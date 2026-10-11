@@ -523,7 +523,7 @@ Tests/UIReplay/out_*/
 # NativeScripting UserProjectGenerator output in the default player project —
 # machine-specific baked SDK path, regenerated on project open (same class as
 # the GameEngine.Scripts.csproj rule above)
-/Apps/Editor/Player/assets/CMakeLists.txt
+/Apps/Editor/Player/Assets/CMakeLists.txt
 
 # Local desktop build inputs for isolated wasm builds (GE_WEB_SHADERPKG_DIR/GE_WEB_MATERIAL_COOK point here)
 /prereq/
