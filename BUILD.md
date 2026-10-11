@@ -131,6 +131,18 @@ node --version && python3 --version    # optional tools
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | your distribution's `nodejs` package, or [nodejs.org](https://nodejs.org/) |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows. | your distribution's `python3` package |
 
+On Fedora (checked on Fedora 44), these two commands install everything above, including the system packages the vcpkg ports build with (Perl modules for OpenSSL, `nasm`, `autoconf-archive`):
+
+```bash
+sudo dnf group install development-tools c-development
+sudo dnf install cmake ninja-build git pkgconf-pkg-config \
+  perl-IPC-Cmd perl-FindBin perl-Time-Piece nasm autoconf-archive \
+  libX11-devel libxcb-devel libXinerama-devel libXcursor-devel libXrandr-devel libXi-devel \
+  libxkbcommon-devel wayland-devel mesa-libGLU-devel \
+  mesa-vulkan-drivers vulkan-tools vulkan-validation-layers \
+  dotnet-sdk-10.0 nodejs python3
+```
+
 If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader with X11 and Wayland surface support; GLFW is built for X11, so a Wayland session needs XWayland. For a pure Wayland session, add the `wayland` feature to `glfw3` in `vcpkg.json` and install your distribution's Wayland development packages.
 
 ## Platform notes
