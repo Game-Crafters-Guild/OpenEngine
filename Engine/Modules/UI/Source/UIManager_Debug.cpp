@@ -9,6 +9,7 @@
 
 #include "Logger/Logger.h"
 
+#include <iomanip>
 #include <string>
 #include <vector>
 #include <unordered_map>
