@@ -8443,6 +8443,8 @@ bool VulkanDevice::BeginFrame()
         if (!AcquireNextImage(imageIndex))
         {
             // Expected during resize/move (VK_TIMEOUT/OUT_OF_DATE); skip this frame quietly.
+            // No semaphore was signaled on either path, so the slot's
+            // imageAvailable semaphore is free for the next acquire.
             m_CurrentSwapchainImage = UINT32_MAX;
             m_AcquiredThisFrame = false;
             return false;
@@ -12400,7 +12402,13 @@ bool VulkanDevice::AcquireNextImage(uint32_t& imageIndex)
     // Mark that we must wait on the imageAvailable semaphore once this frame
     m_WaitedOnImageAvailableThisFrame = false;
 
-    if (result == VK_SUCCESS)
+    // VK_SUBOPTIMAL_KHR is a successful acquire: the image is valid and the
+    // imageAvailable semaphore will be signaled, so the frame must go on to
+    // render and present it. Skipping the frame here would leave that binary
+    // semaphore signaled, and the next acquire on this frame slot would reuse it
+    // (VUID-vkAcquireNextImageKHR-semaphore-01286). PresentImage sees the
+    // suboptimal swapchain again and recreates it after the present.
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
     {
         m_CurrentSwapchainImage = imageIndex;
         m_AcquireSemaphoreThisFrame = (m_CurrentFrame < m_ImageAvailableSemaphores.size()) ? m_ImageAvailableSemaphores[m_CurrentFrame] : VK_NULL_HANDLE;
@@ -12433,23 +12441,6 @@ bool VulkanDevice::AcquireNextImage(uint32_t& imageIndex)
             }
         }
         // Skip this frame; the loop will continue and try acquire again next frame
-        m_AcquiredThisFrame = false;
-        m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
-        return false;
-    }
-    else if (result == VK_SUBOPTIMAL_KHR)
-    {
-        // Suboptimal means the swapchain can still be used but should be recreated.
-        // We must NOT use the old imageIndex after recreation because it's from the
-        // old swapchain. Skip this frame and let the next frame acquire from the new swapchain.
-        if (m_SwapchainExtent.width > 0 && m_SwapchainExtent.height > 0)
-        {
-            const WindowTargetHandle activeTarget = GetActiveWindowTarget();
-            if (activeTarget.IsValid())
-            {
-                RecreateWindowTargetSwapchain(activeTarget, m_SwapchainExtent.width, m_SwapchainExtent.height);
-            }
-        }
         m_AcquiredThisFrame = false;
         m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
         return false;

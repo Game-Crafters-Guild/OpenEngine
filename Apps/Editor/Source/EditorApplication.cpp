@@ -892,24 +892,20 @@ static bool BeginWindowRenderFrame(EditorApplication::EditorWindowContext* ctx,
 
     if (!dev->BeginFrame())
     {
-        // BeginFrame returns false on three independent acquire conditions:
+        // BeginFrame returns false on two acquire conditions:
         //   1. VK_TIMEOUT (16ms) — no swapchain image was free in time (e.g.
         //      compositor briefly held all 3 images for vsync). Transient;
         //      next frame's acquire will succeed.
         //   2. VK_ERROR_OUT_OF_DATE_KHR — swapchain is stale. The device layer
         //      (AcquireNextImage in VulkanDevice.cpp) already recreates the
         //      swapchain internally before returning false.
-        //   3. VK_SUBOPTIMAL_KHR — same: device layer already recreated.
+        // VK_SUBOPTIMAL_KHR is not one of them: it acquires an image, the frame
+        // renders, and PresentImage recreates the swapchain after presenting.
         //
-        // Previously this site unconditionally recreated the swapchain. On (1)
-        // that was a destructive false-positive: ~70ms recreate work made the
-        // next acquire ALSO time out (new images not yet enqueued for
-        // compositor display), and the editor wedged at ~12 FPS in a recreate
-        // loop. On (2)/(3) the device had already recreated, so the editor's
-        // recreate was a redundant second pass.
-        //
-        // Right behavior: skip this frame; trust the device's internal
-        // OUT_OF_DATE/SUBOPTIMAL handling to have recreated when warranted.
+        // Do not recreate the swapchain here. On (1) the ~70ms recreate makes
+        // the next acquire time out as well (the new images are not yet queued
+        // for compositor display), and the editor wedges at ~12 FPS in a
+        // recreate loop; on (2) the device has already recreated it.
         return false;
     }
 
