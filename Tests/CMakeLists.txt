@@ -284,6 +284,15 @@ add_test(NAME DotnetHostVersions.NewestVersionFirst
           -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/DotnetHostVersions.cmake
           -P ${CMAKE_SOURCE_DIR}/cmake/Tests/DotnetHostVersionsTest.cmake)
 
+# Distro-built .NET (Fedora, Ubuntu's source build) ships its host pack under the
+# distro's RID instead of linux-x64; this lays out scratch pack trees and checks
+# which RIDs the nethost search visits, without a build.
+add_test(NAME DotnetLinuxHostRids.PortableThenDistroPacks
+  COMMAND ${CMAKE_COMMAND}
+          -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/DotnetLinuxHostRids.cmake
+          -DWORK=${CMAKE_BINARY_DIR}/Tests/DotnetLinuxHostRidsScratch
+          -P ${CMAKE_SOURCE_DIR}/cmake/Tests/DotnetLinuxHostRidsTest.cmake)
+
 # The compiler vcpkg resolves is part of every package's ABI, and a configure
 # the build system re-runs inherits the build system's PATH; this re-configures
 # a scratch project with another compiler first on PATH and checks what a
