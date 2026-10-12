@@ -553,6 +553,20 @@ void PlayerApplication::PollRuntimeDisplayControls()
         (void)ToggleRuntimeHdrOutput();
 }
 
+// The game's pointer lock request, applied in the frame it was made. The window
+// is the whole play surface, so the game holds the lock for as long as it asks;
+// the platform lets the cursor go while the window is unfocused, and the game
+// is told it is locked only while it actually is.
+void PlayerApplication::ApplyPointerLock()
+{
+    Platform::Window* window = m_Host->GetWindow();
+    Input::InputSystem* input = GetInputSystem();
+    if (!window || !input)
+        return;
+    window->SetCursorLocked(input->IsPointerLockRequested());
+    input->SetPointerLocked(window->IsCursorLocked() && window->IsFocused());
+}
+
 bool PlayerApplication::ToggleRuntimeHdrOutput()
 {
     Engine::Renderer::RenderDeviceContext* renderCtx = m_Host->GetRenderDeviceContext();
@@ -643,6 +657,8 @@ void PlayerApplication::Update(float64 deltaTime)
     {
         GameEngine::NativeScripting::TickUserSystems(*world, static_cast<float>(deltaTime));
     }
+
+    ApplyPointerLock();
 
     // Check for window close request (GLFW polling model).
     if (Platform::Window* window = m_Host->GetWindow(); window && window->ShouldClose())

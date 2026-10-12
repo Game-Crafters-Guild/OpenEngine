@@ -158,6 +158,7 @@ set(EDITOR_SOURCES
     Source/PlayMode/ModelAnimationPlayMode.cpp
     Source/PlayMode/AnimationPlayModeHelpers.cpp
     Source/PlayMode/RuntimeInputConnection.cpp
+    Source/PlayMode/GameViewPointerLock.cpp
     Source/Scene/DefaultSceneEntities.cpp
     Source/Scene/SceneBackupRecovery.cpp
     Source/Scene/SceneDocumentManager.cpp
@@ -633,6 +634,7 @@ set(EDITOR_HEADERS
     Include/UndoRedo/DeleteAssetPathsCommand.h
     Include/PlayMode/PlayModeManager.h
     Include/PlayMode/RuntimeInputConnection.h
+    Include/PlayMode/GameViewPointerLock.h
     Include/UndoRedo/VcsRevertCommand.h
     Include/UndoRedo/TagCommands.h
     Include/UndoRedo/MultiEntityComponentSnapshot.h

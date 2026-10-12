@@ -118,6 +118,11 @@ public:
     // Accumulates only between two positions inside the window: a pointer
     // arriving from outside has not travelled from anywhere this sink saw.
     Mathematics::Vector2 m_MouseDelta;
+    // Frame snapshot of m_MouseDelta, taken by Update() before it clears the
+    // accumulator, so GetMouseDelta() reads the same value all frame.
+    Mathematics::Vector2 m_FrameMouseDelta;
+    bool m_PointerLockRequested = false;
+    bool m_PointerLocked = false;
     Mathematics::Vector2 m_Scroll;
 
     struct GamepadState
@@ -285,6 +290,7 @@ void InputSystem::Update(float /*deltaTime*/) {
     m_Impl->m_DirtyMouseButtons.clear();
 
     // Clear per-frame mouse deltas and scroll accumulators after actions have been computed.
+    m_Impl->m_FrameMouseDelta = m_Impl->m_MouseDelta;
     m_Impl->m_MouseDelta = {};
     m_Impl->m_Scroll     = {};
 
@@ -358,6 +364,9 @@ void InputSystem::ClearRegistrations()
     std::memset(m_Impl->m_KeyPollClaim, 0, sizeof(m_Impl->m_KeyPollClaim));
     std::memset(m_Impl->m_MousePollClaim, 0, sizeof(m_Impl->m_MousePollClaim));
     std::memset(m_Impl->m_GamepadPollClaim, 0, sizeof(m_Impl->m_GamepadPollClaim));
+
+    // So does a pointer lock request: the next session asks for its own.
+    m_Impl->m_PointerLockRequested = false;
 }
 
 void InputSystem::SetClaimsSuspended(bool suspended)
@@ -399,6 +408,26 @@ bool InputSystem::IsPointerInWindow() const {
 
 bool InputSystem::IsWindowFocused() const {
     return m_Impl->m_WindowFocused;
+}
+
+Mathematics::Vector2 InputSystem::GetMouseDelta() const {
+    return m_Impl->m_FrameMouseDelta;
+}
+
+void InputSystem::RequestPointerLock(bool locked) {
+    m_Impl->m_PointerLockRequested = locked;
+}
+
+bool InputSystem::IsPointerLockRequested() const {
+    return m_Impl->m_PointerLockRequested;
+}
+
+void InputSystem::SetPointerLocked(bool locked) {
+    m_Impl->m_PointerLocked = locked;
+}
+
+bool InputSystem::IsPointerLocked() const {
+    return m_Impl->m_PointerLocked;
 }
 
 std::optional<Mathematics::Vector2> InputSystem::GetMouseButtonPressPosition(MouseCode button) const {

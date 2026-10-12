@@ -210,6 +210,17 @@ class Window
     void SetCursor(CursorType type);
     void ResetCursor(); // restore default arrow
 
+    // Pointer lock: hide the cursor and hold it in this window, so the mouse
+    // reports movement without bound (raw, unaccelerated motion where the
+    // platform offers it) instead of moving a cursor that stops at the screen
+    // edge. Cursor moves still arrive through the mouse-move handler, as
+    // positions that run on past the window. The platform releases the cursor
+    // while the window is unfocused and takes it back on refocus. SetCursor and
+    // ResetCursor change only the shape the cursor has once it is unlocked.
+    // Not available in the browser build, where it stays unlocked.
+    void SetCursorLocked(bool locked);
+    bool IsCursorLocked() const { return m_CursorLocked; }
+
     // True fullscreen toggle backed by glfwSetWindowMonitor.
     void SetFullscreen(bool enable);
     bool IsFullscreen() const { return m_IsFullscreen; }
@@ -239,6 +250,8 @@ class Window
     GLFWwindow* m_Handle = nullptr;
     void* m_UserPtr = nullptr;
     struct GLFWcursor* m_Cursor = nullptr; // custom cursor (if set)
+    bool m_CursorLocked = false;
+    bool m_CursorHidden = false; // SetCursor(Hidden), restored when the lock ends
     float m_UiContentScale = 0.0f;         // 0 = unset; otherwise pushed by UI layer
 
     // Fullscreen bookkeeping for SetFullscreen.

@@ -82,6 +82,7 @@ class SceneThumbnailCapture;
 class PackageManagerController;
 class MovieRecorderController;
 class PlayModeManager;
+class GameViewPointerLock;
 class RecipeControllers;
 class UniversalSearchController;
 enum class PlayModeState : std::uint8_t;
@@ -341,6 +342,8 @@ class EditorApplication : public Application
     // play mode is active and a Game View tab is showing. Mouse position is
     // Game View local (viewport origin), not window client pixels.
     std::unique_ptr<Input::InputSystem> m_RuntimeInput;
+    // Grants the game's pointer lock request to the window showing the Game View.
+    std::unique_ptr<Editor::GameViewPointerLock> m_GameViewPointerLock;
     // Cached once per frame: play mode + Game View is the active tab of some
     // window. Session-scoped (context enable, stuck-key reset), not per-window.
     bool m_RuntimeInputActive = false;

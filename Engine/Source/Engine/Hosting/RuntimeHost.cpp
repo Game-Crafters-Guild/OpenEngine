@@ -186,6 +186,7 @@ bool RuntimeHost::InitWindow()
 WindowInputRouterConfig::PlaySurface RuntimeHost::HudPlaySurface() const
 {
     WindowInputRouterConfig::PlaySurface surface;
+    surface.pointerLocked = m_Window && m_Window->IsCursorLocked();
     if (!m_GameUI)
         return surface;
     surface.gameUi = m_GameUI.get();

@@ -1591,13 +1591,11 @@ void Window::SetCursor(CursorType type)
         m_Cursor = nullptr;
     }
 
-    if (type == CursorType::Hidden)
-    {
-        glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    m_CursorHidden = type == CursorType::Hidden;
+    if (!m_CursorLocked)
+        glfwSetInputMode(m_Handle, GLFW_CURSOR, m_CursorHidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
+    if (m_CursorHidden)
         return;
-    }
-
-    glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     int glfwShape = GLFW_ARROW_CURSOR;
     switch (type)
@@ -1646,8 +1644,34 @@ void Window::ResetCursor()
         m_Cursor = nullptr;
     }
 
-    glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    m_CursorHidden = false;
+    if (!m_CursorLocked)
+        glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSetCursor(m_Handle, nullptr); // reset to default
+}
+
+void Window::SetCursorLocked(bool locked)
+{
+    if (!m_Handle || locked == m_CursorLocked)
+        return;
+
+#if defined(__EMSCRIPTEN__)
+    // A browser grants pointer lock only inside a user gesture, which this
+    // per-frame call is not.
+    return;
+#endif
+
+    m_CursorLocked = locked;
+    if (locked)
+    {
+        glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported())
+            glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+        return;
+    }
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+    glfwSetInputMode(m_Handle, GLFW_CURSOR, m_CursorHidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
 }
 
 } // namespace Platform

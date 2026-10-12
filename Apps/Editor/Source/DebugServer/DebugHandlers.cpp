@@ -109,6 +109,7 @@
 #include "Rendering/Core/RenderGraph/RGBarrier.h"
 #include "Rendering/Core/RenderGraph/RGTypes.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Input/InputSystem.h"
 #include "Logger/LogLevel.h"
 #include "Logger/RingBufferSink.h"
 #include "Panels/AnimationWindowPanel.h"
@@ -2720,6 +2721,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 result["focusedElementId"] = app.m_Windows[0]->ui->GetFocusedElementId();
                 result["hoveredElement"] = app.m_Windows[0]->ui->GetHoveredElementDebugName();
                 result["mouseCaptured"] = app.m_Windows[0]->ui->IsMouseCaptured();
+                result["pointerLocked"] = app.m_RuntimeInput && app.m_RuntimeInput->IsPointerLocked();
                 result["captureElementId"] = app.m_Windows[0]->ui->GetCaptureId();
             }
         }

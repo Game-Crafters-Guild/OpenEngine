@@ -2959,3 +2959,92 @@ TEST(WindowInputRoutingTests, GamepadEdgesSkipTheSurfaceUiAndChromeUi)
     EXPECT_TRUE(runtime.IsGamepadButtonDown(kPad, Input::GamepadButton::A));
     EXPECT_TRUE(field->GetValue().empty()) << "a gamepad button is not typing";
 }
+
+// The editor's shape: a locked pointer belongs to the game. Its moves, presses
+// and wheel reach the gameplay sink and nothing else, so the editor neither
+// hovers nor clicks under a cursor it cannot see.
+TEST(WindowInputRoutingTests, ALockedPointerReachesOnlyTheGameplaySink)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    RecordingSink game;
+    Input::InputSystem runtime{Input::SinkRole::Gameplay};
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.gameplaySink = &game;
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+
+    WindowInputRouter::RouteMouseMove(f.config, /*window=*/nullptr, 40.0f, 30.0f);
+    WindowInputRouter::RouteMouseButton(f.config, 0, /*pressed=*/true, 0);
+    WindowInputRouter::RouteScroll(f.config, 0.0f, 2.0f, 0);
+    f.input.Update(0.016f);
+
+    EXPECT_FALSE(f.input.IsPointerInWindow());
+    EXPECT_FALSE(f.input.IsMouseButtonDown(0));
+    EXPECT_EQ(game.events, (std::vector<std::string>{"b0:1", "s0:2"}));
+
+    // And the moves themselves, through a real sink: the delta counts.
+    surface.gameplaySink = &runtime;
+    f.UsePlaySurface(surface);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 40.0f, 30.0f);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 2040.0f, 25.0f);
+    runtime.Update(0.016f);
+    EXPECT_EQ(runtime.GetMouseDelta(), Mathematics::Vector2(2000.0f, -5.0f));
+    EXPECT_FALSE(f.input.IsPointerInWindow());
+}
+
+// A button held down before the lock comes up everywhere it went down: a
+// release is never withheld, locked or not.
+TEST(WindowInputRoutingTests, AReleaseUnderTheLockReachesEveryStage)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    RecordingSink game;
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.gameplaySink = &game;
+    f.UsePlaySurface(surface);
+
+    // Unlocked, an unclaimed press travels on to the editor's input.
+    WindowInputRouter::RouteMouseButton(f.config, 1, /*pressed=*/true, 0);
+    f.input.Update(0.016f);
+    ASSERT_TRUE(f.input.IsMouseButtonDown(1));
+
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+    WindowInputRouter::RouteMouseButton(f.config, 1, /*pressed=*/false, 0);
+    f.input.Update(0.016f);
+    EXPECT_FALSE(f.input.IsMouseButtonDown(1));
+    EXPECT_EQ(game.events, (std::vector<std::string>{"b1:1", "b1:0"}));
+}
+
+// The Player's shape: the surface is the whole window and has no separate
+// gameplay sink, so the window's own InputSystem is the game's and a locked
+// pointer is delivered there.
+TEST(WindowInputRoutingTests, WithoutAGameplaySinkALockedPointerReachesTheWindowsInput)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 640.0f, 360.0f);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, -300.0f, 380.0f);
+    WindowInputRouter::RouteMouseButton(f.config, 0, /*pressed=*/true, 0);
+    f.input.Update(0.016f);
+
+    EXPECT_EQ(f.input.GetMouseDelta(), Mathematics::Vector2(-940.0f, 20.0f));
+    EXPECT_TRUE(f.input.IsMouseButtonDown(0));
+}

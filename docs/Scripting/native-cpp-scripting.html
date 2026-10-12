@@ -322,6 +322,7 @@ ul.task-list input[type="checkbox"]:checked + label {
 <a href="#dx-project">Project layout</a>
 <a href="#dx-component">Components</a>
 <a href="#dx-system">Systems</a>
+<a href="#dx-input">Input</a>
 <a href="#dx-hotreload">Reloading</a>
 <a href="#dx-inspector">Editor extensions</a>
 <a href="#dx-player">Shipping</a>
@@ -410,6 +411,42 @@ struct DamageSystem : ECS::SystemBase
     }
 };</code></pre>
 <p><code>OnStart</code>, <code>OnUpdate</code>, <code>OnPostSimulation</code> and <code>OnDestroy</code> are optional hooks. Their ordering and permitted world access are defined in <a href="native-user-systems.html">Native User Systems</a>. Use that contract when choosing between gameplay before simulation and presentation after simulation.</p>
+<h2 id="dx-input">Input</h2>
+<p>A system reads the game's input from <code>EngineCore::GetInstance().GetRuntimeInput()</code> (<code>Core/Engine.h</code>), an <code>Input::InputSystem</code>. Poll keys with <code>IsKeyDown</code>, <code>WasKeyPressed</code> and <code>WasKeyReleased</code> and buttons with <code>IsMouseButtonDown</code> and <code>WasMouseButtonPressed</code>, using the codes in <code>Input/KeyCodes.h</code>. Reading a key or button claims it for the game, so in the editor it does not also reach editor shortcuts during play.</p>
+<h3 id="dx-pointer-lock">Mouse look and pointer lock</h3>
+<p>For mouse look, mouse steering or anything else where the mouse moves the game rather than a cursor, ask for the pointer to be locked and read how far the mouse moved each frame:</p>
+<pre><code>#pragma once
+#include &lt;GameSDK/System.h&gt;
+#include "Core/Engine.h"
+#include "Input/InputSystem.h"
+#include "Input/KeyCodes.h"
+
+struct MouseLookSystem : ECS::SystemBase
+{
+    float Yaw = 0.0f;
+    float Pitch = 0.0f;
+
+    void OnStart(ECS::World&amp;)
+    {
+        GameEngine::EngineCore::GetInstance().GetRuntimeInput()-&gt;RequestPointerLock(true);
+    }
+
+    void OnUpdate(ECS::World&amp;, float)
+    {
+        auto* input = GameEngine::EngineCore::GetInstance().GetRuntimeInput();
+        if (!input-&gt;IsPointerLocked())
+            return;
+        const auto delta = input-&gt;GetMouseDelta();
+        Yaw += delta.x * 0.1f;
+        Pitch -= delta.y * 0.1f;
+    }
+};</code></pre>
+<ul>
+<li><strong><code>GetMouseDelta()</code></strong> is the movement delivered before this frame's input update, in the same pixels as <code>GetMousePosition()</code>. It counts only movement inside the window, so it is useful without the lock too, but stops at the screen edge.</li>
+<li><strong><code>RequestPointerLock(true)</code></strong> asks for the cursor to be hidden and held. The request stands until the game passes <code>false</code> or play ends. While the pointer is locked, its moves, clicks and wheel reach only the game, and <code>GetMousePosition()</code> runs on without bound.</li>
+<li><strong><code>IsPointerLocked()</code></strong> says whether the host has granted the lock this frame. Read input as mouse movement only while it is true, and show a prompt such as "click to play" while it is not. The first frame or two after the lock changes can carry a jump from where the cursor was, so a game that steers by the delta may skip them.</li>
+</ul>
+<p>The Player holds the lock while its window has focus. The editor holds it while play runs unpaused in a focused Game View: <kbd>Esc</kbd> hands the pointer back to the editor (the game still receives the key) and a click on the Game View returns it to the game. A game that releases the lock itself, for a pause menu say, withdraws its request and asks again when play resumes. Pointer lock is not available in the browser build, where <code>IsPointerLocked()</code> stays false.</p>
 <h2 id="dx-hotreload">Reloading</h2>
 <p>The native script manager watches source changes and rebuilds the affected module. Build output and errors are reported through the editor's log. It validates the candidate module's ABI and toolchain fingerprint before accepting it. A failed build is not a successful reload: read the diagnostic before continuing.</p>
 <p>Build duration depends on the source and toolchain. Component data restoration and module replacement have failure paths; keep authored scenes saved rather than relying on a reload to preserve every live change.</p>
@@ -431,6 +468,7 @@ struct DamageSystem : ECS::SystemBase
 <li><strong>A build fails:</strong> inspect the compiler output under <code>.Cache/NativeScripts/build</code> and the editor log.</li>
 </ul>
 <h2>Changelog</h2>
+<p>2026-10-12: input polling, mouse delta and pointer lock for native systems.</p>
 <p>2026-10-08: use the implemented GameSDK headers, registration paths, lifecycle hooks and generated build layout; link the canonical package and publishing guides.</p>
 </main>
 </div>

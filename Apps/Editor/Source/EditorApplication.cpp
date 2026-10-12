@@ -207,6 +207,7 @@
 #include "Placement/RecipeControllers.h"
 #include "PlayMode/PlayModeEntryModal.h"
 #include "PlayMode/PlayModeManager.h"
+#include "PlayMode/GameViewPointerLock.h"
 #include "PlayMode/RuntimeInputConnection.h"
 #include "Scene/SceneEditorController.h"
 #include "Scene/SceneThumbnailCapture.h"
@@ -2135,6 +2136,7 @@ bool EditorApplication::Initialize()
     // rest keep travelling to the editor.
     m_RuntimeInput = std::make_unique<Input::InputSystem>(Input::SinkRole::Gameplay);
     EngineCore::GetInstance().SetRuntimeInput(m_RuntimeInput.get());
+    m_GameViewPointerLock = std::make_unique<Editor::GameViewPointerLock>();
     Logger::Log::Info("[Startup] InputSystem config: {:.1f}ms", MsSince(tPhase));
 
     // Create main window (using Platform::Window)
@@ -2267,6 +2269,7 @@ bool EditorApplication::Initialize()
     };
     mainInput.onKeyPre = [this, mainCtxRaw](int key, int action, int mods) -> bool
     {
+        m_GameViewPointerLock->OnKey(key, action);
         if (key == Input::kKeyCode_Escape && action == Input::kKeyActionPress && m_PlayMode)
         {
             const auto state = m_PlayMode->GetState();
@@ -3370,6 +3373,8 @@ bool EditorApplication::Initialize()
                             if (win && win->windowId == pointerWindowId && win->gameView)
                                 win->gameView->HandleGameUiPointer(false, 0.0f, 0.0f, false, 0);
                     pointerWindowId = nextId;
+                    if (destination && down)
+                        m_GameViewPointerLock->OnGameViewPressed();
                     if (destination)
                         destination->gameView->HandleGameUiPointer(true, x, y, down, mods);
                 });
@@ -7040,6 +7045,12 @@ void EditorApplication::Update(float64 deltaTime)
         if (!playingOrPaused && m_WasPlayModeActive && m_RuntimeInput)
             m_RuntimeInput->ClearRegistrations();
         m_WasPlayModeActive = playingOrPaused;
+
+        if (m_RuntimeInput)
+            m_GameViewPointerLock->Update(*m_RuntimeInput,
+                                          gameViewHost ? gameViewHost->window.get() : nullptr,
+                                          m_PlayMode &&
+                                              m_PlayMode->GetState() == GameEngine::Editor::PlayModeState::Play);
     }
 
     // Update runtime input before gameplay scripts tick.
@@ -8254,6 +8265,7 @@ void EditorApplication::Render()
             }
             if (win && win->window)
             {
+                m_GameViewPointerLock->ForgetWindow(win->window.get());
                 win->window->Destroy();
                 win->window.reset();
             }
@@ -8302,6 +8314,7 @@ WindowInputRouterConfig::PlaySurface EditorApplication::GetPlaySurface(Platform:
             return surface;
         surface.gameplaySink = m_RuntimeInput.get();
         surface.gameUi = win->gameView ? win->gameView->GetGameUI() : nullptr;
+        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(window);
         // The mapper maps from the context resolved here instead of finding the
         // window again. Holding it raw is safe because a surface is built and
         // spent inside one routing call (WindowInputRouter::RouteMouseMove), with

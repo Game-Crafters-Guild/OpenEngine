@@ -134,10 +134,11 @@ public:
     Engine::Renderer::RenderDeviceContext* GetRenderDeviceContext() const { return m_RenderCtx.get(); }
 
 private:
-    // The window's play surface, resolved per event: the HUD host, and the
-    // mapping that makes this window's pointer the HUD's. Empty until the first
-    // rendered frame builds the host. No gameplay sink — with no chrome above
-    // it, the game's own InputSystem ends the chain instead of sitting inside it.
+    // The window's play surface, resolved per event: whether the window holds
+    // the pointer locked, the HUD host, and the mapping that makes this window's
+    // pointer the HUD's. The HUD legs are empty until the first rendered frame
+    // builds the host. No gameplay sink — with no chrome above it, the game's own
+    // InputSystem ends the chain instead of sitting inside it.
     WindowInputRouterConfig::PlaySurface HudPlaySurface() const;
     // The immediate-mode frame for the window — pool imports for the view targets,
     // ImportBackbuffer, the spine, the HUD composite, the composite hook, the

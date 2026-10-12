@@ -2013,3 +2013,77 @@ TEST(InputSystemTests, ResetStateForgetsEveryPad)
     EXPECT_FALSE(input.IsGamepadConnected(kSecondPad));
     EXPECT_FLOAT_EQ(input.GetGamepadAxis(kFirstPad, GamepadAxis::LeftX), 0.0f);
 }
+
+// The movement a frame reads is what arrived before its Update, and it stays the
+// same however late in the frame the game reads it: Update clears the
+// accumulator only after taking the snapshot.
+TEST(InputSystemTests, MouseDeltaIsTheMovementDeliveredBeforeTheFramesUpdate)
+{
+    InputSystem input;
+    input.OnMouseMove({100.0f, 100.0f});
+    input.OnMouseMove({103.0f, 98.0f});
+    input.OnMouseMove({110.0f, 95.0f});
+    input.Update(0.016f);
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(10.0f, -5.0f));
+
+    // A move after the Update belongs to the next frame.
+    input.OnMouseMove({111.0f, 95.0f});
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(10.0f, -5.0f));
+    input.Update(0.016f);
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(1.0f, 0.0f));
+
+    // A frame with no movement reads none.
+    input.Update(0.016f);
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(0.0f, 0.0f));
+}
+
+// A locked pointer's positions run on past the window; the delta keeps counting.
+TEST(InputSystemTests, MouseDeltaKeepsCountingPastTheWindowEdge)
+{
+    InputSystem input;
+    input.OnMouseMove({1270.0f, 400.0f});
+    input.OnMouseMove({1900.0f, 400.0f});
+    input.Update(0.016f);
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(630.0f, 0.0f));
+}
+
+// A pointer arriving from outside the window has travelled from nowhere this
+// sink saw, so its first position adds nothing.
+TEST(InputSystemTests, MouseDeltaIgnoresTheJumpOfAPointerEnteringTheWindow)
+{
+    InputSystem input;
+    input.OnMouseMove({10.0f, 10.0f});
+    input.OnMouseLeave();
+    input.OnMouseMove({500.0f, 300.0f});
+    input.OnMouseMove({502.0f, 300.0f});
+    input.Update(0.016f);
+    EXPECT_EQ(input.GetMouseDelta(), Vector2(2.0f, 0.0f));
+}
+
+// The game asks, the host answers: the request and the grant are separate, and
+// ending the session withdraws the request so the next one starts unlocked.
+TEST(InputSystemTests, PointerLockRequestStandsUntilWithdrawnOrTheSessionEnds)
+{
+    InputSystem input{SinkRole::Gameplay};
+    EXPECT_FALSE(input.IsPointerLockRequested());
+    EXPECT_FALSE(input.IsPointerLocked());
+
+    input.RequestPointerLock(true);
+    EXPECT_TRUE(input.IsPointerLockRequested());
+    EXPECT_FALSE(input.IsPointerLocked());
+    input.SetPointerLocked(true);
+    EXPECT_TRUE(input.IsPointerLocked());
+
+    // Frames, focus loss and a state reset leave the request alone.
+    input.Update(0.016f);
+    input.OnWindowFocus(false);
+    input.ResetState();
+    EXPECT_TRUE(input.IsPointerLockRequested());
+
+    input.RequestPointerLock(false);
+    EXPECT_FALSE(input.IsPointerLockRequested());
+
+    input.RequestPointerLock(true);
+    input.ClearRegistrations();
+    EXPECT_FALSE(input.IsPointerLockRequested());
+}

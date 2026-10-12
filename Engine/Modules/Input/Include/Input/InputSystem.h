@@ -220,9 +220,10 @@ class InputSystem : public IRawInputSink
     // switches game input off. Leaves the pointer and focus states alone.
     void ResetState();
 
-    // Clear all action registrations, context stack, and listeners. Called
-    // when the runtime input session ends (e.g. play mode exit) to prevent
-    // stale callbacks from accumulating across sessions.
+    // Clear all action registrations, context stack, and listeners, and withdraw
+    // a pointer lock request. Called when the runtime input session ends (e.g.
+    // play mode exit) to prevent stale callbacks from accumulating across
+    // sessions and the next session from starting with the pointer locked.
     void ClearRegistrations();
 
     // A suspended Gameplay sink claims nothing: a paused game acts on no input,
@@ -262,6 +263,28 @@ class InputSystem : public IRawInputSink
     // the window: a window behind another still receives moves and the wheel
     // for a pointer that merely crosses it.
     bool IsWindowFocused() const;
+    // How far the pointer moved over the last frame, in the same space as
+    // GetMousePosition(): the moves delivered before the latest Update(). Only
+    // movement between two positions inside the window counts, so a pointer
+    // arriving from outside adds nothing. While the pointer is locked it keeps
+    // counting however far the mouse travels, which is what mouse look and
+    // mouse steering read; the position then runs on without bound.
+    Mathematics::Vector2 GetMouseDelta() const;
+
+    // Pointer lock: the game asks for the platform cursor to be hidden and held
+    // by the window, so the mouse steers the game instead of a cursor. The host
+    // grants it while it can: the Player while its window has focus, the editor
+    // while play runs in the Game View, until Escape hands the pointer back to
+    // the editor and a click on the Game View returns it. While it is locked,
+    // the pointer's moves, presses and wheel reach only gameplay. The request
+    // stands until the game withdraws it or the session ends.
+    void RequestPointerLock(bool locked);
+    bool IsPointerLockRequested() const;
+    // Whether the host holds the pointer locked now: the host reports it every
+    // frame, and a game reads it, for instance to say "click to fly" while the
+    // editor has the pointer.
+    void SetPointerLocked(bool locked);
+    bool IsPointerLocked() const;
     // Where the most recent accepted up-to-down transition happened, in the same
     // space as GetMousePosition(). Movement, a duplicate down, the release and
     // Update() all retain it; only another accepted press replaces it, and
