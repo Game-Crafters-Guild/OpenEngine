@@ -643,6 +643,11 @@ endforeach()
         )
     elseif(WIN32)
         list(APPEND _stage_sdk_lib_args -DOMIT_CURRENT_RUNTIME_COPY=ON)
+    else()
+        # A single-config generator (Ninja, Make) writes the engine's shared
+        # libraries to the flat CMAKE_LIBRARY_OUTPUT_DIRECTORY, not lib/<config>,
+        # so stage from wherever the Engine's link file actually is.
+        list(APPEND _stage_sdk_lib_args -DEXTRA_LIB_DIR=$<TARGET_LINKER_FILE_DIR:Engine>)
     endif()
     add_custom_command(TARGET ${host_target} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
