@@ -390,6 +390,11 @@ void UIManager::FreeRenderSlots(UIElement* el)
         m_ClipAllocator.Free(el->m_ClipSlotIdx);
         el->m_ClipSlotIdx = 0xFFFFu;
     }
+    if (el->m_TransformSlotIdx != UI::kNoTransform)
+    {
+        m_TransformAllocator.Free(el->m_TransformSlotIdx);
+        el->m_TransformSlotIdx = UI::kNoTransform;
+    }
     // Draw-order is a compact array (no allocator); nothing to free.
     el->m_DrawOrderIdx = 0xFFFFFFFFu;
 }

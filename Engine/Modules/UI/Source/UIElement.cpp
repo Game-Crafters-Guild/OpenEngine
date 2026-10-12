@@ -187,7 +187,8 @@ UIElement::~UIElement()
     // destroyed. An element never outlives its manager with the owner still
     // set: ~UIManager detaches every survivor.
     if (m_OwnerManager &&
-        (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu || m_DrawOrderIdx != 0xFFFFFFFFu))
+        (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu || m_TransformSlotIdx != 0 ||
+         m_DrawOrderIdx != 0xFFFFFFFFu))
     {
         UIManagerFreeRenderSlots(m_OwnerManager, this);
     }

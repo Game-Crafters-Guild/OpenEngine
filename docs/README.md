@@ -12,7 +12,7 @@ The engine's documentation, published on [openengine.dev/docs](https://openengin
 - [`animation/`](animation/): retargeting, clip events, the glTF clip schema and animation sources
 - [`assets/`](assets/): model extras, Unity import, alpha coverage and smart folders
 - [`navigation/`](navigation/): the navigation surface
-- [`ui/`](ui/): the UI API, game UI scaling, control defaults and text effects
+- [`ui/`](ui/): the UI API, game UI scaling, control defaults, text effects and transforms
 - [`packages/`](packages/): the package data model
 - [`publishing/`](publishing/): game builds, Steam publishing and the desktop Player's sources
 - [`contributing/`](contributing/): material for engine contributors, from the scripting ABI to editor guidelines

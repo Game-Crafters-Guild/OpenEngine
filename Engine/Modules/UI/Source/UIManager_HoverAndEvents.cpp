@@ -12,6 +12,7 @@
 #include "UI/Parsers/CSSParser.h"
 #include "UI/TransitionEngine.h"
 #include "UI/UIEvents.h"
+#include "UI/UITransform.h"
 
 #include "Input/KeyCodes.h"
 #include "UI/Layout/YogaLayout.h"
@@ -177,8 +178,13 @@ UIElement* GatePointerTargetToOpenPopups(const std::vector<DismissablePopup*>& r
 // items, modal SearchDialog, drag preview). UIElement::HasOverlayInSubtree()
 // gates the prune; when set, we still descend but fast-path through
 // non-overlay siblings to find only the overlay-bearing branches.
+// (mx, my) is the pointer in the space `el` lays out in: the screen point
+// carried back through every transformed ancestor's inverse. (screenX,
+// screenY) is the untouched screen point, which overlays restart from — they
+// paint outside their ancestors' transforms as they do outside their clips.
 void HitTestSubtreeRecursive(UIElement* el,
                              float mx, float my,
+                             float screenX, float screenY,
                              int parentPosContext,
                              int parentOverlayPriority,
                              int parentOverlayDepth,
@@ -225,7 +231,33 @@ void HitTestSubtreeRecursive(UIElement* el,
     // panels paint outside the chain's overflow:hidden boxes by design).
     HitClipState selfClip = inheritedClip;
     if (selfIsOverlay)
+    {
         selfClip = HitClipState{};
+        mx = screenX;
+        my = screenY;
+    }
+
+    // CSS transform: carry the pointer into the element's untransformed
+    // layout space, where its own rect, its descendants' rects and the clips
+    // they add all live. The inherited clip is in the space the element sits
+    // in, so it is settled first: a clip only ever asks about this one point,
+    // and whether the point is inside it does not change by moving to
+    // another space. A singular transform (scale(0)) paints nothing, and so
+    // hits nothing.
+    if (!rs.Visual.Transform.IsNone())
+    {
+        const bool insideInherited = ClipContains(selfClip, mx, my);
+        UI::Affine2D m, inv;
+        const bool invertible =
+            UI::ComputeElementTransform(rs.Visual, el->GetLayoutX(), el->GetLayoutY(), el->GetLayoutWidth(),
+                                        el->GetLayoutHeight(), 1.0f, m) &&
+            m.Inverse(inv);
+        if (invertible)
+            inv.Apply(mx, my);
+        selfClip = HitClipState{};
+        if (!insideInherited || !invertible)
+            selfClip.hasClip = true; // zero area: nothing below can be hit
+    }
 
     // Stacking context. An element with explicit z-index > 0 establishes
     // a new positioning context; descendants without their own z-index
@@ -298,14 +330,14 @@ void HitTestSubtreeRecursive(UIElement* el,
             continue;
         if (nonOverlayCantHit && !child->HasOverlayInSubtree())
             continue;
-        HitTestSubtreeRecursive(child.get(), mx, my, childPosContext, selfOverlayPriority,
+        HitTestSubtreeRecursive(child.get(), mx, my, screenX, screenY, childPosContext, selfOverlayPriority,
                                 selfOverlayDepth, childClip, requirePointerEvents, orderCounter, best);
     }
 
     if (UIElement* tgt = el->GetMountTarget())
     {
         if (!nonOverlayCantHit || tgt->HasOverlayInSubtree())
-            HitTestSubtreeRecursive(tgt, mx, my, childPosContext, selfOverlayPriority,
+            HitTestSubtreeRecursive(tgt, mx, my, screenX, screenY, childPosContext, selfOverlayPriority,
                                     selfOverlayDepth, childClip, requirePointerEvents, orderCounter, best);
     }
 }
@@ -340,7 +372,7 @@ UIElement* UIManager::HitTestTree(float mx, float my, bool requirePointerEvents)
     HitCandidate best{};
     HitClipState rootClip{};
     int orderCounter = 0;
-    HitTestSubtreeRecursive(m_Root.get(), mx, my, /*parentPosContext=*/0,
+    HitTestSubtreeRecursive(m_Root.get(), mx, my, mx, my, /*parentPosContext=*/0,
                             /*parentOverlayPriority=*/0, /*parentOverlayDepth=*/0, rootClip,
                             requirePointerEvents, orderCounter, best);
     return GatePointerTargetToOpenPopups(m_DismissablePopupRegistry, m_Root.get(), best.el);
