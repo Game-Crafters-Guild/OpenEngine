@@ -12,6 +12,7 @@
 #include "Assets/AssetDependencyExtractor.h"
 #include "Assets/Packages/ProjectPackagesManifest.h"
 
+#include "Components/Audio/AudioEmitter.h"
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/Animation/AnimatedNodeRef.h"
@@ -2243,6 +2244,102 @@ TEST(SceneIO, LightAngularDiameterDefaultsToSolarDisc)
 {
     Components::Light l{};
     EXPECT_FLOAT_EQ(l.ShadowAngularDiameter, 0.53f);
+}
+
+// An audio emitter's distance falloff decides how loud every spatialized sound
+// is, so an authored curve that reverted on load would change the mix of the
+// whole scene. The default maximum distance (max float, "no limit") must come
+// back exactly too.
+TEST(SceneIO, SaveThenLoad_RoundTripAudioEmitterFalloff)
+{
+    const auto scenePath = MakeTempPath("audio_emitter_falloff.scene");
+
+    ECS::World w1;
+    const ECS::EntityHandle authoredEntity = w1.CreateEntity();
+    const ECS::EntityHandle defaultEntity = w1.CreateEntity();
+    ASSERT_TRUE(authoredEntity.IsValid());
+    ASSERT_TRUE(defaultEntity.IsValid());
+    w1.AddComponentImmediate(authoredEntity, Components::SceneEntityTag{{'a', 'u', 't', 'h', '\0'}});
+    w1.AddComponentImmediate(defaultEntity, Components::SceneEntityTag{{'d', 'e', 'f', '\0'}});
+
+    Components::AudioEmitter authored{};
+    authored.attenuation = Components::AudioEmitterAttenuation::Linear;
+    authored.minDistance = 50.0f;
+    authored.maxDistance = 2000.0f;
+    authored.rolloff = 0.75f;
+    w1.AddComponentImmediate(authoredEntity, authored);
+    w1.AddComponentImmediate(defaultEntity, Components::AudioEmitter{});
+
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const auto* a2 = w2.GetComponent<Components::AudioEmitter>(FindByTag(w2, "auth"));
+    const auto* d2 = w2.GetComponent<Components::AudioEmitter>(FindByTag(w2, "def"));
+    ASSERT_NE(a2, nullptr);
+    ASSERT_NE(d2, nullptr);
+    EXPECT_EQ(a2->attenuation, Components::AudioEmitterAttenuation::Linear);
+    EXPECT_EQ(a2->minDistance, 50.0f);
+    EXPECT_EQ(a2->maxDistance, 2000.0f);
+    EXPECT_EQ(a2->rolloff, 0.75f);
+    EXPECT_EQ(d2->attenuation, Components::AudioEmitterAttenuation::Inverse);
+    EXPECT_EQ(d2->minDistance, 1.0f);
+    EXPECT_EQ(d2->maxDistance, std::numeric_limits<float>::max());
+    EXPECT_EQ(d2->rolloff, 1.0f);
+}
+
+// A scene written before the falloff fields existed has no lines for them: the
+// emitter loads with the default falloff, which is the 1/distance curve every
+// spatialized emitter had before.
+TEST(SceneIO, Load_AudioEmitterWithoutFalloffKeysTakesTheDefaults)
+{
+    const auto scenePath = MakeTempPath("audio_emitter_no_falloff.scene");
+
+    ECS::World w1;
+    const ECS::EntityHandle e = w1.CreateEntity();
+    ASSERT_TRUE(e.IsValid());
+    w1.AddComponentImmediate(e, Components::SceneEntityTag{{'e', 'm', 'i', 't', '\0'}});
+    Components::AudioEmitter authored{};
+    authored.volume = 0.5f;
+    authored.attenuation = Components::AudioEmitterAttenuation::Exponential;
+    authored.minDistance = 50.0f;
+    authored.maxDistance = 2000.0f;
+    authored.rolloff = 2.0f;
+    w1.AddComponentImmediate(e, authored);
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
+
+    std::string text;
+    {
+        std::ifstream in(scenePath, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    for (const std::string key : {"AudioEmitter.attenuation", "AudioEmitter.minDistance",
+                                  "AudioEmitter.maxDistance", "AudioEmitter.rolloff"})
+    {
+        const auto pos = text.find(key);
+        ASSERT_NE(pos, std::string::npos)
+            << key << " does not serialize at all, so this test cannot tell an absent key from an "
+               "unwritten one; the file reads:\n"
+            << text;
+        const auto lineEnd = text.find('\n', pos);
+        text.erase(pos, lineEnd == std::string::npos ? std::string::npos : lineEnd - pos + 1);
+    }
+    {
+        std::ofstream out(scenePath, std::ios::binary | std::ios::trunc);
+        out << text;
+    }
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const auto* loaded = w2.GetComponent<Components::AudioEmitter>(FindByTag(w2, "emit"));
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->attenuation, Components::AudioEmitterAttenuation::Inverse);
+    EXPECT_EQ(loaded->minDistance, 1.0f);
+    EXPECT_EQ(loaded->maxDistance, std::numeric_limits<float>::max());
+    EXPECT_EQ(loaded->rolloff, 1.0f);
+    // The rest of the emitter is untouched: the absent keys resolved to their
+    // defaults, the load did not bail out early.
+    EXPECT_EQ(loaded->volume, 0.5f);
 }
 
 // Exposure lives on the Camera (the sensor). The exposure-control fields (mode + Manual EV100 +

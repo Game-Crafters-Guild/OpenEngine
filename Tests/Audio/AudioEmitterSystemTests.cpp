@@ -1,7 +1,9 @@
 // AudioEmitterSystemTests.cpp — lock tests for AudioEmitterSystem's
 // lifecycle-events consumer behavior (P3 #389 + its must-fix f0d4c05) and
 // the shared SwapGenerationGuard gap recovery it migrated onto (S1 #406).
-// Both migrations previously shipped proven by inspection only.
+// Both migrations previously shipped proven by inspection only. Charter 7
+// covers the distance falloff a spatialized voice is started with, read back
+// from its sound through AudioSystem::GetSpatializedVoiceFalloffsForTest.
 //
 // Harness shape: a REAL AudioSystem initialized headlessly (miniaudio's
 // default backend priority ends at the null backend, so device-less CI still
@@ -18,6 +20,7 @@
 #include "Assets/AudioAsset.h"
 #include "Audio/AudioSystem.h"
 #include "Components/Audio/AudioEmitter.h"
+#include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
@@ -26,7 +29,9 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 using GameEngine::AssetManager;
@@ -402,4 +407,125 @@ TEST_F(AudioEmitterSystemTest, DoubleStepWithinWindowIsIdempotent)
     m_System->Update(*m_World, kDt);
     m_System->Update(*m_World, kDt); // same Removed span again
     EXPECT_EQ(AliveVoices(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Charter 7 — distance falloff: PlayOptions::falloff and the emitter's falloff
+// fields reach the voice's miniaudio sound (read back from the sound), the
+// defaults are miniaudio's own, and out-of-range values are sanitized.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+const GameEngine::Mathematics::Vector3 kZero{0.0f, 0.0f, 0.0f};
+
+Audio::PlayOptions SilentLoopOptions()
+{
+    Audio::PlayOptions opts{};
+    opts.volume = 0.0f;
+    opts.loop = true;
+    return opts;
+}
+
+void ExpectFalloff(const Audio::AudioFalloff& actual, Audio::AudioAttenuationModel model,
+                   float minDistance, float maxDistance, float rolloff)
+{
+    EXPECT_EQ(actual.model, model);
+    EXPECT_EQ(actual.minDistance, minDistance);
+    EXPECT_EQ(actual.maxDistance, maxDistance);
+    EXPECT_EQ(actual.rolloff, rolloff);
+}
+} // namespace
+
+TEST_F(AudioEmitterSystemTest, DefaultFalloffIsInverseOverOneUnitWithNoLimit)
+{
+    ASSERT_TRUE(m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, SilentLoopOptions()).IsValid());
+
+    const auto falloffs = m_Audio->GetSpatializedVoiceFalloffsForTest();
+    ASSERT_EQ(falloffs.size(), 1u);
+    ExpectFalloff(falloffs[0], Audio::AudioAttenuationModel::Inverse, 1.0f,
+                  std::numeric_limits<float>::max(), 1.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, Play3DFalloffReachesTheSound)
+{
+    Audio::PlayOptions opts = SilentLoopOptions();
+    opts.falloff.model = Audio::AudioAttenuationModel::Linear;
+    opts.falloff.minDistance = 50.0f;
+    opts.falloff.maxDistance = 2000.0f;
+    opts.falloff.rolloff = 0.5f;
+    ASSERT_TRUE(m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, opts).IsValid());
+
+    const auto falloffs = m_Audio->GetSpatializedVoiceFalloffsForTest();
+    ASSERT_EQ(falloffs.size(), 1u);
+    ExpectFalloff(falloffs[0], Audio::AudioAttenuationModel::Linear, 50.0f, 2000.0f, 0.5f);
+}
+
+TEST_F(AudioEmitterSystemTest, SpatializedPlay2DFalloffReachesTheSound)
+{
+    Audio::PlayOptions opts = SilentLoopOptions();
+    opts.spatialized = true;
+    opts.falloff.model = Audio::AudioAttenuationModel::Exponential;
+    opts.falloff.minDistance = 4.0f;
+    opts.falloff.maxDistance = 400.0f;
+    opts.falloff.rolloff = 2.0f;
+    ASSERT_TRUE(m_Audio->Play2D(m_ClipGuid, opts).IsValid());
+
+    const auto falloffs = m_Audio->GetSpatializedVoiceFalloffsForTest();
+    ASSERT_EQ(falloffs.size(), 1u);
+    ExpectFalloff(falloffs[0], Audio::AudioAttenuationModel::Exponential, 4.0f, 400.0f, 2.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, OutOfRangeFalloffIsSanitized)
+{
+    Audio::PlayOptions negative = SilentLoopOptions();
+    negative.falloff.model = Audio::AudioAttenuationModel::None;
+    negative.falloff.minDistance = -5.0f;
+    negative.falloff.maxDistance = -10.0f;
+    negative.falloff.rolloff = -2.0f;
+    ASSERT_TRUE(m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, negative).IsValid());
+
+    Audio::PlayOptions nonFinite = SilentLoopOptions();
+    nonFinite.falloff.minDistance = std::numeric_limits<float>::quiet_NaN();
+    nonFinite.falloff.maxDistance = std::numeric_limits<float>::infinity();
+    nonFinite.falloff.rolloff = std::numeric_limits<float>::quiet_NaN();
+    ASSERT_TRUE(m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, nonFinite).IsValid());
+
+    Audio::PlayOptions inverted = SilentLoopOptions();
+    inverted.falloff.minDistance = 100.0f;
+    inverted.falloff.maxDistance = 10.0f;
+    ASSERT_TRUE(m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, inverted).IsValid());
+
+    const auto falloffs = m_Audio->GetSpatializedVoiceFalloffsForTest();
+    ASSERT_EQ(falloffs.size(), 3u);
+    constexpr float kSmallest = std::numeric_limits<float>::min();
+    ExpectFalloff(falloffs[0], Audio::AudioAttenuationModel::None, kSmallest, kSmallest, 0.0f);
+    ExpectFalloff(falloffs[1], Audio::AudioAttenuationModel::Inverse, 1.0f,
+                  std::numeric_limits<float>::max(), 1.0f);
+    ExpectFalloff(falloffs[2], Audio::AudioAttenuationModel::Inverse, 100.0f, 100.0f, 1.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, SpatializedEmitterFalloffReachesTheVoice)
+{
+    AudioEmitter defaults = MakeEmitter();
+    defaults.spatialized = true;
+    (void)m_World->CreateHandle(defaults, GameEngine::Components::WorldTransform{});
+
+    AudioEmitter authored = defaults;
+    authored.attenuation = GameEngine::Components::AudioEmitterAttenuation::Linear;
+    authored.minDistance = 50.0f;
+    authored.maxDistance = 2000.0f;
+    authored.rolloff = 0.75f;
+    (void)m_World->CreateHandle(authored, GameEngine::Components::WorldTransform{});
+    SwapAndRun();
+
+    auto falloffs = m_Audio->GetSpatializedVoiceFalloffsForTest();
+    ASSERT_EQ(falloffs.size(), 2u);
+    // Voice-slot order follows start order, which the system does not promise;
+    // tell the two apart by their minimum distance.
+    if (falloffs[0].minDistance > falloffs[1].minDistance)
+        std::swap(falloffs[0], falloffs[1]);
+    ExpectFalloff(falloffs[0], Audio::AudioAttenuationModel::Inverse, 1.0f,
+                  std::numeric_limits<float>::max(), 1.0f);
+    ExpectFalloff(falloffs[1], Audio::AudioAttenuationModel::Linear, 50.0f, 2000.0f, 0.75f);
 }

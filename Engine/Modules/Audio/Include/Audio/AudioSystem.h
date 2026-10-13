@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace GameEngine
 {
@@ -78,6 +79,10 @@ public:
     // observable for tests and debug overlays; per-voice handles stay private
     // to their owners (e.g. AudioEmitterSystem's pimpl).
     std::size_t GetAliveVoiceCount() const;
+
+    // Test hook: the distance falloff of every started spatialized voice, read back
+    // from its miniaudio sound (after sanitizing), in voice-slot order.
+    std::vector<AudioFalloff> GetSpatializedVoiceFalloffsForTest() const;
 
     // Bus volume (linear 0..1). Clamped in SetBusVolume.
     void SetBusVolume(AudioBusId bus, float linearVolume);

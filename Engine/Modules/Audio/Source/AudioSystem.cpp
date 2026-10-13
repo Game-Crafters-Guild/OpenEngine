@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <limits>
@@ -30,6 +31,61 @@ static std::uint8_t NextGeneration(std::uint8_t g)
     if (g == 0)
         g = 1;
     return g;
+}
+
+ma_attenuation_model ToMiniaudioModel(AudioAttenuationModel model)
+{
+    switch (model)
+    {
+    case AudioAttenuationModel::None:
+        return ma_attenuation_model_none;
+    case AudioAttenuationModel::Linear:
+        return ma_attenuation_model_linear;
+    case AudioAttenuationModel::Exponential:
+        return ma_attenuation_model_exponential;
+    case AudioAttenuationModel::Inverse:
+        break;
+    }
+    return ma_attenuation_model_inverse;
+}
+
+AudioAttenuationModel FromMiniaudioModel(ma_attenuation_model model)
+{
+    switch (model)
+    {
+    case ma_attenuation_model_none:
+        return AudioAttenuationModel::None;
+    case ma_attenuation_model_linear:
+        return AudioAttenuationModel::Linear;
+    case ma_attenuation_model_exponential:
+        return AudioAttenuationModel::Exponential;
+    case ma_attenuation_model_inverse:
+        break;
+    }
+    return AudioAttenuationModel::Inverse;
+}
+
+// The sanitizing rules documented on AudioFalloff.
+AudioFalloff SanitizeFalloff(const AudioFalloff& falloff)
+{
+    const AudioFalloff defaults{};
+    AudioFalloff out = falloff;
+    out.minDistance = std::isfinite(falloff.minDistance)
+                          ? std::max(falloff.minDistance, std::numeric_limits<float>::min())
+                          : defaults.minDistance;
+    out.maxDistance = std::isfinite(falloff.maxDistance) ? falloff.maxDistance : defaults.maxDistance;
+    out.maxDistance = std::max(out.maxDistance, out.minDistance);
+    out.rolloff = std::isfinite(falloff.rolloff) ? std::max(falloff.rolloff, 0.0f) : defaults.rolloff;
+    return out;
+}
+
+void ApplyFalloff(ma_sound& sound, const AudioFalloff& falloff)
+{
+    const AudioFalloff f = SanitizeFalloff(falloff);
+    ma_sound_set_attenuation_model(&sound, ToMiniaudioModel(f.model));
+    ma_sound_set_min_distance(&sound, f.minDistance);
+    ma_sound_set_max_distance(&sound, f.maxDistance);
+    ma_sound_set_rolloff(&sound, f.rolloff);
 }
 } // namespace
 
@@ -601,7 +657,7 @@ void AudioSystem::Update(float dt)
         {
             ma_sound_set_position(&v.sound, v.pos.x, v.pos.y, v.pos.z);
             ma_sound_set_velocity(&v.sound, v.vel.x, v.vel.y, v.vel.z);
-            ma_sound_set_attenuation_model(&v.sound, ma_attenuation_model_inverse);
+            ApplyFalloff(v.sound, v.opts.falloff);
         }
 
         // Verify device is started before attempting to play sound
@@ -1222,6 +1278,26 @@ std::size_t AudioSystem::GetAliveVoiceCount() const
             ++count;
     }
     return count;
+}
+
+std::vector<AudioFalloff> AudioSystem::GetSpatializedVoiceFalloffsForTest() const
+{
+    std::vector<AudioFalloff> falloffs;
+    if (!m_Impl)
+        return falloffs;
+
+    for (const auto& v : m_Impl->voices)
+    {
+        if (!v.alive || !v.soundInit || (!v.is3D && !v.opts.spatialized))
+            continue;
+        AudioFalloff f{};
+        f.model = FromMiniaudioModel(ma_sound_get_attenuation_model(&v.sound));
+        f.minDistance = ma_sound_get_min_distance(&v.sound);
+        f.maxDistance = ma_sound_get_max_distance(&v.sound);
+        f.rolloff = ma_sound_get_rolloff(&v.sound);
+        falloffs.push_back(f);
+    }
+    return falloffs;
 }
 
 void AudioSystem::SetBusVolume(AudioBusId bus, float linearVolume)

@@ -15,6 +15,7 @@ namespace GameEngine { namespace Engine::Audio {
 using namespace ::GameEngine::Audio;
 
 using GameEngine::Components::AudioEmitter;
+using GameEngine::Components::AudioEmitterAttenuation;
 using GameEngine::Components::WorldTransform;
 
 namespace
@@ -38,6 +39,32 @@ void StopEmitterVoice(Audio::AudioSystem& audio, RuntimeEmitter& rt)
         rt.voice = Audio::INVALID_AUDIO_EMITTER_HANDLE;
     }
     rt.started = false;
+}
+
+Audio::AudioAttenuationModel ToAttenuationModel(AudioEmitterAttenuation attenuation)
+{
+    switch (attenuation)
+    {
+    case AudioEmitterAttenuation::None:
+        return Audio::AudioAttenuationModel::None;
+    case AudioEmitterAttenuation::Linear:
+        return Audio::AudioAttenuationModel::Linear;
+    case AudioEmitterAttenuation::Exponential:
+        return Audio::AudioAttenuationModel::Exponential;
+    case AudioEmitterAttenuation::Inverse:
+        break;
+    }
+    return Audio::AudioAttenuationModel::Inverse;
+}
+
+Audio::AudioFalloff MakeFalloff(const AudioEmitter& emitter)
+{
+    Audio::AudioFalloff falloff{};
+    falloff.model = ToAttenuationModel(emitter.attenuation);
+    falloff.minDistance = emitter.minDistance;
+    falloff.maxDistance = emitter.maxDistance;
+    falloff.rolloff = emitter.rolloff;
+    return falloff;
 }
 
 } // namespace
@@ -209,6 +236,7 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                opts.loop = emitter.loop;
                opts.spatialized = spatialize;
                opts.bus = static_cast<Audio::AudioBusId>(emitter.bus);
+               opts.falloff = MakeFalloff(emitter);
 
                // Start if requested.
                const bool shouldStart = !rt.voice.IsValid() && (emitter.loop || (emitter.playOnStart && !rt.started));

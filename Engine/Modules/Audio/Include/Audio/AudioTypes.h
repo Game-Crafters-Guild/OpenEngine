@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 namespace GameEngine::Audio
 {
@@ -38,6 +39,38 @@ struct ListenerState
     float velocity[3] = {0, 0, 0};
 };
 
+// Distance attenuation curve of a spatialized voice; each maps to the miniaudio
+// model of the same name.
+enum class AudioAttenuationModel : std::uint8_t
+{
+    None = 0,    // no distance attenuation
+    Inverse,     // 1/d-shaped falloff (default)
+    Linear,      // straight ramp between minDistance and maxDistance
+    Exponential, // (d / minDistance)^-rolloff
+};
+
+/** Distance falloff of a spatialized voice; 2D voices ignore it. Distances are in
+ *  world units from the listener. With dc = clamp(d, minDistance, maxDistance):
+ *    Inverse:     gain = minDistance / (minDistance + rolloff * (dc - minDistance))
+ *    Linear:      gain = 1 - rolloff * (dc - minDistance) / (maxDistance - minDistance), floored at 0
+ *    Exponential: gain = (dc / minDistance)^-rolloff
+ *    None:        gain = 1
+ *  Inside minDistance a voice plays at full volume; past maxDistance its gain holds at
+ *  the maxDistance value (Linear with rolloff 1 is silent there, Inverse is not).
+ *  maxDistance equal to minDistance disables attenuation. The defaults are miniaudio's
+ *  (Inverse, 1, no limit, 1: gain = 1/d beyond one unit).
+ *  A voice sanitizes the values when it starts: a NaN or infinite value takes its
+ *  default (an infinite maxDistance is the same as no limit), minDistance is raised to
+ *  at least the smallest positive normal float (Inverse and Exponential divide by it),
+ *  maxDistance to at least minDistance, and rolloff to at least 0. */
+struct AudioFalloff
+{
+    AudioAttenuationModel model = AudioAttenuationModel::Inverse;
+    float minDistance = 1.0f;
+    float maxDistance = std::numeric_limits<float>::max(); // no limit
+    float rolloff = 1.0f;
+};
+
 struct PlayOptions
 {
     float volume = 1.0f;
@@ -45,6 +78,7 @@ struct PlayOptions
     bool loop = false;
     bool spatialized = false;
     AudioBusId bus = 0;
+    AudioFalloff falloff{}; // spatialized voices only
 };
 
 } // namespace GameEngine::Audio
