@@ -126,6 +126,7 @@ struct AudioSystem::Impl
         std::uint8_t generation = 1;
         bool alive = false;
         VoiceState state = VoiceState::Empty;
+        bool paused = false; // Pause(): a pending voice does not start, a playing one is stopped in place
         std::uint64_t startSeq = 0; // monotonically increasing when a voice begins playing (for simple priority/stealing)
 
         AudioClipHandle clip = INVALID_AUDIO_CLIP_HANDLE;
@@ -147,6 +148,23 @@ struct AudioSystem::Impl
         ma_decoder decoder{};
         bool decoderInit = false;
     };
+
+    // The live slot a handle names, or nullptr for an invalid or stale handle.
+    VoiceSlot* FindVoice(AudioEmitterHandle emitter)
+    {
+        if (!emitter.IsValid() || emitter.Index() >= voices.size())
+            return nullptr;
+        VoiceSlot& v = voices[emitter.Index()];
+        return (v.alive && v.generation == emitter.Generation()) ? &v : nullptr;
+    }
+
+    const VoiceSlot* FindVoice(AudioEmitterHandle emitter) const
+    {
+        return const_cast<Impl*>(this)->FindVoice(emitter);
+    }
+
+    // Matches the MA_SOUND_FLAG_NO_SPATIALIZATION choice made when the sound starts.
+    static bool IsSpatialized(const VoiceSlot& v) { return v.is3D || v.opts.spatialized; }
 
     // Asset hot-reload integration (queue-only callback)
     std::mutex assetEventMutex;
@@ -496,7 +514,7 @@ void AudioSystem::Update(float dt)
     for (std::uint64_t i = 0; i < m_Impl->voices.size(); ++i)
     {
         auto& v = m_Impl->voices[i];
-        if (!v.alive || v.state != Impl::VoiceState::Pending)
+        if (!v.alive || v.state != Impl::VoiceState::Pending || v.paused)
             continue;
 
         const AudioEmitterHandle vh(i, v.generation);
@@ -596,6 +614,8 @@ void AudioSystem::Update(float dt)
 
         ma_sound_set_volume(&v.sound, v.opts.volume);
         ma_sound_set_pitch(&v.sound, v.opts.pitch);
+        if (!Impl::IsSpatialized(v))
+            ma_sound_set_pan(&v.sound, v.opts.pan);
 
         if (v.is3D || v.opts.spatialized)
         {
@@ -642,7 +662,7 @@ void AudioSystem::Update(float dt)
     for (std::uint64_t i = 0; i < m_Impl->voices.size(); ++i)
     {
         auto& v = m_Impl->voices[i];
-        if (!v.alive || v.state != Impl::VoiceState::Playing || !v.soundInit)
+        if (!v.alive || v.state != Impl::VoiceState::Playing || !v.soundInit || v.paused)
             continue;
 
         if (!v.opts.loop && ma_sound_at_end(&v.sound))
@@ -949,6 +969,7 @@ AudioEmitterHandle AudioSystem::Play2D(AudioClipHandle clip, const PlayOptions& 
     auto& v = m_Impl->voices[idx];
     v.alive = true;
     v.state = Impl::VoiceState::Pending;
+    v.paused = false;
     v.startSeq = 0;
     v.clip = clip;
     v.opts = opts;
@@ -1069,6 +1090,7 @@ AudioEmitterHandle AudioSystem::Play3D(AudioClipHandle clip,
     auto& v = m_Impl->voices[idx];
     v.alive = true;
     v.state = Impl::VoiceState::Pending;
+    v.paused = false;
     v.startSeq = 0;
     v.clip = clip;
     v.opts = opts;
@@ -1208,6 +1230,92 @@ bool AudioSystem::IsPlaying(AudioEmitterHandle emitter) const
         return false;
 
     return ma_sound_is_playing(&v.sound) != MA_FALSE;
+}
+
+void AudioSystem::SetVolume(AudioEmitterHandle emitter, float linearVolume)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return;
+    v->opts.volume = std::max(linearVolume, 0.0f);
+    if (v->soundInit)
+        ma_sound_set_volume(&v->sound, v->opts.volume);
+}
+
+void AudioSystem::SetPitch(AudioEmitterHandle emitter, float pitch)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !(pitch > 0.0f))
+        return;
+    v->opts.pitch = pitch;
+    if (v->soundInit)
+        ma_sound_set_pitch(&v->sound, pitch);
+}
+
+void AudioSystem::SetPan(AudioEmitterHandle emitter, float pan)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || Impl::IsSpatialized(*v))
+        return;
+    v->opts.pan = std::clamp(pan, -1.0f, 1.0f);
+    if (v->soundInit)
+        ma_sound_set_pan(&v->sound, v->opts.pan);
+}
+
+float AudioSystem::GetVolume(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_volume(&v->sound) : v->opts.volume;
+}
+
+float AudioSystem::GetPitch(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_pitch(&v->sound) : v->opts.pitch;
+}
+
+float AudioSystem::GetPan(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_pan(&v->sound) : v->opts.pan;
+}
+
+void AudioSystem::Pause(AudioEmitterHandle emitter)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || v->paused)
+        return;
+    v->paused = true;
+    // ma_sound_stop halts the node in place; the data source keeps its cursor.
+    if (v->soundInit)
+        ma_sound_stop(&v->sound);
+}
+
+void AudioSystem::Resume(AudioEmitterHandle emitter)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !v->paused)
+        return;
+    v->paused = false;
+    if (!v->soundInit)
+        return; // pending: starts in Update once its clip is ready
+    // ma_sound_start rewinds a sound sitting at its end; a finished one-shot
+    // is left for the reaper instead of replaying.
+    if (!v->opts.loop && ma_sound_at_end(&v->sound))
+        return;
+    ma_sound_start(&v->sound);
+}
+
+bool AudioSystem::IsPaused(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    return v && v->paused;
 }
 
 std::size_t AudioSystem::GetAliveVoiceCount() const

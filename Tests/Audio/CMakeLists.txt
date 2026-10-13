@@ -1,18 +1,21 @@
 # Audio ECS tests — AudioEmitterSystem lifecycle-consumer coverage
-# (P3 #389 lifecycle events + S1 #406 SwapGenerationGuard gap recovery)
-# plus AudioListener +Z-forward convention pins.
+# (P3 #389 lifecycle events + S1 #406 SwapGenerationGuard gap recovery),
+# AudioListener +Z-forward convention pins, and AudioSystem live voice
+# control (volume, pitch, pan, pause and resume).
 
 find_package(GTest REQUIRED)
 
 add_executable(AudioECSTests
     AudioEmitterSystemTests.cpp
     AudioListenerSystemTests.cpp
+    AudioVoiceControlTests.cpp
 )
 
 # Modules are OBJECT libs aggregated into Engine.dll; link Engine alone and
 # resolve module symbols across the import lib (Tests/Rendering precedent).
 set_target_properties(AudioECSTests PROPERTIES UNITY_BUILD OFF)
 target_compile_features(AudioECSTests PUBLIC cxx_std_20)
+target_include_directories(AudioECSTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests) # TestTempDir.h
 
 target_link_libraries(AudioECSTests
     PRIVATE

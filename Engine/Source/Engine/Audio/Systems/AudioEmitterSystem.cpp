@@ -234,6 +234,15 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                    }
                }
 
+               // Volume and pitch follow the component for the life of the voice.
+               if (rt.voice.IsValid())
+               {
+                   if (m_Audio->GetVolume(rt.voice) != emitter.volume)
+                       m_Audio->SetVolume(rt.voice, emitter.volume);
+                   if (m_Audio->GetPitch(rt.voice) != emitter.pitch)
+                       m_Audio->SetPitch(rt.voice, emitter.pitch);
+               }
+
                // Keep 3D state updated.
                if (rt.voice.IsValid() && spatialize)
                {

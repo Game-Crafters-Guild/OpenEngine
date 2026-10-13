@@ -23,6 +23,8 @@
 #include "ECS/World.h"
 #include "ECSModules/Audio/Systems/AudioEmitterSystem.h"
 
+#include "AudioTestTone.h"
+
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -41,55 +43,6 @@ namespace
 {
 
 constexpr float kDt = 0.016f;
-
-// A tiny valid 16-bit PCM WAV (0.5 s, 440 Hz, mono, 8 kHz) so the clip
-// decodes through the same miniaudio path production WAVs take.
-GameEngine::Vector<GameEngine::uint8> MakeTestToneWav()
-{
-    constexpr std::uint32_t kSampleRate = 8000;
-    constexpr std::uint32_t kFrameCount = 4000;
-    constexpr std::uint16_t kChannels = 1;
-    constexpr std::uint16_t kBitsPerSample = 16;
-    constexpr std::uint32_t kBytesPerFrame = kChannels * (kBitsPerSample / 8);
-    constexpr std::uint32_t kDataBytes = kFrameCount * kBytesPerFrame;
-
-    GameEngine::Vector<GameEngine::uint8> wav;
-    wav.reserve(44 + kDataBytes);
-
-    auto putU16 = [&](std::uint16_t v)
-    {
-        wav.push_back(static_cast<GameEngine::uint8>(v & 0xFF));
-        wav.push_back(static_cast<GameEngine::uint8>((v >> 8) & 0xFF));
-    };
-    auto putU32 = [&](std::uint32_t v)
-    {
-        putU16(static_cast<std::uint16_t>(v & 0xFFFF));
-        putU16(static_cast<std::uint16_t>(v >> 16));
-    };
-    auto putTag = [&](const char* tag) { wav.insert(wav.end(), tag, tag + 4); };
-
-    putTag("RIFF");
-    putU32(36 + kDataBytes);
-    putTag("WAVE");
-    putTag("fmt ");
-    putU32(16);
-    putU16(1); // PCM
-    putU16(kChannels);
-    putU32(kSampleRate);
-    putU32(kSampleRate * kBytesPerFrame); // byte rate
-    putU16(kBytesPerFrame);               // block align
-    putU16(kBitsPerSample);
-    putTag("data");
-    putU32(kDataBytes);
-
-    for (std::uint32_t i = 0; i < kFrameCount; ++i)
-    {
-        const float t = static_cast<float>(i) / static_cast<float>(kSampleRate);
-        const float s = std::sin(2.0f * 3.14159265f * 440.0f * t);
-        putU16(static_cast<std::uint16_t>(static_cast<std::int16_t>(s * 0.25f * 32767.0f)));
-    }
-    return wav;
-}
 
 } // namespace
 
@@ -115,7 +68,7 @@ protected:
         m_ClipGuid = GUID::Generate();
         m_Clip = std::make_shared<AudioAsset>(m_ClipGuid,
                                               std::filesystem::path("audio-ecs-test-tone.wav"));
-        ASSERT_TRUE(m_Clip->LoadFromData(MakeTestToneWav()));
+        ASSERT_TRUE(m_Clip->LoadFromData(AudioTestTone::MakeTestToneWav()));
         ASSERT_TRUE(m_Audio->ResolveClip(*m_Clip).IsValid());
 
         m_World = std::make_unique<ECS::World>();
@@ -402,4 +355,31 @@ TEST_F(AudioEmitterSystemTest, DoubleStepWithinWindowIsIdempotent)
     m_System->Update(*m_World, kDt);
     m_System->Update(*m_World, kDt); // same Removed span again
     EXPECT_EQ(AliveVoices(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Charter 7 — live fields: volume and pitch edits on the component reach the
+// voice it is already playing, without a restart.
+// ---------------------------------------------------------------------------
+
+TEST_F(AudioEmitterSystemTest, VolumeAndPitchEditsReachLiveVoice)
+{
+    m_Audio->SetBusVolume(0, 0.0f); // master bus muted: the edited volume is audible otherwise
+    auto e = CreateEmitterEntity();
+    SwapAndRun();
+    ASSERT_EQ(AliveVoices(), 1u);
+
+    // The first voice of a fresh AudioSystem occupies slot 0, generation 1.
+    const Audio::AudioEmitterHandle voice(0, 1);
+    ASSERT_TRUE(m_Audio->IsAlive(voice));
+
+    AudioEmitter* emitter = m_World->GetComponentForWrite<AudioEmitter>(e);
+    ASSERT_NE(emitter, nullptr);
+    emitter->volume = 0.125f;
+    emitter->pitch = 1.5f;
+    SwapAndRun();
+
+    EXPECT_TRUE(m_Audio->IsAlive(voice)) << "a field edit restarted the voice";
+    EXPECT_FLOAT_EQ(m_Audio->GetVolume(voice), 0.125f);
+    EXPECT_FLOAT_EQ(m_Audio->GetPitch(voice), 1.5f);
 }
