@@ -37,7 +37,7 @@
 # pinned tools into it makes that resolution identical everywhere, and costs a
 # download once per machine instead of once per tree.
 
-set(GE_VCPKG_COMMIT "ade921ed36f0414d40fafed83f1df7a95c6d1db4")
+set(GE_VCPKG_COMMIT "264e86adc7ed96c8cbfae64c1ff98bd833870ae7")
 
 # Reports whether ${cloneDir} is checked out at GE_VCPKG_COMMIT. Runs on every
 # configure, including the ones that provision nothing.
