@@ -384,7 +384,12 @@ void main()
     ivec2 depthSize = textureSize(uDepth, 0);
     ivec2 pix = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize) - vec2(1.0)));
     float rawDepth = texelFetch(uDepth, pix, 0).r;
-    bool sky = rawDepth <= 0.000001;
+    // Reverse-Z clears the background to exactly 0 and a D32F buffer keeps the
+    // nearest geometry to the far plane above it, so only 0 is sky. A small
+    // threshold took the last metres before the far plane for sky too, and
+    // geometry there went unfogged: a dark rim along the horizon of a scene
+    // whose fog reaches the far plane.
+    bool sky = rawDepth <= 0.0;
 
     float depthForRay = sky ? 0.0 : rawDepth;
     vec2 ndc = ViewportUvToNdc(vUV);
