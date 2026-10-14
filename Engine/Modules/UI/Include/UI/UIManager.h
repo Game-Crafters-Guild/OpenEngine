@@ -707,6 +707,9 @@ public:
     // Test-only peek at a persistent clip slot. Returns nullptr when the slot
     // is out of bounds. Used by text-overflow clip regression tests.
     const UI::UIClipRect* PeekClipRectForTesting(uint16_t slot) const;
+    // Test-only peek at a persistent transform slot (UIElement::
+    // m_TransformSlotIdx). Returns nullptr when the slot is out of bounds.
+    const UI::UITransformSlot* PeekTransformSlotForTesting(uint32_t slot) const;
     // Test-only: position of `el`'s first persistent primitive slot in the
     // frame's draw order, or -1 when the element emitted nothing. Later
     // positions draw on top. Used by overlay-ordering regression tests.
@@ -1798,6 +1801,7 @@ public:
     // SDF per-frame SSBO buffers (auto-growing)
     std::unique_ptr<UI::FrameBufferRing<UI::UIPrimitive>> m_SdfPrimRing;
     std::unique_ptr<UI::FrameBufferRing<UI::UIClipRect>> m_SdfClipRing;
+    std::unique_ptr<UI::FrameBufferRing<UI::UITransformSlot>> m_SdfTransformRing;
     // Stage 2 part 3: ring buffer for the DrawOrder SSBO. Size mirrors
     // m_DrawOrder; each entry is a uint32_t slot index into m_PersistentPrimitives.
     std::unique_ptr<UI::FrameBufferRing<uint32_t>> m_SdfDrawOrderRing;
@@ -1816,6 +1820,7 @@ public:
     // uploads the touched slot span instead of the whole store.
     uint64_t m_PrimitiveStoreVersion = 1;
     uint64_t m_ClipStoreVersion = 1;
+    uint64_t m_TransformStoreVersion = 1;
     uint64_t m_DrawOrderStoreVersion = 1;
 
     // Compat profile only: the per-texture partition of the draw order, and the
@@ -2218,6 +2223,11 @@ public:
     // element the last full DFS skipped has become visible and needs a full
     // regen to re-establish its slots.
     bool ElementRectIntersectsNearestClip(const UIElement* el) const;
+    // CSS transform support: writes `el`'s transform slot from its current
+    // layout rect and style, chained to `parentIdx`, allocating the slot if
+    // the element has none. Returns the slot, or kNoTransform when the
+    // element's transform is `none` (a slot it held is freed).
+    uint32_t WriteElementTransformSlot(UIElement* el, uint32_t parentIdx);
     // Drain support: whether a control that renders its own text, and owned
     // no primitive range at its last full DFS, would emit anything now. Emits
     // into the drain context's scratch tail and discards the result.
@@ -2823,6 +2833,11 @@ public:
     UI::SlotAllocator            m_PrimitiveAllocator;
     std::vector<UI::UIClipRect>  m_PersistentClipRects;
     UI::SimpleSlotAllocator      m_ClipAllocator;
+    // CSS transforms: one slot per transformed element (UIElement::
+    // m_TransformSlotIdx). Slot 0 is the identity every untransformed
+    // primitive points at; AllocateTransformSlot never hands it out.
+    std::vector<UI::UITransformSlot> m_PersistentTransforms;
+    UI::SimpleSlotAllocator          m_TransformAllocator;
     std::vector<uint32_t>        m_DrawOrder;
     UI::SlotAllocator            m_DrawOrderAllocator;
 

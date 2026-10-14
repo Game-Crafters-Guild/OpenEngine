@@ -1715,6 +1715,203 @@ static StyleValue ParseBorderImageRepeatValue(const std::string& value)
     return r;
 }
 
+// --- transform (css-transforms-1, 2D functions) ------------------------------
+
+// Splits a function's argument list at its top-level commas.
+static std::vector<std::string> SplitTransformArgs(const std::string& args)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    int depth = 0;
+    for (char c : args)
+    {
+        if (c == '(')
+            ++depth;
+        else if (c == ')')
+            --depth;
+        if (c == ',' && depth == 0)
+        {
+            out.push_back(Trim(cur));
+            cur.clear();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    out.push_back(Trim(cur));
+    return out;
+}
+
+// An <angle> in degrees: deg, rad, grad or turn, or a bare 0.
+static bool ParseTransformAngle(const std::string& tok, float& outDegrees)
+{
+    const std::string v = ToLowerAscii(Trim(tok));
+    const char* begin = v.c_str();
+    char* end = nullptr;
+    const float f = std::strtof(begin, &end);
+    if (end == begin)
+        return false;
+    const std::string unit(end);
+    if (unit == "deg")
+        outDegrees = f;
+    else if (unit == "rad")
+        outDegrees = f * (180.0f / 3.14159265358979f);
+    else if (unit == "grad")
+        outDegrees = f * 0.9f;
+    else if (unit == "turn")
+        outDegrees = f * 360.0f;
+    else if (unit.empty() && f == 0.0f)
+        outDegrees = 0.0f;
+    else
+        return false;
+    return true;
+}
+
+// A <number> or <percentage> (scale() takes either; 50% is 0.5).
+static bool ParseTransformNumber(const std::string& tok, float& out)
+{
+    const std::string v = Trim(tok);
+    const char* begin = v.c_str();
+    char* end = nullptr;
+    const float f = std::strtof(begin, &end);
+    if (end == begin)
+        return false;
+    const std::string unit(end);
+    if (unit.empty())
+        out = f;
+    else if (unit == "%")
+        out = f * 0.01f;
+    else
+        return false;
+    return true;
+}
+
+// A <length-percentage> for translate(): px (calc() folds) or a percentage of
+// the border box.
+static bool ParseTransformLength(const std::string& tok, float& out, bool& isPercent)
+{
+    const StyleValue parsed = ParseLengthValue(tok);
+    const StyleLength* len = std::get_if<StyleLength>(&parsed);
+    if (!len || len->IsAuto())
+        return false;
+    out = len->Value;
+    isPercent = len->IsPercent();
+    return true;
+}
+
+static bool ParseTransformFunction(const std::string& token, TransformValue& out)
+{
+    const size_t open = token.find('(');
+    if (open == std::string::npos || token.back() != ')')
+        return false;
+    const std::string name = ToLowerAscii(Trim(token.substr(0, open)));
+    const std::vector<std::string> args = SplitTransformArgs(token.substr(open + 1, token.size() - open - 2));
+    const size_t n = args.size();
+    if (n == 1 && args[0].empty())
+        return false;
+
+    TransformOp op{};
+    if (name == "translate" || name == "translatex" || name == "translatey")
+    {
+        op.Function = TransformFunction::Translate;
+        if (name == "translate")
+        {
+            if (n > 2 || !ParseTransformLength(args[0], op.Args[0], op.XIsPercent))
+                return false;
+            if (n == 2 && !ParseTransformLength(args[1], op.Args[1], op.YIsPercent))
+                return false;
+        }
+        else
+        {
+            const bool isY = name == "translatey";
+            if (n != 1 || !ParseTransformLength(args[0], op.Args[isY ? 1 : 0], isY ? op.YIsPercent : op.XIsPercent))
+                return false;
+        }
+    }
+    else if (name == "scale" || name == "scalex" || name == "scaley")
+    {
+        op.Function = TransformFunction::Scale;
+        op.Args[0] = op.Args[1] = 1.0f;
+        if (name == "scale")
+        {
+            if (n > 2 || !ParseTransformNumber(args[0], op.Args[0]))
+                return false;
+            op.Args[1] = op.Args[0];
+            if (n == 2 && !ParseTransformNumber(args[1], op.Args[1]))
+                return false;
+        }
+        else if (n != 1 || !ParseTransformNumber(args[0], op.Args[name == "scaley" ? 1 : 0]))
+        {
+            return false;
+        }
+    }
+    else if (name == "rotate")
+    {
+        op.Function = TransformFunction::Rotate;
+        if (n != 1 || !ParseTransformAngle(args[0], op.Args[0]))
+            return false;
+    }
+    else if (name == "skew" || name == "skewx" || name == "skewy")
+    {
+        op.Function = TransformFunction::Skew;
+        if (name == "skew")
+        {
+            if (n > 2 || !ParseTransformAngle(args[0], op.Args[0]))
+                return false;
+            if (n == 2 && !ParseTransformAngle(args[1], op.Args[1]))
+                return false;
+        }
+        else if (n != 1 || !ParseTransformAngle(args[0], op.Args[name == "skewy" ? 1 : 0]))
+        {
+            return false;
+        }
+    }
+    else if (name == "matrix")
+    {
+        op.Function = TransformFunction::Matrix;
+        if (n != 6)
+            return false;
+        for (size_t i = 0; i < 6; ++i)
+        {
+            const std::string v = Trim(args[i]);
+            const char* begin = v.c_str();
+            char* end = nullptr;
+            op.Args[i] = std::strtof(begin, &end);
+            if (end == begin || *end != '\0')
+                return false;
+        }
+    }
+    else
+    {
+        // 3D functions (rotateX, perspective, matrix3d...) and unknown names:
+        // the whole declaration is invalid, as CSS treats an unsupported one.
+        return false;
+    }
+    if (out.Count >= TransformValue::kMaxOps)
+        return false;
+    out.Append(op);
+    return true;
+}
+
+// `none`, or a whitespace-separated list of transform functions. Any function
+// that does not parse invalidates the declaration (monostate), so an earlier
+// rule survives instead of a partial list.
+static StyleValue ParseTransformValue(const std::string& value)
+{
+    const std::string trimmed = Trim(value);
+    if (ToLowerAscii(trimmed) == "none")
+        return TransformValue{};
+    const auto toks = TokenizeWhitespaceOutsideParens(trimmed);
+    if (toks.empty())
+        return std::monostate{};
+    TransformValue out{};
+    for (const std::string& tok : toks)
+    {
+        if (!ParseTransformFunction(tok, out))
+            return std::monostate{};
+    }
+    return out;
+}
+
 static StyleValue ParseBoxShadowValue(const std::string& value)
 {
     if (ToLowerAscii(Trim(value)) == "none")
@@ -2677,6 +2874,10 @@ constexpr PropertyRow kPropertyRows[] = {
     {"text-outline-width", StylePropertyId::TextOutlineWidth, &ParseFloatPxValue},
     {"text-outline-color", StylePropertyId::TextOutlineColor, &ParseColorValue},
     {"selection-color", StylePropertyId::SelectionColor, &ParseColorValue},
+    {"transform", StylePropertyId::Transform, &ParseTransformValue},
+    // Same grammar as background-position (the optional third, z, component
+    // is a 3D concept and is not read).
+    {"transform-origin", StylePropertyId::TransformOrigin, &ParseBackgroundPositionValue},
     {"glow", StylePropertyId::Glow, &ParseGlowValue},
     {"transition", StylePropertyId::Transition, &ParseTransitionValue},
 };

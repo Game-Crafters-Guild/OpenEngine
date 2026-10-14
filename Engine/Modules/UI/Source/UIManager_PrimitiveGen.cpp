@@ -14,6 +14,7 @@
 #include "UI/GlyphRunEmitter.h"
 #include "UI/TextSelectionFill.h"
 #include "UI/UITextureRegistry.h"
+#include "UI/UITransform.h"
 #include "JobSystem/ParallelAlgorithms.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "Rendering/Text/TextLayout.h"
@@ -585,6 +586,11 @@ struct UIManager::PrimitiveGenContext
         return ClipStack.empty() ? UI::kNoClip : ClipStack.back();
     }
 
+    // The transform slot the element being emitted paints in: its own when it
+    // has a CSS transform, else its nearest transformed ancestor's. Stamped on
+    // its primitives and on the clips it pushes; restored on the way out.
+    uint32_t CurrentTransformIdx = UI::kNoTransform;
+
     // Stage 3: per-element clip ownership. `el` may be nullptr for the
     // anonymous viewport clip used by deferred-overlay rendering — that
     // case routes to UIManager::m_ViewportClipSlot, allocated lazily and
@@ -604,8 +610,10 @@ struct UIManager::PrimitiveGenContext
         SnapPaintRect(x, y, w, h);
 
         // Intersect with the current parent clip so nested overflow:hidden
-        // elements don't replace the parent's clip region.
-        if (!ClipStack.empty())
+        // elements don't replace the parent's clip region. Only within one
+        // transform space: across a transform the rects are in different
+        // coordinates, and the shader's chain walk applies the parent instead.
+        if (!ClipStack.empty() && ClipRects[ClipStack.back()].TransformIndex == CurrentTransformIdx)
         {
             const UI::UIClipRect& parent = ClipRects[ClipStack.back()];
             float px1 = parent.Rect[0];
@@ -677,6 +685,7 @@ struct UIManager::PrimitiveGenContext
         cr.RadiiY[2] = radii.BottomRight.Y;
         cr.RadiiY[3] = radii.BottomLeft.Y;
         cr.ParentIndex = ClipStack.empty() ? UI::kNoClip : ClipStack.back();
+        cr.TransformIndex = CurrentTransformIdx;
         ClipStack.push_back(slot);
         return slot;
     }
@@ -988,6 +997,7 @@ void UIManager::GenerateAllPrimitives()
     // frame-in-flight slice re-uploads in full as it comes around.
     ++m_PrimitiveStoreVersion;
     ++m_ClipStoreVersion;
+    ++m_TransformStoreVersion;
     ++m_DrawOrderStoreVersion;
     if (m_SdfPrimRing)
         m_SdfPrimRing->MarkAllRangesDirty();
@@ -1004,13 +1014,18 @@ void UIManager::GenerateOverlayPrimitives(UIElement* el, PrimitiveGenContext& ct
 {
     const size_t savedClipDepth = ctx.ClipStack.size();
     const float savedOpacity = ctx.EffectiveOpacity;
+    const uint32_t savedTransform = ctx.CurrentTransformIdx;
     ctx.ClipStack.clear();
     ctx.EffectiveOpacity = 1.0f;
+    // Overlays paint in screen space like they clip to it: an ancestor's
+    // transform does not carry into a dropdown or tooltip it opened.
+    ctx.CurrentTransformIdx = UI::kNoTransform;
     ctx.PushClip(/*el=*/nullptr, 0, 0, ctx.ViewportW, ctx.ViewportH, {});
     GeneratePrimitivesForElement(el, ctx, parentAbsX, parentAbsY);
     ctx.PopClip();
     ctx.ClipStack.resize(savedClipDepth);
     ctx.EffectiveOpacity = savedOpacity;
+    ctx.CurrentTransformIdx = savedTransform;
 }
 
 void UIManager::EmitTooltipArrowSlot(PrimitiveGenContext& ctx)
@@ -1051,12 +1066,18 @@ bool UIManager::ElementRectIntersectsNearestClip(const UIElement* el) const
     const float h = std::max(0.0f, el->GetLayoutHeight() * cs);
     if (w <= 0.0f || h <= 0.0f)
         return false;
+    if (!el->GetResolvedStyle().Visual.Transform.IsNone())
+        return true;
     // Nearest ancestor that owns a persistent clip slot. Ancestors precede
     // descendants in the drain queue (the mark walks are pre-order), so a
     // scrolled clip owner's slot has already been rewritten to its current
     // rect by the time descendants are tested.
     for (const UIElement* p = el->GetParent(); p; p = p->GetParent())
     {
+        // Under a transformed ancestor the layout rect is not where the
+        // element paints: answer "visible" and let the full DFS decide.
+        if (!p->GetResolvedStyle().Visual.Transform.IsNone())
+            return true;
         if (p->m_ClipSlotIdx != UI::kNoClip &&
             static_cast<size_t>(p->m_ClipSlotIdx) < m_PersistentClipRects.size())
         {
@@ -1069,6 +1090,43 @@ bool UIManager::ElementRectIntersectsNearestClip(const UIElement* el) const
     return x < static_cast<float>(m_LastLayoutWidth) &&
            y < static_cast<float>(m_LastLayoutHeight) &&
            x + w > 0.0f && y + h > 0.0f;
+}
+
+uint32_t UIManager::WriteElementTransformSlot(UIElement* el, uint32_t parentIdx)
+{
+    UI::Affine2D m;
+    if (!UI::ComputeElementTransform(el->GetResolvedStyle().Visual, el->GetLayoutX(), el->GetLayoutY(),
+                                     el->GetLayoutWidth(), el->GetLayoutHeight(),
+                                     std::max(0.01f, m_ContentScale), m))
+    {
+        if (el->m_TransformSlotIdx != UI::kNoTransform)
+        {
+            m_TransformAllocator.Free(el->m_TransformSlotIdx);
+            el->m_TransformSlotIdx = UI::kNoTransform;
+        }
+        return UI::kNoTransform;
+    }
+    if (el->m_TransformSlotIdx == UI::kNoTransform)
+    {
+        uint32_t slot = m_TransformAllocator.Allocate();
+        // Slot 0 is the shared identity. The allocator's very first slot is
+        // 0 and nothing ever frees it, so skipping it once reserves it.
+        if (slot == UI::kNoTransform)
+            slot = m_TransformAllocator.Allocate();
+        el->m_TransformSlotIdx = slot;
+    }
+    const uint32_t slot = el->m_TransformSlotIdx;
+    if (m_PersistentTransforms.size() <= slot)
+        m_PersistentTransforms.resize(static_cast<size_t>(slot) + 1);
+    UI::UITransformSlot& t = m_PersistentTransforms[slot];
+    t.M[0] = m.A;
+    t.M[1] = m.B;
+    t.M[2] = m.C;
+    t.M[3] = m.D;
+    t.T[0] = m.E;
+    t.T[1] = m.F;
+    t.ParentIndex = parentIdx;
+    return slot;
 }
 
 bool UIManager::OwnTextEmissionPaints(UIElement* el, PrimitiveGenContext& ctx)
@@ -1127,6 +1185,7 @@ bool UIManager::DrainPrimitiveDataDirty()
     // rewrite just the touched slot span.
     bool touchedPrimitives = false;
     bool touchedClips = false;
+    bool touchedTransforms = false;
     bool touchedDrawOrder = false;
     auto bailToFullRegen = [&]() {
         MarkPrimitivesNeedRegen(0x400u);
@@ -1210,6 +1269,28 @@ bool UIManager::DrainPrimitiveDataDirty()
             continue;
         }
 
+        // CSS transform. A changed value only rewrites the element's own slot:
+        // descendants reach it by index and the shader composes the chain, so
+        // they need no re-emission (the parent link is unchanged under the
+        // drain invariant). A switch to or from `none` changes which slot this
+        // element's and its descendants' primitives and clips must name —
+        // only the full DFS restamps those. Like the clip rewrite below, this
+        // runs before the range early-outs: a transformed container may own
+        // no primitives itself.
+        {
+            const bool hasTransform = !el->GetResolvedStyle().Visual.Transform.IsNone();
+            if (hasTransform != (el->m_TransformSlotIdx != UI::kNoTransform))
+            {
+                bailToFullRegen();
+                continue;
+            }
+            if (hasTransform)
+            {
+                WriteElementTransformSlot(el, m_PersistentTransforms[el->m_TransformSlotIdx].ParentIndex);
+                touchedTransforms = true;
+            }
+        }
+
         // Drain-mode emit skips PushClip, so an element that owns a clip slot
         // (overflow != visible) would leave its children clipped against the
         // pre-mutation rect. Rewrite the slot in place from the current layout
@@ -1254,7 +1335,8 @@ bool UIManager::DrainPrimitiveDataDirty()
             // the mask by a fraction of a pixel.
             SnapPaintRect(cx, cy, cw, ch);
             if (cr.ParentIndex != UI::kNoClip &&
-                static_cast<size_t>(cr.ParentIndex) < m_PersistentClipRects.size())
+                static_cast<size_t>(cr.ParentIndex) < m_PersistentClipRects.size() &&
+                m_PersistentClipRects[cr.ParentIndex].TransformIndex == cr.TransformIndex)
             {
                 const UI::UIClipRect& parent = m_PersistentClipRects[cr.ParentIndex];
                 const float px1 = parent.Rect[0];
@@ -1407,6 +1489,8 @@ bool UIManager::DrainPrimitiveDataDirty()
         // the regen bumps every store again anyway).
         if (touchedClips)
             ++m_ClipStoreVersion;
+        if (touchedTransforms)
+            ++m_TransformStoreVersion;
         m_PrimitiveDataDirty.clear();
         return false;
     }
@@ -1728,6 +1812,8 @@ bool UIManager::DrainPrimitiveDataDirty()
         ++m_PrimitiveStoreVersion;
     if (touchedClips)
         ++m_ClipStoreVersion;
+    if (touchedTransforms)
+        ++m_TransformStoreVersion;
     if (touchedDrawOrder)
         ++m_DrawOrderStoreVersion;
 
@@ -1758,6 +1844,11 @@ const UI::UIPrimitive* UIManager::PeekPrimitiveForTesting(const UIElement& el, u
 const UI::UIClipRect* UIManager::PeekClipRectForTesting(uint16_t slot) const
 {
     return slot < m_PersistentClipRects.size() ? &m_PersistentClipRects[slot] : nullptr;
+}
+
+const UI::UITransformSlot* UIManager::PeekTransformSlotForTesting(uint32_t slot) const
+{
+    return slot < m_PersistentTransforms.size() ? &m_PersistentTransforms[slot] : nullptr;
 }
 
 int UIManager::FindDrawOrderPosForTesting(const UIElement& el) const
@@ -1952,6 +2043,34 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
         return;
     }
 
+    // CSS transform. The drain emits one element with no ancestors on the
+    // stack, so it starts from the ambient slot the last full DFS recorded;
+    // the drain's collect phase has already rewritten this element's own slot
+    // (or escalated, when the transform switched to or from `none`). The full
+    // DFS (re)writes the slot here. Every exit restores the ambient slot.
+    if (ctx.DrainModeOnly)
+        ctx.CurrentTransformIdx = el->m_AmbientTransformIdx;
+    const uint32_t ambientTransformIdx = ctx.CurrentTransformIdx;
+    uint32_t ownTransformIdx = ambientTransformIdx;
+    if (ctx.DrainModeOnly)
+    {
+        if (el->m_TransformSlotIdx != UI::kNoTransform)
+            ownTransformIdx = el->m_TransformSlotIdx;
+    }
+    else if (!style.Visual.Transform.IsNone() || el->m_TransformSlotIdx != UI::kNoTransform)
+    {
+        const uint32_t slot = WriteElementTransformSlot(el, ambientTransformIdx);
+        if (slot != UI::kNoTransform)
+            ownTransformIdx = slot;
+    }
+    struct TransformRestore
+    {
+        PrimitiveGenContext& Ctx;
+        uint32_t Saved;
+        ~TransformRestore() { Ctx.CurrentTransformIdx = Saved; }
+    } transformRestore{ctx, ambientTransformIdx};
+    ctx.CurrentTransformIdx = ownTransformIdx;
+
     // Yoga-computed layout rect is in CSS logical px (single space for
     // layout + hit-testing). Convert to physical px once here; every
     // primitive emitted below is in physical.
@@ -2033,8 +2152,12 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
             return;
         }
     }
-    else if (EmitContributionBoundedByOwnRect(*el, style))
+    else if (EmitContributionBoundedByOwnRect(*el, style) &&
+             (ctx.ClipStack.empty() ? UI::kNoTransform : ctx.ClipRects[ctx.ClipStack.back()].TransformIndex) ==
+                 ownTransformIdx)
     {
+        // (Only when the ambient clip is in the space this element paints in:
+        // a transform moves the paint away from the layout rect tested here.)
         float clipL = 0.0f;
         float clipT = 0.0f;
         float clipR = ctx.ViewportW;
@@ -2062,6 +2185,7 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
     {
         el->m_LastFullDfsFrame = m_PrimitiveGenFrame;
         el->m_AmbientClipIdx = clipIdx;
+        el->m_AmbientTransformIdx = ambientTransformIdx;
     }
 
     // CSS visibility:hidden — skip self-emission but still recurse into
@@ -2200,6 +2324,12 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
         if (hasOutline)
             EmitOutlineRing(ctx.Primitives, vs, usedRadii, x, y, w, h, cs, clipIdx, ctx.EffectiveOpacity);
     }
+
+    // Every primitive this element emitted — built-in or custom — paints in
+    // its transform space. Stamped here rather than in the builders, which
+    // custom emitters bypass.
+    for (size_t i = scratchStart; i < ctx.Primitives.size(); ++i)
+        ctx.Primitives[i].TransformIndex = ownTransformIdx;
 
     // Block E1: in drain mode, skip FinalizeElementSlots (caller copies the
     // scratch into the existing slot range itself) and skip child recursion
@@ -2486,7 +2616,8 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
                                               bgRadii.BottomLeft.X, bgRadii.BottomLeft.Y);
                 UI::SetTextureSourceSpaceBits(prim, bgSlot.SpaceBits);
                 prim.Saturation = sat;
-                prim.PointFilter = el->HasClass("ui-bg-point-filter") ? 1.0f : 0.0f;
+                if (el->HasClass("ui-bg-point-filter"))
+                    prim.ModeAndFlags |= UI::kPrimPointFilterBit;
                 UI::SetClip(prim, clipIdx);
                 UI::SetOpacity(prim, ctx.EffectiveOpacity);
                 ctx.Primitives.push_back(prim);
@@ -2608,7 +2739,8 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
                                               bgRadii.BottomRight.X, bgRadii.BottomRight.Y,
                                               bgRadii.BottomLeft.X, bgRadii.BottomLeft.Y);
     UI::SetTextureSourceSpaceBits(prim, bgSlot.SpaceBits);
-    prim.PointFilter = el->HasClass("ui-bg-point-filter") ? 1.0f : 0.0f;
+    if (el->HasClass("ui-bg-point-filter"))
+        prim.ModeAndFlags |= UI::kPrimPointFilterBit;
     prim.Saturation = std::clamp(bgImg.Saturation, 0.0f, 1.0f);
     UI::SetClip(prim, clipIdx);
     UI::SetOpacity(prim, ctx.EffectiveOpacity);

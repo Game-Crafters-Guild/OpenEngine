@@ -1,0 +1,103 @@
+---
+title: Transforms
+description: Rotating, scaling, moving and skewing any UI element and its children in CSS with transform and transform-origin, from code, in transitions, with clipping, pointer input and limits.
+---
+
+The `transform` property rotates, scales, moves and skews an element and everything inside it, the way it does on the web. It is a paint-time change: layout never sees it, so the element keeps its place in the flow, its siblings do not move, and `GetLayoutX()` and friends report the untransformed box. Pointer hit-testing follows the painted shape, so a rotated button is clicked where it is drawn.
+
+Use it for dials and needles, compass roses, minimaps that turn with the player, spinners, and hover and press feedback that grows or shrinks a control.
+
+## Declare a transform
+
+```css title="A needle, and a card that grows on hover"
+.needle {
+    position: absolute;
+    left: 60px;
+    top: 10px;
+    width: 8px;
+    height: 70px;
+    background-image: url("UI/needle.png");
+    transform-origin: 50% 100%;
+    transform: rotate(35deg);
+}
+
+.card {
+    transition: transform 0.15s ease;
+}
+
+.card:hover {
+    transform: scale(1.04);
+}
+```
+
+## Properties
+
+| Property | Values | Initial |
+|---|---|---|
+| `transform` | `none`, or a space-separated list of the functions below, applied left to right | `none` |
+| `transform-origin` | One or two of `left`, `center`, `right`, `top`, `bottom`, a length in px, or a percentage of the border box: the point the transform pivots about | `50% 50%` |
+
+| Function | Arguments |
+|---|---|
+| `translate(x, y)`, `translateX(x)`, `translateY(y)` | px (or a `calc()` that folds to px), or a percentage of the element's own border box. `y` defaults to 0. |
+| `scale(x, y)`, `scaleX(x)`, `scaleY(y)` | Numbers or percentages (`50%` is 0.5). `y` defaults to `x`. |
+| `rotate(a)` | An angle in `deg`, `rad`, `grad` or `turn`. Positive turns clockwise. |
+| `skew(ax, ay)`, `skewX(a)`, `skewY(a)` | Angles. `ay` defaults to 0. |
+| `matrix(a, b, c, d, e, f)` | Numbers, as in CSS: x' = ax + cy + e, y' = bx + dy + f, with e and f in px. |
+
+A declaration with any function the engine does not support (the 3D ones such as `rotateX()`, `perspective()` and `matrix3d()`), or with more than eight functions, is invalid as a whole, and the earlier rule stays in force.
+
+## Set it from code
+
+A transform that changes every frame, such as a needle following a value, is set as a style override. Changing an existing transform is cheap: the element keeps one 32-byte transform slot, the change rewrites only that slot, and its children follow on the GPU without being re-emitted.
+
+```cpp title="A speedometer needle"
+#include "UI/StyleProperties.h"
+
+void UpdateSpeedo(GameEngine::UIElement& needle, float speed)
+{
+    using namespace GameEngine;
+    needle.Overrides().Set(Style::Transform, TransformValue{}.Rotate(speed * 2.7f - 135.0f));
+}
+```
+
+`TransformValue` has a builder for each function: `Translate(x, y, xIsPercent, yIsPercent)`, `Scale(s)`, `Scale(x, y)`, `Rotate(degrees)`, `Skew(xDegrees, yDegrees)` and `Matrix(a, b, c, d, e, f)`. A default `TransformValue{}` is `none`. `Style::TransformOrigin` takes a `TransformOriginValue{x, xIsPercent, y, yIsPercent}`.
+
+:::caution[Keep the transform on]
+
+Switching between `none` and a transform costs a full primitive rebuild of the UI, because the subtree has to be re-pointed at a new slot. For something that animates, leave a transform in place (`rotate(0deg)` rather than `none`) and change its value.
+
+:::
+
+## Transitions
+
+`transform` and `transform-origin` can be transitioned, and both are part of `transition: all`. Two transform lists interpolate function by function when they have the same functions in the same order (and the same units on each `translate()`); `none` interpolates as the other list with identity arguments. Lists that differ in shape switch at the midpoint rather than interpolating their matrices.
+
+## Clipping
+
+Clips behave as on the web:
+
+- An ancestor with `overflow: hidden` clips a transformed descendant where it is painted. A round clip (`overflow: hidden; border-radius: 50%`) around a rotated image makes a turning minimap.
+- A transformed element with `overflow: hidden` clips its children to its own transformed box, so the clip turns with it.
+
+## Pointer input
+
+Hit-testing maps the pointer through every transformed ancestor, so hover, press and click land on what is drawn. As before, hit-testing clips use the clip's rectangle and ignore its rounded corners.
+
+:::caution[Coordinates in events are screen coordinates]
+
+Event positions are not transformed. A control that works out a value from the pointer position, such as a slider's thumb, a text field's caret or a tree view's row, does that against its untransformed layout box. Inside a rotated or scaled element such a control would read the pointer in the wrong place. Transform display elements, or whole panels that are only translated, rather than interactive controls.
+
+:::
+
+## Limits
+
+- 2D only. There are no 3D transforms, no `perspective` and no `backface-visibility`.
+- A transform does not create a stacking context or a containing block. Paint order is the usual document and `z-index` order.
+- Overlays (dropdowns, tooltips, modals, drag previews) paint in screen space. An ancestor's transform does not carry into a popup it opens.
+- A chain of up to eight nested transformed elements composes; past eight, the outermost ones are ignored. A primitive is clipped by at most four nested clips, the same as before.
+- Elements inside a transformed element are never culled against an off-screen clip. That costs a little extra drawing for large transformed scroll content; ordinary transformed panels are unaffected.
+
+## Changelog
+
+- 2026-10-13: Added `transform` and `transform-origin`.

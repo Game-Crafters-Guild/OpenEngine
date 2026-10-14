@@ -475,6 +475,76 @@ struct BackgroundPositionValue
     bool operator==(const BackgroundPositionValue&) const = default;
 };
 
+// One CSS transform function (css-transforms-1, 2D only). Args by function:
+//   Translate  x, y (CSS px, or a percentage of the border box under the flags)
+//   Scale      x, y
+//   Rotate     angle in degrees, clockwise on screen
+//   Skew       x angle, y angle, in degrees
+//   Matrix     a, b, c, d, e, f, as CSS matrix() (e and f in CSS px)
+// translateX(), scaleY(), skewX() and friends parse to the two-argument form.
+enum class TransformFunction : uint8_t
+{
+    Translate,
+    Scale,
+    Rotate,
+    Skew,
+    Matrix
+};
+
+struct TransformOp
+{
+    TransformFunction Function = TransformFunction::Translate;
+    float Args[6] = {0, 0, 0, 0, 0, 0};
+    bool XIsPercent = false; // Translate only
+    bool YIsPercent = false; // Translate only
+    bool operator==(const TransformOp&) const = default;
+};
+
+// The `transform` property: a list of functions applied left to right, as in
+// CSS, about the element's transform-origin. Count == 0 is `none`. Fixed
+// storage keeps ResolvedStyle trivially copyable; a list longer than
+// kMaxOps is rejected at parse time. Paint-only: layout never sees it, so a
+// transformed element keeps its place in the flow and its siblings do not move.
+//
+// The builders read like the CSS they stand for:
+//   TransformValue{}.Rotate(45.0f)                   rotate(45deg)
+//   TransformValue{}.Translate(-50, -50, true, true) translate(-50%, -50%)
+struct TransformValue
+{
+    static constexpr uint8_t kMaxOps = 8;
+    TransformOp Ops[kMaxOps]{};
+    uint8_t Count = 0;
+
+    bool IsNone() const { return Count == 0; }
+    bool operator==(const TransformValue&) const = default;
+
+    TransformValue& Append(const TransformOp& op)
+    {
+        if (Count < kMaxOps)
+            Ops[Count++] = op;
+        return *this;
+    }
+    TransformValue& Translate(float x, float y, bool xIsPercent = false, bool yIsPercent = false)
+    {
+        return Append({TransformFunction::Translate, {x, y, 0, 0, 0, 0}, xIsPercent, yIsPercent});
+    }
+    TransformValue& Scale(float x, float y) { return Append({TransformFunction::Scale, {x, y, 0, 0, 0, 0}}); }
+    TransformValue& Scale(float s) { return Scale(s, s); }
+    TransformValue& Rotate(float degrees) { return Append({TransformFunction::Rotate, {degrees, 0, 0, 0, 0, 0}}); }
+    TransformValue& Skew(float xDegrees, float yDegrees)
+    {
+        return Append({TransformFunction::Skew, {xDegrees, yDegrees, 0, 0, 0, 0}});
+    }
+    TransformValue& Matrix(float a, float b, float c, float d, float e, float f)
+    {
+        return Append({TransformFunction::Matrix, {a, b, c, d, e, f}});
+    }
+};
+
+// `transform-origin`: where the transform pivots, against the border box.
+// Same shape and initial value (50% 50%) as background-position.
+using TransformOriginValue = BackgroundPositionValue;
+
 enum class StylePropertyId : uint16_t
 {
     Unknown,
@@ -578,6 +648,8 @@ enum class StylePropertyId : uint16_t
     TextOutlineWidth,
     TextOutlineColor,
     SelectionColor,
+    Transform,
+    TransformOrigin,
     // Raw declaration captured when the value contains var(). This is expanded
     // and parsed at compute time after variable substitution so that var()
     // can appear anywhere, including inside shorthands.
@@ -693,6 +765,16 @@ constexpr StylePropertyImpact GetStylePropertyImpact(StylePropertyId id)
     case StylePropertyId::TextAlign:
     case StylePropertyId::SelectionColor:
         return {false, true, true};
+
+    // Paint only. A transform reaches descendants too, but not through their
+    // primitives: they carry the index of the transform slot their nearest
+    // transformed ancestor owns, and the shader composes the chain. A changed
+    // transform is one slot rewrite in the drain (UIManager_PrimitiveGen.cpp);
+    // only a switch to or from `none` changes which slot descendants point at,
+    // and the drain escalates that to a full regen itself.
+    case StylePropertyId::Transform:
+    case StylePropertyId::TransformOrigin:
+        return {false, true};
 
     // Paint only, confined to the element itself.
     // TextOverflow never feeds the Yoga solve — the measure is of the full
@@ -837,6 +919,7 @@ using StyleValue = std::variant<std::monostate,
                                 BackgroundImageSource,
                                 BackgroundSizeValue,
                                 BackgroundPositionValue,
+                                TransformValue,
                                 StyleLength,
                                 StyleBox,
                                 std::vector<std::string>,

@@ -95,6 +95,8 @@ namespace
         case StylePropertyId::FlexShrink: return "flex-shrink";
         case StylePropertyId::Gap: return "gap";
         case StylePropertyId::Opacity: return "opacity";
+        case StylePropertyId::Transform: return "transform";
+        case StylePropertyId::TransformOrigin: return "transform-origin";
         case StylePropertyId::Visibility: return "visibility";
         case StylePropertyId::Color: return "color";
         case StylePropertyId::BackgroundColor: return "background-color";

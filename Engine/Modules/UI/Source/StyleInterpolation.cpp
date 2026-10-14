@@ -73,6 +73,10 @@ bool IsInterpolable(StylePropertyId id)
     case StylePropertyId::TextOutlineWidth:
     case StylePropertyId::TextOutlineColor:
     case StylePropertyId::Glow:
+    // Transform lists interpolate function by function when their shapes
+    // match (InterpolateTransform); transform-origin per axis like a length.
+    case StylePropertyId::Transform:
+    case StylePropertyId::TransformOrigin:
         return true;
     default:
         return false;
@@ -119,6 +123,8 @@ StyleValue ReadProperty(const ResolvedStyle& rs, StylePropertyId id)
     case StylePropertyId::Display:       return rs.Layout.DisplayMode;
 
     case StylePropertyId::Opacity:       return rs.Visual.LocalOpacity;
+    case StylePropertyId::Transform:       return rs.Visual.Transform;
+    case StylePropertyId::TransformOrigin: return rs.Visual.TransformOrigin;
     // The computed value of font-size is always an absolute length: the
     // percentage is a SPECIFIED form, resolved before anything can read this.
     // Transitions interpolate computed values, so they never see the percentage.
@@ -229,6 +235,12 @@ void WriteProperty(ResolvedStyle& rs, StylePropertyId id, const StyleValue& v)
     case StylePropertyId::Opacity:
         rs.Visual.LocalOpacity = std::get<float>(v);
         rs.Visual.Opacity = rs.Visual.LocalOpacity;
+        break;
+    case StylePropertyId::Transform:
+        rs.Visual.Transform = std::get<TransformValue>(v);
+        break;
+    case StylePropertyId::TransformOrigin:
+        rs.Visual.TransformOrigin = std::get<TransformOriginValue>(v);
         break;
     // Write-back bypasses the cascade with a value that is already computed, so
     // it lands as a length and clears any percentage the cascade parked — which
@@ -380,8 +392,72 @@ void WriteProperty(ResolvedStyle& rs, StylePropertyId id, const StyleValue& v)
     }
 }
 
+// The identity form of `op`'s function, which `none` stands in for when it
+// meets a list (css-transforms-1 §9: "none" interpolates as the identity
+// functions of the other side's list).
+static TransformOp IdentityTransformOp(const TransformOp& op)
+{
+    TransformOp id{};
+    id.Function = op.Function;
+    id.XIsPercent = op.XIsPercent;
+    id.YIsPercent = op.YIsPercent;
+    if (op.Function == TransformFunction::Scale)
+        id.Args[0] = id.Args[1] = 1.0f;
+    else if (op.Function == TransformFunction::Matrix)
+        id.Args[0] = id.Args[3] = 1.0f;
+    return id;
+}
+
+// Function-by-function interpolation when both lists have the same functions
+// in the same order (with the same units on translate). Anything else flips
+// at the midpoint: CSS would interpolate the decomposed matrices instead,
+// which this does not implement. matrix() interpolates its six numbers.
+static TransformValue InterpolateTransform(TransformValue a, TransformValue b, float t)
+{
+    if (a.IsNone() && b.IsNone())
+        return a;
+    if (a.IsNone())
+        for (uint8_t i = 0; i < b.Count; ++i)
+            a.Append(IdentityTransformOp(b.Ops[i]));
+    if (b.IsNone())
+        for (uint8_t i = 0; i < a.Count; ++i)
+            b.Append(IdentityTransformOp(a.Ops[i]));
+
+    bool sameShape = a.Count == b.Count;
+    for (uint8_t i = 0; sameShape && i < a.Count; ++i)
+        sameShape = a.Ops[i].Function == b.Ops[i].Function && a.Ops[i].XIsPercent == b.Ops[i].XIsPercent &&
+                    a.Ops[i].YIsPercent == b.Ops[i].YIsPercent;
+    if (!sameShape)
+        return (t < 0.5f) ? a : b;
+
+    TransformValue out = a;
+    for (uint8_t i = 0; i < a.Count; ++i)
+        for (int k = 0; k < 6; ++k)
+            out.Ops[i].Args[k] = Math::Lerp(a.Ops[i].Args[k], b.Ops[i].Args[k], t);
+    return out;
+}
+
 StyleValue InterpolateProperty(StylePropertyId /*id*/, const StyleValue& a, const StyleValue& b, float t)
 {
+    if (std::holds_alternative<TransformValue>(a) && std::holds_alternative<TransformValue>(b))
+    {
+        return InterpolateTransform(std::get<TransformValue>(a), std::get<TransformValue>(b), t);
+    }
+
+    // transform-origin (and background-position, which shares the type): each
+    // axis lerps when its unit matches and flips at the midpoint when not.
+    if (std::holds_alternative<BackgroundPositionValue>(a) && std::holds_alternative<BackgroundPositionValue>(b))
+    {
+        const auto& pa = std::get<BackgroundPositionValue>(a);
+        const auto& pb = std::get<BackgroundPositionValue>(b);
+        BackgroundPositionValue out = (t < 0.5f) ? pa : pb;
+        if (pa.XIsPercent == pb.XIsPercent)
+            out.X = Math::Lerp(pa.X, pb.X, t);
+        if (pa.YIsPercent == pb.YIsPercent)
+            out.Y = Math::Lerp(pa.Y, pb.Y, t);
+        return out;
+    }
+
     if (std::holds_alternative<float>(a) && std::holds_alternative<float>(b))
     {
         return Math::Lerp(std::get<float>(a), std::get<float>(b), t);

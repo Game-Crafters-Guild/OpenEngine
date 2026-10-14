@@ -395,7 +395,7 @@ public:
             // in the old buffer.
             if (m_OwnerManager &&
                 (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu ||
-                 m_DrawOrderIdx != 0xFFFFFFFFu))
+                 m_TransformSlotIdx != 0 || m_DrawOrderIdx != 0xFFFFFFFFu))
             {
                 UIManagerFreeRenderSlots(m_OwnerManager, this);
             }
@@ -2097,6 +2097,13 @@ protected:
     //                         from baked primitives or a parent walk.
     // m_DrawOrderIdx        : start in m_DrawOrder for this element's
     //                         slice (size mirrors m_PrimitiveRangeCount).
+    // m_TransformSlotIdx    : index in m_PersistentTransforms while the
+    //                         element has a CSS transform (0 = none; slot 0
+    //                         is the shared identity, never owned).
+    // m_AmbientTransformIdx : the transform slot in effect at this element's
+    //                         last full-DFS visit (its nearest transformed
+    //                         ancestor's), recorded for the same reason as
+    //                         m_AmbientClipIdx.
     //
     // Sentinels match SlotAllocator::kInvalidSlot and UI::kNoClip; not
     // typed as those constants here to keep the headers light.
@@ -2106,6 +2113,8 @@ protected:
     uint16_t m_ClipSlotIdx         = 0xFFFFu;
     uint16_t m_AmbientClipIdx      = 0xFFFFu;
     uint32_t m_DrawOrderIdx        = 0xFFFFFFFFu;
+    uint32_t m_TransformSlotIdx    = 0;
+    uint32_t m_AmbientTransformIdx = 0;
 
     // Ancestor-chain opacity product at the last primitive emit, EXCLUDING
     // this element's own opacity. The drain seeds emission from this instead

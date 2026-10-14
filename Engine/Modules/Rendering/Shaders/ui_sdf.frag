@@ -18,6 +18,11 @@ layout(location = 2) in vec2 vUV;
 // vInstance (the dense draw index) bypasses the indirection and lands on
 // waste / wrong slots in the persistent buffer.
 layout(location = 3) flat in uint vSlot;
+// The fragment in each clip-chain level's own space, and that space's units
+// per vLocal unit (ui_sdf.vert writeClipVaryings).
+layout(location = 5) in vec4 vClipPos01;
+layout(location = 6) in vec4 vClipPos23;
+layout(location = 7) flat in vec4 vClipScale;
 #if defined(GE_COMPAT_PROFILE)
 // Run-local texture slot ordinal, unpacked by the vertex stage from the high
 // bits of the draw-order word (UI/ui_sdf_textures.glsl).
@@ -81,7 +86,20 @@ float applyEdgeSoftness(float coverage)
     return coverage;
 }
 
-float computeClipAlpha(vec2 p, uint flags, float px)
+vec2 clipPosAt(int level)
+{
+    if (level == 0) return vClipPos01.xy;
+    if (level == 1) return vClipPos01.zw;
+    if (level == 2) return vClipPos23.xy;
+    return vClipPos23.zw;
+}
+
+// Each clip is evaluated in its own space (the space of the element that
+// pushed it), so a rotated element's overflow clip rotates with it and an
+// untransformed ancestor's clip still cuts a rotated descendant on screen.
+// `px` is the footprint in vLocal units; vClipScale carries it into each
+// clip's units.
+float computeClipAlpha(uint flags, float px)
 {
     uint idx = (flags >> CLIP_INDEX_SHIFT) & 0xFFFFu;
     if (idx == NO_CLIP)
@@ -95,7 +113,8 @@ float computeClipAlpha(vec2 p, uint flags, float px)
     for (int i = 0; i < kMaxClipChainDepth; ++i)
     {
         UIClipRect clip = cb.clips[idx];
-        alpha = min(alpha, sdfCoverage(roundedRectSDF(p, clip.rect, clip.radii, clip.radiiY), px));
+        alpha = min(alpha, sdfCoverage(roundedRectSDF(clipPosAt(i), clip.rect, clip.radii, clip.radiiY),
+                                       px * vClipScale[i]));
         idx = clip.params.x;
         if (idx == NO_CLIP)
             break;
@@ -123,7 +142,7 @@ void main()
     ge_UiDeriv.UvDdy = dFdy(vUV);
 #endif
 
-    float clipA = computeClipAlpha(p, flags, px);
+    float clipA = computeClipAlpha(flags, px);
     if (clipA <= 0.0)
         discard;
 
@@ -483,9 +502,9 @@ void main()
 
         uint texIdx = prim.packed.y;
         vec4 tint = uiPaintColor(prim.colors.x);
-        // modeParams.y > 0.5 signals point (nearest-neighbor) filtering.
+        // POINT_FILTER_BIT signals point (nearest-neighbor) filtering.
         vec4 tex;
-        if (prim.modeParams.y > 0.5)
+        if ((flags & POINT_FILTER_BIT) != 0u)
             tex = GE_UI_TEX_NEAREST(texIdx, vTexSlot, vUV);
         else
             tex = GE_UI_TEX_LINEAR(texIdx, vTexSlot, vUV);

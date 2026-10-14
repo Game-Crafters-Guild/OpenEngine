@@ -23,6 +23,7 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/StyleInterpolation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/StyleApplier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/TransitionEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UITransform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/ResolvedStyle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UIManager_StyleResolve.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UIManager_StyleAnalysis.cpp
@@ -439,6 +440,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PercentageUnitsLengthTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PercentMinWidthShrinkTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShadowGlowPrimitiveTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformRenderTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextEffectsTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/BackgroundOriginPaddingBoxTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/NineSliceLayoutTests.cpp
@@ -531,6 +533,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/MathInterpolationTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CSSTransitionParserTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/StyleInterpolationTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformStyleTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TransitionEngineTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/SearchDialogFocusTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/DefaultStylesheetTests.cpp)
