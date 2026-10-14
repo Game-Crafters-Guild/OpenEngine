@@ -2309,6 +2309,17 @@ endif()
 			    ge_stage_runtime_dependencies(BloomRenderingTests)
 			    add_test(NAME BloomRenderingTests COMMAND $<TARGET_FILE:BloomRenderingTests>)
 
+			    add_executable(HeightFogRenderingTests Tests/HeightFogRenderingTests.cpp)
+			    target_link_libraries(HeightFogRenderingTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+			    target_compile_definitions(HeightFogRenderingTests PRIVATE
+			        RENDERING_SHADER_OUTPUT_DIR="${CMAKE_BINARY_DIR}/Shaders")
+			    add_dependencies(HeightFogRenderingTests CompileShaders)
+			    set_target_properties(HeightFogRenderingTests PROPERTIES
+			        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Engine/Tests")
+			    ge_set_output_tests(HeightFogRenderingTests)
+			    ge_stage_runtime_dependencies(HeightFogRenderingTests)
+			    add_test(NAME HeightFogRenderingTests COMMAND $<TARGET_FILE:HeightFogRenderingTests>)
+
 			    add_executable(PostProcessDofControlTests
 			            Tests/PostProcessBlendCoverageTests.cpp)
 			    target_link_libraries(PostProcessDofControlTests PRIVATE Engine GTest::gtest GTest::gtest_main)
