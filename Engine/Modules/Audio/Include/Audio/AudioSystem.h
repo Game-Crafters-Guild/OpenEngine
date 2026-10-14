@@ -72,7 +72,34 @@ public:
     // Stop all currently alive voices (best-effort). Intended for Editor PlayMode teardown.
     void StopAllVoices();
     bool IsAlive(AudioEmitterHandle emitter) const;
+    // False while the voice is pending (clip still loading) or paused.
     bool IsPlaying(AudioEmitterHandle emitter) const;
+
+    // Live voice control. Game thread only, like Play*/Stop. Invalid or stale
+    // handles are no-ops. On a pending voice the value is stored and applied
+    // when the voice starts.
+    // Linear gain; negative values clamp to 0.
+    void SetVolume(AudioEmitterHandle emitter, float linearVolume);
+    // Playback rate multiplier (1 = original). Non-positive values are ignored.
+    void SetPitch(AudioEmitterHandle emitter, float pitch);
+    // Stereo pan, -1 (left) .. 1 (right), clamped. Applies to non-spatialized
+    // voices only: a spatialized voice is panned by its position relative to
+    // the listener, and SetPan leaves it untouched.
+    void SetPan(AudioEmitterHandle emitter, float pan);
+    // Current values of a live voice; 0 for an invalid or stale handle.
+    float GetVolume(AudioEmitterHandle emitter) const;
+    float GetPitch(AudioEmitterHandle emitter) const;
+    float GetPan(AudioEmitterHandle emitter) const;
+
+    // Pause keeps the playback position and the voice (IsAlive stays true;
+    // IsPlaying reports false; a paused voice is never reclaimed as finished).
+    // Resume continues from the paused position. A pending voice paused
+    // before its clip is ready does not start until resumed. A one-shot that
+    // had already reached its end when paused is reclaimed instead of
+    // restarting.
+    void Pause(AudioEmitterHandle emitter);
+    void Resume(AudioEmitterHandle emitter);
+    bool IsPaused(AudioEmitterHandle emitter) const;
 
     // Number of currently-alive voices (pending or playing). The voice-level
     // observable for tests and debug overlays; per-voice handles stay private

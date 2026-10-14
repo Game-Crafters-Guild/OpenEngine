@@ -42,6 +42,7 @@ struct PlayOptions
 {
     float volume = 1.0f;
     float pitch = 1.0f;
+    float pan = 0.0f; // -1 (left) .. 1 (right); non-spatialized voices only
     bool loop = false;
     bool spatialized = false;
     AudioBusId bus = 0;
