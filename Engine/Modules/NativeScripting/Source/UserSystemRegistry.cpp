@@ -100,7 +100,13 @@ bool RegisterUserSystem(IUserSystem* system)
 {
     if (!system)
         return false;
-    Systems().push_back(UserSystemEntry{system, ActiveModule()});
+    // Kept sorted as it grows, so every hook walks it in order. A disabled entry (null System)
+    // keeps its Order, so a hard fault does not move the systems after it.
+    std::vector<UserSystemEntry>& systems = Systems();
+    const int order = system->Order();
+    const auto at = std::upper_bound(systems.begin(), systems.end(), order,
+                                     [](int value, const UserSystemEntry& e) { return value < e.Order; });
+    systems.insert(at, UserSystemEntry{system, ActiveModule(), order});
     return true;
 }
 

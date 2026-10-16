@@ -90,7 +90,7 @@ TEST_F(NativePostSimulation, AdapterOptsInAndLegacySystemsRemainNoOp)
     ECS::UserSystemAdapter<OldStyleSystem> old("OldStyleSystem");
     EXPECT_TRUE(late.HasPostSimulation());
     EXPECT_FALSE(old.HasPostSimulation());
-    EXPECT_EQ(GE_USERMODULE_ABI_VERSION, 2u);
+    EXPECT_EQ(GE_USERMODULE_ABI_VERSION, 3u);
     AdapterProbe::Posts = 0;
     ns::RegisterUserSystem(&late);
     ns::RegisterUserSystem(&old);

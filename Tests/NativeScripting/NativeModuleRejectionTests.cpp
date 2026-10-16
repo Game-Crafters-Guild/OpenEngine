@@ -117,7 +117,7 @@ INSTANTIATE_TEST_SUITE_P(HandshakeGates, NativeModuleRejection, testing::Values(
                   "missing GE_UserModule_AbiVersion_v1 export", 0},
     RejectionCase{"AbiMismatch", "RejectedModuleProbe.dll", 1, "ABI version mismatch", 0},
     RejectionCase{"OldUserSystemAbi", "RejectedModuleProbe.dll", 4,
-                  "ABI version mismatch: module=1 host=2", 0},
+                  "ABI version mismatch: module=1 host=3", 0},
     RejectionCase{"MissingFingerprint", "RejectedModuleMissingFingerprint.dll", 0,
                   "missing GE_UserModule_ToolchainFingerprint_v1 export", 0},
     RejectionCase{"FingerprintMismatch", "RejectedModuleProbe.dll", 2,
