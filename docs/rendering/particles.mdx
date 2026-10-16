@@ -136,7 +136,7 @@ An emitter simulates at most its Amount, up to 4096 live particles. A world simu
 
 Stacks are written as JSON in the project so they diff and merge. When a game is built, the build cooks every stack it packages into a compact binary form the Player reads without parsing JSON; a stack that fails to cook fails the build with its path and the reason. Nothing needs setting up.
 
-A browser has no shader compiler, so a web export cooks the particle shader programs ahead of time: for each kind of particle material (lighting mode, six-way layout, texture sheet and emission texture), the programs the render pipeline draws particles with. Those are the keywords of the pipeline's **Transmissive** node that particles take (ForwardPlus and Shadows, with or without IBL), on a sprite or on a mesh with or without tangents. The engine's own pipelines are covered. A project pipeline whose Transmissive node has other keywords, or a mesh particle whose mesh brings vertex colors, extra UV sets or skinning, has no cooked program on the web. The emitter then does not draw, and the browser console reports "no cooked program" with the material's name and its defines. To fix it, give the Transmissive node ForwardPlus, Instanced and Shadows (IBL optional), and use meshes without those extra streams.
+A browser has no shader compiler, so a web export cooks the particle shader programs ahead of time: for each kind of particle material (lighting mode, six-way layout, texture sheet and emission texture), the programs the render pipeline draws particles with. Those are the keywords of the pipeline's **Transmissive** node that particles take (ForwardPlus and Shadows, with or without IBL), or, in a pipeline that draws particles after the height fog, its **PostFogTransparent** node's (ForwardPlus, Shadows and IBL, with the fog), on a sprite or on a mesh with or without tangents. The engine's own pipelines are covered. A project pipeline whose Transmissive node has other keywords, or a mesh particle whose mesh brings vertex colors, extra UV sets or skinning, has no cooked program on the web. The emitter then does not draw, and the browser console reports "no cooked program" with the material's name and its defines. To fix it, give the Transmissive node ForwardPlus, Instanced and Shadows (IBL optional), and use meshes without those extra streams.
 
 ## Limits
 
@@ -148,6 +148,7 @@ A browser has no shader compiler, so a web export cooks the particle shader prog
 
 ## Changelog
 
+- 2026-10-14: Particles draw after the height fog and fog themselves by their own distance (see [Height fog](height-fog)).
 - 2026-10-13: Converted from `docs/rendering/particles.html`; American spelling (meters, traveled).
 - 2026-10-08: Packaging: which particle programs a web export cooks, and what the browser reports for one it does not.
 - 2026-10-01: Camera-facing sprites close to the camera fade out, within 3 m of the near plane, and are not drawn once they would reach it; under authored blends their color and emission fade too.

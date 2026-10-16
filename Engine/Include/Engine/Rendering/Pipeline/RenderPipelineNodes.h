@@ -101,6 +101,11 @@ struct ViewDeclare
     // when one exists; otherwise the build is skipped, the set stays inactive, and Blend rides the
     // batched path so it never vanishes on pipelines/previews that lack the node.
     bool PipelineHasSortedTransparentPass = false;
+    // True if this pipeline contains an enabled PostFogTransparent node, which draws the late
+    // forward commands (the particles) after the HeightFog post-process, each fogging itself.
+    // TransmissiveRender then leaves them to it; otherwise it draws them, unfogged by their own
+    // distance, as before.
+    bool PipelineHasPostFogTransparentPass = false;
 
     // Blackboard access. Resolvers return invalid entries for unknown refs;
     // publication overwrites (a node republishing "View.Depth" redirects every

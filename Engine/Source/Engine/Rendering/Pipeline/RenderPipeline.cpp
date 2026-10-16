@@ -1810,6 +1810,16 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
             break;
         }
 
+    // Whether an enabled node draws the late forward commands after the height fog. If so,
+    // TransmissiveRender leaves them to it; drawn twice they would blend twice.
+    bool hasPostFogTransparentPass = false;
+    for (const auto& nb : m_Blueprint.passes)
+        if (nb.enabled && nb.type == "PostFogTransparent")
+        {
+            hasPostFogTransparentPass = true;
+            break;
+        }
+
     // Node loop: blueprint array order IS the declaration order IS the
     // ordering (per-cell hazard tracking derives the edges; phase is only the
     // tiebreak a node forwards to AddPass). No tags, no RunAfterTag, no
@@ -1838,6 +1848,7 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
             d.m_NodeIdx = nodeIdx;
             d.PipelineHasTransmissivePass = hasTransmissivePass;
             d.PipelineHasSortedTransparentPass = hasSortedTransparentPass;
+            d.PipelineHasPostFogTransparentPass = hasPostFogTransparentPass;
             d.ViewColor = TableTexture(v->id, Names::View::Color);
             d.ViewDepth = TableTexture(v->id, Names::View::Depth);
             d.ViewResolve = TableTexture(v->id, Names::View::Resolve);

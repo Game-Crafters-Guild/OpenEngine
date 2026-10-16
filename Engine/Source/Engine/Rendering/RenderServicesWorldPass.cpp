@@ -466,6 +466,22 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
                    m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp));
     }
 
+    // ge_skyBackdrop: what the sky pass draws its backdrop from, for a pass that fogs what it
+    // draws (forward_height_fog.glsl) with the fog colour taken from the sky. Black without one;
+    // the shader samples it only when the fog's colour source names the sky.
+    if (HasKeyword(passKeywords, MaterialKeyword::HeightFog))
+    {
+        TextureHandle backdrop = m_Textures->GetDefaultBlackTexture();
+        if (targets && targets->SkyBackdrop.IsValid())
+        {
+            const TextureHandle viewBackdrop = frame.PhysicalTexture(targets->SkyBackdrop);
+            if (viewBackdrop.IsValid())
+                backdrop = viewBackdrop;
+        }
+        addTexture(HashStringId("ge_skyBackdrop"), backdrop,
+                   m_Textures->GetSampler(Rendering::SamplerPreset::LinearRepeat));
+    }
+
     if (HasKeyword(passKeywords, MaterialKeyword::Shadows))
     {
         const StringId kShadowMapName        = HashStringId("ge_shadowMapArray");
@@ -2177,6 +2193,9 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
             if (targets.SceneGrab.IsValid() &&
                 HasKeyword(passKeywords, MaterialKeyword::SceneColorGrab))
                 p.Read(targets.SceneGrab, RenderGraph::RGTextureRead::Sampled);
+            // ge_skyBackdrop, gated like its binding.
+            if (targets.SkyBackdrop.IsValid() && HasKeyword(passKeywords, MaterialKeyword::HeightFog))
+                p.Read(targets.SkyBackdrop, RenderGraph::RGTextureRead::Sampled);
             // ge_sceneDepth samples the resolved depth. The id-match arm skips the declaration
             // when it aliases the depth ATTACHMENT — but the attach contributes only its own
             // scope, and a read-only one is DepthRead alone (EARLY/LATE_FRAGMENT_TESTS +

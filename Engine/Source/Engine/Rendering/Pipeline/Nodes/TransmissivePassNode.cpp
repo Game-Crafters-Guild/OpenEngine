@@ -24,7 +24,10 @@ bool TransmissivePassNode::Initialize(std::string nodeId, std::string nodeJson, 
 void TransmissivePassNode::DeclareForView(ViewDeclare& d)
 {
     const bool hasGlass = d.Services.HasTransmissionInView(d.View.id);
-    const bool hasLateForward = d.Services.HasLateForwardCommands(d.View.id);
+    // A pipeline that draws the late forward commands after the height fog (PostFogTransparent)
+    // leaves them to that node.
+    const bool hasLateForward =
+        !d.PipelineHasPostFogTransparentPass && d.Services.HasLateForwardCommands(d.View.id);
     // Glass-free and particle-free views pay nothing.
     if (!hasGlass && !hasLateForward)
         return;
@@ -32,74 +35,21 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
     // Transparent contributors such as smoke and ocean spray render after the
     // Ocean node. Keeping them out of World prevents refraction scene-grabs from
     // treating foreground particles as background. They composite into the
-    // resolved HDR colour Ocean made authoritative, depth-testing against the
-    // opaque depth that produced it so occluded particles are hidden rather than
-    // painted over the geometry in front of them.
+    // resolved HDR colour Ocean made authoritative (rather than resolving the
+    // pre-ocean MSAA colour a second time), depth-testing against the opaque depth
+    // that produced it so occluded particles are hidden rather than painted over
+    // the geometry in front of them.
     if (hasLateForward)
     {
-        Engine::Renderer::RenderServices::WorldPassTargetsRG lateTargets{};
-        // Ocean has already made the resolved HDR scene colour authoritative.
-        // Blend late particles into that target rather than resolving the
-        // pre-ocean MSAA colour a second time.
-        lateTargets.Color = d.ViewResolve;
-        lateTargets.Resolve = {};
-        lateTargets.DepthResolved = d.ViewDepthResolved;
-        lateTargets.ResolveFromPipeline = false;
-        // The view depth is attached when it matches the colour's sample count and extent: a
-        // multisampled depth beside a 1-sample colour makes DeriveFormatKey report the whole
-        // pass as multisampled and trips the SetPipeline sample-count assert. Under MSAA the
-        // colour here is the resolved 1-sample target, so the pass attaches a 1-sample copy of
-        // the view depth instead (DeclareLateDepthCopy).
-        const uint32_t viewKey = static_cast<uint32_t>(d.View.id);
-        if (d.ViewDepth.IsValid() && lateTargets.Color.IsValid())
-        {
-            const auto colorDesc = d.Frame.Graph().ResourceDesc(lateTargets.Color.Id);
-            const auto depthDesc = d.Frame.Graph().ResourceDesc(d.ViewDepth.Id);
-            const bool viewDepthFits = depthDesc.SampleCount == colorDesc.SampleCount &&
-                                       depthDesc.Width == colorDesc.Width && depthDesc.Height == colorDesc.Height;
-            lateTargets.Depth = viewDepthFits ? d.ViewDepth : DeclareLateDepthCopy(d, colorDesc);
-            if (lateTargets.Depth.IsValid())
-            {
-                m_DeclinedLateDepthByView.erase(viewKey);
-            }
-            else
-            {
-                // Declining is invisible in the frame — the pass simply loses its z-test — so say
-                // so once, naming what the viewer will see.
-                const LateDepthSpec spec{colorDesc.SampleCount, depthDesc.SampleCount,
-                                         colorDesc.Width,       colorDesc.Height,
-                                         depthDesc.Width,       depthDesc.Height};
-                const auto it = m_DeclinedLateDepthByView.find(viewKey);
-                if (it == m_DeclinedLateDepthByView.end() || !(it->second == spec))
-                {
-                    m_DeclinedLateDepthByView[viewKey] = spec;
-                    Logger::Log::Debug(
-                        "TransmissiveRender(view {}): late transparents have NO depth test — the "
-                        "view depth ({} samples, {}x{}) cannot share a pass with the colour they "
-                        "composite into ({} samples, {}x{}). Smoke and ocean spray will draw over "
-                        "geometry that occludes them.",
-                        viewKey, depthDesc.SampleCount, depthDesc.Width, depthDesc.Height,
-                        colorDesc.SampleCount, colorDesc.Width, colorDesc.Height);
-                }
-            }
-        }
-        // Unlit particles divide by the view's exposure (view_exposure.glsl), which needs the
-        // metered scale: materialize the view's exposure history now, before the metering node
-        // does, so the pass binds it by name and declares its read with the view's other
-        // published buffers. A graph that declares no ExposureHistory binds the zero fallback.
-        d.ResolveBuffer(Names::Res::ExposureHistory);
-        const auto lateCommands = d.Services.GetLateForwardCommands(d.View.id);
         // Individual commands carry their vertex/instancing keywords. Lit
         // particles need the same clustered local lights and shadow receivers
         // as the world pass; IBL alone silently drops point and spot lights.
-        const Rendering::MaterialKeyword lateKeywords = m_PassKeywords & kLateTransparentKeywords;
-        // Read-only: these contributors test depth and never own it. The producer is
-        // registered writesDepth=false (RenderExtractionSystem), and a ReadWrite attach would
-        // declare a depth WRITE the graph would then order every later depth reader against.
-        d.Services.AddForwardCommandPassForView(
-            d.Frame, d.View.id, lateTargets, lateKeywords,
-            lateCommands, {}, "LateTransparent", {},
-            Rendering::RenderGraph::RGDepthAccess::ReadOnly);
+        LateForwardPass::Spec late;
+        late.Color = d.ViewResolve;
+        late.Keywords = m_PassKeywords & kLateTransparentKeywords;
+        late.PassName = "LateTransparent";
+        late.NodeType = GetTypeName();
+        m_Late.Declare(d, late);
     }
 
     if (!hasGlass)
@@ -159,40 +109,6 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
     d.Services.AddWorldPassForView(
         d.Frame, d.View.id, t, keywords,
         Engine::Renderer::RenderServices::WorldPassDrawScope::TransmissiveOnly);
-}
-
-Rendering::RenderGraph::RGTexture TransmissivePassNode::DeclareLateDepthCopy(
-    ViewDeclare& d, const Rendering::RenderGraph::RGResourceDesc& colorDesc)
-{
-    // The source is the multisampled view depth as it stands when this pass runs, so the copy
-    // holds everything the opaque passes wrote — the prepass, terrain, grass, the ocean and the
-    // world pass — as the single-sample path's direct attach does. Sample 0 of each pixel: the
-    // sample every single-sample reader of the view depth takes. View.DepthResolved is not the
-    // source: it is resolved right after the prepass. The copy needs the same extent; a view
-    // whose depth differs in extent has no copy and its late transparents no depth test.
-    const RenderGraph::RGTexture source = d.ViewDepth;
-    const auto& sourceDesc = d.Frame.Graph().ResourceDesc(source.Id);
-    if (sourceDesc.SampleCount <= 1u || sourceDesc.Width != colorDesc.Width ||
-        sourceDesc.Height != colorDesc.Height || colorDesc.SampleCount != 1u)
-        return {};
-    if (!m_LateDepthCopy.EnsureLoaded(d.Services.GetDevice(), /*multisampledSource=*/true))
-        return {};
-
-    TextureDesc desc{};
-    desc.width = colorDesc.Width;
-    desc.height = colorDesc.Height;
-    desc.depth = 1;
-    desc.mipLevels = 1;
-    desc.arrayLayers = 1;
-    desc.sampleCount = 1;
-    desc.format = static_cast<uint32_t>(TextureFormat::D32_FLOAT);
-    desc.usage = static_cast<uint32_t>(TextureUsage::DepthStencil);
-    const RenderGraph::RGTexture copy = d.Frame.CreateTexture(d.PassName("LateTransparentDepth").c_str(), desc);
-    if (!copy.IsValid())
-        return {};
-    m_LateDepthCopy.Declare(d.Frame, source, copy, colorDesc.Width, colorDesc.Height,
-                            d.PassName("LateTransparentDepthCopy"));
-    return copy;
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

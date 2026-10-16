@@ -6,6 +6,7 @@
 #include "Core/CpuProfiler.h"
 #include "Engine/Rendering/AntiAliasingEnvOverrides.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
+#include "Engine/Rendering/HeightFogParamsUBO.h"
 #include "Engine/Rendering/IRenderFeature.h"
 #include "Engine/Rendering/RTShadowMaskService.h"
 #include "Engine/Rendering/SceneAccelerationStructureService.h"
@@ -540,6 +541,11 @@ void RenderServices::CreateFallbackBuffers()
         const ExposureReadbackFeature::State unmetered{};
         registerFallback("ExposureHistory", Rendering::BufferUsage::Storage, sizeof(unmetered),
                          "RenderServices.Fallback.ExposureHistory", &unmetered);
+        // HeightFogParams: intensity 0, so a forward draw that fogs itself (GE_HEIGHT_FOG) in a
+        // view whose render graph uploads no height fog draws unfogged.
+        const HeightFogParamsUBO noFog{};
+        registerFallback("HeightFogParams", Rendering::BufferUsage::Uniform, sizeof(noFog),
+                         "RenderServices.Fallback.HeightFogParams", &noFog);
 
         // ShadowData fallback: zero-filled means numCascades=0, so GE_SampleShadow returns 1.0 (no shadow).
         {

@@ -811,6 +811,10 @@ class RenderServices
         // on SceneColorGrab-keyword passes; the pass declares the Read(Sampled) that
         // forms the copy->draw RAW edge. Invalid = env-cube refraction fallback.
         Rendering::RenderGraph::RGTexture SceneGrab{};
+        // The sky's backdrop (Names::Res::SkyBackdrop, the sky-view LUT or the HDRI) bound as
+        // ge_skyBackdrop on HeightFog-keyword passes, whose fog colour can come from the sky.
+        // Invalid = black, which the shader reads only when a sky colour source is chosen.
+        Rendering::RenderGraph::RGTexture SkyBackdrop{};
         // DDGI scaled glossy-reflection resolve outputs
         // (DDGIProbeFeature::DeclareGlossyResolveForView), bound as
         // ge_ddgiResolveRough/ge_ddgiResolveGlossy on DDGI-keyword passes.

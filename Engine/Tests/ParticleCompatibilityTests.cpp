@@ -162,6 +162,8 @@ TEST(ParticleCompatibility, EveryRenderMaterialCompilesToACookedShape)
 // keywords on the sprite's layout and a mesh particle's. The pass takes kLateTransparentKeywords of its
 // pipeline's TransmissiveRender keywords; the shipped nodes carry ForwardPlus, Instanced and Shadows,
 // with IBL (Assets ForwardPlus, the web library's Web) and without (the web smoke and DDGI projects).
+// Assets ForwardPlus draws them after the height fog instead (PostFogTransparent, with IBL), which
+// adds HeightFog.
 TEST(ParticleCompatibility, TheRequestSetCoversEveryVariantTheRendererDraws)
 {
     using Rendering::MaterialKeyword;
@@ -180,6 +182,11 @@ TEST(ParticleCompatibility, TheRequestSetCoversEveryVariantTheRendererDraws)
              {VertexAttributeFlags::StandardMesh, VertexAttributeFlags::StandardMeshWithTangent})
             reached.push_back(
                 {(transmissive & TransmissivePassNode::kLateTransparentKeywords) | Particles::kParticleDrawKeywords, layout});
+    for (const VertexAttributeFlags layout :
+         {VertexAttributeFlags::StandardMesh, VertexAttributeFlags::StandardMeshWithTangent})
+        reached.push_back({((node | MaterialKeyword::IBL) & TransmissivePassNode::kLateTransparentKeywords) |
+                               MaterialKeyword::HeightFog | Particles::kParticleDrawKeywords,
+                           layout});
 
     const auto variants = Particles::ParticleRenderVariants();
     for (const auto& [keywords, layout] : reached)

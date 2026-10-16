@@ -38,8 +38,22 @@ The mode reads the sky's backdrop texture, which the `SkyRender` pass publishes 
 | **Height Fog**: **Base Height**, **Transition Length** | Below the base the fog is uniform; above it, it thins over the transition length. |
 | **Sky**: **Sky Fill Start**, **Sky Fill End**, **Sky Power** | How far up the sky the haze reaches above the horizon. |
 
+## Particles and other transparents
+
+The haze is applied to the finished image, by the depth of the opaque surface at each pixel. A transparent thing has no depth of its own there, so the haze cannot see it: drawn before the haze, a puff of smoke would take the fog of whatever lies behind it, too much in front of a distant hill and none at all against the sky.
+
+So in the engine's pipeline particles draw after the haze, each fogging itself by its own distance from the camera with the same settings: a distant explosion fades into the haze, and one against the sky fades exactly as one against a hill does. An additive particle (a spark, a glow) is only dimmed; one that hides what is behind it also takes the haze's color. A project pipeline does the same with a **PostFogTransparent** node after the fog, and after the fog glow, which takes whatever the fog adds to the image for the fog's own light:
+
+```json title="After the FogGlowComposite pass"
+{ "id": "PostFogTransparent", "type": "PostFogTransparent", "enabled": true,
+  "output": "HDRFogGlow", "keywords": ["ForwardPlus", "Instanced", "Shadows", "IBL"] }
+```
+
+`output` is the image they draw into, `keywords` those of the **Transmissive** node. Without the node, particles draw in the **Transmissive** node, before the fog, as other transparent materials still do.
+
 ## Changelog
 
+- 2026-10-14: Particles draw after the haze and fog themselves by their own distance.
 - 2026-10-12: Converted from `docs/Rendering/height-fog.html`.
 - 2026-10-12: Sky Horizon is the default color mode for a new fog.
 - 2026-10-12: an HDRI's horizon is averaged around each direction; presets keep the color mode; the blend between volumes in different modes; the inspector line in Sky Horizon.

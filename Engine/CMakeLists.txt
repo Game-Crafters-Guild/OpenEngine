@@ -396,11 +396,13 @@ add_library(RenderServices OBJECT
 	Source/Engine/Rendering/Pipeline/DeformationMotionProducer.cpp
 	Source/Engine/Rendering/Pipeline/RenderPipeline.cpp
 	Source/Engine/Rendering/Pipeline/DepthUpsamplePass.cpp
+	Source/Engine/Rendering/Pipeline/LateForwardPass.cpp
 	Source/Engine/Rendering/Pipeline/PipelineEnumTables.cpp
 	Source/Engine/Rendering/Pipeline/ExpressionEvaluator.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/WorldRenderNode.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/SortedTransparentNode.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/TransmissivePassNode.cpp
+	Source/Engine/Rendering/Pipeline/Nodes/PostFogTransparentNode.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/DepthPrepassNode.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/DepthResolveNode.cpp
 	Source/Engine/Rendering/Pipeline/Nodes/AONode.cpp
