@@ -733,6 +733,18 @@
     },
     {
       "enabled": true,
+      "id": "PostFogTransparent",
+      "keywords": [
+        "ForwardPlus",
+        "Instanced",
+        "Shadows",
+        "IBL"
+      ],
+      "output": "HDRFogGlow",
+      "type": "PostFogTransparent"
+    },
+    {
+      "enabled": true,
       "id": "LensFlare",
       "output": "HDRFogGlow",
       "type": "LensFlare"

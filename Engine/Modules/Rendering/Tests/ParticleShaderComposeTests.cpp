@@ -45,7 +45,8 @@ TEST(ParticleShaderCompose, SurfaceCompilesWithoutParticleInstanceBuffer)
 namespace
 {
 // One particle program variant: profile, lighting (0 unlit, 1 lit, 2 six-way), texture sheet, clustered
-// lighting with shadows and image-based light, emission texture, and six-way packing.
+// lighting with shadows and image-based light, emission texture, six-way packing, and, for a clustered
+// one, the height fog it draws with after the fog pass (MaterialKeyword::HeightFog).
 struct ParticleVariant
 {
     bool Compat = false;
@@ -54,6 +55,7 @@ struct ParticleVariant
     bool Clustered = false;
     bool Emission = false;
     int Packing = 0;
+    bool Fogged = false;
 };
 
 std::vector<ParticleVariant> EveryParticleVariant()
@@ -65,7 +67,9 @@ std::vector<ParticleVariant> EveryParticleVariant()
     for (bool clustered : {false, true})
     for (bool emission : {false, true})
     for (int packing = 0; packing < (lighting == 2 ? 3 : 1); ++packing)
-        variants.push_back({compat, lighting, textured, clustered, emission, packing});
+    for (bool fogged : {false, true})
+        if (clustered || !fogged)
+            variants.push_back({compat, lighting, textured, clustered, emission, packing, fogged});
     return variants;
 }
 
@@ -74,7 +78,7 @@ std::string Describe(const ParticleVariant& variant)
     return std::string(variant.Compat ? "compatibility profile" : "native profile") +
            " lighting=" + std::to_string(variant.Lighting) + " textured=" + std::to_string(variant.Textured) +
            " clustered=" + std::to_string(variant.Clustered) + " emission=" + std::to_string(variant.Emission) +
-           " packing=" + std::to_string(variant.Packing);
+           " packing=" + std::to_string(variant.Packing) + " fogged=" + std::to_string(variant.Fogged);
 }
 
 MaterialBuildResult BuildParticleVariant(const ParticleVariant& variant)
@@ -99,9 +103,13 @@ MaterialBuildResult BuildParticleVariant(const ParticleVariant& variant)
     ctx.PackageShaderDirs = {ctx.AdapterShaderDir};
     ctx.CacheRoot = std::filesystem::temp_directory_path() / ("ge_particle_shader_" + std::to_string(variant.Lighting) +
                                                               std::to_string(variant.Textured) + std::to_string(variant.Clustered));
+    MaterialKeyword keywords = variant.Clustered ? MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus |
+                                                       MaterialKeyword::Shadows | MaterialKeyword::IBL
+                                                 : MaterialKeyword::Instanced;
+    if (variant.Fogged)
+        keywords = keywords | MaterialKeyword::HeightFog;
     auto result = BuildMaterialToShaderPackage(doc, ctx.AdapterShaderDir / "Particle.material",
-        "ParticleTest", ctx, ShaderSourceKind::SpirV, variant.Clustered ? MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL
-                                                    : MaterialKeyword::Instanced,
+        "ParticleTest", ctx, ShaderSourceKind::SpirV, keywords,
         variant.Textured ? VertexAttributeFlags::StandardMeshWithTangent | VertexAttributeFlags::HasColor | VertexAttributeFlags::HasUV1 |
                            VertexAttributeFlags::HasUV2 | VertexAttributeFlags::HasUV3 | VertexAttributeFlags::HasUV4 | VertexAttributeFlags::HasUV5 |
                            VertexAttributeFlags::HasUV6 | VertexAttributeFlags::HasUV7 : VertexAttributeFlags::StandardMesh);
@@ -216,6 +224,35 @@ TEST(ParticleShaderCompose, AllLightingAndTextureVariantsCompile)
                             particleBinding = true;
             EXPECT_TRUE(particleBinding);
         }
+    }
+}
+
+// A particle drawn after the height fog pass fogs itself: its fragment stage declares the fog's
+// parameters (set 0, b52, bound by name to the HeightFogParams buffer) and the sky's backdrop (b53),
+// and one drawn before it declares neither.
+TEST(ParticleShaderCompose, FoggedVariantDeclaresTheFogAndTheSkyBackdrop)
+{
+    RestoreProfile restoreProfile;
+    for (const bool fogged : {false, true})
+    {
+        SCOPED_TRACE(fogged ? "fogged" : "not fogged");
+        ParticleVariant variant;
+        variant.Clustered = true;
+        variant.Fogged = fogged;
+        const auto result = BuildParticleVariant(variant);
+        for (const auto& error : result.errors) ADD_FAILURE() << error;
+        ASSERT_TRUE(result.success);
+        ASSERT_NE(result.package, nullptr);
+        bool fogParams = false, skyBackdrop = false;
+        for (const auto& set : result.package->meta.Sets)
+            if (set.Set == 0)
+                for (const auto& binding : set.Bindings)
+                {
+                    fogParams = fogParams || (binding.Binding == 52 && binding.Name == "HeightFogParams");
+                    skyBackdrop = skyBackdrop || (binding.Binding == 53 && binding.Name == "ge_skyBackdrop");
+                }
+        EXPECT_EQ(fogParams, fogged);
+        EXPECT_EQ(skyBackdrop, fogged);
     }
 }
 

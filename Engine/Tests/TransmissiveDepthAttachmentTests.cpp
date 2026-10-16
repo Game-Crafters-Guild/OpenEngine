@@ -3,6 +3,7 @@
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/Nodes/DepthResolveNode.h"
+#include "Engine/Rendering/Pipeline/Nodes/PostFogTransparentNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/TransmissivePassNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -107,6 +108,9 @@ struct PassDepthDecl
     bool CopySamplesViewDepth = false;
     bool CopySamplesDepthResolved = false;
     bool CopyBeforeLatePass = false;
+    // With a PostFogTransparent node: whether TransmissiveRender declared a LateTransparent pass
+    // as well (it must leave the late commands to the node).
+    bool LateTransparentDeclared = false;
 };
 
 // The depth attachment the named pass declared, if any, plus whether the same resource is also
@@ -280,9 +284,14 @@ PassDepthDecl DeclareTransmissiveWorld(Rendering::IDevice* device, uint32_t samp
 ///
 /// `withDepthResolve` puts the shipped pipeline's DepthResolve node first, which publishes the
 /// single-sample View.DepthResolved the late pass copies its depth from under MSAA.
+///
+/// `postFog` adds a PostFogTransparent node after TransmissiveRender, as the shipped ForwardPlus
+/// graph has after the height fog: the late commands are then its pass ("PostFogTransparent",
+/// into View.Resolve here), and the record describes that pass instead.
 PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t samples,
-                                          bool withDepthResolve = false)
+                                          bool withDepthResolve = false, bool postFog = false)
 {
+    const std::string latePassName = postFog ? "PostFogTransparent" : "LateTransparent";
     PassDepthDecl out{};
     RenderServices rs;
     if (!rs.Initialize(device))
@@ -312,7 +321,9 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
         || !registry.Register("TransmissiveRender",
                               [] { return std::make_unique<Nodes::TransmissivePassNode>(); }, true)
         || !registry.Register("DepthResolve", [] { return std::make_unique<Nodes::DepthResolveNode>(); },
-                              true))
+                              true)
+        || !registry.Register("PostFogTransparent",
+                              [] { return std::make_unique<Nodes::PostFogTransparentNode>(); }, true))
     {
         rs.Shutdown();
         return out;
@@ -346,6 +357,16 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
         p.enabled = true;
         p.perView = true;
         p.passJson = R"({"id":"Transmissive","type":"TransmissiveRender"})";
+        bp.passes.push_back(p);
+    }
+    if (postFog)
+    {
+        RenderPipelineBlueprint::Pass p;
+        p.id = "PostFogTransparent";
+        p.type = "PostFogTransparent";
+        p.enabled = true;
+        p.perView = true;
+        p.passJson = R"({"id":"PostFogTransparent","type":"PostFogTransparent"})";
         bp.passes.push_back(p);
     }
     bp.outputs.push_back({"FinalColor", "View.Resolve"});
@@ -393,9 +414,12 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     instance.Declare(frame, targets, views);
 
     out = CollectDepthDecl(
-        frame, GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{"LateTransparent"}));
+        frame, GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{latePassName.c_str()}));
     const std::vector<RenderGraph::RGPassId> latePasses =
-        GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{"LateTransparent"});
+        GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{latePassName.c_str()});
+    if (postFog)
+        out.LateTransparentDeclared =
+            !GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{"LateTransparent"}).empty();
     for (const auto& att : frame.Attachments())
     {
         if (att.IsDepth && att.Tex == depth.Id && latePasses.size() == 1u && att.Pass == latePasses.front())
@@ -410,7 +434,7 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
             depthResolved = it->second.Id;
     }
     const std::vector<RenderGraph::RGPassId> copyPasses =
-        GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Family{"LateTransparentDepthCopy"});
+        GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Family{(latePassName + "DepthCopy").c_str()});
     RenderGraph::RGResourceId lateDepth = RenderGraph::kInvalidId;
     for (const auto& att : frame.Attachments())
     {
@@ -580,6 +604,51 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesACopyOfTheViewDept
             << "View.DepthResolved is resolved after the prepass and misses terrain, grass and the ocean";
         EXPECT_TRUE(d.CopyBeforeLatePass);
     }
+
+    device->Shutdown();
+}
+
+// A pipeline that draws the late commands after the height fog (PostFogTransparent) draws them there
+// and only there: drawn by TransmissiveRender as well they would blend twice, the second time
+// unfogged. They keep the same depth test, read-only and loaded.
+TEST(TransmissiveDepthAttachmentTests, PostFogTransparentDrawsTheLateCommandsAndAttachesOpaqueDepthReadOnly)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    const PassDepthDecl d = DeclareLateTransparentWorld(device.get(), /*samples=*/1u, /*withDepthResolve=*/false,
+                                                        /*postFog=*/true);
+    ASSERT_TRUE(d.PassDeclared)
+        << "positive control: a late-forward command in the view must declare exactly one PostFogTransparent pass";
+    EXPECT_FALSE(d.LateTransparentDeclared) << "TransmissiveRender must leave the late commands to the node";
+    EXPECT_TRUE(d.AttachedDepth) << "the late transparents must keep their depth test after the fog";
+    EXPECT_TRUE(d.ReadOnly) << "late transparents test depth but never own it";
+    EXPECT_EQ(d.Load, RenderGraph::RGLoadOp::Load);
+    EXPECT_TRUE(d.SampledAttachedDepth) << "the soft-particle fade still texelFetches ge_sceneDepth";
+
+    device->Shutdown();
+}
+
+// Under MSAA the node draws into a resolved 1-sample colour, as TransmissiveRender does, and attaches
+// its own 1-sample copy of the view depth, written before it from the multisampled view depth.
+TEST(TransmissiveDepthAttachmentTests, PostFogTransparentAttachesACopyOfTheViewDepthUnderMsaa)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    const PassDepthDecl d = DeclareLateTransparentWorld(device.get(), /*samples=*/4u, /*withDepthResolve=*/true,
+                                                        /*postFog=*/true);
+    ASSERT_TRUE(d.PassDeclared) << "positive control: the MSAA arm must declare the PostFogTransparent pass";
+    EXPECT_FALSE(d.LateTransparentDeclared);
+    EXPECT_TRUE(d.AttachedDepth);
+    EXPECT_FALSE(d.AttachedViewDepth);
+    EXPECT_EQ(d.DepthSamples, 1u);
+    EXPECT_TRUE(d.ReadOnly);
+    EXPECT_TRUE(d.CopyWritesAttachedDepth);
+    EXPECT_TRUE(d.CopySamplesViewDepth);
+    EXPECT_TRUE(d.CopyBeforeLatePass);
 
     device->Shutdown();
 }

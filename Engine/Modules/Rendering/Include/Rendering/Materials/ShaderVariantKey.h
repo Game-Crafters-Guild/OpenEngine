@@ -68,6 +68,7 @@ enum class MaterialKeyword : uint64_t
     ParallaxDepthFromPrepass = 1ull << 34, // Pass keyword, the colour pass of a parallax material after a camera prepass that wrote the relief depth, with that depth attached read-only: the variant does not march. It reads the depth the prepass wrote at its pixel (ge_prepassDepth, set-0 b49), rebuilds the relief hit from it (Includes/parallax_depth.glsl), and discards where that depth is something else in front of the relief. It tests at the depth it read (layout(depth_less) gl_FragDepth, one value per pixel as the prepass wrote it) and its pipeline writes no depth. Both passes agree on the hit by construction
     ParallaxPrepassDepthMultisample = 1ull << 35, // Pass keyword, beside ParallaxDepthFromPrepass when the depth is multisampled: ge_prepassDepth is a sampler2DMS and the hit comes from the farthest covered sample, the one the relief wrote
     ParallaxDepthTolerance = 1ull << 36, // Pass keyword, beside ParallaxDepthOffset on the colour pass of a view whose prepass wrote the relief depth but whose world pass keeps depth writable, so it cannot read it (forward contributors that draw no prepass depth): the colour variant marches, writes no depth (its pipeline's depth write is off) and tests at min(z, z' + margin), one march step of depth plus 2^-20 relative, so a march that lands a step from the prepass's leaves no hole
+    HeightFog = 1ull << 37, // Pass keyword (the PostFogTransparent node, which draws after the HeightFog post-process): the colour variant fogs its fragment by the fragment's own distance with the post-process's sum (Includes/forward_height_fog.glsl), reading the HeightFogParams buffer (set-0 b52) and the sky backdrop (ge_skyBackdrop, b53). The post-process cannot fog a transparent fragment: it reads only the opaque depth. Without the keyword neither binding nor the fog is in the SPIR-V and the variant is bit-identical to the pre-fog shader
 };
 
 inline constexpr MaterialKeyword operator|(MaterialKeyword a, MaterialKeyword b)
@@ -253,6 +254,8 @@ inline std::vector<std::string> GenerateDefines(const ShaderVariantKey& key,
         defs.push_back("GE_TRANSMISSION_ENABLED");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::SceneColorGrab))
         defs.push_back("GE_SCENECOLOR_GRAB");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::HeightFog))
+        defs.push_back("GE_HEIGHT_FOG");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::TransmissionThick))
         defs.push_back("GE_TRANSMISSION_THICK");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::DepthOnlyTransmissionColor))

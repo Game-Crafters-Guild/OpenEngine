@@ -23,6 +23,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/SkyRenderNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/SmaaNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/SortedTransparentNode.h"
+#include "Engine/Rendering/Pipeline/Nodes/PostFogTransparentNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/TemporalAANode.h"
 #include "Engine/Rendering/Pipeline/Nodes/TemporalFxaaNode.h"
@@ -263,6 +264,14 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         { return std::make_unique<SunGlareRenderNode>(); },
         /*perView*/ true,
         RenderPipelineNodeResourceFields{.RefKeys = {"output"}, .PublishKeys = {{"output", Names::View::Resolve}}});
+
+    // Draws onto its output and republishes nothing.
+    (void)registry.Register(
+        "PostFogTransparent",
+        []() -> std::unique_ptr<IRenderPipelineNode>
+        { return std::make_unique<PostFogTransparentNode>(); },
+        /*perView*/ true,
+        RenderPipelineNodeResourceFields{.RefKeys = {"output"}});
 
     (void)registry.Register(
         "VolumetricFog",

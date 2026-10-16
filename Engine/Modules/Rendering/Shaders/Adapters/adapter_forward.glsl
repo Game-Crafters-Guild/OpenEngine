@@ -292,6 +292,12 @@ layout(set = 0, binding = 6) uniform LightUBO {
 
 #include "../Includes/view_params.glsl"
 
+// Height fog by the fragment's own distance, for transparent draws made after the HeightFog
+// post-process (the PostFogTransparent node's keyword). Colour variants only.
+#if defined(GE_HEIGHT_FOG) && !defined(GE_DEPTH_ONLY_FRAGMENT) && !defined(GE_MOTION_VECTORS)
+#include "../Includes/forward_height_fog.glsl"
+#endif
+
 // Forward+ clustered lighting (when available and a lit model is active).
 // Included AFTER LightUBO so GE_AccumulateClusteredLighting can read
 // Light.uLightDirWorld / uLightColorWorld for the out-of-band directional.
@@ -1083,6 +1089,16 @@ void main()
         if (sceneRaw > gl_FragCoord.z + kRawDepthSlack) // opaque is in front of the glass
             finalColor = texelFetch(ge_sceneColor, ivec2(gl_FragCoord.xy), 0).rgb;
     }
+#endif
+
+#ifdef GE_HEIGHT_FOG
+    // The fog in front of the fragment (forward_height_fog.glsl). How much of the fog's light it
+    // takes depends on how its blend composites it, which only the surface knows: a surface
+    // drawn with other than straight alpha defines GE_SURFACE_FOG_SCATTER_WEIGHT(alpha).
+#ifndef GE_SURFACE_FOG_SCATTER_WEIGHT
+#define GE_SURFACE_FOG_SCATTER_WEIGHT(alpha) 1.0
+#endif
+    finalColor = GE_ApplyHeightFog(finalColor, vPosWS, GE_SURFACE_FOG_SCATTER_WEIGHT(alpha));
 #endif
 
     oColor = vec4(finalColor, alpha);

@@ -34,6 +34,24 @@ MaterialDocument ProceduralSmokeMaterial()
     doc.properties[std::string(GPUFogParticles::kEdgeSoftness)] = kEdgeSoftness;
     return doc;
 }
+
+// How much of the fog's light a sprite takes when it fogs itself after the HeightFog pass
+// (particle_surface.glsl's fogScatterMode): as much as it hides of what is behind it.
+// - Add, destination OneMinusSrcAlpha: it hides what is behind it by its alpha. Source SrcAlpha
+//   (straight alpha) scales the fogged colour by alpha in the blend: 1. Source One (premultiplied,
+//   the hybrid blend) does not, so the shader scales the fog's light by alpha: 2.
+// - Every other blend (additive, multiply, the rest): it hides nothing, and the fog's light is
+//   already in what is behind it: 0. The fog still dims what the sprite adds.
+float FogScatterMode(const std::optional<MaterialBlendState>& authored)
+{
+    const MaterialBlendState blend = authored.value_or(MaterialBlendState{});
+    if (blend.ColorOp != MaterialBlendOp::Add || blend.DstColorFactor != MaterialBlendFactor::OneMinusSrcAlpha)
+        return 0.0f;
+    if (blend.SrcColorFactor == MaterialBlendFactor::SrcAlpha)
+        return 1.0f;
+    return blend.SrcColorFactor == MaterialBlendFactor::One ? 2.0f : 0.0f;
+}
+
 // The power of the near fade a particle's colour and emission take beyond what the alpha already gives
 // them (GE_ParticleNearFadeColorScale). The alpha always carries the fade once.
 // - Add, destination OneMinusSrcAlpha: the sprite hides what is behind it by its faded alpha, so its
@@ -123,6 +141,7 @@ MaterialDocument BuildParticleRenderMaterialDocument(const Components::ParticleR
     // discards it unshaded; an authored blend (additive, premultiplied) can draw at opacity 0.
     doc.properties["straightAlphaBlend"] = !doc.blend || *doc.blend == MaterialBlendState{} ? 1.0f : 0.0f;
     doc.properties["nearFadeColorExponent"] = NearFadeColorExponent(doc.blend);
+    doc.properties["fogScatterMode"] = FogScatterMode(doc.blend);
     return doc;
 }
 
@@ -172,12 +191,17 @@ std::span<const ParticleRenderVariant> ParticleRenderVariants()
     using Rendering::VertexAttributeFlags;
     constexpr MaterialKeyword kForward = kParticleDrawKeywords | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows;
     constexpr MaterialKeyword kForwardIbl = kForward | MaterialKeyword::IBL;
-    static constexpr std::array<ParticleRenderVariant, 5> kVariants = {{
+    // Drawn after the height fog, fogging themselves (PostFogTransparent, in the shipped
+    // ForwardPlus graph, whose keywords carry IBL).
+    constexpr MaterialKeyword kForwardIblFog = kForwardIbl | MaterialKeyword::HeightFog;
+    static constexpr std::array<ParticleRenderVariant, 7> kVariants = {{
         {"base", MaterialKeyword::None, VertexAttributeFlags::StandardMesh},
         {"forward-color", kForward, VertexAttributeFlags::StandardMesh},
         {"forward-color+tangent", kForward, VertexAttributeFlags::StandardMeshWithTangent},
         {"forward-color-ibl", kForwardIbl, VertexAttributeFlags::StandardMesh},
         {"forward-color-ibl+tangent", kForwardIbl, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-fog", kForwardIblFog, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-fog+tangent", kForwardIblFog, VertexAttributeFlags::StandardMeshWithTangent},
     }};
     return kVariants;
 }
