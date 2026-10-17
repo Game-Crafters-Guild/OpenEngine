@@ -18,6 +18,16 @@
 //
 // The build-time scanner detects `: ECS::SystemBase` and generates the registration (no macro).
 //
+// Systems run in ascending `static constexpr int Order` (0 when a system declares none), and
+// systems of equal order in the order they register: a module's by name, as the scanner
+// generates them. Give systems an Order when one must run
+// after another within the frame:
+//
+//     struct DamageSystem : ECS::SystemBase {
+//         static constexpr int Order = 100;  // after the movement systems at 0
+//         void OnUpdate(ECS::World& w, float dt);
+//     };
+//
 // For a per-entity system, inherit ECS::EntitySystem<Self> and write a ForEach(Comp&..., float dt)
 // instead of OnUpdate — the engine builds the Query from ForEach's parameters and runs it for every
 // matching entity. See EntitySystem below.
@@ -34,6 +44,7 @@
 #include "ECS/ECSTemplates.h"                    // Query::Each template implementations
 #include "NativeScripting/UserSystemRegistry.h"  // IUserSystem + RegisterUserSystem
 
+#include <concepts>    // std::convertible_to
 #include <cstddef>     // std::size_t
 #include <tuple>       // ForEach-parameter introspection
 #include <type_traits> // std::remove_cvref_t, std::is_same_v
@@ -133,6 +144,13 @@ public:
     bool HasPostSimulation() const override
     {
         return requires(T& s, World& w, float d) { s.OnPostSimulation(w, d); };
+    }
+    int Order() const override
+    {
+        if constexpr (requires { { T::Order } -> std::convertible_to<int>; })
+            return static_cast<int>(T::Order);
+        else
+            return 0;
     }
 
 private:
