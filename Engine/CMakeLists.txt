@@ -2311,6 +2311,19 @@ endif()
 			    ge_stage_runtime_dependencies(BloomRenderingTests)
 			    add_test(NAME BloomRenderingTests COMMAND $<TARGET_FILE:BloomRenderingTests>)
 
+			    # A transparent fragment fogs itself as the HeightFog post-process fogs an opaque
+			    # surface at the same distance: both shaders run as they ship.
+			    add_executable(HeightFogForwardParityTests Tests/HeightFogForwardParityTests.cpp)
+			    target_link_libraries(HeightFogForwardParityTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+			    target_compile_definitions(HeightFogForwardParityTests PRIVATE
+			        RENDERING_SHADER_OUTPUT_DIR="${CMAKE_BINARY_DIR}/Shaders")
+			    add_dependencies(HeightFogForwardParityTests CompileShaders)
+			    set_target_properties(HeightFogForwardParityTests PROPERTIES
+			        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Engine/Tests")
+			    ge_set_output_tests(HeightFogForwardParityTests)
+			    ge_stage_runtime_dependencies(HeightFogForwardParityTests)
+			    add_test(NAME HeightFogForwardParityTests COMMAND $<TARGET_FILE:HeightFogForwardParityTests>)
+
 			    add_executable(PostProcessDofControlTests
 			            Tests/PostProcessBlendCoverageTests.cpp)
 			    target_link_libraries(PostProcessDofControlTests PRIVATE Engine GTest::gtest GTest::gtest_main)
