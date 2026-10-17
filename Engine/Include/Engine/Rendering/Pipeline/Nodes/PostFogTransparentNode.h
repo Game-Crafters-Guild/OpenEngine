@@ -16,8 +16,8 @@ namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 // The post-processes cannot fog them: they read only the opaque depth, so a sprite drawn before
 // them takes the fog of whatever lies behind it, too much in front of a hill, none at all over the
 // sky. A pipeline with this node enabled draws them here instead of in TransmissiveRender, which
-// also puts them after every composite before the fog glow: the cloud layers draw under them, and
-// they no longer feed the fog glow.
+// also puts them after every composite before the fog glow: the cloud layers draw under them. The
+// fog glow is unaffected: it takes only the fog's own light, never the particles.
 //
 // Placed after the fog glow (which treats whatever the fog pass's output holds beyond the dimmed
 // scene as the fog's own light) and before the lens effects and TAA. JSON:

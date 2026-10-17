@@ -51,10 +51,10 @@ So in the engine's pipeline particles draw after the haze, each fogging itself b
 
 `output` is the image they draw into, `keywords` those of the **Transmissive** node. Without the node, particles draw in the **Transmissive** node, before the fog, as other transparent materials still do.
 
-Drawing after the fog puts particles after everything composited between the **Transmissive** node and the fog glow, which changes two other things:
+Drawing after the fog puts particles after everything composited between the **Transmissive** node and the fog glow:
 
 - **Clouds.** The cloud layer and the volumetric clouds are composited before the fog and have no depth, so particles draw over them: smoke behind a cloud bank shows through it.
-- **Fog glow.** The glow is built from the fogged opaque scene, so particles no longer add to it: a fire in the fog has no glow halo of its own.
+- **Fog glow.** Unchanged. The glow is built from the fog's own light, what the fog adds over the dimmed scene, and the particles were never part of that: drawn before the fog they were in the scene it dims, so a glowing particle had no halo of its own then either.
 
 ## Changelog
 
