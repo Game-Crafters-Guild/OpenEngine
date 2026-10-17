@@ -96,6 +96,11 @@ inline constexpr const char* DepthMinMaxBuffer = "DepthMinMaxBuffer";
 // The texture the sky pass draws its backdrop from (the sky-view LUT or the HDRI), published per
 // view by SkyRender; a black texture when no sky is active.
 inline constexpr const char* SkyBackdrop = "SkyBackdrop";
+// The volumetric fog the VolumetricFog node composites into the scene, published per view for the
+// forward passes that fog what they draw after it (forward_volumetric_fog.glsl): its parameter
+// block, and its in-scattered light and transmittance by froxel. Absent without the fog.
+inline constexpr const char* VolumetricFogParams = "VolumetricFogParams";
+inline constexpr const char* VolumetricFog = "VolumetricFog";
 } // namespace Res
 
 // Pipeline output-slot names (RenderPipelineBlueprint::outputs keys).

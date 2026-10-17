@@ -1,4 +1,4 @@
-// Height fog for what a forward pass draws over the already fogged scene (GE_HEIGHT_FOG): a
+// Height fog for what a forward pass draws over the already fogged scene (GE_FOG): a
 // fragment fogged by its own distance from the camera, with the sum the HeightFog post-process
 // fogs the opaque scene by its depth (height_fog_common.glsl), so the two agree where they meet.
 //

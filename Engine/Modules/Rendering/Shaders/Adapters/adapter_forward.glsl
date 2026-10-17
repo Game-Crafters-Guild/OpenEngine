@@ -292,9 +292,10 @@ layout(set = 0, binding = 6) uniform LightUBO {
 
 #include "../Includes/view_params.glsl"
 
-// Height fog by the fragment's own distance, for transparent draws made after the HeightFog
-// post-process (the PostFogTransparent node's keyword). Colour variants only.
-#if defined(GE_HEIGHT_FOG) && !defined(GE_DEPTH_ONLY_FRAGMENT) && !defined(GE_MOTION_VECTORS)
+// The volumetric and height fog by the fragment's own distance, for transparent draws made after
+// the fog post-processes (the PostFogTransparent node's keyword). Colour variants only.
+#if defined(GE_FOG) && !defined(GE_DEPTH_ONLY_FRAGMENT) && !defined(GE_MOTION_VECTORS)
+#include "../Includes/forward_volumetric_fog.glsl"
 #include "../Includes/forward_height_fog.glsl"
 #endif
 
@@ -1091,13 +1092,16 @@ void main()
     }
 #endif
 
-#ifdef GE_HEIGHT_FOG
-    // The fog in front of the fragment (forward_height_fog.glsl). How much of the fog's light it
-    // takes depends on how its blend composites it, which only the surface knows: a surface
-    // drawn with other than straight alpha defines GE_SURFACE_FOG_SCATTER_WEIGHT(alpha).
+#ifdef GE_FOG
+    // The fog in front of the fragment: the volumetric fog, then the height fog over it, the order
+    // their post-processes fog the opaque scene in (forward_volumetric_fog.glsl,
+    // forward_height_fog.glsl). How much of the fogs' light it takes depends on how its blend
+    // composites it, which only the surface knows: a surface drawn with other than straight alpha
+    // defines GE_SURFACE_FOG_SCATTER_WEIGHT(alpha).
 #ifndef GE_SURFACE_FOG_SCATTER_WEIGHT
 #define GE_SURFACE_FOG_SCATTER_WEIGHT(alpha) 1.0
 #endif
+    finalColor = GE_ApplyVolumetricFog(finalColor, vPosWS, GE_SURFACE_FOG_SCATTER_WEIGHT(alpha));
     finalColor = GE_ApplyHeightFog(finalColor, vPosWS, GE_SURFACE_FOG_SCATTER_WEIGHT(alpha));
 #endif
 

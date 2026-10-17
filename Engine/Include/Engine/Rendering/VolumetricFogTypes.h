@@ -7,6 +7,10 @@ namespace GameEngine::Engine::Renderer
 
 inline constexpr uint32_t kMaxVolumetricFogLocalVolumes = 64;
 
+// The size of the volumetric fog's parameter block (volumetric_fog_params_fields.glsl, std140):
+// the fallback a forward pass binds when its view has no volumetric fog is this many zero bytes.
+inline constexpr uint32_t kVolumetricFogParamsBytes = 528;
+
 enum class VolumetricFogDensityMode : int32_t
 {
     Additive = 0,

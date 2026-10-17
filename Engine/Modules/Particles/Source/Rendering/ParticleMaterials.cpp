@@ -35,7 +35,7 @@ MaterialDocument ProceduralSmokeMaterial()
     return doc;
 }
 
-// How much of the fog's light a sprite takes when it fogs itself after the HeightFog pass
+// How much of the fogs' light a sprite takes when it fogs itself after the fog passes
 // (particle_surface.glsl's fogScatterMode): as much as it hides of what is behind it.
 // - Add, destination OneMinusSrcAlpha: it hides what is behind it by its alpha. Source SrcAlpha
 //   (straight alpha) scales the fogged colour by alpha in the blend: 1. Source One (premultiplied,
@@ -191,9 +191,9 @@ std::span<const ParticleRenderVariant> ParticleRenderVariants()
     using Rendering::VertexAttributeFlags;
     constexpr MaterialKeyword kForward = kParticleDrawKeywords | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows;
     constexpr MaterialKeyword kForwardIbl = kForward | MaterialKeyword::IBL;
-    // Drawn after the height fog, fogging themselves (PostFogTransparent, in the shipped
+    // Drawn after the fog passes, fogging themselves (PostFogTransparent, in the shipped
     // ForwardPlus graph, whose keywords carry IBL).
-    constexpr MaterialKeyword kForwardIblFog = kForwardIbl | MaterialKeyword::HeightFog;
+    constexpr MaterialKeyword kForwardIblFog = kForwardIbl | MaterialKeyword::Fog;
     static constexpr std::array<ParticleRenderVariant, 7> kVariants = {{
         {"base", MaterialKeyword::None, VertexAttributeFlags::StandardMesh},
         {"forward-color", kForward, VertexAttributeFlags::StandardMesh},

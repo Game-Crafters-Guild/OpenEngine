@@ -42,7 +42,7 @@ The mode reads the sky's backdrop texture, which the `SkyRender` pass publishes 
 
 The haze is applied to the finished image, by the depth of the opaque surface at each pixel. A transparent thing has no depth of its own there, so the haze cannot see it: drawn before the haze, a puff of smoke would take the fog of whatever lies behind it, too much in front of a distant hill and none at all against the sky.
 
-So in the engine's pipeline particles draw after the haze, each fogging itself by its own distance from the camera with the same settings: a distant explosion fades into the haze, and one against the sky fades exactly as one against a hill does. An additive particle (a spark, a glow) is only dimmed; one that hides what is behind it also takes the haze's color. A project pipeline does the same with a **PostFogTransparent** node after the fog, and after the fog glow, which takes whatever the fog adds to the image for the fog's own light:
+So in the engine's pipeline particles draw after the haze, each fogging itself by its own distance from the camera with the same settings: a distant explosion fades into the haze, and one against the sky fades exactly as one against a hill does. The volumetric fog works the same way: it too is composited by the depth of the opaque surface, so particles drawn after it read its fog at their own distance, and smoke in a lit fog bank stands in the fog's light rather than in front of it. Each particle takes the volumetric fog first and the haze over it, the order the two fog the scene in. An additive particle (a spark, a glow) is only dimmed; one that hides what is behind it also takes the fogs' light. A project pipeline does the same with a **PostFogTransparent** node after the fog, and after the fog glow, which takes whatever the fog adds to the image for the fog's own light:
 
 ```json title="After the FogGlowComposite pass"
 { "id": "PostFogTransparent", "type": "PostFogTransparent", "enabled": true,
@@ -50,6 +50,11 @@ So in the engine's pipeline particles draw after the haze, each fogging itself b
 ```
 
 `output` is the image they draw into, `keywords` those of the **Transmissive** node. Without the node, particles draw in the **Transmissive** node, before the fog, as other transparent materials still do.
+
+Drawing after the fog puts particles after everything composited between the **Transmissive** node and the fog glow, which changes two other things:
+
+- **Clouds.** The cloud layer and the volumetric clouds are composited before the fog and have no depth, so particles draw over them: smoke behind a cloud bank shows through it.
+- **Fog glow.** The glow is built from the fogged opaque scene, so particles no longer add to it: a fire in the fog has no glow halo of its own.
 
 ## Changelog
 

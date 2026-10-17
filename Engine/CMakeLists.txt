@@ -2313,16 +2313,16 @@ endif()
 
 			    # A transparent fragment fogs itself as the HeightFog post-process fogs an opaque
 			    # surface at the same distance: both shaders run as they ship.
-			    add_executable(HeightFogForwardParityTests Tests/HeightFogForwardParityTests.cpp)
-			    target_link_libraries(HeightFogForwardParityTests PRIVATE Engine GTest::gtest GTest::gtest_main)
-			    target_compile_definitions(HeightFogForwardParityTests PRIVATE
+			    add_executable(FogForwardParityTests Tests/FogForwardParityTests.cpp)
+			    target_link_libraries(FogForwardParityTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+			    target_compile_definitions(FogForwardParityTests PRIVATE
 			        RENDERING_SHADER_OUTPUT_DIR="${CMAKE_BINARY_DIR}/Shaders")
-			    add_dependencies(HeightFogForwardParityTests CompileShaders)
-			    set_target_properties(HeightFogForwardParityTests PROPERTIES
+			    add_dependencies(FogForwardParityTests CompileShaders)
+			    set_target_properties(FogForwardParityTests PROPERTIES
 			        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Engine/Tests")
-			    ge_set_output_tests(HeightFogForwardParityTests)
-			    ge_stage_runtime_dependencies(HeightFogForwardParityTests)
-			    add_test(NAME HeightFogForwardParityTests COMMAND $<TARGET_FILE:HeightFogForwardParityTests>)
+			    ge_set_output_tests(FogForwardParityTests)
+			    ge_stage_runtime_dependencies(FogForwardParityTests)
+			    add_test(NAME FogForwardParityTests COMMAND $<TARGET_FILE:FogForwardParityTests>)
 
 			    add_executable(PostProcessDofControlTests
 			            Tests/PostProcessBlendCoverageTests.cpp)

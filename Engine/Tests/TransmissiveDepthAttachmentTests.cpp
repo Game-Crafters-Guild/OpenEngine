@@ -111,6 +111,9 @@ struct PassDepthDecl
     // With a PostFogTransparent node: whether TransmissiveRender declared a LateTransparent pass
     // as well (it must leave the late commands to the node).
     bool LateTransparentDeclared = false;
+    // With a published volumetric fog volume: whether the late pass declared a sampled read of it,
+    // the edge that orders it after the fog that writes the volume.
+    bool SampledVolumetricFog = false;
 };
 
 // The depth attachment the named pass declared, if any, plus whether the same resource is also
@@ -288,10 +291,26 @@ PassDepthDecl DeclareTransmissiveWorld(Rendering::IDevice* device, uint32_t samp
 /// `postFog` adds a PostFogTransparent node after TransmissiveRender, as the shipped ForwardPlus
 /// graph has after the height fog: the late commands are then its pass ("PostFogTransparent",
 /// into View.Resolve here), and the record describes that pass instead.
+// Publishes a volume under the VolumetricFog node's name, as that node does for the view, so the
+// post-fog pass has one to read.
+class PublishVolumetricFogNode final : public IRenderPipelineNode
+{
+  public:
+    explicit PublishVolumetricFogNode(const RenderGraph::RGTexture* volume) : m_Volume(volume) {}
+    const char* GetTypeName() const override { return "PublishVolumetricFog"; }
+    bool Initialize(std::string, std::string, std::string*) override { return true; }
+    void DeclareForView(ViewDeclare& d) override { d.PublishTexture(Names::Res::VolumetricFog, *m_Volume); }
+
+  private:
+    const RenderGraph::RGTexture* m_Volume;
+};
+
 PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t samples,
-                                          bool withDepthResolve = false, bool postFog = false)
+                                          bool withDepthResolve = false, bool postFog = false,
+                                          bool publishVolumetricFog = false)
 {
     const std::string latePassName = postFog ? "PostFogTransparent" : "LateTransparent";
+    RenderGraph::RGTexture volumetricFog{};
     PassDepthDecl out{};
     RenderServices rs;
     if (!rs.Initialize(device))
@@ -323,7 +342,10 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
         || !registry.Register("DepthResolve", [] { return std::make_unique<Nodes::DepthResolveNode>(); },
                               true)
         || !registry.Register("PostFogTransparent",
-                              [] { return std::make_unique<Nodes::PostFogTransparentNode>(); }, true))
+                              [] { return std::make_unique<Nodes::PostFogTransparentNode>(); }, true)
+        || !registry.Register("PublishVolumetricFog",
+                              [&volumetricFog] { return std::make_unique<PublishVolumetricFogNode>(&volumetricFog); },
+                              true))
     {
         rs.Shutdown();
         return out;
@@ -359,6 +381,16 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
         p.passJson = R"({"id":"Transmissive","type":"TransmissiveRender"})";
         bp.passes.push_back(p);
     }
+    if (publishVolumetricFog)
+    {
+        RenderPipelineBlueprint::Pass p;
+        p.id = "VolumetricFog";
+        p.type = "PublishVolumetricFog";
+        p.enabled = true;
+        p.perView = true;
+        p.passJson = R"({"id":"VolumetricFog","type":"PublishVolumetricFog"})";
+        bp.passes.push_back(p);
+    }
     if (postFog)
     {
         RenderPipelineBlueprint::Pass p;
@@ -391,6 +423,17 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     RenderGraph::RGTexture resolve{};
     if (samples > 1u)
         resolve = frame.ImportPersistentTexture("LT.Resolve", ColorTargetDesc(1u));
+    if (publishVolumetricFog)
+    {
+        TextureDesc volumeDesc{};
+        volumeDesc.width = 4;
+        volumeDesc.height = 4;
+        volumeDesc.depth = 4;
+        volumeDesc.mipLevels = volumeDesc.arrayLayers = volumeDesc.sampleCount = 1;
+        volumeDesc.format = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+        volumeDesc.usage = static_cast<uint32_t>(TextureUsage::ShaderResource);
+        volumetricFog = frame.ImportPersistentTexture("LT.VolumetricFog", volumeDesc);
+    }
 
     const Rendering::MeshGPUHandle mesh = RegisterTestMesh(rs);
     rs.BeginWorldDrawFrame();
@@ -420,6 +463,10 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     if (postFog)
         out.LateTransparentDeclared =
             !GameEngine::Testing::RGQuery::DeclaredIds(frame.Graph(), Subtree{"LateTransparent"}).empty();
+    for (const RenderGraph::RGAccessRecord& a : frame.Graph().Accesses())
+        if (volumetricFog.IsValid() && latePasses.size() == 1u && a.Pass == latePasses.front() &&
+            a.Resource == volumetricFog.Id && a.Access == RenderGraph::RGAccess::Sampled)
+            out.SampledVolumetricFog = true;
     for (const auto& att : frame.Attachments())
     {
         if (att.IsDepth && att.Tex == depth.Id && latePasses.size() == 1u && att.Pass == latePasses.front())
@@ -626,6 +673,27 @@ TEST(TransmissiveDepthAttachmentTests, PostFogTransparentDrawsTheLateCommandsAnd
     EXPECT_TRUE(d.ReadOnly) << "late transparents test depth but never own it";
     EXPECT_EQ(d.Load, RenderGraph::RGLoadOp::Load);
     EXPECT_TRUE(d.SampledAttachedDepth) << "the soft-particle fade still texelFetches ge_sceneDepth";
+
+    device->Shutdown();
+}
+
+// After the volumetric fog the node reads the fog's volume (ge_volumetricFog), so the graph orders it
+// after the passes that write the volume; without the fog there is nothing to read.
+TEST(TransmissiveDepthAttachmentTests, PostFogTransparentReadsTheVolumetricFogVolumeWhenThereIsOne)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    const PassDepthDecl withFog = DeclareLateTransparentWorld(device.get(), /*samples=*/1u, /*withDepthResolve=*/false,
+                                                              /*postFog=*/true, /*publishVolumetricFog=*/true);
+    ASSERT_TRUE(withFog.PassDeclared) << "positive control: the PostFogTransparent pass must be declared";
+    EXPECT_TRUE(withFog.SampledVolumetricFog) << "the pass samples the published volume and must declare it";
+
+    const PassDepthDecl withoutFog = DeclareLateTransparentWorld(device.get(), /*samples=*/1u,
+                                                                 /*withDepthResolve=*/false, /*postFog=*/true);
+    ASSERT_TRUE(withoutFog.PassDeclared);
+    EXPECT_FALSE(withoutFog.SampledVolumetricFog);
 
     device->Shutdown();
 }

@@ -56,13 +56,16 @@ void PostFogTransparentNode::DeclareForView(ViewDeclare& d)
         return;
     }
 
-    // The fog's parameters, bound by name (the HeightFogParamsUpload node publishes them; a graph
-    // without one binds the no-fog fallback), and the sky's backdrop for a fog coloured by the sky.
+    // The fogs' parameters, bound by name (the HeightFogParamsUpload and VolumetricFog nodes publish
+    // them; a graph without one binds its no-fog fallback), the volumetric fog's volume, and the
+    // sky's backdrop for a height fog coloured by the sky.
     d.ResolveBuffer(Names::Res::HeightFogParams);
+    d.ResolveBuffer(Names::Res::VolumetricFogParams);
     LateForwardPass::Spec late;
     late.Color = target;
     late.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);
-    late.Keywords = (m_PassKeywords & TransmissivePassNode::kLateTransparentKeywords) | MaterialKeyword::HeightFog;
+    late.VolumetricFog = d.ResolveTexture(Names::Res::VolumetricFog);
+    late.Keywords = (m_PassKeywords & TransmissivePassNode::kLateTransparentKeywords) | MaterialKeyword::Fog;
     late.PassName = "PostFogTransparent";
     late.NodeType = GetTypeName();
     m_Late.Declare(d, late);

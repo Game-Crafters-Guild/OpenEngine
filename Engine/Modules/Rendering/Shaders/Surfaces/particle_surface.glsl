@@ -58,7 +58,7 @@
 // the power of the near fade this draw's colour and emission take beyond what its alpha gives them.
 // @property float nearFadeColorExponent default=0 hidden
 // The draw's own constant, set by the particle renderer (FogScatterMode, ParticleMaterials.cpp): how
-// much of the fog's light the sprite takes when it fogs itself (GE_HEIGHT_FOG), by how its blend
+// much of the fog's light the sprite takes when it fogs itself (GE_FOG), by how its blend
 // composites it. 0 none: it hides nothing behind it (additive, and the blends that only tint).
 // 1 all: straight alpha, whose blend scales the colour by alpha. 2 its alpha: premultiplied, whose
 // colour already carries it.

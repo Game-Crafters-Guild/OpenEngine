@@ -18,6 +18,7 @@ void LateForwardPass::Declare(ViewDeclare& d, const Spec& spec)
     targets.DepthResolved = d.ViewDepthResolved;
     targets.ResolveFromPipeline = false;
     targets.SkyBackdrop = spec.SkyBackdrop;
+    targets.VolumetricFog = spec.VolumetricFog;
     // The view depth is attached when it matches the colour's sample count and extent: a
     // multisampled depth beside a 1-sample colour makes DeriveFormatKey report the whole
     // pass as multisampled and trips the SetPipeline sample-count assert. Under MSAA the

@@ -812,9 +812,13 @@ class RenderServices
         // forms the copy->draw RAW edge. Invalid = env-cube refraction fallback.
         Rendering::RenderGraph::RGTexture SceneGrab{};
         // The sky's backdrop (Names::Res::SkyBackdrop, the sky-view LUT or the HDRI) bound as
-        // ge_skyBackdrop on HeightFog-keyword passes, whose fog colour can come from the sky.
+        // ge_skyBackdrop on Fog-keyword passes, whose fog colour can come from the sky.
         // Invalid = black, which the shader reads only when a sky colour source is chosen.
         Rendering::RenderGraph::RGTexture SkyBackdrop{};
+        // The view's volumetric fog (Names::Res::VolumetricFog) bound as ge_volumetricFog on
+        // Fog-keyword passes. Invalid = a placeholder volume, which the shader does not read
+        // without the fog's parameters (the zero VolumetricFogParams fallback).
+        Rendering::RenderGraph::RGTexture VolumetricFog{};
         // DDGI scaled glossy-reflection resolve outputs
         // (DDGIProbeFeature::DeclareGlossyResolveForView), bound as
         // ge_ddgiResolveRough/ge_ddgiResolveGlossy on DDGI-keyword passes.

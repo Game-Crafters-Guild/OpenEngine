@@ -1,10 +1,16 @@
-// A transparent fragment drawn after the HeightFog post-process fogs itself (GE_HEIGHT_FOG,
-// forward_height_fog.glsl). The claim that makes that correct: a fragment at distance d along a
-// direction takes the same fog as an opaque surface at distance d along it. Both sides run as they
-// ship: height_fog.frag over a 1x1 scene whose depth puts the opaque surface at the fragment's
-// place, and forward_height_fog_probe.frag, which calls GE_ApplyHeightFog for the fragment. The
-// CPU only places the camera, writes the two parameter blocks and compares the pixels; it does not
-// evaluate the fog.
+// A transparent fragment drawn after the VolumetricFog and HeightFog post-processes fogs itself
+// (GE_FOG, forward_volumetric_fog.glsl and forward_height_fog.glsl). The claim that makes that
+// correct: a fragment at distance d along a direction takes the same fog as an opaque surface at
+// distance d along it. Both sides run as they ship. For the height fog: height_fog.frag over a 1x1
+// scene whose depth puts the opaque surface at the fragment's place, and
+// forward_height_fog_probe.frag, which calls GE_ApplyHeightFog for the fragment. For the volumetric
+// fog: volumetric_fog_composite.frag over a surface at the same distance, reading a froxel volume
+// this file fills, and forward_volumetric_fog_probe.frag, which calls GE_ApplyVolumetricFog. The
+// composite filters the volume over five screen taps, each at the depth under it; a fragment has no
+// depth around it, so it reads all five at its own distance. The composite's surface is therefore
+// one at the same distance under every tap: each tap's depth texel puts it there along its own ray. The CPU places the
+// camera, writes the parameter blocks and the volume, composites the volumetric fog's output by its
+// blend (scene * transmittance + in-scatter) and compares the pixels; it does not evaluate a fog.
 //
 // The scatter weight is pinned against the same draws: a fragment that hides nothing behind it
 // (additive, weight 0) takes the post-process's result less its in-scatter, and a premultiplied one
@@ -14,12 +20,14 @@
 #include <gtest/gtest.h>
 
 #include "Engine/Rendering/HeightFogParamsUBO.h"
+#include "Engine/Rendering/VolumetricFogTypes.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Materials/MaterialBuilder.h"
 #include "Rendering/Materials/ShaderReflection.h"
+#include "Rendering/Utils/TextureUploadHelpers.h"
 
 #include <algorithm>
 #include <array>
@@ -136,6 +144,137 @@ ViewParamsUBO View(const Pose& pose)
     return v;
 }
 
+using Mat4 = std::array<float, 16>; // column-major
+
+Mat4 Multiply(const float* a, const float* b)
+{
+    Mat4 out{};
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            for (int k = 0; k < 4; ++k)
+                out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
+    return out;
+}
+
+// General 4x4 inverse by cofactors (column-major in and out).
+Mat4 Inverse(const Mat4& m)
+{
+    Mat4 inv{};
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] +
+             m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] -
+             m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] +
+             m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] -
+              m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] -
+             m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] +
+             m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] -
+             m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] +
+              m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] +
+             m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] -
+             m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] +
+              m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] -
+              m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] -
+             m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] +
+             m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] -
+              m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] +
+              m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    const double det = double(m[0]) * inv[0] + double(m[1]) * inv[4] + double(m[2]) * inv[8] + double(m[3]) * inv[12];
+    for (float& f : inv)
+        f = float(f / det);
+    return inv;
+}
+
+// The volumetric fog's parameter block (volumetric_fog_params_fields.glsl, std140).
+struct VolumetricFogParams
+{
+    float invViewProj[16];
+    float view[16];
+    float cameraPos[4];
+    float sunDirection[4];
+    float sunColor[4];
+    float ambientColor[4];
+    float albedoDensity[4];
+    float emissionAnisotropy[4];
+    float heightParams[4];
+    float localVolumeCenterShape[4];
+    float localVolumeAxisXHalfExtent[4];
+    float localVolumeAxisYHalfExtent[4];
+    float localVolumeAxisZHalfExtent[4];
+    float localVolumeParams[4];
+    float noiseParams[4];
+    float noiseVelocityTime[4];
+    float noiseChannelWeights[4];
+    float densityParams[4];
+    float volumeParams[4];
+    float gridParams[4];
+    float jitterParams[4];
+    float fogExtraParams[4];
+    float prevViewProj[16];
+    float prevCameraPos[4];
+};
+static_assert(sizeof(VolumetricFogParams) == GameEngine::Engine::Renderer::kVolumetricFogParamsBytes);
+
+constexpr uint32_t kGridW = 8, kGridH = 6, kGridSlices = 16;
+// The depth the composite reads its taps from: fine enough that its five taps fall in five texels.
+constexpr uint32_t kSphereDepthSize = 64;
+
+// A global fog reaching 800 units, with slices spread by the square, whose light past the volume
+// continues analytically (heightParams.w), plus the parameters only the view writes.
+VolumetricFogParams BaseVolumetricFog(const Pose& pose)
+{
+    VolumetricFogParams f{};
+    const ViewParamsUBO v = View(pose);
+    const Mat4 viewProj = Multiply(v.ge_proj, v.ge_view);
+    const Mat4 invViewProj = Inverse(viewProj);
+    std::memcpy(f.invViewProj, invViewProj.data(), sizeof(f.invViewProj));
+    std::memcpy(f.view, v.ge_view, sizeof(f.view));
+    for (int i = 0; i < 3; ++i)
+        f.cameraPos[i] = pose.Camera[i];
+    f.cameraPos[3] = 1;
+    const float sun[3] = {0.3f, 0.8f, -0.52f};
+    for (int i = 0; i < 3; ++i)
+        f.sunDirection[i] = sun[i];
+    f.sunColor[0] = 2.0f;
+    f.sunColor[1] = 1.8f;
+    f.sunColor[2] = 1.5f;
+    f.ambientColor[0] = 0.4f;
+    f.ambientColor[1] = 0.45f;
+    f.ambientColor[2] = 0.55f;
+    f.albedoDensity[0] = 0.8f;
+    f.albedoDensity[1] = 0.82f;
+    f.albedoDensity[2] = 0.86f;
+    f.albedoDensity[3] = 0.0015f;
+    f.emissionAnisotropy[0] = 0.01f;
+    f.emissionAnisotropy[1] = 0.012f;
+    f.emissionAnisotropy[2] = 0.015f;
+    f.emissionAnisotropy[3] = 0.35f;
+    f.heightParams[0] = 0.0f;   // base height
+    f.heightParams[1] = 220.0f; // falloff
+    f.heightParams[3] = 1.0f;   // global: continues past the volume
+    f.localVolumeParams[2] = 0.15f; // sky fade
+    f.volumeParams[0] = 800.0f;
+    f.volumeParams[1] = 2.0f;
+    f.gridParams[0] = float(kGridW);
+    f.gridParams[1] = float(kGridH);
+    f.gridParams[2] = float(kGridSlices);
+    f.fogExtraParams[0] = 0.75f; // composite depth bias
+    return f;
+}
+
 HeightFogParamsUBO BaseFog()
 {
     HeightFogParamsUBO f{};
@@ -165,7 +304,7 @@ struct Pipeline
     ShaderMeta Meta{};
 };
 
-class HeightFogForwardParity : public ::testing::Test
+class FogForwardParity : public ::testing::Test
 {
   protected:
     void SetUp() override
@@ -191,7 +330,9 @@ class HeightFogForwardParity : public ::testing::Test
         bd.memoryUsage = BufferMemoryUsage::Upload;
         m_ViewBuffer = m_Device->CreateBuffer(bd);
         m_FogBuffer = m_Device->CreateBuffer(bd);
-        ASSERT_TRUE(m_ViewBuffer.IsValid() && m_FogBuffer.IsValid());
+        bd.size = sizeof(VolumetricFogParams);
+        m_VolumetricBuffer = m_Device->CreateBuffer(bd);
+        ASSERT_TRUE(m_ViewBuffer.IsValid() && m_FogBuffer.IsValid() && m_VolumetricBuffer.IsValid());
         // A backdrop that changes with direction, for the sky colour sources.
         std::vector<Pixel> backdrop(64 * 32);
         for (uint32_t y = 0; y < 32; ++y)
@@ -200,6 +341,76 @@ class HeightFogForwardParity : public ::testing::Test
         m_Backdrop = Upload(64, 32, backdrop);
         m_Depth = Allocate(1, 1);
         m_Scene = Allocate(1, 1);
+        m_Volume = UploadVolume();
+        m_SphereDepth = Allocate(kSphereDepthSize, kSphereDepthSize);
+        m_Cube = UploadCube();
+    }
+
+    // A froxel volume whose in-scatter grows and transmittance falls with the slice, and which
+    // changes across the screen too, so both the slice a distance picks and the composite's
+    // screen-space taps show.
+    Image UploadVolume()
+    {
+        std::vector<Pixel> voxels(size_t(kGridW) * kGridH * kGridSlices);
+        for (uint32_t z = 0; z < kGridSlices; ++z)
+            for (uint32_t y = 0; y < kGridH; ++y)
+                for (uint32_t x = 0; x < kGridW; ++x)
+                {
+                    const float depth = (z + 0.5f) / kGridSlices;
+                    const float across = (x + 0.5f) / kGridW, down = (y + 0.5f) / kGridH;
+                    voxels[(size_t(z) * kGridH + y) * kGridW + x] = {
+                        0.5f * depth + 0.2f * across, 0.45f * depth + 0.15f * down, 0.6f * depth * (0.7f + 0.3f * across),
+                        std::exp(-2.2f * depth) * (0.9f + 0.1f * down)};
+                }
+        TextureDesc td{};
+        td.width = kGridW;
+        td.height = kGridH;
+        td.depth = kGridSlices;
+        td.mipLevels = td.arrayLayers = td.sampleCount = 1;
+        td.format = static_cast<uint32_t>(TextureFormat::R32G32B32A32_FLOAT);
+        td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource | TextureUsage::TransferDst);
+        td.debugName = "FogParity.Volume";
+        Image image{m_Device->CreateTexture(td), kGridW, kGridH};
+        Require(image.Handle.IsValid(), "volume allocation failed");
+        GameEngine::Rendering::UploadTexture3D(m_Device.get(), image.Handle, voxels.data(), kGridW, kGridH, kGridSlices, kGridW * sizeof(Pixel));
+        m_Images.push_back(image);
+        return image;
+    }
+
+    // The irradiance cube the fog past the volume reads when the view has IBL: a different colour
+    // on every face.
+    Image UploadCube()
+    {
+        TextureDesc td{};
+        td.width = td.height = 1;
+        td.depth = 1;
+        td.mipLevels = td.sampleCount = 1;
+        td.arrayLayers = 6;
+        td.format = static_cast<uint32_t>(TextureFormat::R32G32B32A32_FLOAT);
+        td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource | TextureUsage::TransferDst);
+        td.flags = TextureCreateFlags::CubeCompatible;
+        td.debugName = "FogParity.Irradiance";
+        Image cube{m_Device->CreateTexture(td), 1, 1};
+        Require(cube.Handle.IsValid(), "cube allocation failed");
+        const std::array<Pixel, 6> faces{{{0.9f, 0.8f, 0.7f, 1}, {0.3f, 0.35f, 0.4f, 1}, {1.2f, 1.25f, 1.4f, 1},
+                                          {0.2f, 0.18f, 0.15f, 1}, {0.6f, 0.65f, 0.7f, 1}, {0.5f, 0.55f, 0.62f, 1}}};
+        auto upload = m_Device->CreateUploadBuffer(sizeof(faces), "FogParity.CubeUpload");
+        Require(upload.IsValid(), "upload allocation failed");
+        m_Device->UpdateBuffer(upload, 0, sizeof(faces), faces.data());
+        auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
+        cl->Begin();
+        cl->Barrier(ResourceBarrier::CreateTextureBarrier(cube.Handle, ResourceState::Undefined, ResourceState::CopyDest,
+                                                          0, 1, 0, 6));
+        for (uint32_t face = 0; face < 6; ++face)
+            cl->CopyBufferToTextureSubresource(upload, cube.Handle, 0, face, 1, 1, face * sizeof(Pixel), sizeof(Pixel));
+        cl->Barrier(ResourceBarrier::CreateTextureBarrier(cube.Handle, ResourceState::CopyDest,
+                                                          ResourceState::ShaderResource, 0, 1, 0, 6));
+        cl->End();
+        m_Device->ExecuteCommandLists({cl.get()});
+        m_Device->WaitForIdle();
+        m_Device->DestroyBuffer(upload);
+        m_Images.push_back(cube);
+        return cube;
     }
 
     void TearDown() override
@@ -217,6 +428,8 @@ class HeightFogForwardParity : public ::testing::Test
             m_Device->DestroyBuffer(m_ViewBuffer);
         if (m_FogBuffer.IsValid())
             m_Device->DestroyBuffer(m_FogBuffer);
+        if (m_VolumetricBuffer.IsValid())
+            m_Device->DestroyBuffer(m_VolumetricBuffer);
         m_Device->Shutdown();
     }
 
@@ -312,20 +525,40 @@ class HeightFogForwardParity : public ::testing::Test
                 if (binding.Name == "uSceneColor")
                     image = m_Scene;
                 else if (binding.Name == "uDepth")
-                    image = m_Depth;
+                    image = m_DrawDepth.Handle.IsValid() ? m_DrawDepth : m_Depth;
                 else if (binding.Name == "uSkyBackdrop" || binding.Name == "ge_skyBackdrop")
                     image = m_Backdrop;
+                else if (binding.Name == "uIntegrated" || binding.Name == "ge_volumetricFog")
+                    image = m_Volume;
+                else if (binding.Name == "uFogIrradianceCube" || binding.Name == "ge_volumetricFogIrradiance")
+                    image = m_Cube;
                 else
                     throw std::runtime_error("unexpected texture " + binding.Name + " in " + shader);
                 m_Device->UpdateCombinedImageSamplerBinding(ds, binding.Binding, image.Handle, m_Sampler);
             }
             else if (binding.Type == ShaderMetaBindingType::kUniformBuffer)
             {
-                const bool fog = binding.Name.find("HeightFog") != std::string::npos;
-                Require(fog || binding.Name.find("ViewParams") != std::string::npos,
-                        "unexpected uniform block " + binding.Name + " in " + shader);
-                m_Device->UpdateBufferBinding(ds, binding.Binding, fog ? m_FogBuffer : m_ViewBuffer, 0,
-                                              fog ? sizeof(HeightFogParamsUBO) : sizeof(ViewParamsUBO));
+                BufferHandle buffer{};
+                size_t size = 0;
+                if (binding.Name.find("HeightFog") != std::string::npos)
+                {
+                    buffer = m_FogBuffer;
+                    size = sizeof(HeightFogParamsUBO);
+                }
+                else if (binding.Name.find("VolumetricFog") != std::string::npos || binding.Name == "fog" ||
+                         binding.Name == "FogParams")
+                {
+                    buffer = m_VolumetricBuffer;
+                    size = sizeof(VolumetricFogParams);
+                }
+                else if (binding.Name.find("ViewParams") != std::string::npos)
+                {
+                    buffer = m_ViewBuffer;
+                    size = sizeof(ViewParamsUBO);
+                }
+                else
+                    throw std::runtime_error("unexpected uniform block " + binding.Name + " in " + shader);
+                m_Device->UpdateBufferBinding(ds, binding.Binding, buffer, 0, size);
             }
             else
                 throw std::runtime_error("unexpected binding " + binding.Name + " in " + shader);
@@ -403,6 +636,77 @@ class HeightFogForwardParity : public ::testing::Test
         return Draw("forward_height_fog_probe", bytes);
     }
 
+    // The VolumetricFog composite over an opaque surface of `color` at the pose's distance, blended
+    // as its pipeline blends (scene * transmittance + in-scatter).
+    Pixel Composite(const Pose& pose, const Pixel& color, const VolumetricFogParams& fog)
+    {
+        SetView(pose);
+        m_Device->UpdateBuffer(m_VolumetricBuffer, 0, sizeof(fog), &fog);
+        // The composite's taps, as volumetric_fog_composite.frag places them: the pixel's centre and
+        // one froxel either way across and down. Each tap's texel holds the reversed-Z depth of the
+        // point the pose's distance away along the tap's own ray (view direction (x, y, -1) at NDC
+        // (x, y), so depth = near * |(x, y, -1)| / distance).
+        std::vector<Pixel> depth(size_t(kSphereDepthSize) * kSphereDepthSize, Pixel{});
+        const float offsets[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& o : offsets)
+        {
+            const float u = 0.5f + o[0] / float(kGridW), v = 0.5f + o[1] / float(kGridH);
+            const uint32_t px = uint32_t(u * kSphereDepthSize), py = uint32_t(v * kSphereDepthSize);
+            const float x = u * 2.0f - 1.0f, y = (1.0f - v) * 2.0f - 1.0f;
+            depth[size_t(py) * kSphereDepthSize + px] = {kNear * std::sqrt(x * x + y * y + 1.0f) / pose.Distance, 0, 0, 0};
+        }
+        Write(m_SphereDepth, depth);
+        m_DrawDepth = m_SphereDepth;
+        const Pixel fogged = Draw("volumetric_fog_composite");
+        m_DrawDepth = {};
+        return {color[0] * fogged[3] + fogged[0], color[1] * fogged[3] + fogged[1], color[2] * fogged[3] + fogged[2], 1};
+    }
+
+    Pixel ForwardVolumetric(const Pose& pose, const Pixel& color, float scatterWeight, const VolumetricFogParams& fog)
+    {
+        SetView(pose);
+        m_Device->UpdateBuffer(m_VolumetricBuffer, 0, sizeof(fog), &fog);
+        const Vec3 at = Target(pose);
+        const float pc[8] = {color[0], color[1], color[2], color[3], at[0], at[1], at[2], scatterWeight};
+        std::vector<uint8_t> bytes(sizeof(pc));
+        std::memcpy(bytes.data(), pc, sizeof(pc));
+        return Draw("forward_volumetric_fog_probe", bytes);
+    }
+
+    // Every pose, inside the volume and past it: the opaque surface and the fragment at its place
+    // agree, and the scatter weight takes off exactly its share of the in-scatter. `adjust` changes
+    // the base fog for the case.
+    template <class Adjust>
+    void CheckVolumetricParity(const std::string& name, Adjust adjust)
+    {
+        const Pixel color{0.9f, 0.35f, 0.1f, 1.0f};
+        const Pixel black{0, 0, 0, 1};
+        float strongest = 0;
+        for (Pose pose : Poses())
+            for (float distance : {35.0f, 260.0f, 790.0f, 1300.0f, 6000.0f})
+            {
+                pose.Distance = distance;
+                VolumetricFogParams fog = BaseVolumetricFog(pose);
+                adjust(fog);
+                const Pixel opaque = Composite(pose, color, fog);
+                const Pixel inScatter = Composite(pose, black, fog);
+                const std::string what = name + ", " + Describe(pose);
+                ExpectNear(opaque, ForwardVolumetric(pose, color, 1.0f, fog), what + ", straight alpha");
+                Pixel additive{}, premultiplied{};
+                for (int c = 0; c < 3; ++c)
+                {
+                    additive[c] = opaque[c] - inScatter[c];
+                    premultiplied[c] = opaque[c] - 0.6f * inScatter[c];
+                    strongest = std::max(strongest, std::abs(opaque[c] - color[c]));
+                }
+                ExpectNear(additive, ForwardVolumetric(pose, color, 0.0f, fog), what + ", additive");
+                ExpectNear(premultiplied, ForwardVolumetric(pose, color, 0.4f, fog), what + ", premultiplied at alpha 0.4");
+                if (HasFatalFailure() || HasNonfatalFailure())
+                    return;
+            }
+        EXPECT_GT(strongest, 0.3f) << name << ": the fog barely changes the scene in any pose";
+    }
+
     static std::vector<Pose> Poses()
     {
         std::vector<Pose> poses;
@@ -458,26 +762,26 @@ class HeightFogForwardParity : public ::testing::Test
 
     std::unique_ptr<IDevice> m_Device;
     SamplerHandle m_Sampler{};
-    BufferHandle m_ViewBuffer{}, m_FogBuffer{};
-    Image m_Backdrop{}, m_Depth{}, m_Scene{};
+    BufferHandle m_ViewBuffer{}, m_FogBuffer{}, m_VolumetricBuffer{};
+    Image m_Backdrop{}, m_Depth{}, m_Scene{}, m_Volume{}, m_Cube{}, m_SphereDepth{}, m_DrawDepth{};
     std::vector<Image> m_Images;
     std::map<std::string, Pipeline> m_Pipelines;
 };
 } // namespace
 
-TEST_F(HeightFogForwardParity, FixedColourFogAgreesWithThePostProcessAtTheSameDistance)
+TEST_F(FogForwardParity, HeightFogFixedColourFogAgreesWithThePostProcessAtTheSameDistance)
 {
     CheckParity(BaseFog(), "fixed colour");
 }
 
-TEST_F(HeightFogForwardParity, PartialIntensityAgreesWithThePostProcess)
+TEST_F(FogForwardParity, HeightFogPartialIntensityAgreesWithThePostProcess)
 {
     HeightFogParamsUBO fog = BaseFog();
     fog.intensity = 0.65f;
     CheckParity(fog, "intensity 0.65");
 }
 
-TEST_F(HeightFogForwardParity, DistanceOnlyAndHeightOnlyFogAgreeWithThePostProcess)
+TEST_F(FogForwardParity, HeightFogDistanceOnlyAndHeightOnlyFogAgreeWithThePostProcess)
 {
     HeightFogParamsUBO fog = BaseFog();
     fog.flags = HeightFogFlagDistanceEnabled;
@@ -487,7 +791,7 @@ TEST_F(HeightFogForwardParity, DistanceOnlyAndHeightOnlyFogAgreeWithThePostProce
     CheckParity(fog, "height only");
 }
 
-TEST_F(HeightFogForwardParity, SkyColourSourcesAgreeWithThePostProcess)
+TEST_F(FogForwardParity, HeightFogSkyColourSourcesAgreeWithThePostProcess)
 {
     HeightFogParamsUBO fog = BaseFog();
     fog.colorSource = static_cast<int32_t>(HeightFogColorSource::SkyConstant);
@@ -501,7 +805,7 @@ TEST_F(HeightFogForwardParity, SkyColourSourcesAgreeWithThePostProcess)
     CheckParity(fog, "sky HDRI");
 }
 
-TEST_F(HeightFogForwardParity, NoisyFogAgreesWithThePostProcess)
+TEST_F(FogForwardParity, HeightFogNoisyFogAgreesWithThePostProcess)
 {
     HeightFogParamsUBO fog = BaseFog();
     fog.flags |= HeightFogFlagNoiseEnabled;
@@ -510,4 +814,20 @@ TEST_F(HeightFogForwardParity, NoisyFogAgreesWithThePostProcess)
     fog.noiseTime = 3.25f;
     fog.noiseVelX = 4.0f;
     CheckParity(fog, "noise");
+}
+
+TEST_F(FogForwardParity, VolumetricFogAgreesWithTheCompositeInsideAndPastTheVolume)
+{
+    CheckVolumetricParity("volumetric", [](VolumetricFogParams&) {});
+}
+
+TEST_F(FogForwardParity, VolumetricFogLitByIrradiancePastTheVolumeAgreesWithTheComposite)
+{
+    CheckVolumetricParity("volumetric with IBL", [](VolumetricFogParams& fog) { fog.densityParams[3] = 1.0f; });
+}
+
+TEST_F(FogForwardParity, LocalVolumetricFogStopsAtTheVolumeAsTheCompositeDoes)
+{
+    // Not global: nothing past the volume's far plane, on either side.
+    CheckVolumetricParity("local volumetric", [](VolumetricFogParams& fog) { fog.heightParams[3] = 0.0f; });
 }

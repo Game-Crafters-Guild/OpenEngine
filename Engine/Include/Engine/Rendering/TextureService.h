@@ -207,6 +207,8 @@ class TextureService
     // environment adds no light).
     TextureHandle GetDefaultWhiteArrayTexture() const { return m_DefaultWhiteArrayTexture; }
     TextureHandle GetDefaultBlackCubeTexture() const { return m_DefaultBlackCubeTexture; }
+    // A small 3D texture (the identity colour LUT) for a 3D binding with nothing to read.
+    TextureHandle GetDefaultVolumeTexture() const { return m_IdentityLut3D; }
     // Bindless indices of the default textures (0 when bindless is disabled).
     uint32_t DefaultWhiteBindlessIndex() const { return m_DefaultWhiteBindlessIndex; }
     uint32_t DefaultBlackBindlessIndex() const { return m_DefaultBlackBindlessIndex; }

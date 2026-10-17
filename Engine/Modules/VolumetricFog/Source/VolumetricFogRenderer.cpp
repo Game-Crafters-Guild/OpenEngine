@@ -1780,6 +1780,14 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             cl->Draw(3, 1);
         });
 
+    // For the forward passes that draw after the composite and fog themselves by their own
+    // distance (forward_volumetric_fog.glsl): the parameters and the volume the composite read.
+    static_assert(sizeof(FogGpuParams) == kVolumetricFogParamsBytes,
+                  "FogGpuParams must match volumetric_fog_params_fields.glsl and the fallback's size");
+    d.PublishBuffer(Pipeline::Names::Res::VolumetricFogParams,
+                    {uboBuf, uboOffset, sizeof(FogGpuParams), /*Graph*/ {}});
+    d.PublishTexture(Pipeline::Names::Res::VolumetricFog, finalFogTex);
+
     // ── History/state commit, AT DECLARATION (declared == will run). Exec
     // lambdas stayed read-only above; the previous-VP / frame counter / history
     // validity move here. ──

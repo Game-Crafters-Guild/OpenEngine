@@ -280,7 +280,8 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         /*perView*/ true,
         RenderPipelineNodeResourceFields{.RefKeys = {"output"},
          .PublishKeys = {{"output", Names::View::Resolve}},
-         .StaticPublishNames = {Names::View::DepthResolvedPostOcean}});
+         .StaticPublishNames = {Names::View::DepthResolvedPostOcean, Names::Res::VolumetricFogParams,
+                                Names::Res::VolumetricFog}});
 
     // Two-phase HZB occlusion (R2.1) nodes, wired into the ForwardPlus
     // blueprints after WorldRender. HZBBuild builds the MIN/occlusion

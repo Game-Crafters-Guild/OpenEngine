@@ -30,6 +30,8 @@ class LateForwardPass
         Rendering::RenderGraph::RGTexture Color{};
         // The sky's backdrop, for keywords that fog what they draw (HeightFog); invalid otherwise.
         Rendering::RenderGraph::RGTexture SkyBackdrop{};
+        // The view's volumetric fog, for the same keywords; invalid without one.
+        Rendering::RenderGraph::RGTexture VolumetricFog{};
         Rendering::MaterialKeyword Keywords = Rendering::MaterialKeyword::None;
         // The pass's name; its depth copy is named after it ("<name>Depth", "<name>DepthCopy").
         const char* PassName = "LateTransparent";

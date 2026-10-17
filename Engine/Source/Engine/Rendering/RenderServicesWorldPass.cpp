@@ -466,11 +466,12 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
                    m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp));
     }
 
-    // ge_skyBackdrop: what the sky pass draws its backdrop from, for a pass that fogs what it
-    // draws (forward_height_fog.glsl) with the fog colour taken from the sky. Black without one;
-    // the shader samples it only when the fog's colour source names the sky.
-    if (HasKeyword(passKeywords, MaterialKeyword::HeightFog))
+    // A pass that fogs what it draws (forward_volumetric_fog.glsl, forward_height_fog.glsl).
+    if (HasKeyword(passKeywords, MaterialKeyword::Fog))
     {
+        // ge_skyBackdrop: what the sky pass draws its backdrop from, for the height fog's colour
+        // taken from the sky. Black without one; the shader samples it only when the fog's colour
+        // source names the sky.
         TextureHandle backdrop = m_Textures->GetDefaultBlackTexture();
         if (targets && targets->SkyBackdrop.IsValid())
         {
@@ -480,6 +481,30 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
         }
         addTexture(HashStringId("ge_skyBackdrop"), backdrop,
                    m_Textures->GetSampler(Rendering::SamplerPreset::LinearRepeat));
+
+        // ge_volumetricFog: the view's froxel volume, sampled as the composite samples it. A view
+        // without the fog binds a placeholder the shader does not read (its parameters are the
+        // zero fallback).
+        TextureHandle volume = m_Textures->GetDefaultVolumeTexture();
+        if (targets && targets->VolumetricFog.IsValid())
+        {
+            const TextureHandle viewVolume = frame.PhysicalTexture(targets->VolumetricFog);
+            if (viewVolume.IsValid())
+                volume = viewVolume;
+        }
+        addTexture(HashStringId("ge_volumetricFog"), volume,
+                   m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp));
+
+        // ge_volumetricFogIrradiance: the IBL irradiance cube the composite lights the fog past its
+        // volume with; black without IBL, which the fog's parameters then do not ask for.
+        TextureHandle irradiance = m_Textures->GetDefaultBlackCubeTexture();
+        SamplerHandle cubeSampler = m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp);
+        if (auto* ibl = GetFeature<ImageBasedLightingFeature>(); ibl && ibl->IsInitialized())
+        {
+            irradiance = ibl->GetIrradianceCube();
+            cubeSampler = ibl->GetCubeSampler();
+        }
+        addTexture(HashStringId("ge_volumetricFogIrradiance"), irradiance, cubeSampler);
     }
 
     if (HasKeyword(passKeywords, MaterialKeyword::Shadows))
@@ -2193,9 +2218,11 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
             if (targets.SceneGrab.IsValid() &&
                 HasKeyword(passKeywords, MaterialKeyword::SceneColorGrab))
                 p.Read(targets.SceneGrab, RenderGraph::RGTextureRead::Sampled);
-            // ge_skyBackdrop, gated like its binding.
-            if (targets.SkyBackdrop.IsValid() && HasKeyword(passKeywords, MaterialKeyword::HeightFog))
+            // ge_skyBackdrop and ge_volumetricFog, gated like their bindings.
+            if (targets.SkyBackdrop.IsValid() && HasKeyword(passKeywords, MaterialKeyword::Fog))
                 p.Read(targets.SkyBackdrop, RenderGraph::RGTextureRead::Sampled);
+            if (targets.VolumetricFog.IsValid() && HasKeyword(passKeywords, MaterialKeyword::Fog))
+                p.Read(targets.VolumetricFog, RenderGraph::RGTextureRead::Sampled);
             // ge_sceneDepth samples the resolved depth. The id-match arm skips the declaration
             // when it aliases the depth ATTACHMENT — but the attach contributes only its own
             // scope, and a read-only one is DepthRead alone (EARLY/LATE_FRAGMENT_TESTS +

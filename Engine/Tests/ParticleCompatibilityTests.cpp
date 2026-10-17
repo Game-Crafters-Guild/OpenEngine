@@ -185,7 +185,7 @@ TEST(ParticleCompatibility, TheRequestSetCoversEveryVariantTheRendererDraws)
     for (const VertexAttributeFlags layout :
          {VertexAttributeFlags::StandardMesh, VertexAttributeFlags::StandardMeshWithTangent})
         reached.push_back({((node | MaterialKeyword::IBL) & TransmissivePassNode::kLateTransparentKeywords) |
-                               MaterialKeyword::HeightFog | Particles::kParticleDrawKeywords,
+                               MaterialKeyword::Fog | Particles::kParticleDrawKeywords,
                            layout});
 
     const auto variants = Particles::ParticleRenderVariants();

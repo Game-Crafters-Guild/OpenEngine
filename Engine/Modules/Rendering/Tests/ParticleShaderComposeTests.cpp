@@ -46,7 +46,7 @@ namespace
 {
 // One particle program variant: profile, lighting (0 unlit, 1 lit, 2 six-way), texture sheet, clustered
 // lighting with shadows and image-based light, emission texture, six-way packing, and, for a clustered
-// one, the height fog it draws with after the fog pass (MaterialKeyword::HeightFog).
+// one, the height fog it draws with after the fog pass (MaterialKeyword::Fog).
 struct ParticleVariant
 {
     bool Compat = false;
@@ -107,7 +107,7 @@ MaterialBuildResult BuildParticleVariant(const ParticleVariant& variant)
                                                        MaterialKeyword::Shadows | MaterialKeyword::IBL
                                                  : MaterialKeyword::Instanced;
     if (variant.Fogged)
-        keywords = keywords | MaterialKeyword::HeightFog;
+        keywords = keywords | MaterialKeyword::Fog;
     auto result = BuildMaterialToShaderPackage(doc, ctx.AdapterShaderDir / "Particle.material",
         "ParticleTest", ctx, ShaderSourceKind::SpirV, keywords,
         variant.Textured ? VertexAttributeFlags::StandardMeshWithTangent | VertexAttributeFlags::HasColor | VertexAttributeFlags::HasUV1 |
@@ -227,10 +227,11 @@ TEST(ParticleShaderCompose, AllLightingAndTextureVariantsCompile)
     }
 }
 
-// A particle drawn after the height fog pass fogs itself: its fragment stage declares the fog's
+// A particle drawn after the fog passes fogs itself: its fragment stage declares the height fog's
 // parameters (set 0, b52, bound by name to the HeightFogParams buffer) and the sky's backdrop (b53),
-// and one drawn before it declares neither.
-TEST(ParticleShaderCompose, FoggedVariantDeclaresTheFogAndTheSkyBackdrop)
+// and the volumetric fog's parameters (b54, VolumetricFogParams), volume (b55) and irradiance cube
+// (b56); one drawn before them declares none of these.
+TEST(ParticleShaderCompose, FoggedVariantDeclaresTheFogsAndTheSkyBackdrop)
 {
     RestoreProfile restoreProfile;
     for (const bool fogged : {false, true})
@@ -243,16 +244,24 @@ TEST(ParticleShaderCompose, FoggedVariantDeclaresTheFogAndTheSkyBackdrop)
         for (const auto& error : result.errors) ADD_FAILURE() << error;
         ASSERT_TRUE(result.success);
         ASSERT_NE(result.package, nullptr);
-        bool fogParams = false, skyBackdrop = false;
+        bool fogParams = false, skyBackdrop = false, volumetricParams = false, volume = false, irradiance = false;
         for (const auto& set : result.package->meta.Sets)
             if (set.Set == 0)
                 for (const auto& binding : set.Bindings)
                 {
                     fogParams = fogParams || (binding.Binding == 52 && binding.Name == "HeightFogParams");
                     skyBackdrop = skyBackdrop || (binding.Binding == 53 && binding.Name == "ge_skyBackdrop");
+                    volumetricParams =
+                        volumetricParams || (binding.Binding == 54 && binding.Name == "VolumetricFogParams");
+                    volume = volume || (binding.Binding == 55 && binding.Name == "ge_volumetricFog");
+                    irradiance =
+                        irradiance || (binding.Binding == 56 && binding.Name == "ge_volumetricFogIrradiance");
                 }
         EXPECT_EQ(fogParams, fogged);
         EXPECT_EQ(skyBackdrop, fogged);
+        EXPECT_EQ(volumetricParams, fogged);
+        EXPECT_EQ(volume, fogged);
+        EXPECT_EQ(irradiance, fogged);
     }
 }
 
