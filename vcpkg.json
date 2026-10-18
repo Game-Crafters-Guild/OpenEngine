@@ -79,6 +79,10 @@
       "platform": "windows | linux | osx"
     },
     {
+      "name": "basisu",
+      "platform": "windows | linux | osx"
+    },
+    {
       "name": "webview2",
       "platform": "windows"
     },

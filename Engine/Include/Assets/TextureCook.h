@@ -138,7 +138,7 @@ enum class TextureCookOutput : uint8 {
     BC7
 };
 
-// True when a BCn encoder is compiled in (DirectXTex + libktx writer).
+// True when the BCn encoders are compiled in (bc7e + DirectXTex + libktx writer).
 bool IsTextureCookEncoderAvailable();
 
 // True when the cook is disabled process-wide via GE_TEXTURE_COOK_DISABLE=1
@@ -193,8 +193,8 @@ bool NeedsTextureCook(const TextureCookInputs& inputs, TextureCookOutput output)
 // keys the artifact, because the two searches emit different bytes for the same
 // input and the same settings.
 enum class TextureCookEncodeQuality : uint32 {
-    Full = 0,     // DirectXTex's default (max-quality) search
-    QuickBC7 = 1  // BC7 mode-6 only (TEX_COMPRESS_BC7_QUICK)
+    Full = 0,     // bc7e's "slow" preset (partition and p-bit search)
+    QuickBC7 = 1  // bc7e's "veryfast" preset, for builds that link unoptimized encoders
 };
 
 // Default quality for this build. Explicit export quality is passed to both
@@ -211,7 +211,7 @@ std::string TextureCookArtifactName(const GUID& guid, uint64 sourceHash,
 uint64 ComputeTextureCookSourceHash(const uint8* bytes, size_t size);
 
 // Folds settings, color space, swizzle, resolved output, the cook version, the
-// encoder-library versions (DirectXTex / stb_image_resize2) and — for block
+// encoder-library versions (bc7e / DirectXTex / stb_image_resize2) and — for block
 // outputs — the encode quality into the config half of the cache key. Any change
 // lands on a fresh filename.
 uint64 ComputeTextureCookConfigHash(const TextureCookInputs& inputs, TextureCookOutput output,
@@ -265,21 +265,20 @@ inline constexpr const char* kTextureCookCancelledError = "cancelled";
 inline constexpr uint32 kTextureCookBandBlocks = 512;
 
 // Block-compress one tightly-packed RGBA level (uint8 x4, or float x4 when
-// `isFloat`) into the tight ceil(w/4) x ceil(h/4) block payload DirectXTex
-// produces. `output` must be a block format; Uncompressed fails. An LDR BC7
-// payload then passes through RepairBC7TransparentEndpoints, so a block with a
-// transparent source texel keeps alpha 0 at its transparent endpoints.
+// `isFloat`) into the tight ceil(w/4) x ceil(h/4) block payload. LDR BC7 encodes
+// through bc7e (basisu's scalar port) at `quality`; every other block format
+// through DirectXTex. `output` must be a block format; Uncompressed fails. An LDR
+// BC7 payload then passes through RepairBC7TransparentEndpoints, so a block with
+// a transparent source texel keeps alpha 0 at its transparent endpoints.
 //
 // The level is issued as a series of horizontal block-row bands with
 // `cancelRequested` polled between them, so a cancel can preempt a level in
-// progress: a whole-level DirectX::Compress call is opaque — no progress or
-// cancellation callback — and is minutes long on a large base level. Banding is
-// not a fork of the library, just the same public call over sub-images, and it
-// is byte-exact because BCn blocks encode independently (no cross-block state at
-// TEX_COMPRESS_DEFAULT; dithering, which would diffuse error across block rows,
-// is not enabled) and every band starts on a block-row boundary, so the only
-// partial block row is the image's own bottom edge. Each band writes its own
-// slice of the payload.
+// progress: neither encoder takes a progress or cancellation callback. Banding is
+// byte-exact because BCn blocks encode independently (no cross-block state at
+// TEX_COMPRESS_DEFAULT or in bc7e; dithering, which would diffuse error across
+// block rows, is not enabled) and every band starts on a block-row boundary, so
+// the only partial block row is the image's own bottom edge. Each band writes its
+// own slice of the payload.
 //
 // With `workers`, the bands are spread across the pool workers the asset decode
 // gate leaves to texture work (TextureCookWorkers::RunBands), the calling thread
@@ -318,10 +317,9 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
 // The optional synchronous callback is never retained. It is polled before each
 // mip level and between block-row bands within a level's encode, so
 // a cancel is honored in bounded time rather than at the end of the cook. A
-// whole-level DirectXTex::Compress call is opaque — no progress or cancellation
-// callback — and is minutes long on a large base level, so the encode is issued
-// as a series of bands instead: the same public API over sub-images, and
-// byte-identical because BCn blocks encode independently. A cancelled cook
+// whole-level encoder call is opaque — no progress or cancellation callback —
+// so the encode is issued as a series of bands instead: the same encoder over
+// sub-images, and byte-identical because BCn blocks encode independently. A cancelled cook
 // returns false with outError == kTextureCookCancelledError and leaves
 // outKtx2Bytes empty, so nothing reaches the derived cache.
 //

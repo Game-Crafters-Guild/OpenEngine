@@ -34,6 +34,10 @@
 #if defined(GE_HAVE_DIRECTXTEX)
 #include <DirectXTex.h>
 #endif
+#if defined(GE_HAVE_BC7E)
+#include <basisu/encoder/basisu_bc7e_scalar.h>
+#include <mutex>
+#endif
 
 namespace GameEngine {
 
@@ -184,12 +188,17 @@ namespace
     // Encoder-library versions folded into the config hash: a vcpkg bump that
     // changes artifact bytes under an unchanged recipe must re-key to a clean
     // miss, never serve a stale artifact (mirrors GE_MESHOPT_VERSION in the
-    // mesh-LOD cook). DirectXTex bytes only reach block-compressed outputs;
-    // stbir shapes every mip chain.
+    // mesh-LOD cook). bc7e bytes reach BC7 outputs from LDR sources, DirectXTex
+    // bytes every other block-compressed output; stbir shapes every mip chain.
 #if defined(GE_HAVE_DIRECTXTEX)
     constexpr uint32 kDirectXTexVersion = DIRECTX_TEX_VERSION;
 #else
     constexpr uint32 kDirectXTexVersion = 0;
+#endif
+#if defined(GE_BC7E_VERSION)
+    constexpr const char* kBc7eVersion = GE_BC7E_VERSION;
+#else
+    constexpr const char* kBc7eVersion = "bc7e-none";
 #endif
 #if defined(GE_STBIR_VERSION)
     constexpr const char* kStbirVersion = GE_STBIR_VERSION;
@@ -361,7 +370,7 @@ bool ValidateTextureAlphaCoverageSettings(const TextureCookSettings& settings,
 
 bool IsTextureCookEncoderAvailable()
 {
-#if defined(GE_HAVE_DIRECTXTEX) && defined(GE_HAVE_KTX)
+#if defined(GE_HAVE_DIRECTXTEX) && defined(GE_HAVE_BC7E) && defined(GE_HAVE_KTX)
     return true;
 #else
     return false;
@@ -422,7 +431,7 @@ bool DecodeBlockPayloadRGBA8(TextureFormat format, uint32 width, uint32 height,
 #endif
 }
 
-#if defined(GE_HAVE_DIRECTXTEX)
+#if defined(GE_HAVE_DIRECTXTEX) && defined(GE_HAVE_BC7E)
 namespace
 {
     // BCn blocks are 4x4 pixels.
@@ -443,9 +452,25 @@ namespace
 }
 #endif
 
-#if defined(GE_HAVE_DIRECTXTEX)
+#if defined(GE_HAVE_DIRECTXTEX) && defined(GE_HAVE_BC7E)
 namespace
 {
+    // bc7e's preset for each search quality, built once: the presets are plain data, and
+    // bc7e_compress_block_init fills the tables every encode reads. Linear (not perceptual)
+    // error, the metric DirectXTex's BC7 used, so the cook's output is judged as before.
+    const bc7e_scalar::bc7e_compress_block_params& Bc7eParamsFor(TextureCookEncodeQuality quality)
+    {
+        static std::once_flag initialized;
+        static bc7e_scalar::bc7e_compress_block_params full{};
+        static bc7e_scalar::bc7e_compress_block_params quick{};
+        std::call_once(initialized, []() {
+            bc7e_scalar::bc7e_compress_block_init();
+            bc7e_scalar::bc7e_compress_block_params_init_slow(&full, /*perceptual=*/false);
+            bc7e_scalar::bc7e_compress_block_params_init_veryfast(&quick, /*perceptual=*/false);
+        });
+        return quality == TextureCookEncodeQuality::QuickBC7 ? quick : full;
+    }
+
     // One level's encode, split into block-row bands that each land at their own
     // offset of the level's payload. BCn blocks encode independently (no
     // cross-block state at TEX_COMPRESS_DEFAULT; dithering, which would diffuse
@@ -459,7 +484,7 @@ namespace
         TextureCookOutput Output = TextureCookOutput::BC7;
         DXGI_FORMAT SourceFormat = DXGI_FORMAT_UNKNOWN;
         DXGI_FORMAT TargetFormat = DXGI_FORMAT_UNKNOWN;
-        DirectX::TEX_COMPRESS_FLAGS Flags = DirectX::TEX_COMPRESS_DEFAULT;
+        const bc7e_scalar::bc7e_compress_block_params* Bc7Params = nullptr; // BC7 outputs only
         size_t RowPitch = 0;      // source bytes per pixel row
         size_t BlockRowBytes = 0; // payload bytes per block row
         uint32 BandHeight = 0;    // pixel rows per band, a multiple of kBlockDim
@@ -468,10 +493,45 @@ namespace
         std::atomic<long> FirstFailure{0}; // HRESULT of the first band that failed
     };
 
+    // An LDR BC7 band through bc7e: each block row gathers its 4x4 texels, a partial block at
+    // the right or bottom edge repeating the level's last column or row, and encodes straight
+    // into the band's rows of the payload.
+    void EncodeBC7Band(LevelBands& bands, uint32 y, uint32 height)
+    {
+        const TextureCookMipLevel& level = *bands.Level;
+        const uint32 blocksPerRow = (level.Width + kBlockDim - 1) / kBlockDim;
+        std::vector<uint32_t> blockTexels(static_cast<size_t>(blocksPerRow) * kBlockDim * kBlockDim);
+        for (uint32 blockY = y; blockY < y + height; blockY += kBlockDim)
+        {
+            for (uint32 bx = 0; bx < blocksPerRow; ++bx)
+                for (uint32 ty = 0; ty < kBlockDim; ++ty)
+                    for (uint32 tx = 0; tx < kBlockDim; ++tx)
+                    {
+                        const uint32 sx = std::min(bx * kBlockDim + tx, level.Width - 1);
+                        const uint32 sy = std::min(blockY + ty, level.Height - 1);
+                        std::memcpy(&blockTexels[(static_cast<size_t>(bx) * kBlockDim + ty) * kBlockDim + tx],
+                                    level.Bytes.data() + static_cast<size_t>(sy) * bands.RowPitch + sx * 4u, 4);
+                    }
+            uint8* out = bands.Payload + static_cast<size_t>(blockY / kBlockDim) * bands.BlockRowBytes;
+            bc7e_scalar::bc7e_compress_blocks(blocksPerRow, reinterpret_cast<uint64_t*>(out), blockTexels.data(),
+                                              bands.Bc7Params);
+        }
+    }
+
     bool EncodeLevelBand(LevelBands& bands, uint32 band)
     {
         const TextureCookMipLevel& level = *bands.Level;
         const uint32 y = band * bands.BandHeight;
+        if (bands.Bc7Params)
+        {
+            const uint32 height = std::min(bands.BandHeight, level.Height - y);
+            EncodeBC7Band(bands, y, height);
+            const size_t bandBytes = bands.BlockRowBytes * ((height + kBlockDim - 1) / kBlockDim);
+            uint8* payload = bands.Payload + static_cast<size_t>(y / kBlockDim) * bands.BlockRowBytes;
+            RepairBC7TransparentEndpoints(level.Bytes.data() + static_cast<size_t>(y) * bands.RowPitch, level.Width,
+                                          height, std::span<uint8>(payload, bandBytes));
+            return true;
+        }
 
         DirectX::Image src{};
         src.width = level.Width;
@@ -482,7 +542,7 @@ namespace
         src.pixels = const_cast<uint8*>(level.Bytes.data()) + static_cast<size_t>(y) * bands.RowPitch;
 
         DirectX::ScratchImage compressed;
-        const HRESULT hr = DirectX::Compress(src, bands.TargetFormat, bands.Flags,
+        const HRESULT hr = DirectX::Compress(src, bands.TargetFormat, DirectX::TEX_COMPRESS_DEFAULT,
                                              DirectX::TEX_THRESHOLD_DEFAULT, compressed);
         const DirectX::Image* img = SUCCEEDED(hr) ? compressed.GetImage(0, 0, 0) : nullptr;
         const size_t expectedBytes = bands.BlockRowBytes * ((src.height + kBlockDim - 1) / kBlockDim);
@@ -492,11 +552,6 @@ namespace
             bands.FirstFailure.compare_exchange_strong(expected, FAILED(hr) ? static_cast<long>(hr) : E_FAIL);
             return false;
         }
-        // DirectXTex lifts transparent BC7 endpoints to alpha 1/255 or 4/255 by its p-bit vote;
-        // see BC7TransparentEndpointRepair.h. Per block, so banding stays byte-exact.
-        if (bands.Output == TextureCookOutput::BC7 && !bands.IsFloat)
-            RepairBC7TransparentEndpoints(src.pixels, static_cast<uint32>(src.width), static_cast<uint32>(src.height),
-                                          std::span<uint8>(img->pixels, img->slicePitch));
         std::memcpy(bands.Payload + static_cast<size_t>(y / kBlockDim) * bands.BlockRowBytes, img->pixels,
                     img->slicePitch);
         return true;
@@ -512,7 +567,7 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
                               TextureCookWorkers* workers)
 {
     outBytes.clear();
-#if defined(GE_HAVE_DIRECTXTEX)
+#if defined(GE_HAVE_DIRECTXTEX) && defined(GE_HAVE_BC7E)
     const DXGI_FORMAT dstFormat = DxgiTargetFor(output);
     if (dstFormat == DXGI_FORMAT_UNKNOWN)
     {
@@ -533,9 +588,8 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
     // threads, 7.2 GB WS, machine-wide starvation while the frame's ECS wave
     // waited behind the cooks). One texture spreads across the JobSystem's
     // workers through `workers` instead, within a budget shared by every cook.
-    if (output == TextureCookOutput::BC7 &&
-        quality.value_or(TextureCookEncodeQualityFor(output)) == TextureCookEncodeQuality::QuickBC7)
-        bands.Flags |= DirectX::TEX_COMPRESS_BC7_QUICK;
+    if (output == TextureCookOutput::BC7 && !isFloat)
+        bands.Bc7Params = &Bc7eParamsFor(quality.value_or(TextureCookEncodeQualityFor(output)));
     const uint32 blocksPerRow = (level.Width + kBlockDim - 1) / kBlockDim;
     const uint32 targetBlocks = bandBlocks != 0 ? bandBlocks : kTextureCookBandBlocks;
     // Clamp to the level's own block rows: a huge bandBlocks over a narrow level
@@ -646,11 +700,10 @@ uint64 ComputeTextureCookSourceHash(const uint8* bytes, size_t size)
 TextureCookEncodeQuality TextureCookEncodeQualityFor(TextureCookOutput output)
 {
 #if defined(_DEBUG)
-    // Debug DirectXTex's default (max-quality) BC7 search is pathologically slow
-    // (minutes per level; profiled in D3DX_BC7::Exhaustive), so Debug cooks the
-    // mode-6-only quick encode — a documented Debug-config quality tradeoff.
-    // It is a DIFFERENT artifact from the full-quality one, which is why it is
-    // folded into the cache key rather than left implicit in the build config.
+    // A Debug build links the unoptimized basisu, under which bc7e's full search is
+    // slow enough to stall a cold load, so Debug cooks the quick preset. It is a
+    // DIFFERENT artifact from the full-quality one, which is why it is folded into
+    // the cache key rather than left implicit in the build config.
     return output == TextureCookOutput::BC7 ? TextureCookEncodeQuality::QuickBC7
                                             : TextureCookEncodeQuality::Full;
 #else
@@ -692,7 +745,13 @@ uint64 ComputeTextureCookConfigHash(const TextureCookInputs& inputs, TextureCook
     }
     if (output != TextureCookOutput::Uncompressed)
     {
+        // BC7 names both encoders: bc7e encodes LDR sources, DirectXTex a float source.
         key += "|enc="; key += std::to_string(kDirectXTexVersion);
+        if (output == TextureCookOutput::BC7)
+        {
+            key += '+';
+            key += kBc7eVersion;
+        }
         // The encoder's search quality is a build property, so without it a
         // Debug-cooked (quick) artifact keys identically to a full-quality one
         // and is silently adopted by DebugFast/Release.
@@ -980,7 +1039,7 @@ bool CookTexture(const uint8* srcBytes, size_t srcSize, const std::string& extLo
         return false;
     }
 
-#if !defined(GE_HAVE_DIRECTXTEX)
+#if !defined(GE_HAVE_DIRECTXTEX) || !defined(GE_HAVE_BC7E)
     if (output != TextureCookOutput::Uncompressed)
     {
         outError = "BC encoder not compiled in";

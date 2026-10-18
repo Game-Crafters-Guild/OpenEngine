@@ -173,10 +173,11 @@ TEST(TextureCookResolve, BcDegradesToUncompressedWithoutDeviceOrEncoder)
     EXPECT_EQ(ResolveTextureCookOutput(s, false, false, true), TextureCookOutput::Uncompressed);
 }
 
-// Every desktop host cooks BC: vcpkg.json installs DirectXTex on Windows, Linux
-// and macOS, and the Editor's import cook and the export's package cook encode
-// through it. A host build without it (a platform missing from the manifest's
-// gate, or the quiet find_package in Engine/CMakeLists.txt failing) resolves
+// Every desktop host cooks BC: vcpkg.json installs basisu (bc7e, for BC7) and
+// DirectXTex (the other formats) on Windows, Linux and macOS, and the Editor's
+// import cook and the export's package cook encode through them. A host build
+// without them (a platform missing from the manifest's gate, or a quiet
+// find_package in Engine/CMakeLists.txt failing) resolves
 // every texture to RGBA8, four times the bytes of BC7, and nothing else says so.
 TEST(TextureCookEncoder, DesktopHostsCompileTheBcEncoder)
 {
@@ -346,7 +347,7 @@ TEST(TextureCookKey, ConfigHashSeparatesEncodeQuality)
     }
 
     // And the policy itself, not merely its agreement with the key: the
-    // mode-6-only search is a Debug-config cost tradeoff, and a shipping build
+    // quick search is a Debug-config cost tradeoff, and a shipping build
     // that quietly adopted it would ship visibly worse textures. Nothing else
     // catches that — a decoded-error bound cannot, because the smooth-gradient
     // content BC7 is near-lossless on decodes to the same error under both
@@ -354,7 +355,7 @@ TEST(TextureCookKey, ConfigHashSeparatesEncodeQuality)
 #if defined(_DEBUG)
     EXPECT_EQ(TextureCookEncodeQualityFor(TextureCookOutput::BC7),
               TextureCookEncodeQuality::QuickBC7)
-        << "Debug must cook the quick BC7 search; the full search is minutes per level here";
+        << "Debug must cook the quick BC7 search; Debug links the unoptimized encoder";
 #else
     EXPECT_EQ(TextureCookEncodeQualityFor(TextureCookOutput::BC7),
               TextureCookEncodeQuality::Full)
@@ -765,9 +766,9 @@ TEST(TextureCookBc, HdrCooksToBc6hLinear)
 // endpoints + 4-level interpolation band visibly; BC7 stays near-lossless.
 //
 // Keep the ramp 1-D — every channel varying together along one diagonal. That is
-// not just a BC1 argument: Debug encodes BC7 with a single-subset mode only (see
-// TextureCookEncodeQualityFor), so content whose channels ramp along DIFFERENT
-// axes cannot be fitted by one line and reds the BC7 bound in Debug alone.
+// not just a BC1 argument: Debug cooks BC7 at the quick search (see
+// TextureCookEncodeQualityFor), which tries fewer modes and partitions, and the
+// bound must state what BC7 does, not which search a build runs.
 TEST(TextureCookQuality, Bc1BandsOnSmoothGradientsBc7DoesNot)
 {
     if (!IsTextureCookEncoderAvailable())
@@ -891,11 +892,10 @@ TEST(TextureCookBc, HugeBandBlocksOnNarrowLevelEncodesWholeLevel)
 //
 // The differential is deliberately not a decoded-error bound. How closely BC7
 // tracks the source is a property of the encoder's mode SEARCH, which is a build
-// property, not a cook one: Debug encodes BC7 mode-6-only (see
-// TextureCookEncodeQualityFor), and one mode-6 line cannot follow this image's R
-// ramp along Y and G ramp along X at once, so the same correctly-assembled bytes
-// decode 4 off in Debug and 2 off in a full-search build. Which search a build is
-// entitled to use is pinned directly, per config, by
+// property, not a cook one: Debug cooks the quick search (see
+// TextureCookEncodeQualityFor), so the same correctly-assembled bytes decode
+// further from this image's crossed R and G ramps in Debug than in a full-search
+// build. Which search a build is entitled to use is pinned directly, per config, by
 // TextureCookKey.ConfigHashSeparatesEncodeQuality; near-losslessness itself by
 // TextureCookQuality.Bc1BandsOnSmoothGradientsBc7DoesNot, on 1-D ramp content.
 //
@@ -974,19 +974,20 @@ TEST(TextureCookBc, BandedEncodeAssemblesCorrectly)
     EXPECT_EQ(std::memcmp(cooked.data(), cooked2.data(), cooked.size()), 0);
 }
 
-// A sprite exported white under its alpha mask (issue 2237). DirectXTex picks each
-// BC7 mode 6 and mode 7 endpoint's p-bit by a vote of the channel LSBs, so a
-// transparent endpoint under white RGB decodes to alpha 1/255 (mode 6) or 4/255
-// (mode 7), and an HDR particle colour turns that floor into a visible quad. Three
-// blocks, encoded at both searches the cook uses. Without the repair every alpha 0
-// texel of all three blocks (16 + 4 + 8) decodes to 1/255 under both searches: the
-// full search does not escape the vote by picking another mode.
+// A sprite exported white under its alpha mask (issue 2237). A BC7 mode 6 or mode 7
+// endpoint's p-bit is the lowest bit of all four channels, so an encoder minimising
+// summed error keeps p = 1 for a transparent endpoint under white RGB, which then
+// decodes to alpha 1/255 (mode 6) or 4/255 (mode 7), and an HDR particle colour turns
+// that floor into a visible quad. Three blocks, encoded at both searches the cook
+// uses. Without the repair, alpha 0 texels decode to 1/255 under both searches (4 of
+// the 28 under the full search, 12 under the quick one): neither escapes by picking
+// another mode.
 //  - block 0: transparent white.
 //  - block 1: white with an alpha ramp from four transparent texels up to 96, the
 //    soft edge of a glow.
 //  - block 2: two transparent white columns next to two opaque orange columns. The
-//    same vote holds its opaque endpoint under even RGB at alpha 254 (issue 2477);
-//    this test does not check that floor.
+//    same shared p-bit can hold an opaque endpoint under even RGB at alpha 254
+//    (issue 2477); this test does not check that floor.
 // Every alpha 0 source texel must decode to alpha 0. Opaque texels stay within 2
 // steps of the source per channel: each colour is an exact endpoint, so only the
 // encoder's own endpoint quantization (1 step) is left, and the repair never
@@ -1154,7 +1155,7 @@ TEST(TextureCookCancel, CancelRacingTheStartIsObserved)
 
 // The band poll is what bounds a cancel's wait once a single large level is
 // under way — the case the whole banding change exists for (a 2048x2048 BC7 base
-// level is one opaque Compress otherwise). With mips OFF there is exactly one
+// level is one opaque encoder call otherwise). With mips OFF there is exactly one
 // level, so the per-level poll fires once before the encode starts and a cancel
 // arriving later can ONLY be seen between bands. Cancel partway in and require
 // the cook to stop well short of an uncancelled control measured here, on this
@@ -1164,13 +1165,14 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
     if (!IsTextureCookEncoderAvailable())
         GTEST_SKIP() << "no BC encoder compiled in";
 
-    // BC7, and sized so the level splits into four bands (1600 blocks over
-    // kTextureCookBandBlocks). BC7 is not incidental here: it is the format whose
-    // per-block cost makes a base level minutes long, and it dwarfs the source
-    // decode, so the cancel below lands inside the encode rather than ahead of
-    // it — which is what makes this a test of the BAND poll and not of the
-    // per-level one.
-    const std::vector<uint8> tga = GradientTga(160);
+    // BC7, and sized so the level splits into 32 bands (16384 blocks over
+    // kTextureCookBandBlocks). BC7 is not incidental here: it is the format with
+    // the costliest per-block search, which dwarfs the source decode, so the
+    // cancel below lands inside the encode rather than ahead of it — which is
+    // what makes this a test of the BAND poll and not of the per-level one. The
+    // extent keeps the uncancelled control well above the instrument floor below
+    // under the full-quality bc7e search.
+    const std::vector<uint8> tga = GradientTga(512);
     const TextureCookInputs in = MakeInputs(TextureCookUsage::Color, TextureColorSpace::Linear,
                                             /*mips=*/false);
 
@@ -1238,6 +1240,41 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
         << "ms uncancelled";
     RecordProperty("controlMs", static_cast<int>(controlMs));
     RecordProperty("cancelledMs", static_cast<int>(cancelledMs));
+}
+
+// A cold project load cooks every texture a material binds, so the BC7 search is
+// on the path to the first frame: a 512x512 base level of noise (no block a
+// single line can fit, the search's worst case) encodes at the full search in a
+// few hundred milliseconds on one thread, not the minute an exhaustive search
+// takes. Debug links the unoptimized encoder and cooks the quick search, and
+// ASan instruments the cook around it, so neither reading would mean anything.
+TEST(TextureCookPerformance, FullSearchBc7LevelEncodesWithinTheColdLoadBudget)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+#if defined(_DEBUG) || (defined(GE_ENABLE_ASAN) && GE_ENABLE_ASAN)
+    GTEST_SKIP() << "timing is meaningless with an unoptimized or instrumented encoder";
+#endif
+    constexpr uint32 kSize = 512;
+    TextureCookMipLevel level;
+    level.Width = kSize;
+    level.Height = kSize;
+    level.Bytes.resize(static_cast<size_t>(kSize) * kSize * 4);
+    uint32 state = 0x9E3779B9u;
+    for (uint8& byte : level.Bytes)
+    {
+        state = state * 1664525u + 1013904223u;
+        byte = static_cast<uint8>(state >> 24);
+    }
+
+    std::vector<uint8> payload;
+    std::string error;
+    const auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/false, TextureCookOutput::BC7, /*bandBlocks=*/0, payload,
+                                         error, {}, TextureCookEncodeQuality::Full))
+        << error;
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    EXPECT_LT(seconds, 5.0) << "a 512x512 BC7 level took " << seconds << " s on one thread";
 }
 
 // ── One texture's bands spread across workers ────────────────────────────────

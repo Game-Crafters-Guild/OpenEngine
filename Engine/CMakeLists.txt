@@ -1314,6 +1314,32 @@ message(STATUS "Texture-cook cache stbir version key: stbir-${GE_STBIR_VERSION_S
     else()
         message(STATUS "DirectXTex not found: texture cook BCn encoding unavailable")
     endif()
+    # basisu (vcpkg, desktop): its scalar port of bc7e encodes the cook's BC7, which
+    # DirectXTex's exhaustive search made the slowest step of a cold project load.
+    # The cook links only bc7e_scalar, which uses no other basisu code, so the static
+    # archive contributes nothing that collides with the basisu copy inside libktx.
+    find_package(basisu CONFIG QUIET)
+    if(TARGET basisu::basisu_encoder)
+        target_link_libraries(Engine PRIVATE basisu::basisu_encoder)
+        # The encoder's version keys the BC7 cook artifacts (as GE_STBIR_VERSION keys the
+        # mips): a basisu upgrade re-keys to a clean miss, never a silently stale artifact.
+        get_target_property(_ge_basisu_include_dirs basisu::basisu_encoder INTERFACE_INCLUDE_DIRECTORIES)
+        set(GE_BC7E_VERSION_STR "unpinned")
+        foreach(_ge_basisu_include_dir IN LISTS _ge_basisu_include_dirs)
+            set(_ge_basisu_comp_header "${_ge_basisu_include_dir}/basisu/encoder/basisu_comp.h")
+            if(EXISTS "${_ge_basisu_comp_header}")
+                file(STRINGS "${_ge_basisu_comp_header}" _ge_basisu_version_line
+                     REGEX "#define BASISU_LIB_VERSION_STRING")
+                if(_ge_basisu_version_line MATCHES "\"([0-9.]+)\"")
+                    set(GE_BC7E_VERSION_STR "${CMAKE_MATCH_1}")
+                endif()
+            endif()
+        endforeach()
+        target_compile_definitions(Engine PRIVATE GE_HAVE_BC7E GE_BC7E_VERSION="bc7e-basisu-${GE_BC7E_VERSION_STR}")
+        message(STATUS "Texture-cook cache BC7 encoder version key: bc7e-basisu-${GE_BC7E_VERSION_STR}")
+    else()
+        message(STATUS "basisu not found: texture cook BCn encoding unavailable")
+    endif()
 
     # Include directories
     target_include_directories(Engine PUBLIC Include)
