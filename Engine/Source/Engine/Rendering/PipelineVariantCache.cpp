@@ -709,6 +709,7 @@ void PipelineVariantCache::SubmitPendingVariantCompiles()
             job.IsDepth = req.IsDepth;
             job.MaterialVersion = material->GetVersion();
             job.Name = material->GetName();
+            job.MaterialAssetPath = material->GetMaterialAssetPath();
             job.Spec = material->GetCompileSpec();
             job.BaseGraphicsPipelineId = baseId;
             job.BuildContext = buildContext;
@@ -723,9 +724,8 @@ void PipelineVariantCache::SubmitPendingVariantCompiles()
             if (job.Spec.customVertexShader)
                 Rendering::ApplyCustomVertexShaderClamp(mergedKey);
             job.CacheKey.VariantKey = mergedKey;
-            job.CacheKey.Source.SurfaceShaderPath = job.Spec.surfaceShaderPath;
-            job.CacheKey.Source.VertexModifierPath = job.Spec.vertexModifierPath;
-            job.CacheKey.Source.MaterialAssetPath = material->GetMaterialAssetPath();
+            job.CacheKey.Source = MakeShaderSourceKey(job.Spec.surfaceShaderPath, job.Spec.vertexModifierPath,
+                                                     job.MaterialAssetPath);
 
             // Count the compile as running BEFORE dispatch so the throttle sees it;
             // every Run* exit decrements via the RAII guard (ReleaseVariantCompile).
@@ -889,7 +889,7 @@ void PipelineVariantCache::RunColorVariantCompile(const VariantCompileRequest& r
 
     const auto tCompile0 = std::chrono::high_resolution_clock::now();
     auto variant = m_Materials->m_ShaderCompilationCache.GetOrCompile(
-        req.CacheKey, req.Spec, req.BuildContext, req.Name,
+        req.CacheKey, req.Spec, req.BuildContext, req.Name, req.MaterialAssetPath,
         m_Materials->GetDevice()->PreferredShaderSource());
     if (!variant || variant->vertexBytes.empty())
         return; // transient (context cold) or genuine failure — the scope re-opens the key
@@ -1005,7 +1005,7 @@ void PipelineVariantCache::RunDepthVariantCompile(const VariantCompileRequest& r
 
     const auto tCompile0 = std::chrono::high_resolution_clock::now();
     auto variant = m_Materials->m_ShaderCompilationCache.GetOrCompile(
-        req.CacheKey, req.Spec, req.BuildContext, req.Name,
+        req.CacheKey, req.Spec, req.BuildContext, req.Name, req.MaterialAssetPath,
         m_Materials->GetDevice()->PreferredShaderSource());
     if (!variant || variant->vertexBytes.empty())
         return; // transient or genuine failure — the scope re-opens the key

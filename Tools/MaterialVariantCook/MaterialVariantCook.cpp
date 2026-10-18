@@ -76,7 +76,6 @@
 #include "Rendering/Materials/MaterialAlphaMode.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
-#include "Rendering/Materials/MaterialShaderIncludeRoots.h"
 #include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
@@ -899,6 +898,7 @@ struct RowBuild
     std::string VertexSource;
     std::string FragmentSource;
     std::vector<std::string> Defines;
+    std::vector<fs::path> IncludeRoots;
 };
 
 std::vector<CookRow> CookRows(const std::vector<CookTarget>& targets, const MaterialBuildContext& context,
@@ -921,6 +921,7 @@ RowBuild BuildRow(const CookRow& row, bool web)
         build.VertexSource = std::move(result.composedVertexSource);
         build.FragmentSource = std::move(result.composedFragmentSource);
         build.Defines = std::move(result.composedDefines);
+        build.IncludeRoots = std::move(result.composedIncludeRoots);
     }
     return build;
 }
@@ -1123,7 +1124,7 @@ int main(int argc, char** argv)
         wgsl.VertexSource = result.VertexSource;
         wgsl.FragmentSource = result.FragmentSource;
         wgsl.Defines = result.Defines;
-        wgsl.IncludeRoots = BuildMaterialIncludeRoots(context, target.MaterialPath.parent_path());
+        wgsl.IncludeRoots = result.IncludeRoots;
         wgsl.DebugName = target.Name + "_" + variant.Name;
         wgslRequestByPackage.emplace(outcome.PackagePath, outcome.WgslRequest);
     }

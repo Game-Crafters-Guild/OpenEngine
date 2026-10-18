@@ -697,9 +697,8 @@ void MaterialSystem::DrainPendingShaderSourceEdits()
                 if (Engine::Renderer::IsGraphLivePreviewMaterialPath(mat.GetMaterialAssetPath()))
                     return;
                 if (references(spec.surfaceShaderPath) || references(spec.vertexModifierPath)
-                    || matched.count(ShaderSourceKey{spec.surfaceShaderPath,
-                                                     spec.vertexModifierPath,
-                                                     mat.GetMaterialAssetPath()})
+                    || matched.count(MakeShaderSourceKey(spec.surfaceShaderPath, spec.vertexModifierPath,
+                                                         mat.GetMaterialAssetPath()))
                            != 0)
                     affected.push_back(guid);
             });
@@ -1805,9 +1804,7 @@ void MaterialSystem::RecompileMaterialPipeline(const GUID& guid, const MaterialD
 
     ShaderCacheKey cacheKey{};
     cacheKey.VariantKey = mat->GetVariantKey();
-    cacheKey.Source.SurfaceShaderPath = resolved.surfaceShader;
-    cacheKey.Source.VertexModifierPath = resolved.vertexModifier;
-    cacheKey.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+    cacheKey.Source = MakeShaderSourceKey(resolved.surfaceShader, resolved.vertexModifier, mat->GetMaterialAssetPath());
 
     // The in-memory cache is keyed by paths, not bytes: a content edit behind an
     // unchanged path must invalidate here or the worker would re-serve the old
@@ -2120,9 +2117,7 @@ void MaterialSystem::CompileMaterialPipeline(Material& mat, const MaterialDocume
 
     ShaderCacheKey cacheKey{};
     cacheKey.VariantKey = mergedKey;
-    cacheKey.Source.SurfaceShaderPath = doc.surfaceShader;
-    cacheKey.Source.VertexModifierPath = doc.vertexModifier;
-    cacheKey.Source.MaterialAssetPath = mat.GetMaterialAssetPath();
+    cacheKey.Source = MakeShaderSourceKey(doc.surfaceShader, doc.vertexModifier, mat.GetMaterialAssetPath());
 
     MaterialCompileSpec spec{};
     spec.surfaceShaderPath = doc.surfaceShader;
@@ -2136,7 +2131,7 @@ void MaterialSystem::CompileMaterialPipeline(Material& mat, const MaterialDocume
     using Clock = std::chrono::high_resolution_clock;
     const auto tShader = Clock::now();
     auto variant = m_ShaderCompilationCache.GetOrCompile(cacheKey, spec, m_MaterialBuildContext,
-                                                         mat.GetName(),
+                                                         mat.GetName(), mat.GetMaterialAssetPath(),
                                                          m_Device->PreferredShaderSource());
     const double shaderMs = std::chrono::duration<double, std::milli>(Clock::now() - tShader).count();
     if (!variant)
@@ -2239,9 +2234,7 @@ void MaterialSystem::SubmitAsyncBaseCompile(const GUID& guid, Material& mat,
     const Rendering::ShaderVariantKey variantKey = mat.GetVariantKey();
     ShaderCacheKey cacheKey{};
     cacheKey.VariantKey = variantKey;
-    cacheKey.Source.SurfaceShaderPath = doc.surfaceShader;
-    cacheKey.Source.VertexModifierPath = doc.vertexModifier;
-    cacheKey.Source.MaterialAssetPath = mat.GetMaterialAssetPath();
+    cacheKey.Source = MakeShaderSourceKey(doc.surfaceShader, doc.vertexModifier, mat.GetMaterialAssetPath());
 
     // Coalesce duplicate submits: one base compile per GUID at a time. A re-
     // registration before the first publish still sees an invalid pipeline id and
@@ -2269,6 +2262,7 @@ void MaterialSystem::SubmitAsyncBaseCompile(const GUID& guid, Material& mat,
     const Rendering::FrontFace frontFace = DebugFrontFace();
     const Rendering::VertexAttributeFlags vertexFlags = variantKey.vertexFlags;
     const std::string materialName = mat.GetName();
+    const std::filesystem::path materialAssetPath = mat.GetMaterialAssetPath();
     const Rendering::MaterialBuildContext buildContext = m_MaterialBuildContext;
     // Q6 RebuildDevice: the worker captures this raw IDevice*, which is safe
     // because the IDevice POINTER survives RebuildDevice by design (the rebuild
@@ -2283,11 +2277,11 @@ void MaterialSystem::SubmitAsyncBaseCompile(const GUID& guid, Material& mat,
 
     SubmitTrackedPrewarm(
         [this, guid, cacheKey, spec, buildContext, derivedBlend, cullMode, frontFace,
-         vertexFlags, materialName, device, cache]() mutable
+         vertexFlags, materialName, materialAssetPath, device, cache]() mutable
         {
             // Compile the SPIR-V (mutex-guarded, single-flight) and intern the base
             // pipeline (thread-safe device cache) entirely off the main thread.
-            auto variant = cache->GetOrCompile(cacheKey, spec, buildContext, materialName,
+            auto variant = cache->GetOrCompile(cacheKey, spec, buildContext, materialName, materialAssetPath,
                                                device->PreferredShaderSource());
             Rendering::GraphicsPipelineId pipelineId{};
             if (variant)
@@ -2408,9 +2402,7 @@ void MaterialSystem::ApplyPendingPipelinePublishes()
         // recompile from). Discard and re-drive for the current key instead.
         ShaderCacheKey liveKey{};
         liveKey.VariantKey = mat->GetVariantKey();
-        liveKey.Source.SurfaceShaderPath = mat->GetCompileSpec().surfaceShaderPath;
-        liveKey.Source.VertexModifierPath = mat->GetCompileSpec().vertexModifierPath;
-        liveKey.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+        liveKey.Source = MakeShaderSourceKey(mat->GetCompileSpec().surfaceShaderPath, mat->GetCompileSpec().vertexModifierPath, mat->GetMaterialAssetPath());
         if (!(rec.CompiledKey == liveKey))
         {
             RedriveAsyncBaseCompile(rec.Guid, *mat);
@@ -2499,11 +2491,8 @@ void MaterialSystem::PrewarmMaterialBaseShader(const MaterialDocument& doc,
 
     ShaderCacheKey cacheKey{};
     cacheKey.VariantKey = identity.Key;
-    cacheKey.Source.SurfaceShaderPath = spec.surfaceShaderPath;
-    cacheKey.Source.VertexModifierPath = spec.vertexModifierPath;
-    // Key identity must match the eventual draw-time key (which carries the
-    // asset path), and material-relative surface references need the anchor.
-    cacheKey.Source.MaterialAssetPath = materialAssetPath;
+    // The identity the eventual draw-time key derives from the same document and asset path.
+    cacheKey.Source = MakeShaderSourceKey(spec.surfaceShaderPath, spec.vertexModifierPath, materialAssetPath);
 
     const Rendering::MaterialBuildContext buildContext = m_MaterialBuildContext;
     auto* cache = &m_ShaderCompilationCache;
@@ -2511,9 +2500,9 @@ void MaterialSystem::PrewarmMaterialBaseShader(const MaterialDocument& doc,
     const Rendering::ShaderSourceKind sourceKind = m_Device->PreferredShaderSource();
 
     SubmitTrackedPrewarm(
-        [cache, cacheKey, spec, buildContext, materialName, sourceKind]() mutable
+        [cache, cacheKey, spec, buildContext, materialName, materialAssetPath, sourceKind]() mutable
         {
-            cache->GetOrCompile(cacheKey, spec, buildContext, materialName, sourceKind);
+            cache->GetOrCompile(cacheKey, spec, buildContext, materialName, materialAssetPath, sourceKind);
         });
 }
 
@@ -2799,11 +2788,9 @@ void MaterialSystem::PrewarmMaterialVariantSet(const Rendering::ShaderVariantKey
             for (const auto& key : keys)
             {
                 ShaderCacheKey ck{};
-                ck.Source.SurfaceShaderPath = spec.surfaceShaderPath;
-                ck.Source.VertexModifierPath = spec.vertexModifierPath;
-                ck.Source.MaterialAssetPath = materialAssetPath;
+                ck.Source = MakeShaderSourceKey(spec.surfaceShaderPath, spec.vertexModifierPath, materialAssetPath);
                 ck.VariantKey = key;
-                cache->GetOrCompile(ck, spec, buildContext, materialName, sourceKind);
+                cache->GetOrCompile(ck, spec, buildContext, materialName, materialAssetPath, sourceKind);
             }
 
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
