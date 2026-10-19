@@ -35,6 +35,8 @@ No `#version`, no `layout(...)` declarations, no descriptor bindings: the adapte
 
 The material's `surfaceShader` reference resolves in this order: **the material's own directory** → project root(s) → package shader dirs → the engine shader tree. Dropping `my_surface.glsl` next to the .material and writing `"surfaceShader": "my_surface.glsl"` is all it takes. An authored reference that resolves nowhere is a *hard compile failure* that lists every searched root, never a silent fallback.
 
+A surface's own `#include`s resolve against the including file's directory, then the project root(s), the package shader dirs and the engine shader tree. The material's directory joins that list only when the material's surface or vertex modifier lives there, so a surface found through a root reads the same files whichever material uses it, and every material on it shares one compiled shader. Keep a helper next to the surface that includes it, or include it by its path from a shader root; an include that resolves nowhere is logged as `NOT FOUND` with every directory searched.
+
 ## 3 · Textures
 
 Declare the textures your surface samples with `@texture` comment tags at the top of the file:
