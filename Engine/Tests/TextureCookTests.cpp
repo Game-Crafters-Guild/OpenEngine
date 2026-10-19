@@ -760,6 +760,37 @@ TEST(TextureCookBc, HdrCooksToBc6hLinear)
     EXPECT_EQ(asset.GetMipChain()[0].Size, 4u * 16u);
 }
 
+// BC7 from a float source encodes through DirectXTex, which converts the float texels to
+// UNORM (clamping at 1); bc7e reads only RGBA8 and would take the float bytes for texels.
+TEST(TextureCookBc, FloatSourceBc7EncodesTheClampedColour)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+
+    constexpr uint32 kSize = 8;
+    constexpr float kTexel[4] = {2.5f, 1.0f, 0.25f, 1.0f};
+    TextureCookMipLevel level;
+    level.Width = kSize;
+    level.Height = kSize;
+    level.Bytes.resize(static_cast<size_t>(kSize) * kSize * sizeof(kTexel));
+    for (size_t offset = 0; offset < level.Bytes.size(); offset += sizeof(kTexel))
+        std::memcpy(level.Bytes.data() + offset, kTexel, sizeof(kTexel));
+
+    std::vector<uint8> payload;
+    std::string error;
+    ASSERT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/true, TextureCookOutput::BC7, /*bandBlocks=*/0, payload,
+                                         error))
+        << error;
+    std::vector<uint8> decoded;
+    ASSERT_TRUE(DecodeBlockPayloadRGBA8(TextureFormat::BC7, kSize, kSize, payload.data(), payload.size(), decoded));
+
+    constexpr int kExpected[4] = {255, 255, 64, 255};
+    for (size_t texel = 0; texel < static_cast<size_t>(kSize) * kSize; ++texel)
+        for (int c = 0; c < 4; ++c)
+            ASSERT_LE(std::abs(static_cast<int>(decoded[texel * 4 + c]) - kExpected[c]), 2)
+                << "texel " << texel << " channel " << c;
+}
+
 // The gradient-banding argument behind "Auto never picks BC1", in numbers:
 // encode a smooth low-frequency gradient (the classic stylized-content case)
 // to BC1 and BC7, decode both, and compare max per-pixel error. BC1's 5:6:5

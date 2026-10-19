@@ -1314,8 +1314,8 @@ message(STATUS "Texture-cook cache stbir version key: stbir-${GE_STBIR_VERSION_S
     else()
         message(STATUS "DirectXTex not found: texture cook BCn encoding unavailable")
     endif()
-    # basisu (vcpkg, desktop): its scalar port of bc7e encodes the cook's BC7, which
-    # DirectXTex's exhaustive search made the slowest step of a cold project load.
+    # basisu (vcpkg, desktop): its scalar port of bc7e encodes the cook's LDR BC7, the
+    # format every colour texture a material binds cooks to on a cold project load.
     # The cook links only bc7e_scalar, which uses no other basisu code, so the static
     # archive contributes nothing that collides with the basisu copy inside libktx.
     find_package(basisu CONFIG QUIET)

@@ -457,7 +457,7 @@ namespace
 {
     // bc7e's preset for each search quality, built once: the presets are plain data, and
     // bc7e_compress_block_init fills the tables every encode reads. Linear (not perceptual)
-    // error, the metric DirectXTex's BC7 used, so the cook's output is judged as before.
+    // error: the cook's BC7 is measured by RGB and alpha PSNR against the source.
     const bc7e_scalar::bc7e_compress_block_params& Bc7eParamsFor(TextureCookEncodeQuality quality)
     {
         static std::once_flag initialized;
