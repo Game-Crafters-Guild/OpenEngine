@@ -7,6 +7,7 @@
 #include "ECS/ECSTemplates.h"
 #include "Logger/Logger.h"
 #include "Particles/Assets/ParticleStackAsset.h"
+#include "Particles/ParticleProcessorRegistry.h"
 #include "PhysicsECS/PhysicsWorldService.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -60,12 +61,21 @@ void DeliverGameEvents(ParticlePlayback& playback, ParticleRuntime& simulation)
 // A missing stack asset is asked for again at most this often, in frames.
 constexpr uint64 kStackLoadRetryFrames = 60;
 
+// A stack is asked for at once, past the retry interval, when processors have been registered since
+// this world last asked for it: it may name one a module registers as it loads. The asset manager
+// refuses an asset whose load failed until its file changes, and that failure may predate the
+// registration (another world's request, or this one's), so the refusal is lifted for that request.
 const ParticleWorldState::StackLoad& RequestStackLoad(ParticleWorldState& state, const GUID& guid)
 {
     auto& load = state.StackLoads[guid];
-    if (state.Frame < load.RetryFrame)
+    const uint64 revision = ParticleProcessorRegistry::Revision();
+    const bool processorsAdded = revision != load.ProcessorRevision;
+    if (state.Frame < load.RetryFrame && !processorsAdded)
         return load;
+    if (processorsAdded)
+        state.Assets->ClearLoadSuppressed(guid);
     load.RetryFrame = state.Frame + kStackLoadRetryFrames;
+    load.ProcessorRevision = revision;
     state.Assets->LoadAsset(
         guid, [failed = load.Failed](Result<SharedPtr<Asset>, AssetError> result)
         { failed->store(!result.IsOk()); },

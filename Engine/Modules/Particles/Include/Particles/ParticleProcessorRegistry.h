@@ -311,6 +311,11 @@ class ParticleProcessorRegistry
     /// Visits every descriptor in registration order (built-ins first).
     static void ForEach(const std::function<void(const ParticleProcessorDescriptor&)>& visit);
 
+    /// Grows each time an id is registered for the first time, the built-ins included, so it is
+    /// never 0; registering a known id again does not change it. A stack that failed to load because
+    /// it named an id nobody had registered may load once this has grown.
+    static uint64 Revision();
+
     /// Module load abort: undoes what the aborted load {moduleId, generation} registered before its
     /// image is unmapped. A processor it replaced gets the replaced registration back; one it added
     /// is no longer found. Returns the number of processors undone.

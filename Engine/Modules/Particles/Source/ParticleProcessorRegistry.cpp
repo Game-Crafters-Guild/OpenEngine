@@ -7,6 +7,7 @@
 #include "Logger/Logger.h"
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <deque>
 #include <mutex>
@@ -48,6 +49,13 @@ struct RegisteredProcessor
     // Hidden from lookups once the load that added it aborted; stays in place so no pointer dangles.
     bool Purged = false;
 };
+
+// Counts first registrations of an id (ParticleProcessorRegistry::Revision).
+std::atomic<uint64>& RevisionCounter()
+{
+    static std::atomic<uint64> revision{0};
+    return revision;
+}
 
 // A deque keeps descriptor addresses stable: documents hold descriptor pointers for the process.
 std::deque<RegisteredProcessor>& Registrations()
@@ -167,6 +175,7 @@ bool StoreDescriptor(const ParticleProcessorDescriptor& descriptor)
         return true;
     }
     Registrations().push_back(RegisteredProcessor{descriptor, module});
+    RevisionCounter().fetch_add(1, std::memory_order_release);
     return true;
 }
 
@@ -238,6 +247,12 @@ void ParticleProcessorRegistry::ForEach(const std::function<void(const ParticleP
     }
     for (const auto* descriptor : snapshot)
         visit(*descriptor);
+}
+
+uint64 ParticleProcessorRegistry::Revision()
+{
+    EnsureBuiltInsRegistered();
+    return RevisionCounter().load(std::memory_order_acquire);
 }
 
 std::size_t ParticleProcessorRegistry::PurgeModuleProcessors(std::string_view moduleId, uint64 generation)

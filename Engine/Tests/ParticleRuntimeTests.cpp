@@ -2142,6 +2142,24 @@ TEST(ParticleProcessorRegistry, AModuleReloadSwapsItsProcessorCodeInPlace)
     EXPECT_EQ(ParticleProcessorRegistry::Find("test.reload.added"), nullptr);
 }
 
+// The revision tells a stack that failed for an unknown id whether loading it again could succeed:
+// it grows when an id is registered for the first time, and only then. The built-ins count, so a
+// revision of 0 means "never asked".
+TEST(ParticleProcessorRegistry, TheRevisionGrowsWhenAnIdIsRegisteredForTheFirstTime)
+{
+    const uint64 before = ParticleProcessorRegistry::Revision();
+    EXPECT_GT(before, 0u) << "the built-ins are registered ids";
+    ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.spin", SpinAtGenerationOne)));
+    const uint64 added = ParticleProcessorRegistry::Revision();
+    EXPECT_GT(added, before);
+    ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.spin", SpinAtGenerationTwo)));
+    EXPECT_EQ(ParticleProcessorRegistry::Revision(), added) << "a registration in place adds no id";
+    ParticleProcessorDescriptor gusty = ReloadedSpin("test.revision.spin", SpinAtGenerationTwo);
+    BindParticleParameters<ParticleRuntimeTestTypes::GustySpinParameters>(gusty, kGustySpinFields);
+    EXPECT_FALSE(ParticleProcessorRegistry::Register(gusty));
+    EXPECT_EQ(ParticleProcessorRegistry::Revision(), added) << "a refused registration adds no id";
+}
+
 #if !defined(NDEBUG)
 namespace
 {
