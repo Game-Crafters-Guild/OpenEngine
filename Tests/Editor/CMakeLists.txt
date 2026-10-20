@@ -1156,6 +1156,32 @@ add_test(NAME CurveFieldTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
+# The light inspector's color reset over its real label events and undo service.
+add_executable(LightInspectorTests
+	LightInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LightInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LuxText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/InspectorNotice.cpp
+)
+target_include_directories(LightInspectorTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+)
+target_link_libraries(LightInspectorTests PRIVATE Engine EditorSDK GTest::gtest GTest::gtest_main)
+set_target_properties(LightInspectorTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(LightInspectorTests)
+ge_stage_runtime_dependencies(LightInspectorTests)
+add_test(NAME LightInspectorTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:LightInspectorTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:LightInspectorTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # The sky inspector's sun path rows, typed into and dragged over the real undo
 # service. Its own target for the reason above: the rows draw the day on the
 # shared curve editor, whose sources stay out of EditorTests' unity batches.
