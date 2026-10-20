@@ -100,10 +100,12 @@ TEST(HierarchyModelThumbnail, AReparentByValueWriteNeedsTheIndexDropped)
     ASSERT_EQ(FindModelGuidForEntityOrChildren(&world, unit.root, &index), model);
 
     // A Parent value write moves the pivot without a structural change: the
-    // index cannot see it, which is why the panel drops its index whenever it
-    // applies such a move (and on every full refresh).
+    // index cannot see it and still answers from the old tree, which is why the
+    // panel drops its index whenever it applies such a move (and on every full
+    // refresh).
     world.GetComponentForWrite<Parent>(unit.pivot)->parent = elsewhere;
     EXPECT_TRUE(FindModelGuidForEntityOrChildren(&world, unit.root).IsNull());
+    EXPECT_EQ(FindModelGuidForEntityOrChildren(&world, unit.root, &index), model);
     index.Invalidate();
     EXPECT_TRUE(FindModelGuidForEntityOrChildren(&world, unit.root, &index).IsNull());
     EXPECT_EQ(FindModelGuidForEntityOrChildren(&world, elsewhere, &index), model);

@@ -256,10 +256,10 @@ private:
     std::size_t m_LastWorldStructuralVersion = 0;
     // Each entity's children, for the row binds' model-thumbnail lookup: a row
     // whose entity draws no model of its own looks through its subtree, and
-    // without an index each look scans every Parent in the world (one row bind
-    // of a mission's units cost about 2 ms). It rebuilds itself after a structural
-    // change; a reparent by a Parent value write is not one, so the panel drops
-    // it then too, and on a world swap.
+    // without an index each look scans every Parent in the world. It rebuilds
+    // itself after a structural change; a reparent by a Parent value write is not
+    // one, so the panel drops it then too, on every full refresh, and on a world
+    // swap.
     Components::ParentRelationIndex m_ParentIndex;
 
     // LifecycleEvents (Parent) consumer bookkeeping for the incremental sync path.
