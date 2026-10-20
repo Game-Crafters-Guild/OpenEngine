@@ -1013,6 +1013,39 @@ add_test(NAME HierarchyEnableStateTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
+# The Hierarchy's model-thumbnail lookup with and without the panel's ParentRelationIndex.
+# Its own target for the same reason as HierarchyEnableStateTests.
+add_executable(HierarchyModelThumbnailTests
+	HierarchyModelThumbnailTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityIcon.cpp
+	# What HierarchyEntityIcon.cpp reaches: the component traits registry for an
+	# entity's kind, and the Polyhaven cache directory for a placeholder's thumbnail.
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Entities/EditorComponentTraits.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/PolyhavenService.cpp
+	# PolyhavenService reads its cache directory from the editor preferences.
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SettingsStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/EditorPaths.cpp
+)
+target_include_directories(HierarchyModelThumbnailTests PRIVATE ${CMAKE_SOURCE_DIR}/Apps/Editor/Include)
+target_link_libraries(HierarchyModelThumbnailTests PRIVATE
+	Engine
+	GTest::gtest
+	GTest::gtest_main
+)
+set_target_properties(HierarchyModelThumbnailTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(HierarchyModelThumbnailTests)
+ge_stage_runtime_dependencies(HierarchyModelThumbnailTests)
+add_test(NAME HierarchyModelThumbnailTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:HierarchyModelThumbnailTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:HierarchyModelThumbnailTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # What the 9-slice editor offers on a texture it cannot write. Its own target
 # rather than a file in EDITOR_TEST_SOURCES, for the reason above: the control's
 # anonymous namespace would join EditorTests' unity batches.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetCore/GUID.h"
+#include "Components/HierarchyQueries.h"
 #include "ECS/ECS.h"
 
 #include <filesystem>
@@ -16,7 +17,10 @@ struct EditorContext;
 namespace Editor {
 
 void ClearHierarchyEntityIconClasses(UIElement* element);
-void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS::EntityHandle handle);
+/// \p parentIndex, when given, answers the model-GUID subtree scan (see
+/// FindModelGuidForEntityOrChildren); without it the scan reads every Parent in the world.
+void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS::EntityHandle handle,
+                                     Components::ParentRelationIndex* parentIndex = nullptr);
 /// Same, for the element that actually draws the glyph. Adds the shared
 /// `entity-icon` marker on top of the kind class, so one CSS selector
 /// (`.entity-icon.hierarchy-entity-*`) styles the Hierarchy tree's preview
@@ -24,7 +28,8 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS:
 /// the plain overload above: a row carrying the marker would paint the glyph
 /// as its own background.
 void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
-                                           ECS::EntityHandle handle);
+                                           ECS::EntityHandle handle,
+                                           Components::ParentRelationIndex* parentIndex = nullptr);
 
 /// True when \p element carries a hierarchy-entity CSS class that renders as a pure CSS
 /// glyph (lights, cameras, primitives, empties, terrain, ocean, physics, etc.) rather than
@@ -33,7 +38,13 @@ void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
 /// row bind and the Inspector header icon consult it.
 bool EntityIconIsCssOnly(const UIElement& element);
 
-GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle);
+/// The first non-primitive model the entity or any of its descendants draws.
+/// The descendants come from \p parentIndex when it is given: O(subtree) once
+/// the index is fresh, which it rebuilds after a structural change. Without it
+/// the walk scans every Parent in the world, which is fine for one lookup but
+/// not for each row of a list (the Hierarchy's row binds pass their index).
+GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle,
+                                      Components::ParentRelationIndex* parentIndex = nullptr);
 
 /// If \p handle is a sprite (plane primitive + file-backed MaterialAsset),
 /// returns the absolute filesystem path of its albedoMap texture. Returns an

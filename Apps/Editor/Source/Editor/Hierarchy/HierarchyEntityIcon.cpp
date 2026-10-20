@@ -251,7 +251,8 @@ std::filesystem::path TryResolveInspectorIconAssetPath(ECS::World* world,
     return {};
 }
 
-GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle)
+GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle,
+                                      Components::ParentRelationIndex* parentIndex)
 {
     if (!world || !handle.IsValid() || !world->IsValid(handle))
         return {};
@@ -271,7 +272,10 @@ GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handl
     // direct-child scan misses them. BFS the full subtree and return the
     // first non-primitive model GUID we find.
     std::vector<ECS::EntityHandle> descendants;
-    Components::DescendantsOf(*world, handle, descendants);
+    if (parentIndex)
+        Components::DescendantsOf(*world, handle, *parentIndex, descendants);
+    else
+        Components::DescendantsOf(*world, handle, descendants);
     for (const auto& descendant : descendants)
     {
         const auto* mr = world->GetComponent<MeshRenderer>(descendant);
@@ -345,7 +349,8 @@ void ClearHierarchyEntityIconClasses(UIElement* row)
     }
 }
 
-void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle)
+void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle,
+                                     Components::ParentRelationIndex* parentIndex)
 {
     ClearHierarchyEntityIconClasses(row);
     if (!world || !row || !handle.IsValid() || !world->IsValid(handle))
@@ -539,7 +544,7 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
         return;
     }
 
-    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle);
+    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle, parentIndex);
     if (!childModelGuid.IsNull())
     {
         row->AddClass("hierarchy-entity-model");
@@ -550,9 +555,10 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
 }
 
 void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
-                                           ECS::EntityHandle handle)
+                                           ECS::EntityHandle handle,
+                                           Components::ParentRelationIndex* parentIndex)
 {
-    ApplyHierarchyEntityIconClasses(world, icon, handle);
+    ApplyHierarchyEntityIconClasses(world, icon, handle, parentIndex);
     if (!icon)
         return;
     /* Only the glyph-drawing element gets the marker, so `.entity-icon` plus the

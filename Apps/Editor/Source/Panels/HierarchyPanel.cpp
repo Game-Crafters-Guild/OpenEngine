@@ -1729,7 +1729,7 @@ HierarchyPanel::HierarchyPanel()
 	        else
 	            row->RemoveClass("entity-runtime");
 
-	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle);
+	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle, &m_ParentIndex);
 
             // Keep the preview icon separate from the title so it can have its own
             // hover state.  TreeView rows are pooled, so create the child once and
@@ -1886,7 +1886,7 @@ HierarchyPanel::HierarchyPanel()
                    the Inspector header and the Bookmarks row. The row keeps its
                    own copy of the kind class for IsCssGlyphEntity and the
                    row-level rules. */
-                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle);
+                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle, &m_ParentIndex);
 
                 Editor::ApplyHierarchyLightIconTint(*m_World, handle, *previewIconEl);
 
@@ -1991,7 +1991,7 @@ HierarchyPanel::HierarchyPanel()
                     {
                         // Check entity itself or its children for a model asset (submesh models
                         // have MeshRenderer on children, not the parent).
-                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle);
+                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle, &m_ParentIndex);
                         if (!modelGuid.IsNull() &&
                             m_Context && m_Context->Thumbnails && !m_Context->UIReplayActive)
                             {
@@ -4804,6 +4804,7 @@ std::vector<ECS::EntityHandle> HierarchyPanel::ResolveRowActionTargets(
 void HierarchyPanel::SetWorld(ECS::World* world)
 {
     m_World = world;
+    m_ParentIndex.Invalidate();
     // Seed the poll baseline to the world we're about to rebuild against, so the first Update()
     // after a world swap doesn't spuriously rebuild an already-current provider. The change gate
     // needs the same seeding: version streams are per-World, so a gate carried across a swap
@@ -5104,6 +5105,7 @@ void HierarchyPanel::Update()
 
     if (reparentMoves > 0)
     {
+        m_ParentIndex.Invalidate();
         if (m_VcsController)
             m_VcsController->RefreshLiveState();
         else
@@ -5221,6 +5223,8 @@ void HierarchyPanel::Refresh(bool restoreHierarchyUiFromSceneAfterCommit)
     // stamps up front — Update()'s change scan must not schedule another refresh for
     // anything at-or-before this point.
     ArmValueChangeGate();
+    // A refresh can follow a Parent value write, which leaves the structural version alone.
+    m_ParentIndex.Invalidate();
     m_Provider->Rebuild();
     // A full Rebuild re-establishes provider truth against the current world, so re-seed the
     // incremental baselines to match (kill switch OFF keeps the legacy path byte-identical —

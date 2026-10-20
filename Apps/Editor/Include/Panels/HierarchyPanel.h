@@ -6,6 +6,7 @@
 #include "UI/Interaction/Selection.h"
 #include "UI/Interaction/Types.h"
 #include "ECS/ChangeFilter.h"
+#include "Components/HierarchyQueries.h"
 #include "ECS/ECS.h"
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
 #include "EditorChangeNotifications.h"
@@ -254,6 +255,13 @@ private:
     // seeded in SetWorld and advanced whenever a poll observes movement, so event-driven and
     // poll-driven refreshes never redundantly rebuild each other.
     std::size_t m_LastWorldStructuralVersion = 0;
+    // Each entity's children, for the row binds' model-thumbnail lookup: a row
+    // whose entity draws no model of its own looks through its subtree, and
+    // without an index each look scans every Parent in the world (one row bind
+    // of a mission's units cost about 2 ms). It rebuilds itself after a structural
+    // change; a reparent by a Parent value write is not one, so the panel drops
+    // it then too, and on a world swap.
+    Components::ParentRelationIndex m_ParentIndex;
 
     // LifecycleEvents (Parent) consumer bookkeeping for the incremental sync path.
     // Reset generation (World::Clear / scene swap): change => full Rebuild fallback.
