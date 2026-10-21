@@ -1,6 +1,6 @@
 param(
   [string]$EditorExe = "",
-  [ValidateSet("Debug", "RelWithDebInfo", "Release")]
+  [ValidateSet("Debug", "DebugFast", "RelWithDebInfo", "Release")]
   [string]$Config = "RelWithDebInfo",
   [string]$ProjectRoot,
   [string]$OutDir,
@@ -12,8 +12,13 @@ param(
   [int]$TimeoutSeconds = 120,
   # When enabled, captures Editor stdout/stderr to files under OutDir (helps diagnose crashes/hangs).
   [switch]$CaptureStdout = $true,
-  [switch]$KillExistingEditor = $true,
-  # Optional: override the default scenario list (useful for CTest/CI smoke).
+  # Before each scenario, stop editors this runner started that are still running: this run's, and an
+  # earlier run's still writing a replay log under the same OutDir (see Stop-EditorIfRunning). Off by default.
+  [switch]$KillExistingEditor,
+  # Optional: override the default scenario list (useful for CTest/CI smoke). Each element may hold
+  # several comma-separated paths: through `powershell -File` a value after the first binds to the
+  # next free positional parameter or is dropped, so callers on a command line pass one comma-joined string.
+  # A path that contains a comma is not supported. Passing -Scenarios with no path is an error.
   [string[]]$Scenarios = @()
 )
 
@@ -21,15 +26,20 @@ param(
 # - Never throws (so callers/tools won't abort on a single failing scenario)
 # - Always writes per-scenario logs
 # - Prints a summary at the end
+# - Gives each editor its own MCP debug port from 9900-9919 (--debug-port), the first one with no
+#   listener when the editor starts, so it never lands on another editor's port (9999 is the default)
 
 $ErrorActionPreference = "Continue"
 
 # Resolve repo root from this script's location (Tests/run_ui_replay_tests_safe.ps1 → ..).
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = $repoRoot }
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = Join-Path $repoRoot 'Apps/Editor/Player' }
 if ([string]::IsNullOrWhiteSpace($OutDir))      { $OutDir      = Join-Path $repoRoot 'Tests\UIReplay\out' }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+# Absolute, so the editor (which resolves a relative --ui-replay-log against its project root) writes
+# the files this runner reads, and Test-RunnerOwnedCommandLine compares absolute paths.
+$OutDir = (Resolve-Path -LiteralPath $OutDir).ProviderPath
 
 if ([string]::IsNullOrWhiteSpace($EditorExe)) {
   $presets = @($Preset, 'vs2026-x64-local', 'vs2026-x64-local-unity',
@@ -91,10 +101,20 @@ $defaultScenarios = @(
   'scroll_log_listview_scrollbar_drag.json'
 ) | ForEach-Object { Join-Path $scenarioDir $_ }
 
-$scenarios = $defaultScenarios
-if ($null -ne $Scenarios -and $Scenarios.Count -gt 0) {
-  $scenarios = $Scenarios
+# PowerShell variable names are case-insensitive: this list must not be named $scenarios, or it
+# overwrites the -Scenarios parameter before the override is read.
+$scenarioPaths = $defaultScenarios
+$requestedScenarios = @($Scenarios | ForEach-Object { $_ -split ',' } |
+                        ForEach-Object { $_.Trim() } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($PSBoundParameters.ContainsKey('Scenarios')) {
+  if ($requestedScenarios.Count -eq 0) {
+    Write-Host "[UIReplay] -Scenarios names no scenario path: pass one or more comma-separated paths, or omit -Scenarios to run the default list."
+    exit 2
+  }
+  $scenarioPaths = $requestedScenarios
 }
+Write-Host ("[UIReplay] {0} scenarios" -f @($scenarioPaths).Count)
 
 $failures = @()
 
@@ -112,12 +132,68 @@ function Get-ReplayResult([string]$logPath) {
   return $null
 }
 
+# Editors this run started, held as Process objects so a recycled PID never matches.
+$startedEditors = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
+
+# True when the command line passes --ui-replay-log an absolute path under this runner's OutDir.
+# A relative or drive-relative path never matches: its editor resolved it against a directory this
+# runner cannot see, so it may name another tree's out folder.
+function Test-RunnerOwnedCommandLine([string]$commandLine) {
+  if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+  $m = [regex]::Match($commandLine, '--ui-replay-log\s+(?:"(?<p>[^"]+)"|(?<p>\S+))')
+  if (-not $m.Success) { return $false }
+  $logArg = $m.Groups["p"].Value
+  if ($logArg -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2})') { return $false }
+  try {
+    $logPath = [IO.Path]::GetFullPath($logArg)
+    $outPrefix = [IO.Path]::GetFullPath($OutDir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  } catch {
+    return $false
+  }
+  return $logPath.StartsWith($outPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+# Stops only editors this runner owns: those this run started (by the process it recorded), and
+# leftovers of an earlier run into the same OutDir (matched by Test-RunnerOwnedCommandLine).
+# Never selects by process name alone: other editors on the machine are not the runner's to stop.
 function Stop-EditorIfRunning() {
-  $procs = Get-Process Editor -ErrorAction SilentlyContinue
-  if ($null -eq $procs) { return }
+  $owned = @{}
+  foreach ($started in $startedEditors) {
+    if (-not $started.HasExited) { $owned[$started.Id] = $started }
+  }
+  foreach ($e in @(Get-CimInstance Win32_Process -Filter "Name = 'Editor.exe'" -ErrorAction SilentlyContinue)) {
+    if ($owned.ContainsKey([int]$e.ProcessId)) { continue }
+    if (-not (Test-RunnerOwnedCommandLine $e.CommandLine)) { continue }
+    $leftover = Get-Process -Id $e.ProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $leftover) { $owned[$leftover.Id] = $leftover }
+  }
+  if ($owned.Count -eq 0) { return }
+  $procs = @($owned.Values)
   $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+  # A force-stopped editor can take 30 to 60 s to tear down. One still exiting after the wait is reported,
+  # the next scenario launches beside it, and it is found and stopped again before the scenario after that.
   try { $procs | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue } catch { }
+  foreach ($proc in $procs) {
+    $proc.Refresh()
+    $state = if ($proc.HasExited) { "stopped" } else { "still exiting after 5 s" }
+    Write-Host ("[UIReplay] Runner-owned Editor pid={0}: {1}" -f $proc.Id, $state)
+  }
   Start-Sleep -Milliseconds 200
+}
+
+$runnerDebugPortFirst = 9900
+$runnerDebugPortLast = 9919
+
+# Returns the first port in the runner's range with no TCP listener, or $null when all are taken.
+function Get-FreeRunnerDebugPort() {
+  $listening = @{}
+  foreach ($endpoint in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()) {
+    $listening[$endpoint.Port] = $true
+  }
+  for ($port = $runnerDebugPortFirst; $port -le $runnerDebugPortLast; $port++) {
+    if (-not $listening.ContainsKey($port)) { return $port }
+  }
+  return $null
 }
 
 function Update-ProjectPickerRecentProject([string]$projectRoot) {
@@ -131,7 +207,7 @@ function Update-ProjectPickerRecentProject([string]$projectRoot) {
   }
   if (-not (Test-Path -Path $resolvedProjectRoot -PathType Container)) { return }
 
-  $prefsRoot = Join-Path (Join-Path $env:APPDATA "GameEngine") "Editor"
+  $prefsRoot = $env:GE_EDITOR_USER_DATA_ROOT
   $prefsPath = Join-Path $prefsRoot "Preferences.json"
   try {
     New-Item -ItemType Directory -Force -Path $prefsRoot | Out-Null
@@ -178,11 +254,18 @@ function Update-ProjectPickerRecentProject([string]$projectRoot) {
   }
 }
 
-foreach ($s in $scenarios) {
+# The editors and Update-ProjectPickerRecentProject keep preferences, recent projects and caches under
+# OutDir, never in the developer's own editor user data. The editor needs an absolute path here.
+$env:GE_EDITOR_USER_DATA_ROOT = Join-Path $OutDir 'EditorUserData'
+
+foreach ($s in $scenarioPaths) {
   $name = [IO.Path]::GetFileNameWithoutExtension($s)
   $out = Join-Path $OutDir ("{0}.{1}.jsonl" -f $name, $Config)
   $stdout = Join-Path $OutDir ("{0}.{1}.stdout.txt" -f $name, $Config)
   $stderr = Join-Path $OutDir ("{0}.{1}.stderr.txt" -f $name, $Config)
+  $editorLog = Join-Path $OutDir ("{0}.{1}.editor.log" -f $name, $Config)
+  # An earlier run's logs would be read as this run's result when the editor never writes its own.
+  Remove-Item -LiteralPath $out, $editorLog -Force -ErrorAction SilentlyContinue
   Write-Host ("[UIReplay] Running {0} (config={1})" -f $name, $Config)
 
   $scenarioJson = $null
@@ -214,7 +297,7 @@ foreach ($s in $scenarios) {
     $sandboxName = [string]$scenarioJson.sandboxAssets
   }
   if (-not [string]::IsNullOrWhiteSpace($sandboxName)) {
-    $prep = Join-Path $ProjectRoot "Tests\\UIReplay\\prepare_assets_sandbox.ps1"
+    $prep = Join-Path $repoRoot 'Tests\UIReplay\prepare_assets_sandbox.ps1'
     if (Test-Path $prep) {
       powershell -ExecutionPolicy Bypass -File $prep -ProjectRoot $ProjectRoot -Name $sandboxName | Out-Null
     }
@@ -230,6 +313,8 @@ foreach ($s in $scenarios) {
   # Some shells may have this set from other scripts, and correctness mode forces heavy passes
   # which can mask performance-path regressions we want to catch.
   $env:GE_UI_CORRECTNESS_MODE = "0"
+  # Keep HDR output off whatever the project or the developer's settings request.
+  $env:GE_FORCE_HDR_OUTPUT = "Off"
 
   # Pick a safer per-scenario frame budget:
   # - if the JSON specifies minFrames, run at least (minFrames + extraFrames)
@@ -240,7 +325,8 @@ foreach ($s in $scenarios) {
     $scenarioExit = [Math]::Max($scenarioExit, ($min + $extraFrames))
   }
 
-  $editorArgs = @("--ui-replay", $s, "--ui-replay-log", $out, "--exit-after-frames", $scenarioExit)
+  $editorArgs = @("--ui-replay", $s, "--ui-replay-log", $out, "--exit-after-frames", $scenarioExit,
+                  "-logfile", $editorLog)
   if (-not $launchWithoutProject) {
     $editorArgs = @("--project", $ProjectRoot) + $editorArgs
   }
@@ -248,17 +334,28 @@ foreach ($s in $scenarios) {
   $p = $null
   $timedOut = $false
   try {
+    # Checked free at launch time; the editor binds it seconds later. An editor that loses the port to
+    # another process logs "Failed to start MCP debug server" and runs without one, which the replay
+    # does not use.
+    $debugPort = Get-FreeRunnerDebugPort
+    if ($null -eq $debugPort) {
+      throw ("no free debug port in {0}-{1}" -f $runnerDebugPortFirst, $runnerDebugPortLast)
+    }
+    $editorArgs += @("--debug-port", $debugPort)
     if ($CaptureStdout) {
       $p = Start-Process -FilePath $EditorExe -ArgumentList $editorArgs -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } else {
       $p = Start-Process -FilePath $EditorExe -ArgumentList $editorArgs -NoNewWindow -PassThru
     }
+    $startedEditors.Add($p)
+    Write-Host ("[UIReplay] Editor pid={0} debug port={1}" -f $p.Id, $debugPort)
     try {
       $p | Wait-Process -Timeout $TimeoutSeconds -ErrorAction Stop
     } catch {
       $timedOut = $true
     }
   } catch {
+    Write-Host ("[UIReplay] Could not launch {0}: {1}" -f $name, $_)
     $p = $null
   }
 
@@ -275,7 +372,8 @@ foreach ($s in $scenarios) {
       try { $p.Refresh() } catch { }
       try { $code = $p.ExitCode } catch { $code = 1 }
     } else {
-      $code = $LASTEXITCODE
+      # Not launched: Start-Process sets no exit code, so record the failure explicitly.
+      $code = 1
     }
   }
   $result = Get-ReplayResult $out
@@ -345,7 +443,7 @@ foreach ($s in $scenarios) {
 
   # Cleanup sandbox after scenario (best-effort).
   if (-not [string]::IsNullOrWhiteSpace($sandboxName)) {
-    $prep = Join-Path $ProjectRoot "Tests\\UIReplay\\prepare_assets_sandbox.ps1"
+    $prep = Join-Path $repoRoot 'Tests\UIReplay\prepare_assets_sandbox.ps1'
     if (Test-Path $prep) {
       powershell -ExecutionPolicy Bypass -File $prep -ProjectRoot $ProjectRoot -Name $sandboxName -CleanOnly | Out-Null
     }

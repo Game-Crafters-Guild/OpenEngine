@@ -94,6 +94,18 @@ bool EditorComponentTraitsRegistry::TryGet(ECS::ComponentTypeId typeId, EditorCo
     return true;
 }
 
+std::string EditorComponentTraitsRegistry::UntitledNameOf(const std::vector<ECS::ComponentTypeId>& types) const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    for (const ECS::ComponentTypeId type : types)
+    {
+        const auto it = m_Traits.find(type);
+        if (it != m_Traits.end() && !it->second.UntitledName.empty())
+            return it->second.UntitledName;
+    }
+    return {};
+}
+
 bool EditorComponentTraitsRegistry::TryGetSectionHost(ECS::ComponentTypeId hostedTypeId,
                                                       ECS::ComponentTypeId& outHostTypeId,
                                                       EditorComponentTraits& outHostTraits) const

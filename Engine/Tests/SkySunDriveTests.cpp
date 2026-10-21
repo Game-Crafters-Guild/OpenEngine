@@ -41,7 +41,6 @@ namespace SunDrive = Components::SkySunDrive;
 namespace SunIlluminance = Components::SkySunIlluminance;
 
 constexpr float kShippedSunLux = 100000.0f;
-constexpr float kSkyIrradianceScale = 1.33f; // mirrors SkyEnvironmentSystem.cpp, so a drift shows
 
 // A sky linked to one directional light, driving it from its curve.
 struct CurveRig
@@ -201,7 +200,7 @@ TEST(SkySunDrive, AtNightTheMoonlightOwnsTheLight)
     rig.SetHours(0.0f);
     rig.Tick();
     const float moonlight = SunDrive::MoonlightLux(rig.Rig.Sky(), rig.Settings().moonDirWS[1]);
-    ASSERT_GT(moonlight, 1.0f);
+    ASSERT_GT(moonlight, 0.01f);
     EXPECT_NEAR(SunIlluminance::DeliveredLux(rig.Light()), moonlight, moonlight * 1e-4f);
 }
 
@@ -256,9 +255,11 @@ TEST(SkySunDrive, TheSkyFollowsTheCurvesNoon)
         // primarySunIntensity is the sky's day source while the moon has not taken over.
         const float expected = Components::LightIntensityToUnitless(SunDrive::SkySourceLux(rig.Rig.Sky(), hours),
                                                                     Components::LightUnit::Lux) *
-                               kSkyIrradianceScale;
+                               Rendering::SkySourceIlluminanceScale(Rendering::ScatteringAtmosphere());
         if (hours < 15.5f)
+        {
             EXPECT_EQ(rig.Settings().primarySunIntensity, expected) << "hour " << hours;
+        }
     }
     // At noon the sky's source is the noon reference.
     EXPECT_NEAR(SunDrive::SkySourceLux(rig.Rig.Sky(), 12.0f), reference, reference * 1e-4f);
@@ -272,6 +273,9 @@ TEST(SkySunDrive, TheSkyFollowsTheCurvesNoon)
     EXPECT_NEAR(noonDelivered, curveNoon, curveNoon * 1e-5f);
 
     // Continuous across the 1.15-degree floor: on 21 December the noon sun crosses it near 65.4 N.
+    // A low sun's extinction is steep through haze: near the floor, 0.022 stops per 0.01 degree of
+    // latitude through the default crisp day's and 0.054 through a typical day's (optical depth 0.15),
+    // against a jump of whole stops if the floor broke continuity.
     Components::SkyEnvironment polar = sky;
     polar.SunIlluminanceCurve = FlatCurve(10000.0f);
     float previous = 0.0f;
@@ -280,7 +284,9 @@ TEST(SkySunDrive, TheSkyFollowsTheCurvesNoon)
         polar.Latitude = latitude;
         const float r = SunDrive::NoonReferenceLux(polar);
         if (previous > 0.0f)
-            EXPECT_LT(std::abs(std::log2(r / previous)), 0.05f) << "latitude " << latitude;
+        {
+            EXPECT_LT(std::abs(std::log2(r / previous)), 0.08f) << "latitude " << latitude;
+        }
         previous = r;
     }
 }
@@ -444,16 +450,22 @@ TEST(SkySunDrive, TheSeedIsMonotoneAndFollowsThePhysicalCurve)
             const float value = SunDrive::CurveIlluminanceLux(seed, hours);
             constexpr float kLogRoundTrip = 1e-5f;
             if (minute > 0 && minute <= 12 * 60)
+            {
                 EXPECT_GE(value, previous * (1.0f - kLogRoundTrip))
                     << "latitude " << site.Latitude << " day " << site.Day << " at " << hours;
+            }
             if (minute > 12 * 60)
+            {
                 EXPECT_LE(value, previous * (1.0f + kLogRoundTrip))
                     << "latitude " << site.Latitude << " day " << site.Day << " at " << hours;
+            }
             previous = value;
             const float model = SunDrive::PhysicalIlluminanceLux(sky, kShippedSunLux, hours);
             if (model > 0.01f)
+            {
                 EXPECT_LE(std::abs(std::log2(std::max(value, SunDrive::kCurveFloorLux) / model)), 0.5f)
                     << "latitude " << site.Latitude << " day " << site.Day << " at " << hours;
+            }
         }
     }
 }

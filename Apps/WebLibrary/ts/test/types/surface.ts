@@ -1,8 +1,8 @@
 // Type test of the public declarations: the day-one calls compile, and each misuse below is
 // a type error (tsc fails on a @ts-expect-error with no error). check-declarations.mjs also
 // compiles the README's and llms.txt's examples as written.
-import { Engine, OrbitControls, Light, Camera, SkyEnvironment, Transform, OpenEngineError } from '@openengine/web';
-import type { Entity, Scene } from '@openengine/web';
+import { Engine, OrbitControls, Light, Camera, SkyEnvironment, Transform, OpenEngineError } from '@game-crafters-guild/openengine-web';
+import type { Entity, Scene } from '@game-crafters-guild/openengine-web';
 
 export async function daySnippet(canvas: HTMLCanvasElement): Promise<void> {
     const engine = await Engine.create({ canvas, threads: 'auto' });

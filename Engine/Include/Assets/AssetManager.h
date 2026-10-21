@@ -25,6 +25,7 @@
 #include <condition_variable>
 #include <shared_mutex>
 
+#include <unordered_map>
 #include <unordered_set>
 namespace GameEngine {
 
@@ -34,6 +35,7 @@ namespace GameEngine {
 class AssetManager;
 class AssetBatchCoordinator;
 class AssetIOService;
+class TextureCookActivity;
 class TextureCookWorkers;
 
 /**
@@ -572,9 +574,11 @@ public:
      * load is in flight the request is kept and the reload starts once that load
      * lands (Update), because the load may already have read the settings the
      * request is about. No-op when the asset is neither resident nor loading.
-     * Returns true when a reload was queued or kept for the load.
+     * Returns true when a reload was queued or kept for the load. `priority` is the
+     * read's place in the decode reader's queue: High for a person's edit, Low for
+     * work nobody is waiting to see (a texture's usage re-key).
      */
-    bool RequestAsyncReload(const GUID& guid);
+    bool RequestAsyncReload(const GUID& guid, AssetLoadPriority priority = AssetLoadPriority::High);
 
     /**
      * @brief True while an async reload of @p guid is reading and decoding — from
@@ -784,6 +788,9 @@ public:
      * @brief Get the job system for task submission
      */
     JobSystem::WorkStealingThreadPool& GetJobSystem() { return *m_JobSystem; }
+    /// False for a manager initialized without a job system; GetJobSystem is
+    /// not callable then and loads run synchronously.
+    bool HasJobSystem() const { return m_JobSystem != nullptr; }
 
     /**
      * @brief The workers texture cooks spread their encode across (CookTexture's
@@ -791,6 +798,11 @@ public:
      * system runs inline.
      */
     TextureCookWorkers* GetTextureCookWorkers() { return m_TextureCookWorkers.get(); }
+
+    /**
+     * @brief The textures whose import cook runs now, in this manager's loads.
+     */
+    TextureCookActivity& GetTextureCookActivity() { return *m_TextureCookActivity; }
 
     /**
      * @brief Number of loads currently tracked as in flight (dedupe map size).
@@ -926,7 +938,8 @@ private:
      * not bump mtime and must still restart. Main thread only.
      */
     void StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& asset, bool watchReason,
-                          bool restartSameMtime = false);
+                          bool restartSameMtime = false,
+                          AssetLoadPriority priority = AssetLoadPriority::High);
 
     /**
      * @brief Adopt staged async-reload payloads into their live assets (main
@@ -1248,8 +1261,8 @@ private:
     mutable std::mutex m_InFlightMutex;
     // RequestAsyncReload calls that arrived while the asset's first load was in flight
     // (StartReloadsRequestedDuringLoad). Guarded by m_InFlightMutex, like the table it is
-    // checked against.
-    std::unordered_set<GUID> m_ReloadsRequestedDuringLoad;
+    // checked against. The highest priority any of them asked for.
+    std::unordered_map<GUID, AssetLoadPriority> m_ReloadsRequestedDuringLoad;
     // Writes announced by this process, so a watcher's report of one is recognisable as
     // that write arriving rather than as a second change. See ExpectWrite.
     ExpectedWriteLedger m_ExpectedWrites;
@@ -1347,6 +1360,9 @@ private:
     // The pool workers texture cooks spread their bands across: helpers take
     // their slots from m_IOService's decode gate, as texture decodes do.
     std::unique_ptr<TextureCookWorkers> m_TextureCookWorkers;
+
+    // Entered by a cook on a miss in this manager's loads (TextureAsset::TryLoadViaCook).
+    std::unique_ptr<TextureCookActivity> m_TextureCookActivity;
 
     // Unified asset loading coordinator
     std::unique_ptr<AssetBatchCoordinator> m_BatchCoordinator;

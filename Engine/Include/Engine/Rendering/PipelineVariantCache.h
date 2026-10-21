@@ -242,6 +242,18 @@ class PipelineVariantCache
     bool EnsureConcreteWarm(const Material& material, GraphicsPipelineId id,
                             const Rendering::PipelineFormatKey& fk);
 
+    // Scene warm (SceneDrawWarm): the colour variant a world-pass draw of `material` with these
+    // inputs asks for (GetOrCompileColorVariant's key, the sample count taken from `fk`) is
+    // compiled on the compile workers if it is not cached, and once it is published the device
+    // builds its pipeline for `fk` on a worker. Nothing builds on the calling thread and no draw
+    // waits on it. Serial frame-begin thread.
+    void WarmColorVariant(const Material& material,
+                          VertexAttributeFlags vertexFlags,
+                          PrimitiveTopology topology,
+                          MaterialKeyword passKeywords,
+                          FrontFace frontFace,
+                          const Rendering::PipelineFormatKey& fk);
+
     // Build + intern a depth-only graphics pipeline for the given shader
     // variant and vertex flags. `variant` is shared by ptr so the pipeline desc
     // can alias the SPIR-V storage owned by the shader cache without a copy.
@@ -317,6 +329,13 @@ class PipelineVariantCache
     // consumer of the material that renders inside this window caches a frame
     // without those draws.
     bool HasPipelineBuildsInFlight(const Material& material) const;
+
+    // True while any material's pipeline is being built: a variant queued,
+    // compiling or awaiting its publish, or a backend build a draw waits on.
+    // A consumer that keeps a rendered frame (a Once reflection probe) waits for
+    // this to clear before it recaptures, so a level's compile burst costs it
+    // one recapture rather than one per landing.
+    bool HasAnyPipelineBuildsInFlight() const;
 
     // Apply the variant units the compile workers (or the inline headless path)
     // queued since the last drain: insert/republish the cache nodes, clear the
@@ -429,6 +448,15 @@ class PipelineVariantCache
   private:
     using VariantCacheMap =
         std::unordered_map<InstancedVariantKey, InstancedVariantEntry, InstancedVariantKeyHash>;
+
+    // The cache keys the draw paths look variants up by; the scene warm builds the same ones.
+    InstancedVariantKey MakeColorVariantKey(const Material& material, VertexAttributeFlags vertexFlags,
+                                            uint32_t sampleCount, MaterialKeyword passKeywords,
+                                            PrimitiveTopology topology, FrontFace frontFace) const;
+    InstancedVariantKey MakeDepthVariantKey(const Material& material, VertexAttributeFlags vertexFlags,
+                                            uint32_t sampleCount, MaterialKeyword passKeywords,
+                                            PrimitiveTopology topology, FrontFace frontFace,
+                                            bool depthBiasEnable, bool depthClampEnable) const;
 
     // Shared bodies: both ctx types expose GetCurrentSampleCount() +
     // GetOrCreatePipelineVariant() name-identically; the caches they mutate are
@@ -620,6 +648,11 @@ class PipelineVariantCache
     void FireVariantPublished(const GUID& guid) const { VariantPublished.Invoke(guid); }
     std::unordered_set<InstancedVariantKey, InstancedVariantKeyHash> m_ColorCompilesInFlight;
     std::unordered_set<InstancedVariantKey, InstancedVariantKeyHash> m_DepthCompilesInFlight;
+    // Scene-warmed colour variants still compiling, with the pass formats the serial publish apply
+    // requests each one's pipeline build for once it lands (WarmColorVariant). Purged with the
+    // material; the entry of a compile that failed is never asked for and stays until then.
+    std::unordered_map<InstancedVariantKey, std::vector<Rendering::PipelineFormatKey>, InstancedVariantKeyHash>
+        m_WarmColorFormats;
 
     // Diagnostic count of variant compiles the async publish-gate path ran (the
     // work that used to block the record thread on a cold miss). Bumped on the

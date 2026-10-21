@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "RenderServicesDetail.h"
@@ -109,7 +110,7 @@ CascadeRenderInputs BuildCascadeCacheInputs(RenderServices& rs, ViewId viewId,
         in.WorldId = viewDesc->worldId;
         in.CasterEpoch = cache.TrackCasterChanges(viewId, cacheSlot, in.WorldId,
             rs.GetShadowCasterChanges(in.WorldId), in.LightVP, resolution);
-        in.RenderLayerMask = viewDesc->ActiveRenderLayerMask();
+        in.Layers = viewDesc->ActiveRenderLayerMask();
         if (!fitFreeze && viewDesc->cameraId != 0)
         {
             if (const auto* cam = rs.Views().FindCameraData(viewDesc->cameraId))
@@ -162,7 +163,7 @@ void ShadowMapRenderFeature::Declare(Rendering::RenderGraph::RGFrame& frame, Ren
         PlanCascadeMotionFrame(frame, rs, ctx);
         for (uint32_t c = 0; c < ctx.CascadeCount; ++c)
         {
-            char suffix[16];
+            char suffix[24];
             std::snprintf(suffix, sizeof(suffix), "Cascade%u", c);
             const std::string name = ctx.PassName ? ctx.PassName(suffix) : std::string(suffix);
             DeclareCascadePass(frame, rs, ctx, c, name.c_str());
@@ -1066,7 +1067,7 @@ void ShadowMapRenderFeature::DeclarePointPasses(Rendering::RenderGraph::RGFrame&
     if (slotAlloc.Ptr)
     {
         auto* slots = static_cast<PointShadowSlotGPU*>(slotAlloc.Ptr);
-        std::memset(slots, 0, static_cast<size_t>(slotBytes));
+        std::uninitialized_value_construct_n(slots, budget);
         for (const PointShadowFrameInfo& fi : ctx.PointShadows)
         {
             if (fi.shadowSlot < 0 || static_cast<uint32_t>(fi.shadowSlot) >= budget)

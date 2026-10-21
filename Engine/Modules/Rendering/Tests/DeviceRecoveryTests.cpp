@@ -541,6 +541,24 @@ TEST(FaultInjectionParse, ForceBeginFrameTimeout)
     EXPECT_FALSE(cfg.ShouldForceLostAtFrame(9));      // independent hook
 }
 
+TEST(FaultInjectionParse, ForceAcquireSuboptimal)
+{
+    const VulkanFaultInjection both = ParseFaultInjection(nullptr, nullptr, nullptr, "2");
+    EXPECT_TRUE(both.Active());
+    EXPECT_EQ(both.acquireSuboptimalEvery, 2u);
+    EXPECT_TRUE(both.acquireSuboptimalAlsoPresent);
+    EXPECT_TRUE(both.ShouldForceAcquireSuboptimal(2));
+    EXPECT_FALSE(both.ShouldForceAcquireSuboptimal(1));
+
+    const VulkanFaultInjection acquireOnly = ParseFaultInjection(nullptr, nullptr, nullptr, "2:acquire");
+    EXPECT_EQ(acquireOnly.acquireSuboptimalEvery, 2u);
+    EXPECT_FALSE(acquireOnly.acquireSuboptimalAlsoPresent);
+
+    EXPECT_FALSE(ParseFaultInjection(nullptr, nullptr, nullptr, "0").Active());
+    EXPECT_FALSE(ParseFaultInjection(nullptr, nullptr, nullptr, "x").Active());
+    EXPECT_FALSE(ParseFaultInjection(nullptr, nullptr, nullptr, "2:acqire").Active()); // unknown suffix
+}
+
 TEST(FaultInjectionParse, ForceBeginFrameTimeoutSustainedRange)
 {
     // "N:K" sustains the Hung state across K consecutive frames so the >250ms

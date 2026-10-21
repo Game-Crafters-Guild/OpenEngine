@@ -229,6 +229,22 @@ TEST_F(MeshGPURegistryTest, RegisterMultipleSubmeshes_AllFindable)
     }
 }
 
+// A triangle's three 16-bit indices are 6 bytes. The registry pads them to an even
+// count and the pool rounds every range up to 4 bytes, so the next mesh's indices
+// start on a 4-byte offset; either rule alone keeps it there.
+TEST_F(MeshGPURegistryTest, IndexRangesAfterAnOddIndexCountStayFourByteAligned)
+{
+    GUID guid = GUID::Generate();
+    Mesh mesh = MakeTriangleMesh();
+
+    m_registry.RegisterSubmesh({guid, 0}, mesh);
+    const MeshGPUEntry* second = m_registry.Find(m_registry.RegisterSubmesh({guid, 1}, mesh));
+
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(second->indexSubAlloc.Offset % 4, 0u);
+    EXPECT_EQ(uint64_t{second->firstIndex} * 2, second->indexSubAlloc.Offset);
+}
+
 TEST_F(MeshGPURegistryTest, Uint32IndexOverflowCreatesSiblingPool)
 {
     constexpr uint32_t kVertexCount = 70000u; // Forces uint32 index buffers.
@@ -281,6 +297,35 @@ TEST_F(MeshGPURegistryTest, ZeroedNormalsUV_StillHasCoreFlags)
     EXPECT_TRUE(HasFlag(entry->vertexFlags, VertexAttributeFlags::HasPosition));
     EXPECT_TRUE(HasFlag(entry->vertexFlags, VertexAttributeFlags::HasNormal));
     EXPECT_TRUE(HasFlag(entry->vertexFlags, VertexAttributeFlags::HasUV0));
+}
+
+// Draws address geometry in elements (vertexOffset, firstIndex), so every
+// stream suballocation must start on a whole element of its stride. Several
+// registrations per pool put later ranges at nonzero offsets.
+TEST_F(MeshGPURegistryTest, StreamOffsetsAreWholeElementsOfTheirStride)
+{
+    constexpr uint32_t kUint32VertexCount = 70000u; // Forces uint32 index buffers.
+
+    std::vector<Mesh> meshes;
+    meshes.push_back(MakeTriangleMesh());
+    meshes.push_back(MakeTriangleMesh(/*withNormals=*/false, /*withUV=*/false));
+    meshes.push_back(MakeTriangleMesh());
+    meshes.push_back(MakeTriangleMesh(/*withNormals=*/true, /*withUV=*/true, /*skinned=*/true));
+    meshes.push_back(MakeTriangleMesh(/*withNormals=*/true, /*withUV=*/true, /*skinned=*/true));
+    meshes.push_back(MakeUint32IndexMesh(kUint32VertexCount, 3u));
+    meshes.push_back(MakeUint32IndexMesh(kUint32VertexCount, 5u));
+
+    const GUID guid = GUID::Generate();
+    for (uint32_t i = 0; i < meshes.size(); ++i)
+    {
+        const MeshGPUEntry* entry = m_registry.Find(m_registry.RegisterSubmesh({guid, i}, meshes[i]));
+        ASSERT_NE(entry, nullptr) << "submesh " << i;
+
+        const uint64_t coreStride = CoreVertexStride(entry->vertexFlags);
+        const uint64_t indexStride = entry->indexType == static_cast<uint32_t>(IndexType::Uint16) ? 2u : 4u;
+        EXPECT_EQ(entry->vertexOffset * coreStride, entry->coreSubAlloc.Offset) << "submesh " << i;
+        EXPECT_EQ(entry->firstIndex * indexStride, entry->indexSubAlloc.Offset) << "submesh " << i;
+    }
 }
 
 // Skinned mesh sets the Skinned flags and creates joints/weights VBs.
@@ -711,7 +756,7 @@ TEST_F(MeshGPURegistryTest, ScopedLookupsAreConsistentBesideConcurrentRegistrati
 }
 
 // GetPoolStats is the only witness to pool fragmentation, which converts into
-// GPU memory growth and extra pool groups: a failed best-fit does not fail the
+// GPU memory growth and extra pool groups: a failed allocation does not fail the
 // upload, it appends a sibling pool at double the capacity. The editor reads it
 // over IPC (renderServices.meshPools), so the shape it reports is a contract.
 TEST_F(MeshGPURegistryTest, PoolStatsReportOneEntryPerLivePoolWithItsOccupancy)
@@ -743,11 +788,11 @@ TEST_F(MeshGPURegistryTest, PoolStatsReportOneEntryPerLivePoolWithItsOccupancy)
     ASSERT_NE(core, nullptr) << "every registered mesh occupies a core pool";
     EXPECT_EQ(core->BucketKey, entry->bucketKey);
     EXPECT_EQ(core->PoolIndex, 0u);
-    EXPECT_GT(core->Allocator.capacity, 0u);
-    EXPECT_GT(core->Allocator.used, 0u);
-    EXPECT_LE(core->Allocator.used, core->Allocator.capacity);
-    EXPECT_GE(core->Allocator.peak, core->Allocator.used);
-    EXPECT_LE(core->Allocator.largestFreeRange, core->Allocator.capacity);
+    EXPECT_GT(core->Allocator.CapacityUnits, 0u);
+    EXPECT_GT(core->Allocator.UsedUnits, 0u);
+    EXPECT_LE(core->Allocator.UsedUnits, core->Allocator.CapacityUnits);
+    EXPECT_GE(core->Allocator.PeakUnits, core->Allocator.UsedUnits);
+    EXPECT_LE(core->Allocator.LargestFreeUnits, core->Allocator.CapacityUnits);
 
     ASSERT_NE(findStream("IB16"), nullptr) << "a 3-index triangle uses the 16-bit index pool";
 
@@ -756,7 +801,7 @@ TEST_F(MeshGPURegistryTest, PoolStatsReportOneEntryPerLivePoolWithItsOccupancy)
     for (const MeshGPUPoolStats& s : stats)
     {
         EXPECT_EQ(s.BucketKey, entry->bucketKey);
-        EXPECT_GT(s.Allocator.capacity, 0u) << "stream " << s.Stream;
+        EXPECT_GT(s.Allocator.CapacityUnits, 0u) << "stream " << s.Stream;
     }
 }
 

@@ -99,9 +99,12 @@ public:
     std::unique_ptr<UIElement> CreatePanelOfType(std::string_view typeKey) const;
 
     // The editor attaches consumers once its docking model + UI exist.
-    // Entries registered before that (test hosts) are replayed on attach;
-    // later ones fire immediately (the editor order: packages load at
-    // project open, long after startup).
+    // Entries registered before that (test hosts) are replayed on attach.
+    // Later ones (the editor order: packages load at project open, long after
+    // startup) wait for DeliverPendingRegistrations: a package registers from
+    // its module's static initializers, under the OS loader lock, where the
+    // consumer must not build a panel or destroy the one it replaces (a
+    // destructor that joins a thread would deadlock on that lock).
     struct Consumers
     {
         std::function<void(const EditorPanelDescriptor&)> Panel;
@@ -109,6 +112,11 @@ public:
         std::function<void(const EditorOverlayDescriptor&)> Overlay;
     };
     void SetConsumers(Consumers consumers);
+    // Hands the registrations made since the last call to the consumers, in
+    // registration order per kind (stylesheets, then panels, then overlays);
+    // a same-id re-registration is delivered once, with its latest descriptor.
+    // The editor calls it once per update, on the main thread.
+    void DeliverPendingRegistrations();
 
     // Editor-installed service that shows/activates a registered panel in the
     // dock. Modules call OpenPanel from their own affordances (context menus,
@@ -154,6 +162,10 @@ private:
     std::vector<OverlayEntry> m_Overlays;
     std::vector<PanelTypeEntry> m_PanelTypes;
     Consumers m_Consumers;
+    // Registrations made while consumers were attached, not yet delivered.
+    std::vector<std::string> m_PendingPanelIds;
+    std::vector<EditorStyleSheetContribution> m_PendingStyleSheets;
+    std::vector<std::string> m_PendingOverlayIds;
     PanelOpener m_PanelOpener;
 };
 

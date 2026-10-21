@@ -128,6 +128,18 @@ void DDGIMaterialMapAtlas::Refresh()
     ++m_FrameClock;
     CollectRetired();
 
+    // The layout is a function of the registry alone, so an unchanged stamp
+    // means the sweep below would find the same layout: skip it, but keep
+    // re-arming, which is what fills a layer whose blit has not landed yet.
+    const MaterialRegistryStamp stamp = m_Materials->GetRegistryStamp();
+    if (m_HaveSweptStamp && stamp == m_SweptStamp && m_Texture.IsValid())
+    {
+        RearmPendingBlits();
+        return;
+    }
+    m_SweptStamp = stamp;
+    m_HaveSweptStamp = true;
+
     // Sweep: every material holding a GPU-scene SSBO row contributes one
     // record; distinct source textures are deduplicated into layers in
     // first-seen order, which is what the layout hash below is taken over.
@@ -423,6 +435,7 @@ void DDGIMaterialMapAtlas::ReleaseAll()
     m_RecordsByMaterialSlot.clear();
     m_PendingBlits.clear();
     m_LayoutHash = 0;
+    m_HaveSweptStamp = false;
 }
 
 }  // namespace GameEngine::Engine::Renderer

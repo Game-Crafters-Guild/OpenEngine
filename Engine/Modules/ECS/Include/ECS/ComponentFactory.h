@@ -4,7 +4,7 @@
 //
 // Runtime scene loading and the editor's discoverable Add Component menu know a
 // component only by its runtime ComponentTypeId, but adding it correctly requires
-// default member values like RenderLayer::mask = 0xFFFFFFFF or AnimatorRef::Speed = 1.0
+// default member values like Light::Intensity or AnimatorRef::Speed = 1.0
 // to be honoured. This registry stores default bytes for all reflected components and
 // menu creators for the subset that should be user-addable.
 //

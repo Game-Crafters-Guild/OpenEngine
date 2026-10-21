@@ -33,6 +33,7 @@ target_link_libraries(ECSBenchCompare PRIVATE
     Logger
     JobSystem
     ECS
+    Memory
 )
 
 if(WIN32)

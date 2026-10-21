@@ -21,11 +21,35 @@ namespace
 
 constexpr const char* kLayoutAssetPath = "UI/controls/InspectorNotice/InspectorNotice.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/InspectorNotice/InspectorNotice.css";
+constexpr const char* kPlateClass = "inspector-notice-plate";
 constexpr const char* kTextClass = "inspector-notice-text";
 constexpr const char* kActionClass = "inspector-notice-action";
 constexpr const char* kHeadingClass = "inspector-notice-heading";
 constexpr const char* kTitleClass = "inspector-notice-title";
+constexpr const char* kGlyphClass = "inspector-notice-glyph";
 constexpr const char* kHiddenClass = "hidden";
+
+// The kind's suffix: the control carries inspector-notice-<kind>, and each part
+// inspector-notice-<part>-<kind>, which InspectorNotice.css styles.
+const char* KindSuffix(InspectorNotice::Kind kind)
+{
+    switch (kind)
+    {
+    case InspectorNotice::Kind::Information:
+        return "information";
+    case InspectorNotice::Kind::Error:
+        return "error";
+    case InspectorNotice::Kind::Warning:
+        break;
+    }
+    return "warning";
+}
+
+void AddKindClass(UIElement* part, const char* partClass, const char* kindSuffix)
+{
+    if (part)
+        part->AddClass(std::string(partClass) + "-" + kindSuffix);
+}
 
 std::string ReadLayoutText()
 {
@@ -55,8 +79,9 @@ const std::string& LayoutText()
 
 InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
 {
+    const char* kindSuffix = KindSuffix(kind);
     AddClass("inspector-notice");
-    AddClass(kind == Kind::Information ? "inspector-notice-information" : "inspector-notice-warning");
+    AddClass(std::string("inspector-notice-") + kindSuffix);
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
     const std::string& layoutText = LayoutText();
@@ -88,6 +113,17 @@ InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
 
     m_Heading = InspectorDrag::FindChildByClass(plateRaw, kHeadingClass);
     m_Title = m_Heading ? dynamic_cast<Label*>(InspectorDrag::FindChildByClass(m_Heading, kTitleClass)) : nullptr;
+    // Each part carries one class for the kind (InspectorNotice.css).
+    AddKindClass(plateRaw, kPlateClass, kindSuffix);
+    AddKindClass(m_Text, kTextClass, kindSuffix);
+    AddKindClass(m_Action, kActionClass, kindSuffix);
+    AddKindClass(m_Title, kTitleClass, kindSuffix);
+    AddKindClass(m_Heading ? InspectorDrag::FindChildByClass(m_Heading, kGlyphClass) : nullptr, kGlyphClass,
+                 kindSuffix);
+    // The button attaches the shared button sheet to itself, which puts it after this notice's sheet
+    // in the action's cascade. Attaching the notice's sheet to the action as well, after the
+    // button's, lets the kind's single-class edge rule outrank the button's border color.
+    m_Action->RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
     m_Text->SetText(text);
     m_Action->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { InvokeAction(); });
 }

@@ -20,8 +20,9 @@ namespace GameEngine.Scripting
             Type memberType = member is PropertyInfo p ? p.PropertyType : ((FieldInfo)member).FieldType;
             if (!TryConvert(raw, memberType, out object? converted))
             {
-                UiElementTypeLog.Report($"attribute value '{raw}' is not a valid {memberType.Name} for " +
-                       $"{target.GetType().FullName}.{member.Name}; the member was left unchanged.");
+                ConsoleDiagnostics.Report("Ui.ElementTypes",
+                    $"attribute value '{raw}' is not a valid {memberType.Name} for " +
+                    $"{target.GetType().FullName}.{member.Name}; the member was left unchanged.");
                 return;
             }
 

@@ -241,8 +241,6 @@ private:
     Editor::EditorChangeNotifications::SubscriptionToken m_StructureSub{};
     Editor::EditorChangeNotifications::SubscriptionToken m_LightChangedSub{};
     Editor::EditorChangeNotifications::SubscriptionToken m_MeshRendererChangedSub{};
-    Editor::EditorChangeNotifications::SubscriptionToken m_SkinnedMeshRendererChangedSub{};
-    Editor::EditorChangeNotifications::SubscriptionToken m_RenderLayerChangedSub{};
     Editor::EditorChangeNotifications::SubscriptionToken m_NameChangedSub{};
     bool m_RefreshQueued = false;
     // Coalesces the Name-changed label rebuild, which deliberately bypasses m_RefreshQueued

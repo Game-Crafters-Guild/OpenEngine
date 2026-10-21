@@ -77,7 +77,7 @@ export function downloadProgress(label, whenDownloaded) {
     bar.value = 0;
     /** @type {Map<string, { loaded: number, total: number }>} */
     const phases = new Map();
-    return (/** @type {import('@openengine/web').LoadProgress} */ { phase, loaded, total }) => {
+    return (/** @type {import('@game-crafters-guild/openengine-web').LoadProgress} */ { phase, loaded, total }) => {
         phases.set(phase, { loaded, total });
         const all = [...phases.values()];
         bar.hidden = false;
@@ -153,7 +153,7 @@ function turnedAbout(point, centre, degrees) {
 
 /**
  * Turns a shown model `degrees` about the vertical axis through its box's centre, as the turntable does.
- * @param {import('@openengine/web').Model} model @param {Shape} shape @param {number} degrees
+ * @param {import('@game-crafters-guild/openengine-web').Model} model @param {Shape} shape @param {number} degrees
  */
 export function turnAbout(model, shape, degrees) {
     model.transform.position.set(...turnedAbout(model.transform.position, shape.center, degrees));
@@ -174,15 +174,15 @@ function turnFrom(rotation, rest) {
  * longest side is kModelReach metres, then turned `yaw` degrees on the turntable (its starting turn).
  * Returns its shape (the box before that turn, and its rotation then), or null for a model with
  * nothing to draw (no box).
- * @param {import('@openengine/web').Model} model @param {number} [yaw]
+ * @param {import('@game-crafters-guild/openengine-web').Model} model @param {number} [yaw]
  * @returns {Shape | null}
  */
 export function standardise(model, yaw = 0) {
-    const box = /** @type {import('@openengine/web').Bounds | null} */ (model.bounds);
+    const box = /** @type {import('@game-crafters-guild/openengine-web').Bounds | null} */ (model.bounds);
     if (!box) return null;
     const reach = Math.max(box.size.x, box.size.y, box.size.z), k = model.transform.scale;
     if (reach > 0) k.set((k.x * kModelReach) / reach, (k.y * kModelReach) / reach, (k.z * kModelReach) / reach);
-    const { center, size, min } = /** @type {import('@openengine/web').Bounds} */ (model.bounds), q = model.transform.quaternion;
+    const { center, size, min } = /** @type {import('@game-crafters-guild/openengine-web').Bounds} */ (model.bounds), q = model.transform.quaternion;
     const shape = { center, size, min, rest: { x: q.x, y: q.y, z: q.z, w: q.w } };
     turnAbout(model, shape, yaw);
     return shape;
@@ -192,7 +192,7 @@ export function standardise(model, yaw = 0) {
  * Stands the stage under a model: the floor centred on the model's feet, opaque out to 1.05 times
  * the model's size from there and gone by 2.85 times, a disc that ends inside the frame rather than
  * at the horizon, and the GI volume fitted to the model. Does nothing before a model is shown.
- * @param {Record<'floor' | 'gi', import('@openengine/web').Entity | null>} stage the floor and the GI volume, each null while off
+ * @param {Record<'floor' | 'gi', import('@game-crafters-guild/openengine-web').Entity | null>} stage the floor and the GI volume, each null while off
  * @param {{ center: { x: number, y: number, z: number }, size: { x: number, y: number, z: number }, min: { y: number } } | null} shape the model's box as the page loaded it
  */
 export function fitStage(stage, shape) {

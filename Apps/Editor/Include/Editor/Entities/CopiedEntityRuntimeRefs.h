@@ -12,8 +12,8 @@
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
-#include "PathfindingECS/NavigationGridRuntime.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
+#include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PhysicsECS/Components/CharacterController.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -108,7 +108,7 @@ class CopiedEntityRuntimeRefs
         RepairCharacterController(world, copy);
         RepairAnimatorRuntime(world, copy);
         RepairTerrainColliders(world, copy);
-        RepairNavigationGrid(world, copy);
+        RepairNavigationSurface(world, copy);
     }
 
     // Repair what a copy names of another entity of the payload, once every entity of it is
@@ -161,17 +161,17 @@ class CopiedEntityRuntimeRefs
     // Cleared, the copy has no previous entry to retire and bakes its own. The
     // authoring weights and the sourceMesh* fields stay: they name the shared
     // model submesh every instance registers, which no instance unregisters.
-    // The map a NavigationGrid names belongs to the entity that created it. The
-    // copy forgets the binding and NavigationBuildSystem creates its own map;
+    // The map a NavigationSurface names belongs to the entity that created it.
+    // The copy forgets the binding and NavigationSurfaceSystem bakes its own map;
     // sharing it would let the copy's teardown release the original's map.
-    static void RepairNavigationGrid(ECS::World& world, ECS::EntityHandle copy)
+    static void RepairNavigationSurface(ECS::World& world, ECS::EntityHandle copy)
     {
-        const auto* grid = world.GetComponent<Components::NavigationGrid>(copy);
-        if (!grid || !grid->Initialized)
+        const auto* surface = world.GetComponent<Components::NavigationSurface>(copy);
+        if (!surface || surface->OwnerWorldId == 0)
             return;
 
-        Components::NavigationGrid updated = *grid;
-        PathfindingECS::ForgetNavigationGridMap(updated);
+        Components::NavigationSurface updated = *surface;
+        PathfindingECS::ForgetNavigationSurfaceMap(updated);
         world.AddComponentImmediate(copy, updated);
     }
 

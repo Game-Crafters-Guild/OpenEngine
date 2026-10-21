@@ -82,6 +82,10 @@ struct RuntimeHostHooks
 /// The owner brings it up in order (InitWindow, InitRendering, LoadRenderPipeline, OpenScene),
 /// mounting assets and loading native modules between the steps as it needs, calls Render once
 /// per application frame, and Shutdown before the engine shuts down.
+///
+/// Under a headless application (ApplicationConfig::Headless) the same order brings up no
+/// window, no render device and no pipeline: the scene opens into the primary world, the
+/// engine's system schedule runs every frame without render services, and Render does nothing.
 class RuntimeHost
 {
 public:
@@ -93,15 +97,17 @@ public:
     RuntimeHost& operator=(const RuntimeHost&) = delete;
 
     /// Creates the window, binds its input to the application's input system and the HUD, and
-    /// applies the window mode. False when the window cannot be created.
+    /// applies the window mode. False when the window cannot be created. Headless: no window.
     bool InitWindow();
     /// Creates the render device and its render services on the window, enables the
     /// engine-managed rendering loop and applies the LOD selection and render quality settings.
-    /// Requires InitWindow.
+    /// Requires InitWindow. Headless: no device; enables the engine's schedule without render
+    /// services.
     bool InitRendering();
     /// Resolves and compiles the render pipeline. Call after every native module that registers
     /// pipeline node types is loaded. Returns PipelineResolveFailure::None on success; otherwise
     /// the reason, logged with the resolver's message, for the owner to state its own fix.
+    /// Headless: None, with no pipeline.
     Engine::Renderer::PipelineResolveFailure LoadRenderPipeline();
     /// Replaces the primary world's content with the scene at `scenePath`, relative to the
     /// resolved asset root, hands its models and standalone materials to the rendering loop's
@@ -111,26 +117,28 @@ public:
     bool OpenScene(const std::filesystem::path& scenePath);
     /// The resolve batch of the scene the last OpenScene loaded, for the owner to ask the
     /// rendering loop's resolve service when the scene has resolved. None before OpenScene, or
-    /// when it ran before InitRendering.
+    /// when it ran before InitRendering or headless.
     Engine::Renderer::SceneResolveBatch GetSceneResolveBatch() const { return m_SceneResolve; }
     /// Renders one frame of the primary world's active camera and presents it. `deltaTime` is
     /// the frame time the pipeline's temporal passes advance by, in seconds.
+    /// Headless: does nothing.
     void Render(float deltaTime);
     /// Waits for the device, then releases the frame stream, the view, the HUD, the rendering
     /// loop, the render device and the window. Readbacks the owner still holds must be read or
     /// dropped before it: they cannot resolve after it.
     void Shutdown();
 
-    /// Null before InitWindow and after Shutdown.
+    /// Null before InitWindow, after Shutdown, and always when headless.
     Platform::Window* GetWindow() const { return m_Window.get(); }
-    /// Null before InitRendering and after Shutdown.
+    /// Null before InitRendering, after Shutdown, and always when headless.
     Engine::Renderer::RenderDeviceContext* GetRenderDeviceContext() const { return m_RenderCtx.get(); }
 
 private:
-    // The window's play surface, resolved per event: the HUD host, and the
-    // mapping that makes this window's pointer the HUD's. Empty until the first
-    // rendered frame builds the host. No gameplay sink — with no chrome above
-    // it, the game's own InputSystem ends the chain instead of sitting inside it.
+    // The window's play surface, resolved per event: whether the window holds
+    // the pointer locked, the HUD host, and the mapping that makes this window's
+    // pointer the HUD's. The HUD legs are empty until the first rendered frame
+    // builds the host. No gameplay sink — with no chrome above it, the game's own
+    // InputSystem ends the chain instead of sitting inside it.
     WindowInputRouterConfig::PlaySurface HudPlaySurface() const;
     // The immediate-mode frame for the window — pool imports for the view targets,
     // ImportBackbuffer, the spine, the HUD composite, the composite hook, the

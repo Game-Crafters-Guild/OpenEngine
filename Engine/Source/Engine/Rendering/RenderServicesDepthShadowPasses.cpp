@@ -22,7 +22,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
@@ -208,7 +207,7 @@ bool RenderServices::ViewNeedsShadowCascadePasses(Rendering::ViewId viewId) cons
     for (const auto& v : m_ViewRegistry.GetViews())
     {
         if (v.id == viewId)
-            return v.ActiveRenderLayerMask() != 0u && HasShadowCasters(viewId);
+            return v.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(viewId);
     }
     return false;
 }
@@ -246,7 +245,7 @@ FeatureDeclareContext RenderServices::MakeFeatureDeclareContext(
     // Present only under the gate: active render layers + shadow casters + a
     // valid light of that family. GetWorldLights is read once here.
     if (const auto* view = m_ViewRegistry.FindViewDesc(viewId);
-        view && view->ActiveRenderLayerMask() != 0u && HasShadowCasters(viewId))
+        view && view->ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(viewId))
     {
         const auto lights = GetWorldLights(view->worldId);
         if (auto area = BuildAreaShadowFrameInfo(lights); area.valid)
@@ -474,7 +473,8 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
     Rendering::ViewId viewId, uint64 worldId, const Rendering::CameraData& camData)
 {
     const auto* viewDesc = m_ViewRegistry.FindViewDesc(viewId);
-    const uint32_t renderLayerMask = viewDesc ? viewDesc->ActiveRenderLayerMask() : 0xFFFFFFFFu;
+    const Rendering::RenderLayerMask renderLayerMask =
+        viewDesc ? viewDesc->ActiveRenderLayerMask() : Rendering::RenderLayerMask::All();
     PointShadowAssignment& entry = m_PointShadowAssignments[viewId];
     const uint64_t deviceFrame = m_Device ? m_Device->GetFrameIndex() : 0u;
     // Idempotent per (view, device frame): the first consumer this frame advances
@@ -551,7 +551,7 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
         // visible must re-render the light (its layer was culled/never drawn).
         c.Plan.ContentHash =
             HashPointShadowContent(light.positionWS, light.range, c.Geometry.faceMask,
-                                   renderLayerMask);
+                                   renderLayerMask.Bits);
         // L1b: world-space influence sphere for caster-proximity keying (same
         // world-space source as the content hash — never camera-relative).
         c.Plan.InfluenceSphere[0] = light.positionWS[0];

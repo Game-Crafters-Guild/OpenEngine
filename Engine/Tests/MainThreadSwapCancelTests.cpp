@@ -3,9 +3,13 @@
 // for it; a Shutdown on the main thread cannot pump that queue, so a wait that
 // ignored the run's cancellation stalled Shutdown for the full timeout.
 //
+// Also pins the other end of that wait: in an engine with no frame loop (a
+// standalone-hosted one) the stage pumps the queue itself once the wait times
+// out, so the swap runs instead of timing out.
+//
 // The engine is initialized headless with scripting fully disabled, so the
 // swap stage takes its main-thread path against a ScriptManager whose queue
-// this test owns and never pumps.
+// these tests own and never pump.
 
 #include <gtest/gtest.h>
 
@@ -45,6 +49,7 @@ class MainThreadSwapCancel : public ::testing::Test
         ApplicationConfig config{};
         config.WorkspaceDirectory = m_Workspace.string();
         config.AssetDirectory = "Assets";
+        config.StandaloneHosted = m_StandaloneHosted;
         ScriptsConfig scriptsConfig{};
         scriptsConfig.disableClr = true;
         scriptsConfig.enableHotReload = false;
@@ -64,21 +69,30 @@ class MainThreadSwapCancel : public ::testing::Test
 
     std::filesystem::path m_OriginalWorkingDirectory;
     std::filesystem::path m_Workspace;
+    bool m_StandaloneHosted = false;
+};
+
+// What the scripting ABI's bootstrap initializes for dotnet test: no frame loop, no pump.
+class MainThreadSwapStandalone : public MainThreadSwapCancel
+{
+  protected:
+    MainThreadSwapStandalone() { m_StandaloneHosted = true; }
 };
 
 } // namespace
 
 TEST_F(MainThreadSwapCancel, CancelEndsTheWaitForTheMainThread)
 {
-    // This thread plays the editor's main thread: marked, so the swap stage
-    // does not pump the queue inline, and busy, so it never pumps it either.
+    // This thread plays the editor's main thread: Initialize marked it, so the
+    // swap stage does not pump the queue inline, and it is busy, so it never
+    // pumps it either.
+    ASSERT_TRUE(EngineCore::GetInstance().IsMainThread());
     auto& scriptManager = EngineCore::GetInstance().GetScriptManager();
-    scriptManager.MarkMainThread();
     ASSERT_EQ(scriptManager.GetMainThreadTaskCount(), 0u);
 
     JobSystem::WorkStealingThreadPool pool(1);
     auto cancellation = std::make_shared<HotReloadCancellation>();
-    auto swap = pool.Submit(std::make_unique<MainThreadSwapTask>(&pool, "GameEngine.Scripts.dll", nullptr,
+    auto swap = pool.Submit(std::make_unique<MainThreadSwapTask>(&pool, "GameEngine.Scripts.dll",
                                                                  std::make_shared<PreloadSync>(), nullptr, cancellation));
     ASSERT_TRUE(swap.IsValid());
 
@@ -100,4 +114,22 @@ TEST_F(MainThreadSwapCancel, CancelEndsTheWaitForTheMainThread)
                                      << " ms for the main thread after its run was cancelled";
     std::chrono::milliseconds swapDuration{};
     EXPECT_FALSE(swap.TryGetResult(swapDuration)) << "a cancelled swap must not publish a swap duration";
+}
+
+TEST_F(MainThreadSwapStandalone, TheSwapStagePumpsTheQueueItselfWhenNoFrameLoopRuns)
+{
+    ASSERT_TRUE(EngineCore::GetInstance().IsStandaloneHosted());
+    auto& scriptManager = EngineCore::GetInstance().GetScriptManager();
+    ASSERT_EQ(scriptManager.GetMainThreadTaskCount(), 0u);
+
+    JobSystem::WorkStealingThreadPool pool(1);
+    auto swap = pool.Submit(std::make_unique<MainThreadSwapTask>(&pool, "GameEngine.Scripts.dll",
+                                                                 std::make_shared<PreloadSync>(), nullptr,
+                                                                 std::make_shared<HotReloadCancellation>()));
+    ASSERT_TRUE(swap.IsValid());
+    // Returns after the stage's 5 s main-thread timeout, when it pumps the queue itself.
+    swap.Wait();
+
+    EXPECT_EQ(scriptManager.GetMainThreadTaskCount(), 0u)
+        << "the swap stage left its swap queued for a main thread that never pumps";
 }

@@ -72,7 +72,7 @@ std::optional<MarkupFootprint> RegionFootprint(const ECS::World& world, ECS::Ent
     placed.reserve(data->ClosedPolygonXZ.size());
     for (const Vector2& point : data->ClosedPolygonXZ)
         placed.push_back(PlaceXZ(matrix, point.x, 0.0f, point.y));
-    footprint.Ring = DecimateRegionRing(placed);
+    footprint.Ring = DecimateRegionRing(placed, kMaxRegionKnots);
     return footprint;
 }
 

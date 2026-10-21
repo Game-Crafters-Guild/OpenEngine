@@ -266,6 +266,8 @@ TEST(RenderPipelineCompiler, MissingShaderPkgFileIsError)
     const auto bp = CompileText(json);
     EXPECT_TRUE(bp.HasErrors()) << IssuesToString(bp);
     EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Error, "could not be loaded")) << IssuesToString(bp);
+    // The error states the fix: a pipeline that names a removed shader is repaired by the user.
+    EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Error, "or delete the pass")) << IssuesToString(bp);
 }
 
 TEST(RenderPipelineCompiler, ReflectionSkippedWhenResolverUnconfigured)
@@ -832,12 +834,12 @@ TEST(RenderPipelineCompiler, PassesFeedingTheDepthPrepassAreDeclaredAheadOfIt)
 TEST(RenderPipelineCompilerFleet, AllRepoBlueprintsCompileWithoutErrors)
 {
 #ifndef GE_RENDERER_REPO_ROOT
-    GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined";
+    FAIL() << "GE_RENDERER_REPO_ROOT must name the shipped blueprint source tree";
 #else
     namespace fs = std::filesystem;
     const fs::path root = GE_RENDERER_REPO_ROOT;
     const std::vector<fs::path> roots = {
-        root / "Assets",
+        root / "Engine" / "Assets",
         root / "Tests" / "Projects",
         root / "Tests" / "EditorHarness",
         root / "Tools" / "Web",
@@ -855,8 +857,9 @@ TEST(RenderPipelineCompilerFleet, AllRepoBlueprintsCompileWithoutErrors)
     for (const auto& r : roots)
     {
         std::error_code ec;
-        if (!fs::exists(r, ec))
-            continue;
+        ASSERT_TRUE(fs::is_directory(r, ec))
+            << "Missing or unreadable shipped folder: " << r.generic_string()
+            << " (" << ec.message() << ")";
         for (auto it = fs::recursive_directory_iterator(r, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec))
         {
@@ -1332,7 +1335,7 @@ TEST(RenderPipelineCompiler, InputGatesWarnUnlessAnInputIsGatedOnASettingsGate)
 TEST(RenderPipelineCompiler, ForwardPlusCloudPassesMatchCookedShaderSource)
 {
     const auto path = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
-                      "Assets/RenderPipelines/ForwardPlus.rendergraph";
+                      "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph";
     std::ifstream stream(path);
     ASSERT_TRUE(stream.is_open()) << path;
     const auto document = nlohmann::json::parse(stream);

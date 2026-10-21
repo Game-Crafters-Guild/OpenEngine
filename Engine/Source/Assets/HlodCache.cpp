@@ -110,6 +110,7 @@ uint64 ComputeClusterSourceHash(std::span<const BakedMemberRef> members) {
             h = Hashing::Fnv1a64Value(h, q);
         }
         h = Hashing::Fnv1a64Value(h, m.ChosenLod);
+        h = Hashing::Fnv1a64Value(h, m.RenderLayers.Bits);
     }
     return h;
 }
@@ -166,6 +167,7 @@ void WriteMember(std::ostream& os, const BakedMemberRef& m) {
     os.write(reinterpret_cast<const char*>(m.Transform), sizeof(m.Transform));
     WriteScalar(os, m.ChosenLod);
     WriteScalar(os, m.CastsShadow);
+    WriteScalar(os, m.RenderLayers.Bits);
 }
 
 // Read a single submesh, fully bounds-validated. Returns false → Corrupt.
@@ -233,7 +235,8 @@ bool ReadMember(const char* data, std::size_t size, std::size_t& cursor, BakedMe
     std::memcpy(out.Transform, data + cursor, sizeof(out.Transform));
     cursor += sizeof(out.Transform);
     return ReadScalar(data, size, cursor, out.ChosenLod) &&
-           ReadScalar(data, size, cursor, out.CastsShadow);
+           ReadScalar(data, size, cursor, out.CastsShadow) &&
+           ReadScalar(data, size, cursor, out.RenderLayers.Bits);
 }
 
 } // namespace
@@ -270,6 +273,7 @@ bool WriteHlodCache(const std::filesystem::path& file, const HlodBakedScene& sce
             os.write(reinterpret_cast<const char*>(cluster.BoundsMin), sizeof(cluster.BoundsMin));
             os.write(reinterpret_cast<const char*>(cluster.BoundsMax), sizeof(cluster.BoundsMax));
             WriteScalar(os, cluster.ClusterSourceHash);
+            WriteScalar(os, cluster.RenderLayers.Bits);
             WriteScalar(os, static_cast<uint32>(cluster.Members.size()));
             for (const BakedMemberRef& m : cluster.Members)
                 WriteMember(os, m);
@@ -347,6 +351,7 @@ HlodCacheStatus ReadHlodCache(const std::filesystem::path& file,
         std::memcpy(cluster.BoundsMax, data + cursor, sizeof(cluster.BoundsMax));
         cursor += sizeof(cluster.BoundsMax);
         if (!ReadScalar(data, size, cursor, cluster.ClusterSourceHash) ||
+            !ReadScalar(data, size, cursor, cluster.RenderLayers.Bits) ||
             !ReadScalar(data, size, cursor, memberCount))
             return HlodCacheStatus::Corrupt;
         if (memberCount > kMaxMembersPerCluster)

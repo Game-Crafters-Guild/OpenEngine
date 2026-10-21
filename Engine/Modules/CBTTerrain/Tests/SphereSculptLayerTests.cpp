@@ -423,7 +423,9 @@ TEST(SphereSculptLayer, DabAllocatesExactlyTouchedPages)
         << "the dab must allocate exactly the pages its non-zero texels touch";
     for (uint32_t f = 0; f < kCubeFaceCount; ++f)
         if (f != regions.Rects[0].Face && regions.Count == 1u)
+        {
             EXPECT_EQ(layer.AllocatedPageCountForFace(f), 0u) << "untouched face allocated a page";
+        }
 }
 
 // POOL EXHAUSTION HONESTY: fill a tiny pool, then the next allocating write is REFUSED (one-shot

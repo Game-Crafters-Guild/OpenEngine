@@ -28,6 +28,13 @@ struct MaterialBuildResult
     // Cached output location (typically under <workspace>/.Cache/Shaders/...).
     std::string generatedShaderPkgPath;
 
+    // The key a program index addresses this variant by: a hash of the build's inputs once the
+    // variant key is derived (the material's source identity, the derived variant key, the shader
+    // references and the user keywords in authored order), set before composition and kept on
+    // every later failure; 0 when the build stopped earlier. A cook records it beside the package
+    // it built (ShaderProgramIndex).
+    uint64_t programIndexKey = 0;
+
     // Populated on success.
     std::unique_ptr<ShaderPackage, ShaderPackageDeleter> package;
 
@@ -35,7 +42,10 @@ struct MaterialBuildResult
     // was compiled with. Populated as soon as composition succeeds — including
     // on a later compile failure. The web variant cook re-runs this same text
     // through the browser toolchain (glslc/naga/tint), so it must be the text
-    // the SPIR-V came from rather than a recomposition of it.
+    // the SPIR-V came from rather than a recomposition of it. Empty when the
+    // program came from the context's program index, which composes nothing;
+    // that package then carries no declared-property table either (only the
+    // editor's material inspector reads one).
     std::string composedVertexSource;
     std::string composedFragmentSource;
     std::vector<std::string> composedDefines;
@@ -47,7 +57,8 @@ struct MaterialBuildResult
     // include. Absolute, lexically normal. Populated whenever the build reached
     // the compile service, INCLUDING on stage-compile failure (see
     // ShaderProgramCompileResult::includeClosurePaths); empty when composition
-    // itself failed. Feeds the shader-edit invalidation trigger.
+    // itself failed, and only the package's recorded extras when the program
+    // came from the program index. Feeds the shader-edit invalidation trigger.
     std::vector<std::string> includeClosurePaths;
 };
 

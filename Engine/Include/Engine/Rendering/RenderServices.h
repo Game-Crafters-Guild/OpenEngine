@@ -52,7 +52,6 @@
 #include "Engine/Rendering/PointShadowAtlasPlanner.h"
 #include "Engine/Rendering/VolumetricFogTypes.h"
 #include "Engine/Rendering/AnimationComputePass.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Engine/Rendering/GPUAnimationDataStore.h"
 #include "Engine/Rendering/PerFrameWritePool.h"
 #include "Engine/Rendering/ShaderCompilationCache.h"
@@ -275,6 +274,15 @@ static_assert(offsetof(ForwardLightUBO, uSecondaryCount) == 128);
 static_assert(offsetof(ForwardLightUBO, uSecondaryDirs) == 144);
 static_assert(offsetof(ForwardLightUBO, uSecondaryColors) == 192);
 
+// The directionals the forward pass shades, from a finalized (strongest-first) world light list:
+// the primary (SelectPrimaryDirectional) in out[0], then up to kMaxSecondaryDirectionals
+// secondaries, the next-strongest directionals that emit (castsLight set and DeliveredLuminance
+// above zero). Directionals past the cap are not shaded. Returns how many entries of `out` it
+// filled: 0 when the list has no directional. Every reader of "which directionals light the
+// world" asks here.
+uint32 SelectShadedDirectionals(std::span<const ExtractedLight> sortedLights,
+                                std::array<const ExtractedLight*, kMaxDirectionalLights>& out);
+
 // Fills the directional lanes of the composed LightUBO from a finalized
 // (strongest-first) world light list: primary = SelectPrimaryDirectional
 // (unchanged semantics — its castsShadows flag rides in uLightColorWorld.w),
@@ -392,6 +400,8 @@ class RenderServices
     // by AddWorldPassForView. Forward contributors read these to drive
     // MaterialBinder::BeginPass with the same keyword set the world pass uses.
     std::optional<Rendering::MaterialKeyword> GetWorldPassKeywords(Rendering::ViewId viewId) const;
+    // The base winding the world pass draws entities with (mirrored instances flip it per segment).
+    Rendering::FrontFace GetFrontFace() const { return m_FrontFace; }
 
     // GPU culling pipeline (frustum/HZB). Owned by RenderServices and created
     // during Initialize(); ScheduleViewCullingDispatches drives it per frame
@@ -802,6 +812,17 @@ class RenderServices
         // on SceneColorGrab-keyword passes; the pass declares the Read(Sampled) that
         // forms the copy->draw RAW edge. Invalid = env-cube refraction fallback.
         Rendering::RenderGraph::RGTexture SceneGrab{};
+        // The sky's backdrop (Names::Res::SkyBackdrop, the sky-view LUT or the HDRI), bound as
+        // ge_skyBackdrop for the height fog's colour taken from the sky (HeightFog-keyword
+        // variants). Invalid = black, which the fog reads only under a sky colour source.
+        Rendering::RenderGraph::RGTexture SkyBackdrop{};
+        // The view's froxel volume (Names::Res::VolumetricFog), bound as ge_volumetricFog on
+        // VolumetricFog-keyword passes, which their node sets only when the volume was published.
+        Rendering::RenderGraph::RGTexture VolumetricFog{};
+        // The view's resolved volumetric clouds, bound as ge_volumetricClouds on
+        // VolumetricClouds-keyword passes, which their node sets only when the clouds composited this
+        // frame.
+        Rendering::RenderGraph::RGTexture VolumetricClouds{};
         // DDGI scaled glossy-reflection resolve outputs
         // (DDGIProbeFeature::DeclareGlossyResolveForView), bound as
         // ge_ddgiResolveRough/ge_ddgiResolveGlossy on DDGI-keyword passes.
@@ -1453,7 +1474,10 @@ class RenderServices
         // Last-frame counters (context for the timing splits).
         // On GE_EXTRACTION_FEED fast frames RecordCount/RebuildCount/
         // SkippedCount describe the LAST FULL PASS, not a per-frame walk —
-        // read FastFrame/FeedPatchedCount for what the tick actually did.
+        // read FastFrame/FeedPatchedCount for what the tick actually did. On
+        // a structural delta frame RecordCount still describes the last full
+        // pass; RebuildCount/SkippedCount and DeltaPreparedCount describe the
+        // delta pass.
         uint32_t RecordCount = 0;     // renderable records gathered
         uint32_t SubmissionCount = 0; // per-view submissions produced
         uint32_t RebuildCount = 0;    // records that MISSED the dirty-skip (rebuilt + uploaded)
@@ -1469,6 +1493,8 @@ class RenderServices
         uint32_t WindowTicks = 0;          // ticks currently in the stats window
         uint32_t EscalationReasonBits = 0; // why the full lane ran (0 on fast ticks)
         uint32_t FeedPatchedCount = 0;     // dirty entities patched this fast tick
+        uint32_t DeltaFrame = 0;           // 1 = a structural change took the delta lane
+        uint32_t DeltaPreparedCount = 0;   // renderables the delta lane re-prepared
         uint32_t SubsetRefreshedCount = 0; // always-refresh entities re-prepared this fast tick
         // Pending-transient breakdown at the last full pass (E8). Per-shape so
         // a permanently pinned full lane is attributable in one poll — a
@@ -1477,6 +1503,7 @@ class RenderServices
         uint32_t PendingMaterialLoad = 0;  // material GUID set but not registered yet
         uint32_t PendingPipeline = 0;      // material pipeline still compiling
         uint32_t PendingSentinelIndex = 0; // mesh/material GPU index still the ~0u sentinel
+        uint32_t PendingUnresolvedTransform = 0; // WorldTransform not resolved yet (Version 0)
         // Scene-composition counts (the S0 residual-attribution assertion:
         // "residual ~= CLEANUP" holds only for particle/volume/ocean-free
         // compositions — bench post-processing asserts these are zero before
@@ -2299,6 +2326,8 @@ class RenderServices
     // PerViewResources::WorldPassKeywords). Lets prewarm match the loaded pipeline (IBL in
     // the editor, non-IBL in WASDDemo) instead of guessing.
     Rendering::MaterialKeyword ResolveWorldPassKeywordsForPrewarm() const;
+    // HeightFog when any view's world pass recorded it, None otherwise (ResolveWorldPassKeywordsForPrewarm).
+    Rendering::MaterialKeyword RecordedHeightFogKeyword() const;
 
     Rendering::SamplerHandle m_AreaShadowSampler;
     Rendering::SamplerHandle m_AreaShadowRawSampler;

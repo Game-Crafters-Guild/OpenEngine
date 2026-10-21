@@ -24,9 +24,10 @@ namespace EditorUI
 // test reads them without a layout pass. The action starts hidden; SetAction shows it.
 //
 // A warning (the default) says something is wrong or about to be lost and is drawn in the warning
-// palette; an information notice states how the fields around it behave and is drawn neutral. The
-// kind is one class on the control (inspector-notice-warning, inspector-notice-information) that
-// InspectorNotice.css styles.
+// palette; an information notice states how the fields around it behave and is drawn neutral; an
+// error notice says something failed. The kind is one class on the control
+// (inspector-notice-<kind>) and one on each part (inspector-notice-<part>-<kind>: the plate, the
+// glyph, the title, the text and the action), which InspectorNotice.css styles.
 class InspectorNotice : public UIElement
 {
 public:
@@ -34,6 +35,8 @@ public:
     {
         Warning,
         Information,
+        // Something failed: the error text colour on a red wash.
+        Error,
     };
 
     explicit InspectorNotice(const std::string& text, Kind kind = Kind::Warning);

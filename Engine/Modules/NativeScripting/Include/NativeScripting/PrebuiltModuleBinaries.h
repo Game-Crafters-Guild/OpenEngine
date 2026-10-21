@@ -53,7 +53,9 @@ struct PrebuiltModuleLookup
 
 // Pure filesystem decision: probe <prebuiltRoot>/<platform-dir>/ for the
 // host-fingerprint-matching module DLL and verify the optional engine_abi
-// marker against `hostEngineAbiDigest`. Never loads anything.
+// marker against `hostEngineAbiDigest`. An empty `hostEngineAbiDigest` (an engine
+// that cannot be identified) refuses every prebuilt that ships a marker. Never loads
+// anything.
 PrebuiltModuleLookup FindPrebuiltModule(const std::filesystem::path& prebuiltRoot,
                                         const GE_ToolchainFingerprint& hostFingerprint,
                                         const std::string& moduleName,

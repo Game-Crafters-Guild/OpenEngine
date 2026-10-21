@@ -3347,7 +3347,9 @@ TEST(FenceLayout, CrestPiecesStayRigidOnEveryGrade)
             // exactly as it does on a racked one. Where the span's own basis
             // is orthonormal, the row simply keeps it.
             if (grade != Components::SplineSpanGrade::Sheared)
+            {
                 EXPECT_NEAR(V3::Dot(pose.Up, span.Pose.Up), 1.0f, 1.0e-4f);
+            }
         }
     }
 }
@@ -3530,7 +3532,9 @@ TEST(FenceLayout, CrestRegisteredToItsSpanClosesTheRowAsTheWallsDo)
         }
         // The curve's bare authored points are mitred joints; the ramp has none.
         if (arm.Grade == Components::SplineSpanGrade::Racked)
+        {
             EXPECT_GT(mitredJoints, 0u) << arm.Name;
+        }
     }
 }
 
@@ -4136,7 +4140,9 @@ TEST(FenceLayout, TheClosedSquareMitresItsFourCorners)
         EXPECT_EQ(span.Start.Mitred, span.OrdinalInRun == 0u);
         EXPECT_EQ(span.End.Mitred, span.OrdinalInRun == 1u);
         if (span.End.Mitred)
+        {
             EXPECT_NEAR(std::abs(span.End.TurnRadians), Mathematics::Pi * 0.5f, 1e-4f);
+        }
     }
 }
 

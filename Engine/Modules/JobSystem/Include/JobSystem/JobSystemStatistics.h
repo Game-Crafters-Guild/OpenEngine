@@ -68,7 +68,7 @@ struct JobSystemStatistics
 
     // Jobs dequeued from the compute lanes (GlobalPops + LocalPops + StealPops
     // + BackgroundPops) plus the channel jobs the blocking threads ran. Counts
-    // dequeues, so a handle job the shutdown drain cancelled and a fork stub
+    // dequeues, so a handle job the shutdown drain cancelled and a fork visit
     // whose job a participating Wait already ran are in it.
     uint64 TasksExecuted = 0;
 

@@ -62,7 +62,7 @@
 	height: 16px;
 	min-width: 16px;
 	min-height: 16px;
-	background-image: url("editor:Icons/dot.png");
+	background-image: url("editor:Icons/dot.svg");
 	background-size: 4px 4px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -79,7 +79,7 @@
 	height: 16px;
 	min-width: 16px;
 	min-height: 16px;
-	background-image: url("editor:Icons/dot.png");
+	background-image: url("editor:Icons/dot.svg");
 	background-size: 4px 4px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -92,7 +92,7 @@
 	height: 16px;
 	min-width: 16px;
 	min-height: 16px;
-	background-image: url("editor:Icons/dot.png");
+	background-image: url("editor:Icons/dot.svg");
 	background-size: 4px 4px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -120,7 +120,7 @@
 	height: 16px;
 	min-width: 16px;
 	min-height: 16px;
-	background-image: url("editor:Icons/dot.png");
+	background-image: url("editor:Icons/dot.svg");
 	background-size: 4px 4px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -145,7 +145,7 @@
 	margin-left: -8px;
 	margin-right: 0;
 	align-self: center;
-	background-image: url("editor:Icons/dot.png");
+	background-image: url("editor:Icons/dot.svg");
 	background-size: 4px 4px;
 	background-repeat: no-repeat;
 	background-position: center;

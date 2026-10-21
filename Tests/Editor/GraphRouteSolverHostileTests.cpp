@@ -111,7 +111,7 @@ TEST(GraphRouteSolverHostile, InvertedAndNestedBodies)
 {
     // Left > Right and Top > Bottom: the canvas should never produce it, but the
     // router may not spin or emit a diagonal if it does.
-    const std::vector<Obstacle> bodies{{300.f, 200.f, 100.f, 50.f}, {150.f, -50.f, 350.f, 250.f}};
+    const std::vector<Obstacle> bodies{{{300.f, 200.f, 100.f, 50.f}}, {{150.f, -50.f, 350.f, 250.f}}};
     const RouteRequest request = Hostile(0.f, 0.f, 500.f, 100.f);
     std::vector<Vector2> points;
     const bool solved = SolveOrthogonalRoute(request, bodies, points);

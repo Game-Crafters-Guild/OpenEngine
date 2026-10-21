@@ -9,6 +9,12 @@ const GUID& OceanSurfaceMaterialGuid()
     return guid;
 }
 
+const GUID& OceanSurfaceFogMaterialGuid()
+{
+    static const GUID guid = GUID::Derive(GUID{}, "ocean/default_material/height_fog");
+    return guid;
+}
+
 MaterialDocument BuildOceanSurfaceMaterialDocument()
 {
     MaterialDocument doc{};

@@ -604,7 +604,7 @@ void DockspaceElement::RebuildFromModel() {
 
     // If debug is enabled, ensure overlay is present and updated immediately
     if (DockOverlay::IsDebugZonesEnabled()) {
-        UIElement* overlayEl = FindById("dock-overlay");
+        UIElement* overlayEl = FindById("dock-overlay"_sid);
         DockOverlay* ov = nullptr;
         if (!overlayEl) {
             auto ovNew = std::make_unique<DockOverlay>();
@@ -884,7 +884,7 @@ bool DockspaceElement::ToggleMaximizeLeaf(const std::string& panelId)
 void DockspaceElement::SetDropPreview(const DockDropTarget& target, float containerW, float containerH) {
     if (!m_Model) return;
     // Ensure overlay exists as a child
-    UIElement* overlayEl = FindById("dock-overlay");
+    UIElement* overlayEl = FindById("dock-overlay"_sid);
     DockOverlay* overlay = nullptr;
     if (!overlayEl) {
         auto ov = std::make_unique<DockOverlay>();
@@ -909,7 +909,7 @@ void DockspaceElement::SetDropPreview(const DockDropTarget& target, float contai
 void DockspaceElement::ClearDropPreview() {
     if (DockOverlay::IsDebugZonesEnabled() && m_Model) {
         // Ensure overlay exists and show debug-only zones
-        UIElement* overlayEl = FindById("dock-overlay");
+        UIElement* overlayEl = FindById("dock-overlay"_sid);
         DockOverlay* ov = nullptr;
         if (!overlayEl) {
             auto ovNew = std::make_unique<DockOverlay>();
@@ -926,7 +926,7 @@ void DockspaceElement::ClearDropPreview() {
             ov->SetTargetZones(dt, *m_Model, GetLayoutWidth(), GetLayoutHeight());
         }
     } else {
-        if (UIElement* overlayEl = FindById("dock-overlay")) {
+        if (UIElement* overlayEl = FindById("dock-overlay"_sid)) {
             if (auto* ov = dynamic_cast<DockOverlay*>(overlayEl)) {
                 ov->Clear();
             }

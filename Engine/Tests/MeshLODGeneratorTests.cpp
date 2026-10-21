@@ -2091,7 +2091,9 @@ TEST(AuthoredLODGeneration, GenerateSkipsAuthoredSubmeshWithoutClearing) {
     // Generatable sibling: still gets generated LODs (when meshopt is available).
     EXPECT_FALSE(model.GetMesh(1).HasAuthoredLODs());
     if (IsMeshLODGenerationAvailable())
+    {
         EXPECT_GT(model.GetMesh(1).ExtraLODs.size(), 0u);
+    }
 }
 
 // --- Phase C2a: authored-LOD import sources ------------------------------

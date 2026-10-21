@@ -101,7 +101,7 @@ const std::string& InspectorSection::AssignHeaderIconId(const std::string& id)
     return id;
 }
 
-void InspectorSection::SetHeaderBadge(const std::string& text, const std::string& tooltip)
+void InspectorSection::SetHeaderBadge(const std::string& text, const std::string& tooltip, BadgeKind kind)
 {
     if (!m_HeaderRow)
         return;
@@ -112,8 +112,7 @@ void InspectorSection::SetHeaderBadge(const std::string& text, const std::string
         badge->AddClass("inspector-section-header-badge");
         m_HeaderBadge = badge.get();
 
-        // Insert just before the options affordance so the badge sits on the
-        // right of the title (the title flex-grows and pushes it over).
+        // Insert just before the options affordance so the badge follows the title.
         const auto& children = m_HeaderRow->GetChildren();
         size_t insertIndex = children.size();
         for (size_t i = 0; i < children.size(); ++i)
@@ -129,15 +128,26 @@ void InspectorSection::SetHeaderBadge(const std::string& text, const std::string
 
     m_HeaderBadge->SetText(text);
     m_HeaderBadge->SetTooltip(tooltip);
+    m_HeaderBadge->RemoveClass("inspector-section-header-badge-error");
+    m_HeaderBadge->RemoveClass("inspector-section-header-badge-success");
+    m_HeaderBadge->RemoveClass("inspector-section-header-badge-neutral");
+    if (kind == BadgeKind::Error)
+        m_HeaderBadge->AddClass("inspector-section-header-badge-error");
+    else if (kind == BadgeKind::Success)
+        m_HeaderBadge->AddClass("inspector-section-header-badge-success");
+    else if (kind == BadgeKind::Neutral)
+        m_HeaderBadge->AddClass("inspector-section-header-badge-neutral");
     if (text.empty())
     {
         m_HeaderBadge->AddClass("hidden");
-        m_HeaderRow->RemoveClass("has-header-badge");
+        if (m_TitleLabel)
+            m_TitleLabel->RemoveClass("inspector-section-header-badged");
     }
     else
     {
         m_HeaderBadge->RemoveClass("hidden");
-        m_HeaderRow->AddClass("has-header-badge");
+        if (m_TitleLabel)
+            m_TitleLabel->AddClass("inspector-section-header-badged");
     }
 }
 

@@ -197,7 +197,7 @@ struct HudFixture
         Pointer(x, y, false);
     }
 
-    UIElement* Find(const char* id) { return Host->GetUIManager()->GetRootElement()->FindById(id); }
+    UIElement* Find(StringId id) { return Host->GetUIManager()->GetRootElement()->FindById(id); }
     UIElement* Resolve(uint64_t instanceId) { return Host->GetUIManager()->FindElementByInstanceId(instanceId); }
 
     // Button geometry from the fixture stylesheet: 80x40 at (40,40).
@@ -240,7 +240,7 @@ TEST(GameUIElementHandleTests, StaleInstanceIdUnregisterCannotReachAReplacements
     HudFixture hud(dev.get(), "gameui_handle_arm1", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* first = hud.Find("take-damage");
+    UIElement* first = hud.Find("take-damage"_sid);
     ASSERT_NE(first, nullptr);
     const uint64_t firstInstance = first->GetInstanceId();
 
@@ -254,7 +254,7 @@ TEST(GameUIElementHandleTests, StaleInstanceIdUnregisterCannotReachAReplacements
     GameUI::NotifyGameplayStopped();
     hud.Sync();
 
-    UIElement* replacement = hud.Find("take-damage");
+    UIElement* replacement = hud.Find("take-damage"_sid);
     ASSERT_NE(replacement, nullptr);
     ASSERT_NE(replacement->GetInstanceId(), firstInstance)
         << "fixture precondition: the rebuild must have produced a different element";
@@ -288,7 +288,7 @@ TEST(GameUIElementHandleTests, InstanceIdFailsClosedAfterPlayStop)
     HudFixture hud(dev.get(), "gameui_handle_arm2", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     const uint64_t instanceId = btn->GetInstanceId();
     ASSERT_EQ(hud.Resolve(instanceId), btn);
@@ -316,7 +316,7 @@ TEST(GameUIElementHandleTests, InstanceIdFailsClosedWhenDetachedButAlive)
     HudFixture hud(dev.get(), "gameui_handle_arm3", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     const uint64_t instanceId = btn->GetInstanceId();
     UIElement* parent = btn->GetParent();
@@ -346,7 +346,7 @@ TEST(GameUIElementHandleTests, ReconcilePreservesInstanceIdAndItsSubscription)
     HudFixture hud(dev.get(), "gameui_handle_arm4", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     const uint64_t instanceId = btn->GetInstanceId();
 
@@ -358,11 +358,11 @@ TEST(GameUIElementHandleTests, ReconcilePreservesInstanceIdAndItsSubscription)
     // the added sibling proves the reconcile actually ran.
     hud.HotReload("<uielement class='hud-root'><button id='take-damage' class='btn' />"
                   "<uielement id='added' /></uielement>\n");
-    ASSERT_NE(hud.Find("added"), nullptr) << "fixture precondition: the reconcile must have run";
+    ASSERT_NE(hud.Find("added"_sid), nullptr) << "fixture precondition: the reconcile must have run";
     EXPECT_GT(GameUI::GetBindGeneration(), beforeGeneration)
         << "fixture precondition: the reconcile must bump the generation this arm is about";
 
-    UIElement* after = hud.Find("take-damage");
+    UIElement* after = hud.Find("take-damage"_sid);
     ASSERT_NE(after, nullptr);
     EXPECT_EQ(after->GetInstanceId(), instanceId) << "the reconcile replaced an element it should have reused";
     EXPECT_EQ(hud.Resolve(instanceId), after) << "a preserved element must stay resolvable by its id";
@@ -389,7 +389,7 @@ TEST(GameUIElementHandleTests, ReconcilePreservesASetOnClickSubscription)
     HudFixture hud(dev.get(), "gameui_handle_arm4_setonclick", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    auto* btn = dynamic_cast<Button*>(hud.Find("take-damage"));
+    auto* btn = dynamic_cast<Button*>(hud.Find("take-damage"_sid));
     ASSERT_NE(btn, nullptr) << "fixture precondition: the id must name a Button";
     const uint64_t instanceId = btn->GetInstanceId();
 
@@ -399,11 +399,11 @@ TEST(GameUIElementHandleTests, ReconcilePreservesASetOnClickSubscription)
 
     hud.HotReload("<uielement class='hud-root'><button id='take-damage' class='btn' />"
                   "<uielement id='added' /></uielement>\n");
-    ASSERT_NE(hud.Find("added"), nullptr) << "fixture precondition: the reconcile must have run";
+    ASSERT_NE(hud.Find("added"_sid), nullptr) << "fixture precondition: the reconcile must have run";
     EXPECT_GT(GameUI::GetBindGeneration(), beforeGeneration)
         << "fixture precondition: the reconcile must bump the generation this arm is about";
 
-    auto* after = dynamic_cast<Button*>(hud.Find("take-damage"));
+    auto* after = dynamic_cast<Button*>(hud.Find("take-damage"_sid));
     ASSERT_NE(after, nullptr);
     ASSERT_EQ(after->GetInstanceId(), instanceId)
         << "fixture precondition: the reconcile replaced an element it should have reused";
@@ -444,7 +444,7 @@ TEST(GameUIElementHandleTests, InstanceIdFromAnotherManagerNeverResolvesThroughT
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(
         R"(<uielement id='chrome-root'><button id='chrome-btn' /></uielement>)", chromeRoot));
     chrome.GetUIManager()->SetRoot(std::move(chromeRoot));
-    UIElement* chromeBtn = chrome.GetUIManager()->GetRootElement()->FindById("chrome-btn");
+    UIElement* chromeBtn = chrome.GetUIManager()->GetRootElement()->FindById("chrome-btn"_sid);
     ASSERT_NE(chromeBtn, nullptr);
     const uint64_t chromeInstance = chromeBtn->GetInstanceId();
     ASSERT_EQ(chrome.GetUIManager()->FindElementByInstanceId(chromeInstance), chromeBtn)
@@ -469,7 +469,7 @@ TEST(GameUIElementHandleTests, ClickRequiresTheArmAndNotJustAMouseUp)
     HudFixture hud(dev.get(), "gameui_handle_arm9", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     ASSERT_GT(btn->GetLayoutWidth(), 0.0f) << "button has no layout — the pointer could never hit it";
 
@@ -520,7 +520,7 @@ TEST(GameUIElementHandleTests, APlainElementNeverDispatchesAClickHoweverItIsPres
     HudFixture hud(dev.get(), "gameui_handle_nonbutton", kMixedHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* plain = hud.Find("not-a-button");
+    UIElement* plain = hud.Find("not-a-button"_sid);
     ASSERT_NE(plain, nullptr);
     ASSERT_EQ(dynamic_cast<Button*>(plain), nullptr) << "fixture precondition: must not be a Button";
     ASSERT_GT(plain->GetLayoutWidth(), 0.0f) << "fixture precondition: it must be hittable";
@@ -575,12 +575,12 @@ TEST(GameUIElementHandleTests, ValueAndScrollEventsReachAScriptThroughTheRealExp
     HudFixture hud(dev.get(), "gameui_handle_valueevents", kControlsHud);
     ASSERT_TRUE(hud.Ok);
 
-    auto* slider = dynamic_cast<Slider*>(hud.Find("vol"));
-    auto* checkbox = dynamic_cast<ToggleBase*>(hud.Find("mute"));
-    auto* scroll = dynamic_cast<ScrollView*>(hud.Find("list"));
-    auto* text = dynamic_cast<Field<std::string>*>(hud.Find("name"));
-    UIElement* intField = hud.Find("num");
-    UIElement* plain = hud.Find("plain");
+    auto* slider = dynamic_cast<Slider*>(hud.Find("vol"_sid));
+    auto* checkbox = dynamic_cast<ToggleBase*>(hud.Find("mute"_sid));
+    auto* scroll = dynamic_cast<ScrollView*>(hud.Find("list"_sid));
+    auto* text = dynamic_cast<Field<std::string>*>(hud.Find("name"_sid));
+    UIElement* intField = hud.Find("num"_sid);
+    UIElement* plain = hud.Find("plain"_sid);
     ASSERT_NE(slider, nullptr);
     ASSERT_NE(checkbox, nullptr);
     ASSERT_NE(scroll, nullptr);
@@ -672,11 +672,11 @@ TEST(GameUIElementHandleTests, TypedValueAccessorsRoundTripThroughTheRealExports
     HudFixture hud(dev.get(), "gameui_handle_typedvalues", kControlsHud);
     ASSERT_TRUE(hud.Ok);
 
-    auto* slider = dynamic_cast<Slider*>(hud.Find("vol"));
-    auto* checkbox = dynamic_cast<ToggleBase*>(hud.Find("mute"));
-    auto* scroll = dynamic_cast<ScrollView*>(hud.Find("list"));
-    UIElement* text = hud.Find("name");
-    auto* dropdown = dynamic_cast<Dropdown*>(hud.Find("mode"));
+    auto* slider = dynamic_cast<Slider*>(hud.Find("vol"_sid));
+    auto* checkbox = dynamic_cast<ToggleBase*>(hud.Find("mute"_sid));
+    auto* scroll = dynamic_cast<ScrollView*>(hud.Find("list"_sid));
+    UIElement* text = hud.Find("name"_sid);
+    auto* dropdown = dynamic_cast<Dropdown*>(hud.Find("mode"_sid));
     ASSERT_NE(slider, nullptr);
     ASSERT_NE(checkbox, nullptr);
     ASSERT_NE(scroll, nullptr);
@@ -819,7 +819,7 @@ TEST(GameUIElementHandleTests, TextPayloadSurvivesAMidDispatchWriteThroughTheRea
     constexpr const char* kHud = "<uielement class='hud-root'><textfield id='name' /></uielement>\n";
     HudFixture hud(dev.get(), "gameui_handle_textlifetime", kHud);
     ASSERT_TRUE(hud.Ok);
-    auto* text = dynamic_cast<Field<std::string>*>(hud.Find("name"));
+    auto* text = dynamic_cast<Field<std::string>*>(hud.Find("name"_sid));
     ASSERT_NE(text, nullptr);
     const std::uint64_t id = text->GetInstanceId();
 
@@ -866,7 +866,7 @@ TEST(GameUIElementHandleTests, ReconcileRestoresAuthoredTextButNotStyleOverrides
     HudFixture hud(dev.get(), "gameui_handle_arm5", kLabelHud);
     ASSERT_TRUE(hud.Ok);
 
-    auto* label = dynamic_cast<Label*>(hud.Find("hp-label"));
+    auto* label = dynamic_cast<Label*>(hud.Find("hp-label"_sid));
     ASSERT_NE(label, nullptr);
     const uint64_t instanceId = label->GetInstanceId();
     ASSERT_EQ(label->GetText(), "-- / --") << "fixture precondition: the authored text must have applied";
@@ -935,7 +935,7 @@ TEST(GameUIElementHandleTests, InstanceIdStaysValidWhileOverlayIsSuppressed)
     world.ProcessCommands();
     GameUIHostTestAccess::SyncFromWorld(host, world);
 
-    UIElement* leaf = host.GetUIManager()->GetRootElement()->FindById("ov-leaf");
+    UIElement* leaf = host.GetUIManager()->GetRootElement()->FindById("ov-leaf"_sid);
     ASSERT_NE(leaf, nullptr);
     const uint64_t instanceId = leaf->GetInstanceId();
     ASSERT_TRUE(GameUIHostTestAccess::AnyReadyFullscreenSubtree(host))
@@ -1018,9 +1018,9 @@ TEST(GameUIElementHandleTests, LiveElementsReportTheirOwnTagId)
     ASSERT_TRUE(hud.Ok);
 
     const auto& reg = UIRegistration::ElementFactoryRegistry::Instance();
-    UIElement* btn = hud.Find("btn");
-    UIElement* lbl = hud.Find("lbl");
-    UIElement* plain = hud.Find("plain");
+    UIElement* btn = hud.Find("btn"_sid);
+    UIElement* lbl = hud.Find("lbl"_sid);
+    UIElement* plain = hud.Find("plain"_sid);
     ASSERT_NE(btn, nullptr);
     ASSERT_NE(lbl, nullptr);
     ASSERT_NE(plain, nullptr);
@@ -1045,7 +1045,7 @@ TEST(GameUIElementHandleTests, EachSessionRegistrationIsItsOwnHandlerEntry)
     HudFixture hud(dev.get(), "gameui_handle_refcount", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     const uint64_t instanceId = btn->GetInstanceId();
     ASSERT_EQ(UIEventHandlerAccess::HandlerCount(*btn, kEventButtonClick), 0u)
@@ -1091,7 +1091,7 @@ TEST(GameUIElementHandleTests, UnregisterWithTheWrongEventIdLeavesTheSubscriptio
     HudFixture hud(dev.get(), "gameui_handle_evtscope", kOneButtonHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* btn = hud.Find("take-damage");
+    UIElement* btn = hud.Find("take-damage"_sid);
     ASSERT_NE(btn, nullptr);
     const uint64_t instanceId = btn->GetInstanceId();
 
@@ -1127,7 +1127,7 @@ TEST(GameUIElementHandleTests, PlainElementReceivesPointerEventsOnlyWhenSubscrib
     HudFixture hud(dev.get(), "gameui_handle_pointerevents", kPlainHud);
     ASSERT_TRUE(hud.Ok);
 
-    UIElement* panel = hud.Find("panel");
+    UIElement* panel = hud.Find("panel"_sid);
     ASSERT_NE(panel, nullptr);
     ASSERT_GT(panel->GetLayoutWidth(), 0.0f) << "fixture precondition: it must be hittable";
     const uint64_t instanceId = panel->GetInstanceId();
@@ -1165,4 +1165,48 @@ TEST(GameUIElementHandleTests, PlainElementReceivesPointerEventsOnlyWhenSubscrib
         << "CurrentTarget is what the ABI reports as the event's element instance id";
     EXPECT_FLOAT_EQ(lastMove.X, HudFixture::kInsideX);
     EXPECT_FLOAT_EQ(lastMove.Y, HudFixture::kInsideY);
+}
+
+// GE_GameUI_FindElement with an entity searches that UIDocument's subtree only; with 0 it
+// searches every bound document. The scoped path is FindDocumentRoot(entity)->FindById, so an
+// id that lives in another document, or an entity with no bound document, is NotFound.
+TEST(GameUIElementHandleTests, FindElementWithAnEntitySearchesOnlyThatDocument)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    HudFixture hud(dev.get(), "gameui_handle_scopedfind", kOneButtonHud);
+    ASSERT_TRUE(hud.Ok);
+
+    const auto secondUxml =
+        WriteUxml(hud.Root, "second.uxml", "<uielement><label id='only-second' /></uielement>\n");
+    auto& reg = hud.Assets.GetRegistry();
+    ASSERT_TRUE(reg.RegisterAsset(secondUxml));
+    const GUID secondGuid = reg.GetAssetGUID(secondUxml);
+    hud.Assets.LoadAssetAsync(secondGuid, AssetLoadPriority::Normal).get();
+    Components::UIDocument secondDoc;
+    secondDoc.Layout.Set(secondGuid);
+    const uint64_t second = hud.World->Create<Components::UIDocument>(secondDoc).GetHandle().id;
+    hud.World->ProcessCommands();
+    hud.Sync();
+
+    UIElement* button = hud.Find("take-damage"_sid);
+    UIElement* label = hud.Find("only-second"_sid);
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    uint64_t instanceId = 0;
+    ASSERT_EQ(GE_GameUI_FindElement(hud.Entity, "take-damage", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, button->GetInstanceId());
+    ASSERT_EQ(GE_GameUI_FindElement(second, "only-second", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, label->GetInstanceId());
+    ASSERT_EQ(GE_GameUI_FindElement(0, "only-second", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, label->GetInstanceId());
+
+    EXPECT_EQ(GE_GameUI_FindElement(hud.Entity, "only-second", &instanceId), GE_Result_NotFound)
+        << "a scoped lookup must not reach another document's element";
+    EXPECT_EQ(GE_GameUI_FindElement(second + hud.Entity + 1, "take-damage", &instanceId), GE_Result_NotFound)
+        << "an entity with no bound document has nothing to search";
 }

@@ -71,7 +71,7 @@ bool StageShaderRoot(const fs::path& moduleShaders, const std::string& mountName
 
 } // namespace
 
-// Mirrors Assets/Materials/UnlitWhite.material (World Debug and Shadow Only
+// Mirrors Engine/Assets/Materials/UnlitWhite.material (World Debug and Shadow Only
 // author the same surface).
 TEST(ShippedSurfaceCompose, UnlitSolidComposesThroughRealPipeline)
 {

@@ -173,7 +173,7 @@ PassDepthDecl DeclareTransmissiveWorld(Rendering::IDevice* device, uint32_t samp
     }
     rs.Views().SetCameraData(camId, cd);
     const ViewId viewId = rs.Views().AllocateView("TransView", camId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
     clear.clearColor = true;
     clear.clearColorValue[3] = 1.0f;
@@ -245,7 +245,7 @@ PassDepthDecl DeclareTransmissiveWorld(Rendering::IDevice* device, uint32_t samp
     rec.viewId = viewId;
     rec.meshHandle = mesh;
     rec.material = &glass;
-    rec.renderLayerMask = 1u;
+    rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
     rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&rec, 1u));
     rs.BuildWorldBatchKeys();
 
@@ -298,7 +298,7 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     }
     rs.Views().SetCameraData(camId, cd);
     const ViewId viewId = rs.Views().AllocateView("LateView", camId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
     clear.clearColor = true;
     clear.clearColorValue[3] = 1.0f;
@@ -377,7 +377,7 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     rec.viewId = viewId;
     rec.meshHandle = mesh;
     rec.material = &opaque;
-    rec.renderLayerMask = 1u;
+    rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
     rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&rec, 1u));
     rs.BuildWorldBatchKeys();
 
@@ -582,4 +582,23 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesACopyOfTheViewDept
     }
 
     device->Shutdown();
+}
+
+// A node told what to draw draws only that; a list that names nothing, or names an unknown kind, is refused
+// with the fix, rather than declaring a node that draws nothing.
+TEST(TransmissiveDepthAttachmentTests, DrawsListNamesWhatTheNodeDraws)
+{
+    for (const char* json : {R"({"draws":["glass"]})", R"({"draws":["lateTransparents"]})", R"({})"})
+    {
+        Nodes::TransmissivePassNode node;
+        std::string error;
+        EXPECT_TRUE(node.Initialize("Transmissive", json, &error)) << json << ": " << error;
+    }
+    for (const char* json : {R"({"draws":[]})", R"({"draws":["opaque"]})", R"({"draws":"glass"})"})
+    {
+        Nodes::TransmissivePassNode node;
+        std::string error;
+        EXPECT_FALSE(node.Initialize("Transmissive", json, &error)) << json;
+        EXPECT_NE(error.find("\"glass\""), std::string::npos) << json << ": " << error;
+    }
 }

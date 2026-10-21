@@ -6,6 +6,7 @@
 #include "Input/GamepadFrame.h"
 #include "Input/GamepadPolling.h"
 #include "Input/InputSystem.h"
+#include "Platform/Thread.h"
 #include "Platform/Window.h"
 #include "Core/CpuProfiler.h"
 #include "Core/DebugMetrics.h"
@@ -154,6 +155,8 @@ void Application::RunPlatformLoop() {
 
 bool Application::PollEventsAndTick() {
     if (m_ShouldExit) return false;
+    // A headless application has no window, so there are no events to pump.
+    if (m_Config.Headless) return Tick();
     // Native refresh callbacks run whole frames inside the pump: an uncovered
     // window, and every step of a live resize while the OS holds the pump. A
     // frame that completed there is this step's frame; ticking again would
@@ -268,7 +271,8 @@ bool Application::Tick() {
 	        //    This ensures that input for the current frame is visible to
 	        //    both application logic and engine systems in the same frame.
 	        const auto tPoll0 = std::chrono::high_resolution_clock::now();
-	        RouteGamepadPoll();
+	        if (!m_Config.Headless)
+	            RouteGamepadPoll();
 	        const auto tPoll1 = std::chrono::high_resolution_clock::now();
 	        phases.PollEventsMs = MsBetween(tPoll0, tPoll1);
 	        if (m_InputSystem)
@@ -374,13 +378,19 @@ bool Application::Tick() {
         // empty, 0 or unparsable means no limiter, in every application: with
         // VSync on, present paces the frame, and an application that turns VSync
         // off asked for uncapped frames. A fixed frame rate (SetFixedFrameRate)
-        // ignores GE_FRAME_CAP.
+        // ignores GE_FRAME_CAP. A headless application at a fixed frame rate
+        // holds each frame to that rate: nothing presents, so nothing else paces it.
         //
         // A plain sleep under a coarse timer (common on Windows) quantizes to
         // ~15.6 ms and turns a 60 fps cap into 30 to 40 fps, so the wait below
-        // sleeps most of the remainder and yields for the tail.
+        // sleeps most of the remainder on a precise timer and yields for the tail.
         double targetFps = 0.0;
-        if (!IsFixedFrameRateEnabled())
+        if (IsFixedFrameRateEnabled())
+        {
+            if (m_Config.Headless)
+                targetFps = GetFixedFrameRate();
+        }
+        else
         {
             if (const char* capEnv = std::getenv("GE_FRAME_CAP"))
             {
@@ -409,7 +419,7 @@ bool Application::Tick() {
                 // Sleep most of the remaining time, then spin/yield for the tail to reduce oversleep.
                 if (remaining > 0.002)
                 {
-                    std::this_thread::sleep_for(std::chrono::duration<double>(remaining - 0.001));
+                    Platform::SleepPrecise(std::chrono::duration<double>(remaining - 0.001));
                 }
                 while (std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - m_LastFrameTime).count() < targetFrameTime)
                 {

@@ -1,8 +1,12 @@
 #include "Engine/Rendering/Pipeline/Nodes/AutoExposureNode.h"
 
+#include "Engine/Rendering/Exposure.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
+#include "Engine/Rendering/IncidentLightMeter.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
+#include "Engine/Rendering/Pipeline/ViewExposureCompensation.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/RenderServices.h"
 
@@ -17,6 +21,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <optional>
 
 namespace GameEngine::Engine::Renderer { using namespace ::GameEngine::Rendering; }
 
@@ -30,48 +35,11 @@ constexpr uint32_t kBinCount = 256u;
 // Two histograms, geometry then sky (far plane); layout owned by auto_exposure_histogram.comp.
 constexpr uint32_t kHistogramCount = 2u;
 constexpr uint32_t kHistogramBytes = kHistogramCount * kBinCount * sizeof(uint32_t); // 2048
-// {float scale; uint valid; float pad0,pad1} — layout owned by the CPU mirror.
+// {float scale; uint valid; float preExposure, previousPreExposure} — layout owned by the CPU mirror.
 constexpr uint32_t kExposureStateBytes = ExposureReadbackFeature::kStateBytes;
 constexpr float kMaxAdaptDt = 0.1f;                                // clamp dt so a hitch can't snap exposure
 
-// The canonical publish name. New rendergraphs declare "ExposureHistory" as a blueprint resource
-// (perView 16-byte Storage buffer, zeroOnCreate) and consumers materialize it on first resolve;
-// this node's own import below exists only for rendergraphs that predate the resource entry.
 constexpr const char* kExposurePublishName = Names::Res::ExposureHistory;
-constexpr const char* kHistoryPrefix = "Pipeline.AutoExposure.History.View"; // + per-view id suffix
-
-// Legacy-graph fallback: import the persistent per-view exposure-history buffer and publish it as
-// "ExposureHistory". Persistent (never transient) because transient pool buffers alias across
-// frames and would corrupt the cross-frame adaptation state; zero-filled on creation so a reader
-// can never observe recycled pool garbage as a plausible exposure. Returns an invalid RGBuffer if
-// the import fails.
-RenderGraph::RGBuffer ImportAndPublishExposureHistory(ViewDeclare& d)
-{
-    const std::string viewSuffix = std::to_string(static_cast<uint32_t>(d.View.id));
-
-    Rendering::BufferDesc expDesc{};
-    expDesc.size = kExposureStateBytes;
-    expDesc.usage = static_cast<uint32_t>(BufferUsage::Storage) |
-                    static_cast<uint32_t>(BufferUsage::TransferDst);
-    expDesc.memoryUsage = BufferMemoryUsage::DeviceLocal;
-    const std::string expName = std::string(kHistoryPrefix) + viewSuffix;
-    expDesc.debugName = expName.c_str();
-    bool needsZeroInit = false;
-    const RenderGraph::RGBuffer exposure =
-        d.Frame.ImportPersistentBuffer(expName.c_str(), expDesc, &needsZeroInit);
-    if (!exposure.IsValid())
-        return {};
-    if (needsZeroInit)
-        d.Frame.AddBufferZeroInit(exposure, ("ZeroInit." + expName).c_str());
-
-    PipelineBufferBindingRG eb{};
-    eb.Buffer = d.Frame.PhysicalBuffer(exposure);
-    eb.Offset = 0;
-    eb.Size = kExposureStateBytes;
-    eb.Graph = exposure;
-    d.PublishBuffer(kExposurePublishName, eb);
-    return exposure;
-}
 }
 
 bool AutoExposureNode::Initialize(std::string nodeId, std::string nodeJson, std::string* /*outError*/)
@@ -103,38 +71,28 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
     // The exposure-history buffer must always exist as a resolvable resource, even when
     // auto-exposure is off: the Tonemap node unconditionally declares it, and FullscreenShaderNode
     // SKIPS ITS ENTIRE STAGE if a declared buffer fails to resolve — so a missing buffer would drop
-    // tonemapping on every scene. Rendergraphs declare "ExposureHistory" in their resources section
-    // (materialized on first resolve, order-independent); for older graphs without the entry, fall
-    // back to importing + publishing it here. The buffer is PERSISTENT either way: transient pool
-    // buffers alias across frames and would corrupt the cross-frame adaptation state.
-    RenderGraph::RGBuffer exposure;
-    const PipelineBufferBindingRG resolved = d.ResolveBuffer(kExposurePublishName);
-    if (resolved.IsValid() && resolved.Graph.IsValid())
-    {
-        exposure = resolved.Graph; // blueprint resource (or an earlier consumer's materialization)
-        // 1b under-size guard: a blueprint that declares "ExposureHistory" smaller
-        // than this node's fixed state struct would silently truncate the
-        // adaptation state on write. The materializer sizes buffers from the
-        // blueprint and can't know a consumer's stride, so the consuming node is
-        // the practical authority. Warn-once (persistent, so it can't spam per
-        // frame) keyed on the single buffer this node consumes.
-        if (resolved.Size < kExposureStateBytes && !m_WarnedExposureHistoryUnderSize)
-        {
-            m_WarnedExposureHistoryUnderSize = true;
-            Logger::Log::Warning(
-                "AutoExposureNode '{}': resolved '{}' buffer is {} bytes but the exposure state "
-                "needs {} — declared size is too small; adaptation state will be truncated",
-                m_Id, kExposurePublishName, resolved.Size, kExposureStateBytes);
-        }
-    }
-    else
-        exposure = ImportAndPublishExposureHistory(d); // no resource entry: own it (legacy graphs)
-    if (!exposure.IsValid())
+    // tonemapping on every scene. ResolveViewExposureHistory materializes the graph's resource, or
+    // imports and publishes one for a graph that declares none.
+    const PipelineBufferBindingRG resolved = ResolveViewExposureHistory(d);
+    if (!resolved.IsValid())
         return;
+    // Under-size guard: a blueprint that declares "ExposureHistory" smaller than the state struct
+    // would silently truncate the adaptation state on write. The materializer sizes buffers from
+    // the blueprint and cannot know a consumer's stride, so the consuming node is the practical
+    // authority. Warn-once (persistent, so it cannot spam per frame).
+    if (resolved.Size < kExposureStateBytes && !m_WarnedExposureHistoryUnderSize)
+    {
+        m_WarnedExposureHistoryUnderSize = true;
+        Logger::Log::Warning(
+            "AutoExposureNode '{}': resolved '{}' buffer is {} bytes but the exposure state "
+            "needs {} — declared size is too small; adaptation state will be truncated",
+            m_Id, kExposurePublishName, resolved.Size, kExposureStateBytes);
+    }
+    const RenderGraph::RGBuffer exposure = resolved.Graph;
 
-    // The metering passes only run when auto-exposure is the active mode (and the shaders loaded /
-    // the HDR source exists). When off, the published buffer is simply not updated and the tonemap
-    // ignores it (useAutoExposure == 0).
+    // The metering passes only run when auto-exposure is the active mode (and the shaders loaded).
+    // When off, the published buffer is simply not updated and the tonemap ignores it
+    // (useAutoExposure == 0).
     if (!m_HistogramPipelineId.IsValid() || !m_ResolvePipelineId.IsValid())
         return;
     const PostProcessSettings settings =
@@ -142,51 +100,24 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
     if (!settings.IsAutoExposureActive())
         return;
 
-    // Meter the configured input (pre-exposure, so the histogram sees un-exposed scene luminance —
-    // no exposure feedback loop). Shipped graphs point this at the last pre-bloom chain value so
-    // bloom energy and HDR grading don't bias adaptation.
-    const RenderGraph::RGTexture hdr = d.ResolveTexture(m_InputKey);
-    if (!hdr.IsValid())
+    // The lights meter reads the light falling on the world, never the frame: no histogram pass.
+    // Until the environment's first reading lands there is nothing to meter, so the resolve does not
+    // run and the history holds (a fresh view falls back to its static exposure in the tonemap).
+    const bool lightsMeter =
+        settings.AutoExposureMeter == static_cast<int32>(Components::ExposureMeter::Lights);
+    float lightsLogLuminance = 0.0f;
+    if (lightsMeter)
     {
-        // Loud once: a typo'd/missing input silently freezing eye adaptation
-        // is otherwise undiagnosable from the outside.
-        if (!m_WarnedUnresolvedInput)
-        {
-            m_WarnedUnresolvedInput = true;
-            Logger::Log::Warning(
-                "AutoExposureNode '{}': metering input '{}' does not resolve in this rendergraph; "
-                "auto-exposure will not update",
-                m_Id, m_InputKey);
-        }
-        return;
+        const std::optional<IncidentLight> light = MeasureIncidentLight(
+            d.Services.GetWorldLights(d.View.worldId), ReadIncidentEnvironment(d.Services));
+        if (!light)
+            return;
+        lightsLogLuminance = Rendering::MeteredLogLuminance(IncidentLightEv100(*light));
     }
-    // The view's resolved depth splits the frame into geometry and sky (the far plane). The depth
-    // after the world and the water when the ocean surface step or the fog resolved it this frame
-    // (the sea is scene, not sky), else the view's resolved depth, which every shipped rendergraph
-    // publishes.
-    RenderGraph::RGTexture depth = d.ResolveTexture(Names::View::DepthResolvedPostOcean);
-    if (!depth.IsValid())
-        depth = d.ResolveTexture(Names::View::DepthResolved);
-    if (!depth.IsValid())
-    {
-        if (!m_WarnedUnresolvedDepth)
-        {
-            m_WarnedUnresolvedDepth = true;
-            Logger::Log::Warning(
-                "AutoExposureNode '{}': '{}' does not resolve in this rendergraph; auto-exposure "
-                "needs the view depth to tell the sky from the scene and will not update",
-                m_Id, Names::View::DepthResolved);
-        }
-        return;
-    }
-    const auto& hd = d.Frame.Graph().ResourceDesc(hdr.Id);
-    const uint32_t w = hd.Width;
-    const uint32_t h = hd.Height;
-    if (w == 0 || h == 0)
-        return;
 
     // Per-view histogram (also persistent; zero-filled at the top of the histogram
     // pass each frame, so first-use garbage and pool-recycled contents never meter).
+    // The resolve binds it under either meter; only the picture meter fills and reads it.
     const std::string viewSuffix = std::to_string(static_cast<uint32_t>(d.View.id));
     Rendering::BufferDesc histDesc{};
     histDesc.size = kHistogramBytes;
@@ -200,76 +131,19 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
     if (!histogram.IsValid())
         return;
 
+    if (!lightsMeter && !DeclareHistogramPass(d, histogram, exposure))
+        return;
+
+    const PipelineBufferBindingRG compensation = ResolveViewExposureCompensation(d);
+    if (!compensation.IsValid())
+        return;
+
     const float dt = m_DeltaTimeSeconds;
+    const uint32_t exposureMeter = lightsMeter ? 1u : 0u;
 
-    // Pass 1: HDR colour + depth -> geometry and sky log-luminance histograms (atomicAdd into the
-    // persistent buffer).
-    d.Frame.AddComputePass(
-        d.PassName("AutoExposureHistogram").c_str(), Rendering::PassPhase::kDefault,
-        [&](RenderGraph::RGPassBuilder& p)
-        {
-            p.Read(hdr, RenderGraph::RGTextureRead::Sampled);
-            p.Read(depth, RenderGraph::RGTextureRead::Sampled);
-            p.Write(histogram, RenderGraph::RGBufferWrite::Storage);
-        },
-        [this, hdr, depth, histogram, w, h](RenderGraph::RGContext& ctx)
-        {
-            auto* dev = ctx.GetDevice();
-            auto* cl = ctx.Cmd;
-            if (!dev || !cl)
-                return;
-            const auto hdrTex = ctx.GetTexture(hdr);
-            const auto depthTex = ctx.GetTexture(depth);
-            const auto histBuf = ctx.GetBuffer(histogram);
-            if (!hdrTex.IsValid() || !depthTex.IsValid() || !histBuf.IsValid() || !m_Sampler.IsValid())
-                return; // skip rather than dispatch with an unwritten texture binding
-
-            // Zero the histogram before accumulating: the persistent pool buffer is
-            // never zero-initialized on creation and can be recycled from an evicted
-            // view with stale counts — an end-of-frame clear cannot cover either.
-            cl->Barrier(Rendering::ResourceBarrier::CreateBufferBarrier(
-                histBuf, Rendering::ResourceState::UnorderedAccess,
-                Rendering::ResourceState::CopyDest));
-            cl->FillBuffer(histBuf, 0, kHistogramBytes, 0u);
-            cl->Barrier(Rendering::ResourceBarrier::CreateBufferBarrier(
-                histBuf, Rendering::ResourceState::CopyDest,
-                Rendering::ResourceState::UnorderedAccess));
-
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_HistogramSet0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "AutoExposureHistogram.Set0";
-            auto ds = dev->CreateDescriptorSet(dsDesc);
-
-            if (m_HistogramMeta)
-            {
-                NamedDescriptorWriter wd(dev, ds, *m_HistogramMeta, 0);
-                wd.AddCombinedImageSampler("uHDRColor", hdrTex, m_Sampler);
-                wd.AddCombinedImageSampler("uSceneDepth", depthTex, m_Sampler);
-                wd.AddStorageBuffer("HistogramBuffer", histBuf, 0, kHistogramBytes);
-                wd.Flush();
-            }
-
-            PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_HistogramPipelineId);
-            if (!pipe.IsValid())
-                return;
-            cl->SetPipeline(pipe);
-            if (m_HistogramMeta && !m_HistogramMeta->PushConstants.empty())
-            {
-                NamedPushConstantWriter pcw(*m_HistogramMeta, m_HistogramMeta->PushConstants[0].Name);
-                if (pcw.IsValid())
-                {
-                    pcw.Add("pixelCountX", w);
-                    pcw.Add("pixelCountY", h);
-                    pcw.Flush(cl);
-                }
-            }
-            cl->BindDescriptorSet(0, ds, pipe);
-            cl->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
-        });
-
-    // Pass 2: histograms -> metered average (geometry, with the sky as a ceiling) -> adapted LINEAR
-    // exposure (single thread). Reads the histograms + previous exposure, writes the new exposure.
+    // Pass 2: the metered average (picture: the histograms, geometry with the sky as a ceiling; lights:
+    // the incident reading) -> adapted LINEAR exposure (single thread). Reads the histograms + previous
+    // exposure, writes the new exposure.
     d.Frame.AddComputePass(
         d.PassName("AutoExposureResolve").c_str(), Rendering::PassPhase::kDefault,
         [&](RenderGraph::RGPassBuilder& p)
@@ -277,8 +151,9 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
             p.Read(histogram, RenderGraph::RGBufferRead::Storage);
             p.Read(exposure, RenderGraph::RGBufferRead::Storage);
             p.Write(exposure, RenderGraph::RGBufferWrite::Storage);
+            p.Write(compensation.Graph, RenderGraph::RGBufferWrite::Storage);
         },
-        [this, histogram, exposure, settings, dt](RenderGraph::RGContext& ctx)
+        [this, histogram, exposure, compensation, settings, dt, exposureMeter, lightsLogLuminance](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
             auto* cl = ctx.Cmd;
@@ -299,6 +174,7 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
                 NamedDescriptorWriter wd(dev, ds, *m_ResolveMeta, 0);
                 wd.AddStorageBuffer("HistogramBuffer", histBuf, 0, kHistogramBytes);
                 wd.AddStorageBuffer("state", expBuf, 0, kExposureStateBytes);
+                wd.AddStorageBuffer("uCompensation", compensation.Buffer, compensation.Offset, compensation.Size);
                 wd.Flush();
             }
 
@@ -316,6 +192,10 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
                     {
                         if (member.Name == "deltaTime")
                             pcw.Add("deltaTime", clampedDt);
+                        else if (member.Name == "exposureMeter")
+                            pcw.Add("exposureMeter", exposureMeter);
+                        else if (member.Name == "lightsLogLuminance")
+                            pcw.Add("lightsLogLuminance", lightsLogLuminance);
                         else
                             (void)settings.TryWriteField(member.Name, pcw);
                     }
@@ -357,6 +237,124 @@ void AutoExposureNode::DeclareForView(ViewDeclare& d)
                 });
         }
     }
+}
+
+bool AutoExposureNode::DeclareHistogramPass(ViewDeclare& d, RenderGraph::RGBuffer histogram,
+                                            RenderGraph::RGBuffer exposure)
+{
+    // Meter the configured input (pre-exposure, so the histogram sees un-exposed scene luminance —
+    // no exposure feedback loop). Shipped graphs point this at the last pre-bloom chain value so
+    // bloom energy and HDR grading don't bias adaptation.
+    const RenderGraph::RGTexture hdr = d.ResolveTexture(m_InputKey);
+    if (!hdr.IsValid())
+    {
+        // Loud once: a typo'd/missing input silently freezing eye adaptation
+        // is otherwise undiagnosable from the outside.
+        if (!m_WarnedUnresolvedInput)
+        {
+            m_WarnedUnresolvedInput = true;
+            Logger::Log::Warning(
+                "AutoExposureNode '{}': metering input '{}' does not resolve in this rendergraph; "
+                "auto-exposure will not update",
+                m_Id, m_InputKey);
+        }
+        return false;
+    }
+    // The view's resolved depth splits the frame into geometry and sky (the far plane). The depth
+    // after the world and the water when the ocean surface step or the fog resolved it this frame
+    // (the sea is scene, not sky), else the view's resolved depth, which every shipped rendergraph
+    // publishes.
+    RenderGraph::RGTexture depth = d.ResolveTexture(Names::View::DepthResolvedPostOcean);
+    if (!depth.IsValid())
+        depth = d.ResolveTexture(Names::View::DepthResolved);
+    if (!depth.IsValid())
+    {
+        if (!m_WarnedUnresolvedDepth)
+        {
+            m_WarnedUnresolvedDepth = true;
+            Logger::Log::Warning(
+                "AutoExposureNode '{}': '{}' does not resolve in this rendergraph; auto-exposure "
+                "needs the view depth to tell the sky from the scene and will not update",
+                m_Id, Names::View::DepthResolved);
+        }
+        return false;
+    }
+    const auto& hd = d.Frame.Graph().ResourceDesc(hdr.Id);
+    const uint32_t w = hd.Width;
+    const uint32_t h = hd.Height;
+    if (w == 0 || h == 0)
+        return false;
+
+    // Pass 1: HDR colour + depth -> geometry and sky log-luminance histograms (atomicAdd into the
+    // persistent buffer). The exposure state supplies the pre-exposure the colour is stored at.
+    d.Frame.AddComputePass(
+        d.PassName("AutoExposureHistogram").c_str(), Rendering::PassPhase::kDefault,
+        [&](RenderGraph::RGPassBuilder& p)
+        {
+            p.Read(hdr, RenderGraph::RGTextureRead::Sampled);
+            p.Read(depth, RenderGraph::RGTextureRead::Sampled);
+            p.Read(exposure, RenderGraph::RGBufferRead::Storage);
+            p.Write(histogram, RenderGraph::RGBufferWrite::Storage);
+        },
+        [this, hdr, depth, histogram, exposure, w, h](RenderGraph::RGContext& ctx)
+        {
+            auto* dev = ctx.GetDevice();
+            auto* cl = ctx.Cmd;
+            if (!dev || !cl)
+                return;
+            const auto hdrTex = ctx.GetTexture(hdr);
+            const auto depthTex = ctx.GetTexture(depth);
+            const auto histBuf = ctx.GetBuffer(histogram);
+            const auto expBuf = ctx.GetBuffer(exposure);
+            if (!hdrTex.IsValid() || !depthTex.IsValid() || !histBuf.IsValid() || !expBuf.IsValid() ||
+                !m_Sampler.IsValid())
+                return; // skip rather than dispatch with an unwritten binding
+
+            // Zero the histogram before accumulating: the persistent pool buffer is
+            // never zero-initialized on creation and can be recycled from an evicted
+            // view with stale counts — an end-of-frame clear cannot cover either.
+            cl->Barrier(Rendering::ResourceBarrier::CreateBufferBarrier(
+                histBuf, Rendering::ResourceState::UnorderedAccess,
+                Rendering::ResourceState::CopyDest));
+            cl->FillBuffer(histBuf, 0, kHistogramBytes, 0u);
+            cl->Barrier(Rendering::ResourceBarrier::CreateBufferBarrier(
+                histBuf, Rendering::ResourceState::CopyDest,
+                Rendering::ResourceState::UnorderedAccess));
+
+            DescriptorSetDesc dsDesc{};
+            dsDesc.layout = m_HistogramSet0Layout;
+            dsDesc.transient = true;
+            dsDesc.debugName = "AutoExposureHistogram.Set0";
+            auto ds = dev->CreateDescriptorSet(dsDesc);
+
+            if (m_HistogramMeta)
+            {
+                NamedDescriptorWriter wd(dev, ds, *m_HistogramMeta, 0);
+                wd.AddCombinedImageSampler("uHDRColor", hdrTex, m_Sampler);
+                wd.AddCombinedImageSampler("uSceneDepth", depthTex, m_Sampler);
+                wd.AddStorageBuffer("HistogramBuffer", histBuf, 0, kHistogramBytes);
+                wd.AddStorageBuffer("uExposure", expBuf, 0, kExposureStateBytes);
+                wd.Flush();
+            }
+
+            PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_HistogramPipelineId);
+            if (!pipe.IsValid())
+                return;
+            cl->SetPipeline(pipe);
+            if (m_HistogramMeta && !m_HistogramMeta->PushConstants.empty())
+            {
+                NamedPushConstantWriter pcw(*m_HistogramMeta, m_HistogramMeta->PushConstants[0].Name);
+                if (pcw.IsValid())
+                {
+                    pcw.Add("pixelCountX", w);
+                    pcw.Add("pixelCountY", h);
+                    pcw.Flush(cl);
+                }
+            }
+            cl->BindDescriptorSet(0, ds, pipe);
+            cl->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        });
+    return true;
 }
 
 void AutoExposureNode::LoadShaders(IDevice* device)

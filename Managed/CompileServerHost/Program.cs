@@ -26,7 +26,7 @@ namespace GameEngine.CompileServerHost;
 // ImplicitUsings, Nullable: the generated csproj's AllowUnsafeBlocks, ImplicitUsings
 // and Nullable, so the live compile matches `dotnet build` of that csproj; absent
 // means false, which is how a request from before these fields compiles.
-internal record BuildRequest(string ProjectRoot, string[] ChangedFiles, string[] AffectedFiles, string[] AllFiles, string PreferredStrategy, bool ForceFull, string? Config = null, string? Tfm = null, string? EngineBinDir = null, string? AssemblyName = null, string[]? References = null, string[]? Defines = null, bool AllowUnsafe = false, bool ImplicitUsings = false, bool Nullable = false);
+internal record BuildRequest(string ProjectRoot, string[] ChangedFiles, string[] AffectedFiles, string[] AllFiles, string PreferredStrategy, bool ForceFull, string? Config = null, string? Tfm = null, string? EngineBinDir = null, string? AssemblyName = null, string[]? References = null, string[]? Defines = null, bool AllowUnsafe = false, bool ImplicitUsings = false, bool Nullable = false, string[]? ScriptSurface = null);
 internal record Diagnostic(string Severity, string Code, string FileUtf8, int Line, int Column, string MessageUtf8);
 internal record BuildResponse(bool Success, Diagnostic[] Warnings, Diagnostic[] Errors, byte[]? AssemblyBytes, byte[]? PdbBytes);
 
@@ -367,16 +367,23 @@ internal class Program
 	}
 
 	/// <summary>
-	/// Engine-managed DLLs referenced in addition to the TPA set, in reference order:
-	/// ABI modules (sorted), then the core engine-managed assemblies.
+	/// Engine-managed DLLs referenced in addition to the TPA set, in reference order: the request's
+	/// script surface assemblies (the engine's ScriptingPaths::kScriptSurfaceAssemblyFileNames, sent as
+	/// file names in EngineBinDir), then the core engine-managed assemblies.
 	/// </summary>
-	private static List<string> EnumerateEngineReferenceCandidates(string engineBinDir)
+	private static List<string> EnumerateEngineReferenceCandidates(string engineBinDir, string[]? scriptSurface)
 	{
 		var candidates = new List<string>();
 		try
 		{
-			candidates.AddRange(Directory.EnumerateFiles(engineBinDir, "GameEngine.*.ABI.dll", SearchOption.TopDirectoryOnly)
-				.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+			// A request with an EngineBinDir always names the surface (refused above otherwise); one
+			// whose bin directory was inferred from its ProjectRoot names none and gets none.
+			foreach (string assembly in scriptSurface ?? Array.Empty<string>())
+			{
+				string path = Path.Combine(engineBinDir, assembly);
+				if (File.Exists(path))
+					candidates.Add(path);
+			}
 		}
 		catch { /* engine bin dir may vanish mid-request; stamps below capture the difference */ }
 		candidates.Add(Path.Combine(engineBinDir, "GameEngine.CoreBridge.dll"));
@@ -466,7 +473,7 @@ internal class Program
 	{
 		var sw = System.Diagnostics.Stopwatch.StartNew();
 		string? engineBinDir = ResolveEngineBinDir(request);
-		var engineCandidates = engineBinDir is not null ? EnumerateEngineReferenceCandidates(engineBinDir) : null;
+		var engineCandidates = engineBinDir is not null ? EnumerateEngineReferenceCandidates(engineBinDir, request.ScriptSurface) : null;
 		var extraReferences = (request.References ?? Array.Empty<string>())
 			.Where(p => !string.IsNullOrEmpty(p))
 			.ToList();
@@ -641,6 +648,17 @@ internal class Program
 				try { File.Delete(pidTempPath); } catch { }
 			}
 
+			// --parent-pid <pid>: the process that launched this host. The host exits when that
+			// process exits, so a stopped or crashed Editor never leaves a host holding its
+			// folder open. The launcher also binds the host to its lifetime on Windows (a
+			// kill-on-close job) and Linux (a parent-death signal); on macOS this watch is the
+			// only binding. The watch follows the process id alone: if the id is reused before
+			// the watch opens it, the watch follows the wrong process, and the idle timeout
+			// below is what bounds the orphan.
+			int parentPid = ParseParentProcessId(args);
+			if (parentPid > 0)
+				ExitWhenProcessExits(parentPid, logPath, pidPath);
+
 			// Optional idle timeout (seconds). Default: 120s. Set to 0 to disable.
 			int idleSeconds = 120;
 			try
@@ -669,6 +687,49 @@ internal class Program
 			Console.Error.WriteLine($"[CompileServerHost] Fatal: {ex}");
 			return -1;
 		}
+	}
+
+	private static int ParseParentProcessId(string[] args)
+	{
+		for (int i = 1; i + 1 < args.Length; i++)
+		{
+			if (string.Equals(args[i], "--parent-pid", StringComparison.Ordinal) && int.TryParse(args[i + 1], out int pid))
+				return pid;
+		}
+		return 0;
+	}
+
+	private static void ExitWhenProcessExits(int processId, string logPath, string pidPath)
+	{
+		System.Diagnostics.Process process;
+		try
+		{
+			process = System.Diagnostics.Process.GetProcessById(processId);
+		}
+		catch (ArgumentException)
+		{
+			ExitAfterParent(processId, logPath, pidPath); // exited before the watch started
+			return;
+		}
+		var watcher = new Thread(() => WaitThenExitAfterParent(process, processId, logPath, pidPath))
+		{
+			IsBackground = true,
+			Name = "ParentProcessWatch",
+		};
+		watcher.Start();
+	}
+
+	private static void WaitThenExitAfterParent(System.Diagnostics.Process process, int processId, string logPath, string pidPath)
+	{
+		process.WaitForExit();
+		ExitAfterParent(processId, logPath, pidPath);
+	}
+
+	private static void ExitAfterParent(int processId, string logPath, string pidPath)
+	{
+		try { File.AppendAllText(logPath, $"[{DateTime.Now:O}] Parent process {processId} exited -> exiting{Environment.NewLine}"); } catch { }
+		try { File.Delete(pidPath); } catch { }
+		Environment.Exit(0);
 	}
 
 	private static int RunNamedPipeServer(string pipeName, string logPath, string pidPath, int idleSeconds)
@@ -1020,6 +1081,20 @@ internal class Program
 						null, null);
 					var noSourcesJson = JsonSerializer.Serialize(noSources);
 					try { writer.WriteLine(noSourcesJson); TryPipeDrain(stream, isNamedPipe); } catch (IOException) { }
+					continue;
+				}
+
+				// A request for the engine's references names the engine's script surface: the engine
+				// owns that list (ScriptSurfaceRequestField), and this host holds none of its own.
+				if (!string.IsNullOrEmpty(request.EngineBinDir) && request.ScriptSurface is null)
+				{
+					var noSurface = new BuildResponse(false, Array.Empty<Diagnostic>(),
+						new[] { new Diagnostic("Error", "GE0003", request.ProjectRoot ?? string.Empty, 0, 0,
+							"The request names an EngineBinDir but no ScriptSurface, so the engine and this compile server " +
+							"come from different builds. Rebuild the engine and the compile server from one source tree.") },
+						null, null);
+					var noSurfaceJson = JsonSerializer.Serialize(noSurface);
+					try { writer.WriteLine(noSurfaceJson); TryPipeDrain(stream, isNamedPipe); } catch (IOException) { }
 					continue;
 				}
 

@@ -20,6 +20,7 @@
 #include "Core/Application.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Editor/EditorPaths.h"
+#include "Projects/NewProjectLocation.h"
 #include "UI/Interaction/ContextMenuManipulator.h"
 #include "Core/Engine.h"
 #include "Input/KeyCodes.h"
@@ -211,7 +212,7 @@ void EnableWindowDrag(UIElement& handle, UIElement& window, bool directTargetOnl
 // abandon the build rather than render half a modal.
 UIElement* RequireLayoutElement(UIElement& root, const char* elementId, bool& layoutComplete)
 {
-    UIElement* element = root.FindById(elementId);
+    UIElement* element = root.FindById(HashStringId(elementId));
     if (!element)
     {
         Logger::Log::Error("ProjectPicker: ProjectPicker.uxml has no element with id '{}'", elementId);
@@ -854,7 +855,7 @@ void ProjectFolderPickerModal::BuildTree()
 
     auto communityIcon = std::make_unique<UIElement>();
     communityIcon->AddClass("project-community-icon");
-    UI::Layout::SetBackgroundPath(*communityIcon, "Icons/cloud.png");
+    UI::Layout::SetBackgroundPath(*communityIcon, "Icons/cloud.svg");
 
     auto communityTitle = std::make_unique<Label>();
     m_CommunityStatusTitle = communityTitle.get();
@@ -937,7 +938,11 @@ void ProjectFolderPickerModal::BuildTree()
         row->AddChild(std::move(field));
         form.AddChild(std::move(row));
     };
-    addField(*newProjectForm, "PROJECT NAME", m_NewProjectNameField);
+    // The fields share one row; the error, when shown, takes its own row below them inside the
+    // band, so it keeps the band's padding and never sits against the footer.
+    auto newProjectFields = std::make_unique<UIElement>();
+    newProjectFields->AddClass("project-picker-form-fields");
+    addField(*newProjectFields, "PROJECT NAME", m_NewProjectNameField);
     // Ids let the debug-server automation (set_text_field / click_element)
     // target the creation form.
     m_NewProjectNameField->SetId("new-project-name-field");
@@ -969,15 +974,16 @@ void ProjectFolderPickerModal::BuildTree()
     }
     locationRow->AddChild(std::move(locationLabel));
     locationRow->AddChild(std::move(locationControls));
-    newProjectForm->AddChild(std::move(locationRow));
-    newProjectView->AddChild(std::move(newProjectForm));
+    newProjectFields->AddChild(std::move(locationRow));
+    newProjectForm->AddChild(std::move(newProjectFields));
 
     auto newProjectError = std::make_unique<Label>();
     m_NewProjectErrorLabel = newProjectError.get();
     newProjectError->SetText("");
     newProjectError->SetId("new-project-error");
     newProjectError->AddClass("project-picker-error");
-    newProjectView->AddChild(std::move(newProjectError));
+    newProjectForm->AddChild(std::move(newProjectError));
+    newProjectView->AddChild(std::move(newProjectForm));
 
     auto importProjectView = std::make_unique<UIElement>();
     m_ImportProjectView = importProjectView.get();
@@ -1409,7 +1415,7 @@ void ProjectFolderPickerModal::Hide()
         const std::string& focusId = manager->GetFocusedElementId();
         if (!focusId.empty())
         {
-            if (UIElement* focused = FindById(focusId))
+            if (UIElement* focused = FindById(HashStringId(focusId)))
             {
                 for (UIElement* p = focused; p; p = p->GetParent())
                 {
@@ -1849,7 +1855,7 @@ void ProjectFolderPickerModal::Update()
         m_LogoHueAnimationTime = std::fmod(
             m_LogoHueAnimationTime + dt * kLogoHueDegreesPerSecond, 360.0f);
 
-        if (UIElement* cubeIcon = FindById("cube-icon"))
+        if (UIElement* cubeIcon = FindById("cube-icon"_sid))
         {
             const float h = m_LogoHueAnimationTime;
             constexpr float s = 0.5f;
@@ -1932,9 +1938,9 @@ Button* ProjectFolderPickerModal::AddCatalogCard(UIElement& row, const std::stri
     {
         if (UIManager* manager = GetOwnerManager())
         {
-            const GUID thumbnailGuid = manager->ResolveBackgroundImagePath(entry.ThumbnailRef);
+            const GUID thumbnailGuid = manager->BackgroundImages().ResolvePath(entry.ThumbnailRef);
             if (!thumbnailGuid.IsNull())
-                manager->EnsureBackgroundTextureUploaded(thumbnailGuid);
+                manager->BackgroundImages().EnsureUploaded(thumbnailGuid);
         }
     }
     preview->AddChild(std::move(previewImage));
@@ -2276,23 +2282,9 @@ void ProjectFolderPickerModal::ShowNewProjectView()
         if (m_NewProjectNameField)
             m_NewProjectNameField->SetValue(DefaultNewProjectName());
 
-        std::filesystem::path initialLocation;
-        Editor::SettingsStore prefs = Editor::OpenEditorPreferences();
-        std::string err;
-        (void)prefs.Load(&err);
-        std::string lastBrowsedDirectory;
-        if (prefs.TryGetString("lastBrowsedDirectory", lastBrowsedDirectory) &&
-            !lastBrowsedDirectory.empty())
-        {
-            std::error_code ec;
-            const std::filesystem::path candidate(lastBrowsedDirectory);
-            if (std::filesystem::is_directory(candidate, ec))
-                initialLocation = candidate;
-        }
-        if (initialLocation.empty())
-            initialLocation = ResolveHomePath();
         if (m_NewProjectLocationField)
-            m_NewProjectLocationField->SetValue(initialLocation.generic_string());
+            m_NewProjectLocationField->SetValue(
+                Editor::LoadNewProjectLocation(ResolveHomePath()).generic_string());
     }
 
     UpdateNewProjectTabView();
@@ -2311,21 +2303,8 @@ void ProjectFolderPickerModal::ShowImportProjectView()
 
     if (m_ImportDestinationField && TrimProjectText(m_ImportDestinationField->GetValue()).empty())
     {
-        std::filesystem::path initialDestination;
-        Editor::SettingsStore prefs = Editor::OpenEditorPreferences();
-        std::string err;
-        (void)prefs.Load(&err);
-        std::string lastBrowsedDirectory;
-        if (prefs.TryGetString("lastBrowsedDirectory", lastBrowsedDirectory) &&
-            !lastBrowsedDirectory.empty())
-        {
-            std::error_code ec;
-            if (std::filesystem::is_directory(lastBrowsedDirectory, ec))
-                initialDestination = lastBrowsedDirectory;
-        }
-        if (initialDestination.empty())
-            initialDestination = ResolveHomePath();
-        m_ImportDestinationField->SetValue(initialDestination.generic_string());
+        m_ImportDestinationField->SetValue(
+            Editor::LoadNewProjectLocation(ResolveHomePath()).generic_string());
     }
     if (m_StackedScrim)
         m_StackedScrim->Overrides().Set(Style::Display, DisplayMode::Flex);
@@ -2400,7 +2379,7 @@ void ProjectFolderPickerModal::OnCreateProjectClicked()
         entry = &m_Community.Catalog.Entries[m_SelectedCommunity];
         if (entry->Source.Type == Editor::ProjectSourceType::Unsupported)
         {
-            setError("This project's source type is not supported by this build.");
+            setError(entry->Source.RefusalReason);
             return;
         }
         if (entry->Source.Type == Editor::ProjectSourceType::Git &&
@@ -2468,6 +2447,7 @@ void ProjectFolderPickerModal::OnCreateProjectClicked()
         setError("Another project is still being created.");
         return;
     }
+    Editor::SaveNewProjectLocation(parent);
     m_AcquireInFlight = true;
     UpdateCreateProjectEnabled();
     ShowLoading();
@@ -2598,6 +2578,7 @@ void ProjectFolderPickerModal::OnImportProjectClicked()
         setError("Another project is still being imported.");
         return;
     }
+    Editor::SaveNewProjectLocation(parent);
     m_AcquireInFlight = true;
     UpdateImportProjectEnabled();
     ShowLoading();
@@ -3008,7 +2989,7 @@ void ProjectFolderPickerModal::RefreshRecentProjectsList()
     auto plusIcon = std::make_unique<UIElement>();
     plusIcon->AddClass("project-card-plus-icon");
     plusIcon->AddClass("project-card-action-icon");
-    UI::Layout::SetBackgroundPath(*plusIcon, "Icons/plus.png");
+    UI::Layout::SetBackgroundPath(*plusIcon, "Icons/plus.svg");
     newPreview->AddChild(std::move(plusIcon));
 
     auto newBody = std::make_unique<UIElement>();
@@ -3017,7 +2998,7 @@ void ProjectFolderPickerModal::RefreshRecentProjectsList()
     newName->SetText("New project");
     newName->AddClass("project-card-title");
     auto newMeta = std::make_unique<Label>();
-    newMeta->SetText("Blank · 3D · Open World");
+    newMeta->SetText("Blank · 3D");
     newMeta->AddClass("project-card-meta");
     newBody->AddChild(std::move(newName));
     newBody->AddChild(std::move(newMeta));
@@ -3042,7 +3023,7 @@ void ProjectFolderPickerModal::RefreshRecentProjectsList()
     auto folderIcon = std::make_unique<UIElement>();
     folderIcon->AddClass("project-card-folder-icon");
     folderIcon->AddClass("project-card-action-icon");
-    UI::Layout::SetBackgroundPath(*folderIcon, "Icons/Folder@64px.png");
+    UI::Layout::SetBackgroundPath(*folderIcon, "Icons/Folder@64px.svg");
     openPreview->AddChild(std::move(folderIcon));
 
     auto openBody = std::make_unique<UIElement>();

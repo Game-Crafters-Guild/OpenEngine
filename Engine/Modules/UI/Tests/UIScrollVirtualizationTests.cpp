@@ -306,10 +306,10 @@ TEST(UIScrollVirtualizationTests, ScrollView_Width100UsesScrollportWidth_AndLong
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
 
-    auto* scroll = dynamic_cast<ScrollView*>(r->FindById("sv"));
+    auto* scroll = dynamic_cast<ScrollView*>(r->FindById("sv"_sid));
     ASSERT_NE(scroll, nullptr);
 
-    UIElement* fillEl = r->FindById("fill");
+    UIElement* fillEl = r->FindById("fill"_sid);
     ASSERT_NE(fillEl, nullptr);
 
     const float vw = scroll->GetViewportWidth();
@@ -381,7 +381,7 @@ TEST(UIScrollVirtualizationTests, GridView_RebindsVisibleCellsImmediatelyAfterSc
     const uint64_t minBefore = *std::min_element(gidsBefore.begin(), gidsBefore.end());
     EXPECT_EQ(minBefore, 1u);
 
-    auto* grid = dynamic_cast<GridView*>(r->FindById("gv"));
+    auto* grid = dynamic_cast<GridView*>(r->FindById("gv"_sid));
     ASSERT_NE(grid, nullptr);
     ASSERT_FALSE(grid->GetChildren().empty());
 
@@ -499,7 +499,7 @@ TEST(UIScrollVirtualizationTests, TreeView_RebindsVisibleRowsImmediatelyAfterScr
     ASSERT_TRUE(collectMinVisibleNodeId(minBefore));
     EXPECT_EQ(minBefore, 1u);
 
-    auto* tree = dynamic_cast<TreeView*>(r->FindById("tv"));
+    auto* tree = dynamic_cast<TreeView*>(r->FindById("tv"_sid));
     ASSERT_NE(tree, nullptr);
     ASSERT_FALSE(tree->GetChildren().empty());
     auto* scroll = dynamic_cast<ScrollView*>(tree->GetChildren()[0].get());
@@ -694,7 +694,7 @@ TEST(UIScrollVirtualizationTests, ListView_DoesNotAllowOverscroll_WhenItemHeight
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
 
-    auto* list = dynamic_cast<ListView*>(r->FindById("lv"));
+    auto* list = dynamic_cast<ListView*>(r->FindById("lv"_sid));
     ASSERT_NE(list, nullptr);
     const float viewportH = list->GetViewportHeight();
     const float expectedContentH = (float)kCount * (float)std::lround(kItemHeight);
@@ -802,7 +802,7 @@ TEST(UIScrollVirtualizationTests, ListView_RebindsVisibleCellsImmediatelyAfterSc
         const uint64_t minBefore = collectMinBoundIndex();
         EXPECT_EQ(minBefore, 0u) << "Expected initial visible indices to include 0";
 
-        auto* list = dynamic_cast<ListView*>(r->FindById("lv"));
+        auto* list = dynamic_cast<ListView*>(r->FindById("lv"_sid));
         ASSERT_NE(list, nullptr);
         ASSERT_FALSE(list->GetChildren().empty());
         ScrollView* scroll = nullptr;
@@ -901,7 +901,7 @@ TEST(UIScrollVirtualizationTests, VirtualizationCoordinator_DropsWorkForRemovedC
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    auto* list = dynamic_cast<ListView*>(r->FindById("lv"));
+    auto* list = dynamic_cast<ListView*>(r->FindById("lv"_sid));
     ASSERT_NE(list, nullptr);
 
     // Enqueue work, then destroy the control before the next Update() drains the queue.
@@ -968,7 +968,7 @@ TEST(UIScrollVirtualizationTests, ListView_MarkChanged_RepaintsAffectedRowWithou
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* cell0 = r->FindById("lvcell-0");
+    UIElement* cell0 = r->FindById("lvcell-0"_sid);
     ASSERT_NE(cell0, nullptr);
     EXPECT_EQ(cell0->GetTextContent(), "Row 0");
 
@@ -978,7 +978,7 @@ TEST(UIScrollVirtualizationTests, ListView_MarkChanged_RepaintsAffectedRowWithou
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* cell0After = r->FindById("lvcell-0");
+    UIElement* cell0After = r->FindById("lvcell-0"_sid);
     ASSERT_NE(cell0After, nullptr);
     EXPECT_EQ(cell0After->GetTextContent(), "CHANGED-0")
         << "Change pump must rebind the affected row without a scroll/viewport event";

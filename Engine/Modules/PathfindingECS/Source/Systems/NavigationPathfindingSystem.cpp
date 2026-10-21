@@ -4,14 +4,17 @@
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
 #include "Components/Transform.h"
+#include "ECS/ECSTemplates.h"
 #include "ECS/Query.h"
 #include "Pathfinding/GridMap.h"
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/PathBuffer.h"
 #include "Pathfinding/PathfindingTypes.h"
-#include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <limits>
+#include <span>
 
 namespace GameEngine::PathfindingECS
 {
@@ -84,23 +87,48 @@ void CacheWaypointsFromPath(Components::NavigationAgentState& state, const Pathf
     }
 }
 
+Pathfinding::PathRequest BuildPathRequest(const Components::NavigationAgent& agent,
+                                          const Components::NavigationAgentState& state,
+                                          const Components::WorldTransform& wt, float32 currentTime)
+{
+    // WorldTransform is column-major: [12], [13], [14] hold the translation.
+    Pathfinding::PathRequest request;
+    request.StartX = wt.matrix[12];
+    request.StartY = wt.matrix[13];
+    request.StartZ = wt.matrix[14];
+    request.EndX = state.DestinationX;
+    request.EndY = state.DestinationY;
+    request.EndZ = state.DestinationZ;
+    request.AgentRadius = agent.Radius;
+    request.AgentHeight = agent.Height;
+    request.ExcludeAgentId = agent.AgentId;
+    request.CurrentTime = currentTime;
+    request.SmoothPath = agent.SmoothPaths;
+    return request;
+}
+
+void ReleasePath(Components::NavigationAgentState& state, Pathfinding::PathBuffer& pathBuffer)
+{
+    const Pathfinding::PathHandle oldPath{state.PathIndex, state.PathGeneration};
+    if (!oldPath.IsValid())
+        return;
+    pathBuffer.FreePath(oldPath);
+    state.PathIndex = 0;
+    state.PathGeneration = 0;
+}
+
 } // anonymous namespace
 
-// No scene in the repository authors a NavigationAgent, so these queries match
-// nothing today. That is a fact about the content, not about the component
-// model: NavigationAgent has a registered scene schema
-// (NavigationSceneSchemas.cpp), and adding it via that schema — scene load,
-// the editor's add-component path, or the debug server — also adds
-// NavigationAgentState, because RequiredComponents<NavigationAgent> names it
-// (NavigationAgent.h) and both World::AddComponent and AddComponentImmediate
-// honour that list. Author one agent and these queries iterate.
-//
-// What has no authoring path at all is the destination.
-// NavigationAgentState::HasDestination gates every request below, and no code
-// outside tests ever sets it true — the sole non-test write is
-// NavigationMovementSystem clearing it on arrival. So an authored agent is
-// visited but never solves a path, including through the synchronous fallback.
-// A destination setter is the missing piece, not a bug in this file.
+// A request is an agent with HasDestination and either PathDirty or
+// ReplanRequested set. Game code sets HasDestination and PathDirty (orders,
+// abilities, training), and the engine re-dirties a path through the Failed
+// retry below and the movement system's corridor checks; the replan timer
+// raises ReplanRequested, a refresh that keeps the current path. Each Update
+// marks timer and Failed replans, queues every request (the first Update it is
+// seen stamps its sequence; a PathDirty request is marked Pending and releases
+// its old path), prepares the bodies of every agent on a grid, then solves the
+// oldest MaxPathSolvesPerFrame requests and applies their results before it
+// returns. The rest stay queued in order for a later Update.
 void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
 {
     auto* navWorld = NavigationService::TryGet();
@@ -108,121 +136,13 @@ void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
         return;
 
     m_AccumulatedTime += deltaTime;
-    auto& pathBuffer = navWorld->GetPathBuffer();
-    const uint64 worldId = world.GetWorldId();
-    const uint64 resetGeneration = world.GetLifecycleResetGeneration();
-    const uint64 serviceGeneration = NavigationService::GetGeneration();
-
-    // Step 1a: Collect all completed results into a vector keyed by entity ID.
-    // This avoids O(N*M) by decoupling task harvesting from entity queries.
-    m_CompletedResults.clear();
-
-    for (auto it = m_InFlightRequests.begin(); it != m_InFlightRequests.end();)
-    {
-        const auto& pending = it->second;
-        if (!pending.Task.IsDone())
-        {
-            ++it;
-            continue;
-        }
-
-        PendingCompletion completion;
-        completion.EntityId = it->first;
-        completion.Success = pending.Task.TryGetResult<Pathfinding::PathResult>(completion.Result);
-        if (pending.WorldId != worldId || pending.ResetGeneration != resetGeneration ||
-            pending.ServiceGeneration != serviceGeneration)
-        {
-            // Clear restarts entity generations; another World can also have
-            // the same handle. Retire the old result without touching an actor.
-            // A replaced service already destroyed its own PathBuffer: its
-            // numeric path handles must never be freed in the new buffer.
-            if (pending.ServiceGeneration == serviceGeneration && completion.Success &&
-                completion.Result.Path.IsValid())
-                pathBuffer.FreePath(completion.Result.Path);
-            it = m_InFlightRequests.erase(it);
-            continue;
-        }
-        m_CompletedResults.push_back(std::move(completion));
-        it = m_InFlightRequests.erase(it);
-    }
-
-    // Step 1b: Single query pass to write back all completed results
-    if (!m_CompletedResults.empty())
-    {
-        world.Query<ECS::Read<Components::NavigationAgent>,
-                    ECS::Write<Components::NavigationAgentState>>().Each(
-            [&](ECS::EntityHandle e, const Components::NavigationAgent& /*agent*/,
-                Components::NavigationAgentState& state)
-            {
-                uint64 entityKey = static_cast<uint64>(e.id);
-                const PendingCompletion* found = nullptr;
-                for (const auto& entry : m_CompletedResults)
-                {
-                    if (entry.EntityId == entityKey)
-                    {
-                        found = &entry;
-                        break;
-                    }
-                }
-                if (!found)
-                    return;
-
-                if (found->Success)
-                {
-                    state.PathIndex = found->Result.Path.Index;
-                    state.PathGeneration = found->Result.Path.Generation;
-                    state.Status = static_cast<uint8>(found->Result.Status);
-                    state.CurrentPathPointIndex = 0;
-                    state.PathDirty = false;
-
-                    if (found->Result.Status == Pathfinding::PathStatus::Complete ||
-                        found->Result.Status == Pathfinding::PathStatus::Partial)
-                    {
-                        CacheWaypointsFromPath(state, pathBuffer);
-                    }
-                }
-                else
-                {
-                    state.Status = static_cast<uint8>(Pathfinding::PathStatus::Failed);
-                    state.PathDirty = false;
-                    Logger::Log::Warning("[PathfindingECS] Path request failed for entity {}", e.id);
-                }
-            });
-
-        // Free path handles for completed requests whose entities no longer exist.
-        // These are orphaned paths that would otherwise leak in the PathBuffer.
-        for (const auto& entry : m_CompletedResults)
-        {
-            if (entry.Success && entry.Result.Path.IsValid())
-            {
-                // Check if this completion was consumed by the entity query above.
-                // If the entity was destroyed, the query never matched it — free the path.
-                bool consumed = false;
-                world.Query<ECS::Read<Components::NavigationAgentState>>().Each(
-                    [&](ECS::EntityHandle e, const Components::NavigationAgentState& state)
-                    {
-                        if (consumed)
-                            return;
-                        if (static_cast<uint64>(e.id) == entry.EntityId &&
-                            state.PathIndex == entry.Result.Path.Index &&
-                            state.PathGeneration == entry.Result.Path.Generation)
-                        {
-                            consumed = true;
-                        }
-                    });
-                if (!consumed)
-                {
-                    pathBuffer.FreePath(entry.Result.Path);
-                }
-            }
-        }
-    }
-
-    // Step 1.5: Re-evaluation - periodically mark agents for re-pathing.
-    // Budget-limited to MaxReplansPerFrame to avoid CPU spikes when many agents
-    // have timers expiring on the same frame. Timers are staggered on first init
-    // so agents spread their replans across frames.
-    uint32 replansThisFrame = 0;
+    ++m_Statistics.Frames;
+    // Re-evaluation - periodically mark agents for re-pathing. The
+    // marks are not limited here: every request, whatever marked it, shares
+    // the solve budget below. Timers are staggered on first init so agents
+    // spread their replans across frames. A timer does not re-arm while its
+    // request waits; it keeps counting down and fires again once the
+    // request is solved.
     world.Query<ECS::Read<Components::NavigationAgent>,
                 ECS::Write<Components::NavigationAgentState>>().Each(
         [&](ECS::EntityHandle e, const Components::NavigationAgent& agent,
@@ -257,13 +177,9 @@ void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
             // is active), set the timer to a fraction of the interval based on a
             // simple hash of the agent's ID. This spreads replans across frames
             // instead of all agents replanning simultaneously.
-            if (state.ReplanTimer <= 0.0f && !state.PathDirty)
+            if (state.ReplanTimer <= 0.0f && !state.PathDirty && !state.ReplanRequested)
             {
-                if (replansThisFrame >= MaxReplansPerFrame)
-                    return; // defer to next frame
-
-                state.PathDirty = true;
-                ++replansThisFrame;
+                state.ReplanRequested = true;
 
                 // Stagger the next replan using a cheap hash to distribute across frames.
                 // Use AgentId if set, otherwise fall back to entity ID to avoid all-zero hash.
@@ -278,131 +194,244 @@ void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
             }
         });
 
-    // Prepare all bodies before the first grid solve, regardless of query
-    // order. NMS owns ordinary frame-to-frame stamps; no grid request means
-    // there is nothing for this pass to prepare.
+    // Bodies are prepared after queuing, which changes no input the
+    // preparation reads, and before the first grid solve, so every solve in
+    // a frame sees the same occupancy.
+    if (CollectRequests(world))
+        PrepareBodies(world);
+
+    SolveOldestRequests(world);
+}
+
+// Queues every request in query order and reports whether any targets a grid
+// map. A request seen for the first time takes the next sequence. A PathDirty
+// request becomes Pending and releases its old path, the state it waits in
+// until it is solved, including a timer refresh that a corridor check
+// re-dirtied while it waited; a timer refresh alone keeps its path, except on an
+// invalid map, where it becomes a dirty request.
+bool NavigationPathfindingSystem::CollectRequests(ECS::World& world)
+{
+    auto& navWorld = NavigationService::Get();
+    auto& pathBuffer = navWorld.GetPathBuffer();
+    m_Queue.clear();
+    m_Statistics.NewRequests = 0;
     bool hasGridRequest = false;
-    world.Query<ECS::Read<Components::NavigationAgent>,
-                ECS::Read<Components::NavigationAgentState>,
-                ECS::Read<Components::WorldTransform>>().Each(
-        [&](ECS::EntityHandle, const Components::NavigationAgent& agent,
-            const Components::NavigationAgentState& state, const Components::WorldTransform&)
-        {
-            if (!hasGridRequest && state.HasDestination && state.PathDirty)
-                hasGridRequest = navWorld->GetGridMap({agent.NavMapIndex, agent.NavMapGeneration}) != nullptr;
-        });
-
-    if (hasGridRequest)
-    {
-        world.Query<ECS::Read<Components::NavigationAgent>,
-                    ECS::Write<Components::NavigationAgentState>,
-                    ECS::Read<Components::WorldTransform>>().Each(
-            [&](ECS::EntityHandle, const Components::NavigationAgent& agent,
-                Components::NavigationAgentState& state, const Components::WorldTransform& wt)
-            {
-                if (agent.AgentId == 0)
-                    return;
-                auto* grid = navWorld->GetGridMap({agent.NavMapIndex, agent.NavMapGeneration});
-                if (!grid)
-                    return;
-
-                const bool requesting = state.HasDestination && state.PathDirty;
-                const auto status = static_cast<Pathfinding::PathStatus>(state.Status);
-                if (state.HasDestination && !state.PathDirty &&
-                    (status == Pathfinding::PathStatus::Complete || status == Pathfinding::PathStatus::Partial) &&
-                    state.CurrentPathPointIndex < pathBuffer.GetPointCount({state.PathIndex, state.PathGeneration}))
-                    return; // Preserve the native moving body's complete lookahead corridor.
-
-                // A dirty replanner deliberately drops its old corridor once.
-                // Idle/direct peers need rebuilding only if actual body cells
-                // are missing, expired or at their previous position. The
-                // HasCellReservations hint can outlive its expired cells.
-                if (!requesting && HasCurrentBody(*grid, agent, wt.matrix[12], wt.matrix[14], m_AccumulatedTime))
-                    return;
-                StampNavigationAgentOccupancy(agent, state, wt.matrix[12], wt.matrix[14], m_AccumulatedTime);
-            });
-    }
-
-    // Step 2: Submit only after every eligible body's preparation above.
     world.Query<ECS::Read<Components::NavigationAgent>,
                 ECS::Write<Components::NavigationAgentState>,
                 ECS::Read<Components::WorldTransform>>().Each(
         [&](ECS::EntityHandle e, const Components::NavigationAgent& agent,
-            Components::NavigationAgentState& state,
-            const Components::WorldTransform& wt)
+            Components::NavigationAgentState& state, const Components::WorldTransform& wt)
         {
-            if (!state.HasDestination || !state.PathDirty)
-                return;
-
-            uint64 entityKey = static_cast<uint64>(e.id);
-
-            // Skip if there is already an in-flight request for this entity.
-            // Don't free the old path yet: the in-flight completion replaces it,
-            // or is retired above once its scope has moved on.
-            // Its body was prepared before any request could start.
-            if (m_InFlightRequests.count(entityKey) > 0)
-                return;
-
-            // Free the old path now that we know we'll submit a new request
-            Pathfinding::PathHandle oldPath{state.PathIndex, state.PathGeneration};
-            if (oldPath.IsValid())
+            if (!state.HasDestination || (!state.PathDirty && !state.ReplanRequested))
             {
-                pathBuffer.FreePath(oldPath);
-                state.PathIndex = 0;
-                state.PathGeneration = 0;
+                // A request withdrawn while queued (arrival, a game clearing
+                // PathDirty) gives up its place.
+                if (state.PathRequestSequence != 0)
+                    state.PathRequestSequence = 0;
+                if (!state.HasDestination)
+                    state.ReplanRequested = false;
+                return;
             }
 
-            Pathfinding::NavMapHandle mapHandle{agent.NavMapIndex, agent.NavMapGeneration};
-            if (!mapHandle.IsValid())
+            const Pathfinding::NavMapHandle map{agent.NavMapIndex, agent.NavMapGeneration};
+            if (!hasGridRequest)
+                hasGridRequest = navWorld.GetGridMap(map) != nullptr;
+
+            if (state.PathDirty && state.Status != static_cast<uint8>(Pathfinding::PathStatus::Pending))
+            {
+                ReleasePath(state, pathBuffer);
+                state.Status = static_cast<uint8>(Pathfinding::PathStatus::Pending);
+            }
+
+            // With no map to solve on, a request waits unqueued as a Pending
+            // PathDirty request, without a path, until the agent has a map
+            // again; a timer refresh becomes one.
+            if (!map.IsValid())
+            {
+                ReleasePath(state, pathBuffer);
+                state.PathDirty = true;
+                state.ReplanRequested = false;
+                state.Status = static_cast<uint8>(Pathfinding::PathStatus::Pending);
+                state.PathRequestSequence = 0;
                 return;
-
-            // Extract position from WorldTransform (column-major: [12],[13],[14] = translation)
-            float32 posX = wt.matrix[12];
-            float32 posY = wt.matrix[13];
-            float32 posZ = wt.matrix[14];
-
-            Pathfinding::PathRequest request;
-            request.StartX = posX;
-            request.StartY = posY;
-            request.StartZ = posZ;
-            request.EndX = state.DestinationX;
-            request.EndY = state.DestinationY;
-            request.EndZ = state.DestinationZ;
-            request.AgentRadius = agent.Radius;
-            request.AgentHeight = agent.Height;
-            request.ExcludeAgentId = agent.AgentId;
-            request.CurrentTime = m_AccumulatedTime;
-            request.SmoothPath = agent.SmoothPaths;
-
-            // Mark as pending immediately
-            state.Status = static_cast<uint8>(Pathfinding::PathStatus::Pending);
-
-            // Try async path request; fall back to synchronous if no task handle returned
-            auto taskHandle = navWorld->RequestPath(mapHandle, request);
-            if (taskHandle.IsValid())
-            {
-                m_InFlightRequests[entityKey] = {
-                    std::move(taskHandle), worldId, resetGeneration, serviceGeneration};
             }
-            else
+
+            if (state.PathRequestSequence == 0)
             {
-                // Synchronous fallback
-                Pathfinding::PathHandle outPath;
-                Pathfinding::PathStatus status = navWorld->FindPath(mapHandle, request, outPath);
-
-                state.PathIndex = outPath.Index;
-                state.PathGeneration = outPath.Generation;
-                state.Status = static_cast<uint8>(status);
-                state.CurrentPathPointIndex = 0;
-                state.PathDirty = false;
-
-                if (status == Pathfinding::PathStatus::Complete ||
-                    status == Pathfinding::PathStatus::Partial)
-                {
-                    CacheWaypointsFromPath(state, pathBuffer);
-                }
+                state.PathRequestSequence = IssueSequence();
+                ++m_Statistics.NewRequests;
             }
+            m_Queue.push_back({e, state.PathRequestSequence, map,
+                               BuildPathRequest(agent, state, wt, m_AccumulatedTime)});
         });
+    m_Statistics.TotalNewRequests += m_Statistics.NewRequests;
+    return hasGridRequest;
+}
+
+// Stamps the bodies a solve must see. NavigationMovementSystem owns ordinary
+// frame-to-frame stamps; this restores the ones a request or a missing stamp
+// left out.
+void NavigationPathfindingSystem::PrepareBodies(ECS::World& world)
+{
+    auto& navWorld = NavigationService::Get();
+    auto& pathBuffer = navWorld.GetPathBuffer();
+    world.Query<ECS::Read<Components::NavigationAgent>,
+                ECS::Write<Components::NavigationAgentState>,
+                ECS::Read<Components::WorldTransform>>().Each(
+        [&](ECS::EntityHandle, const Components::NavigationAgent& agent,
+            Components::NavigationAgentState& state, const Components::WorldTransform& wt)
+        {
+            if (agent.AgentId == 0)
+                return;
+            auto* grid = navWorld.GetGridMap({agent.NavMapIndex, agent.NavMapGeneration});
+            if (!grid)
+                return;
+
+            const bool requesting = state.HasDestination && state.PathDirty;
+            const auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+            if (state.HasDestination && !state.PathDirty &&
+                (status == Pathfinding::PathStatus::Complete || status == Pathfinding::PathStatus::Partial) &&
+                state.CurrentPathPointIndex < pathBuffer.GetPointCount({state.PathIndex, state.PathGeneration}))
+                return; // Preserve the native moving body's complete lookahead corridor.
+
+            // A dirty replanner deliberately drops its old corridor once.
+            // Idle/direct peers need rebuilding only if actual body cells
+            // are missing, expired or at their previous position. The
+            // HasCellReservations hint can outlive its expired cells.
+            if (!requesting && HasCurrentBody(*grid, agent, wt.matrix[12], wt.matrix[14], m_AccumulatedTime))
+                return;
+            StampNavigationAgentOccupancy(agent, state, wt.matrix[12], wt.matrix[14], m_AccumulatedTime);
+        });
+}
+
+// Solves the oldest MaxPathSolvesPerFrame queued requests and records what the
+// budget left waiting. The grid requests solve together on the world's pool
+// (NavigationWorld::SolveGridPaths), the rest one by one on this thread (a
+// Detour map shares one query object); every result is then applied here in
+// queue order, oldest first, so path handles and agent state do not depend on
+// the pool.
+void NavigationPathfindingSystem::SolveOldestRequests(ECS::World& world)
+{
+    auto& navWorld = NavigationService::Get();
+    auto& pathBuffer = navWorld.GetPathBuffer();
+
+    const auto older = [this](const QueuedRequest& a, const QueuedRequest& b)
+    { return SequenceAge(a.Sequence) > SequenceAge(b.Sequence); };
+    const std::size_t solveCount = std::min<std::size_t>(std::max(MaxPathSolvesPerFrame, 1u), m_Queue.size());
+    std::partial_sort(m_Queue.begin(), m_Queue.begin() + static_cast<std::ptrdiff_t>(solveCount), m_Queue.end(),
+                      older);
+
+    std::size_t gridSolveCount = 0;
+    for (std::size_t i = 0; i < solveCount; ++i)
+    {
+        if (!navWorld.GetGridMap(m_Queue[i].Map))
+            continue;
+        if (gridSolveCount == m_GridSolves.size())
+            m_GridSolves.emplace_back();
+        m_GridSolves[gridSolveCount].Map = m_Queue[i].Map;
+        m_GridSolves[gridSolveCount].Request = m_Queue[i].Request;
+        ++gridSolveCount;
+    }
+    navWorld.SolveGridPaths(world.GetJobSystem(), std::span(m_GridSolves.data(), gridSolveCount));
+
+    m_Statistics.Solved = 0;
+    m_Statistics.LongestSolvedWaitFrames = 0;
+    m_Statistics.LongestSolvedWaitSeconds = 0.0f;
+    std::size_t gridSolve = 0;
+    for (std::size_t i = 0; i < solveCount; ++i)
+    {
+        const QueuedRequest& queued = m_Queue[i];
+        const Pathfinding::GridPathSolve* solved =
+            navWorld.GetGridMap(queued.Map) ? &m_GridSolves[gridSolve++] : nullptr;
+        // Cannot be null inside one Update (no structural change since the
+        // queue was collected), but a stale handle must never be written.
+        auto* state = world.GetComponentForWrite<Components::NavigationAgentState>(queued.Entity);
+        if (!state)
+            continue;
+
+        uint32 waitFrames = 0;
+        float32 waitSeconds = 0.0f;
+        ReadWait(queued.Sequence, waitFrames, waitSeconds);
+        m_Statistics.LongestSolvedWaitFrames = std::max(m_Statistics.LongestSolvedWaitFrames, waitFrames);
+        m_Statistics.LongestSolvedWaitSeconds = std::max(m_Statistics.LongestSolvedWaitSeconds, waitSeconds);
+        state->PathRequestSequence = 0;
+        ++m_Statistics.Solved;
+
+        Pathfinding::PathHandle outPath;
+        Pathfinding::PathStatus status = Pathfinding::PathStatus::Failed;
+        if (solved)
+        {
+            status = solved->Status;
+            if (status == Pathfinding::PathStatus::Complete)
+                outPath = pathBuffer.AllocatePath(solved->Points.data(), static_cast<uint32>(solved->Points.size()));
+        }
+        else
+        {
+            status = navWorld.FindPath(queued.Map, queued.Request, outPath);
+        }
+        ReleasePath(*state, pathBuffer);
+        state->ReplanRequested = false;
+        state->PathIndex = outPath.Index;
+        state->PathGeneration = outPath.Generation;
+        state->Status = static_cast<uint8>(status);
+        state->CurrentPathPointIndex = 0;
+        state->PathDirty = false;
+        if (status == Pathfinding::PathStatus::Complete || status == Pathfinding::PathStatus::Partial)
+            CacheWaypointsFromPath(*state, pathBuffer);
+    }
+    m_Statistics.TotalSolved += m_Statistics.Solved;
+
+    m_Statistics.Backlog = static_cast<uint32>(m_Queue.size() - solveCount);
+    m_Statistics.OldestWaitFrames = 0;
+    m_Statistics.OldestWaitSeconds = 0.0f;
+    if (m_Statistics.Backlog == 0)
+    {
+        m_SequenceIssues.clear();
+        return;
+    }
+    const auto oldest = std::min_element(m_Queue.begin() + static_cast<std::ptrdiff_t>(solveCount), m_Queue.end(),
+                                         older);
+    ReadWait(oldest->Sequence, m_Statistics.OldestWaitFrames, m_Statistics.OldestWaitSeconds);
+    // Issues older than the one holding the oldest queued request are no
+    // longer read.
+    if (!m_SequenceIssues.empty())
+        m_SequenceIssues.erase(m_SequenceIssues.begin(),
+                               m_SequenceIssues.begin() + static_cast<std::ptrdiff_t>(FindIssue(oldest->Sequence)));
+}
+
+uint32 NavigationPathfindingSystem::IssueSequence()
+{
+    const uint32 sequence = m_NextSequence;
+    m_NextSequence = m_NextSequence == std::numeric_limits<uint32>::max() ? 1u : m_NextSequence + 1u;
+    if (m_SequenceIssues.empty() || m_SequenceIssues.back().Frame != m_Statistics.Frames)
+        m_SequenceIssues.push_back({sequence, m_Statistics.Frames, m_AccumulatedTime});
+    return sequence;
+}
+
+// The index of the issue that holds `sequence`: the newest one issued at or
+// before it. A sequence older than every issue kept (an agent that left the
+// query while queued and came back) maps to the oldest issue. The list must
+// not be empty.
+std::size_t NavigationPathfindingSystem::FindIssue(uint32 sequence) const
+{
+    const uint32 age = SequenceAge(sequence);
+    for (std::size_t i = m_SequenceIssues.size(); i > 0; --i)
+    {
+        if (SequenceAge(m_SequenceIssues[i - 1].FirstSequence) >= age)
+            return i - 1;
+    }
+    return 0;
+}
+
+void NavigationPathfindingSystem::ReadWait(uint32 sequence, uint32& frames, float32& seconds) const
+{
+    frames = 0;
+    seconds = 0.0f;
+    if (m_SequenceIssues.empty())
+        return;
+    const SequenceIssue& issue = m_SequenceIssues[FindIssue(sequence)];
+    frames = static_cast<uint32>(m_Statistics.Frames - issue.Frame);
+    seconds = m_AccumulatedTime - issue.Time;
 }
 
 } // namespace GameEngine::PathfindingECS

@@ -9,7 +9,7 @@
     "allowJs": true,
     "checkJs": true,
     "skipLibCheck": false,
-    "paths": { "@openengine/web": ["./opengine.d.ts"] }
+    "paths": { "@game-crafters-guild/openengine-web": ["./opengine.d.ts"] }
   },
   "include": ["opengine.d.ts", "components.d.ts", "src/**/*", "test/types/**/*", "../examples/*/main.js"]
 }

@@ -71,7 +71,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverPaintOnlyDoesNotTriggerYogaSolve)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* b = r->FindById("b");
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(b, nullptr);
 
     // Layout should remain unchanged.
@@ -127,7 +127,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverLayoutTriggersYogaSolveNextFrame)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* b = r->FindById("b");
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(b, nullptr);
 
     EXPECT_NEAR(b->GetLayoutX(), 200.0f, 0.5f);
@@ -171,7 +171,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverChangesResolvedBackgroundColor)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* btn = r->FindById("btn");
+    UIElement* btn = r->FindById("btn"_sid);
     ASSERT_NE(btn, nullptr);
 
     const uint32_t baseColor = btn->GetResolvedStyle().Visual.BackgroundColor;
@@ -235,7 +235,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverAppliesBorderImageSlice)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* btn = r->FindById("btn");
+    UIElement* btn = r->FindById("btn"_sid);
     ASSERT_NE(btn, nullptr);
     EXPECT_FALSE(btn->GetResolvedStyle().Visual.BackgroundImage.HasBorderImage);
 
@@ -280,7 +280,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverWithOverridesDoesNotStompBackground)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* btn = r->FindById("btn");
+    UIElement* btn = r->FindById("btn"_sid);
     ASSERT_NE(btn, nullptr);
 
     btn->AddClass("btn");
@@ -341,7 +341,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverWithCssVariablesAndMultipleClasses)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* btn = r->FindById("btn");
+    UIElement* btn = r->FindById("btn"_sid);
     ASSERT_NE(btn, nullptr);
 
     btn->AddClass("button");
@@ -449,9 +449,9 @@ TEST(UIManagerPseudoInvalidationTests, ProgrammaticFocusChainElementLayoutRelays
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* child = r->FindById("child");
+    UIElement* child = r->FindById("child"_sid);
     ASSERT_NE(child, nullptr);
-    r->FindById("container")->SetFocusable(true);
+    r->FindById("container"_sid)->SetFocusable(true);
 
     ui.Update(0.0f, /*interactive=*/true);
     EXPECT_NEAR(child->GetLayoutX(), 0.0f, 0.5f);
@@ -497,9 +497,9 @@ TEST(UIManagerPseudoInvalidationTests, ProgrammaticFocusChainElementLayoutRevert
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* child = r->FindById("child");
+    UIElement* child = r->FindById("child"_sid);
     ASSERT_NE(child, nullptr);
-    r->FindById("container")->SetFocusable(true);
+    r->FindById("container"_sid)->SetFocusable(true);
 
     ui.Update(0.0f, /*interactive=*/true);
     ui.SetFocusById("container");
@@ -881,7 +881,7 @@ constexpr uint32_t kOverlayHoverColor = 0xFFFF0000u;
 void ExpectCardHoverWorks(UIManager& ui, const char* cardId, float cardCenterX,
                           const char* what)
 {
-    UIElement* card = ui.GetRootElement()->FindById(cardId);
+    UIElement* card = ui.GetRootElement()->FindById(HashStringId(cardId));
     ASSERT_NE(card, nullptr) << what;
     ASSERT_FALSE(card->GetChildren().empty()) << what;
     UIElement* overlay = card->GetChildren().front().get();
@@ -1011,7 +1011,7 @@ TEST(UIManagerPseudoInvalidationTests, HoverDescendantTransitionAppliesToRuntime
         tick();
 
     auto expectHoverTintWorks = [&](const char* cardId, float centerX, const char* what) {
-        UIElement* card = ui.GetRootElement()->FindById(cardId);
+        UIElement* card = ui.GetRootElement()->FindById(HashStringId(cardId));
         ASSERT_NE(card, nullptr) << what;
         UIElement* overlay = card->GetChildren().front().get();
 

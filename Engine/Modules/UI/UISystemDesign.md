@@ -3,7 +3,7 @@
 Author: Augment Agent
 
 ## User guide
-For practical usage and API examples, see [docs/UI_API_GUIDE.md](../../../docs/UI_API_GUIDE.md).
+For practical usage and API examples, see [docs/ui/ui-api-guide.mdx](../../../docs/ui/ui-api-guide.mdx).
 
 ## Goals and scope
 - XML + CSS-driven UI that integrates with the engine’s AssetManager, Rendering (geometry + text), and input systems
@@ -100,7 +100,7 @@ Integration:
   - Split static (from CSS) vs dynamic (pseudo-state + inline overrides) to allow fast toggling and hot reload
 - Properties
   - Layout: display, flex-direction, flex-wrap, flex, flex-grow/shrink/basis, align-items, align-self, justify-content, gap, width/height/min/max, margin/padding/border
-  - Visual: background-color/gradient, background-image (later), border-color/width/radius (per-edge/corner), opacity, box-shadow (later), overflow
+  - Visual: background-color/gradient, background-image (later), border-color/width/radius (per-edge/corner), opacity, box-shadow (later), overflow, transform/transform-origin (2D, paint-time; docs/ui/transform.mdx)
   - Text: color, font-family/size/weight/style, line-height, white-space (initially single-line clip), text-align
   - Custom properties: `--vars` are stored by `StringId` keys; use `HashStringId()` or the `_sid` literal for code access
 
@@ -248,7 +248,7 @@ Options are typically supplied from code via the field API:
 // After layout has been loaded
 if (UIElement* root = ui->GetRootElement())
 {
-	    if (auto* el = root->FindById("QualityDropdown"))
+	    if (auto* el = root->FindById("QualityDropdown"_sid))
 	    {
 		        if (auto* dd = dynamic_cast<Dropdown*>(el))
 		        {
@@ -369,6 +369,7 @@ Yoga bridge layer when translating `ResolvedStyle` to Yoga node styles.
   - `PrimitiveMode::Textured` for background images
   - `PrimitiveMode::Line` for separators and underlines
 - Clip rects are stored in a separate SSBO; each primitive references its clip by index.
+- CSS transforms are stored in a third SSBO (`UITransformSlot`, one per transformed element, chained to the nearest transformed ancestor). Each primitive and clip names the slot of the space it is in (`UIPrimitive::TransformIndex`, `UIClipRect::TransformIndex`; 0 is the identity). The vertex stage composes the chain and maps each primitive into its clips' spaces, so geometry and SDFs stay in element space and a transform change rewrites one slot.
 - GPU draw: `Draw(6, primitiveCount)` — instanced fullscreen quads, fragment shader evaluates SDF per-pixel.
 - Textures: bindless descriptor array from `UITextureRegistry` holds all font atlas pages and background images.
 

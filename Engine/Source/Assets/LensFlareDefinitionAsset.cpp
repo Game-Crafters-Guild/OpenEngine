@@ -1,7 +1,10 @@
 #include "Assets/LensFlareDefinitionAsset.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
+#include <format>
 #include <fstream>
 
 #include <nlohmann/json.hpp>
@@ -10,15 +13,21 @@ namespace GameEngine {
 
 namespace {
 
-LensFlare::Color ParseColor(const nlohmann::json& j, LensFlare::Color fallback)
+using Serialization::JsonFieldReader;
+
+// A colour object's channels over `fallback`; a value that is not an object is the fallback.
+// Field names in refusals start with `context`.
+LensFlare::Color ParseColor(const nlohmann::json& j, LensFlare::Color fallback, JsonFieldReader& reader,
+                            std::string context)
 {
     if (!j.is_object())
         return fallback;
-    LensFlare::Color c;
-    c.R = j.value("r", fallback.R);
-    c.G = j.value("g", fallback.G);
-    c.B = j.value("b", fallback.B);
-    c.A = j.value("a", fallback.A);
+    reader.SetContext(std::move(context));
+    LensFlare::Color c = fallback;
+    reader.Read(j, "r", c.R);
+    reader.Read(j, "g", c.G);
+    reader.Read(j, "b", c.B);
+    reader.Read(j, "a", c.A);
     return c;
 }
 
@@ -40,93 +49,102 @@ nlohmann::json CurveToJson(const std::vector<LensFlare::CurveKeyData>& keys)
     return out;
 }
 
-void ParseGlobals(const nlohmann::json& j, LensFlare::FlareGlobals& g)
+// The curve `name` of `parent`, when it is an array: each key an object of time, value and tangents.
+void ParseCurve(const nlohmann::json& parent, const char* name, std::vector<LensFlare::CurveKeyData>& out,
+                JsonFieldReader& reader)
 {
-    g.GlobalScale      = j.value("globalScale", g.GlobalScale);
-    g.GlobalBrightness = j.value("globalBrightness", g.GlobalBrightness);
-    if (j.contains("globalTint"))
-        g.GlobalTint = ParseColor(j["globalTint"], g.GlobalTint);
-
-    g.UseDistanceFade  = j.value("useDistanceFade", g.UseDistanceFade);
-    g.UseDistanceScale = j.value("useDistanceScale", g.UseDistanceScale);
-    g.UseMaxDistance   = j.value("useMaxDistance", g.UseMaxDistance);
-    g.MaxDistance      = j.value("maxDistance", g.MaxDistance);
-
-    g.UseAngleLimit      = j.value("useAngleLimit", g.UseAngleLimit);
-    g.MaxAngle           = j.value("maxAngle", g.MaxAngle);
-    g.UseAngleScale      = j.value("useAngleScale", g.UseAngleScale);
-    g.UseAngleBrightness = j.value("useAngleBrightness", g.UseAngleBrightness);
-    g.UseAngleCurve      = j.value("useAngleCurve", g.UseAngleCurve);
-
-    const auto parseCurve = [](const nlohmann::json& parent, const char* name,
-                               std::vector<LensFlare::CurveKeyData>& out)
+    auto it = parent.find(name);
+    if (it == parent.end() || !it->is_array())
+        return;
+    out.reserve(it->size());
+    for (size_t index = 0; index < it->size(); ++index)
     {
-        auto it = parent.find(name);
-        if (it == parent.end() || !it->is_array())
-            return;
-        out.reserve(it->size());
-        for (const auto& k : *it)
-        {
-            LensFlare::CurveKeyData key;
-            key.Time = k.value("time", 0.0f);
-            key.Value = k.value("value", 0.0f);
-            key.InTangent = k.value("inTangent", 0.0f);
-            key.OutTangent = k.value("outTangent", 0.0f);
-            out.push_back(key);
-        }
-    };
-    parseCurve(j, "angleCurve", g.AngleCurveKeys);
-    parseCurve(j, "dynamicEdgeCurve", g.DynamicEdgeCurveKeys);
-
-    g.OffScreenFadeDist = j.value("offScreenFadeDist", g.OffScreenFadeDist);
-
-    g.UseDynamicEdgeBoost   = j.value("useDynamicEdgeBoost", g.UseDynamicEdgeBoost);
-    g.DynamicEdgeBrightness = j.value("dynamicEdgeBrightness", g.DynamicEdgeBrightness);
-    g.DynamicEdgeRange      = j.value("dynamicEdgeRange", g.DynamicEdgeRange);
-    g.DynamicEdgeBias       = j.value("dynamicEdgeBias", g.DynamicEdgeBias);
-
-    g.UseDynamicEdgeScale   = j.value("useDynamicEdgeScale", g.UseDynamicEdgeScale);
-    g.DynamicEdgeScale      = j.value("dynamicEdgeScale", g.DynamicEdgeScale);
-    g.DynamicEdgeScaleRange = j.value("dynamicEdgeScaleRange", g.DynamicEdgeScaleRange);
-    g.DynamicEdgeScaleBias  = j.value("dynamicEdgeScaleBias", g.DynamicEdgeScaleBias);
-
-    g.UseDynamicCenterBoost   = j.value("useDynamicCenterBoost", g.UseDynamicCenterBoost);
-    g.DynamicCenterBrightness = j.value("dynamicCenterBrightness", g.DynamicCenterBrightness);
-    g.DynamicCenterScale      = j.value("dynamicCenterScale", g.DynamicCenterScale);
-    g.DynamicCenterRange      = j.value("dynamicCenterRange", g.DynamicCenterRange);
-    g.DynamicCenterBias       = j.value("dynamicCenterBias", g.DynamicCenterBias);
-
-    g.MultiplyScaleByTransformScale =
-        j.value("multiplyScaleByTransformScale", g.MultiplyScaleByTransformScale);
-
-    g.NeverCull = j.value("neverCull", g.NeverCull);
+        reader.SetContext(std::format("globals.{}[{}].", name, index));
+        const nlohmann::json& k = (*it)[index];
+        LensFlare::CurveKeyData key;
+        reader.Read(k, "time", key.Time);
+        reader.Read(k, "value", key.Value);
+        reader.Read(k, "inTangent", key.InTangent);
+        reader.Read(k, "outTangent", key.OutTangent);
+        out.push_back(key);
+    }
 }
 
-LensFlare::FlareElement ParseElement(const nlohmann::json& j)
+void ParseGlobals(const nlohmann::json& j, LensFlare::FlareGlobals& g, JsonFieldReader& reader)
 {
+    reader.SetContext("globals.");
+    reader.Read(j, "globalScale", g.GlobalScale);
+    reader.Read(j, "globalBrightness", g.GlobalBrightness);
+    if (j.contains("globalTint"))
+        g.GlobalTint = ParseColor(j["globalTint"], g.GlobalTint, reader, "globals.globalTint.");
+
+    reader.SetContext("globals.");
+    reader.Read(j, "useDistanceFade", g.UseDistanceFade);
+    reader.Read(j, "useDistanceScale", g.UseDistanceScale);
+    reader.Read(j, "useMaxDistance", g.UseMaxDistance);
+    reader.Read(j, "maxDistance", g.MaxDistance);
+
+    reader.Read(j, "useAngleLimit", g.UseAngleLimit);
+    reader.Read(j, "maxAngle", g.MaxAngle);
+    reader.Read(j, "useAngleScale", g.UseAngleScale);
+    reader.Read(j, "useAngleBrightness", g.UseAngleBrightness);
+    reader.Read(j, "useAngleCurve", g.UseAngleCurve);
+
+    ParseCurve(j, "angleCurve", g.AngleCurveKeys, reader);
+    ParseCurve(j, "dynamicEdgeCurve", g.DynamicEdgeCurveKeys, reader);
+
+    reader.SetContext("globals.");
+    reader.Read(j, "offScreenFadeDist", g.OffScreenFadeDist);
+
+    reader.Read(j, "useDynamicEdgeBoost", g.UseDynamicEdgeBoost);
+    reader.Read(j, "dynamicEdgeBrightness", g.DynamicEdgeBrightness);
+    reader.Read(j, "dynamicEdgeRange", g.DynamicEdgeRange);
+    reader.Read(j, "dynamicEdgeBias", g.DynamicEdgeBias);
+
+    reader.Read(j, "useDynamicEdgeScale", g.UseDynamicEdgeScale);
+    reader.Read(j, "dynamicEdgeScale", g.DynamicEdgeScale);
+    reader.Read(j, "dynamicEdgeScaleRange", g.DynamicEdgeScaleRange);
+    reader.Read(j, "dynamicEdgeScaleBias", g.DynamicEdgeScaleBias);
+
+    reader.Read(j, "useDynamicCenterBoost", g.UseDynamicCenterBoost);
+    reader.Read(j, "dynamicCenterBrightness", g.DynamicCenterBrightness);
+    reader.Read(j, "dynamicCenterScale", g.DynamicCenterScale);
+    reader.Read(j, "dynamicCenterRange", g.DynamicCenterRange);
+    reader.Read(j, "dynamicCenterBias", g.DynamicCenterBias);
+
+    reader.Read(j, "multiplyScaleByTransformScale", g.MultiplyScaleByTransformScale);
+
+    reader.Read(j, "neverCull", g.NeverCull);
+}
+
+LensFlare::FlareElement ParseElement(const nlohmann::json& j, size_t index, JsonFieldReader& reader)
+{
+    const std::string context = std::format("elements[{}].", index);
+    reader.SetContext(context);
     LensFlare::FlareElement e;
-    e.SpriteName = j.value("sprite", std::string{});
-    e.Visible    = j.value("visible", e.Visible);
-    e.Brightness = j.value("brightness", e.Brightness);
-    e.Scale      = j.value("scale", e.Scale);
-    e.SizeX      = j.value("sizeX", e.SizeX);
-    e.SizeY      = j.value("sizeY", e.SizeY);
-    e.Position   = j.value("position", e.Position);
-    e.OffsetX    = j.value("offsetX", e.OffsetX);
-    e.OffsetY    = j.value("offsetY", e.OffsetY);
-    e.AnamorphicX = j.value("anamorphicX", e.AnamorphicX);
-    e.AnamorphicY = j.value("anamorphicY", e.AnamorphicY);
-    e.Angle           = j.value("angle", e.Angle);
-    e.UseStarRotation = j.value("useStarRotation", e.UseStarRotation);
-    e.RotateToFlare   = j.value("rotateToFlare", e.RotateToFlare);
-    e.RotationSpeed   = j.value("rotationSpeed", e.RotationSpeed);
+    reader.Read(j, "sprite", e.SpriteName);
+    reader.Read(j, "visible", e.Visible);
+    reader.Read(j, "brightness", e.Brightness);
+    reader.Read(j, "scale", e.Scale);
+    reader.Read(j, "sizeX", e.SizeX);
+    reader.Read(j, "sizeY", e.SizeY);
+    reader.Read(j, "position", e.Position);
+    reader.Read(j, "offsetX", e.OffsetX);
+    reader.Read(j, "offsetY", e.OffsetY);
+    reader.Read(j, "anamorphicX", e.AnamorphicX);
+    reader.Read(j, "anamorphicY", e.AnamorphicY);
+    reader.Read(j, "angle", e.Angle);
+    reader.Read(j, "useStarRotation", e.UseStarRotation);
+    reader.Read(j, "rotateToFlare", e.RotateToFlare);
+    reader.Read(j, "rotationSpeed", e.RotationSpeed);
     if (j.contains("tint"))
-        e.Tint = ParseColor(j["tint"], e.Tint);
+        e.Tint = ParseColor(j["tint"], e.Tint, reader, context + "tint.");
     // Absent = negative default = inherit the flare's global boost.
-    e.EdgeBrightnessBoost   = j.value("edgeBrightnessBoost", e.EdgeBrightnessBoost);
-    e.CenterBrightnessBoost = j.value("centerBrightnessBoost", e.CenterBrightnessBoost);
-    e.EdgeScaleBoost        = j.value("edgeScaleBoost", e.EdgeScaleBoost);
-    e.CenterScaleBoost      = j.value("centerScaleBoost", e.CenterScaleBoost);
+    reader.SetContext(context);
+    reader.Read(j, "edgeBrightnessBoost", e.EdgeBrightnessBoost);
+    reader.Read(j, "centerBrightnessBoost", e.CenterBrightnessBoost);
+    reader.Read(j, "edgeScaleBoost", e.EdgeScaleBoost);
+    reader.Read(j, "centerScaleBoost", e.CenterScaleBoost);
     return e;
 }
 
@@ -242,30 +260,46 @@ void LensFlareDefinitionAsset::Unload()
     SetState(AssetState::Unloaded);
 }
 
+bool LensFlareDefinitionAsset::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("LensFlareDefinitionAsset: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    m_AtlasRef.clear();
+    m_Globals = {};
+    m_Elements.clear();
+    return false;
+}
+
 bool LensFlareDefinitionAsset::ParseFromText(const std::string& text)
 {
     m_AtlasRef.clear();
     m_Globals = {};
     m_Elements.clear();
 
-    nlohmann::json doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions*/ false);
-    if (doc.is_discarded() || !doc.is_object())
-        return false;
+    nlohmann::json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+    if (!doc.is_object())
+        return Refuse("its JSON is not an object; write it as an object of atlas, globals and elements");
 
-    m_AtlasRef = doc.value("atlas", std::string{});
+    JsonFieldReader reader;
+    reader.Read(doc, "atlas", m_AtlasRef);
 
     if (doc.contains("globals") && doc["globals"].is_object())
-        ParseGlobals(doc["globals"], m_Globals);
+        ParseGlobals(doc["globals"], m_Globals, reader);
 
     if (doc.contains("elements") && doc["elements"].is_array())
     {
-        for (const auto& e : doc["elements"])
+        const nlohmann::json& elements = doc["elements"];
+        for (size_t index = 0; index < elements.size(); ++index)
         {
-            if (e.is_object())
-                m_Elements.push_back(ParseElement(e));
+            if (elements[index].is_object())
+                m_Elements.push_back(ParseElement(elements[index], index, reader));
         }
     }
 
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
     return true;
 }
 

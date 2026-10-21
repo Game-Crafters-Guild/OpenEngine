@@ -8,6 +8,7 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <span>
@@ -386,7 +387,8 @@ void GraphNodeRegistry::RegisterMaterialTypesFromShaderGraph()
 {
     using namespace ShaderGraph;
 
-    const SgNodeLibraryIndex& index = GetSharedNodeLibraryIndex();
+    const std::filesystem::path projectNodesRoot;
+    const SgNodeLibraryIndex& index = GetSharedNodeLibraryIndex(projectNodesRoot);
 
     for (const auto& entry : index.NodesByType)
     {

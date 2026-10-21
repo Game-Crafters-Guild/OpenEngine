@@ -255,7 +255,7 @@ class FlareElementPreview : public UIElement
             return;
 
         const Rendering::TextureHandle texture =
-            ctx.Manager->TryGetBackgroundTextureHandleByGuid(m_TextureGuid);
+            ctx.Manager->BackgroundImages().TryGetHandle(m_TextureGuid);
         if (!texture.IsValid())
             return;
         const uint32_t textureSlot = ctx.Textures->Register(texture);
@@ -359,7 +359,7 @@ void RenderFlareAtlasSpriteGhost(const UI::Interaction::DragPayload& dragPayload
         return;
 
     constexpr const char* kPreviewId = "flare-atlas-sprite-drag-ghost";
-    auto* preview = dynamic_cast<FlareElementPreview*>(icon.FindById(kPreviewId));
+    auto* preview = dynamic_cast<FlareElementPreview*>(icon.FindById(HashStringId(kPreviewId)));
     if (!preview)
     {
         auto ownedPreview = std::make_unique<FlareElementPreview>();

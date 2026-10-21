@@ -16,7 +16,7 @@ std::string MakeSurfaceShaderTemplateSource()
         "// OpenPBR BRDF — you only describe the surface. This file compiles and\n"
         "// renders as-is; edit and save to hot-reload every material that uses it.\n"
         "//\n"
-        "// Guide:  Engine/Modules/Rendering/docs/SurfaceShaderAuthoring.html\n"
+        "// Guide:  docs/rendering/surface-shader-authoring.mdx\n"
         "// Structs: Engine/Modules/Rendering/Shaders/Includes/surface_io.glsl\n"
         "//\n"
         "// Rules: no #version, no layout()/bindings here — the adapter owns those.\n"

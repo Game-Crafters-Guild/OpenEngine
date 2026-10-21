@@ -223,16 +223,17 @@ static_assert(offsetof(GE_AnimationEventRecord, timeSeconds) == 8);
 static_assert(offsetof(GE_AnimationEventRecord, nameLength) == 12);
 static_assert(offsetof(GE_AnimationEventRecord, name) == 16);
 
-// Logs, once per process, that GE_Animator_PollEventsOnEntity was refused off the main thread: a script that polls
-// from a worker every frame would otherwise fill the log with the same line.
-void ReportPollRefusedOffMainThread()
+// Logs, once per process, that GE_Animator_PollEventsOnEntity was refused on a thread the engine does not schedule: a
+// script that polls from its own thread every frame would otherwise fill the log with the same line.
+void ReportPollRefusedOffEngineThreads()
 {
     static std::atomic<bool> s_Reported{false};
     if (s_Reported.exchange(true))
         return;
-    Logger::Log::Error("GE_Animator_PollEventsOnEntity (AnimatorApi.PollEvents) was called from a thread other than "
-                       "the engine's main thread and was refused, because the animation wave writes the events on "
-                       "worker threads. Poll them from a system's update.");
+    Logger::Log::Error("GE_Animator_PollEventsOnEntity (AnimatorApi.PollEvents) was called from a thread the engine "
+                       "does not schedule and was refused: the animation wave writes the events on the engine's "
+                       "threads, and a thread of your own can run while it does. Poll from a system's update, or post "
+                       "the poll to the main thread with MainThread.Post.");
 }
 
 GE_AnimationEventRecord ToRecord(const GameEngine::Animation::AnimationEvent& event)
@@ -250,9 +251,11 @@ GE_Result PollEvents(World* world, uint64_t entityId, GE_AnimationEventRecord* r
 {
     if (!world)
         return GE_Result_InvalidArg;
-    if (!GameEngine::ScriptingAbi::OnEngineMainThread())
+    // Admitted on the engine's threads only: the animation wave that writes the collectors runs on them, and a
+    // system's update (wherever the scheduler runs it) is ordered after that wave.
+    if (!GameEngine::ScriptingAbi::OnEngineThreadFor(GameEngine::EngineCore::GetInstance()))
     {
-        ReportPollRefusedOffMainThread();
+        ReportPollRefusedOffEngineThreads();
         return GE_Result_Fail;
     }
     const EntityHandle entity = EntityFromId(entityId);

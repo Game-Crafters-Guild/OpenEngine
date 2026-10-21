@@ -51,9 +51,9 @@
 //
 // **Cross-DLL is different.** Engine modules (PathfindingECS, PhysicsECS, ...)
 // are OBJECT libs spliced into Engine.dll. Their TUs implicitly instantiate
-// `World::AddComponent<NavigationGrid>` etc. when they use those components.
+// `World::AddComponent<NavigationSurface>` etc. when they use those components.
 // Consumers (Editor.exe, Player.exe, GameEngine.Native.dll) also write
-// `World::AddComponent<NavigationGrid>` in inspector / scene-load code, which
+// `World::AddComponent<NavigationSurface>` in inspector / scene-load code, which
 // triggers their own implicit instantiation.
 //
 // On Windows, MSVC's weakly-defined COMDAT symbols survive cross-DLL binding

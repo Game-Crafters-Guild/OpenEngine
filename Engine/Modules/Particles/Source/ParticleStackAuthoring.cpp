@@ -93,7 +93,7 @@ void ReadCurve(const Json& source, Math::Curve& curve)
 {
     if (!source.is_array() || source.size() > Math::Curve::Capacity)
         Refuse("A curve is a list of at most 32 keys");
-    curve = {};
+    curve = Math::Curve{};
     for (const auto& item : source)
     {
         RequireKnownKeys(item, {"time", "value", "interpolation", "tangentMode", "inTangent", "outTangent"},

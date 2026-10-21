@@ -8,16 +8,17 @@
 #include "Core/Engine.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "FileSystem/FileSystem.h"
+#include "Image/Encode.h"
+#include "Image/Resample.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 
-#include <stb_image_resize2.h>
-#include <stb_image_write.h>
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <system_error>
 #include <vector>
 
@@ -328,22 +329,20 @@ void ModelThumbnailHandler::PollDiskCacheReadback()
         // kDiskCachePngLongEdge). pngSrc holds sRGB-encoded bytes here.
         uint32_t outW = w;
         uint32_t outH = h;
-        std::vector<uint8_t> downscaled;
+        Image::Image8 downscaled;
         if (maxPngLongEdge > 0 && std::max(w, h) > maxPngLongEdge)
         {
-            const float scale = static_cast<float>(maxPngLongEdge) / static_cast<float>(std::max(w, h));
-            outW = std::max(1u, static_cast<uint32_t>(std::lround(w * scale)));
-            outH = std::max(1u, static_cast<uint32_t>(std::lround(h * scale)));
-            downscaled.resize(static_cast<size_t>(outW) * outH * 4);
-            if (stbir_resize_uint8_srgb(pngSrc, static_cast<int>(w), static_cast<int>(h), 0,
-                                        downscaled.data(), static_cast<int>(outW),
-                                        static_cast<int>(outH), 0, STBIR_RGBA) == nullptr)
+            downscaled = Image::ResampleToLongEdge(std::span(pngSrc, static_cast<size_t>(w) * h * 4), w, h,
+                                                   maxPngLongEdge);
+            if (!downscaled.Valid)
             {
                 Logger::Log::Warning("ModelThumbnailHandler: thumb downscale failed for '{}'",
                                      cachePathStr);
                 return;
             }
-            pngSrc = downscaled.data();
+            pngSrc = downscaled.Pixels.data();
+            outW = downscaled.Width;
+            outH = downscaled.Height;
         }
 
         // Write beside the final path and publish: scroll-time readers probe
@@ -352,12 +351,7 @@ void ModelThumbnailHandler::PollDiskCacheReadback()
         const std::filesystem::path tempPath = FileSystem::MakeTemporarySiblingPath(cachePath);
         const std::string tempPathStr = tempPath.string();
 
-        if (!stbi_write_png(tempPathStr.c_str(),
-                            static_cast<int>(outW),
-                            static_cast<int>(outH),
-                            4,
-                            pngSrc,
-                            static_cast<int>(outW * 4)))
+        if (!Image::WritePngFile(tempPath, std::span(pngSrc, static_cast<size_t>(outW) * outH * 4), outW, outH))
         {
             Logger::Log::Warning("ModelThumbnailHandler: failed to write thumbnail '{}'",
                                  tempPathStr);

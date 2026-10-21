@@ -1,12 +1,39 @@
 #include "Assets/AudioAsset.h"
+#include "Audio/AudioDecoderConfig.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 #include <miniaudio.h>
 
 namespace GameEngine {
+
+namespace {
+
+// Ogg Opus shares the Ogg container and the .ogg extension with Ogg Vorbis, but the
+// engine decodes Vorbis only. An Opus stream's first Ogg page carries the "OpusHead"
+// identification packet (RFC 7845, section 3): the packet starts after the 27-byte
+// page header and its segment table, whose length is the header's last byte.
+bool IsOggOpus(const Vector<uint8>& data)
+{
+    constexpr std::string_view kCapturePattern = "OggS";
+    constexpr std::string_view kOpusHead = "OpusHead";
+    constexpr size_t kPageHeaderBytes = 27;
+
+    if (data.size() < kPageHeaderBytes ||
+        std::memcmp(data.data(), kCapturePattern.data(), kCapturePattern.size()) != 0)
+    {
+        return false;
+    }
+
+    const size_t packetStart = kPageHeaderBytes + data[kPageHeaderBytes - 1];
+    return data.size() >= packetStart + kOpusHead.size() &&
+           std::memcmp(data.data() + packetStart, kOpusHead.data(), kOpusHead.size()) == 0;
+}
+
+} // namespace
 
 AudioAsset::AudioAsset(const GUID& guid, const std::filesystem::path& path)
     : Asset(guid, AssetType::Audio, path)
@@ -159,9 +186,16 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
     m_Format = DetermineFormat(extension);
 
     // Probe via miniaudio decoder (cheap header parse; used for duration heuristics + metadata).
-    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, /*channels*/ 0, /*sampleRate*/ 0);
+    ma_decoder_config cfg = Audio::MakeDecoderConfig();
     ma_decoder decoder{};
     const ma_result ir = ma_decoder_init_memory(data.data(), data.size(), &cfg, &decoder);
+    if (ir != MA_SUCCESS && IsOggOpus(data))
+    {
+        Logger::Log::Error("Audio '{}' is Ogg Opus, which the engine does not decode; re-encode it as Ogg Vorbis, FLAC, MP3 or WAV",
+            GetName());
+        SetState(AssetState::Failed);
+        return false;
+    }
     if (ir != MA_SUCCESS)
     {
         Logger::Log::Error("Audio decode init failed for '{}': ma_result={} '{}', format={}, size={} bytes", 

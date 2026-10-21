@@ -31,6 +31,7 @@
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "Inspectors/RenderLayersRow.h"
 
 #include "Editor/Entities/EditorInspectorPseudoComponents.h"
 
@@ -172,8 +173,9 @@ ResolveActiveMaterialAsset(const Components::MeshRenderer& mr, AssetManager& am)
 }
 
 // Load a model asset by GUID, register its GPU meshes and converted materials,
-// then update the MeshRenderer component and ensure all rendering prerequisites
-// (Transform, WorldTransform, LocalBounds, MeshGPUData) are present.
+// then update the MeshRenderer component and ensure its rendering prerequisites
+// are present (Transform, which brings WorldTransform, and LocalBounds; the
+// MeshRenderer brings MeshGPUData).
 static void AssignModelToMeshRenderer(ECS::World* world,
                                       ECS::EntityHandle entity,
                                       const GUID& guid,
@@ -210,13 +212,6 @@ static void AssignModelToMeshRenderer(ECS::World* world,
     {
         Components::Transform xf{};
         world->AddComponentImmediate(entity, xf);
-    }
-
-    // Ensure WorldTransform exists (required by RenderExtractionSystem query).
-    if (!world->GetComponent<Components::WorldTransform>(entity))
-    {
-        Components::WorldTransform wt{};
-        world->AddComponentImmediate(entity, wt);
     }
 
     // This entity draws submesh 0, so its culling envelope is that submesh's, as
@@ -632,9 +627,10 @@ void RegisterMeshRendererInspector()
             [](Components::MeshRenderer& u, int v) { u.meshId = static_cast<uint32>(std::max(0, v)); },
             "Submesh index within the model asset", extras);
 
-        InspectorDrag::AddComponentIntRowWithDrag<Components::MeshRenderer>(ctx.Parent, "RenderLayerMask", static_cast<int>(mr->renderLayerMask), w, e, n,
-            [](Components::MeshRenderer& u, int v) { u.renderLayerMask = static_cast<uint32>(std::max(0, v)); },
-            "Bitmask controlling which render layers include this mesh", extras);
+        InspectorDrag::AddComponentRenderLayersRow<Components::MeshRenderer>(
+            ctx.Parent, "Render Layers", &Components::MeshRenderer::RenderLayers, w, e, n, undo,
+            "Change Render Layers", "The render layers this mesh is on. A view draws it when they share a layer.",
+            Editor::kRenderLayersNothingTooltip, extras);
 
         InspectorDrag::AddToggleRow(ctx.Parent, "CastShadows", mr->castShadows,
             [getWorld, e, n, extras](bool v) {

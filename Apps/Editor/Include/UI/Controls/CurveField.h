@@ -34,6 +34,9 @@ class CurveField : public UIElement
         /// A 0-24 hour field: the hours under the graph every six hours ("06:00"), and the
         /// playback indicator's time ("17:45") where its line meets them.
         HoursOfDay,
+        /// The time under each vertical grid line and the playback indicator's time, as
+        /// Config::TimeLabel writes them (an EV100 axis: "-6").
+        Formatted,
     };
 
     struct Config
@@ -67,6 +70,8 @@ class CurveField : public UIElement
         /// value is read out elsewhere turns it off.
         bool ShowPlaybackValueMarker = true;
         TimeLabels TimeAxisLabels = TimeLabels::None;
+        /// Writes a time for TimeLabels::Formatted. Unset: the time is written as a number.
+        std::function<std::string(float)> TimeLabel;
         /// Interpolate the keys in log2 of their value (Math::EvaluateCurveKeysLogarithmic) and
         /// draw the value axis logarithmically, for a quantity that spans orders of magnitude
         /// (an illuminance from twilight to noon). The axis runs from the larger of ValueMin and
@@ -225,6 +230,7 @@ class CurveField : public UIElement
     void DrawValueAxisMarks(UI::PrimitiveEmitContext& ctx, const ResolvedStyle& style, const GraphRect& r) const;
     void DrawTimeLabels(UI::PrimitiveEmitContext& ctx, const ResolvedStyle& style, const GraphRect& r, float x,
                         float w) const;
+    std::string TimeLabelText(float time) const;
 
     Config m_Config;
     std::vector<Math::CurveKey> m_Keys;

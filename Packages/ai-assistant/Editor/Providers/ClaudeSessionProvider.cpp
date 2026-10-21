@@ -282,15 +282,27 @@ std::string ClaudeSessionProvider::CheckReadiness(const CancelToken& cancel) con
 void ClaudeSessionProvider::ReadTextDelta(const nlohmann::json& record, TurnState& turn)
 {
     const nlohmann::json& event = JsonFields::Object(record, "event");
-    if (JsonFields::String(event, "type") != "content_block_delta")
-        return;
-    const nlohmann::json& delta = JsonFields::Object(event, "delta");
-    if (JsonFields::String(delta, "type") != "text_delta")
-        return;
-    const std::string text = JsonFields::String(delta, "text");
-    if (text.empty())
-        return;
-    turn.Result.Text += text;
-    turn.Events.OnTextDelta(text);
+    const std::string type = JsonFields::String(event, "type");
+    std::string text;
+    if (type == "content_block_start")
+    {
+        // A text block after another (the text after a tool call, in the same message or the
+        // next) is a paragraph of its own.
+        const nlohmann::json& block = JsonFields::Object(event, "content_block");
+        if (JsonFields::String(block, "type") != "text")
+            return;
+        turn.TextBlocks.BeginBlock();
+        text = JsonFields::String(block, "text");
+    }
+    else if (type == "content_block_delta")
+    {
+        const nlohmann::json& delta = JsonFields::Object(event, "delta");
+        if (JsonFields::String(delta, "type") != "text_delta")
+            return;
+        text = JsonFields::String(delta, "text");
+    }
+    const std::string_view appended = turn.TextBlocks.Append(turn.Result.Text, text);
+    if (!appended.empty())
+        turn.Events.OnTextDelta(appended);
 }
 } // namespace GameEngine

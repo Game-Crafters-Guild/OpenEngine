@@ -21,8 +21,8 @@
 //
 // Call shapes (both real):
 //   external  Query::Parallel from a persistent non-worker caller thread —
-//             the F17 external waiter PARKS on the counter; wave stubs ride
-//             the caller's moodycamel implicit-producer sub-queue.
+//             the caller participates in its counter's tagged tasks; wave
+//             stubs ride the caller's moodycamel implicit-producer sub-queue.
 //   worker    Query::Parallel from inside a pool job (the Scheduler::
 //             MakeJobParallel production shape) — the F17 participating
 //             waiter executes same-counter envelopes from the counter's

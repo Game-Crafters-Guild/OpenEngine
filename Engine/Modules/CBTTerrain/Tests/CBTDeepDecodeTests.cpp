@@ -645,8 +645,10 @@ TEST_F(CBTDeepDecodeGpu, GpuDecodeMatchesCpuLibraryBitExact)
         for (uint32_t wordIdx = 0; wordIdx < 4u; ++wordIdx) // corner1 vec4 words 4..7... compare xyz+sector
         {
             if (wordIdx < 3u)
+            {
                 EXPECT_EQ(verts[s0 * kVW + 4u + wordIdx], verts[s1 * kVW + 4u + wordIdx])
                     << "sibling shared-midpoint local[" << wordIdx << "] differs (nd=" << nd << ")";
+            }
         }
         EXPECT_EQ(verts[s0 * kVW + 18u], verts[s1 * kVW + 18u]) << "sibling midpoint sector word 0";
         EXPECT_EQ(verts[s0 * kVW + 19u], verts[s1 * kVW + 19u]) << "sibling midpoint sector word 1";

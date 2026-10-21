@@ -15,6 +15,7 @@
 // draw. Three vertices, one result.
 
 #include "Includes/sun_glare.glsl"
+#include "Includes/sky_transmittance_lut.glsl"
 
 layout(location = 0) out vec2 vUV;
 layout(location = 1) flat out vec3 vSunTransmittance;
@@ -54,7 +55,8 @@ layout(push_constant) uniform GlarePC
     // (the cascade COUNT comes from the shadow block, which is its owner).
     vec4 cameraShadow;
     // x = terrain-skyline visibility in [0, 1], marched on the CPU against the heightfield so
-    // it holds whether or not the sun is on screen. yzw are std140 padding.
+    // it holds whether or not the sun is on screen. y = planet radius, z = atmosphere radius
+    // (the transmittance LUT's shell, metres). w is std140 padding.
     vec4 horizon;
 } pc;
 
@@ -64,13 +66,14 @@ void main()
     vUV = vec2(p.x, 1.0 - p.y);
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 
-    // Transmittance LUT parameterisation (sky_transmittance_lut.comp): u encodes the ray's
-    // zenith cosine, v the square root of the normalised altitude. Sampled at the SUN's
-    // direction, which is the ray the sun's light actually travels down — the disc's own
-    // lookup keyed on the view direction reduces to this one at the disc's centre.
-    vec2 transUv = vec2(0.5 * (clamp(pc.params.y, -1.0, 1.0) + 1.0),
-                        sqrt(clamp(pc.params.z, 0.0, 1.0)));
-    vSunTransmittance = textureLod(uTransLUT, transUv, 0.0).rgb;
+    // The transmittance LUT read along the SUN's direction, which is the ray the sun's light
+    // actually travels down — the disc's own lookup keyed on the view direction reduces to this
+    // one at the disc's centre. 0 once the sun is below the camera's horizon.
+    float planetRadius = pc.horizon.y;
+    float atmosphereRadius = pc.horizon.z;
+    float camR = mix(planetRadius, atmosphereRadius, clamp(pc.params.z, 0.0, 1.0));
+    vSunTransmittance = GE_SkyTransmittanceToTop(uTransLUT, camR, clamp(pc.params.y, -1.0, 1.0),
+                                                 planetRadius, atmosphereRadius);
 
     // Shadow cascades: anything that CASTS, on screen or off, including a sun behind the
     // camera. The MINIMUM over cascades, not the one a view depth would select — each

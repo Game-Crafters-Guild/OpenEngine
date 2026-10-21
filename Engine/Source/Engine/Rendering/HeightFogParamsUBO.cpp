@@ -1,6 +1,12 @@
 #include "Engine/Rendering/HeightFogParamsUBO.h"
 
+#include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Engine/Rendering/PostProcessSettings.h"
+#include "Engine/Rendering/SkyBackdrop.h"
+#include "Rendering/Sky/SkySettings.h"
+
+#include <algorithm>
+#include <cmath>
 
 namespace GameEngine::Engine::Renderer {
 
@@ -69,6 +75,57 @@ void FillHeightFogParamsUBO(const PostProcessSettings& settings, HeightFogParams
     out.noiseFadeEnd = settings.HeightFogNoiseFadeEnd;
     out.skyHorizonOffset = settings.HeightFogSkyHorizonOffset;
     out.skyBottomStrength = settings.HeightFogSkyBottomStrength;
+}
+
+void FillHeightFogSkyColor(const PostProcessSettings& settings, const Rendering::SkySettings* activeSky,
+                           HeightFogParamsUBO& out)
+{
+    out.colorSource = static_cast<int32>(HeightFogColorSource::Fixed);
+    if (settings.HeightFogColorMode != static_cast<int32>(::GameEngine::Components::HeightFogColorMode::SkyHorizon) ||
+        !activeSky)
+        return;
+
+    const Rendering::SkySettings& sky = *activeSky;
+    // sky_render.frag's single exposure multiply, applied to every backdrop kind.
+    const float exposure = std::exp2(sky.exposureEV);
+    out.skyHorizonScale = exposure;
+    out.skyNightAmount = 0.0f;
+    out.skyAzimuthOffset = 0.0f;
+
+    switch (ClassifySkyBackdrop(sky))
+    {
+    case SkyBackdropKind::Hdri:
+        out.colorSource = static_cast<int32>(HeightFogColorSource::SkyHdri);
+        out.skyHorizonScale = exposure * sky.hdriIntensity;
+        out.skyAzimuthOffset = sky.skyboxRotationRadians;
+        return;
+    case SkyBackdropKind::Gradient:
+        // The gradient at view y == 0 is its horizon colour alone.
+        out.colorSource = static_cast<int32>(HeightFogColorSource::SkyConstant);
+        out.skyHorizonColorR = sky.gradientSkyHorizonColor[0];
+        out.skyHorizonColorG = sky.gradientSkyHorizonColor[1];
+        out.skyHorizonColorB = sky.gradientSkyHorizonColor[2];
+        return;
+    case SkyBackdropKind::Atmosphere:
+        break;
+    }
+
+    const float nightAmount = std::clamp(sky.nightSkyBlend, 0.0f, 1.0f);
+    if (sky.belowHorizonMode == static_cast<uint32_t>(Rendering::SkyBelowHorizonMode::StylizedGround))
+    {
+        // sky_render.frag paints the stylized rim over the horizon, fully at viewZenithCos == 0.
+        out.colorSource = static_cast<int32>(HeightFogColorSource::SkyConstant);
+        out.skyHorizonColorR = std::lerp(sky.groundHorizonColor[0], sky.groundHorizonNightColor[0], nightAmount);
+        out.skyHorizonColorG = std::lerp(sky.groundHorizonColor[1], sky.groundHorizonNightColor[1], nightAmount);
+        out.skyHorizonColorB = std::lerp(sky.groundHorizonColor[2], sky.groundHorizonNightColor[2], nightAmount);
+        return;
+    }
+
+    out.colorSource = static_cast<int32>(HeightFogColorSource::SkyViewLut);
+    out.skyNightAmount = nightAmount;
+    out.skyHorizonColorR = sky.nightSkyHorizonColor[0];
+    out.skyHorizonColorG = sky.nightSkyHorizonColor[1];
+    out.skyHorizonColorB = sky.nightSkyHorizonColor[2];
 }
 
 } // namespace GameEngine::Engine::Renderer

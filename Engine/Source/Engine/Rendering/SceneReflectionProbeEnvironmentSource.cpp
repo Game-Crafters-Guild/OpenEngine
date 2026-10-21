@@ -2,6 +2,9 @@
 
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/IRenderFeature.h"
+#include "Engine/Rendering/IrradianceReadbackFeature.h"
+#include "Engine/Rendering/MaterialSystem.h"
+#include "Engine/Rendering/PipelineVariantCache.h"
 #include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "RenderServicesDetail.h"
@@ -47,6 +50,9 @@ constexpr float kCaptureNearPlane = 0.005f;
 constexpr uint32_t kAllFacesMask = (1u << ImageBasedLightingFeature::kNumCaptureFaces) - 1u;
 static_assert(ImageBasedLightingFeature::kNumCaptureFaces == kProbeFaceCount,
               "the probe-face cull index block is sized to the capture cube's face count");
+static_assert(SceneProbeRecaptureSchedule::kPipelineRestFrames ==
+                  ImageBasedLightingFeature::kIblRebakeIntervalFrames,
+              "a Once probe waits one rebake throttle window for the Pipelines epoch to rest");
 
 struct ProbeCubeFaceBasis
 {
@@ -142,7 +148,7 @@ bool SceneReflectionProbeEnvironmentSource::EnsureViews()
                                                 Rendering::ViewPurpose::UtilityCapture,
                                                 Rendering::ViewParticipation::OnDemand);
     m_Services->Views().SetViewActiveRenderPipeline(m_ViewId, false);
-    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CullMask);
+    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CapturedLayers);
     m_Services->Views().SetViewWorldId(m_ViewId, m_Desc.WorldId);
 
     m_ViewsAllocated = true;
@@ -154,7 +160,7 @@ void SceneReflectionProbeEnvironmentSource::ArmFaces(uint32_t faceMask)
     if (!m_Services || !m_ViewsAllocated || m_ViewId == 0)
         return;
     m_Services->Views().RequestViewFrame(m_ViewId);
-    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CullMask);
+    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CapturedLayers);
     m_Services->Views().SetViewWorldId(m_ViewId, m_Desc.WorldId);
     m_ArmedFaceMask = faceMask & kAllFacesMask;
 }
@@ -183,7 +189,7 @@ void SceneReflectionProbeEnvironmentSource::ScheduleCulling(const FeatureCulling
             break;
         }
     }
-    if (!view || view->ActiveRenderLayerMask() == 0u)
+    if (!view || view->ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
         return;
 
     // Every face shares the eye and the projection, so one derived camera
@@ -259,7 +265,7 @@ uint64_t SceneReflectionProbeEnvironmentSource::BaseDigest() const
     HashBytes(h, m_Desc.BoxAxisY, sizeof(m_Desc.BoxAxisY));
     HashBytes(h, m_Desc.BoxAxisZ, sizeof(m_Desc.BoxAxisZ));
     HashBytes(h, &m_Desc.MaxDistance, sizeof(m_Desc.MaxDistance));
-    HashBytes(h, &m_Desc.CullMask, sizeof(m_Desc.CullMask));
+    HashBytes(h, &m_Desc.CapturedLayers.Bits, sizeof(m_Desc.CapturedLayers.Bits));
     HashBytes(h, &m_Desc.ExposureEV, sizeof(m_Desc.ExposureEV));
     HashBytes(h, &m_Desc.RotationRadians, sizeof(m_Desc.RotationRadians));
     HashBytes(h, &m_Desc.CaptureResolution, sizeof(m_Desc.CaptureResolution));
@@ -307,7 +313,8 @@ SceneProbeWorldEpochs SceneReflectionProbeEnvironmentSource::WorldEpochs() const
 
 void SceneReflectionProbeEnvironmentSource::TickBakeClock(float deltaTimeSeconds)
 {
-    m_Schedule.Tick(deltaTimeSeconds > 0.0f ? deltaTimeSeconds : kFallbackDeltaTimeSeconds);
+    m_Schedule.Tick(deltaTimeSeconds > 0.0f ? deltaTimeSeconds : kFallbackDeltaTimeSeconds, WorldEpochs(),
+                    m_Services->Materials().Variants().HasAnyPipelineBuildsInFlight());
 }
 
 float SceneReflectionProbeEnvironmentSource::RealtimeInterval() const
@@ -576,7 +583,7 @@ void SceneReflectionProbeEnvironmentSource::RecordSpecularPrefilter(RenderGraph:
     }
 
     feature.SetLastBakedDigest(bakedDigest);
-    feature.ResetFramesSinceBake();
+    feature.MarkBaked();
 }
 
 bool SceneReflectionProbeEnvironmentSource::DeclareCaptureFrame(const EnvironmentBakeContext& ctx,
@@ -596,7 +603,7 @@ bool SceneReflectionProbeEnvironmentSource::DeclareCaptureFrame(const Environmen
 
     const uint32_t firstFace = static_cast<uint32_t>(sliceIndices[0] - kProbeFaceCullingIndexBase);
     m_Services->Views().SetCameraData(m_CameraId, MakeFaceCamera(firstFace));
-    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CullMask);
+    m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CapturedLayers);
     m_Services->Views().SetViewWorldId(m_ViewId, m_Desc.WorldId);
 
     m_Services->WriteViewLightBuffer(m_ViewId);
@@ -660,6 +667,8 @@ bool SceneReflectionProbeEnvironmentSource::DeclareFaceCapture(
     // capture face binds a zero-intensity EnvData so it never samples the cube
     // it is baking. Scoped to exactly this world pass declaration.
     m_Services->SetWorldPassExcludeEnvironment(!m_Desc.CaptureEnvironment);
+    // The capture view runs no render graph, so its pass binds the fallback ExposureHistory, whose
+    // pre-exposure reads as 1: the cube stores absolute radiance (P = 1 by construction).
     const auto world = m_Services->AddWorldPassForView(
         frame, m_ViewId, targets, MaterialKeyword::Instanced,
         RenderServices::WorldPassDrawScope::All, ProbeFaceCullingIndex(face));
@@ -706,6 +715,10 @@ void SceneReflectionProbeEnvironmentSource::DeclareFinalizePasses(
         [self, feature = &feature](RenderGraph::RGContext& c) {
             self->RecordDiffuseConvolve(c, *feature);
         });
+    // The probe's cube is what lights the scene while it is active, so the readback follows it.
+    if (auto* irradianceReadback = m_Services->GetFeature<IrradianceReadbackFeature>())
+        irradianceReadback->DeclareCopy(*ctx.Device, frame, irrCube, ImageBasedLightingFeature::kIrradianceSize,
+                                        bakedDigest);
 
     frame.AddComputePass(
         "IBLGen.SceneProbeSpecularPrefilter", PassPhase::kWorldRender + 1,
@@ -733,6 +746,12 @@ void SceneReflectionProbeEnvironmentSource::ScheduleBake(const EnvironmentBakeCo
     RenderGraph::RGFrame& frame = *ctx.Frame;
     ImageBasedLightingFeature& feature = *ctx.Feature;
     feature.TickFramesSinceBake();
+
+    // An idle probe declares no bake this frame, so a readback that arrives between bakes copies
+    // the cube as it rests, once.
+    if (m_CaptureState == CaptureState::Idle)
+        if (auto* irradianceReadback = m_Services->GetFeature<IrradianceReadbackFeature>())
+            irradianceReadback->DeclareRestingCopy(*ctx.Device, frame, feature);
 
     // Realtime REBAKES time-slice (one face per frame); the first-ever bake,
     // Once probes, and every-frame probes take the single-frame path so the

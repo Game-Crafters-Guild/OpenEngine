@@ -10,7 +10,7 @@
 
 const float kGrassCellSize = 8.0;
 const float kGrassCellArea = kGrassCellSize * kGrassCellSize;
-const uint kGrassMaxSlotsPerCell = 4096u;
+const uint kGrassMaxSlotsPerCell = 16384u;
 const float kGrassMinGrowth = 0.02;
 const float kGrassGrowthSlotFraction = 0.15;
 const uint kGrassLodCount = 2u;
@@ -137,6 +137,8 @@ struct GrassSlotSample
     float ScaleRand;
     float WidthRand;
     float MaskRand;
+    float TiltRand;
+    float TwistRand;
 };
 
 GrassSlotSample GrassSampleSlot(int cellX, int cellZ, uint slot, uint seed)
@@ -160,6 +162,10 @@ GrassSlotSample GrassSampleSlot(int cellX, int cellZ, uint slot, uint seed)
     s.WidthRand = GrassHashToUnit(h);
     h = GrassHashNext(h);
     s.MaskRand = GrassHashToUnit(h);
+    h = GrassHashNext(h);
+    s.TiltRand = GrassHashToUnit(h);
+    h = GrassHashNext(h);
+    s.TwistRand = GrassHashToUnit(h);
     return s;
 }
 

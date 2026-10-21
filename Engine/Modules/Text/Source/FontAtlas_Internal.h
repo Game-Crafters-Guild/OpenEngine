@@ -131,6 +131,17 @@ inline hb_buffer_t* GetThreadLocalHBBuffer()
     return s_HbBuf;
 }
 
+// HarfBuzz's guess over the whole string, for text DetectDirScriptUtf8 cannot
+// classify. A null lang stands for the default language the guess assigns.
+// Uses the thread-local buffer, so call it before filling that buffer.
+inline HBDirScript GuessDirScriptUtf8(std::string_view s)
+{
+    hb_buffer_t* buffer = GetThreadLocalHBBuffer();
+    hb_buffer_add_utf8(buffer, s.data(), (int)s.size(), 0, (int)s.size());
+    hb_buffer_guess_segment_properties(buffer);
+    return {hb_buffer_get_direction(buffer), hb_buffer_get_script(buffer), nullptr};
+}
+
 // Optional ligatures must not survive non-zero letter-spacing (CSS Text 3
 // 8.2): tracking a ligated pair would space the fused glyph as one cluster and
 // make the tracking of a word depend on which letter pairs happen to ligate.

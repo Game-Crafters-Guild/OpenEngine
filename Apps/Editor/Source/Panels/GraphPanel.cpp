@@ -3537,7 +3537,7 @@ void GraphPanel::SetupUI()
 
     const std::vector<GraphToolbarEntry> kindEntries =
         m_KindHooks.ToolbarEntries ? m_KindHooks.ToolbarEntries() : std::vector<GraphToolbarEntry>{};
-    auto addEntries = [this, &toolbarRight](const std::vector<GraphToolbarEntry>& entries,
+    auto addEntries = [&toolbarRight](const std::vector<GraphToolbarEntry>& entries,
                                             GraphToolbarEntry::Place place)
     {
         for (const GraphToolbarEntry& entry : entries)

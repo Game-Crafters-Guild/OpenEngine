@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
-# These host-side checks (the runtime patches, the package build, the examples) run on the
-# build host, including desktop builds.
+# These host-side checks (the runtime patches, the export's content staging, the package
+# build, the examples) run on the build host, including desktop builds.
 if(BUILD_TESTING)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     find_program(GE_WEB_TEST_NODE NAMES node)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME WebExportContent
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/Web/test_export_web_player.py)
+        set_tests_properties(WebExportContent PROPERTIES TIMEOUT 30)
+    endif()
     if(Python3_Interpreter_FOUND AND GE_WEB_TEST_NODE)
         add_test(NAME WebMailboxPatch
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/Web/test_patch_check_mailbox.py)

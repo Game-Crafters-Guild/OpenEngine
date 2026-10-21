@@ -415,6 +415,10 @@ TEST(TopologyBench, BENCHMARK_FeedCensus_JobCounterWaveStorm)
     const double wallMs = ElapsedUs(t0, SteadyClock::now()) / 1000.0;
 
     EXPECT_EQ(executed.load(), uint64_t{kWaves} * kTasksPerWave);
+    // The waiter runs its own jobs, so a Run's queue visit can still be queued
+    // when Wait returns; the census is read once every visit has run.
+    ASSERT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; },
+                          std::chrono::milliseconds(5000)));
     const Census d = Delta(pool.GetStatistics(), before);
     PrintCensus("JobCounter wave storm (10k waves x Run(8)+Wait)", d, wallMs);
     ExpectCensusConserved(d);

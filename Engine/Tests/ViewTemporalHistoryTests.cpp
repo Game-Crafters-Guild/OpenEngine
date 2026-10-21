@@ -431,8 +431,10 @@ TEST(ViewTemporalHistory, RebasedEndpointDifferencingSurvivesLongUptimeWhereAbso
                 << offset << " s";
 
             if (uptime >= 65520.0)
+            {
                 EXPECT_LT(std::abs(rebasedDelta - kFrame), std::abs(absoluteDelta - kFrame))
                     << "the rebased lane must be strictly better than the absolute one here";
+            }
         }
     }
 }

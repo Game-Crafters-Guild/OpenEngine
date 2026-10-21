@@ -8,9 +8,13 @@
    weight — dimming the text is what made a read-only panel unreadable — and
    drops the affordances that promise a menu the control will not open. */
 
+/* Without its plate the value is text, so it starts where the row's other values start: no left
+   padding and no left border inset. */
 .dropdown:disabled > .dropdown-header {
 	background-color: transparent;
 	border-color: transparent;
+	padding-left: 0px;
+	border-left-width: 0px;
 	cursor: default;
 }
 

@@ -58,11 +58,11 @@ struct StructuralFixture
         Ui->Update(0.0f, /*interactive=*/false);
     }
 
-    UIElement* Find(const char* id) const { return Ui->GetRootElement()->FindById(id); }
+    UIElement* Find(StringId id) const { return Ui->GetRootElement()->FindById(id); }
 
     uint32_t Background(const char* id) const
     {
-        const UIElement* el = Find(id);
+        const UIElement* el = Find(HashStringId(id));
         return el ? el->GetResolvedStyle().Visual.BackgroundColor : kUnmarked;
     }
 };
@@ -119,7 +119,7 @@ TEST(StructuralPseudoRestyleTests, InsertAndRemoveToggleOnlyChildOnTheOtherSibli
     fx.Update();
     EXPECT_EQ(fx.Background("a"), kUnmarked) << "a kept :only-child after a sibling was inserted";
 
-    root->RemoveChild(fx.Find("b"));
+    root->RemoveChild(fx.Find("b"_sid));
     fx.Update();
     EXPECT_EQ(fx.Background("a"), kMarked) << "a did not regain :only-child after its sibling was removed";
 }
@@ -148,7 +148,7 @@ TEST(StructuralPseudoRestyleTests, RemoveMovesLastOfTypeToEarlierSameTypeSibling
     ASSERT_EQ(fx.Background("a"), kUnmarked);
     ASSERT_EQ(fx.Background("b"), kMarked);
 
-    fx.Ui->GetRootElement()->RemoveChild(fx.Find("b"));
+    fx.Ui->GetRootElement()->RemoveChild(fx.Find("b"_sid));
     fx.Update();
 
     EXPECT_EQ(fx.Background("a"), kMarked) << "a did not become :last-of-type when the later element of its type was removed";
@@ -162,7 +162,7 @@ TEST(StructuralPseudoRestyleTests, FirstChildAddedClearsParentEmpty)
         GTEST_SKIP() << "Device init failed";
     ASSERT_EQ(fx.Background("box"), kMarked);
 
-    fx.Find("box")->AddChild(std::make_unique<UIElement>());
+    fx.Find("box"_sid)->AddChild(std::make_unique<UIElement>());
     fx.Update();
 
     EXPECT_EQ(fx.Background("box"), kUnmarked) << "the parent kept :empty after its first child was added";

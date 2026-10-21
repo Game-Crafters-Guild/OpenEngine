@@ -22,6 +22,9 @@ class LayoutPresetController
                                      UIManager* mainUi,
                                      const DockNode* preset);
     static void SetActiveToolbarIndex(UIManager* mainUi, int activeIndex);
+    /// Copies the main dockspace's splitter positions into the docking model,
+    /// so a layout read from the model matches what the user sees.
+    static void SyncSplitRatios(UIManager* mainUi);
 };
 
 } // namespace Editor

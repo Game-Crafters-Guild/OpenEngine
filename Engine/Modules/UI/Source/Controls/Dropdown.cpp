@@ -8,6 +8,7 @@
 #include "Input/KeyCodes.h"
 #include "UI/Controls/Label.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
+#include "../Layout/DropdownPopupPlacement.h"
 #include "UI/UIElement.h"
 #include "UI/UIManager.h"
 #include "UI/StyleProperties.h"
@@ -349,99 +350,16 @@ void Dropdown::OnPostLayout()
 // tree another post-layout dispatch and solve.
 void Dropdown::UpdatePopupPlacement()
 {
-    const auto setUpward = [this](bool upward)
-    {
-        if (upward)
-            AddClass("open-upward");
-        else
-            RemoveClass("open-upward");
-    };
-
     if (!m_ItemsContainer)
     {
-        setUpward(false);
+        RemoveClass("open-upward");
         return;
     }
-
-    UIManager* manager = GetOwnerManager();
-    UIElement* root = manager ? manager->GetRootElement() : nullptr;
-    if (!root)
-    {
-        setUpward(false);
-        return;
-    }
-
-    // A popup may be well inside the window yet immediately cross a clipped
-    // dock/panel boundary. Use the intersection of genuine viewport ancestors
-    // as the available space so bottom-edge dropdowns flip upward before
-    // their rows overlap another dock and lose pointer hit testing, and so a
-    // popup in a narrow panel is measured against that panel.
-    //
-    // Only a ScrollView's clip viewport or a dock panel box count: either one
-    // imposes a real limit independent of its content. A plain overflow:hidden
-    // wrapper (e.g. one used only to force ellipsis text truncation) sizes
-    // itself to fit its own content and clips nothing under normal layout, so
-    // treating it as a boundary here starves the room estimate and flips the
-    // popup upward for no visible reason.
-    float visibleTop = root->GetLayoutY();
-    float visibleBottom = visibleTop + root->GetLayoutHeight();
-    float visibleLeft = root->GetLayoutX();
-    float visibleRight = visibleLeft + root->GetLayoutWidth();
-    for (UIElement* ancestor = GetParent(); ancestor; ancestor = ancestor->GetParent())
-    {
-        if (!ancestor->HasClass("scroll-viewport") && !ancestor->HasClass("panel"))
-            continue;
-        visibleTop = std::max(visibleTop, ancestor->GetLayoutY());
-        visibleBottom = std::min(visibleBottom,
-                                 ancestor->GetLayoutY() + ancestor->GetLayoutHeight());
-        visibleLeft = std::max(visibleLeft, ancestor->GetLayoutX());
-        visibleRight = std::min(visibleRight,
-                                ancestor->GetLayoutX() + ancestor->GetLayoutWidth());
-    }
-
-    constexpr float kPopupEdgeClearance = 2.0f;
-
-    const float headerTop = GetLayoutY();
-    const float headerBottom = headerTop + GetLayoutHeight();
-    const float roomAbove = std::max(0.0f, headerTop - visibleTop);
-    const float roomBelow = std::max(0.0f, visibleBottom - headerBottom);
-
-    // A closed popup has no current layout height. Use the standard dropdown
-    // row height for its first opening, then prefer the measured height on
-    // subsequent openings.
+    // A closed popup has no layout height: the standard row height stands in for its first opening.
     constexpr float kEstimatedRowHeight = 24.0f;
     constexpr float kEstimatedPopupPadding = 4.0f;
-    const float measuredHeight = m_ItemsContainer->GetLayoutHeight();
-    const float estimatedHeight =
-        kEstimatedPopupPadding + static_cast<float>(m_Options.size()) * kEstimatedRowHeight;
-    const float requiredHeight =
-        measuredHeight > 1.0f ? measuredHeight + kPopupEdgeClearance : estimatedHeight;
-    setUpward(roomBelow < requiredHeight && roomAbove > roomBelow);
-
-    const float available = visibleRight - visibleLeft - 2.0f * kPopupEdgeClearance;
-    const float headerLeft = GetLayoutX();
-    // Before the first layout the popup has no width of its own; it is at least
-    // as wide as the header it matches.
-    const float popupWidth = std::max(m_ItemsContainer->GetLayoutWidth(), GetLayoutWidth());
-    const float overflowRight = (headerLeft + popupWidth) - (visibleRight - kPopupEdgeClearance);
-    float offset = overflowRight > 0.0f ? -overflowRight : 0.0f;
-    const float leftLimit = (visibleLeft + kPopupEdgeClearance) - headerLeft;
-    offset = std::max(offset, std::min(0.0f, leftLimit));
-    if (offset < 0.0f)
-    {
-        m_ItemsContainer->Overrides().Set(Style::PositionLeft, StyleLength::Px(offset));
-        // A popup that has to be pulled back does not fit where it was anchored,
-        // and it was sized against the header, not the panel: give it the panel's
-        // width so its rows use the space that is there instead of wrapping
-        // beside it.
-        if (available > 0.0f)
-            m_ItemsContainer->Overrides().Set(Style::MinWidth, StyleLength::Px(available));
-    }
-    else
-    {
-        m_ItemsContainer->Overrides().Reset(Style::PositionLeft);
-        m_ItemsContainer->Overrides().Reset(Style::MinWidth);
-    }
+    UI::Layout::PlaceDropdownPopup(*this, *m_ItemsContainer,
+                                   kEstimatedPopupPadding + static_cast<float>(m_Options.size()) * kEstimatedRowHeight);
 }
 
 void Dropdown::EnsureHeader()

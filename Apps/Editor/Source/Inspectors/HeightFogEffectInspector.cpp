@@ -31,6 +31,7 @@ namespace
 using namespace InspectorDrag;
 using HF = Components::HeightFogEffect;
 using Components::HeightFogAxisMode;
+using Components::HeightFogColorMode;
 using Components::HeightFogGradientMode;
 using Components::HeightFogLayerMode;
 using Components::HeightFogPreset;
@@ -50,6 +51,11 @@ static constexpr EnumEntry<HeightFogAxisMode> kHeightFogAxisModes[] = {
     {HeightFogAxisMode::WorldX, "World X"},
     {HeightFogAxisMode::WorldZ, "World Z"},
     {HeightFogAxisMode::Custom, "Custom"},
+};
+
+static constexpr EnumEntry<HeightFogColorMode> kHeightFogColorModes[] = {
+    {HeightFogColorMode::FixedColor, "Fixed Color"},
+    {HeightFogColorMode::SkyHorizon, "Sky Horizon"},
 };
 
 static constexpr EnumEntry<HeightFogGradientMode> kHeightFogGradientModes[] = {
@@ -471,83 +477,103 @@ void RegisterHeightFogEffectInspector()
 
         InspectorUI::AddTextBlock(ctx.Parent, "Color", "inspector-section-subheader");
 
-        AddFogColorRow(ctx.Parent, "Emissive", "Base fog color", w, e, n, undo, ctx.OpenColorPickerWindow,
-            &HF::Emissive, {0.48f, 0.54f, 0.60f}, "Change Height Fog Emissive");
-
-        auto* gradientField = InspectorUI::AddEnumRow(ctx.Parent, "Gradient Mode", kHeightFogGradientModes, effect->GradientMode,
-            "Dual-color fog gradient driver.");
-        gradientField->SetOnValueChanged([w, e, n, undo](HeightFogGradientMode mode) {
-            CommitComponentWithUndo<HF>(w, e, n, undo, "Change Height Fog Gradient Mode",
-                [mode](HF& u) { u.GradientMode = mode; u.Preset = HeightFogPreset::Custom; });
+        auto* colorModeField = InspectorUI::AddEnumRow(ctx.Parent, "Color Mode", kHeightFogColorModes,
+            effect->ColorMode,
+            "Fixed Color uses the colors below. Sky Horizon takes the sky's color at the horizon, so the "
+            "haze follows the time of day.");
+        colorModeField->SetOnValueChanged([w, e, n, undo](HeightFogColorMode mode) {
+            CommitComponentWithUndo<HF>(w, e, n, undo, "Change Height Fog Color Mode",
+                [mode](HF& u) { u.ColorMode = mode; u.Preset = HeightFogPreset::Custom; });
         });
 
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Gradient Strength", effect->GradientStrength, w, e, n,
-            undo, "Change Height Fog Gradient Strength",
-            [](HF& u, float v) { u.GradientStrength = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
-            0.05f, "Blend weight between low and high fog colors.",
-            {}, 0.0f, 1.0f);
-
-        AddFogColorRow(ctx.Parent, "Gradient Low", "Near / low fog tint", w, e, n, undo, ctx.OpenColorPickerWindow,
-            &HF::GradientLowColor, {0.48f, 0.54f, 0.60f}, "Change Height Fog Gradient Low");
-
-        AddFogColorRow(ctx.Parent, "Gradient High", "Far / high fog tint", w, e, n, undo, ctx.OpenColorPickerWindow,
-            &HF::GradientHighColor, {0.72f, 0.78f, 0.85f}, "Change Height Fog Gradient High");
-
-        InspectorUI::AddTextBlock(ctx.Parent, "Directional Light", "inspector-section-subheader");
-
-        AddToggleRow(ctx.Parent, "Track Sun Light", effect->TrackDirectionalLight,
-            [w, e, n, undo](bool v) {
-                CommitComponentWithUndo<HF>(w, e, n, undo, "Change Height Fog Sun Tracking",
-                    [v](HF& u) { u.TrackDirectionalLight = v; u.Preset = HeightFogPreset::Custom; });
-            },
-            "Use the scene directional light for fog sun direction, color, and intensity.");
-
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sun Intensity Scale", effect->SunIntensityScale, w, e, n,
-            undo, "Change Height Fog Sun Intensity Scale",
-            [](HF& u, float v) { u.SunIntensityScale = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
-            0.05f, "Multiplier applied when tracking the directional light.",
-            {}, 0.0f, 8.0f);
-
-        if (!effect->TrackDirectionalLight)
+        // The sky's horizon radiance already carries the sun's scattering, so the sky mode has no
+        // fixed colors and no sun in-scatter to author; a line says where the color comes from.
+        if (effect->ColorMode == HeightFogColorMode::SkyHorizon)
         {
-            AddIndexedFloatRow(ctx.Parent, "Sun Dir X", effect->SunDirection[0], w, e, n, undo,
-                "Change Height Fog Sun Direction X",
-                [](HF& u, float v) { u.SunDirection[0] = v; u.Preset = HeightFogPreset::Custom; },
-                0.01f, "Manual sun direction.");
-            AddIndexedFloatRow(ctx.Parent, "Sun Dir Y", effect->SunDirection[1], w, e, n, undo,
-                "Change Height Fog Sun Direction Y",
-                [](HF& u, float v) { u.SunDirection[1] = v; u.Preset = HeightFogPreset::Custom; },
-                0.01f, "Manual sun direction.");
-            AddIndexedFloatRow(ctx.Parent, "Sun Dir Z", effect->SunDirection[2], w, e, n, undo,
-                "Change Height Fog Sun Direction Z",
-                [](HF& u, float v) { u.SunDirection[2] = v; u.Preset = HeightFogPreset::Custom; },
-                0.01f, "Manual sun direction.");
+            InspectorUI::AddTextBlock(ctx.Parent,
+                "The sky supplies the color and the sunlight, at the horizon in each view direction.",
+                "inspector-text");
         }
+        else
+        {
+            AddFogColorRow(ctx.Parent, "Emissive", "Base fog color", w, e, n, undo, ctx.OpenColorPickerWindow,
+                &HF::Emissive, {0.48f, 0.54f, 0.60f}, "Change Height Fog Emissive");
 
-        AddFogColorRow(ctx.Parent, "Sun Color", "Sun in-scatter tint", w, e, n, undo, ctx.OpenColorPickerWindow,
-            &HF::SunColor, {1.0f, 0.82f, 0.58f}, "Change Height Fog Sun Color");
+            auto* gradientField = InspectorUI::AddEnumRow(ctx.Parent, "Gradient Mode", kHeightFogGradientModes, effect->GradientMode,
+                "Dual-color fog gradient driver.");
+            gradientField->SetOnValueChanged([w, e, n, undo](HeightFogGradientMode mode) {
+                CommitComponentWithUndo<HF>(w, e, n, undo, "Change Height Fog Gradient Mode",
+                    [mode](HF& u) { u.GradientMode = mode; u.Preset = HeightFogPreset::Custom; });
+            });
 
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sun Intensity", effect->SunIntensity, w, e, n,
-            undo, "Change Height Fog Sun Intensity",
-            [](HF& u, float v) { u.SunIntensity = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
-            0.05f, "Sun in-scatter strength when not tracking a light.",
-            {}, 0.0f, 8.0f);
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Gradient Strength", effect->GradientStrength, w, e, n,
+                undo, "Change Height Fog Gradient Strength",
+                [](HF& u, float v) { u.GradientStrength = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+                0.05f, "Blend weight between low and high fog colors.",
+                {}, 0.0f, 1.0f);
 
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase", effect->Phase, w, e, n,
-            undo, "Change Height Fog Phase",
-            [](HF& u, float v) { u.Phase = std::clamp(v, -0.95f, 0.95f); u.Preset = HeightFogPreset::Custom; },
-            0.01f, "Henyey-Greenstein anisotropy for sun scattering.",
-            {}, -0.95f, 0.95f);
+            AddFogColorRow(ctx.Parent, "Gradient Low", "Near / low fog tint", w, e, n, undo, ctx.OpenColorPickerWindow,
+                &HF::GradientLowColor, {0.48f, 0.54f, 0.60f}, "Change Height Fog Gradient Low");
 
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase Weight 0", effect->PhaseWeight0, w, e, n,
-            undo, "Change Height Fog Phase Weight 0",
-            [](HF& u, float v) { u.PhaseWeight0 = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
-            0.01f, "Primary HG lobe weight.");
+            AddFogColorRow(ctx.Parent, "Gradient High", "Far / high fog tint", w, e, n, undo, ctx.OpenColorPickerWindow,
+                &HF::GradientHighColor, {0.72f, 0.78f, 0.85f}, "Change Height Fog Gradient High");
 
-        AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase Weight 1", effect->PhaseWeight1, w, e, n,
-            undo, "Change Height Fog Phase Weight 1",
-            [](HF& u, float v) { u.PhaseWeight1 = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
-            0.01f, "Secondary multi-lobe weight.");
+            InspectorUI::AddTextBlock(ctx.Parent, "Directional Light", "inspector-section-subheader");
+
+            AddToggleRow(ctx.Parent, "Track Sun Light", effect->TrackDirectionalLight,
+                [w, e, n, undo](bool v) {
+                    CommitComponentWithUndo<HF>(w, e, n, undo, "Change Height Fog Sun Tracking",
+                        [v](HF& u) { u.TrackDirectionalLight = v; u.Preset = HeightFogPreset::Custom; });
+                },
+                "Use the scene directional light for fog sun direction, color, and intensity.");
+
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sun Intensity Scale", effect->SunIntensityScale, w, e, n,
+                undo, "Change Height Fog Sun Intensity Scale",
+                [](HF& u, float v) { u.SunIntensityScale = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
+                0.05f, "Multiplier applied when tracking the directional light.",
+                {}, 0.0f, 8.0f);
+
+            if (!effect->TrackDirectionalLight)
+            {
+                AddIndexedFloatRow(ctx.Parent, "Sun Dir X", effect->SunDirection[0], w, e, n, undo,
+                    "Change Height Fog Sun Direction X",
+                    [](HF& u, float v) { u.SunDirection[0] = v; u.Preset = HeightFogPreset::Custom; },
+                    0.01f, "Manual sun direction.");
+                AddIndexedFloatRow(ctx.Parent, "Sun Dir Y", effect->SunDirection[1], w, e, n, undo,
+                    "Change Height Fog Sun Direction Y",
+                    [](HF& u, float v) { u.SunDirection[1] = v; u.Preset = HeightFogPreset::Custom; },
+                    0.01f, "Manual sun direction.");
+                AddIndexedFloatRow(ctx.Parent, "Sun Dir Z", effect->SunDirection[2], w, e, n, undo,
+                    "Change Height Fog Sun Direction Z",
+                    [](HF& u, float v) { u.SunDirection[2] = v; u.Preset = HeightFogPreset::Custom; },
+                    0.01f, "Manual sun direction.");
+            }
+
+            AddFogColorRow(ctx.Parent, "Sun Color", "Sun in-scatter tint", w, e, n, undo, ctx.OpenColorPickerWindow,
+                &HF::SunColor, {1.0f, 0.82f, 0.58f}, "Change Height Fog Sun Color");
+
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sun Intensity", effect->SunIntensity, w, e, n,
+                undo, "Change Height Fog Sun Intensity",
+                [](HF& u, float v) { u.SunIntensity = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
+                0.05f, "Sun in-scatter strength when not tracking a light.",
+                {}, 0.0f, 8.0f);
+
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase", effect->Phase, w, e, n,
+                undo, "Change Height Fog Phase",
+                [](HF& u, float v) { u.Phase = std::clamp(v, -0.95f, 0.95f); u.Preset = HeightFogPreset::Custom; },
+                0.01f, "Henyey-Greenstein anisotropy for sun scattering.",
+                {}, -0.95f, 0.95f);
+
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase Weight 0", effect->PhaseWeight0, w, e, n,
+                undo, "Change Height Fog Phase Weight 0",
+                [](HF& u, float v) { u.PhaseWeight0 = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
+                0.01f, "Primary HG lobe weight.");
+
+            AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Phase Weight 1", effect->PhaseWeight1, w, e, n,
+                undo, "Change Height Fog Phase Weight 1",
+                [](HF& u, float v) { u.PhaseWeight1 = std::max(v, 0.0f); u.Preset = HeightFogPreset::Custom; },
+                0.01f, "Secondary multi-lobe weight.");
+        }
 
         InspectorUI::AddTextBlock(ctx.Parent, "Noise", "inspector-section-subheader");
 

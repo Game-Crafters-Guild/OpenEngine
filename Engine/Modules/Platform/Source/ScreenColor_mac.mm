@@ -55,7 +55,7 @@ uint32_t GE_MacOS_GetScreenPixelColor(int screenX, int screenY)
             1, 1,
             8, 4,
             colorSpace,
-            (CGBitmapInfo)(kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big));
+            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast) | kCGBitmapByteOrder32Big);
         CGColorSpaceRelease(colorSpace);
         
         if (!context) {

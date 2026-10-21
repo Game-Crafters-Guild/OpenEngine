@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <deque>
 #include <iterator>
+#include <utility>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -150,13 +151,17 @@ WorkStealingThreadPool::JobBodyScope::JobBodyScope(JobContext context)
     : m_State(CurrentJobState()), m_Enclosing(m_State) {
     // Background and channel jobs are the ones that run long enough for a
     // start time to matter; a Normal job (a 1 us ECS task) never reads the
-    // clock.
+    // clock. A body nested in a body of the same context (a tagged job its
+    // Wait runs) keeps the enclosing start: the slot reports how long the
+    // outermost body of that context has run, as the hang watchdog reads it.
     const bool timed = context.Channel != nullptr || context.Class == JobPriority::Background;
+    const bool sameContext = m_Enclosing.Depth > 0 && m_Enclosing.Context.Channel == context.Channel &&
+                             m_Enclosing.Context.Class == context.Class;
     m_State.Context = context;
-    m_State.SinceNs = timed ? SteadyClockNs() : 0;
+    m_State.SinceNs = !timed ? 0 : sameContext ? m_Enclosing.SinceNs : SteadyClockNs();
     ++m_State.Depth;
     if (OccupancySlot* slot = m_State.Slot) {
-        if (timed) {
+        if (timed && !sameContext) {
             slot->SinceNs.store(m_State.SinceNs, std::memory_order_relaxed);
         }
         slot->Running.store(JobName(context), std::memory_order_relaxed);
@@ -182,6 +187,10 @@ WorkStealingThreadPool::JobBodyScope::~JobBodyScope() {
 WorkStealingThreadPool::JobContext WorkStealingThreadPool::CallerContext() {
     const ThreadJobState& state = CurrentJobState();
     return state.Depth > 0 ? state.Context : ComputeContext(JobPriority::Normal);
+}
+
+bool WorkStealingThreadPool::IsExecutingJob() {
+    return CurrentJobState().Depth > 0;
 }
 
 const char* WorkStealingThreadPool::GetCurrentJobForTests() {
@@ -241,13 +250,14 @@ WorkStealingThreadPool::WorkStealingThreadPool(size_t numThreads, size_t blockin
     m_DependencyGraph = MakeUnique<TaskDependencyGraph>();
     m_BlockingThreads = MakeUnique<Detail::BlockingThreads>(*this, blockingThreadBudget);
 
-    // The slabs ParallelFor can hold at once on this pool, provisioned before
-    // the first fork so that no fork takes a heap allocation: the helper
-    // envelopes (kMaxUnstartedClaimHelpersPerWorker unstarted in each of the
-    // two lanes and one running, per worker), a run block for each of them,
-    // and the forking caller's block. Each further caller forking at the same
-    // time adds one block.
-    const size_t claimHelperEnvelopes = (2 * kMaxUnstartedClaimHelpersPerWorker + 1) * numThreads;
+    // The slabs fork tasks can hold at once on this pool, provisioned before
+    // the first fork so that no fork takes a heap allocation: the helper and
+    // queue-visit envelopes (kMaxUnstartedForkTasksPerWorker unstarted in
+    // each of the two lanes and one running, per worker), a run block for
+    // each of them, and the forking caller's block. Each further caller
+    // forking at the same time adds one block. A visit a refused Run
+    // publishes takes its slab from the freelist's stock.
+    const size_t claimHelperEnvelopes = (2 * kMaxUnstartedForkTasksPerWorker + 1) * numThreads;
     Detail::ProvisionTaskSlabs(2 * claimHelperEnvelopes + 1);
     // Every record exists before any thread that writes one: the workers
     // start below, blocking threads on a channel's first dispatch.
@@ -594,7 +604,7 @@ void WorkStealingThreadPool::CommitRecycledTaskData(
     }
 }
 
-moodycamel::ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>&
+ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>&
 WorkStealingThreadPool::TaskDataFreelist() {
     // IMMORTAL for the same reason as the slab freelist (TaskSlabPool.cpp):
     // recycles can run during static destruction; a destructed freelist would
@@ -603,7 +613,7 @@ WorkStealingThreadPool::TaskDataFreelist() {
     // TaskData (~500B each) are ever pinned.
     static constexpr size_t kTaskDataFreelistCapacity = 256;
     static auto* const s_Freelist =
-        new moodycamel::ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>(
+        new ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>(
             kTaskDataFreelistCapacity);
     return *s_Freelist;
 }
@@ -796,6 +806,106 @@ bool WorkStealingThreadPool::IsComputeWorkerOf(const WorkStealingThreadPool* poo
     return pool != nullptr && s_CurrentPool == pool && s_CurrentWorkerId != SIZE_MAX;
 }
 
+size_t WorkStealingThreadPool::ReserveForkTasks(std::atomic<uint32>& unstarted, size_t wanted, size_t budget) {
+    const size_t before = unstarted.fetch_add(static_cast<uint32>(wanted), std::memory_order_relaxed);
+    const size_t granted = before >= budget ? 0 : std::min(wanted, budget - before);
+    if (granted < wanted)
+        unstarted.fetch_sub(static_cast<uint32>(wanted - granted), std::memory_order_relaxed);
+    return granted;
+}
+
+#if GE_DEBUG_INSTRUMENTATION
+namespace {
+std::atomic<void (*)(WorkStealingThreadPool::TaggedVisitPoint)> g_TaggedVisitHook{nullptr};
+} // namespace
+
+void WorkStealingThreadPool::SetTaggedVisitHookForTests(void (*hook)(TaggedVisitPoint point)) {
+    g_TaggedVisitHook.store(hook, std::memory_order_release);
+}
+#endif
+
+// A worker's visit to a tagged queue object, not to a counter: it holds the
+// object alive (a holder, JobCounter::TaggedJobs::State) but never keeps it
+// from being recycled, and when it runs it drains whatever counter's
+// envelopes occupy the object at that moment; each envelope decrements its
+// own counter. So a stale visit, published for a counter already joined,
+// may run a later counter's job at the lane it was published at.
+//
+// A visit counts in the object's PendingVisits from its publish until it has
+// proven the object empty, and a Run the budget refuses publishes a visit
+// only when none is pending: every envelope runs on a worker without a
+// waiter. The proof is a Dekker pair with that Run: the visit decrements
+// PendingVisits and then reloads JobCount; the Run increments JobCount (its
+// critical section), fences, and then loads PendingVisits. Either the Run
+// sees no visit pending and publishes one, or the visit sees the Run's job
+// and drains again.
+//
+// A budgeted visit holds one count of its lane's fork-task budget, given back
+// as its first act, so the count bounds unstarted visits only. Move-only; an
+// envelope destroyed without running gives its count back, stops counting
+// itself pending and drops its hold.
+class WorkStealingThreadPool::TaggedQueueVisit {
+  public:
+    TaggedQueueVisit(JobCounter::TaggedJobs& jobs, std::atomic<uint32>* unstarted)
+        : m_Jobs(&jobs), m_Unstarted(unstarted) {
+        jobs.PendingVisits.fetch_add(1, std::memory_order_relaxed);
+        jobs.State.fetch_add(JobCounter::TaggedJobs::kOneHolder, std::memory_order_relaxed);
+    }
+    TaggedQueueVisit(TaggedQueueVisit&& other) noexcept
+        : m_Jobs(std::exchange(other.m_Jobs, nullptr)), m_Unstarted(std::exchange(other.m_Unstarted, nullptr)) {}
+    TaggedQueueVisit(const TaggedQueueVisit&) = delete;
+    TaggedQueueVisit& operator=(const TaggedQueueVisit&) = delete;
+    TaggedQueueVisit& operator=(TaggedQueueVisit&&) = delete;
+    ~TaggedQueueVisit() {
+        GiveBackUnstartedCount();
+        if (m_Jobs) {
+            m_Jobs->PendingVisits.fetch_sub(1, std::memory_order_relaxed);
+            JobCounter::DropTaggedJobsHolder(std::exchange(m_Jobs, nullptr));
+        }
+    }
+
+    void operator()() {
+        GiveBackUnstartedCount();
+        JobCounter::TaggedJobs& jobs = *m_Jobs;
+        for (;;) {
+            while (JobCounter::RunOneTagged(jobs)) {
+            }
+            jobs.PendingVisits.fetch_sub(1, std::memory_order_seq_cst);
+#if GE_DEBUG_INSTRUMENTATION
+            if (auto hook = g_TaggedVisitHook.load(std::memory_order_acquire))
+                hook(TaggedVisitPoint::ProvedEmpty);
+#endif
+            if (jobs.JobCount.load(std::memory_order_seq_cst) == 0)
+                break;
+            jobs.PendingVisits.fetch_add(1, std::memory_order_relaxed);
+        }
+        // The hold drops after the visit's last touch of the object.
+        JobCounter::DropTaggedJobsHolder(std::exchange(m_Jobs, nullptr));
+    }
+
+  private:
+    void GiveBackUnstartedCount() {
+        if (m_Unstarted)
+            std::exchange(m_Unstarted, nullptr)->fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    JobCounter::TaggedJobs* m_Jobs;
+    std::atomic<uint32>* m_Unstarted;
+};
+
+void WorkStealingThreadPool::PublishTaggedQueueVisit(JobCounter::TaggedJobs& jobs, JobPriority lane) {
+    std::atomic<uint32>& unstarted = m_UnstartedForkTasks[static_cast<size_t>(lane)];
+    if (ReserveForkTasks(unstarted, 1, kMaxUnstartedForkTasksPerWorker * GetWorkerCount()) == 1) {
+        EnqueueWork(TaggedQueueVisit(jobs, &unstarted), lane);
+        return;
+    }
+    // Refused: the Run's side of the Dekker pair with a leaving visit
+    // (TaggedQueueVisit), after the critical section's JobCount increment.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (jobs.PendingVisits.load(std::memory_order_seq_cst) == 0)
+        EnqueueWork(TaggedQueueVisit(jobs, nullptr), lane);
+}
+
 void WorkStealingThreadPool::Wait(JobCounter& counter) {
     if (m_InlineMode)
         DrainInlineTasksOnThisThread();
@@ -814,24 +924,10 @@ void WorkStealingThreadPool::Wait(JobCounter& counter) {
         return true;
     };
 
+    // Every waiter, on every thread, executes ONLY tasks tagged with this
+    // counter (design decision D1). The pool queues and wake protocol stay
+    // untouched. A thread that cannot block parks in reported slices below.
     const bool canBlock = GameEngine::Platform::CanBlockCurrentThread();
-    const bool participant = (s_CurrentPool == this && s_CurrentWorkerId != SIZE_MAX) || !canBlock;
-    if (!participant) {
-        // Preserve the native external-wait contract: jobs run on workers.
-        if (synchronizedZero()) {
-            return;
-        }
-        std::unique_lock<std::mutex> lock(counter.m_Mutex);
-        ++counter.m_Waiters;
-        counter.m_Cv.wait(lock, [&counter] {
-            return counter.m_Count.load(std::memory_order_acquire) == 0;
-        });
-        --counter.m_Waiters;
-        return;
-    }
-
-    // Workers and host threads that cannot park execute ONLY tasks tagged
-    // with this counter. The pool queues and wake protocol stay untouched.
     JobCounter::TaggedJobsRef jobs;
     {
         std::lock_guard<std::mutex> lock(counter.m_Mutex);
@@ -875,7 +971,7 @@ void WorkStealingThreadPool::Wait(JobCounter& counter) {
                 return jobs && jobs->JobCount.load(std::memory_order_acquire) > 0;
             };
             if (canBlock) {
-                // Keep the native worker wait free of timeout bookkeeping.
+                // Keep the native wait free of timeout bookkeeping.
                 counter.m_Cv.wait(lock, parkPredicate);
             } else {
                 // A stalled host-thread wait stops frames and input. Report
@@ -1140,7 +1236,7 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
                 // Census pops count PHYSICAL dequeues from a lane, whichever
                 // path consumes them — the push/pop conservation identity
                 // must hold across a drain too (a participating Wait can
-                // leave its no-op stub for the shutdown drain to consume).
+                // leave its no-op visit for the shutdown drain to consume).
                 m_Census.GlobalPops.fetch_add(1, std::memory_order_relaxed);
                 AccountDequeuedTask();
                 drained.push_back({std::move(task), /*PoolCounted=*/true, ComputeContext(JobPriority::Normal)});
@@ -2224,7 +2320,7 @@ void WorkStealingThreadPool::EnqueueTaskGlobal(UniquePtr<TaskBase> task, JobPrio
     NotifyAfterPublish(); // (P2..P4)
 }
 
-moodycamel::ConcurrentQueue<UniquePtr<TaskBase>>& WorkStealingThreadPool::PriorityLane(JobPriority priority) {
+ConcurrentQueue<UniquePtr<TaskBase>>& WorkStealingThreadPool::PriorityLane(JobPriority priority) {
     return priority == JobPriority::Background ? m_BackgroundQueue : m_GlobalQueue;
 }
 

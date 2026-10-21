@@ -7,6 +7,7 @@
 #include "Assets/AssetTasks.h"
 #include "Assets/ShaderProgramAsset.h"
 #include "Assets/TextureAsset.h"
+#include "Assets/TextureCookActivity.h"
 #include "Assets/TextureCookWorkers.h"
 #include "Assets/CoreAssetRegistrations.h"
 #include "AssetCore/PathNormalization.h"
@@ -259,7 +260,7 @@ static constexpr std::chrono::milliseconds kWriteEchoWindow{5000};
 
 AssetManager::AssetManager()
     : m_Initialized(false), m_HotReloadEnabled(false), m_JobSystem(nullptr),
-      m_ExpectedWrites(kWriteEchoWindow)
+      m_ExpectedWrites(kWriteEchoWindow), m_TextureCookActivity(std::make_unique<TextureCookActivity>())
 {
 }
 
@@ -1915,6 +1916,7 @@ SharedPtr<Asset> AssetManager::CreateAsset(const AssetMetadata& metadata)
         if (asset)
         {
             Logger::Log::Debug("Created asset using asset type registry: {}", metadata.Name);
+            asset->SetName(metadata.Name);
             return asset;
         }
         Logger::Log::Warning("Asset type registry failed to create asset: {} (type: {}): {}",
@@ -1927,6 +1929,7 @@ SharedPtr<Asset> AssetManager::CreateAsset(const AssetMetadata& metadata)
     if (result.Success && result.ParsedAsset)
     {
         Logger::Log::Debug("Created asset using parser registry: {}", metadata.Name);
+        result.ParsedAsset->SetName(metadata.Name);
         return result.ParsedAsset;
     }
 
@@ -2448,7 +2451,7 @@ void AssetManager::DispatchWithRedirectSources(AssetEvent event)
 }
 
 void AssetManager::StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& asset, bool watchReason,
-                                    bool restartSameMtime)
+                                    bool restartSameMtime, AssetLoadPriority priority)
 {
     AssetMetadata metadata{};
     if (!m_Registry.TryGetAssetMetadata(guid, metadata) || metadata.Path.empty())
@@ -2502,7 +2505,7 @@ void AssetManager::StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& as
     request.AssetGuid = guid;
     request.Metadata = metadata;
     request.Metadata.Path = m_ParserRegistry.ResolveReadPath(metadata, *this);
-    request.Priority = AssetLoadPriority::High; // the user just saved this file
+    request.Priority = priority;
     request.CancelRequested = cancelFlag;
     request.ProcessData = [this, guid, metadata, cancelFlag, generation,
                            submitTime](Vector<uint8> data) -> SharedPtr<Asset>
@@ -2537,7 +2540,7 @@ void AssetManager::StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& as
     m_IOService->SubmitRead(std::move(request));
 }
 
-bool AssetManager::RequestAsyncReload(const GUID& guid)
+bool AssetManager::RequestAsyncReload(const GUID& guid, AssetLoadPriority priority)
 {
     // A first load still in flight may already have read the settings this request is
     // about, and there is nothing resident to reload yet, so the request waits for the load
@@ -2548,25 +2551,27 @@ bool AssetManager::RequestAsyncReload(const GUID& guid)
         std::lock_guard<std::mutex> lock(m_InFlightMutex);
         if (m_InFlight.find(guid) != m_InFlight.end())
         {
-            m_ReloadsRequestedDuringLoad.insert(guid);
+            auto [requested, inserted] = m_ReloadsRequestedDuringLoad.try_emplace(guid, priority);
+            if (!inserted)
+                requested->second = std::max(requested->second, priority);
             return true;
         }
     }
     SharedPtr<Asset> asset = GetLoadedAsset(guid);
     if (!asset)
         return false;
-    StartAsyncReload(guid, asset, /*watchReason=*/false, /*restartSameMtime=*/true);
+    StartAsyncReload(guid, asset, /*watchReason=*/false, /*restartSameMtime=*/true, priority);
     return true;
 }
 
 void AssetManager::StartReloadsRequestedDuringLoad()
 {
-    std::vector<GUID> landed;
+    std::vector<std::pair<GUID, AssetLoadPriority>> landed;
     {
         std::lock_guard<std::mutex> lock(m_InFlightMutex);
         for (auto it = m_ReloadsRequestedDuringLoad.begin(); it != m_ReloadsRequestedDuringLoad.end();)
         {
-            if (m_InFlight.find(*it) != m_InFlight.end())
+            if (m_InFlight.find(it->first) != m_InFlight.end())
             {
                 ++it;
                 continue;
@@ -2576,10 +2581,10 @@ void AssetManager::StartReloadsRequestedDuringLoad()
         }
     }
     // A load that failed or was cancelled left nothing resident; its request goes with it.
-    for (const GUID& guid : landed)
+    for (const auto& [guid, priority] : landed)
     {
         if (SharedPtr<Asset> asset = GetLoadedAsset(guid))
-            StartAsyncReload(guid, asset, /*watchReason=*/false, /*restartSameMtime=*/true);
+            StartAsyncReload(guid, asset, /*watchReason=*/false, /*restartSameMtime=*/true, priority);
     }
 }
 
@@ -2831,11 +2836,14 @@ bool AssetManager::RenameAssetPath(const std::filesystem::path& oldPath, const s
     const GUID guid = m_Registry.GetAssetGUID(oldPath);
     if (!m_Registry.TryRenameAssetPath(oldPath, newPath))
         return false;
-    // The instance carries the registry's normalized form of the path, as it did
-    // when it was loaded.
+    // The instance carries the registry's normalized form of the path and the file's
+    // spelling, as it did when it was loaded.
     AssetMetadata metadata;
     if (SharedPtr<Asset> asset = GetLoadedAsset(guid); asset && m_Registry.TryGetAssetMetadata(guid, metadata))
+    {
         asset->SetPath(metadata.Path);
+        asset->SetName(metadata.Name);
+    }
     return true;
 }
 
@@ -3180,8 +3188,11 @@ void AssetManager::OnGuidRemapped(const GUID& oldGuid, const GUID& newGuid, cons
             m_InFlight.erase(it);
             m_InFlight.emplace(newGuid, std::move(entry));
         }
-        if (m_ReloadsRequestedDuringLoad.erase(oldGuid) > 0)
-            m_ReloadsRequestedDuringLoad.insert(newGuid);
+        if (auto requested = m_ReloadsRequestedDuringLoad.extract(oldGuid))
+        {
+            requested.key() = newGuid;
+            m_ReloadsRequestedDuringLoad.insert(std::move(requested));
+        }
     }
 
     // Pending reloads + suppression follow the identity.

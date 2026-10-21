@@ -130,7 +130,7 @@ Rendering::ShaderVariantKey DeriveBaseVariantKey(const MaterialDocument& doc)
             ids.push_back(static_cast<uint64_t>(HashStringId(kw)));
         key.userKeywordHash = Rendering::CombineUserKeywordHash(std::move(ids));
     }
-    Rendering::ApplyAlphaModeKeyword(key, GetEffectiveMaterialAlphaMode(doc));
+    Rendering::ApplyAlphaModeKeywords(key, GetEffectiveMaterialAlphaMode(doc), doc.blend);
     // No vertex-modifier keyword here: which of the two forms a modifier implements is a
     // property of the resolved FILE, and resolving it needs the material's asset path plus
     // the shader-root chain — neither of which reaches a MaterialRegistry handed a document

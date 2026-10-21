@@ -3,6 +3,11 @@
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/CancellableShellProcess.h"
 #include "Core/Engine.h"
+#include "AssetCore/SharedFileRead.h"
+#include "Image/Decode.h"
+#include "Image/Encode.h"
+#include "Image/ImageHeader.h"
+#include "Image/Resample.h"
 #include "Logger/Logger.h"
 #include "Core/Application.h"
 
@@ -13,12 +18,8 @@
 #include <cstdio>
 #include <fstream>
 #include <memory>
+#include <utility>
 #include <vector>
-
-#if defined(GE_HAVE_STB)
-#include <stb_image.h>
-#include <stb_image_write.h>
-#endif
 
 namespace fs = std::filesystem;
 
@@ -33,8 +34,6 @@ std::string ToLowerAscii(std::string value)
     return value;
 }
 
-#if defined(GE_HAVE_STB)
-
 struct RgbaImage
 {
     int width = 0;
@@ -44,92 +43,33 @@ struct RgbaImage
 
 static bool LoadRgbaImage(const fs::path& path, RgbaImage& out, std::string& error)
 {
-    int w = 0;
-    int h = 0;
-    int comp = 0;
-    stbi_uc* data = stbi_load(path.string().c_str(), &w, &h, &comp, 4);
-    if (!data)
+    Vector<uint8> fileBytes;
+    if (!ReadFileBytesShared(path, fileBytes))
+    {
+        error = "Failed to read icon image: " + path.string();
+        return false;
+    }
+    Image::Image8 decoded = Image::Decode8(fileBytes, path.string(), Image::DecodeChannels::Rgba);
+    if (!decoded.Valid)
     {
         error = "Failed to decode icon image: " + path.string();
         return false;
     }
-    out.width = w;
-    out.height = h;
-    out.pixels.assign(data, data + static_cast<size_t>(w) * static_cast<size_t>(h) * 4u);
-    stbi_image_free(data);
-    if (w <= 0 || h <= 0)
-    {
-        error = "Icon image has invalid dimensions";
-        return false;
-    }
+    out.width = static_cast<int>(decoded.Width);
+    out.height = static_cast<int>(decoded.Height);
+    out.pixels = std::move(decoded.Pixels);
     return true;
 }
 
-static RgbaImage ResizeRgbaBilinear(const RgbaImage& src, int dstW, int dstH)
+// One square icon size, filtered in linear light with alpha weighting.
+static bool ResampleIcon(const RgbaImage& source, int size, RgbaImage& out)
 {
-    RgbaImage dst;
-    dst.width = dstW;
-    dst.height = dstH;
-    dst.pixels.resize(static_cast<size_t>(dstW) * static_cast<size_t>(dstH) * 4u);
-    if (src.width <= 0 || src.height <= 0 || dstW <= 0 || dstH <= 0)
-        return dst;
-
-    const auto sample = [&](float fx, float fy, int c) -> float {
-        fx = std::clamp(fx, 0.0f, static_cast<float>(src.width - 1));
-        fy = std::clamp(fy, 0.0f, static_cast<float>(src.height - 1));
-        const int x0 = static_cast<int>(fx);
-        const int y0 = static_cast<int>(fy);
-        const int x1 = std::min(x0 + 1, src.width - 1);
-        const int y1 = std::min(y0 + 1, src.height - 1);
-        const float tx = fx - static_cast<float>(x0);
-        const float ty = fy - static_cast<float>(y0);
-        const auto at = [&](int x, int y) -> float {
-            return static_cast<float>(src.pixels[(static_cast<size_t>(y) * static_cast<size_t>(src.width)
-                                                    + static_cast<size_t>(x)) * 4u + static_cast<size_t>(c)]);
-        };
-        const float v00 = at(x0, y0);
-        const float v10 = at(x1, y0);
-        const float v01 = at(x0, y1);
-        const float v11 = at(x1, y1);
-        const float v0 = v00 + (v10 - v00) * tx;
-        const float v1 = v01 + (v11 - v01) * tx;
-        return v0 + (v1 - v0) * ty;
-    };
-
-    for (int y = 0; y < dstH; ++y)
-    {
-        const float fy = (static_cast<float>(y) + 0.5f) * static_cast<float>(src.height) / static_cast<float>(dstH) - 0.5f;
-        for (int x = 0; x < dstW; ++x)
-        {
-            const float fx = (static_cast<float>(x) + 0.5f) * static_cast<float>(src.width) / static_cast<float>(dstW) - 0.5f;
-            const size_t di = (static_cast<size_t>(y) * static_cast<size_t>(dstW) + static_cast<size_t>(x)) * 4u;
-            for (int c = 0; c < 4; ++c)
-                dst.pixels[di + static_cast<size_t>(c)] =
-                    static_cast<uint8_t>(std::clamp(sample(fx, fy, c), 0.0f, 255.0f));
-        }
-    }
-    return dst;
-}
-
-static bool WritePngFile(const fs::path& path, const RgbaImage& image)
-{
-    std::error_code ec;
-    fs::create_directories(path.parent_path(), ec);
-    return stbi_write_png(path.string().c_str(), image.width, image.height, 4, image.pixels.data(), image.width * 4) != 0;
-}
-
-static void PngWriteToVector(void* context, void* data, int size)
-{
-    auto* out = static_cast<std::vector<uint8_t>*>(context);
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    out->insert(out->end(), bytes, bytes + size);
-}
-
-static bool EncodePng(const RgbaImage& image, std::vector<uint8_t>& outPng)
-{
-    outPng.clear();
-    return stbi_write_png_to_func(PngWriteToVector, &outPng, image.width, image.height, 4, image.pixels.data(),
-                                  image.width * 4) != 0;
+    out.width = size;
+    out.height = size;
+    out.pixels.resize(static_cast<size_t>(size) * static_cast<size_t>(size) * 4u);
+    return Image::ResampleRgba8(source.pixels, static_cast<uint32_t>(source.width),
+                                static_cast<uint32_t>(source.height), out.pixels, static_cast<uint32_t>(size),
+                                static_cast<uint32_t>(size), Image::ResampleColorSpace::Srgb);
 }
 
 static bool WriteWindowsIco(const fs::path& icoPath, const RgbaImage& source, std::string& error)
@@ -140,9 +80,15 @@ static bool WriteWindowsIco(const fs::path& icoPath, const RgbaImage& source, st
 
     for (const int size : kSizes)
     {
-        const RgbaImage resized = ResizeRgbaBilinear(source, size, size);
-        std::vector<uint8_t> png;
-        if (!EncodePng(resized, png) || png.empty())
+        RgbaImage resized;
+        if (!ResampleIcon(source, size, resized))
+        {
+            error = "Failed to resample the ICO icon";
+            return false;
+        }
+        std::vector<uint8_t> png = Image::EncodePng(resized.pixels, static_cast<uint32_t>(resized.width),
+                                                    static_cast<uint32_t>(resized.height));
+        if (png.empty())
         {
             error = "Failed to encode ICO PNG payload";
             return false;
@@ -228,8 +174,10 @@ static bool WriteMacIconset(const fs::path& iconsetDir, const RgbaImage& source,
     fs::create_directories(iconsetDir, ec);
     for (const MacIconsetEntry& entry : kEntries)
     {
-        const RgbaImage resized = ResizeRgbaBilinear(source, entry.pixelSize, entry.pixelSize);
-        if (!WritePngFile(iconsetDir / entry.fileName, resized))
+        RgbaImage resized;
+        if (!ResampleIcon(source, entry.pixelSize, resized) ||
+            !Image::WritePngFile(iconsetDir / entry.fileName, resized.pixels, static_cast<uint32_t>(resized.width),
+                                 static_cast<uint32_t>(resized.height)))
         {
             error = "Failed to write macOS iconset PNG";
             return false;
@@ -267,10 +215,18 @@ static bool WriteLinuxIconTree(const fs::path& linuxRoot, const std::string& ico
     static constexpr int kSizes[] = {16, 32, 48, 64, 128, 256, 512};
     for (const int size : kSizes)
     {
-        const RgbaImage resized = ResizeRgbaBilinear(source, size, size);
+        RgbaImage resized;
+        if (!ResampleIcon(source, size, resized))
+        {
+            error = "Failed to resample a Linux icon";
+            return false;
+        }
         const fs::path pngPath =
             linuxRoot / ("hicolor/" + std::to_string(size) + "x" + std::to_string(size) + "/apps/" + iconName + ".png");
-        if (!WritePngFile(pngPath, resized))
+        std::error_code ec;
+        fs::create_directories(pngPath.parent_path(), ec);
+        if (!Image::WritePngFile(pngPath, resized.pixels, static_cast<uint32_t>(resized.width),
+                                 static_cast<uint32_t>(resized.height)))
         {
             error = "Failed to write Linux icon PNG";
             return false;
@@ -278,8 +234,6 @@ static bool WriteLinuxIconTree(const fs::path& linuxRoot, const std::string& ico
     }
     return true;
 }
-
-#endif // GE_HAVE_STB
 
 static std::string BuildCmakeIconSection()
 {
@@ -315,22 +269,18 @@ static IconBundleKind IconKindForPlatform(const std::string& platformName)
 
 static constexpr int kMinDefaultIconDimensionPx = 128;
 
-#if defined(GE_HAVE_STB)
 static int MaxIconDimension(const fs::path& imagePath)
 {
-    int width = 0;
-    int height = 0;
-    int components = 0;
-    if (!stbi_info(imagePath.string().c_str(), &width, &height, &components))
+    const Image::ImageHeader header = Image::ReadImageHeader(imagePath);
+    if (!header.Valid || !header.WithinDecoderLimits)
         return 0;
-    return std::max(width, height);
+    return static_cast<int>(std::max(header.Width, header.Height));
 }
 
 static bool IconMeetsPreviewQuality(const fs::path& imagePath)
 {
     return MaxIconDimension(imagePath) >= kMinDefaultIconDimensionPx;
 }
-#endif
 
 #if defined(__APPLE__)
 static fs::path ExportMacIcnsToCachedPng(const fs::path& icnsPath)
@@ -380,7 +330,6 @@ fs::path ResolveDefaultEditorApplicationIconPath(const fs::path& editorSdkPath, 
             runtimeRoot = exeDir;
     }
 
-#if defined(GE_HAVE_STB)
     const auto useIfQuality = [&](const fs::path& path) -> fs::path {
         const fs::path file = tryFile(path);
         if (!file.empty() && IconMeetsPreviewQuality(file))
@@ -392,12 +341,6 @@ fs::path ResolveDefaultEditorApplicationIconPath(const fs::path& editorSdkPath, 
         return icon;
     if (auto icon = useIfQuality(runtimeRoot / "AppIcon.png"); !icon.empty())
         return icon;
-#else
-    if (auto icon = tryFile(sdkRoot / "AppIcon.png"); !icon.empty())
-        return icon;
-    if (auto icon = tryFile(runtimeRoot / "AppIcon.png"); !icon.empty())
-        return icon;
-#endif
 
 #if defined(__APPLE__)
     const fs::path bundleIcns = runtimeRoot / ".." / "Resources" / "AppIcon.icns";
@@ -450,10 +393,6 @@ AppIconGenerationResult GenerateApplicationIcons(const BuildSettings& settings, 
     if (sourcePath.empty())
         return result;
 
-#if !defined(GE_HAVE_STB)
-    result.warnings.push_back("stb_image is unavailable; application icon generation was skipped");
-    return result;
-#else
     RgbaImage source{};
     if (!LoadRgbaImage(sourcePath, source, result.error))
     {
@@ -517,16 +456,10 @@ AppIconGenerationResult GenerateApplicationIcons(const BuildSettings& settings, 
     Logger::Log::Info("Build: Generated application icons for platform '{}' from '{}'",
                       settings.platformName, sourcePath.string());
     return result;
-#endif
 }
 
 bool PackageLinuxIconsToStaging(const BuildSettings& settings, const fs::path& stagingDir)
 {
-#if !defined(GE_HAVE_STB)
-    (void)settings;
-    (void)stagingDir;
-    return true;
-#else
     const IconBundleKind kind = IconKindForPlatform(settings.platformName);
     if (kind != IconBundleKind::Linux)
         return true;
@@ -548,7 +481,6 @@ bool PackageLinuxIconsToStaging(const BuildSettings& settings, const fs::path& s
     }
     Logger::Log::Info("Build: Packaged Linux application icons into staging");
     return true;
-#endif
 }
 
 } // namespace GameEngine

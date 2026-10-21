@@ -106,6 +106,32 @@ public:
     // register is missing for that reason. Main thread only.
     bool AnyShippedModuleBuildFailed() const;
 
+    // The shipped modules (the project module and runtime package modules; editor-only modules
+    // never ship) whose latest build failed. Main thread only.
+    const std::vector<std::string>& FailedShippedModules() const { return m_FailedShippedModules; }
+
+    // The first compiler error line of a shipped module's latest failed build, or the build's
+    // failure summary when the output names none; empty when its latest build did not fail.
+    // Main thread only.
+    std::string FirstBuildErrorLine(const std::string& moduleId) const;
+
+    // True while a build that holds a shipped module is requested, waits out its debounce or runs:
+    // entering play mode waits on it, because the build replaces the module the game runs. A batch
+    // of editor-only modules does not count. Main thread only.
+    bool AreShippedModuleBuildsPending() const;
+
+    // What the dispatched build is doing, for a progress display: the module it is on, that
+    // module's place in the batch (1-based) and the stage the log names for it. Module is empty
+    // while no build runs. Any thread.
+    struct BuildProgress
+    {
+        std::string Module;
+        std::string Stage;
+        std::size_t Index = 0;
+        std::size_t Count = 0;
+    };
+    BuildProgress CurrentBuildProgress() const;
+
     // Invoked on the MAIN thread after every async build completes (success or failure)
     // so the editor can surface a toast / route errors to the log. Optional.
     using BuildCompletedCallback = std::function<void(const NativeBuildResult&)>;
@@ -333,7 +359,24 @@ private:
     // user DLL's component registrars, which mutate the shared registries). KickBuild
     // (main thread, from Tick) gates on the source-digest staleness check, then either
     // loads the cached DLL directly or dispatches BuildOnly to the JobSystem.
+    // A module a build pass found out of date, with the digests its build record will carry.
+    struct StaleModule
+    {
+        NativeBuildConfig Config;
+        std::string FullDigest;
+        std::string AbiDigest;
+        bool IsPackageModule = false;
+        // Position in ModuleConfigs(): built modules load in this order (package modules in
+        // dependency order, then the project module), whatever order they were built in.
+        std::size_t LoadOrder = 0;
+    };
+
     void KickBuild();
+    // Builds `staleModules` in the given order as one job and loads them, in LoadOrder, in one
+    // completion task on the main thread. `initialPackagePass`: the batch counts toward
+    // InitialPackageModulePassComplete.
+    void DispatchBuildBatch(std::vector<StaleModule> staleModules, bool initialPackagePass);
+    void SetBuildStage(const char* stage);
     std::filesystem::path BuildOnly(const NativeBuildConfig& config, NativeBuildResult& result);
     // moduleId = the owning module (NativeBuildConfig::ModuleName); stamps every registration the
     // module makes while loading and scopes the pre-register ClearUserSystems to that module.
@@ -439,10 +482,22 @@ private:
     // inside WaitForModuleBuilds, which Shutdown waits out before the manager can
     // be destroyed; m_ShutDown whether Shutdown ran since the last Initialize.
     // m_DeferredBuildLoads is written under it too.
+    // Editor-only modules of the last pass, held while the pass's shipped modules build so play
+    // mode, which loads only shipped modules, waits for those alone; Tick dispatches them when
+    // that batch completes. Main thread only.
+    std::vector<StaleModule> m_DeferredEditorModules;
+    bool m_DeferredEditorModulesInitialPass = false;
+
+    // The worker writes it as a build moves through modules and stages; CurrentBuildProgress reads it.
+    mutable std::mutex m_ProgressMutex;
+    BuildProgress m_Progress;
     std::mutex m_SettleMutex;
     std::condition_variable m_SettleCondition;
     std::vector<std::string> m_ShippedModulesBuilding;
     std::vector<std::string> m_FailedShippedModules;
+    // FirstBuildErrorLine's records, by module; written on the main thread beside
+    // m_FailedShippedModules.
+    std::unordered_map<std::string, std::string> m_FirstBuildErrors;
     bool m_ModuleLoadingSupported = true;
     std::thread::id m_TickThread;
     int m_SettleWaiters = 0;

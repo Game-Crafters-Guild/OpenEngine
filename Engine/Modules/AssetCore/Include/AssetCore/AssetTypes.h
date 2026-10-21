@@ -53,7 +53,6 @@ namespace GameEngine {
     X(Video) \
     /* Navigation formats */ \
     X(NavigationGrid) \
-    X(NavigationMesh) \
     /* Saved world-space ocean depth grid (.oceandepth) */ \
     X(OceanDepthCache) \
     /* Asset-backed ocean wave spectrum override (.oceanspectrum) */ \

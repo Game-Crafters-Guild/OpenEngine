@@ -16,10 +16,17 @@ using ::GameEngine::Rendering::MaterialKeyword;
 
 namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 {
-// Per-view node that draws the dedicated post-opaque TRANSMISSIVE pass: the glass meshes peeled
-// out of the world opaque pass, composited over the lit scene (View.EffectiveColor). Refracts the
-// post-opaque scene-colour grab (screen-space) when available, else the env cube. Placed AFTER the
-// world node (and after OceanUnderwater) and BEFORE VolumetricFog so it reads/writes the lit SceneColor.
+// Per-view node that draws what composites over the lit scene after the opaque passes:
+// - the glass meshes peeled out of the world opaque pass, composited over the lit scene
+//   (View.EffectiveColor). Refracts the post-opaque scene-colour grab (screen-space) when available,
+//   else the env cube. Placed after the world node and OceanUnderwater, before the post chain, so
+//   it reads and writes the lit SceneColor;
+// - the late transparents (particles, ocean spray), into "output" (default View.Resolve). Placed
+//   after the VolumetricFog composite they take the volumetric fog by their own distance, and the
+//   composite, which fogs by the opaque depth, does not fog them again.
+// "draws" lists which of the two a node draws ("glass", "lateTransparents"); absent, both.
+// "clouds" names the graph's resolved volumetric clouds when the late transparents draw after the
+// clouds composite: a blended surface beyond the clouds then takes their transmittance.
 class TransmissivePassNode final : public IRenderPipelineNode
 {
   public:
@@ -61,6 +68,12 @@ class TransmissivePassNode final : public IRenderPipelineNode
     std::string m_Id;
     std::string m_Json;
     Rendering::MaterialKeyword m_PassKeywords = Rendering::MaterialKeyword::None;
+    bool m_DrawsGlass = true;
+    bool m_DrawsLateTransparents = true;
+    // The colour the late transparents composite into; empty is the view's resolve target.
+    std::string m_LateOutputRef;
+    // The resolved volumetric clouds the late transparents test their distance against; empty: none.
+    std::string m_CloudsRef;
     std::unordered_map<uint32_t, LateDepthSpec> m_DeclinedLateDepthByView;
     DepthUpsamplePass m_LateDepthCopy;
 };

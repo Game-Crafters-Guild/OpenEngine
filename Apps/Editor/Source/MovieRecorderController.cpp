@@ -945,6 +945,10 @@ void MovieRecorderController::HandleRecordAfterPlayStarts()
     }
 
     const auto state = m_PlayMode->GetState();
+    // Play waits for the script build: the recording starts when play does, or is dropped below
+    // once the wait ends without play (Cancel, a failed build).
+    if (state == PlayModeState::Edit && m_PlayMode->GetEntryGate().GetPhase() == PlayModeEntryGate::Phase::Waiting)
+        return;
     if (state == PlayModeState::Edit || state == PlayModeState::ChangeReview)
     {
         m_RecordAfterPlayStarts = false;

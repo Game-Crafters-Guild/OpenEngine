@@ -92,8 +92,7 @@ def generate(project):
                   'Transform.rotation = (0.2, 0.3, 0, 0.9327379)', '',
                   '[entity id="post"]', 'Name.value = "Controlled Post"',
                   'PostProcessVolume.enabled = true', 'PostProcessVolume.isGlobal = true',
-                  'PostProcessVolume.weight = 1', 'PostProcessVolume.tonemap = 0',
-                  'PostProcessVolume.ditherMode = 0', ''])
+                  'PostProcessVolume.weight = 1', 'PostProcessVolume.look = Filmic', '',
     (assets / "Scenes/AAQuality.scene").write_text('\n'.join(lines))
 
 

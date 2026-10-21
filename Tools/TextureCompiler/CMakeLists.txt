@@ -11,9 +11,9 @@ target_compile_features(TextureCompiler PRIVATE cxx_std_20)
 find_package(Ktx CONFIG REQUIRED)
 target_link_libraries(TextureCompiler PRIVATE KTX::ktx)
 
-# stb_image / stb_image_resize2 (header-only; implementations compiled in-TU).
-find_path(GE_TEXC_STB_INCLUDE_DIRS "stb_image_resize2.h" REQUIRED)
-target_include_directories(TextureCompiler PRIVATE ${GE_TEXC_STB_INCLUDE_DIRS})
+# Image: the decode, the mip filter and the PNG encode. Image and Logger are OBJECT
+# libraries, so the tool links their objects directly rather than Engine.dll.
+target_link_libraries(TextureCompiler PRIVATE Image Logger Types)
 
 # VkFormat constants for the KTX2 createInfo (header-only usage).
 find_path(GE_TEXC_VULKAN_INCLUDE_DIRS "vulkan/vulkan_core.h" REQUIRED)

@@ -49,6 +49,7 @@
 // quiescence — without Reset, a reused counter's later waves inherit an
 // earlier wave's failure.
 
+#include "JobSystem/ConcurrentQueue.h"
 #include "JobSystem/Types.h"
 #include "Logger/Logger.h"
 
@@ -59,25 +60,6 @@
 #include <mutex>
 #include <thread>
 #include <utility>
-
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 6326 6011)
-#endif
-
-#if __has_include(<concurrentqueue/moodycamel/concurrentqueue.h>)
-#include <concurrentqueue/moodycamel/concurrentqueue.h>
-#elif __has_include(<concurrentqueue/concurrentqueue.h>)
-#include <concurrentqueue/concurrentqueue.h>
-#elif __has_include(<concurrentqueue.h>)
-#include <concurrentqueue.h>
-#else
-#error "moodycamel concurrentqueue headers not found - ensure vcpkg concurrentqueue package is installed"
-#endif
-
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
 
 namespace JobSystem
 {
@@ -91,10 +73,9 @@ class JobCounter
     {
         assert(m_Count.load(std::memory_order_acquire) == 0 &&
                "JobCounter destroyed with outstanding tasks — Wait() must complete first");
-        // m_Jobs may legitimately outlive this counter: pool-side stubs hold
-        // their own reference and find the queue EMPTY (any queued envelope
-        // would be an outstanding count, excluded by the assert). The last
-        // reference returns the queue for reuse (ReleaseTaggedJobs).
+        // Dropping m_Jobs may be the queue's last user, which returns it for
+        // reuse (ReleaseTaggedJobs) even while pool-side visits still hold
+        // it: they find it empty, or running another counter's envelopes.
     }
 
     /**
@@ -226,19 +207,29 @@ class JobCounter
     };
 
     // The tagged-task queue is shared between the counter and the pool-side
-    // stubs: a stub can outlive a stack-owned counter (the waiter may have
-    // consumed the stub's envelope, and Wait() returns at zero without waiting
-    // for stub retirement), so stubs reach the queue through their own
-    // TaggedJobsRef — never through the counter.
+    // visits (WorkStealingThreadPool::TaggedQueueVisit, the task each Run may
+    // publish): a visit can outlive a stack-owned counter (the waiter may
+    // have run every envelope, and Wait() returns at zero without waiting for
+    // queued visits), so visits reach the queue object, never the counter.
+    //
+    // Two kinds of hold keep the object alive. A user (TaggedJobsRef: the
+    // counter's m_Jobs, a Run's and a participating waiter's local) owns the
+    // queue for one counter; a holder (a visit) only visits the object. When
+    // the last user drops, the queue is recycled whatever its holders, and a
+    // visit that runs later drains whatever counter's envelopes occupy the
+    // object at that moment: each envelope decrements its own counter.
     //
     // Queues are recycled: a fresh moodycamel queue costs four heap
     // allocations (the queue, its first block, its producer and the
     // producer's block index), and every ECS wave and parallel query forks
     // on a fresh stack counter. AcquireTaggedJobs takes the forking thread's
     // cached queue, else one from a fixed shared pool, and constructs one
-    // only when both are empty; the last TaggedJobsRef gives it back whole,
-    // its blocks intact and JobCount zero. Because the last reference may be
-    // a late stub's, a stub never reaches a queue another counter is using.
+    // only when both are empty; the last user gives it back whole, its blocks
+    // intact and JobCount zero. The last user is the counter's, or the
+    // waiter's, on the forking thread for every stack counter, so after
+    // warm-up a fork constructs nothing whatever the workers are doing. A
+    // queue no cache or slot takes is orphaned, and deleted once no holder
+    // remains.
     //
     // JobCount is the authoritative occupancy signal, maintained OUTSIDE the
     // moodycamel queue: incremented by the producer BEFORE its enqueue (the
@@ -249,16 +240,16 @@ class JobCounter
     // try_dequeue can fail spuriously while a committed element exists (the
     // consumer-side overcommit race under concurrent consumers). The pool's
     // own queues tolerate that via the workers' backstop re-poll; this
-    // queue's consumers are one-shot stubs, so a spurious failure would
-    // no-op a stub and strand its envelope forever (count never reaches
-    // zero, the waiter parks for good — observed live as an ECS sweep hang
-    // at 32 workers). RunOneTagged therefore retries until it either pops an
+    // queue's consumers stop at their first empty dequeue, so a spurious
+    // failure would end a visit early and strand its envelope forever (count
+    // never reaches zero, the waiter parks for good — observed live as an
+    // ECS sweep hang at 32 workers). RunOneTagged therefore retries until it either pops an
     // envelope or can PROVE emptiness via JobCount == 0.
     struct TaggedJobs
     {
         // One block to start with: the queue grows to a counter's high-water
         // mark and, recycled, keeps those blocks for the next counter.
-        moodycamel::ConcurrentQueue<IJob*> Queue{moodycamel::ConcurrentQueue<IJob*>::BLOCK_SIZE};
+        ConcurrentQueue<IJob*> Queue{ConcurrentQueue<IJob*>::BLOCK_SIZE};
         // The one producer every Run enqueues through. Run enqueues under
         // m_Mutex, so the token never serves two threads at once, and a
         // consumer's dequeue scans one producer however many threads have
@@ -267,14 +258,26 @@ class JobCounter
         // and every dequeue scans.)
         moodycamel::ProducerToken Producer{Queue};
         std::atomic<size_t> JobCount{0};
-        // Live TaggedJobsRef count: the counter's, one per queued stub, and a
-        // participating waiter's local. Zero means the queue is cached or
-        // pooled (or about to be).
-        std::atomic<uint32> RefCount{0};
+        // Users in the low 32 bits, holders above them, and kOrphaned, in one
+        // word: the drop of the last user, an orphaning release and the drop
+        // of the last holder each decide in one read-modify-write, so exactly
+        // one of them deletes an orphaned object. Zero users means the queue
+        // is cached or pooled (or about to be); holders may remain.
+        static constexpr uint64 kOneUser = 1;
+        static constexpr uint64 kUserMask = 0xFFFF'FFFFull;
+        static constexpr uint64 kOneHolder = uint64{1} << 32;
+        static constexpr uint64 kOrphaned = uint64{1} << 63;
+        static constexpr uint64 kHolderMask = ~kUserMask & ~kOrphaned;
+        std::atomic<uint64> State{0};
+        // Visits published and not yet proven the queue empty, whichever
+        // counter occupies it. A Run the fork-task budget refuses publishes a
+        // visit only when this reads zero. Never reset on reuse: a pending
+        // visit drains the object for its next occupant too.
+        std::atomic<uint32> PendingVisits{0};
 
         ~TaggedJobs()
         {
-            // Every envelope is consumed exactly once (stub or participating
+            // Every envelope is consumed exactly once (a visit or a participating
             // waiter) before its counter reaches zero; a leftover here means a
             // counted task never ran, which the JobCounter dtor assert already
             // rules out. Delete defensively anyway so Release can't leak.
@@ -287,8 +290,8 @@ class JobCounter
         }
     };
 
-    // Owning reference to a TaggedJobs. Copies count up; the destructor of the
-    // last one hands the queue to ReleaseTaggedJobs. A std::shared_ptr cannot
+    // A user's reference to a TaggedJobs. Copies count up; the destructor of
+    // the last one hands the queue to ReleaseTaggedJobs. A std::shared_ptr cannot
     // recycle allocation-free: a custom deleter allocates a control block per
     // queue, and allocate_shared destroys the queue (and frees its blocks)
     // at zero.
@@ -304,7 +307,7 @@ class JobCounter
         {
             if (m_Jobs)
             {
-                m_Jobs->RefCount.fetch_add(1, std::memory_order_relaxed);
+                m_Jobs->State.fetch_add(TaggedJobs::kOneUser, std::memory_order_relaxed);
             }
         }
 
@@ -318,9 +321,10 @@ class JobCounter
 
         ~TaggedJobsRef()
         {
-            // acq_rel: every holder's queue operations happen-before the
+            // acq_rel: every user's queue operations happen-before the
             // release that lets another counter reuse the queue.
-            if (m_Jobs && m_Jobs->RefCount.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            if (m_Jobs && (m_Jobs->State.fetch_sub(TaggedJobs::kOneUser, std::memory_order_acq_rel) &
+                           TaggedJobs::kUserMask) == 1)
             {
                 ReleaseTaggedJobs(m_Jobs);
             }
@@ -335,23 +339,30 @@ class JobCounter
     };
 
     // Takes the calling thread's cached queue, else one from the shared pool,
-    // else constructs one, with RefCount 1 (the caller's TaggedJobsRef adopts
+    // else constructs one, with one user (the caller's TaggedJobsRef adopts
     // it). JobCounter.cpp.
     static TaggedJobs* AcquireTaggedJobs();
 
-    // Caches a queue whose last reference dropped on the calling thread, or
-    // pools it, or deletes it when both are full. JobCount must be zero
-    // (Debug assert). Allocation-free and noexcept: stubs release on worker
-    // threads, including during static destruction.
+    // Caches a queue whose last user dropped on the calling thread, or pools
+    // it, or orphans it when both are full. JobCount must be zero (Debug
+    // assert). Allocation-free and noexcept: users release on worker threads,
+    // including during static destruction.
     static void ReleaseTaggedJobs(TaggedJobs* jobs) noexcept;
+
+    // Marks a queue with no user that no cache or slot takes as orphaned and
+    // deletes it if no holder remains; else the last holder's drop deletes it.
+    static void OrphanTaggedJobs(TaggedJobs* jobs) noexcept;
+
+    // Drops one holder; deletes an orphaned queue whose last holder this was.
+    static void DropTaggedJobsHolder(TaggedJobs* jobs) noexcept;
 
     // The calling thread's cached queue and its return to the shared pool at
     // thread exit; thread_local state in JobCounter.cpp.
     struct ThreadTaggedJobs;
 
     // Pops and executes ONE tagged envelope; returns false only when the
-    // queue is provably empty (JobCount == 0). Used by the pool-side stub and
-    // by participating waiters — the only two consumers of tagged tasks.
+    // queue is provably empty (JobCount == 0). Used by the pool-side visits
+    // and by participating waiters — the only two consumers of tagged tasks.
     //
     // The retry loop terminates: JobCount > 0 implies a committed element
     // (some retry succeeds once the concurrent operations hiding it retire),

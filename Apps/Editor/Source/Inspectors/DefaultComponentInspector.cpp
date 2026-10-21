@@ -7,6 +7,8 @@
 #include "Inspectors/InspectorUIHelpers.h"    // InspectorUI::AddLine
 #include "Inspectors/InspectorComponentRowHelpers.h"  // MakeComponentSnapshotTargetById
 #include "Inspectors/PreservedFieldNotice.h"          // AddPreservedFieldNotice
+#include "Inspectors/RenderLayerField.h"              // the render layer rows on the project's names
+#include "UI/Controls/MaskField.h"
 #include "UI/Controls/TextField.h"            // editable String / uint rows
 #include "UI/Controls/Dropdown.h"             // enum name dropdown (scanner-detected enum fields)
 #include "UI/Controls/Slider.h"               // compact ocean planar reflection strength slider
@@ -68,6 +70,22 @@ bool SpanDiffers(const Snapshot& primary, const std::vector<Snapshot>& extras,
             return true;
     }
     return false;
+}
+
+// The layers of a render layer field at `offset` that the selection disagrees on.
+uint32 MixedRenderLayerBits(Rendering::RenderLayerMask primary, const std::vector<Snapshot>& extras,
+                            std::size_t offset)
+{
+    uint32 mixed = 0u;
+    for (const Snapshot& other : extras)
+    {
+        Rendering::RenderLayerMask layers;
+        if (offset + sizeof(layers) > other.size())
+            continue;
+        std::memcpy(&layers, other.data() + offset, sizeof(layers));
+        mixed |= layers.Bits ^ primary.Bits;
+    }
+    return mixed;
 }
 
 // Read any integer field element as a signed int for display. 64-bit values are
@@ -459,7 +477,7 @@ const char* OceanRendererFieldTooltip(std::string_view fieldName)
         {"MaxActiveDepthCaches", "Runtime budget for active OceanDepthCacheSource components. 0 keeps all eligible caches."},
         {"RasterDepthCapture", "Captures dynamic mesh geometry into the seabed-depth texture from a top-down pass."},
         {"RasterDepthCaptureResolution", "Resolution of the dynamic raster seabed-depth capture."},
-        {"RasterDepthCaptureRenderLayerMask", "Render-layer mask used by raster seabed-depth capture."},
+        {"RasterDepthCaptureLayers", "The render layers the raster seabed-depth capture draws."},
         {"RasterDepthCaptureSizeX", "World X size of the top-down raster seabed-depth capture."},
         {"RasterDepthCaptureSizeZ", "World Z size of the top-down raster seabed-depth capture."},
         {"RasterDepthCaptureTopPadding", "Extra height above captured geometry for the raster depth camera."},
@@ -496,7 +514,7 @@ const char* ReflectionProbeFieldTooltip(std::string_view fieldName)
         {"UpdateMode", "When the probe re-bakes. Once: only when the probe's own settings, the sky or the geometry in its world are added or removed. Realtime (on change): also whenever its world changes: lights, the sky, moved or edited renderables, material edits, and animated or depth-writing content such as skinned characters, terrain, an animated ocean or grass. Shader-time material animation, playing video textures and particles do not re-bake it; set the interval to 0 to capture them every frame."},
         {"RealtimeUpdateInterval", "Realtime (on change): the fastest the probe may re-bake while the world changes, in seconds; 0 = every frame."},
         {"MaxDistance", "Far clip distance for scene capture. 0 uses the probe volume."},
-        {"CullMask", "Render-layer mask captured by the probe's hidden scene views."},
+        {"CapturedLayers", "The render layers the probe's capture draws."},
     };
     for (const Entry& entry : kTooltips)
     {
@@ -734,6 +752,24 @@ void RecordUIntTextFieldRefresh(RefreshPlan* plan, TextField* field, std::size_t
             return;
         *lastValue = value;
         field->SetValueWithoutNotify(std::to_string(value));
+    }});
+}
+
+void RecordRenderLayerMaskFieldRefresh(RefreshPlan* plan, MaskField* field, std::size_t offset)
+{
+    if (!plan || !field)
+        return;
+    auto lastValue = std::make_shared<std::optional<Rendering::RenderLayerMask>>();
+    plan->push_back({[field, offset, lastValue](const Snapshot& bytes, const std::string& focusId) {
+        if (ShouldSkipFieldRefresh(field, focusId) || field->IsPopupOpen())
+            return;
+        Rendering::RenderLayerMask value;
+        if (!ReadPod(bytes, offset, value))
+            return;
+        if (lastValue->has_value() && **lastValue == value)
+            return;
+        *lastValue = value;
+        field->SetValueWithoutNotify(value.Bits);
     }});
 }
 
@@ -1999,6 +2035,32 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     RecordIntFieldRefresh(planPtr, intf, offset, field.Type);
                     any = true;
                 }
+                break;
+            }
+            case FieldTypeId::RenderLayerMask:
+            {
+                // The project's layer names in a MaskField. A click changes one layer (or all of them)
+                // on each selected entity and keeps the entity's other layers.
+                Rendering::RenderLayerMask mask;
+                if (count != 1 || !ReadPod(bytes, field.Offset, mask))
+                    break;
+                FieldEditContext fec = fecBase;
+                fec.Label = std::string(FieldDisplayName(field.Name));
+                const std::size_t offset = field.Offset;
+                MaskField* layers = InspectorUI::AddRenderLayersRow(
+                    parent, fec.Label, mask, MixedRenderLayerBits(mask, extraBytes, offset), tooltipPtr,
+                    Editor::kLayerRowNothingTooltip);
+                layers->SetOnBitsChanged([fec, offset](uint32 bitsChanged, bool on) {
+                    CommitFieldPatch(fec, [&](Snapshot& b) {
+                        Rendering::RenderLayerMask current;
+                        if (!ReadPod(b, offset, current))
+                            return;
+                        current.Bits = on ? (current.Bits | bitsChanged) : (current.Bits & ~bitsChanged);
+                        std::memcpy(b.data() + offset, &current, sizeof(current));
+                    });
+                });
+                RecordRenderLayerMaskFieldRefresh(planPtr, layers, offset);
+                any = true;
                 break;
             }
             case FieldTypeId::String:

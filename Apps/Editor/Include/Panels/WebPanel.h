@@ -79,6 +79,7 @@ class WebPanel : public DockPanel
     WebTab* ActiveTab();
     Platform::IWebView* ActiveView();
     bool CreateTabWebView(WebTab& tab);
+    void OnWebViewUnavailable(const std::string& message);
     void OpenBlankTab();
     void ActivateTab(size_t index);
     void CloseTab(size_t index);
@@ -110,6 +111,8 @@ class WebPanel : public DockPanel
     size_t m_ActiveTab = 0;
     Platform::Window* m_ParentWindow = nullptr;
     std::string m_PendingURL;
+    // Why the web view cannot be created, stating the fix; empty while it can.
+    std::string m_WebViewUnavailableMessage;
 };
 
 } // namespace GameEngine

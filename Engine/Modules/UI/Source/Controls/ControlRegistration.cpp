@@ -2,6 +2,7 @@
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/IntField.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/Vector3Field.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -10,6 +11,7 @@
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/MaskField.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Scrollbar.h"
 #include "UI/Controls/Slider.h"
@@ -116,6 +118,9 @@ void DefineBuiltInControls()
         .Attr("value", &BaseField::SetValue)
         .Attr("readonly", &TextArea::SetReadOnly);
 
+    // Read-only Markdown; its text is set from code (SetMarkdown), never from the layout file.
+    Register<MarkdownText>("MarkdownText");
+
     RegisterWithFactory<Scrollbar>("scrollbar", []()
                                    { return std::make_unique<Scrollbar>(Scrollbar::Orientation::Vertical); });
 
@@ -165,6 +170,9 @@ void DefineBuiltInControls()
                                 { return std::make_unique<Toggle>(); })
         .Attr("checked", &Toggle::SetChecked)
         .TagAlias("toggle");
+
+    RegisterWithFactory<MaskField>("MaskField", []()
+                                   { return std::make_unique<MaskField>(); });
 
     RegisterWithFactory<Slider>("Slider", []()
                                 { return std::make_unique<Slider>(); })

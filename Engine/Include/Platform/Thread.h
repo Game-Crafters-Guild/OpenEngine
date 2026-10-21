@@ -1,5 +1,10 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <string>
+#include <thread>
+
 #if defined(__EMSCRIPTEN__)
 #  include <emscripten/threading.h>
 #elif defined(_WIN32)
@@ -50,6 +55,48 @@ inline void SetCurrentThreadName([[maybe_unused]] const char* name)
         pthread_setname_np(pthread_self(), truncated);
     }
 #endif
+}
+
+// The name a thread of this process was given (SetCurrentThreadName, or by the
+// runtime), by its OS thread id: GetCurrentThreadId on Windows,
+// pthread_threadid_np on macOS, gettid on Linux. Empty when the thread is gone,
+// has no name, or the platform cannot read another thread's name.
+std::string GetThreadName(std::uint64_t osThreadId);
+
+// Blocks the calling thread for `duration`, overshooting by well under a
+// millisecond. std::this_thread::sleep_for on Windows rounds up to the system
+// timer tick (15.6 ms unless some process raised the resolution), so a 15 ms
+// sleep can last 31 ms; a high-resolution waitable timer does not. Elsewhere
+// the standard sleep already has that precision.
+inline void SleepPrecise(std::chrono::duration<double> duration)
+{
+    if (duration.count() <= 0.0)
+        return;
+#if defined(_WIN32)
+    struct TimerHandle
+    {
+        HANDLE Handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                               TIMER_ALL_ACCESS);
+        ~TimerHandle()
+        {
+            if (Handle)
+                CloseHandle(Handle);
+        }
+    };
+    thread_local TimerHandle timer;
+    if (timer.Handle)
+    {
+        // A negative due time is relative, in 100 ns units.
+        LARGE_INTEGER dueTime{};
+        dueTime.QuadPart = -static_cast<LONGLONG>(duration.count() * 1.0e7);
+        if (SetWaitableTimer(timer.Handle, &dueTime, 0, nullptr, nullptr, FALSE))
+        {
+            WaitForSingleObject(timer.Handle, INFINITE);
+            return;
+        }
+    }
+#endif
+    std::this_thread::sleep_for(duration);
 }
 
 } // namespace GameEngine::Platform

@@ -2,13 +2,24 @@
 // The engine's WebGPU backend brings up the real browser device: async
 // adapter/device request, canvas surface + swapchain through the surface
 // bridge, then a rAF-driven loop that clears to an animated color and draws
-// one triangle through the backend's pipeline path (WGSL — browser WebGPU
-// has no SPIR-V ingestion). One log line per milestone; a heartbeat every
-// kHeartbeatFrames keeps the console proving liveness.
+// one green triangle through the backend's pipeline path (WGSL — browser WebGPU
+// has no SPIR-V ingestion). The triangle's position and colour streams sit at
+// engine vertex bindings UV7 and Weights1, past the first six, so a backend that
+// binds only the low bindings fails the draw's validation. A nine-stream pipeline,
+// one past the eight vertex buffers Chrome binds, must be refused at creation
+// with its streams named. One log line per milestone; a heartbeat every
+// kHeartbeatFrames keeps the console proving liveness. A manual check, not a
+// gate:
+//
+//   python Tools/Web/browser_gate.py --root build/wasm-release-singlethread/bin
+//       --page RendererBrowserSmoke.html
+//       --expect "SMOKE: nine-stream pipeline refused:"
+//       --expect "graphics pipeline 'BrowserSmoke.NineStreams' is refused: its mesh has 9 vertex streams"
 
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineTypes.h"
+#include "Rendering/Geometry/VertexLayoutBuilder.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -28,23 +39,24 @@ using namespace GameEngine::Rendering;
 
 constexpr int kHeartbeatFrames = 60;
 
-// Clip-space triangle from the vertex index; solid orange. Entry points are
-// "main" to match the backend's shared entry-point convention.
+// Clip-space position (location 0) and colour (location 4) from the vertex
+// streams. Entry points are "main" to match the backend's shared entry-point
+// convention.
 constexpr const char kTriangleVertWgsl[] = R"(
+struct Out { @builtin(position) position : vec4f, @location(0) color : vec4f };
 @vertex
-fn main(@builtin(vertex_index) index : u32) -> @builtin(position) vec4f {
-    var positions = array<vec2f, 3>(
-        vec2f(-0.8, -0.8),
-        vec2f(0.8, -0.8),
-        vec2f(0.0, 0.8));
-    return vec4f(positions[index], 0.0, 1.0);
+fn main(@location(0) position : vec3f, @location(4) color : vec4f) -> Out {
+    var out : Out;
+    out.position = vec4f(position, 1.0);
+    out.color = color;
+    return out;
 }
 )";
 
 constexpr const char kTriangleFragWgsl[] = R"(
 @fragment
-fn main() -> @location(0) vec4f {
-    return vec4f(1.0, 0.45, 0.1, 1.0);
+fn main(@location(0) color : vec4f) -> @location(0) vec4f {
+    return color;
 }
 )";
 
@@ -61,6 +73,8 @@ struct SmokeState
     std::unique_ptr<IDevice> Device;
     WindowTargetHandle WindowTarget;
     PipelineHandle Pipeline;
+    BufferHandle Positions; // bound at engine binding UV7
+    BufferHandle Colors;    // bound at engine binding Weights1
     uint32_t Width = 0;
     uint32_t Height = 0;
     int Frame = 0;
@@ -124,6 +138,8 @@ void Frame()
     commandList->SetPipeline(s.Pipeline);
     commandList->SetViewport(0.0f, 0.0f, static_cast<float>(s.Width), static_cast<float>(s.Height));
     commandList->SetScissor(0, 0, s.Width, s.Height);
+    commandList->SetVertexBuffer(s.Positions, VertexBinding::UV7);
+    commandList->SetVertexBuffer(s.Colors, VertexBinding::Weights1);
     commandList->Draw(3);
     commandList->EndRenderPass();
     commandList->End();
@@ -142,6 +158,51 @@ void Frame()
     {
         std::printf("SMOKE: heartbeat frame=%d\n", s.Frame);
     }
+}
+
+// The triangle's streams: its positions and a green colour per vertex.
+void CreateTriangleStreams(SmokeState& s)
+{
+    const float positions[] = {-0.8f, -0.8f, 0.0f, 0.8f, -0.8f, 0.0f, 0.0f, 0.8f, 0.0f};
+    const float colors[] = {0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f};
+    BufferDesc desc{};
+    desc.memoryUsage = BufferMemoryUsage::Upload;
+    desc.usage = static_cast<uint32_t>(BufferUsage::Vertex);
+    desc.size = sizeof(positions);
+    s.Positions = s.Device->CreateBuffer(desc);
+    desc.size = sizeof(colors);
+    s.Colors = s.Device->CreateBuffer(desc);
+    if (!s.Positions.IsValid() || !s.Colors.IsValid())
+    {
+        Fail("triangle vertex buffers");
+    }
+    s.Device->UpdateBuffer(s.Positions, 0, sizeof(positions), positions);
+    s.Device->UpdateBuffer(s.Colors, 0, sizeof(colors), colors);
+}
+
+// Creates `triangle`'s program over nine vertex streams (bindings Core to UV2), one
+// past the eight vertex buffers Chrome binds, and logs whether the device refused it
+// and why.
+void ReportNineStreamPipeline(IDevice& device, const GraphicsPipelineDesc& triangle,
+                              const PipelineFormatKey& formatKey)
+{
+    GraphicsPipelineDesc wide = triangle;
+    wide.DebugName = "BrowserSmoke.NineStreams";
+    wide.VertexBindings.clear();
+    for (uint32_t binding = VertexBinding::Core; binding <= VertexBinding::UV2; ++binding)
+    {
+        wide.VertexBindings.push_back({binding, 4 * sizeof(float), /*inputRate=*/0});
+    }
+    wide.VertexAttributes = {{0, VertexBinding::Core, Format::R32G32B32_FLOAT, 0},
+                             {4, VertexBinding::Weights1, Format::R32G32B32A32_FLOAT, 0}};
+    const PipelineHandle pipeline =
+        device.GetOrCreateGraphicsPipeline(device.InternGraphicsPipeline(wide), formatKey);
+    if (pipeline.IsValid())
+    {
+        std::printf("SMOKE: nine-stream pipeline created\n");
+        return;
+    }
+    std::printf("SMOKE: nine-stream pipeline refused: %s\n", device.GetLastGraphicsPipelineFailure().c_str());
 }
 
 } // namespace
@@ -196,6 +257,11 @@ int main()
     pipelineDesc.Rasterization.cullMode = CullModeFlagBits::None;
     pipelineDesc.ColorBlend.attachments.emplace_back();
     pipelineDesc.DebugName = "BrowserSmoke.Triangle";
+    pipelineDesc.VertexBindings = {{VertexBinding::UV7, 3 * sizeof(float), /*inputRate=*/0},
+                                   {VertexBinding::Weights1, 4 * sizeof(float), /*inputRate=*/0}};
+    pipelineDesc.VertexAttributes = {{0, VertexBinding::UV7, Format::R32G32B32_FLOAT, 0},
+                                     {4, VertexBinding::Weights1, Format::R32G32B32A32_FLOAT, 0}};
+    CreateTriangleStreams(g_State);
     const GraphicsPipelineId pipelineId = g_State.Device->InternGraphicsPipeline(pipelineDesc);
 
     PipelineFormatKey formatKey{};
@@ -207,6 +273,7 @@ int main()
         Fail("triangle pipeline creation (WGSL)");
     }
     std::printf("SMOKE: pipeline ready\n");
+    ReportNineStreamPipeline(*g_State.Device, pipelineDesc, formatKey);
 
     // rAF drive: the browser presents when each callback returns (the same
     // seam Application::RunPlatformLoop targets).

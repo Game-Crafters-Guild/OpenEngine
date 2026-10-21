@@ -182,7 +182,7 @@ namespace GameEngine.SourceGenerators
         private const ushort kBool = 1, kInt8 = 2, kInt16 = 3, kInt32 = 4, kInt64 = 5;
         private const ushort kUInt8 = 6, kUInt16 = 7, kUInt32 = 8, kUInt64 = 9;
         private const ushort kFloat = 10, kDouble = 11;
-        private const ushort kVec2 = 12, kVec3 = 13, kVec4 = 14, kQuat = 15, kColor = 17;
+        private const ushort kVec2 = 12, kVec3 = 13, kVec4 = 14, kQuat = 15, kColor = 17, kRenderLayerMask = 22;
 
         private static TypeLayout LayoutOfType(ITypeSymbol type)
         {
@@ -224,6 +224,7 @@ namespace GameEngine.SourceGenerators
                     "System.Numerics.Vector3" => kVec3,
                     "System.Numerics.Vector4" => kVec4,
                     "System.Numerics.Quaternion" => kQuat,
+                    "GameEngine.Scripting.RenderLayerMask" => kRenderLayerMask,
                     _ => (ushort)0, // unknown composite: occupies space, not schema-representable
                 };
                 return new TypeLayout(nested.Size, nested.Alignment, fieldType);

@@ -19,6 +19,11 @@
 #          case-insensitive filesystem an engine module's "Event/Event.h"
 #          resolves to yoga/event/event.h. Consumers include yoga as
 #          <yoga/...>, which the remaining root serves.
+#   0004 — keys a measure-function node's layout cache by owner size when its
+#          min/max size, padding or margin is a percentage. The relaxed reuse
+#          rules otherwise return a size clamped against the previous owner, so
+#          a label with min-width: 37% kept 37% of a wide row after the row
+#          narrowed (#3765).
 #
 # The source download (REF/SHA512) is identical to upstream; only PATCHES
 # differs. When upstream vcpkg bumps the yoga version, resync this portfile and
@@ -38,6 +43,7 @@ vcpkg_from_github(
         0001-css-flexbox-9.7-resolve-flexible-lengths.patch
         0002-keep-std-rtti-identity.patch
         0003-scope-public-include-root.patch
+        0004-key-measure-cache-by-owner-size.patch
 )
 
 vcpkg_cmake_configure(

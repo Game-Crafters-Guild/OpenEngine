@@ -2,7 +2,7 @@
 
 Native C++ port of Godot Engine's Visual Shader node catalog and codegen
 semantics. Material graphs use the **shader graph v2** workflow (see
-`docs/Rendering/shader-graph-spec.html`): one `.glsl` file per graph with
+`docs/rendering/shader-graph-spec.mdx`): one `.glsl` file per graph with
 `@sg-*` tags, helper nodes under `Engine/Modules/Rendering/Shaders/Graph/Nodes/`,
 and `ShaderGraph::SgGraphCompiler` for codegen. Game-logic graphs still use
 `.graph` JSON in `NodeGraphPanel`.

@@ -33,10 +33,10 @@ public:
     /// (AgentConversationController::Send).
     static constexpr size_t kMaxMessageBytes = 64 * 1024;
 
-    /// Appends the user's message and a Queued reply to be answered by `providerId`
-    /// with `model` and `effort` (empty: the provider's default).
-    TurnId AddTurn(std::string userText, std::string providerId, std::string model, std::string effort,
-                   std::chrono::system_clock::time_point now);
+    /// Appends the user's message, with the `markups` its tokens named, and a Queued reply
+    /// to be answered by `providerId` with `model` and `effort` (empty: the provider's default).
+    TurnId AddTurn(std::string userText, SentMarkups markups, std::string providerId, std::string model,
+                   std::string effort, std::chrono::system_clock::time_point now);
     /// The reply of `turn` is being written: Queued becomes InProgress.
     void Start(TurnId turn);
     /// Appends streamed text and tool calls to the reply of `turn`, and marks the reply's

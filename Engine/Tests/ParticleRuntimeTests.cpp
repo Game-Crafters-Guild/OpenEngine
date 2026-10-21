@@ -923,8 +923,12 @@ TEST(ParticleRuntime, ANewbornHoldsTheValueItsLifetimeCurvesGiveAtAgeZero)
     EXPECT_GE(newborns, 40u) << "the emitter did not spawn, so nothing was checked";
     const auto colors = runtime.Channels().Colors();
     for (uint32 index = 0; index < runtime.Count(); ++index)
+    {
         if (runtime.Channels().Ages()[index] > 0.5f)
+        {
             EXPECT_GT(colors[index].w, 0.0f) << "the curve did not fade the particle in";
+        }
+    }
 }
 
 // The pass runs after the Enter processors and sees what they wrote: an Enter value is the entry

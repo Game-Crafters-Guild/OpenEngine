@@ -9,6 +9,7 @@
 #include "Core/WindowInputRouter.h"
 #include "Core/WindowUiBootstrap.h"
 #include "Display/HdrOutputController.h"
+#include "Docking/FloatingFrameHost.h"
 #include "Docking/WindowDockingController.h"
 #include "EditorContextMenu/UIContextMenu.h"
 #include "EditorPanelManager.h"
@@ -24,6 +25,7 @@
 #include "Input/KeyCodes.h"
 #include "Panels/GameViewPanel.h"
 #include "Panels/InspectorPanel.h"
+#include "PlayMode/GameViewPointerLock.h"
 #include "Rendering/Core/Device.h"
 #include "Platform/Capabilities.h"
 #include "Platform/Display.h"
@@ -105,6 +107,19 @@ void EditorApplication::DismissTornOffPanelsForLayoutRestore()
     }
 }
 
+std::vector<std::string> EditorApplication::SeparateWindowPanelIds() const
+{
+    std::vector<std::string> ids = m_DockDnd ? m_DockDnd->FloatingFrames().PanelIds()
+                                             : std::vector<std::string>{};
+    for (size_t i = 1; i < m_Windows.size(); ++i)
+    {
+        const EditorWindowContext* ctx = m_Windows[i].get();
+        if (ctx && !ctx->floatingPanelId.empty())
+            ids.push_back(ctx->floatingPanelId);
+    }
+    return ids;
+}
+
 void EditorApplication::AttachDeferredNativeToolWindows()
 {
     GE_CPU_PROFILE_SCOPE("EditorApplication.Update.AttachPendingNativeToolWindows");
@@ -176,7 +191,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
                 // Prefer the leaf size that the tab lived in. This works even when
                 // the tab is not currently active (so no mount exists).
                 UIElement* leaf = nullptr;
-                if (UIElement* tabEl = rootEl->FindById(std::string("tab:") + panelId))
+                if (UIElement* tabEl = rootEl->FindById(HashStringId(std::string("tab:") + panelId)))
                 {
                     UIElement* p = tabEl;
                     while (p && !p->HasClass("dock-leaf"))
@@ -186,7 +201,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
                 if (!leaf)
                 {
                     // Fallback to the active mount path (works when the panel is active).
-                    if (UIElement* mount = rootEl->FindById(std::string("mount:") + panelId))
+                    if (UIElement* mount = rootEl->FindById(HashStringId(std::string("mount:") + panelId)))
                     {
                         UIElement* content = mount->GetParent();
                         leaf = content ? content->GetParent() : nullptr;
@@ -324,6 +339,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
     DeviceDesc desc{};
     desc.preferredAPI = LoadPreferredGraphicsApi();
     desc.enableSwapchain = true;
+    desc.persistPipelineCache = true;
     desc.applicationName = GetConfig().Name;
     if (Engine::Renderer::ShouldEnableVkValidation())
     {
@@ -532,7 +548,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
     if (auto* rootEl = ctx->ui->GetRootElement())
     {
         rootEl->AddClass("floating");
-        if (auto* el = rootEl->FindById("dock"))
+        if (auto* el = rootEl->FindById("dock"_sid))
         {
             if (auto* ds = dynamic_cast<DockspaceElement*>(el))
             {
@@ -608,28 +624,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
     };
     floatingInput.onKeyPre = [this, ctxRaw](int k, int a, int m) -> bool
     {
-#if GE_ENABLE_CPU_PROFILING
-        if (k == Input::kKeyCode_F2 && a == Input::kKeyActionPress)
-        {
-            auto& prof = GameEngine::Profiling::CpuProfiler::Get();
-            if ((m & Input::kModShift) != 0)
-            {
-                prof.SetEnabled(false);
-                Logger::Log::Info("[CPU Profiler] OFF");
-                return true;
-            }
-            if (!prof.IsEnabled())
-            {
-                prof.SetEnabled(true);
-                Logger::Log::Info("[CPU Profiler] ON (press F2 again to dump)");
-            }
-            else
-            {
-                prof.RequestDump(this->BuildPerfDumpLine());
-            }
-            return true;
-        }
-#endif
+        m_GameViewPointerLock->OnKey(k, a);
 
         // Global editor hotkey: F11 toggles dock debug overlay regardless of UI focus.
         if (k == Input::kKeyCode_F11 && a == Input::kKeyActionPress)

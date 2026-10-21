@@ -1,0 +1,146 @@
+---
+title: Terrain grass
+description: How the TerrainGrass component places blades, how density, range and the budget interact, how a blade gets its shape, how clumps shape the field, how a blade takes its color and the color of its ground, and the presets.
+---
+
+The `TerrainGrass` component grows procedural grass on the terrain on the same entity. This page tells you what the main settings do and how they interact. For grass that is shorter or thinner in one area, see [Regional terrain grass](terrain-grass-regions.mdx). For the two alpha modes, see [Grass render modes](grass-render-modes.mdx).
+
+## Presets
+
+**Preset** at the top of the grass settings picks the kind of field. A preset sets the colors, **Blade Height**, **Blade Width**, the density and **Blade Tilt**. Every setting stays editable after you pick a preset. When you change one of them, **Preset** shows **Custom**. A preset does not change the wind, the clumps, **Root Fade**, **Canopy Shade** or the textures.
+
+| Preset | Stored value | Density (blades / m²) | Height (m) | Width (m) | Tilt | Tip color |
+|---|---|---|---|---|---|---|
+| **Meadow** (the default) | `Meadow` | 21 | 0.72 | 0.036 | 14 degrees | leaf green |
+| **Lawn** | `Lawn` | 64 | 0.4 | 0.024 | 6 degrees | deeper green |
+| **Steppe** | `Steppe` | 12 | 0.9 | 0.02 | 20 degrees | dry straw green |
+| **Custom** | `Custom` | as set | as set | as set | as set | as set |
+
+The scene stores the preset as `TerrainGrass.preset`. The preset is a label of where the settings came from: a scene loads it as it was saved.
+
+:::caution[Provisional values]
+
+The preset values and the default palette are provisional. They are set again, on the rendered look, after a change to how the tips of the blades are lit against the sun. The settings, the stored fields and the color contract stay as described here.
+
+:::
+
+## Density and range
+
+**blades / m² (at camera)** is the number of blades on each square meter of ground near the camera. The value does not change with the size of the terrain. The density falls off to zero at **Range**, along **Density Falloff**.
+
+| Inspector | Stored field | Default | Range |
+|---|---|---|---|
+| **blades / m² (at camera)** | `BladesPerSquareMeter` | 21 | 0 to 256 |
+| **Range (m)** | `Range` | 500 | 0 or more (the slider goes to 2000) |
+| **Density Falloff** (Advanced) | `DensityFalloff` | 2 | 0 or more |
+
+The maximum density is 256 blades per square meter. Placement divides the ground into cells of 8 m by 8 m, and one cell holds at most 16384 blades. A stored value above 256 is clamped to 256 when the scene loads, so the value you see is the value that renders.
+
+### The instance budget pays with range
+
+Each view has a fixed pool of 524,288 grass instances. The pool size does not change with the density, so a denser field uses no more memory. When the density and the range need more instances than the pool holds, placement keeps the density near the camera and shortens the range.
+
+The inspector shows a note under **Range** when this occurs. The note gives the range that the field actually reaches. For example, the default 21 blades per square meter over 500 m reaches about 369 m. A density of 64 reaches about 211 m, and a density of 200 reaches about 120 m.
+
+:::tip[Dense short grass]
+
+For a lawn or a close-up shot, increase the density and decrease **Blade Height**. Then make sure that the shortened range is far enough for your camera.
+
+:::
+
+## The shape of a blade
+
+A blade is a leaf. It leaves the ground at an angle, it bends under its own weight, and it turns about its length. Its sides are parallel for most of its height, and then it narrows to a point. Five settings give this shape. Each setting has a physical unit. The component stores angles in radians, and the inspector shows them in degrees.
+
+| Inspector | Stored field | Default | What it does |
+|---|---|---|---|
+| **Blade Height (m)** | `BladeHeight` | 0.72 | The average height of a blade. |
+| **Blade Width (m)** | `BladeWidth` | 0.036 | The width of the whole leaf at its base. A meadow leaf is 3 mm to 8 mm wide. The default is wider so that the default 21 blades per square meter still cover the ground from eye height and from a strategy camera; at a real leaf's width the field reads as bare ground with a few lines in it. A game that places more blades, or that looks at grass from close up, sets a narrower width. A blade is never wider than a fifth of its height. |
+| **Blade Tilt (deg)** | `BladeTilt` | 0.25 rad (14 degrees) | The angle from vertical where the blade leaves the ground. The default suits a meadow of upright leaves. A lawn is near 6 degrees. A loose meadow is 17 to 29 degrees. |
+| **Blade Bend (deg)** | `BladeBend` | 0.35 rad (20 degrees) | How much the blade curves along its length. The tip bends by 0.6 of this value again. The wind adds more bend. |
+| **Blade Twist (turns)** | `BladeTwist` | 0.25 | How much the leaf turns about its length, from the root to the tip. A value of 0.25 turns the face of the leaf through 90 degrees. A value of 0 gives a flat ribbon. |
+| **Blade Taper Start** | `BladeTaperStart` | 0.6 | The height fraction where the sides stop being parallel and the leaf narrows to its point. |
+| **Tuft Fan (deg per Clump Size)** | `TuftFan` | 0.25 rad (14 degrees) | How much a blade leans away from the center of its tuft, in degrees for each **Clump Size** of distance from the center. The outer blades of a tuft lean the most. A value of 0 gives no fan. This setting has an effect only when **Clump Size** is more than 0. |
+
+Each blade has its own values near the settings. Its tilt and its bend are each in a range of 40% above and below the setting. Its twist goes in one direction or the other, in a range of 50% above and below the setting. Each blade also leans a small amount toward one of its two faces. These values come from the position of the blade, so a blade keeps its shape from one frame to the next.
+
+The wind does not change these rules. A field with no wind stays still. A gust bends the blades further and turns them toward the wind. Tilt and bend together never take a blade's tip past 80 degrees from vertical, so no tip goes into the ground.
+
+### How a blade is shaded
+
+The renderer shades a blade as a thin leaf with a shallow, rounded channel along its center line. Where a blade is only a few pixels wide, the channel fades out. Far from the camera, the blade shades the same as the ground below it.
+
+A blade is thin, so some of the light that falls on it passes through it. When the sun is behind a blade, you see the light that comes through the leaf: a field seen against a low sun glows at its tips, and a face of a blade that turns away from the sun is not dark. A sunlit face keeps the color that you set. The light through a blade is never more than the light that its sunlit face reflects, so a field seen against the sun is never brighter than the same field lit from the front. The tip, which is thin, lets the most light through. The amount gets smaller toward the thick root, where no light comes through. A shadow that falls on a blade, from a hill or a tree, stops this light too.
+
+| Inspector | Stored field | Default | What it does |
+|---|---|---|---|
+| **Backlight** | `Translucency` | 1 | How much light passes through the tip of a blade, against the light that its sunlit face reflects. 1 is a thin leaf: as much light comes through it as comes off it. This is the most. 0 makes the blade opaque. The range is 0 to 1. |
+| **Backlight**, swatch | `BacklightColor` | yellow-green, `0xFFBCCE61` | The color of the light through a blade. The brightness of that light comes from the blade's own color, so this swatch sets only its hue and saturation. |
+
+The grass also keeps some light from the lower part of each blade and from the ground below the grass. This canopy shade darkens the sunlight and the light from the sky. In a thin field it is a small change. In a dense field it makes the lower blades and the ground below them clearly darker, so the lit tips are the brightest part of the field. The amount comes from the density, the width and the height of the blades. The amount at a point also follows how much grass stands there: the splat weight of the grass layer and the density of a grass region. The base of a blade and the ground next to it get the same amount, so the base of the blade stays the same color as its ground.
+
+| Inspector | Stored field | Default | What it does |
+|---|---|---|---|
+| **Canopy Shade** | `CanopyShade` | 1 | How much light the grass keeps from its lower blades and the ground under it. 1 is the physical amount for the density, the width and the height. 0 lights the ground under the grass as open ground, for a bright lawn. Values above 1 shade more, up to 60% of the light at the base of a full field, which a dense field reaches at 1 already. The range is 0 to 2. |
+
+:::note[Compat profile]
+
+On the compat (web) profile, the ground below the grass does not read the grass regions. Under a region that changes the density, the ground takes the occlusion of the splat weight alone.
+
+:::
+
+## Clumps
+
+Blades stand on an even pattern of positions in each cell. An even field looks mown. Clumps group the blades into tufts that share a height, a facing direction, and a hue.
+
+| Inspector | Stored field | Default | What it does |
+|---|---|---|---|
+| **Clump Size** | `ClumpSize` | 1.1 | The edge of a tuft in meters. 0 turns clumps off. |
+| **Clump Height Variance** (Advanced) | `ClumpHeightVariance` | 0.3 | How much the height of one tuft differs from the next, as a fraction of **Blade Height**. |
+| **Clump Alignment** (Advanced) | `ClumpAlignment` | 0.45 | How much the blades of a tuft turn to one common facing direction. |
+| **Clump Taper** (Advanced) | `ClumpTaper` | 0.35 | How much shorter the outer blades of a tuft are than its center blades. |
+
+A clump never moves a blade and never removes a blade. Every part of the ground keeps the density that you set, and a tuft shows by its shape: it is tallest at its center. At a **Clump Taper** of 1, the outer blades of each tuft shrink to nothing, and the ground between the tufts shows again.
+
+A scene that sets `TerrainGrass.clumpGather` loads with a warning in the log, and the engine ignores the key. Save the scene again to remove the key.
+
+## The color of a blade
+
+A blade has its own color gradient, from **Root Color** at the root to **Tip Color** at the tip. This gradient always goes along the full blade.
+
+### The color contract
+
+**Tip Color**, **Root Color** and **Backlight Color** are sRGB colors, as the color picker shows them. The scene stores each one as the picker's bytes, packed as `0xAARRGGBB` in a decimal number (`TerrainGrass.tipColor = 4286158157` is `0xFF79954D`). The renderer converts each color from sRGB to linear light when it reads it. Thus the swatch in the inspector is the color of the blade before lighting.
+
+### The default palette
+
+The default **Tip Color** is a leaf green, linear (0.19, 0.30, 0.075). The default **Backlight Color** is a more yellow green, linear (0.50, 0.62, 0.12). The untextured grass layer of a terrain is a soil color, linear (0.14, 0.13, 0.065): darker and less saturated than the leaf. A new terrain uses this soil where its grass grows. Under the sun, a lit leaf is brighter than the soil it stands in, and its base is near the color of that soil. A game that wants a bright lawn sets a brighter ground material on the grass layer and **Canopy Shade** to 0.
+
+The base of the blade also takes the color of the ground that it grows out of. **Root Fade** sets how far up the blade this ground color goes. Above **Root Fade End**, the blade has only its own gradient.
+
+The ground color is one color for each blade. The renderer finds it at the root of the blade, as the average color of the terrain material over about 1 m of ground. Every part of the blade uses this same ground color. Thus a ground texture with a strong pattern, such as lines or stones, cannot show on the blade.
+
+| Inspector | Stored field | Default | What it does |
+|---|---|---|---|
+| **Tip Color** | `TipColor` | leaf green, `0xFF79954D` | The color at the tip of the blade's own gradient. |
+| **Root Color** | `RootColor` | Auto (stored as 0) | The color at the root of the blade's own gradient. Auto uses **Tip Color** at 65% of its brightness in linear light, with the same hue, so the blade always gets darker toward the ground. Pick a color to set it, or select **Auto** to clear it. |
+| **Root Fade**, low thumb | `RootFadeStart` | 0 | The height fraction where the blade starts to leave the ground color. |
+| **Root Fade**, high thumb | `RootFadeEnd` | 0.25 | The height fraction where the blade has only its own color. |
+| **Grounding Strength** (Advanced) | `GroundingStrength` | 1 | How much the blade takes the ground color. 0 gives the blade only its own color from root to tip. |
+| **Splat Root Color** (Advanced) | `UseSplatRootColor` | on | Off uses **Root Color** in place of the ground color at the base of the blade. |
+
+With the default **Root Fade**, the base of the blade changes from the ground color to its own color over the lowest quarter of the blade. A **Root Fade End** of 1 spreads this change over the full blade, so the ground color reaches halfway up the blade.
+
+A scene keeps the **Root Fade** values that it was saved with. To use the default, set **Root Fade End** to 0.25.
+
+:::note[The root is the local average of the ground]
+
+The base of a blade has the average ground color around its root, not the color of the exact point under it. On a ground texture with high contrast, the blade bases can be lighter or darker than the small details beside them.
+
+:::
+
+:::note[Compat profile]
+
+On the compat (web) profile, the base of a blade still takes the ground color at each pixel of the blade. A blade that leans over a ground texture with a strong pattern can show that pattern.
+
+:::

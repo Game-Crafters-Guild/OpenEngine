@@ -1,6 +1,9 @@
 #include "TerrainGrass/TerrainGrassRenderFeature.h"
 
+#include "TerrainGrass/GrassBladeRows.h"
+#include "TerrainGrass/GrassComputePrograms.h"
 #include "TerrainGrass/GrassDrawMode.h"
+#include "TerrainGrass/GrassMaterialKeywords.h"
 #include "TerrainGrass/GrassPlacementElisionInputs.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "Engine/Rendering/CameraUtils.h"
@@ -26,6 +29,7 @@
 #include "Rendering/Utils/BufferHelpers.h"
 #include "Terrain/TerrainTypes.h"
 #include "AssetCore/GUID.h"
+#include "Assets/ShaderProgramAsset.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Components/Terrain/TerrainGrass.h"
 #include "Core/Application.h"
@@ -79,8 +83,8 @@ struct GrassBladeInstanceGPU
     float BladeHeight = 0.0f;
     float BladeWidth = 0.0f;
     float Yaw = 0.0f;
-    float Rand = 0.0f;
-    float GrassWeight = 0.0f;
+    uint32 RandAndCoverage = 0; // grass_clump.glsl owns the layout (per-blade random, field coverage)
+    uint32 BladeShape = 0;      // grass_clump.glsl owns the bit layout (tilt, twist, tuft fan)
     uint32 TerrainIndex = 0;
     float NormalX = 0.0f; // baked terrain normal (atlas terrains only; 0 otherwise)
     float NormalZ = 0.0f;
@@ -302,12 +306,12 @@ public:
         if (md.Keyword)
             doc.keywords = {md.Keyword};
 
-        using Rendering::MaterialKeyword;
+        // Registered like every scene material: the base program resolves and its pipeline builds
+        // on a worker, so a cold first draw costs no main-thread frame. The view draws no grass
+        // until that pipeline publishes (EmitForwardCommands finds no base pipeline before then).
         material = m_RenderServices.Materials().RegisterMaterialFromDocument(
-            *md.Guid, doc,
-            MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows |
-                MaterialKeyword::Instanced | MaterialKeyword::IBL |
-                MaterialKeyword::ProceduralVertexOutput);
+            *md.Guid, doc, kGrassMaterialKeywords,
+            Engine::Renderer::MaterialSystem::BaseCompileMode::Async);
 
         if (!material)
         {
@@ -315,7 +319,7 @@ public:
             return false;
         }
 
-        Logger::Log::Info("TerrainGrass: material '{}' registered and compiled", md.Name);
+        Logger::Log::Info("TerrainGrass: material '{}' registered; its pipeline builds on a worker", md.Name);
         return true;
     }
 
@@ -463,6 +467,15 @@ public:
             pipelineId = device->InternGraphicsPipeline(std::move(gd));
             pipelineVersion = material->GetVersion();
         }
+        // The re-interned pipeline builds on a worker for the formats the view's world pass draws
+        // with, as the prepass head's does, and grass draws once the device holds it: a cold first
+        // draw never builds it on the recording thread. A view that has declared no world pass yet
+        // has no formats to request it for; its draw resolves the pipeline when it records.
+        const Rendering::PipelineFormatKey worldFormats =
+            m_RenderServices.Views().GetViewWorldColorFormatKey(ctx.ViewId);
+        if (worldFormats.ColorCount != 0 &&
+            !m_RenderServices.Materials().Variants().EnsureConcreteWarm(*material, pipelineId, worldFormats))
+            return;
 
         auto& scratch = m_Scratch[ctx.ViewId];
         scratch.Shared.clear();
@@ -855,9 +868,11 @@ namespace
 {
 struct GrassShaderLocation
 {
+    // The directory holding the grass programs: the sources, or the cooked WGSL.
     std::filesystem::path Dir;
-    std::filesystem::path IncludeRoot;
-    std::filesystem::path CbtDir; // holds cbt_atlas.glsl (the resident-window atlas resolve grass shares)
+    // The engine shader tree the sources compile against (MakeGrassComputeCompileRequest); empty
+    // for cooked WGSL.
+    std::filesystem::path EngineShaders;
 };
 
 // The staged grass compute sources under the install assets root's Shaders directory; nullopt
@@ -875,20 +890,22 @@ std::optional<GrassShaderLocation> FindGrassShaderLocation(bool cookedPrograms)
         const fs::path programDir = shaders / "TerrainGrass";
         if (!fs::exists(programDir / "terrain_grass_place.comp.wgsl", ec))
             return std::nullopt;
-        return GrassShaderLocation{programDir, {}, {}};
+        return GrassShaderLocation{programDir, {}};
     }
-    GrassShaderLocation location{shaders / "TerrainGrass", shaders, shaders / "CBT"};
+    GrassShaderLocation location{shaders / "TerrainGrass", shaders};
     if (!fs::exists(location.Dir / "terrain_grass_place.comp", ec))
         return std::nullopt;
     return location;
 }
 
 bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLocation& location,
-                                 const char* shaderFile, const char* debugName, bool compat,
+                                 const GrassComputeProgram& program, bool compat,
                                  Rendering::ComputePipelineId& outId,
                                  Rendering::PipelineHandle& outPipeline)
 {
     namespace fs = std::filesystem;
+    const char* shaderFile = program.ShaderFile;
+    const char* debugName = program.DebugName;
     Vector<uint8> computeProgram;
     if (device.PreferredShaderSource() == Rendering::ShaderSourceKind::Wgsl)
     {
@@ -903,17 +920,13 @@ bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLo
     }
     else
     {
-        Rendering::ShaderProgramCompileRequest req{};
-        req.debugName = debugName;
-        req.baseDirectory = location.Dir;
-        req.cacheRoot = fs::path(".Cache") / "Shaders";
-        req.includeDirs = {location.IncludeRoot, location.CbtDir, location.Dir};
-        // The compat profile selects the named-binding arm of the source, the same arm the
-        // web cook builds, so a desktop run under GE_FORCE_COMPAT exercises it too.
-        std::vector<std::string> defines;
-        if (compat)
-            defines.push_back("GE_COMPAT_PROFILE");
-        req.stages = {{"cs", shaderFile, "main", std::move(defines)}};
+        Rendering::ShaderProgramCompileRequest req =
+            MakeGrassComputeCompileRequest(location.EngineShaders, program, compat);
+        // A packaged game's cooked cache is probed first (MaterialVariantCook cooks these programs
+        // for a desktop export); a program it lacks compiles into the workspace cache.
+        const ShaderCacheRoots& cacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
+        req.readOnlyCacheRoots = cacheRoots.ReadOnly;
+        req.cacheRoot = cacheRoots.Writable.empty() ? fs::path(".Cache") / "Shaders" : cacheRoots.Writable;
         Rendering::ShaderProgramCompileResult result{};
         std::string compileError;
         if (!Rendering::ShaderCompileService::CompileProgramToCache(
@@ -976,14 +989,11 @@ bool TerrainGrassRenderFeature::EnsureComputePipeline(Engine::Renderer::RenderSe
         Logger::Log::Warning("TerrainGrass: placement compute shader not found");
         return false;
     }
-    if (!CompileGrassComputePipeline(*m_Device, *location, "terrain_grass_classify.comp",
-                                     "TerrainGrassClassify_Pipeline", compat, m_ClassifyPipelineId,
+    if (!CompileGrassComputePipeline(*m_Device, *location, kGrassClassifyProgram, compat, m_ClassifyPipelineId,
                                      m_ClassifyPipeline)
-        || !CompileGrassComputePipeline(*m_Device, *location, "terrain_grass_plan.comp",
-                                        "TerrainGrassPlan_Pipeline", compat, m_PlanPipelineId,
+        || !CompileGrassComputePipeline(*m_Device, *location, kGrassPlanProgram, compat, m_PlanPipelineId,
                                         m_PlanPipeline)
-        || !CompileGrassComputePipeline(*m_Device, *location, "terrain_grass_place.comp",
-                                        "TerrainGrassPlace_Pipeline", compat, m_ComputePipelineId,
+        || !CompileGrassComputePipeline(*m_Device, *location, kGrassPlaceProgram, compat, m_ComputePipelineId,
                                         m_ComputePipeline))
         return false;
     Logger::Log::Info("TerrainGrass: placement compute pipeline ready");
@@ -1896,8 +1906,6 @@ void TerrainGrassRenderFeature::CreateBladeMesh(uint32 bladeSegments)
     // readable on that reduced geometry; the vertex modifier animates it from the same wind field
     // as LOD 0, so the far field gusts with the near one.
     constexpr uint32 kLod1Segments = 2u;
-    // Row parameter t = u^(2/3) for u evenly spaced over [0,1] — see the row loop below.
-    constexpr float kBladeRowDistributionExponent = 2.0f / 3.0f;
     const uint32 lodSegments[kGrassLodCount] = {
         bladeSegments,
         std::min(bladeSegments, kLod1Segments),
@@ -1913,17 +1921,10 @@ void TerrainGrassRenderFeature::CreateBladeMesh(uint32 bladeSegments)
         mesh.FirstIndex = static_cast<uint32>(indices.size());
         mesh.IndexCount = segments * 6u;
 
-        // Rows are spaced to equalise how far the straight segment between them strays from the
-        // spine the vertex stage actually evaluates. That spine puts row t at radius t*height and
-        // angle bend*t^2 (terrain_grass_vertex_modifier.glsl), which is the cubic y = bend*x^3 to
-        // leading order, so its second derivative grows LINEARLY in t. Chord error goes like
-        // t * dt^2, and holding that constant gives t = u^(2/3). Evenly spaced rows spend their
-        // budget where the blade is straight and kink at the tip; equal-lean-angle rows (t = u^0.5)
-        // overcorrect and move a bigger kink to the root. Mesh-build only — no runtime cost.
+        // Rows crowd toward the tip, where the droop bends the leaf (GrassBladeRowHeight).
         for (uint32 row = 0; row <= segments; ++row)
         {
-            const float u = static_cast<float>(row) / static_cast<float>(segments);
-            const float t = std::pow(u, kBladeRowDistributionExponent);
+            const float t = GrassBladeRowHeight(row, segments);
             vertices.push_back(BladeVertex{-1.0f, t});
             vertices.push_back(BladeVertex{ 1.0f, t});
         }

@@ -68,12 +68,13 @@ public:
     /// a reply never lands under another provider's turns. Each local session keeps
     /// its session id, so switching back continues it.
     void SetProvider(std::string providerId);
-    /// Queues the user's message for the current connection, answered with `model`
-    /// and `effort` (empty: the provider's default); it runs once the turns before it
-    /// end, with the model and effort it was sent with. Returns
+    /// Queues the user's message for the current connection, with the `markups` its tokens
+    /// named (the blocks its turn sends after it), answered with `model` and `effort` (empty: the
+    /// provider's default); it runs once the turns before it end, with the model and effort
+    /// it was sent with. Returns
     /// false, queuing nothing, when `text` is longer than Conversation::kMaxMessageBytes:
     /// a prompt is refused whole, never cut.
-    bool Send(std::string text, std::string model, std::string effort);
+    bool Send(std::string text, SentMarkups markups, std::string model, std::string effort);
     /// Sends the prompt of the failed reply at `messageIndex` again as a new turn,
     /// answered by the same connection (and so the same local session), model and effort.
     /// The failed reply stays, marked Retried, and is retried once: does nothing for

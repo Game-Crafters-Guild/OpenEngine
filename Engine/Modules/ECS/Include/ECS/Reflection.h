@@ -74,6 +74,9 @@ enum class FieldTypeId : std::uint16_t
     EntityHandle = 19,
     String       = 20,
     Bytes        = 21,
+    // Rendering::RenderLayerMask: a 32-bit layer word, written in scenes as layer numbers
+    // in brackets or all/none (Components/RenderLayerMaskReflectionTraits.h).
+    RenderLayerMask = 22,
 };
 
 // Per-field editor/runtime policy. Orthogonal to FieldTypeId and defaulted to
@@ -305,7 +308,8 @@ constexpr std::uint32_t FieldElementSize(FieldTypeId type)
         case FieldTypeId::Int32:
         case FieldTypeId::UInt32:
         case FieldTypeId::Float:
-        case FieldTypeId::EntityHandle:return 4;
+        case FieldTypeId::EntityHandle:
+        case FieldTypeId::RenderLayerMask: return 4;
         case FieldTypeId::Int64:
         case FieldTypeId::UInt64:
         case FieldTypeId::Double:      return 8;

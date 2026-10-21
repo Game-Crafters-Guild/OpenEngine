@@ -6,37 +6,22 @@
 // Template implementations for World class methods with C++20 Auto-Registration.
 // All component read/write goes through the colocated ArchetypeTable.
 
-#include "ECS/RequiredComponents.h"
-
 // ============================================================================
 // TEMPLATE IMPLEMENTATIONS WITH AUTO-REGISTRATION
 // ============================================================================
 
 namespace GameEngine::ECS {
 
-// Deferred: queues the add (and any required-component adds) to the
-// thread-local command buffer; falls back to immediate execution when full.
-// Every required component is queued and decided at the flush, not here: the
-// world at push time does not know what the commands queued before this one
-// will add or remove by then.
+// Deferred: queues the add to the thread-local command buffer; falls back to
+// immediate execution when full. The components T requires are decided at the
+// flush, by the unified add body: the world at push time does not know what the
+// commands queued before this one will add or remove by then.
 template<Component T>
 void World::AddComponent(EntityHandle entity, const T& component) {
     AutoComponentRegistrar<T>::EnsureRegistered();
 
     auto& buffer = GetCommandBuffer();
-    bool ok = true;
-    auto pushReq = [&](auto tag)
-    {
-        using Req = typename decltype(tag)::type;
-        ok = ok && buffer.TryPush(Command::addRequiredComponent(entity, Req{}));
-    };
-    using ReqList = typename Detail::RequiredComponents<T>::type;
-    [&]<typename... Reqs>(Detail::TypeList<Reqs...>)
-    { (pushReq(Detail::TypeTag<Reqs>{}), ...); }(ReqList{});
-
-    ok = ok && buffer.TryPush(Command::addComponent(entity, component));
-
-    if (!ok) {
+    if (!buffer.TryPush(Command::addComponent(entity, component))) {
         AddComponentImmediate(entity, component);
     }
 }
@@ -45,7 +30,6 @@ template<Component T>
 void World::AddComponentImmediate(EntityHandle entity, const T& component) {
     CheckRemovalReentry();
     AutoComponentRegistrar<T>::EnsureRegistered();
-    Detail::EnsureRequiredComponents<T>(*this, entity);
     AddComponentImpl(entity, component);
 }
 
@@ -247,12 +231,16 @@ void World::SetBulkComponents(const std::vector<EntityHandle>& entities,
         auto& metadata = entityMetadata[entity.index];
         Archetype* current = metadata.archetype;
 
+        static const ComponentSignature kNoComponents;
         Archetype* target;
+        const ComponentSignature* addedFrom = nullptr; // set on a structural add
         if (current && current->GetSignature().Contains(typeId)) {
             target = current; // data-only set, no structural change
         } else if (current) {
             target = GetOrCreateArchetypeForAdd(current, typeId);
             MoveEntity(entity, current, target);
+            addedFrom = &current->GetSignature();
+            WriteRequiredDefaultsAfterAdd(entity, *addedFrom, *target, typeId);
             // Lifecycle events: a structural ADD outside the unified body
             // (§6.1 completeness — an unrecorded bulk add would be an
             // R1-class silent false negative for Added consumers).
@@ -261,12 +249,15 @@ void World::SetBulkComponents(const std::vector<EntityHandle>& entities,
             if (!emptyToT) {
                 ComponentSignature sig;
                 sig.Add(typeId);
+                AddRequiredClosure(sig);
                 emptyToT = GetOrCreateArchetype(sig);
             }
             target = emptyToT;
             EntityLocation loc = target->AddEntityUnsafe(entity);
             metadata.archetype = target;
             metadata.SetLocation(loc);
+            addedFrom = &kNoComponents;
+            WriteRequiredDefaultsAfterAdd(entity, kNoComponents, *target, typeId);
             RecordComponentAdded(typeId, entity);
         }
 
@@ -290,6 +281,10 @@ void World::SetBulkComponents(const std::vector<EntityHandle>& entities,
         // the touched chunk's T column here.
         target->GetTable().StampColumnVersion(metadata.chunkIndex,
                                               static_cast<std::size_t>(columnIndex), stampVersion);
+        // Requirements signal once every column holds its value, as in the
+        // unified add body.
+        if (addedFrom)
+            SignalRequiredAdds(entity, *addedFrom, target->GetSignature(), typeId);
     }
 
     structuralChangeVersion.fetch_add(1, std::memory_order_relaxed);
@@ -323,6 +318,7 @@ EntityHandle World::CreateHandle(const Components&... components) {
         Archetype* CachedArchetype = nullptr;
         std::size_t CachedGeneration = 0;
         std::array<uint32_t, sizeof...(Components)> ColOffsets{};
+        std::vector<RequiredColumn> Required;
     };
     static thread_local CachedArchetypeLookup s_Cache;
 
@@ -350,9 +346,12 @@ EntityHandle World::CreateHandle(const Components&... components) {
             ((componentSizes.try_emplace(GetComponentTypeId<Components>(), sizeof(Components))), ...);
         }
 
-        ComponentSignature signature;
-        for (auto id : typeIds) signature.Add(id);
+        ComponentSignature supplied;
+        for (auto id : typeIds) supplied.Add(id);
+        ComponentSignature signature = supplied;
+        AddRequiredClosure(signature);
         archetype = GetOrCreateArchetype(signature);
+        ResolveRequiredColumns(*archetype, supplied, s_Cache.Required);
 
         // Cache column byte offsets for direct writes (no FindColumnIndex per entity).
         if (archetype->HasTable()) {
@@ -382,6 +381,7 @@ EntityHandle World::CreateHandle(const Components&... components) {
         std::size_t colI = 0;
         ((chunk.template GetColumnByOffset<Components>(s_Cache.ColOffsets[colI++])[loc.IndexInChunk] = components), ...);
     }
+    WriteRequiredColumns(*archetype, loc, s_Cache.Required);
 
     // Lifecycle events (§6.1): typed creation bypasses the unified add body.
     RecordAddedForSignature(archetype->GetSignature(), entity);
@@ -405,8 +405,10 @@ EntityHandle World::CreateInArchetypeHandle() {
 
     ((componentSizes.try_emplace(GetComponentTypeId<Components>(), sizeof(Components))), ...);
 
-    ComponentSignature signature;
-    (signature.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature supplied;
+    (supplied.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature signature = supplied;
+    AddRequiredClosure(signature);
 
     Archetype* archetype = GetOrCreateArchetype(signature);
 
@@ -417,6 +419,9 @@ EntityHandle World::CreateInArchetypeHandle() {
     metadata.SetLocation(loc);
 
     ((archetype->SetComponentAt<Components>(metadata.chunkIndex, metadata.indexInChunk, Components{})), ...);
+    std::vector<RequiredColumn> required;
+    ResolveRequiredColumns(*archetype, supplied, required);
+    WriteRequiredColumns(*archetype, loc, required);
 
     // Lifecycle events (§6.1): archetype creation bypasses the unified add body.
     RecordAddedForSignature(archetype->GetSignature(), entity);
@@ -434,11 +439,15 @@ std::vector<EntityHandle> World::CreateBatchHandle(size_t count, const Component
 
     ((componentSizes.try_emplace(GetComponentTypeId<Components>(), sizeof(Components))), ...);
 
-    ComponentSignature signature;
-    (signature.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature supplied;
+    (supplied.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature signature = supplied;
+    AddRequiredClosure(signature);
 
     Archetype* archetype = GetOrCreateArchetype(signature);
     archetype->Reserve(archetype->GetEntityCount() + count);
+    std::vector<RequiredColumn> required;
+    ResolveRequiredColumns(*archetype, supplied, required);
 
     // Pre-reserve entityMetadata so the per-entity emplace_back doesn't
     // trigger geometric regrowth mid-batch. freeIndices may absorb some of
@@ -479,6 +488,7 @@ std::vector<EntityHandle> World::CreateBatchHandle(size_t count, const Component
         auto& chunk = chunks[loc.ChunkIndex];
         std::size_t colI = 0;
         ((chunk.template GetColumnByOffset<Components>(colOffsets[colI++])[loc.IndexInChunk] = components), ...);
+        WriteRequiredColumns(*archetype, loc, required);
 
         entities.push_back(entity);
     }
@@ -504,11 +514,15 @@ std::vector<EntityHandle> World::CreateBatchWithInit(size_t count, InitFn&& init
 
     ((componentSizes.try_emplace(GetComponentTypeId<Components>(), sizeof(Components))), ...);
 
-    ComponentSignature signature;
-    (signature.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature supplied;
+    (supplied.Add(GetComponentTypeId<Components>()), ...);
+    ComponentSignature signature = supplied;
+    AddRequiredClosure(signature);
 
     Archetype* archetype = GetOrCreateArchetype(signature);
     archetype->Reserve(archetype->GetEntityCount() + count);
+    std::vector<RequiredColumn> required;
+    ResolveRequiredColumns(*archetype, supplied, required);
 
     // Pre-reserve entityMetadata (see CreateBatchHandle for rationale).
     if (entityMetadata.size() + count > entityMetadata.capacity()) {
@@ -545,6 +559,7 @@ std::vector<EntityHandle> World::CreateBatchWithInit(size_t count, InitFn&& init
             metadata.SetLocation(loc);
             entities.push_back(entity);  // push BEFORE initFn so rollback sees it
 
+            WriteRequiredColumns(*archetype, loc, required);
             auto chunks = archetype->GetTable().GetChunks();
             auto& chunk = chunks[loc.ChunkIndex];
 
@@ -607,6 +622,7 @@ void World::ReserveArchetypeCapacity(size_t count) {
 
     ComponentSignature signature;
     (signature.Add(GetComponentTypeId<Components>()), ...);
+    this->AddRequiredClosure(signature);
     Archetype* archetype = this->GetOrCreateArchetype(signature);
 
     archetype->Reserve(count);

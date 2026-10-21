@@ -131,7 +131,7 @@ bool VulkanPipelineCache::Initialize()
     }
 
     // Create cache directory if it doesn't exist
-    if (!CreateCacheDirectory())
+    if (m_Config.PersistToDisk && !CreateCacheDirectory())
     {
         std::cerr << "PipelineCache: Failed to create cache directory" << std::endl;
         return false;
@@ -153,8 +153,11 @@ bool VulkanPipelineCache::Initialize()
     // performs the single read + validation and returns the DECOMPRESSED
     // vkGetPipelineCacheData payload (re-reading the file here raced
     // concurrent saves from other engine processes, and handed the still-
-    // compressed bytes to the driver — an ignored blob at best).
-    std::optional<std::vector<uint8_t>> cacheData = LoadCacheData();
+    // compressed bytes to the driver — an ignored blob at best). An in-memory
+    // cache starts empty: no file is read.
+    std::optional<std::vector<uint8_t>> cacheData;
+    if (m_Config.PersistToDisk)
+        cacheData = LoadCacheData();
     if (cacheData)
     {
         createInfo.initialDataSize = cacheData->size();
@@ -180,8 +183,9 @@ void VulkanPipelineCache::Shutdown(bool saveToDisk)
         return;
     }
 
-    // Save cache before shutdown (skipped during device rebuild — see header).
-    if (saveToDisk)
+    // Save cache before shutdown (skipped during device rebuild — see header — and
+    // for an in-memory cache, which owns no file).
+    if (saveToDisk && m_Config.PersistToDisk)
         SaveCache();
 
     // Destroy Vulkan pipeline cache
@@ -234,9 +238,9 @@ bool VulkanPipelineCache::SaveCache()
     header.checksum = CalculateChecksum(cacheData);
     header.compressed = wasCompressed ? 1 : 0;
 
-    // The cache file is machine-global: every engine process (editor, tests,
-    // player) saves here on device teardown while others may be reading it at
-    // device bring-up. Publish atomically — write a per-process temp file,
+    // The cache file is machine-global: every process whose device persists its
+    // cache (the Editor, the Player) saves here on device teardown while others
+    // may be reading it at device bring-up. Publish atomically — write a per-process temp file,
     // then rename over the destination — so a reader can never observe the
     // truncate-then-append window of an in-place rewrite. That window is what
     // turned a concurrent save into "vector too long" in an unrelated
@@ -416,7 +420,7 @@ void VulkanPipelineCache::ClearCache()
 
 void VulkanPipelineCache::RecordPipelineCreation(double creationTimeMs, bool wasCached)
 {
-    std::lock_guard<std::mutex> lock(m_CreationMutex);
+    std::lock_guard<std::mutex> lock(m_StatisticsMutex);
     m_Statistics.TotalPipelines++;
 
     if (wasCached)

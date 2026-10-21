@@ -205,7 +205,7 @@ DepthCacheStreamCamera ResolveDepthCacheStreamCamera(Engine::Renderer::RenderSer
 
     for (const auto& view : rs->Views().GetViews())
     {
-        if (!view.activeRenderPipeline || view.renderLayerMask == 0u)
+        if (!view.activeRenderPipeline || !view.Participates())
             continue;
         if (useCamera(view.cameraId))
             return out;
@@ -1563,7 +1563,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (rendererOff)
                     return;
-                if (renderer && (renderer->renderLayerMask & mc.RenderLayerMask) == 0u)
+                if (renderer && !renderer->RenderLayers.Intersects(mc.ContributorLayers))
                     return;
 
                 const Mathematics::AABB aabb = bounds.Box.TransformToAABB(wt.matrix);
@@ -2751,7 +2751,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         OceanRasterDepthCaptureSettings rasterSettings{};
         rasterSettings.Enabled = renderer.RasterDepthCapture;
         rasterSettings.Resolution = renderer.RasterDepthCaptureResolution;
-        rasterSettings.RenderLayerMask = renderer.RasterDepthCaptureRenderLayerMask;
+        rasterSettings.CaptureLayers = renderer.RasterDepthCaptureLayers;
         rasterSettings.SizeX = renderer.RasterDepthCaptureSizeX;
         rasterSettings.SizeZ = renderer.RasterDepthCaptureSizeZ;
         rasterSettings.TopPadding = renderer.RasterDepthCaptureTopPadding;

@@ -89,16 +89,17 @@ GE_API GE_Result GE_CDECL GE_GameUI_FindElement(uint64_t entityId, const char* i
         if (!outInstanceId)
             return GE_Result_InvalidArg;
         *outInstanceId = 0;
-        // An empty id is a caller error, not a miss: FindById matches the first element
-        // whose id is empty, which is most of a tree, so an unguarded empty string would
-        // hand back a durable handle to an arbitrary element and every later write would
-        // land on it. Rejected before the lookup, so the result does not depend on what
-        // happens to be mounted.
+        // An empty id is a caller error, not a miss: no element can be named by it, so a
+        // script passing one has a bug that a NotFound poll would hide forever.
         if (!id || *id == '\0')
             return GE_Result_InvalidArg;
-        const std::string_view key{id};
-        GameEngine::UIElement* el = (entityId == 0) ? GameEngine::GameUI::FindElementByIdAny(key)
-                                                    : GameEngine::GameUI::FindElementById(entityId, key);
+        // Script ids arrive as strings; this is where they are hashed, once per call.
+        const GameEngine::StringId key = GameEngine::HashStringId(id);
+        GameEngine::UIElement* el = nullptr;
+        if (entityId == 0)
+            el = GameEngine::GameUI::FindElementById(key);
+        else if (GameEngine::UIElement* root = GameEngine::GameUI::FindDocumentRoot(entityId))
+            el = root->FindById(key);
         if (!el)
         {
             ReportUnresolvableHostOnce();

@@ -49,6 +49,10 @@ constexpr uint64_t kBucketIndexInitialBytes = 4ull  << 20; // 4 MB
 // is always safe.
 constexpr uint64_t kRetireDelay = 4ull;
 
+// Ranges a stream pool's allocator tracks, free and live, before its first
+// growth; it grows geometrically at allocation from there.
+constexpr uint32_t kPoolInitialRanges = 8u;
+
 // WebGPU Queue.WriteBuffer requires the destination offset AND the byte size to
 // be multiples of 4 (Vulkan is looser). Index pools stride at 2 bytes (Uint16),
 // which yields 2-aligned offsets and, for an odd index count, a 2-mod-4 size.
@@ -93,6 +97,14 @@ uint64_t AlignUp(uint64_t value, uint64_t alignment)
     return ((value + alignment - 1u) / alignment) * alignment;
 }
 
+// A range of `bytes` in `pool`, its size rounded up to the pool's alignment so
+// every offset in the pool stays a multiple of it.
+GameEngine::Memory::RangeAllocator::Allocation AllocateInPool(GameEngine::Rendering::MeshGPUStreamPool& pool,
+                                                              uint64_t bytes)
+{
+    return pool.allocator->Allocate(AlignUp(bytes, pool.alignmentBytes));
+}
+
 uint64_t NextPoolCapacity(const std::vector<GameEngine::Rendering::MeshGPUStreamPool>& pools,
                           uint64_t initialCapacity,
                           uint64_t requestedBytes,
@@ -114,7 +126,7 @@ uint64_t NextPoolCapacity(const std::vector<GameEngine::Rendering::MeshGPUStream
 void ReclaimPools(std::vector<GameEngine::Rendering::MeshGPUStreamPool>& pools, uint64_t frameIndex)
 {
     for (auto& pool : pools)
-        pool.allocator.ReclaimUpToFrame(frameIndex);
+        pool.allocator->ReclaimThrough(frameIndex);
 }
 
 void DestroyPools(GameEngine::Rendering::IDevice* device,
@@ -770,7 +782,7 @@ std::vector<MeshGPUPoolStats> MeshGPURegistry::GetPoolStats() const
                 entry.BucketKey = bucket.key;
                 entry.Stream    = stream;
                 entry.PoolIndex = static_cast<uint32_t>(i);
-                entry.Allocator = pools[i].allocator.GetStats();
+                entry.Allocator = pools[i].allocator->GetStats();
                 stats.push_back(entry);
             }
         };
@@ -1033,7 +1045,7 @@ MeshGPUReprovisionReport MeshGPURegistry::ReprovisionAfterDeviceRebuild(
     // pool tracking (the VkBuffers are gone, so DestroyBuffer here would just be a
     // wasted generational no-op) — but the real reason to forget them is that the
     // pools are persistently MAPPED: keeping them would leave UploadMesh writing
-    // through dangling mapped pointers into freed VMA memory. The BucketPoolAllocator
+    // through dangling mapped pointers into freed VMA memory. The RangeAllocator
     // bookkeeping (offsets) goes with it: every entry is re-uploaded below into a
     // fresh allocation, so no recorded offset is trusted across the rebuild.
     m_Buckets.clear();
@@ -1521,7 +1533,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
                               uint32_t stride,
                               size_t srcBytes,
                               const char* debugName,
-                              BucketPoolAllocator::Allocation& outAlloc,
+                              Memory::RangeAllocator::Allocation& outAlloc,
                               uint32_t& outPoolIndex) -> bool
     {
         outAlloc = {};
@@ -1531,7 +1543,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
 
         for (uint32_t i = 0; i < static_cast<uint32_t>(pools.size()); ++i)
         {
-            BucketPoolAllocator::Allocation alloc = pools[i].allocator.Allocate(srcBytes);
+            Memory::RangeAllocator::Allocation alloc = AllocateInPool(pools[i], srcBytes);
             if (alloc.IsValid())
             {
                 outAlloc = alloc;
@@ -1552,7 +1564,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         }
 
         MeshGPUStreamPool& pool = pools.back();
-        BucketPoolAllocator::Allocation alloc = pool.allocator.Allocate(srcBytes);
+        Memory::RangeAllocator::Allocation alloc = AllocateInPool(pool, srcBytes);
         if (!alloc.IsValid())
         {
             Logger::Log::Warning(
@@ -1570,16 +1582,16 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
 
     auto freeStream = [](std::vector<MeshGPUStreamPool>& pools,
                          uint32_t poolIndex,
-                         BucketPoolAllocator::Allocation alloc)
+                         Memory::RangeAllocator::Allocation alloc)
     {
         if (!alloc.IsValid())
             return;
         if (MeshGPUStreamPool* pool = GetPool(pools, poolIndex))
-            pool->allocator.Free(alloc);
+            pool->allocator->Free(alloc);
     };
 
-    BucketPoolAllocator::Allocation coreSub{}, indexSub{}, tangentSub{}, colorSub{}, uv1Sub{}, jointsSub{}, weightsSub{}, joints1Sub{}, weights1Sub{};
-    std::array<BucketPoolAllocator::Allocation, 6> extraUvSub{};
+    Memory::RangeAllocator::Allocation coreSub{}, indexSub{}, tangentSub{}, colorSub{}, uv1Sub{}, jointsSub{}, weightsSub{}, joints1Sub{}, weights1Sub{};
+    std::array<Memory::RangeAllocator::Allocation, 6> extraUvSub{};
     uint32_t corePoolIndex = kInvalidMeshGPUPoolIndex;
     uint32_t indexPoolIndex = kInvalidMeshGPUPoolIndex;
     uint32_t tangentPoolIndex = kInvalidMeshGPUPoolIndex;
@@ -1604,7 +1616,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         uint32_t stride = 1;
         size_t bytes = 0;
         const char* debugName = nullptr;
-        BucketPoolAllocator::Allocation* alloc = nullptr;
+        Memory::RangeAllocator::Allocation* alloc = nullptr;
         uint32_t* poolIndex = nullptr;
     };
 
@@ -1614,7 +1626,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
                                uint32_t stride,
                                size_t bytes,
                                const char* debugName,
-                               BucketPoolAllocator::Allocation& alloc,
+                               Memory::RangeAllocator::Allocation& alloc,
                                uint32_t& poolIndex)
     {
         if (bytes == 0)
@@ -1674,7 +1686,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
             }
 
             MeshGPUStreamPool& pool = (*stream.pools)[groupIndex];
-            BucketPoolAllocator::Allocation alloc = pool.allocator.Allocate(stream.bytes);
+            Memory::RangeAllocator::Allocation alloc = AllocateInPool(pool, stream.bytes);
             if (!alloc.IsValid())
             {
                 clearVertexAllocations();
@@ -1684,7 +1696,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
             *stream.alloc = alloc;
             *stream.poolIndex = groupIndex;
 
-            const uint64_t streamVertexOffset = alloc.offset / stream.stride;
+            const uint64_t streamVertexOffset = alloc.Offset / stream.stride;
             if (vertexOffset == std::numeric_limits<uint64_t>::max())
                 vertexOffset = streamVertexOffset;
             else if (vertexOffset != streamVertexOffset)
@@ -1824,7 +1836,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
 
     auto updateStream = [&](std::vector<MeshGPUStreamPool>& pools,
                             uint32_t poolIndex,
-                            BucketPoolAllocator::Allocation alloc,
+                            Memory::RangeAllocator::Allocation alloc,
                             size_t size,
                             const void* data)
     {
@@ -1833,7 +1845,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         MeshGPUStreamPool* pool = GetPool(pools, poolIndex);
         if (!pool || !pool->buffer.IsValid())
             return;
-        m_Device->UpdateBuffer(pool->buffer, alloc.offset, size, data);
+        m_Device->UpdateBuffer(pool->buffer, alloc.Offset, size, data);
     };
 
     updateStream(bucket.corePools, corePoolIndex, coreSub, coreBytes, coreData.data());
@@ -1860,8 +1872,8 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
     entry.weights1SubAlloc = weights1Sub;
     entry.extraUvSubAlloc  = extraUvSub;
 
-    entry.vertexOffset = static_cast<uint32_t>(coreSub.offset / coreStride);
-    entry.firstIndex   = static_cast<uint32_t>(indexSub.offset / indexStride);
+    entry.vertexOffset = static_cast<uint32_t>(coreSub.Offset / coreStride);
+    entry.firstIndex   = static_cast<uint32_t>(indexSub.Offset / indexStride);
 
     entry.indexType  = use16Indices ? static_cast<uint32_t>(IndexType::Uint16)
                                     : static_cast<uint32_t>(IndexType::Uint32);
@@ -1995,8 +2007,10 @@ bool MeshGPURegistry::CreateBucketStreamPool(std::vector<MeshGPUStreamPool>& poo
     MeshGPUStreamPool pool{};
     pool.buffer = h;
     pool.capacityBytes = capacityBytes;
-    pool.strideBytes = static_cast<uint32_t>(std::max<uint64_t>(1u, alignmentBytes));
-    pool.allocator.Initialize(capacityBytes, alignmentBytes);
+    pool.alignmentBytes = alignmentBytes;
+    pool.allocator = std::make_unique<Memory::RangeAllocator>(debugName ? debugName : "MeshGPU.Bucket",
+                                                              Memory::Residency::Gpu, 1, capacityBytes,
+                                                              kPoolInitialRanges);
     pools.push_back(std::move(pool));
     return true;
 }
@@ -2058,13 +2072,13 @@ void MeshGPURegistry::ReleaseEntryToBucket(MeshGPUEntry& entry)
     const uint64_t retire = m_CurrentFrameIndex + kRetireDelay;
     auto freeDeferred = [retire](std::vector<MeshGPUStreamPool>& pools,
                                  uint32_t poolIndex,
-                                 BucketPoolAllocator::Allocation& alloc)
+                                 Memory::RangeAllocator::Allocation& alloc)
     {
         if (!alloc.IsValid())
             return;
         if (MeshGPUStreamPool* pool = GetPool(pools, poolIndex))
         {
-            pool->allocator.FreeDeferred(alloc, retire);
+            pool->allocator->FreeAfter(alloc, retire);
             alloc = {};
         }
     };

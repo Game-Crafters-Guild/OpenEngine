@@ -858,7 +858,7 @@ void RegisterLightInspector()
 
             // Double-click on the "Color" label resets to white
             auto lastColorClickTime = std::make_shared<std::chrono::steady_clock::time_point>();
-            colorLabel->RegisterEventHandler(kEventMouseDown, [w, e, n, undo, swatchRaw, rgbLabelRaw, lastColorClickTime, colorDrivenBySky](UIEvent& ev) {
+            colorLabel->RegisterEventHandler(kEventMouseDown, [w, e, n, undo, lastColorClickTime, colorDrivenBySky](UIEvent& ev) {
                 if (ev.Button != 0 || colorDrivenBySky)
                     return;
                 auto now = std::chrono::steady_clock::now();
@@ -1246,15 +1246,15 @@ void RegisterLightInspector()
                     mpFieldRaw->SetOnValueChanging([applyMp](const float& v) { applyMp(v); });
                     mpFieldRaw->SetOnValueChanged([applyMp](const float& v) { applyMp(v); });
 
-                    constexpr float kDefaultMaxPenumbra = 0.0f; // auto (tap-budget bound)
                     auto lastMpClickTime = std::make_shared<std::chrono::steady_clock::time_point>();
-                    mpLabel->RegisterEventHandler(kEventMouseDown, [applyMp, lastMpClickTime, kDefaultMaxPenumbra](UIEvent& ev) {
+                    mpLabel->RegisterEventHandler(kEventMouseDown, [applyMp, lastMpClickTime](UIEvent& ev) {
                         if (ev.Button != 0) return;
                         auto now = std::chrono::steady_clock::now();
                         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - *lastMpClickTime);
                         if (lastMpClickTime->time_since_epoch().count() != 0 && elapsed < GameEngine::Platform::GetDoubleClickInterval())
                         {
                             ev.Stop();
+                            constexpr float kDefaultMaxPenumbra = 0.0f; // auto (tap-budget bound)
                             applyMp(kDefaultMaxPenumbra);
                             *lastMpClickTime = {};
                             return;

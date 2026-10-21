@@ -37,6 +37,8 @@
 #include "Rendering/Core/PipelineTypes.h"
 
 #include "Platform/Shell.h"
+#include "Components/Rendering/LightPhotometry.h"
+#include "Rendering/Sky/AtmosphereTransmittance.h"
 
 #include "TestDeviceHelper.h"
 
@@ -70,9 +72,11 @@ struct GlareProbePC
 // The sun's apparent angular radius, radians — the width SunGlareRenderNode gives the kernel's
 // core. Half of the ~0.533 degree apparent diameter.
 constexpr float kSunAngularRadius = 0.004651f;
-// Irradiance of a 100 klx sun on the engine's unitless scale: 100000 / 203
-// (LightPhotometry.h), times the sky's ground-to-TOA anchor of 1.33.
-constexpr float kShippedSunIrradiance = 655.2f;
+// Above-atmosphere irradiance of a 100 klx sun on the engine's unitless scale, as the sky uploads it:
+// 100000 / 203 (LightPhotometry.h) times the sky's ground-to-top-of-atmosphere lift.
+const float kShippedSunIrradiance =
+    100000.0f / Components::kReferenceWhiteNits *
+    Rendering::SkySourceIlluminanceScale(Rendering::ScatteringAtmosphere());
 // The fraction sun_glare.glsl documents. Read back from the device rather than trusted, but
 // the tests need a value to compare the readback against.
 constexpr double kDocumentedGlareFraction = 0.01;
@@ -127,11 +131,14 @@ std::string StripLineComments(const std::string& source)
 std::string LoadRepoFileWithoutComments(const char* relativePath)
 {
 #ifndef GE_RENDERER_REPO_ROOT
-    (void)relativePath;
+    ADD_FAILURE() << "Missing repository root for shipped input: " << relativePath;
     return {};
 #else
     const std::filesystem::path path = std::filesystem::path(GE_RENDERER_REPO_ROOT) / relativePath;
-    return StripLineComments(ReadTextFile(path));
+    const std::string source = StripLineComments(ReadTextFile(path));
+    if (source.empty())
+        ADD_FAILURE() << "Missing or empty shipped input: " << relativePath;
+    return source;
 #endif
 }
 
@@ -725,8 +732,8 @@ TEST(SunGlareSourceContract, GlarePassReachesTheKernelThroughTheSharedInclude)
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare.frag");
     const std::string vert =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare.vert");
-    if (frag.empty() || vert.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(frag.empty());
+    ASSERT_FALSE(vert.empty());
 
     EXPECT_NE(frag.find("#include \"Includes/sun_glare.glsl\""), std::string::npos)
         << "sun_glare.frag no longer includes the shared kernel; the device probe would be "
@@ -755,8 +762,8 @@ TEST(SunGlareSourceContract, TheMultisampledVariantIsAThinWrapperOverTheSharedVe
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare.vert");
     const std::string multi =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare_ms.vert");
-    if (single.empty() || multi.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(single.empty());
+    ASSERT_FALSE(multi.empty());
 
     EXPECT_NE(single.find("uniform sampler2D uSceneDepth"), std::string::npos);
     EXPECT_NE(multi.find("uniform sampler2DMS uSceneDepth"), std::string::npos)
@@ -778,8 +785,8 @@ TEST(SunGlareSourceContract, ThereIsExactlyOneGlareFractionConstant)
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/sun_glare.glsl");
     const std::string frag =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare.frag");
-    if (include.empty() || frag.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(include.empty());
+    ASSERT_FALSE(frag.empty());
 
     EXPECT_EQ(CountOccurrences(include, "#define GE_SUN_GLARE_FRACTION"), 1u)
         << "the glare fraction is the term's ONE dial; a second definition is a second dial";
@@ -798,8 +805,9 @@ TEST(SunGlareSourceContract, VisibilityIsTheProductOfBothIndependentTerms)
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare.vert");
     const std::string multi =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare_ms.vert");
-    if (vsBody.empty() || single.empty() || multi.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(vsBody.empty());
+    ASSERT_FALSE(single.empty());
+    ASSERT_FALSE(multi.empty());
 
     // No term alone can see every occluder in this engine: the cascades cannot see CBT terrain
     // (it casts no shadows), the screen probe cannot see anything while the sun is off screen,
@@ -831,8 +839,7 @@ TEST(SunGlareSourceContract, TheMultisampledProbeAveragesOverSamplesRatherThanPi
 {
     const std::string include =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/sun_glare.glsl");
-    if (include.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(include.empty());
 
     const std::size_t ms = include.find("GE_SunGlareScreenVisibilityMS");
     ASSERT_NE(ms, std::string::npos);
@@ -853,8 +860,8 @@ TEST(SunGlareSourceContract, ShadowBlockPrefixMatchesTheShadowSamplingHeader)
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/sun_glare_vs.glsl");
     const std::string header =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/shadow_sampling.glsl");
-    if (vert.empty() || header.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; shader source unavailable";
+    ASSERT_FALSE(vert.empty());
+    ASSERT_FALSE(header.empty());
 
     // The glare declares a std140 PREFIX of the cascades' ShadowData block rather than
     // including the whole shadow header, which would drag in the PCSS, MSM and bindless
@@ -891,9 +898,9 @@ TEST(SunGlareSourceContract, TheProbeReadsThePostWorldDepthAttachmentWithNoResol
     const std::string node = LoadRepoFileWithoutComments(
         "Engine/Source/Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.cpp");
     const std::string graph =
-        LoadRepoFileWithoutComments("Assets/RenderPipelines/ForwardPlus.rendergraph");
-    if (node.empty() || graph.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; source unavailable";
+        LoadRepoFileWithoutComments("Engine/Assets/RenderPipelines/ForwardPlus.rendergraph");
+    ASSERT_FALSE(node.empty());
+    ASSERT_FALSE(graph.empty());
 
     EXPECT_NE(node.find("depth = d.ViewDepth"), std::string::npos)
         << "the glare no longer binds the scene depth attachment";
@@ -929,8 +936,7 @@ TEST(SunGlareSourceContract, TheSkylineTermIsIndependentOfWhereTheCameraPoints)
 {
     const std::string node = LoadRepoFileWithoutComments(
         "Engine/Source/Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.cpp");
-    if (node.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; source unavailable";
+    ASSERT_FALSE(node.empty());
 
     EXPECT_NE(node.find("GetSkylineTangent(d.View.id)"), std::string::npos)
         << "the node no longer reads the terrain skyline, so a sun behind a hill and off frame "
@@ -971,8 +977,7 @@ TEST(SunGlareSourceContract, TheProbeRingStaysCloseToTheDisc)
 {
     const std::string node = LoadRepoFileWithoutComments(
         "Engine/Source/Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.cpp");
-    if (node.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; source unavailable";
+    ASSERT_FALSE(node.empty());
 
     const std::size_t at = node.find("kProbeRadiusInSunRadii = ");
     ASSERT_NE(at, std::string::npos);
@@ -986,9 +991,8 @@ TEST(SunGlareSourceContract, TheProbeRingStaysCloseToTheDisc)
 TEST(SunGlareSourceContract, BlueprintCompositesTheGlareBeforeTonemap)
 {
     const std::string graph =
-        LoadRepoFileWithoutComments("Assets/RenderPipelines/ForwardPlus.rendergraph");
-    if (graph.empty())
-        GTEST_SKIP() << "GE_RENDERER_REPO_ROOT not defined; blueprint unavailable";
+        LoadRepoFileWithoutComments("Engine/Assets/RenderPipelines/ForwardPlus.rendergraph");
+    ASSERT_FALSE(graph.empty());
 
     const std::size_t glare = graph.find("\"type\": \"SunGlare\"");
     ASSERT_NE(glare, std::string::npos)

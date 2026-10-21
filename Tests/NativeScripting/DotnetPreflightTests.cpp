@@ -83,9 +83,10 @@ TEST(DotnetPreflight, SdkManifestRecordedPathWinsEvenWithEmptyPath)
               "config=Debug\n"
               "includedir=include\n"
               "importlib=lib/Debug/Engine.lib\n"
+              "enginebinary=../Engine.dll\n"
               "dotnet=" + fakeDotnet.generic_string() + "\n");
     // LoadSdkManifest requires the include dir's parent fields only (strings);
-    // the resolver does not stat includedir/importlib.
+    // the resolver does not stat includedir/importlib/enginebinary.
 
     ScopedEnvOverride emptyPath("PATH", "");
     std::string error;

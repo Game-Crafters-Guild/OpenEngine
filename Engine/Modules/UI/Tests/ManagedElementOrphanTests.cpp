@@ -122,14 +122,22 @@ protected:
         return UIRegistration::ElementFactoryRegistry::Instance();
     }
 
-    // Register the way the managed binding does: the caller learns the tag id as the call
-    // RETURNS, and can publish its binding only after that.
+    // Register the way the managed binding does, from a registration window's callback: the
+    // caller learns the tag id as the call RETURNS, and can publish its binding only after that.
     static StringId Register(std::string_view tagName, std::uint64_t owner)
     {
+        const ManagedElementTypes::ScopedWindowForTests window;
         const StringId id = Types().RegisterType(tagName, owner);
         if (id != 0)
             StubRuntime::Publish(id);
         return id;
+    }
+
+    // Close the verdict where the binding closes it, from a registration window's callback.
+    static void Verdict(std::uint64_t owner)
+    {
+        const ManagedElementTypes::ScopedWindowForTests window;
+        Types().NotifyReloadCompleted(owner);
     }
 
     // Owns the elements a test creates, so they outlive the registrations that made them —
@@ -205,7 +213,7 @@ TEST_F(ManagedElementOrphanTest, ReRegisteringTheTypeReAttachesToTheSameElement)
     StubRuntime::s_Applied.clear();
     const std::uint64_t reloadedOwner = kOwner + 1;
     ASSERT_NE(Register("HealthBar", reloadedOwner), StringId(0));
-    Types().NotifyReloadCompleted(kOwner);
+    Verdict(kOwner);
 
     EXPECT_EQ(StubRuntime::s_Declined, 0) << "the engine asked only once the caller could answer";
     EXPECT_EQ(proxy->State(), ManagedTypeState::Live);
@@ -244,7 +252,7 @@ TEST_F(ManagedElementOrphanTest, RemovedIsNotDecidedFromAbsenceAlone)
     EXPECT_FALSE(proxy->HasClass(ManagedElementTypes::kMissingClass));
 
     // The reload completed without the type. NOW absence is a fact.
-    Types().NotifyReloadCompleted(kOwner);
+    Verdict(kOwner);
     EXPECT_EQ(proxy->State(), ManagedTypeState::Faulted);
     EXPECT_FALSE(proxy->HasClass(ManagedElementTypes::kOrphanedClass));
     EXPECT_TRUE(proxy->HasClass(ManagedElementTypes::kMissingClass));
@@ -255,7 +263,7 @@ TEST_F(ManagedElementOrphanTest, RemovedIsNotDecidedFromAbsenceAlone)
     // And it still comes back if the type is restored by a LATER reload — a verdict revives
     // whatever its tag has made available again, not only what this reload orphaned.
     ASSERT_NE(Register("HealthBar", kOwner + 1), StringId(0));
-    Types().NotifyReloadCompleted(kOwner);
+    Verdict(kOwner);
     EXPECT_EQ(proxy->State(), ManagedTypeState::Live);
     EXPECT_FALSE(proxy->HasClass(ManagedElementTypes::kMissingClass));
 
@@ -276,7 +284,7 @@ TEST_F(ManagedElementOrphanTest, ReloadCompletingWithTheTypeBackLeavesNothingFau
 
     // The ordinary hot-reload shape: every tag claimed during the reload, then one verdict,
     // which must re-attach the type that came back rather than fault it.
-    Types().NotifyReloadCompleted(kOwner);
+    Verdict(kOwner);
     EXPECT_EQ(proxy->State(), ManagedTypeState::Live);
     EXPECT_EQ(Types().CountProxiesInState(ManagedTypeState::Faulted), 0u);
 
@@ -302,7 +310,7 @@ TEST_F(ManagedElementOrphanTest, BadgeIsDevOnlyAndNeverPerturbsLayout)
     EXPECT_FALSE(shippingProxy->HasClass(ManagedElementTypes::kOrphanedClass));
     EXPECT_EQ(shippingProxy->GetChildren().size(), childCountBefore);
 
-    Types().NotifyReloadCompleted(kOwner);
+    Verdict(kOwner);
     EXPECT_EQ(shippingProxy->State(), ManagedTypeState::Faulted);
     EXPECT_FALSE(shippingProxy->HasClass(ManagedElementTypes::kMissingClass));
 

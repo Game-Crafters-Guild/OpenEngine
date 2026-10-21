@@ -710,6 +710,32 @@
       }
     },
     {
+      "name": "macos-arm64-local-asan",
+      "displayName": "macOS ARM64 AddressSanitizer",
+      "description": "Ninja Debug build with -fsanitize=address and tests on",
+      "inherits": "macos-arm64-ninja",
+      "binaryDir": "build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "ENABLE_ASAN": "ON",
+        "ENABLE_TSAN": "OFF"
+      }
+    },
+    {
+      "name": "macos-arm64-local-tsan",
+      "displayName": "macOS ARM64 ThreadSanitizer",
+      "description": "Ninja Debug build with -fsanitize=thread and tests on",
+      "inherits": "macos-arm64-ninja",
+      "binaryDir": "build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "ENABLE_ASAN": "OFF",
+        "ENABLE_TSAN": "ON"
+      }
+    },
+    {
       "name": "macos-x64-ninja",
       "generator": "Ninja",
       "binaryDir": "build/${presetName}",
@@ -855,6 +881,8 @@
 	    { "name": "macos-arm64-ninja", "configurePreset": "macos-arm64-ninja" },
 	    { "name": "macos-arm64-editor-fast", "configurePreset": "macos-arm64-editor-fast", "targets": [ "Editor" ], "jobs": 10 },
 	    { "name": "macos-arm64-full-clean", "configurePreset": "macos-arm64-full-clean", "cleanFirst": true, "jobs": 10 },
+	    { "name": "macos-arm64-local-asan", "configurePreset": "macos-arm64-local-asan" },
+	    { "name": "macos-arm64-local-tsan", "configurePreset": "macos-arm64-local-tsan" },
 	    { "name": "macos-x64-ninja", "configurePreset": "macos-x64-ninja" },
 	    { "name": "ninja-x64-sccache-unity", "configurePreset": "ninja-x64-sccache-unity", "configuration": "DebugFast" },
 	    { "name": "ninja-x64-sccache", "configurePreset": "ninja-x64-sccache", "configuration": "DebugFast" },

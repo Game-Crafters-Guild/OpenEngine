@@ -1,0 +1,549 @@
+{
+  "format": 1,
+  "name": "Kinds",
+  "hash": "0x9462e590934ac983",
+  "constants": [
+    {
+      "id": "Kinds.kAllLayers",
+      "name": "kAllLayers",
+      "cpp": "GameEngine::Kinds::kAllLayers",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 28,
+      "kind": "UInt32",
+      "value": "4294967295"
+    },
+    {
+      "id": "Kinds.kDefaultPitch",
+      "name": "kDefaultPitch",
+      "cpp": "GameEngine::Kinds::kDefaultPitch",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 27,
+      "kind": "Float",
+      "value": "1"
+    }
+  ],
+  "enums": [
+    {
+      "id": "Kinds.Loudness",
+      "name": "Loudness",
+      "cpp": "GameEngine::Kinds::Loudness",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 20,
+      "doc": "How loud a voice plays.",
+      "underlying": "Int16",
+      "values": [
+        {
+          "name": "Quiet",
+          "value": -1
+        },
+        {
+          "name": "Normal",
+          "value": 0
+        },
+        {
+          "name": "Loud",
+          "value": 4
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "functions": [
+    {
+      "id": "Kinds.GetPitch",
+      "name": "GetPitch",
+      "cpp": "GameEngine::Kinds::Script::GetPitch",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 98,
+      "doc": "The pitch of a voice.",
+      "thread": "main",
+      "returns": {
+        "kind": "Float"
+      },
+      "params": [
+        {
+          "name": "voice",
+          "kind": "Handle",
+          "type": "Kinds.Voice"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.Ids",
+      "name": "Ids",
+      "cpp": "GameEngine::Kinds::Script::Ids",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 85,
+      "doc": "Entities, ids, text and spans.",
+      "thread": "any",
+      "returns": {
+        "kind": "StringId"
+      },
+      "params": [
+        {
+          "name": "entity",
+          "kind": "Entity"
+        },
+        {
+          "name": "id",
+          "kind": "StringId"
+        },
+        {
+          "name": "name",
+          "kind": "String"
+        },
+        {
+          "name": "weights",
+          "kind": "Span",
+          "element": {
+            "kind": "Float"
+          }
+        },
+        {
+          "name": "hits",
+          "kind": "Span",
+          "element": {
+            "kind": "Record",
+            "type": "Kinds.Hit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "Kinds.Math",
+      "name": "Math",
+      "cpp": "GameEngine::Kinds::Script::Math",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 80,
+      "doc": "Every math kind, and the angle.",
+      "thread": "main",
+      "returns": {
+        "kind": "Mat4"
+      },
+      "params": [
+        {
+          "name": "v2",
+          "kind": "Vec2"
+        },
+        {
+          "name": "v3",
+          "kind": "Vec3"
+        },
+        {
+          "name": "v4",
+          "kind": "Vec4"
+        },
+        {
+          "name": "q",
+          "kind": "Quat"
+        },
+        {
+          "name": "angle",
+          "kind": "Angle"
+        },
+        {
+          "name": "color",
+          "kind": "ColorLinear"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.Play",
+      "name": "Play",
+      "cpp": "GameEngine::Kinds::Script::Play",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 90,
+      "doc": "Plays a voice.",
+      "thread": "engine",
+      "context": "KindsSystem",
+      "returns": {
+        "kind": "Handle",
+        "type": "Kinds.Voice"
+      },
+      "params": [
+        {
+          "name": "slot",
+          "kind": "Handle",
+          "type": "Kinds.Slot"
+        },
+        {
+          "name": "options",
+          "kind": "Record",
+          "type": "Kinds.PlayOptions",
+          "default": "{}"
+        },
+        {
+          "name": "gain",
+          "kind": "Float",
+          "default": "0.5"
+        },
+        {
+          "name": "loudness",
+          "kind": "Enum",
+          "type": "Kinds.Loudness",
+          "default": "Loud"
+        },
+        {
+          "name": "layers",
+          "kind": "UInt32",
+          "default": "4294967295",
+          "defaultConstant": "Kinds.kAllLayers"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.Scalars",
+      "name": "Scalars",
+      "cpp": "GameEngine::Kinds::Script::Scalars",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 74,
+      "doc": "Every scalar kind.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "b",
+          "kind": "Bool"
+        },
+        {
+          "name": "i8",
+          "kind": "Int8"
+        },
+        {
+          "name": "i16",
+          "kind": "Int16"
+        },
+        {
+          "name": "i32",
+          "kind": "Int32"
+        },
+        {
+          "name": "i64",
+          "kind": "Int64"
+        },
+        {
+          "name": "u8",
+          "kind": "UInt8"
+        },
+        {
+          "name": "u16",
+          "kind": "UInt16"
+        },
+        {
+          "name": "u32",
+          "kind": "UInt32"
+        },
+        {
+          "name": "u64",
+          "kind": "UInt64"
+        },
+        {
+          "name": "f",
+          "kind": "Float"
+        },
+        {
+          "name": "d",
+          "kind": "Double"
+        },
+        {
+          "name": "i",
+          "kind": "Int32"
+        },
+        {
+          "name": "engineByte",
+          "kind": "UInt8"
+        },
+        {
+          "name": "engineFloat",
+          "kind": "Float"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.SetGain",
+      "name": "SetGain",
+      "cpp": "GameEngine::Kinds::Script::SetGain",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 102,
+      "doc": "Sets the gain, written with a suffix.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "gain",
+          "kind": "Float",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.SetTrim",
+      "name": "SetTrim",
+      "cpp": "GameEngine::Kinds::Script::SetTrim",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 106,
+      "doc": "Sets the gain, written with a bare point.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "trim",
+          "kind": "Float",
+          "default": "1"
+        },
+        {
+          "name": "mask",
+          "kind": "UInt8",
+          "default": "255"
+        },
+        {
+          "name": "scale",
+          "kind": "Double",
+          "default": "2.5"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.TryFindHit",
+      "name": "TryFindHit",
+      "cpp": "GameEngine::Kinds::Script::TryFindHit",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 95,
+      "doc": "Finds the nearest hit.",
+      "thread": "main",
+      "try": true,
+      "context": "KindsSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "origin",
+          "kind": "Vec3"
+        },
+        {
+          "name": "outHit",
+          "kind": "Record",
+          "type": "Kinds.Hit",
+          "out": true
+        },
+        {
+          "name": "maxDistance",
+          "kind": "Float",
+          "default": "1000"
+        }
+      ]
+    }
+  ],
+  "handles": [
+    {
+      "id": "Kinds.Slot",
+      "name": "Slot",
+      "cpp": "GameEngine::Kinds::Slot",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 16,
+      "doc": "A pool slot.",
+      "width": 64
+    },
+    {
+      "id": "Kinds.Voice",
+      "name": "Voice",
+      "cpp": "GameEngine::Kinds::Voice",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 12,
+      "doc": "A sound voice.",
+      "width": 64
+    }
+  ],
+  "records": [
+    {
+      "id": "Kinds.Hit",
+      "name": "Hit",
+      "cpp": "GameEngine::Kinds::Hit",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 51,
+      "doc": "A hit.",
+      "size": 216,
+      "align": 8,
+      "fields": [
+        {
+          "name": "flags",
+          "kind": "UInt8",
+          "offset": 0,
+          "default": "0"
+        },
+        {
+          "name": "distance",
+          "kind": "Double",
+          "offset": 8,
+          "default": "0"
+        },
+        {
+          "name": "options",
+          "kind": "Record",
+          "type": "Kinds.PlayOptions",
+          "offset": 16
+        },
+        {
+          "name": "rotation",
+          "kind": "Quat",
+          "offset": 112,
+          "default": [
+            "0",
+            "0",
+            "0",
+            "1"
+          ]
+        },
+        {
+          "name": "turn",
+          "kind": "Quat",
+          "offset": 128,
+          "default": [
+            "0",
+            "0",
+            "1",
+            "0"
+          ]
+        },
+        {
+          "name": "pose",
+          "kind": "Mat4",
+          "offset": 144,
+          "default": [
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "1"
+          ]
+        },
+        {
+          "name": "scale",
+          "kind": "Vec2",
+          "offset": 208,
+          "default": [
+            "0",
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "Kinds.PlayOptions",
+      "name": "PlayOptions",
+      "cpp": "GameEngine::Kinds::PlayOptions",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 34,
+      "doc": "Options for one voice.\nEvery field has its default.",
+      "size": 96,
+      "align": 8,
+      "fields": [
+        {
+          "name": "loop",
+          "kind": "Bool",
+          "offset": 0,
+          "default": "false"
+        },
+        {
+          "name": "volume",
+          "kind": "Float",
+          "offset": 4,
+          "default": "1"
+        },
+        {
+          "name": "pitch",
+          "kind": "Float",
+          "offset": 8,
+          "default": "1",
+          "defaultConstant": "Kinds.kDefaultPitch"
+        },
+        {
+          "name": "loudness",
+          "kind": "Enum",
+          "type": "Kinds.Loudness",
+          "offset": 12,
+          "default": "Normal"
+        },
+        {
+          "name": "layers",
+          "kind": "UInt32",
+          "offset": 16,
+          "default": "4294967295",
+          "defaultConstant": "Kinds.kAllLayers"
+        },
+        {
+          "name": "offset",
+          "kind": "Vec3",
+          "offset": 20,
+          "default": [
+            "0",
+            "1",
+            "0"
+          ]
+        },
+        {
+          "name": "tint",
+          "kind": "ColorLinear",
+          "offset": 32,
+          "default": [
+            "1",
+            "1",
+            "1",
+            "1"
+          ]
+        },
+        {
+          "name": "rim",
+          "kind": "ColorLinear",
+          "offset": 48,
+          "default": [
+            "0.25",
+            "0.5",
+            "0.75",
+            "1"
+          ]
+        },
+        {
+          "name": "shade",
+          "kind": "ColorLinear",
+          "offset": 64,
+          "default": [
+            "0",
+            "0",
+            "0",
+            "1"
+          ]
+        },
+        {
+          "name": "owner",
+          "kind": "Entity",
+          "offset": 80
+        },
+        {
+          "name": "previous",
+          "kind": "Handle",
+          "type": "Kinds.Voice",
+          "offset": 88
+        }
+      ]
+    }
+  ]
+}

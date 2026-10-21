@@ -21,8 +21,7 @@
 #include "Engine/Rendering/RenderDeviceContext.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
-
-#include <stb_image_write.h>
+#include "Image/Encode.h"
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
@@ -35,6 +34,7 @@
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/Passes/TemporalDither.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scripting/ManagedSystemBridge.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
@@ -122,8 +122,8 @@ PlayerApplication::PlayerApplication(const ApplicationConfig& config, const Game
                                      bool tickManagedSystems,
 #if GE_PLAYER_MOVIE_RECORDER
                                      std::optional<Video::VideoWriterOptions> movieOptions,
-                                     uint64_t movieFrameLimit,
 #endif
+                                     uint64_t quitAfterFrames,
                                      bool allowRuntimeHdrToggle,
                                      std::string screenshotPath)
     : Application(config)
@@ -134,9 +134,10 @@ PlayerApplication::PlayerApplication(const ApplicationConfig& config, const Game
                                     : Rendering::HdrOutputMode::Auto)
     , m_RuntimeHdrBitDepth(gameConfig.hdrSwapchainBitDepth)
     , m_AllowRuntimeHdrToggle(allowRuntimeHdrToggle)
+    , m_QuitAfterFrames(quitAfterFrames)
 #if GE_PLAYER_MOVIE_RECORDER
     , m_MovieOptions(std::move(movieOptions))
-    , m_MovieFrameLimit(movieFrameLimit)
+    , m_MovieFrameLimit(quitAfterFrames)
 #endif
     , m_ScreenshotPath(std::move(screenshotPath))
 {
@@ -382,6 +383,9 @@ bool PlayerApplication::Initialize()
         SetLODImportSettings(lod);
     }
 
+    // The project's render layer names, before any game system starts and asks for a layer by name.
+    Rendering::SetRenderLayerNames(m_GameConfig.renderLayerNames);
+
     // Configure the Player's copy of the Rendering::Utils shader hooks (see
     // PlayerResolveEngineShaderPath above). Must run after the 'editor' asset
     // source is mounted so resolution can find staged engine shaders, and before
@@ -409,8 +413,12 @@ bool PlayerApplication::Initialize()
 
     // Register built-in primitive meshes/materials (must happen after editor source
     // is mounted so the material compiler can find shader adapters).
-    if (auto* rs = m_Host->GetRenderDeviceContext()->GetRenderServices())
-        Engine::Renderer::PrimitiveGenerator::RegisterAll(*rs);
+    // Headless: no render context, so nothing to register.
+    if (auto* renderCtx = m_Host->GetRenderDeviceContext())
+    {
+        if (auto* rs = renderCtx->GetRenderServices())
+            Engine::Renderer::PrimitiveGenerator::RegisterAll(*rs);
+    }
 
     // Register the plugin scene schemas before any scene loads (EngineCore
     // registers the built-in ones at initialization), and the terrain modules'
@@ -548,6 +556,21 @@ void PlayerApplication::PollRuntimeDisplayControls()
         (void)ToggleRuntimeHdrOutput();
 }
 
+// The game's pointer lock request, applied in the frame it was made. The window
+// is the whole play surface, so the game holds the lock for as long as it asks;
+// the platform lets the cursor go while the window is unfocused, and the game
+// is told it is locked only while it actually is.
+void PlayerApplication::ApplyPointerLock()
+{
+    Platform::Window* window = m_Host->GetWindow();
+    Input::InputSystem* input = GetInputSystem();
+    if (!window || !input)
+        return;
+    window->SetCursorLocked(input->GetPointerLockState() != Input::PointerLockState::Unlocked);
+    Input::IRawInputSink& sink = *input;
+    sink.OnPointerLock(window->IsCursorLocked() && window->IsFocused());
+}
+
 bool PlayerApplication::ToggleRuntimeHdrOutput()
 {
     Engine::Renderer::RenderDeviceContext* renderCtx = m_Host->GetRenderDeviceContext();
@@ -621,9 +644,24 @@ void PlayerApplication::FinishStartupResolve(ECS::World& world)
                       progress.Total, seconds, m_StartupResolveFrames, counts.ResolvedEntities,
                       counts.MissedEntities, counts.RegisteredModels, counts.RegisteredMaterials,
                       counts.MissedMaterials);
+    LogProgramIndexCounts();
     // The skeleton binder bound the batch's skinned entities on the frame each
     // completed, before this tick, so the autoplay starts find their skeletons.
     Engine::Renderer::BootstrapSceneAnimators(world);
+}
+
+void PlayerApplication::LogProgramIndexCounts()
+{
+    auto* renderCtx = m_Host->GetRenderDeviceContext();
+    auto* renderServices = renderCtx ? renderCtx->GetRenderServices() : nullptr;
+    const Rendering::ShaderProgramIndex* index =
+        renderServices ? renderServices->Materials().GetProgramIndex() : nullptr;
+    if (!index)
+        return;
+    const Rendering::ShaderProgramIndex::Counts counts = index->GetCounts();
+    Logger::Log::Info("Player: shader program index: {} variant(s) served without composing, {} composed and hashed "
+                      "(not in the index)",
+                      counts.Hits, counts.Misses);
 }
 
 void PlayerApplication::Update(float64 deltaTime)
@@ -639,11 +677,23 @@ void PlayerApplication::Update(float64 deltaTime)
         GameEngine::NativeScripting::TickUserSystems(*world, static_cast<float>(deltaTime));
     }
 
+    ApplyPointerLock();
+
     // Check for window close request (GLFW polling model).
     if (Platform::Window* window = m_Host->GetWindow(); window && window->ShouldClose())
         RequestExit();
 
     PollRuntimeDisplayControls();
+
+    // --quit-after: this is the last frame when it is frame number m_QuitAfterFrames.
+    // A movie capture ends on its written frames instead (PollMovieFrames).
+#if GE_PLAYER_MOVIE_RECORDER
+    const bool movieOwnsQuit = m_MovieOptions.has_value();
+#else
+    const bool movieOwnsQuit = false;
+#endif
+    if (m_QuitAfterFrames > 0 && !movieOwnsQuit && GetFrameCount() + 1 >= m_QuitAfterFrames)
+        RequestExit();
 
     // Engine::Update() is called by the base Application loop and drives the
     // rendering loop (ECS systems) automatically via SetRenderingLoopAutoDrive(true).
@@ -734,9 +784,7 @@ void PlayerApplication::PollScreenshot()
             m_ScreenshotSpace ? Rendering::ReadbackToRgba8Srgb(shot, *m_ScreenshotSpace)
                               : std::vector<uint8_t>{};
         if (!rgba.empty() &&
-            stbi_write_png(m_ScreenshotPath.c_str(), static_cast<int>(shot.width),
-                           static_cast<int>(shot.height), 4, rgba.data(),
-                           static_cast<int>(shot.width * 4u)) != 0)
+            Image::WritePngFile(m_ScreenshotPath, rgba, shot.width, shot.height))
         {
             Logger::Log::Info("Player: wrote screenshot '{}' ({}x{})", m_ScreenshotPath, shot.width, shot.height);
         }

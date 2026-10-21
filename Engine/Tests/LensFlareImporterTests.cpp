@@ -12,7 +12,9 @@
 //   * legacy elements resolve sprites via elementTextureID when SpriteName
 //     is missing.
 #include "Assets/LensFlareImporter.h"
+#include "Assets/FlareAtlasAsset.h"
 #include "Assets/LensFlareDefinitionAsset.h"
+#include "EngineLogCapture.h"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -276,6 +278,28 @@ TEST_F(LensFlareImporterTest, DefinitionSaveRoundTripsEditableSettings)
 
     const json serialized = Load(path);
     EXPECT_FALSE(serialized["elements"][0].contains("centerBrightnessBoost"));
+}
+
+// A lens flare or a flare atlas whose field holds a value of the wrong type is refused, naming the
+// file and the field, and never throws: the web build has no exception catching.
+TEST(LensFlareAssets, AMistypedFieldIsRefusedNamingTheFileAndTheField)
+{
+    const auto bytes = [](std::string_view text) { return Vector<uint8>(text.begin(), text.end()); };
+    LensFlareDefinitionAsset flare(GUID::Generate(), "Flares/Mistyped.lensflare");
+    FlareAtlasAsset atlas(GUID::Generate(), "Flares/Mistyped.flareatlas");
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Error);
+        EXPECT_FALSE(flare.LoadFromData(bytes(R"({"atlas": 5, "elements": []})")));
+        EXPECT_FALSE(atlas.LoadFromData(bytes(R"({"texture": "Glow", "sprites": [{"name": "Ring", "u": "left"}]})")));
+        Logger::Log::Flush();
+    }
+    const std::string flareRefusal = TestLog::FirstLineContaining(lines, "Mistyped.lensflare");
+    EXPECT_NE(flareRefusal.find("'Flares/Mistyped.lensflare' is not loaded: 'atlas' is a number; write it as a string"),
+              std::string::npos)
+        << flareRefusal;
+    const std::string atlasRefusal = TestLog::FirstLineContaining(lines, "Mistyped.flareatlas");
+    EXPECT_NE(atlasRefusal.find("'sprites[0].u' is a string; write it as a number"), std::string::npos) << atlasRefusal;
 }
 
 } // namespace

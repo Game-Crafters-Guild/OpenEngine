@@ -64,7 +64,9 @@ target_include_directories(ECS PRIVATE Source)
 
 # Dependencies
 # ECS module dependencies (target-based; avoid hardcoded include paths)
-target_link_libraries(ECS PUBLIC Logger JobSystem Types)
+# Memory: the wave runner's ScratchScope (Include/ECS/Systems.h). An executable that links ECS
+# without Engine links Memory too: OBJECT objects do not reach it transitively.
+target_link_libraries(ECS PUBLIC Logger JobSystem Memory Types)
 
 # Platform-specific definitions
 if(WIN32)

@@ -1,0 +1,59 @@
+---
+title: Terrain shadows
+description: How a terrain shadows the sun, what casts and receives, how soft the edge is, the one setting, its cost, and its limits.
+---
+
+A terrain shadows the sun: a ridge darkens the valley behind it, a hill throws its shadow across the lake, at any sun angle and as far as the shadow reaches. This page is what casts, what receives, how soft the edge is, the one setting, what it costs, and what it does not do yet.
+
+## The short version
+
+:::tip[It is on by default]
+
+Every terrain with `Cast Shadows` on (the default) shadows the scene's sun, the primary directional light that casts shadows. Nothing else needs setting up, in either directional shadow mode (**Cascades** or **Ray traced**).
+
+:::
+
+## What casts and what receives
+
+|  | What | Notes |
+|---|---|---|
+| **Casts** | The terrain's height field: the surface its heights describe, at the resolution of the height data. | The shadow follows the heights, not the triangles the terrain is drawn with, so it does not shift as the terrain refines near the camera. Meshes on the terrain cast their own shadows through the shadow cascades as before. |
+| **Receives** | Everything the sun lights: the terrain itself, grass, meshes, characters, the water surface. | A receiver above the ground (a roof, a tree top, a lake surface over its bed) is shadowed only when it is below the terrain's shadow at that point, so tall things stand out of a valley's shadow into the sun. The terrain's shadow reaches beyond the shadow cascades' distance and beyond the terrain's own edge, onto the sea. |
+
+## The soft edge
+
+The sun is a disc, not a point, so a shadow's edge blurs with the distance to whatever casts it: sharp at the foot of a cliff, wide a long way behind a ridge. The terrain's shadow follows the same rule as the shadows of meshes in the same shadow mode, so a ridge and a wall of the same height soften alike:
+
+- **Cascades** with the **PCSS** or **DPCF** filter: the edge widens with the sun light's `Angular Diameter` and the distance to the ridge, up to the `Max Penumbra (World)` shown beside it (the widest the blur may get across the sun's ray, as for meshes). With the other filters the terrain's edge stays sharp.
+- **Ray traced**: the edge widens with the `Angular Diameter` and the distance, without a limit, as the traced mesh shadows do. A ridge two kilometers away under a low evening sun casts a very soft shadow.
+
+On level ground the blurred band is `2 × r / sin(elevation)` wide, where `r = distance / cos(elevation) × tan(Angular Diameter / 2)` is the blur's half-width across the sun's ray (bounded by `Max Penumbra` in the cascades mode). An `Angular Diameter` of 0 makes every edge sharp. A `Max Penumbra` of 0 does not: it means the automatic limit, 0.5 m across the sun's ray, which is wider than the 0.2 m default, so setting it to 0 to sharpen a terrain edge widens it instead.
+
+## The setting
+
+| Field | Default | Effect |
+|---|---|---|
+| `Terrain → Terrain Rendering → Cast Shadows` | on | Off: the terrain casts no shadow on anything, itself included. Meshes still cast theirs onto the terrain (that is `Receive Shadows`). |
+
+## What it costs
+
+The shadow is computed once into a map laid along the sun's direction, and every lit pixel reads it once. The map is recomputed only when it has to be:
+
+- **A still sun:** never. The terrain's shadow costs one texture read per lit pixel.
+- **An animated day** (the animate toggle beside `Sky Environment → Time of Day`): whenever the sun has moved, which is most frames. The recomputation takes a fraction of a millisecond on a desktop GPU for a 4 km terrain at one sample per meter, and less for smaller terrains.
+- **Sculpting:** only the part of the map that the edited area can shadow.
+
+The map takes four bytes per sample (the shadow's height and the distance to what casts it): under 3 MiB for a 600 m terrain at one sample per meter, and at most 64 MiB for the largest terrains, whose map uses a slightly coarser sample than their height data.
+
+## Limits
+
+:::caution[Not yet]
+
+- **The edge's resolution.** The map has one sample per height-data cell (slightly coarser on the largest terrains), so a shadow starts up to one sample behind the ridge crest that casts it.
+- **Streamed (atlas-backed) terrains and planets** cast no terrain shadow yet.
+- **One terrain.** With several terrains active, the one the terrain renderer draws casts.
+- **The compatibility renderer profile** (web) has no terrain shadow.
+
+:::
+
+With the sun below the horizon, or within half a degree of straight overhead, the terrain casts no shadow.

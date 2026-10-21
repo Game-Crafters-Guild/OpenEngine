@@ -246,10 +246,10 @@ constexpr std::string_view kTriangleWithSocketExtras = R"({
   "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"}]
 })";
 
-// GE_Model_GetExtras reads what a loaded model kept, under the text-out contract ModelApi.GetExtras
-// relies on: a length query, a full read, a short buffer that still reports the whole length. It refuses a
-// thread other than the engine's main thread, and bad buffer arguments before it looks the model up.
-TEST(ScriptingAbi, ModelGetExtrasReadsWhatTheLoadedModelKept)
+namespace
+{
+// The engine this file's model tests run in: initialized here unless a test before them did.
+void EnsureEngineForModelTests()
 {
     auto& engine = EngineCore::GetInstance();
     if (!engine.IsInitialized()) {
@@ -259,13 +259,29 @@ TEST(ScriptingAbi, ModelGetExtrasReadsWhatTheLoadedModelKept)
         engine.SetScriptsConfig(scriptsConfig);
         ASSERT_TRUE(engine.Initialize(cfg));
     }
-    AssetManager* assetManager = engine.TryGetAssetManager();
-    ASSERT_NE(assetManager, nullptr);
+}
 
-    const GUID modelGuid = GUID::Generate();
+// Registers a loaded triangle whose node "Socket" carries kSocketExtras.
+void RegisterSocketModel(const GUID& modelGuid)
+{
+    AssetManager* assetManager = EngineCore::GetInstance().TryGetAssetManager();
+    ASSERT_NE(assetManager, nullptr);
     auto model = std::make_shared<ModelAsset>(modelGuid, std::filesystem::path("abi_socket_extras.gltf"));
     ASSERT_TRUE(model->LoadFromData(Vector<uint8>(kTriangleWithSocketExtras.begin(), kTriangleWithSocketExtras.end())));
     assetManager->RegisterLoadedAsset(modelGuid, model);
+}
+} // namespace
+
+// GE_Model_GetExtras reads what a loaded model kept, under the text-out contract ModelApi.GetExtras
+// relies on: a length query, a full read, a short buffer that still reports the whole length. It refuses
+// bad buffer arguments before it looks the model up.
+TEST(ScriptingAbi, ModelGetExtrasReadsWhatTheLoadedModelKept)
+{
+    ASSERT_NO_FATAL_FAILURE(EnsureEngineForModelTests());
+    auto& engine = EngineCore::GetInstance();
+    AssetManager* assetManager = engine.TryGetAssetManager();
+    const GUID modelGuid = GUID::Generate();
+    ASSERT_NO_FATAL_FAILURE(RegisterSocketModel(modelGuid));
     uint8 guidBytes[GUID::kSize];
     modelGuid.WriteBytes(guidBytes);
     const std::string_view socket = "Socket";
@@ -297,18 +313,6 @@ TEST(ScriptingAbi, ModelGetExtrasReadsWhatTheLoadedModelKept)
                                  &length),
               GE_Result_InvalidArg);
 
-    // Initialize marked this thread as the engine's main thread; any other thread is refused.
-    ASSERT_TRUE(engine.GetScriptManager().HasMarkedMainThread());
-    GE_Result workerResult = GE_Result_Ok;
-    int32_t workerLength = -1;
-    std::thread worker([&] {
-        workerResult = GE_Model_GetExtras(guidBytes, GE_ModelObjectKind_Node, socket.data(), socketLength, nullptr, 0,
-                                          &workerLength);
-    });
-    worker.join();
-    EXPECT_EQ(workerResult, GE_Result_Fail) << "a call off the main thread is refused";
-    EXPECT_EQ(workerLength, 0);
-
     assetManager->UnregisterLoadedAsset(modelGuid);
     length = -1;
     EXPECT_EQ(GE_Model_GetExtras(guidBytes, GE_ModelObjectKind_Node, socket.data(), socketLength, nullptr, 0, &length),
@@ -319,6 +323,33 @@ TEST(ScriptingAbi, ModelGetExtrasReadsWhatTheLoadedModelKept)
         << "a null buffer with a nonzero length is refused before the model is looked up";
 }
 
+
+// GE_Model_GetExtras answers on any thread, a thread of the caller's own included: the extras are an immutable
+// snapshot a reload replaces whole, so a reader never needs the main thread.
+TEST(ScriptingAbi, GetExtrasFromAWorkerIsAdmitted)
+{
+    ASSERT_NO_FATAL_FAILURE(EnsureEngineForModelTests());
+    ASSERT_TRUE(EngineCore::GetInstance().IsMainThread());
+    const GUID modelGuid = GUID::Generate();
+    ASSERT_NO_FATAL_FAILURE(RegisterSocketModel(modelGuid));
+    uint8 guidBytes[GUID::kSize];
+    modelGuid.WriteBytes(guidBytes);
+    const std::string_view socket = "Socket";
+
+    GE_Result workerResult = GE_Result_Fail;
+    std::string text(kSocketExtras.size(), '\0');
+    int32_t workerLength = -1;
+    std::thread worker([&] {
+        workerResult = GE_Model_GetExtras(guidBytes, GE_ModelObjectKind_Node, socket.data(),
+                                          static_cast<uint32_t>(socket.size()), text.data(),
+                                          static_cast<int32_t>(text.size()), &workerLength);
+    });
+    worker.join();
+    EXPECT_EQ(workerResult, GE_Result_Ok) << "a read off the main thread is admitted";
+    EXPECT_EQ(workerLength, static_cast<int32_t>(kSocketExtras.size()));
+    EXPECT_EQ(text, kSocketExtras);
+    EngineCore::GetInstance().TryGetAssetManager()->UnregisterLoadedAsset(modelGuid);
+}
 
 // A process that has run the engine owns it for good. A GE_* export reached after this
 // harness's Shutdown() — a managed finalizer, a stale callback — must find no engine, not
@@ -338,9 +369,9 @@ TEST(ScriptingAbi, ExportAfterHostShutdownDoesNotStartAnotherEngine)
 	ASSERT_FALSE(engine.IsInitialized());
 
 	// An export that needs the engine must be refused by the bootstrap — GE_Result_Fail, the
-	// export's mapping of that refusal; a bootstrapped engine would answer NotInitialized for
-	// its null RuntimeInput instead — and the engine must stay down.
-	int32_t down = 42;
-	EXPECT_EQ(GE_Input_IsKeyDown(0, &down), GE_Result_Fail);
+	// export's mapping of that refusal; a bootstrapped engine would answer the asset count
+	// instead — and the engine must stay down.
+	int32_t count = 42;
+	EXPECT_EQ(GE_GetAssetCount(&count), GE_Result_Fail);
 	EXPECT_FALSE(engine.IsInitialized()) << "the ABI started an engine this process had already shut down";
 }

@@ -17,17 +17,17 @@
 namespace GameEngine {
 
 namespace {
-static std::filesystem::path g_shaderCacheRoot;
+static ShaderCacheRoots g_shaderCacheRoots;
 } // namespace
 
-void ShaderProgramAsset::SetShaderCacheRoot(std::filesystem::path root) noexcept
+void ShaderProgramAsset::SetShaderCacheRoots(ShaderCacheRoots roots) noexcept
 {
-    g_shaderCacheRoot = std::move(root);
+    g_shaderCacheRoots = std::move(roots);
 }
 
-const std::filesystem::path& ShaderProgramAsset::GetShaderCacheRoot()
+const ShaderCacheRoots& ShaderProgramAsset::GetShaderCacheRoots()
 {
-    return g_shaderCacheRoot;
+    return g_shaderCacheRoots;
 }
 
 void ShaderProgramAsset::ShaderPackageDeleter::operator()(Rendering::ShaderPackage* p) const noexcept
@@ -114,15 +114,15 @@ bool ShaderProgramAsset::LoadFromData(const Vector<uint8>& data)
         // This keeps Assets clean by writing derived artifacts to <workspace>/.Cache/Shaders/...
         try
         {
-            if (g_shaderCacheRoot.empty())
+            if (g_shaderCacheRoots.Writable.empty())
                 throw std::runtime_error("ShaderProgramAsset: shader cache root not configured. "
-                                         "Call ShaderProgramAsset::SetShaderCacheRoot() before loading.");
-            const std::filesystem::path& cacheRoot = g_shaderCacheRoot;
+                                         "Call ShaderProgramAsset::SetShaderCacheRoots() before loading.");
 
             Rendering::ShaderProgramCompileRequest creq{};
             creq.debugName = GetName();
             creq.baseDirectory = GetPath().parent_path();
-            creq.cacheRoot = cacheRoot;
+            creq.readOnlyCacheRoots = g_shaderCacheRoots.ReadOnly;
+            creq.cacheRoot = g_shaderCacheRoots.Writable;
             creq.includeDirs = {};
             creq.stages.reserve(m_Doc.stages.size());
             for (const auto& kv : m_Doc.stages)

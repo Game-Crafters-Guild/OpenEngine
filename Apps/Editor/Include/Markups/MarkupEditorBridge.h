@@ -30,6 +30,7 @@ class World;
 
 namespace GameEngine::Editor
 {
+class UndoRedoService;
 
 // The editor side of world mark-ups: the one subscriber to the editor's change
 // notifications for them, who stamps an edit to a mark-up with its author and time
@@ -153,9 +154,9 @@ public:
     void SetPlayModeProvider(PlayModeProvider provider) { m_PlayModeProvider = std::move(provider); }
     bool IsInPlayMode() const { return m_PlayModeProvider && m_PlayModeProvider(); }
     // Selects the entity as a click in the Scene View would (the Inspector and the Hierarchy
-    // follow): a mark-up, or any entity a comment links to (the chip's click and its frame glyph). A mark-up's updates are marked
-    // seen. `frame` also frames it: a mark-up's volume, else the entity.
-    void SelectMarkup(ECS::World& world, ECS::EntityHandle entity, bool frame);
+    // follow): a mark-up, or any entity a comment links to. A mark-up's updates are marked seen.
+    // Framing is FrameMarkupInSceneView's.
+    void SelectMarkup(ECS::World& world, ECS::EntityHandle entity);
     // A Mark-ups panel row's or a comment's entity link's hover: outlines the entity as a
     // Hierarchy hover does and, for a mark-up, highlights its volume; an invalid handle clears
     // both.
@@ -169,6 +170,10 @@ public:
     MarkupHighlightState GetHighlight() const;
     // The main window's Scene View, or null (no view yet, or tests).
     SceneViewController* GetSceneView() const { return m_SceneViewProvider ? m_SceneViewProvider() : nullptr; }
+    // The editor's undo history, which the mark-up requests record their steps in; null in
+    // hosts without one (tests).
+    void SetUndoService(UndoRedoService* undo) { m_Undo = undo; }
+    UndoRedoService* GetUndoService() const { return m_Undo; }
     // The displays of `world`'s regions, shared by every Scene View; a reset world (a scene
     // closed or opened) starts with none. A cache, not viewer state: drawing fills it.
     MarkupECS::MarkupRegionDisplayCache& RegionDisplaysOf(const ECS::World& world) const
@@ -212,7 +217,8 @@ private:
     struct WorldState
     {
         std::unordered_map<ECS::EntityHandle, EditBaseline, ECS::EntityHandleHash> Baselines;
-        uint64 Generation = 0;
+        uint64 HandleEpoch = 0;     // World::GetEntityHandleEpoch the state belongs to
+        uint64 ResetGeneration = 0; // World::GetLifecycleResetGeneration the derived caches were read in
         HandleSet Hidden;
         std::unordered_map<ECS::EntityHandle, SeenMark, ECS::EntityHandleHash> Seen;
         HandleSet Read; // handles whose saved state was read, or that were set this session
@@ -237,7 +243,10 @@ private:
     // its state now; 0, and a new baseline, for one it had none for.
     uint8 TakeEditChanges(const ECS::World& world, ECS::EntityHandle entity);
 
-    // The world's state; a reset world starts empty.
+    // The world's state. A world in a new run of handles (World::GetEntityHandleEpoch) starts
+    // empty; an in-place restore keeps the viewer state, as MarkupService keeps the notes, and
+    // drops what was read from the components (the edit baselines, the region displays and
+    // the frame's ground), which the restore replaced.
     WorldState& StateOf(const ECS::World& world) const;
     // Reads `entity`'s saved state on first sight, when it owns its scene tag.
     void ReadSaved(const ECS::World& world, WorldState& state, ECS::EntityHandle entity) const;
@@ -278,6 +287,7 @@ private:
     mutable std::size_t m_UnseenCount = 0;
     SceneViewProvider m_SceneViewProvider;
     PlayModeProvider m_PlayModeProvider;
+    UndoRedoService* m_Undo = nullptr;
     ECS::EntityHandle m_HoveredRow{};
 };
 

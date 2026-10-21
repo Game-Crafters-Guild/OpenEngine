@@ -75,7 +75,9 @@ bool IsHeightFieldCollisionCurrent(ECS::World& world, const Physics::PhysicsWorl
             if (!current || !provider)
                 return;
             Physics::AABB footprint;
-            if (transform &&
+            // An unresolved pose (Version 0) places no footprint: disjointness
+            // is not established, so the collider is checked like any other.
+            if (transform && transform->Version != 0u &&
                 HeightFieldFootprint(transform->matrix, shape.sizeX, shape.sizeZ, shape.heightScale, footprint) &&
                 !BoxesOverlap(footprint, box))
                 return;

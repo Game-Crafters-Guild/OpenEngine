@@ -89,6 +89,7 @@ bool SunGlareRenderFeature::Initialize(IDevice* device)
     m_ViewParamsBinding = resolveBinding("ViewParams", 2u);
     m_ShadowArrayBinding = resolveBinding("uShadowMapArray", 3u);
     m_ShadowDataBinding = resolveBinding("ShadowData", 4u);
+    m_ExposureBinding = resolveBinding("uExposure", 5u);
 
     // The layouts come from each package's reflection so the image shapes
     // (depth array, multisampled probe, filtered LUT) match what the shader

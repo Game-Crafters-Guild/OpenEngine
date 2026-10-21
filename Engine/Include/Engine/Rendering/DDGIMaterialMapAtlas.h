@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "Engine/Rendering/MaterialRegistryStamp.h"
 #include "Rendering/Core/Handle.h"
 
 namespace GameEngine::Rendering
@@ -110,10 +111,11 @@ class DDGIMaterialMapAtlas
     DDGIMaterialMapAtlas(const DDGIMaterialMapAtlas&) = delete;
     DDGIMaterialMapAtlas& operator=(const DDGIMaterialMapAtlas&) = delete;
 
-    // Re-derives the layer assignment from the material registry. Deliberately
-    // not epoch-gated: a texture finishing its stream-in changes the answer
-    // without bumping any material epoch. Cheap enough for every tick — a walk
-    // of the registry plus a hash, no asset or file access.
+    // Called every tick. Re-derives the layer assignment from the material
+    // registry only when its stamp (MaterialSystem::GetRegistryStamp) moved: a
+    // texture finishing its stream-in binds a new handle to the slot
+    // (Material::SetTexture), which moves the stamp like any other edit. The
+    // pending blits are re-armed on every call.
     void Refresh();
 
     // Bumped whenever the layer assignment changes. Consumers that bake a layer
@@ -188,6 +190,9 @@ class DDGIMaterialMapAtlas
 
     uint64_t m_LayoutHash = 0;
     uint64_t m_LayoutEpoch = 0;
+    // The registry stamp the current layout was swept at.
+    MaterialRegistryStamp m_SweptStamp;
+    bool m_HaveSweptStamp = false;
     uint64_t m_FrameClock = 0;
     std::vector<RetiredResources> m_Retired;
 };

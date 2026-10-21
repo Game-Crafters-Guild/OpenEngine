@@ -14,7 +14,7 @@ Screenshots and comparison images, generated `.assetdb` files, build and test lo
 ## Documentation
 
 - `docs/` is for users of the engine: how to use a feature, an authored format they write, or a concept they need to understand. Development documentation — designs, decisions, investigations, measurements, plans, post-mortems, review records — lives in the workbench repository (`GameEngine-Workbench/designs/`, `measurements/`, `notes/`), not here. A code comment states the invariant, unit, convention or trap itself; it may name the workbench document for the long story, it never depends on it.
-- New documentation is HTML: one canonical file per topic, undated filename, a changelog section, the repository's dark style (references in the workbench under `doc-style/`). Existing Markdown stays Markdown when merely edited; the root files (`README.md`, `BUILD.md`, `CodingStyle.md`, `CLAUDE.md`, this file) are the exception by convention.
+- Documentation pages are Markdown with directives (`.mdx`) in `docs/<area>/`: one canonical file per topic, undated filename, a changelog section. The rules, the directives and the C++ | C# tabs are in `.claude/rules/documentation.md`. The root files (`README.md`, `BUILD.md`, `CodingStyle.md`, `CLAUDE.md`, this file) stay plain Markdown by convention.
 - A change to documented behaviour edits the canonical. A dated sibling file for "the same topic, another iteration" is a defect.
 - No engine names (Unity, Unreal) in user-facing strings, tooltips, enum display names or comments; import features keep their names. User-facing text uses American spelling.
 

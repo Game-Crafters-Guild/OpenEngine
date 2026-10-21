@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <utility>
 
@@ -566,9 +567,11 @@ public:
      * @brief The raw extras JSON text the import kept for the source file's scenes, nodes, meshes,
      * materials and animations, by object kind and name (glTF and GLB; empty for other formats).
      *
-     * The engine reads none of it; ModelApi.GetExtras hands it to scripts.
+     * The engine reads none of it; ModelApi.GetExtras hands it to scripts, from any thread. The
+     * snapshot is immutable and never null (an unloaded model's is empty): a reload that replaces the
+     * extras meanwhile never frees what a reader holds.
      */
-    const ModelExtras& GetExtras() const { return m_Extras; }
+    std::shared_ptr<const ModelExtras> GetExtras() const;
 
     /**
      * @brief Get total vertex count across all meshes
@@ -753,7 +756,11 @@ private:
     Vector<ImportedCameraData> m_Cameras;
     Vector<ImportedLightData> m_Lights;
     Vector<ImportedSceneNodeData> m_SceneNodes;
-    ModelExtras m_Extras;
+    // Replaced whole, never edited in place: by the load, the reload adoption and the unload,
+    // each under m_ExtrasMutex, which a reader holds only to copy the pointer.
+    std::shared_ptr<const ModelExtras> m_Extras = std::make_shared<const ModelExtras>();
+    mutable std::mutex m_ExtrasMutex;
+    void SetExtras(std::shared_ptr<const ModelExtras> extras);
     uint32 m_TotalVertexCount;
     uint32 m_TotalIndexCount;
     uint32 m_SkeletonId = 0;

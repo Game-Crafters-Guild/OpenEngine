@@ -2,9 +2,9 @@
 
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
-#include "PathfindingECS/Components/NavigationMesh.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
 #include "PathfindingECS/NavigationService.h"
+#include "PathfindingECS/NavigationSurfaceRuntime.h"
 
 #include "ECS/Entity.h"
 #include "Pathfinding/GridMap.h"
@@ -12,33 +12,6 @@
 
 namespace GameEngine::PathfindingECS
 {
-
-namespace
-{
-
-// Also runs from ~World at process shutdown, where the navigation service may
-// already be gone. Clear the handle either way: leaving it set would hand a
-// revived component (undo of a delete) a map index that names nothing.
-void ReleaseMap(uint32& mapIndex, uint32& mapGeneration, bool& initialized)
-{
-    if (initialized)
-    {
-        if (auto* navWorld = NavigationService::TryGet())
-            navWorld->RemoveMap(Pathfinding::NavMapHandle{mapIndex, mapGeneration});
-    }
-
-    mapIndex = 0;
-    mapGeneration = 0;
-    initialized = false;
-}
-
-} // namespace
-
-void ReleaseNavigationMeshMap(Components::NavigationMesh& mesh)
-{
-    ReleaseMap(mesh.NavMapIndex, mesh.NavMapGeneration, mesh.Initialized);
-    mesh.NeedsRebuild = true;
-}
 
 void ClearNavigationAgentReservations(const Components::NavigationAgent& agent)
 {
@@ -93,6 +66,14 @@ void StampNavigationAgentOccupancy(const Components::NavigationAgent& agent,
     state.HasCellReservations = true;
 }
 
+// The world a surface leaves releases its map only when that world owns it: a copy of the
+// component's bytes in another world names the original's map.
+void ReleaseNavigationSurfaceInWorld(const ECS::World& world, ECS::EntityHandle /*entity*/,
+                                     Components::NavigationSurface& surface)
+{
+    ResetNavigationSurfaceMap(world, surface);
+}
+
 void ReleaseNavigationAgentReservations(Components::NavigationAgent& agent)
 {
     ClearNavigationAgentReservations(agent);
@@ -100,8 +81,7 @@ void ReleaseNavigationAgentReservations(Components::NavigationAgent& agent)
 
 void RegisterNavigationWorldHooks(ECS::World& world)
 {
-    world.RegisterOnRemove<Components::NavigationGrid>(&ReleaseNavigationGridMap);
-    world.RegisterOnRemove<Components::NavigationMesh>(&ReleaseNavigationMeshMap);
+    world.RegisterOnRemove<Components::NavigationSurface>(&ReleaseNavigationSurfaceInWorld);
     world.RegisterOnRemove<Components::NavigationAgent>(&ReleaseNavigationAgentReservations);
 }
 

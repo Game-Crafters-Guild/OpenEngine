@@ -135,7 +135,7 @@ TEST(SubtreeDirtyTests, IntegrationClearsOnRootAfterUpdate)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* leaf = r->FindById("leaf");
+    UIElement* leaf = r->FindById("leaf"_sid);
     ASSERT_NE(leaf, nullptr);
 
     EXPECT_FALSE(r->IsDirty(UIElement::SubtreeDirty))
@@ -185,7 +185,7 @@ TEST(SubtreeDirtyTests, FastPathFiresOnSteadyState)
     // way production frames do: one element dirty, sibling subtrees clean.
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* b = r->FindById("b");
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(b, nullptr);
     b->MarkDirty(UIElement::StyleDirty);
     ui.Update(0.0f, /*interactive=*/true);
@@ -222,7 +222,7 @@ TEST(SubtreeDirtyTests, FastPathRespectsDisabledFlag)
     // slow-paths under the disabled flag.
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
     a->MarkDirty(UIElement::StyleDirty);
     ui.Update(0.0f, /*interactive=*/true);
@@ -323,7 +323,7 @@ TEST(SubtreeDirtyTests, MountHostFastPathsWhenTargetClean)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* b = r->FindById("b");
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(b, nullptr);
 
     // Heavy frame with the Mount-host subtree clean: container must skip.
@@ -338,7 +338,7 @@ TEST(SubtreeDirtyTests, MountHostFastPathsWhenTargetClean)
 
     // Counter-check: dirt INSIDE the target forces the host chain back
     // onto the slow path that frame (the skip must not hide it).
-    UIElement* targetLeaf = targetOwner->FindById("target-leaf");
+    UIElement* targetLeaf = targetOwner->FindById("target-leaf"_sid);
     ASSERT_NE(targetLeaf, nullptr);
     targetLeaf->MarkDirty(UIElement::StyleDirty);
     ui.Update(0.0f, /*interactive=*/true);
@@ -504,8 +504,8 @@ TEST(SubtreeDirtyTests, DisplayNoneDescendantClearsAncestorSubtreeDirty)
     ui.Update(0.0f, true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* hidden = r->FindById("hidden");
-    UIElement* leaf = r->FindById("leaf");
+    UIElement* hidden = r->FindById("hidden"_sid);
+    UIElement* leaf = r->FindById("leaf"_sid);
     ASSERT_NE(hidden, nullptr);
     ASSERT_NE(leaf, nullptr);
 
@@ -567,8 +567,8 @@ TEST(SubtreeDirtyTests, DisplayNoneFlipRebuildsIndicesForAdjacentSiblings)
     ui.Update(0.0f, true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
 
@@ -581,21 +581,21 @@ TEST(SubtreeDirtyTests, DisplayNoneFlipRebuildsIndicesForAdjacentSiblings)
     // gate had wrongly fired, nodeIndexByElement might still have entries
     // pointing at indices that no longer match ctx.nodes (because a1/a2/a3
     // are gone but nodeIndexByElement wasn't rebuilt).
-    EXPECT_EQ(r->FindById("b"), b);
+    EXPECT_EQ(r->FindById("b"_sid), b);
     EXPECT_TRUE(b->IsEnabled());
 
     // Show 'a' again. a1/a2/a3 re-appear in ctx.nodes, ctx.nodes size grows.
     a->Overrides().Reset(Style::Display);
     ui.Update(0.0f, true);
 
-    EXPECT_EQ(r->FindById("a1"), a->GetChildren()[0].get());
-    EXPECT_EQ(r->FindById("a3"), a->GetChildren()[2].get());
+    EXPECT_EQ(r->FindById("a1"_sid), a->GetChildren()[0].get());
+    EXPECT_EQ(r->FindById("a3"_sid), a->GetChildren()[2].get());
 
     // One more steady-state frame to confirm the skip gate now reuses
     // correctly-populated maps.
     ui.Update(0.0f, true);
-    EXPECT_EQ(r->FindById("a2"), a->GetChildren()[1].get());
-    EXPECT_EQ(r->FindById("b"), b);
+    EXPECT_EQ(r->FindById("a2"_sid), a->GetChildren()[1].get());
+    EXPECT_EQ(r->FindById("b"_sid), b);
 }
 
 // ---------------------------------------------------------------------------
@@ -767,8 +767,8 @@ TEST(ProductionPathTests, OrderClassChangeReordersYogaChildren)
     ui.Update(0.0f, /*interactive=*/true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
     YGNodeRef rootYg = r->m_YogaState ? r->m_YogaState->Node : nullptr;
@@ -811,8 +811,8 @@ TEST(ProductionPathTests, OrderOverrideReordersYogaChildren)
     ui.Update(0.0f, /*interactive=*/true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
     YGNodeRef rootYg = r->m_YogaState ? r->m_YogaState->Node : nullptr;
@@ -937,7 +937,7 @@ TEST(ProductionPathTests, InheritedFontSizeFansOutOnUpdate)
     ui.Update(0.0f, /*interactive=*/true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* b1 = r->FindById("b1");
+    UIElement* b1 = r->FindById("b1"_sid);
     ASSERT_NE(b1, nullptr);
     ASSERT_NE(b1->GetResolvedStyle().Visual.FontSize, 24.0f);
 
@@ -975,9 +975,9 @@ TEST(ProductionPathTests, SiblingCombinatorStyleAppliesOnUpdate)
     ui.Update(0.0f, /*interactive=*/true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
-    UIElement* c = r->FindById("c");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
+    UIElement* c = r->FindById("c"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
     ASSERT_NE(c, nullptr);
@@ -1026,7 +1026,7 @@ TEST(ProductionPathTests, NoSiblingSmearWithoutCombinator)
     ui.Update(0.0f, /*interactive=*/true);
 
     UIElement* r = ui.GetRootElement();
-    UIElement* b = r->FindById("b");
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(b, nullptr);
 
     b->MarkDirty(UIElement::StyleDirty);

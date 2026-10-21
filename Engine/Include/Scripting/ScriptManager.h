@@ -2,6 +2,7 @@
 
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/PackageScriptCompile.h"
+#include "Scripting/ScriptAssemblyStatus.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Types/Types.h"
 
@@ -73,7 +74,11 @@ class ScriptManager
      *
      * Editor scripts, CLR host, and managed state are preserved.
      * Stops the project file watcher, updates paths, restarts watcher on new directory.
-     * Unloads old project assemblies and kicks off compilation of the new project's scripts.
+     * Then loads the new project's scripts the way Initialize does: its current
+     * ScriptAssemblies/GameEngine.Scripts.dll when that is neither a reference stub nor older
+     * than the scripting ABI, otherwise a compile (in the background when Initialize was told
+     * to defer the initial load) followed by the load. The loaded assembly replaces the
+     * previous project's.
      * Reads only the path fields of newConfig; the hot-reload and project-generation policy
      * stays as Initialize set it.
      */
@@ -144,6 +149,20 @@ class ScriptManager
     String GetAsyncHotReloadStatus() const;
 
     /**
+     * @brief Why the last finished async hot reload failed; empty when it succeeded or none has
+     * finished. A reload superseded by a newer edit leaves it unchanged. The outcome is recorded
+     * when IsAsyncHotReloadInProgress sees the reload finish.
+     */
+    String GetLastAsyncHotReloadError() const;
+
+    /**
+     * @brief Where the bound project's C# scripts assembly stands: not loaded, building, loaded
+     * with how many C# components and systems it defines, or failed; disabled in a build without
+     * C# scripting. Any thread.
+     */
+    ScriptAssemblyStatus GetScriptAssemblyStatus() const;
+
+    /**
      * @brief Get CoreCLR host
      */
     CoreCLRHost& GetCLRHost() { return m_ClrHost; }
@@ -184,29 +203,24 @@ class ScriptManager
     size_t ProcessMainThreadTasks();
 
     /**
-     * @brief Record the calling thread as the main thread. Used to diagnose
-     *        main-thread tasks executing on a fallback thread.
+     * @brief Have the next ProcessMainThreadTasks call run the managed
+     *        MainThread.Post queue, once, before its task loop and outside its
+     *        per-call task cap. Reached through EngineCore's post gate
+     *        (EngineCore::RequestManagedPostDrain).
      */
-    void MarkMainThread();
+    void RequestManagedPostDrain();
+
+    /// The managed MainThread.Post drain: runs the queued batch in order when
+    /// `run` is nonzero, discards it otherwise.
+    using ManagedPostDrain = void (*)(int32_t run);
 
     /**
-     * @brief True once MarkMainThread ran, i.e. a live frame loop owns the
-     *        main-thread task queue. Standalone hosts (gtest, dotnet-test)
-     *        never mark one and must pump the queue themselves.
+     * @brief Install the managed drain, process-wide and first-wins (a later
+     *        installation is refused: replacing a live pointer would free it
+     *        under a pump that is calling it).
+     * @return false when a drain was already installed.
      */
-    bool HasMarkedMainThread() const { return m_MainThreadId.load(std::memory_order_relaxed) != std::thread::id{}; }
-
-    /**
-     * @brief True when the calling thread is the marked main thread. False both
-     *        off-main and when no main thread has been marked at all, so a
-     *        caller that treats "no frame loop" as permissive must ask
-     *        HasMarkedMainThread() as well.
-     */
-    bool IsMainThread() const
-    {
-        const std::thread::id marked = m_MainThreadId.load(std::memory_order_relaxed);
-        return marked != std::thread::id{} && marked == std::this_thread::get_id();
-    }
+    static bool InstallManagedPostDrain(ManagedPostDrain drain);
 
     /**
      * @brief Queue a task for execution on the main thread
@@ -312,6 +326,22 @@ class ScriptManager
     bool RunCompile(const std::function<void()>& compile);
 
   private:
+    // The bound project's initial scripts load, shared by Initialize and RebindProjectScripts:
+    // the packaged game's staged assembly, or in a dev session the editor scripts assembly
+    // (built when missing or stale) and then the project's assembly, loaded when current and
+    // otherwise compiled and loaded (in the background under deferInitialLoad). Main thread.
+    void LoadInitialScriptAssembly();
+
+    // A scripts assembly finished loading (any thread): queues ApplyArrivedScriptAssembly.
+    void NotifyScriptAssemblyArrived();
+
+    // Main thread, after every assembly load or swap: records the loaded status and applies the
+    // primary world's kept components whose types the assembly registered.
+    void ApplyArrivedScriptAssembly();
+
+    // The async pipeline's end of a run (pipeline worker thread).
+    void OnHotReloadRunCompleted(const HotReloadPipeline::PipelineStats& stats);
+
     // Delete <assemblies>/Packages[/Editor] dll/pdb files no resolved package
     // module produces. The hot-reload domain loads that directory wholesale, so
     // a removed package's assembly would otherwise keep loading (and keep
@@ -506,12 +536,15 @@ class ScriptManager
     // consumed by IsAsyncHotReloadInProgress and Shutdown, so every access holds m_CurrentAsyncFutureMutex.
     mutable std::future<HotReloadPipeline::PipelineStats> m_CurrentAsyncFuture;
     mutable std::mutex m_CurrentAsyncFutureMutex;
+    // The last finished reload's failure (GetLastAsyncHotReloadError); guarded by
+    // m_CurrentAsyncFutureMutex.
+    mutable String m_LastAsyncHotReloadError;
 
     // Shutdown/lifetime: prevents work from being queued during teardown and allows
     // us to join fire-and-forget tasks that capture `this`.
     std::atomic<bool> m_ShuttingDown{false};
 
-    // When deferInitialLoad is enabled we queue a one-shot background build.
+    // When deferInitialLoad is enabled the initial build runs in the background.
     // This TaskHandle is used to wait for completion during shutdown so worker
     // threads can't execute lambdas that captured `this` after destruction.
     JobSystem::TaskHandle m_DeferredInitialBuildTask{};
@@ -535,12 +568,26 @@ class ScriptManager
     // the same thread; consumers try-lock and bail if another thread is pumping
     // (rationale in ProcessMainThreadTasks). Producers use the queue mutex above.
     std::recursive_mutex m_MainThreadTaskProcessingMutex;
-    // Set once by MarkMainThread; empty id means unknown (standalone test hosts).
-    std::atomic<std::thread::id> m_MainThreadId{};
     std::atomic<bool> m_WarnedOffMainThreadPump{false};
+    // A MainThread.Post landed since the last pump's drain step. Guarded by
+    // m_MainThreadTasksMutex, so it lives and dies with this queue.
+    bool m_ManagedPostDrainRequested = false;
 
-    // One-shot deferred initial build scheduling (when startup must not block)
+    // A deferred initial build is queued or running (one at a time); cleared by its main-thread
+    // completion, which reruns LoadInitialScriptAssembly when a request was refused meanwhile.
     std::atomic<bool> m_DeferredInitialBuildQueued{false};
+    // A deferred build request was refused because one was running; that build's completion
+    // then loads the bound project. Main thread.
+    std::atomic<bool> m_InitialLoadAfterRunningBuild{false};
+    // Bumped by every RebindProjectScripts: a deferred build started under an older binding
+    // does not load its output.
+    std::atomic<uint64> m_ProjectBindGeneration{0};
+
+    // ScriptsConfig::disableClr as Initialize received it; the rebind honours it too.
+    bool m_ClrDisabled = false;
+    // GetScriptAssemblyStatus: the state and the type count of the last arrived assembly.
+    std::atomic<ScriptAssemblyState> m_ScriptAssemblyState{ScriptAssemblyState::NotLoaded};
+    std::atomic<uint32> m_ScriptTypeCount{0};
 
     // One-shot package-module compile retry (compile-server cold-start race):
     // queued through the main thread onto the compile channel (the next pipeline tick)

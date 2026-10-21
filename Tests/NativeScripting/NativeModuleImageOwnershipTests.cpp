@@ -26,6 +26,8 @@
 // header-inline RegisterEventHandler, exactly as a native user system does.
 
 #include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Memory/Arena.h"
+#include "Memory/ImagePins.h"
 #include "NativeScripting/BuildCacheRecord.h"
 #include "NativeScripting/EngineBuildIdentity.h"
 #include "NativeScripting/NativeScriptManager.h"
@@ -38,10 +40,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -110,6 +114,13 @@ struct ImageRange
     std::uint64_t Size = 0;
     bool Contains(std::uint64_t addr) const { return Base != 0 && addr >= Base && addr < Base + Size; }
 };
+
+// True when the Memory image-pin source names `arena` for `range`.
+bool ArenaPinsRange(const std::string& arena, const ImageRange& range)
+{
+    const std::vector<std::string> names = Memory::Detail::DescribeArenasPinningImage(range.Base, range.Size);
+    return std::find(names.begin(), names.end(), arena) != names.end();
+}
 
 #if defined(_WIN32)
 ImageRange RangeOf(HMODULE mod)
@@ -582,6 +593,28 @@ TEST_F(ModuleImageOwnership, AFunctionPointerHandlerStillIdentifiesTheProbeImage
         << "a non-lambda callable built in the probe DLL was attributed elsewhere — such a "
            "handler would survive its module's unload un-revoked";
     EXPECT_FALSE(s_EngineRange.Contains(addr));
+}
+
+// Memory as an image-pin source, against a real image: an engine arena holding an object
+// whose destructor the probe instantiated pins the probe's range, which keeps it mapped at
+// an unload decision (EngineCore's DescribeImagePins appends this answer), until the arena's
+// Reset runs the destructor.
+TEST_F(ModuleImageOwnership, AnArenaHoldingAProbeImageDestructorKeepsTheImageMapped)
+{
+    auto newInArena =
+        reinterpret_cast<void (*)(void*, int*)>(::GetProcAddress(s_Probe, "GE_NativeProbe_NewInArena"));
+    ASSERT_NE(newInArena, nullptr);
+
+    int destroyed = 0;
+    Memory::Arena arena("Tests.ProbeImageArena");
+    newInArena(&arena, &destroyed);
+    EXPECT_TRUE(ArenaPinsRange("Tests.ProbeImageArena", s_ProbeRange))
+        << "an arena holding a probe-instantiated destructor did not pin the probe image";
+
+    arena.Reset();
+    EXPECT_EQ(destroyed, 1);
+    EXPECT_FALSE(ArenaPinsRange("Tests.ProbeImageArena", s_ProbeRange))
+        << "the pin outlived the destructor it stood for";
 }
 
 // The load-abort seam, driven through the real manager.

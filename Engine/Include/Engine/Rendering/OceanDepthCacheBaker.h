@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Ocean/OceanDepthCacheAsset.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 #include <filesystem>
@@ -15,7 +16,7 @@ namespace Engine::Renderer
 
 struct OceanSceneDepthBakeOptions
 {
-    uint32 RenderLayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
     bool LoadMissingAssets = true;
     bool IncludeDisabledRenderers = false;
     bool IncludeSkinnedMeshes = false;
@@ -38,7 +39,7 @@ struct OceanSceneDepthBakeStats
 };
 
 // Bakes the current scene's MeshRenderer geometry and terrain heightfields into a
-// saved ocean depth cache. Sources are filtered by renderLayerMask, transformed by
+// saved ocean depth cache. Sources are filtered by Layers, transformed by
 // WorldTransform, and sampled top-down into Ocean's .oceandepth format.
 bool BakeOceanDepthCacheFromSceneMeshes(ECS::World& world,
                                         const Ocean::OceanDepthCacheBakeDesc& desc,

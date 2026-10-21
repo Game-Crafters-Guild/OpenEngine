@@ -130,86 +130,14 @@ void TerrainRenderFeature::ReleaseTerrainResources(TerrainHandle handle)
 
     ReleaseGrassFieldResourcesLocked(handle);
 
-    if (handle.Index < m_Heightmaps.size())
-    {
-        auto& entry = m_Heightmaps[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
-    }
-
-    if (handle.Index < m_Splatmaps.size())
-    {
-        auto& entry = m_Splatmaps[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
-    }
-
-    if (handle.Index < m_Normalmaps.size())
-    {
-        auto& entry = m_Normalmaps[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
-    }
-
-    if (handle.Index < m_AtlasHeights.size())
-    {
-        auto& entry = m_AtlasHeights[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
-    }
-
-    if (handle.Index < m_AtlasCoarse.size())
-    {
-        auto& entry = m_AtlasCoarse[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
-    }
-
-    // Phase E atlas splat/normal surface sources + their coarse fields share the same lifetime.
+    // The unified maps, the Phase E atlas height + coarse fields, and the atlas splat/normal surface
+    // sources + their coarse fields share the terrain's lifetime.
     for (std::vector<TextureEntry>* vec :
-         {&m_AtlasSplats, &m_AtlasNormals, &m_AtlasSplatCoarse, &m_AtlasNormalCoarse})
+         {&m_Heightmaps, &m_Splatmaps, &m_Normalmaps, &m_AtlasHeights, &m_AtlasCoarse, &m_AtlasSplats,
+          &m_AtlasNormals, &m_AtlasSplatCoarse, &m_AtlasNormalCoarse})
     {
-        if (handle.Index >= vec->size())
-            continue;
-        auto& entry = (*vec)[handle.Index];
-        if (entry.Texture.IsValid())
-        {
-            DeferTextureDestroy(entry.Texture, entry.Bytes);
-            entry.Texture = {};
-            entry.Width = 0;
-            entry.Height = 0;
-            entry.BindlessIndex = 0;
-        }
+        if (handle.Index < vec->size())
+            RetireTextureEntry((*vec)[handle.Index]);
     }
 
     // Drop any accumulated dirty rect so a reused slot starts clean (a stale rect would
@@ -252,7 +180,23 @@ void TerrainRenderFeature::ReleaseTerrainResources(TerrainHandle handle)
     // heightmap from its own descriptor ring (a separate path from the bindless slots this frees)
     // before the frames-in-flight quarantine above frees the image. Bumped after the retires so a
     // consumer that observes the new value is guaranteed to see the cleared entries.
-    m_TerrainTextureRetireGeneration.fetch_add(1, std::memory_order_release);
+    const uint64 retireGeneration = m_TerrainTextureRetireGeneration.fetch_add(1, std::memory_order_release) + 1;
+    if (handle.Index >= m_RetireGenerationByIndex.size())
+        m_RetireGenerationByIndex.resize(static_cast<size_t>(handle.Index) + 1, 0);
+    m_RetireGenerationByIndex[handle.Index] = retireGeneration;
+}
+
+uint64 TerrainRenderFeature::GetTerrainRetireGeneration(uint32 handleIndex) const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    return handleIndex < m_RetireGenerationByIndex.size() ? m_RetireGenerationByIndex[handleIndex] : 0;
+}
+
+void TerrainRenderFeature::RetireTextureEntry(TextureEntry& entry)
+{
+    DeferTextureDestroy(entry.Texture, entry.Bytes);
+    DeferTextureViewDestroy(entry.StorageView);
+    entry = TextureEntry{};
 }
 
 void TerrainRenderFeature::OnDeviceRebuilt(Rendering::IDevice* device)
@@ -1735,6 +1679,12 @@ TerrainRenderFeature::ActiveHeightSource TerrainRenderFeature::GetActiveHeightSo
     return {true, terrain.HeightmapTexture, terrain.AtlasBacked, terrain.AtlasHeightTexture};
 }
 
+bool TerrainRenderFeature::ViewDrawsActiveTerrain(Rendering::RenderLayerMask viewLayers) const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    return !m_ActiveTerrains.empty() && m_ActiveTerrains.front().RenderLayers.Intersects(viewLayers);
+}
+
 void TerrainRenderFeature::EnsureMaterialTableBuffer(uint32 fi, uint32 capacity)
 {
     if (!m_Device || capacity <= m_TerrainMaterialCapacity[fi])
@@ -1780,7 +1730,7 @@ void TerrainRenderFeature::WarnIfUploadPassMissing()
         "than bindlessly, so it is not gated at all and reads an image nothing has written — "
         "undefined per driver, which on MoltenVK comes back zero and renders as flat terrain. "
         "Add a TerrainUpload node to the pipeline's .rendergraph (see "
-        "Assets/RenderPipelines/ForwardPlus.rendergraph).",
+        "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph).",
         m_TexturesAwaitingGpuInit.size(), m_FramesAwaitingUploadPass);
 }
 

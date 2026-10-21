@@ -9,6 +9,7 @@
 #include "UI/UIStyle.h"
 #include "UI/StyleProperties.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -94,6 +95,8 @@ namespace
         case StylePropertyId::FlexShrink: return "flex-shrink";
         case StylePropertyId::Gap: return "gap";
         case StylePropertyId::Opacity: return "opacity";
+        case StylePropertyId::Transform: return "transform";
+        case StylePropertyId::TransformOrigin: return "transform-origin";
         case StylePropertyId::Visibility: return "visibility";
         case StylePropertyId::Color: return "color";
         case StylePropertyId::BackgroundColor: return "background-color";
@@ -274,24 +277,46 @@ void CssInspector::OnScrollWheel(float deltaY)
     // upper bound clamped in Update() when we have layer count
 }
 
+void CssInspector::SetEnabled(bool on)
+{
+    if (m_Enabled == on)
+        return;
+    m_Enabled = on;
+    if (on)
+        return;
+
+    for (const UIManagerRef& reference : m_ActiveManagers)
+    {
+        UIManager* manager = reference.Get();
+        UIElement* root = manager ? manager->GetRootElement() : nullptr;
+        if (!root)
+            continue;
+        if (UIElement* overlay = root->FindById("css-inspector-overlay"_sid))
+            overlay->Overrides().Set(Style::Display, DisplayMode::None);
+        if (UIElement* highlight = root->FindById("css-inspector-highlight"_sid))
+            highlight->Overrides().Set(Style::Display, DisplayMode::None);
+    }
+    m_ActiveManagers.clear();
+}
+
 void CssInspector::Update(UIManager* ui, int windowWidth, int windowHeight)
 {
-    if (!ui)
+    if (!m_Enabled || !ui)
         return;
     UIElement* root = ui->GetRootElement();
     if (!root)
         return;
 
-    UIElement* overlay = root->FindById("css-inspector-overlay");
-    UIElement* highlight = root->FindById("css-inspector-highlight");
-    if (!m_Enabled)
+    const auto existing = std::find_if(m_ActiveManagers.begin(), m_ActiveManagers.end(),
+                                      [ui](const UIManagerRef& reference) { return reference.Get() == ui; });
+    if (existing == m_ActiveManagers.end())
     {
-        if (overlay)
-            overlay->Overrides().Set(Style::Display, DisplayMode::None);
-        if (highlight)
-            highlight->Overrides().Set(Style::Display, DisplayMode::None);
-        return;
+        std::erase_if(m_ActiveManagers, [](const UIManagerRef& reference) { return !reference.Get(); });
+        m_ActiveManagers.emplace_back(ui);
     }
+
+    UIElement* overlay = root->FindById("css-inspector-overlay"_sid);
+    UIElement* highlight = root->FindById("css-inspector-highlight"_sid);
 
     UIElement* hovered = ui->GetHoveredElement();
     if (!hovered)

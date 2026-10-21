@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "name": "Alpha",
+  "hash": "0x4f7b85d6ce9339b3",
+  "constants": [],
+  "enums": [],
+  "events": [],
+  "functions": [
+    {
+      "id": "Alpha.TakeHit",
+      "name": "TakeHit",
+      "cpp": "GameEngine::Alpha::Script::TakeHit",
+      "header": "Alpha/AlphaScriptApi.h",
+      "line": 17,
+      "doc": "Takes Alpha's hit.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "hit",
+          "kind": "Record",
+          "type": "Alpha.Hit"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "Alpha.Hit",
+      "name": "Hit",
+      "cpp": "GameEngine::Alpha::Script::Hit",
+      "header": "Alpha/AlphaScriptApi.h",
+      "line": 10,
+      "doc": "Alpha's hit.",
+      "size": 4,
+      "align": 4,
+      "fields": [
+        {
+          "name": "distance",
+          "kind": "Float",
+          "offset": 0,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

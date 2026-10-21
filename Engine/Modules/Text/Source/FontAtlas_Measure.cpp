@@ -193,12 +193,49 @@ TextMetrics MeasureUtf8WithFace(const MeasureFaceRef& f, std::string_view utf8,
     return m;
 }
 
+#if defined(GE_HAVE_HARFBUZZ)
+// Code points the first caret-map shaping of a tail starts before its first
+// byte, so the common case (a rewrap after a space) finds a safe break in one
+// shaping.
+constexpr size_t kCaretAnchorLookbackCodePoints = 8;
+
+static size_t StepBackCodePoints(std::string_view utf8, size_t byte, size_t count)
+{
+    for (; count > 0 && byte > 0; --count)
+    {
+        --byte;
+        while (byte > 0 && (static_cast<unsigned char>(utf8[byte]) & 0xC0u) == 0x80u)
+            --byte;
+    }
+    return byte;
+}
+
+// True when the shaping in `buffer`, which starts at `anchor`, has a cluster
+// start in (anchor, firstByte] that HarfBuzz marks safe to break at. The glyphs
+// from that cluster on are then the whole string's: a ligature or an attached
+// mark that a split at firstByte would sever starts at or after it.
+static bool HasSafeBreakAfterAnchor(hb_buffer_t* buffer, size_t anchor, size_t firstByte)
+{
+    unsigned count = 0;
+    const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buffer, &count);
+    for (unsigned i = 0; i < count; ++i)
+    {
+        const size_t cluster = infos[i].cluster;
+        if (cluster > anchor && cluster <= firstByte &&
+            (hb_glyph_info_get_glyph_flags(&infos[i]) & HB_GLYPH_FLAG_UNSAFE_TO_BREAK) == 0)
+            return true;
+    }
+    return false;
+}
+#endif
+
 bool BuildCaretMapWithFace(const MeasureFaceRef& f, std::string_view utf8,
                            float geometryScale, std::vector<float>& outXByByte,
-                           float letterSpacingPx)
+                           float letterSpacingPx, size_t firstByte)
 {
+    const std::string_view tail = utf8.substr(firstByte);
     outXByByte.clear();
-    outXByByte.resize(utf8.size() + 1, 0.0f);
+    outXByByte.resize(tail.size() + 1, 0.0f);
     if (!f.Face)
         return false;
 
@@ -211,34 +248,58 @@ bool BuildCaretMapWithFace(const MeasureFaceRef& f, std::string_view utf8,
 #if defined(GE_HAVE_HARFBUZZ)
     if (f.Hb)
     {
-        hb_buffer_t* s_HbBuf = Detail::GetThreadLocalHBBuffer();
-        hb_buffer_add_utf8(s_HbBuf, utf8.data(), (int)utf8.size(), 0, (int)utf8.size());
+        // A tail is shaped in the whole string's direction and script, never
+        // in what its own first strong character would infer. Resolve them
+        // before the shared buffer is filled: the guess uses it.
+        const bool tailOnly = firstByte > 0;
         Detail::HBDirScript r = Detail::DetectDirScriptUtf8(utf8);
-        if (r.script != HB_SCRIPT_INVALID)
-        {
-            hb_buffer_set_direction(s_HbBuf, r.dir);
-            hb_buffer_set_script(s_HbBuf, r.script);
-            if (r.lang)
-                hb_buffer_set_language(s_HbBuf, hb_language_from_string(r.lang, -1));
-        }
-        else
-        {
-            hb_buffer_guess_segment_properties(s_HbBuf);
-        }
+        if (tailOnly && r.script == HB_SCRIPT_INVALID)
+            r = Detail::GuessDirScriptUtf8(utf8);
         hb_feature_t features[2];
         const unsigned featureCount = Detail::LetterSpacingFeatures(letterSpacingPx, features);
-        hb_shape(f.Hb, s_HbBuf, featureCount ? features : nullptr, featureCount);
+        // A tail can start inside a ligature or before a combining mark, which
+        // shaping from firstByte would sever. Shaping starts at an earlier
+        // anchor instead, stepped back (doubling the span) until a safe break
+        // lies between the anchor and firstByte, or the anchor reaches 0.
+        size_t anchor = StepBackCodePoints(utf8, firstByte, kCaretAnchorLookbackCodePoints);
+        hb_buffer_t* s_HbBuf = nullptr;
+        for (;;)
+        {
+            s_HbBuf = Detail::GetThreadLocalHBBuffer();
+            hb_buffer_add_utf8(s_HbBuf, utf8.data(), (int)utf8.size(), (unsigned)anchor,
+                               (int)(utf8.size() - anchor));
+            if (r.script != HB_SCRIPT_INVALID || tailOnly)
+            {
+                hb_buffer_set_direction(s_HbBuf, r.dir);
+                hb_buffer_set_script(s_HbBuf, r.script);
+                hb_buffer_set_language(s_HbBuf, r.lang ? hb_language_from_string(r.lang, -1)
+                                                       : hb_language_get_default());
+            }
+            else
+            {
+                hb_buffer_guess_segment_properties(s_HbBuf);
+            }
+            hb_shape(f.Hb, s_HbBuf, featureCount ? features : nullptr, featureCount);
+            if (anchor == 0 || HasSafeBreakAfterAnchor(s_HbBuf, anchor, firstByte))
+                break;
+            anchor = StepBackCodePoints(utf8, anchor, firstByte - anchor);
+        }
+        // The map is built over [anchor, end), then its first firstByte - anchor
+        // entries are dropped.
+        const size_t spanSize = utf8.size() - anchor;
+        outXByByte.resize(spanSize + 1);
         unsigned count = 0;
         const hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(s_HbBuf, &count);
         const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(s_HbBuf, &count);
-        // Map from byte index -> x position in pixels (ink advance space)
+        // Map from byte index -> x position in pixels (ink advance space).
+        // Clusters are byte offsets into the whole string.
         float xAtlas = 0.0f;
         // Initialize all undefined to -1 so we can fill gaps
         std::fill(outXByByte.begin(), outXByByte.end(), -1.0f);
         for (unsigned i = 0; i < count; ++i)
         {
-            unsigned cluster = infos[i].cluster; // byte index in original UTF-8 string
-            if (cluster <= utf8.size())
+            const unsigned cluster = infos[i].cluster - (unsigned)anchor; // byte index in span
+            if (cluster <= spanSize)
             {
                 if (outXByByte[cluster] < 0.0f)
                     outXByByte[cluster] = xAtlas;
@@ -247,11 +308,11 @@ bool BuildCaretMapWithFace(const MeasureFaceRef& f, std::string_view utf8,
             // Spacing goes after each cluster's last glyph, including the run's
             // final one — the caret at end-of-text carries the trailing gap and
             // so equals the measured width.
-            if (i + 1 == count || infos[i + 1].cluster != cluster)
+            if (i + 1 == count || infos[i + 1].cluster != infos[i].cluster)
                 xAtlas += lsAtlas;
         }
         // Ensure the last insertion point is set to total width
-        outXByByte[utf8.size()] = xAtlas;
+        outXByByte[spanSize] = xAtlas;
         // Backfill any gaps (bytes within a cluster share the same x)
         float last = 0.0f;
         for (size_t i = 0; i < outXByByte.size(); ++i)
@@ -260,6 +321,14 @@ bool BuildCaretMapWithFace(const MeasureFaceRef& f, std::string_view utf8,
                 last = outXByByte[i];
             else
                 outXByByte[i] = last;
+        }
+        if (tailOnly)
+        {
+            outXByByte.erase(outXByByte.begin(),
+                             outXByByte.begin() + (std::ptrdiff_t)(firstByte - anchor));
+            const float origin = outXByByte[0];
+            for (float& v : outXByByte)
+                v -= origin;
         }
         // Convert atlas-space X positions to render pixels
         if (geometryScale != 1.0f)
@@ -274,26 +343,26 @@ bool BuildCaretMapWithFace(const MeasureFaceRef& f, std::string_view utf8,
     float xAtlas = 0.0f;
     outXByByte[0] = 0.0f;
     size_t bi = 0;
-    while (bi < utf8.size())
+    while (bi < tail.size())
     {
-        unsigned char c = (unsigned char)utf8[bi];
+        unsigned char c = (unsigned char)tail[bi];
         unsigned codepoint = c;
         size_t step = 1;
         if (c >= 0x80)
         { // naive UTF-8 step
-            if ((c >> 5) == 0x6 && bi + 1 < utf8.size())
+            if ((c >> 5) == 0x6 && bi + 1 < tail.size())
             {
-                codepoint = ((c & 0x1F) << 6) | ((unsigned char)utf8[bi + 1] & 0x3F);
+                codepoint = ((c & 0x1F) << 6) | ((unsigned char)tail[bi + 1] & 0x3F);
                 step = 2;
             }
-            else if ((c >> 4) == 0xE && bi + 2 < utf8.size())
+            else if ((c >> 4) == 0xE && bi + 2 < tail.size())
             {
-                codepoint = ((c & 0x0F) << 12) | (((unsigned char)utf8[bi + 1] & 0x3F) << 6) | ((unsigned char)utf8[bi + 2] & 0x3F);
+                codepoint = ((c & 0x0F) << 12) | (((unsigned char)tail[bi + 1] & 0x3F) << 6) | ((unsigned char)tail[bi + 2] & 0x3F);
                 step = 3;
             }
-            else if ((c >> 3) == 0x1E && bi + 3 < utf8.size())
+            else if ((c >> 3) == 0x1E && bi + 3 < tail.size())
             {
-                codepoint = ((c & 0x07) << 18) | (((unsigned char)utf8[bi + 1] & 0x3F) << 12) | (((unsigned char)utf8[bi + 2] & 0x3F) << 6) | ((unsigned char)utf8[bi + 3] & 0x3F);
+                codepoint = ((c & 0x07) << 18) | (((unsigned char)tail[bi + 1] & 0x3F) << 12) | (((unsigned char)tail[bi + 2] & 0x3F) << 6) | ((unsigned char)tail[bi + 3] & 0x3F);
                 step = 4;
             }
         }
@@ -476,19 +545,21 @@ LineMetrics FontAtlas::GetFontLineMetrics(float pixelSize) const
 }
 
 bool FontAtlas::BuildCaretMapUtf8(std::string_view utf8, float pixelSize,
-                                  std::vector<float>& outXByByte, float letterSpacingPx)
+                                  std::vector<float>& outXByByte, float letterSpacingPx,
+                                  size_t firstByte)
 {
 #if !defined(GE_HAVE_FREETYPE)
     (void)utf8;
     (void)pixelSize;
     (void)outXByByte;
     (void)letterSpacingPx;
+    (void)firstByte;
     return false;
 #else
     if (!m_FtFace.IsValid())
     {
         outXByByte.clear();
-        outXByByte.resize(utf8.size() + 1, 0.0f);
+        outXByByte.resize(utf8.size() - firstByte + 1, 0.0f);
         return false;
     }
 
@@ -512,7 +583,7 @@ bool FontAtlas::BuildCaretMapUtf8(std::string_view utf8, float pixelSize,
                      , m_HbFont.Get()
 #endif
     };
-    return BuildCaretMapWithFace(f, utf8, geometryScale, outXByByte, letterSpacingPx);
+    return BuildCaretMapWithFace(f, utf8, geometryScale, outXByByte, letterSpacingPx, firstByte);
 #endif
 }
 

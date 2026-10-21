@@ -7,8 +7,11 @@
 #include "ECS/Reflection.h"
 #include "ECS/ComponentTypeName.h"
 #include "ECS/ModuleRegistration.h"
+#include "ECS/RequiredComponents.h"
 #include "Logger/Logger.h"
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <span>
 #include <string>
@@ -16,6 +19,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
+#include <vector>
 
 // Forward declaration to avoid circular dependency
 namespace GameEngine {
@@ -46,6 +50,12 @@ public:
         // Byte offset of the bool Enabled field a KeepsOwnEnabledField type switches
         // through; 0 for every other type.
         uint32 EnabledFieldOffset = 0;
+        // The types this type requires directly (Detail::RequiredComponents); the
+        // World resolves the closure (World::AddRequiredClosure).
+        std::vector<ComponentTypeId> Required;
+        // T{} as bytes, recorded once another type requires T: the value a column
+        // added for a requirement starts with. Empty for a type nothing requires.
+        std::vector<std::uint8_t> RequirementDefault;
     };
 
 private:
@@ -75,6 +85,35 @@ private:
                           "The Enabled field's offset is only defined for a standard-layout component");
             info.EnabledFieldOffset = static_cast<uint32>(offsetof(T, Enabled));
         }
+    }
+
+    // Registers each type T requires, records its default value for the columns a
+    // requirement adds, and returns their type ids. Runs before any reference into
+    // the component map is taken: registering a requirement can rehash the map.
+    template<Component T>
+    static std::vector<ComponentTypeId> RegisterRequirements() {
+        std::vector<ComponentTypeId> required;
+        [&]<typename... Reqs>(Detail::TypeList<Reqs...>) {
+            (RegisterRequirement<T, Reqs>(required), ...);
+        }(typename Detail::RequiredComponents<T>::type{});
+        return required;
+    }
+
+    template<Component T, Component Req>
+    static void RegisterRequirement(std::vector<ComponentTypeId>& required) {
+        static_assert(!std::is_same_v<T, Req>, "A component cannot require itself");
+        static_assert(std::is_default_constructible_v<Req>,
+                      "A required component is added with its default value: make it default-constructible");
+        const ComponentTypeId reqId = ECS::GetComponentTypeId<Req>();
+        if (GetComponents().find(reqId) == GetComponents().end())
+            RegisterComponent<Req>(std::string(ComponentTypeName<Req>()));
+        auto& reqInfo = GetComponents().at(reqId);
+        if (reqInfo.RequirementDefault.empty()) {
+            const Req value{};
+            reqInfo.RequirementDefault.resize(sizeof(Req));
+            std::memcpy(reqInfo.RequirementDefault.data(), &value, sizeof(Req));
+        }
+        required.push_back(reqId);
     }
 
     // Map accessors — defined in ComponentRegistry.cpp with cross-module redirect
@@ -129,6 +168,7 @@ public:
         // reflection table views belong to the registering image and must be
         // replaced before the superseded module may be unmapped.
         const ModuleRegistrationStamp& active = GetActiveRegistrationModule();
+        std::vector<ComponentTypeId> required = RegisterRequirements<T>();
         if (auto existing = GetComponents().find(typeId); existing != GetComponents().end()) {
             if (!active.Supersedes(existing->second.Module)) {
                 Logger::Log::Debug("[ECS] Component '{}' already registered, skipping", name);
@@ -136,6 +176,7 @@ public:
             }
             existing->second.Module = active;
             existing->second.Size = sizeof(T);
+            existing->second.Required = std::move(required);
             RecordDeclaredFlags<T>(existing->second);
             GetHandlers()[typeId] = CreateHandler<T>();
             Logger::Log::Info("[ECS] Component '{}' handler re-owned by module '{}' generation {} (reload)",
@@ -153,6 +194,7 @@ public:
         info.Size = sizeof(T);
         info.TypeId = typeId;
         info.Module = active;
+        info.Required = std::move(required);
         RecordDeclaredFlags<T>(info);
 
         GetComponents()[typeId] = info;

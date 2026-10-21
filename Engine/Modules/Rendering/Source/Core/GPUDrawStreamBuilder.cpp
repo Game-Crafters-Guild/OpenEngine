@@ -1,6 +1,7 @@
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
 
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 
 #include "Rendering/Core/BarrierMapping.h"
 #include "Rendering/Core/CommandList.h"
@@ -342,13 +343,20 @@ void GPUDrawStreamBuilder::ReprovisionAfterDeviceRebuild()
 
 // ---- R1.3/R1.4 scatter path ------------------------------------------------
 
-std::vector<GPUDrawStreamBuilder::BatchTableEntry>
+size_t GPUDrawStreamBuilder::BatchTableCapacity(const BatchRegistry& registry)
+{
+    return 2u * registry.BatchCount();
+}
+
+std::span<GPUDrawStreamBuilder::BatchTableEntry>
 GPUDrawStreamBuilder::BuildBatchTable(const BatchRegistry& registry,
                                       std::span<const uint32_t> meshPoolGroup,
+                                      std::span<BatchTableEntry> table,
+                                      std::pmr::memory_resource& scratch,
                                       uint32_t* outTotalRecords)
 {
-    std::vector<BatchTableEntry> table;
-    table.reserve(registry.BatchCount());
+    assert(table.size() >= BatchTableCapacity(registry) && "size the table with BatchTableCapacity");
+    size_t rows = 0;
     if (meshPoolGroup.empty())
     {
         for (const auto& [key, count] : registry.Counts())
@@ -361,9 +369,15 @@ GPUDrawStreamBuilder::BuildBatchTable(const BatchRegistry& registry,
             // nuance applies to double-sided too). Emit only the non-empty lanes so
             // a mirror-free scene produces exactly today's one-row-per-batch table.
             if (count.Even > 0u)
-                table.push_back({materialIndex, meshIndex, 0u, count.Even});
+            {
+                assert(rows < table.size() && "BatchTableCapacity undercounts the table");
+                table[rows++] = {materialIndex, meshIndex, 0u, count.Even};
+            }
             if (count.Odd > 0u)
-                table.push_back({materialIndex, meshIndex | kMeshParityBit, 0u, count.Odd});
+            {
+                assert(rows < table.size() && "BatchTableCapacity undercounts the table");
+                table[rows++] = {materialIndex, meshIndex | kMeshParityBit, 0u, count.Odd};
+            }
         }
     }
     else
@@ -372,7 +386,7 @@ GPUDrawStreamBuilder::BuildBatchTable(const BatchRegistry& registry,
         // rows that collapse — one region per (materialIndex, group, parity).
         // Registry keys are unique per (mat, mesh), so merging only happens
         // across meshes of one group; Σ capacities is invariant.
-        std::unordered_map<uint64_t, uint32_t> merged;
+        std::pmr::unordered_map<uint64_t, uint32_t> merged{&scratch};
         merged.reserve(registry.BatchCount());
         for (const auto& [key, count] : registry.Counts())
         {
@@ -392,9 +406,11 @@ GPUDrawStreamBuilder::BuildBatchTable(const BatchRegistry& registry,
             e.materialIndex = ParityMergeClass(mergedKey);
             e.meshIndex     = ParityMergeMesh(mergedKey); // group | parity bit 24
             e.capacity      = count;
-            table.push_back(e);
+            assert(rows < table.size() && "BatchTableCapacity undercounts the table");
+            table[rows++] = e;
         }
     }
+    table = table.first(rows);
     std::sort(table.begin(), table.end(),
               [](const BatchTableEntry& a, const BatchTableEntry& b)
               {
@@ -414,10 +430,12 @@ GPUDrawStreamBuilder::BuildBatchTable(const BatchRegistry& registry,
     return table;
 }
 
-std::vector<GPUDrawStreamBuilder::BatchTableEntry>
+std::span<GPUDrawStreamBuilder::BatchTableEntry>
 GPUDrawStreamBuilder::BuildShadowBatchTable(const BatchRegistry& registry,
                                             std::span<const uint8_t> materialDepthClass,
                                             std::span<const uint32_t> meshPoolGroup,
+                                            std::span<BatchTableEntry> table,
+                                            std::pmr::memory_resource& scratch,
                                             uint32_t* outTotalRecords)
 {
     // Map each (materialIndex, meshIndex) batch to a class key: eligible
@@ -430,7 +448,8 @@ GPUDrawStreamBuilder::BuildShadowBatchTable(const BatchRegistry& registry,
     // (its casters are cull-None — winding is irrelevant depth-only — and the
     // scatter forces their parity to 0, so a parity-1 row would be dead and a
     // mirrored DS caster searching it would have its shadow silently dropped).
-    std::unordered_map<uint64_t, uint32_t> merged;
+    assert(table.size() >= BatchTableCapacity(registry) && "size the table with BatchTableCapacity");
+    std::pmr::unordered_map<uint64_t, uint32_t> merged{&scratch};
     merged.reserve(registry.BatchCount());
     for (const auto& [key, count] : registry.Counts())
     {
@@ -471,16 +490,17 @@ GPUDrawStreamBuilder::BuildShadowBatchTable(const BatchRegistry& registry,
         }
     }
 
-    std::vector<BatchTableEntry> table;
-    table.reserve(merged.size());
+    size_t rows = 0;
     for (const auto& [mergedKey, count] : merged)
     {
         BatchTableEntry e{};
         e.materialIndex = ParityMergeClass(mergedKey); // classKey lives in the material field
         e.meshIndex     = ParityMergeMesh(mergedKey);  // real mesh | parity bit 24
         e.capacity      = count;
-        table.push_back(e);
+        assert(rows < table.size() && "BatchTableCapacity undercounts the table");
+        table[rows++] = e;
     }
+    table = table.first(rows);
     std::sort(table.begin(), table.end(),
               [](const BatchTableEntry& a, const BatchTableEntry& b)
               {
@@ -500,10 +520,12 @@ GPUDrawStreamBuilder::BuildShadowBatchTable(const BatchRegistry& registry,
     return table;
 }
 
-std::vector<GPUDrawStreamBuilder::BatchTableEntry>
+std::span<GPUDrawStreamBuilder::BatchTableEntry>
 GPUDrawStreamBuilder::BuildColorBatchTable(const BatchRegistry& registry,
                                            std::span<const uint32_t> materialColorClass,
                                            std::span<const uint32_t> meshPoolGroup,
+                                           std::span<BatchTableEntry> table,
+                                           std::pmr::memory_resource& scratch,
                                            uint32_t* outTotalRecords)
 {
     // Remap each (materialIndex, meshIndex) batch to a color-class key through
@@ -512,7 +534,8 @@ GPUDrawStreamBuilder::BuildColorBatchTable(const BatchRegistry& registry,
     // transmissive / material-dependent rows map to themselves (identity) and
     // keep their (materialIndex, mesh) region. Counts merge per (classKey,
     // meshIndex) so a mesh's shared-PSO opaque draws issue once.
-    std::unordered_map<uint64_t, uint32_t> merged;
+    assert(table.size() >= BatchTableCapacity(registry) && "size the table with BatchTableCapacity");
+    std::pmr::unordered_map<uint64_t, uint32_t> merged{&scratch};
     merged.reserve(registry.BatchCount());
     // Track the two domains for the disjointness invariant (P2-a): a class id
     // that aliases a real materialIndex present in the same table would fold
@@ -554,16 +577,17 @@ GPUDrawStreamBuilder::BuildColorBatchTable(const BatchRegistry& registry,
            && "color class-id domain aliases a real materialIndex in the same table "
               "(raise kColorClassBase headroom / see P2-a)");
 
-    std::vector<BatchTableEntry> table;
-    table.reserve(merged.size());
+    size_t rows = 0;
     for (const auto& [mergedKey, count] : merged)
     {
         BatchTableEntry e{};
         e.materialIndex = ParityMergeClass(mergedKey); // classKey in the material field
         e.meshIndex     = ParityMergeMesh(mergedKey);  // real mesh | parity bit 24
         e.capacity      = count;
-        table.push_back(e);
+        assert(rows < table.size() && "BatchTableCapacity undercounts the table");
+        table[rows++] = e;
     }
+    table = table.first(rows);
     std::sort(table.begin(), table.end(),
               [](const BatchTableEntry& a, const BatchTableEntry& b)
               {
@@ -1641,20 +1665,29 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
     const bool callCrossfadeActive =
         std::any_of(slices.begin(), slices.end(), sliceCrossfades);
 
+    // Both tables live in this scope: they are read only while this call
+    // declares its passes (the ring upload and the elision digest copy them).
+    Memory::ScratchScope scratch;
+    const size_t tableCapacity = BatchTableCapacity(registry);
     uint32_t colorRecords = 0u;
-    std::vector<BatchTableEntry> colorTable =
-        colorMergeActive
-            ? BuildColorBatchTable(registry, materialColorClass, meshPoolOrdered, &colorRecords)
-            : BuildBatchTable(registry, meshPoolOrdered, &colorRecords);
+    const std::span<BatchTableEntry> colorRows =
+        scratch.AllocateArrayForOverwrite<BatchTableEntry>(tableCapacity);
+    const std::span<const BatchTableEntry> colorTable =
+        colorMergeActive ? BuildColorBatchTable(registry, materialColorClass, meshPoolOrdered,
+                                                colorRows, scratch.Resource(), &colorRecords)
+                         : BuildBatchTable(registry, meshPoolOrdered, colorRows, scratch.Resource(),
+                                           &colorRecords);
     if (colorTable.empty() || colorRecords == 0u)
         return {};
 
     uint32_t shadowRecords = 0u;
-    std::vector<BatchTableEntry> shadowTable;
+    std::span<const BatchTableEntry> shadowTable;
     if (anyShadowSlice)
     {
-        shadowTable = BuildShadowBatchTable(registry, materialDepthClass, meshPoolOrdered,
-                                            &shadowRecords);
+        shadowTable = BuildShadowBatchTable(
+            registry, materialDepthClass, meshPoolOrdered,
+            scratch.AllocateArrayForOverwrite<BatchTableEntry>(tableCapacity), scratch.Resource(),
+            &shadowRecords);
         assert(shadowRecords == colorRecords
                && "shadow table Σ capacities must equal color table's (merging only reduces rows)");
     }
@@ -1676,7 +1709,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
         std::vector<TableRun>              runs;
         std::vector<std::array<uint32_t, 2>> rowRun; // per row: {runStart, runIndex}
     };
-    auto computeRuns = [&](const std::vector<BatchTableEntry>& table) -> TableRunLayout
+    auto computeRuns = [&](std::span<const BatchTableEntry> table) -> TableRunLayout
     {
         TableRunLayout out;
         if (!groupActive || table.empty())
@@ -2055,7 +2088,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
         }
         return offset;
     };
-    auto uploadTable = [&](const std::vector<BatchTableEntry>& t) -> uint32_t
+    auto uploadTable = [&](std::span<const BatchTableEntry> t) -> uint32_t
     { return uploadBytes(t.data(), t.size() * sizeof(BatchTableEntry)); };
     // Upload THIS call's materialColorClass map into the ring, just ahead of
     // this call's tables (so no within-frame wrap clobbers it). BuildColorBatchTable
@@ -2132,7 +2165,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
     {
         const SliceRegistration& slice = slices[s];
         const bool sliceIsShadow = slice.table == SliceTable::Shadow;
-        const std::vector<BatchTableEntry>& sliceTable = sliceIsShadow ? shadowTable : colorTable;
+        const std::span<const BatchTableEntry> sliceTable = sliceIsShadow ? shadowTable : colorTable;
         const TableRunLayout& sliceRuns = sliceIsShadow ? shadowRuns : colorRuns;
         const uint32_t sliceRecordBase =
             callRecordBase + (headDrawBlockOffset + s) * snapshotRecords;

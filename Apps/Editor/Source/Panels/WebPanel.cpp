@@ -13,6 +13,7 @@
 #include "UI/UIManager.h"
 #include "UI/UIEvents.h"
 #include "Core/WindowInputRouter.h"
+#include "Editor/EditorPaths.h"
 #include "Platform/WebView.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
@@ -284,11 +285,11 @@ void WebPanel::LoadBindAttachLayoutAndStyle()
 
 void WebPanel::RefreshElementPointers()
 {
-    m_Container = FindById("WebContainer");
-    m_URLField = dynamic_cast<TextField*>(FindById("WebURLField"));
-    m_TabBar = FindById("WebTabBar");
-    m_WebViewContainer = FindById("WebViewContainer");
-    m_ErrorLabel = dynamic_cast<Label*>(FindById("WebErrorLabel"));
+    m_Container = FindById("WebContainer"_sid);
+    m_URLField = dynamic_cast<TextField*>(FindById("WebURLField"_sid));
+    m_TabBar = FindById("WebTabBar"_sid);
+    m_WebViewContainer = FindById("WebViewContainer"_sid);
+    m_ErrorLabel = dynamic_cast<Label*>(FindById("WebErrorLabel"_sid));
 
     if (m_WebViewContainer && !m_WebViewContainer->HasClass("web-asset-drop-initialized"))
     {
@@ -373,7 +374,7 @@ void WebPanel::RefreshElementPointers()
         });
     }
 
-    if (auto* newTabButton = dynamic_cast<Button*>(FindById("WebNewTabButton")))
+    if (auto* newTabButton = dynamic_cast<Button*>(FindById("WebNewTabButton"_sid)))
     {
         newTabButton->SetTooltip("New tab");
         newTabButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OpenBlankTab(); });
@@ -527,7 +528,7 @@ void WebPanel::LoadURL(const std::string& url)
     else
     {
         if (m_ErrorLabel)
-            m_ErrorLabel->SetText("Failed to load URL.");
+            m_ErrorLabel->SetText(m_WebViewUnavailableMessage.empty() ? "Failed to load URL." : m_WebViewUnavailableMessage);
         Logger::Log::Error("WebPanel: Failed to load URL: {}", normalized);
     }
     RebuildTabBar();
@@ -598,7 +599,8 @@ void WebPanel::LoadYouTubeVideo(const std::string& embedURL)
     else
     {
         if (m_ErrorLabel)
-            m_ErrorLabel->SetText("Failed to load YouTube page. Please check the URL.");
+            m_ErrorLabel->SetText(m_WebViewUnavailableMessage.empty() ? "Failed to load YouTube page. Please check the URL."
+                                                                      : m_WebViewUnavailableMessage);
         Logger::Log::Error("WebPanel: Failed to load HTML wrapper");
     }
     RebuildTabBar();
@@ -760,10 +762,17 @@ void WebPanel::UpdateWebViewSize()
     // GetLayout* returns CSS-logical pixels (Yoga's space, shrunk by Additional UI Scale).
     // The native web view expects window client-space pixels, so undo the multiplier.
     const float scale = WindowInputRouter::UiLogicalToClientScale(m_ParentWindow, m_WebViewContainer->GetOwnerManager());
+    // Each edge rounds to the nearest client pixel and the size is the distance between the rounded
+    // edges, so the view ends where the container's edge rounds to. Rounding the size on its own
+    // can end the view a pixel short of that edge or a pixel past it.
     if (width > 0 && height > 0)
     {
-        view->Resize(static_cast<int>(std::lround(width * scale)), static_cast<int>(std::lround(height * scale)));
-        view->SetPosition(static_cast<int>(std::lround(x * scale)), static_cast<int>(std::lround(y * scale)));
+        const int left = static_cast<int>(std::lround(x * scale));
+        const int top = static_cast<int>(std::lround(y * scale));
+        const int right = static_cast<int>(std::lround((x + width) * scale));
+        const int bottom = static_cast<int>(std::lround((y + height) * scale));
+        view->Resize(right - left, bottom - top);
+        view->SetPosition(left, top);
     }
 }
 
@@ -793,13 +802,14 @@ bool WebPanel::CreateTabWebView(WebTab& tab)
     if (!m_ParentWindow)
         return false;
 
-    tab.view = Platform::CreateWebView(m_ParentWindow);
+    tab.view = Platform::CreateWebView(m_ParentWindow, Editor::GetEditorGlobalPaths().userCacheRoot / "WebView2");
     if (!tab.view || !tab.view->GetNativeView())
     {
         tab.view.reset();
         return false;
     }
 
+    tab.view->SetOnUnavailable([this](const std::string& message) { OnWebViewUnavailable(message); });
     tab.view->SetBackgroundColor(39, 39, 39);
     // Load minimal dark page so clicking in content area never shows white (blank default)
     const char* darkPlaceholder = R"(<!DOCTYPE html><html><head><meta charset="UTF-8"></head>)"
@@ -815,6 +825,14 @@ bool WebPanel::CreateTabWebView(WebTab& tab)
             ui->ClearFocus();
     });
     return true;
+}
+
+void WebPanel::OnWebViewUnavailable(const std::string& message)
+{
+    m_WebViewUnavailableMessage = message;
+    if (m_ErrorLabel)
+        m_ErrorLabel->SetText(message);
+    Logger::Log::Warning("WebPanel: {}", message);
 }
 
 void WebPanel::OpenBlankTab()

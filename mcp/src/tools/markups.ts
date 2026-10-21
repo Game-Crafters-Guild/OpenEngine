@@ -12,7 +12,7 @@ import { proxyTool } from "./proxy.js";
  * markup_comment. Every write the port makes directly is stamped Agent, unless
  * `author: "User"` is passed for a scripted demonstration; an edit made through injected
  * input (send_key, click_element, perform_drop) counts as the user's. User guide:
- * docs/Editor/world-markups.html.
+ * docs/editor/world-markups.mdx.
  */
 
 function author() {
@@ -48,7 +48,7 @@ export const tools: ToolDef[] = [
     name: "markup_list",
     category: "scene",
     description:
-      "List the open scene's mark-ups, newest change first. Returns the scene's `revision`, the `epoch` and one row per mark-up (entityId, tag, title, kind, status, tags, author, updatedBy, created, updated, revision, hidden, hasUpdate, center, radius, entryCount). To see what the user changed since your last look, pass the `revision` your previous answer returned as `since` (strictly after; never a clock) with `changedBy: \"User\"`. Hidden mark-ups are listed and say so.",
+      "List the open scene's mark-ups, newest change first. Returns the scene's `revision`, the `epoch` and one row per mark-up (entityId, tag, title, kind, status, tags, author, updatedBy, created, updated, revision, hidden, hasUpdate, center, radius, entryCount, color: the color it draws in as #RRGGBB, its own else its status's). To see what the user changed since your last look, pass the `revision` your previous answer returned as `since` (strictly after; never a clock) with `changedBy: \"User\"`. Hidden mark-ups are listed and say so.",
     schema: {
       status: z.string().optional().describe("Only this status, by name (e.g. \"Requested\")"),
       author: author().optional().describe("Only mark-ups created by this author"),
@@ -62,7 +62,7 @@ export const tools: ToolDef[] = [
     name: "markup_get",
     category: "scene",
     description:
-      "One mark-up in full, as `markup`: its row, description, thread (`entries`: kind created/comment/statusChange/edit, author, time, status, text; an edit's `changes`: converted, moved, resized, rotated, renamed, reshaped, recolored, described, its `text` the name a rename gave and its `color` (#RRGGBB) the color a recolor gave) and shape (`shape`: box or sphere, center, halfExtents, rotation [x,y,z,w]; for a region `shape: \"region\"`, `outline` (the evaluated ring in world [x, z], at most 256 points, what markup_contains tests), `knots` (what markup_update takes back as outline), type, extrudeHeight, area (square meters) and perimeter (meters, every ring), both with the members applied as markup_contains tests them (a sphere's circle as its 32-gon), bounds {min, max}, groundRange {min, max} (the lowest and highest heights the region stands on, meters) and `members`: {entityId, mode, deleted, title, tag, kind, footprint: {outline} or {center, radius}}; for a path `shape: \"path\"`, `points` (world [x, y, z]), type and length); beside it the scene's `revision` and the `epoch`.",
+      "One mark-up in full, as `markup`: its row, description, thread (`entries`: kind created/comment/statusChange/edit, author, time, status, text; an edit's `changes`: converted, moved, resized, rotated, renamed, reshaped, recolored, described, its `text` the name a rename gave and its `color` (#RRGGBB) the color a recolor gave) and shape (`shape`: box or sphere, center, halfExtents, rotation [x,y,z,w]; for a region `shape: \"region\"`, `outline` (the evaluated ring in world [x, z], at most 256 points, what markup_contains tests), `knots` (what markup_update takes back as outline), type, extrudeHeight, area (square meters) and perimeter (meters, every ring), both with the members applied as markup_contains tests them (a sphere's circle as its 32-gon), bounds {min, max}, groundRange {min, max} (the lowest and highest heights the region stands on, meters) and `members`: {entityId, mode, deleted, title, tag, tags, kind, footprint: {outline} or {center, radius}}; for a path `shape: \"path\"`, `points` (world [x, y, z]), type and length); beside it the scene's `revision` and the `epoch`.",
     schema: {
       entityId: z.coerce.number().describe("The mark-up's entityId from markup_list"),
     },

@@ -84,7 +84,7 @@ void EditorApplication::ShowOrFocusAssetViewInSceneTabs(EditorWindowContext* ctx
 
     if (UIElement* rootEl = ctx->ui->GetRootElement())
     {
-        if (auto* el = rootEl->FindById("dock"))
+        if (auto* el = rootEl->FindById("dock"_sid))
         {
             if (auto* dockspace = dynamic_cast<DockspaceElement*>(el))
             {

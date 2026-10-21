@@ -1,4 +1,5 @@
 param(
+  [Parameter(Mandatory = $true)]
   [string]$ProjectRoot,
   [Parameter(Mandatory = $true)]
   [string]$Name,
@@ -7,8 +8,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Default to the repository root from this script's location (Tests/UIReplay/prepare_assets_sandbox.ps1 -> ../..).
-if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 
 $assetsRoot = Join-Path $ProjectRoot "Assets"
 $sandboxRoot = Join-Path $assetsRoot "UIReplaySandbox"

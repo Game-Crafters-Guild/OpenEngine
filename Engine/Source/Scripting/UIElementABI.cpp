@@ -53,7 +53,7 @@
 #include "Logger/Logger.h"
 
 // GE_UIEventData/GE_UIEventCallback + the GE_UIElement_* prototypes are declared in
-// ScriptingABI.h (the canonical ABI surface, alongside GE_Input_*/GE_ECS_*). The reverse
+// ScriptingABI.h (the canonical ABI surface, alongside GE_ECS_*). The reverse
 // callback hands the opaque GCHandle the script passed in back verbatim so the callee can
 // recover its context.
 

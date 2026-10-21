@@ -42,16 +42,8 @@ target_link_libraries(CBTTerrain
 # ---------------------------------------------------------------------------
 # int64 storage + spec constants target Vulkan 1.3 / SPIR-V 1.6 (matches the
 # engine's device). spirv-val runs explicitly to catch the findMSB(u64) trap
-# (plan §9) before the SPIR-V ever reaches a pipeline.
-find_package(Vulkan QUIET)
-set(_CBT_GLSLC_HINTS "${Vulkan_INCLUDE_DIRS}/../bin")
-if(VCPKG_DIR AND VCPKG_ARCH)
-    list(APPEND _CBT_GLSLC_HINTS
-        "${VCPKG_DIR}/installed/${VCPKG_ARCH}/tools"
-        "${VCPKG_DIR}/installed/${VCPKG_ARCH}/tools/shaderc")
-endif()
-find_program(CBT_GLSLC_EXECUTABLE glslc HINTS ${_CBT_GLSLC_HINTS})
-find_program(CBT_SPIRV_VAL_EXECUTABLE spirv-val HINTS ${_CBT_GLSLC_HINTS})
+# (plan §9) before the SPIR-V ever reaches a pipeline. GLSLC_EXECUTABLE and
+# SPIRV_VAL_EXECUTABLE come from the top level (cmake/GlslcCompiler.cmake).
 
 # The sources sit under Shaders/CBT so the repo layout MIRRORS the staged layout
 # (Assets/Shaders/CBT): material documents name their surface as 'CBT/cbt_surface.glsl',
@@ -61,7 +53,7 @@ set(CBT_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/CBT)
 set(CBT_SHADER_OUTPUT_DIR ${CMAKE_BINARY_DIR}/Shaders)
 file(MAKE_DIRECTORY ${CBT_SHADER_OUTPUT_DIR})
 
-if(CBT_GLSLC_EXECUTABLE)
+if(GLSLC_EXECUTABLE)
     set(CBT_KERNELS_SRC ${CBT_SHADER_DIR}/cbt_kernels.comp)
     set(CBT_KERNELS_SPV ${CBT_SHADER_OUTPUT_DIR}/cbt_kernels.comp.spv)
     set(CBT_KERNELS_INCLUDES ${CBT_SHADER_DIR}/cbt_layout.glsl ${CBT_SHADER_DIR}/cbt_domain.glsl
@@ -70,12 +62,12 @@ if(CBT_GLSLC_EXECUTABLE)
         ${CBT_SHADER_DIR}/cbt_page.glsl)
 
     set(_CBT_COMPILE_COMMANDS
-        COMMAND ${CBT_GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6
+        COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6
                 -I ${CBT_SHADER_DIR} ${CBT_KERNELS_SRC} -o ${CBT_KERNELS_SPV})
-    if(CBT_SPIRV_VAL_EXECUTABLE)
+    if(SPIRV_VAL_EXECUTABLE)
         list(APPEND _CBT_COMPILE_COMMANDS
-            COMMAND ${CBT_SPIRV_VAL_EXECUTABLE} --target-env vulkan1.3 ${CBT_KERNELS_SPV})
-        message(STATUS "CBTTerrain: spirv-val enabled (${CBT_SPIRV_VAL_EXECUTABLE})")
+            COMMAND ${SPIRV_VAL_EXECUTABLE} --target-env vulkan1.3 ${CBT_KERNELS_SPV})
+        message(STATUS "CBTTerrain: spirv-val enabled (${SPIRV_VAL_EXECUTABLE})")
     else()
         message(STATUS "CBTTerrain: spirv-val not found; relying on glslc validation")
     endif()
@@ -92,12 +84,12 @@ if(CBT_GLSLC_EXECUTABLE)
     # SAME arm the web cook compiles to WGSL — before this, that arm never met any test.
     set(CBT_KERNELS_HEAP32_SPV ${CBT_SHADER_OUTPUT_DIR}/cbt_kernels_heap32.comp.spv)
     set(_CBT_COMPILE_HEAP32_COMMANDS
-        COMMAND ${CBT_GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6
+        COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6
                 -DGE_CBT_HEAP32 -I ${CBT_SHADER_DIR} ${CBT_KERNELS_SRC}
                 -o ${CBT_KERNELS_HEAP32_SPV})
-    if(CBT_SPIRV_VAL_EXECUTABLE)
+    if(SPIRV_VAL_EXECUTABLE)
         list(APPEND _CBT_COMPILE_HEAP32_COMMANDS
-            COMMAND ${CBT_SPIRV_VAL_EXECUTABLE} --target-env vulkan1.3 ${CBT_KERNELS_HEAP32_SPV})
+            COMMAND ${SPIRV_VAL_EXECUTABLE} --target-env vulkan1.3 ${CBT_KERNELS_HEAP32_SPV})
     endif()
     add_custom_command(
         OUTPUT ${CBT_KERNELS_HEAP32_SPV}
@@ -284,15 +276,10 @@ if(BUILD_TESTING)
             GTest::gtest_main
         )
         # OBJECT->OBJECT object files are not spliced transitively on the VS
-        # generator: splice Logger in directly (the Rendering tests do the same)
-        # and provide the stb_image impl that SkyRenderer pulls into
-        # GameEngineRendering but does not export.
-        target_sources(CBTTerrainTests PRIVATE $<TARGET_OBJECTS:Logger>)
-        target_sources(CBTTerrainTests PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/stb_image_impl.cpp)
-        target_compile_definitions(CBTTerrainTests PRIVATE GE_HAVE_STB)
-        if(TARGET stb::stb)
-            target_link_libraries(CBTTerrainTests PRIVATE stb::stb)
-        endif()
+        # generator: splice Logger, Memory and Image (whose decode SkyRenderer calls)
+        # in directly, as the Rendering tests do.
+        target_sources(CBTTerrainTests PRIVATE $<TARGET_OBJECTS:Logger> $<TARGET_OBJECTS:Memory>
+            $<TARGET_OBJECTS:Image>)
         target_compile_definitions(CBTTerrainTests PRIVATE
             CBT_SHADER_OUTPUT_DIR="${CBT_SHADER_OUTPUT_DIR}"
             CBT_SHADER_SOURCE_DIR="${CBT_SHADER_DIR}"

@@ -405,7 +405,6 @@ private:
     void CreateNewShaderGraphInDirectory(const std::filesystem::path& dir);
     void CreateNewSurfaceShaderInDirectory(const std::filesystem::path& dir);
     void CreateNewNavGridInDirectory(const std::filesystem::path& dir);
-    void CreateNewNavMeshInDirectory(const std::filesystem::path& dir);
     // Shared scaffold for all "Create code asset" actions (C# + C++ component/system); the
     // per-type templates live in the CodeAssetDescriptor table (see CodeAssetTemplates.h).
     void CreateCodeAssetInDirectory(const std::filesystem::path& dir,

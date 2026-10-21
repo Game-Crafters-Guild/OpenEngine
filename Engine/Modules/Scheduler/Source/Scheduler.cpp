@@ -104,7 +104,7 @@ ChainHandle ChainBuilder::Commit() {
     IScheduler* sch = m_Sch;
     auto scheduleIndex = std::make_shared<std::function<void(std::size_t)>>();
     *scheduleIndex = [sch, cancelled, currentId, steps, scheduleIndex](std::size_t i) {
-        auto wrapper = [sch, cancelled, currentId, steps, scheduleIndex, i]() {
+        auto wrapper = [cancelled, currentId, steps, scheduleIndex, i]() {
             if (cancelled->load(std::memory_order_relaxed)) return;
             auto& s = (*steps)[i];
             if (s.fn) s.fn();

@@ -14,8 +14,9 @@
  * slider's track (Slider::OnGeneratePrimitives reads --slider-track-fill, the
  * filled part; --slider-track, the rest of the rail; --slider-tick, the step
  * ticks) and its thumb, the toggle's knob, the checkbox's box and the scrollbar's
- * thumb; and the `hidden` class the controls set on parts they are not showing
- * (a slider's second thumb outside range mode, a dock tab bar's scroll buttons).
+ * thumb; the `hidden` class the controls set on parts they are not showing
+ * (a slider's second thumb outside range mode, a dock tab bar's scroll buttons);
+ * and MarkdownText, whose words would otherwise stack one per line.
  * Colours are the variables below; a theme recolours a control by setting the
  * variable.
  */
@@ -30,6 +31,13 @@
     --ui_color_checkbox_box_border: #777777;
     --ui_color_checkbox_box_checked: #3B85E0;
     --ui_color_scrollbar_thumb: #808080;
+    --ui_color_markdown_link: #4C9AFF;
+    --ui_color_markdown_link_hover: #8CC0FF;
+    --ui_color_markdown_muted: #9A9A9A;
+    --ui_color_markdown_code_inline: rgba(128, 128, 128, 0.2);
+    --ui_color_markdown_code_block: rgba(0, 0, 0, 0.25);
+    --ui_color_markdown_line: rgba(128, 128, 128, 0.4);
+    --ui_color_markdown_table_header: rgba(128, 128, 128, 0.12);
 }
 
 .hidden {
@@ -76,4 +84,250 @@
 
 .scrollbar-thumb {
     background-color: var(--ui_color_scrollbar_thumb);
+}
+
+/* MarkdownText: only what Markdown adds. The element's own font, size, line
+ * height and color are the text's, set by the document that holds it, and
+ * every block inherits them. Inline text is one label per word in a wrapping
+ * row, so a line breaks between words. */
+
+.markdown-text {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+}
+
+/* The space above a block: a block gap, more above a heading, little under a
+ * heading and between the items of one list, none above the first block
+ * (MarkdownText sets the class from the block before). Later rules win. */
+.markdown-block {
+    margin-top: 10px;
+}
+
+.markdown-heading {
+    margin-top: 14px;
+    font-weight: 700;
+}
+
+.markdown-after-heading {
+    margin-top: 4px;
+}
+
+.markdown-list-continued {
+    margin-top: 3px;
+}
+
+.markdown-block-first {
+    margin-top: 0;
+}
+
+.markdown-flow {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    min-width: 0;
+}
+
+/* A word keeps the spaces after it (pre: a wrapping label would drop them). */
+.markdown-word {
+    white-space: pre;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+/* A long word (a path, an address) may be wider than the line: it shrinks to
+ * the line and wraps inside itself, so it shows whole. MarkdownText gives its
+ * spaces a label of their own. */
+.markdown-word-long {
+    white-space: normal;
+    overflow-wrap: break-word;
+}
+
+/* A word whose look changes inside it stays on one line. */
+.markdown-word-group {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.markdown-break {
+    width: 100%;
+    height: 0;
+}
+
+.markdown-strong {
+    font-weight: 700;
+}
+
+.markdown-emphasis {
+    font-style: italic;
+}
+
+.markdown-code {
+    padding: 0 4px;
+    border-radius: 3px;
+    border: 1px solid var(--ui_color_markdown_line);
+    font-family: var(--ui_font_mono, monospace);
+    background-color: var(--ui_color_markdown_code_inline);
+}
+
+/* An underline drawn as a bottom border, pulled into the line's own box so a
+ * line with a link is no taller than one without. */
+.markdown-link {
+    margin-bottom: -1px;
+    border-bottom: 1px solid var(--ui_color_markdown_link);
+    color: var(--ui_color_markdown_link);
+    cursor: pointer;
+}
+
+.markdown-link-hover {
+    border-bottom-color: var(--ui_color_markdown_link_hover);
+    color: var(--ui_color_markdown_link_hover);
+}
+
+.markdown-heading-1 {
+    font-size: 130%;
+}
+
+.markdown-heading-2 {
+    font-size: 115%;
+}
+
+.markdown-list-item {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    min-width: 0;
+}
+
+.markdown-list-item-nested {
+    padding-left: 20px;
+}
+
+.markdown-list-marker {
+    flex-shrink: 0;
+    min-width: 20px;
+    padding-right: 4px;
+    color: var(--ui_color_markdown_muted);
+}
+
+/* The marker label holding a bullet is empty of ink and sits on the line's
+ * baseline; the dot is drawn 7 px above it, on the middle of 14 px text's
+ * lowercase letters. */
+.markdown-bullet {
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin-top: -7px;
+    border-radius: 3px;
+    background-color: var(--ui_color_markdown_muted);
+}
+
+.markdown-bullet-nested {
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin-top: -7px;
+    border-radius: 3px;
+    border: 1px solid var(--ui_color_markdown_muted);
+}
+
+.markdown-list-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
+}
+
+.markdown-code-block {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 4px 10px 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--ui_color_markdown_line);
+    background-color: var(--ui_color_markdown_code_block);
+}
+
+.markdown-code-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.markdown-code-language {
+    flex-grow: 1;
+    font-size: 12px;
+    color: var(--ui_color_markdown_muted);
+}
+
+.markdown-code-copy {
+    flex-shrink: 0;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    color: var(--ui_color_markdown_muted);
+    background-color: var(--ui_color_markdown_code_inline);
+    cursor: pointer;
+}
+
+/* Long lines scroll sideways; the vertical wheel scrolls the page around the
+ * block. */
+.markdown-code-scroll {
+    --ui_scrollview_keep_wheel_axis: 1;
+    flex-grow: 0;
+}
+
+.markdown-code-text {
+    font-family: var(--ui_font_mono, monospace);
+    white-space: pre;
+}
+
+.markdown-quote {
+    padding-left: 10px;
+    border-left: 3px solid var(--ui_color_markdown_line);
+    color: var(--ui_color_markdown_muted);
+}
+
+.markdown-rule {
+    height: 1px;
+    background-color: var(--ui_color_markdown_line);
+}
+
+.markdown-table {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--ui_color_markdown_line);
+    border-radius: 4px;
+}
+
+.markdown-table-header {
+    display: flex;
+    flex-direction: row;
+    font-weight: 700;
+    background-color: var(--ui_color_markdown_table_header);
+}
+
+.markdown-table-row {
+    display: flex;
+    flex-direction: row;
+    border-top: 1px solid var(--ui_color_markdown_line);
+}
+
+.markdown-table-cell {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
+    min-width: 0;
+    padding: 4px 8px;
 }

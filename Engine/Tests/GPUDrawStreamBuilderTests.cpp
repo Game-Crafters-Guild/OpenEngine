@@ -6,11 +6,14 @@
 
 #include <gtest/gtest.h>
 
+#include "Memory/AllocationCountScope.h"
+#include "Memory/ScratchScope.h"
 #include "Rendering/Core/BarrierMapping.h"
 #include "Rendering/Core/BatchRegistry.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
 #include "Rendering/Core/GPUInstanceDepthClass.h"
+#include "BatchTableTesting.h"
 #include "TestDeviceHelper.h"
 
 #include <cstdint>
@@ -307,7 +310,7 @@ TEST(BuildShadowBatchTable, MergesEligibleMaterialsOfSameMeshAndSide)
     const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
 
     uint32_t total = 0u;
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {}, &total);
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {}, &total);
 
     // mat0 + mat1 (both single-sided eligible) on mesh 10 collapse to one
     // single-sided sentinel row with summed count 3 + 2 = 5.
@@ -328,7 +331,7 @@ TEST(BuildShadowBatchTable, SingleAndDoubleSidedEligibleSplitBySentinel)
     const BatchRegistry reg = MakeMixedRegistry();
     const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
 
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {});
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {});
 
     // Same mesh 10, opposite sidedness -> two separate class-sentinel rows.
     const auto ss =
@@ -346,7 +349,7 @@ TEST(BuildShadowBatchTable, MaterialDependentKeepsIdentity)
     const BatchRegistry reg = MakeMixedRegistry();
     const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
 
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {});
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {});
 
     // mat3 is dependent: it must NOT fold into a sentinel; it keeps its real
     // (materialIndex, mesh) row, and no sentinel absorbed its count.
@@ -360,7 +363,7 @@ TEST(BuildShadowBatchTable, SentinelsSortAboveRealMaterialIndices)
     const BatchRegistry reg = MakeMixedRegistry();
     const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
 
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {});
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {});
 
     // Rows are sorted by (materialIndex, meshIndex); the two sentinels are the
     // top of the 24-bit domain, so every real materialIndex sorts before them.
@@ -385,9 +388,9 @@ TEST(BuildShadowBatchTable, TotalRecordsEqualsColorTableTotal)
     const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
 
     uint32_t colorTotal = 0u;
-    const auto color = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &colorTotal);
+    const auto color = BatchTableTesting::Build(reg, {}, &colorTotal);
     uint32_t shadowTotal = 0u;
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {}, &shadowTotal);
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {}, &shadowTotal);
 
     // Merging only reduces the row count, never the record count.
     EXPECT_EQ(colorTotal, 17u);
@@ -400,7 +403,7 @@ TEST(BuildShadowBatchTable, EmptyClassSpanDegradesToMaterialDependent)
     const BatchRegistry reg = MakeMixedRegistry();
 
     uint32_t total = 0u;
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, {}, {}, &total);
+    const auto shadow = BatchTableTesting::BuildShadow(reg, {}, {}, &total);
 
     // With no class information every material is treated as dependent, so no
     // sentinel rows appear and each (mat, mesh) keeps its identity — same shape
@@ -435,7 +438,7 @@ TEST(BuildBatchTableParity, SplitsMirroredIntoSiblingSortedAfterEven)
     for (int i = 0; i < 2; ++i) reg.OnInstanceAdded(2u, 5u, /*mirrored=*/true);
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &total);
+    const auto table = BatchTableTesting::Build(reg, {}, &total);
     ASSERT_EQ(table.size(), 2u);
     EXPECT_EQ(total, 5u); // conservation: even(3) + odd(2)
 
@@ -456,7 +459,7 @@ TEST(BuildBatchTableParity, AllMirroredBatchProducesOnlyTheParityOneRow)
     for (int i = 0; i < 4; ++i) reg.OnInstanceAdded(1u, 9u, /*mirrored=*/true);
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &total);
+    const auto table = BatchTableTesting::Build(reg, {}, &total);
     ASSERT_EQ(table.size(), 1u);
     EXPECT_EQ(total, 4u);
     EXPECT_EQ(table[0].meshIndex, 9u | kTestMeshParityBit) << "no even instances → no parity-0 row";
@@ -469,7 +472,7 @@ TEST(BuildBatchTableParity, MirrorFreeRegistryIsByteIdenticalToPreParityLayout)
     // way, no parity bit set — the bench-invariant guarantee by construction.
     const BatchRegistry reg = MakeMixedRegistry();
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &total);
+    const auto table = BatchTableTesting::Build(reg, {}, &total);
     EXPECT_EQ(total, 17u);
     EXPECT_EQ(table.size(), reg.BatchCount()); // one row per batch, no extra parity rows
     for (const auto& e : table)
@@ -491,7 +494,7 @@ TEST(BuildShadowBatchTableParity, DoubleSidedSentinelDoesNotSplit)
     for (int i = 0; i < 2; ++i) reg.OnInstanceAdded(0u, 10u, /*mirrored=*/true);
     const std::vector<uint8_t> classes{kDS};
 
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {});
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {});
     const auto ds0 =
         FindEntry(shadow, GPUDrawStreamBuilder::kSharedDepthDoubleSidedSentinel, 10u);
     ASSERT_TRUE(ds0.has_value());
@@ -513,7 +516,7 @@ TEST(BuildShadowBatchTableParity, SingleSidedAndDependentSplit)
     reg.OnInstanceAdded(1u, 10u, /*mirrored=*/true);                              // dependent mirrored
     const std::vector<uint8_t> classes{kSS, kDep};
 
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, {});
+    const auto shadow = BatchTableTesting::BuildShadow(reg, classes, {});
     // SS sentinel: parity-0 (3) + parity-1 (2).
     const auto ss0 = FindEntry(shadow, GPUDrawStreamBuilder::kSharedDepthSingleSidedSentinel, 10u);
     const auto ss1 = FindEntry(shadow, GPUDrawStreamBuilder::kSharedDepthSingleSidedSentinel,
@@ -561,7 +564,7 @@ TEST(BuildColorBatchTable, MergesSameClassMaterialsAndKeepsIdentityRows)
     const std::vector<uint32_t> map{kC0, kC0, 2u};
 
     uint32_t total = 0u;
-    const auto color = GPUDrawStreamBuilder::BuildColorBatchTable(reg, map, {}, &total);
+    const auto color = BatchTableTesting::BuildColor(reg, map, {}, &total);
 
     // mat0 + mat1 on mesh 10 collapse into one class-C0 row (3 + 2 = 5).
     const auto c10 = FindEntry(color, kC0, 10u);
@@ -585,9 +588,9 @@ TEST(BuildColorBatchTable, TotalRecordsEqualsUnmergedColorTable)
     const std::vector<uint32_t> map{kC0, kC0, 2u};
 
     uint32_t baseTotal = 0u;
-    const auto base = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &baseTotal);
+    const auto base = BatchTableTesting::Build(reg, {}, &baseTotal);
     uint32_t mergedTotal = 0u;
-    const auto merged = GPUDrawStreamBuilder::BuildColorBatchTable(reg, map, {}, &mergedTotal);
+    const auto merged = BatchTableTesting::BuildColor(reg, map, {}, &mergedTotal);
 
     // Merging only reduces the row count, never the record count (preserves the
     // shadowRecords == colorRecords contract in ScheduleUnifiedScatter).
@@ -608,7 +611,7 @@ TEST(BuildColorBatchTable, EmptySpanDegradesToUnmergedTable)
     const BatchRegistry reg = MakeColorRegistry();
 
     uint32_t total = 0u;
-    const auto color = GPUDrawStreamBuilder::BuildColorBatchTable(reg, {}, {}, &total);
+    const auto color = BatchTableTesting::BuildColor(reg, {}, {}, &total);
 
     // No class information -> every material keeps identity, same shape as
     // BuildBatchTable. Safe fallback (nothing merges wrongly).
@@ -625,7 +628,7 @@ TEST(BuildColorBatchTable, ClassIdDomainStaysDisjointFromRealMaterialIndices)
     const BatchRegistry reg = MakeColorRegistry();
     const std::vector<uint32_t> map{kC0, kC0, 2u};
 
-    const auto color = GPUDrawStreamBuilder::BuildColorBatchTable(reg, map, {});
+    const auto color = BatchTableTesting::BuildColor(reg, map, {});
 
     // Every merged (class) row's key is a downward-from-base class id; every
     // identity row's key is a small real materialIndex. The two domains must be
@@ -666,7 +669,7 @@ TEST(BuildColorBatchTableDeathTest, DomainDisjointnessAssertFiresOnAliasingClass
     // Synthetic violation: mat0 maps to class value 1, but mat1 is identity 1 —
     // the class id aliases a real materialIndex present in the same table.
     const std::vector<uint32_t> bad{1u, 1u};
-    ASSERT_DEATH({ GPUDrawStreamBuilder::BuildColorBatchTable(reg, bad, {}); }, "");
+    ASSERT_DEATH({ BatchTableTesting::BuildColor(reg, bad, {}); }, "");
 }
 #endif
 
@@ -685,7 +688,7 @@ TEST(BuildGroupedTables, MergesRowsAcrossMeshesSharingPoolGroup)
 
     const std::vector<uint32_t> groups{5u, 5u, 9u};
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, groups, &total);
+    const auto table = BatchTableTesting::Build(reg, groups, &total);
     ASSERT_EQ(table.size(), 2u);
     EXPECT_EQ(total, 3u);
     EXPECT_EQ(table[0].materialIndex, 1u);
@@ -709,7 +712,7 @@ TEST(BuildGroupedTables, ColorClassAndGroupAxesComposeSigmaPreserved)
     const std::vector<uint32_t> groups{4u, 4u, 6u};
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildColorBatchTable(reg, classMap, groups, &total);
+        BatchTableTesting::BuildColor(reg, classMap, groups, &total);
     ASSERT_EQ(table.size(), 2u);
     EXPECT_EQ(total, 3u);
     // (2, 6) identity row sorts below (C0, 4).
@@ -732,7 +735,7 @@ TEST(BuildGroupedTables, ShadowDoubleSidedSentinelDoesNotSplitOnGroupAxis)
     const std::vector<uint32_t> groups{3u, 3u};
     uint32_t total = 0u;
     const auto shadow =
-        GPUDrawStreamBuilder::BuildShadowBatchTable(reg, classes, groups, &total);
+        BatchTableTesting::BuildShadow(reg, classes, groups, &total);
     ASSERT_EQ(shadow.size(), 1u) << "DS sentinel collapses parity on the group axis too";
     EXPECT_EQ(total, 2u);
     EXPECT_EQ(shadow[0].materialIndex, GPUDrawStreamBuilder::kSharedDepthDoubleSidedSentinel);
@@ -748,7 +751,7 @@ TEST(BuildGroupedTables, ParitySiblingsSplitOnGroupAxis)
 
     const std::vector<uint32_t> groups{2u, 2u};
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, groups, &total);
+    const auto table = BatchTableTesting::Build(reg, groups, &total);
     ASSERT_EQ(table.size(), 2u);
     EXPECT_EQ(total, 2u);
     EXPECT_EQ(table[0].meshIndex, 2u);              // parity-0 group row
@@ -765,7 +768,7 @@ TEST(BuildGroupedTables, MeshesPastTheSpanMergeUnderTheAbsentKey)
 
     const std::vector<uint32_t> groups{0u, 0u};
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, groups, &total);
+    const auto table = BatchTableTesting::Build(reg, groups, &total);
     // Both rows merge under the absent pseudo group; Σ capacities preserved.
     // Dead rows by construction: their instances self-reject at the scatter's
     // mesh-row checks, and consumers skip them via the entry-missing guard.
@@ -773,6 +776,60 @@ TEST(BuildGroupedTables, MeshesPastTheSpanMergeUnderTheAbsentKey)
     EXPECT_EQ(table[0].meshIndex, 0xFFFFFFu);
     EXPECT_EQ(table[0].capacity, 2u);
     EXPECT_EQ(total, 2u);
+}
+
+// The tables and the builders' merge maps live in the caller's ScratchScope, so a steady caller
+// takes nothing from the heap: every builder, the pool-grouped (merging) path included.
+TEST(BuildGroupedTables, BatchTablesAllocateNothingAfterWarmup)
+{
+    BatchRegistry reg = MakeMixedRegistry();
+    reg.OnInstanceAdded(1u, 20u, /*mirrored=*/true);
+    reg.OnInstanceAdded(3u, 20u, /*mirrored=*/true);
+    const std::vector<uint8_t> classes{kSS, kSS, kDS, kDep};
+    const uint32_t c0 = GPUDrawStreamBuilder::kColorClassBase;
+    const std::vector<uint32_t> colorClass{c0, c0, 2u, 3u};
+    std::vector<uint32_t> groups(21, 0u);
+    groups[10] = 1u;
+    groups[20] = 2u;
+
+    constexpr int kWarmupCalls = 4;
+    constexpr int kMeasuredCalls = 64;
+    uint64_t allocations = 0;
+    size_t rows[4]{};
+    uint32_t totals[4]{};
+    for (int call = 0; call < kWarmupCalls + kMeasuredCalls; ++call)
+    {
+        GameEngine::Memory::AllocationCountScope count(GameEngine::Memory::CountWindow::ThisThread);
+        {
+            GameEngine::Memory::ScratchScope scratch;
+            const size_t capacity = GPUDrawStreamBuilder::BatchTableCapacity(reg);
+            rows[0] = GPUDrawStreamBuilder::BuildBatchTable(
+                          reg, {}, scratch.AllocateArrayForOverwrite<BatchTableEntry>(capacity),
+                          scratch.Resource(), &totals[0])
+                          .size();
+            rows[1] = GPUDrawStreamBuilder::BuildBatchTable(
+                          reg, groups, scratch.AllocateArrayForOverwrite<BatchTableEntry>(capacity),
+                          scratch.Resource(), &totals[1])
+                          .size();
+            rows[2] = GPUDrawStreamBuilder::BuildShadowBatchTable(
+                          reg, classes, groups, scratch.AllocateArrayForOverwrite<BatchTableEntry>(capacity),
+                          scratch.Resource(), &totals[2])
+                          .size();
+            rows[3] = GPUDrawStreamBuilder::BuildColorBatchTable(
+                          reg, colorClass, groups,
+                          scratch.AllocateArrayForOverwrite<BatchTableEntry>(capacity), scratch.Resource(),
+                          &totals[3])
+                          .size();
+        }
+        if (call >= kWarmupCalls)
+            allocations += count.Count();
+    }
+    for (int build = 0; build < 4; ++build)
+    {
+        EXPECT_GT(rows[build], 0u) << "build " << build;
+        EXPECT_EQ(totals[build], 19u) << "build " << build;
+    }
+    EXPECT_EQ(allocations, 0u) << "over " << kMeasuredCalls << " calls of four builds";
 }
 
 // ---- Crossfade tail region -------------------------------------------------
@@ -809,8 +866,8 @@ TEST(GPUDrawStreamCrossfadeTail, ColourAndShadowTablesKeepEqualRecordTotals)
     const std::vector<uint8_t> depthClass(4u, kSS);
 
     uint32_t colorTotal = 0u, shadowTotal = 0u;
-    const auto color = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &colorTotal);
-    (void)GPUDrawStreamBuilder::BuildShadowBatchTable(reg, depthClass, {}, &shadowTotal);
+    const auto color = BatchTableTesting::Build(reg, {}, &colorTotal);
+    (void)BatchTableTesting::BuildShadow(reg, depthClass, {}, &shadowTotal);
 
     EXPECT_EQ(shadowTotal, colorTotal);
     EXPECT_EQ(colorTotal, 4u) << "capacity is the snapshot live count, never scaled";
@@ -860,7 +917,9 @@ TEST(GPUDrawStreamCrossfadeTail, PerSliceCursorBlocksTileTheClaimWithoutAliasing
         const uint32_t blockEnd = offsets[s] + kHalf * 2u;
         EXPECT_LE(offsets[s] + kHalf + kHalf, blockEnd) << "tail half escapes slice " << s;
         if (s + 1 < offsets.size())
+        {
             EXPECT_LE(blockEnd, offsets[s + 1]) << "slice " << s << " overlaps its successor";
+        }
     }
 }
 

@@ -16,6 +16,7 @@ namespace GameEngine
 {
     void SceneViewController::OnEntityPicked(ECS::EntityHandle, bool, bool, bool) {}
     void SceneViewController::FrameOrigin() {}
+    void SceneViewController::StartCameraTween(const SceneViewCameraPose&, float) {}
     void SceneViewController::SetHoverEntity(ECS::EntityHandle, bool, HoverEntitySource) {}
 }
 

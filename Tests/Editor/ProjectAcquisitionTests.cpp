@@ -5,6 +5,7 @@
 
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Projects/ProjectAcquisition.h"
+#include "ScopedEditorUserDataRoot.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -21,23 +22,6 @@ using GameEngine::Editor::ProjectAcquireStatus;
 using GameEngine::Editor::ProjectAcquisition;
 using GameEngine::Editor::ProjectSourceType;
 
-namespace
-{
-
-void SetUserDataRoot(const char* value)
-{
-#ifdef _WIN32
-    _putenv_s("GE_EDITOR_USER_DATA_ROOT", value ? value : "");
-#else
-    if (value)
-        setenv("GE_EDITOR_USER_DATA_ROOT", value, 1);
-    else
-        unsetenv("GE_EDITOR_USER_DATA_ROOT");
-#endif
-}
-
-} // namespace
-
 // With the pool's only compute worker held, a template copy still completes.
 TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
 {
@@ -49,7 +33,7 @@ TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
         std::ofstream file(root / "templates" / "empty" / "Assets" / "readme.txt");
         file << "template";
     }
-    SetUserDataRoot((root / "user").string().c_str());
+    const ScopedEditorUserDataRoot userDataRoot(root / "user");
 
     JobSystem::WorkStealingThreadPool pool(1);
     std::promise<void> release;
@@ -87,7 +71,6 @@ TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
         << "the acquisition waited for the held compute worker (" << status.Error << ")";
     EXPECT_TRUE(fs::exists(root / "projects" / "Acquired" / "Assets" / "readme.txt"));
 
-    SetUserDataRoot(nullptr);
     std::error_code ec;
     fs::remove_all(root, ec);
 }

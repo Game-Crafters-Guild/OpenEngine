@@ -10,12 +10,14 @@
 # and the message names that tree, while a root recording this tree is not,
 # however the tree is spelled; a root with no record, or an unreadable one, is
 # not a refusal, and says so rather than passing silently once the root is
-# populated. The installed-set record is written on first sight, accepts an
-# unchanged set, refuses a changed version and an ABI-only change — the shape
-# a toolset update takes — and keeps refusing until the build directory goes,
-# rather than adopting the new set. A package added or removed since the
-# record is not a refusal: nothing was compiled against an added one, and a
-# removed one fails the link out loud.
+# populated. The installed-set record is written on first sight and accepts an
+# unchanged set. A changed version is adopted in place and recorded, and so is
+# a package rebuilt at its version against a dependency that moved, directly
+# or through another such package. An ABI-only change with no moved dependency
+# — the shape a toolset update takes — is refused, and keeps being refused
+# until the build directory goes, rather than adopting the new set. A package
+# added or removed since the record is not a refusal: nothing was compiled
+# against an added one, and a removed one fails the link out loud.
 if(NOT DEFINED SCRIPT OR NOT DEFINED WORK)
     message(FATAL_ERROR "VcpkgInstallGuardTest.cmake: SCRIPT and WORK are required")
 endif()
@@ -62,6 +64,33 @@ function(expect_guard_ok case)
     if(NOT _rc EQUAL 0)
         message(FATAL_ERROR "${case}: the guard refused a valid state (exit ${_rc}): ${_text}")
     endif()
+endfunction()
+
+# expect_guard_adopted(<case> <expected substring>... -- <guard args>...)
+function(expect_guard_adopted case)
+    set(_expected "")
+    set(_args "")
+    set(_inArgs FALSE)
+    foreach(_item IN LISTS ARGN)
+        if(_item STREQUAL "--")
+            set(_inArgs TRUE)
+        elseif(_inArgs)
+            list(APPEND _args "${_item}")
+        else()
+            list(APPEND _expected "${_item}")
+        endif()
+    endforeach()
+    run_guard(_rc _text ${_args})
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "${case}: the guard refused a move it must adopt (exit ${_rc}): ${_text}")
+    endif()
+    foreach(_needle IN LISTS _expected ITEMS "adopted in place")
+        string(FIND "${_text}" "${_needle}" _at)
+        if(_at LESS 0)
+            message(FATAL_ERROR
+                "${case}: the adoption does not state \"${_needle}\".\n  Message: ${_text}")
+        endif()
+    endforeach()
 endfunction()
 
 # expect_record_holds(<case> <expected record line>...)
@@ -324,18 +353,37 @@ write_status("${_curlOld}" "${_curlFeature}" "${_shadercOld}" "${_hostNew}"
              "${_tinyexpr}" "${_glfwBack}")
 expect_guard_ok("a removed package reinstalled at a new version" ${_setArgs})
 
-# A baseline bump: same package, new version.
+# A baseline bump: same package, new version. The installer has replaced the
+# package; adopted in place, and recorded. A package built from source keeps
+# its archive's timestamps, older than the objects that include it, so the
+# guard touches the headers its file list names (and nothing else it installed)
+# for those objects to recompile.
 package_paragraph(curl 8.22.0 "" abi-curl-new "install ok installed" _curlNew)
 write_status("${_curlNew}" "${_curlFeature}" "${_shadercOld}" "${_hostNew}"
              "${_tinyexpr}" "${_glfwBack}")
-expect_guard_refused("a changed package version"
-    "curl 8.21.0#1 -> 8.22.0#0" "delete ${_build} and reconfigure"
+file(WRITE "${_installed}/vcpkg/info/curl_8.22.0_${_triplet}.list"
+     "${_triplet}/\n${_triplet}/include/\n${_triplet}/include/curl/\n"
+     "${_triplet}/include/curl/curl.h\n${_triplet}/lib/libcurl.lib\n")
+file(WRITE "${_installed}/${_triplet}/include/curl/curl.h" "")
+file(WRITE "${_installed}/${_triplet}/lib/libcurl.lib" "")
+file(TIMESTAMP "${_installed}/${_triplet}/include/curl/curl.h" _headerBefore "%s")
+file(TIMESTAMP "${_installed}/${_triplet}/lib/libcurl.lib" _libraryBefore "%s")
+execute_process(COMMAND ${CMAKE_COMMAND} -E sleep 1.1)
+expect_guard_adopted("a changed package version"
+    "curl 8.21.0#1 -> 8.22.0#0" "recompiles the objects that include them"
     -- ${_setArgs})
-
-# The record must not be adopted by the failure it reported.
-expect_guard_refused("a changed package version, checked twice"
-    "curl 8.21.0#1 -> 8.22.0#0"
-    -- ${_setArgs})
+expect_record_holds("a changed package version" "curl|8.22.0#0|abi-curl-new")
+file(TIMESTAMP "${_installed}/${_triplet}/include/curl/curl.h" _headerAfter "%s")
+file(TIMESTAMP "${_installed}/${_triplet}/lib/libcurl.lib" _libraryAfter "%s")
+if(NOT _headerAfter GREATER _headerBefore)
+    message(FATAL_ERROR
+        "a changed package version: the adopted package's header kept its timestamp "
+        "(${_headerBefore}); objects that include it would not recompile")
+endif()
+if(NOT _libraryAfter EQUAL _libraryBefore)
+    message(FATAL_ERROR "a changed package version: a file outside include/ was touched")
+endif()
+expect_guard_ok("a changed package version, checked twice" ${_setArgs})
 
 # A toolset update: same versions, every ABI hash new.
 package_paragraph(shaderc 2026.3 "" abi-shaderc-new "install ok installed" _shadercNew)
@@ -382,8 +430,8 @@ expect_record_holds("a package purged from the set" "tinyexpr|1.1.1#0|abi-tinyex
 package_paragraph(tinyexpr 2.0 "" abi-tinyexpr-new "install ok installed" _tinyexprBack)
 write_status("${_curlOld}" "${_curlFeature}" "${_shadercNew}" "${_hostNew}"
              "${_tinyexpr}" "${_glfwBack}" "${_tinyexprGone}" "${_tinyexprBack}")
-expect_guard_refused("a purged package reinstalled at a new version"
-    "tinyexpr 1.1.1#0 -> 2.0#0" "delete ${_build} and reconfigure"
+expect_guard_adopted("a purged package reinstalled at a new version"
+    "tinyexpr 1.1.1#0 -> 2.0#0"
     -- ${_setArgs})
 
 # A ";" inside a paragraph — a Description carries prose — must not split the
@@ -406,5 +454,52 @@ file(WRITE "${_installed}/vcpkg/status"
 expect_guard_refused("a changed package whose description contains a semicolon"
     "semicolon-port 1.0#0 (ABI only)" "delete ${_build} and reconfigure"
     -- ${_setArgs})
+
+# A version move rebuilds the ports that depend on it at their own versions:
+# a new ABI with unchanged headers that is the consequence of a moved
+# dependency, which the objects that include the dependency's headers already
+# answer. Adopted, through a chain (freetype on libpng on zlib) as well; the
+# dependency is named the way vcpkg spells it, with a triplet or features.
+file(REMOVE_RECURSE "${_build}")
+file(MAKE_DIRECTORY "${_build}")
+# dependent_paragraph(<name> <version> <abi> <Depends value> <out>)
+function(dependent_paragraph name version abi depends outVar)
+    set(${outVar} "Package: ${name}\nVersion: ${version}\nDepends: ${depends}\nArchitecture: ${_triplet}\nMulti-Arch: same\nAbi: ${abi}\nStatus: install ok installed" PARENT_SCOPE)
+endfunction()
+package_paragraph(zlib 1.3.1 "" abi-zlib-old "install ok installed" _zlibOld)
+package_paragraph(zlib 1.3.2 "" abi-zlib-new "install ok installed" _zlibNew)
+dependent_paragraph(libpng 1.6.50 abi-png-old "vcpkg-cmake:x64-windows, zlib" _pngOld)
+dependent_paragraph(libpng 1.6.50 abi-png-new "vcpkg-cmake:x64-windows, zlib" _pngNew)
+dependent_paragraph(libpng 1.6.50 abi-png-newer "vcpkg-cmake:x64-windows, zlib" _pngNewer)
+dependent_paragraph(freetype 2.13.3 abi-ft-old "libpng[core]" _ftOld)
+dependent_paragraph(freetype 2.13.3 abi-ft-new "libpng[core]" _ftNew)
+write_status("${_zlibOld}" "${_pngOld}" "${_ftOld}" "${_shadercOld}")
+expect_guard_ok("first sight of a dependency chain" ${_setArgs})
+write_status("${_zlibNew}" "${_pngNew}" "${_ftNew}" "${_shadercOld}")
+expect_guard_adopted("dependents rebuilt against a moved dependency"
+    "zlib 1.3.1#0 -> 1.3.2#0" "libpng 1.6.50#0 (rebuilt against zlib)"
+    "freetype 2.13.3#0 (rebuilt against libpng)"
+    -- ${_setArgs})
+expect_record_holds("dependents rebuilt against a moved dependency"
+    "zlib|1.3.2#0|abi-zlib-new" "libpng|1.6.50#0|abi-png-new" "freetype|2.13.3#0|abi-ft-new")
+
+# The same dependent rebuilt again with nothing it depends on moving is an
+# ABI-only change like any other.
+write_status("${_zlibNew}" "${_pngNewer}" "${_ftNew}" "${_shadercOld}")
+expect_guard_refused("a dependent rebuilt with no moved dependency"
+    "libpng 1.6.50#0 (ABI only)" "delete ${_build} and reconfigure"
+    -- ${_setArgs})
+
+# A toolset update during a version move: the moved package and its dependents
+# are adopted, an unrelated package at a new ABI still refuses.
+file(REMOVE_RECURSE "${_build}")
+file(MAKE_DIRECTORY "${_build}")
+write_status("${_zlibOld}" "${_pngOld}" "${_shadercOld}")
+expect_guard_ok("first sight before a mixed move" ${_setArgs})
+write_status("${_zlibNew}" "${_pngNew}" "${_shadercNew}")
+expect_guard_refused("a version move together with an unrelated ABI-only change"
+    "shaderc 2026.3#0 (ABI only)" "delete ${_build} and reconfigure"
+    -- ${_setArgs})
+expect_record_holds("a refused mixed move" "zlib|1.3.1#0|abi-zlib-old")
 
 file(REMOVE_RECURSE "${WORK}")

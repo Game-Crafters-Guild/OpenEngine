@@ -29,9 +29,9 @@ public:
     /// primary world. False, with the reason in `outError`, when any step fails.
     bool Start(std::string& outError);
 
-    /// Sizes the window to the canvas's CSS size; the drawing buffer follows at the device
-    /// pixel ratio.
-    void Resize(int width, int height);
+    /// Sizes the window to the canvas's CSS size; the drawing buffer is that size times
+    /// `devicePixelRatio`.
+    void Resize(int width, int height, double devicePixelRatio);
 
     /// Null before Start succeeds and after Shutdown.
     Engine::Renderer::RenderServices* GetRenderServices() const;

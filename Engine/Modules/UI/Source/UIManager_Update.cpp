@@ -58,7 +58,6 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
-// ThreadLocalScratchResource.h removed: PMR scratch allocator no longer used in this file
 
 #include <cmath>
 #include <vector>
@@ -177,8 +176,8 @@ void UIManager::Update(float deltaTime, bool interactive)
     // Stage 5 Block D: refresh the :focus-within chain. Marks any element
     // entering or leaving the chain dirty so its style re-cascades with
     // the new FocusWithin flag. Cheap when m_FocusId is stable — the
-    // FindById walk + parent ascent is O(N + depth) and only the symmetric
-    // difference triggers MarkDirty calls.
+    // indexed FindById plus the parent ascent is O(depth) and only the
+    // symmetric difference triggers MarkDirty calls.
     RebuildFocusWithinChain();
 
     // Diagnostics for redundant-BuildYoga investigation. Populated throughout
@@ -473,7 +472,7 @@ void UIManager::Update(float deltaTime, bool interactive)
                 }
                 if (!cap && !m_CaptureId.empty())
                 {
-                    cap = root->FindById(m_CaptureId);
+                    cap = root->FindById(HashStringId(m_CaptureId));
                 }
                 if (cap)
                 {

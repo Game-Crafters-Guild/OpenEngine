@@ -33,6 +33,7 @@ void main()
 
         accum += transmittance * lighting.rgb * scatterWeight;
         transmittance *= stepT;
+        // Absolute in-scatter (P = 1 by construction); volumetric_fog_composite.frag applies P.
         imageStore(uOutIntegrated, ivec3(gid, z), vec4(accum, transmittance));
     }
 }

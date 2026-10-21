@@ -107,9 +107,10 @@ bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
         outConfig.CMakeExe = "cmake";
     const std::string includeDir = get("includedir");
     const std::string importLib = get("importlib");
-    if (includeDir.empty() || importLib.empty())
+    const std::string engineBinary = get("enginebinary");
+    if (includeDir.empty() || importLib.empty() || engineBinary.empty())
     {
-        outError = "SDK manifest is missing includedir / importlib";
+        outError = "SDK manifest is missing includedir / importlib / enginebinary";
         return false;
     }
     // The SDK root anchors every engine path below; the generator emits them through
@@ -128,6 +129,7 @@ bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
     for (const std::string& dir : engineIncludes)
         outConfig.IncludeDirs.emplace_back(sdkRoot / dir);
     outConfig.EngineImportLib = sdkRoot / importLib;
+    outConfig.EngineBinary = sdkRoot / engineBinary;
     outConfig.SdkEntrySource = sdkRoot / get("sdkentry");
 
     // Compile definitions: the engine's public interface defs + the always-on globals.
@@ -147,24 +149,28 @@ bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
     // Editor-kind module configs and CLEARS them on Runtime/module-project
     // configs so runtime ABI digests stay editor-independent.
     outConfig.EditorImportLib.clear();
+    outConfig.EditorBinary.clear();
     outConfig.EditorIncludeDirs.clear();
     if (const std::string editorImportLib = get("editorimportlib"); !editorImportLib.empty())
     {
         outConfig.EditorImportLib = sdkRoot / editorImportLib;
+        if (const std::string editorBinary = get("editorbinary"); !editorBinary.empty())
+            outConfig.EditorBinary = sdkRoot / editorBinary;
         std::vector<std::string> editorIncludes;
         AppendSemicolonList(get("editorincludes"), editorIncludes);
         for (const std::string& dir : editorIncludes)
             outConfig.EditorIncludeDirs.emplace_back(sdkRoot / dir);
     }
 
-    // Scanner is optional — when dotnet or the scanner DLL is absent, BuildAndLoad runs
-    // in macros-only mode (no auto-detection of `: ECS::ComponentBase`).
     outConfig.DotnetExe = ResolveDotnetExecutable(get("dotnet"));
-    const std::string scanner = get("scannerdll");
-    outConfig.ComponentScannerDll = scanner.empty() ? std::filesystem::path{} : (sdkRoot / scanner);
+
+    // Scanner is optional — when it is absent, BuildAndLoad runs in macros-only mode (no
+    // auto-detection of `: ECS::ComponentBase`).
+    const std::string scanner = get("scanner");
+    outConfig.ComponentScannerExe = scanner.empty() ? std::filesystem::path{} : (sdkRoot / scanner);
     outConfig.DetectBase = "ComponentBase";
 
-    if (outConfig.DotnetExe.empty() || outConfig.ComponentScannerDll.empty())
+    if (outConfig.ComponentScannerExe.empty())
         Logger::Log::Info("[NativeScripting] SDK manifest has no scanner; user DLLs build in macros-only mode");
 
     return true;

@@ -112,7 +112,7 @@ void FillCullingDataFromView(const ViewCullingInput& view, uint32_t sliceInstanc
     cd.farPlane = view.farPlane;
     cd.firstInstance = view.firstInstance;
     cd.instanceCount = sliceInstanceCount;
-    cd.renderLayerMask = view.renderLayerMask;
+    cd.renderLayerMask = view.renderLayerMask.Bits;
     cd.frameIndex = view.frameIndex;
     cd.deltaTime = view.deltaTime;
     // Shadow dispatches (area light = kAreaShadowCullingIndex, or any per-view
@@ -640,7 +640,7 @@ void GPUCullingPipeline::ScheduleHzbCullPass(RenderGraph::RGFrame& frame,
             }
         },
         [pipeline, sampler, instances, visibility, prevVisible, stats, hzb, cdBuf = cd.Buffer,
-         cdOff = cd.Offset, pc, instanceBytes, visBytes, prevVisibleBytes, statsBytes, isPhaseB,
+         cdOff = cd.Offset, pc, instanceBytes, visBytes, prevVisibleBytes, isPhaseB,
          instanceCount = sliceInstanceCount](RenderGraph::RGContext& ctx)
         {
             DescriptorSetDesc setDesc{};
@@ -794,7 +794,7 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
         appendVec3(v.cameraRelativeOrigin);
         blob.Append(v.firstInstance);
         blob.Append(v.instanceCount);
-        blob.Append(v.renderLayerMask);
+        blob.Append(v.renderLayerMask.Bits);
         blob.Append(v.reserveOcclusionSlice);
         if (i < m_ViewVisibilityLayout.size())
         {
@@ -835,7 +835,7 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
         appendVec3(g.cameraRelativeOrigin);
         blob.Append(g.firstInstance);
         blob.Append(g.instanceCount);
-        blob.Append(g.renderLayerMask);
+        blob.Append(g.renderLayerMask.Bits);
     }
 
     blob.Append(static_cast<uint32_t>(m_OcclusionReservations.size()));
@@ -1115,7 +1115,7 @@ void GPUCullingPipeline::EndFrameRG()
         cd.farPlane = g.farPlane;
         cd.firstInstance = g.firstInstance;
         cd.instanceCount = g.instanceCount;
-        cd.renderLayerMask = g.renderLayerMask;
+        cd.renderLayerMask = g.renderLayerMask.Bits;
         cd.frameIndex = g.frameIndex;
         cd.deltaTime = g.deltaTime;
         // Shadow groups drop non-casters; a color fan-out (probe faces) keeps
@@ -1279,7 +1279,7 @@ RenderGraph::RGBuffer GPUCullingPipeline::ImportRuntimeVisible(RenderGraph::RGFr
                       static_cast<int32_t>(PassPhase::kEarlySetup),
                       [&](RenderGraph::RGPassBuilder& p)
                       { p.Write(rvRG, RenderGraph::RGBufferWrite::CopyDst); },
-                      [rvRG, cap](RenderGraph::RGContext& ctx)
+                      [rvRG](RenderGraph::RGContext& ctx)
                       { ctx.Cmd->FillBuffer(ctx.GetBuffer(rvRG), 0, cap * sizeof(uint32_t), 1u); });
     }
     return m_FrameRuntimeVisRG;
@@ -1467,7 +1467,7 @@ void GPUCullingPipeline::ScheduleRuntimeVisibilityAggregate(RenderGraph::RGFrame
                       // barrier in the exec handles fill-before-dispatch.
                       p.Write(rvRG, RenderGraph::RGBufferWrite::CopyDst);
                   },
-                  [pipeline, anyRG, rvRG, instances = sceneRG.Instances, cap, flagsBytesU, instBytes,
+                  [pipeline, anyRG, rvRG, instances = sceneRG.Instances, flagsBytesU, instBytes,
                    instanceCount](RenderGraph::RGContext& ctx)
                   {
                       BufferHandle rv = ctx.GetBuffer(rvRG);

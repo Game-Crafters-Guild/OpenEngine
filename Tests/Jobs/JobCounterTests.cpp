@@ -9,9 +9,11 @@
 
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/ParallelAlgorithms.h"
+#include "JobSystem/TaskSlabPool.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Memory/AllocationCountScope.h"
 
+#include "HeldWorkers.h"
 #include "TestPlatform.h"
 
 #include <gtest/gtest.h>
@@ -213,37 +215,59 @@ TEST(JobCounterTest, ReuseAcrossWaves)
 
 // Every ECS wave and parallel query forks on a fresh stack counter. Its tagged
 // queue is recycled whole, so after warmup a fork on a fresh counter
-// allocates nothing. The allocation counter sees operator new only: it catches
-// the queue object itself, while moodycamel takes its blocks and its producer
-// from std::malloc, which it does not see.
+// allocates nothing. The allocation counter sees the queue object and, through
+// JobSystem::QueueAllocationTraits, the queue's blocks, producer and block
+// index, so a fork that constructs or grows a queue reads nonzero.
+//
+// A thread's first slab release builds its producer in the slab freelist, a
+// one-time allocation per thread. The waiting test thread runs most of its own
+// jobs, so a worker can reach its first release late; the warm-up lasts until
+// every worker has released a slab, which its jobs do before marking it primed.
 TEST(JobCounterTest, ForkOnAFreshCounterAllocatesNothingAfterWarmup)
 {
     constexpr int kWarmup = 1000;
     constexpr int kForks = 10000;
     constexpr int kFanout = 8;
+    constexpr size_t kWorkers = 4;
 
-    JobSystem::WorkStealingThreadPool pool(4);
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
     std::atomic<uint64_t> sink{0};
-    auto fork = [&pool, &sink]
+    std::array<std::atomic<bool>, kWorkers> primed{};
+    auto fork = [&pool, &sink, &primed](bool prime)
     {
         JobSystem::JobCounter counter;
         for (int t = 0; t < kFanout; ++t)
         {
-            pool.Run([&sink] { sink.fetch_add(1, std::memory_order_relaxed); }, counter);
+            pool.Run([&pool, &sink, &primed, prime]
+                     {
+                         sink.fetch_add(1, std::memory_order_relaxed);
+                         if (const size_t worker = pool.GetCurrentWorkerId(); prime && worker < primed.size())
+                         {
+                             JobSystem::Detail::ReleaseTaskSlab(JobSystem::Detail::AcquireTaskSlab());
+                             primed[worker].store(true, std::memory_order_release);
+                         }
+                     },
+                     counter);
         }
         pool.Wait(counter);
     };
+    const auto everyWorkerPrimed = [&primed]
+    { return std::all_of(primed.begin(), primed.end(), [](const std::atomic<bool>& p) { return p.load(std::memory_order_acquire); }); };
 
-    for (int i = 0; i < kWarmup; ++i)
+    int warmups = 0;
+    const SteadyClock::time_point deadline = SteadyClock::now() + ParkedWaiterDeadline();
+    while (warmups < kWarmup || (!everyWorkerPrimed() && SteadyClock::now() < deadline))
     {
-        fork();
+        fork(true);
+        ++warmups;
     }
+    ASSERT_TRUE(everyWorkerPrimed()) << "a worker ran none of the warm-up's jobs";
     std::uint64_t forkAllocations = 0;
     {
         const Memory::AllocationCountScope allocations(Memory::CountWindow::Process);
         for (int i = 0; i < kForks; ++i)
         {
-            fork();
+            fork(false);
         }
         forkAllocations = allocations.Count();
     }
@@ -251,10 +275,8 @@ TEST(JobCounterTest, ForkOnAFreshCounterAllocatesNothingAfterWarmup)
     const double allocsPerFork = static_cast<double>(forkAllocations) / kForks;
     std::printf("[JobCounterAlloc] %.3f heap allocs per fresh-counter fork of %d\n", allocsPerFork,
                 kFanout);
-    EXPECT_EQ(sink.load(), static_cast<uint64_t>(kWarmup + kForks) * kFanout);
-    // Slack covers a fork that constructs a queue while a late stub still
-    // holds the previous one; the stub's release pools it for the next.
-    EXPECT_LE(allocsPerFork, 0.1);
+    EXPECT_EQ(sink.load(), static_cast<uint64_t>(warmups + kForks) * kFanout);
+    EXPECT_EQ(forkAllocations, 0u);
 }
 
 namespace {
@@ -266,8 +288,8 @@ constexpr int kSharedTaggedJobsSlots = 64;
 // so they take this thread's cached queue and every pooled one before any is
 // constructed, then releases them all; returns the operator-new calls made on
 // every thread meanwhile.
-// Each counter outlives its stub, so its last reference drops here: the first
-// released is cached on this thread and the rest are pooled.
+// Each counter's last user drops here: the first released is cached on this
+// thread and the rest are pooled.
 unsigned long long ForkOnEveryPooledQueue(JobSystem::WorkStealingThreadPool& pool)
 {
     constexpr auto kStubRetireWait = std::chrono::milliseconds(50);
@@ -300,6 +322,243 @@ TEST(JobCounterTest, ExitingThreadReturnsItsCachedQueueToThePool)
 
     std::printf("[JobCounterThreadExit] %llu operator-new calls on the second thread\n", secondThreadNews);
     EXPECT_EQ(secondThreadNews, 0u) << "the exiting thread's cached queue did not reach the shared pool";
+}
+
+// With every worker held, the forking thread runs every job of its forks
+// itself, and the tasks the forks leave queued for the workers stay within
+// the pool's budget of unstarted fork tasks instead of one per job. Those
+// tasks never keep a fork's queue from being recycled, so the forks construct
+// nothing. Once the workers are free the queued tasks drain and give their
+// budget back: a fork publishes a task for each of its jobs again.
+TEST(JobCounterTest, ForksWhileEveryWorkerIsHeldStayBoundedAndAllocationFree)
+{
+    constexpr int kForks = 2000;
+    constexpr int kFanout = 8;
+
+    JobSystem::WorkStealingThreadPool pool(4);
+    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+    std::atomic<uint64_t> sink{0};
+    auto publish = [&pool, &sink](JobSystem::JobCounter& counter)
+    {
+        for (int t = 0; t < kFanout; ++t)
+        {
+            pool.Run([&sink] { sink.fetch_add(1, std::memory_order_relaxed); }, counter);
+        }
+    };
+    auto fork = [&pool, &publish]
+    {
+        JobSystem::JobCounter counter;
+        publish(counter);
+        pool.Wait(counter);
+    };
+
+    HeldWorkers held(pool);
+    fork();
+    std::uint64_t forkAllocations = 0;
+    {
+        const Memory::AllocationCountScope allocations(Memory::CountWindow::Process);
+        for (int i = 0; i < kForks; ++i)
+        {
+            fork();
+        }
+        forkAllocations = allocations.Count();
+    }
+    const size_t queuedWhileHeld = pool.GetApproximateQueueSize();
+    held.Release();
+    std::printf("[JobCounterHeld] %llu allocations over %d forks, %zu tasks queued (bound %zu)\n",
+                static_cast<unsigned long long>(forkAllocations), kForks, queuedWhileHeld, bound);
+    EXPECT_EQ(forkAllocations, 0u);
+    EXPECT_LE(queuedWhileHeld, bound);
+
+    ASSERT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; }, ParkedWaiterDeadline()));
+    HeldWorkers heldAgain(pool);
+    size_t publishedAfterTheDrain = 0;
+    {
+        JobSystem::JobCounter counter;
+        publish(counter);
+        publishedAfterTheDrain = pool.GetApproximateQueueSize();
+        pool.Wait(counter);
+    }
+    heldAgain.Release();
+    EXPECT_EQ(publishedAfterTheDrain, static_cast<size_t>(kFanout)) << "the drained tasks did not give their budget back";
+    EXPECT_EQ(sink.load(), static_cast<uint64_t>(kForks + 2) * kFanout);
+}
+
+// A Run the budget refuses still has its job run by a worker when nobody
+// waits on its counter: a caller that publishes and polls IsZero (the scene
+// TLAS request) is never stranded. The workers are held while another
+// counter's Runs take the whole budget, then the polled counter's three
+// Runs are refused; the workers are freed and nobody waits.
+TEST(JobCounterTest, ARefusedRunStillRunsWithoutAWaiter)
+{
+    JobSystem::WorkStealingThreadPool pool(2);
+    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+    std::atomic<int> ran{0};
+    JobSystem::JobCounter spent;
+    JobSystem::JobCounter polled;
+
+    HeldWorkers held(pool);
+    for (size_t i = 0; i < bound; ++i)
+    {
+        pool.Run([] {}, spent);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        pool.Run([&ran] { ran.fetch_add(1, std::memory_order_relaxed); }, polled);
+    }
+    held.Release();
+    const bool ranWithoutAWaiter = WaitUntil([&polled] { return polled.IsZero(); }, ParkedWaiterDeadline());
+    pool.Wait(polled);
+    pool.Wait(spent);
+
+    EXPECT_TRUE(ranWithoutAWaiter) << "a refused Run's job waited for a waiter";
+    EXPECT_EQ(ran.load(), 3);
+}
+
+#if GE_DEBUG_INSTRUMENTATION
+namespace {
+
+// A hook that holds the first tagged-queue visit reaching ProvedEmpty until
+// released.
+struct VisitHold
+{
+    static inline std::atomic<bool> Held{false};
+    static inline std::atomic<bool> Released{false};
+
+    static void Hook(JobSystem::WorkStealingThreadPool::TaggedVisitPoint)
+    {
+        bool expected = false;
+        if (!Held.compare_exchange_strong(expected, true))
+            return;
+        while (!Released.load())
+            std::this_thread::yield();
+    }
+
+    VisitHold()
+    {
+        Held.store(false);
+        Released.store(false);
+        JobSystem::WorkStealingThreadPool::SetTaggedVisitHookForTests(&VisitHold::Hook);
+    }
+    ~VisitHold()
+    {
+        Released.store(true);
+        JobSystem::WorkStealingThreadPool::SetTaggedVisitHookForTests(nullptr);
+    }
+    void Release() { Released.store(true); }
+};
+
+} // namespace
+#endif
+
+// A visit that has drained its queue and is leaving as a refused Run
+// publishes into that queue never strands the job: either the Run sees no
+// visit pending and publishes one, or the leaving visit sees the job and
+// stays. The only worker's visit is held between proving the queue empty and
+// re-reading its job count while another counter's Runs take the whole
+// budget, then the queue's counter forks once more; nobody waits on it.
+TEST(JobCounterTest, AVisitLeavingAsAJobArrivesStays)
+{
+#if !GE_DEBUG_INSTRUMENTATION
+    GTEST_SKIP() << "needs the Debug-only tagged-visit hook (GE_DEBUG_INSTRUMENTATION)";
+#else
+    JobSystem::WorkStealingThreadPool pool(1);
+    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+    std::atomic<int> ran{0};
+    JobSystem::JobCounter leaving;
+    JobSystem::JobCounter spent;
+    bool ranWithoutAWaiter = false;
+    {
+        VisitHold hold;
+        pool.Run([&ran] { ran.fetch_add(1, std::memory_order_relaxed); }, leaving);
+        ASSERT_TRUE(WaitUntil([] { return VisitHold::Held.load(); }, ParkedWaiterDeadline()))
+            << "the visit never proved its queue empty";
+        for (size_t i = 0; i < bound; ++i)
+        {
+            pool.Run([] {}, spent);
+        }
+        pool.Run([&ran] { ran.fetch_add(1, std::memory_order_relaxed); }, leaving);
+        hold.Release();
+        ranWithoutAWaiter = WaitUntil([&leaving] { return leaving.IsZero(); }, ParkedWaiterDeadline());
+    }
+    pool.Wait(leaving);
+    pool.Wait(spent);
+
+    EXPECT_TRUE(ranWithoutAWaiter) << "the job published as the visit left was stranded";
+    EXPECT_EQ(ran.load(), 2);
+#endif
+}
+
+// A queue whose counter is gone while tasks the counter's Runs published are
+// still queued is recycled at once; when the cache and the shared pool are
+// full it is deleted, but only after the last of those tasks has run. One
+// more counter than the pool's slots and a thread's cache hold together
+// forks while the workers are held, so at least one queue is released into
+// full slots with its tasks still queued (ASan reads the use after free).
+TEST(JobCounterTest, AnOrphanedQueueOutlivesItsQueuedTasks)
+{
+    constexpr int kCounters = 66; // kSharedTaggedJobsSlots, this thread's cache, one more
+
+    JobSystem::WorkStealingThreadPool pool(2);
+    HeldWorkers held(pool);
+    {
+        std::array<JobSystem::JobCounter, kCounters> counters;
+        for (JobSystem::JobCounter& counter : counters)
+        {
+            pool.Run([] {}, counter);
+            pool.Wait(counter);
+        }
+    }
+    held.Release();
+    EXPECT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; }, ParkedWaiterDeadline()));
+}
+
+// A visit queued for one counter runs the jobs of the counter now using its
+// recycled queue, and that counter's counts come out exact. While the only
+// worker is held, counters forked and joined one after another on this
+// thread reuse its cached queue and leave the whole budget of visits queued
+// for it; the next counter on that queue has its Runs refused with a visit
+// pending, so they publish nothing. Only the stale visits can run its jobs
+// before anyone waits.
+TEST(JobCounterTest, AStaleVisitRunsTheJobsOfTheCounterNowUsingItsQueue)
+{
+    constexpr int kLaterJobs = 3;
+
+    JobSystem::WorkStealingThreadPool pool(1);
+    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+    std::atomic<int> ran{0};
+    std::atomic<int> ranOnWorker{0};
+    JobSystem::JobCounter later;
+
+    HeldWorkers held(pool);
+    for (size_t i = 0; i < bound; ++i)
+    {
+        JobSystem::JobCounter earlier;
+        pool.Run([] {}, earlier);
+        pool.Wait(earlier);
+    }
+    const uint64_t publishedBefore = pool.GetPublishedJobCount();
+    for (int i = 0; i < kLaterJobs; ++i)
+    {
+        pool.Run(
+            [&]
+            {
+                if (pool.GetCurrentWorkerId() < pool.GetWorkerCount())
+                    ranOnWorker.fetch_add(1, std::memory_order_relaxed);
+                ran.fetch_add(1, std::memory_order_relaxed);
+            },
+            later);
+    }
+    const uint64_t publishedByLater = pool.GetPublishedJobCount() - publishedBefore;
+    held.Release();
+    const bool ranWithoutAWaiter = WaitUntil([&later] { return later.IsZero(); }, ParkedWaiterDeadline());
+    pool.Wait(later);
+
+    EXPECT_EQ(publishedByLater, 0u) << "the later counter's Runs published a visit of their own";
+    EXPECT_TRUE(ranWithoutAWaiter) << "no stale visit ran the later counter's jobs";
+    EXPECT_EQ(ranOnWorker.load(), kLaterJobs);
+    EXPECT_EQ(ran.load(), kLaterJobs);
+    EXPECT_TRUE(later.IsZero());
 }
 
 // Reset() re-arms a reused counter: wave 1 fails and sets the sticky flag,
@@ -440,73 +699,6 @@ TEST(ParticipatingWaitTest, WorkerWaiterExecutesOnlySameCounterTasks)
     EXPECT_EQ(foreignRan.load(), 4);
 }
 
-// A recycled tagged queue never reaches a stub that is still queued: such a
-// stub holds the queue, so the next counter gets another one. On the single
-// worker, each first-wave counter's envelope is eaten by its participating
-// Wait, leaving its stub queued ahead of a marker task; each second-wave
-// counter's stub is queued after the marker. A second-wave task that runs
-// before the marker was run by a first-wave stub, through a queue recycled
-// under it. The test thread joins only after the marker ran: a thread that
-// cannot block (the threaded web build's main thread) participates in Wait
-// and would otherwise run second-wave envelopes itself, ahead of the marker.
-TEST(ParticipatingWaitTest, LateStubNeverRunsALaterCountersTask)
-{
-    constexpr int kCounters = 64;
-
-    JobSystem::WorkStealingThreadPool pool(1);
-    std::array<JobSystem::JobCounter, kCounters> secondWave;
-    std::atomic<bool> markerRan{false};
-    std::atomic<int> secondWaveRan{0};
-    std::atomic<int> secondWaveBeforeMarker{0};
-    std::atomic<bool> forked{false};
-
-    pool.EnqueueWork(
-        [&]
-        {
-            for (int i = 0; i < kCounters; ++i)
-            {
-                JobSystem::JobCounter firstWave;
-                pool.Run([] {}, firstWave);
-                pool.Wait(firstWave); // participates: runs the envelope, its stub stays queued
-            }
-            pool.EnqueueWork([&markerRan] { markerRan.store(true, std::memory_order_release); });
-            for (auto& counter : secondWave)
-            {
-                pool.Run(
-                    [&]
-                    {
-                        if (!markerRan.load(std::memory_order_acquire))
-                        {
-                            secondWaveBeforeMarker.fetch_add(1, std::memory_order_relaxed);
-                        }
-                        secondWaveRan.fetch_add(1, std::memory_order_relaxed);
-                    },
-                    counter);
-            }
-            forked.store(true, std::memory_order_release);
-        });
-
-    const auto deadline = SteadyClock::now() + ParkedWaiterDeadline();
-    while (!forked.load(std::memory_order_acquire) && SteadyClock::now() < deadline)
-    {
-        std::this_thread::yield();
-    }
-    ASSERT_TRUE(forked.load()) << "the forking task did not finish on the single-worker pool";
-    while (!markerRan.load(std::memory_order_acquire) && SteadyClock::now() < deadline)
-    {
-        std::this_thread::yield();
-    }
-    ASSERT_TRUE(markerRan.load()) << "the worker did not reach the marker task";
-    for (auto& counter : secondWave)
-    {
-        pool.Wait(counter);
-    }
-
-    EXPECT_EQ(secondWaveRan.load(), kCounters);
-    EXPECT_EQ(secondWaveBeforeMarker.load(), 0)
-        << "a first-wave stub ran a second-wave task through a recycled queue";
-}
-
 // F17 nested counters: a task counted into A forks counter-B work and waits
 // on B from the worker — on a single-worker pool this deadlocks unless the
 // waiter participates in B.
@@ -537,24 +729,21 @@ TEST(ParticipatingWaitTest, NestedCountersNoDeadlock)
     EXPECT_EQ(innerRan.load(), 4);
 }
 
-// Native external waiters park until the last decrement. In particular, Wait
-// must not move work from the pool onto the caller's thread.
+// A waiter that is not a worker joins only at the last decrement: it runs
+// the gated jobs it can claim itself (participation, design decision D1) and
+// parks for the ones the workers hold, so Wait returns with every job done.
 TEST(ParticipatingWaitTest, ExternalWaiterJoinsUntilLastDecrement)
 {
     JobSystem::WorkStealingThreadPool pool(2);
 
     std::atomic<bool> release{false};
     std::atomic<int> ran{0};
-    std::atomic<bool> ranOnWaiter{false};
-    const auto waiterId = std::this_thread::get_id();
     JobSystem::JobCounter counter;
     for (int t = 0; t < 4; ++t)
     {
         pool.Run(
-            [&release, &ran, &ranOnWaiter, waiterId]
+            [&release, &ran]
             {
-                if (std::this_thread::get_id() == waiterId)
-                    ranOnWaiter.store(true, std::memory_order_relaxed);
                 while (!release.load(std::memory_order_acquire))
                 {
                     std::this_thread::yield();
@@ -571,9 +760,8 @@ TEST(ParticipatingWaitTest, ExternalWaiterJoinsUntilLastDecrement)
             release.store(true, std::memory_order_release);
         });
 
-    pool.Wait(counter); // must park (tasks are gated) and wake on the last decrement
+    pool.Wait(counter); // the tasks are gated: returns only after the last decrement
     EXPECT_EQ(ran.load(), 4);
-    EXPECT_FALSE(ranOnWaiter.load());
     EXPECT_TRUE(counter.IsZero());
     releaser.join();
 }

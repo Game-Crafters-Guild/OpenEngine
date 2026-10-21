@@ -1001,7 +1001,9 @@ MeshLODs GenerateMeshLODs(const Mesh& mesh, const MeshLODConfig& config) {
         vertexFlags.empty() ? nullptr
                             : reinterpret_cast<const unsigned char*>(vertexFlags.data());
     const unsigned int borderOption =
-        config.BorderRule == MeshLODBorderRule::LockAll ? meshopt_SimplifyLockBorder : 0u;
+        config.BorderRule == MeshLODBorderRule::LockAll
+            ? static_cast<unsigned int>(meshopt_SimplifyLockBorder)
+            : 0u;
     const bool anyHardLock =
         borderOption != 0u ||
         std::any_of(vertexFlags.begin(), vertexFlags.end(),

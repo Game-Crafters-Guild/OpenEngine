@@ -12,7 +12,7 @@
 //
 // A fork publishes only the helpers that fit the pool's bound on helpers
 // published and not yet started in their lane, at most
-// kMaxUnstartedClaimHelpersPerWorker per worker; the caller claims what they
+// kMaxUnstartedForkTasksPerWorker per worker; the caller claims what they
 // would have. A helper's first act is to give its count back to the pool,
 // which outlives it; nothing after that depends on the count.
 //
@@ -195,18 +195,6 @@ bool RunAdmittedUnit(RunBlock& block)
     RunUnit(block, unit);
     ReleaseAdmission(block);
     return true;
-}
-
-// Reserves up to `wanted` of the pool's unstarted-helper budget and returns
-// the count granted; the rest is given back at once. The add comes first, so
-// concurrent forks never grant more than `budget` between them.
-size_t ReserveHelpers(std::atomic<uint32>& unstarted, size_t wanted, size_t budget)
-{
-    const size_t before = unstarted.fetch_add(static_cast<uint32>(wanted), std::memory_order_relaxed);
-    const size_t granted = before >= budget ? 0 : std::min(wanted, budget - before);
-    if (granted < wanted)
-        unstarted.fetch_sub(static_cast<uint32>(wanted - granted), std::memory_order_relaxed);
-    return granted;
 }
 
 // The helper task: one reference to the block, and one count of the pool's
@@ -460,6 +448,11 @@ bool WorkStealingThreadPool::RunParallelFor(WorkStealingThreadPool* pool, bool (
 {
     if (unitCount == 0)
         return true;
+    // A unit is a job body whichever thread runs it: a helper's units through
+    // its envelope, the caller's under this scope, at the caller's own
+    // context (Normal outside a body). Without it IsExecutingJob() inside a
+    // unit would depend on which thread claimed the unit.
+    const JobBodyScope callerUnits(CallerContext());
     if (pool == nullptr)
         return RunEveryUnitOnTheCaller(invoke, body, unitCount, options.Stop);
 
@@ -472,10 +465,10 @@ bool WorkStealingThreadPool::RunParallelFor(WorkStealingThreadPool* pool, bool (
         (options.HelperPriority == JobPriority::Background || CallerContext().Class == JobPriority::Background)
             ? JobPriority::Background
             : JobPriority::Normal;
-    std::atomic<uint32>& unstarted = pool->m_UnstartedClaimHelpers[static_cast<size_t>(helperClass)];
+    std::atomic<uint32>& unstarted = pool->m_UnstartedForkTasks[static_cast<size_t>(helperClass)];
     const size_t helpers =
         wanted == 0 ? 0
-                    : ReserveHelpers(unstarted, wanted, kMaxUnstartedClaimHelpersPerWorker * pool->GetWorkerCount());
+                    : ReserveForkTasks(unstarted, wanted, kMaxUnstartedForkTasksPerWorker * pool->GetWorkerCount());
     if (helpers == 0)
         return RunEveryUnitOnTheCaller(invoke, body, unitCount, options.Stop);
 

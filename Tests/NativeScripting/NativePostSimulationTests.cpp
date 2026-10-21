@@ -267,9 +267,7 @@ class ExclusiveSystem : public ECS::ISystem
   public:
     explicit ExclusiveSystem(WaveState* state) : State(state) {}
     const char* GetName() const override { return "Exclusive"; }
-    // No override specifier so the same regression compiles against the old
-    // scheduler: its ignored requirement then fails the actual wave assertions.
-    bool RequiresExclusiveUpdate() const { return true; }
+    bool RequiresExclusiveUpdate() const override { return true; }
     void Update(ECS::World&, float32) override
     {
         EXPECT_EQ(std::this_thread::get_id(), State->Caller);

@@ -63,7 +63,8 @@ size_t ElementSize(ECS::FieldTypeId type)
     case FieldTypeId::Bool: return sizeof(bool);
     case FieldTypeId::Int8: case FieldTypeId::UInt8: return 1u;
     case FieldTypeId::Int16: case FieldTypeId::UInt16: return 2u;
-    case FieldTypeId::Int32: case FieldTypeId::UInt32: case FieldTypeId::Float: return 4u;
+    case FieldTypeId::Int32: case FieldTypeId::UInt32: case FieldTypeId::Float:
+    case FieldTypeId::RenderLayerMask: return 4u;
     case FieldTypeId::Int64: case FieldTypeId::UInt64: case FieldTypeId::Double: return 8u;
     case FieldTypeId::Color: return sizeof(float32);
     default: return 0u;
@@ -111,7 +112,8 @@ bool WriteFieldValue(const ECS::FieldInfo& field, const OceanPresetValue& value,
     case FieldTypeId::Int64: return WriteNumbers<int64>(value, destination, count);
     case FieldTypeId::UInt8: return WriteNumbers<uint8>(value, destination, count);
     case FieldTypeId::UInt16: return WriteNumbers<uint16>(value, destination, count);
-    case FieldTypeId::UInt32: return WriteNumbers<uint32>(value, destination, count);
+    case FieldTypeId::UInt32:
+    case FieldTypeId::RenderLayerMask: return WriteNumbers<uint32>(value, destination, count);
     case FieldTypeId::UInt64: return WriteNumbers<uint64>(value, destination, count);
     case FieldTypeId::Float: return WriteNumbers<float32>(value, destination, count);
     case FieldTypeId::Double: return WriteNumbers<double>(value, destination, count);

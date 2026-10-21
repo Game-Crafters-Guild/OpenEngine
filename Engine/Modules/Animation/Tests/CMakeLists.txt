@@ -266,7 +266,7 @@ gtest_discover_tests(AutoImportDispatchTests)
 # via a path relative to its own exe location.
 add_custom_command(TARGET HumanoidStandardProfileTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/Assets/SkeletonProfiles/HumanoidStandard.profile.json
+        ${CMAKE_SOURCE_DIR}/Engine/Assets/SkeletonProfiles/HumanoidStandard.profile.json
         $<TARGET_FILE_DIR:HumanoidStandardProfileTests>/TestAssets/SkeletonProfiles/HumanoidStandard.profile.json
     COMMENT "Staging HumanoidStandard.profile.json for HumanoidStandardProfileTests"
     VERBATIM
@@ -275,3 +275,8 @@ add_custom_command(TARGET HumanoidStandardProfileTests POST_BUILD
 gtest_discover_tests(HumanoidStandardProfileTests
     WORKING_DIRECTORY $<TARGET_FILE_DIR:HumanoidStandardProfileTests>
 )
+
+# The refusal tests capture the log through the engine tests' shared LogCapture.h.
+foreach(target AnimationLibraryTests AnimationControllerTests SpriteFramesTests SkeletonProfileTests HumanoidRigTests RetargetMapTests)
+    target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Tests)
+endforeach()

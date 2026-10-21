@@ -50,8 +50,6 @@ target_link_libraries(PageStreaming
         FileWatcher
         Terrain
         Logger
+        # The 16-bit PNG heightmap decode.
+        Image
 )
-
-# stb_image for 16-bit PNG heightmaps; stb_image_impl.cpp is compiled by Engine.
-find_path(STB_INCLUDE_DIRS "stb_image.h")
-target_include_directories(PageStreaming PRIVATE ${STB_INCLUDE_DIRS})

@@ -26,11 +26,10 @@ std::vector<std::string> TakeChangedFilesForNextCompile();
 // Test-only callback to observe the JSON request built for CompileServer
 void SetOnCompileServerJsonBuiltForTests(std::function<void(const std::string&)> callback);
 
-// Test-only: the kill-on-close job object that ephemeral CompileServerHost
-// launches (GE_COMPILE_SERVER_EPHEMERAL=1) are assigned to on Windows.
-// Returns the raw HANDLE as void*, or nullptr when the marker is unset,
-// job creation failed, or on non-Windows platforms (issue #357).
-void* GetCompileServerEphemeralJobHandleForTests();
+// Test-only: the kill-on-close job object every launched CompileServerHost
+// is assigned to on Windows. Returns the raw HANDLE as void*, or nullptr
+// when job creation failed or on non-Windows platforms.
+void* GetCompileServerHostJobHandleForTests();
 // Debug-only: record which default compiler was chosen last
 void ResetLastDefaultCompilerSelection();
 bool WasLastDefaultCompilerServer();

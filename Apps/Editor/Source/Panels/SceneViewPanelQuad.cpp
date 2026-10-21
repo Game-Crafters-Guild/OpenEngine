@@ -30,19 +30,35 @@ namespace GameEngine
 {
 namespace
 {
-constexpr const char* kRulerOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewRulerOverlay",
-    "SceneViewRulerOverlayTop",
-    "SceneViewRulerOverlayFront",
-    "SceneViewRulerOverlaySide",
+constexpr StringId kRulerOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
+    "SceneViewRulerOverlay"_sid,
+    "SceneViewRulerOverlayTop"_sid,
+    "SceneViewRulerOverlayFront"_sid,
+    "SceneViewRulerOverlaySide"_sid,
 };
 
-constexpr const char* kMeasureOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewMeasureOverlay",
-    "SceneViewMeasureOverlayTop",
-    "SceneViewMeasureOverlayFront",
-    "SceneViewMeasureOverlaySide",
+constexpr StringId kMeasureOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
+    "SceneViewMeasureOverlay"_sid,
+    "SceneViewMeasureOverlayTop"_sid,
+    "SceneViewMeasureOverlayFront"_sid,
+    "SceneViewMeasureOverlaySide"_sid,
 };
+
+// The overlay of type T with `id` that `held` names while it is alive; once it is destroyed
+// (or before the first call), the first T with `id` in `viewport`, else in `panel`, which
+// `held` then names. The per-viewport overlays are refreshed every frame, so this keeps
+// that refresh off the id lookup.
+template <typename T>
+T* HeldViewportOverlay(UIElement::WeakRef<T>& held, UIElement* viewport, UIElement& panel, StringId id)
+{
+    if (T* overlay = held.Get())
+        return overlay;
+    T* overlay = viewport ? dynamic_cast<T*>(viewport->FindById(id)) : nullptr;
+    if (!overlay)
+        overlay = dynamic_cast<T*>(panel.FindById(id));
+    held = UIElement::MakeWeakRef(overlay);
+    return overlay;
+}
 
 constexpr const char* kSharedViewportOverlayIds[] = {
     "SceneToolOverlay",
@@ -271,7 +287,7 @@ void SceneViewPanel::ResetQuadViewSplits()
     ApplyQuadViewLayout();
     UpdateQuadViewButtonState();
 
-    if (UIElement* host = FindById("SceneViewViewportHost"))
+    if (UIElement* host = FindById("SceneViewViewportHost"_sid))
     {
         host->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
         host->RequestRelayout();
@@ -500,21 +516,18 @@ UIElement* SceneViewPanel::GetViewportForOverlay() const
 
 void SceneViewPanel::RefreshViewportRotationGizmos()
 {
-    static constexpr const char* kRotationGizmoIds[static_cast<size_t>(ViewportSlot::Count)] = {
-        "ViewportRotationGizmo",
-        "ViewportRotationGizmoTop",
-        "ViewportRotationGizmoFront",
-        "ViewportRotationGizmoSide",
+    static constexpr StringId kRotationGizmoIds[static_cast<size_t>(ViewportSlot::Count)] = {
+        "ViewportRotationGizmo"_sid,
+        "ViewportRotationGizmoTop"_sid,
+        "ViewportRotationGizmoFront"_sid,
+        "ViewportRotationGizmoSide"_sid,
     };
 
     for (size_t i = 0; i < m_RotationGizmos.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        ViewportRotationGizmo* gizmo = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            gizmo = dynamic_cast<ViewportRotationGizmo*>(viewport->FindById(kRotationGizmoIds[i]));
-        if (!gizmo)
-            gizmo = dynamic_cast<ViewportRotationGizmo*>(FindById(kRotationGizmoIds[i]));
+        ViewportRotationGizmo* gizmo =
+            HeldViewportOverlay(m_HeldRotationGizmos[i], m_ViewportSlots[i], *this, kRotationGizmoIds[i]);
         m_RotationGizmos[i] = gizmo;
         if (!gizmo)
             continue;
@@ -544,11 +557,8 @@ void SceneViewPanel::RefreshViewportRulerOverlays()
     for (size_t i = 0; i < m_RulerOverlays.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewRulerOverlay* overlay = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            overlay = dynamic_cast<SceneViewRulerOverlay*>(viewport->FindById(kRulerOverlayIds[i]));
-        if (!overlay)
-            overlay = dynamic_cast<SceneViewRulerOverlay*>(FindById(kRulerOverlayIds[i]));
+        SceneViewRulerOverlay* overlay =
+            HeldViewportOverlay(m_HeldRulerOverlays[i], m_ViewportSlots[i], *this, kRulerOverlayIds[i]);
 
         m_RulerOverlays[i] = overlay;
         if (!overlay)
@@ -567,11 +577,8 @@ void SceneViewPanel::RefreshViewportMeasureOverlays()
     for (size_t i = 0; i < m_MeasureOverlays.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewMeasureOverlay* overlay = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            overlay = dynamic_cast<SceneViewMeasureOverlay*>(viewport->FindById(kMeasureOverlayIds[i]));
-        if (!overlay)
-            overlay = dynamic_cast<SceneViewMeasureOverlay*>(FindById(kMeasureOverlayIds[i]));
+        SceneViewMeasureOverlay* overlay =
+            HeldViewportOverlay(m_HeldMeasureOverlays[i], m_ViewportSlots[i], *this, kMeasureOverlayIds[i]);
 
         m_MeasureOverlays[i] = overlay;
         if (!overlay)
@@ -594,7 +601,7 @@ UIElement* SceneViewPanel::FindViewportOverlayById(const char* id) const
 
     const auto findIn = [id](UIElement* root) -> UIElement*
     {
-        return root ? root->FindById(id) : nullptr;
+        return root ? root->FindById(HashStringId(id)) : nullptr;
     };
 
     if (UIElement* element = findIn(m_OverlayViewport))
@@ -617,7 +624,7 @@ UIElement* SceneViewPanel::FindViewportOverlayById(const char* id) const
             return element;
     }
 
-    return const_cast<SceneViewPanel*>(this)->FindById(id);
+    return const_cast<SceneViewPanel*>(this)->FindById(HashStringId(id));
 }
 
 bool SceneViewPanel::ViewportOverlaysNeedSync() const
@@ -710,7 +717,7 @@ void SceneViewPanel::SetQuadViewKind(ViewportSlot slot, QuadViewKind kind)
     }
     ApplyQuadViewKind(slot);
     SyncViewportOverlays();
-    if (UIElement* host = FindById("SceneViewViewportHost"))
+    if (UIElement* host = FindById("SceneViewViewportHost"_sid))
     {
         host->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
         host->RequestRelayout();
@@ -730,7 +737,7 @@ void SceneViewPanel::ResetQuadViewAssignments()
         ApplyQuadViewKind(static_cast<ViewportSlot>(i));
     SyncViewportOverlays();
 
-    if (UIElement* host = FindById("SceneViewViewportHost"))
+    if (UIElement* host = FindById("SceneViewViewportHost"_sid))
     {
         host->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
         host->RequestRelayout();
@@ -738,7 +745,7 @@ void SceneViewPanel::ResetQuadViewAssignments()
 }
 void SceneViewPanel::ApplyQuadViewLayout()
 {
-    UIElement* host = FindById("SceneViewViewportHost");
+    UIElement* host = FindById("SceneViewViewportHost"_sid);
     const float hostW = host ? std::max(1.0f, host->GetLayoutWidth()) : 1.0f;
     const float hostH = host ? std::max(1.0f, host->GetLayoutHeight()) : 1.0f;
     if (host)
@@ -833,7 +840,7 @@ void SceneViewPanel::ApplyQuadViewLayout()
                  .Set(Style::PositionTop, StyleLength::Px(topY * hostH))
                  .Set(Style::Width, StyleLength::Px(kSplitHandleHitPx))
                  .Set(Style::Height, StyleLength::Px(std::max(0.0f, height * hostH)));
-            if (UIElement* line = handle->FindById(lineId))
+            if (UIElement* line = handle->FindById(HashStringId(lineId)))
             {
                 const float lineLeftPx = std::clamp(splitPx - leftPx, 0.0f, kSplitHandleHitPx - kSplitLinePx);
                 line->Overrides()
@@ -864,7 +871,7 @@ void SceneViewPanel::ApplyQuadViewLayout()
                  .Set(Style::PositionTop, StyleLength::Px(topPx))
                  .Set(Style::Width, StyleLength::Percent(100.0f))
                  .Set(Style::Height, StyleLength::Px(kSplitHandleHitPx));
-            if (UIElement* line = handle->FindById("SceneViewQuadSplitHorizontalLine"))
+            if (UIElement* line = handle->FindById("SceneViewQuadSplitHorizontalLine"_sid))
             {
                 const float lineTopPx = std::clamp(splitPx - topPx, 0.0f, kSplitHandleHitPx - kSplitLinePx);
                 line->Overrides()
@@ -1389,7 +1396,7 @@ void SceneViewPanel::UpdateQuadSplitDrag(UIEvent& ev)
     if (m_QuadSplitDragAxis == QuadSplitDragAxis::None)
         return;
 
-    UIElement* host = FindById("SceneViewViewportHost");
+    UIElement* host = FindById("SceneViewViewportHost"_sid);
     if (!host)
         return;
 
@@ -1459,7 +1466,7 @@ std::vector<ContextMenuManipulator::Item> SceneViewPanel::BuildQuadViewMenuItems
 
 void SceneViewPanel::UpdateQuadViewButtonState()
 {
-    if (auto* btn = dynamic_cast<Button*>(FindById("QuadViewToggle")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("QuadViewToggle"_sid)))
     {
         if (m_QuadViewEnabled)
             btn->AddClass("icon-active");

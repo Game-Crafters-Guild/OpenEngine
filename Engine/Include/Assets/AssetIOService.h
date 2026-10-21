@@ -154,9 +154,10 @@ class AssetIOService
     // The gate caps how many pool workers asset work occupies at once. The
     // frame's ECS waves run on the SAME pool; Background priority only orders
     // the queue — it cannot preempt a running cook. A cold-asset storm (bulk
-    // import: hundreds of texture/model cooks) otherwise occupies every worker
-    // and the main thread parks in SystemManager::UpdateWaveBased for the
-    // storm's duration (observed live: 62-minute wedge, AppHangTransient).
+    // import: hundreds of texture/model cooks) otherwise occupies every worker,
+    // and the main thread, which runs its own wave's jobs while it waits in
+    // SystemManager::UpdateWaveBased, runs every forked system of the frame
+    // serially for the storm's duration.
     // Texture decodes, and the helper bands of their cooks, take only the gate's
     // texture share: a texture decode that misses the cook cache holds its slot
     // for the whole cook, minutes for a large texture, so without the share a

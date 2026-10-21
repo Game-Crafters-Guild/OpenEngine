@@ -107,22 +107,23 @@ void ClaudeApiStream::OnEvent(const SseEvent& event)
     }
     else if (event.Type == "content_block_start")
     {
+        // Text blocks of one reply (around a tool call) are paragraphs of their own.
         const nlohmann::json& block = JsonFields::Object(payload, "content_block");
-        const std::string text = JsonFields::String(block, "text");
-        if (JsonFields::String(block, "type") == "text" && !text.empty())
-        {
-            m_Result.Text += text;
-            m_Events.OnTextDelta(text);
-        }
+        if (JsonFields::String(block, "type") != "text")
+            return;
+        m_TextBlocks.BeginBlock();
+        const std::string_view appended = m_TextBlocks.Append(m_Result.Text, JsonFields::String(block, "text"));
+        if (!appended.empty())
+            m_Events.OnTextDelta(appended);
     }
     else if (event.Type == "content_block_delta")
     {
         const nlohmann::json& delta = JsonFields::Object(payload, "delta");
         if (JsonFields::String(delta, "type") != "text_delta")
             return;
-        const std::string text = JsonFields::String(delta, "text");
-        m_Result.Text += text;
-        m_Events.OnTextDelta(text);
+        const std::string_view appended = m_TextBlocks.Append(m_Result.Text, JsonFields::String(delta, "text"));
+        if (!appended.empty())
+            m_Events.OnTextDelta(appended);
     }
     else if (event.Type == "message_delta")
     {

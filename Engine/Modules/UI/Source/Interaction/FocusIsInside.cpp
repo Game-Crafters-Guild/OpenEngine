@@ -29,7 +29,7 @@ bool FocusIsInside(const UIElement& element)
     // descendant test carry: a malformed parent cycle must not hang a keystroke.
     constexpr int kMaxDepth = 2048;
     int depth = 0;
-    for (const UIElement* el = root->FindById(focusId); el && depth++ < kMaxDepth; el = el->GetParent())
+    for (const UIElement* el = root->FindById(HashStringId(focusId)); el && depth++ < kMaxDepth; el = el->GetParent())
     {
         if (el == &element)
             return true;

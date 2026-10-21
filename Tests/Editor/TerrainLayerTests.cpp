@@ -91,7 +91,7 @@ TEST(TerrainLayers, SetHexTilingTouchesOnlyItsOwnBit)
 // engine palette reds this test rather than silently making the card lie.
 TEST(TerrainLayers, FallbackTintSwatchIsSrgbEncoded)
 {
-    EXPECT_EQ(TerrainLayers::FallbackTintSwatchArgb(0), 0xFFA0C476u); // grass
+    EXPECT_EQ(TerrainLayers::FallbackTintSwatchArgb(0), 0xFF696548u); // grass: the soil under a meadow
     EXPECT_EQ(TerrainLayers::FallbackTintSwatchArgb(1), 0xFFC4BCADu); // rock
     EXPECT_EQ(TerrainLayers::FallbackTintSwatchArgb(2), 0xFFBCA689u); // dirt
     EXPECT_EQ(TerrainLayers::FallbackTintSwatchArgb(3), 0xFFF3F6F9u); // snow

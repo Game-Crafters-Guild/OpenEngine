@@ -31,13 +31,13 @@
 	background-size: 12px 12px;
 	background-repeat: no-repeat;
 	background-position: center;
-	background-image: url("editor:Icons/arrow-down.png");
+	background-image: url("editor:Icons/arrow-down.svg");
 	background-image-tint: rgba(200, 200, 200, 1.0);
 	opacity: 0.7;
 }
 
 .editor-info-card-chevron.collapsed {
-	background-image: url("editor:Icons/arrow-right.png");
+	background-image: url("editor:Icons/arrow-right.svg");
 	opacity: 0.55;
 }
 
@@ -67,7 +67,7 @@
 	/* Padding, not margin: a horizontal margin on a flex child inside a scroll
 	   body has recursed layout here before. */
 	padding-left: 8px;
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .editor-info-card-copy.clamped {

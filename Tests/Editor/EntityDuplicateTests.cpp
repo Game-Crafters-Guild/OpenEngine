@@ -36,10 +36,10 @@
 #include "Engine/Rendering/RenderWorldHooks.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
-#include "PathfindingECS/NavigationGridRuntime.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
+#include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/NavigationService.h"
-#include "PathfindingECS/Systems/NavigationBuildSystem.h"
+#include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
 #include "Pathfinding/NavigationWorld.h"
 #include "Physics/PhysicsWorld.h"
@@ -244,45 +244,46 @@ GameEngine::ECS::EntityHandle FindEntityByName(World& world, const char* name)
     return {};
 }
 
-TEST_F(EntityDuplicateTests, DuplicatedNavigationGridCreatesItsOwnMap)
+TEST_F(EntityDuplicateTests, DuplicatedNavigationSurfaceCreatesItsOwnMap)
 {
-    using GameEngine::Components::NavigationGrid;
+    using GameEngine::Components::NavigationSurface;
     using GameEngine::PathfindingECS::NavigationService;
     if (!NavigationService::IsInitialized())
         NavigationService::Initialize();
     World world;
     GameEngine::PathfindingECS::RegisterNavigationWorldHooks(world);
-    GameEngine::PathfindingECS::NavigationBuildSystem build;
+    GameEngine::PathfindingECS::NavigationSurfaceSystem build;
 
-    NavigationGrid grid{};
-    grid.Width = grid.Depth = 4;
-    grid.BakeSource = GameEngine::Components::NavigationBakeSource::Manual;
-    const EntityHandle original = world.Create(grid, Name{"Grid"}).GetHandle();
+    NavigationSurface surface{};
+    surface.Mode = GameEngine::Components::NavigationSurfaceMode::Grid;
+    surface.FitBounds = false;
+    surface.Extent = {2.0f, 1.0f, 2.0f};
+    const EntityHandle original = world.Create(surface, Name{"Surface"}).GetHandle();
     build.Update(world, 0.0f);
-    const auto* bound = world.GetComponent<NavigationGrid>(original);
+    const auto* bound = world.GetComponent<NavigationSurface>(original);
     ASSERT_NE(bound, nullptr);
-    ASSERT_TRUE(bound->Initialized);
-    const GameEngine::Pathfinding::NavMapHandle originalMap{bound->NavMapIndex, bound->NavMapGeneration};
-    ASSERT_NE(NavigationService::Get().GetGridMap(originalMap), nullptr);
+    const GameEngine::Pathfinding::NavMapHandle originalMap =
+        GameEngine::PathfindingECS::ResolveNavigationSurfaceMap(world, *bound);
+    ASSERT_TRUE(originalMap.IsValid());
 
     const auto duplicate = GameEngine::Editor::DuplicateEntitySubtreeRoots(world, {original});
     ASSERT_EQ(duplicate.NewRoots.size(), 1u);
     const EntityHandle copy = duplicate.NewRoots[0];
-    const auto* copied = world.GetComponent<NavigationGrid>(copy);
+    const auto* copied = world.GetComponent<NavigationSurface>(copy);
     ASSERT_NE(copied, nullptr);
-    EXPECT_FALSE(copied->Initialized);
-    EXPECT_EQ(copied->Width, 4u);
+    EXPECT_EQ(copied->OwnerWorldId, 0u);
+    EXPECT_FLOAT_EQ(copied->Extent.x, 2.0f);
 
     build.Update(world, 0.0f);
-    copied = world.GetComponent<NavigationGrid>(copy);
-    ASSERT_TRUE(copied->Initialized);
-    const GameEngine::Pathfinding::NavMapHandle copyMap{copied->NavMapIndex, copied->NavMapGeneration};
+    copied = world.GetComponent<NavigationSurface>(copy);
+    const GameEngine::Pathfinding::NavMapHandle copyMap =
+        GameEngine::PathfindingECS::ResolveNavigationSurfaceMap(world, *copied);
+    ASSERT_TRUE(copyMap.IsValid());
     EXPECT_NE(copyMap, originalMap);
-    EXPECT_NE(NavigationService::Get().GetGridMap(copyMap), nullptr);
 
     world.DestroyEntityImmediate(copy);
-    EXPECT_NE(NavigationService::Get().GetGridMap(originalMap), nullptr);
-    EXPECT_EQ(NavigationService::Get().GetGridMap(copyMap), nullptr);
+    EXPECT_NE(NavigationService::Get().GetMap(originalMap), nullptr);
+    EXPECT_EQ(NavigationService::Get().GetMap(copyMap), nullptr);
 }
 
 TEST_F(EntityDuplicateTests, DuplicatingSplineCreatesIndependentSplineData)
@@ -2426,6 +2427,8 @@ TEST_F(ModelBackedSkinnedDuplicateTests, DuplicateOwnsItsOwnGroupThroughTheShare
     EXPECT_EQ(store.GetRuntimeRefCount(cloneRuntime), 2u)
         << "the clone's two SkeletonRefs must hold exactly two references";
     if (cloneRuntime != repaired)
+    {
         EXPECT_EQ(store.GetRuntime(repaired), nullptr)
             << "the repaired runtime is orphaned: resident forever, named by nobody";
+    }
 }

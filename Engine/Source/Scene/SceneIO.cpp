@@ -788,8 +788,8 @@ struct SceneDoc
         std::string value;
         int line = 0;
         // Authored spelling of the property key (keys are lowercased for schema
-        // matching); empty means "same as the lowered key". Only the unknown-
-        // component preservation path echoes this back.
+        // matching); empty means "same as the lowered key". The load report and
+        // the unknown-component preservation path echo this back.
         std::string originalKey;
     };
 
@@ -833,11 +833,16 @@ struct SceneDoc
     };
     std::unordered_map<std::string, Resource> resources;
 
+    // A body line that is not "Component.field = value" ({line, text}): no '=', no dot, or an empty
+    // component or field name. The load reports each one.
+    using UnreadLines = std::vector<std::pair<int, std::string>>;
+
     struct Entity
     {
         std::string id;
         std::optional<std::string> parent;
         ComponentProperties components;
+        UnreadLines unreadLines;
         int headerLine = 0;
     };
     std::vector<Entity> entities; // in file order
@@ -851,6 +856,7 @@ struct SceneDoc
         ComponentProperties components;
         // Remove directives (-ComponentName)
         std::unordered_set<std::string> removedComponents;
+        UnreadLines unreadLines;
         int headerLine = 0;
     };
     std::vector<BlueprintInstance> blueprintInstances;
@@ -1206,7 +1212,10 @@ static bool ParseDocument(const std::filesystem::path& filePath,
             {
                 std::string comp, prop, value, compAuthored, propAuthored;
                 if (!ParseComponentLine(l, comp, prop, value, &compAuthored, &propAuthored))
+                {
+                    e.unreadLines.emplace_back(ln, l);
                     continue;
+                }
                 SetComponentProp(FindOrAppendComponent(e.components, comp, compAuthored), prop,
                                  SceneDoc::PropValue{value, ln, propAuthored});
             }
@@ -1248,7 +1257,10 @@ static bool ParseDocument(const std::filesystem::path& filePath,
                 }
                 std::string comp, prop, value, compAuthored, propAuthored;
                 if (!ParseComponentLine(l, comp, prop, value, &compAuthored, &propAuthored))
+                {
+                    bi.unreadLines.emplace_back(ln, l);
                     continue;
+                }
                 SetComponentProp(FindOrAppendComponent(bi.components, comp, compAuthored), prop,
                                  SceneDoc::PropValue{value, ln, propAuthored});
             }
@@ -2200,6 +2212,63 @@ static bool FindReflectedFieldSpan(ECS::ComponentTypeId typeId, const std::strin
     return false;
 }
 
+// Record each property name the schema reported it has no field for. The line stays out of the
+// world's preserved fields: a save drops it, which is the fix the message asks for.
+static void RecordUnknownFields(const std::vector<std::string>& unknownFields,
+                                const SceneDoc::ComponentProps& comp, const std::string& entityId,
+                                const std::filesystem::path& ownerFile, ECS::EntityHandle h,
+                                SceneLoadDegradation* degradation)
+{
+    if (!degradation)
+        return;
+    const std::string& authoredComp = !comp.originalName.empty() ? comp.originalName : comp.name;
+    for (const std::string& key : unknownFields)
+    {
+        const auto prop = std::find_if(comp.props.begin(), comp.props.end(),
+                                       [&key](const auto& propKv) { return propKv.first == key; });
+        const bool authored = prop != comp.props.end();
+        const std::string authoredProp =
+            authored && !prop->second.originalKey.empty() ? prop->second.originalKey : key;
+        degradation->skips.push_back(SceneLoadSkip{
+            entityId, authoredComp, authoredProp,
+            UnknownFieldMessage(authoredComp, authoredProp),
+            ownerFile, authored ? prop->second.line : 0, /*preserved=*/false, h});
+    }
+}
+
+// The most of an unread line a load-report row quotes; the file and line point at the rest.
+constexpr std::size_t kMaxQuotedLineBytes = 80;
+
+// The start of `text` a row quotes: the whole line when it is short, else its first
+// kMaxQuotedLineBytes bytes, cut before a UTF-8 continuation byte, and "...".
+static std::string QuoteUnreadLine(const std::string& text)
+{
+    if (text.size() <= kMaxQuotedLineBytes)
+        return text;
+    std::size_t cut = kMaxQuotedLineBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0u) == 0x80u)
+        --cut;
+    return text.substr(0, cut) + "...";
+}
+
+// Record each body line the parser could not read as an assignment, then put the entity's rows,
+// from `firstRow` on, in line order. A save drops an unread line.
+static void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::string& entityId,
+                              const std::filesystem::path& ownerFile, ECS::EntityHandle h,
+                              std::size_t firstRow, SceneLoadDegradation* degradation)
+{
+    if (!degradation)
+        return;
+    for (const auto& [line, text] : unreadLines)
+        degradation->skips.push_back(SceneLoadSkip{
+            entityId, {}, {},
+            "'" + QuoteUnreadLine(text) +
+                "' is not an assignment: write it as Component.field = value, or delete the line",
+            ownerFile, line, /*preserved=*/false, h});
+    std::stable_sort(degradation->skips.begin() + static_cast<std::ptrdiff_t>(firstRow), degradation->skips.end(),
+                     [](const SceneLoadSkip& a, const SceneLoadSkip& b) { return a.line < b.line; });
+}
+
 // Apply one component's authored properties, tolerating individual failures.
 //
 // The grouped apply runs first and is the only path a clean scene takes, so nothing here costs a
@@ -2222,11 +2291,21 @@ static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneLoa
     for (const auto& propKv : comp.props)
         pairs.emplace_back(propKv.first, propKv.second.value);
 
+    // A property name the component has no field for comes back through ctx.UnknownFields and goes
+    // to the load report; the rest of the block still applies.
+    std::vector<std::string> unknownFields;
+    ctx.UnknownFields = &unknownFields;
     std::string err;
     std::size_t failedIndex = 0;
     if (schema.ApplyProperties(world, h, ctx, pairs, &err, &failedIndex))
+    {
+        ctx.UnknownFields = nullptr;
+        RecordUnknownFields(unknownFields, comp, entityId, ownerFile, h, degradation);
         return;
+    }
 
+    // The grouped apply stopped at a malformed value; the pass below meets every unknown name again.
+    unknownFields.clear();
     const std::string& authoredComp = !comp.originalName.empty() ? comp.originalName : comp.name;
     for (const auto& propKv : comp.props)
     {
@@ -2267,6 +2346,8 @@ static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneLoa
             degradation->skips.push_back(SceneLoadSkip{entityId, authoredComp, authoredProp, propErr,
                                                        ownerFile, propKv.second.line, preserved, h});
     }
+    ctx.UnknownFields = nullptr;
+    RecordUnknownFields(unknownFields, comp, entityId, ownerFile, h, degradation);
 }
 
 // A component block whose name resolves to no schema. Three cases, told apart through the field
@@ -2296,10 +2377,20 @@ static void PreserveOrDropUnhandledComponent(ECS::World& world, ECS::EntityHandl
             pc.Props.emplace_back(!propKv.second.originalKey.empty() ? propKv.second.originalKey
                                                                      : propKv.first,
                                   propKv.second.value);
+#if GE_ENABLE_SCRIPTING
         Logger::Log::Warning("Scene: no registered type is named '{}' (on '{}'): its values are kept and "
                              "applied when a module that registers it loads; until then it does nothing, and if "
                              "no module does, remove it from the scene",
                              pc.Name, entityId);
+#else
+        // A C# component can never register in a build without C# scripting, so "remove it"
+        // would delete authored data a scripting build still reads.
+        Logger::Log::Warning("Scene: no registered type is named '{}' (on '{}'): its values are kept in the scene "
+                             "and it does nothing in this build, which has no C# scripting. A C# component: open "
+                             "the scene in an editor built with scripting to edit it. A native component: it "
+                             "applies when a module that registers it loads",
+                             pc.Name, entityId);
+#endif
         world.GetUnresolvedComponents().Add(h, std::move(pc));
         return;
     }
@@ -2386,6 +2477,7 @@ static void ApplyEntityComponents(ECS::World& world,
 {
     world.AddComponentImmediate(h, MakeTag(entityId));
 
+    const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
     for (const auto& comp : e.components)
     {
         const std::string& compName = comp.name;
@@ -2398,6 +2490,7 @@ static void ApplyEntityComponents(ECS::World& world,
 
         ApplyComponentBlock(world, ctx, *schema, h, comp, entityId, ownerFile, e.headerLine, degradation);
     }
+    RecordUnreadLines(e.unreadLines, entityId, ownerFile, h, firstRow, degradation);
 
     // Hierarchy uses Name; scene files may omit it. Fill from the scene id
     // string for human-authored ids (e.g. main_camera). Skip auto-generated
@@ -2735,6 +2828,7 @@ static bool LoadParsedIntoWorld(ECS::World& world,
                 }
             }
 
+            const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
             for (const auto& comp : bi.components)
             {
                 const std::string& compName = comp.name;
@@ -2749,6 +2843,7 @@ static bool LoadParsedIntoWorld(ECS::World& world,
                 ApplyComponentBlock(world, localCtx, *schema, rootEntity, comp, bi.id, sceneFilePath,
                                     bi.headerLine, degradation);
             }
+            RecordUnreadLines(bi.unreadLines, bi.id, sceneFilePath, rootEntity, firstRow, degradation);
 
             // Ensure all blueprint roots are parented under the instance root.
             for (auto h : bpInst.created)
@@ -2996,27 +3091,28 @@ bool LoadSceneFromFile(ECS::World& world,
         return false;
     }
 
-    // The load succeeded, so every caller is about to treat this world as the scene. When part of the
-    // file could not be applied, that is only true with an asterisk — say so once, loudly, with the
+    // The load succeeded, so every caller is about to treat this world as the scene. When a line of the
+    // file did not apply, that is only true with an asterisk — say so once, loudly, with the
     // count and enough specifics to act on. The full census goes to outDegradation; this log line is
     // what a user who never reads a census actually sees.
     if (degradation.IsDegraded())
     {
         constexpr std::size_t kMaxLoggedSkips = 10;
         const std::size_t dropped = degradation.DroppedCount();
-        Logger::Log::Error("Scene: '{}' loaded DEGRADED — {} assignment(s) in the file could not be "
-                           "applied by this build ({} preserved for re-save, {} would be LOST on save). "
-                           "The scene is open and everything else loaded.",
+        Logger::Log::Error("Scene: '{}' loaded with {} line(s) that did not apply (a value that could not be read, "
+                           "a reference that did not resolve, a field the component does not have, or a line "
+                           "that is not an assignment). A save writes {} of them back as written and does not "
+                           "keep {}. Everything else loaded; each line below says how to fix it.",
                            sceneFilePath.string(), degradation.skips.size(),
                            degradation.skips.size() - dropped, dropped);
         const std::size_t shown = std::min(kMaxLoggedSkips, degradation.skips.size());
         for (std::size_t i = 0; i < shown; ++i)
         {
             const SceneLoadSkip& s = degradation.skips[i];
-            Logger::Log::Error("  [{}/{}] entity '{}': {}{}{} at {}:{} — {}{}", i + 1,
-                               degradation.skips.size(), s.entityId, s.component,
-                               s.field.empty() ? "" : ".", s.field, s.file.string(), s.line, s.message,
-                               s.preserved ? " (authored text preserved)" : " (WILL BE LOST ON SAVE)");
+            Logger::Log::Error("  [{}/{}] entity '{}'{}{}{}{} at {}:{} — {}{}", i + 1,
+                               degradation.skips.size(), s.entityId, s.component.empty() ? "" : ", ",
+                               s.component, s.field.empty() ? "" : ".", s.field, s.file.string(), s.line,
+                               s.message, s.preserved ? " (a save writes it back)" : " (a save does not keep it)");
         }
         if (degradation.skips.size() > shown)
             Logger::Log::Error("  ... and {} more", degradation.skips.size() - shown);

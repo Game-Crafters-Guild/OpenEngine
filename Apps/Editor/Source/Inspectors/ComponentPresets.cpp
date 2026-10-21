@@ -6,6 +6,7 @@
 #include "Components/Audio/AudioListener.h"
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/Light.h"
+#include "Components/Rendering/LightPhotometry.h"
 #include "Components/Rendering/Particles.h"
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/SkyEnvironment.h"
@@ -154,6 +155,17 @@ const char* PresetUndoDisplayName(ComponentPreset p)
 
     switch (p)
     {
+    case Preset::TerrainFlattenArea:
+    case Preset::TerrainHeightOffsetArea:
+    case Preset::TerrainNoiseArea:
+    case Preset::TerrainStampArea:
+    case Preset::TerrainPaintArea:
+    case Preset::TerrainRulesArea:
+    case Preset::TerrainGroundClaimArea:
+    case Preset::TerrainGrassArea:
+        break; // Handled by FindTerrainAreaPreset above.
+    case Preset::Count:
+        break; // Sentinel, not a preset.
     case Preset::Camera:
         return "Camera";
     case Preset::Light:
@@ -212,6 +224,17 @@ std::vector<ECS::ComponentTypeId> ComponentTypeIdsForPreset(ComponentPreset p)
 
     switch (p)
     {
+    case Preset::TerrainFlattenArea:
+    case Preset::TerrainHeightOffsetArea:
+    case Preset::TerrainNoiseArea:
+    case Preset::TerrainStampArea:
+    case Preset::TerrainPaintArea:
+    case Preset::TerrainRulesArea:
+    case Preset::TerrainGroundClaimArea:
+    case Preset::TerrainGrassArea:
+        break; // Handled by FindTerrainAreaPreset above.
+    case Preset::Count:
+        break; // Sentinel, not a preset.
     case Preset::Camera:
         return {ECS::GetComponentTypeId<Components::Camera>()};
     case Preset::Light:
@@ -261,6 +284,16 @@ std::vector<ECS::ComponentTypeId> ComponentTypeIdsForPreset(ComponentPreset p)
         return {ECS::GetComponentTypeId<Components::VideoTextureComponent>()};
     }
     return {};
+}
+
+Components::Light MakeDefaultDirectionalLight()
+{
+    Components::Light light{};
+    light.Type = Components::LightType::Directional;
+    light.Intensity = Components::kClearNoonSunIlluminanceLux;
+    light.IntensityUnit = Components::LightUnit::Lux;
+    light.CastsShadows = true;
+    return light;
 }
 
 const std::vector<ComponentPresetEntry>& ComponentPresetCatalog()

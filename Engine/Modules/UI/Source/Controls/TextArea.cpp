@@ -55,7 +55,8 @@ static void GetVisualLines(const std::string& text,
                            float lineBoxPx,
                            float letterSpacingPx,
                            TextLayout::WordBreak wordBreak,
-                           std::vector<LineBreakInfo>& outLines)
+                           std::vector<LineBreakInfo>& outLines,
+                           size_t firstByte)
 {
     outLines.clear();
 
@@ -71,12 +72,12 @@ static void GetVisualLines(const std::string& text,
     run.Text = text;
 
     auto result = TextLayout::ShapeMultiline(
-        std::span<const StyledRun>(&run, 1), wrapWidth, lineBoxPx, wordBreak);
+        std::span<const StyledRun>(&run, 1), wrapWidth, lineBoxPx, wordBreak, firstByte);
 
     outLines = std::move(result.LineBreaks);
 
     if (outLines.empty())
-        outLines.push_back({0, text.size()});
+        outLines.push_back({firstByte, text.size()});
 
     if (!text.empty() && text.back() == '\n')
         outLines.push_back({text.size(), text.size()});
@@ -133,13 +134,12 @@ static uint64_t HashMix(uint64_t h, uint64_t v)
     return h;
 }
 
-static uint64_t LineBreakCacheKey(const std::string& text, FontAtlas* font,
+static uint64_t LineBreakStyleKey(FontAtlas* font,
                                   float pixelSize, float wrapWidth,
                                   float lineBoxPx, float letterSpacingPx,
                                   TextLayout::WordBreak wb)
 {
-    uint64_t h = std::hash<std::string_view>{}(std::string_view(text));
-    h = HashMix(h, reinterpret_cast<uintptr_t>(font));
+    uint64_t h = font ? font->GetAtlasId() : 0;
     uint32_t bits;
     std::memcpy(&bits, &pixelSize, sizeof(float));
     h = HashMix(h, static_cast<uint64_t>(bits));
@@ -154,7 +154,9 @@ static uint64_t LineBreakCacheKey(const std::string& text, FontAtlas* font,
 }
 
 struct TextArea::TextRenderCache {
-    uint64_t BreakKey = 0;
+    uint64_t StyleKey = 0;
+    uint64_t ShapingKey = 0;
+    std::string CachedText;
     std::vector<LineBreakInfo> Breaks;
 
     struct LineShape {
@@ -172,14 +174,30 @@ struct TextArea::TextRenderCache {
                           float lineBoxPx, float letterSpacingPx,
                           TextLayout::WordBreak wb)
     {
-        uint64_t key =
-            LineBreakCacheKey(text, font, pixelSize, wrapWidth, lineBoxPx, letterSpacingPx, wb);
-        if (key == BreakKey && !Breaks.empty())
+        const uint64_t key =
+            LineBreakStyleKey(font, pixelSize, wrapWidth, lineBoxPx, letterSpacingPx, wb);
+        if (key == StyleKey && CachedText == text && !Breaks.empty())
             return;
 
-        BreakKey = key;
-        Breaks.clear();
-        Shapes.clear();
+        const uint64_t shapingKey = TextLayout::ShapingContextKey(text);
+        size_t keptLines = 0;
+        if (key == StyleKey && shapingKey == ShapingKey && !Breaks.empty()) {
+            const auto difference = std::mismatch(CachedText.begin(), CachedText.end(), text.begin(), text.end());
+            const size_t changedByte = static_cast<size_t>(difference.first - CachedText.begin());
+            const auto affected = std::lower_bound(Breaks.begin(), Breaks.end(), changedByte,
+                [](const LineBreakInfo& line, size_t byte) { return line.ByteEnd < byte; });
+            keptLines = static_cast<size_t>(affected - Breaks.begin());
+            // Include the preceding line: deleting a separator can pull a word
+            // back across a soft wrap, and shaping can change beside the edit.
+            if (keptLines > 0)
+                --keptLines;
+        }
+        const size_t firstByte = keptLines < Breaks.size() ? Breaks[keptLines].ByteStart : 0;
+        Breaks.resize(keptLines);
+        Shapes.resize(std::min(Shapes.size(), keptLines));
+        StyleKey = key;
+        ShapingKey = shapingKey;
+        CachedText = text;
 
         if (text.empty()) {
             Breaks.push_back({0, 0});
@@ -187,8 +205,8 @@ struct TextArea::TextRenderCache {
         }
 
         if (wrapWidth <= 0.0f) {
-            size_t lineStart = 0;
-            for (size_t i = 0; i < text.size(); ++i) {
+            size_t lineStart = firstByte;
+            for (size_t i = firstByte; i < text.size(); ++i) {
                 if (text[i] == '\n') {
                     Breaks.push_back({lineStart, i});
                     lineStart = i + 1;
@@ -200,7 +218,9 @@ struct TextArea::TextRenderCache {
             return;
         }
 
-        GetVisualLines(text, font, pixelSize, wrapWidth, lineBoxPx, letterSpacingPx, wb, Breaks);
+        std::vector<LineBreakInfo> tail;
+        GetVisualLines(text, font, pixelSize, wrapWidth, lineBoxPx, letterSpacingPx, wb, tail, firstByte);
+        Breaks.insert(Breaks.end(), tail.begin(), tail.end());
     }
 };
 

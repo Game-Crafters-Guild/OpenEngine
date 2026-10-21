@@ -55,7 +55,9 @@
 // where the whole claim-then-reconcile sequence runs in ONE slot, so no element construction can
 // interleave between a tag being claimed and the caller being able to answer for it.
 //
-// The entry points refuse off-main rather than trusting that. A refusal is bounded, not
+// The entry points refuse a claim or a verdict made outside a window rather than trusting that
+// (the unload sweep, which runs outside any window, refuses anywhere but the main thread outside a
+// job body). A refusal is bounded, not
 // permanent: any later verdict re-materializes a proxy whose tag is registered by then, whoever
 // registered it, so a batch lost to a stalled reload comes back on the next one.
 
@@ -198,10 +200,11 @@ public:
     using MainThreadMarshaller = std::function<void(std::function<void()>)>;
     void SetMainThreadMarshaller(MainThreadMarshaller marshaller);
 
-    // Answers "is the calling thread the one that owns the UI tree". Injected for the same
-    // reason as the marshaller: the only authority on it is ScriptManager, which these suites
-    // must not stand up, and the policy for a host that has no frame loop at all belongs at the
-    // ABI rather than here.
+    // Answers "may the calling thread mutate the UI tree now", read by the unload sweep alone
+    // (claims and verdicts are keyed on the registration window instead). Injected for the same
+    // reason as the marshaller: the only authority on it is EngineCore, which these suites must
+    // not stand up, and the policy for a host that has no frame loop at all belongs at the ABI
+    // rather than here.
     //
     // Left unset every thread is the main thread, which is the right answer for a native-only
     // host: the off-thread caller this guards against exists solely behind the managed ABI.
@@ -231,9 +234,12 @@ public:
     // engine tag, which is what stops a managed type named "Button" from replacing the built-in
     // control process-wide and then deleting it when its context unloads.
     //
-    // MAIN THREAD ONLY: claiming a tag writes the factory registry that document builds read, and
-    // that registry has no synchronization. Called off-main the whole batch is refused (every id
-    // 0) and the refusal is logged and counted — it is never performed on the wrong thread.
+    // INSIDE A REGISTRATION WINDOW ONLY, on the thread running it: claiming a tag writes the
+    // factory registry that document builds read, and that registry has no synchronization. The
+    // window runs on the thread that owns the UI tree, and a claim outside every window would also
+    // leave its owner's orphans undecided, because a window's closing verdict covers only the
+    // owners that claimed inside it. Called anywhere else, on any thread, the whole batch is
+    // refused (every id 0) and the refusal is logged and counted.
     StringId RegisterType(std::string_view tagName, std::uint64_t owner);
 
     // Claim several tags for one owner in one pass, returning one tag id per input and 0
@@ -250,8 +256,9 @@ public:
     // number of proxies orphaned. Call this from the unload seam, before the owning context
     // actually goes: the handles have to be released while they are still valid.
     //
-    // MAIN THREAD ONLY, same rule and same registry as RegisterType — unregistering factories is
-    // the symmetric and larger write of the map document builds read. Called off-main it is
+    // MAIN THREAD ONLY, outside any job body: it runs in the unload seam, outside any window, and
+    // unregistering factories is the symmetric and larger write of the map RegisterType claims
+    // into, which document builds read. Called anywhere else it is
     // refused, logged and counted, and NOTHING is swept. Both halves of that survive for the rest
     // of the process, and the second is the worse one:
     //
@@ -278,17 +285,13 @@ public:
     // nothing about the other, and faulting everything would paint a user-visible
     // missing-type badge on elements whose own assembly is merely still loading.
     //
-    // MAIN THREAD ONLY, same rule and same reason as RegisterType: the reconcile it triggers
-    // constructs instances and edits badge classes on live elements. Called off-main it is
-    // refused, logged and counted, and the proxies stay as they are — a later verdict decides
-    // them.
+    // INSIDE A REGISTRATION WINDOW ONLY, same rule and same reason as RegisterType: the reconcile
+    // it triggers constructs instances and edits badge classes on live elements. Called anywhere
+    // else it is refused, logged and counted, and the proxies stay as they are — a later verdict
+    // decides them.
     //
-    // Called from inside a registration window the reconcile runs INLINE, closing the window's
-    // claim-then-decide sequence in the one main-thread slot. Called from a main-thread context
-    // that is not a window — which is what a native host does — it is MARSHALLED as one task,
-    // because the reconcile is tree-visible and the caller may be mid-frame. One task for the
-    // owner rather than one per proxy or per tag: the main-thread queue's budget drops to a
-    // single task per frame during a hot reload, which is exactly when this fires.
+    // The window is the main-thread slot, so the reconcile runs INLINE, closing the window's
+    // claim-then-decide sequence in that one slot.
     void NotifyReloadCompleted(std::uint64_t owner);
 
     // What a refused tag claim found: who holds the tag, and whether the engine still considers
@@ -313,14 +316,33 @@ public:
         return m_LastRefusedTagClaim;
     }
 
+    // Test seam: for its scope the calling thread is where a registration window's callback runs
+    // (inside the window, inside a main-thread task), so the suites that drive the protocol step
+    // by step can claim and decide directly. It opens no window: no owner is recorded and no
+    // closing verdict is issued.
+    class ScopedWindowForTests
+    {
+    public:
+        ScopedWindowForTests();
+        ~ScopedWindowForTests();
+        ScopedWindowForTests(const ScopedWindowForTests&) = delete;
+        ScopedWindowForTests& operator=(const ScopedWindowForTests&) = delete;
+
+    private:
+        bool m_WasInWindow;
+        bool m_WasInMainThreadTask;
+    };
+
     // Test seams.
     std::size_t ProxyCount() const { return m_Proxies.size(); }
     std::size_t CountProxiesInState(ManagedTypeState state) const;
     std::size_t CountTypesOwnedBy(std::uint64_t owner) const;
 
-    // How many calls the off-main-thread guard has turned away. A return code alone leaves a
-    // refused batch looking exactly like one that had nothing to register.
+    // How many unload sweeps the main-thread guard has turned away, and how many claims and
+    // verdicts the registration-window guard has. A return code alone leaves a refused batch
+    // looking exactly like one that had nothing to register.
     std::size_t RefusedOffMainThreadCount() const { return m_RefusedOffMainThread; }
+    std::size_t RefusedOutsideWindowCount() const { return m_RefusedOutsideWindow; }
 
     // Drop every registration this object made. Test-only: the registry is a process
     // singleton and a suite that left types behind would leak them into the next test.
@@ -375,6 +397,12 @@ private:
     // Record and log a call that arrived on the wrong thread. `what` names the entry point.
     void RefuseOffMainThread(const char* what, const char* remedyAndConsequence);
 
+    // Is the calling thread inside a registration window.
+    static bool InRegistrationWindow();
+
+    // Record and log a claim or a verdict made outside a registration window.
+    void RefuseOutsideWindow(const char* what);
+
     // Record and log a second installation of something that may only be installed once.
     void RefuseReinstall(const char* what);
 
@@ -415,10 +443,12 @@ private:
     MainThreadMarshaller m_Marshaller;
     MainThreadPredicate m_MainThreadPredicate;
     std::size_t m_RefusedOffMainThread = 0;
+    std::size_t m_RefusedOutsideWindow = 0;
     std::size_t m_RefusedReinstalls = 0;
-    // Is a registration window on the stack, and which owners have claimed a tag inside it.
-    // Claims made outside a window are not collected: a native host that never installs a
-    // PerformRegistrations callback would otherwise grow this list with nothing to drain it.
+    // Is a registration window on the stack, and which owners have claimed a tag inside it: the
+    // window's own bookkeeping. The claim and verdict guard reads a thread-local flag instead
+    // (see RunRegistrationWindow), because another thread would read this member true while a
+    // window is open on the pump and write the registry under the window's writes.
     //
     // A plain vector because a window carries one owner in the ordinary case and a handful in
     // the worst: the linear membership check costs less than the hashing would.

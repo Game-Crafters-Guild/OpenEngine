@@ -139,7 +139,7 @@ void SendMouse(UIElement& el, EventId id, int button = 0)
 
 Button* FindButton(UIElement& root, const std::string& id)
 {
-    return dynamic_cast<Button*>(root.FindById(id));
+    return dynamic_cast<Button*>(root.FindById(HashStringId(id)));
 }
 
 // Asks for the removal the way the card offers it: the header's options button publishes its item
@@ -191,18 +191,18 @@ TEST(TerrainMaterialLibraryInspector, BuildsOneCardPerMaterialKeyedBySlotId)
     UIElement root("div");
     BuildInto(root, lib);
 
-    EXPECT_NE(root.FindById("terrainmatlib-slot-7-name"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-7-albedo"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-7-tiling"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-7-hex"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-7-retired"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-2-name"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-slot-2-options"), nullptr);
-    EXPECT_NE(root.FindById("terrainmatlib-add"), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-7-name"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-7-albedo"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-7-tiling"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-7-hex"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-7-retired"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-2-name"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-slot-2-options"_sid), nullptr);
+    EXPECT_NE(root.FindById("terrainmatlib-add"_sid), nullptr);
 
     // No card for a slot nobody holds — the array positions are 0 and 1 here.
-    EXPECT_EQ(root.FindById("terrainmatlib-slot-0-name"), nullptr);
-    EXPECT_EQ(root.FindById("terrainmatlib-slot-1-name"), nullptr);
+    EXPECT_EQ(root.FindById("terrainmatlib-slot-0-name"_sid), nullptr);
+    EXPECT_EQ(root.FindById("terrainmatlib-slot-1-name"_sid), nullptr);
 }
 
 // Add takes the LOWEST FREE slot ID, never the next array position, so a new material cannot
@@ -274,9 +274,9 @@ TEST(TerrainMaterialLibraryInspector, SurvivingCardsKeepTheirSlotIdsAfterARemove
 
     UIElement rebuilt("div");
     BuildInto(rebuilt, lib);
-    EXPECT_NE(rebuilt.FindById("terrainmatlib-slot-3-name"), nullptr);
-    EXPECT_NE(rebuilt.FindById("terrainmatlib-slot-9-name"), nullptr);
-    EXPECT_EQ(rebuilt.FindById("terrainmatlib-slot-5-name"), nullptr);
+    EXPECT_NE(rebuilt.FindById("terrainmatlib-slot-3-name"_sid), nullptr);
+    EXPECT_NE(rebuilt.FindById("terrainmatlib-slot-9-name"_sid), nullptr);
+    EXPECT_EQ(rebuilt.FindById("terrainmatlib-slot-5-name"_sid), nullptr);
 }
 
 // An empty library still offers the one control that gets a user out of it.
@@ -414,7 +414,7 @@ TEST(TerrainMaterialLibraryInspector, TintSwatchMouseDownOpensThePickerAtTheMate
                   openedIntensity = intensity;
               });
 
-    UIElement* swatch = root.FindById("terrainmatlib-slot-0-tint");
+    UIElement* swatch = root.FindById("terrainmatlib-slot-0-tint"_sid);
     ASSERT_NE(swatch, nullptr) << "the swatch element is gone; the rest of this test is vacuous";
 
     // Control FIRST, so a stub that fires for any dispatch cannot pass the assertion below.
@@ -422,7 +422,7 @@ TEST(TerrainMaterialLibraryInspector, TintSwatchMouseDownOpensThePickerAtTheMate
     SendMouse(*swatch, kEventMouseDown, /*button*/ 1);
     EXPECT_EQ(opened, 0) << "a right-click opened the colour picker";
     // ...and neither is a mouse-down on a sibling row that carries no tint handler.
-    UIElement* nameRow = root.FindById("terrainmatlib-slot-0-name");
+    UIElement* nameRow = root.FindById("terrainmatlib-slot-0-name"_sid);
     ASSERT_NE(nameRow, nullptr);
     SendMouse(*nameRow, kEventMouseDown, 0);
     EXPECT_EQ(opened, 0) << "an unrelated element opened the tint picker";
@@ -452,11 +452,11 @@ TEST(TerrainMaterialLibraryInspector, TheCardHeadlineIsTheNameAndTheSlotIsSecond
     UIElement root("div");
     BuildInto(root, lib);
 
-    Foldout* card = dynamic_cast<Foldout*>(root.FindById("terrainmatlib-slot-3-card"));
+    Foldout* card = dynamic_cast<Foldout*>(root.FindById("terrainmatlib-slot-3-card"_sid));
     ASSERT_NE(card, nullptr);
     EXPECT_EQ(card->GetTitle(), "Wet Sand") << "the slot ID is back in the headline";
 
-    Label* note = dynamic_cast<Label*>(root.FindById("terrainmatlib-slot-3-slotnote"));
+    Label* note = dynamic_cast<Label*>(root.FindById("terrainmatlib-slot-3-slotnote"_sid));
     ASSERT_NE(note, nullptr) << "the slot ID vanished; it is what painted terrain stores";
     EXPECT_EQ(note->GetText(), "Slot 3");
 }
@@ -486,18 +486,18 @@ TEST(TerrainMaterialLibraryInspector, ARetiredCardIsDimmedAndBadgedWhileALiveOne
 
     // Control first: the live card carries neither mark, so a build that stamped every card
     // cannot pass the assertions below.
-    UIElement* live = root.FindById("terrainmatlib-slot-4-card");
+    UIElement* live = root.FindById("terrainmatlib-slot-4-card"_sid);
     ASSERT_NE(live, nullptr);
     EXPECT_FALSE(live->HasClass("retired")) << "a live material is dimmed";
-    EXPECT_EQ(root.FindById("terrainmatlib-slot-4-retiredbadge"), nullptr);
+    EXPECT_EQ(root.FindById("terrainmatlib-slot-4-retiredbadge"_sid), nullptr);
 
-    UIElement* card = root.FindById("terrainmatlib-slot-6-card");
+    UIElement* card = root.FindById("terrainmatlib-slot-6-card"_sid);
     ASSERT_NE(card, nullptr);
     EXPECT_TRUE(card->HasClass("terrain-material-card"))
         << "the retired card is drawn at full strength: it is outside the dimming selector";
     EXPECT_TRUE(card->HasClass("retired")) << "the retired card is drawn at full strength";
 
-    Label* badge = dynamic_cast<Label*>(root.FindById("terrainmatlib-slot-6-retiredbadge"));
+    Label* badge = dynamic_cast<Label*>(root.FindById("terrainmatlib-slot-6-retiredbadge"_sid));
     ASSERT_NE(badge, nullptr) << "nothing on the card says it is retired";
     EXPECT_EQ(badge->GetText(), "RETIRED");
     EXPECT_TRUE(badge->HasClass("terrain-material-retired-badge"))
@@ -604,7 +604,7 @@ TEST(TerrainMaterialLibraryInspector, RemoveConfirmsFirstAndStatesTheEffectOnBou
     UIElement root("div");
     BuildInto(root, lib);
 
-    UIElement* confirm = root.FindById("terrainmatlib-slot-2-remove-confirm");
+    UIElement* confirm = root.FindById("terrainmatlib-slot-2-remove-confirm"_sid);
     ASSERT_NE(confirm, nullptr);
     EXPECT_EQ(confirm->Overrides().Get(Style::Display), DisplayMode::None)
         << "the confirmation is showing before anything was asked";
@@ -671,7 +671,7 @@ TEST(TerrainMaterialLibraryInspector, NoFieldIsMarkedUnsampled)
          {"normal", "orm", "ao", "normalstrength", "roughness", "tiling", "albedo"})
     {
         const std::string id = std::string("terrainmatlib-slot-1-") + field + "-phaseb";
-        EXPECT_EQ(root.FindById(id), nullptr)
+        EXPECT_EQ(root.FindById(HashStringId(id)), nullptr)
             << field << " is marked unsampled, but the terrain surface samples it";
     }
 
@@ -679,7 +679,7 @@ TEST(TerrainMaterialLibraryInspector, NoFieldIsMarkedUnsampled)
     for (const char* field : {"normal", "orm", "ao", "normalstrength"})
     {
         const std::string id = std::string("terrainmatlib-slot-1-") + field;
-        EXPECT_NE(root.FindById(id), nullptr) << field << " row disappeared with its note";
+        EXPECT_NE(root.FindById(HashStringId(id)), nullptr) << field << " row disappeared with its note";
     }
 }
 
@@ -722,7 +722,7 @@ T* FindDescendantByClass(UIElement& root, const char* className)
 // The row's draggable label, reached from the field's id: field -> .inspector-field -> .inspector-row.
 Label* FindRowLabelForField(UIElement& root, const std::string& fieldId)
 {
-    UIElement* field = root.FindById(fieldId);
+    UIElement* field = root.FindById(HashStringId(fieldId));
     if (!field)
         return nullptr;
     UIElement* fieldCell = field->GetParent();
@@ -812,7 +812,7 @@ TEST(TerrainMaterialLibraryInspector, ProjectionDropdownWritesPlanarAndUndoResto
     (*fn)(ctx);
 
     auto* projection = dynamic_cast<EnumField<TerrainMaterialProjection>*>(
-        root.FindById("terrainmatlib-slot-6-projection"));
+        root.FindById("terrainmatlib-slot-6-projection"_sid));
     ASSERT_NE(projection, nullptr) << "the card offers no Projection dropdown";
     EXPECT_EQ(projection->GetDropdown()->GetSelectedIndex(), 0)
         << "a new material must show Triplanar, the default every existing material renders with";

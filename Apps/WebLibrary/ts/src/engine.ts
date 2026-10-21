@@ -44,6 +44,9 @@ export function selectBuild(threads: ThreadsOption, crossOriginIsolated: boolean
         : { build: 'st', reason: 'the page is not cross-origin isolated (no COOP/COEP headers or service worker)' };
 }
 
+/** The drawing buffer's default pixel cap on a phone or tablet (EngineOptions.maxDrawingBufferPixels). */
+const kMobileDrawingBufferPixels = 1_000_000;
+
 let g_CanvasCount = 0;
 
 function canvasSelector(canvas: HTMLCanvasElement): string {
@@ -63,11 +66,14 @@ export class EngineImpl implements EngineApi, SceneHost {
     /** A load poll scheduled on its own because the engine is not running. */
     private m_PendingPoll: { kind: 'raf' | 'timer'; handle: number } | null = null;
     private readonly m_Unsubscribe: Array<() => void> = [];
+    private readonly m_MaxDrawingBufferPixels: number;
 
-    constructor(bridge: Bridge, host: Host, canvas: HTMLCanvasElement) {
+    constructor(bridge: Bridge, host: Host, canvas: HTMLCanvasElement, maxDrawingBufferPixels?: number) {
         this.bridge = bridge;
         this.m_Host = host;
         this.m_Canvas = canvas;
+        this.m_MaxDrawingBufferPixels =
+            maxDrawingBufferPixels ?? (host.isMobile() ? kMobileDrawingBufferPixels : Number.POSITIVE_INFINITY);
         this.scene = new SceneImpl(this);
     }
 
@@ -88,11 +94,11 @@ export class EngineImpl implements EngineApi, SceneHost {
         this.scene.setDefaults({ camera, sun: new SunViewImpl(sun), sky: new SkyViewImpl(sky) });
     }
 
-    /** Starts tracking the canvas size and the tab's visibility. */
+    /** Sizes the drawing buffer, then starts tracking the canvas size and the tab's visibility. */
     attach(): void {
+        this.resize();
         this.m_Unsubscribe.push(this.m_Host.observeResize(this.m_Canvas, () => this.resize()));
         this.m_Unsubscribe.push(this.m_Host.onVisibilityChange(() => this.reschedule()));
-        this.resize();
     }
 
     run(): void {
@@ -115,8 +121,14 @@ export class EngineImpl implements EngineApi, SceneHost {
         return () => this.m_FrameCallbacks.delete(callback);
     }
 
+    /** Sizes the drawing buffer to the canvas's CSS size times the pixel ratio, within the pixel cap. */
     resize(): void {
-        const code = this.bridge.abi.ge_resize(this.m_Canvas.clientWidth, this.m_Canvas.clientHeight, this.m_Host.devicePixelRatio());
+        const width = this.m_Canvas.clientWidth;
+        const height = this.m_Canvas.clientHeight;
+        const devicePixelRatio = this.m_Host.devicePixelRatio();
+        const fitting = Math.sqrt(this.m_MaxDrawingBufferPixels / Math.max(1, width * height));
+        const ratio = Math.min(devicePixelRatio, fitting);
+        const code = this.bridge.abi.ge_resize(width, height, ratio);
         this.bridge.check(code, 'engine.resize');
     }
 
@@ -200,13 +212,36 @@ export class EngineImpl implements EngineApi, SceneHost {
     }
 }
 
+/** Refuses an EngineOptions.maxDrawingBufferPixels that is not a positive number or Infinity. */
+function checkDrawingBufferCap(maxDrawingBufferPixels: unknown): void {
+    if (maxDrawingBufferPixels === undefined) return;
+    if (typeof maxDrawingBufferPixels !== 'number' || Number.isNaN(maxDrawingBufferPixels) || maxDrawingBufferPixels <= 0) {
+        throw new OpenEngineError('InvalidArgument',
+            `maxDrawingBufferPixels takes a number of pixels above 0, or Infinity for no limit (got ${String(maxDrawingBufferPixels)}); ` +
+            'leave it out for the default: 1,000,000 on a phone or tablet, no limit elsewhere.');
+    }
+}
+
+/**
+ * Refuses a canvas that measures 0 CSS pixels on an axis: a hidden canvas (display: none, or inside
+ * a hidden element) has no size for the engine to take, and the page's CSS cannot size it later.
+ */
+function checkCanvasShown(canvas: HTMLCanvasElement): void {
+    if (canvas.clientWidth > 0 && canvas.clientHeight > 0) return;
+    throw new OpenEngineError('InvalidArgument',
+        `The canvas measures ${canvas.clientWidth} x ${canvas.clientHeight} CSS pixels: it is hidden (display: none, ` +
+        'or inside a hidden element) or has no size. Show it before Engine.create, or call Engine.create once it is shown.');
+}
+
 /** Engine.create with its browser services, loader and release stamp supplied. */
 export async function createEngine(options: EngineOptions, host: Host, loadCore: CoreLoader, stamp: ReleaseStamp): Promise<EngineImpl> {
+    checkDrawingBufferCap(options.maxDrawingBufferPixels);
     if (!host.hasWebGPU()) {
         throw new OpenEngineError('NoWebGPU', 'This browser has no WebGPU. Use a current Chrome or Edge, or Safari or Firefox with WebGPU enabled.');
     }
     const { build, reason } = selectBuild(options.threads ?? 'auto', host.crossOriginIsolated());
     host.log(`OpenEngine: using the ${build === 'mt' ? 'threaded' : 'single-threaded'} build because ${reason}.`);
+    checkCanvasShown(options.canvas);
     const bridge = new Bridge(await loadCore(build, options.canvas, downloadTracker(options.onProgress)));
     const selector = canvasSelector(options.canvas);
     const code = await bridge.contract.suspend('ge_create', () => bridge.abi.ge_create(bridge.writeString(selector), 0));
@@ -214,9 +249,15 @@ export async function createEngine(options: EngineOptions, host: Host, loadCore:
     const json = bridge.loadReflection();
     checkRelease(json, bridge.reflection.engineVersion, stamp);
     bindComponentTokens(bridge.reflection);
-    const engine = new EngineImpl(bridge, host, options.canvas);
-    engine.createDefaultWorld();
-    engine.attach();
+    const engine = new EngineImpl(bridge, host, options.canvas, options.maxDrawingBufferPixels);
+    try {
+        engine.createDefaultWorld();
+        engine.attach();
+    } catch (error) {
+        // A rejected create leaves nothing running: no resize observer, no module.
+        await engine.dispose();
+        throw error;
+    }
     return engine;
 }
 

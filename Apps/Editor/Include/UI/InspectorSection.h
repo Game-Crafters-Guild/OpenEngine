@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <functional>
 
@@ -41,10 +42,22 @@ public:
     // via FindById. Returns the id passed in.
     const std::string& AssignHeaderIconId(const std::string& id);
 
-    // Show a small right-aligned status badge in the header (e.g. "Not Loaded"),
-    // inserted just before the options affordance. Empty text hides it.
+    // How a header badge reads: amber asks for attention, red says something failed, green
+    // says the state is good, neutral is information (work in progress).
+    enum class BadgeKind : std::uint8_t
+    {
+        Warning,
+        Error,
+        Success,
+        Neutral,
+    };
+
+    // Show a small status badge in the header (e.g. "Not Loaded") after the title: on the value
+    // column when the title is short, right after the title's text when it is long. Empty text
+    // hides it.
     // An optional tooltip is applied to the badge itself.
-    void SetHeaderBadge(const std::string& text, const std::string& tooltip = "");
+    void SetHeaderBadge(const std::string& text, const std::string& tooltip = "",
+                        BadgeKind kind = BadgeKind::Warning);
 
     UIElement* GetContentRoot() const { return m_ContentRoot; }
 

@@ -280,7 +280,7 @@ void EditorVersionControlUi::ActivateDiffPanel(DockingManager* docking, UIManage
         // Panel exists and was activated, rebuild the dockspace to reflect the activation
         if (auto* rootEl = ui->GetRootElement())
         {
-            if (auto* el = rootEl->FindById("dock"))
+            if (auto* el = rootEl->FindById("dock"_sid))
             {
                 if (auto* ds = dynamic_cast<DockspaceElement*>(el))
                 {
@@ -316,7 +316,7 @@ void EditorVersionControlUi::ActivateDiffPanel(DockingManager* docking, UIManage
                 // Rebuild the dockspace to show the new panel
                 if (auto* rootEl = ui->GetRootElement())
                 {
-                    if (auto* el = rootEl->FindById("dock"))
+                    if (auto* el = rootEl->FindById("dock"_sid))
                     {
                         if (auto* ds = dynamic_cast<DockspaceElement*>(el))
                         {

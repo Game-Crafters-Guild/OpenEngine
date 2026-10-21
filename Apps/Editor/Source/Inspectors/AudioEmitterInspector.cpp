@@ -19,6 +19,18 @@
 namespace GameEngine
 {
 
+// The smallest Min Distance the inspector offers, in world units (1 cm at the engine's metre
+// scale): Inverse and Exponential divide by it, so a value near 0 drops the sound below
+// audibility from the first unit out.
+static constexpr float kMinDistanceFloor = 0.01f;
+
+static constexpr EnumEntry<Components::AudioEmitterAttenuation> kAttenuationModels[] = {
+    {Components::AudioEmitterAttenuation::Inverse,     "Inverse"},
+    {Components::AudioEmitterAttenuation::Linear,      "Linear"},
+    {Components::AudioEmitterAttenuation::Exponential, "Exponential"},
+    {Components::AudioEmitterAttenuation::None,        "None"},
+};
+
 void RegisterAudioEmitterInspector()
 {
     InspectorFn fn = [](const InspectorContext& ctx)
@@ -285,6 +297,37 @@ void RegisterAudioEmitterInspector()
             [](Components::AudioEmitter& u, float v) { u.pitch = v; },
             emitter->pitch,
             "Playback pitch multiplier (1 = normal, 2 = one octave up)", extras);
+
+        // Distance falloff (spatialized emitters only).
+        auto* attenuationField = InspectorUI::AddEnumRow(ctx.Parent, "Attenuation", kAttenuationModels,
+            emitter->attenuation, "How volume falls off with distance from the listener");
+        attenuationField->SetOnValueChanged([w, e, n, undo, extras](Components::AudioEmitterAttenuation v) {
+            CommitComponentsWithUndo<Components::AudioEmitter>(w, e, extras, n, undo,
+                "Change Audio Emitter Attenuation",
+                [v](Components::AudioEmitter& u) { u.attenuation = v; });
+        });
+
+        AddComponentFloatRowWithDrag<Components::AudioEmitter>(ctx.Parent, "Min Distance", emitter->minDistance, w, e, n, undo,
+            "Change Audio Emitter Min Distance",
+            [](Components::AudioEmitter& u, float v) { u.minDistance = v; },
+            1.0f,
+            "Distance from the listener, in world units, within which the sound plays at full volume. "
+            "At least 0.01: the volume falls from there, so a smaller distance makes the sound much quieter from the first unit out", extras,
+            kMinDistanceFloor);
+
+        AddComponentFloatRowWithDrag<Components::AudioEmitter>(ctx.Parent, "Max Distance", emitter->maxDistance, w, e, n, undo,
+            "Change Audio Emitter Max Distance",
+            [](Components::AudioEmitter& u, float v) { u.maxDistance = v; },
+            10000.0f,
+            "Distance beyond which the volume stops falling; Linear reaches silence here", extras,
+            0.0f);
+
+        AddComponentFloatRowWithDrag<Components::AudioEmitter>(ctx.Parent, "Rolloff", emitter->rolloff, w, e, n, undo,
+            "Change Audio Emitter Rolloff",
+            [](Components::AudioEmitter& u, float v) { u.rolloff = v; },
+            1.0f,
+            "How quickly the volume falls with distance (0 = no falloff, 1 = natural)", extras,
+            0.0f);
     };
 
     InspectorRegistry::Get().RegisterComponentInspector<Components::AudioEmitter>(std::move(fn));

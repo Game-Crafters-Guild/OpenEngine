@@ -48,6 +48,7 @@
 // content identity and GPU-resource lifetime.
 
 #include "Engine/Rendering/ShadowCasterChanges.h"
+#include "Rendering/RenderLayerMask.h"
 
 #include <array>
 #include <cstdint>
@@ -118,7 +119,7 @@ struct CascadeRenderInputs
     // switch would leave retained cascades on their pre-switch LOD picks while
     // the camera pass re-selected.
     uint32_t SelectionMode = 0;
-    uint32_t RenderLayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
     bool CasterReduction = false;
     bool HasContributorDrawCommands = false;
 };

@@ -55,7 +55,10 @@ class CBTPlanarScaleAudit : public ::testing::TestWithParam<uint32_t>
         ASSERT_TRUE(m_Device->Initialize(desc));
         if (!m_Device->GetCapabilities().supportsShaderInt64)
             GTEST_SKIP() << "Vulkan shaderInt64 is required";
-        if (desc.enableDebugLayer) ASSERT_TRUE(m_Device->GetValidationStats().Enabled);
+        if (desc.enableDebugLayer)
+        {
+            ASSERT_TRUE(m_Device->GetValidationStats().Enabled);
+        }
         ASSERT_TRUE(m_Kernels.Initialize(*m_Device, CBTTest::ShaderOutputDir()));
     }
     void TearDown() override
@@ -160,8 +163,9 @@ class CBTPlanarScaleAudit : public ::testing::TestWithParam<uint32_t>
         double area = 0;
         for (const uint32_t slot : compact)
         {
-            CBTVertexData vertex{};
-            std::memcpy(&vertex, words.data()+slot*stride, sizeof(vertex));
+            std::array<uint32_t, sizeof(CBTVertexData) / sizeof(uint32_t)> recordWords;
+            std::copy_n(words.data() + slot * stride, recordWords.size(), recordWords.data());
+            const CBTVertexData vertex = std::bit_cast<CBTVertexData>(recordWords);
             ASSERT_EQ(vertex.DeepTag[0], 0u);
             const float* corners[] = {vertex.Corner0, vertex.Corner1, vertex.Corner2};
             CornerKey keys[3];

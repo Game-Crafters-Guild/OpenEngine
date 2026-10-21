@@ -336,12 +336,6 @@ private:
     // whatever's behind it. Cleared at stroke start / cancel.
     uint32 m_StickyEntityId = 0;
 
-    // Hover state. Updated on mouse move when not dragging. The gizmo
-    // renderer uses this to highlight the knot/handle under the cursor.
-    // kind: 0=none, 1=knot, 2=handleIn, 3=handleOut.
-    int32 m_HoverKind = 0;
-    int32 m_HoverPointIndex = -1;
-
     // Edit drag state. When non-zero kind, the tool is dragging a knot or
     // bezier handle of the selected spline entity instead of authoring new
     // points. kind: 0=none, 1=knot, 2=handleIn, 3=handleOut.

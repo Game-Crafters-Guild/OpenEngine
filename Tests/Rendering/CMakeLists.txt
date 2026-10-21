@@ -57,7 +57,6 @@ if(TARGET GameEngine.Native)
 endif()
 target_include_directories(MaterialLitCubeTests
     PRIVATE
-    ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/Tests
     # StagedTestPaths.h — exe-anchored resolution of the staged adapter shaders.
     ${CMAKE_SOURCE_DIR}/Engine/Tests
@@ -140,6 +139,10 @@ include(GoogleTest)
 add_test(NAME AnimationSystemTests COMMAND AnimationSystemTests)
 add_test(NAME TimelinePlaybackTests COMMAND TimelinePlaybackTests)
 add_test(NAME TransformMathTests COMMAND TransformMathTests)
+# ECS::ChangeFilter::Enabled() is read once per process: the hierarchy's change-filter-off path runs in a
+# process of its own.
+add_test(NAME TransformMathTests_ChangeFilterOff COMMAND TransformMathTests --gtest_filter=TransformMathTests.Hierarchy_*)
+set_tests_properties(TransformMathTests_ChangeFilterOff PROPERTIES ENVIRONMENT "GE_ECS_CHANGE_FILTER=0")
 
 # The working directory is the engine's workspace root; the build root, like
 # every other engine-initialising suite's. The asset root is exe-anchored.

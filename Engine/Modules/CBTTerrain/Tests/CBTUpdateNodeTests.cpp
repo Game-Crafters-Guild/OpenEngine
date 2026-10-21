@@ -368,7 +368,9 @@ TEST_F(CBTUpdateNodeTest, AStillViewSettlesAndStopsUpdating)
             settledCount = ReadbackDrawCount(*m_Device, instance);
         }
         if (firstSkipped < f)
+        {
             EXPECT_FALSE(declared) << "a settled still view declared the update again at frame " << f;
+        }
     }
     ASSERT_LT(firstSkipped, kFrames) << "the update never settled";
     EXPECT_GT(settledCount, kRootHalfedgeCount * 3u) << "settled before the tree refined";

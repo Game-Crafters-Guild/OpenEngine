@@ -1,11 +1,24 @@
 #version 450
 
-// Auto-exposure pass 2: reduce the geometry and sky histograms (built by auto_exposure_histogram.comp)
-// to one LINEAR exposure scale, smoothed in log space against the previous frame (eye adaptation).
+// Auto-exposure pass 2: one metered log luminance -> one LINEAR exposure scale, clamped and smoothed in
+// log space against the previous frame (eye adaptation). Two meters (Components::ExposureMeter):
+//   picture (0): reduce the geometry and sky histograms built by auto_exposure_histogram.comp;
+//   lights  (1): take lightsLogLuminance, the luminance of an 18 % card under the light falling on a
+//                horizontal surface (Rendering::MeteredLogLuminance of IncidentLightEv100); the histograms are
+//                neither built nor read.
+// Both readings are absolute scene-linear luminance: the histogram divides the pre-exposed scene
+// colour by its pre-exposure P before binning, and the lights reading is computed from the lights,
+// never from scene colour, so it never carries P.
+// The clamp, the bias (compensation), the compensation curve and the smoothing are the same for both.
+//
+// Compensation curve (Components::ExposureCompensationCurve.h): stops added to the exposure as a function
+// of the metered scene EV, read at the meter's unclamped reading and applied after the clamp, like the
+// bias. The CPU samples the curve (Rendering::SampleExposureCompensation) into compensationStops; this
+// pass interpolates the samples linearly and holds the end samples outside them.
 // State lives in a PERSISTENT/imported SSBO (RGFrame::ImportPersistentBuffer) so it survives across
 // frames; transient pool buffers alias and MUST NOT be used here.
 //
-// Metering rule (design: GameEngine-Workbench designs/rendering/auto-exposure.md):
+// Picture metering rule (design: GameEngine-Workbench designs/rendering/auto-exposure.md):
 //   the meter reads the geometry; the sky is a ceiling, not part of the average. With G and S the
 //   10-90 % log-averages of the geometry and sky histograms and f the sky's share of the metered
 //   pixels,
@@ -22,8 +35,8 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 const uint kBinCount = 256u;
 const uint kSkyOffset = kBinCount;  // histogram[256..511] is the sky (far plane)
-const float kMinLogLum = -16.0;     // must match the histogram pass
-const float kLogLumRange = 30.0;    // must match the histogram pass (physical scene-linear range)
+const float kMinLogLum = -24.0;     // must match the histogram pass
+const float kLogLumRange = 38.0;    // must match the histogram pass (physical scene-linear range)
 // Centered percentile window: reject only the extremes (deep shadow + highlights) and average the
 // middle 80% of each histogram.
 const float kLowPercent = 0.10;
@@ -38,13 +51,18 @@ const float kMinGeometryShare = 0.05;
 
 layout(set = 0, binding = 0, std430) restrict buffer HistogramBuffer { uint histogram[]; };
 
-// Persistent state. exposureScale is what the tonemap reads (N-1 latency).
-layout(set = 0, binding = 1, std430) restrict buffer ExposureState {
-    float exposureScale; // resolved LINEAR scene-exposure multiplier
-    uint  valid;         // != 1 -> first frame: snap to target, no smoothing
-    float padA;
-    float padB;
-} state;
+// Persistent state. exposureScale is what the tonemap reads (N-1 latency). The pre-exposure pair
+// belongs to pre_exposure_snapshot.comp; this pass never writes it.
+#define GE_EXPOSURE_HISTORY_BINDING 1
+#define GE_EXPOSURE_HISTORY_NAME state
+#define GE_EXPOSURE_HISTORY_WRITABLE
+#include "Includes/exposure_history.glsl"
+
+// The stops this frame's reading took from the compensation curve, for the passes that undo it (the
+// stars).
+#define GE_EXPOSURE_COMPENSATION_BINDING 2
+#define GE_EXPOSURE_COMPENSATION_WRITABLE
+#include "Includes/exposure_compensation.glsl"
 
 layout(push_constant) uniform PC {
     float deltaTime;     // seconds, clamped [0,0.1] on the CPU
@@ -58,7 +76,14 @@ layout(push_constant) uniform PC {
                          // compensation works even at the envelope pins.
     float minExposure;   // linear clamp (from MaxEv, bias pre-applied)
     float maxExposure;   // linear clamp (from MinEv, bias pre-applied)
+    uint  exposureMeter; // Components::ExposureMeter: 0 = picture, 1 = lights
+    float lightsLogLuminance; // lights meter: the metered log2 luminance
+    float compensationStartLogLuminance; // the metered log2 luminance of the first sample
+    float compensationSamplesPerStop;    // sample spacing; 0 = a constant curve (the first sample)
+    vec4  compensationStops[4];          // kCompensationSampleCount samples, stops (+ brightens)
 } pc;
+
+const uint kCompensationSampleCount = 16u; // Engine::Renderer::ExposureCompensationSamples::kCount
 
 // Called only for bins 1..255 — the reduction excludes the reserved near-black bin 0.
 float BinToLogLuminance(uint bin)
@@ -116,15 +141,55 @@ float MeteredLogLuminance()
     return geometry + pull * max(0.0, sky - kSkyHeadroomStops - geometry);
 }
 
+float CompensationSample(uint i)
+{
+    return pc.compensationStops[i >> 2u][i & 3u];
+}
+
+// The curve at a metered log2 luminance: linear between samples, the end samples outside them.
+float CompensationStops(float logLuminance)
+{
+    const float lastSample = float(kCompensationSampleCount - 1u);
+    float t = clamp((logLuminance - pc.compensationStartLogLuminance) * pc.compensationSamplesPerStop,
+                    0.0, lastSample);
+    uint i = min(uint(t), kCompensationSampleCount - 2u);
+    return mix(CompensationSample(i), CompensationSample(i + 1u), t - float(i));
+}
+
+// The lowest and the highest compensation the curve gives at any reading.
+vec2 CompensationRange()
+{
+    vec2 range = vec2(CompensationSample(0u));
+    for (uint i = 1u; i < kCompensationSampleCount; ++i)
+    {
+        float stops = CompensationSample(i);
+        range = vec2(min(range.x, stops), max(range.y, stops));
+    }
+    return range;
+}
+
 void main()
 {
-    float avgLum = exp2(MeteredLogLuminance());
+    const uint kMeterLights = 1u;
+    float logLum = pc.exposureMeter == kMeterLights ? pc.lightsLogLuminance : MeteredLogLuminance();
+    float avgLum = exp2(logLum);
     // Order the clamp bounds so an inverted Min/Max EV (which swaps min/maxExposure) stays well-defined.
     float loScale = min(pc.minExposure, pc.maxExposure);
     float hiScale = max(pc.minExposure, pc.maxExposure);
-    // The div-by-zero guard must sit BELOW the window floor (2^-16), or it becomes the real
-    // adaptation limit and MinEv is unreachable again.
-    float targetScale = clamp(pc.exposureKey / max(avgLum, 1e-6), loScale, hiScale);
+    // The divide-by-zero guard sits below the window floor (2^-24), so the picture meter never meets
+    // it. Under the lights meter it caps a reading near EV100 -19.8 (log2(1e-9 / 0.18) + log2(203)):
+    // an Auto Min EV below that lands there.
+    float compensationStops = CompensationStops(logLum);
+    float targetScale = clamp(pc.exposureKey / max(avgLum, 1e-9), loScale, hiScale) * exp2(compensationStops);
+    uCompensation.compensationStops = compensationStops;
+    uCompensation.meteredLogLuminance = logLum;
+    uCompensation.compensationValid = 1u;
+    // Every exposure the target can take: the clamp range widened by the curve's lowest and highest
+    // compensation. The previous exposure is held inside it, not inside the clamp range, so a
+    // compensated target outside the clamps is reached by the smoothing instead of being cut back.
+    vec2 compensationRange = exp2(CompensationRange());
+    loScale *= compensationRange.x;
+    hiScale *= compensationRange.y;
 
     // Snap on the first frame OR when the persistent state reads back garbage. The persistent buffer
     // is not zero-initialized, and an evicted view's buffer can be recycled with a stale valid==1, so

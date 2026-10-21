@@ -17,6 +17,8 @@
 # GoogleTest target directly. The pass runs once, deferred to the end of the top-level
 # directory, so it sees executables from every subdirectory without each one opting in.
 
+include(${CMAKE_CURRENT_LIST_DIR}/BuildsystemTargets.cmake)
+
 set(GE_ALLOCATION_HOOK_SOURCE "${CMAKE_SOURCE_DIR}/Engine/Modules/Memory/Source/AllocationHook.cpp")
 set(GE_PRODUCTION_ALLOCATION_HOOK_SOURCE "${CMAKE_SOURCE_DIR}/Engine/Modules/Memory/Source/ProductionAllocationHook.cpp")
 set(GE_ALLOCATION_COUNTER_SOURCE "${CMAKE_SOURCE_DIR}/Engine/Modules/Memory/Source/AllocationCounter.cpp")
@@ -44,14 +46,15 @@ function(ge_add_production_allocation_hook target_name)
     _ge_allocation_hook_compile_alone(${target_name})
 endfunction()
 
-function(_ge_collect_buildsystem_targets directory out_var)
-    get_property(_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
-    get_property(_subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
-    foreach(_subdirectory IN LISTS _subdirectories)
-        _ge_collect_buildsystem_targets("${_subdirectory}" _nested)
-        list(APPEND _targets ${_nested})
-    endforeach()
-    set(${out_var} ${_targets} PARENT_SCOPE)
+# The counter copy compiles empty in a target whose link closure already holds the
+# counter: Memory and Engine carry the GE_ALLOCATION_COUNTER_LINKED link-interface
+# property (COMPATIBLE_INTERFACE_BOOL), which $<TARGET_PROPERTY:...> evaluates over the
+# compiling target's dependencies. Only this source sees the definition.
+function(_ge_allocation_counter_compile_empty_when_linked target_name)
+    set_source_files_properties(${GE_ALLOCATION_COUNTER_SOURCE}
+        TARGET_DIRECTORY ${target_name}
+        PROPERTIES COMPILE_DEFINITIONS
+            "$<$<BOOL:$<TARGET_PROPERTY:GE_ALLOCATION_COUNTER_LINKED>>:GE_ALLOCATION_COUNTER_LINKED>")
 endfunction()
 
 function(_ge_is_test_executable target_name out_var)
@@ -68,7 +71,7 @@ function(_ge_is_test_executable target_name out_var)
 endfunction()
 
 function(ge_add_allocation_hook_to_test_executables)
-    _ge_collect_buildsystem_targets("${CMAKE_SOURCE_DIR}" _targets)
+    ge_collect_buildsystem_targets("${CMAKE_SOURCE_DIR}" _targets)
     set(_count 0)
     foreach(_target IN LISTS _targets)
         _ge_is_test_executable(${_target} _is_test)
@@ -78,6 +81,7 @@ function(ge_add_allocation_hook_to_test_executables)
         target_sources(${_target} PRIVATE ${GE_ALLOCATION_HOOK_SOURCE} ${GE_ALLOCATION_COUNTER_SOURCE})
         target_include_directories(${_target} PRIVATE ${GE_ALLOCATION_COUNTER_INCLUDE_DIRS})
         _ge_allocation_hook_compile_alone(${_target})
+        _ge_allocation_counter_compile_empty_when_linked(${_target})
         math(EXPR _count "${_count} + 1")
     endforeach()
     message(STATUS "Allocation counter: hook compiled into ${_count} test executables")

@@ -1,8 +1,9 @@
 #pragma once
 
+#include "Types/StringId.h"
+
 #include <cstdint>
 #include <functional>
-#include <string_view>
 
 namespace GameEngine {
 
@@ -31,15 +32,17 @@ UIManager* GetUIManager();
 // bound on the gameplay host.
 UIElement* FindDocumentRoot(uint64_t entityId);
 
-UIElement* FindElementById(uint64_t entityId, std::string_view id);
-
-// On a match, outOwnerEntityId (if non-null) receives the owning UIDocument
-// entity so the caller can pin later lookups to that one subtree. Untouched
-// when nothing matches.
+// Element `id` in any bound document, or nullptr: FindElementById("score"_sid),
+// or FindElementById(HashStringId(name)) for an id built at runtime. An id two
+// documents share resolves to the one owned by the lowest entity id, so the
+// winner is stable. On a match, outOwnerEntityId (if non-null) receives that
+// owning UIDocument entity, so a game with several documents can pin later
+// lookups to one of them through FindDocumentRoot(owner), which returns nullptr
+// while that document loads or after play stops: check it before FindById.
+// outOwnerEntityId is untouched when nothing matches.
 //
-// An EMPTY id matches the first element that has no id, which is most of a tree
-// — callers taking an id from outside must reject empty before calling.
-UIElement* FindElementByIdAny(std::string_view id, uint64_t* outOwnerEntityId = nullptr);
+// An empty id is never registered; FindElementById(0) returns nullptr.
+UIElement* FindElementById(StringId id, uint64_t* outOwnerEntityId = nullptr);
 
 // Bumps when a document layout binds, a subtree is removed, or a .uxml hot
 // reload reconciles a bound subtree. A bump does not imply the old elements
@@ -60,7 +63,7 @@ uint64_t GetGameplaySession();
 // There is deliberately no session-scoped click registration on this surface.
 //
 // C++ callers register on document elements directly, through the ordinary UI
-// APIs: resolve the element with FindElementById / FindElementByIdAny above and
+// APIs: resolve the element with FindElementById above and
 // call UIElement::RegisterEventHandler. The TREE LIFECYCLE owns those handlers —
 // play-stop drops every bound UIDocument subtree (GameUIHost::ResetBoundDocuments,
 // #1061), which destroys the elements and with them their handlers, and a native

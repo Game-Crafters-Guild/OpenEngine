@@ -5,8 +5,8 @@
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "PathfindingECS/NavigationService.h"
-#include "PathfindingECS/NavigationGridRuntime.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
+#include "PathfindingECS/NavigationSurfaceRuntime.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/GridMap.h"
 #include "Pathfinding/PathfindingTypes.h"
@@ -29,7 +29,7 @@ namespace
 constexpr uint32_t kMaxBrushRadius = 4;
 constexpr float kRayDirectionEpsilon = 1e-6f;
 
-// Find the first initialized grid map via ECS NavigationGrid components.
+// The grid of the first NavigationSurface baked in Grid mode.
 Pathfinding::GridMap* FindFirstGridMap(ECS::World* ecsWorld)
 {
     auto* navWorld = PathfindingECS::NavigationService::TryGet();
@@ -40,12 +40,12 @@ Pathfinding::GridMap* FindFirstGridMap(ECS::World* ecsWorld)
         return nullptr;
 
     Pathfinding::GridMap* result = nullptr;
-    ecsWorld->Query<ECS::Read<Components::NavigationGrid>>().Each(
-        [&](ECS::EntityHandle /*e*/, const Components::NavigationGrid& source)
+    ecsWorld->Query<ECS::Read<Components::NavigationSurface>>().Each(
+        [&](ECS::EntityHandle /*e*/, const Components::NavigationSurface& source)
         {
             if (result)
                 return;
-            result = PathfindingECS::ResolveNavigationGridMap(*ecsWorld, source);
+            result = PathfindingECS::ResolveNavigationSurfaceGrid(*ecsWorld, source);
         });
 
     return result;

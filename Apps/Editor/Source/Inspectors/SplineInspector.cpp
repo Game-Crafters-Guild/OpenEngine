@@ -102,7 +102,7 @@ public:
 
         const ECS::ComponentTypeId splineType = ECS::GetComponentTypeId<Components::SplineComponent>();
         m_Subscription = m_Notifications->SubscribeComponentChanged(
-            [this, splineType](const EditorChangeNotifications::ComponentChangedEvent& ev)
+            [this](const EditorChangeNotifications::ComponentChangedEvent& ev)
             {
                 if (ev.world != m_World || ev.entity != m_Entity || ev.componentType != splineType)
                     return;

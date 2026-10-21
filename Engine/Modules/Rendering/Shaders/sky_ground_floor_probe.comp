@@ -30,7 +30,7 @@ layout(push_constant) uniform ProbePC
     vec4 sunDirAndIntensity;    // xyz sun direction,   w sun intensity
     vec4 albedoAndScaleHeight;  // xyz ground albedo,   w rayleigh scale height
     vec4 sunColorAndHaze;       // xyz sun colour,      w ground haze strength
-    vec4 betaAndPad;            // xyz beta rayleigh,   w unused
+    vec4 betaAndAtmosphereRadius; // xyz beta rayleigh, w atmosphere radius
     vec4 skyColorAndCount;      // xyz incoming sky,    w direction count
     vec4 meanRadiance;          // xyz cosine-weighted mean sky radiance
 } pc;
@@ -64,6 +64,7 @@ void main()
                                             dirWS,
                                             pc.centerAndBrightness.xyz,
                                             pc.camPosAndRadius.w,
+                                            pc.betaAndAtmosphereRadius.w,
                                             camR,
                                             dirWS.y,
                                             pc.albedoAndScaleHeight.xyz,
@@ -71,7 +72,7 @@ void main()
                                             normalize(pc.sunDirAndIntensity.xyz),
                                             pc.sunColorAndHaze.xyz,
                                             pc.sunDirAndIntensity.w,
-                                            pc.betaAndPad.xyz,
+                                            pc.betaAndAtmosphereRadius.xyz,
                                             pc.albedoAndScaleHeight.w,
                                             pc.sunColorAndHaze.w,
                                             // Daytime: the property under test is the

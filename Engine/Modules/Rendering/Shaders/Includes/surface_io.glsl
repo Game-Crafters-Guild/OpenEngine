@@ -174,6 +174,14 @@ struct SurfaceOutput
     vec3 particleNegative;
     mat3 particleBasis;
 #endif
+#ifdef GE_DIFFUSE_TRANSMISSION_ENABLED
+    // Diffuse transmission through a thin surface (a leaf, paper, a lampshade). The share of the
+    // diffuse light that leaves through the far face instead of the near one, 0..1, and the albedo
+    // of that light. The near face keeps (1 - diffuseTransmission) of its diffuse reflection; the
+    // far face sends diffuseTransmission * diffuseTransmissionAlbedo of the light that reaches it.
+    float diffuseTransmission;
+    vec3 diffuseTransmissionAlbedo;
+#endif
 
 #ifdef GE_PARALLAX_MARCH
     // How much of the primary directional light reaches the shaded point past the surface's own
@@ -246,6 +254,10 @@ SurfaceOutput DefaultSurfaceOutput()
     o.particleNegative = vec3(1.0);
     o.particleBasis = mat3(1.0);
 #endif
+#ifdef GE_DIFFUSE_TRANSMISSION_ENABLED
+    o.diffuseTransmission = 0.0;
+    o.diffuseTransmissionAlbedo = vec3(0.0);
+#endif
 #ifdef GE_PARALLAX_MARCH
     o.primaryLightOcclusion = 1.0;
 #endif
@@ -291,11 +303,22 @@ SurfaceInput DefaultSurfaceInput()
     si.particleColorScale = 1.0;
     si.particleNearFade = 1.0;
 #endif
+#ifdef GE_COMPAT_PROFILE
+    // Whole-array stores, no loop: the WGSL cook turns a loop-indexed store into a private array the
+    // Mali compiler keeps in memory: about half the forward pass on a Mali-G78.
+    const vec4 kIdentityRow0 = vec4(1.0, 0.0, 0.0, 0.0);
+    const vec4 kIdentityRow1 = vec4(0.0, 1.0, 0.0, 0.0);
+    si.textureST = vec4[8](kIdentityRow0, kIdentityRow0, kIdentityRow0, kIdentityRow0,
+                           kIdentityRow0, kIdentityRow0, kIdentityRow0, kIdentityRow0);
+    si.textureST2 = vec4[8](kIdentityRow1, kIdentityRow1, kIdentityRow1, kIdentityRow1,
+                            kIdentityRow1, kIdentityRow1, kIdentityRow1, kIdentityRow1);
+#else
     for (int i = 0; i < 8; ++i)
     {
         si.textureST[i] = vec4(1.0, 0.0, 0.0, 0.0);
         si.textureST2[i] = vec4(0.0, 1.0, 0.0, 0.0);
     }
+#endif
 #ifdef GE_PARALLAX_MARCH
     si.uvFootprint = vec4(0.0);
     si.positionFootprintX = vec3(0.0);

@@ -40,7 +40,7 @@
     { "frame": 106, "type": "keyUp", "key": 341, "mods": 0 },
     { "frame": 108, "type": "waitSelectedCount", "subtreeId": "assets-grid", "requiredClass": "grid-cell", "exact": 2, "timeoutFrames": 300 },
 
-    { "frame": 210, "type": "mouseMove", "target": { "kind": "elementId", "id": "assets-views-container", "relX": 0.8, "relY": 0.92 } },
+    { "frame": 210, "type": "mouseMove", "target": { "kind": "elementId", "id": "assets-views-container", "relX": 0.8, "relY": 0.7 } },
     { "frame": 211, "type": "mouseDown", "button": 0 },
     { "frame": 212, "type": "mouseUp", "button": 0 },
     { "frame": 220, "type": "waitSelectedCount", "subtreeId": "assets-grid", "requiredClass": "grid-cell", "exact": 0, "timeoutFrames": 300 },

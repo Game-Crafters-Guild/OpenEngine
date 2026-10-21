@@ -47,7 +47,7 @@ export function checkRelease(json: string, engineVersion: string, expected: { ve
     if (expected.fingerprint === null || fingerprint(json) === expected.fingerprint) return;
     throw new OpenEngineError('VersionMismatch',
         `The engine module is release ${engineVersion} and this library is ${expected.version}; their component layouts differ. ` +
-        `Update @openengine/web to ${engineVersion}, or serve the engine module that ships with ${expected.version}.`);
+        `Update @game-crafters-guild/openengine-web to ${engineVersion}, or serve the engine module that ships with ${expected.version}.`);
 }
 
 export class Reflection {

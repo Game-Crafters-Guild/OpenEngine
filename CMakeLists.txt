@@ -559,6 +559,9 @@ endif()
 # GE_DEBUG_INSTRUMENTATION. Also refuses ENABLE_MIMALLOC where the hook is compiled.
 include(cmake/AllocationHook.cmake)
 
+# Refuses a target that links Engine and also a module Engine already contains.
+include(cmake/EngineModuleDuplicationCheck.cmake)
+
 # Verify dependencies are working
 verify_dependencies()
 
@@ -600,8 +603,13 @@ if(NOT CMAKE_HOST_WIN32)
     find_package(PkgConfig REQUIRED)
 endif()
 
+# .NET hosting libraries (nethost) with architecture detection, and the helper that
+# stages the hosting runtime beside an executable: scripting-only, so a build with
+# ENABLE_SCRIPTING=OFF never looks for a .NET install.
+if(ENABLE_SCRIPTING)
 # Find .NET hosting libraries (nethost) with architecture detection
 include(cmake/DotnetHostVersions.cmake)
+include(cmake/DotnetLinuxHostRids.cmake)
 if(WIN32)
     # Detect target architecture — prefer the generator platform (VS generators)
     # over CMAKE_SYSTEM_PROCESSOR which reports the host, not the target.
@@ -731,33 +739,40 @@ elseif(APPLE)
 	endif()
 
 elseif(UNIX AND NOT APPLE)
-    # Linux: locate libnethost.so from the installed .NET SDK/runtime
-    # Prefer DOTNET_ROOT when set, otherwise fall back to the standard install root
+    # Linux: locate libnethost.so from the installed .NET SDK/runtime.
+    # The install root is DOTNET_ROOT when set, else the directory of the dotnet
+    # executable on PATH with symlinks resolved (distro packages link
+    # /usr/bin/dotnet into their own root, /usr/lib64/dotnet on Fedora), else
+    # the location Microsoft's installer uses.
     set(DOTNET_ROOT_HINT "$ENV{DOTNET_ROOT}")
     if(DOTNET_ROOT_HINT STREQUAL "")
-        set(DOTNET_ROOT_HINT "/usr/share/dotnet")
+        find_program(_ge_dotnet_on_path dotnet NO_CACHE)
+        if(_ge_dotnet_on_path)
+            file(REAL_PATH "${_ge_dotnet_on_path}" _ge_dotnet_on_path)
+            get_filename_component(DOTNET_ROOT_HINT "${_ge_dotnet_on_path}" DIRECTORY)
+        else()
+            set(DOTNET_ROOT_HINT "/usr/share/dotnet")
+        endif()
     endif()
 
-    # Derive RID based on architecture (x64 / arm64)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         # On many Linux distros CMAKE_SYSTEM_PROCESSOR is "aarch64" or
         # "arm64" for ARM64; handle both as well as uppercase ARM64.
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
-            set(DOTNET_LINUX_RID "linux-arm64")
+            set(DOTNET_LINUX_ARCH "arm64")
         else()
-            set(DOTNET_LINUX_RID "linux-x64")
+            set(DOTNET_LINUX_ARCH "x64")
         endif()
     else()
-        set(DOTNET_LINUX_RID "linux-x86")
+        set(DOTNET_LINUX_ARCH "x86")
     endif()
 
-    set(DOTNET_HOST_PACK_ROOT "${DOTNET_ROOT_HINT}/packs/Microsoft.NETCore.App.Host.${DOTNET_LINUX_RID}")
-    file(GLOB DOTNET_HOST_VERSIONS "${DOTNET_HOST_PACK_ROOT}/*")
-
-    if(DOTNET_HOST_VERSIONS)
+    ge_dotnet_linux_host_rids("${DOTNET_ROOT_HINT}" "${DOTNET_LINUX_ARCH}" DOTNET_LINUX_RIDS)
+    foreach(DOTNET_LINUX_RID IN LISTS DOTNET_LINUX_RIDS)
+        file(GLOB DOTNET_HOST_VERSIONS "${DOTNET_ROOT_HINT}/packs/Microsoft.NETCore.App.Host.${DOTNET_LINUX_RID}/*")
         ge_dotnet_versions_newest_first(DOTNET_HOST_VERSIONS)
 
-        foreach(VERSION_PATH ${DOTNET_HOST_VERSIONS})
+        foreach(VERSION_PATH IN LISTS DOTNET_HOST_VERSIONS)
             set(DOTNET_NATIVE_PATH "${VERSION_PATH}/runtimes/${DOTNET_LINUX_RID}/native")
             message(STATUS "Checking: ${DOTNET_NATIVE_PATH}")
 
@@ -769,11 +784,15 @@ elseif(UNIX AND NOT APPLE)
                 break()
             endif()
         endforeach()
-    endif()
+
+        if(NETHOST_LIBRARY)
+            break()
+        endif()
+    endforeach()
 
     if(NOT NETHOST_LIBRARY)
         message(WARNING "libnethost.so not found under ${DOTNET_ROOT_HINT}; CoreCLR hosting will be disabled on Linux.")
-        message(STATUS "Searched under: ${DOTNET_HOST_PACK_ROOT}")
+        message(STATUS "Searched host packs for: ${DOTNET_LINUX_RIDS}")
     else()
         message(STATUS "Using .NET hosting library on Linux: ${NETHOST_LIBRARY}")
     endif()
@@ -815,6 +834,7 @@ function(ge_add_dotnet_hosting_runtime target_name)
     endif()
   endif()
 endfunction()
+endif() # ENABLE_SCRIPTING
 
 #
 # Helper: copy MSVC AddressSanitizer runtime DLLs next to an executable target.
@@ -894,8 +914,12 @@ if(GE_STEAMDECK_BUILD)
     add_compile_definitions(GE_STEAMDECK_BUILD=1 PLATFORM_STEAMDECK=1)
 endif()
 
-# When enabled, treat warnings as errors on non-MSVC compilers in dev configs.
-option(ENABLE_WERROR_NON_MSVC "Treat warnings as errors on non-MSVC compilers (Debug/RelWithDebInfo)" OFF)
+# GCC and Clang-family builds are strict by default.
+set(_ge_werror_non_msvc_default OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+	set(_ge_werror_non_msvc_default ON)
+endif()
+option(ENABLE_WERROR_NON_MSVC "Treat warnings as errors on non-MSVC compilers (Debug/DebugFast/RelWithDebInfo)" ${_ge_werror_non_msvc_default})
 
 # Compiler-specific options
 if(MSVC)
@@ -904,7 +928,7 @@ if(MSVC)
 	#  - /Zc:preprocessor           : conforming preprocessor
 	#  - /Zc:__cplusplus            : make __cplusplus report the actual standard level
 	#  - /W4                        : high warning level
-	#  - /WX (Debug/RelWithDebInfo) : treat *compiler* warnings as errors in dev configs
+	#  - /WX (Debug/DebugFast/RelWithDebInfo) : treat *compiler* warnings as errors in dev configs
 	#  - /MP                        : multi-processor compilation
 	#  - /analyze (Debug only)      : static analysis where iteration speed doesn't
 	#                                 matter; RelWithDebInfo is the perf-verification
@@ -930,7 +954,7 @@ if(MSVC)
 	)
 	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 else()
-	# GCC/Clang: strong warnings everywhere; -Werror only when explicitly requested.
+	# GCC/Clang: strong warnings everywhere; dev configs default to errors.
 	add_compile_options(
 		-Wall
 		-Wextra
@@ -942,11 +966,12 @@ else()
 		-Wno-unused-variable
 		-Wno-missing-field-initializers
 		-Wno-unused-parameter
-		$<$<CXX_COMPILER_ID:GNU>:-Wno-changes-meaning>
+		$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-changes-meaning>
 	)
 	if(ENABLE_WERROR_NON_MSVC)
 		add_compile_options(
 			$<$<CONFIG:Debug>:-Werror>
+			$<$<CONFIG:DebugFast>:-Werror>
 			$<$<CONFIG:RelWithDebInfo>:-Werror>
 		)
 	endif()
@@ -981,6 +1006,20 @@ if(ENABLE_ASAN)
 
 	# Expose a compile-time define so code/tests can relax perf thresholds under ASan.
 	add_compile_definitions($<$<CONFIG:Debug>:GE_ENABLE_ASAN=1>)
+endif()
+
+# ThreadSanitizer toggle (Debug config, clang and gcc only)
+option(ENABLE_TSAN "Enable ThreadSanitizer (applies to Debug config)" OFF)
+if(ENABLE_TSAN)
+	if(ENABLE_ASAN)
+		message(FATAL_ERROR "ENABLE_TSAN and ENABLE_ASAN cannot both be ON: the two sanitizers do not link together. Configure a separate tree for each (macos-arm64-local-asan, macos-arm64-local-tsan), or turn one off in this tree with -DENABLE_ASAN=OFF or -DENABLE_TSAN=OFF (or reconfigure with cmake --fresh).")
+	endif()
+	if(MSVC)
+		message(FATAL_ERROR "ENABLE_TSAN needs clang or gcc: MSVC has no ThreadSanitizer. Use a macOS or Linux tree.")
+	endif()
+	message(STATUS "ThreadSanitizer: ENABLED")
+	add_compile_options("$<$<CONFIG:Debug>:-fsanitize=thread;-fno-omit-frame-pointer>")
+	add_link_options("$<$<CONFIG:Debug>:-fsanitize=thread>")
 endif()
 
 # Clang-Tidy integration (runs during CMake builds if available)
@@ -1024,6 +1063,10 @@ endif()
 
 # Include directories (removed global include paths; targets declare their own)
 
+# The shader compiler, before any engine directory that compiles shaders.
+include(cmake/GlslcCompiler.cmake)
+ge_find_glslc()
+
 # Add subdirectories in dependency order
 
 # Emscripten builds compile the engine library graph (Phase 4 of the web
@@ -1041,6 +1084,7 @@ if(EMSCRIPTEN)
     add_subdirectory(Engine/Modules/Mathematics)
     add_subdirectory(Engine/Modules/Serialization)
     add_subdirectory(Engine/Modules/Noise)
+    add_subdirectory(Engine/Modules/Image)
     add_subdirectory(Engine/Modules/Memory)
     add_subdirectory(Engine/Modules/Animation)
     add_subdirectory(Engine/ECSModules/Components)
@@ -1128,6 +1172,8 @@ add_subdirectory(Engine/Modules/Mathematics)
 add_subdirectory(Engine/Modules/Serialization)
 # Noise depends on Types: shared CPU noise primitives for terrain and any other sampler
 add_subdirectory(Engine/Modules/Noise)
+# Image depends on Logger: the one CPU image decode, resample and encode (owns stb)
+add_subdirectory(Engine/Modules/Image)
 add_subdirectory(Engine/Modules/Animation)     # Animation pose, graph nodes, retargeting primitives
 
 # ECSModules/Components: shared ECS/authoring component headers
@@ -1257,6 +1303,13 @@ if(BUILD_TESTING)
 endif()
 if(BUILD_TOOLS)
   add_subdirectory(Tools)
+elseif(TARGET Editor)
+  # The Editor's desktop export runs MaterialVariantCook (BuildPipeline::CookMaterialVariants), so the
+  # Editor builds it whatever BUILD_TOOLS says, staged into bin/<config>/Tools beside ShaderReflect.
+  add_subdirectory(Tools/MaterialVariantCook)
+endif()
+if(TARGET Editor)
+  add_dependencies(Editor MaterialVariantCook)
 endif()
 if(ENABLE_SCRIPTING)
   # Convenience target to build only scripting-related artifacts

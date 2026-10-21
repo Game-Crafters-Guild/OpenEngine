@@ -89,9 +89,8 @@ set(_managed_dir "${_resources_dir}/Managed")
 if(EXISTS "${_managed_dir}")
   foreach(_shared IN ITEMS
       GameEngine.Scripting.ABI
+      GameEngine.Scripting.Bindings
       GameEngine.ECS.ABI
-      GameEngine.Input.ABI
-      GameEngine.Physics.ABI
       GameEngine.Platform.ABI
       GameEngine.Editor.Scripting.ABI
       GameEngine.Scripting.Runtime

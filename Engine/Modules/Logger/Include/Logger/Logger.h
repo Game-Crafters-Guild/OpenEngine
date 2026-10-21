@@ -331,11 +331,11 @@ class Log
 #define LOG_TRACE(...) ((void)0)
 #define LOG_DEBUG(...) ((void)0)
 #else
-#define LOG_TRACE(format, ...) Logger::Log::Trace(format, ##__VA_ARGS__)
-#define LOG_DEBUG(format, ...) Logger::Log::Debug(format, ##__VA_ARGS__)
+#define LOG_TRACE(format, ...) Logger::Log::Trace(format __VA_OPT__(,) __VA_ARGS__)
+#define LOG_DEBUG(format, ...) Logger::Log::Debug(format __VA_OPT__(,) __VA_ARGS__)
 #endif
-#define LOG_INFO(format, ...) Logger::Log::Info(format, ##__VA_ARGS__)
-#define LOG_WARNING(format, ...) Logger::Log::Warning(format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) Logger::Log::Error(format, ##__VA_ARGS__)
-#define LOG_CRITICAL(format, ...) Logger::Log::Critical(format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) Logger::Log::Info(format __VA_OPT__(,) __VA_ARGS__)
+#define LOG_WARNING(format, ...) Logger::Log::Warning(format __VA_OPT__(,) __VA_ARGS__)
+#define LOG_ERROR(format, ...) Logger::Log::Error(format __VA_OPT__(,) __VA_ARGS__)
+#define LOG_CRITICAL(format, ...) Logger::Log::Critical(format __VA_OPT__(,) __VA_ARGS__)
 #endif

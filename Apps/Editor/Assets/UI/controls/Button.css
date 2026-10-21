@@ -407,7 +407,7 @@ button.camera-bookmarks-slot.cambookmark-icon,
 	height: 26px;
 	min-width: 26px;
 	min-height: 26px;
-	background-image: url("editor:Icons/cambookmark.png");
+	background-image: url("editor:Icons/cambookmark.svg");
 	background-size: 26px 26px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -550,4 +550,47 @@ button.todo-delete:active,
 .button.todo-delete:active {
 	background-color: transparent;
 	border-color: transparent;
+}
+
+/* Segmented buttons: one choice of a few in a row, the chosen one segmented-button-selected. After the base
+   rules so that, at equal specificity, these win. */
+.segmented-button {
+	flex: 1 1 0;
+	min-width: 0;
+	min-height: 26px;
+	height: 26px;
+	margin: 0;
+	padding: 3px 8px;
+	border-width: 0;
+	border-style: none;
+	border-radius: 4px;
+	background-color: transparent;
+	background-image: none;
+	color: rgba(255, 255, 255, 0.68);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.segmented-button:hover {
+	background-color: rgba(255, 255, 255, 0.08);
+	color: rgba(255, 255, 255, 0.9);
+}
+
+.segmented-button:active {
+	background-color: rgba(255, 255, 255, 0.12);
+}
+
+.segmented-button-selected {
+	background-color: rgba(255, 255, 255, 0.16);
+	color: var(--ui_color_text);
+}
+
+.segmented-button-selected:hover {
+	background-color: rgba(255, 255, 255, 0.16);
+	color: var(--ui_color_text);
+}
+
+/* Two to a row in a row that wraps. */
+.segmented-button-pair {
+	flex: 1 0 40%;
 }

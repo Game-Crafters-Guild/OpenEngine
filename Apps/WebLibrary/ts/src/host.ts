@@ -13,6 +13,8 @@ export interface Host {
     /** Calls `callback` whenever `element`'s size changes; returns the unsubscribe. */
     observeResize(element: HTMLElement, callback: () => void): () => void;
     devicePixelRatio(): number;
+    /** True on a phone or tablet: where `maxDrawingBufferPixels` defaults to a megapixel. */
+    isMobile(): boolean;
     crossOriginIsolated(): boolean;
     hasWebGPU(): boolean;
     /** `url` resolved against the page's base URL. */
@@ -40,6 +42,12 @@ export function browserHost(): Host {
             return () => observer.disconnect();
         },
         devicePixelRatio: () => window.devicePixelRatio || 1,
+        isMobile: () => {
+            const userAgentData = (navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData;
+            // iPadOS Safari reports a Macintosh user agent; its touch points tell it from a Mac.
+            return userAgentData?.mobile === true || /Android|iPhone|iPad|iPod/.test(navigator.userAgent) ||
+                (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+        },
         crossOriginIsolated: () => globalThis.crossOriginIsolated === true,
         hasWebGPU: () => 'gpu' in navigator && navigator.gpu !== undefined,
         resolveUrl: (url) => new URL(url, document.baseURI).href,

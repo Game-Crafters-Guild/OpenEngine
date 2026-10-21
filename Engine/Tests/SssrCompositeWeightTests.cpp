@@ -45,7 +45,8 @@ TEST(SssrCompositeWeight, ForwardExportsTheActualIncidentRadianceAndLayeredWeigh
     EXPECT_NE(ibl.find("ge_sssrSpecularWeight *= coatDarken * so.coatColor * (1.0 - ccFc);"), std::string::npos);
     EXPECT_NE(ibl.find("ge_sssrSpecularWeight *= 1.0 - fuzzReflectance;"), std::string::npos);
     EXPECT_NE(adapter.find("ge_sssrSpecularWeight * ambientMultiplier"), std::string::npos);
-    EXPECT_NE(adapter.find("vec4(ge_sssrIncidentRadiance, reflectionOct.y)"), std::string::npos);
+    // Stored at the pre-exposure, like the scene colour SSR composites it against.
+    EXPECT_NE(adapter.find("vec4(ge_sssrIncidentRadiance * GE_PreExposure(), reflectionOct.y)"), std::string::npos);
 }
 
 TEST(SssrCompositeWeight, MissAndCompositeReadTheSameForwardTexel)

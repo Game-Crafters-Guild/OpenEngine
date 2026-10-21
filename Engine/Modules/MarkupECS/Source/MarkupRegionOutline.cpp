@@ -205,8 +205,9 @@ Vector2 RegionLabelPoint(std::span<const Vector2> ring)
     return best.Center;
 }
 
-std::vector<Vector2> DecimateRegionRing(std::span<const Vector2> ring)
+std::vector<Vector2> DecimateRegionRing(std::span<const Vector2> ring, std::size_t maxPoints)
 {
+    maxPoints = std::max(maxPoints, kMinRegionKnots);
     std::vector<Vector2> kept(ring.begin(), ring.end());
     if (ring.size() <= kMinRegionKnots)
         return kept;
@@ -222,7 +223,7 @@ std::vector<Vector2> DecimateRegionRing(std::span<const Vector2> ring)
     {
         Spline::SimplifyPolylineIndices(polyline, tolerance, indices);
         indices.pop_back(); // the repeated first point
-        if (indices.size() <= kMaxRegionKnots)
+        if (indices.size() <= maxPoints)
             break;
     }
     kept.clear();

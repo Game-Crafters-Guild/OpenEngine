@@ -2,6 +2,7 @@
 
 #include "Platform/WebView.h"
 #include "Platform/Window.h"
+#include "WebViewPageStyle_mac.h"
 
 #define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3.h>
@@ -24,43 +25,6 @@
 @interface WebViewFileDragSource : NSObject <NSDraggingSource>
 @end
 
-// Dark background injected into every loaded page so a light page never flashes white
-// before it paints. Runs at document-start, where document.body and document.head are
-// still null, and again after navigation for pages that rebuild <head> during load.
-//
-// The page scrollbar is deliberately left alone: macOS WebKit draws it as a native
-// scroller, which ignores ::-webkit-scrollbar and scrollbar-color (scrollbar-width is
-// the only property that takes effect), so it cannot be themed to match the editor.
-static NSString* const kPageStyleScript = @""
-    "(function() {"
-    "  var root = document.documentElement;"
-    "  if (root) {"
-    "    root.style.backgroundColor = '#272727';"
-    "  }"
-    "  if (document.body) {"
-    "    document.body.style.backgroundColor = '#272727';"
-    "  }"
-    "  var style = document.getElementById('ge-injected-style');"
-    "  if (style) {"
-    "    if (document.head) {"
-    "      document.head.appendChild(style);"  // move last so it outranks page styles
-    "    }"
-    "    return;"
-    "  }"
-    "  style = document.createElement('style');"
-    "  style.id = 'ge-injected-style';"
-    "  style.textContent = 'html, body { background-color: #272727 !important; }';"
-    "  var attach = function() {"
-    "    if (document.head) {"
-    "      document.head.appendChild(style);"
-    "    }"
-    "  };"
-    "  if (document.head) {"
-    "    attach();"
-    "  } else {"
-    "    document.addEventListener('DOMContentLoaded', attach);"
-    "  }"
-    "})();";
 
 @implementation YouTubeNavigationDelegate
 
@@ -85,7 +49,7 @@ static NSString* const kPageStyleScript = @""
     
     // Inject JavaScript to ensure dark background persists and check for YouTube errors
     // Re-assert after navigation: some pages replace <head> during load.
-    NSString* script = [kPageStyleScript stringByAppendingString:@""
+    NSString* script = [GameEngine::Platform::Detail::kPageStyleScript stringByAppendingString:@""
         "(function() {"
         "  var iframes = document.querySelectorAll('iframe');"
         "  for (var i = 0; i < iframes.length; i++) {"
@@ -156,22 +120,20 @@ public:
 
         // Create WKWebView with configuration for YouTube embeds
         WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
+        // Keep the previous page visible until the next document is complete;
+        // painting a partial document can expose empty content and changing scrollbars.
+        config.suppressesIncrementalRendering = YES;
         config.allowsAirPlayForMediaPlayback = YES;
         config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
         
         // Enable JavaScript (required for YouTube embeds)
         WKPreferences* preferences = [[WKPreferences alloc] init];
-        preferences.javaScriptEnabled = YES;
+        config.defaultWebpagePreferences.allowsContentJavaScript = YES;
         // Enable HTML5 fullscreen API so YouTube (and other sites) can go fullscreen
         if ([preferences respondsToSelector:@selector(_setFullScreenEnabled:)]) {
             [preferences _setFullScreenEnabled:YES];
         }
         config.preferences = preferences;
-        
-        // Set process pool to allow proper referrer handling
-        if (!config.processPool) {
-            config.processPool = [[WKProcessPool alloc] init];
-        }
         
         // Configure website data store for proper cookie/security settings
         // Use default data store which supports cookies and secure connections
@@ -192,7 +154,7 @@ public:
         WKUserContentController* userContentController = [[WKUserContentController alloc] init];
         
         // Inject referrer policy and dark background script at document start
-        NSString* injectScript = [kPageStyleScript stringByAppendingString:@""
+        NSString* injectScript = [GameEngine::Platform::Detail::kPageStyleScript stringByAppendingString:@""
             "(function() {"
             "  if (document.querySelector('meta[name=\"referrer\"]') !== null) {"
             "    return;"
@@ -475,6 +437,9 @@ public:
         m_OnMouseDown = std::move(callback);
     }
 
+    // Creation fails synchronously here: CreateWebView returns nullptr instead.
+    void SetOnUnavailable(std::function<void(const std::string&)> /*callback*/) override {}
+
     void Destroy() override {
         if (m_MouseDownMonitor) {
             [NSEvent removeMonitor:m_MouseDownMonitor];
@@ -505,7 +470,7 @@ private:
     bool m_Initialized = false;
 };
 
-std::unique_ptr<IWebView> CreateWebView(Window* parentWindow) {
+std::unique_ptr<IWebView> CreateWebView(Window* parentWindow, const std::filesystem::path& /*userDataFolder*/) {
     if (!parentWindow) {
         return nullptr;
     }

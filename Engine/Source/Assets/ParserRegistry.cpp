@@ -19,7 +19,6 @@
 #include "Assets/Parsers/AnimationGraphAssetParser.h"
 #include "Assets/Parsers/ClipSetAssetParser.h"
 #include "Assets/Parsers/NavGridAssetParser.h"
-#include "Assets/Parsers/NavMeshAssetParser.h"
 #include "Assets/Parsers/RenderPipelineAssetParser.h"
 #include "Assets/Parsers/SceneAssetParser.h"
 #include "Assets/Parsers/SpriteFramesAssetParser.h"
@@ -498,7 +497,6 @@ void ParserRegistry::RegisterDefaultParsers()
 
     // Register navigation parsers
     RegisterParser(std::make_shared<NavGridAssetParser>());
-    RegisterParser(std::make_shared<NavMeshAssetParser>());
 
     // Register material parser (.material -> Material v2 doc)
     RegisterParser(std::make_shared<MaterialAssetParser>());

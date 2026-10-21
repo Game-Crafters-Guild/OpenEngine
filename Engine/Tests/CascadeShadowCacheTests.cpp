@@ -131,7 +131,7 @@ TEST(CascadeShadowCache, EachInputChangeMissesWithItsCause)
          CascadeCacheDirtyCause::ConfigChanged},
         {"lodForce", [](CascadeRenderInputs& in) { in.LODForceLevel = 2; },
          CascadeCacheDirtyCause::ConfigChanged},
-        {"renderLayers", [](CascadeRenderInputs& in) { in.RenderLayerMask = 0x80000000u; },
+        {"renderLayers", [](CascadeRenderInputs& in) { in.Layers = GameEngine::Rendering::RenderLayerMask::FromLayer(31); },
          CascadeCacheDirtyCause::ConfigChanged},
         // A selection-mode switch re-derives every mesh row's switch points, so a
         // retained cascade would hold LOD picks the camera pass no longer makes.

@@ -1,0 +1,41 @@
+---
+title: Physics queries
+description: Ray casts and box overlaps against the physics world, and the filter that decides which bodies they see.
+---
+
+Gameplay code asks the physics world what lies along a ray or inside a box through `PhysicsWorld`: ground under a unit, line of sight to a target, what a click lands on, what a building footprint overlaps.
+
+A C# script casts a ray with `Physics.RayCast`, which takes the same filter. [Physics from scripts](../scripting/physics-from-scripts.mdx#cast-a-ray) shows the call.
+
+:::caution[C# binding pending]
+`RayCastAll` and `BoxOverlap` have no managed call yet; tracked as [OpenEngine issue #27](https://github.com/Game-Crafters-Guild/OpenEngine/issues/27).
+:::
+
+```cpp title="Physics/PhysicsWorld.h"
+bool RayCast(const RayCastQuery& query, RayCastResult& outResult) const;
+bool RayCastAll(const RayCastQuery& query, std::vector<RayCastResult>& outResults, uint32 maxResults = 64) const;
+bool BoxOverlap(const BoxOverlapQuery& query, std::vector<OverlapResult>& outResults, uint32 maxResults = 64) const;
+```
+
+## The filter
+
+Every query carries a `CollisionFilter`. `layerMask` names the collision layers the query sees, one bit per layer. Bodies on the other layers are passed through as if they were not there, so a ray aimed at the ground goes through the units standing on it. `ignoreSensors` passes through sensors (trigger bodies). Without it a sensor stops a ray like a solid body.
+
+```cpp title="The ground under a point, through units and trigger volumes"
+using namespace GameEngine::Physics;
+
+RayCastQuery query;
+query.ray.origin = {x, 500.0f, z};
+query.ray.direction = {0.0f, -1.0f, 0.0f};
+query.maxDistance = 1000.0f;
+query.filter.layerMask = 1u << Layers::Static;
+query.filter.ignoreSensors = true;
+
+RayCastResult ground;
+if (world.RayCast(query, ground))
+    height = ground.hitPoint.y;
+```
+
+## One hit or every hit
+
+`RayCast` returns the nearest body the filter sees. `RayCastAll` returns every such body along the ray, nearest first (bodies at the same distance always in the same order), each body once at its nearest hit (a mesh the ray crosses several times is one result), and at most `maxResults` of them: the nearest ones. A `maxResults` of 0 asks for nothing and returns false. Both return false, with an empty result, when the ray hits nothing the filter sees.

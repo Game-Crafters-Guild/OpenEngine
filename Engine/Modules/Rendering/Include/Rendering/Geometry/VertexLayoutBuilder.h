@@ -70,7 +70,19 @@ struct VertexBinding
     static constexpr uint32_t UV5      = 11;
     static constexpr uint32_t UV6      = 12;
     static constexpr uint32_t UV7      = 13;
+    // The number of bindings: every engine vertex binding is below it.
+    static constexpr uint32_t Count    = 14;
 };
+
+// The stream an engine vertex binding carries, as the convention above names it
+// ("Core", "Tangent", ..., "UV7"); "?" for a number that is not a binding.
+inline const char* VertexBindingName(uint32_t binding)
+{
+    static constexpr const char* kNames[VertexBinding::Count] = {
+        "Core", "Tangent", "Color", "UV1", "Joints", "Weights", "Joints1",
+        "Weights1", "UV2", "UV3", "UV4", "UV5", "UV6", "UV7"};
+    return binding < VertexBinding::Count ? kNames[binding] : "?";
+}
 
 // Configure a `GraphicsPipelineDesc`'s vertex input state from
 // `VertexAttributeFlags`. Clears existing bindings/attributes first and

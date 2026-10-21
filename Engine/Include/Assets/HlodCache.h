@@ -1,9 +1,10 @@
 #pragma once
 
 // Cooked HLOD cluster cache (.gehlod). Persists a scene's baked proxy clusters —
-// per-cluster bounds, the FULL bake key inputs for every member (stable GUID,
-// content hash, resolved material GUID, mesh handle selector, cluster-relative
-// transform, chosen LOD), and the merged proxy geometry per material submesh —
+// per-cluster bounds and render layers, the FULL bake key inputs for every member
+// (stable GUID, content hash, resolved material GUID, mesh handle selector,
+// cluster-relative transform, chosen LOD, render layers), and the merged proxy
+// geometry per material submesh —
 // so repeat editor loads and the meshopt-free packaged Player skip the merge
 // entirely (design v0.2 §4.3, §10). Mirrors the .gelod discipline
 // (MeshLODCache.h): little-endian, magic + format version, atomic temp+rename
@@ -35,7 +36,7 @@ namespace Hlod {
 
 // Bump when the .gehlod byte layout changes. Gates format compatibility only,
 // never folded into the key (that is the config hash's job).
-inline constexpr uint32 kHlodCacheFormatVersion = 1u;
+inline constexpr uint32 kHlodCacheFormatVersion = 2u;
 
 // Bump when the baker changes produced proxy geometry for an unchanged input +
 // config. Folded into ConfigHash so a baker change makes every prior cook a miss.
@@ -70,6 +71,7 @@ struct BakedMemberRef {
         0.0f, 0.0f, 0.0f, 1.0f};
     uint32 ChosenLod = 0u;
     uint8  CastsShadow = 1u;
+    Rendering::RenderLayerMask RenderLayers;
 };
 
 // One proxy submesh: merged cluster-relative geometry for a single material.
@@ -88,6 +90,7 @@ struct BakedCluster {
     float  BoundsMin[3] = {0.0f, 0.0f, 0.0f};
     float  BoundsMax[3] = {0.0f, 0.0f, 0.0f};
     uint64 ClusterSourceHash = 0; // over Members (ComputeClusterSourceHash)
+    Rendering::RenderLayerMask RenderLayers; // every member's layers; the proxy draws on these
     Vector<BakedMemberRef> Members;
     Vector<BakedSubmesh>   Submeshes;
 };
@@ -101,8 +104,8 @@ struct HlodBakedScene {
 
 // FNV-1a over a cluster's members (stable GUID order assumed already applied by
 // the caller): each member's GUID, content hash, material GUID, mesh handle
-// selector, quantized transform, and chosen LOD (the C3 fold). A material
-// reassignment or a member move perturbs this.
+// selector, quantized transform, chosen LOD and render layers (the C3 fold). A
+// material reassignment, a member move or a layer edit perturbs this.
 uint64 ComputeClusterSourceHash(std::span<const BakedMemberRef> members);
 
 // FNV-1a over the grid config + baker + meshopt versions, plus the FBX import

@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+#include "LogCapture.h"
+
 #include "Animation/HumanBone.h"
 #include "Animation/HumanoidRig.h"
 #include "Animation/RetargetMap.h"
@@ -160,3 +164,28 @@ TEST(RetargetMapTest, OpStackParamsSurviveRoundTrip)
 // TODO Phase 3: integration test for "hot-reload during evaluation race"
 // requires HumanoidRetargetSystem (added in Phase 3) to drive the eviction
 // path. Currently exercising only the asset-side serialization contract.
+
+// A retarget map that is not JSON, or whose field holds a value of the wrong type, is refused with
+// the file and the place or the field named, and never throws: the web build has no exception
+// catching.
+TEST(RetargetMapTest, AnUnreadableFileIsRefusedNamingThePlaceOrTheField)
+{
+    std::vector<std::string> lines;
+    bool truncatedLoaded = true;
+    bool mistypedLoaded = true;
+    {
+        TestLog::ScopedLogCapture capture(&lines);
+        const std::string truncatedText = R"({"name": [)";
+        const std::string mistypedText = R"({"chainMap": [{"kind": "Spine", "ik": {"enabled": "yes"}}]})";
+        RetargetMap truncated(GUID(), std::filesystem::path("Animations/Truncated.retargetmap.json"));
+        truncatedLoaded = truncated.LoadFromData(Vector<uint8>(truncatedText.begin(), truncatedText.end()));
+        RetargetMap mistyped(GUID(), std::filesystem::path("Animations/Mistyped.retargetmap.json"));
+        mistypedLoaded = mistyped.LoadFromData(Vector<uint8>(mistypedText.begin(), mistypedText.end()));
+    }
+    EXPECT_FALSE(truncatedLoaded);
+    EXPECT_FALSE(mistypedLoaded);
+    EXPECT_NE(TestLog::FirstLineContaining(
+                  lines, "'Animations/Truncated.retargetmap.json' is not loaded: it is not JSON (parse error at line 1, column"),
+              "");
+    EXPECT_NE(TestLog::FirstLineContaining(lines, "'Animations/Mistyped.retargetmap.json' is not loaded: 'chainMap[0].ik.enabled' is a string; write it as true or false"), "");
+}

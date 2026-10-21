@@ -7,7 +7,9 @@
 #include "Types/StringId.h"
 #include "UI/Selectors/SelectorTypes.h"
 #include <cstdint>
+#include <algorithm>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -356,7 +358,7 @@ struct BackgroundImageSource
     // For Path or ResourceName kinds, holds the string value.
     std::string Value;
     // Optional explicit asset-source alias for Path resolution (e.g.
-    // "editor", "project"). When non-empty, ResolveBackgroundImagePath
+    // "editor", "project"). When non-empty, BackgroundImageCache::ResolvePath
     // looks up the path under exactly this source instead of falling
     // through implicit priority. Set by `url("editor:path")` or
     // `url("@editor/path")` syntax in CSS.
@@ -475,6 +477,120 @@ struct BackgroundPositionValue
     bool operator==(const BackgroundPositionValue&) const = default;
 };
 
+// One CSS transform function (css-transforms-1, 2D only).
+// translateX(), scaleY(), skewX() and friends parse to the two-axis form, with
+// the other axis at its identity.
+enum class TransformFunction : uint8_t
+{
+    Translate,
+    Scale,
+    Rotate,
+    Skew,
+    Matrix
+};
+
+struct TransformOp
+{
+    TransformFunction Function = TransformFunction::Translate;
+    // Translate only: the offsets, in CSS px or as a percentage of the
+    // element's own border box.
+    StyleLength TranslateX = StyleLength::Px(0.0f);
+    StyleLength TranslateY = StyleLength::Px(0.0f);
+    // The other functions' numbers:
+    //   Scale   x, y
+    //   Rotate  the angle in degrees, clockwise on screen
+    //   Skew    the x angle and the y angle, in degrees
+    //   Matrix  a, b, c, d, e, f, as CSS matrix() takes them (e and f in CSS px)
+    float Args[6] = {0, 0, 0, 0, 0, 0};
+    bool operator==(const TransformOp&) const = default;
+};
+
+// The functions of a `transform` list, in order.
+using TransformOpList = std::vector<TransformOp>;
+
+// The `transform` property: a list of functions applied left to right, as in
+// CSS, about the element's transform-origin. An empty list is `none`.
+// Paint-only: layout never sees it, so a transformed element keeps its place in
+// the flow and its siblings do not move.
+//
+// The list lives out of line and is shared, as font-family is: almost no
+// element sets a transform, and every element's resolved style carries the
+// field, so an untransformed one pays a null pointer. A built list is never
+// written again; the builders copy it, so copies of a value never alias a
+// change. Equality compares the functions, not the pointers.
+//
+// The builders read like the CSS they stand for:
+//   TransformValue{}.Rotate(45.0f)                         rotate(45deg)
+//   TransformValue{}.Translate(StyleLength::Percent(-50),
+//                              StyleLength::Percent(-50))  translate(-50%, -50%)
+struct TransformValue
+{
+    bool IsNone() const { return !m_Ops || m_Ops->empty(); }
+    std::span<const TransformOp> Ops() const
+    {
+        return m_Ops ? std::span<const TransformOp>(*m_Ops) : std::span<const TransformOp>();
+    }
+    bool operator==(const TransformValue& other) const
+    {
+        const std::span<const TransformOp> a = Ops();
+        const std::span<const TransformOp> b = other.Ops();
+        return std::equal(a.begin(), a.end(), b.begin(), b.end());
+    }
+
+    // A value holding `ops`, in order; an empty list is `none`.
+    static TransformValue FromOps(TransformOpList ops)
+    {
+        TransformValue value;
+        if (!ops.empty())
+            value.m_Ops = std::make_shared<const TransformOpList>(std::move(ops));
+        return value;
+    }
+
+    // Adds `op` at the end of the list.
+    TransformValue& Append(const TransformOp& op)
+    {
+        auto list = m_Ops ? std::make_shared<TransformOpList>(*m_Ops) : std::make_shared<TransformOpList>();
+        list->push_back(op);
+        m_Ops = std::move(list);
+        return *this;
+    }
+    // A length in Px or Percent; an Auto length counts as 0px.
+    TransformValue& Translate(StyleLength x, StyleLength y)
+    {
+        TransformOp op{};
+        op.TranslateX = x.IsAuto() ? StyleLength::Px(0.0f) : x;
+        op.TranslateY = y.IsAuto() ? StyleLength::Px(0.0f) : y;
+        return Append(op);
+    }
+    TransformValue& Scale(float x, float y) { return Append({TransformFunction::Scale, {}, {}, {x, y, 0, 0, 0, 0}}); }
+    TransformValue& Rotate(float degrees)
+    {
+        return Append({TransformFunction::Rotate, {}, {}, {degrees, 0, 0, 0, 0, 0}});
+    }
+    TransformValue& Skew(float xDegrees, float yDegrees)
+    {
+        return Append({TransformFunction::Skew, {}, {}, {xDegrees, yDegrees, 0, 0, 0, 0}});
+    }
+    TransformValue& Matrix(float a, float b, float c, float d, float e, float f)
+    {
+        return Append({TransformFunction::Matrix, {}, {}, {a, b, c, d, e, f}});
+    }
+
+  private:
+    std::shared_ptr<const TransformOpList> m_Ops;
+};
+
+static_assert(sizeof(TransformValue) <= 16, "TransformValue is one shared pointer: keep the list out of line");
+
+// `transform-origin`: where the transform pivots, in CSS px or as a percentage
+// of the border box, from its top-left corner. The initial value is the centre.
+struct TransformOriginValue
+{
+    StyleLength X = StyleLength::Percent(50.0f);
+    StyleLength Y = StyleLength::Percent(50.0f);
+    bool operator==(const TransformOriginValue&) const = default;
+};
+
 enum class StylePropertyId : uint16_t
 {
     Unknown,
@@ -578,6 +694,8 @@ enum class StylePropertyId : uint16_t
     TextOutlineWidth,
     TextOutlineColor,
     SelectionColor,
+    Transform,
+    TransformOrigin,
     // Raw declaration captured when the value contains var(). This is expanded
     // and parsed at compute time after variable substitution so that var()
     // can appear anywhere, including inside shorthands.
@@ -693,6 +811,16 @@ constexpr StylePropertyImpact GetStylePropertyImpact(StylePropertyId id)
     case StylePropertyId::TextAlign:
     case StylePropertyId::SelectionColor:
         return {false, true, true};
+
+    // Paint only. A transform reaches descendants too, but not through their
+    // primitives: they carry the index of the transform slot their nearest
+    // transformed ancestor owns, and the shader composes the chain. A changed
+    // transform is one slot rewrite in the drain (UIManager_PrimitiveGen.cpp);
+    // a switch to or from `none` changes which slot descendants point at, and
+    // the drain re-points the element's subtree itself.
+    case StylePropertyId::Transform:
+    case StylePropertyId::TransformOrigin:
+        return {false, true};
 
     // Paint only, confined to the element itself.
     // TextOverflow never feeds the Yoga solve — the measure is of the full
@@ -837,6 +965,8 @@ using StyleValue = std::variant<std::monostate,
                                 BackgroundImageSource,
                                 BackgroundSizeValue,
                                 BackgroundPositionValue,
+                                TransformValue,
+                                TransformOriginValue,
                                 StyleLength,
                                 StyleBox,
                                 std::vector<std::string>,

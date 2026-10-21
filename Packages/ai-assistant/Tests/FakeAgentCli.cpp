@@ -15,7 +15,8 @@
 //                      (the sandboxed command reached the port); in mode sandbox-broken Codex's
 //                      own start failure on stderr and exit code 1; otherwise "REFUSED EACCES"
 //   anything else is a turn: stdin is read to its end, then by mode
-//     replay           prints the file named by FAKE_AGENT_CLI_REPLAY, line by line
+//     replay           prints the file named by FAKE_AGENT_CLI_REPLAY, line by line, with
+//                      FAKE_AGENT_CLI_REPLAY_DELAY_MS milliseconds after each line when set
 //     env              a Claude stream whose reply reports each variable in kReportedVariables
 //                      as "NAME=value" or "NAME unset", separated by "; "
 //     echo             a Claude stream whose reply is "stdin=<what stdin held>"
@@ -64,16 +65,25 @@ void PrintLine(std::string_view line)
     std::fflush(stdout);
 }
 
-// `text` must hold no control character; quotes and backslashes (a Windows path among
-// the arguments) are escaped.
+// Quotes and backslashes (a Windows path among the arguments) are escaped, and so are line
+// breaks and tabs (a prompt of several lines, such as one carrying mark-up blocks).
 std::string DeltaLine(std::string_view text)
 {
     std::string escaped;
     for (const char c : text)
     {
-        if (c == '"' || c == '\\')
-            escaped += '\\';
-        escaped += c;
+        if (c == '\n')
+            escaped += "\\n";
+        else if (c == '\r')
+            escaped += "\\r";
+        else if (c == '\t')
+            escaped += "\\t";
+        else
+        {
+            if (c == '"' || c == '\\')
+                escaped += '\\';
+            escaped += c;
+        }
     }
     return R"({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":")" +
            escaped + R"("}}})";
@@ -101,9 +111,16 @@ int Replay()
         std::fputs("fake: no replay file\n", stderr);
         return 2;
     }
+    // FAKE_AGENT_CLI_REPLAY_DELAY_MS paces the lines, so a capture can catch a reply mid-stream.
+    const char* delay = std::getenv("FAKE_AGENT_CLI_REPLAY_DELAY_MS");
+    const auto pause = std::chrono::milliseconds(delay ? std::atoi(delay) : 0);
     std::string line;
     while (std::getline(file, line))
+    {
         PrintLine(line);
+        if (pause.count() > 0)
+            std::this_thread::sleep_for(pause);
+    }
     return 0;
 }
 

@@ -64,7 +64,8 @@ uint32_t Bits(float value)
 
 // The sun and moon placement the sky used before it had a latitude or a date: one great circle
 // through the zenith, noon straight up, east = south x up with south = -Z. It is the golden for the
-// default site, so it is kept here verbatim now that production no longer has it.
+// default site, so it is kept here now that production no longer has it, with the moon trailing the
+// sun by its cycle as production places it.
 struct GreatCircle
 {
     float Sun[3];
@@ -87,7 +88,8 @@ GreatCircle PreviousGreatCircle(float timeOfDayHours, float moonArcPosition)
     const float s = std::sin(theta);
     float cycle = moonArcPosition;
     cycle = cycle - std::floor(cycle);
-    const float moonTheta = theta + cycle * kTwoPi;
+    // The moon trails the sun by the cycle, as the real moon trails it eastward through the month.
+    const float moonTheta = theta - cycle * kTwoPi;
     const float mc = std::cos(moonTheta);
     const float ms = std::sin(moonTheta);
 

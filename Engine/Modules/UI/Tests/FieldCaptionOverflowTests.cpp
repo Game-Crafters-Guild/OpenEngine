@@ -33,6 +33,7 @@ using GameEngine::PathUtils;
 using GameEngine::SuffixAlignment;
 using GameEngine::SuffixRole;
 using GameEngine::UIElement;
+using GameEngine::operator""_sid;
 using GameEngine::UITesting::IsolatedUIFixture;
 
 namespace
@@ -158,8 +159,8 @@ struct Columns
         for (int i = 0; i < kFrames; ++i)
             Fixture.StepFrame();
         UIElement* root = Fixture.Manager().GetRootElement();
-        const UIElement* bubble = root->FindById("ui-tooltip");
-        const auto* text = dynamic_cast<const Label*>(root->FindById("ui-tooltip-text"));
+        const UIElement* bubble = root->FindById("ui-tooltip"_sid);
+        const auto* text = dynamic_cast<const Label*>(root->FindById("ui-tooltip-text"_sid));
         if (!bubble || !text || bubble->GetLayoutX() < 0.0f || bubble->GetLayoutY() < 0.0f)
             return {};
         return text->GetText();

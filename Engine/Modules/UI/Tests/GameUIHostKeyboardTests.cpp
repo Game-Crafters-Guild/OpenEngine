@@ -357,7 +357,7 @@ TEST(GameUIHostKeyboardTests, FocusDoesNotSurviveTheDocumentThatHeldIt)
 
     ASSERT_TRUE(host.SyncDocuments(&world));
     UIManager* ui = host.GetUIManager();
-    ASSERT_NE(ui->GetRootElement()->FindById("chat"), nullptr) << "the HUD field did not mount";
+    ASSERT_NE(ui->GetRootElement()->FindById("chat"_sid), nullptr) << "the HUD field did not mount";
     ui->SetFocusById("chat");
     ASSERT_TRUE(host.OnKey(Input::kKeyCode_W, Input::kKeyActionPress, 0))
         << "precondition: the focused field takes the movement key";
@@ -366,7 +366,7 @@ TEST(GameUIHostKeyboardTests, FocusDoesNotSurviveTheDocumentThatHeldIt)
     // document, with a new TextField carrying the same id.
     host.ResetBoundDocuments();
     ASSERT_TRUE(host.SyncDocuments(&world));
-    ASSERT_NE(ui->GetRootElement()->FindById("chat"), nullptr) << "the HUD field did not remount";
+    ASSERT_NE(ui->GetRootElement()->FindById("chat"_sid), nullptr) << "the HUD field did not remount";
 
     EXPECT_TRUE(ui->GetFocusedElementId().empty()) << "focus outlived the element it named";
     EXPECT_FALSE(host.OnKey(Input::kKeyCode_W, Input::kKeyActionPress, 0))
@@ -402,7 +402,7 @@ TEST(GameUIHostKeyboardTests, FocusDoesNotSurviveTheEntityThatCarriedTheDocument
 
     ASSERT_TRUE(host.SyncDocuments(&world));
     UIManager* ui = host.GetUIManager();
-    ASSERT_NE(ui->GetRootElement()->FindById("chat"), nullptr) << "the HUD field did not mount";
+    ASSERT_NE(ui->GetRootElement()->FindById("chat"_sid), nullptr) << "the HUD field did not mount";
     ui->SetFocusById("chat");
     ASSERT_TRUE(host.OnKey(Input::kKeyCode_W, Input::kKeyActionPress, 0))
         << "precondition: the focused field takes the movement key";
@@ -410,7 +410,7 @@ TEST(GameUIHostKeyboardTests, FocusDoesNotSurviveTheEntityThatCarriedTheDocument
     document.Destroy();
     world.ProcessCommands();
     ASSERT_FALSE(host.SyncDocuments(&world)) << "the sweep did not drop the destroyed entity's subtree";
-    ASSERT_EQ(ui->GetRootElement()->FindById("chat"), nullptr) << "the HUD field is still in the tree";
+    ASSERT_EQ(ui->GetRootElement()->FindById("chat"_sid), nullptr) << "the HUD field is still in the tree";
     EXPECT_TRUE(ui->GetFocusedElementId().empty()) << "focus outlived the entity that carried it";
 
     // The symptom the rule exists for: the dialog re-opens as a new entity carrying
@@ -418,7 +418,7 @@ TEST(GameUIHostKeyboardTests, FocusDoesNotSurviveTheEntityThatCarriedTheDocument
     world.Create<Components::UIDocument>(doc);
     world.ProcessCommands();
     ASSERT_TRUE(host.SyncDocuments(&world));
-    ASSERT_NE(ui->GetRootElement()->FindById("chat"), nullptr) << "the replacement HUD field did not mount";
+    ASSERT_NE(ui->GetRootElement()->FindById("chat"_sid), nullptr) << "the replacement HUD field did not mount";
 
     EXPECT_TRUE(ui->GetFocusedElementId().empty()) << "the replacement field is focused before any click";
     EXPECT_FALSE(host.OnKey(Input::kKeyCode_W, Input::kKeyActionPress, 0))

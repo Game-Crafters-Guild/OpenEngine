@@ -21,6 +21,7 @@ add_executable(EditorSdkRegistryTests
     EditorSdkPanelRegistryTests.cpp
     EditorSdkMenuRegistryTests.cpp
     EditorSdkSceneCommandsTests.cpp
+    EditorSdkMarkupRequestsTests.cpp
     EditorSdkSettingsRegistryTests.cpp
     # Link the shared SDK registry, as the Build panel and package modules do.
     BuildExporterRegistryTests.cpp
@@ -38,6 +39,14 @@ add_executable(EditorSdkRegistryTests
     # in here directly.
     LodSettingsPageTests.cpp
     ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/LodSettingsPage.cpp
+    # The Render Layers page: its rows, their refusals and a rename's writes. The page feeds the
+    # editor's layer pickers, so their helper compiles in too.
+    # A settings text row: its refusal, its placeholder and its commit.
+    SettingsTextFieldRowTests.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/SettingsTextFieldRow.cpp
+    RenderLayersSettingsPageTests.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/RenderLayersSettingsPage.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/RenderLayerField.cpp
     # Game UI scale policy: the editor-side write and the Game UI Scaling page,
     # which SettingsPageOpenIsNotAnEditTests also seeds. Same arrangement.
     UIScaleProjectSettingsWriterTests.cpp
@@ -134,7 +143,9 @@ file(GENERATE
     CONTENT
 "cmake=${CMAKE_COMMAND}
 importlib=$<TARGET_LINKER_FILE:Engine>
+enginebinary=$<TARGET_FILE:Engine>
 editorimportlib=$<TARGET_LINKER_FILE:EditorSDK>
+editorbinary=$<TARGET_FILE:EditorSDK>
 config=$<CONFIG>
 sdkentry=${CMAKE_SOURCE_DIR}/Engine/Modules/NativeScripting/GameSDK/Source/UserModuleEntry.cpp
 sdkinc=${CMAKE_SOURCE_DIR}/Engine/Modules/NativeScripting/GameSDK/Include

@@ -487,11 +487,11 @@ class AssemblyPrepTask : public HotReloadTask
 class MainThreadSwapTask : public HotReloadTask
 {
   public:
-    MainThreadSwapTask(JobSystem::WorkStealingThreadPool* jobSystem, const String& assemblyPath, void* preparedContext,
+    MainThreadSwapTask(JobSystem::WorkStealingThreadPool* jobSystem, const String& assemblyPath,
                        std::shared_ptr<PreloadSync> preloadSync,
                        std::unique_ptr<Jobs::IAssemblySwapper> swapper = nullptr,
                        std::shared_ptr<HotReloadCancellation> cancellation = nullptr)
-        : HotReloadTask(jobSystem, assemblyPath, HotReloadCancellation::Token(cancellation)), m_PreparedContext(preparedContext), m_Swapper(std::move(swapper)), m_PreloadSync(std::move(preloadSync)),
+        : HotReloadTask(jobSystem, assemblyPath, HotReloadCancellation::Token(cancellation)), m_Swapper(std::move(swapper)), m_PreloadSync(std::move(preloadSync)),
           m_Cancellation(cancellation ? std::move(cancellation) : std::make_shared<HotReloadCancellation>()) {}
 
     void Execute() override;
@@ -523,7 +523,6 @@ class MainThreadSwapTask : public HotReloadTask
     void UpdateAssemblyReferences();
 
   private:
-    void* m_PreparedContext;
     void* m_OldContext{nullptr};
     std::chrono::milliseconds m_SwapDuration{0};
     bool m_SwapCompleted{false};
@@ -588,6 +587,10 @@ class HotReloadPipeline
     void SetCompilerFactory(std::function<std::unique_ptr<Jobs::ICompiler>()> factory) { m_CompilerFactory = std::move(factory); }
     void SetAssemblyLoaderFactory(std::function<std::unique_ptr<Jobs::IAssemblyLoader>()> factory) { m_LoaderFactory = std::move(factory); }
     void SetSwapperFactory(std::function<std::unique_ptr<Jobs::IAssemblySwapper>()> factory) { m_SwapperFactory = std::move(factory); }
+
+    /// Called on the pipeline's worker thread at the end of every run, with its stats, before the
+    /// run's future is ready. Set before the first ExecuteAsync.
+    void SetRunCompletedCallback(std::function<void(const PipelineStats&)> callback) { m_RunCompletedCallback = std::move(callback); }
 
     /**
      * @brief Request cancellation of the current run and return without waiting.
@@ -693,6 +696,7 @@ class HotReloadPipeline
 
     std::function<std::unique_ptr<Jobs::IAssemblyLoader>()> m_LoaderFactory;
     std::function<std::unique_ptr<Jobs::IAssemblySwapper>()> m_SwapperFactory;
+    std::function<void(const PipelineStats&)> m_RunCompletedCallback;
 
     DISALLOW_COPY_AND_ASSIGN(HotReloadPipeline);
 };

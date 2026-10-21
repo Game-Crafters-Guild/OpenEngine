@@ -115,7 +115,7 @@ TEST_F(HotReloadStressTest, RapidFileChanges) {
 
     // Launch multiple threads that rapidly trigger hot-reload
     for (int t = 0; t < numConcurrentThreads; ++t) {
-        threads.emplace_back([this, &successCount, &failureCount, &cancelledCount, numChanges, t]() {
+        threads.emplace_back([this, &successCount, &failureCount, &cancelledCount, t]() {
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> delay(1, 10); // 1-10ms delay
@@ -308,7 +308,7 @@ TEST_F(HotReloadStressTest, ThreadPoolTaskStressTest) {
 
     // Launch threads that concurrently submit tasks to the thread pool
     for (int t = 0; t < numThreads; ++t) {
-        threads.emplace_back([this, &tasksProcessed, &errors, numTasks, numThreads, t]() {
+        threads.emplace_back([this, &tasksProcessed, &errors]() {
             std::random_device rd;
             std::mt19937 gen(rd());
 
@@ -380,7 +380,7 @@ TEST_F(HotReloadStressTest, FileWatcherDebouncingTest) {
     ASSERT_TRUE(fws.StartWatching());
 
     // Simulate rapid file changes
-    std::thread fileChangeThread([this, numFileChanges, changeIntervalMs]() {
+    std::thread fileChangeThread([this, changeIntervalMs]() {
         for (int i = 0; i < numFileChanges; ++i) {
             modifyTestAssembly();
             std::this_thread::sleep_for(std::chrono::milliseconds(changeIntervalMs));

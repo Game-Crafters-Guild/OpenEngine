@@ -83,7 +83,7 @@ SceneViewDropPoint ResolveSceneViewDropPoint(const Mathematics::Ray3D& cameraRay
         }
     }
 
-    // Per-triangle mesh fallback. Drop wherever the cursor hits — no
+    // Per-triangle mesh fallback. Drop wherever the cursor hits - no
     // orientation gating. Matches Godot/Unreal behavior: the user is
     // intentionally aiming at the surface they want to drop on. Future
     // follow-up: optional modifier to align the placed object's up-axis

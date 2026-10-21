@@ -265,7 +265,7 @@ class IsolatedUIFixture
     UIElement* Find(const std::string& id) const
     {
         UIElement* root = m_Ui ? m_Ui->GetRootElement() : nullptr;
-        return root ? root->FindById(id) : nullptr;
+        return root ? root->FindById(HashStringId(id)) : nullptr;
     }
 
     // Logical viewport, held constant across content scales (see Build).

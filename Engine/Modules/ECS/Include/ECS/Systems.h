@@ -8,6 +8,8 @@
 #include "Logger/Logger.h"
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Memory/ScratchScope.h"
+#include <span>
 #include <vector>
 #include <memory>
 #include <chrono>
@@ -348,7 +350,7 @@ private:
         return m_WaveTrace.AddSystem(*frame, *wave, static_cast<uint32>(idx));
     }
 
-    void UpdateWaveRange(const std::vector<size_t>& enabled, size_t begin, size_t end,
+    void UpdateWaveRange(std::span<const size_t> enabled, size_t begin, size_t end,
                          World& world, float32 deltaTime,
                          SystemWaveTrace::Frame* frame, SystemWaveTrace::WaveSample* wave) {
         if (begin == end) return;
@@ -374,7 +376,7 @@ private:
 
     // The forked range of a traced wave: a publish stamp per system, the
     // publish loop's jobs counted, the join timed.
-    void UpdateTracedFork(const std::vector<size_t>& enabled, size_t begin, size_t end,
+    void UpdateTracedFork(std::span<const size_t> enabled, size_t begin, size_t end,
                           World& world, float32 deltaTime,
                           SystemWaveTrace::Frame& frame, SystemWaveTrace::WaveSample& wave) {
         JobSystem::JobCounter waveCounter;
@@ -405,8 +407,13 @@ private:
             frame = &m_WaveTrace.BeginFrame(jobSystem ? jobSystem->GetPublishedJobCount() : 0);
         for (size_t planWave = 0; planWave < m_ExecutionPlan.Waves.size(); ++planWave) {
             const auto& wave = m_ExecutionPlan.Waves[planWave];
-            // Collect enabled systems in this wave
-            std::vector<size_t> enabled;
+            // Collect enabled systems in this wave. The list lives in the calling
+            // thread's scratch until the wave has joined; forked bodies receive
+            // indices, never the list.
+            Memory::ScratchScope scratch;
+            std::span<size_t> enabledSlots =
+                scratch.AllocateArrayForOverwrite<size_t>(wave.SystemIndices.size());
+            size_t enabledCount = 0;
             for (size_t idx : wave.SystemIndices) {
                 if (idx >= systems.size()) continue;
                 auto& sys = systems[idx];
@@ -418,10 +425,11 @@ private:
                     uint32 c = (idx < seqFrameCounters.size()) ? seqFrameCounters[idx]++ : 0u;
                     if ((c % n) != 0u) continue;
                 }
-                enabled.push_back(idx);
+                enabledSlots[enabledCount++] = idx;
             }
 
-            if (enabled.empty()) continue;
+            if (enabledCount == 0) continue;
+            const std::span<const size_t> enabled = enabledSlots.first(enabledCount);
 
             SystemWaveTrace::WaveSample* waveSample =
                 frame ? m_WaveTrace.BeginWave(*frame, static_cast<uint32>(planWave)) : nullptr;

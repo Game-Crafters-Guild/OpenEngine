@@ -77,7 +77,7 @@ packages/
 !Engine/Source/Assets/Packages/
 !Apps/Editor/Include/Packages/
 !Apps/Editor/Source/Packages/
-!docs/Packages/
+!docs/packages/
 *.nupkg
 *.snupkg
 project.lock.json
@@ -466,6 +466,9 @@ cmake-build-debug/*
 !.claude/skills/root-cause-debugging/
 !.claude/skills/empirical-validation/
 !.claude/skills/html-doc-format/
+!.claude/skills/writing-simplified-technical-english/
+!.claude/skills/agent-mailbox/
+!.claude/skills/coordinator/
 
 # Temporary screenshots
 ss*.png
@@ -491,10 +494,14 @@ Tests/BlendSamples/
 
 # On-demand FBX fixtures (FetchFbxTestFixtures) + sidecars the editor
 # may regenerate next to them — store-licensed payload, never committed.
-Assets/Models/FBXTest/*.fbx
-Assets/Models/FBXTest/*.humanoidrig.json
-Assets/Models/FBXTest/*.retargetmap.json
-Assets/Models/FBXTest/*.anim.json
+Engine/Assets/Models/FBXTest/*.fbx
+Engine/Assets/Models/FBXTest/*.humanoidrig.json
+Engine/Assets/Models/FBXTest/*.retargetmap.json
+Engine/Assets/Models/FBXTest/*.anim.json
+
+# Engine content lives in Engine/Assets; the repository root is never a project,
+# so a root Assets/ folder is refused.
+/Assets/
 
 # Renderer perf-bench hermetic project, and every benchmark results/ directory
 # under Tools (ECSBenchCompare writes results/ecs_bench_results.json).
@@ -519,7 +526,7 @@ Tests/UIReplay/out_*/
 # NativeScripting UserProjectGenerator output in the default player project —
 # machine-specific baked SDK path, regenerated on project open (same class as
 # the GameEngine.Scripts.csproj rule above)
-/Apps/Editor/Player/assets/CMakeLists.txt
+/Apps/Editor/Player/Assets/CMakeLists.txt
 
 # Local desktop build inputs for isolated wasm builds (GE_WEB_SHADERPKG_DIR/GE_WEB_MATERIAL_COOK point here)
 /prereq/

@@ -38,6 +38,10 @@ std::unique_ptr<UIElement> MakeElement(const char* id)
     return el;
 }
 
+// Declared before the UIManager in every test: the handlers WatchFocus registers
+// hold it by reference, and the manager's teardown dispatches FocusOut to the
+// still-focused element before it destroys that element, so a handler's captures
+// must outlive the manager.
 struct FocusLog
 {
     std::vector<std::string> Order;
@@ -120,13 +124,13 @@ TEST(FocusReleaseOnRemoval, RemovingAnAncestorOfTheFocusedElementClearsTheFocusI
 // parent. The backdrop dies with it, so it hears FocusOut and focus stops naming it.
 TEST(FocusReleaseOnRemoval, ClosingAModalReleasesFocusFromItsDestroyedBackdrop)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     auto root = MakeElement("root");
     auto modalOwned = MakeElement("modal");
     auto backdropOwned = MakeElement("backdrop");
     UIElement* rootEl = root.get();
     UIElement* modal = modalOwned.get();
-    FocusLog log;
     WatchFocus(*backdropOwned, "backdrop", log);
     modalOwned->AddChild(std::move(backdropOwned));
     root->AddChild(std::move(modalOwned));
@@ -142,11 +146,11 @@ TEST(FocusReleaseOnRemoval, ClosingAModalReleasesFocusFromItsDestroyedBackdrop)
 
 TEST(FocusReleaseOnRemoval, RemovingASiblingKeepsFocus)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* other = t.Other;
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     ui.SetRoot(std::move(t.Root));
     ui.SetFocusById("field");
@@ -170,7 +174,7 @@ TEST(FocusReleaseOnRemoval, RemovingADifferentElementWithTheSameIdKeepsFocus)
     root->AddChild(std::move(twinOwned));
     ui.SetRoot(std::move(t.Root));
     ui.SetFocusById("field");
-    ASSERT_NE(root->FindById("field"), twin) << "the precondition is that the id resolves to the first field";
+    ASSERT_NE(root->FindById("field"_sid), twin) << "the precondition is that the id resolves to the first field";
 
     root->RemoveChild(twin);
 
@@ -179,11 +183,11 @@ TEST(FocusReleaseOnRemoval, RemovingADifferentElementWithTheSameIdKeepsFocus)
 
 TEST(FocusReleaseOnRemoval, DestroyingTheFocusedElementDispatchesFocusOutBeforeRemovalReturns)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* panel = t.Panel;
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     ui.SetRoot(std::move(t.Root));
     ui.SetFocusById("field");
@@ -203,11 +207,11 @@ TEST(FocusReleaseOnRemoval, DestroyingTheFocusedElementDispatchesFocusOutBeforeR
 // The commit handler reads state the detach handlers may tear down, so it runs first.
 TEST(FocusReleaseOnRemoval, FocusOutPrecedesTheDestructionDetach)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* panel = t.Panel;
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     t.Field->RegisterEventHandler(kEventDetachedFromPanel, [&log](UIEvent&) { log.Order.push_back("detach:field"); });
     ui.SetRoot(std::move(t.Root));
@@ -224,11 +228,11 @@ TEST(FocusReleaseOnRemoval, FocusOutPrecedesTheDestructionDetach)
 // The edge rule: focus that was set but never announced is dropped without a FocusOut.
 TEST(FocusReleaseOnRemoval, AnElementNeverToldFocusInIsNotToldFocusOut)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* panel = t.Panel;
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     ui.SetRoot(std::move(t.Root));
     ui.SetFocusById("field");
@@ -243,11 +247,11 @@ TEST(FocusReleaseOnRemoval, AnElementNeverToldFocusInIsNotToldFocusOut)
 // dies, so it hears FocusOut now, and the new focus still gets its FocusIn next frame.
 TEST(FocusReleaseOnRemoval, FocusMovedBeforeTheAnnouncementStillReachesTheNewTarget)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* panel = t.Panel;
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     WatchFocus(*t.Other, "other", log);
     ui.SetRoot(std::move(t.Root));
@@ -265,11 +269,11 @@ TEST(FocusReleaseOnRemoval, FocusMovedBeforeTheAnnouncementStillReachesTheNewTar
 // A FocusOut handler that moves focus keeps it.
 TEST(FocusReleaseOnRemoval, AFocusOutHandlerThatMovesFocusKeepsIt)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
     UIElement* root = t.Root.get();
     UIElement* panel = t.Panel;
-    FocusLog log;
     WatchFocus(*t.Other, "other", log);
     t.Field->RegisterEventHandler(kEventFocusOut, [&ui](UIEvent&) { ui.SetFocusById("other"); });
     ui.SetRoot(std::move(t.Root));
@@ -285,9 +289,9 @@ TEST(FocusReleaseOnRemoval, AFocusOutHandlerThatMovesFocusKeepsIt)
 
 TEST(FocusReleaseOnRemoval, ReplacingTheRootDispatchesFocusOut)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     PanelTree t = BuildPanelTree();
-    FocusLog log;
     WatchFocus(*t.Field, "field", log);
     ui.SetRoot(std::move(t.Root));
     ui.SetFocusById("field");
@@ -303,13 +307,13 @@ TEST(FocusReleaseOnRemoval, ReplacingTheRootDispatchesFocusOut)
 // with its panel. The edit reaches the commit callback before the field dies.
 TEST(FocusReleaseOnRemoval, AnEditedTextFieldCommitsWhenItsPanelIsDestroyed)
 {
+    std::vector<std::string> committed;
     UIManager ui{nullptr};
     auto root = MakeElement("root");
     auto panelOwned = MakeElement("panel");
     auto fieldOwned = std::make_unique<TextField>();
     fieldOwned->SetId("field");
     TextField* field = fieldOwned.get();
-    std::vector<std::string> committed;
     field->SetOnValueChanged([&committed](const std::string& value) { committed.push_back(value); });
     UIElement* panel = panelOwned.get();
     UIElement* rootEl = root.get();
@@ -330,6 +334,7 @@ TEST(FocusReleaseOnRemoval, AnEditedTextFieldCommitsWhenItsPanelIsDestroyed)
 // element that heard FocusIn still hears FocusOut when focus leaves it.
 TEST(FocusReleaseOnRemoval, AnUnmountedPanelStillHearsFocusOut)
 {
+    FocusLog log;
     UIManager ui{nullptr};
     auto root = MakeElement("root");
     auto mountOwned = std::make_unique<Mount>();
@@ -343,7 +348,6 @@ TEST(FocusReleaseOnRemoval, AnUnmountedPanelStillHearsFocusOut)
     UIElement* field = fieldOwned.get();
     panel->AddChild(std::move(fieldOwned));
     mount->SetTarget(panel.get());
-    FocusLog log;
     WatchFocus(*field, "field", log);
     ui.SetFocusById("field");
     UIManagerFocusAccess::AnnounceFocusChange(ui);

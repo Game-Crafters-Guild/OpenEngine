@@ -47,9 +47,9 @@ struct ChangeGate
 namespace ChangeFilter
 {
 
-// Consumer-lane kill switch: GE_ECS_CHANGE_FILTER=0 disables the gated
-// consumers (TransformHierarchySystem's flat gate, ensure gate, and the
-// serial all-or-nothing skip), restoring pre-filter behavior exactly.
+// Consumer-lane kill switch: GE_ECS_CHANGE_FILTER=0 disables every gated
+// consumer (each checks Enabled() before trusting its gate), restoring
+// pre-filter behavior exactly.
 // Stamping itself is always on — the write grants are the production
 // mechanism and their cost is one relaxed uint64 store per visited chunk
 // column (design R12: noise next to the callback).

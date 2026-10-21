@@ -77,7 +77,29 @@ void BindSearchResultIcon(UIElement& iconElement, const SearchIcon& icon, float 
     for (const std::string& cls : staleIconClasses)
         iconElement.RemoveClass(cls);
 
-    if (icon.HasImage())
+    iconElement.RemoveClass("search-result-swatch");
+    iconElement.Overrides().Reset(Style::BackgroundColor);
+    iconElement.Overrides().Reset(Style::MarginLeft);
+    iconElement.Overrides().Reset(Style::MarginRight);
+    if (icon.HasSwatch())
+    {
+        UI::Layout::DisableBackgroundOverride(iconElement);
+        iconElement.RemoveClass("has-thumb");
+        // Half the icon's size, centered in its slot by the class's margin, so the text lines up
+        // with rows that carry an icon.
+        const float swatch = size * 0.5f;
+        iconElement.AddClass("search-result-swatch");
+        iconElement.Overrides()
+            .Set(Style::BackgroundColor, icon.SwatchArgb)
+            .Set(Style::Width, StyleLength::Px(swatch))
+            .Set(Style::Height, StyleLength::Px(swatch))
+            .Set(Style::MinWidth, StyleLength::Px(swatch))
+            .Set(Style::MinHeight, StyleLength::Px(swatch))
+            .Set(Style::MarginLeft, StyleLength::Px(swatch * 0.5f))
+            .Set(Style::MarginRight, StyleLength::Px(swatch * 0.5f));
+        iconElement.RemoveClass("hidden");
+    }
+    else if (icon.HasImage())
     {
         constexpr std::string_view kEnginePrefix = "engine:";
         if (icon.ImagePath.rfind(kEnginePrefix, 0) == 0)
@@ -1063,8 +1085,8 @@ void SearchDialog::AppendResults(std::vector<SearchResultItem> batch)
     m_ResultsGrid->RefreshFromProvider();
     UpdatePanelHeight();
 
-    // Auto-highlight first result
-    if (wasEmpty && !m_Results.empty())
+    // Auto-highlight the first result (once a query is typed, when the dialog asks for that).
+    if (wasEmpty && !m_Results.empty() && (m_HighlightsFirstBeforeQuery || !m_LastQuery.empty()))
     {
         m_ResultsList->SetSelectedIndex(0, /*scrollIntoView=*/true);
         m_ResultsGrid->SetSelectedIndex(0, /*scrollIntoView=*/true);
@@ -1119,6 +1141,14 @@ void SearchDialog::SelectHighlighted()
             Close();
         if (m_OnResult)
             m_OnResult(item);
+        return;
+    }
+    // Nothing highlighted in a dialog that highlights nothing before a query: Enter closes it.
+    if (!m_HighlightsFirstBeforeQuery)
+    {
+        Close();
+        if (m_OnCancel)
+            m_OnCancel();
     }
 }
 

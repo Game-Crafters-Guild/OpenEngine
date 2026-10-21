@@ -177,9 +177,9 @@ ge_add_managed_assembly(CoreBridgeAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/CoreBridge/GameEngine.CoreBridge.csproj
   COMMENT "Building CoreBridge assembly (GameEngine.CoreBridge.dll)")
 
-ge_add_managed_assembly(InputAbiAssembly ALL
-  CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Input.ABI/GameEngine.Input.ABI.csproj
-  COMMENT "Building Input ABI assembly (GameEngine.Input.ABI.dll)")
+ge_add_managed_assembly(ScriptingBindingsAssembly ALL
+  CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/GameEngine.Scripting.Bindings.csproj
+  COMMENT "Building the generated script API bindings (GameEngine.Scripting.Bindings.dll)")
 
 # Editor Scripting ABI: not part of ALL — Editor.Managed builds it transitively
 # via ProjectReference, so adding it to the default build would race.
@@ -192,10 +192,6 @@ endif()
 ge_add_managed_assembly(EcsAbiAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/GameEngine.ECS.ABI.csproj
   COMMENT "Building ECS ABI assembly (GameEngine.ECS.ABI.dll)")
-
-ge_add_managed_assembly(PhysicsAbiAssembly ALL
-  CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Physics.ABI/GameEngine.Physics.ABI.csproj
-  COMMENT "Building Physics ABI assembly (GameEngine.Physics.ABI.dll)")
 
 ge_add_managed_assembly(PlatformAbiAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Platform.ABI/GameEngine.Platform.ABI.csproj
@@ -223,7 +219,7 @@ if(BUILD_EDITOR)
   ge_add_managed_assembly(EditorManagedAssembly ALL
     CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Editor.Managed/GameEngine.Editor.Managed.csproj
     COMMENT "Building Editor managed integration assembly (GameEngine.Editor.Managed.dll)"
-    DEPENDS_ON ScriptingAbiAssembly EcsAbiAssembly InputAbiAssembly ScriptingRuntimeAssembly)
+    DEPENDS_ON ScriptingAbiAssembly EcsAbiAssembly ScriptingRuntimeAssembly)
 endif()
 
 # The csproj generates the host's protocol version from CompileServerVersion.txt;

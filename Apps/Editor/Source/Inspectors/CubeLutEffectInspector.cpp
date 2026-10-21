@@ -7,35 +7,71 @@
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
 #include "Components/Rendering/PostProcessEffects/CubeLutEffect.h"
+#include "Components/Rendering/PostProcessVolume.h"
 #include "Core/Engine.h"
+#include "EditorChangeNotifications.h"
 #include "Editor/Entities/EditorECSHelpers.h"
+#include "Inspectors/CubeLutPreview.h"
+#include "Inspectors/CubeLutStageNotice.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/AssetField.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace GameEngine
 {
 namespace
 {
-using Components::CubeLutInputEncoding;
-using Components::CubeLutTextureFormat;
+using Components::CubeLutStage;
 
-static constexpr EnumEntry<CubeLutInputEncoding> kInputEncodings[] = {
-    {CubeLutInputEncoding::Linear, "Linear"},
-    {CubeLutInputEncoding::Rec709SRGB, "Rec.709 / sRGB"},
-    {CubeLutInputEncoding::ArriLogC3, "ARRI LogC3"},
-    {CubeLutInputEncoding::DaVinciWideGamutIntermediate, "DaVinci Intermediate"},
-    {CubeLutInputEncoding::ACEScct, "ACEScct"},
-    {CubeLutInputEncoding::Cineon, "Cineon"},
+static constexpr EnumEntry<CubeLutStage> kStages[] = {
+    {CubeLutStage::Finish, "Finish (after the look)"},
+    {CubeLutStage::Grade, "Grade (before the look)"},
 };
 
-static constexpr EnumEntry<CubeLutTextureFormat> kTextureFormats[] = {
-    {CubeLutTextureFormat::R32G32B32A32_FLOAT, "R32G32B32A32_FLOAT"},
-    {CubeLutTextureFormat::R16G16B16A16_FLOAT, "RGBA16F"},
-};
+// The LUT's preview under the asset row: the exposure ramp and the saturated probes through the
+// volume's look (top of each pair) and through the look and the LUT at its stage and intensity
+// (bottom), so the difference is the LUT. A disabled effect grades nothing, so its preview shows
+// the look alone. A click enlarges it.
+std::shared_ptr<CubeLutPreview> AddLutPreview(UIElement* parent, ECS::EntityHandle entity,
+                                              const Components::CubeLutEffect& effect, Components::Look look)
+{
+    UIElement* field = InspectorUI::AddActionRow(parent, "cube-lut-strip-row");
+    if (!field)
+        return nullptr;
+    CubeLutStripRequest request{};
+    request.Lut = effect.LutAssetGuid.ToGuid();
+    request.Owner = entity.id + 1u;
+    request.Intensity = std::clamp(effect.Intensity, 0.0f, 1.0f);
+    request.Look = static_cast<int32_t>(look);
+    request.Stage = static_cast<uint32_t>(effect.Stage);
+    return CubeLutPreview::Build(field, request, effect.Enabled, CubeLutPreviewSize::Inspector,
+                                 [](CubeLutPreview& preview) { preview.OpenEnlarged(); });
+}
+
+// One undoable change of the effect's stage: the Stage row's and the stage notice's action. The
+// stage decides whether the notice shows, so the section is rebuilt after the commit; a plain
+// commit leaves the inspector as it is, and a notice's button would leave the old stage and the
+// notice on screen.
+void CommitStage(ECS::World* world, ECS::EntityHandle entity, Editor::EditorChangeNotifications* notifications,
+                 Editor::UndoRedoService* undo, CubeLutStage stage)
+{
+    InspectorDrag::CommitComponentWithUndo<Components::CubeLutEffect>(
+        world, entity, notifications, undo, "Change LUT Stage",
+        [stage](Components::CubeLutEffect& effect) { effect.Stage = stage; });
+    if (!notifications)
+        return;
+    Editor::EditorChangeNotifications::ComponentChangedEvent rebuild{};
+    rebuild.world = world;
+    rebuild.entity = entity;
+    rebuild.componentType = ECS::GetComponentTypeId<Components::CubeLutEffect>();
+    rebuild.kind = Editor::EditorChangeNotifications::ChangeKind::InspectorRebuild;
+    notifications->NotifyComponentChanged(rebuild);
+}
+
 } // namespace
 
 void RegisterCubeLutEffectInspector()
@@ -59,7 +95,7 @@ void RegisterCubeLutEffectInspector()
 
         {
             UIElement* row = InspectorUI::AddRow(ctx.Parent);
-            Label* label = InspectorUI::AddLabel(row, "LUT", "Resolve .cube asset");
+            Label* label = InspectorUI::AddLabel(row, "LUT", "Resolve .cube asset; its input encoding is set on the asset");
             if (label) label->AddClass("inspector-label-no-drag");
             UIElement* fieldContainer = InspectorUI::AddFieldContainer(row);
 
@@ -78,31 +114,34 @@ void RegisterCubeLutEffectInspector()
             fieldContainer->AddChild(std::move(field));
         }
 
+        std::shared_ptr<CubeLutPreview> preview;
+        if (!effect->LutAssetGuid.IsNull())
+        {
+            const auto* volume = w->GetComponent<Components::PostProcessVolume>(e);
+            preview = AddLutPreview(ctx.Parent, e, *effect, volume ? volume->Look : Components::Look::Neutral);
+        }
+
+        auto* stage = InspectorUI::AddEnumRow(ctx.Parent, "Stage", kStages, effect->Stage,
+            "Finish grades the look's output, as a display LUT expects. Grade runs the LUT before the look, "
+            "on the scene's colors, as a colorist's log or scene LUT expects.");
+        stage->SetOnValueChanged([w, e, n, undo](CubeLutStage v) { CommitStage(w, e, n, undo, v); });
+        if (!effect->LutAssetGuid.IsNull())
+            AddCubeLutStageNotice(ctx, effect->LutAssetGuid.ToGuid(), effect->Stage,
+                [w, e, n, undo](CubeLutStage v) { CommitStage(w, e, n, undo, v); });
+
         AddComponentFloatRowWithDrag<LUT>(ctx.Parent, "Intensity",
             std::clamp(effect->Intensity, 0.0f, 1.0f), w, e, n, undo,
             "Change LUT Intensity",
-            [](LUT& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); },
+            [preview](LUT& u, float v) {
+                u.Intensity = std::clamp(v, 0.0f, 1.0f);
+                if (preview)
+                    preview->SetIntensity(u.Intensity);
+            },
             1.0f,
             "0 = bypass, 1 = full LUT blend.",
             {},
             0.0f,
             1.0f);
-
-        auto* encoding = InspectorUI::AddEnumRow(ctx.Parent, "Input Encoding", kInputEncodings,
-            static_cast<CubeLutInputEncoding>(std::min<uint32>(effect->InputEncoding, 5u)),
-            "Encoding expected by the LUT.");
-        encoding->SetOnValueChanged([w, e, n, undo](CubeLutInputEncoding v) {
-            CommitComponentWithUndo<LUT>(w, e, n, undo, "Change LUT Input Encoding",
-                [v](LUT& u) { u.InputEncoding = static_cast<uint32>(v); });
-        });
-
-        auto* format = InspectorUI::AddEnumRow(ctx.Parent, "Texture Format", kTextureFormats,
-            static_cast<CubeLutTextureFormat>(std::min<uint32>(effect->TextureFormat, 1u)),
-            "GPU texture precision for uploaded LUT tables.");
-        format->SetOnValueChanged([w, e, n, undo](CubeLutTextureFormat v) {
-            CommitComponentWithUndo<LUT>(w, e, n, undo, "Change LUT Texture Format",
-                [v](LUT& u) { u.TextureFormat = static_cast<uint32>(v); });
-        });
     };
 
     InspectorRegistry::Get().RegisterComponentInspector<LUT>(std::move(fn));

@@ -18,12 +18,19 @@ namespace GameEngine::PhysicsECS
 // - PhysicsECS reserves backend `BodySettings.userData` for the ECS entity id, so we can map
 //   physics events back to `ECS::EntityHandle` cheaply.
 // - Callbacks are invoked on the main thread during `PhysicsWorld::Step()` (after the simulation step).
+// - A callback may subscribe or unsubscribe, itself or another, while it runs. A subscription that
+//   ends during a delivery is not called again, also not later in the same delivery.
+// - A subscription ends in one place: Unsubscribe, UnsubscribeAllForEntity or ClearAll. Each runs
+//   the subscription's `ended` callback once, after which the subscription is gone.
+//   PhysicsWorldService::Shutdown (leaving play mode, engine shutdown) calls ClearAll: the entities
+//   a subscription names belong to the world that shuts down.
 struct EntityContactEvent
 {
     ECS::EntityHandle self{};
     ECS::EntityHandle other{};
 
-    // The original physics event (state + contact point/normal/impulse).
+    // The physics event's state, contact point and impulse. The normal is in world space and points
+    // from other into self: a body resting on the ground gets +Y as self.
     Physics::ContactState state = Physics::ContactState::Persist;
     Physics::Vector3 point{0.0f, 0.0f, 0.0f};
     Physics::Vector3 normal{0.0f, 1.0f, 0.0f};
@@ -55,17 +62,21 @@ public:
 
     using ContactCallback = GameEngine::Function<void(const EntityContactEvent&)>;
     using TriggerCallback = GameEngine::Function<void(const EntityTriggerEvent&)>;
+    // Runs once when the subscription ends, for whatever reason it ends.
+    using EndedCallback = GameEngine::Function<void()>;
+
+    // Each Subscribe returns 0, and keeps nothing, for an invalid entity.
 
     // Contacts (solid): separate callbacks for Begin and End.
-    static SubscriptionId SubscribeContactBegin(ECS::EntityHandle entity, ContactCallback callback);
-    static SubscriptionId SubscribeContactEnd(ECS::EntityHandle entity, ContactCallback callback);
+    static SubscriptionId SubscribeContactBegin(ECS::EntityHandle entity, ContactCallback callback, EndedCallback ended = {});
+    static SubscriptionId SubscribeContactEnd(ECS::EntityHandle entity, ContactCallback callback, EndedCallback ended = {});
 
     // Triggers: separate callbacks for Enter and Exit.
     // Note: callbacks fire for BOTH entities:
     // - If `entity` is the trigger body: `selfIsTrigger=true`.
     // - If `entity` is the other body: `selfIsTrigger=false`.
-    static SubscriptionId SubscribeTriggerEnter(ECS::EntityHandle entity, TriggerCallback callback);
-    static SubscriptionId SubscribeTriggerExit(ECS::EntityHandle entity, TriggerCallback callback);
+    static SubscriptionId SubscribeTriggerEnter(ECS::EntityHandle entity, TriggerCallback callback, EndedCallback ended = {});
+    static SubscriptionId SubscribeTriggerExit(ECS::EntityHandle entity, TriggerCallback callback, EndedCallback ended = {});
 
     static void Unsubscribe(SubscriptionId id);
     static void UnsubscribeAllForEntity(ECS::EntityHandle entity);

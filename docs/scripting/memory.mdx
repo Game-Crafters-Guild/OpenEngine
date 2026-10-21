@@ -1,0 +1,299 @@
+---
+title: Memory
+description: Counting memory the engine's statistics should show with TrackedBytes, and allocating with Arena, ScratchScope, ObjectPool and RangeAllocator.
+sidebar:
+  order: 14
+---
+
+:::note[Who this is for]
+
+engine and game-module developers who hold memory the general heap does not see (device buffers, pools, caches) and want it to show in the engine's memory statistics, or who allocate many short-lived objects together and want to free them all at once, or who need working memory for one call without touching the general heap, or who pool objects, or who place ranges in a buffer they own. The headers are under `Engine/Modules/Memory/Include/Memory/`. A game module reaches them by linking `Engine`, and `GameSDK/GameSDK.h` includes `ScratchScope.h` and `ObjectPool.h`. This guide grows with the Memory module. It covers `TrackedBytes`, the stats snapshot, `Arena`, `ScratchScope`, `ObjectPool` and `RangeAllocator` today.
+
+:::
+
+:::tip[How do I pool?]
+
+Pick by what the object is, not by how often it is created.
+
+- **A game object that lives in the world** (a projectile, a unit, a pickup) is an **entity**: spawn it and destroy it. The ECS owns its storage and already reuses it. A pool of entities is never needed.
+- **Data you address by handle**, where the storage may move, is a **`GenerationalVector`**: a stale handle is detected, but a raw pointer or reference into it is invalid after the next `Create`, which may grow the storage and move every element.
+- **An object outside the ECS that needs a stable address** (linked by raw pointer, handed to a library, captured by a callback) is a **`Memory::ObjectPool<T>`** (section 5). When the pool is destroyed it destroys its live objects in address order: a destructor that runs then may `Delete` other objects of the same pool, but must not otherwise touch them and must not create objects in it (one created then may never be destroyed).
+
+:::
+
+## 1. TrackedBytes: a named byte count
+
+`Memory::TrackedBytes` is a byte count with a name and a residency that the stats registry reports. It counts exactly what its owner reports to it, nothing more: the engine does not measure anything on its behalf. Report every growth with `Add` and every release with `Subtract`, as deltas.
+
+```cpp title="Count a cache's bytes with TrackedBytes"
+#include "Memory/TrackedBytes.h"
+
+namespace
+{
+// One per owner, usually a static beside the code that holds the bytes.
+GameEngine::Memory::TrackedBytes s_CacheBytes{"MyGame.PathCache", GameEngine::Memory::Residency::Cpu};
+}
+
+void PathCache::Grow(std::size_t newCapacity)
+{
+    const std::size_t oldBytes = m_Nodes.capacity() * sizeof(Node);
+    m_Nodes.reserve(newCapacity);
+    s_CacheBytes.Add(m_Nodes.capacity() * sizeof(Node) - oldBytes);
+}
+
+PathCache::~PathCache()
+{
+    s_CacheBytes.Subtract(m_Nodes.capacity() * sizeof(Node));
+}
+```
+
+| Part | What it does |
+|---|---|
+| `TrackedBytes(name, residency)` | Registers the count under `name` for the object's whole life; the destructor unregisters it. Constructing it is the registration: there is no separate call. |
+| `Residency::Cpu` / `Residency::Gpu` | Where the bytes live: process memory, or device memory and host-visible buffers the device reads. |
+| `Add(bytes)` | Adds to the count. A relaxed atomic: any thread, no lock, no allocation. |
+| `Subtract(bytes)` | Subtracts at most the current count, so a release reported larger than what was added leaves 0, never a wrapped count. Same cost as `Add`. |
+
+### Names
+
+- Use `Area.What`, for example `Animation.RetargetGPUData`. The name is copied at construction, so a temporary string is fine.
+- **At most 47 characters.** A longer name is truncated to 47. A build with asserts (Debug, DebugFast) prints the name and stops at an assert asking you to shorten it.
+- Names are not required to be unique. Two objects with the same name are two entries in a snapshot. One static per owner, shared by all its instances, gives one entry with their total.
+
+:::caution[Lifetime]
+
+a `TrackedBytes` cannot be copied or moved, because the registry holds it for its whole life. Keep one per owner, as a static or as a member of an object that does not move. An owner destroyed without reporting its release leaves its bytes in the count: subtract what you hold in your destructor.
+
+:::
+
+## 2. Reading the stats snapshot
+
+```cpp title="Read the stats snapshot"
+#include "Memory/StatsSnapshot.h"
+
+for (const GameEngine::Memory::StatsEntry& entry : GameEngine::Memory::SnapshotStats())
+    std::printf("%s %s %llu\n", entry.Name.c_str(),
+                entry.Residency == GameEngine::Memory::Residency::Gpu ? "gpu" : "cpu",
+                static_cast<unsigned long long>(entry.Bytes));
+```
+
+- `SnapshotStats()` copies every `TrackedBytes`, `Arena`, `ObjectPool` and `RangeAllocator` alive at the call, and the scratch arena of every thread that has opened a `ScratchScope`, newest first, as `StatsEntry { Name, Kind, Residency, Bytes, ReservedBytes, HighWaterBytes, Blocks, ThreadId, OutOfOrder, Shrinks }`.
+- `Kind` says which registered it. For a `TrackedBytes`, `Bytes` is its count and the other three are 0. For an `Arena`, `Bytes` is the bytes in use, `ReservedBytes` the bytes of its blocks, `HighWaterBytes` the most it has had in use, and `Blocks` how many blocks it holds. An arena updates them when it acquires a block and at `Rewind` and `Reset`, so between those they show the value as of the last one. For an `ObjectPool`, the counts are slot bytes as of its last block acquisition: `Bytes` the live objects' slots and `HighWaterBytes` the most ever live (a pool acquires a block only when every slot is live, so the two are equal), `ReservedBytes` its blocks and `Blocks` how many. Its `LiveCount()` is exact at any time. For a `RangeAllocator`, the counts are bytes (units times its unit size), current after every call: `Bytes` the live ranges (those waiting for `ReclaimThrough` included), `HighWaterBytes` the most ever live, `ReservedBytes` the end of the highest range ever handed out (how much of your storage it has used) and `Blocks` the ranges handed out and not returned. A `Scratch` entry (named `Memory.Scratch`, one per thread) has the arena's counts plus `ThreadId` (the OS thread id), `OutOfOrder` (allocations through a scope that was not the innermost, section 4) and `Shrinks` (times the thread released a retained block). The last three are 0 for every other kind. A thread publishes its scratch counts when it acquires a block and at every 64th outermost close, so between those they can lag.
+- In a running editor, the `get_memory_stats` debug-port method (and the MCP tool of the same name) returns the same entries with each scratch thread's name, the editor's frame count, and the process's resident size.
+- It takes the registry's mutex and allocates the copy: call it from tools, tests, and debug views, not from a per-frame path.
+- Each count is read once, without stopping its owner, so a count another thread is changing reads as its value just before or just after that change.
+
+## 3. Arena: allocate together, free together
+
+`Memory::Arena` hands out memory by moving a cursor forward through blocks it owns, and takes it all back at once: `Reset` empties it, `Rewind` returns to a marker. There is no per-allocation free. Use it for data that lives exactly as long as something else does: one frame, one job, one level load. A pointer it returns stays valid until the `Rewind` or `Reset` that covers it, or the arena's destruction. Blocks are chained, never moved.
+
+```cpp title="A per-frame Arena"
+#include "Memory/Arena.h"
+
+class PathfindingSystem
+{
+    GameEngine::Memory::Arena m_Frame{"MyGame.PathfindingFrame"};
+
+    void Update()
+    {
+        m_Frame.Reset();                                                  // last frame's data is gone
+        std::span<Node> nodes = m_Frame.AllocateArray<Node>(nodeCount);  // zeroed
+        Request* request = m_Frame.New<Request>(goal);                    // ~Request runs at the next Reset
+        std::pmr::vector<Node*> open{&m_Frame.Resource()};                // a standard container on the arena
+        ...
+    }
+};
+```
+
+| Part | What it does |
+|---|---|
+| `Arena(name, firstBlockBytes = 64 KiB)` | Registers the arena in the stats snapshot under `name` (copied; at most 47 characters; not empty). Acquires nothing until the first allocation. |
+| `Allocate(bytes, alignment)` | Raw memory, aligned to any power of two (default `alignof(std::max_align_t)`). Never null: a block that cannot be acquired throws `std::bad_alloc`. |
+| `New<T>(args...)` | Constructs a `T`. If `T` has a destructor that does something, it is recorded and run by `Rewind` or `Reset`, newest first. The constructor and the destructor may themselves allocate from the same arena. |
+| `AllocateArray<T>(n)` | `n` value-initialized elements (zeroes for numbers). Trivially destructible `T` only. |
+| `AllocateArrayForOverwrite<T>(n)` | `n` elements left indeterminate, for an array you fill completely before reading it. Trivially destructible `T` only. |
+| `CopyArray<T>(span)` | A copy of the span in the arena. |
+| `GetMarker()` / `Rewind(marker)` | Remember a position, and go back to it: the destructors recorded after the marker run, newest first, and the memory after it is reused. Every block is kept. A marker is valid until a `Rewind` to an earlier position or a `Reset`. |
+| `Reset()` | Runs every recorded destructor, newest first, and empties the arena. |
+| `Resource()` | A `std::pmr::memory_resource` for standard containers: they allocate from the arena, and their frees do nothing (the memory returns at `Rewind` or `Reset`). Declare the container after the arena, so it is destroyed first. |
+| `BytesUsed()` / `BytesReserved()` | Bytes handed out since the last `Reset` (alignment padding included), and bytes in the blocks it holds. |
+
+### Growth: a steady frame allocates nothing
+
+- A request that does not fit the current block takes the next block it holds, else a new block twice the size of the last (at most 4 MiB per step, or the request's size if larger).
+- At `Reset`, an arena holding several blocks replaces them with one block as large as the most it had in use. From then on, a frame of the same size fits that one block, and neither the frame nor its `Reset` touches the general heap. Pick the first block size near a typical frame to skip the first frame's growth.
+- `Rewind` never frees or merges blocks.
+
+### Rules
+
+1. **One user at a time.** An arena is not thread-safe. Any thread may use it, but uses must be ordered: a system's member arena used by whichever worker runs the system each frame is fine, because the frame orders them. Two threads inside one arena at the same moment stop at an assert in Debug and DebugFast ("two threads used this Arena at once"). Give each thread its own arena, or order the uses with a join or a lock. Any thread may read memory it was handed.
+2. **Nothing outlives its Reset.** A pointer, span, or container element from before a `Reset` (or a `Rewind` past it) points at memory the arena reuses. Debug and DebugFast fill new allocations with `0xCD` and taken-back memory with `0xDD`, so a stale read shows as those bytes. Under AddressSanitizer it is reported where it happens.
+3. **Destructors and hot reload.** An arena that still holds an object whose destructor is your module's code keeps that module's old code loaded when the module reloads, and the editor log names the arena. A system's member arena needs nothing from you: its destructors run when the replaced system is destroyed at the next schedule build. An arena held anywhere else stops holding the old code once you reset or destroy it, and the old code is then released at a later reload that nothing else holds it for. A module that registers a game system keeps its old code loaded until the editor restarts, whatever its arenas hold.
+4. **Not copyable, not movable.** Keep an arena where it does not move: a member of an object that does not move, or a static.
+
+:::tip[Cost]
+
+an allocation is an align, an add, and a compare on the current block. Statistics are written only when a block is acquired and at `Rewind` and `Reset`. The Debug and DebugFast checks (the one-user word and the fills) cost a few instructions per allocation and a pass over the bytes taken back.
+
+:::
+
+## 4. ScratchScope: memory for one block of code
+
+`Memory::ScratchScope` is stack memory you can size at run time. Everything allocated through it lives until the scope's closing brace, and comes from the calling thread's own scratch arena, so a function that runs every frame allocates nothing from the general heap once its thread has warmed up. Use it for working lists whose size you learn inside the function: candidates, sort keys, the indices of the items a loop selected.
+
+```cpp title="Working memory for one block with ScratchScope"
+#include "Memory/ScratchScope.h"
+
+void TargetingSystem::Update(ECS::World& world, float deltaTime)
+{
+    GameEngine::Memory::ScratchScope scratch;                             // declare it first
+    std::span<Candidate> candidates =
+        scratch.AllocateArrayForOverwrite<Candidate>(m_Units.size());     // filled before it is read
+    std::size_t count = 0;
+    for (const Unit& unit : m_Units)
+        if (unit.IsHostile())
+            candidates[count++] = {unit.Handle, unit.DistanceTo(m_Origin)};
+    std::pmr::vector<std::uint32_t> order{&scratch.Resource()};       // containers after the scope
+    ...
+}                                                                         // all of it is returned here
+```
+
+| Part | What it does |
+|---|---|
+| `ScratchScope()` | Opens a scope on the calling thread. The thread's first scope creates its scratch state; its first allocation acquires a 64 KiB block. |
+| `Allocate(bytes, alignment)` | Raw memory, aligned to any power of two. Never null: memory that cannot be acquired throws `std::bad_alloc`. |
+| `New<T>(args...)` | Constructs a `T`. Trivially destructible `T` only: nothing runs at the close. |
+| `AllocateArray<T>(n)` / `AllocateArrayForOverwrite<T>(n)` / `CopyArray<T>(span)` | As on `Arena`: zeroed, indeterminate (fill it before reading), or a copy. Trivially destructible `T` only. |
+| `Resource()` | A `std::pmr::memory_resource` for standard containers. A container on it runs its own destructor; its frees do nothing (the memory returns at the close). |
+
+### Nesting
+
+- Scopes nest on a thread, last opened first closed: an inner scope's memory returns at its close and the outer scope's stays. A scope may be open across a fork and a `Wait`: the units this thread runs inside the `Wait` open and close their scopes above it. There is no depth limit.
+- Allocate from the innermost open scope. An allocation through an outer scope while an inner one is open (including a container bound to the outer scope growing) is still correct, but it is served from the general heap and freed when that outer scope closes. The scratch stats count it as `OutOfOrder`, and Debug and DebugFast log it once per thread.
+
+### Rules
+
+1. **It is stack memory.** Declare the scope first and its containers after it, as locals. It cannot be copied, moved, or created with `new`, and Debug and DebugFast assert when a scope closes while one opened after it is still open.
+2. **Give units spans.** Only the thread that opened the scope allocates from it (Debug and DebugFast assert "a ScratchScope allocates only on the thread that opened it"). Any thread may read and write the memory while the scope is open: pass spans to the units you fork, never the scope or a container bound to it, and join before the scope closes. Never hand it to a `Submit`: its body may run after the scope has closed.
+3. **Nothing outlives the close.** A pointer, span, or container from the scope points at memory the next scope reuses. A container declared before its scope, or kept after it, that grows later stops at an assert in Debug and DebugFast ("a container outlived its ScratchScope; declare it inside the scope"). The check covers 256 scopes per thread: with more than 256 open at once, the scopes past them hand out their depth's own resource, and a container that outlived an earlier scope at the same depth is not caught. The `Arena` fills and AddressSanitizer reports apply as in section 3.
+
+### Retention
+
+- At the close of a thread's outermost scope the arena is emptied, and a chain of blocks becomes one block as large as the most that scope had in use, so the next frame of the same size allocates nothing.
+- A block more than twice the largest need of at least the last 1024 outermost scopes on that thread is released, so a one-off spike is returned within about 2100 further outermost closes on that thread (the check runs at every 64th), while a steady large user keeps its block. `HighWaterBytes` and `Shrinks` in the thread's scratch entry show both.
+- A thread that never opens a scope allocates nothing. A scope opened while its thread is exiting, after the thread's scratch state has been freed (from a `thread_local` or static destructor), is served from the general heap.
+
+:::tip[Cost]
+
+opening and closing an inner scope is a call into the engine, a marker read, and a rewind. The outermost close adds a reset, and every 64th outermost close the stats and the retention check. An allocation from the innermost scope is the arena's bump. The Debug and DebugFast checks add a thread comparison per allocation and the `Arena` fills.
+
+:::
+
+## 5. ObjectPool: objects with a stable address
+
+`Memory::ObjectPool<T>` holds objects of one type in fixed-size slots. `New` constructs an object in a free slot and `Delete` destroys it and frees the slot for the next `New`. An object keeps its address from `New` to `Delete`, however many objects the pool holds meanwhile, so other objects, a library or a callback may point at it. It is for objects outside the ECS: a world object is an entity (see "How do I pool?" at the top).
+
+```cpp title="Stable-address objects in an ObjectPool"
+#include "Memory/ObjectPool.h"
+
+class PathfindingService
+{
+    GameEngine::Memory::ObjectPool<PathRequest> m_Requests{"MyGame.PathRequests"};
+
+    PathRequest* Submit(Vector3 from, Vector3 to, Callback done)
+    {
+        PathRequest* request = m_Requests.New(from, to, done);   // stable until Delete
+        m_Solver.Enqueue(request);                               // the solver keeps the pointer
+        return request;
+    }
+
+    void OnSolved(PathRequest* request)
+    {
+        request->Done(request->Path);
+        m_Requests.Delete(request);                              // runs ~PathRequest; the slot is reused next
+    }
+};
+```
+
+| Part | What it does |
+|---|---|
+| `ObjectPool<T>(name)` | Registers the pool in the stats snapshot under `name` (copied; at most 47 characters; not empty). Acquires nothing until the first `New`. |
+| `New(args...)` | Constructs a `T` from `args` in a free slot and returns it. Never null: a block that cannot be acquired throws `std::bad_alloc`. A constructor that throws gives its slot back. The constructor may use the same pool. |
+| `Delete(object)` | Runs the object's destructor and frees its slot. The object must come from `New` of this pool and not have been deleted since; a null pointer does nothing, as with `delete`. The destructor may use the same pool. |
+| `LiveCount()` | Objects created and not yet deleted. |
+| `~ObjectPool()` | Destroys every live object once, in address order, then frees every block. |
+
+### Growth
+
+- A slot is `sizeof(T)`, at least a pointer, rounded up to `alignof(T)` (at least a pointer's alignment). Any alignment is served, `alignas(256)` included.
+- The first block holds 16 KiB of slots (at least 16), and each new block twice as many as the last while a block's slots stay within 4 MiB. A slot larger than 4 MiB gets a block of its own. Each block also holds one bit per slot, used when the pool is destroyed.
+- Blocks are never moved or freed before the pool is destroyed, so the pool never shrinks: size it for its peak. A freed slot is the next one reused (last in, first out), so a pool that churns at a steady size touches no new memory and allocates nothing from the general heap.
+
+### Rules
+
+1. **One user at a time.** Like an `Arena`, a pool is not thread-safe. Any thread may use it, but uses must be ordered: a system's member pool used by whichever worker runs the system each frame is fine. Two threads inside one pool at the same moment stop at an assert in Debug and DebugFast ("two threads used this ObjectPool at once"). Any thread may use an object it was handed.
+2. **Delete each object once, into its own pool.** Debug and DebugFast assert on a second `Delete` ("this object was already returned to the pool") and on a pointer that is not one of the pool's slots ("this pointer did not come from this pool"). Release does not check.
+3. **Nothing outlives its Delete.** Debug and DebugFast fill a deleted object's slot with `0xDD` (its first pointer-sized word, 8 bytes on a 64-bit target, then holds the link to the next free slot), and AddressSanitizer reports a read of a free slot past that word.
+4. **Destroying the pool.** Live objects are destroyed in address order. A destructor that runs then may `Delete` other objects of the same pool (a tree node its children, a request its follow-ups): each object is destroyed exactly once, whichever of the two the pool reaches first. It must not otherwise read them, because one at a lower address is already destroyed (AddressSanitizer reports that read), and it must not `New` from the pool: Debug and DebugFast assert ("New during the pool's destruction"), and in Release that object is never destroyed.
+5. **Not copyable, not movable.** Keep a pool where it does not move: a member of an object that does not move, or a static. A system's member pool destroys its objects when the replaced system is destroyed after a hot reload, like any other member.
+
+:::tip[Cost]
+
+`New` takes the most recently freed slot, or the next unused slot of the newest block. `Delete` runs the destructor and puts the slot back. Both are a few instructions and touch no other slot and no per-block data. Statistics are written only when a block is acquired. Debug and DebugFast add the one-user word, a binary search over the blocks to keep each slot's live bit for the asserts, and the fill. Destroying the pool walks every slot once.
+
+:::
+
+## 6. RangeAllocator: ranges in storage you own
+
+`Memory::RangeAllocator` decides where ranges go inside storage you own (a GPU buffer, a vector of slots) and never touches the storage itself. It counts in your units: a vertex, an index, a slot. Use it when many ranges of different sizes come and go in one buffer, and you need each range's offset to stay put while it lives.
+
+```cpp title="Place meshes in one vertex buffer with a RangeAllocator"
+#include "Memory/RangeAllocator.h"
+
+class TerrainChunkBuffer
+{
+    static constexpr uint64_t kVertexBytes = sizeof(TerrainVertex);
+    GameEngine::Memory::RangeAllocator m_Ranges{"MyGame.TerrainChunks", GameEngine::Memory::Residency::Gpu,
+                                                kVertexBytes, kBufferVertices, 256};
+
+    bool Upload(Chunk& chunk)
+    {
+        chunk.Range = m_Ranges.Allocate(chunk.Vertices.size());   // in vertices
+        if (!chunk.Range.IsValid())
+            return false;                                          // nothing fits: no partial state
+        m_Device->UpdateBuffer(m_Buffer, chunk.Range.Offset * kVertexBytes, chunk.Bytes(), chunk.Data());
+        return true;
+    }
+
+    void Unload(Chunk& chunk, uint64_t frame)
+    {
+        m_Ranges.FreeAfter(chunk.Range, frame + kFramesInFlight);  // the GPU may still read it
+        chunk.Range = {};
+    }
+
+    void EndFrame(uint64_t retiredFrame) { m_Ranges.ReclaimThrough(retiredFrame); }
+};
+```
+
+| Part | What it does |
+|---|---|
+| `RangeAllocator(name, residency, unitBytes, capacityUnits, initialRanges)` | Registers the allocator in the stats snapshot under `name` (copied; at most 47 characters; not empty). `capacityUnits` is the size of your storage in units of `unitBytes` bytes; `unitBytes` only turns the stats into bytes. `initialRanges` is how many ranges, free and live, it has room to track before it first grows. |
+| `Allocate(units)` | A range of exactly `units`, or an invalid `Allocation` (`IsValid()` false) when nothing fits or `units` is 0. A refusal changes nothing. |
+| `Free(allocation)` | Returns the range now and merges it with free neighbors. An invalid allocation does nothing. |
+| `FreeAfter(allocation, stamp)` | Returns the range at the first `ReclaimThrough` with a stamp at or past `stamp`; until then it stays in use. Use it while the GPU may still read the range. |
+| `ReclaimThrough(stamp)` | Returns every range queued with a stamp at or below `stamp`. Call it once per frame with the last frame the GPU has finished. |
+| `TryGrowInPlace(allocation, units)` | Grows the range to `units` when the range right after it is free and large enough, and returns true; otherwise changes nothing and returns false, and you allocate a new range, copy and free the old one. |
+| `GetStats()` | Capacity, used, peak, the end of the highest range, the largest free range, free and queued range counts, and fragmentation, in units. Walks one free list: for tools and tests, not every frame. |
+
+### Rules
+
+1. **Pass the `Allocation` back unchanged.** It carries a record index, so `Free` finds the range without a search. Debug and DebugFast assert on a range freed twice, freed while queued, or from another allocator ("this range is not live in this RangeAllocator"). Release does not check.
+2. **Release never allocates.** `Allocate` provisions everything a later release needs, so `Free`, `FreeAfter` and `ReclaimThrough` cannot fail and are safe in destructors and on error paths.
+3. **One user at a time.** It is not thread-safe and has no check: order every call with a lock, a join or the frame.
+4. **Not copyable, not movable.** Keep it where it does not move. In a container that reallocates, hold it by `std::unique_ptr`.
+
+:::tip[Cost]
+
+The free ranges sit in bins by size (a power of two, split into eight), and a bitmap finds the first bin that can fit a request. `Allocate` takes the smallest free range that fits, the lowest offset among equal ones, from the request's own bin or the first larger bin that has one, so it walks the free ranges of at most two bins, never all of them. The grant is cut from the low end of that range and is never larger than the request. `Free` is constant time and merges with both neighbors. `ReclaimThrough` returns at once when nothing is due, otherwise it walks the queue. The stats are written at every call that changes them.
+
+:::

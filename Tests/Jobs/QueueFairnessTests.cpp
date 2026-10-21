@@ -358,9 +358,9 @@ TEST(QueueFairnessTest, FloodPlusWavesConserveEveryTaskExactlyOnce)
         }
     });
 
-    // Waves from this thread while the producers publish: the caller parks
-    // per wave (F17 external waiter), so each Wait's return proves the wave's
-    // stubs were consumed out of a lane the flood was actively deepening.
+    // Waves from this thread while the producers publish: the caller runs the
+    // wave's tagged jobs it can claim and the workers run the rest from stubs
+    // in a lane the flood is actively deepening; each task still runs once.
     for (size_t w = 0; w < kWaveCount; ++w)
     {
         JobCounter counter;

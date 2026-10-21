@@ -1,0 +1,160 @@
+GameEngine overlay patch for yoga 3.2.1.
+
+algorithm: key a measured node's cache entries by owner size when its measured
+size depends on the owner.
+
+calculateLayoutInternal reuses a measure-function node's cached size through
+canUseCachedMeasurement, which compares available sizes and sizing modes only.
+Two of its rules accept an entry measured under a different available size:
+newSizeIsStricterAndStillValid (a tighter fit-content constraint the old size
+still fits) and oldSizeIsMaxContentAndStillFits. Both assume the measured size is
+a function of the available size alone. It is not when the node's min/max size,
+padding or margin is a percentage: measureNodeWithMeasureFunc resolves those
+against ownerWidth/ownerHeight, which no cache entry records.
+
+The failing case: a label with flex: 0 1 auto and min-width: 37% in a 700 px
+row measures 259 (37% of 700) while computing its flex basis. The row narrows
+to 400 px; the label's available width goes 700 -> 400 fit-content, 259 still
+fits, so the stricter rule returns 259 where a fresh layout gives 148
+(37% of 400), as CSS does: a percentage min-width resolves against the
+containing block of the current layout. A min-height percentage fails the
+same way when the owner gets shorter. A percentage max-width or max-height does
+not leave a stale size: constrainMaxSizeForMode narrows the available size
+handed to the measurement, and the flex line re-applies the max clamp. Only a
+percentage floor lets the larger, stale size survive.
+
+The fix records the owner size on every measure-function cache entry and, for a
+node whose style carries a percentage min/max dimension, padding or margin,
+accepts an entry only under the same owner size. Nodes without such a
+percentage keep every relaxed rule, so text in a resizing panel without
+percentage constraints is measured exactly as often as before. Nodes without a
+measure function are not touched: their cache only accepts an exact match of
+available size and mode.
+
+The gate also covers percentage max sizes, padding and margins, which resolve
+against the owner during measurement too, and it compares both owner axes for
+any of them. A node with only a percentage min-width is therefore re-measured
+when only its owner's height changes; keying per axis would avoid that extra
+measurement at the cost of a wider gate. CachedMeasurement grows by two floats
+(72 bytes per node over the nine entries); nothing allocates.
+
+Upstream main (facebook/yoga, Cache.cpp and calculateLayoutInternal, read
+2026-10-12) has the same rules and no owner-size key.
+
+diff --git a/yoga/algorithm/CalculateLayout.cpp b/yoga/algorithm/CalculateLayout.cpp
+index 0065096..2eb72ee 100644
+--- a/yoga/algorithm/CalculateLayout.cpp
++++ b/yoga/algorithm/CalculateLayout.cpp
+@@ -2150,6 +2150,38 @@ static void calculateLayoutImpl(
+   }
+ }
+ 
++// A measured node's percentage min/max sizes, padding and margins resolve
++// against its owner's size, but canUseCachedMeasurement only compares available
++// sizes. Its relaxed rules (a stricter fit-content constraint the old size still
++// fits, a max-content size that still fits) then hand back a size clamped or
++// padded against the previous owner: a short label with min-width: 37% keeps
++// 37% of the wide row after the row narrows. Such a node's cache entries are
++// valid only under the owner size they were measured with.
++static bool measuredSizeDependsOnOwnerSize(const yoga::Node* const node) {
++  const auto& style = node->style();
++  for (const Dimension dimension : {Dimension::Width, Dimension::Height}) {
++    if (style.minDimension(dimension).unit() == Unit::Percent ||
++        style.maxDimension(dimension).unit() == Unit::Percent) {
++      return true;
++    }
++  }
++  for (const Edge edge : ordinals<Edge>()) {
++    if (style.padding(edge).unit() == Unit::Percent ||
++        style.margin(edge).unit() == Unit::Percent) {
++      return true;
++    }
++  }
++  return false;
++}
++
++static bool cachedOwnerSizeMatches(
++    const CachedMeasurement& entry,
++    const float ownerWidth,
++    const float ownerHeight) {
++  return yoga::inexactEquals(entry.ownerWidth, ownerWidth) &&
++      yoga::inexactEquals(entry.ownerHeight, ownerHeight);
++}
++
+ //
+ // This is a wrapper around the calculateLayoutImpl function. It determines
+ // whether the layout request is redundant and can be skipped.
+@@ -2203,6 +2235,7 @@ bool calculateLayoutInternal(
+   // they are the most expensive to measure, so it's worth avoiding redundant
+   // measurements if at all possible.
+   if (node->hasMeasureFunc()) {
++    const bool ownerSizeKeyed = measuredSizeDependsOnOwnerSize(node);
+     const float marginAxisRow =
+         node->style().computeMarginForAxis(FlexDirection::Row, ownerWidth);
+     const float marginAxisColumn =
+@@ -2222,7 +2255,10 @@ bool calculateLayoutInternal(
+             layout->cachedLayout.computedHeight,
+             marginAxisRow,
+             marginAxisColumn,
+-            node->getConfig())) {
++            node->getConfig()) &&
++        (!ownerSizeKeyed ||
++         cachedOwnerSizeMatches(
++             layout->cachedLayout, ownerWidth, ownerHeight))) {
+       cachedResults = &layout->cachedLayout;
+     } else {
+       // Try to use the measurement cache.
+@@ -2240,7 +2276,10 @@ bool calculateLayoutInternal(
+                 layout->cachedMeasurements[i].computedHeight,
+                 marginAxisRow,
+                 marginAxisColumn,
+-                node->getConfig())) {
++                node->getConfig()) &&
++            (!ownerSizeKeyed ||
++             cachedOwnerSizeMatches(
++                 layout->cachedMeasurements[i], ownerWidth, ownerHeight))) {
+           cachedResults = &layout->cachedMeasurements[i];
+           break;
+         }
+@@ -2325,6 +2364,8 @@ bool calculateLayoutInternal(
+           layout->measuredDimension(Dimension::Width);
+       newCacheEntry->computedHeight =
+           layout->measuredDimension(Dimension::Height);
++      newCacheEntry->ownerWidth = ownerWidth;
++      newCacheEntry->ownerHeight = ownerHeight;
+     }
+   }
+ 
+diff --git a/yoga/node/CachedMeasurement.h b/yoga/node/CachedMeasurement.h
+index 9c76280..e150fef 100644
+--- a/yoga/node/CachedMeasurement.h
++++ b/yoga/node/CachedMeasurement.h
+@@ -25,6 +25,12 @@ struct CachedMeasurement {
+   float computedWidth{-1};
+   float computedHeight{-1};
+ 
++  // The owner size the entry was measured under. Only consulted for a node
++  // whose measured size depends on it (a percentage min/max size, padding or
++  // margin), see measuredSizeDependsOnOwnerSize in CalculateLayout.cpp.
++  float ownerWidth{-1};
++  float ownerHeight{-1};
++
+   bool operator==(CachedMeasurement measurement) const {
+     bool isEqual = widthSizingMode == measurement.widthSizingMode &&
+         heightSizingMode == measurement.heightSizingMode;
+@@ -46,6 +52,15 @@ struct CachedMeasurement {
+       isEqual = isEqual && computedHeight == measurement.computedHeight;
+     }
+ 
++    if (!yoga::isUndefined(ownerWidth) ||
++        !yoga::isUndefined(measurement.ownerWidth)) {
++      isEqual = isEqual && ownerWidth == measurement.ownerWidth;
++    }
++    if (!yoga::isUndefined(ownerHeight) ||
++        !yoga::isUndefined(measurement.ownerHeight)) {
++      isEqual = isEqual && ownerHeight == measurement.ownerHeight;
++    }
++
+     return isEqual;
+   }
+ };

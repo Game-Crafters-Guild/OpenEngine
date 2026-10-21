@@ -9,6 +9,7 @@ namespace GameEngine::Rendering::RenderGraph
 {
 
 RGGraph::RGGraph()
+    : m_Arena("RenderGraph.Frame")
 {
     m_Resources.reserve(256);
     m_ResourceExternal.reserve(256);
@@ -51,7 +52,7 @@ const char* RGGraph::CopyName(const char* name)
     if (!name)
         return nullptr;
     const size_t len = std::strlen(name) + 1;
-    char* dst = static_cast<char*>(m_Arena.AllocRaw(len, 1));
+    char* dst = static_cast<char*>(m_Arena.Allocate(len, 1));
     std::memcpy(dst, name, len);
     return dst;
 }

@@ -1,0 +1,50 @@
+---
+title: Terrain detail
+description: How fine the terrain mesh is near the camera and far from it, set by the height data's spacing and Target Pixel Error, and what each costs.
+---
+
+A terrain is drawn as one adaptive mesh: triangles are small near the camera and grow with distance, and the mesh re-adapts every frame as the camera moves. Two things decide how fine it is. Near the camera of a heightfield terrain, the height data's own spacing sets the smallest triangle. Farther away, **Target Pixel Error** sets how long a triangle edge may be on screen. This page explains both and what each one costs.
+
+## The short version
+
+:::tip[Leave Target Pixel Error at 11 and choose detail with Samples Per Meter]
+
+The default draws distant ground with edges of about 11 pixels at 1080 rows, and draws the same triangle count at any screen resolution of the same aspect ratio. For finer ground near the camera on a heightfield terrain, raise **Samples Per Meter**: the terrain then holds more height data, and the mesh near the camera follows it sample for sample.
+
+:::
+
+## Near the camera: the height data
+
+This section applies to heightfield terrains. A planet has no height grid and no Samples Per Meter: it refines procedurally near the camera, down to a depth limit that follows its radius, and Target Pixel Error applies to it the same way.
+
+The terrain's height data is a grid of samples. Its spacing follows **Size** and **Samples Per Meter**, rounded up so that each axis holds `64 × 2^k` intervals. A 576 m terrain at 1 sample per meter therefore holds 1,024 intervals, 0.5625 m apart. The mesh refines down to exactly that spacing and no further: where the ground has relief, a vertex sits on every sample near the camera. Smaller triangles would only interpolate the same samples, so they would add cost and no shape.
+
+- Fine relief (ruts, ridges, a path's edge) needs samples at least twice as dense as the feature. A 1 m wide rut needs about 2 samples per meter.
+- Doubling Samples Per Meter quadruples the height data's memory and the triangles near the camera, where the mesh reaches the data's spacing.
+- The surface's lighting comes from a normal map at the same resolution, per pixel, so smooth ground looks smooth even where its triangles are large on screen.
+
+## Farther away: Target Pixel Error
+
+**Target Pixel Error** (Terrain component, Advanced) is the longest edge a triangle may have on screen, measured in pixels of a 1080-row view. A triangle whose edge projects longer than the target is split. A split pair is merged back once the edge it was split from projects shorter than half of the target.
+
+### It follows the view's height
+
+The target is relative to resolution. In a view *H* rows tall, the edge limit is `target × H / 1080` pixels. A 2160-row view uses 22-pixel edges at the default, so it draws the same triangles as a 1080-row view of the same aspect ratio, and the terrain's memory does not grow with the display. The same holds for a reduced render scale: the triangle count follows the camera and the ground, not the pixel count.
+
+| Target | Edge at 1080 rows | Edge at 2160 rows | Distant triangles, relative to 11 |
+|---|---|---|---|
+| 8 | 8 px | 16 px | about 1.9× |
+| **11 (default)** | 11 px | 22 px | 1× |
+| 16 | 16 px | 32 px | about 0.5× |
+
+### Flat ground stays coarse
+
+On a heightfield terrain a triangle also splits only while the heights under it vary by more than about one pixel on screen, measured at the triangle's nearest point to the camera. Flat ground therefore stays as a few large triangles at any distance, even right under the camera, and relief keeps every triangle the target and the data allow. Shading comes from the per-pixel normal map. A coarse triangle can sit up to that pixel's worth of height off the data, so under grazing light a long shadow's edge on it can move by a pixel or two. The rule does not apply to planets or to terrains streamed through the tile atlas (the largest tiled terrains). They refine on the edge length alone.
+
+The distant triangle count goes as about `1 / target²`. Near the camera the count does not change with the target on a heightfield terrain, because the triangles there already sit at the data's spacing.
+
+:::caution[Lowering the target is the expensive direction]
+
+A lower target refines all distant ground with relief, including gentle slopes where the extra triangles change little that is visible. On a large terrain at a low target the mesh can reach its capacity. It then coarsens the largest triangles first, so distant ground ends up coarser than the target asks.
+
+:::

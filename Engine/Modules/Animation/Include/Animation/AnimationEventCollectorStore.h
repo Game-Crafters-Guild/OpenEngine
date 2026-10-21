@@ -19,9 +19,10 @@ namespace GameEngine::Animation
 // The store takes no lock: its users never overlap. Only the primary world runs the animation schedule, where
 // AnimationEventCollectorSystem (which creates ids), AnimationGraph, Animation and HumanoidRetarget (which read them)
 // run one after another by their declared ordering (RegisterRenderingSystems); the Animator remove hook destroys
-// collectors under the world's exclusive structural lock; scripts poll on the main thread only. An Animator in another
-// world (a thumbnail's) never gets an id, and looking up or destroying id 0 reads nothing from the store. A new user
-// joins that ordering or takes the store back to a lock.
+// collectors under the world's exclusive structural lock; scripts poll from a system's update, which the animation
+// schedule precedes, on whichever engine thread runs it, and GE_Animator_PollEventsOnEntity refuses every other thread
+// (ScriptingAbi::OnEngineThread). An Animator in another world (a thumbnail's) never gets an id, and looking up or
+// destroying id 0 reads nothing from the store. A new user joins that ordering or takes the store back to a lock.
 class AnimationEventCollectorStore
 {
 public:

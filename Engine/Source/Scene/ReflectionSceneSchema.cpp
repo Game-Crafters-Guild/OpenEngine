@@ -287,7 +287,6 @@ struct ResolvedProperty
     int SplitElement = -1; // 0..2 when the key is a split-vector element (e.g. colorG)
     int ArrayIndex = -1;   // element index when the key is "<Name><index>" of an AssetGuid array
                            // or "<Name><index>.<SubField>" of a struct array
-    bool DropSilently = false; // a retired legacy key: parse-and-ignore
     // The struct-array sub-field a "<Name><index>.<SubField>" key names (nested arrays walk one
     // more "<Inner><index>." per level), and its byte offset from the start of the component.
     const ECS::FieldInfo* ElementField = nullptr;
@@ -331,7 +330,7 @@ ResolvedProperty ResolveStructArrayElement(ECS::ComponentTypeId typeId, std::str
             {
                 if (NameEquals(sub.Name, rest) && IsSerializableElementField(sub))
                 {
-                    ResolvedProperty resolved{topField, nullptr, -1, topIndex, false};
+                    ResolvedProperty resolved{topField, nullptr, -1, topIndex};
                     resolved.ElementField = &sub;
                     resolved.ElementOffset = offset + sub.Offset;
                     return resolved;
@@ -382,16 +381,16 @@ ResolvedProperty ResolveProperty(ECS::ComponentTypeId typeId, const PostProcessE
                 for (int i = 0; i < 3; ++i)
                 {
                     if (last == kSuffixes[i])
-                        return {&f, io, i, -1, false};
+                        return {&f, io, i, -1};
                 }
             }
             continue;
         }
         if (NameEquals(key, property))
-            return {&f, io, -1, -1, false};
+            return {&f, io, -1, -1};
         // A renamed field still accepts its reflected name (harmless superset of the hand schema).
         if (io && !io->SerializedKey.empty() && NameEquals(f.Name, property))
-            return {&f, io, -1, -1, false};
+            return {&f, io, -1, -1};
     }
 
     // Element form "<Name><index>" of an AssetGuid array field (the mirror of the save path;
@@ -406,7 +405,7 @@ ResolvedProperty ResolveProperty(ECS::ComponentTypeId typeId, const PostProcessE
                 continue;
             const std::uint32_t count = f.Size / ECS::FieldElementSize(f.Type);
             if (index < count)
-                return {&f, nullptr, -1, static_cast<int>(index), false};
+                return {&f, nullptr, -1, static_cast<int>(index)};
             break; // right field, out-of-range index: fall through to the unknown-key skip
         }
     }
@@ -415,30 +414,29 @@ ResolvedProperty ResolveProperty(ECS::ComponentTypeId typeId, const PostProcessE
     if (const ResolvedProperty element = ResolveStructArrayElement(typeId, property); element.Field)
         return element;
 
-    if (desc)
-    {
-        for (const std::string_view dropped : desc->DroppedLegacyKeys)
-        {
-            if (NameEquals(dropped, property))
-                return {nullptr, nullptr, -1, -1, true};
-        }
-    }
     return {};
 }
 
 enum class PropertyApply
 {
     Applied, // value written into the component bytes
-    Skipped, // tolerated no-op (unknown/transient/no-serializer/legacy key)
+    Skipped, // tolerated no-op (unknown/transient/no-serializer key)
     Failed   // malformed value; outError set to the bare parse error
 };
 
-// One warning for the authored keys a component block names and the component no longer has (renamed
-// or removed since the file was written), however many there are.
-void WarnUnknownFields(const std::string& componentName, std::span<const std::string_view> unknown)
+// The authored keys a component block names and the component has no field for (renamed or removed
+// since the file was written, or misspelled). A scene load takes them for its load report; any other
+// apply gets one warning for all of them.
+void ReportUnknownFields(const SceneLoadContext& ctx, const std::string& componentName,
+                         std::span<const std::string_view> unknown)
 {
     if (unknown.empty())
         return;
+    if (ctx.UnknownFields)
+    {
+        ctx.UnknownFields->insert(ctx.UnknownFields->end(), unknown.begin(), unknown.end());
+        return;
+    }
     std::string names;
     for (const std::string_view key : unknown)
         names += (names.empty() ? "'" : ", '") + std::string(key) + "'";
@@ -458,8 +456,6 @@ PropertyApply ApplyPropertyToBytes(ECS::ComponentTypeId typeId, const std::strin
                                    std::vector<std::string_view>& unknownFields)
 {
     const ResolvedProperty target = ResolveProperty(typeId, desc, property);
-    if (target.DropSilently)
-        return PropertyApply::Skipped;
     if (!target.Field)
     {
         unknownFields.push_back(property);
@@ -772,7 +768,7 @@ bool ReflectionSceneSchema::ApplyProperty(ECS::World& world, ECS::EntityHandle e
     std::vector<std::string_view> unknownFields;
     const PropertyApply applied = ApplyPropertyToBytes(m_TypeId, m_Name, desc, bytes, ctx, property, value, &err,
                                                        unknownFields);
-    WarnUnknownFields(m_Name, unknownFields);
+    ReportUnknownFields(ctx, m_Name, unknownFields);
     if (applied == PropertyApply::Failed)
     {
         if (outError)
@@ -828,7 +824,7 @@ bool ReflectionSceneSchema::ApplyProperties(ECS::World& world, ECS::EntityHandle
             return false;
         }
     }
-    WarnUnknownFields(m_Name, unknownFields);
+    ReportUnknownFields(ctx, m_Name, unknownFields);
 
     if (!world.ApplyComponentBytesImmediate(entity, m_TypeId, bytes))
     {

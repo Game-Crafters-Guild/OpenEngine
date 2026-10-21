@@ -53,12 +53,6 @@ AssetFileResult CreateDefaultNavGridFile(const std::filesystem::path& dir,
                                          UndoRedoService* undo,
                                          AssetManager* assets);
 
-// Create a default navigation mesh asset (.navmesh) with default NavMeshSettings and no source geometry.
-AssetFileResult CreateDefaultNavMeshFile(const std::filesystem::path& dir,
-                                         const std::string& baseName,
-                                         UndoRedoService* undo,
-                                         AssetManager* assets);
-
 // Export .material files for a model's derived materials.
 // Creates files in modelFilePath.parent_path()/Materials/, registers with the asset system,
 // and updates MeshRenderer components on the provided entities to use file-backed GUIDs.

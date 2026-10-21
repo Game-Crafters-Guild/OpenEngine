@@ -4,7 +4,7 @@
 // shown before comes back as another copy of the asset already loaded), destroys the previous
 // one, frames it and resolves once it is shown; the gate then reads the frame.
 // ?threads=single|auto picks the build, as Engine.create's option does.
-import { Engine, OrbitControls } from '@openengine/web';
+import { Engine, OrbitControls } from '@game-crafters-guild/openengine-web';
 
 const kSampleBase = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models';
 

@@ -9,6 +9,8 @@
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/Internal/AttachDetachInternal.h"
 #include "UI/Interaction/Manipulator.h"
+#include "UI/UITransform.h"
+#include "Mathematics/MatrixOps.h"
 
 #include "Logger/Logger.h"
 
@@ -103,6 +105,73 @@ UIElement::UIElement(const std::string& id)
     WireOverridesDirtyCallback();
 }
 
+namespace
+{
+
+// The map from `el`'s layout space to the window: its own CSS transform and
+// every transformed ancestor's on the DFS chain (a Mount's target paints in
+// its host's space; an overlay in its owner's), innermost first. Only the
+// outermost UI::kMaxTransformChainDepth apply, as in the paint. False when
+// none applies.
+bool ComposeLayoutToWindow(const UIElement& el, Mathematics::Matrix3x3& out)
+{
+    int chain = 0;
+    for (const UIElement* e = &el; e; e = e->GetDfsParent())
+    {
+        if (!e->GetResolvedStyle().Visual.Transform.IsNone())
+            ++chain;
+    }
+    int ignored = std::max(0, chain - UI::kMaxTransformChainDepth);
+    bool transformed = false;
+    Mathematics::Matrix3x3 composed = Mathematics::Matrix3x3::Identity();
+    for (const UIElement* e = &el; e; e = e->GetDfsParent())
+    {
+        if (ignored > 0 && !e->GetResolvedStyle().Visual.Transform.IsNone())
+        {
+            --ignored;
+            continue;
+        }
+        Mathematics::Matrix3x3 own;
+        if (UI::ComputeElementTransform(e->GetResolvedStyle().Visual,
+                                        Mathematics::Rect{e->GetLayoutX(), e->GetLayoutY(), e->GetLayoutWidth(),
+                                                          e->GetLayoutHeight()},
+                                        1.0f, own))
+        {
+            composed = own * composed;
+            transformed = true;
+        }
+    }
+    if (transformed)
+        out = composed;
+    return transformed;
+}
+
+} // namespace
+
+Mathematics::Rect UIElement::GetWindowRect() const
+{
+    const Mathematics::Rect layout{m_LastX, m_LastY, m_LastW, m_LastH};
+    Mathematics::Matrix3x3 toWindow;
+    if (!ComposeLayoutToWindow(*this, toWindow))
+        return layout;
+    return Mathematics::TransformRectBounds2D(toWindow, layout);
+}
+
+bool UIElement::WindowToLayout(const Mathematics::Vector2& window, Mathematics::Vector2& out) const
+{
+    Mathematics::Matrix3x3 toWindow;
+    if (!ComposeLayoutToWindow(*this, toWindow))
+    {
+        out = window;
+        return true;
+    }
+    Mathematics::Matrix3x3 toLayout;
+    if (!Mathematics::TryInverseAffine2D(toWindow, toLayout))
+        return false;
+    out = toLayout.TransformPoint(window);
+    return true;
+}
+
 UIElement::~UIElement()
 {
     // Expire every WeakRef before anything below runs a callback that might Get() one.
@@ -187,7 +256,8 @@ UIElement::~UIElement()
     // destroyed. An element never outlives its manager with the owner still
     // set: ~UIManager detaches every survivor.
     if (m_OwnerManager &&
-        (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu || m_DrawOrderIdx != 0xFFFFFFFFu))
+        (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu || m_TransformSlotIdx != 0 ||
+         m_DrawOrderIdx != 0xFFFFFFFFu))
     {
         UIManagerFreeRenderSlots(m_OwnerManager, this);
     }
@@ -226,7 +296,7 @@ UIElement::~UIElement()
     // dispatch paths store ids instead of raw pointers for exactly this.
     if (m_OwnerManager)
     {
-        UIManagerUnregisterElementInstanceId(m_OwnerManager, this);
+        UIManagerUnregisterElementLookups(m_OwnerManager, this);
     }
 }
 
@@ -628,6 +698,10 @@ void UIElement::AddChild(std::unique_ptr<UIElement> child) {
     }
     UIElement* raw = child.get();
     child->m_Parent = this;
+    // The attached root is written here, before an owner callback can look the child up,
+    // and again once the child is in m_Children, after a callback may have moved an
+    // ancestor whose walk could not reach it yet (UI::ElementIdIndex).
+    child->NoteDfsParentChanged();
     // Propagate owning UIManager from parent to newly added child subtree
     if (m_OwnerManager) child->SetOwnerManager(m_OwnerManager);
     // A newly attached subtree must have its styles/layout computed at least once.
@@ -638,6 +712,7 @@ void UIElement::AddChild(std::unique_ptr<UIElement> child) {
     // child subtree's rule cache.
     child->InvalidateRuleCacheSubtree();
     m_Children.emplace_back(std::move(child));
+    raw->NoteDfsParentChanged();
     MarkDirty(ChildrenDirty | LayoutDirty | VisualDirty);
     RestyleAfterChildListChange(m_Children.size() - 1, /*inserted=*/true, typeid(*raw));
     if (raw->m_HasOverlayInSubtree && !m_HasOverlayInSubtree)
@@ -672,12 +747,15 @@ void UIElement::InsertChild(size_t index, std::unique_ptr<UIElement> child)
     }
     UIElement* raw = child.get();
     child->m_Parent = this;
+    // Written before the owner and again after the insert, as in AddChild.
+    child->NoteDfsParentChanged();
     if (m_OwnerManager)
         child->SetOwnerManager(m_OwnerManager);
     child->MarkDirtySubtree(StyleDirty | LayoutDirty | VisualDirty | ChildrenDirty);
     // Cascade-memoization Phase 2: same as AddChild — new ancestor context.
     child->InvalidateRuleCacheSubtree();
     m_Children.insert(m_Children.begin() + static_cast<ptrdiff_t>(index), std::move(child));
+    raw->NoteDfsParentChanged();
     MarkDirty(ChildrenDirty | LayoutDirty | VisualDirty);
     if (raw->m_HasOverlayInSubtree && !m_HasOverlayInSubtree)
         RefreshOverlaySubtreeBitAndPropagate();
@@ -728,6 +806,8 @@ bool UIElement::AddManipulator(const std::shared_ptr<Manipulator>& manipulator)
     if (!manipulator)
         return false;
 
+    const Manipulator* manipulatorInstance = manipulator.get();
+
     // One instance, one element. A manipulator records its subscriptions on itself with no
     // element attached to the record, and handler keys are minted per element — so a second
     // attach mixes two elements' tokens into one list, and detaching from either unregisters
@@ -739,7 +819,7 @@ bool UIElement::AddManipulator(const std::shared_ptr<Manipulator>& manipulator)
             "element (or its element was destroyed). One instance serves one element: its "
             "subscription records name no element, so removing it here would unregister the "
             "other element's handlers. Build a second instance for this element.",
-            GetId(), typeid(*manipulator).name());
+            GetId(), typeid(*manipulatorInstance).name());
         return false;
     }
 
@@ -761,14 +841,15 @@ bool UIElement::AddManipulator(const std::shared_ptr<Manipulator>& manipulator)
                 it = entries.erase(it);
                 continue;
             }
-            if (typeid(*existing) == typeid(*manipulator))
+            const Manipulator* existingInstance = existing.get();
+            if (typeid(*existingInstance) == typeid(*manipulatorInstance))
             {
                 Logger::Log::Warning(
                     "UI: AddManipulator refused on element '{}' — a {} is already attached. The "
                     "second one can never fire (the first claims the gesture and the dispatch "
                     "stops there). Remove the existing one first, or attach this instance to a "
                     "different element.",
-                    GetId(), typeid(*manipulator).name());
+                    GetId(), typeid(*manipulatorInstance).name());
                 return false;
             }
             ++it;
@@ -861,6 +942,7 @@ void UIElement::RemoveChildImpl(UIElement* child) {
 	        if (m_OwnerManager)
 	            m_OwnerManager->ClearHoverForSubtree(it->get());
         (*it)->m_Parent = nullptr;
+        (*it)->NoteDfsParentChanged();
         // Clear owner on the removed subtree to avoid dangling UIManager pointer
         if (m_OwnerManager) (*it)->SetOwnerManager(nullptr);
         const size_t removedIndex = static_cast<size_t>(it - m_Children.begin());
@@ -1032,6 +1114,7 @@ std::unique_ptr<UIElement> UIElement::TakeChild(UIElement* child)
     // will reinsert when the caller reparents.
     UIElementDetachYogaChild(this, out.get());
     out->m_Parent = nullptr;
+    out->NoteDfsParentChanged();
     if (m_OwnerManager)
         out->SetOwnerManager(nullptr);
 
@@ -1134,21 +1217,70 @@ bool UIElement::PostSafeAction(std::function<void()> action)
     });
 }
 
-UIElement* UIElement::FindById(std::string_view id) {
+void UIElement::SetMountHostAsDfsParent(UIElement* host)
+{
+    m_DfsParent = host;
+    NoteDfsParentChanged();
+}
+
+void UIElement::NoteDfsParentChanged()
+{
+    const UIElement* dfsParent = GetDfsParent();
+    const UIElement* root = dfsParent ? dfsParent->m_AttachedRoot : (m_IsManagerRoot ? this : nullptr);
+    // Every element below this edge already carries this element's value, so an unchanged
+    // value needs no walk. This keeps building a detached tree free: nothing changes there.
+    if (root != m_AttachedRoot)
+        AssignAttachedRootInSubtree(root);
+}
+
+void UIElement::AssignAttachedRootInSubtree(const UIElement* root)
+{
+    m_AttachedRoot = root;
+    // DFS children only: a child shown through another Mount belongs to that Mount's
+    // subtree, and a Mount target belongs to this one.
+    for (const auto& child : m_Children)
+    {
+        if (child && child->GetDfsParent() == this)
+            child->AssignAttachedRootInSubtree(root);
+    }
+    if (UIElement* target = GetMountTarget(); target && target->GetDfsParent() == this)
+        target->AssignAttachedRootInSubtree(root);
+}
+
+void UIElement::SetId(const std::string& id)
+{
+    if (m_Id == id)
+        return;
+    if (m_OwnerManager)
+        m_OwnerManager->m_ElementIdIndex.Unregister(*this);
+    m_Id = id;
+    m_IdHash = id.empty() ? StringId{0} : HashStringId(id);
+    if (m_OwnerManager)
+        m_OwnerManager->m_ElementIdIndex.Register(*this);
+    // Id selectors affect descendants and, when used, following sibling selectors.
+    InvalidateRuleCacheSubtree();
+    if (UIManagerUsesSiblingCombinators(m_OwnerManager))
+        InvalidateRuleCacheFollowingSiblings();
+}
+
+UIElement* UIElement::FindById(StringId id) {
+    if (id == 0)
+        return nullptr;
+    if (m_OwnerManager)
+        return m_OwnerManager->m_ElementIdIndex.Find(*this, id);
+
+    // Offline trees have no manager index; preserve their construction-time lookup.
     // Treat id and name as aliases (name is folded into m_Id during parsing).
-    if (m_Id == id) return this;
+    if (m_IdHash == id) return this;
     for (auto& c : m_Children) {
         if (auto* f = c->FindById(id)) return f;
     }
     // Include portal-like Mount targets in lookup so ids inside mounted panel subtrees
     // are discoverable by callers (automation, editor integration, debugging tools).
-    if (auto* m = dynamic_cast<Mount*>(this))
+    if (UIElement* target = GetMountTarget())
     {
-        if (UIElement* tgt = m->GetTarget())
-        {
-            if (UIElement* f = tgt->FindById(id))
-                return f;
-        }
+        if (UIElement* found = target->FindById(id))
+            return found;
     }
     return nullptr;
 }

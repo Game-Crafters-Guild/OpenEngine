@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Types/Types.h"
+#include "Rendering/RenderLayerMask.h"
 
 #include <memory>
 
@@ -118,31 +119,31 @@ struct ViewDesc
     ViewId id;
     CameraId cameraId;
     ViewTargets targets;
-    // Render layer mask used to decide which renderables should be submitted to
-    // this view. Renderables with (renderLayerMask & view.renderLayerMask) == 0
-    // are skipped during extraction/submission.
-    //
-    // Default is all bits set so existing behavior (render everything) is
-    // preserved unless callers explicitly scope the view.
-    uint32 renderLayerMask = 0xFFFFFFFFu;
+    // The render layers this view draws: a renderable is submitted to the view
+    // when its layers intersect these. Default: every layer.
+    RenderLayerMask renderLayerMask = RenderLayerMask::All();
     // When false, the active render pipeline skips this view. The view can
     // still render through explicit passes such as AddWorldPassForView.
     bool activeRenderPipeline = true;
     ViewPurpose purpose = ViewPurpose::Game;
     // OnDemand views participate in extraction, batch-key build, and the GPU
     // culling loop only while participationFrames > 0 (RequestViewFrame sets
-    // it; BeginWorldDrawFrame decrements it once per frame). Every per-view
-    // consumer gates through ActiveRenderLayerMask(), so an expired view
-    // costs nothing — the mechanism the probe capture and ocean mirror
-    // previously hand-rolled by flipping renderLayerMask.
+    // it; BeginWorldDrawFrame decrements it once per frame). Extraction and
+    // culling gate through ActiveRenderLayerMask() and the pipeline through
+    // Participates(), so an expired view costs nothing: its effective layers
+    // are None while it sleeps.
     ViewParticipation participation = ViewParticipation::Always;
     uint32 participationFrames = 0;
 
-    uint32 ActiveRenderLayerMask() const
+    // Whether the view takes part in this frame: always for an Always view, while armed for an
+    // OnDemand one. A view that takes part runs its pipeline even when its layers are None.
+    bool Participates() const
     {
-        return (participation == ViewParticipation::OnDemand && participationFrames == 0)
-                   ? 0u
-                   : renderLayerMask;
+        return participation != ViewParticipation::OnDemand || participationFrames > 0;
+    }
+    RenderLayerMask ActiveRenderLayerMask() const
+    {
+        return Participates() ? renderLayerMask : RenderLayerMask::None();
     }
     // Optional association of this view to a specific ECS world.
     // When non-zero, render extraction should only submit entities from the

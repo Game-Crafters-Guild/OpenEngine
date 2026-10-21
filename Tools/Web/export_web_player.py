@@ -8,6 +8,7 @@ serves any project.
 
     python3 Tools/Web/export_web_player.py \\
         --project Tools/Web/smoke-project \\
+        --content-list /tmp/websmoke-content.json \\
         --out /tmp/websmoke-dist \\
         --template build/wasm-debug/bin \\
         --shaderpkg-dir build/macos-arm64-ninja/Shaders \\
@@ -17,8 +18,13 @@ serves any project.
 
 What it does, in order:
 
-  1. Stages the project's game.config and Assets/ (skipping dot-directories,
-     which hold editor state and derived caches). An editor project directory
+  1. Stages the project's game.config and the files --content-list names. The
+     engine writes that list (StageWebExportContent): the content the desktop
+     export ships, walked from the configured scenes and filtered by the
+     engine's shippable-content rule, so the project's C# and C++ sources and
+     its Editor/ folders never ship, with the scenes stripped of their
+     editor-only components as the desktop export strips them. This script
+     stages the list verbatim and never decides what ships. An editor project directory
      has no game.config of its own; --game-config supplies the one the editor
      derived from its build settings.
   2. Overlays the engine shader sources the material pipeline composes against,
@@ -141,12 +147,15 @@ def StagedRelativePaths(root: Path) -> list[str]:
                   for path in root.rglob("*") if path.is_file())
 
 
-def CopyProjectContent(project: Path, staging: Path, gameConfig: Path | None = None) -> None:
-    """Stage game.config and Assets/, skipping dot-directories.
+def CopyProjectContent(project: Path, contentList: Path, staging: Path,
+                       gameConfig: Path | None = None) -> None:
+    """Stage game.config and the files `contentList` names.
 
-    Dot-directories are editor state (.Editor), derived caches (.Cache) and
-    version control — never runtime content, and .Cache in particular would
-    ship a desktop shader cache the browser cannot read.
+    `contentList` is the engine's decision of what ships (JSON, {"files":
+    [{"source": <absolute path>, "path": <staged path>}]}); each file is copied
+    to its staged path. A staged path that is absolute or climbs out of the
+    staging tree is refused. A listed file that no longer exists is reported
+    and skipped, as the desktop export's copy does.
 
     `gameConfig` overrides the project's own file. An editor project directory
     holds no game.config — the editor derives one from its build settings
@@ -160,17 +169,24 @@ def CopyProjectContent(project: Path, staging: Path, gameConfig: Path | None = N
         raise ExportError(f"{project} is not a project: no game.config")
     shutil.copy2(configSource, staging / "game.config")
 
-    assets = project / "Assets"
-    if not assets.is_dir():
-        raise ExportError(f"{project} has no Assets directory")
-    for source in sorted(assets.rglob("*")):
-        relative = source.relative_to(project)
-        if any(part.startswith(".") for part in relative.parts):
+    try:
+        files = json.loads(contentList.read_text(encoding="utf-8"))["files"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ExportError(f"cannot read the content list {contentList}: {error}") from error
+    stagingRoot = staging.resolve()
+    for entry in files:
+        # Read with the host's path rules (backslashes and drives on Windows): a path with a root
+        # or a drive of its own, or one that resolves outside the staging tree, is refused.
+        relative = Path(entry["path"])
+        destination = (staging / relative).resolve()
+        if relative.anchor or destination == stagingRoot or not destination.is_relative_to(stagingRoot):
+            raise ExportError(f"content list stages outside the build: {entry['path']}")
+        source = Path(entry["source"])
+        if not source.is_file():
+            print(f"export: warning: listed asset not found: {source}", file=sys.stderr)
             continue
-        if source.is_file():
-            destination = staging / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 
 def CopyEngineRuntimeAssets(engineShaders: Path, font: Path, staging: Path) -> None:
@@ -261,7 +277,7 @@ def Export(args: argparse.Namespace) -> None:
         shutil.rmtree(outDir)
     staging.mkdir(parents=True)
 
-    CopyProjectContent(args.project, staging, args.game_config)
+    CopyProjectContent(args.project, args.content_list, staging, args.game_config)
     CopyEngineRuntimeAssets(args.engine_shaders, args.font, staging)
 
     print("export: cooking built-in shader packages to WGSL")
@@ -311,6 +327,9 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", type=Path, required=True,
                         help="project directory (game.config + Assets/)")
+    parser.add_argument("--content-list", type=Path, required=True,
+                        help="JSON list of the files to ship, written by the engine's web export "
+                             "(StageWebExportContent)")
     parser.add_argument("--out", type=Path, required=True, help="dist directory to create")
     parser.add_argument("--template", type=Path, required=True,
                         help="directory holding the built WebPlayer.{html,js,wasm}")

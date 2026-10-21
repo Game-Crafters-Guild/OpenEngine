@@ -2,12 +2,15 @@
 
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 namespace GameEngine
 {
@@ -24,31 +27,10 @@ json Vec3ToJson(const Mathematics::Vector3& v)
     return json::array({v.x, v.y, v.z});
 }
 
-Mathematics::Vector3 JsonToVec3(const json& j, const Mathematics::Vector3& fallback)
-{
-    if (!j.is_array() || j.size() < 3)
-        return fallback;
-    return Mathematics::Vector3(
-        j[0].get<float>(),
-        j[1].get<float>(),
-        j[2].get<float>());
-}
-
 json QuatToJson(const Mathematics::Quaternion& q)
 {
     const glm::quat& g = q.GetGLM();
     return json::array({g.w, g.x, g.y, g.z});
-}
-
-Mathematics::Quaternion JsonToQuat(const json& j, const Mathematics::Quaternion& fallback)
-{
-    if (!j.is_array() || j.size() < 4)
-        return fallback;
-    return Mathematics::Quaternion(
-        j[0].get<float>(),
-        j[1].get<float>(),
-        j[2].get<float>(),
-        j[3].get<float>());
 }
 
 } // namespace
@@ -115,55 +97,67 @@ const ProfileBone* SkeletonProfile::FindBone(HumanBone bone) const
 
 bool SkeletonProfile::ParseJson(const std::string& text)
 {
-    try
+    json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+
+    Serialization::JsonFieldReader reader;
+    // Schema version. Missing = 0; bumped (newer than supported) logs a warning
+    // but proceeds with best-effort parsing for forward compatibility.
+    m_Version = 0;
+    reader.Read(doc, "version", m_Version);
+    if (m_Version > kSchemaVersion)
     {
-        const auto doc = json::parse(text);
-
-        // Schema version. Missing = 0; bumped (newer than supported) logs a warning
-        // but proceeds with best-effort parsing for forward compatibility.
-        m_Version = doc.value("version", 0);
-        if (m_Version > kSchemaVersion)
-        {
-            Logger::Log::Warning(
-                "SkeletonProfile '{}' has version {} but engine supports up to {}; reading anyway",
-                GetPath().string(), m_Version, kSchemaVersion);
-        }
-
-        m_Name = doc.value("name", std::string());
-        m_Description = doc.value("description", std::string());
-
-        m_Bones.clear();
-        if (doc.contains("bones") && doc["bones"].is_array())
-        {
-            m_Bones.reserve(doc["bones"].size());
-            for (const auto& boneJson : doc["bones"])
-            {
-                ProfileBone pb;
-                pb.Bone = HumanBoneFromString(boneJson.value("bone", std::string("None")));
-                pb.Parent = HumanBoneFromString(boneJson.value("parent", std::string("None")));
-                pb.RestTranslation = JsonToVec3(boneJson.value("restTranslation", json::array()),
-                                                Mathematics::Vector3(0.0f, 0.0f, 0.0f));
-                pb.RestRotation = JsonToQuat(boneJson.value("restRotation", json::array()),
-                                             Mathematics::Quaternion::Identity());
-                pb.RestScale = JsonToVec3(boneJson.value("restScale", json::array()),
-                                          Mathematics::Vector3(1.0f, 1.0f, 1.0f));
-                pb.LocalForward = JsonToVec3(boneJson.value("localForward", json::array()),
-                                             Mathematics::Vector3(0.0f, 0.0f, 1.0f));
-                pb.LocalUp = JsonToVec3(boneJson.value("localUp", json::array()),
-                                        Mathematics::Vector3(0.0f, 1.0f, 0.0f));
-                m_Bones.push_back(pb);
-            }
-        }
-
-        SetState(AssetState::Loaded);
-        return true;
+        Logger::Log::Warning(
+            "SkeletonProfile '{}' has version {} but engine supports up to {}; reading anyway",
+            GetPath().string(), m_Version, kSchemaVersion);
     }
-    catch (const std::exception& e)
+
+    m_Name.clear();
+    m_Description.clear();
+    reader.Read(doc, "name", m_Name);
+    reader.Read(doc, "description", m_Description);
+
+    m_Bones.clear();
+    if (doc.contains("bones") && doc["bones"].is_array())
     {
-        Logger::Log::Error("SkeletonProfile: failed to parse '{}': {}", GetPath().string(), e.what());
-        SetState(AssetState::Failed);
-        return false;
+        m_Bones.reserve(doc["bones"].size());
+        const json& bones = doc["bones"];
+        for (size_t index = 0; index < bones.size(); ++index)
+        {
+            const json& boneJson = bones[index];
+            const std::string context = std::format("bones[{}].", index);
+            reader.SetContext(context);
+            ProfileBone pb;
+            std::string bone = "None";
+            std::string parent = "None";
+            reader.Read(boneJson, "bone", bone);
+            reader.Read(boneJson, "parent", parent);
+            pb.Bone = HumanBoneFromString(bone);
+            pb.Parent = HumanBoneFromString(parent);
+            pb.RestTranslation =
+                reader.ReadVector3(boneJson, "restTranslation", Mathematics::Vector3(0.0f, 0.0f, 0.0f));
+            pb.RestRotation = reader.ReadQuaternion(boneJson, "restRotation", Mathematics::Quaternion::Identity());
+            pb.RestScale = reader.ReadVector3(boneJson, "restScale", Mathematics::Vector3(1.0f, 1.0f, 1.0f));
+            pb.LocalForward = reader.ReadVector3(boneJson, "localForward", Mathematics::Vector3(0.0f, 0.0f, 1.0f));
+            pb.LocalUp = reader.ReadVector3(boneJson, "localUp", Mathematics::Vector3(0.0f, 1.0f, 0.0f));
+            m_Bones.push_back(pb);
+        }
     }
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
+
+    SetState(AssetState::Loaded);
+    return true;
+}
+
+bool SkeletonProfile::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("SkeletonProfile: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    Unload();
+    SetState(AssetState::Failed);
+    return false;
 }
 
 std::string SkeletonProfile::SerializeJson() const

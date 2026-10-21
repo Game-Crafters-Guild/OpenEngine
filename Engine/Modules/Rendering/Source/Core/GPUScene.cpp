@@ -259,6 +259,10 @@ void GPUScene::Shutdown()
     m_FreeMeshSlots.clear();
 
     m_PrevVisibleResetSlots.clear();
+    // Every slot is gone without a release entry: move the log's start past
+    // every cursor handed out, so each consumer rebuilds what it keyed by slot.
+    m_ReleaseLogStart = GetReleasedSlotCount() + 1u;
+    m_ReleaseLog.clear();
     m_InstanceContinuityStamps.clear();
     m_ContinuityResetSlots.clear();
     m_InstanceSlotHighWater = 0;
@@ -348,6 +352,9 @@ uint32_t GPUScene::AddInstance(const GPUInstance& instance)
     // free-slot and dirty-word storage before a new row becomes owned/live.
     const size_t rows = m_Instances.size() + (m_FreeInstanceSlots.empty() ? 1 : 0);
     ReserveGeometric(m_FreeInstanceSlots, rows);
+    // The release log takes one entry per removed row: room for every live row
+    // keeps RemoveInstances allocation-free (its trim only erases).
+    ReserveGeometric(m_ReleaseLog, m_ReleaseLog.size() + m_InstanceCount + 1u);
     const size_t words = (rows + 63) / 64;
     for (uint32_t slot = 0; slot < m_FramesInFlight; ++slot)
     {
@@ -631,6 +638,7 @@ void GPUScene::RemoveInstances(std::span<const uint32_t> instanceIndices)
             m_ScatterHot[index] = MakeScatterHot(m_Instances[index]);
         MarkInstanceDirtyAllSlots(index);
         FreeInstanceSlot(index);
+        m_ReleaseLog.push_back(index);
         if (m_InstanceCount > 0)
             --m_InstanceCount;
         anyRemoved = true;
@@ -638,6 +646,15 @@ void GPUScene::RemoveInstances(std::span<const uint32_t> instanceIndices)
 
     if (!anyRemoved)
         return;
+
+    // Bounded retention: drop the older half once the log doubles its window,
+    // so a trim is amortized O(1) per entry.
+    if (m_ReleaseLog.size() > 2u * kReleaseLogRetention)
+    {
+        const std::size_t dropped = m_ReleaseLog.size() - kReleaseLogRetention;
+        m_ReleaseLog.erase(m_ReleaseLog.begin(), m_ReleaseLog.begin() + static_cast<std::ptrdiff_t>(dropped));
+        m_ReleaseLogStart += dropped;
+    }
 
     // Single trailing-trim pass: strip the maximal suffix of free slots so the
     // instance array (and its mirrors) shrink back. O(1) membership per step
@@ -661,6 +678,19 @@ void GPUScene::RemoveInstances(std::span<const uint32_t> instanceIndices)
     m_InstancesDirty = true;
     m_InstancesAABBDirty = true;
     for (uint32_t s = 0; s < m_FramesInFlight; ++s) m_InstancesDirtySlots[s] = true;
+}
+
+bool GPUScene::ReadReleasedSlotsSince(uint64_t cursor, std::vector<uint32_t>& out) const
+{
+    out.clear();
+    if (cursor < m_ReleaseLogStart)
+        return false;
+    const uint64_t end = GetReleasedSlotCount();
+    if (cursor > end)
+        return false;
+    const auto first = m_ReleaseLog.begin() + static_cast<std::ptrdiff_t>(cursor - m_ReleaseLogStart);
+    out.assign(first, m_ReleaseLog.end());
+    return true;
 }
 
 void GPUScene::DrainPrevVisibleResetSlots(std::vector<uint32_t>& outSlots)

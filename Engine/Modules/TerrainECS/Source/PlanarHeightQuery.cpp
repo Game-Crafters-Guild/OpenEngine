@@ -47,6 +47,15 @@ bool PlanarHeightQuery::ContainsXZ(float32 worldX, float32 worldZ) const
            worldZ <= originZ + sizeZ;
 }
 
+bool PlanarHeightQuery::TileCoordinateAt(float32 worldX, float32 worldZ, int32& outTileX, int32& outTileZ) const
+{
+    if (!Tiled || !(Tiled->Config.TileWorldSize > 0.0f))
+        return false;
+    outTileX = static_cast<int32>(std::floor((worldX - Tiled->WorldOriginX) / Tiled->Config.TileWorldSize));
+    outTileZ = static_cast<int32>(std::floor((worldZ - Tiled->WorldOriginZ) / Tiled->Config.TileWorldSize));
+    return true;
+}
+
 float32 PlanarHeightQuery::FootprintOriginX() const
 {
     return Tiled ? Tiled->WorldOriginX : OriginX;

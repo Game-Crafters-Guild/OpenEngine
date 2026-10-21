@@ -368,9 +368,8 @@ static void RegisterBoxShapeInspector()
         ECS::EntityHandle entity = ctx.Entity;
         UndoRedoService* undo = ctx.Undo;
         Editor::EditorChangeNotifications* changes = ctx.ChangeNotifications;
-        const auto kBoxTypeId = ECS::GetComponentTypeId<Components::BoxColliderShape>();
 
-        auto makeTarget = [world, entity, changes, kBoxTypeId]() -> UndoRedoService::SnapshotTarget
+        auto makeTarget = [world, entity, changes]() -> UndoRedoService::SnapshotTarget
         {
             UndoRedoService::SnapshotTarget t{};
             t.debugLabel = "BoxColliderShape";
@@ -499,9 +498,8 @@ static void RegisterSphereShapeInspector()
         ECS::EntityHandle entity = ctx.Entity;
         UndoRedoService* undo = ctx.Undo;
         Editor::EditorChangeNotifications* changes = ctx.ChangeNotifications;
-        const auto kTypeId = ECS::GetComponentTypeId<Components::SphereColliderShape>();
 
-        auto makeTarget = [world, entity, changes, kTypeId]() -> UndoRedoService::SnapshotTarget
+        auto makeTarget = [world, entity, changes]() -> UndoRedoService::SnapshotTarget
         {
             UndoRedoService::SnapshotTarget t{};
             t.debugLabel = "SphereColliderShape";
@@ -592,9 +590,8 @@ static void RegisterCapsuleShapeInspector()
         ECS::EntityHandle entity = ctx.Entity;
         UndoRedoService* undo = ctx.Undo;
         Editor::EditorChangeNotifications* changes = ctx.ChangeNotifications;
-        const auto kTypeId = ECS::GetComponentTypeId<Components::CapsuleColliderShape>();
 
-        auto makeTarget = [world, entity, changes, kTypeId]() -> UndoRedoService::SnapshotTarget
+        auto makeTarget = [world, entity, changes]() -> UndoRedoService::SnapshotTarget
         {
             UndoRedoService::SnapshotTarget t{};
             t.debugLabel = "CapsuleColliderShape";
@@ -731,9 +728,8 @@ static void RegisterPlaneShapeInspector()
         ECS::EntityHandle entity = ctx.Entity;
         UndoRedoService* undo = ctx.Undo;
         Editor::EditorChangeNotifications* changes = ctx.ChangeNotifications;
-        const auto kTypeId = ECS::GetComponentTypeId<Components::PlaneColliderShape>();
 
-        auto makeTarget = [world, entity, changes, kTypeId]() -> UndoRedoService::SnapshotTarget
+        auto makeTarget = [world, entity, changes]() -> UndoRedoService::SnapshotTarget
         {
             UndoRedoService::SnapshotTarget t{};
             t.debugLabel = "PlaneColliderShape";

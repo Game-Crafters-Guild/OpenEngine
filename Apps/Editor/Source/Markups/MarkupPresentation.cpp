@@ -91,12 +91,28 @@ std::string MarkupTagLabel(uint32 tagId)
 std::string_view MarkupTitleView(const ECS::World& world, ECS::EntityHandle entity)
 {
     const auto* name = world.GetComponent<Components::Name>(entity);
-    return name && !name->View().empty() ? name->View() : std::string_view("Mark-up");
+    return name && !name->View().empty() ? name->View() : kUntitledMarkupName;
 }
 
 std::string MarkupTitle(const ECS::World& world, ECS::EntityHandle entity)
 {
     return std::string(MarkupTitleView(world, entity));
+}
+
+std::vector<std::string> MarkupTagNames(const ECS::World& world, ECS::EntityHandle entity)
+{
+    std::vector<std::string> names;
+    const MarkupECS::MarkupService& service = MarkupECS::MarkupService::Get();
+    if (const MarkupECS::MarkupNotes* notes = service.FindNotes(world, entity))
+    {
+        for (const uint32 id : notes->Tags)
+        {
+            const MarkupECS::MarkupTag* tag = id == MarkupECS::MarkupService::kInvalidTag ? nullptr : service.GetTag(id);
+            if (tag)
+                names.push_back(tag->Name);
+        }
+    }
+    return names;
 }
 
 bool MarkupHasOwnColor(const Components::Markup& markup)

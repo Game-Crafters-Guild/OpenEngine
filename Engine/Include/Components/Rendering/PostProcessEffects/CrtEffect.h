@@ -11,8 +11,6 @@ struct CrtEffect {
     bool Enabled{true};
     // Off pins the effect off wherever its volume applies: a value the volume blend reads.
     static constexpr bool KeepsOwnEnabledField = true;
-    // Relative execution order among reorderable LDR post FX.
-    int32 StackOrder{2};
     // 0 = bypass (shader skips the look), 1 = full effect.
     float32 Intensity{1.0f};
     // Screen curvature / barrel warp (typical 0–0.35). 0 = flat (no barrel warp).

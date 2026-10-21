@@ -52,8 +52,9 @@ std::vector<ContextMenuManipulator::Item> BuildMarkupToolMenuItems(const OpenCol
 nlohmann::json PlaceMarkup(MarkupEditorBridge& bridge, ECS::World& world, UndoRedoService* undo,
                            EditorChangeNotifications* notifications, const Mathematics::Vector3& ground,
                            MarkupToolShape shape = MarkupToolShape::Box);
-// The region the tool draws over `knots` (world x, z, in order around the area; status Requested,
-// by the user, one undo step), through markup_create's path: its result, or a refusal.
+// The region the tool draws over `knots` (world x, z, in order around the area; titled "Region <n>"
+// by FreeMarkupTitle, status Requested, by the user, one undo step), through markup_create's path:
+// its result, or a refusal.
 nlohmann::json PlaceRegion(MarkupEditorBridge& bridge, ECS::World& world, UndoRedoService* undo,
                            EditorChangeNotifications* notifications, std::span<const Mathematics::Vector2> knots);
 

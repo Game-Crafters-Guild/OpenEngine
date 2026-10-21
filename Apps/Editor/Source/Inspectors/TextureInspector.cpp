@@ -5,6 +5,7 @@
 #include "Assets/SvgRasterizer.h"
 #include "Assets/TextureAsset.h"
 #include "Assets/TextureCook.h"
+#include "Assets/TextureCookActivity.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -14,6 +15,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/TextureCoveragePolicyNotice.h"
+#include "Inspectors/TextureLoadingSuffix.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/EnumField.h"
@@ -272,7 +274,7 @@ const char* AssetFormatName(TextureFormat f)
 // Appended to the format line while the payload it reports is being rebuilt. A
 // cook-affecting edit lands asynchronously and can take tens of seconds on a
 // large source, so the line says the numbers beside it are the ones going away.
-const char* const kRebuildInFlightSuffix = "   cooking…";
+const char* const kRebuildInFlightSuffix = "   preparing…";
 
 // The evidence line itself: what the loaded payload is, and whether it is being
 // replaced right now.
@@ -387,7 +389,7 @@ void WriteTextureCookMeta(const std::filesystem::path& assetPath, const char* ke
     const GUID guid = assets.ResolveAssetGuid(assetPath);
     if (auto* rs = EngineCore::GetInstance().GetRenderServices(); rs && !guid.IsNull())
     {
-        rs->Textures().RequestRecook(guid);
+        rs->Textures().RequestRecook(guid, AssetLoadPriority::High);
         rs->Textures().RequestReupload(guid); // immediate view-format refresh while the recook lands
     }
 }
@@ -1284,6 +1286,16 @@ void BuildTextureInspector(const InspectorContext& ctx, TextureAsset* tex)
 
 } // namespace
 
+namespace
+{
+// A texture whose first load cooks reads "preparing" after its name until the load lands.
+std::string ReadTextureLoadingSuffix(const GUID& texture)
+{
+    AssetManager* assets = EngineCore::GetInstance().TryGetAssetManager();
+    return assets ? Editor::TextureLoadingSuffix(assets->GetTextureCookActivity(), texture) : std::string();
+}
+} // namespace
+
 void RegisterTextureInspector()
 {
     InspectorRegistry::Get().RegisterAssetInspector(
@@ -1298,6 +1310,7 @@ void RegisterTextureInspector()
                 return;
             BuildTextureInspector(ctx, tex);
         });
+    InspectorRegistry::Get().RegisterAssetLoadingSuffix(AssetType::Texture, &ReadTextureLoadingSuffix);
 }
 
 } // namespace GameEngine

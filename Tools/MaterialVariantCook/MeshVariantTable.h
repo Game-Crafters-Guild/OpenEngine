@@ -20,10 +20,18 @@ using Rendering::VertexAttributeFlags;
 //
 // DECLARED, NOT DERIVED. The renderer chooses pass keywords per view, so this
 // table is a claim about which views a cooked build supports — not a proof. A
-// view that turns on a keyword outside it (GTAO, SSSR, ray-traced shadows,
-// LOD crossfade) asks for a variant no cook produced, and the runtime says so
-// by name rather than drawing wrong. Widen the table when the shipped pipeline
-// grows a pass.
+// view that turns on a keyword outside it (ray-traced shadows, say) asks for a
+// variant no cook produced, and the runtime says so by name rather than drawing
+// wrong. Widen the table when the shipped pipeline grows a pass. A desktop cook
+// also adds, for a material the runtime prewarms, every key that prewarm asks
+// for (MaterialPrewarmVariantKeys: the LOD-crossfade tails, the asset preview
+// and the depth heads) under every world pass this table declares, so a view
+// with per-view keywords (GTAO, SSSR, DDGI, contact shadows), which prewarm does
+// not ask for, finds its crossfade tails cooked too.
+//
+// The material's own keywords are derived, not declared: VariantsFor adds what the document decides
+// (DeriveBaseVariantKey: its lobes and AlphaTest) to every row, as registration keeps them in every
+// key it asks for, and adds the transmissive pass's scene-colour-grab rows for a transmissive one.
 constexpr MaterialKeyword kForwardColor =
     MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows;
 constexpr MaterialKeyword kDepth = MaterialKeyword::Instanced;
@@ -57,6 +65,10 @@ constexpr MaterialKeyword kForwardColorIblDdgi = kForwardColorIbl | MaterialKeyw
 constexpr MaterialKeyword kForwardColorIblDdgiSssr = kForwardColorIblSssr | MaterialKeyword::DDGI;
 constexpr MaterialKeyword kForwardColorIblDdgiGtao = kForwardColorIblGtao | MaterialKeyword::DDGI;
 constexpr MaterialKeyword kForwardColorIblDdgiGtaoSssr = kForwardColorIblGtaoSssr | MaterialKeyword::DDGI;
+// The height fog is evaluated in every surface's own shader, so a view whose height fog is active
+// re-keys its colour pass with the HeightFog keyword, as an AO volume does with GTAO. The shipped
+// templates draw the fog with no other per-view keyword.
+constexpr MaterialKeyword kForwardColorIblFog = kForwardColorIbl | MaterialKeyword::HeightFog;
 
 inline const VariantRequest kMeshVariants[] = {
     // The keyword-less base variant material registration prewarms before any
@@ -110,6 +122,11 @@ inline const VariantRequest kMeshVariants[] = {
     {"forward-color-ibl-gtao-sssr+skin", kForwardColorIblGtaoSssr, VertexAttributeFlags::SkinnedMesh},
     {"forward-color-ibl-gtao-sssr+skin+tangent", kForwardColorIblGtaoSssr, VertexAttributeFlags::SkinnedMeshWithTangent},
 
+    {"forward-color-ibl-fog", kForwardColorIblFog, VertexAttributeFlags::StandardMesh},
+    {"forward-color-ibl-fog+tangent", kForwardColorIblFog, VertexAttributeFlags::StandardMeshWithTangent},
+    {"forward-color-ibl-fog+skin", kForwardColorIblFog, VertexAttributeFlags::SkinnedMesh},
+    {"forward-color-ibl-fog+skin+tangent", kForwardColorIblFog, VertexAttributeFlags::SkinnedMeshWithTangent},
+
     {"depth", kDepth, VertexAttributeFlags::StandardMesh},
     {"depth+tangent", kDepth, VertexAttributeFlags::StandardMeshWithTangent},
     {"depth+skin", kDepth, VertexAttributeFlags::SkinnedMesh},
@@ -136,6 +153,10 @@ inline const VariantRequest kBlendMeshVariants[] = {
     {"forward-color-ibl-ddgi-sssr+tangent", kForwardColorIblDdgiSssr, VertexAttributeFlags::StandardMeshWithTangent},
     {"forward-color-ibl-ddgi-sssr+skin", kForwardColorIblDdgiSssr, VertexAttributeFlags::SkinnedMesh},
     {"forward-color-ibl-ddgi-sssr+skin+tangent", kForwardColorIblDdgiSssr, VertexAttributeFlags::SkinnedMeshWithTangent},
+    {"forward-color-ibl-fog", kForwardColorIblFog, VertexAttributeFlags::StandardMesh},
+    {"forward-color-ibl-fog+tangent", kForwardColorIblFog, VertexAttributeFlags::StandardMeshWithTangent},
+    {"forward-color-ibl-fog+skin", kForwardColorIblFog, VertexAttributeFlags::SkinnedMesh},
+    {"forward-color-ibl-fog+skin+tangent", kForwardColorIblFog, VertexAttributeFlags::SkinnedMeshWithTangent},
     {"depth", kDepth, VertexAttributeFlags::StandardMesh},
     {"depth+tangent", kDepth, VertexAttributeFlags::StandardMeshWithTangent},
     {"depth+skin", kDepth, VertexAttributeFlags::SkinnedMesh},

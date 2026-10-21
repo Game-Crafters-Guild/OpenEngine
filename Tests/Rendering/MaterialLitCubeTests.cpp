@@ -167,7 +167,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     const auto materialPath = assetsRoot / "Materials" / "test.material";
 
     // Reads its parameters from the MaterialParams row the way the shipped
-    // surfaces do (Assets/Materials/Surfaces/standard_pbr.glsl), so a wrong row
+    // surfaces do (Engine/Assets/Materials/Surfaces/standard_pbr.glsl), so a wrong row
     // layout shows up as a wrong colour.
     WriteTextFile(surfacePath,
                   "SurfaceOutput EvaluateSurface(SurfaceInput sIn)\n"

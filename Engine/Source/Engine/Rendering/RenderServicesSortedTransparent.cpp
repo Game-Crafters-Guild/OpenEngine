@@ -46,10 +46,12 @@
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory_resource>
 #include <string>
 #include <vector>
 #include "RenderServicesDetail.h"
@@ -105,7 +107,7 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
     holder.LoggedBuildTransition = false;
     holder.Records.clear();
     holder.Runs.clear();
-    holder.Partition = {};
+    holder.Partition.Clear();
     holder.Commands.clear();
     holder.Stats = {};
 
@@ -125,6 +127,10 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
     const std::vector<Rendering::GPUInstance>& instances = scene->GetInstances();
     const auto& meshRegistry = GetMeshGPURegistry();
 
+    // The per-call working sets below live in this scope; the holder keeps only what the drain
+    // reads.
+    Memory::ScratchScope scratch;
+
     // Collect ORDER-DEPENDENT Blend instances. Transmission glass is coerced
     // to Opaque alpha mode (MaterialRegistry), so filtering on Blend naturally
     // leaves the transmissive pass untouched; order-independent blends
@@ -139,8 +145,10 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         Rendering::MeshGPUHandle Mesh;
         const Rendering::MeshGPUEntry* Entry;
     };
-    std::vector<PendingRecord> pending;
-    std::vector<TransparentSphere> candidates;
+    std::pmr::vector<PendingRecord> pending{&scratch.Resource()};
+    std::pmr::vector<TransparentSphere> candidates{&scratch.Resource()};
+    pending.reserve(submissions.size());
+    candidates.reserve(submissions.size());
     for (const WorldSubmissionRecord& sub : submissions)
     {
         if (!sub.material || !IsOrderDependentBlendMaterial(*sub.material))
@@ -180,7 +188,7 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         SectorToWorld(originSector, origin.x, origin.y, origin.z);
     }
 
-    std::vector<TransparentCentroid> visible;
+    std::pmr::vector<TransparentCentroid> visible{&scratch.Resource()};
     visible.reserve(candidates.size());
     const uint32_t culledCount =
         CullTransparentsToFrustum(candidates, frustumPlanes, origin, visible);
@@ -198,9 +206,10 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         SortedTransparentRunMaterialKey MatKey;
         SortedTransparentRunGeometryKey GeoKey;
     };
-    std::vector<RunKeyEntry> runKeys;
+    std::pmr::vector<RunKeyEntry> runKeys{&scratch.Resource()};
     // Per-unique-material key cache (materials repeat heavily across records).
-    std::vector<std::pair<const Material*, SortedTransparentRunMaterialKey>> matKeyCache;
+    std::pmr::vector<std::pair<const Material*, SortedTransparentRunMaterialKey>> matKeyCache{
+        &scratch.Resource()};
 
     holder.Records.reserve(visible.size());
     const Rendering::Vector3 camPos = camDerived.Position;
@@ -255,8 +264,8 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
                                   static_cast<int32_t>(p.Entry->vertexOffset), group, viewDepth});
     }
 
-    holder.Partition = BuildSortedTransparentRunPartition(
-        holder.Records, static_cast<uint32_t>(holder.Runs.size()));
+    BuildSortedTransparentRunPartition(holder.Records, static_cast<uint32_t>(holder.Runs.size()),
+                                       scratch.Resource(), holder.Partition);
     holder.CameraPos[0] = camPos.x;
     holder.CameraPos[1] = camPos.y;
     holder.CameraPos[2] = camPos.z;

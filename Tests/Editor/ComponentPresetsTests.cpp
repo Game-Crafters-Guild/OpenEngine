@@ -2,6 +2,7 @@
 
 #include "Inspectors/ComponentPresets.h"
 
+#include "Components/Rendering/Light.h"
 #include "Components/Rendering/Particles.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/TerrainModifierVolume.h"
@@ -263,4 +264,13 @@ TEST(ComponentPresetApply, ASecondRowStacksOnTheVolumeAlreadyThere)
     EXPECT_FALSE(second.AddedVolume) << "the region volume is shared; only the first row creates it";
     EXPECT_EQ(second.AddedEffectTypeId, presets[1].EffectTypeId);
     EXPECT_EQ(TerrainECS::NextEffectStackOrder(world, entity), 2);
+}
+
+// A directional light from Create > Directional Light or the Light preset is a sun, and a sun
+// casts shadows; the component default (off) is for point and spot lights.
+TEST(ComponentPresetLight, ANewDirectionalLightCastsShadows)
+{
+    const Components::Light light = Editor::MakeDefaultDirectionalLight();
+    EXPECT_EQ(light.Type, Components::LightType::Directional);
+    EXPECT_TRUE(light.CastsShadows);
 }

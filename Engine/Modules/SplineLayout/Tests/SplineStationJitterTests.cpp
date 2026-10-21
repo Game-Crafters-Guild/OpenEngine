@@ -292,7 +292,9 @@ TEST(SplineStationJitter, DropoutLeavesSurvivorsBitIdenticalAndKeepsTheirOrdinal
     for (size_t i = 0; i < some.size(); ++i)
     {
         if (i > 0)
+        {
             EXPECT_GT(some[i].StationIndex, some[i - 1].StationIndex);
+        }
         ASSERT_LT(some[i].StationIndex, all.size());
         EXPECT_TRUE(PoseBitsEqual(some[i], all[some[i].StationIndex]))
             << "survivor at ordinal " << some[i].StationIndex << " moved when its neighbours left";

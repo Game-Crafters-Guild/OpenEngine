@@ -80,7 +80,8 @@ void GraphAsset::Unload()
 std::string SerializeMaterialGraphGlsl(const Graph::Model& model, const std::string& graphName)
 {
     const auto doc = GraphModelToSgDocument(model, graphName);
-    const auto& library = ShaderGraph::GetSharedNodeLibraryIndex();
+    const std::filesystem::path projectNodesRoot;
+    const auto& library = ShaderGraph::GetSharedNodeLibraryIndex(projectNodesRoot);
     const ShaderGraph::SgCompileResult compiled = ShaderGraph::SgGraphCompiler::Compile(doc, library);
 
     std::string serialized = Graph::AppendAuthoringJsonFence(
@@ -104,7 +105,8 @@ bool SaveGraphToPath(const Graph::Model& model, const std::filesystem::path& pat
         if (graphName.ends_with("_built"))
         {
             const auto doc = GraphModelToSgDocument(model, graphName);
-            const auto& library = ShaderGraph::GetSharedNodeLibraryIndex();
+            const std::filesystem::path projectNodesRoot;
+            const auto& library = ShaderGraph::GetSharedNodeLibraryIndex(projectNodesRoot);
             const ShaderGraph::SgCompileResult compiled =
                 ShaderGraph::SgGraphCompiler::Compile(doc, library);
             return ShaderGraph::SaveGraphFile(path, doc,

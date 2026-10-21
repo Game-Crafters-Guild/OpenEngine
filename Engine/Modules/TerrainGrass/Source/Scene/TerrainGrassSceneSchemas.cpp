@@ -3,7 +3,6 @@
 #include "AssetCore/GUID.h"
 #include "Components/Terrain/TerrainGrass.h"
 #include "ECS/ECSTemplates.h"
-#include "Logger/Logger.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneValue.h"
 #include "TerrainGrass/TerrainGrassClamps.h"
@@ -11,10 +10,8 @@
 #include <cctype>
 #include <cstdio>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 
 namespace GameEngine::Scene
 {
@@ -122,16 +119,24 @@ static bool ParseBool(std::string_view value, bool& out, std::string* outError)
     return true;
 }
 
-// Parses a TerrainGrass render mode: the enum NAME (Dither / Blend) or a bare integer (0 / 1).
-// Case-insensitive, quote-tolerant — the same tolerance ParseDomain gives Terrain.domain.
-static bool ParseRenderMode(std::string_view value, Components::TerrainGrassRenderMode& out,
-                            std::string* outError)
+// An enum value as a scene writes it, without surrounding blanks or quotes and in lower case, so
+// the parsers below compare names case-insensitively and quote-tolerantly.
+static std::string NormalizeEnumToken(std::string_view value)
 {
     std::string v(value);
     auto isTrim = [](char ch) { return ch == ' ' || ch == '\t' || ch == '"' || ch == '\''; };
     while (!v.empty() && isTrim(v.front())) v.erase(v.begin());
     while (!v.empty() && isTrim(v.back())) v.pop_back();
     for (char& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return v;
+}
+
+// Parses a TerrainGrass render mode: the enum NAME (Dither / Blend) or a bare integer (0 / 1).
+// Case-insensitive and quote-tolerant.
+static bool ParseRenderMode(std::string_view value, Components::TerrainGrassRenderMode& out,
+                            std::string* outError)
+{
+    const std::string v = NormalizeEnumToken(value);
 
     if (v == "dither" || v == "0") { out = Components::TerrainGrassRenderMode::Dither; return true; }
     if (v == "blend" || v == "1") { out = Components::TerrainGrassRenderMode::Blend; return true; }
@@ -139,98 +144,30 @@ static bool ParseRenderMode(std::string_view value, Components::TerrainGrassRend
     return false;
 }
 
-// Retired TerrainGrass properties. An unrecognized key does not fail the load — the tolerant
-// loader records it in the degradation census and preserves its text across saves — but that
-// treats a deliberately deleted knob as damage to report and carries dead text forever.
-// Retiring it warns once, drops it, and the next save sheds the key.
-//
-// Deliberately NOT migrated to a value: a retired knob is not a current one under another name.
-// Density was a fraction of a fixed candidate lattice whose size depended on the terrain, so the
-// same 0.5 meant 4 blades/m2 on a 512 m terrain and 0.016 on an 8 km one; there is no scale-free
-// number to carry across. FadeStart/FadeEnd/DistanceFadeEnabled described a fade band that no
-// longer exists — blades now leave by not being spawned. RootAlpha/RootAlphaBlendRange faded the
-// blade body out toward its base to hide the seam where it met the ground; the root is embedded
-// and contact-shaded now, so there is no seam to hide and a blade body is opaque. The contact pair
-// (RootContactAo, RootContactShade) scaled the blade base's indirect diffuse and its albedo, and
-// only the blade's — one-sided, so their whole sub-1.0 ranges put a step on the contact line, and
-// the contact is structural now with no dial to carry a value to. The hue-variance PAIR became
-// one authored amount, and RandomColor's tint had no amount dial at all — its strength was a
-// shader literal — so both retire into hueVariation rather than mapping onto it.
-// Dropping to the current behaviour is the honest migration; inventing a mapping would silently
-// restate a value the author never chose.
-struct RetiredGrassProperty
+// Parses a TerrainGrass preset: the enum NAME (Custom / Meadow / Lawn / Steppe) or a bare integer
+// (0 to 3). Case-insensitive and quote-tolerant.
+static bool ParsePreset(std::string_view value, Components::TerrainGrassPreset& out, std::string* outError)
 {
-    // The key as ApplyProperty receives it: the loader lower-cases before dispatch.
-    std::string_view Key;
-    // The same key as it is spelled in a scene FILE. Carried explicitly because the notice names
-    // it, and a notice that says `rootalphablendrange` sends the author grepping for a string
-    // their file does not contain.
-    std::string_view Authored;
-    // Per-key, because the retired set spans several unrelated changes: one fixed sentence would
-    // misdescribe whichever group it was not written for.
-    std::string_view Reason;
-};
+    const std::string v = NormalizeEnumToken(value);
 
-constexpr std::string_view kRetiredDensityReason =
-    "density is now blades/m2 at the camera and the fade band is gone";
-constexpr std::string_view kRetiredRootFadeReason =
-    "the blade body is opaque; the root is embedded and contact-shaded instead of faded out";
-constexpr std::string_view kRetiredContactAoReason =
-    "a blade-side occlusion cannot darken the ground beside it, so the contact keeps its indirect "
-    "diffuse fully open";
-constexpr std::string_view kRetiredContactShadeReason =
-    "the root adopts the ground's albedo exactly; scaling it put a value step on the contact line";
-constexpr std::string_view kRetiredShadowStrengthReason =
-    "renamed to groundingStrength, which is what it gates - the grounding read, never cast "
-    "shadows";
-constexpr std::string_view kRetiredHueSplitReason =
-    "clump and blade hue spread are one authored amount now (hueVariation), at the shipped "
-    "ratio between the two granularities";
-constexpr std::string_view kRetiredRandomColorReason =
-    "the per-blade tint had no amount dial - its strength was a shader literal - so colour "
-    "variation is authored by hueVariation alone";
-constexpr std::string_view kRetiredCurvatureReason =
-    "blade bend is authored by the wind amplitudes it multiplied (windRestingLean, "
-    "windStrength, windFlutterAmount)";
-constexpr std::string_view kRetiredScaleReason =
-    "blade size is authored in metres by bladeHeight and bladeWidth; a second multiplier over "
-    "them made the component report a size it did not render";
-
-constexpr RetiredGrassProperty kRetiredGrassProperties[] = {
-    {"density", "density", kRetiredDensityReason},
-    {"fadestart", "fadeStart", kRetiredDensityReason},
-    {"fadeend", "fadeEnd", kRetiredDensityReason},
-    {"distancefadeenabled", "distanceFadeEnabled", kRetiredDensityReason},
-    {"texturedensity", "textureDensity", kRetiredDensityReason},
-    {"rootalpha", "rootAlpha", kRetiredRootFadeReason},
-    {"rootalphablendrange", "rootAlphaBlendRange", kRetiredRootFadeReason},
-    {"rootcontactao", "rootContactAo", kRetiredContactAoReason},
-    {"rootcontactshade", "rootContactShade", kRetiredContactShadeReason},
-    {"scale", "scale", kRetiredScaleReason},
-    {"curvature", "curvature", kRetiredCurvatureReason},
-    {"clumphuevariance", "clumpHueVariance", kRetiredHueSplitReason},
-    {"bladehuevariance", "bladeHueVariance", kRetiredHueSplitReason},
-    {"randomcolor", "randomColor", kRetiredRandomColorReason},
-    {"shadowstrength", "shadowStrength", kRetiredShadowStrengthReason},
-};
-
-const RetiredGrassProperty* FindRetiredGrassProperty(std::string_view property)
-{
-    for (const auto& entry : kRetiredGrassProperties)
-        if (entry.Key == property)
-            return &entry;
-    return nullptr;
+    if (v == "custom" || v == "0") { out = Components::TerrainGrassPreset::Custom; return true; }
+    if (v == "meadow" || v == "1") { out = Components::TerrainGrassPreset::Meadow; return true; }
+    if (v == "lawn" || v == "2") { out = Components::TerrainGrassPreset::Lawn; return true; }
+    if (v == "steppe" || v == "3") { out = Components::TerrainGrassPreset::Steppe; return true; }
+    if (outError) *outError = "preset must be custom/meadow/lawn/steppe or 0 to 3";
+    return false;
 }
 
-// Warns once per process per retired property.
-void WarnRetiredGrassProperty(const RetiredGrassProperty& retired)
+static const char* PresetName(Components::TerrainGrassPreset preset)
 {
-    static std::mutex mutex;
-    static std::unordered_set<std::string> warned;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (warned.emplace(std::string(retired.Key)).second)
-        Logger::Log::Warning("Scene: TerrainGrass.{} is retired ({}) — ignoring. Re-save the "
-                             "scene to drop it.", retired.Authored, retired.Reason);
+    switch (preset)
+    {
+    case Components::TerrainGrassPreset::Meadow: return "Meadow";
+    case Components::TerrainGrassPreset::Lawn: return "Lawn";
+    case Components::TerrainGrassPreset::Steppe: return "Steppe";
+    case Components::TerrainGrassPreset::Custom: break;
+    }
+    return "Custom";
 }
 
 class TerrainGrassSchema final : public ISceneComponentSchema
@@ -248,6 +185,9 @@ public:
 
         outLines.push_back(std::string("TerrainGrass.renderMode = ") +
             (c->RenderMode == Components::TerrainGrassRenderMode::Blend ? "Blend" : "Dither"));
+        // A label of where the dials came from: a load restores it as written and checks nothing
+        // against it.
+        outLines.push_back(std::string("TerrainGrass.preset = ") + PresetName(c->Preset));
         outLines.push_back("TerrainGrass.bladesPerSquareMeter = " + FormatFloat(c->BladesPerSquareMeter));
         outLines.push_back("TerrainGrass.range = " + FormatFloat(c->Range));
         outLines.push_back("TerrainGrass.densityFalloff = " + FormatFloat(c->DensityFalloff));
@@ -255,10 +195,14 @@ public:
         outLines.push_back("TerrainGrass.clumpSize = " + FormatFloat(c->ClumpSize));
         outLines.push_back("TerrainGrass.clumpHeightVariance = " + FormatFloat(c->ClumpHeightVariance));
         outLines.push_back("TerrainGrass.clumpAlignment = " + FormatFloat(c->ClumpAlignment));
-        outLines.push_back("TerrainGrass.clumpGather = " + FormatFloat(c->ClumpGather));
+        outLines.push_back("TerrainGrass.clumpTaper = " + FormatFloat(c->ClumpTaper));
         outLines.push_back("TerrainGrass.bladeHeight = " + FormatFloat(c->BladeHeight));
         outLines.push_back("TerrainGrass.bladeWidth = " + FormatFloat(c->BladeWidth));
-        outLines.push_back("TerrainGrass.maxWidthRatio = " + FormatFloat(c->MaxWidthRatio));
+        outLines.push_back("TerrainGrass.bladeTilt = " + FormatFloat(c->BladeTilt));
+        outLines.push_back("TerrainGrass.bladeBend = " + FormatFloat(c->BladeBend));
+        outLines.push_back("TerrainGrass.bladeTwist = " + FormatFloat(c->BladeTwist));
+        outLines.push_back("TerrainGrass.bladeTaperStart = " + FormatFloat(c->BladeTaperStart));
+        outLines.push_back("TerrainGrass.tuftFan = " + FormatFloat(c->TuftFan));
         outLines.push_back("TerrainGrass.bladeSegments = " + std::to_string(c->BladeSegments));
         outLines.push_back("TerrainGrass.randomScale = " + FormatFloat(c->RandomScale));
         outLines.push_back("TerrainGrass.layerIndex = " + std::to_string(c->LayerIndex));
@@ -274,12 +218,10 @@ public:
         outLines.push_back("TerrainGrass.brightness = " + FormatFloat(c->Brightness));
         outLines.push_back("TerrainGrass.randomBrightness = " + FormatFloat(c->RandomBrightness));
         outLines.push_back("TerrainGrass.hueVariation = " + FormatFloat(c->HueVariation));
-        outLines.push_back("TerrainGrass.rootShade = " + FormatFloat(c->RootShade));
         outLines.push_back("TerrainGrass.rootFadeStart = " + FormatFloat(c->RootFadeStart));
         outLines.push_back("TerrainGrass.rootFadeEnd = " + FormatFloat(c->RootFadeEnd));
-        outLines.push_back("TerrainGrass.bladeNormalForm = " + FormatFloat(c->BladeNormalForm));
-        outLines.push_back("TerrainGrass.bladeScatterGain = " + FormatFloat(c->BladeScatterGain));
         outLines.push_back("TerrainGrass.groundingStrength = " + FormatFloat(c->GroundingStrength));
+        outLines.push_back("TerrainGrass.canopyShade = " + FormatFloat(c->CanopyShade));
         outLines.push_back("TerrainGrass.translucency = " + FormatFloat(c->Translucency));
         outLines.push_back(std::string("TerrainGrass.textureGrass = ") + (c->TextureGrass ? "true" : "false"));
         outLines.push_back("TerrainGrass.textureCardsPerSquareMeter = " + FormatFloat(c->TextureCardsPerSquareMeter));
@@ -300,7 +242,7 @@ public:
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -310,6 +252,7 @@ public:
             c = *existing;
 
         if (property == "rendermode") { if (!ParseRenderMode(value, c.RenderMode, outError)) return false; }
+        else if (property == "preset") { if (!ParsePreset(value, c.Preset, outError)) return false; }
         else if (property == "bladespersquaremeter") { if (!ParseF32(value, c.BladesPerSquareMeter, outError)) return false; }
         else if (property == "range") { if (!ParseF32(value, c.Range, outError)) return false; }
         else if (property == "densityfalloff") { if (!ParseF32(value, c.DensityFalloff, outError)) return false; }
@@ -317,10 +260,14 @@ public:
         else if (property == "clumpsize") { if (!ParseF32(value, c.ClumpSize, outError)) return false; }
         else if (property == "clumpheightvariance") { if (!ParseF32(value, c.ClumpHeightVariance, outError)) return false; }
         else if (property == "clumpalignment") { if (!ParseF32(value, c.ClumpAlignment, outError)) return false; }
-        else if (property == "clumpgather") { if (!ParseF32(value, c.ClumpGather, outError)) return false; }
+        else if (property == "clumptaper") { if (!ParseF32(value, c.ClumpTaper, outError)) return false; }
         else if (property == "bladeheight") { if (!ParseF32(value, c.BladeHeight, outError)) return false; }
         else if (property == "bladewidth") { if (!ParseF32(value, c.BladeWidth, outError)) return false; }
-        else if (property == "maxwidthratio") { if (!ParseF32(value, c.MaxWidthRatio, outError)) return false; }
+        else if (property == "bladetilt") { if (!ParseF32(value, c.BladeTilt, outError)) return false; }
+        else if (property == "bladebend") { if (!ParseF32(value, c.BladeBend, outError)) return false; }
+        else if (property == "bladetwist") { if (!ParseF32(value, c.BladeTwist, outError)) return false; }
+        else if (property == "bladetaperstart") { if (!ParseF32(value, c.BladeTaperStart, outError)) return false; }
+        else if (property == "tuftfan") { if (!ParseF32(value, c.TuftFan, outError)) return false; }
         else if (property == "bladesegments") { if (!ParseU32(value, c.BladeSegments, outError)) return false; }
         else if (property == "randomscale") { if (!ParseF32(value, c.RandomScale, outError)) return false; }
         else if (property == "layerindex") { if (!ParseU32(value, c.LayerIndex, outError)) return false; }
@@ -336,12 +283,10 @@ public:
         else if (property == "brightness") { if (!ParseF32(value, c.Brightness, outError)) return false; }
         else if (property == "randombrightness") { if (!ParseF32(value, c.RandomBrightness, outError)) return false; }
         else if (property == "huevariation") { if (!ParseF32(value, c.HueVariation, outError)) return false; }
-        else if (property == "rootshade") { if (!ParseF32(value, c.RootShade, outError)) return false; }
         else if (property == "rootfadestart") { if (!ParseF32(value, c.RootFadeStart, outError)) return false; }
         else if (property == "rootfadeend") { if (!ParseF32(value, c.RootFadeEnd, outError)) return false; }
-        else if (property == "bladenormalform") { if (!ParseF32(value, c.BladeNormalForm, outError)) return false; }
-        else if (property == "bladescattergain") { if (!ParseF32(value, c.BladeScatterGain, outError)) return false; }
         else if (property == "groundingstrength") { if (!ParseF32(value, c.GroundingStrength, outError)) return false; }
+        else if (property == "canopyshade") { if (!ParseF32(value, c.CanopyShade, outError)) return false; }
         else if (property == "translucency") { if (!ParseF32(value, c.Translucency, outError)) return false; }
         else if (property == "texturegrass") { if (!ParseBool(value, c.TextureGrass, outError)) return false; }
         else if (property == "texturecardspersquaremeter") { if (!ParseF32(value, c.TextureCardsPerSquareMeter, outError)) return false; }
@@ -358,15 +303,9 @@ public:
         else if (property == "atlastilecount") { if (!ParseU32(value, c.AtlasTileCount, outError)) return false; }
         else if (property == "alphacutoff") { if (!ParseF32(value, c.AlphaCutoff, outError)) return false; }
         else if (property == "normalstrength") { if (!ParseF32(value, c.NormalStrength, outError)) return false; }
-        else if (const auto* retired = FindRetiredGrassProperty(property))
-        {
-            WarnRetiredGrassProperty(*retired);
-        }
         else
         {
-            if (outError)
-                *outError = "Unknown TerrainGrass property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         // The bounds are the component's, not this parser's, so an authored value and the same

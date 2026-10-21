@@ -177,9 +177,9 @@ std::future<HotReloadPipeline::PipelineStats> HotReloadPipeline::ExecuteAsync(
                 auto assemblyPrepTask = std::make_unique<AssemblyPrepTask>(&m_ThreadPool, chosenPath, fileLoadHandle, preloadSync, runCancelToken);
                 std::unique_ptr<MainThreadSwapTask> swapTask;
                 if (m_SwapperFactory) {
-                    swapTask = std::make_unique<MainThreadSwapTask>(&m_ThreadPool, chosenPath, nullptr, preloadSync, m_SwapperFactory(), runCancellation);
+                    swapTask = std::make_unique<MainThreadSwapTask>(&m_ThreadPool, chosenPath, preloadSync, m_SwapperFactory(), runCancellation);
                 } else {
-                    swapTask = std::make_unique<MainThreadSwapTask>(&m_ThreadPool, chosenPath, nullptr, preloadSync, nullptr, runCancellation);
+                    swapTask = std::make_unique<MainThreadSwapTask>(&m_ThreadPool, chosenPath, preloadSync, nullptr, runCancellation);
                 }
 
                 const JobSystem::TaskId assemblyPrepId = assemblyPrepTask->GetTaskId();
@@ -265,6 +265,9 @@ std::future<HotReloadPipeline::PipelineStats> HotReloadPipeline::ExecuteAsync(
         // Don't reset progress to 0.0f - leave it at the final value (1.0f for success, or intermediate value for failure)
         // This allows the test to read the final progress value after the pipeline completes
 
+        if (m_RunCompletedCallback) {
+            m_RunCompletedCallback(stats);
+        }
         runResult->set_value(std::move(stats));
 
         // A cancelled or failed run stops monitoring while a stage can still

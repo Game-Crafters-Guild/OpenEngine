@@ -3,8 +3,6 @@
 #include "Jobs/CompileServerClient.h"
 #include "Jobs/PipeTransport.h"
 
-#include <cstdlib>
-
 using namespace GameEngine;
 
 // Minimal engine-level compile server smoke test.
@@ -15,15 +13,6 @@ using namespace GameEngine;
 TEST(EngineCompileServerSmoke, EmptyWorkspaceCompile)
 {
 	const std::string pipeName = "GE_CompileServer_EngineSmoke";
-
-	// Any host this test spawns must die with the test process (issue #357):
-	// mark it ephemeral so the launch path binds it to the kill-on-close job
-	// object (Windows) / parent-death signal (Linux).
-#ifdef _WIN32
-	_putenv_s("GE_COMPILE_SERVER_EPHEMERAL", "1");
-#else
-	setenv("GE_COMPILE_SERVER_EPHEMERAL", "1", 1);
-#endif
 
 	// Match the minimal request shape used by the managed
 	// GameEngine.CompileServerSmoke utility: empty workspace

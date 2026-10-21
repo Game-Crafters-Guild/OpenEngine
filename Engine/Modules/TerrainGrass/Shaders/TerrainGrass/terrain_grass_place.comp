@@ -79,15 +79,17 @@ struct TerrainParamsEntry
     float GrassTextureCardsPerSquareMeter;
     float GrassTextureSize;
     float GrassPlacementSeed;
-    float GrassMaxWidthRatio;
+    float GrassBladeTilt;
+    float GrassBladeBend;
+    float GrassBladeTwist;
+    float GrassBladeTaperStart;
+    float GrassTuftFan;
     float GrassClumpSize;
     float GrassClumpHeightVariance;
     float GrassClumpAlignment;
-    float GrassClumpGather;
+    float GrassClumpTaper;
     float GrassHueVariation;
-    float GrassRootShade;
-    float GrassBladeNormalForm;
-    float GrassBladeScatterGain;
+    float GrassCanopyOcclusion;
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
@@ -101,8 +103,8 @@ struct GrassBladeInstance
     float BladeHeight;
     float BladeWidth;
     float Yaw;
-    float Rand;
-    float GrassWeight;
+    uint RandAndCoverage; // grass_clump.glsl owns the layout (per-blade random, field coverage)
+    uint BladeShape; // grass_clump.glsl owns the bit layout (tilt, twist, tuft fan)
     uint TerrainIndex;
     // Terrain surface normal (world nx/nz; ny reconstructed) baked here for atlas terrains, whose
     // vertex modifier has no unified normalmap to sample. 0 for non-atlas terrains (the vertex
@@ -274,10 +276,11 @@ layout(set = 0, binding = 19) uniform sampler gGrassMapSampler;
 #define GRASS_ATLAS_PARAMS_BINDING 4
 #define GRASS_ATLAS_ROWS_BINDING 5
 #include "TerrainGrass/grass_atlas_splat.glsl"
+#include "Includes/terrain_grass_canopy.glsl"
 
 // Endpoint-aligned RG8 control lattice: R is height, G is density. Missing maps
-// are exactly neutral. Resolve at the final gathered site, never the candidate's
-// earlier position, and do not crossfade rejection probabilities during streaming.
+// are exactly neutral. Resolve at the blade's own site, and do not crossfade rejection
+// probabilities during streaming.
 vec2 grassRegionControls(TerrainParamsEntry tp, vec2 uv)
 {
     if (GrassAtlas_IsAtlasBacked(tp.Flags, Atlas.Enabled))
@@ -338,7 +341,8 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
 // stops being a shape and becomes a sampling decision: it survives in one screen column and not the
 // next, and moves between them as the camera turns. That is the grazing-angle hatch, and it is a
 // geometry problem — no AA mode resolves a sliver it is only ever handed a fraction of.
-const float kGrassMinPixelWidth = 0.75;
+// The width of the whole leaf.
+const float kGrassMinPixelWidth = 1.5;
 // Divide guard for the perspective term below, in view-space metres. Not the near plane: it exists
 // only so a blade at or behind the eye cannot divide by zero.
 const float kGrassMinProjectionDepth = 0.001;
@@ -375,16 +379,15 @@ float grassProjectedPixelsPerUnit(vec3 posWS, vec3 dirWS)
 // clamp against. Evaluated ONCE per blade, where the vertex stage would evaluate it once per vertex
 // — twelve times over at LOD 0.
 //
-// One evaluation point is enough because of WHICH term dominates. A face-on blade in a field
-// authored at these widths only falls under the pixel floor tens of metres out; what actually
-// drives the floor is how far the blade is turned EDGE-ON to the camera, and that direction is a
-// per-blade property the vertex stage does not vary along the blade either. What is approximated is
-// only the positional term, which moves as 1/z over the blade's own height: mid-height is the point
-// that minimises its error over the span.
+// One evaluation point is enough for the positional term, which moves as 1/z over the blade's own
+// height: mid-height is the point that minimises its error over the span. What drives the floor is
+// how far the blade is turned EDGE-ON to the camera. This measures it at the root facing; the twist
+// turns the face along the blade, and the vertex stage rescales the floor by each vertex's own
+// facing (GrassBladeFloor in terrain_grass_vertex_modifier.glsl).
 //
 // Returned as a ratio to `bladeWidth` so the vertex stage can recover a world width by multiplying
 // by the value it already reads, without this shader having to know about the taper, the
-// aspect-ratio cap or the textured-card halving that the vertex stage applies afterwards.
+// aspect-ratio cap or the halving to a half-width that the vertex stage applies afterwards.
 float grassMinWidthScale(vec3 rootWS, float bladeHeight, float bladeWidth, float yaw)
 {
     // Height 0 means the view has not published a world pass yet, so the pixel size is not known.
@@ -408,14 +411,6 @@ float sampleAtlasHeight01(vec2 uv)
         return grassMapTap(Atlas.HeightCoarseBindless, gGrassAtlasHeightCoarse,
                            grassCoarseUV(uv, Atlas.CoarseDim)).r;
     return 0.0;
-}
-
-float layerWeight(vec4 weights, uint layerIndex)
-{
-    if (layerIndex == 0u) return weights.r;
-    if (layerIndex == 1u) return weights.g;
-    if (layerIndex == 2u) return weights.b;
-    return weights.a;
 }
 
 float sampleHeight01(TerrainParamsEntry tp, vec2 uv)
@@ -469,36 +464,17 @@ vec3 sampleTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
 // grass outright. Semantics preserved from the fixed-grid placement (mirrored by the
 // TerrainAtlasTests oracles): grass must both reach MaskThreshold and lead the next-strongest
 // layer by min(0.18, MaskThreshold).
-float grassMaskFactor(TerrainParamsEntry tp, vec2 uv, out float grassWeightOut)
+float grassMaskFactor(TerrainParamsEntry tp, vec2 uv)
 {
-    bool hasSplatmap = grassHasSplat(tp.Flags, tp.SplatmapBindless);
     // A newly-resident tile's coarse->slot crossfade is NOT shown here: the mask below is a
     // threshold and a refusal, and a weight sliding between two sources across the upgrade window
     // would spawn and unspawn blades along the residency frontier. Placement has always taken the
     // slot outright and keeps doing so; only the ground COLOUR travels with the ground's fade.
     vec4 splatWeights = GrassAtlas_ResolveSplat(tp.Flags, tp.SplatmapBindless, uv, false);
-
-    uint grassLayer = min(tp.GrassLayerIndex, 3u);
-    float grassWeight = layerWeight(splatWeights, grassLayer);
-    grassWeightOut = grassWeight;
-    float otherMax = 0.0;
-    for (uint layer = 0u; layer < 4u; ++layer)
-    {
-        if (layer != grassLayer)
-            otherMax = max(otherMax, layerWeight(splatWeights, layer));
-    }
-
-    float maskThreshold = clamp(tp.GrassMaskThreshold, 0.0, 1.0);
-    float dominantGrass = grassWeight - otherMax;
-    float dominanceFloor = min(0.18, maskThreshold);
-    if (hasSplatmap && (grassWeight < maskThreshold || dominantGrass < dominanceFloor))
-        return -1.0;
-
-    float maskFeather = hasSplatmap ? 0.08 : 0.25;
-    float dominanceMin = hasSplatmap ? dominanceFloor : 0.08;
-    float dominanceMax = hasSplatmap ? (dominanceFloor + 0.18) : 0.28;
-    return smoothstep(maskThreshold, min(maskThreshold + maskFeather, 1.0), grassWeight)
-        * smoothstep(dominanceMin, dominanceMax, dominantGrass);
+    // The coverage the ground darkens its canopy occlusion by (cbt_surface.glsl), so the ground
+    // under the field and the blades standing on it agree on where the field is.
+    return GrassSplatCoverage(splatWeights, min(tp.GrassLayerIndex, 3u), tp.GrassMaskThreshold,
+                              grassHasSplat(tp.Flags, tp.SplatmapBindless));
 }
 
 // First terrain row whose XZ footprint CONTAINS this point. Resolved per candidate, not per cell:
@@ -576,8 +552,8 @@ uint emitCellSlots()
         blade.BladeHeight = 0.0;
         blade.BladeWidth = 0.0;
         blade.Yaw = 0.0;
-        blade.Rand = 0.0;
-        blade.GrassWeight = 0.0;
+        blade.RandAndCoverage = 0u;
+        blade.BladeShape = 0u;
         blade.TerrainIndex = uint(terrainIdx);
         blade.NormalX = 0.0;
         blade.NormalZ = 0.0;
@@ -597,6 +573,10 @@ uint emitCellSlots()
                 // would make a cell straddling two terrains sample two different lattices and
                 // tear the tufts along the seam. The response AMOUNTS below come from the site
                 // terrain, which is where every other per-blade attribute comes from.
+                //
+                // A clump shapes a blade (height, facing, hue) and never moves or removes it: the
+                // candidate stands where the Halton lattice put it, so every part of the ground
+                // keeps the authored density (#4205).
                 bool clumped = tp.GrassClumpSize > 0.0;
                 GrassClumpSample clump;
                 uint clumpCode = 0u;
@@ -604,13 +584,6 @@ uint emitCellSlots()
                 {
                     clump = GrassSampleClump(vec2(worldX, worldZ), tp.GrassClumpSize, seed);
                     clumpCode = GrassClumpCodeFromRand(clump.ColorRand);
-                    // Gathered BEFORE the terrain, mask and height are resolved, so a blade is
-                    // masked and grounded where it actually ends up standing. Pulling afterwards
-                    // would let a gathered blade land on bare rock with a grass mask that passed
-                    // somewhere else, and hover at the height of the point it came from.
-                    float gather = clamp(tp.GrassClumpGather, 0.0, 1.0);
-                    worldX = mix(worldX, clump.Center.x, gather);
-                    worldZ = mix(worldZ, clump.Center.y, gather);
                 }
 
                 // The terrain this blade actually stands on, which is not necessarily the one whose
@@ -622,12 +595,13 @@ uint emitCellSlots()
                     vec2 uv = clamp(vec2((worldX - stp.WorldOriginX) / max(stp.WorldSizeX, 0.0001),
                                          (worldZ - stp.WorldOriginZ) / max(stp.WorldSizeZ, 0.0001)),
                                     vec2(0.0), vec2(1.0));
-                    float grassWeight = 0.0;
+                    // The field coverage: the probability a blade stands here, and the share of
+                    // the canopy occlusion its root and the ground under it take.
                     vec2 regional = grassRegionControls(stp, uv);
-                    float mask = grassMaskFactor(stp, uv, grassWeight) * regional.g;
+                    float mask = GrassFieldCoverage(grassMaskFactor(stp, uv), regional);
                     // The mask feather stays stochastic so splat boundaries keep their soft edge;
                     // the base density is now geometric, not a Bernoulli thinning of a fixed grid.
-                    if (regional.r > 0.0 && mask > 0.0 && s.MaskRand <= mask)
+                    if (mask > 0.0 && s.MaskRand <= mask)
                     {
                         float randomScaleAmount = max(0.0, stp.GrassRandomScale);
                         float randomScale = max(0.0, 1.0 + (s.ScaleRand * 2.0 - 1.0) * randomScaleAmount);
@@ -637,11 +611,12 @@ uint emitCellSlots()
                         if (clumped)
                         {
                             // Folded into the height the instance already carries: some tufts
-                            // tall, some short, at zero bytes per blade. A variance of 0 returns
-                            // exactly 1.0, so an unclumped field is bit-identical, not merely
-                            // close.
+                            // tall, some short, each tallest at its centre, at zero bytes per
+                            // blade. A variance and a taper of 0 each return exactly 1.0, so an
+                            // unclumped field is bit-identical, not merely close.
                             bladeHeight *= GrassClumpHeightMultiplier(
-                                clump.HeightRand, stp.GrassClumpHeightVariance);
+                                               clump.HeightRand, stp.GrassClumpHeightVariance)
+                                * GrassClumpTaperMultiplier(clump.DistanceCells, stp.GrassClumpTaper);
                         }
                         float bladeWidth = max(0.0, stp.GrassBladeWidth) * bladeScale
                             * mix(0.65, 1.25, s.WidthRand);
@@ -685,8 +660,19 @@ uint emitCellSlots()
                                 yaw = atan(blended.y, blended.x);
                         }
                         blade.Yaw = yaw;
-                        blade.Rand = s.WidthRand;
-                        blade.GrassWeight = grassWeight;
+                        blade.RandAndCoverage = GrassPackRandAndCoverage(s.WidthRand, mask);
+                        // The blade's place in its tuft rides beside its own shape draws: the
+                        // vertex stage leans it away from the site, the more the farther out.
+                        float fanTurn = 0.0;
+                        float fanDistance = 0.0;
+                        if (clumped)
+                        {
+                            vec2 fromSite = vec2(worldX, worldZ) - clump.Center;
+                            fanTurn = atan(fromSite.y, fromSite.x) * (1.0 / 6.28318530718);
+                            fanDistance = clump.DistanceCells;
+                        }
+                        blade.BladeShape =
+                            GrassPackBladeShape(s.TiltRand, s.TwistRand, fanTurn, fanDistance);
                         blade.TerrainIndex = uint(siteIdx);
                         blade.Flags = GrassPackFlags(lod, clumpCode,
                             grassMinWidthScale(vec3(worldX, blade.RootY, worldZ),

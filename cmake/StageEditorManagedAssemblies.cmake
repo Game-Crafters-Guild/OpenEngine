@@ -4,17 +4,16 @@ endif()
 
 file(MAKE_DIRECTORY "${GE_MANAGED_DEST}")
 
+include("${CMAKE_CURRENT_LIST_DIR}/ScriptSurfaceAssemblies.cmake")
 set(_whole_directories
   "${GE_SOURCE_DIR}/Managed/CoreBridge/bin/${GE_CONFIG}/net10.0"
   "${GE_SOURCE_DIR}/Managed/HotReload/bin/${GE_CONFIG}/net10.0"
   "${GE_SOURCE_DIR}/Managed/Editor.Scripting.ABI/bin/${GE_CONFIG}"
-  "${GE_SOURCE_DIR}/Managed/ECS.ABI/bin/${GE_CONFIG}"
-  "${GE_SOURCE_DIR}/Managed/Input.ABI/bin/${GE_CONFIG}"
-  "${GE_SOURCE_DIR}/Managed/Physics.ABI/bin/${GE_CONFIG}"
-  "${GE_SOURCE_DIR}/Managed/Platform.ABI/bin/${GE_CONFIG}"
   "${GE_SOURCE_DIR}/Managed/Editor.Managed/bin/${GE_CONFIG}"
-  "${GE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/${GE_CONFIG}"
 )
+foreach(_surface_dir IN LISTS GE_SCRIPT_SURFACE_MANAGED_DIRS)
+  list(APPEND _whole_directories "${GE_SOURCE_DIR}/Managed/${_surface_dir}/bin/${GE_CONFIG}")
+endforeach()
 foreach(_source_dir IN LISTS _whole_directories)
   if(NOT IS_DIRECTORY "${_source_dir}")
     message(FATAL_ERROR "Managed assembly directory is missing: ${_source_dir}")

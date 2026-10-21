@@ -90,7 +90,7 @@ std::vector<std::string> DeclareOceanFrame(IDevice* device, float waterCenterZ, 
     const CameraId cameraId = rs.Views().AllocateCamera("OceanInViewCamera");
     rs.Views().SetCameraData(cameraId, ForwardCamera());
     const ViewId viewId = rs.Views().AllocateView("OceanInViewView", cameraId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     ViewClearConfig clear{};
     clear.clearColor = true;
     clear.clearDepth = true;
@@ -204,7 +204,7 @@ TEST(OceanWaterInViewTest, FixedOceanTimeOrNoWaterInViewClaimsNoDynamicDepth)
         const CameraId cameraId = rs.Views().AllocateCamera("OceanClaimCamera");
         rs.Views().SetCameraData(cameraId, ForwardCamera());
         const ViewId viewId = rs.Views().AllocateView("OceanClaimView", cameraId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;

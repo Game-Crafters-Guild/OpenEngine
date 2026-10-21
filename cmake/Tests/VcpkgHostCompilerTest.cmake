@@ -22,14 +22,19 @@ find_program(systemCxx NAMES c++ REQUIRED NO_CACHE)
 find_program(systemCc NAMES cc REQUIRED NO_CACHE)
 
 # A working compiler at another path, as xcodebuild's toolchain directory is:
-# a different file, and so a different compiler hash for vcpkg.
+# a different file, and so a different compiler hash for vcpkg. The wrapper
+# runs the system compiler under the PATH this test started with: a compiler
+# launcher's masquerade link (ccache's /usr/lib64/ccache/cc) finds the real
+# compiler as the next cc on PATH, and with a wrapper directory first on PATH
+# that is the wrapper again, which never returns.
+set(startPath "$ENV{PATH}")
 function(make_wrapper_toolchain dir)
     file(MAKE_DIRECTORY "${dir}")
     foreach(pair IN ITEMS "c++|${systemCxx}" "cc|${systemCc}")
         string(REPLACE "|" ";" pair "${pair}")
         list(GET pair 0 name)
         list(GET pair 1 target)
-        file(WRITE "${dir}/${name}" "#!/bin/sh\nexec \"${target}\" \"$@\"\n")
+        file(WRITE "${dir}/${name}" "#!/bin/sh\nPATH='${startPath}' exec \"${target}\" \"$@\"\n")
         file(CHMOD "${dir}/${name}" PERMISSIONS
             OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
     endforeach()

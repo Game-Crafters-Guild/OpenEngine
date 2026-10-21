@@ -427,7 +427,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         }
     }
     desc.MaxDistance = std::max(0.0f, best.Probe.MaxDistance);
-    desc.CullMask = best.Probe.CullMask;
+    desc.CapturedLayers = best.Probe.CapturedLayers;
     desc.WorldId = world.GetWorldId();
     desc.SourceKey = best.SourceKey != 0 ? best.SourceKey : 1u;
     desc.Intensity = std::max(0.0f, best.Probe.Intensity) * best.Weight;

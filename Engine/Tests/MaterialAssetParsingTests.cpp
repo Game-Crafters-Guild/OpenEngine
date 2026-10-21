@@ -234,6 +234,25 @@ Material:
     EXPECT_EQ(doc.textures.at("albedoMap"), "26667450-ec0f-6554-9916-b07e332c0689");
 }
 
+// A Unity material with no colour property keeps Unity's default colour, white, not the engine's
+// new-material base colour.
+TEST(MaterialAssetParsingTest, UnityMat_WithoutAColorImportsWhite)
+{
+    const std::string unityMat = R"MAT(%YAML 1.1
+--- !u!21 &2100000
+Material:
+  m_Name: Plain Stone
+  m_SavedProperties:
+    m_Floats:
+    - _Metallic: 0
+)MAT";
+
+    MaterialAsset asset(GUID::Generate(), "Plain Stone.mat");
+    ASSERT_TRUE(ParseMaterialJson(unityMat, asset)) << asset.GetErrors().front();
+    EXPECT_EQ(std::get<std::vector<float>>(asset.GetDocument().properties.at("baseColor")),
+              (std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f}));
+}
+
 TEST(MaterialAssetParsingTest, UnityMat_EmissionMapEmitsAtReferenceWhite)
 {
     const std::string unityMat = R"MAT(%YAML 1.1
@@ -720,6 +739,21 @@ TEST(MaterialDocumentDefaultsTest, FreshDefaultDocumentIsFullyOpaque)
     const MaterialDocument doc = MaterialDocument::CreateDefaultPBR("New");
     EXPECT_NEAR(DocOpacity(doc), 1.0f, 1e-6f);
     EXPECT_NEAR(doc.DefaultOpacity(), 1.0f, 1e-6f);
+}
+
+// No real surface reflects all the light it receives: a new material's base colour is 0.8, a
+// bright plaster or paper, so a default-material object under the sun does not read as clipped
+// white. A partial .material with no base colour gets the same value from the fill.
+TEST(MaterialDocumentDefaultsTest, ANewMaterialsBaseColorIsAPlausibleAlbedo)
+{
+    const std::vector<float> expected{0.8f, 0.8f, 0.8f, 1.0f};
+    const MaterialDocument created = MaterialDocument::CreateDefaultPBR("New");
+    EXPECT_EQ(std::get<std::vector<float>>(created.properties.at("baseColor")), expected);
+
+    MaterialDocument partial{};
+    partial.lightingModel = "StandardPBR";
+    partial.FillMissingStandardPBRDefaults();
+    EXPECT_EQ(std::get<std::vector<float>>(partial.properties.at("baseColor")), expected);
 }
 
 // ---- Textures ----

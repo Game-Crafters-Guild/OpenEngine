@@ -3499,7 +3499,7 @@ TEST(AssetDbHardening, ResolvePathTargetIteratesAllSources)
     EXPECT_EQ(reg.ResolvePathTarget("models/knight.fbx"), projGuid);
     // Path under editor mount resolves via editor source — this is the
     // multi-source iteration we're protecting.
-    EXPECT_EQ(reg.ResolvePathTarget("Icons/play.png"), edGuid);
+    EXPECT_EQ(reg.ResolvePathTarget("Icons/play.svg"), edGuid);
     // Path that exists in neither mount stays unresolved.
     EXPECT_TRUE(reg.ResolvePathTarget("nowhere/missing.png").IsNull());
 

@@ -550,6 +550,50 @@ TEST(TransformMathTests, Hierarchy_CachedTopologyPropagatesCollapsedDirtySubtree
     EXPECT_EQ(hierarchy.GetTopologyBuildCount(), 3u);
 }
 
+// A Transform brings its WorldTransform at creation (Version 0: not resolved
+// yet). The first resolve marks it resolved even when the pose is identity, so
+// a consumer waiting for a placed pose never waits forever; a still frame
+// after that leaves the Version alone. Covers both the flat and the hierarchy
+// path.
+TEST(TransformMathTests, Hierarchy_FirstResolveMarksEveryPoseResolved)
+{
+    ECS::World world(nullptr);
+    ECS::Entity root = world.Create(Transform{});
+    ECS::Entity parent = world.Create(Transform{});
+    ECS::Entity child = world.Create(Transform{});
+    child.Set(Parent{parent.GetHandle()});
+    world.ProcessCommands();
+    for (ECS::Entity* entity : {&root, &parent, &child})
+    {
+        const auto* worldTransform = world.GetComponent<WorldTransform>(entity->GetHandle());
+        ASSERT_NE(worldTransform, nullptr) << "a Transform entity is created without its WorldTransform";
+        EXPECT_EQ(worldTransform->Version, 0u);
+    }
+
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+
+    for (ECS::Entity* entity : {&root, &parent, &child})
+        EXPECT_EQ(world.GetComponent<WorldTransform>(entity->GetHandle())->Version, 1u)
+            << "an identity pose stayed unresolved, or a still frame bumped it again";
+}
+
+// A required component stays while its requirer does: removing an entity's
+// WorldTransform while its Transform stays is refused, so the entity never
+// leaves the hierarchy's and extraction's queries for good.
+TEST(TransformMathTests, RemovingWorldTransformWhileTransformStaysIsRefused)
+{
+    ECS::World world(nullptr);
+    ECS::Entity entity = world.Create(Transform{});
+    world.RemoveComponentImmediate<WorldTransform>(entity.GetHandle());
+    EXPECT_NE(world.GetComponent<WorldTransform>(entity.GetHandle()), nullptr);
+    world.RemoveComponentImmediate<Transform>(entity.GetHandle());
+    world.RemoveComponentImmediate<WorldTransform>(entity.GetHandle());
+    EXPECT_EQ(world.GetComponent<WorldTransform>(entity.GetHandle()), nullptr)
+        << "with the Transform gone, nothing requires the WorldTransform";
+}
+
 // Entities without a Parent resolve on the flat pass even when a hierarchy
 // exists elsewhere in the world: one parented pair must not send a thousand
 // unrelated roots down the hierarchy walk.
@@ -620,6 +664,152 @@ TEST(TransformMathTests, Hierarchy_EveryUnitAHierarchyStillWalksNothingAndMovesW
         EXPECT_FLOAT_EQ(childWorld->matrix[13], 1.0f);
         EXPECT_FLOAT_EQ(childWorld->matrix[14], 2.0f);
     }
+}
+
+// Unparented spawns beside a hierarchy leave the cached topology alone: no
+// rebuild, and the flat pass resolves only the chunks the spawns landed in. The
+// cache stays usable the same frame: a parent moved beside the spawns still
+// carries its child.
+TEST(TransformMathTests, Hierarchy_UnparentedSpawnsKeepTheTopologyAndResolveOnlyTheirChunks)
+{
+    constexpr int kFlat = 20000;
+    constexpr int kSpawned = 10;
+    ECS::World world(nullptr);
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    child.Set(Parent{parent.GetHandle()});
+    for (int i = 0; i < kFlat; ++i)
+        world.Create(Transform::FromTRS({static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    world.ProcessCommands();
+
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+    const size_t builds = hierarchy.GetTopologyBuildCount();
+
+    std::vector<ECS::Entity> spawned;
+    for (int i = 0; i < kSpawned; ++i)
+        spawned.push_back(world.Create(Transform::FromTRS(
+            {-static_cast<float>(i + 1), 5.0f, 0.0f}, Quaternion{}, {1, 1, 1})));
+    world.ProcessCommands();
+    world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 0.0f, 3.0f);
+    hierarchy.Update(world, 0.0f);
+
+    // The counts rest on the change filter's gates; with GE_ECS_CHANGE_FILTER=0
+    // every frame resolves everything by design, and only the poses are checked.
+    if (ECS::ChangeFilter::Enabled())
+    {
+        EXPECT_EQ(hierarchy.GetTopologyBuildCount(), builds) << "an unparented spawn rebuilt the topology";
+        EXPECT_LT(hierarchy.GetLastFlatResolvedCount(), static_cast<size_t>(kFlat / 2))
+            << "the flat pass re-resolved the world after a spawn of " << kSpawned;
+    }
+    const WorldTransform* childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
+    ASSERT_NE(childWorld, nullptr);
+    EXPECT_FLOAT_EQ(childWorld->matrix[12], 1.0f);
+    EXPECT_FLOAT_EQ(childWorld->matrix[14], 3.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(parent.GetHandle())->matrix[14], 3.0f);
+    for (const int i : {0, kSpawned - 1})
+    {
+        const WorldTransform* spawnedWorld = world.GetComponent<WorldTransform>(spawned[i].GetHandle());
+        ASSERT_NE(spawnedWorld, nullptr);
+        EXPECT_FLOAT_EQ(spawnedWorld->matrix[12], -static_cast<float>(i + 1));
+        EXPECT_FLOAT_EQ(spawnedWorld->matrix[13], 5.0f);
+    }
+}
+
+// A cached node whose components move without any Parent edit still carries
+// its child: an unrelated destroy that swap-moves the node inside its chunk,
+// and growth of the node's archetype by thousands of entities. A child whose
+// Parent is removed (an archetype move, no Parent column edit) leaves it.
+TEST(TransformMathTests, Hierarchy_NodeMovedByAnUnrelatedStructuralChangeStillCarriesItsChild)
+{
+    ECS::World world(nullptr);
+    // The filler and the parent share an archetype chunk, the parent last:
+    // destroying the filler swap-moves the parent into the filler's row.
+    ECS::Entity filler = world.Create(Transform::FromTRS({9.0f, 9.0f, 9.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    child.Set(Parent{parent.GetHandle()});
+    world.ProcessCommands();
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+
+    const Transform* parentBefore = world.GetComponent<Transform>(parent.GetHandle());
+    world.DestroyEntityImmediate(filler.GetHandle());
+    ASSERT_NE(world.GetComponent<Transform>(parent.GetHandle()), parentBefore)
+        << "the destroy did not move the parent; the case is not exercised";
+    world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 2.0f, 0.0f);
+    hierarchy.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(child.GetHandle())->matrix[13], 2.0f)
+        << "the child did not follow a parent that a swap-remove moved";
+
+    const Transform* parentBeforeGrowth = world.GetComponent<Transform>(parent.GetHandle());
+    for (int i = 0; i < 5000; ++i)
+        world.Create(Transform::FromTRS({static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    world.ProcessCommands();
+    RecordProperty("parentMovedByGrowth", world.GetComponent<Transform>(parent.GetHandle()) != parentBeforeGrowth ? 1 : 0);
+    world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 0.0f, 4.0f);
+    hierarchy.Update(world, 0.0f);
+    const WorldTransform* childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
+    EXPECT_FLOAT_EQ(childWorld->matrix[13], 2.0f);
+    EXPECT_FLOAT_EQ(childWorld->matrix[14], 4.0f) << "the child did not follow after its archetype grew";
+
+    // Removing the child's Parent moves it to an unparented archetype: it is
+    // a root from then on, its world matrix its own local pose.
+    world.RemoveComponentImmediate<Parent>(child.GetHandle());
+    world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(5.0f, 0.0f, 0.0f);
+    hierarchy.Update(world, 0.0f);
+    childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
+    EXPECT_FLOAT_EQ(childWorld->matrix[12], 1.0f) << "the unparented child still followed its old parent";
+    EXPECT_FLOAT_EQ(childWorld->matrix[13], 0.0f);
+    EXPECT_FLOAT_EQ(childWorld->matrix[14], 0.0f);
+}
+
+// A Parent-holder spawned beside a cached hierarchy is resolved under its
+// parent on its first frame. With GE_ECS_CHANGE_FILTER=0 (the ctest entry
+// TransformMathTests_ChangeFilterOff) no Parent column gate reports it, so the
+// structural change itself has to rebuild the topology.
+TEST(TransformMathTests, Hierarchy_ParentHolderSpawnedBesideACachedHierarchyResolves)
+{
+    ECS::World world(nullptr);
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 3.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity firstChild = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    firstChild.Set(Parent{parent.GetHandle()});
+    world.ProcessCommands();
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+
+    ECS::Entity secondChild = world.Create(Transform::FromTRS({0.0f, 1.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    secondChild.Set(Parent{parent.GetHandle()});
+    world.ProcessCommands();
+    hierarchy.Update(world, 0.0f);
+    const WorldTransform* childWorld = world.GetComponent<WorldTransform>(secondChild.GetHandle());
+    ASSERT_NE(childWorld, nullptr);
+    EXPECT_FLOAT_EQ(childWorld->matrix[12], 0.0f);
+    EXPECT_FLOAT_EQ(childWorld->matrix[13], 1.0f);
+    EXPECT_FLOAT_EQ(childWorld->matrix[14], 3.0f) << "the new child was not resolved under its parent";
+}
+
+// The serial seam caches every entity and has no flat pass: a frame that only
+// spawns still resolves the new entity.
+TEST(TransformMathTests, Hierarchy_SerialSeamResolvesASpawnOnAFrameWithoutDestroys)
+{
+    ECS::World world(nullptr);
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    child.Set(Parent{parent.GetHandle()});
+    world.ProcessCommands();
+    Engine::Renderer::TransformHierarchySystem serial(true);
+    serial.Update(world, 0.0f);
+    serial.Update(world, 0.0f);
+
+    ECS::Entity spawned = world.Create(Transform::FromTRS({7.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    world.ProcessCommands();
+    serial.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(spawned.GetHandle())->matrix[12], 7.0f)
+        << "the serial seam left a spawned entity unresolved";
 }
 
 namespace
@@ -802,6 +992,72 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathOnRandomForests)
     }
 }
 
+// P2 (S8c): with unparented entities spawned and destroyed beside the forest
+// every frame (they share archetype chunks with the forest's flat-owned roots,
+// so destroys swap-move those roots), the split paths still match the serial
+// seam bitwise, frame by frame.
+TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathWithSpawnsAndDestroys)
+{
+    constexpr int kForest = 1500;
+    constexpr int kFrames = 12;
+    std::mt19937 rng(8001u);
+    const ForestSpec spec = MakeForest(rng, kForest);
+
+    JobSystem::WorkStealingThreadPool pool(4);
+    ECS::World splitWorld(&pool);
+    ECS::World serialWorld(nullptr);
+    const auto splitHandles = BuildForest(splitWorld, spec);
+    const auto serialHandles = BuildForest(serialWorld, spec);
+    Engine::Renderer::TransformHierarchySystem split;
+    Engine::Renderer::TransformHierarchySystem serial(true);
+    std::vector<ECS::EntityHandle> splitExtra, serialExtra;
+
+    std::uniform_int_distribution<int> pick(0, kForest - 1);
+    std::uniform_real_distribution<float> step(-1.0f, 1.0f);
+    for (int frame = 0; frame < kFrames; ++frame)
+    {
+        const int spawns = std::uniform_int_distribution<int>(0, 40)(rng);
+        for (int s = 0; s < spawns; ++s)
+        {
+            const Transform local = Transform::FromTRS({step(rng), step(rng), step(rng)}, Quaternion{}, {1, 1, 1});
+            splitExtra.push_back(splitWorld.Create(local).GetHandle());
+            serialExtra.push_back(serialWorld.Create(local).GetHandle());
+        }
+        const int destroys = std::min<int>(static_cast<int>(splitExtra.size()),
+                                           std::uniform_int_distribution<int>(0, 20)(rng));
+        for (int d = 0; d < destroys; ++d)
+        {
+            const size_t at = std::uniform_int_distribution<size_t>(0, splitExtra.size() - 1)(rng);
+            splitWorld.DestroyEntityImmediate(splitExtra[at]);
+            serialWorld.DestroyEntityImmediate(serialExtra[at]);
+            splitExtra.erase(splitExtra.begin() + static_cast<std::ptrdiff_t>(at));
+            serialExtra.erase(serialExtra.begin() + static_cast<std::ptrdiff_t>(at));
+        }
+        splitWorld.ProcessCommands();
+        serialWorld.ProcessCommands();
+        for (int m = 0; m < 20; ++m)
+        {
+            const int i = pick(rng);
+            const float dx = step(rng), dy = step(rng), dz = step(rng);
+            splitWorld.GetComponentForWrite<Transform>(splitHandles[i])->Translate(dx, dy, dz);
+            serialWorld.GetComponentForWrite<Transform>(serialHandles[i])->Translate(dx, dy, dz);
+        }
+        split.Update(splitWorld, 0.0f);
+        serial.Update(serialWorld, 0.0f);
+
+        for (int i = 0; i < kForest; ++i)
+            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitHandles[i])->matrix,
+                                     serialWorld.GetComponent<WorldTransform>(serialHandles[i])->matrix,
+                                     sizeof(float32) * 16))
+                << "frame " << frame << " forest entity " << i << " differs from the serial path";
+        for (size_t i = 0; i < splitExtra.size(); ++i)
+            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitExtra[i])->matrix,
+                                     serialWorld.GetComponent<WorldTransform>(serialExtra[i])->matrix,
+                                     sizeof(float32) * 16))
+                << "frame " << frame << " spawned entity " << i << " differs from the serial path";
+    }
+}
+
 TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
 {
     constexpr size_t kRoots = 1000;
@@ -867,10 +1123,30 @@ TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
         hierarchy.Update(world, 0.0f);
     }, 7);
 
+    // A structural frame that moves no node (an unparented spawn) pays the
+    // O(nodes) cache check instead of a rebuild; one that moves a node (a leaf
+    // given, then relieved of, a component) pays the check and the rebuild.
+    const size_t buildsBeforeSpawns = hierarchy.GetTopologyBuildCount();
+    const double structuralCheckMs = median([&] {
+        world.Create(Transform::FromTRS({-1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        world.ProcessCommands();
+        hierarchy.Update(world, 0.0f);
+    }, 11);
+    EXPECT_EQ(hierarchy.GetTopologyBuildCount(), buildsBeforeSpawns) << "an unparented spawn rebuilt the topology";
+    bool ordered = false;
+    const double movedNodeMs = median([&] {
+        if (ordered)
+            world.RemoveComponentImmediate<HierarchyOrder>(leaves.back());
+        else
+            world.AddComponentImmediate<HierarchyOrder>(leaves.back(), HierarchyOrder{1});
+        ordered = !ordered;
+        hierarchy.Update(world, 0.0f);
+    }, 7);
+
     std::printf(
         "\n[TransformHierarchyPerf] entities=%zu firstBuild=%.3fms clean=%.3fms "
-        "leaf=%.3fms branch1000=%.3fms topologyRebuild=%.3fms\n",
-        kEntities, firstBuildMs, cleanMs, leafMs, branchMs, rebuildMs);
+        "leaf=%.3fms branch1000=%.3fms topologyRebuild=%.3fms structuralCheck=%.3fms movedNode=%.3fms\n",
+        kEntities, firstBuildMs, cleanMs, leafMs, branchMs, rebuildMs, structuralCheckMs, movedNodeMs);
 }
 
 // Change-signaling contract for hierarchy-propagated moves. The hierarchy's

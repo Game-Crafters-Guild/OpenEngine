@@ -86,5 +86,5 @@ If you don't have your own:
 
 ## Related docs
 
-- [`Quickstart.md`](../../../../../../docs/Animation/Quickstart.md)
-- [`HumanoidRetargeting.html`](../../../../../../docs/Animation/HumanoidRetargeting.html)
+- [`humanoid-retargeting-quickstart.mdx`](../../../../../../docs/animation/humanoid-retargeting-quickstart.mdx)
+- [`humanoid-retargeting.mdx`](../../../../../../docs/animation/humanoid-retargeting.mdx)

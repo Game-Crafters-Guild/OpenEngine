@@ -1,0 +1,30 @@
+#version 450
+
+// Test-only probe: reads the transmittance LUT through the lookup every sky pass uses
+// (GE_SkyTransmittanceToTop) at the (r, mu) pairs the test asks for (SkyAtmosphereLutReferenceTests).
+// The mapping and the planet's shadow live in that one function, so this is the read the sky-view
+// march, the multiscatter march, the sun disc and the glare all make.
+
+#include "Includes/sky_transmittance_lut.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uTransLUT;
+// In: (r, mu, -, -) per query. Out: the transmittance, rgb.
+layout(set = 0, binding = 1) buffer ProbeData { vec4 data[]; } uProbe;
+
+layout(push_constant) uniform ProbePC
+{
+    // x planet radius, y atmosphere radius, z query count
+    vec4 radiiAndCount;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (float(i) >= pc.radiiAndCount.z)
+        return;
+    vec2 rMu = uProbe.data[i].xy;
+    vec3 t = GE_SkyTransmittanceToTop(uTransLUT, rMu.x, rMu.y, pc.radiiAndCount.x, pc.radiiAndCount.y);
+    uProbe.data[i] = vec4(t, 1.0);
+}

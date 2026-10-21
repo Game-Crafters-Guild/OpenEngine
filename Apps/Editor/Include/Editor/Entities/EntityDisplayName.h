@@ -12,8 +12,9 @@ class World;
 namespace GameEngine::Editor
 {
 
-/// The entity's name as editor text shows it: its Name component, or its id label
-/// (EntityIdLabel) when it has none or the name is empty.
+/// The entity's name as editor text shows it: its Name component; when it has none or the
+/// name is empty, the UntitledName a component of it registers (EditorComponentTraits), else
+/// its id label (EntityIdLabel).
 std::string EntityDisplayName(const ECS::World& world, ECS::EntityHandle entity);
 
 /// The entity's id as editor text shows it: "Entity <id>".

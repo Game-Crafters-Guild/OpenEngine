@@ -23,6 +23,7 @@
 // modules: a delta of 0 here would mean the export never consulted the registry the engine keeps
 // (or that the two DLLs did not share it), whatever the engine-side unit arms say.
 
+#include "Scripting/ManagedElementTypes.h"
 #include "Scripting/ManagedTypeOwners.h"
 #include "Scripting/ScriptingABI.h"
 
@@ -120,14 +121,24 @@ TEST(ScriptingAbiUiTypeOwner, AMintedOwnerIsAcceptedByTheSameExportsAndRecordsNo
 
     uint64_t tagId = 0;
     const std::string tag = FreshTag("live");
-    ASSERT_EQ(GE_UI_RegisterElementType(owner, tag.c_str(), &tagId), GE_Result_Ok);
+    // The claim and the verdict are admitted only inside a registration window. The managed
+    // runtime this suite hosts installs the process's element-type callbacks first, so the window
+    // a script would ask for runs the runtime's callback, not this arm's: the thread is put where
+    // that callback runs instead.
+    {
+        const GameEngine::Scripting::ManagedElementTypes::ScopedWindowForTests window;
+        ASSERT_EQ(GE_UI_RegisterElementType(owner, tag.c_str(), &tagId), GE_Result_Ok);
+    }
     EXPECT_NE(tagId, 0ull) << "a live owner's fresh tag must be claimed";
 
     // The required order, which is also this arm's cleanup: orphan at the unload seam, then the
-    // verdict with the same id, and only then retire it.
+    // verdict with the same id from a window, and only then retire it.
     uint64_t orphaned = 0;
     EXPECT_EQ(GE_UI_OrphanElementTypes(owner, &orphaned), GE_Result_Ok);
-    EXPECT_EQ(GE_UI_NotifyReloadCompleted(owner), GE_Result_Ok);
+    {
+        const GameEngine::Scripting::ManagedElementTypes::ScopedWindowForTests window;
+        EXPECT_EQ(GE_UI_NotifyReloadCompleted(owner), GE_Result_Ok);
+    }
     EXPECT_EQ(GE_UI_ReleaseTypeOwner(owner), GE_Result_Ok);
 
     EXPECT_EQ(Rejections() - before, 0u) << "a live owner must not be recorded as a refusal";

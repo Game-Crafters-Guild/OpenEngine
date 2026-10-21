@@ -6,9 +6,15 @@
 
 A modern, high-performance, open-source game engine built for the community, by the community, with the goals of bringing power, scale, ease of use and true ownership to game developers.
 
-It also builds for the web: the same engine runs in the browser on WebGPU, shipped as the `@openengine/web` package with live examples. Its Web API is designed to bring the capabilities and performance of the engine into an HTML canvas anywhere.
+It also builds for the web: the same engine runs in the browser on WebGPU, shipped as the `@game-crafters-guild/openengine-web` package with live examples. Its Web API is designed to bring the capabilities and performance of the engine into an HTML canvas anywhere.
 
 **Platforms:** Windows x64 and ARM64 (primary), macOS on Apple Silicon and Intel (native Metal renderer), Linux, Steam Deck.
+
+![Open Engine editor showing a moonlit fantasy landscape, hierarchy, inspector, and asset browser.](docs/images/editor/editor-overview.webp)
+
+## Why Open Engine
+
+Game developers need a powerful, modern engine that is theirs: open source, owned by the community that uses it, and built on current ideas about how an engine should work. An MIT engine with no product and no monetization inside it cannot change its terms underneath your game or cancel the feature you depend on because it stopped paying; and it is built so an AI assistant can reach everything a person can. The whole answer, including why AI is part of it, is in [WHY-OPEN-ENGINE.md](WHY-OPEN-ENGINE.md) and at [openengine.dev/why](https://openengine.dev/why).
 
 ## Foundation
 
@@ -20,7 +26,7 @@ It also builds for the web: the same engine runs in the browser on WebGPU, shipp
 - A cross-platform editor for Windows, macOS, Linux and the web. Yes, the editor runs in the browser.
 - An ECS built on a true data-oriented design.
 - UI driven by CSS layout and XML, in the editor and in games.
-- Built for AI-assisted development: a bundled MCP server and CLI let AI agents drive the running editor, and an in-editor AI assistant ships as a preview. See [docs/MCP_SETUP.md](docs/MCP_SETUP.md).
+- Built for AI-assisted development: a bundled MCP server and CLI let AI agents drive the running editor, and an in-editor AI assistant ships as a preview. See [docs/getting-started/mcp-setup.mdx](docs/getting-started/mcp-setup.mdx).
 
 ## Try it in the browser
 
@@ -31,7 +37,7 @@ Live examples, built from the engine and published with each release (WebGPU):
 - [Model viewer](https://game-crafters-guild.github.io/opengine-web/package/examples/model-viewer/index.html): sample models or your own `.glb`, orbit and pan, time of day, exposure, and the model's animation clips.
 - [Instancing](https://game-crafters-guild.github.io/opengine-web/package/examples/instancing/index.html): one model drawn up to 100,000 times, each copy an entity.
 
-The library behind them is [`@openengine/web`](https://www.npmjs.com/package/@openengine/web) (`npm install @openengine/web@alpha`); its README is the guide. The examples' source and the built package live in [opengine-web](https://github.com/Game-Crafters-Guild/opengine-web).
+The library behind them is [`@game-crafters-guild/openengine-web`](https://www.npmjs.com/package/@game-crafters-guild/openengine-web) (`npm install @game-crafters-guild/openengine-web@alpha`); its README is the guide. The examples' source and the built package live in [opengine-web](https://github.com/Game-Crafters-Guild/opengine-web).
 
 ## Screenshots
 
@@ -77,25 +83,25 @@ cmake --build --preset vs2026-x64-local --config DebugFast --target Editor -j 12
 build\vs2026-x64-local\bin\DebugFast\Apps\Editor\Editor.exe
 ```
 
-The first configure bootstraps vcpkg and builds the third-party dependencies once (expect tens of minutes); every build after that is incremental. macOS and Linux build the same Editor through their own presets (`macos-arm64-local`, `linux-x64-local`); platform prerequisites, the Ninja fast build, Steam Deck, tests and troubleshooting are in [BUILD.md](BUILD.md). With the editor running, [Your first project](docs/first-project.html) creates a project, saves a scene and exports a game.
+The first configure bootstraps vcpkg and builds the third-party dependencies once (expect tens of minutes); every build after that is incremental. macOS and Linux build the same Editor through their own presets (`macos-arm64-local`, `linux-x64-local`); platform prerequisites, the Ninja fast build, Steam Deck, tests and troubleshooting are in [BUILD.md](BUILD.md). With the editor running, [Your first project](docs/getting-started/first-project.mdx) creates a project, saves a scene and exports a game.
 
 ## Repository layout
 
 ```
 Engine/               The engine library: Include/, Source/, and one library per subsystem under Modules/
+  Assets/             Engine content the build stages beside the Editor and the Player: materials, render pipelines, textures, UI, graphs
   ECSModules/         Shared ECS components (Audio, Components, Rendering)
 Apps/Editor/          The editor (C++, with CSS/XML UI)
 Apps/Player/          The game runtime the editor exports games with
-Apps/WebLibrary/      The web build: the WebGPU engine module and the @openengine/web library
+Apps/WebLibrary/      The web build: the WebGPU engine module and the @game-crafters-guild/openengine-web library
 Managed/              C# side: CoreBridge, HotReload, Scripting.ABI, CompileServerHost
 Packages/             Add-on packages: the AI assistant, version-control integrations, post effects, import tools
-Assets/               Engine assets: materials, render pipelines, textures, UI, graphs
 Examples/             Standalone demos (BUILD_EXAMPLES)
 Tests/                Integration tests (module unit tests live next to each module)
 ThirdParty/           Bundled third-party code, each with its own license
 cmake/                Build scripts, presets and ports
 mcp/                  The MCP server and CLI that drive a running editor
-docs/                 Documentation (start at docs/index.html)
+docs/                 Documentation (start at docs/README.md)
 Tools/                Developer tools and scripts
 dependencies/         Auto-provisioned vcpkg checkout (gitignored)
 build/                Build trees, one per preset (gitignored)
@@ -108,6 +114,12 @@ This is an alpha: APIs and file formats may change between releases.
 The engine is yours as much as ours: open issues, send pull requests, and help shape it. [CONTRIBUTING.md](CONTRIBUTING.md) and [CodingStyle.md](CodingStyle.md) say how.
 
 Join us on Discord: https://discord.gg/c8JASm4q8
+
+## A note on AI
+
+AI tools were used in the development of Open Engine. The engine is not "vibe coded": every change draws on its developers' experience and passes human review before it lands, and the same review stands at the door for contributions. Pull requests are judged on design, correctness and evidence, whoever or whatever wrote them; generated code that is not understood, tested and explained by its author is not accepted.
+
+The team welcomes the responsible use of AI. The engine ships with built-in MCP tools and integrations to enable agentic workflows driven by human creativity and design.
 
 ## License
 

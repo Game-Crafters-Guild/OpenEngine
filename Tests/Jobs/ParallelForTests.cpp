@@ -9,6 +9,7 @@
 // exists.
 
 #include "HeldSlabFreelist.h"
+#include "HeldWorkers.h"
 
 #include "JobSystem/ParallelAlgorithms.h"
 #include "JobSystem/TaskSlabPool.h"
@@ -34,44 +35,6 @@ namespace GameEngine::Tests
 
 namespace
 {
-
-using SteadyClock = std::chrono::steady_clock;
-
-bool WaitUntil(const std::function<bool()>& pred, std::chrono::milliseconds timeout)
-{
-    const auto deadline = SteadyClock::now() + timeout;
-    while (!pred())
-    {
-        if (SteadyClock::now() >= deadline)
-            return false;
-        std::this_thread::yield();
-    }
-    return true;
-}
-
-// Holds every worker of the pool inside one task each until Release().
-class HeldWorkers
-{
-  public:
-    explicit HeldWorkers(WorkStealingThreadPool& pool)
-    {
-        const size_t workers = pool.GetWorkerCount();
-        for (size_t i = 0; i < workers; ++i)
-        {
-            pool.EnqueueWork([this] {
-                m_Holding.fetch_add(1);
-                while (!m_Released.load())
-                    std::this_thread::yield();
-            });
-        }
-        EXPECT_TRUE(WaitUntil([this, workers] { return m_Holding.load() == workers; }, std::chrono::seconds(10)));
-    }
-    void Release() { m_Released.store(true); }
-
-  private:
-    std::atomic<size_t> m_Holding{0};
-    std::atomic<bool> m_Released{false};
-};
 
 // Runs a task on the pool and waits for it to finish, from behind whatever
 // the test thread queued before it (one producer's tasks dequeue in order on
@@ -613,7 +576,7 @@ TEST(ParallelFor, BackgroundBodyForkPublishesNoNormalWork)
 // A thread that is no worker forking back to back while every worker is busy:
 // the caller runs every unit of each run and closes it, and the helpers of the
 // closed runs wait in the queue. The pool keeps at most
-// kMaxUnstartedClaimHelpersPerWorker unstarted helpers per worker in a lane,
+// kMaxUnstartedForkTasksPerWorker unstarted helpers per worker in a lane,
 // so the queue and the slabs it holds (each queued helper's envelope and at
 // most one run block) stay within that bound however many forks are issued,
 // and drain once the workers are free.
@@ -622,7 +585,7 @@ TEST(ParallelFor, BackToBackForksOnABusyPoolKeepTheQueuedHelpersBounded)
     WorkStealingThreadPool pool(4);
     HeldWorkers held(pool);
     const int64_t slabsBefore = JobSystem::Detail::GetTaskSlabStatsForTests().Live;
-    const size_t bound = WorkStealingThreadPool::kMaxUnstartedClaimHelpersPerWorker * pool.GetWorkerCount();
+    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
 
     constexpr size_t kForks = 1000;
     std::atomic<size_t> covered{0};
@@ -697,7 +660,7 @@ TEST(ParallelFor, AHelperInsideAUnitNoLongerHoldsItsCount)
 {
     WorkStealingThreadPool pool(4);
     const size_t workers = pool.GetWorkerCount();
-    const size_t bound = WorkStealingThreadPool::kMaxUnstartedClaimHelpersPerWorker * workers;
+    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * workers;
 
     std::atomic<size_t> entered{0};
     std::atomic<bool> gate{false};
@@ -732,7 +695,7 @@ TEST(ParallelFor, QueuedBackgroundHelpersLeaveANormalForkItsHelpers)
 {
     WorkStealingThreadPool pool(4);
     const size_t workers = pool.GetWorkerCount();
-    const size_t bound = WorkStealingThreadPool::kMaxUnstartedClaimHelpersPerWorker * workers;
+    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * workers;
     HeldWorkers held(pool);
 
     ParallelForOptions background;
@@ -782,7 +745,7 @@ TEST(ParallelFor, ForksTakeNoHeapAllocationOnceThePoolExists)
     WorkStealingThreadPool pool(4);
     const uint64_t heapAllocsAfterConstruction = JobSystem::Detail::GetTaskSlabStatsForTests().HeapAllocs;
     HeldWorkers held(pool);
-    const size_t bound = WorkStealingThreadPool::kMaxUnstartedClaimHelpersPerWorker * pool.GetWorkerCount();
+    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
 
     ParallelForOptions normal;
     normal.Helpers = 1;

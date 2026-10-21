@@ -252,7 +252,7 @@ DDGISkinnedGeometry::TickResult DDGISkinnedGeometry::Tick(
             info.IndexBuffer = bindings.indexBuffer;
             info.CoreStrideBytes = coreStride;
             info.VertexOffset = entry.vertexOffset;
-            info.VertexCount = static_cast<uint32_t>(entry.coreSubAlloc.size / coreStride);
+            info.VertexCount = static_cast<uint32_t>(entry.coreSubAlloc.Size / coreStride);
             info.FirstIndex = entry.firstIndex;
             info.IndexCount = entry.indexCount;
             info.IndexType = entry.indexType;

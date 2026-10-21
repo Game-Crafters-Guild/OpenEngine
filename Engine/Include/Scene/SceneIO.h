@@ -38,17 +38,18 @@ void ClearLastSceneIOError();
 
 // One component or field assignment the loader could not apply. The load CONTINUED past it, so the
 // entity exists and everything else about it is live — this records exactly what did not make it in.
-// A scene authored against a newer build than the one opening it (a component type, a field or an
-// enumerator that this binary's reflection tables do not know), or one carrying a value whose syntax
-// this parser cannot read at all, produces one of these per assignment instead of costing the user
-// the whole scene. Structural errors are not in this class and still fail the load: a dangling
+// A scene authored against a newer build than the one opening it (a field or an enumerator that this
+// binary does not know), a field name the component does not have (renamed, removed or misspelled),
+// or a value whose syntax this parser cannot read at all produces one of these per assignment instead
+// of costing the user the whole scene. A component type no module registers is kept, not recorded
+// here. Structural errors are not in this class and still fail the load: a dangling
 // entity or resource reference is a claim about the document, not a value a component can decline.
 struct SceneLoadSkip
 {
     std::string entityId;       // instantiated scene entity id (include/blueprint prefix applied)
     std::string component;      // authored component name
     std::string field;          // authored property key; empty when the whole component failed
-    std::string message;        // the error exactly as the schema reported it
+    std::string message;        // the schema's error, or the fix for a field the component does not have
     std::filesystem::path file; // file the line came from (an include, for included entities)
     int line = 0;               // 0 when unknown
 

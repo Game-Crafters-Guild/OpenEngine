@@ -1,5 +1,5 @@
 // Boot sequencing for EditorApplication: idle the world path while the project
-// picker covers the canvas, and open GE_EDITOR_STARTUP_SCENE only after Update
+// picker covers the canvas, and open the startup scene only after Update
 // has a settled workspace. Split from EditorApplication.cpp.
 #include "EditorApplication.h"
 
@@ -37,26 +37,26 @@ void EditorApplication::SyncWorldPathForProjectPicker()
 
 void EditorApplication::QueueDeferredStartupScene()
 {
-    if (!m_SceneEditor)
+    const auto& config = GetConfig();
+    if (!m_SceneEditor || config.WorkspaceDirectoryIsFallback || config.WorkspaceDirectory.empty())
         return;
+    m_DeferredStartupSceneWorkspace = config.WorkspaceDirectory;
+    m_DeferredStartupScene.clear();
     // Web host maps `?GE_EDITOR_STARTUP_SCENE=` (and WebMain seeds it from the
     // project's game.config when `?project=` is set) so a freshly planted
     // project actually opens its scene. Queue it for Update: doing the open
     // from Initialize is the same boot-open class the wasm last-project skip
     // avoids.
     const char* startupScene = std::getenv("GE_EDITOR_STARTUP_SCENE");
-    if (!startupScene || startupScene[0] == '\0')
-        return;
-    m_DeferredStartupScene = startupScene;
-    m_DeferredStartupSceneWorkspace = GetConfig().WorkspaceDirectory;
-    Logger::Log::Info(
-        "Editor: deferring GE_EDITOR_STARTUP_SCENE '{}' until the world path is settled",
-        startupScene);
+    if (startupScene && startupScene[0] != '\0')
+        m_DeferredStartupScene = startupScene;
+    Logger::Log::Info("Editor: deferring startup scene for '{}' until the world path is settled",
+                      m_DeferredStartupSceneWorkspace.string());
 }
 
 void EditorApplication::TryOpenDeferredStartupScene()
 {
-    if (m_DeferredStartupScene.empty() || !m_SceneEditor || m_IsShuttingDown)
+    if (m_DeferredStartupSceneWorkspace.empty() || !m_SceneEditor || m_IsShuttingDown)
         return;
 
     if (m_StartupFrameCount < GetConfig().StartupSceneOpenFrame)
@@ -71,6 +71,14 @@ void EditorApplication::TryOpenDeferredStartupScene()
     const std::filesystem::path expected = m_DeferredStartupSceneWorkspace.lexically_normal();
     if (workspace.empty() || workspace != expected)
         return;
+
+    m_DeferredStartupSceneWorkspace.clear();
+    if (m_DeferredStartupScene.empty())
+    {
+        // Boot owns the interim scene; there are no outgoing edits to save.
+        m_SceneEditor->OpenProjectStartupScene(workspace, /*outgoingChangesDiscarded=*/true);
+        return;
+    }
 
     Logger::Log::Info("Editor: opening GE_EDITOR_STARTUP_SCENE '{}'",
                       m_DeferredStartupScene.string());

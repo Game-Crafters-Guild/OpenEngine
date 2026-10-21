@@ -284,11 +284,12 @@ private:
     // OnAdd: invoked after a component is first added to an entity (not on update/set of existing).
     // OnSet: invoked after a component's value is written (both initial add and subsequent updates).
     //
-    // Invoke receives the source entity handle. Callbacks registered via the
-    // legacy `void(*)(T&)` API ignore the entity; the entity-aware
-    // `void(*)(EntityHandle, T&)` API uses it. Both coexist.
+    // Invoke receives the world that runs the hook and the source entity handle.
+    // Callbacks registered via the `void(*)(T&)` API ignore both; the
+    // entity-aware `void(*)(EntityHandle, T&)` API uses the entity; the
+    // world-aware remove hook uses both.
     struct ComponentHook {
-        void(*Invoke)(EntityHandle, void* componentPtr, void* userData);
+        void(*Invoke)(const World&, EntityHandle, void* componentPtr, void* userData);
         void* UserData = nullptr;             // per-registration context (e.g. typed callback pointer)
         std::size_t ComponentSize;            // sizeof(T), for batch iteration stride
         uint64 RegistrationId = 0;
@@ -349,6 +350,15 @@ private:
     std::size_t m_WorldGeneration = 0;
 
 private:
+    // GetEntityHandleEpoch, and the last epoch Clear handed out: every Clear takes a new one,
+    // so a run of handles once left is never named again by a later Clear.
+    uint64 m_EntityHandleEpoch = 0;
+    uint64 m_LastEntityHandleEpoch = 0;
+    // Per slot, the highest version issued in this run when it is above the slot's own: a
+    // restore brought back an older entity in a slot that had issued newer handles since.
+    // Empty unless a restore needed it; Clear empties it.
+    std::vector<EntityVersion> m_IssuedVersionFloor;
+
     // Bulk operations mode
     bool bulkOperationMode = false;
     // When true, ABI structural operations (create/destroy/add/remove component) queue
@@ -445,6 +455,14 @@ public:
         return RegisterComponentHook<T>(ComponentHookKind::Remove, callback);
     }
 
+    // World-aware variant. Also receives the world the component leaves, for a
+    // resource that belongs to one world while copies of the component's bytes
+    // may sit in another (a copy's teardown must not release the original's).
+    template<Component T>
+    ComponentHookToken RegisterOnRemove(void(*callback)(const World&, EntityHandle, T&)) {
+        return RegisterComponentHook<T>(ComponentHookKind::Remove, callback);
+    }
+
     // Count registrations whose callback OR invocation thunk lies in a module
     // image [base, base + size), once per hook. Includes add/set/remove hooks
     // across this linked ECS copy's live worlds. Main-thread unload boundary:
@@ -531,21 +549,21 @@ public:
     void InvokeRemoveHook(ComponentTypeId typeId, EntityHandle entity, void* ptr) const {
         auto it = m_OnRemoveHooks.find(typeId);
         if (it != m_OnRemoveHooks.end()) {
-            it->second.Invoke(entity, ptr, it->second.UserData);
+            it->second.Invoke(*this, entity, ptr, it->second.UserData);
         }
     }
 
     void InvokeAddHook(ComponentTypeId typeId, EntityHandle entity, void* ptr) const {
         auto it = m_OnAddHooks.find(typeId);
         if (it != m_OnAddHooks.end()) {
-            it->second.Invoke(entity, ptr, it->second.UserData);
+            it->second.Invoke(*this, entity, ptr, it->second.UserData);
         }
     }
 
     void InvokeSetHook(ComponentTypeId typeId, EntityHandle entity, void* ptr) const {
         auto it = m_OnSetHooks.find(typeId);
         if (it != m_OnSetHooks.end()) {
-            it->second.Invoke(entity, ptr, it->second.UserData);
+            it->second.Invoke(*this, entity, ptr, it->second.UserData);
         }
     }
 
@@ -641,7 +659,8 @@ public:
     // Editor/tooling: destroy without releasing the entity index back to the free list.
     // This allows undo/redo flows to revive the same EntityHandle (index+version) later.
     void DestroyEntityImmediatePreserveHandle(EntityHandle entity);
-    // Editor/tooling: revive a previously preserved entity handle (same index+version).
+    // Editor/tooling: revive a previously preserved entity handle (same index+version), taking
+    // its slot off the free list when a restore or a destroy put it there.
     // Returns true on success (or if already alive); false if the handle is incompatible.
     bool ReviveEntityImmediatePreserveHandle(EntityHandle entity);
 
@@ -838,9 +857,10 @@ public:
 	    void CopyComponent(EntityHandle src, EntityHandle dst, ComponentTypeId typeId);
 	    EntityHandle CloneEntity(EntityHandle source);
 	    // In-memory snapshots preserve entity handles, including undo-reserved dead
-	    // slots. Restore still resets the World's lifecycle generation via Clear(),
-	    // and leaves the World untouched for any stream that is not a snapshot of
-	    // the current format.
+	    // slots, and record the run they belong to (GetEntityHandleEpoch); a restore keeps
+	    // the world's run only for a snapshot of that run. Restore still resets
+	    // the World's lifecycle generation via Clear(), and leaves the World untouched
+	    // for any stream that is not a snapshot of the current format.
 	    std::vector<uint8_t> SerializeWorld();
 	    void DeserializeWorld(const std::vector<uint8_t>& data);
             void Clear();
@@ -1194,6 +1214,16 @@ public:
     // consumer needs regardless).
     uint64 GetLifecycleResetGeneration() const { return m_LifecycleEvents.ResetGeneration(); }
 
+    // Which run of entity handles the world's handles belong to. Within one run no handle is
+    // issued twice. Clear starts a new run (entity versions restart, so a handle kept from an
+    // earlier run may name an unrelated entity). DeserializeWorld brings back a snapshot's
+    // handles: a snapshot of the run the world is in keeps the run, and every slot stays past
+    // the versions it issued, so an entity created after the snapshot never has its handle
+    // issued again; a snapshot from an earlier run starts a new one. Data kept outside the
+    // world by entity handle stays valid while this is unchanged, including through the
+    // in-place restore of a snapshot, which still moves GetLifecycleResetGeneration.
+    uint64 GetEntityHandleEpoch() const { return m_EntityHandleEpoch; }
+
     // Swap generation — the consumer-cadence guard (F1 pattern). Increments
     // once per SwapLifecycleEvents(). A consumer caches the generation it
     // last consumed; on observing a gap > 1 (it was disabled or throttled
@@ -1276,7 +1306,7 @@ private:
 
     // Unified add-or-set body behind typed AddComponentImpl<T>, type-erased
     // SetComponentBytesImmediate, and (via the component handlers) deferred
-    // ADD_COMPONENT/ADD_REQUIRED_COMPONENT/SET_COMPONENT playback. The fast
+    // ADD_COMPONENT/SET_COMPONENT playback. The fast
     // path is a data-only SET; the structural branch is an ADD — that
     // classification happens only here.
     // Components are trivially copyable (Component concept), so the raw byte
@@ -1288,7 +1318,9 @@ private:
     // Shared removal behind C++ operations and runtime blob removal. The tri-state
     // result lets C++ operations invalidate queries even when the component is
     // absent, while blob removal reports absence without a structural change.
-    enum class RemoveComponentResult { Removed, ComponentAbsent, InvalidEntity };
+    // RequiredByAnother: the entity holds a component that requires this one
+    // (RequiredComponents.h); remove that one first. Logged with both names.
+    enum class RemoveComponentResult { Removed, ComponentAbsent, InvalidEntity, RequiredByAnother };
     RemoveComponentResult RemoveComponentInternal(EntityHandle entity, ComponentTypeId typeId);
 
     // ----------------------------------------------------------------
@@ -1335,13 +1367,53 @@ private:
 
     // Create entity without acquiring mutex (for internal use when mutex is already held)
     EntityHandle CreateEntityUnsafe();
+    // The version the next entity in `index` takes: one past the highest the slot issued in
+    // this run of handles. Caller holds worldMutex.
+    EntityVersion NextIssuedVersion(EntityIndex index) const;
 
     // Get thread-local command buffer
     CommandBuffer& GetCommandBuffer();
 
     // Archetype graph edge resolution: given a source archetype and a component to add/remove,
     // return the target archetype, creating it if needed. Caches the edge for O(1) future lookups.
+    // The add edge's target holds typeId and everything it requires
+    // (RequiredComponents.h), so a structural add is one move.
     Archetype* GetOrCreateArchetypeForAdd(Archetype* source, ComponentTypeId typeId);
+
+    // Adds to `signature` every component its members require, transitively,
+    // and registers the sizes of the types it adds. Caller holds worldMutex
+    // exclusively.
+    void AddRequiredClosure(ComponentSignature& signature);
+
+    // A column a requirement added to an archetype beyond the components a
+    // creation call supplies, with the value it starts with.
+    struct RequiredColumn
+    {
+        uint32_t Offset = 0;
+        std::vector<std::uint8_t> Default;
+    };
+
+    // The columns of `archetype` outside `supplied`, each with its required
+    // type's default value. Resolved once per creation call or batch.
+    void ResolveRequiredColumns(Archetype& archetype, const ComponentSignature& supplied,
+                                std::vector<RequiredColumn>& out) const;
+
+    // Writes each column's default value for the entity at `loc`.
+    static void WriteRequiredColumns(Archetype& archetype, EntityLocation loc,
+                                     std::span<const RequiredColumn> columns);
+
+    // The structural add's requirement steps: write each column that `target`
+    // holds and `from` lacks, other than `added` (the type the caller
+    // supplies), with its default; then, once every column holds its value,
+    // signal each as an add (hooks, dirty feed, lifecycle event) like the
+    // supplied type.
+    void WriteRequiredDefaultsAfterAdd(EntityHandle entity, const ComponentSignature& from,
+                                       Archetype& target, ComponentTypeId added);
+    void SignalRequiredAdds(EntityHandle entity, const ComponentSignature& from,
+                            const ComponentSignature& to, ComponentTypeId added);
+
+    // A component of `signature` that requires `typeId` directly, or 0.
+    static ComponentTypeId FindRequirerOf(const ComponentSignature& signature, ComponentTypeId typeId);
     Archetype* GetOrCreateArchetypeForRemove(Archetype* source, ComponentTypeId typeId);
     // The same resolution for the entity-activity pair, which moves as one:
     // `disable` adds both tags, otherwise both are removed. Caches on the
@@ -1388,7 +1460,7 @@ private:
         static_assert(sizeof(void*) >= sizeof(callback), "void* must be able to hold a function pointer");
         ComponentHook hook{};
         hook.UserData = reinterpret_cast<void*>(callback);
-        hook.Invoke = [](EntityHandle, void* ptr, void* data) {
+        hook.Invoke = [](const World&, EntityHandle, void* ptr, void* data) {
             reinterpret_cast<void(*)(T&)>(data)(*static_cast<T*>(ptr));
         };
         hook.ComponentSize = sizeof(T);
@@ -1403,8 +1475,24 @@ private:
         static_assert(sizeof(void*) >= sizeof(callback), "void* must be able to hold a function pointer");
         ComponentHook hook{};
         hook.UserData = reinterpret_cast<void*>(callback);
-        hook.Invoke = [](EntityHandle entity, void* ptr, void* data) {
+        hook.Invoke = [](const World&, EntityHandle entity, void* ptr, void* data) {
             reinterpret_cast<void(*)(EntityHandle, T&)>(data)(entity, *static_cast<T*>(ptr));
+        };
+        hook.ComponentSize = sizeof(T);
+        return InstallComponentHook(kind, GetComponentTypeId<T>(), hook);
+    }
+
+    template<Component T>
+    ComponentHookToken RegisterComponentHook(ComponentHookKind kind,
+                                             void(*callback)(const World&, EntityHandle, T&)) {
+        if (!callback)
+            return {};
+        AutoComponentRegistrar<T>::EnsureRegistered();
+        static_assert(sizeof(void*) >= sizeof(callback), "void* must be able to hold a function pointer");
+        ComponentHook hook{};
+        hook.UserData = reinterpret_cast<void*>(callback);
+        hook.Invoke = [](const World& world, EntityHandle entity, void* ptr, void* data) {
+            reinterpret_cast<void(*)(const World&, EntityHandle, T&)>(data)(world, entity, *static_cast<T*>(ptr));
         };
         hook.ComponentSize = sizeof(T);
         return InstallComponentHook(kind, GetComponentTypeId<T>(), hook);

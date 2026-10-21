@@ -1,9 +1,32 @@
 #version 450
 
+
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
 layout(set = 0, binding = 0) uniform sampler2D uFogged;
-layout(set = 0, binding = 1) uniform sampler2D uSceneSource;
+layout(set = 0, binding = 1) uniform sampler2D uDepth;
+// The view's exposure state: scene colour is stored at the frame's pre-exposure P, while the
+// fog glow threshold, knee and contribution cap are absolute scene-linear values, so the
+// brightness they are compared with is divided by P. The extracted glow stays in stored units.
+#define GE_EXPOSURE_HISTORY_BINDING 2
+#include "Includes/exposure_history.glsl"
+layout(set = 0, binding = 3, std140) uniform ViewParamsBlock
+{
+#define GE_VP_MAT4(name) mat4 name;
+#define GE_VP_VEC4(name) vec4 name;
+#define GE_VIEWPARAMS_CORE_ONLY 1
+#include "Includes/view_params_fields.glsl"
+#undef GE_VIEWPARAMS_CORE_ONLY
+#undef GE_VP_VEC4
+#undef GE_VP_MAT4
+} ViewParams;
+layout(set = 0, binding = 4, std140) uniform HeightFogParamsBlock
+{
+#include "Includes/height_fog_params_fields.glsl"
+} HeightFogParams;
+// What the sky pass draws its backdrop from; read only when the fog's colour comes from the sky.
+layout(set = 0, binding = 5) uniform sampler2D uSkyBackdrop;
+#include "Includes/fog_glow_layer.glsl"
 
 layout(push_constant) uniform FogGlowFastPC
 {
@@ -29,19 +52,15 @@ vec3 Median3(vec3 a, vec3 b, vec3 c)
 
 vec3 FilterFogSample(vec2 uv)
 {
-    vec4 fogged = texture(uFogged, uv);
-    vec4 scene = texture(uSceneSource, uv);
-    float transmittance = clamp(fogged.a / max(scene.a, 1e-5), 0.0, 1.0);
-    float opacity = 1.0 - transmittance;
+    // The fog's own light (GE_FogGlowLayer), so surfaces and silhouettes never leak into the glow
+    // mask.
+    vec4 layer = GE_FogGlowLayer(uv);
     float fade = smoothstep(pc.fogGlowFadeStart,
                             max(pc.fogGlowFadeEnd, pc.fogGlowFadeStart + 1e-4),
-                            opacity);
-    // Fog passes satisfy fogged = scene * transmittance + fog radiance.
-    // Reconstructing the additive term prevents surfaces and silhouettes from
-    // leaking into the glow mask.
-    vec3 fogRadiance = max(fogged.rgb - scene.rgb * transmittance, vec3(0.0));
+                            layer.a);
+    vec3 fogRadiance = max(layer.rgb, vec3(0.0));
     vec3 source = min(fogRadiance, vec3(65000.0)) * fade;
-    float brightness = max(max(source.r, source.g), source.b);
+    float brightness = max(max(source.r, source.g), source.b) / GE_PreExposure();
     float knee = max(pc.fogGlowKnee, 1e-5);
     float soft = clamp((brightness - pc.fogGlowThreshold + knee) / (2.0 * knee), 0.0, 1.0);
     soft = soft * soft * knee;

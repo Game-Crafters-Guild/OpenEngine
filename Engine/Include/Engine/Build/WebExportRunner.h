@@ -15,8 +15,9 @@ class BuildPipeline;
 ///
 /// The Web platform does not go through BuildPipeline's native compile phases —
 /// nothing is compiled here. The wasm Player is an export template built ahead
-/// of time; the export stages the project's content, cooks its shaders to WGSL
-/// and packs the result beside a verbatim copy of that template.
+/// of time; the export stages the project content the desktop export ships, its
+/// scenes stripped of their editor-only components, cooks its shaders to WGSL and
+/// packs the result beside a verbatim copy of that template.
 ///
 /// `pipeline` supplies the cancellation signal and the child-process host.
 /// `onLine` receives each line of exporter output.

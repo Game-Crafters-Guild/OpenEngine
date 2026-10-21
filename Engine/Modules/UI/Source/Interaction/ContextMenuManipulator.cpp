@@ -100,13 +100,13 @@ UIElement::EventHandlerToken ContextMenuManipulator::SubscribeStamped(
 void ContextMenuManipulator::OnActivated(UIElement& target, float x, float y)
 {
     // Menus anchor to the element, not the pointer, so they align like dropdowns
-    // regardless of where inside the control the release fell.
+    // regardless of where inside the control the release fell: below the box as
+    // it is drawn, which a CSS transform moves away from the layout rect.
     (void)x;
     (void)y;
+    const Mathematics::Rect drawn = target.GetWindowRect();
     const Mathematics::Vector2 anchor =
-        m_Anchor ? m_Anchor(target)
-                 : Mathematics::Vector2(target.GetLayoutX(),
-                                        target.GetLayoutY() + target.GetLayoutHeight());
+        m_Anchor ? m_Anchor(target) : Mathematics::Vector2(drawn.X, drawn.Bottom());
 
     Platform::Window* window = nullptr;
     if (UIManager* manager = target.GetOwnerManager())

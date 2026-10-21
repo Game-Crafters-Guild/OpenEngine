@@ -7745,7 +7745,7 @@ void AssetRegistry::TickPersistence()
     // stalls on database writes. Uses flushInProgress to prevent concurrent
     // flushes on the same source.
     auto submitAsyncFlush = [this](SourceEntry* src, AssetDatabase::IAssetStore* store,
-                                    std::filesystem::path dbFile, bool isProject) {
+                                    std::filesystem::path dbFile) {
         // Atomic claim: only one thread proceeds if multiple ticks see dirty=true
         // before any flush starts.
         bool expected = false;
@@ -7761,7 +7761,7 @@ void AssetRegistry::TickPersistence()
 
         if (m_JobSystem)
         {
-            m_JobSystem->Submit([src, store, dbFile = std::move(dbFile), alias, isProject]() {
+            m_JobSystem->Submit([src, store, dbFile = std::move(dbFile), alias]() {
                 FlushClaimRelease release{src->FlushInProgress};
                 std::string err;
                 // Never park a job worker on another process's write lock: the
@@ -7809,7 +7809,7 @@ void AssetRegistry::TickPersistence()
 
             if (store && !dbFile.empty())
             {
-                submitAsyncFlush(m_ProjectSource.get(), store, std::move(dbFile), true);
+                submitAsyncFlush(m_ProjectSource.get(), store, std::move(dbFile));
             }
         }
     }
@@ -7856,7 +7856,7 @@ void AssetRegistry::TickPersistence()
             std::filesystem::path dbFile = src->DbFile;
             if (store && !dbFile.empty())
             {
-                submitAsyncFlush(src, store, std::move(dbFile), false);
+                submitAsyncFlush(src, store, std::move(dbFile));
             }
         }
     }

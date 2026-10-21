@@ -88,7 +88,7 @@ void VcsCommitDialog::Show(GameEngine::UIManager* uiManager,
     {
         if (auto* root = uiManager->GetRootElement())
         {
-            if (auto* field = root->FindById("commit-message-field"))
+            if (auto* field = root->FindById("commit-message-field"_sid))
             {
                 if (auto* tf = dynamic_cast<GameEngine::TextField*>(field))
                 {
@@ -131,7 +131,7 @@ void VcsCommitDialog::Show(GameEngine::UIManager* uiManager,
             if (m_DialogRoot && m_UIManager == uiManager)
             {
                 if (auto* field = dynamic_cast<GameEngine::TextField*>(
-                        m_DialogRoot->FindById("commit-message-field")))
+                        m_DialogRoot->FindById("commit-message-field"_sid)))
                 {
                     uiManager->FocusElement(field);
                     field->SelectAll();

@@ -96,6 +96,24 @@ public:
     /// that acts in the editor: a program name searched for on PATH or a full path.
     static std::string NodeExecutable();
 
+    /// The conversation's text size in px, the size slider's value (its body text; the
+    /// smaller tiers scale with it): kDefaultTextSizePx until the user changes it, never
+    /// below the default, so no text falls under the editor's 12 px floor.
+    static constexpr float kDefaultTextSizePx = 14.0f;
+    static constexpr float kMaxTextSizePx = 24.0f;
+    static float TextSize();
+    /// Stores `px`, clamped to the slider's range.
+    static void SetTextSize(float px);
+
+    /// Dictation (where the platform offers speech input): whether the microphone is
+    /// held to speak (a press starts, the release stops) instead of clicked on and off.
+    static bool HoldToSpeak();
+    static void SetHoldToSpeak(bool hold);
+    /// Whether stopping the microphone sends the dictated prompt once its last words
+    /// arrive. Typing or sending never triggers it.
+    static bool SendWhenMicStops();
+    static void SetSendWhenMicStops(bool send);
+
     /// The mode a new conversation starts in: the one last chosen, Auto until the
     /// user first chooses.
     static AssistantMode LastMode();

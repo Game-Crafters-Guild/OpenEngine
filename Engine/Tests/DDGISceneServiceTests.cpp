@@ -590,7 +590,9 @@ TEST(ThreadedBvhPoolTest, PooledTraversalHitsTheSameTrianglesAsTheSourceTrees)
             // Only well defined when one triangle uniquely owns the closest t
             // (a shared edge can tie), same caveat as SceneBvhTests'.
             if (tiedCount == 1)
+            {
                 EXPECT_EQ(reference.Triangle + triangleBase, traversed.Triangle) << "mesh " << m;
+            }
         }
     }
     EXPECT_GT(hitsChecked, 0u) << "the fixture produced no hits — the parity check proved nothing";

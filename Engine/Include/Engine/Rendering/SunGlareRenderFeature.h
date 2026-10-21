@@ -22,8 +22,8 @@ struct SunGlarePushConstants
                                                          // screen probe is off this frame
     float CameraShadow[4]{0.0f, 0.0f, 0.0f, 0.0f};       // xyz camera position, w cascades ready
     // x = terrain-skyline visibility in [0, 1], computed on the CPU from the heightfield so it
-    // holds whether or not the sun is on screen. yzw are std140 padding: a push-constant block
-    // member cannot be tighter than a vec4.
+    // holds whether or not the sun is on screen. y = planet radius, z = atmosphere radius (the
+    // transmittance LUT's shell, metres). w is std140 padding.
     float Horizon[4]{1.0f, 0.0f, 0.0f, 0.0f};
 };
 // The GPU ABI is the member OFFSETS, so those are what is asserted. The struct carries no
@@ -110,6 +110,7 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t GetViewParamsBinding() const { return m_ViewParamsBinding; }
     uint32_t GetShadowArrayBinding() const { return m_ShadowArrayBinding; }
     uint32_t GetShadowDataBinding() const { return m_ShadowDataBinding; }
+    uint32_t GetExposureBinding() const { return m_ExposureBinding; }
 
   private:
     ::GameEngine::Rendering::IDevice* m_Device = nullptr;
@@ -128,6 +129,7 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t m_ViewParamsBinding = 2;
     uint32_t m_ShadowArrayBinding = 3;
     uint32_t m_ShadowDataBinding = 4;
+    uint32_t m_ExposureBinding = 5;
     // Flat rather than a map: a frame has a handful of views, this is written once and read
     // once per view per frame, and a linear scan beats a hash at that size. Reused across
     // frames so the per-frame refill does not allocate.

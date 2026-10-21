@@ -92,12 +92,12 @@ if(BUILD_TESTING)
         FileSystemObjects
         AssetCore
         Logger
+        Memory
         GTest::gtest
         GTest::gtest_main
     )
-    target_sources(MaterialGraphCompilerTests PRIVATE
-        ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/stb_image_impl.cpp)
-    target_compile_definitions(MaterialGraphCompilerTests PRIVATE GE_HAVE_STB)
+    # Image: the decode SkyRenderer calls, not spliced transitively from GameEngineRendering.
+    target_sources(MaterialGraphCompilerTests PRIVATE $<TARGET_OBJECTS:Image>)
     # StagedTestPaths.h — staged-fixture resolution shared by all fixture suites.
     target_include_directories(MaterialGraphCompilerTests PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Tests)
     if(COMMAND ge_set_output_tests)
@@ -121,12 +121,11 @@ if(BUILD_TESTING)
         FileSystemObjects
         AssetCore
         Logger
+        Memory
         GTest::gtest
         GTest::gtest_main
     )
-    target_sources(GraphSerializationTests PRIVATE
-        ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/stb_image_impl.cpp)
-    target_compile_definitions(GraphSerializationTests PRIVATE GE_HAVE_STB)
+    target_sources(GraphSerializationTests PRIVATE $<TARGET_OBJECTS:Image>)
     if(COMMAND ge_set_output_tests)
         ge_set_output_tests(GraphSerializationTests)
     endif()

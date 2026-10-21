@@ -118,6 +118,31 @@ TEST(CompileServerEndToEnd, FailsOnInvalidSourceAndReturnsErrors) {
     BuildAndExpect(pipeName, ws, {file}, /*expectSuccess*/false, /*expectAsm*/false);
 }
 
+// A request that names an EngineBinDir must name the engine's script surface too: the server holds
+// no list of its own, so it refuses such a request by name instead of compiling without it.
+TEST(CompileServerEndToEnd, RequestWithAnEngineDirectoryAndNoScriptSurfaceIsRefused) {
+    std::filesystem::path ws = std::filesystem::temp_directory_path() / "GE_EndToEnd_Workspace_NoSurface";
+    std::error_code ec; std::filesystem::create_directories(ws, ec);
+    std::string pipeName = CompileServerTestHost::UniquePipeName("NoSurface");
+    const std::string file = std::filesystem::path(WriteTempCs(ws)).generic_string();
+#ifdef _WIN32
+    ASSERT_TRUE(CompileServerTestHost::StartTestCompileServer(pipeName));
+#endif
+    std::ostringstream json;
+    json << "{\"ProjectRoot\":\"" << ws.generic_string() << "\",";
+    json << "\"EngineBinDir\":\"" << ws.generic_string() << "\",";
+    json << "\"ChangedFiles\":[],\"AffectedFiles\":[],\"AllFiles\":[\"" << file << "\"],";
+    json << "\"PreferredStrategy\":\"Full\",\"ForceFull\":true}";
+
+    CompileServerClient client(std::unique_ptr<IHotReloadTransport>{}, pipeName);
+    CompileServerResponse resp;
+    EXPECT_FALSE(client.Compile(json.str(), resp));
+
+    ASSERT_EQ(resp.Errors.size(), 1u);
+    EXPECT_EQ(resp.Errors.front().Code, "GE0003");
+    EXPECT_NE(resp.Errors.front().MessageUtf8.find("no ScriptSurface"), std::string::npos) << resp.Errors.front().MessageUtf8;
+}
+
 TEST(CompileServerEndToEnd, AssemblyLoadSmoke) {
 #ifdef _WIN32
     // Arrange: workspace and simple source

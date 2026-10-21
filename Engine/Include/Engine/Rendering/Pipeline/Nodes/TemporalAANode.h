@@ -96,6 +96,8 @@ class TemporalAANode final : public IRenderPipelineNode
     static float HistoryClipMode(bool hasMovers, bool contentChanged, bool stationaryScene);
 
   private:
+    // Declares the resolve for the view; false when the view renders without it this frame.
+    bool DeclareResolve(ViewDeclare& d);
     void LoadShaders(IDevice* device);
     void LoadTaauShaders(IDevice* device); // lazy, first TAAU frame
 

@@ -1476,10 +1476,10 @@ TEST(OceanQueryTests, DepthCacheBakerSamplesHeightfieldSources)
     source.SizeZ = 1.0f;
     source.HeightScale = 10.0f;
     source.WorldOriginY = -5.0f;
-    source.LayerMask = 0x1u;
+    source.Layers = GameEngine::Rendering::RenderLayerMask{0x1u};
 
     OceanDepthCacheAsset cache;
-    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, &source, 1, 0x1u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, &source, 1, GameEngine::Rendering::RenderLayerMask{0x1u}, cache));
 
     float32 depth = 0.0f;
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
@@ -1505,23 +1505,23 @@ TEST(OceanQueryTests, DepthCacheBakerFiltersAndOverlapsHeightfieldLayers)
     sources[0].Height = 1;
     sources[0].SizeX = 1.0f;
     sources[0].SizeZ = 1.0f;
-    sources[0].LayerMask = 0x1u;
+    sources[0].Layers = GameEngine::Rendering::RenderLayerMask{0x1u};
     sources[1] = sources[0];
     sources[1].Samples = shallowFloor;
-    sources[1].LayerMask = 0x2u;
+    sources[1].Layers = GameEngine::Rendering::RenderLayerMask{0x2u};
 
     OceanDepthCacheAsset cache;
     float32 depth = 0.0f;
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, 0x1u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x1u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 10.0f, 1e-5f);
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, 0x2u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x2u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 2.0f, 1e-5f);
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, 0x3u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromHeightfields(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x3u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 2.0f, 1e-5f);
 }
@@ -1550,10 +1550,10 @@ TEST(OceanQueryTests, DepthCacheBakerCapturesMeshGeometry)
     source.VertexCount = 4;
     source.Indices = indices;
     source.IndexCount = 6;
-    source.LayerMask = 0x1u;
+    source.Layers = GameEngine::Rendering::RenderLayerMask{0x1u};
 
     OceanDepthCacheAsset cache;
-    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, &source, 1, 0x1u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, &source, 1, GameEngine::Rendering::RenderLayerMask{0x1u}, cache));
 
     const std::vector<float32>& depths = cache.GetDepths();
     ASSERT_EQ(depths.size(), 4u);
@@ -1591,7 +1591,7 @@ TEST(OceanQueryTests, DepthCacheBakerTransformsMeshSources)
     source.LocalToWorld[14] = 20.0f;
 
     OceanDepthCacheAsset cache;
-    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, &source, 1, 0xFFFFFFFFu, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, &source, 1, GameEngine::Rendering::RenderLayerMask{0xFFFFFFFFu}, cache));
 
     float32 depth = 0.0f;
     ASSERT_TRUE(cache.SampleDepth(10.5f, 20.5f, depth));
@@ -1628,23 +1628,23 @@ TEST(OceanQueryTests, DepthCacheBakerFiltersAndOverlapsMeshLayers)
     sources[0].VertexCount = 4;
     sources[0].Indices = indices;
     sources[0].IndexCount = 6;
-    sources[0].LayerMask = 0x1u;
+    sources[0].Layers = GameEngine::Rendering::RenderLayerMask{0x1u};
     sources[1] = sources[0];
     sources[1].Positions = shallowPositions;
-    sources[1].LayerMask = 0x2u;
+    sources[1].Layers = GameEngine::Rendering::RenderLayerMask{0x2u};
 
     OceanDepthCacheAsset cache;
     float32 depth = 0.0f;
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, 0x1u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x1u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 10.0f, 1e-5f);
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, 0x2u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x2u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 2.0f, 1e-5f);
 
-    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, 0x3u, cache));
+    ASSERT_TRUE(BakeOceanDepthCacheFromMeshes(desc, sources, 2, GameEngine::Rendering::RenderLayerMask{0x3u}, cache));
     ASSERT_TRUE(cache.SampleDepth(0.5f, 0.5f, depth));
     EXPECT_NEAR(depth, 2.0f, 1e-5f);
 }

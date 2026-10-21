@@ -110,15 +110,15 @@ TEST(Docking, ActivationPatchSwapsTabWithoutFullRebuild) {
     EXPECT_EQ(dm.GetRoot()->GetActivePanelId(), "B");
 
     // Verify the mount target was swapped
-    UIElement* mountEl = dock.FindById("mount:B");
+    UIElement* mountEl = dock.FindById("mount:B"_sid);
     ASSERT_NE(mountEl, nullptr);
     auto* mount = dynamic_cast<Mount*>(mountEl);
     ASSERT_NE(mount, nullptr);
     EXPECT_EQ(mount->GetTarget(), &panelB);
 
     // Verify tab active classes were updated
-    UIElement* tabA = dock.FindById("tab:A");
-    UIElement* tabB = dock.FindById("tab:B");
+    UIElement* tabA = dock.FindById("tab:A"_sid);
+    UIElement* tabB = dock.FindById("tab:B"_sid);
     ASSERT_NE(tabA, nullptr);
     ASSERT_NE(tabB, nullptr);
     EXPECT_FALSE(tabA->HasClass("active"));
@@ -379,7 +379,7 @@ TEST(DockLayoutController, CloneAndPruneDropsUnregisteredTabsAndEmptyBranches) {
     source->Second()->AddTab("MissingBranch");
 
     DockLayoutController controller(dm);
-    auto pruned = controller.CloneForRegisteredPanels(source.get());
+    auto pruned = controller.CloneForRegisteredPanels(source.get(), {});
 
     ASSERT_NE(pruned, nullptr);
     ASSERT_TRUE(pruned->IsLeaf());
@@ -408,7 +408,7 @@ TEST(DockLayoutController, CloneAndPrunePreservesSurvivingSplitGeometry) {
     ASSERT_TRUE(source->Second()->ActivateTab("B"));
 
     DockLayoutController controller(dm);
-    auto pruned = controller.CloneForRegisteredPanels(source.get());
+    auto pruned = controller.CloneForRegisteredPanels(source.get(), {});
 
     ASSERT_NE(pruned, nullptr);
     ASSERT_TRUE(pruned->IsSplit());
@@ -435,7 +435,7 @@ TEST(DockLayoutController, ApplyPrunedLayoutRejectsAnEntirelyUnavailablePreset) 
     unavailable->AddTab("Missing");
 
     DockLayoutController controller(dm);
-    EXPECT_FALSE(controller.ApplyForRegisteredPanels(unavailable.get()));
+    EXPECT_FALSE(controller.ApplyForRegisteredPanels(unavailable.get(), {}));
     ASSERT_NE(dm.GetRoot(), nullptr);
     EXPECT_EQ(dm.GetRoot()->GetActivePanelId(), "Current");
 }

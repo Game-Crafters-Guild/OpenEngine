@@ -133,7 +133,6 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
 
         // Navigation formats
         {".navgrid", AssetType::NavigationGrid},
-        {".navmesh", AssetType::NavigationMesh},
 
         // Terrain heightmap raw formats (16-bit PNG heightmaps stay Texture)
         {".r16", AssetType::TerrainHeightmap},
@@ -295,7 +294,6 @@ bool IsTextBasedAssetType(AssetType type) {
         case AssetType::Timeline:
         case AssetType::AnimationGraph:
         case AssetType::ClipSet:
-        case AssetType::NavigationMesh:
         case AssetType::OceanWaveSpectrum:
         case AssetType::OceanSettings:
         case AssetType::OceanPreset:

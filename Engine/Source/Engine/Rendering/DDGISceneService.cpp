@@ -155,9 +155,10 @@ bool DDGISceneService::Tick(float deltaTimeSeconds)
     const uint64_t sceneEpoch    = m_GpuScene->GetContentEpoch();
     const uint64_t materialEpoch = Material::GetGlobalContentEpoch();
     const uint64_t reloadCounter = m_ReloadCounter.load(std::memory_order_relaxed);
-    // The atlas epoch is a signal in its own right: a base-colour or emissive
-    // texture finishing its stream-in gives a material a layer it did not have,
-    // and that changes the baked records without touching any other epoch.
+    // The atlas epoch is a signal in its own right: the baked records carry the
+    // atlas's layer indices, and a layout change reaches them through it. (A
+    // texture finishing its stream-in lands through Material::SetTexture, which
+    // also moves the material epoch.)
     const uint64_t atlasEpoch = m_MapAtlas ? m_MapAtlas->GetLayoutEpoch() : 0;
     const bool signalsMoved = !m_HaveEpochs || sceneEpoch != m_LastSceneEpoch ||
                               materialEpoch != m_LastMaterialEpoch ||

@@ -116,6 +116,7 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
     const BufferHandle primBuf      = m_SdfPrimRing ? m_SdfPrimRing->GetBuffer() : BufferHandle{};
     const BufferHandle clipBuf      = m_SdfClipRing ? m_SdfClipRing->GetBuffer() : BufferHandle{};
     const BufferHandle drawOrderBuf = m_SdfDrawOrderRing ? m_SdfDrawOrderRing->GetBuffer() : BufferHandle{};
+    const BufferHandle transformBuf = m_SdfTransformRing ? m_SdfTransformRing->GetBuffer() : BufferHandle{};
 
     const bool uploadsOk = fd.UploadsOk;
 
@@ -196,6 +197,9 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
             if (drawOrderBuf.IsValid())
                 p.Read(frame.ImportExternalBuffer("UISdfDrawOrder", drawOrderBuf),
                        RenderGraph::RGBufferRead::Storage);
+            if (transformBuf.IsValid())
+                p.Read(frame.ImportExternalBuffer("UISdfTransforms", transformBuf),
+                       RenderGraph::RGBufferRead::Storage);
 
             // One sampled read per resolved deferred binding — this IS the
             // barrier that orders the producers (scene/game pipelines) before
@@ -204,7 +208,7 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
             for (const ResolvedBinding& rb : resolved)
                 p.Read(rb.Tex, RenderGraph::RGTextureRead::Sampled);
         },
-        [this, resolved, primBuf, clipBuf, drawOrderBuf, uploadsOk, outputEncoding,
+        [this, resolved, primBuf, clipBuf, drawOrderBuf, transformBuf, uploadsOk, outputEncoding,
          subpixelActive, blendEncoded, textCoverage](RenderGraph::RGContext& ctx)
         {
             // Slot updates run even on draw-skipped frames: the published
@@ -304,7 +308,7 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
                        ? std::clamp(hdrState.staticMetadata.minMasteringLuminance,
                                     kHdrUiBlackLiftMinNits, kHdrUiBlackLiftMaxNits)
                        : 0.0f);
-            if (!primBuf.IsValid() || !drawOrderBuf.IsValid())
+            if (!primBuf.IsValid() || !drawOrderBuf.IsValid() || !transformBuf.IsValid())
                 return;
 
             DescriptorSetDesc dsDesc{};
@@ -331,6 +335,11 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
             const size_t drawOrderOffset = m_SdfDrawOrderRing->GetFrameOffset(frameIdx);
             m_Device->UpdateStorageBufferBinding(ssboSet, 2, drawOrderBuf, drawOrderOffset,
                                                  drawOrderBytes);
+
+            const size_t transformBytes =
+                std::max<size_t>(1, m_TransformAllocator.GetTotalSlots()) * sizeof(UI::UITransformSlot);
+            const size_t transformOffset = m_SdfTransformRing->GetFrameOffset(frameIdx);
+            m_Device->UpdateStorageBufferBinding(ssboSet, 3, transformBuf, transformOffset, transformBytes);
 
             ctx.Cmd->BindDescriptorSet(0, ssboSet, pipeline);
 

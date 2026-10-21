@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace GameEngine;
@@ -137,6 +138,19 @@ protected:
 
     static ManagedElementTypes& Types() { return ManagedElementTypes::Instance(); }
 
+    // A claim and a verdict where the managed binding makes them, from a registration window's
+    // callback: the only place either is admitted.
+    static StringId Claim(std::string_view tagName, std::uint64_t owner)
+    {
+        const ManagedElementTypes::ScopedWindowForTests window;
+        return Types().RegisterType(tagName, owner);
+    }
+    static void Verdict(std::uint64_t owner)
+    {
+        const ManagedElementTypes::ScopedWindowForTests window;
+        Types().NotifyReloadCompleted(owner);
+    }
+
     std::vector<std::unique_ptr<UIElement>> m_Owned;
 };
 } // namespace
@@ -154,7 +168,7 @@ TEST_F(ElementTypeOwnershipHazardTest, AnOwnerCannotClaimAnEngineTagAndThenSweep
     // succeeds, the tag becomes owner-stamped and the next unload deletes the engine control
     // for the rest of the process.
     const std::uint64_t owner = 0xB10Cull;
-    EXPECT_EQ(Types().RegisterType("Button", owner), StringId(0))
+    EXPECT_EQ(Claim("Button", owner), StringId(0))
         << "a non-zero owner must not be able to take over an engine tag";
 
     // The built-in is untouched in every respect that matters.
@@ -178,14 +192,14 @@ TEST_F(ElementTypeOwnershipHazardTest, OneOwnerCannotTakeAnotherOwnersTag)
 {
     const std::uint64_t first = 0x1111ull;
     const std::uint64_t second = 0x2222ull;
-    ASSERT_NE(Types().RegisterType("HazardContested", first), StringId(0));
+    ASSERT_NE(Claim("HazardContested", first), StringId(0));
 
-    EXPECT_EQ(Types().RegisterType("HazardContested", second), StringId(0));
+    EXPECT_EQ(Claim("HazardContested", second), StringId(0));
     EXPECT_EQ(Reg().CountFactoriesOwnedBy(first), 1u);
     EXPECT_EQ(Reg().CountFactoriesOwnedBy(second), 0u);
 
     // The rightful owner may still re-register: reloads do exactly that.
-    EXPECT_NE(Types().RegisterType("HazardContested", first), StringId(0));
+    EXPECT_NE(Claim("HazardContested", first), StringId(0));
     EXPECT_EQ(Reg().CountFactoriesOwnedBy(first), 1u);
 }
 
@@ -249,7 +263,7 @@ TEST_F(ElementTypeOwnershipHazardTest, AnUnknownTagSurvivorStopsMatchingOnceTheT
 
     // The type arrives.
     const std::uint64_t owner = 0x4444ull;
-    ASSERT_NE(Types().RegisterType("HazardLateType", owner), StringId(0));
+    ASSERT_NE(Claim("HazardLateType", owner), StringId(0));
 
     // The placeholder must now STOP matching, or the reconciler adopts it forever and the real
     // control is never built. This is the one case where the stamp is not enough on its own.
@@ -282,8 +296,8 @@ TEST_F(ElementTypeOwnershipHazardTest, TypeMatchingDoesNotBreakTheCasesItMustPre
     // Two tags on ONE shared proxy class still separate on the stamp: the registered-type
     // check passes for both, so the stamp is what tells them apart.
     const std::uint64_t owner = 0x5555ull;
-    ASSERT_NE(Types().RegisterType("HazardFoo", owner), StringId(0));
-    ASSERT_NE(Types().RegisterType("HazardBar", owner), StringId(0));
+    ASSERT_NE(Claim("HazardFoo", owner), StringId(0));
+    ASSERT_NE(Claim("HazardBar", owner), StringId(0));
     std::unique_ptr<UIElement> foo = Reg().Create("hazardfoo");
     std::unique_ptr<UIElement> bar = Reg().Create("hazardbar");
     ASSERT_NE(foo, nullptr);
@@ -311,7 +325,7 @@ TEST_F(ElementTypeOwnershipHazardTest, TheUnloadSeamFinishesWhenReleaseDestroysO
     cb.Release = &DestroyingRelease;
     Types().SetCallbacks(cb);
 
-    ASSERT_NE(Types().RegisterType("HazardDestructive", owner), StringId(0));
+    ASSERT_NE(Claim("HazardDestructive", owner), StringId(0));
     for (int i = 0; i < 16; ++i)
     {
         std::unique_ptr<UIElement> el = Reg().Create("hazarddestructive");
@@ -341,7 +355,7 @@ TEST_F(ElementTypeOwnershipHazardTest, TheVerdictFinishesWhenConstructionCreates
     cb.Release = [](std::intptr_t) {};
     Types().SetCallbacks(cb);
 
-    ASSERT_NE(Types().RegisterType("HazardSpawning", owner), StringId(0));
+    ASSERT_NE(Claim("HazardSpawning", owner), StringId(0));
     for (int i = 0; i < 64; ++i)
     {
         std::unique_ptr<UIElement> el = Reg().Create("hazardspawning");
@@ -359,8 +373,8 @@ TEST_F(ElementTypeOwnershipHazardTest, TheVerdictFinishesWhenConstructionCreates
     g_CreateSpawns = true;
     g_SpawnBudget = 256;
     const std::uint64_t reloadedOwner = owner + 1;
-    ASSERT_NE(Types().RegisterType("HazardSpawning", reloadedOwner), StringId(0));
-    Types().NotifyReloadCompleted(owner);
+    ASSERT_NE(Claim("HazardSpawning", reloadedOwner), StringId(0));
+    Verdict(owner);
     g_CreateSpawns = false;
 
     // Every orphan must have been re-materialized. One left Pending means the walk lost it.
@@ -385,7 +399,7 @@ TEST_F(ElementTypeOwnershipHazardTest, AProxyLeavesTheIndexBeforeItsOwnReleaseCa
     cb.Release = &CountingSweepingRelease;
     Types().SetCallbacks(cb);
 
-    ASSERT_NE(Types().RegisterType("HazardReentrantRelease", owner), StringId(0));
+    ASSERT_NE(Claim("HazardReentrantRelease", owner), StringId(0));
     std::unique_ptr<UIElement> el = Reg().Create("hazardreentrantrelease");
     ASSERT_NE(el, nullptr);
     m_Owned.push_back(std::move(el));
@@ -420,7 +434,7 @@ TEST_F(ElementTypeOwnershipHazardTest, AConstructorThatDestroysItsOwnElementGets
     cb.Release = [](std::intptr_t) {};
     Types().SetCallbacks(cb);
 
-    ASSERT_NE(Types().RegisterType("HazardSelfDestructing", owner), StringId(0));
+    ASSERT_NE(Claim("HazardSelfDestructing", owner), StringId(0));
     for (int i = 0; i < 4; ++i)
     {
         std::unique_ptr<UIElement> el = Reg().Create("hazardselfdestructing");
@@ -435,9 +449,9 @@ TEST_F(ElementTypeOwnershipHazardTest, AConstructorThatDestroysItsOwnElementGets
     // The reload's verdict re-materializes every orphan, and one of those
     // constructors destroys its own element from inside Create.
     const std::uint64_t reloadedOwner = owner + 1;
-    ASSERT_NE(Types().RegisterType("HazardSelfDestructing", reloadedOwner), StringId(0));
+    ASSERT_NE(Claim("HazardSelfDestructing", reloadedOwner), StringId(0));
     g_CreateDestroysItsOwnProxy = true;
-    Types().NotifyReloadCompleted(owner);
+    Verdict(owner);
     g_CreateDestroysItsOwnProxy = false;
 
     EXPECT_EQ(m_Owned.size(), 3u) << "the attack did not actually destroy an element";
@@ -462,8 +476,8 @@ TEST_F(ElementTypeOwnershipHazardTest, AReloadCompletingDoesNotFaultAnotherOwner
 
     const std::uint64_t ownerX = 0x8888ull;
     const std::uint64_t ownerY = 0x9999ull;
-    ASSERT_NE(Types().RegisterType("HazardOwnerX", ownerX), StringId(0));
-    ASSERT_NE(Types().RegisterType("HazardOwnerY", ownerY), StringId(0));
+    ASSERT_NE(Claim("HazardOwnerX", ownerX), StringId(0));
+    ASSERT_NE(Claim("HazardOwnerY", ownerY), StringId(0));
 
     std::unique_ptr<UIElement> ex = Reg().Create("hazardownerx");
     std::unique_ptr<UIElement> ey = Reg().Create("hazardownery");
@@ -478,15 +492,15 @@ TEST_F(ElementTypeOwnershipHazardTest, AReloadCompletingDoesNotFaultAnotherOwner
     ASSERT_EQ(px->State(), ManagedTypeState::Pending);
     ASSERT_EQ(py->State(), ManagedTypeState::Pending);
 
-    Types().NotifyReloadCompleted(ownerX);
+    Verdict(ownerX);
 
     EXPECT_EQ(px->State(), ManagedTypeState::Faulted);
     EXPECT_EQ(py->State(), ManagedTypeState::Pending)
         << "owner Y's elements were declared permanently missing by owner X's reload";
 
     // Y's own reload still resolves it, in either direction.
-    ASSERT_NE(Types().RegisterType("HazardOwnerY", ownerY + 1), StringId(0));
-    Types().NotifyReloadCompleted(ownerY);
+    ASSERT_NE(Claim("HazardOwnerY", ownerY + 1), StringId(0));
+    Verdict(ownerY);
     EXPECT_EQ(py->State(), ManagedTypeState::Live);
 
     m_Owned.push_back(std::move(ex));
@@ -500,8 +514,8 @@ TEST_F(ElementTypeOwnershipHazardTest, AReloadCompletingDoesNotFaultAnotherOwner
 TEST_F(ElementTypeOwnershipHazardTest, EachManagedTypeReportsItsOwnName)
 {
     const std::uint64_t owner = 0xAAAAull;
-    ASSERT_NE(Types().RegisterType("HazardHealthBar", owner), StringId(0));
-    ASSERT_NE(Types().RegisterType("HazardAmmoCounter", owner), StringId(0));
+    ASSERT_NE(Claim("HazardHealthBar", owner), StringId(0));
+    ASSERT_NE(Claim("HazardAmmoCounter", owner), StringId(0));
 
     std::unique_ptr<UIElement> bar = Reg().Create("hazardhealthbar");
     std::unique_ptr<UIElement> ammo = Reg().Create("hazardammocounter");

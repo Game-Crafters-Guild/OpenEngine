@@ -502,11 +502,32 @@ std::filesystem::path PathUtils::GetBundledShaderCacheRoot()
 #if defined(__EMSCRIPTEN__)
     // The cook ships in the wasm preload at the MEMFS root.
     const std::filesystem::path bundleCache{"/.Cache/Shaders"};
+#else
+    // A desktop export stages the cook in the content root: Contents/Resources in a macOS bundle,
+    // the executable's directory otherwise.
+    const std::filesystem::path contentRoot = InstallContentRootFor(GetExecutableDirectory());
+    if (contentRoot.empty())
+        return {};
+    const std::filesystem::path bundleCache = contentRoot / ".Cache" / "Shaders";
+#endif
     std::error_code ec;
     return std::filesystem::is_directory(bundleCache, ec) ? bundleCache : std::filesystem::path{};
-#else
+}
+
+std::filesystem::path PathUtils::FindFileUpward(std::filesystem::path start, const std::filesystem::path& relative)
+{
+    std::error_code ec;
+    while (!start.empty())
+    {
+        const std::filesystem::path candidate = start / relative;
+        if (std::filesystem::is_regular_file(candidate, ec))
+            return candidate;
+        const std::filesystem::path parent = start.parent_path();
+        if (parent == start)
+            break;
+        start = parent;
+    }
     return {};
-#endif
 }
 
 } // namespace GameEngine

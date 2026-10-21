@@ -54,4 +54,11 @@ struct Camera
 /// Future: support priority/tag-based camera selection (e.g., MainCamera component).
 std::optional<Camera> FindActiveCamera(ECS::World& world);
 
+class ViewRegistry;
+
+/// Declares a game view for this frame once its world's active camera is resolved: the view draws the
+/// camera's Visible Layers and is armed for the frame. With no camera nothing is armed, so an on-demand
+/// view sleeps: its effective layers are None, and no extraction, culling or pass reads it.
+void DeclareGameCameraView(ViewRegistry& views, Rendering::ViewId view, const Camera* activeCamera);
+
 } // namespace GameEngine::Engine::Renderer

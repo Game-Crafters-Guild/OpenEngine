@@ -48,8 +48,9 @@ struct CountedFeature final : IRenderFeature
         // exactly one feature construction — a constructor that returns
         // immediately makes the window too narrow to sample reliably. Real
         // feature constructors do more work than this spin.
-        for (volatile int i = 0; i < 2000; ++i)
+        for (volatile int i = 0; i < 2000;)
         {
+            i = i + 1;
         }
     }
 

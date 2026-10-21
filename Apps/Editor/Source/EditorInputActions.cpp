@@ -7,6 +7,18 @@ namespace GameEngine
 namespace EditorInput
 {
 
+namespace
+{
+// A key with exactly `mods` held: Shift+F3 is not F3.
+void RegisterExactChordAction(Input::InputSystem& input, Input::ActionId id, int key, int mods)
+{
+    Input::ActionBinding binding{Input::DeviceType::Keyboard, key, 1.0f};
+    binding.requiredMods = static_cast<Input::ModifierFlags>(mods);
+    binding.forbiddenMods = Input::kShortcutModifiers & ~binding.requiredMods;
+    input.RegisterAction(kEditorGlobalContext, {id, {binding}, /*isAxis=*/false, /*hostReserved=*/false});
+}
+} // namespace
+
 void RegisterEditorInputActions(Input::InputSystem& input)
 {
     // Scene View movement (WASD + Q/E world vertical while RMB look is active).
@@ -86,7 +98,7 @@ void RegisterEditorInputActions(Input::InputSystem& input)
     frameSelection.isAxis = false;
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_F, 1.0f};
-        b.forbiddenMods = Input::kModShortcutMask;
+        b.forbiddenMods = Input::kShortcutModifiers;
         frameSelection.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, frameSelection);
@@ -99,7 +111,7 @@ void RegisterEditorInputActions(Input::InputSystem& input)
         // Alt+F: frame all. Moved off Shift+F to avoid conflict with the
         // Assets panel's Shift+F preview toggle.
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_F, 1.0f};
-        b.requiredMods = Input::kModAlt;
+        b.requiredMods = Input::ModifierFlags::Alt;
         frameAll.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, frameAll);
@@ -111,12 +123,12 @@ void RegisterEditorInputActions(Input::InputSystem& input)
     toggleFullscreen.hostReserved = true;
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_F, 1.0f};
-        b.requiredMods = Input::kModSuper;
+        b.requiredMods = Input::ModifierFlags::Super;
         toggleFullscreen.bindings.push_back(b);
     }
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_F, 1.0f};
-        b.requiredMods = Input::kModControl;
+        b.requiredMods = Input::ModifierFlags::Control;
         toggleFullscreen.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, toggleFullscreen);
@@ -128,12 +140,12 @@ void RegisterEditorInputActions(Input::InputSystem& input)
     togglePlayMode.hostReserved = true;
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_P, 1.0f};
-        b.requiredMods = Input::kModSuper;
+        b.requiredMods = Input::ModifierFlags::Super;
         togglePlayMode.bindings.push_back(b);
     }
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_P, 1.0f};
-        b.requiredMods = Input::kModControl;
+        b.requiredMods = Input::ModifierFlags::Control;
         togglePlayMode.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, togglePlayMode);
@@ -153,14 +165,14 @@ void RegisterEditorInputActions(Input::InputSystem& input)
     saveScene.hostReserved = true;
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_S, 1.0f};
-        b.requiredMods = Input::kModControl;
-        b.forbiddenMods = Input::kModShift;
+        b.requiredMods = Input::ModifierFlags::Control;
+        b.forbiddenMods = Input::ModifierFlags::Shift;
         saveScene.bindings.push_back(b);
     }
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_S, 1.0f};
-        b.requiredMods = Input::kModSuper;
-        b.forbiddenMods = Input::kModShift;
+        b.requiredMods = Input::ModifierFlags::Super;
+        b.forbiddenMods = Input::ModifierFlags::Shift;
         saveScene.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, saveScene);
@@ -172,17 +184,25 @@ void RegisterEditorInputActions(Input::InputSystem& input)
     saveSceneAs.hostReserved = true;
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_S, 1.0f};
-        b.requiredMods = Input::kModControl | Input::kModShift;
+        b.requiredMods = Input::ModifierFlags::Control | Input::ModifierFlags::Shift;
         saveSceneAs.bindings.push_back(b);
     }
     {
         Input::ActionBinding b{Input::DeviceType::Keyboard, Input::kKeyCode_S, 1.0f};
-        b.requiredMods = Input::kModSuper | Input::kModShift;
+        b.requiredMods = Input::ModifierFlags::Super | Input::ModifierFlags::Shift;
         saveSceneAs.bindings.push_back(b);
     }
     input.RegisterAction(kEditorGlobalContext, saveSceneAs);
 
     RegisterUniversalSearchShortcut(input);
+
+    // Diagnostics: bare function keys, not reserved, so a game in Play that binds
+    // or polls one takes it first (Editor::DiagnosticShortcuts acts on them).
+#if GE_ENABLE_CPU_PROFILING
+    RegisterExactChordAction(input, kEditorCpuProfiler, Input::kKeyCode_F2, 0);
+    RegisterExactChordAction(input, kEditorCpuProfilerOff, Input::kKeyCode_F2, Input::kModShift);
+#endif
+    RegisterExactChordAction(input, kEditorShowUIDemo, Input::kKeyCode_F3, 0);
 
     // Apply any user shortcut overrides persisted in Preferences.json on
     // top of the defaults just registered above.

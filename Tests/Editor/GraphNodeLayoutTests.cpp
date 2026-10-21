@@ -530,7 +530,9 @@ TEST(GraphNodeLayoutTests, MaterialUnconnectedVec2InputHidesPortEditors)
     EXPECT_FALSE(uv->HasClass("has-inline-editor"));
     UIElement* editors = FindByClass(*uv, "graph-inline-editors");
     if (editors)
+    {
         EXPECT_TRUE(IsDisplayNone(*editors));
+    }
 }
 
 TEST(GraphNodeLayoutTests, GameLogicUnconnectedVec2InputGetsTwoDistinctFloatFields)
@@ -682,7 +684,9 @@ TEST(GraphNodeLayoutTests, ColorConstantShowsSwatchWithoutPortRgbFields)
     ASSERT_NE(value, nullptr);
     UIElement* editors = FindByClass(*value, "graph-inline-editors");
     if (editors)
+    {
         EXPECT_TRUE(IsDisplayNone(*editors));
+    }
 }
 
 TEST(GraphNodeLayoutTests, GameLogicUnconnectedBoolKeepsConditionLabelAndMarksEditor)
@@ -750,7 +754,9 @@ TEST(GraphNodeLayoutTests, ConnectedBoolInputHidesEditorClasses)
     EXPECT_FALSE(condition->HasClass("bool-editor"));
     UIElement* editors = FindByClass(*condition, "graph-inline-editors");
     if (editors)
+    {
         EXPECT_TRUE(IsDisplayNone(*editors));
+    }
 }
 
 TEST(GraphNodeLayoutTests, UnconnectedStringInputGetsTextField)

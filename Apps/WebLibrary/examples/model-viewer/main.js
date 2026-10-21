@@ -4,8 +4,8 @@
 // Models: Khronos glTF Sample Assets, listed in panel.js and ../ASSET_PROVENANCE.md.
 // License: CC0 1.0, CC BY 4.0 and CC BY-NC 4.0 (the listed models, credited on screen; the last is
 // non-commercial); MIT (coi-serviceworker.js).
-// Needs: WebGPU; @openengine/web; coi-serviceworker.js beside the engine module for the threaded build.
-import { Camera, DDGIVolume, Engine, OrbitControls } from '@openengine/web';
+// Needs: WebGPU; @game-crafters-guild/openengine-web; coi-serviceworker.js beside the engine module for the threaded build.
+import { Camera, DDGIVolume, Engine, OrbitControls } from '@game-crafters-guild/openengine-web';
 import { downloadProgress, fitStage, fitToFreeArea, showFailure, standardise, turnAbout } from '../shared/page-status.js';
 import { controlPanel } from './panel.js';
 
@@ -15,11 +15,11 @@ const engine = await Engine.create({ canvas, threads: 'auto', onProgress: downlo
 const { scene } = engine;
 scene.camera.transform.position.set(0.55, 0.15, 0.78);   // the orbit starts at the front three-quarter, faces toward the panel, 9 degrees up (glTF models face +Z)
 const controls = new OrbitControls(scene.camera, canvas), startPitch = controls.pitch;   // every model starts at this elevation unless its entry gives one
-let model = /** @type {import('@openengine/web').Model | null} */ (null), shape = /** @type {import('../shared/page-status.js').Shape | null} */ (null), fitted = 1;   // fitted: the distance the last fit chose; the visitor's zoom is distance / fitted
-const stage = /** @type {Record<'floor' | 'gi', import('@openengine/web').Entity | null>} */ ({ floor: null, gi: null });   // the floor and the GI volume, each null while off
+let model = /** @type {import('@game-crafters-guild/openengine-web').Model | null} */ (null), shape = /** @type {import('../shared/page-status.js').Shape | null} */ (null), fitted = 1;   // fitted: the distance the last fit chose; the visitor's zoom is distance / fitted
+const stage = /** @type {Record<'floor' | 'gi', import('@game-crafters-guild/openengine-web').Entity | null>} */ ({ floor: null, gi: null });   // the floor and the GI volume, each null while off
 globalThis.viewer = { engine, controls, model: () => model, shape: () => shape, stage };   // for the browser console and the gate
 
-/** Shows the model at `url` in place of the current one: the orbit at its starting elevation (`pitch`), the model at its starting turn (`yaw`), degrees, its emission `emissiveStrength` times the file's. @param {string} url @param {(progress: import('@openengine/web').LoadProgress) => void} onProgress @param {{ pitch?: number, yaw?: number, emissiveStrength?: number }} [look] */
+/** Shows the model at `url` in place of the current one: the orbit at its starting elevation (`pitch`), the model at its starting turn (`yaw`), degrees, its emission `emissiveStrength` times the file's. @param {string} url @param {(progress: import('@game-crafters-guild/openengine-web').LoadProgress) => void} onProgress @param {{ pitch?: number, yaw?: number, emissiveStrength?: number }} [look] */
 async function show(url, onProgress, { pitch = startPitch, yaw = 0, emissiveStrength } = {}) {
     const next = await scene.load(url, { onProgress, emissiveStrength });
     model?.destroy();
@@ -51,7 +51,7 @@ async function setStage(/** @type {'floor' | 'gi'} */ part, /** @type {boolean} 
     if (part === 'gi') stage.gi?.set(DDGIVolume, {});
     fitStage(stage, shape);
 }
-const panel = controlPanel(document, { show, timeOfDay: 15, setTimeOfDay: (hours) => { scene.sky.timeOfDay = hours; }, exposure: 2, setExposure: (ev) => scene.camera.set(Camera, { exposureCompensation: ev }), setStage, play: (clip, speed) => model?.animation.play(clip, { speed }), pause: () => model?.animation.pause(), reframe: () => frame(true) });
+const panel = controlPanel(document, { show, timeOfDay: scene.sky.timeOfDay, setTimeOfDay: (hours) => { scene.sky.timeOfDay = hours; }, exposure: 0, setExposure: (ev) => scene.camera.set(Camera, { exposureCompensation: ev }), setStage, play: (clip, speed) => model?.animation.play(clip, { speed }), pause: () => model?.animation.pause(), reframe: () => frame(true) });
 engine.onFrame((dt) => {
     if (panel.turning() && model && shape) turnAbout(model, shape, 10 * dt);
     panel.frame(dt);

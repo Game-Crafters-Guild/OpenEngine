@@ -49,7 +49,6 @@ constexpr uint32_t kCmdDirectoryCreateMaterial = 0x300D;
 constexpr uint32_t kCmdDirectoryCreateShaderGraph = 0x3023;
 constexpr uint32_t kCmdDirectoryCreateSurfaceShader = 0x300E;
 constexpr uint32_t kCmdDirectoryCreateNavGrid = 0x300F;
-constexpr uint32_t kCmdDirectoryCreateNavMesh = 0x3014;
 // The six "Create code asset" command ids live in Editor::kCmdCreate* (CodeAssetTemplates.h)
 // so the descriptor table and this dispatch switch share a single source of truth.
 constexpr uint32_t kCmdDirectoryCreateAnimationLibrary = 0x3019;
@@ -395,12 +394,6 @@ void EditorContextMenu::EnsureMenu()
                 if (m_OnDirectoryAction)
                 {
                     m_OnDirectoryAction(path, DirectoryAction::CreateNavGrid);
-                }
-                break;
-            case kCmdDirectoryCreateNavMesh:
-                if (m_OnDirectoryAction)
-                {
-                    m_OnDirectoryAction(path, DirectoryAction::CreateNavMesh);
                 }
                 break;
             case kCmdDirectoryImport:
@@ -846,7 +839,7 @@ void EditorContextMenu::ShowAssetMenu(const std::filesystem::path& assetPath,
             ? std::vector<std::filesystem::path>{assetPath}
             : m_PathsForBookmarks;
         const std::vector<EditorTagDefinition> tags = EditorTags::Load();
-        m_Menu->SetStateProvider([this, paths, tags](uint32_t cmd) -> MenuItemState {
+        m_Menu->SetStateProvider([paths, tags](uint32_t cmd) -> MenuItemState {
             MenuItemState state{.Enabled = true, .Checked = false};
             if (cmd >= kCmdAssetAssignTagBase && cmd < kCmdAssetAssignTagBase + kCmdAssetAssignTagMaxCount)
             {
@@ -949,8 +942,7 @@ void EditorContextMenu::ShowDirectoryMenu(const std::filesystem::path& directory
         .AddItem("Create/Animation/Clip Set", kCmdDirectoryCreateClipSet, MenuItemFlag_None, -1080, EditorIcons::kFilm)
         .AddItem("Create/Animation/Sprite Frames", kCmdDirectoryCreateSpriteFrames, MenuItemFlag_None, -1079, EditorIcons::kFilm)
         .AddItem("Create/---6", 0, MenuItemFlag_None, -1078)
-        .AddItem("Create/Navigation Grid", kCmdDirectoryCreateNavGrid, MenuItemFlag_None, -1077, EditorIcons::kNavGrid)
-        .AddItem("Create/Navigation Mesh", kCmdDirectoryCreateNavMesh, MenuItemFlag_None, -1076, EditorIcons::kNavGrid);
+        .AddItem("Create/Navigation Grid", kCmdDirectoryCreateNavGrid, MenuItemFlag_None, -1077, EditorIcons::kNavGrid);
 
     // The six "Create code asset" rows are table-driven (sorted into place by their priorities).
     {

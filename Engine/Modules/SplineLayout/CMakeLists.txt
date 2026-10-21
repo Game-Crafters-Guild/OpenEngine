@@ -28,9 +28,10 @@ if(BUILD_TESTING)
         Tests/TileLayoutTests.cpp
     )
     # OBJECT dependencies propagate headers, not object files: the recipe's
-    # asset references need AssetCore's GUID constructor, and the span mitre
-    # SplineGeometry's plane cut, in this standalone link.
-    target_link_libraries(SplineLayoutTests PRIVATE SplineLayout SplineGeometry AssetCore GTest::gtest GTest::gtest_main)
+    # asset references need AssetCore's GUID constructor, the span mitre
+    # SplineGeometry's plane cut, and the allocation hook Memory's counter (ECS
+    # links Memory, so this executable's own copy compiles empty), in this standalone link.
+    target_link_libraries(SplineLayoutTests PRIVATE SplineLayout SplineGeometry AssetCore Memory GTest::gtest GTest::gtest_main)
     set_target_properties(SplineLayoutTests PROPERTIES FOLDER "Engine/Tests/SplineLayout")
     ge_set_output_tests(SplineLayoutTests)
     ge_stage_runtime_dependencies(SplineLayoutTests)

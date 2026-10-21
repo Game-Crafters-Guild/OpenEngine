@@ -1,22 +1,24 @@
 #include "Rendering/Sky/SkyRenderer.h"
 
+#include "StarCatalog.h"
+
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
 #include "Rendering/Core/PipelineTypes.h"
+#include "Rendering/Materials/ShaderLayoutShape.h"
 
+#include "Image/Decode.h"
 #include "Logger/Logger.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/Utils/TextureUploadHelpers.h"
-#if defined(GE_HAVE_STB)
-#include <stb_image.h>
-#endif
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <random>
 #include <vector>
 
 namespace GameEngine
@@ -26,30 +28,38 @@ namespace Rendering
 
 namespace
 {
-// Must match SkyRenderNode / sky_render.frag: starSizeRange.w < 0 selects procedural sky LUT sampling.
+// Must match SkyRenderNode / sky_render.frag: skyboxParams.y < 0 selects procedural sky LUT sampling.
 constexpr float kSkyHdriProceduralSentinel = -1.0f;
+
+// Reads a whole file in one sized read. False when it cannot be opened or read.
+bool ReadWholeFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file)
+        return false;
+    const std::streamoff size = file.tellg();
+    if (size < 0)
+        return false;
+    outBytes.resize(static_cast<size_t>(size));
+    file.seekg(0);
+    return static_cast<bool>(file.read(reinterpret_cast<char*>(outBytes.data()), static_cast<std::streamsize>(size)));
+}
 
 TextureHandle LoadSkyTexture2D(IDevice* device, const std::filesystem::path& path, TextureFormat format, const char* debugName)
 {
     if (!device)
         return {};
 
-#if defined(GE_HAVE_STB)
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    stbi_set_flip_vertically_on_load(false);
-    stbi_uc* pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
-    if (!pixels || width <= 0 || height <= 0)
-    {
-        if (pixels)
-            stbi_image_free(pixels);
+    std::vector<uint8_t> fileBytes;
+    if (!ReadWholeFile(path, fileBytes))
         return {};
-    }
+    const Image::Image8 decoded = Image::Decode8(fileBytes, path.string(), Image::DecodeChannels::Rgba);
+    if (!decoded.Valid)
+        return {};
 
     TextureDesc td{};
-    td.width = static_cast<uint32_t>(width);
-    td.height = static_cast<uint32_t>(height);
+    td.width = decoded.Width;
+    td.height = decoded.Height;
     td.mipLevels = 1;
     td.arrayLayers = 1;
     td.format = static_cast<uint32_t>(format);
@@ -59,15 +69,8 @@ TextureHandle LoadSkyTexture2D(IDevice* device, const std::filesystem::path& pat
     td.debugName = debugName;
     TextureHandle texture = device->CreateTexture(td);
     if (texture.IsValid())
-        UploadTexture2D(device, texture, pixels, td.width, td.height, td.width * 4u, debugName);
-    stbi_image_free(pixels);
+        UploadTexture2D(device, texture, decoded.Pixels.data(), td.width, td.height, td.width * 4u, debugName);
     return texture;
-#else
-    (void)path;
-    (void)format;
-    (void)debugName;
-    return {};
-#endif
 }
 
 // Resolve a set0 binding index from reflected shader meta by name. Only the
@@ -90,6 +93,21 @@ uint32_t ResolveSet0Binding(const ShaderMeta& meta, const char* name, uint32_t f
                          "falling back to literal {}",
                          name, pkgName, fallback);
     return fallback;
+}
+
+// The texel format a kernel declares for a set 0 storage image (its GLSL layout qualifier, from the
+// package's reflection), or TextureFormat{} when the image is absent or declares none.
+TextureFormat DeclaredStorageFormat(const ShaderMeta& meta, const char* name)
+{
+    for (const auto& s : meta.Sets)
+    {
+        if (s.Set != 0)
+            continue;
+        for (const auto& b : s.Bindings)
+            if (b.Name == name && b.Image)
+                return static_cast<TextureFormat>(b.Image->Format);
+    }
+    return TextureFormat{};
 }
 
 TextureHandle CreateSolidSkyTexture2D(IDevice* device, uint32_t rgba, TextureFormat format, const char* debugName)
@@ -221,11 +239,31 @@ TextureHandle SkyRenderer::EnsureMoonFullTexture()
     return m_MoonFullTexture;
 }
 
+TextureFormat SkyRenderer::SkyViewLutFormat(ShaderSourceKind kernels)
+{
+    return kernels == ShaderSourceKind::Wgsl ? TextureFormat::R16G16B16A16_FLOAT
+                                             : TextureFormat::R32G32B32A32_FLOAT;
+}
+
 bool SkyRenderer::Initialize(IDevice* device, const Config& config)
 {
     m_Device = device;
     m_Config = config;
     m_TransmittanceComputed = false;
+
+    // Every reader filters the sky-view LUT linearly, so an RGBA32F LUT needs a device that filters
+    // 32-bit floats. Vulkan and Metal always report that they do (the capability defaults to true);
+    // only WebGPU reports the optional float32-filterable feature, and a WebGPU device that loads
+    // SPIR-V kernels without it would sample the LUT as black. Refuse that device here, by name.
+    const TextureFormat skyViewFormat = SkyViewLutFormat(m_Device->PreferredShaderSource());
+    if (skyViewFormat == TextureFormat::R32G32B32A32_FLOAT && !m_Device->GetCapabilities().supportsFilterableFloat32)
+    {
+        Logger::Log::Error("SkyRenderer: this device loads SPIR-V kernels but cannot filter 32-bit float textures "
+                           "(WebGPU feature 'float32-filterable' is missing), and the sky-view LUT is RGBA32F. The "
+                           "physical sky is not supported on this device: use an adapter that offers "
+                           "float32-filterable, or a backend that loads WGSL kernels.");
+        return false;
+    }
 
     {
         TextureDesc d{};
@@ -240,7 +278,7 @@ bool SkyRenderer::Initialize(IDevice* device, const Config& config)
         TextureDesc d{};
         d.width = m_Config.skyViewLutWidth;
         d.height = m_Config.skyViewLutHeight;
-        d.format = (uint32_t)TextureFormat::R16G16B16A16_FLOAT;
+        d.format = static_cast<uint32_t>(skyViewFormat);
         d.usage = (uint32_t)(TextureUsage::UnorderedAccess | TextureUsage::ShaderResource);
         d.debugName = "Sky_View_LUT";
         m_SkyViewLutTex = m_Device->CreateTexture(d);
@@ -412,6 +450,18 @@ bool SkyRenderer::CreatePipelines()
         m_Bindings.SkyViewLut.MultiscatterLUT =
             ResolveSet0Binding(pkg.meta, "uMultiscatterLUT", 4, "sky_view_lut");
 
+        // The kernel's storage qualifier and the LUT's texture format change together: a kernel that
+        // writes rgba16f into an RGBA32F image (or the reverse) is refused here, before any frame.
+        const TextureFormat declared = DeclaredStorageFormat(pkg.meta, "oSkyViewLUT");
+        if (declared != SkyViewLutFormat(sourceKind))
+        {
+            Logger::Log::Error("SkyRenderer: sky_view_lut declares its storage image as format {}, but "
+                               "SkyRenderer::SkyViewLutFormat creates the LUT as {}. Change the kernel's layout "
+                               "qualifier and the accessor together.",
+                               ToString(declared), ToString(SkyViewLutFormat(sourceKind)));
+            return false;
+        }
+
         DescriptorSetLayoutDesc sl{};
         sl.bindings = {
             {m_Bindings.SkyViewLut.SkyViewLUT, DescriptorType::StorageImage, 1, 0x20},
@@ -423,7 +473,7 @@ bool SkyRenderer::CreatePipelines()
         for (auto& b : sl.bindings)
         {
             if (b.type == DescriptorType::StorageImage)
-                b.storageTexelFormat = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+                b.storageTexelFormat = static_cast<uint32_t>(SkyViewLutFormat(sourceKind));
             if (b.type == DescriptorType::CombinedImageSampler)
                 b.imageFilterableFloat = true;
         }
@@ -433,126 +483,157 @@ bool SkyRenderer::CreatePipelines()
         m_SkyViewLutPipe.debugName = "Sky_View_LUT_Pipe";
     }
 
-    // Sky Render Graphics (Fullscreen Triangle)
+    if (!CreateSkyRenderPipeline("Shaders/sky_render.shaderpkg", false, m_SkyRender) ||
+        !CreateStarBillboardPipeline("Shaders/sky_stars_billboard.shaderpkg", false, m_StarBillboard))
+        return false;
+    m_HasHeightFogPipelines =
+        CreateSkyRenderPipeline("Shaders/sky_render_fog.shaderpkg", true, m_SkyRenderFog) &&
+        CreateStarBillboardPipeline("Shaders/sky_stars_billboard_fog.shaderpkg", true, m_StarBillboardFog);
+    if (!m_HasHeightFogPipelines)
+        Logger::Log::Info("SkyRenderer: the height fog variants of the sky are not built here; the sky "
+                          "draws without the height fog's sky fill");
+
+    return true;
+}
+
+bool SkyRenderer::CreateSkyRenderPipeline(const char* packagePath, bool heightFog, SkyDrawPipeline& out)
+{
+    const ShaderSourceKind sourceKind = m_Device->PreferredShaderSource();
+    ShaderPackage pkg{};
+    std::string err;
+    if (!LoadShaderPkg(packagePath, sourceKind, pkg, &err))
+        return false;
+    auto itVs = pkg.stageBytes.find("vs");
+    auto itFs = pkg.stageBytes.find("fs");
+    if (itVs == pkg.stageBytes.end() || itVs->second.empty() || itFs == pkg.stageBytes.end() || itFs->second.empty())
+        return false;
+
+    const char* name = heightFog ? "sky_render_fog" : "sky_render";
+    auto& slots = m_Bindings.SkyRender;
+    slots.Sky = ResolveSet0Binding(pkg.meta, "uSky", 0, name);
+    slots.SkyViewLUT = ResolveSet0Binding(pkg.meta, "uSkyViewLUT", 1, name);
+    slots.Atmos = ResolveSet0Binding(pkg.meta, "uAtmos", 2, name);
+    slots.TransLUT = ResolveSet0Binding(pkg.meta, "uTransLUT", 3, name);
+    slots.MoonFull = ResolveSet0Binding(pkg.meta, "uMoonFullTexture", 4, name);
+    slots.Exposure = ResolveSet0Binding(pkg.meta, "uExposure", 5, name);
+
+    DescriptorSetLayoutDesc sl{};
+    sl.bindings = {
+        {slots.Sky, DescriptorType::UniformBuffer, 1, 0x10},
+        {slots.SkyViewLUT, DescriptorType::CombinedImageSampler, 1, 0x10},
+        {slots.Atmos, DescriptorType::UniformBuffer, 1, 0x10},
+        {slots.TransLUT, DescriptorType::CombinedImageSampler, 1, 0x10},
+        {slots.MoonFull, DescriptorType::CombinedImageSampler, 1, 0x10},
+        {slots.Exposure, DescriptorType::StorageBuffer, 1, 0x10},
+    };
+    if (heightFog)
     {
-        ShaderPackage pkg{};
-        std::string err;
-        if (!LoadShaderPkg("Shaders/sky_render.shaderpkg", sourceKind, pkg, &err))
-            return false;
-        auto itVs = pkg.stageBytes.find("vs");
-        auto itFs = pkg.stageBytes.find("fs");
-        if (itVs == pkg.stageBytes.end() || itVs->second.empty() || itFs == pkg.stageBytes.end() || itFs->second.empty())
-            return false;
-
-        m_Bindings.SkyRender.Sky = ResolveSet0Binding(pkg.meta, "uSky", 0, "sky_render");
-        m_Bindings.SkyRender.SkyViewLUT = ResolveSet0Binding(pkg.meta, "uSkyViewLUT", 1, "sky_render");
-        m_Bindings.SkyRender.Atmos = ResolveSet0Binding(pkg.meta, "uAtmos", 2, "sky_render");
-        m_Bindings.SkyRender.TransLUT = ResolveSet0Binding(pkg.meta, "uTransLUT", 3, "sky_render");
-        m_Bindings.SkyRender.MoonFull =
-            ResolveSet0Binding(pkg.meta, "uMoonFullTexture", 4, "sky_render");
-
-        DescriptorSetLayoutDesc sl{};
-        sl.bindings = {
-            {m_Bindings.SkyRender.Sky, DescriptorType::UniformBuffer, 1, 0x10},
-            {m_Bindings.SkyRender.SkyViewLUT, DescriptorType::CombinedImageSampler, 1, 0x10},
-            {m_Bindings.SkyRender.Atmos, DescriptorType::UniformBuffer, 1, 0x10},
-            {m_Bindings.SkyRender.TransLUT, DescriptorType::CombinedImageSampler, 1, 0x10},
-            {m_Bindings.SkyRender.MoonFull, DescriptorType::CombinedImageSampler, 1, 0x10},
-        };
-        m_SkyRenderPipe.type = PipelineType::Graphics;
-        m_SkyRenderPipe.vertexShader = itVs->second;
-        m_SkyRenderPipe.pixelShader = itFs->second;
-        m_SkyRenderPipe.descriptorSetLayouts.push_back(sl);
-        m_SkyRenderPipe.debugName = "Sky_Render_Pipe";
-
-        m_SkyRenderPipe.rasterizationSamples = 1;
-        m_SkyRenderPipe.EnableDepthTest(false);
-        m_SkyRenderPipe.SetCullingMode(CullModeFlagBits::None);
-        m_SkyRenderPipe.AddDynamicState(DynamicState::Viewport);
-        m_SkyRenderPipe.AddDynamicState(DynamicState::Scissor);
+        slots.ViewParams = ResolveSet0Binding(pkg.meta, "ViewParams", 6, name);
+        slots.HeightFog = ResolveSet0Binding(pkg.meta, "HeightFogParams", 7, name);
+        slots.HeightFogBackdrop = ResolveSet0Binding(pkg.meta, "uHeightFogBackdrop", 8, name);
+        sl.bindings.push_back({slots.ViewParams, DescriptorType::UniformBuffer, 1, 0x10});
+        sl.bindings.push_back({slots.HeightFog, DescriptorType::UniformBuffer, 1, 0x10});
+        sl.bindings.push_back({slots.HeightFogBackdrop, DescriptorType::CombinedImageSampler, 1, 0x10});
     }
+    // Each storage buffer's access class and each image's shape come from the shader's
+    // reflection: WebGPU bakes both into the layout and refuses a pipeline that disagrees.
+    ApplyMetaImageShapeToLayout(pkg.meta, sl);
+    out.Pipe = {};
+    out.Pipe.type = PipelineType::Graphics;
+    out.Pipe.vertexShader = itVs->second;
+    out.Pipe.pixelShader = itFs->second;
+    out.Pipe.descriptorSetLayouts.push_back(sl);
+    out.SetDesc = {};
+    out.SetDesc.layout = sl;
+    out.SetDesc.layout.debugName = heightFog ? "Sky.SkyRenderFog" : "Sky.SkyRender";
+    out.SetDesc.transient = true;
+    out.SetDesc.debugName = heightFog ? "Sky.SkyRenderFog.Set0" : "Sky.SkyRender.Set0";
+    out.Pipe.debugName = heightFog ? "Sky_RenderFog_Pipe" : "Sky_Render_Pipe";
 
-    // Star Billboard Graphics
+    out.Pipe.rasterizationSamples = 1;
+    out.Pipe.EnableDepthTest(false);
+    out.Pipe.SetCullingMode(CullModeFlagBits::None);
+    out.Pipe.AddDynamicState(DynamicState::Viewport);
+    out.Pipe.AddDynamicState(DynamicState::Scissor);
+    out.Id = {};
+    return true;
+}
+
+bool SkyRenderer::CreateStarBillboardPipeline(const char* packagePath, bool heightFog, SkyDrawPipeline& out)
+{
+    const ShaderSourceKind sourceKind = m_Device->PreferredShaderSource();
+    ShaderPackage pkg{};
+    std::string err;
+    if (!LoadShaderPkg(packagePath, sourceKind, pkg, &err))
+        return false;
+    auto itVs = pkg.stageBytes.find("vs");
+    auto itFs = pkg.stageBytes.find("fs");
+    if (itVs == pkg.stageBytes.end() || itVs->second.empty() ||
+        itFs == pkg.stageBytes.end() || itFs->second.empty())
+        return false;
+
+    const char* name = heightFog ? "sky_stars_billboard_fog" : "sky_stars_billboard";
+    auto& slots = m_Bindings.StarBillboard;
+    slots.Stars = ResolveSet0Binding(pkg.meta, "sb", 0, name);
+    slots.Sky = ResolveSet0Binding(pkg.meta, "uSky", 1, name);
+    slots.Exposure = ResolveSet0Binding(pkg.meta, "uExposure", 2, name);
+    slots.SkyViewLUT = ResolveSet0Binding(pkg.meta, "uSkyViewLUT", 3, name);
+    slots.Atmos = ResolveSet0Binding(pkg.meta, "uAtmos", 4, name);
+    slots.TransLUT = ResolveSet0Binding(pkg.meta, "uTransLUT", 5, name);
+    slots.Compensation = ResolveSet0Binding(pkg.meta, "uCompensation", 6, name);
+
+    constexpr uint32_t kVertFrag = kShaderStageVertex | kShaderStageFragment;
+    DescriptorSetLayoutDesc sl{};
+    sl.bindings = {
+        {slots.Stars, DescriptorType::StorageBuffer, 1, kVertFrag},
+        {slots.Sky, DescriptorType::UniformBuffer, 1, kVertFrag},
+        {slots.Exposure, DescriptorType::StorageBuffer, 1, kShaderStageFragment},
+        {slots.SkyViewLUT, DescriptorType::CombinedImageSampler, 1, kShaderStageVertex},
+        {slots.Atmos, DescriptorType::UniformBuffer, 1, kShaderStageVertex},
+        {slots.TransLUT, DescriptorType::CombinedImageSampler, 1, kShaderStageVertex},
+        {slots.Compensation, DescriptorType::StorageBuffer, 1, kShaderStageFragment}
+    };
+    if (heightFog)
     {
-        ShaderPackage pkg{};
-        std::string err;
-        if (!LoadShaderPkg("Shaders/sky_stars_billboard.shaderpkg", sourceKind, pkg, &err))
-            return false;
-        auto itVs = pkg.stageBytes.find("vs");
-        auto itFs = pkg.stageBytes.find("fs");
-        if (itVs == pkg.stageBytes.end() || itVs->second.empty() ||
-            itFs == pkg.stageBytes.end() || itFs->second.empty())
-            return false;
-
-        m_Bindings.StarBillboard.Stars = ResolveSet0Binding(pkg.meta, "sb", 0, "sky_stars_billboard");
-        m_Bindings.StarBillboard.Sky = ResolveSet0Binding(pkg.meta, "uSky", 1, "sky_stars_billboard");
-
-        constexpr uint32_t kVertFrag = kShaderStageVertex | kShaderStageFragment;
-        DescriptorSetLayoutDesc sl{};
-        sl.bindings = {
-            {m_Bindings.StarBillboard.Stars, DescriptorType::StorageBuffer, 1, kVertFrag},
-            {m_Bindings.StarBillboard.Sky, DescriptorType::UniformBuffer, 1, kVertFrag}
-        };
-        m_StarBillboardPipe.type = PipelineType::Graphics;
-        m_StarBillboardPipe.vertexShader = itVs->second;
-        m_StarBillboardPipe.pixelShader = itFs->second;
-        m_StarBillboardPipe.descriptorSetLayouts.push_back(sl);
-        m_StarBillboardPipe.debugName = "Sky_StarBillboard_Pipe";
-
-        m_StarBillboardPipe.rasterizationSamples = 1;
-        m_StarBillboardPipe.EnableDepthTest(false);
-        m_StarBillboardPipe.SetCullingMode(CullModeFlagBits::None);
-        m_StarBillboardPipe.EnableBlending(true, BlendFactor::One, BlendFactor::One);
-        m_StarBillboardPipe.AddDynamicState(DynamicState::Viewport);
-        m_StarBillboardPipe.AddDynamicState(DynamicState::Scissor);
+        slots.HeightFog = ResolveSet0Binding(pkg.meta, "HeightFogParams", 7, name);
+        sl.bindings.push_back({slots.HeightFog, DescriptorType::UniformBuffer, 1, kShaderStageVertex});
     }
+    ApplyMetaImageShapeToLayout(pkg.meta, sl);
+    out.Pipe = {};
+    out.Pipe.type = PipelineType::Graphics;
+    out.Pipe.vertexShader = itVs->second;
+    out.Pipe.pixelShader = itFs->second;
+    out.Pipe.descriptorSetLayouts.push_back(sl);
+    out.SetDesc = {};
+    out.SetDesc.layout = sl;
+    out.SetDesc.layout.debugName = heightFog ? "Sky.StarBillboardFog" : "Sky.StarBillboard";
+    out.SetDesc.transient = true;
+    out.SetDesc.debugName = heightFog ? "Sky.StarBillboardFog.Set0" : "Sky.StarBillboard.Set0";
+    out.Pipe.debugName = heightFog ? "Sky_StarBillboardFog_Pipe" : "Sky_StarBillboard_Pipe";
 
+    out.Pipe.rasterizationSamples = 1;
+    out.Pipe.EnableDepthTest(false);
+    out.Pipe.SetCullingMode(CullModeFlagBits::None);
+    // Additive into scene colour (colour 0) and into the star light (colour 1), both blended alike:
+    // without Vulkan's independentBlend every attachment of a pipeline must blend the same way.
+    out.Pipe.EnableBlending(true, BlendFactor::One, BlendFactor::One);
+    out.Pipe.colorBlendState.attachments.push_back(out.Pipe.colorBlendState.attachments[0]);
+    out.Pipe.AddDynamicState(DynamicState::Viewport);
+    out.Pipe.AddDynamicState(DynamicState::Scissor);
+    out.Id = {};
     return true;
 }
 
 void SkyRenderer::GenerateStarCatalog()
 {
-    const uint32_t maxStars = m_Config.maxStars;
-    std::vector<StarInstanceGPU> stars;
-    stars.reserve(maxStars);
-
-    std::mt19937 rng(42);
-    std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
-
-    static constexpr float kPi = 3.14159265358979f;
-    static constexpr float kTwoPi = 2.0f * kPi;
-
-    for (uint32_t i = 0; i < maxStars; ++i)
-    {
-        float u = dist01(rng);
-        float v = dist01(rng);
-        float theta = kTwoPi * u;
-        float phi = std::acos(2.0f * v - 1.0f);
-
-        float sinPhi = std::sin(phi);
-        float x = sinPhi * std::cos(theta);
-        float y = std::cos(phi);
-        float z = sinPhi * std::sin(theta);
-
-        float brightness = 0.3f + 0.7f * dist01(rng);
-        float sizeScale = 0.6f + 1.2f * dist01(rng);
-        float rotAngle = kTwoPi * dist01(rng);
-        float twinkleSeed = dist01(rng);
-        float colorTemp = dist01(rng);
-
-        StarInstanceGPU star{};
-        star.dirAndBrightness[0] = x;
-        star.dirAndBrightness[1] = y;
-        star.dirAndBrightness[2] = z;
-        star.dirAndBrightness[3] = brightness;
-        star.properties[0] = sizeScale;
-        star.properties[1] = rotAngle;
-        star.properties[2] = twinkleSeed;
-        star.properties[3] = colorTemp;
-        stars.push_back(star);
-    }
-
+    // Any star field the renderer draws holds its stars brightest first (BuildStarField's contract;
+    // a catalog loaded from data sorts to it), so a limiting magnitude draws a prefix.
+    const std::vector<StarInstanceGPU> stars = BuildStarField();
     m_StarCount = static_cast<uint32_t>(stars.size());
+    m_StarMagnitudes.resize(stars.size());
+    for (size_t i = 0; i < stars.size(); ++i)
+        m_StarMagnitudes[i] = stars[i].dirAndMagnitude[3];
+    assert(std::is_sorted(m_StarMagnitudes.begin(), m_StarMagnitudes.end()));
 
     BufferDesc bd{};
     bd.size = m_StarCount * sizeof(StarInstanceGPU);
@@ -570,12 +651,11 @@ void SkyRenderer::GenerateStarCatalog()
     }
 }
 
-uint32_t SkyRenderer::GetStarInstanceCount(float density) const
+uint32_t SkyRenderer::GetStarInstanceCount(float limitingMagnitude) const
 {
-    float t = std::clamp(density, 0.0f, 1.0f);
-    float mapped = t * t;
-    uint32_t count = static_cast<uint32_t>(mapped * static_cast<float>(m_StarCount));
-    return std::clamp(count, 1u, m_StarCount);
+    constexpr float kLimitFade = 0.25f;
+    const auto end = std::upper_bound(m_StarMagnitudes.begin(), m_StarMagnitudes.end(), limitingMagnitude + kLimitFade);
+    return static_cast<uint32_t>(end - m_StarMagnitudes.begin());
 }
 
 void SkyRenderer::Update(const SkySettings& settings, const SkySystemState& state)
@@ -589,11 +669,14 @@ void SkyRenderer::SetCamera(const CameraState& camera)
     m_Camera = camera;
 }
 
-void SkyRenderer::InvalidateTransmittance()
-{
-    m_TransmittanceComputed = false;
-}
-
+// Earth's atmosphere on a crisp clear day: Hillaire 2020's Earth ("A Scalable and Production Ready
+// Sky and Atmosphere Rendering Technique", table 1, after Bruneton's reference) with the aerosol of
+// a crisp clear day, optical depth 0.06 at 550 nm, in place of the paper's pristine 0.0053: a deep
+// blue zenith over a light haze at the horizon. The hazier days are the presets an aerosol setting
+// will carry: a generic clear day at 0.10 and the satellite record's typical day at 0.15 (its
+// multiannual global mean is 0.13 to 0.14 over the oceans and 0.19 over land; MODIS, Remer et al.
+// 2008, JGR 113, D14S07). Per-metre coefficients at sea level, scale heights in metres, ozone as a
+// tent between 10 and 40 km.
 void SkyRenderer::FillDefaultAtmosphere(AtmosphereParametersGPU& atmo)
 {
     atmo.planetRadius = 6360.0e3f;
@@ -603,13 +686,32 @@ void SkyRenderer::FillDefaultAtmosphere(AtmosphereParametersGPU& atmo)
     atmo.betaRayleigh[0] = 5.802e-6f;
     atmo.betaRayleigh[1] = 13.558e-6f;
     atmo.betaRayleigh[2] = 33.100e-6f;
-    atmo.betaMie[0] = 2.0e-6f;
-    atmo.betaMie[1] = 2.0e-6f;
-    atmo.betaMie[2] = 2.0e-6f;
-    atmo.mieG = 0.8f;
-    atmo.groundAlbedo[0] = 0.3f;
-    atmo.groundAlbedo[1] = 0.3f;
-    atmo.groundAlbedo[2] = 0.3f;
+    // Mie extinction 0.06 / 1200 m = 5e-5 per metre at 550 nm, at the paper's single-scattering
+    // albedo, 0.9 (absorption is the extinction less the scattering), and falling with wavelength as
+    // (lambda / 550 nm)^-1.6, the Angstrom exponent of an aerosol of mostly fine particles, sampled at
+    // the 680, 550 and 440 nm the Rayleigh coefficients are given at. A grey aerosol greys the sky:
+    // this one scatters blue 43 % more than green, red 29 % less.
+    atmo.betaMie[0] = 3.20463e-5f;
+    atmo.betaMie[1] = 4.5e-5f;
+    atmo.betaMie[2] = 6.43085e-5f;
+    atmo.mieAbsorption[0] = 3.56071e-6f;
+    atmo.mieAbsorption[1] = 5.0e-6f;
+    atmo.mieAbsorption[2] = 7.14539e-6f;
+    // Ozone per linear-sRGB channel. The paper samples the cross section at 680, 550 and 440 nm
+    // (0.650, 1.881, 0.085)e-6, but the Chappuis band peaks at 600 nm, between the red and green
+    // samples, so that under-weights red and turns the twilight zenith violet. These are the same
+    // data (300 Dobson units, Serdyuchenko 233 K cross sections, the solar spectrum) integrated
+    // against the CIE 1931 functions and the sRGB primaries: what each channel of the sun loses
+    // through the zenith column. From the zenith column to the horizon path red moves 0.9 % and
+    // green 2.6 %; blue stays within -0.03..0.05e-6, so it is 0.
+    atmo.ozoneAbsorption[0] = 2.480e-6f;
+    atmo.ozoneAbsorption[1] = 1.795e-6f;
+    atmo.ozoneAbsorption[2] = 0.0f;
+    atmo.ozoneCenterHeight = 25.0e3f;
+    atmo.ozoneHalfWidth = 15.0e3f;
+    atmo.groundAlbedo[0] = kDefaultGroundAlbedo;
+    atmo.groundAlbedo[1] = kDefaultGroundAlbedo;
+    atmo.groundAlbedo[2] = kDefaultGroundAlbedo;
     atmo.groundBrightness = 0.8f;
     atmo.groundNightColor[0] = 0.025f;
     atmo.groundNightColor[1] = 0.025f;
@@ -678,24 +780,23 @@ ComputePipelineId SkyRenderer::EnsureSkyViewLutId(IDevice& device)
     return m_SkyViewLutId;
 }
 
-GraphicsPipelineId SkyRenderer::EnsureStarBillboardId(IDevice& device)
+GraphicsPipelineId SkyRenderer::EnsureDrawPipelineId(IDevice& device, SkyDrawPipeline& pipeline)
 {
-    if (!m_StarBillboardId.IsValid())
-    {
-        m_StarBillboardPipe.debugName = "Sky_StarBillboard_Pipe";
-        m_StarBillboardId = PipelineDescTranslator::InternGraphics(device, m_StarBillboardPipe);
-    }
-    return m_StarBillboardId;
+    if (!pipeline.Id.IsValid())
+        pipeline.Id = PipelineDescTranslator::InternGraphics(device, pipeline.Pipe);
+    return pipeline.Id;
 }
 
-GraphicsPipelineId SkyRenderer::EnsureSkyRenderId(IDevice& device)
+GraphicsPipelineId SkyRenderer::EnsureStarBillboardId(IDevice& device, bool heightFog)
 {
-    if (!m_SkyRenderId.IsValid())
-    {
-        m_SkyRenderPipe.debugName = "Sky_Render_Pipe";
-        m_SkyRenderId = PipelineDescTranslator::InternGraphics(device, m_SkyRenderPipe);
-    }
-    return m_SkyRenderId;
+    assert((!heightFog || m_HasHeightFogPipelines) && "the stars' height fog variant was not built");
+    return EnsureDrawPipelineId(device, heightFog ? m_StarBillboardFog : m_StarBillboard);
+}
+
+GraphicsPipelineId SkyRenderer::EnsureSkyRenderId(IDevice& device, bool heightFog)
+{
+    assert((!heightFog || m_HasHeightFogPipelines) && "the sky's height fog variant was not built");
+    return EnsureDrawPipelineId(device, heightFog ? m_SkyRenderFog : m_SkyRender);
 }
 
 } // namespace Rendering

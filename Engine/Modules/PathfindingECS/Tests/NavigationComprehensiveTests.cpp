@@ -1,8 +1,9 @@
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
-#include "PathfindingECS/Systems/NavigationBuildSystem.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
+#include "NavigationTestSurfaces.h"
+#include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationPathfindingSystem.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"
 #include "Components/Transform.h"
@@ -50,20 +51,7 @@ protected:
     ECS::Entity CreateGrid(uint32 width = kDefaultGridWidth, uint32 depth = kDefaultGridDepth,
                            float32 cellSize = kDefaultCellSize)
     {
-        auto entity = m_World->Create();
-        Components::NavigationGrid source{};
-        source.GridType = Pathfinding::GridType::Square;
-        source.CellSize = cellSize;
-        source.Width = width;
-        source.Depth = depth;
-        entity.Set(source);
-        m_World->ProcessCommands();
-
-        NavigationBuildSystem buildSystem;
-        buildSystem.Update(*m_World, kDeltaTime);
-        m_World->ProcessCommands();
-
-        return entity;
+        return Testing::CreateFlatGridSurface(*m_World, width, depth, cellSize);
     }
 
     ECS::Entity CreateAgent(float32 startX, float32 startZ, float32 destX, float32 destZ,
@@ -146,9 +134,9 @@ protected:
         return *ptr;
     }
 
-    Components::NavigationGrid GetGridSource(ECS::Entity& entity)
+    Components::NavigationSurface GetGridSource(ECS::Entity& entity)
     {
-        auto* ptr = entity.Get<Components::NavigationGrid>();
+        auto* ptr = entity.Get<Components::NavigationSurface>();
         EXPECT_NE(ptr, nullptr);
         return *ptr;
     }

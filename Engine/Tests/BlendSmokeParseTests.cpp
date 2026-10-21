@@ -14,6 +14,12 @@
 //      blend's header survives inflation.
 //   6. A minimal complete blend parses through the same entry point raw, as
 //      gzip and as zstd.
+//   7. Truncations of that blend, raw or wrapped in a valid gzip or zstd
+//      archive, cuts of its type tables behind a block that declares the cut
+//      length, and type tables with an index or an array dimension out of
+//      range, are refused without reading past the buffer (run under the ASan
+//      preset to see an overread as a failure), and a block longer than the
+//      file is refused before it is allocated.
 //
 // The sample tests SKIP (rather than fail) when blend-samples/ is not
 // extracted — the bundles are large + user-local + gitignored. Hydrate on any
@@ -23,6 +29,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -59,6 +66,16 @@
 #endif
 #if defined(GE_FBTBLEND_HAVE_ZSTD)
 #  include <zstd.h>
+#endif
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <psapi.h>
 #endif
 
 // The parser's built-in SDNA, defined in the fbtBlend.cpp implementation TU.
@@ -195,16 +212,198 @@ namespace
         bytes.insert(bytes.end(), header, header + kBlockHeaderBytes);
     }
 
-    // The smallest .blend the parser reads to the end: a header, a DNA1 block
-    // holding the parser's own SDNA, and ENDB.
-    std::vector<unsigned char> MinimalBlend()
+    // A header, a DNA1 block holding the first sdnaBytes of the parser's own
+    // SDNA, and ENDB.
+    std::vector<unsigned char> BlendWithSdnaPrefix(std::size_t sdnaBytes)
     {
         std::vector<unsigned char> bytes(kBlend405Header, kBlend405Header + sizeof(kBlend405Header) - 1);
-        AppendBlockHeader(bytes, "DNA1", static_cast<std::uint32_t>(bfBlenderLen), 1);
-        bytes.insert(bytes.end(), bfBlenderFBT, bfBlenderFBT + bfBlenderLen);
+        AppendBlockHeader(bytes, "DNA1", static_cast<std::uint32_t>(sdnaBytes), 1);
+        bytes.insert(bytes.end(), bfBlenderFBT, bfBlenderFBT + sdnaBytes);
         AppendBlockHeader(bytes, "ENDB", 0, 0);
         return bytes;
     }
+
+    // The smallest .blend the parser reads to the end.
+    std::vector<unsigned char> MinimalBlend()
+    {
+        return BlendWithSdnaPrefix(static_cast<std::size_t>(bfBlenderLen));
+    }
+
+    constexpr std::size_t kSdnaCutsPerTableTag = 4;
+    constexpr std::size_t kEvenlySpacedSdnaCuts = 64;
+
+    // Lengths to cut the parser's SDNA at: around each table tag (SDNA, NAME,
+    // TYPE, TLEN, STRC: just before it, after it, inside the count that follows
+    // and after the count) and evenly spaced through the tables. A parse costs
+    // the built-in tables' setup (a quarter second under ASan), so the sweep
+    // samples the cut lengths instead of trying all of them.
+    std::vector<std::size_t> SdnaCutLengths()
+    {
+        const std::size_t sdnaBytes = static_cast<std::size_t>(bfBlenderLen);
+        std::vector<std::size_t> cuts;
+        for (const char* tag : {"SDNA", "NAME", "TYPE", "TLEN", "STRC"})
+        {
+            const unsigned char* const begin = bfBlenderFBT;
+            const unsigned char* const end = begin + sdnaBytes;
+            const unsigned char* const found = std::search(begin, end, tag, tag + 4);
+            if (found == end)
+            {
+                continue;
+            }
+            const std::size_t offset = static_cast<std::size_t>(found - begin);
+            for (std::size_t step = 0; step < kSdnaCutsPerTableTag; ++step)
+            {
+                const std::size_t cut = offset + step * 3;
+                if (cut > 0 && cut <= sdnaBytes)
+                {
+                    cuts.push_back(cut - 1);
+                }
+            }
+        }
+        for (std::size_t i = 1; i < kEvenlySpacedSdnaCuts; ++i)
+        {
+            cuts.push_back(sdnaBytes * i / kEvenlySpacedSdnaCuts);
+        }
+        cuts.push_back(sdnaBytes - 1);
+        return cuts;
+    }
+
+    // Where the tables of the parser's own SDNA sit (little-endian, as this
+    // machine reads it), so a test can corrupt one value in place.
+    struct SdnaLayout
+    {
+        std::vector<std::size_t> NameAt;
+        std::vector<std::size_t> StructAt;
+        std::uint32_t TypeCount = 0;
+    };
+
+    std::uint16_t ReadU16(const std::vector<unsigned char>& bytes, std::size_t at)
+    {
+        std::uint16_t value = 0;
+        std::memcpy(&value, &bytes[at], sizeof(value));
+        return value;
+    }
+
+    void WriteU16(std::vector<unsigned char>& bytes, std::size_t at, std::uint16_t value)
+    {
+        std::memcpy(&bytes[at], &value, sizeof(value));
+    }
+
+    std::size_t AlignTo4(std::size_t offset)
+    {
+        return (offset + 3) & ~std::size_t{3};
+    }
+
+    std::size_t SkipStrings(const std::vector<unsigned char>& bytes, std::size_t at, std::uint32_t count,
+                            std::vector<std::size_t>* starts)
+    {
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            if (starts != nullptr)
+            {
+                starts->push_back(at);
+            }
+            at += std::strlen(reinterpret_cast<const char*>(&bytes[at])) + 1;
+        }
+        return at;
+    }
+
+    // SDNA, NAME, the name count and names; TYPE, the type count and types;
+    // TLEN and one length per type; STRC, the struct count and the structs.
+    SdnaLayout ScanSdna(const std::vector<unsigned char>& sdna)
+    {
+        constexpr std::size_t kTagBytes = 4;
+        SdnaLayout layout;
+        std::uint32_t count = 0;
+        std::size_t at = 2 * kTagBytes;
+        std::memcpy(&count, &sdna[at], sizeof(count));
+        at = AlignTo4(SkipStrings(sdna, at + sizeof(count), count, &layout.NameAt));
+        std::memcpy(&layout.TypeCount, &sdna[at + kTagBytes], sizeof(layout.TypeCount));
+        at = AlignTo4(SkipStrings(sdna, at + kTagBytes + sizeof(count), layout.TypeCount, nullptr));
+        at = AlignTo4(at + kTagBytes + layout.TypeCount * sizeof(std::uint16_t));
+        std::memcpy(&count, &sdna[at + kTagBytes], sizeof(count));
+        at += kTagBytes + sizeof(count);
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            layout.StructAt.push_back(at);
+            at += 2 * sizeof(std::uint16_t) * (1 + std::size_t{ReadU16(sdna, at + 2)});
+        }
+        return layout;
+    }
+
+    // Rewrites the first name of at least `text`'s length as `text`, padded with
+    // letters, so its array dimensions read as `text` declares them.
+    void RewriteName(std::vector<unsigned char>& sdna, const SdnaLayout& layout, const char* text)
+    {
+        const std::size_t textBytes = std::strlen(text);
+        for (const std::size_t at : layout.NameAt)
+        {
+            const std::size_t nameBytes = std::strlen(reinterpret_cast<const char*>(&sdna[at]));
+            if (nameBytes >= textBytes)
+            {
+                std::memset(&sdna[at], 'q', nameBytes);
+                std::memcpy(&sdna[at], text, textBytes);
+                return;
+            }
+        }
+    }
+
+    struct SdnaCorruption
+    {
+        const char* Name;
+        void (*Apply)(std::vector<unsigned char>& sdna, const SdnaLayout& layout);
+    };
+
+    constexpr std::uint16_t kMembersPastTheLimit = 256;
+
+    const SdnaCorruption kSdnaCorruptions[] = {
+        {"struct type equal to the type count",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout)
+         { WriteU16(sdna, layout.StructAt.front(), static_cast<std::uint16_t>(layout.TypeCount)); }},
+        {"member count of 256",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout)
+         { WriteU16(sdna, layout.StructAt.front() + 2, kMembersPastTheLimit); }},
+        {"member type equal to the type count",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout)
+         { WriteU16(sdna, layout.StructAt.back() + 4, static_cast<std::uint16_t>(layout.TypeCount)); }},
+        {"member name equal to the name count",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout)
+         { WriteU16(sdna, layout.StructAt.back() + 6, static_cast<std::uint16_t>(layout.NameAt.size())); }},
+        {"four array dimensions",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[1][1][1][1]"); }},
+        {"an unterminated dimension",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[12"); }},
+        {"a zero dimension",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[0]"); }},
+        {"a dimension that is not a number",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[-]"); }},
+        {"an empty dimension",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[]"); }},
+        {"a dimension of 20 digits",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout)
+         { RewriteName(sdna, layout, "a[99999999999999999999]"); }},
+        {"dimensions whose product passes 65535",
+         [](std::vector<unsigned char>& sdna, const SdnaLayout& layout) { RewriteName(sdna, layout, "a[256][257]"); }},
+    };
+
+    // A blend whose DNA1 block declares `declaredBytes` and holds `heldBytes`.
+    std::vector<unsigned char> BlendWithShortBlock(std::uint32_t declaredBytes, std::size_t heldBytes)
+    {
+        std::vector<unsigned char> bytes(kBlend405Header, kBlend405Header + sizeof(kBlend405Header) - 1);
+        AppendBlockHeader(bytes, "DNA1", declaredBytes, 1);
+        bytes.resize(bytes.size() + heldBytes, 'x');
+        return bytes;
+    }
+
+#if defined(_WIN32)
+    // The most private bytes the process has committed at once since it started.
+    std::size_t PeakPrivateBytes()
+    {
+        PROCESS_MEMORY_COUNTERS counters{};
+        GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters));
+        return counters.PeakPagefileUsage;
+    }
+#endif
 
 #if defined(GE_FBTBLEND_HAVE_ZLIB)
     constexpr int kZlibDefaultMemLevel = 8;
@@ -363,7 +562,13 @@ TEST_F(BlendSmokeParseTests, LargestFileParsesWithinBudget)
     // that cost roughly 3-4x. We multiply the budget by 3x in Debug so the
     // gate measures the right thing on each config; the user-facing
     // engineering budget remains the Release number.
-#if defined(_DEBUG) || defined(GE_DEBUG_BUILD)
+#if defined(GE_ENABLE_ASAN) && GE_ENABLE_ASAN
+    // ASan's shadow checks and the machine's load swing this from 1.5 s to
+    // 3.3 s for the same reader, so the budget catches a parse that grows
+    // with the file's square, not a percentage.
+    constexpr double kBudgetMsPer50MB = 500.0 * 10.0;
+    constexpr const char* kBudgetLabel = "Debug ASan (10x Release)";
+#elif defined(_DEBUG) || defined(GE_DEBUG_BUILD)
     constexpr double kBudgetMsPer50MB = 500.0 * 3.0;
     constexpr const char* kBudgetLabel = "Debug (3x Release)";
 #else
@@ -438,5 +643,100 @@ TEST_F(BlendSmokeParseTests, MinimalBlendParsesRawGzipAndZstd)
     const std::vector<unsigned char> zstd = ZstdCompress(blend);
     ASSERT_FALSE(zstd.empty());
     EXPECT_EQ(ParseLikeModelLoader(zstd), fbtFile::FS_OK);
+#endif
+}
+
+// Truncations of a complete blend: inside its header, inside the DNA1 block
+// header and through the type tables, raw and, cut inside the name table,
+// inside a valid gzip and zstd archive. The DNA1 block declares more bytes than
+// the file holds; the parse must refuse each file instead of reading the type
+// tables past the end of the buffer. (The parse stops after the DNA1 block, so
+// a cut inside ENDB loses nothing it reads.)
+TEST_F(BlendSmokeParseTests, TruncatedBlendIsRefused)
+{
+    const std::vector<unsigned char> blend = MinimalBlend();
+    const std::size_t headerBytes = sizeof(kBlend405Header) - 1;
+    std::vector<std::size_t> lengths = {7, headerBytes - 1, headerBytes, headerBytes + kBlockHeaderBytes - 1,
+                                        headerBytes + kBlockHeaderBytes};
+    for (const std::size_t cut : SdnaCutLengths())
+    {
+        lengths.push_back(headerBytes + kBlockHeaderBytes + cut);
+    }
+    for (const std::size_t length : lengths)
+    {
+        const std::vector<unsigned char> truncated(blend.begin(), blend.begin() + length);
+        EXPECT_NE(ParseLikeModelLoader(truncated), fbtFile::FS_OK) << "truncated to " << length << " bytes";
+    }
+
+    const std::size_t nameTableCut = static_cast<std::size_t>(bfBlenderLen) / 4;
+    const std::vector<unsigned char> truncated(blend.begin(),
+                                               blend.begin() + headerBytes + kBlockHeaderBytes + nameTableCut);
+#if defined(GE_FBTBLEND_HAVE_ZLIB)
+    const std::vector<unsigned char> gzip = GzipCompress(truncated, Z_DEFAULT_COMPRESSION);
+    ASSERT_FALSE(gzip.empty());
+    EXPECT_NE(ParseLikeModelLoader(gzip), fbtFile::FS_OK) << "gzip";
+#endif
+#if defined(GE_FBTBLEND_HAVE_ZSTD)
+    const std::vector<unsigned char> zstd = ZstdCompress(truncated);
+    ASSERT_FALSE(zstd.empty());
+    EXPECT_NE(ParseLikeModelLoader(zstd), fbtFile::FS_OK) << "zstd";
+#endif
+}
+
+// A file that holds every byte its DNA1 block declares, where the block ends
+// inside the type tables: every scan of a name, a type or a struct must stop
+// at the end of the block.
+TEST_F(BlendSmokeParseTests, TypeTablesCutShortInsideTheirBlockAreRefused)
+{
+    for (const std::size_t cut : SdnaCutLengths())
+    {
+        EXPECT_NE(ParseLikeModelLoader(BlendWithSdnaPrefix(cut)), fbtFile::FS_OK)
+            << "type tables cut at " << cut << " bytes";
+    }
+}
+
+// One value of the parser's own SDNA corrupted in place, inside a block that
+// holds every byte it declares: a struct or member index past its table, too
+// many members, and array dimensions that are too many, unterminated, empty,
+// zero, not a number or too large. Each is refused instead of indexing past a
+// table or dividing by a zero dimension when a data block is linked.
+TEST_F(BlendSmokeParseTests, CorruptTypeTablesAreRefused)
+{
+    const std::vector<unsigned char> intact(bfBlenderFBT, bfBlenderFBT + bfBlenderLen);
+    const SdnaLayout layout = ScanSdna(intact);
+    ASSERT_FALSE(layout.StructAt.empty());
+    for (const SdnaCorruption& corruption : kSdnaCorruptions)
+    {
+        std::vector<unsigned char> sdna = intact;
+        corruption.Apply(sdna, layout);
+        std::vector<unsigned char> bytes(kBlend405Header, kBlend405Header + sizeof(kBlend405Header) - 1);
+        AppendBlockHeader(bytes, "DNA1", static_cast<std::uint32_t>(sdna.size()), 1);
+        bytes.insert(bytes.end(), sdna.begin(), sdna.end());
+        AppendBlockHeader(bytes, "ENDB", 0, 0);
+        EXPECT_NE(ParseLikeModelLoader(bytes), fbtFile::FS_OK) << corruption.Name;
+    }
+}
+
+// A 1 KB file whose block declares 1 GiB is refused before the block is
+// allocated: eight refusals leave the process's peak private bytes where they
+// were. Allocating the declared block, freed or leaked, raises the peak by at
+// least that block.
+TEST_F(BlendSmokeParseTests, BlockLongerThanTheFileIsRefusedBeforeItsAllocation)
+{
+#if defined(_WIN32)
+    constexpr std::uint32_t kDeclaredBytes = 1u << 30;
+    constexpr std::size_t kHeldBytes = 1000;
+    constexpr int kParses = 8;
+    constexpr std::size_t kAllowedGrowthBytes = 64u << 20;
+    const std::vector<unsigned char> bytes = BlendWithShortBlock(kDeclaredBytes, kHeldBytes);
+    const std::size_t before = PeakPrivateBytes();
+    for (int parse = 0; parse < kParses; ++parse)
+    {
+        EXPECT_NE(ParseLikeModelLoader(bytes), fbtFile::FS_OK);
+    }
+    const std::size_t after = PeakPrivateBytes();
+    EXPECT_LT(after - before, kAllowedGrowthBytes) << "peak private bytes grew from " << before << " to " << after;
+#else
+    GTEST_SKIP() << "reads the process's private bytes through the Windows API.";
 #endif
 }

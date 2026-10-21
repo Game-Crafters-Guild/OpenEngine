@@ -64,7 +64,7 @@ protected:
         m_Ui->OnMouseMove(-1000.0f, -1000.0f);
     }
 
-    UIElement* FindById(const std::string& id)
+    UIElement* FindById(StringId id)
     {
         return m_Ui->GetRootElement()->FindById(id);
     }
@@ -95,7 +95,7 @@ TEST_F(TransitionEngineTest, OpacityTransitionReachesTarget)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     EXPECT_NEAR(box->GetResolvedStyle().Visual.LocalOpacity, 1.0f, 0.01f);
@@ -132,7 +132,7 @@ TEST_F(TransitionEngineTest, IntermediateValuesAreInterpolated)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     // Trigger hover.
@@ -171,7 +171,7 @@ TEST_F(TransitionEngineTest, PositionTopTransitionUpdatesCommittedGeometry)
     )";
     SetupUI(xml, css);
 
-    UIElement* card = FindById("card");
+    UIElement* card = FindById("card"_sid);
     ASSERT_NE(card, nullptr);
     EXPECT_NEAR(card->GetLayoutY(), 0.0f, 0.5f);
 
@@ -211,7 +211,7 @@ TEST_F(TransitionEngineTest, TransitionCompletesAndStopsUpdating)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     HoverAt(10.0f, 10.0f);
@@ -251,7 +251,7 @@ TEST_F(TransitionEngineTest, RetargetOnUnhoverMidTransition)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     HoverAt(10.0f, 10.0f);
@@ -297,7 +297,7 @@ TEST_F(TransitionEngineTest, ColorTransitionReachesTarget)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     HoverAt(10.0f, 10.0f);
@@ -336,7 +336,7 @@ TEST_F(TransitionEngineTest, TransitionAllHandlesMultipleProperties)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     HoverAt(10.0f, 10.0f);
@@ -371,7 +371,7 @@ TEST_F(TransitionEngineTest, DelayHoldsStartValueDuringDelay)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     HoverAt(10.0f, 10.0f);
@@ -412,7 +412,7 @@ TEST_F(TransitionEngineTest, DiscreteDisplayTransitionDelaysNone)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     EXPECT_EQ(box->GetResolvedStyle().Layout.DisplayMode, DisplayMode::Flex);
@@ -485,7 +485,7 @@ TEST_F(TransitionEngineTest, LineHeightTransitionAnimatesResolvedValue)
     )";
     SetupUI(xml, css);
 
-    UIElement* text = FindById("text");
+    UIElement* text = FindById("text"_sid);
     ASSERT_NE(text, nullptr);
     EXPECT_NEAR(text->GetResolvedStyle().Visual.LineHeight, 20.0f, 0.5f);
 
@@ -519,7 +519,7 @@ TEST_F(TransitionEngineTest, TransitionEndEventFires)
     )";
     SetupUI(xml, css);
 
-    UIElement* box = FindById("box");
+    UIElement* box = FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     int transitionEndCount = 0;
@@ -610,8 +610,8 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesInsideModalScrollView)
     )";
     SetupUI(xml, css);
 
-    UIElement* card = FindById("card");
-    UIElement* preview = FindById("preview");
+    UIElement* card = FindById("card"_sid);
+    UIElement* preview = FindById("preview"_sid);
     ASSERT_NE(card, nullptr);
     ASSERT_NE(preview, nullptr);
     ASSERT_GT(card->GetLayoutWidth(), 0.0f);
@@ -705,7 +705,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWithInlineFrameOverrides)
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
     // Mirror ApplyProjectCardFrame + addCardOutline inline overrides.
-    UIElement* cardEl = root->FindById("card");
+    UIElement* cardEl = root->FindById("card"_sid);
     ASSERT_NE(cardEl, nullptr);
     cardEl->Overrides()
         .Set(Style::Display, DisplayMode::Flex)
@@ -723,7 +723,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWithInlineFrameOverrides)
         .Set(Style::BorderWidth, Box4{0.0f, 0.0f, 0.0f, 0.0f})
         .Set(Style::BorderRadius, CornerRadiiTLTRBRBL{8.0f, 8.0f, 8.0f, 8.0f})
         .Set(Style::Cursor, CursorStyle::Pointer);
-    UIElement* outlineEl = root->FindById("outline");
+    UIElement* outlineEl = root->FindById("outline"_sid);
     ASSERT_NE(outlineEl, nullptr);
     outlineEl->Overrides()
         .Set(Style::Position, PositionType::Absolute)
@@ -747,7 +747,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWithInlineFrameOverrides)
     ASSERT_TRUE(m_Ui->AttachStyleFromFile(m_CssPath.string()));
     Tick(0.0f, false);
 
-    UIElement* card = FindById("card");
+    UIElement* card = FindById("card"_sid);
     ASSERT_NE(card, nullptr);
     ASSERT_GT(card->GetLayoutWidth(), 0.0f);
     EXPECT_EQ(card->GetResolvedStyle().Visual.BackgroundColor, 0xFF1F2126u);
@@ -767,7 +767,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWithInlineFrameOverrides)
         Tick(0.016f);
     EXPECT_EQ(card->GetResolvedStyle().Visual.BackgroundColor, 0xFF18233Du);
 
-    UIElement* outline = FindById("outline");
+    UIElement* outline = FindById("outline"_sid);
     ASSERT_NE(outline, nullptr);
     EXPECT_EQ(outline->GetResolvedStyle().Visual.BorderColor.Top, 0xFF6F98FFu)
         << "outline should follow the descendant hover rule";
@@ -811,7 +811,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWhenCardAddedAfterAttach)
     SetupUI(xml, css);
 
     // Now add the card dynamically, like RefreshRecentProjectsList does.
-    UIElement* grid = FindById("grid");
+    UIElement* grid = FindById("grid"_sid);
     ASSERT_NE(grid, nullptr);
     auto card = std::make_unique<Button>();
     card->SetId("card");
@@ -833,7 +833,7 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWhenCardAddedAfterAttach)
 
     Tick(0.0f);
 
-    UIElement* cardEl = FindById("card");
+    UIElement* cardEl = FindById("card"_sid);
     ASSERT_NE(cardEl, nullptr);
     ASSERT_GT(cardEl->GetLayoutWidth(), 0.0f);
     EXPECT_EQ(cardEl->GetResolvedStyle().Visual.BackgroundColor, 0xFF1F2126u);

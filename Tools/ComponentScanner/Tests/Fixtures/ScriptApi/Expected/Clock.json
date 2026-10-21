@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "name": "Clock",
+  "hash": "0xf33622ab5e3da4f3",
+  "constants": [],
+  "enums": [],
+  "events": [],
+  "functions": [
+    {
+      "id": "Clock.Now",
+      "name": "Now",
+      "cpp": "GameEngine::Events::Clock::Now",
+      "header": "Events/ClockScriptApi.h",
+      "line": 19,
+      "doc": "Seconds since the start.",
+      "thread": "main",
+      "returns": {
+        "kind": "Double"
+      },
+      "params": []
+    }
+  ],
+  "handles": [],
+  "records": []
+}

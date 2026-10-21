@@ -1,0 +1,30 @@
+#version 450
+
+// Test-only probe: reads a multiscatter LUT through the mapping the sky-view march reads it with
+// (GE_SkyMultiscatterLutUv) at the (sunCosZenith, heightNorm) pairs the test asks for
+// (SkyAtmosphereLutReferenceTests). The test fills the LUT with each texel's own indices, so a read
+// at the parameters the bake gives a texel must return that texel exactly.
+
+#include "Includes/sky_multiscatter_lut.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uMultiscatterLUT;
+// In: (sunCosZenith, heightNorm, -, -) per query. Out: the bilinear read, rgb.
+layout(set = 0, binding = 1) buffer ProbeData { vec4 data[]; } uProbe;
+
+layout(push_constant) uniform ProbePC
+{
+    // x query count
+    vec4 count;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (float(i) >= pc.count.x)
+        return;
+    vec2 lutSize = vec2(textureSize(uMultiscatterLUT, 0));
+    vec2 q = uProbe.data[i].xy;
+    uProbe.data[i] = vec4(textureLod(uMultiscatterLUT, GE_SkyMultiscatterLutUv(q.x, q.y, lutSize), 0.0).rgb, 1.0);
+}

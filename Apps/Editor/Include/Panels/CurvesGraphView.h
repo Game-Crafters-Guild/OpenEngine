@@ -245,8 +245,6 @@ private:
     bool m_BoxSelectModifierDown = false;
     float m_DragCurrentTime = 0.0f;
     float m_DragCurrentValue = 0.0f;
-    float m_DragAnchorPointerTime = 0.0f;
-    float m_DragAnchorPointerValue = 0.0f;
     float m_EmptyActionStartX = 0.0f;
     float m_EmptyActionStartY = 0.0f;
     float m_BoxStartX = 0.0f;

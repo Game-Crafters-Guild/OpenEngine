@@ -32,7 +32,7 @@ bool ConfigEqual(const CascadeRenderInputs& a, const CascadeRenderInputs& b)
            a.ShadowLODBias == b.ShadowLODBias && a.LODForceLevel == b.LODForceLevel &&
            a.SseThresholdToCoverage == b.SseThresholdToCoverage &&
            a.SseThresholdToCoverageTight == b.SseThresholdToCoverageTight &&
-           a.SelectionMode == b.SelectionMode && a.RenderLayerMask == b.RenderLayerMask && a.CasterReduction == b.CasterReduction;
+           a.SelectionMode == b.SelectionMode && a.Layers == b.Layers && a.CasterReduction == b.CasterReduction;
 }
 
 bool AnyCasterOverlapsCascade(std::span<const ShadowCasterChangeSphere> spheres,

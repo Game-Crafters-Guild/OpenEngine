@@ -22,14 +22,14 @@ namespace NativeScripting
 {
 
 // Load <sdkRoot>/nativescripting/manifest.txt into outConfig (engine-interface fields:
-// CMakeExe, Config, IncludeDirs, EngineImportLib, CompileDefinitions, SdkEntrySource,
-// DotnetExe, ComponentScannerDll, DetectBase; plus EditorImportLib/EditorIncludeDirs
+// CMakeExe, Config, IncludeDirs, EngineImportLib, EngineBinary, CompileDefinitions, SdkEntrySource,
+// DotnetExe, ComponentScannerExe, DetectBase; plus EditorImportLib/EditorBinary/EditorIncludeDirs
 // when the editor's SDK staged them). Relative manifest paths are resolved
 // against sdkRoot. The user DLL's build config is mapped from the engine's config to a
 // CRT-compatible standalone config (engine Debug → Debug /MDd; anything else → Release
 // /MD — DebugFast uses the release CRT). Returns false with outError set when the
-// manifest is missing or the essential build inputs (cmake / import lib / include dir)
-// are absent. A missing dotnet/scanner is tolerated (the build falls back to macros-only).
+// manifest is missing or the essential build inputs (cmake / import lib / engine binary /
+// include dir) are absent. A missing scanner is tolerated (the build falls back to macros-only).
 bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
                      NativeBuildConfig& outConfig,
                      std::string& outError);

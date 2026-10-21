@@ -76,7 +76,7 @@ class ModelThumbnailHandler : public AssetThumbnailHandler
     // RenderGraph arm (slice 8c-2b): same CPU phase, declarations into the window's
     // frame (bucketer twin → world → tonemap → encode into the slot's
     // handler-owned device texture). A window ticks on exactly one arm.
-    void TickRenderRG(uint64_t windowId, Rendering::RenderGraph::RGFrame& frame);
+    void TickRenderRG(uint64_t windowId, Rendering::RenderGraph::RGFrame& frame) override;
 
     // RenderGraph-mode binding. Pure frames (pureFrame != null): per-frame
     // SetExternalTextureRG + PublishExternalTextureRG of every ready slot —
@@ -85,7 +85,7 @@ class ModelThumbnailHandler : public AssetThumbnailHandler
     // before the old graph on the same queue with the slot exported
     // ShaderReadOnly, so the old UI's descriptor-direct sample is ordered.
     bool RegisterReadyThumbnailsRG(uint64_t windowId, class UIManager* ui,
-                                   Rendering::RenderGraph::RGFrame* pureFrame);
+                                   Rendering::RenderGraph::RGFrame* pureFrame) override;
 
     // Called when the editor switches projects / reinitializes AssetManager.
     // Keeps GPU resources alive but drops GUID mappings and pending work so we
@@ -97,7 +97,7 @@ class ModelThumbnailHandler : public AssetThumbnailHandler
     /// the matching (list-aware) slot for this window. Restores the pre-RG
     /// ResolveEngineTextureForWindow path the immediate-mode cutover dropped;
     /// without it the list variant (hierarchy/inspector icons) never renders.
-    void EnsureEngineThumbnailRequested(uint64_t windowId, const std::string& engineName);
+    void EnsureEngineThumbnailRequested(uint64_t windowId, const std::string& engineName) override;
 
     // Route material asset thumbnails through the same 3-D preview pipeline.
     // Returns engine:editor_material_thumb_<guid> immediately.
@@ -126,7 +126,7 @@ class ModelThumbnailHandler : public AssetThumbnailHandler
     // can use this to defer swapping the bound resource (e.g. a focused
     // preview pane) until the new render is ready, so the previous content
     // stays visible during the transition instead of going blank.
-    bool IsEngineThumbnailReadyForWindow(uint64_t windowId, const std::string& engineName) const;
+    bool IsEngineThumbnailReadyForWindow(uint64_t windowId, const std::string& engineName) const override;
 
     // Where to write rendered material thumbnails as PNG so future navigations
     // bypass the live-render queue (see ThumbnailService::GetOrRequest material

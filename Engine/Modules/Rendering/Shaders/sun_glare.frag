@@ -27,6 +27,11 @@ layout(set = 0, binding = 2, std140) uniform ViewParamsBlock {
 #undef GE_VP_MAT4
 } ViewParams;
 
+// The view's exposure state (ExposureHistory): the glare's absolute radiance lands in scene colour
+// at the frame's pre-exposure P.
+#define GE_EXPOSURE_HISTORY_BINDING 5
+#include "Includes/exposure_history.glsl"
+
 // A 32-byte PREFIX of the vertex stage's GlarePC. Vulkan lets each stage declare the range it
 // uses, and the packager checks the SUM of the per-stage ranges against a 128-byte limit, so
 // the fragment stage declares only the two vec4s it reads. Everything else the glare needs is
@@ -55,8 +60,9 @@ void main()
                                          GE_SUN_GLARE_FRACTION);
     radiance *= vSunGlareScale;
 
-    vec3 glare = pc.sunColorIrradiance.rgb * vSunTransmittance * radiance;
-    // Bound what lands in the fp16 target. At the shipped glare fraction and a 100 klx sun it
+    vec3 glare = pc.sunColorIrradiance.rgb * vSunTransmittance * radiance *
+                 GE_PreExposure();
+    // Bound what lands in the fp16 target (stored units, after P). At the shipped glare fraction and a 100 klx sun it
     // does not bind at the default sky exposure; where it does bind — a brighter authored sun,
     // or the maximum +2 EV trim — the disc is drawn over that region anyway. It is what keeps
     // either case from writing +Inf, which would reach NaN through bloom's Karis weight and

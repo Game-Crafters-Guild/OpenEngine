@@ -90,6 +90,9 @@ struct EditorComponentTraits
     // or off. Off stops its sound." (ComponentEnabledToggleTooltip). Empty = the
     // generic tooltip.
     std::string EnableToggleTooltip;
+    // What editor text calls an entity with this component while it has no name
+    // (EntityDisplayName): "Untitled mark-up". Empty = its id (EntityIdLabel).
+    std::string UntitledName;
     // For a component whose system writes to other entities (a sky drives its
     // linked light's color): editor code that edits without knowing the
     // component (a component's enable toggle, an entity's creation) calls
@@ -117,6 +120,10 @@ public:
     // Copy-out lookup: callers get a stable snapshot, never a pointer into the
     // map (registrations can land at any time from module loads).
     bool TryGet(ECS::ComponentTypeId typeId, EditorComponentTraits& outTraits) const;
+
+    // The first UntitledName the traits of `types` set, in their order; empty for none. One
+    // lookup per type under one lock, copying the name alone (EntityDisplayName's fallback).
+    std::string UntitledNameOf(const std::vector<ECS::ComponentTypeId>& types) const;
 
     // The component whose traits host `hostedTypeId`'s inspector section (see
     // EditorComponentTraits::HostsInspectorSection), with its traits; false when

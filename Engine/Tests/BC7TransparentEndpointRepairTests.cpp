@@ -1,5 +1,5 @@
 // RepairBC7TransparentEndpoints on hand-built blocks: no encoder, so these run on
-// every platform. The encoder half (DirectXTex output decoded back) is
+// every platform. The encoder half (the cook's BC7 output decoded back) is
 // TextureCookBc.Bc7TransparentTexelsDecodeToZeroAlpha in TextureCookTests.cpp.
 
 #include <gtest/gtest.h>

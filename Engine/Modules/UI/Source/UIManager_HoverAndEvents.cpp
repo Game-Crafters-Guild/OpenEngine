@@ -12,6 +12,8 @@
 #include "UI/Parsers/CSSParser.h"
 #include "UI/TransitionEngine.h"
 #include "UI/UIEvents.h"
+#include "UI/UITransform.h"
+#include "Mathematics/MatrixOps.h"
 
 #include "Input/KeyCodes.h"
 #include "UI/Layout/YogaLayout.h"
@@ -177,8 +179,13 @@ UIElement* GatePointerTargetToOpenPopups(const std::vector<DismissablePopup*>& r
 // items, modal SearchDialog, drag preview). UIElement::HasOverlayInSubtree()
 // gates the prune; when set, we still descend but fast-path through
 // non-overlay siblings to find only the overlay-bearing branches.
+// (mx, my) is the pointer in the space `el` lays out in: the window point
+// carried back through every transformed ancestor's inverse. An overlay keeps
+// it: it restarts its clip chain at the window but paints in its owner's
+// transform.
 void HitTestSubtreeRecursive(UIElement* el,
                              float mx, float my,
+                             int transformDepth,
                              int parentPosContext,
                              int parentOverlayPriority,
                              int parentOverlayDepth,
@@ -226,6 +233,39 @@ void HitTestSubtreeRecursive(UIElement* el,
     HitClipState selfClip = inheritedClip;
     if (selfIsOverlay)
         selfClip = HitClipState{};
+
+    // CSS transform: carry the pointer into the element's untransformed
+    // layout space, where its own rect, its descendants' rects and the clips
+    // they add all live. The inherited clip is in the space the element sits
+    // in, so it is settled first: a clip only ever asks about this one point,
+    // and whether the point is inside it does not change by moving to
+    // another space. A singular transform (scale(0)) paints nothing, and so
+    // hits nothing.
+    // Past UI::kMaxTransformChainDepth transformed ancestors the transform is
+    // ignored, as the paint ignores it (WriteElementTransformSlot).
+    int childTransformDepth = transformDepth;
+    if (!rs.Visual.Transform.IsNone() && transformDepth < UI::kMaxTransformChainDepth)
+    {
+        ++childTransformDepth;
+        const bool insideInherited = ClipContains(selfClip, mx, my);
+        Mathematics::Matrix3x3 m;
+        Mathematics::Matrix3x3 inv;
+        const bool invertible =
+            UI::ComputeElementTransform(rs.Visual,
+                                        Mathematics::Rect{el->GetLayoutX(), el->GetLayoutY(), el->GetLayoutWidth(),
+                                                          el->GetLayoutHeight()},
+                                        1.0f, m) &&
+            Mathematics::TryInverseAffine2D(m, inv);
+        if (invertible)
+        {
+            const Mathematics::Vector2 local = inv.TransformPoint(Mathematics::Vector2(mx, my));
+            mx = local.x;
+            my = local.y;
+        }
+        selfClip = HitClipState{};
+        if (!insideInherited || !invertible)
+            selfClip.hasClip = true; // zero area: nothing below can be hit
+    }
 
     // Stacking context. An element with explicit z-index > 0 establishes
     // a new positioning context; descendants without their own z-index
@@ -298,14 +338,14 @@ void HitTestSubtreeRecursive(UIElement* el,
             continue;
         if (nonOverlayCantHit && !child->HasOverlayInSubtree())
             continue;
-        HitTestSubtreeRecursive(child.get(), mx, my, childPosContext, selfOverlayPriority,
+        HitTestSubtreeRecursive(child.get(), mx, my, childTransformDepth, childPosContext, selfOverlayPriority,
                                 selfOverlayDepth, childClip, requirePointerEvents, orderCounter, best);
     }
 
     if (UIElement* tgt = el->GetMountTarget())
     {
         if (!nonOverlayCantHit || tgt->HasOverlayInSubtree())
-            HitTestSubtreeRecursive(tgt, mx, my, childPosContext, selfOverlayPriority,
+            HitTestSubtreeRecursive(tgt, mx, my, childTransformDepth, childPosContext, selfOverlayPriority,
                                     selfOverlayDepth, childClip, requirePointerEvents, orderCounter, best);
     }
 }
@@ -340,7 +380,7 @@ UIElement* UIManager::HitTestTree(float mx, float my, bool requirePointerEvents)
     HitCandidate best{};
     HitClipState rootClip{};
     int orderCounter = 0;
-    HitTestSubtreeRecursive(m_Root.get(), mx, my, /*parentPosContext=*/0,
+    HitTestSubtreeRecursive(m_Root.get(), mx, my, /*transformDepth=*/0, /*parentPosContext=*/0,
                             /*parentOverlayPriority=*/0, /*parentOverlayDepth=*/0, rootClip,
                             requirePointerEvents, orderCounter, best);
     return GatePointerTargetToOpenPopups(m_DismissablePopupRegistry, m_Root.get(), best.el);
@@ -1226,7 +1266,7 @@ void UIManager::DispatchEvents(UpdateContext& ctx)
                     if (!tgt && !m_CaptureId.empty())
                     {
                         if (auto* r = GetRootElement())
-                            tgt = r->FindById(m_CaptureId);
+                            tgt = r->FindById(HashStringId(m_CaptureId));
                     }
                 }
                 if (!tgt)
@@ -1254,7 +1294,7 @@ void UIManager::DispatchEvents(UpdateContext& ctx)
         {
             if (id.empty() || !GetRootElement())
                 return nullptr;
-            return GetRootElement()->FindById(id);
+            return GetRootElement()->FindById(HashStringId(id));
         };
 
         // The narrow bit-mask each transition passes to MarkPseudoStateScope:
@@ -1316,7 +1356,7 @@ void UIManager::NotifyFocusChange()
             DispatchFocusEvent(*prevEl, kEventFocusOut);
         if (!m_FocusId.empty() && GetRootElement())
         {
-            if (UIElement* newEl = GetRootElement()->FindById(m_FocusId))
+            if (UIElement* newEl = GetRootElement()->FindById(HashStringId(m_FocusId)))
             {
                 m_FocusNotifiedInstanceId = newEl->GetInstanceId();
                 DispatchFocusEvent(*newEl, kEventFocusIn);
@@ -1353,7 +1393,7 @@ void UIManager::ReleaseFocusInDoomedSubtree(const UIElement* doomedRoot)
     // subtree does not leave the id naming it.
     if (!m_FocusId.empty() && m_Root)
     {
-        const UIElement* focused = m_Root->FindById(m_FocusId);
+        const UIElement* focused = m_Root->FindById(HashStringId(m_FocusId));
         if (focused && IsInOwnedSubtree(focused, doomedRoot))
             m_FocusId.clear();
     }

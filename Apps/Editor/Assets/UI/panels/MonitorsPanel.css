@@ -176,7 +176,7 @@
     border-color: transparent;
     border-radius: 4px;
     padding: 4px 6px;
-    transition: background-color 0.16s ease, border-color 0.16s ease, opacity 0.12s ease, transform 0.16s ease;
+    transition: background-color 0.16s ease, border-color 0.16s ease, opacity 0.12s ease;
 }
 
 .monitors-charts-grid.sparse .monitors-chart-strip {
@@ -189,13 +189,11 @@
 
 .monitors-chart-strip.dragging {
     opacity: 0.78;
-    transform: scale(1.015);
 }
 
 .monitors-chart-strip.swap-target {
     background-color: rgba(58, 143, 255, 0.14);
     border-color: var(--ui_color_accent_blue);
-    transform: scale(0.985);
 }
 
 .monitors-chart-strip.drop-before {

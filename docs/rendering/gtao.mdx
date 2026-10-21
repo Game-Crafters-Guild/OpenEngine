@@ -1,0 +1,82 @@
+---
+title: GTAO
+description: The ground-truth ambient occlusion node, its quality presets and temporal accumulation, its limits, and what it costs in memory and GPU time.
+---
+
+The Forward+ ambient-occlusion node produces world-space bent normals in RGB and visibility in alpha. Material AO still combines with visibility using `min()`. IBL retains its multibounce and specular-occlusion responses.
+
+## Configuration
+
+The `AmbientOcclusion` node accepts these render-graph settings:
+
+```json title="The AmbientOcclusion node"
+{
+  "id": "AmbientOcclusion",
+  "type": "AmbientOcclusion",
+  "enabled": true,
+  "quality": "medium",
+  "temporal": true,
+  "output": "View.GTAO"
+}
+```
+
+| Quality | Sweep / history resolution | Slices | Steps per side | Depth taps per pixel |
+|---|---|---|---|---|
+| `medium` (default) | Half width and height | 5 | 3 | 30 |
+| `high` | Full | 5 | 3 | 30 |
+| `ultra` | Full | 8 | 3 | 48 |
+
+:::tip[A preset changes noise, never the amount of occlusion]
+
+Steps per side is the same for every preset and is not a field of the preset table. The sweep marks the sectors its taps land in, so its horizon is a maximum over samples: occlusion rises with the tap count and does not converge. Measured on the GPU over three synthetic fixtures, three / four / six / twelve / twenty-four taps gave 0.027 / 0.033 / 0.046 / 0.064 / 0.077 mean occlusion on the same frame. A preset that raised the tap count would darken every frame and silently retune every AmbientOcclusion volume. Resolution and slice count are neutral in amount (within 10 % and 1.5 % respectively) and are therefore what the presets buy: Medium to High is sharpness, High to Ultra is less slice banding. `GtaoComputeTest.PresetsAgreeOnOcclusionAmount` holds the three presets to 10 % of each other on the GPU, and the tap count lives in `kGtaoSweepSteps`.
+
+:::
+
+:::caution[There is no `low` preset]
+
+A fixed per-frame cost (prepare, the depth mip chain, the denoiser, and the temporal pass, about 0.105 ms of the Medium chain on an RTX 5080 at 3067×900) dominates below Medium, so a 3-slice preset measured 13 % cheaper for 40 % fewer taps. A cheaper tier has to remove passes, not taps. Until one does, Medium is the floor.
+
+:::
+
+Radius, thickness, and intensity remain Post Process Volume properties. Invalid quality names fail node initialization. With `temporal: false`, the noise phase is fixed and no history pass or resources are allocated. AO intensity zero disables the node and invalidates its history.
+
+:::caution[Existing volumes may need their Intensity re-tuned]
+
+This estimator puts occlusion on contact geometry rather than spreading a tint over whole objects, so the same Intensity does not reproduce the same picture as the single-pass node it replaces. Tune Intensity against a scene, not against a number carried over.
+
+:::
+
+The Inspector has no control for quality or temporal accumulation. Edit the `quality` and `temporal` fields on the `AmbientOcclusion` node in the rendergraph asset used by your camera's pipeline, using the values above. Edit the source asset, not a staged build copy.
+
+## Limits
+
+GTAO runs before object motion vectors are available. Reprojection therefore handles camera motion. Conservative rejection limits stale occlusion on moving objects but does not provide object-motion reprojection. The temporal toggle is useful when evaluating rapidly moving or deforming geometry. Letterboxed subrect views use the unoccluded fallback because their depth UV mapping differs.
+
+On the web (WebGPU), an adapter without the `float32-filterable` feature leaves the effect inactive, and the log says so once.
+
+## Cost
+
+### Persistent VRAM per view
+
+Figures at 1920×1080, bytes per texel × texels; the previous single-pass node kept one full-res RGBA16F output (16.6 MB).
+
+| Resource | Format | Medium | High / Ultra |
+|---|---|---|---|
+| Depth mip chain (6 levels) | R32F, full res | 11.1 MB | 11.1 MB |
+| Published output | RGBA16F, full res | 16.6 MB | — (history is the output) |
+| AO history × 2 | RGBA16F, sweep res | 8.3 MB | 33.2 MB |
+| Surface history × 2 | RG32F, sweep res | 8.3 MB | 33.2 MB |
+| **Total** |  | **44.2 MB** (2.7×) | **77.5 MB** (4.7×) |
+
+### GPU time
+
+Release, RTX 5080, 3067×900 viewport, Biggles Lanscape.scene, whole GTAO chain per frame. The control is the previous single-pass node (same scene, same build configuration).
+
+| Preset | Chain (ms) | vs control |
+|---|---|---|
+| Control (previous node) | 0.061 | 1.0× |
+| Medium (default) | 0.149 | 2.4× |
+| High | 0.241 | 4.0× |
+| Ultra | 0.341 | 5.6× |
+
+Only Release timings are comparable. DebugFast numbers from this arc were not used. Metal/MoltenVK frame timings have not been measured in an application frame.

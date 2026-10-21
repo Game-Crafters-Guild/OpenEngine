@@ -191,7 +191,7 @@ class SubmitGraphTask : public Task
 
 /**
  * @brief Bare envelope for fire-and-forget work (EnqueueWork,
- * EnqueueWorkBatch and the Run() stub): no TaskHandle, no TaskData, no
+ * EnqueueWorkBatch and the Run() visit): no TaskHandle, no TaskData, no
  * dependency graph; the caller owns all synchronization. A TaskBase plus the
  * closure, so every in-tree closure fits a pooled slab (TaskSlabPool.h). F is
  * the decayed closure type.

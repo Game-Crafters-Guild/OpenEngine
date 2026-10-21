@@ -171,6 +171,7 @@ GatheredMembers GatherHlodMembers(GameEngine::ECS::World& world, const ModelReso
                                 : mesh.Vertices.size());
             member.CastsShadow =
                 mr.castShadows && (localBounds == nullptr || localBounds->CastShadows);
+            member.RenderLayers = mr.RenderLayers;
 
             out.Members.push_back(member);
             out.Geometry.push_back(&mesh);

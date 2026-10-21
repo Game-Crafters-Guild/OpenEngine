@@ -13,7 +13,6 @@
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/LocalBounds.h"
-#include "Components/Rendering/MeshGPUData.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/MorphTargetWeights.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
@@ -460,10 +459,6 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
                 lb.Box = gpuEntry->bounds;
                 bundle.Add(lb);
             }
-
-            // Pre-allocate the GPUScene-index cache so RenderExtractionSystem
-            // doesn't trigger a first-frame archetype migration to add it.
-            bundle.Add(Components::MeshGPUData{});
 
             // Without a container root the sole submesh entity becomes the root,
             // so the root Animator folds into this bundle.

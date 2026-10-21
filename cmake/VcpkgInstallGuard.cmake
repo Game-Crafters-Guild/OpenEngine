@@ -5,11 +5,16 @@
 # two together: the vcpkg toolchain registers vcpkg.json and
 # vcpkg-configuration.json as configure dependencies and nothing else, so the
 # installed tree can be replaced under a build directory without that build
-# directory noticing. The next build recompiles only the sources that changed,
-# relinks everything against the new import libraries, and stages the new
-# runtime DLLs. The result links and stages without one diagnostic and faults
-# at startup inside an unrelated subsystem, because two objects in the same DLL
-# disagree about a type's layout.
+# directory noticing. The next build recompiles the sources that changed and
+# the objects that read a header newer than themselves (MSBuild and Ninja both
+# record every header a compile read, the installed ones included, and compare
+# timestamps), relinks everything against the new import libraries, and stages
+# the new runtime DLLs. A reinstalled header is not necessarily newer: a package
+# built from source keeps its source archive's timestamps, which can predate
+# every object here. When nothing recompiles against a library that changed,
+# the result links and stages without one diagnostic and can fault at startup
+# inside an unrelated subsystem, because two objects in the same DLL disagree
+# about a type's layout.
 #
 # Three checks, at the points where that state is producible.
 #
@@ -32,13 +37,22 @@
 #
 # ge_check_vcpkg_install_set_unchanged() runs AFTER every installer, because it
 # compares against the post-install state. It records the installed package
-# set in the build directory and refuses to continue once a package this
-# directory already compiled against is installed at a different version or a
-# different ABI. The ABI hash covers the compiler, so a toolset update is
-# caught on the same path as a baseline bump.
+# set in the build directory and compares each package this directory already
+# compiled against:
+#   - a new version (or port-version) is adopted in place: the installer has
+#     already replaced the package, and the guard touches the package's
+#     installed headers (the include/ entries of its vcpkg/info file list), so
+#     the next build recompiles exactly the objects that include them, whatever
+#     timestamps the package was installed with. A package whose version stayed
+#     but which was rebuilt against a dependency that moved version is adopted
+#     the same way;
+#   - a new ABI at the same version, with no moved dependency, is a refusal.
+#     That is a toolset update (the ABI hash covers the compiler), a moved vcpkg
+#     checkout or a port rebuilt with other flags: the headers are unchanged, so
+#     nothing would recompile against the library that changed under them.
 #
 # Scope: only packages present in BOTH the recorded and the current set, and
-# differing, are a refusal. An added package cannot invalidate an object that
+# differing, are compared. An added package cannot invalidate an object that
 # never included its headers (turning a manifest feature on must not force a
 # rebuild), and a removed one produces a loud missing-library link error. The
 # record is the union of what it held and what is installed, so a package that
@@ -112,17 +126,79 @@ function(z_ge_vcpkg_installed_set statusFile triplet outVar)
     set(${outVar} "${text}" PARENT_SCOPE)
 endfunction()
 
-# Names the packages that appear in both sets with a different version or ABI,
-# formatted for a human ("curl 8.21.0#1 -> 8.22.0#0", "shaderc 2026.3#0 (ABI only)").
-function(z_ge_vcpkg_changed_packages recordedText currentText outVar)
+# Reads ${statusFile} and returns, in ${outVar}, one "name|dependency,..." line
+# per package of ${triplet} that has dependencies: the union of the Depends
+# fields of its installed paragraphs (the package and its features), each
+# dependency reduced to its port name.
+function(z_ge_vcpkg_installed_depends statusFile triplet outVar)
+    file(READ "${statusFile}" statusText)
+    string(REPLACE "\r\n" "\n" statusText "${statusText}")
+    set(statusText "\n${statusText}\n")
+    string(REPLACE ";" "\;" statusText "${statusText}")
+
+    set(names "")
+    string(REGEX MATCHALL "\nPackage: [^\n]+\n([^\n]+\n)*" paragraphs "${statusText}")
+    foreach(paragraph IN LISTS paragraphs)
+        if(NOT paragraph MATCHES "\nPackage: ([^\n]+)\n")
+            continue()
+        endif()
+        set(name "${CMAKE_MATCH_1}")
+        if(NOT triplet STREQUAL "" AND NOT paragraph MATCHES "\nArchitecture: ${triplet}\n")
+            continue()
+        endif()
+        if(NOT paragraph MATCHES "\nStatus: install ok installed\n"
+           OR NOT paragraph MATCHES "\nDepends: ([^\n]*)\n")
+            continue()
+        endif()
+        string(REPLACE "," ";" dependencies "${CMAKE_MATCH_1}")
+        foreach(dependency IN LISTS dependencies)
+            string(STRIP "${dependency}" dependency)
+            string(REGEX REPLACE "[:[].*$" "" dependency "${dependency}")
+            if(NOT dependency STREQUAL "" AND NOT dependency IN_LIST "z_ge_depends_${name}")
+                list(APPEND "z_ge_depends_${name}" "${dependency}")
+            endif()
+        endforeach()
+        if(NOT name IN_LIST names)
+            list(APPEND names "${name}")
+        endif()
+    endforeach()
+
+    set(entries "")
+    foreach(name IN LISTS names)
+        list(JOIN "z_ge_depends_${name}" "," joined)
+        list(APPEND entries "${name}|${joined}")
+    endforeach()
+    list(JOIN entries "\n" text)
+    set(${outVar} "${text}" PARENT_SCOPE)
+endfunction()
+
+# Compares the packages that appear in both sets with a different version or
+# ABI, and sorts them for the guard, formatted for a human:
+#   ${movedVar}   adopted in place: a new version ("curl 8.21.0#1 -> 8.22.0#0"),
+#                 or the same version rebuilt against a dependency that moved,
+#                 directly or through another such package
+#                 ("libpng 1.6.50#0 (rebuilt against zlib)")
+#   ${movedNamesVar} the names of the packages in ${movedVar}
+#   ${abiOnlyVar} refused: a new ABI at the same version with no moved
+#                 dependency ("shaderc 2026.3#0 (ABI only)")
+# ${dependsText} is z_ge_vcpkg_installed_depends()'s output for the current set.
+function(z_ge_vcpkg_changed_packages recordedText currentText dependsText movedVar movedNamesVar abiOnlyVar)
     string(REPLACE "\n" ";" recordedLines "${recordedText}")
     foreach(line IN LISTS recordedLines)
         if(line MATCHES "^([^|]+)\\|([^|]*)\\|(.*)$")
             set("z_ge_was_${CMAKE_MATCH_1}" "${CMAKE_MATCH_2}|${CMAKE_MATCH_3}")
         endif()
     endforeach()
+    string(REPLACE "\n" ";" dependsLines "${dependsText}")
+    foreach(line IN LISTS dependsLines)
+        if(line MATCHES "^([^|]+)\\|(.*)$")
+            string(REPLACE "," ";" "z_ge_depends_${CMAKE_MATCH_1}" "${CMAKE_MATCH_2}")
+        endif()
+    endforeach()
 
-    set(changed "")
+    set(moved "")
+    set(movedNames "")
+    set(abiOnlyNames "")
     string(REPLACE "\n" ";" currentLines "${currentText}")
     foreach(line IN LISTS currentLines)
         if(NOT line MATCHES "^([^|]+)\\|([^|]*)\\|(.*)$")
@@ -140,12 +216,39 @@ function(z_ge_vcpkg_changed_packages recordedText currentText outVar)
         endif()
         string(REGEX REPLACE "\\|.*$" "" wasVersion "${was}")
         if(wasVersion STREQUAL nowVersion)
-            list(APPEND changed "${name} ${nowVersion} (ABI only)")
+            list(APPEND abiOnlyNames "${name}")
+            set("z_ge_version_${name}" "${nowVersion}")
         else()
-            list(APPEND changed "${name} ${wasVersion} -> ${nowVersion}")
+            list(APPEND moved "${name} ${wasVersion} -> ${nowVersion}")
+            list(APPEND movedNames "${name}")
         endif()
     endforeach()
-    set(${outVar} "${changed}" PARENT_SCOPE)
+
+    # A rebuild against a moved dependency can itself be the dependency another
+    # package was rebuilt against, so repeat until a pass adopts nothing.
+    set(adopted TRUE)
+    while(adopted)
+        set(adopted FALSE)
+        foreach(name IN LISTS abiOnlyNames)
+            foreach(dependency IN LISTS "z_ge_depends_${name}")
+                if(dependency IN_LIST movedNames)
+                    list(APPEND moved "${name} ${z_ge_version_${name}} (rebuilt against ${dependency})")
+                    list(APPEND movedNames "${name}")
+                    list(REMOVE_ITEM abiOnlyNames "${name}")
+                    set(adopted TRUE)
+                    break()
+                endif()
+            endforeach()
+        endforeach()
+    endwhile()
+
+    set(abiOnly "")
+    foreach(name IN LISTS abiOnlyNames)
+        list(APPEND abiOnly "${name} ${z_ge_version_${name}} (ABI only)")
+    endforeach()
+    set(${movedVar} "${moved}" PARENT_SCOPE)
+    set(${movedNamesVar} "${movedNames}" PARENT_SCOPE)
+    set(${abiOnlyVar} "${abiOnly}" PARENT_SCOPE)
 endfunction()
 
 # Union of ${recordedText} and ${currentText}, one "name|version#port-version|abi"
@@ -326,6 +429,38 @@ function(ge_check_vcpkg_install_root_written_here installedDir manifestDir build
         "  nothing: it pairs those same objects with a fresh record.")
 endfunction()
 
+# Touches the installed headers of each package in ${names}: the include/ entries
+# of the package's file list (vcpkg/info/<name>_<version>_<triplet>.list, the
+# version without its port-version). A package built from source keeps its
+# archive's timestamps, which can predate the objects that include it, so
+# without this its new headers would not read as changed. ${currentText} is the
+# current installed set, which holds each package's version.
+function(z_ge_vcpkg_touch_installed_headers installedDir triplet currentText names)
+    string(REPLACE "\n" ";" currentLines "${currentText}")
+    foreach(line IN LISTS currentLines)
+        if(NOT line MATCHES "^([^|]+)\\|([^#|]*)#")
+            continue()
+        endif()
+        set(name "${CMAKE_MATCH_1}")
+        if(NOT name IN_LIST names)
+            continue()
+        endif()
+        set(listFile "${installedDir}/vcpkg/info/${name}_${CMAKE_MATCH_2}_${triplet}.list")
+        if(NOT EXISTS "${listFile}")
+            message(WARNING
+                "vcpkg install set: adopted ${name} has no file list at ${listFile}, so its "
+                "headers were not touched and objects that include them may not recompile. "
+                "Delete the build directory and reconfigure if the build misbehaves.")
+            continue()
+        endif()
+        file(STRINGS "${listFile}" entries REGEX "^${triplet}/include/.*[^/]$")
+        list(TRANSFORM entries PREPEND "${installedDir}/")
+        if(entries)
+            file(TOUCH_NOCREATE ${entries})
+        endif()
+    endforeach()
+endfunction()
+
 # Records the installed package set in ${buildDir} and refuses to continue once
 # a package this build directory already compiled against changed underneath
 # it. Call after every configure-time installer has run.
@@ -357,8 +492,7 @@ function(ge_check_vcpkg_install_set_unchanged installedDir triplet buildDir)
         list(LENGTH currentLines packageCount)
         # First record in this directory: there is nothing to compare it
         # against, so it is adopted. Objects already here are covered only from
-        # this point on, which is why BUILD.md says to delete a build directory
-        # configured before this check existed.
+        # this point on.
         message(STATUS
             "vcpkg install set: recorded ${packageCount} installed package(s) as this build "
             "directory's baseline — anything already built here is assumed to match it")
@@ -376,11 +510,13 @@ function(ge_check_vcpkg_install_set_unchanged installedDir triplet buildDir)
         return()
     endif()
 
-    z_ge_vcpkg_changed_packages("${recordedText}" "${currentText}" changed)
-    if(changed STREQUAL "")
-        # The set moved, but no package this directory compiled against did.
-        # Merging instead of replacing is what keeps a package that left the
-        # set comparable when it returns, and what stops a truncated status
+    z_ge_vcpkg_installed_depends("${statusFile}" "${triplet}" dependsText)
+    z_ge_vcpkg_changed_packages("${recordedText}" "${currentText}" "${dependsText}"
+        moved movedNames abiOnly)
+    if(abiOnly STREQUAL "")
+        # Nothing this directory compiled against changed under unchanged
+        # headers. Merging instead of replacing is what keeps a package that left
+        # the set comparable when it returns, and what stops a truncated status
         # database from quietly shrinking the record.
         z_ge_vcpkg_merged_set("${recordedText}" "${currentText}" mergedText)
         if(NOT mergedText STREQUAL recordedText)
@@ -388,15 +524,27 @@ function(ge_check_vcpkg_install_set_unchanged installedDir triplet buildDir)
         endif()
         string(REPLACE "\n" ";" mergedLines "${mergedText}")
         list(LENGTH mergedLines packageCount)
-        message(STATUS
-            "vcpkg install set: the installed set moved since this build directory was "
-            "configured but no package it already compiled against changed — the record "
-            "now covers ${packageCount} package(s)")
+        if(moved STREQUAL "")
+            message(STATUS
+                "vcpkg install set: the installed set moved since this build directory was "
+                "configured but no package it already compiled against changed — the record "
+                "now covers ${packageCount} package(s)")
+        else()
+            z_ge_vcpkg_touch_installed_headers("${installedDir}" "${triplet}"
+                "${currentText}" "${movedNames}")
+            list(LENGTH moved movedCount)
+            list(JOIN moved "\n      " movedText)
+            message(STATUS
+                "vcpkg install set: ${movedCount} package(s) this build directory compiled "
+                "against moved and were adopted in place; their installed headers were "
+                "touched, so the next build recompiles the objects that include them:"
+                "\n      ${movedText}")
+        endif()
         return()
     endif()
 
-    list(LENGTH changed changedCount)
-    set(shown "${changed}")
+    list(LENGTH abiOnly changedCount)
+    set(shown "${abiOnly}")
     list(SUBLIST shown 0 5 shown)
     list(JOIN shown "\n      " shownText)
     set(moreText "")
@@ -408,16 +556,19 @@ function(ge_check_vcpkg_install_set_unchanged installedDir triplet buildDir)
     # The record is deliberately left stale: a second configure must fail the
     # same way, not silently adopt the new set and hand back the bad objects.
     message(FATAL_ERROR
-        "The installed dependency set changed since this build directory was configured "
-        "(${changedCount} package(s)); delete ${buildDir} and reconfigure.\n"
+        "${changedCount} installed package(s) this build directory compiled against were "
+        "rebuilt at the same version with a different ABI; delete ${buildDir} and "
+        "reconfigure.\n"
         "      ${shownText}\n"
         "${moreText}"
         "  Install root: ${installedDir}\n"
-        "  The object files already in this directory were compiled against the previous\n"
-        "  versions and will not be recompiled, because none of their sources changed. They\n"
-        "  would relink against the current libraries into binaries that crash at startup.\n"
-        "  Deleting the build directory is the whole fix; the dependencies restore from the\n"
-        "  vcpkg binary cache in seconds.")
+        "  A new ABI at an unchanged version is a Visual Studio toolset update, a moved\n"
+        "  vcpkg checkout (dependencies/vcpkg) or a port rebuilt with other flags. The\n"
+        "  package's headers did not change, so no object file in this directory recompiles,\n"
+        "  but the library under them did: they would relink into binaries that can crash at\n"
+        "  startup. Deleting the build directory is the whole fix; the dependencies restore\n"
+        "  from the vcpkg binary cache in seconds. A version move, by contrast, is adopted in\n"
+        "  place, because its headers change with it.")
 endfunction()
 
 # Entry point for the contract test (cmake/Tests/VcpkgInstallGuardTest.cmake),

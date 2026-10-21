@@ -92,7 +92,9 @@ TEST(TagIdentityTests, ElementTagIdIsPerElementNotPerCppType)
     // The RTTI reverse map is the thing that cannot answer this: both elements are the same
     // C++ class, so it holds one entry — whichever tag registered last. Asserting that it
     // collapses documents WHY element identity may not be read from it.
-    EXPECT_EQ(reg.GetTagIdForType(typeid(*foo)), reg.GetTagIdForType(typeid(*bar)));
+    const UIElement* fooElement = foo.get();
+    const UIElement* barElement = bar.get();
+    EXPECT_EQ(reg.GetTagIdForType(typeid(*fooElement)), reg.GetTagIdForType(typeid(*barElement)));
 }
 
 // ---------------------------------------------------------------------------

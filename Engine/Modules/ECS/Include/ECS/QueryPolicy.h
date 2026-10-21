@@ -30,9 +30,12 @@ struct QueryPolicy {
     // (GE_BACKPRESSURE_BENCH_FULL=1), Release, 8-worker pool, 3 full runs,
     // interleaved config sweep, 100k-entity waves under a 3-thread
     // competing-wave storm (the self-pressure regime — the only regime the
-    // constants can reach; see the floor comment below):
+    // constants can reach; see the floor comment below). The external caller
+    // parked in Wait when these were measured; every caller now runs its own
+    // counter's jobs while it waits, and the constants were not re-measured
+    // for that shape:
     //
-    //   external-caller wave (parks):     off=7.8ms  floor4096=4.5ms
+    //   external-caller wave (parked):    off=7.8ms  floor4096=4.5ms
     //                                     floor32768=1.8ms   (medians of 3)
     //   worker-caller wave (participates): off=1.0ms floor4096=2.3ms(!)
     //                                     floor32768=1.0ms, and p99 tails
@@ -58,7 +61,7 @@ struct QueryPolicy {
 
     // When under backpressure, raise minBatch at least to this value.
     // 32768 (was 4096) is the measured-best floor in BOTH call shapes: under
-    // a wave storm it beat 4096 by 2.5x for parked external callers and
+    // a wave storm it beat 4096 by 2.5x for external callers (then parked) and
     // removed the participating shape's 2.3x median / 10x tail penalty —
     // 4096 was the worst measured middle ground (fine enough to keep every
     // wave contending in the global-queue scan window, coarse enough to

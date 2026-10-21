@@ -29,3 +29,5 @@
 
 #include "Component.h"                            // ECS::ComponentBase tag + ECS alias (light)
 #include "Components/ComponentRegistrationLite.h" // GE_REGISTER_COMPONENT / GE_REFLECT (type-erased)
+#include "Memory/ObjectPool.h"                    // Memory::ObjectPool<T>, objects with a stable address
+#include "Memory/ScratchScope.h"                  // Memory::ScratchScope, per-call stack memory

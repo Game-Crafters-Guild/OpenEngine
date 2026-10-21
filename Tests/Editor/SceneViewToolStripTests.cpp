@@ -50,7 +50,7 @@ bool IsHidden(const UIElement* element)
 
 UIElement* FindButton(UIElement& strip, ToolStripPlacement placement, std::string_view id)
 {
-    return strip.FindById(Editor::RegisteredToolButtonId(placement, id));
+    return strip.FindById(HashStringId(Editor::RegisteredToolButtonId(placement, id)));
 }
 
 } // namespace
@@ -63,8 +63,8 @@ TEST(SceneViewToolStrip, ARegisteredEntryIsAppendedActivatesItsToolAndShowsItsBa
     SceneViewToolStripEntry entry;
     entry.Id = "notes";
     entry.Tooltip = "Notes";
-    entry.Icon = "editor:Icons/marker.png";
-    entry.BadgeButtonIcon = "editor:Icons/pulse.png";
+    entry.Icon = "editor:Icons/marker.svg";
+    entry.BadgeButtonIcon = "editor:Icons/pulse.svg";
     int badgeReads = 0;
     entry.BadgeCount = [&unseen, &badgeReads]() {
         ++badgeReads;
@@ -97,18 +97,18 @@ TEST(SceneViewToolStrip, ARegisteredEntryIsAppendedActivatesItsToolAndShowsItsBa
     EXPECT_TRUE(strip.GetChildren()[1]->HasClass("scene-tool-divider"));
     auto* button = dynamic_cast<Button*>(strip.GetChildren()[2].get());
     EXPECT_TRUE(strip.GetChildren()[3]->HasClass("scene-tool-badge-host"));
-    auto* badgeButton = dynamic_cast<Button*>(strip.FindById(Editor::RegisteredToolBadgeButtonId(ToolStripPlacement::Floating, "notes")));
+    auto* badgeButton = dynamic_cast<Button*>(strip.FindById(HashStringId(Editor::RegisteredToolBadgeButtonId(ToolStripPlacement::Floating, "notes"))));
     ASSERT_NE(button, nullptr);
     ASSERT_NE(badgeButton, nullptr);
     EXPECT_EQ(button->GetId(), Editor::RegisteredToolButtonId(ToolStripPlacement::Floating, "notes"));
-    EXPECT_EQ(icons, (std::vector<std::string>{"editor:Icons/marker.png", "editor:Icons/pulse.png"}));
+    EXPECT_EQ(icons, (std::vector<std::string>{"editor:Icons/marker.svg", "editor:Icons/pulse.svg"}));
 
     Click(*button);
     EXPECT_EQ(toggled, std::vector<std::string>{"notes"});
     Click(*badgeButton);
     EXPECT_EQ(badgeOpened, 1);
 
-    auto* count = dynamic_cast<Label*>(strip.FindById(Editor::RegisteredToolBadgeCountId(ToolStripPlacement::Floating, "notes")));
+    auto* count = dynamic_cast<Label*>(strip.FindById(HashStringId(Editor::RegisteredToolBadgeCountId(ToolStripPlacement::Floating, "notes"))));
     ASSERT_NE(count, nullptr);
     kept.SetActiveEntry("notes");
     kept.Refresh(nullptr);
@@ -301,7 +301,9 @@ TEST(SceneViewToolStrip, TheSplineEntryMenuListsTheSplineSettingsInOrder)
         if (next < expected.size() && item.Path == expected[next])
             ++next;
         if (item.Path == "Spline Color...")
+        {
             EXPECT_NE(item.Flags & MenuItemFlag_Disabled, 0u) << "a color row needs a picker";
+        }
     }
     EXPECT_EQ(next, expected.size()) << "first missing or out of order: "
                                      << (next < expected.size() ? expected[next] : std::string());

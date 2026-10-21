@@ -237,7 +237,7 @@ TEST_F(WorkStealingThreadPoolTest, WorkStealingBehavior) {
 
     // Submit many tasks to trigger work stealing
     for (size_t i = 0; i < numTasks; ++i) {
-        handles.push_back(pool.Submit([&completedTasks, i]() {
+        handles.push_back(pool.Submit([&completedTasks]() {
             // Simulate some work
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             completedTasks.fetch_add(1);
@@ -273,7 +273,7 @@ TEST_F(WorkStealingThreadPoolTest, TaskDistribution) {
 
     // Submit tasks that track which thread executes them
     for (size_t i = 0; i < numTasks; ++i) {
-        handles.push_back(pool.Submit([&completedTasks, &threadTaskCounts]() {
+        handles.push_back(pool.Submit([&completedTasks]() {
             // Simulate work
             std::this_thread::sleep_for(std::chrono::microseconds(100));
             completedTasks.fetch_add(1);

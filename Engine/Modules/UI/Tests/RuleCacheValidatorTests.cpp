@@ -115,8 +115,8 @@ TEST_F(RuleCacheValidatorTest, AdjacentSiblingComboInvalidatesFollowingSibling)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
 
@@ -167,7 +167,7 @@ TEST_F(RuleCacheValidatorTest, GeneralSiblingComboInvalidatesAllFollowingSibling
     ResetDivergences();
 
     UIElement* r = ui.GetRootElement();
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
 
     a->AddClass("marker");
@@ -213,7 +213,7 @@ TEST_F(RuleCacheValidatorTest, EmptyPseudoFlipOnChildInsertRemove)
     ResetDivergences();
 
     UIElement* r = ui.GetRootElement();
-    UIElement* box = r->FindById("box");
+    UIElement* box = r->FindById("box"_sid);
     ASSERT_NE(box, nullptr);
 
     // Mutation 1: insert a child → :empty no longer matches #box.
@@ -278,7 +278,7 @@ TEST_F(RuleCacheValidatorTest, NthChildInvalidatesOnSiblingInsert)
     EXPECT_EQ(Divergences(), 0u) << "Inserting a sibling at index 0 shifts :nth-child for every following sibling";
 
     // Mutation: remove the inserted sibling. Indices shift back.
-    UIElement* inserted = r->FindById("c0");
+    UIElement* inserted = r->FindById("c0"_sid);
     ASSERT_NE(inserted, nullptr);
     r->RemoveChild(inserted);
     ui.Update(0.0f, /*interactive=*/true);

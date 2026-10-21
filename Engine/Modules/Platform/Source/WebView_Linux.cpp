@@ -139,6 +139,7 @@ public:
 
     // Mouse-down callback not wired on this platform; see WebView.h.
     void SetOnMouseDown(std::function<void()> /*callback*/) override {}
+    void SetOnUnavailable(std::function<void(const std::string&)> /*callback*/) override {}
 
     void Destroy() override {
         if (m_WebView) {
@@ -171,12 +172,13 @@ public:
     void SetBackgroundColor(unsigned char /*r*/, unsigned char /*g*/, unsigned char /*b*/) override {}
     bool BeginFileDrag(const std::filesystem::path& /*path*/) override { return false; }
     void SetOnMouseDown(std::function<void()> /*callback*/) override {}
+    void SetOnUnavailable(std::function<void(const std::string&)> /*callback*/) override {}
     void Destroy() override {}
 };
 
 #endif // __has_include(<webkit2/webkit2.h>)
 
-std::unique_ptr<IWebView> CreateWebView(Window* parentWindow) {
+std::unique_ptr<IWebView> CreateWebView(Window* parentWindow, const std::filesystem::path& /*userDataFolder*/) {
     if (!parentWindow) {
         return nullptr;
     }

@@ -328,6 +328,48 @@ namespace GameEngine.HotReload
             }
         }
 
+        /// <summary>
+        /// The number of C# components and systems the loaded scripts assembly defines: types
+        /// implementing IComponent or IEntitySystem, or deriving from GameSystem. Matched by name,
+        /// since this assembly does not reference Scripting.ABI. 0 when no assembly is loaded.
+        /// </summary>
+        public static int CountScriptTypes()
+        {
+            Assembly? asm;
+            lock (m_Lock) { asm = m_CurrentAssembly; }
+            if (asm == null)
+                return 0;
+            Type?[] types;
+            try { types = asm.GetTypes(); }
+            catch (ReflectionTypeLoadException ex) { types = ex.Types; }
+            int count = 0;
+            foreach (var type in types)
+            {
+                if (type != null && IsScriptType(type))
+                    ++count;
+            }
+            return count;
+        }
+
+        private static bool IsScriptType(Type type)
+        {
+            // Interfaces, abstract and static classes and open generic definitions are not
+            // types a game places or runs.
+            if (type.IsAbstract || type.IsInterface || type.IsGenericTypeDefinition)
+                return false;
+            foreach (var implemented in type.GetInterfaces())
+            {
+                if (implemented.FullName is "GameEngine.Scripting.IComponent" or "GameEngine.Scripting.IEntitySystem")
+                    return true;
+            }
+            for (var baseType = type.BaseType; baseType != null; baseType = baseType.BaseType)
+            {
+                if (baseType.FullName == "GameEngine.Scripting.GameSystem")
+                    return true;
+            }
+            return false;
+        }
+
 #if DEBUG
         public static Assembly? GetCurrentAssembly() => m_CurrentAssembly;
         public static Assembly? GetPreloadedAssemblyForTests() => m_Preloaded?.Assembly;
@@ -2894,9 +2936,8 @@ namespace GameEngine.HotReload
         private static readonly string[] s_SharedAssemblyNames =
         {
             "GameEngine.Scripting.ABI",
+            "GameEngine.Scripting.Bindings",
             "GameEngine.ECS.ABI",
-            "GameEngine.Input.ABI",
-            "GameEngine.Physics.ABI",
             "GameEngine.Platform.ABI",
             "GameEngine.Editor.Scripting.ABI",
             "GameEngine.Scripting.Runtime",

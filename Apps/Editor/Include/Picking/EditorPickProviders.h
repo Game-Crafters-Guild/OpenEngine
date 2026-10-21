@@ -13,6 +13,7 @@
 
 #include "AssetCore/GUID.h"
 #include "ECS/ECS.h"
+#include "Rendering/RenderLayerMask.h"
 #include "ECS/ModuleRegistration.h"
 
 #include <cstdint>
@@ -37,7 +38,7 @@ struct SyntheticMeshPick
 {
     std::uint64_t MeshGpuHandleId = 0; // raw MeshGPUHandle id (0 = mesh not built)
     GUID ModelAssetGuid{};
-    std::uint32_t RenderLayerMask = 1u;
+    Rendering::RenderLayerMask RenderLayers;
 };
 
 struct EditorPickProvider

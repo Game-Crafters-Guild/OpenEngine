@@ -1,0 +1,136 @@
+---
+title: Animation source persistence
+description: What a saved scene remembers about an animation source, for the Animator's embedded clip, a skinned entity's rig, and the retarget system's source skeleton.
+sidebar:
+  order: 6
+---
+
+One rule for every animation source a scene names: the durable identity is the container asset the artist assigned (a model GUID, plus a selector where the container holds several), and every numeric store index derived from it is a per-session cache the scene file never carries. Three consumers follow it: the Animator’s embedded clip, a skinned entity’s rig, and the retarget system’s source skeleton.
+
+:::danger[The problem, as the artist meets it]
+
+An Animator is pointed at an animation that lives inside a model file (an animation-only FBX, or a clip embedded in a character model). The scene is saved, the editor restarts, the scene is loaded. The character plays its own model's first animation, or nothing, instead of the animation that was assigned. Nothing in the scene file names the model that holds the clip, so nothing loads it.
+
+:::
+
+## Identity of an embedded clip
+
+Embedded clips have no asset-registry record of their own. Their identity is derived (`GUID::Derive(modelGuid, "embedded:<i>")`, see `Engine/Modules/AssetCore/Include/AssetCore/SubassetDeriveKeys.h` and `ModelAsset::DeriveEmbeddedClipGuid`). The container journals its derive keys only so a container rename can cascade redirects. The journal is written after a successful load and never for read-only mounts, so it cannot serve as a reverse lookup from a derived GUID to its container.
+
+The Animator therefore carries the container itself, the same shape `MeshRenderer` uses for embedded meshes (a `ModelRef` plus a selector):
+
+```cpp title="The Animator's clip source fields"
+ModelRef clipSourceModelGuid;          // container
+uint32   clipSourceAnimationIndex;     // embedded index; UINT32_MAX = no pair
+AssetRef<Animation> clipGuid;          // runtime identity the ClipStore keys on
+```
+
+A pair is either complete or absent. When present, `clipGuid` is the GUID derived from it. A standalone `.anim` keeps its plain `clipGuid` and no pair.
+
+## Writers keep the pair consistent
+
+| Writer | Call | Effect on the pair |
+|---|---|---|
+| Inspector asset row, embedded dropdown, default assignment; model spawn | `Animator::SelectEmbeddedClip(model, index)` | sets pair and derived `clipGuid` |
+| Inspector standalone pick or "(None)"; debug-server spawn | `Animator::SelectClip(guid)` | clears pair, sets `clipGuid` |
+| Scripting: `PlayState`, `CrossFadeSeconds`, `PlaySection` | by name or GUID | clears pair |
+
+Do not assign `clipGuid` directly from new code. A stale pair next to a changed or cleared clip is exactly the state these calls exist to prevent.
+
+## Scene file
+
+:::tip[Embedded clip]
+
+
+
+```text title="An embedded clip in the scene file"
+Animator.clipSourceModelGuid = [path="..." guid="..."]
+Animator.clipSourceAnimationIndex = 0
+```
+
+Emitted when the pair is present, or when it can be recovered from the resident clip's source path and index (`AnimationClip::GetSourcePath` / `GetSourceAnimationIndex`, recorded by the FBX, Blend, and glTF loaders) and the resolver identifies that path as a model producing the selected GUID.
+
+:::
+
+:::tip[Standalone clip]
+
+
+
+```text title="A standalone clip in the scene file"
+Animator.clipGuid = [path="..." guid="..."]
+```
+
+Unchanged representation. A clip whose container cannot be recovered is also saved this way, and a load reports it as an unresolved reference rather than substituting another animation.
+
+:::
+
+Loading parses the two fields as a group (`AnimatorSchema::ApplyProperties`). A pair with a missing half, a non-model source, or a `clipGuid` that contradicts the pair fails the group. SceneIO's per-property fallback then records the halves as degradation skips instead of installing half a pair. Redirected model GUIDs resolve through the normal scene resolver before the clip GUID is derived. Dependency enumeration reports the model container so packaging includes it.
+
+## Playback resolution
+
+Runtime bootstrap, the per-tick command owner, and Editor enter-Play share `Engine::Renderer::ResolveAnimatorClipIndex`:
+
+1. A complete pair whose derived GUID matches the selected clip loads that model (non-blocking) and verifies the index exists and derives the expected GUID. A bad index resolves to nothing.
+2. Otherwise an explicit `clipGuid` resolves as a standalone clip, or as a model-as-clip hint (first embedded clip of that model).
+3. Only an Animator with no explicit clip falls back to the entity's own model's first embedded clip.
+
+:::caution[Source still loading]
+
+Resolution reports *pending*. The Animator is left with the internal `AnimatorPlaybackCommand::Autoplay`, which `ProcessClipAnimatorCommands` retries each animation tick until the model lands. Autoplay applies the authored seek or section, blend, speed, and loop settings exactly once. An explicit `Pause` or `Stop` issued meanwhile replaces it. A model that can never load resolves as *not pending* and logs one warning. `Autoplay` is never serialized.
+
+:::
+
+## Rig source: model skeleton persistence
+
+:::danger[The problem, as the artist meets it]
+
+A skinned character is placed, the scene is saved, the editor restarts. The character now wears another model’s rig, or its submeshes and the helper nodes parented to its bones (weapon sockets, props) each rebuild their own pose and drift apart while the animation plays. The scene file had stored `SkeletonStore` indices, which are per-process, and nothing recorded which entities were one instance.
+
+:::
+
+`SkeletonRef` carries the durable source and the instance grouping. Its store handles are `[DoNotSerialize]` caches rebuilt every session:
+
+```cpp title="The SkeletonRef fields"
+ModelRef              sourceModelGuid;   // the model whose skeleton this rig is (empty: procedural, in-memory)
+SkeletonInstanceOwner ownerMode;         // Self: an independent instance; Entity: share instanceOwner's pose
+EntityHandle          instanceOwner;     // the model root the group belongs to (SceneIO remaps it on additive load)
+uint32 skeletonId, runtimeId; uint64 runtimeGeneration;   // [DoNotSerialize] per-session caches
+```
+
+:::tip[Model instance (factory spawn)]
+
+
+
+```text title="A model instance in the scene file"
+SkeletonRef.sourceModelGuid = [path="..." guid="..."]
+SkeletonRef.ownerMode = Entity
+SkeletonRef.instanceOwner = "root-entity-id"
+```
+
+Every submesh and every animated helper node of one `ModelEntityFactory` spawn names the same owner, so they resolve to one runtime and one pose. A `MeshRenderer.modelAssetGuid` on the same entity selects the rig as well and follows model reassignment. Helper nodes have no mesh and rely on their own saved source.
+
+:::
+
+:::caution[Numeric skeleton ids in an older scene]
+
+An older scene file may hold a `SkinnedMeshRenderer.skeletonId` line, a per-session `SkeletonStore` index. It is read and ignored today, and that reader is to be removed (tracked by issue #3932). A mesh in such a scene recovers its rig from its model GUID, as an independent `Self` instance. A helper node with neither a source nor a mesh has nothing to rebuild from. The resolver reports it once, naming the entity and the fix (re-spawn the model, or author `sourceModelGuid` and `instanceOwner`), and leaves it unresolved rather than animating nothing silently.
+
+:::
+
+### Reconstruction
+
+`RenderingLoop::Update` calls `BindChangedSkinnedMeshAnimation` on the main thread before the animation and extraction waves, on both hosts. Direct SceneIO loads, additive loads (owner remapped by the reflected entity-reference codec), helper-only source readiness, and model reassignment all flow through the one resolver in `Engine/Source/Engine/Rendering/ModelRenderSetup.cpp`. The binder never waits for a model: one that is not resident is requested and the entity binds once it lands. An entity the engine’s `SceneResolveService` still holds (its model loading) is skipped, not bound to a placeholder, and binds on the first tick after the service completes it. While the editor’s scene-open build (`SceneBuildPump`) is active the binder leaves its gates unconsumed so the first tick after the build sees the complete instance. Steady frames do one cache-only asset lookup per distinct referenced model and no component writes. Resolution runs on `Changed<>` of `SkeletonRef`, `SkinnedMeshRenderer`, and `MeshRenderer`, on a structural change that invalidated an owner, and when a referenced model’s residency or skeleton index changes.
+
+### Ownership and lifetime
+
+- Every published non-zero `runtimeId` owns one `SkeletonStore` reference. The `OnRemove` hook (`ReleaseSkeletonRuntime`) drops it.
+- The store stamps each allocation with a generation (the create epoch). A component whose `runtimeGeneration` no longer matches its slot is a stale snapshot — a raw `DeserializeWorld` (play-mode exit, undo) or a byte-copied clone — and neither reuses nor releases the slot’s current occupant. Generation zero with no model source is the explicit procedural contract and releases as before.
+- The runtime records its `SkeletonRuntimeSource` (model, owner, World id, and reset generation). A cache joins an existing runtime only when that identity matches exactly.
+- The editor’s duplicate path (`CopiedEntityRuntimeRefs`) hands the clone its own runtime, remaps `instanceOwner` to the cloned owner, and stamps the new generation and source, so the resolver keeps that runtime instead of regrouping the clone under the original.
+- Store mutation (create, retain, release) never overlaps the animation and extraction waves. The generation read is lock-free behind the same publish/acquire pair the other runtime readers use.
+
+The `SkinnedMeshRenderer` inspector shows the rig source (model file), the rig owner (entity), and whether the runtime is resolved. The per-session ids are not shown.
+
+## Retarget source: the animation’s own model
+
+`HumanoidRetargetSystem` resolves an embedded clip’s declared source model through the asset manager before sampling, building the CPU node, or publishing GPU rig data. The loaded model supplies the source `SkeletonStore` id. A pending, missing, wrong-type, or skeleton-less explicit source stays unresolved and never falls back to the target skeleton (that fallback seeded the shared GPU rig table with the wrong layout, so which actor evaluated first affected the others). Missing resident assets request the asynchronous load and retry on later updates without blocking the animation wave. Standalone `.anim` and procedural clips with an empty source path keep the in-memory contract and the intentional same-rig fallback. Each distinct explicit clip is memoized once per update in a small vector whose capacity is reused. A source that can never resolve is reported once per character and cleared when it resolves, while a load in flight stays quiet.

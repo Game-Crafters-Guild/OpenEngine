@@ -7,7 +7,7 @@ import { repoRoot } from "./paths.js";
  *
  * The authoritative parameter docs for a debug-server method are the comments
  * above its RegisterHandler call — that is where they have always lived, and
- * docs/MCP_SETUP.md says so. Parsing them beats maintaining a second copy: a
+ * docs/getting-started/mcp-setup.mdx says so. Parsing them beats maintaining a second copy: a
  * transcribed list is exactly what drifted before.
  */
 

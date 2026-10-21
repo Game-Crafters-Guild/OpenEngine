@@ -80,32 +80,36 @@ bool OceanForwardContributor::EnsureFallbackCascade(::GameEngine::Rendering::IDe
     return m_FallbackCascade.IsValid() && m_FallbackCascadeSampler.IsValid();
 }
 
-bool OceanForwardContributor::EnsureMaterial()
+Engine::Renderer::Material* OceanForwardContributor::EnsureMaterial(bool heightFog)
 {
-    if (m_Material)
-        return true;
-    if (m_MaterialInitAttempted)
-        return false;
-    m_MaterialInitAttempted = true;
+    const size_t index = heightFog ? 1u : 0u;
+    if (m_Materials[index])
+        return m_Materials[index];
+    if (m_MaterialInitAttempted[index])
+        return nullptr;
+    m_MaterialInitAttempted[index] = true;
 
+    const GUID& guid = heightFog ? OceanSurfaceFogMaterialGuid() : OceanSurfaceMaterialGuid();
     auto& registry = m_RenderServices.Materials().Registry();
-    m_Material = registry.Find(OceanSurfaceMaterialGuid());
-    if (m_Material)
-        return true;
+    m_Materials[index] = registry.Find(guid);
+    if (m_Materials[index])
+        return m_Materials[index];
 
-    m_Material = m_RenderServices.Materials().RegisterMaterialFromDocument(
-        OceanSurfaceMaterialGuid(), BuildOceanSurfaceMaterialDocument(),
-        OceanSurfaceMaterialKeywords(Rendering::IsCompatShaderProfile()));
+    Rendering::MaterialKeyword keywords = OceanSurfaceMaterialKeywords(Rendering::IsCompatShaderProfile());
+    if (heightFog)
+        keywords |= Rendering::MaterialKeyword::HeightFog;
+    m_Materials[index] =
+        m_RenderServices.Materials().RegisterMaterialFromDocument(guid, BuildOceanSurfaceMaterialDocument(), keywords);
 
-    if (!m_Material)
+    if (!m_Materials[index])
     {
-        Logger::Log::Error("OceanForwardContributor: failed to register material");
-        return false;
+        Logger::Log::Error("OceanForwardContributor: failed to register the {}material",
+                           heightFog ? "height fog " : "");
+        return nullptr;
     }
 
-
-    Logger::Log::Info("OceanForwardContributor: material registered and compiled");
-    return true;
+    Logger::Log::Info("OceanForwardContributor: {}material registered and compiled", heightFog ? "height fog " : "");
+    return m_Materials[index];
 }
 
 bool OceanForwardContributor::BuildForwardCommand(
@@ -119,7 +123,14 @@ bool OceanForwardContributor::BuildForwardCommand(
     if (IsAssetPreviewView(m_RenderServices.Views().FindViewDesc(viewId)))
         return false;
 
-    if (!EnsureMaterial())
+    // The world pass's keywords for this view: the surface draws into that pass's targets and takes
+    // the height fog when that pass draws it.
+    Rendering::MaterialKeyword passKeywords = Rendering::MaterialKeyword::None;
+    if (auto kw = m_RenderServices.GetWorldPassKeywords(viewId))
+        passKeywords = *kw;
+    const bool heightFog = Rendering::HasKeyword(passKeywords, Rendering::MaterialKeyword::HeightFog);
+    Engine::Renderer::Material* material = EnsureMaterial(heightFog);
+    if (!material)
         return false;
 
     auto* device = ctx.Device;
@@ -242,18 +253,19 @@ bool OceanForwardContributor::BuildForwardCommand(
     // standard mesh layout; ocean vertices carry local XZ, LOD and skirt scale).
     // Rebuild both cached
     // variants on a material recompile so the cull mode can be selected per view.
-    const uint32_t materialVersion = m_Material->GetVersion();
-    if (m_PipelineMaterialVersion != materialVersion)
+    const size_t fogIndex = heightFog ? 1u : 0u;
+    const uint32_t materialVersion = material->GetVersion();
+    if (m_PipelineMaterialVersions[fogIndex] != materialVersion)
     {
-        m_OceanPipelineIds[0] = {};
-        m_OceanPipelineIds[1] = {};
-        m_PipelineMaterialVersion = materialVersion;
+        m_OceanPipelineIds[fogIndex][0] = {};
+        m_OceanPipelineIds[fogIndex][1] = {};
+        m_PipelineMaterialVersions[fogIndex] = materialVersion;
     }
 
-    auto& oceanPipelineId = m_OceanPipelineIds[twoSided ? 1 : 0];
+    auto& oceanPipelineId = m_OceanPipelineIds[fogIndex][twoSided ? 1 : 0];
     if (!oceanPipelineId.IsValid())
     {
-        const auto* base = device->LookupGraphicsPipeline(m_Material->GetGraphicsPipelineId());
+        const auto* base = device->LookupGraphicsPipeline(material->GetGraphicsPipelineId());
         if (!base)
             return false;
         Rendering::GraphicsPipelineDesc gd = *base;
@@ -746,17 +758,13 @@ bool OceanForwardContributor::BuildForwardCommand(
         }
     }
 
-    Rendering::MaterialKeyword passKeywords = Rendering::MaterialKeyword::None;
-    if (auto kw = m_RenderServices.GetWorldPassKeywords(viewId))
-        passKeywords = *kw;
-
     DrawBindings drawBindings{};
     drawBindings.Buffers = scratch.Buffers;
     drawBindings.Textures = scratch.Textures;
 
     outCommand = {};
     outCommand.InternedPipeline = oceanPipelineId;
-    outCommand.Material = m_Material;
+    outCommand.Material = material;
     outCommand.VertexFlags = Rendering::VertexAttributeFlags::None;
     outCommand.PassKeywords = passKeywords;
     outCommand.Geometry.AltGeom = {gridVB, gridIB, Rendering::IndexType::Uint32};

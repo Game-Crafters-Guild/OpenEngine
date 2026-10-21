@@ -8,7 +8,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/NavGridAsset.h"
-#include "Assets/NavMeshAsset.h"
 #include "Assets/Textures/TextureMimeType.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Editor/Entities/EntityMaterialTextureAssign.h"
@@ -217,39 +216,6 @@ AssetFileResult CreateDefaultNavGridFile(const std::filesystem::path& dir,
     }
 
     return {target};
-}
-
-AssetFileResult CreateDefaultNavMeshFile(const std::filesystem::path& dir,
-                                         const std::string& baseName,
-                                         UndoRedoService* undo,
-                                         AssetManager* assets)
-{
-    return CreateAssetFile(dir, baseName, ".navmesh",
-        [](const std::string& /*name*/) {
-            Pathfinding::NavMeshSettings settings;
-            nlohmann::json json;
-            json["version"] = 1;
-
-            nlohmann::json s;
-            s["cellSize"] = settings.CellSize;
-            s["cellHeight"] = settings.CellHeight;
-            s["agentRadius"] = settings.AgentRadius;
-            s["agentHeight"] = settings.AgentHeight;
-            s["agentMaxClimb"] = settings.AgentMaxClimb;
-            s["agentMaxSlope"] = settings.AgentMaxSlope;
-            s["regionMinSize"] = settings.RegionMinSize;
-            s["regionMergeSize"] = settings.RegionMergeSize;
-            s["edgeMaxLen"] = settings.EdgeMaxLen;
-            s["edgeMaxError"] = settings.EdgeMaxError;
-            s["detailSampleDist"] = settings.DetailSampleDist;
-            s["detailSampleMaxError"] = settings.DetailSampleMaxError;
-            s["vertsPerPoly"] = settings.VertsPerPoly;
-            json["settings"] = s;
-            json["sourceGeometry"] = nlohmann::json::array();
-
-            return json.dump(4) + "\n";
-        },
-        "Create Navigation Mesh", undo, assets);
 }
 
 // Extract embedded images from a model to disk, returning a map from

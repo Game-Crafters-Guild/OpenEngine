@@ -191,6 +191,7 @@ GameConfig LoadGameConfig(const std::filesystem::path& path)
     {
         cfg.lodSelection = Rendering::LodProjectSettings::ReadFrom(doc["rendering"]);
         cfg.renderQuality = Rendering::AntiAliasingProjectSettings::ReadFrom(doc["rendering"]);
+        cfg.renderLayerNames = Rendering::RenderLayerNames::ReadFrom(doc["rendering"]);
     }
 
     // Clamp window dimensions to reasonable bounds.
@@ -252,6 +253,7 @@ bool SaveGameConfig(const std::filesystem::path& path, const GameConfig& cfg)
     json rendering = json::object();
     cfg.lodSelection.WriteTo(rendering);
     cfg.renderQuality.WriteTo(rendering);
+    cfg.renderLayerNames.WriteTo(rendering);
     doc["rendering"] = rendering;
 
     std::ofstream file(path);

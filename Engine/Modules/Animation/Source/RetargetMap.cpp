@@ -2,10 +2,13 @@
 
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace GameEngine
 {
@@ -120,90 +123,110 @@ bool RetargetMap::SaveToPath(const std::filesystem::path& path) const
 
 bool RetargetMap::ParseJson(const std::string& text)
 {
-    try
+    json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+
+    Serialization::JsonFieldReader reader;
+    m_Version = 0;
+    reader.Read(doc, "version", m_Version);
+    if (m_Version > kSchemaVersion)
     {
-        const auto doc = json::parse(text);
-
-        m_Version = doc.value("version", 0);
-        if (m_Version > kSchemaVersion)
-        {
-            Logger::Log::Warning(
-                "RetargetMap '{}' has version {} but engine supports up to {}; reading anyway",
-                GetPath().string(), m_Version, kSchemaVersion);
-        }
-
-        if (doc.contains("sourceRigRef") && doc["sourceRigRef"].is_string())
-            m_SourceRigRef = ::GameEngine::GUID(doc["sourceRigRef"].get<std::string>());
-        else
-            m_SourceRigRef = ::GameEngine::GUID();
-
-        if (doc.contains("targetRigRef") && doc["targetRigRef"].is_string())
-            m_TargetRigRef = ::GameEngine::GUID(doc["targetRigRef"].get<std::string>());
-        else
-            m_TargetRigRef = ::GameEngine::GUID();
-
-        m_ChainMap.clear();
-        if (doc.contains("chainMap") && doc["chainMap"].is_array())
-        {
-            m_ChainMap.reserve(doc["chainMap"].size());
-            for (const auto& c : doc["chainMap"])
-            {
-                ChainPairing cp;
-                cp.Kind = ChainKindFromString(c.value("kind", std::string("Other")));
-
-                if (c.contains("fk") && c["fk"].is_object())
-                {
-                    const auto& fk = c["fk"];
-                    cp.FK.RotationMode = FKRotationModeFromString(
-                        fk.value("rotationMode", std::string("OneToOne")));
-                    cp.FK.RotationAlpha = fk.value("rotationAlpha", 1.0f);
-                    cp.FK.TranslationMode = FKTranslationModeFromString(
-                        fk.value("translationMode", std::string("None")));
-                }
-
-                if (c.contains("ik") && c["ik"].is_object())
-                {
-                    const auto& ik = c["ik"];
-                    cp.IK.Enabled = ik.value("enabled", false);
-                    cp.IK.BlendToSource = ik.value("blendToSource", 1.0f);
-                    cp.IK.Extension = ik.value("extension", 0.0f);
-                }
-
-                if (c.contains("footLock") && c["footLock"].is_object())
-                {
-                    const auto& fl = c["footLock"];
-                    cp.FootLock.Enabled = fl.value("enabled", false);
-                    cp.FootLock.SpeedThreshold = fl.value("speedThreshold", 0.05f);
-                    cp.FootLock.LockBlend = fl.value("lockBlend", 1.0f);
-                }
-
-                m_ChainMap.push_back(std::move(cp));
-            }
-        }
-
-        m_OpStack.clear();
-        if (doc.contains("opStack") && doc["opStack"].is_array())
-        {
-            m_OpStack.reserve(doc["opStack"].size());
-            for (const auto& op : doc["opStack"])
-            {
-                OpStackEntry ose;
-                ose.OpName = op.value("opName", std::string());
-                if (op.contains("params"))
-                    ose.Params = op["params"];
-                m_OpStack.push_back(std::move(ose));
-            }
-        }
-
-        SetState(AssetState::Loaded);
-        return true;
+        Logger::Log::Warning(
+            "RetargetMap '{}' has version {} but engine supports up to {}; reading anyway",
+            GetPath().string(), m_Version, kSchemaVersion);
     }
-    catch (const std::exception& e)
+
+    if (doc.contains("sourceRigRef") && doc["sourceRigRef"].is_string())
+        m_SourceRigRef = ::GameEngine::GUID(doc["sourceRigRef"].get<std::string>());
+    else
+        m_SourceRigRef = ::GameEngine::GUID();
+
+    if (doc.contains("targetRigRef") && doc["targetRigRef"].is_string())
+        m_TargetRigRef = ::GameEngine::GUID(doc["targetRigRef"].get<std::string>());
+    else
+        m_TargetRigRef = ::GameEngine::GUID();
+
+    m_ChainMap.clear();
+    if (doc.contains("chainMap") && doc["chainMap"].is_array())
     {
-        Logger::Log::Error("RetargetMap: failed to parse '{}': {}", GetPath().string(), e.what());
-        SetState(AssetState::Failed);
-        return false;
+        m_ChainMap.reserve(doc["chainMap"].size());
+        const json& chainMap = doc["chainMap"];
+        for (size_t index = 0; index < chainMap.size(); ++index)
+        {
+            const json& c = chainMap[index];
+            const std::string context = std::format("chainMap[{}].", index);
+            reader.SetContext(context);
+            ChainPairing cp;
+            std::string kind = "Other";
+            reader.Read(c, "kind", kind);
+            cp.Kind = ChainKindFromString(kind);
+
+            if (c.is_object() && c.contains("fk") && c["fk"].is_object())
+            {
+                const auto& fk = c["fk"];
+                reader.SetContext(context + "fk.");
+                std::string rotationMode = "OneToOne";
+                std::string translationMode = "None";
+                reader.Read(fk, "rotationMode", rotationMode);
+                reader.Read(fk, "rotationAlpha", cp.FK.RotationAlpha);
+                reader.Read(fk, "translationMode", translationMode);
+                cp.FK.RotationMode = FKRotationModeFromString(rotationMode);
+                cp.FK.TranslationMode = FKTranslationModeFromString(translationMode);
+            }
+
+            if (c.is_object() && c.contains("ik") && c["ik"].is_object())
+            {
+                const auto& ik = c["ik"];
+                reader.SetContext(context + "ik.");
+                reader.Read(ik, "enabled", cp.IK.Enabled);
+                reader.Read(ik, "blendToSource", cp.IK.BlendToSource);
+                reader.Read(ik, "extension", cp.IK.Extension);
+            }
+
+            if (c.is_object() && c.contains("footLock") && c["footLock"].is_object())
+            {
+                const auto& fl = c["footLock"];
+                reader.SetContext(context + "footLock.");
+                reader.Read(fl, "enabled", cp.FootLock.Enabled);
+                reader.Read(fl, "speedThreshold", cp.FootLock.SpeedThreshold);
+                reader.Read(fl, "lockBlend", cp.FootLock.LockBlend);
+            }
+
+            m_ChainMap.push_back(std::move(cp));
+        }
     }
+
+    m_OpStack.clear();
+    if (doc.contains("opStack") && doc["opStack"].is_array())
+    {
+        m_OpStack.reserve(doc["opStack"].size());
+        const json& opStack = doc["opStack"];
+        for (size_t index = 0; index < opStack.size(); ++index)
+        {
+            const json& op = opStack[index];
+            reader.SetContext(std::format("opStack[{}].", index));
+            OpStackEntry ose;
+            reader.Read(op, "opName", ose.OpName);
+            if (op.is_object() && op.contains("params"))
+                ose.Params = op["params"];
+            m_OpStack.push_back(std::move(ose));
+        }
+    }
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
+
+    SetState(AssetState::Loaded);
+    return true;
+}
+
+bool RetargetMap::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("RetargetMap: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    Unload();
+    SetState(AssetState::Failed);
+    return false;
 }
 
 std::string RetargetMap::SerializeJson() const

@@ -191,7 +191,7 @@ TEST(AttachDetachEventTests, RemoveChildAnnouncesDetachForTheWholeDoomedSubtree)
     EXPECT_EQ(log.Order, (std::vector<std::string>{"detach:a1", "detach:a"}))
         << "children before parents, and before any teardown; log=" << log.Joined();
 
-    EXPECT_EQ(ui.GetRootElement()->FindById("a"), nullptr);
+    EXPECT_EQ(ui.GetRootElement()->FindById("a"_sid), nullptr);
 
     // And nothing further: the settle must not re-announce a transition already closed.
     ui.Update(0.0f, /*interactive=*/false);
@@ -305,7 +305,7 @@ TEST(AttachDetachEventTests, TreeEditsFromInsideADestructionDetachAreRefused)
 
     EXPECT_EQ(childCountSeenAfterAdopt, 1u) << "the adopt must be refused, leaving only a1";
     EXPECT_FALSE(rescueReturnedSomething) << "a condemned element must not be rescuable";
-    EXPECT_EQ(ui.GetRootElement()->FindById("a"), nullptr);
+    EXPECT_EQ(ui.GetRootElement()->FindById("a"_sid), nullptr);
 }
 
 // THE COMBINATION NEITHER BRANCH BUILT: the handler-table drain running inside a
@@ -623,7 +623,7 @@ TEST(AttachDetachEventTests, HandlerRemovingAnElementDuringTheSettleIsDeferredTh
     // The removal is deferred out of the dispatch, and when it finally runs it destroys
     // `b` — which now announces, because destruction is a detach. The walk it was removed
     // from did not fault.
-    EXPECT_EQ(ui.GetRootElement()->FindById("b"), nullptr);
+    EXPECT_EQ(ui.GetRootElement()->FindById("b"_sid), nullptr);
     EXPECT_EQ(log.CountOf("attach:b"), 1u);
     EXPECT_EQ(log.CountOf("detach:b"), 1u)
         << "the deferred RemoveChild destroys b, and destruction announces";
@@ -728,18 +728,19 @@ TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach
     auto* layout = dynamic_cast<UILayoutAsset*>(asset.get());
     ASSERT_NE(layout, nullptr);
 
+    AttachLog log;
+    AttachLog addedLog;
     UIManager ui(dev.get(), &assets);
     ASSERT_TRUE(ui.LoadLayoutFromAsset(*layout));
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* kept = ui.GetRootElement()->FindById("kept");
+    UIElement* kept = ui.GetRootElement()->FindById("kept"_sid);
     ASSERT_NE(kept, nullptr);
     const uint64_t keptId = kept->GetInstanceId();
 
     // Subscribe AFTER the initial build, so the log starts empty and anything in it comes
     // from the reload.
-    AttachLog log;
     Watch(*kept, "kept", log);
 
     {
@@ -754,7 +755,7 @@ TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* keptAfter = ui.GetRootElement()->FindById("kept");
+    UIElement* keptAfter = ui.GetRootElement()->FindById("kept"_sid);
     ASSERT_NE(keptAfter, nullptr);
     // The reuse precondition: if the reconcile rebuilt this element the arm below would be
     // vacuously green, since a rebuilt element carries none of the subscriptions.
@@ -762,9 +763,8 @@ TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach
     EXPECT_TRUE(log.Order.empty())
         << "a .uxml save must not fire a detach/attach pair on the elements it preserved";
 
-    UIElement* added = ui.GetRootElement()->FindById("added");
+    UIElement* added = ui.GetRootElement()->FindById("added"_sid);
     ASSERT_NE(added, nullptr);
-    AttachLog addedLog;
     Watch(*added, "added", addedLog);
     // The new element was created and parented during the reload, so its attach is already
     // settled — subscribing now is too late to hear it, which is exactly why an element's
@@ -810,7 +810,7 @@ TEST(AttachDetachEventTests, ReconcileAnnouncesTheElementItReplaces)
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* before = ui.GetRootElement()->FindById("slot");
+    UIElement* before = ui.GetRootElement()->FindById("slot"_sid);
     ASSERT_NE(before, nullptr);
     const uint64_t idBefore = before->GetInstanceId();
 
@@ -828,7 +828,7 @@ TEST(AttachDetachEventTests, ReconcileAnnouncesTheElementItReplaces)
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* after = ui.GetRootElement()->FindById("slot");
+    UIElement* after = ui.GetRootElement()->FindById("slot"_sid);
     ASSERT_NE(after, nullptr);
     ASSERT_NE(after->GetInstanceId(), idBefore) << "a tag change must rebuild, not adopt";
     // The original was DESTROYED inside the reconcile, and destruction is announced. This
@@ -951,13 +951,9 @@ TEST(AttachDetachEventTests, ASurvivingMountTargetIsAnnouncedAgainByItsNextManag
 // element announced ATTACHED is one the scripting ABI can resolve, always.
 //
 // The case that can break it is a Mount targeted BEFORE the Mount itself is parented. The
-// Mount cannot propagate an owner it does not have, so the target starts ownerless while
-// the portal edge already routes it into the tree; Mount::OnPostLayout adopts it later in
-// the same frame, which is after the settle has already run. A walk that inherited the
-// queued root's verdict straight down the portal edge would therefore announce the target
-// while it is still ownerless — and an ownerless element is registered nowhere, so
-// FindElementByInstanceId cannot resolve it and IsAlive reports false. The announcement
-// waits for the adoption instead.
+// Mount cannot propagate an owner it does not have. Parenting the Mount now adopts
+// an ownerless target immediately for authored-id lookup; the attach event must still
+// wait for the settle, when both the authored-id and instance-id indexes can resolve it.
 TEST(AttachDetachEventTests, AnElementIsNeverAnnouncedAttachedBeforeTheAbiCanResolveIt)
 {
     auto dev = MakeHeadlessDevice();
@@ -990,13 +986,9 @@ TEST(AttachDetachEventTests, AnElementIsNeverAnnouncedAttachedBeforeTheAbiCanRes
     ASSERT_EQ(target->GetOwnerManager(), nullptr) << "precondition: unowned target";
     rootRaw->AddChild(std::move(mountOwned));
 
-    ui.Update(0.0f, /*interactive=*/false);
-    EXPECT_EQ(log.CountOf("attach:t"), 0u)
-        << "the target was still ownerless when this frame's settle ran, so announcing it "
-           "would have named an element no lookup could resolve";
-
-    // OnPostLayout adopted it during that frame, which changed its owner and queued it.
-    ASSERT_EQ(target->GetOwnerManager(), &ui) << "Mount::OnPostLayout adopts the target";
+    ASSERT_EQ(target->GetOwnerManager(), &ui) << "parenting adopts an ownerless target";
+    EXPECT_EQ(rootRaw->FindById("t"_sid), target.get());
+    EXPECT_EQ(log.CountOf("attach:t"), 0u) << "adoption alone must not dispatch attach";
 
     ui.Update(0.0f, /*interactive=*/false);
     EXPECT_EQ(log.CountOf("attach:t"), 1u) << "announced once the owner is real";
@@ -1396,7 +1388,7 @@ TEST(AttachDetachEventTests, DetachHandlerAddingASiblingDoesNotCorruptRemoveChil
     rootRaw->RemoveChild(doomedRaw);
 
     ui.Update(0.0f, false);
-    EXPECT_EQ(rootRaw->FindById("doomed"), nullptr) << "the doomed element must be gone";
+    EXPECT_EQ(rootRaw->FindById("doomed"_sid), nullptr) << "the doomed element must be gone";
     SUCCEED() << "log=" << log.Joined();
 }
 
@@ -1440,7 +1432,7 @@ TEST(AttachDetachEventTests, LoadingASecondLayoutAnnouncesTheTreeItDestroys)
     DriveUiRender(ui, rg);
 
     AttachLog log;
-    UIElement* first = ui.GetRootElement()->FindById("first");
+    UIElement* first = ui.GetRootElement()->FindById("first"_sid);
     ASSERT_NE(first, nullptr);
     Watch(*first, "first", log);
     // Make the attach real so there is an edge to close.
@@ -1497,7 +1489,7 @@ TEST(AttachDetachEventTests, ReconcileTypeChangeAnnouncesTheElementItReplaces)
     ui.Update(0.0f, false);
     DriveUiRender(ui, rg);
 
-    UIElement* before = ui.GetRootElement()->FindById("slot");
+    UIElement* before = ui.GetRootElement()->FindById("slot"_sid);
     ASSERT_NE(before, nullptr);
     const uint64_t idBefore = before->GetInstanceId();
 
@@ -1521,7 +1513,7 @@ TEST(AttachDetachEventTests, ReconcileTypeChangeAnnouncesTheElementItReplaces)
     ui.Update(0.0f, false);
     DriveUiRender(ui, rg);
 
-    UIElement* after = ui.GetRootElement()->FindById("slot");
+    UIElement* after = ui.GetRootElement()->FindById("slot"_sid);
     ASSERT_NE(after, nullptr);
     ASSERT_NE(after->GetInstanceId(), idBefore) << "precondition: a tag change rebuilds";
 
@@ -1651,6 +1643,6 @@ TEST(AttachDetachEventTests, ControlDetachHandlerAddingToAnUnrelatedParentIsSafe
 
     rootRaw->RemoveChild(doomedRaw);
     ui.Update(0.0f, false);
-    EXPECT_EQ(rootRaw->FindById("doomed"), nullptr);
+    EXPECT_EQ(rootRaw->FindById("doomed"_sid), nullptr);
     SUCCEED();
 }

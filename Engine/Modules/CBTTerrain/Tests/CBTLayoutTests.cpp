@@ -349,11 +349,11 @@ TEST(CBTLayout, StructSizesMatchStd430)
 // GlslSurfaceStructsMatchCppStd430's job.
 TEST(CBTLayout, SurfaceParamsCarriesNoMaterialPalette)
 {
-    // Dropping the 4 x 48B palette pulled the analytic tail back to the leading block's end
-    // (88 + 4 + 4 = 96, still 16-aligned for the std430 vec4-struct array).
-    EXPECT_EQ(sizeof(CBTSurfaceParams), 864u);
-    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalyticCount), 88u);
-    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalytic), 96u); // 16-aligned (std430 vec4 structs)
+    // No palette: the analytic tail follows the leading scalar block directly (104 + 4 + 4 = 112,
+    // 16-aligned for the std430 vec4-struct array).
+    EXPECT_EQ(sizeof(CBTSurfaceParams), 880u);
+    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalyticCount), 104u);
+    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalytic), 112u); // 16-aligned (std430 vec4 structs)
     EXPECT_LE(sizeof(CBTSurfaceParams), kCBTSurfaceParamsSlotStride); // still fits one ring slot
 
 #if defined(CBT_SHADER_SOURCE_DIR)
@@ -552,11 +552,12 @@ TEST(CBTLayout, BothTerrainSurfacesCrossfadeANewlyResidentSlotInFromTheCoarseFie
         << " crossfades on the row Fade, expected 2 (atlas normal + atlas splat). The grass surface "
            "mirrors this set; a change here is a decision for the blades as well";
 
+    // The blade's ground colour is resolved at its root by the vertex stage on the full profile.
     const std::string grass = StripLineComments(
-        SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/terrain_grass_surface.glsl"));
+        SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/grass_root_ground_color.glsl"));
     const std::string shared = StripLineComments(
         SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/grass_atlas_splat.glsl"));
-    ASSERT_FALSE(grass.empty()) << "cannot read terrain_grass_surface.glsl";
+    ASSERT_FALSE(grass.empty()) << "cannot read grass_root_ground_color.glsl";
     ASSERT_FALSE(shared.empty()) << "cannot read grass_atlas_splat.glsl";
 
     // One rule for both grass consumers, owned by the shared include, and driven by the row the
@@ -568,7 +569,7 @@ TEST(CBTLayout, BothTerrainSurfacesCrossfadeANewlyResidentSlotInFromTheCoarseFie
         << "the shared grass resolve computes an upgrade weight without reading the resolved row's "
            "Fade — a second clock rather than the ground's";
     EXPECT_NE(grass.find("GrassAtlas_SlotUpgradeWeight("), std::string::npos)
-        << "terrain_grass_surface.glsl takes the atlas normal outright, so the triplanar projection "
+        << "grass_root_ground_color.glsl takes the atlas normal outright, so the triplanar projection "
            "weights under a blade would step on upgrade while the ground beside it faded";
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR / TERRAIN_GRASS_SHADER_SOURCE_DIR not defined";
@@ -650,7 +651,7 @@ TEST(CBTLayout, PlanarMaterialsTapEveryMapOnceAtTheFootprintUV)
     const std::string layout =
         StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_layout.glsl"));
     const std::string grass = StripLineComments(SlurpFile(
-        std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/terrain_grass_surface.glsl"));
+        std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/grass_root_ground_color.glsl"));
     ASSERT_FALSE(albedo.empty());
     ASSERT_FALSE(surface.empty());
     ASSERT_FALSE(layout.empty());
@@ -706,7 +707,7 @@ TEST(CBTLayout, PlanarMaterialsTapEveryMapOnceAtTheFootprintUV)
         surface, std::regex(R"(CBT_BuildTriplanarCtx\(\s*sIn\.positionRelWS\s*,\s*normalWS\s*,\s*sIn\.uv0\s*\))")))
         << "the ground no longer hands the footprint UV (sIn.uv0) to the material context";
     EXPECT_TRUE(std::regex_search(
-        grass, std::regex(R"(CBT_BuildTriplanarCtx\(\s*posRelWS\s*,[^;]*,\s*uv\s*\)\s*;)")))
+        grass, std::regex(R"(CBT_BuildTriplanarCtx\(\s*rootRelWS\s*,[^;]*,\s*uv\s*\)\s*;)")))
         << "the grass no longer hands its footprint UV to the material context";
 #else
     GTEST_SKIP() << "shader source directories not defined";
@@ -985,7 +986,7 @@ TEST(CBTLayout, DefaultTerrainMaterialsCarryTheShippedPalette)
 
     // grass / rock / dirt / snow — linear RGB, the order the splat blends its channels.
     const float kTints[4][3] = {
-        {0.35f, 0.55f, 0.18f}, {0.55f, 0.50f, 0.42f}, {0.50f, 0.38f, 0.25f}, {0.90f, 0.92f, 0.95f}};
+        {0.14f, 0.13f, 0.065f}, {0.55f, 0.50f, 0.42f}, {0.50f, 0.38f, 0.25f}, {0.90f, 0.92f, 0.95f}};
     // The values TerrainGPUParams::LayerRoughness defaulted to, which the surface blended before it
     // resolved roughness through a record.
     const float kRoughness[4] = {0.85f, 0.65f, 0.75f, 0.90f};
@@ -1141,6 +1142,10 @@ TEST(CBTLayout, GlslSurfaceStructsMatchCppStd430)
         {"AtlasNormalBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasNormalBindless)},
         {"AtlasSplatCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasSplatCoarseBindless)},
         {"AtlasNormalCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasNormalCoarseBindless)},
+        {"AtlasGrassBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasGrassBindless)},
+        {"AtlasGrassCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasGrassCoarseBindless)},
+        {"_PadAtlasGrass0", "uint", 1, offsetof(CBTSurfaceParams, _PadAtlasGrass0)},
+        {"_PadAtlasGrass1", "uint", 1, offsetof(CBTSurfaceParams, _PadAtlasGrass1)},
         {"SphereAnalyticCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticCount)},
         {"SphereAnalyticDabCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticDabCount)},
         {"SphereAnalytic", "CBTSphereAnalyticFlatten", kMaxSphereAnalyticModifiers,

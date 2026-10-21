@@ -486,7 +486,7 @@ class MarkupSceneSchema final : public ISceneComponentSchema
         {
             if (!service)
                 return Refuse(outError, "MarkupService not initialized");
-            if (!ApplyServiceProperty(*service, world, entity, markup, property, value, outError))
+            if (!ApplyServiceProperty(ctx, *service, world, entity, markup, property, value, outError))
                 return false;
         }
         if (property == "revision" && service)
@@ -533,9 +533,9 @@ class MarkupSceneSchema final : public ISceneComponentSchema
 
     // The lines that name a tag or carry the notes. Each reads its whole value before it
     // writes, so a refused line changes nothing.
-    static bool ApplyServiceProperty(MarkupService& service, const ECS::World& world, ECS::EntityHandle entity,
-                                     Markup& markup, std::string_view property, std::string_view value,
-                                     std::string* outError)
+    static bool ApplyServiceProperty(const SceneLoadContext& ctx, MarkupService& service, const ECS::World& world,
+                                     ECS::EntityHandle entity, Markup& markup, std::string_view property,
+                                     std::string_view value, std::string* outError)
     {
         std::string text;
         size_t index = 0;
@@ -584,7 +584,7 @@ class MarkupSceneSchema final : public ISceneComponentSchema
                 entries[index] = std::move(entry);
             return read;
         }
-        return Refuse(outError, "Unknown Markup property");
+        return ReportUnknownField(ctx, "Markup", property, outError);
     }
 };
 

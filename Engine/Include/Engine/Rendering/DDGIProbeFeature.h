@@ -6,6 +6,7 @@
 #include "Engine/Rendering/DDGIProbeWindow.h"
 #include "Engine/Rendering/DDGIAtlasUploadState.h"
 #include "Engine/Rendering/DDGIEmitterAreas.h"
+#include "Engine/Rendering/DDGIEmitterMaterials.h"
 #include "Mathematics/Vector3.h"
 #include "Engine/Rendering/DDGIGlossyAtlasLayout.h"
 #include "Engine/Rendering/IRenderFeature.h"
@@ -833,6 +834,7 @@ class DDGIProbeFeature final : public IRenderFeature
     Rendering::MeshGPURegistry* m_MeshRegistry = nullptr;  // retained to rebuild m_SceneService on device rebuild
     DDGIEmitterAreas m_EmitterAreas;
     MaterialSystem* m_Materials = nullptr;                 // ditto
+    DDGIEmitterMaterials m_EmitterMaterials;
 
     // M7/M9 sticky fallback: `supportsRayQuery` is a HARDWARE capability
     // flag (this GPU family can do ray-query) — it says nothing about

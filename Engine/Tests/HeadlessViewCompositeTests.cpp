@@ -264,7 +264,7 @@ bool LayoutRect(UIManager* hud, const char* id, IntRect& out, std::string& why)
         why = "no HUD root element";
         return false;
     }
-    const UIElement* el = hud->GetRootElement()->FindById(id);
+    const UIElement* el = hud->GetRootElement()->FindById(HashStringId(id));
     if (!el)
     {
         why = std::string("HUD element '") + id + "' not found";
@@ -295,7 +295,7 @@ bool LayoutRect(UIManager* hud, const char* id, IntRect& out, std::string& why)
 // reading the blend — the models still differ in the blend function alone.
 bool EmittedPaint(UIManager* hud, const char* id, uint32_t rgba[4], std::string& why)
 {
-    const UIElement* el = hud && hud->GetRootElement() ? hud->GetRootElement()->FindById(id)
+    const UIElement* el = hud && hud->GetRootElement() ? hud->GetRootElement()->FindById(HashStringId(id))
                                                        : nullptr;
     if (!el)
     {

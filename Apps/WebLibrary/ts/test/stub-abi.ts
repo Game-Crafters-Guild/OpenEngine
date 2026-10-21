@@ -58,6 +58,8 @@ export class StubAbi implements Abi {
     refuseLoads = false;
     /** When true, ge_model_emissive_strength fails, as the module does without a renderer. */
     refuseEmissiveStrength = false;
+    /** When true, ge_resize fails, as the module does for a size or ratio it cannot take. */
+    refuseResize = false;
     /** Called inside ge_tick: the engine's own writes. */
     onTick: (() => void) | null = null;
     lastResize: [number, number, number] | null = null;
@@ -127,7 +129,7 @@ export class StubAbi implements Abi {
     ge_resize(width: number, height: number, dpr: number): number {
         this.calls.push('ge_resize');
         this.lastResize = [width, height, dpr];
-        return 0;
+        return this.refuseResize ? this.fail('ge_resize needs a positive size and pixel ratio') : 0;
     }
 
     ge_shutdown(): Promise<number> {

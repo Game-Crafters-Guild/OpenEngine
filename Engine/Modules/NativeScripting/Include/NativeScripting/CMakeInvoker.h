@@ -49,11 +49,11 @@ public:
     using ProcessRunner = std::function<int(const std::string& command, std::string& outOutput)>;
     static void SetProcessRunnerForTests(ProcessRunner runner);
 
-    // Run the ComponentScanner (dotnet) over config.SourceDir to emit the user
+    // Run the ComponentScanner over config.SourceDir to emit the user
     // component-registration .cpp into config.BuildDir. Returns the generated file's
     // path on success, or empty (with outError set) on failure. Captures scanner
     // output into outOutput and fills outStats from the scanner's summary line. Caller
-    // gates on DotnetExe + ComponentScannerDll being set.
+    // gates on ComponentScannerExe being set.
     static std::filesystem::path RunComponentScanner(const NativeBuildConfig& config,
                                                      std::string& outOutput,
                                                      std::string& outError,

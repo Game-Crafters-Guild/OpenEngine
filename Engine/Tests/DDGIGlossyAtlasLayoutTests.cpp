@@ -82,7 +82,9 @@ TEST(DDGIGlossyAtlasLayoutTests, IsNearSquareAndMinimal)
         // narrower must NOT have been enough.
         EXPECT_GE(layout.TilesX * layout.TilesX, probeTotal);
         if (layout.TilesX > 1)
+        {
             EXPECT_LT((layout.TilesX - 1) * (layout.TilesX - 1), probeTotal);
+        }
     }
 }
 

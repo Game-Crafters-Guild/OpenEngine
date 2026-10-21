@@ -1,0 +1,128 @@
+---
+title: The night sky
+description: How the physical sky lights a night with the moon, how the moon's phase follows its cycle, what the night sky's own glow adds, how the stars are drawn, and how exposure shows the result.
+---
+
+At night the physical sky uses physical values, as it does by day. The moon is a second light source in the sky. It lights the atmosphere from its own direction, and it lights the ground through the directional light that the sky drives. A clear night without a moon keeps the natural glow of the night sky. Exposure decides how bright the result looks.
+
+## The moon's light
+
+The **Moonlight (lx)** field on the **Sky Environment** sets the moon's illuminance on a surface that faces it, with a full moon high in the sky. The default is 0.25 lx, the value of a real full moon.
+
+The moon uses this value in three places:
+
+- The moonlit sky. The sky's atmosphere scatters the moon's light in the same way that it scatters sunlight. The sky near the moon is brighter, and the sky goes red near the horizon at moonrise.
+- The linked directional light. At night the light that the sky drives comes from the moon's direction, with the moon's illuminance for the phase.
+- The moon's disk. The disk has the surface brightness of the real moon. A full moon 33 degrees up averages about 3,300 cd/m² over its face (measured), and bright highlands reach about 8,500 cd/m². **Moon size** makes the disk larger or smaller, as a telephoto lens does. It does not change the disk's brightness or the moon's light. So a full or quarter moon shows in the day sky, as the real moon does.
+
+The moon's light is slightly warmer than sunlight, because the lunar surface reflects red light better than blue light. Dimming the sun does not change the moon.
+
+## The moon's phase
+
+The **Moon arc position** field sets where the moon is in its cycle. The same value sets the moon's phase:
+
+| Moon arc position | Phase | Where the moon is | Light, as a fraction of a full moon |
+|---|---|---|---|
+| 0 | New moon | With the sun | 0 |
+| 0.25 | First quarter | High in the sky at sunset | about 0.09 |
+| 0.5 | Full moon | Opposite the sun: it rises at sunset | 1 |
+| 0.75 | Last quarter | High in the sky at sunrise | about 0.09 |
+
+The moon follows the sun's daily path and trails it by the arc position. The disk is lit on the side that faces the sun. The phase also sets the amount of moonlight on the sky and the ground. A quarter moon gives about a tenth of a full moon's light, because a half-lit moon is also lit at a low angle. When **Auto moon cycle** is on and the time of day animates, the moon moves through its cycle over **Moon cycle length** days, and it rises later each day.
+
+The dark side of the disk shows earthshine: sunlight that the Earth reflects onto the moon. Seen from the moon, the Earth's phase is the opposite of the moon's, so earthshine is strongest on a thin crescent and gone at full moon. On a thin crescent the dark side is about one ten-thousandth as bright as the lit side, and half of that at a quarter moon. Earthlight is bluer than sunlight, so the dark side is a little bluer than the lit side.
+
+**Moon exposure** is a stylistic trim on the disk only, in stops. At 0, the disk has the real moon's brightness.
+
+## The night sky's own glow
+
+A clear sky without a moon is not black. Airglow in the upper atmosphere and the light of faint stars give about 1.7e-4 cd/m² at the zenith. The horizon is about three times brighter, because the line of sight crosses more of the glowing layer. The sky adds this glow to the moonlit sky and to the twilight. The **Night sky horizon ramp** sets the glow's color and level at the horizon over the day.
+
+## The star field
+
+The engine makes a star field with the statistics of the real sky:
+
+- About 9,000 stars are brighter than magnitude 6.5 over the whole sky. This is the naked-eye limit under a dark sky. Each magnitude fainter has about three times as many stars. The field goes down to magnitude 8, about 50,600 stars.
+- The stars are spread evenly over the sky.
+- Each star has a blackbody color. The colors follow the spectral mix of the stars that you can see without a telescope: blue-white stars are frequent, orange stars are frequent, and red stars are rare.
+
+The field is the same in every run and on every platform.
+
+## How a star is lit
+
+Each star sends the illuminance of its magnitude: a magnitude 0 star gives 2.54e-6 lux above the atmosphere. The engine applies the light to the scene on the same scale as the sun and the sky, so the camera's exposure decides how bright the stars look.
+
+Some terms model the sky, some depend on who looks at it, and some are a look:
+
+- **The sky (physical).** The count law of the star field, each star's flux, the extinction along the star, the visibility threshold against the sky behind it, and the twinkle's amount by airmass.
+- **The observer.** Eye draws the stars as a dark-adapted eye sees them: the glare around a bright star (CIE 146) and faint stars fading to white. Camera draws the same stars without the glare, each in its catalog color. The visibility threshold is the eye's for both observers: the limit is the density of the field, a setting.
+- **The look (artistic).** The compression, the glow, the spikes, the core's scale, the sparkle shape, the twinkle rate and the night tint.
+
+The engine ships the **Vivid** look as its default. Vivid is artistic and uses the eye. The **Physical** look is one click away: it sets every artistic setting to its physical value and uses the camera.
+
+- **Extinction.** The air dims and reddens a star near the horizon. The engine reads the atmosphere's transmittance along the star's direction, as it does for the sun.
+- **Core.** A star is a soft round point about two pixels wide (the physical core; **Core** scales it). Every star has the same core: a bright star is a brighter point with a glare and a glow around it, not a wider disk. The star's light stays the same at every screen resolution and at every position on the screen.
+- **Glare.** The eye scatters a small part of a bright star's light around it (disability glare, CIE 146). With the **Eye** observer the engine draws this glare. The light of the glare comes out of the star's core, so the total light of the star does not change. The glare is faint. For a stronger glow, use **Glow**. The **Camera** observer draws no glare.
+- **Color.** Each star has the color of its temperature, reddened by the air near the horizon. With the **Eye** observer, faint stars fade to white, as the eye's rod vision sees them: a star brighter than magnitude 3.5 keeps its full color, and the color fades to white between magnitude 3.5 and magnitude 5.5. With the **Camera** observer, every star keeps its color. The highlight compression does not change the color.
+- **Visibility.** The eye sees a fainter star against a darker sky. The engine uses the eye's threshold for a point of light against a background (Schaefer 1993): the limiting magnitude is the setting's value under a moonless sky, about 4 under a full-moon sky, and about -4 in daylight. The engine reads the sky behind each star, so at dusk the bright stars come out first, and near the moon fewer stars show.
+- **Twinkle.** Stars near the horizon twinkle (scintillation). Stars overhead stay steady.
+
+## Star settings
+
+The star settings are on the **Sky Environment** component, in the inspector's **Stars** section. The observer and the two physical settings come first. The **Artistic** group follows: these settings make the stars look better on a screen, and their neutral values give the physical sky. The defaults are the **Vivid** look, which is artistic.
+
+| Setting | Scene key | Kind | Default | What it does |
+|---|---|---|---|---|
+| Observer | `StarObserver` | The observer | Eye | Eye draws the stars as a dark-adapted eye sees them (glare, faint stars fading to white); Camera draws the same stars without the glare, each in its catalog color. A look sets it: Physical uses Camera, the other looks use Eye. |
+| Limit | `StarLimitingMagnitude` | Physical | 7.25 | The limiting magnitude: the faintest star that the engine draws under a moonless sky. 6.5 is an average sky seen by eye, 7.25 a dark site. Use up to 8 for a camera. Lower values draw fewer stars. A brighter sky lowers the limit by the eye's threshold. |
+| Twinkle | `StarTwinkleAmount` | Physical | 0.3 | How far a star's brightness swings at about 6 degrees above the horizon (scintillation). Stars overhead stay steady. 0 gives still stars. |
+| Highlights | `StarHighlightCompression` | Artistic | 0.775 | Makes the bright stars less bright, relative to the faint stars. 1 is physical: a magnitude -1.5 star is 1,585 times as bright as a magnitude 6.5 star. 0.775 makes it 300 times as bright, so the brightest stars do not clip at a night exposure. |
+| Glow | `StarGlow` | Artistic | 0.9 | A soft glow around the brightest stars, as a multiple of the star's own light: 1 adds the star's light again around it. It acts on stars brighter than magnitude 3, in full on stars brighter than magnitude 1.5, with either shape. The glow adds light around the core or the sparkle, which keeps the brightness that it has with no glow. 0 is physical. The range is 0 to 4. |
+| Twinkle rate | `StarTwinkleRate` | Artistic | 1 | How fast the twinkle swings, as a multiple of a slow twinkle. At 1 the fastest swing is about 2 Hz. The most, 12, keeps the fastest swing under 30 times a second. Real scintillation is faster still. |
+| Shape | `StarShape` | Artistic | Point | **Point** is the physical round core. **Sparkle** draws every star as a four-pointed sparkle. |
+| Core | `StarCoreScale` | Artistic | 0.85 | The scale of every star's core. 1 is the physical point. A smaller value gives a tighter, brighter point. The range is 0.5 to 3. |
+| Spikes | `StarSpikes` | Artistic | 0.2 | Four diffraction spikes on the stars that have a glow, as the share of the glow's light that they take. The star's total light does not change. 0 gives no spikes. The spikes need a glow. |
+| Spike length | `StarSpikeLength` | Artistic | 0.6 | The distance over which a spike fades to a third, in glow radii. 1 is about 7 pixels on a 900-pixel-tall view. A bright spike stays visible for a few times that distance. The range is 0.5 to 4. |
+
+## Star looks
+
+The **Star look** buttons set the star settings and the night tint together, with one click and one undo step:
+
+- **Vivid** (the default, artistic): a dark site's star count, the brightest stars glowing with four thin diffraction spikes two to three glow radii long, a tighter core, faint stars that fade to white, and the full navy night tint.
+- **Restrained**: Vivid without the spikes, with the physical core, a softer glow (0.8) and half the night tint.
+- **Physical**: the physical sky as a camera records it. It sets every artistic setting to its neutral value (highlights 1, no glow, no spikes, core 1, the Point shape, no tint) and the observer to **Camera**: no glare, and every star keeps its color. It sets the limit to 6.5, the naked eye's limit, and the twinkle rate to 12, its top.
+- **Classic**: every star is a four-pointed sparkle, with a soft glow (0.8) and half the night tint.
+
+The looks do not change the sky's exposure trim or any other sky setting. The button of the look that the star settings match shows as selected. After you change a star setting by hand, the row shows **Custom**. The night tint is on each global **Post Process Volume**, and the buttons set it on all of them. If the world has no global Post Process Volume, the row says so, and a look sets the star settings only. Add a global Post Process Volume to control the night tint.
+
+## The night tint
+
+The night tint is an artistic setting on the **Post Process Volume**. It gives a night image the blue color that films use for night scenes.
+
+- **Strength** sets how much the tint acts. 0 turns the tint off (physical). 1 gives the dark sky exactly the color's hue. The default is 1, the Vivid look, an artistic choice. A world without a global Post Process Volume uses the default.
+- **Color** sets the hue of the tint. Pick it with the color picker. Only the hue is used: the engine keeps the image's brightness. The engine applies the tint after the look, so the dark sky shows this hue exactly. The default is a navy blue.
+- In a scene file, the keys are `nightTintStrength` and `nightTintColor`. Each channel of `nightTintColor` is 0 to 1.
+
+The tint follows what the camera meters, before **Auto Min EV** and the **Compensation Curve**. It has its full effect on a scene that meters darker than 0.005 cd/m² and none on a scene that meters brighter than 0.05 cd/m²: a full moon (about 0.009 cd/m²) takes most of it; a room lit by a lamp (about 0.3 cd/m²), a dusk and a day take none.
+
+In a night image, the tint changes the dark sky and keeps the stars' color:
+
+- The star pass records the light that the stars add to each pixel. A pixel of sky that the stars make at least 1.5 times as bright as the sky alone keeps its color. Between 1.1 and 1.5 times, it keeps part of its color.
+- So the bright stars and their glows keep the stars' color. A faint star whose pixels stand less than 1.5 times above the sky behind them takes part of the tint.
+- The sky next to a building, a tree or terrain takes the tint up to its edge, and so does geometry in front of the stars.
+- The bright parts of a moonlit scene keep their color: the moon, a lit window. The tint acts in full on surfaces under 0.5 cd/m² (moonlight puts less than 0.1 cd/m² on the ground) and not at all above 2 cd/m². This is the scene's own brightness, before the exposure, so the exposure compensation curve and **Auto Min EV** do not change which surfaces take the tint.
+
+How much of a star's color shows on screen also depends on the look: the **Photographic** look keeps more of it than the **Neutral** look.
+
+## Exposure at night
+
+A physical night is very dark compared to a day. A full moon lights the ground with less than one millionth of the sun's light. The camera's exposure decides what the picture shows:
+
+- Auto exposure meters the night and its **Compensation Curve** keeps it dark: by default a full moon is shown 2.5 stops under its metered exposure, so the ground sits about 4 stops under middle gray, the moon reads bright and the stars stand out. A moonless night reads below the **Auto Min EV** floor of -7, so it is held at the floor and shows darker still, with the stars on the night sky's glow.
+- The stars do not take the **Compensation Curve**: they keep the brightness the metered exposure gives them while the curve darkens the sky around them.
+- Under a full moon the sky is bright enough that the eye's threshold leaves only the brighter stars (about magnitude 4 and brighter), and fewer still near the moon; a moonless night shows the full star field.
+- The **Lights** meter reads a full moon at about EV100 -4 and a moonless night near -12.
+- The **Picture** meter, a game camera's default, reads the ground and the sky, not the stars. On the Basic 3D template it reads a full moon at 21:00 at EV100 -4.3 and a moonless night at -10.7.
+- A game camera and the Scene View share the floor (**Auto Min EV** -7) and the curve: the Scene View takes the scene's main camera's. The Scene View meters the Lights by default, so its night can sit a stop or so away from the Game View's.
+
+See [Exposure](exposure.mdx#the-scene-views-exposure).

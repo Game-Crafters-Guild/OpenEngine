@@ -53,7 +53,7 @@ struct ProbePC
     float sunDirAndIntensity[4];
     float albedoAndScaleHeight[4];
     float sunColorAndHaze[4];
-    float betaAndPad[4];
+    float betaAndAtmosphereRadius[4];
     float skyColorAndCount[4];
     float meanRadiance[4];
 };
@@ -61,6 +61,7 @@ static_assert(sizeof(ProbePC) == 128, "the probe push constant must fit the guar
 
 // Earth-scale, matching SkyEnvironment's shipped default and the scale the degeneracy needs.
 constexpr float kPlanetRadius = 6360000.0f;
+constexpr float kAtmosphereRadius = 6460000.0f;
 constexpr uint32_t kDirections = 64u;
 
 // Resolve the staged probe SPIR-V by walking up from the EXECUTABLE, never from the
@@ -217,10 +218,10 @@ class SkyGroundFloorParityTest : public ::testing::Test
         pc.sunColorAndHaze[1] = 0.97f;
         pc.sunColorAndHaze[2] = 0.93f;
         pc.sunColorAndHaze[3] = 1.0f;       // groundHazeStrength
-        pc.betaAndPad[0] = 5.8e-6f;
-        pc.betaAndPad[1] = 13.5e-6f;
-        pc.betaAndPad[2] = 33.1e-6f;
-        pc.betaAndPad[3] = 0.0f; // camR is computed on the GPU, see the probe shader
+        pc.betaAndAtmosphereRadius[0] = 5.8e-6f;
+        pc.betaAndAtmosphereRadius[1] = 13.5e-6f;
+        pc.betaAndAtmosphereRadius[2] = 33.1e-6f;
+        pc.betaAndAtmosphereRadius[3] = kAtmosphereRadius;
         // A sky colour nothing else can produce, so "the floor did not composite" is
         // distinguishable from "the floor composited to something similar".
         pc.skyColorAndCount[0] = 11.0f;

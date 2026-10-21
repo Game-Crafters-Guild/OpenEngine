@@ -38,6 +38,11 @@ bool IsRefusal(const nlohmann::json& result)
     return result.is_object() && result.contains(kRefusalKey);
 }
 
+std::string RefusalReason(const nlohmann::json& result)
+{
+    return IsRefusal(result) ? result.at(kRefusalKey).at(kReasonKey).get<std::string>() : std::string();
+}
+
 nlohmann::json HandlerResponse(const std::string& id, const nlohmann::json& result)
 {
     if (!IsRefusal(result))

@@ -7,6 +7,7 @@
 #include <memory>
 #include <set>
 #include <vector>
+#include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
@@ -22,6 +23,24 @@ void SetEnv(const char* name, const char* value)
 #else
     setenv(name, value, 1);
 #endif
+}
+
+// One frame as the render loop drives it: BeginFrame runs the deferred-destruction
+// sweep, and the empty submit moves the graphics timeline past what was deferred.
+void RunFrame(IDevice& dev)
+{
+    dev.TickDeviceRecovery();
+    if (!dev.BeginFrame())
+        return;
+    auto cl = dev.CreateCommandList(IDevice::QueueType::Graphics);
+    if (cl)
+    {
+        cl->Begin();
+        cl->End();
+        std::vector<CommandList*> lists{cl.get()};
+        dev.ExecuteCommandLists(lists);
+    }
+    dev.Present();
 }
 
 // Headless fixture that enables the descriptor-buffer runtime path before constructing
@@ -409,6 +428,151 @@ TEST_F(DescriptorBufferFixture, Device_DestroyDescriptorSetReleasesDbEntry)
     device->DestroyDescriptorSet(handle);
     EXPECT_FALSE(vk->LookupDescriptorBufferSet(handle).Found)
         << "DestroyDescriptorSet must erase the m_DescriptorBufferSets entry for a DB-tagged handle";
+}
+
+// A view creates persistent sets and destroys them when it goes. Over a session the
+// bytes of a destroyed set are reused once the GPU is done with them, so view churn
+// never spills the persistent region into further descriptor buffers: each one costs
+// a binding, and past the device's limit the bind path refuses sets and the draw
+// reads whatever was bound before.
+TEST_F(DescriptorBufferFixture, Device_PersistentSetChurnReusesTheBytesOfDestroyedSets)
+{
+    DescriptorSetDesc desc{};
+    desc.transient = false;
+    desc.debugName = "ViewChurnSet";
+    DescriptorBinding b{};
+    b.binding = 0;
+    b.type = DescriptorType::StorageBuffer;
+    b.count = 1;
+    b.shaderStages = static_cast<uint32_t>(VK_SHADER_STAGE_COMPUTE_BIT);
+    desc.layout.bindings.push_back(b);
+
+    const DescriptorSetHandle first = device->CreateDescriptorSet(desc);
+    ASSERT_TRUE(VulkanDevice::IsDescriptorBufferHandle(first));
+    const VkBuffer backing = vk->LookupDescriptorBufferSet(first).alloc.Buffer;
+    ASSERT_NE(backing, VK_NULL_HANDLE);
+    device->DestroyDescriptorSet(first);
+
+    // 25,600 sets: several times what the persistent region holds when nothing is reused.
+    constexpr int kViews = 400;
+    constexpr int kSetsPerView = 64;
+    std::vector<DescriptorSetHandle> viewSets;
+    for (int view = 0; view < kViews; ++view)
+    {
+        for (int set = 0; set < kSetsPerView; ++set)
+        {
+            const DescriptorSetHandle handle = device->CreateDescriptorSet(desc);
+            ASSERT_TRUE(handle.IsValid());
+            ASSERT_EQ(vk->LookupDescriptorBufferSet(handle).alloc.Buffer, backing)
+                << "view " << view << ", set " << set << " spilled out of the persistent region";
+            viewSets.push_back(handle);
+        }
+        for (const DescriptorSetHandle handle : viewSets)
+            device->DestroyDescriptorSet(handle);
+        viewSets.clear();
+        RunFrame(*device);
+    }
+}
+
+namespace
+{
+// One storage buffer for the compute stage: the persistent set the reuse tests churn.
+DescriptorSetDesc PersistentStorageBufferSetDesc(const char* debugName)
+{
+    DescriptorSetDesc desc{};
+    desc.transient = false;
+    desc.debugName = debugName;
+    DescriptorBinding b{};
+    b.binding = 0;
+    b.type = DescriptorType::StorageBuffer;
+    b.count = 1;
+    b.shaderStages = static_cast<uint32_t>(VK_SHADER_STAGE_COMPUTE_BIT);
+    desc.layout.bindings.push_back(b);
+    return desc;
+}
+
+bool SameBytes(const DescriptorBufferAllocation& a, const DescriptorBufferAllocation& b)
+{
+    return a.Buffer == b.Buffer && a.Offset == b.Offset;
+}
+} // namespace
+
+// Command buffers recorded in the frame a set is destroyed may still read its
+// bytes, so they come back only once every queue is past that frame's work: a set
+// created in the same frame gets other bytes, and the next frame reuses them.
+TEST_F(DescriptorBufferFixture, Device_DestroyedPersistentSetBytesWaitForTheGpuBeforeReuse)
+{
+    const DescriptorSetDesc desc = PersistentStorageBufferSetDesc("DeferredReuseSet");
+    RunFrame(*device);
+
+    const DescriptorSetHandle destroyed = device->CreateDescriptorSet(desc);
+    ASSERT_TRUE(VulkanDevice::IsDescriptorBufferHandle(destroyed));
+    const DescriptorBufferAllocation destroyedBytes = vk->LookupDescriptorBufferSet(destroyed).alloc;
+    device->DestroyDescriptorSet(destroyed);
+
+    const DescriptorSetHandle sameFrame = device->CreateDescriptorSet(desc);
+    EXPECT_FALSE(SameBytes(vk->LookupDescriptorBufferSet(sameFrame).alloc, destroyedBytes))
+        << "a destroyed set's bytes were handed out again in the frame that may still read them";
+
+    RunFrame(*device);
+    const DescriptorSetHandle nextFrame = device->CreateDescriptorSet(desc);
+    EXPECT_TRUE(SameBytes(vk->LookupDescriptorBufferSet(nextFrame).alloc, destroyedBytes))
+        << "the destroyed set's bytes were not reused once the GPU was past them";
+
+    device->DestroyDescriptorSet(sameFrame);
+    device->DestroyDescriptorSet(nextFrame);
+}
+
+// A device rebuild replaces the descriptor-buffer pool. A set made before it and
+// destroyed after it names the destroyed pool's buffer, so its bytes must not reach
+// the new pool: the next set would bind a destroyed buffer and write through a
+// freed mapping.
+TEST(DescriptorBufferRebuild, SetMadeBeforeARebuildReleasesNothingIntoTheNewPool)
+{
+    SetEnv("GE_HEADLESS_TEST", "1");
+    SetEnv("GE_VK_FORCE_DEVICE_LOST", "2");
+    DeviceDesc dd{};
+    dd.preferredAPI = GraphicsAPI::Vulkan;
+    dd.enableDynamicRendering = true;
+    dd.descriptorBuffers = DescriptorBufferMode::Auto;
+    std::unique_ptr<IDevice> device = DeviceFactory::CreateDevice(dd);
+    const bool initialized = device && device->Initialize(dd);
+    SetEnv("GE_VK_FORCE_DEVICE_LOST", "");
+    if (!initialized)
+        GTEST_SKIP() << "Vulkan device init failed — likely no Vulkan runtime available on this machine";
+    auto* vk = dynamic_cast<VulkanDevice*>(device.get());
+    ASSERT_NE(vk, nullptr);
+    if (!vk->IsDescriptorBufferEnabled())
+        GTEST_SKIP() << "Descriptor-buffer runtime path not enabled on this device";
+
+    const DescriptorSetDesc desc = PersistentStorageBufferSetDesc("PreRebuildSet");
+    const DescriptorSetHandle preRebuild = device->CreateDescriptorSet(desc);
+    const DescriptorBufferAllocation oldPoolBytes = vk->LookupDescriptorBufferSet(preRebuild).alloc;
+    ASSERT_TRUE(oldPoolBytes.IsValid());
+
+    bool rebuilt = false;
+    for (int i = 0; i < 12 && !rebuilt; ++i)
+    {
+        RunFrame(*device);
+        rebuilt = device->GetDeviceHealth() == DeviceHealth::AwaitingReprovision;
+    }
+    ASSERT_TRUE(rebuilt) << "the injected loss did not rebuild the device";
+    device->NotifyReprovisionComplete();
+
+    const DescriptorSetHandle onNewPool = device->CreateDescriptorSet(desc);
+    const VkBuffer newPoolBuffer = vk->LookupDescriptorBufferSet(onNewPool).alloc.Buffer;
+    device->DestroyDescriptorSet(preRebuild);
+    for (int i = 0; i < 4; ++i)
+        RunFrame(*device);
+
+    const DescriptorSetHandle next = device->CreateDescriptorSet(desc);
+    const DescriptorBufferAllocation nextBytes = vk->LookupDescriptorBufferSet(next).alloc;
+    EXPECT_EQ(nextBytes.Buffer, newPoolBuffer) << "a set after the rebuild was handed the destroyed pool's bytes";
+    EXPECT_NE(nextBytes.HostMapped, oldPoolBytes.HostMapped);
+
+    device->DestroyDescriptorSet(onNewPool);
+    device->DestroyDescriptorSet(next);
+    device->Shutdown();
 }
 
 // WriteDescriptorBufferUpdate must resolve default VK_WHOLE_SIZE ranges to

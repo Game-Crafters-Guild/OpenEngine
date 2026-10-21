@@ -38,14 +38,9 @@ UIElement* FindDocumentRoot(uint64_t entityId)
     return g_Host ? g_Host->FindDocumentRoot(entityId) : nullptr;
 }
 
-UIElement* FindElementById(uint64_t entityId, std::string_view id)
+UIElement* FindElementById(StringId id, uint64_t* outOwnerEntityId)
 {
-    return g_Host ? g_Host->FindElementById(entityId, id) : nullptr;
-}
-
-UIElement* FindElementByIdAny(std::string_view id, uint64_t* outOwnerEntityId)
-{
-    return g_Host ? g_Host->FindElementByIdAny(id, outOwnerEntityId) : nullptr;
+    return g_Host ? g_Host->FindElementById(id, outOwnerEntityId) : nullptr;
 }
 
 uint64_t GetBindGeneration()

@@ -89,6 +89,7 @@ struct RecordingSink final : Input::IRawInputSink
     void OnMouseMove(Mathematics::Vector2) override {}
     void OnMouseLeave() override {}
     void OnWindowFocus(bool focused) override { events.push_back(focused ? "f1" : "f0"); }
+    void OnPointerLock(bool) override {}
     bool OnMouseButton(int button, bool down, int /*mods*/) override
     {
         events.push_back("b" + std::to_string(button) + ":" + (down ? "1" : "0"));
@@ -491,15 +492,15 @@ constexpr Input::ActionId kFrameAllLikeAction = Input::HashInput("Test.EditorGlo
 void RegisterEditorChords(Input::InputSystem& input)
 {
     Input::ActionBinding save{Input::DeviceType::Keyboard, Input::kKeyCode_S, 1.0f};
-    save.requiredMods = Input::kModControl;
+    save.requiredMods = Input::ModifierFlags::Control;
     input.BindKey(kEditorLikeContext, kSaveSceneLikeAction, save);
 
     Input::ActionBinding copy{Input::DeviceType::Keyboard, Input::kKeyCode_C, 1.0f};
-    copy.requiredMods = Input::kModControl;
+    copy.requiredMods = Input::ModifierFlags::Control;
     input.BindKey(kEditorLikeContext, kCopyLikeAction, copy);
 
     Input::ActionBinding frameAll{Input::DeviceType::Keyboard, Input::kKeyCode_F, 1.0f};
-    frameAll.requiredMods = Input::kModAlt;
+    frameAll.requiredMods = Input::ModifierFlags::Alt;
     input.BindKey(kEditorLikeContext, kFrameAllLikeAction, frameAll);
 
     input.PushContext(kEditorLikeContext);
@@ -1131,7 +1132,7 @@ constexpr Input::ActionId kHostShortcut = Input::HashInput("Test.Host.Shortcut")
 void ReserveForHost(Input::InputSystem& host, Input::KeyCode key, int mods)
 {
     Input::ActionBinding binding{Input::DeviceType::Keyboard, key, 1.0f};
-    binding.requiredMods = mods;
+    binding.requiredMods = static_cast<Input::ModifierFlags>(mods);
     host.RegisterAction(kHostContext, {kHostShortcut, {binding}, false, /*hostReserved=*/true});
 }
 
@@ -1172,7 +1173,7 @@ TEST(WindowInputRoutingTests, UnreservedChordsReachTheGameplaySink)
             else
             {
                 Input::ActionBinding binding{Input::DeviceType::Keyboard, Input::kKeyCode_A, 1.0f};
-                binding.requiredMods = mods;
+                binding.requiredMods = static_cast<Input::ModifierFlags>(mods);
                 runtime.BindKey(kGameplayContext, kGameplayAction, binding);
             }
             WindowInputRouterConfig config;
@@ -1941,7 +1942,7 @@ TEST(WindowInputRoutingTests, ChordedMousePressIsClaimedFromTheEventMods)
     f.UseGameplaySink(gameplay);
 
     Input::ActionBinding ctrlClick{Input::DeviceType::Mouse, /*code=*/0, 1.0f};
-    ctrlClick.requiredMods = Input::kModControl;
+    ctrlClick.requiredMods = Input::ModifierFlags::Control;
     gameplay.BindKey(kGameplayContext, kGameplayAction, ctrlClick);
     gameplay.PushContext(kGameplayContext);
 
@@ -2010,7 +2011,7 @@ TEST(WindowInputRoutingTests, ChordedScrollIsClaimedFromTheEventMods)
     zoom.id = kGameplayAction;
     zoom.isAxis = true;
     Input::ActionBinding ctrlWheel{Input::DeviceType::Mouse, Input::kMouseScrollAxisY, 1.0f};
-    ctrlWheel.requiredMods = Input::kModControl;
+    ctrlWheel.requiredMods = Input::ModifierFlags::Control;
     zoom.bindings.push_back(ctrlWheel);
     gameplay.RegisterAction(kGameplayContext, zoom);
     gameplay.PushContext(kGameplayContext);
@@ -2958,4 +2959,130 @@ TEST(WindowInputRoutingTests, GamepadEdgesSkipTheSurfaceUiAndChromeUi)
     WindowInputRouter::RouteGamepadButton(f.config, kPad, kPadButtonA, /*down=*/true);
     EXPECT_TRUE(runtime.IsGamepadButtonDown(kPad, Input::GamepadButton::A));
     EXPECT_TRUE(field->GetValue().empty()) << "a gamepad button is not typing";
+}
+
+// The editor's shape: a locked pointer belongs to the game. Its moves, presses
+// and wheel reach the gameplay sink and nothing else, so the editor neither
+// hovers nor clicks under a cursor it cannot see.
+TEST(WindowInputRoutingTests, ALockedPointerReachesOnlyTheGameplaySink)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    RecordingSink game;
+    Input::InputSystem runtime{Input::SinkRole::Gameplay};
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.gameplaySink = &game;
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+    // The host's own wheel hook is a stage like any other: a locked wheel skips it.
+    int hostWheelTicks = 0;
+    f.config.onScrollPre = [&hostWheelTicks](float, float)
+    {
+        ++hostWheelTicks;
+        return false;
+    };
+
+    WindowInputRouter::RouteMouseMove(f.config, /*window=*/nullptr, 40.0f, 30.0f);
+    WindowInputRouter::RouteMouseButton(f.config, 0, /*pressed=*/true, 0);
+    WindowInputRouter::RouteScroll(f.config, 0.0f, 2.0f, 0);
+    f.input.Update(0.016f);
+
+    EXPECT_FALSE(f.input.IsPointerInWindow());
+    EXPECT_FALSE(f.input.IsMouseButtonDown(0));
+    EXPECT_EQ(hostWheelTicks, 0);
+    EXPECT_EQ(game.events, (std::vector<std::string>{"b0:1", "s0:2"}));
+
+    // And the moves themselves, through a real sink: the delta counts.
+    surface.gameplaySink = &runtime;
+    f.UsePlaySurface(surface);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 40.0f, 30.0f);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 2040.0f, 25.0f);
+    runtime.Update(0.016f);
+    EXPECT_EQ(runtime.GetMouseDelta(), Mathematics::Vector2(2000.0f, -5.0f));
+    EXPECT_FALSE(f.input.IsPointerInWindow());
+}
+
+// A button held down before the lock comes up everywhere it went down: a
+// release is never withheld, locked or not.
+TEST(WindowInputRoutingTests, AReleaseUnderTheLockReachesEveryStage)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    RecordingSink game;
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.gameplaySink = &game;
+    f.UsePlaySurface(surface);
+
+    // Unlocked, an unclaimed press travels on to the editor's input.
+    WindowInputRouter::RouteMouseButton(f.config, 1, /*pressed=*/true, 0);
+    f.input.Update(0.016f);
+    ASSERT_TRUE(f.input.IsMouseButtonDown(1));
+
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+    WindowInputRouter::RouteMouseButton(f.config, 1, /*pressed=*/false, 0);
+    f.input.Update(0.016f);
+    EXPECT_FALSE(f.input.IsMouseButtonDown(1));
+    EXPECT_EQ(game.events, (std::vector<std::string>{"b1:1", "b1:0"}));
+}
+
+// The Player's shape: the surface is the whole window and has no separate
+// gameplay sink, so the window's own InputSystem is the game's and a locked
+// pointer is delivered there.
+TEST(WindowInputRoutingTests, WithoutAGameplaySinkALockedPointerReachesTheWindowsInput)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.pointerLocked = true;
+    f.UsePlaySurface(surface);
+
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 640.0f, 360.0f);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, -300.0f, 380.0f);
+    WindowInputRouter::RouteMouseButton(f.config, 0, /*pressed=*/true, 0);
+    f.input.Update(0.016f);
+
+    EXPECT_EQ(f.input.GetMouseDelta(), Mathematics::Vector2(-940.0f, 20.0f));
+    EXPECT_TRUE(f.input.IsMouseButtonDown(0));
+}
+
+// The editor maps the Game View's pointer by its UI scale. A locked move skips
+// that mapping, so the game's mouse delta is in window client units and a
+// sensitivity tuned in the editor holds in the Player.
+TEST(WindowInputRoutingTests, ALockedMoveReachesGameplayInWindowClientUnits)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    Input::InputSystem runtime{Input::SinkRole::Gameplay};
+    WindowInputRouterConfig::PlaySurface surface;
+    surface.gameplaySink = &runtime;
+    surface.pointerLocked = true;
+    surface.mapGameplayPointer = [](float clientX, float clientY, float& playX, float& playY)
+    {
+        playX = clientX * 0.5f - 100.0f;
+        playY = clientY * 0.5f - 50.0f;
+    };
+    f.UsePlaySurface(surface);
+
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 400.0f, 300.0f);
+    WindowInputRouter::RouteMouseMove(f.config, nullptr, 520.0f, 290.0f);
+    runtime.Update(0.016f);
+
+    EXPECT_EQ(runtime.GetMouseDelta(), Mathematics::Vector2(120.0f, -10.0f));
 }

@@ -281,6 +281,12 @@ struct ResolvedEffect
     // all), and the SPLAT packer walks exactly this set to decide what the kernel must reproduce.
     static bool IsSplat(Kind k) { return k == Kind::PaintLayer || k == Kind::Rules; }
 
+    struct GrassParams
+    {
+        float32 HeightScale;
+        float32 DensityScale;
+    };
+
     Kind EffectKind = Kind::Flatten;
     int32 StackOrder = 0;
 
@@ -293,7 +299,7 @@ struct ResolvedEffect
         ModifierPaintLayerParams PaintLayer;
         ModifierSurfaceRulesParams Rules;
         ModifierGroundClaimParams GroundClaim;
-        struct { float32 HeightScale; float32 DensityScale; } Grass;
+        GrassParams Grass;
     };
 
     ResolvedEffect() : Flatten{} {}

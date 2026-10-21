@@ -642,9 +642,9 @@ TEST(UIManagerOrderTests, OrderPropertyReordersAndUnsettingRestoresOriginal)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
-    UIElement* c = r->FindById("c");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
+    UIElement* c = r->FindById("c"_sid);
     ASSERT_TRUE(a && b && c);
 
     float ax1 = a->GetLayoutX();
@@ -742,9 +742,9 @@ TEST(UIManagerOrderTests, OrderRespectedUnderRTLWithMirroredPositions)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
-    UIElement* c = r->FindById("c");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
+    UIElement* c = r->FindById("c"_sid);
     ASSERT_TRUE(a && b && c);
 
     float ax1 = a->GetLayoutX();
@@ -838,10 +838,10 @@ TEST(UIManagerOrderTests, OrderWithWrapReordersAcrossLines)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
-    UIElement* c = r->FindById("c");
-    UIElement* d = r->FindById("d");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
+    UIElement* c = r->FindById("c"_sid);
+    UIElement* d = r->FindById("d"_sid);
     ASSERT_TRUE(a && b && c && d);
 
     // Expect rows: (b,d) at y=0; (c,a) at y=20
@@ -896,9 +896,9 @@ TEST(UIManagerOrderTests, ColumnDirectionOrderAffectsVerticalPositions)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
-    UIElement* c = r->FindById("c");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
+    UIElement* c = r->FindById("c"_sid);
     ASSERT_TRUE(a && b && c);
 
     EXPECT_NEAR(b->GetLayoutY(), 0.f, 1.0f);
@@ -955,10 +955,10 @@ TEST(UIManagerOrderTests, NestedContainersOrderAppliedIndependently)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a0 = r->FindById("a0");
-    UIElement* b0 = r->FindById("b0");
-    UIElement* a1 = r->FindById("a1");
-    UIElement* b1 = r->FindById("b1");
+    UIElement* a0 = r->FindById("a0"_sid);
+    UIElement* b0 = r->FindById("b0"_sid);
+    UIElement* a1 = r->FindById("a1"_sid);
+    UIElement* b1 = r->FindById("b1"_sid);
     ASSERT_TRUE(a0 && b0 && a1 && b1);
 
     // Inside p0: b0 then a0; Inside p1: a1 then b1 (check relative order within each parent)
@@ -1519,7 +1519,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		
 		    UIElement* rootEl = ui.GetRootElement();
 		    ASSERT_NE(rootEl, nullptr);
-		    UIElement* bg = rootEl->FindById("bg");
+		    UIElement* bg = rootEl->FindById("bg"_sid);
 		    ASSERT_NE(bg, nullptr);
 		
 		    const auto& st = bg->GetResolvedStyle();
@@ -1568,7 +1568,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		
 		    UIElement* rootEl = ui.GetRootElement();
 		    ASSERT_NE(rootEl, nullptr);
-		    UIElement* bg = rootEl->FindById("bg");
+		    UIElement* bg = rootEl->FindById("bg"_sid);
 		    ASSERT_NE(bg, nullptr);
 		
 		    const auto& st = bg->GetResolvedStyle();
@@ -2071,7 +2071,7 @@ TEST(UIManagerStylesheetTests, GlobalReattachingStylesheetPreservesPrecedence)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	UIElement* target = r->FindById("target");
+	UIElement* target = r->FindById("target"_sid);
 	ASSERT_NE(target, nullptr);
 	const auto& style1 = target->GetResolvedStyle();
 	EXPECT_EQ(style1.Visual.Color, 0xFF0000FFu);
@@ -2129,8 +2129,8 @@ TEST(UIManagerStylesheetTests, LocalStylesheetReattachReordersForSubtree)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	UIElement* container = r->FindById("container");
-	UIElement* target = r->FindById("target");
+	UIElement* container = r->FindById("container"_sid);
+	UIElement* target = r->FindById("target"_sid);
 	ASSERT_TRUE(container && target);
 	const auto& baseStyle = target->GetResolvedStyle();
 	EXPECT_EQ(baseStyle.Visual.Color, 0xFF0000FFu);
@@ -2185,7 +2185,7 @@ TEST(UIManagerStylesheetTests, HotReloadRemovingPropertyRevertsToDefault)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	UIElement* target = r->FindById("target");
+	UIElement* target = r->FindById("target"_sid);
 	ASSERT_NE(target, nullptr);
 	const auto& s1 = target->GetResolvedStyle();
 	EXPECT_EQ(s1.Visual.BackgroundColor, 0xFFFF0000u);
@@ -2246,7 +2246,7 @@ TEST(UIManagerStylesheetTests, RootPaddingFromClassAndPseudoAffectsChildLayout)
 
 	UIElement* rootEl = ui.GetRootElement();
 	ASSERT_NE(rootEl, nullptr);
-	UIElement* child = rootEl->FindById("child");
+	UIElement* child = rootEl->FindById("child"_sid);
 	ASSERT_NE(child, nullptr);
 
 	const auto& rootStyle = rootEl->GetResolvedStyle();
@@ -2301,7 +2301,7 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	UIElement* box = r->FindById("box");
+	UIElement* box = r->FindById("box"_sid);
 	ASSERT_NE(box, nullptr);
 	auto* checkbox = dynamic_cast<Checkbox*>(box);
 	ASSERT_NE(checkbox, nullptr);
@@ -2373,8 +2373,8 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 
 		UIElement* r = ui.GetRootElement();
 		ASSERT_NE(r, nullptr);
-		UIElement* lower = r->FindById("lower");
-		UIElement* upper = r->FindById("upper");
+		UIElement* lower = r->FindById("lower"_sid);
+		UIElement* upper = r->FindById("upper"_sid);
 		ASSERT_TRUE(lower && upper);
 
 		// Target a point inside the overlapping rect.
@@ -2527,7 +2527,7 @@ TEST(UIManagerOrderTests, DropdownLikePopupRespectsZIndexOverBackground)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	UIElement* ddBase = r->FindById("dd");
+	UIElement* ddBase = r->FindById("dd"_sid);
 	ASSERT_NE(ddBase, nullptr);
 	UIElement* items = nullptr;
 	for (const auto& ch : ddBase->GetChildren())
@@ -2563,7 +2563,7 @@ TEST(UIManagerOrderTests, DropdownLikePopupRespectsZIndexOverBackground)
 	const float hitX = items->GetLayoutX() + items->GetLayoutWidth() * 0.5f;
 	const float hitY = items->GetLayoutY() + items->GetLayoutHeight() * 0.25f;
 
-		UIElement* under = r->FindById("under");
+		UIElement* under = r->FindById("under"_sid);
 		ASSERT_NE(under, nullptr);
 			SCOPED_TRACE(::testing::Message()
 			    << "under layout: x=" << under->GetLayoutX()
@@ -2681,9 +2681,9 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 
 	UIElement* r = ui.GetRootElement();
 	ASSERT_NE(r, nullptr);
-	auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"));
+	auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"_sid));
 	ASSERT_NE(dd, nullptr);
-	auto* slider = dynamic_cast<Slider*>(r->FindById("underSlider"));
+	auto* slider = dynamic_cast<Slider*>(r->FindById("underSlider"_sid));
 	ASSERT_NE(slider, nullptr);
 	slider->SetMin(0.0f);
 	slider->SetMax(100.0f);
@@ -2798,7 +2798,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 		
 		    UIElement* r = ui.GetRootElement();
 		    ASSERT_NE(r, nullptr);
-		    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"));
+		    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"_sid));
 		    ASSERT_NE(dd, nullptr);
 		
 		    // Initial layout to create header and items container.
@@ -2930,7 +2930,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 		
 			    UIElement* r = ui.GetRootElement();
 			    ASSERT_NE(r, nullptr);
-			    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"));
+			    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"_sid));
 			    ASSERT_NE(dd, nullptr);
 		
 			    // Initial layout so the header and items container are created and measured.
@@ -3051,7 +3051,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			
 			    UIElement* r = ui.GetRootElement();
 			    ASSERT_NE(r, nullptr);
-			    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"));
+			    auto* dd = dynamic_cast<Dropdown*>(r->FindById("dd"_sid));
 			    ASSERT_NE(dd, nullptr);
 			
 			    // Initial layout so the header and items container are created and measured.
@@ -3126,7 +3126,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    ASSERT_NE(root, nullptr);
 			
 			    // Toggle: exactly one knob child.
-			    auto* t = dynamic_cast<Toggle*>(root->FindById("t"));
+			    auto* t = dynamic_cast<Toggle*>(root->FindById("t"_sid));
 			    ASSERT_NE(t, nullptr);
 			    int knobCount = 0;
 			    for (const auto& ch : t->GetChildren())
@@ -3138,7 +3138,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    EXPECT_EQ(t->GetChildren().size(), (size_t)1);
 			
 			    // Dropdown: exactly one header + one items container.
-			    auto* dd = dynamic_cast<Dropdown*>(root->FindById("dd"));
+			    auto* dd = dynamic_cast<Dropdown*>(root->FindById("dd"_sid));
 			    ASSERT_NE(dd, nullptr);
 			    int headerCount = 0;
 			    int itemsCount = 0;
@@ -3152,7 +3152,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    EXPECT_EQ(itemsCount, 1);
 			
 			    // Button: exactly one internal label child.
-			    auto* btn = dynamic_cast<Button*>(root->FindById("btn"));
+			    auto* btn = dynamic_cast<Button*>(root->FindById("btn"_sid));
 			    ASSERT_NE(btn, nullptr);
 			    int labelCount = 0;
 			    for (const auto& ch : btn->GetChildren())
@@ -3197,7 +3197,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			
 			    UIElement* root = ui.GetRootElement();
 			    ASSERT_NE(root, nullptr);
-			    auto* dd = dynamic_cast<Dropdown*>(root->FindById("dd"));
+			    auto* dd = dynamic_cast<Dropdown*>(root->FindById("dd"_sid));
 			    ASSERT_NE(dd, nullptr);
 			    Dropdown* ddPtr = dd;
 			
@@ -3219,7 +3219,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    ui.Update(0.0f, /*interactive=*/false);
 			    DriveUiRender(ui, rg);
 			
-			    auto* dd2 = dynamic_cast<Dropdown*>(ui.GetRootElement()->FindById("dd"));
+			    auto* dd2 = dynamic_cast<Dropdown*>(ui.GetRootElement()->FindById("dd"_sid));
 			    ASSERT_NE(dd2, nullptr);
 			    EXPECT_EQ(dd2, ddPtr);
 			
@@ -3285,8 +3285,8 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			
 			    UIElement* r = ui.GetRootElement();
 			    ASSERT_NE(r, nullptr);
-			    UIElement* n1 = r->FindById("c1");
-			    UIElement* n2 = r->FindById("c2");
+			    UIElement* n1 = r->FindById("c1"_sid);
+			    UIElement* n2 = r->FindById("c2"_sid);
 			    ASSERT_NE(n1, nullptr);
 			    ASSERT_NE(n2, nullptr);
 			
@@ -3408,9 +3408,9 @@ TEST(UIManagerOrderTests, CSSCursorPropertySurvivesInheritance)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* parent = r->FindById("parent");
-    UIElement* childPointer = r->FindById("child-pointer");
-    UIElement* childInherit = r->FindById("child-inherit");
+    UIElement* parent = r->FindById("parent"_sid);
+    UIElement* childPointer = r->FindById("child-pointer"_sid);
+    UIElement* childInherit = r->FindById("child-inherit"_sid);
     ASSERT_TRUE(parent && childPointer && childInherit);
 
     EXPECT_EQ(parent->GetResolvedStyle().Visual.Cursor, CursorStyle::Crosshair)
@@ -3469,7 +3469,7 @@ TEST(UIManagerOrderTests, SplitterHitTestBoundsAreExpandedBeyondLayout)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* splitter = r->FindById("split");
+    UIElement* splitter = r->FindById("split"_sid);
     ASSERT_NE(splitter, nullptr);
 
     float layoutW = splitter->GetLayoutWidth();
@@ -3533,7 +3533,7 @@ TEST(UIManagerOrderTests, SplitterHoverSetsCursorViaCallback)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* splitter = r->FindById("split");
+    UIElement* splitter = r->FindById("split"_sid);
     ASSERT_NE(splitter, nullptr);
 
     float splitCenterX = splitter->GetLayoutX() + splitter->GetLayoutWidth() * 0.5f;

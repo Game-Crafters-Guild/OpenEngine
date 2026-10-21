@@ -289,12 +289,12 @@ MaterialCompiler::Result MaterialCompiler::BuildResultFromSnapshot(
 
     Rendering::MaterialBuildContext ctx;
     ctx.AdapterShaderDir = ResolveAdapterShaderDir(assets);
-    // The bundle cache root wins when one is set: a compiler-less runtime (web)
-    // ships its cooked variants beside the binary, not under the workspace.
-    const std::filesystem::path& shaderCacheRoot = ShaderProgramAsset::GetShaderCacheRoot();
-    ctx.CacheRoot = shaderCacheRoot.empty()
+    // A packaged runtime's cooked cache is probed first; a miss compiles into the workspace's.
+    const ShaderCacheRoots& shaderCacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
+    ctx.ReadOnlyCacheRoots = shaderCacheRoots.ReadOnly;
+    ctx.CacheRoot = shaderCacheRoots.Writable.empty()
         ? EngineCore::GetInstance().GetWorkspaceRoot() / ".Cache" / "Shaders"
-        : shaderCacheRoot;
+        : shaderCacheRoots.Writable;
     ctx.IncludeDirs = {assets.GetAssetRoot()};
     ctx.ProjectRoots = CollectProjectRoots(assets);
     ctx.AssetSourceRoots = CollectAssetSourceRoots(assets);

@@ -8,6 +8,9 @@
 #include "ECS/World.h"
 #include "ECS/Systems.h"
 
+#include <string>
+#include <vector>
+
 using namespace GameEngine;
 using namespace GameEngine::ECS;
 
@@ -53,6 +56,51 @@ TEST(SystemPlanTrailingWave, LateAddedSystemSurvivesPlanReplacement)
     sm.Update(world, 0.016f);
     EXPECT_EQ(aTicks, 2);
     EXPECT_EQ(bTicks, 2) << "late-added system wiped by SetExecutionPlan";
+}
+
+namespace
+{
+class OrderRecordingSystem : public ISystem
+{
+public:
+    OrderRecordingSystem(const char* name, std::vector<std::string>* order) : m_Name(name), m_Order(order) {}
+    void Update(World&, float32) override { m_Order->push_back(m_Name); }
+    const char* GetName() const override { return m_Name; }
+
+private:
+    const char* m_Name;
+    std::vector<std::string>* m_Order;
+};
+} // namespace
+
+// The Player registers ManagedSystemBridge after its plan is built, and a script's update reads what the
+// animation wave wrote (AnimatorApi.PollEvents) on the strength of this ordering: a late-added system ticks after
+// every planned wave, the animation wave included, before and after the plan is rebuilt.
+TEST(SystemPlanTrailingWave, ManagedSystemBridgeTicksAfterTheAnimationWave)
+{
+    World world(nullptr);
+    SystemManager sm;
+    std::vector<std::string> order;
+    sm.AddSystem<OrderRecordingSystem>("AnimationEventCollector", &order);
+    sm.AddSystem<OrderRecordingSystem>("Animation", &order);
+
+    SystemExecutionPlan plan;
+    plan.Waves.push_back({{0}});
+    plan.Waves.push_back({{1}});
+    sm.SetExecutionPlan(std::move(plan));
+    sm.AddSystem<OrderRecordingSystem>("ManagedSystemBridge", &order);
+
+    sm.Update(world, 0.016f);
+    EXPECT_EQ(order, (std::vector<std::string>{"AnimationEventCollector", "Animation", "ManagedSystemBridge"}));
+
+    SystemExecutionPlan rebuilt;
+    rebuilt.Waves.push_back({{1}});
+    rebuilt.Waves.push_back({{0}});
+    sm.SetExecutionPlan(std::move(rebuilt));
+    order.clear();
+    sm.Update(world, 0.016f);
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(order.back(), "ManagedSystemBridge") << "a rebuilt plan keeps the bridge after every planned wave";
 }
 
 TEST(SystemPlanTrailingWave, PlanCoveringLateSystemRunsItExactlyOnce)

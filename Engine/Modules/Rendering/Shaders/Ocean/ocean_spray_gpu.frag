@@ -1,6 +1,10 @@
 #version 450
 #include "Ocean/ocean_spray_gpu_common.glsl"
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
+// The view's exposure state (ExposureHistory): the spray's absolute radiance is stored in scene
+// colour at the frame's pre-exposure P.
+#define GE_EXPOSURE_HISTORY_BINDING 4
+#include "Includes/exposure_history.glsl"
 layout(location = 0) in vec2 uv;
 layout(location = 1) in float opacity;
 layout(location = 2) in float eyeDepth;
@@ -21,5 +25,5 @@ void main()
     a *= smoothstep(0.05, 0.5, eyeDepth);
     if (a < 0.001)
         discard;
-    outColor = vec4(radiance * a, a);
+    outColor = vec4(radiance * GE_PreExposure() * a, a);
 }

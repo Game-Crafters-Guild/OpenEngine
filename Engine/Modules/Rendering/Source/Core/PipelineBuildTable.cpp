@@ -71,6 +71,8 @@ void PipelineBuildTable::Finish(uint64_t key, uint64_t ticket, bool succeeded, u
         else
             it->second = Row{Status::Failed, ticket, invalidationEpoch};
     }
+    // Outside the lock: the table outlives this call even when the Quiesce it
+    // wakes lets the device go, because the dispatched job calling it shares it.
     m_BuildEnded.notify_all();
 }
 

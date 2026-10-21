@@ -394,7 +394,7 @@ TEST_F(UndoRedoServiceTests, ComponentEnabledToggleTooltipIsTheOwnersWhenItRegis
     const EntityHandle hosted = world->CreateEntity();
     world->AddComponentImmediate(hosted, HostedToggleTooltipProbe{});
     Editor::EditorComponentTraits hostTraits;
-    hostTraits.HostsInspectorSection = [hostedId](GameEngine::ECS::ComponentTypeId typeId)
+    hostTraits.HostsInspectorSection = [](GameEngine::ECS::ComponentTypeId typeId)
     { return typeId == hostedId; };
     hostTraits.HostedEnableToggleTooltip = "Switch this effect on or off. Off leaves the probe host alone.";
     Editor::EditorComponentTraitsRegistry::Get().Register(GetComponentTypeId<ToggleTooltipProbeHost>(),
@@ -496,11 +496,11 @@ TEST_F(UndoRedoServiceTests, TransformSnapshotUndoRedoRestoresExactLocalPosition
     UndoRedoService svc;
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = "Transform";
-    target.Capture = [world, handle, typeId](UndoRedoService::SnapshotTarget::Snapshot& out)
+    target.Capture = [world, handle](UndoRedoService::SnapshotTarget::Snapshot& out)
     {
         return world->CaptureComponentBytes(handle, typeId, out);
     };
-    target.Apply = [world, handle, typeId](const UndoRedoService::SnapshotTarget::Snapshot& snap)
+    target.Apply = [world, handle](const UndoRedoService::SnapshotTarget::Snapshot& snap)
     {
         return world->ApplyComponentBytesImmediate(handle, typeId, snap);
     };
@@ -1404,11 +1404,11 @@ TEST_F(UndoRedoServiceTests, CreateEntityUndoRedo_PreservesHandle_ForSubsequentT
     const auto typeId = GameEngine::ECS::GetComponentTypeId<Transform>();
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = "Transform";
-    target.Capture = [world, h, typeId](UndoRedoService::SnapshotTarget::Snapshot& out)
+    target.Capture = [world, h](UndoRedoService::SnapshotTarget::Snapshot& out)
     {
         return world->CaptureComponentBytes(h, typeId, out);
     };
-    target.Apply = [world, h, typeId](const UndoRedoService::SnapshotTarget::Snapshot& snap)
+    target.Apply = [world, h](const UndoRedoService::SnapshotTarget::Snapshot& snap)
     {
         return world->ApplyComponentBytesImmediate(h, typeId, snap);
     };

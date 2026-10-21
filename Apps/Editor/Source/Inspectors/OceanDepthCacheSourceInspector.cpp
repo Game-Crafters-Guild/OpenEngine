@@ -176,7 +176,7 @@ void AddBakeAction(const InspectorContext& ctx)
         }
 
         Engine::Renderer::OceanSceneDepthBakeOptions options{};
-        options.RenderLayerMask = source->RenderLayerMask;
+        options.Layers = source->SourceLayers;
         options.LoadMissingAssets = source->BakeLoadMissingAssets;
         options.IncludeDisabledRenderers = source->BakeIncludeDisabledRenderers;
         options.IncludeSkinnedMeshes = source->BakeIncludeSkinnedMeshes;

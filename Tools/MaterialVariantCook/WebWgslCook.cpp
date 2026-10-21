@@ -1,15 +1,14 @@
 #include "WebWgslCook.h"
 
+#include "CookWorkers.h"
 #include "Engine/Build/CancellableShellProcess.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdlib>
 #include <fstream>
 #include <string>
-#include <thread>
 #include <unordered_map>
 
 namespace GameEngine::Tools
@@ -127,34 +126,23 @@ bool CookWebWgslIntoPackage(const WebWgslCookRequest& request, std::string& outE
 
 namespace
 {
-// One worker: claims the next unclaimed request until none is left.
-void CookBatchWorker(const std::vector<WebWgslCookRequest>& requests, std::atomic<size_t>& next,
-                     std::vector<std::string>& errors)
+// One request of a batch: its error, empty when it cooked. A cooked request's scratch is removed.
+std::string CookBatchRequest(const WebWgslCookRequest& request)
 {
-    for (size_t index = next.fetch_add(1); index < requests.size(); index = next.fetch_add(1))
-    {
-        const WebWgslCookRequest& request = requests[index];
-        std::string error;
-        std::error_code ec;
-        if (CookWebWgslIntoPackage(request, error))
-            fs::remove_all(request.ScratchDir, ec);
-        else
-            errors[index] = error.empty() ? std::string("WGSL cook failed") : std::move(error);
-    }
+    std::string error;
+    if (!CookWebWgslIntoPackage(request, error))
+        return error.empty() ? std::string("WGSL cook failed") : error;
+    std::error_code ec;
+    fs::remove_all(request.ScratchDir, ec);
+    return {};
 }
 } // namespace
 
 std::vector<std::string> CookWebWgslBatch(const std::vector<WebWgslCookRequest>& requests, size_t jobs)
 {
     std::vector<std::string> errors(requests.size());
-    std::atomic<size_t> next{0};
-    const size_t workerCount = std::min(std::max<size_t>(jobs, 1), std::max<size_t>(requests.size(), 1));
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
-    for (size_t i = 0; i < workerCount; ++i)
-        workers.emplace_back(CookBatchWorker, std::cref(requests), std::ref(next), std::ref(errors));
-    for (std::thread& worker : workers)
-        worker.join();
+    RunOnCookWorkers(requests.size(), jobs,
+                     [&](size_t index) { errors[index] = CookBatchRequest(requests[index]); });
     return errors;
 }
 

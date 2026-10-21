@@ -1,4 +1,5 @@
 #include "Rendering/Text/TextLayout.h"
+#include "FontAtlas_Internal.h"
 #include <algorithm>
 
 namespace GameEngine
@@ -8,10 +9,24 @@ namespace Rendering
 namespace Text
 {
 
+uint64_t TextLayout::ShapingContextKey(std::string_view text)
+{
+#if defined(GE_HAVE_HARFBUZZ)
+    Detail::HBDirScript properties = Detail::DetectDirScriptUtf8(text);
+    if (properties.script == HB_SCRIPT_INVALID)
+        properties = Detail::GuessDirScriptUtf8(text);
+    return (static_cast<uint64_t>(properties.script) << 32) | static_cast<uint64_t>(properties.dir);
+#else
+    (void)text;
+    return 0;
+#endif
+}
+
 TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const StyledRun> runs,
                                                             float wrapWidth,
                                                             float lineBoxPx,
-                                                            WordBreak wordBreak)
+                                                            WordBreak wordBreak,
+                                                            size_t firstByte)
 {
     MultilineShapeResult out{};
 
@@ -92,7 +107,7 @@ TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const Styl
         std::vector<StyledRun> lineRuns;
         lineRuns.reserve(16);
         float minLineH = 0.0f;
-        size_t lineByteStart = 0;
+        size_t lineByteStart = firstByte;
 
         auto flushLine = [&](size_t lineByteEnd) {
             const ShapedLine line = shapeLine(lineRuns, curY);
@@ -111,7 +126,13 @@ TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const Styl
         for (const auto& run : runs)
         {
             if (!run.Font) { globalOffset += run.Text.size(); continue; }
-            size_t start = 0;
+            if (firstByte > globalOffset && firstByte >= globalOffset + run.Text.size())
+            {
+                globalOffset += run.Text.size();
+                continue;
+            }
+            size_t start = firstByte > globalOffset
+                ? std::min(firstByte - globalOffset, run.Text.size()) : 0;
             while (start <= run.Text.size())
             {
                 size_t nl = run.Text.find('\n', start);
@@ -173,13 +194,22 @@ TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const Styl
     for (const auto& run : runs)
     {
         if (!run.Font) { globalOffset += run.Text.size(); continue; }
-        auto* font = const_cast<FontAtlas*>(run.Font);
-        std::vector<float> caretX;
-        const bool caretOk =
-            font->BuildCaretMapUtf8(run.Text, run.PixelSize, caretX, run.LetterSpacingPx);
-        if (!caretOk || caretX.size() < run.Text.size() + 1)
+        const size_t runStart = firstByte > globalOffset
+            ? std::min(firstByte - globalOffset, run.Text.size()) : 0;
+        if (runStart == run.Text.size())
         {
-            size_t start = 0;
+            globalOffset += run.Text.size();
+            continue;
+        }
+        auto* font = const_cast<FontAtlas*>(run.Font);
+        // Maps the bytes from runStart, shaped as inside the whole run;
+        // caretX[k] is the insertion point of byte runStart + k.
+        std::vector<float> caretX;
+        const bool caretOk = font->BuildCaretMapUtf8(run.Text, run.PixelSize, caretX,
+                                                     run.LetterSpacingPx, runStart);
+        if (!caretOk || caretX.size() < run.Text.size() - runStart + 1)
+        {
+            size_t start = runStart;
             while (start <= run.Text.size())
             {
                 size_t nl = run.Text.find('\n', start);
@@ -197,7 +227,7 @@ TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const Styl
             globalOffset += run.Text.size();
             continue;
         }
-        size_t i = 0;
+        size_t i = runStart;
         while (i < run.Text.size())
         {
             uint32_t cp = 0;
@@ -207,7 +237,8 @@ TextLayout::MultilineShapeResult TextLayout::ShapeMultiline(std::span<const Styl
                 atoms.push_back(Atom{&run, i, next, globalOffset + i, globalOffset + next, 0.0f, false, true});
             else
             {
-                float adv = (next < caretX.size()) ? (caretX[next] - caretX[i]) : 0.0f;
+                const size_t caretNext = next - runStart;
+                float adv = (caretNext < caretX.size()) ? (caretX[caretNext] - caretX[i - runStart]) : 0.0f;
                 atoms.push_back(Atom{&run, i, next, globalOffset + i, globalOffset + next, adv,
                                      isWrapWhitespace(cp), false, isWrapHyphen(cp)});
             }

@@ -3,6 +3,7 @@
 #include "Editor/BuildExporters/WebBuildExporter.h"
 #include "Editor/Application/BuildConfigStatus.h"
 #include "Editor/Application/EditorVersion.h"
+#include "Editor/Registries/BuiltInStatusBarItems.h"
 #include "EditorPanelIds.h"
 #include "EditorPanelManager.h"
 #include "Mathematics/Vector2.h"
@@ -58,6 +59,7 @@
 #include "Assets/Packages/PackageNativeCache.h"
 #include "Core/Application.h"
 #include "Core/CpuProfiler.h"
+#include "Editor/Shortcuts/DiagnosticShortcuts.h"
 #include "Core/Engine.h"
 #include "Core/Time.h"
 #include "Core/WindowInputRouter.h"
@@ -88,6 +90,8 @@
 #include "VersionControl/EditorVersionControlService.h"
 #include "VersionControl/EditorVersionControlUi.h"
 #include "Scripting/EditorScriptMenuRegistry.h"
+#include "Scripting/ScriptStatusIndicator.h"
+#include "Scene/KeptComponentResolver.h"
 #include "ScriptEditor/SourceLocation.h"
 #include "ScriptEditor/SourceLocationOpener.h"
 #include "Startup/BuiltinAssetSync.h"
@@ -193,6 +197,7 @@
 #include "Panels/BuildPanel.h"
 #include "Panels/BuiltInPanelTypes.h"
 #include "SceneView/GizmoSettingsWiring.h"
+#include "SceneView/MountedViewPanels.h"
 #include "SceneView/EditorSceneViewDropWiring.h"
 #include "SceneView/SceneViewEntityLinks.h"
 #include "SceneView/SceneViewRenderCoordinator.h"
@@ -205,7 +210,9 @@
 #include "Markups/MarkupEditorSurfaces.h"
 #include "SceneView/BuiltInSceneViewTools.h"
 #include "Placement/RecipeControllers.h"
+#include "PlayMode/PlayModeEntryModal.h"
 #include "PlayMode/PlayModeManager.h"
+#include "PlayMode/GameViewPointerLock.h"
 #include "PlayMode/RuntimeInputConnection.h"
 #include "Scene/SceneEditorController.h"
 #include "Scene/SceneThumbnailCapture.h"
@@ -218,6 +225,7 @@
 #include "UI/Registration/ElementRegistration.h"
 
 #include "Thumbnails/ModelThumbnailHandler.h"
+#include "Thumbnails/CubeLutThumbnailHandler.h"
 #include "Thumbnails/TextureThumbnailHandler.h"
 #include "Thumbnails/ThumbnailMenuItems.h"
 #include "Thumbnails/ThumbnailService.h"
@@ -237,10 +245,11 @@
 #include "UI/DragDropGhostRenderers.h"
 #include "UI/Interaction/Types.h"
 
-// Linux runtime icon loading via stb_image. On Windows we use the embedded
-// .ico resource (set via Win32 APIs) and on macOS the app bundle's .icns.
-#if !defined(_WIN32) && !defined(__APPLE__) && defined(GE_HAVE_STB)
-#include <stb_image.h>
+// Linux runtime icon loading. On Windows we use the embedded .ico resource
+// (set via Win32 APIs) and on macOS the app bundle's .icns.
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include "AssetCore/SharedFileRead.h"
+#include "Image/Decode.h"
 #endif
 
 #include "UI/Controls/Dropdown.h"
@@ -255,6 +264,7 @@
 #include "Editor/Registries/EditorPanelRegistry.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "Editor/Registries/EditorSceneCommands.h"
+#include "Editor/Registries/MarkupActionRegistry.h"
 #include "Editor/Vcs/EditorVcsProviderRegistry.h"
 #include "Picking/EditorPickProviders.h"
 #include "Platform/ContextMenu.h"
@@ -337,7 +347,7 @@ bool IsFocusInTextField(UIManager* ui)
     if (focusId.empty()) return false;
     UIElement* root = ui->GetRootElement();
     if (!root) return false;
-    for (UIElement* el = root->FindById(focusId); el; el = el->GetParent())
+    for (UIElement* el = root->FindById(HashStringId(focusId)); el; el = el->GetParent())
     {
         if (dynamic_cast<TextField*>(el) || dynamic_cast<TextArea*>(el))
             return true;
@@ -599,7 +609,7 @@ void ApplySavedAccentStyle(UIManager* ui)
     // Forward accent color to dock overlays
     if (auto* root = ui->GetRootElement())
     {
-        if (auto* ds = dynamic_cast<DockspaceElement*>(root->FindById("dock")))
+        if (auto* ds = dynamic_cast<DockspaceElement*>(root->FindById("dock"_sid)))
             ds->SetAccentColor(accentColor);
     }
 }
@@ -690,6 +700,8 @@ static bool RegisterEditorAssetSource(AssetManager& assetManager,
     AssetSourceDesc editorSource{};
     editorSource.Alias = "editor";
     editorSource.Root = editorAssetsRoot;
+    // The mount has no metadata store, so a bind cannot save inferred settings.
+    editorSource.InfersTextureImportSettings = false;
     if (!assetManager.RegisterSource(editorSource))
     {
         Logger::Log::Warning("Editor: {} failed to register editor asset source '{}'",
@@ -891,46 +903,25 @@ static bool BeginWindowRenderFrame(EditorApplication::EditorWindowContext* ctx,
 
     if (!dev->BeginFrame())
     {
-        // BeginFrame returns false on three independent acquire conditions:
+        // BeginFrame returns false on two acquire conditions:
         //   1. VK_TIMEOUT (16ms) — no swapchain image was free in time (e.g.
         //      compositor briefly held all 3 images for vsync). Transient;
         //      next frame's acquire will succeed.
         //   2. VK_ERROR_OUT_OF_DATE_KHR — swapchain is stale. The device layer
         //      (AcquireNextImage in VulkanDevice.cpp) already recreates the
         //      swapchain internally before returning false.
-        //   3. VK_SUBOPTIMAL_KHR — same: device layer already recreated.
+        // VK_SUBOPTIMAL_KHR is not one of them: it acquires an image, the frame
+        // renders, and PresentImage recreates the swapchain after presenting.
         //
-        // Previously this site unconditionally recreated the swapchain. On (1)
-        // that was a destructive false-positive: ~70ms recreate work made the
-        // next acquire ALSO time out (new images not yet enqueued for
-        // compositor display), and the editor wedged at ~12 FPS in a recreate
-        // loop. On (2)/(3) the device had already recreated, so the editor's
-        // recreate was a redundant second pass.
-        //
-        // Right behavior: skip this frame; trust the device's internal
-        // OUT_OF_DATE/SUBOPTIMAL handling to have recreated when warranted.
+        // Do not recreate the swapchain here. On (1) the ~70ms recreate makes
+        // the next acquire time out as well (the new images are not yet queued
+        // for compositor display), and the editor wedges at ~12 FPS in a
+        // recreate loop; on (2) the device has already recreated it.
         return false;
     }
 
     ++ctx->deviceFrameStamp; // RenderGraph BeginFrame pairing tripwire (see header)
     return true;
-}
-
-template <typename TPanel>
-static TPanel* ResolveMountedPanelForWindow(EditorApplication::EditorWindowContext* ctx, const char* mountId)
-{
-    if (!ctx || !ctx->ui || !mountId)
-        return nullptr;
-
-    UIElement* root = ctx->ui->GetRootElement();
-    if (!root)
-        return nullptr;
-
-    if (auto* mount = dynamic_cast<Mount*>(root->FindById(mountId)))
-    {
-        return dynamic_cast<TPanel*>(mount->GetTarget());
-    }
-    return nullptr;
 }
 
 // 7f post-spine bind: re-point "game_main" + the game viewport element at the
@@ -1264,39 +1255,6 @@ static void EnsureWorldHasPhysicsSettingsFromProject(GameEngine::ECS::World& wor
 }
 } // namespace
 
-std::unique_ptr<DockNode> CloneDockNode(const DockNode* src)
-{
-    if (!src)
-        return nullptr;
-
-    if (src->IsLeaf())
-    {
-        auto out = DockNode::MakeLeaf();
-        for (const auto& tab : src->GetTabs())
-        {
-            out->AddTab(tab);
-        }
-        const std::string& active = src->GetActivePanelId();
-        if (!active.empty())
-        {
-            (void)out->ActivateTab(active);
-        }
-        return out;
-    }
-
-    if (src->IsSplit())
-    {
-        auto out = std::make_unique<DockNode>();
-        auto first = CloneDockNode(src->First());
-        auto second = CloneDockNode(src->Second());
-        out->SetSplit(src->GetSplitDirection(), src->GetSplitRatio(), std::move(first), std::move(second));
-        out->SetMinChildSizes(src->GetMinFirstPx(), src->GetMinSecondPx());
-        return out;
-    }
-
-    return nullptr;
-}
-
 std::unique_ptr<DockNode> EditorApplication::CloneCurrentDockLayout() const
 {
     return m_Docking && m_Docking->GetRoot() ? CloneDockNode(m_Docking->GetRoot()) : nullptr;
@@ -1376,7 +1334,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         rootEntity.Set(renderer);
     }
 
@@ -1397,7 +1355,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         child1.Set(renderer);
     }
     child1.Set(Parent{rootHandle});
@@ -1419,7 +1377,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         child2.Set(renderer);
     }
     child2.Set(Parent{rootHandle});
@@ -1492,6 +1450,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
         return (!m_Windows.empty() && m_Windows[0]->scene) ? m_Windows[0]->scene.get() : nullptr;
     });
     m_MarkupBridge->SetPlayModeProvider([this]() { return m_PlayMode && m_PlayMode->IsPlayingOrPaused(); });
+    m_MarkupBridge->SetUndoService(m_UndoRedo.get());
     Editor::InstallSceneViewEntityLinks([this]() -> SceneViewController* {
         return !m_Windows.empty() ? m_Windows[0]->scene.get() : nullptr;
     });
@@ -1505,7 +1464,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
     // The untitled-scene save prompt waits for the picker to close and for a
     // queued startup scene to be requested.
     m_SceneEditor->SetBootFlowActiveProbe(
-        [this]() { return ShouldIdleWorldPathForProjectPicker() || !m_DeferredStartupScene.empty(); });
+        [this]() { return ShouldIdleWorldPathForProjectPicker() || !m_DeferredStartupSceneWorkspace.empty(); });
     // The recipe controllers' generated entities are scoped to the open scene
     // (RecipeControllers::ReleaseSceneScoped). Release them at the swap, while the
     // outgoing world is still the one they describe. Wired here rather than at the
@@ -1524,6 +1483,17 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
         return m_SceneEditor ? m_SceneEditor->GetActiveScenePath() : std::nullopt;
     });
     m_SceneThumbnailCapture = std::make_unique<GameEngine::Editor::SceneThumbnailCapture>();
+    m_ScriptStatus = std::make_unique<Editor::ScriptStatusIndicator>(
+        [this]() -> Label* {
+            if (m_Windows.empty() || !m_Windows[0] || !m_Windows[0]->ui)
+                return nullptr;
+            UIElement* root = m_Windows[0]->ui->GetRootElement();
+            return root ? dynamic_cast<Label*>(root->FindById("ScriptStatus"_sid)) : nullptr;
+        },
+        [this]() {
+            if (m_PanelManager && !m_Windows.empty() && m_Windows[0])
+                m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), "Log");
+        });
     m_VcsUi = std::make_unique<EditorVersionControlUi>();
     m_VcsUi->SetScenePathProvider([this]() -> std::optional<std::filesystem::path>
     {
@@ -1814,9 +1784,9 @@ bool EditorApplication::Initialize()
     }
     Logger::Log::Info("[Startup] Application::Initialize (Engine): {:.1f}ms", MsSince(tPhase));
 
-    // The Settings panel is lazy. Apply both SVG defaults before any editor UI
-    // or project SVG texture can be loaded, rather than waiting for its page.
-    Editor::SvgRasterSettings::ApplySavedDefaults(
+    // The Settings panel is lazy. Apply the SVG texture default before any
+    // project SVG texture can be loaded, rather than waiting for its page.
+    Editor::SvgRasterSettings::ApplySavedDefault(
         EngineCore::GetInstance().GetWorkspaceRoot());
     // The engine now knows the project and runs MarkupService; a later project switch
     // reloads in FinishProjectFolderSwitch.
@@ -1937,6 +1907,7 @@ bool EditorApplication::Initialize()
     m_EditorContext->PlayMode = m_PlayMode.get();
     m_EditorContext->DownloadManager = m_DownloadManager.get();
     m_EditorContext->RenderGraphTicks = &m_RenderGraphTicks;
+    Editor::RegisterBuiltInStatusBarItems(m_StatusBarItems);
     m_DownloadManager->SetContext(m_EditorContext.get(), m_ChangeNotifications.get());
     // Pin the active world on the context so consumers (MissingAssetTracker
     // rescan, etc.) read it from one place instead of each reaching into
@@ -2134,6 +2105,7 @@ bool EditorApplication::Initialize()
     // rest keep travelling to the editor.
     m_RuntimeInput = std::make_unique<Input::InputSystem>(Input::SinkRole::Gameplay);
     EngineCore::GetInstance().SetRuntimeInput(m_RuntimeInput.get());
+    m_GameViewPointerLock = std::make_unique<Editor::GameViewPointerLock>();
     Logger::Log::Info("[Startup] InputSystem config: {:.1f}ms", MsSince(tPhase));
 
     // Create main window (using Platform::Window)
@@ -2213,15 +2185,16 @@ bool EditorApplication::Initialize()
 
     // Linux: load window icon at runtime via GLFW. Windows/macOS rely on
     // embedded resources or bundle icons.
-#if !defined(_WIN32) && !defined(__APPLE__) && defined(GE_HAVE_STB)
+#if !defined(_WIN32) && !defined(__APPLE__)
     {
-        auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
-        int iconW = 0, iconH = 0, iconChannels = 0;
-        unsigned char* iconPixels = stbi_load(iconPath.string().c_str(), &iconW, &iconH, &iconChannels, 4);
-        if (iconPixels)
+        const auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
+        Vector<uint8> iconBytes;
+        if (ReadFileBytesShared(iconPath, iconBytes))
         {
-            mainCtx->window->SetIcon(iconPixels, iconW, iconH);
-            stbi_image_free(iconPixels);
+            const Image::Image8 icon = Image::Decode8(iconBytes, iconPath.string(), Image::DecodeChannels::Rgba);
+            if (icon.Valid)
+                mainCtx->window->SetIcon(icon.Pixels.data(), static_cast<int>(icon.Width),
+                                         static_cast<int>(icon.Height));
         }
     }
 #endif
@@ -2266,6 +2239,7 @@ bool EditorApplication::Initialize()
     };
     mainInput.onKeyPre = [this, mainCtxRaw](int key, int action, int mods) -> bool
     {
+        m_GameViewPointerLock->OnKey(key, action);
         if (key == Input::kKeyCode_Escape && action == Input::kKeyActionPress && m_PlayMode)
         {
             const auto state = m_PlayMode->GetState();
@@ -2315,42 +2289,6 @@ bool EditorApplication::Initialize()
                     return true;
                 }
             }
-        }
-
-        // Global editor hotkey: F2 controls CPU profiler (opt-in diagnostics).
-        // - Press F2 once to enable.
-        // - Press F2 again to dump the last frame's scope summary to the console.
-        // - Press Shift+F2 to disable.
-#if GE_ENABLE_CPU_PROFILING
-        if (key == Input::kKeyCode_F2 && action == Input::kKeyActionPress)
-        {
-            auto& prof = GameEngine::Profiling::CpuProfiler::Get();
-            if ((mods & Input::kModShift) != 0)
-            {
-                prof.SetEnabled(false);
-                Logger::Log::Info("[CPU Profiler] OFF");
-                return true;
-            }
-            if (!prof.IsEnabled())
-            {
-                prof.SetEnabled(true);
-                Logger::Log::Info("[CPU Profiler] ON (press F2 again to dump)");
-            }
-            else
-            {
-                // Include the current perf breakdown so dumps are self-contained.
-                prof.RequestDump(this->BuildPerfDumpLine());
-            }
-            return true;
-        }
-#endif
-
-        // Global editor hotkey: F3 toggles UI Demo panel.
-        if (key == Input::kKeyCode_F3 && action == Input::kKeyActionPress)
-        {
-            if (m_PanelManager)
-                m_PanelManager->ShowOrActivateUIDemoPanel(mainCtxRaw);
-            return true;
         }
 
         // Global editor hotkey: F11 toggles dock debug overlay regardless of UI focus.
@@ -2507,6 +2445,7 @@ bool EditorApplication::Initialize()
     DeviceDesc desc{};
     desc.preferredAPI = LoadPreferredGraphicsApi();
     desc.enableSwapchain = true;
+    desc.persistPipelineCache = true;
     desc.applicationName = GetConfig().Name;
     if (Engine::Renderer::ShouldEnableVkValidation())
     {
@@ -2773,6 +2712,10 @@ bool EditorApplication::Initialize()
             auto modelHandler = std::make_unique<ModelThumbnailHandler>(assetManager, renderServices);
             thumbnailServiceRaw->RegisterHandler(AssetType::Model, std::move(modelHandler));
 
+            // Cube LUT preview strips: the ramp through the Tonemap pass, with and without the LUT.
+            thumbnailServiceRaw->RegisterHandler(
+                AssetType::CubeLut, std::make_unique<CubeLutThumbnailHandler>(assetManager, renderServices));
+
             // Register video thumbnail handler (extracts representative frame).
             auto videoHandler = std::make_unique<VideoThumbnailHandler>();
             thumbnailServiceRaw->RegisterHandler(AssetType::Video, std::move(videoHandler));
@@ -2958,9 +2901,7 @@ bool EditorApplication::Initialize()
                         m_SelectedProjectPath = path;
                         m_ProjectFolderSelected = true;
                         Logger::Log::Info("Editor: Project folder selected: {}", path.string());
-                        
-                        // Update the project root by reinitializing AssetManager
-                        SetProjectFolder(path); });
+                        OpenPickedProject(path); });
                     modal->SetOnCancelled([this]()
                                           {
                         Logger::Log::Info("Editor: Project folder selection cancelled");
@@ -3008,7 +2949,7 @@ bool EditorApplication::Initialize()
                                 m_ProjectFolderSelected = true;
                                 if (m_ProjectFolderModal)
                                     m_ProjectFolderModal->SetPath(*lastProject);
-                                SetProjectFolder(*lastProject);
+                                SetProjectFolder(*lastProject, /*outgoingChangesDiscarded=*/false);
                                 autoLoaded = true;
                             }
                             else if (!config.AutoOpenLastProjectOnBoot)
@@ -3084,6 +3025,10 @@ bool EditorApplication::Initialize()
                 auto dlModal = std::make_unique<DownloadInProgressModal>();
                 m_DownloadModal = dlModal.get();
                 rootEl->AddChild(std::move(dlModal));
+
+                auto playEntryModal = std::make_unique<PlayModeEntryModal>(m_PlayMode->GetEntryGate());
+                m_PlayEntryModal = playEntryModal.get();
+                rootEl->AddChild(std::move(playEntryModal));
             }
         }
 
@@ -3131,7 +3076,7 @@ bool EditorApplication::Initialize()
         DockspaceElement* dockspaceForConfig = nullptr;
         if (auto* rootEl = main->ui->GetRootElement())
         {
-            if (auto* el = rootEl->FindById("dock"))
+            if (auto* el = rootEl->FindById("dock"_sid))
             {
                 dockspaceForConfig = dynamic_cast<DockspaceElement*>(el);
             }
@@ -3259,6 +3204,7 @@ bool EditorApplication::Initialize()
         if (!m_UiReplayScenarioPath.has_value())
         {
             LoadLayoutPresetsFromPreferences();
+            RestoreWorkingLayout(/*rebuildDockspace=*/false);
         }
 
         auto* mainWindowCtx = !m_Windows.empty() ? m_Windows[0].get() : nullptr;
@@ -3267,6 +3213,9 @@ bool EditorApplication::Initialize()
         Logger::Log::Info("[Startup]   Panel creation + layout config: {:.1f}ms", MsSince(tPhase));
         tDockSub = std::chrono::high_resolution_clock::now();
         m_PanelManager = std::make_unique<EditorPanelManager>();
+        m_DiagnosticShortcuts = std::make_unique<Editor::DiagnosticShortcuts>(
+            [this] { return BuildPerfDumpLine(); },
+            [this] { m_PanelManager->ShowOrActivateUIDemoPanel(m_Windows.empty() ? nullptr : m_Windows[0].get()); });
         m_PanelManager->SetDocking(m_Docking.get());
         m_PanelManager->SetPanelStorage(&m_PanelStorage);
         m_PanelManager->SetWindows(&m_Windows);
@@ -3367,6 +3316,8 @@ bool EditorApplication::Initialize()
                             if (win && win->windowId == pointerWindowId && win->gameView)
                                 win->gameView->HandleGameUiPointer(false, 0.0f, 0.0f, false, 0);
                     pointerWindowId = nextId;
+                    if (destination && down)
+                        m_GameViewPointerLock->OnGameViewPressed();
                     if (destination)
                         destination->gameView->HandleGameUiPointer(true, x, y, down, mods);
                 });
@@ -3927,7 +3878,7 @@ bool EditorApplication::Initialize()
         // Defer to Update() so we never rebuild dockspace during native/menu callbacks.
         if (assetsPanel)
         {
-            assetsPanel->SetOnAddToBookmarks([this, bookmarksPanel](const std::vector<std::filesystem::path>& paths)
+            assetsPanel->SetOnAddToBookmarks([bookmarksPanel](const std::vector<std::filesystem::path>& paths)
             {
                 if (!bookmarksPanel || paths.empty())
                     return;
@@ -4114,7 +4065,7 @@ bool EditorApplication::Initialize()
         bool dockBound = false;
         if (auto* rootEl = main->ui->GetRootElement())
         {
-            if (auto* el = rootEl->FindById("dock"))
+            if (auto* el = rootEl->FindById("dock"_sid))
             {
                 if (auto* dock = dynamic_cast<DockspaceElement*>(el))
                 {
@@ -4468,7 +4419,7 @@ bool EditorApplication::Initialize()
                     if (!m_TopToolbar)
                     {
                         m_TopToolbar =
-                            dynamic_cast<EditorTopToolbar*>(rootEl->FindById("EditorTopToolbar"));
+                            dynamic_cast<EditorTopToolbar*>(rootEl->FindById("EditorTopToolbar"_sid));
                         if (!m_TopToolbar)
                         {
                             auto toolbar = std::make_unique<EditorTopToolbar>();
@@ -4491,7 +4442,7 @@ bool EditorApplication::Initialize()
                                 entries.push_back({
                                     panel.panelId,
                                     panel.title,
-                                    panel.iconClass,
+                                    panel.iconPath,
                                 });
                             }
                             return entries;
@@ -4792,7 +4743,7 @@ bool EditorApplication::Initialize()
                         }
 
                         // Wire TopToolbarRight2 (info icon) to open the intro video.
-                        if (auto* infoBtn = dynamic_cast<Button*>(rootEl->FindById("TopToolbarRight2")))
+                        if (auto* infoBtn = dynamic_cast<Button*>(rootEl->FindById("TopToolbarRight2"_sid)))
                         {
                             infoBtn->SetTooltip("Info");
                             infoBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&)
@@ -4841,10 +4792,10 @@ bool EditorApplication::Initialize()
                                 if (panelMgr && main)
                                     panelMgr->ShowOrActivateSettingsPanelToCategory(main, SettingsCategory::GridAndSnapping);
                             });
-                            // The auto-exposure toggle seeds Fixed EV100 (AE-lock); an open
+                            // A switch to Fixed exposure seeds Fixed EV100 (AE-lock); an open
                             // camera popup must pick up the seeded value or its stale field
                             // would clobber the seed.
-                            toolbar->SetOnPostFxAutoExposureToggled([sceneViewPanelPtr]() {
+                            toolbar->SetOnExposureModeChanged([sceneViewPanelPtr]() {
                                 if (sceneViewPanelPtr)
                                     sceneViewPanelPtr->SyncCameraSettingsPopupFromSettings();
                             });
@@ -5218,7 +5169,7 @@ void EditorApplication::ConsumePackagePanelDescriptor(const Editor::EditorPanelD
     if ((previous || inCurrentLayout) && !m_Windows.empty() && m_Windows[0] && m_Windows[0]->ui)
     {
         if (UIElement* rootEl = m_Windows[0]->ui->GetRootElement())
-            if (auto* dockspace = dynamic_cast<DockspaceElement*>(rootEl->FindById("dock")))
+            if (auto* dockspace = dynamic_cast<DockspaceElement*>(rootEl->FindById("dock"_sid)))
                 dockspace->RequestRebuildFromModel();
     }
 
@@ -5266,7 +5217,27 @@ void EditorApplication::ConsumePackageEditorStyleSheet(
 }
 
 
-void EditorApplication::SetProjectFolder(const std::filesystem::path& projectPath)
+void EditorApplication::OpenPickedProject(const std::filesystem::path& projectPath)
+{
+    if (!m_SceneEditor)
+    {
+        SetProjectFolder(projectPath, /*outgoingChangesDiscarded=*/false);
+        return;
+    }
+    // The save prompt is answered with the picker closed: it would otherwise sit over the prompt.
+    if (m_SceneEditor->IsSceneDirty() && m_ProjectFolderModal)
+    {
+        m_ProjectFolderModal->HideLoading();
+        m_ProjectFolderModal->Hide();
+    }
+    m_SceneEditor->PromptSaveBefore(
+        "opening another project",
+        [this, projectPath](bool changesDiscarded) { SetProjectFolder(projectPath, changesDiscarded); },
+        [projectPath]()
+        { Logger::Log::Info("Editor: kept the current project; '{}' was not opened", projectPath.string()); });
+}
+
+void EditorApplication::SetProjectFolder(const std::filesystem::path& projectPath, bool outgoingChangesDiscarded)
 {
     if (projectPath.empty())
     {
@@ -5328,6 +5299,7 @@ void EditorApplication::SetProjectFolder(const std::filesystem::path& projectPat
     pending.OldAssetRoot = currentAssetRoot;
     pending.OldDbFile = currentDbFile;
     pending.OldCacheRoot = currentCacheRoot;
+    pending.OutgoingChangesDiscarded = outgoingChangesDiscarded;
 
     // Rebind just the project source. Editor source + loaded editor assets are preserved.
     AssetManager::SourceRebindDesc rebindDesc;
@@ -5400,11 +5372,13 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
     EngineCore& engine = EngineCore::GetInstance();
     AssetManager& am = engine.GetAssetManager();
 
+    // The outgoing project keeps its working layout for its next session.
+    SaveWorkingLayout();
     // Update Engine's workspace root so that GetCurrentEditorProjectPaths() returns correct paths
     engine.SetWorkspaceRoot(projectPath);
     if (m_MarkupBridge)
         m_MarkupBridge->LoadProjectState(projectPath);
-    Editor::SvgRasterSettings::ApplySavedDefaults(projectPath);
+    Editor::SvgRasterSettings::ApplySavedDefault(projectPath);
     // Plugin enablement lives in the project's settings, so the workspace
     // switch changes the answers: drop the memoized states before package
     // modules mount and re-resolve against the new project.
@@ -5425,6 +5399,7 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
     // active preset explicitly so the live dockspace is rebuilt from the loaded model.
     if (m_ActiveLayoutPresetIndex >= 0)
         RecallLayoutPreset(m_ActiveLayoutPresetIndex);
+    RestoreWorkingLayout(/*rebuildDockspace=*/true);
     SyncLayoutPresetToolbar();
 
     // Re-apply project-scoped runtime settings after workspace/project switch.
@@ -5500,20 +5475,22 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
 
     const std::filesystem::path deferredProjectPath = projectPath;
     const std::filesystem::path deferredAssetRoot = newAssetRoot;
+    const bool outgoingChangesDiscarded = pending.OutgoingChangesDiscarded;
     if (!m_Windows.empty() && m_Windows[0] && m_Windows[0]->ui && m_Windows[0]->ui->GetDispatcher())
     {
-        m_Windows[0]->ui->PostToUI([this, deferredProjectPath, deferredAssetRoot]()
-        { ApplyProjectFolderUiAsync(deferredProjectPath, deferredAssetRoot); });
+        m_Windows[0]->ui->PostToUI([this, deferredProjectPath, deferredAssetRoot, outgoingChangesDiscarded]()
+        { ApplyProjectFolderUiAsync(deferredProjectPath, deferredAssetRoot, outgoingChangesDiscarded); });
     }
     else
     {
-        ApplyProjectFolderUiAsync(deferredProjectPath, deferredAssetRoot);
+        ApplyProjectFolderUiAsync(deferredProjectPath, deferredAssetRoot, outgoingChangesDiscarded);
     }
     m_ProjectSwitchPending = false;
 }
 
 void EditorApplication::ApplyProjectFolderUiAsync(const std::filesystem::path& projectPath,
-                                                    const std::filesystem::path& newAssetRoot)
+                                                    const std::filesystem::path& newAssetRoot,
+                                                    bool outgoingChangesDiscarded)
 {
     if (m_IsShuttingDown)
         return;
@@ -5555,6 +5532,9 @@ void EditorApplication::ApplyProjectFolderUiAsync(const std::filesystem::path& p
     }
 
     Logger::Log::Info("Editor: Project folder updated successfully. New asset root: {}", newAssetRoot.string());
+
+    if (m_SceneEditor)
+        m_SceneEditor->OpenProjectStartupScene(projectPath, outgoingChangesDiscarded);
 
     // Save the project path to preferences for next launch
     {
@@ -5712,6 +5692,7 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
                 // ABI digest (they never link it) — keep their digests
                 // editor-independent and Player-identical.
                 pkgCfg.EditorImportLib.clear();
+                pkgCfg.EditorBinary.clear();
                 pkgCfg.EditorIncludeDirs.clear();
             }
             GameEngine::NativeScripting::AppendPackageDefines(pkgCfg, module.Defines);
@@ -5727,49 +5708,30 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
     // and their ABI digest must stay editor-independent (BuildPipeline
     // recomputes it without any editor interface).
     cfg.EditorImportLib.clear();
+    cfg.EditorBinary.clear();
     cfg.EditorIncludeDirs.clear();
     GameEngine::NativeScripting::AppendPackageDefines(cfg, m_Packages->GetPackageDefines());
     nativeScripts->SetBuildConfig(cfg);
 
-    // Bottom-bar status indicator: set the status Label's text + state-color class. Looked
-    // up by id per call (cheap — only fires on build edges) so a UI/layout rebuild can never
-    // leave a dangling pointer. State colors live in core.css (.is-building/.is-ok/.is-fail).
-    auto setNativeScriptStatus = [this](const std::string& text, const char* stateClass) {
-        if (m_Windows.empty() || !m_Windows[0] || !m_Windows[0]->ui)
-            return;
-        UIElement* root = m_Windows[0]->ui->GetRootElement();
-        if (!root)
-            return;
-        auto* label = dynamic_cast<Label*>(root->FindById("NativeScriptStatus"));
-        if (!label)
-            return;
-        label->RemoveClass("is-building");
-        label->RemoveClass("is-ok");
-        label->RemoveClass("is-fail");
-        label->AddClass(stateClass);
-        label->SetText(text);
-    };
 
     // Build STARTED (main thread): only fires for a real compile, not a cached no-op load.
-    nativeScripts->SetBuildStartedCallback([setNativeScriptStatus]() {
-        setNativeScriptStatus("Building scripts...", "is-building");
+    nativeScripts->SetBuildStartedCallback([this]() {
+        m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Building);
     });
 
-    // Build-complete callback (main thread): on failure bring the log forward (the error
-    // lines are already routed there) and flag the status bar. A successful module load
+    // Build-complete callback (main thread): the status bar records the outcome (a failure brings
+    // the Log forward, where the error lines are already routed). A successful module load
     // refreshes only panels currently showing a custom inspector owned by that module.
     // This covers inspectors first registered by a late package load as well as replaced
     // inspector code, without rebuilding unrelated selections for every startup package.
     // Component layout changes use the more precise InspectorRebuild notifications below.
-    nativeScripts->SetBuildCompletedCallback([this, setNativeScriptStatus](const GameEngine::NativeScripting::NativeBuildResult& result) {
+    nativeScripts->SetBuildCompletedCallback([this](const GameEngine::NativeScripting::NativeBuildResult& result) {
         if (!result.Success())
         {
-            setNativeScriptStatus("Build failed - using last good build", "is-fail");
-            if (m_PanelManager && !m_Windows.empty() && m_Windows[0])
-                m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), "Log");
+            m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Failed);
             return;
         }
-        setNativeScriptStatus("Scripts loaded", "is-ok");
+        m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Loaded);
         if (result.RegistrationsChanged && !result.ModuleId.empty())
         {
             for (const auto& panel : m_PanelStorage)
@@ -5803,6 +5765,7 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
             Editor::EditorVcsProviderRegistry::Get().AppendModulePins(moduleId, pins);
             InspectorRegistry::Get().AppendModulePins(moduleId, pins);
             Editor::DebugRequestGateRegistry::Get().AppendModulePins(moduleId, pins);
+            Editor::MarkupActionRegistry::Get().AppendModulePins(moduleId, pins);
             if (pins.empty())
                 return "no stamped editor-registry entries (module code may still be referenced "
                        "by live UI)";
@@ -5826,78 +5789,17 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
             const std::vector<ECS::ComponentTypeId> migratedIds =
                 layoutMigrator->MigrateChangedLayouts(*world);
 
-            // Re-apply preserved unknown components whose type just became registered (e.g. a user
-            // native module finished compiling after the scene had already loaded, so the loader
-            // stashed the component verbatim instead of dropping it). Runs AFTER layout migration so
-            // a freshly-instantiated component lands at the current layout. Resolved entries are
-            // removed (so the next save emits them once, via the real reflected path); still-unknown
-            // entries stay for a later reload.
-            auto& unresolved = world->GetUnresolvedComponents();
-            if (!unresolved.Empty())
-            {
-                GameEngine::Scene::SceneLoadContext loadCtx{};
-                loadCtx.TargetWorld = world;
-                for (auto entIt = unresolved.Map().begin(); entIt != unresolved.Map().end();)
-                {
-                    const ECS::EntityHandle e = entIt->first;
-                    if (!world->IsValid(e))
-                    {
-                        entIt = unresolved.Map().erase(entIt); // entity destroyed before module loaded
-                        continue;
-                    }
-                    auto& preserved = entIt->second;
-                    for (auto compIt = preserved.begin(); compIt != preserved.end();)
-                    {
-                        const GameEngine::Scene::ISceneComponentSchema* schema =
-                            GameEngine::Scene::SceneSchemaRegistry::Find(compIt->Name);
-                        if (!schema)
-                        {
-                            ++compIt; // type still not registered — keep it preserved
-                            continue;
-                        }
-                        bool ok = true;
-                        std::string applyErr;
-                        if (compIt->Props.empty())
-                        {
-                            ok = schema->AddDefault(*world, e, &applyErr);
-                        }
-                        else
-                        {
-                            for (const auto& [prop, value] : compIt->Props)
-                            {
-                                if (!schema->ApplyProperty(*world, e, loadCtx, prop, value, &applyErr))
-                                {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if (ok)
-                        {
-                            Logger::Log::Info("[NativeScripting] re-applied preserved component '{}'", compIt->Name);
-                            compIt = preserved.erase(compIt);
-                        }
-                        else
-                        {
-                            Logger::Log::Warning("[NativeScripting] re-apply of preserved component '{}' failed: {}",
-                                                 compIt->Name, applyErr);
-                            ++compIt;
-                        }
-                    }
-                    if (preserved.empty())
-                        entIt = unresolved.Map().erase(entIt);
-                    else
-                        ++entIt;
-                }
-                world->ProcessCommands();
-            }
+            // Apply kept scene components whose type a module just registered (it finished
+            // compiling after the scene loaded). After layout migration, so a component lands at
+            // the current layout.
+            (void)GameEngine::Scene::ResolveKeptComponents(*world);
 
             // A migration re-packs bytes under the SAME ComponentTypeId, so panels
             // watching component-ID signatures (the inspector's rebuild poll) cannot
             // see it — a stale field plan would keep displaying, and WireEdit keep
             // committing, pre-migration offsets. Broadcast InspectorRebuild for every
             // entity holding a migrated component so every observing panel rebuilds
-            // from the new field table. Fired after the preserved-component re-apply
+            // from the new field table. Fired after the kept-component apply
             // above so a triggered rebuild reads fully settled state. Idempotent
             // (the after-hook contract): a re-fire just forces a redundant rebuild.
             if (!migratedIds.empty() && m_ChangeNotifications)
@@ -6307,6 +6209,21 @@ void EditorApplication::Update(float64 deltaTime)
     // message pump (PollEvents, immediately before Update) is being serviced.
     Editor::MainThreadHangWatchdog::NotifyAlive();
 
+    EditorWindowContext* mainWindow = m_Windows.empty() ? nullptr : m_Windows[0].get();
+    m_FramePhaseRecorder.RecordPreviousFrame({
+        .FrameCount = GetFrameCount(),
+        .DeltaSeconds = GetDeltaTime(),
+        .FixedFrameRate = IsFixedFrameRateEnabled(),
+        .Phases = GetLastFramePhaseTimings(),
+        .AppUpdate = m_LastAppUpdateSubPhases,
+        .SceneView = m_LastSceneViewPerf,
+        .RenderPreloopMs = m_LastRenderPreloopMs,
+        .MainFrame = mainWindow ? mainWindow->RenderGraphStream.Frame.get() : nullptr,
+        .MainDevice = mainWindow && mainWindow->renderCtx ? mainWindow->renderCtx->GetDevice() : nullptr,
+        .Services = EngineCore::GetInstance().GetRenderServices(),
+        .Jobs = &EngineCore::GetInstance().GetJobSystem(),
+    });
+
     SyncWorldPathForProjectPicker();
 
     // Menus displaced after Show() returned (drawn row handler, macOS deferred
@@ -6346,6 +6263,9 @@ void EditorApplication::Update(float64 deltaTime)
         }
     }
 
+    if (m_ScriptStatus && !m_IsShuttingDown)
+        m_ScriptStatus->Update(EngineCore::GetInstance().GetScriptManager().GetScriptAssemblyStatus());
+
     // First-detect gate: open VCS workspace detection once every package
     // module reached its first terminal outcome — all VCS providers live in
     // package modules, and detecting earlier would let a later-ordered
@@ -6370,6 +6290,12 @@ void EditorApplication::Update(float64 deltaTime)
     // fire from module static init under the loader lock. Run it here.
     if (m_VcsService && !m_IsShuttingDown)
         m_VcsService->PumpDeferredWork();
+
+    // Package panels, overlays and editor stylesheets register from module
+    // static init under the loader lock too: building a panel and destroying
+    // the one it replaces happen here.
+    if (!m_IsShuttingDown)
+        Editor::EditorPanelRegistry::Get().DeliverPendingRegistrations();
 
     // Panel construction can finish after the second startup frame (notably
     // while package editor modules are loading).  Keep the deferred request
@@ -6480,6 +6406,9 @@ void EditorApplication::Update(float64 deltaTime)
             RefreshMainWindowTitle();
     }
 
+    if (!m_IsShuttingDown && !m_Windows.empty() && m_Windows[0] && m_Windows[0]->ui)
+        m_StatusBarItems.Update(std::chrono::duration<double>(deltaTime), m_Windows[0]->ui->GetRootElement());
+
     // Bottom-bar status refresh, 1 Hz. Both labels are looked up by id here rather than cached
     // so a UI rebuild can never leave a dangling pointer.
     m_FooterStatusAccum += deltaTime;
@@ -6497,7 +6426,7 @@ void EditorApplication::Update(float64 deltaTime)
             // Vulkan validation badge: empty (invisible) at zero errors, so only count edges matter.
             if (UIElement* root = m_Windows[0]->ui->GetRootElement())
             {
-                if (auto* label = dynamic_cast<Label*>(root->FindById("VkValidationStatus")))
+                if (auto* label = dynamic_cast<Label*>(root->FindById("VkValidationStatus"_sid)))
                 {
                     m_ValidationBadgeErrors = errors;
                     label->SetText(errors > 0 ? "VK validation: " + std::to_string(errors) : "");
@@ -6517,7 +6446,7 @@ void EditorApplication::Update(float64 deltaTime)
             {
                 if (UIElement* root = m_Windows[0]->ui->GetRootElement())
                 {
-                    if (auto* label = dynamic_cast<Label*>(root->FindById("BuildConfigStatus")))
+                    if (auto* label = dynamic_cast<Label*>(root->FindById("BuildConfigStatus"_sid)))
                         label->SetText(Editor::BuildConfigStatusText());
                     m_BuildConfigTagTreeGeneration = treeGen;
                 }
@@ -6550,6 +6479,8 @@ void EditorApplication::Update(float64 deltaTime)
     // Poll download-in-progress modal (auto-dismiss when all downloads finish).
     if (m_DownloadModal)
         m_DownloadModal->Poll();
+    if (m_PlayEntryModal)
+        m_PlayEntryModal->Poll();
 
     // Poll completed Polyhaven downloads and replace placeholder entities with full models.
     if (m_DownloadManager)
@@ -6604,9 +6535,7 @@ void EditorApplication::Update(float64 deltaTime)
 
                     // Keep the panel's temporary yaw/pitch in sync so the next
                     // input tick does not overwrite the restored camera orientation.
-                    if (SceneViewPanel* svPanel = ResolveMountedPanelForWindow<SceneViewPanel>(
-                            targetWindow,
-                            EditorPanelIds::MountSceneView))
+                    if (SceneViewPanel* svPanel = Editor::MountedViewPanels::SceneView(targetWindow->ui.get()))
                     {
                         svPanel->SetYawPitch(pose.YawDeg, pose.PitchDeg);
                     }
@@ -6637,7 +6566,7 @@ void EditorApplication::Update(float64 deltaTime)
                 for (auto& win : m_Windows)
                 {
                     if (win && win->ui)
-                        win->ui->EvictBackgroundTexture(cachePath);
+                        win->ui->BackgroundImages().Evict(cachePath);
                 }
                 if (!scenePath.empty())
                 {
@@ -6992,6 +6921,12 @@ void EditorApplication::Update(float64 deltaTime)
         if (!playingOrPaused && m_WasPlayModeActive && m_RuntimeInput)
             m_RuntimeInput->ClearRegistrations();
         m_WasPlayModeActive = playingOrPaused;
+
+        if (m_RuntimeInput)
+            m_GameViewPointerLock->Update(*m_RuntimeInput,
+                                          gameViewHost ? gameViewHost->window.get() : nullptr,
+                                          m_PlayMode &&
+                                              m_PlayMode->GetState() == GameEngine::Editor::PlayModeState::Play);
     }
 
     // Update runtime input before gameplay scripts tick.
@@ -7200,6 +7135,9 @@ void EditorApplication::Update(float64 deltaTime)
             if (inputSystem->WasActionTriggered(kEditorUniversalSearch) && m_UniversalSearch)
                 m_UniversalSearch->Toggle();
 
+            if (m_DiagnosticShortcuts)
+                m_DiagnosticShortcuts->Update(*inputSystem);
+
             // Cmd/Ctrl+P: toggle play mode (global, works even without Scene View focus).
             if (inputSystem->WasActionTriggered(kEditorTogglePlayMode) && m_PlayMode)
             {
@@ -7327,7 +7265,7 @@ bool EditorApplication::TryInterceptQuitForDirtyScene()
        Each step calls the next only when the user saves or discards. */
     auto doQuit = [this]() { RequestExit(); };
 
-    auto checkScript = [this, sePanel, scriptDirty, doQuit]()
+    auto checkScript = [sePanel, scriptDirty, doQuit]()
     {
         if (scriptDirty && sePanel)
             sePanel->PromptSaveBeforeQuit(doQuit);
@@ -7344,7 +7282,7 @@ bool EditorApplication::TryInterceptQuitForDirtyScene()
     }
 
     if (sceneDirty && m_SceneEditor)
-        m_SceneEditor->PromptSaveBeforeQuit(checkGraph);
+        m_SceneEditor->PromptSaveBefore("quitting", [checkGraph](bool) { checkGraph(); }, {});
     else
         checkGraph();
 
@@ -7700,7 +7638,7 @@ bool EditorApplication::InvokeUiReplayCommand(std::uint32_t commandId, std::stri
                 return false;
             }
             const std::string mountId = std::string("mount:") + panelId;
-            auto* mount = dynamic_cast<Mount*>(rootEl->FindById(mountId));
+            auto* mount = dynamic_cast<Mount*>(rootEl->FindById(HashStringId(mountId)));
             if (!mount || !mount->GetTarget())
             {
                 if (outDetail)
@@ -7747,13 +7685,13 @@ bool EditorApplication::InvokeUiReplayCommand(std::uint32_t commandId, std::stri
             }
             else if (std::strcmp(panelId, EditorPanelIds::Assets) == 0)
             {
-                if (!panelRoot->FindById("assets-tree"))
+                if (!panelRoot->FindById("assets-tree"_sid))
                 {
                     if (outDetail)
                         *outDetail = "assets tree element missing";
                     return false;
                 }
-                if (!panelRoot->FindById("assets-views-container"))
+                if (!panelRoot->FindById("assets-views-container"_sid))
                 {
                     if (outDetail)
                         *outDetail = "assets views container missing";
@@ -7926,7 +7864,7 @@ void EditorApplication::Render()
 
     // Best-effort per-frame perf breakdown for the primary Scene View window.
     bool capturedScenePerf = false;
-    FramePerfBreakdown scenePerf{};
+    Editor::SceneViewFrameTimings scenePerf{};
     auto MsBetween = [](const auto& a, const auto& b) -> double
     {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -8019,7 +7957,7 @@ void EditorApplication::Render()
         {
             if (UIElement* root = ctx->ui->GetRootElement())
             {
-                if (auto* dsEl = dynamic_cast<DockspaceElement*>(root->FindById("dock")))
+                if (auto* dsEl = dynamic_cast<DockspaceElement*>(root->FindById("dock"_sid)))
                 {
                     DockDropTarget dt;
                     dt.Kind = DockDropTarget::TargetKind::None; // debug only
@@ -8084,6 +8022,7 @@ void EditorApplication::Render()
             scenePerf.variantCompileMs = frameResult.variantCompileMs;
             scenePerf.prewarmMs       = frameResult.prewarmMs;
             scenePerf.presentMs       = frameResult.presentMs;
+            scenePerf.frameIndex      = GetFrameCount();
             // Include Application-level phase timings so the MCP debug handler
             // can report the full frame cost (not just the rendering phases).
             const auto& phases = GetLastFramePhaseTimings();
@@ -8205,6 +8144,7 @@ void EditorApplication::Render()
             }
             if (win && win->window)
             {
+                m_GameViewPointerLock->ForgetWindow(win->window.get());
                 win->window->Destroy();
                 win->window.reset();
             }
@@ -8253,6 +8193,7 @@ WindowInputRouterConfig::PlaySurface EditorApplication::GetPlaySurface(Platform:
             return surface;
         surface.gameplaySink = m_RuntimeInput.get();
         surface.gameUi = win->gameView ? win->gameView->GetGameUI() : nullptr;
+        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(window);
         // The mapper maps from the context resolved here instead of finding the
         // window again. Holding it raw is safe because a surface is built and
         // spent inside one routing call (WindowInputRouter::RouteMouseMove), with
@@ -8306,6 +8247,9 @@ EditorApplication::EditorWindowContext* EditorApplication::FindWindowHostingGame
 
 void EditorApplication::OnShutdown()
 {
+    // While the dock and its UI are alive: the next session reopens this layout.
+    SaveWorkingLayout();
+
     // Stop input while every host is alive, then revoke deferred viewport
     // callbacks before their UI dispatchers and this application are destroyed.
     for (auto& win : m_Windows)
@@ -8371,7 +8315,7 @@ void EditorApplication::OnShutdown()
     // Stop centralized file watching BEFORE any teardown at all. Watcher
     // threads dispatch subscription callbacks that post into UI elements (the
     // Assets browser posts grid refreshes from file events) and into ECS
-    // systems (NavigationBuildSystem marks navigation assets dirty);
+    // systems (NavigationSurfaceSystem marks grid surfaces for a re-bake);
     // StopWatching joins those threads, so after this point no callback can
     // land on state the teardown below destroys. Debounced events make this
     // window real: files the editor itself writes at exit (.Editor state,
@@ -8643,8 +8587,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     const bool idleWorldForPicker = m_WorldPathIdledForProjectPicker;
     routing.rg2Scene = useRGFrame && ctx->RenderGraphStream.Frame && ctx->scene != nullptr && !idleWorldForPicker;
     routing.gvPanel =
-        ctx->gameView ? ResolveMountedPanelForWindow<GameViewPanel>(ctx, EditorPanelIds::MountGameView)
-                      : nullptr;
+        ctx->gameView ? Editor::MountedViewPanels::GameView(ctx->ui.get()) : nullptr;
     // An inactive dock tab's panel is unmounted, but its viewport element keeps
     // the layout box from its last visible frame — the mounted resolve, not the
     // size probe, is what says the tab is actually on screen. The unmounted
@@ -8682,8 +8625,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
             // already has a complete frame to present if input arrives after
             // extraction. The inactive Game panel has no measured viewport yet;
             // the visible Scene viewport is the closest matching content extent.
-            if (auto* scenePanel = ResolveMountedPanelForWindow<SceneViewPanel>(
-                    ctx, EditorPanelIds::MountSceneView))
+            if (auto* scenePanel = Editor::MountedViewPanels::SceneView(ctx->ui.get()))
             {
                 (void)Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
                     ctx, scenePanel->GetViewportElement(), routing.gvW, routing.gvH);
@@ -8944,8 +8886,8 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
         // JobSystem; here (engine layer) it is backed by WorkStealingThreadPool::Run
         // + a participating Wait (never ParallelFor — §A2.4-D3). Inert unless
         // GE_PARALLEL_RECORD is set (RecordAndSubmit gates on the env kill switch).
-        // Native external waiters park while workers record the interiors;
-        // a host thread that cannot block participates in this tagged counter.
+        // The frame thread's Wait participates: it records interiors itself
+        // beside the workers until none is left to claim.
         frame.SetRecordParallel(
             [](uint32_t count, const std::function<void(uint32_t)>& body)
             {
@@ -9284,7 +9226,7 @@ void EditorApplication::ShowTabContextMenu(const std::string& panelId, float x, 
             if (!w->floatingPanelId.empty())
                 floatingCtx = w.get();
             if (UIElement* rootEl = w->ui->GetRootElement())
-                dockspace = dynamic_cast<DockspaceElement*>(rootEl->FindById("dock"));
+                dockspace = dynamic_cast<DockspaceElement*>(rootEl->FindById("dock"_sid));
             break;
         }
     }
@@ -9386,7 +9328,7 @@ void EditorApplication::ResetLayoutToDefault()
 
     if (auto* rootEl = main->ui->GetRootElement())
     {
-        if (auto* el = rootEl->FindById("dock"))
+        if (auto* el = rootEl->FindById("dock"_sid))
         {
             if (auto* ds = dynamic_cast<DockspaceElement*>(el))
             {

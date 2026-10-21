@@ -51,6 +51,9 @@ public:
     bool Initialize(DetourNavMap& navMap, uint32 maxAgents);
     void Shutdown();
     bool IsInitialized() const;
+    // True while the crowd steers on `navMap`'s current Detour mesh. A DetourNavMap::Initialize
+    // replaces that mesh, after which the crowd must be shut down before it steps again.
+    bool IsBoundTo(const DetourNavMap& navMap) const;
 
     CrowdAgentHandle AddAgent(float32 x, float32 y, float32 z, const CrowdAgentParams& params);
     void RemoveAgent(CrowdAgentHandle agent);

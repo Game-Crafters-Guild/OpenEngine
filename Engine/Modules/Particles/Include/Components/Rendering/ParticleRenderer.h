@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/AssetRef.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Color.h"
 #include "Types/Types.h"
 
@@ -127,8 +128,8 @@ struct ParticleRenderer
     ParticleDrawOrder DrawOrder = ParticleDrawOrder::ViewDepth;
     // @ge-tooltip Meshes each particle draws, first submesh of each; none draws a sprite
     ModelRef Meshes[ParticleMaxMeshes]{};
-    // @ge-tooltip View layers that draw the particles
-    uint32 RenderLayerMask = 1u;
+    // @ge-tooltip The render layers the particles are on
+    Rendering::RenderLayerMask RenderLayers;
     // @ge-tooltip Distance from the camera in metres at which particles begin to thin out
     // @ge-range 0
     float32 ThinningStart = 0.0f;

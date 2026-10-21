@@ -44,22 +44,4 @@ float GE_DistanceToOuterSphere(float r, float mu, float sphereRadius)
     return (rMu > 0.0) ? shell / (q + rMu) : q - rMu;
 }
 
-// Nearest forward distance from radius r along zenith cosine mu to a sphere the origin is
-// OUTSIDE or exactly ON (r >= sphereRadius). Returns 0.0 when the ray misses it or meets it
-// only behind the origin. Exactly on the surface both roots collapse to the chord -2*r*mu,
-// which is what an origin sitting on the ground gets.
-float GE_DistanceToInnerSphere(float r, float mu, float sphereRadius)
-{
-    float rMu = r * mu;
-    float gap = (r - sphereRadius) * (r + sphereRadius); // r^2 - sphereRadius^2, without the cancellation
-    float disc = rMu * rMu - gap;
-    if (disc < 0.0)
-        return 0.0;
-    float tFar = -rMu + sqrt(disc);
-    if (tFar <= 0.0)
-        return 0.0;
-    float tNear = gap / tFar; // product of the roots over the far one: no cancelling subtraction
-    return (tNear > 0.0) ? tNear : tFar;
-}
-
 #endif // GE_SKY_RAY_SPHERE_GLSL

@@ -429,6 +429,12 @@ static const PropertyApplier kAppliers[] = {
     /* SelectionColor */ [](ResolvedStyle& rs, const StyleValue& v) {
         if (auto* p = std::get_if<uint32_t>(&v)) rs.Visual.SelectionColor = *p;
     },
+    /* Transform */ [](ResolvedStyle& rs, const StyleValue& v) {
+        if (auto* p = std::get_if<TransformValue>(&v)) rs.Visual.Transform = *p;
+    },
+    /* TransformOrigin */ [](ResolvedStyle& rs, const StyleValue& v) {
+        if (auto* p = std::get_if<TransformOriginValue>(&v)) rs.Visual.TransformOrigin = *p;
+    },
     /* DeferredDecl */ nullptr,
 };
 

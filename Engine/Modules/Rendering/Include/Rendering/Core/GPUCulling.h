@@ -95,7 +95,7 @@ struct ViewCullingInput
     // same GPUScene backend.
     uint32_t firstInstance = 0;
     uint32_t instanceCount = 0;
-    uint32_t renderLayerMask = 0xFFFFFFFFu;
+    RenderLayerMask renderLayerMask = RenderLayerMask::All();
     uint32_t frameIndex = 0;
     float deltaTime = 0.0f;
     // Two-phase HZB occlusion (R2.1): reserve a SECOND visibility slice for
@@ -116,7 +116,7 @@ struct ViewCullingInput
 struct CascadeCullingGroup
 {
     ViewId viewId = 0;
-    uint32_t renderLayerMask = 0xFFFFFFFFu;
+    RenderLayerMask renderLayerMask = RenderLayerMask::All();
     // 1..kMaxCullingViewsPerDispatch; selects the PSO variant.
     uint32_t cascadeCount = 0;
     // Slice c of the group publishes its ViewVisibilityRange at cascadeIndex

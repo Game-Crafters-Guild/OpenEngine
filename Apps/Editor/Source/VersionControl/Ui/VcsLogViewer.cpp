@@ -163,7 +163,7 @@ void VcsLogViewer::UpdateLogEntries()
     auto entries = m_Vcs->GetLog(m_FilePath, 100);
 
     // Find container
-    if (auto* container = m_PanelRoot->FindById("log-entries-container"))
+    if (auto* container = m_PanelRoot->FindById("log-entries-container"_sid))
     {
         // Clear existing entries
         container->RemoveAllChildren();

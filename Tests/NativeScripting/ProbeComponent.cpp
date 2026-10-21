@@ -141,6 +141,7 @@ GE_NATIVE_PROBE_API int GE_NativeProbe_SelfSeesExplicit()
 // way) — this is the production call shape, not a stand-in for it.
 // ---------------------------------------------------------------------------
 
+#include "Memory/Arena.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/TreeView.h"
 #include "UI/UIElement.h"
@@ -215,4 +216,25 @@ GE_NATIVE_PROBE_API void GE_NativeProbe_SetOnTreeSelectionChanged(void* treeView
         if (firedCounter)
             ++*firedCounter;
     });
+}
+
+// A destructor this image's code runs, recorded in an engine arena the host owns: the shape
+// of a game system's member arena holding objects with destructors across a hot reload.
+// Arena::Destroy<ProbeArenaObject> is instantiated here, so the recorded address is this
+// image's.
+struct ProbeArenaObject
+{
+    explicit ProbeArenaObject(int* destroyedCounter) : DestroyedCounter(destroyedCounter) {}
+    ~ProbeArenaObject()
+    {
+        if (DestroyedCounter)
+            ++*DestroyedCounter;
+    }
+
+    int* DestroyedCounter;
+};
+
+GE_NATIVE_PROBE_API void GE_NativeProbe_NewInArena(void* arena, int* destroyedCounter)
+{
+    static_cast<GameEngine::Memory::Arena*>(arena)->New<ProbeArenaObject>(destroyedCounter);
 }

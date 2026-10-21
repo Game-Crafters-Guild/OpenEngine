@@ -102,7 +102,13 @@ public:
     // ---------------------------------------------------------------------
     // Queries
     // ---------------------------------------------------------------------
+    /// The nearest body along `query.ray` within `query.maxDistance` that `query.filter` sees.
+    /// False, with an empty result, when there is none.
     bool RayCast(const RayCastQuery& query, RayCastResult& outResult) const;
+    /// Every body along the ray that `query.filter` sees, nearest first (bodies at the same
+    /// distance in a fixed order, by body), each once at its nearest hit (a mesh the ray crosses
+    /// several times is one result), at most `maxResults` of them.
+    /// `maxResults` 0 asks for none: false with an empty list, as BoxOverlap. True when any is hit.
     bool RayCastAll(const RayCastQuery& query, std::vector<RayCastResult>& outResults, uint32 maxResults = 64) const;
     bool BoxOverlap(const BoxOverlapQuery& query, std::vector<OverlapResult>& outResults, uint32 maxResults = 64) const;
 

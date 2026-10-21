@@ -18,6 +18,11 @@ layout(location = 2) in vec2 vUV;
 // vInstance (the dense draw index) bypasses the indirection and lands on
 // waste / wrong slots in the persistent buffer.
 layout(location = 3) flat in uint vSlot;
+// The fragment in each clip-chain level's own space, and that space's units
+// per vLocal unit (ui_sdf.vert writeClipVaryings).
+layout(location = 5) in vec4 vClipPos01;
+layout(location = 6) in vec4 vClipPos23;
+layout(location = 7) flat in vec4 vClipScale;
 #if defined(GE_COMPAT_PROFILE)
 // Run-local texture slot ordinal, unpacked by the vertex stage from the high
 // bits of the draw-order word (UI/ui_sdf_textures.glsl).
@@ -51,10 +56,6 @@ layout(std430, set = 0, binding = 1) readonly buffer ClipBuf {
 #include "UI/ui_sdf_textures.glsl"
 #include "UI/text_effects.glsl"
 
-// Clip evaluation: walk the parent chain so ancestor rounded corners
-// still clip descendants. Typical depth is 1-3; cap at 4 iterations.
-const int kMaxClipChainDepth = 4;
-
 // Every primitive exit funnels through here so the dual-source variant can
 // never leave its second output undefined (undefined src1 = undefined blend).
 void emitPremultiplied(vec4 pm)
@@ -81,7 +82,20 @@ float applyEdgeSoftness(float coverage)
     return coverage;
 }
 
-float computeClipAlpha(vec2 p, uint flags, float px)
+vec2 clipPosAt(int level)
+{
+    if (level == 0) return vClipPos01.xy;
+    if (level == 1) return vClipPos01.zw;
+    if (level == 2) return vClipPos23.xy;
+    return vClipPos23.zw;
+}
+
+// Each clip is evaluated in its own space (the space of the element that
+// pushed it), so a rotated element's overflow clip rotates with it and an
+// untransformed ancestor's clip still cuts a rotated descendant on screen.
+// `px` is the footprint in vLocal units; vClipScale carries it into each
+// clip's units.
+float computeClipAlpha(uint flags, float px)
 {
     uint idx = (flags >> CLIP_INDEX_SHIFT) & 0xFFFFu;
     if (idx == NO_CLIP)
@@ -95,7 +109,8 @@ float computeClipAlpha(vec2 p, uint flags, float px)
     for (int i = 0; i < kMaxClipChainDepth; ++i)
     {
         UIClipRect clip = cb.clips[idx];
-        alpha = min(alpha, sdfCoverage(roundedRectSDF(p, clip.rect, clip.radii, clip.radiiY), px));
+        alpha = min(alpha, sdfCoverage(roundedRectSDF(clipPosAt(i), clip.rect, clip.radii, clip.radiiY),
+                                       px * vClipScale[i]));
         idx = clip.params.x;
         if (idx == NO_CLIP)
             break;
@@ -114,6 +129,12 @@ void main()
     vec4 rect = prim.rectXYWH;
     vec2 p = vLocal;
     float px = pixelFootprint(p);
+    // Taken here, in uniform control flow, for the per-edge footprint of a
+    // primitive in a transformed space (rectEdgeFootprint). An untransformed
+    // primitive keeps the isotropic footprint, which is exact for it.
+    vec2 dpdx = dFdx(p);
+    vec2 dpdy = dFdy(p);
+    bool transformedSpace = floatBitsToUint(prim.modeParams.y) != NO_TRANSFORM;
 
 #if defined(GE_COMPAT_PROFILE)
     // Uniform control flow ends at the first mode branch below, so every
@@ -123,7 +144,7 @@ void main()
     ge_UiDeriv.UvDdy = dFdy(vUV);
 #endif
 
-    float clipA = computeClipAlpha(p, flags, px);
+    float clipA = computeClipAlpha(flags, px);
     if (clipA <= 0.0)
         discard;
 
@@ -190,8 +211,9 @@ void main()
         }
 
         // Element fill + border
+        float pxEdge = transformedSpace ? rectEdgeFootprint(p, elemRect, dpdx, dpdy) : px;
         float sdOuter = roundedRectSDF(p, elemRect, radX, radY);
-        float aOuter = sdfCoverage(sdOuter, px);
+        float aOuter = sdfCoverage(sdOuter, pxEdge);
 
         if (!insetShadow)
             shadowA *= (1.0 - aOuter);
@@ -233,7 +255,7 @@ void main()
                 vec4 radInnerX = max(vec4(0.0), radX - vec4(bw.x, bw.z, bw.z, bw.x));
                 vec4 radInnerY = max(vec4(0.0), radY - vec4(bw.y, bw.y, bw.w, bw.w));
                 float sdInner = roundedRectSDF(p, inner, radInnerX, radInnerY);
-                float aInner = sdfCoverage(sdInner, px);
+                float aInner = sdfCoverage(sdInner, pxEdge);
                 // Ring coverage as the difference of the two box-filter
                 // coverages. Both are linear in their distance field, so the
                 // difference is the exact covered area of the band at every
@@ -278,7 +300,7 @@ void main()
                                       max(0.0, elemRect.w - (bw.y + bw.w)));
                     vec4 radInnerX = max(vec4(0.0), radX - vec4(bw.x, bw.z, bw.z, bw.x));
                     vec4 radInnerY = max(vec4(0.0), radY - vec4(bw.y, bw.y, bw.w, bw.w));
-                    inside = sdfCoverage(roundedRectSDF(p, inner, radInnerX, radInnerY), px);
+                    inside = sdfCoverage(roundedRectSDF(p, inner, radInnerX, radInnerY), pxEdge);
                 }
                 float sA = shadowCol.a * (1.0 - shadowA) * inside;
                 float outFillA = sA + elemColor.a * (1.0 - sA);
@@ -476,16 +498,17 @@ void main()
         float roundedA = 1.0;
         if (max(max(paintRadX.x, paintRadX.y), max(paintRadX.z, paintRadX.w)) > 0.0)
         {
-            roundedA = sdfCoverage(roundedRectSDF(p, paintRect, paintRadX, paintRadY), px);
+            float pxPaint = transformedSpace ? rectEdgeFootprint(p, paintRect, dpdx, dpdy) : px;
+            roundedA = sdfCoverage(roundedRectSDF(p, paintRect, paintRadX, paintRadY), pxPaint);
             if (roundedA <= 0.0)
                 discard;
         }
 
         uint texIdx = prim.packed.y;
         vec4 tint = uiPaintColor(prim.colors.x);
-        // modeParams.y > 0.5 signals point (nearest-neighbor) filtering.
+        // POINT_FILTER_BIT signals point (nearest-neighbor) filtering.
         vec4 tex;
-        if (prim.modeParams.y > 0.5)
+        if ((flags & POINT_FILTER_BIT) != 0u)
             tex = GE_UI_TEX_NEAREST(texIdx, vTexSlot, vUV);
         else
             tex = GE_UI_TEX_LINEAR(texIdx, vTexSlot, vUV);

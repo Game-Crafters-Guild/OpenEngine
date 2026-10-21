@@ -1,0 +1,113 @@
+---
+title: Editor keyboard shortcuts
+description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, view navigation, and tab management.
+---
+
+## Gizmo tools (Scene View)
+
+| Key | Tool | Description |
+|-----|------|-------------|
+| **Q** | Selection | Arrow tool - select objects |
+| **W** | Move | Translate gizmo - move objects |
+| **E** | Rotate | Rotation gizmo - rotate objects |
+| **R** | Scale | Scale gizmo - resize objects |
+
+## Camera navigation (Scene View)
+
+### Mouse camera controls
+
+| Input | Action | Description |
+|-------|--------|-------------|
+| **RMB (Hold & Drag)** | FPS Look | Free-look camera (first-person style) |
+| **Alt + LMB** | Orbit | Rotate camera around pivot point |
+| **Alt + Ctrl + LMB** (PC/Linux) | Pan | Move camera horizontally/vertically |
+| **Alt + Cmd + LMB** (macOS) | Pan | Move camera horizontally/vertically |
+| **Alt + RMB** | Dolly | Zoom in/out (move left-right) |
+
+### Keyboard camera controls
+
+| Input | Action | Description |
+|-------|--------|-------------|
+| **W** (+ RMB) | Move Forward | Move camera forward |
+| **A** (+ RMB) | Move Left | Move camera left |
+| **S** (+ RMB) | Move Backward | Move camera backward |
+| **D** (+ RMB) | Move Right | Move camera right |
+| **Shift** (+ WASD + RMB) | Fast Move | 3x faster camera movement |
+
+### Camera framing
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| **F** | Frame Selection | Focus camera on selected object |
+| **Alt + F** | Frame All | Focus camera on all objects in scene |
+
+## Global editor shortcuts
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| **G** | Toggle Gizmos | Show/hide transformation gizmos |
+| **P** | Toggle FPS Counter | Show/hide FPS counter in Scene View |
+| **Cmd + W** (macOS) | Close Tab/Window | Close active tab or floating window |
+| **Ctrl + W** (PC/Linux) | Close Tab/Window | Close active tab or floating window |
+| **F11** | Toggle Debug Zones | Show/hide dock debug overlay |
+
+### Diagnostics
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| **F2** | CPU Profiler | Turn the CPU profiler on. Press again to print the last frame's scope summary to the log |
+| **Shift + F2** | CPU Profiler Off | Turn the CPU profiler off |
+| **F3** | UI Demo | Open the UI demo panel |
+
+The CPU profiler keys exist in builds with CPU profiling compiled in. All three can be rebound under
+**Keyboard Shortcuts > Diagnostics**. While a game runs in a focused Game View, a game that binds or
+reads one of these keys receives it and the editor does not act on it. A key the game does not use
+still reaches the editor.
+
+---
+
+## View navigation
+
+| Input | Action | Description |
+|-------|--------|-------------|
+| **Ctrl + Scroll** (PC/Linux), **Cmd + Scroll** (macOS) | Resize Items | Over the Hierarchy or the Assets panel's items, or over the panel's size slider: wheel up makes the items bigger, wheel down smaller |
+
+Resize Items can be rebound under **Keyboard Shortcuts > View Navigation > Resize Items**. The
+binding must include a modifier, so a plain wheel always scrolls. The size slider's tooltip names
+the current binding. In the Assets grid, sizes step on a 16 px grid (32, 48, 64, ... px), the same
+sizes a drag on the slider reaches. See [UI control defaults](../ui/ui-control-defaults.mdx) for how
+the gesture reaches game UI grids.
+
+---
+
+## Platform differences
+
+All shortcuts work cross-platform. The only difference is:
+- **macOS** uses **Cmd** (Command) as the primary modifier
+- **Windows/Linux** uses **Ctrl** (Control) as the primary modifier
+
+---
+
+## Tab management
+
+| Action | Method | Description |
+|--------|--------|-------------|
+| **Close Tab** | Right-click on tab | Close a specific panel tab |
+| **Close Tab** | **Cmd/Ctrl + W** | Close the currently active tab |
+| **Close Window** | **Cmd/Ctrl + W** (when no tabs) | Close floating window |
+
+:::note
+Tabs have no close button: right-click a tab or use the shortcut to close it.
+:::
+
+---
+
+## Tips
+
+- **WASD navigation** requires holding the right mouse button (RMB)
+- **Alt-based camera controls** work independently and do not require RMB
+- Press **Shift** while moving to triple your movement speed
+- Press **F** to quickly frame and zoom to a selected object
+- Press **Alt + F** to frame all objects in the scene
+- **Right-click on any tab** to access the context menu with close option
+- **Cmd/Ctrl + W** closes the active tab. If no tabs remain in a floating window, it closes the window

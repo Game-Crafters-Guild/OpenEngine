@@ -4,6 +4,7 @@
 #include "AssetCore/GUID.h"
 #include "ECS/Entity.h" // ECS::EntityHandle
 #include "Scene/SceneIO.h" // FormatAssetReferenceForSave, TryResolveAssetReference, entity-ref helpers
+#include "Scene/RenderLayerMaskText.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/SceneValue.h"
 #include "Types/FormatNumber.h"
@@ -345,6 +346,24 @@ struct EntityHandleSerializer final : IFieldSerializer
     }
 };
 
+// Render layer mask: the layer numbers in brackets, or all, or none (RenderLayerMaskText.h). The key in
+// a refusal is the field's own name, which is its scene key.
+struct RenderLayerMaskSerializer final : IFieldSerializer
+{
+    std::string Write(const std::byte* f, const FieldInfo&, const SceneSaveContext&) const override
+    {
+        return FormatRenderLayerMask(ReadPod<Rendering::RenderLayerMask>(f));
+    }
+    bool Read(std::string_view t, std::byte* f, const FieldInfo& info, const SceneLoadContext&, std::string* e) const override
+    {
+        Rendering::RenderLayerMask mask;
+        if (!ParseRenderLayerMask(t, info.Name, mask, e))
+            return false;
+        WritePod<Rendering::RenderLayerMask>(f, mask);
+        return true;
+    }
+};
+
 // Enum field codec: serializes the enumerator NAME from the field's own EnumNames table (bound by
 // the scanner — see FieldInfo::EnumNames), not a bare integer. Stateless — the table travels on the
 // FieldInfo passed to Write/Read, so one shared instance serves every enum field, no per-field state
@@ -406,6 +425,7 @@ const Vec4Serializer               kVec4;  // also serves Quat + Color (four flo
 const StringSerializer             kString;
 const AssetGuidSerializer          kAssetGuid;
 const EntityHandleSerializer       kEntityHandle;
+const RenderLayerMaskSerializer    kRenderLayerMask;
 const EnumNameSerializer           kEnumCodec;
 
 // Flat dispatch table indexed by FieldTypeId — replaces the old hash map + lazy seed + per-call
@@ -434,8 +454,9 @@ const IFieldSerializer* const kDefaults[] = {
     &kEntityHandle, // 19 EntityHandle
     &kString,     // 20 String
     nullptr,      // 21 Bytes
+    &kRenderLayerMask, // 22 RenderLayerMask
 };
-static_assert(sizeof(kDefaults) / sizeof(kDefaults[0]) == static_cast<std::size_t>(FieldTypeId::Bytes) + 1,
+static_assert(sizeof(kDefaults) / sizeof(kDefaults[0]) == static_cast<std::size_t>(FieldTypeId::RenderLayerMask) + 1,
               "kDefaults must have exactly one entry per FieldTypeId");
 
 } // namespace

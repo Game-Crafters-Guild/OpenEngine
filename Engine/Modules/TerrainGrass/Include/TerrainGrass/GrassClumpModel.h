@@ -12,7 +12,8 @@
 // field read as mown rather than grown. Clumping restores grouping WITHOUT touching that lattice:
 // a second, coarser, world-anchored lattice assigns each blade to the nearest of nine jittered
 // sites, and the winning site's hash drives the attributes that make a tuft read as one plant —
-// common height, common facing, a shared colour, and a pull toward its centre.
+// common height, common facing, a shared colour, and a height that tapers from its centre. It never
+// moves a blade, so the field keeps the lattice's even coverage.
 //
 // MIRROR OBLIGATION: byte-for-byte counterpart of
 // Shaders/TerrainGrass/grass_clump.glsl. Every function below has a GLSL twin with the same name
@@ -77,6 +78,7 @@ struct GrassClumpSample
     float32 ColorRand = 0.0f;  // [0,1) — clump tint / hue offset
     float32 HeightRand = 0.0f; // [0,1) — clump height multiplier
     float32 FacingRand = 0.0f; // [0,1) — clump common facing, as a fraction of a turn
+    float32 DistanceCells = 0.0f; // from the blade to the winning site, in clump cells
     int32 CellX = 0;           // winning lattice cell, for tests and debugging
     int32 CellZ = 0;
 };
@@ -138,6 +140,7 @@ inline GrassClumpSample GrassSampleClump(float32 worldX, float32 worldZ, float32
                 best.ColorRand = GrassHashToUnit(h2);
                 best.HeightRand = GrassHashToUnit(h3);
                 best.FacingRand = GrassHashToUnit(h4);
+                best.DistanceCells = std::sqrt(distanceSq);
                 best.CellX = cellX;
                 best.CellZ = cellZ;
             }
@@ -305,6 +308,19 @@ inline float32 GrassClumpHeightMultiplier(float32 heightRand, float32 variance)
 {
     const float32 v = std::clamp(variance, 0.0f, 1.0f);
     return 1.0f + (heightRand * 2.0f - 1.0f) * v;
+}
+
+// Distance from a tuft's site, in clump cells, at which its taper is complete. About the edge of a
+// tuft: half of all blades stand within 0.42 cells of their site and nine in ten within 0.68.
+inline constexpr float32 kGrassClumpTaperEdge = 0.75f;
+
+// The tuft's shape: 1 at the site, falling to 1 - taper at kGrassClumpTaperEdge and beyond. A taper
+// of 0 returns exactly 1.0, so an untapered field is bit-identical to one without the term.
+inline float32 GrassClumpTaperMultiplier(float32 distanceCells, float32 taper)
+{
+    const float32 x = std::clamp(distanceCells / kGrassClumpTaperEdge, 0.0f, 1.0f);
+    const float32 edge = x * x * (3.0f - 2.0f * x);
+    return 1.0f - std::clamp(taper, 0.0f, 1.0f) * edge;
 }
 
 } // namespace GameEngine::TerrainGrass

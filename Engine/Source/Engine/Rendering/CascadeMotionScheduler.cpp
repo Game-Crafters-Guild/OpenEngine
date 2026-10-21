@@ -78,7 +78,7 @@ CascadeMotionScheduler::FramePlan CascadeMotionScheduler::PlanFrame(
     // never defer — it always classifies as forced.
     const auto forced = [&](uint32_t c) { return staleness[c] > maxAge; };
     uint32_t budget = motionCap;
-    std::sort(motionSlots, motionSlots + motionCount,
+    std::sort(motionSlots, motionSlots + std::min(motionCount, kMaxCascades),
               [&](uint32_t a, uint32_t b)
               {
                   const bool fa = forced(a);

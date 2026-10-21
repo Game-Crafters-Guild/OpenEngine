@@ -1,7 +1,6 @@
 // Shipped outdoor scenes must be lit for the stop the editor Scene View pins.
 //
-// The Scene View has no Camera entity of its own, so when its auto exposure is
-// off (the default) it exposes at a fixed photographic stop —
+// The Scene View has no Camera entity of its own; Fixed exposes it at a stop that defaults to
 // Components::kDefaultManualExposureEv, a sunlit exterior EV100. A scene
 // whose sun is authored on the unitless scale (a few units, i.e. a few hundred
 // lux) is five to eight stops under that stop and opens black, however bright it

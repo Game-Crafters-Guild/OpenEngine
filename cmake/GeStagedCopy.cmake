@@ -2,7 +2,7 @@
 #
 # Shared copy helper for the runtime-staging scripts, robust to a destination
 # locked by a running process. On Windows a loaded PE image cannot be
-# overwritten or deleted, but it CAN be renamed. `cmake -E copy_if_different`
+# overwritten or deleted, but it CAN be renamed. `file(COPY_FILE ... ONLY_IF_DIFFERENT)`
 # short-circuits to success when the destination is already identical, so a
 # copy failure means the staged file is BOTH stale AND locked — exactly the
 # case where letting the build exit 0 ships a stale runtime: the relaunched
@@ -14,17 +14,18 @@
 # fails, FAIL the build loudly; a silently stale staged runtime is never OK.
 
 # ge_staged_copy(<src-file> <dest-dir> <label>)
+#
+# The copy runs in-process: these scripts stage dozens of files on every build
+# (the Visual Studio generator runs POST_BUILD steps even when nothing relinked),
+# and a cmake process per file costs more than the comparisons themselves.
 function(ge_staged_copy _src _dest_dir _label)
-  execute_process(
-      COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_src}" "${_dest_dir}"
-      RESULT_VARIABLE _rc
-  )
+  get_filename_component(_name "${_src}" NAME)
+  set(_dest "${_dest_dir}/${_name}")
+  file(COPY_FILE "${_src}" "${_dest}" ONLY_IF_DIFFERENT RESULT _rc)
   if(_rc EQUAL 0)
     return()
   endif()
 
-  get_filename_component(_name "${_src}" NAME)
-  set(_dest "${_dest_dir}/${_name}")
   string(RANDOM LENGTH 8 _tag)
   file(RENAME "${_dest}" "${_dest}.stale-${_tag}" RESULT _rename_err)
   if(_rename_err)
@@ -35,10 +36,7 @@ function(ge_staged_copy _src _dest_dir _label)
         "Failing the build instead of leaving a stale runtime staged.")
   endif()
 
-  execute_process(
-      COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_src}" "${_dest_dir}"
-      RESULT_VARIABLE _rc2
-  )
+  file(COPY_FILE "${_src}" "${_dest}" ONLY_IF_DIFFERENT RESULT _rc2)
   if(NOT _rc2 EQUAL 0)
     message(FATAL_ERROR
         "${_label}: failed staging '${_src}' -> '${_dest_dir}' (rc=${_rc2}) even "

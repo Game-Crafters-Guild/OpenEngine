@@ -5,6 +5,7 @@
 #include "Components/Rendering/PostProcessEffects/BloomEffect.h"
 #include "Components/Rendering/PostProcessEffects/ChromaticAberrationEffect.h"
 #include "Components/Rendering/PostProcessEffects/ColorGradeEffect.h"
+#include "Components/Rendering/PostProcessEffects/CubeLutEffect.h"
 #include "Components/Rendering/PostProcessEffects/CrtEffect.h"
 #include "Components/Rendering/PostProcessEffects/DebandEffect.h"
 #include "Components/Rendering/PostProcessEffects/DepthOfFieldEffect.h"
@@ -12,9 +13,12 @@
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Components/Rendering/PostProcessEffects/ScreenSpaceReflectionsEffect.h"
 #include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
-#include "Components/Rendering/TonemapMode.h"
+#include "Components/Rendering/Look.h"
 #include "Engine/Rendering/ColorGradeParamsUBO.h"
+#include "Engine/Rendering/TextureService.h"
+#include "Rendering/Utils/CubeLutColorDomain.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
+#include "Rendering/Passes/TonemapPass.h"
 #include "Rendering/Materials/ShaderMeta.h"
 #include "ECS/ComponentFactory.h"
 #include "ECS/ECSTemplates.h"
@@ -41,6 +45,7 @@
 
 using GameEngine::Engine::Renderer::BlendPostProcessSettings;
 using GameEngine::Engine::Renderer::PostProcessSettings;
+using GameEngine::Engine::Renderer::PostProcessViewOutput;
 using GameEngine::Engine::Renderer::SettingsBlendGroupMask;
 
 namespace
@@ -66,7 +71,7 @@ SettingsBlendGroupMask ContributingGroups(bool colorGrade, bool heightFog, bool 
 // fails the coverage test below.
 const std::unordered_set<std::string> kDeliberatelyUnblended = {
     // Camera-stamped lens fields: applied after blending from the active
-    // camera (applyCameraExposure), never volume-blended.
+    // camera (ApplyCameraExposure), never volume-blended.
     "dofFocusDistance",
     "dofFocalLengthMm",
     "dofAperture",
@@ -90,8 +95,8 @@ const std::unordered_set<std::string> kComputedReads = {
     "colorGradeActive", "hdrColorFxActive", "casActive", "lutActive",
     "ldrStackActive", "vhsActive", "chromaticAberrationActive", "filmSimulationGrainActive",
     "filmSimulationArtifactsActive", "crtActive", "fastBlurActive", "dofActive",
-    "heatDistortionActive", "heightFogActive", "volumetricFogActive", "atmosphericCloudActive",
-    "volumetricCloudsActive",
+    "heatDistortionActive", "heightFogActive", "heightFogSkyColorActive", "volumetricFogActive",
+    "atmosphericCloudActive", "volumetricCloudsActive",
     "bloomIntensity", "volumetricFogIntensity",
 };
 
@@ -158,8 +163,8 @@ TEST(PostProcessBlendCoverage, EveryReflectedFieldBlendsOrIsExcluded)
 // pin the migration: the exact name set cannot drift, and every registered
 // (name, offset, kind) triple must resolve the member TryReadField reports.
 
-// Golden set of every readable name, 303 in total: 44 computed gates (11 core +
-// 33 registered) + 257 shared members (16 core appendix + 241 registered) + 2
+// Golden set of every readable name, 299 in total: 45 computed gates (11 core +
+// 34 registered) + 252 shared members (14 core appendix + 238 registered) + 2
 // read-only aliases. A new effect field extends this list in the same change
 // that registers it; a missing name here means a registration line was lost,
 // not that the list is stale.
@@ -175,7 +180,7 @@ TEST(PostProcessSettingsWrite, ReadableFieldNamesMatchGoldenSet)
     "aoActive", "useAutoExposure", "colorFilterActive", "colorGradeActive",
     "hdrColorFxActive", "casActive", "lutActive", "ldrStackActive",
     "chromaticAberrationActive", "filmSimulationGrainActive", "filmSimulationArtifactsActive", "crtActive",
-    "fastBlurActive", "dofActive", "heatDistortionActive", "heightFogActive",
+    "fastBlurActive", "dofActive", "heatDistortionActive", "heightFogActive", "heightFogSkyColorActive",
     "volumetricFogActive", "atmosphericCloudActive", "volumetricCloudsActive", "exposure", "threshold",
     "knee", "bloomAntiFlicker", "intensity", "bloomScatteringAmount",
     "bloomTintR", "bloomTintG", "bloomTintB", "bloomRadius",
@@ -188,8 +193,9 @@ TEST(PostProcessSettingsWrite, ReadableFieldNamesMatchGoldenSet)
     "fogGlowThreshold", "fogGlowKnee", "fogGlowAntiFlicker", "fogGlowOctaves",
     "fogGlowScatter", "fogGlowFadeStart", "fogGlowFadeEnd", "fogGlowTintR",
     "fogGlowTintG", "fogGlowTintB", "halationIntensity", "halationRadius",
-    "halationTintR", "halationTintG", "halationTintB", "tonemapMode",
-    "ditherMode", "ictcpChromaCompression", "chromaticAberrationIntensity", "chromaticAberrationStartOffset", "chromaticAberrationSaturation",
+    "halationTintR", "halationTintG", "halationTintB", "look",
+    "nightTintStrength", "nightTintR", "nightTintG", "nightTintB",
+    "chromaticAberrationIntensity", "chromaticAberrationStartOffset", "chromaticAberrationSaturation",
     "chromaticAberrationLongitudinal", "chromaticAberrationComa", "dofIntensity", "dofMaxRadius",
     "dofSamplingQuality", "dofDebugMode", "dofDebugAlpha", "dofFocusDistance",
     "dofFocalLengthMm", "dofAperture", "dofSensorHeightMm", "dofApertureBladeCount",
@@ -203,9 +209,9 @@ TEST(PostProcessSettingsWrite, ReadableFieldNamesMatchGoldenSet)
     "filmSimulationDustIntensity", "filmSimulationDustSize", "filmSimulationDustRandomSize", "filmSimulationGateWeaveEnabled",
     "filmSimulationGateWeaveHorizontal", "filmSimulationGateWeaveVertical", "filmSimulationGateWeaveRotation", "filmSimulationGateMask",
     "filmSimulationGateMaskFeather", "filmSimulationGateMaskRoundness", "colorFilterR", "colorFilterG",
-    "colorFilterB", "colorFilterIntensity", "colorFilterBlendMode", "colorFilterStackOrder",
-    "casStrength", "casStackOrder", "lutIntensity", "lutStackOrder",
-    "lutInputEncoding", "lutTextureFormat", "vignetteIntensity", "vignetteSmoothness",
+    "colorFilterB", "colorFilterIntensity", "colorFilterBlendMode",
+    "casStrength", "casStackOrder", "lutIntensity",
+    "lutStage", "vignetteIntensity", "vignetteSmoothness",
     "vignetteRounded", "vignetteColorR", "vignetteColorG", "vignetteColorB",
     "vignetteStackOrder", "vhsActive", "vhsIntensity", "vhsWobble",
     "vhsTracking", "vhsSignalGlitches", "vhsGlitchOffsets", "vhsInterference",
@@ -312,14 +318,14 @@ TEST(PostProcessSettingsWrite, RegistryFieldsResolveDeclaredMembersByName)
             }
         });
 
-    // 257 shared members minus the 16 core/fog-glow appendix names
+    // 252 shared members minus the 14 core/fog-glow appendix names
     // (PP_CORE_SHARED_FIELDS in PostProcessSettings.cpp). The named
     // set is an on-disk/shader contract: it must not move without extending the
     // golden name list above.
-    EXPECT_EQ(namedCount, 241u);
-    // Blend-only members (Phase 2): 2 bloom + 40 height fog + 62 volumetric fog
-    // + 1 deband + 3 AO + 7 SSSR + 3 exposure adjustment + 35 volumetric clouds.
-    EXPECT_EQ(blendOnlyCount, 153u);
+    EXPECT_EQ(namedCount, 238u);
+    // Blend-only members (Phase 2): 2 bloom + 41 height fog + 62 volumetric fog
+    // + 1 deband + 3 AO + 7 SSSR + 5 exposure adjustment + 35 volumetric clouds.
+    EXPECT_EQ(blendOnlyCount, 156u);
 }
 
 // Every gate an effect registers is readable by name, listed once, and reads
@@ -355,8 +361,8 @@ TEST(PostProcessSettingsWrite, RegistryGatesReadTheirPredicatesByName)
             }
         });
 
-    // 44 gates in total: 33 decided by one effect, 11 in the core table.
-    EXPECT_EQ(gateCount, 33u);
+    // 45 gates in total: 34 decided by one effect, 11 in the core table.
+    EXPECT_EQ(gateCount, 34u);
     EXPECT_EQ(R::PostProcessEffectRegistry::FindGate("fogGlowActive"), nullptr)
         << "a gate combining effects belongs in the core table, not one effect's registration";
 }
@@ -722,7 +728,7 @@ TEST(PostProcessChromaticAberration, UsesDepthAwareFocusAndPixelCorrectSeparatio
     const std::filesystem::path root = std::filesystem::path(GE_RENDERER_REPO_ROOT);
     const std::filesystem::path shader = root /
         "Packages/chromatic-aberration/Assets/Shaders/chromatic_aberration.frag";
-    const std::filesystem::path graph = root / "Assets/RenderPipelines/ForwardPlus.rendergraph";
+    const std::filesystem::path graph = root / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph";
 
     std::ifstream shaderStream(shader);
     ASSERT_TRUE(shaderStream.is_open()) << shader;
@@ -770,7 +776,7 @@ TEST(PostProcessVhs, UsesSkippableMitLicensedPixelCorrectLdrPass)
     const std::filesystem::path chromaBandsShader =
         root / "Engine/Modules/Rendering/Shaders/vhs_chroma_bands.frag";
     const std::filesystem::path graph =
-        root / "Assets/RenderPipelines/ForwardPlus.rendergraph";
+        root / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph";
 
     std::ifstream shaderStream(shader);
     ASSERT_TRUE(shaderStream.is_open()) << shader;
@@ -1065,6 +1071,10 @@ TEST(PostProcessFogGlowControls, RequiresFogAndResolvesSharedPyramid)
     settings.FogGlowOctaves = 8;
 
     EXPECT_FALSE(settings.IsFogGlowActive()) << "glow cannot become a scene-wide bloom without fog";
+    // The glow blooms the height fog's own light, which a volumetric fog alone does not give it.
+    settings.VolumetricFogIntensity = 1.0f;
+    settings.VolumetricFogDensity = 0.4f;
+    EXPECT_FALSE(settings.IsFogGlowActive()) << "the volumetric fog alone gives the glow no source";
     settings.HeightFogIntensity = 1.0f;
     settings.HeightFogDensity = 0.4f;
     settings.HeightFogDistanceFogEnabled = 1;
@@ -1117,7 +1127,7 @@ TEST(PostProcessFogGlowControls, ExtractsFogRadianceWithoutSceneSilhouettes)
         "Engine/Modules/Rendering/Shaders/fog_glow_fast.frag";
     const std::filesystem::path prefilterShader = root /
         "Engine/Modules/Rendering/Shaders/fog_glow_prefilter.frag";
-    const std::filesystem::path graph = root / "Assets/RenderPipelines/ForwardPlus.rendergraph";
+    const std::filesystem::path graph = root / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph";
 
     auto readText = [](const std::filesystem::path& path) {
         std::ifstream stream(path);
@@ -1129,32 +1139,38 @@ TEST(PostProcessFogGlowControls, ExtractsFogRadianceWithoutSceneSilhouettes)
     const std::string fastSource = readText(fastShader);
     const std::string prefilterSource = readText(prefilterShader);
     const std::string graphSource = readText(graph);
+    // The glow's source is the fog's own light, evaluated from the view depth with the term every
+    // surface took in its own shader, so no surface or silhouette seeds it and no copy of the scene
+    // before the fog exists.
     for (const std::string* source : {&fastSource, &prefilterSource})
     {
-        EXPECT_NE(source->find("uSceneSource"), std::string::npos);
-        EXPECT_NE(source->find("fogged.rgb - scene.rgb * transmittance"), std::string::npos);
+        EXPECT_NE(source->find("Includes/fog_glow_layer.glsl"), std::string::npos);
+        EXPECT_NE(source->find("GE_FogGlowLayer(uv)"), std::string::npos);
+        EXPECT_EQ(source->find("uSceneSource"), std::string::npos);
     }
     EXPECT_NE(fastSource.find("fogGlowAntiFlicker"), std::string::npos);
     EXPECT_NE(fastSource.find("Median3"), std::string::npos);
-    EXPECT_NE(graphSource.find("\"id\": \"FogGlowSceneSource\""), std::string::npos);
-    EXPECT_NE(graphSource.find("\"uSceneSource\": \"FogGlowSceneSource\""),
-              std::string::npos);
-    // The glow source taps the post-clouds chain output: VolumetricClouds when
-    // active, stitched through to AtmosphericCloudLayer when skipped.
-    EXPECT_NE(graphSource.find("\"inputs\": { \"uTex\": \"VolumetricClouds\" }"),
-              std::string::npos);
+    EXPECT_EQ(graphSource.find("FogGlowSceneSource"), std::string::npos);
+    EXPECT_EQ(graphSource.find("\"id\": \"HeightFog\""), std::string::npos)
+        << "no pass fogs the scene after the surfaces took their own fog";
 
+    // The glow reads the chain after the clouds, the volumetric fog composite and the late
+    // transparents, which draw into it after the composite.
     const size_t cloudPos = graphSource.find("\"id\": \"AtmosphericCloudLayer\"");
-    const size_t sourcePos = graphSource.find("\"id\": \"FogGlowSceneSource\"");
     const size_t volumetricFogPos = graphSource.find("\"id\": \"VolumetricFog\"");
-    const size_t heightFogPos = graphSource.find("\"id\": \"HeightFog\"");
+    const size_t latePos = graphSource.find("\"id\": \"LateTransparent\"");
+    const size_t glowPos = graphSource.find("\"id\": \"FogGlowFast\"");
     ASSERT_NE(cloudPos, std::string::npos);
-    ASSERT_NE(sourcePos, std::string::npos);
     ASSERT_NE(volumetricFogPos, std::string::npos);
-    ASSERT_NE(heightFogPos, std::string::npos);
-    EXPECT_LT(cloudPos, sourcePos);
-    EXPECT_LT(sourcePos, volumetricFogPos);
-    EXPECT_LT(volumetricFogPos, heightFogPos);
+    ASSERT_NE(latePos, std::string::npos);
+    ASSERT_NE(glowPos, std::string::npos);
+    EXPECT_LT(cloudPos, volumetricFogPos);
+    EXPECT_LT(volumetricFogPos, latePos);
+    EXPECT_LT(latePos, glowPos);
+    const std::string glowPass = graphSource.substr(glowPos, graphSource.find("\"id\":", glowPos + 6) - glowPos);
+    EXPECT_NE(glowPass.find("\"uFogged\": \"VolumetricClouds\""), std::string::npos);
+    EXPECT_NE(glowPass.find("\"uDepth\": \"View.DepthResolved\""), std::string::npos);
+    EXPECT_NE(glowPass.find("\"HeightFogParams\": \"HeightFogParams\""), std::string::npos);
 }
 
 // The SebLague/Clouds port: pins the ported density/lighting math, the MIT
@@ -1172,7 +1188,7 @@ TEST(PostProcessVolumetricClouds, PortsLagueMarchWithTemporalHistoryAndBakedNois
         "Engine/Modules/VolumetricClouds/Shaders/volumetric_clouds_shape_noise.comp";
     const std::filesystem::path upstream = root /
         "Engine/Modules/VolumetricClouds/ThirdParty/SebLague-Clouds/UPSTREAM.md";
-    const std::filesystem::path graph = root / "Assets/RenderPipelines/ForwardPlus.rendergraph";
+    const std::filesystem::path graph = root / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph";
 
     auto readText = [](const std::filesystem::path& path) {
         std::ifstream stream(path);
@@ -1203,7 +1219,10 @@ TEST(PostProcessVolumetricClouds, PortsLagueMarchWithTemporalHistoryAndBakedNois
     EXPECT_NE(resolveSource.find("minLumT"), std::string::npos);
 
     const std::string compositeSource = readText(compositeShader);
-    EXPECT_NE(compositeSource.find("scene.rgb * clamp(clouds.g, 0.0, 1.0) + clouds.r * sunColor"),
+    EXPECT_NE(compositeSource.find("float cloudTransmittance = clamp(clouds.g, 0.0, 1.0);"), std::string::npos);
+    EXPECT_NE(compositeSource.find("vec3 cloudRadiance = clouds.r * sunColor;"), std::string::npos);
+    // The cloud stands in front of what the pixel shows and takes the fog in front of that.
+    EXPECT_NE(compositeSource.find("(cloudRadiance * fogTransmittance + fogScattering * (1.0 - cloudTransmittance)) * GE_PreExposure()"),
               std::string::npos);
 
     const std::string shapeSource = readText(shapeBake);
@@ -1257,25 +1276,26 @@ TEST(PostProcessAtmosphericCloudControls, AuthoredColorOwnsHueAndOpacityControls
     EXPECT_EQ(source.find("coolLight"), std::string::npos);
     EXPECT_NE(source.find("cloudColor * max(cloudLighting, 0.0)"), std::string::npos);
     EXPECT_NE(source.find("clamp(pc.atmosOpacity, 0.0, 8.0)"), std::string::npos);
-    EXPECT_NE(source.find("scene.rgb * transmittance + scattering"), std::string::npos);
+    EXPECT_NE(source.find("vec3 rgb = scene.rgb * transmittance +"), std::string::npos);
+    EXPECT_NE(source.find("(scattering * fogTransmittance + fogScattering * (1.0 - transmittance)) * preExposure"),
+              std::string::npos);
     EXPECT_EQ(source.find("mix(scene.rgb, rgb"), std::string::npos)
         << "Beer-Lambert transmittance must not be alpha-composited a second time";
 }
 
-TEST(PostProcessTonemapControls, ExposesReferenceOperators)
+TEST(PostProcessTonemapControls, ExposesTheThreeLooks)
 {
-    using GameEngine::Components::TonemapMode;
-    EXPECT_EQ(static_cast<int32_t>(TonemapMode::GranTurismo7), 6);
-    EXPECT_EQ(static_cast<int32_t>(TonemapMode::ACES2), 7);
-    EXPECT_EQ(GameEngine::Components::kTonemapModeCount, 8);
-    // Display names carry the operator's published provenance, so the label is
-    // the pinned surface: the enumerator names stay bare (Neutral,
-    // GranTurismo7) and only what the inspector shows spells out the source.
-    EXPECT_STREQ(GameEngine::Components::kTonemapModeNames[4], "Khronos PBR Neutral");
-    EXPECT_STREQ(GameEngine::Components::kTonemapModeNames[6], "ICtCp Tonemapper (2025, GT7)");
-    EXPECT_STREQ(GameEngine::Components::kTonemapModeNames[7], "ACES 2");
-    EXPECT_TRUE(GameEngine::Components::IsValidTonemapModeValue(6));
-    EXPECT_TRUE(GameEngine::Components::IsValidTonemapModeValue(7));
+    using GameEngine::Components::Look;
+    EXPECT_EQ(static_cast<int32_t>(Look::Neutral), 0);
+    EXPECT_EQ(static_cast<int32_t>(Look::Filmic), 1);
+    EXPECT_EQ(static_cast<int32_t>(Look::Photographic), 2);
+    EXPECT_EQ(GameEngine::Components::kLookCount, 3);
+    // The names are the scene format and the inspector's labels: no label names a technique.
+    EXPECT_EQ(GameEngine::Components::LookName(Look::Neutral), "Neutral");
+    EXPECT_EQ(GameEngine::Components::LookName(Look::Filmic), "Filmic");
+    EXPECT_EQ(GameEngine::Components::LookName(Look::Photographic), "Photographic");
+    EXPECT_EQ(GameEngine::Rendering::Passes::kTonemapNoLookArm, GameEngine::Components::kLookCount)
+        << "the no-look debug arm sits past the looks, so no volume value can select it";
 
     const std::filesystem::path shaderRoot =
         std::filesystem::path(GE_RENDERER_REPO_ROOT) /
@@ -1288,25 +1308,18 @@ TEST(PostProcessTonemapControls, ExposesReferenceOperators)
     };
 
     const std::string tonemap = readText(shaderRoot / "tonemap.frag");
-    const std::string gt7 = readText(shaderRoot / "Includes/tonemap_gt7.glsl");
     const std::string aces2 = readText(shaderRoot / "Includes/tonemap_aces2.glsl");
     const std::string aces2Tables =
         readText(shaderRoot / "Includes/tonemap_aces2_tables.glsl");
 
-    EXPECT_NE(tonemap.find("case 6:  return TonemapGranTurismo7(hdr)"),
+    EXPECT_NE(tonemap.find("case kLookFilmic: return TonemapACES2(hdr, Aces2TargetOutputMax())"),
               std::string::npos);
-    EXPECT_NE(tonemap.find("case 7:  return TonemapACES2(hdr, Aces2TargetOutputMax())"),
-              std::string::npos);
-    // ACES 2 is peak-parameterised: it routes display-referred (clamped, never
-    // extended) so its tier ladder owns the headroom rendering.
-    EXPECT_NE(tonemap.find("if (pc.tonemapMode == 7)\n        return min(sdrTonemapped, vec3(outputMax))"),
-              std::string::npos);
-    // GT7 must remain the published 2025 ICtCp operator, not the older GT Sport
-    // curve commonly distributed online under the generic Gran Turismo name.
-    EXPECT_NE(gt7.find("GT7RgbToICtCp"), std::string::npos);
-    EXPECT_NE(gt7.find("sourceICtCp.yz * chromaScale"), std::string::npos);
-    EXPECT_NE(gt7.find("mix(skewedRgb, scaledRgb, 0.6)"), std::string::npos);
-    EXPECT_NE(gt7.find("Copyright (c) 2025 Polyphony Digital Inc."),
+    EXPECT_NE(tonemap.find("case 2:           return TonemapAgX(hdr)"), std::string::npos);
+    EXPECT_NE(tonemap.find("const int kLookFilmic = 1;"), std::string::npos);
+    EXPECT_NE(tonemap.find("const int kNoLookArm = 3;"), std::string::npos);
+    // Filmic (ACES 2) is peak-parameterised: it routes display-referred (clamped,
+    // never extended) so its tier ladder owns the headroom rendering.
+    EXPECT_NE(tonemap.find("if (pc.look == kLookFilmic)\n        return min(sdrTonemapped, vec3(outputMax))"),
               std::string::npos);
 
     // ACES 2's reference transform includes CAM/JMh tone scaling, chroma
@@ -1711,9 +1724,11 @@ using GameEngine::uint64;
     X(HalationTintR) \
     X(HalationTintG) \
     X(HalationTintB) \
-    X(TonemapMode) \
-    X(DitherMode) \
-    X(IctcpChromaCompression) \
+    X(Look) \
+    X(NightTintStrength) \
+    X(NightTintR) \
+    X(NightTintG) \
+    X(NightTintB) \
     X(ChromaticAberrationIntensity) \
     X(ChromaticAberrationStartOffset) \
     X(ChromaticAberrationSaturation) \
@@ -1773,13 +1788,10 @@ using GameEngine::uint64;
     X(ColorFilterB) \
     X(ColorFilterIntensity) \
     X(ColorFilterBlendMode) \
-    X(ColorFilterStackOrder) \
     X(CasStrength) \
     X(CasStackOrder) \
     X(LutIntensity) \
-    X(LutStackOrder) \
-    X(LutInputEncoding) \
-    X(LutTextureFormat) \
+    X(LutStage) \
     X(LutAssetGuidWords) \
     X(VignetteIntensity) \
     X(VignetteSmoothness) \
@@ -1922,6 +1934,7 @@ using GameEngine::uint64;
     X(HeightFogUseTimeOfDay) \
     X(HeightFogSkyHorizonOffset) \
     X(HeightFogSkyBottomStrength) \
+    X(HeightFogColorMode) \
     X(ColorGradeShadowsR) \
     X(ColorGradeShadowsG) \
     X(ColorGradeShadowsB) \
@@ -2094,10 +2107,16 @@ using GameEngine::uint64;
     X(ExposureCompensationEv) \
     X(ExposureClampMinEv) \
     X(ExposureClampMaxEv) \
-    X(BloomOctaveBlend)
+    X(BloomOctaveBlend) \
+    X(ViewOutput) \
+    X(AutoExposureMeter) \
+    X(AutoExposureCompensation) \
+    X(ExposureClampMinWeight) \
+    X(ExposureClampMaxWeight)
 
-// Keep this inventory order stable when extending it: randomized input values
-// depend on ordinal, so appending fields preserves existing per-field goldens.
+// The inventory follows the struct's declaration order. The randomized input values
+// draw from one stream in that order, so adding a member renumbers the draws of the
+// members after it: regenerate the fixture with GE_PP_BLEND_GOLDEN_REGEN=1.
 #define PP_BLEND_LOCK_FIELDS(X) \
     PP_BLEND_LOCK_TOLERANCE_FIELDS(X) \
     PP_BLEND_LOCK_EXACT_FIELDS(X)
@@ -2107,7 +2126,7 @@ constexpr std::size_t kFieldCount = 0 PP_BLEND_LOCK_FIELDS(PP_LOCK_COUNT);
 constexpr std::size_t kExactFieldCount = 0 PP_BLEND_LOCK_EXACT_FIELDS(PP_LOCK_COUNT);
 constexpr std::size_t kToleranceFieldCount = 0 PP_BLEND_LOCK_TOLERANCE_FIELDS(PP_LOCK_COUNT);
 #undef PP_LOCK_COUNT
-static_assert(kFieldCount == 421, "PostProcessSettings member count moved: regenerate PP_BLEND_LOCK_FIELDS");
+static_assert(kFieldCount == 426, "PostProcessSettings member count moved: regenerate PP_BLEND_LOCK_FIELDS");
 static_assert(kToleranceFieldCount == 1, "the ULP-pinned set is Exposure alone");
 static_assert(kExactFieldCount + kToleranceFieldCount == kFieldCount,
               "the lock partition must cover every member exactly once");
@@ -2129,17 +2148,17 @@ constexpr std::size_t kPadBeforeBloomDirtGuid =
     offsetof(PostProcessSettings, BloomLensDirtScatter) - sizeof(float32);
 constexpr std::size_t kPadBeforeLutGuid =
     offsetof(PostProcessSettings, LutAssetGuidWords) -
-    offsetof(PostProcessSettings, LutTextureFormat) - sizeof(int32);
+    offsetof(PostProcessSettings, LutStage) - sizeof(int32);
 constexpr std::size_t kTailPad = sizeof(PostProcessSettings) -
-    offsetof(PostProcessSettings, ExposureClampMaxEv) - sizeof(float32);
+    offsetof(PostProcessSettings, ExposureClampMaxWeight) - sizeof(float32);
 // The pads are pinned to literals: a derived pad would silently absorb a NEW
 // member appended after the anchor it is measured from.
 static_assert(kPadAfterAutoExposureActive == 3, "layout moved: re-derive the pad pins");
 static_assert(kPadBeforeBloomDirtGuid == 0, "layout moved: re-derive the pad pins");
 static_assert(kPadBeforeLutGuid == 0, "layout moved: re-derive the pad pins");
-// The current layout ends 4 bytes short of its 8-byte boundary (the 8-aligned GUID
-// word arrays set the struct's alignment), so the tail pad is 4. Pinning it still
-// ensures an appended member cannot be silently absorbed by an ABI alignment hole.
+// The 8-aligned GUID word arrays set the struct's alignment, and the members end
+// 4 bytes short of that boundary, so the tail pad is 4. Pinning it ensures an
+// appended member cannot be silently absorbed by the ABI alignment hole.
 static_assert(kTailPad == 4, "layout moved: extend PP_BLEND_LOCK_FIELDS and re-derive the pad pins");
 static_assert(kFieldBytes + kPadAfterAutoExposureActive + kPadBeforeBloomDirtGuid +
                   kPadBeforeLutGuid + kTailPad == sizeof(PostProcessSettings),
@@ -2181,34 +2200,30 @@ inline void FillValue(float32& v, LockRng& r)
 }
 inline void FillValue(int32& v, LockRng& r) { v = static_cast<int32>(r.Next() % 9u) - 4; }
 inline void FillValue(bool& v, LockRng& r) { v = (r.Next() & 1u) != 0u; }
+inline void FillValue(PostProcessViewOutput& v, LockRng& r)
+{
+    v = static_cast<PostProcessViewOutput>(r.Next() & 1u);
+}
 inline void FillValue(uint64 (&v)[2], LockRng& r)
 {
     v[0] = (static_cast<uint64>(r.Next()) << 32) | r.Next();
     v[1] = (static_cast<uint64>(r.Next()) << 32) | r.Next();
 }
-
-template <class T>
-void FillLockMember(const char* name, T& value, LockRng& sequence, uint32 seed)
+inline void FillValue(GameEngine::Engine::Renderer::ExposureCompensationSamples& v, LockRng& r)
 {
-    // New fields get an independent stream so extending the lock does not
-    // renumber every established randomized value in the committed fixture.
-    if constexpr (std::is_same_v<T, float32>)
-    {
-        if (std::strcmp(name, "IctcpChromaCompression") == 0)
-        {
-            LockRng independent(seed ^ 0x49435443u); // "ICTC"
-            FillValue(value, independent);
-            return;
-        }
-    }
-    FillValue(value, sequence);
+    FillValue(v.StartEv, r);
+    FillValue(v.EndEv, r);
+    for (float32& stops : v.Stops)
+        FillValue(stops, r);
 }
 
+// Every locked member draws from one stream in declaration order, so adding or removing a member
+// renumbers the values of the members after it: regenerate the fixture with GE_PP_BLEND_GOLDEN_REGEN=1.
 PostProcessSettings MakeRandomSettings(uint32 seed)
 {
     PostProcessSettings s{};
     LockRng r(seed);
-#define PP_LOCK_FILL(M) FillLockMember(#M, s.M, r, seed);
+#define PP_LOCK_FILL(M) FillValue(s.M, r);
     PP_BLEND_LOCK_FIELDS(PP_LOCK_FILL)
 #undef PP_LOCK_FILL
     return s;
@@ -2451,6 +2466,7 @@ void RefCopyHeightFogFields(PostProcessSettings& dst, const PostProcessSettings&
     dst.HeightFogUseTimeOfDay = src.HeightFogUseTimeOfDay;
     dst.HeightFogSkyHorizonOffset = src.HeightFogSkyHorizonOffset;
     dst.HeightFogSkyBottomStrength = src.HeightFogSkyBottomStrength;
+    dst.HeightFogColorMode = src.HeightFogColorMode;
 }
 
 void RefCopyAtmosphericCloudFields(PostProcessSettings& dst, const PostProcessSettings& src)
@@ -2607,6 +2623,7 @@ PostProcessSettings BlendReference(
     out.AutoExposureSpeedUp   = lerp(a.AutoExposureSpeedUp, b.AutoExposureSpeedUp, w);
     out.AutoExposureSpeedDown = lerp(a.AutoExposureSpeedDown, b.AutoExposureSpeedDown, w);
     out.AutoExposureBiasEv    = lerp(a.AutoExposureBiasEv, b.AutoExposureBiasEv, w);
+    out.AutoExposureMeter     = (w >= 0.5f) ? b.AutoExposureMeter : a.AutoExposureMeter;
     // Volume exposure modifiers: EV-space lerps fade a volume's compensation/clamps in and
     // out with its blend weight (the no-op clamp endpoints are the identity). A fading clamp
     // engages nonlinearly — it only bites once the lerped value crosses the camera envelope —
@@ -2614,11 +2631,15 @@ PostProcessSettings BlendReference(
     out.ExposureCompensationEv = lerp(a.ExposureCompensationEv, b.ExposureCompensationEv, w);
     out.ExposureClampMinEv     = lerp(a.ExposureClampMinEv, b.ExposureClampMinEv, w);
     out.ExposureClampMaxEv     = lerp(a.ExposureClampMaxEv, b.ExposureClampMaxEv, w);
+    out.ExposureClampMinWeight = lerp(a.ExposureClampMinWeight, b.ExposureClampMinWeight, w);
+    out.ExposureClampMaxWeight = lerp(a.ExposureClampMaxWeight, b.ExposureClampMaxWeight, w);
     // Discrete settings: use B when weight >= 0.5 (highest priority wins)
     out.AutoExposureActive = (w >= 0.5f) ? b.AutoExposureActive : a.AutoExposureActive;
-    out.TonemapMode    = (w >= 0.5f) ? b.TonemapMode : a.TonemapMode;
-    out.DitherMode     = (w >= 0.5f) ? b.DitherMode : a.DitherMode;
-    out.IctcpChromaCompression = lerp(a.IctcpChromaCompression, b.IctcpChromaCompression, w);
+    out.Look           = (w >= 0.5f) ? b.Look : a.Look;
+    out.NightTintStrength = lerp(a.NightTintStrength, b.NightTintStrength, w);
+    out.NightTintR = lerp(a.NightTintR, b.NightTintR, w);
+    out.NightTintG = lerp(a.NightTintG, b.NightTintG, w);
+    out.NightTintB = lerp(a.NightTintB, b.NightTintB, w);
     out.ChromaticAberrationIntensity = lerp(a.ChromaticAberrationIntensity, b.ChromaticAberrationIntensity, w);
     out.ChromaticAberrationStartOffset = lerp(a.ChromaticAberrationStartOffset, b.ChromaticAberrationStartOffset, w);
     out.ChromaticAberrationSaturation = lerp(a.ChromaticAberrationSaturation, b.ChromaticAberrationSaturation, w);
@@ -2675,13 +2696,10 @@ PostProcessSettings BlendReference(
     out.ColorFilterB         = lerp(a.ColorFilterB,         b.ColorFilterB,         w);
     out.ColorFilterIntensity = lerp(a.ColorFilterIntensity, b.ColorFilterIntensity, w);
     out.ColorFilterBlendMode = (w >= 0.5f) ? b.ColorFilterBlendMode : a.ColorFilterBlendMode;
-    out.ColorFilterStackOrder = (w >= 0.5f) ? b.ColorFilterStackOrder : a.ColorFilterStackOrder;
     out.CasStrength          = lerp(a.CasStrength,          b.CasStrength,          w);
     out.CasStackOrder        = (w >= 0.5f) ? b.CasStackOrder : a.CasStackOrder;
     out.LutIntensity         = lerp(a.LutIntensity,         b.LutIntensity,         w);
-    out.LutStackOrder        = (w >= 0.5f) ? b.LutStackOrder : a.LutStackOrder;
-    out.LutInputEncoding     = (w >= 0.5f) ? b.LutInputEncoding : a.LutInputEncoding;
-    out.LutTextureFormat     = (w >= 0.5f) ? b.LutTextureFormat : a.LutTextureFormat;
+    out.LutStage     = (w >= 0.5f) ? b.LutStage : a.LutStage;
     out.LutAssetGuidWords[0] = 0;
     out.LutAssetGuidWords[1] = 0;
     out.VignetteIntensity  = lerp(a.VignetteIntensity,  b.VignetteIntensity,  w);
@@ -2846,6 +2864,7 @@ PostProcessSettings BlendReference(
     out.HeightFogUseTimeOfDay = (w >= 0.5f) ? b.HeightFogUseTimeOfDay : a.HeightFogUseTimeOfDay;
     out.HeightFogSkyHorizonOffset = lerp(a.HeightFogSkyHorizonOffset, b.HeightFogSkyHorizonOffset, w);
     out.HeightFogSkyBottomStrength = lerp(a.HeightFogSkyBottomStrength, b.HeightFogSkyBottomStrength, w);
+    out.HeightFogColorMode = (w >= 0.5f) ? b.HeightFogColorMode : a.HeightFogColorMode;
     out.VolumetricFogIntensity         = lerp(a.VolumetricFogIntensity, b.VolumetricFogIntensity, w);
     out.VolumetricFogIsGlobal          = (w >= 0.5f) ? b.VolumetricFogIsGlobal : a.VolumetricFogIsGlobal;
     out.VolumetricFogVolumeShape       = (w >= 0.5f) ? b.VolumetricFogVolumeShape : a.VolumetricFogVolumeShape;
@@ -3448,11 +3467,26 @@ bool BlendsExactly(bool out, bool x, bool y, float, bool dflt)
     return out == x || out == y || out == dflt;
 }
 
+bool BlendsExactly(PostProcessViewOutput out, PostProcessViewOutput x, PostProcessViewOutput y, float,
+                   PostProcessViewOutput dflt)
+{
+    return out == x || out == y || out == dflt;
+}
+
 bool BlendsExactly(const uint64 (&out)[2], const uint64 (&x)[2], const uint64 (&y)[2], float,
                    const uint64 (&dflt)[2])
 {
     return BitsEqual(out, x, sizeof(out)) || BitsEqual(out, y, sizeof(out)) ||
            BitsEqual(out, dflt, sizeof(out));
+}
+
+bool BlendsExactly(const GameEngine::Engine::Renderer::ExposureCompensationSamples& out,
+                   const GameEngine::Engine::Renderer::ExposureCompensationSamples& x,
+                   const GameEngine::Engine::Renderer::ExposureCompensationSamples& y, float,
+                   const GameEngine::Engine::Renderer::ExposureCompensationSamples& dflt)
+{
+    return BitsEqual(&out, &x, sizeof(out)) || BitsEqual(&out, &y, sizeof(out)) ||
+           BitsEqual(&out, &dflt, sizeof(out));
 }
 
 } // namespace
@@ -3633,6 +3667,80 @@ TEST(PostProcessEffectRegistry, LutUsesConciseDisplayName)
     const auto* descriptor = FindEffectDescriptor("CubeLutEffect");
     ASSERT_NE(descriptor, nullptr);
     EXPECT_EQ(descriptor->DisplayName, "LUT");
+}
+
+// A LUT effect with no asset picked grades nothing: the extraction pushes no intensity, whatever the
+// effect's own Intensity says; with an asset the intensity passes through.
+TEST(PostProcessExtractHooks, CubeLutWithoutAnAssetPushesNoIntensity)
+{
+    GameEngine::ECS::World world;
+    const GameEngine::ECS::EntityHandle e = world.CreateEntity();
+    GameEngine::Components::CubeLutEffect lut{};
+    lut.Enabled = true;
+    lut.Intensity = 0.8f;
+    world.AddComponentImmediate(e, lut);
+    const auto none = ExtractAllEffects(world, e);
+    EXPECT_FALSE(none.HasCubeLutAsset);
+    EXPECT_FLOAT_EQ(none.Settings.LutIntensity, 0.0f);
+
+    lut.LutAssetGuid.Set(GameEngine::GUID("33333333-3333-3333-3333-333333333333"));
+    world.AddComponentImmediate(e, lut);
+    const auto picked = ExtractAllEffects(world, e);
+    EXPECT_TRUE(picked.HasCubeLutAsset);
+    EXPECT_FLOAT_EQ(picked.Settings.LutIntensity, 0.8f);
+}
+
+// The encoding a pass's LUT lookup uses is the asset's, carried by the uploaded binding: the volume's
+// settings no longer own lutInputEncoding, and the node's LUT writer pushes the binding's value.
+TEST(PostProcessExtractHooks, ThePassPushesTheLutAssetsEncoding)
+{
+    namespace R = GameEngine::Rendering;
+    R::ShaderMeta meta{};
+    R::PushConstantRangeMeta range{};
+    range.Name = "PC";
+    range.Size = 4;
+    R::Member member{};
+    member.Name = "lutInputEncoding";
+    member.Offset = 0;
+    member.Size = 4;
+    range.Block.Size = 4;
+    range.Block.Members.push_back(member);
+    meta.PushConstants.push_back(range);
+
+    R::NamedPushConstantWriter writer(meta, "PC");
+    ASSERT_TRUE(writer.IsValid());
+    GameEngine::Engine::Renderer::PostProcessSettings settings{};
+    EXPECT_FALSE(settings.TryWriteField("lutInputEncoding", writer)) << "the volume does not choose the encoding";
+
+    R::CubeLutGpuBindingState binding{};
+    binding.InputEncoding = static_cast<int32_t>(R::CubeLutInputEncoding::ACEScct);
+    ASSERT_TRUE(GameEngine::Engine::Renderer::TextureService::TryWriteCubeLutPushMember("lutInputEncoding", binding, writer));
+    int32_t pushed = -1;
+    std::memcpy(&pushed, writer.GetBuffer().data(), sizeof(pushed));
+    EXPECT_EQ(pushed, static_cast<int32_t>(R::CubeLutInputEncoding::ACEScct));
+}
+
+// A LUT at the Grade stage is sampled by the HDRColorFx pass, so it turns that pass's gate on even on a
+// volume with no Color Grade effect; at Finish it leaves the gate alone (the Tonemap pass samples it).
+TEST(PostProcessExtractHooks, AGradeLutTurnsTheHdrColorFxPassOn)
+{
+    GameEngine::ECS::World world;
+    const GameEngine::ECS::EntityHandle e = world.CreateEntity();
+    GameEngine::Components::CubeLutEffect lut{};
+    lut.LutAssetGuid.Set(GameEngine::GUID("33333333-3333-3333-3333-333333333333"));
+    world.AddComponentImmediate(e, lut);
+    auto finish = ExtractAllEffects(world, e);
+    const auto& gd = finish.CubeLutAssetGuid.GetData();
+    std::memcpy(finish.Settings.LutAssetGuidWords, gd.data(), sizeof(finish.Settings.LutAssetGuidWords));
+    EXPECT_TRUE(finish.Settings.IsLutActive());
+    EXPECT_FALSE(finish.Settings.IsHdrColorFxActive()) << "a Finish LUT runs in the Tonemap pass";
+
+    lut.Stage = GameEngine::Components::CubeLutStage::Grade;
+    world.AddComponentImmediate(e, lut);
+    auto grade = ExtractAllEffects(world, e);
+    std::memcpy(grade.Settings.LutAssetGuidWords, gd.data(), sizeof(grade.Settings.LutAssetGuidWords));
+    EXPECT_EQ(grade.Settings.LutStage, static_cast<int32>(GameEngine::Components::CubeLutStage::Grade));
+    EXPECT_TRUE(grade.Settings.IsHdrColorFxActive()) << "a Grade LUT runs in the HDRColorFx pass";
 }
 
 // Adding an effect is one registration: every registered descriptor must carry
@@ -3991,8 +4099,10 @@ TEST(PostProcessExtractHooks, ExposureAdjustmentRespectsClampFlags)
     auto out = ExtractAllEffects(world, e);
     EXPECT_FLOAT_EQ(out.Settings.ExposureCompensationEv, 1.5f);
     EXPECT_FLOAT_EQ(out.Settings.ExposureClampMinEv, 6.0f);
+    EXPECT_FLOAT_EQ(out.Settings.ExposureClampMinWeight, 1.0f);
     EXPECT_FLOAT_EQ(out.Settings.ExposureClampMaxEv,
                     GameEngine::Engine::Renderer::kExposureClampNoOpMaxEv);
+    EXPECT_FLOAT_EQ(out.Settings.ExposureClampMaxWeight, 0.0f);
 }
 
 // The per-volume neutralize baselines fog/cloud struct defaults for volumes

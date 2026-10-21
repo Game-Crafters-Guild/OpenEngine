@@ -113,8 +113,9 @@
     </UIElement>
     <LayoutPresetToolbar id="LayoutButtonContainer" class="bottom-toolbar-center" />
     <UIElement class="bottom-toolbar-side bottom-toolbar-side-right">
+      <UIElement id="StatusBarItems" class="bottom-toolbar-status-items" />
       <Label id="VkValidationStatus" class="bottom-toolbar-status vk-validation-badge" />
-      <Label id="NativeScriptStatus" class="bottom-toolbar-status" />
+      <Label id="ScriptStatus" class="bottom-toolbar-status" />
     </UIElement>
   </UIElement>
 </UIElement>

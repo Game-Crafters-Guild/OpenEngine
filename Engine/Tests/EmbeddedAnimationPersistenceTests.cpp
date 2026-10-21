@@ -346,7 +346,9 @@ TEST_F(EmbeddedAnimationPersistence, NamedAndGuidCommandsClearPreviousSource)
         EXPECT_TRUE(a.clipSourceModelGuid.IsNull());
         EXPECT_EQ(a.clipSourceAnimationIndex, UINT32_MAX);
         if (command == 0 || command == 2 || command == 4)
+        {
             EXPECT_TRUE(a.clipGuid.IsNull());
+        }
     }
 }
 

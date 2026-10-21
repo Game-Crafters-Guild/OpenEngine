@@ -309,7 +309,9 @@ TEST(CascadeReceiverFit, Cascade0StartsAtTheNearestMeasuredReceiver)
     for (const Receiver& r : receivers)
     {
         if (r.ViewDepth < fd.SplitDistances[0])
+        {
             EXPECT_LE(MaxLightNdc(fd, 0, r.Position), 1.0f) << "receiver at depth " << r.ViewDepth;
+        }
     }
 }
 

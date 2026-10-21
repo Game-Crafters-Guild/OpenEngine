@@ -288,9 +288,9 @@ function(ge_stage_runtime_dependencies target_name)
 
   # All platforms use the same scan-based staging: `file(GET_RUNTIME_DEPENDENCIES)`
   # reads the binary's import table and locates each needed library in the search
-  # dirs. This catches every transitive vcpkg DLL — including those exposed via
-  # find_package modules that don't create imported SHARED targets (e.g. FindFFMPEG,
-  # parts of FindVulkan in older SDKs) which CMake's `TARGET_RUNTIME_DLLS` would
+  # dirs. This catches every transitive vcpkg DLL — including those of libraries
+  # linked without an imported SHARED target (e.g. the FFmpeg libraries, parts of
+  # FindVulkan in older SDKs), which CMake's `TARGET_RUNTIME_DLLS` would
   # otherwise miss.
   #
   # vcpkg's own applocal.ps1 post-build step is gated off project-wide via

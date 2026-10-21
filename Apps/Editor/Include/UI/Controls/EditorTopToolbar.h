@@ -39,7 +39,7 @@ class EditorTopToolbar final : public UIElement
     {
         std::string panelId;
         std::string title;
-        std::string iconClass;
+        std::string iconPath; ///< Resolved image file, or empty for no icon.
     };
 
     /// Callbacks invoked when toolbar buttons are clicked. Each is optional.
@@ -109,6 +109,10 @@ class EditorTopToolbar final : public UIElement
     /// Highlight or de-highlight the fullscreen toggle button.
     void SetFullscreenActive(bool active);
 
+    /// Show the audio state on the audio toggle right of Play and name the muted state in
+    /// the Play button's tooltip while audio is not enabled.
+    void SetAudioEnabled(bool enabled);
+
     /// Highlight or de-highlight the movie recording toolbar button.
     void SetRecordActive(bool active);
 
@@ -132,6 +136,7 @@ class EditorTopToolbar final : public UIElement
     Button* m_SaveButton = nullptr;
     Button* m_RecordButton = nullptr;
     Button* m_PlayButton = nullptr;
+    Button* m_AudioToggleButton = nullptr;
     Button* m_PauseButton = nullptr;
     Button* m_StopButton = nullptr;
     std::unique_ptr<INativeContextMenu> m_PanelMenu;

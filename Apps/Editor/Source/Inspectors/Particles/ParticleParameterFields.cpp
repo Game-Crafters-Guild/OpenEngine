@@ -191,21 +191,19 @@ void AddEnumField(UIElement* parent, const FieldBinding& binding, uint32 initial
 void AddFlagsField(UIElement* parent, const FieldBinding& binding, uint32 initial)
 {
     const auto& field = *binding.Parameter.Presentation;
+    std::vector<MaskOption> options;
+    options.reserve(field.Options.size());
     for (const auto& option : field.Options)
+        options.push_back({option.Value, std::string(option.DisplayName)});
+    MaskField* flags = InspectorUI::AddMaskRow(parent, binding.Label, options, initial, Tooltip(field).c_str());
+    flags->SetOnBitsChanged([binding](uint32 bits, bool on)
     {
-        const uint32 bit = option.Value;
-        InspectorDrag::AddToggleRow(
-            parent, Joined(binding.Label, option.DisplayName), (initial & bit) != 0,
-            [binding, bit](bool on)
-            {
-                const auto parameter = binding.Parameter;
-                CommitParameter(binding, [parameter, bit, on](void* parameters)
-                                {
-                    const uint32 bits = ReadParticleParameterInteger(parameters, parameter);
-                    WriteParticleParameterInteger(parameters, parameter, on ? bits | bit : bits & ~bit); });
-            },
-            Tooltip(field).c_str());
-    }
+        const auto parameter = binding.Parameter;
+        CommitParameter(binding, [parameter, bits, on](void* parameters)
+                        {
+            const uint32 value = ReadParticleParameterInteger(parameters, parameter);
+            WriteParticleParameterInteger(parameters, parameter, on ? value | bits : value & ~bits); });
+    });
 }
 
 void AddPhaseField(UIElement* parent, const FieldBinding& binding, const StackDocument& document, uint32 initial)

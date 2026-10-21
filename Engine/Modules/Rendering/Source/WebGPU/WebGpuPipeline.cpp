@@ -6,6 +6,7 @@
 #include "WebGpuUnsupported.h"
 
 #include "Rendering/Core/PipelineTypes.h"
+#include "Rendering/Geometry/VertexLayoutBuilder.h"
 
 #include "Logger/Logger.h"
 
@@ -15,8 +16,14 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <format>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace GameEngine::Rendering
 {
@@ -25,6 +32,105 @@ namespace
 {
 // SPIR-V and WGSL both name the engine's entry point "main".
 constexpr const char* kShaderEntryPoint = "main";
+
+// The workgroup size a compute shader declares: OpExecutionMode LocalSize in SPIR-V, or the
+// literal @workgroup_size of WGSL (an omitted dimension is 1). Nullopt when the size is not
+// a literal (a specialization constant or a WGSL override) or the blob is neither.
+std::optional<std::array<uint32_t, 3>> DeclaredWorkgroupSize(const std::vector<uint8_t>& bytes)
+{
+    constexpr uint32_t kSpirvMagic = 0x07230203u;
+    constexpr uint32_t kSpirvHeaderWords = 5;
+    constexpr uint32_t kOpExecutionMode = 16;
+    constexpr uint32_t kExecutionModeLocalSize = 17;
+    uint32_t firstWord = 0;
+    if (bytes.size() >= sizeof(uint32_t))
+    {
+        std::memcpy(&firstWord, bytes.data(), sizeof(uint32_t));
+    }
+    if (firstWord == kSpirvMagic && bytes.size() % sizeof(uint32_t) == 0)
+    {
+        std::vector<uint32_t> words(bytes.size() / sizeof(uint32_t));
+        std::memcpy(words.data(), bytes.data(), bytes.size());
+        for (size_t at = kSpirvHeaderWords; at < words.size();)
+        {
+            const uint32_t wordCount = words[at] >> 16;
+            const uint32_t opcode = words[at] & 0xFFFFu;
+            if (wordCount == 0 || at + wordCount > words.size())
+            {
+                return std::nullopt;
+            }
+            if (opcode == kOpExecutionMode && wordCount == 6 && words[at + 2] == kExecutionModeLocalSize)
+            {
+                return std::array<uint32_t, 3>{words[at + 3], words[at + 4], words[at + 5]};
+            }
+            at += wordCount;
+        }
+        return std::nullopt;
+    }
+
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const size_t attribute = text.find("@workgroup_size(");
+    if (attribute == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    std::array<uint32_t, 3> size{1u, 1u, 1u};
+    size_t at = attribute + std::string_view("@workgroup_size(").size();
+    for (size_t dimension = 0; dimension < size.size(); ++dimension)
+    {
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at])))
+        {
+            ++at;
+        }
+        if (at >= text.size() || !std::isdigit(static_cast<unsigned char>(text[at])))
+        {
+            return std::nullopt;
+        }
+        uint32_t value = 0;
+        while (at < text.size() && std::isdigit(static_cast<unsigned char>(text[at])))
+        {
+            value = value * 10u + static_cast<uint32_t>(text[at] - '0');
+            ++at;
+        }
+        size[dimension] = value;
+        if (at < text.size() && (text[at] == 'u' || text[at] == 'i'))
+        {
+            ++at;
+        }
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at])))
+        {
+            ++at;
+        }
+        if (at < text.size() && text[at] == ')')
+        {
+            return size;
+        }
+        if (at >= text.size() || text[at] != ',')
+        {
+            return std::nullopt;
+        }
+        ++at;
+    }
+    return std::nullopt;
+}
+
+// Why a device with `limits` cannot run a workgroup of `size`; empty when it can.
+std::string WorkgroupRefusal(const std::array<uint32_t, 3>& size, const WGPULimits& limits)
+{
+    const uint64_t invocations = uint64_t{size[0]} * size[1] * size[2];
+    if (invocations <= limits.maxComputeInvocationsPerWorkgroup && size[0] <= limits.maxComputeWorkgroupSizeX &&
+        size[1] <= limits.maxComputeWorkgroupSizeY && size[2] <= limits.maxComputeWorkgroupSizeZ)
+    {
+        return {};
+    }
+    return std::format("its workgroup is {}x{}x{} ({} invocations) and this device allows {} invocations per "
+                       "workgroup, at most {}x{}x{}; package the kernel at a workgroup of at most 256 "
+                       "invocations, the WebGPU default a phone grants, and list it in the ComputeShader "
+                       "node's shaderPkgFallbacks",
+                       size[0], size[1], size[2], invocations, limits.maxComputeInvocationsPerWorkgroup,
+                       limits.maxComputeWorkgroupSizeX, limits.maxComputeWorkgroupSizeY,
+                       limits.maxComputeWorkgroupSizeZ);
+}
 
 // Distinguishes the depth-write-disabled twin in Dawn's validation messages.
 constexpr const char* kDepthReadOnlyPipelineSuffix = ".DepthReadOnly";
@@ -49,6 +155,32 @@ uint32_t PushConstantBlockBytes(const PushConstantRange& single,
         bytes = std::max(bytes, aligned);
     }
     return bytes;
+}
+
+// Why a WebGPU device that binds `maxVertexBuffers` vertex buffers cannot draw
+// with `gd`'s vertex layout, naming its streams; empty when it can. Each engine
+// vertex binding the layout reads is one WebGPU vertex buffer.
+std::string VertexLayoutRefusal(const GraphicsPipelineDesc& gd, uint32_t maxVertexBuffers)
+{
+    std::string streams;
+    for (const VertexInputBinding& binding : gd.VertexBindings)
+    {
+        if (binding.binding >= VertexBinding::Count)
+        {
+            return std::format("it reads vertex binding {}, which is not an engine vertex binding (0 to {})",
+                               binding.binding, VertexBinding::Count - 1);
+        }
+        streams += streams.empty() ? "" : ", ";
+        streams += VertexBindingName(binding.binding);
+    }
+    if (gd.VertexBindings.size() <= maxVertexBuffers)
+    {
+        return {};
+    }
+    return std::format("its mesh has {} vertex streams ({}) and this device binds at most {} vertex buffers; "
+                       "remove the UV sets or the second skin set its materials do not read from the source "
+                       "file and reimport it",
+                       gd.VertexBindings.size(), streams, maxVertexBuffers);
 }
 
 WGPUBufferBindingType ResolveBufferBindingType(DescriptorType type, uint32_t engineStageMask,
@@ -151,21 +283,23 @@ WGPUTextureSampleType SampleTypeFromBinding(const DescriptorBinding& binding)
     // Float (filterable) sample type on a multisampled layout entry.
     if (binding.imageMultisample)
         return WGPUTextureSampleType_UnfilterableFloat;
-    // A separate sampled image that reflection saw no stage filter is read with
-    // textureLoad only, on any stage. UnfilterableFloat accepts every float
+    // A sampled image that reflection saw no stage filter, separate or combined, is read
+    // with textureLoad only, on any stage. UnfilterableFloat accepts every float
     // format Float does and depth32float besides, which a second, raw-depth
-    // binding of a shadow map needs (shadow_sampling.glsl's ge_shadowMapRaw).
-    if (binding.type == DescriptorType::Texture && binding.imageUsageReflected &&
-        !binding.imageFilterableFloat)
+    // binding of a shadow map needs (shadow_sampling.glsl's ge_shadowMapRaw), and so
+    // does a texelFetch of a single-sample depth attachment (sun_glare.vert's probe).
+    if ((binding.type == DescriptorType::Texture ||
+         binding.type == DescriptorType::CombinedImageSampler) &&
+        binding.imageUsageReflected && !binding.imageFilterableFloat)
         return WGPUTextureSampleType_UnfilterableFloat;
     // Reflection records actual usage: imageFilterableFloat is true exactly
     // when some stage samples this binding through a filtering-capable op
     // (ImageInfo.Filtered from the SPIR-V walk). For compute the bit is
     // authoritative — a texelFetch-only binding stays UnfilterableFloat,
-    // which also accepts depth/R32F views that Float would reject. Graphics
-    // stages keep the permissive Float default when the bit is unset:
-    // hand-synthesized layouts predate the usage walk and say nothing, and
-    // Float matches their historical behavior.
+    // which also accepts depth/R32F views that Float would reject. A graphics
+    // binding with no reflected usage (a hand-synthesized layout that predates
+    // the usage walk and says nothing) keeps the permissive Float default,
+    // which matches its historical behavior.
     constexpr uint32_t kComputeStageBit = 0x00000020; // VK_SHADER_STAGE_COMPUTE_BIT
     if (binding.shaderStages == kComputeStageBit && !binding.imageFilterableFloat)
         return WGPUTextureSampleType_UnfilterableFloat;
@@ -529,6 +663,15 @@ PipelineHandle WebGpuDevice::CreateConcreteGraphicsPipeline(const GraphicsPipeli
         Logger::Log::Error("WebGpuDevice: graphics pipeline '{}' has no vertex shader", gd.DebugName);
         return INVALID_PIPELINE_HANDLE;
     }
+    const std::string vertexLayoutRefusal = VertexLayoutRefusal(gd, m_DeviceLimits.maxVertexBuffers);
+    if (!vertexLayoutRefusal.empty())
+    {
+        const std::string failure =
+            std::format("graphics pipeline '{}' is refused: {}", gd.DebugName, vertexLayoutRefusal);
+        Logger::Log::Error("WebGpuDevice: {}", failure);
+        SetLastGraphicsPipelineFailure(failure);
+        return INVALID_PIPELINE_HANDLE;
+    }
 
     WGPUShaderModule vertexModule = CreateShaderModule(*gd.VertexShader, gd.DebugName.c_str());
     if (vertexModule == nullptr)
@@ -758,6 +901,27 @@ PipelineHandle WebGpuDevice::CreateConcreteComputePipeline(const ComputePipeline
     if (m_Device == nullptr || !cd.ComputeShader || cd.ComputeShader->empty())
     {
         return INVALID_PIPELINE_HANDLE;
+    }
+    // Refused here, by name, rather than created invalid: an invalid compute pipeline invalidates
+    // every command buffer that records it, so each later frame is rejected and nothing draws. A
+    // refused pipeline is requested again each frame it is declared; the refusal is logged once.
+    if (const auto size = DeclaredWorkgroupSize(*cd.ComputeShader))
+    {
+        const std::string refusal = WorkgroupRefusal(*size, m_DeviceLimits);
+        if (!refusal.empty())
+        {
+            const std::string failure = std::format("compute pipeline '{}' is refused: {}", cd.DebugName, refusal);
+            bool firstReport = false;
+            {
+                std::lock_guard<std::mutex> lock(m_ReportedComputeRefusalsMutex);
+                firstReport = m_ReportedComputeRefusals.insert(failure).second;
+            }
+            if (firstReport)
+            {
+                Logger::Log::Error("WebGpuDevice: {}", failure);
+            }
+            return INVALID_PIPELINE_HANDLE;
+        }
     }
 
     WGPUShaderModule module = CreateShaderModule(*cd.ComputeShader, cd.DebugName.c_str());

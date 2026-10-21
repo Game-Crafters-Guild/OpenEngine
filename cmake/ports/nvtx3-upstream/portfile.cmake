@@ -8,7 +8,7 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO NVIDIA/NVTX
     REF v3.6.0
-    SHA512 03892ea32a5867923301f871fecd5dae9e5cbbc506e28b2bf1a436ff5a15fb6c73f8639f9cf1bb4723dd6279f6fe8593da5a06630bae1eef290233bed2063e20
+    SHA512 ca43f5c79b5f989f47d6bd973586f5869ffa4a685e1efe0af96f0a68a21f081f479932e4ab6cacf7f456d7f31075ba620d99848c37250ab66d6c1ed328ebe21d
 )
 
 # Installs the nvtx3 directory itself (not its contents), so consumers include

@@ -4,6 +4,7 @@
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 
 #include "Logger/Logger.h"
@@ -244,6 +245,16 @@ bool TemporalAANode::ComputeHistoryValid(uint64_t lastWrittenFrame, uint64_t fra
 
 void TemporalAANode::DeclareForView(ViewDeclare& d)
 {
+    // The history is stored at the pre-exposure P of the frame that wrote it, and the resolve
+    // rescales it by P over the previous frame's P. A frame of this view that renders without the
+    // resolve (another AA mode, a letterbox, an input missing) advances that P without writing the
+    // history, so the history state is dropped: the next resolve starts it from scratch.
+    if (!DeclareResolve(d))
+        m_ViewHistory.erase(static_cast<uint32_t>(d.View.id));
+}
+
+bool TemporalAANode::DeclareResolve(ViewDeclare& d)
+{
     const RenderGraph::RGTexture input = d.ResolveTexture(m_InputKey);
     // Stitch-through: the output name must resolve for downstream consumers
     // whether TAA runs or not (the FullscreenShader chain binds it
@@ -253,9 +264,9 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
 
     const auto* taa = d.Services.Views().FindViewAntiAliasing(d.View.id);
     if (taa == nullptr)
-        return; // AA mode is not TAA for this view: passthrough
+        return false; // AA mode is not TAA for this view: passthrough
     if (taa->Mode != AntiAliasingMode::TAA)
-        return; // FXAA jitters the same raster but resolves in the LDR chain: passthrough here
+        return false; // FXAA jitters the same raster but resolves in the LDR chain: passthrough here
     if (!input.IsValid())
     {
         if (!m_WarnedUnresolvedInput)
@@ -266,23 +277,23 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
                 "inactive",
                 m_Id, m_InputKey);
         }
-        return;
+        return false;
     }
     if (!m_ShadersLoaded)
-        return; // not staged yet: passthrough, retry next frame
+        return false; // not staged yet: passthrough, retry next frame
     if (!d.ViewDepthResolved.IsValid() || !d.ViewDepth.IsValid())
-        return;
+        return false;
     // Letterboxed views render into a sub-rect; the P0 resolve assumes the
     // full extent. Passthrough (documented limitation, game-view aspect
     // presets keep MSAA-or-off semantics for now).
     if (d.Services.Views().GetViewLetterbox(d.View.id).active)
-        return;
+        return false;
 
     const uint64_t frameIndex = d.Frame.FrameIndex();
     const uint32_t w = d.RenderWidth;
     const uint32_t h = d.RenderHeight;
     if (w == 0 || h == 0)
-        return;
+        return false;
 
     // TAAU (render scale < 1): the pre-pass redirected the raster to the
     // internal extent (w, h) and preserved the caller's display targets. The
@@ -309,7 +320,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
                     "inactive (bilinear passthrough) until they load",
                     m_Id);
             }
-            return;
+            return false;
         }
     }
 
@@ -317,7 +328,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
     // rotated this frame) and snapshot what the resolve needs.
     const auto* state = d.Services.Views().AdvanceViewAntiAliasing(d.View.id, frameIndex);
     if (state == nullptr)
-        return;
+        return false;
 
     ViewHistory& vh = m_ViewHistory[static_cast<uint32_t>(d.View.id)];
     // Folded with the pool's freshness answer once the history import below has
@@ -358,7 +369,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
         ComputeHistoryValid(prevWrittenFrame, frameIndex, prevOutWidth, prevOutHeight, outW, outH,
                             prevCameraValid, historyReadFresh);
     if (!historyWrite.IsValid() || !historyRead.IsValid())
-        return;
+        return false;
 
     const auto mvTex = m_MotionVectors.Declare(d);
 
@@ -371,7 +382,12 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
     const RenderGraph::RGTexture outColor =
         d.Frame.ImportPersistentTexture((base + ".Output").c_str(), outDesc);
     if (!mvTex.IsValid() || !outColor.IsValid())
-        return;
+        return false;
+    // The output and the histories hold scene colour stored at the frame's pre-exposure (the
+    // histories' alpha is depth, which a resource capture leaves alone).
+    d.MarkPreExposed(outColor);
+    d.MarkPreExposed(historyRead);
+    d.MarkPreExposed(historyWrite);
 
     // Certified-stationary history: raster jitter can miss a whole subpixel
     // object over finite-depth ground, and depth alone cannot distinguish that
@@ -445,7 +461,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
     {
         auto alloc = d.Frame.AllocUpload<TaaUpscaleParamsCPU>();
         if (!alloc.Valid())
-            return;
+            return false;
         TaaUpscaleParamsCPU up{};
         std::memcpy(up.InvViewProj, params.InvViewProj, sizeof(up.InvViewProj));
         std::memcpy(up.PrevViewProj, params.PrevViewProj, sizeof(up.PrevViewProj));
@@ -466,7 +482,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
     {
         auto alloc = d.Frame.AllocUpload<TaaResolveParamsCPU>();
         if (!alloc.Valid())
-            return;
+            return false;
         *alloc.Ptr = params;
         paramsBuffer = alloc.Buffer;
         paramsOffset = alloc.Offset;
@@ -474,11 +490,17 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
     }
 
     const RenderGraph::RGTexture depthResolved = d.ViewDepthResolved;
+    // The input is stored at this frame's pre-exposure and the history at the previous frame's:
+    // the resolve rescales the history by their ratio.
+    const PipelineBufferBindingRG exposure = ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return false;
     d.Frame.AddComputePass(
         d.PassName("TAAResolve").c_str(), Rendering::PassPhase::kDefault,
         [&](RenderGraph::RGPassBuilder& p)
         {
             p.Read(input, RenderGraph::RGTextureRead::Sampled);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Read(depthResolved, RenderGraph::RGTextureRead::Sampled);
             p.Read(mvTex, RenderGraph::RGTextureRead::Sampled);
             p.Read(historyRead, RenderGraph::RGTextureRead::Sampled);
@@ -486,7 +508,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
             p.Write(outColor, RenderGraph::RGTextureWrite::Storage);
         },
         [this, input, depthResolved, mvTex, historyRead, historyWrite, outColor, paramsBuffer,
-         paramsOffset, paramsSize, taau, outW, outH](RenderGraph::RGContext& ctx)
+         paramsOffset, paramsSize, taau, outW, outH, exposure](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
             auto* cl = ctx.Cmd;
@@ -520,6 +542,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
                 ok &= wd.TryAddCombinedImageSampler("uMV", mv, m_LinearClampSampler);
                 ok &= wd.TryAddCombinedImageSampler("uHistory", histR, m_LinearClampSampler);
                 ok &= wd.TryAddUniformBuffer("Taa", paramsBuffer, paramsOffset, paramsSize);
+                ok &= wd.TryAddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size);
                 if (!ok)
                 {
                     if (!m_WarnedBindingMismatch)
@@ -573,6 +596,7 @@ void TemporalAANode::DeclareForView(ViewDeclare& d)
         m_DepthUpsample.Declare(d.Frame, d.ViewDepth, d.ViewOutputDepth, outW, outH,
                                 d.PassName("TAAUDepthUpsample"));
     }
+    return true;
 }
 
 TemporalAANode::~TemporalAANode()

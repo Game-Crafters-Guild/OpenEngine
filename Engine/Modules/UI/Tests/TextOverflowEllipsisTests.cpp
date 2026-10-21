@@ -362,7 +362,7 @@ TEST(TextOverflowEllipsisTests, AuthoredAncestorTooltipBeatsTheTruncatedLabel)
 
     UI::Interaction::TooltipOverlay tip;
     tip.Update(root, fx.Lbl, 10.0f, 10.0f, /*time=*/0.0f);
-    auto* bubble = dynamic_cast<Label*>(root->FindById("ui-tooltip-text"));
+    auto* bubble = dynamic_cast<Label*>(root->FindById("ui-tooltip-text"_sid));
     ASSERT_NE(bubble, nullptr);
     EXPECT_EQ(bubble->GetText(), kLongText)
         << "with no authored tooltip the truncated label speaks for itself";

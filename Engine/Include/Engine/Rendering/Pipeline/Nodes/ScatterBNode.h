@@ -17,7 +17,7 @@ namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 //
 // Declaration order: after OcclusionCullP2 (it consumes the phase-B visibility
 // that pass writes). Wired and enabled in the shipped blueprints
-// (Assets/RenderPipelines/ForwardPlus.rendergraph and
+// (Engine/Assets/RenderPipelines/ForwardPlus.rendergraph and
 // ForwardPlus_DebugOverlay.rendergraph); a headless fixture with no
 // AssetManager pins a blueprint of its own that carries only WorldRender, so it
 // never declares it.

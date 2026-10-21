@@ -18,17 +18,16 @@ class ParserRegistry;
 struct AssetManifest;
 struct TexturePackageCookStats;
 class TextureCookWorkers;
-enum class TextureCookEncodeQuality : uint32;
 
 /// The build's cook of the content it staged: strips the editor-only components from the staged
 /// scenes (StripEditorOnlyComponentsFromStagedScenes), bakes the staged textures from the tree's
-/// `.assetmanifest` (StagePackagedTextureCooks, at `textureQuality`, spread across `textureWorkers` when
+/// `.assetmanifest` (StagePackagedTextureCooks, spread across `textureWorkers` when
 /// given, the manifest parsed on `manifestParsePool` when given), then rewrites every asset whose
 /// parser has a packaged form (CookStagedAssets). Returns false at the first failure, with `error`
 /// naming it, and when `cancelRequested` returns true; the build then fails and publishes nothing.
 bool CookStagedContent(const std::filesystem::path& contentRoot, const AssetManifest& manifest,
                        const AssetRegistry& registry, const ParserRegistry& parsers,
-                       TextureCookEncodeQuality textureQuality, TextureCookWorkers* textureWorkers,
+                       TextureCookWorkers* textureWorkers,
                        JobSystem::WorkStealingThreadPool* manifestParsePool,
                        const std::function<bool()>& cancelRequested, TexturePackageCookStats& textureStats,
                        std::string& error);

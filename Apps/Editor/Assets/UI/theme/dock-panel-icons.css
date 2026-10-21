@@ -16,39 +16,39 @@
  * restating the URL here. */
 
 .dock-assets-icon {
-	background-image: url("editor:Icons/folder.png");
+	background-image: url("editor:Icons/folder.svg");
 }
 
 .dock-asset-view-icon {
-	background-image: url("editor:Icons/eye.png");
+	background-image: url("editor:Icons/eye.svg");
 }
 
 .dock-hierarchy-icon {
-	background-image: url("editor:Icons/list.png");
+	background-image: url("editor:Icons/list.svg");
 }
 
 .dock-inspector-icon {
-	background-image: url("editor:Icons/options.png");
+	background-image: url("editor:Icons/options.svg");
 }
 
 .dock-scene-view-icon {
-	background-image: url("editor:Icons/sceneicon.png");
+	background-image: url("editor:Icons/sceneicon.svg");
 }
 
 .dock-game-view-icon {
-	background-image: url("editor:Icons/game-controller.png");
+	background-image: url("editor:Icons/game-controller.svg");
 }
 
 .dock-ui-demo-icon {
-	background-image: url("editor:Icons/desktop.png");
+	background-image: url("editor:Icons/desktop.svg");
 }
 
 .dock-diff-icon {
-	background-image: url("editor:Icons/codeicon.png");
+	background-image: url("editor:Icons/codeicon.svg");
 }
 
 .dock-web-icon {
-	background-image: url("editor:Icons/computer.png");
+	background-image: url("editor:Icons/computer.svg");
 }
 
 .dock-log-icon {

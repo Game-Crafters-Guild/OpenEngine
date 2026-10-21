@@ -52,7 +52,8 @@ std::string ClaudeApiProvider::BuildRequestBody(const AgentTurnRequest& request)
         if (message.Text.empty())
             continue;
         messages.push_back({{"role", message.Role == MessageRole::User ? "user" : "assistant"},
-                            {"content", message.Text}});
+                            {"content", message.Role == MessageRole::User ? message.SentText()
+                                                                          : message.Text}});
     }
     messages.push_back({{"role", "user"}, {"content", request.UserText}});
 

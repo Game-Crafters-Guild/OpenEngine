@@ -117,6 +117,25 @@ TEST_F(AssetRenamePathTests, ResidentAssetFollowsItsRenamedFile)
     EXPECT_EQ(m_Assets->ReloadAssetNow(guid), ReloadOutcome::Reloaded);
 }
 
+// An asset's name is its file's spelling, not the case-folded key its path is (on a
+// case-insensitive volume the path of MixedCase.bin reads mixedcase.bin), and a rename takes the
+// new file's spelling.
+TEST_F(AssetRenamePathTests, AnAssetsNameKeepsItsFilesSpellingAcrossARename)
+{
+    const std::filesystem::path oldPath = WriteBinaryAsset(m_Dir, "MixedCase.bin");
+    RegisterSource();
+    const GUID guid = m_Assets->ResolveAssetGuid(oldPath, "rename");
+    ASSERT_FALSE(guid.IsNull());
+    SharedPtr<Asset> asset = LoadSynchronously(*m_Assets, guid);
+    ASSERT_NE(asset, nullptr);
+    EXPECT_EQ(asset->GetName(), "MixedCase");
+
+    const std::filesystem::path newPath = m_Dir / "RenamedTwice.bin";
+    std::filesystem::rename(oldPath, newPath);
+    ASSERT_TRUE(m_Assets->RenameAssetPath(oldPath, newPath));
+    EXPECT_EQ(asset->GetName(), "RenamedTwice");
+}
+
 TEST_F(AssetRenamePathTests, UnregisteredPathIsRefused)
 {
     RegisterSource();

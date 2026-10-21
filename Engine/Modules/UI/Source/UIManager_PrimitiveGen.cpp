@@ -1,5 +1,6 @@
 #include "UI/UIManager.h"
 #include "UIManager_Internal.h"
+#include "BackgroundImageGeometry.h"
 #include "Core/CpuProfiler.h"
 #include "Logger/Logger.h"
 #include "UI/Interaction/TooltipOverlay.h"
@@ -14,6 +15,7 @@
 #include "UI/GlyphRunEmitter.h"
 #include "UI/TextSelectionFill.h"
 #include "UI/UITextureRegistry.h"
+#include "UI/UITransform.h"
 #include "JobSystem/ParallelAlgorithms.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "Rendering/Text/TextLayout.h"
@@ -38,19 +40,6 @@ static constexpr size_t kInitialDeferredOverlayCapacity = 8;
 
 namespace
 {
-std::string MakeBackgroundPathCacheKey(std::string_view path, std::string_view sourceAlias)
-{
-    if (sourceAlias.empty())
-        return std::string(path);
-
-    std::string key;
-    key.reserve(sourceAlias.size() + 1u + path.size());
-    key.append(sourceAlias);
-    key.push_back('|');
-    key.append(path);
-    return key;
-}
-
 // Corner radii of the padding box — the inner border edge, which is both the
 // CSS overflow clip contour and the inner edge of the painted border ring.
 // The outer radii shrunk by the adjacent border widths, floored at zero
@@ -550,10 +539,19 @@ constexpr uint32_t SpaceFlagBitsForSpace(UI::UITextureSpace space)
 struct UIManager::ResolvedBgSlot
 {
     uint32_t TexSlot = 0;
+    // Texels of the bound texture: the UV space nine-slice cuts measure in.
     uint32_t ImgW = 0;
     uint32_t ImgH = 0;
+    // The image's natural size in physical px when it is not its texel size:
+    // an SVG draws at its intrinsic CSS size x content scale whatever size it
+    // was baked at. Zero means "the texel size".
+    float NaturalW = 0.0f;
+    float NaturalH = 0.0f;
     uint32_t SpaceBits = 0;
     NineSlice Slice{};
+    // The bound texture was baked for this draw's drawn size (an SVG at its own
+    // size): the quad is drawn texel for texel on the device grid.
+    bool TexelExact = false;
 };
 
 // PrimitiveGenContext holds the scratch state for the DFS tree walk.
@@ -585,6 +583,11 @@ struct UIManager::PrimitiveGenContext
         return ClipStack.empty() ? UI::kNoClip : ClipStack.back();
     }
 
+    // The transform slot the element being emitted paints in: its own when it
+    // has a CSS transform, else its nearest transformed ancestor's. Stamped on
+    // its primitives and on the clips it pushes; restored on the way out.
+    uint32_t CurrentTransformIdx = UI::kNoTransform;
+
     // Stage 3: per-element clip ownership. `el` may be nullptr for the
     // anonymous viewport clip used by deferred-overlay rendering — that
     // case routes to UIManager::m_ViewportClipSlot, allocated lazily and
@@ -604,8 +607,10 @@ struct UIManager::PrimitiveGenContext
         SnapPaintRect(x, y, w, h);
 
         // Intersect with the current parent clip so nested overflow:hidden
-        // elements don't replace the parent's clip region.
-        if (!ClipStack.empty())
+        // elements don't replace the parent's clip region. Only within one
+        // transform space: across a transform the rects are in different
+        // coordinates, and the shader's chain walk applies the parent instead.
+        if (!ClipStack.empty() && ClipRects[ClipStack.back()].TransformIndex == CurrentTransformIdx)
         {
             const UI::UIClipRect& parent = ClipRects[ClipStack.back()];
             float px1 = parent.Rect[0];
@@ -677,6 +682,7 @@ struct UIManager::PrimitiveGenContext
         cr.RadiiY[2] = radii.BottomRight.Y;
         cr.RadiiY[3] = radii.BottomLeft.Y;
         cr.ParentIndex = ClipStack.empty() ? UI::kNoClip : ClipStack.back();
+        cr.TransformIndex = CurrentTransformIdx;
         ClipStack.push_back(slot);
         return slot;
     }
@@ -721,6 +727,8 @@ struct UIManager::PrimitiveGenContext
         UIElement* Element;
         float ParentAbsX, ParentAbsY;
         OverlayLayer Layer;
+        // The transform slot in effect where the walk found the overlay.
+        uint32_t OwnerTransformIdx;
     };
     std::vector<DeferredOverlay> DeferredOverlays;
 };
@@ -958,7 +966,7 @@ void UIManager::GenerateAllPrimitives()
            ctx.DeferredOverlays[overlayIdx].Layer < OverlayLayer::HoverTooltip; ++overlayIdx)
     {
         const auto def = ctx.DeferredOverlays[overlayIdx]; // copy: vector may grow
-        GenerateOverlayPrimitives(def.Element, ctx, def.ParentAbsX, def.ParentAbsY);
+        GenerateOverlayPrimitives(def.Element, ctx, def.ParentAbsX, def.ParentAbsY, def.OwnerTransformIdx);
     }
 
     // Between the lower layers and the hover tooltip: the arrow draws above
@@ -968,7 +976,7 @@ void UIManager::GenerateAllPrimitives()
     for (; overlayIdx < ctx.DeferredOverlays.size(); ++overlayIdx)
     {
         const auto def = ctx.DeferredOverlays[overlayIdx];
-        GenerateOverlayPrimitives(def.Element, ctx, def.ParentAbsX, def.ParentAbsY);
+        GenerateOverlayPrimitives(def.Element, ctx, def.ParentAbsX, def.ParentAbsY, def.OwnerTransformIdx);
     }
 
     // Stage 2 part 3: m_SdfPrimitiveBuffer is now solely a per-element
@@ -988,6 +996,7 @@ void UIManager::GenerateAllPrimitives()
     // frame-in-flight slice re-uploads in full as it comes around.
     ++m_PrimitiveStoreVersion;
     ++m_ClipStoreVersion;
+    ++m_TransformStoreVersion;
     ++m_DrawOrderStoreVersion;
     if (m_SdfPrimRing)
         m_SdfPrimRing->MarkAllRangesDirty();
@@ -1000,17 +1009,26 @@ void UIManager::GenerateAllPrimitives()
 #endif
 }
 
-void UIManager::GenerateOverlayPrimitives(UIElement* el, PrimitiveGenContext& ctx, float parentAbsX, float parentAbsY)
+void UIManager::GenerateOverlayPrimitives(UIElement* el, PrimitiveGenContext& ctx, float parentAbsX, float parentAbsY,
+                                          uint32_t ownerTransformIdx)
 {
     const size_t savedClipDepth = ctx.ClipStack.size();
     const float savedOpacity = ctx.EffectiveOpacity;
+    const uint32_t savedTransform = ctx.CurrentTransformIdx;
     ctx.ClipStack.clear();
     ctx.EffectiveOpacity = 1.0f;
+    // The clip chain restarts at the window: the viewport clip is pushed in
+    // window space. The transform chain does not: the overlay paints in its
+    // owner's space, so a popup under a scaled header is scaled with it, and
+    // the vertex stage maps it into the window-space clip.
+    ctx.CurrentTransformIdx = UI::kNoTransform;
     ctx.PushClip(/*el=*/nullptr, 0, 0, ctx.ViewportW, ctx.ViewportH, {});
+    ctx.CurrentTransformIdx = ownerTransformIdx;
     GeneratePrimitivesForElement(el, ctx, parentAbsX, parentAbsY);
     ctx.PopClip();
     ctx.ClipStack.resize(savedClipDepth);
     ctx.EffectiveOpacity = savedOpacity;
+    ctx.CurrentTransformIdx = savedTransform;
 }
 
 void UIManager::EmitTooltipArrowSlot(PrimitiveGenContext& ctx)
@@ -1051,12 +1069,18 @@ bool UIManager::ElementRectIntersectsNearestClip(const UIElement* el) const
     const float h = std::max(0.0f, el->GetLayoutHeight() * cs);
     if (w <= 0.0f || h <= 0.0f)
         return false;
+    if (!el->GetResolvedStyle().Visual.Transform.IsNone())
+        return true;
     // Nearest ancestor that owns a persistent clip slot. Ancestors precede
     // descendants in the drain queue (the mark walks are pre-order), so a
     // scrolled clip owner's slot has already been rewritten to its current
     // rect by the time descendants are tested.
     for (const UIElement* p = el->GetParent(); p; p = p->GetParent())
     {
+        // Under a transformed ancestor the layout rect is not where the
+        // element paints: answer "visible" and let the full DFS decide.
+        if (!p->GetResolvedStyle().Visual.Transform.IsNone())
+            return true;
         if (p->m_ClipSlotIdx != UI::kNoClip &&
             static_cast<size_t>(p->m_ClipSlotIdx) < m_PersistentClipRects.size())
         {
@@ -1069,6 +1093,229 @@ bool UIManager::ElementRectIntersectsNearestClip(const UIElement* el) const
     return x < static_cast<float>(m_LastLayoutWidth) &&
            y < static_cast<float>(m_LastLayoutHeight) &&
            x + w > 0.0f && y + h > 0.0f;
+}
+
+namespace
+{
+
+// An element as a log line names it: `#id`, else its first class, else
+// "an element", followed by its nearest ancestor that has an id.
+std::string DescribeElementForLog(const UIElement& el)
+{
+    std::string text = !el.GetId().empty()          ? "#" + el.GetId()
+                       : !el.GetClasses().empty() ? "." + el.GetClasses().front()
+                                                  : std::string("an element");
+    for (const UIElement* p = el.GetDfsParent(); p; p = p->GetDfsParent())
+    {
+        if (!p->GetId().empty())
+        {
+            text += " inside #" + p->GetId();
+            break;
+        }
+    }
+    return text;
+}
+
+} // namespace
+
+uint32_t UIManager::WriteElementTransformSlot(UIElement* el, uint32_t parentIdx)
+{
+    int depth = 0;
+    for (uint32_t idx = parentIdx; idx != UI::kNoTransform && depth < UI::kMaxTransformChainDepth &&
+                                   static_cast<size_t>(idx) < m_PersistentTransforms.size();
+         idx = m_PersistentTransforms[idx].ParentIndex)
+        ++depth;
+    const bool pastDepth = depth >= UI::kMaxTransformChainDepth;
+    if (pastDepth && !m_LoggedTransformChainDepth && !el->GetResolvedStyle().Visual.Transform.IsNone())
+    {
+        m_LoggedTransformChainDepth = true;
+        Logger::Log::Warning("[UI] {} has {} transformed ancestors, the most the UI composes; its transform is "
+                             "ignored, so it is drawn and hit untransformed. Flatten the nesting, for example by "
+                             "folding a parent's transform into its child's.",
+                             DescribeElementForLog(*el), UI::kMaxTransformChainDepth);
+    }
+    Mathematics::Matrix3x3 m;
+    if (pastDepth ||
+        !UI::ComputeElementTransform(el->GetResolvedStyle().Visual,
+                                     Mathematics::Rect{el->GetLayoutX(), el->GetLayoutY(), el->GetLayoutWidth(),
+                                                       el->GetLayoutHeight()},
+                                     std::max(0.01f, m_ContentScale), m))
+    {
+        if (el->m_TransformSlotIdx != UI::kNoTransform)
+        {
+            m_TransformAllocator.Free(el->m_TransformSlotIdx);
+            el->m_TransformSlotIdx = UI::kNoTransform;
+        }
+        return UI::kNoTransform;
+    }
+    if (el->m_TransformSlotIdx == UI::kNoTransform)
+    {
+        uint32_t slot = m_TransformAllocator.Allocate();
+        // Slot 0 is the shared identity. The allocator's very first slot is
+        // 0 and nothing ever frees it, so skipping it once reserves it.
+        if (slot == UI::kNoTransform)
+            slot = m_TransformAllocator.Allocate();
+        el->m_TransformSlotIdx = slot;
+    }
+    const uint32_t slot = el->m_TransformSlotIdx;
+    if (m_PersistentTransforms.size() <= slot)
+        m_PersistentTransforms.resize(static_cast<size_t>(slot) + 1);
+    UI::UITransformSlot& t = m_PersistentTransforms[slot];
+    t.M[0] = m[0][0];
+    t.M[1] = m[0][1];
+    t.M[2] = m[1][0];
+    t.M[3] = m[1][1];
+    t.T[0] = m[2][0];
+    t.T[1] = m[2][1];
+    t.ParentIndex = parentIdx;
+    return slot;
+}
+
+bool UIManager::RewriteClipSlotFromLayout(UIElement* el)
+{
+    if (el->m_ClipSlotIdx == UI::kNoClip || static_cast<size_t>(el->m_ClipSlotIdx) >= m_PersistentClipRects.size())
+        return false;
+    UI::UIClipRect& cr = m_PersistentClipRects[el->m_ClipSlotIdx];
+    const float clipScale = std::max(0.01f, m_ContentScale);
+    float cx = el->GetLayoutX() * clipScale;
+    float cy = el->GetLayoutY() * clipScale;
+    float cw = std::max(0.0f, el->GetLayoutWidth() * clipScale);
+    float ch = std::max(0.0f, el->GetLayoutHeight() * clipScale);
+    // Every slot masks at the padding box — mirror the inset both
+    // push sites apply, or the first drain would re-expand the mask
+    // over the element's border.
+    const ResolvedStyle& elRs = el->GetResolvedStyle();
+    const VisualStyle& elVs = elRs.Visual;
+    const Box4& elBw = elRs.Layout.BorderWidth;
+    InsetToPaddingBox(elBw, clipScale, cx, cy, cw, ch);
+    CornerRadiiTLTRBRBL radii = ScaleRadii(
+        InnerClipRadii(UsedBorderRadius(elVs, el->GetLayoutWidth(), el->GetLayoutHeight()),
+                       elBw),
+        clipScale);
+    // The own-text outset, from the cut verdict of the element's last
+    // emission: a drain changes neither the layout nor the text, and
+    // a worker emitting this element after collect reuses this rect
+    // as written. An element without a shape cache always re-emits on
+    // the UI thread, whose push writes the shape again. Only a leaf
+    // with visible effects can grow, so only it reads the verdict.
+    if (!ClipSlotPushedForChildren(el) && elVs.TextEffects.HasVisibleEffect())
+    {
+        const ITextMeasurable* textEl = el->GetTextMeasurable();
+        const bool textCut =
+            !textEl || textEl->GetOrCreateTextShapeCache().LastRunCut.load(std::memory_order_relaxed);
+        OutsetClipShape(OwnTextClipOutsetPx(el, elVs, clipScale, textCut), cx, cy, cw, ch, radii);
+    }
+    // Same snap PushClip applies on push — the drain's rewrite must
+    // reproduce the exact stored shape, or a drained frame re-expands
+    // the mask by a fraction of a pixel.
+    SnapPaintRect(cx, cy, cw, ch);
+    if (cr.ParentIndex != UI::kNoClip &&
+        static_cast<size_t>(cr.ParentIndex) < m_PersistentClipRects.size() &&
+        m_PersistentClipRects[cr.ParentIndex].TransformIndex == cr.TransformIndex)
+    {
+        const UI::UIClipRect& parent = m_PersistentClipRects[cr.ParentIndex];
+        const float px1 = parent.Rect[0];
+        const float py1 = parent.Rect[1];
+        const float px2 = px1 + parent.Rect[2];
+        const float py2 = py1 + parent.Rect[3];
+        const float cx2 = cx + cw;
+        const float cy2 = cy + ch;
+        cx = std::max(cx, px1);
+        cy = std::max(cy, py1);
+        cw = std::max(0.0f, std::min(cx2, px2) - cx);
+        ch = std::max(0.0f, std::min(cy2, py2) - cy);
+    }
+    cr.Rect[0] = cx;
+    cr.Rect[1] = cy;
+    cr.Rect[2] = cw;
+    cr.Rect[3] = ch;
+    cr.Radii[0] = radii.TopLeft.X;
+    cr.Radii[1] = radii.TopRight.X;
+    cr.Radii[2] = radii.BottomRight.X;
+    cr.Radii[3] = radii.BottomLeft.X;
+    cr.RadiiY[0] = radii.TopLeft.Y;
+    cr.RadiiY[1] = radii.TopRight.Y;
+    cr.RadiiY[2] = radii.BottomRight.Y;
+    cr.RadiiY[3] = radii.BottomLeft.Y;
+    return true;
+}
+
+bool UIManager::SubtreeEmittedForRepoint(UIElement* el, bool isRoot) const
+{
+    if (el->m_LastFullDfsFrame != m_LastFullDfsGenFrame)
+    {
+        // Not visited by the last full DFS. Hidden, it emitted nothing and
+        // has nothing to re-point (showing it later escalates on the same
+        // stale stamp). Visible, it was culled against a clip the transform
+        // may have moved it into: only the full DFS can emit it.
+        const ResolvedStyle& rs = el->GetResolvedStyle();
+        return rs.Layout.DisplayMode == DisplayMode::None || rs.Visual.Opacity <= 0.0f;
+    }
+    if (!isRoot && el->m_TransformSlotIdx != UI::kNoTransform)
+        return true;
+    for (const auto& child : el->GetChildren())
+    {
+        if (child && !SubtreeEmittedForRepoint(child.get(), /*isRoot=*/false))
+            return false;
+    }
+    if (UIElement* target = el->GetMountTarget())
+        return SubtreeEmittedForRepoint(target, /*isRoot=*/false);
+    return true;
+}
+
+void UIManager::RepointSubtreeTransform(UIElement* el, uint32_t space, bool isRoot)
+{
+    if (!isRoot)
+    {
+        if (el->m_LastFullDfsFrame != m_LastFullDfsGenFrame)
+            return;
+        el->m_AmbientTransformIdx = space;
+        if (el->m_TransformSlotIdx != UI::kNoTransform)
+        {
+            // Its own space, and everything under it, is unchanged: only its
+            // link to the space it sits in moves.
+            m_PersistentTransforms[el->m_TransformSlotIdx].ParentIndex = space;
+            return;
+        }
+    }
+
+    if (el->m_PrimitiveRangeStart != UI::SlotAllocator::kInvalidSlot && el->m_PrimitiveRangeCount > 0)
+    {
+        const size_t start = static_cast<size_t>(el->m_PrimitiveRangeStart);
+        const size_t end = std::min(start + el->m_PrimitiveRangeCount, m_PersistentPrimitives.size());
+        for (size_t i = start; i < end; ++i)
+            m_PersistentPrimitives[i].TransformIndex = space;
+        if (m_SdfPrimRing && end > start)
+            m_SdfPrimRing->MarkRangeDirty(static_cast<uint32_t>(start), end - start);
+    }
+    // The element's own clip is in its own space. Rewriting it from the
+    // layout re-decides whether it folds in its parent clip, which only
+    // happens within one space. Pre-order, so a parent clip in the subtree
+    // is final before its children's are rewritten.
+    if (el->m_ClipSlotIdx != UI::kNoClip && static_cast<size_t>(el->m_ClipSlotIdx) < m_PersistentClipRects.size())
+    {
+        m_PersistentClipRects[el->m_ClipSlotIdx].TransformIndex = space;
+        RewriteClipSlotFromLayout(el);
+    }
+
+    for (const auto& child : el->GetChildren())
+    {
+        if (child)
+            RepointSubtreeTransform(child.get(), space, /*isRoot=*/false);
+    }
+    if (UIElement* target = el->GetMountTarget())
+        RepointSubtreeTransform(target, space, /*isRoot=*/false);
+}
+
+bool UIManager::RepointTransformSpace(UIElement* el)
+{
+    if (!SubtreeEmittedForRepoint(el, /*isRoot=*/true))
+        return false;
+    // Allocates the slot for a transform, frees it for `none`.
+    const uint32_t ownSlot = WriteElementTransformSlot(el, el->m_AmbientTransformIdx);
+    const uint32_t space = ownSlot != UI::kNoTransform ? ownSlot : el->m_AmbientTransformIdx;
+    RepointSubtreeTransform(el, space, /*isRoot=*/true);
+    return true;
 }
 
 bool UIManager::OwnTextEmissionPaints(UIElement* el, PrimitiveGenContext& ctx)
@@ -1127,6 +1374,7 @@ bool UIManager::DrainPrimitiveDataDirty()
     // rewrite just the touched slot span.
     bool touchedPrimitives = false;
     bool touchedClips = false;
+    bool touchedTransforms = false;
     bool touchedDrawOrder = false;
     auto bailToFullRegen = [&]() {
         MarkPrimitivesNeedRegen(0x400u);
@@ -1210,78 +1458,41 @@ bool UIManager::DrainPrimitiveDataDirty()
             continue;
         }
 
+        // CSS transform. A changed value only rewrites the element's own slot:
+        // descendants reach it by index and the shader composes the chain, so
+        // they need no re-emission (the parent link is unchanged under the
+        // drain invariant). A switch to or from `none` changes which slot this
+        // element's and its descendants' primitives and clips name: the
+        // re-point walk patches those in place. Like the clip rewrite below,
+        // this runs before the range early-outs: a transformed container may
+        // own no primitives itself.
+        {
+            const bool hasTransform = !el->GetResolvedStyle().Visual.Transform.IsNone();
+            if (hasTransform != (el->m_TransformSlotIdx != UI::kNoTransform))
+            {
+                if (!RepointTransformSpace(el))
+                {
+                    bailToFullRegen();
+                    continue;
+                }
+                touchedTransforms = true;
+                touchedPrimitives = true;
+                touchedClips = true;
+            }
+            else if (hasTransform)
+            {
+                WriteElementTransformSlot(el, m_PersistentTransforms[el->m_TransformSlotIdx].ParentIndex);
+                touchedTransforms = true;
+            }
+        }
+
         // Drain-mode emit skips PushClip, so an element that owns a clip slot
         // (overflow != visible) would leave its children clipped against the
         // pre-mutation rect. Rewrite the slot in place from the current layout
-        // rect, re-intersected with the recorded parent clip (unchanged under
-        // the drain invariant). Must run before the range early-outs below —
-        // a pure-layout clip container owns a slot but no primitive range.
-        if (el->m_ClipSlotIdx != UI::kNoClip &&
-            static_cast<size_t>(el->m_ClipSlotIdx) < m_PersistentClipRects.size())
-        {
-            UI::UIClipRect& cr = m_PersistentClipRects[el->m_ClipSlotIdx];
-            const float clipScale = std::max(0.01f, m_ContentScale);
-            float cx = el->GetLayoutX() * clipScale;
-            float cy = el->GetLayoutY() * clipScale;
-            float cw = std::max(0.0f, el->GetLayoutWidth() * clipScale);
-            float ch = std::max(0.0f, el->GetLayoutHeight() * clipScale);
-            // Every slot masks at the padding box — mirror the inset both
-            // push sites apply, or the first drain would re-expand the mask
-            // over the element's border.
-            const ResolvedStyle& elRs = el->GetResolvedStyle();
-            const VisualStyle& elVs = elRs.Visual;
-            const Box4& elBw = elRs.Layout.BorderWidth;
-            InsetToPaddingBox(elBw, clipScale, cx, cy, cw, ch);
-            CornerRadiiTLTRBRBL radii = ScaleRadii(
-                InnerClipRadii(UsedBorderRadius(elVs, el->GetLayoutWidth(), el->GetLayoutHeight()),
-                               elBw),
-                clipScale);
-            // The own-text outset, from the cut verdict of the element's last
-            // emission: a drain changes neither the layout nor the text, and
-            // a worker emitting this element after collect reuses this rect
-            // as written. An element without a shape cache always re-emits on
-            // the UI thread, whose push writes the shape again. Only a leaf
-            // with visible effects can grow, so only it reads the verdict.
-            if (!ClipSlotPushedForChildren(el) && elVs.TextEffects.HasVisibleEffect())
-            {
-                const ITextMeasurable* textEl = el->GetTextMeasurable();
-                const bool textCut =
-                    !textEl || textEl->GetOrCreateTextShapeCache().LastRunCut.load(std::memory_order_relaxed);
-                OutsetClipShape(OwnTextClipOutsetPx(el, elVs, clipScale, textCut), cx, cy, cw, ch, radii);
-            }
-            // Same snap PushClip applies on push — the drain's rewrite must
-            // reproduce the exact stored shape, or a drained frame re-expands
-            // the mask by a fraction of a pixel.
-            SnapPaintRect(cx, cy, cw, ch);
-            if (cr.ParentIndex != UI::kNoClip &&
-                static_cast<size_t>(cr.ParentIndex) < m_PersistentClipRects.size())
-            {
-                const UI::UIClipRect& parent = m_PersistentClipRects[cr.ParentIndex];
-                const float px1 = parent.Rect[0];
-                const float py1 = parent.Rect[1];
-                const float px2 = px1 + parent.Rect[2];
-                const float py2 = py1 + parent.Rect[3];
-                const float cx2 = cx + cw;
-                const float cy2 = cy + ch;
-                cx = std::max(cx, px1);
-                cy = std::max(cy, py1);
-                cw = std::max(0.0f, std::min(cx2, px2) - cx);
-                ch = std::max(0.0f, std::min(cy2, py2) - cy);
-            }
-            cr.Rect[0] = cx;
-            cr.Rect[1] = cy;
-            cr.Rect[2] = cw;
-            cr.Rect[3] = ch;
-            cr.Radii[0] = radii.TopLeft.X;
-            cr.Radii[1] = radii.TopRight.X;
-            cr.Radii[2] = radii.BottomRight.X;
-            cr.Radii[3] = radii.BottomLeft.X;
-            cr.RadiiY[0] = radii.TopLeft.Y;
-            cr.RadiiY[1] = radii.TopRight.Y;
-            cr.RadiiY[2] = radii.BottomRight.Y;
-            cr.RadiiY[3] = radii.BottomLeft.Y;
+        // rect. Must run before the range early-outs below — a pure-layout
+        // clip container owns a slot but no primitive range.
+        if (RewriteClipSlotFromLayout(el))
             touchedClips = true;
-        }
 
         // Skip elements that don't currently own a slot range — they emitted
         // nothing at their last DFS, so a translation or visual mark has
@@ -1391,7 +1602,12 @@ bool UIManager::DrainPrimitiveDataDirty()
                 if (rs.Visual.BackgroundImage.HasImage ||
                     el->HasBackgroundImageTextureOverride())
                 {
-                    item.Bg = ResolveBackgroundTextureSlot(el, ctx, rs.Visual.BackgroundImage, ew, eh);
+                    float paddingX = 0.0f;
+                    float paddingY = 0.0f;
+                    float paddingW = ew;
+                    float paddingH = eh;
+                    InsetToPaddingBox(rs.Layout.BorderWidth, pcs, paddingX, paddingY, paddingW, paddingH);
+                    item.Bg = ResolveBackgroundTextureSlot(el, ctx, rs.Visual.BackgroundImage, paddingW, paddingH);
                     item.HasPreResolvedBg = true;
                 }
             }
@@ -1407,6 +1623,8 @@ bool UIManager::DrainPrimitiveDataDirty()
         // the regen bumps every store again anyway).
         if (touchedClips)
             ++m_ClipStoreVersion;
+        if (touchedTransforms)
+            ++m_TransformStoreVersion;
         m_PrimitiveDataDirty.clear();
         return false;
     }
@@ -1728,6 +1946,8 @@ bool UIManager::DrainPrimitiveDataDirty()
         ++m_PrimitiveStoreVersion;
     if (touchedClips)
         ++m_ClipStoreVersion;
+    if (touchedTransforms)
+        ++m_TransformStoreVersion;
     if (touchedDrawOrder)
         ++m_DrawOrderStoreVersion;
 
@@ -1758,6 +1978,11 @@ const UI::UIPrimitive* UIManager::PeekPrimitiveForTesting(const UIElement& el, u
 const UI::UIClipRect* UIManager::PeekClipRectForTesting(uint16_t slot) const
 {
     return slot < m_PersistentClipRects.size() ? &m_PersistentClipRects[slot] : nullptr;
+}
+
+const UI::UITransformSlot* UIManager::PeekTransformSlotForTesting(uint32_t slot) const
+{
+    return slot < m_PersistentTransforms.size() ? &m_PersistentTransforms[slot] : nullptr;
 }
 
 int UIManager::FindDrawOrderPosForTesting(const UIElement& el) const
@@ -1952,6 +2177,34 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
         return;
     }
 
+    // CSS transform. The drain emits one element with no ancestors on the
+    // stack, so it starts from the ambient slot the last full DFS recorded;
+    // the drain's collect phase has already rewritten this element's own slot
+    // (or escalated, when the transform switched to or from `none`). The full
+    // DFS (re)writes the slot here. Every exit restores the ambient slot.
+    if (ctx.DrainModeOnly)
+        ctx.CurrentTransformIdx = el->m_AmbientTransformIdx;
+    const uint32_t ambientTransformIdx = ctx.CurrentTransformIdx;
+    uint32_t ownTransformIdx = ambientTransformIdx;
+    if (ctx.DrainModeOnly)
+    {
+        if (el->m_TransformSlotIdx != UI::kNoTransform)
+            ownTransformIdx = el->m_TransformSlotIdx;
+    }
+    else if (!style.Visual.Transform.IsNone() || el->m_TransformSlotIdx != UI::kNoTransform)
+    {
+        const uint32_t slot = WriteElementTransformSlot(el, ambientTransformIdx);
+        if (slot != UI::kNoTransform)
+            ownTransformIdx = slot;
+    }
+    struct TransformRestore
+    {
+        PrimitiveGenContext& Ctx;
+        uint32_t Saved;
+        ~TransformRestore() { Ctx.CurrentTransformIdx = Saved; }
+    } transformRestore{ctx, ambientTransformIdx};
+    ctx.CurrentTransformIdx = ownTransformIdx;
+
     // Yoga-computed layout rect is in CSS logical px (single space for
     // layout + hit-testing). Convert to physical px once here; every
     // primitive emitted below is in physical.
@@ -2033,8 +2286,12 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
             return;
         }
     }
-    else if (EmitContributionBoundedByOwnRect(*el, style))
+    else if (EmitContributionBoundedByOwnRect(*el, style) &&
+             (ctx.ClipStack.empty() ? UI::kNoTransform : ctx.ClipRects[ctx.ClipStack.back()].TransformIndex) ==
+                 ownTransformIdx)
     {
+        // (Only when the ambient clip is in the space this element paints in:
+        // a transform moves the paint away from the layout rect tested here.)
         float clipL = 0.0f;
         float clipT = 0.0f;
         float clipR = ctx.ViewportW;
@@ -2062,6 +2319,7 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
     {
         el->m_LastFullDfsFrame = m_PrimitiveGenFrame;
         el->m_AmbientClipIdx = clipIdx;
+        el->m_AmbientTransformIdx = ambientTransformIdx;
     }
 
     // CSS visibility:hidden — skip self-emission but still recurse into
@@ -2201,6 +2459,12 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
             EmitOutlineRing(ctx.Primitives, vs, usedRadii, x, y, w, h, cs, clipIdx, ctx.EffectiveOpacity);
     }
 
+    // Every primitive this element emitted — built-in or custom — paints in
+    // its transform space. Stamped here rather than in the builders, which
+    // custom emitters bypass.
+    for (size_t i = scratchStart; i < ctx.Primitives.size(); ++i)
+        ctx.Primitives[i].TransformIndex = ownTransformIdx;
+
     // Block E1: in drain mode, skip FinalizeElementSlots (caller copies the
     // scratch into the existing slot range itself) and skip child recursion
     // entirely — only the dirty element is being refreshed.
@@ -2260,7 +2524,7 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
             UIElement* child = ctx.SortedChildren[i];
             if (child->GetOverlayLayer() != OverlayLayer::None)
             {
-                ctx.DeferredOverlays.push_back({child, x, y, child->GetOverlayLayer()});
+                ctx.DeferredOverlays.push_back({child, x, y, child->GetOverlayLayer(), ctx.CurrentTransformIdx});
                 continue;
             }
             GeneratePrimitivesForElement(child, ctx, x, y);
@@ -2281,10 +2545,10 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
 
 UIManager::ResolvedBgSlot UIManager::ResolveBackgroundTextureSlot(
     UIElement* el, PrimitiveGenContext& ctx,
-    const BackgroundImageStyle& bgImg, float /*elW*/, float /*elH*/)
+    const BackgroundImageStyle& bgImg, float paddingW, float paddingH)
 {
-    // Resolution mutates shared caches (m_BgTextureCache, m_BgPathToGuid,
-    // deferred RG bindings) and can trigger GPU uploads — UI-thread-only.
+    // Resolution mutates shared caches (the background-image cache, deferred
+    // RG bindings) and can trigger GPU uploads — UI-thread-only.
     // The drain pre-resolves work items during collect (ctx.PreResolvedBg),
     // so this only fires when that pre-resolution was skipped or missed.
     if (ctx.OffThread)
@@ -2336,58 +2600,25 @@ UIManager::ResolvedBgSlot UIManager::ResolveBackgroundTextureSlot(
         else if (bgImg.Source.Kind == BackgroundImageSource::SourceKind::Guid ||
                  bgImg.Source.Kind == BackgroundImageSource::SourceKind::Path)
         {
-            GUID guid = bgImg.Source.Guid;
-            if (bgImg.Source.Kind == BackgroundImageSource::SourceKind::Path && guid.IsNull())
-            {
-                auto itGuid = ctx.Manager->m_BgPathToGuid.find(
-                    MakeBackgroundPathCacheKey(bgImg.Source.Value, bgImg.Source.SourceAlias));
-                if (itGuid != ctx.Manager->m_BgPathToGuid.end())
-                    guid = itGuid->second;
-                else
-                    guid = ctx.Manager->ResolveBackgroundImagePath(bgImg.Source.Value, bgImg.Source.SourceAlias);
-            }
-
-            if (!guid.IsNull())
-            {
-                auto itTex = ctx.Manager->m_BgTextureCache.find(guid);
-                const bool cached = (itTex != ctx.Manager->m_BgTextureCache.end() && itTex->second.Handle.IsValid());
-                if (cached)
-                {
-                    itTex->second.LastUsedFrame = ctx.Manager->m_BgCacheFrame;
-                    const bool pointFilter = el->HasClass("ui-bg-point-filter");
-                    texSlot = ctx.Textures->Register(
-                        itTex->second.Handle,
-                        pointFilter ? ctx.Manager->m_SamplerNearestClamp : Rendering::SamplerHandle{});
-                    imgW = itTex->second.Width;
-                    imgH = itTex->second.Height;
-                    slice = itTex->second.Slice;
-                }
-                else
-                {
-                    ctx.Manager->EnsureBackgroundTextureUploaded(guid);
-
-                    // EnsureBackgroundTextureUploaded can complete synchronously
-                    // when the asset was already loaded by startup preloading.
-                    // Re-check immediately so first paint does not need a later
-                    // global style refresh (for example, closing the project picker)
-                    // before CSS icon backgrounds become visible.
-                    itTex = ctx.Manager->m_BgTextureCache.find(guid);
-                    if (itTex != ctx.Manager->m_BgTextureCache.end() && itTex->second.Handle.IsValid())
-                    {
-                        const bool pointFilter = el->HasClass("ui-bg-point-filter");
-                        texSlot = ctx.Textures->Register(
-                            itTex->second.Handle,
-                            pointFilter ? ctx.Manager->m_SamplerNearestClamp : Rendering::SamplerHandle{});
-                        imgW = itTex->second.Width;
-                        imgH = itTex->second.Height;
-                        slice = itTex->second.Slice;
-                    }
-                }
-            }
+            const UI::BackgroundImageCache::PaintBinding binding =
+                ctx.Manager->m_BackgroundImages.ResolveForPaint(bgImg, paddingW, paddingH, ctx.ContentScale);
+            if (!binding.Handle.IsValid())
+                return {};
+            const bool pointFilter = el->HasClass("ui-bg-point-filter");
+            ResolvedBgSlot slot;
+            slot.TexSlot = ctx.Textures->Register(
+                binding.Handle, pointFilter ? ctx.Manager->m_SamplerNearestClamp : Rendering::SamplerHandle{});
+            slot.ImgW = binding.Width;
+            slot.ImgH = binding.Height;
+            slot.NaturalW = binding.NaturalWidth;
+            slot.NaturalH = binding.NaturalHeight;
+            slot.Slice = binding.Slice;
+            slot.TexelExact = binding.TexelExact;
+            return slot;
         }
     }
 
-    return {texSlot, imgW, imgH, spaceBits, slice};
+    return {texSlot, imgW, imgH, 0.0f, 0.0f, spaceBits, slice};
 }
 
 void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext& ctx,
@@ -2396,16 +2627,6 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
                                               uint16_t clipIdx)
 {
     if (!ctx.Textures || !ctx.Manager)
-        return;
-
-    const auto& bgImg = vs.BackgroundImage;
-    const ResolvedBgSlot bgSlot = ctx.PreResolvedBg
-        ? *ctx.PreResolvedBg
-        : ResolveBackgroundTextureSlot(el, ctx, bgImg, w, h);
-    const uint32_t texSlot = bgSlot.TexSlot;
-    const uint32_t imgW = bgSlot.ImgW;
-    const uint32_t imgH = bgSlot.ImgH;
-    if (texSlot == 0)
         return;
 
     // Two boxes, and they are not the same box.
@@ -2422,6 +2643,16 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
     float pw = w;
     float ph = h;
     InsetToPaddingBox(borderWidth, ctx.ContentScale, px, py, pw, ph);
+
+    const auto& bgImg = vs.BackgroundImage;
+    const ResolvedBgSlot bgSlot = ctx.PreResolvedBg
+        ? *ctx.PreResolvedBg
+        : ResolveBackgroundTextureSlot(el, ctx, bgImg, pw, ph);
+    const uint32_t texSlot = bgSlot.TexSlot;
+    const uint32_t imgW = bgSlot.ImgW;
+    const uint32_t imgH = bgSlot.ImgH;
+    if (texSlot == 0)
+        return;
 
     // border-radius clips background imagery to the element's rounded border
     // box, matching the rect background above (CSS background painting). The
@@ -2486,7 +2717,8 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
                                               bgRadii.BottomLeft.X, bgRadii.BottomLeft.Y);
                 UI::SetTextureSourceSpaceBits(prim, bgSlot.SpaceBits);
                 prim.Saturation = sat;
-                prim.PointFilter = el->HasClass("ui-bg-point-filter") ? 1.0f : 0.0f;
+                if (el->HasClass("ui-bg-point-filter"))
+                    prim.ModeAndFlags |= UI::kPrimPointFilterBit;
                 UI::SetClip(prim, clipIdx);
                 UI::SetOpacity(prim, ctx.EffectiveOpacity);
                 ctx.Primitives.push_back(prim);
@@ -2494,61 +2726,15 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
         return;
     }
 
-    // Compute display rect based on background-size mode. Every term measures
-    // against the positioning area (pw/ph), never the element rect.
-    float displayW = pw;
-    float displayH = ph;
-    float naturalW = (imgW > 0) ? static_cast<float>(imgW) : pw;
-    float naturalH = (imgH > 0) ? static_cast<float>(imgH) : ph;
-
-    switch (bgImg.SizeMode)
-    {
-    case BackgroundSizeMode::Cover:
-    {
-        float s = std::max(pw / naturalW, ph / naturalH);
-        displayW = naturalW * s;
-        displayH = naturalH * s;
-        break;
-    }
-    case BackgroundSizeMode::Contain:
-    {
-        float s = std::min(pw / naturalW, ph / naturalH);
-        displayW = naturalW * s;
-        displayH = naturalH * s;
-        break;
-    }
-    case BackgroundSizeMode::Explicit:
-    {
-        // CSS explicit sizes are logical px; scale to match physical rect.
-        if (bgImg.SizeX > 0)
-            displayW = bgImg.SizeXIsPercent ? (bgImg.SizeX * 0.01f * pw) : (bgImg.SizeX * ctx.ContentScale);
-        else
-            displayW = naturalW;
-        if (bgImg.SizeY > 0)
-            displayH = bgImg.SizeYIsPercent ? (bgImg.SizeY * 0.01f * ph) : (bgImg.SizeY * ctx.ContentScale);
-        else
-            displayH = naturalH;
-        break;
-    }
-    default: // Auto: natural size, clamped to the positioning area
-    {
-        float s = std::min(pw / naturalW, ph / naturalH);
-        if (s < 1.0f)
-        {
-            displayW = naturalW * s;
-            displayH = naturalH * s;
-        }
-        else
-        {
-            displayW = naturalW;
-            displayH = naturalH;
-        }
-        break;
-    }
-    }
-
-    displayW = std::max(1.0f, displayW);
-    displayH = std::max(1.0f, displayH);
+    // The drawn size from background-size, measured against the positioning
+    // area (pw/ph), never the element rect. An SVG's raster was baked from the
+    // same computation, so a raster baked for this draw is the size it paints.
+    const float naturalW = (bgSlot.NaturalW > 0.0f) ? bgSlot.NaturalW : (imgW > 0) ? static_cast<float>(imgW) : pw;
+    const float naturalH = (bgSlot.NaturalH > 0.0f) ? bgSlot.NaturalH : (imgH > 0) ? static_cast<float>(imgH) : ph;
+    const UI::BackgroundImageSize display =
+        UI::ComputeBackgroundImageSize(bgImg, pw, ph, ctx.ContentScale, naturalW, naturalH);
+    const float displayW = display.Width;
+    const float displayH = display.Height;
 
     // Compute position offset, also within the positioning area.
     float posOffX = 0.0f;
@@ -2568,6 +2754,17 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
     float drawY = py + posOffY;
     float drawW = displayW;
     float drawH = displayH;
+    if (bgSlot.TexelExact && bgImg.Repeat == BackgroundRepeat::NoRepeat)
+    {
+        // A raster baked for this draw lands texel for texel: its origin on the
+        // device-pixel grid (rounded as SnapPaintRect rounds) and its size the
+        // raster's, so no texel is resampled whatever the filter. The raster is
+        // the drawn box rounded up, so the quad grows by under one pixel.
+        drawX = std::round(drawX);
+        drawY = std::round(drawY);
+        drawW = static_cast<float>(imgW);
+        drawH = static_cast<float>(imgH);
+    }
 
     if (bgImg.Repeat == BackgroundRepeat::Repeat ||
         bgImg.Repeat == BackgroundRepeat::RepeatX ||
@@ -2608,7 +2805,8 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
                                               bgRadii.BottomRight.X, bgRadii.BottomRight.Y,
                                               bgRadii.BottomLeft.X, bgRadii.BottomLeft.Y);
     UI::SetTextureSourceSpaceBits(prim, bgSlot.SpaceBits);
-    prim.PointFilter = el->HasClass("ui-bg-point-filter") ? 1.0f : 0.0f;
+    if (el->HasClass("ui-bg-point-filter"))
+        prim.ModeAndFlags |= UI::kPrimPointFilterBit;
     prim.Saturation = std::clamp(bgImg.Saturation, 0.0f, 1.0f);
     UI::SetClip(prim, clipIdx);
     UI::SetOpacity(prim, ctx.EffectiveOpacity);

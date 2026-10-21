@@ -274,7 +274,7 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
 
     IDevice::IDevice()
         : m_PipelineCache(std::make_unique<PipelineCache>()),
-          m_PipelineBuilds(std::make_unique<PipelineBuildTable>())
+          m_PipelineBuilds(std::make_shared<PipelineBuildTable>())
     {
     }
 
@@ -509,13 +509,23 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         PipelineBuildRequest job = request;
         job.Ticket = queued.Ticket;
         job.InvalidationEpoch = epoch;
+        // The job holds the table, not the device: it may run or be destroyed
+        // after the device is gone, and then its claim fails (Shutdown cancelled
+        // the row) before anything of the device is reached.
+        std::shared_ptr<PipelineBuildTable> builds = m_PipelineBuilds;
         // Fires when the last copy of the job is destroyed. After the job ran
         // its ticket no longer names a queued request and this does nothing;
         // a job the dispatcher destroyed unrun releases the request here.
         auto releaseIfUnrun = std::shared_ptr<void>(
-            nullptr, [this, key = job.Key, ticket = job.Ticket](void*) { m_PipelineBuilds->ReleaseUnrun(key, ticket); });
+            nullptr, [builds, key = job.Key, ticket = job.Ticket](void*) { builds->ReleaseUnrun(key, ticket); });
         // Called outside every device lock: a dispatcher may run the job inline.
-        (*dispatcher)([this, job, releaseIfUnrun]() { RunQueuedPipelineBuild(job); });
+        (*dispatcher)(
+            [this, builds, job, releaseIfUnrun]()
+            {
+                // Cancelled, or a synchronous caller took the build over.
+                if (builds->ClaimQueued(job.Key, job.Ticket))
+                    RunClaimedPipelineBuild(job);
+            });
 
         if (TryGetWarmPipeline(request).IsValid())
             return PipelineBuildState::Warm;
@@ -553,10 +563,8 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         }
     }
 
-    void IDevice::RunQueuedPipelineBuild(const PipelineBuildRequest& request)
+    void IDevice::RunClaimedPipelineBuild(const PipelineBuildRequest& request)
     {
-        if (!m_PipelineBuilds->ClaimQueued(request.Key, request.Ticket))
-            return; // cancelled, or a synchronous caller took the build over
         bool published = false;
         const PipelineHandle h = CreateAndPublishPipeline(request, published);
         if (h.IsValid() && !published)

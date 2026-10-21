@@ -136,7 +136,9 @@ TEST(OceanFrameStamp, ConsecutiveGraphFramesContinueAcrossDeviceSlotWraps)
     for (uint64 frame = 0; frame < kFramesAcrossTwoSlotWraps; ++frame)
     {
         if (frame > 0u)
+        {
             EXPECT_TRUE(stamp.PrecedesFrame(frame)) << "frame " << frame;
+        }
         EXPECT_FALSE(stamp.IsFrame(frame));
         stamp.Frame = frame;
         EXPECT_TRUE(stamp.IsFrame(frame));
@@ -170,7 +172,7 @@ TEST(OceanShadowSimTest, DeclaresEveryFrameAcrossDeviceSlotWraps)
         }
         rs.Views().SetCameraData(cameraId, camera);
         const ViewId viewId = rs.Views().AllocateView("OceanShadowView", cameraId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -261,11 +263,15 @@ TEST(OceanShadowSimTest, DeclaresEveryFrameAcrossDeviceSlotWraps)
             device->FinalizeFrame();
             device->WaitForIdle();
             if (index + 1u == kShadowRemovedFrame)
+            {
                 EXPECT_LT(ReadCentreVisibility(*device, sim.GetTexture(viewId)), 0.05f)
                     << "the authored shadow must reach the field before the history check means anything";
+            }
             if (index == kShadowRemovedFrame)
+            {
                 EXPECT_LT(ReadCentreVisibility(*device, sim.GetTexture(viewId)), kLitWithoutHistory)
                     << "history must carry the shadow across the device-slot wrap at graph frame " << index;
+            }
         }
         EXPECT_EQ(slotsSeen.size(), device->GetFramesInFlight())
             << "the test must drive the device slot through a wrap to mean anything";

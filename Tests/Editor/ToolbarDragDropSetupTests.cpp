@@ -34,6 +34,7 @@
 using GameEngine::Button;
 using GameEngine::DisplayMode;
 using GameEngine::UIElement;
+using GameEngine::operator""_sid;
 using GameEngine::UIEvent;
 using GameEngine::UILayoutAccess;
 using GameEngine::Editor::ToolbarDragDrop;
@@ -249,7 +250,7 @@ void PressAndDragTo(Button* button, float x, float y)
 
 DisplayMode IndicatorDisplay(UIElement* root)
 {
-    UIElement* indicator = root->FindById("toolbar-insertion-indicator");
+    UIElement* indicator = root->FindById("toolbar-insertion-indicator"_sid);
     if (!indicator)
         return DisplayMode::None;
     return indicator->Overrides().Get(GameEngine::Style::Display).value_or(DisplayMode::None);

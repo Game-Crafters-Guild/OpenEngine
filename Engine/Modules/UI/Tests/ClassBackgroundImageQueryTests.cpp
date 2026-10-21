@@ -112,13 +112,13 @@ std::vector<StylesheetHandle> ShippedGlobalCascade()
 // table keyed on the class name could only ever give one.
 TEST(ClassBackgroundImageQueryTests, ResolvedUrlFollowsTheStylesheetThatDeclaredIt)
 {
-    EXPECT_EQ(ResolveIn(R"(.checkmark-icon { background-image: url("editor:Icons/todolist.png"); })",
+    EXPECT_EQ(ResolveIn(R"(.checkmark-icon { background-image: url("editor:Icons/todolist.svg"); })",
                         "checkmark-icon"),
-              "editor:Icons/todolist.png");
+              "editor:Icons/todolist.svg");
 
     // Same class, stylesheet moved elsewhere. Both the old convention
     // ("checkmark-icon" -> Icons/checkmark.png) and the old hardcoded
-    // exception (-> Icons/todolist.png) fail this line.
+    // exception (-> Icons/todolist.svg) fail this line.
     EXPECT_EQ(ResolveIn(R"(.checkmark-icon { background-image: url("editor:Icons/moved-away.svg"); })",
                         "checkmark-icon"),
               "editor:Icons/moved-away.svg");
@@ -226,24 +226,24 @@ TEST(ClassBackgroundImageQueryTests, ShippedIconsMatchTheDeletedTablesValues)
     const std::vector<StylesheetHandle> cascade = ShippedGlobalCascade();
     ASSERT_GE(cascade.size(), 10u) << "theme.css cascade did not parse; the rest is vacuous";
 
-    EXPECT_EQ(Resolve(cascade, "checkmark-icon"), "editor:Icons/todolist.png");
-    EXPECT_EQ(Resolve(cascade, "script-icon"), "editor:Icons/log.png");
+    EXPECT_EQ(Resolve(cascade, "checkmark-icon"), "editor:Icons/todolist.svg");
+    EXPECT_EQ(Resolve(cascade, "script-icon"), "editor:Icons/log.svg");
     EXPECT_EQ(Resolve(cascade, "dock-log-icon"), "editor:Icons/DockLog.svg");
     EXPECT_EQ(Resolve(cascade, "dock-script-errors-icon"), "editor:Icons/DockScriptErrors.svg");
     EXPECT_EQ(Resolve(cascade, "dock-shader-errors-icon"), "editor:Icons/DockShaderErrors.svg");
     EXPECT_EQ(Resolve(cascade, "dock-clip-editor-icon"), "editor:Icons/DockClipEditor.svg");
 
     // The panels the panelId -> path table used to cover, now authored classes.
-    EXPECT_EQ(Resolve(cascade, "dock-assets-icon"), "editor:Icons/folder.png");
-    EXPECT_EQ(Resolve(cascade, "dock-asset-view-icon"), "editor:Icons/eye.png");
-    EXPECT_EQ(Resolve(cascade, "dock-hierarchy-icon"), "editor:Icons/list.png");
-    EXPECT_EQ(Resolve(cascade, "dock-inspector-icon"), "editor:Icons/options.png");
-    EXPECT_EQ(Resolve(cascade, "dock-scene-view-icon"), "editor:Icons/sceneicon.png");
-    EXPECT_EQ(Resolve(cascade, "dock-game-view-icon"), "editor:Icons/game-controller.png");
-    EXPECT_EQ(Resolve(cascade, "dock-ui-demo-icon"), "editor:Icons/desktop.png");
-    EXPECT_EQ(Resolve(cascade, "dock-diff-icon"), "editor:Icons/codeicon.png");
-    EXPECT_EQ(Resolve(cascade, "dock-web-icon"), "editor:Icons/computer.png");
+    EXPECT_EQ(Resolve(cascade, "dock-assets-icon"), "editor:Icons/folder.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-asset-view-icon"), "editor:Icons/eye.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-hierarchy-icon"), "editor:Icons/list.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-inspector-icon"), "editor:Icons/options.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-scene-view-icon"), "editor:Icons/sceneicon.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-game-view-icon"), "editor:Icons/game-controller.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-ui-demo-icon"), "editor:Icons/desktop.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-diff-icon"), "editor:Icons/codeicon.svg");
+    EXPECT_EQ(Resolve(cascade, "dock-web-icon"), "editor:Icons/computer.svg");
 
     // The launcher's generic mark, for a row whose panel declares no class.
-    EXPECT_EQ(Resolve(cascade, "menulist-icon"), "editor:Icons/menulist.png");
+    EXPECT_EQ(Resolve(cascade, "menulist-icon"), "editor:Icons/menulist.svg");
 }

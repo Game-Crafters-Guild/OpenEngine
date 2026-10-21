@@ -15,6 +15,23 @@ import {
 import { defineTool, type ToolDef, ToolError } from "../registry.js";
 import { proxyTool } from "./proxy.js";
 
+/**
+ * A world point as `[x, y, z]`. A factory, not a shared const: one zod instance reused across two
+ * properties emits a `$ref` for the second instead of inlining it (vec3Tuple()).
+ * Unlike vec3Tuple() it also takes the JSON text the CLI passes.
+ */
+function worldPoint() {
+  return z.preprocess(
+    (val) => {
+      if (typeof val === "string") {
+        try { return JSON.parse(val); } catch { return val; }
+      }
+      return val;
+    },
+    z.array(z.coerce.number()).length(3),
+  );
+}
+
 /** Image name the panel CLI is asked to capture. */
 const kEditorProcessName = process.platform === "win32" ? "Editor.exe" : "Editor";
 
@@ -56,7 +73,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "get_render_stats",
     category: "profiling",
-    description: "Get rendering performance statistics. renderServices.renderThreadCpu.ecsSystems[].maxMs is each ECS system's slowest update since tracking began; pass resetSystemMaxima:true to clear it after this read, so the next read reports the worst single frame in between (read, act, read).",
+    description: "Get rendering performance statistics. renderServices.ibl.bakeCount counts the image-based-lighting bakes (sky and reflection probes) since the renderer started, with framesSinceBake (absent before the first bake): a capture is settled once bakeCount stops rising. renderServices.renderThreadCpu.ecsSystems[].maxMs is each ECS system's slowest update since tracking began; pass resetSystemMaxima:true to clear it after this read, so the next read reports the worst single frame in between (read, act, read).",
     schema: {
       resetSystemMaxima: z.coerce.boolean().optional().describe("Clear every ECS system's maxMs after this read (default false)"),
     },
@@ -188,13 +205,60 @@ export const tools: ToolDef[] = [
   }),
 
   proxyTool({
+    name: "get_memory_stats",
+    category: "profiling",
+    description: "Read the Memory module's stats registry right now: frame (the editor's frame count), entries[] newest first as {name, kind, residency, bytes} where kind is TrackedBytes (bytes its owner reported), Arena, Scratch, ObjectPool or RangeAllocator (bytes in use plus reservedBytes, highWaterBytes, blocks; an ObjectPool counts slot bytes as of its last block acquisition; a RangeAllocator counts its live ranges' bytes, reservedBytes is the end of its highest range ever handed out and blocks its outstanding ranges); a Scratch entry is one thread's ScratchScope arena and adds threadId (OS id), threadName, outOfOrder (allocations through a scope that was not the innermost, served from the heap) and shrinks (retained blocks released by the hysteresis). scratch sums the Scratch entries {threads, bytes, reservedBytes, outOfOrder, shrinks}; a thread writes its scratch counts when it acquires a block and at every 64th outermost close, so bytes lags: compare reservedBytes and highWaterBytes across reads. processResidentBytes is the process's resident size now, where the platform reports it.",
+    schema: {},
+  }),
+
+  proxyTool({
     name: "get_ecs_wave_trace",
     category: "profiling",
-    description: "Read how the ECS system waves ran, frame by frame, from a ring of the newest 256 SystemManager updates recorded while the trace is armed (pass enabled: true first; arming clears the ring). Unlike get_job_system, which polls between frames, it sees every fork after the fact. summary: ecsMs (the ECS part of the frame), framePeriodMs, joinWaitMs (time the main thread waited in wave joins), inlineMs (bodies the main thread ran in single-system and exclusive waves), helpMs (forked bodies the main thread ran while joining; 0 on native targets, where the join parks), gapsMs (ECS time outside any wave), forkedWaves, forks, joins, and publishes: waveForks (one job per fork), inSystems (jobs system bodies published on their own thread), duringUpdate (every thread's publishes during the ECS update), perFrame (every thread's publishes from one frame's start to the next) and outsideSystems (perFrame minus the two attributed counts). waves[] per plan wave: systems, forks, makespanMs, gapBeforeMs, joinWaitMs, criticalPathMs (slowest forked body), dispatchMs (fork publish to body start). systems[] per system, slowest first: ms, updates, forked, onWorker, onCaller, publishesPerUpdate. Distributions are {median, p95, max} in milliseconds. frames[] describes the newest N frames system by system. On macOS the same waves, joins and bodies are os_signpost intervals (subsystem com.gameengine.ecs, category SystemWaves) for an Instruments recording while armed.",
+    description: "Read how the ECS system waves ran, frame by frame, from a ring of the newest 256 SystemManager updates recorded while the trace is armed (pass enabled: true first; arming clears the ring). Unlike get_job_system, which polls between frames, it sees every fork after the fact. summary: ecsMs (the ECS part of the frame), framePeriodMs, joinWaitMs (time the main thread waited in wave joins), inlineMs (bodies the main thread ran in single-system and exclusive waves), helpMs (forked bodies the main thread ran while joining, its own wave's jobs), gapsMs (ECS time outside any wave), forkedWaves, forks, joins, and publishes: waveForks (pool tasks the waves' publish loops published, at most one per fork), inSystems (jobs system bodies published on their own thread), duringUpdate (every thread's publishes during the ECS update), perFrame (every thread's publishes from one frame's start to the next) and outsideSystems (perFrame minus the two attributed counts). waves[] per plan wave: systems, forks, makespanMs, gapBeforeMs, joinWaitMs, criticalPathMs (slowest forked body), dispatchMs (fork publish to body start). systems[] per system, slowest first: ms, updates, forked, onWorker, onCaller, publishesPerUpdate. Distributions are {median, p95, max} in milliseconds. frames[] describes the newest N frames system by system. On macOS the same waves, joins and bodies are os_signpost intervals (subsystem com.gameengine.ecs, category SystemWaves) for an Instruments recording while armed.",
     schema: {
       enabled: z.boolean().optional().describe("Arm (true, clears the ring) or disarm (false) the trace. Omit to leave it as it is."),
       window: z.coerce.number().int().optional().describe("Summarise the newest N recorded frames (default and maximum 256)"),
       frames: z.coerce.number().int().optional().describe("Also describe the newest N frames one by one (default 0)"),
+    },
+  }),
+
+  proxyTool({
+    name: "get_frame_phases",
+    category: "profiling",
+    description: "Attribute slow frames after the fact. The editor always records one sample per main-loop frame for the newest 1024 frames: frameMs (Application's frame interval, the value get_render_stats' 250 ms window holds; when the reply's fixedFrameRate is true, Application's delta is the fixed step, so frameMs is measured from Update to Update instead) and the phase timings the frame loop already measures: poll (the gamepad read), input, appUpdate (.preUi, .debugPanels, .uiWindows, .tail), engineUpdate, render (.preloop, .beginFrame, .worldViews, .thumbnails, .uiRecord, .terminalPasses, .rgCompile, .rgExecute, .variantCompile, .prewarm, .present; for the window that rendered the Scene View), sleep, unaccounted (frameMs minus the top-level phases: the OS event pump, which runs between frames outside every phase, the CPU profiler's frame close and log dump while it is armed, and the loop's bookkeeping), renderServices.sort / .bucketerSchedule / .extraction, renderGraph.compile / .schedule / .generateBarriers / .buildSubmissionPlan / .queueSubmit / .barrierEmit, gpuSync.fenceWait / .acquire / .presentTransitionSubmit / .queuePresent and gpuSync.gpuFramePeriod (GPU timeline spacing, read a frame or more late). renderServices, renderGraph and gpuSync times are measured inside engineUpdate and render, so they repeat time rather than add to it. summary: frameMs and every phase as {median, p95, p99, max} over the window, spanMs; with minFrameMs, framesAtOrAbove and spikeIntervalFrames / spikeIntervalMs (the spacing between slow frames: a steady interval means a periodic trigger). frames[]: each listed frame's frameIndex, frameMs, agoMs, sceneViewRendered, jobsPublished (by every thread during the frame), graphSubmissions, graphRenderPasses, its non-zero phases, and excess: the five phases furthest above their window median, which names where a slow frame's time went. While get_ecs_wave_trace is armed and still holds the frame (its newest 256), a listed frame also carries ecs: {ecsMs, slowestSystems[] {name, ms, onWorker}}. Times are milliseconds.",
+    schema: {
+      window: z.coerce.number().int().optional().describe("Summarise the newest N frames (default and maximum 1024)"),
+      minFrameMs: z.coerce.number().optional().describe("List every frame in the window whose frame time is at or above this, e.g. 10"),
+      frames: z.coerce.number().int().optional().describe("Also list the newest N frames whatever their time (default 0)"),
+    },
+  }),
+
+  proxyTool({
+    name: "get_navigation_stats",
+    category: "profiling",
+    description: "Read NavigationPathfindingSystem's path solve budget. Every navigation request (an agent with HasDestination and PathDirty or ReplanRequested, whatever set them: orders, the replan timer, the Failed retry, the movement system's corridor checks) joins one queue; each frame solves the oldest maxPathSolvesPerFrame and leaves the rest waiting: a PathDirty request as Pending, a replan timer refresh still walking its current path. frames: Updates run. frame (the newest Update): newRequests (requests that joined the queue), solved, backlog (requests left queued), oldestWaitFrames and oldestWaitSeconds (the oldest request still queued, 0 when none is), longestSolvedWaitFrames and longestSolvedWaitSeconds (the longest wait among the requests solved; a request solved in the frame it joined waited 0). totals: newRequests and solved since the system was created; read twice and subtract for a rate. solverScratch (the navigation world's grid A* solvers, one per grid path solve it has run at once; 11 bytes per cell, grown to the largest grid the solver solved on and freed entirely, whenever a grid map is removed or replaced, if it holds more than the largest grid map left needs; the next solve regrows it): solvers, solversHoldingScratch, heldBytes (what they hold as of each one's last solve or release), solverHighWaterBytes (the most any one of them has held). Refused when no ECS system manager runs or the navigation systems are not scheduled.",
+    schema: {},
+  }),
+
+  proxyTool({
+    name: "find_path",
+    category: "scene",
+    description:
+      "Solve one path across a baked NavigationSurface with the surface's own agent (radius, height), on the editor's main thread between frames. Returns status (Complete: reaches `to`; Partial: ends at the reachable point nearest `to`; Failed: `from` or `to` has no surface polygon near it, or nothing connects them), surfaceEntityId, bakeStatus (the line the surface's inspector shows), pointCount, lengthMeters and the corner points as [x, y, z]. Refused with the reason when the scene has no surface, has several and entityId is missing, or the surface is not baked.",
+    schema: {
+      from: worldPoint().describe("Start as a world point [x, y, z]"),
+      to: worldPoint().describe("End as a world point [x, y, z]"),
+      entityId: z.coerce.number().optional().describe("The NavigationSurface entity; optional when the scene has one"),
+    },
+  }),
+
+  proxyTool({
+    name: "get_navigation_sources",
+    category: "scene",
+    description:
+      "List what a bake of a NavigationSurface reads besides the terrain, gathered on the editor's main thread between frames: every collider and mesh inside the surface's bounds, one entry per entity and kind. Returns surfaceEntityId, count and sources, each with entityId, name (when the entity has one), kind (Collider: a box, sphere, capsule or plane collider on a Static body; Mesh: a mesh renderer's model submesh or primitive) and, for a mesh, policy (the NavigationSource policy that admitted it: Auto, or Include for a mesh Auto would leave out); colliders carry no policy. A mesh under NavigationSource Exclude, on itself or inherited from an ancestor, is not listed. Refused with the reason when the scene has no surface, or has several and entityId is missing.",
+    schema: {
+      entityId: z.coerce.number().optional().describe("The NavigationSurface entity; optional when the scene has one"),
     },
   }),
 

@@ -31,6 +31,7 @@
 #include "Assets/TextureAsset.h"
 #include "Assets/RenderPipelineAsset.h"
 
+#include "Memory/ImagePins.h"
 #include "NativeScripting/NativeScriptManager.h"
 #include "UI/ModuleOwnedHandlers.h"
 
@@ -296,12 +297,13 @@ void ShutdownWorldServices()
     }
 }
 
-// Opens the audio device. False (audio disabled) when the init fails or throws.
-bool InitializeAudio(Audio::AudioSystem& audio)
+// Opens the audio output. False (audio disabled) when the init fails or throws.
+bool InitializeAudio(Audio::AudioSystem& audio, Audio::AudioOutput output)
 {
     try
     {
         Audio::AudioSystemConfig audioCfg{};
+        audioCfg.output = output;
         if (!audio.Initialize(audioCfg))
         {
             Logger::Log::Warning("AudioSystem init failed; audio disabled");
@@ -314,6 +316,22 @@ bool InitializeAudio(Audio::AudioSystem& audio)
         Logger::Log::Warning("AudioSystem init threw: {}", e.what());
         return false;
     }
+}
+
+// The image-pin answer for the arenas that still hold a destructor in [base, base + size):
+// "N arena(s) holding destructors: <names>", or empty when none does.
+std::string DescribeArenaImagePins(uint64 base, uint64 size)
+{
+    const std::vector<std::string> arenas = Memory::Detail::DescribeArenasPinningImage(base, size);
+    if (arenas.empty())
+        return {};
+    std::string pins = std::to_string(arenas.size()) + " arena(s) holding destructors:";
+    for (std::size_t index = 0; index < arenas.size(); ++index)
+    {
+        pins += index == 0 ? " " : ", ";
+        pins += arenas[index];
+    }
+    return pins;
 }
 
 } // namespace
@@ -333,6 +351,8 @@ class EngineCore::InitializeTransaction
         m_Engine.DiscardAudioInitAfterFailedInitialize();
         m_Engine.m_StartupChannel.reset();
         m_Engine.m_ShaderHookState.reset();
+        // The manager this Initialize may have opened the gate on is never pumped.
+        m_Engine.SetPostGate(PostGate::ShutDown);
         m_Engine.m_InitializingThread.store(std::thread::id{}, std::memory_order_release);
         m_Engine.m_Lifecycle.store(EngineLifecycleState::Uninitialized, std::memory_order_release);
     }
@@ -350,6 +370,50 @@ class EngineCore::InitializeTransaction
 };
 
 EngineCore* EngineCore::s_Instance = nullptr;
+
+void EngineCore::SetPostGate(PostGate state)
+{
+    std::lock_guard<std::mutex> lock(m_PostGateMutex);
+    m_PostGate = state;
+}
+
+EngineCore::MainThreadPost EngineCore::PostMainThreadTask(std::function<void()> task)
+{
+    MainThreadPost answer = MainThreadPost::Dropped;
+    {
+        std::lock_guard<std::mutex> lock(m_PostGateMutex);
+        if (m_PostGate == PostGate::NoQueue || (m_PostGate == PostGate::Live && IsStandaloneHosted()))
+        {
+            answer = MainThreadPost::RunInline;
+        }
+        else if (m_PostGate == PostGate::Live)
+        {
+            m_ScriptManager->QueueMainThreadTask(std::move(task));
+            return MainThreadPost::Queued;
+        }
+    }
+    // Outside the gate: the task may itself reach the main thread.
+    if (answer == MainThreadPost::RunInline)
+    {
+        task();
+    }
+    return answer;
+}
+
+EngineCore::MainThreadPost EngineCore::RequestManagedPostDrain()
+{
+    std::lock_guard<std::mutex> lock(m_PostGateMutex);
+    if (m_PostGate == PostGate::NoQueue || (m_PostGate == PostGate::Live && IsStandaloneHosted()))
+    {
+        return MainThreadPost::RunInline;
+    }
+    if (m_PostGate == PostGate::ShutDown)
+    {
+        return MainThreadPost::Dropped;
+    }
+    m_ScriptManager->RequestManagedPostDrain();
+    return MainThreadPost::Queued;
+}
 
 EngineCore::EngineCore()
 {
@@ -408,6 +472,10 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         return false;
     }
     m_InitializingThread.store(std::this_thread::get_id(), std::memory_order_release);
+    // The frames run on this thread, whatever the configuration. Recorded before anything
+    // that can run a script, so the scripting ABI's thread predicates answer from the start.
+    m_MainThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+    m_StandaloneHosted.store(config.StandaloneHosted, std::memory_order_release);
     InitializeTransaction transaction(*this);
 
     // Unreachable by construction: Shutdown() and the Initialize rollback both join
@@ -649,6 +717,15 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
                     pins += ", ";
                 pins += std::to_string(hooks) + " ECS component hook(s)";
             }
+            // Arenas holding a destructor from the image run it at their owner's Reset or
+            // destruction; until then the code must stay mapped.
+            const std::string arenas = DescribeArenaImagePins(base, size);
+            if (!arenas.empty())
+            {
+                if (!pins.empty())
+                    pins += ", ";
+                pins += arenas;
+            }
             return pins;
         };
         observer.ImageUnmapping = [](uint64 base, uint64 size) {
@@ -675,13 +752,13 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     Rendering::Utils::SetShaderPathResolver(&ResolveEngineShaderPath);
     Rendering::SetShaderPackageRebuildAction(&ShaderPackageRebuildAction);
     {
-        std::filesystem::path shaderCacheRoot = resolvedWorkspaceRoot / ".Cache" / "Shaders";
-        // Runtimes without a compiler read the current bundled packages for
-        // every project. A persisted project cache can contain older variants
-        // or metadata and must not shadow that authoritative bundle.
+        // The cooked cache a runtime ships is probed before the workspace's own, so a persisted
+        // workspace cache never shadows it; a program it lacks compiles into the workspace.
+        ShaderCacheRoots shaderCacheRoots;
         if (const auto bundleCache = PathUtils::GetBundledShaderCacheRoot(); !bundleCache.empty())
-            shaderCacheRoot = bundleCache;
-        ShaderProgramAsset::SetShaderCacheRoot(shaderCacheRoot);
+            shaderCacheRoots.ReadOnly.push_back(bundleCache);
+        shaderCacheRoots.Writable = resolvedWorkspaceRoot / ".Cache" / "Shaders";
+        ShaderProgramAsset::SetShaderCacheRoots(std::move(shaderCacheRoots));
     }
 
     // Initialize script manager (only when scripting is enabled at build time).
@@ -735,7 +812,9 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
 
     // If scripting is effectively disabled by config, skip ScriptManager initialization entirely.
     // This keeps headless tools/tests fast and avoids unnecessary file watcher + hot reload pipeline setup.
+    // A NativeAOT Player runs scripts with the CLR off, and keeps the manager for its main-thread queue.
     const bool scriptingFullyDisabled =
+        !scriptsConfig.nativeAot &&
         scriptsConfig.disableClr &&
         !scriptsConfig.enableHotReload &&
         !scriptsConfig.enableAsyncHotReload &&
@@ -751,9 +830,9 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         {
             m_ScriptManager = MakeUnique<ScriptManager>();
         }
-        // Engine init and Update run on this thread; record it so off-main-thread
-        // pumping of main-thread tasks gets diagnosed instead of passing silently.
-        m_ScriptManager->MarkMainThread();
+        // Before the manager initializes: the CLR's initial load can post to the main thread,
+        // and the pump inside ScriptManager::Initialize runs what it posted.
+        SetPostGate(PostGate::Live);
 
         if (!scriptsNativeDllPath.empty())
         {
@@ -796,14 +875,15 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     }
     else
     {
+        SetPostGate(PostGate::NoQueue);
         Logger::Log::Info("ScriptManager disabled by config; skipping ScriptManager initialization");
     }
 #else
-    // Even when scripting is compiled out, we still want asset hot
-    // reloading (e.g., UI CSS/layout, textures, shaders) to work when
-    // requested via ScriptsConfig. Honor the engine-level scripts config
-    // for the AssetManager here.
-    if (m_ScriptsConfig.has_value() && m_ScriptsConfig->enableHotReload)
+    SetPostGate(PostGate::NoQueue);
+    // Asset hot reloading (UI CSS and layouts, textures, shaders, terrain material libraries)
+    // does not depend on C# scripting: the same default as a scripting build (on unless the
+    // engine-level scripts config turns it off).
+    if (!m_ScriptsConfig.has_value() || m_ScriptsConfig->enableHotReload)
     {
         m_AssetManager->SetHotReloadEnabled(true);
         Logger::Log::Info("Asset hot reloading enabled (scripting disabled at build time)");
@@ -823,25 +903,33 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     Scene::RegisterBuiltInSceneSchemas();
 
     // Initialize engine-owned audio system asynchronously (no downstream deps during startup).
+    // A headless host opens no audio device: the engine runs as it does when the device
+    // fails to open, with no AudioSystem and no audio systems in the schedule.
     tPhase = std::chrono::high_resolution_clock::now();
     m_StartupChannel = MakeUnique<JobSystem::JobChannel>(
         *m_JobSystem, JobSystem::JobChannelDesc{.Name = "Engine startup", .MaxRunning = 2});
-    m_AudioSystem = MakeUnique<Audio::AudioSystem>(*m_AssetManager);
+    if (config.Headless)
     {
+        Logger::Log::Info("[Startup] AudioSystem: none (headless)");
+    }
+    else
+    {
+        m_AudioSystem = MakeUnique<Audio::AudioSystem>(*m_AssetManager);
         // Opening the device waits on the OS, so it is a startup-channel job. Where the
         // joining thread cannot block (Platform::SupportsTransientThreads: the browser
         // main thread), GetAudioSystem() runs it inline on first use instead.
         if (Platform::SupportsTransientThreads())
         {
             Audio::AudioSystem* audioRaw = m_AudioSystem.get();
-            m_AudioInit = m_StartupChannel->Submit([audioRaw]() -> bool { return InitializeAudio(*audioRaw); });
+            const Audio::AudioOutput output = config.AudioOutput;
+            m_AudioInit = m_StartupChannel->Submit([audioRaw, output]() -> bool { return InitializeAudio(*audioRaw, output); });
         }
         else
         {
             m_AudioInitDeferred = true;
         }
+        Logger::Log::Info("[Startup] AudioSystem: launched async ({:.1f}ms to dispatch)", MsSince(tPhase));
     }
-    Logger::Log::Info("[Startup] AudioSystem: launched async ({:.1f}ms to dispatch)", MsSince(tPhase));
 
     // If engine-managed rendering loop is enabled, ensure world exists
     if (m_RenderingLoopEnabled)
@@ -952,7 +1040,7 @@ bool EngineCore::JoinAudioInitLocked()
     if (m_AudioInitDeferred)
     {
         m_AudioInitDeferred = false;
-        return m_AudioSystem && InitializeAudio(*m_AudioSystem);
+        return m_AudioSystem && InitializeAudio(*m_AudioSystem, m_Config.AudioOutput);
     }
     if (!m_AudioInit.IsValid())
         return true;
@@ -1018,7 +1106,9 @@ void EngineCore::Shutdown()
         PhysicsECS::PhysicsWorldService::Shutdown();
     }
 
-    // Shutdown subsystems in reverse order
+    // Shutdown subsystems in reverse order. The gate closes first, so a request that races
+    // this teardown is dropped instead of reaching the manager the reset below frees.
+    SetPostGate(PostGate::ShutDown);
     if (m_ScriptManager)
     {
         m_ScriptManager->Shutdown();
@@ -1361,7 +1451,15 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
         // Initialize world services and register module pipeline node types.
         InitializeWorldServices();
         ApplyTerrainBakeCacheLocation();
-        if (auto* nodeTypes = renderServices->Spine().GetPipelineNodeRegistry())
+        // A headless host passes no render services: there are no pipeline node types
+        // to register, and every scheduled system skips its render work, including the
+        // render-side systems that also produce terrain height and ocean buoyancy.
+        if (!renderServices)
+        {
+            Logger::Log::Info("EnableRenderingLoop: no render services (headless); the schedule "
+                              "runs without render work");
+        }
+        else if (auto* nodeTypes = renderServices->Spine().GetPipelineNodeRegistry())
         {
             TerrainECS::RegisterTerrainPipelineNodes(*nodeTypes);
             CBTTerrainECS::RegisterCBTPipelineNodes(*nodeTypes);
@@ -1398,7 +1496,7 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
         schedule.Add<Video::VideoTextureSystem>(
             "VideoTexture", ECS::SystemPhase::Extraction, 8,
             {"RenderExtraction", "TerrainExtraction"},
-            renderServices->GetDevice(), renderServices);
+            renderServices ? renderServices->GetDevice() : nullptr, renderServices);
         SplineECS::AddSplineSystemsToSchedule(schedule);
         PathfindingECS::AddPathfindingSystemsToSchedule(schedule);
         // Associate contributions with their plugin so reload reconciliation

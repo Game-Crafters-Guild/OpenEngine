@@ -40,6 +40,11 @@ class Material;
 struct DrawCommand;
 } // namespace GameEngine::Engine::Renderer
 
+namespace GameEngine::TerrainECS
+{
+class TerrainRenderFeature;
+} // namespace GameEngine::TerrainECS
+
 namespace GameEngine::CBTTerrainECS
 {
 
@@ -209,13 +214,15 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // that heightmap through its own descriptor ring (bindings 15/18/19), which the per-slot lazy
     // SetHeightSource only refreshes one element per frame — so a retired image can be freed while a
     // ring element still references it (device-lost in VertexEval a few frames later). This polls the
-    // terrain feature's retire generation and, on a bump, drains the GPU and rebinds every ring
-    // element to its default in the SAME update the re-provision commits (RefreshTerrainSources),
-    // then forces a full VertexEval since the new heightmap staled every cached bisector corner.
-    // A retire also means the tree grew on a terrain that is gone, so it marks the tree for a
-    // restart (EnsureSeeded). Called render-side before EnsureSeeded and BuildFrameParams. No-op
-    // when nothing retired.
-    void ConsumeTerrainRetire(uint64_t retireGeneration);
+    // terrain feature's retire generation and, on a bump of any terrain's, retires the submitted
+    // graphics work and rebinds every ring element to its default in the SAME update the
+    // re-provision commits (RefreshTerrainSources: a ring element may still hold a terrain drawn in
+    // an earlier frame), then forces a full VertexEval since the new heightmap staled every cached
+    // bisector corner. Only a retire of the terrain the tree grew on (the one BuildFrameParams last
+    // bound) marks the tree for a restart (EnsureSeeded); another terrain's retire leaves the tree
+    // as it is. Called render-side before EnsureSeeded and BuildFrameParams. No-op when nothing
+    // retired.
+    void ConsumeTerrainRetire(const TerrainECS::TerrainRenderFeature& terrainFeature);
 
     // Gathers this frame's camera (from the view) + terrain params (the first active
     // terrain from TerrainRenderFeature — the SAME heightmap/world-size CDLOD uses)
@@ -376,8 +383,11 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // terrain whose words each slot holds and their version (a terrain change re-uploads).
     uint64_t m_PageUploadedTableVersion[CBTTerrain::kCBTFrameParamsRing] = {};
     uint32_t m_PageBoundTerrain[CBTTerrain::kCBTFrameParamsRing] = {};
-    // The terrain BuildFrameParams last bound (its render handle index), for TerrainSourceChanged.
+    // The terrain BuildFrameParams last bound (its render handle index), for TerrainSourceChanged
+    // and for ConsumeTerrainRetire's restart decision; m_HasBoundTerrain is false while no terrain
+    // is bound (index 0 is a valid handle index).
     uint32_t m_BoundTerrainIndex = 0u;
+    bool m_HasBoundTerrain = false;
     // The height source the frame parameters last committed (the terrain's handle, paged or not),
     // logged with the frame when it changes: the source that draws, not the page predicate's intent.
     uint32_t m_CommittedSourceTerrain = ~0u;

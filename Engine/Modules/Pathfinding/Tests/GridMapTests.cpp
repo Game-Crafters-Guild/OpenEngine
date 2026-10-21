@@ -3,8 +3,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
+#include <thread>
 
 using namespace GameEngine;
 using namespace GameEngine::Pathfinding;
@@ -108,6 +113,98 @@ TEST_F(GridMapTest, IsPointNavigableReturnsFalseForBlockedCells)
 TEST_F(GridMapTest, IsPointNavigableReturnsTrueForOpenCells)
 {
     EXPECT_TRUE(m_Map->IsPointNavigable(5.5f, 0.0f, 5.5f, 0.5f));
+}
+
+// #4044: a body of the radius around the point keeps clear of every blocked cell's rectangle,
+// wherever in its cell the point lies and on both sides of half a cell. Cell (3, 3) is [3, 4] x [3, 4].
+TEST_F(GridMapTest, IsPointNavigableKeepsTheRadiusFromBlockedCells)
+{
+    m_Map->SetCellBlocked(3, 3, true);
+
+    EXPECT_FALSE(m_Map->IsPointNavigable(2.9f, 0.0f, 3.5f, 0.45f)) << "0.1 m from the cell";
+    EXPECT_TRUE(m_Map->IsPointNavigable(2.5f, 0.0f, 3.5f, 0.45f)) << "0.5 m from the cell";
+    EXPECT_FALSE(m_Map->IsPointNavigable(3.5f, 0.0f, 3.5f, 0.45f)) << "inside the cell";
+    EXPECT_TRUE(m_Map->IsPointNavigable(2.9f, 0.0f, 3.5f, 0.0f)) << "a point needs only its own cell open";
+    EXPECT_FALSE(m_Map->IsPointNavigable(2.8f, 0.0f, 2.8f, 0.3f)) << "0.28 m from the cell's corner";
+    EXPECT_TRUE(m_Map->IsPointNavigable(2.4f, 0.0f, 3.5f, 0.55f)) << "0.6 m from the cell";
+    EXPECT_FALSE(m_Map->IsPointNavigable(2.5f, 0.0f, 3.5f, 0.55f)) << "0.5 m from the cell";
+}
+
+// Blocked cells inside `openCells` count as open, the start's own cell included;
+// outside it they are walls.
+TEST_F(GridMapTest, IsSegmentClearCountsTheOpenCellsAsOpen)
+{
+    m_Map->SetCellBlocked(5, 5, true); // the rectangle [5, 6] x [5, 6]
+    const GridMap::CellRange aroundTheCell{4, 4, 6, 6};
+    const GridMap::CellRange elsewhere{10, 10, 12, 12};
+
+    EXPECT_TRUE(m_Map->IsSegmentClear(5.5f, 5.5f, 9.5f, 5.5f, 0.45f, &aroundTheCell))
+        << "a start inside a blocked cell of the range";
+    EXPECT_FALSE(m_Map->IsSegmentClear(5.5f, 5.5f, 9.5f, 5.5f, 0.45f, &elsewhere))
+        << "a start inside a blocked cell outside the range";
+    // Along z = 4.8 the segment passes the cell 0.2 m away.
+    EXPECT_TRUE(m_Map->IsSegmentClear(2.5f, 4.8f, 9.5f, 4.8f, 0.45f, &aroundTheCell));
+    EXPECT_FALSE(m_Map->IsSegmentClear(2.5f, 4.8f, 9.5f, 4.8f, 0.45f, &elsewhere));
+}
+
+// #4044: off the grid counts as blocked, so a body near the grid's edge does not fit.
+TEST_F(GridMapTest, IsPointNavigableKeepsTheRadiusFromTheGridEdge)
+{
+    EXPECT_FALSE(m_Map->IsPointNavigable(0.3f, 0.0f, 5.5f, 0.45f)) << "0.3 m from the edge";
+    EXPECT_TRUE(m_Map->IsPointNavigable(0.5f, 0.0f, 5.5f, 0.45f)) << "0.5 m from the edge";
+}
+
+// #4044: a hex grid's odd rows are shifted half a cell along X; the clearance test reads the
+// shifted rectangle WorldToCell maps to the cell.
+TEST_F(GridMapTest, IsPointNavigableReadsTheHexRowShift)
+{
+    GridSettings settings = MakeDefaultSettings();
+    settings.Type = GridType::Hex;
+    GridMap hex(settings);
+    hex.SetCellBlocked(4, 5, true); // an odd row
+    float32 centreX = 0.0f, centreZ = 0.0f;
+    hex.CellToWorld(4, 5, centreX, centreZ);
+
+    EXPECT_FALSE(hex.IsPointNavigable(centreX + 0.7f, 0.0f, centreZ, 0.3f)) << "0.2 m right of the cell";
+    EXPECT_TRUE(hex.IsPointNavigable(centreX - 0.9f, 0.0f, centreZ, 0.3f)) << "0.4 m left of the cell";
+}
+
+// #4044: smoothing keeps the agent's radius from blocked cells. The unsmoothed route from cell
+// (0, 0) to cell (5, 3) passes the blocked cell (3, 3) at 0.71 m; the straight shortcut passes its
+// corner at 0.34 m, inside a 0.45 m body.
+TEST_F(GridMapTest, SmoothedPathKeepsTheAgentRadiusFromBlockedCells)
+{
+    m_Map->SetCellBlocked(3, 3, true);
+    PathRequest request;
+    request.StartX = 0.5f;
+    request.StartZ = 0.5f;
+    request.EndX = 5.5f;
+    request.EndZ = 3.5f;
+    request.AgentRadius = 0.45f;
+
+    for (const bool smooth : {false, true})
+    {
+        request.SmoothPath = smooth;
+        PathBuffer pathBuffer;
+        PathHandle path;
+        ASSERT_EQ(m_Map->FindPath(request, pathBuffer, path), PathStatus::Complete);
+        // The nearest any point of the route comes to [3, 4] x [3, 4], sampled every millimetre.
+        float32 nearest = std::numeric_limits<float32>::max();
+        for (uint32 i = 1; i < pathBuffer.GetPointCount(path); ++i)
+        {
+            const PathPoint a = pathBuffer.GetPoint(path, i - 1);
+            const PathPoint b = pathBuffer.GetPoint(path, i);
+            const uint32 samples = 1 + static_cast<uint32>(std::hypot(b.X - a.X, b.Z - a.Z) * 1000.0f);
+            for (uint32 s = 0; s <= samples; ++s)
+            {
+                const float32 t = static_cast<float32>(s) / static_cast<float32>(samples);
+                const float32 dx = std::max({3.0f - (a.X + (b.X - a.X) * t), 0.0f, a.X + (b.X - a.X) * t - 4.0f});
+                const float32 dz = std::max({3.0f - (a.Z + (b.Z - a.Z) * t), 0.0f, a.Z + (b.Z - a.Z) * t - 4.0f});
+                nearest = std::min(nearest, std::hypot(dx, dz));
+            }
+        }
+        EXPECT_GE(nearest, 0.45f - 1.0e-3f) << (smooth ? "smoothed" : "unsmoothed");
+    }
 }
 
 TEST_F(GridMapTest, GetClosestNavigablePointFindsAdjacentCell)
@@ -223,21 +320,6 @@ TEST_F(GridMapTest, FindPathFromAToBProducesValidWaypoints)
     EXPECT_NEAR(first.Z, 0.5f, 1.0f);
     EXPECT_NEAR(last.X, 5.5f, 1.0f);
     EXPECT_NEAR(last.Z, 0.5f, 1.0f);
-}
-
-TEST_F(GridMapTest, BakeHeightsPopulatesHeightData)
-{
-    auto heightQuery = [](float32 /*x*/, float32 /*z*/, float32& outHeight) -> bool
-    {
-        outHeight = 10.0f;
-        return true;
-    };
-
-    m_Map->BakeHeights(heightQuery);
-
-    EXPECT_FLOAT_EQ(m_Map->GetCellHeight(0, 0), 10.0f);
-    EXPECT_FLOAT_EQ(m_Map->GetCellHeight(7, 7), 10.0f);
-    EXPECT_FLOAT_EQ(m_Map->GetCellHeight(15, 15), 10.0f);
 }
 
 TEST_F(GridMapTest, ReserveCellAndGetCellReservation)
@@ -412,9 +494,71 @@ TEST_F(GridMapTest, TopologyVersionIncrements)
     const uint32 v3 = m_Map->GetTopologyVersion();
     EXPECT_GT(v3, v2);
 
-    m_Map->BakeHeights([](float32, float32, float32& h) { h = 1.0f; return true; });
-    const uint32 v4 = m_Map->GetTopologyVersion();
-    EXPECT_GT(v4, v3);
-
-    EXPECT_EQ(v4, v0 + 4u);
+    EXPECT_EQ(v3, v0 + 3u);
 }
+
+TEST_F(GridMapTest, ReadViewReadsTheMapsCells)
+{
+    m_Map->SetCellCost(2, 3, 4.0f);
+    m_Map->SetCellHeight(2, 3, 0.25f);
+    m_Map->SetCellBlocked(5, 6, true);
+    m_Map->SetCellDynamicBlocked(7, 8, true);
+    m_Map->ReserveCell(2, 3, 42, 100.0f, true);
+
+    m_Map->OpenPathSolveWindow();
+    const GridMap::ReadView view = m_Map->View();
+    EXPECT_FLOAT_EQ(view.GetCellCost(2, 3), 4.0f);
+    EXPECT_FLOAT_EQ(view.GetCellHeight(2, 3), 0.25f);
+    EXPECT_TRUE(view.IsCellBlocked(5, 6));
+    EXPECT_TRUE(view.IsCellBlocked(7, 8));
+    EXPECT_FALSE(view.IsCellBlocked(2, 3));
+    const CellReservation reservation = view.Reservation(2, 3);
+    EXPECT_EQ(reservation.AgentId, 42u);
+    EXPECT_FLOAT_EQ(reservation.ExpirationTime, 100.0f);
+    EXPECT_EQ(reservation.Occupancy, 1u);
+    m_Map->ClosePathSolveWindow();
+}
+
+#if !defined(NDEBUG)
+TEST(GridMapReadView, WriterAssertsWhileViewOpen)
+{
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    GridMap map(MakeDefaultSettings());
+    EXPECT_DEATH(
+        {
+            map.OpenPathSolveWindow();
+            const GridMap::ReadView view = map.View();
+            map.SetCellBlocked(1, 1, !view.IsCellBlocked(1, 1));
+        },
+        "while path solves read it");
+    EXPECT_DEATH(
+        {
+            map.OpenPathSolveWindow();
+            const GridMap::ReadView view = map.View();
+            map.ReserveCell(1, 1, view.Reservation(1, 1).AgentId + 1, 10.0f);
+        },
+        "while path solves read it");
+    EXPECT_DEATH(static_cast<void>(map.View()), "outside a path-solve window");
+}
+#endif
+
+#if defined(NDEBUG)
+// Release only: in asserting builds every writer asserts before it locks, so only Release can
+// show that an open path-solve window holds the reservation lock a writer waits on.
+TEST_F(GridMapTest, ReservationWriterWaitsForAnOpenPathSolveWindow)
+{
+    GridMap& map = *m_Map;
+    map.OpenPathSolveWindow();
+    std::atomic<bool> wrote{false};
+    std::thread writer([&] {
+        map.ReserveCell(1, 1, 7, 100.0f, false);
+        wrote.store(true);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const bool wroteInsideWindow = wrote.load();
+    map.ClosePathSolveWindow();
+    writer.join();
+    EXPECT_FALSE(wroteInsideWindow) << "a reservation write landed while a path-solve window was open";
+    EXPECT_TRUE(wrote.load());
+}
+#endif

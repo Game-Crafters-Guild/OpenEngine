@@ -73,6 +73,8 @@ struct TerrainInstanceInfo
     bool IsTiled = false;
     // Terrain.CastShadows: whether the terrain shadows the directional light (its clearance map).
     bool CastShadows = true;
+    // Terrain.RenderLayers: a view draws the terrain when its layers share one with these.
+    Rendering::RenderLayerMask RenderLayers;
 
     // Phase E resident-window atlas (design §3). When AtlasBacked, the CBT height sample
     // resolves terrain UV -> tile -> slot through AtlasRows + AtlasHeightTexture instead of
@@ -206,7 +208,7 @@ public:
     // maps and grass fields from the CPU state the terrain service holds.
     uint64 GetDeviceResourceEpoch() const { return m_DeviceResourceEpoch.load(std::memory_order_acquire); }
 
-    // Monotonic count of ReleaseTerrainResources calls — the "a terrain texture set was retired"
+    // Advanced by every ReleaseTerrainResources call and by a device rebuild — the "a terrain texture set was retired"
     // signal an in-place re-provision (SamplesPerMeter/size edit) raises. The CBT renderer samples
     // the unified heightmap through its OWN descriptor ring (a path bindless-slot invalidation does
     // not cover), so it polls this each frame and, on a bump, deterministically drops the retired
@@ -217,6 +219,10 @@ public:
     {
         return m_TerrainTextureRetireGeneration.load(std::memory_order_acquire);
     }
+    // The GetTerrainTextureRetireGeneration value the ReleaseTerrainResources call that last retired
+    // the terrain at `handleIndex` advanced it to, or 0 if that index was never retired. Tells a
+    // consumer that draws one terrain a retire of that terrain from a retire of any other.
+    uint64 GetTerrainRetireGeneration(uint32 handleIndex) const;
 
     // Monotonic count of every change to the terrain TEXTURE content grass placement samples —
     // height, splat and normal, unified or atlas — plus every texture retirement. Bumped where the
@@ -610,6 +616,9 @@ public:
         Rendering::TextureHandle AtlasHeightTexture;
     };
     ActiveHeightSource GetActiveHeightSource() const;
+    // Whether a view whose effective layers are `viewLayers` draws the first active terrain, the one the
+    // CBT renderer draws: false when no terrain is active or their layers share none.
+    bool ViewDrawsActiveTerrain(Rendering::RenderLayerMask viewLayers) const;
 
     // ---- Frame lifecycle ----
 
@@ -662,6 +671,10 @@ private:
     std::vector<TextureEntry> m_Normalmaps;
     std::array<std::vector<TextureEntry>, 3> m_GrassFields;
     void ReleaseGrassFieldResourcesLocked(TerrainHandle handle);
+    // Retires one texture set entry: defers the image destroy (with its tracked bytes) and the
+    // storage view behind the frames-in-flight quarantine, then resets the entry, so a recycled
+    // handle index starts with nothing of the retired set. Safe on an empty entry.
+    void RetireTextureEntry(TextureEntry& entry);
     // Phase E: one square R32F atlas per terrain (bound directly by CBT compute, not bindless).
     std::vector<TextureEntry> m_AtlasHeights;
     // The per-terrain coarse height field (out-of-window fallback), one small square R32F each.
@@ -726,6 +739,10 @@ private:
     // Bumped by ReleaseTerrainResources (see GetTerrainTextureRetireGeneration): the re-provision
     // signal the CBT renderer polls to purge the retired heightmap from its own descriptor ring.
     std::atomic<uint64> m_TerrainTextureRetireGeneration{0};
+    // Per handle index, the retire generation of its last ReleaseTerrainResources (see
+    // GetTerrainRetireGeneration). Guarded by m_Mutex; written after the global bump, so a reader
+    // that loaded the global value first sees a per-index value no older than it.
+    std::vector<uint64> m_RetireGenerationByIndex;
     // Bumped wherever a terrain texture write is QUEUED, and by ReleaseTerrainResources (see
     // GetGrassPlacementContentEpoch). Two queues reach those textures: staged copies drain through
     // m_PendingUploads, which only QueueBandUpload and QueueRegionUpload fill, and atlas bakes

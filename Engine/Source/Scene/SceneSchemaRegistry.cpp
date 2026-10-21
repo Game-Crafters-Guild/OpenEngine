@@ -268,6 +268,25 @@ const ISceneComponentSchema* SceneSchemaRegistry::ReflectionSchemaForUnhandledTy
     return GetOrCreateReflectionSchemaLocked(typeId);
 }
 
+std::string UnknownFieldMessage(std::string_view component, std::string_view field)
+{
+    return std::string(component) + " has no field named '" + std::string(field) +
+           "': delete the line or correct the spelling";
+}
+
+bool ReportUnknownField(const SceneLoadContext& ctx, std::string_view component, std::string_view field,
+                        std::string* outError)
+{
+    if (ctx.UnknownFields)
+    {
+        ctx.UnknownFields->emplace_back(field);
+        return true;
+    }
+    if (outError)
+        *outError = UnknownFieldMessage(component, field);
+    return false;
+}
+
 std::vector<const ISceneComponentSchema*> SceneSchemaRegistry::GetAllSorted()
 {
     std::vector<const ISceneComponentSchema*> out;

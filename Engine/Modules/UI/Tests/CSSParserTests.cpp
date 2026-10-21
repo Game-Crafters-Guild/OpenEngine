@@ -1799,6 +1799,37 @@ TEST(CSSParserTests, ParsesBackgroundImageAndSupportingProperties)
 }
 
 
+TEST(CSSParserTests, BackgroundPositionMixesALengthWithAnAxisKeyword)
+{
+    // The icon-left-of-label button shape: inset the image from the left edge,
+    // center it vertically. A keyword read as a length is 0 and pins the image
+    // to the top; each vertical keyword takes its own percent.
+    struct Case
+    {
+        const char* Keyword;
+        float ExpectedY;
+    };
+    const Case cases[] = {{"top", 0.0f}, {"center", 50.0f}, {"bottom", 100.0f}};
+    for (const Case& c : cases)
+    {
+        const std::string css =
+            std::string("#bg { background-image: url(\"textures/icon.png\");\n"
+                        "      background-position: 6px ") + c.Keyword + "; }\n";
+        Stylesheet sheet{};
+        ASSERT_TRUE(CSSParser::ParseStylesFromString(css, sheet)) << c.Keyword;
+
+        ElementState st{};
+        UIElement el;
+        el.SetId("bg");
+        auto s = CSSParser::ComputeStyleFor(el, sheet, st);
+
+        EXPECT_FALSE(s.Visual.BackgroundImage.PosXIsPercent) << c.Keyword;
+        EXPECT_NEAR(s.Visual.BackgroundImage.PosX, 6.0f, 0.001f) << c.Keyword;
+        EXPECT_TRUE(s.Visual.BackgroundImage.PosYIsPercent) << c.Keyword;
+        EXPECT_NEAR(s.Visual.BackgroundImage.PosY, c.ExpectedY, 0.001f) << c.Keyword;
+    }
+}
+
 TEST(CSSParserTests, ParsesBackgroundTintColorWithAlpha)
 {
 		    const std::string css =

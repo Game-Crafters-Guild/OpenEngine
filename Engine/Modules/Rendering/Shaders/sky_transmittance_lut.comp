@@ -13,30 +13,7 @@ layout(binding = 0, rgba16f) writeonly uniform image2D uTransLUT;
 
 #define GE_ATMOSPHERE_UBO_BINDING 1
 #include "Includes/sky_atmosphere_ubo.glsl"
-#include "Includes/sky_ray_sphere.glsl"
-
-float RayleighDensity(float height)
-{
-    return exp(-height / uAtmos.rayleighScaleHeight);
-}
-
-float MieDensity(float height)
-{
-    return exp(-height / uAtmos.mieScaleHeight);
-}
-
-// Mapping from [0,1]^2 to (mu, r) domain. We bias the radius mapping
-// towards the ground with a simple quadratic curve so that the LUT
-// dedicates more resolution to low altitudes where gradients are strongest.
-// mu = cos(theta) (view zenith cos), r = radius from planet center.
-vec2 DecodeUvToMuR(vec2 uv)
-{
-	float mu = mix(-1.0, 1.0, uv.x);
-	float t = uv.y;
-	float rNorm = t * t;
-	float r = mix(uAtmos.planetRadius, uAtmos.atmosphereRadius, rNorm);
-	return vec2(mu, r);
-}
+#include "Includes/sky_transmittance_lut.glsl"
 
 void main()
 {
@@ -45,16 +22,14 @@ void main()
     if (pix.x >= size.x || pix.y >= size.y)
         return;
 
-    // Normalized coordinates in [0,1]
+    // The (r, mu) this texel centre stands for, over the rays that leave the atmosphere without
+    // meeting the planet (Includes/sky_transmittance_lut.glsl).
     vec2 uv = (vec2(pix) + 0.5) / vec2(size);
+    vec2 rMu = GE_SkyTransmittanceLutUvToRMu(uv, uAtmos.planetRadius, uAtmos.atmosphereRadius, vec2(size));
+    float r  = rMu.x;
+    float mu = rMu.y;
 
-    vec2 muR = DecodeUvToMuR(uv);
-    float mu = muR.x;
-    float r  = muR.y;
-
-    // Integrate optical depth along the ray using a simple fixed-step
-    // numerical integration. This remains relatively cheap at our
-    // 256x64 resolution but moves us closer to a proper Hillaire setup.
+    // Optical depth to the top of the atmosphere, midpoint rule.
     float sMax = GE_DistanceToOuterSphere(r, mu, uAtmos.atmosphereRadius);
     if (sMax <= 0.0)
     {
@@ -62,53 +37,38 @@ void main()
         return;
     }
 
-    // For downward views, clamp the ray to the planet surface if we hit it.
-    if (mu < 0.0)
-    {
-        float sGround = GE_DistanceToInnerSphere(r, mu, uAtmos.planetRadius);
-        if (sGround > 0.0)
-        {
-            sMax = sGround;
-        }
-    }
-
-    const int kSteps = 32;
+    // Midpoint rule with steps short against the aerosol's 1.2 km scale height. The error grows with
+    // the aerosol's density: from the ground at 10 degrees, 40 steps miss the transmittance by 0.8 %
+    // at Earth's pristine aerosol (optical depth 0.005) and by 16 % at a hazy day's 0.20; 512 steps
+    // keep a typical day's (0.15) within 0.1 % of the converged integral down to the horizon. The
+    // LUT is baked only when the atmosphere changes.
+    const int kSteps = 512;
     float ds = sMax / float(kSteps);
 
     vec3 tau = vec3(0.0);
     for (int i = 0; i < kSteps; ++i)
     {
-        // Midpoint integration along the ray.
-        float s0 = float(i) * ds;
-        float s1 = float(i + 1) * ds;
-        float sm = 0.5 * (s0 + s1);
+        float sm = (float(i) + 0.5) * ds;
 
         float r2 = r * r + sm * sm + 2.0 * r * mu * sm;
         float rSample = sqrt(max(r2, 0.0));
         float hSample = max(0.0, rSample - uAtmos.planetRadius);
 
-        float rayleigh = RayleighDensity(hSample);
-        float mie      = MieDensity(hSample);
-
-        vec3 sigma = uAtmos.betaRayleigh * rayleigh + uAtmos.betaMie * mie;
-        tau += sigma * (s1 - s0);
+        tau += GE_SkyMediumAt(hSample).extinction * ds;
     }
 
-    // True optical transmittance exp(-tau) -- no non-physical tint or floor. This LUT is the shared
-    // sun-shadow term for the sky-view + multiscatter LUTs and the PlanetGround floor, so it must
-    // stay physical. For mu < 0 the march is clamped to the ray's OWN hit with the ground, so how
-    // much a set source is extinguished scales with altitude: the longest downward path is 260 km
-    // at row 15 but 1.6 km at row 0, and away from grazing it falls to metres there, so the bottom
-    // row's texels stay close to 1.
+    // True optical transmittance exp(-tau) of the full extinction (Rayleigh, Mie scattering and
+    // absorption, ozone), no tint or floor: this LUT is the sun-shadow term of
+    // the sky-view and multiscatter marches, the sun disc's and the glare's extinction and the
+    // PlanetGround floor's sun term, so it has to stay physical. Rays that meet the planet are not
+    // stored; GE_SkyTransmittanceToTop returns 0 for them.
     //
-    // That is why nothing below the horizon is shared with the CPU mirror. The two feed different
-    // consumers: this LUT attenuates the sky's in-scatter per march step (sky_view_lut.comp's
-    // GetTransmittance at each sample), while what a set sun stops LIGHTING the scene with is
-    // primarySunGroundColor -- EvaluateBodyGroundColors in AtmosphereTransmittance.cpp, which
-    // takes the chord through the planet instead and drives the directional light and the fog.
-    // uSky.sunColor is neither of those: it is the untouched above-atmosphere tint
-    // (SkyEnvironmentSystem.cpp primarySunColor), which is what makes the per-step attenuation
-    // here the sky's only extinction.
+    // Nothing here is shared with the CPU mirror (AtmosphereTransmittance.cpp), which evaluates
+    // the same optical depth at the planet surface for the ground consumers (the directional
+    // light and the fog) and takes the chord through the planet below the horizon. uSky.sunColor
+    // is neither: it is the untouched above-atmosphere tint (SkyEnvironmentSystem.cpp
+    // primarySunColor), which is what makes this LUT the sky's only extinction.
     vec3 transmittance = exp(-tau);
+    // A ratio, independent of the pre-exposure.
     imageStore(uTransLUT, pix, vec4(transmittance, 1.0));
 }

@@ -19,7 +19,7 @@ constexpr StringId HashStringId(std::string_view sv)
 
 // User-defined literal for compile-time string ids, e.g.:
 //   constexpr StringId kMyId = "My.Id"_sid;
-constexpr StringId operator"" _sid(const char* s, size_t n)
+constexpr StringId operator""_sid(const char* s, size_t n)
 {
     return HashStringId(std::string_view{s, n});
 }

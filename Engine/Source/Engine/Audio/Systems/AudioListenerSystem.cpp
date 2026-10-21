@@ -36,9 +36,16 @@ void AudioListenerSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     if (!m_Audio || !m_Audio->IsInitialized())
         return;
 
-    auto q = world.Query<ECS::Read<AudioListener>, ECS::Optional<WorldTransform>>();
-    q.Each([&](ECS::EntityHandle /*e*/, const AudioListener& listener, const WorldTransform* wt)
+    auto q = world.Query<ECS::Read<AudioListener>, ECS::Optional<WorldTransform>,
+                         ECS::Optional<Components::Transform>>();
+    q.Each([&](ECS::EntityHandle /*e*/, const AudioListener& listener, const WorldTransform* wt,
+               const Components::Transform* local)
            {
+               // A pose the hierarchy has not resolved yet (Version 0 beside a
+               // Transform) would place the listener at the origin for a frame;
+               // it keeps its previous state instead.
+               if (wt && local && wt->Version == 0u)
+                   return;
                Audio::ListenerState s{};
                if (wt)
                {

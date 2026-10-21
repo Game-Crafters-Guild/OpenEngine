@@ -149,7 +149,7 @@ TEST(ECSBenchmark, MovementSystem_1M) {
     auto q = w.Query<Position, Velocity>();
 
     // Warm up
-    q.Each([dt](EntityHandle, Position& p, Velocity& v) {
+    q.Each([](EntityHandle, Position& p, Velocity& v) {
         p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
     });
 
@@ -157,7 +157,7 @@ TEST(ECSBenchmark, MovementSystem_1M) {
     double totalMs = 0.0;
     for (int r = 0; r < RUNS; ++r) {
         auto start = Clock::now();
-        q.Each([dt](EntityHandle, Position& p, Velocity& v) {
+        q.Each([](EntityHandle, Position& p, Velocity& v) {
             p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
         });
         totalMs += ToMs(Clock::now() - start);
@@ -195,21 +195,21 @@ TEST(ECSBenchmark, MovementSystem_Batch_1M) {
 
     auto timeEach = [&]() {
         auto start = Clock::now();
-        q.Each([dt](EntityHandle, Position& p, Velocity& v) {
+        q.Each([](EntityHandle, Position& p, Velocity& v) {
             p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
         });
         return ToMs(Clock::now() - start);
     };
     auto timeEachNoEH = [&]() {
         auto start = Clock::now();
-        q.Each([dt](Position& p, Velocity& v) {
+        q.Each([](Position& p, Velocity& v) {
             p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
         });
         return ToMs(Clock::now() - start);
     };
     auto timeBatchScalar = [&]() {
         auto start = Clock::now();
-        q.BatchEach([dt](Position* pos, Velocity* vel, size_t count) {
+        q.BatchEach([](Position* pos, Velocity* vel, size_t count) {
             for (size_t i = 0; i < count; ++i) {
                 pos[i].x += vel[i].x * dt;
                 pos[i].y += vel[i].y * dt;
@@ -296,7 +296,7 @@ TEST(ECSBenchmark, TwoSystems_1M) {
     auto dataQuery = w.Query<DataComponent>();
 
     // Movement system
-    auto movementSystem = [dt](EntityHandle, Position& p, Velocity& v) {
+    auto movementSystem = [](EntityHandle, Position& p, Velocity& v) {
         p.x += v.x * dt;
         p.y += v.y * dt;
         p.z += v.z * dt;
@@ -432,7 +432,7 @@ TEST(ECSBenchmark, ParallelMovement_1M) {
     auto q = w.Query<Position, Velocity>();
 
     // Warm up (synchronous fork-join since slice 5)
-    q.Parallel([dt](EntityHandle, Position& p, Velocity& v) {
+    q.Parallel([](EntityHandle, Position& p, Velocity& v) {
         p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
     }, 10000);
 
@@ -440,7 +440,7 @@ TEST(ECSBenchmark, ParallelMovement_1M) {
     double totalMs = 0.0;
     for (int r = 0; r < RUNS; ++r) {
         auto start = Clock::now();
-        q.Parallel([dt](EntityHandle, Position& p, Velocity& v) {
+        q.Parallel([](EntityHandle, Position& p, Velocity& v) {
             p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
         }, 10000);
         totalMs += ToMs(Clock::now() - start);
@@ -470,7 +470,7 @@ TEST(ECSBenchmark, ParallelBatchEach_Movement_1M) {
 
     auto timeScalar = [&]() {
         auto start = Clock::now();
-        q.ParallelBatchEach([dt](Position* pos, Velocity* vel, size_t count) {
+        q.ParallelBatchEach([](Position* pos, Velocity* vel, size_t count) {
             for (size_t i = 0; i < count; ++i) {
                 pos[i].x += vel[i].x * dt;
                 pos[i].y += vel[i].y * dt;
@@ -530,7 +530,7 @@ TEST(ECSBenchmark, ParallelBatchEach_BatchSizeSweep_1M) {
     auto timeAt = [&](size_t minBatch) {
         auto start = Clock::now();
         q.ParallelBatchEach(
-            [dt](Position* p, Velocity* v, size_t count) {
+            [](Position* p, Velocity* v, size_t count) {
                 for (size_t i = 0; i < count; ++i) {
                     p[i].x += v[i].x * dt;
                     p[i].y += v[i].y * dt;
@@ -638,7 +638,7 @@ TEST(ECSBenchmark, FragmentedTwoSystems_1M) {
     auto dataQ = w.Query<DataComponent>();
 
     auto run = [&]() {
-        moveQ.Each([dt](EntityHandle, Position& p, Velocity& v) {
+        moveQ.Each([](EntityHandle, Position& p, Velocity& v) {
             p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
         });
         dataQ.Each([](EntityHandle, DataComponent& d) {
@@ -681,9 +681,9 @@ TEST(ECSBenchmark, SevenSystems_1M) {
     auto renderQ   = w.Query<SpriteComponent>();
 
     auto run = [&]() {
-        movementQ.Each([dt](EntityHandle, Position& p, Velocity& v) { p.x += v.x*dt; p.y += v.y*dt; p.z += v.z*dt; });
+        movementQ.Each([](EntityHandle, Position& p, Velocity& v) { p.x += v.x*dt; p.y += v.y*dt; p.z += v.z*dt; });
         dataQ.Each([](EntityHandle, DataComponent& d) { d.thingy = static_cast<int32_t>(d.rng() % 100); d.toggle = !d.toggle; });
-        complexQ.Each([dt](EntityHandle, Position& p, Velocity& v, DataComponent& d) {
+        complexQ.Each([](EntityHandle, Position& p, Velocity& v, DataComponent& d) {
             if (d.toggle) { p.x -= v.x * dt * 0.5f; }
         });
         healthQ.Each([](EntityHandle, HealthComponent& h, DamageComponent& dmg) {
@@ -728,9 +728,9 @@ TEST(ECSBenchmark, FragmentedSevenSystems_1M) {
     auto renderQ   = w.Query<SpriteComponent>();
 
     auto run = [&]() {
-        movementQ.Each([dt](EntityHandle, Position& p, Velocity& v) { p.x += v.x*dt; p.y += v.y*dt; p.z += v.z*dt; });
+        movementQ.Each([](EntityHandle, Position& p, Velocity& v) { p.x += v.x*dt; p.y += v.y*dt; p.z += v.z*dt; });
         dataQ.Each([](EntityHandle, DataComponent& d) { d.thingy = static_cast<int32_t>(d.rng() % 100); d.toggle = !d.toggle; });
-        complexQ.Each([dt](EntityHandle, Position& p, Velocity& v, DataComponent& d) {
+        complexQ.Each([](EntityHandle, Position& p, Velocity& v, DataComponent& d) {
             if (d.toggle) { p.x -= v.x * dt * 0.5f; }
         });
         healthQ.Each([](EntityHandle, HealthComponent& h) { h.alive = h.hp > 0.f; });

@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory_resource>
 #include <random>
 #include <vector>
 
@@ -384,7 +385,8 @@ class GPUDrainComputeTest : public ::testing::Test
             records[i].RunGroup = (runCount > 1u) ? group(rng) : 0u;
             records[i].ViewDepth = z; // camera at origin, forward +Z
         }
-        const auto partition = R::BuildSortedTransparentRunPartition(records, runCount);
+        R::SortedTransparentRunPartition partition;
+        R::BuildSortedTransparentRunPartition(records, runCount, *std::pmr::new_delete_resource(), partition);
         for (uint32_t i = 0; i < liveCount; ++i)
         {
             recordsGPU[i] = {records[i].InstanceIndex, records[i].IndexCount,

@@ -1,4 +1,5 @@
 #include "UI/UIManager.h"
+#include "ShippedFontFace.h"
 #include "UIManager_Internal.h"
 
 #include "Logger/Logger.h"
@@ -340,43 +341,10 @@ FontAtlas* UIManager::GetOrRequestFontFamilyInternal(const std::string& family,
 
         const std::string& famLower = famKey; // already lowercased
 
-        // Pick a shipped Roboto face. Check Roboto Mono first because "roboto
-        // mono" contains "roboto" and would otherwise be captured by the
-        // proportional-Roboto branch below.
-        //
-        // Weight mapping (proportional Roboto ships Regular / Medium / Bold):
-        //   [1   .. 499]  → Regular (400)
-        //   [500 .. 649]  → Medium (500)  — CSS `font-weight: 500` or semibold (600)
-        //   [650 ..    ]  → Bold (700)
-        // This keeps "semibold" (600) from looking like full Bold, which was
-        // too heavy for section headers.
-        const char* shippedFace = nullptr;
-        {
-            const bool wantItalic = (style == FontStyle::Italic || style == FontStyle::Oblique);
-            const bool wantBold   = (weight >= 650);
-            const bool wantMedium = (weight >= 500 && weight < 650);
-            const bool wantMono = famLower.find("roboto mono") != std::string::npos
-                               || famLower.find("robotomono") != std::string::npos;
-            if (wantMono)
-            {
-                // Roboto Mono ships only Regular/Bold + italic variants. Medium
-                // requests fall back to Regular — the Mono design doesn't
-                // really need an intermediate weight for code readability.
-                shippedFace = (wantBold && wantItalic) ? "RobotoMono-BoldItalic.ttf"
-                            : (wantBold)               ? "RobotoMono-Bold.ttf"
-                            : (wantItalic)             ? "RobotoMono-Italic.ttf"
-                                                       : "RobotoMono-Regular.ttf";
-            }
-            else if (famLower.find("roboto") != std::string::npos)
-            {
-                if (wantBold)
-                    shippedFace = wantItalic ? "Roboto-BoldItalic.ttf" : "Roboto-Bold.ttf";
-                else if (wantMedium)
-                    shippedFace = wantItalic ? "Roboto-MediumItalic.ttf" : "Roboto-Medium.ttf";
-                else
-                    shippedFace = wantItalic ? "Roboto-Italic.ttf" : "Roboto-Regular.ttf";
-            }
-        }
+        // A shipped Roboto face, picked by the same CSS weight matching the editor's font
+        // resolver uses.
+        const bool wantItalic = (style == FontStyle::Italic || style == FontStyle::Oblique);
+        const char* shippedFace = GameEngine::UI::PickShippedFontFile(famLower, weight, wantItalic);
         if (shippedFace)
         {
             const std::string stagedFace = (PathUtils::GetInstallAssetsRoot() / "Fonts" / shippedFace).string();

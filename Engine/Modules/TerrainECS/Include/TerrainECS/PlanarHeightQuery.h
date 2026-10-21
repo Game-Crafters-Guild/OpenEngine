@@ -55,6 +55,10 @@ struct PlanarHeightQuery
     // a caller must wait out rather than build across.
     [[nodiscard]] bool ContainsXZ(float32 worldX, float32 worldZ) const;
 
+    // The tile of a tiled residency that holds world XZ: the tile a false SampleHeight inside the
+    // footprint is waiting on. False on a single heightfield, which streams no tiles.
+    [[nodiscard]] bool TileCoordinateAt(float32 worldX, float32 worldZ, int32& outTileX, int32& outTileZ) const;
+
     // The footprint SampleHeight actually answers over: the tiled residency's own
     // extent when there is one, the terrain component's Origin/Size otherwise.
     // The two disagree on a tiled terrain — the tiled path never reads

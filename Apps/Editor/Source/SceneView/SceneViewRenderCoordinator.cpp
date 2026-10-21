@@ -1,7 +1,8 @@
 #include "SceneView/SceneViewRenderCoordinator.h"
 
+#include "SceneView/MountedViewPanels.h"
+
 #include "Core/Engine.h"
-#include "EditorPanelIds.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Engine/Rendering/Pipeline/PipelineFrameResources.h"
 #include "Engine/Rendering/RenderDeviceContext.h"
@@ -11,7 +12,6 @@
 #include "Panels/SceneViewPanel.h"
 #include "Scene/SceneThumbnailCapture.h"
 #include "SceneViewController.h"
-#include "UI/Controls/Mount.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIElement.h"
 #include "UI/UIManager.h"
@@ -78,21 +78,6 @@ const char* ExternalSceneNameForController(SceneViewRenderCoordinator::EditorWin
     return nullptr;
 }
 
-template <typename TPanel>
-TPanel* ResolveMountedPanelForWindow(SceneViewRenderCoordinator::EditorWindowContext* ctx, const char* mountId)
-{
-    if (!ctx || !ctx->ui || !mountId)
-        return nullptr;
-
-    UIElement* root = ctx->ui->GetRootElement();
-    if (!root)
-        return nullptr;
-
-    if (auto* mount = dynamic_cast<Mount*>(root->FindById(mountId)))
-        return dynamic_cast<TPanel*>(mount->GetTarget());
-    return nullptr;
-}
-
 UIElement* FindHdrTestPatternOverlay(UIElement* viewport)
 {
     if (!viewport)
@@ -127,7 +112,7 @@ SceneViewPanel* SceneViewRenderCoordinator::SyncMountedPanelControllers(EditorWi
     if (!ctx)
         return nullptr;
 
-    SceneViewPanel* svPanel = ResolveMountedPanelForWindow<SceneViewPanel>(ctx, EditorPanelIds::MountSceneView);
+    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
     if (!svPanel)
         return nullptr;
 
@@ -408,8 +393,7 @@ void SceneViewRenderCoordinator::DeclareOverlaysRG(
     if (!rs)
         return;
 
-    SceneViewPanel* svPanel =
-        ResolveMountedPanelForWindow<SceneViewPanel>(ctx, EditorPanelIds::MountSceneView);
+    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
     if (!svPanel)
         return;
     SceneViewController* activeController =
@@ -457,8 +441,7 @@ void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::Ren
     if (!device)
         return;
 
-    SceneViewPanel* svPanel =
-        ResolveMountedPanelForWindow<SceneViewPanel>(ctx, EditorPanelIds::MountSceneView);
+    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
     if (!svPanel)
         return;
 

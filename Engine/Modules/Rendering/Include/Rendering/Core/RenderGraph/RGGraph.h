@@ -10,7 +10,7 @@
 // barrier generation, and the submission plan — all over flat dense-id arrays.
 // Physical realization and command recording live in RGFrame/RGRecord.
 
-#include "Rendering/Core/RenderGraph/RGArena.h"
+#include "Memory/Arena.h"
 #include "Rendering/Core/RenderGraph/RGBarrier.h"
 #include "Rendering/Core/RenderGraph/RGTypes.h"
 
@@ -292,6 +292,10 @@ class RGGraph
     bool IsExternal(RGResourceId r) const { return m_ResourceExternal[r] != 0; }
     // True for cross-frame pool imports (MarkImported): the "persistent" class.
     bool IsImported(RGResourceId r) const { return m_ResourceImported[r] != 0; }
+    // The layout the importer claimed for r (MarkImported); Undefined for a resource the graph creates.
+    RGImageLayout ImportLayout(RGResourceId r) const { return m_ResourceInitLayout[r]; }
+    // r's contractual final layout (SetExportLayout); Undefined when r has none.
+    RGImageLayout ExportLayout(RGResourceId r) const { return m_ResourceExportLayout[r]; }
     // True when any LIVE pass accesses r. This is the REALIZATION gate: a live
     // pass's depth attachment must exist even if nothing downstream reads it
     // (needed = reaches a sink, drives culling; used = must be allocated).
@@ -322,7 +326,7 @@ class RGGraph
     RGQueue PassQueue(RGPassId p) const { return m_Passes[p].Desc.Queue; }
     int32_t PassPhase(RGPassId p) const { return m_Passes[p].Desc.Phase; }
 
-    RGArena& Arena() { return m_Arena; }
+    Memory::Arena& Arena() { return m_Arena; }
 
   private:
     struct RGPassRec
@@ -469,7 +473,7 @@ class RGGraph
     // when callers build names dynamically).
     const char* CopyName(const char* name);
 
-    RGArena m_Arena;
+    Memory::Arena m_Arena;
 };
 
 } // namespace GameEngine::Rendering::RenderGraph

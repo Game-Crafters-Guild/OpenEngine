@@ -17,6 +17,11 @@ namespace GameEngine::ECS
 class World;
 }
 
+namespace GameEngine::Components
+{
+struct Light;
+}
+
 namespace GameEngine::Editor
 {
 
@@ -140,6 +145,13 @@ struct ComponentPresetEntry
     // entity wears elsewhere in the editor.
     std::string Icon;
 };
+
+/// The light a new directional light starts as, whichever path creates it: the
+/// Light preset, the Hierarchy's Create > Directional Light and a new scene's sun.
+/// A clear noon sun in physical units (kClearNoonSunIlluminanceLux, Lux) that
+/// casts shadows; the component's own default leaves shadows off, which suits
+/// point and spot lights but never a sun.
+Components::Light MakeDefaultDirectionalLight();
 
 /// Single catalog for the Add Component picker and the inspector header context
 /// menus, sorted by (category, label).

@@ -45,6 +45,16 @@ struct WindowInputRouterConfig
         // the cursor is over the surface, so it points the host itself, and a
         // second stream from here would fight it.
         std::function<void(float clientX, float clientY, float& uiX, float& uiY)> mapGameUiPointer;
+        // The game holds the pointer locked (InputSystem::LockPointer,
+        // granted by the host). The pointer is then gameplay's alone: its moves,
+        // presses and wheel skip chrome and the HUD and reach only the gameplay
+        // sink, or, where the surface has none, the window's InputSystem (a
+        // window whose whole client area is the surface: the Player). A locked
+        // move is delivered in window client units, unmapped: its position names
+        // no place on the surface, and the mapping would scale the game's mouse
+        // delta by the editor's UI scale. Releases still reach every stage, so a
+        // button held into the lock is not left down anywhere.
+        bool pointerLocked = false;
     };
 
     Platform::Window* window = nullptr;

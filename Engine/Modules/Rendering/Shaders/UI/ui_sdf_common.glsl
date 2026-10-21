@@ -35,6 +35,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 // --- UIPrimitive (144 bytes, 9 x vec4) ---
+// modeParams.y is a uint (the UITransformSlot index): floatBitsToUint.
 // A corner is an ellipse: radii holds the horizontal semi-axes and radiiY the
 // vertical ones. Modes that overload the radii slot for something else (Line/
 // Bezier thickness, Triangle rounding) leave radiiY zero. Slug overloads radii
@@ -46,7 +47,7 @@ struct UIPrimitive {
     vec4 borderWidths;   // Rect: l/t/r/b; Textured: background clip rect (border box)
     vec4 uvRect;
     vec4 effects;        // shadowOffsetX, shadowOffsetY, shadowSoftness (CSS blur radius), glowRadius
-    vec4 modeParams;     // opacity, pointFilter (Textured: 1=nearest 0=linear), caretTime, saturation (Textured)
+    vec4 modeParams;     // opacity, transformIndex (uint bits), caretTime, saturation (Textured)
     uvec4 packed;        // modeAndFlags, textureIndex, gradColor0, gradColor1
     vec4 radiiY;         // Rect/Textured: vertical corner semi-axes (tl, tr, br, bl); Slug: x = outline width
 };
@@ -57,11 +58,31 @@ struct UIClipRect {
     vec4 rect;       // x, y, w, h
     vec4 radii;      // tl, tr, br, bl horizontal semi-axes
     vec4 radiiY;     // tl, tr, br, bl vertical semi-axes
-    uvec4 params;    // .x = parentIndex (NO_CLIP terminates), .yzw = unused
+    uvec4 params;    // .x = parentIndex (NO_CLIP terminates), .y = transformIndex, .zw = unused
 };
 
+// --- UITransformSlot (32 bytes, 2 x vec4) ---
+// An element's 2D affine map from its own layout space into its parent's:
+// p' = mat2(m) * p + t (m in CSS matrix() order a, b, c, d). parentIndex
+// chains to the nearest transformed ancestor; NO_TRANSFORM (slot 0, the
+// identity) ends it.
+struct UITransformSlot {
+    vec4 m;
+    vec2 t;
+    uint parentIndex;
+    uint pad;
+};
+const uint NO_TRANSFORM = 0u;
+
+// Clip chain levels a primitive is clipped against. The fragment stage walks
+// this many levels of the parent chain (typical depth is 1-3); the vertex
+// stage maps the fragment into the space of each of them, and the four slots
+// of vClipPos01 and vClipPos23 carry exactly this many.
+const int kMaxClipChainDepth = 4;
+
 // --- Mode/flag bit layout (matches UIPrimitive.h) ---
-const uint MODE_MASK        = 0x000000FFu;
+const uint MODE_MASK        = 0x00000007u;
+const uint POINT_FILTER_BIT = 0x00000008u;
 const uint GRADIENT_SHIFT   = 8u;
 const uint GRADIENT_MASK    = 0x00000700u;
 const uint ENCODED_SRC_BIT  = 0x00000800u;

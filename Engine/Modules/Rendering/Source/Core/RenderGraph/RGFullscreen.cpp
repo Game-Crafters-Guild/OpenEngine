@@ -5,6 +5,8 @@
 #include "Rendering/Materials/ShaderLayoutShape.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include "Logger/Logger.h"
+
 #include <array>
 #include <cassert>
 
@@ -27,19 +29,24 @@ PipelineDesc MakeFullscreenPipelineDesc(const char* debugName)
 RGPass AddFullscreenPass(RGFrame& frame, const RGFullscreenDesc& desc)
 {
     assert(desc.Name && desc.Target.IsValid() && "AddFullscreenPass: name + target required");
-    assert(desc.Textures.size() <= kMaxFullscreenTextureInputs &&
-           "AddFullscreenPass: raise kMaxFullscreenTextureInputs");
-    assert(desc.Buffers.size() <= kMaxFullscreenBufferInputs &&
-           "AddFullscreenPass: raise kMaxFullscreenBufferInputs");
+    // Over a cap the pass is refused whole: dropping the inputs past the cap would bind a shader
+    // whose descriptors are partly unwritten.
+    if (desc.Textures.size() > kMaxFullscreenTextureInputs || desc.Buffers.size() > kMaxFullscreenBufferInputs)
+    {
+        Logger::Log::Error("AddFullscreenPass '{}': {} texture and {} buffer inputs exceed the caps of {} and "
+                           "{} (RGFullscreen.h); the pass is not declared",
+                           desc.Name, desc.Textures.size(), desc.Buffers.size(), kMaxFullscreenTextureInputs,
+                           kMaxFullscreenBufferInputs);
+        return {};
+    }
 
     // The spans die with the caller's frame; the exec lambda carries copies.
     std::array<RGFullscreenTextureInput, kMaxFullscreenTextureInputs> textures{};
-    const uint32_t textureCount =
-        static_cast<uint32_t>(std::min(desc.Textures.size(), textures.size()));
+    const uint32_t textureCount = static_cast<uint32_t>(desc.Textures.size());
     for (uint32_t i = 0; i < textureCount; ++i)
         textures[i] = desc.Textures[i];
     std::array<RGFullscreenBufferInput, kMaxFullscreenBufferInputs> buffers{};
-    const uint32_t bufferCount = static_cast<uint32_t>(std::min(desc.Buffers.size(), buffers.size()));
+    const uint32_t bufferCount = static_cast<uint32_t>(desc.Buffers.size());
     for (uint32_t i = 0; i < bufferCount; ++i)
         buffers[i] = desc.Buffers[i];
 

@@ -141,7 +141,9 @@ class DDGIBlendComputeTest : public ::testing::Test
         for (size_t i = kTexels; i < result.size(); ++i)
             for (size_t channel = 0; channel < 4; ++channel)
                 if (std::isfinite(history[channel]))
+                {
                     EXPECT_FLOAT_EQ(result[i][channel], history[channel]);
+                }
     }
 
     void ExpectFinite()

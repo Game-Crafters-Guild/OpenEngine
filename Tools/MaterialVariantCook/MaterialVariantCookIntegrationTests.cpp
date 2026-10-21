@@ -5,14 +5,24 @@
 #include "Assets/Packages/PackageMounts.h"
 #include "Assets/Packages/PackageResolver.h"
 #include "Engine/Build/CancellableShellProcess.h"
+#include "Engine/Build/MaterialVariantCookTool.h"
+#include "Engine/Rendering/MaterialPrewarmVariants.h"
+#include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/MaterialShaderPackageBuilder.h"
 #include "Engine/Rendering/PackageShaderDirs.h"
+#include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Particles/Rendering/ParticleMaterials.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/RendererProfile.h"
+#include "Rendering/Materials/ShaderCompileService.h"
+#include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "StagedTestPaths.h"
+#include "TerrainGrass/GrassComputePrograms.h"
 #include "TestTempDir.h"
+#include "MeshVariantTable.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -196,6 +206,151 @@ bool DeclaresCapability(const std::vector<uint8_t>& bytes, uint32_t capability)
     return false;
 }
 
+// Two materials whose lobes the runtime compiles into every program it asks for: a clear coat, and a
+// transmissive glass, which the transmissive pass also draws with the scene-colour grab bound.
+void WriteLobeMaterials(const fs::path& project)
+{
+    const fs::path materials = project / "Assets/Materials";
+    fs::create_directories(materials);
+    std::ofstream(materials / "ClearCoat.material") << R"({
+  "schemaVersion": 3,
+  "materialName": "ClearCoat",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {"enableClearCoat": true, "clearCoat": 1.0, "clearCoatRoughness": 0.1}
+})";
+    std::ofstream(materials / "Glass.material") << R"({
+  "schemaVersion": 3,
+  "materialName": "Glass",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {"enableTransmission": true, "transmissionWeight": 1.0}
+})";
+}
+
+// The world passes the shipped render graphs draw a material with: ForwardPlus.rendergraph's, and the one
+// without IBL that Web.rendergraph draws and prewarm asks for before a graph is applied.
+constexpr GameEngine::Rendering::MaterialKeyword kWebWorldPass =
+    GameEngine::Rendering::MaterialKeyword::Instanced | GameEngine::Rendering::MaterialKeyword::ForwardPlus |
+    GameEngine::Rendering::MaterialKeyword::Shadows;
+constexpr GameEngine::Rendering::MaterialKeyword kForwardPlusWorldPass =
+    kWebWorldPass | GameEngine::Rendering::MaterialKeyword::IBL;
+
+// The world passes a material's colour pass is drawn with: the shipped graphs' (kForwardPlusWorldPass,
+// kWebWorldPass), and each world pass the mesh table declares for a view's per-view keywords (GTAO,
+// SSSR, DDGI), with and without contact shadows. The colour pass draws a crossfading tail under every
+// one of them.
+std::vector<GameEngine::Rendering::MaterialKeyword> ColourWorldPasses()
+{
+    using GameEngine::Rendering::MaterialKeyword;
+    std::vector<MaterialKeyword> passes = {kForwardPlusWorldPass, kWebWorldPass};
+    for (const auto& row : GameEngine::Tools::MaterialCook::kMeshVariants)
+        if (GameEngine::Rendering::HasKeyword(row.PassKeywords, MaterialKeyword::ForwardPlus))
+            for (const MaterialKeyword pass : {row.PassKeywords, row.PassKeywords | MaterialKeyword::ScreenSpaceShadows})
+                if (std::find(passes.begin(), passes.end(), pass) == passes.end())
+                    passes.push_back(pass);
+    return passes;
+}
+
+// Every key the runtime's prewarm asks for when it registers the material at `materialPath`
+// (MaterialPrewarmVariantKeys), under every world pass the colour pass draws with (ColourWorldPasses):
+// the base program, the colour, asset preview and depth programs with their LOD-crossfade tails, and
+// the transmissive pass's grab variants. The transmissive pass draws with its graph node's keywords
+// (TransmissivePassNode), a shipped graph's world pass, so only those ask for a grab variant. The
+// registration key is the document's keywords on the layout registration infers from its asset.
+std::vector<GameEngine::Rendering::ShaderVariantKey> RuntimePrewarmKeys(const GameEngine::MaterialDocument& document,
+                                                                        const fs::path& materialPath)
+{
+    using GameEngine::Rendering::MaterialKeyword;
+    GameEngine::Rendering::ShaderVariantKey base = GameEngine::Engine::Renderer::DeriveBaseVariantKey(document);
+    base.vertexFlags = GameEngine::Engine::Renderer::InferVertexAttributeFlagsFromDocument(document, materialPath);
+    std::vector<GameEngine::Rendering::ShaderVariantKey> keys;
+    for (const MaterialKeyword worldPass : ColourWorldPasses())
+    {
+        const bool graphPass = worldPass == kForwardPlusWorldPass || worldPass == kWebWorldPass;
+        for (const auto& key : GameEngine::Engine::Renderer::MaterialPrewarmVariantKeys(
+                 base, worldPass, document.customVertexShader,
+                 GameEngine::Engine::Renderer::DeriveRenderedAlphaMode(document), document.ignoreVertexColor))
+            if ((graphPass || !GameEngine::Rendering::HasKeyword(key.materialKeywords, MaterialKeyword::SceneColorGrab)) &&
+                std::find(keys.begin(), keys.end(), key) == keys.end())
+                keys.push_back(key);
+    }
+    return keys;
+}
+
+// The compile inputs the desktop cook keys its rows at, as a desktop device sets them: the full
+// profile and SPIR-V 1.6. Restores the target on every exit.
+struct ScopedDesktopCompileInputs
+{
+    using Target = GameEngine::Rendering::ShaderCompileService::SpirvTarget;
+    ScopedDesktopCompileInputs() : Previous(GameEngine::Rendering::ShaderCompileService::MaxSupportedSpirv())
+    {
+        GameEngine::Rendering::ApplyShaderCompileProfile(GameEngine::Rendering::RendererProfile{});
+        GameEngine::Rendering::ShaderCompileService::SetMaxSupportedSpirv(Target::Spirv_1_6);
+    }
+    ~ScopedDesktopCompileInputs() { GameEngine::Rendering::ShaderCompileService::SetMaxSupportedSpirv(Previous); }
+    Target Previous;
+};
+
+// Restores the compiler on every exit, including a failed assertion.
+struct ScopedCookOnlyRuntime
+{
+    ScopedCookOnlyRuntime() { GameEngine::Rendering::ShaderCompileService::SetCompilerAvailable(false); }
+    ~ScopedCookOnlyRuntime() { GameEngine::Rendering::ShaderCompileService::SetCompilerAvailable(true); }
+};
+
+// Expects every key in `keys` of the material at `materialPath` to build from `bundle`, without a
+// compiler, as the runtime's ShaderCompilationCache builds it: the compile spec's document, the key's
+// keywords and layout.
+void ExpectServedFromBundle(const GameEngine::MaterialDocument& document, const fs::path& materialPath,
+                            const std::string& name, const std::vector<GameEngine::Rendering::ShaderVariantKey>& keys,
+                            GameEngine::Rendering::MaterialBuildContext& context, const fs::path& bundle)
+{
+    using namespace GameEngine;
+    const Engine::Renderer::MaterialCompileSpec spec = Engine::Renderer::DeriveCompileSpec(document);
+    MaterialDocument runtimeDocument{};
+    runtimeDocument.surfaceShader = spec.surfaceShaderPath;
+    runtimeDocument.lightingModel = spec.lightingModel;
+    runtimeDocument.vertexModifier = spec.vertexModifierPath;
+    runtimeDocument.customVertexShader = spec.customVertexShader;
+    runtimeDocument.keywords = spec.userKeywords;
+    if (spec.alphaTest)
+        runtimeDocument.alphaMode = MaterialAlphaMode::Mask;
+    for (const auto& key : keys)
+    {
+        const Engine::Renderer::MaterialShaderPackageBuilder builder(runtimeDocument, materialPath, name, context);
+        const Rendering::MaterialBuildResult served =
+            builder.Build(Rendering::ShaderSourceKind::SpirV, key.materialKeywords, key.vertexFlags);
+        EXPECT_TRUE(served.success)
+            << name << " keywords 0x" << std::hex << static_cast<uint64_t>(key.materialKeywords) << " layout 0x"
+            << static_cast<uint32_t>(key.vertexFlags) << std::dec
+            << " was not cooked: " << (served.errors.empty() ? std::string{} : served.errors.front());
+        EXPECT_EQ(fs::path(served.generatedShaderPkgPath).parent_path().parent_path(), bundle)
+            << name << " was served from " << served.generatedShaderPkgPath << ", not from the bundle";
+    }
+}
+
+// The cook's per-variant report lines, "  ok   ..." and "  FAIL ..." without their detail lines, in
+// output order.
+std::vector<std::string> ReportLines(const std::string& output)
+{
+    std::vector<std::string> lines;
+    std::size_t start = 0;
+    while (start < output.size())
+    {
+        std::size_t end = output.find_first_of("\r\n", start);
+        if (end == std::string::npos)
+            end = output.size();
+        const std::string line = output.substr(start, end - start);
+        if (line.starts_with("  ok   ") || line.starts_with("  FAIL "))
+            lines.push_back(line);
+        start = end + 1;
+    }
+    return lines;
+}
+
 std::map<std::string, fs::file_time_type> PackageWriteTimes(const fs::path& cache)
 {
     std::map<std::string, fs::file_time_type> result;
@@ -233,6 +388,90 @@ TEST(MaterialVariantCookIntegration, CommittedGraphSamplesCookAndVerifyWithoutAC
         if (entry.path().extension() == ".glsl")
             ++materializedSamples;
     EXPECT_EQ(materializedSamples, 2u);
+}
+
+// The export reads the cook's report line by line, so compiling variants concurrently must report
+// them, and name their packages, exactly as compiling them one at a time does.
+TEST(MaterialVariantCookIntegration, ConcurrentCookReportsEveryVariantInTheSerialOrder)
+{
+    GameEngine::TestUtils::ScopedTempDir serial{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_serial")};
+    GameEngine::TestUtils::ScopedTempDir concurrent{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_concurrent")};
+    ASSERT_NO_FATAL_FAILURE(CopyGraphSamples(serial.Path()));
+    ASSERT_NO_FATAL_FAILURE(WriteLobeMaterials(serial.Path()));
+    fs::copy(serial.Path(), concurrent.Path(), fs::copy_options::recursive);
+
+    const auto serialCook = Cook(serial.Path(), false, {"--particle-row", "base", "--jobs", "1"});
+    ASSERT_NO_FATAL_FAILURE(CheckCook(serialCook));
+    const auto concurrentCook = Cook(concurrent.Path(), false, {"--particle-row", "base", "--jobs", "8"});
+    ASSERT_NO_FATAL_FAILURE(CheckCook(concurrentCook));
+
+    // Each cook names packages under its own cache; the key directories must match.
+    std::vector<std::string> expected = ReportLines(serialCook.output);
+    ASSERT_GT(expected.size(), 1u) << serialCook.output;
+    const std::string serialCache = (serial.Path() / ".Cache" / "Shaders").make_preferred().string();
+    const std::string concurrentCache = (concurrent.Path() / ".Cache" / "Shaders").make_preferred().string();
+    for (std::string& line : expected)
+        if (const std::size_t at = line.find(serialCache); at != std::string::npos)
+            line.replace(at, serialCache.size(), concurrentCache);
+    EXPECT_EQ(ReportLines(concurrentCook.output), expected);
+}
+
+// A program the editor already compiled is the same program under the same key: a cook given the
+// editor's cache copies every program it holds into its own cache and compiles none of them.
+TEST(MaterialVariantCookIntegration, ACookReusesWhatTheEditorCacheHolds)
+{
+    GameEngine::TestUtils::ScopedTempDir project{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_reuse")};
+    ASSERT_NO_FATAL_FAILURE(WriteLobeMaterials(project.Path()));
+    const fs::path editorCache = project.Path() / ".Cache/Shaders";
+    const auto seeded = Cook(project.Path(), false, {"--particle-row", "base"});
+    ASSERT_FALSE(seeded.cancelled) << seeded.output;
+    ASSERT_EQ(seeded.exitCode, 0) << seeded.output;
+    const auto before = PackageWriteTimes(editorCache);
+    ASSERT_FALSE(before.empty());
+
+    const fs::path exportCache = project.Path() / ".Build/MaterialVariantCook";
+    const auto result = Cook(project.Path(), false,
+                             {"--particle-row", "base", "--cache", exportCache.string(),
+                              "--reuse-cache", editorCache.string()});
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+    const std::vector<fs::path> packages = GameEngine::CookedShaderPackages(result.output);
+    ASSERT_FALSE(packages.empty()) << result.output;
+    for (const fs::path& package : packages)
+        EXPECT_TRUE(fs::is_regular_file(package) && !package.lexically_relative(exportCache).empty() &&
+                    *package.lexically_relative(exportCache).begin() != "..")
+            << package << " is not a program in the export's cache";
+    const std::size_t variants = ReportLines(result.output).size();
+    EXPECT_NE(result.output.find("MaterialVariantCook: " + std::to_string(variants) + " variant(s) reused from"),
+              std::string::npos)
+        << "every variant was in the editor's cache, so none may compile\n" << result.output;
+    EXPECT_EQ(PackageWriteTimes(editorCache), before) << "the cook wrote to the editor's cache";
+}
+
+// The export reads the result lines and the summary from this output. The verify pass logs a line
+// per program just before the summary: every logged line is written before the summary, so no log
+// line follows it. A desktop cook without --reuse-cache prints a single summary line, which is
+// therefore the last line of its output.
+TEST(MaterialVariantCookIntegration, NoLogLineFollowsTheCookSummary)
+{
+    GameEngine::TestUtils::ScopedTempDir project{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_summary")};
+    ASSERT_NO_FATAL_FAILURE(WriteLobeMaterials(project.Path()));
+    const auto result = Cook(project.Path(), false, {"--particle-row", "base"});
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+    const std::string& output = result.output;
+    const std::string tail = output.substr(output.size() - std::min<std::size_t>(output.size(), 4096));
+    ASSERT_TRUE(output.ends_with('\n')) << "the output ends mid-line:\n" << tail;
+    const std::size_t lastLineEnd = output.find_last_not_of("\r\n") + 1;
+    const std::size_t lastLineStart = output.find_last_of("\r\n", lastLineEnd - 1) + 1;
+    const std::string lastLine = output.substr(lastLineStart, lastLineEnd - lastLineStart);
+    EXPECT_TRUE(lastLine.starts_with("MaterialVariantCook: ") &&
+                lastLine.find(" variant(s) cooked from ") != std::string::npos)
+        << "the last line is not the summary:\n" << tail;
 }
 
 TEST(MaterialVariantCookIntegration, RelocatedGraphSamplesReuseEveryCookedPackage)
@@ -380,6 +619,157 @@ TEST(MaterialVariantCookIntegration, TheDesktopCookComposesTheReliefForADeviceWi
         ASSERT_NE(fragment, package.stageBytes.end()) << variant << " has no fragment stage";
         EXPECT_TRUE(DeclaresCapability(fragment->second, kCapabilityInterpolationFunction))
             << variant << " marches without the interpolation functions a desktop device composes it with";
+    }
+}
+
+// A desktop export cooks with DesktopMaterialCookArguments into its own cache and ships the packages
+// the cook names in the bundle's read-only shader cache (StageCookedShaderPackages). A packaged game then
+// serves every program it asks for from that bundle, without a compiler and without writing to its own
+// cache. The keys are every one the runtime's prewarm asks for (LOD-crossfade tails and depth heads
+// included), under the shipped graphs' world passes and every per-view one (ColourWorldPasses); each
+// carries the material's lobes (clear coat, transmission and the rest DeriveBaseVariantKey reads from
+// the document), and a transmissive material's include its scene-colour-grab variants for the
+// transmissive pass. The imported mesh materials' keys are checked too, each colour-pass key also on
+// its vertex-colour layout, as a mesh with a COLOR_0 stream draws it. Each key is resolved here as the
+// runtime's ShaderCompilationCache builds it (ExpectServedFromBundle).
+TEST(MaterialVariantCookIntegration, AnExportedBundleServesEveryKeyTheRuntimePrewarms)
+{
+    using namespace GameEngine;
+    TestUtils::ScopedTempDir project{TestUtils::MakeUniqueTempDirectory("material_lobe_cook")};
+    ASSERT_NO_FATAL_FAILURE(WriteLobeMaterials(project.Path()));
+    const fs::path fixtures = TestPaths::StagedRoot();
+    DesktopMaterialCookInputs inputs;
+    inputs.ProjectAssets = project.Path() / "Assets";
+    inputs.EngineShaders = fixtures / "Engine/Modules/Rendering/Shaders";
+    inputs.PackageShaderDirs = {fixtures / "Engine/Modules/GPUFogParticles/Shaders",
+                                TestPaths::ExecutableDirectory() / "Fixtures/MaterialVariantCook/PackageShaders"};
+    inputs.Cache = project.Path() / ".Build/MaterialVariantCook";
+    const fs::path tool = TestPaths::ExecutableDirectory().parent_path() / "Tools" / GE_MATERIAL_VARIANT_COOK_FILENAME;
+    const ShellProcessResult result =
+        RunProcessCaptured(tool.string(), DesktopMaterialCookArguments(inputs), std::chrono::minutes(45));
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+
+    const std::vector<fs::path> packages = CookedShaderPackages(result.output);
+    ASSERT_FALSE(packages.empty()) << result.output;
+    const fs::path bundle = project.Path() / "Game.app/Contents/Resources/.Cache/Shaders";
+    std::string stageError;
+    ASSERT_TRUE(StageCookedShaderPackages(packages, inputs.Cache, bundle, stageError)) << stageError;
+    for (const fs::path& package : packages)
+        EXPECT_TRUE(fs::is_regular_file(bundle / package.lexically_relative(inputs.Cache))) << package;
+
+    Rendering::MaterialBuildContext context;
+    context.AdapterShaderDir = inputs.EngineShaders;
+    context.PackageShaderDirs = inputs.PackageShaderDirs;
+    context.ProjectRoots = {inputs.ProjectAssets};
+    context.AssetSourceRoots.push_back({"project", inputs.ProjectAssets});
+    context.ReadOnlyCacheRoots = {bundle};
+    const fs::path userCache = project.Path() / "UserData/.Cache/Shaders";
+    context.CacheRoot = userCache;
+    ScopedDesktopCompileInputs desktopInputs;
+
+    std::size_t grabKeys = 0;
+    std::size_t vertexColourKeys = 0;
+    {
+        ScopedCookOnlyRuntime cookOnly;
+        for (const char* name : {"ClearCoat", "Glass"})
+        {
+            const fs::path materialPath = project.Path() / "Assets/Materials" / (std::string(name) + ".material");
+            MaterialAsset asset(GUID::Generate(), materialPath);
+            ASSERT_TRUE(asset.Load()) << materialPath;
+            const auto keys = RuntimePrewarmKeys(asset.GetDocument(), materialPath);
+            ASSERT_FALSE(keys.empty()) << name;
+            for (const auto& key : keys)
+                grabKeys += Rendering::HasKeyword(key.materialKeywords, Rendering::MaterialKeyword::SceneColorGrab);
+            ExpectServedFromBundle(asset.GetDocument(), materialPath, name, keys, context, bundle);
+        }
+        // An imported model's materials compose as the default PBR family, and a mesh with a COLOR_0 stream
+        // draws every colour-pass key of theirs, crossfade tails included, with the stream bound
+        // (BoundStreamVertexFlags). The blended stand-in cooks only the rows its own table declares.
+        for (const auto& imported : Tools::MaterialCook::kImportedMeshMaterialTargets)
+        {
+            if (!imported.Rows.empty())
+                continue;
+            MaterialDocument document = MaterialDocument::CreateDefaultPBR(imported.DocumentName);
+            document.alphaMode = imported.AlphaMode;
+            const fs::path materialPath = project.Path() / "Assets/Models" / imported.File;
+            auto keys = RuntimePrewarmKeys(document, materialPath);
+            for (std::size_t i = 0, count = keys.size(); i < count; ++i)
+            {
+                if (!Rendering::HasKeyword(keys[i].materialKeywords, Rendering::MaterialKeyword::ForwardPlus))
+                    continue;
+                auto coloured = keys[i];
+                coloured.vertexFlags |= Rendering::VertexAttributeFlags::HasColor;
+                if (std::find(keys.begin(), keys.end(), coloured) != keys.end())
+                    continue;
+                keys.push_back(coloured);
+                ++vertexColourKeys;
+            }
+            ExpectServedFromBundle(document, materialPath, imported.Name, keys, context, bundle);
+        }
+    }
+    EXPECT_GT(grabKeys, 0u) << "the glass asks for no scene-colour grab variant, so the test checks none";
+    EXPECT_GT(vertexColourKeys, 0u) << "no imported material asks for a vertex-colour key, so the test checks none";
+    std::size_t userPackages = 0;
+    if (fs::is_directory(userCache))
+        for (const auto& entry : fs::recursive_directory_iterator(userCache))
+            userPackages += entry.path().extension() == ".shaderpkg";
+    EXPECT_EQ(userPackages, 0u) << "a program served from the bundle was written to the user cache";
+}
+
+// A desktop runtime compiles the terrain grass placement's compute programs from the engine shader tree,
+// and registers the grass draw-mode materials when it first draws grass. An export's cook compiles both
+// into the bundle, so the packaged game serves the compute programs, built as the runtime builds them
+// (MakeGrassComputeCompileRequest), from the bundle without a compiler.
+TEST(MaterialVariantCookIntegration, AnExportedBundleServesTheTerrainGrassPrograms)
+{
+    using namespace GameEngine;
+    TestUtils::ScopedTempDir project{TestUtils::MakeUniqueTempDirectory("material_grass_cook")};
+    // The engine shader tree an export ships: the engine's shaders with the modules' staged beside them.
+    const fs::path fixtures = TestPaths::StagedRoot();
+    const fs::path packageShaders = TestPaths::ExecutableDirectory() / "Fixtures/MaterialVariantCook/PackageShaders";
+    const fs::path engineShaders = project.Path() / "Content/Assets/Shaders";
+    fs::create_directories(engineShaders);
+    fs::copy(fixtures / "Engine/Modules/Rendering/Shaders", engineShaders, fs::copy_options::recursive);
+    fs::copy(packageShaders, engineShaders, fs::copy_options::recursive | fs::copy_options::skip_existing);
+    fs::create_directories(project.Path() / "Assets");
+
+    DesktopMaterialCookInputs inputs;
+    inputs.ProjectAssets = project.Path() / "Assets";
+    inputs.EngineShaders = engineShaders;
+    inputs.PackageShaderDirs = {fixtures / "Engine/Modules/GPUFogParticles/Shaders", packageShaders};
+    inputs.Cache = project.Path() / ".Build/MaterialVariantCook";
+    std::vector<std::string> arguments = DesktopMaterialCookArguments(inputs);
+    arguments.insert(arguments.end(), {"--particle-row", "base"});
+    const fs::path tool = TestPaths::ExecutableDirectory().parent_path() / "Tools" / GE_MATERIAL_VARIANT_COOK_FILENAME;
+    const ShellProcessResult result = RunProcessCaptured(tool.string(), arguments, std::chrono::minutes(45));
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+    EXPECT_GT(CookedVariantCount(result.output, "terrain-grass-opaque"), 0u) << result.output;
+    EXPECT_EQ(CookedVariantCount(result.output, "terrain-grass-compute"), std::size(TerrainGrass::kGrassComputePrograms))
+        << result.output;
+
+    const fs::path bundle = project.Path() / "Game.app/Contents/Resources/.Cache/Shaders";
+    std::string stageError;
+    ASSERT_TRUE(StageCookedShaderPackages(CookedShaderPackages(result.output), inputs.Cache, bundle, stageError))
+        << stageError;
+
+    ScopedDesktopCompileInputs desktopInputs;
+    ScopedCookOnlyRuntime cookOnly;
+    const fs::path userCache = project.Path() / "UserData/.Cache/Shaders";
+    for (const TerrainGrass::GrassComputeProgram& program : TerrainGrass::kGrassComputePrograms)
+    {
+        Rendering::ShaderProgramCompileRequest request =
+            TerrainGrass::MakeGrassComputeCompileRequest(engineShaders, program, false);
+        request.readOnlyCacheRoots = {bundle};
+        request.cacheRoot = userCache;
+        Rendering::ShaderProgramCompileResult served{};
+        std::string error;
+        EXPECT_TRUE(Rendering::ShaderCompileService::CompileProgramToCache(request, Rendering::ShaderSourceKind::SpirV,
+                                                                         served, &error))
+            << program.ShaderFile << " was not cooked: " << error;
+        EXPECT_EQ(served.shaderPkgPath.parent_path().parent_path(), bundle)
+            << program.ShaderFile << " was served from " << served.shaderPkgPath << ", not from the bundle";
     }
 }
 

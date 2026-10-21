@@ -11,23 +11,28 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+
 const uint kBinCount = 256u;
 const uint kHistogramCount = 2u; // 0 = geometry, 1 = sky (far plane)
-// The window must span the engine's PHYSICAL scene-linear range (203 nits == 1.0). Ceiling: a
-// 100k-lux sun drives white to ~157 and the sky dome into the hundreds, so the top stays at
-// 2^14 (~16384) — bright pixels are metered, not collapsed into the top bin (which biased the
-// average low -> washout). Floor: AutoExposureMinEv = -4 needs a meterable average down to
-// key / 2^(log2(203)+4) ~= 2^-14.2; a floor of 2^-16 reaches it with margin (the old -10 floor
-// silently stopped dark adaptation ~4 stops early). 254 bins over 30 log2 units ~= 1/8 EV each.
-const float kMinLogLum = -16.0;             // log2 luminance mapped to bin 1
-const float kLogLumRange = 30.0;            // window spans up to log2 = +14 (~16384 scene-linear)
+// The window spans the engine's physical scene-linear range (203 nits == 1.0). Ceiling 2^14 (about
+// 16384): a 100k-lux sun drives white to about 157 and the sky dome into the hundreds, and those pixels
+// keep their own bins instead of piling into the top one. Floor 2^-24: a moonless night is the darkest
+// scene the engine renders, its sky near 2^-20 (0.0002 nits) and its ground near 2^-22, so both fall
+// inside the window and the meter reads them, not the stars alone. 254 bins over 38 log2 units, about
+// 0.15 EV each.
+const float kMinLogLum = -24.0;             // log2 luminance mapped to bin 1
+const float kLogLumRange = 38.0;            // window spans up to log2 = +14 (~16384 scene-linear)
 const float kInvLogLumRange = 1.0 / kLogLumRange;
 
-layout(set = 0, binding = 0) uniform sampler2D uHDRColor;                       // RGBA16F, pre-exposure
+layout(set = 0, binding = 0) uniform sampler2D uHDRColor; // RGBA16F, stored at the frame's pre-exposure P
 layout(set = 0, binding = 1, std430) restrict buffer HistogramBuffer { uint histogram[]; };
 // The view's resolved depth (reverse-Z: the far plane, where nothing was drawn, is exactly 0.0).
 // It may be a different size than the colour input; pixels map by normalized position.
 layout(set = 0, binding = 2) uniform sampler2D uSceneDepth;
+// The view's ExposureHistory: the colour input is stored scaled by its preExposure, and the bins
+// are absolute scene-linear luminance, so every tap is divided by P before binning.
+#define GE_EXPOSURE_HISTORY_BINDING 3
+#include "Includes/exposure_history.glsl"
 
 layout(push_constant) uniform PC {
     uint pixelCountX;
@@ -39,7 +44,7 @@ const vec3 kLumaWeights = vec3(0.2126, 0.7152, 0.0722); // Rec.709 relative lumi
 
 uint LuminanceToBin(float lum)
 {
-    if (lum < 7.6e-6) // ~2^-17, below the metering window's floor
+    if (lum < 3.0e-8) // ~2^-25, below the metering window's floor
         return 0u;    // near-black -> reserved bin 0
     float t = clamp((log2(lum) - kMinLogLum) * kInvLogLumRange, 0.0, 1.0);
     return uint(t * float(kBinCount - 2u) + 1.0);
@@ -71,7 +76,7 @@ void main()
         vec2 uv = (vec2(pix) + 0.5) / vec2(float(pc.pixelCountX), float(pc.pixelCountY));
         vec3 hdr = max(textureLod(uHDRColor, uv, 0.0).rgb, vec3(0.0));
 #endif
-        uint bin = LuminanceToBin(dot(hdr, kLumaWeights));
+        uint bin = LuminanceToBin(dot(hdr, kLumaWeights) / GE_PreExposure());
         atomicAdd(sTile[HistogramForPixel(pix) * kBinCount + bin], 1u);
     }
     barrier();

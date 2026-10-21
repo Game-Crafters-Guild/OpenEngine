@@ -5,6 +5,7 @@
 #include "Logger/Logger.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/TextArea.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIManager.h"
@@ -35,7 +36,7 @@ void SetClassIf(UIElement& element, const char* className, bool on)
 template <typename T>
 T* TakeElement(UIElement& row, const char* id, size_t index)
 {
-    T* element = dynamic_cast<T*>(row.FindById(id));
+    T* element = dynamic_cast<T*>(row.FindById(HashStringId(id)));
     if (element)
         element->SetId(std::string(id) + ":" + std::to_string(index));
     return element;
@@ -55,13 +56,14 @@ bool PinHeightPx(UIElement& element, float heightPx)
 
 AgentConversationRow::AgentConversationRow(size_t index, std::function<void()> onStop, std::function<void()> onRetry,
                                            ReplyActionHandler onReplyAction, AgentCallRow::AnswerHandler onAnswer,
-                                           std::function<void()> onUndoTurn)
+                                           std::function<void()> onUndoTurn, MarkupChipHandler onFrameMarkup)
     : m_Index(index)
     , m_OnStop(std::move(onStop))
     , m_OnRetry(std::move(onRetry))
     , m_OnReplyAction(std::move(onReplyAction))
     , m_OnAnswer(std::move(onAnswer))
     , m_OnUndoTurn(std::move(onUndoTurn))
+    , m_OnFrameMarkup(std::move(onFrameMarkup))
 {
     SetFocusable(false);
 }
@@ -82,10 +84,13 @@ bool AgentConversationRow::Build(UIManager& ui)
     m_UndoTurn = TakeElement<Button>(*this, "AgentRowUndoTurn", m_Index);
     m_Retried = TakeElement<Label>(*this, "AgentRowRetried", m_Index);
     m_Text = TakeElement<TextArea>(*this, "AgentRowText", m_Index);
+    m_Reply = TakeElement<MarkdownText>(*this, "AgentRowReply", m_Index);
     m_Calls = TakeElement<UIElement>(*this, "AgentRowCalls", m_Index);
     m_Status = TakeElement<UIElement>(*this, "AgentRowStatus", m_Index);
     m_Actions = TakeElement<UIElement>(*this, "AgentRowActions", m_Index);
-    if (!m_Header || !m_Time || !m_Stop || !m_Retry || !m_UndoTurn || !m_Retried || !m_Text || !m_Calls || !m_Status || !m_Actions)
+    m_MarkupChips = TakeElement<UIElement>(*this, "AgentRowMarkups", m_Index);
+    if (!m_Header || !m_Time || !m_Stop || !m_Retry || !m_UndoTurn || !m_Retried || !m_Text || !m_Reply || !m_Calls ||
+        !m_Status || !m_Actions || !m_MarkupChips)
     {
         Logger::Log::Error("AI Assistant: {} is missing a row element.", kLayoutAssetPath);
         return false;
@@ -109,12 +114,22 @@ void AgentConversationRow::Show(const AgentConversationRowModel& model, const st
         m_Time->SetText(time);
         SetClassIf(*this, "agent-row-user", model.FromUser);
     }
+    if (!shown || shown->MarkupChips != model.MarkupChips)
+        BuildMarkupChips(model.MarkupChips);
     if (!shown || shown->Header != model.Header)
         m_Header->SetText(model.Header);
-    if (!shown || shown->Text != model.Text)
-        m_Text->SetValue(model.Text);
-    if (!shown || shown->ShowsText != model.ShowsText)
-        SetClassIf(*m_Text, "hidden", !model.ShowsText);
+    if (!shown || shown->Text != model.Text || shown->FromUser != model.FromUser)
+    {
+        if (model.FromUser)
+            m_Text->SetValue(model.Text);
+        else
+            m_Reply->SetMarkdown(model.Text);
+    }
+    if (!shown || shown->ShowsText != model.ShowsText || shown->FromUser != model.FromUser)
+    {
+        SetClassIf(*m_Text, "hidden", !model.ShowsText || !model.FromUser);
+        SetClassIf(*m_Reply, "hidden", !model.ShowsText || model.FromUser);
+    }
     if (!shown || shown->Calls != model.Calls)
         ShowCalls(model.Calls);
     if (!shown || shown->Asks != model.Asks)
@@ -136,7 +151,7 @@ void AgentConversationRow::Show(const AgentConversationRowModel& model, const st
     if (!shown || shown->CanStop != model.CanStop)
         SetClassIf(*m_Stop, "hidden", !model.CanStop);
     if (model.ShowsReplyActions && !m_ReplyActionsBuilt)
-        BuildReplyActions();
+        BuildReplyActions(model.ReplyActions);
     m_Shown = model;
 }
 
@@ -183,13 +198,36 @@ void AgentConversationRow::ShowCalls(const std::vector<AgentCallRowModel>& calls
     SetClassIf(*m_Calls, "hidden", calls.empty());
 }
 
-void AgentConversationRow::BuildReplyActions()
+void AgentConversationRow::BuildMarkupChips(const std::vector<MarkupChip>& chips)
+{
+    m_MarkupChips->RemoveAllChildren();
+    SetClassIf(*m_MarkupChips, "hidden", chips.empty());
+    for (const MarkupChip& chip : chips)
+    {
+        auto button = std::make_unique<Button>();
+        button->AddClass("small");
+        button->AddClass("secondary");
+        button->AddClass("agent-row-markup-chip");
+        button->SetFocusable(false);
+        button->SetText(chip.Label);
+        button->SetTooltip("Frame " + chip.Label + " in the Scene View");
+        // To the chip's right: chips start at the panel's left edge, so a centered tooltip would
+        // leave the panel.
+        button->SetTooltipPlacement(UIElement::TooltipPlacement::Right);
+        button->SetOnClick([this, token = chip.Token](UIEvent&) { m_OnFrameMarkup(token); });
+        m_MarkupChips->AddChild(std::move(button));
+    }
+}
+
+void AgentConversationRow::BuildReplyActions(const std::vector<std::string>& actionIds)
 {
     m_ReplyActionsBuilt = true;
     const std::span<const AgentReplyAction> actions = AgentReplyActions::All();
     for (size_t actionIndex = 0; actionIndex < actions.size(); ++actionIndex)
     {
         const AgentReplyAction& action = actions[actionIndex];
+        if (std::find(actionIds.begin(), actionIds.end(), action.Id) == actionIds.end())
+            continue;
         auto button = std::make_unique<Button>();
         button->SetId("AgentRowAction:" + action.Id + ":" + std::to_string(m_Index));
         button->AddClass("small");
@@ -197,7 +235,13 @@ void AgentConversationRow::BuildReplyActions()
         button->SetFocusable(false);
         button->SetText(action.Label);
         button->SetTooltip(action.Tooltip);
-        button->SetOnClick([this, actionIndex](UIEvent&) { m_OnReplyAction(AgentReplyActions::All()[actionIndex]); });
+        button->SetOnClick([this, actionIndex, raw = button.get()](UIEvent&) {
+            const AgentReplyAction& clicked = AgentReplyActions::All()[actionIndex];
+            if (!m_OnReplyAction(clicked) || !clicked.Once)
+                return;
+            raw->SetEnabled(false);
+            raw->SetTooltip(clicked.DoneTooltip);
+        });
         m_Actions->AddChild(std::move(button));
     }
 }
@@ -231,14 +275,19 @@ bool AgentConversationRow::FitHeight()
 {
     if (!m_Text)
         return false;
-    const float advance = m_Text->GetResolvedLineAdvancePx();
-    if (advance <= 0.0f)
-        return false;
-
-    const auto& textBox = m_Text->GetResolvedStyle().Layout;
-    const float textHeight = static_cast<float>(m_Text->GetVisualLineCount()) * advance + textBox.Padding.Top +
-                             textBox.Padding.Bottom + textBox.BorderWidth.Top + textBox.BorderWidth.Bottom;
-    bool moved = PinHeightPx(*m_Text, textHeight);
+    // A reply (MarkdownText) is sized by layout; only a prompt's text area is pinned.
+    float textHeight = 0.0f;
+    bool moved = false;
+    if (!m_Text->HasClass("hidden"))
+    {
+        const float advance = m_Text->GetResolvedLineAdvancePx();
+        if (advance <= 0.0f)
+            return false;
+        const auto& textBox = m_Text->GetResolvedStyle().Layout;
+        textHeight = static_cast<float>(m_Text->GetVisualLineCount()) * advance + textBox.Padding.Top +
+                     textBox.Padding.Bottom + textBox.BorderWidth.Top + textBox.BorderWidth.Bottom;
+        moved = PinHeightPx(*m_Text, textHeight);
+    }
     for (AgentCallRow* call : m_CallRows)
     {
         moved = call->FitImage() || moved;

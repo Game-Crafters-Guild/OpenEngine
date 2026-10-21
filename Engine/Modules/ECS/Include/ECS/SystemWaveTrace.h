@@ -86,7 +86,9 @@ class SystemWaveTrace
         // jobs published by every thread in between, this frame's included.
         uint64 PublishedAtBegin = 0;
         uint64 PublishedAtEnd = 0;
-        // Jobs the waves' publish loops published (one stub per fork).
+        // Pool tasks the waves' publish loops published: at most one per fork,
+        // since a Run the fork-task budget refuses publishes none while a visit
+        // to its counter's queue is pending.
         uint32 WaveForkPublishes = 0;
         uint16 WaveCount = 0;
         uint16 SystemCount = 0;

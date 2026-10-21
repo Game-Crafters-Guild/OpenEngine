@@ -3,12 +3,12 @@
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h" // AssetLoadHandle
 #include "Mathematics/Vector2.h"
+#include "Types/StringId.h"
 #include "UI/UITargetSpace.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <string_view>
 #include <unordered_map>
 
 // JobSystem is a TOP-LEVEL namespace (::JobSystem), NOT GameEngine::JobSystem —
@@ -182,18 +182,14 @@ class GameUIHost
     // Per-entity subtree root for a live UIDocument, or nullptr if unbound.
     UIElement* FindDocumentRoot(uint64_t entityId) const;
 
-    // Element `id` inside that document's mounted subtree, or nullptr.
-    UIElement* FindElementById(uint64_t entityId, std::string_view id);
-
     // First match of `id` across mounted documents. Shared ids resolve to the
     // lowest entity id so the winner is stable. On a match, outOwnerEntityId (if
     // non-null) receives the owning UIDocument entity, so a caller that searched
     // every document can pin later lookups to that one subtree instead of
     // re-walking all of them. Left untouched when nothing matches.
     //
-    // An EMPTY id matches the first element that has no id, which is most of a
-    // tree — callers taking an id from outside must reject empty before calling.
-    UIElement* FindElementByIdAny(std::string_view id, uint64_t* outOwnerEntityId = nullptr);
+    // An empty id is never registered; FindElementById(0) returns nullptr.
+    UIElement* FindElementById(StringId id, uint64_t* outOwnerEntityId = nullptr);
 
     // Bumps when a document layout binds, a subtree is removed, or a .uxml hot
     // reload reconciles a bound subtree. The reconcile bump comes from the

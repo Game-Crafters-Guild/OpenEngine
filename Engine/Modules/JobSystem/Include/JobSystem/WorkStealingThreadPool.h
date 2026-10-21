@@ -1,5 +1,6 @@
 #pragma once
 
+#include "JobSystem/ConcurrentQueue.h"
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/JobSystemStatistics.h"
 #include "JobSystem/ParallelForOptions.h"
@@ -20,29 +21,6 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
-
-// Lock-free MPMC queue (the vcpkg concurrentqueue port). Some versions of the
-// header trigger MSVC /analyze diagnostics C6326 (constant-vs-constant
-// comparison) and C6011, which are benign for this use; they are suppressed
-// around the include only, so the module's own code keeps every warning.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 6326 6011)
-#endif
-
-#if __has_include(<concurrentqueue/moodycamel/concurrentqueue.h>)
-#include <concurrentqueue/moodycamel/concurrentqueue.h>
-#elif __has_include(<concurrentqueue/concurrentqueue.h>)
-#include <concurrentqueue/concurrentqueue.h>
-#elif __has_include(<concurrentqueue.h>)
-#include <concurrentqueue.h>
-#else
-#error "moodycamel concurrentqueue headers not found - ensure vcpkg concurrentqueue package is installed"
-#endif
-
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
 
 namespace JobSystem
 {
@@ -103,7 +81,7 @@ class WorkStealingThreadPool;
  * @note No helper is published in inline mode or once Shutdown() has been
  *       requested, and none re-publishes after that: the caller runs what is
  *       left. The pool keeps at most
- *       WorkStealingThreadPool::kMaxUnstartedClaimHelpersPerWorker helpers
+ *       WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker helpers
  *       per worker published and not yet started in each lane, across every
  *       caller; a fork publishes only the helpers that fit and the caller
  *       claims the rest. The run's state is one 128-byte slab and the helpers
@@ -119,7 +97,7 @@ bool ParallelFor(WorkStealingThreadPool* pool, size_t count, Body&& body, const 
  *
  * - The global queue (moodycamel; it shards internally per producer) carries
  *   every Submit(F&&) handle envelope, every EnqueueWork and EnqueueWorkBatch
- *   bare envelope, every JobCounter stub, and the graph tasks published from
+ *   bare envelope, every JobCounter visit, and the graph tasks published from
  *   threads that are not workers of this pool. Producers publish tokenless;
  *   workers consume through their own ConsumerTokens for cross-producer
  *   fairness (see Worker::GlobalConsumerToken).
@@ -138,7 +116,7 @@ bool ParallelFor(WorkStealingThreadPool* pool, size_t count, Body&& body, const 
  *   spin poll and the retiring spinner's recheck). Each poll is gated on the
  *   m_BackgroundQueued occupancy counter, so an empty lane costs one relaxed
  *   load. Background work never enters a local queue or the steal ring;
- *   graph tasks are always Normal, and a fork (JobCounter stubs, ParallelFor
+ *   graph tasks are always Normal, and a fork (JobCounter visits, ParallelFor
  *   helpers) publishes at the class of the body that forks, so a Background
  *   body's forks stay Background. m_QueuedTasks counts
  *   both classes, so both share one wake protocol and differ only in dequeue
@@ -288,17 +266,20 @@ class WorkStealingThreadPool
     static constexpr uint32 kMaxWakePerBatch = 4;
     static constexpr size_t kBulkPublishThreshold = 8;
 
-    // ParallelFor's helpers published and not yet started, across every caller,
-    // are at most this many per worker in each lane; a fork publishes only the
-    // helpers that fit its helpers' lane (none: the caller runs every unit).
-    // The budget: two forks at full width from threads that are no workers (2
-    // per worker), plus the copies running helpers re-publish between units
-    // without checking the budget (at most one per worker): 3, taken as 4. The helpers of
-    // closed runs are what the bound limits: a caller that forks back to back
-    // faster than the workers drain them would otherwise queue them, and the
-    // slabs they hold, without limit. Each lane has its own budget, so cook
-    // helpers queued behind a streaming flood never take a Normal fork's.
-    static constexpr size_t kMaxUnstartedClaimHelpersPerWorker = 4;
+    // Fork tasks published and not yet started, across every caller, are at
+    // most this many per worker in each lane: ParallelFor's helpers and Run's
+    // queue visits. A ParallelFor publishes only the helpers that fit its
+    // helpers' lane (none: the caller runs every unit); a Run past the budget
+    // publishes a visit only when its queue has none pending, since one
+    // visit drains every job of its queue. The budget: two forks at full
+    // width from threads that are no workers (2 per worker), plus the copies
+    // running helpers re-publish between units without checking the budget
+    // (at most one per worker): 3, taken as 4. The tasks of joined forks are
+    // what the bound limits: a caller that forks back to back faster than the
+    // workers drain them would otherwise queue them, and the slabs they hold,
+    // without limit. Each lane has its own budget, so cook helpers queued
+    // behind a streaming flood never take a Normal fork's.
+    static constexpr size_t kMaxUnstartedForkTasksPerWorker = 4;
 
     /**
      * @brief Fire-and-forget batch: publish `count` callables of one closure
@@ -351,12 +332,15 @@ class WorkStealingThreadPool
      * releases its waiter (the exception is logged and sets the counter's
      * sticky HasAnyFailed(); there is no per-task failure observation).
      *
-     * The closure is queued in the counter's own tagged queue and a bare stub
-     * is published to the pool. Whichever consumer reaches the envelope first,
-     * a worker running a stub or a participating Wait() on the same counter,
-     * executes it; a late stub finds nothing and returns. The pool's counters,
-     * wake protocol and shutdown drain see only the stub, which is an ordinary
-     * EnqueueWork task. If the tagged enqueue fails (an allocation failure, the
+     * The closure is queued in the counter's own tagged queue and a visit to
+     * that queue (a bare task) is published to the pool while the lane's
+     * budget of unstarted fork tasks lasts, else only when no visit to the
+     * queue is pending. Whichever consumer reaches the envelope first, a
+     * worker running a visit or a participating Wait() on the same counter,
+     * executes it; a visit drains the queue until it is empty, and a late
+     * visit finds nothing and returns. The pool's counters, wake protocol and
+     * shutdown drain see only the visit, which is an ordinary EnqueueWork
+     * task. If the tagged enqueue fails (an allocation failure, the
      * allocating enqueue's only failure mode), the envelope executes inline on
      * this thread: never dropped, never a hung waiter.
      *
@@ -367,14 +351,14 @@ class WorkStealingThreadPool
      * also happens, and after that critical section Run touches only its own
      * reference to the tagged queue, never `counter`.
      *
-     * Shutdown: as EnqueueWork, the stub is never dropped, so the envelope
+     * Shutdown: as EnqueueWork, the visit is never dropped, so the envelope
      * always executes and the counter always drains. After Shutdown() has
      * returned, `fn` runs synchronously on the calling thread.
      *
      * The counter must outlive the join: call Wait(counter) before it is
      * destroyed. Every task of one counter must target the same pool.
      *
-     * Priority: Run() takes no JobPriority; its stubs publish at the class
+     * Priority: Run() takes no JobPriority; its visits publish at the class
      * of the pool body running on this thread (Background inside a
      * Background body, Normal everywhere else), so a Background body's fork
      * never publishes Normal work.
@@ -386,25 +370,31 @@ class WorkStealingThreadPool
      * @brief Join on a JobCounter. Returns once every task counted into
      * `counter` has completed; the tasks' writes happen-before the return.
      *
-     * A worker of this pool, or a host thread that cannot block
-     * (Platform::CanBlockCurrentThread() is false), participates: it executes
+     * Every waiter participates, on every thread: a worker of this pool, the
+     * main thread, a worker of another pool, a blocking thread. It executes
      * only tasks tagged with this counter (consumed from the counter's own
-     * queue, never an arbitrary drain of the pool queues), which makes waiting
-     * on a worker deadlock-free. Every other thread parks on the counter's
-     * condvar and leaves execution to the workers. A participant that finds no
-     * tagged task (the rest are running on other threads, or the counter is a
-     * barrier for bare chunks with no tagged queue) parks on the counter's
-     * condvar too and is woken by the last decrement or by a new tagged
-     * publish.
+     * queue, never an arbitrary drain of the pool queues), so a waiter never
+     * runs a job that could wait on the waiter itself, and waiting on a
+     * worker is deadlock-free. A tagged task the waiter runs is a job body of
+     * the waiter's own current context (IsExecutingJob() is true inside it;
+     * Normal outside a body). A waiter that finds no tagged task (the rest
+     * are running on other threads, or the counter is a barrier for bare
+     * chunks with no tagged queue) parks on the counter's condvar and is
+     * woken by the last decrement or by a new tagged publish. A thread that
+     * cannot block (Platform::CanBlockCurrentThread() is false) parks in
+     * 10 s slices and reports each one on stderr.
      *
      * A participating waiter is neither a spinner nor a sleeper of the pool:
      * it never touches the pool's wake protocol or its queued-task counters
-     * (the stubs carry those through the normal worker path).
+     * (the visits carry those through the normal worker path).
      *
      * Participation covers only tasks submitted with Run(fn, counter). A
-     * counter used as a barrier for work published another way (bare chunks
-     * of the ParallelFor shape) must be joined from a thread that is not a
-     * worker of this pool.
+     * counter used as a barrier for work published another way (bare chunks)
+     * must be joined from a thread that is not a worker of this pool: the
+     * waiter can only park on it.
+     *
+     * A caller must not hold, across this Wait, a lock that a task of the
+     * counter takes: the caller may run that task itself.
      *
      * Destruction: only one thread may treat this Wait's return as permission
      * to destroy the counter. A second concurrent waiter can still be inside
@@ -586,7 +576,7 @@ class WorkStealingThreadPool
 
     /**
      * @brief Attributes publishes to a site: while it lives, every job the
-     * calling thread publishes into a compute queue (a Run stub, an
+     * calling thread publishes into a compute queue (a Run visit, an
      * EnqueueWork or Submit envelope, each element of an EnqueueWorkBatch, a
      * graph task) adds one to `sink`. Jobs published by other threads are not
      * counted, so a body another thread runs adds nothing. A body this
@@ -612,6 +602,16 @@ class WorkStealingThreadPool
       private:
         uint32* m_Enclosing;
     };
+
+    /**
+     * @brief Whether the calling thread is inside a job body, on any thread
+     * and of any pool: a compute job, a channel job, a tagged job a
+     * participating Wait runs, or a ParallelFor unit, whether a helper or the
+     * forking caller runs it. False outside a body, completion callbacks
+     * included (they run after the body's context has ended). Consumers: the
+     * scripting ABI's engine-thread predicates.
+     */
+    static bool IsExecutingJob();
 
     /**
      * @brief Test hook: what the calling thread is executing as a job body:
@@ -663,6 +663,24 @@ class WorkStealingThreadPool
      * every pool, have parked waiting for units in progress.
      */
     static uint64 GetClaimCallerParksForTests();
+
+    /**
+     * @brief Debug-only test hook: where a visit to a Run's tagged queue calls
+     * the hook installed with SetTaggedVisitHookForTests.
+     *  - ProvedEmpty: the visit found the queue empty and stopped counting
+     *    itself pending, and has not yet re-read the queue's job count.
+     */
+    enum class TaggedVisitPoint : uint8
+    {
+        ProvedEmpty,
+    };
+
+    /**
+     * @brief Debug-only test hook: install a function every tagged-queue
+     * visit of every pool calls at each TaggedVisitPoint (null removes it).
+     * A test holds a visit at a point by blocking inside the hook.
+     */
+    static void SetTaggedVisitHookForTests(void (*hook)(TaggedVisitPoint point));
 #endif
 
     /**
@@ -840,7 +858,7 @@ class WorkStealingThreadPool
     struct Worker
     {
         std::thread Thread;
-        moodycamel::ConcurrentQueue<UniquePtr<TaskBase>> LocalQueue;
+        ConcurrentQueue<UniquePtr<TaskBase>> LocalQueue;
         moodycamel::ProducerToken ProducerToken;
         moodycamel::ConsumerToken LocalConsumerToken;
         // Fair-scan tokens for the two global lanes. moodycamel's tokenless
@@ -872,11 +890,11 @@ class WorkStealingThreadPool
 
     // The global queue: one MPMC (moodycamel shards it internally per
     // implicit producer; publishes are tokenless) carrying every bare, handle,
-    // batch and JobCounter-stub publish, plus graph tasks published from
+    // batch and JobCounter-visit publish, plus graph tasks published from
     // threads that are not workers of this pool. Workers consume it through
     // their GlobalConsumerToken (see the token's declaration for why); the
     // drain, which runs on any thread, consumes it tokenless.
-    moodycamel::ConcurrentQueue<UniquePtr<TaskBase>> m_GlobalQueue;
+    ConcurrentQueue<UniquePtr<TaskBase>> m_GlobalQueue;
 
     // The Background lane: the same queue type and discipline as
     // m_GlobalQueue (allocating tokenless enqueue, an allocation failure
@@ -885,7 +903,7 @@ class WorkStealingThreadPool
     // priority, so one Background flood could starve another Background
     // producer the same way). Consumed last in every scan, and every poll is
     // gated on m_BackgroundQueued, so an empty lane never costs a queue touch.
-    moodycamel::ConcurrentQueue<UniquePtr<TaskBase>> m_BackgroundQueue;
+    ConcurrentQueue<UniquePtr<TaskBase>> m_BackgroundQueue;
 
     // Synchronization
     std::atomic<bool> shutdown_requested{false};
@@ -914,14 +932,25 @@ class WorkStealingThreadPool
     // line with m_QueuedTasks on purpose: idle scans load that line every lap
     // already.
     std::atomic<uint32> m_BackgroundQueued{0};
-    // ParallelFor helpers published and not yet started, indexed by lane
-    // (JobPriority), each at most kMaxUnstartedClaimHelpersPerWorker per
-    // worker: a fork reserves its helpers' counts in their lane before it
-    // publishes them, and a helper gives its count back when it starts or
-    // when its envelope is destroyed unrun. A bound, not a synchronization:
-    // relaxed. On the queued counter's line, which the dequeue before a
-    // helper's start has just written.
-    std::atomic<uint32> m_UnstartedClaimHelpers[2]{};
+    // Fork tasks (ParallelFor helpers and Run's queue visits) published and
+    // not yet started, indexed by lane (JobPriority), each at most
+    // kMaxUnstartedForkTasksPerWorker per worker: a fork reserves its tasks'
+    // counts in their lane before it publishes them, and a task gives its
+    // count back when it starts or when its envelope is destroyed unrun. A
+    // bound, not a synchronization: relaxed. On the queued counter's line,
+    // which the dequeue before a task's start has just written.
+    std::atomic<uint32> m_UnstartedForkTasks[2]{};
+    // Reserves up to `wanted` of `unstarted`'s budget and returns the count
+    // granted; the rest is given back at once. The add comes first, so
+    // concurrent forks never grant more than `budget` between them.
+    static size_t ReserveForkTasks(std::atomic<uint32>& unstarted, size_t wanted, size_t budget);
+    // The pool task a Run publishes: a visit that drains one tagged queue.
+    // WorkStealingThreadPool.cpp.
+    class TaggedQueueVisit;
+    // After a Run's publish, publishes a visit to `jobs` at `lane`: one the
+    // lane's fork-task budget grants, else one only when no visit to `jobs`
+    // is pending.
+    void PublishTaggedQueueVisit(JobCounter::TaggedJobs& jobs, JobPriority lane);
     // Workers inside the TrySpinPoll poll loop only (the token is retired
     // before any task found is executed).
     std::atomic<uint32> m_NumSpinning{0};
@@ -1010,7 +1039,7 @@ class WorkStealingThreadPool
     // Accepts only exclusively owned TaskData (the registry drain's
     // use_count() == 1 guarantee, see DrainPendingCleanupLocked).
     static void RecycleTaskData(SharedPtr<TaskHandle::TaskData> data);
-    static moodycamel::ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>& TaskDataFreelist();
+    static ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>& TaskDataFreelist();
 
     // Process-wide task id source; ids are never reused across pools.
     static std::atomic<TaskId> m_NextTaskId;
@@ -1098,7 +1127,7 @@ class WorkStealingThreadPool
     // The global lane for `priority`: m_GlobalQueue or m_BackgroundQueue.
     // Worker-local queues are not lanes: they carry graph tasks published on
     // workers, always Normal.
-    moodycamel::ConcurrentQueue<UniquePtr<TaskBase>>& PriorityLane(JobPriority priority);
+    ConcurrentQueue<UniquePtr<TaskBase>>& PriorityLane(JobPriority priority);
     // Push into the priority's lane (allocating tokenless enqueue). It fails
     // only when an allocation fails, and a silently dropped task can be a
     // caller-barrier release, so a failure aborts loudly.
@@ -1149,7 +1178,7 @@ class WorkStealingThreadPool
     void CleanupTaskData(TaskId taskId);
     // Publish sequence for tasks that always use a global lane (Submit's
     // handle envelopes, bare EnqueueWork and batch envelopes, JobCounter
-    // stubs): counters, PushGlobalQueue into the priority's lane, wake
+    // visits): counters, PushGlobalQueue into the priority's lane, wake
     // decision. Graph tasks go through EnqueueTask instead, whose PushTask
     // routes a publish on a worker into that worker's local queue (always
     // Normal).
@@ -1545,7 +1574,7 @@ void WorkStealingThreadPool::Run(F&& fn, JobCounter& counter)
         {
             // An allocation failure (the allocating enqueue's only failure
             // mode): the envelope never became visible, so its occupancy is
-            // taken back and stubs and waiters can still prove emptiness.
+            // taken back and visits and waiters can still prove emptiness.
             jobs->JobCount.fetch_sub(1, std::memory_order_release);
         }
     }
@@ -1554,19 +1583,19 @@ void WorkStealingThreadPool::Run(F&& fn, JobCounter& counter)
     {
         // Never drop work, never hang a waiter: execute the envelope inline on
         // the submitting thread. Its scope guard decrements the counter, so
-        // the count is conserved, and no stub is published for it: stubs stay
-        // one-to-one with queued envelopes. It runs as the caller's own class.
+        // the count is conserved, and no visit is published for it. It runs
+        // as the caller's own class.
         JobBodyScope body(CallerContext());
         job->Execute();
         return;
     }
 
-    // The stub holds a reference to the tagged queue, never the counter: a
-    // stub whose envelope a participating waiter consumed can outlive a
-    // stack-owned counter and must still be safe to execute, and the queue
-    // is not recycled while the stub holds it. The stub publishes at the
-    // forking body's class, so a Background body's fork stays Background.
-    EnqueueWork([jobs = std::move(jobs)]() { JobCounter::RunOneTagged(*jobs); }, CallerContext().Class);
+    // Outside the critical section: a visit reaches the queue object, never
+    // the counter, so it may outlive a stack-owned counter whose envelopes a
+    // participating waiter ran, and it never keeps the queue from being
+    // recycled. It publishes at the forking body's class, so a Background
+    // body's fork stays Background.
+    PublishTaggedQueueVisit(*jobs, CallerContext().Class);
 }
 
 template <typename Body>

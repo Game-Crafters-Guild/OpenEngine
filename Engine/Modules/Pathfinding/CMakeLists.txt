@@ -6,12 +6,12 @@ add_library(Pathfinding OBJECT
     Source/PathBuffer.cpp
     Source/GridMap.cpp
     Source/AStarSolver.cpp
+    Source/AStarSolverPool.cpp
     Source/HexGridHelpers.cpp
     Source/DetourNavMap.cpp
     Source/ObstacleAvoidance.cpp
     Source/NavigationWorld.cpp
     Source/PathSmoother.cpp
-    Source/NavCacheManager.cpp
 )
 
 target_compile_features(Pathfinding PUBLIC cxx_std_20)
@@ -67,6 +67,7 @@ if(BUILD_TESTING)
         Tests/PathBufferTests.cpp
         Tests/GridMapTests.cpp
         Tests/AStarSolverTests.cpp
+        Tests/AStarSolverPoolTests.cpp
         Tests/HexGridHelpersTests.cpp
         Tests/NavigationWorldTests.cpp
         Tests/DetourNavMapTests.cpp

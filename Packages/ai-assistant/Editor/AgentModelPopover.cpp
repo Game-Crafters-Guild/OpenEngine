@@ -80,14 +80,14 @@ bool AgentModelPopover::Build(UIManager& ui)
                            kLayoutAssetPath);
         return false;
     }
-    m_Panel = FindById("AgentModelPopoverPanel");
-    m_ModelDropdown = dynamic_cast<Dropdown*>(FindById("AgentModelDropdown"));
-    m_EffortRow = FindById("AgentEffortRow");
-    m_EffortSlider = dynamic_cast<Slider*>(FindById("AgentEffortSlider"));
-    m_EffortValue = dynamic_cast<Label*>(FindById("AgentEffortValue"));
-    m_EffortEnds = FindById("AgentEffortEnds");
-    m_EffortLowest = dynamic_cast<Label*>(FindById("AgentEffortLowest"));
-    m_EffortHighest = dynamic_cast<Label*>(FindById("AgentEffortHighest"));
+    m_Panel = FindById("AgentModelPopoverPanel"_sid);
+    m_ModelDropdown = dynamic_cast<Dropdown*>(FindById("AgentModelDropdown"_sid));
+    m_EffortRow = FindById("AgentEffortRow"_sid);
+    m_EffortSlider = dynamic_cast<Slider*>(FindById("AgentEffortSlider"_sid));
+    m_EffortValue = dynamic_cast<Label*>(FindById("AgentEffortValue"_sid));
+    m_EffortEnds = FindById("AgentEffortEnds"_sid);
+    m_EffortLowest = dynamic_cast<Label*>(FindById("AgentEffortLowest"_sid));
+    m_EffortHighest = dynamic_cast<Label*>(FindById("AgentEffortHighest"_sid));
     if (!m_Panel || !m_ModelDropdown || !m_EffortRow || !m_EffortSlider || !m_EffortValue || !m_EffortEnds ||
         !m_EffortLowest || !m_EffortHighest)
     {

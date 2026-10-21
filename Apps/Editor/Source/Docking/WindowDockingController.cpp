@@ -207,7 +207,7 @@ void WindowDockingController::Tick()
         if (targetUnderCursor && targetUnderCursor->ui)
         {
             UIElement* root = targetUnderCursor->ui->GetRootElement();
-            UIElement* dockEl = root ? root->FindById("dock") : nullptr;
+            UIElement* dockEl = root ? root->FindById("dock"_sid) : nullptr;
             if (dockEl)
             {
                 // Compute dockspace rect in screen space. GetPosition returns window
@@ -383,7 +383,7 @@ void WindowDockingController::Tick()
             {
                 if (auto* root = targetUnderCursor->ui->GetRootElement())
                 {
-                    if (auto* dockEl = root->FindById("dock"))
+                    if (auto* dockEl = root->FindById("dock"_sid))
                     {
                         int wx = 0, wy = 0;
                         targetUnderCursor->window->GetPosition(wx, wy);
@@ -754,7 +754,7 @@ void WindowDockingController::ClearAllDockOverlays()
             continue;
         if (UIElement* root = w->ui->GetRootElement())
         {
-            if (UIElement* dock = root->FindById("dock"))
+            if (UIElement* dock = root->FindById("dock"_sid))
             {
                 if (auto* ds = dynamic_cast<DockspaceElement*>(dock))
                 {
@@ -791,7 +791,7 @@ void WindowDockingController::ShowDropOverlays()
 
     if (UIElement* root = target->ui->GetRootElement())
     {
-        if (UIElement* dock = root->FindById("dock"))
+        if (UIElement* dock = root->FindById("dock"_sid))
         {
             // Use UI layout coordinates directly for DockOverlay
             const float dww = dock->GetLayoutWidth();
@@ -844,7 +844,7 @@ bool WindowDockingController::ComputeDropCandidateFromCursor(EditorWindowContext
         return false;
     if (UIElement* root = targetUnderCursor->ui->GetRootElement())
     {
-        if (UIElement* dock = root->FindById("dock"))
+        if (UIElement* dock = root->FindById("dock"_sid))
         {
             int wx = 0, wy = 0;
             targetUnderCursor->window->GetPosition(wx, wy);

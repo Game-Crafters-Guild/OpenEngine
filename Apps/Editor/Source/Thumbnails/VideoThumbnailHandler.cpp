@@ -2,12 +2,11 @@
 
 #include "Logger/Logger.h"
 #include "Core/Engine.h"
+#include "Image/Encode.h"
+#include "Image/Resample.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Video/VideoPlayer.h"
 
-#include <stb_image_write.h>
-
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <thread>
@@ -38,30 +37,6 @@ float AveragePixelBrightness(const std::vector<uint8_t>& rgba, int w, int h)
         sum += rgba[i * 4 + 2];
     }
     return static_cast<float>(sum) / static_cast<float>(pixelCount * 3);
-}
-
-// Simple box-filter downscale from (srcW x srcH) RGBA to (dstW x dstH).
-std::vector<uint8_t> DownscaleRGBA(const uint8_t* src, int srcW, int srcH, int dstW, int dstH)
-{
-    std::vector<uint8_t> dst(static_cast<size_t>(dstW) * dstH * 4);
-    const float scaleX = static_cast<float>(srcW) / dstW;
-    const float scaleY = static_cast<float>(srcH) / dstH;
-
-    for (int dy = 0; dy < dstH; ++dy)
-    {
-        for (int dx = 0; dx < dstW; ++dx)
-        {
-            const int sx = std::min(static_cast<int>(dx * scaleX), srcW - 1);
-            const int sy = std::min(static_cast<int>(dy * scaleY), srcH - 1);
-            const size_t srcIdx = (static_cast<size_t>(sy) * srcW + sx) * 4;
-            const size_t dstIdx = (static_cast<size_t>(dy) * dstW + dx) * 4;
-            dst[dstIdx + 0] = src[srcIdx + 0];
-            dst[dstIdx + 1] = src[srcIdx + 1];
-            dst[dstIdx + 2] = src[srcIdx + 2];
-            dst[dstIdx + 3] = src[srcIdx + 3];
-        }
-    }
-    return dst;
 }
 
 } // namespace
@@ -167,27 +142,16 @@ std::string VideoThumbnailHandler::GetOrRequest(const std::filesystem::path& ass
                 if (extracted)
                 {
                     // Downscale so the long edge is kThumbLongEdge, preserving aspect ratio.
-                    int dstW, dstH;
-                    if (srcW >= srcH)
-                    {
-                        dstW = kThumbLongEdge;
-                        dstH = std::max(1, srcH * kThumbLongEdge / srcW);
-                    }
-                    else
-                    {
-                        dstH = kThumbLongEdge;
-                        dstW = std::max(1, srcW * kThumbLongEdge / srcH);
-                    }
-                    auto thumb = DownscaleRGBA(frameRGBA.data(), srcW, srcH, dstW, dstH);
+                    const Image::Image8 thumb =
+                        Image::ResampleToLongEdge(frameRGBA, static_cast<uint32_t>(srcW), static_cast<uint32_t>(srcH),
+                                                  static_cast<uint32_t>(kThumbLongEdge));
 
                     // Ensure cache directory exists.
                     std::error_code dirEc;
                     std::filesystem::create_directories(cachePath.parent_path(), dirEc);
 
-                    stbi_write_png(cachePath.string().c_str(),
-                                   dstW, dstH, 4,
-                                   thumb.data(),
-                                   dstW * 4);
+                    if (thumb.Valid)
+                        Image::WritePngFile(cachePath, thumb.Pixels, thumb.Width, thumb.Height);
                 }
             }
             player.Unload();

@@ -119,9 +119,6 @@ private:
     // ID counter for generating unique IDs
     int m_NextId = 1;
     
-    // Guard against concurrent rebuilds
-    bool m_RebuildPending = false;
-    
     // Flag to request rebuild on next safe opportunity (OnPostLayout)
     bool m_NeedsRebuild = false;
     bool m_NeedsSave = false;

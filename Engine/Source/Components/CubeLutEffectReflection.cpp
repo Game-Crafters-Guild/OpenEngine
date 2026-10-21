@@ -10,9 +10,15 @@
 
 GE_REGISTER_COMPONENT_BEGIN(GameEngine::Components::CubeLutEffect)
     GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, Enabled)
-    GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, StackOrder)
     GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, Intensity)
-    GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, InputEncoding)
-    GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, TextureFormat)
+    GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, Stage)
     GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::CubeLutEffect, LutAssetGuid)
 GE_REGISTER_COMPONENT_END(GameEngine::Components::CubeLutEffect)
+
+// The Stage's names (Components::kCubeLutStageNames), so tools and the debug server read and write
+// it by name, as a scene does.
+GE_REFLECT_ENUM_TABLE_BEGIN(CubeLutStage)
+    GE_REFLECT_ENUM_TABLE_VALUE("Finish", 0)
+    GE_REFLECT_ENUM_TABLE_VALUE("Grade", 1)
+GE_REFLECT_ENUM_TABLE_END()
+GE_REFLECT_ENUM_FIELD(GameEngine::Components::CubeLutEffect, Stage, CubeLutStage);

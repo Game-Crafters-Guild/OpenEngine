@@ -505,7 +505,7 @@ HeadlessViewStatus HeadlessViewFixture::Up()
     }
     m_Services->Views().SetCameraData(m_Camera, cd);
     m_View = m_Services->Views().AllocateView("HeadlessView", m_Camera);
-    m_Services->Views().SetViewRenderLayerMask(m_View, 1u);
+    m_Services->Views().SetViewRenderLayerMask(m_View, GameEngine::Rendering::RenderLayerMask::Default());
 
     // One instance so the GPU-driven prologue does not vacuously early-out —
     // the spine's culling and bucketer stages are part of "a real world view".

@@ -34,7 +34,7 @@ MaterialKeyword RenderServices::ResolveWorldPassKeywordsForPrewarm() const
         for (const auto& pass : bp->passes)
         {
             if (pass.type == kWorldRenderPassType)
-                return Pipeline::Nodes::ParseWorldPassKeywords(pass.passJson);
+                return Pipeline::Nodes::ParseWorldPassKeywords(pass.passJson) | RecordedHeightFogKeyword();
         }
     }
 
@@ -56,6 +56,21 @@ MaterialKeyword RenderServices::ResolveWorldPassKeywordsForPrewarm() const
     // pipeline declares so the work isn't wasted. If the loaded blueprint later adds keywords
     // (e.g. IBL), the GetOrCompileColorVariantImpl self-heal compiles the real variant on first draw.
     return MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows;
+}
+
+// The height fog keyword a view's world pass recorded: the fog is drawn in every surface's own shader,
+// and a scene whose fog is on (every new scene and template) draws every material with it, so prewarm
+// compiles that variant rather than the one the first draw would replace.
+MaterialKeyword RenderServices::RecordedHeightFogKeyword() const
+{
+    MaterialKeyword fog = MaterialKeyword::None;
+    m_ViewRegistry.ForEachPerView(
+        [&](const ViewRegistry::PerViewResources& pv)
+        {
+            if (pv.WorldPassKeywords && HasKeyword(*pv.WorldPassKeywords, MaterialKeyword::HeightFog))
+                fog = MaterialKeyword::HeightFog;
+        });
+    return fog;
 }
 
 // The register+prewarm entry stays on RenderServices because it resolves the

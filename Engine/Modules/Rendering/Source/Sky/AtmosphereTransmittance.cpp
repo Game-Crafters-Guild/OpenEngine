@@ -1,5 +1,7 @@
 #include "Rendering/Sky/AtmosphereTransmittance.h"
 
+#include "Types/ColorUtils.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -9,7 +11,7 @@ namespace {
 
 // Steps of the optical-depth quadrature. Mirrors kSteps in sky_transmittance_lut.comp: the CPU
 // colour and the GPU LUT are the same integral, so they must also be the same approximation of it.
-constexpr int kOpticalDepthSteps = 32;
+constexpr int kOpticalDepthSteps = 512;
 
 // Path length from the planet surface along a ray of zenith cosine `mu`. The evaluator sits ON the
 // surface (r == planetRadius), so both intersections are closed-form. Do not replace this with a
@@ -20,8 +22,8 @@ constexpr int kOpticalDepthSteps = 32;
 //
 // Upward and grazing (mu >= 0): out to the top of the atmosphere. Downward (mu < 0): the chord
 // through the planet — hundreds of kilometres of full-density air, so the source is occluded. The
-// GPU LUT's bottom row sits a few metres above the surface and takes the short path down to the
-// ground instead, which is why nothing below the horizon is shared with it.
+// GPU LUT stores no ray that meets the planet (its readers return 0 for one), so nothing below the
+// horizon is shared with it.
 float SurfacePathLength(const AtmosphereParametersGPU& atmosphere, float mu)
 {
     const float r = atmosphere.planetRadius;
@@ -53,8 +55,13 @@ void OpticalDepth(const AtmosphereParametersGPU& atmosphere, float mu, float out
 
         const float rayleigh = std::exp(-height / atmosphere.rayleighScaleHeight);
         const float mie = std::exp(-height / atmosphere.mieScaleHeight);
+        const float ozone = std::max(
+            0.0f, 1.0f - std::fabs(height - atmosphere.ozoneCenterHeight) / atmosphere.ozoneHalfWidth);
         for (int c = 0; c < 3; ++c)
-            outTau[c] += (atmosphere.betaRayleigh[c] * rayleigh + atmosphere.betaMie[c] * mie) * ds;
+            outTau[c] += (atmosphere.betaRayleigh[c] * rayleigh +
+                          (atmosphere.betaMie[c] + atmosphere.mieAbsorption[c]) * mie +
+                          atmosphere.ozoneAbsorption[c] * ozone) *
+                         ds;
     }
 }
 
@@ -100,6 +107,15 @@ void EvaluateGroundLevelSunColor(const AtmosphereParametersGPU& atmosphere,
     // varies over the day is the EXTRA air mass a lower sun's light travels through.
     for (int c = 0; c < 3; ++c)
         outColor[c] = colorAboveAtmosphere[c] * std::exp(zenithTau[c] - tau[c]);
+}
+
+float SkySourceIlluminanceScale(const AtmosphereParametersGPU& atmosphere)
+{
+    float zenithTau[3];
+    OpticalDepth(atmosphere, 1.0f, zenithTau);
+    const float zenithTransmittance[3] = {std::exp(-zenithTau[0]), std::exp(-zenithTau[1]),
+                                          std::exp(-zenithTau[2])};
+    return 1.0f / ColorUtils::LinearRec709Luminance(zenithTransmittance);
 }
 
 SkyBodyGroundColors EvaluateBodyGroundColors(const AtmosphereParametersGPU& atmosphere,

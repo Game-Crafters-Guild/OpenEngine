@@ -942,7 +942,10 @@ bool ModelAsset::AdoptReloadedPayload(Asset& staged) {
     std::swap(m_Cameras, other->m_Cameras);
     std::swap(m_Lights, other->m_Lights);
     std::swap(m_SceneNodes, other->m_SceneNodes);
-    std::swap(m_Extras, other->m_Extras);
+    {
+        std::scoped_lock lock(m_ExtrasMutex, other->m_ExtrasMutex);
+        std::swap(m_Extras, other->m_Extras);
+    }
     std::swap(m_TotalVertexCount, other->m_TotalVertexCount);
     std::swap(m_TotalIndexCount, other->m_TotalIndexCount);
     std::swap(m_SourceContentHash, other->m_SourceContentHash);
@@ -971,6 +974,16 @@ bool ModelAsset::AdoptReloadedPayload(Asset& staged) {
     return true;
 }
 
+std::shared_ptr<const ModelExtras> ModelAsset::GetExtras() const {
+    std::lock_guard<std::mutex> lock(m_ExtrasMutex);
+    return m_Extras;
+}
+
+void ModelAsset::SetExtras(std::shared_ptr<const ModelExtras> extras) {
+    std::lock_guard<std::mutex> lock(m_ExtrasMutex);
+    m_Extras = std::move(extras);
+}
+
 void ModelAsset::Unload() {
     m_Meshes.clear();
     m_Materials.clear();
@@ -978,7 +991,7 @@ void ModelAsset::Unload() {
     m_Cameras.clear();
     m_Lights.clear();
     m_SceneNodes.clear();
-    m_Extras = {};
+    SetExtras(std::make_shared<const ModelExtras>());
     m_TotalVertexCount = 0;
     m_TotalIndexCount = 0;
     m_HasAnimations = false;

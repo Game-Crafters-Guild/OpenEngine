@@ -180,6 +180,31 @@ TEST(MaterialAssetParsing, RejectsWrongSchemaVersion)
     EXPECT_TRUE(ErrorsContain(mat, "unsupported schemaVersion"));
 }
 
+// A .material that is not JSON, or whose field holds a value of the wrong type, is refused with the
+// place or the field named, and never throws: the web build has no exception catching.
+TEST(MaterialAssetParsing, RefusesUnreadableJsonNamingThePlaceOrTheField)
+{
+    const auto bytes = [](std::string_view text) { return Vector<uint8>(text.begin(), text.end()); };
+
+    MaterialAsset truncated(GUID{}, "Materials/Truncated.material");
+    EXPECT_FALSE(truncated.LoadFromData(bytes(R"({"shader": "StandardPBR", )")));
+    EXPECT_TRUE(ErrorsContain(truncated, "the file is not JSON (parse error at line 1, column"));
+
+    MaterialAsset mistyped(GUID{}, "Materials/Mistyped.material");
+    EXPECT_FALSE(mistyped.LoadFromData(bytes(R"({"schemaVersion": 3, "doubleSided": "yes"})")));
+    EXPECT_TRUE(ErrorsContain(mistyped, "'doubleSided' is a string; write it as true or false"));
+
+    // An authored key in a field name is escaped and cut to 64 bytes, its length given: a line
+    // break in it would split the log line, and its length is the author's.
+    // The key as JSON text: "a", an escaped line break, "b", then 200 more characters.
+    const std::string longKey = R"(a\nb)" + std::string(200, 'k');
+    MaterialAsset longKeyed(GUID{}, "Materials/LongKey.material");
+    EXPECT_FALSE(longKeyed.LoadFromData(
+        bytes(R"({"schemaVersion": 3, "textures": {")" + longKey + R"(": {"guid": 5}}})")));
+    EXPECT_TRUE(ErrorsContain(longKeyed, R"('textures.a\nb)" + std::string(52, 'k') +
+                                             "'... (217 bytes) is a number; write it as a string"));
+}
+
 TEST(MaterialAssetParsing, MissingSurfaceShaderFailsFast)
 {
     const auto tmpRoot = TestUtils::MakeUniqueTempDirectory("ge_material_parse_missing_surface");

@@ -1,6 +1,6 @@
 [scene name="OceanUnderwaterLookdev" version=1]
 ; Underwater clarity, displaced waterline, shadowed caustics and sun shafts.
-; The ocean surface detail guide (docs/Rendering/ocean-surface-detail.html) explains the controls.
+; The ocean surface detail guide (docs/rendering/ocean-surface-detail.mdx) explains the controls.
 
 [entity id="sun"]
 Name.value = "Sun"
@@ -43,7 +43,7 @@ Transform.rotation = (0.055, 0, 0, 0.998486)
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.isGlobal = true
-PostProcessVolume.tonemap = 4
+PostProcessVolume.look = Neutral
 
 [entity id="ocean"]
 Name.value = "Ocean - underwater optics"

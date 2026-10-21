@@ -68,6 +68,14 @@ enum class MaterialKeyword : uint64_t
     ParallaxDepthFromPrepass = 1ull << 34, // Pass keyword, the colour pass of a parallax material after a camera prepass that wrote the relief depth, with that depth attached read-only: the variant does not march. It reads the depth the prepass wrote at its pixel (ge_prepassDepth, set-0 b49), rebuilds the relief hit from it (Includes/parallax_depth.glsl), and discards where that depth is something else in front of the relief. It tests at the depth it read (layout(depth_less) gl_FragDepth, one value per pixel as the prepass wrote it) and its pipeline writes no depth. Both passes agree on the hit by construction
     ParallaxPrepassDepthMultisample = 1ull << 35, // Pass keyword, beside ParallaxDepthFromPrepass when the depth is multisampled: ge_prepassDepth is a sampler2DMS and the hit comes from the farthest covered sample, the one the relief wrote
     ParallaxDepthTolerance = 1ull << 36, // Pass keyword, beside ParallaxDepthOffset on the colour pass of a view whose prepass wrote the relief depth but whose world pass keeps depth writable, so it cannot read it (forward contributors that draw no prepass depth): the colour variant marches, writes no depth (its pipeline's depth write is off) and tests at min(z, z' + margin), one march step of depth plus 2^-20 relative, so a march that lands a step from the prepass's leaves no hole
+    DiffuseTransmission = 1ull << 37, // Diffuse transmission through a thin surface on StandardPBR (per-material opt-in, set by the engine code that registers the material): the diffuse lobe gives so.diffuseTransmission of its light to the far face, which every light behind the surface lights with so.diffuseTransmissionAlbedo (GE_DiffuseTransmissionFarFace). Shading path only; the ambient term keeps the whole diffuse albedo
+    HeightFog          = 1ull << 38, // Pass keyword (set per view only when the view's height fog is active, IsHeightFogActive, and its graph uploads the HeightFogParams buffer): every shading variant fogs its own radiance by its own distance (Includes/height_fog_term.glsl: HeightFogParams at set-0 b52, ge_skyBackdrop b53), weighted by its blend (the blend keywords below). Without the keyword neither binding nor term is in the SPIR-V and the variant is bit-identical to the unfogged shader
+    VolumetricFog      = 1ull << 39, // Pass keyword (set on the late transparents and the glass pass of a view whose volumetric fog published its froxel volume; NarrowColorPassKeywords keeps it only for blended and transmissive materials): the shading variant takes the volumetric fog by its own distance from that volume (Includes/volumetric_fog_forward.glsl: VolumetricFogParams at set-0 b54, ge_volumetricFog b55, ge_volumetricFogIrradiance b56), before the height fog. Those passes draw after the volumetric fog composite, which fogs everything drawn before them by the opaque depth. Without the keyword none of it is in the SPIR-V
+    PremultipliedBlend = 1ull << 40, // Derived per material, never authored (ApplyAlphaModeKeywords, from ClassifyBlendComposite): a Blend material composited as premultiplied over (One, OneMinusSrcAlpha). The fog adds its in-scatter scaled by the output alpha. Read only under HeightFog or VolumetricFog
+    AdditiveBlend      = 1ull << 41, // Derived like PremultipliedBlend: a Blend material added onto what is behind it (destination factor One). The fog only fades it toward black, its blend's identity: no in-scatter, which every overlapping sprite would add again. Read only under HeightFog or VolumetricFog
+    MultiplyBlend      = 1ull << 42, // Derived like PremultipliedBlend: a Blend material that multiplies what is behind it (DstColor, Zero or Zero, SrcColor). The fog fades its colour toward 1, its blend's identity. Read only under HeightFog or VolumetricFog
+    UnfoggedBlend      = 1ull << 43, // Derived like PremultipliedBlend: a Blend material whose blend has no identity colour to fade toward (Min, Max, the subtractions, and every other factor pair): the fog leaves it as it is. Read only under HeightFog or VolumetricFog
+    VolumetricClouds   = 1ull << 44, // Pass keyword (set on the late transparents of a view whose volumetric clouds composited this frame, drawn after that composite; NarrowColorPassKeywords keeps it only for blended materials): a blended surface beyond the clouds' mean distance at its pixel takes the clouds' transmittance on its contribution, so the clouds stand in front of it (Includes/forward_fog.glsl: ge_volumetricClouds at set-0 b57). A nearer surface is drawn over the clouds. Without the keyword neither binding nor test is in the SPIR-V
 };
 
 inline constexpr MaterialKeyword operator|(MaterialKeyword a, MaterialKeyword b)
@@ -247,6 +255,8 @@ inline std::vector<std::string> GenerateDefines(const ShaderVariantKey& key,
         defs.push_back("GE_ANISOTROPY_ENABLED");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::Subsurface))
         defs.push_back("GE_SUBSURFACE_ENABLED");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::DiffuseTransmission))
+        defs.push_back("GE_DIFFUSE_TRANSMISSION_ENABLED");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::DepthOnlyFragment))
         defs.push_back("GE_DEPTH_ONLY_FRAGMENT");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::Transmission))
@@ -303,6 +313,22 @@ inline std::vector<std::string> GenerateDefines(const ShaderVariantKey& key,
         defs.push_back("GE_PARALLAX_PREPASS_DEPTH_MULTISAMPLE");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::ParallaxDepthTolerance))
         defs.push_back("GE_PARALLAX_DEPTH_TOLERANCE");
+    // The fog is a property of the shading path, like the SSSR G-buffer above: a key that shades
+    // nothing composes the same program with or without it.
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::HeightFog) && !shadesNothing)
+        defs.push_back("GE_HEIGHT_FOG");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::VolumetricFog) && !shadesNothing)
+        defs.push_back("GE_VOLUMETRIC_FOG_FORWARD");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::VolumetricClouds) && !shadesNothing)
+        defs.push_back("GE_CLOUDS_IN_FRONT");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::PremultipliedBlend))
+        defs.push_back("GE_BLEND_PREMULTIPLIED");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::AdditiveBlend))
+        defs.push_back("GE_BLEND_ADDITIVE");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::MultiplyBlend))
+        defs.push_back("GE_BLEND_MULTIPLY");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::UnfoggedBlend))
+        defs.push_back("GE_BLEND_UNFOGGED");
 
     defs.push_back("LIGHTING_MODEL_" + ToUpperSnakeCase(lightingModelName));
 

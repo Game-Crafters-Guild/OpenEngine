@@ -1,0 +1,66 @@
+#version 450
+
+// Test-only probe for the height fog's sky horizon colour (HeightFogSkyColorTests).
+//
+// Per probed view direction it writes two colours:
+//   [2i]     the fog's: GE_SkyHorizonColor, the call the fog term makes (height_fog_term.glsl) for
+//            every sky source, fed the values FillHeightFogSkyColor put in the fog's UBO;
+//   [2i + 1] the sky's: sky_render.frag's atmosphere backdrop at the horizon of the same azimuth
+//            (the LUT tap, the shared ground and night composite at viewZenithCos 0, the exposure
+//            multiply), fed the sky settings the way SkyRenderNode fills the sky UBO.
+// The test asserts the two agree, so the haze is the colour of the sky it meets.
+
+#include "Includes/sky_composite.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uSkyViewLUT;
+layout(set = 0, binding = 1) buffer ProbeOut { vec4 result[]; } uOut;
+
+layout(push_constant) uniform ProbePC
+{
+    vec4 fogScaleNightOffsetCount; // fog UBO: skyHorizonScale, skyNightAmount, skyAzimuthOffset; w direction count
+    vec4 fogHorizonColor;          // fog UBO: skyHorizonColor; w colorSource
+    vec4 skyExposureNight;         // sky settings: x exposureEV, y nightSkyBlend; z 1 = HDRI sweep
+    vec4 skyNightHorizonColor;     // sky settings: nightSkyHorizonColor
+} pc;
+
+const float kSkyViewLutHeight = 256.0;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    uint count = uint(pc.fogScaleNightOffsetCount.w);
+    if (i >= count)
+        return;
+
+    // View directions over every azimuth, from 40 degrees below the horizon (fog over the ground)
+    // to 5 degrees above it (fog over the sky's lower band).
+    float u = (float(i) + 0.5) / float(count);
+    float elevation = radians(mix(-40.0, 5.0, u));
+    float azimuth = float(i) * 2.39996323;
+    if (pc.skyExposureNight.z > 0.5)
+    {
+        // HDRI sweep: neighbouring directions a quarter turn apart in even steps, 5 degrees down.
+        elevation = radians(-5.0);
+        azimuth = u * 1.57079633;
+    }
+    vec3 dirWS = vec3(cos(elevation) * cos(azimuth), sin(elevation), cos(elevation) * sin(azimuth));
+
+    vec3 fogColor = GE_SkyHorizonColor(uSkyViewLUT, int(pc.fogHorizonColor.w), dirWS,
+                                       pc.fogScaleNightOffsetCount.z, pc.fogScaleNightOffsetCount.y,
+                                       pc.fogHorizonColor.rgb, pc.fogScaleNightOffsetCount.x);
+
+    vec3 horizonWS = normalize(vec3(dirWS.x, 0.0, dirWS.z));
+    vec2 skyUv = GE_SkyDirToViewLutUv(horizonWS);
+    skyUv.y = clamp(skyUv.y, 0.5 / kSkyViewLutHeight, 1.0 - 0.5 / kSkyViewLutHeight);
+    vec3 skyColor = textureLod(uSkyViewLUT, skyUv, 0.0).rgb;
+    skyColor = GE_ApplySkyGroundAndNight(skyColor, horizonWS, 0.0,
+                                         clamp(pc.skyExposureNight.y, 0.0, 1.0), false,
+                                         vec3(0.0), 0.0, vec3(0.0), 0.0, vec3(0.0), 1.0,
+                                         pc.skyNightHorizonColor.rgb);
+    skyColor *= exp2(pc.skyExposureNight.x);
+
+    uOut.result[2u * i] = vec4(fogColor, elevation);
+    uOut.result[2u * i + 1u] = vec4(skyColor, azimuth);
+}

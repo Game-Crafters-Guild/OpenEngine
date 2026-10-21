@@ -6604,6 +6604,31 @@ TEST(TerrainRegionBake, SphereStampFlatWhiteDiscAddSubtract)
     EXPECT_NEAR(svc.SampleSphereSculptHeight(dirN.x, dirN.y, dirN.z, 0.0f), -kStampHeight, 1.0f);
 }
 
+TEST(TerrainRegionBake, SphereNonHeightEffectsDoNotCreateFlattenPlacements)
+{
+    ScopedTerrainService scoped;
+    auto& service = TerrainService::Get();
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreatePlanetEntity(world, CreateBakedTerrain(service));
+
+    const Dir3 direction = Normalize3({0.5f, 0.5f, 0.7f});
+    const Dir3 position = {direction.x * 2000.0f, direction.y * 2000.0f, direction.z * 2000.0f};
+    constexpr float32 kStampHeight = 40.0f;
+    const auto modifier = CreateSphereStampModifier(
+        world, position, 250.0f, 50.0f, kStampHeight, Components::TerrainModifierBlend::Add);
+    world.AddComponentImmediate<Components::TerrainSurfaceRulesEffect>(modifier, {});
+    world.AddComponentImmediate<Components::TerrainGroundClaimEffect>(modifier, {});
+    world.AddComponentImmediate<Components::TerrainGrassEffect>(modifier, {});
+    world.SwapLifecycleEvents();
+
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+
+    EXPECT_NEAR(service.SampleSphereSculptHeight(direction.x, direction.y, direction.z, 0.0f),
+                kStampHeight, 1.0f);
+}
+
 // Planet-grass gate oracle. TerrainExtractionSystem sources a terrain's grass params only when the
 // domain supports the planar placement compute; a spherical planet would otherwise get blades rooted
 // on a flat XZ grid, floating off its curved surface (the reported "grass in outer space" bug). The

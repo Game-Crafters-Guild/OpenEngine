@@ -278,6 +278,12 @@ static void ApplyProperty(ResolvedStyle& rs,
         rs.Visual.BackgroundImage.PosYIsPercent = pos.YIsPercent;
     }
         break;
+    case StylePropertyId::Transform:
+        rs.Visual.Transform = GetValue<TransformValue>(p);
+        break;
+    case StylePropertyId::TransformOrigin:
+        rs.Visual.TransformOrigin = GetValue<TransformOriginValue>(p);
+        break;
     case StylePropertyId::BackgroundTint:
         rs.Visual.BackgroundImage.Tint = GetValue<uint32_t>(p);
         rs.Visual.BackgroundImage.HasTint = true;
@@ -760,6 +766,12 @@ static void CopyPropertyFromStyle(ResolvedStyle& dst,
         dst.Visual.BackgroundImage.PosY = src.Visual.BackgroundImage.PosY;
         dst.Visual.BackgroundImage.PosYIsPercent = src.Visual.BackgroundImage.PosYIsPercent;
         break;
+    case StylePropertyId::Transform:
+        dst.Visual.Transform = src.Visual.Transform;
+        break;
+    case StylePropertyId::TransformOrigin:
+        dst.Visual.TransformOrigin = src.Visual.TransformOrigin;
+        break;
     case StylePropertyId::BackgroundTint:
         dst.Visual.BackgroundImage.Tint = src.Visual.BackgroundImage.Tint;
         dst.Visual.BackgroundImage.HasTint = src.Visual.BackgroundImage.HasTint;
@@ -1082,7 +1094,8 @@ static int CountSiblingsOfType(const UIElement& el, bool ofType)
     const std::type_info& elType = typeid(el);
     for (const auto& child : children)
     {
-        if (typeid(*child) == elType)
+        const UIElement* childElement = child.get();
+        if (typeid(*childElement) == elType)
             ++count;
     }
     return count;

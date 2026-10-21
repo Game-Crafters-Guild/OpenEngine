@@ -1,6 +1,9 @@
 #include "TerrainGrass/GrassClumpModel.h"
 #include "TerrainGrass/GrassPlacementModel.h"
 #include "TerrainGrass/TerrainGrassPlacementStats.h"
+#include "Terrain/TerrainTypes.h"
+
+#include "GlslShim.h"
 
 #include <gtest/gtest.h>
 
@@ -9,6 +12,7 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <cmath>
@@ -20,6 +24,28 @@
 // dispatch extent are derived from the same slot counts the compute spawns. These tests pin the
 // determinism contract, the scale-invariance claim, and the golden hash values a GLSL drift would
 // break (grass_placement.glsl is the mirror; a change to one without the other reds this suite).
+
+// The shared grass canopy block (Includes/terrain_grass_canopy.glsl), compiled from the shipped
+// shader through GlslShim.h so the contact's occlusion parity is measured on the expressions that
+// render.
+namespace GrassCanopyShader
+{
+using namespace GameEngine::GlslShim;
+#include "GrassCanopyExtracted.h"
+} // namespace GrassCanopyShader
+
+// The shipped pack and unpack of the instance's blade shape and per-blade random (grass_clump.glsl),
+// on the placement model's hash, which is the GLSL hash's mirror.
+namespace GrassBladeShapeShader
+{
+using namespace GameEngine::GlslShim;
+using GameEngine::GlslShim::clamp;
+using GameEngine::GlslShim::floor;
+using GameEngine::GlslShim::fract;
+using GameEngine::TerrainGrass::GrassHashNext;
+using GameEngine::TerrainGrass::GrassHashToUnit;
+#include "GrassBladeShapeExtracted.h"
+} // namespace GrassBladeShapeShader
 
 namespace GameEngine::TerrainGrass
 {
@@ -600,6 +626,41 @@ TEST(GrassClumpModel, ZeroVarianceIsExactlyTheAuthoredHeight)
     EXPECT_GE(GrassClumpHeightMultiplier(0.0f, 5.0f), 0.0f);
 }
 
+// The tuft's shape: tallest at its site, ClumpTaper shorter at its edge, and no change at all at a
+// taper of 0, so an author who dials it back gets the field they had before touching it.
+TEST(GrassClumpModel, TaperShapesATuftFromItsSiteToItsEdge)
+{
+    for (float32 d : {0.0f, 0.3f, kGrassClumpTaperEdge, 2.0f})
+        EXPECT_EQ(GrassClumpTaperMultiplier(d, 0.0f), 1.0f) << "d=" << d;
+    EXPECT_EQ(GrassClumpTaperMultiplier(0.0f, 0.35f), 1.0f);
+    EXPECT_FLOAT_EQ(GrassClumpTaperMultiplier(kGrassClumpTaperEdge, 0.35f), 0.65f);
+    EXPECT_FLOAT_EQ(GrassClumpTaperMultiplier(1.5f, 0.35f), 0.65f);
+    float32 previous = 1.0f;
+    for (int step = 1; step <= 20; ++step)
+    {
+        const float32 m = GrassClumpTaperMultiplier(static_cast<float32>(step) * 0.05f, 0.35f);
+        EXPECT_LE(m, previous) << "the taper rises again at step " << step;
+        previous = m;
+    }
+    // An out-of-range taper cannot invert a blade.
+    EXPECT_GE(GrassClumpTaperMultiplier(1.0f, 5.0f), 0.0f);
+}
+
+// The distance the taper reads is the blade's distance to the site it joined, in clump cells.
+TEST(GrassClumpModel, DistanceCellsIsTheDistanceToTheAdoptingSite)
+{
+    constexpr float32 kClumpSize = 1.1f;
+    for (float32 x : {-7.25f, 0.0f, 3.7f, 1000.5f})
+    {
+        for (float32 z : {-2.4f, 0.55f, 12.0f})
+        {
+            const GrassClumpSample c = GrassSampleClump(x, z, kClumpSize, 3u);
+            EXPECT_NEAR(c.DistanceCells * kClumpSize, ClumpDistance(x, z, c), 2e-3f)
+                << "x=" << x << " z=" << z;
+        }
+    }
+}
+
 // The clump code and the minimum-width scale ride in the instance's Flags word beside the LOD
 // index, which is the whole reason both cost zero bytes per blade. No field may corrupt another.
 TEST(GrassClumpModel, TheFlagsWordCarriesLodClumpCodeAndMinWidthIndependently)
@@ -652,28 +713,6 @@ TEST(GrassClumpModel, TheLodAndClumpAccessorsAreBlindToTheMinWidthField)
             }
         }
     }
-}
-
-// The floor is inert unless it exceeds the width it is clamped against, and inertness must be
-// EXACT rather than close: clamp returns its `width` operand itself, so a blade that already
-// clears the floor renders bit-identically to a build without the feature. Mirrors the vertex
-// stage's `clamp(minWidth, width, width * kGrassMaxWidthExpansion)`.
-TEST(GrassClumpModel, AMinWidthBelowTheBladesOwnWidthIsBitIdenticallyInert)
-{
-    auto clampWidth = [](float32 minWidth, float32 width) {
-        return std::min(std::max(minWidth, width), width * kGrassMaxWidthExpansion);
-    };
-    for (float32 width : {0.0f, 1.0e-6f, 0.0123f, 0.043f, 0.05f, 1.7f})
-    {
-        // No floor at all: the encoded 0 must not perturb a single bit.
-        const float32 noFloor = 0.05f * GrassMinWidthScaleFromFlags(GrassPackFlags(0u, 0u, 0.0f));
-        EXPECT_EQ(clampWidth(noFloor, width), width) << "width=" << width;
-        // A floor strictly under the width is equally inert.
-        EXPECT_EQ(clampWidth(width * 0.5f, width), width) << "width=" << width;
-    }
-    // And where it does bind, it binds to the floor, not past the ceiling.
-    EXPECT_FLOAT_EQ(clampWidth(0.02f, 0.01f), 0.02f);
-    EXPECT_FLOAT_EQ(clampWidth(1.0f, 0.01f), 0.01f * kGrassMaxWidthExpansion);
 }
 
 TEST(GrassClumpModel, TheClumpCodeSpansItsEightBitsAcrossTheField)
@@ -972,7 +1011,10 @@ TEST(GrassSplatResolveSharing, ColourShowsTheUpgradeCrossfadeAndPlacementDoesNot
         const char* File;
         const char* ShowsFade;
     };
-    for (const Consumer consumer : {Consumer{"terrain_grass_surface.glsl", "true"},
+    // The ground colour is resolved by the vertex stage's root resolve on the full profile and by
+    // the surface on the compat profile; both show the fade.
+    for (const Consumer consumer : {Consumer{"grass_root_ground_color.glsl", "true"},
+                                    Consumer{"terrain_grass_surface.glsl", "true"},
                                     Consumer{"terrain_grass_place.comp", "false"}})
     {
         const std::string src = ReadShaderSource(consumer.File);
@@ -1000,18 +1042,19 @@ TEST(GrassSplatResolveSharing, ColourShowsTheUpgradeCrossfadeAndPlacementDoesNot
     }
 }
 
-// The surface's ground colour reaches the atlas TWICE: the splat weights through the shared resolve
-// above, and the terrain normal that supplies the triplanar projection weights the shared albedo
-// expression blends its taps by. cbt_surface.glsl crossfades BOTH on upgrade, so fading only the
-// splat would still step the blend the moment a tile went resident.
-TEST(GrassSplatResolveSharing, TheSurfacesGroundNormalTakesTheSameUpgradeWeight)
+// The blade's root ground colour (grass_root_ground_color.glsl) reaches the atlas TWICE: the splat
+// weights through the shared resolve above, and the terrain normal that supplies the triplanar
+// projection weights the shared albedo expression blends its taps by. cbt_surface.glsl crossfades
+// BOTH on upgrade, so fading only the splat would still step the blend the moment a tile went
+// resident.
+TEST(GrassSplatResolveSharing, TheRootGroundNormalTakesTheSameUpgradeWeight)
 {
-    const std::string surface = ReadShaderSource("terrain_grass_surface.glsl");
-    ASSERT_GT(surface.size(), 200u) << "the grass surface read back empty or stripped to nothing";
+    const std::string surface = ReadShaderSource("grass_root_ground_color.glsl");
+    ASSERT_GT(surface.size(), 200u) << "the root resolve read back empty or stripped to nothing";
 
     const std::vector<std::string> calls = CallArguments(surface, "GrassAtlas_SlotUpgradeWeight");
     ASSERT_EQ(calls.size(), 1u)
-        << "terrain_grass_surface.glsl calls GrassAtlas_SlotUpgradeWeight " << calls.size()
+        << "grass_root_ground_color.glsl calls GrassAtlas_SlotUpgradeWeight " << calls.size()
         << " times; the ground normal is the one site that needs it directly (the splat reaches it "
            "through GrassAtlas_ResolveSplat)";
     // The weight must come from the row THIS resolve read — a second clock, or a constant, would
@@ -1032,7 +1075,7 @@ TEST(GrassSplatResolveSharing, TheUpgradeWeightIsActuallyMixedNotJustDerived)
         size_t ExpectedMixes;
     };
     for (const MixSite& site : {MixSite{"grass_atlas_splat.glsl", 1u},
-                                MixSite{"terrain_grass_surface.glsl", 1u}})
+                                MixSite{"grass_root_ground_color.glsl", 1u}})
     {
         const std::string src = ReadShaderSource(site.File);
         ASSERT_GT(src.size(), 200u) << site.File << " read back empty or stripped to nothing";
@@ -1053,30 +1096,134 @@ TEST(GrassSplatResolveSharing, TheUpgradeWeightIsActuallyMixedNotJustDerived)
 // the wrong way round — the base is supposed to disappear into its surroundings. The contact is
 // structural rather than authored, so nothing outside this expression can express that factor, and
 // the expression is therefore what holds the invariant.
-TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourUnscaled)
+TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscaled)
 {
     const std::string surface = ReadShaderSource("terrain_grass_surface.glsl");
     ASSERT_GT(surface.size(), 200u) << "the grass surface read back empty or stripped to nothing";
 
-    // The one mix that spans the blade's colour schedule: grounded end to canopy end, weighted by
-    // the schedule itself.
+    // The one mix that spans the blade's ground handover: grounded end to canopy end, weighted by
+    // the handover itself.
     std::vector<std::string> scheduleMixes;
     for (const std::string& arg : CallArguments(surface, "mix"))
-        if (arg.find("terrainColor") != std::string::npos &&
+        if (arg.find("groundedEnd") != std::string::npos &&
             arg.find("bladeRise") != std::string::npos)
             scheduleMixes.push_back(arg);
     ASSERT_EQ(scheduleMixes.size(), 1u)
-        << "expected exactly one terrainColor-to-canopy schedule mix in the grass surface, found "
+        << "expected exactly one groundedEnd-to-canopy handover mix in the grass surface, found "
         << scheduleMixes.size() << " — re-point this scan before trusting it";
 
     std::string grounded = scheduleMixes[0].substr(0, scheduleMixes[0].find(','));
     grounded.erase(std::remove_if(grounded.begin(), grounded.end(),
                                   [](unsigned char c) { return std::isspace(c) != 0; }),
                    grounded.end());
-    EXPECT_EQ(grounded, "terrainColor")
-        << "the grounded end of the blade's colour schedule is `" << grounded
-        << "`, not the terrain colour itself — a scaled contact reads as a colour mismatch at the "
+    EXPECT_EQ(grounded, "groundedEnd")
+        << "the grounded end of the blade's ground handover is `" << grounded
+        << "`, not the grounded colour itself — a scaled contact reads as a colour mismatch at the "
            "root rather than as the blade being seated in its ground";
+    // And the grounded colour is the terrain's own, unscaled, whenever Splat Root Color is on.
+    std::string stripped = surface;
+    stripped.erase(std::remove_if(stripped.begin(), stripped.end(),
+                                  [](unsigned char c) { return std::isspace(c) != 0; }),
+                   stripped.end());
+    EXPECT_NE(stripped.find("vec3groundedEnd=((tp.GrassEnabled&2u)!=0u)?terrainColor:rootColor;"),
+              std::string::npos)
+        << "the grounded colour is no longer the unscaled terrain colour under Splat Root Color";
+
+    // The contact's indirect light: the blade root and the ground under a full field take the same
+    // canopy occlusion, executed on the shipped shared block, at every depth a row can carry.
+    // At every coverage a field edge or a region can leave, too: the root and the ground beside it
+    // take the same occlusion.
+    namespace C = GrassCanopyShader;
+    for (float32 depth : {0.0f, 0.1f, Terrain::TerrainGrassCanopyOcclusionDepth(Terrain::TerrainGPUParams{}, 1.0f),
+                          Terrain::kTerrainGrassCanopyOcclusionMax})
+    {
+        for (float32 coverage : {0.25f, 0.5f, 1.0f})
+        {
+            EXPECT_FLOAT_EQ(C::GrassBladeCanopyOcclusion(depth, coverage, 0.0f),
+                            C::GrassGroundCanopyOcclusion(depth, coverage))
+                << "depth " << depth << " coverage " << coverage;
+            EXPECT_FLOAT_EQ(C::GrassBladeCanopyOcclusion(depth, coverage, 1.0f), 1.0f)
+                << "the canopy occludes the top of the blade at depth " << depth;
+        }
+        EXPECT_LT(C::GrassGroundCanopyOcclusion(depth, 0.5f), 1.0f + 1e-6f);
+        if (depth > 0.0f)
+            EXPECT_GT(C::GrassGroundCanopyOcclusion(depth, 0.5f), C::GrassGroundCanopyOcclusion(depth, 1.0f))
+                << "a half-covered ground is less occluded than a full field";
+    }
+    // The field coverage is the placement's spawn probability: the splat coverage times the region's
+    // density, and nothing where a region removes the grass. There the ground takes no occlusion.
+    EXPECT_FLOAT_EQ(C::GrassFieldCoverage(0.8f, C::vec2(1.0f, 1.0f)), 0.8f);
+    EXPECT_FLOAT_EQ(C::GrassFieldCoverage(0.8f, C::vec2(1.0f, 0.5f)), 0.4f);
+    EXPECT_EQ(C::GrassFieldCoverage(0.8f, C::vec2(1.0f, 0.0f)), 0.0f);
+    EXPECT_EQ(C::GrassFieldCoverage(0.8f, C::vec2(0.0f, 1.0f)), 0.0f);
+    EXPECT_EQ(C::GrassGroundCanopyOcclusion(Terrain::kTerrainGrassCanopyOcclusionMax,
+                                            C::GrassFieldCoverage(1.0f, C::vec2(1.0f, 0.0f))),
+              1.0f);
+    // And both sides apply it, from the one row field, on the ground where the placement spawns.
+    EXPECT_NE(stripped.find("floatcanopyOcclusion=GrassBladeCanopyOcclusion(tp.GrassCanopyOcclusion,vGrassCoverage,t);"),
+              std::string::npos)
+        << "the blade no longer takes the row's canopy depth at its site's coverage and its own height";
+    const std::string vertex = ReadShaderSource("terrain_grass_vertex_modifier.glsl");
+    EXPECT_NE(vertex.find("GrassUnpackCoverage(blade.RandAndCoverage)"), std::string::npos)
+        << "the vertex stage no longer hands the surface the coverage its site was placed with";
+    EXPECT_NE(stripped.find("o.baseColor=col*canopyOcclusion;"), std::string::npos)
+        << "the blade's canopy shade no longer scales its reflectance (sun and sky alike)";
+    std::ifstream groundFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl");
+    ASSERT_TRUE(groundFile.good()) << "cannot read cbt_surface.glsl";
+    std::string ground = StripComments(std::string((std::istreambuf_iterator<char>(groundFile)),
+                                                   std::istreambuf_iterator<char>()));
+    ground.erase(std::remove_if(ground.begin(), ground.end(),
+                                [](unsigned char c) { return std::isspace(c) != 0; }),
+                 ground.end());
+    EXPECT_NE(ground.find("GrassGroundCanopyOcclusion(tp.GrassCanopyOcclusion,GrassFieldCoverage(GrassSplatCoverage(weights,"),
+              std::string::npos)
+        << "the ground no longer occludes by the row's canopy depth over the placement's field coverage";
+    EXPECT_NE(ground.find("CBT_GrassRegionControls(tp,sIn.uv0)));"), std::string::npos)
+        << "the ground's field coverage no longer reads the grass region controls";
+    EXPECT_NE(ground.find("o.baseColor=baseColor*grassCanopy;"), std::string::npos)
+        << "the ground's canopy shade no longer scales its reflectance (sun and sky alike)";
+    EXPECT_NE(ground.find("floatgrassCanopy=1.0;if(tp.GrassCanopyOcclusion>0.0){grassCanopy=GrassGroundCanopyOcclusion("),
+              std::string::npos)
+        << "a terrain with no grass depth now pays for the ground's coverage reads";
+    EXPECT_NE(ground.find("if(sp.AtlasGrassBindless==0u&&sp.AtlasGrassCoarseBindless==0u)returnvec2(1.0);"
+                          "AtlasResolver=CBT_SurfResolve(uv,sp);"),
+              std::string::npos)
+        << "the ground resolves the atlas for a grass control map that is not bound";
+    std::string placement = ReadShaderSource("terrain_grass_place.comp");
+    placement.erase(std::remove_if(placement.begin(), placement.end(),
+                                   [](unsigned char c) { return std::isspace(c) != 0; }),
+                    placement.end());
+    EXPECT_NE(placement.find("returnGrassSplatCoverage(splatWeights,"), std::string::npos)
+        << "the placement no longer spawns by the coverage the ground darkens by";
+    EXPECT_NE(placement.find("floatmask=GrassFieldCoverage(grassMaskFactor(stp,uv),regional);"), std::string::npos)
+        << "the placement no longer spawns by the shared field coverage";
+    EXPECT_NE(placement.find("GrassPackRandAndCoverage(s.WidthRand,mask)"), std::string::npos)
+        << "the placement no longer stores the coverage it spawned the blade by";
+}
+
+// The canopy depth is the field's one-sided coverage at the camera, blades/m2 x width x height,
+// scaled and capped, and nothing where no blade stands.
+TEST(GrassContactIdentity, TheCanopyDepthIsTheFieldsCoverageAndZeroWhereNoBladeStands)
+{
+    Terrain::TerrainGPUParams meadow{};
+    meadow.GrassEnabled = Terrain::kTerrainGrassBitEnabled;
+    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 1.0f), 21.0f * 0.036f * 0.72f * 0.4f, 1e-6f);
+    // Canopy Shade scales the physical depth: 0 is open ground under the grass, 2 twice the shade.
+    EXPECT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 0.0f), 0.0f);
+    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 2.0f), 2.0f * 21.0f * 0.036f * 0.72f * 0.4f,
+                1e-6f);
+
+    Terrain::TerrainGPUParams dense = meadow;
+    dense.GrassDensity = 256.0f;
+    EXPECT_FLOAT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(dense, 1.0f), Terrain::kTerrainGrassCanopyOcclusionMax);
+
+    Terrain::TerrainGPUParams disabled = meadow;
+    disabled.GrassEnabled = 0u;
+    EXPECT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(disabled, 1.0f), 0.0f);
+
+    Terrain::TerrainGPUParams cards = meadow;
+    cards.GrassEnabled |= Terrain::kTerrainGrassBitTextureCard;
+    EXPECT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(cards, 1.0f), 0.0f);
 }
 
 // The plan step WRITES the indirect block the placement then adds to, each through its own copy
@@ -1148,6 +1295,93 @@ TEST(GrassIndirectBlockMirror, ThePlanStepWritesTheBlockThePlacementReads)
         ++counterWords;
     EXPECT_EQ(counterWords,
               (sizeof(GrassIndirectBlockGPU) - kGrassLodCount * sizeof(GrassIndirectDrawGPU)) / sizeof(uint32));
+}
+
+// The per-blade shape word: four eight-bit fields that round-trip within one step each, a fan
+// direction that wraps rather than clamps, and the per-blade random and the field coverage beside it.
+// Executed on the shipped GLSL.
+TEST(GrassClumpModel, TheBladeShapeWordRoundTripsItsFourFields)
+{
+    namespace G = GrassBladeShapeShader;
+    constexpr float32 kStep = 1.0f / 255.0f;
+    for (float32 tilt : {0.0f, 0.2f, 0.5f, 0.999f})
+    {
+        for (float32 twist : {0.0f, 0.3f, 0.5f, 1.0f})
+        {
+            for (float32 distance : {0.0f, 0.42f, 0.75f, G::kGrassBladeShapeMaxDistanceCells})
+            {
+                for (float32 turn : {0.0f, 0.25f, 0.6f, 0.99f})
+                {
+                    const uint32 shape = G::GrassPackBladeShape(tilt, twist, turn, distance);
+                    EXPECT_NEAR(G::GrassBladeShapeTiltRand(shape), tilt, 0.5f * kStep + 1e-6f);
+                    EXPECT_NEAR(G::GrassBladeShapeTwistSigned(shape), twist * 2.0f - 1.0f, kStep + 1e-6f);
+                    EXPECT_NEAR(G::GrassBladeShapeDistanceCells(shape), distance,
+                                0.5f * kStep * G::kGrassBladeShapeMaxDistanceCells + 1e-6f);
+                    EXPECT_NEAR(G::GrassBladeShapeFanTurn(shape), turn, 1.0f / 256.0f + 1e-6f);
+                }
+            }
+        }
+    }
+    // A heading a quarter turn below zero is three quarters of a turn, not a clamped zero.
+    EXPECT_NEAR(G::GrassBladeShapeFanTurn(G::GrassPackBladeShape(0.0f, 0.0f, -0.25f, 0.0f)), 0.75f, 1e-6f);
+    // Out-of-range input clamps inside its own field and never reaches a neighbour.
+    const uint32 saturated = G::GrassPackBladeShape(9.0f, -9.0f, 0.0f, 99.0f);
+    EXPECT_EQ(saturated & G::kGrassBladeShapeFieldMask, 255u);
+    EXPECT_EQ((saturated >> G::kGrassBladeShapeTwistShift) & G::kGrassBladeShapeFieldMask, 0u);
+    EXPECT_EQ((saturated >> G::kGrassBladeShapeFanShift) & G::kGrassBladeShapeFieldMask, 0u);
+    EXPECT_EQ(saturated >> G::kGrassBladeShapeDistanceShift, 255u);
+    // The bend and the lean side are rehashed from the tilt code: both take their whole range.
+    std::set<bool> sides;
+    float32 bendMin = 1.0f;
+    float32 bendMax = 0.0f;
+    for (uint32 code = 0; code <= 255u; ++code)
+    {
+        sides.insert(G::GrassBladeShapeJitterSign(code) > 0.0f);
+        bendMin = std::min(bendMin, G::GrassBladeShapeBendRand(code));
+        bendMax = std::max(bendMax, G::GrassBladeShapeBendRand(code));
+    }
+    EXPECT_EQ(sides.size(), 2u);
+    EXPECT_LT(bendMin, 0.05f);
+    EXPECT_GT(bendMax, 0.95f);
+    // The per-blade random to one unorm16 step, the coverage to one unorm8 step, independently.
+    for (float32 rand : {0.0f, 0.123456f, 0.5f, 0.999f})
+    {
+        for (float32 coverage : {0.0f, 0.25f, 0.5f, 1.0f})
+        {
+            const uint32 packed = G::GrassPackRandAndCoverage(rand, coverage);
+            EXPECT_NEAR(G::GrassUnpackRand(packed), rand, 0.5f / 65535.0f + 1e-7f);
+            EXPECT_NEAR(G::GrassUnpackCoverage(packed), coverage, 0.5f * kStep + 1e-6f);
+        }
+    }
+    EXPECT_EQ(G::GrassPackRandAndCoverage(1.0f, 1.0f) >> 24u, 0u) << "bits 24-31 stay unused";
+}
+
+// The blade instance is 48 bytes in every shader that declares it: the per-blade shape rides in a
+// word the instance already had, so the pool's size per view is what it was.
+TEST(GrassBladeInstanceLayout, TheInstanceStaysFortyEightBytesInEveryShaderThatDeclaresIt)
+{
+    std::vector<std::vector<std::string>> declared;
+    for (const char* file : {"terrain_grass_place.comp", "terrain_grass_vertex_modifier.glsl"})
+    {
+        const std::string src = ReadShaderSource(file);
+        const size_t begin = src.find("struct GrassBladeInstance");
+        ASSERT_NE(begin, std::string::npos) << file << " lost its GrassBladeInstance";
+        const size_t open = src.find('{', begin);
+        const size_t close = src.find('}', open);
+        const std::string body = src.substr(open + 1, close - open - 1);
+        std::vector<std::string> fields;
+        const std::regex field(R"((\w+)\s+(\w+)\s*;)");
+        for (auto it = std::sregex_iterator(body.begin(), body.end(), field); it != std::sregex_iterator(); ++it)
+        {
+            const std::string type = (*it)[1].str();
+            EXPECT_TRUE(type == "float" || type == "uint") << file << ": " << (*it)[2].str()
+                                                            << " is a " << type << ", not a 4-byte scalar";
+            fields.push_back(type + " " + (*it)[2].str());
+        }
+        EXPECT_EQ(fields.size() * 4u, 48u) << file << " declares " << fields.size() << " instance fields";
+        declared.push_back(std::move(fields));
+    }
+    EXPECT_EQ(declared[0], declared[1]) << "the placement and the vertex stage disagree on the instance";
 }
 
 #endif // TERRAIN_GRASS_SHADER_SOURCE_DIR

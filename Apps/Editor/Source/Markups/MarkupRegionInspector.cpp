@@ -302,7 +302,7 @@ void AddMemberRow(const InspectorContext& ctx, MarkupEditorBridge& bridge, UIEle
         title->SetTooltip("Click to select it");
         title->RegisterEventHandler(kEventMouseUp, [ctx, &bridge, entity = candidate.Entity](UIEvent& event) {
             if (event.Button == 0)
-                bridge.SelectMarkup(*ctx.World, entity, false);
+                bridge.SelectMarkup(*ctx.World, entity);
         });
     }
     row->AddChild(std::move(title));

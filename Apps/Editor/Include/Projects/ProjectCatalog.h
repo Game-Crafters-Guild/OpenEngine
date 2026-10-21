@@ -23,6 +23,8 @@ struct ProjectCatalogSource
     std::string Url;  // git: repository URL
     std::string Ref;  // git: optional branch/tag; empty = remote HEAD
     std::string Path; // local: folder relative to manifest dir; git: subfolder = project root
+    // Type Unsupported: the rule the source broke, as a sentence the picker shows the user.
+    std::string RefusalReason;
 };
 
 struct ProjectCatalogEntry

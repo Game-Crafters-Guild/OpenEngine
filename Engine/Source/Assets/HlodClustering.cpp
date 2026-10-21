@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <utility>
 
 namespace GameEngine {
 namespace Hlod {
@@ -24,10 +25,10 @@ ClusterTable BuildClusters(std::span<const MemberInput> members, const GridConfi
     if (config.CellSize <= 0.0f)
         return table;
 
-    // Ordered map so cluster emission is deterministic (cell-coord ascending)
+    // Ordered map so cluster emission is deterministic ((cell, layers) ascending)
     // regardless of member order; member indices land ascending because members
     // are visited in index order.
-    std::map<CellCoord, std::vector<uint32>> cells;
+    std::map<std::pair<CellCoord, uint32>, std::vector<uint32>> cells;
 
     for (uint32 i = 0; i < static_cast<uint32>(members.size()); ++i) {
         const MemberInput& m = members[i];
@@ -51,13 +52,14 @@ ClusterTable BuildClusters(std::span<const MemberInput> members, const GridConfi
             FloorToCell(centerX, config.GridOrigin[0], config.CellSize),
             FloorToCell(centerY, config.GridOrigin[1], config.CellSize),
             FloorToCell(centerZ, config.GridOrigin[2], config.CellSize)};
-        cells[cell].push_back(i);
+        cells[{cell, m.RenderLayers.Bits}].push_back(i);
     }
 
     table.Clusters.reserve(cells.size());
-    for (auto& [cell, memberIndices] : cells) {
+    for (auto& [key, memberIndices] : cells) {
         Cluster cluster;
-        cluster.Cell = cell;
+        cluster.Cell = key.first;
+        cluster.RenderLayers = Rendering::RenderLayerMask{key.second};
         cluster.MemberIndices = std::move(memberIndices);
 
         float minB[3] = {std::numeric_limits<float>::max(),

@@ -184,8 +184,8 @@ TEST(UIIdleGateTests, DirtyMarkDeclinesGateAndChangeApplies)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
     EXPECT_NEAR(b->GetLayoutX(), 100.0f, 0.5f);
@@ -238,7 +238,7 @@ TEST(UIIdleGateTests, ActiveTransitionsDeclineGateUntilComplete)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
     EXPECT_NEAR(a->GetResolvedStyle().Visual.LocalOpacity, 1.0f, 0.01f);
 
@@ -299,7 +299,7 @@ TEST(UIIdleGateTests, InheritedColorPropagatesAfterIdleStretch)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* child = r->FindById("child");
+    UIElement* child = r->FindById("child"_sid);
     ASSERT_NE(child, nullptr);
 
     // ResolveStyles (the inheritance walk) is gated on the resolve-dirty
@@ -365,8 +365,8 @@ TEST(UIIdleGateTests, PassiveHostTakesCleanFramesAndAppliesDirtyChanges)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
-    UIElement* b = r->FindById("b");
+    UIElement* a = r->FindById("a"_sid);
+    UIElement* b = r->FindById("b"_sid);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
     EXPECT_NEAR(b->GetLayoutX(), 100.0f, 0.5f);
@@ -423,7 +423,7 @@ TEST(UIIdleGateTests, PassiveHostActiveTransitionsDeclineGateUntilComplete)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
     EXPECT_NEAR(a->GetResolvedStyle().Visual.LocalOpacity, 1.0f, 0.01f);
 

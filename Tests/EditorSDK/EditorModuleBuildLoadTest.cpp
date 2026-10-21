@@ -176,6 +176,7 @@ ns::NativeBuildConfig MakeEditorModuleConfig(const std::map<std::string, std::st
     config.CMakeExe = kv.at("cmake");
     config.Config = kv.at("config");
     config.EngineImportLib = kv.at("importlib");
+    config.EngineBinary = kv.at("enginebinary");
     config.SdkEntrySource = kv.at("sdkentry");
     config.ModuleName = moduleName;
     for (const auto& d : SplitList(kv.at("includes"), ';'))
@@ -187,6 +188,7 @@ ns::NativeBuildConfig MakeEditorModuleConfig(const std::map<std::string, std::st
     for (const auto& d : SplitList(kv.count("globaldefs") ? kv.at("globaldefs") : "", ';'))
         config.CompileDefinitions.push_back(d);
     config.EditorImportLib = kv.at("editorimportlib");
+    config.EditorBinary = kv.at("editorbinary");
     for (const auto& d : SplitList(kv.at("editorincludes"), ';'))
         config.EditorIncludeDirs.emplace_back(d);
     return config;

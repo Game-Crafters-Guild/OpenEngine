@@ -27,6 +27,8 @@ inline ViewRegistry::CameraExposure ToCameraExposure(const Components::Camera& c
     e.AutoExposureMaxEv = c.AutoExposureMaxEv;
     e.AutoExposureSpeedUp = c.AutoExposureSpeedUp;
     e.AutoExposureSpeedDown = c.AutoExposureSpeedDown;
+    e.AutoExposureMeter = static_cast<int32>(c.AutoExposureMeter);
+    e.AutoExposureCompensationCurve = c.AutoExposureCompensationCurve;
     e.FocusDistance = c.FocusDistance;
     e.ApertureBladeCount = static_cast<int32>(std::clamp(
         c.ApertureBladeCount, Components::Camera::kApertureBladeCountMin,

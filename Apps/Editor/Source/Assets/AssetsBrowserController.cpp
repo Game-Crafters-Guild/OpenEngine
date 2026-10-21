@@ -192,7 +192,7 @@ namespace
 
     static bool IsBrowserThumbnailVisible(UIElement* view, const std::string& id)
     {
-        UIElement* element = view ? view->FindById(id) : nullptr;
+        UIElement* element = view ? view->FindById(HashStringId(id)) : nullptr;
         if (!element)
             return false;
         // Parked pooled cells and the inactive grid/list retain their IDs and
@@ -626,14 +626,14 @@ void AssetsBrowserController::InvalidateThumbnailForPath(const std::filesystem::
             post.Post([this, alive, thumbId, rel]()
             {
                 if (!alive->load(std::memory_order_acquire)) return;
-                if (auto* el = m_Grid->FindById(thumbId))
+                if (auto* el = m_Grid->FindById(HashStringId(thumbId)))
                     UI::Layout::SetBackgroundPath(*el, rel);
             });
         });
 
     if (!immediate.empty())
     {
-        if (auto* el = m_Grid->FindById(thumbId))
+        if (auto* el = m_Grid->FindById(HashStringId(thumbId)))
             UI::Layout::SetBackgroundPath(*el, immediate);
     }
 }
@@ -1086,7 +1086,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});
@@ -1691,7 +1691,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});
@@ -2053,9 +2053,9 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                         post.Post([this, alive, thumbId, cellId, rel]()
                         {
                             if (!alive->load(std::memory_order_acquire)) return;
-                            if (auto* el = m_Grid->FindById(thumbId))
+                            if (auto* el = m_Grid->FindById(HashStringId(thumbId)))
                                 ApplyThumbToElement(el, rel);
-                            if (auto* c = m_Grid->FindById(cellId))
+                            if (auto* c = m_Grid->FindById(HashStringId(cellId)))
                                 c->AddClass("has-thumbnail");
                         });
                     });
@@ -2497,7 +2497,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});
@@ -3220,7 +3220,7 @@ void AssetsBrowserController::BindListCell(UIElement* cell, StringId colKey, Lis
                             post.Post([this, alive, iconIdCopy, rel]()
                             {
                                 if (!alive->load(std::memory_order_acquire)) return;
-                                if (auto* el = m_List->FindById(iconIdCopy))
+                                if (auto* el = m_List->FindById(HashStringId(iconIdCopy)))
                                 {
                                     ApplyThumbToElement(el, rel);
                                     el->AddClass("has-thumbnail");
@@ -4604,9 +4604,6 @@ void AssetsBrowserController::HandleDirectoryAction(const std::filesystem::path&
     case EditorContextMenu::DirectoryAction::CreateNavGrid:
         CreateNewNavGridInDirectory(directory);
         break;
-    case EditorContextMenu::DirectoryAction::CreateNavMesh:
-        CreateNewNavMeshInDirectory(directory);
-        break;
     case EditorContextMenu::DirectoryAction::CreateGameSystem:
     case EditorContextMenu::DirectoryAction::CreateEntitySystem:
     case EditorContextMenu::DirectoryAction::CreateComponent:
@@ -4825,14 +4822,6 @@ void AssetsBrowserController::CreateNewNavGridInDirectory(const std::filesystem:
 {
     if (!m_Context) return;
     auto result = Editor::CreateDefaultNavGridFile(dir, "NewNavGrid",
-                                                    m_Context->UndoRedo, m_Context->Assets);
-    RevealCreatedAsset(result.path);
-}
-
-void AssetsBrowserController::CreateNewNavMeshInDirectory(const std::filesystem::path& dir)
-{
-    if (!m_Context) return;
-    auto result = Editor::CreateDefaultNavMeshFile(dir, "NewNavMesh",
                                                     m_Context->UndoRedo, m_Context->Assets);
     RevealCreatedAsset(result.path);
 }

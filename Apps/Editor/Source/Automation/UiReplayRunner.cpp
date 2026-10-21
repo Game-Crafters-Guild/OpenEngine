@@ -689,7 +689,7 @@ UIElement* UiReplayRunner::FindById(UIManager& ui, const std::string& id) const
     if (id.empty())
         return nullptr;
     if (UIElement* root = ui.GetRootElement())
-        return root->FindById(id);
+        return root->FindById(HashStringId(id));
     return nullptr;
 }
 

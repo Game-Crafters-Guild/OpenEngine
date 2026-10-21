@@ -851,3 +851,75 @@ TEST(ShaderCompileCacheKey, UnparseablePackageAtCurrentKeyRecompilesCleanly)
         << "an unloadable package must recompile, not fail the request";
     EXPECT_FALSE(again.stageBytes.at("vs").empty());
 }
+
+namespace
+{
+std::size_t PackageCount(const fs::path& root)
+{
+    std::size_t count = 0;
+    std::error_code ec;
+    if (fs::is_directory(root, ec))
+        for (const auto& entry : fs::recursive_directory_iterator(root))
+            count += entry.path().filename() == "program.shaderpkg";
+    return count;
+}
+} // namespace
+
+TEST(ShaderCompileCacheKey, ReadOnlyRootServesAHitWithoutWritingAnywhere)
+{
+    // A packaged game's cooked cache: probed before the writable root, served without a compile,
+    // and the writable root stays untouched.
+    TempTree tree("ge_cachekey_readonly_hit");
+    const fs::path bundle = tree.Root / "Bundle";
+    const fs::path user = tree.Root / "User";
+    ShaderProgramCompileResult cooked{};
+    COMPILE_OR_SKIP(MakeInlineRequest(bundle, tree.Root / "probe.vert", "cooked"), cooked);
+
+    auto request = MakeInlineRequest(user, tree.Root / "probe.vert", "cooked");
+    request.readOnlyCacheRoots = {tree.Root / "EmptyBundle", bundle};
+    const uint64_t compilesBefore = ShaderCompileService::GetTotalCompilations();
+    ShaderProgramCompileResult hit{};
+    std::string err;
+    ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, hit, &err)) << err;
+    EXPECT_EQ(ShaderCompileService::GetTotalCompilations(), compilesBefore) << "a read-only hit compiled";
+    EXPECT_EQ(hit.shaderPkgPath, cooked.shaderPkgPath) << "the hit names the root that served it";
+    EXPECT_FALSE(hit.stageBytes.empty());
+    EXPECT_FALSE(fs::exists(user)) << "a read-only hit wrote to the writable root";
+    EXPECT_FALSE(fs::exists(tree.Root / "EmptyBundle"));
+    EXPECT_EQ(PackageCount(bundle), 1u);
+}
+
+TEST(ShaderCompileCacheKey, AMissCompilesIntoTheWritableRootAndNeverTheReadOnlyOne)
+{
+    TempTree tree("ge_cachekey_readonly_miss");
+    const fs::path bundle = tree.Root / "Bundle";
+    const fs::path user = tree.Root / "User";
+    ShaderProgramCompileResult cooked{};
+    COMPILE_OR_SKIP(MakeInlineRequest(bundle, tree.Root / "probe.vert", "cooked"), cooked);
+
+    auto request = MakeInlineRequest(user, tree.Root / "probe.vert", "uncooked",
+                                     "#version 450\nvoid main() { gl_Position = vec4(1.0); }\n");
+    request.readOnlyCacheRoots = {bundle};
+    ShaderProgramCompileResult compiled{};
+    std::string err;
+    ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, compiled, &err)) << err;
+    EXPECT_EQ(compiled.outputDir.parent_path(), user);
+    EXPECT_TRUE(fs::is_regular_file(compiled.shaderPkgPath));
+    EXPECT_EQ(PackageCount(bundle), 1u) << "a miss wrote into the read-only root";
+    EXPECT_EQ(PackageCount(user), 1u);
+
+    // Without a compiler the same miss names where the cook should have put it: the first read-only root.
+    struct CompilerOff
+    {
+        CompilerOff() { ShaderCompileService::SetCompilerAvailable(false); }
+        ~CompilerOff() { ShaderCompileService::SetCompilerAvailable(true); }
+    } compilerOff;
+    auto uncooked = MakeInlineRequest(tree.Root / "OtherUser", tree.Root / "probe.vert", "uncooked",
+                                      "#version 450\nvoid main() { gl_Position = vec4(2.0); }\n");
+    uncooked.readOnlyCacheRoots = {bundle};
+    ShaderProgramCompileResult miss{};
+    std::string missErr;
+    EXPECT_FALSE(ShaderCompileService::CompileProgramToCache(uncooked, ShaderSourceKind::SpirV, miss, &missErr));
+    EXPECT_NE(missErr.find((bundle / miss.outputDir.filename() / "program.shaderpkg").string()), std::string::npos)
+        << missErr;
+}

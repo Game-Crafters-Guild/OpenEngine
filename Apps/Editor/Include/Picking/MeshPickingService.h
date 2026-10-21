@@ -8,6 +8,7 @@
 #include "ECS/ECS.h"
 #include "Mathematics/Ray.h"
 #include "Mathematics/Vector3.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 namespace GameEngine::ECS { class World; }
@@ -36,7 +37,7 @@ struct PickOptions
     bool                          IncludePrimitives    = true;
     bool                          IncludeBoundsFallback = true;  // pick generated/runtime renderers without CPU mesh data
     bool                          IncludeDisabled      = false;   // include ECS::Disabled entities
-    uint32                        LayerMask            = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask    LayerMask            = Rendering::RenderLayerMask::All();
     float32                       MaxDistance          = 1.0e30f;
     // Entities to skip during traversal — typically the drag-drop preview
     // model's own entities, so the placement ray doesn't self-intersect.

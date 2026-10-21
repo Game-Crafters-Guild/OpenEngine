@@ -30,7 +30,6 @@ namespace Platform { class Window; }
             CreateShaderGraph,
             CreateSurfaceShader,
             CreateNavGrid,
-            CreateNavMesh,
             CreateGameSystem,
             CreateEntitySystem,
             CreateComponent,

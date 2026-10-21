@@ -6,3 +6,5 @@ PlayerHdrOptions.cpp
 PlayerHdrOptions.h
 PlayerLog.cpp
 PlayerLog.h
+PlayerRunOptions.cpp
+PlayerRunOptions.h

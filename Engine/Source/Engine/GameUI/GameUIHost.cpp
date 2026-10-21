@@ -133,7 +133,8 @@ void GameUIHost::ConfigureFonts(const std::filesystem::path& assetsDir)
     if (!reg.IsAssetRegistered(fontPath))
         reg.RegisterAsset(fontPath);
     const GUID fontGuid = reg.GetAssetGUID(fontPath);
-    const std::vector<uint8_t>& bytes = ReadDefaultFontBytesCached(fontPath.string());
+    const std::string fontPathString = fontPath.string();
+    const std::vector<uint8_t>& bytes = ReadDefaultFontBytesCached(fontPathString);
     if (!m_UI->SetDefaultFontBytes(bytes, fontGuid))
         Logger::Log::Warning("Game UI: failed to install default font '{}'", fontPath.string());
 
@@ -373,7 +374,7 @@ void GameUIHost::DropFocusInside(const UIElement& subtreeRoot)
     // Resolve the id the way the manager's own dispatch does, so this asks
     // exactly "is the element that would receive the next key inside the subtree
     // leaving the tree".
-    UIElement* focused = root ? root->FindById(m_UI->GetFocusedElementId()) : nullptr;
+    UIElement* focused = root ? root->FindById(HashStringId(m_UI->GetFocusedElementId())) : nullptr;
     for (UIElement* p = focused; p; p = p->GetParent())
     {
         if (p == &subtreeRoot)
@@ -413,13 +414,7 @@ UIElement* GameUIHost::FindDocumentRoot(uint64_t entityId) const
     return it != m_Subtrees.end() ? it->second.Root : nullptr;
 }
 
-UIElement* GameUIHost::FindElementById(uint64_t entityId, std::string_view id)
-{
-    UIElement* root = FindDocumentRoot(entityId);
-    return root ? root->FindById(id) : nullptr;
-}
-
-UIElement* GameUIHost::FindElementByIdAny(std::string_view id, uint64_t* outOwnerEntityId)
+UIElement* GameUIHost::FindElementById(StringId id, uint64_t* outOwnerEntityId)
 {
     // Lowest owning entity id wins a shared id. m_Subtrees is an unordered_map whose
     // iteration order changes across rehashes (documents mount/unmount every
@@ -644,7 +639,7 @@ void GameUIHost::Update(float deltaTime, uint32_t extentW, uint32_t extentH)
     if (GameUiDiagEnabled() && (m_FrameCounter <= 10 || (m_FrameCounter % 180) == 0))
     {
         UIElement* root = m_UI->GetRootElement();
-        UIElement* panel = root ? root->FindById("hud-panel") : nullptr;
+        UIElement* panel = root ? root->FindById("hud-panel"_sid) : nullptr;
         if (root)
             Logger::Log::Info("[GameUI] Update override={}x{} rootRect=({},{},{},{}) panel={}", extentW, extentH,
                               root->GetLayoutX(), root->GetLayoutY(), root->GetLayoutWidth(),

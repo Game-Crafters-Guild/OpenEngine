@@ -30,6 +30,19 @@ StyleLength ResolveWidth(const std::string& expr)
     return CSSParser::ComputeStyleFor(el, sheet, state).Layout.Width;
 }
 
+// Resolves `.t { font-size: 40px; } .t { font-size: <expr>; }` and returns the font size.
+float ResolveFontSize(const std::string& expr)
+{
+    Stylesheet sheet{};
+    const std::string css = ".t { font-size: 40px; } .t { font-size: " + expr + "; }";
+    if (!CSSParser::ParseStylesFromString(css, sheet))
+        return -1.0f;
+    UIElement el;
+    el.AddClass("t");
+    const ElementState state{};
+    return CSSParser::ComputeStyleFor(el, sheet, state).Visual.FontSize;
+}
+
 void ExpectFoldsToPx(const std::string& expr, float px)
 {
     const StyleLength w = ResolveWidth(expr);
@@ -160,4 +173,15 @@ TEST(CSSMathFunctionTests, RecursionBoundRejectsDeepNestingButAllowsRealDepth)
     ExpectFoldsToPx(wrap(8), 1.0f);   // well inside the 32-frame bound
     ExpectRejected(wrap(64));         // over the bound: rejected, not a stack blowout
     ExpectRejected(wrap(4096));       // parenthesis bomb
+}
+
+// font-size folds math functions like every length property, so a theme can scale its text sizes
+// (`calc(var(--ui_font_size_list) * 0.85)`, `calc(14px * var(--scale))`); a calc that cannot fold
+// leaves the cascaded size standing.
+TEST(CSSMathFunctionTests, FontSizeFoldsMathFunctions)
+{
+    EXPECT_FLOAT_EQ(ResolveFontSize("calc(14px * 1.5)"), 21.0f);
+    EXPECT_FLOAT_EQ(ResolveFontSize("calc(12px * 0.85)"), 10.2f);
+    EXPECT_FLOAT_EQ(ResolveFontSize("max(12px, calc(10px * 1))"), 12.0f);
+    EXPECT_FLOAT_EQ(ResolveFontSize("calc(50% - 4px)"), kCascadedPx) << "a px/percent mix cannot fold";
 }

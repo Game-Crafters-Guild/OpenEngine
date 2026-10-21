@@ -302,7 +302,7 @@ void BookmarksPanel::BuildUI()
         if (bm.Type == BookmarkType::Scene || bm.Type == BookmarkType::Entity)
         {
             dragPayload.GhostIconKind = UI::Interaction::DragGhostIconKind::AssetFile;
-            dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.png";
+            dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.svg";
         }
         else if (bm.Type == BookmarkType::Asset && m_Context)
         {
@@ -352,7 +352,7 @@ void BookmarksPanel::BuildUI()
                 {
                     const std::string ext = assetPath.extension().string();
                     if (ext == ".scene")
-                        dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                        dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                     else if (m_Context->Thumbnails)
                     {
                         const std::string thumb = m_Context->Thumbnails->GetOrRequest(assetPath, 128, [](const std::string&) {});
@@ -756,7 +756,7 @@ void BookmarksPanel::SetupDragAndDrop(UIElement* row, UIElement* /*dragHandle*/,
     
     // Drag from whole row (except remove button): mouse down arms drag and captures panel (same as TreeView).
     // Panel receives mouse move when it has capture; drag starts in panel's kEventMouseMove handler.
-    row->RegisterEventHandler(kEventMouseDown, [this, row, index](UIEvent& e)
+    row->RegisterEventHandler(kEventMouseDown, [this, index](UIEvent& e)
     {
         if (e.Button != 0)
             return;
@@ -1152,7 +1152,7 @@ void BookmarksPanel::SetDropPreview(const UI::Interaction::DropPreviewState& sta
                                       : (m_Bookmarks.empty() ? 0 : m_Bookmarks.size() - 1);
     const bool lineBelowRow = (insertIndex >= static_cast<int>(m_Bookmarks.size()) && !m_Bookmarks.empty());
 
-    UIElement* row = m_ListContainer->FindById("bookmark-row-" + std::to_string(rowToHighlight));
+    UIElement* row = m_ListContainer->FindById(HashStringId("bookmark-row-" + std::to_string(rowToHighlight)));
     if (!row)
     {
         if (m_InsertionIndicator)
@@ -1706,7 +1706,7 @@ void BookmarksPanel::UpdateBookmarkIcon(UIElement* iconEl, const Bookmark& bookm
                         }
                         else if (!iconId.empty())
                         {
-                            iconEl = FindById(iconId);
+                            iconEl = FindById(HashStringId(iconId));
                         }
                         
                         // Verify element is still valid.
@@ -2141,7 +2141,7 @@ void BookmarksPanel::SetupDropHandlers(UIElement* container)
                                           : (m_Bookmarks.empty() ? 0 : m_Bookmarks.size() - 1);
                 const bool lineBelowRow = (insertIndex >= static_cast<int>(m_Bookmarks.size()) && !m_Bookmarks.empty());
 
-                UIElement* row = m_ListContainer->FindById("bookmark-row-" + std::to_string(rowIdx));
+                UIElement* row = m_ListContainer->FindById(HashStringId("bookmark-row-" + std::to_string(rowIdx)));
                 if (row)
                 {
                     UI::Interaction::DropRequest req{};
@@ -2365,7 +2365,7 @@ void BookmarksPanel::HandleAssetDrop(const std::filesystem::path& assetPath, int
             else
                 bookmark.Name = pathStr;
         }
-        bookmark.IconPath = "Icons/Folder@32px.png"; // Set folder icon path explicitly
+        bookmark.IconPath = "Icons/Folder@32px.svg"; // Set folder icon path explicitly
         
         AddBookmarkAt(bookmark, at);
         return;

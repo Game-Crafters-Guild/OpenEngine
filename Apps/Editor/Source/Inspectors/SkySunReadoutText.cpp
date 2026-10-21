@@ -148,7 +148,7 @@ std::string StillSunLine(const SkySunDay& day)
 std::string SolarClockText(float hours)
 {
     const int minutes = MinutesOfDay(hours);
-    char text[8];
+    char text[16];
     std::snprintf(text, sizeof(text), "%02d:%02d", minutes / kMinutesPerHour, minutes % kMinutesPerHour);
     return text;
 }

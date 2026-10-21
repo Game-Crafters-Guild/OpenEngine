@@ -9,12 +9,16 @@
 #include "Editor/Settings/EditorSettingsRegistry.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Logger/Logger.h"
+#include "Platform/SpeechInput.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -31,6 +35,9 @@ constexpr const char* kPrefClaudeExecutable = "aiAssistant.claudeExecutable";
 constexpr const char* kPrefCodexExecutable = "aiAssistant.codexExecutable";
 constexpr const char* kPrefNodeExecutable = "aiAssistant.nodeExecutable";
 constexpr const char* kPrefLastMode = "aiAssistant.lastMode";
+constexpr const char* kPrefTextSize = "aiAssistant.textSize";
+constexpr const char* kPrefHoldToSpeak = "aiAssistant.holdToSpeak";
+constexpr const char* kPrefSendWhenMicStops = "aiAssistant.sendWhenMicStops";
 constexpr const char* kDefaultNodeExecutable = "node";
 constexpr AssistantMode kInitialMode = AssistantMode::Auto;
 // The effort a Claude session turn asks for until the user chooses one.
@@ -371,6 +378,45 @@ std::string AiAssistantSettings::NodeExecutable()
     return ReadPreference(kPrefNodeExecutable, kDefaultNodeExecutable);
 }
 
+float AiAssistantSettings::TextSize()
+{
+    const std::string stored = ReadPreference(kPrefTextSize, {});
+    char* end = nullptr;
+    const float px = stored.empty() ? kDefaultTextSizePx : std::strtof(stored.c_str(), &end);
+    if (end == stored.c_str() || !std::isfinite(px))
+        return kDefaultTextSizePx;
+    return std::clamp(px, kDefaultTextSizePx, kMaxTextSizePx);
+}
+
+void AiAssistantSettings::SetTextSize(float px)
+{
+    const float clamped = std::clamp(px, kDefaultTextSizePx, kMaxTextSizePx);
+    WritePreference(kPrefTextSize, std::to_string(static_cast<int>(std::lround(clamped))));
+}
+
+bool AiAssistantSettings::HoldToSpeak()
+{
+    return ReadPreference(kPrefHoldToSpeak, "0") == "1";
+}
+
+// Writes only a change: the settings page calls Set with the stored value when it opens.
+void AiAssistantSettings::SetHoldToSpeak(bool hold)
+{
+    if (HoldToSpeak() != hold)
+        WritePreference(kPrefHoldToSpeak, hold ? "1" : "0");
+}
+
+bool AiAssistantSettings::SendWhenMicStops()
+{
+    return ReadPreference(kPrefSendWhenMicStops, "0") == "1";
+}
+
+void AiAssistantSettings::SetSendWhenMicStops(bool send)
+{
+    if (SendWhenMicStops() != send)
+        WritePreference(kPrefSendWhenMicStops, send ? "1" : "0");
+}
+
 AssistantMode AiAssistantSettings::LastMode()
 {
     return ParseAssistantMode(ReadPreference(kPrefLastMode, {})).value_or(kInitialMode);
@@ -497,6 +543,23 @@ Editor::SettingsCategoryDescriptor AiAssistantSettings::BuildCategory()
         "What the assistant may do in the editor when a new conversation starts; the panel's mode control "
         "changes it, and a resumed session keeps its own.",
         kPrefLastMode, std::string(DescribeAssistantMode(kInitialMode).Id), std::move(modes)));
+
+    if (Platform::SpeechInput::IsAvailable())
+    {
+        Field hold;
+        hold.Label = "Hold the microphone to speak";
+        hold.Tooltip = "Press and hold the microphone beside Send to dictate; releasing it stops. Off: a click "
+                       "starts dictation and a second click stops it.";
+        hold.Control = Field::ToggleField{false, [] { return HoldToSpeak(); }, [](bool on) { SetHoldToSpeak(on); }};
+        category.Fields.push_back(std::move(hold));
+        Field send;
+        send.Label = "Send when the microphone stops";
+        send.Tooltip = "Stopping the microphone sends the dictated prompt once its last words arrive. Typing "
+                       "while dictating never sends.";
+        send.Control =
+            Field::ToggleField{false, [] { return SendWhenMicStops(); }, [](bool on) { SetSendWhenMicStops(on); }};
+        category.Fields.push_back(std::move(send));
+    }
 
     category.Fields.push_back(ExecutableRow(
         "Claude executable", "The claude program: a name found on PATH or a full path to claude.exe.",

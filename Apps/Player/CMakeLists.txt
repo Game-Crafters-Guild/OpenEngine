@@ -136,32 +136,32 @@ endif()
 # owning packages (e.g. Packages/eztree), not from the engine tree.
 add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Adapters"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Adapters"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Adapters"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Includes"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Includes"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Surfaces"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Surfaces"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Surfaces"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Particles"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Particles"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/GPUFogParticles/Surfaces"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/GPUFogParticles/Shaders/Surfaces"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/GPUFogParticles/Surfaces"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/TerrainGrass"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Shaders/TerrainGrass"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/TerrainGrass"
     # Ocean GLSL sources compile at runtime (shaderc) through the material adapter
     # pipeline + the sim compute drivers, so the whole source dir must ship.
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Ocean"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Ocean"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Ocean"
     # CBT terrain shader sources + the compiled compute kernel, mirroring the
@@ -227,7 +227,7 @@ add_custom_command(TARGET Player POST_BUILD
 add_custom_target(StagePlayerHumanoidProfile
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/SkeletonProfiles"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/Assets/SkeletonProfiles/HumanoidStandard.profile.json"
+            "${CMAKE_SOURCE_DIR}/Engine/Assets/SkeletonProfiles/HumanoidStandard.profile.json"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/SkeletonProfiles/HumanoidStandard.profile.json"
     COMMENT "Staging the runtime humanoid profile for Player"
     VERBATIM)
@@ -241,9 +241,24 @@ add_dependencies(Player StagePlayerHumanoidProfile)
 add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Textures"
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${CMAKE_SOURCE_DIR}/Assets/Textures"
+            "${CMAKE_SOURCE_DIR}/Engine/Assets/Textures"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Textures"
     COMMENT "Staging engine texture assets for Player"
+    VERBATIM
+)
+
+# Stage engine-level materials into the Player's staged Assets.
+# Scenes reference built-in materials by their 'editor' mount GUID (the grid ground of the New
+# Scene and the Basic 3D template), and a Player run from the build tree resolves them from
+# this tree.
+# A POST_BUILD copy runs only when the Player relinks: an edited material stays stale and a
+# deleted one is not pruned until then. The dependency-tracked mirror is issue #2473.
+add_custom_command(TARGET Player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Materials"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_SOURCE_DIR}/Engine/Assets/Materials"
+            "${_GE_PLAYER_CONTENT_DIR}/Assets/Materials"
+    COMMENT "Staging engine material assets for Player"
     VERBATIM
 )
 
@@ -258,7 +273,7 @@ add_custom_command(TARGET Player POST_BUILD
 add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/RenderPipelines"
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${CMAKE_SOURCE_DIR}/Assets/RenderPipelines"
+            "${CMAKE_SOURCE_DIR}/Engine/Assets/RenderPipelines"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/RenderPipelines"
     COMMENT "Staging engine render pipelines for Player"
     VERBATIM
@@ -305,31 +320,28 @@ if(ENABLE_SCRIPTING)
     if(NOT APPLE)
         add_custom_command(TARGET Player POST_BUILD
             # CoreBridge (stable bridge, needed for CLR hosting)
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/CoreBridge/bin/$<CONFIG>/net10.0"
                     "$<TARGET_FILE_DIR:Player>"
             # HotReload (provides the .runtimeconfig.json needed for CLR initialization;
             # the Player doesn't use hot-reload but needs the config to bootstrap the runtime)
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/HotReload/bin/$<CONFIG>/net10.0"
                     "$<TARGET_FILE_DIR:Player>"
             # Scripting ABI surfaces (no editor-specific assemblies)
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/Scripting.ABI/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${CMAKE_SOURCE_DIR}/Managed/Input.ABI/bin/$<CONFIG>"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                    "${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${CMAKE_SOURCE_DIR}/Managed/Physics.ABI/bin/$<CONFIG>"
-                    "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/Platform.ABI/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
             COMMENT "Staging managed assemblies (CoreBridge/ABI/Scripting.Runtime) next to Player.exe"
@@ -354,8 +366,7 @@ if(ENABLE_SCRIPTING)
                 # Scripting ABI surfaces (no editor-specific assemblies)
                 "${CMAKE_SOURCE_DIR}/Managed/Scripting.ABI/bin/$<CONFIG>"
                 "${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/bin/$<CONFIG>"
-                "${CMAKE_SOURCE_DIR}/Managed/Input.ABI/bin/$<CONFIG>"
-                "${CMAKE_SOURCE_DIR}/Managed/Physics.ABI/bin/$<CONFIG>"
+                "${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/bin/$<CONFIG>"
                 "${CMAKE_SOURCE_DIR}/Managed/Platform.ABI/bin/$<CONFIG>"
                 # GameSystem runner (ManagedSystemBridge resolves it beside CoreBridge)
                 "${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>"
@@ -376,7 +387,7 @@ endif()
 if(ENABLE_SCRIPTING)
     set(_ge_player_managed_deps
         CoreBridgeAssembly HotReloadAssembly ScriptingAbiAssembly
-        EcsAbiAssembly InputAbiAssembly PhysicsAbiAssembly PlatformAbiAssembly
+        EcsAbiAssembly ScriptingBindingsAssembly PlatformAbiAssembly
         ScriptingRuntimeAssembly)
     add_dependencies(Player ${_ge_player_managed_deps})
 

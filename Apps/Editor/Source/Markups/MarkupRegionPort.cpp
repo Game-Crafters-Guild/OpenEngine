@@ -145,6 +145,7 @@ json MemberJson(const ECS::World& world, const MarkupECS::MarkupRegionArea::Memb
     out["deleted"] = false;
     out["title"] = name ? std::string(name->View()) : std::string();
     out["tag"] = tag ? std::string(tag->View()) : std::string();
+    out["tags"] = MarkupTagNames(world, member.Entity);
     out["kind"] = world.GetComponent<MarkupRegion>(member.Entity) ? "region" : "volume";
     out["footprint"] = FootprintJson(*member.Footprint);
     return out;

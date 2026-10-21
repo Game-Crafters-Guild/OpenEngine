@@ -230,6 +230,72 @@ void AssetCollector::WalkDependencies(const GUID& root, AssetManifest& manifest)
     }
 }
 
+bool AssetCollector::CollectGameContent(const std::vector<std::string>& scenePaths,
+                                        const std::string& renderPipelinePath,
+                                        const std::filesystem::path& projectAssetRoot, AssetManifest& outManifest,
+                                        std::vector<std::string>& outWarnings, std::string& outError)
+{
+    namespace fs = std::filesystem;
+    outManifest = CollectFromScenes(scenePaths);
+
+    // If the dependency-based collector found nothing, fall back to the project's
+    // registered assets. This handles cases where the asset registry hasn't
+    // scanned the project yet or scene paths don't match.
+    if (outManifest.entries.empty())
+    {
+        Logger::Log::Warning("AssetCollector: no assets found via the dependency graph, falling back to the project's assets");
+        outManifest = CollectAllAssets();
+    }
+
+    // If the registry holds nothing either, stage the shippable files of the
+    // project's asset directory: the dependency graph may not be populated when
+    // the build runs on a background thread.
+    if (outManifest.entries.empty())
+    {
+        std::error_code ec;
+        if (fs::is_directory(projectAssetRoot, ec))
+        {
+            for (const auto& entry : fs::recursive_directory_iterator(projectAssetRoot, ec))
+            {
+                if (!entry.is_regular_file())
+                    continue;
+                // Skip Shaders: the export stages the engine's shaders separately.
+                const fs::path rel = fs::relative(entry.path(), projectAssetRoot);
+                if (rel.generic_string().rfind("Shaders/", 0) == 0)
+                    continue;
+                // Checked on the root-relative path so the Editor/ deny only sees
+                // segments under the asset root.
+                if (!IsShippableContent(rel))
+                    continue;
+                AssetManifestEntry manifestEntry;
+                manifestEntry.sourcePath = entry.path();
+                manifestEntry.outputPath = fs::path("Assets") / rel;
+                outManifest.entries.push_back(std::move(manifestEntry));
+            }
+            Logger::Log::Info("AssetCollector: Added {} asset files from the project directory",
+                              outManifest.entries.size());
+        }
+    }
+
+    // Whichever way the content was collected, the pipeline game.config names ships
+    // in the manifest: the Player resolves it by path through the .assetmanifest. A
+    // packaged game has no stand-in pipeline, so one missing from the package draws nothing.
+    if (!CollectRenderPipeline(renderPipelinePath, outManifest))
+        outWarnings.push_back("Selected render pipeline not found; the game will draw nothing: " + renderPipelinePath);
+
+    if (!CollectRuntimeHumanoidProfile(outManifest))
+    {
+        outError = "Runtime humanoid profile is missing or conflicts with project content; see the asset collection log";
+        return false;
+    }
+    if (!CollectDefaultUIFont(outManifest))
+    {
+        outError = "Default game UI font is missing; see the asset collection log";
+        return false;
+    }
+    return true;
+}
+
 AssetManifest AssetCollector::CollectFromScenes(const std::vector<std::string>& scenePaths)
 {
     AssetManifest manifest;

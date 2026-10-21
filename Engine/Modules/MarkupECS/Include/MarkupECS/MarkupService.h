@@ -113,13 +113,15 @@ struct MarkupWorldNotes
 // entity's full handle (index and generation). They outlive the entity: a delete leaves
 // them dormant, a delete that preserves the handle (World::DestroyEntityImmediatePreserveHandle,
 // the editor's delete) is revived with them, and an entity that reuses the index carries
-// a new generation and starts with none. A world reset (World::Clear, as a scene load
-// that replaces the world does) restarts entity versions, so a world's notes and
-// revision belong to its lifecycle reset generation: after a reset the world reads as
-// having none, and the first write drops the old ones. Only the editor's play session
-// carries the notes across a reset that brings the same entities back under their
-// handles, with CaptureWorld and RestoreWorld; the other in-place restores (the undo of a
-// world snapshot command, an additive scene load, a version-control revert) drop them.
+// a new generation and starts with none. A world's notes and revision belong to its run of
+// entity handles (World::GetEntityHandleEpoch). A world replaced by World::Clear (a scene
+// load that replaces the world, a new scene) starts a new run, since entity versions
+// restart: the world then reads as having none, and the first write drops the old ones.
+// An in-place restore (World::DeserializeWorld: the undo and redo of a world snapshot
+// command, the end of a play session, a version-control revert) brings the same entities
+// back under the same handles; a snapshot of the run the world is in keeps the run, so the
+// notes stay. A snapshot from a run the world has left (the end of a play session in which
+// a scene was opened) starts a new run, and the notes read as none until restored.
 //
 // Main thread only: the editor's tools, its debug server and scene load and save call it.
 class MarkupService
@@ -213,21 +215,22 @@ public:
     // --- Restoring a world in place ----------------------------------------------------
     // The world's notes and revision as they are now.
     MarkupWorldNotes CaptureWorld(const ECS::World& world) const;
-    // Makes `notes` the world's notes and revision under its current reset generation,
-    // for a reset that restored the entities `notes` was captured from under the same
-    // handles; the notes of any other entity would attach to whatever holds its handle.
+    // Makes `notes` the world's notes and revision under its current run of handles, for a
+    // restore that brought back the entities `notes` was captured from under the same
+    // handles after their run's notes were dropped; the notes of any other entity would
+    // attach to whatever holds its handle.
     void RestoreWorld(const ECS::World& world, MarkupWorldNotes notes);
 
 private:
     struct WorldMarkups
     {
-        uint64 ResetGeneration = 0; // World::GetLifecycleResetGeneration these belong to
+        uint64 HandleEpoch = 0; // World::GetEntityHandleEpoch these belong to
         MarkupWorldNotes State;
     };
 
-    // The world's state for writing; a reset since the state was written drops it first.
+    // The world's state for writing; a new run of handles since the state was written drops it first.
     WorldMarkups& WritableState(const ECS::World& world);
-    // The world's state for reading; null when it has none or a reset outdated it.
+    // The world's state for reading; null when it has none or a new run of handles outdated it.
     const WorldMarkups* ReadableState(const ECS::World& world) const;
 
     std::vector<MarkupTag> m_Tags;

@@ -157,6 +157,7 @@ class WebViewWeb final : public IWebView
     bool BeginFileDrag(const std::filesystem::path& /*path*/) override { return false; }
 
     void SetOnMouseDown(std::function<void()> /*callback*/) override {}
+    void SetOnUnavailable(std::function<void(const std::string&)> /*callback*/) override {}
 
     void Destroy() override
     {
@@ -215,7 +216,7 @@ class WebViewWeb final : public IWebView
 
 } // namespace
 
-std::unique_ptr<IWebView> CreateWebView(Window* /*parentWindow*/)
+std::unique_ptr<IWebView> CreateWebView(Window* /*parentWindow*/, const std::filesystem::path& /*userDataFolder*/)
 {
     return std::make_unique<WebViewWeb>(NextWebViewId());
 }

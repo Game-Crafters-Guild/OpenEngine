@@ -144,7 +144,6 @@ class RenderGraphPanel : public DockPanel {
     std::string m_SelectedPass;
     std::string m_SearchText;
     std::size_t m_LastPassSignature = 0;
-    std::size_t m_LastDetailSignature = 0;
     std::string m_LastDetailPass;
     int m_FrameCounter = 0;
     bool m_DetailDirty = false;

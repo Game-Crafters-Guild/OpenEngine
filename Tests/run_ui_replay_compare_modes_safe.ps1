@@ -1,15 +1,22 @@
 param(
   [string]$EditorExe = "",
-  [ValidateSet("Debug", "RelWithDebInfo", "Release")]
+  [ValidateSet("Debug", "DebugFast", "RelWithDebInfo", "Release")]
   [string]$Config = "RelWithDebInfo",
   [string]$ProjectRoot,
   [string]$OutDir,
   [string]$Preset,
   [int]$ExitAfterFrames = 900,
-  [switch]$KillExistingEditor = $true,
-  # When enabled, writes the Editor process stdout/stderr for each run
+  # Before each run, stop editors this runner started that are still running, and an earlier run's
+  # still writing a replay log under the same OutDir (see Stop-EditorIfRunning). Off by default.
+  [switch]$KillExistingEditor,
+  # When enabled, writes the Editor process stdout and stderr for each run
   # next to the JSONL log. This helps diagnose random crashes or black frames.
-  [switch]$CaptureStdout = $true
+  [switch]$CaptureStdout = $true,
+  # Optional: override the default scenario list. Each element may hold several comma-separated paths:
+  # through `powershell -File` a value after the first binds to the next free positional parameter or
+  # is dropped, so callers on a command line pass one comma-joined string. A path that contains a comma
+  # is not supported. Passing -Scenarios with no path is an error.
+  [string[]]$Scenarios = @()
 )
 
 # Compare runner:
@@ -17,15 +24,21 @@ param(
 # - Never throws (keeps automation sessions alive)
 # - Writes separate logs per mode
 # - Prints a compact summary (failures, fast-path hints, scroll ranges)
+# - Gives each editor its own MCP debug port from 9960-9979 (--debug-port), the first one with no
+#   listener when the editor starts, so it never lands on another editor's port (9999 is the default;
+#   run_ui_replay_tests_safe.ps1 owns 9900-9919)
 
 $ErrorActionPreference = "Continue"
 
 # Resolve repo root from this script's location (Tests/run_ui_replay_compare_modes_safe.ps1 → ..).
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = $repoRoot }
-if ([string]::IsNullOrWhiteSpace($OutDir))      { $OutDir      = Join-Path $repoRoot 'Tests\UIReplay\out' }
+if ([string]::IsNullOrWhiteSpace($OutDir))      { $OutDir      = Join-Path $repoRoot 'Tests\UIReplay\out_compare' }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+# Absolute, so the editor (which resolves a relative --ui-replay-log against its project root) writes
+# the files this runner reads, and Test-RunnerOwnedCommandLine compares absolute paths.
+$OutDir = (Resolve-Path -LiteralPath $OutDir).ProviderPath
 
 if ([string]::IsNullOrWhiteSpace($EditorExe)) {
   $presets = @($Preset, 'vs2026-x64-local', 'vs2026-x64-local-unity',
@@ -43,7 +56,7 @@ if ([string]::IsNullOrWhiteSpace($EditorExe)) {
 $extraFrames = 180
 
 $scenarioDir = Join-Path $repoRoot 'Tests\UIReplay'
-$scenarios = @(
+$defaultScenarios = @(
   'smoke_present_not_black.json',
   'smoke_present_resize_fuzz.json',
   'repro_hierarchy_multi_create.json',
@@ -53,6 +66,21 @@ $scenarios = @(
   'repro_assets_listview_wheel_scroll_delay.json',
   'repro_assets_listview_horizontal_scrollbar_drag.json'
 ) | ForEach-Object { Join-Path $scenarioDir $_ }
+
+# PowerShell variable names are case-insensitive: this list must not be named $scenarios, or it
+# overwrites the -Scenarios parameter before the override is read.
+$scenarioPaths = $defaultScenarios
+$requestedScenarios = @($Scenarios | ForEach-Object { $_ -split ',' } |
+                        ForEach-Object { $_.Trim() } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($PSBoundParameters.ContainsKey('Scenarios')) {
+  if ($requestedScenarios.Count -eq 0) {
+    Write-Host "[UIReplayCompare] -Scenarios names no scenario path: pass one or more comma-separated paths, or omit -Scenarios to run the default list."
+    exit 2
+  }
+  $scenarioPaths = $requestedScenarios
+}
+Write-Host ("[UIReplayCompare] {0} scenarios" -f @($scenarioPaths).Count)
 
 function Get-ScenarioMinFrames([string]$path) {
   try {
@@ -147,13 +175,76 @@ function Parse-PixelHashMap([string]$logPath) {
   return $map
 }
 
+# Editors this run started, held as Process objects so a recycled PID never matches.
+$startedEditors = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
+
+# True when the command line passes --ui-replay-log an absolute path under this runner's OutDir.
+# A relative or drive-relative path never matches: its editor resolved it against a directory this
+# runner cannot see, so it may name another tree's out folder.
+function Test-RunnerOwnedCommandLine([string]$commandLine) {
+  if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+  $m = [regex]::Match($commandLine, '--ui-replay-log\s+(?:"(?<p>[^"]+)"|(?<p>\S+))')
+  if (-not $m.Success) { return $false }
+  $logArg = $m.Groups["p"].Value
+  if ($logArg -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2})') { return $false }
+  try {
+    $logPath = [IO.Path]::GetFullPath($logArg)
+    $outPrefix = [IO.Path]::GetFullPath($OutDir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  } catch {
+    return $false
+  }
+  return $logPath.StartsWith($outPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+# Stops only editors this runner owns: those this run started (by the process it recorded), and
+# leftovers of an earlier run into the same OutDir (matched by Test-RunnerOwnedCommandLine). Never
+# selects by process name alone: other editors on the machine are not the runner's to stop. An editor's
+# CompileServerHost children stop with it (the engine binds them to the editor process).
 function Stop-EditorIfRunning() {
-  $procs = Get-Process Editor -ErrorAction SilentlyContinue
-  if ($null -eq $procs) { return }
-  # Try to stop and wait for exit to avoid rapid-restart hazards (Vulkan/WSI).
+  $owned = @{}
+  foreach ($started in $startedEditors) {
+    if (-not $started.HasExited) { $owned[$started.Id] = $started }
+  }
+  foreach ($e in @(Get-CimInstance Win32_Process -Filter "Name = 'Editor.exe'" -ErrorAction SilentlyContinue)) {
+    if ($owned.ContainsKey([int]$e.ProcessId)) { continue }
+    if (-not (Test-RunnerOwnedCommandLine $e.CommandLine)) { continue }
+    $leftover = Get-Process -Id $e.ProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $leftover) { $owned[$leftover.Id] = $leftover }
+  }
+  if ($owned.Count -eq 0) { return }
+  $procs = @($owned.Values)
+  Write-Host ("[UIReplayCompare] Stopping runner-owned Editor pid(s) {0}" -f (($procs | ForEach-Object { $_.Id }) -join ", "))
   $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+  # A force-stopped editor can take 30 to 60 s to tear down. One still exiting after the wait is reported,
+  # the next run launches beside it, and it is found and stopped again before the run after that.
   try { $procs | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue } catch { }
+  foreach ($proc in $procs) {
+    $proc.Refresh()
+    $state = if ($proc.HasExited) { "stopped" } else { "still exiting after 5 s" }
+    Write-Host ("[UIReplayCompare] Runner-owned Editor pid={0}: {1}" -f $proc.Id, $state)
+  }
   Start-Sleep -Milliseconds 200
+}
+
+$runnerDebugPortFirst = 9960
+$runnerDebugPortLast = 9979
+
+# Returns the first port in the runner's range with no TCP listener, or $null when all are taken.
+function Get-FreeRunnerDebugPort() {
+  $listening = @{}
+  foreach ($endpoint in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()) {
+    $listening[$endpoint.Port] = $true
+  }
+  for ($port = $runnerDebugPortFirst; $port -le $runnerDebugPortLast; $port++) {
+    if (-not $listening.ContainsKey($port)) { return $port }
+  }
+  return $null
+}
+
+# Start-Process joins -ArgumentList with spaces and quotes nothing, so a path with a space would split.
+# Inside the quotes, trailing backslashes are doubled: the C runtime reads \" as a literal quote.
+function Join-EditorArguments([object[]]$arguments) {
+  return @($arguments | ForEach-Object { $a = [string]$_; if ($a -match '\s') { '"{0}"' -f ($a -replace '(\\+)$', '$1$1') } else { $a } })
 }
 
 function Clean-DiffArtifacts([string]$scenarioName) {
@@ -165,7 +256,21 @@ function Clean-DiffArtifacts([string]$scenarioName) {
 
 $results = @()
 
-foreach ($s in $scenarios) {
+# The editors read these from the runner's environment. Their previous values are restored before the
+# runner exits, so a session that runs it with & keeps its own.
+$runnerEnvironmentNames = @('GE_EDITOR_USER_DATA_ROOT', 'GE_FORCE_HDR_OUTPUT', 'GE_UI_CORRECTNESS_MODE')
+$savedEnvironment = @{}
+foreach ($envName in $runnerEnvironmentNames) {
+  $savedEnvironment[$envName] = [Environment]::GetEnvironmentVariable($envName, 'Process')
+}
+
+# The editors keep preferences, recent projects and caches under OutDir, never in the developer's own
+# editor user data. The editor needs an absolute path here.
+$env:GE_EDITOR_USER_DATA_ROOT = Join-Path $OutDir 'EditorUserData'
+# Keep HDR output off whatever the project or the developer's settings request.
+$env:GE_FORCE_HDR_OUTPUT = "Off"
+
+foreach ($s in $scenarioPaths) {
   $name = [IO.Path]::GetFileNameWithoutExtension($s)
   $minFrames = Get-ScenarioMinFrames $s
   $scenarioExit = [Math]::Max($ExitAfterFrames, ($minFrames + $extraFrames))
@@ -180,14 +285,45 @@ foreach ($s in $scenarios) {
     $env:GE_UI_CORRECTNESS_MODE = $mode
     $out = Join-Path $OutDir ("{0}.{1}.mode{2}.jsonl" -f $name, $Config, $mode)
     $stdout = Join-Path $OutDir ("{0}.{1}.mode{2}.stdout.txt" -f $name, $Config, $mode)
+    $stderr = Join-Path $OutDir ("{0}.{1}.mode{2}.stderr.txt" -f $name, $Config, $mode)
+    $editorLog = Join-Path $OutDir ("{0}.{1}.mode{2}.editor.log" -f $name, $Config, $mode)
+    # An earlier run's logs would be read as this run's result when the editor never writes its own.
+    Remove-Item -LiteralPath $out, $editorLog -Force -ErrorAction SilentlyContinue
     Write-Host ("[UIReplayCompare] Running {0} mode={1} (config={2})" -f $name, $mode, $Config)
 
-    if ($CaptureStdout) {
-      & $EditorExe --project $ProjectRoot --ui-replay $s --ui-replay-log $out --exit-after-frames $scenarioExit *> $stdout
-    } else {
-      & $EditorExe --project $ProjectRoot --ui-replay $s --ui-replay-log $out --exit-after-frames $scenarioExit
+    $p = $null
+    try {
+      # Checked free at launch time; the editor binds it seconds later. An editor that loses the port to
+      # another process logs "Failed to start MCP debug server" and runs without one, which the replay
+      # does not use.
+      $debugPort = Get-FreeRunnerDebugPort
+      if ($null -eq $debugPort) {
+        throw ("no free debug port in {0}-{1}" -f $runnerDebugPortFirst, $runnerDebugPortLast)
+      }
+      $editorArgs = Join-EditorArguments @("--project", $ProjectRoot, "--ui-replay", $s, "--ui-replay-log", $out,
+                                           "--exit-after-frames", $scenarioExit, "-logfile", $editorLog,
+                                           "--debug-port", $debugPort)
+      if ($CaptureStdout) {
+        $p = Start-Process -FilePath $EditorExe -ArgumentList $editorArgs -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+      } else {
+        $p = Start-Process -FilePath $EditorExe -ArgumentList $editorArgs -NoNewWindow -PassThru
+      }
+      $startedEditors.Add($p)
+      # Holding the handle keeps ExitCode readable after the process exits.
+      $null = $p.Handle
+      Write-Host ("[UIReplayCompare] Editor pid={0} debug port={1}" -f $p.Id, $debugPort)
+      $p | Wait-Process
+    } catch {
+      Write-Host ("[UIReplayCompare] Could not launch {0} mode={1}: {2}" -f $name, $mode, $_)
+      $p = $null
     }
-    $code = $LASTEXITCODE
+
+    # Not launched: Start-Process sets no exit code, so record the failure explicitly.
+    $code = 1
+    if ($null -ne $p) {
+      try { $p.Refresh() } catch { }
+      try { $code = $p.ExitCode } catch { $code = 1 }
+    }
     $result = Get-ReplayResult $out
 
     $failMsg = Parse-FailMessage $out
@@ -201,6 +337,7 @@ foreach ($s in $scenarios) {
       result = $result
       log = $out
       stdout = $stdout
+      stderr = $stderr
       fail = $failMsg
       scrollMin = if ($null -ne $scrollRange) { $scrollRange.min } else { $null }
       scrollMax = if ($null -ne $scrollRange) { $scrollRange.max } else { $null }
@@ -221,7 +358,7 @@ foreach ($r in $results) {
   $ok = ($r.result -eq "pass")
   $status = if ($ok) { "OK" } else { ("FAIL result={0} exit={1} msg={2}" -f $r.result, $r.exitCode, $r.fail) }
   if ($CaptureStdout) {
-    Write-Host ("  - {0} mode={1}: {2} {3} {4} stdout={5}" -f $r.scenario, $r.mode, $status, $scroll, $fp, $r.stdout)
+    Write-Host ("  - {0} mode={1}: {2} {3} {4} stdout={5} stderr={6}" -f $r.scenario, $r.mode, $status, $scroll, $fp, $r.stdout, $r.stderr)
   } else {
     Write-Host ("  - {0} mode={1}: {2} {3} {4}" -f $r.scenario, $r.mode, $status, $scroll, $fp)
   }
@@ -266,6 +403,10 @@ foreach ($s in ($results | Select-Object -ExpandProperty scenario -Unique)) {
       Write-Host ("      frame {0}: mode0={1} mode1={2}" -f $f, $m0[$f].hash, $m1[$f].hash)
     }
   }
+}
+
+foreach ($envName in $runnerEnvironmentNames) {
+  [Environment]::SetEnvironmentVariable($envName, $savedEnvironment[$envName], 'Process')
 }
 
 # Always exit success to keep automation sessions alive.

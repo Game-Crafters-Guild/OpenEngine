@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 namespace GameEngine {
@@ -51,7 +52,8 @@ struct ReflectionProbe {
     // a full six-face bake per frame, no time slicing and no rebake throttle.
     float32 RealtimeUpdateInterval = 0.5f; // @ge-range 0
     float32 MaxDistance = 0.0f;
-    uint32 CullMask = 0xFFFFFFFFu;
+    // @ge-tooltip The render layers the probe's capture draws
+    Rendering::RenderLayerMask CapturedLayers = Rendering::RenderLayerMask::All();
 };
 
 } // namespace Components

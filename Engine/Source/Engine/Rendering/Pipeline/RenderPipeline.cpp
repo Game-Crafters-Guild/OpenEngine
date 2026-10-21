@@ -52,9 +52,11 @@ static uint64_t HashString(const std::string& s)
     return Fnv1a64(s.data(), s.size());
 }
 
-static uint32_t PipelineViewMask(const Rendering::ViewDesc& view)
+// Whether the active pipeline declares a view this frame: its switch is on and it takes part (an
+// OnDemand view only while armed). A view on no layer still declares: it draws its clear and its sky.
+static bool PipelineDeclaresView(const Rendering::ViewDesc& view)
 {
-    return view.activeRenderPipeline ? view.renderLayerMask : 0u;
+    return view.activeRenderPipeline && view.Participates();
 }
 
 static bool JsonTryGetString(const nlohmann::json& j, const char* key, std::string& out)
@@ -752,7 +754,9 @@ void ValidateBlueprint(RenderPipelineBlueprint& bp, const RenderPipelineNodeRegi
         {
             addIssue(PipelineIssueSeverity::Error,
                      "shaderPkg '" + pkg + "' could not be loaded: " +
-                         (err.empty() ? std::string("not found") : err),
+                         (err.empty() ? std::string("not found") : err) +
+                         ". Point the pass's \"shaderPkg\" at a package that exists, or delete the pass and "
+                         "point the passes that read its output at the input it read.",
                      pass.id);
             continue;
         }
@@ -1241,6 +1245,9 @@ struct RenderPipelineInstance::ResourceDescription
     };
     Kind Type = Kind::Invalid;
     bool PerView = false;
+    // "preExposed": the texture holds scene colour stored at the frame's pre-exposure P
+    // (pre_exposure_snapshot.comp); a reader of absolute values divides by P.
+    bool PreExposed = false;
     bool AbsoluteExtent = false;
     bool OutputExtent = false;
     float ScaleX = 1.0f;
@@ -1278,6 +1285,8 @@ struct RenderPipelineInstance::ResourceDescription
         if (!kind.empty() && kind != "texture")
             return;
         Type = Kind::Texture;
+        if (jr.contains("preExposed") && jr["preExposed"].is_boolean())
+            PreExposed = jr["preExposed"].get<bool>();
 
         Rendering::TextureFormat fmt = Rendering::TextureFormat::RGBA8_UNORM;
         std::string fmtStr;
@@ -1485,6 +1494,15 @@ Rendering::RenderGraph::RGTexture RenderPipelineInstance::TableTexture(Rendering
     return {};
 }
 
+Rendering::RenderGraph::RGBuffer RenderPipelineInstance::FindPreExposureSource(
+    uint32_t textureResourceId) const
+{
+    const auto it = m_FrameResources.PreExposedTextures.find(textureResourceId);
+    if (it == m_FrameResources.PreExposedTextures.end())
+        return {};
+    return TableBuffer(it->second, Names::Res::ExposureHistory).Graph;
+}
+
 PipelineBufferBindingRG RenderPipelineInstance::TableBuffer(Rendering::ViewId viewId,
                                                             const std::string& name) const
 {
@@ -1624,7 +1642,7 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
     for (const auto& vt : targets)
     {
         const Rendering::ViewDesc* v = findView(vt.View);
-        if (!v || PipelineViewMask(*v) == 0)
+        if (!v || !PipelineDeclaresView(*v))
             continue;
 
         uint32_t samples = 1;
@@ -1673,6 +1691,20 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
                 !m_Blueprint.worldColorResolveTargetRef.empty() && crossingAvailable &&
                 !m_Rs.Views().GetViewLetterbox(v->id).active;
             m_DrsAnyViewEligible = m_DrsAnyViewEligible || splitEligible;
+            // The split needs a single-sample raster, so a multisampled view draws at full
+            // resolution whatever its render scale. Say so once, with the fix, rather than
+            // leave the scale silently doing nothing.
+            if (samples > 1 && crossingAvailable && !m_WarnedRenderScaleUnderMsaa &&
+                std::abs(scale - 1.0f) > kRenderScaleNativeEpsilon)
+            {
+                m_WarnedRenderScaleUnderMsaa = true;
+                Logger::Log::Warning(
+                    "RenderPipeline: view {} asks for render scale {:.2f}, but it renders with {}x MSAA and "
+                    "a render scale applies only to a single-sample view, so it draws at full resolution. "
+                    "Turn MSAA off for the camera: use TAA (on the web, Camera antiAliasing 3) or "
+                    "msaaSamples 1.",
+                    static_cast<uint32_t>(v->id), scale, samples);
+            }
             // Both directions split: sub-1.0 renders reduced and upscales,
             // above-1.0 renders supersampled (SSAA) and the crossing filters
             // back down.
@@ -1757,6 +1789,9 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
         const Rendering::RenderGraph::RGTexture rasterDepth =
             splitActive ? splitInternalDepth : vt.Depth;
         m_FrameResources.Textures[{v->id, Names::View::Color}] = color;
+        // The view's colour target is scene colour: the sky and the world write it at P.
+        if (color.IsValid())
+            m_FrameResources.PreExposedTextures[color.Id] = v->id;
         m_FrameResources.Textures[{v->id, Names::View::Depth}] = rasterDepth;
         m_FrameResources.Textures[{v->id, Names::View::Resolve}] = resolve;
         m_FrameResources.Textures[{v->id, Names::View::DepthResolved}] = rasterDepth;
@@ -1831,7 +1866,7 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
         for (const auto& vt : targets)
         {
             const Rendering::ViewDesc* v = findView(vt.View);
-            if (!v || PipelineViewMask(*v) == 0)
+            if (!v || !PipelineDeclaresView(*v))
                 continue;
             ViewDeclare d(frame, *v, m_Rs, nb.id.c_str());
             d.m_Instance = this;
@@ -1913,7 +1948,11 @@ Rendering::RenderGraph::RGTexture RenderPipelineInstance::MaterializeTexture(
 
     const Rendering::RenderGraph::RGTexture t = frame.ImportPersistentTexture(poolName.c_str(), td);
     if (t.IsValid())
+    {
         m_FrameResources.Textures[{scopeView, name}] = t;
+        if (resource->PreExposed && perView)
+            m_FrameResources.PreExposedTextures[t.Id] = viewId;
+    }
     return t;
 }
 
@@ -2122,6 +2161,20 @@ void ViewDeclare::PublishTexture(const std::string& name, Rendering::RenderGraph
 {
     if (m_Instance)
         m_Instance->m_FrameResources.Textures[{View.id, name}] = t;
+}
+
+void ViewDeclare::MarkPreExposed(Rendering::RenderGraph::RGTexture t)
+{
+    if (m_Instance && t.IsValid())
+        m_Instance->m_FrameResources.PreExposedTextures[t.Id] = View.id;
+}
+
+bool ViewDeclare::IsPreExposed(Rendering::RenderGraph::RGTexture t) const
+{
+    if (!m_Instance || !t.IsValid())
+        return false;
+    const auto it = m_Instance->m_FrameResources.PreExposedTextures.find(t.Id);
+    return it != m_Instance->m_FrameResources.PreExposedTextures.end() && it->second == View.id;
 }
 
 void ViewDeclare::PublishBuffer(const std::string& name, const PipelineBufferBindingRG& b)

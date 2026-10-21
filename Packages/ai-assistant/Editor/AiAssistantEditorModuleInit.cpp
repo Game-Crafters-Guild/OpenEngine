@@ -2,6 +2,7 @@
 #include "AiAssistantSettings.h"
 #include "AssistantGate.h"
 #include "CopyReplyAction.h"
+#include "MarkupActions.h"
 #include "PromptPanel.h"
 
 #include "Editor/Registries/DebugRequestGateRegistry.h"
@@ -33,7 +34,8 @@ struct AiAssistantEditorModuleRegistrar
         };
         GameEngine::Editor::EditorPanelRegistry::Get().RegisterPanel(std::move(panel));
 
-        GameEngine::AgentReplyActions::Register({"copy", "Copy", "Copy the reply text", GameEngine::CopyReply});
+        GameEngine::AgentReplyActions::Register({"copy", "Copy", "Copy the reply text", GameEngine::CopyReply, {}, false, {}});
+        GameEngine::RegisterMarkupActions();
 
         GameEngine::AiAssistantSettings::Register();
 

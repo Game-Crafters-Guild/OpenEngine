@@ -60,8 +60,8 @@ void EZTreeStatsPanel::OnPostLayout()
 
 void EZTreeStatsPanel::ResolveElements()
 {
-    m_SummaryLabel = MakeWeakRef(dynamic_cast<Label*>(FindById("EZTreeStatsSummary")));
-    m_RowsContainer = MakeWeakRef(FindById("EZTreeStatsRows"));
+    m_SummaryLabel = MakeWeakRef(dynamic_cast<Label*>(FindById("EZTreeStatsSummary"_sid)));
+    m_RowsContainer = MakeWeakRef(FindById("EZTreeStatsRows"_sid));
 }
 
 void EZTreeStatsPanel::OnLayoutReconciled()

@@ -1,4 +1,4 @@
-// The package entry: what `import { ... } from '@openengine/web'` resolves to. Its shape is
+// The package entry: what `import { ... } from '@game-crafters-guild/openengine-web'` resolves to. Its shape is
 // opengine.d.ts; test/types/conformance.ts holds this module to it.
 
 export { Engine } from './engine.js';

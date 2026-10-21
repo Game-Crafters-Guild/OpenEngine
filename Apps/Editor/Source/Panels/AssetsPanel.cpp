@@ -597,7 +597,7 @@ AssetsPanel::AssetsPanel()
             // Defer registry writes so the modal can close and the UI stays responsive.
             std::vector<std::filesystem::path> pathsCopy = paths;
             std::string tagNameCopy = tagName;
-            this->PostAction([this, pathsCopy, tagNameCopy]() {
+            this->PostAction([pathsCopy, tagNameCopy]() {
                 auto& reg = EngineCore::GetInstance().GetAssetManager().GetRegistry();
                 const std::string key = "tags";
                 for (const auto& p : pathsCopy)

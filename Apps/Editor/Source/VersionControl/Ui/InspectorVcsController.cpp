@@ -469,8 +469,12 @@ void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
         return;
 
     const std::vector<uint8_t> before = m_Panel.m_World->SerializeWorld();
+    // A baseline line naming a field the component does not have reverts nothing, as a scene load
+    // applies nothing for it.
+    std::vector<std::string> unknownFields;
     Scene::SceneLoadContext loadContext{};
     loadContext.TargetWorld = m_Panel.m_World;
+    loadContext.UnknownFields = &unknownFields;
     std::string error;
     if (!schema->ApplyProperty(
             *m_Panel.m_World, m_Panel.m_Entity, loadContext, field,
@@ -479,6 +483,12 @@ void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
         Logger::Log::Warning(
             "Inspector scene diff: failed to revert '{}': {}",
             property.Key, error);
+        return;
+    }
+    if (!unknownFields.empty())
+    {
+        Logger::Log::Warning("Inspector scene diff: the revert skips a line of the committed version: {}",
+                             Scene::UnknownFieldMessage(component, field));
         return;
     }
     m_Panel.m_World->ProcessCommands();

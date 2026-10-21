@@ -133,9 +133,9 @@ TEST(UIRegressions, TooltipWrapsAtMaximumWidthAndShortTextReturnsToNaturalWidth)
     // Frame 2: dimensions are final; the tooltip becomes visible.
     overlay.Update(rootPtr, sourcePtr, 50.0f, 20.0f, 3.0f);
 
-    UIElement* wrapper = rootPtr->FindById("ui-tooltip-wrapper");
-    UIElement* tooltip = rootPtr->FindById("ui-tooltip");
-    UIElement* label = rootPtr->FindById("ui-tooltip-text");
+    UIElement* wrapper = rootPtr->FindById("ui-tooltip-wrapper"_sid);
+    UIElement* tooltip = rootPtr->FindById("ui-tooltip"_sid);
+    UIElement* label = rootPtr->FindById("ui-tooltip-text"_sid);
     ASSERT_NE(wrapper, nullptr);
     ASSERT_NE(tooltip, nullptr);
     ASSERT_NE(label, nullptr);
@@ -215,7 +215,7 @@ TEST(UIRegressions, HoverTooltipDrawsAboveDropdownOverlay)
         ui.Update(0.0f, /*interactive=*/false);
         DriveUiRender(ui, rg);
 
-        UIElement* bubble = rootPtr->FindById("ui-tooltip");
+        UIElement* bubble = rootPtr->FindById("ui-tooltip"_sid);
         ASSERT_NE(bubble, nullptr);
 
         const int dropdownPos = ui.FindDrawOrderPosForTesting(*dropdownPtr);
@@ -277,8 +277,8 @@ TEST(UIRegressions, GridViewInitialColumnsUsesUpdatedViewportOnFirstUpdate)
     const std::string cell1Id = std::string("gridcell-") + std::to_string(gvAddr) + "-1";
     const std::string cell9Id = std::string("gridcell-") + std::to_string(gvAddr) + "-9";
 
-    UIElement* cell1 = rootEl->FindById(cell1Id);
-    UIElement* cell9 = rootEl->FindById(cell9Id);
+    UIElement* cell1 = rootEl->FindById(HashStringId(cell1Id));
+    UIElement* cell9 = rootEl->FindById(HashStringId(cell9Id));
     ASSERT_NE(cell1, nullptr);
     ASSERT_NE(cell9, nullptr);
 
@@ -605,7 +605,7 @@ TEST(UIRegressions, TreeChangedRebuildThenRelayoutDoesNotBreakInheritedFontSize)
     ui.Update(0.0f, /*interactive=*/false);
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* lblEl0 = rootEl->FindById("lbl");
+    UIElement* lblEl0 = rootEl->FindById("lbl"_sid);
     ASSERT_NE(lblEl0, nullptr);
     EXPECT_NEAR(lblEl0->GetResolvedStyle().Visual.FontSize, 14.0f, 0.01f);
 
@@ -639,7 +639,7 @@ TEST(UIRegressions, TreeChangedRebuildThenRelayoutDoesNotBreakInheritedFontSize)
 
     EXPECT_TRUE(didReorder);
 
-    UIElement* lblEl1 = rootEl->FindById("lbl");
+    UIElement* lblEl1 = rootEl->FindById("lbl"_sid);
     ASSERT_NE(lblEl1, nullptr);
     EXPECT_NEAR(lblEl1->GetResolvedStyle().Visual.FontSize, 14.0f, 0.01f);
 }
@@ -692,8 +692,8 @@ TEST(UIRegressions, MultilineLabelHeightPreventsOverlapInScrollView)
 
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* l1El = rootEl->FindById("l1");
-    UIElement* l2El = rootEl->FindById("l2");
+    UIElement* l1El = rootEl->FindById("l1"_sid);
+    UIElement* l2El = rootEl->FindById("l2"_sid);
     ASSERT_NE(l1El, nullptr);
     ASSERT_NE(l2El, nullptr);
 
@@ -1198,8 +1198,8 @@ TEST(UIRegressions, WordBreakBreakAllWrapsLabelHeight)
 
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* nowrapEl = rootEl->FindById("nowrap");
-    UIElement* wrapEl = rootEl->FindById("wrap");
+    UIElement* nowrapEl = rootEl->FindById("nowrap"_sid);
+    UIElement* wrapEl = rootEl->FindById("wrap"_sid);
     ASSERT_NE(nowrapEl, nullptr);
     ASSERT_NE(wrapEl, nullptr);
     EXPECT_EQ(wrapEl->GetResolvedStyle().Visual.WordBreak, WordBreak::BreakAll);
@@ -1254,7 +1254,7 @@ TEST(UIRegressions, DeferredRelayoutReflowsSiblingAfterDisplayNoneCollapse)
 
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* bEl = rootEl->FindById("b");
+    UIElement* bEl = rootEl->FindById("b"_sid);
     ASSERT_NE(bEl, nullptr);
     const float bYBefore = bEl->GetLayoutY();
     EXPECT_GT(bYBefore, 30.0f) << "precondition: b should sit below a (~40px)";
@@ -1311,7 +1311,7 @@ TEST(UIRegressions, DeferredRelayoutReflowsSiblingAfterSelfResize)
 
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* bEl = rootEl->FindById("b");
+    UIElement* bEl = rootEl->FindById("b"_sid);
     ASSERT_NE(bEl, nullptr);
     const float bYBefore = bEl->GetLayoutY();
 

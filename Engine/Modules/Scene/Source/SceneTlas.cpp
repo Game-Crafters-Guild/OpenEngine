@@ -708,7 +708,7 @@ void SceneTlas::SnapshotTreeForTesting(std::vector<uint8>& out) const
         {
             append(leaf.Entity.id);
             appendAabb(leaf.WorldBounds);
-            append(leaf.LayerMask);
+            append(leaf.LayerMask.Bits);
             append(leaf.InstanceMask);
             append(leaf.CachedXfVersion);
             append(leaf.ParentNode);
@@ -826,8 +826,8 @@ TlasLeaf MakeLeafFromRecord(
     TlasLeaf leaf{};
     leaf.Entity          = rec.entity;
     leaf.WorldBounds     = worldBounds;
-    leaf.LayerMask       = rec.meshRenderer.renderLayerMask;
-    leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.renderLayerMask & 0xFFu);
+    leaf.LayerMask       = rec.meshRenderer.RenderLayers;
+    leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.RenderLayers.Bits & 0xFFu);
     leaf.CachedXfVersion = rec.worldTransform.Version;
     leaf.OwningSector    = owningSector;
     return leaf;
@@ -1046,8 +1046,8 @@ void ReconcileFromRecords(
                         TlasLeaf& leaf = sec->Leaves[leafIdx];
                         leaf.WorldBounds     = worldBounds;
                         leaf.CachedXfVersion = rec.worldTransform.Version;
-                        leaf.LayerMask       = rec.meshRenderer.renderLayerMask;
-                        leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.renderLayerMask & 0xFFu);
+                        leaf.LayerMask       = rec.meshRenderer.RenderLayers;
+                        leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.RenderLayers.Bits & 0xFFu);
                         sec->DirtyLeavesScratch.push_back(leafIdx);
                         sectorsRefit.insert(key);
                     }
@@ -1112,8 +1112,8 @@ void ReconcileFromRecords(
                 if (leafIt == sec->EntityToLeaf.end()) continue;
                 const uint32 leafIdx = leafIt->second;
                 TlasLeaf& leaf = sec->Leaves[leafIdx];
-                leaf.LayerMask    = rec.meshRenderer.renderLayerMask;
-                leaf.InstanceMask = static_cast<uint8>(rec.meshRenderer.renderLayerMask & 0xFFu);
+                leaf.LayerMask    = rec.meshRenderer.RenderLayers;
+                leaf.InstanceMask = static_cast<uint8>(rec.meshRenderer.RenderLayers.Bits & 0xFFu);
                 const auto& wb = worldBounds;
                 const auto& lb = leaf.WorldBounds;
                 const bool boundsChanged =
@@ -1156,8 +1156,8 @@ void ReconcileFromRecords(
                 TlasLeaf& leaf = sec.Leaves[leafIdx];
                 leaf.WorldBounds     = worldBounds;
                 leaf.CachedXfVersion = rec.worldTransform.Version;
-                leaf.LayerMask       = rec.meshRenderer.renderLayerMask;
-                leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.renderLayerMask & 0xFFu);
+                leaf.LayerMask       = rec.meshRenderer.RenderLayers;
+                leaf.InstanceMask    = static_cast<uint8>(rec.meshRenderer.RenderLayers.Bits & 0xFFu);
                 sec.DirtyLeavesScratch.push_back(leafIdx);
                 sectorsRefit.insert(newKey);
             }

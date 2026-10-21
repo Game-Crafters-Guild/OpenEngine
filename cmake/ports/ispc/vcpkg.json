@@ -1,0 +1,8 @@
+{
+  "name": "ispc",
+  "version": "1.32.0",
+  "description": "Prebuilt Intel Implicit SPMD Program Compiler: the host tool that compiles the bc7e BC7 encoder kernel.",
+  "homepage": "https://ispc.github.io",
+  "license": "BSD-3-Clause",
+  "supports": "(windows & (x64 | arm64) & !uwp) | (linux & (x64 | arm64)) | osx"
+}

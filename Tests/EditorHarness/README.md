@@ -83,6 +83,7 @@ Each takes the same `GE_EDITOR_DEBUG_PORT` and runs on its own.
 
 | Script | What it proves |
 |---|---|
+| `project-startup.mjs` | Command-line project startup opens its configured scene without a save prompt; Import starts in the remembered parent folder. Takes `--scene=<path>` and `--parent=<path>` with the isolated fixture described in the script. |
 | `play-review-dismissal.mjs` | Entities created and deleted through the real Play snapshot and Undo paths; the review overlay renders, and pointer input afterwards lands. Asserts the rendered overlay, because `get_editor_state.modal` does not report it. |
 | `inspector-new-stack.mjs` | New Stack on an emitter that runs the default stack: the stack asset is written and assigned, the inspector rebuilds from a section's refresh callback once the asset loads, and the editor keeps answering. Red before the inspector deferred that rebuild (signal 11 in `InspectorPanel::TickSimulationRefresh`). Creates and deletes its own entity and undoes the created asset. |
 | `terrain-sculpt-roundtrip.mjs` | A brush edit on a live terrain reaches the heightfield, survives save and reopen, and comes back rendering — in both domains (planar `.tzone` sidecar, planet `.tsculpt` sidecar). Takes `--domain=planar\|spherical\|both` and `--keep`. |

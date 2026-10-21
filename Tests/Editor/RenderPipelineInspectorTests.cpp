@@ -108,32 +108,32 @@ TEST(RenderPipelineInspector, BuildsUiForComputeAndFullscreenPasses)
     EXPECT_GT(root.GetChildren().size(), 0u);
 
     // Verify a few key controls exist (IDs are set in the inspector implementation).
-    EXPECT_NE(root.FindById("rp-pass-0-type"), nullptr);
-    EXPECT_NE(root.FindById("rp-pass-0-dispatch-x"), nullptr);
-    EXPECT_NE(root.FindById("rp-pass-0-inputs-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-pass-1-type"), nullptr);
-    EXPECT_NE(root.FindById("rp-pass-1-alphaBlend"), nullptr);
-    EXPECT_NE(root.FindById("rp-pass-1-output"), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-0-type"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-0-dispatch-x"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-0-inputs-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-1-type"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-1-alphaBlend"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-pass-1-output"_sid), nullptr);
 
     // Verify resource editor controls exist.
-    EXPECT_NE(root.FindById("rp-res-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-kind"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-scope"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-bytes"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-memoryUsage"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-usage-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-flags-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-vars-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-key"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-type"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-string"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-depthSlices-number"), nullptr);
+    EXPECT_NE(root.FindById("rp-res-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-kind"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-scope"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-bytes"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-memoryUsage"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-usage-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-flags-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-vars-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-key"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-type"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-clustersX-string"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterParams-size-var-depthSlices-number"_sid), nullptr);
 
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-kind"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-format"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-usage-add"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-mode"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-scale-x"), nullptr);
-    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-scale-y"), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-kind"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-format"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-usage-add"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-mode"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-scale-x"_sid), nullptr);
+    EXPECT_NE(root.FindById("rp-res-ClusterDebug-extent-scale-y"_sid), nullptr);
 }
 

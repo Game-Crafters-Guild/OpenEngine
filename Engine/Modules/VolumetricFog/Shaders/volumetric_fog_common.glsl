@@ -3,31 +3,10 @@
 
 layout(set = 0, binding = 2, std140) uniform FogParams
 {
-    mat4 uInvViewProj;
-    mat4 uView;
-    vec4 uCameraPos;
-    vec4 uSunDirection;
-    vec4 uSunColor;
-    vec4 uAmbientColor; // rgb=flat-ambient fallback tint, w=IBL intensity scale
-    vec4 uAlbedoDensity;
-    vec4 uEmissionAnisotropy;
-    vec4 uHeightParams; // x=baseHeight, y=heightFalloff, z=localLightHistoryPressure, w=isGlobal
-    vec4 uLocalVolumeCenterShape; // xyz=centerWS, w=shape (0 box, 1 sphere, 2 capsule, 3 cylinder)
-    vec4 uLocalVolumeAxisXHalfExtent; // xyz=axisX, w=halfExtentX
-    vec4 uLocalVolumeAxisYHalfExtent; // xyz=axisY, w=halfExtentY
-    vec4 uLocalVolumeAxisZHalfExtent; // xyz=axisZ, w=halfExtentZ
-    vec4 uLocalVolumeParams; // x=blendDistance, y=valid, z=skyFade (far fog->sky feather)
-    vec4 uNoiseParams;
-    vec4 uNoiseVelocityTime;
-    vec4 uNoiseChannelWeights;
-    vec4 uDensityParams; // x=global noise threshold, y=threshold softness, z=orthographic, w=iblEnabled
-    vec4 uVolumeParams;
-    vec4 uGridParams;
-    vec4 uJitterParams; // x=frame, y=historyValid, z=renderWidth, w=renderHeight
-    vec4 uFogExtraParams; // x=compositeDepthBias, y=shadowBias, z=reserved, w=emissionGridActive
-    mat4 uPrevViewProj;
-    vec4 uPrevCameraPos;
+#include "Includes/volumetric_fog_params_fields.glsl"
 } fog;
+// The block's instance, as the shared fog functions name it.
+#define GE_VOLUMETRIC_FOG fog
 
 #ifdef GE_VOLUMETRIC_FOG_BIND_JITTER_ATLAS
 layout(set = 0, binding = 11) uniform sampler3D uFogJitterAtlas;
@@ -59,63 +38,7 @@ layout(set = 0, binding = 12, std430) readonly buffer FogLocalVolumeBuffer
 layout(set = 0, binding = 13) uniform sampler3D uFogDensityNoiseAtlas;
 #endif
 
-vec2 FogUvToNdc(vec2 uv)
-{
-    return vec2(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
-}
-
-vec2 FogNdcToUv(vec2 ndc)
-{
-    return vec2(ndc.x * 0.5 + 0.5, 1.0 - (ndc.y * 0.5 + 0.5));
-}
-
-float FogSliceDistance(float slice01)
-{
-    return fog.uVolumeParams.x * pow(clamp(slice01, 0.0, 1.0), max(fog.uVolumeParams.y, 0.05));
-}
-
-float FogDistanceToSlice01(float distanceToCamera)
-{
-    return pow(clamp(distanceToCamera / max(fog.uVolumeParams.x, 0.001), 0.0, 1.0), 1.0 / max(fog.uVolumeParams.y, 0.05));
-}
-
-vec3 FogWorldRayFromUv(vec2 uv)
-{
-    vec4 nearPoint = fog.uInvViewProj * vec4(FogUvToNdc(uv), 1.0, 1.0);
-    vec4 farPoint = fog.uInvViewProj * vec4(FogUvToNdc(uv), 0.0, 1.0);
-    nearPoint.xyz /= max(nearPoint.w, 1.0e-6);
-    farPoint.xyz /= max(farPoint.w, 1.0e-6);
-    if (fog.uDensityParams.z > 0.5)
-        return normalize(farPoint.xyz - nearPoint.xyz);
-    return normalize(farPoint.xyz - fog.uCameraPos.xyz);
-}
-
-vec3 FogRayOriginFromUv(vec2 uv)
-{
-    if (fog.uDensityParams.z <= 0.5)
-        return fog.uCameraPos.xyz;
-
-    vec4 nearPoint = fog.uInvViewProj * vec4(FogUvToNdc(uv), 1.0, 1.0);
-    return nearPoint.xyz / max(nearPoint.w, 1.0e-6);
-}
-
-vec3 FogWorldFromUvDistance(vec2 uv, float distanceToCamera)
-{
-    return FogRayOriginFromUv(uv) + FogWorldRayFromUv(uv) * distanceToCamera;
-}
-
-vec3 FogWorldFromDepth(vec2 uv, float rawDepth)
-{
-    vec4 p = fog.uInvViewProj * vec4(FogUvToNdc(uv), rawDepth, 1.0);
-    return p.xyz / max(p.w, 1.0e-6);
-}
-
-float FogViewDistanceFromWorld(vec2 uv, vec3 worldPos)
-{
-    if (fog.uDensityParams.z > 0.5)
-        return max(dot(worldPos - FogRayOriginFromUv(uv), FogWorldRayFromUv(uv)), 0.0);
-    return length(worldPos - fog.uCameraPos.xyz);
-}
+#include "Includes/volumetric_fog_view.glsl"
 
 float FogHash(vec3 p)
 {
@@ -370,11 +293,6 @@ float FogApplyDensityThreshold(float n, float threshold, float softness)
     return smoothstep(threshold, min(threshold + max(softness, 0.0001), 1.0), n);
 }
 
-float FogHenyeyGreenstein(float cosTheta, float g)
-{
-    float gg = g * g;
-    float denom = max(1.0 + gg - 2.0 * g * cosTheta, 1.0e-4);
-    return (1.0 - gg) / (12.5663706 * denom * sqrt(denom));
-}
+#include "Includes/volumetric_fog_phase.glsl"
 
 #endif

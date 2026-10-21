@@ -1,0 +1,71 @@
+#version 450
+
+// Pre-exposure snapshot: once per view per frame, before any pass writes scene colour, fix the
+// scale P that this frame's scene colour is stored at. Every pass that writes radiance into scene
+// colour multiplies by P (GE_PreExposure, Includes/view_exposure.glsl); every pass that compares
+// scene colour against an absolute value divides by it; temporal histories are rescaled by
+// preExposure / previousPreExposure. SceneColor is RGBA16F with 1.0 = 203 nits, so a physical
+// night sky (1e-4 nits and below) sits under fp16's normal floor unless it is stored scaled.
+//
+// P is the exposure the view will be shown at, rounded to a power of two: the multiply at write
+// and the divide at read are then exact for every value in fp16's normal range.
+//   - Auto exposure with a valid history: the adapted scale the resolve wrote last frame
+//     (auto_exposure_resolve.comp), the value the tonemap reads at N-1 latency.
+//   - First frame, or a history that is invalid, non-finite or non-positive (the resolve snaps on
+//     the same test): the static scale.
+//   - Manual exposure: the static scale, every frame.
+//   - A static scale that is not positive: 1.
+// previousPreExposure carries last frame's P; on the first frame it equals this frame's P, so the
+// history ratio is exactly 1.
+//
+// A SINGLE thread: one read-modify-write of a 16-byte buffer.
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// The view's persistent ExposureHistory buffer: the resolve owns exposureScale and valid, this
+// pass owns preExposure and previousPreExposure.
+#define GE_EXPOSURE_HISTORY_BINDING 0
+#define GE_EXPOSURE_HISTORY_NAME state
+#define GE_EXPOSURE_HISTORY_WRITABLE
+#include "Includes/exposure_history.glsl"
+
+// Named after the post-process settings fields the render graph's ComputeShader node fills
+// (PostProcessSettings::TryWriteField), the same pair the tonemap reads.
+layout(push_constant) uniform PC {
+    float exposure;        // the view's static (Fixed/Manual/Physical) linear exposure scale
+    int   useAutoExposure; // != 0 when auto exposure meters the view
+} pc;
+
+// log2(P) is held to this range so P and 1/P stay normal fp32 numbers.
+const float kMaxPreExposureLog2 = 64.0;
+
+bool IsUsableScale(float scale)
+{
+#if defined(GE_COMPAT_PROFILE)
+    // naga has no OpIsNan/OpIsInf: NaN is self-inequal, Inf exceeds FLT_MAX.
+    return scale == scale && abs(scale) < 3.4e38 && scale > 0.0;
+#else
+    return !isnan(scale) && !isinf(scale) && scale > 0.0;
+#endif
+}
+
+// Nearest power of two in log2, ties upward (floor(x + 0.5) is the same on every backend; GLSL
+// round() leaves the tie direction to the implementation).
+float QuantisePreExposure(float scale)
+{
+    if (!IsUsableScale(scale))
+        return 1.0;
+    float exponent = clamp(floor(log2(scale) + 0.5), -kMaxPreExposureLog2, kMaxPreExposureLog2);
+    return exp2(exponent);
+}
+
+void main()
+{
+    bool historyUsable = state.valid == 1u && IsUsableScale(state.exposureScale);
+    float scale = (pc.useAutoExposure != 0 && historyUsable) ? state.exposureScale : pc.exposure;
+    float preExposure = QuantisePreExposure(scale);
+
+    float previous = state.preExposure;
+    state.previousPreExposure = IsUsableScale(previous) ? previous : preExposure;
+    state.preExposure = preExposure;
+}

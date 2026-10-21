@@ -144,14 +144,14 @@ void ShaderGraphPanel::BindShaderController()
 
 MaterialGraphController::ToolbarItems ShaderGraphPanel::ShaderToolbar()
 {
-    auto button = [this](const char* id) { return dynamic_cast<Button*>(FindById(id)); };
+    auto button = [this](StringId id) { return dynamic_cast<Button*>(FindById(id)); };
     MaterialGraphController::ToolbarItems items;
-    items.Preview = button("NodeGraphMaterialPreviewToggle");
-    items.PreviewIbl = button("NodeGraphMaterialPreviewIblToggle");
-    items.AutoCompile = button("NodeGraphAutoCompileToggle");
-    items.Compile = button("NodeGraphCompileButton");
-    items.CompileWrap = FindById("NodeGraphCompileWrap");
-    items.CompileStatusDot = FindById("NodeGraphCompileStatusDot");
+    items.Preview = button("NodeGraphMaterialPreviewToggle"_sid);
+    items.PreviewIbl = button("NodeGraphMaterialPreviewIblToggle"_sid);
+    items.AutoCompile = button("NodeGraphAutoCompileToggle"_sid);
+    items.Compile = button("NodeGraphCompileButton"_sid);
+    items.CompileWrap = FindById("NodeGraphCompileWrap"_sid);
+    items.CompileStatusDot = FindById("NodeGraphCompileStatusDot"_sid);
     return items;
 }
 

@@ -29,6 +29,13 @@ layout(set = 0, binding = 3) uniform sampler2D uDepth;
 layout(set = 0, binding = 4) uniform sampler2D uMV;
 layout(set = 0, binding = 5) uniform sampler2D uHistory;
 
+// The view's exposure state (ExposureHistory). The scene colour is stored at this frame's
+// pre-exposure P and the history at the previous frame's: every history colour read is rescaled
+// by P / previousPreExposure. The Karis weights are written against absolute scene-linear luma,
+// so luma is divided by P where it feeds them.
+#define GE_EXPOSURE_HISTORY_BINDING 7
+#include "Includes/exposure_history.glsl"
+
 layout(std140, set = 0, binding = 6) uniform TaaResolveParams
 {
     // Current frame, UNJITTERED inverse view-proj. Deliberately NOT the
@@ -95,7 +102,8 @@ float Luma(vec3 rgb)
 vec3 ClipToAABB(vec3 q, vec3 aabbMin, vec3 aabbMax)
 {
     vec3 center = 0.5 * (aabbMax + aabbMin);
-    vec3 extents = max(0.5 * (aabbMax - aabbMin), vec3(1e-5));
+    // The floor is a colour, stored at the frame's pre-exposure.
+    vec3 extents = max(0.5 * (aabbMax - aabbMin), vec3(1e-5 * GE_PreExposure()));
     vec3 v = q - center;
     vec3 unitV = abs(v / extents);
     float maxUnit = max(unitV.x, max(unitV.y, unitV.z));
@@ -276,9 +284,11 @@ void main()
     // A lower bound preserves accumulated bright subpixel coverage.
     current = max(YCoCgToRGB(currSharpYCoCg), minCurrent);
 
+    float historyScale = GE_PreExposureHistoryScale();
     vec4 historySample = texture(uHistory, prevUv);
     if (interior > 0.0)
         historySample = mix(historySample, SampleCatmullRom(uHistory, prevUv), interior);
+    historySample.rgb *= historyScale;
     vec3 historyYCoCg = RGBToYCoCg(historySample.rgb);
     vec3 clampedYCoCg = ClipToAABB(historyYCoCg, aabbMin, aabbMax);
     float clampAmount = length(clampedYCoCg - historyYCoCg);
@@ -299,13 +309,14 @@ void main()
     // check below for untracked shading changes on otherwise static surfaces.
     bool shadingChanged = stationaryFootprint && !stationaryScene &&
         TaaShadingChanged(uHistory, historyPx, ivec2(Taa.uExtent.xy), minCurrent, maxCurrent,
-                         ivec2(interior < 0.999 ? 2 : 1));
+                         ivec2(interior < 0.999 ? 2 : 1), historyScale, GE_PreExposure());
     float mvPixels = length(mv * Taa.uExtent.xy);
     vec3 clippedHistory = clamp(YCoCgToRGB(clampedYCoCg), minCurrent, maxCurrent);
     vec3 coverageHistory = max(historySample.rgb, vec3(0.0));
     bool staleLighting = stationaryFootprint &&
-        TaaHistoryNeighborhoodUniform(uHistory, historyPx, ivec2(Taa.uExtent.xy)) &&
-        TaaSampleOutsideCurrent(historySample.rgb, minCurrent, maxCurrent);
+        TaaHistoryNeighborhoodUniform(uHistory, historyPx, ivec2(Taa.uExtent.xy), historyScale,
+                                      GE_PreExposure()) &&
+        TaaSampleOutsideCurrent(historySample.rgb, minCurrent, maxCurrent, GE_PreExposure());
     // A moving caster changes lighting on zero-motion receivers. Preserve
     // phase-missed coverage only without movers or evidence of stale lighting;
     // normal color clipping still allows in-range history to accumulate.
@@ -369,8 +380,9 @@ void main()
     // Validated stationary history integrates coverage in linear light. Karis
     // weighting here would give an old dark sample nearly all the weight when
     // an HDR emitter appears, preserving a dark sun ring despite fresh input.
-    float wCurr = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(current));
-    float wHist = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(history));
+    float invPreExposure = 1.0 / GE_PreExposure();
+    float wCurr = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(current) * invPreExposure);
+    float wHist = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(history) * invPreExposure);
     vec3 blended = (current * wCurr * (1.0 - weight) + history * wHist * weight) /
                    max(wCurr * (1.0 - weight) + wHist * weight, 1e-5);
 

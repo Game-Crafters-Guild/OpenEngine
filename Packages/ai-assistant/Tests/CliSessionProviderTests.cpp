@@ -407,4 +407,52 @@ TEST(CliSessionProviderTests, ALoggedOutSessionRefusesTheTurnWithTheFix)
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
     EXPECT_EQ(events.Result.Error, "Not logged in: run `codex login`.");
 }
+
+// A reply whose text comes in two blocks around a tool call (issue #3435): the second block
+// starts a new paragraph, as the model wrote them, instead of running on from the first's
+// last word. The break travels with the second block's first delta.
+TEST(CliSessionProviderTests, TextBlocksAroundAToolCallAreSeparatedByAParagraphBreak)
+{
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "replay");
+    const std::string fixture = Fixture("claude-two-text-blocks.stdout");
+    ScopedEnvironmentVariable replay("FAKE_AGENT_CLI_REPLAY", fixture.c_str());
+    ClaudeSessionProvider provider(FakeCli(), {});
+    RecordingTurnEvents events;
+    CancelToken cancel;
+
+    provider.RunTurn(Request("Make a lantern and save."), events, cancel);
+
+    const std::string reply = "I'll create the lantern, then save the scene.\n\nThe create_entity call succeeded.";
+    const std::vector<std::string> expected = {std::string("session:") + kFixtureSession,
+                                               "delta:I'll create the lantern,",
+                                               "delta: then save the scene.",
+                                               "tool:mcp__gameengine__create_entity",
+                                               "delta:\n\nThe create_entity call succeeded.",
+                                               "finished:" + reply};
+    EXPECT_EQ(events.Log, expected);
+    EXPECT_EQ(events.Result.Text, reply);
+}
+
+// Codex reports each message whole; a later message (after a command it ran) starts a new
+// paragraph, as with Claude's text blocks.
+TEST(CliSessionProviderTests, CodexMessagesAroundACommandAreSeparatedByAParagraphBreak)
+{
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "replay");
+    const std::string fixture = Fixture("codex-two-messages.stdout");
+    ScopedEnvironmentVariable replay("FAKE_AGENT_CLI_REPLAY", fixture.c_str());
+    CodexSessionProvider provider(FakeCli(), {});
+    RecordingTurnEvents events;
+    CancelToken cancel;
+
+    provider.RunTurn(Request("What is in the scene?"), events, cancel);
+
+    const std::string reply = "I will look at the scene first.\n\nIt holds seven entities.";
+    const std::vector<std::string> expected = {std::string("session:") + kFixtureSession,
+                                               "delta:I will look at the scene first.",
+                                               "tool:command_execution",
+                                               "delta:\n\nIt holds seven entities.",
+                                               "finished:" + reply};
+    EXPECT_EQ(events.Log, expected);
+    EXPECT_EQ(events.Result.Text, reply);
+}
 } // namespace GameEngine

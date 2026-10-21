@@ -1,0 +1,62 @@
+---
+title: Audio mute
+description: Turn the editor's audio off with the speaker button beside Play or from the Play button's right-click menu, or mute the speakers with one call on the audio system, without stopping anything the engine plays.
+sidebar:
+  order: 2
+---
+
+Silence the speakers without stopping anything the engine plays. In the editor, the speaker button to the right of Play turns audio on and off. In code, the mute is one call on the audio system.
+
+## In the editor
+
+Click the speaker button to the right of the **Play** button in the top toolbar. While the editor plays audio, which is the default, the button shows a speaker with sound waves. Click it to mute the audio. The button then shows a speaker with an X, and its tooltip and the Play button's tooltip say that audio is muted. Click it again to turn audio back on.
+
+The **Audio Enabled** item in the Play button's right-click menu is a second control for the same setting. The item has a check mark while the editor plays audio. When you choose the item, the speaker button changes too, and when you click the speaker button, the check mark changes.
+
+- The setting covers all engine audio sent to the speakers while the editor runs: the game in play mode, sound previews in the inspector, and any other sound the editor plays.
+- The setting works in edit mode and while the game plays or is paused; entering or leaving play mode keeps it.
+- The choice is saved in the editor preferences as `audio.enabled`, so the next editor session starts muted if you left audio off.
+- It does not change the volumes in the Mixer panel. The Mixer's Master meter reads zero while muted, because it measures what reaches the speakers; the other bus meters keep moving.
+
+:::note
+A movie recorded while audio is muted keeps its full sound track: the recorder takes the mix before the mute, so you can record quietly.
+:::
+
+To run an editor or a Player with no audio device at all, see [Game builds and Steam publishing](../publishing/game-publishing.mdx): `GE_AUDIO_OUTPUT=silent` and the Player's `--silent-audio` mix without opening a device. The mute is for a session that keeps its device and silences it for a while.
+
+## In code
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Mute and unmute the speakers"
+#include "Audio/AudioSystem.h"
+#include "Core/Engine.h"
+
+if (GameEngine::Audio::AudioSystem* audio = GameEngine::EngineCore::GetInstance().GetAudioSystem())
+{
+    audio->SetMasterMuted(true);  // silence the speakers
+    bool muted = audio->IsMasterMuted();
+    audio->SetMasterMuted(false); // restore them
+}
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet; the native calls are `AudioSystem::SetMasterMuted` and `AudioSystem::IsMasterMuted`.
+:::
+
+::::
+:::::
+
+| Behavior | While muted |
+|---|---|
+| Voices | Keep playing and advancing. A one-shot finishes at its normal time and is released; a looping sound keeps looping. Unmuting resumes at the current position, not from the start. |
+| Bus volumes | Unchanged. `GetBusVolume` returns the same values, and `SetBusVolume` still works; the new volume is heard when the mute is lifted. |
+| Speakers | Receive exact silence. The Master bus meter (`GetBusMeterLevel(0)`) reads zero; the other bus meters are unchanged. |
+| Output capture | The `SetOutputCaptureCallback` callback still receives the full mix at its normal level. |
+| Initialization | `SetMasterMuted` can be called before `Initialize`; the speakers start muted. The state survives `Shutdown` and a later `Initialize`. |
+
+Call it from the thread that owns the audio system, like the rest of its API.

@@ -1515,9 +1515,13 @@ void AppendSpherePlacements(const ResolvedModifier& mod, float32 planetRadius,
         case ResolvedEffect::Kind::Noise:   FillSphereNoise(p, fx.Noise); break;
         case ResolvedEffect::Kind::Flatten: FillSphereFlattenEffect(p, fx.Flatten); break;
         case ResolvedEffect::Kind::Stamp:   FillSphereStamp(p, mod, fx.Stamp); break;
-        // Paint needs a per-face sphere splat layer, and a constant height offset
-        // has no sphere twin yet: surfaced, never silently applied.
+        // Splat, claim, grass and constant height-offset effects have no sphere
+        // path yet. Never publish an uninitialized placement for them.
         case ResolvedEffect::Kind::PaintLayer:
+        case ResolvedEffect::Kind::Rules:
+        case ResolvedEffect::Kind::GroundClaim:
+        case ResolvedEffect::Kind::Grass:
+        case ResolvedEffect::Kind::Count:
         case ResolvedEffect::Kind::HeightOffset:
             outUnsupported = true;
             continue;
@@ -1923,6 +1927,8 @@ void VisitModifierInputs(const ResolvedModifier& mod, Sink& sink)
                 sink.Float(fx.Grass.HeightScale);
                 sink.Float(fx.Grass.DensityScale);
                 break;
+            case ResolvedEffect::Kind::Count:
+                break; // Sentinel, not an authored effect.
             case ResolvedEffect::Kind::Rules:
                 // Every authored field of every live row: dragging one band
                 // handle must move this hash, or the edit bakes never.
@@ -5110,7 +5116,8 @@ void TerrainModifierSystem::BakeSphereModifiers(TerrainService& terrainService, 
         Logger::Log::Warning(
             "TerrainModifierSystem: a spherical terrain carries modifiers not yet baked onto "
             "planets (Noise, Flatten, Stamp and Sculpt zones bake with a circle or rectangle "
-            "shape; Paint and Spline modifiers, and any volume with Shape=Spline Path/Area or "
+            "shape; Paint and Spline modifiers, surface-rules, ground-claim and grass effects, "
+            "and any volume with Shape=Spline Path/Area or "
             "Shape=Global, do not yet); those modifiers are ignored on the sphere.");
     }
     if (analyticOverflow && !m_SphereAnalyticOverflowWarned)

@@ -44,6 +44,7 @@
 #include "Logger/Logger.h"
 #include "Editor/Settings/CurveEditorSettings.h"
 #include "Editor/Settings/SettingsStore.h"
+#include "Editor/Settings/SettingsTextFieldRow.h"
 #include "Editor/Vcs/EditorVcsProviderRegistry.h"
 #include "VCSIntegration/IVCSIntegration.h"
 #include "Types/StringId.h"
@@ -435,9 +436,8 @@ void WireSettingsIntLabelDrag(EditorContext* context,
         normalize(defaultValue));
 }
 
-/// Build one of the independent SVG rasterization defaults. UI SVGs are
-/// personal appearance state; texture import is a project-wide authoring rule.
-static std::unique_ptr<UIElement> BuildSvgRasterSizeRow(Editor::SvgRasterSettingsScope scope)
+/// Build the project-wide SVG texture import raster default.
+static std::unique_ptr<UIElement> BuildSvgRasterSizeRow()
 {
     constexpr int kDefaultExp = 8;
     constexpr int kMinExp = 4;
@@ -447,18 +447,15 @@ static std::unique_ptr<UIElement> BuildSvgRasterSizeRow(Editor::SvgRasterSetting
     row->AddClass("settings-row");
 
     auto label = std::make_unique<Label>();
-    label->SetText(scope == Editor::SvgRasterSettingsScope::EditorUi
-        ? "UI SVG Raster Size"
-        : "Default Raster Size");
-    label->SetTooltip(scope == Editor::SvgRasterSettingsScope::EditorUi
-        ? "Default raster bounds for SVGs shipped with the editor UI. Aspect ratio is preserved."
-        : "Default raster bounds for project SVG textures without a per-asset override. Aspect ratio is preserved.");
+    label->SetText("Default Raster Size");
+    label->SetTooltip(
+        "Default raster bounds for project SVG textures without a per-asset override. Aspect ratio is preserved.");
     label->AddClass("settings-row-label");
     Label* labelPtr = label.get();
 
     const std::filesystem::path workspaceRoot = EngineCore::GetInstance().GetWorkspaceRoot();
     std::string loadError;
-    const uint32 initialPixels = Editor::SvgRasterSettings::Load(scope, workspaceRoot, &loadError);
+    const uint32 initialPixels = Editor::SvgRasterSettings::Load(workspaceRoot, &loadError);
     if (!loadError.empty())
         Logger::Log::Warning("SvgRasterSettings: failed to load setting: {}", loadError);
     int exp = kMinExp;
@@ -480,13 +477,13 @@ static std::unique_ptr<UIElement> BuildSvgRasterSizeRow(Editor::SvgRasterSetting
     dropdown->SetOptions(options, exp - kMinExp);
     Dropdown* dropdownPtr = dropdown.get();
 
-    auto applySelection = [scope](const std::string& value) {
+    auto applySelection = [](const std::string& value) {
         uint32 pixels = 0;
         if (!ParseSvgRasterSizeMeta(value, pixels))
             return;
         std::string err;
         if (!Editor::SvgRasterSettings::SaveAndApply(
-                scope, EngineCore::GetInstance().GetWorkspaceRoot(), pixels, true, &err))
+                EngineCore::GetInstance().GetWorkspaceRoot(), pixels, true, &err))
             Logger::Log::Warning("SvgRasterSettings: failed to save setting: {}", err);
     };
 
@@ -1204,10 +1201,12 @@ void SettingsTreeDataProvider::RefreshRegistryNodes() const
         const TreeId id = static_cast<TreeId>(kRegistrySettingsCategoryBase + i);
         // Labels can change on module replace-forward; refresh unconditionally.
         m_Nodes[id] = {categories[i].Title, {}, false};
-        // VersionControl- and UIAppearance-group categories render inline on
-        // their host pages rather than as tree children; they contribute no node.
+        // VersionControl-, UIAppearance- and SceneView-group categories render
+        // inline on their host pages rather than as tree children; they
+        // contribute no node.
         if (categories[i].Group == Editor::SettingsCategoryGroup::VersionControl ||
-            categories[i].Group == Editor::SettingsCategoryGroup::UIAppearance)
+            categories[i].Group == Editor::SettingsCategoryGroup::UIAppearance ||
+            categories[i].Group == Editor::SettingsCategoryGroup::SceneView)
             continue;
 
         TreeId parent = 0;
@@ -2067,7 +2066,7 @@ void SettingsPanel::ApplyAccentColorToUI()
     // Forward accent color to dock overlays
     if (auto* root = ui->GetRootElement())
     {
-        if (auto* ds = dynamic_cast<DockspaceElement*>(root->FindById("dock")))
+        if (auto* ds = dynamic_cast<DockspaceElement*>(root->FindById("dock"_sid)))
             ds->SetAccentColor(m_UIAccentColor);
     }
 
@@ -2463,7 +2462,7 @@ void SettingsPanel::ApplySavedNodeGraphHeaderAlignmentStyle(UIManager* ui)
     if (!root)
         return;
 
-    auto* canvas = root->FindById("NodeGraphCanvas");
+    auto* canvas = root->FindById("NodeGraphCanvas"_sid);
     if (!canvas)
         return;
 
@@ -3589,6 +3588,8 @@ void SettingsPanel::RequestShowRegistryCategory(std::string_view categoryId)
                 target = SettingsCategory::VersionControl;
             else if (categories[i].Group == Editor::SettingsCategoryGroup::UIAppearance)
                 target = SettingsCategory::UIAppearance;
+            else if (categories[i].Group == Editor::SettingsCategoryGroup::SceneView)
+                target = SettingsCategory::Camera;
             RequestShowCategory(target);
             return;
         }
@@ -4020,7 +4021,7 @@ void SettingsPanel::CreateUIColorsContent()
         section->AddChild(std::move(swatch));
 
         const uint32_t kDefaultAssetIconTint = 0xFFAAAAAA;
-        AddDoubleClickReset(iconTintLabelPtr, [this, kDefaultAssetIconTint]()
+        AddDoubleClickReset(iconTintLabelPtr, [this]()
         {
             m_UIAssetIconTint = kDefaultAssetIconTint;
             auto prefs = Editor::OpenEditorPreferences();
@@ -4184,7 +4185,7 @@ void SettingsPanel::CreateUIColorsContent()
         section->AddChild(std::move(swatch));
 
         const uint32_t kDefaultSmartFolderIconTint = 0xFF6BA4F8;
-        AddDoubleClickReset(smartLabelPtr, [this, kDefaultSmartFolderIconTint]()
+        AddDoubleClickReset(smartLabelPtr, [this]()
         {
             m_UISmartFolderIconTint = kDefaultSmartFolderIconTint;
             auto prefs = Editor::OpenEditorPreferences();
@@ -4318,8 +4319,6 @@ void SettingsPanel::CreateUIAppearanceContent()
         return;
 
     CreateUIColorsContent();
-
-    m_ContentBody->AddContent(BuildSvgRasterSizeRow(Editor::SvgRasterSettingsScope::EditorUi));
 
     // Editor-wide boolean control presentation.
     {
@@ -7203,7 +7202,7 @@ void SettingsPanel::CreateUIInspectorContent()
         }
         syncFromValue(current);
 
-        auto onPicked = [this, leftCb, middleCb, rightCb, syncFromValue](const std::string& value) {
+        auto onPicked = [this, syncFromValue](const std::string& value) {
             syncFromValue(value);
             auto prefs = Editor::OpenEditorPreferences();
             std::string err;
@@ -7215,7 +7214,7 @@ void SettingsPanel::CreateUIInspectorContent()
         };
 
         // Derive selected value from checkbox state and notify once (robust to event order / double-firing)
-        auto applyFromSelection = [onPicked, leftCb, middleCb, rightCb]() {
+        auto applyFromSelection = [onPicked, middleCb, rightCb]() {
             const std::string value = middleCb->IsChecked() ? "middle" : (rightCb->IsChecked() ? "right" : "left");
             onPicked(value);
         };
@@ -8155,90 +8154,6 @@ void SettingsPanel::CreateCameraSettingsContent()
         createCameraSliderRow(config, "SettingsSceneCameraAcceleration");
     }
 
-    // Scene View pinned exposure (used while its Auto Exposure toggle is off)
-    {
-        SettingsSliderConfig config;
-        config.labelText = "Fixed Exposure (EV100)";
-        config.defaultValue = Components::kDefaultManualExposureEv;
-        config.initialValue = settings.GetPostFxFixedExposureEv();
-        config.minValue = SceneViewSettings::kMinExposureEv;
-        config.maxValue = SceneViewSettings::kMaxExposureEv;
-        config.step = 0.1f;
-        config.prefKey.clear(); // Use SceneViewSettings for persistence
-        config.onValueChanging = [](float value) {
-            SceneViewSettings::Get().SetPostFxFixedExposureEv(value, false);
-        };
-        config.onValueChanged = [](float value) {
-            SceneViewSettings::Get().SetPostFxFixedExposureEv(value);
-        };
-
-        createCameraSliderRow(config, "SettingsSceneCameraFixedEv");
-    }
-
-    {
-        m_ContentBody->AddContent(MakeSettingsInfoCard(
-            "EV100 the Scene View is pinned to while its Auto Exposure toggle (viewport "
-            "post-fx menu or camera popup) is off."));
-    }
-
-    // Scene View auto-metering tune (applies while Auto Exposure is on)
-    {
-        SettingsSliderConfig config;
-        config.labelText = "Auto Exposure Min EV100";
-        config.defaultValue = SceneViewSettings::kDefaultAutoExposureMinEv;
-        config.initialValue = settings.GetPostFxAutoExposureMinEv();
-        config.minValue = SceneViewSettings::kMinExposureEv;
-        config.maxValue = SceneViewSettings::kMaxExposureEv;
-        config.step = 0.1f;
-        config.prefKey.clear(); // Use SceneViewSettings for persistence
-        config.onValueChanging = [](float value) {
-            SceneViewSettings::Get().SetPostFxAutoExposureMinEv(value, false);
-        };
-        config.onValueChanged = [](float value) {
-            SceneViewSettings::Get().SetPostFxAutoExposureMinEv(value);
-        };
-
-        createCameraSliderRow(config, "SettingsSceneCameraAutoMinEv");
-    }
-
-    {
-        SettingsSliderConfig config;
-        config.labelText = "Auto Exposure Max EV100";
-        config.defaultValue = SceneViewSettings::kDefaultAutoExposureMaxEv;
-        config.initialValue = settings.GetPostFxAutoExposureMaxEv();
-        config.minValue = SceneViewSettings::kMinExposureEv;
-        config.maxValue = SceneViewSettings::kMaxExposureEv;
-        config.step = 0.1f;
-        config.prefKey.clear(); // Use SceneViewSettings for persistence
-        config.onValueChanging = [](float value) {
-            SceneViewSettings::Get().SetPostFxAutoExposureMaxEv(value, false);
-        };
-        config.onValueChanged = [](float value) {
-            SceneViewSettings::Get().SetPostFxAutoExposureMaxEv(value);
-        };
-
-        createCameraSliderRow(config, "SettingsSceneCameraAutoMaxEv");
-    }
-
-    {
-        SettingsSliderConfig config;
-        config.labelText = "Exposure Compensation";
-        config.defaultValue = 0.0f;
-        config.initialValue = settings.GetPostFxExposureCompensation();
-        config.minValue = -SceneViewSettings::kMaxExposureCompensation;
-        config.maxValue = SceneViewSettings::kMaxExposureCompensation;
-        config.step = 0.1f;
-        config.prefKey.clear(); // Use SceneViewSettings for persistence
-        config.onValueChanging = [](float value) {
-            SceneViewSettings::Get().SetPostFxExposureCompensation(value, false);
-        };
-        config.onValueChanged = [](float value) {
-            SceneViewSettings::Get().SetPostFxExposureCompensation(value);
-        };
-
-        createCameraSliderRow(config, "SettingsSceneCameraExposureComp");
-    }
-
     // Max orbit distance
     {
         SettingsSliderConfig config;
@@ -8297,7 +8212,7 @@ void SettingsPanel::CreateCameraSettingsContent()
         section->AddChild(std::move(swatch));
 
         constexpr uint32_t kDefaultBackgroundColor = 0xFF1A1A1Au;
-        AddDoubleClickReset(labelPtr, [this, kDefaultBackgroundColor]() {
+        AddDoubleClickReset(labelPtr, [this]() {
             m_SceneViewBackgroundColor = kDefaultBackgroundColor;
             SceneViewSettings::Get().SetBackgroundColor(kDefaultBackgroundColor);
             UpdateSceneViewBackgroundColorSwatchStyle();
@@ -8499,7 +8414,7 @@ void SettingsPanel::CreateCameraSettingsContent()
         section->AddChild(std::move(swatch));
 
         constexpr uint32_t kDefaultIndicatorColor = 0xF2F2664Du;
-        AddDoubleClickReset(labelPtr, [this, kDefaultIndicatorColor]() {
+        AddDoubleClickReset(labelPtr, [this]() {
             m_RulerIndicatorColor = kDefaultIndicatorColor;
             SceneViewSettings::Get().SetRulerIndicatorColor(kDefaultIndicatorColor);
             UpdateRulerIndicatorColorSwatchStyle();
@@ -8547,7 +8462,7 @@ void SettingsPanel::CreateCameraSettingsContent()
         section->AddChild(std::move(swatch));
 
         constexpr uint32_t kDefaultMeasureColor = 0xFFFFC738u;
-        AddDoubleClickReset(labelPtr, [this, kDefaultMeasureColor]() {
+        AddDoubleClickReset(labelPtr, [this]() {
             m_MeasureColor = kDefaultMeasureColor;
             SceneViewSettings::Get().SetMeasureColor(kDefaultMeasureColor);
             UpdateMeasureColorSwatchStyle();
@@ -8836,6 +8751,12 @@ void SettingsPanel::CreateCameraSettingsContent()
         CreateSettingsSliderRow(config, m_ContentBody);
     }
 
+    // Pages registered against the SceneView group render here, after the
+    // hand-built rows.
+    for (const auto& category : Editor::EditorSettingsRegistry::Get().Snapshot())
+        if (category.Group == Editor::SettingsCategoryGroup::SceneView)
+            CreateRegistrySettingsContent(category);
+
     // Description
     {
         m_ContentBody->AddContent(MakeSettingsInfoCard(
@@ -8854,9 +8775,9 @@ void SettingsPanel::SyncCameraSettingsControls()
     const Editor::SceneViewSettings& settings = Editor::SceneViewSettings::Get();
     auto sync = [this](const char* idPrefix, float value)
     {
-        if (auto* slider = dynamic_cast<Slider*>(FindById(std::string(idPrefix) + "Slider")))
+        if (auto* slider = dynamic_cast<Slider*>(FindById(HashStringId(std::string(idPrefix) + "Slider"))))
             slider->SetValueWithoutNotify(value);
-        if (auto* field = dynamic_cast<FloatField*>(FindById(std::string(idPrefix) + "Field")))
+        if (auto* field = dynamic_cast<FloatField*>(FindById(HashStringId(std::string(idPrefix) + "Field"))))
             field->SetValueWithoutNotify(value);
     };
 
@@ -8866,10 +8787,6 @@ void SettingsPanel::SyncCameraSettingsControls()
     sync("SettingsSceneCameraMoveSpeed", settings.GetMoveSpeed());
     sync("SettingsSceneCameraFastMultiplier", settings.GetFastMoveMultiplier());
     sync("SettingsSceneCameraAcceleration", settings.GetMoveAccelerationTime());
-    sync("SettingsSceneCameraFixedEv", settings.GetPostFxFixedExposureEv());
-    sync("SettingsSceneCameraAutoMinEv", settings.GetPostFxAutoExposureMinEv());
-    sync("SettingsSceneCameraAutoMaxEv", settings.GetPostFxAutoExposureMaxEv());
-    sync("SettingsSceneCameraExposureComp", settings.GetPostFxExposureCompensation());
 }
 
 
@@ -8938,122 +8855,15 @@ void CreateSettingsDropdownRow(const SettingsDropdownConfig& config, ScrollView*
     contentBody->AddContent(std::move(row));
 }
 
-struct SettingsTextFieldConfig
+// Adds a text or path row built by Editor::CreateSettingsTextFieldRow, with the label's
+// double-click reset, and its refusal line under it.
+void AddSettingsTextFieldRow(const Editor::SettingsTextFieldRowConfig& config, ScrollView* contentBody)
 {
-    std::string labelText;
-    std::string tooltip;
-    std::string defaultValue;
-    std::string prefKey;
-    std::function<std::string()> get;
-    std::function<void(const std::string&)> onValueChanged;
-    // When set, a Browse button opens the native picker of this kind and writes
-    // the chosen path into the field.
-    std::optional<Editor::SettingsFieldDescriptor::PathField::Kind> browseKind;
-};
-
-void CreateSettingsTextFieldRow(const SettingsTextFieldConfig& config, ScrollView* contentBody)
-{
-    auto row = std::make_unique<UIElement>();
-    row->AddClass("settings-row");
-
-    auto label = std::make_unique<Label>();
-    label->SetText(config.labelText);
-    if (!config.tooltip.empty())
-        label->SetTooltip(config.tooltip);
-    label->AddClass("settings-row-label");
-    Label* labelPtr = label.get();
-    row->AddChild(std::move(label));
-
-    std::string currentValue = config.defaultValue;
-    if (config.get)
-    {
-        currentValue = config.get();
-    }
-    else if (!config.prefKey.empty())
-    {
-        auto prefs = Editor::OpenEditorPreferences();
-        std::string err;
-        prefs.Load(&err);
-        prefs.TryGetString(config.prefKey, currentValue);
-    }
-
-    auto field = std::make_unique<TextField>();
-    field->SetValue(currentValue);
-    if (!config.tooltip.empty())
-        field->SetTooltip(config.tooltip);
-    field->AddClass("settings-row-field");
-    TextField* fieldPtr = field.get();
-
-    // One commit path for typing, focus-out, Browse and double-click-to-reset,
-    // so a value can never reach the callback without reaching the store.
-    //
-    // Focus-out fires whether or not the user typed anything, so an unchanged
-    // value must not write: tabbing through a page is not an edit, and writing
-    // there would persist the row's own default and stop that key tracking the
-    // default from then on. Same obligation the toggle and slider rows carry.
-    auto committed = std::make_shared<std::string>(currentValue);
-    auto commit = [onChanged = config.onValueChanged, prefKey = config.prefKey,
-                   committed](const std::string& value)
-    {
-        if (*committed == value)
-            return;
-        *committed = value;
-        if (onChanged)
-            onChanged(value);
-        if (!prefKey.empty())
-        {
-            auto prefs = Editor::OpenEditorPreferences();
-            std::string err;
-            prefs.Load(&err);
-            prefs.SetString(prefKey, value);
-            prefs.Save(&err);
-        }
-    };
-
-    fieldPtr->SetOnValueChanged(commit);
-    fieldPtr->RegisterEventHandler(kEventFocusOut,
-                                   [fieldPtr, commit](UIEvent&) { commit(fieldPtr->GetValue()); });
-    row->AddChild(std::move(field));
-
-    if (config.browseKind.has_value())
-    {
-        using PathKind = Editor::SettingsFieldDescriptor::PathField::Kind;
-        const PathKind kind = *config.browseKind;
-
-        auto browse = std::make_unique<Button>();
-        browse->SetText("Browse...");
-        browse->AddClass("small");
-        browse->AddClass("secondary");
-        browse->SetTooltip(kind == PathKind::Directory ? "Choose a folder." : "Choose a file.");
-        browse->RegisterEventHandler(kEventButtonClick, [fieldPtr, commit, kind](UIEvent&)
-        {
-            // Seed the picker from the current value when it names a real
-            // location, else from the open project.
-            std::filesystem::path initial = EngineCore::GetInstance().GetWorkspaceRoot();
-            const std::filesystem::path current(fieldPtr->GetValue());
-            std::error_code ec;
-            if (!current.empty() && std::filesystem::exists(current, ec))
-                initial = current;
-
-            const std::filesystem::path picked = kind == PathKind::Directory
-                                                     ? Platform::SelectFolder(initial)
-                                                     : Platform::SelectFile(initial);
-            if (picked.empty())
-                return; // cancelled
-            const std::string value = picked.string();
-            fieldPtr->SetValue(value);
-            commit(value);
-        });
-        row->AddChild(std::move(browse));
-    }
-
-    AddDoubleClickReset(labelPtr, [fieldPtr, commit, defaultValue = config.defaultValue]()
-    {
-        fieldPtr->SetValue(defaultValue);
-        commit(defaultValue);
-    });
-
-    contentBody->AddContent(std::move(row));
+    Editor::SettingsTextFieldRow row = Editor::CreateSettingsTextFieldRow(config);
+    AddDoubleClickReset(row.RowLabel, row.Reset);
+    contentBody->AddContent(std::move(row.Row));
+    if (row.Refusal)
+        contentBody->AddContent(std::move(row.Refusal));
 }
 
 // Subsection break above a field, for pages whose rows fall into named groups.
@@ -9156,26 +8966,28 @@ void SettingsPanel::CreateRegistrySettingsContent(const Editor::SettingsCategory
         }
         else if (const auto* text = std::get_if<SettingsFieldDescriptor::StringField>(&field.Control))
         {
-            SettingsTextFieldConfig config;
-            config.labelText = field.Label;
-            config.tooltip = field.Tooltip;
-            config.defaultValue = text->DefaultValue;
-            config.prefKey = field.PrefKey;
-            config.get = text->Get;
-            config.onValueChanged = text->Set;
-            CreateSettingsTextFieldRow(config, m_ContentBody);
+            Editor::SettingsTextFieldRowConfig config;
+            config.LabelText = field.Label;
+            config.Tooltip = field.Tooltip;
+            config.DefaultValue = text->DefaultValue;
+            config.PrefKey = field.PrefKey;
+            config.Get = text->Get;
+            config.Set = text->Set;
+            config.Validate = text->Validate;
+            config.Placeholder = text->Placeholder;
+            AddSettingsTextFieldRow(config, m_ContentBody);
         }
         else if (const auto* path = std::get_if<SettingsFieldDescriptor::PathField>(&field.Control))
         {
-            SettingsTextFieldConfig config;
-            config.labelText = field.Label;
-            config.tooltip = field.Tooltip;
-            config.defaultValue = path->DefaultValue;
-            config.prefKey = field.PrefKey;
-            config.get = path->Get;
-            config.onValueChanged = path->Set;
-            config.browseKind = path->PathKind;
-            CreateSettingsTextFieldRow(config, m_ContentBody);
+            Editor::SettingsTextFieldRowConfig config;
+            config.LabelText = field.Label;
+            config.Tooltip = field.Tooltip;
+            config.DefaultValue = path->DefaultValue;
+            config.PrefKey = field.PrefKey;
+            config.Get = path->Get;
+            config.Set = path->Set;
+            config.BrowseKind = path->PathKind;
+            AddSettingsTextFieldRow(config, m_ContentBody);
         }
         else if (const auto* button = std::get_if<SettingsFieldDescriptor::ButtonField>(&field.Control))
         {
@@ -10135,7 +9947,7 @@ void SettingsPanel::CreateAssetImportSettingsContent()
         sectionHeader->AddClass("settings-section-header");
         m_ContentBody->AddContent(std::move(sectionHeader));
     }
-    m_ContentBody->AddContent(BuildSvgRasterSizeRow(Editor::SvgRasterSettingsScope::TextureImport));
+    m_ContentBody->AddContent(BuildSvgRasterSizeRow());
 
     {
         auto sectionHeader = std::make_unique<Label>();
@@ -10773,7 +10585,7 @@ void SettingsPanel::CreateHDROutputSettingsContent()
         auto toggle = std::make_unique<Toggle>();
         toggle->SetChecked(hdrEnabled);
         Editor::SceneViewSettings::Get().SetHdrOutputEnabled(hdrEnabled);
-        toggle->SetOnValueChanged([this, saveHdrSetting, requestHdrOutputRefresh, setHdrControlsVisible, rebuildHdrContent](const bool& enabled) {
+        toggle->SetOnValueChanged([saveHdrSetting, requestHdrOutputRefresh, setHdrControlsVisible, rebuildHdrContent](const bool& enabled) {
             saveHdrSetting([enabled](nlohmann::json& hdr)
             {
                 hdr["enabled"] = enabled;
@@ -11387,6 +11199,7 @@ void SettingsPanel::CreatePerformanceSettingsContent()
                 {
                     case Rendering::GraphicsAPI::Vulkan: activeApi = "Vulkan"; break;
                     case Rendering::GraphicsAPI::Metal: activeApi = "Metal"; break;
+                    case Rendering::GraphicsAPI::WebGPU: activeApi = "WebGPU"; break;
                     case Rendering::GraphicsAPI::DirectX12: activeApi = "DirectX 12"; break;
                     case Rendering::GraphicsAPI::Auto: activeApi = "Auto"; break;
                 }
@@ -11775,7 +11588,7 @@ void SettingsPanel::CreateTagsSettingsContent()
         sectionHeader->AddClass("settings-section-header");
         sectionHeader->SetFocusable(true);
         constexpr uint32_t kCmdResetTagsToDefaults = 1;
-        sectionHeader->RegisterEventHandler(kEventMouseDown, [this, kCmdResetTagsToDefaults](UIEvent& e) {
+        sectionHeader->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e) {
             if (e.Button != 1 || !m_EditorContext || !m_EditorContext->MainWindow)
                 return;
             e.Stop();
@@ -11808,7 +11621,7 @@ void SettingsPanel::CreateTagsSettingsContent()
                         auto processBatchRef = std::make_shared<std::function<void()>>();
                         *processBatchRef = [processBatchRef, panel, paths = std::move(paths),
                                            defaultNamesLower = std::move(defaultNamesLower),
-                                           nextIndex, batchSize]() {
+                                           nextIndex]() {
                             AssetRegistry& registry = EngineCore::GetInstance().GetAssetManager().GetRegistry();
                             const size_t start = *nextIndex;
                             const size_t end = (std::min)(start + batchSize, paths.size());
@@ -11890,9 +11703,8 @@ void SettingsPanel::CreateTagsSettingsContent()
             .Set(Style::Width, StyleLength::Px(20.0f)).Set(Style::Height, StyleLength::Px(20.0f)).Set(Style::MinWidth, StyleLength::Px(20.0f)).Set(Style::MinHeight, StyleLength::Px(20.0f))
             .Set(Style::BorderRadius, CornerRadiiTLTRBRBL{4.0f, 4.0f, 4.0f, 4.0f}).Set(Style::BorderWidth, Box4{1.0f, 1.0f, 1.0f, 1.0f}).Set(Style::BorderColor, BorderColorsTRBL{0xFF555555u, 0xFF555555u, 0xFF555555u, 0xFF555555u})
             .Set(Style::BackgroundColor, (uint32_t)swatchArgb).Set(Style::FlexShrink, 0.0f).Set(Style::Cursor, CursorStyle::Pointer);
-        UIElement* swatchPtr = swatch.get();
 
-        swatch->RegisterEventHandler(kEventMouseDown, [this, tagIndex, swatchPtr, hasProject](UIEvent& e) {
+        swatch->RegisterEventHandler(kEventMouseDown, [this, tagIndex, hasProject](UIEvent& e) {
             if (e.Button != 0 || !hasProject) return;
             std::vector<EditorTagDefinition> current = EditorTags::Load();
             if (tagIndex >= current.size()) return;
@@ -11925,7 +11737,7 @@ void SettingsPanel::CreateTagsSettingsContent()
         nameField->SetOnValueChanged([this, tagIndex, hasProject](const std::string& newName) {
             if (!hasProject || newName.empty()) return;
             std::string nameCopy = newName;
-            this->PostAction([this, tagIndex, nameCopy]() {
+            this->PostAction([tagIndex, nameCopy]() {
                 std::vector<EditorTagDefinition> t = EditorTags::Load();
                 if (tagIndex < t.size()) {
                     t[tagIndex].Name = nameCopy;
@@ -12970,7 +12782,6 @@ void SettingsPanel::RegisterSearchableItems()
     m_SearchableItems.push_back({"Smart Folder Icon Tint", "smart folder icon tint color", SettingsCategory::UIAppearance, nullptr});
     m_SearchableItems.push_back({"Curve Time Dot", "curve playback current time indicator dot color", SettingsCategory::UIAppearance, nullptr});
     m_SearchableItems.push_back({"Scrollbar Thumb Color", "scrollbar thumb color", SettingsCategory::UIAppearance, nullptr});
-    m_SearchableItems.push_back({"UI SVG Raster Size", "ui svg raster resolution size icons", SettingsCategory::UIAppearance, nullptr});
     m_SearchableItems.push_back({"Use Checkmarks for Toggles", "checkbox checkmark toggle switch boolean style", SettingsCategory::UIAppearance, nullptr});
     m_SearchableItems.push_back({"Use system display scaling", "hidpi dpi retina display scaling", SettingsCategory::UIHiDpi, nullptr});
     m_SearchableItems.push_back({"Additional UI scale", "hidpi dpi 100% 125% 150% 200% zoom", SettingsCategory::UIHiDpi, nullptr});
@@ -13115,6 +12926,8 @@ void SettingsPanel::RegisterSearchableItems()
                 category = SettingsCategory::VersionControl;
             else if (categories[i].Group == Editor::SettingsCategoryGroup::UIAppearance)
                 category = SettingsCategory::UIAppearance;
+            else if (categories[i].Group == Editor::SettingsCategoryGroup::SceneView)
+                category = SettingsCategory::Camera;
             if (!categories[i].SearchKeywords.empty())
             {
                 std::string keywords = categories[i].Title + " " + categories[i].SearchKeywords;

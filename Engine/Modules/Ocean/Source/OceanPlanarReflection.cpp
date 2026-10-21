@@ -304,6 +304,9 @@ bool OceanPlanarReflection::DeclareForView(Engine::Renderer::Pipeline::ViewDecla
     // Instanced only (no Shadows): the reflection view is inactive, so no cascade
     // pass ran for it — a Shadows keyword would just bind the dummy array. Matches
     // the thumbnail path. Reflections are sun/sky/ambient lit without self-shadow.
+    // The reflection view runs no render graph, so it binds the fallback ExposureHistory (pre-exposure
+    // reads as 1): the reflection stores absolute radiance, and the water surface that samples it
+    // applies the main view's P to its output.
     const auto world =
         rs.AddWorldPassForView(d.Frame, m_ViewId, targets, Rendering::MaterialKeyword::Instanced);
     if (!world.Pass.IsValid())

@@ -9,6 +9,7 @@
 
 #include "Logger/Logger.h"
 
+#include <iomanip>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -145,7 +146,7 @@ void UIManager::EmitDebugCapture()
         m_DebugCaptureOut << "\"id\":";
         writeString(probeId ? probeId : "");
 
-        UIElement* el = (m_Root && probeId) ? m_Root->FindById(probeId) : nullptr;
+        UIElement* el = (m_Root && probeId) ? m_Root->FindById(HashStringId(probeId)) : nullptr;
         m_DebugCaptureOut << ",\"exists\":";
         writeBool(el != nullptr);
         if (el)
@@ -215,8 +216,8 @@ void UIManager::EmitDebugCapture()
         }
     }
 
-    UIElement* colorPickerDialog = m_Root ? m_Root->FindById("colorpicker-dialog-picker") : nullptr;
-    UIElement* colorPickerPalette = m_Root ? m_Root->FindById("colorpicker-palette") : nullptr;
+    UIElement* colorPickerDialog = m_Root ? m_Root->FindById("colorpicker-dialog-picker"_sid) : nullptr;
+    UIElement* colorPickerPalette = m_Root ? m_Root->FindById("colorpicker-palette"_sid) : nullptr;
     const size_t paletteSwatchCount = colorPickerPalette ? colorPickerPalette->GetChildren().size() : 0u;
 
     static constexpr const char* kColorPickerProbeIds[] =
@@ -258,7 +259,7 @@ void UIManager::EmitDebugCapture()
     m_DebugCaptureOut << "\"fileStylesheets\":" << m_FileStylesheets.size() << ",";
     m_DebugCaptureOut << "\"externalTextures\":" << m_ExternalRGRegistrations.size() << ",";
     m_DebugCaptureOut << "\"externalDeviceTextures\":" << m_ExternalDeviceTextures.size() << ",";
-    m_DebugCaptureOut << "\"bgTextureCache\":" << m_BgTextureCache.size() << ",";
+    m_DebugCaptureOut << "\"bgTextureCache\":" << m_BackgroundImages.EntryCount() << ",";
     m_DebugCaptureOut << "\"rootChildCount\":" << (m_Root ? m_Root->GetChildren().size() : 0u);
     m_DebugCaptureOut << "},";
 

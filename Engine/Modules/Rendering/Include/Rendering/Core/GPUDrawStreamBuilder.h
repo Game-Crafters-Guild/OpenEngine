@@ -20,8 +20,10 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <span>
 #include <string>
@@ -302,8 +304,15 @@ class GPUDrawStreamBuilder
         uint32_t capacity;     // snapshot live-instance count = per-batch draw bound
     };
 
+    /// Rows a batch table of `registry` can hold: one per winding parity of
+    /// each batch. Every Build*BatchTable writes into a `table` span at least
+    /// this long.
+    static size_t BatchTableCapacity(const BatchRegistry& registry);
+
     /// Snapshot the registry into a sorted table with exclusive-prefix record
-    /// offsets. `outTotalRecords` receives the per-slice record count
+    /// offsets, written to the front of `table` (BatchTableCapacity entries at
+    /// least) and returned; the merge map's memory comes from `scratch`.
+    /// `outTotalRecords` receives the per-slice record count
     /// (Σ capacities = live instances at snapshot). `meshPoolGroup` (indexed
     /// by meshIndex, MeshPoolGroupPlan values) is the draw-consolidation mesh
     /// axis: non-empty remaps every row's mesh field to its pool-group id and
@@ -311,9 +320,11 @@ class GPUDrawStreamBuilder
     /// per (classKey, mesh). Σ capacities is invariant either way. An empty
     /// span is the consolidation-OFF signal: today's per-mesh table,
     /// bit-for-bit. Pure; no GPU work.
-    static std::vector<BatchTableEntry> BuildBatchTable(const BatchRegistry& registry,
-                                                        std::span<const uint32_t> meshPoolGroup,
-                                                        uint32_t* outTotalRecords = nullptr);
+    static std::span<BatchTableEntry> BuildBatchTable(const BatchRegistry& registry,
+                                                      std::span<const uint32_t> meshPoolGroup,
+                                                      std::span<BatchTableEntry> table,
+                                                      std::pmr::memory_resource& scratch,
+                                                      uint32_t* outTotalRecords = nullptr);
 
     /// Reserved materialIndex values (top of the 24-bit sort domain) that stand
     /// in for the two shared-depth class buckets in the SHADOW batch table.
@@ -357,10 +368,12 @@ class GPUDrawStreamBuilder
     /// the mesh's single/double-sided class sentinel, material-dependent ones
     /// keep their (materialIndex, mesh) identity. Σ capacities == the color
     /// table's total (merging only reduces the row count, never the record
-    /// count). Pure; no GPU work.
-    static std::vector<BatchTableEntry> BuildShadowBatchTable(
+    /// count). Writes and returns the rows as BuildBatchTable does. Pure; no
+    /// GPU work.
+    static std::span<BatchTableEntry> BuildShadowBatchTable(
         const BatchRegistry& registry, std::span<const uint8_t> materialDepthClass,
-        std::span<const uint32_t> meshPoolGroup, uint32_t* outTotalRecords = nullptr);
+        std::span<const uint32_t> meshPoolGroup, std::span<BatchTableEntry> table,
+        std::pmr::memory_resource& scratch, uint32_t* outTotalRecords = nullptr);
 
     /// Color twin of BuildShadowBatchTable for the cascade=None color/depth-
     /// prepass table (P2 cross-material merge). `materialColorClass` is indexed
@@ -371,10 +384,12 @@ class GPUDrawStreamBuilder
     /// preserved (only the row count drops, so the shadowRecords==colorRecords
     /// contract survives). Asserts the class-id domain never aliases a real
     /// materialIndex present in the same table. An empty span is the flag-OFF
-    /// signal (callers use BuildBatchTable instead). Pure; no GPU work.
-    static std::vector<BatchTableEntry> BuildColorBatchTable(
+    /// signal (callers use BuildBatchTable instead). Writes and returns the
+    /// rows as BuildBatchTable does. Pure; no GPU work.
+    static std::span<BatchTableEntry> BuildColorBatchTable(
         const BatchRegistry& registry, std::span<const uint32_t> materialColorClass,
-        std::span<const uint32_t> meshPoolGroup, uint32_t* outTotalRecords = nullptr);
+        std::span<const uint32_t> meshPoolGroup, std::span<BatchTableEntry> table,
+        std::pmr::memory_resource& scratch, uint32_t* outTotalRecords = nullptr);
 
     /// Lazily create the scatter compute pipeline
     /// (Shaders/draw_command_scatter.shaderpkg via the same loader as the

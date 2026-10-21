@@ -4,6 +4,10 @@
 // or persistence implementation lives here. Reintroducing its whole-sweep return
 // must fail this test. This is not a live GPU/orbit integration test.
 #include "Thumbnails/ModelThumbnailCachePolicy.h"
+#include "Image/PixelImage.h"
+#include "Image/Decode.h"
+#include "Image/Encode.h"
+#include "Image/Resample.h"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <chrono>
@@ -17,14 +21,8 @@
 #include <mutex>
 #include <optional>
 #include <unordered_set>
+#include <iterator>
 #include <vector>
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include <stb_image_resize2.h>
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
 
 namespace ThumbnailPersistenceHost
 {
@@ -84,6 +82,8 @@ struct Log
 };
 }
 namespace JobSystem { enum class JobPriority { Background }; }
+// The real encoder and resampler: the persistence block writes PNGs through them.
+namespace Image = GameEngine::Image;
 struct EngineCore
 {
     static EngineCore& GetInstance() { static EngineCore instance; return instance; }
@@ -328,12 +328,12 @@ TEST(ThumbnailPersistence, ReadyGridSlotPublishesPngWhileAnotherModelIsUnsettled
     EXPECT_EQ(frame.importedTexture, 2);
     EXPECT_FALSE(std::filesystem::exists(handler.ComputeModelCachePath(focused)));
     ASSERT_TRUE(std::filesystem::exists(handler.ComputeModelCachePath(ready)));
-    int width = 0, height = 0, channels = 0;
-    auto* pixels = stbi_load(handler.ComputeModelCachePath(ready).string().c_str(), &width, &height, &channels, 4);
-    ASSERT_NE(pixels, nullptr);
-    EXPECT_EQ(width, 4); EXPECT_EQ(height, 4);
-    EXPECT_EQ(pixels[0], 255); EXPECT_EQ(pixels[3], 255);
-    stbi_image_free(pixels);
+    std::ifstream png(handler.ComputeModelCachePath(ready), std::ios::binary);
+    const std::vector<uint8_t> pngBytes((std::istreambuf_iterator<char>(png)), std::istreambuf_iterator<char>());
+    const Image::Image8 pixels = Image::Decode8(pngBytes, "the ready slot's cached PNG", Image::DecodeChannels::Rgba);
+    ASSERT_TRUE(pixels.Valid);
+    EXPECT_EQ(pixels.Width, 4u); EXPECT_EQ(pixels.Height, 4u);
+    EXPECT_EQ(pixels.Pixels[0], 255); EXPECT_EQ(pixels.Pixels[3], 255);
 }
 
 // A material tile is cached only from a settled render: its first renders can

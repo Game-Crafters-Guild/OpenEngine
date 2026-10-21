@@ -98,7 +98,7 @@ void AddEditKnotsRow(const InspectorContext& ctx, MarkupEditorBridge& bridge, co
     button->RegisterEventHandler(kEventButtonClick, [ctx, &bridge](UIEvent&) {
         if (bridge.IsInPlayMode())
             return;
-        bridge.SelectMarkup(*ctx.World, ctx.Entity, false);
+        bridge.SelectMarkup(*ctx.World, ctx.Entity);
         if (SceneViewController* view = bridge.GetSceneView())
             view->SetActiveRegisteredTool("spline");
     });

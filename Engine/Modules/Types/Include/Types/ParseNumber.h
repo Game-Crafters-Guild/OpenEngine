@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,23 +31,35 @@
 namespace GameEngine
 {
 
-// Locale-independent float parse. Returns the value on success, nullopt on
-// failure. If charsConsumed is non-null, stores the number of characters that
-// were part of the parsed number (callers can use this to inspect trailing
-// suffixes like "px" or "%").
-inline std::optional<float> ParseFloat(std::string_view s, size_t* charsConsumed = nullptr)
+// The outcome of a locale-independent number parse.
+enum class ParseNumberStatus : uint8_t
+{
+    Ok,
+    // No number starts the text.
+    NoNumber,
+    // The text is a number, but past the type's range: an overflow, or an underflow that would
+    // round to zero. A subnormal is in range.
+    OutOfRange,
+};
+
+// Locale-independent float parse of the number at the start of `s`. On Ok, outValue holds the
+// value and charsConsumed the count of characters that were part of the number (callers can use
+// this to inspect trailing suffixes like "px" or "%"); on any other status both are unchanged.
+inline ParseNumberStatus ParseFloat(std::string_view s, float& outValue, size_t& charsConsumed)
 {
     if (s.empty())
-        return std::nullopt;
+        return ParseNumberStatus::NoNumber;
 
 #ifdef GE_FLOAT_CHARCONV_AVAILABLE
     float result = 0.0f;
     auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec == std::errc::result_out_of_range)
+        return ParseNumberStatus::OutOfRange;
     if (ec != std::errc{})
-        return std::nullopt;
-    if (charsConsumed)
-        *charsConsumed = static_cast<size_t>(ptr - s.data());
-    return result;
+        return ParseNumberStatus::NoNumber;
+    outValue = result;
+    charsConsumed = static_cast<size_t>(ptr - s.data());
+    return ParseNumberStatus::Ok;
 #else
     constexpr size_t kBufSize = 128;
     char buf[kBufSize];
@@ -68,27 +81,33 @@ inline std::optional<float> ParseFloat(std::string_view s, size_t* charsConsumed
     char* end = nullptr;
     errno = 0;
     float result = strtof_l(str, &end, cLocale);
-    if (end == str || errno == ERANGE)
-        return std::nullopt;
-    if (charsConsumed)
-        *charsConsumed = static_cast<size_t>(end - str);
-    return result;
+    if (end == str)
+        return ParseNumberStatus::NoNumber;
+    // libc may set ERANGE for a subnormal it represents; from_chars accepts those.
+    if (errno == ERANGE && (result == 0.0f || std::isinf(result)))
+        return ParseNumberStatus::OutOfRange;
+    outValue = result;
+    charsConsumed = static_cast<size_t>(end - str);
+    return ParseNumberStatus::Ok;
 #endif
 }
 
-inline std::optional<double> ParseDouble(std::string_view s, size_t* charsConsumed = nullptr)
+// ParseFloat above for double.
+inline ParseNumberStatus ParseDouble(std::string_view s, double& outValue, size_t& charsConsumed)
 {
     if (s.empty())
-        return std::nullopt;
+        return ParseNumberStatus::NoNumber;
 
 #ifdef GE_FLOAT_CHARCONV_AVAILABLE
     double result = 0.0;
     auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec == std::errc::result_out_of_range)
+        return ParseNumberStatus::OutOfRange;
     if (ec != std::errc{})
-        return std::nullopt;
-    if (charsConsumed)
-        *charsConsumed = static_cast<size_t>(ptr - s.data());
-    return result;
+        return ParseNumberStatus::NoNumber;
+    outValue = result;
+    charsConsumed = static_cast<size_t>(ptr - s.data());
+    return ParseNumberStatus::Ok;
 #else
     constexpr size_t kBufSize = 128;
     char buf[kBufSize];
@@ -110,12 +129,67 @@ inline std::optional<double> ParseDouble(std::string_view s, size_t* charsConsum
     char* end = nullptr;
     errno = 0;
     double result = strtod_l(str, &end, cLocale);
-    if (end == str || errno == ERANGE)
+    if (end == str)
+        return ParseNumberStatus::NoNumber;
+    // libc may set ERANGE for a subnormal it represents; from_chars accepts those.
+    if (errno == ERANGE && (result == 0.0 || std::isinf(result)))
+        return ParseNumberStatus::OutOfRange;
+    outValue = result;
+    charsConsumed = static_cast<size_t>(end - str);
+    return ParseNumberStatus::Ok;
+#endif
+}
+
+// Locale-independent float parse. Returns the value on success, nullopt when no number starts
+// the text or it is out of a float's range. If charsConsumed is non-null, stores the number of
+// characters that were part of the parsed number.
+inline std::optional<float> ParseFloat(std::string_view s, size_t* charsConsumed = nullptr)
+{
+    float value = 0.0f;
+    size_t consumed = 0;
+    if (ParseFloat(s, value, consumed) != ParseNumberStatus::Ok)
         return std::nullopt;
     if (charsConsumed)
-        *charsConsumed = static_cast<size_t>(end - str);
-    return result;
-#endif
+        *charsConsumed = consumed;
+    return value;
+}
+
+inline std::optional<double> ParseDouble(std::string_view s, size_t* charsConsumed = nullptr)
+{
+    double value = 0.0;
+    size_t consumed = 0;
+    if (ParseDouble(s, value, consumed) != ParseNumberStatus::Ok)
+        return std::nullopt;
+    if (charsConsumed)
+        *charsConsumed = consumed;
+    return value;
+}
+
+// The number at the start of `text` as std::stof reads one, without its throw: leading ASCII
+// space and one '+' are skipped, then ParseFloat reads the number, locale-independent. With
+// std::from_chars for float that reads decimal numbers, inf, infinity and nan as std::stof does,
+// and no hex, which std::stof takes; where ParseFloat falls back to strtof_l, hex is read too.
+// Nullopt when no number starts the text or it is out of a float's range, where std::stof throws.
+// If charsConsumed is non-null, it counts the characters read, the leading space and sign
+// included. For authored data whose parse must never throw: the web build has no exception
+// catching.
+inline std::optional<float> ParseLeadingFloat(std::string_view text, size_t* charsConsumed = nullptr)
+{
+    size_t skipped = 0;
+    while (skipped < text.size() && std::isspace(static_cast<unsigned char>(text[skipped])))
+        ++skipped;
+    if (skipped < text.size() && text[skipped] == '+')
+    {
+        ++skipped;
+        // std::stof refuses a second sign after '+'; ParseFloat would read the '-'.
+        if (skipped < text.size() && text[skipped] == '-')
+            return std::nullopt;
+    }
+    size_t consumed = 0;
+    const std::optional<float> value = ParseFloat(text.substr(skipped), &consumed);
+    if (value && charsConsumed)
+        *charsConsumed = skipped + consumed;
+    return value;
 }
 
 // Strict decimal parse: the intersection of what std::from_chars and strtod_l

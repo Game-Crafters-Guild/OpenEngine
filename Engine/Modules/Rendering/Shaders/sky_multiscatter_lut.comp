@@ -1,7 +1,8 @@
 #version 450
 
 // Hillaire 2020 multiple-scattering LUT.
-// Keyed by (u = sunCosZenith mapped [-1,1]->[0,1], v = normalized height [0,1]).
+// Keyed by the sun's zenith cosine and the normalised height, with the half-texel inset
+// (Includes/sky_multiscatter_lut.glsl).
 // Each texel integrates second-order scattered light (L2) and the multiscatter
 // feedback fraction (fms) over the full sphere of incoming directions, then sums
 // the geometric series Psi_ms = L2 / (1 - fms) to get the infinite-bounce factor.
@@ -19,7 +20,7 @@ layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D oMultiscatterLUT
 layout(set = 0, binding = 1) uniform sampler2D uTransmittanceLUT;
 
 #include "Includes/sky_atmosphere_ubo.glsl"
-#include "Includes/sky_ray_sphere.glsl"
+#include "Includes/sky_multiscatter_lut.glsl"
 
 const float PI = 3.14159265359;
 const float kInvFourPi = 1.0 / (4.0 * PI);
@@ -33,26 +34,17 @@ const int kNumDirections = kSqrtSamples * kSqrtSamples;
 // while staying smooth (Hillaire uses ~20-40 here).
 const int kNumSteps = 32;
 
-// Same parameterization as sky_view_lut.comp: u = 0.5 + 0.5*cosZenith,
-// v = sqrt(normalizedHeight). 'height' is the absolute radius from planet center.
-vec3 GetTransmittance(float height, float zenithCos)
-{
-    float u_mu = 0.5 + 0.5 * zenithCos;
-    float rNorm = clamp((height - uAtmos.planetRadius) / (uAtmos.atmosphereRadius - uAtmos.planetRadius), 0.0, 1.0);
-    float u_r = sqrt(rNorm);
-    return texture(uTransmittanceLUT, vec2(u_mu, u_r)).rgb;
-}
-
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(oMultiscatterLUT);
     if (pixel.x >= size.x || pixel.y >= size.y) return;
 
-    // u -> sun cosine zenith in [-1,1]; v -> normalized height in [0,1].
-    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
-    float sunCosZenith = uv.x * 2.0 - 1.0;
-    float heightNorm = clamp(uv.y, 0.0, 1.0);
+    // The sun's zenith cosine and the normalised height this texel centre stands for
+    // (Includes/sky_multiscatter_lut.glsl).
+    vec2 params = GE_SkyMultiscatterLutParams((vec2(pixel) + 0.5) / vec2(size), vec2(size));
+    float sunCosZenith = params.x;
+    float heightNorm = params.y;
 
     // Sample point on the planet 'up' axis at the requested altitude. The frame
     // is built so 'up' = +Y; the sun direction is reconstructed purely from
@@ -92,17 +84,20 @@ void main()
             float tStart = max(0.0, t0);
             float tEnd = t1;
 
-            // Clip the march to the ground if the ray hits the planet.
+            // Clip the march to the ground if the ray hits the planet: a downward ray that
+            // meets the sphere ahead. The lowest row's sample sits on the ground, where a
+            // downward ray meets it at once (t = 0).
             float tg0, tg1;
-            if (GE_RaySphereIntersect(samplePos, omega, planetCenter, uAtmos.planetRadius, tg0, tg1))
+            bool hitsGround = false;
+            if (omega.y < 0.0 &&
+                GE_RaySphereIntersect(samplePos, omega, planetCenter, uAtmos.planetRadius, tg0, tg1) &&
+                tg1 > 0.0)
             {
-                if (tg0 > 0.0) tEnd = min(tEnd, tg0);
+                tEnd = min(tEnd, max(tg0, 0.0));
+                hitsGround = true;
             }
 
-            if (tEnd <= tStart)
-                continue;
-
-            float dt = (tEnd - tStart) / float(kNumSteps);
+            float dt = max(tEnd - tStart, 0.0) / float(kNumSteps);
             float t = tStart + 0.5 * dt;
 
             vec3 pathTransmittance = vec3(1.0);
@@ -114,47 +109,68 @@ void main()
                 float h = r - uAtmos.planetRadius;
                 if (h < 0.0) break;
 
-                float rhoRay = exp(-h / uAtmos.rayleighScaleHeight);
-                float rhoMie = exp(-h / uAtmos.mieScaleHeight);
-
-                vec3 sigmaS_Ray = uAtmos.betaRayleigh * rhoRay;
-                vec3 sigmaS_Mie = uAtmos.betaMie * rhoMie;
-                vec3 sigmaS = sigmaS_Ray + sigmaS_Mie;
-                // Mie absorption matches sky_view_lut.comp (sigmaE = scatter + 0.1*Mie).
-                vec3 sigmaE = sigmaS_Ray + sigmaS_Mie * 1.1;
+                GE_SkyMedium medium = GE_SkyMediumAt(h);
+                vec3 sigmaS = medium.scatterRayleigh + medium.scatterMie;
+                vec3 sigmaE = medium.extinction;
 
                 vec3 stepTransmittance = exp(-sigmaE * dt);
 
-                // Transmittance from this sample point toward the sun (sun shadow).
+                // Transmittance from this sample point toward the sun, 0 where the planet
+                // is in the way (the planet's shadow).
                 vec3 upP = (p - planetCenter) / r;
                 float sunZenith = dot(upP, sunDir);
-                vec3 transToSun = GetTransmittance(r, sunZenith);
+                vec3 transToSun = GE_SkyTransmittanceToTop(uTransmittanceLUT, r, sunZenith,
+                                                           uAtmos.planetRadius, uAtmos.atmosphereRadius);
 
                 // Energy-conserving analytic integral of in-scattered light over
                 // the step: integral(sigmaS * T(s)) ds = sigmaS * (1 - stepT) / sigmaE.
                 // (sigmaS / sigmaE) is the single-scatter albedo of the step.
                 vec3 stepIntegral = (sigmaS - sigmaS * stepTransmittance) / max(sigmaE, vec3(1e-9));
 
-                // L2: incoming = sun illuminance (white) * transmittance-to-sun,
-                // scattered isotropically (1/4PI).
+                // L2: second-order luminance along omega. The incoming light is the
+                // sun illuminance (white) * transmittance-to-sun, scattered toward the
+                // sample point with the isotropic phase 1/(4 pi) (Hillaire 2020 uses a
+                // uniform phase for this LUT).
                 L2 += pathTransmittance * stepIntegral * transToSun * kInvFourPi;
 
-                // fms: incoming = uniform ambient radiance 1 (no sun transmittance),
-                // scattered isotropically. This is the fraction of ambient that
-                // scatters back toward the sample point.
-                fms += pathTransmittance * stepIntegral * kInvFourPi;
+                // fms: the transfer of a uniform unit radiance along omega, with no
+                // phase yet: the fraction of light that scatters back toward the
+                // sample point, per unit incoming radiance, once integrated below.
+                fms += pathTransmittance * stepIntegral;
 
                 pathTransmittance *= stepTransmittance;
 
                 t += dt;
             }
+
+            // The ground's bounce (Hillaire 2020, NewMultiScatCS): a ray that ends on the
+            // planet receives the sunlight the ground reflects back up it, Lambertian at the
+            // floor's albedo, through the path's transmittance. It is radiance arriving along
+            // omega, so it takes no phase here; the sphere integral below scatters it.
+            if (hitsGround)
+            {
+                vec3 groundPos = samplePos + omega * tEnd;
+                vec3 groundUp = normalize(groundPos - planetCenter);
+                float groundSunCos = dot(groundUp, sunDir);
+                vec3 groundTransToSun = GE_SkyTransmittanceToTop(uTransmittanceLUT, uAtmos.planetRadius,
+                                                                 groundSunCos, uAtmos.planetRadius,
+                                                                 uAtmos.atmosphereRadius);
+                L2 += pathTransmittance * groundTransToSun * max(groundSunCos, 0.0) * uAtmos.groundAlbedo / PI;
+            }
         }
     }
 
-    // Uniform-area solid-angle weight per direction.
+    // Hillaire 2020, eqs. 7 and 8: both sphere integrals are taken with the
+    // uniform-area weight dOmega = 4 pi / N and then multiplied by the
+    // isotropic phase 1/(4 pi) once more, because the luminance they give
+    // arrives at the sample point from every direction and is re-scattered
+    // there isotropically (NewMultiScatCS: `* SphereSolidAngle / N`, then
+    // `* IsotropicPhase` on both). For fms the per-direction sum carries no
+    // phase, so the two factors reduce it to the mean over the sphere; L2 keeps
+    // its in-march phase and gains the second one.
     float dOmega = 4.0 * PI / float(kNumDirections);
-    L2 *= dOmega;
-    fms *= dOmega;
+    L2 *= dOmega * kInvFourPi;
+    fms *= dOmega * kInvFourPi;
 
     // Infinite multiple-scattering geometric series: sum_{n>=0} fms^n * L2.
     // Clamp fms < 1 so the sum stays finite (single-scatter albedo < 1 already
@@ -162,5 +178,7 @@ void main()
     vec3 clampedFms = clamp(fms, vec3(0.0), vec3(0.9999));
     vec3 psiMs = L2 / (vec3(1.0) - clampedFms);
 
+    // Absolute scene-linear, never pre-exposed (P = 1 by construction): the passes that sample
+    // this LUT into scene colour apply the pre-exposure themselves.
     imageStore(oMultiscatterLUT, pixel, vec4(psiMs, 1.0));
 }

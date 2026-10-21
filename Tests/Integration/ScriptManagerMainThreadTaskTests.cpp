@@ -139,10 +139,9 @@ TEST(ScriptManagerMainThreadTasks, PumpReturnsImmediatelyWhileAnotherThreadIsPum
     EXPECT_TRUE(secondTaskRan.load());
 }
 
-TEST(ScriptManagerMainThreadTasks, MarkMainThreadDoesNotPreventFallbackPumping)
+TEST(ScriptManagerMainThreadTasks, APumpOffTheMainThreadStillRunsTasks)
 {
     ScriptManager manager;
-    manager.MarkMainThread();
 
     bool taskRan = false;
     manager.QueueMainThreadTask([&]() { taskRan = true; });

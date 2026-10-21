@@ -114,7 +114,7 @@ void MakeIdentity4(float m[16])
 }
 
 // One packed gizmo group: an absolute firstVertex into the ring buffer plus
-// the per-group color. Only triangles carry layer/sort keys; alwaysOnTop
+// the per-group color. Only triangles carry layer/sort keys; depthMode
 // applies to both and selects which depth pass owns the draw.
 struct GizmoGroupDraw
 {
@@ -124,7 +124,7 @@ struct GizmoGroupDraw
     int32_t layer = 0;
     float depthKey = 0.0f;
     bool isTransparent = false;
-    bool alwaysOnTop = false;
+    Editor::SceneTools::GizmoDepthMode depthMode = Editor::SceneTools::GizmoDepthMode::SceneDepth;
 };
 
 // Pack xyz-triplet group vertices into a 16-byte-stride ring alloc. Returns
@@ -165,8 +165,7 @@ bool PackGizmoGroups(RenderGraph::RGFrame& frame, const GroupVec& groups, uint32
         draw.firstVertex = baseVertex + cursor;
         draw.vertexCount = vc;
         draw.color = group.color;
-        draw.alwaysOnTop =
-            (group.depthMode == Editor::SceneTools::GizmoDepthMode::AlwaysOnTop);
+        draw.depthMode = group.depthMode;
         outDraws.push_back(draw);
 
         const float* src = group.vertices.data();
@@ -672,7 +671,7 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                        idLinesVisible, idTrisVisible);
             internPair(CompareOp::Less, "SV_Gizmos_Lines_Occluded", "SV_Gizmos_Triangles_Occluded",
                        idLinesOccluded, idTrisOccluded);
-            // Opt-in third pair for GizmoDepthMode::AlwaysOnTop: no depth test,
+            // Opt-in third pair for GizmoDepthMode::AlwaysOnTop and Handle: no depth test,
             // so the group draws once at full strength wherever it lands.
             internPair(CompareOp::Always, "SV_Gizmos_Lines_Always",
                        "SV_Gizmos_Triangles_Always", idLinesAlways, idTrisAlways);
@@ -796,14 +795,15 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                     // version did.
                     const auto drawSubset = [&](PipelineHandle pipe, BufferHandle buf,
                                                 const std::vector<GizmoGroupDraw>& draws,
-                                                bool alwaysOnTop, float alphaScale)
+                                                Editor::SceneTools::GizmoDepthMode depthMode,
+                                                float alphaScale)
                     {
                         if (draws.empty() || !buf.IsValid())
                             return;
                         bool bound = false;
                         for (const GizmoGroupDraw& draw : draws)
                         {
-                            if (draw.alwaysOnTop != alwaysOnTop)
+                            if (draw.depthMode != depthMode)
                                 continue;
                             if (!bound)
                             {
@@ -821,7 +821,8 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                         }
                     };
 
-                    // Always-on-top first, then occluded, then visible.
+                    // Always-on-top first, then occluded, then visible, then the
+                    // handles.
                     //
                     // Always-on-top leads because its members are backdrops: the
                     // spline's width band has to sit UNDER the curve and knots
@@ -832,24 +833,25 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                     // test partitions each primitive's pixels between the two,
                     // but where two DIFFERENT primitives land on the same pixel
                     // the full-strength fragment blends on top.
-                    struct DepthPass
+                    //
+                    // Handles last: the transform handles the user grabs sit on
+                    // top of everything, a transparent world overlay included.
+                    using Editor::SceneTools::GizmoDepthMode;
+                    for (const GizmoDepthMode mode : Editor::SceneTools::kGizmoDepthModeDrawOrder)
                     {
-                        PipelineHandle Lines;
-                        PipelineHandle Tris;
-                        float AlphaScale;
-                        bool AlwaysOnTop;
-                    };
-                    const DepthPass depthPasses[3] = {
-                        {pipeLinesAlways, pipeTrisAlways, 1.0f, true},
-                        {pipeLinesOccluded, pipeTrisOccluded, Editor::SceneTools::kGizmoOccludedAlphaScale, false},
-                        {pipeLinesVisible, pipeTrisVisible, 1.0f, false},
-                    };
-                    for (const DepthPass& pass : depthPasses)
-                    {
-                        drawSubset(pass.Lines, lineBuf, lineDraws, pass.AlwaysOnTop,
-                                   pass.AlphaScale);
-                        drawSubset(pass.Tris, triBuf, triDraws, pass.AlwaysOnTop,
-                                   pass.AlphaScale);
+                        if (mode == GizmoDepthMode::SceneDepth)
+                        {
+                            drawSubset(pipeLinesOccluded, lineBuf, lineDraws, mode,
+                                       Editor::SceneTools::kGizmoOccludedAlphaScale);
+                            drawSubset(pipeTrisOccluded, triBuf, triDraws, mode,
+                                       Editor::SceneTools::kGizmoOccludedAlphaScale);
+                            drawSubset(pipeLinesVisible, lineBuf, lineDraws, mode, 1.0f);
+                            drawSubset(pipeTrisVisible, triBuf, triDraws, mode, 1.0f);
+                            continue;
+                        }
+                        // AlwaysOnTop and Handle: no depth test, full strength.
+                        drawSubset(pipeLinesAlways, lineBuf, lineDraws, mode, 1.0f);
+                        drawSubset(pipeTrisAlways, triBuf, triDraws, mode, 1.0f);
                     }
                 });
         }

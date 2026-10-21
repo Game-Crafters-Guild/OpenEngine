@@ -373,6 +373,8 @@ TEST(CompileConcurrencyGate, ComputedCapIsSane)
     const uint32_t cap = ComputeShaderCompileConcurrencyCap();
     EXPECT_GE(cap, 2u) << "cap must leave at least a minimum of parallelism";
     if (std::getenv("GE_SHADER_COMPILE_CAP") == nullptr)
+    {
         EXPECT_LE(cap, std::max(2u, std::thread::hardware_concurrency()))
             << "derived cap must not exceed the logical core count";
+    }
 }

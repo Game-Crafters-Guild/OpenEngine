@@ -3,6 +3,7 @@
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/ParticleRenderer.h"
 #include "GPUFogParticles/GPUFogParticlesMaterial.h"
+#include "Rendering/Materials/MaterialBlendComposite.h"
 
 #include <algorithm>
 #include <array>
@@ -48,15 +49,19 @@ MaterialDocument ProceduralSmokeMaterial()
 //   still collapses with the sprite at the end of the fade.
 float NearFadeColorExponent(const std::optional<MaterialBlendState>& authored)
 {
-    const MaterialBlendState blend = authored.value_or(MaterialBlendState{});
-    if (blend.ColorOp != MaterialBlendOp::Add)
-        return 0.0f;
-    const bool sourceOne = blend.SrcColorFactor == MaterialBlendFactor::One;
-    const bool sourceAlpha = blend.SrcColorFactor == MaterialBlendFactor::SrcAlpha;
-    if (blend.DstColorFactor == MaterialBlendFactor::OneMinusSrcAlpha)
-        return sourceOne ? 1.0f : 0.0f;
-    if (blend.DstColorFactor == MaterialBlendFactor::One)
-        return sourceOne ? 2.0f : sourceAlpha ? 1.0f : 0.0f;
+    switch (ClassifyBlendComposite(authored))
+    {
+    case BlendComposite::PremultipliedOver:
+    case BlendComposite::AdditiveStraight:
+        return 1.0f;
+    case BlendComposite::AdditivePremultiplied:
+        return 2.0f;
+    case BlendComposite::Over:
+    case BlendComposite::AdditiveOther:
+    case BlendComposite::Multiply:
+    case BlendComposite::Other:
+        break;
+    }
     return 0.0f;
 }
 } // namespace
@@ -172,12 +177,35 @@ std::span<const ParticleRenderVariant> ParticleRenderVariants()
     using Rendering::VertexAttributeFlags;
     constexpr MaterialKeyword kForward = kParticleDrawKeywords | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows;
     constexpr MaterialKeyword kForwardIbl = kForward | MaterialKeyword::IBL;
-    static constexpr std::array<ParticleRenderVariant, 5> kVariants = {{
+    // The fog by the sprite's own distance (the late transparent pass of the shipped ForwardPlus graph,
+    // after the volumetric fog composite): the height fog, the volumetric fog, and both.
+    constexpr MaterialKeyword kForwardIblFog = kForwardIbl | MaterialKeyword::HeightFog;
+    constexpr MaterialKeyword kForwardIblVolumetric = kForwardIbl | MaterialKeyword::VolumetricFog;
+    constexpr MaterialKeyword kForwardIblBothFogs = kForwardIblFog | MaterialKeyword::VolumetricFog;
+    // Each of those, and none, with the volumetric clouds in front of a sprite beyond them.
+    constexpr MaterialKeyword kClouds = MaterialKeyword::VolumetricClouds;
+    static constexpr std::array<ParticleRenderVariant, 19> kVariants = {{
         {"base", MaterialKeyword::None, VertexAttributeFlags::StandardMesh},
         {"forward-color", kForward, VertexAttributeFlags::StandardMesh},
         {"forward-color+tangent", kForward, VertexAttributeFlags::StandardMeshWithTangent},
         {"forward-color-ibl", kForwardIbl, VertexAttributeFlags::StandardMesh},
         {"forward-color-ibl+tangent", kForwardIbl, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-fog", kForwardIblFog, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-fog+tangent", kForwardIblFog, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-vfog", kForwardIblVolumetric, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-vfog+tangent", kForwardIblVolumetric, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-fog-vfog", kForwardIblBothFogs, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-fog-vfog+tangent", kForwardIblBothFogs, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-clouds", kForwardIbl | kClouds, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-clouds+tangent", kForwardIbl | kClouds, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-fog-clouds", kForwardIblFog | kClouds, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-fog-clouds+tangent", kForwardIblFog | kClouds, VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-vfog-clouds", kForwardIblVolumetric | kClouds, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-vfog-clouds+tangent", kForwardIblVolumetric | kClouds,
+         VertexAttributeFlags::StandardMeshWithTangent},
+        {"forward-color-ibl-fog-vfog-clouds", kForwardIblBothFogs | kClouds, VertexAttributeFlags::StandardMesh},
+        {"forward-color-ibl-fog-vfog-clouds+tangent", kForwardIblBothFogs | kClouds,
+         VertexAttributeFlags::StandardMeshWithTangent},
     }};
     return kVariants;
 }

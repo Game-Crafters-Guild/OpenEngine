@@ -1,0 +1,166 @@
+---
+title: Particle processor stacks
+description: The .particlestack asset that says what an emitter's particles do, its phases, stages, values, and built-in processors, its file format, and how a game registers its own processor.
+---
+
+A processor stack says what an emitter's particles do: when they are born, where, how they move, how they change, and what happens to them. It is a `.particlestack` asset that any number of emitters reference (see [Particles](particles.mdx) for the emitter, its preview, and the renderer). Select the asset in the Assets panel to edit it, or edit it in place in an emitter's Processor Stack section. Both edit the same asset, and every emitter running it follows the edit. Every edit is one undo step, and a drag previews live and records one step when it ends.
+
+## Phases, stages and processors
+
+A stack holds up to 16 **phases**. A particle is in one phase at a time. Every particle is born in the **entry phase**. Each phase holds up to 64 **processors** (64 in the whole stack), and each processor runs in one **stage**:
+
+| Stage | Runs |
+|---|---|
+| Emission | Once per tick for the emitter, deciding how many particles are born. Only in the entry phase. |
+| Birth | Once for each newborn particle. |
+| Enter | When a particle arrives in the phase from another one. |
+| Update | Every tick, for every particle in the phase. Processors that run before movement also run once at birth with a tick length of 0, so the first frame already holds the value at age 0; Collision and Trail run after movement and do not run at birth. |
+| Exit | When a particle leaves the phase. |
+| Event | Event rules, evaluated when their trigger fires. |
+
+Within a stage, processors run in their order in the phase. Drag a processor's header to reorder, or use its header menu (Move Up, Move Down, Remove). The round toggle on the header switches a processor off without removing it. **Add Processor** opens a searchable list of every registered processor type, including a game's own. A phase's header menu sets it as the entry phase or removes it. **Add Phase** adds one. The stack's **Particle Lifetime** is how long a particle lives unless a processor sets its lifetime.
+
+An Update or Emission processor can be limited to an interval: **Active From** and, with **Stops** on, **Active Until**, in seconds of the particle's phase age (or its total age, with **Active On**, Particle Age). Intervals take effect at simulation ticks.
+
+### Moving between phases
+
+An Event processor's *Move to Phase* action sends the particle to another phase. The particle keeps its identity and its total age. Its phase age starts again at zero. The source phase's Exit processors and exit rules run, then the destination's Enter processors and enter rules, in the same tick. A tick resolves up to eight rounds of moves, so rules that bounce a particle between phases cannot loop forever.
+
+## Values
+
+Most numbers in a processor are **values**, and each value picks how it varies:
+
+| Mode | The number |
+|---|---|
+| Constant | One number. |
+| Random Range | A random number between a minimum and a maximum, picked once per particle and kept. |
+| Curve | A curve over the processor's input. |
+| Random Curves | A random blend between two curves, picked once per particle. |
+
+Curves hold up to 32 keys with linear, smooth, or stepped interpolation and editable tangents. The processor's **Curve Input** says what the curves are evaluated at, remapped from **Input From** and **Input To** onto the curve's 0 to 1, with **Outside the Range** clamping, repeating, or ping-ponging beyond them:
+
+| Input | Reads |
+|---|---|
+| Age / Lifetime | How far through its life the particle is, 0 to 1. |
+| Age (seconds) | The particle's total age. |
+| Phase Age (seconds) | Time since the particle entered its phase. |
+| Random per Particle | A number fixed per particle and processor: a stable position on the curve, which keeps a color gradient's channels together. |
+| Speed | The particle's speed. |
+| Size | The particle's size. |
+| Emitter Speed | How fast the emitter moves. |
+
+Random picks come from the emitter's seed, the particle, and the processor, so an effect replays exactly and reordering processors does not reroll them.
+
+## Processors
+
+Every built-in processor. Each row's parameters are the processor's rows in the inspector.
+
+| Processor | Stage | What it does | Parameters |
+|---|---|---|---|
+| Emission Rate | Emission | Spawns particles continuously. | Rate (particles per second); as a curve it reads the emitter's age in seconds or its speed. |
+| Emission Burst | Emission | Spawns a number of particles at once, optionally repeating. | Time, Count, Repeat Every (0 bursts once). |
+| Shape | Birth | Places newborn particles on or inside a shape around the emitter. | Shape (Sphere, Hemisphere, Box, Circle, Cone, Cylinder, Line, Mesh Vertices, Mesh Surface), its sizes, Offset, Surface Only, Align Velocity to Normal. |
+| Velocity Cone | Birth, Enter | Launches particles in random directions within a cone. | Space, Direction, Spread (180 is every direction), Speed, Inherit Emitter Velocity. |
+| Property | Birth, Enter, Update, Exit | Sets, adds to or multiplies a particle attribute by a value. | Attribute (Position, Velocity, Size, Scale, Color, Alpha, Rotation, Spin, Lifetime, Animation Speed, Animation Offset), Operation (Set, Add, Multiply), Basis (the current value, the value at birth or at phase entry, so an Update does not compound), Space, Value per component. |
+| Acceleration | Update | Gravity, wind or thrust. | Space (World keeps gravity down however the emitter turns), Acceleration. |
+| Drag | Update | Slows particles. | Mode (Exponential: a fraction of the velocity per second; Linear: a fixed speed per second, like friction), Drag. |
+| Limit Speed | Update | Caps speed, keeping the direction. | Maximum Speed. |
+| Orbit | Update | Accelerates particles away from and around an axis through the emitter. | Axis, Radial (negative pulls in), Tangential. |
+| Noise | Update | Turbulence from a divergence-free curl field. | Motion (Force or Displacement), Field (Analytic, the default: a trigonometric field scrolled by the emitter's clock from a place set by the emitter's seed, which repeats every 2π wavelengths; Gradient: seeded gradient noise with no repeating pattern, at several times the cost per particle), Octaves with their strength and frequency, Axis Weights, Rotation, Size Modulation, Strength, Wavelength, Scroll Speed. A shorter wavelength makes the field finer, not stronger. |
+| Collision | Update | Bounces particles off a plane or the physics world and raises collision events. | Collide With (Plane, Physics), Plane Normal and Offset, Radius (a multiple of the particle size), Bounce, Damping, Kill on Contact, Layer Mask (a bit per physics layer). |
+| Event | Event | When something happens to a particle, moves it to another phase, spawns children, or kills it. | When (On Birth, On Death, On Collision, At Age, At Phase Age, On Phase Enter, On Phase Exit, On Game Event, Every Distance, Every Interval), Do (Move to Phase, Spawn in Child Emitter, Kill), Probability, and per action: the Phase; the Child Emitter slot, Count, Inherit (velocity, size, color, rotation, lifetime), Velocity Scale, Align to Contact Normal, Kill This Particle. |
+| Light | Update | Makes each particle a point light of its color while active. | Intensity, Range. |
+| Trail | Update | Records each particle's recent path; the renderer draws it as a ribbon. | Trail Lifetime, Points (2 to 64), Point Spacing, Remove with Particle. |
+
+The Mesh Vertices and Mesh Surface shapes carry their geometry in the stack file, as the processor's `"vertices"` and `"indices"` arrays (up to 65,536 vertices). The inspector shows how many vertices and triangles a shape holds. Mesh Surface picks triangles by area, so particles spread evenly over the surface.
+
+A spawn rule names one of the emitter's four sub-emitter slots rather than an entity, so one stack works for every emitter that runs it. Each emitter says which entity each slot is (see [Particles](particles.mdx)). A game-event rule reacts to the name a game sends with `ParticlePlayback::SendEvent`.
+
+## The file
+
+A `.particlestack` is JSON, written with a two-space indent so it reads and merges well. Processor ids are unique in the stack and keep a processor's identity across edits. Parameters are keyed by their names in camel case and enumerations by their wire names. A parameter left out takes its default, so files stay short. Unknown keys are refused rather than ignored, and a file that does not validate keeps the last valid stack running and lists what is wrong in the inspector.
+
+```json title="A burst of sparks that fade out"
+{
+  "version": 1,
+  "entryPhase": 1,
+  "lifetime": 2,
+  "phases": [
+    {
+      "id": 1,
+      "label": "Sparks",
+      "processors": [
+        { "type": "emitBurst", "id": 2, "stage": "emission", "parameters": { "count": 40 } },
+        { "type": "shape", "id": 3, "stage": "birth", "parameters": { "shape": "sphere", "radius": 0.2 } },
+        { "type": "velocityCone", "id": 4, "stage": "birth",
+          "parameters": { "spread": 180, "speed": { "mode": "range", "minimum": 2, "maximum": 5 } } },
+        { "type": "acceleration", "id": 5, "stage": "update" },
+        { "type": "property", "id": 6, "stage": "update",
+          "parameters": { "target": "alpha", "operation": "set", "value": [
+            { "mode": "curve", "curve": [ { "time": 0, "value": 1 }, { "time": 1, "value": 0 } ] } ] } }
+      ]
+    }
+  ]
+}
+```
+
+A processor may also carry `"label"`, `"enabled": false`, `"clock": "age"`, `"start"`, and `"end"` (its active interval). A value is `{"mode": "constant", "value": v}`, `{"mode": "range", "minimum", "maximum"}`, `{"mode": "curve", "curve": [keys]}`, or `{"mode": "curveRange", "minimumCurve", "maximumCurve"}`. A key is `{"time", "value"}` with optional `"interpolation"` (`"smooth"` or `"step"`) and tangents. A curve input is `{"driver", "minimum", "maximum", "wrap"}`.
+
+Packaged games carry stacks in a cooked binary form the build writes; see [Particles](particles.mdx).
+
+## Writing a processor
+
+A game or package adds processor types without changing the engine. A processor is a descriptor registered with `ParticleProcessorRegistry`: a stable id with the game's own prefix, the stages it may run in, the particle channels it reads and writes, a parameter struct reflected with `GE_REFLECT` and one presentation entry per field, and a function that runs over a batch of particles. The stack's file format, validation, cooked form, inspector rows, and the Add Processor list all come from the descriptor.
+
+```cpp title="A game's own Spin processor"
+#include "ECS/Reflection.h"
+#include "Particles/ParticleProcessorRegistry.h"
+
+struct SpinParameters
+{
+    float Rate = 1.0f;
+};
+GE_REFLECT(SpinParameters, Rate);
+
+constexpr Particles::ParticleParameterField kSpinFields[] = {
+    {.Name = "Rate", .Label = "Spin Rate", .Tooltip = "Radians per second",
+     .Kind = Particles::ParticleParameterKind::Float, .Minimum = 0.0f},
+};
+
+// Runs once per tick over every particle of the phase: loop over the batch, touch only the
+// channels the descriptor declares.
+void ExecuteSpin(Particles::ParticleProcessorContext& context)
+{
+    const float rate = context.Params<SpinParameters>().Rate;
+    auto spins = context.Channels.Spins();
+    for (const uint32 index : context.Particles)
+        spins[index] = rate;
+}
+
+void RegisterSpinProcessor()
+{
+    Particles::ParticleProcessorDescriptor descriptor;
+    descriptor.Id = "game.spin";
+    descriptor.DisplayName = "Spin";
+    descriptor.Category = "Game";
+    descriptor.Stages = Particles::StageBit(Particles::ParticleStage::Birth) |
+                        Particles::StageBit(Particles::ParticleStage::Update);
+    descriptor.DefaultStage = Particles::ParticleStage::Update;
+    descriptor.Writes = Particles::ChannelBits(Particles::ParticleChannel::Spin);
+    descriptor.Execute = ExecuteSpin;
+    Particles::BindParticleParameters<SpinParameters>(descriptor, kSpinFields);
+    Particles::ParticleProcessorRegistry::Register(descriptor);
+}
+```
+
+:::note
+
+Call the registration from the module's initialization, before any stack that uses the processor loads. A stack naming a processor type nobody registered does not validate. Its emitters run nothing and the inspector says why. An id keeps the parameter struct it was first registered with for the whole run: registering it again with another struct is refused with an error, because loaded stacks hold parameter bytes laid out for the first. Give a changed struct a new id, or restart. When a native module reloads, its processors are registered again in place and the stacks that hold them run the new code. The module's earlier image stays mapped until the editor restarts, since stacks compiled while it served may still hold data it built. The execute function runs once per processor per tick over a contiguous batch, never once per particle through a virtual call, so a processor costs what its loop costs.
+
+:::
+
+## Limits
+
+- 16 phases, 64 processors in a stack, 32 keys per curve, 65,536 vertices of mesh geometry.
+- Each tick holds up to 4,096 spawn events and 4,096 child spawn requests per emitter, and up to 256 game events.
+- Emission processors run only in the entry phase.

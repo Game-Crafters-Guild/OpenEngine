@@ -18,6 +18,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "TestDeviceHelper.h"
+#include "TestTempDir.h"
 
 #include <chrono>
 #include <cstdint>
@@ -97,7 +98,7 @@ class AwaitedEmissiveTextureUploadJob : public testing::Test
         m_Device = CreateVulkanDeviceFast();
         if (!m_Device)
             GTEST_SKIP() << "No Vulkan device available";
-        m_Workspace = fs::temp_directory_path() / ("ge-awaited-emissive-" + GUID::Generate().ToString());
+        m_Workspace = TestUtils::MakeUniqueTempDirectory("ge-awaited-emissive");
         fs::create_directories(m_Workspace / "Assets");
         m_PreviousDirectory = fs::current_path();
         auto& engine = EngineCore::GetInstance();

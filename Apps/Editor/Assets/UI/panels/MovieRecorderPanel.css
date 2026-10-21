@@ -301,11 +301,11 @@ button.movie-recorder-record-button.record-icon.active,
 
 .movie-recorder-section-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .movie-recorder-refresh-button {
-    background-image: url("editor:Icons/ResetReload.png");
+    background-image: url("editor:Icons/ResetReload.svg");
     background-image-tint: rgba(200, 200, 200, 1.0);
     background-size: 16px 16px;
     background-repeat: no-repeat;
@@ -431,7 +431,7 @@ button.movie-recorder-row-button.pressed {
 button.movie-recorder-delete-button,
 .movie-recorder-delete-button.icon-button,
 button.movie-recorder-delete-button.icon-button {
-    background-image: url("editor:Icons/trash.png");
+    background-image: url("editor:Icons/trash.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: center;

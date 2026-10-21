@@ -149,7 +149,7 @@ class Reader
             Fail("Invalid curve in particle stack");
             return;
         }
-        curve = {};
+        curve = Math::Curve{};
         curve.KeyCount = count;
         for (uint32 index = 0; index < count; ++index)
         {

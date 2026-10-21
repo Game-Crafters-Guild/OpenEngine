@@ -1,12 +1,13 @@
 // The process's one allocation counter: the state behind AllocationCountScope,
-// AllocationSiteTag and Testing::ScopedAllocationFault, fed by every image's
-// allocation hook through Detail::OnAllocation.
+// AllocationSiteTag, Testing::ScopedAllocationFault and Testing::ScopedAllocationHold, fed
+// by every image's allocation hook through Detail::OnAllocation.
 //
 // One copy per process. The Memory module compiles it into Engine; a test executable
 // that links neither Engine nor the Memory module compiles its own copy. A target that
-// links either sees GE_ALLOCATION_COUNTER_LINKED (Memory's interface definition, which
-// Engine re-exports) and compiles this file empty, so its hook and its scopes reach the
-// linked copy instead of a second counter that the linked images would never feed.
+// links either sees GE_ALLOCATION_COUNTER_LINKED (set on this file alone, from the
+// link-interface property Memory and Engine carry: cmake/AllocationHook.cmake) and
+// compiles this file empty, so its hook and its scopes reach the linked copy instead of
+// a second counter that the linked images would never feed.
 //
 // No exported data and no exported thread_local: the state below has internal linkage,
 // and the functions are plain (no GE_API), exported on Windows through Engine.dll's
@@ -18,12 +19,14 @@
 #include "Memory/AllocationCounter.h"
 #include "Memory/AllocationSiteTag.h"
 #include "Memory/Testing/ScopedAllocationFault.h"
+#include "Memory/Testing/ScopedAllocationHold.h"
 #include "Types/FalseSharing.h"
 
 #include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 namespace GameEngine::Memory
 {
@@ -37,6 +40,7 @@ struct ThreadCounters
     std::uint64_t Allocations = 0;
     AllocationSiteTag* Site = nullptr;
     Testing::ScopedAllocationFault* Fault = nullptr;
+    Testing::ScopedAllocationHold* Hold = nullptr;
 };
 
 constinit thread_local ThreadCounters t_Counters;
@@ -79,6 +83,8 @@ bool OnAllocation(std::size_t bytes)
             return false;
         }
     }
+    if (Testing::ScopedAllocationHold* hold = counters.Hold)
+        hold->ParkIfMatch(bytes);
     ++counters.Allocations;
     if (AllocationSiteTag* site = counters.Site)
         ++site->m_Count;
@@ -158,6 +164,51 @@ ScopedAllocationFault::~ScopedAllocationFault()
 {
     assert(t_Counters.Fault == this && "a ScopedAllocationFault is destroyed on the thread that armed it");
     t_Counters.Fault = nullptr;
+}
+
+ScopedAllocationHold::ScopedAllocationHold(std::size_t matchBytes, std::uint32_t holdOnMatch)
+    : m_MatchBytes(matchBytes)
+    , m_MatchesBeforeHold(holdOnMatch - 1)
+{
+    assert(holdOnMatch != 0 && "ScopedAllocationHold's holdOnMatch counts from 1: 1 parks the first match");
+    assert(t_Counters.Hold == nullptr &&
+           "this thread already has an armed ScopedAllocationHold; close it before arming another");
+    t_Counters.Hold = this;
+}
+
+ScopedAllocationHold::~ScopedAllocationHold()
+{
+    assert(t_Counters.Hold == this && "a ScopedAllocationHold is destroyed on the thread that armed it");
+    t_Counters.Hold = nullptr;
+}
+
+void ScopedAllocationHold::ParkIfMatch(std::size_t bytes)
+{
+    if (m_State.load(std::memory_order_acquire) != State::Armed)
+        return;
+    if (m_MatchBytes != 0 && m_MatchBytes != bytes)
+        return;
+    if (m_MatchesBeforeHold != 0)
+    {
+        --m_MatchesBeforeHold;
+        return;
+    }
+    State expected = State::Armed;
+    if (!m_State.compare_exchange_strong(expected, State::Held, std::memory_order_acq_rel))
+        return;
+    while (m_State.load(std::memory_order_acquire) == State::Held)
+        std::this_thread::yield();
+}
+
+void ScopedAllocationHold::WaitUntilHeld() const
+{
+    while (m_State.load(std::memory_order_acquire) == State::Armed)
+        std::this_thread::yield();
+}
+
+void ScopedAllocationHold::Release()
+{
+    m_State.store(State::Released, std::memory_order_release);
 }
 
 } // namespace Testing

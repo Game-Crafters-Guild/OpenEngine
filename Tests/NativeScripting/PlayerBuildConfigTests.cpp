@@ -81,7 +81,9 @@ TEST(PlayerBuildConfig, DefaultIsTheMostShipOptimizedConfigurationForThisHost)
     EXPECT_EQ(DefaultPlayerBuildConfig(),
               kHostUsesDebugCrt ? std::string_view("Debug") : std::string_view("Release"));
     if (kTrueConfig == "DebugFast")
+    {
         EXPECT_NE(DefaultPlayerBuildConfig(), LegacyPreprocessorConfigName());
+    }
 }
 
 // Substituting the editor's own truthful configuration name into the build
@@ -92,7 +94,9 @@ TEST(PlayerBuildConfig, EditorsOwnConfigurationIsNotAlwaysAPlayerConfiguration)
 {
     EXPECT_FALSE(IsSupportedPlayerBuildConfig("DebugFast"));
     if (!IsSupportedPlayerBuildConfig(kTrueConfig))
+    {
         EXPECT_NE(kTrueConfig, DefaultPlayerBuildConfig()) << "built as '" << kTrueConfig << "'";
+    }
 }
 
 // The NativeAOT gate keys on the shipping-artifact property, not on the name

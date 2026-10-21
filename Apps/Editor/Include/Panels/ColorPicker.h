@@ -226,7 +226,6 @@ private:
     // Common elements
     Slider* m_AlphaSlider = nullptr;
     Label* m_AlphaValueLabel = nullptr;
-    TextField* m_AlphaField = nullptr;
     Slider* m_IntensitySlider = nullptr;
     Label* m_IntensityValueLabel = nullptr;
     TextField* m_HField = nullptr;
@@ -237,7 +236,6 @@ private:
     TextField* m_BField = nullptr;
     TextField* m_AField = nullptr; // Alpha text field in RGBA row
     UIElement* m_SwatchEl = nullptr;
-    UIElement* m_SwatchCheckerboard = nullptr; // for alpha visualization
     TextField* m_HexField = nullptr;
     UIElement* m_ModeToggleBtn = nullptr;
     UIElement* m_PaletteRow = nullptr;

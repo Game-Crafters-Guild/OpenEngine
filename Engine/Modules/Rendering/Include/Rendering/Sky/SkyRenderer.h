@@ -3,6 +3,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
+#include "Rendering/Sky/StarCatalog.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -21,7 +22,7 @@ struct AtmosphereParametersGPU
     float betaRayleigh[3];
     float pad0;
     float betaMie[3];
-    float mieG;
+    float pad1;
     float groundAlbedo[3];
     float groundBrightness;
     float groundNightColor[3];
@@ -49,9 +50,17 @@ struct AtmosphereParametersGPU
     // PlanetGround aerial-perspective haze strength on its own std140 row at 192.
     float groundHazeStrength;
     float groundHazeStrengthPad[3];
+    // Aerosol absorption per metre at sea level (Mie extinction = betaMie + mieAbsorption), on the
+    // Mie density profile.
+    float mieAbsorption[3];
+    // Ozone layer: a tent of density 1 at ozoneCenterHeight falling linearly to 0 at
+    // ozoneCenterHeight +- ozoneHalfWidth (metres). It absorbs and does not scatter.
+    float ozoneCenterHeight;
+    float ozoneAbsorption[3];
+    float ozoneHalfWidth;
 };
 
-static_assert(sizeof(AtmosphereParametersGPU) == 208,
+static_assert(sizeof(AtmosphereParametersGPU) == 240,
               "AtmosphereParametersGPU must match GLSL AtmosphereUBO std140 layout");
 static_assert(offsetof(AtmosphereParametersGPU, groundNightColor) == 64, "AtmosphereUBO groundNightColor offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, groundHorizonColor) == 80, "AtmosphereUBO groundHorizonColor offset mismatch");
@@ -68,9 +77,13 @@ static_assert(offsetof(AtmosphereParametersGPU, belowHorizonDarkColorStd140PrePa
 static_assert(offsetof(AtmosphereParametersGPU, belowHorizonDarkColor) == 176, "AtmosphereUBO belowHorizonDarkColor offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, belowHorizonMode) == 188, "AtmosphereUBO belowHorizonMode offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, groundHazeStrength) == 192, "AtmosphereUBO groundHazeStrength offset mismatch");
+static_assert(offsetof(AtmosphereParametersGPU, mieAbsorption) == 208, "AtmosphereUBO mieAbsorption offset mismatch");
+static_assert(offsetof(AtmosphereParametersGPU, ozoneCenterHeight) == 220, "AtmosphereUBO ozoneCenterHeight offset mismatch");
+static_assert(offsetof(AtmosphereParametersGPU, ozoneAbsorption) == 224, "AtmosphereUBO ozoneAbsorption offset mismatch");
+static_assert(offsetof(AtmosphereParametersGPU, ozoneHalfWidth) == 236, "AtmosphereUBO ozoneHalfWidth offset mismatch");
 
 // Camera + celestial + star upload block. Hand-padded so C++ tight-packing
-// matches the GLSL SkyUBO std140 layout byte-for-byte (320 B). Shared by the
+// matches the GLSL SkyUBO std140 layout byte-for-byte (288 B). Shared by the
 // sky-view, render and star-billboard passes; the capture pass uses the smaller
 // CaptureSkyUbo prefix instead. Keep in lock-step with the SkyUBO block in
 // sky_render.frag / sky_stars_billboard.{vert,frag}.
@@ -87,14 +100,15 @@ struct SkyUBOGPU
     float moonUboPad1;
     float moonUboPad2;
     float sunColor[3];       float sunIntensity;
-    float timeOfDayHours;    float skyPad0;
+    float timeOfDayHours;    float starsUndoCompensation; // 1: the star pass undoes the exposure compensation
     float viewportAspect;    float tanHalfFovY;
     float viewportResolution[2]; float nightSkyBlend; float skyTimeSeconds;
-    float starSizeShape[4];
-    float starTwinkleParams[4];
-    float starTwinkleAmp[4];
-    float starDensityHorizon[4];
-    float starSizeRange[4];
+    // x = limiting magnitude (V), y = star highlight compression (1 = physical),
+    // z = twinkle amount at airmass 10, w = twinkle rate.
+    float starModel[4];
+    // x = HDRI rotation in radians; y = HDRI intensity, or kSkyHdriProceduralSentinel (< 0) for
+    // the procedural sky; z = the stars' artistic glow (0 = none); w = 1 when faint stars fade to white.
+    float skyboxParams[4];
     float fallingStarParams[4];
     float fallingStarShapeParams[4];
     // Gradient sky: .rgb = scene-linear premultiplied color, gradientSkyTop.w = mode sentinel
@@ -102,25 +116,24 @@ struct SkyUBOGPU
     float gradientSkyTop[4];
     float gradientSkyHorizon[4];
     float gradientSkyBottom[4];
+    // x = star core size (1 = physical), y = the spikes' share of the glow, z = spike length in glow
+    // radii, w = the star shape (0 = point, 1 = sparkle). Only the star billboard declares it.
+    float starShape[4];
 };
 
-static_assert(sizeof(SkyUBOGPU) == 320, "SkyUBOGPU must match GLSL SkyUBO std140 layout");
+static_assert(sizeof(SkyUBOGPU) == 288, "SkyUBOGPU must match GLSL SkyUBO std140 layout");
 static_assert(offsetof(SkyUBOGPU, sunColor) == 112, "SkyUBO sunColor offset mismatch");
-static_assert(offsetof(SkyUBOGPU, starSizeShape) == 160, "SkyUBO starSizeShape offset mismatch");
-static_assert(offsetof(SkyUBOGPU, fallingStarParams) == 240, "SkyUBO fallingStarParams offset mismatch");
-static_assert(offsetof(SkyUBOGPU, fallingStarShapeParams) == 256, "SkyUBO fallingStarShapeParams offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyTop) == 272, "SkyUBO gradientSkyTop offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyHorizon) == 288, "SkyUBO gradientSkyHorizon offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyBottom) == 304, "SkyUBO gradientSkyBottom offset mismatch");
-
-struct StarInstanceGPU
-{
-    float dirAndBrightness[4];
-    float properties[4];
-};
+static_assert(offsetof(SkyUBOGPU, starModel) == 160, "SkyUBO starModel offset mismatch");
+static_assert(offsetof(SkyUBOGPU, skyboxParams) == 176, "SkyUBO skyboxParams offset mismatch");
+static_assert(offsetof(SkyUBOGPU, fallingStarParams) == 192, "SkyUBO fallingStarParams offset mismatch");
+static_assert(offsetof(SkyUBOGPU, fallingStarShapeParams) == 208, "SkyUBO fallingStarShapeParams offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyTop) == 224, "SkyUBO gradientSkyTop offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyHorizon) == 240, "SkyUBO gradientSkyHorizon offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyBottom) == 256, "SkyUBO gradientSkyBottom offset mismatch");
+static_assert(offsetof(SkyUBOGPU, starShape) == 272, "SkyUBO starShape offset mismatch");
 
 // Engine-owned moon art, relative to the install assets root. The Editor's and Player's
-// asset staging copy the repo's Assets/Textures tree next to the executable, so this is a
+// asset staging copy the repo's Engine/Assets/Textures tree next to the executable, so this is a
 // staged-tree path and never a repo path.
 inline constexpr const char* kSkyMoonFullTextureRelativePath = "Textures/Sky/MoonPhases/moon_full.png";
 
@@ -138,8 +151,6 @@ class SkyRenderer
         // Hillaire multiscatter LUT is a coarse 2D table (sunCosZenith x height);
         // 32x32 is the production size — the data is very low-frequency.
         uint32_t multiscatterLutSize = 32;
-
-        uint32_t maxStars = 8000;
 
         // Where the host staged the engine assets (PathUtils::GetInstallAssetsRoot()).
         // The renderer does not derive it: install layout is the host's concern, and this
@@ -183,11 +194,22 @@ class SkyRenderer
             uint32_t Atmos = 2;      // uAtmos (UBO)
             uint32_t TransLUT = 3;   // uTransLUT (sampler)
             uint32_t MoonFull = 4;   // uMoonFullTexture (sampler)
+            uint32_t Exposure = 5;   // uExposure (SSBO, the view's ExposureHistory)
+            // The height fog variant (sky_render_fog) only:
+            uint32_t ViewParams = 6;        // ViewParams (UBO): the pixel's direction and the far plane
+            uint32_t HeightFog = 7;         // HeightFogParams (UBO)
+            uint32_t HeightFogBackdrop = 8; // uHeightFogBackdrop (sampler): the backdrop the fog's sky colour reads
         } SkyRender;
         struct
         {
-            uint32_t Stars = 0; // sb (SSBO)
-            uint32_t Sky = 1;   // uSky (UBO)
+            uint32_t Stars = 0;      // sb (SSBO)
+            uint32_t Sky = 1;        // uSky (UBO)
+            uint32_t Exposure = 2;   // uExposure (SSBO, the view's ExposureHistory)
+            uint32_t SkyViewLUT = 3; // uSkyViewLUT (sampler): the sky behind each star, for its contrast
+            uint32_t Atmos = 4;      // uAtmos (UBO)
+            uint32_t TransLUT = 5;   // uTransLUT (sampler): each star's extinction
+            uint32_t Compensation = 6; // uCompensation (SSBO, the view's exposure compensation state)
+            uint32_t HeightFog = 7;  // HeightFogParams (UBO), the height fog variant (sky_stars_billboard_fog) only
         } StarBillboard;
     };
 
@@ -224,9 +246,16 @@ class SkyRenderer
 
     void Update(const SkySettings& settings, const SkySystemState& state);
 
-    void InvalidateTransmittance();
-
     static void FillDefaultAtmosphere(AtmosphereParametersGPU& atmo);
+
+    /// The sky-view LUT's texel format for a device that loads kernels of the given kind.
+    ///
+    /// The LUT stores absolute scene-linear radiance (1.0 = 203 nits, never pre-exposed), from a
+    /// noon sky near 30 down to a moonless night near 8e-7. Binary16's smallest normal is 6.1e-5,
+    /// and its subnormals are 6e-8 apart, so the SPIR-V kernel writes RGBA32F. The compat (WGSL)
+    /// kernel keeps RGBA16F: WebGPU filters 32-bit floats only behind an optional feature. The
+    /// kernel's storage qualifier (sky_view_lut.comp) and this format change together.
+    static TextureFormat SkyViewLutFormat(ShaderSourceKind kernels);
 
     IDevice* GetDevice() const { return m_Device; }
     const Config& GetConfig() const { return m_Config; }
@@ -246,16 +275,26 @@ class SkyRenderer
     ComputePipelineId  EnsureTransmittanceId(IDevice& device);
     ComputePipelineId  EnsureMultiscatterId(IDevice& device);
     ComputePipelineId  EnsureSkyViewLutId(IDevice& device);
-    GraphicsPipelineId EnsureSkyRenderId(IDevice& device);
-    GraphicsPipelineId EnsureStarBillboardId(IDevice& device);
+    // The sky, with the height fog's sky fill over it when heightFog is set (sky_render_fog). The
+    // height fog variants exist only where their packages were built (HasHeightFogPipelines).
+    GraphicsPipelineId EnsureSkyRenderId(IDevice& device, bool heightFog);
+    // The stars, added to colour 0 (scene colour) and colour 1 (the star light, R16F luminance),
+    // dimmed by the height fog's sky fill when heightFog is set (sky_stars_billboard_fog).
+    GraphicsPipelineId EnsureStarBillboardId(IDevice& device, bool heightFog);
+    // Whether the height fog variants of the sky and the stars loaded. A runtime without their
+    // packages (the web player, whose graph declares no height fog) draws the sky without the fill.
+    bool HasHeightFogPipelines() const { return m_HasHeightFogPipelines; }
     BufferHandle GetStarSSBO() const { return m_StarSSBO; }
-    uint32_t GetStarInstanceCount(float density) const;
+    /// The instance count that draws every star of the field down to the limiting magnitude, plus
+    /// the quarter magnitude over which the vertex shader fades the limit out.
+    uint32_t GetStarInstanceCount(float limitingMagnitude) const;
     bool IsTransmittanceComputed() const { return m_TransmittanceComputed; }
     void MarkTransmittanceComputed() { m_TransmittanceComputed = true; }
 
     // Sky-view LUT dirty tracking. The LUT is a function of SkySettings
-    // only (sun direction, atmosphere, etc. — NOT camera). The pipeline
-    // node computes a digest of the relevant settings each frame and
+    // (sun direction, atmosphere, etc.) and of the camera's altitude band
+    // (Rendering/Sky/SkyViewLutAltitude.h), never of the raw camera. The pipeline
+    // node computes a digest of those inputs each frame and
     // calls IsSkyViewLutCurrentFor() in its activation predicate; if the
     // digest matches the last-computed value, the dispatch is skipped.
     // MarkSkyViewLutComputed() is called from the execute lambda after
@@ -279,9 +318,9 @@ class SkyRenderer
         return m_SkyViewLutComputedOnce ? m_SkyViewLutInputDigest : 0;
     }
 
-    // Multiscatter LUT dirty tracking. Shares the sky-view input digest (the
-    // multiscatter LUT is a function of the same atmosphere + sun-zenith
-    // parameterization). Gated independently so the three-pass chain
+    // Multiscatter LUT dirty tracking. Takes the sky-view LUT's settings digest
+    // without the altitude band (the multiscatter LUT is a function of the same
+    // atmosphere + sun-zenith parameterization, over every height). Gated independently so the three-pass chain
     // (transmittance -> multiscatter -> sky-view) re-runs together on a change.
     bool IsMultiscatterCurrentFor(uint64_t inputDigest) const
     {
@@ -299,6 +338,17 @@ class SkyRenderer
 
     // Reflected set0 binding indices shared with SkyRenderNode (see SkyBindingSlots).
     const SkyBindingSlots& GetBindingSlots() const { return m_Bindings; }
+    // The descriptor sets SkyRenderNode binds against the sky and star pipelines, built by
+    // Initialize. Their layouts are the pipelines' own set0 layouts: WebGPU refuses a bind group
+    // whose layout differs from its pipeline's in any entry.
+    const DescriptorSetDesc& GetSkyRenderSetDesc(bool heightFog) const
+    {
+        return heightFog ? m_SkyRenderFog.SetDesc : m_SkyRender.SetDesc;
+    }
+    const DescriptorSetDesc& GetStarBillboardSetDesc(bool heightFog) const
+    {
+        return heightFog ? m_StarBillboardFog.SetDesc : m_StarBillboard.SetDesc;
+    }
 
     uint32_t GetFrameSlot(IDevice* device) const;
 
@@ -310,6 +360,19 @@ class SkyRenderer
     BufferHandle GetRenderAtmoUBO(uint32_t slot) const { return m_RenderAtmoUBO[slot]; }
 
   private:
+    // A sky draw pipeline: its description, the descriptor set its node binds against it, and the
+    // interned id (on first Ensure).
+    struct SkyDrawPipeline
+    {
+        PipelineDesc Pipe;
+        DescriptorSetDesc SetDesc;
+        GraphicsPipelineId Id{};
+    };
+
+    bool CreateSkyRenderPipeline(const char* packagePath, bool heightFog, SkyDrawPipeline& out);
+    bool CreateStarBillboardPipeline(const char* packagePath, bool heightFog, SkyDrawPipeline& out);
+    GraphicsPipelineId EnsureDrawPipelineId(IDevice& device, SkyDrawPipeline& pipeline);
+
     IDevice* m_Device = nullptr;
     Config m_Config;
     SkyBindingSlots m_Bindings;
@@ -327,16 +390,19 @@ class SkyRenderer
     PipelineDesc m_TransmittancePipe;
     PipelineDesc m_MultiscatterPipe;
     PipelineDesc m_SkyViewLutPipe;
-    PipelineDesc m_SkyRenderPipe;
-    PipelineDesc m_StarBillboardPipe;
+    SkyDrawPipeline m_SkyRender;
+    SkyDrawPipeline m_SkyRenderFog;
+    SkyDrawPipeline m_StarBillboard;
+    SkyDrawPipeline m_StarBillboardFog;
+    bool m_HasHeightFogPipelines = false;
 
     ComputePipelineId  m_TransmittanceId{};
     ComputePipelineId  m_MultiscatterId{};
     ComputePipelineId  m_SkyViewLutId{};
-    GraphicsPipelineId m_SkyRenderId{};
-    GraphicsPipelineId m_StarBillboardId{};
     BufferHandle m_StarSSBO;
     uint32_t m_StarCount = 0;
+    // The drawn field's magnitudes, brightest first: GetStarInstanceCount's prefix search.
+    std::vector<float> m_StarMagnitudes;
 
     static constexpr uint32_t kMaxFramesInFlight = IDevice::kMaxSupportedFramesInFlight;
     uint32_t m_FramesInFlight = 1;

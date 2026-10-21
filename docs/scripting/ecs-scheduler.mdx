@@ -1,0 +1,103 @@
+---
+title: ECS scheduler and iteration choices
+description: The ECS query iteration calls, the Scheduler helpers and the fluent SystemJob builder, and when to use which.
+sidebar:
+  order: 9
+---
+
+This guide explains the query iteration calls (`Each`, `Parallel`, `ForEachChunk`, `ParallelChunks`), the `Scheduler` helpers and the fluent `SystemJob` builder, and when to use which. The parallel modes and their rules are in [ECS parallel queries](./ecs-parallel-queries.mdx).
+
+## Iteration calls on a query
+
+- `Each(fn)`:
+  - The callback is `fn(EntityHandle, args...)`: `Read<T>` binds `const T&`, `Write<T>` binds `T&`, and `Optional<T>` a pointer.
+  - Best for simple per-entity logic; no job system is needed.
+- `Parallel(fn, minBatchSize = 1000)`:
+  - The same callback as `Each`. It uses the world's job system when there is one, and groups work per chunk with the adaptive batching of `QueryPolicy`.
+  - Good for medium data sizes: it keeps the per-task overhead low while running in parallel.
+- `ForEachChunk(fn)`:
+  - The callback is `fn(T*..., size_t count)`. An `Optional<T>` column may be `nullptr`.
+  - Best for high-performance code with tight inner loops and SIMD-friendly processing.
+- `ParallelChunks(fn)`:
+  - Like `ForEachChunk`, but submits one task per chunk to the job system.
+  - Use it when data sets are very large and chunk-level work outweighs the overhead.
+
+## Scheduler helpers and SystemJob
+
+- `Scheduler::MakeJobEach`, `MakeJobParallel`, `MakeJobForEachChunk`, and `MakeJobParallelChunks` wrap a query in a `JobDesc` with its read and write sets.
+- `Scheduler::SystemJob::Each`, `Parallel`, `ForEachChunk`, and `ParallelChunks` are a fluent builder with `Name` or `WithName`, and `DependsOn`. For example: `Scheduler::SystemJob::Parallel(q, fn, 0).WithName("WriteVel").DependsOn(0);`
+
+Every helper copies the read and write sets from the query (`GetReadSet`, `GetWriteSet`), so the scheduler can avoid conflicts when it runs jobs together.
+
+## Conflict-free scheduling and dependencies
+
+- The scheduler forms parallel waves of jobs that do not conflict: no write-write or read-write overlap by `DenseSignature`.
+- Optional dependency edges enforce ordering across jobs (`Dependency{Before, After}` or `SystemJob::DependsOn`).
+- Typical patterns:
+  - Several read-only jobs, on disjoint or the same components, run together.
+  - A writer to a component forces sequencing with the readers and writers of that component.
+  - Use dependencies when the ordering matters even without a data hazard.
+
+## When to choose each
+
+- `Each` or `Parallel`:
+  - Use `Each` for small counts or when there is no job system.
+  - Use `Parallel` for medium counts, and let `QueryPolicy` choose the batch sizes (`World::SetQueryPolicy`).
+- `ForEachChunk` or `ParallelChunks`:
+  - Use `ForEachChunk` for single-threaded, cache-efficient processing, and when you want explicit control over the loops.
+  - Use `ParallelChunks` for very large data with naturally chunkable work. Mind the per-chunk overhead.
+- The scheduler or direct query calls:
+  - Direct calls are simplest for a few independent operations.
+  - Use the scheduler for several jobs with possible conflicts, so the runtime runs them in parallel safely.
+  - Prefer the helpers or `SystemJob`: less boilerplate, and the read and write sets are right.
+
+| Call | Use |
+|---|---|
+| `Each` | simple, single-threaded |
+| `Parallel` | batched parallelism through `QueryPolicy`; the same callback as `Each` |
+| `ForEachChunk` | chunk pointer access, the most control and speed; single-threaded |
+| `ParallelChunks` | one task per chunk, for very large data sets |
+| `Scheduler` with the helpers or `SystemJob` | several jobs together, without conflicts, with optional dependencies |
+
+## Policy configuration
+
+- The world owns its `QueryPolicy`. `WorldBuilder::SetQueryPolicy(policy)` applies one at construction.
+- Its fields:
+  - `MinBatchSizeDefault`: the default for `Parallel` when the caller passes 0.
+  - `EnableBackpressure`, `QueuePressureFactor`, `PendingPressureFactor`, and `PressuredMinBatchFloor`: adapt the batch sizes when the worker queue is under pressure.
+
+```cpp title="A policy, two jobs, and the fluent form"
+WorldBuilder builder;
+QueryPolicy policy; policy.MinBatchSizeDefault = 2000;
+auto world = builder.SetJobSystem(&js).SetQueryPolicy(policy).Build();
+
+auto qA = world->Query<Read<Pos>>();
+auto qB = world->Query<Write<Vel>>();
+Scheduler sched(world->GetJobSystem());
+
+auto jA = Scheduler::MakeJobEach(qA,  [&](EntityHandle, const Pos&){}, "ReadPos");
+auto jB = Scheduler::MakeJobEach(qB,  [&](EntityHandle, Vel& v){ v.x+=1; }, "WriteVel");
+
+std::vector<Scheduler::JobDesc> jobs{ jA, jB };
+sched.Run(jobs);
+
+// The fluent SystemJob form.
+std::vector<Scheduler::SystemJob> sysJobs;
+sysJobs.push_back(Scheduler::SystemJob::Each(qA, [&](EntityHandle, const Pos&){}).WithName("ReadPos"));
+sysJobs.push_back(Scheduler::SystemJob::Parallel(qB, [&](EntityHandle, Vel& v){ v.x+=1; }, 0).WithName("WriteVel").DependsOn(0));
+sched.Run(sysJobs);
+```
+
+## Chunk callbacks and optional components
+
+- `ForEachChunk` and `ParallelChunks` accept two callback shapes: `fn(T*..., size_t count)` and `fn(T*...)`.
+- With `Optional<U>` in the query, the `U*` passed to the chunk callback is `nullptr` for a chunk without `U`.
+- The adapter that allows leaving out the count adds negligible overhead in typical builds, and tests cover it. A `nullptr` branch for an optional component is taken per chunk, not per entity.
+- The `MakeJobParallel` and `MakeJobParallelChunks` helpers wait on their own jobs, so the scheduler treats each as a single wave item without leaking handles.
+
+## Diagnostics
+
+- Define `ECS_ADAPTER_DIAGNOSTICS=1` when configuring the tests to enable the adapter counters `Detail::ChunkAdapterDiag::CallsWithCount` and `Detail::ChunkAdapterDiag::CallsWithoutCount`. The `QueryBenchmarks` tests log them.
+- Define `ECS_SCHEDULER_DIAGNOSTICS=1` to print wave-level timings and totals, for tuning `QueryPolicy` and job composition.
+
+Examples: `Tests/ECS/ParallelPerfTest.cpp` uses `MakeJobParallel`, and `Tests/ECS/ECSCoreTest.cpp` uses `Scheduler::SystemJob` chunk jobs with optional components.

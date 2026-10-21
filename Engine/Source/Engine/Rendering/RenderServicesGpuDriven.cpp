@@ -25,7 +25,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
@@ -672,10 +671,10 @@ uint32_t RenderServices::ScheduleWorldBucketerCommon()
 
     for (const auto& view : m_ViewRegistry.GetViews())
     {
-        // A view with no active layer declares no pass that reads a slice (the
-        // culling loop and the pipeline skip it too); its cull-less slice would
-        // still scatter every instance of its world.
-        if (view.ActiveRenderLayerMask() == 0u)
+        // A view with no active layer (asleep, or on no layer) gets no slice: the
+        // culling loop skips it too, and its pipeline declares only its clear and
+        // sky. A cull-less slice would still scatter every instance of its world.
+        if (view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
             continue;
 
         // Main-view / thumbnail / picking slice (cascadeIndex = none).
@@ -1148,7 +1147,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
     {
         if (view.cameraId == 0)
             continue;
-        if (view.ActiveRenderLayerMask() == 0u)
+        if (view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
             continue;
 
         const Rendering::CameraData* camData = findCamera(view.cameraId);
@@ -1185,7 +1184,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         ctx.FarPlane = camera.FarPlane;
         ctx.FirstInstance = 0;
         ctx.InstanceCount = instanceCount;
-        ctx.RenderLayerMask = view.ActiveRenderLayerMask();
+        ctx.Layers = view.ActiveRenderLayerMask();
         ctx.FrameIndex = thisFrame;
         ctx.DeltaTime = deltaTime;
         ctx.CullingPipeline = m_GpuCullingPipeline.get();
@@ -1211,7 +1210,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         strategy->ScheduleCulling(ctx);
 
         const auto areaShadow = BuildAreaShadowFrameInfo(GetWorldLights(view.worldId));
-        if (areaShadow.valid && view.ActiveRenderLayerMask() != 0u && HasShadowCasters(view.id))
+        if (areaShadow.valid && view.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(view.id))
         {
             Rendering::ViewCullingContext areaCtx{};
             areaCtx.Id = view.id;
@@ -1226,7 +1225,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
             areaCtx.FarPlane = areaShadow.farPlane;
             areaCtx.FirstInstance = 0;
             areaCtx.InstanceCount = instanceCount;
-            areaCtx.RenderLayerMask = view.ActiveRenderLayerMask();
+            areaCtx.Layers = view.ActiveRenderLayerMask();
             areaCtx.FrameIndex = thisFrame;
             areaCtx.DeltaTime = deltaTime;
             areaCtx.CullingPipeline = m_GpuCullingPipeline.get();
@@ -1235,7 +1234,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         }
 
         const auto spotShadow = BuildSpotShadowFrameInfo(GetWorldLights(view.worldId));
-        if (spotShadow.valid && view.ActiveRenderLayerMask() != 0u && HasShadowCasters(view.id))
+        if (spotShadow.valid && view.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(view.id))
         {
             Rendering::ViewCullingContext spotCtx{};
             spotCtx.Id = view.id;
@@ -1250,7 +1249,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
             spotCtx.FarPlane = spotShadow.farPlane;
             spotCtx.FirstInstance = 0;
             spotCtx.InstanceCount = instanceCount;
-            spotCtx.RenderLayerMask = view.ActiveRenderLayerMask();
+            spotCtx.Layers = view.ActiveRenderLayerMask();
             spotCtx.FrameIndex = thisFrame;
             spotCtx.DeltaTime = deltaTime;
             spotCtx.CullingPipeline = m_GpuCullingPipeline.get();
@@ -1264,7 +1263,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         // per (view, frame) — the declaration path reads the identical result, so
         // the per-face mask and slot set cannot diverge (they are one computation,
         // not two pure re-derives). Casters stay culled to the LIGHT frustum.
-        if (view.ActiveRenderLayerMask() != 0u && HasShadowCasters(view.id))
+        if (view.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(view.id))
         {
             const auto& assignment = EnsurePointShadowAssignment(
                 view.id, view.worldId, m_ViewRegistry.ResolveCameraData(view.id));
@@ -1297,7 +1296,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
                     pointCtx.FarPlane = fi.farPlane;
                     pointCtx.FirstInstance = 0;
                     pointCtx.InstanceCount = instanceCount;
-                    pointCtx.RenderLayerMask = view.ActiveRenderLayerMask();
+                    pointCtx.Layers = view.ActiveRenderLayerMask();
                     pointCtx.FrameIndex = thisFrame;
                     pointCtx.DeltaTime = deltaTime;
                     pointCtx.CullingPipeline = m_GpuCullingPipeline.get();

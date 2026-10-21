@@ -1,12 +1,14 @@
 #include "Scene/SceneEditorController.h"
 
 #include "EditorInputActions.h"
+#include "Editor/Settings/BuildSettingsStore.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Editor/Shortcuts/EditorShortcuts.h"
 #include "Panels/ConfirmActionModal.h"
 #include "Panels/RestoreSceneBackupModal.h"
 #include "Panels/SaveSceneAsModal.h"
 #include "Panels/SaveSceneChangesModal.h"
+#include "Projects/ProjectStartupScene.h"
 #include "Scene/SceneBackupRecovery.h"
 #include "Scene/SceneDocumentManager.h"
 #include "Scene/WorldSnapshotCommand.h"
@@ -198,7 +200,7 @@ void SceneEditorController::AttachToRoot(UIElement& root,
                                              // current scene is discarded — cancel was the way to keep it.
                                              m_PendingNewSceneNaming = false;
                                              CleanupBackupsForCleanClose();
-                                             m_Doc->NewSceneUntitled();
+                                             m_Doc->NewSceneUntitled(EngineCore::GetInstance().GetRenderServices());
                                              if (m_UndoRedo)
                                                  m_UndoRedo->Clear();
                                              if (m_Doc->SaveAs(path))
@@ -221,17 +223,23 @@ void SceneEditorController::AttachToRoot(UIElement& root,
                                          m_Pending = *m_AfterPrompt;
                                          m_AfterPrompt.reset();
                                      }
-                                     if (m_DeferredQuitAfterSave)
+                                     m_DeferredCancelAfterSave = {};
+                                     if (m_DeferredProceedAfterSave)
                                      {
-                                         auto quit = std::move(m_DeferredQuitAfterSave);
-                                         m_DeferredQuitAfterSave = {};
-                                         if (quit)
-                                             quit();
+                                         auto proceed = std::move(m_DeferredProceedAfterSave);
+                                         m_DeferredProceedAfterSave = {};
+                                         if (proceed)
+                                             proceed();
                                      }
                                  });
         m_SaveAsModal->SetOnCancel([this]() {
             m_AfterPrompt.reset();
-            m_DeferredQuitAfterSave = {};
+            m_DeferredProceedAfterSave = {};
+            if (auto canceled = std::move(m_DeferredCancelAfterSave))
+            {
+                m_DeferredCancelAfterSave = {};
+                canceled();
+            }
             if (m_EagerScenePersistence)
             {
                 // New-scene cancel keeps the current scene; untitled-prompt cancel just
@@ -278,7 +286,8 @@ void SceneEditorController::Update(Input::InputSystem* inputSystem)
         const bool policyAnswersDirtyPrompt =
             a.restorePolicy != OpenRestorePolicy::Prompt;
         const bool shouldPromptDirty = IsSceneDirty() && m_SaveChangesModal
-                                    && !m_IgnoreDirtyForNextPending && !policyAnswersDirtyPrompt;
+                                    && !m_IgnoreDirtyForNextPending && !policyAnswersDirtyPrompt
+                                    && !a.outgoingChangesDiscarded;
         if (shouldPromptDirty)
         {
             PromptIfDirtyThen(a);
@@ -689,7 +698,7 @@ void SceneEditorController::Execute(const PendingAction& a)
         // The outgoing document closes cleanly here (any dirty state was
         // resolved by the prompt in Update), so its autosave staging is stale.
         CleanupBackupsForCleanClose();
-        m_Doc->NewSceneUntitled();
+        m_Doc->NewSceneUntitled(EngineCore::GetInstance().GetRenderServices());
         if (m_UndoRedo)
             m_UndoRedo->Clear();
         return;
@@ -930,41 +939,43 @@ void SceneEditorController::PromptIfDirtyThen(PendingAction next)
     m_SaveChangesModal->Show("Save changes?", msg);
 }
 
-void SceneEditorController::PromptSaveBeforeQuit(std::function<void()> proceedQuit)
+void SceneEditorController::PromptSaveBefore(const std::string& action,
+                                             std::function<void(bool changesDiscarded)> proceed,
+                                             std::function<void()> canceled)
 {
-    if (!proceedQuit)
+    if (!proceed)
         return;
     if (!m_Doc || !m_SaveChangesModal)
     {
-        proceedQuit();
+        proceed(false);
         return;
     }
     // Payload-aware: stroke-only sessions must prompt too (see IsSceneDirty).
     if (!IsSceneDirty())
     {
-        proceedQuit();
+        proceed(false);
         return;
     }
 
     const std::string msg =
         m_Doc->HasScenePath()
-            ? "Save changes to the scene before quitting?"
-            : "The scene has unsaved changes and has not been saved yet. Save before quitting?";
+            ? "Save changes to the scene before " + action + "?"
+            : "The scene has unsaved changes and has not been saved yet. Save before " + action + "?";
 
-    auto finishHeld = std::make_shared<std::function<void()>>(std::move(proceedQuit));
-    auto finishQuit = [finishHeld]() {
-        if (!finishHeld || !*finishHeld)
+    auto proceedHeld = std::make_shared<std::function<void(bool)>>(std::move(proceed));
+    auto finish = [proceedHeld](bool changesDiscarded) {
+        if (!proceedHeld || !*proceedHeld)
             return;
-        std::function<void()> fn = std::move(*finishHeld);
-        *finishHeld = nullptr;
+        std::function<void(bool)> fn = std::move(*proceedHeld);
+        *proceedHeld = nullptr;
         if (fn)
-            fn();
+            fn(changesDiscarded);
     };
 
-    m_SaveChangesModal->SetOnSave([this, finishQuit]() {
+    m_SaveChangesModal->SetOnSave([this, finish, canceled]() {
         if (!m_Doc)
             return;
-        // Refused during play, and the quit does NOT proceed: finishQuit stays unrun, because
+        // Refused during play, and the action does NOT proceed: finish stays unrun, because
         // discarding unsaved authored work is not a reasonable reading of "Save". The user is
         // told what to do; Don't Save remains the deliberate way out.
         if (RefuseSaveDuringPlay(nullptr))
@@ -980,18 +991,22 @@ void SceneEditorController::PromptSaveBeforeQuit(std::function<void()> proceedQu
                     if (auto scenePath = m_Doc->GetScenePath())
                         m_OnAfterSave(*scenePath);
                 }
-                finishQuit();
+                finish(false);
             }
             return;
         }
-        m_DeferredQuitAfterSave = finishQuit;
+        m_DeferredProceedAfterSave = [finish]() { finish(false); };
+        m_DeferredCancelAfterSave = canceled;
         DoSaveAsFlow();
     });
-    m_SaveChangesModal->SetOnDontSave([finishQuit]() { finishQuit(); });
-    m_SaveChangesModal->SetOnCancel([this, finishHeld]() {
-        m_DeferredQuitAfterSave = {};
-        if (finishHeld)
-            *finishHeld = nullptr;
+    m_SaveChangesModal->SetOnDontSave([finish]() { finish(true); });
+    m_SaveChangesModal->SetOnCancel([this, proceedHeld, canceled]() {
+        m_DeferredProceedAfterSave = {};
+        m_DeferredCancelAfterSave = {};
+        if (proceedHeld)
+            *proceedHeld = nullptr;
+        if (canceled)
+            canceled();
     });
 
     m_SaveChangesModal->Show("Save scene?", msg);
@@ -1097,6 +1112,36 @@ void SceneEditorController::MaybePromptSaveUntitledScene()
     m_SaveAsModal->Show(EngineCore::GetInstance().GetResolvedAssetRoot());
 }
 
+void SceneEditorController::OpenProjectStartupScene(const std::filesystem::path& projectRoot,
+                                                    bool outgoingChangesDiscarded)
+{
+    ProjectStartupSceneCandidates candidates;
+    candidates.GlobalBuildScenes = LoadGlobalBuildScenes();
+    SettingsStore settings = OpenProjectSettings(projectRoot);
+    std::string err;
+    (void)settings.Load(&err);
+    settings.TryGetString(kProjectStartupSceneKey, candidates.StartupScene);
+    candidates.RecentScenes = GetRecentScenePaths();
+
+    const std::optional<std::filesystem::path> scene = ResolveProjectStartupScene(projectRoot, candidates);
+    // Both requests below replace m_Pending with their own action, except a new scene under eager
+    // persistence, which asks for a name first and queues nothing: the answer is stamped only on an
+    // action this call queued, never on an unrelated one already pending.
+    const bool queuesAction = scene.has_value() || !m_EagerScenePersistence;
+    if (scene)
+    {
+        Logger::Log::Info("Editor: opening the project's startup scene '{}'", scene->string());
+        RequestOpenScene(*scene, /*additive*/ false);
+    }
+    else
+    {
+        Logger::Log::Info("Editor: '{}' names no startup scene; opening a default scene", projectRoot.string());
+        RequestNewScene();
+    }
+    if (queuesAction && m_Pending)
+        m_Pending->outgoingChangesDiscarded = outgoingChangesDiscarded;
+}
+
 void SceneEditorController::RequestNewScene()
 {
     if (m_EagerScenePersistence)
@@ -1166,20 +1211,21 @@ void SceneEditorController::PromptDegradedThenSave()
     const std::size_t dropped = degraded->DroppedCount();
     const std::size_t preserved = degraded->SkippedCount() - dropped;
 
-    std::string msg = "This scene loaded with " + std::to_string(degraded->SkippedCount()) +
-                      " assignment(s) this build could not read";
+    std::string msg = "This scene has " + std::to_string(degraded->SkippedCount()) +
+                      " line(s) that did not apply: a value that could not be read, a reference that did not "
+                      "resolve, a field the component does not have, or a line that is not an assignment.";
     if (dropped > 0)
     {
-        msg += ", and saving will permanently drop " + std::to_string(dropped) + " of them from ";
+        msg += " Saving removes " + std::to_string(dropped) + " of them from ";
         msg += degraded->DocumentPath.filename().string() + ".";
     }
     else
     {
-        msg += ". Their original text was preserved and will be written back unchanged.";
+        msg += " Saving writes them back unchanged.";
     }
     if (preserved > 0 && dropped > 0)
-        msg += " The other " + std::to_string(preserved) + " will be written back unchanged.";
-    msg += " See the log for the full list.";
+        msg += " The other " + std::to_string(preserved) + " are written back unchanged.";
+    msg += " The Log panel lists each line and how to fix it.";
 
     m_SaveChangesModal->SetOnSave([this]() { DoSaveConfirmed(DegradedSavePolicy::SaveAnyway); });
     m_SaveChangesModal->SetOnDontSave([this]() { DoSaveAsFlow(); });
@@ -1214,8 +1260,9 @@ bool SceneEditorController::SaveActiveScene(std::string* outError, DegradedSaveP
     {
         if (outError)
             *outError = "scene loaded with " + std::to_string(degraded->SkippedCount()) +
-                        " unreadable assignment(s) (" + std::to_string(degraded->DroppedCount()) +
-                        " would be lost); pass force=true to save anyway, or save to a new path";
+                        " line(s) that did not apply (a save would not keep " +
+                        std::to_string(degraded->DroppedCount()) +
+                        "); pass force=true to save anyway, or save to a new path";
         return false;
     }
     if (!m_Doc->Save(degradedPolicy))

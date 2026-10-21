@@ -244,6 +244,33 @@ TEST_F(MarkupRegionTest, TheDecimatedRingOfASmoothRegionStaysWithinATenthOfAMete
         EXPECT_LE(DistanceToRing(point, tested), 0.1f + 1e-3f);
 }
 
+// The AI Assistant's block caps a ring at 64 points by Douglas-Peucker: a 1,000-point circle keeps
+// at most 64 of its own points, and a square sampled at 1,000 points keeps exactly its corners.
+TEST(MarkupRegionDecimation, AThousandPointRingKeepsAtMostSixtyFourOfItsPointsAndItsCorners)
+{
+    const std::vector<Vector2> circle = Circle(100.0f, 1000);
+    const std::vector<Vector2> kept = MarkupECS::DecimateRegionRing(circle, 64);
+    EXPECT_LE(kept.size(), 64u);
+    EXPECT_GE(kept.size(), 16u);
+    for (const Vector2& point : kept)
+        EXPECT_NE(std::find(circle.begin(), circle.end(), point), circle.end());
+
+    std::vector<Vector2> square;
+    const Vector2 corners[] = {{0.0f, 0.0f}, {200.0f, 0.0f}, {200.0f, 200.0f}, {0.0f, 200.0f}};
+    for (int side = 0; side < 4; ++side)
+    {
+        for (int step = 0; step < 250; ++step)
+        {
+            const float32 t = static_cast<float32>(step) / 250.0f;
+            const Vector2& from = corners[side];
+            const Vector2& to = corners[(side + 1) % 4];
+            square.emplace_back(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+        }
+    }
+    const std::vector<Vector2> squareKept = MarkupECS::DecimateRegionRing(square, 64);
+    EXPECT_EQ(squareKept, std::vector<Vector2>(std::begin(corners), std::end(corners)));
+}
+
 // A linear outline is tested as its knots: one edge per knot, not the spline's 16 samples per
 // segment, which kept the worst point test 16 times over its bound.
 TEST_F(MarkupRegionTest, ALinearRegionsFootprintIsItsKnots)

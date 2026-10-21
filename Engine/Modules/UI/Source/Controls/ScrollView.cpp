@@ -408,7 +408,13 @@ void ScrollView::EnsureYVisible(float contentY, float viewTop, float viewHeight)
         // editor behavior and keeps wheel scrolling useful for single-line content (e.g. TextField).
         // When the pointer is over a scrollbar, do not remap vertical wheel to horizontal scroll —
         // that axis swap feels like a wrong scroll direction on the scrollbar.
-        if (!IsScrollbarInTargetChain(e.Target) && dx == 0.0f && dy != 0.0f && maxY <= 0.0f && maxX > 0.0f)
+        // A view nested in a vertically scrolling page (a code block in a conversation) sets
+        // --ui_scrollview_keep_wheel_axis: 1 so the vertical wheel passes to the page, as Chrome
+        // does over a horizontally scrolling block.
+        const bool keepWheelAxis =
+            GetResolvedStyle().GetCustomNumber(HashStringId("--ui_scrollview_keep_wheel_axis")).value_or(0.0f) > 0.0f;
+        if (!keepWheelAxis && !IsScrollbarInTargetChain(e.Target) && dx == 0.0f && dy != 0.0f && maxY <= 0.0f &&
+            maxX > 0.0f)
         {
             dx = dy;
             dy = 0.0f;

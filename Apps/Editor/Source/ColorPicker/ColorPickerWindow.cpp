@@ -51,7 +51,7 @@ ColorPicker* FindDialogPicker(UIManager* ui)
     if (!ui)
         return nullptr;
     UIElement* root = ui->GetRootElement();
-    UIElement* pickerEl = root ? root->FindById("colorpicker-dialog-picker") : nullptr;
+    UIElement* pickerEl = root ? root->FindById("colorpicker-dialog-picker"_sid) : nullptr;
     return pickerEl ? dynamic_cast<ColorPicker*>(pickerEl) : nullptr;
 }
 
@@ -398,7 +398,7 @@ std::unique_ptr<EditorApplication::EditorWindowContext> ColorPickerWindow::Creat
                             if (!ctxRaw || !ctxRaw->ui)
                                 return;
                             UIElement* root = ctxRaw->ui->GetRootElement();
-                            UIElement* pickerEl = root ? root->FindById("colorpicker-dialog-picker") : nullptr;
+                            UIElement* pickerEl = root ? root->FindById("colorpicker-dialog-picker"_sid) : nullptr;
                             ColorPicker* pickerControl = pickerEl ? dynamic_cast<ColorPicker*>(pickerEl) : nullptr;
                             ColorPickerContext* cpCtx = ctxRaw ? ColorPickerEditorIntegration::GetContext(ctxRaw) : nullptr;
                             if (pickerControl && cpCtx && cpCtx->onApply)

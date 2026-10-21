@@ -85,7 +85,7 @@ void CheckCallbackRetirement(bool dynamicModule, bool shutdown = false)
             services.EnsureFeature<ObservedFeature>(featureAlive);
         const auto camera = services.Views().AllocateCamera("CallbackCamera");
         const auto view = services.Views().AllocateView("CallbackView", camera);
-        services.Views().SetViewRenderLayerMask(view, 1);
+        services.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
         services.Views().SetViewTargets(view, 0, 0, 0, ViewClearConfig{});
         const auto registerGeneration = [&](uint64_t generation)
         {
@@ -213,7 +213,7 @@ void CheckStreamRetirement(bool abandonedSameFrame)
         int destroyed = 0, executed = 0;
         const auto camera = services.Views().AllocateCamera("StreamCamera");
         const auto view = services.Views().AllocateView("StreamView", camera);
-        services.Views().SetViewRenderLayerMask(view, 1);
+        services.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
         services.Views().SetViewTargets(view, 0, 0, 0, ViewClearConfig{});
         ECS::SetActiveRegistrationModule("StreamModule", 1);
         const bool registered = services.Spine().RegisterPipelineNodeType("CallbackProbe", [&]

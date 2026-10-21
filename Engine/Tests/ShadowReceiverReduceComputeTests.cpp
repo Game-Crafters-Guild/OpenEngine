@@ -379,7 +379,9 @@ void ReferenceBoxes(const std::vector<ReferenceSample>& samples, Vector3 Referen
 void ExpectBinBox(const AABB& got, const AABB& strict, const AABB& loose, float tolerance)
 {
     if (!strict.IsEmpty())
+    {
         ASSERT_FALSE(got.IsEmpty());
+    }
     if (got.IsEmpty())
         return;
     ASSERT_FALSE(loose.IsEmpty()) << "a bin no receiver reaches holds a box";

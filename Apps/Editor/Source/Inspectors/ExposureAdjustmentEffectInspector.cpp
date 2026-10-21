@@ -17,7 +17,7 @@ namespace
 {
 constexpr float kCompensationMin = -5.0f;
 constexpr float kCompensationMax = 5.0f;
-constexpr float kEvMin = -5.0f;
+constexpr float kEvMin = Components::kDefaultAutoExposureMinEv;
 constexpr float kEvMax = 20.0f;
 // Row reset values come straight from the component's member defaults.
 constexpr Components::ExposureAdjustmentEffect kDefaults{};

@@ -124,7 +124,7 @@ TEST(SceneExportStrip, ExportKeepsAPropAndItsChildWithoutTheMeasureOnIt)
     AssetRegistry registry;
     TexturePackageCookStats textureStats;
     std::string error;
-    ASSERT_TRUE(CookStagedContent(root, manifest, registry, parsers, TextureCookEncodeQuality::QuickBC7,
+    ASSERT_TRUE(CookStagedContent(root, manifest, registry, parsers,
                                   /*textureWorkers=*/nullptr, /*manifestParsePool=*/nullptr,
                                   NeverCancelled, textureStats, error))
         << error;
@@ -262,7 +262,7 @@ TEST(SceneExportStrip, ARegionLeavesOnlyItsEntityAndTransform)
     AssetRegistry registry;
     TexturePackageCookStats textureStats;
     std::string error;
-    ASSERT_TRUE(CookStagedContent(root, manifest, registry, parsers, TextureCookEncodeQuality::QuickBC7,
+    ASSERT_TRUE(CookStagedContent(root, manifest, registry, parsers,
                                   /*textureWorkers=*/nullptr, /*manifestParsePool=*/nullptr,
                                   NeverCancelled, textureStats, error))
         << error;

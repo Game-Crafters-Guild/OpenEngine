@@ -152,7 +152,7 @@ void MissingAssetsPanel::RebuildList()
     {
         if (auto* root = mgr->GetRootElement())
         {
-            if (auto* tab = dynamic_cast<DockTab*>(root->FindById(std::string("tab:") + EditorPanelIds::MissingAssets)))
+            if (auto* tab = dynamic_cast<DockTab*>(root->FindById(HashStringId(std::string("tab:") + EditorPanelIds::MissingAssets))))
                 tab->SetText(tabText);
         }
     }

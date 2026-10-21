@@ -18,9 +18,16 @@ void ReleaseWithEntity(EntityHandle entity, OwnedResource& value)
     released += value.Value;
 }
 void ReleaseOther(OtherResource& value) { replacementReleased += value.Value; }
+const World* releasedFrom = nullptr;
+void ReleaseFromWorld(const World& world, EntityHandle entity, OwnedResource& value)
+{
+    releasedFrom = &world;
+    releasedEntity = entity;
+    released += value.Value;
+}
 class RemovalHookLifetime : public testing::Test
 {
-    void SetUp() override { released = replacementReleased = 0; releasedEntity = {}; }
+    void SetUp() override { released = replacementReleased = 0; releasedEntity = {}; releasedFrom = nullptr; }
 };
 
 TEST_F(RemovalHookLifetime, ImagePinsIncludeEveryLiveWorldUntilUnregistered)
@@ -141,6 +148,27 @@ TEST_F(RemovalHookLifetime, EntityAwareHookCanBeRemovedAndReplaced)
     world.ProcessCommands();
     EXPECT_EQ(released, 11);
     EXPECT_EQ(releasedEntity.id, expected.id);
+}
+
+TEST_F(RemovalHookLifetime, WorldAwareRemoveHookNamesTheWorldTheComponentLeaves)
+{
+    World first(nullptr), second(nullptr);
+    first.RegisterOnRemove<OwnedResource>(ReleaseFromWorld);
+    second.RegisterOnRemove<OwnedResource>(ReleaseFromWorld);
+    auto inSecond = second.Create(OwnedResource{5});
+    second.ProcessCommands();
+    const auto expected = inSecond.GetHandle();
+    inSecond.Remove<OwnedResource>();
+    second.ProcessCommands();
+    EXPECT_EQ(releasedFrom, &second);
+    EXPECT_EQ(releasedEntity.id, expected.id);
+    EXPECT_EQ(released, 5);
+
+    first.Create(OwnedResource{7});
+    first.ProcessCommands();
+    first.Clear();
+    EXPECT_EQ(releasedFrom, &first);
+    EXPECT_EQ(released, 12);
 }
 
 TEST_F(RemovalHookLifetime, WorldDestructionDoesNotCallUnregisteredCode)

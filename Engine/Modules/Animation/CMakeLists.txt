@@ -84,6 +84,7 @@ target_link_libraries(Animation
         nlohmann_json::nlohmann_json
     PRIVATE
         Logger
+        Serialization
 )
 
 # cgltf is header-only via vcpkg. Animation only INCLUDES cgltf.h (no

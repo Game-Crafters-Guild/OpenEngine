@@ -72,7 +72,7 @@ while (running) {
 - Render passes should end in COLOR_ATTACHMENT_OPTIMAL; do not record manual present barriers in command lists.
 - Call Device::Present, which performs the just-in-time transition COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR, merges registered per-present waits (timeline-first), and presents (Vulkan bridges to a single presentReady binary internally).
 - Use RenderGraph::SetBackbuffer() when presenting; avoid hidden Present pass injection.
-- `RenderGraph::GetBackbufferDescriptor()` reports the active backbuffer's format, extent and sample count; see `Engine/Modules/Rendering/docs/RenderGraph.md`.
+- `RenderGraph::GetBackbufferDescriptor()` reports the active backbuffer's format, extent and sample count; see `docs/rendering/render-graph.mdx`.
 
 
 ## Architecture Overview

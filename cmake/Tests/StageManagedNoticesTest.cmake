@@ -37,11 +37,14 @@ endforeach()
 # The aggregate reads as text: no byte below 0x20 other than tab, LF and CR, and the
 # RTF notice appears as its displayed text.
 file(READ "${_out}/THIRD_PARTY_NOTICES.md" _book)
-string(REGEX MATCH "^.*" _book_before_nul "${_book}")
-string(LENGTH "${_book_before_nul}" _book_before_nul_length)
-string(LENGTH "${_book}" _book_length)
-if(NOT _book_before_nul_length EQUAL _book_length)
-    message(FATAL_ERROR "aggregate notice contains a NUL byte at offset ${_book_before_nul_length}")
+# A regex stops at a NUL, so whatever "^.*" leaves behind starts at one. Measured from
+# REGEX REPLACE: CMake 4.3 drops empty list elements from a REGEX MATCH result.
+string(REGEX REPLACE "^.*" "" _book_from_nul "${_book}")
+string(LENGTH "${_book_from_nul}" _book_from_nul_length)
+if(NOT _book_from_nul_length EQUAL 0)
+    string(LENGTH "${_book}" _book_length)
+    math(EXPR _nul_offset "${_book_length} - ${_book_from_nul_length}")
+    message(FATAL_ERROR "aggregate notice contains a NUL byte at offset ${_nul_offset}")
 endif()
 string(ASCII 1 2 3 4 5 6 7 8 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 _controls)
 if(_book MATCHES "[${_controls}]")

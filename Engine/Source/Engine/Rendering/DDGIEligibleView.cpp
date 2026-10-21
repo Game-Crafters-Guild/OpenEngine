@@ -15,7 +15,7 @@ constexpr float kFollowMotionEpsilonSq = 1.0e-7f;
 
 bool IsDDGIEligibleView(const Rendering::ViewDesc& view, uint64 worldId)
 {
-    if (view.cameraId == 0 || view.ActiveRenderLayerMask() == 0u)
+    if (view.cameraId == 0 || view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
         return false;
     if (view.purpose != Rendering::ViewPurpose::Game && view.purpose != Rendering::ViewPurpose::EditorScene)
         return false;

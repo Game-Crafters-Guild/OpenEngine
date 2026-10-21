@@ -326,6 +326,10 @@ bool AssignTextureToEntityMaterialSlot(ECS::World& world,
 
     MaterialDocument doc = matAsset->GetDocument();
     const std::string slot(slotKey);
+    // A material made for a dropped albedo texture shows the texture as authored: the new-material
+    // base colour (0.8) would multiply into it and dim every color it holds.
+    if (createdNewMaterial && slot == "albedoMap")
+        doc.properties["baseColor"] = std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f};
 
     // Capture previous slot value for undo (only meaningful when we didn't
     // create a fresh material, since a fresh doc's slots are defaults).

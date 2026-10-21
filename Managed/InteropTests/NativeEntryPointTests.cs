@@ -19,11 +19,11 @@ namespace GameEngine.ManagedInteropTests
         private const string kNativeLibrary = "GameEngine.Native";
         private const string kExportPrefix = "GE_";
 
-        /// <summary>The script-facing ABI assemblies: Scripting.ABI (TimelineApi and the rest) and Input.ABI.</summary>
+        /// <summary>The script-facing ABI assembly: Scripting.ABI (TimelineApi and the rest).</summary>
         [Test]
         public void EveryNativeImportBindsAGePrefixedExport()
         {
-            Assembly[] assemblies = { typeof(TimelineApi).Assembly, typeof(Input).Assembly };
+            Assembly[] assemblies = { typeof(TimelineApi).Assembly };
             List<(string Declaration, string BoundName)> imports = NativeImports(assemblies).ToList();
             List<string> unbound = imports.Where(import => !import.BoundName.StartsWith(kExportPrefix))
                                           .Select(import => $"{import.Declaration} binds {import.BoundName}")
@@ -33,6 +33,25 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(unbound, Is.Empty,
                         "these declarations bind a name GameEngine.Native does not export; " +
                         "add EntryPoint = \"GE_...\" with the C export's name: " + string.Join("; ", unbound));
+        }
+
+        /// <summary>
+        /// The generated bindings call the engine through its function tables only: a DllImport or LibraryImport there,
+        /// of any library, would skip the table's hash check, and under the assembly's DisableRuntimeMarshalling one with
+        /// an out parameter throws.
+        /// </summary>
+        [Test]
+        public void GeneratedBindingsHoldNoNativeImport()
+        {
+            const BindingFlags kDeclaredStatics = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static |
+                                                  BindingFlags.DeclaredOnly;
+            List<string> imports = typeof(Input).Assembly.GetTypes()
+                .SelectMany(type => type.GetMethods(kDeclaredStatics).Select(method => (type, method)))
+                .Where(entry => entry.method.GetCustomAttribute<DllImportAttribute>() != null ||
+                                entry.method.GetCustomAttribute<LibraryImportAttribute>() != null)
+                .Select(entry => $"{entry.type.FullName}.{entry.method.Name}")
+                .ToList();
+            Assert.That(imports, Is.Empty);
         }
 
         private static IEnumerable<(string Declaration, string BoundName)> NativeImports(IEnumerable<Assembly> assemblies)

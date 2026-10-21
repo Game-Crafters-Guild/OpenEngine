@@ -176,23 +176,29 @@ bool ParseProjectCatalog(const std::string& jsonText,
 
         if (const auto sourceIt = item.find("source"); sourceIt != item.end() && sourceIt->is_object())
         {
-            entry.Source.Type = ParseSourceType(GetString(*sourceIt, "type"));
+            const std::string type = GetString(*sourceIt, "type");
+            entry.Source.Type = ParseSourceType(type);
             entry.Source.Url = GetString(*sourceIt, "url");
             entry.Source.Ref = GetString(*sourceIt, "ref");
             entry.Source.Path = GetString(*sourceIt, "path");
-            // Downgrade rather than skip so the card still shows with a clear
-            // "not supported" error on create. Git/zip URLs are restricted to
-            // http(s): file/ssh/ext transports would let a hostile manifest
-            // read local paths or execute commands via git remote helpers.
+            // Downgrade rather than skip so the card still shows, and Create names the
+            // rule the source broke. Git/zip URLs are restricted to http(s):
+            // file/ssh/ext transports would let a hostile manifest read local paths or
+            // execute commands via git remote helpers.
             const bool remoteSource = entry.Source.Type == ProjectSourceType::Git ||
                                       entry.Source.Type == ProjectSourceType::Zip;
-            const bool invalidSource =
-                (remoteSource &&
-                 (!IsHttpRef(entry.Source.Url) ||
-                  (!entry.Source.Path.empty() && !IsSafeRelativePath(entry.Source.Path)))) ||
-                (entry.Source.Type == ProjectSourceType::Local &&
-                 !IsSafeRelativePath(entry.Source.Path));
-            if (invalidSource)
+            if (entry.Source.Type == ProjectSourceType::Unsupported)
+                entry.Source.RefusalReason = "This editor cannot fetch a '" + type + "' project source.";
+            else if (remoteSource && !IsHttpRef(entry.Source.Url))
+                entry.Source.RefusalReason = "Community projects are fetched over http(s) only; this project's "
+                                             "source URL is '" + entry.Source.Url + "'.";
+            else if (remoteSource && !entry.Source.Path.empty() && !IsSafeRelativePath(entry.Source.Path))
+                entry.Source.RefusalReason = "Community projects are fetched from a folder inside their "
+                                             "repository; this project's source path is '" + entry.Source.Path + "'.";
+            else if (entry.Source.Type == ProjectSourceType::Local && !IsSafeRelativePath(entry.Source.Path))
+                entry.Source.RefusalReason = "Templates are copied from a folder inside the template catalog; "
+                                             "this template's path is '" + entry.Source.Path + "'.";
+            if (!entry.Source.RefusalReason.empty())
                 entry.Source.Type = ProjectSourceType::Unsupported;
         }
 

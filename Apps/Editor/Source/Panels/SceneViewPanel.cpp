@@ -120,11 +120,11 @@ void ClampPointerToViewport(float& localX, float& localY, float viewW, float vie
 
 // The built-in buttons' icons; the registered entries' icons join them in the reveal gate.
 constexpr std::array<std::string_view, 5> kSceneToolOverlayIconPaths = {
-    "Icons/arrowmouse.png",
-    "Icons/GiszmoTranslate.png",
-    "Icons/GizmoRotate.png",
-    "Icons/Giszmo_scale.png",
-    "Icons/Ruler.png",
+    "Icons/arrowmouse.svg",
+    "Icons/GiszmoTranslate.svg",
+    "Icons/GizmoRotate.svg",
+    "Icons/Giszmo_scale.svg",
+    "Icons/Ruler.svg",
 };
 
 // Window-space anchor for a scene tool button's context menu. A vertical row
@@ -956,14 +956,14 @@ void SceneViewPanel::RefreshElementPointers()
     // Refresh element pointers by id in case hot-reload reconciliation swapped nodes.
     m_ViewportSlots.fill(nullptr);
     m_ViewportLabels.fill(nullptr);
-    if (UIElement* vp = FindById("SceneViewViewport"))
+    if (UIElement* vp = FindById("SceneViewViewport"_sid))
     {
         m_Viewport = vp;
         m_ViewportSlots[static_cast<size_t>(ViewportSlot::Perspective)] = vp;
     }
-    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Top)] = FindById("SceneViewViewportTop");
-    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Front)] = FindById("SceneViewViewportFront");
-    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Side)] = FindById("SceneViewViewportSide");
+    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Top)] = FindById("SceneViewViewportTop"_sid);
+    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Front)] = FindById("SceneViewViewportFront"_sid);
+    m_ViewportSlots[static_cast<size_t>(ViewportSlot::Side)] = FindById("SceneViewViewportSide"_sid);
     // Every pane hosts a world render target sized from its own rect, so the
     // rect has to land on whole device pixels or the `cover` fit resolves to a
     // non-unit scale and the pane is resampled (see SetSnapRectToDevicePixels).
@@ -984,17 +984,17 @@ void SceneViewPanel::RefreshElementPointers()
     if (UIElement* e = m_ViewportSlots[static_cast<size_t>(ViewportSlot::Perspective)])
         e->AddClass("quad-bottom-right");
     m_ViewportLabels[static_cast<size_t>(ViewportSlot::Perspective)] =
-        dynamic_cast<Label*>(FindById("SceneViewViewportLabelPerspective"));
+        dynamic_cast<Label*>(FindById("SceneViewViewportLabelPerspective"_sid));
     m_ViewportLabels[static_cast<size_t>(ViewportSlot::Top)] =
-        dynamic_cast<Label*>(FindById("SceneViewViewportLabelTop"));
+        dynamic_cast<Label*>(FindById("SceneViewViewportLabelTop"_sid));
     m_ViewportLabels[static_cast<size_t>(ViewportSlot::Front)] =
-        dynamic_cast<Label*>(FindById("SceneViewViewportLabelFront"));
+        dynamic_cast<Label*>(FindById("SceneViewViewportLabelFront"_sid));
     m_ViewportLabels[static_cast<size_t>(ViewportSlot::Side)] =
-        dynamic_cast<Label*>(FindById("SceneViewViewportLabelSide"));
-    m_QuadSplitVerticalTop = FindById("SceneViewQuadSplitVerticalTop");
-    m_QuadSplitVerticalBottom = FindById("SceneViewQuadSplitVerticalBottom");
-    m_QuadSplitHorizontal = FindById("SceneViewQuadSplitHorizontal");
-    m_Toolbar = dynamic_cast<SceneViewToolbar*>(FindById("SceneViewToolbar"));
+        dynamic_cast<Label*>(FindById("SceneViewViewportLabelSide"_sid));
+    m_QuadSplitVerticalTop = FindById("SceneViewQuadSplitVerticalTop"_sid);
+    m_QuadSplitVerticalBottom = FindById("SceneViewQuadSplitVerticalBottom"_sid);
+    m_QuadSplitHorizontal = FindById("SceneViewQuadSplitHorizontal"_sid);
+    m_Toolbar = dynamic_cast<SceneViewToolbar*>(FindById("SceneViewToolbar"_sid));
     if (m_Toolbar)
     {
         m_Toolbar->SetSceneController(m_Controller);
@@ -1004,9 +1004,9 @@ void SceneViewPanel::RefreshElementPointers()
     m_FpsLabel = nullptr;
     if (m_Viewport)
     {
-        m_FpsLabel = dynamic_cast<Label*>(m_Viewport->FindById("SceneViewFpsLabel"));
+        m_FpsLabel = dynamic_cast<Label*>(m_Viewport->FindById("SceneViewFpsLabel"_sid));
         m_HoverHighlightLabel =
-            dynamic_cast<Label*>(FindById("SceneViewHoverHighlightLabel"));
+            dynamic_cast<Label*>(FindById("SceneViewHoverHighlightLabel"_sid));
     }
     if (m_FpsLabel)
     {
@@ -1866,7 +1866,7 @@ void SceneViewPanel::BindToolbarWidgets()
         });
     }
 
-    auto* bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"));
+    auto* bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"_sid));
     if (bookmarks)
     {
         bookmarks->SetSceneController(m_Controller);
@@ -1954,7 +1954,7 @@ void SceneViewPanel::UpdateMeasureToolButtons()
 
     for (const char* id : kIds)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(id))))
         {
             if (m_MeasureToolEnabled)
                 btn->AddClass("icon-active");
@@ -2343,7 +2343,7 @@ void SceneViewPanel::WireToolOverlay()
     });
 
     // Wire selection tool button (Q)
-    if (auto* btn = dynamic_cast<Button*>(FindById("SelectionToolBtn")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("SelectionToolBtn"_sid)))
     {
         btn->SetTooltip("Select (Q)");
         btn->SetTooltipPlacement(UIElement::TooltipPlacement::Right);
@@ -2370,7 +2370,7 @@ void SceneViewPanel::WireToolOverlay()
 
     for (const auto& entry : kModeButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(entry.id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(entry.id))))
         {
             btn->SetTooltip(entry.tooltip);
             btn->SetTooltipPlacement(UIElement::TooltipPlacement::Right);
@@ -2398,7 +2398,7 @@ void SceneViewPanel::WireToolOverlay()
     };
     for (const char* id : kSelectButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(id))))
         {
             auto menu = ContextMenuManipulator::Create(BuildSelectToolMenuItems());
             menu->SetAnchor(ToolButtonMenuAnchor);
@@ -2408,9 +2408,9 @@ void SceneViewPanel::WireToolOverlay()
 
     // Drag-to-reposition the floating tool overlay by pressing and dragging the
     // Select (arrow) button past a small pixel threshold.
-    if (auto* selectBtn = dynamic_cast<Button*>(FindById("SelectModeBtn")))
+    if (auto* selectBtn = dynamic_cast<Button*>(FindById("SelectModeBtn"_sid)))
     {
-        UIElement* overlay = FindById("SceneToolOverlay");
+        UIElement* overlay = FindById("SceneToolOverlay"_sid);
         if (overlay)
         {
             // Apply user preference for borderless overlay (Editor preferences).
@@ -2577,7 +2577,7 @@ void SceneViewPanel::WireToolOverlay()
 
     for (const auto& entry : kInlineButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(entry.id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(entry.id))))
         {
             btn->SetTooltip(entry.tooltip);
             btn->RegisterEventHandler(kEventButtonClick, [this, mode = entry.mode](UIEvent&) {
@@ -2598,7 +2598,7 @@ void SceneViewPanel::WireToolOverlay()
     };
     for (const char* id : kMeasureButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(id))))
         {
             btn->SetTooltip("Ruler Mode (M): drag to measure. Right-click for options.");
             if (std::string_view(id) == "MeasureToolBtn")
@@ -2623,7 +2623,7 @@ void SceneViewPanel::WireToolOverlay()
     UpdateMeasureToolButtons();
 
     // Wire space toggle button (in horizontal toolbar)
-    if (auto* btn = dynamic_cast<Button*>(FindById("ToolSpaceToggle")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("ToolSpaceToggle"_sid)))
     {
         btn->SetTooltip("Toggle Transform Space (X)");
         UpdateToolOverlaySpaceButton();
@@ -2637,7 +2637,7 @@ void SceneViewPanel::WireToolOverlay()
     }
 
     // Wire Maya-style four-view layout toggle. Space remains the quick viewport toggle.
-    if (auto* btn = dynamic_cast<Button*>(FindById("QuadViewToggle")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("QuadViewToggle"_sid)))
     {
         btn->SetTooltip("Toggle Four View Layout (Space). Right-click for options.");
         UpdateQuadViewButtonState();
@@ -2686,28 +2686,28 @@ void SceneViewPanel::ApplySceneToolIconBackgrounds()
         const char* id;
         std::string_view path;
     } kButtons[] = {
-        {"SelectModeBtn",     "Icons/arrowmouse.png"},
-        {"InlineSelectBtn",   "Icons/arrowmouse.png"},
-        {"TranslateModeBtn",  "Icons/GiszmoTranslate.png"},
-        {"InlineTranslateBtn", "Icons/GiszmoTranslate.png"},
-        {"RotateModeBtn",     "Icons/GizmoRotate.png"},
-        {"InlineRotateBtn",   "Icons/GizmoRotate.png"},
-        {"ScaleModeBtn",      "Icons/Giszmo_scale.png"},
-        {"InlineScaleBtn",    "Icons/Giszmo_scale.png"},
-        {"MeasureToolBtn",    "Icons/Ruler.png"},
-        {"InlineMeasureBtn",  "Icons/Ruler.png"},
+        {"SelectModeBtn",     "Icons/arrowmouse.svg"},
+        {"InlineSelectBtn",   "Icons/arrowmouse.svg"},
+        {"TranslateModeBtn",  "Icons/GiszmoTranslate.svg"},
+        {"InlineTranslateBtn", "Icons/GiszmoTranslate.svg"},
+        {"RotateModeBtn",     "Icons/GizmoRotate.svg"},
+        {"InlineRotateBtn",   "Icons/GizmoRotate.svg"},
+        {"ScaleModeBtn",      "Icons/Giszmo_scale.svg"},
+        {"InlineScaleBtn",    "Icons/Giszmo_scale.svg"},
+        {"MeasureToolBtn",    "Icons/Ruler.svg"},
+        {"InlineMeasureBtn",  "Icons/Ruler.svg"},
     };
 
     for (const auto& entry : kButtons)
     {
-        if (UIElement* button = FindById(entry.id))
+        if (UIElement* button = FindById(HashStringId(entry.id)))
             SetEditorBackgroundPath(*button, entry.path);
     }
 }
 
 void SceneViewPanel::PrepareToolOverlayReveal()
 {
-    UIElement* overlay = FindById("SceneToolOverlay");
+    UIElement* overlay = FindById("SceneToolOverlay"_sid);
     UIManager* ui = GetOwnerManager();
     if (!overlay || !ui)
         return;
@@ -2719,7 +2719,7 @@ void SceneViewPanel::PrepareToolOverlayReveal()
     // overlay for a frame while image loads complete.
     overlay->AddClass("hidden");
 
-    auto* toggle = FindById("ToolOverlayToggle");
+    auto* toggle = FindById("ToolOverlayToggle"_sid);
     const bool overlayEnabled = !toggle || toggle->HasClass("icon-active");
     if (!overlayEnabled)
         return;
@@ -2752,7 +2752,7 @@ void SceneViewPanel::PrepareToolOverlayReveal()
 
     for (std::string_view path : iconPaths)
     {
-        const GUID guid = ui->ResolveBackgroundImagePath(
+        const GUID guid = ui->BackgroundImages().ResolvePath(
             std::string(path), std::string(GameEngine::kAssetSourceAliasEditor));
         if (guid.IsNull())
         {
@@ -2760,7 +2760,7 @@ void SceneViewPanel::PrepareToolOverlayReveal()
             continue;
         }
 
-        ui->RequestBackgroundTexture(
+        ui->BackgroundImages().Request(
             guid,
             [completeOne](Rendering::TextureHandle, uint32_t, uint32_t) mutable {
                 completeOne();
@@ -2783,11 +2783,11 @@ void SceneViewPanel::RevealToolOverlayIfEnabled(uint32_t generation)
     if (generation != m_ToolOverlayRevealGeneration)
         return;
 
-    UIElement* overlay = FindById("SceneToolOverlay");
+    UIElement* overlay = FindById("SceneToolOverlay"_sid);
     if (!overlay)
         return;
 
-    auto* toggle = FindById("ToolOverlayToggle");
+    auto* toggle = FindById("ToolOverlayToggle"_sid);
     const bool overlayEnabled = !toggle || toggle->HasClass("icon-active");
     if (overlayEnabled)
         overlay->RemoveClass("hidden");
@@ -2802,7 +2802,7 @@ void SceneViewPanel::ApplyToolbarIconVisibility()
     prefs.Load(&err);
     for (const auto& entry : kSceneToolbarIconToggles)
     {
-        UIElement* el = m_Toolbar->FindById(entry.id);
+        UIElement* el = m_Toolbar->FindById(HashStringId(entry.id));
         if (!el)
             continue;
         bool visible = true;
@@ -2869,7 +2869,7 @@ void SceneViewPanel::ShowToolbarIconContextMenu(float windowX, float windowY)
         prefs.SetBool(entry.prefKey, visible);
         prefs.Save(&err);
 
-        if (UIElement* el = m_Toolbar ? m_Toolbar->FindById(entry.id) : nullptr)
+        if (UIElement* el = m_Toolbar ? m_Toolbar->FindById(HashStringId(entry.id)) : nullptr)
         {
             if (visible)
                 el->RemoveClass("hidden");
@@ -2979,7 +2979,7 @@ void SceneViewPanel::RefreshCameraSettingsPopupLayout()
     if (!m_CameraSettingsPopup || !m_CameraSettingsPopup->IsVisible() || !m_Toolbar)
         return;
 
-    UIElement* anchor = m_Toolbar->FindById("CameraSettingsBtn");
+    UIElement* anchor = m_Toolbar->FindById("CameraSettingsBtn"_sid);
     if (!anchor)
         return;
 
@@ -3003,9 +3003,9 @@ void SceneViewPanel::PopulateRegisteredToolStripEntries()
     actions.ColorPicker = [this]() { return m_OpenColorPickerWindow; };
     actions.MenuAnchor = &ToolButtonMenuAnchor;
     const Editor::SceneViewToolStripRegistry& registry = Editor::SceneViewToolStripRegistry::Get();
-    if (UIElement* overlay = FindById("SceneToolOverlay"))
+    if (UIElement* overlay = FindById("SceneToolOverlay"_sid))
         m_FloatingToolStrip.Populate(*overlay, Editor::ToolStripPlacement::Floating, registry, actions);
-    if (UIElement* inlineButtons = FindById("InlineToolButtons"))
+    if (UIElement* inlineButtons = FindById("InlineToolButtons"_sid))
         m_InlineToolStrip.Populate(*inlineButtons, Editor::ToolStripPlacement::Inline, registry, actions);
     UpdateRegisteredToolStripEntries();
 }
@@ -3065,7 +3065,7 @@ void SceneViewPanel::UpdateToolOverlayModeButtons()
         allowSceneTools && m_Controller->GetActiveToolKind() == SceneViewController::ToolKind::Selection;
 
     // Selection tool button
-    if (auto* btn = dynamic_cast<Button*>(FindById("SelectionToolBtn")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("SelectionToolBtn"_sid)))
     {
         if (isSelectionTool)
             btn->AddClass("icon-active");
@@ -3088,7 +3088,7 @@ void SceneViewPanel::UpdateToolOverlayModeButtons()
 
     for (const auto& entry : kButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(entry.id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(entry.id))))
         {
             if (isTransformTool && entry.mode == current)
                 btn->AddClass("icon-active");
@@ -3107,7 +3107,7 @@ void SceneViewPanel::UpdateToolOverlayModeButtons()
 
     for (const auto& entry : kInlineButtons)
     {
-        if (auto* btn = dynamic_cast<Button*>(FindById(entry.id)))
+        if (auto* btn = dynamic_cast<Button*>(FindById(HashStringId(entry.id))))
         {
             if (isTransformTool && entry.mode == current)
                 btn->AddClass("icon-active");
@@ -3124,7 +3124,7 @@ void SceneViewPanel::UpdateToolOverlaySpaceButton()
     if (!m_Controller)
         return;
 
-    if (auto* btn = dynamic_cast<Button*>(FindById("ToolSpaceToggle")))
+    if (auto* btn = dynamic_cast<Button*>(FindById("ToolSpaceToggle"_sid)))
     {
         if (m_Controller->IsTransformSpaceLocal())
             btn->AddClass("icon-active");
@@ -3145,7 +3145,7 @@ void SceneViewPanel::UpdateHoverHighlightPill()
 {
     if (!m_HoverHighlightLabel || m_HoverHighlightLabel->GetOwnerManager() == nullptr)
         m_HoverHighlightLabel =
-            dynamic_cast<Label*>(FindById("SceneViewHoverHighlightLabel"));
+            dynamic_cast<Label*>(FindById("SceneViewHoverHighlightLabel"_sid));
     if (!m_HoverHighlightLabel)
         return;
     UIElement* hoverViewport = m_HoverHighlightLabel->GetParent();
@@ -3322,6 +3322,10 @@ void SceneViewPanel::UpdateHoverHighlightPill()
 
 void SceneViewPanel::UpdateFPS(float deltaTime)
 {
+    // The camera popover shows this view's own exposure readings.
+    if (m_CameraSettingsPopup && m_CameraSettingsPopup->IsVisible() && m_Controller)
+        m_CameraSettingsPopup->RefreshReading(m_Controller->GetMeteredExposureEv(), m_Controller->GetLightsReadingEv());
+
     // The registered entries' availability and badges follow state outside the strips.
     RefreshRegisteredToolStrips();
 
@@ -3335,7 +3339,7 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
     // rebind controller hookups when the instance changes.
     if (m_Controller)
     {
-        auto* bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"));
+        auto* bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"_sid));
         if (bookmarks)
         {
             const uint64_t inst = bookmarks->GetInstanceId();
@@ -3429,7 +3433,7 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
         // scene views without bespoke broadcast plumbing.
         if (m_Viewport)
         {
-            if (UIElement* overlay = FindById("SceneToolOverlay"))
+            if (UIElement* overlay = FindById("SceneToolOverlay"_sid))
             {
                 const bool borderless = Editor::SceneViewSettings::Get().GetToolOverlayBorderless();
                 if (borderless && !overlay->HasClass("borderless"))
@@ -3491,7 +3495,7 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
     // Robustness: re-acquire on demand if the tree was reconciled.
     if (!m_FpsLabel || m_FpsLabel->GetOwnerManager() == nullptr)
     {
-        m_FpsLabel = dynamic_cast<Label*>(FindById("SceneViewFpsLabel"));
+        m_FpsLabel = dynamic_cast<Label*>(FindById("SceneViewFpsLabel"_sid));
     }
     if (!m_FpsLabel || !m_FpsVisible)
         return;
@@ -3546,12 +3550,12 @@ void SceneViewPanel::EnsureAssetPreviewElements()
 
     if (!m_AssetPreviewOverlay || m_AssetPreviewOverlay->GetOwnerManager() == nullptr)
     {
-        m_AssetPreviewOverlay = FindById("SceneAssetPreview");
+        m_AssetPreviewOverlay = FindById("SceneAssetPreview"_sid);
     }
 
     if (!m_AssetPreviewImage || m_AssetPreviewImage->GetOwnerManager() == nullptr)
     {
-        if (auto* img = FindById("SceneAssetPreviewImage"))
+        if (auto* img = FindById("SceneAssetPreviewImage"_sid))
         {
             m_AssetPreviewImage = img;
         }

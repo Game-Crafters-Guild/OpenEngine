@@ -1,9 +1,11 @@
 # GameEngine AssetDatabase.assetdb (authoritative)
 # Format: JSON Lines (one JSON object per line).
 {"format":"assetdb","version":2}
-{"guid":"b67164fc-be56-420a-b0e8-2b7d09e692a3","path":"editor/icons/arrow-up-circle.png","type":"Texture"}
+{"guid":"8cf59664-9b4e-4493-8c73-e5142cfcb0e6","path":"editor/icons/arrow-up-circle.svg","type":"Texture"}
 {"guid":"c490fd86-8b7f-4397-9c2f-cc2759bba39e","path":"editor/icons/chatbox.svg","type":"Texture"}
-{"guid":"8e6ae783-af7c-40bb-be73-26e936436ebc","path":"editor/icons/view-ring.png","type":"Texture"}
+{"guid":"9b680fde-2495-40d9-bb58-a3bfba4e3409","path":"editor/icons/mic-listening.svg","type":"Texture"}
+{"guid":"5dbfd6e9-ec93-4c9d-9138-c7cd0284f8e2","path":"editor/icons/mic.svg","type":"Texture"}
+{"guid":"dee641cd-f00d-431c-b6b2-f330f1556c39","path":"editor/icons/view-ring.svg","type":"Texture"}
 {"guid":"aefe6faa-71f0-46ab-a320-4684426ca0f5","path":"editor/ui/controls/agentconversationrow.uxml","type":"UILayout"}
 {"guid":"f03c834b-339c-4c39-99c8-908a26a96a54","path":"editor/ui/controls/agentmodelpopover.uxml","type":"UILayout"}
 {"guid":"68f7706d-7f46-4150-a1ea-0b554ee39e18","path":"editor/ui/promptpanelchrome.css","type":"UIStyle"}

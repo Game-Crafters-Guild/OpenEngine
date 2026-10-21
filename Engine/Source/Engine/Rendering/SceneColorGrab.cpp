@@ -132,6 +132,7 @@ bool SceneColorGrab::DeclareForView(Pipeline::ViewDeclare& d, uint32_t frameInde
     const RenderGraph::RGTexture grab = d.Frame.ImportExternalTexture(
         m_DebugName.c_str(), m_GrabTexture, ResourceState::ShaderResource,
         static_cast<TextureFormat>(m_Format));
+    d.MarkPreExposed(grab); // a copy of scene colour, stored at the frame's pre-exposure
 
     // Copy: sample the lit-opaque scene into the grab (read source, write grab → the RG
     // inserts the RenderTarget->Sampled edge). MSAA sources declined above, so the

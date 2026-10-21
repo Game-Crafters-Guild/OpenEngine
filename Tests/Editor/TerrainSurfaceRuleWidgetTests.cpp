@@ -960,7 +960,7 @@ TEST(TerrainRuleVocabulary, CaptionsCarryTheSameDigitsTheFieldShows)
 // survive anywhere.
 TEST(TerrainRuleVocabulary, NoCaptionCarriesATrailingZero)
 {
-    for (const auto pair : {std::pair<Kind, float>{Kind::SlopeDegrees, 34.0f},
+    for (const auto& pair : {std::pair<Kind, float>{Kind::SlopeDegrees, 34.0f},
                             std::pair<Kind, float>{Kind::SlopeDegrees, 4.0f},
                             std::pair<Kind, float>{Kind::HeightMetres, 400.0f},
                             std::pair<Kind, float>{Kind::HeightNormalized, 0.5f},

@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory_resource>
 #include <numeric>
 #include <span>
 #include <string_view>
@@ -135,26 +136,38 @@ struct SortedTransparentRunPartition
     std::vector<uint32_t> GroupOfSlot;
     std::vector<uint32_t> RunStart; // exclusive prefix of RunCount, slot order
     std::vector<uint32_t> RunCount;
+
+    /// Empties every vector and keeps its capacity.
+    void Clear()
+    {
+        SlotOfGroup.clear();
+        GroupOfSlot.clear();
+        RunStart.clear();
+        RunCount.clear();
+    }
 };
 
 // Order groups coarsely back-to-front: descending farthest-member view depth,
 // discovery ordinal as the deterministic tiebreak. Depths are compared through
 // the same monotonic float→uint transform the GPU key uses so the CPU slot
 // order and the GPU key order can never disagree on any input (±0, NaN).
-inline SortedTransparentRunPartition BuildSortedTransparentRunPartition(
-    std::span<const SortedTransparentRecord> records, uint32_t groupCount)
+// Fills `part` in place, so its vectors keep their capacity from frame to
+// frame; the per-group working sets come from `scratch`.
+inline void BuildSortedTransparentRunPartition(std::span<const SortedTransparentRecord> records,
+                                              uint32_t groupCount,
+                                              std::pmr::memory_resource& scratch,
+                                              SortedTransparentRunPartition& part)
 {
-    SortedTransparentRunPartition part{};
     part.SlotOfGroup.assign(groupCount, 0u);
     part.GroupOfSlot.resize(groupCount);
     part.RunStart.assign(groupCount, 0u);
     part.RunCount.assign(groupCount, 0u);
     if (groupCount == 0u)
-        return part;
+        return;
 
-    std::vector<uint32_t> countByGroup(groupCount, 0u);
+    std::pmr::vector<uint32_t> countByGroup(groupCount, 0u, &scratch);
     // Sortable-uint domain: 0 is the minimum, so "no member yet" folds away.
-    std::vector<uint32_t> maxDepthByGroup(groupCount, 0u);
+    std::pmr::vector<uint32_t> maxDepthByGroup(groupCount, 0u, &scratch);
     for (const SortedTransparentRecord& rec : records)
     {
         ++countByGroup[rec.RunGroup];
@@ -180,7 +193,6 @@ inline SortedTransparentRunPartition BuildSortedTransparentRunPartition(
         part.RunCount[slot] = countByGroup[group];
         start += countByGroup[group];
     }
-    return part;
 }
 
 // The total drain order as record indices: run slot ascending, view depth

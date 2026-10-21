@@ -7,9 +7,14 @@
 
 #include "Types/Types.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 struct cgltf_data;
@@ -25,6 +30,14 @@ struct GltfDocumentRelease
     void operator()(cgltf_data* document);
 };
 
+/// The deepest node hierarchy a glTF file may hold, in levels from a scene root (the root is level 1).
+inline constexpr size_t kMaxGltfNodeDepth = 4096;
+
+/// The most vertices MergeStaticPrimitivesByMaterial merges into one mesh: its indices are uint32. On a
+/// 32-bit target (wasm32) the cap is size_t's maximum, which no mesh there can reach.
+inline constexpr size_t kMaxMergedGltfVertices =
+    static_cast<size_t>(std::min<uint64_t>(uint64_t{1} << 32, std::numeric_limits<size_t>::max()));
+
 /// A parsed glTF document whose buffers are loaded; empty when the file was refused.
 using GltfDocument = std::unique_ptr<cgltf_data, GltfDocumentRelease>;
 
@@ -32,13 +45,16 @@ using GltfDocument = std::unique_ptr<cgltf_data, GltfDocumentRelease>;
  * @brief Opens a .gltf or .glb file for reading.
  *
  * Parses `bytes`, refuses the file when its extensionsRequired lists an extension
- * the engine does not implement, loads its buffers (external ones resolve beside
- * `path`, and one shorter than its declared byteLength is refused), refuses a
- * buffer view whose byteStride is outside glTF's 4 to 252 or that runs past its
- * buffer, an accessor whose extent is larger than a size_t holds, and an accessor
- * without a buffer view that declares more elements than the HLOD cache allows a
- * submesh (2^26, or 2^27 for one read only as primitive indices), runs
- * cgltf_validate, which bounds every buffer view, every accessor that has one and
+ * the engine does not implement or a base64 data URI buffer declares a byteLength
+ * past what its payload decodes to (before cgltf would allocate it), loads its
+ * buffers (external ones resolve beside `path`, and one shorter than its declared
+ * byteLength is refused), refuses a buffer view whose byteStride is outside glTF's
+ * 4 to 252 or that runs past its buffer, an accessor whose extent is larger than
+ * a size_t holds, and an accessor without a buffer view that declares more
+ * elements than the HLOD cache allows a
+ * submesh (2^26, or 2^27 for one read only as primitive indices), refuses a node
+ * more than kMaxGltfNodeDepth levels below its scene root, runs cgltf_validate,
+ * which bounds every buffer view, every accessor that has one and
  * every sparse block by the loaded bytes, every index a buffer view holds by its
  * primitive's vertex count, and the output of every animation channel that
  * targets a node by its input's key count, and refuses a skin with fewer inverse
@@ -48,6 +64,19 @@ using GltfDocument = std::unique_ptr<cgltf_data, GltfDocumentRelease>;
  * @return The document, or an empty one when the file is refused.
  */
 GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem::path& path);
+
+struct Mesh;
+
+/**
+ * @brief Merges the static triangle meshes of a glTF model that share a material into one mesh per
+ *        material, baking each source node's transform into the vertices, when the model has at
+ *        least 32 such meshes and more than twice as many of them as materials.
+ *
+ * Skinned, morphed, non-triangle, multiply placed and LOD-chained meshes stay as they are. A
+ * material's group whose merged vertex count would pass `maxMergedVertices` (the loader passes
+ * kMaxMergedGltfVertices) stays unmerged, with a warning that names `modelName` and the material.
+ */
+void MergeStaticPrimitivesByMaterial(Vector<Mesh>& meshes, std::string_view modelName, size_t maxMergedVertices);
 
 class GltfAllocationBudget;
 

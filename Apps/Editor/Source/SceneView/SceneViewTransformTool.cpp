@@ -613,7 +613,7 @@ void TransformTranslateGizmo::Render(GizmoRenderContext& context)
     // Handles are a control surface, not a place in the world: occluding them
     // against the geometry they move only makes them harder to grab. Covers
     // every draw below, plane quads included — those are drag targets too.
-    GizmoDepthModeScope depthScope(context, GizmoDepthMode::AlwaysOnTop);
+    GizmoDepthModeScope depthScope(context, GizmoDepthMode::Handle);
 
     // Draw planar handles (XY, YZ, ZX) first on the base gizmo triangle
     // layer, then the axis cylinders/arrows on a higher layer so that the
@@ -1188,7 +1188,7 @@ void TransformRotateGizmo::Render(GizmoRenderContext& context)
     // Manipulation, not description — the rings are grab targets, and the drag
     // feedback (angle arc, start/end lines, snap guides) is only readable at
     // full strength.
-    GizmoDepthModeScope depthScope(context, GizmoDepthMode::AlwaysOnTop);
+    GizmoDepthModeScope depthScope(context, GizmoDepthMode::Handle);
 
     const Vector3 center = m_Pivot;
 
@@ -1921,21 +1921,23 @@ bool TransformRotateGizmo::HandlePointerEvent(const ScenePointerEvent& event,
 
         m_TotalAngleDelta += delta;
 
-        // Flip the sign so that dragging clockwise around the ring (from the
-        // camera's point of view) produces a clockwise rotation of the target
-        // object on screen. The underlying rotation math keeps its right-handed,
-        // test-verified semantics; this inversion only affects the interaction
-        // mapping.
+        // The angle is applied as measured. For an axis ring and the screen
+        // ring, (tangent, bitangent, normal) is right-handed, so the angle grows
+        // in the direction a positive turn about the normal carries the tangent,
+        // and the target turns the way the pointer went. The edge-on fallback
+        // measures the pointer's travel along the in-view perpendicular instead,
+        // which is not a direction in the ring plane, so the invariant does not
+        // apply there; it keeps this sign.
         const float snapStep = m_Owner->GetRotateSnapIncrementRad();
         float toApply = 0.0f;
         if (event.rotateSnap45)
         {
             const float snapTotal = std::round(m_TotalAngleDelta / snapStep) * snapStep;
-            toApply = -snapTotal - m_CumulativeAppliedRotation;
+            toApply = snapTotal - m_CumulativeAppliedRotation;
         }
         else
         {
-            toApply = -delta;
+            toApply = delta;
         }
 
         if (std::fabs(toApply) < 1.0e-5f)
@@ -2000,7 +2002,7 @@ void TransformScaleGizmo::Render(GizmoRenderContext& context)
 {
     // Manipulation, not description — the axis boxes and the centre cube are
     // grab targets.
-    GizmoDepthModeScope depthScope(context, GizmoDepthMode::AlwaysOnTop);
+    GizmoDepthModeScope depthScope(context, GizmoDepthMode::Handle);
 
     // Compute axis length - use constant screen size if enabled
     float axisLength = m_AxisLength;
@@ -2399,22 +2401,6 @@ bool TransformScaleGizmo::HandlePointerEvent(const ScenePointerEvent& event,
     return false;
 }
 
-namespace
-{
-using GameEngine::Editor::SceneTools::TransformAxisSpace;
-
-// Map the user-facing axis space toggle to the **effective** axis space used by
-// the gizmo visuals and transform math. We intentionally flip the semantics so
-// that selecting "World" in the UI gives behaviour that previously lived under
-// "Local" (object-aligned axes), and vice versa.
-inline TransformAxisSpace GetEffectiveAxisSpace(TransformAxisSpace space)
-{
-    return (space == TransformAxisSpace::World)
-               ? TransformAxisSpace::Local
-               : TransformAxisSpace::World;
-}
-} // namespace
-
 TransformTool::TransformTool(GameEngine::ECS::World& world) : m_World(&world)
 {
     const Vector3 origin(0.0f, 0.0f, 0.0f);
@@ -2716,12 +2702,10 @@ bool TransformTool::GetAxisDirections(GizmoAxisDirections& outAxisDirs) const
     // even if we early-out below.
     outAxisDirs = kWorldAxisDirections;
 
-    // Visual axis space remains intuitive:
     // - World  : canonical world basis.
     // - Local  : axes rotated by the entity's world rotation.
-    // The semantic swap between World/Local is handled separately in
-    // ApplyRotationDelta via GetEffectiveAxisSpace; we keep the visuals
-    // unchanged.
+    // ApplyRotationDelta turns about the same axes, so a ring turns the target
+    // about the axis it is drawn around.
     if (m_AxisSpace == TransformAxisSpace::World || !m_TargetEntity.IsValid())
     {
         return false;
@@ -3174,13 +3158,12 @@ void TransformTool::ApplyRotationDelta(std::uint32_t axisIndex, float deltaRadia
         return;
     }
 
-    // Resolve the world-space rotation axis from the index + effective axis
-    // space, then defer to the arbitrary-axis path so both the X/Y/Z rings and
+    // Resolve the world-space rotation axis from the index + axis space, then
+    // defer to the arbitrary-axis path so both the X/Y/Z rings and
     // the screen-space ring share one implementation.
     const Vector3& worldIndexAxis = kWorldAxisDirections[axisIndex];
     Vector3 axis = worldIndexAxis;
-    const TransformAxisSpace effectiveSpace = GetEffectiveAxisSpace(m_AxisSpace);
-    if (effectiveSpace != TransformAxisSpace::World)
+    if (m_AxisSpace != TransformAxisSpace::World)
     {
         GameEngine::ECS::World* world = &GetWorld();
         if (!world->IsValid(m_TargetEntity))

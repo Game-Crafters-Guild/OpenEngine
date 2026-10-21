@@ -41,8 +41,8 @@ static bool IsImageExtension(const std::filesystem::path& p)
 {
     auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
     // .ktx/.ktx2 render through the UI background path, which re-decodes
-    // block-compressed containers to RGBA8 (see UIManager's
-    // CreateUIBackgroundTextureFromAsset).
+    // block-compressed containers to RGBA8 (UI::UploadBackgroundImageFromAsset,
+    // Engine/Modules/UI/Source/BackgroundImageUpload.cpp).
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
            ext == ".tga" || ext == ".gif" || ext == ".webp" || ext == ".svg" ||
            ext == ".hdr" || ext == ".ktx" || ext == ".ktx2";
@@ -190,24 +190,23 @@ static std::string ComputeFallbackThumbnail(const std::filesystem::path& assetPa
     }
 
     // Non-image assets: provide a sensible default for common model types so
-    // that FBX/OBJ/GLTF/etc. fall back to the static model icon in
-    // Assets/Icons/ModelThumbnail@64px.png when no dedicated handler is
-    // registered.
+    // that FBX/OBJ/GLTF/etc. fall back to the editor's model icon,
+    // Assets/Icons/3d.svg, when no dedicated handler is registered.
     if (!isImage && isModel && relStr.empty())
     {
-        relStr = "Icons/ModelThumbnail@64px.png";
+        relStr = "Icons/3d.svg";
     }
 
     // Audio assets: use music note icon.
     if (!isImage && isAudio && relStr.empty())
     {
-        relStr = "Icons/music-note-icon@64px.png";
+        relStr = "Icons/music-note-icon@64px.svg";
     }
 
     // Video assets: use video camera icon.
     if (!isImage && isVideo && relStr.empty())
     {
-        relStr = "Icons/videocam.png";
+        relStr = "Icons/videocam.svg";
     }
 
     return relStr;
@@ -888,11 +887,11 @@ std::string ThumbnailService::GetOrRequestLocked(const std::filesystem::path& as
 bool ThumbnailService::IsEngineThumbnailReadyForWindow(uint64_t windowId,
                                                        const std::string& engineName) const
 {
-    auto it = m_Handlers.find(AssetType::Model);
-    if (it == m_Handlers.end() || !it->second)
-        return false;
-    if (auto* modelHandler = dynamic_cast<ModelThumbnailHandler*>(it->second.get()))
-        return modelHandler->IsEngineThumbnailReadyForWindow(windowId, engineName);
+    for (const auto& [type, handler] : m_Handlers)
+    {
+        if (handler && handler->IsEngineThumbnailReadyForWindow(windowId, engineName))
+            return true;
+    }
     return false;
 }
 
@@ -917,15 +916,10 @@ void ThumbnailService::TickThumbnailsForWindowRG(uint64_t windowId, Rendering::R
     std::unique_lock<std::mutex> lock(m_Mutex, std::try_to_lock);
     if (!lock.owns_lock())
         return;
-    auto it = m_Handlers.find(AssetType::Model);
-    if (it == m_Handlers.end() || !it->second)
+    for (auto& [type, handler] : m_Handlers)
     {
-        return;
-    }
-
-    if (auto* modelHandler = dynamic_cast<ModelThumbnailHandler*>(it->second.get()))
-    {
-        modelHandler->TickRenderRG(windowId, frame);
+        if (handler)
+            handler->TickRenderRG(windowId, frame);
     }
 }
 
@@ -943,11 +937,11 @@ void ThumbnailService::EnsureEngineThumbnailRequested(uint64_t windowId,
         m_ExternalTextureRetryWindows.insert(windowId);
         return;
     }
-    auto it = m_Handlers.find(AssetType::Model);
-    if (it == m_Handlers.end() || !it->second)
-        return;
-    if (auto* modelHandler = dynamic_cast<ModelThumbnailHandler*>(it->second.get()))
-        modelHandler->EnsureEngineThumbnailRequested(windowId, engineName);
+    for (auto& [type, handler] : m_Handlers)
+    {
+        if (handler)
+            handler->EnsureEngineThumbnailRequested(windowId, engineName);
+    }
 }
 
 std::string ThumbnailService::RequestLiveMaterialPreview(uint64_t windowId,
@@ -980,17 +974,7 @@ bool ThumbnailService::IsLiveMaterialPreviewReady(uint64_t windowId,
 
 bool ThumbnailService::RegisterReadyThumbnails(uint64_t windowId, UIManager* ui)
 {
-    ResumeBrowserThumbnails(windowId, ui);
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    auto it = m_Handlers.find(AssetType::Model);
-    if (it == m_Handlers.end() || !it->second)
-        return false;
-
-    if (auto* modelHandler = dynamic_cast<ModelThumbnailHandler*>(it->second.get()))
-    {
-        return modelHandler->RegisterReadyThumbnailsRG(windowId, ui, nullptr);
-    }
-    return false;
+    return RegisterReadyThumbnailsRG(windowId, ui, nullptr);
 }
 
 bool ThumbnailService::RegisterReadyThumbnailsRG(uint64_t windowId, UIManager* ui,
@@ -998,15 +982,13 @@ bool ThumbnailService::RegisterReadyThumbnailsRG(uint64_t windowId, UIManager* u
 {
     ResumeBrowserThumbnails(windowId, ui);
     std::lock_guard<std::mutex> lock(m_Mutex);
-    auto it = m_Handlers.find(AssetType::Model);
-    if (it == m_Handlers.end() || !it->second)
-        return false;
-
-    if (auto* modelHandler = dynamic_cast<ModelThumbnailHandler*>(it->second.get()))
+    bool changed = false;
+    for (auto& [type, handler] : m_Handlers)
     {
-        return modelHandler->RegisterReadyThumbnailsRG(windowId, ui, pureFrame);
+        if (handler && handler->RegisterReadyThumbnailsRG(windowId, ui, pureFrame))
+            changed = true;
     }
-    return false;
+    return changed;
 }
 
 void ThumbnailService::ResumeBrowserThumbnails(uint64_t windowId, UIManager* ui)

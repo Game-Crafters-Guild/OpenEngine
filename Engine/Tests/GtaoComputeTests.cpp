@@ -963,7 +963,7 @@ TEST_F(GtaoComputeTest, ProductionNodeExecutesBothResolutionPathsAndKeepsViewHis
         settings.AOIntensity = 1.0f;
         for (auto view : {viewA, viewB})
         {
-            services.Views().SetViewRenderLayerMask(view, 1u);
+            services.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
             services.Views().SetViewPostProcessOverride(view, settings);
         }
         P::RenderPipelineNodeRegistry registry;
@@ -1096,7 +1096,7 @@ TEST_F(GtaoComputeTest, ProductionNodeAppliesHistoryAndDropsItOnTheFirstFrameAft
         };
         SetCameraAt(0.0f);
         const auto view = services.Views().AllocateView("GtaoCutView", cameraId);
-        services.Views().SetViewRenderLayerMask(view, 1u);
+        services.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
         PostProcessSettings settings{};
         settings.AOIntensity = 1.0f;
         settings.AORadius = kRadius;

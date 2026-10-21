@@ -10,7 +10,7 @@ namespace GameEngine
 namespace Rendering
 {
 
-// Device-lost / hung fault injection (Q6 slice 5, design §10). A device-layer
+// Device-lost / hung / swapchain fault injection (Q6 slice 5, design §10). A device-layer
 // hook — Vulkan validation layers offer no device-fault injection, so these env
 // vars are the only way to drive the recovery machinery deterministically.
 //
@@ -29,10 +29,19 @@ namespace Rendering
 //                                        unlike the fake-submit hooks above which
 //                                        classify a still-healthy submit. Exercises
 //                                        recovery against a truly reset device.
+//   GE_VK_FORCE_ACQUIRE_SUBOPTIMAL=<N>   report every Nth successful swapchain acquire,
+//                                        and the present that follows it, as
+//                                        VK_SUBOPTIMAL_KHR. The real acquire succeeded,
+//                                        so the image and its semaphore signal are
+//                                        exactly what a driver's SUBOPTIMAL hands over.
+//   GE_VK_FORCE_ACQUIRE_SUBOPTIMAL=<N>:acquire  same, but the present reports the
+//                                        driver's own result (a driver that flags only
+//                                        the acquire).
 //
-// Zero cost unless configured: Active() gates every query and the injecting
-// sites maintain their frame/submit counters only while Active(). The config is
-// parsed once at device Initialize and cached; no env read on any hot path.
+// Zero cost unless configured: each injecting site is gated on a cached field,
+// and the frame/submit/acquire counters advance only while their hook is set.
+// The config is parsed once at device Initialize and cached; no env read on any
+// hot path.
 // Frame and submit ordinals are 1-based (first BeginFrame / first graphics
 // submit is #1), so a target of 0 (unset / malformed) never fires.
 struct VulkanFaultInjection
@@ -59,10 +68,14 @@ struct VulkanFaultInjection
     uint64_t timeoutFrames = 1;
     bool hangEnabled = false;
     uint64_t hangFrame = 0;
+    // GE_VK_FORCE_ACQUIRE_SUBOPTIMAL: 0 = off; otherwise every Nth successful acquire.
+    uint64_t acquireSuboptimalEvery = 0;
+    // False for the ":acquire" form: the forced acquire's present is left untouched.
+    bool acquireSuboptimalAlsoPresent = true;
 
     bool Active() const noexcept
     {
-        return lostMode != LostMode::None || timeoutEnabled || hangEnabled;
+        return lostMode != LostMode::None || timeoutEnabled || hangEnabled || acquireSuboptimalEvery > 0;
     }
 
     // Frame mode fires on the first graphics submit at or after the target frame
@@ -88,6 +101,11 @@ struct VulkanFaultInjection
     {
         return hangEnabled && frameOrdinal >= hangFrame;
     }
+    // acquireOrdinal counts successful acquires, 1-based.
+    bool ShouldForceAcquireSuboptimal(uint64_t acquireOrdinal) const noexcept
+    {
+        return acquireSuboptimalEvery > 0 && acquireOrdinal % acquireSuboptimalEvery == 0;
+    }
     // Consume the fired AtFrame/AtSubmit target: arm the next queued frame target if
     // any (repeat-loss), else disarm. Called once per fired loss.
     void ConsumeLostTarget() noexcept
@@ -104,10 +122,11 @@ struct VulkanFaultInjection
     }
 };
 
-// Pure parse (unit-testable). forceLost / forceTimeout are the raw env strings
-// (nullptr when unset). A parsed ordinal of 0 disables that hook.
+// Pure parse (unit-testable). The arguments are the raw env strings (nullptr when
+// unset). A parsed ordinal of 0 disables that hook.
 inline VulkanFaultInjection ParseFaultInjection(const char* forceLost, const char* forceTimeout,
-                                                const char* forceHang = nullptr)
+                                                const char* forceHang = nullptr,
+                                                const char* forceAcquireSuboptimal = nullptr)
 {
     VulkanFaultInjection cfg;
     if (forceLost != nullptr && forceLost[0] != '\0')
@@ -179,6 +198,18 @@ inline VulkanFaultInjection ParseFaultInjection(const char* forceLost, const cha
             cfg.hangFrame = n;
         }
     }
+    if (forceAcquireSuboptimal != nullptr && forceAcquireSuboptimal[0] != '\0')
+    {
+        // Exactly "N" or "N:acquire"; any other suffix leaves the hook off.
+        char* end = nullptr;
+        const uint64_t n = std::strtoull(forceAcquireSuboptimal, &end, 10);
+        const bool acquireOnly = std::strcmp(end, ":acquire") == 0;
+        if (n > 0 && (*end == '\0' || acquireOnly))
+        {
+            cfg.acquireSuboptimalEvery = n;
+            cfg.acquireSuboptimalAlsoPresent = !acquireOnly;
+        }
+    }
     return cfg;
 }
 
@@ -186,7 +217,8 @@ inline VulkanFaultInjection FaultInjectionFromEnv()
 {
     return ParseFaultInjection(std::getenv("GE_VK_FORCE_DEVICE_LOST"),
                                std::getenv("GE_VK_FORCE_BEGINFRAME_TIMEOUT"),
-                               std::getenv("GE_VK_FORCE_GPU_HANG"));
+                               std::getenv("GE_VK_FORCE_GPU_HANG"),
+                               std::getenv("GE_VK_FORCE_ACQUIRE_SUBOPTIMAL"));
 }
 
 } // namespace Rendering

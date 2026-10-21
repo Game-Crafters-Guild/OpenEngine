@@ -11,6 +11,7 @@
       <Button id="InlineMeasureBtn" class="scene-tool-btn ruler-tool-icon" />
     </UIElement>
     <UIElement class="sceneview-toolbar-buttons sceneview-toolbar-right">
+      <SceneViewLayersField id="SceneViewLayersFilter" />
       <Button id="ToolbarSpacer1" class="toolbar-spacer-btn" />
       <Button id="CameraSettingsBtn" class="small secondary icon-button camera-settings-icon" />
       <Button id="GridToggle" class="small secondary icon-button grid-icon" />

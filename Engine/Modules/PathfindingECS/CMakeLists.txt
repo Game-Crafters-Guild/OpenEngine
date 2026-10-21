@@ -3,11 +3,16 @@ cmake_minimum_required(VERSION 3.20)
 project(PathfindingECS LANGUAGES CXX)
 
 add_library(PathfindingECS OBJECT
+    Source/Navigation.cpp
     Source/NavigationComponentInstantiations.cpp
+    Source/NavigationGridBake.cpp
+    Source/NavigationMeshBake.cpp
     Source/NavigationService.cpp
-    Source/NavigationGridRuntime.cpp
-    Source/SceneGeometryCollector.cpp
-    Source/Systems/NavigationBuildSystem.cpp
+    Source/NavigationSourceCollector.cpp
+    Source/NavigationSourceReflection.cpp
+    Source/NavigationSurfaceReflection.cpp
+    Source/NavigationSurfaceRuntime.cpp
+    Source/Systems/NavigationSurfaceSystem.cpp
     Source/Systems/NavigationPathfindingSystem.cpp
     Source/Systems/NavigationMovementSystem.cpp
     Source/Systems/NavigationDebugSystem.cpp
@@ -21,7 +26,7 @@ target_compile_features(PathfindingECS PUBLIC cxx_std_20)
 target_include_directories(PathfindingECS
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
-        # NavigationBuildSystem.h includes Assets/FileWatchingService.h, which
+        # NavigationSurfaceSystem.h includes Assets/FileWatchingService.h, which
         # includes FileWatcher/FileWatcher.h. Headers only: the FileWatcher
         # objects reach the binary through the Engine module splice.
         $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>
@@ -44,6 +49,9 @@ target_link_libraries(PathfindingECS
         # symbols get resolved when Engine.dll links PathfindingECS.lib. The
         # Engine/Include headers the sources use arrive through ECSComponents.
         PhysicsECS
+        # The surface bake reads the terrain's heightfield (PlanarHeightQuery).
+        TerrainECS
+        JobSystem
 )
 
 # Tests
@@ -54,14 +62,15 @@ if(BUILD_TESTING)
         Tests/NavSystemIntegrationTests.cpp
         Tests/NavigationComprehensiveTests.cpp
         Tests/NavigationRepathingTests.cpp
-        Tests/NavigationRequestReplacementTests.cpp
+        Tests/NavigationSolveBudgetTests.cpp
+        Tests/NavigationParallelSolveTests.cpp
         Tests/NavigationInitialOccupancyTests.cpp
         Tests/NavigationOccupiedStartTests.cpp
         Tests/AssetSerializationTests.cpp
         Tests/PathfindingScheduleTests.cpp
-        Tests/NavigationBuildGatingTests.cpp
-        Tests/NavigationTerrainReadinessTests.cpp
-        Tests/NavigationGridOwnershipTests.cpp
+        Tests/NavigationSurfaceGatingTests.cpp
+        Tests/NavigationSurfaceOwnershipTests.cpp
+        Tests/NavigationSurfaceTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
     )
     # Test files each declare anonymous-namespace constants (kDeltaTime,

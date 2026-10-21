@@ -1,10 +1,8 @@
-// The wave trace allocates nothing per frame: with tracing on, a frame of a
-// forking plan makes exactly as many allocations as with tracing off.
-//
-// The comparison is a difference, not an absolute zero: the wave runner itself
-// allocates per wave (its list of enabled systems), so the claim measured here
-// is the trace's own share. Its own target because the window is process-wide:
-// forked bodies run on workers.
+// The wave runner and the wave trace allocate nothing per frame once warm: an
+// untraced call of a forking wave makes no allocation, and with tracing on a
+// frame of a forking plan makes exactly as many allocations as with tracing off.
+// Its own target because the window is process-wide: forked bodies run on
+// workers and on the caller, which runs its own forks' jobs while it waits.
 
 #include <gtest/gtest.h>
 
@@ -14,6 +12,7 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Memory/AllocationCountScope.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 
@@ -27,6 +26,22 @@ class EmptySystem : public ISystem
 public:
     void Update(World&, float32) override {}
     const char* GetName() const override { return "Empty"; }
+};
+
+// A body with enough work that the wave's other forks reach the workers.
+class SpinSystem : public ISystem
+{
+public:
+    void Update(World&, float32) override
+    {
+        std::uint64_t value = 1;
+        for (int i = 0; i < 2000; ++i)
+            value = value * 6364136223846793005ull + 1442695040888963407ull;
+        g_SpinSink.fetch_add(value & 1u, std::memory_order_relaxed);
+    }
+    const char* GetName() const override { return "Spin"; }
+
+    static inline std::atomic<std::uint64_t> g_SpinSink{0};
 };
 
 class ExclusiveSystem : public EmptySystem
@@ -78,4 +93,34 @@ TEST(SystemWaveTraceAllocation, TracingAddsNoAllocationsPerFrame)
                 static_cast<unsigned long long>(untraced), static_cast<unsigned long long>(traced));
     EXPECT_EQ(traced, untraced);
     EXPECT_GE(manager.GetWaveTrace().GetFramesRecorded(), static_cast<std::uint64_t>(kMeasuredFrames));
+}
+
+// One wave of eight forked systems on an eight-worker pool: after 100 warm-up
+// calls, a call allocates nothing on any thread.
+TEST(SystemWaveTraceAllocation, WaveUpdateAllocatesNothingAfterWarmup)
+{
+    constexpr int kWarmupCalls = 100;
+    constexpr int kMeasuredCalls = 100;
+    JobSystem::WorkStealingThreadPool pool(8);
+    World world(&pool);
+    SystemManager manager(&pool);
+    SystemExecutionPlan plan;
+    SystemExecutionPlan::Wave wave;
+    for (size_t i = 0; i < 8; ++i)
+    {
+        manager.AddSystem<SpinSystem>();
+        wave.SystemIndices.push_back(i);
+    }
+    plan.Waves.push_back(wave);
+    manager.SetExecutionPlan(std::move(plan));
+
+    for (int i = 0; i < kWarmupCalls; ++i)
+        manager.Update(world, 0.016f);
+    Memory::AllocationCountScope scope(Memory::CountWindow::Process);
+    for (int i = 0; i < kMeasuredCalls; ++i)
+        manager.Update(world, 0.016f);
+    const std::uint64_t allocations = scope.Count();
+    std::printf("allocations over %d one-wave calls of eight systems: %llu\n", kMeasuredCalls,
+                static_cast<unsigned long long>(allocations));
+    EXPECT_EQ(allocations, 0u);
 }

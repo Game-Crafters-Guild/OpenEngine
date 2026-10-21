@@ -3,21 +3,17 @@
 #include <string>
 
 // Test-side lifetime management for real CompileServerHost processes
-// (issue #357). Hosts are resident services by design (workspace-keyed
-// pipes, warm Roslyn caches), so tests must opt into ephemeral lifetime:
+// (issue #357):
 //
-// 1. GE_COMPILE_SERVER_EPHEMERAL=1 is set for the whole test process (a
-//    global gtest Environment does this before the first test), so every
-//    host spawned through the engine's launch path — explicitly via
+// 1. Every host spawned through the engine's launch path (explicitly via
 //    StartTestCompileServer or implicitly via pipeline/ScriptManager
-//    compiles — lands in a Windows kill-on-close job object and dies with
-//    the test process, even when the run crashes or is killed.
-// 2. Fixture teardown (the same Environment) reaps registered pipes on
-//    orderly exit: __shutdown__, bounded grace, then kill by PID.
+//    compiles) dies with the test process, even when the run crashes or is
+//    killed: the launch path binds it to its launcher (a Windows
+//    kill-on-close job object, a Linux parent-death signal, the host's
+//    --parent-pid watch).
+// 2. Fixture teardown (a global gtest Environment) reaps registered pipes
+//    on orderly exit: __shutdown__, bounded grace, then kill by PID.
 namespace CompileServerTestHost {
-
-// Sets GE_COMPILE_SERVER_EPHEMERAL=1 for this process (idempotent).
-void EnsureEphemeralMarker();
 
 // Spawns a host for the pipe through the engine's real launch path
 // (CompileServerClient::StartServerForPipe) and registers the pipe for

@@ -3,5 +3,5 @@
    EditorPanelRegistry stylesheet contribution, after the editor theme. */
 
 .settings-tree-pane .svn-row .tree-title {
-    background-image: url("svn-vcs:Icons/SettingsSVN.png");
+    background-image: url("svn-vcs:Icons/SettingsSVN.svg");
 }

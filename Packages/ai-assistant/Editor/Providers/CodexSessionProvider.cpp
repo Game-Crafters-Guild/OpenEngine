@@ -160,14 +160,11 @@ void CodexSessionProvider::ReadItem(const nlohmann::json& item, TurnState& turn)
     const std::string type = JsonFields::String(item, "type");
     if (type == "agent_message")
     {
-        std::string text = JsonFields::String(item, "text");
-        if (text.empty())
-            return;
-        // Each message arrives whole; a later one starts a new paragraph.
-        if (!turn.Result.Text.empty())
-            text.insert(0, "\n\n");
-        turn.Result.Text += text;
-        turn.Events.OnTextDelta(text);
+        // Each message arrives whole, as a block of its own.
+        turn.TextBlocks.BeginBlock();
+        const std::string_view appended = turn.TextBlocks.Append(turn.Result.Text, JsonFields::String(item, "text"));
+        if (!appended.empty())
+            turn.Events.OnTextDelta(appended);
     }
     else if (type != "error" && type != "reasoning" && !type.empty())
     {

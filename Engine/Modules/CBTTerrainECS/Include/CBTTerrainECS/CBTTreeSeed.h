@@ -18,7 +18,7 @@ enum class CBTTreeRestart : uint8_t
 {
     None,
     DomainChanged,   // planar <-> spherical
-    TerrainRetired,  // a terrain was replaced, re-provisioned or removed (every scene open does this)
+    TerrainRetired,  // the drawn terrain was replaced, re-provisioned or removed (every scene open does this)
     DepthCapLowered, // the cap fell below the deepest cap the tree was allowed to reach
 };
 
@@ -49,8 +49,8 @@ class CBTTreeSeed
     // `maxDepth`. Clears a pending retire and the settle hold.
     void Seeded(uint32_t domain, uint32_t maxDepth);
 
-    // A terrain texture set was retired (TerrainRenderFeature::GetTerrainTextureRetireGeneration
-    // advanced): the terrain under the tree is no longer the one it grew on.
+    // The texture set of the terrain the tree grew on was retired (CBTRenderFeature::
+    // ConsumeTerrainRetire): the terrain under the tree is no longer the one it grew on.
     void NoteTerrainRetired()
     {
         m_TerrainRetired = true;

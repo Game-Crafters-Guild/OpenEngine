@@ -40,7 +40,7 @@ struct SceneReflectionProbeEnvironmentDesc
     float BoxAxisY[3] = {0.0f, 1.0f, 0.0f};
     float BoxAxisZ[3] = {0.0f, 0.0f, 1.0f};
     float MaxDistance = 0.0f;
-    uint32_t CullMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask CapturedLayers = Rendering::RenderLayerMask::All();
     uint64_t WorldId = 0;
     uint64_t SourceKey = 0;
     float Intensity = 1.0f;

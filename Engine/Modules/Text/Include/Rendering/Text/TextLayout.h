@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "Rendering/Text/FontAtlas.h"
 
@@ -124,6 +125,10 @@ public:
         return lineBoxTop + HalfLeadingPx(fontHeightPx, lineBoxPx) + fontMetrics.ascender;
     }
 
+    // Text-derived direction and script identity. Cached lines must be invalidated
+    // when this changes, even if the edit is after those lines.
+    static uint64_t ShapingContextKey(std::string_view text);
+
     // Shape multiline text into glyph placements (Y-down, top-left origin).
     // Handles explicit '\n' line breaks and optional width-based word wrapping.
     // Each GlyphPlacement.color is stamped from the corresponding StyledRun.
@@ -131,10 +136,15 @@ public:
     // ResolveLineBoxPx); <= 0 means "normal": each line's box is the font's
     // metric height. Half-leading centres the ascent/descent box inside the
     // line box and may be negative when the box is tighter than the font.
+    // firstByte resumes at a known visual-line boundary in the concatenated runs.
+    // Each complete run remains the shaping context (its direction and script); only the
+    // tail is shaped, wrapped and emitted.
+    // Byte ranges remain relative to the full input, while glyphs and Y start at zero.
     static MultilineShapeResult ShapeMultiline(std::span<const StyledRun> runs,
                                                float wrapWidth = 0.0f,
                                                float lineBoxPx = 0.0f,
-                                               WordBreak wordBreak = WordBreak::Normal);
+                                               WordBreak wordBreak = WordBreak::Normal,
+                                               size_t firstByte = 0);
 };
 
 }}} // namespace

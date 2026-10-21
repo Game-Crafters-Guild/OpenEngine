@@ -241,7 +241,13 @@ namespace GameEngine.Scripting
             return ElementRegistry.Resolve(instanceId);
         }
 
-        /// <summary>What a pointer event carries. Positions are in the host's UI space.</summary>
+        /// <summary>
+        /// What a pointer event carries. Positions are in the subscribed element's layout space, in
+        /// the host's UI pixels: the space its layout rect is in. Outside any CSS transform that is
+        /// the host's UI space; under one, the pointer carried back through every transform that
+        /// applies to the element, so it compares with the element's own box as it would anywhere
+        /// else.
+        /// </summary>
         public readonly struct PointerArgs
         {
             internal PointerArgs(float x, float y, int mods)
@@ -251,10 +257,10 @@ namespace GameEngine.Scripting
                 Mods = mods;
             }
 
-            /// <summary>Pointer X in the host's UI space.</summary>
+            /// <summary>Pointer X in the element's layout space.</summary>
             public readonly float X;
 
-            /// <summary>Pointer Y in the host's UI space.</summary>
+            /// <summary>Pointer Y in the element's layout space.</summary>
             public readonly float Y;
 
             /// <summary>Modifier-key bitmask as the engine reports it.</summary>

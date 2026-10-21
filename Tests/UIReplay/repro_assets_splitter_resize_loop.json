@@ -47,6 +47,8 @@
     { "frame": 3, "type": "mouseDown", "button": 0 },
     { "frame": 4, "type": "mouseUp", "button": 0 },
 
+    { "frame": 20, "type": "invokeCommand", "commandId": 4037083393 },
+
     { "frame": 40, "type": "mouseMove", "target": { "kind": "elementId", "id": "assets-splitter", "relX": 0.5, "relY": 0.5 } },
 
     { "frame": 55, "type": "mouseDown", "button": 0 },

@@ -42,8 +42,9 @@ struct MarkupCommentPiece
 // What an entity link's click does: selects `entity`, and frames it when `frame` (its frame glyph).
 using MarkupEntitySelect = std::function<void(ECS::EntityHandle entity, bool frame)>;
 
-// The select every comment surface hands BuildMarkupCommentText: MarkupEditorBridge::SelectMarkup,
-// the Mark-ups panel's own select and frame, in `world`.
+// The select every comment surface hands BuildMarkupCommentText, in `world`: MarkupEditorBridge::
+// SelectMarkup; a frame frames a mark-up as its Mark-ups panel row does (FrameMarkupInSceneView)
+// and any other entity at its origin.
 MarkupEntitySelect SelectThroughBridge(MarkupEditorBridge& bridge, ECS::World& world);
 
 // `text` cut into pieces in order; plain text between links is one piece, line breaks kept.

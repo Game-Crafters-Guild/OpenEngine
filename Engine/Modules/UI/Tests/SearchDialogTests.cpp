@@ -316,6 +316,33 @@ TEST(SearchDialogTests, InitialSelectionAbsentKeepsFirstRow)
     EXPECT_EQ(chosen, 1u);
 }
 
+// A dialog that highlights nothing before a query: Enter right after it opens picks nothing and
+// closes it as Escape does; after an arrow key, Enter picks the highlighted row.
+TEST(SearchDialogTests, WithoutAFirstHighlightEnterBeforeAnArrowCancelsAndAfterOnePicks)
+{
+    TestSearchProvider provider;
+    provider.SetItems(MakeTestItems(3));
+
+    SearchDialog dialog;
+    dialog.SetProvider(&provider);
+    dialog.SetHighlightsFirstBeforeQuery(false);
+    SearchItemId chosen = 0;
+    int cancelCount = 0;
+    dialog.SetOnResult([&chosen](const SearchResultItem& item) { chosen = item.Id; });
+    dialog.SetOnCancel([&cancelCount]() { ++cancelCount; });
+
+    dialog.Show();
+    SendKey(dialog, Input::kKeyCode_Enter);
+    EXPECT_EQ(chosen, 0u);
+    EXPECT_EQ(cancelCount, 1);
+    EXPECT_FALSE(dialog.IsOpen());
+
+    dialog.Show();
+    SendKey(dialog, Input::kKeyCode_Down);
+    SendKey(dialog, Input::kKeyCode_Enter);
+    EXPECT_EQ(chosen, 1u);
+}
+
 TEST(SearchDialogTests, ArrowKeysDoNotCrashWithNoResults)
 {
     SearchDialog dialog;

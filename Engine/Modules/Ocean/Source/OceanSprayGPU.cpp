@@ -3,6 +3,7 @@
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/VectorOps.h"
@@ -107,7 +108,8 @@ bool OceanSprayGPU::Initialize(IDevice *device)
     m_DrawLayout.bindings = {{0, DescriptorType::UniformBuffer, 1, kShaderStageVertex | kShaderStageFragment},
                              {1, DescriptorType::StorageBuffer, 1, kShaderStageVertex},
                              {2, DescriptorType::StorageBuffer, 1, kShaderStageVertex},
-                             {3, DescriptorType::CombinedImageSampler, 1, kShaderStageFragment}};
+                             {3, DescriptorType::CombinedImageSampler, 1, kShaderStageFragment},
+                             {4, DescriptorType::StorageBuffer, 1, kShaderStageFragment}};
     auto compile = [&](const char *name, const std::vector<ShaderStageCompileSpec> &stages,
                        ShaderProgramCompileResult &result) {
         ShaderProgramCompileRequest req{};
@@ -173,7 +175,7 @@ bool OceanSprayGPU::Initialize(IDevice *device)
 bool OceanSprayGPU::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare &d, OceanRenderFeature &ocean)
 {
     auto *device = d.Services.GetDevice();
-    if (!device || !Enabled() || (d.View.ActiveRenderLayerMask() & m_Surface.SprayRenderLayerMask) == 0)
+    if (!device || !Enabled() || !d.View.ActiveRenderLayerMask().Intersects(m_Surface.SprayRenderLayers))
         return false;
     // The slot selects the ocean's per-slot resources; the graph's monotonic
     // index is this view's frame identity and the birth seed.
@@ -462,17 +464,24 @@ bool OceanSprayGPU::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare &d, O
             ctx.Cmd->BindDescriptorSet(0, ds, pso);
             ctx.Cmd->Dispatch((capacity + 63u) / 64u, 1, 1);
         });
+    // The view's ExposureHistory: the spray stores its radiance at the frame's pre-exposure P.
+    const Engine::Renderer::Pipeline::PipelineBufferBindingRG exposure =
+        Engine::Renderer::Pipeline::ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return false;
     d.Frame.AddPass(
         "OceanSprayDraw", PassPhase::kPostProcess,
         [&](RenderGraph::RGPassBuilder &p) {
             p.AttachColor(0, target);
             p.Read(depth, RenderGraph::RGTextureRead::Sampled);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Read(state, RenderGraph::RGBufferRead::Storage);
             p.Read(visible, RenderGraph::RGBufferRead::Storage);
             p.Read(args, RenderGraph::RGBufferRead::Indirect);
         },
         [state, visible, args, depth, draw, drawLayout, sampler, capacity, width = d.RenderWidth,
-         height = d.RenderHeight, buf = upload.Buffer, off = upload.Offset](RenderGraph::RGContext &ctx) {
+         height = d.RenderHeight, buf = upload.Buffer, off = upload.Offset,
+         exposure](RenderGraph::RGContext &ctx) {
             auto *dev = ctx.GetDevice();
             if (!dev || !ctx.Cmd)
                 return;
@@ -488,6 +497,7 @@ bool OceanSprayGPU::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare &d, O
             dev->UpdateStorageBufferBinding(ds, 1, ctx.GetBuffer(state), 0, capacity * kParticleBytes);
             dev->UpdateStorageBufferBinding(ds, 2, ctx.GetBuffer(visible), 0, capacity * sizeof(uint32));
             dev->UpdateCombinedImageSamplerBinding(ds, 3, ctx.GetTexture(depth), sampler);
+            dev->UpdateStorageBufferBinding(ds, 4, exposure.Buffer, exposure.Offset, exposure.Size);
             ctx.Cmd->SetPipeline(pso);
             ctx.Cmd->SetViewport(0, 0, static_cast<float>(width), static_cast<float>(height));
             ctx.Cmd->SetScissor(0, 0, width, height);

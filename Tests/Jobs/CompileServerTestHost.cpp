@@ -56,12 +56,9 @@ uint32_t ParseProcessId(const std::string& versionJson)
     return pid;
 }
 
-// Registers the ephemeral marker + teardown reaper for any test executable
-// that links this file. SetUp runs before the first test, so implicit host
-// spawns (pipeline / ScriptManager compiles) are job-bound too.
+// Registers the teardown reaper for any test executable that links this file.
 class CompileServerHostReaperEnvironment : public ::testing::Environment {
 public:
-    void SetUp() override { EnsureEphemeralMarker(); }
     void TearDown() override { ReapAllTestHosts(); }
 };
 
@@ -73,18 +70,8 @@ const bool g_ReaperRegistered = []
 
 } // namespace
 
-void EnsureEphemeralMarker()
-{
-#ifdef _WIN32
-    _putenv_s("GE_COMPILE_SERVER_EPHEMERAL", "1");
-#else
-    setenv("GE_COMPILE_SERVER_EPHEMERAL", "1", 1);
-#endif
-}
-
 bool StartTestCompileServer(const std::string& pipeName)
 {
-    EnsureEphemeralMarker();
     if (!GameEngine::CompileServerClient::StartServerForPipe(pipeName))
         return false;
 

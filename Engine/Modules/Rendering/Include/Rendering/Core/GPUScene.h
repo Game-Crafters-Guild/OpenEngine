@@ -279,7 +279,7 @@ inline constexpr float kCullMarginTightCascade = 1.05f;
  * vary per frame once true multi-frame-in-flight support is enabled.
  *
  * Initially, all frames alias a single shared physical buffer for each
- * resource type (see docs/RENDERING_GPU_BUFFERS_AND_FRAMES_IN_FLIGHT.md).
+ * resource type (see docs/contributing/gpu-buffers-and-frames-in-flight.mdx).
  * This keeps behavior backward compatible while providing a clear
  * extension point for future per-frame buffers.
  */
@@ -386,6 +386,17 @@ class GPUScene
     // skipped; a slot appearing twice in the span is folded to one remove.
     // RemoveInstance delegates here with a 1-span so behavior can't drift.
     void RemoveInstances(std::span<const uint32_t> instanceIndices);
+
+    // Release log: every slot RemoveInstances freed, in order, numbered from 0
+    // over the scene's life. A consumer that keys state by slot (a world's
+    // retained submissions) keeps the count it has read and reads what was
+    // freed since, whichever world freed it. The log keeps the most recent
+    // kReleaseLogRetention entries; a consumer whose cursor is older reads
+    // false and must rebuild what it keyed by slot. AddInstance reserves an
+    // entry for every live row, so removal never allocates.
+    static constexpr uint64_t kReleaseLogRetention = 1u << 18;
+    uint64_t GetReleasedSlotCount() const { return m_ReleaseLogStart + m_ReleaseLog.size(); }
+    bool ReadReleasedSlotsSince(uint64_t cursor, std::vector<uint32_t>& out) const;
 
     // Per-slot continuity stamp: a per-frame consumer that carries state
     // derived from an instance across frames (a previous-frame endpoint) may
@@ -743,6 +754,8 @@ class GPUScene
     // prevVisible may be dirty and needs reset on reuse); index == high-water is
     // a genuinely fresh slot still holding the buffer's 0xFFFFFFFF first-touch.
     std::vector<uint32_t> m_PrevVisibleResetSlots;
+    std::vector<uint32_t> m_ReleaseLog;   // freed slots, oldest first
+    uint64_t m_ReleaseLogStart = 0;       // log number of m_ReleaseLog[0]
     uint32_t m_InstanceSlotHighWater = 0;
 
     // Cached world-space AABB over all live instances. Lazily recomputed in

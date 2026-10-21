@@ -117,7 +117,7 @@ struct EvictionHarness {
         rs.Views().SetCameraData(cameraId, MakeIdentityCamera());
         ViewId viewId = rs.Views().AllocateView("HlodEvictView", cameraId);
         rs.Views().SetViewWorldId(viewId, worldId);
-        rs.Views().SetViewRenderLayerMask(viewId, 0x1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
         extraction = std::make_unique<RenderExtractionSystem>(&rs, /*feedFastPathEnabled=*/true);
         return true;
@@ -134,7 +134,7 @@ struct EvictionHarness {
         e.Set(MakeTransformAt(x, y, z));
         MeshRenderer mr{};
         mr.meshGpuHandleId = static_cast<uint64>(meshHandle);
-        mr.renderLayerMask = 0x1u;
+        mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
         mr.materialAssetGuid.Set(materialGuid);
         e.Set(mr);
         world->ProcessCommands();

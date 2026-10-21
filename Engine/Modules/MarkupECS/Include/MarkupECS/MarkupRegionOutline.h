@@ -38,9 +38,13 @@ float32 RegionOutlineDistance(const Mathematics::Vector2& point, std::span<const
 // three points. Bounded work for any ring: at most 64 x 64 seed cells and 100,000 refinements.
 Mathematics::Vector2 RegionLabelPoint(std::span<const Mathematics::Vector2> ring);
 
-// The evaluated ring as an agent reads it: simplified by Douglas-Peucker at 0.1 m, the
-// tolerance doubled until at most kMaxRegionKnots points remain. A linear ring comes back
-// as its knots.
-std::vector<Mathematics::Vector2> DecimateRegionRing(std::span<const Mathematics::Vector2> ring);
+// The ring simplified by Douglas-Peucker at 0.1 m, the tolerance doubled until at most
+// `maxPoints` points remain (a `maxPoints` under kMinRegionKnots counts as kMinRegionKnots):
+// Douglas-Peucker keeps the points that carry the shape, a corner or the tip of a spit, where an
+// even spacing along the ring would cut them. A ring narrower than the tolerance reached (a
+// sliver a few millimeters wide) can come back with two points. A ring of kMinRegionKnots points
+// or fewer comes back as it is. The evaluated ring as markup_get returns it is decimated to
+// kMaxRegionKnots; the AI Assistant's mark-up block to 64 points.
+std::vector<Mathematics::Vector2> DecimateRegionRing(std::span<const Mathematics::Vector2> ring, std::size_t maxPoints);
 
 } // namespace GameEngine::MarkupECS

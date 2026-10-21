@@ -9,6 +9,7 @@
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Vector3.h"
 #include "Scene/FunctionRef.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Scene/TlasInstance.h"
 #include "Types/Types.h"
 
@@ -67,20 +68,20 @@ enum class RefitExecution : uint8
 struct TraverseRayOptions
 {
     float32                                                MaxDistance     = std::numeric_limits<float32>::infinity();
-    uint32                                                 LayerMask       = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask                             LayerMask       = Rendering::RenderLayerMask::All();
     bool                                                   IncludeDisabled = false;  // see header note above
     std::span<const GameEngine::ECS::EntityHandle>         IgnoreEntities{};  // ≤8 typical; filtered at leaf-visit
 };
 
 struct TraverseSphereOptions
 {
-    uint32 LayerMask       = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask LayerMask = Rendering::RenderLayerMask::All();
     bool   IncludeDisabled = false;  // see header note above TraverseRayOptions
 };
 
 struct TraverseFrustumOptions
 {
-    uint32 LayerMask       = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask LayerMask = Rendering::RenderLayerMask::All();
     bool   IncludeDisabled = false;  // see header note above TraverseRayOptions
 };
 

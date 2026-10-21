@@ -474,7 +474,7 @@ void RecordDepthOnlyPass(Rendering::RenderGraph::RGContext& c,
             head.Keywords);
         const OptionalStreamBinds optionalStreams = CollectOptionalStreamBinds(drawVertexFlags, entryBindings);
         const Rendering::CullModeFlags depthCullMode = material->IsDoubleSided()
-            ? Rendering::CullModeFlagBits::None
+            ? static_cast<Rendering::CullModeFlags>(Rendering::CullModeFlagBits::None)
             : services.CullMode;
         const bool isSkinnedDepth = Rendering::HasFlag(
             depthVertexFlags,

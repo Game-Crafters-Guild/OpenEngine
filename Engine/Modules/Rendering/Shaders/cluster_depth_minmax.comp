@@ -21,9 +21,19 @@
 //     a tile entirely covered by sky reports (UINT_MAX, 0u) which downstream
 //     readers must treat as "no opaque geometry in this tile".
 
-// 32x32 threads per workgroup, one workgroup per 32x32 screen tile.
-// Each thread reads one depth sample; atomic min/max reduces into shared.
-layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
+// One workgroup per 32x32 screen tile, GE_DEPTH_MINMAX_THREADS x
+// GE_DEPTH_MINMAX_THREADS threads per workgroup, each reading a square block of
+// (32 / threads)^2 depth samples; atomic min/max reduces into shared. The
+// result per tile is the same at every size. The build packages the kernel at
+// 32 (one sample per thread), 16 and 8 threads per axis, and the
+// DepthMinMax pass runs the largest the device's workgroup limit allows: a
+// phone's WebGPU grants 256 invocations per workgroup, not 1024.
+#ifndef GE_DEPTH_MINMAX_THREADS
+#define GE_DEPTH_MINMAX_THREADS 32
+#endif
+layout(local_size_x = GE_DEPTH_MINMAX_THREADS, local_size_y = GE_DEPTH_MINMAX_THREADS, local_size_z = 1) in;
+const int kTileSize = 32;
+const int kSamplesPerAxis = kTileSize / GE_DEPTH_MINMAX_THREADS;
 
 // Scene depth resolved to single-sample R32F by DepthResolveNode.
 layout(set = 0, binding = 0) uniform sampler2D DepthTex;
@@ -46,7 +56,7 @@ shared uint sZmaxBits;  // initialised to 0          (no opaque pixel yet)
 
 void main()
 {
-    // Init LDS via a single thread to avoid 1024 writes to the same locations.
+    // Init LDS via a single thread to avoid a write per thread to the same locations.
     if (gl_LocalInvocationIndex == 0u)
     {
         sZminBits = 0xFFFFFFFFu;
@@ -55,19 +65,26 @@ void main()
     barrier();
 
     const ivec2 texSize = textureSize(DepthTex, 0);
-    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-
-    // Skip threads that map outside the depth texture (the right/bottom edge
-    // tiles may extend past the render target by up to 31 px).
-    if (pix.x < texSize.x && pix.y < texSize.y)
+    const ivec2 blockOrigin = ivec2(gl_WorkGroupID.xy) * kTileSize + ivec2(gl_LocalInvocationID.xy) * kSamplesPerAxis;
+    for (int sampleY = 0; sampleY < kSamplesPerAxis; ++sampleY)
     {
-        const float depth = texelFetch(DepthTex, pix, 0).r;  // lod 0
-        // Filter sky / cleared pixels (reverse-Z far == 0). Opaque depth is in (0, 1].
-        if (depth > 0.0)
+        for (int sampleX = 0; sampleX < kSamplesPerAxis; ++sampleX)
         {
-            const uint bits = floatBitsToUint(depth);
-            atomicMin(sZminBits, bits);
-            atomicMax(sZmaxBits, bits);
+            const ivec2 pix = blockOrigin + ivec2(sampleX, sampleY);
+
+            // Skip samples outside the depth texture (the right/bottom edge
+            // tiles may extend past the render target by up to 31 px).
+            if (pix.x < texSize.x && pix.y < texSize.y)
+            {
+                const float depth = texelFetch(DepthTex, pix, 0).r;  // lod 0
+                // Filter sky / cleared pixels (reverse-Z far == 0). Opaque depth is in (0, 1].
+                if (depth > 0.0)
+                {
+                    const uint bits = floatBitsToUint(depth);
+                    atomicMin(sZminBits, bits);
+                    atomicMax(sZmaxBits, bits);
+                }
+            }
         }
     }
     barrier();

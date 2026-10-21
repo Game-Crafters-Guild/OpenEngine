@@ -136,7 +136,7 @@ TEST(EditorComponentTraits, SectionHostIsFoundByTheSectionsItHosts)
     const GameEngine::ECS::ComponentTypeId hostedTypeId = 0xE011;
 
     ed::EditorComponentTraits host;
-    host.HostsInspectorSection = [hostedTypeId](GameEngine::ECS::ComponentTypeId typeId)
+    host.HostsInspectorSection = [](GameEngine::ECS::ComponentTypeId typeId)
     { return typeId == hostedTypeId; };
     host.MissingHostBadge = "No Host";
     registry.Register(hostTypeId, host);

@@ -3217,28 +3217,9 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
     if (lightCount < kDDGIMaxLights)
     {
         m_EmitterAreas.Update(*m_MeshRegistry, instances);
-        // materialIndex -> scene-linear emissive, built once per tick. Only
-        // materials that actually emit are kept, so a scene with no emitters
-        // pays one registry walk and nothing else.
-        struct EmitterMaterial
-        {
-            DDGIEmissive Emissive;
-            bool DoubleSided = false;
-        };
-        std::unordered_map<uint32_t, EmitterMaterial> emissiveByMaterial;
-        m_Materials->Registry().ForEach(
-            [&](const GameEngine::GUID&, const Material& material)
-            {
-                const uint32_t slot = material.GetGpuSceneMaterialIndex();
-                if (slot == ~0u)
-                    return;
-                float tint[3] = {0.0f, 0.0f, 0.0f};
-                material.GetVector(HashStringId("emissive"), tint, 3);
-                const float nits = material.GetFloat(HashStringId("emissionLuminance"), 0.0f);
-                const DDGIEmissive e = ComputeDDGIEmissive(tint[0], tint[1], tint[2], nits);
-                if (e.Color[0] > 0.0f || e.Color[1] > 0.0f || e.Color[2] > 0.0f)
-                    emissiveByMaterial.emplace(slot, EmitterMaterial{e, material.IsDoubleSided()});
-            });
+        // materialIndex -> scene-linear emissive; re-derived only when the
+        // material registry changed.
+        m_EmitterMaterials.Refresh(*m_Materials);
 
         for (size_t instanceIndex = 0; instanceIndex < instances.size(); ++instanceIndex)
         {
@@ -3247,8 +3228,8 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
                 break;
             if ((inst.flags & Rendering::kInstanceFlagGIEmitter) == 0u)
                 continue;
-            const auto it = emissiveByMaterial.find(inst.materialIndex);
-            if (it == emissiveByMaterial.end())
+            const DDGIEmitterMaterials::Emitter* emitter = m_EmitterMaterials.Find(inst.materialIndex);
+            if (!emitter)
                 continue;  // flagged but not actually emissive — nothing to publish
             if (!(inst.boundingRadius > 0.0f))
                 continue;
@@ -3264,11 +3245,11 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
             // meshes without CPU geometry.
             const std::optional<float> surfaceArea = m_EmitterAreas.GetSurfaceArea(instanceIndex);
             const float projectedArea = surfaceArea
-                ? ComputeDDGIEmitterProjectedArea(*surfaceArea, it->second.DoubleSided)
+                ? ComputeDDGIEmitterProjectedArea(*surfaceArea, emitter->DoubleSided)
                 : GE_PI_F * proxy.Radius * proxy.Radius;
             if (!(projectedArea > 0.0f))
                 continue;
-            const DDGIEmissive& emissive = it->second.Emissive;
+            const DDGIEmissive& emissive = emitter->Emissive;
             proxy.Radiance[0] = emissive.Color[0] * projectedArea;
             proxy.Radiance[1] = emissive.Color[1] * projectedArea;
             proxy.Radiance[2] = emissive.Color[2] * projectedArea;

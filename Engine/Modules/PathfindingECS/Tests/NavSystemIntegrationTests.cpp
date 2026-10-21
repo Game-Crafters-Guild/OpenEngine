@@ -1,9 +1,10 @@
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
+#include "NavigationTestSurfaces.h"
 #include "PathfindingECS/Components/NavigationDebugSettings.h"
-#include "PathfindingECS/Systems/NavigationBuildSystem.h"
+#include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationPathfindingSystem.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"
 #include "PathfindingECS/Systems/NavigationDebugSystem.h"
@@ -57,20 +58,7 @@ protected:
     // Helper: create a grid source entity and run init system so it gets baked
     ECS::Entity CreateGridSource()
     {
-        auto entity = world->Create();
-        Components::NavigationGrid source{};
-        source.GridType = Pathfinding::GridType::Square;
-        source.CellSize = kTestCellSize;
-        source.Width = kTestGridWidth;
-        source.Depth = kTestGridDepth;
-        entity.Set(source);
-        world->ProcessCommands();
-
-        NavigationBuildSystem initSystem;
-        initSystem.Update(*world, kDeltaTime);
-        world->ProcessCommands();
-
-        return entity;
+        return Testing::CreateFlatGridSurface(*world, kTestGridWidth, kTestGridDepth, kTestCellSize);
     }
 
     // Helper: create an agent entity at a given position with a destination
@@ -114,10 +102,10 @@ protected:
         return entity;
     }
 
-    // Helper: read NavigationGrid back from entity
-    Components::NavigationGrid GetGridSource(ECS::Entity& entity)
+    // Helper: read the NavigationSurface back from its entity
+    Components::NavigationSurface GetGridSource(ECS::Entity& entity)
     {
-        auto* ptr = entity.Get<Components::NavigationGrid>();
+        auto* ptr = entity.Get<Components::NavigationSurface>();
         EXPECT_NE(ptr, nullptr);
         return *ptr;
     }
@@ -181,23 +169,23 @@ protected:
 
 TEST_F(NavSystemIntegrationTest, GridSourceInit)
 {
+    Testing::CreateGroundPlane(*world);
     auto gridEntity = world->Create();
-    Components::NavigationGrid source{};
-    source.GridType = Pathfinding::GridType::Square;
+    Components::NavigationSurface source{};
+    source.Mode = Components::NavigationSurfaceMode::Grid;
     source.CellSize = kTestCellSize;
-    source.Width = kTestGridWidth;
-    source.Depth = kTestGridDepth;
+    source.FitBounds = false;
+    source.Center = {8.0f, 0.0f, 8.0f};
+    source.Extent = {8.0f, 1.0f, 8.0f};
     gridEntity.Set(source);
     world->ProcessCommands();
 
-    EXPECT_FALSE(GetGridSource(gridEntity).Initialized);
+    EXPECT_FALSE(ResolveNavigationSurfaceMap(*world, GetGridSource(gridEntity)).IsValid());
 
-    NavigationBuildSystem initSystem;
-    initSystem.Update(*world, kDeltaTime);
-    world->ProcessCommands();
+    Testing::BakeSurfaces(*world);
 
     auto updatedSource = GetGridSource(gridEntity);
-    EXPECT_TRUE(updatedSource.Initialized);
+    EXPECT_EQ(updatedSource.BakePhase, Components::NavigationBakePhase::Baked);
     EXPECT_NE(updatedSource.NavMapGeneration, 0u);
 }
 

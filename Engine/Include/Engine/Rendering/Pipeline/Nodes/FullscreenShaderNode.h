@@ -24,9 +24,13 @@ class NamedPushConstantWriter;
 struct PipelineDesc;
 } // namespace GameEngine::Rendering
 
-namespace GameEngine::Engine::Renderer
+namespace GameEngine::Rendering
 {
 struct CubeLutGpuBindingState;
+} // namespace GameEngine::Rendering
+
+namespace GameEngine::Engine::Renderer
+{
 struct PostProcessSettings;
 } // namespace GameEngine::Engine::Renderer
 
@@ -83,7 +87,7 @@ class FullscreenShaderNode : public IRenderPipelineNode
     void WriteReflectedPPFields(GameEngine::Rendering::NamedPushConstantWriter& writer,
                                 const GameEngine::Rendering::BlockLayout& block,
                                 const GameEngine::Engine::Renderer::PostProcessSettings& settings,
-                                const GameEngine::Engine::Renderer::CubeLutGpuBindingState& cubeLut,
+                                const GameEngine::Rendering::CubeLutGpuBindingState& cubeLut,
                                 float shaderAnimationTime) const;
     // RenderGraph declare path: a skipped/declined stage threads the chain variable —
     // publish the output ref as the resolved passthrough INPUT (the
@@ -193,6 +197,7 @@ class FullscreenShaderNode : public IRenderPipelineNode
     bool m_LoggedMetaValidationIssues = false;
     bool m_LoggedMissingBindings = false;
     bool m_LoggedMissingBufferBindings = false;
+    bool m_LoggedMissingServiceTextures = false;
     bool m_LoggedStitchIssue = false;
     bool m_LoggedUnresolvedInput = false;
     bool m_LoggedUnresolvedOutput = false;

@@ -169,11 +169,9 @@ TEST_F(HotReloadPipelineTest, AssemblyPrepTaskExecution) {
  * @brief Test main thread swap task
  */
 TEST_F(HotReloadPipelineTest, MainThreadSwapTaskExecution) {
-    void* mockContext = reinterpret_cast<void*>(0x12345678);
-
     auto preloadSync = std::make_shared<GameEngine::PreloadSync>();
 
-    MainThreadSwapTask swapTask(threadPool.get(), testAssemblyPath.string(), mockContext, preloadSync);
+    MainThreadSwapTask swapTask(threadPool.get(), testAssemblyPath.string(), preloadSync);
 
     auto startTime = std::chrono::high_resolution_clock::now();
     swapTask.Execute();

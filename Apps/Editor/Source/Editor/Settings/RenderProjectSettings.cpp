@@ -4,6 +4,8 @@
 #include "Editor/Settings/SettingsStore.h"
 #include "Engine/Rendering/AntiAliasingProjectSettings.h"
 #include "Engine/Rendering/LodProjectSettings.h"
+#include "Engine/Rendering/RenderLayerNames.h"
+#include "Inspectors/RenderLayerField.h"
 #include "Engine/Rendering/AntiAliasing.h"
 #include "Engine/Rendering/DynamicResolutionController.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -251,6 +253,11 @@ void ApplyProjectRenderSettings(Engine::Renderer::RenderServices& renderServices
     Rendering::AntiAliasingProjectSettings::ReadFrom(rendering).ApplyTo(renderServices);
 
     Rendering::LodProjectSettings::ReadFrom(rendering).ApplyTo(renderServices);
+
+    // The render layer names are one table for the process, not per RenderServices, so every window's
+    // apply sets the same names.
+    Rendering::SetRenderLayerNames(Rendering::RenderLayerNames::ReadFrom(rendering));
+    RefreshRenderLayerFields();
 
     Logger::Log::Info(
         "Editor: applied project render settings from '{}': MSAA {} sample(s), AA mode {}",

@@ -4,6 +4,7 @@
 #include "Engine/Rendering/HeightFogParamsUBO.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Engine/Rendering/SkyRenderFeature.h"
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +46,11 @@ void HeightFogParamsUploadNode::DeclareForView(ViewDeclare& d)
     HeightFogParamsUBO ubo{};
     FillHeightFogParamsUBO(pp, ubo);
     ubo.noiseTime = d.Services.GetShaderAnimationTimeSeconds();
+
+    // The same "is there a sky" the SkyRender node draws by: without it there is no backdrop.
+    const SkyRenderFeature* sky = d.Services.GetFeature<SkyRenderFeature>();
+    const bool skyActive = sky && sky->IsInitialized() && sky->HasActiveSettings();
+    FillHeightFogSkyColor(pp, skyActive ? &sky->GetSettings() : nullptr, ubo);
 
     if (pp.HeightFogTrackDirectionalLight)
     {

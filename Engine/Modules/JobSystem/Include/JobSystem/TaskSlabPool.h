@@ -13,7 +13,7 @@
 // EnqueueWorkBatch / Run / Submit(F&&)):
 //   ParallelFor helper          16B  (RunBlock* + the lane's unstarted counter*)
 //   ParallelFor run block      ≤128B (one slab; static_assert in ParallelForCore.cpp)
-//   Run() pool stub              8B  (JobCounter::TaggedJobsRef)
+//   Run() queue visit           16B  (TaggedQueueVisit: TaggedJobs* + the lane's unstarted counter*)
 //   JobCounter::Job<F>          16B + sizeof(F); typical Run captures ≤64B
 //   Submit(F&&) lambdas         typical captures ≤64B (previously verified)
 // Envelope bases are ≤40B (vptr + TaskId + flags [+ inline TaskData]), so
@@ -61,8 +61,10 @@ void AcquireTaskSlabsBulk(void** slabs, size_t count);
 
 /**
  * @brief Return a slab to the freelist; falls back to ::operator delete when
- * the freelist is at capacity. Non-allocating (try_enqueue) and noexcept —
- * called from worker threads, including during static destruction.
+ * the freelist is at capacity. noexcept — called from worker threads,
+ * including during static destruction. A thread's first release builds its
+ * producer in the freelist, once per thread; every later release allocates
+ * nothing (try_enqueue).
  */
 void ReleaseTaskSlab(void* slab) noexcept;
 

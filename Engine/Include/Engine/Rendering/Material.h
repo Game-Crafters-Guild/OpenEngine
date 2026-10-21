@@ -15,8 +15,9 @@
 //   3. SetFloat() etc -- StringId-keyed named access (Editor, scripting)
 //
 // Any content change bumps a process-wide content epoch (see MarkDirty /
-// GetGlobalContentEpoch); PackMaterialSSBO folds that epoch into its per-frame
-// skip stamp and repacks when it changes. There is no per-material GPU buffer:
+// GetGlobalContentEpoch) and the material's own revision (GetContentRevision);
+// PackMaterialSSBO skips a frame while the epoch is unchanged and otherwise
+// repacks the rows whose revision moved. There is no per-material GPU buffer:
 // material params live only in the shared SSBO, indexed per-instance.
 //
 // GPU state (pipeline id, shader meta) is private. Only MaterialRegistry has
@@ -219,8 +220,9 @@ class Material
     // evicted for a reload, or it failed): it carries no texture and samples
     // AwaitedSlotDefault. Consumers that read the slot's texture rather than its
     // bindless index (the Classic bind group, the DDGI map atlas) read this to
-    // tell it from an unassigned slot. Set by TextureService::BindAwaitedTexture;
-    // any SetTexture on the slot clears it.
+    // tell it from an unassigned slot. Set by TextureService::BindAwaitedTexture,
+    // which drops any texture bound to the slot; any SetTexture on the slot
+    // clears it. Both transitions are content (MarkDirty); a repeated wait is not.
     void MarkTextureAwaited(StringId name);
     bool IsTextureAwaited(uint32_t slotOrdinal) const;
     // The same question asked by the name's slot on this material's surface: a
@@ -411,18 +413,20 @@ class Material
     // --- Content-change tracking ---
 
     // Per-material content revision: moves on every MarkDirty() of THIS
-    // material (properties, textures, bindless indices, UV transforms, sampler
-    // preset) and on nothing else — a recompile leaves it alone, and another
-    // material's edit leaves it alone. Consumers that cache work derived from
-    // this material's content compare it; the global epoch below cannot tell
-    // them which material moved.
+    // material (properties, textures, awaited slots, the texture slot map,
+    // bindless indices, UV transforms, sampler preset, double-sidedness) and on
+    // nothing else. A property, texture, awaited-slot or slot-map write of the
+    // value already there is no edit; a texture-transform write always is. A
+    // recompile leaves it alone, and another material's edit leaves it alone.
+    // Consumers that cache work derived from this material's content compare
+    // it; the global epoch below cannot tell them which material moved.
     uint32_t GetContentRevision() const { return m_ContentRevision; }
 
-    // Process-wide epoch bumped by every MarkDirty() on any material
-    // (properties, textures, bindless indices, UV transforms, sampler preset).
-    // PackMaterialSSBO folds it into its per-frame-slot stamp, making the
-    // idle-frame skip check O(1): any material content change anywhere
-    // invalidates the packed slots.
+    // Process-wide epoch bumped by every MarkDirty() on any material (the list
+    // above). PackMaterialSSBO keeps it per ring slot, making the idle-frame skip
+    // check O(1): an unchanged epoch skips the pack without scanning rows, and a
+    // moved one makes the pack compare each row's GetContentRevision to rewrite
+    // only the rows that changed.
     //
     // Out-of-line on purpose: every module that includes this header would
     // instantiate a header-inline static separately (the generated exports.def

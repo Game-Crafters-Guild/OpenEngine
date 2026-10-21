@@ -865,9 +865,8 @@ void AnimationSystem::Update(ECS::World& world, float32 deltaTime) {
     // GE_FORCE_CPU_ANIM=1 still forces the CPU path globally for debugging.
     const char* forceCpuEnv = std::getenv("GE_FORCE_CPU_ANIM");
     const bool forceCpu = forceCpuEnv && forceCpuEnv[0] && forceCpuEnv[0] != '0';
-    const bool gpuReady = !forceCpu && m_RenderServices->IsComputeSkinningReady();
-    auto& gpuStore = m_RenderServices->GetGPUAnimationDataStore();
-    auto& atlas = m_RenderServices->GetSkinPaletteAtlas();
+    // Without render services (a headless host) every item samples on the CPU.
+    const bool gpuReady = !forceCpu && m_RenderServices && m_RenderServices->IsComputeSkinningReady();
 
     static bool s_LoggedFirst = false;
 
@@ -906,7 +905,7 @@ void AnimationSystem::Update(ECS::World& world, float32 deltaTime) {
             continue;
         }
 
-        const uint32 skelGPUIdx = itemGpuSafe ? gpuStore.EnsureSkeletonUploaded(item.SkeletonId)
+        const uint32 skelGPUIdx = itemGpuSafe ? m_RenderServices->GetGPUAnimationDataStore().EnsureSkeletonUploaded(item.SkeletonId)
                                               : GPUAnimationDataStore::kNotUploaded;
         // A route cached before a reload grew the skeleton past the limits:
         // the store refused it, so say why it now samples on the CPU.
@@ -915,6 +914,9 @@ void AnimationSystem::Update(ECS::World& world, float32 deltaTime) {
             WarnSkeletonOverGPULimitsOnce(item.SkeletonId, *item.CachedSkeleton);
         if (skelGPUIdx != GPUAnimationDataStore::kNotUploaded)
         {
+            // Uploaded, so gpuReady held and the render services exist.
+            auto& gpuStore = m_RenderServices->GetGPUAnimationDataStore();
+            auto& atlas = m_RenderServices->GetSkinPaletteAtlas();
             const uint32 jc = (item.CachedSkeleton->SkinJointCount > 0)
                 ? item.CachedSkeleton->SkinJointCount : item.CachedSkeleton->BoneCount;
             if (jc == 0) continue;

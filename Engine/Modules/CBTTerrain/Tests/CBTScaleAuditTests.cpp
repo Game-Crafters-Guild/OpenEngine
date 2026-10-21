@@ -316,7 +316,10 @@ class CBTSphereScaleAudit : public ::testing::TestWithParam<ScaleCase>
         ASSERT_TRUE(m_Device->Initialize(desc));
         if (!m_Device->GetCapabilities().supportsShaderInt64)
             GTEST_SKIP() << "Vulkan shaderInt64 is required";
-        if (desc.enableDebugLayer) ASSERT_TRUE(m_Device->GetValidationStats().Enabled);
+        if (desc.enableDebugLayer)
+        {
+            ASSERT_TRUE(m_Device->GetValidationStats().Enabled);
+        }
         ASSERT_TRUE(m_Kernels.Initialize(*m_Device, ShaderOutputDir()));
     }
     void TearDown() override
@@ -364,7 +367,12 @@ class CBTSphereScaleAudit : public ::testing::TestWithParam<ScaleCase>
         EXPECT_EQ(vertices.size(), highest*kVertexWords);
         if (vertices.size() != highest*kVertexWords) return {};
         s.Vertices.resize(highest);
-        std::memcpy(s.Vertices.data(), vertices.data(), vertices.size()*4u);
+        for (uint32_t slot = 0; slot < highest; ++slot)
+        {
+            std::array<uint32_t, kVertexWords> recordWords;
+            std::copy_n(vertices.data() + slot * kVertexWords, recordWords.size(), recordWords.data());
+            s.Vertices[slot] = std::bit_cast<CBTVertexData>(recordWords);
+        }
         s.DrawCount = inst.ReadDrawIndexCount(kDrawStreamAll);
         EXPECT_LE(s.DrawCount, pool*3u);
         s.Compact = inst.DebugReadWords(CBTBinding::IndicesAll, std::min(pool, s.DrawCount/3u));
@@ -643,7 +651,10 @@ TEST_P(CBTSphereScaleAudit, ScreenSpaceTeleportRebaseAndDistanceLodKeepActualCov
     ASSERT_EQ(far.Heap, quiet.Heap) << "stationary converged LOD still changes topology";
     ASSERT_EQ(far.Vertices.size(), quiet.Vertices.size());
     for (uint32_t slot = 0; slot < far.Vertices.size(); ++slot)
-        if (far.Heap[slot]) EXPECT_EQ(std::memcmp(&far.Vertices[slot], &quiet.Vertices[slot], sizeof(CBTVertexData)), 0);
+        if (far.Heap[slot])
+        {
+            EXPECT_EQ(std::memcmp(&far.Vertices[slot], &quiet.Vertices[slot], sizeof(CBTVertexData)), 0);
+        }
 
     // The parent hold applies only while rescue is active. Turning rescue off
     // must release the extra limb detail; restoring it must refine that detail

@@ -706,7 +706,7 @@ namespace
 {
 
 // A PNG's signature and header chunk only: what the decoder's size check reads.
-void WritePngHeader(const std::filesystem::path& file, uint32 width, uint32 height, uint8 colorType)
+void WritePngHeader(const std::filesystem::path& file, uint32 width, uint32 height, uint8 colorType, uint8 bitDepth)
 {
     const auto bigEndian = [](uint32 value) {
         return std::array<char, 4>{char(value >> 24), char(value >> 16), char(value >> 8), char(value)};
@@ -717,7 +717,7 @@ void WritePngHeader(const std::filesystem::path& file, uint32 width, uint32 heig
     out.write("IHDR", 4);
     out.write(bigEndian(width).data(), 4);
     out.write(bigEndian(height).data(), 4);
-    const char rest[5] = {16, static_cast<char>(colorType), 0, 0, 0};
+    const char rest[5] = {static_cast<char>(bitDepth), static_cast<char>(colorType), 0, 0, 0};
     out.write(rest, 5);
     out.write(bigEndian(0).data(), 4); // CRC, unchecked by the size check
     out.write(bigEndian(0).data(), 4); // an empty IDAT: where the header scan stops
@@ -730,26 +730,36 @@ void WritePngHeader(const std::filesystem::path& file, uint32 width, uint32 heig
 TEST_F(PageStoreTest, PngHeightmapsPastTheDecodersLimitAreRefusedWithTheFix)
 {
     const std::filesystem::path fits = m_Dir / "fits.png";
-    WritePngHeader(fits, 32768, 16384, 0);
+    WritePngHeader(fits, 32768, 16384, 0, 16);
     Terrain::PngHeightmapSize size;
     EXPECT_EQ(Terrain::ResolvePngHeightmapSize(fits, size), "");
     EXPECT_EQ(size.Width, 32768u);
 
     const std::filesystem::path tooLarge = m_Dir / "large.png";
-    WritePngHeader(tooLarge, 40000, 40000, 0);
+    WritePngHeader(tooLarge, 40000, 40000, 0, 16);
     const std::string reason = Terrain::ResolvePngHeightmapSize(tooLarge, size);
     EXPECT_NE(reason.find("more than a PNG heightmap can hold"), std::string::npos);
     EXPECT_NE(reason.find(".r32"), std::string::npos);
 
     // Three 16-bit channels take three times the bytes: a grid a grayscale PNG holds, RGB does not.
     const std::filesystem::path rgb = m_Dir / "rgb.png";
-    WritePngHeader(rgb, 32768, 16384, 2);
-    EXPECT_NE(Terrain::ResolvePngHeightmapSize(rgb, size), "");
+    WritePngHeader(rgb, 32768, 16384, 2, 16);
+    const std::string rgbReason = Terrain::ResolvePngHeightmapSize(rgb, size);
+    EXPECT_NE(rgbReason.find(".r32"), std::string::npos) << rgbReason;
 
     // A palette image is checked at four channels: 20000 x 15000 passes as three, fails as four.
     const std::filesystem::path palette = m_Dir / "palette.png";
-    WritePngHeader(palette, 20000, 15000, 3);
-    EXPECT_NE(Terrain::ResolvePngHeightmapSize(palette, size), "");
+    WritePngHeader(palette, 20000, 15000, 3, 8);
+    const std::string paletteReason = Terrain::ResolvePngHeightmapSize(palette, size);
+    EXPECT_NE(paletteReason.find(".r32"), std::string::npos) << paletteReason;
+
+    // The decoder reads an 8-bit grayscale PNG of 2^30 samples, but the heightmap decodes it
+    // to 16 bits, 2^31 bytes: refused with the same fix.
+    const std::filesystem::path gray8 = m_Dir / "gray8.png";
+    WritePngHeader(gray8, 32768, 32768, 0, 8);
+    const std::string gray8Reason = Terrain::ResolvePngHeightmapSize(gray8, size);
+    EXPECT_NE(gray8Reason.find("more than a PNG heightmap can hold"), std::string::npos) << gray8Reason;
+    EXPECT_NE(gray8Reason.find(".r32"), std::string::npos) << gray8Reason;
 
     HeightCookSource source;
     EXPECT_EQ(ResolveHeightCookSource(tooLarge, 0, 0, source), reason);

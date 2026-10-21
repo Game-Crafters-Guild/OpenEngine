@@ -168,10 +168,15 @@ class FontAtlas
     // Optional debug info about the loaded FreeType face.
     std::optional<FaceDebugInfo> GetFaceDebugInfo() const;
 
-    // Build a caret map: x positions (in render pixels) at each UTF-8 byte insertion point [0..utf8.size()].
+    // Build a caret map: x positions (in render pixels) at each UTF-8 byte insertion point
+    // [firstByte..utf8.size()], indexed from firstByte and measured from its insertion point.
     // Uses HarfBuzz shaping when available to ensure positions match rendered geometry.
+    // The whole string is the tail's context: it takes the string's direction, script and
+    // language, and shaping starts before an earlier point HarfBuzz marks safe to break
+    // at, not at firstByte (a code point boundary that may sit inside a ligature or before a
+    // combining mark), so a tail maps as it does inside the whole string.
     bool BuildCaretMapUtf8(std::string_view utf8, float pixelSize, std::vector<float>& outXByByte,
-                           float letterSpacingPx = 0.0f);
+                           float letterSpacingPx = 0.0f, size_t firstByte = 0);
 
     // Query: does this font contain a glyph for the given Unicode codepoint?
     bool HasGlyph(uint32_t codepoint) const;

@@ -1,7 +1,7 @@
 [scene name="OceanRibbonLookdev" version=1]
 ; A continuous, bounded river with flow and material optics,
 ; running in a channel its own spline carves through the terrain and out into the sea.
-; The ocean surface detail guide (docs/Rendering/ocean-surface-detail.html) explains the controls.
+; The ocean surface detail guide (docs/rendering/ocean-surface-detail.mdx) explains the controls.
 
 [entity id="sun"]
 Name.value = "Sun"
@@ -44,7 +44,7 @@ Transform.rotation = (0.22, 0, 0, 0.9755)
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.isGlobal = true
-PostProcessVolume.tonemap = 4
+PostProcessVolume.look = Neutral
 
 [entity id="ocean"]
 Name.value = "Ocean - continuous river"
@@ -132,7 +132,7 @@ Terrain.sizeX = 1024
 Terrain.sizeZ = 1024
 Terrain.heightScale = 60
 Terrain.samplesPerMeter = 1
-Terrain.renderLayerMask = 1
+Terrain.renderLayers = [0]
 Terrain.castShadows = true
 Terrain.receiveShadows = true
 Transform.position = (0, 1.5, 200)

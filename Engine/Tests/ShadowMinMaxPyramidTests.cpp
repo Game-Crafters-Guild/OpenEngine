@@ -46,7 +46,9 @@ TEST(ShadowMinMaxPyramid, LevelsCoverTheWidestKernelQuery)
         ASSERT_GE(levels, 1u);
         EXPECT_GE(Footprint(levels - 1u), query) << "the top level covers the query";
         if (levels > 1u)
+        {
             EXPECT_LT(Footprint(levels - 2u), query) << "no level beyond the first that covers it";
+        }
     }
     EXPECT_EQ(ShadowMinMaxPyramid::LevelsForQuery(kBase, 61.5f), 5u);
     // Never past the base level's own mip chain (512 -> 10 levels).

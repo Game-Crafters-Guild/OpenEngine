@@ -145,8 +145,9 @@ namespace GameEngine.Scripting
                     catch { }
                     if (getActive == null)
                     {
-                        UiElementTypeLog.Report("GameEngine.HotReload exposes no GetActiveUserAssemblies; C#-defined " +
-                               "element types cannot be discovered from this copy.");
+                        ConsoleDiagnostics.Report("Ui.ElementTypes",
+                            "GameEngine.HotReload exposes no GetActiveUserAssemblies; C#-defined " +
+                            "element types cannot be discovered from this copy.");
                         continue;
                     }
 

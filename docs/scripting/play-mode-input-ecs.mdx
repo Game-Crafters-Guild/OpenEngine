@@ -1,0 +1,229 @@
+---
+title: C# scripting with Play Mode, input and ECS
+description: How Play Mode calls C# code, reading input and actions, reading and writing ECS data, and how the editor gates input to the Game View.
+sidebar:
+  order: 6
+---
+
+This guide covers:
+- **How Play Mode calls your C# code**
+- **How to read input** (via `GameEngine.Scripting.Bindings.dll`)
+- **How to read/write ECS** (via `GameEngine.ECS.ABI.dll`)
+- **When the Editor feeds the game input** (only while play runs and the **Game View is the active tab**)
+
+## What the scripting API offers
+- **Play Mode lifecycle hooks**: `[PlayModeEnter]`, `[PlayModeTick]`, `[PlayModeExit]` on **static methods**
+- **Input** (polling, pointer lock, and actions with their bindings and contexts)
+- **ECS ABI**:
+  - basic entity/name/transform helpers
+  - **runtime-defined "blob" components** (C# `unmanaged` structs stored as bytes)
+
+## Play Mode lifecycle in C#
+
+### Attributes
+These live in `GameEngine.Scripting.ABI`:
+- `GameEngine.Scripting.PlayModeEnterAttribute`
+- `GameEngine.Scripting.PlayModeTickAttribute`
+- `GameEngine.Scripting.PlayModeExitAttribute`
+
+Supported signatures:
+- `void OnEnter()` or `int OnEnter()`
+- `void Tick(float deltaSeconds)` or `int Tick(float deltaSeconds)`
+- `void OnExit()` or `int OnExit()`
+
+### Minimal example
+
+```csharp title="Play Mode hooks on static methods"
+using System;
+using GameEngine.Scripting;
+
+namespace GameScripts
+{
+    public static class MyGame
+    {
+        [PlayModeEnter]
+        public static void OnEnter()
+        {
+            Console.WriteLine("[Game] Enter");
+        }
+
+        [PlayModeTick]
+        public static void Tick(float dt)
+        {
+            // Called only while playing (not while paused).
+        }
+
+        [PlayModeExit]
+        public static void OnExit()
+        {
+            Console.WriteLine("[Game] Exit");
+        }
+    }
+}
+```
+
+## Input in C#
+
+Polling keys, buttons and the mouse, the mouse delta and pointer lock, from C++ and C#: [The input system](../input/input-system.mdx).
+
+### When the game receives input
+Scripts read the game's own input system. In the Editor, that input system receives keys, buttons and the mouse only while:
+- **Play Mode is playing or paused**, and
+- the **Game View is the active tab** of its window
+
+Outside that, it receives nothing: a poll reads as nothing held, and every action reads as released. A script does not gate its input itself; its contexts and actions are its own.
+
+### Creating actions and bindings
+Namespace: `GameEngine.Scripting` (assembly `GameEngine.Scripting.Bindings.dll`)
+
+```csharp title="Register an action and bind a key"
+using GameEngine.Scripting;
+
+public static class Controls
+{
+    // Ids made once: hashing a name costs more than the call that takes it.
+    private static readonly StringId Gameplay = StringId.Of("Gameplay");
+    private static readonly StringId ActionJump = StringId.Of("Game.Jump");
+
+    public static void Setup()
+    {
+        Input.RegisterAction(Gameplay, ActionJump, ActionKind.Button);
+
+        // The space bar, not with Control held, and the gamepad's A button.
+        Input.BindKey(Gameplay, ActionJump, Key.Space, forbiddenMods: ModifierFlags.Control);
+        Input.BindGamepadButton(Gameplay, ActionJump, GamepadButton.A);
+    }
+}
+```
+
+### An axis from two keys
+
+```csharp title="WASD as two axes, and the left stick on the same actions"
+using GameEngine.Scripting;
+
+public static class Movement
+{
+    private static readonly StringId Gameplay = StringId.Of("Gameplay");
+    private static readonly StringId MoveX = StringId.Of("Game.MoveX");
+    private static readonly StringId MoveY = StringId.Of("Game.MoveY");
+
+    public static void Setup()
+    {
+        Input.RegisterAction(Gameplay, MoveX, ActionKind.Axis);
+        Input.RegisterAction(Gameplay, MoveY, ActionKind.Axis);
+        Input.BindKey(Gameplay, MoveX, Key.A, -1f);
+        Input.BindKey(Gameplay, MoveX, Key.D, 1f);
+        Input.BindKey(Gameplay, MoveY, Key.S, -1f);
+        Input.BindKey(Gameplay, MoveY, Key.W, 1f);
+        Input.BindGamepadAxis(Gameplay, MoveX, GamepadAxis.LeftX);
+        Input.BindGamepadAxis(Gameplay, MoveY, GamepadAxis.LeftY, -1f);
+    }
+
+    // -1 to 1 on each axis; A and D together cancel.
+    public static float Strafe() => Input.GetActionState(MoveX).Value;
+    public static float Forward() => Input.GetActionState(MoveY).Value;
+}
+```
+
+### Polling action state
+
+```csharp title="Poll an action"
+using GameEngine.Scripting;
+
+public static class Controls
+{
+    private static readonly StringId ActionJump = StringId.Of("Game.Jump");
+
+    public static bool JumpPressedThisFrame() => Input.GetActionState(ActionJump).JustPressed;
+}
+```
+
+Notes:
+- Before an input system runs (in the editor, outside play), a poll answers the default (`false`, zero, an empty `ActionState`) and a call that changes input does nothing.
+- `BindKey`, `BindMouseButton`, `BindMouseAxis`, `BindGamepadButton` and `BindGamepadAxis` each name their device and take its own enum. On an axis action, a held key or mouse button adds its scale to the value, and `BindMouseAxis` (pointer motion or the wheel) and `BindGamepadAxis` (a stick or trigger) add the axis times their scale. A gamepad button drives button actions only.
+- An id of 0 throws `ArgumentException`. A call from a thread the engine does not run (`Task.Run`, a timer) throws `EngineCallException`.
+- A context's actions are live while the context is enabled, which it is from its first action on. `SetContextEnabled` switches a context off and on (a menu over gameplay, a vehicle); `PushContext` and `PopContext` order contexts, the top one first, when two hold the same action.
+
+## ECS in C#
+
+Namespace: `GameEngine.ECS` (assembly `GameEngine.ECS.ABI.dll`)
+
+### Get the world
+
+```csharp title="Get the primary world"
+using GameEngine.ECS;
+
+WorldHandle world = Ecs.PrimaryWorld;
+```
+
+### Built-in helpers
+
+```csharp title="Entity, name and transform helpers"
+uint e = world.CreateEmptyEntity("My Entity");
+world.SetName(e, "Renamed");
+string name = world.GetName(e);
+
+// Transform as a 4x4 float matrix (column-major)
+float[] m = world.GetTransformMatrix(e);
+world.SetTransformMatrix(e, m);
+```
+
+### Custom ECS components from C#
+
+You can store an `unmanaged` C# struct as a runtime-defined component type.
+This is a **byte blob** component internally, but it participates in archetypes and queries.
+
+```csharp title="A custom component from C#"
+using System.Runtime.InteropServices;
+using GameEngine.ECS;
+
+[StructLayout(LayoutKind.Sequential)]
+public struct PlayerStats
+{
+    public int score;
+    public float health;
+}
+
+public static class Gameplay
+{
+    public static void SetStats(WorldHandle world, uint entity, PlayerStats stats)
+        => ComponentType<PlayerStats>.Set(in world, entity, in stats);
+
+    public static PlayerStats GetStats(WorldHandle world, uint entity)
+        => ComponentType<PlayerStats>.Get(in world, entity);
+}
+```
+
+### Iterate entities with a component
+
+Per-entity iteration is an `IEntitySystem`: a partial struct whose `Execute` method names the components it reads and writes, with the chunk iteration generated for it. See [C# ECS systems](./csharp-ecs-systems-architecture.mdx).
+
+## Making it work in the editor
+
+### Where scripts live
+The Editor's script compilation pipeline references the script API assemblies staged next to `Editor.exe`:
+- `GameEngine.Scripting.Bindings.dll` (Input and Physics)
+- `GameEngine.Scripting.ABI.dll`
+- `GameEngine.ECS.ABI.dll`
+- `GameEngine.Platform.ABI.dll`
+
+Place your gameplay scripts under the project `Assets/` folder (e.g. `Assets/MyGame.cs`).
+
+### When input reaches a script
+- The game's input system receives input only while Play Mode is playing or paused and the Game View is the active tab of its window ([When the game receives input](#when-the-game-receives-input)).
+
+### Play Mode call order
+- Enter:
+  - world snapshot captured
+  - play-mode undo stack isolated
+  - runtime simulation systems enabled (physics/animation/audio emitter)
+  - C# `[PlayModeEnter]` invoked
+- Tick:
+  - C# `[PlayModeTick]` invoked (only while playing; paused does not tick)
+- Exit:
+  - C# `[PlayModeExit]` invoked
+  - audio stopped (`StopAllVoices`)
+  - runtime simulation systems disabled
+  - world snapshot restored
+  - edit-mode undo history restored
+  - **Change Review UI** (if user made undoable changes during Play)

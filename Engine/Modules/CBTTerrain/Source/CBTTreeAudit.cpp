@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
-#include <cstring>
 #include <type_traits>
 #include <unordered_set>
 
@@ -233,7 +233,11 @@ void UnpackRecords(const std::vector<uint32_t>& words, uint32_t wordsPerSlot, ui
     const size_t available = words.size() / wordsPerSlot;
     const size_t n = std::min<size_t>(available, poolSize);
     for (size_t i = 0; i < n; ++i)
-        std::memcpy(&out[i], &words[i * wordsPerSlot], sizeof(T));
+    {
+        std::array<uint32_t, sizeof(T) / sizeof(uint32_t)> recordWords;
+        std::copy_n(&words[i * wordsPerSlot], recordWords.size(), recordWords.data());
+        out[i] = std::bit_cast<T>(recordWords);
+    }
 }
 } // namespace
 

@@ -53,14 +53,18 @@ struct NativeBuildConfig
     std::vector<std::filesystem::path> IncludeDirs;
     std::filesystem::path              EngineImportLib;
     std::vector<std::string>           CompileDefinitions;
+    // The Engine shared library the import lib above stands for: its link stamp is the
+    // engine identity the ABI digest folds (HashEngineAbiInputs).
+    std::filesystem::path              EngineBinary;
 
     // EditorSDK interface (native Editor-kind package modules only): the
-    // EditorSDK import lib + the staged editor headers. Both empty for
-    // Runtime modules and in Player layouts (the editor stages the EditorSDK;
-    // nothing else does). When set, the generated project links the lib, the
-    // include dirs join the compile, and the identity folds into the ABI
-    // digest so an editor-surface relink invalidates cached module DLLs.
+    // EditorSDK import lib, its shared library + the staged editor headers. All
+    // empty for Runtime modules and in Player layouts (the editor stages the
+    // EditorSDK; nothing else does). When set, the generated project links the
+    // lib, the include dirs join the compile, and the binary's link stamp folds
+    // into the ABI digest so an editor-surface relink invalidates cached module DLLs.
     std::filesystem::path              EditorImportLib;
+    std::filesystem::path              EditorBinary;
     std::vector<std::filesystem::path> EditorIncludeDirs;
 
     // Root of the staged engine SDK the interface above lives under. When set, the
@@ -75,12 +79,14 @@ struct NativeBuildConfig
     // user never writes them. Added to the generated target's sources.
     std::filesystem::path SdkEntrySource;
 
-    // Component scanner (optional). When both DotnetExe and ComponentScannerDll are
-    // set, the pipeline runs the scanner over SourceDir before building and compiles
-    // the generated registration into the user DLL — so `struct X : ECS::ComponentBase`
-    // is auto-registered with no macro. Leave empty to use explicit macros only.
+    // The build machine's dotnet as the SDK manifest recorded it (empty in a build without
+    // C# scripting); game packaging resolves its C# steps through it.
     std::filesystem::path DotnetExe;
-    std::filesystem::path ComponentScannerDll;
+    // Component scanner (optional). When set, the pipeline runs the scanner executable
+    // over SourceDir before building and compiles the generated registration into the
+    // user DLL — so `struct X : ECS::ComponentBase` is auto-registered with no macro.
+    // Leave empty to use explicit macros only.
+    std::filesystem::path ComponentScannerExe;
     std::string           DetectBase = "ComponentBase"; // inheritors of this base are detected
 
     // Fast-build toolchain (filled by the manager from the detected MsvcToolchain). When

@@ -14,7 +14,7 @@ namespace
 // The floor the sky's illuminance curve evaluates with: 0.001 lx, below starlight.
 constexpr float kFloorLux = 0.001f;
 
-// What the physical sun of the default sky (the equator at the March equinox, a 100 000 lx sun)
+// What the physical sun of the equator sky on the March equinox (a 100 000 lx sun)
 // delivers facing it as it sets, read from SkySunPath::PhysicalSunIlluminanceLux at the hours it
 // crosses each elevation (17:40, 17:52, 18:00, 18:12, 18:24).
 constexpr float kLuxAtFiveDegrees = 40266.98f;

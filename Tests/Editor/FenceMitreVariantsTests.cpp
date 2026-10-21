@@ -440,7 +440,9 @@ TEST(FenceMitreVariants, OneModelInTwoSlotsIsOneMesh)
         for (size_t w = 0; w < plan.Variants.size(); ++w)
         {
             if (plan.Variants[v].Shape == plan.Variants[w].Shape)
+            {
                 EXPECT_EQ(variants.Meshes[v].Handle, variants.Meshes[w].Handle) << v << "," << w;
+            }
         }
     }
 

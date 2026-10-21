@@ -38,27 +38,30 @@ bool CalculateSvgRasterDimensions(float32 sourceWidth,
                                   uint32& outWidth,
                                   uint32& outHeight);
 
-/// Set the editor/UI SVG default for the longest rasterized axis. The legacy
-/// names remain the default used by RasterizeSvgToRgba's scale-based API.
-void SetSvgRasterizerUserScale(float32 targetPixels);
-float32 GetSvgRasterizerUserScale();
-
-/// Set/get the independent default used by imported SVG texture assets that do
-/// not carry a per-asset kSvgRasterSizeMetaKey override.
+/// Set/get the default longest-axis raster size for SVG texture assets that do
+/// not carry a per-asset kSvgRasterSizeMetaKey override. UI draws of an SVG do
+/// not use it: they rasterize at the drawn size through
+/// RasterizeSvgToRgbaAtDimensions on TextureAsset::SnapshotSvgSource.
 void SetSvgTextureRasterizerDefaultSize(float32 targetPixels);
 float32 GetSvgTextureRasterizerDefaultSize();
 
-// Rasterize with an explicit longest-axis target. This bypasses the process-wide
-// default so asset importers can honor a persisted per-SVG size.
+// Rasterize an SVG UTF-8 string into an RGBA8 image buffer using ThorVG with an
+// explicit longest-axis target (the aspect ratio is kept). Returns true on
+// success and fills outImage; returns false on failure.
 bool RasterizeSvgToRgbaAtSize(const std::string& svgUtf8,
                               float32 targetPixels,
                               SvgRasterizedImage& outImage);
 
-// Rasterize an SVG UTF-8 string into an RGBA8 image buffer using ThorVG.
-// `scale` multiplies the process-wide target configured above.
-// Returns true on success and fills outImage; returns false on failure.
-bool RasterizeSvgToRgba(const std::string& svgUtf8,
-                        float32 scale,
-                        SvgRasterizedImage& outImage);
+// Rasterize an SVG UTF-8 string into a width x height RGBA8 image (each in
+// 1..kMaxSvgRasterSize, straight alpha). The picture fills the whole raster; a
+// box whose aspect differs from the SVG's stretches the picture on each axis
+// (preserveAspectRatio is not honored). Each pixel holds the picture's coverage
+// of it: the raster is made at up to 4 x 4 samples per pixel and averaged, so
+// crossing strokes unite instead of adding up and a drawn-size icon matches the
+// SVG.
+bool RasterizeSvgToRgbaAtDimensions(const std::string& svgUtf8,
+                                    uint32 width,
+                                    uint32 height,
+                                    SvgRasterizedImage& outImage);
 
 } // namespace GameEngine

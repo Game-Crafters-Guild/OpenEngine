@@ -37,15 +37,21 @@
 //   Any thread   AcquireTypeOwner, ReleaseTypeOwner (ManagedTypeOwners is locked), and
 //                RequestTypeRegistrationWindow, whose whole purpose is to be callable from a
 //                reload thread.
-//   Main only    RegisterElementType, NotifyReloadCompleted and OrphanElementTypes. Claiming a
-//                tag writes the factory registry that document builds read; the verdict
-//                constructs instances and edits classes on live elements; and the orphan sweep
-//                performs the symmetric, larger write of that same registry — unregistering a
-//                whole owner's factories, aliases and attribute handlers. None can marshal
-//                itself: registration has to return the tag id synchronously (*outTagId below),
-//                an id cannot be computed off-thread because it is read from the map the claim
-//                writes, and the orphan seam's handle release is only valid while the unload
-//                callback is on the stack. So all three are REFUSED off-main instead.
+//   Window only  RegisterElementType and NotifyReloadCompleted: admitted only on the thread
+//                running a registration window, whatever that thread is, and refused everywhere
+//                else, on every thread. Claiming a tag writes the factory registry that document
+//                builds read, and the verdict constructs instances and edits classes on live
+//                elements; the window runs on the thread that owns the UI tree. Neither can
+//                marshal itself: registration has to return the tag id synchronously (*outTagId
+//                below), and an id cannot be computed off-thread because it is read from the map
+//                the claim writes.
+//
+//   Main only    OrphanElementTypes, on the main thread outside any job body (the predicate
+//                ScriptingAbi::OnEngineMainThread). The orphan sweep performs the symmetric,
+//                larger write of that same registry — unregistering a whole owner's factories,
+//                aliases and attribute handlers — from the unload seam, outside any window, and
+//                cannot marshal itself either: the handle release is only valid while the unload
+//                callback is on the stack. So it is REFUSED anywhere else instead.
 //
 //                ORPHANING IS A CONTRACT ON THE CALLER, not a best effort. Refused, nothing is
 //                swept, and both consequences last the whole process: the unloading context can
@@ -55,8 +61,8 @@
 //                reading. The editor's reload already satisfies it (the unload runs inside the
 //                main-thread swap task).
 //
-// This file installs both halves of that contract onto ManagedElementTypes — the marshaller and
-// the main-thread predicate, both backed by ScriptManager — alongside the callbacks.
+// This file installs both halves of that contract onto ManagedElementTypes — the marshaller,
+// backed by EngineCore's post gate, and the main-thread predicate — alongside the callbacks.
 
 #include "Scripting/ScriptingABI.h" // GE_API, GE_CDECL, GE_Result
 
@@ -64,7 +70,8 @@
 #include "DllEngineBootstrap.h"
 #include "Scripting/ManagedElementTypes.h"
 #include "Scripting/ManagedTypeOwners.h"
-#include "Scripting/ScriptManager.h"
+#include "Core/Engine.h"
+#include "Logger/Logger.h"
 
 #include <functional>
 #include <utility>
@@ -75,12 +82,17 @@ using GameEngine::Scripting::ManagedElementTypes;
 using GameEngine::Scripting::ManagedTypeOwners;
 using GameEngine::Scripting::OwnerEntryPoint;
 
-// Hand a tree-visible transition to the frame loop. Resolved per call rather than captured:
-// EngineCore::Initialize and Shutdown replace the ScriptManager, and the one alive at dispatch
-// time is the one that must run the task.
+// Hand a tree-visible transition to the frame loop, through EngineCore's post gate: queued on the
+// live engine's main-thread queue, run here when the engine has no queue to wait for (none initialized,
+// a standalone-hosted one, or one with scripting off), and dropped after the engine shut down or its
+// Initialize failed. Never constructs a ScriptManager, so a request that races Shutdown cannot reach
+// the one it frees.
 void QueueOnMainThread(std::function<void()> task)
 {
-    GameEngine::EngineCore::GetInstance().GetScriptManager().QueueMainThreadTask(std::move(task));
+    using MainThreadPost = GameEngine::EngineCore::MainThreadPost;
+    if (GameEngine::EngineCore::GetInstance().PostMainThreadTask(std::move(task)) == MainThreadPost::Dropped)
+        Logger::Log::Warning("UI: a main-thread task of the element-type registry was dropped: the engine has "
+                             "shut down, and nothing will run it.");
 }
 } // namespace
 
@@ -141,7 +153,7 @@ GE_API GE_Result GE_CDECL GE_UI_ReleaseTypeOwner(uint64_t owner)
 //
 // The marshaller is installed HERE rather than being reached for by ManagedElementTypes: that
 // policy compiles into Engine and is asserted by suites that never stand up an EngineCore, and
-// ScriptManager is only reachable through the engine root singleton.
+// the post gate is only reachable through the engine root singleton.
 GE_API GE_Result GE_CDECL GE_UI_SetElementTypeCallbacks(
     intptr_t (GE_CDECL* create)(uint64_t tagId, uint64_t instanceId),
     void (GE_CDECL* applyAttribute)(intptr_t handle, const char* name, const char* value),

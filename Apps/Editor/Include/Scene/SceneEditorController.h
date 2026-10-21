@@ -74,12 +74,19 @@ class SceneEditorController
     // Create a fresh untitled scene (prompts to save if dirty).
     void RequestNewScene();
 
+    // Called once a project has opened, with the workspace root already on it:
+    // opens the project's startup scene (Projects/ProjectStartupScene.h), or a
+    // default scene when it names none. Prompts like any open when the outgoing
+    // scene is dirty, unless `outgoingChangesDiscarded`: the user already chose
+    // Don't Save for the switch (PromptSaveBefore).
+    void OpenProjectStartupScene(const std::filesystem::path& projectRoot, bool outgoingChangesDiscarded);
+
     // Top toolbar save icon / menu: same behavior as Editor.Global.SaveScene (Ctrl+S).
     void RequestSaveScene();
     /// Save As dialog (e.g. toolbar save with Shift held).
     void RequestSaveSceneAs();
     // Discard unsaved edits. Saved documents reload from disk; untitled
-    // documents become a new empty scene. Shows a confirmation first.
+    // documents become a new default scene. Shows a confirmation first.
     // Play mode is a no-op (the simulated world must not replace the document).
     void RequestRevertScene();
 
@@ -104,9 +111,14 @@ class SceneEditorController
     // Periodic auto-save to `<name>.backup.scene` (see settings). Call from EditorApplication::Update.
     void TickAutoSave(float deltaSeconds, bool inhibitWhileNotEditing);
 
-    /// If the active scene document is dirty, shows SaveSceneChangesModal; otherwise invokes `proceedQuit` immediately.
-    /// When the user Saves (or chooses Don't Save / completes Save As), `proceedQuit` runs exactly once.
-    void PromptSaveBeforeQuit(std::function<void()> proceedQuit);
+    /// If the active scene document is dirty, asks "Save before <action>?" (action: "quitting",
+    /// "opening another project"); otherwise invokes `proceed` immediately. When the user Saves
+    /// (or chooses Don't Save / completes Save As), `proceed` runs exactly once, told whether the
+    /// changes were discarded (Don't Save). The answer belongs to that action alone: a caller whose
+    /// scene change follows passes it on (OpenProjectStartupScene), and any other scene change
+    /// still asks. Cancel, in the prompt or in Save As, runs `canceled` (optional) instead.
+    void PromptSaveBefore(const std::string& action, std::function<void(bool changesDiscarded)> proceed,
+                          std::function<void()> canceled);
 
     // Clean close of the active document (normal exit, scene switch): delete its
     // autosave staging — the `.backup.scene` and any staged `.tzone.backup`
@@ -210,6 +222,8 @@ class SceneEditorController
         Kind kind = Kind::None;
         std::filesystem::path path;
         OpenRestorePolicy restorePolicy = OpenRestorePolicy::Prompt;
+        // The user already chose Don't Save for the action this open completes.
+        bool outgoingChangesDiscarded = false;
     };
 
     void Execute(const PendingAction& a);
@@ -307,7 +321,8 @@ class SceneEditorController
     std::function<void(const std::filesystem::path&)> m_OnAfterSave;
 
     /// When non-empty, invoked after a successful Save As (used for quit flow).
-    std::function<void()> m_DeferredQuitAfterSave;
+    std::function<void()> m_DeferredProceedAfterSave;
+    std::function<void()> m_DeferredCancelAfterSave;
 };
 
 } // namespace Editor

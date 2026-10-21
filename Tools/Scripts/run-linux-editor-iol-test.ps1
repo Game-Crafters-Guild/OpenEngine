@@ -122,7 +122,7 @@ if ($buildImageExit -ne 0) {
 cmake -S . -B __BUILDDIR__ -G Ninja -DCMAKE_BUILD_TYPE=__CONFIG__ -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=ON -DENABLE_SCRIPTING=ON -DGE_SKIP_VCPKG_VERIFY=ON &&
 cmake --build __BUILDDIR__ --target Editor -- -j4 &&
 mkdir -p __BUILDDIR__/bin/__CONFIG__/Assets &&
-cp /src/Assets/TestInit.cs __BUILDDIR__/bin/__CONFIG__/Assets/TestInit.cs
+cp /src/Tests/Projects/Scratch/Assets/TestInit.cs __BUILDDIR__/bin/__CONFIG__/Assets/TestInit.cs
 '@
 
     $buildCommand = $buildCommandTemplate.Replace("__BUILDDIR__", $BuildDir).Replace("__CONFIG__", $Configuration)

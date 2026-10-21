@@ -399,10 +399,11 @@ void CBTRenderFeature::EnsureSeeded(uint32_t frameCounter)
                       ToString(reason));
 }
 
-void CBTRenderFeature::ConsumeTerrainRetire(uint64_t retireGeneration)
+void CBTRenderFeature::ConsumeTerrainRetire(const TerrainECS::TerrainRenderFeature& terrainFeature)
 {
     if (!m_Initialized)
         return;
+    const uint64_t retireGeneration = terrainFeature.GetTerrainTextureRetireGeneration();
     // First sight: adopt the current generation without acting. A re-provision (or a terrain
     // teardown) that ran before CBT initialized must not trigger a rebind of an already-clean ring.
     if (!m_TerrainRetireGenerationSynced)
@@ -413,6 +414,7 @@ void CBTRenderFeature::ConsumeTerrainRetire(uint64_t retireGeneration)
     }
     if (retireGeneration == m_LastTerrainRetireGeneration)
         return;
+    const uint64_t previousGeneration = m_LastTerrainRetireGeneration;
     m_LastTerrainRetireGeneration = retireGeneration;
 
     // A terrain texture set was retired this frame. Drop the retired heightmap from EVERY ring
@@ -429,9 +431,14 @@ void CBTRenderFeature::ConsumeTerrainRetire(uint64_t retireGeneration)
                           "the height/atlas/coarse rings (gen={})",
                           m_Instance.GetTerrainSourceGeneration());
     }
-    // The tree grew on the retired terrain: EnsureSeeded restarts it from its roots (CBTTreeSeed
-    // decides when).
-    m_TreeSeed.NoteTerrainRetired();
+    // The tree grew on the terrain BuildFrameParams last bound. When that terrain was retired in this
+    // step of the generation, EnsureSeeded restarts the tree from its roots (CBTTreeSeed decides
+    // when); another terrain's retire leaves it alone. The upper bound keeps a retire that lands
+    // between the two reads for the next step, so it is noted exactly once.
+    const uint64_t drawnRetire =
+        m_HasBoundTerrain ? terrainFeature.GetTerrainRetireGeneration(m_BoundTerrainIndex) : 0u;
+    if (drawnRetire > previousGeneration && drawnRetire <= retireGeneration)
+        m_TreeSeed.NoteTerrainRetired();
 }
 
 bool CBTRenderFeature::EnsureMaterial(RenderServices& rs)
@@ -865,6 +872,7 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         m_Instance.SetAtlasSource(frameIndex, Rendering::TextureHandle{});
         m_Instance.SetCoarseSource(frameIndex, Rendering::TextureHandle{});
         m_BoundHeightmap = {};
+        m_HasBoundTerrain = false;
         m_TerrainShadowSource = {};
         return false;
     }
@@ -875,6 +883,7 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         m_Instance.SetAtlasSource(frameIndex, Rendering::TextureHandle{});
         m_Instance.SetCoarseSource(frameIndex, Rendering::TextureHandle{});
         m_BoundHeightmap = {};
+        m_HasBoundTerrain = false;
         m_TerrainShadowSource = {};
         return false;
     }
@@ -902,6 +911,7 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
     if (pageCache.IsValid() && !m_Instance.ProvisionPageTableWords(static_cast<uint32_t>(pageWords.size())))
         pageCache = {};
     m_BoundTerrainIndex = t.Handle.Index;
+    m_HasBoundTerrain = true;
     LogCommittedHeightSource(t.Handle.Index, t.Handle.Generation, pageCache.IsValid(), frameIndex);
     // Invalid until the heightmap uploads; feeds the C5 read edge (the page cache when paged, the
     // atlas when atlas-backed).
@@ -1125,6 +1135,9 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         surfaceParams.AtlasNormalBindless = t.AtlasNormalBindlessIndex;
         surfaceParams.AtlasSplatCoarseBindless = t.AtlasSplatCoarseBindlessIndex;
         surfaceParams.AtlasNormalCoarseBindless = t.AtlasNormalCoarseBindlessIndex;
+        surfaceParams.AtlasGrassBindless = t.GrassRegionsActive ? t.AtlasGrassBindlessIndex : 0u;
+        surfaceParams.AtlasGrassCoarseBindless =
+            t.GrassRegionsActive ? t.AtlasGrassCoarseBindlessIndex : 0u;
     }
     if (spherical)
     {

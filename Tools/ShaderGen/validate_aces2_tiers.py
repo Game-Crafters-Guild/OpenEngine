@@ -614,7 +614,7 @@ def main():
                 hr = peak / 100.0
                 rgb = dense_probes(hr)
                 out = eval_aces2(rgb, mats, tier_at(tiers, idx))
-                out = np.minimum(out, F(hr))  # the mode-7 routing clamp in tonemap.frag
+                out = np.minimum(out, F(hr))  # Filmic's routing clamp in tonemap.frag
                 ref = ocio_reference(peak, rgb)
                 rel = compare(out, ref, hr)
                 d = de_itp(out, ref)

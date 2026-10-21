@@ -26,6 +26,9 @@ nlohmann::json RefuseRequest(std::string reason, nlohmann::json details = nlohma
 
 bool IsRefusal(const nlohmann::json& result);
 
+// The reason a refusal (IsRefusal) carries; empty for any other result.
+std::string RefusalReason(const nlohmann::json& result);
+
 // The response object for a handler's result: a refusal as ok:false with its reason (and
 // details, when there are any), any other result as ok:true with the result unchanged.
 nlohmann::json HandlerResponse(const std::string& id, const nlohmann::json& result);

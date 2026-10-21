@@ -103,12 +103,12 @@ void FloatingPanel::BindChrome()
         return;
     }
 
-    m_TitleBar = FindById("floating-panel-titlebar");
-    m_TitleIcon = FindById("floating-panel-icon");
-    m_TitleLabel = dynamic_cast<Label*>(FindById("floating-panel-title"));
-    m_CloseButton = dynamic_cast<Button*>(FindById("floating-panel-close"));
-    m_BodyHost = FindById("floating-panel-body");
-    m_ResizeGrip = FindById("floating-panel-resize");
+    m_TitleBar = FindById("floating-panel-titlebar"_sid);
+    m_TitleIcon = FindById("floating-panel-icon"_sid);
+    m_TitleLabel = dynamic_cast<Label*>(FindById("floating-panel-title"_sid));
+    m_CloseButton = dynamic_cast<Button*>(FindById("floating-panel-close"_sid));
+    m_BodyHost = FindById("floating-panel-body"_sid);
+    m_ResizeGrip = FindById("floating-panel-resize"_sid);
     if (!m_TitleBar || !m_TitleIcon || !m_TitleLabel || !m_CloseButton || !m_BodyHost || !m_ResizeGrip)
     {
         Logger::Log::Error("FloatingPanel: {} is missing a chrome element; the frame has no chrome.",

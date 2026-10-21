@@ -7,17 +7,11 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
-
-#ifdef _MSC_VER
-#include <malloc.h> // _aligned_malloc / _aligned_free
-#else
-#include <cstdlib> // aligned_alloc / free
-#endif
 
 namespace GameEngine::ECS
 {
@@ -642,33 +636,25 @@ class ArchetypeTable
     }
 
   private:
+    // Chunks come from the global aligned operator new, so the allocation counter and the
+    // process heap policy see them like every other engine allocation. Throws
+    // std::bad_alloc on failure.
     std::byte* AllocateChunkMemory() const
     {
-#ifdef _MSC_VER
-        auto* ptr = static_cast<std::byte*>(_aligned_malloc(m_Layout.AllocationBytes, m_Layout.AllocationAlignment));
-#else
-        auto* ptr = static_cast<std::byte*>(std::aligned_alloc(m_Layout.AllocationAlignment, m_Layout.AllocationBytes));
-#endif
-        if (!ptr) [[unlikely]]
-        {
-            throw std::bad_alloc();
-        }
-        return ptr;
+        return static_cast<std::byte*>(
+            ::operator new(m_Layout.AllocationBytes, std::align_val_t{m_Layout.AllocationAlignment}));
     }
 
-    static void FreeChunkMemory(std::byte* ptr)
+    // Every chunk of this table has the layout's size and alignment, so the sized aligned
+    // delete matches the allocation.
+    void FreeChunkMemory(std::byte* ptr) const noexcept
     {
-#ifdef _MSC_VER
-        _aligned_free(ptr);
-#else
-        std::free(ptr);
-#endif
+        ::operator delete(ptr, m_Layout.AllocationBytes, std::align_val_t{m_Layout.AllocationAlignment});
     }
 
     void AllocateNewChunk()
     {
-        std::unique_ptr<std::byte, decltype(&FreeChunkMemory)> memory(AllocateChunkMemory(), &FreeChunkMemory);
-        std::byte* mem = memory.get();
+        std::byte* mem = AllocateChunkMemory();
         // Skip the defensive zero-fill in release. Every live slot is written
         // before it is read: AddEntity calls Append() immediately after any
         // new chunk alloc; component columns are populated by the caller
@@ -692,9 +678,9 @@ class ArchetypeTable
             if (m_Chunks.size() > m_ChunkMemory.size())
                 m_Chunks.pop_back();
             m_ColumnVersions.resize(m_ChunkMemory.size() * GetColumnCount());
+            FreeChunkMemory(mem);
             throw;
         }
-        memory.release();
     }
 
     void SwapColumnVersionRows(std::size_t a, std::size_t b)

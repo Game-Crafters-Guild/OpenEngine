@@ -356,6 +356,25 @@ TEST_F(RuntimeHumanoidProfileTest, WorldResetRearmsFailedPairWithoutAssetEvent)
     EXPECT_TRUE(world.HasComponent<Components::HumanoidRetargeterComponent>(actor));
 }
 
+// A headless host runs the engine's schedule with no render services: the system
+// samples every animated skeleton on the CPU instead of reaching for the GPU store.
+TEST_F(RuntimeHumanoidProfileTest, AnimationSamplesOnTheCpuWithoutRenderServices)
+{
+    ECS::World world(nullptr);
+    const auto actor = Actor(world);
+    Renderer::AnimationSystem system(nullptr);
+    for (int i = 0; i < 2; ++i)
+    {
+        system.Update(world, .016f);
+        world.ProcessCommands();
+    }
+    const auto* skeleton = world.GetComponent<Components::SkeletonRef>(actor);
+    ASSERT_NE(skeleton, nullptr);
+    const auto* runtime = Renderer::SkeletonStore::Instance().GetRuntime(skeleton->runtimeId);
+    ASSERT_NE(runtime, nullptr);
+    EXPECT_FALSE(runtime->CompactSkinMatrices.empty());
+}
+
 TEST_F(RuntimeHumanoidProfileTest, MissingRuntimeProfileCannotEnterExportManifest)
 {
     AssetCollector collector(*assets);

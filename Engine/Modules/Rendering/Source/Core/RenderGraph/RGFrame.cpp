@@ -511,7 +511,7 @@ void RGFrame::DiscardRecordedPasses()
     // A subsequent BeginFrame may have cleared declarations while the previous
     // submission still uses node-owned resources. Retirement must join it too.
     WaitForPendingWork();
-    if (m_Graph.PassCount() == 0 && m_Graph.Arena().PendingDestructors() == 0)
+    if (m_Graph.PassCount() == 0 && m_Graph.Arena().GetMarker().DestructorCount == 0)
         return;
     ResetRecording();
 }

@@ -116,17 +116,8 @@ message(STATUS "Logger: Source files: ${LOGGER_SOURCES}")
 message(STATUS "Logger: Header files: ${LOGGER_HEADERS}")
 
 # Performance and debugging options
-option(LOGGER_ENABLE_THREAD_SAFETY "Enable thread-safe logging (slight performance cost)" ON)
 option(LOGGER_ENABLE_TIMESTAMPS "Enable timestamp logging" ON)
 option(LOGGER_ENABLE_SOURCE_LOCATION "Enable source file/line logging (debug builds only)" ON)
-
-if(LOGGER_ENABLE_THREAD_SAFETY)
-    target_compile_definitions(Logger PUBLIC LOGGER_THREAD_SAFE=1)
-    message(STATUS "Logger: Thread safety enabled")
-else()
-    target_compile_definitions(Logger PUBLIC LOGGER_THREAD_SAFE=0)
-    message(STATUS "Logger: Thread safety disabled (better performance)")
-endif()
 
 if(LOGGER_ENABLE_TIMESTAMPS)
     target_compile_definitions(Logger PUBLIC LOGGER_ENABLE_TIMESTAMPS=1)

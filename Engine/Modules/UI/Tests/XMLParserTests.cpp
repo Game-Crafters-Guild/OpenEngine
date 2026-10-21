@@ -79,17 +79,17 @@ TEST(XMLParserTests, TextAreaReadonlyAndTextInputResolveFromMarkup)
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
     ASSERT_TRUE((bool)root);
 
-    auto* readOnly = dynamic_cast<TextArea*>(root->FindById("ro"));
+    auto* readOnly = dynamic_cast<TextArea*>(root->FindById("ro"_sid));
     ASSERT_NE(readOnly, nullptr);
     EXPECT_TRUE(readOnly->IsReadOnly());
 
     // The negative control: without it, a SetReadOnly bound to the wrong default would pass
     // the arm above for the wrong reason.
-    auto* writable = dynamic_cast<TextArea*>(root->FindById("rw"));
+    auto* writable = dynamic_cast<TextArea*>(root->FindById("rw"_sid));
     ASSERT_NE(writable, nullptr);
     EXPECT_FALSE(writable->IsReadOnly());
 
-    EXPECT_NE(dynamic_cast<TextInput*>(root->FindById("ti")), nullptr);
+    EXPECT_NE(dynamic_cast<TextInput*>(root->FindById("ti"_sid)), nullptr);
 }
 
 TEST(XMLParserTests, UnknownTagFallsBackToUIElementWithOriginalName)
@@ -128,7 +128,7 @@ TEST(XMLParserTests, AccordionModeParsesFromAttribute)
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
     ASSERT_TRUE((bool)root);
 
-    UIElement* el = root->FindById("acc");
+    UIElement* el = root->FindById("acc"_sid);
     ASSERT_NE(el, nullptr);
     auto* acc = dynamic_cast<Accordion*>(el);
     ASSERT_NE(acc, nullptr);
@@ -146,7 +146,7 @@ TEST(XMLParserTests, DropdownModeParsesFromAttribute)
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
     ASSERT_TRUE((bool)root);
 
-    UIElement* el = root->FindById("dd");
+    UIElement* el = root->FindById("dd"_sid);
     ASSERT_NE(el, nullptr);
     auto* dd = dynamic_cast<Dropdown*>(el);
     ASSERT_NE(dd, nullptr);
@@ -165,16 +165,16 @@ TEST(XMLParserTests, FindByIdUsesCanonicalId)
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
     ASSERT_TRUE((bool)root);
 
-    UIElement* byNameOnly = root->FindById("childA");
+    UIElement* byNameOnly = root->FindById("childA"_sid);
     ASSERT_NE(byNameOnly, nullptr);
     EXPECT_EQ(UIAttributeAccess::GetDebugTypeName(*byNameOnly), "Panel");
     EXPECT_EQ(byNameOnly->GetId(), "childA");
 
     // When both id and name are provided, id remains canonical (name is ignored).
-    UIElement* byAlias = root->FindById("alias");
+    UIElement* byAlias = root->FindById("alias"_sid);
     EXPECT_EQ(byAlias, nullptr);
 
-    UIElement* byId = root->FindById("x");
+    UIElement* byId = root->FindById("x"_sid);
     ASSERT_NE(byId, nullptr);
     EXPECT_EQ(UIAttributeAccess::GetDebugTypeName(*byId), "Panel");
     EXPECT_EQ(byId->GetId(), "x");

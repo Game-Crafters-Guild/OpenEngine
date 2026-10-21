@@ -1,0 +1,363 @@
+---
+title: Editor UI component library
+description: A reference for the editor's native UI, its registered controls, CSS classes, panel patterns, design tokens, behavior rules, and authoring conventions, so new UI belongs in the editor.
+---
+
+A visual reference for the current native editor UI: registered controls, CSS classes, panel patterns, design tokens, behavior rules, and authoring conventions. This page documents what already exists so new UI can feel like it belongs in the editor. [Browse the components](#components) or [read the guidelines](#authoring-guidelines).
+
+## Foundations
+
+The editor UI is native C++ controls plus UXML structure and CSS-style theme assets.
+
+### Runtime model
+
+- `UIElement` is the base node for structure, classes, state, events, and styles.
+- Registered controls map UXML tags to native C++ types in `ControlRegistration.cpp`.
+- Use C++ for dynamic state, event wiring, virtualization, and editor services.
+
+### Asset model
+
+- Global editor styling enters through `Apps/Editor/Assets/UI/theme.css`.
+- Reusable control CSS belongs in `Apps/Editor/Assets/UI/controls`.
+- Panel-specific CSS belongs in `Apps/Editor/Assets/UI/panels`.
+
+:::note
+Prefer UXML for stable layout structure and C++ for behavior. When a control owns reusable child structure, attach its local CSS with `RequestSubtreeStyleAssetPath("UI/controls/<Control>.css")`.
+:::
+
+## Theme tokens
+
+Shared values come from `theme/tokens.css`. Reuse them before adding new colors or dimensions. The values below are the ones in `Apps/Editor/Assets/UI/theme/tokens.css`.
+
+### Core colors
+
+| Token | Value | Use |
+|---|---|---|
+| `--ui_color_bg_panel` | `#272727` | Panel background |
+| `--ui_color_bg_tabbar` | `#1D1D1C` | Tab bar background |
+| `--ui_color_text` | `#E5E5E5` | Text |
+| `--ui_color_border` | `#272727` | Borders |
+| `--ui_color_accent` | `#006FFF` | Focus, selection, and the primary accent |
+| `--ui_color_accent_green` | `#4CAF50` | Green accent |
+
+### Orange and warning colors
+
+These are not tokens yet: the value is written where it is used.
+
+| Value | Use |
+|---|---|
+| `#dcdcaa` | Warning text |
+| `#f08040` | GPU orange (profiler) |
+| `#FFAA00` | VCS warning |
+| `#f0c850` | Tag yellow |
+
+- Use amber/yellow for warning, caution, and validation-in-progress states.
+- Use orange for GPU/profiler distinction or existing category chips.
+- Keep blue as the default focus, selection, and primary accent.
+
+### Typography and spacing
+
+| Token | Value | Use |
+|---|---|---|
+| `--ui_font_family` | Roboto | Text |
+| `--ui_font_mono` | Roboto Mono | Code and numbers |
+| `--ui_font_size_small` / `_list` / `_base` / `_header` | 12 / 13 / 14 / 16 px | Type sizes |
+| `--ui_spacing_xs` / `_sm` / `_md` / `_lg` / `_xl` | 4 / 6 / 8 / 12 / 16 px | Spacing |
+
+- Use base sizes for dense panels and headers only where hierarchy matters.
+- Do not scale editor text with viewport width.
+
+### Radii and icon tint
+
+| Token | Value | Use |
+|---|---|---|
+| `--ui_radius_sm` | 4 px | Small radius |
+| `--ui_radius_md` | 6 px | Medium radius |
+| `--ui_icon_tint_default` | `#808080` | Icon at rest |
+| `--ui_icon_tint_hover` | `#ffffff` | Icon under the pointer |
+
+- Keep editor surfaces restrained and compact.
+- Use image tinting instead of whole-control opacity for icon states.
+
+### Tree sizing
+
+| Token | Value | Use |
+|---|---|---|
+| `--ui_tree_icon_size` | 16 px | A tree row's icon |
+| `--ui_tree_foldout_size` | 15 px | The foldout arrow |
+| `--ui_tree_icon_padding` | 28 px | The space before a row's icon |
+
+- Use tree tokens for hierarchy, assets, and folder trees.
+- Avoid hard-coded tree indentation unless the control owns it.
+
+## Components
+
+Use these existing pieces before adding new UI primitives or one-off CSS.
+
+### Buttons
+
+Command actions, confirmations, and dense panel actions. Classes: `primary`, `secondary`, `cancel-button`, `small`.
+
+```xml title="A primary button"
+<Button id="ApplySettings" class="primary" text="Apply" />
+```
+
+Default height is at least 32 px. Keep labels short and state changes stable.
+
+### Icon buttons
+
+Toolbar, chrome, and repeated compact actions. Classes: `icon-button`, `save-icon`, `settings-icon`.
+
+```xml title="A toolbar icon button"
+<Button class="small secondary icon-button settings-icon" />
+```
+
+Standard toolbar hit area is 24 x 24 px. Playback uses 32 x 32 px.
+
+### Editor icon assets
+
+Toolbar, hierarchy, inspector, and panel sprites as PNG/SVG files under Assets/Icons, referenced from theme and panel CSS. Where they live: `Apps/Editor/Assets/Icons`, `editor:Icons/*.png`, `url("Icons/…")` in panels.
+
+```css title="An icon from the editor's icon folder"
+background-image: url("editor:Icons/save.svg");
+```
+
+- **Global playback / folds / dock layouts**: `theme/core.css`
+- **Trees, locks, project rows, create-entity thumbnails**: `theme/views.css`
+- **Dropdown carets, reorder handles, outlines**: `theme/widgets.css`
+- **Inspector add menus, reorder, section locks**: `theme/inspector.css`
+- **Animation / Scene View / Settings / Build …**: `panels/*.css`
+
+Sparse SVG companions (e.g. `Lock.svg`, `ArrowUp.svg`) ship beside PNGs; tint with `background-image-tint`. Reuse glyphs before introducing parallel assets.
+
+### Labels
+
+Static text, property names, headings, status text, and empty states. Classes: `inspector-label`, `inspector-text`, `inspector-header`.
+
+```xml title="A property name"
+<Label class="inspector-label" text="Roughness" />
+```
+
+Do not use labels as command controls when a clear hit area is needed.
+
+### Boolean controls
+
+Checkboxes for explicit choices, toggles for switch-like state. Classes: `checkbox`, `toggle`, `inspector-toggle`.
+
+```xml title="A checkbox"
+<Checkbox text="Enable shadows" checked="true" />
+```
+
+Keep row cells stable so checked state does not reflow the panel.
+
+### Dropdowns
+
+Bounded option sets in UI or native OS mode. Classes: `dropdown`, `inspector-dropdown`, `open`.
+
+```xml title="An inspector dropdown"
+<Dropdown class="inspector-dropdown" options="Directional,Point,Spot" />
+```
+
+Inspector dropdowns stretch to the field column. Bottom bar popups open upward.
+
+An option may carry an icon. The field names a CSS class beside the option's value and label. `theme/dropdown-option-icons.css` says which image that class is, so nothing in C++ names an image file and the theme can restyle or retint the icons without a rebuild. A control whose options declare icons gives every row the slot, so an option with no icon still lines its text up with the rest.
+
+```cpp title="Options that carry an icon class"
+Dropdown::Option{"soft", "Soft", {}, "dropdown-icon--light-area"};
+EnumEntry<LightType>{LightType::Area, "Area", "dropdown-icon--light-area"};
+```
+
+### Text and numeric fields
+
+Text input, multiline text, float/int values, and vector groups. Controls: `TextField`, `FloatField`, `Vector3Field`.
+
+```xml title="A vector field"
+<Vector3Field id="Position" class="inspector-vector3" />
+```
+
+Vector components shrink to 40 px minimum. Preserve focused fields during refresh.
+
+### Sliders
+
+Continuous and stepped values that benefit from scrubbing. Classes: `inspector-slider`, `valuebubble`, `range`.
+
+```xml title="A slider"
+<Slider min="0" max="10" value="1" step="0.01" />
+```
+
+Pair with numeric fields when precision matters. Commit once per gesture.
+
+### Foldout and accordion
+
+Collapsible sections and grouped disclosure. Controls and classes: `Foldout`, `Accordion`, `inspector-section`.
+
+```xml title="An accordion with one section open at a time"
+<Accordion id="SettingsGroups" mode="exclusive" />
+```
+
+Use `InspectorSection` for inspector component sections.
+
+### Search dialog
+
+Command, asset, and filtered-list pickers. Names: `SearchDialog`, `results`, `highlighted`.
+
+```cpp title="Create a search dialog"
+auto dialog = std::make_unique<SearchDialog>();
+```
+
+Anchor to the invoking field or a predictable panel region.
+
+### Asset field
+
+GUID asset selection with search, clear behavior, thumbnails, and drag/drop. Classes: `asset-field`, `asset-field-preview`, `asset-field-clear`.
+
+```cpp title="Accept materials only"
+field->SetAcceptedTypes({AssetType::Material});
+```
+
+Use instead of rebuilding picker behavior in inspectors.
+
+### Tree, grid, list, scroll
+
+Hierarchy trees, asset thumbnails, dense rows, and scroll ownership. Elements: `treeview`, `gridview`, `listview`, `scrollview`.
+
+```xml title="A scroll view"
+<scrollview class="inspector-scrollview">...</scrollview>
+```
+
+Scrollable panels need constrained parents and `min-height: 0`.
+
+### Layout primitives
+
+Split panes, weighted regions, mounted subtrees, and scroll primitives. Elements: `pane`, `splitter`, `splitview`, `Mount`, `scrollbar`.
+
+```xml title="A weighted pane and a splitter"
+<pane weight="0.35" />
+<splitter class="splitter row" />
+```
+
+Use for runtime-resizable layouts and portal-like mounted panel content.
+
+### Charts and logs
+
+Profiler charts, virtualized logs, status rows, and diagnostic severity. Names: `ChartView`, `LogView`, `log-warning`, `log-error`.
+
+```cpp title="Create a chart"
+auto chart = std::make_unique<ChartView>();
+```
+
+Keep charts stable in height and logs dense/virtualized for large data.
+
+### Color picker
+
+Shared color selection, popups, swatches, and live preview/apply flows. Names: `ColorPicker`, `ColorPickerPopup`, `ColorPickerCallbacks`.
+
+```cpp title="Open the color picker window"
+ctx.OpenColorPickerWindow(initialColor, intensity, callbacks);
+```
+
+Use preview/commit semantics: live while dragging, commit on apply/final change.
+
+### Scene View widgets
+
+Viewport toolbar, camera bookmarks, ruler overlays, and rotation gizmo. Controls: `SceneViewToolbar`, `CameraBookmarksWidget`, `ViewportRotationGizmo`.
+
+```xml title="The viewport rotation gizmo"
+<ViewportRotationGizmo class="viewport-rotation-gizmo" />
+```
+
+Overlay viewport UI without covering core content. Move/hide on overlap.
+
+### Animation timeline
+
+Dopesheet, curves, clip lanes, markers, rulers, and time range controls. Controls: `DopeSheetView`, `CurvesGraphView`, `TimeCompositeView`, `TimelineBarElement`.
+
+```xml title="A curves view"
+<CurvesGraphView class="animationwindow-view-placeholder" />
+```
+
+Keep ruler, labels, playhead, and scrub strips aligned across zoom levels.
+
+### Modals
+
+Focused blocking workflows such as confirmations and project picking. Names: `ProjectPicker.css`, `cancel-button`, `open-button`.
+
+```cpp title="Attach a modal's stylesheet"
+RequestSubtreeStyleAssetPath("UI/controls/ProjectPicker.css");
+```
+
+Keep header/footer control positions stable and initial focus predictable.
+
+### Docking and panels
+
+Docked editor tools, tabs, split layouts, and panel inventory. Names: `dockspace`, `DockablePanel`, `panel`.
+
+```xml title="A dockable panel"
+<DockablePanel id="SceneView" type="SceneViewPanel" />
+```
+
+Panel roots should use `flex-grow: 1`, `min-width: 0`, and `min-height: 0`.
+
+### Inspector sections
+
+Reusable component/entity sections in the Inspector. Names: `InspectorSection`, `inspector-row`, `inspector-field`, `inspector-section-subheader`.
+
+```cpp title="Add a row to a section"
+section->GetContentRoot()->AddChild(std::move(row));
+```
+
+Avoid overwriting focused field subtrees during refresh.
+
+A heading over a group of rows inside a section body takes `inspector-section-subheader`. `inspector-section-header` is the section bar's own title and belongs to `InspectorSection`; put on a loose label it styles a heading for a bar that is not there.
+
+### Toolbars
+
+Global editor commands, playback, layout presets, and panel-local tools. Classes: `editor-top-toolbar`, `layout-button`, `toolbar-spacer`.
+
+```xml title="A play button"
+<Button class="small secondary icon-button play-icon" />
+```
+
+Toolbars are 40 px tall. Center playback controls keep natural width.
+
+## Authoring guidelines
+
+Rules for adding new editor UI without drifting away from the current system.
+
+### Layout
+
+- Use dense, predictable tool UI. Avoid decorative cards and oversized marketing-style composition.
+- Flexible roots and scroll hosts need `min-width: 0` and `min-height: 0`.
+- Stable controls need explicit dimensions or min/max constraints.
+
+### Styling
+
+- Prefer classes and tokens over inline style overrides.
+- Use `controls/` for reusable component CSS, `panels/` for panel CSS, and `theme/` for cross-editor styles.
+- Use `background-image-tint` for icon color states.
+
+### Behavior
+
+- `UIManager::Update` owns input, focus, hover, dispatch, and layout.
+- `UIManager::RenderRG(frame, target, targetSpace)` prepares geometry and declares the current frame's UI pass. The host supplies the target color space.
+- Interactive edits preview while dragging and commit once when the gesture ends.
+
+### Naming
+
+- Reusable controls use `<component>`, `<component>-<part>`, and `<component>-<state>`.
+- Inspector classes use `inspector-*`.
+- Icon classes should end in `-icon` and map to shipped editor icons.
+
+## New UI checklist
+
+A compact review list before a new panel or control lands.
+
+- Reuse an existing native control or editor helper where one exists.
+- Choose classes from the component catalog before adding new CSS.
+- Use tokens for shared colors, spacing, type, radii, and icon tint.
+- Ensure flexible roots and scroll areas have `min-width: 0` and `min-height: 0`.
+- Verify hover, active, focus, selected, disabled, empty, and drag/drop states where applicable.
+- Keep control dimensions stable across state changes.
+- Make data changes through editor edit APIs and preserve preview/commit semantics.
+
+The canonical component catalog; authoring rules live in [Editor UI guidelines](../contributing/editor-ui-guidelines.mdx). The [documentation index](../README.md) lists every page.

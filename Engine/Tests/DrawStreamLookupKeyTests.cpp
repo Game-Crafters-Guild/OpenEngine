@@ -10,6 +10,7 @@
 
 #include "Engine/Rendering/DrawStreamLookupKey.h"
 
+#include "BatchTableTesting.h"
 #include "Rendering/Core/BatchRegistry.h"
 
 #include <cstdint>
@@ -18,6 +19,7 @@
 using GameEngine::Engine::Renderer::DrawStreamLookupKey;
 using GameEngine::Engine::Renderer::ResolveDrawStreamLookupKey;
 using GameEngine::Engine::Renderer::WorldDrawBuilder;
+namespace BatchTableTesting = GameEngine::Rendering::BatchTableTesting;
 using GameEngine::Rendering::BatchRegistry;
 using GameEngine::Rendering::GPUDrawStreamBuilder;
 using GameEngine::Rendering::MaterialDepthClass;
@@ -71,7 +73,7 @@ TEST(DrawStreamLookupKey, ColorSliceResolvesClassIdAndPoolGroup)
     const std::vector<uint32_t> colorClass{kClassId, kClassId};
     const std::vector<uint32_t> meshToGroup{kGroup, kGroup};
 
-    const auto table = GPUDrawStreamBuilder::BuildColorBatchTable(registry, colorClass, meshToGroup);
+    const auto table = BatchTableTesting::BuildColor(registry, colorClass, meshToGroup);
 
     const WorldDrawBuilder::BatchKey key = MakeKey(1u, 1u, kClassId);
     const DrawStreamLookupKey lookup = ResolveDrawStreamLookupKey(
@@ -102,7 +104,7 @@ TEST(DrawStreamLookupKey, ShadowCascadeResolvesSharedDepthSentinel)
     const std::vector<uint8_t>  depthClass{kSingleSided, kSingleSided};
     const std::vector<uint32_t> meshToGroup{kGroup, kGroup};
 
-    const auto table = GPUDrawStreamBuilder::BuildShadowBatchTable(registry, depthClass, meshToGroup);
+    const auto table = BatchTableTesting::BuildShadow(registry, depthClass, meshToGroup);
 
     const WorldDrawBuilder::BatchKey key = MakeKey(1u, 1u, kClassId);
     const DrawStreamLookupKey lookup = ResolveDrawStreamLookupKey(
@@ -141,7 +143,7 @@ TEST(DrawStreamLookupKey, ConsolidationOffAndMergeOffDegradeToRawAxes)
     BatchRegistry registry;
     registry.OnInstanceAdded(3u, 5u, /*mirrored=*/false);
 
-    const auto table = GPUDrawStreamBuilder::BuildColorBatchTable(registry, {}, {});
+    const auto table = BatchTableTesting::BuildColor(registry, {}, {});
 
     const WorldDrawBuilder::BatchKey key = MakeKey(3u, 5u, /*colorClassId=*/3u);
     const DrawStreamLookupKey lookup = ResolveDrawStreamLookupKey(
@@ -162,7 +164,7 @@ TEST(DrawStreamLookupKey, MeshPastTheGroupSpanResolvesToAbsentGroup)
     registry.OnInstanceAdded(1u, 5u, /*mirrored=*/false); // past the 2-entry span
 
     const std::vector<uint32_t> meshToGroup{0u, 0u};
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(registry, meshToGroup);
+    const auto table = BatchTableTesting::Build(registry, meshToGroup);
 
     const WorldDrawBuilder::BatchKey key = MakeKey(1u, 5u, /*colorClassId=*/1u);
     const DrawStreamLookupKey lookup = ResolveDrawStreamLookupKey(

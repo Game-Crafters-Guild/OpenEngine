@@ -7,7 +7,7 @@
 
 TEST(BloomExposureUnitsContract, HighlightExtractorsBindTheSameExposureAsTonemap)
 {
-    std::ifstream f(std::filesystem::path(GE_RENDERER_REPO_ROOT) / "Assets/RenderPipelines/ForwardPlus.rendergraph");
+    std::ifstream f(std::filesystem::path(GE_RENDERER_REPO_ROOT) / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph");
     ASSERT_TRUE(f.is_open());
     const auto graph = nlohmann::json::parse(f);
     int extracts = 0, linearDownsamples = 0;
@@ -34,7 +34,7 @@ TEST(BloomExposureUnitsContract, HighlightExtractorsBindTheSameExposureAsTonemap
 
 TEST(BloomExposureUnitsContract, HalationReadsOriginalHighlightsNotScatteringOrBloom)
 {
-    std::ifstream f(std::filesystem::path(GE_RENDERER_REPO_ROOT) / "Assets/RenderPipelines/ForwardPlus.rendergraph");
+    std::ifstream f(std::filesystem::path(GE_RENDERER_REPO_ROOT) / "Engine/Assets/RenderPipelines/ForwardPlus.rendergraph");
     ASSERT_TRUE(f.is_open());
     const auto graph = nlohmann::json::parse(f);
     int checked = 0;

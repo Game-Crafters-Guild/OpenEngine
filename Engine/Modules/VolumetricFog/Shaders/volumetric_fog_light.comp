@@ -393,5 +393,6 @@ void main()
     vec3 emission = fog.uFogExtraParams.w > 0.5 ? texelFetch(uEmission, gid, 0).rgb
                                                 : fog.uEmissionAnisotropy.rgb;
     vec3 radiance = media.rgb * (direct + ambient) + emission;
+    // Absolute froxel radiance (P = 1 by construction); the composite applies P.
     imageStore(uOutLighting, gid, vec4(max(radiance, vec3(0.0)), media.a));
 }

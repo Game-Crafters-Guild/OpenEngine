@@ -580,7 +580,7 @@ TEST_F(SceneLoadFailureTests, NewSceneClearsTheDegradedRecord)
     ASSERT_TRUE(doc.OpenSceneReplace(scene));
     ASSERT_TRUE(doc.GetLastLoadDegraded().has_value());
 
-    doc.NewSceneUntitled();
+    doc.NewSceneUntitled(nullptr);
     EXPECT_FALSE(doc.GetLastLoadDegraded().has_value());
 }
 

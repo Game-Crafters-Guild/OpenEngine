@@ -61,7 +61,7 @@ float ScatterCoverage(const GameEngine::Rendering::GPUDrawStreamBuilder::ViewLOD
 TEST(PointShadowLodSelection, PointFaceProjScaleYMatchesFaceProjection)
 {
     constexpr float kPi = 3.14159265358979323846f;
-    for (const auto [nearPlane, farPlane] : {std::pair{0.025f, 10.0f}, std::pair{0.025f, 500.0f},
+    for (const auto& [nearPlane, farPlane] : {std::pair{0.025f, 10.0f}, std::pair{0.025f, 500.0f},
                                              std::pair{1.0f, 4.0f}})
     {
         const GameEngine::Mathematics::Matrix4x4 faceProj =

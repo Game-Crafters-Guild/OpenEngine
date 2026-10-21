@@ -2,7 +2,7 @@
 
 The engine adapts the lens dirt of Sonic Ether's MIT-licensed SE Natural Bloom
 and Dirty Lens effect: the supplied `lensDirt1` texture
-(`Assets/Textures/Bloom/lensDirt1.png`) and its composite. Bloom itself (the
+(`Engine/Assets/Textures/Bloom/lensDirt1.png`) and its composite. Bloom itself (the
 three-to-eight-octave HDR pyramid, the normalized octave reconstruction and the
 combine) belongs to the engine's core bloom, not to this port.
 

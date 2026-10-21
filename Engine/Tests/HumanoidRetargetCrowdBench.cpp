@@ -3,7 +3,8 @@
 //   * per-character CPU evaluate ns
 //   * per-character CPU sample ns (clip onto source skeleton)
 //   * per-character palette emit ns
-//   * per-character resident RAM (Memory::AllocationCategory::Animation)
+//   * per-character resident RAM (the "Animation.RetargetGPUData" stats
+//     record plus the CPU path's estimate, EstimateCrowdResidentBytes)
 // Records baselines to Engine/Tests/Baselines/Retarget/ on first run
 // and compares against the recorded baseline on subsequent runs with the
 // 20% tolerance band per round-3 audit ("20% threshold initial 4 weeks,
@@ -37,7 +38,7 @@
 #include "Engine/Rendering/RetargetGPUDataStore.h"
 #include "Engine/Rendering/RetargetSubmission.h"
 
-#include "Memory/AllocationCategory.h"
+#include "Memory/StatsSnapshot.h"
 
 #include "Assets/AnimationClip.h"
 #include "AssetCore/GUID.h"
@@ -51,6 +52,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -341,11 +344,10 @@ struct CrowdMeasurement
     uint64_t ResidentRamBytes = 0;
 };
 
-// Phase 12 (audit §2.4): wire the CPU-side resident bytes that the
-// retarget pipeline holds during a crowd run. The CPU path doesn't go
-// through RetargetGPUDataStore (the only existing TrackAllocation site
-// for AllocationCategory::Animation), so the baseline column read 0
-// before this. We approximate the resident footprint as:
+// The CPU-side resident bytes the retarget pipeline holds during a crowd
+// run. The CPU path does not go through RetargetGPUDataStore, whose
+// "Animation.RetargetGPUData" stats record therefore reads 0 here, so the
+// footprint is approximated as:
 //
 //   per-character storage: SkeletonData (rest TRS + bind/inv-bind) +
 //                          per-character RetargetNode storage estimate.
@@ -382,6 +384,20 @@ inline uint64_t EstimateCrowdResidentBytes(uint32 charCount,
     return srcSkel + static_cast<uint64_t>(charCount) * (perTgtSkel + perCharNode);
 }
 
+// RetargetGPUDataStore's resident bytes, summed over every live store, as the
+// stats registry reports them; empty when no record carries the name.
+constexpr const char* kRetargetResidentStatsName = "Animation.RetargetGPUData";
+
+std::optional<uint64_t> ReadRetargetResidentBytes()
+{
+    for (const GEMem::StatsEntry& entry : GEMem::SnapshotStats())
+    {
+        if (entry.Name == kRetargetResidentStatsName)
+            return entry.Bytes;
+    }
+    return std::nullopt;
+}
+
 double Median(std::vector<double>& v)
 {
     std::sort(v.begin(), v.end());
@@ -400,7 +416,6 @@ CrowdMeasurement RunCrowdWorkload(uint32 charCount,
                                   bool useLODOverride)
 {
     GERender::ClipStore::Instance().ClearForTest();
-    GEMem::ResetCategoryBytes(GEMem::AllocationCategory::Animation);
 
     CrowdSetup s;
     BuildCrowd(charCount, s);
@@ -448,19 +463,11 @@ CrowdMeasurement RunCrowdWorkload(uint32 charCount,
     m.P95FrameMs    = Percentile(frameMs, 0.95);
     m.MeanPerCharUs = (charCount > 0) ? (m.MedianFrameMs * 1000.0 / static_cast<double>(charCount)) : 0.0;
 
-    // Wire the CPU-side resident estimate into the AllocationCategory counter
-    // so the baseline column reflects real RAM, not 0. (Pre-Phase-12 the only
-    // tracker was inside RetargetGPUDataStore, which the CPU bench never
-    // exercises.) See EstimateCrowdResidentBytes.
-    {
-        constexpr uint32 kBenchChainCount = 6; // spine + head + 2 arms + 2 legs
-        const uint64_t bytes = EstimateCrowdResidentBytes(
-            charCount, kBenchSrcBoneCount, kBenchTgtBoneCount, kBenchChainCount);
-        const uint64_t prev = GEMem::GetCategoryBytes(GEMem::AllocationCategory::Animation);
-        if (bytes > prev) GEMem::TrackAllocation(GEMem::AllocationCategory::Animation, bytes - prev);
-        else if (bytes < prev) GEMem::TrackDeallocation(GEMem::AllocationCategory::Animation, prev - bytes);
-    }
-    m.ResidentRamBytes = GEMem::GetCategoryBytes(GEMem::AllocationCategory::Animation);
+    // The store's resident bytes, read by name, plus the CPU path's estimate
+    // (EstimateCrowdResidentBytes), which no store reports.
+    constexpr uint32 kBenchChainCount = 6; // spine + head + 2 arms + 2 legs
+    m.ResidentRamBytes = ReadRetargetResidentBytes().value_or(0) +
+        EstimateCrowdResidentBytes(charCount, kBenchSrcBoneCount, kBenchTgtBoneCount, kBenchChainCount);
     return m;
 }
 
@@ -589,12 +596,46 @@ TEST(HumanoidRetargetCrowdBench, RAMBudget_PerCharacterUnder16KB)
                 static_cast<double>(m100.ResidentRamBytes) / 100.0);
 
     // The CPU-only path doesn't touch RetargetGPUDataStore yet; no GPU slot
-    // gets reserved so the AllocationCategory::Animation counter stays at
-    // zero. This is expected — when GPU integration lands here we'll
-    // assert against the 2 MB / 12 MB budget. For now the gate is "no
-    // unbounded growth".
+    // gets reserved, so the store's stats record contributes zero and the
+    // reading is the CPU estimate alone. This is expected — when GPU
+    // integration lands here we'll assert against the 2 MB / 12 MB budget.
+    // For now the gate is "no unbounded growth".
     EXPECT_LE(m100.ResidentRamBytes, 32u * 1024u * 1024u)
         << "Resident retarget RAM should not exceed 32 MB even before GPU wiring";
+}
+
+// The bench's resident column reads RetargetGPUDataStore's bytes from the
+// stats registry by name; a store that holds data shows in that reading.
+TEST(HumanoidRetargetCrowdBench, CrowdBenchReadsRetargetResidentBytesByName)
+{
+    const std::optional<uint64_t> before = ReadRetargetResidentBytes();
+    ASSERT_TRUE(before.has_value())
+        << "no stats record named " << kRetargetResidentStatsName
+        << ": RetargetGPUDataStore's TrackedBytes is not registered";
+
+    GERender::RetargetGPUDataStore store;
+    const GERender::GPURetargetCharacterParams character{};
+    store.AppendCharacterParams(std::span(&character, 1));
+    ASSERT_GT(store.GetResidentBytes(), 0u);
+    EXPECT_EQ(ReadRetargetResidentBytes().value_or(0), *before + store.GetResidentBytes());
+
+    store.Shutdown();
+    EXPECT_EQ(ReadRetargetResidentBytes().value_or(0), *before);
+}
+
+// A store destroyed without Shutdown gives its bytes back to the stats record.
+TEST(HumanoidRetargetCrowdBench, DestroyingAStoreWithoutShutdownReleasesItsResidentBytes)
+{
+    const std::optional<uint64_t> before = ReadRetargetResidentBytes();
+    ASSERT_TRUE(before.has_value());
+    {
+        GERender::RetargetGPUDataStore store;
+        const GERender::GPURetargetCharacterParams character{};
+        store.AppendCharacterParams(std::span(&character, 1));
+        ASSERT_GT(ReadRetargetResidentBytes().value_or(0), *before);
+    }
+    EXPECT_EQ(ReadRetargetResidentBytes().value_or(0), *before)
+        << "the destroyed store left its bytes in " << kRetargetResidentStatsName;
 }
 
 // =====================================================================

@@ -73,6 +73,10 @@ bool IsInterpolable(StylePropertyId id)
     case StylePropertyId::TextOutlineWidth:
     case StylePropertyId::TextOutlineColor:
     case StylePropertyId::Glow:
+    // Transform lists interpolate function by function when their shapes
+    // match (InterpolateTransform); transform-origin per axis like a length.
+    case StylePropertyId::Transform:
+    case StylePropertyId::TransformOrigin:
         return true;
     default:
         return false;
@@ -119,6 +123,8 @@ StyleValue ReadProperty(const ResolvedStyle& rs, StylePropertyId id)
     case StylePropertyId::Display:       return rs.Layout.DisplayMode;
 
     case StylePropertyId::Opacity:       return rs.Visual.LocalOpacity;
+    case StylePropertyId::Transform:       return rs.Visual.Transform;
+    case StylePropertyId::TransformOrigin: return rs.Visual.TransformOrigin;
     // The computed value of font-size is always an absolute length: the
     // percentage is a SPECIFIED form, resolved before anything can read this.
     // Transitions interpolate computed values, so they never see the percentage.
@@ -229,6 +235,12 @@ void WriteProperty(ResolvedStyle& rs, StylePropertyId id, const StyleValue& v)
     case StylePropertyId::Opacity:
         rs.Visual.LocalOpacity = std::get<float>(v);
         rs.Visual.Opacity = rs.Visual.LocalOpacity;
+        break;
+    case StylePropertyId::Transform:
+        rs.Visual.Transform = std::get<TransformValue>(v);
+        break;
+    case StylePropertyId::TransformOrigin:
+        rs.Visual.TransformOrigin = std::get<TransformOriginValue>(v);
         break;
     // Write-back bypasses the cascade with a value that is already computed, so
     // it lands as a length and clears any percentage the cascade parked — which
@@ -380,8 +392,86 @@ void WriteProperty(ResolvedStyle& rs, StylePropertyId id, const StyleValue& v)
     }
 }
 
+// The identity form of `op`'s function, which `none` stands in for when it
+// meets a list (css-transforms-1 §9: "none" interpolates as the identity
+// functions of the other side's list).
+static TransformOp IdentityTransformOp(const TransformOp& op)
+{
+    TransformOp id{};
+    id.Function = op.Function;
+    id.TranslateX = StyleLength{op.TranslateX.Unit, 0.0f};
+    id.TranslateY = StyleLength{op.TranslateY.Unit, 0.0f};
+    if (op.Function == TransformFunction::Scale)
+        id.Args[0] = id.Args[1] = 1.0f;
+    else if (op.Function == TransformFunction::Matrix)
+        id.Args[0] = id.Args[3] = 1.0f;
+    return id;
+}
+
+// A length lerps when both ends have the same unit, and flips at the midpoint
+// when they do not.
+static StyleLength InterpolateLength(const StyleLength& a, const StyleLength& b, float t)
+{
+    if (a.Unit != b.Unit)
+        return (t < 0.5f) ? a : b;
+    return StyleLength{a.Unit, Math::Lerp(a.Value, b.Value, t)};
+}
+
+// Function-by-function interpolation when both lists have the same functions
+// in the same order (with the same units on translate). Anything else flips
+// at the midpoint: CSS would interpolate the decomposed matrices instead,
+// which this does not implement. matrix() interpolates its six numbers.
+static TransformValue InterpolateTransform(const TransformValue& from, const TransformValue& to, float t)
+{
+    if (from.IsNone() && to.IsNone())
+        return from;
+    const auto identityOf = [](std::span<const TransformOp> ops)
+    {
+        TransformOpList identity;
+        identity.reserve(ops.size());
+        for (const TransformOp& op : ops)
+            identity.push_back(IdentityTransformOp(op));
+        return identity;
+    };
+    const TransformOpList fromIdentity = from.IsNone() ? identityOf(to.Ops()) : TransformOpList{};
+    const TransformOpList toIdentity = to.IsNone() ? identityOf(from.Ops()) : TransformOpList{};
+    const std::span<const TransformOp> a = from.IsNone() ? std::span<const TransformOp>(fromIdentity) : from.Ops();
+    const std::span<const TransformOp> b = to.IsNone() ? std::span<const TransformOp>(toIdentity) : to.Ops();
+
+    bool sameShape = a.size() == b.size();
+    for (size_t i = 0; sameShape && i < a.size(); ++i)
+        sameShape = a[i].Function == b[i].Function && a[i].TranslateX.Unit == b[i].TranslateX.Unit &&
+                    a[i].TranslateY.Unit == b[i].TranslateY.Unit;
+    if (!sameShape)
+        return TransformValue::FromOps(TransformOpList(t < 0.5f ? a.begin() : b.begin(), t < 0.5f ? a.end() : b.end()));
+
+    TransformOpList out(a.begin(), a.end());
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        out[i].TranslateX = InterpolateLength(a[i].TranslateX, b[i].TranslateX, t);
+        out[i].TranslateY = InterpolateLength(a[i].TranslateY, b[i].TranslateY, t);
+        for (int k = 0; k < 6; ++k)
+            out[i].Args[k] = Math::Lerp(a[i].Args[k], b[i].Args[k], t);
+    }
+    return TransformValue::FromOps(std::move(out));
+}
+
 StyleValue InterpolateProperty(StylePropertyId /*id*/, const StyleValue& a, const StyleValue& b, float t)
 {
+    if (std::holds_alternative<TransformValue>(a) && std::holds_alternative<TransformValue>(b))
+    {
+        return InterpolateTransform(std::get<TransformValue>(a), std::get<TransformValue>(b), t);
+    }
+
+    // transform-origin: each axis lerps when its unit matches and flips at the
+    // midpoint when not.
+    if (std::holds_alternative<TransformOriginValue>(a) && std::holds_alternative<TransformOriginValue>(b))
+    {
+        const auto& pa = std::get<TransformOriginValue>(a);
+        const auto& pb = std::get<TransformOriginValue>(b);
+        return TransformOriginValue{InterpolateLength(pa.X, pb.X, t), InterpolateLength(pa.Y, pb.Y, t)};
+    }
+
     if (std::holds_alternative<float>(a) && std::holds_alternative<float>(b))
     {
         return Math::Lerp(std::get<float>(a), std::get<float>(b), t);

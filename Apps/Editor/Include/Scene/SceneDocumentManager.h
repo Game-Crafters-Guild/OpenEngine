@@ -123,9 +123,10 @@ class SceneDocumentManager
                             const std::filesystem::path& scenePath);
     // Add entities from a scene into the current world.
     bool LoadSceneAdditive(const std::filesystem::path& scenePath);
-    // Clears the world and starts a new untitled scene with default entities
-    // (directional light, ambient light, sky environment, plane, sphere).
-    void NewSceneUntitled(Engine::Renderer::RenderServices* renderServices = nullptr);
+    // Clears the world and starts a new untitled scene seeded by SeedDefaultSceneEntities.
+    // The plane and spheres need renderServices: pass the engine's services.
+    // Null seeds only the non-mesh entities, for headless tests.
+    void NewSceneUntitled(Engine::Renderer::RenderServices* renderServices);
 
     // Play mode simulates the authored world IN PLACE (PlayModeManager keeps a
     // same-world snapshot and restores it on exit), so while it runs the world

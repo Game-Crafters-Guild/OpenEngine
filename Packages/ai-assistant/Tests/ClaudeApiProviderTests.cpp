@@ -380,4 +380,41 @@ TEST(ClaudeApiProviderTests, CancellingMidStreamStopsTheTurnWithTheTextSoFar)
     EXPECT_TRUE(events.Result.Error.empty()) << events.Result.Error;
     EXPECT_LT(elapsed, 10s);
 }
+
+namespace
+{
+std::string SseFrame(std::string_view type, std::string_view data)
+{
+    return "event: " + std::string(type) + "\ndata: " + std::string(data) + "\n\n";
+}
+} // namespace
+
+// Text blocks of one reply (around a tool_use block) are joined by a paragraph break, never
+// run together (issue #3435); a block that opens the reply or adds no text adds no break.
+TEST(ClaudeApiProviderTests, TextBlocksOfOneReplyAreSeparatedByAParagraphBreak)
+{
+    const std::string reply =
+        SseFrame("message_start", "{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}") +
+        SseFrame("content_block_start",
+                 "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}") +
+        SseFrame("content_block_delta", "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+                                        "\"text_delta\",\"text\":\"Creating the lantern.\"}}") +
+        SseFrame("content_block_start", "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":"
+                                        "\"tool_use\",\"id\":\"toolu_1\",\"name\":\"create_entity\",\"input\":{}}}") +
+        SseFrame("content_block_start",
+                 "{\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}") +
+        SseFrame("content_block_delta", "{\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":"
+                                        "\"text_delta\",\"text\":\"It is lit.\"}}") +
+        SseFrame("content_block_start",
+                 "{\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}") +
+        SseFrame("message_stop", "{\"type\":\"message_stop\"}");
+    RecordingTurnEvents events;
+    ClaudeApiStream stream(events);
+    stream.Feed(reply);
+    stream.Finish(Completed());
+
+    const std::vector<std::string> expected = {"delta:Creating the lantern.", "delta:\n\nIt is lit.",
+                                               "finished:Creating the lantern.\n\nIt is lit."};
+    EXPECT_EQ(events.Log, expected);
+}
 } // namespace GameEngine

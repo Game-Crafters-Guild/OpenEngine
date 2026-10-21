@@ -3,7 +3,7 @@
 // engine.dispose() is in flight and one made after it is awaited must both be refused, and the
 // page logs one "dispose-check: PASS|FAIL {...}" line that browser_gate.py --expect reads.
 // ?threads=single|auto picks the build, as Engine.create's option does.
-import { Engine } from '@openengine/web';
+import { Engine } from '@game-crafters-guild/openengine-web';
 
 const kInvalidEntity = 0xffffffff;
 const kRunSeconds = 3;

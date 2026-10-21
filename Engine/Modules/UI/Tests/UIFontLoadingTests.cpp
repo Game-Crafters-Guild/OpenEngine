@@ -103,7 +103,7 @@ TEST(UIFontLoadingTests, RequestsFamilyOnceAndAppliesOnCompletion)
     // This prevents overlap/stacking during async font resolution.
     UIElement* rootEl = ui.GetRootElement();
     ASSERT_NE(rootEl, nullptr);
-    UIElement* lblEl = rootEl->FindById("lbl");
+    UIElement* lblEl = rootEl->FindById("lbl"_sid);
     ASSERT_NE(lblEl, nullptr);
     EXPECT_GT(lblEl->GetLayoutHeight(), 0.0f);
 

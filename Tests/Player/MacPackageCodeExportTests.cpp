@@ -129,9 +129,12 @@ class MacPackageCodeExportTest : public testing::Test
                   "<key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n");
         fs::create_directories(templateApp / "MacOS");
         fs::copy_file("/usr/bin/true", templateApp / "MacOS/Player");
-        WriteFile(Sdk / "nativescripting/manifest.txt", "includedir=include\nimportlib=lib/libEngine.dylib\n");
+        WriteFile(Sdk / "nativescripting/manifest.txt",
+                  "includedir=include\nimportlib=lib/libEngine.dylib\nenginebinary=lib/libEngine.dylib\n");
         WriteFile(Sdk / "include/Engine.h", "#pragma once\n");
-        WriteFile(Sdk / "lib/libEngine.dylib", "engine");
+        // A real image: the engine-ABI digest reads its LC_UUID.
+        fs::create_directories(Sdk / "lib");
+        fs::copy_file(GE_MAC_BUNDLE_FIXTURE_DYLIB, Sdk / "lib/libEngine.dylib", fs::copy_options::overwrite_existing);
 
         // Opaque mandatory dependencies of every export.
         WriteFile(Assets / "Fonts/Roboto-Regular.ttf", "TTFDATA");

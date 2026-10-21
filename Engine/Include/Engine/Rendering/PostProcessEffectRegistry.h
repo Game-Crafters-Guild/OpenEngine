@@ -156,9 +156,6 @@ struct PostProcessEffectDescriptor
     // so a descriptor is scene-IO-inert for them — it exists for the chrome and
     // settings-write consumers above.
     std::span<const EffectFieldIO> FieldIO{};
-    // Retired keys older scenes may still carry: parsed and dropped without a
-    // warning (e.g. ColorGrade brightness/gamma/hue).
-    std::span<const std::string_view> DroppedLegacyKeys{};
 
     std::span<const EffectSettingsField> SettingsFields{};
 

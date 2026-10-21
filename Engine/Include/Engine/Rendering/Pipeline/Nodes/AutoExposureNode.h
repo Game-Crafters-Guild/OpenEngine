@@ -20,11 +20,15 @@ using ::GameEngine::Rendering::ShaderMeta;
 
 namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 {
-// Histogram auto-exposure (eye adaptation). Two compute passes per view:
-//   auto_exposure_histogram.comp — HDR scene colour + the view's resolved depth -> two 256-bin
-//                                  log-luminance histograms, geometry and sky (the far plane)
-//   auto_exposure_resolve.comp   — meters the geometry, with the sky as a ceiling when it is a large
-//                                  share of the frame -> adapted LINEAR exposure
+// Auto exposure (eye adaptation) with two meters (PostProcessSettings::AutoExposureMeter):
+//   picture: two compute passes per view —
+//     auto_exposure_histogram.comp — HDR scene colour + the view's resolved depth -> two 256-bin
+//                                    log-luminance histograms, geometry and sky (the far plane)
+//     auto_exposure_resolve.comp   — meters the geometry, with the sky as a ceiling when it is a large
+//                                    share of the frame -> adapted LINEAR exposure
+//   lights: the resolve alone, fed the incident reading of the view's world (IncidentLightMeter.h),
+//     taken on the CPU at declare time; no histogram pass.
+// Both meters share the resolve's clamp, bias and smoothing.
 // The resolved exposure lives in the per-view "ExposureHistory" buffer — a PERSISTENT blueprint
 // resource (rendergraph "resources" entry: 16-byte perView Storage buffer, zeroOnCreate), never a
 // transient (those alias across frames). Consumers (BloomThreshold, Tonemap) bind it by name and
@@ -52,6 +56,10 @@ class AutoExposureNode final : public IRenderPipelineNode
 
   private:
     void LoadShaders(IDevice* device);
+    // The picture meter's histogram pass over the configured input and the view depth; `exposure` is
+    // the view's ExposureHistory, whose pre-exposure the input is stored at. False (and a warn-once)
+    // when the input or the depth does not resolve, in which case the resolve must not run.
+    bool DeclareHistogramPass(ViewDeclare& d, RenderGraph::RGBuffer histogram, RenderGraph::RGBuffer exposure);
 
     // Metering source, overridden via the node's "input". The default stays
     // HDRFiltered — the name every tonemap chain produces — so legacy graphs

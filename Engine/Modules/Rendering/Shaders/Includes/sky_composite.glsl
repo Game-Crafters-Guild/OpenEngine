@@ -4,6 +4,7 @@
 #include "compat_profile.glsl"
 
 #include "sky_ray_sphere.glsl"
+#include "sky_transmittance_lut.glsl"
 
 // Shared sky composite: the ground / below-horizon blend and the night-sky
 // gradient that sit on TOP of the atmospheric sky-view LUT sample. Factored out
@@ -61,10 +62,9 @@ float GE_SkyHash13(vec3 p)
     return fract(p.x * p.y * p.z);
 }
 
-// Layers the ground / below-horizon blend and the night-sky gradient over the
-// atmospheric sky color. Mirrors sky_render.frag's "Ground color blend" +
-// "Night sky gradient" blocks exactly (same branches, same constants, same
-// noise term). Returns the composited sky color (still pre-exposure).
+// Layers the ground / below-horizon blend and the night sky's own glow over the
+// atmospheric sky color, for the visible sky and the IBL capture alike. Returns the
+// composited sky color (still pre-exposure).
 //
 //   skyColor       - the sky-view LUT sample (scene-linear, pre-composite)
 //   dirWS          - world-space view direction (for the night noise term)
@@ -72,7 +72,7 @@ float GE_SkyHash13(vec3 p)
 //   nightAmount    - clamp(nightSkyBlend, 0, 1)
 //   applyGround    - when false, skip the below-horizon ground/dark block so the
 //                    raw atmospheric sky shows below the horizon (open sky). The
-//                    night gradient (above the horizon) is unaffected either way.
+//                    night glow (above the horizon) is unaffected either way.
 //   groundAlbedo / groundBrightness / groundNightColor / belowHorizon* /
 //   nightSkyHorizonColor - the AtmosphereUBO fields the blocks consume.
 vec3 GE_ApplySkyGroundAndNight(vec3 skyColor,
@@ -100,50 +100,27 @@ vec3 GE_ApplySkyGroundAndNight(vec3 skyColor,
         skyColor = mix(skyColor, groundColor, t);
     }
 
-    // ---- Night sky gradient ----
-    // Anchor the night sky to the actual horizon twilight (the sky-view LUT
-    // sample) and darken smoothly toward the zenith, then add the authored glow
-    // as a horizon-weighted term that is strongest AT the horizon and fades up.
-    // This fuses the LUT twilight and the authored glow into ONE horizon glow
-    // instead of injecting a second band above the horizon: the old gradient
-    // ramped nightSkyHorizonColor in via smoothstep(0, 0.20, viewZenithCos),
-    // which held the night color off the horizon and left the LUT twilight
-    // showing through underneath it as a separate band.
-    // When the stylized ground is painted (applyGround), keep the night gradient
-    // strictly above the horizon so it never tints that ground; the rim +
-    // nightSkyHorizonColor overlay in the render pass owns the StylizedGround horizon.
-    // The physical modes (ContinueHorizon / PlanetGround) instead MIRROR the night sky
-    // below the horizon -- |viewZenithCos| drives the gradient, so the horizon glow
-    // continues down and darkens to the nadir as a seamless night sphere (PlanetGround
-    // then composites its lit floor on top).
+    // ---- Night sky glow ----
+    // The natural night sky's own light, added to the LUT's sky, which carries the twilight and the
+    // moonlit sky itself: airglow and integrated starlight, about 1.7e-4 cd/m2 at the zenith (V 22
+    // mag per square arcsecond, Leinert et al. 1998), brightening toward the horizon (van Rhijn's
+    // longer path through the glowing layer) to nightSkyHorizonColor. Desaturated blue-grey.
+    // When the stylized ground is painted (applyGround), the glow stays strictly above the horizon
+    // so it never tints that ground; the physical modes (ContinueHorizon / PlanetGround) mirror it
+    // below the horizon, |viewZenithCos| driving the gradient (PlanetGround then composites its lit
+    // floor on top).
     float nightFloorCos = applyGround ? 0.0 : -1.0;
     if (nightAmount > 0.0 && viewZenithCos > nightFloorCos)
     {
-        // |viewZenithCos| for the physical modes mirrors the gradient below the horizon;
-        // StylizedGround clamps to the upper half so its painted ground stays untouched.
         float elevCos = applyGround ? max(viewZenithCos, 0.0) : abs(viewZenithCos);
-
-        // Darken the twilight toward a dark night zenith. zenithDarken is 0 at the
-        // horizon (keep the LUT twilight) and approaches 1 at the zenith/nadir.
-        // Scene-linear on the 203-nit anchor, ~0.02-0.12 nits: a real night
-        // zenith, so midnight meters below the auto-exposure floor and stays dark
-        // (the dimmer default NightSkyHorizonColorKeys carry the same rationale).
-        const vec3 kNightZenithCol = vec3(0.00018, 0.00009, 0.0006);
-        float zenithDarken = smoothstep(0.0, 0.85, elevCos);
-        vec3 baseNight = mix(skyColor, kNightZenithCol, zenithDarken);
-
-        // The authored glow owns the night horizon: blend toward it so the bright LUT
-        // twilight grazing glow is subdued under it (it would otherwise read as a
-        // separate grey band beside the purple), fading to the darkened twilight away.
-        float horizonWeight = 1.0 - smoothstep(0.0, 0.55, elevCos);
-        vec3 nightSky = mix(baseNight, nightSkyHorizonColor, horizonWeight);
+        // Scene-linear on the 203-nit anchor.
+        const vec3 kNightZenithCol = vec3(6.98e-7, 8.50e-7, 1.163e-6);
+        vec3 glow = mix(nightSkyHorizonColor, kNightZenithCol, smoothstep(0.0, 0.85, elevCos));
 
         float noise = GE_SkyHash13(normalize(dirWS) * 37.0);
-        float noiseFactor = 1.0 + (noise - 0.5) * 0.05;
-        nightSky *= noiseFactor;
+        glow *= 1.0 + (noise - 0.5) * 0.05;
 
-        float mixStrength = clamp(nightAmount, 0.0, 1.0);
-        skyColor = mix(skyColor, nightSky, mixStrength);
+        skyColor += glow * clamp(nightAmount, 0.0, 1.0);
     }
 
     return skyColor;
@@ -219,6 +196,102 @@ vec3 GE_SkyDiffuseMeanRadiance(sampler2D skyViewLut, float lutHeight)
     return sum / float(GE_SKY_AMBIENT_SAMPLE_COUNT);
 }
 
+// Where a horizon colour comes from (GE_SkyHorizonColor); HeightFogColorSource mirrors the values.
+#define GE_SKY_HORIZON_SOURCE_VIEW_LUT 1
+#define GE_SKY_HORIZON_SOURCE_CONSTANT 2
+#define GE_SKY_HORIZON_SOURCE_HDRI 3
+
+// Compass resolution of an HDRI's horizon colour: the row is averaged over 1/64 of a turn
+// (5.6 degrees) around each direction, so its detail (a fence, a tree line, the sun) washes out
+// instead of drawing one column of colour per texel.
+#define GE_SKY_HORIZON_HDRI_COLUMNS 64.0
+#define GE_SKY_HORIZON_HDRI_TAPS 4
+
+// The visible sky's radiance at the horizon in the azimuth of dirWS: scene-linear, before the
+// sky's exposure trim, which sky_render.frag multiplies in last and a caller multiplies in the same
+// way. This is the colour of the far air a ground-hugging haze stands in front of: the backdrop's
+// horizon row (v = 0.5) under the shared night composite, evaluated at viewZenithCos == 0, where
+// the composite's ground block does not apply. Below-horizon view directions read the horizon of
+// their own azimuth, so a haze over the ground meets the sky without a seam.
+//
+// skyBackdrop is the texture the sky pass draws its backdrop from: the sky-view LUT, or an HDRI.
+// At the horizon the two encodings coincide (the LUT's u is the same atan(z, x) azimuth as the
+// HDRI's lat-long u, and both put the horizon at v = 0.5). The LUT is smooth along its horizon
+// row and is tapped once at lod 0. An HDRI is averaged (averageAlongRow): from the mip whose width
+// is GE_SKY_HORIZON_HDRI_COLUMNS where its chain reaches that far, with GE_SKY_HORIZON_HDRI_TAPS
+// taps across the window for what the chain does not cover (an HDRI cooked without mips).
+// azimuthOffsetRadians is the HDRI's rotation about the zenith (0 for the LUT); nightAmount is 0
+// for an HDRI, which the sky draws without the night composite.
+//
+// The planet-local frame is taken as the world axes (east +X, up +Y, north +Z): the sky pass's frame
+// for a camera above the world origin. Away from the origin the sky's up tilts by distance over the
+// planet radius, about 0.01 degrees per kilometre at Earth scale.
+//
+// Explicit lods: callers evaluate this per fragment inside non-uniform branches, where WGSL
+// refuses an implicit one.
+vec3 GE_SkyHorizonRadiance(sampler2D skyBackdrop,
+                           vec3 dirWS,
+                           float azimuthOffsetRadians,
+                           float nightAmount,
+                           vec3 nightSkyHorizonColor,
+                           bool averageAlongRow)
+{
+    // A view straight up or down has no azimuth; any horizon direction is as good as another.
+    vec3 flatDir = vec3(dirWS.x, 0.0, dirWS.z);
+    vec3 horizonDir = dot(flatDir, flatDir) > 1e-12 ? normalize(flatDir) : vec3(1.0, 0.0, 0.0);
+    // The HDRI's rotation turns the tap about the zenith. At offset 0 the tap direction equals
+    // horizonDir bit for bit, so a LUT tap lands exactly where the sky pass's own tap does.
+    float cosOffset = cos(azimuthOffsetRadians);
+    float sinOffset = sin(azimuthOffsetRadians);
+    vec3 tapDir = vec3(cosOffset * horizonDir.x - sinOffset * horizonDir.z, 0.0,
+                       sinOffset * horizonDir.x + cosOffset * horizonDir.z);
+    vec2 tapUv = GE_SkyDirToViewLutUv(tapDir);
+
+    vec3 skyColor;
+    if (averageAlongRow)
+    {
+        float width = float(textureSize(skyBackdrop, 0).x);
+        float lod = clamp(log2(width / GE_SKY_HORIZON_HDRI_COLUMNS), 0.0,
+                          float(textureQueryLevels(skyBackdrop) - 1));
+        skyColor = vec3(0.0);
+        for (int i = 0; i < GE_SKY_HORIZON_HDRI_TAPS; ++i)
+        {
+            float offset = ((float(i) + 0.5) / float(GE_SKY_HORIZON_HDRI_TAPS) - 0.5) /
+                           GE_SKY_HORIZON_HDRI_COLUMNS;
+            skyColor += textureLod(skyBackdrop, vec2(tapUv.x + offset, tapUv.y), lod).rgb;
+        }
+        skyColor /= float(GE_SKY_HORIZON_HDRI_TAPS);
+    }
+    else
+    {
+        skyColor = textureLod(skyBackdrop, tapUv, 0.0).rgb;
+    }
+    // The night composite's per-direction dither hashes horizonDir, the direction of the sky pixel
+    // the haze stands in front of.
+    return GE_ApplySkyGroundAndNight(skyColor, horizonDir, 0.0, nightAmount,
+                                     false, vec3(0.0), 0.0, vec3(0.0), 0.0, vec3(0.0), 1.0,
+                                     nightSkyHorizonColor);
+}
+
+// A haze's colour from the sky, in the units the sky draws in. source is one of the
+// GE_SKY_HORIZON_SOURCE_* values. A constant source (the gradient sky's horizon, the stylized
+// ground's rim) is horizonColor itself; the backdrop sources read GE_SkyHorizonRadiance with
+// horizonColor as the night sky's horizon colour. scale is the sky's exposure trim, times the
+// HDRI's intensity for an HDRI.
+vec3 GE_SkyHorizonColor(sampler2D skyBackdrop,
+                        int source,
+                        vec3 dirWS,
+                        float azimuthOffsetRadians,
+                        float nightAmount,
+                        vec3 horizonColor,
+                        float scale)
+{
+    if (source == GE_SKY_HORIZON_SOURCE_CONSTANT)
+        return horizonColor * scale;
+    return GE_SkyHorizonRadiance(skyBackdrop, dirWS, azimuthOffsetRadians, nightAmount, horizonColor,
+                                 source == GE_SKY_HORIZON_SOURCE_HDRI) * scale;
+}
+
 // Radiance leaving the Lambertian planet floor: sunlight attenuated by the atmosphere on
 // the way down, plus the skylight the floor actually receives, both reflected by the
 // ground albedo.
@@ -233,17 +306,12 @@ vec3 GE_SkyDiffuseMeanRadiance(sampler2D skyViewLut, float lutHeight)
 // Energy-bounded by construction -- the albedo multiplies an irradiance the surface
 // actually receives, so the result cannot exceed albedo x incident.
 //
-// At night both terms go to zero -- the sun is below the horizon so the N.L clamp kills
-// the direct term, and the sky-view LUT the skylight integrates is near-black -- which
-// would leave the floor black. That is wrong here for a specific reason, not a taste one:
-// the LUT is not the sky this engine renders at night. GE_ApplySkyGroundAndNight
-// composites an authored night gradient ON TOP of the LUT, so a floor derived from the
-// LUT alone reflects a sky nobody sees, which is exactly the capture/visible divergence
-// this whole path exists to remove. So the floor crosses to the authored night ground
-// colour on the same nightAmount the sky gradient uses, mirroring the blend the stylized
-// path already does at the top of this file. groundNightColor is a radiance in its own
-// right (the stylized path writes it straight into skyColor), so like there it is NOT
-// scaled by groundBrightness.
+// At night the primary source is the moon, so the direct term is the moonlit floor and the
+// skylight term the moonlit sky's. The night sky's own glow (airglow and starlight, which
+// GE_ApplySkyGroundAndNight adds over the LUT) is not in the LUT the skylight integrates,
+// so its share of the floor is added on the same nightAmount: groundNightColor, the floor's
+// radiance under that glow alone. It is a radiance in its own right (the stylized path
+// writes it straight into skyColor), so like there it is NOT scaled by groundBrightness.
 vec3 GE_GroundBounceRadiance(vec3 groundAlbedo,
                              float groundBrightness,
                              vec3 surfaceUp,
@@ -259,7 +327,7 @@ vec3 GE_GroundBounceRadiance(vec3 groundAlbedo,
     vec3  direct  = groundAlbedo * (1.0 / GE_SKY_PI) * NdotL * transToSun * sunColor * sunIntensity;
     vec3  ambient = groundAlbedo * skyDiffuseMeanRadiance;
     vec3  lit     = (direct + ambient) * max(groundBrightness, 0.0);
-    return mix(lit, groundNightColor, clamp(nightAmount, 0.0, 1.0));
+    return lit + groundNightColor * clamp(nightAmount, 0.0, 1.0);
 }
 
 // Composites the lit planet floor below the horizon over `skyColor`, hazed into the
@@ -282,6 +350,7 @@ vec3 GE_CompositeGroundFloor(vec3 skyColor,
                              vec3 dirWS,
                              vec3 planetCenter,
                              float planetRadius,
+                             float atmosphereRadius,
                              float camR,
                              float viewZenithCos,
                              vec3 groundAlbedo,
@@ -346,12 +415,10 @@ vec3 GE_CompositeGroundFloor(vec3 skyColor,
         distToFloor = tg0;
     }
 
-    // Sun shadowing from the transmittance LUT at the surface row (the hit point is on
-    // the sphere, so the normalized height is 0).
-    float uMu        = 0.5 + 0.5 * dot(upAtHit, sunDir);
-    // Compat needs an explicit lod here: the hit branch is per-fragment, and
-    // WGSL forbids implicit lod in non-uniform control flow.
-    vec3  transToSun = GE_TAP_LOD0(transLUT, vec2(uMu, 0.0)).rgb;
+    // Sun shadowing from the transmittance LUT at the surface (the hit point is on the
+    // sphere), 0 once the sun is below the hit point's horizon.
+    vec3  transToSun = GE_SkyTransmittanceToTop(transLUT, planetRadius, dot(upAtHit, sunDir),
+                                                planetRadius, atmosphereRadius);
 
     vec3 floorColor = GE_GroundBounceRadiance(groundAlbedo, groundBrightness, upAtHit, sunDir,
                                               transToSun, sunColor, sunIntensity, skyDiffuseMeanRadiance,

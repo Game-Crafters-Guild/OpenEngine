@@ -56,7 +56,7 @@ TEST_F(SceneSchemaOwnership, RegistrationLookupNeverSynthesizesAReflectionSchema
     // A reflected type with no hand-written schema: the loader reaches it through the reflection
     // fallback, but a registration guard must not mistake that fallback for a registered schema.
     const char* reflectedOnly = nullptr;
-    for (const char* candidate : {"SkeletonRef", "AnimatorRef", "RenderLayer"})
+    for (const char* candidate : {"SkeletonRef", "AnimatorRef"})
     {
         const ECS::ComponentTypeId typeId = ECS::ComponentFieldRegistry::FindByName(candidate);
         if (typeId != 0 && Scene::SceneSchemaRegistry::FindForComponentType(typeId) == nullptr &&

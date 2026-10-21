@@ -25,6 +25,7 @@
 #include "Mathematics/Vector3.h"
 #include "SceneView/SceneViewFraming.h"
 #include "SceneViewController.h"
+#include "UI/ContextMenuLabels.h"
 #include "UndoRedo/DuplicateEntitiesCommand.h"
 #include "UndoRedo/EntityComponentsEdit.h"
 #include "UndoRedo/GenericEditUndo.h"
@@ -45,6 +46,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -173,9 +175,10 @@ VolumeGeometry ReadGeometry(const ECS::World& world, ECS::EntityHandle entity)
     return geometry;
 }
 
-// Which run of revisions an answer's `revision` belongs to: the world and its lifecycle
-// reset generation. A reader whose epoch changed since its last answer (the scene was
-// reopened or replaced) lists everything again instead of trusting `since`.
+// When a reader's `since` stops being enough: the world and its lifecycle reset generation.
+// A reader whose epoch changed since its last answer (the scene was reopened, replaced or
+// restored in place by an undo, a redo or the end of play, which can remove mark-ups without
+// a revision) lists everything again instead of trusting `since`.
 std::string Epoch(const ECS::World& world)
 {
     return std::to_string(world.GetWorldId()) + "." + std::to_string(world.GetLifecycleResetGeneration());
@@ -230,15 +233,6 @@ json BuildRow(const MarkupRequestContext& context, ECS::EntityHandle entity)
     const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(world, entity);
     const VolumeGeometry geometry = ReadGeometry(world, entity);
 
-    json tags = json::array();
-    if (notes)
-    {
-        for (const uint32 tag : notes->Tags)
-        {
-            if (tag != MarkupService::kInvalidTag)
-                tags.push_back(TagName(tag));
-        }
-    }
     const auto* name = world.GetComponent<Components::Name>(entity);
     const auto* sceneTag = world.GetComponent<Components::SceneEntityTag>(entity);
     Mathematics::Vector3 center = geometry.Center;
@@ -263,7 +257,7 @@ json BuildRow(const MarkupRequestContext& context, ECS::EntityHandle entity)
                 {"title", name ? std::string(name->View()) : std::string()},
                 {"kind", kind},
                 {"status", TagName(markup.Status)},
-                {"tags", tags},
+                {"tags", MarkupTagNames(world, entity)},
                 {"author", AuthorName(markup.Author)},
                 {"updatedBy", AuthorName(markup.UpdatedBy)},
                 {"created", Iso8601(markup.CreatedUnix)},
@@ -273,7 +267,8 @@ json BuildRow(const MarkupRequestContext& context, ECS::EntityHandle entity)
                 {"hasUpdate", context.Bridge->HasUnseenUpdate(world, entity)},
                 {"center", Vector3Json(center)},
                 {"radius", radius},
-                {"entryCount", ReadableEntryCount(notes)}};
+                {"entryCount", ReadableEntryCount(notes)},
+                {"color", ContextMenuLabels::ArgbToHexRGB(MarkupDisplayArgb(markup))}};
 }
 
 // The mark-up `params.entityId` names, or a refusal naming the fix.
@@ -482,15 +477,15 @@ ECS::EntityHandle AddMarkupEntity(ECS::World& world, const NewMarkup& added, int
     return entity;
 }
 
-// "<parent> exclusion <n>" for the smallest n from `from` that no mark-up in the world is titled,
-// as it is stored: `parent` is cut so the title fits a Name with its suffix whole.
-std::string FreeExclusionTitle(ECS::World& world, const std::string& parent, std::size_t& from)
+// "<head><tail> <n>" for the smallest n from `from` that no mark-up in the world is titled, as it
+// is stored: `head` is cut so the title fits a Name with `tail` and the number whole.
+std::string FreeNumberedTitle(ECS::World& world, const std::string& head, std::string_view tail, std::size_t& from)
 {
     constexpr std::size_t kTitleCapacity = sizeof(Components::Name::value) - 1;
     for (;; ++from)
     {
-        const std::string suffix = " exclusion " + std::to_string(from);
-        const std::string title = parent.substr(0, kTitleCapacity - suffix.size()) + suffix;
+        const std::string suffix = std::string(tail) + " " + std::to_string(from);
+        const std::string title = head.substr(0, kTitleCapacity - suffix.size()) + suffix;
         bool taken = false;
         world.Query<ECS::Read<Components::Markup>, ECS::Read<Components::Name>>().Each(
             [&taken, &title](ECS::EntityHandle, const Components::Markup&, const Components::Name& name) {
@@ -515,7 +510,7 @@ std::vector<MarkupRegionMember> AddExclusionRegions(ECS::World& world, ECS::Enti
     for (std::size_t i = 0; i < exclusions.size(); ++i)
     {
         NewMarkup exclusion = parent;
-        exclusion.Title = FreeExclusionTitle(world, parent.Title, index);
+        exclusion.Title = FreeNumberedTitle(world, parent.Title, " exclusion", index);
         exclusion.Description.clear();
         const RegionPlacement placement = NewRegionPlacement(exclusions[i], regionWorld, regionWorld[13]);
         exclusion.Transform = placement.Local;
@@ -859,6 +854,12 @@ json CreateMarkup(const MarkupRequestContext& context, const json& params)
         answer["exclusionIds"] = std::move(exclusions);
     }
     return SceneRevision(world, std::move(answer));
+}
+
+std::string FreeMarkupTitle(ECS::World& world, const std::string& name)
+{
+    std::size_t from = 1;
+    return FreeNumberedTitle(world, name, {}, from);
 }
 
 namespace
@@ -1330,6 +1331,14 @@ json UpdateMarkup(const MarkupRequestContext& context, const json& params)
     return SceneRevision(world, json{{"markup", BuildRow(context, entity)}});
 }
 
+std::optional<json> ResolveMarkupRequest(const MarkupRequestContext& context, const json& params,
+                                         ECS::EntityHandle& outEntity)
+{
+    if (const auto refusal = CheckContext(context))
+        return refusal;
+    return ResolveMarkup(context, params, outEntity);
+}
+
 json CommentOnMarkup(const MarkupRequestContext& context, const json& params)
 {
     if (const auto refusal = CheckContext(context))
@@ -1420,6 +1429,17 @@ json ContainsInMarkup(const MarkupRequestContext& context, const json& params)
     return SceneRevision(world, json{{"inside", std::move(inside)}, {"insideCount", count}});
 }
 
+std::optional<MarkupWorldVolume> ReadMarkupFrameVolume(const MarkupRequestContext& context, ECS::EntityHandle markup)
+{
+    // The volume where it is in the world, as the Scene View draws it: a parented mark-up's
+    // local position is not where it stands.
+    if (context.World->GetComponent<MarkupRegion>(markup))
+        return RegionFrameVolume(*context.World, markup);
+    if (IsMarkupPath(*context.World, markup))
+        return PathFrameVolume(context, markup);
+    return ReadMarkupWorldVolume(*context.World, markup);
+}
+
 json FrameMarkup(const MarkupRequestContext& context, const json& params, SceneViewCameraPose& outPose)
 {
     if (const auto refusal = CheckContext(context))
@@ -1431,13 +1451,7 @@ json FrameMarkup(const MarkupRequestContext& context, const json& params, SceneV
     Mathematics::Vector3 direction(1.0f, -0.5f, 1.0f);
     if (params.contains("direction") && !ReadVector3(params["direction"], direction))
         return Refusal("direction must be [x, y, z], from the camera toward the mark-up");
-    // The volume where it is in the world, as the Scene View draws it: a parented mark-up's
-    // local position is not where it stands.
-    const std::optional<MarkupWorldVolume> volume = context.World->GetComponent<MarkupRegion>(entity)
-                                                        ? RegionFrameVolume(*context.World, entity)
-                                                    : IsMarkupPath(*context.World, entity)
-                                                        ? PathFrameVolume(context, entity)
-                                                        : ReadMarkupWorldVolume(*context.World, entity);
+    const std::optional<MarkupWorldVolume> volume = ReadMarkupFrameVolume(context, entity);
     if (!volume)
         return Refusal("The mark-up has no shape to frame; a region needs an outline of three points or more");
     float distance = MarkupFrameDistance(*volume, context.FrameTanHalfFov);

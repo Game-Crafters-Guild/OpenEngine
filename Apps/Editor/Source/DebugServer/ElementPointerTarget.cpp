@@ -16,7 +16,7 @@ bool ResolveElementPointerTarget(UIElement* root, const std::string& elementId, 
         return false;
     }
 
-    UIElement* target = root->FindById(elementId);
+    UIElement* target = root->FindById(HashStringId(elementId));
     if (!target)
     {
         error = RefuseRequest("Element not found: " + elementId);

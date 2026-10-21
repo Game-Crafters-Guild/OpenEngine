@@ -25,8 +25,10 @@
 # content differs, so an unchanged export list never triggers a link. The
 # generation itself, the cost of a build that compiled nothing, is skipped when
 # no input changed since the last one completed: the object set, any object,
-# the module object list, the project file, this script and its filter. The
-# `.inputs` record beside OUTPUT_DEF holds that object set.
+# the module object list, this script and its filter. The `.inputs` record
+# beside OUTPUT_DEF holds that object set. The project file is read only to
+# derive the object set, so its timestamp is not an input: a regenerated
+# project that compiles the same objects leaves the definition up to date.
 #
 # Args (set via -D on the cmake invocation):
 #   ENGINE_OBJ_DIR  - absolute path to Engine.dir/<Config>/ (Engine's own .obj;
@@ -131,9 +133,6 @@ endforeach()
 set(_inputs_record "${OUTPUT_DEF}.inputs")
 set(_defined_filter_script "${CMAKE_CURRENT_LIST_DIR}/FilterDefinedExports.ps1")
 set(_generation_inputs ${_all_objs} "${MODULE_OBJECTS_FILE}" "${CMAKE_CURRENT_LIST_FILE}" "${_defined_filter_script}")
-if(DEFINED ENGINE_PROJECT_FILE AND EXISTS "${ENGINE_PROJECT_FILE}")
-    list(APPEND _generation_inputs "${ENGINE_PROJECT_FILE}")
-endif()
 if(EXISTS "${OUTPUT_DEF}" AND EXISTS "${_inputs_record}")
     file(READ "${_inputs_record}" _recorded_objlist)
     if(_recorded_objlist STREQUAL _objlist_content)
@@ -211,108 +210,68 @@ set(_GE_PRIVATE_C_DEPENDENCY_NAMES
     te_free_parameters
 )
 
-file(STRINGS "${_staged_def}" _lines)
-set(_kept "")
-set(_stripped_pch 0)
-set(_stripped_template 0)
-set(_stripped_lambda 0)
-set(_stripped_tmember 0)
-set(_stripped_crt 0)
-set(_stripped_private_c 0)
-set(_stripped_data 0)
-set(_stripped_nvtx 0)
-set(_stripped_allocation 0)
-foreach(_line ${_lines})
-    # PCH-sentinel pathologies (from CMake's __create_def).
-    if(_line MATCHES "^[ \t]+__[ \t]*(DATA)?[ \t]*$")
-        math(EXPR _stripped_pch "${_stripped_pch} + 1")
-        continue()
-    endif()
-    if(_line MATCHES "__@@_PchSym_@")
-        math(EXPR _stripped_pch "${_stripped_pch} + 1")
-        continue()
-    endif()
-    # Auto-exported DATA symbols commonly include RTTI, function-local statics,
-    # and implementation globals; these are not stable Engine DLL ABI.
-    if(_line MATCHES "[ \t]+DATA[ \t]*$")
-        math(EXPR _stripped_data "${_stripped_data} + 1")
-        continue()
-    endif()
-    # CRT inline helpers — see _GE_CRT_INLINE_NAMES comment above.
-    set(_is_crt FALSE)
-    foreach(_crt IN LISTS _GE_CRT_INLINE_NAMES)
-        if(_line MATCHES "^[ \t]+${_crt}[ \t]*$")
-            set(_is_crt TRUE)
-            break()
-        endif()
-    endforeach()
-    if(_is_crt)
-        math(EXPR _stripped_crt "${_stripped_crt} + 1")
-        continue()
-    endif()
-    # Private C dependency helpers — see _GE_PRIVATE_C_DEPENDENCY_NAMES.
-    set(_is_private_c FALSE)
-    foreach(_private_c IN LISTS _GE_PRIVATE_C_DEPENDENCY_NAMES)
-        if(_line MATCHES "^[ \t]+${_private_c}[ \t]*$")
-            set(_is_private_c TRUE)
-            break()
-        endif()
-    endforeach()
-    if(_is_private_c)
-        math(EXPR _stripped_private_c "${_stripped_private_c} + 1")
-        continue()
-    endif()
-    # NVTX v3's header-only implementation emits a `nvtx*_v3` trampoline per API
-    # entry point in whichever TU includes it (NvtxRange.cpp). They are upstream
-    # internals, not Engine ABI, and re-exporting them would invite a consumer
-    # to bind to NVTX through Engine.dll.
-    if(_line MATCHES "^[ \t]+nvtx[A-Za-z0-9_]*[ \t]*$")
-        math(EXPR _stripped_nvtx "${_stripped_nvtx} + 1")
-        continue()
-    endif()
-    # The global allocation functions (operator new, delete, new[], delete[]:
-    # `??2@Y`, `??3@Y`, `??_U@Y`, `??_V@Y`) that the allocation counter's hook
-    # defines in Engine.dll under GE_DEBUG_INSTRUMENTATION. Each image carries its
-    # own replacement; exporting Engine's would let an image without one bind to it.
-    # The same prefixes cover the placement forms (`operator new(size_t, void*)`,
-    # `??2@YAPEAX_KPEAX@Z`), which Engine.dll exports in every configuration, hook or
-    # not; they go too, harmlessly: <vcruntime_new.h> defines them inline.
-    if(_line MATCHES "^[ \t]+\\?\\?(2|3|_U|_V)@Y")
-        math(EXPR _stripped_allocation "${_stripped_allocation} + 1")
-        continue()
-    endif()
-    # Lambda-scoped symbols. The `<lambda_` substring appears in any symbol
-    # whose enclosing scope is a lambda, including the lambda's call operator,
-    # RTTI of types declared inside, and so on.
-    if(_line MATCHES "<lambda_")
-        math(EXPR _stripped_lambda "${_stripped_lambda} + 1")
-        continue()
-    endif()
-    # Template-function instantiations: mangled name starts with `??$`.
-    if(_line MATCHES "^[ \t]+\\?\\?\\$")
-        math(EXPR _stripped_template "${_stripped_template} + 1")
-        continue()
-    endif()
-    # Member functions of template classes: pattern `<methodname>@?$<class>` —
-    # method scoped inside a template instantiation. Drops std::vector::push_back,
-    # std::unordered_map::_Insert, etc. Consumers re-instantiate these locally.
-    if(_line MATCHES "@\\?\\$")
-        math(EXPR _stripped_tmember "${_stripped_tmember} + 1")
-        continue()
-    endif()
-    # Operators on template classes: `??<op>?$<class>@...` — operator=, ctor,
-    # dtor, etc., dispatched on a template instantiation. Same rationale.
-    if(_line MATCHES "^[ \t]+\\?\\?[0-9A-Z_]+\\?\\$")
-        math(EXPR _stripped_tmember "${_stripped_tmember} + 1")
-        continue()
-    endif()
-    list(APPEND _kept "${_line}")
-endforeach()
+# Each filter is one list(FILTER) pass over what the earlier ones kept, so a
+# line is counted once, by the first filter in this order that matches it. A
+# per-line loop over the ~190k lines __create_def writes cost more than half a
+# minute of every regeneration.
+file(STRINGS "${_staged_def}" _kept)
+# _ge_drop_matching(<count var> <regex>): drops the lines matching <regex> and
+# adds how many went to <count var>.
+function(_ge_drop_matching count_var regex)
+    list(LENGTH _kept _before)
+    list(FILTER _kept EXCLUDE REGEX "${regex}")
+    list(LENGTH _kept _after)
+    math(EXPR _dropped "${_before} - ${_after}")
+    set(_kept "${_kept}" PARENT_SCOPE)
+    set(${count_var} ${_dropped} PARENT_SCOPE)
+endfunction()
+# PCH-sentinel pathologies (from CMake's __create_def).
+_ge_drop_matching(_stripped_pch "^[ \t]+__[ \t]*(DATA)?[ \t]*$")
+_ge_drop_matching(_stripped_pch_sym "__@@_PchSym_@")
+math(EXPR _stripped_pch "${_stripped_pch} + ${_stripped_pch_sym}")
+# Auto-exported DATA symbols commonly include RTTI, function-local statics,
+# and implementation globals; these are not stable Engine DLL ABI.
+_ge_drop_matching(_stripped_data "[ \t]+DATA[ \t]*$")
+# CRT inline helpers — see _GE_CRT_INLINE_NAMES comment above.
+list(JOIN _GE_CRT_INLINE_NAMES "|" _ge_crt_names)
+_ge_drop_matching(_stripped_crt "^[ \t]+(${_ge_crt_names})[ \t]*$")
+# Private C dependency helpers — see _GE_PRIVATE_C_DEPENDENCY_NAMES.
+list(JOIN _GE_PRIVATE_C_DEPENDENCY_NAMES "|" _ge_private_c_names)
+_ge_drop_matching(_stripped_private_c "^[ \t]+(${_ge_private_c_names})[ \t]*$")
+# NVTX v3's header-only implementation emits a `nvtx*_v3` trampoline per API
+# entry point in whichever TU includes it (NvtxRange.cpp). They are upstream
+# internals, not Engine ABI, and re-exporting them would invite a consumer
+# to bind to NVTX through Engine.dll.
+_ge_drop_matching(_stripped_nvtx "^[ \t]+nvtx[A-Za-z0-9_]*[ \t]*$")
+# The global allocation functions (operator new, delete, new[], delete[]:
+# `??2@Y`, `??3@Y`, `??_U@Y`, `??_V@Y`) that the allocation counter's hook
+# defines in Engine.dll under GE_DEBUG_INSTRUMENTATION. Each image carries its
+# own replacement; exporting Engine's would let an image without one bind to it.
+# The same prefixes cover the placement forms (`operator new(size_t, void*)`,
+# `??2@YAPEAX_KPEAX@Z`), which Engine.dll exports in every configuration, hook or
+# not; they go too, harmlessly: <vcruntime_new.h> defines them inline.
+_ge_drop_matching(_stripped_allocation "^[ \t]+\\?\\?(2|3|_U|_V)@Y")
+# Lambda-scoped symbols. The `<lambda_` substring appears in any symbol
+# whose enclosing scope is a lambda, including the lambda's call operator,
+# RTTI of types declared inside, and so on.
+_ge_drop_matching(_stripped_lambda "<lambda_")
+# Template-function instantiations: mangled name starts with `??$`.
+_ge_drop_matching(_stripped_template "^[ \t]+\\?\\?\\$")
+# Member functions of template classes: pattern `<methodname>@?$<class>` —
+# method scoped inside a template instantiation. Drops std::vector::push_back,
+# std::unordered_map::_Insert, etc. Consumers re-instantiate these locally.
+_ge_drop_matching(_stripped_tmember "@\\?\\$")
+# Operators on template classes: `??<op>?$<class>@...` — operator=, ctor,
+# dtor, etc., dispatched on a template instantiation. Same rationale.
+_ge_drop_matching(_stripped_toperator "^[ \t]+\\?\\?[0-9A-Z_]+\\?\\$")
+math(EXPR _stripped_tmember "${_stripped_tmember} + ${_stripped_toperator}")
 
-file(WRITE "${_staged_def}" "")
-foreach(_line IN LISTS _kept)
-    file(APPEND "${_staged_def}" "${_line}\n")
-endforeach()
+list(JOIN _kept "\n" _kept_text)
+list(LENGTH _kept _kept_count)
+if(_kept_count GREATER 0)
+    string(APPEND _kept_text "\n")
+endif()
+file(WRITE "${_staged_def}" "${_kept_text}")
 
 find_program(_powershell_exe NAMES powershell pwsh)
 if(_powershell_exe)

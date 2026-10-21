@@ -1978,7 +1978,9 @@ TEST(TerrainSurfaceRulesSchema, ARowIndexTooLargeForUint32IsRejectedRatherThanWr
     // Nothing was written to the row the wrap would have selected.
     const auto* loaded = w.GetComponent<TerrainSurfaceRulesEffect>(e);
     if (loaded)
+    {
         EXPECT_EQ(loaded->Rules[0].MaterialSlot, 0u) << "the wrapped index reached row 0";
+    }
 
     World w2;
     const auto e2 = w2.CreateEntity();

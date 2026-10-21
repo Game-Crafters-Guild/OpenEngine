@@ -1297,8 +1297,10 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
         for (uint32_t ci = 0; ci < 3u; ++ci)
             for (uint32_t cj = 0; cj < 3u; ++cj)
                 if (!(ci == 1u && cj == 1u) && !(ci == 2u && cj == 0u))
+                {
                     EXPECT_EQ(shareMatrix[ci][cj], 0u)
                         << a.Label << ": unexpected shared corner c" << ci << "/c" << cj;
+                }
 
         // 2 and 3 are REGIME-SPLIT, because both are exact only on flat ground.
         //

@@ -15,16 +15,19 @@ endif()
 set(_objects "${WORK}/objects")
 set(_module_objects "${WORK}/module-objects.txt")
 set(_def "${WORK}/exports.def")
+set(_project "${WORK}/Engine.vcxproj")
 
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${_objects}")
 file(WRITE "${_module_objects}" "")
+file(WRITE "${_project}" "<Project></Project>\n")
 
 # generate(<output var>): one run of the script; its report lands in <output var>.
 function(generate out)
     execute_process(
         COMMAND ${CMAKE_COMMAND}
                 -DENGINE_OBJ_DIR=${_objects}
+                -DENGINE_PROJECT_FILE=${_project}
                 -DMODULE_OBJECTS_FILE=${_module_objects}
                 -DOUTPUT_DEF=${_def}
                 -P ${SCRIPT}
@@ -63,6 +66,12 @@ def_timestamp(_second)
 if(NOT _second STREQUAL _first)
     message(FATAL_ERROR "an unchanged definition was rewritten (${_first} -> ${_second}); Engine.dll would relink")
 endif()
+expect_reported("${_report}" "up to date")
+
+# A rewritten project file that compiles the same objects is not a changed input:
+# the object set it yields is compared through the record instead.
+file(TOUCH "${_project}")
+generate(_report)
 expect_reported("${_report}" "up to date")
 
 # A changed input regenerates, and an identical definition still keeps its timestamp.

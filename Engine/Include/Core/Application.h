@@ -14,12 +14,14 @@
 #include "Core/WindowInputRouter.h"
 #include "Types/Types.h"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 
 namespace GameEngine {
 
 namespace Input { class GamepadEdgeTracker; class InputSystem; }
+namespace Audio { enum class AudioOutput : std::uint8_t; }
 
 /**
  * @brief Utility functions for path resolution
@@ -50,10 +52,21 @@ public:
 
     /**
      * @brief A cooked shader cache the build ships alongside the runtime, or empty
-     * where there is none. A runtime with no shader compiler (the browser) reads
-     * this instead of a project's own cache and seeds new projects from it.
+     * where there is none: `.Cache/Shaders` in the content root of a desktop export
+     * (InstallContentRootFor: `Contents/Resources/.Cache/Shaders` in a macOS bundle,
+     * `<executable directory>/.Cache/Shaders` on Windows and Linux), `/.Cache/Shaders`
+     * in the browser's preload. The engine probes it, read-only, before the
+     * workspace's own cache.
      */
     static std::filesystem::path GetBundledShaderCacheRoot();
+
+    /**
+     * @brief The first regular file at @p relative under @p start or any of its
+     * ancestors, or empty. The walk runs to the filesystem root rather than a fixed
+     * depth: a staged executable sits at different depths inside a build tree on
+     * each platform (nine directories down inside a macOS bundle).
+     */
+    static std::filesystem::path FindFileUpward(std::filesystem::path start, const std::filesystem::path& relative);
 
     /**
      * @brief The staged asset root for an executable that lives in @p executableDirectory:
@@ -210,6 +223,22 @@ struct ApplicationConfig {
     // whose project storage mounts asynchronously during boot sets this past
     // the frame that mount lands on; desktop storage is ready from frame 1.
     uint32_t StartupSceneOpenFrame = 1;
+    // No window, render device, audio device or input device: the main loop pumps
+    // no window events and polls no gamepad, the engine opens no audio device, and
+    // a fixed frame rate (SetFixedFrameRate) holds each frame to wall-clock time
+    // instead of running as fast as the CPU allows. For dedicated servers and
+    // simulation runs; the host brings up no window or device of its own either.
+    bool Headless = false;
+    // Where the engine's audio goes (Audio/AudioTypes.h). Value-initialized to
+    // AudioOutput::Device; AudioOutput::Silent mixes with no output device, for
+    // isolated and automated runs. Ignored under Headless, which opens no audio.
+    Audio::AudioOutput AudioOutput{};
+    // Set only by the scripting ABI's bootstrap (DllBootstrap::EnsureEngineInitialized),
+    // which initializes an engine for a host that has no frame loop of its own (a
+    // `dotnet test` process): the caller is the only thread that drives the engine,
+    // nothing ever pumps the main-thread queue, and an export that asks for the main
+    // thread answers yes on every thread. No native host sets it.
+    bool StandaloneHosted = false;
 };
 
 /**
@@ -304,7 +333,9 @@ public:
      * @brief Force the main loop to advance by a fixed delta each rendered frame.
      *
      * This is intended for offline/movie rendering where simulation time should
-     * match the output video frame rate instead of wall-clock performance.
+     * match the output video frame rate instead of wall-clock performance. A
+     * headless application (ApplicationConfig::Headless) also waits out each
+     * frame, so its fixed steps run in real time.
      */
     void SetFixedFrameRate(double fps);
     void ClearFixedFrameRate();

@@ -10,6 +10,7 @@
 #include "Assets/AnimationClip.h"
 #include "Assets/BinaryAsset.h"
 #include "Assets/ClipSetAsset.h"
+#include "Assets/CubeLutAsset.h"
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/RenderPipelineAsset.h"
@@ -20,7 +21,6 @@
 #include "Assets/TimelineAsset.h"
 #include "Assets/AnimationGraphAsset.h"
 #include "Assets/NavGridAsset.h"
-#include "Assets/NavMeshAsset.h"
 #include "Assets/SceneAsset.h"
 #include "Graph/GraphAsset.h"
 
@@ -93,6 +93,7 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
 #endif
 
     RegisterCoreType(typeRegistry, AssetType::Texture, &CreateAssetAtPath<TextureAsset>, "Texture Asset");
+    RegisterCoreType(typeRegistry, AssetType::CubeLut, &CreateAssetAtPath<CubeLutAsset>, "Cube LUT Asset");
     RegisterCoreType(typeRegistry, AssetType::Animation, &CreateAssetAtPath<AnimationClip>, "Animation Asset");
 
     // Humanoid retargeting. The compound extensions (.profile.json /
@@ -132,8 +133,6 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
 
     RegisterCoreType(typeRegistry, AssetType::NavigationGrid, &CreateAssetAtPath<NavGridAsset>,
                      "Navigation Grid Asset");
-    RegisterCoreType(typeRegistry, AssetType::NavigationMesh, &CreateAssetAtPath<NavMeshAsset>,
-                     "Navigation Mesh Asset");
 
     // Ocean payloads are consumed by the ocean systems directly.
     RegisterCoreType(typeRegistry, AssetType::OceanDepthCache, &CreateBinaryAsset, "Ocean Depth Cache");

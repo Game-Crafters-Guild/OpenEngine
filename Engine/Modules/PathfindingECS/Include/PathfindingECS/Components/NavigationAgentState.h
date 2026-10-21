@@ -16,6 +16,10 @@ struct NavigationAgentState
     float32 DestinationZ = 0.0f;
     bool HasDestination = false;
     bool PathDirty = true;
+    // Set by NavigationPathfindingSystem's replan timer: a refresh of a path
+    // that is still valid, so the agent keeps walking it until the new solve
+    // lands. PathDirty (orders, the corridor checks) drops the path instead.
+    bool ReplanRequested = false;
     // True while this agent owns at least one stamped cell (body or lookahead).
     bool HasCellReservations = false;
 
@@ -45,6 +49,12 @@ struct NavigationAgentState
 
     // Replan timer (runtime, not saved)
     float32 ReplanTimer = 0.0f;
+
+    // The agent's place in NavigationPathfindingSystem's solve queue (runtime,
+    // not saved): set the first Update a request (HasDestination with PathDirty
+    // or ReplanRequested) is seen, kept while it waits, 0 when the agent is
+    // not queued.
+    uint32 PathRequestSequence = 0;
 };
 
 static_assert(std::is_trivially_copyable_v<NavigationAgentState>);

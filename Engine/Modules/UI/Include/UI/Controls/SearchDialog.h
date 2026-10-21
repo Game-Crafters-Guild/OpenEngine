@@ -44,11 +44,13 @@ struct SearchIcon
     std::string CssClass;          // CSS class applied to the icon element
     std::string ImagePath;         // Background image: file path or "engine:<name>" for GPU textures
     uint64_t    TextureHandle = 0; // Raw texture handle for thumbnail (0 = none)
+    uint32_t    SwatchArgb = 0;    // A round swatch filled with this 0xAARRGGBB color (0 = none)
 
     bool HasImage() const { return !ImagePath.empty(); }
     bool HasTexture() const { return TextureHandle != 0; }
     bool HasCssClass() const { return !CssClass.empty(); }
-    bool HasAny() const { return HasTexture() || HasCssClass() || HasImage(); }
+    bool HasSwatch() const { return SwatchArgb != 0; }
+    bool HasAny() const { return HasTexture() || HasCssClass() || HasImage() || HasSwatch(); }
 
     static SearchIcon FromClass(const std::string& cssClass) { return {cssClass, {}, 0}; }
     static SearchIcon FromTexture(uint64_t handle) { return {{}, {}, handle}; }
@@ -172,6 +174,11 @@ public:
     /// returns the highlight to the first row.
     void SetInitialSelection(SearchItemId id) { m_InitialSelectionId = id; }
 
+    /// Whether the first result is highlighted before the user types a query or presses an arrow
+    /// key (the default). Off, nothing is highlighted until then and Enter closes the dialog as
+    /// Escape does, so an Enter meant for the field the dialog opened from picks nothing.
+    void SetHighlightsFirstBeforeQuery(bool highlights) { m_HighlightsFirstBeforeQuery = highlights; }
+
     /// Open the dialog, clear query, focus the text field.
     void Show();
 
@@ -259,6 +266,7 @@ private:
 
     SearchItemId m_InitialSelectionId = 0;
     bool m_InitialSelectionPending = false;
+    bool m_HighlightsFirstBeforeQuery = true;
 
     // Internal list data provider bridging m_Results → IListDataProvider
     class ResultsDataProvider;

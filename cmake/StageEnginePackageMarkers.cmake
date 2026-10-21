@@ -1,11 +1,11 @@
 # Write engine_abi markers for staged prebuilt engine-package modules. Runs
-# POST_BUILD on the host app AFTER its SDK and Packages staging and, on macOS,
-# the signing of its SDK libraries: the digest hashes the STAGED SDK import
-# libs' identity (path + size + mtime), which signing changes, so it must be
-# computed against their final staged state — the exact inputs the
-# NativeScriptManager loader recomputes at project open. A stale/mismatched
-# marker makes the loader fall back to a source build loudly; it can never
-# cause a wrong load.
+# POST_BUILD on the host app AFTER its SDK and Packages staging: the digest
+# folds the link stamps of the SDK's Engine and EditorSDK binaries (never their
+# paths or timestamps), the exact inputs the NativeScriptManager loader
+# recomputes at project open. A mismatched marker makes the loader fall back to
+# a source build loudly. The marker identifies the engine link the module was
+# built against, so it cannot catch a prebuilt that was itself built against a
+# different engine and stamped against this one.
 #
 # Args: -DSTAMP_TOOL= -DSDK_DIR= -DPACKAGES_DIR= -DMODULES_FILE=
 # MODULES_FILE lines: <pkg-relative prebuilt subdir>|<editor|runtime>|<defines,comma-separated>
@@ -57,7 +57,15 @@ foreach(_entry IN LISTS _modules)
     endif()
     file(STRINGS "${_stamp_out}" _digest_lines LIMIT_COUNT 1)
     list(GET _digest_lines 0 _digest)
-    file(WRITE "${_platform_path}/engine_abi.txt" "${_digest}\n")
+    # Written only when the digest differs, so a no-op build keeps the marker's timestamp.
+    set(_marker "${_platform_path}/engine_abi.txt")
+    set(_marker_current "")
+    if(EXISTS "${_marker}")
+        file(READ "${_marker}" _marker_current)
+    endif()
+    if(NOT _marker_current STREQUAL "${_digest}\n")
+        file(WRITE "${_marker}" "${_digest}\n")
+    endif()
 endforeach()
 
 file(REMOVE "${_stamp_out}")

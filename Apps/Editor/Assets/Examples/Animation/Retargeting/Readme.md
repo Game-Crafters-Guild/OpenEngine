@@ -23,6 +23,6 @@ exceptions, non-identity skin matrices, no NaNs.
 
 ## Related docs
 
-- [`docs/Animation/Quickstart.md`](../../../../../../docs/Animation/Quickstart.md)
-- [`docs/Animation/HumanoidRetargeting.html`](../../../../../../docs/Animation/HumanoidRetargeting.html)
-- [`docs/Animation/Architecture.md`](../../../../../../docs/Animation/Architecture.md)
+- [`docs/animation/humanoid-retargeting-quickstart.mdx`](../../../../../../docs/animation/humanoid-retargeting-quickstart.mdx)
+- [`docs/animation/humanoid-retargeting.mdx`](../../../../../../docs/animation/humanoid-retargeting.mdx)
+- [`docs/animation/humanoid-retargeting-architecture.mdx`](../../../../../../docs/animation/humanoid-retargeting-architecture.mdx)

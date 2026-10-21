@@ -200,10 +200,10 @@ void UIDemoPanel::RefreshControlPointers()
 {
     // Resolve by id so EditorApplication can still find the native dropdown and tests can
     // access the controls.
-    m_Checkbox       = dynamic_cast<Checkbox*>(FindById("UIDemoCheckbox"));
-    m_Toggle         = dynamic_cast<Toggle*>(FindById("UIDemoToggle"));
-    m_UiDropdown     = dynamic_cast<Dropdown*>(FindById("UIDemoDropdownUi"));
-    m_NativeDropdown = dynamic_cast<Dropdown*>(FindById("UIDemoDropdownNative"));
+    m_Checkbox       = dynamic_cast<Checkbox*>(FindById("UIDemoCheckbox"_sid));
+    m_Toggle         = dynamic_cast<Toggle*>(FindById("UIDemoToggle"_sid));
+    m_UiDropdown     = dynamic_cast<Dropdown*>(FindById("UIDemoDropdownUi"_sid));
+    m_NativeDropdown = dynamic_cast<Dropdown*>(FindById("UIDemoDropdownNative"_sid));
 }
 
 } // namespace GameEngine

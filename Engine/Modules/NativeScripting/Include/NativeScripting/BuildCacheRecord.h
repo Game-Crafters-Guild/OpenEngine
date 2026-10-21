@@ -30,8 +30,8 @@ struct BuildCacheRecord
     std::string AbiDigest; // ABI-inputs-only digest — the engine this DLL was built against
 
     // EngineBuildIdentity() of the engine that BUILT this DLL. The AbiDigest above
-    // cannot serve this purpose at runtime: it is hashed from build inputs (import
-    // lib path/size/mtime) that a Player has no access to, so a runtime cannot
+    // cannot serve this purpose at runtime: it is hashed from build inputs (the SDK
+    // manifest's config, binaries and defines) that a Player has no access to, so a runtime cannot
     // recompute it to compare. This one the running engine reads off its own image.
     //
     // Set by the EDITOR's live build cache only, and read only for a dev cache
@@ -68,19 +68,24 @@ bool WriteEngineAbiMarker(const std::filesystem::path& dir, const std::string& a
 std::uint64_t Fnv1aHash(std::string_view data, std::uint64_t seed = 0xcbf29ce484222325ULL);
 std::string ToHexDigest(std::uint64_t hash);
 
-// Hash of the ABI inputs alone: config + engine import-lib identity (size+mtime —
-// any relink bumps it) + compile definitions. The manager's full staleness digest
-// CONTINUES this hash over the source stats, which is what makes the ABI digest a
-// mid-stream snapshot of the full digest.
-std::uint64_t HashEngineAbiInputs(const NativeBuildConfig& config);
+// Hash of the ABI inputs alone: config + the Engine binary's link stamp + compile
+// definitions + the EditorSDK binary's link stamp for an Editor-kind module
+// (EditorImportLib set). Link stamps (ReadBinaryLinkStamp), never paths or timestamps,
+// so every copy of an SDK digests alike, and a relink that changes only struct layouts
+// still changes the digest. Empty when a binary has no readable stamp: such an engine
+// cannot be identified, so nothing built against it may be reused. The manager's full
+// staleness digest CONTINUES this hash over the source stats, which is what makes the
+// ABI digest a mid-stream snapshot of the full digest.
+std::optional<std::uint64_t> HashEngineAbiInputs(const NativeBuildConfig& config);
 
-// ToHexDigest(HashEngineAbiInputs(...)) — the engine identity string recorded in
-// build caches, packaged records, and the packaged engine_abi marker.
+// ToHexDigest(HashEngineAbiInputs(...)), or empty when that is empty — the engine
+// identity string recorded in build caches, packaged records, and the packaged
+// engine_abi marker. Every reader treats an empty digest as "cannot verify".
 std::string ComputeEngineAbiDigest(const NativeBuildConfig& config);
 
 // ComputeEngineAbiDigest with the EditorSDK interface cleared first — the digest
 // of a RUNTIME user-script module. Runtime modules never link the EditorSDK: the
-// editor clears EditorImportLib/EditorIncludeDirs off their build configs before
+// editor clears EditorImportLib/EditorBinary/EditorIncludeDirs off their build configs before
 // stamping build records (EditorApplication::WireNativeScriptingForProject), so
 // any recompute of a runtime module's digest — the packaged-build C2 staleness
 // gate — must hash the same runtime-only inputs. Hashing a manifest-loaded config

@@ -1,22 +1,22 @@
-// GPU-executed gate for the transmittance LUT's ray-sphere path lengths.
+// GPU-executed gate for the transmittance LUT's (r, mu) mapping and its ray-sphere path length.
 //
-// The LUT bakes exp(-tau) along two path lengths: out to the top of the atmosphere, and -- for
-// downward rays -- down to the ground. Both solves are exact-cancellation-prone: at planet scale
-// r*r and sphereRadius*sphereRadius are ~4e13, so the difference of the two squares keeps no
-// float32 precision, and a compiler free to contract one product into an FMA leaves a residual of
-// ~1e6 m^2 where the exact answer is 0. That is not a hypothetical: it is what made the CPU sun
-// colour resolve a 222-2165 km chord as a 0.25-2.97 m near root on arm64, so a set sun was never
-// extinguished.
+// The LUT bakes exp(-tau) out to the top of the atmosphere over the rays that do not meet the
+// planet (Bruneton's mapping, Includes/sky_transmittance_lut.glsl). Both the exit distance and the
+// mapping are cancellation-prone: at planet scale r*r and sphereRadius*sphereRadius are ~4e13, so
+// the difference of the two squares keeps no float32 precision, and a compiler free to contract
+// one product into an FMA leaves a residual of ~1e6 m^2 where the exact answer is 0. That is not
+// a hypothetical: it is what made the CPU sun colour resolve a 222-2165 km chord as a 0.25-2.97 m
+// near root on arm64, so a set sun was never extinguished.
 //
-// The shader now factors both terms as (a - b) * (a + b) and takes each root in its non-cancelling
-// direction. This test checks that on a REAL device, because the compiler that decides whether to
-// contract is the driver's -- MoltenVK hands SPIR-V to Metal, which recompiles it. A CPU
-// simulation of the arithmetic is not the arithmetic that ships.
+// The shader factors every such term as (a - b) * (a + b) and takes each root in its
+// non-cancelling direction. This test checks that on a REAL device, because the compiler that
+// decides whether to contract is the driver's -- MoltenVK hands SPIR-V to Metal, which recompiles
+// it. A CPU simulation of the arithmetic is not the arithmetic that ships.
 //
 // The LUT's own texels cannot serve as the instrument: it stores rgba16f, and near the surface a
 // 5% path-length error moves a transmittance of ~1 by less than one fp16 ULP. So the probe reports
-// the path lengths and this compares them against the REPLACED quadratic evaluated in double,
-// which is the contract the change claims: identical wherever that form was not asked to cancel.
+// the (r, mu) each texel bakes, its path length and the forward mapping's round trip, and this
+// compares them against double-precision references.
 //
 // Skips ONLY without a Vulkan device. A missing staged probe shader FAILS instead: the same target
 // builds it, so its absence is a build defect, and an all-skip suite that reads as green is the
@@ -48,7 +48,8 @@ namespace
 // Mirrors sky_transmittance_path_probe.comp's ProbePC.
 struct ProbePC
 {
-    float radiiAndCount[4];
+    float radiiAndRow[4];
+    float columns[4];
 };
 
 // SkyRenderer::FillDefaultAtmosphere's Earth-scale shell, which is the scale the cancellation
@@ -56,24 +57,9 @@ struct ProbePC
 constexpr double kPlanetRadius = 6360000.0;
 constexpr double kAtmosphereRadius = 6460000.0;
 
-// One invocation per LUT column, so the sweep is the shader's own pixel-centre mu sequence.
-constexpr uint32_t kSamples = 256u;
-
-// The LUT's row radii, from DecodeUvToMuR: rNorm = t*t with t = (row + 0.5) / 64. Row 0 is the
-// one the defect lives closest to -- 6 m of shell above the surface, where the ground root is
-// metres long and a cancelling solve rounds it into nonsense.
-//
-// The float round-trip only picks a radius near the row's; the value the shader solves at is the
-// one the probe is HANDED, and every reference below is evaluated at the radius the probe reports
-// back (result.w), so this quantisation cannot reach the comparison. The shader's own fp32 mix()
-// would land elsewhere again -- 6.5 m for row 0 without contraction, against 6.0 m here -- which is
-// exactly why the reference reads the radius back instead of recomputing it.
-double RowRadius(uint32_t row, uint32_t rows = 64u)
-{
-    const double t = (static_cast<double>(row) + 0.5) / static_cast<double>(rows);
-    return static_cast<double>(
-        static_cast<float>(kPlanetRadius + t * t * (kAtmosphereRadius - kPlanetRadius)));
-}
+// SkyRenderer's transmittance LUT, probed texel by texel.
+constexpr uint32_t kColumns = 256u;
+constexpr uint32_t kRows = 64u;
 
 // The reference is the REPLACED general quadratic, evaluated in double: nearest positive root of
 // t^2 + 2*r*mu*t + (r^2 - sphereRadius^2), zero when there is none.
@@ -161,16 +147,17 @@ class SkyTransmittanceLutParityTest : public ::testing::Test
             m_Device->Shutdown();
     }
 
-    // Returns kSamples x (sAtmosphere, sGround, mu, r) at the given LUT row radius.
-    std::vector<float> Probe(double rowRadius)
+    // Returns kColumns x (sAtmosphere, round-trip u error, mu, r) for one LUT row.
+    std::vector<float> Probe(uint32_t row)
     {
         ProbePC pc{};
-        pc.radiiAndCount[0] = static_cast<float>(kPlanetRadius);
-        pc.radiiAndCount[1] = static_cast<float>(kAtmosphereRadius);
-        pc.radiiAndCount[2] = static_cast<float>(rowRadius);
-        pc.radiiAndCount[3] = static_cast<float>(kSamples);
+        pc.radiiAndRow[0] = static_cast<float>(kPlanetRadius);
+        pc.radiiAndRow[1] = static_cast<float>(kAtmosphereRadius);
+        pc.radiiAndRow[2] = static_cast<float>(row);
+        pc.radiiAndRow[3] = static_cast<float>(kRows);
+        pc.columns[0] = static_cast<float>(kColumns);
 
-        const size_t bytes = static_cast<size_t>(kSamples) * 4u * sizeof(float);
+        const size_t bytes = static_cast<size_t>(kColumns) * 4u * sizeof(float);
         BufferDesc od{};
         od.size = bytes;
         od.usage = static_cast<uint32_t>(BufferUsage::Storage) |
@@ -181,7 +168,7 @@ class SkyTransmittanceLutParityTest : public ::testing::Test
         od.debugName = "SkyTransmittancePathProbe.Out";
         BufferHandle outBuf = m_Device->CreateBuffer(od);
         m_Buffers.push_back(outBuf);
-        const std::vector<float> poison(static_cast<size_t>(kSamples) * 4u, -1.0f);
+        const std::vector<float> poison(static_cast<size_t>(kColumns) * 4u, -1.0f);
         m_Device->UpdateBuffer(outBuf, 0, bytes, poison.data());
 
         DescriptorSetDesc dsDesc{};
@@ -196,12 +183,12 @@ class SkyTransmittanceLutParityTest : public ::testing::Test
         cl->SetPipeline(m_Pipeline);
         cl->BindDescriptorSet(0, ds, m_Pipeline);
         cl->SetPushConstants(pc);
-        cl->Dispatch((kSamples + 63u) / 64u, 1u, 1u);
+        cl->Dispatch((kColumns + 63u) / 64u, 1u, 1u);
         cl->End();
         m_Device->ExecuteCommandLists({cl.get()});
         m_Device->WaitForIdle();
 
-        std::vector<float> out(static_cast<size_t>(kSamples) * 4u);
+        std::vector<float> out(static_cast<size_t>(kColumns) * 4u);
         void* mapped = m_Device->MapBuffer(outBuf);
         EXPECT_NE(mapped, nullptr);
         if (mapped)
@@ -216,91 +203,78 @@ class SkyTransmittanceLutParityTest : public ::testing::Test
     std::vector<BufferHandle> m_Buffers;
 };
 
-// float32 relative bound, one for both roots. The bound has to be tight enough that the SHELL exit
-// separates too: the replaced quadratic misses the ground root by 5e-2 but the shell exit by only
-// 1.2e-4, so a looser bound would leave the shell-exit case with no red arm at all. At 1e-4 the
-// replaced form is red on all three cases and the closed forms clear it by 60x on the ground root
-// and 400x on the shell exit -- decided by that measured gap, not tuned.
+// float32 relative bound on the exit distance. The replaced quadratic misses the shell exit by
+// 1.2e-4 at planet scale; the closed form clears this bound by 400x, decided by that measured gap.
 constexpr double kRelativeTolerance = 1e-4;
+
+// A reader asking for a texel's own (r, mu) must land on that texel: the round trip of the
+// mapping may drift by a hundredth of a texel at most.
+constexpr double kRoundTripTexels = 0.01;
+
+// The lowest altitude a texel's ray reaches, in double: r itself for an upward ray, the
+// perigee r * sqrt(1 - mu^2) above the planet for a downward one.
+double LowestAltitude(double r, double mu)
+{
+    return (mu >= 0.0 ? r : r * std::sqrt(1.0 - mu * mu)) - kPlanetRadius;
+}
+
+// The grazing column is tangent to the planet, so its perigee is 0 up to float32 at planet scale
+// (one ULP of 6.36e6 is 0.5 m). A ray that enters the planet goes kilometres deep.
+constexpr double kTangentToleranceMetres = 1.0;
 
 } // namespace
 
-// THE anchor: the ground root near the surface. This is the exact geometry the CPU evaluator's
-// contraction bug destroyed, and the rows the sky actually samples from a camera standing on the
-// planet. A metres-long root is the defect's signature, so every row is checked against the
-// double-precision answer rather than against a mirror of the shader's own new expression.
-TEST_F(SkyTransmittanceLutParityTest, GroundRootIsExactOnEveryLutRow)
+// The LUT holds only rays that leave the atmosphere: a ray that meets the planet is occluded, and
+// a texel that bakes one puts a discontinuity on the horizon -- a bilinear read there mixing a
+// grazing path with a short path to the ground (0.59/0.50/0.47 against the exact
+// 0.156/0.017/0.0001 at 3 m).
+TEST_F(SkyTransmittanceLutParityTest, NoLutTexelBakesARayThatMeetsThePlanet)
 {
-    size_t checked = 0;
-    double worstRel = 0.0;
-    for (uint32_t row = 0; row < 64u; ++row)
+    for (uint32_t row = 0; row < kRows; ++row)
     {
-        const double r = RowRadius(row);
-        const std::vector<float> got = Probe(r);
-        ASSERT_EQ(got.size(), static_cast<size_t>(kSamples) * 4u);
+        const std::vector<float> got = Probe(row);
+        ASSERT_EQ(got.size(), static_cast<size_t>(kColumns) * 4u);
         ASSERT_NE(got[0], -1.0f) << "the probe never wrote: the dispatch did not reach the buffer";
-
-        for (uint32_t i = 0; i < kSamples; ++i)
+        for (uint32_t i = 0; i < kColumns; ++i)
         {
             const double mu = static_cast<double>(got[i * 4u + 2]);
-            const double expected =
-                ReferenceNearestPositiveRoot(static_cast<double>(got[i * 4u + 3]), mu, kPlanetRadius);
-            const double actual = static_cast<double>(got[i * 4u + 1]);
-            if (expected <= 0.0)
-            {
-                EXPECT_EQ(actual, 0.0) << "row " << row << " mu " << mu
-                                       << ": the ray misses the planet, so there is no root";
-                continue;
-            }
-            ++checked;
-            const double rel = std::fabs(actual - expected) / expected;
-            worstRel = std::max(worstRel, rel);
-            if (rel > kRelativeTolerance)
-            {
-                ADD_FAILURE() << "row " << row << " (r - R = " << (r - kPlanetRadius) << " m) mu "
-                              << mu << ": ground root " << actual << " m, exact " << expected
-                              << " m, relative error " << rel
-                              << " -- a cancelling ray-sphere solve is back in the LUT";
-                row = 64u; // one row's worth of detail is enough to diagnose
-                break;
-            }
+            const double r = static_cast<double>(got[i * 4u + 3]);
+            ASSERT_GE(LowestAltitude(r, mu), -kTangentToleranceMetres)
+                << "texel (" << i << ", " << row << ") bakes r - R = " << (r - kPlanetRadius)
+                << " m, mu " << mu << ": a ray into the planet";
         }
     }
-    EXPECT_GT(checked, 0u) << "no downward ray hit the planet: the sweep never exercised the root";
-    RecordProperty("worstGroundRootRelativeError", std::to_string(worstRel));
 }
 
-// The other half of the same solve: the distance out through the shell, which every row uses and
-// which is the LUT's whole upward path. Its cancelling direction is the OPPOSITE one -- an outward
-// ray subtracts near-equal terms -- so a form that fixed only the ground root fails here, but only
-// against a bound tight enough to see it: the replaced quadratic's worst shell error is 1.2e-4,
-// three orders of magnitude smaller than the 5e-2 it misses the ground root by. That gap is what
-// kRelativeTolerance is set from.
-TEST_F(SkyTransmittanceLutParityTest, AtmosphereExitIsExactOnEveryLutRow)
+// The distance out through the shell, which every texel integrates over. Its cancelling direction
+// is an outward ray, which subtracts near-equal terms.
+TEST_F(SkyTransmittanceLutParityTest, AtmosphereExitIsExactOnEveryLutTexel)
 {
     double worstRel = 0.0;
-    for (uint32_t row = 0; row < 64u; ++row)
+    for (uint32_t row = 0; row < kRows; ++row)
     {
-        const double r = RowRadius(row);
-        const std::vector<float> got = Probe(r);
-        ASSERT_EQ(got.size(), static_cast<size_t>(kSamples) * 4u);
+        const std::vector<float> got = Probe(row);
+        ASSERT_EQ(got.size(), static_cast<size_t>(kColumns) * 4u);
 
-        for (uint32_t i = 0; i < kSamples; ++i)
+        for (uint32_t i = 0; i < kColumns; ++i)
         {
             const double mu = static_cast<double>(got[i * 4u + 2]);
             const double expected =
                 ReferenceNearestPositiveRoot(static_cast<double>(got[i * 4u + 3]), mu, kAtmosphereRadius);
             const double actual = static_cast<double>(got[i * 4u + 0]);
-            ASSERT_GT(expected, 0.0) << "row " << row << " mu " << mu
-                                     << ": every LUT row is inside the shell, so the ray must exit";
+            if (expected <= 0.0)
+            {
+                // The top row looking outward stands on the boundary: there is no shell left.
+                EXPECT_LE(std::fabs(actual), 1.0) << "texel (" << i << ", " << row << ") mu " << mu;
+                continue;
+            }
             const double rel = std::fabs(actual - expected) / expected;
             worstRel = std::max(worstRel, rel);
             if (rel > kRelativeTolerance)
             {
-                ADD_FAILURE() << "row " << row << " (r - R = " << (r - kPlanetRadius) << " m) mu "
-                              << mu << ": shell exit " << actual << " m, exact " << expected
-                              << " m, relative error " << rel;
-                row = 64u;
+                ADD_FAILURE() << "texel (" << i << ", " << row << ") mu " << mu << ": shell exit "
+                              << actual << " m, exact " << expected << " m, relative error " << rel;
+                row = kRows;
                 break;
             }
         }
@@ -308,24 +282,23 @@ TEST_F(SkyTransmittanceLutParityTest, AtmosphereExitIsExactOnEveryLutRow)
     RecordProperty("worstShellExitRelativeError", std::to_string(worstRel));
 }
 
-// On the surface exactly, both roots collapse and the forward one is the chord -2*R*mu. That is
-// the case the CPU evaluator resolves in closed form, and the shape a contracted solve turns into
-// a near root of a few metres -- the failure that left a set sun lit.
-TEST_F(SkyTransmittanceLutParityTest, OnTheSurfaceTheGroundRootIsTheChord)
+// The forward mapping of each texel's decoded (r, mu) returns the texel: the readers and the
+// baking pass agree on where a ray is stored, the grazing column included.
+TEST_F(SkyTransmittanceLutParityTest, TheMappingRoundTripsOnEveryLutTexel)
 {
-    const std::vector<float> got = Probe(kPlanetRadius);
-    ASSERT_EQ(got.size(), static_cast<size_t>(kSamples) * 4u);
-
-    for (uint32_t i = 0; i < kSamples; ++i)
+    double worstTexels = 0.0;
+    for (uint32_t row = 0; row < kRows; ++row)
     {
-        const double mu = static_cast<double>(got[i * 4u + 2]);
-        if (mu >= 0.0)
-            continue;
-        const double expected = -2.0 * kPlanetRadius * mu;
-        const double actual = static_cast<double>(got[i * 4u + 1]);
-        const double rel = std::fabs(actual - expected) / expected;
-        ASSERT_LE(rel, kRelativeTolerance)
-            << "mu " << mu << ": on-surface ground root " << actual << " m, chord " << expected
-            << " m -- the metres-long near root is exactly the contraction failure";
+        const std::vector<float> got = Probe(row);
+        ASSERT_EQ(got.size(), static_cast<size_t>(kColumns) * 4u);
+        for (uint32_t i = 0; i < kColumns; ++i)
+        {
+            const double texels = std::fabs(static_cast<double>(got[i * 4u + 1])) * kColumns;
+            worstTexels = std::max(worstTexels, texels);
+            ASSERT_LE(texels, kRoundTripTexels)
+                << "texel (" << i << ", " << row << "): the forward mapping lands " << texels
+                << " texels away";
+        }
     }
+    RecordProperty("worstRoundTripTexels", std::to_string(worstTexels));
 }

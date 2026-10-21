@@ -138,7 +138,7 @@ enum class TextureCookOutput : uint8 {
     BC7
 };
 
-// True when a BCn encoder is compiled in (DirectXTex + libktx writer).
+// True when the BCn encoders are compiled in (bc7e + DirectXTex + libktx writer).
 bool IsTextureCookEncoderAvailable();
 
 // True when the cook is disabled process-wide via GE_TEXTURE_COOK_DISABLE=1
@@ -150,12 +150,19 @@ bool IsTextureCookEncoderAvailable();
 // JPEG normals) still shade through the new decode. Read once.
 bool IsTextureCookDisabled();
 
-// Decode one LDR block-compressed level back to tightly-packed RGBA8
-// (verification/tooling path — quality A/Bs and tests; not a runtime decode).
-// Fails for BC6H (HDR) and when no decoder is compiled in.
+// Decode one LDR block-compressed level (BC1, BC4, BC5, BC7) back to tightly-packed RGBA8:
+// a packaged texture's CPU readers, the UI preview, quality A/Bs and tests. Fails for BC6H
+// (DecodeBlockPayloadRGBA32F) and when no decoder is compiled in.
 bool DecodeBlockPayloadRGBA8(TextureFormat format, uint32 width, uint32 height,
                              const uint8* payload, size_t payloadSize,
                              std::vector<uint8>& outRgba8);
+
+// Decode one BC6H (unsigned HDR) level back to tightly-packed RGBA32F, alpha 1: a packaged
+// HDR texture's CPU readers (a float terrain stamp mask). Fails for any other format and
+// when no decoder is compiled in.
+bool DecodeBlockPayloadRGBA32F(TextureFormat format, uint32 width, uint32 height,
+                               const uint8* payload, size_t payloadSize,
+                               std::vector<float>& outRgba32f);
 
 // Resolve the concrete output. Explicit compression wins; Auto maps usage ->
 // format (Color/Packed -> BC7, Normal -> BC5, Mask -> BC4, HDR sources -> BC6H,
@@ -188,34 +195,20 @@ bool ResolveTextureCookInputs(
 bool IsTextureCookSourceExtension(const std::string& extensionLower);
 bool NeedsTextureCook(const TextureCookInputs& inputs, TextureCookOutput output);
 
-// Encoder search quality defaults to the build configuration, but export passes
-// the Player target quality explicitly. It is not a per-texture setting, but it
-// keys the artifact, because the two searches emit different bytes for the same
-// input and the same settings.
-enum class TextureCookEncodeQuality : uint32 {
-    Full = 0,     // DirectXTex's default (max-quality) search
-    QuickBC7 = 1  // BC7 mode-6 only (TEX_COMPRESS_BC7_QUICK)
-};
-
-// Default quality for this build. Explicit export quality is passed to both
-// the encoder and artifact key; non-BC7 outputs always use Full.
-TextureCookEncodeQuality TextureCookEncodeQualityFor(TextureCookOutput output);
-
 // A relocation-independent artifact name shared by build staging and loading.
 // cacheRoot/Tex is chosen by the owning asset mount, outside this key recipe.
 std::string TextureCookArtifactName(const GUID& guid, uint64 sourceHash,
-                                    const TextureCookInputs& inputs, TextureCookOutput output,
-                                    std::optional<TextureCookEncodeQuality> quality = {});
+                                    const TextureCookInputs& inputs, TextureCookOutput output);
 
 // FNV-1a-64 over the full source payload (same recipe as the LOD cook key).
 uint64 ComputeTextureCookSourceHash(const uint8* bytes, size_t size);
 
-// Folds settings, color space, swizzle, resolved output, the cook version, the
-// encoder-library versions (DirectXTex / stb_image_resize2) and — for block
-// outputs — the encode quality into the config half of the cache key. Any change
-// lands on a fresh filename.
-uint64 ComputeTextureCookConfigHash(const TextureCookInputs& inputs, TextureCookOutput output,
-                                    std::optional<TextureCookEncodeQuality> quality = {});
+// Folds settings, color space, swizzle, resolved output, the cook version and
+// the versions of the libraries that shape the bytes (stb_image_resize2 for every
+// mip chain; for block outputs the encoder that writes them: bc7e for BC7,
+// DirectXTex for the other BC formats) into the config half of the cache key.
+// Any change lands on a fresh filename.
+uint64 ComputeTextureCookConfigHash(const TextureCookInputs& inputs, TextureCookOutput output);
 
 // Mip level count for a base extent under the cook settings (full chain to
 // 1x1, clamped by MipLimit; 1 when mips are disabled).
@@ -229,7 +222,7 @@ struct TextureCookMipLevel {
 };
 
 // Successive-halving mip chain builder — the ONE resampling recipe, shared by the
-// cook and by the synchronous raw-decode upload path (TextureService::GetOrUpload),
+// cook and by the raw-decode upload path (TextureService::PrepareUpload),
 // so a first bind and the cooked artifact that later replaces it filter identically.
 // `chain` must already hold level 0; levels are appended until it holds `mipCount`
 // (see ComputeTextureCookMipCount). sRGB color filters through stbir's sRGB path
@@ -244,7 +237,7 @@ struct TextureCookMipLevel {
 // to the ordinary chain. This is a precompression texel guarantee, not a promise
 // about BC7 error or bilinear/trilinear sampled coverage. Invalid active settings
 // fail visibly; callers must not silently substitute uncorrected mips.
-// Returns false when a downsample fails or no resampler is compiled in (no stb).
+// Returns false when a downsample fails.
 // Only callers with coverage disabled may degrade to the existing partial chain.
 bool BuildTextureCookMipChain(std::vector<TextureCookMipLevel>& chain, uint32 mipCount,
                               bool isFloat, bool srgb, const TextureCookSettings& settings,
@@ -265,20 +258,22 @@ inline constexpr const char* kTextureCookCancelledError = "cancelled";
 inline constexpr uint32 kTextureCookBandBlocks = 512;
 
 // Block-compress one tightly-packed RGBA level (uint8 x4, or float x4 when
-// `isFloat`) into the tight ceil(w/4) x ceil(h/4) block payload DirectXTex
-// produces. `output` must be a block format; Uncompressed fails. An LDR BC7
-// payload then passes through RepairBC7TransparentEndpoints, so a block with a
-// transparent source texel keeps alpha 0 at its transparent endpoints.
+// `isFloat`) into a tight ceil(w/4) x ceil(h/4) block payload. `output` must be
+// a block format; Uncompressed fails. BC7 is encoded by bc7e at its `slow`
+// profile with RGB (non-perceptual) error, a float level first saturated to
+// RGBA8; BC1, BC4, BC5 and BC6H by DirectXTex. An LDR BC7 payload then passes
+// through RepairBC7TransparentEndpoints, so a block with a transparent source
+// texel keeps alpha 0 at its transparent endpoints. There is no quality setting,
+// and every build configuration encodes the same bytes (design
+// `designs/assets/texture-cook-speed.md`).
 //
 // The level is issued as a series of horizontal block-row bands with
 // `cancelRequested` polled between them, so a cancel can preempt a level in
-// progress: a whole-level DirectX::Compress call is opaque — no progress or
-// cancellation callback — and is minutes long on a large base level. Banding is
-// not a fork of the library, just the same public call over sub-images, and it
-// is byte-exact because BCn blocks encode independently (no cross-block state at
-// TEX_COMPRESS_DEFAULT; dithering, which would diffuse error across block rows,
-// is not enabled) and every band starts on a block-row boundary, so the only
-// partial block row is the image's own bottom edge. Each band writes its own
+// progress. Banding is byte-exact because BCn blocks encode independently (no
+// cross-block state: bc7e encodes each 16-texel block alone, DirectXTex at
+// TEX_COMPRESS_DEFAULT does not dither) and every band starts on a block-row
+// boundary, so the only partial block row is the image's own bottom edge (bc7e
+// reads its partial blocks edge-replicated). Each band writes its own
 // slice of the payload.
 //
 // With `workers`, the bands are spread across the pool workers the asset decode
@@ -304,11 +299,13 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
                               TextureCookOutput output, uint32 bandBlocks,
                               std::vector<uint8>& outBytes, std::string& outError,
                               const std::function<bool()>& cancelRequested = {},
-                              std::optional<TextureCookEncodeQuality> quality = {},
                               TextureCookWorkers* workers = nullptr);
 
-// Cook source bytes into a KTX2 blob. Decodes with stb (extLower selects the
-// HDR float path for ".hdr"), applies the swizzle, builds the mip chain
+// Cook source bytes into a KTX2 blob. Decodes with Image::Decode8 or, when
+// extLower is ".hdr", Image::DecodeFloat (both to RGBA; a source past what
+// stb_image can produce is refused by name, and any source that does not decode
+// fails the cook with a warning that names `sourceName`, the file or asset the
+// bytes came from), applies the swizzle, builds the mip chain
 // (sRGB-aware filtering for sRGB color, straight linear for data, per-mip
 // renormalization for Usage == Normal), encodes to `output`, and serializes a
 // KTX2 container whose DFD transfer function carries the color space.
@@ -316,23 +313,19 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
 // outError set on decode/encode failure (caller falls back to the raw path).
 //
 // The optional synchronous callback is never retained. It is polled before each
-// mip level and between block-row bands within a level's encode, so
-// a cancel is honored in bounded time rather than at the end of the cook. A
-// whole-level DirectXTex::Compress call is opaque — no progress or cancellation
-// callback — and is minutes long on a large base level, so the encode is issued
-// as a series of bands instead: the same public API over sub-images, and
-// byte-identical because BCn blocks encode independently. A cancelled cook
-// returns false with outError == kTextureCookCancelledError and leaves
-// outKtx2Bytes empty, so nothing reaches the derived cache.
+// mip level and between block-row bands within a level's encode (see
+// CompressTextureCookLevel), so a cancel is honored in bounded time rather than
+// at the end of the cook. A cancelled cook returns false with
+// outError == kTextureCookCancelledError and leaves outKtx2Bytes empty, so
+// nothing reaches the derived cache.
 //
 // `workers` spreads each level's bands across a pool (see
 // CompressTextureCookLevel); null encodes on the calling thread. The editor's
 // cook and the build's pass the AssetManager's (AssetManager::GetTextureCookWorkers).
-bool CookTexture(const uint8* srcBytes, size_t srcSize, const std::string& extLower,
+bool CookTexture(const uint8* srcBytes, size_t srcSize, std::string_view sourceName, const std::string& extLower,
                  const TextureCookInputs& inputs, TextureCookOutput output,
                  std::vector<uint8>& outKtx2Bytes, std::string& outError,
                  const std::function<bool()>& cancelRequested = {},
-                 std::optional<TextureCookEncodeQuality> quality = {},
                  TextureCookWorkers* workers = nullptr);
 
 } // namespace GameEngine

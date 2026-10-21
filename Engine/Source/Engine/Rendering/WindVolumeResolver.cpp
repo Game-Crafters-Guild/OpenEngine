@@ -140,7 +140,7 @@ int32 Quantize(float value, float scale)
 // Extraction runs once per tick per caller; the scratch keeps its capacity across calls
 // instead of allocating per frame. thread_local because ResolveAt is also called from
 // package extraction systems on their own threads.
-std::vector<ExtractedWindVolume>& ExtractVolumes(ECS::World& world, uint32 layerMask)
+std::vector<ExtractedWindVolume>& ExtractVolumes(ECS::World& world)
 {
     static thread_local std::vector<ExtractedWindVolume> volumes;
     volumes.clear();
@@ -151,9 +151,6 @@ std::vector<ExtractedWindVolume>& ExtractVolumes(ECS::World& world, uint32 layer
                   const Components::WindVolume& volume,
                   const Components::WorldTransform& xf)
               {
-                  if ((volume.LayerMask & layerMask) == 0u)
-                      return;
-
                   ExtractedWindVolume extracted{};
                   extracted.Volume = volume;
                   extracted.EntityId = entity.id;
@@ -202,10 +199,9 @@ ResolvedWind WindVolumeResolver::ResolveAt(ECS::World& world,
                                            float32 worldX,
                                            float32 worldY,
                                            float32 worldZ,
-                                           const ResolvedWind& baseWind,
-                                           uint32 layerMask)
+                                           const ResolvedWind& baseWind)
 {
-    const auto& volumes = ExtractVolumes(world, layerMask);
+    const auto& volumes = ExtractVolumes(world);
 
     ResolvedWind result = baseWind;
     for (const ExtractedWindVolume& volume : volumes)
@@ -265,10 +261,9 @@ ResolvedWind WindVolumeResolver::ResolveAt(ECS::World& world,
     return result;
 }
 
-void WindVolumeResolver::ExtractGPU(ECS::World& world, std::vector<Rendering::WindVolumeGPU>& out,
-                                    uint32 layerMask)
+void WindVolumeResolver::ExtractGPU(ECS::World& world, std::vector<Rendering::WindVolumeGPU>& out)
 {
-    const auto& volumes = ExtractVolumes(world, layerMask);
+    const auto& volumes = ExtractVolumes(world);
     out.clear();
     out.reserve(volumes.size());
     for (const auto& v : volumes)

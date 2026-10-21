@@ -81,9 +81,10 @@ message(STATUS "NativeScripting: Configured as OBJECT library")
 add_executable(GePrebuiltStamp
     Tools/GePrebuiltStampMain.cpp
     Source/BuildCacheRecord.cpp
+    Source/EngineBuildIdentity.cpp
     Source/PrebuiltModuleBinaries.cpp
     Source/SdkManifest.cpp
     Source/ToolchainFingerprint.cpp)
 set_target_properties(GePrebuiltStamp PROPERTIES UNITY_BUILD OFF FOLDER "Tools")
 target_include_directories(GePrebuiltStamp PRIVATE Include Source)
-target_link_libraries(GePrebuiltStamp PRIVATE Types Logger)
+target_link_libraries(GePrebuiltStamp PRIVATE Types Logger ${CMAKE_DL_LIBS})

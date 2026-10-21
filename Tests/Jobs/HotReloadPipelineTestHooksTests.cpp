@@ -7,6 +7,7 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "MockHotReloadDependencies.h"
 #include "ScopedHotReloadTestHooks.h"
+#include "Scripting/PathResolver.h"
 #include "Scripting/ScriptManager.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
@@ -236,6 +237,12 @@ TEST(HotReloadPipelineTestHooks, ChangedFilesHookIncludedInRequest)
     EXPECT_TRUE(j.contains("PreferredStrategy") && j["PreferredStrategy"].get<std::string>() == "Incremental");
     EXPECT_TRUE(j.contains("Config"));
     EXPECT_TRUE(j.contains("Tfm") && j["Tfm"].get<std::string>() == "net10.0");
+    // The engine's script surface rides on the hot-reload request as on every other: the server
+    // holds no list of its own.
+    ASSERT_TRUE(j.contains("ScriptSurface"));
+    EXPECT_EQ(j["ScriptSurface"].get<std::vector<std::string>>(),
+              std::vector<std::string>(GameEngine::ScriptingPaths::kScriptSurfaceAssemblyFileNames.begin(),
+                                       GameEngine::ScriptingPaths::kScriptSurfaceAssemblyFileNames.end()));
 #else
     GTEST_SKIP() << "Windows-only in this environment";
 #endif

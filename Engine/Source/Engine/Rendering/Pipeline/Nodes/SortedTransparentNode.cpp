@@ -1,5 +1,6 @@
 #include "Engine/Rendering/Pipeline/Nodes/SortedTransparentNode.h"
 
+#include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h" // ParseWorldPassKeywords
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -43,9 +44,12 @@ void SortedTransparentNode::DeclareForView(ViewDeclare& d)
     t.Resolve = d.ViewResolve;
     t.DepthResolved = d.ViewDepthResolved;
     t.GTAO = d.ResolveTexture(Names::View::GTAO);
+    t.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);
     t.ResolveFromPipeline = d.ResolveFromPipeline;
 
-    d.Services.AddSortedTransparentDrainForView(d.Frame, d.View.id, t, m_PassKeywords);
+    // These transparents draw before the volumetric fog composite, which fogs them by the opaque
+    // depth behind them; the height fog they take in their own shaders.
+    d.Services.AddSortedTransparentDrainForView(d.Frame, d.View.id, t, m_PassKeywords | HeightFogPassKeyword(d));
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

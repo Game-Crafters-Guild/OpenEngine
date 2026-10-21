@@ -8,7 +8,7 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/GUID.h"
 #include "Logger/Logger.h"
-#include "Memory/AllocationCategory.h"
+#include "Memory/TrackedBytes.h"
 #include "Rendering/Core/Device.h"
 
 #include <algorithm>
@@ -18,6 +18,9 @@ namespace GameEngine { namespace Engine { namespace Renderer {
 
 namespace
 {
+
+// The resident bytes of every live store, summed: each store reports its own changes.
+Memory::TrackedBytes s_ResidentBytes{"Animation.RetargetGPUData", Memory::Residency::Gpu};
 
 // GUID -> 64-bit hash key for the per-asset upload tables. GUID is 128 bits;
 // folding to 64 with a multiplicative mix is collision-safe for our cardinality
@@ -174,7 +177,7 @@ bool RetargetGPUDataStore::Initialize(GameEngine::Rendering::IDevice* device)
     m_RigBufCapacity = 0;
     m_CharsBufCapacity = 0;
 
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
     return true;
 }
 
@@ -197,6 +200,11 @@ void RetargetGPUDataStore::ReprovisionAfterDeviceRebuild()
     m_RigDirty   = !m_RigData.empty();
     m_CharsDirty = !m_Chars.empty();
     FlushIfDirty();
+}
+
+RetargetGPUDataStore::~RetargetGPUDataStore()
+{
+    s_ResidentBytes.Subtract(m_ResidentBytes);
 }
 
 void RetargetGPUDataStore::Shutdown()
@@ -228,7 +236,7 @@ void RetargetGPUDataStore::Shutdown()
     m_ActiveCharCount = 0;
     m_DispatchScheduledThisFrame = false;
     m_Device = nullptr;
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
 }
 
 void RetargetGPUDataStore::BeginFrame(uint32_t /*frameIndex*/)
@@ -405,7 +413,7 @@ uint32_t RetargetGPUDataStore::EnsureClipUploaded(const GUID& guid, const Animat
     // [clipHeaderIdx + 0] and [clipHeaderIdx + 1].
     m_ClipGuidToHeaderIdx[key] = headerVec4Off;
     m_ClipDirty = true;
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
     return headerVec4Off;
 }
 
@@ -568,7 +576,7 @@ uint32_t RetargetGPUDataStore::EnsureRigPairUploaded(const GUID& mapGuid,
 
     m_RigGuidToHeaderIdx[key] = headerVec4Off;
     m_RigDirty = true;
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
     return headerVec4Off;
 }
 
@@ -631,7 +639,7 @@ void RetargetGPUDataStore::AppendCharacterParams(std::span<const GPURetargetChar
     m_Chars.insert(m_Chars.end(), params.begin(), params.end());
     m_ActiveCharCount = static_cast<uint32_t>(m_Chars.size());
     m_CharsDirty = true;
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
 }
 
 GameEngine::Rendering::BufferHandle RetargetGPUDataStore::CreateOrGrowBuffer(
@@ -708,15 +716,11 @@ void RetargetGPUDataStore::FlushIfDirty()
         m_CharsDirty = false;
     }
 
-    UpdateCategoryBytes();
+    UpdateResidentBytes();
 }
 
-void RetargetGPUDataStore::UpdateCategoryBytes()
+void RetargetGPUDataStore::UpdateResidentBytes()
 {
-    using ::GameEngine::Memory::AllocationCategory;
-    using ::GameEngine::Memory::TrackAllocation;
-    using ::GameEngine::Memory::TrackDeallocation;
-
     const uint64_t cpuBytes =
         m_ClipData.size() * sizeof(uint32_t)
       + m_RigData.size() * sizeof(uint32_t)
@@ -728,9 +732,9 @@ void RetargetGPUDataStore::UpdateCategoryBytes()
     const uint64_t newBytes = std::max(cpuBytes, devBytes);
 
     if (newBytes > m_ResidentBytes)
-        TrackAllocation(AllocationCategory::Animation, newBytes - m_ResidentBytes);
+        s_ResidentBytes.Add(newBytes - m_ResidentBytes);
     else if (newBytes < m_ResidentBytes)
-        TrackDeallocation(AllocationCategory::Animation, m_ResidentBytes - newBytes);
+        s_ResidentBytes.Subtract(m_ResidentBytes - newBytes);
     m_ResidentBytes = newBytes;
 }
 

@@ -15,9 +15,8 @@
 //     (successor of the PP_SHARED_FIELDS X-macro) consumed by TryWriteField /
 //     TryReadField / ReadableFieldNames, and — since Phase 2 — by the
 //     BlendPostProcessSettings fold (each entry carries its blend rule and
-//     contributes-group). Volume-core names (exposure, tonemapMode,
-//     ditherMode) and the fog-glow group shared by both fog effects stay in
-//     PostProcessSettings.cpp appendices.
+//     contributes-group). Volume-core names (exposure, look) and the fog-glow
+//     group shared by both fog effects stay in PostProcessSettings.cpp appendices.
 //   - Gates: the computed "<effect>Active" skipWhen names this effect alone
 //     decides, with their predicates. Gates that combine effects live in the
 //     core gate table in PostProcessSettings.cpp.
@@ -274,6 +273,7 @@ void CopyHeightFogEffectToSettings(
     settings.HeightFogUseTimeOfDay = effect.UseTimeOfDay ? 1 : 0;
     settings.HeightFogSkyHorizonOffset = std::clamp(effect.SkyHorizonOffset, -1.0f, 1.0f);
     settings.HeightFogSkyBottomStrength = std::clamp(effect.SkyBottomStrength, 0.0f, 1.0f);
+    settings.HeightFogColorMode = static_cast<int32_t>(effect.ColorMode);
 
     // A volume can contain both fog components. They intentionally share one
     // post-fog pyramid; the stronger enabled authoring block owns its shape.
@@ -394,9 +394,6 @@ constexpr EffectFieldIO kColorGradeIO[]{
      .ClampMin = -Engine::Renderer::kColorGradeTemperatureTintRange,
      .ClampMax = Engine::Renderer::kColorGradeTemperatureTintRange},
 };
-// Pre-unification single-range keys: the 3-way model that replaced them has no
-// equivalent, so stray scenes that still carry them load with the keys dropped.
-constexpr std::string_view kColorGradeDroppedKeys[]{"brightness", "gamma", "hue"};
 
 // DebugMode/DebugAlpha are legacy load-only keys (focus visualization moved to
 // Camera): accepted from older scenes, never serialized. DebugMode's 0..1 clamp
@@ -593,7 +590,6 @@ constexpr EffectSettingsField kColorFilterSettings[]{
     PP_SETTING("colorFilterB", ColorFilterB),
     PP_SETTING("colorFilterIntensity", ColorFilterIntensity),
     PP_SETTING("colorFilterBlendMode", ColorFilterBlendMode),
-    PP_SETTING("colorFilterStackOrder", ColorFilterStackOrder),
 };
 
 constexpr EffectSettingsField kContrastAdaptiveSharpenSettings[]{
@@ -603,9 +599,7 @@ constexpr EffectSettingsField kContrastAdaptiveSharpenSettings[]{
 
 constexpr EffectSettingsField kCubeLutSettings[]{
     PP_SETTING("lutIntensity", LutIntensity),
-    PP_SETTING("lutStackOrder", LutStackOrder),
-    PP_SETTING("lutInputEncoding", LutInputEncoding),
-    PP_SETTING("lutTextureFormat", LutTextureFormat),
+    PP_SETTING("lutStage", LutStage),
 };
 
 constexpr EffectSettingsField kVignetteSettings[]{
@@ -788,6 +782,7 @@ constexpr EffectSettingsField kHeightFogSettings[]{
     PP_BLEND_IN(HeightFogNoiseVelY, HeightFog),
     PP_BLEND_IN(HeightFogNoiseVelZ, HeightFog),
     PP_BLEND_IN(HeightFogUseTimeOfDay, HeightFog),
+    PP_BLEND_IN(HeightFogColorMode, HeightFog),
 };
 
 constexpr EffectSettingsField kColorGradeSettings[]{
@@ -982,6 +977,8 @@ constexpr EffectSettingsField kExposureAdjustmentSettings[]{
     PP_BLEND(ExposureCompensationEv),
     PP_BLEND(ExposureClampMinEv),
     PP_BLEND(ExposureClampMaxEv),
+    PP_BLEND(ExposureClampMinWeight),
+    PP_BLEND(ExposureClampMaxWeight),
 };
 
 // A lens-dirt composite samples the full bloom pyramid, so it keeps every
@@ -1060,6 +1057,7 @@ constexpr EffectSettingsGate kVolumetricFogGates[]{
 };
 constexpr EffectSettingsGate kHeightFogGates[]{
     {"heightFogActive", [](const PPS& s) { return s.IsHeightFogActive(); }},
+    {"heightFogSkyColorActive", [](const PPS& s) { return s.IsHeightFogSkyColorActive(); }},
 };
 constexpr EffectSettingsGate kAtmosphericCloudGates[]{
     {"atmosphericCloudActive", [](const PPS& s) { return s.IsAtmosphericCloudActive(); }},
@@ -1329,9 +1327,15 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             {
                 out.Settings.ExposureCompensationEv = exposureAdjust->Compensation;
                 if (exposureAdjust->ClampMin)
+                {
                     out.Settings.ExposureClampMinEv = exposureAdjust->MinEv;
+                    out.Settings.ExposureClampMinWeight = 1.0f;
+                }
                 if (exposureAdjust->ClampMax)
+                {
                     out.Settings.ExposureClampMaxEv = exposureAdjust->MaxEv;
+                    out.Settings.ExposureClampMaxWeight = 1.0f;
+                }
             }
         },
     });
@@ -1544,7 +1548,6 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.ColorFilterB         = cf->Color[2];
                 out.Settings.ColorFilterIntensity = cf->Intensity;
                 out.Settings.ColorFilterBlendMode = static_cast<int32>(cf->BlendMode);
-                out.Settings.ColorFilterStackOrder = cf->StackOrder;
             }
         },
     });
@@ -1555,7 +1558,6 @@ void RegisterBuiltInPostProcessEffectDescriptors()
         .Description = "Three-way HDR color corrector (shadows / midtones / highlights) before tonemap",
         .IconPath = "Icons/PostFX/ColorGrade.svg",
         .FieldIO = kColorGradeIO,
-        .DroppedLegacyKeys = kColorGradeDroppedKeys,
         .SettingsFields = kColorGradeSettings,
         .Gates = kColorGradeGates,
         .Extract =
@@ -1802,12 +1804,11 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             if (auto* clut = world.GetComponent<GameEngine::Components::CubeLutEffect>(entity);
                 clut && clut->Enabled)
             {
-                out.Settings.LutIntensity = std::clamp(clut->Intensity, 0.0f, 1.0f);
-                out.Settings.LutStackOrder = clut->StackOrder;
-                out.Settings.LutInputEncoding = static_cast<int32>(std::min<uint32>(clut->InputEncoding, 5u));
-                out.Settings.LutTextureFormat = static_cast<int32>(std::min<uint32>(clut->TextureFormat, 1u));
                 out.CubeLutAssetGuid = clut->LutAssetGuid.ToGuid();
                 out.HasCubeLutAsset = !out.CubeLutAssetGuid.IsNull();
+                // An effect with no LUT picked grades nothing: no intensity reaches the pass.
+                out.Settings.LutIntensity = out.HasCubeLutAsset ? std::clamp(clut->Intensity, 0.0f, 1.0f) : 0.0f;
+                out.Settings.LutStage = static_cast<int32>(clut->Stage);
             }
         },
     });

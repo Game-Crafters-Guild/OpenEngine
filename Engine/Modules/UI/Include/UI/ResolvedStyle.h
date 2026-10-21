@@ -211,6 +211,12 @@ struct VisualStyle
 
     UI::TextEffects TextEffects;
 
+    // Paint-time transform (not inherited; reaches descendants at emit time
+    // through the transform slot chain). Percentages in both are of the
+    // element's own border box. UI/UITransform.h turns them into a matrix.
+    TransformValue Transform{};
+    TransformOriginValue TransformOrigin{};
+
     // Interaction / visibility
     float LocalOpacity = 1.0f;
     float Opacity = 1.0f;

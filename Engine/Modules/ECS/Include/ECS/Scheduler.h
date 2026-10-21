@@ -179,8 +179,8 @@ public:
             }
 
             // Wave join on a JobCounter (slice 5): no TaskHandles, no per-task
-            // registry traffic; a worker-thread caller participates instead of
-            // blocking a pool lane.
+            // registry traffic; the caller, on any thread, runs the wave's jobs
+            // while it waits instead of blocking.
             JobSystem::JobCounter waveCounter;
             for (size_t idx : wave) {
                 scheduled[idx] = true;

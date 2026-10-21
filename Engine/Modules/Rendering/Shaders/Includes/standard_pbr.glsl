@@ -190,6 +190,31 @@ vec3 GE_SubsurfaceTransmission(SurfaceOutput so, vec3 V, vec3 L)
 #endif
 }
 
+// Diffuse transmission through a thin surface (a leaf, paper, a lampshade): the light that crosses
+// the surface and leaves its far face. The far face is a Lambert surface of albedo
+// `transmittedAlbedo`; it takes the `transmission` share of the diffuse light, and the near face keeps
+// the rest (GE_EvaluateStandardPBR scales its diffuse by 1 - transmission under the same keyword). So
+// the light a back-lit face receives is light a front-lit face gives up, not light added: with a
+// transmittedAlbedo no brighter than the base colour and a share of at most one half, a surface lit
+// from behind sends no more light toward the viewer than the same surface lit from the front.
+// `NdotL` is the signed cosine between the shading normal, turned toward the viewer, and the
+// direction to the light: only a light behind the surface (NdotL < 0) reaches the far face. Returned
+// per unit of light, before the light's colour, intensity and shadow, like the BRDF; the shadow
+// applies, since whatever blocks the light from the near face blocks it from the far one. The
+// literals carry the `f` suffix because the block is lifted into the host tests (GlslShim.h).
+// GE_SHARED_DIFFUSE_TRANSMISSION_BEGIN
+// The share of the diffuse light the near face keeps.
+float GE_DiffuseTransmissionNearFaceShare(float transmission)
+{
+    return 1.0f - clamp(transmission, 0.0f, 1.0f);
+}
+
+vec3 GE_DiffuseTransmissionFarFace(vec3 transmittedAlbedo, float transmission, float NdotL)
+{
+    return transmittedAlbedo * (clamp(transmission, 0.0f, 1.0f) * max(-NdotL, 0.0f) * (1.0f / GE_PI));
+}
+// GE_SHARED_DIFFUSE_TRANSMISSION_END
+
 // Estevez-Kulla 2017 "Production Friendly Microfacet Sheen BRDF" shadowing-masking — the
 // visibility term the glTF KHR_materials_sheen reference uses. The cheap Ashikhmin form it
 // replaces ignores the soft velvet terminator; this fitted lambda reproduces it. `alpha` is
@@ -362,6 +387,11 @@ vec3 GE_EvaluateStandardPBR(SurfaceOutput so, vec3 V, vec3 L)
     float onS     = dot(L, V) - NdotL * NdotV;
     float onST    = onS > 0.0 ? onS / max(max(NdotL, NdotV), 1e-4) : onS;
     vec3 diffuse  = kd * baseColor * (onA + onB * onST);
+#ifdef GE_DIFFUSE_TRANSMISSION_ENABLED
+    // A thin surface gives the diffuse transmission share to its far face
+    // (GE_DiffuseTransmissionFarFace, added by GE_EvaluateSurfaceLight) and keeps the rest here.
+    diffuse *= GE_DiffuseTransmissionNearFaceShare(so.diffuseTransmission);
+#endif
 #ifdef GE_TRANSMISSION_ENABLED
     // Transmission takes its energy out of the DIFFUSE budget: light that refracts through the
     // surface leaves on the far side instead of scattering back to the viewer. ibl.glsl applies

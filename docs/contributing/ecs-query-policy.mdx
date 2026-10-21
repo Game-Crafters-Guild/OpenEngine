@@ -1,0 +1,41 @@
+---
+title: ECS query policy and backpressure
+description: How ECS parallel queries size their batches, the QueryPolicy defaults, and how backpressure raises the batch size under job-system load.
+---
+
+This page explains how ECS queries adapt their task granularity to runtime load, and how to configure the defaults through `QueryPolicy`.
+
+## QueryPolicy
+
+`QueryPolicy` holds conservative defaults for batch sizing in `Query::Parallel`. They were chosen from micro-benchmarks as safe starting points across machines.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `MinBatchSizeDefault` | 1000 | The minimum batch size when none is passed to `Query::Parallel`. |
+| `MinBatchSizeDefaultBatch` | 10000 | The same for `Query::ParallelBatchEach`, whose per-chunk callback is memory-bound and pays more for fine batching. |
+| `EnableBackpressure` | true | Adapt the batch size to job-system pressure. |
+| `QueuePressureFactor` | 8 | When the queue length exceeds workers × this factor, raise the batch size. |
+| `PendingPressureFactor` | 16 | When the pending tasks exceed workers × this factor, raise the batch size. |
+| `PressuredMinBatchFloor` | 32768 | The floor the batch size is raised to under pressure. |
+
+## Behavior
+
+When you call `Query::Parallel(func, minBatchSize)`:
+
+- With `minBatchSize == 0`, the default comes from `QueryPolicy::MinBatchSizeDefault` (`Query::ParallelBatchEach` takes `MinBatchSizeDefaultBatch` instead).
+- With backpressure enabled, the job system's metrics are sampled, and the batch size is raised under load to reduce the task scheduling overhead:
+
+```text title="The backpressure rule"
+qsize   = GetApproximateQueueSize()
+pending = GetPendingTasksApprox()
+workers = GetWorkerCount()
+
+if (qsize > workers * QueuePressureFactor || pending > workers * PendingPressureFactor)
+    minBatchSize = max(minBatchSize, PressuredMinBatchFloor)
+```
+
+## Notes
+
+- `WorldBuilder::SetQueryPolicy` sets the policy at world construction. After that, `World::SetQueryPolicy` replaces it whole. There is no per-field setter.
+- Backpressure only ever increases the batch size, so it cannot oscillate.
+- For the iteration modes these numbers apply to, see [ECS parallel queries](../scripting/ecs-parallel-queries.mdx).

@@ -148,6 +148,11 @@ bool CrowdManager::IsInitialized() const
     return m_Impl && m_Impl->Crowd != nullptr;
 }
 
+bool CrowdManager::IsBoundTo(const DetourNavMap& navMap) const
+{
+    return IsInitialized() && m_Impl->NavMesh == navMap.GetDetourNavMesh();
+}
+
 CrowdAgentHandle CrowdManager::AddAgent(float32 x, float32 y, float32 z, const CrowdAgentParams& params)
 {
     if (!IsInitialized())
@@ -330,6 +335,11 @@ void CrowdManager::Shutdown()
 }
 
 bool CrowdManager::IsInitialized() const
+{
+    return false;
+}
+
+bool CrowdManager::IsBoundTo(const DetourNavMap& /*navMap*/) const
 {
     return false;
 }

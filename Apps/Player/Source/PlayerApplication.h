@@ -32,8 +32,8 @@ public:
                       bool tickManagedSystems = false,
 #if GE_PLAYER_MOVIE_RECORDER
                       std::optional<Video::VideoWriterOptions> movieOptions = std::nullopt,
-                      uint64_t movieFrameLimit = 0,
 #endif
+                      uint64_t quitAfterFrames = 0,
                       bool allowRuntimeHdrToggle = false,
                       std::string screenshotPath = {});
     ~PlayerApplication() override;
@@ -58,6 +58,9 @@ private:
     // Once the startup scene's resolve batch completes: logs it and starts the
     // scene's autoplay animators. Each frame until then.
     void FinishStartupResolve(ECS::World& world);
+    // How many material variants the shipped shader cache's program index served and how many it
+    // did not hold (composed and hashed instead), when the cache carries one.
+    void LogProgramIndexCounts();
     // The host's composite hook: the movie frame and the screenshot read the
     // composited frame back through it.
     void OnFrameComposited(RuntimeFrameReadback& readback);
@@ -66,6 +69,7 @@ private:
     void PollScreenshot();
     void RegisterManagedSystemBridge();
     void PollRuntimeDisplayControls();
+    void ApplyPointerLock();
     bool ToggleRuntimeHdrOutput();
     bool ApplyRuntimeHdrOutput(Rendering::HdrOutputMode mode);
 #if GE_PLAYER_MOVIE_RECORDER
@@ -97,6 +101,9 @@ private:
     Rendering::HdrOutputMode m_RuntimeHdrRequestedMode = Rendering::HdrOutputMode::Auto;
     Rendering::HdrSwapchainBitDepth m_RuntimeHdrBitDepth = Rendering::HdrSwapchainBitDepth::Bit10;
     bool m_AllowRuntimeHdrToggle = false;
+    // --quit-after: the run exits once this many frames have run; 0 runs until asked to
+    // quit. A movie capture counts written movie frames instead (m_MovieFrameLimit).
+    uint64_t m_QuitAfterFrames = 0;
 #if GE_PLAYER_MOVIE_RECORDER
     std::optional<Video::VideoWriterOptions> m_MovieOptions;
     std::shared_ptr<Video::AsyncVideoRecorder> m_MovieRecorder;
@@ -122,7 +129,7 @@ private:
 
     // --screenshot: read back the pipeline FinalColor once (after a short warmup so
     // shaders are compiled and the C++ OnStart spawn has run), write a PNG, and exit.
-    // A headless way to see what the shipped Player actually renders (the swapchain
+    // An unattended way to see what the shipped Player actually renders (the swapchain
     // has no movie/screen-capture path on this branch).
     std::string m_ScreenshotPath;
     // The startup scene's resolve batch on the engine's resolve service, pending

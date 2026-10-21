@@ -47,12 +47,11 @@ Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (1, 1, 1)
 
 [entity id="e_sky"]
-; Gradient mode with the sun/moon driver off: a fixed, time-independent dome, so
-; two captures minutes apart see identical incoming radiance.
+; Gradient mode: a fixed, time-independent dome. The gradient draws no sun, moon
+; or stars, its fill is baked from the three colors alone, and no light is linked
+; to it, so two captures minutes apart see identical incoming radiance.
 SkyEnvironment.Mode = 1
 SkyEnvironment.GradientSkyIntensity = 2000
-SkyEnvironment.IblIntensity = 1
-SkyEnvironment.AutoSunMoon = false
 Name.value = "Sky"
 Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
@@ -61,7 +60,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_wall_left"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "WallLeft"
 Transform.position = (-3.1, 2, 0)
@@ -71,7 +70,7 @@ Transform.scale = (0.2, 4.4, 6.4)
 [entity id="e_wall_right"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "WallRight"
 Transform.position = (3.1, 2, 0)
@@ -81,7 +80,7 @@ Transform.scale = (0.2, 4.4, 6.4)
 [entity id="e_wall_floor"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "WallFloor"
 Transform.position = (0, -0.1, 0)
@@ -91,7 +90,7 @@ Transform.scale = (6.4, 0.2, 6.4)
 [entity id="e_wall_back"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "WallBack"
 Transform.position = (0, 2, 3.1)
@@ -101,7 +100,7 @@ Transform.scale = (6.4, 4.4, 0.2)
 [entity id="e_wall_front"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "WallFront"
 Transform.position = (0, 2, -3.1)
@@ -113,7 +112,7 @@ Transform.scale = (6.4, 4.4, 0.2)
 ; exists to find, and the occluder whose shadow boundary DepthSharpness sharpens.
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Pillar"
 Transform.position = (0, 1.2, 0.6)
@@ -132,7 +131,7 @@ Transform.scale = (1.6, 2.4, 1.6)
 ; outputs rather than only the flag.
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/CornellWhite.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Shelf"
 Transform.position = (-1.6, 0.7, -1.2)

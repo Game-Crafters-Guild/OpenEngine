@@ -189,8 +189,9 @@
 }
 
 /* An entry's kind at a glance, in the Activity tab and the Thread alike: a speech bubble for a
-   comment, a plus for created, a pencil for an edit, a square in the status's color (set per
-   entry) for a status change; every marker takes one 14 px slot, so the text column lines up. */
+   comment, a hollow circle for created, a pencil for an edit, a square in the status's color
+   (set per entry) for a status change; every marker takes one 14 px slot, so the text column
+   lines up. */
 .markup-entry-marker {
 	width: 14px;
 	height: 14px;
@@ -207,11 +208,11 @@
 }
 
 .markup-entry-marker.markup-entry-created {
-	background-image: url("editor:Icons/plus.png");
+	background-image: url("editor:Icons/created.svg");
 }
 
 .markup-entry-marker.markup-entry-edit {
-	background-image: url("editor:Icons/draw_curve.png");
+	background-image: url("editor:Icons/draw_curve.svg");
 }
 
 .markup-entry-marker.markup-entry-status {
@@ -232,7 +233,7 @@
 /* The way back to the status color, beside the color row's swatch: a bare glyph. */
 /* The reset glyph on the theme's icon button (.icon-button sizes and plates it). */
 .markup-inspector-color-reset {
-	background-image: url("editor:Icons/ResetReload.png");
+	background-image: url("editor:Icons/ResetReload.svg");
 	background-size: 14px 14px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -289,7 +290,7 @@
 	min-height: 20px;
 	padding: 0;
 	flex-shrink: 0;
-	background-image: url("editor:Icons/eye.png");
+	background-image: url("editor:Icons/eye.svg");
 	background-size: 14px 14px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -431,7 +432,7 @@
 
 .markup-inspector-thread-title {
 	padding: 4px 8px;
-	font-weight: 600;
+	font-weight: 500;
 	border-bottom-width: 1px;
 	border-color: var(--ui_color_border_subtle);
 }
@@ -471,15 +472,6 @@
 	white-space: normal;
 }
 
-/* "Created ... · changed ..." under the Tags row. */
-.markup-inspector-history {
-	margin-top: 4px;
-	margin-bottom: 6px;
-	color: var(--ui_color_text_dim);
-	font-size: 12px;
-	white-space: normal;
-}
-
 /* A mark-up's kind (MarkupKind): a box, a sphere or a region, on its panel row and in a region's
    member list. */
 .markup-kind-glyph {
@@ -495,7 +487,7 @@
 }
 
 .markup-kind-glyph.markup-kind-box {
-	background-image: url("editor:Icons/cube.svg");
+	background-image: url("editor:Icons/Cube.svg");
 }
 
 .markup-kind-glyph.markup-kind-sphere {
@@ -526,7 +518,7 @@
 .markup-region-title {
 	margin-top: 8px;
 	padding: 2px 0;
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .markup-region-value {
@@ -545,7 +537,7 @@
 
 .markup-member-heading {
 	padding: 4px 8px;
-	font-weight: 600;
+	font-weight: 500;
 	border-bottom-width: 1px;
 	border-color: var(--ui_color_border_subtle);
 }
@@ -629,5 +621,5 @@
 .markup-path-heading {
 	margin-top: 6px;
 	padding: 4px 0px;
-	font-weight: 600;
+	font-weight: 500;
 }

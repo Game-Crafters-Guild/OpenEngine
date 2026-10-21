@@ -124,7 +124,7 @@ TEST(SystemWaveTraceTest, RecordsEveryWaveForkJoinAndBodyOfAKnownPlan)
         EXPECT_EQ(frame.DroppedWaves, 0u);
         EXPECT_EQ(frame.DroppedSystems, 0u);
 
-        // Forks per wave, joins per forked range, and the publish loops' stubs.
+        // Forks per wave and joins per forked range.
         const uint16 expectedForks[3] = {3, 0, 2};
         const uint16 expectedJoins[3] = {1, 0, 1};
         const uint16 expectedSystems[3] = {3, 1, 3};
@@ -146,9 +146,10 @@ TEST(SystemWaveTraceTest, RecordsEveryWaveForkJoinAndBodyOfAKnownPlan)
                 EXPECT_EQ(wave.JoinWaitNs, 0u);
             }
         }
-        EXPECT_EQ(frame.WaveForkPublishes, 5u);
-        // Every job published during the frame: the 5 fork stubs and Nester's 3.
-        EXPECT_EQ(frame.PublishedAtEnd - frame.PublishedAtBegin, 5u + NesterSystem::kNestedJobs);
+        // The publish loops publish at most one pool task per fork: a Run the
+        // fork-task budget refuses publishes none while a visit to its
+        // counter's queue is pending.
+        EXPECT_LE(frame.WaveForkPublishes, 5u);
 
         // Waves run in order and inside the frame.
         EXPECT_LE(frame.BeginNs, frame.Waves[0].BeginNs);
@@ -159,6 +160,7 @@ TEST(SystemWaveTraceTest, RecordsEveryWaveForkJoinAndBodyOfAKnownPlan)
         // The systems in recording order: wave 0's forks, Solo, Exclusive, then wave 2's forks.
         const char* expectedNames[7] = {"A", "B", "Nester", "Solo", "Exclusive", "C", "D"};
         const bool expectedForked[7] = {true, true, true, false, false, true, true};
+        uint64 systemPublishes = 0;
         for (uint16 s = 0; s < 7; ++s)
         {
             const SystemWaveTrace::SystemSample& sample = frame.Systems[s];
@@ -170,14 +172,21 @@ TEST(SystemWaveTraceTest, RecordsEveryWaveForkJoinAndBodyOfAKnownPlan)
             EXPECT_LE(wave.BeginNs, sample.BeginNs);
             EXPECT_LE(sample.BeginNs, sample.EndNs);
             EXPECT_LE(sample.EndNs, wave.EndNs);
-            EXPECT_EQ(sample.Publishes, s == 2 ? NesterSystem::kNestedJobs : 0u);
+            // Only Nester publishes, at most one pool task per nested job.
+            if (s == 2)
+                EXPECT_LE(sample.Publishes, NesterSystem::kNestedJobs);
+            else
+                EXPECT_EQ(sample.Publishes, 0u);
+            systemPublishes += sample.Publishes;
             if (expectedForked[s])
             {
-                // A native caller parks in Wait, so a forked body runs on a worker.
+                // A forked body runs on a worker, or on the caller, which
+                // runs its own fork's jobs while it waits.
                 EXPECT_NE(sample.PublishNs, 0u);
                 EXPECT_LE(wave.BeginNs, sample.PublishNs);
                 EXPECT_LE(sample.PublishNs, sample.BeginNs);
-                EXPECT_LT(sample.Worker, kWorkers);
+                EXPECT_TRUE(sample.Worker < kWorkers || sample.Worker == SystemWaveTrace::kCallerThread)
+                    << sample.Worker;
             }
             else
             {
@@ -185,6 +194,9 @@ TEST(SystemWaveTraceTest, RecordsEveryWaveForkJoinAndBodyOfAKnownPlan)
                 EXPECT_EQ(sample.Worker, SystemWaveTrace::kCallerThread);
             }
         }
+        // Every pool task published during the frame is attributed: the
+        // publish loops' and the system bodies'.
+        EXPECT_EQ(frame.PublishedAtEnd - frame.PublishedAtBegin, frame.WaveForkPublishes + systemPublishes);
     }
 }
 
@@ -246,7 +258,7 @@ TEST(SystemWaveTraceTest, DisabledSystemsAreNotRecorded)
     ASSERT_EQ(frames.size(), 1u);
     EXPECT_EQ(frames[0].SystemCount, 6u);
     EXPECT_EQ(frames[0].Waves[0].Forks, 2u);
-    EXPECT_EQ(frames[0].WaveForkPublishes, 4u);
+    EXPECT_LE(frames[0].WaveForkPublishes, 4u);
 }
 
 TEST(SystemWaveTraceTest, WavesPastTheFixedTableAreCountedAsDropped)
@@ -286,7 +298,7 @@ TEST(SystemWaveTraceTest, TheRingKeepsTheNewestFrames)
     // A slot reused after the ring wraps starts from a clean sample, so a
     // wrapped frame's counts are its own.
     EXPECT_EQ(known.NameOf(frames.back().Systems[2]), "Nester");
-    EXPECT_EQ(frames.back().Systems[2].Publishes, NesterSystem::kNestedJobs);
+    EXPECT_LE(frames.back().Systems[2].Publishes, NesterSystem::kNestedJobs);
 }
 
 TEST(SystemWaveTraceTest, TracedFramesStillFeedPerformanceTracking)

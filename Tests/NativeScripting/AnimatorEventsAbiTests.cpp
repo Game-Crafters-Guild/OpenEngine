@@ -17,14 +17,19 @@
 #include "Engine/Rendering/RenderWorldHooks.h"
 #include "GltfTestFiles.h"
 #include "Scripting/AnimatorABI.h"
-#include "Scripting/ScriptManager.h"
+#include "Engine/Build/PackagedGameLayout.h"
+#include "EngineLogCapture.h"
+#include "JobSystem/WorkStealingThreadPool.h"
+#include "StagedTestPaths.h"
 #include "Types/StringId.h"
 
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -141,33 +146,123 @@ TEST(AnimatorEventsAbi, PollEventsFillsWhatFitsAndRefusesBadArguments)
     AnimationEventCollectorStore::Instance().ClearForTest();
 }
 
-// A poll from a thread other than the engine's main thread is refused and leaves the events for the main thread.
-// Marking this test's thread as the main thread holds for the rest of the process, where every test runs on it.
-TEST(AnimatorEventsAbi, PollEventsRefusesAThreadOtherThanTheMainThread)
+namespace
+{
+// An engine initialized on this thread for `scripts`, which marks this thread as its main thread, shut down at
+// scope exit.
+class ScopedEngine
+{
+  public:
+    explicit ScopedEngine(const GameEngine::ScriptsConfig& scripts)
+    {
+        GameEngine::ApplicationConfig config{};
+        config.AssetDirectory = GameEngine::TestPaths::StagedEngineAssetsDir().string();
+        GameEngine::EngineCore::GetInstance().SetScriptsConfig(scripts);
+        m_Initialized = GameEngine::EngineCore::GetInstance().Initialize(config);
+    }
+    ~ScopedEngine() { GameEngine::EngineCore::GetInstance().Shutdown(); }
+    ScopedEngine(const ScopedEngine&) = delete;
+    ScopedEngine& operator=(const ScopedEngine&) = delete;
+    bool Initialized() const { return m_Initialized; }
+
+  private:
+    bool m_Initialized = false;
+};
+
+GameEngine::ScriptsConfig NoScripting()
+{
+    GameEngine::ScriptsConfig scripts{};
+    scripts.disableClr = true;
+    scripts.enableHotReload = false;
+    scripts.enableAsyncHotReload = false;
+    scripts.enableAutoProjectGeneration = false;
+    return scripts;
+}
+
+// A world with one entity whose Animator's collector holds one unpolled "step" event.
+struct OneEventWorld
+{
+    OneEventWorld()
+    {
+        GameEngine::Components::Animator animator{};
+        animator.eventCollectorId = AnimationEventCollectorStore::Instance().Create();
+        AnimationEventCollectorStore::Instance().Get(animator.eventCollectorId)->Add({0.1f, "step", {}});
+        Entity = World.CreateEntity();
+        World.AddComponentImmediate(Entity, animator);
+    }
+    GameEngine::ECS::World World{nullptr};
+    GameEngine::ECS::EntityHandle Entity;
+};
+
+// Polls the world's one entity on a thread of this test's own.
+GE_Result PollFromAThreadOfOurOwn(OneEventWorld& world, int32_t& count)
+{
+    GE_AnimationEventRecord record{};
+    GE_Result result = GE_Result_Ok;
+    std::thread thread([&] {
+        result = GE_Animator_PollEventsOnEntity(HandleOf(&world.World), world.Entity.id, &record, 1, &count);
+    });
+    thread.join();
+    return result;
+}
+} // namespace
+
+// A poll from a thread the engine does not schedule is refused and leaves the events for the engine's threads. The
+// NativeAOT Player's configuration marks the main thread too, so the rule is the same there. The refusal's log line,
+// which names the fix, is once per process: an earlier refusal in the process may already have written it.
+TEST(AnimatorEventsAbi, PollEventsFromAForeignThreadIsRefused)
+{
+    std::vector<std::string> lines;
+    GameEngine::TestLog::ScopedEngineLogCapture capture(&lines);
+    const GameEngine::ScriptsConfig configurations[] = {
+        NoScripting(), GameEngine::BuildPlayerScriptsConfig(GameEngine::PackagedGameLayout{}, /*useNativeAOT=*/true)};
+    for (const GameEngine::ScriptsConfig& scripts : configurations)
+    {
+        AnimationEventCollectorStore::Instance().ClearForTest();
+        ScopedEngine engine(scripts);
+        ASSERT_TRUE(engine.Initialized());
+        OneEventWorld world;
+
+        int32_t foreignCount = -1;
+        EXPECT_EQ(PollFromAThreadOfOurOwn(world, foreignCount), GE_Result_Fail)
+            << "nativeAot=" << scripts.nativeAot;
+        EXPECT_EQ(foreignCount, 0);
+
+        GE_AnimationEventRecord record{};
+        int32_t count = -1;
+        ASSERT_EQ(GE_Animator_PollEventsOnEntity(HandleOf(&world.World), world.Entity.id, &record, 1, &count),
+                  GE_Result_Ok);
+        EXPECT_EQ(count, 1) << "the refused poll left the event for the main thread";
+    }
+    Logger::Log::Flush();
+    EXPECT_LE(GameEngine::TestLog::CountLinesContaining(lines, "post the poll to the main thread with MainThread.Post"),
+              1u)
+        << "the refusal is logged once per process";
+    AnimationEventCollectorStore::Instance().ClearForTest();
+}
+
+// A system's update is admitted wherever the scheduler runs it: a job body on a pool worker polls the events.
+TEST(AnimatorEventsAbi, PollEventsFromAWaveBodyOnAWorkerIsAdmitted)
 {
     AnimationEventCollectorStore::Instance().ClearForTest();
-    GameEngine::ScriptManager& scripts = GameEngine::EngineCore::GetInstance().GetScriptManager();
-    scripts.MarkMainThread();
-    ASSERT_TRUE(scripts.IsMainThread());
-    World world(nullptr);
-    GameEngine::Components::Animator animator{};
-    animator.eventCollectorId = AnimationEventCollectorStore::Instance().Create();
-    AnimationEventCollectorStore::Instance().Get(animator.eventCollectorId)->Add({0.1f, "step", {}});
-    const GameEngine::ECS::EntityHandle entity = world.CreateEntity();
-    world.AddComponentImmediate(entity, animator);
+    ScopedEngine engine(NoScripting());
+    ASSERT_TRUE(engine.Initialized());
+    OneEventWorld world;
+    JobSystem::WorkStealingThreadPool pool(2);
 
-    GE_AnimationEventRecord record{};
-    GE_Result workerResult = GE_Result_Ok;
-    int32_t workerCount = -1;
-    std::thread worker([&] {
-        workerResult = GE_Animator_PollEventsOnEntity(HandleOf(&world), entity.id, &record, 1, &workerCount);
-    });
-    worker.join();
-    EXPECT_EQ(workerResult, GE_Result_Fail);
-    EXPECT_EQ(workerCount, 0);
-
+    std::promise<std::pair<GE_Result, bool>> polled;
     int32_t count = -1;
-    ASSERT_EQ(GE_Animator_PollEventsOnEntity(HandleOf(&world), entity.id, &record, 1, &count), GE_Result_Ok);
-    EXPECT_EQ(count, 1) << "the refused poll left the event for the main thread";
+    pool.EnqueueWork([&] {
+        GE_AnimationEventRecord record{};
+        const GE_Result result =
+            GE_Animator_PollEventsOnEntity(HandleOf(&world.World), world.Entity.id, &record, 1, &count);
+        polled.set_value({result, GameEngine::EngineCore::GetInstance().IsMainThread()});
+    });
+    const auto [result, onMainThread] = polled.get_future().get();
+    pool.Shutdown();
+
+    EXPECT_FALSE(onMainThread) << "the body ran on a pool worker";
+    EXPECT_EQ(result, GE_Result_Ok);
+    EXPECT_EQ(count, 1);
     AnimationEventCollectorStore::Instance().ClearForTest();
 }

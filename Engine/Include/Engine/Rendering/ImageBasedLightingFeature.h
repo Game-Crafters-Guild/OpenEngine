@@ -193,7 +193,14 @@ class ImageBasedLightingFeature final : public IRenderFeature
     static constexpr uint32_t kIblRebakeIntervalFrames = 8;
     uint32_t GetFramesSinceBake() const { return m_FramesSinceBake; }
     void TickFramesSinceBake() { if (m_FramesSinceBake < 0xFFFFFFFFu) ++m_FramesSinceBake; }
-    void ResetFramesSinceBake() { m_FramesSinceBake = 0; }
+    // Called by an environment source on each bake: restarts the throttle and counts the bake.
+    void MarkBaked()
+    {
+        m_FramesSinceBake = 0;
+        ++m_BakeCount;
+    }
+    // Bakes since the feature was created (any source): a capture is settled once it stops rising.
+    uint64_t GetBakeCount() const { return m_BakeCount; }
 
     // The split-sum BRDF LUT is environment-independent, so it bakes exactly once.
     bool IsBrdfLutBaked() const { return m_BrdfLutBaked; }
@@ -234,6 +241,7 @@ class ImageBasedLightingFeature final : public IRenderFeature
 
     uint64_t m_LastBakedDigest = 0; // 0 == never baked (sentinel; sources avoid 0)
     uint32_t m_FramesSinceBake = 0xFFFFFFFFu; // saturated so the first bake is never throttled
+    uint64_t m_BakeCount = 0;
     bool m_BrdfLutBaked = false;
 
     std::unique_ptr<IEnvironmentSource> m_Source;

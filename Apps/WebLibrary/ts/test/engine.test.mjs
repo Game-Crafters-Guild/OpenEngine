@@ -33,7 +33,7 @@ test('a library built against another release rejects naming both versions and t
     abi.engineVersion = '0.2.0';
     const load = async () => abi;
     await assert.rejects(createEngine({ canvas: fakeCanvas() }, new FakeHost(), load, { version: '0.1.0', fingerprint: '0123456789abcdef' }),
-        { code: 'VersionMismatch', message: /engine module is release 0.2.0 and this library is 0.1.0.*Update @openengine\/web to 0.2.0/ });
+        { code: 'VersionMismatch', message: /engine module is release 0.2.0 and this library is 0.1.0.*Update @game-crafters-guild\/openengine-web to 0.2.0/ });
     const matching = await createEngine({ canvas: fakeCanvas() }, new FakeHost(), async () => new StubAbi(),
         { version: '0.1.0', fingerprint: fingerprint(new StubAbi().reflectionJson()) });
     assert.ok(matching.scene.camera);
@@ -61,6 +61,57 @@ test('a canvas resize reaches the engine as CSS size and device pixel ratio', as
     host.dpr = 1.5;
     host.resizeCanvas();
     assert.deepEqual(abi.lastResize, [1024, 600, 1.5]);
+});
+
+test('a phone draws within a megapixel by default and a page can raise or lift the cap', async () => {
+    const phone = () => {
+        const host = new FakeHost();
+        host.mobile = true;
+        host.dpr = 2.625;
+        return host;
+    };
+    const phoneCanvas = () => Object.assign(fakeCanvas(), { clientWidth: 411, clientHeight: 785 });
+    const capped = await startEngine({ canvas: phoneCanvas() }, undefined, phone());
+    const [width, height, ratio] = capped.abi.lastResize;
+    assert.deepEqual([width, height], [411, 785]);
+    assert.ok(ratio < 2.625, `the ratio ${ratio} was not lowered`);
+    assert.ok(Math.abs(width * height * ratio * ratio - 1_000_000) < 1, `the buffer is ${width * height * ratio * ratio} pixels`);
+
+    const raised = await startEngine({ canvas: phoneCanvas(), maxDrawingBufferPixels: 1_500_000 }, undefined, phone());
+    assert.ok(Math.abs(411 * 785 * raised.abi.lastResize[2] ** 2 - 1_500_000) < 1);
+    const lifted = await startEngine({ canvas: phoneCanvas(), maxDrawingBufferPixels: Infinity }, undefined, phone());
+    assert.equal(lifted.abi.lastResize[2], 2.625);
+
+    const desktop = await startEngine({ canvas: Object.assign(fakeCanvas(), { clientWidth: 2560, clientHeight: 1440 }) });
+    assert.equal(desktop.abi.lastResize[2], 2, 'a desktop page is not capped by default');
+});
+
+test('a hidden canvas is refused before the engine loads, naming the cause and the fix', async () => {
+    for (const size of [{ clientWidth: 0, clientHeight: 0 }, { clientWidth: 800, clientHeight: 0 }]) {
+        let loaded = false;
+        const canvas = Object.assign(fakeCanvas(), size);
+        await assert.rejects(createEngine({ canvas }, new FakeHost(), async () => { loaded = true; return new StubAbi(); },
+                                          { version: '0.1.0', fingerprint: null }),
+            { code: 'InvalidArgument', message: /it is hidden \(display: none, or inside a hidden element\).*Show it before Engine.create/ });
+        assert.equal(loaded, false, 'the engine module was loaded for a hidden canvas');
+    }
+});
+
+test('a create that fails leaves no resize observer and no engine running', async () => {
+    const host = new FakeHost();
+    const abi = new StubAbi();
+    abi.refuseResize = true;
+    await assert.rejects(createEngine({ canvas: fakeCanvas() }, host, async () => abi, { version: '0.1.0', fingerprint: null }));
+    assert.equal(host.resizeListenerCount(), 0);
+    assert.ok(abi.calls.includes('ge_shutdown'), 'the engine was not shut down');
+});
+
+test('a drawing-buffer cap that is not a positive number or Infinity is refused, naming the option', async () => {
+    for (const cap of [0, -5, NaN, 'big']) {
+        await assert.rejects(startEngine({ canvas: fakeCanvas(), maxDrawingBufferPixels: cap }),
+            { code: 'InvalidArgument', message: /maxDrawingBufferPixels takes a number of pixels above 0, or Infinity/ },
+            `the cap ${String(cap)}`);
+    }
 });
 
 test('onFrame callbacks run before the tick with the step in seconds, until unsubscribed', async () => {

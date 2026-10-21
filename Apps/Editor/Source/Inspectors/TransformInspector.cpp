@@ -479,7 +479,7 @@ private:
         const ECS::ComponentTypeId transformType = ECS::GetComponentTypeId<Transform>();
         const ECS::ComponentTypeId sectorType = ECS::GetComponentTypeId<Components::WorldSectorCoord>();
         m_Sub = m_Changes->SubscribeComponentChanged(
-            [this, transformType, sectorType](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
+            [this](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
             {
                 if (e.world != m_World)
                 {
@@ -1085,7 +1085,7 @@ private:
             }
         });
 
-        label->RegisterEventHandler(kEventMouseUp, [this, label, field, onChanged, dragDidMove](UIEvent& e) {
+        label->RegisterEventHandler(kEventMouseUp, [this, field, onChanged, dragDidMove](UIEvent& e) {
             if (m_DraggingLabel && m_DraggingVec3Field == field && e.Button == 0) {
                 m_DraggingLabel = nullptr;
                 m_DraggingVec3Field = nullptr;

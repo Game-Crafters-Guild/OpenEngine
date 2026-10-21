@@ -2,6 +2,7 @@
 
 #include "PhysicsECS/PhysicsWorldService.h"
 
+#include <deque>
 #include <unordered_map>
 #include <vector>
 
@@ -9,6 +10,8 @@ namespace GameEngine::PhysicsECS
 {
 namespace
 {
+using SubscriptionId = PhysicsEntityEventCallbacks::SubscriptionId;
+
 enum class EntryKind : uint8
 {
     ContactBegin,
@@ -19,28 +22,41 @@ enum class EntryKind : uint8
 
 struct Entry
 {
-    PhysicsEntityEventCallbacks::SubscriptionId id = 0;
+    SubscriptionId id = 0;
     ECS::EntityHandle entity{};
     EntryKind kind = EntryKind::ContactBegin;
+    // False once the subscription has ended; an ended entry is kept only until the delivery that may
+    // be running its callback returns.
+    bool live = true;
 
     PhysicsEntityEventCallbacks::ContactCallback contactCb{};
     PhysicsEntityEventCallbacks::TriggerCallback triggerCb{};
+    PhysicsEntityEventCallbacks::EndedCallback ended{};
 };
 
 struct PerEntityLists
 {
-    std::vector<PhysicsEntityEventCallbacks::SubscriptionId> contactBegin;
-    std::vector<PhysicsEntityEventCallbacks::SubscriptionId> contactEnd;
-    std::vector<PhysicsEntityEventCallbacks::SubscriptionId> triggerEnter;
-    std::vector<PhysicsEntityEventCallbacks::SubscriptionId> triggerExit;
+    std::vector<SubscriptionId> contactBegin;
+    std::vector<SubscriptionId> contactEnd;
+    std::vector<SubscriptionId> triggerEnter;
+    std::vector<SubscriptionId> triggerExit;
 };
 
 static std::unordered_map<ECS::EntityHandle, PerEntityLists, ECS::EntityHandleHash> g_byEntity;
-static std::unordered_map<PhysicsEntityEventCallbacks::SubscriptionId, Entry> g_entries;
-static PhysicsEntityEventCallbacks::SubscriptionId g_nextId = 1;
+static std::unordered_map<SubscriptionId, Entry> g_entries;
+static SubscriptionId g_nextId = 1;
 
 static Physics::PhysicsWorld::ListenerId g_entityContactListenerId = 0;
 static Physics::PhysicsWorld::ListenerId g_entityTriggerListenerId = 0;
+
+// The deliveries running now (a callback that steps the world nests one). While any runs, the world
+// iterates its listeners, so they are not removed, and an ended entry is not erased, because its
+// callback may be the one running.
+static uint32 g_deliveryDepth = 0;
+// One id list per delivery level, reused, so a delivery allocates nothing once warm. A deque, so a
+// nested level never moves the list an outer level iterates.
+static std::deque<std::vector<SubscriptionId>> g_deliverySnapshots;
+static std::vector<SubscriptionId> g_endedDuringDelivery;
 
 static ECS::EntityHandle EntityRouterEntityFromUserData(uint64 ud)
 {
@@ -48,162 +64,127 @@ static ECS::EntityHandle EntityRouterEntityFromUserData(uint64 ud)
     return ECS::EntityHandle(static_cast<uint32>(ud));
 }
 
-static bool HasAnyContactSubscriptions()
+static std::vector<SubscriptionId>& ListOf(PerEntityLists& lists, EntryKind kind)
 {
-    for (const auto& kv : g_byEntity)
+    switch (kind)
     {
-        const auto& l = kv.second;
-        if (!l.contactBegin.empty() || !l.contactEnd.empty())
-            return true;
+    case EntryKind::ContactBegin:
+        return lists.contactBegin;
+    case EntryKind::ContactEnd:
+        return lists.contactEnd;
+    case EntryKind::TriggerEnter:
+        return lists.triggerEnter;
+    case EntryKind::TriggerExit:
+        break;
     }
-    return false;
+    return lists.triggerExit;
 }
 
-static bool HasAnyTriggerSubscriptions()
+// Calls the live callbacks of `ids` with `ev`. The ids are copied first: a callback may subscribe or
+// unsubscribe, which changes the list.
+template <class Event, class Callback>
+static void Deliver(const std::vector<SubscriptionId>& ids, const Event& ev, Callback Entry::*callback)
 {
-    for (const auto& kv : g_byEntity)
+    if (ids.empty())
+        return;
+    if (g_deliverySnapshots.size() <= g_deliveryDepth)
+        g_deliverySnapshots.emplace_back();
+    std::vector<SubscriptionId>& snapshot = g_deliverySnapshots[g_deliveryDepth];
+    snapshot.assign(ids.begin(), ids.end());
+
+    ++g_deliveryDepth;
+    for (const SubscriptionId id : snapshot)
     {
-        const auto& l = kv.second;
-        if (!l.triggerEnter.empty() || !l.triggerExit.empty())
-            return true;
+        const auto it = g_entries.find(id);
+        if (it != g_entries.end() && it->second.live && it->second.*callback)
+            (it->second.*callback)(ev);
     }
-    return false;
+    --g_deliveryDepth;
+
+    if (g_deliveryDepth == 0)
+    {
+        for (const SubscriptionId id : g_endedDuringDelivery)
+            g_entries.erase(id);
+        g_endedDuringDelivery.clear();
+    }
 }
 
+// `normal` points from other into self.
+static void DeliverContactTo(ECS::EntityHandle self, ECS::EntityHandle other, uint64 selfUserData, uint64 otherUserData,
+                             const Physics::Vector3& normal, const Physics::ContactEvent& e)
+{
+    const auto it = g_byEntity.find(self);
+    if (it == g_byEntity.end())
+        return;
+    EntityContactEvent ev{};
+    ev.self = self;
+    ev.other = other;
+    ev.state = e.state;
+    ev.point = e.point;
+    ev.normal = normal;
+    ev.impulse = e.impulse;
+    ev.selfUserData = selfUserData;
+    ev.otherUserData = otherUserData;
+    const bool isBegin = e.state == Physics::ContactState::Begin;
+    Deliver(isBegin ? it->second.contactBegin : it->second.contactEnd, ev, &Entry::contactCb);
+}
+
+static void OnWorldContact(const Physics::ContactEvent& e)
+{
+    const ECS::EntityHandle a = EntityRouterEntityFromUserData(e.userDataA);
+    const ECS::EntityHandle b = EntityRouterEntityFromUserData(e.userDataB);
+    if (!a.IsValid() || !b.IsValid())
+        return;
+    if (e.state != Physics::ContactState::Begin && e.state != Physics::ContactState::End)
+        return;
+    // The backend's normal points from body A into body B.
+    DeliverContactTo(a, b, e.userDataA, e.userDataB, e.normal * -1.0f, e);
+    DeliverContactTo(b, a, e.userDataB, e.userDataA, e.normal, e);
+}
+
+static void DeliverTriggerTo(ECS::EntityHandle self, ECS::EntityHandle other, bool selfIsTrigger, uint64 selfUserData,
+                             uint64 otherUserData, bool isEntering)
+{
+    const auto it = g_byEntity.find(self);
+    if (it == g_byEntity.end())
+        return;
+    EntityTriggerEvent ev{};
+    ev.self = self;
+    ev.other = other;
+    ev.selfIsTrigger = selfIsTrigger;
+    ev.isEntering = isEntering;
+    ev.selfUserData = selfUserData;
+    ev.otherUserData = otherUserData;
+    Deliver(isEntering ? it->second.triggerEnter : it->second.triggerExit, ev, &Entry::triggerCb);
+}
+
+static void OnWorldTrigger(const Physics::TriggerEvent& e)
+{
+    const ECS::EntityHandle trigger = EntityRouterEntityFromUserData(e.triggerUserData);
+    const ECS::EntityHandle other = EntityRouterEntityFromUserData(e.otherUserData);
+    if (!trigger.IsValid() || !other.IsValid())
+        return;
+    DeliverTriggerTo(trigger, other, true, e.triggerUserData, e.otherUserData, e.isEntering);
+    DeliverTriggerTo(other, trigger, false, e.otherUserData, e.triggerUserData, e.isEntering);
+}
+
+// The two world listeners are installed together while any subscription exists, so a callback that
+// subscribes to the other kind during a delivery finds its listener in place and never changes the
+// world's listener lists while the world iterates them.
 static void EnsureWorldListeners()
 {
-    if (!PhysicsWorldService::IsInitialized())
+    if (!PhysicsWorldService::IsInitialized() || g_byEntity.empty())
         return;
 
     auto& w = PhysicsWorldService::Get();
-
-    const bool wantContact = HasAnyContactSubscriptions();
-    const bool wantTrigger = HasAnyTriggerSubscriptions();
-
-    if (wantContact && g_entityContactListenerId == 0)
-    {
-        g_entityContactListenerId = w.AddContactListener([](const Physics::ContactEvent& e)
-                                                   {
-                                                       const ECS::EntityHandle a = EntityRouterEntityFromUserData(e.userDataA);
-                                                       const ECS::EntityHandle b = EntityRouterEntityFromUserData(e.userDataB);
-                                                       if (!a.IsValid() || !b.IsValid())
-                                                           return;
-
-                                                       if (e.state != Physics::ContactState::Begin && e.state != Physics::ContactState::End)
-                                                           return;
-
-                                                       const bool isBegin = (e.state == Physics::ContactState::Begin);
-
-                                                       auto itA = g_byEntity.find(a);
-                                                       if (itA != g_byEntity.end())
-                                                       {
-                                                           const auto& ids = isBegin ? itA->second.contactBegin : itA->second.contactEnd;
-                                                           EntityContactEvent ev{};
-                                                           ev.self = a;
-                                                           ev.other = b;
-                                                           ev.state = e.state;
-                                                           ev.point = e.point;
-                                                           ev.normal = e.normal;
-                                                           ev.impulse = e.impulse;
-                                                           ev.selfUserData = e.userDataA;
-                                                           ev.otherUserData = e.userDataB;
-
-                                                           for (const auto id : ids)
-                                                           {
-                                                               auto itE = g_entries.find(id);
-                                                               if (itE != g_entries.end() && itE->second.contactCb)
-                                                                   itE->second.contactCb(ev);
-                                                           }
-                                                       }
-
-                                                       auto itB = g_byEntity.find(b);
-                                                       if (itB != g_byEntity.end())
-                                                       {
-                                                           const auto& ids = isBegin ? itB->second.contactBegin : itB->second.contactEnd;
-                                                           EntityContactEvent ev{};
-                                                           ev.self = b;
-                                                           ev.other = a;
-                                                           ev.state = e.state;
-                                                           ev.point = e.point;
-                                                           ev.normal = e.normal;
-                                                           ev.impulse = e.impulse;
-                                                           ev.selfUserData = e.userDataB;
-                                                           ev.otherUserData = e.userDataA;
-
-                                                           for (const auto id : ids)
-                                                           {
-                                                               auto itE = g_entries.find(id);
-                                                               if (itE != g_entries.end() && itE->second.contactCb)
-                                                                   itE->second.contactCb(ev);
-                                                           }
-                                                       }
-                                                   });
-    }
-    else if (!wantContact && g_entityContactListenerId != 0)
-    {
-        w.RemoveContactListener(g_entityContactListenerId);
-        g_entityContactListenerId = 0;
-    }
-
-    if (wantTrigger && g_entityTriggerListenerId == 0)
-    {
-        g_entityTriggerListenerId = w.AddTriggerListener([](const Physics::TriggerEvent& e)
-                                                   {
-                                                       const ECS::EntityHandle trigger = EntityRouterEntityFromUserData(e.triggerUserData);
-                                                       const ECS::EntityHandle other = EntityRouterEntityFromUserData(e.otherUserData);
-                                                       if (!trigger.IsValid() || !other.IsValid())
-                                                           return;
-
-                                                       const bool isEnter = e.isEntering;
-
-                                                       // Trigger perspective
-                                                       if (auto it = g_byEntity.find(trigger); it != g_byEntity.end())
-                                                       {
-                                                           const auto& ids = isEnter ? it->second.triggerEnter : it->second.triggerExit;
-                                                           EntityTriggerEvent ev{};
-                                                           ev.self = trigger;
-                                                           ev.other = other;
-                                                           ev.selfIsTrigger = true;
-                                                           ev.isEntering = e.isEntering;
-                                                           ev.selfUserData = e.triggerUserData;
-                                                           ev.otherUserData = e.otherUserData;
-
-                                                           for (const auto id : ids)
-                                                           {
-                                                               auto itE = g_entries.find(id);
-                                                               if (itE != g_entries.end() && itE->second.triggerCb)
-                                                                   itE->second.triggerCb(ev);
-                                                           }
-                                                       }
-
-                                                       // Other perspective
-                                                       if (auto it = g_byEntity.find(other); it != g_byEntity.end())
-                                                       {
-                                                           const auto& ids = isEnter ? it->second.triggerEnter : it->second.triggerExit;
-                                                           EntityTriggerEvent ev{};
-                                                           ev.self = other;
-                                                           ev.other = trigger;
-                                                           ev.selfIsTrigger = false;
-                                                           ev.isEntering = e.isEntering;
-                                                           ev.selfUserData = e.otherUserData;
-                                                           ev.otherUserData = e.triggerUserData;
-
-                                                           for (const auto id : ids)
-                                                           {
-                                                               auto itE = g_entries.find(id);
-                                                               if (itE != g_entries.end() && itE->second.triggerCb)
-                                                                   itE->second.triggerCb(ev);
-                                                           }
-                                                       }
-                                                   });
-    }
-    else if (!wantTrigger && g_entityTriggerListenerId != 0)
-    {
-        w.RemoveTriggerListener(g_entityTriggerListenerId);
-        g_entityTriggerListenerId = 0;
-    }
+    if (g_entityContactListenerId == 0)
+        g_entityContactListenerId = w.AddContactListener(&OnWorldContact);
+    if (g_entityTriggerListenerId == 0)
+        g_entityTriggerListenerId = w.AddTriggerListener(&OnWorldTrigger);
 }
 
+// Removes the world listeners when no subscription is left and no delivery runs. When the last
+// subscription ends during a delivery, the listeners stay until the next end call outside one.
 static void MaybeRemoveWorldListeners()
 {
     if (!PhysicsWorldService::IsInitialized())
@@ -212,56 +193,37 @@ static void MaybeRemoveWorldListeners()
         g_entityTriggerListenerId = 0;
         return;
     }
+    if (g_deliveryDepth != 0 || !g_byEntity.empty())
+        return;
 
     auto& w = PhysicsWorldService::Get();
-
-    const bool wantContact = HasAnyContactSubscriptions();
-    const bool wantTrigger = HasAnyTriggerSubscriptions();
-
-    if (!wantContact && g_entityContactListenerId != 0)
+    if (g_entityContactListenerId != 0)
     {
         w.RemoveContactListener(g_entityContactListenerId);
         g_entityContactListenerId = 0;
     }
-
-    if (!wantTrigger && g_entityTriggerListenerId != 0)
+    if (g_entityTriggerListenerId != 0)
     {
         w.RemoveTriggerListener(g_entityTriggerListenerId);
         g_entityTriggerListenerId = 0;
     }
 }
 
-static PhysicsEntityEventCallbacks::SubscriptionId AddEntry(const Entry& e)
+static SubscriptionId AddEntry(Entry e)
 {
     if (!e.entity.IsValid())
         return 0;
 
-    Entry stored = e;
-    stored.id = g_nextId++;
-    g_entries[stored.id] = stored;
-
-    auto& lists = g_byEntity[stored.entity];
-    switch (stored.kind)
-    {
-    case EntryKind::ContactBegin:
-        lists.contactBegin.push_back(stored.id);
-        break;
-    case EntryKind::ContactEnd:
-        lists.contactEnd.push_back(stored.id);
-        break;
-    case EntryKind::TriggerEnter:
-        lists.triggerEnter.push_back(stored.id);
-        break;
-    case EntryKind::TriggerExit:
-        lists.triggerExit.push_back(stored.id);
-        break;
-    }
+    e.id = g_nextId++;
+    const SubscriptionId id = e.id;
+    ListOf(g_byEntity[e.entity], e.kind).push_back(id);
+    g_entries.emplace(id, std::move(e));
 
     EnsureWorldListeners();
-    return stored.id;
+    return id;
 }
 
-static void RemoveIdFromVector(std::vector<PhysicsEntityEventCallbacks::SubscriptionId>& v, PhysicsEntityEventCallbacks::SubscriptionId id)
+static void RemoveIdFromVector(std::vector<SubscriptionId>& v, SubscriptionId id)
 {
     for (size_t i = 0; i < v.size(); ++i)
     {
@@ -273,76 +235,78 @@ static void RemoveIdFromVector(std::vector<PhysicsEntityEventCallbacks::Subscrip
         }
     }
 }
+
+// The one place a subscription ends: it leaves the entity's lists, its entry is erased now or, during
+// a delivery, when the delivery returns, and its `ended` callback runs.
+static void EndSubscription(SubscriptionId id)
+{
+    const auto it = g_entries.find(id);
+    if (it == g_entries.end() || !it->second.live)
+        return;
+
+    Entry& e = it->second;
+    e.live = false;
+    PhysicsEntityEventCallbacks::EndedCallback ended = std::move(e.ended);
+    if (auto itL = g_byEntity.find(e.entity); itL != g_byEntity.end())
+    {
+        auto& lists = itL->second;
+        RemoveIdFromVector(ListOf(lists, e.kind), id);
+        if (lists.contactBegin.empty() && lists.contactEnd.empty() && lists.triggerEnter.empty() && lists.triggerExit.empty())
+            g_byEntity.erase(itL);
+    }
+    if (g_deliveryDepth == 0)
+        g_entries.erase(it);
+    else
+        g_endedDuringDelivery.push_back(id);
+
+    if (ended)
+        ended();
+}
+
+static SubscriptionId Subscribe(ECS::EntityHandle entity, EntryKind kind, PhysicsEntityEventCallbacks::ContactCallback contact,
+                                PhysicsEntityEventCallbacks::TriggerCallback trigger, PhysicsEntityEventCallbacks::EndedCallback ended)
+{
+    Entry e{};
+    e.entity = entity;
+    e.kind = kind;
+    e.contactCb = std::move(contact);
+    e.triggerCb = std::move(trigger);
+    e.ended = std::move(ended);
+    return AddEntry(std::move(e));
+}
 } // namespace
 
-PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle entity, ContactCallback callback)
+PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle entity,
+                                                                                               ContactCallback callback,
+                                                                                               EndedCallback ended)
 {
-    Entry e{};
-    e.entity = entity;
-    e.kind = EntryKind::ContactBegin;
-    e.contactCb = std::move(callback);
-    return AddEntry(e);
+    return Subscribe(entity, EntryKind::ContactBegin, std::move(callback), {}, std::move(ended));
 }
 
-PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeContactEnd(ECS::EntityHandle entity, ContactCallback callback)
+PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeContactEnd(ECS::EntityHandle entity,
+                                                                                             ContactCallback callback,
+                                                                                             EndedCallback ended)
 {
-    Entry e{};
-    e.entity = entity;
-    e.kind = EntryKind::ContactEnd;
-    e.contactCb = std::move(callback);
-    return AddEntry(e);
+    return Subscribe(entity, EntryKind::ContactEnd, std::move(callback), {}, std::move(ended));
 }
 
-PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeTriggerEnter(ECS::EntityHandle entity, TriggerCallback callback)
+PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeTriggerEnter(ECS::EntityHandle entity,
+                                                                                               TriggerCallback callback,
+                                                                                               EndedCallback ended)
 {
-    Entry e{};
-    e.entity = entity;
-    e.kind = EntryKind::TriggerEnter;
-    e.triggerCb = std::move(callback);
-    return AddEntry(e);
+    return Subscribe(entity, EntryKind::TriggerEnter, {}, std::move(callback), std::move(ended));
 }
 
-PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeTriggerExit(ECS::EntityHandle entity, TriggerCallback callback)
+PhysicsEntityEventCallbacks::SubscriptionId PhysicsEntityEventCallbacks::SubscribeTriggerExit(ECS::EntityHandle entity,
+                                                                                              TriggerCallback callback,
+                                                                                              EndedCallback ended)
 {
-    Entry e{};
-    e.entity = entity;
-    e.kind = EntryKind::TriggerExit;
-    e.triggerCb = std::move(callback);
-    return AddEntry(e);
+    return Subscribe(entity, EntryKind::TriggerExit, {}, std::move(callback), std::move(ended));
 }
 
 void PhysicsEntityEventCallbacks::Unsubscribe(SubscriptionId id)
 {
-    const auto it = g_entries.find(id);
-    if (it == g_entries.end())
-        return;
-
-    const Entry e = it->second;
-    g_entries.erase(it);
-
-    if (auto itL = g_byEntity.find(e.entity); itL != g_byEntity.end())
-    {
-        auto& lists = itL->second;
-        switch (e.kind)
-        {
-        case EntryKind::ContactBegin:
-            RemoveIdFromVector(lists.contactBegin, id);
-            break;
-        case EntryKind::ContactEnd:
-            RemoveIdFromVector(lists.contactEnd, id);
-            break;
-        case EntryKind::TriggerEnter:
-            RemoveIdFromVector(lists.triggerEnter, id);
-            break;
-        case EntryKind::TriggerExit:
-            RemoveIdFromVector(lists.triggerExit, id);
-            break;
-        }
-
-        if (lists.contactBegin.empty() && lists.contactEnd.empty() && lists.triggerEnter.empty() && lists.triggerExit.empty())
-            g_byEntity.erase(itL);
-    }
-
+    EndSubscription(id);
     MaybeRemoveWorldListeners();
 }
 
@@ -360,13 +324,19 @@ void PhysicsEntityEventCallbacks::UnsubscribeAllForEntity(ECS::EntityHandle enti
     ids.insert(ids.end(), it->second.triggerExit.begin(), it->second.triggerExit.end());
 
     for (auto id : ids)
-        Unsubscribe(id);
+        EndSubscription(id);
+    MaybeRemoveWorldListeners();
 }
 
 void PhysicsEntityEventCallbacks::ClearAll()
 {
-    g_byEntity.clear();
-    g_entries.clear();
+    std::vector<SubscriptionId> ids;
+    ids.reserve(g_entries.size());
+    for (const auto& [id, entry] : g_entries)
+        if (entry.live)
+            ids.push_back(id);
+    for (const SubscriptionId id : ids)
+        EndSubscription(id);
     MaybeRemoveWorldListeners();
 }
 
@@ -385,4 +355,3 @@ void PhysicsEntityEventCallbacks::NotifyWorldStateChanged()
 }
 
 } // namespace GameEngine::PhysicsECS
-

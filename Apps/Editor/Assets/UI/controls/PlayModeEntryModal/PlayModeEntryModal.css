@@ -1,0 +1,28 @@
+/* PlayModeEntryModal: the build progress bar and the failure state. The window, header, message
+   and footer come from Modal.css. */
+
+/* #767676 on the #2c2c2c modal plate is 3.1:1, so the empty track reads as a bar. */
+.play-entry-progress-track {
+	width: 100%;
+	height: 6px;
+	border-radius: 3px;
+	background-color: #767676;
+	overflow: hidden;
+}
+
+.play-entry-progress-fill {
+	height: 100%;
+	border-radius: 3px;
+	background-color: var(--ui_color_accent_blue);
+	opacity: 1;
+	transition: opacity 0.7s ease;
+}
+
+/* The low half of the pulse shown while the build gives no measure of progress. */
+.play-entry-progress-dim {
+	opacity: 0.35;
+}
+
+.play-entry-failed {
+	color: var(--ui_color_warning_text);
+}

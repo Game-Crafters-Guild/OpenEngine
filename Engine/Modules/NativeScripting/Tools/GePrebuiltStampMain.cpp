@@ -75,6 +75,7 @@ int main(int argc, char** argv)
             // Runtime modules never fold the editor surface into their digest
             // (mirrors the editor's package-module wiring).
             config.EditorImportLib.clear();
+            config.EditorBinary.clear();
             config.EditorIncludeDirs.clear();
         }
         else if (kind != "editor")
@@ -95,7 +96,18 @@ int main(int argc, char** argv)
         for (int i = 5; i < argc; ++i)
             defines.emplace_back(argv[i]);
         AppendPackageDefines(config, defines);
-        return WriteResult(argv[4], ComputeEngineAbiDigest(config));
+        const std::string digest = ComputeEngineAbiDigest(config);
+        if (digest.empty())
+        {
+            std::fprintf(stderr,
+                         "GePrebuiltStamp: no link stamp readable from the SDK binaries (engine '%s'%s%s%s) — "
+                         "cannot digest the engine ABI\n",
+                         config.EngineBinary.generic_string().c_str(), kind == "editor" ? ", editor '" : "",
+                         kind == "editor" ? config.EditorBinary.generic_string().c_str() : "",
+                         kind == "editor" ? "'" : "");
+            return 1;
+        }
+        return WriteResult(argv[4], digest);
     }
 
     std::fprintf(stderr, "usage: GePrebuiltStamp platformdir <outfile>\n"

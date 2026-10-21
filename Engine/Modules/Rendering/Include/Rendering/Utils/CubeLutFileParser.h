@@ -17,6 +17,7 @@ struct CubeLutParseResult
 {
     bool Ok = false;
     std::string Error;
+    std::string Title; // the TITLE line's text, empty when the file has none
 
     bool Has1D = false;
     bool Has3D = false;

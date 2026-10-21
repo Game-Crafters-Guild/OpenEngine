@@ -1,0 +1,23 @@
+<!-- PlayModeEntryModal (Apps/Editor/Include/PlayMode/PlayModeEntryModal.h): the dialog shown while a
+     play-mode entry waits for the script build, or after that build failed. The ids are the
+     contract with PlayModeEntryModal.cpp: the title, the message, the line naming what is building
+     or what failed, the progress fill (its width is the share of modules built, set from C++) and
+     the one button, Cancel while waiting and Close after a failure. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-480">
+    <UIElement class="modal-header">
+      <Label id="play-entry-title" class="modal-title" text="Entering Play Mode" />
+    </UIElement>
+    <UIElement class="modal-content modal-content-column">
+      <Label id="play-entry-message" class="modal-message modal-message-breakable" />
+      <Label id="play-entry-activity" class="modal-message-detail modal-message-breakable" />
+      <UIElement id="play-entry-progress-track" class="play-entry-progress-track">
+        <UIElement id="play-entry-progress-fill" class="play-entry-progress-fill" />
+      </UIElement>
+    </UIElement>
+    <UIElement class="modal-footer">
+      <UIElement class="modal-footer-spacer" />
+      <Button id="play-entry-button" class="secondary" text="Cancel" />
+    </UIElement>
+  </UIElement>
+</UIElement>

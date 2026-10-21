@@ -1,6 +1,7 @@
 #include "PlayerApplication.h"
 #include "PlayerHdrOptions.h"
 #include "PlayerLog.h"
+#include "PlayerRunOptions.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
@@ -164,47 +165,6 @@ void ApplyWindowModeOverrides(int argc, char** argv, GameEngine::GameConfig& cfg
 }
 
 #if GE_PLAYER_MOVIE_RECORDER
-bool TryParseDouble(const char* text, double& out)
-{
-    if (!text)
-        return false;
-    char* end = nullptr;
-    const double value = std::strtod(text, &end);
-    if (end == text || (end && *end != '\0'))
-        return false;
-    out = value;
-    return true;
-}
-
-bool TryParseUint64(const char* text, uint64_t& out)
-{
-    if (!text || text[0] == '-')
-        return false;
-    char* end = nullptr;
-    const auto value = std::strtoull(text, &end, 10);
-    if (end == text || (end && *end != '\0'))
-        return false;
-    out = static_cast<uint64_t>(value);
-    return true;
-}
-
-uint64_t ParseMovieFrameLimit(int argc, char** argv)
-{
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::string(argv[i]) != "--quit-after")
-            continue;
-
-        uint64_t frameLimit = 0;
-        if (i + 1 < argc && TryParseUint64(argv[i + 1], frameLimit))
-            return frameLimit;
-
-        Logger::Log::Error("Player: --quit-after requires a non-negative frame count");
-        return 0;
-    }
-    return 0;
-}
-
 std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc, char** argv)
 {
     GameEngine::Video::VideoWriterOptions options{};
@@ -233,7 +193,7 @@ std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc,
         else if (arg == "--movie-fps" || arg == "--fixed-fps")
         {
             double fps = 0.0;
-            if (i + 1 < argc && TryParseDouble(argv[++i], fps) && fps > 0.0)
+            if (i + 1 < argc && GameEngine::TryParsePlayerDouble(argv[++i], fps) && fps > 0.0)
                 options.fps = fps;
             else
                 Logger::Log::Error("Player: {} requires a positive numeric FPS", arg);
@@ -258,7 +218,7 @@ std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc,
         else if (arg == "--movie-bitrate")
         {
             uint64_t bitrateKbps = 0;
-            if (i + 1 < argc && TryParseUint64(argv[++i], bitrateKbps) && bitrateKbps > 0)
+            if (i + 1 < argc && GameEngine::TryParsePlayerUint64(argv[++i], bitrateKbps) && bitrateKbps > 0)
                 options.bitrateKbps = static_cast<uint32_t>(std::min<uint64_t>(bitrateKbps, 1000000ull));
             else
                 Logger::Log::Error("Player: --movie-bitrate requires a positive bitrate in Kbps");
@@ -266,7 +226,7 @@ std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc,
         else if (arg == "--movie-width")
         {
             uint64_t width = 0;
-            if (i + 1 < argc && TryParseUint64(argv[++i], width) && width > 0)
+            if (i + 1 < argc && GameEngine::TryParsePlayerUint64(argv[++i], width) && width > 0)
                 options.width = static_cast<uint32_t>(std::min<uint64_t>(width, 16384ull));
             else
                 Logger::Log::Error("Player: --movie-width requires a positive pixel width");
@@ -274,7 +234,7 @@ std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc,
         else if (arg == "--movie-height")
         {
             uint64_t height = 0;
-            if (i + 1 < argc && TryParseUint64(argv[++i], height) && height > 0)
+            if (i + 1 < argc && GameEngine::TryParsePlayerUint64(argv[++i], height) && height > 0)
                 options.height = static_cast<uint32_t>(std::min<uint64_t>(height, 16384ull));
             else
                 Logger::Log::Error("Player: --movie-height requires a positive pixel height");
@@ -319,7 +279,7 @@ std::optional<GameEngine::Video::VideoWriterOptions> ParseMovieOptions(int argc,
         else if (arg == "--movie-fade-duration")
         {
             double seconds = 0.0;
-            if (i + 1 < argc && TryParseDouble(argv[++i], seconds) && seconds > 0.0)
+            if (i + 1 < argc && GameEngine::TryParsePlayerDouble(argv[++i], seconds) && seconds > 0.0)
                 options.fadeDurationSeconds = std::clamp(seconds, 0.01, 60.0);
             else
                 Logger::Log::Error("Player: --movie-fade-duration requires a positive duration in seconds");
@@ -424,6 +384,16 @@ static int PlayerMainImpl(int argc, char** argv)
     gameConfig.hdrSwapchainBitDepth = hdrOptions.BitDepth;
     const bool allowRuntimeHdrToggle = hdrOptions.AllowRuntimeToggle;
 
+    // --headless: no window, render device, audio device or input device; the
+    // project's scene, scripts and systems run on a fixed step paced to real time.
+    const std::optional<GameEngine::PlayerRunOptions> runOptions =
+        GameEngine::ParsePlayerRunOptions(argc, argv, std::getenv("GE_AUDIO_OUTPUT"));
+    if (!runOptions)
+    {
+        Logger::Log::Flush();
+        return 1;
+    }
+
     // The standalone Player is a runtime, not a dev tool: it should never spawn
     // the resident CompileServerHost (a hot-reload/incremental-compile helper that
     // needs the dev .NET SDK). On machines without it, that spawn stalls startup
@@ -442,6 +412,8 @@ static int PlayerMainImpl(int argc, char** argv)
     appConfig.WindowWidth = gameConfig.windowWidth;
     appConfig.WindowHeight = gameConfig.windowHeight;
     appConfig.Fullscreen = (gameConfig.windowMode != GameEngine::WindowMode::Windowed);
+    appConfig.Headless = runOptions->Headless;
+    appConfig.AudioOutput = runOptions->AudioOutput;
     // Resolve the asset root to an absolute path. A relative value from the
     // command line resolves against the LAUNCH cwd (where the user ran the
     // command); without one, the root is the Assets/ the build staged.
@@ -470,7 +442,6 @@ static int PlayerMainImpl(int argc, char** argv)
 
 #if GE_PLAYER_MOVIE_RECORDER
     auto movieOptions = ParseMovieOptions(argc, argv);
-    const uint64_t movieFrameLimit = ParseMovieFrameLimit(argc, argv);
     if (movieOptions)
     {
         constexpr GameEngine::uint32 kMaxMovieWindowWidth = 1920;
@@ -537,6 +508,8 @@ static int PlayerMainImpl(int argc, char** argv)
             "— packaged script mode, runtime compilation disabled",
             packagedLayout.ContentRoot.string());
     }
+    // A Player built without C# scripting loads no assembly, so a missing one is not an error.
+#if GE_ENABLE_SCRIPTING
     if (!useNativeAOT && !packagedLayout.PrebuiltScriptAssembly.empty() &&
         !packagedLayout.PrebuiltScriptAssemblyExists)
     {
@@ -545,6 +518,7 @@ static int PlayerMainImpl(int argc, char** argv)
             "scripts will not load (repackage the game or fix game.config)",
             gameConfig.scriptAssemblyPath, packagedLayout.PrebuiltScriptAssembly.string());
     }
+#endif
 
     GameEngine::ScriptsConfig scriptsConfig =
         GameEngine::BuildPlayerScriptsConfig(packagedLayout, useNativeAOT);
@@ -578,7 +552,7 @@ static int PlayerMainImpl(int argc, char** argv)
     }
 #endif
 
-    // --screenshot <path>: one-shot FinalColor readback -> PNG -> exit (headless verify).
+    // --screenshot <path>: one-shot FinalColor readback -> PNG -> exit (unattended verification).
     std::string screenshotPath;
     for (int i = 1; i + 1 < argc; ++i)
     {
@@ -596,9 +570,17 @@ static int PlayerMainImpl(int argc, char** argv)
         appConfig, gameConfig,
         GameEngine::PlayerNeedsManagedSystemBridge(scriptsConfig, useNativeAOT),
 #if GE_PLAYER_MOVIE_RECORDER
-        movieOptions, movieFrameLimit,
+        movieOptions,
 #endif
-        allowRuntimeHdrToggle, screenshotPath);
+        runOptions->QuitAfterFrames, allowRuntimeHdrToggle, screenshotPath);
+    if (runOptions->Headless)
+    {
+        app.SetFixedFrameRate(runOptions->HeadlessFps);
+        Logger::Log::Info("Player: headless, fixed step {} fps{}", runOptions->HeadlessFps,
+                          runOptions->QuitAfterFrames > 0
+                              ? ", quits after " + std::to_string(runOptions->QuitAfterFrames) + " frames"
+                              : std::string());
+    }
     try
     {
         if (!app.Initialize())

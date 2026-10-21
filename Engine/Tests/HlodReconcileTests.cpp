@@ -118,6 +118,23 @@ TEST(HlodReconcile, MaterialReassignmentMarksClusterStale) {
     EXPECT_TRUE(r.Clusters[0].Stale) << "material reassignment must perturb the cluster hash";
 }
 
+TEST(HlodReconcile, MemberLayerEditMarksClusterStale) {
+    HlodBakedScene scene;
+    const float cx = 100.0f;
+    scene.Clusters.push_back(MakeCluster(4, cx));
+
+    LiveMemberIndex live;
+    for (int i = 0; i < 4; ++i)
+        live[MemberGuid(i)] = LiveMember(Handle(50u + i), scene.Clusters[0].Members[i], cx);
+    // Move member 2 to another render layer: the proxy would draw it in the wrong views -> stale.
+    live[MemberGuid(2)].Resolved.RenderLayers = Rendering::RenderLayerMask::FromLayer(4);
+
+    ReconcileResult r = ReconcileBakedScene(scene, live);
+    ASSERT_EQ(r.Clusters.size(), 1u);
+    EXPECT_EQ(r.Clusters[0].MissingMembers, 0u);
+    EXPECT_TRUE(r.Clusters[0].Stale) << "a layer edit must perturb the cluster hash";
+}
+
 TEST(HlodReconcile, MemberMoveMarksClusterStale) {
     HlodBakedScene scene;
     const float cx = 100.0f;

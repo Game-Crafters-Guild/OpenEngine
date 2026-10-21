@@ -34,6 +34,16 @@ PathPoint MakePoint(float32 x, float32 y, float32 z)
     return p;
 }
 
+// Smooths inside a path-solve window on the map, as GridMap::FindPath does, for
+// a point-sized agent.
+uint32 SmoothInWindow(const GridMap& map, std::vector<PathPoint>& points)
+{
+    map.OpenPathSolveWindow();
+    const uint32 count = PathSmoother::Smooth(map.View(), points, 0.0f);
+    map.ClosePathSolveWindow();
+    return count;
+}
+
 } // namespace
 
 class PathSmootherTest : public ::testing::Test
@@ -58,7 +68,7 @@ TEST_F(PathSmootherTest, SmoothStraightLineRemovesIntermediatePoints)
         points.push_back(MakePoint(worldX, 0.0f, worldZ));
     }
 
-    uint32 count = PathSmoother::Smooth(*m_Map, points);
+    uint32 count = SmoothInWindow(*m_Map, points);
 
     // Should reduce to just start and end
     EXPECT_EQ(count, 2u);
@@ -94,7 +104,7 @@ TEST_F(PathSmootherTest, SmoothPreservesCornerPoints)
         points.push_back(MakePoint(worldX, 0.0f, worldZ));
     }
 
-    uint32 count = PathSmoother::Smooth(*m_Map, points);
+    uint32 count = SmoothInWindow(*m_Map, points);
 
     // Should be fewer than original but keep at least 3 points (start, corner area, end)
     EXPECT_GE(count, 3u);
@@ -118,7 +128,7 @@ TEST_F(PathSmootherTest, SmoothPathWithTwoPointsUnchanged)
     points.push_back(MakePoint(0.5f, 0.0f, 0.5f));
     points.push_back(MakePoint(5.5f, 0.0f, 5.5f));
 
-    uint32 count = PathSmoother::Smooth(*m_Map, points);
+    uint32 count = SmoothInWindow(*m_Map, points);
 
     EXPECT_EQ(count, 2u);
     EXPECT_EQ(points.size(), 2u);
@@ -129,7 +139,7 @@ TEST_F(PathSmootherTest, SmoothPathWithOnePointUnchanged)
     std::vector<PathPoint> points;
     points.push_back(MakePoint(0.5f, 0.0f, 0.5f));
 
-    uint32 count = PathSmoother::Smooth(*m_Map, points);
+    uint32 count = SmoothInWindow(*m_Map, points);
 
     EXPECT_EQ(count, 1u);
     EXPECT_EQ(points.size(), 1u);
@@ -174,7 +184,7 @@ TEST_F(PathSmootherTest, SmoothAroundObstacle)
     }
 
     const auto originalSize = points.size();
-    uint32 count = PathSmoother::Smooth(*m_Map, points);
+    uint32 count = SmoothInWindow(*m_Map, points);
 
     // Should reduce the path
     EXPECT_LT(count, static_cast<uint32>(originalSize));

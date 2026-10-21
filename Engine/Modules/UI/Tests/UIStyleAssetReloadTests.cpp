@@ -429,7 +429,9 @@ TEST_P(UIStyleAssetDirectoryReloadTests, DeletionPreservesLiveStyleAndRestoratio
     // Windows, so the path resolves again only in the variant where no deletion was
     // delivered. Hot reload resumes either way, through the loaded-asset scan.
     if (!GetParam())
+    {
         EXPECT_EQ(m_Assets.GetRegistry().GetAssetGUID(path), guid);
+    }
     EXPECT_NE(style->GetStylesheetHandle(), retained);
     UIElement retainedElement;
     retainedElement.AddClass("sample");

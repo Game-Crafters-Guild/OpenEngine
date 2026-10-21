@@ -29,6 +29,8 @@
 #include "UI/UIStyle.h"
 #include "UI/StyleOverrides.h"
 #include "UI/ResolvedStyle.h"
+#include "Mathematics/Rect.h"
+#include "Mathematics/Vector2.h"
 
 
 
@@ -61,7 +63,7 @@ void UIManagerNotifyElementOwnerChanged(UIManager* owner, UIElement* el);
 void UIManagerRegisterLocalSheetElement(UIManager* owner, UIElement* el);
 void UIManagerUnregisterLocalSheetElement(UIManager* owner, UIElement* el);
 void UIManagerUnregisterTransitioningElement(UIManager* owner, UIElement* el);
-void UIManagerUnregisterElementInstanceId(UIManager* owner, UIElement* el);
+void UIManagerUnregisterElementLookups(UIManager* owner, UIElement* el);
 void UIManagerNotifyElementContentDirty(UIManager* owner, UIElement* el);
 // NOT PUBLIC API. The one piece of the attach/detach machinery that header-inline code
 // reaches (SetOwnerManager below, and Mount's portal edits), which is why it is declared
@@ -273,24 +275,7 @@ public:
 
     const std::string& GetId() const { return m_Id; }
     StringId GetIdHash() const { return m_IdHash; }
-    void SetId(const std::string& id)
-    {
-        // Recycled cells reapply stable IDs; unchanged IDs cannot affect selectors.
-        if (m_Id == id)
-            return;
-        m_Id = id;
-        m_IdHash = id.empty() ? StringId{0} : HashStringId(id);
-        // Cascade-memoization Phase 2: id is part of the structural match
-        // key (`#foo` selectors). Self + descendants need cache rebuild —
-        // descendants because `#foo .child` selectors target descendants
-        // through the parent's id.
-        InvalidateRuleCacheSubtree();
-        // Cascade-memoization Phase 6: if the stylesheet set uses sibling
-        // combinators (`#foo + .bar`, `#foo ~ .baz`), following siblings
-        // also need their caches rebuilt.
-        if (UIManagerUsesSiblingCombinators(m_OwnerManager))
-            InvalidateRuleCacheFollowingSiblings();
-    }
+    void SetId(const std::string& id);
     uint64_t GetInstanceId() const { return m_InstanceId; }
 
     // The canonical tag this element was created as, or 0 when it was constructed directly
@@ -373,6 +358,9 @@ public:
     // Tree structure
     UIElement* GetParent() const { return m_Parent; }
     const std::vector<std::unique_ptr<UIElement>>& GetChildren() const { return m_Children; }
+    // Reorders only: the vector must hold the same children afterwards. Adding or removing
+    // a child goes through AddChild / InsertChild / RemoveChild / TakeChild, which keep the
+    // parent, the owner and the attached root (UIAttachedRootAccess) in step.
     std::vector<std::unique_ptr<UIElement>>& GetMutableChildren() { return m_Children; }
 
     // DFS-parent for cascade purposes — same edge BuildYogaRecursive
@@ -381,7 +369,7 @@ public:
     // UIElement parent (m_Parent). For everything else it falls back to
     // m_Parent. Set/cleared by Mount::SetTarget; otherwise nullptr.
     UIElement* GetDfsParent() const { return m_DfsParent ? m_DfsParent : m_Parent; }
-    void SetMountHostAsDfsParent(UIElement* host) { m_DfsParent = host; }
+    void SetMountHostAsDfsParent(UIElement* host);
     // Owning UIManager (set by UIManager when attached as root, and propagated on AddChild)
     void SetOwnerManager(UIManager* owner)
     {
@@ -412,7 +400,7 @@ public:
             // in the old buffer.
             if (m_OwnerManager &&
                 (m_PrimitiveRangeCap > 0 || m_ClipSlotIdx != 0xFFFFu ||
-                 m_DrawOrderIdx != 0xFFFFFFFFu))
+                 m_TransformSlotIdx != 0 || m_DrawOrderIdx != 0xFFFFFFFFu))
             {
                 UIManagerFreeRenderSlots(m_OwnerManager, this);
             }
@@ -444,10 +432,10 @@ public:
             if (m_OwnerManager && !m_ResolvedStyle.Transitions.IsEmpty())
                 UIManagerUnregisterTransitioningElement(m_OwnerManager, this);
 
-            // instanceId map: drop the OLD manager's mapping; the new
-            // owner's NotifyElementOwnerChanged inserts into its own map.
+            // Drop the old manager's authored-id and instance-id mappings; the
+            // new owner's NotifyElementOwnerChanged inserts its own mappings.
             if (m_OwnerManager)
-                UIManagerUnregisterElementInstanceId(m_OwnerManager, this);
+                UIManagerUnregisterElementLookups(m_OwnerManager, this);
 
             // Cascade-memoization Phase 7: cross-manager owner change
             // invalidates the structural rule cache. The new manager's
@@ -478,6 +466,10 @@ public:
         for (auto& ch : m_Children)
             if (ch)
                 ch->ApplyOwnerManager(owner);
+        // Adopt an ownerless portal target before indexed lookup can reach it.
+        // An already owned target keeps Mount's existing transfer/settle ordering.
+        if (UIElement* target = GetMountTarget(); owner && target && !target->GetOwnerManager())
+            target->ApplyOwnerManager(owner);
     }
 
     // Points m_PostTarget, and m_PostLink's route when a handle exists, at `owner`'s dispatcher,
@@ -518,7 +510,13 @@ public:
     // intentional there and the Mount owns the re-attach timing.
     virtual std::unique_ptr<UIElement> TakeChild(UIElement* child);
 
-    UIElement* FindById(std::string_view id);
+    /// Search this subtree, including Mount targets, for an id given as its StringId
+    /// ("panel-root"_sid, or HashStringId where the id is built at runtime). Manager-owned
+    /// trees use the manager's index; trees without a manager use depth-first traversal.
+    /// Duplicates select the first match in depth-first order: each element precedes its
+    /// children, followed by its Mount target. An empty id is never registered;
+    /// FindById(0) returns nullptr.
+    UIElement* FindById(StringId id);
 
     // Tooltip text shown on hover. Empty string means no tooltip.
     void SetTooltip(std::string text) { m_TooltipText = std::move(text); }
@@ -615,6 +613,11 @@ public:
     // dispatched-state bit disagrees with what its subscribers were actually told is how
     // this mechanism silently drops events.
     friend struct UIAttachStateAccess;
+    // The authored-id index's window onto the attached-root members below
+    // (m_AttachedRoot, m_IsManagerRoot): the index reads them and UIManager::AdoptRoot
+    // marks its root through it. Off the public API because a value that disagrees with
+    // the tree makes a root lookup return the wrong element.
+    friend struct UIAttachedRootAccess;
     // Grants UITests the handler-vector census DispatchToHandlers' compaction is defined
     // in terms of. The public API reports only whether a handler fires, so a dead
     // entry that is never swept is invisible from outside; this friend keeps that
@@ -1160,6 +1163,19 @@ public:
 	    float GetLayoutWidth() const { return m_LastW; }
 	    float GetLayoutHeight() const { return m_LastH; }
 
+	    // The layout rect in window space, in CSS logical px: carried through this
+	    // element's own CSS transform and every transformed ancestor's, as the
+	    // axis-aligned bounds of the drawn box (a browser's getBoundingClientRect).
+	    // The layout rect itself when no transform applies. A popup, tooltip or
+	    // menu that opens at the window level anchors to this. An overlay
+	    // (GetOverlayLayer) escapes its ancestors' clips but keeps their transforms.
+	    Mathematics::Rect GetWindowRect() const;
+	    // A window point (CSS logical px) in this element's layout space: through
+	    // the inverse of every transform GetWindowRect applies. False, with `out`
+	    // untouched, when one of them is singular: scale(0) draws nothing, so no
+	    // window point lies on the element.
+	    bool WindowToLayout(const Mathematics::Vector2& window, Mathematics::Vector2& out) const;
+
 	    // Opt-in: quantise this element's committed rect onto whole DEVICE pixels.
 	    // Yoga's grid is 1/64 of a device pixel, which is what lets a length Chrome
 	    // reports as 20.8px survive the solve — but an element that hosts a render
@@ -1627,6 +1643,23 @@ protected:
     // is what makes a detach-and-reattach inside one frame dispatch nothing.
     bool m_AttachStateDispatched = false;
 
+  private:
+    // Set while a UIManager holds this element as its root (UIManager::AdoptRoot).
+    bool m_IsManagerRoot = false;
+    // The manager root this element's DFS-parent chain (GetDfsParent) ends at, or nullptr
+    // when the chain ends at an element no UIManager holds as its root. Every element of a
+    // DFS subtree carries the same value, so a change at one DFS edge rewrites the subtree
+    // below that edge and nothing else. Rewritten at every DFS edge write (AddChild,
+    // InsertChild, RemoveChild, TakeChild, SetMountHostAsDfsParent) and at AdoptRoot, by
+    // NoteDfsParentChanged; read by UI::ElementIdIndex to answer a root lookup without
+    // walking the parent chain.
+    const UIElement* m_AttachedRoot = nullptr;
+    // Recomputes m_AttachedRoot from the DFS parent (or from m_IsManagerRoot when there is
+    // none) and, when it changed, writes the new value through the DFS subtree.
+    void NoteDfsParentChanged();
+    void AssignAttachedRootInSubtree(const UIElement* root);
+
+  protected:
     ITextMeasurable* m_TextMeasurable = nullptr;
 
     std::string m_Id;
@@ -2104,6 +2137,13 @@ protected:
     //                         from baked primitives or a parent walk.
     // m_DrawOrderIdx        : start in m_DrawOrder for this element's
     //                         slice (size mirrors m_PrimitiveRangeCount).
+    // m_TransformSlotIdx    : index in m_PersistentTransforms while the
+    //                         element has a CSS transform (0 = none; slot 0
+    //                         is the shared identity, never owned).
+    // m_AmbientTransformIdx : the transform slot in effect at this element's
+    //                         last full-DFS visit (its nearest transformed
+    //                         ancestor's), recorded for the same reason as
+    //                         m_AmbientClipIdx.
     //
     // Sentinels match SlotAllocator::kInvalidSlot and UI::kNoClip; not
     // typed as those constants here to keep the headers light.
@@ -2113,6 +2153,8 @@ protected:
     uint16_t m_ClipSlotIdx         = 0xFFFFu;
     uint16_t m_AmbientClipIdx      = 0xFFFFu;
     uint32_t m_DrawOrderIdx        = 0xFFFFFFFFu;
+    uint32_t m_TransformSlotIdx    = 0;
+    uint32_t m_AmbientTransformIdx = 0;
 
     // Ancestor-chain opacity product at the last primitive emit, EXCLUDING
     // this element's own opacity. The drain seeds emission from this instead

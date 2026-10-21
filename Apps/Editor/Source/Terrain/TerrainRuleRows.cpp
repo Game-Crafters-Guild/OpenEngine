@@ -953,7 +953,8 @@ void AddTerrainSurfaceRuleRows(const InspectorContext& ctx, const RulesEffect& e
                         EditRules(target, "Add Surface Rule", [](RulesEffect& u) {
                             if (u.RuleCount >= kMaxTerrainSurfaceRules)
                                 return;
-                            u.Rules[u.RuleCount] = TerrainSurfaceRule{};
+                            const TerrainSurfaceRule rule{};
+                            u.Rules[u.RuleCount] = rule;
                             ++u.RuleCount;
                         });
                         RequestRebuild(target);

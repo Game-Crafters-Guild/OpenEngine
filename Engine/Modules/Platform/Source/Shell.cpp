@@ -245,6 +245,26 @@ DWORD WINAPI PromoteDialogToForegroundThread(LPVOID lpParam)
 #endif
 
 #if !defined(_WIN32)
+// Sets the spawned child's working directory without touching the parent's. macOS has the
+// standard posix_spawn_file_actions_addchdir only from macOS 26, where the _np spelling is
+// deprecated; an older macOS has only the _np spelling.
+void AddSpawnWorkingDirectory(posix_spawn_file_actions_t& actions, const char* directory)
+{
+#if defined(__APPLE__)
+    if (__builtin_available(macOS 26.0, *))
+    {
+        posix_spawn_file_actions_addchdir(&actions, directory);
+        return;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    posix_spawn_file_actions_addchdir_np(&actions, directory);
+#pragma clang diagnostic pop
+#else
+    posix_spawn_file_actions_addchdir_np(&actions, directory);
+#endif
+}
+
 void ReapDetachedProcess(pid_t pid)
 {
     if (pid <= 0)
@@ -702,7 +722,7 @@ bool LaunchDetached(const std::filesystem::path& executable,
     if (!workingDirectory.empty())
     {
         cwdUtf8 = workingDirectory.string();
-        posix_spawn_file_actions_addchdir_np(&actions, cwdUtf8.c_str());
+        AddSpawnWorkingDirectory(actions, cwdUtf8.c_str());
     }
 
     pid_t pid = 0;
@@ -757,7 +777,7 @@ int LaunchDetachedGetPid(const std::filesystem::path& executable,
     {
         cwdUtf8 = workingDirectory.string();
         // Set the child's working directory without touching the parent's CWD.
-        posix_spawn_file_actions_addchdir_np(&actions, cwdUtf8.c_str());
+        AddSpawnWorkingDirectory(actions, cwdUtf8.c_str());
     }
 
 #if defined(POSIX_SPAWN_CLOEXEC_DEFAULT)

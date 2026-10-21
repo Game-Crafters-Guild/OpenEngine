@@ -15,7 +15,7 @@ namespace GameEngine { namespace Components { struct Transform; struct WorldTran
 namespace GameEngine { namespace Engine::Renderer {
 
 // Computes world-space transforms (WorldTransform) from local Transform + Parent
-// hierarchy. See docs/TransformHierarchySystem.md for the component contract.
+// hierarchy. See docs/scripting/transform-hierarchy.mdx for the component contract.
 //
 // Every pass opts back into disabled rows. A disabled entity keeps a world
 // transform — the editor draws its gizmo and the inspector shows its position,
@@ -52,6 +52,9 @@ public:
     // tests and GE_HIER_PROFILE validation.
     size_t GetTopologyBuildCount() const { return m_TopologyBuildCount; }
     size_t GetLastPropagatedNodeCount() const { return m_LastPropagatedNodeCount; }
+    // Entities the last flat pass visited (the chunks its Changed<Transform>
+    // gate let through).
+    size_t GetLastFlatResolvedCount() const { return m_LastFlatCount; }
 
 private:
     struct Node {
@@ -73,20 +76,27 @@ private:
     // exists), or only those without a Parent component.
     enum class FlatScope { AllEntities, Unparented };
 
-    // Phase 0 (both paths): every entity with Transform gets a WorldTransform.
-    void EnsureWorldTransforms(ECS::World& world);
     // Rebuild the cached entity index + CSR graph. Called only after a
     // structural change or Parent edit; Update then resolves every node.
     void RebuildTopology(ECS::World& world);
     // Detect exact Transform edits of Parent-holders inside Changed<Transform>
     // chunks, add the hierarchy roots the flat pass moved, and propagate the
     // topmost of them.
-    void ResolveChangedSubtrees(ECS::World& world, double ensureMs);
+    void ResolveChangedSubtrees(ECS::World& world);
     // Flat pass: WorldTransform = Transform for the scope's changed chunks,
     // fanned out over the job system (serial when the world has no pool).
     // Records the cached hierarchy roots whose world matrix it changed.
     void ResolveFlatParallel(ECS::World& world, FlatScope scope);
     bool HasParentColumnChange(ECS::World& world, uint64 entryVersion);
+    // After a structural change that edited no Parent column: true when the
+    // cached topology still describes the world, so no rebuild is owed. Every
+    // node is alive, with its Transform and WorldTransform at the addresses it
+    // captured: an archetype move (a component added or removed, a Parent
+    // removed included) or a swap-remove in the node's chunk moves them. It
+    // rests on chunk storage staying put otherwise: a chunk that holds a live
+    // entity is never freed or reallocated (growth adds chunks). A new
+    // Parent-holder is not a node; the Parent column gate reports it. O(nodes).
+    bool IsTopologyCacheCurrent(ECS::World& world) const;
     size_t FindNodeIndex(ECS::EntityHandle entity) const;
     void AddNode(ECS::EntityHandle entity, const Components::Transform& local,
                  Components::WorldTransform& worldTransform, ECS::EntityHandle parent);
@@ -134,13 +144,6 @@ private:
     // instance ever serves two worlds.
     uint64 m_GateWorldId = 0;
 
-    // Ensure-pass gate: entities needing WorldTransform can only appear via
-    // a structural change (Transform add = archetype move), so the full
-    // ensure query is skipped while structuralChangeVersion is unchanged —
-    // this was the remaining 0.28 ms floor in the Step-0 A/B.
-    std::size_t m_EnsureStructuralVersion = 0;
-    bool m_EnsureGateValid = false;
-
     // Flat-path gate: Changed<Transform> chunk skip. Sound only while every
     // matched entity is a root (design C10/M1), so the gate resets whenever
     // the previous Update did not run the gated flat path — in particular on
@@ -161,7 +164,6 @@ private:
 
     // Scratch buffers retained between frames to avoid per-frame heap allocations.
     // .clear() preserves capacity; after the first frame these never allocate.
-    std::vector<ECS::EntityHandle> m_NeedWorldTransform;
     std::vector<Node> m_Nodes;
     // Direct entity-index -> node lookup. Entity indices are bounded to 20
     // bits, so even a million-entity scene needs only ~4 MiB at uint32/node.

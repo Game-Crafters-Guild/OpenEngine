@@ -306,20 +306,30 @@ TEST_F(TerrainMaterialLibraryEditorScene, ExtractionCarriesTheLibrarysAuthoredGr
         GameEngine::Engine::Renderer::TransformHierarchySystem transforms;
         TerrainECS::TerrainExtractionSystem extraction(&rs);
 
-        // Pump until the library cache resolves (the asset load it requests is asynchronous),
-        // then a few settle frames so the table was rebuilt FROM the resolved library. Bounded:
-        // a chain that never resolves falls through with resolved=false and the record
-        // assertions below say which half died.
+        // Pump until the library cache resolves (the asset load it requests is asynchronous) and
+        // the layer textures it binds have uploaded (each loads and cooks on a worker, and the
+        // render thread's drain uploads it), then a few settle frames so the table was rebuilt
+        // FROM the resolved library. Bounded: a chain that never resolves falls through with
+        // resolved=false and the record assertions below say which half died.
+        const auto layersUploaded = [&rs]()
+        {
+            for (const FixtureAsset& asset : kFixtureAssets)
+                if (asset.Type == GameEngine::AssetType::Texture &&
+                    !rs.Textures().GetOrUpload(GUID(asset.Guid)).IsValid())
+                    return false;
+            return true;
+        };
         bool resolved = false;
         int settleFrames = 0;
-        for (int frame = 0; frame < 600; ++frame)
+        for (int frame = 0; frame < 6000; ++frame)
         {
             engine.GetAssetManager().Update();
             transforms.Update(world, 0.016f);
             extraction.Update(world, 0.016f);
+            rs.Textures().FlushPendingUploads();
             if (!resolved && feature.MaterialLibraries().Get(GUID(kIslandLibraryGuid), {}) != nullptr)
                 resolved = true;
-            if (resolved && ++settleFrames >= 5)
+            if (resolved && layersUploaded() && ++settleFrames >= 5)
                 break;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }

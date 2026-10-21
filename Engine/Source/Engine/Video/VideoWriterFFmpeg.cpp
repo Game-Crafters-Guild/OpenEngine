@@ -18,6 +18,7 @@ extern "C"
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -832,8 +833,8 @@ bool VideoWriter::Open(const VideoWriterOptions& options)
                                                 options.path.c_str());
     if (result < 0 || !m_Impl->formatCtx)
     {
-        m_Impl->lastError = std::string("Failed to create the ") + containerName + " container (" +
-                            AvErrorToString(result) + ")";
+        m_Impl->lastError = std::format("Failed to create the {} container ({})", containerName,
+                                       AvErrorToString(result));
         return fail();
     }
 
@@ -868,8 +869,8 @@ bool VideoWriter::Open(const VideoWriterOptions& options)
     av_dict_free(&muxerOptions);
     if (result < 0)
     {
-        m_Impl->lastError = std::string("Failed to write the ") + containerName + " header (" +
-                            AvErrorToString(result) + ")";
+        m_Impl->lastError = std::format("Failed to write the {} header ({})", containerName,
+                                       AvErrorToString(result));
         return fail();
     }
     m_Impl->headerWritten = true;

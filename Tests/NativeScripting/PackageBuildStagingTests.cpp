@@ -17,6 +17,7 @@
 #include "NativeScripting/NativeScriptManager.h"
 #include "NativeScripting/PrebuiltModuleBinaries.h"
 #include "NativeScripting/ToolchainFingerprint.h"
+#include "StampedBinary.h"
 
 #include <gtest/gtest.h>
 
@@ -391,7 +392,8 @@ TEST(PackageBuildStaging, ModuleAbiDigestIncludesPackageDefines)
 
     ns::NativeBuildConfig baseCfg;
     baseCfg.Config = "Debug";
-    baseCfg.EngineImportLib = fx.Root / "Engine.lib"; // absent file hashes deterministically
+    GameEngine::NativeScripting::Testing::WriteStampedBinary(fx.Root / "Engine.bin", 0);
+    baseCfg.EngineBinary = fx.Root / "Engine.bin";
     const std::string manifestOnlyDigest = ns::ComputeEngineAbiDigest(baseCfg);
 
     PackageCodeModule module = MakeModule(package, PackageModuleRecord::ModuleLang::Cpp, "OceanPack");

@@ -175,7 +175,8 @@ protected:
     }
     struct Blade
     {
-        float32 X, Z, Y, Height, Width, Yaw, Random, Weight;
+        float32 X, Z, Y, Height, Width, Yaw;
+        uint32 RandomAndCoverage, Shape; // grass_clump.glsl: unorm16 random, unorm8 field coverage
         uint32 Terrain;
         float32 NormalX, NormalZ;
         uint32 Flags;
@@ -234,7 +235,7 @@ protected:
         terrain.GrassTextureSize = 3;
         terrain.GrassMaskThreshold = .5f;
         terrain.GrassClumpSize = 4;
-        terrain.GrassClumpGather = .5f;
+        terrain.GrassClumpTaper = .5f;
         terrain.GrassClumpHeightVariance = .5f;
         terrain.Flags = Terrain::kTerrainFlagHasHeightmap
                       | (controls ? Terrain::kTerrainFlagHasGrassControls : 0u);
@@ -445,7 +446,7 @@ TEST_F(TerrainGrassRegionGpu, ProductionPlacementKeepsNeutralSitesAndScalesCards
             EXPECT_EQ(blade.X,before.X); EXPECT_EQ(blade.Z,before.Z);
             EXPECT_EQ(blade.Y,before.Y);
             EXPECT_NEAR(blade.Y, 7.0f + 4.0f*(64.0f/255.0f), 1e-6f);
-            EXPECT_EQ(blade.Yaw,before.Yaw); EXPECT_EQ(blade.Random,before.Random);
+            EXPECT_EQ(blade.Yaw,before.Yaw); EXPECT_EQ(blade.RandomAndCoverage & 0xFFFFu,before.RandomAndCoverage & 0xFFFFu);
             EXPECT_NEAR(blade.Height,before.Height*(128.0f/255.0f),1e-6f);
             // A card is one square quad carrying grass artwork, so a region scales the whole card
             // and the art keeps its proportions. A ribbon blade IS the geometry: a shorter blade is
@@ -476,7 +477,7 @@ TEST_F(TerrainGrassRegionGpu, ProductionPlacementKeepsNeutralSitesAndScalesCards
                 const auto& before = atlasLegacy.Blades[i];
                 EXPECT_EQ(blade.X,before.X); EXPECT_EQ(blade.Z,before.Z);
                 EXPECT_EQ(blade.Y,before.Y);
-                EXPECT_EQ(blade.Yaw,before.Yaw); EXPECT_EQ(blade.Random,before.Random);
+                EXPECT_EQ(blade.Yaw,before.Yaw); EXPECT_EQ(blade.RandomAndCoverage & 0xFFFFu,before.RandomAndCoverage & 0xFFFFu);
                 EXPECT_NEAR(blade.Height,before.Height*(128.0f/255.0f),1e-6f);
                 if (cards) EXPECT_NEAR(blade.Width,before.Width*(128.0f/255.0f),1e-6f);
                 else       EXPECT_EQ(blade.Width,before.Width);

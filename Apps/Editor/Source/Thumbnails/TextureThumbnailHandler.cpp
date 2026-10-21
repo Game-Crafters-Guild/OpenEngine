@@ -1,18 +1,16 @@
 #include "Thumbnails/TextureThumbnailHandler.h"
 
 #include "AssetCore/SharedFileRead.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "FileSystem/FileSystem.h"
+#include "Image/Decode.h"
+#include "Image/Encode.h"
+#include "Image/ImageHeader.h"
+#include "Image/Resample.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 #include "Types/StringUtils.h"
 
-#include <stb_image.h>
-#include <stb_image_resize2.h>
-#include <stb_image_write.h>
-
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <string_view>
@@ -387,13 +385,9 @@ TextureThumbnailHandler::Outcome TextureThumbnailHandler::GenerateThumbnail(
     }
 
     // Header first: dimensions decide whether a full decode is worth its
-    // allocation, and both of the answers below cost nothing beyond this read.
-    int infoW = 0;
-    int infoH = 0;
-    int infoChannels = 0;
-    if (!stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()),
-                               &infoW, &infoH, &infoChannels) ||
-        infoW <= 0 || infoH <= 0)
+    // allocation, and both of the answers below cost one header read.
+    const Image::ImageHeader header = Image::ReadImageHeader(sourcePath);
+    if (!header.Valid)
     {
         Logger::Log::Debug("TextureThumbnailHandler: not a decodable image '{}'",
                            sourcePath.string());
@@ -401,13 +395,12 @@ TextureThumbnailHandler::Outcome TextureThumbnailHandler::GenerateThumbnail(
         return Outcome::Declined;
     }
 
-    const uint64_t sourcePixels =
-        static_cast<uint64_t>(infoW) * static_cast<uint64_t>(infoH);
+    const uint64_t sourcePixels = static_cast<uint64_t>(header.Width) * header.Height;
     if (sourcePixels > kMaxSourcePixels)
     {
         Logger::Log::Debug(
             "TextureThumbnailHandler: '{}' is {}x{}, past the {} pixel decode budget",
-            sourcePath.string(), infoW, infoH, kMaxSourcePixels);
+            sourcePath.string(), header.Width, header.Height, kMaxSourcePixels);
         *outDeclineReason = DeclineReason::TooLarge;
         return Outcome::Declined;
     }
@@ -415,15 +408,15 @@ TextureThumbnailHandler::Outcome TextureThumbnailHandler::GenerateThumbnail(
     // Already thumbnail-sized: re-encoding it at its own resolution would spend
     // a decode and a second copy on disk to produce a file no smaller than the
     // source. The service's fallback serves the source itself, for free.
-    if (std::max(infoW, infoH) <= longEdge)
+    if (static_cast<int64_t>(std::max(header.Width, header.Height)) <= longEdge)
     {
         *outDeclineReason = DeclineReason::SmallSource;
         return Outcome::Declined;
     }
 
     g_DecodeAttempts.fetch_add(1, std::memory_order_relaxed);
-    const DecodedImage decoded = DecodeImageToRGBA(bytes.data(), bytes.size());
-    if (!decoded.valid || decoded.width == 0 || decoded.height == 0)
+    const Image::Image8 decoded = Image::Decode8(bytes, sourcePath.string(), Image::DecodeChannels::Rgba);
+    if (!decoded.Valid || decoded.Width == 0 || decoded.Height == 0)
     {
         Logger::Log::Debug("TextureThumbnailHandler: cannot decode '{}'", sourcePath.string());
         *outDeclineReason = DeclineReason::Undecodable;
@@ -435,20 +428,12 @@ TextureThumbnailHandler::Outcome TextureThumbnailHandler::GenerateThumbnail(
     bytes.clear();
     bytes.shrink_to_fit();
 
-    const int srcW = static_cast<int>(decoded.width);
-    const int srcH = static_cast<int>(decoded.height);
-
-    const double scale = static_cast<double>(longEdge) / static_cast<double>(std::max(srcW, srcH));
-    const int dstW = std::max(1, static_cast<int>(std::lround(srcW * scale)));
-    const int dstH = std::max(1, static_cast<int>(std::lround(srcH * scale)));
-
-    std::vector<uint8_t> resized(static_cast<size_t>(dstW) * static_cast<size_t>(dstH) * 4);
-    // sRGB-aware filtering: browsing is dominated by colour textures, and
-    // averaging those in gamma space darkens every thumbnail. Alpha rides
-    // STBIR_RGBA, which keeps coverage off the transfer curve.
-    if (stbir_resize_uint8_srgb(decoded.pixels.data(), srcW, srcH, 0,
-                                resized.data(), dstW, dstH, 0,
-                                STBIR_RGBA) == nullptr)
+    // sRGB-aware filtering: browsing is dominated by color textures, and
+    // averaging those in gamma space darkens every thumbnail. Alpha weights the
+    // color taps and stays off the transfer curve.
+    const Image::Image8 resized = Image::ResampleToLongEdge(decoded.Pixels, decoded.Width, decoded.Height,
+                                                            static_cast<uint32_t>(longEdge));
+    if (!resized.Valid)
     {
         Logger::Log::Warning("TextureThumbnailHandler: downscale failed for '{}'",
                              sourcePath.string());
@@ -462,7 +447,7 @@ TextureThumbnailHandler::Outcome TextureThumbnailHandler::GenerateThumbnail(
     // platform's publication semantics (atomic replacement where supported).
     const std::filesystem::path tempPath = FileSystem::MakeTemporarySiblingPath(cachePath);
 
-    if (!stbi_write_png(tempPath.string().c_str(), dstW, dstH, 4, resized.data(), dstW * 4))
+    if (!Image::WritePngFile(tempPath, resized.Pixels, resized.Width, resized.Height))
     {
         Logger::Log::Warning("TextureThumbnailHandler: failed to write '{}'", tempPath.string());
         std::filesystem::remove(tempPath, ec);

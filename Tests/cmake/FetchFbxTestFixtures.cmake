@@ -1,9 +1,10 @@
 # Idempotent fetch helper invoked by the FetchFbxTestFixtures target
 # (Tests/CMakeLists.txt). Downloads the store-licensed FBX test-file archive
-# and extracts it into Assets/Models/FBXTest/ — the layout the
-# humanoid-retarget suites resolve via the StageTestAssets sweep:
+# and extracts it into Engine/Assets/Models/FBXTest/, which the
+# StageTestAssets sweep mirrors to the build root's Assets/Models/FBXTest/,
+# where the humanoid-retarget suites resolve it:
 #
-#   Assets/Models/FBXTest/
+#   Engine/Assets/Models/FBXTest/
 #     BusinessMale.fbx            target humanoid (store humanoid-standard rig)
 #     A_Walk_F_Masc.fbx           source walk clip
 #     A_Idle_Standing_Masc.fbx    source idle clip
@@ -15,10 +16,10 @@
 # FetchBlendSamples.cmake) there is NO hosted default: they stay local per
 # team decision (2026-07-19). License holders point GE_FBXTEST_URL at their
 # own copy of the archive (any file:// or self-controlled URL), or simply
-# place the five .fbx files in Assets/Models/FBXTest/. Never re-host publicly.
+# place the five .fbx files in Engine/Assets/Models/FBXTest/. Never re-host publicly.
 #
 # Expects via -D:
-#   FBXTEST_ROOT    source-tree fixture dir (Assets/Models/FBXTest)
+#   FBXTEST_ROOT    source-tree fixture dir (Engine/Assets/Models/FBXTest)
 #   STAGED_ROOT     build-root mirror the tests actually read (StagedTestPaths)
 #   DOWNLOAD_DIR    archive cache directory
 # Required for any download (no hosted default exists):
@@ -110,7 +111,7 @@ else()
     message(STATUS "FBXTest fixtures: extracted into ${FBXTEST_ROOT}.")
 endif()
 
-# Mirror into the build root the suites actually read. The Assets/ sweep in
+# Mirror into the build root the suites actually read. The Engine/Assets/ sweep in
 # StageTestAssets refreshes this on later builds; the direct copy makes the
 # fixtures live immediately, no rebuild of StageTestAssets required.
 file(COPY "${FBXTEST_ROOT}/" DESTINATION "${STAGED_ROOT}")

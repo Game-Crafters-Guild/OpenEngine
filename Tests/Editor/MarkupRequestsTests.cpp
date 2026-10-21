@@ -15,10 +15,12 @@
 #include "Editor/Entities/EntityDuplicate.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
+#include "Editor/Registries/EditorMarkupRequests.h"
 #include "EditorChangeNotifications.h"
 #include "MarkupECS/MarkupRegionArea.h"
 #include "MarkupECS/MarkupService.h"
 #include "Markups/MarkupEditorBridge.h"
+#include "Markups/MarkupEditorSurfaces.h"
 #include "SceneView/SceneViewFraming.h"
 #include "SceneViewController.h"
 #include "Scripting/ScriptsConfig.h"
@@ -1008,4 +1010,98 @@ TEST_F(MarkupRequestsTest, AnOutlineCommitStampsTheRegionAndAKnotSelectionDoesNo
     Notifications.NotifyComponentChange<Components::SplineComponent>(
         &World, entity, Editor::EditorChangeNotifications::ChangeKind::Commit);
     EXPECT_GT(MarkupOf(forest).Revision, created);
+}
+
+// The context the markup_* methods and the package requests act on is the installed bridge's:
+// the primary world, the bridge's undo history and notifications, its play state and the
+// default field of view while no Scene View has drawn.
+TEST_F(MarkupRequestsTest, TheCurrentContextIsTheInstalledBridges)
+{
+    (void)EngineCore::GetInstance().EnsurePrimaryWorld();
+    EXPECT_EQ(Editor::CurrentMarkupRequestContext().Bridge, nullptr);
+    m_Bridge->SetUndoService(&Undo);
+    m_Bridge->SetPlayModeProvider([]() { return true; });
+    MarkupEditorBridge::Install(m_Bridge.get());
+    const Editor::MarkupRequestContext context = Editor::CurrentMarkupRequestContext();
+    MarkupEditorBridge::Install(nullptr);
+
+    EXPECT_EQ(context.World, EngineCore::GetInstance().GetPrimaryWorld());
+    EXPECT_NE(context.World, nullptr);
+    EXPECT_EQ(context.Bridge, m_Bridge.get());
+    EXPECT_EQ(context.Undo, &Undo);
+    EXPECT_EQ(context.Notifications, &Notifications);
+    EXPECT_TRUE(context.PlayMode);
+    EXPECT_EQ(context.FrameTanHalfFov, Editor::kMarkupDefaultTanHalfFov);
+}
+
+// A package module's requests answer as the methods do on the current context: the same
+// mark-up as markup_get, a comment in the author it names, a refusal's reason as text. Frame
+// refuses as the others do (no such mark-up, play mode) and, apart, when no Scene View is open.
+TEST_F(MarkupRequestsTest, ThePackageRequestsAnswerAsTheMethodsDo)
+{
+    ECS::World* primary = EngineCore::GetInstance().EnsurePrimaryWorld();
+    ASSERT_NE(primary, nullptr);
+    m_Bridge->SetUndoService(&Undo);
+    MarkupEditorBridge::Install(m_Bridge.get());
+    Editor::InstallMarkupRequests();
+    const Editor::MarkupRequestContext context = Editor::CurrentMarkupRequestContext();
+    const json created = Editor::CreateMarkup(
+        context, {{"title", "Harbor"}, {"center", {10.0f, 0.0f, 20.0f}}, {"halfExtents", {5.0f, 2.0f, 5.0f}}});
+    ASSERT_FALSE(IsRefusal(created)) << created.dump();
+    const uint32 id = created["entityId"];
+    const Editor::EditorMarkupRequests& requests = Editor::EditorMarkupRequests::Get();
+
+    const ECS::EntityHandle harbor(id);
+    const Editor::MarkupRequestAnswer query = requests.Query(harbor);
+    EXPECT_FALSE(query.IsRefusal()) << query.Refusal;
+    EXPECT_EQ(query.Result, Editor::GetMarkup(context, {{"entityId", id}}));
+    EXPECT_EQ(requests.List(json::object()).Result, Editor::ListMarkups(context, json::object()));
+    // A row carries the color the mark-up draws in, for the @ list's swatch.
+    const std::string color = Editor::ListMarkups(context, json::object())["markups"][0].value("color", "");
+    EXPECT_EQ(color.size(), 7u);
+    EXPECT_EQ(color[0], '#');
+    const Editor::MarkupRequestAnswer comment = requests.Comment(harbor, "Move the pier", MarkupAuthor::User);
+    ASSERT_FALSE(comment.IsRefusal()) << comment.Refusal;
+    EXPECT_EQ(comment.Result["entry"]["author"], "User");
+    EXPECT_EQ(MarkupService::Get().FindNotes(*primary, ECS::EntityHandle(id))->Entries.back().Text, "Move the pier");
+    const std::string unknown = "No mark-up has that entityId; call markup_list for the current ones";
+    EXPECT_EQ(requests.Query(ECS::EntityHandle(id + 1000)).Refusal, unknown);
+    EXPECT_EQ(requests.Frame(ECS::EntityHandle(id + 1000)).Refusal, unknown);
+    // No Scene View in this host.
+    EXPECT_EQ(requests.Frame(harbor).Refusal, "Open a Scene View to frame the mark-up");
+    m_Bridge->SetPlayModeProvider([]() { return true; });
+    const std::string playing = "Exit play mode first: mark-ups are read and edited in the edit world";
+    EXPECT_EQ(requests.Query(harbor).Refusal, playing);
+    EXPECT_EQ(requests.Frame(harbor).Refusal, playing);
+
+    primary->DestroyEntityImmediate(ECS::EntityHandle(id));
+    Editor::EditorMarkupRequests::Get().Install({});
+    MarkupEditorBridge::Install(nullptr);
+}
+
+// One framing path: a region frames the sphere around its outline and its height, not its origin;
+// the pose keeps the view's heading and looks down at least 30 degrees, from far enough that the
+// sphere fits the field of view.
+TEST_F(MarkupRequestsTest, ARegionFramesItsOutlineSeenFromAbove)
+{
+    const uint32 forest = Editor::CreateMarkup(
+        Context, {{"title", "Forest"}, {"kind", "region"}, {"outline", Square(0.0f, 0.0f, 200.0f)}})["entityId"];
+    const std::optional<Editor::MarkupWorldVolume> volume = Editor::ReadMarkupFrameVolume(Context, ECS::EntityHandle(forest));
+    ASSERT_TRUE(volume.has_value());
+    // The outline's farthest corner from the volume's center lies inside its sphere.
+    const float cornerReach = std::hypot(std::max(volume->Center.x, 200.0f - volume->Center.x),
+                                         std::max(volume->Center.z, 200.0f - volume->Center.z));
+    EXPECT_GE(volume->BoundingRadius, cornerReach);
+
+    SceneViewCameraPose level{};
+    level.YawDeg = 90.0f;
+    level.PitchDeg = 0.0f;
+    const SceneViewCameraPose framed = Editor::MarkupFramePose(*volume, level, Editor::kMarkupDefaultTanHalfFov);
+    EXPECT_NEAR(framed.YawDeg, 90.0f, 1e-3f);
+    EXPECT_NEAR(framed.PitchDeg, -Editor::kMarkupFrameMinDownPitchDeg, 1e-3f);
+    EXPECT_NEAR(framed.Distance, Editor::MarkupFrameDistance(*volume, Editor::kMarkupDefaultTanHalfFov), 1e-3f);
+    SceneViewCameraPose steep = level;
+    steep.PitchDeg = -60.0f;
+    EXPECT_NEAR(Editor::MarkupFramePose(*volume, steep, Editor::kMarkupDefaultTanHalfFov).PitchDeg, -60.0f, 1e-3f)
+        << "a view already looking down more keeps its pitch";
 }

@@ -25,6 +25,7 @@ CMakeLists.txt text eol=lf
 *.yaml text eol=lf
 *.xml text eol=lf
 *.md  text eol=lf
+*.mdx text eol=lf
 *.txt text eol=lf
 *.css text eol=lf
 *.html text eol=lf
@@ -72,3 +73,6 @@ CMakeLists.txt text eol=lf
 *.a   binary
 *.spv binary
 *.cso binary
+
+# Preserve the vendored helper's LF wrapper and configure.ac bytes on Windows.
+cmake/ports/vcpkg-make/** -text

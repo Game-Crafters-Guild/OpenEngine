@@ -199,7 +199,9 @@ GE_API uint32_t GE_CDECL GE_ScriptingGetAbiVersion(void);
 // library its one engine instance binds. A changed layout is breaking, so the major moves.
 // 3.1 adds GE_Model_GetExtras (ModelABI.h) — additive, minor bump.
 // 3.2 adds GE_Animator_PollEventsOnEntity and GE_AnimationEventRecord (AnimatorABI.h) — additive, minor bump.
-static const uint32_t GE_ABI_VERSION_CURRENT = GE_ABI_VERSION_ENCODE(3u, 2u);
+// 4.0 removes the GE_Input_* exports and GE_InputActionState: scripts reach Input through its generated
+// table (GE_Input_GetInterface). It adds GE_GetLastScriptError.
+static const uint32_t GE_ABI_VERSION_CURRENT = GE_ABI_VERSION_ENCODE(4u, 0u);
 
 // Forward declarations for function pointer types used in the interface
 typedef GE_Result (GE_CDECL *GE_Log_Fn)(GE_LogLevel level, const char* msg, uint32_t msgLen);
@@ -300,55 +302,14 @@ GE_API GE_Result GE_CDECL GE_SetHostLoggerState(void* loggerState);
 typedef void(GE_CDECL* GE_DomainWillUnloadFn)(GE_DomainHandle domain, void* user);
 GE_API GE_Result GE_CDECL GE_SetOnDomainWillUnload(GE_DomainWillUnloadFn callback, void* user);
 
-// -------- Input (optional; returns NotInitialized if host has no InputSystem) --------
-typedef struct GE_InputActionState
-{
-    uint8_t pressed;
-    uint8_t justPressed;
-    uint8_t justReleased;
-    uint8_t _pad0;
-    float value;
-} GE_InputActionState;
-
-GE_API GE_Result GE_CDECL GE_Input_GetActionState(uint64_t actionId, GE_InputActionState* outState);
-GE_API GE_Result GE_CDECL GE_Input_IsKeyDown(int32_t key, int32_t* outDown);
-GE_API GE_Result GE_CDECL GE_Input_WasKeyPressed(int32_t key, int32_t* outPressed);
-GE_API GE_Result GE_CDECL GE_Input_WasKeyReleased(int32_t key, int32_t* outReleased);
-// Where the last move placed the pointer, in play-surface pixels; (0,0) before
-// any move, and standing after the pointer leaves the window or the window
-// loses focus. A reader gates on the two states below rather than on the
-// position: hover-style reads want the pointer in the window, and gestures that
-// act on the world (edge scrolling, drags, wheel zoom) want the window focused
-// as well.
-GE_API GE_Result GE_CDECL GE_Input_GetMousePosition(float* outX, float* outY);
-GE_API GE_Result GE_CDECL GE_Input_IsPointerInWindow(int32_t* outInWindow);
-GE_API GE_Result GE_CDECL GE_Input_IsWindowFocused(int32_t* outFocused);
-GE_API GE_Result GE_CDECL GE_Input_IsMouseButtonDown(int32_t button, int32_t* outDown);
-// Frame-snapshot edge queries (mouse mirror of WasKeyPressed/WasKeyReleased).
-// Both report true for a press+release pair completing inside one frame — the
-// case an IsMouseButtonDown poll silently loses.
-GE_API GE_Result GE_CDECL GE_Input_WasMouseButtonPressed(int32_t button, int32_t* outPressed);
-GE_API GE_Result GE_CDECL GE_Input_WasMouseButtonReleased(int32_t button, int32_t* outReleased);
-
-// User-defined action/context authoring from managed code (optional).
-// These operate on the runtime input sink (Engine::GetRuntimeInput) — in the
-// editor the game's own InputSystem, elsewhere the application's — and are
-// intended for gameplay scripts. An action registered in an enabled context is
-// readable through GE_Input_GetActionState without pushing anything; pushing
-// only orders priority between contexts.
-GE_API GE_Result GE_CDECL GE_Input_RegisterAction(uint64_t contextId, uint64_t actionId, int32_t isAxis);
-GE_API GE_Result GE_CDECL GE_Input_RemoveAction(uint64_t contextId, uint64_t actionId);
-GE_API GE_Result GE_CDECL GE_Input_ClearBindings(uint64_t contextId, uint64_t actionId);
-GE_API GE_Result GE_CDECL GE_Input_Bind(uint64_t contextId,
-                                        uint64_t actionId,
-                                        int32_t deviceType,
-                                        int32_t code,
-                                        float scale,
-                                        int32_t requiredMods,
-                                        int32_t forbiddenMods);
-GE_API GE_Result GE_CDECL GE_Input_PushContext(uint64_t contextId);
-GE_API GE_Result GE_CDECL GE_Input_PopContext(uint64_t contextId);
-GE_API GE_Result GE_CDECL GE_Input_SetContextEnabled(uint64_t contextId, int32_t enabled);
+// -------- The generated script API --------
+// Each module's script API is a function table served by GE_<Module>_GetInterface (generated:
+// <build>/generated/scripting/<Module>.script.gen.h). A call that a table function refuses or
+// that fails sets the calling thread's last error; this copies that text out under the
+// AbiTextOut contract (copy what fits, no NUL, always report the full byte length). The text
+// is the last refused or failed call's, on this thread; a call that succeeds, or that answers
+// GE_Result_NotInitialized (no engine or no system for the call), leaves it.
+GE_API GE_Result GE_CDECL GE_GetLastScriptError(char* buffer, int32_t bufferLen, int32_t* outLen);
 
 // -------- Game UI --------
 // Element access for gameplay scripts, split by layer.
@@ -533,8 +494,8 @@ GE_API GE_Result GE_CDECL GE_UI_RequestTypeRegistrationWindow(void);
 // the engine or to another context — and that is GE_Result_Ok, not an error: one bad tag
 // among many must not fail the whole registration pass.
 //
-// MAIN THREAD ONLY: call it from inside the performRegistrations callback. Off-main the whole
-// batch is refused (every *outTagId 0) and the refusal is logged.
+// REGISTRATION WINDOW ONLY: call it from inside the performRegistrations callback. Anywhere
+// else, on any thread, the whole batch is refused (every *outTagId 0) and the refusal is logged.
 GE_API GE_Result GE_CDECL GE_UI_RegisterElementType(uint64_t owner, const char* tagName, uint64_t* outTagId);
 // The owner's context is unloading. Releases its instances, marks its elements Pending and
 // unregisters its tags. *outOrphaned receives how many elements went Pending.
@@ -542,8 +503,28 @@ GE_API GE_Result GE_CDECL GE_UI_OrphanElementTypes(uint64_t owner, uint64_t* out
 // A reload finished: whatever of this owner's elements did not come back is now Faulted
 // rather than merely waiting. Call it while the owner is STILL LIVE, then release the id.
 //
-// MAIN THREAD ONLY, and after the batch — same window, same call, registrations first.
+// REGISTRATION WINDOW ONLY, and after the batch — same window, same call, registrations first.
 GE_API GE_Result GE_CDECL GE_UI_NotifyReloadCompleted(uint64_t owner);
+
+// -------- The main thread, from a script's own thread (MainThread.Post) --------
+// The managed MainThread.Post queue lives in Scripting.ABI; these two exports are its native half.
+
+// What GE_MainThread_RequestPump answered.
+typedef enum GE_MainThreadPost {
+    GE_MainThreadPost_Queued = 0,    // the main-thread pump drains the queue at the end of a frame
+    GE_MainThreadPost_RunInline = 1, // no queue to wait for (no engine initialized, a standalone-hosted one, or
+                                     // one with scripting off): run it now
+    GE_MainThreadPost_Dropped = 2    // the engine shut down or its Initialize failed: drop it; logged here, once per process
+} GE_MainThreadPost;
+
+// Install the managed drain, process-wide and first-wins: the main-thread pump calls it once per
+// pump that a request preceded, with run = 1, and ScriptManager's shutdown calls it with run = 0 to
+// discard the batch. GE_Result_Fail when a drain was already installed. Never initializes the engine.
+GE_API GE_Result GE_CDECL GE_MainThread_SetDrain(void (GE_CDECL* drain)(int32_t run));
+// Ask the next main-thread pump to call the drain. Callable from any thread; the caller holds its
+// queue's lock across this call and its append. Never initializes the engine and never constructs
+// a ScriptManager. Returns a GE_MainThreadPost.
+GE_API int32_t GE_CDECL GE_MainThread_RequestPump(void);
 
 // -------- Domains (AssemblyLoadContext) --------
 // NOTE: Deprecated in favor of GE_ScriptsDomainCreateFromPackage. Reserved for future implementation.

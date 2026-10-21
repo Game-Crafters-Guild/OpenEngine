@@ -499,7 +499,9 @@ TEST(RenderServicesDeviceRecovery, ReadbackTicketsAcrossDeviceRebuild)
             << "post-rebuild readback must resolve — a stale RGFrame queue "
                "timeline wedges every later readback for the process lifetime";
         if (!postRes.pixels.empty())
+        {
             EXPECT_EQ(postRes.width, 8u);
+        }
     }
     device->Shutdown();
     UnsetEnvVar("GE_VK_FORCE_DEVICE_LOST");

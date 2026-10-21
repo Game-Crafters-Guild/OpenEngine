@@ -311,7 +311,7 @@ void GameViewPanel::LoadBindAttachLayoutAndStyle(UIManager* ui)
 void GameViewPanel::RefreshElementPointers()
 {
     UIElement* const previous = m_PointerViewport.Get();
-    UIElement* const viewport = FindById(EditorPanelIds::GameViewViewport);
+    UIElement* const viewport = FindById(HashStringId(EditorPanelIds::GameViewViewport));
     if (viewport != previous)
     {
         // A hot reload that recreates the viewport element needs fresh handlers.
@@ -325,7 +325,7 @@ void GameViewPanel::RefreshElementPointers()
     // land on whole device pixels for the `cover` fit to stay 1:1
     // (UIElement::SetSnapRectToDevicePixels).
     viewport->SetSnapRectToDevicePixels(true);
-    m_NoCameraLabel = MakeWeakRef(dynamic_cast<Label*>(viewport->FindById(EditorPanelIds::GameViewNoCameraLabel)));
+    m_NoCameraLabel = MakeWeakRef(dynamic_cast<Label*>(viewport->FindById(HashStringId(EditorPanelIds::GameViewNoCameraLabel))));
     RegisterViewportPointerHandlers(*viewport);
     Editor::ViewOverlayHost::Get().PublishViewport(Editor::ViewOverlayView::Game, *viewport, {});
 }

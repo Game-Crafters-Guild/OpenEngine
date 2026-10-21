@@ -138,11 +138,12 @@ TEST(UIManagerRenderRGTests, DeclaresPassReadsAndClearAttachment)
         for (size_t r = 0; r < frame.Graph().ResourceCount(); ++r)
         {
             const std::string name = frame.Graph().ResourceName(static_cast<RenderGraph::RGResourceId>(r));
-            if (name == "UISdfPrims" || name == "UISdfClips" || name == "UISdfDrawOrder")
+            if (name == "UISdfPrims" || name == "UISdfClips" || name == "UISdfDrawOrder" ||
+                name == "UISdfTransforms")
                 if (frame.Graph().HasReadAccess(pass, static_cast<RenderGraph::RGResourceId>(r)))
                     ++ssboReads;
         }
-        EXPECT_EQ(ssboReads, 3u) << "the three SDF SSBO ring buffers must be declared reads";
+        EXPECT_EQ(ssboReads, 4u) << "the four SDF SSBO ring buffers must be declared reads";
 
         // (4) Slot-0 color attachment: the target, Clear (the DEFAULT load-op —
         //     the UI owns/clears the target, the editor chrome contract), Store,
@@ -279,7 +280,7 @@ TEST(UIManagerRenderRGTests, StalePublishIsNeverConsumed)
         ASSERT_NE(pass2, RenderGraph::kInvalidId);
         // Frame-2 ids are dense and REUSED (frame-1's src id aliases frame-2's
         // first resource), so a name scan alone can't catch a deleted
-        // FrameIndex compare. The real pin: pass 2 reads NOTHING except the 3
+        // FrameIndex compare. The real pin: pass 2 reads NOTHING except the 4
         // SSBO imports — any other read means the stale publish was consumed
         // through an aliased id.
         for (size_t r = 0; r < frame.Graph().ResourceCount(); ++r)
@@ -289,10 +290,12 @@ TEST(UIManagerRenderRGTests, StalePublishIsNeverConsumed)
             if (name == "Test.Src")
                 FAIL() << "a stale publish must never materialize the previous frame's texture";
             if (frame.Graph().HasReadAccess(pass2, rid))
+            {
                 EXPECT_TRUE(name == "UISdfPrims" || name == "UISdfClips" ||
-                            name == "UISdfDrawOrder")
+                            name == "UISdfDrawOrder" || name == "UISdfTransforms")
                     << "unexpected UI-pass read of '" << name
                     << "' — a stale publish leaked through an aliased frame-local id";
+            }
         }
         frame.Execute();
         dev->WaitForIdle();
@@ -376,7 +379,7 @@ TEST(UIManagerRenderRGTests, DrainDoesNotCompoundElementOpacity)
         for (int i = 0; i < 3; ++i)
             pump();
 
-        UIElement* panel = ui->GetRootElement()->FindById("panel");
+        UIElement* panel = ui->GetRootElement()->FindById("panel"_sid);
         ASSERT_NE(panel, nullptr);
         const UI::UIPrimitive* p = ui->PeekPrimitiveForTesting(*panel, 0);
         ASSERT_NE(p, nullptr);

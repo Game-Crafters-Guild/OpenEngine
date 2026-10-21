@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace GameEngine
 {
@@ -39,10 +40,16 @@ bool MarkupTagReadsDarkText(uint32 tagId);
 // name the agent API uses ("InProgress"); every surface shows it with a lowercase word
 // break at each lower-to-upper case step ("In progress"). Names without one show as named.
 std::string MarkupTagLabel(uint32 tagId);
-// The mark-up's name, or "Mark-up" when it has none. The view lives while the entity's Name
-// is unchanged.
+// What every surface calls a mark-up with no name: the Mark-ups panel's row, the Scene View's
+// label, the inspector's header and the Hierarchy (EditorComponentTraits::UntitledName).
+inline constexpr std::string_view kUntitledMarkupName = "Untitled mark-up";
+// The mark-up's name, or kUntitledMarkupName when it has none. The view lives while the entity's
+// Name is unchanged.
 std::string_view MarkupTitleView(const ECS::World& world, ECS::EntityHandle entity);
 std::string MarkupTitle(const ECS::World& world, ECS::EntityHandle entity);
+// The names of the mark-up's free tags in its notes' order (MarkupNotes::Tags), the slots the
+// vocabulary cannot read skipped; empty for a mark-up with none.
+std::vector<std::string> MarkupTagNames(const ECS::World& world, ECS::EntityHandle entity);
 // Whether the mark-up has a color of its own (Markup::Color not all zero).
 bool MarkupHasOwnColor(const Components::Markup& markup);
 // The color a mark-up draws in: its own (Markup::Color), else its status tag's, else the

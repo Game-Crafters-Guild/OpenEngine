@@ -58,15 +58,11 @@
     cursor: pointer;
 }
 
-#colorpicker-palette > *:hover {
-    transform: scale(1.05);
-}
-
 /* Color picker icon at bottom left of panel */
 .colorpicker-panel-icon {
     width: 24px;
     height: 24px;
-    background-image: url("editor:Icons/colorpicker.png");
+    background-image: url("editor:Icons/colorpicker.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;

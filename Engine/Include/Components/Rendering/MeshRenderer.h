@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Components/AssetRef.h"
+#include "Components/Rendering/MeshGPUData.h"
+#include "ECS/RequiredComponents.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/StringId.h"
 #include "Types/Types.h"
 #include <string_view>
@@ -36,7 +39,8 @@ struct MeshRenderer
     // Asset-backed model reference. Extraction bind uses this when the
     // handle is still zero (Ensure model GPU resources, then cache the handle).
     Components::ModelRef modelAssetGuid;
-    uint32 renderLayerMask = 1u;
+    // The views that draw this mesh: a view draws it when their layers intersect.
+    Rendering::RenderLayerMask RenderLayers;
     bool castShadows = true;
     bool receiveShadows = true;
     bool motionVectors = true;
@@ -124,3 +128,12 @@ inline StringId HashMeshName(std::string_view name)
 
 } // namespace Components
 } // namespace GameEngine
+
+// A MeshRenderer holds its GPUScene index bridge from creation (unassigned until
+// render extraction assigns a slot), so extraction never adds it with an
+// archetype move per entity.
+template <>
+struct GameEngine::ECS::Detail::RequiredComponents<GameEngine::Components::MeshRenderer>
+{
+    using type = TypeList<GameEngine::Components::MeshGPUData>;
+};

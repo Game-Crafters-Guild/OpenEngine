@@ -5,10 +5,12 @@
 #include "AssistantTurnUndo.h"
 #include "Conversation.h"
 #include "ConversationMessage.h"
+#include "MarkupContext.h"
 #include "ModelDisplayName.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <span>
 #include <string_view>
 
 namespace GameEngine
@@ -29,23 +31,6 @@ std::string ProviderLabel(const std::string& providerId)
     return providerId;
 }
 
-// "Claude (local session) · Opus 5.5 · High": the connection, the model that answered
-// (the one asked for until the turn reports it) and the effort asked for, if any.
-std::string ReplyHeader(const ConversationMessage& message)
-{
-    std::string model;
-    if (!message.AnsweredModel.empty())
-        model = ModelDisplayName(message.AnsweredModel);
-    else if (!message.Model.empty())
-        model = AiAssistantSettings::ModelLabel(message.ProviderId, message.Model);
-    else
-        model = "default model";
-    std::string header = ProviderLabel(message.ProviderId) + " · " + model;
-    for (const AiAssistantSettings::Choice& choice : AiAssistantSettings::EffortChoices(message.ProviderId))
-        if (!message.Effort.empty() && choice.Id == message.Effort)
-            header += " · " + std::string(choice.Label);
-    return header;
-}
 
 // "$0.0123 · 1200 tokens in, 340 out"; the parts the provider reported, empty if none.
 std::string Accounting(const ConversationMessage& message)
@@ -95,7 +80,35 @@ std::string ReplyStatus(const ConversationMessage& message)
     }
     return {};
 }
+
+// A chip's text: the title of the mark-up `token` named when its message was sent, else what the
+// token names it by.
+std::string ChipLabel(const MarkupToken& token, std::span<const MarkupMention> mentions)
+{
+    for (const MarkupMention& mention : mentions)
+    {
+        if (mention.Token == token.Text && !mention.Title.empty())
+            return mention.Title;
+    }
+    return token.Title.empty() ? token.Tag : token.Title;
+}
 } // namespace
+
+std::string AgentConversationRowModel::ReplyHeader(const ConversationMessage& message)
+{
+    std::string model;
+    if (!message.AnsweredModel.empty())
+        model = ModelDisplayName(message.AnsweredModel);
+    else if (!message.Model.empty())
+        model = AiAssistantSettings::ModelLabel(message.ProviderId, message.Model);
+    else
+        model = "default model";
+    std::string header = ProviderLabel(message.ProviderId) + " · " + model;
+    for (const AiAssistantSettings::Choice& choice : AiAssistantSettings::EffortChoices(message.ProviderId))
+        if (!message.Effort.empty() && choice.Id == message.Effort)
+            header += " · " + std::string(choice.Label);
+    return header;
+}
 
 AgentConversationRowModel AgentConversationRowModel::From(const ConversationMessage& message,
                                                           std::span<const AssistantAction> actions, uint64_t turn,
@@ -107,6 +120,8 @@ AgentConversationRowModel AgentConversationRowModel::From(const ConversationMess
     {
         row.Header = "You";
         row.FromUser = true;
+        for (const MarkupToken& token : MarkupContext::FindTokens(message.Text))
+            row.MarkupChips.push_back({token.Text, ChipLabel(token, message.Markups.Mentions)});
         return row;
     }
 

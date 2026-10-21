@@ -7,6 +7,7 @@ file(GLOB_RECURSE AUDIO_PUBLIC_HEADERS
 )
 
 set(AUDIO_SOURCES
+    Source/AudioDecoderConfig.cpp
     Source/AudioSystem.cpp
     Source/MiniaudioBackend.cpp
     Source/miniaudio_impl.c
@@ -38,6 +39,11 @@ target_link_libraries(Audio
         AssetCore
         AssetRuntime
 )
+
+# Ogg Vorbis decodes through libvorbisfile (miniaudio's libvorbis backend, compiled into
+# miniaudio_impl.c).
+find_package(Vorbis CONFIG REQUIRED)
+target_link_libraries(Audio PRIVATE Vorbis::vorbisfile)
 
 # macOS: Link CoreAudio frameworks for miniaudio
 # According to miniaudio docs, we should link these frameworks explicitly

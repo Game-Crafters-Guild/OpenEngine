@@ -164,6 +164,9 @@ class CoreCLRHost
     // Query current runtime domain identifier from CoreBridge
     uint64 GetCurrentRuntimeDomainId();
 
+    /// C# components and systems the loaded scripts assembly defines; 0 when none is loaded.
+    uint32 GetCurrentScriptTypeCount();
+
     int32 TryCallWithDelegateSignatures(const String& assemblyName,
                                         const String& typeName,
                                         const String& methodName);

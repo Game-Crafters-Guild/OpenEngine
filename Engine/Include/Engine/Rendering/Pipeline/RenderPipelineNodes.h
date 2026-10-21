@@ -109,6 +109,15 @@ struct ViewDeclare
     PipelineBufferBindingRG ResolveBuffer(const std::string& ref) const;
     void PublishTexture(const std::string& name, Rendering::RenderGraph::RGTexture t);
     void PublishBuffer(const std::string& name, const PipelineBufferBindingRG& b);
+    // Records that `t` holds this view's scene colour stored at its pre-exposure P, for a texture
+    // the node creates itself (a temporal history, a scene grab): readers of absolute values, such
+    // as the editor's resource capture, then divide it by P. Blueprint textures say so in the
+    // render graph ("preExposed").
+    void MarkPreExposed(Rendering::RenderGraph::RGTexture t);
+    // Whether `t` holds this view's scene colour at its pre-exposure P (declared "preExposed" by
+    // the render graph, the view's colour target, or marked by a node), for a node whose own
+    // textures hold what another texture holds.
+    bool IsPreExposed(Rendering::RenderGraph::RGTexture t) const;
 
     // Queue a declaration to run AFTER the node loop (terminal overlays that
     // must attach the chain's FINAL output). Drained by Declare before the

@@ -12,6 +12,8 @@
 	top: 0;
 	width: 100%;
 	height: 100%;
+	/* The tint of a component icon in a result row; a selected row draws it in its text color. */
+	--search-result-icon-tint: var(--ui_color_icon);
 }
 
 .search-dialog.open {
@@ -80,11 +82,11 @@ button.search-dialog-result-view-toggle,
 }
 
 .search-dialog-result-view-toggle.grid-view-icon {
-	background-image: url("editor:Icons/grid.png");
+	background-image: url("editor:Icons/grid.svg");
 }
 
 .search-dialog-result-view-toggle.list-view-icon {
-	background-image: url("editor:Icons/column-horizontal.png");
+	background-image: url("editor:Icons/column-horizontal.svg");
 }
 
 .search-dialog-result-view-toggle:hover,
@@ -204,6 +206,7 @@ button.search-dialog-result-view-toggle,
 
 .search-dialog-grid-results .grid-cell.search-result-grid-card.selected {
 	background-color: var(--ui_color_accent_highlight);
+	--search-result-icon-tint: var(--ui_color_text_bright);
 }
 
 .search-result-grid-thumbnail {
@@ -238,6 +241,7 @@ button.search-dialog-result-view-toggle,
 
 .search-result-row.selected {
 	background-color: var(--ui_color_accent_pressed);
+	--search-result-icon-tint: var(--ui_color_text_bright);
 }
 
 /* The selected row paints an accent-blue background, but only the LABEL had a
@@ -261,6 +265,12 @@ button.search-dialog-result-view-toggle,
 	background-position: 50% 50%;
 }
 
+/* A row's color swatch (SearchIcon::SwatchArgb): a dot half the icon's size, centered in its slot. */
+.search-result-swatch {
+	border-radius: 50%;
+	align-self: center;
+}
+
 .search-result-icon.has-thumb {
 	background-color: transparent;
 }
@@ -269,46 +279,17 @@ button.search-dialog-result-view-toggle,
 	display: none;
 }
 
-/* ---- Component picker icons ---- */
-.search-result-icon.inspector-section-icon-transform,
-.search-result-icon.inspector-section-icon-mesh-renderer,
-.search-result-icon.inspector-section-icon-skinned-mesh,
-.search-result-icon.inspector-section-icon-material,
-.search-result-icon.inspector-section-icon-camera,
-.search-result-icon.inspector-section-icon-light-ambient,
-.search-result-icon.inspector-section-icon-light-directional,
-.search-result-icon.inspector-section-icon-light-spot,
-.search-result-icon.inspector-section-icon-light-point,
-.search-result-icon.inspector-section-icon-light-area,
-.search-result-icon.inspector-section-icon-light-volume,
-.search-result-icon.inspector-section-icon-sky,
-.search-result-icon.inspector-section-icon-post-process,
-.search-result-icon.inspector-section-icon-post-process-volume,
-.search-result-icon.inspector-section-icon-wind-volume,
-.search-result-icon.inspector-section-icon-terrain,
-.search-result-icon.inspector-section-icon-grass,
-.search-result-icon.inspector-section-icon-ocean,
-.search-result-icon.inspector-section-icon-particles,
-.search-result-icon.inspector-section-icon-video-texture,
-.search-result-icon.inspector-section-icon-lens-flare,
-.search-result-icon.inspector-section-icon-spline,
-.search-result-icon.inspector-section-icon-measure,
-.search-result-icon.inspector-section-icon-physics,
-.search-result-icon.inspector-section-icon-physics-settings,
-.search-result-icon.inspector-section-icon-shape-cube,
-.search-result-icon.inspector-section-icon-shape-sphere,
-.search-result-icon.inspector-section-icon-shape-capsule,
-.search-result-icon.inspector-section-icon-shape-plane,
-.search-result-icon.inspector-section-icon-audio-emitter,
-.search-result-icon.inspector-section-icon-audio-listener,
-.search-result-icon.inspector-section-icon-animator,
-.search-result-icon.inspector-section-icon-animated-node,
-.search-result-icon.inspector-section-icon-lod-group,
-.search-result-icon.inspector-section-icon-render-layer,
-.search-result-icon.inspector-section-icon-default {
+/* ---- Component icons ----
+   A row showing a component's inspector icon class carries the shared inspector-section-icon class
+   too (BindSearchResultIcon); the image and the tint come from the theme's inspector.css, as in an
+   inspector header. In a search dialog the glyph is 16 px inside the row's 24 px box, the row's gap
+   spaces it, and it takes the row's icon tint: the text color on a selected row, whose accent
+   background the resting tint does not read on. After .search-result-icon, which it overrides at
+   equal specificity; the tint is important because the theme's is. */
+.inspector-section-icon {
+	margin-right: 0;
 	background-size: 16px 16px;
-	background-image-tint: rgba(200, 200, 200, 1.0);
-	background-image-saturation: 1.0;
+	background-image-tint: var(--search-result-icon-tint) !important;
 }
 
 /* Post-process effect picker: the image comes from the effect registry's
@@ -317,109 +298,6 @@ button.search-dialog-result-view-toggle,
 	background-size: 16px 16px;
 	background-image-tint: rgba(200, 200, 200, 1.0);
 	background-image-saturation: 1.0;
-}
-
-.search-result-icon.inspector-section-icon-transform {
-	background-image: url("editor:Icons/vector.png");
-}
-.search-result-icon.inspector-section-icon-mesh-renderer {
-	background-image: url("editor:Icons/Sphere.png");
-}
-.search-result-icon.inspector-section-icon-skinned-mesh {
-	background-image: url("editor:Icons/person.png");
-}
-.search-result-icon.inspector-section-icon-material {
-	background-image: url("editor:Icons/material.png");
-}
-.search-result-icon.inspector-section-icon-camera {
-	background-image: url("editor:Icons/videocam.png");
-}
-.search-result-icon.inspector-section-icon-light-ambient {
-	background-image: url("editor:Icons/AmbientLight.png");
-}
-.search-result-icon.inspector-section-icon-light-directional {
-	background-image: url("editor:Icons/DirectionalLight.png");
-}
-.search-result-icon.inspector-section-icon-light-spot {
-	background-image: url("editor:Icons/SpotLight.png");
-}
-.search-result-icon.inspector-section-icon-light-point {
-	background-image: url("editor:Icons/PointLight.png");
-}
-.search-result-icon.inspector-section-icon-light-area {
-	background-image: url("editor:Icons/arealight.png");
-}
-.search-result-icon.inspector-section-icon-light-volume {
-	background-image: url("editor:Icons/PointLight.png");
-}
-.search-result-icon.inspector-section-icon-sky {
-	background-image: url("editor:Icons/skyenvironment.png");
-}
-.search-result-icon.inspector-section-icon-post-process {
-	background-image: url("editor:Icons/postfx.png");
-}
-.search-result-icon.inspector-section-icon-post-process-volume {
-	background-image: url("editor:Icons/color-filter.svg");
-}
-.search-result-icon.inspector-section-icon-wind-volume {
-	background-image: url("editor:Icons/wind.svg");
-}
-.search-result-icon.inspector-section-icon-terrain {
-	background-image: url("editor:Icons/terrain.png");
-}
-.search-result-icon.inspector-section-icon-grass {
-	background-image: url("editor:Icons/grass.png");
-}
-.search-result-icon.inspector-section-icon-ocean {
-	background-image: url("editor:Icons/ocean.svg");
-}
-.search-result-icon.inspector-section-icon-particles {
-	background-image: url("editor:Icons/sparkles.png");
-}
-.search-result-icon.inspector-section-icon-video-texture {
-	background-image: url("editor:Icons/film.png");
-}
-.search-result-icon.inspector-section-icon-lens-flare {
-	background-image: url("editor:Icons/flame.png");
-}
-.search-result-icon.inspector-section-icon-spline {
-	background-image: url("editor:Icons/GizmoSpline.png");
-}
-.search-result-icon.inspector-section-icon-measure {
-	background-image: url("editor:Icons/Ruler.png");
-}
-.search-result-icon.inspector-section-icon-physics,
-.search-result-icon.inspector-section-icon-physics-settings {
-	background-image: url("editor:Icons/PhysicsSettings.png");
-}
-.search-result-icon.inspector-section-icon-shape-cube {
-	background-image: url("editor:Icons/Cube.png");
-}
-.search-result-icon.inspector-section-icon-shape-sphere {
-	background-image: url("editor:Icons/Sphere.png");
-}
-.search-result-icon.inspector-section-icon-shape-capsule {
-	background-image: url("editor:Icons/Capsule.png");
-}
-.search-result-icon.inspector-section-icon-shape-plane {
-	background-image: url("editor:Icons/Plane.png");
-}
-.search-result-icon.inspector-section-icon-audio-emitter,
-.search-result-icon.inspector-section-icon-audio-listener {
-	background-image: url("editor:Icons/music-note-icon@32px.png");
-}
-.search-result-icon.inspector-section-icon-animator,
-.search-result-icon.inspector-section-icon-animated-node {
-	background-image: url("editor:Icons/film.png");
-}
-.search-result-icon.inspector-section-icon-lod-group {
-	background-image: url("editor:Icons/layout3split.png");
-}
-.search-result-icon.inspector-section-icon-render-layer {
-	background-image: url("editor:Icons/list.png");
-}
-.search-result-icon.inspector-section-icon-default {
-	background-image: url("editor:Icons/node.png");
 }
 
 /* ---- Text wrapper (label + detail stacked) ---- */
@@ -522,51 +400,51 @@ button.search-dialog-result-view-toggle,
 }
 
 .icon-command-save {
-	background-image: url("editor:Icons/save.png");
+	background-image: url("editor:Icons/save.svg");
 }
 
 .icon-command-new-scene {
-	background-image: url("editor:Icons/sceneicon.png");
+	background-image: url("editor:Icons/sceneicon.svg");
 }
 
 .icon-command-open-project {
-	background-image: url("editor:Icons/folder_open.png");
+	background-image: url("editor:Icons/folder_open.svg");
 }
 
 .icon-command-undo {
-	background-image: url("editor:Icons/undo.png");
+	background-image: url("editor:Icons/undo.svg");
 }
 
 .icon-command-redo {
-	background-image: url("editor:Icons/ResetReload.png");
+	background-image: url("editor:Icons/ResetReload.svg");
 }
 
 .icon-command-play {
-	background-image: url("editor:Icons/play.png");
+	background-image: url("editor:Icons/play.svg");
 }
 
 .icon-command-pause {
-	background-image: url("editor:Icons/pause.png");
+	background-image: url("editor:Icons/pause.svg");
 }
 
 .icon-command-stop {
-	background-image: url("editor:Icons/stop.png");
+	background-image: url("editor:Icons/stop.svg");
 }
 
 .icon-command-reset-layout {
-	background-image: url("editor:Icons/layout3split.png");
+	background-image: url("editor:Icons/layout3split.svg");
 }
 
 .icon-command-reindex {
-	background-image: url("editor:Icons/search.png");
+	background-image: url("editor:Icons/search.svg");
 }
 
 .icon-panel {
-	background-image: url("editor:Icons/layout3split.png");
+	background-image: url("editor:Icons/layout3split.svg");
 }
 
 .icon-settings {
-	background-image: url("editor:Icons/settings.png");
+	background-image: url("editor:Icons/settings.svg");
 }
 
 .icon-unknown {

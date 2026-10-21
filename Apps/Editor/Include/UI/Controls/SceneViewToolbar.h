@@ -34,11 +34,11 @@ public:
     {
         m_OnOpenGridSettings = std::move(cb);
     }
-    // The auto-exposure toggle seeds Fixed EV100 as a side effect (AE-lock); the host uses
+    // A switch to Fixed exposure seeds Fixed EV100 as a side effect (AE-lock); the host uses
     // this to sync an open camera-settings popup whose stale field would clobber the seed.
-    void SetOnPostFxAutoExposureToggled(std::function<void()> cb)
+    void SetOnExposureModeChanged(std::function<void()> cb)
     {
-        m_OnPostFxAutoExposureToggled = std::move(cb);
+        m_OnExposureModeChanged = std::move(cb);
     }
     // Left-click on the camera button; opens the scene camera quick-settings popup
     // anchored below it (window coordinates).
@@ -84,13 +84,17 @@ private:
     void RefreshButtonStates();
     void UpdateProjectionButtonState();
     void UpdateRotationGizmoButtonState();
+    /// The button `held` names while it is alive; once it is destroyed (or before the
+    /// first call), the first Button with `id` in this toolbar, which `held` then names.
+    /// The state refreshes run every frame, so this keeps them off the id lookup.
+    Button* HeldButton(UIElement::WeakRef<Button>& held, StringId id);
 
     SceneViewController*   m_Controller = nullptr; // not owned
     Editor::ToolbarDragDrop* m_DragDrop = nullptr; // not owned
     UIElement*             m_DragRootEl = nullptr; // not owned — main window root for ghosts
     std::function<bool()> m_OnToggleView2D;
     std::function<void()> m_OnOpenGridSettings;
-    std::function<void()> m_OnPostFxAutoExposureToggled;
+    std::function<void()> m_OnExposureModeChanged;
     std::function<void(float, float)> m_OnOpenCameraSettings;
     // One entry per button id WireControls has ever asked for. The key is a value, not
     // a pointer into the caller's id: nothing can dangle, and hashing a string_view
@@ -116,6 +120,16 @@ private:
     // see BeginWiringPass for why the generation alone is not enough.
     bool m_WiringAllResolved = false;
     bool m_WiringPassOpen = false;
+    // The buttons whose icon-active class mirrors controller and settings state
+    // (RefreshButtonStates), held between frames through HeldButton.
+    UIElement::WeakRef<Button> m_GizmoButton;
+    UIElement::WeakRef<Button> m_GridButton;
+    UIElement::WeakRef<Button> m_SnapButton;
+    UIElement::WeakRef<Button> m_View2DButton;
+    UIElement::WeakRef<Button> m_PickModeButton;
+    UIElement::WeakRef<Button> m_PostProcessButton;
+    UIElement::WeakRef<Button> m_ProjectionButton;
+    UIElement::WeakRef<Button> m_RotationGizmoButton;
 };
 
 } // namespace GameEngine

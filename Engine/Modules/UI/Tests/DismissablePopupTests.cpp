@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "IsolatedUIFixture.h"
+#include "UI/Controls/Dropdown.h"
 #include "UI/Interaction/DismissablePopup.h"
 #include "UI/UIElement.h"
 #include "UI/Internal/LayoutAccess.h"
@@ -234,4 +236,49 @@ TEST(DismissablePopupTests, DetachedPopupDoesNotGateOrDismiss)
     EXPECT_TRUE(orphan.IsPopupOpen());
 
     ui.UnregisterDismissablePopup(&orphan);
+}
+
+// The press that dismissed a popup is consumed whole: its release does not focus the field under
+// the pointer, even when the pointer drifted after the last frame and the release hit-tests again.
+TEST(DismissablePopupTests, ReleaseOfADismissingPressFocusesNothing)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, R"(<uielement id="root">
+  <uielement id="host"/>
+  <textfield id="field"/>
+</uielement>)", R"(
+#root { display: flex; flex-direction: column; width: 400px; height: 300px; }
+#host { width: 160px; height: 20px; }
+#field { width: 160px; height: 40px; margin-top: 100px; }
+.dropdown-items { position: absolute; top: 100%; left: 0px; width: 100%; z-index: 1000; }
+.dropdown-item { height: 20px; }
+)");
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fixture.Diagnostic();
+
+    UIElement* field = fixture.Element("field");
+    ASSERT_NE(field, nullptr);
+    auto owned = std::make_unique<Dropdown>();
+    Dropdown* dropdown = owned.get();
+    fixture.Element("host")->AddChild(std::move(owned));
+    dropdown->SetOptionsFromString("One,Two");
+    fixture.Settle();
+    dropdown->OpenMenuUi();
+    fixture.Settle();
+    ASSERT_TRUE(dropdown->IsPopupOpen());
+
+    const float x = field->GetLayoutX() + 20.0f;
+    const float y = field->GetLayoutY() + 20.0f;
+    fixture.Manager().OnMouseMove(x, y);
+    fixture.StepFrame();
+    fixture.Manager().OnMouseButton(0, true);
+    fixture.StepFrame();
+    fixture.Manager().OnMouseMove(x + 1.0f, y);
+    fixture.Manager().OnMouseButton(0, false);
+    fixture.StepFrame();
+
+    EXPECT_FALSE(dropdown->IsPopupOpen());
+    EXPECT_FALSE(field->IsFocusTargetForId(fixture.Manager().GetFocusedElementId()))
+        << "the release of the press that closed the popup focused the field";
 }

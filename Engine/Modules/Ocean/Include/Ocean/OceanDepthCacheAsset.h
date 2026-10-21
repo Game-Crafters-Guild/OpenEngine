@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mathematics/Vector3.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 #include <filesystem>
@@ -75,7 +76,7 @@ struct OceanDepthCacheHeightfieldSource
     float32 SizeZ = 0.0f;
     float32 HeightScale = 1.0f;
     float32 WorldOriginY = 0.0f;
-    uint32 LayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
     bool Enabled = true;
 };
 
@@ -98,7 +99,7 @@ struct OceanDepthCacheMeshSource
         0.0f, 0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f};
 
-    uint32 LayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
     bool Enabled = true;
 };
 
@@ -117,17 +118,17 @@ bool BakeOceanDepthCache(const OceanDepthCacheBakeDesc& desc,
 bool BakeOceanDepthCacheFromHeightfields(const OceanDepthCacheBakeDesc& desc,
                                          const OceanDepthCacheHeightfieldSource* sources,
                                          uint32 sourceCount,
-                                         uint32 sourceLayerMask,
+                                         Rendering::RenderLayerMask sourceLayers,
                                          OceanDepthCacheAsset& outCache,
                                          std::string* error = nullptr);
 
 // Builds a saved depth cache from real indexed triangle geometry. Sources are
-// filtered by LayerMask and sampled top-down: the highest triangle surface at
+// filtered by their Layers and sampled top-down: the highest triangle surface at
 // each texel's world XZ becomes the seabed height before conversion to depth.
 bool BakeOceanDepthCacheFromMeshes(const OceanDepthCacheBakeDesc& desc,
                                    const OceanDepthCacheMeshSource* sources,
                                    uint32 sourceCount,
-                                   uint32 sourceLayerMask,
+                                   Rendering::RenderLayerMask sourceLayers,
                                    OceanDepthCacheAsset& outCache,
                                    std::string* error = nullptr);
 

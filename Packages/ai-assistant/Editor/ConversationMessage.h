@@ -58,6 +58,25 @@ struct ToolCall
     std::string Error;
 };
 
+/// A mark-up token a user message holds, with the mark-up's title when the message was sent.
+struct MarkupMention
+{
+    /// The token as typed (MarkupToken::Text).
+    std::string Token;
+    /// The title of the mark-up it named then; empty when it named none, the mark-up had no
+    /// title, or mark-ups could not be read (play mode).
+    std::string Title;
+};
+
+/// What a user message's mark-up tokens add to it when it is sent (MarkupContext::ForPrompt).
+struct SentMarkups
+{
+    /// What the turn sends after the message's text: the mark-up blocks; empty when it named none.
+    std::string Blocks;
+    /// One per token, in the prompt's order.
+    std::vector<MarkupMention> Mentions;
+};
+
 /// One message of a conversation in the AI Assistant panel.
 struct ConversationMessage
 {
@@ -66,6 +85,11 @@ struct ConversationMessage
     /// The message text: what the user sent, or the assistant's reply so far; at most
     /// Conversation::kMaxMessageBytes.
     std::string Text;
+    /// On a user message: the mark-ups its tokens named when it was sent. The row shows Text, with
+    /// a chip per token named by its mention's title.
+    SentMarkups Markups;
+    /// What a provider receives for a user message: its text, then its mark-up blocks.
+    std::string SentText() const { return Markups.Blocks.empty() ? Text : Text + "\n\n" + Markups.Blocks; }
     /// The reply ran past Conversation::kMaxMessageBytes and Text holds its first part.
     bool Truncated = false;
     /// The reply failed and its prompt was sent again as a later turn (Retry).

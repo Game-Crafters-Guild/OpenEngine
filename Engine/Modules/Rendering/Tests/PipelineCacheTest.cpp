@@ -5,11 +5,21 @@
 
 #include <gtest/gtest.h>
 #include "VulkanPipelineCache.h"
+#include "Logger/LogSink.h"
+#include "Logger/Logger.h"
+#include "Rendering/Core/Device.h"
+#include "ScopedPlatformCacheRoot.h"
 #include "TestTempDir.h"
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 using namespace GameEngine::Rendering;
 
@@ -23,6 +33,8 @@ protected:
         // process of this build shares; the process id keeps a concurrent run's cleanup out of it.
         m_Config.CacheDirectory = "test_cache_" + std::to_string(GameEngine::TestUtils::GetProcessIdForTests()) + "/";
         m_Config.CacheFileName = "test_pipeline_cache.bin";
+        // The fixture is the file-backed cache; the in-memory test turns this off itself.
+        m_Config.PersistToDisk = true;
         
         // Clean up any existing test cache
         CleanupTestCache();
@@ -180,19 +192,172 @@ TEST_F(VulkanPipelineCacheTest, ErrorHandling) {
     EXPECT_FALSE(result);
 }
 
-// Integration test that would require a real Vulkan device
-// This is commented out as it requires actual Vulkan initialization
-/*
-TEST_F(VulkanPipelineCacheTest, DISABLED_RealVulkanIntegration) {
-    // This test would require:
-    // 1. Real Vulkan instance and device creation
-    // 2. Actual pipeline creation
-    // 3. Cache save/load verification
-    // 4. Performance measurement
-    
-    // Would be run as part of integration test suite
+// A cache configured for memory only touches no file system path at all: no directory,
+// no read, no write. The null device stops Initialize before vkCreatePipelineCache,
+// which is past the point where a directory would have been created.
+TEST_F(VulkanPipelineCacheTest, AnInMemoryCacheCreatesNoDirectory) {
+    m_Config.PersistToDisk = false;
+    VulkanPipelineCache cache(m_Device, m_Config);
+    cache.Initialize();
+    EXPECT_FALSE(std::filesystem::exists(m_Config.CacheDirectory));
 }
-*/
+
+namespace
+{
+using GameEngine::TestUtils::ScopedPlatformCacheRoot;
+using LogLines = std::vector<std::string>;
+
+// This binary links the Rendering module and its Logger objects directly, so the
+// pipeline cache logs through the process's own logger state: a sink installed here
+// sees its lines. Shared buffer because the logger owns the sink and the test
+// outlives it.
+class CapturingSink final : public Logger::LogSink
+{
+  public:
+    explicit CapturingSink(std::shared_ptr<LogLines> lines) : m_Lines(std::move(lines)) {}
+
+    void Write(const Logger::LogMessage& message) override
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_Lines->push_back(message.Message);
+    }
+    void Flush() override {}
+    bool ShouldLog(Logger::LogLevel) const override { return true; }
+    Logger::String GetName() const override { return "PipelineCacheTestLogCapture"; }
+
+  private:
+    std::mutex m_Mutex;
+    std::shared_ptr<LogLines> m_Lines;
+};
+
+// Replaces the sink set with a capture for the scope's lifetime (the binary installs
+// none of its own), and restores an empty sink set on every exit path.
+class ScopedLogCapture
+{
+  public:
+    ScopedLogCapture() : m_Lines(std::make_shared<LogLines>())
+    {
+        Logger::Log::Config config;
+        config.GlobalMinLevel = Logger::LogLevel::Warning;
+        Logger::Log::Initialize(config);
+        Logger::Log::ClearSinks();
+        Logger::Log::AddSink(Logger::MakeUnique<CapturingSink>(m_Lines));
+    }
+    ~ScopedLogCapture()
+    {
+        Logger::Log::Flush();
+        Logger::Log::ClearSinks();
+    }
+    ScopedLogCapture(const ScopedLogCapture&) = delete;
+    ScopedLogCapture& operator=(const ScopedLogCapture&) = delete;
+
+    // Lines logged so far that contain `needle`; dispatch is asynchronous, so the
+    // logger is flushed first.
+    size_t CountLinesContaining(const char* needle) const
+    {
+        Logger::Log::Flush();
+        size_t count = 0;
+        for (const std::string& line : *m_Lines)
+            if (line.find(needle) != std::string::npos)
+                ++count;
+        return count;
+    }
+
+  private:
+    std::shared_ptr<LogLines> m_Lines;
+};
+
+// Writes a cache file at `path` whose header is structurally valid (magic, version 1,
+// payload size, uncompressed) but whose checksum does not match the payload, so a
+// reader that opens it logs the checksum warning and ignores it.
+void WriteCacheFileWithBadChecksum(const std::filesystem::path& path)
+{
+    std::filesystem::create_directories(path.parent_path());
+    constexpr uint32_t kMagic = 0x56504C43;
+    constexpr uint32_t kVersion = 1;
+    constexpr uint32_t kPayloadSize = 64;
+    constexpr uint32_t kWrongChecksum = 0xFFFFFFFFu;
+    constexpr uint32_t kUncompressed = 0;
+    const uint32_t header[5] = {kMagic, kVersion, kPayloadSize, kWrongChecksum, kUncompressed};
+    const std::vector<char> payload(kPayloadSize, 'x');
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(header), sizeof(header));
+    out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+}
+
+std::unique_ptr<IDevice> CreateHeadlessDevice(bool persistPipelineCache)
+{
+    DeviceDesc desc{};
+    desc.preferredAPI = GraphicsAPI::Vulkan;
+    desc.enableSwapchain = false;
+    desc.enableDynamicRendering = true;
+    desc.persistPipelineCache = persistPipelineCache;
+    std::unique_ptr<IDevice> device = DeviceFactory::CreateDevice(desc);
+    if (!device || !device->Initialize(desc))
+        return nullptr;
+    return device;
+}
+} // namespace
+
+// A device persists its pipeline cache only when its DeviceDesc asks for it: by default a
+// device's whole life leaves no cache file behind, and with persistPipelineCache the file
+// appears at destruction.
+TEST_F(VulkanPipelineCacheTest, ADeviceWritesItsCacheFileOnlyWhenAskedToPersist) {
+    GameEngine::TestUtils::ScopedTempDir root(
+        GameEngine::TestUtils::MakeUniqueTempDirectory("pipeline_cache_root"));
+    ScopedPlatformCacheRoot redirect(root.Path());
+    const std::filesystem::path file =
+        std::filesystem::path(VulkanPipelineCache::GetPlatformCacheDirectory()) / "vulkan_pipeline_cache.bin";
+    ASSERT_NE(file.string().find(root.Path().string()), std::string::npos)
+        << "the platform cache directory did not follow the redirect: " << file;
+
+    {
+        std::unique_ptr<IDevice> device = CreateHeadlessDevice(/*persistPipelineCache=*/false);
+        if (!device)
+            GTEST_SKIP() << "no Vulkan device";
+    }
+    EXPECT_FALSE(std::filesystem::exists(file)) << file;
+
+    {
+        std::unique_ptr<IDevice> device = CreateHeadlessDevice(/*persistPipelineCache=*/true);
+        ASSERT_NE(device, nullptr);
+    }
+    EXPECT_TRUE(std::filesystem::exists(file)) << file;
+}
+
+// The other half of the contract: an in-memory device never opens the cache file. A file
+// with a bad checksum is planted where the platform cache lives; the device that keeps its
+// cache in memory logs nothing about it, and the device that persists reads it, logs the
+// checksum warning and ignores it. The second device also proves the capture sees the
+// warning at all, so the first count's zero is a measurement and not a silent sink.
+TEST_F(VulkanPipelineCacheTest, AnInMemoryDeviceReadsNoCacheFile) {
+    GameEngine::TestUtils::ScopedTempDir root(
+        GameEngine::TestUtils::MakeUniqueTempDirectory("pipeline_cache_root"));
+    ScopedPlatformCacheRoot redirect(root.Path());
+    const std::filesystem::path file =
+        std::filesystem::path(VulkanPipelineCache::GetPlatformCacheDirectory()) / "vulkan_pipeline_cache.bin";
+    ASSERT_NE(file.string().find(root.Path().string()), std::string::npos)
+        << "the platform cache directory did not follow the redirect: " << file;
+    WriteCacheFileWithBadChecksum(file);
+    ASSERT_TRUE(std::filesystem::exists(file)) << file;
+    constexpr const char* kChecksumWarning = "PipelineCache: checksum mismatch";
+
+    ScopedLogCapture capture;
+    {
+        std::unique_ptr<IDevice> device = CreateHeadlessDevice(/*persistPipelineCache=*/false);
+        if (!device)
+            GTEST_SKIP() << "no Vulkan device";
+    }
+    EXPECT_EQ(capture.CountLinesContaining(kChecksumWarning), 0u)
+        << "an in-memory device opened the on-disk cache";
+
+    {
+        std::unique_ptr<IDevice> device = CreateHeadlessDevice(/*persistPipelineCache=*/true);
+        ASSERT_NE(device, nullptr);
+    }
+    EXPECT_EQ(capture.CountLinesContaining(kChecksumWarning), 1u)
+        << "the persisting device did not read the planted file, so the capture proves nothing";
+}
 
 // Performance test for cache operations
 TEST_F(VulkanPipelineCacheTest, CachePerformance) {

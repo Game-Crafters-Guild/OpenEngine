@@ -1,15 +1,15 @@
 #include "Terrain/Heightfield.h"
 
+#include "Image/Decode.h"
+#include "Image/ImageHeader.h"
+
 #include <algorithm>
-#include <climits>
 #include <cassert>
+#include <climits>
 #include <cmath>
-#include <cstring>
 #include <fstream>
 #include <string>
-
-// stb_image for PNG loading (implementation compiled in Engine/Source/ThirdParty/stb_image_impl.cpp)
-#include <stb_image.h>
+#include <vector>
 
 namespace GameEngine::Terrain
 {
@@ -189,59 +189,51 @@ void HeightfieldData::GetMinMax(int32 x0, int32 z0, int32 sizeX, int32 sizeZ,
 namespace
 {
 
-uint32 BigEndian32(const unsigned char* bytes)
+// Reads a whole file in one sized read. False when it cannot be opened or read.
+bool ReadWholeFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes)
 {
-    return (uint32(bytes[0]) << 24u) | (uint32(bytes[1]) << 16u) | (uint32(bytes[2]) << 8u) | uint32(bytes[3]);
-}
-
-// stb_image's limits for a PNG of `width` x `height` pixels decoded at `channels` 16-bit channels:
-// it refuses more than 2^30 samples times channels at the header, and holds the whole image twice
-// in int-sized allocations (the filtered rows, a filter byte each, and the decoded samples).
-bool FitsPngDecoder(uint32 width, uint32 height, uint32 channels)
-{
-    const uint64 values = static_cast<uint64>(width) * height * channels;
-    const uint64 filtered = static_cast<uint64>(height) * (static_cast<uint64>(width) * channels * 2u + 1u);
-    return values <= (1ull << 30u) && values * 2u <= INT_MAX && filtered <= INT_MAX;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file)
+        return false;
+    const std::streamoff size = file.tellg();
+    if (size < 0)
+        return false;
+    outBytes.resize(static_cast<size_t>(size));
+    file.seekg(0);
+    return static_cast<bool>(file.read(reinterpret_cast<char*>(outBytes.data()), static_cast<std::streamsize>(size)));
 }
 
 } // namespace
 
 std::string ResolvePngHeightmapSize(const std::filesystem::path& file, PngHeightmapSize& out)
 {
-    static constexpr unsigned char kSignature[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-    // Channels per color type as the decoder counts them for its limit: gray, -, RGB, palette
-    // (checked at 4), gray + alpha, -, RGBA.
-    static constexpr uint32 kChannels[7] = {1, 0, 3, 4, 2, 0, 4};
-    unsigned char bytes[26] = {};
-    std::ifstream in(file, std::ios::binary);
-    in.read(reinterpret_cast<char*>(bytes), sizeof(bytes));
-    const unsigned char colorType = bytes[25];
-    if (!in || std::memcmp(bytes, kSignature, sizeof(kSignature)) != 0 || std::memcmp(bytes + 12, "IHDR", 4) != 0 ||
-        colorType >= 7 || kChannels[colorType] == 0)
+    const Image::ImageHeader header = Image::ReadImageHeader(file);
+    if (!header.Valid)
         return "the PNG " + file.filename().string() + " could not be read";
-    const PngHeightmapSize size{BigEndian32(bytes + 16), BigEndian32(bytes + 20)};
-    if (!FitsPngDecoder(size.Width, size.Height, kChannels[colorType]))
-        return "the PNG " + file.filename().string() + " is " + std::to_string(size.Width) + " x " +
-               std::to_string(size.Height) +
-               " samples, more than a PNG heightmap can hold (a PNG decodes whole: up to about 1.07 billion "
-               "grayscale samples, 32768 x 32767); export the heightmap as .r32, which has no size limit";
-    out = size;
+    // LoadFromPNG16 decodes to one 16-bit sample per pixel, held in one int-sized block, whatever
+    // the file stores: an 8-bit PNG the decoder reads can still be too large for that result.
+    const uint64 heightBytes = static_cast<uint64>(header.Width) * header.Height * sizeof(uint16);
+    if (!header.WithinDecoderLimits || heightBytes > INT_MAX)
+        return "the PNG " + file.filename().string() + " is " + std::to_string(header.Width) + " x " +
+               std::to_string(header.Height) +
+               " samples, more than a PNG heightmap can hold (a PNG decodes whole to 16 bits: up to 32768 x "
+               "32766 samples for a 16-bit PNG, 32768 x 32767 for an 8-bit one); export the heightmap as .r32, "
+               "which has no size limit";
+    out = PngHeightmapSize{header.Width, header.Height};
     return {};
 }
 
 bool HeightfieldData::LoadFromPNG16(const std::filesystem::path& path)
 {
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-
-    // Load as 16-bit
-    auto* data = stbi_load_16(path.string().c_str(), &width, &height, &channels, 1);
-    if (!data)
+    std::vector<uint8_t> fileBytes;
+    if (!ReadWholeFile(path, fileBytes))
+        return false;
+    const Image::Image16 decoded = Image::Decode16(fileBytes, path.string(), Image::DecodeChannels::Gray);
+    if (!decoded.Valid)
         return false;
 
-    m_Width = static_cast<uint32>(width);
-    m_Height = static_cast<uint32>(height);
+    m_Width = decoded.Width;
+    m_Height = decoded.Height;
     m_Samples.resize(static_cast<std::size_t>(m_Width) * m_Height);
 
     // Normalize 16-bit [0, 65535] to [0, 1]
@@ -249,10 +241,8 @@ bool HeightfieldData::LoadFromPNG16(const std::filesystem::path& path)
     const auto totalSamples = static_cast<std::size_t>(m_Width) * m_Height;
     for (std::size_t i = 0; i < totalSamples; ++i)
     {
-        m_Samples[i] = static_cast<float32>(data[i]) * kInv65535;
+        m_Samples[i] = static_cast<float32>(decoded.Pixels[i]) * kInv65535;
     }
-
-    stbi_image_free(data);
     return true;
 }
 

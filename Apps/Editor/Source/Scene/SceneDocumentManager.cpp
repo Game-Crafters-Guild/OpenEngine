@@ -233,9 +233,9 @@ void SceneDocumentManager::RecordLoadDegradation(const std::filesystem::path& do
     }
 
     const std::size_t dropped = census.DroppedCount();
-    Logger::Log::Error("SceneDocument: '{}' loaded DEGRADED — {} assignment(s) could not be applied "
-                       "by this build ({} preserved, {} would be lost). The scene is open and usable; "
-                       "Save will not overwrite the file without explicit confirmation.",
+    Logger::Log::Error("SceneDocument: '{}' loaded with {} line(s) that did not apply (a save writes {} "
+                       "back as written and does not keep {}). The scene is open and usable; Save asks "
+                       "before it writes over the file.",
                        documentPath.string(), census.skips.size(), census.skips.size() - dropped,
                        dropped);
 
@@ -311,9 +311,9 @@ std::string SceneDocumentManager::DescribeDegradedRefusal(const std::filesystem:
     // not something this refusal protects, so counting it would overstate what is at stake.
     // WouldRefuseDegradedOverwrite gates this call on outstanding > 0, so the view is non-empty.
     const std::optional<SceneLoadDegraded> outstanding = GetOutstandingLoadDegraded();
-    return std::format("refusing to save over '{}' — it loaded with {} assignment(s) "
-                       "this build could not read, and saving would write {} of them back as "
-                       "defaults. Save As to another file, or confirm explicitly to overwrite.",
+    return std::format("refusing to save over '{}': {} line(s) in it did not apply, and saving "
+                       "would not keep {} of them. Save As to another file, or confirm explicitly to "
+                       "overwrite.",
                        targetPath.string(),
                        outstanding.has_value() ? outstanding->SkippedCount() : 0,
                        outstanding.has_value() ? outstanding->DroppedCount() : 0);
@@ -738,7 +738,7 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
         merged.Census.skips.insert(merged.Census.skips.end(),
                                    std::make_move_iterator(degradation.skips.begin()),
                                    std::make_move_iterator(degradation.skips.end()));
-        Logger::Log::Error("SceneDocument: additive load of '{}' could not apply {} assignment(s); "
+        Logger::Log::Error("SceneDocument: additive load of '{}' has {} line(s) that did not apply; "
                            "the open document now carries {} in total and Save is guarded.",
                            scenePath.string(), degradation.skips.size(), merged.SkippedCount());
         m_LastLoadDegraded = std::move(merged);

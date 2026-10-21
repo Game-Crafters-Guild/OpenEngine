@@ -855,6 +855,8 @@ public:
 		return m_hash;
 	}
 
+	fbtCharHashKey& operator=(const fbtCharHashKey&) = default;
+
 	FBT_INLINE bool operator== (const fbtCharHashKey& v) const    {return hash() == v.hash();}
 	FBT_INLINE bool operator!= (const fbtCharHashKey& v) const    {return hash() != v.hash();}
 	FBT_INLINE bool operator== (const FBThash& v) const           {return hash() == v;}
@@ -918,6 +920,8 @@ public:
 		_FBT_TWHASH(m_hash);
 		return m_hash;
 	}
+
+	fbtSizeHashKey& operator=(const fbtSizeHashKey&) = default;
 
 	FBT_INLINE bool operator== (const fbtSizeHashKey& v) const  { return hash() == v.hash();}
 	FBT_INLINE bool operator!= (const fbtSizeHashKey& v) const  { return hash() != v.hash();}
@@ -1468,6 +1472,8 @@ public:
 		m_buffer[m_size] = 0;
 	}
 
+
+	fbtFixedString& operator=(const fbtFixedString&) = default;
 
 	fbtFixedString(const char* rhs)
 		:   m_size(0), m_hash(FBT_NPOS)
@@ -2864,6 +2870,19 @@ int fbtFile::parseStreamImpl(fbtStream* stream, bool suppressHeaderWarning)
 			break;
 
 
+		// A file that ends inside a block is truncated: refuse a block longer
+		// than the rest of the file before allocating its declared length, and
+		// a short read after it, instead of handing a partly filled block to the
+		// readers. An empty block is refused too. The gzip file stream reports
+		// no size, so there the short read alone refuses a truncated block.
+		const FBTsize streamSize = stream->size();
+		const FBTsize streamPosition = stream->position();
+		if (streamSize >= streamPosition && (FBTsize)chunk.m_len > streamSize - streamPosition)
+		{
+			FBT_INVALID_READ;
+			return FS_INV_READ;
+		}
+
 		void* curPtr = fbtMalloc(chunk.m_len);
 		//printf("alloc curPtr: 0x%x\n", curPtr);fflush(stdout);
 		if (!curPtr)
@@ -2872,8 +2891,10 @@ int fbtFile::parseStreamImpl(fbtStream* stream, bool suppressHeaderWarning)
 			return FS_BAD_ALLOC;
 		}
 
-		if (stream->read(curPtr, chunk.m_len) <= 0)
+		const FBTsize blockRead = stream->read(curPtr, chunk.m_len);
+		if (blockRead == 0 || blockRead != (FBTsize)chunk.m_len)
 		{
+			fbtFree(curPtr);
 			FBT_INVALID_READ;
 			return FS_INV_READ;
 		}
@@ -2927,6 +2948,7 @@ int fbtFile::parseStreamImpl(fbtStream* stream, bool suppressHeaderWarning)
 				MemoryChunk* bin = static_cast<MemoryChunk*>(fbtMalloc(sizeof(MemoryChunk)));
 				if (!bin)
 				{
+					fbtFree(curPtr);
 					FBT_MALLOC_FAILED;
 					return FS_BAD_ALLOC;
 				}
@@ -3458,13 +3480,13 @@ int fbtFile::reflect(const char* path, const int mode, const fbtEndian& /*endian
 	// put magic
 	//fs->writef("%s%c%c%i", m_uhid, cp, ce, m_version);
 	char header[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
-	char version[33];
-	sprintf(version, "%i",m_version);
+	char version[33]{};
+	snprintf(version, sizeof(version), "%i", m_version);
 	
 	strncpy(&header[0], m_uhid, 7); // 7 first bytes of header
 	header[7] = cp;					// 8th byte = pointer size
 	header[8] = ce;					// 9th byte = endianness
-	strncpy(&header[9], version, 3);// last 3 bytes vor 3 version char
+	memcpy(&header[9], version, 3); // fixed-width 3-byte version field
 	
 	fs->write(header, 12);
 	
@@ -3526,6 +3548,8 @@ int fbtChunk::write(fbtFile::Chunk* src, fbtStream* stream)
 	return size;
 }
 
+// A block header the file ends inside is a truncated file: every header read
+// must return the whole header.
 int fbtChunk::read(fbtFile::Chunk* dest, fbtStream* stream, int flags)
 {
 	int bytesRead = 0;
@@ -3543,7 +3567,7 @@ int fbtChunk::read(fbtFile::Chunk* dest, fbtStream* stream, int flags)
 		if (bitsVary)
 		{
 			fbtFile::Chunk32 src;
-			if ((bytesRead = stream->read(&src, Block32)) <= 0)
+			if ((bytesRead = stream->read(&src, Block32)) != Block32)
 			{
 				FBT_INVALID_READ;
 				return fbtFile::FS_INV_READ;
@@ -3566,7 +3590,7 @@ int fbtChunk::read(fbtFile::Chunk* dest, fbtStream* stream, int flags)
 		}
 		else
 		{
-			if ((bytesRead = stream->read(&c64, BlockSize)) <= 0)
+			if ((bytesRead = stream->read(&c64, BlockSize)) != BlockSize)
 			{
 				FBT_INVALID_READ;
 				return fbtFile::FS_INV_READ;
@@ -3594,7 +3618,7 @@ int fbtChunk::read(fbtFile::Chunk* dest, fbtStream* stream, int flags)
 		if (bitsVary)
 		{
 			fbtFile::Chunk64 src;
-			if ((bytesRead = stream->read(&src, Block64)) <= 0)
+			if ((bytesRead = stream->read(&src, Block64)) != Block64)
 			{
 				FBT_INVALID_READ;
 				return fbtFile::FS_INV_READ;
@@ -3620,7 +3644,7 @@ int fbtChunk::read(fbtFile::Chunk* dest, fbtStream* stream, int flags)
 		}
 		else
 		{
-			if ((bytesRead = stream->read(&c32, BlockSize)) <= 0)
+			if ((bytesRead = stream->read(&c32, BlockSize)) != BlockSize)
 			{
 				FBT_INVALID_READ;
 				return fbtFile::FS_INV_READ;
@@ -3869,7 +3893,7 @@ FBTsize fbtGzStream::write(const void* src, FBTsize nr)
 {
 	if (m_mode == fbtStream::SM_READ) return -1;
 	if (!src || !m_handle) return -1;
-    return gzwrite((gzFile)m_handle,(const voidp) src, nr);
+    return gzwrite((gzFile)m_handle, src, nr);
 }
 
 
@@ -4317,16 +4341,36 @@ bool fbtBinTables::read(bool swap)
 }
 
 
-bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
+// Every read of the tables stays inside [cp, end): a table that ends early, a
+// string without its terminator or an index past its table is a corrupt file.
+static bool fbtTableHasBytes(const char* cp, const char* end, FBTsize nr)
+{
+	return cp <= end && (FBTsize)(end - cp) >= nr;
+}
+
+
+static const char* fbtTableStringEnd(const char* cp, const char* end)
+{
+	return cp < end ? (const char*)memchr(cp, 0, (size_t)(end - cp)) : 0;
+}
+
+
+// The most elements a member's array dimensions may multiply to: a struct's
+// length in the type-length table is 16 bits, so no member holds more.
+static const int fbtMaxArrayElements = 0xFFFF;
+
+
+bool fbtBinTables::read(const void* ptr, const FBTsize& len, bool swap)
 {
 	FBTuint32* ip = 0, i, j, k, nl;
 	FBTtype* tp = 0;
 
 	char* cp = (char*)ptr;
+	const char* const end = cp + len;
 
 
     //if (!fbtCharNEq(cp,fbtIdNames::FBT_SDNA, FBT_MAGIC))  // -Waddress
-    if (!(cp && !strncmp(cp,fbtIdNames::FBT_SDNA, FBT_MAGIC)))
+    if (!(cp && fbtTableHasBytes(cp, end, 2 * FBT_MAGIC + sizeof(FBTuint32)) && !strncmp(cp,fbtIdNames::FBT_SDNA, FBT_MAGIC)))
 	{
 		fbtPrintf("Bin table is missing the start id!\n");
 		return false;
@@ -4369,6 +4413,13 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	i = 0;
 	while (i < nl && i < fbtMaxTable)
 	{
+		const char* const nameEnd = fbtTableStringEnd(cp, end);
+		if (!nameEnd)
+		{
+			fbtPrintf("Bin table name %u is truncated!\n", i);
+			return false;
+		}
+
         fbtName name = {cp,(int) i, fbtCharHashKey(cp).hash(), 0, 0, 0, 1, {0}};
 
 		fbtFixedString<64> bn;
@@ -4391,9 +4442,33 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 			case '*':   {++cp; name.m_ptrCount ++; break;   }
 			case '[':
 				{
-					while ((*++cp) != ']')
-						name.m_slots[name.m_numSlots] = (name.m_slots[name.m_numSlots] * 10) + ((*cp) - '0');
-					name.m_arraySize *= name.m_slots[name.m_numSlots++];
+					if (name.m_numSlots >= FBT_ARRAY_SLOTS)
+					{
+						fbtPrintf("Bin table name %u has too many array dimensions!\n", i);
+						return false;
+					}
+					int dimension = 0;
+					while (++cp < nameEnd && *cp != ']')
+					{
+						if (*cp < '0' || *cp > '9' || dimension > fbtMaxArrayElements)
+						{
+							fbtPrintf("Bin table name %u has an array dimension that is not a number up to %d!\n", i, fbtMaxArrayElements);
+							return false;
+						}
+						dimension = (dimension * 10) + ((*cp) - '0');
+					}
+					if (cp == nameEnd)
+					{
+						fbtPrintf("Bin table name %u has an unterminated array dimension!\n", i);
+						return false;
+					}
+					if (dimension == 0 || name.m_arraySize > fbtMaxArrayElements / dimension)
+					{
+						fbtPrintf("Bin table name %u has an empty or zero array dimension, or more than %d elements!\n", i, fbtMaxArrayElements);
+						return false;
+					}
+					name.m_slots[name.m_numSlots++] = dimension;
+					name.m_arraySize *= dimension;
 				}
 				break;
 			}
@@ -4413,7 +4488,7 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	while (opad--) cp++;
 
     //if (!fbtCharNEq(cp, fbtIdNames::FBT_TYPE, FBT_MAGIC))
-    if (!(cp && !strncmp(cp, fbtIdNames::FBT_TYPE, FBT_MAGIC)))
+    if (!(cp && fbtTableHasBytes(cp, end, FBT_MAGIC + sizeof(FBTuint32)) && !strncmp(cp, fbtIdNames::FBT_TYPE, FBT_MAGIC)))
 	{
 		fbtPrintf("Bin table is missing the type id!\n");
 		return false;
@@ -4441,10 +4516,15 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	i = 0;
 	while (i < nl)
 	{
+		const char* const typeEnd = fbtTableStringEnd(cp, end);
+		if (!typeEnd)
+		{
+			fbtPrintf("Bin table type %u is truncated!\n", i);
+			return false;
+		}
         fbtType typeData = {cp, fbtCharHashKey(cp).hash(), (FBTuint32)-1};  // Added explicit cast
 		m_type[m_typeNr++] = typeData;
-		while (*cp) ++cp;
-		++cp;
+		cp = (char*)typeEnd + 1;
 		++i;
 	}
 
@@ -4454,7 +4534,7 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	while (opad--) cp++;
 
     //if (!fbtCharNEq(cp, fbtIdNames::FBT_TLEN, FBT_MAGIC))
-    if (!(cp && !strncmp(cp, fbtIdNames::FBT_TLEN, FBT_MAGIC)))
+    if (!(cp && fbtTableHasBytes(cp, end, FBT_MAGIC + (m_typeNr + (m_typeNr & 1)) * sizeof(FBTtype)) && !strncmp(cp, fbtIdNames::FBT_TLEN, FBT_MAGIC)))
 	{
 		fbtPrintf("Bin table is missing the tlen id!\n");
 		return false;
@@ -4480,7 +4560,7 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	cp = (char*)tp;
 
     //if (!fbtCharNEq(cp, fbtIdNames::FBT_STRC, FBT_MAGIC))
-    if (!(cp && !strncmp(cp, fbtIdNames::FBT_STRC, FBT_MAGIC)))
+    if (!(cp && fbtTableHasBytes(cp, end, FBT_MAGIC + sizeof(FBTuint32)) && !strncmp(cp, fbtIdNames::FBT_STRC, FBT_MAGIC)))
 	{
 		fbtPrintf("Bin table is missing the tlen id!\n");
 		return false;
@@ -4510,41 +4590,47 @@ bool fbtBinTables::read(const void* ptr, const FBTsize& /*len*/, bool swap)
 	i = 0;
 	while (i < nl)
 	{
-		m_strc[m_strcNr++] = tp;
-
-
+		if (!fbtTableHasBytes((const char*)tp, end, 2 * sizeof(FBTtype)))
+		{
+			fbtPrintf("Bin table struct %u is truncated!\n", i);
+			return false;
+		}
 		if (swap)
 		{
 			tp[0] = fbtSwap16(tp[0]);
 			tp[1] = fbtSwap16(tp[1]);
+		}
 
-			m_type[tp[0]].m_strcId = m_strcNr - 1;
+		k = tp[1];
+		if (tp[0] >= m_typeNr || k >= fbtMaxMember
+			|| !fbtTableHasBytes((const char*)(tp + 2), end, 2 * k * sizeof(FBTtype)))
+		{
+			fbtPrintf("Bin table struct %u is truncated or corrupt!\n", i);
+			return false;
+		}
 
-			m_typeFinder.insert(m_type[tp[0]].m_name, m_type[tp[0]]);
+		m_strc[m_strcNr++] = tp;
+		m_type[tp[0]].m_strcId = m_strcNr - 1;
+		m_typeFinder.insert(m_type[tp[0]].m_name, m_type[tp[0]]);
 
+		j = 0;
+		tp += 2;
 
-			k = tp[1];
-			FBT_ASSERT( k < fbtMaxMember );
-
-			j = 0;
-			tp += 2;
-
-			while (j < k)
+		while (j < k)
+		{
+			if (swap)
 			{
 				tp[0] = fbtSwap16(tp[0]);
 				tp[1] = fbtSwap16(tp[1]);
-
-				++j;
-				tp += 2;
 			}
-		}
-		else
-		{
-			FBT_ASSERT( tp[1] < fbtMaxMember );
-			m_type[tp[0]].m_strcId = m_strcNr - 1;
-			m_typeFinder.insert(m_type[tp[0]].m_name, m_type[tp[0]]);
+			if (tp[0] >= m_typeNr || tp[1] >= m_nameNr)
+			{
+				fbtPrintf("Bin table struct %u has a member past the type or name table!\n", i);
+				return false;
+			}
 
-			tp += (2 * tp[1]) + 2;
+			++j;
+			tp += 2;
 		}
 
 		++i;

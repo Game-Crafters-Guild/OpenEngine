@@ -1,7 +1,9 @@
 // AudioEmitterSystemTests.cpp — lock tests for AudioEmitterSystem's
 // lifecycle-events consumer behavior (P3 #389 + its must-fix f0d4c05) and
 // the shared SwapGenerationGuard gap recovery it migrated onto (S1 #406).
-// Both migrations previously shipped proven by inspection only.
+// Both migrations previously shipped proven by inspection only. Charter 8
+// covers the distance falloff of a spatialized voice, read back from its sound
+// through AudioSystem::GetFalloff.
 //
 // Harness shape: a REAL AudioSystem initialized headlessly (miniaudio's
 // default backend priority ends at the null backend, so device-less CI still
@@ -13,19 +15,21 @@
 
 #include <gtest/gtest.h>
 
+#include "AudioTestTone.h"
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AudioAsset.h"
 #include "Audio/AudioSystem.h"
 #include "Components/Audio/AudioEmitter.h"
+#include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "ECSModules/Audio/Systems/AudioEmitterSystem.h"
 
-#include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -41,55 +45,6 @@ namespace
 {
 
 constexpr float kDt = 0.016f;
-
-// A tiny valid 16-bit PCM WAV (0.5 s, 440 Hz, mono, 8 kHz) so the clip
-// decodes through the same miniaudio path production WAVs take.
-GameEngine::Vector<GameEngine::uint8> MakeTestToneWav()
-{
-    constexpr std::uint32_t kSampleRate = 8000;
-    constexpr std::uint32_t kFrameCount = 4000;
-    constexpr std::uint16_t kChannels = 1;
-    constexpr std::uint16_t kBitsPerSample = 16;
-    constexpr std::uint32_t kBytesPerFrame = kChannels * (kBitsPerSample / 8);
-    constexpr std::uint32_t kDataBytes = kFrameCount * kBytesPerFrame;
-
-    GameEngine::Vector<GameEngine::uint8> wav;
-    wav.reserve(44 + kDataBytes);
-
-    auto putU16 = [&](std::uint16_t v)
-    {
-        wav.push_back(static_cast<GameEngine::uint8>(v & 0xFF));
-        wav.push_back(static_cast<GameEngine::uint8>((v >> 8) & 0xFF));
-    };
-    auto putU32 = [&](std::uint32_t v)
-    {
-        putU16(static_cast<std::uint16_t>(v & 0xFFFF));
-        putU16(static_cast<std::uint16_t>(v >> 16));
-    };
-    auto putTag = [&](const char* tag) { wav.insert(wav.end(), tag, tag + 4); };
-
-    putTag("RIFF");
-    putU32(36 + kDataBytes);
-    putTag("WAVE");
-    putTag("fmt ");
-    putU32(16);
-    putU16(1); // PCM
-    putU16(kChannels);
-    putU32(kSampleRate);
-    putU32(kSampleRate * kBytesPerFrame); // byte rate
-    putU16(kBytesPerFrame);               // block align
-    putU16(kBitsPerSample);
-    putTag("data");
-    putU32(kDataBytes);
-
-    for (std::uint32_t i = 0; i < kFrameCount; ++i)
-    {
-        const float t = static_cast<float>(i) / static_cast<float>(kSampleRate);
-        const float s = std::sin(2.0f * 3.14159265f * 440.0f * t);
-        putU16(static_cast<std::uint16_t>(static_cast<std::int16_t>(s * 0.25f * 32767.0f)));
-    }
-    return wav;
-}
 
 } // namespace
 
@@ -115,7 +70,7 @@ protected:
         m_ClipGuid = GUID::Generate();
         m_Clip = std::make_shared<AudioAsset>(m_ClipGuid,
                                               std::filesystem::path("audio-ecs-test-tone.wav"));
-        ASSERT_TRUE(m_Clip->LoadFromData(MakeTestToneWav()));
+        ASSERT_TRUE(m_Clip->LoadFromData(AudioTestSupport::MakeTestToneWav()));
         ASSERT_TRUE(m_Audio->ResolveClip(*m_Clip).IsValid());
 
         m_World = std::make_unique<ECS::World>();
@@ -402,4 +357,193 @@ TEST_F(AudioEmitterSystemTest, DoubleStepWithinWindowIsIdempotent)
     m_System->Update(*m_World, kDt);
     m_System->Update(*m_World, kDt); // same Removed span again
     EXPECT_EQ(AliveVoices(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Charter 7 — live fields: volume and pitch edits on the component reach the
+// voice it is already playing, without a restart.
+// ---------------------------------------------------------------------------
+
+TEST_F(AudioEmitterSystemTest, VolumeAndPitchEditsReachLiveVoice)
+{
+    m_Audio->SetBusVolume(0, 0.0f); // master bus muted: the edited volume is audible otherwise
+    auto e = CreateEmitterEntity();
+    SwapAndRun();
+    ASSERT_EQ(AliveVoices(), 1u);
+
+    // The first voice of a fresh AudioSystem occupies slot 0, generation 1.
+    const Audio::AudioEmitterHandle voice(0, 1);
+    ASSERT_TRUE(m_Audio->IsAlive(voice));
+
+    AudioEmitter* emitter = m_World->GetComponentForWrite<AudioEmitter>(e);
+    ASSERT_NE(emitter, nullptr);
+    emitter->volume = 0.125f;
+    emitter->pitch = 1.5f;
+    SwapAndRun();
+
+    EXPECT_TRUE(m_Audio->IsAlive(voice)) << "a field edit restarted the voice";
+    EXPECT_FLOAT_EQ(m_Audio->GetVolume(voice), 0.125f);
+    EXPECT_FLOAT_EQ(m_Audio->GetPitch(voice), 1.5f);
+}
+
+// ---------------------------------------------------------------------------
+// Charter 8 — distance falloff: PlayOptions::falloff and the emitter's falloff
+// fields reach the voice's miniaudio sound (read back from the sound), the
+// defaults are AudioFalloff's, and out-of-range values are refused or sanitized.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+const GameEngine::Mathematics::Vector3 kZero{0.0f, 0.0f, 0.0f};
+
+Audio::PlayOptions SilentLoopOptions()
+{
+    Audio::PlayOptions opts{};
+    opts.volume = 0.0f;
+    opts.loop = true;
+    return opts;
+}
+
+void ExpectFalloff(const Audio::AudioFalloff& actual, Audio::AudioAttenuationModel model,
+                   float minDistance, float maxDistance, float rolloff)
+{
+    EXPECT_EQ(actual.model, model);
+    EXPECT_EQ(actual.minDistance, minDistance);
+    EXPECT_EQ(actual.maxDistance, maxDistance);
+    EXPECT_EQ(actual.rolloff, rolloff);
+}
+} // namespace
+
+TEST_F(AudioEmitterSystemTest, DefaultFalloffIsInverseFromOneUnitTo10000)
+{
+    const auto voice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, SilentLoopOptions());
+    ASSERT_TRUE(voice.IsValid());
+
+    ExpectFalloff(m_Audio->GetFalloff(voice), Audio::AudioAttenuationModel::Inverse, 1.0f, 10000.0f, 1.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, Play3DFalloffReachesTheSound)
+{
+    Audio::PlayOptions opts = SilentLoopOptions();
+    opts.falloff.model = Audio::AudioAttenuationModel::Linear;
+    opts.falloff.minDistance = 50.0f;
+    opts.falloff.maxDistance = 2000.0f;
+    opts.falloff.rolloff = 0.5f;
+    const auto voice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, opts);
+    ASSERT_TRUE(voice.IsValid());
+
+    ExpectFalloff(m_Audio->GetFalloff(voice), Audio::AudioAttenuationModel::Linear, 50.0f, 2000.0f, 0.5f);
+}
+
+TEST_F(AudioEmitterSystemTest, SetFalloffReachesAPlayingSpatializedVoiceOnly)
+{
+    const auto voice3D = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, SilentLoopOptions());
+    const auto voice2D = m_Audio->Play2D(m_ClipGuid, SilentLoopOptions());
+    ASSERT_TRUE(voice3D.IsValid());
+    ASSERT_TRUE(voice2D.IsValid());
+
+    Audio::AudioFalloff falloff{};
+    falloff.model = Audio::AudioAttenuationModel::Linear;
+    falloff.minDistance = 50.0f;
+    falloff.maxDistance = 2000.0f;
+    falloff.rolloff = 0.5f;
+    m_Audio->SetFalloff(voice3D, falloff);
+    m_Audio->SetFalloff(voice2D, falloff);
+
+    ExpectFalloff(m_Audio->GetFalloff(voice3D), Audio::AudioAttenuationModel::Linear, 50.0f, 2000.0f, 0.5f);
+    // A 2D voice has no distance: it reports, and keeps, the default.
+    EXPECT_EQ(m_Audio->GetFalloff(voice2D), Audio::AudioFalloff{});
+}
+
+TEST_F(AudioEmitterSystemTest, SpatializedPlay2DFalloffReachesTheSound)
+{
+    Audio::PlayOptions opts = SilentLoopOptions();
+    opts.spatialized = true;
+    opts.falloff.model = Audio::AudioAttenuationModel::Exponential;
+    opts.falloff.minDistance = 4.0f;
+    opts.falloff.maxDistance = 400.0f;
+    opts.falloff.rolloff = 2.0f;
+    const auto voice = m_Audio->Play2D(m_ClipGuid, opts);
+    ASSERT_TRUE(voice.IsValid());
+
+    ExpectFalloff(m_Audio->GetFalloff(voice), Audio::AudioAttenuationModel::Exponential, 4.0f, 400.0f, 2.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, OutOfRangeFalloffIsSanitized)
+{
+    Audio::PlayOptions negative = SilentLoopOptions();
+    negative.falloff.model = Audio::AudioAttenuationModel::None;
+    negative.falloff.minDistance = -5.0f;
+    negative.falloff.maxDistance = -10.0f;
+    negative.falloff.rolloff = -2.0f;
+    const auto negativeVoice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, negative);
+    ASSERT_TRUE(negativeVoice.IsValid());
+
+    Audio::PlayOptions nonFinite = SilentLoopOptions();
+    nonFinite.falloff.minDistance = std::numeric_limits<float>::quiet_NaN();
+    nonFinite.falloff.maxDistance = std::numeric_limits<float>::infinity();
+    nonFinite.falloff.rolloff = std::numeric_limits<float>::quiet_NaN();
+    const auto nonFiniteVoice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, nonFinite);
+    ASSERT_TRUE(nonFiniteVoice.IsValid());
+
+    Audio::PlayOptions inverted = SilentLoopOptions();
+    inverted.falloff.minDistance = 100.0f;
+    inverted.falloff.maxDistance = 10.0f;
+    const auto invertedVoice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, inverted);
+    ASSERT_TRUE(invertedVoice.IsValid());
+
+    // A negative or NaN minimum distance takes the default (1); the rest is sanitized.
+    ExpectFalloff(m_Audio->GetFalloff(negativeVoice), Audio::AudioAttenuationModel::None, 1.0f, 1.0f, 0.0f);
+    ExpectFalloff(m_Audio->GetFalloff(nonFiniteVoice), Audio::AudioAttenuationModel::Inverse, 1.0f,
+                  std::numeric_limits<float>::max(), 1.0f);
+    ExpectFalloff(m_Audio->GetFalloff(invertedVoice), Audio::AudioAttenuationModel::Inverse, 100.0f, 100.0f, 1.0f);
+}
+
+// A minimum distance of 0 silences a voice from the first unit out (miniaudio's curves divide
+// by it): SetFalloff refuses it and the voice keeps the falloff it had; a voice started with
+// one takes the default minimum distance.
+TEST_F(AudioEmitterSystemTest, AZeroMinimumDistanceIsRefused)
+{
+    Audio::PlayOptions opts = SilentLoopOptions();
+    opts.falloff.minDistance = 0.0f;
+    const auto voice = m_Audio->Play3D(m_ClipGuid, 0, kZero, kZero, opts);
+    ASSERT_TRUE(voice.IsValid());
+    EXPECT_EQ(m_Audio->GetFalloff(voice).minDistance, 1.0f);
+
+    Audio::AudioFalloff kept{};
+    kept.minDistance = 20.0f;
+    m_Audio->SetFalloff(voice, kept);
+    Audio::AudioFalloff zero = kept;
+    zero.minDistance = 0.0f;
+    m_Audio->SetFalloff(voice, zero);
+    EXPECT_EQ(m_Audio->GetFalloff(voice).minDistance, 20.0f);
+}
+
+TEST_F(AudioEmitterSystemTest, SpatializedEmitterFalloffReachesItsVoiceAndFollowsEdits)
+{
+    AudioEmitter authored = MakeEmitter();
+    authored.spatialized = true;
+    authored.attenuation = GameEngine::Components::AudioEmitterAttenuation::Linear;
+    authored.minDistance = 50.0f;
+    authored.maxDistance = 2000.0f;
+    authored.rolloff = 0.75f;
+    const ECS::EntityHandle e = m_World->CreateHandle(authored, GameEngine::Components::WorldTransform{});
+    SwapAndRun();
+    ASSERT_EQ(AliveVoices(), 1u);
+
+    // The first voice of a fresh AudioSystem occupies slot 0, generation 1.
+    const Audio::AudioEmitterHandle voice(0, 1);
+    ASSERT_TRUE(m_Audio->IsAlive(voice));
+    ExpectFalloff(m_Audio->GetFalloff(voice), Audio::AudioAttenuationModel::Linear, 50.0f, 2000.0f, 0.75f);
+
+    AudioEmitter* emitter = m_World->GetComponentForWrite<AudioEmitter>(e);
+    ASSERT_NE(emitter, nullptr);
+    emitter->attenuation = GameEngine::Components::AudioEmitterAttenuation::Exponential;
+    emitter->minDistance = 4.0f;
+    emitter->maxDistance = 400.0f;
+    emitter->rolloff = 2.0f;
+    SwapAndRun();
+
+    EXPECT_TRUE(m_Audio->IsAlive(voice)) << "a falloff edit restarted the voice";
+    ExpectFalloff(m_Audio->GetFalloff(voice), Audio::AudioAttenuationModel::Exponential, 4.0f, 400.0f, 2.0f);
 }

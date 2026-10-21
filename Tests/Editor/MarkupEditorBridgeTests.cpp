@@ -23,17 +23,23 @@
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "InspectorRegistry.h"
+#include "Editor/Entities/EditorComponentTraits.h"
+#include "Editor/Entities/EntityDisplayName.h"
+#include "Inspectors/ComponentIconClass.h"
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/WorldSnapshotCommand.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
 #include "UI/Controls/Button.h"
+#include "UI/Controls/CollapsibleInfoCard.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextArea.h"
 #include "UI/Controls/TextField.h"
+#include "UI/EditorIcons.h"
 #include "UI/StyleProperties.h"
 #include "UI/UiContext.h"
 #include "UI/UiDispatcher.h"
@@ -43,6 +49,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -424,6 +431,84 @@ TEST_F(MarkupEditorBridgeTest, TwoScenesWithTheSameTagKeepTheirOwnState)
     EXPECT_TRUE(m_Bridge->IsHidden(World, CreateTaggedMarkup("lake")));
 }
 
+// Undoing a world snapshot command (a spline stroke, an additive scene load, a version-control
+// revert) restores the world in place, under the same handles: every mark-up keeps its notes and
+// its viewer state, and the bridge does not adopt it again as a new mark-up (#3103).
+TEST_F(MarkupEditorBridgeTest, UndoingAWorldSnapshotCommandKeepsEveryMarkupsNotesAndViewerState)
+{
+    const ECS::EntityHandle lake = CreateMarkup();
+    ASSERT_TRUE(MarkupService::Get().SetDescription(World, lake, MarkupAuthor::User, m_Now, "keep me"));
+    AgentComment(lake, "walls first");
+    Hide(lake);
+    const std::size_t entries = MarkupService::Get().FindNotes(World, lake)->Entries.size();
+    const Markup stamps = MarkupOf(lake);
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    const ECS::EntityHandle stroke = World.CreateEntity();
+    World.AddComponentImmediate(stroke, Components::Transform{});
+    World.ProcessCommands();
+    Editor::WorldSnapshotCommand command("Spline stroke", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 60;
+    command.Undo();
+
+    ASSERT_TRUE(World.IsValid(lake));
+    const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(World, lake);
+    ASSERT_NE(notes, nullptr) << "the undo dropped the mark-up's notes";
+    EXPECT_EQ(notes->Description, "keep me");
+    EXPECT_EQ(notes->Entries.size(), entries);
+    EXPECT_TRUE(m_Bridge->IsHidden(World, lake)) << "the undo dropped the mark-up's viewer state";
+    EXPECT_EQ(MarkupOf(lake).CreatedUnix, stamps.CreatedUnix) << "the bridge adopted the mark-up again";
+    EXPECT_EQ(MarkupOf(lake).Revision, stamps.Revision);
+}
+
+// A mark-up created after the snapshot an undo restores is gone, and its handle is never issued
+// again: a mark-up created next starts with no notes and no viewer state of its own.
+TEST_F(MarkupEditorBridgeTest, AMarkupCreatedAfterAnUndoDoesNotInheritAnUndoneMarkupsNotes)
+{
+    const ECS::EntityHandle keeper = CreateMarkup();
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    const ECS::EntityHandle gone = CreateMarkup();
+    ASSERT_TRUE(MarkupService::Get().SetDescription(World, gone, MarkupAuthor::User, m_Now, "from the undone load"));
+    AgentComment(gone, "walls first");
+    Hide(gone);
+    Editor::WorldSnapshotCommand command("Load Scene Additive", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 60;
+    command.Undo();
+    ASSERT_TRUE(World.IsValid(keeper));
+    ASSERT_FALSE(World.IsValid(gone));
+    const ECS::EntityHandle fresh = CreateMarkup();
+
+    EXPECT_NE(fresh, gone) << "the undone mark-up's handle was issued again";
+    const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(World, fresh);
+    ASSERT_NE(notes, nullptr);
+    EXPECT_EQ(notes->Description, "");
+    EXPECT_EQ(notes->Entries.size(), 1u);
+    EXPECT_FALSE(m_Bridge->IsHidden(World, fresh));
+}
+
+// An in-place restore replaces the components the bridge read its edit baselines from: the
+// next commit is read against the restored state, so the undo of a move records no move.
+TEST_F(MarkupEditorBridgeTest, AnEditAfterAnUndoIsReadAgainstTheRestoredState)
+{
+    const ECS::EntityHandle docks = CreateMarkup();
+    Notifications.NotifyWorldStructureChanged({&World, EditorChangeNotifications::ChangeKind::Commit});
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    Components::Transform moved;
+    moved.matrix[12] = 5.0f;
+    World.AddComponentImmediate(docks, moved);
+    Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Commit);
+    const auto& entries = MarkupService::Get().FindNotes(World, docks)->Entries;
+    ASSERT_EQ(entries.size(), 2u); // created, moved
+    Editor::WorldSnapshotCommand command("Move", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 600;
+    command.Undo();
+    Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Commit);
+
+    EXPECT_EQ(entries.size(), 2u) << "the commit after the undo was read against the undone move";
+}
+
 // Hiding every mark-up is one write of the user's project settings, not one per mark-up.
 // The writes are counted by their failures: the user-data root is a file, so each write
 // fails and says so once.
@@ -579,7 +664,7 @@ TEST_F(MarkupEditorBridgeTest, TheSearchAndTheStatusFilterSelectTheSameMarkupsOn
     EXPECT_TRUE(Editor::MarkupMatchesFilters(World, lake, "", ""));
     EXPECT_FALSE(Editor::MarkupMatchesFilters(World, lake, "", proposed));
     EXPECT_TRUE(Editor::MarkupMatchesFilters(World, forest, "", proposed));
-    EXPECT_TRUE(Editor::MarkupMatchesFilters(World, forest, "mark", proposed)); // "Mark-up", any case
+    EXPECT_TRUE(Editor::MarkupMatchesFilters(World, forest, "mark", proposed)); // "Untitled mark-up", any case
     EXPECT_FALSE(Editor::MarkupMatchesFilters(World, forest, "zzz", proposed));
 }
 
@@ -723,8 +808,36 @@ TEST_F(MarkupEditorBridgeTest, TheInspectorSectionIsReadOnlyInPlay)
     for (Button* button : FindAll<Button>(*section))
     {
         if (button->GetText() == "Add comment")
+        {
             EXPECT_FALSE(button->IsEnabled());
+        }
     }
+}
+
+// Who created and last changed a mark-up is a note about the section, so it reads in the editor's
+// info card rather than as one more loose line among the fields.
+TEST_F(MarkupEditorBridgeTest, TheCreatedAndChangedLineIsAnInfoCard)
+{
+    const ECS::EntityHandle lake = CreateMarkup();
+    Editor::UndoRedoService undo;
+    const std::unique_ptr<UIElement> section = BuildInspectorSection(lake, undo);
+
+    const std::string provenance = "Created now by you · changed now by you";
+    std::vector<EditorUI::CollapsibleInfoCard*> cards;
+    for (EditorUI::CollapsibleInfoCard* card : FindAll<EditorUI::CollapsibleInfoCard>(*section))
+    {
+        if (card->GetFullText() == provenance)
+            cards.push_back(card);
+    }
+    ASSERT_EQ(cards.size(), 1u) << "no info card holds '" << provenance << "'";
+    size_t labelsInCard = 0;
+    for (Label* label : FindAll<Label>(*cards.front()))
+        labelsInCard += label->GetText() == provenance ? 1 : 0;
+    size_t labelsInSection = 0;
+    for (Label* label : FindAll<Label>(*section))
+        labelsInSection += label->GetText() == provenance ? 1 : 0;
+    EXPECT_EQ(labelsInCard, 1u);
+    EXPECT_EQ(labelsInSection, labelsInCard) << "the line is also shown outside its card";
 }
 
 // A mark-up's volume is part of the mark-up: in play mode its shape refuses a change too.
@@ -1167,4 +1280,64 @@ TEST_F(MarkupEditorBridgeTest, AnEntityChipSelectsFromItsNameAndFramesFromItsGly
     frame.DispatchEvent(glyphRelease);
     const std::vector<std::pair<ECS::EntityHandle, bool>> expected{{cathedral, false}, {cathedral, true}};
     EXPECT_EQ(selects, expected);
+}
+
+// A mark-up with no name is "Untitled mark-up" on its Mark-ups panel row and wherever the editor
+// names an entity (the inspector's header, the Hierarchy, an entity link); another entity with no
+// name keeps its id.
+TEST_F(MarkupEditorBridgeTest, AnUnnamedMarkupIsAnUntitledMarkupEverywhere)
+{
+    Editor::RegisterMarkupInspector(*m_Bridge);
+    const ECS::EntityHandle markup = CreateMarkup();
+    const ECS::EntityHandle plain = World.CreateEntity();
+    World.AddComponentImmediate(plain, Components::Transform{});
+    EXPECT_EQ(Editor::MarkupTitle(World, markup), "Untitled mark-up");
+    EXPECT_EQ(Editor::EntityDisplayName(World, markup), "Untitled mark-up");
+    EXPECT_EQ(Editor::EntityDisplayName(World, plain), Editor::EntityIdLabel(plain));
+}
+
+namespace
+{
+
+// The body of the rule whose selector ends in `selectorTail` in the editor sheet at `sheetPath`:
+// the text from its opening brace to its closing one, or empty when the sheet has no such rule.
+std::string EditorRuleBody(const char* sheetPath, const std::string& selectorTail)
+{
+    std::ifstream in(std::filesystem::path(GE_EDITOR_SOURCE_DIR) / sheetPath);
+    const std::string sheet((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const size_t selector = sheet.find(selectorTail + " {");
+    if (selector == std::string::npos)
+        return {};
+    const size_t open = sheet.find('{', selector);
+    return sheet.substr(open, sheet.find('}', open) - open);
+}
+
+} // namespace
+
+// A mark-up's component shows the glyph of the tool that places it: the inspector section header,
+// the Add Component picker (both through ComponentIconClass) and the Hierarchy row all draw the
+// Scene View tool strip's Mark-up icon.
+TEST_F(MarkupEditorBridgeTest, TheMarkupComponentsShowTheMarkupToolsIcon)
+{
+    const ECS::EntityHandle markup = CreateMarkup();
+    Editor::UndoRedoService undo;
+    (void)BuildInspectorSection(markup, undo);
+    const std::string toolIcon = std::string("url(\"") + EditorIcons::kMarkup + "\")";
+
+    for (const ECS::ComponentTypeId type :
+         {ECS::GetComponentTypeId<Markup>(), ECS::GetComponentTypeId<Components::MarkupVolume>()})
+    {
+        const std::string iconClass = Editor::ComponentIconClass(&World, markup, type);
+        ASSERT_EQ(iconClass, "inspector-section-icon-markup");
+        EXPECT_NE(EditorRuleBody("Assets/UI/theme/inspector.css", ".inspector-section-icon." + iconClass)
+                      .find(toolIcon),
+                  std::string::npos)
+            << iconClass << " does not draw " << EditorIcons::kMarkup;
+    }
+    Editor::EditorComponentTraits traits;
+    ASSERT_TRUE(Editor::EditorComponentTraitsRegistry::Get().TryGet(ECS::GetComponentTypeId<Markup>(), traits));
+    ASSERT_EQ(traits.HierarchyRowClass, "hierarchy-entity-markup");
+    EXPECT_NE(EditorRuleBody("Assets/UI/theme/views.css", ".entity-icon." + traits.HierarchyRowClass).find(toolIcon),
+              std::string::npos)
+        << traits.HierarchyRowClass << " does not draw " << EditorIcons::kMarkup;
 }

@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "Components/Rendering/Camera.h"
+#include "Components/Rendering/PostProcessEffects/ExposureAdjustmentEffect.h"
+#include "Engine/Rendering/CameraExposureHelpers.h"
+#include "../Source/Engine/Rendering/Systems/CameraExposureStamp.h"
 #include "Engine/Rendering/Exposure.h"
 #include "Engine/Rendering/ViewRegistry.h"
 #include "Engine/Rendering/PostProcessSettings.h"
@@ -187,7 +190,7 @@ TEST(Exposure, AutoExposureBiasFoldsIntoKeyAndBothClamps)
     const float lo = Rendering::EvToLinearExposure(s.AutoExposureMaxEv);
     const float hi = Rendering::EvToLinearExposure(s.AutoExposureMinEv);
     const float brightAvg = 1000.0f; // pins at lo
-    const float darkAvg = 1e-5f;     // pins at hi
+    const float darkAvg = 1e-9f;     // pins at hi
     EXPECT_NEAR(std::clamp(key / brightAvg, minExp, maxExp), lo * bias, lo * bias * 1e-4f);
     EXPECT_NEAR(std::clamp(key / darkAvg, minExp, maxExp), hi * bias, hi * bias * 1e-4f);
 }
@@ -233,4 +236,172 @@ TEST(Exposure, ManualEvDefaultIsSharedAcrossCameraAndViewRegistry)
     // Auto stays the camera's default mode: the shared EV is the fallback a manual camera lands on,
     // not a switch to manual exposure.
     EXPECT_EQ(Components::Camera{}.ExposureControl, ExposureMode::Auto);
+}
+
+// A game camera meters the picture by default with a floor that reaches a moonlit night and its
+// ceiling, and the meter it is set to reaches the view's exposure (the field the per-view resolve stamps).
+TEST(Exposure, TheCameraMetersThePictureByDefaultAndPublishesItsMeter)
+{
+    const Components::Camera defaults{};
+    EXPECT_EQ(defaults.AutoExposureMeter, Components::ExposureMeter::Picture);
+    EXPECT_FLOAT_EQ(defaults.AutoExposureMinEv, -7.0f);
+    EXPECT_FLOAT_EQ(defaults.AutoExposureMaxEv, 18.0f);
+    EXPECT_EQ(Engine::Renderer::ToCameraExposure(defaults).AutoExposureMeter,
+              static_cast<int32>(Components::ExposureMeter::Picture));
+
+    Components::Camera lights{};
+    lights.AutoExposureMeter = Components::ExposureMeter::Lights;
+    EXPECT_EQ(Engine::Renderer::ToCameraExposure(lights).AutoExposureMeter,
+              static_cast<int32>(Components::ExposureMeter::Lights));
+}
+
+// One floor for every view: the camera, the render-side copy a camera publishes, and the settings a
+// view starts from.
+TEST(Exposure, TheAutoExposureFloorIsSharedAcrossCameraViewRegistryAndSettings)
+{
+    EXPECT_FLOAT_EQ(Components::kDefaultAutoExposureMinEv, -7.0f);
+    EXPECT_FLOAT_EQ(Components::Camera{}.AutoExposureMinEv, Components::kDefaultAutoExposureMinEv);
+    EXPECT_FLOAT_EQ(Engine::Renderer::ViewRegistry::CameraExposure{}.AutoExposureMinEv,
+                    Components::kDefaultAutoExposureMinEv);
+    EXPECT_FLOAT_EQ(Engine::Renderer::PostProcessSettings{}.AutoExposureMinEv, Components::kDefaultAutoExposureMinEv);
+}
+
+namespace
+{
+bool SameKey(const Math::CurveKey& a, const Math::CurveKey& b)
+{
+    return a.Time == b.Time && a.Value == b.Value && a.Interp == b.Interp && a.TangentMode == b.TangentMode;
+}
+
+// The samples read the way auto_exposure_resolve.comp reads them: linear between samples, the end
+// samples outside.
+float InterpolateSamples(const Engine::Renderer::ExposureCompensationSamples& samples, float ev)
+{
+    using Samples = Engine::Renderer::ExposureCompensationSamples;
+    const float span = samples.EndEv - samples.StartEv;
+    const float perStop = span > 1.0e-4f ? static_cast<float>(Samples::kCount - 1) / span : 0.0f;
+    const float t = std::clamp((ev - samples.StartEv) * perStop, 0.0f, static_cast<float>(Samples::kCount - 1));
+    const uint32 i = std::min(static_cast<uint32>(t), Samples::kCount - 2);
+    return samples.Stops[i] + (samples.Stops[i + 1] - samples.Stops[i]) * (t - static_cast<float>(i));
+}
+} // namespace
+
+// The default compensation curve, pinned: two smooth keys with flat tangents, 0 from EV100 0.5 up and
+// -2.5 from the moonlit -4.25 down.
+TEST(ExposureCompensationCurve, TheDefaultKeysArePinned)
+{
+    using Math::CurveInterp;
+    using Math::CurveTangentMode;
+    const Math::Curve curve = Components::DefaultExposureCompensationCurve();
+    ASSERT_EQ(curve.KeyCount, 2u);
+    EXPECT_TRUE(SameKey(curve.Keys[0], {-4.25f, -2.5f, 0.0f, 0.0f, CurveInterp::Smooth, CurveTangentMode::Flat}));
+    EXPECT_TRUE(SameKey(curve.Keys[1], {0.5f, 0.0f, 0.0f, 0.0f, CurveInterp::Smooth, CurveTangentMode::Flat}));
+    EXPECT_TRUE(SameKey(Components::Camera{}.AutoExposureCompensationCurve.Keys[1], curve.Keys[1]));
+    EXPECT_EQ(Engine::Renderer::ViewRegistry::CameraExposure{}.AutoExposureCompensationCurve.KeyCount, 2u);
+}
+
+// The default never brightens and leaves day, shade, dusk and a lamp-lit room (EV100 0.5 and up) as
+// metered. A darker scene never shows brighter: the curve never falls as the scene brightens.
+TEST(ExposureCompensationCurve, TheDefaultLeavesTheDayAndNeverShowsADarkerSceneBrighter)
+{
+    const Math::Curve curve = Components::DefaultExposureCompensationCurve();
+    const float floorEv = Components::kDefaultAutoExposureMinEv;
+    float previousShown = -16.0f + curve.Evaluate(-16.0f) - floorEv;
+    for (float ev = -16.0f; ev <= 20.0f; ev += 0.05f)
+    {
+        const float stops = curve.Evaluate(ev);
+        EXPECT_LE(stops, 0.0f) << "at EV100 " << ev;
+        // How bright middle gray shows, in stops, relative to the floor: the reading minus the
+        // exposure the clamp holds, plus the curve.
+        const float shown = ev - std::max(ev, floorEv) + stops;
+        EXPECT_GE(shown, previousShown - 1.0e-4f) << "at EV100 " << ev;
+        previousShown = shown;
+    }
+    EXPECT_FLOAT_EQ(curve.Evaluate(0.5f), 0.0f);
+    EXPECT_FLOAT_EQ(curve.Evaluate(0.8f), 0.0f) << "a lamp-lit room";
+    EXPECT_FLOAT_EQ(curve.Evaluate(13.0f), 0.0f) << "a shaded day";
+    EXPECT_FLOAT_EQ(curve.Evaluate(-4.25f), -2.5f) << "a full moon";
+    EXPECT_FLOAT_EQ(curve.Evaluate(-11.0f), -2.5f) << "a moonless night";
+}
+
+// The samples span the keys, through the one curve evaluator, and an empty curve adds nothing.
+TEST(ExposureCompensationCurve, SamplesSpanTheKeysThroughTheCurveEvaluator)
+{
+    using Samples = Engine::Renderer::ExposureCompensationSamples;
+    const Math::Curve curve = Components::DefaultExposureCompensationCurve();
+    const Samples samples = Rendering::SampleExposureCompensation(curve);
+    EXPECT_FLOAT_EQ(samples.StartEv, -4.25f);
+    EXPECT_FLOAT_EQ(samples.EndEv, 0.5f);
+    for (uint32 i = 0; i < Samples::kCount; ++i)
+        EXPECT_NEAR(samples.Stops[i], curve.Evaluate(-4.25f + 4.75f * static_cast<float>(i) / 15.0f), 1.0e-5f) << i;
+
+    const Samples empty = Rendering::SampleExposureCompensation(Math::Curve{});
+    for (float stops : empty.Stops)
+        EXPECT_EQ(stops, 0.0f);
+
+    Math::Curve single{};
+    single.TryInsert(Math::CurveKey{3.0f, -1.5f});
+    const Samples constant = Rendering::SampleExposureCompensation(single);
+    EXPECT_FLOAT_EQ(InterpolateSamples(constant, -20.0f), -1.5f);
+    EXPECT_FLOAT_EQ(InterpolateSamples(constant, 20.0f), -1.5f);
+}
+
+// The resolve's linear read of the samples stays within a twentieth of a stop of the default curve
+// at every reading, so the sampling does not show.
+TEST(ExposureCompensationCurve, TheSampledDefaultFollowsTheCurve)
+{
+    const Math::Curve curve = Components::DefaultExposureCompensationCurve();
+    const auto samples = Rendering::SampleExposureCompensation(curve);
+    for (float ev = -16.0f; ev <= 20.0f; ev += 0.05f)
+        EXPECT_NEAR(InterpolateSamples(samples, ev), curve.Evaluate(ev), 0.05f) << "at EV100 " << ev;
+}
+
+// A camera's curve reaches the render-side copy it publishes.
+TEST(ExposureCompensationCurve, TheCameraPublishesItsCurve)
+{
+    Components::Camera camera{};
+    camera.AutoExposureCompensationCurve = Math::Curve{};
+    camera.AutoExposureCompensationCurve.TryInsert(Math::CurveKey{0.0f, -1.0f});
+    const auto published = Engine::Renderer::ToCameraExposure(camera);
+    ASSERT_EQ(published.AutoExposureCompensationCurve.KeyCount, 1u);
+    EXPECT_FLOAT_EQ(published.AutoExposureCompensationCurve.Keys[0].Value, -1.0f);
+}
+
+// A view with no camera takes the default sensor: Auto, the shared floor and the default curve.
+TEST(ExposureCompensationCurve, AViewWithNoCameraTakesTheDefaultCurve)
+{
+    Engine::Renderer::PostProcessSettings settings{};
+    Engine::Renderer::ApplyCameraExposure(settings, Engine::Renderer::ViewRegistry::CameraExposure{});
+    EXPECT_TRUE(settings.AutoExposureActive);
+    EXPECT_FLOAT_EQ(settings.AutoExposureMinEv, Components::kDefaultAutoExposureMinEv);
+    const auto expected = Rendering::SampleExposureCompensation(Components::DefaultExposureCompensationCurve());
+    EXPECT_EQ(std::memcmp(&settings.AutoExposureCompensation, &expected, sizeof(expected)), 0);
+}
+
+// A camera's own curve reaches its view's settings; a camera with no keys adds nothing.
+TEST(ExposureCompensationCurve, TheCameraCurveReachesItsView)
+{
+    Components::Camera camera{};
+    camera.AutoExposureCompensationCurve = Math::Curve{};
+    camera.AutoExposureCompensationCurve.TryInsert(Math::CurveKey{-6.0f, -2.0f});
+    camera.AutoExposureCompensationCurve.TryInsert(Math::CurveKey{2.0f, 0.0f});
+    Engine::Renderer::PostProcessSettings settings{};
+    Engine::Renderer::ApplyCameraExposure(settings, Engine::Renderer::ToCameraExposure(camera));
+    EXPECT_FLOAT_EQ(settings.AutoExposureCompensation.StartEv, -6.0f);
+    EXPECT_FLOAT_EQ(settings.AutoExposureCompensation.EndEv, 2.0f);
+    EXPECT_FLOAT_EQ(settings.AutoExposureCompensation.Stops[0], -2.0f);
+
+    camera.AutoExposureCompensationCurve = Math::Curve{};
+    Engine::Renderer::PostProcessSettings flat{};
+    Engine::Renderer::ApplyCameraExposure(flat, Engine::Renderer::ToCameraExposure(camera));
+    for (float stops : flat.AutoExposureCompensation.Stops)
+        EXPECT_EQ(stops, 0.0f);
+}
+
+// A volume's Clamp Min starts at the camera's floor: ticking it changes nothing until the author drags
+// it, as Clamp Max starts at the camera's ceiling.
+TEST(Exposure, TheVolumeClampsStartAtTheCamerasFloorAndCeiling)
+{
+    EXPECT_FLOAT_EQ(Components::ExposureAdjustmentEffect{}.MinEv, Components::Camera{}.AutoExposureMinEv);
+    EXPECT_FLOAT_EQ(Components::ExposureAdjustmentEffect{}.MaxEv, Components::Camera{}.AutoExposureMaxEv);
 }

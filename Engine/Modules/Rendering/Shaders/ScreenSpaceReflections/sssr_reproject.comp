@@ -27,6 +27,11 @@ layout(std140, set = 0, binding = 11) uniform SssrReprojection
     mat4 prevInvViewProj;
 };
 layout(set = 0, binding = 12) uniform sampler2D uMotionVectors;
+// The view's exposure state (ExposureHistory). The history is stored at the
+// previous frame's pre-exposure and this frame's radiance at P: the reprojected radiance is
+// rescaled by P / previousPreExposure and the luminance moments by that ratio and its square.
+#define GE_EXPOSURE_HISTORY_BINDING 13
+#include "Includes/exposure_history.glsl"
 
 #include "ScreenSpaceReflections/sssr_common.glsl"
 #include "ScreenSpaceReflections/sssr_history_policy.glsl"
@@ -192,6 +197,10 @@ void main()
     {
         history /= support;
         oldMoments /= support;
+        float historyScale = GE_PreExposureHistoryScale();
+        history.rgb *= historyScale;
+        oldMoments.r *= historyScale;
+        oldMoments.g *= historyScale * historyScale;
         float motionTexels = GE_SssrMotionPixels(uv, reprojectionUv, ge_taaJitter.xy,
                                                 ge_taaJitter.zw, ge_screenSize.xy);
         oldMoments.a /= 1.0 + 0.15 * motionTexels;

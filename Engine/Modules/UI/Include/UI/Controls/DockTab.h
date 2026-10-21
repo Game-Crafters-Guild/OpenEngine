@@ -50,7 +50,6 @@ private:
     float m_DragStartX = 0.0f;
     float m_DragStartY = 0.0f;
     float m_DragGrabOffsetX = 0.0f;         // fixed mouse-to-tab offset captured before live reordering
-    mutable float m_DragCurOffsetX = 0.0f;  // eased value applied at draw time
     float m_DragTargetOffsetX = 0.0f;       // set by input; eased towards
     float m_DragCurrentX = 0.0f;
     float m_DragCurrentY = 0.0f;

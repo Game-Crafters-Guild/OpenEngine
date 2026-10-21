@@ -102,7 +102,7 @@ TEST(FbxAxisConversion, DoesNotNegateFrontOnYupPlusZ)
     axes.front = UFBX_COORDINATE_AXIS_POSITIVE_Z;
 
     const AxisConversion c = Make(axes);
-    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, c, 1.0f);
+    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, c, 1.0f);
     EXPECT_NEAR(front.x, 0.0, 1e-6);
     EXPECT_NEAR(front.y, 0.0, 1e-6);
     EXPECT_NEAR(front.z, 1.0, 1e-6);
@@ -117,7 +117,7 @@ TEST(FbxAxisConversion, Bake180YTurnsFrontToMinusZ)
 
     AxisConversion c = Make(axes);
     ComposeEngineEulerDegrees(c, 0.0f, 180.0f, 0.0f);
-    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, c, 1.0f);
+    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, c, 1.0f);
     EXPECT_NEAR(front.x, 0.0, 1e-5);
     EXPECT_NEAR(front.y, 0.0, 1e-5);
     EXPECT_NEAR(front.z, -1.0, 1e-5);
@@ -132,7 +132,7 @@ TEST(FbxAxisConversion, BakeIdentityLeavesFront)
 
     AxisConversion c = Make(axes);
     ComposeEngineEulerDegrees(c, 0.0f, 0.0f, 0.0f);
-    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, c, 1.0f);
+    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, c, 1.0f);
     EXPECT_NEAR(front.x, 0.0, 1e-6);
     EXPECT_NEAR(front.y, 0.0, 1e-6);
     EXPECT_NEAR(front.z, 1.0, 1e-6);
@@ -147,7 +147,7 @@ TEST(FbxAxisConversion, ZupMayaMapsUpToEngineY)
     axes.front = UFBX_COORDINATE_AXIS_NEGATIVE_Y;
 
     const AxisConversion c = Make(axes);
-    const ufbx_vec3 up = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, c, 1.0f);
+    const ufbx_vec3 up = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, c, 1.0f);
     EXPECT_NEAR(up.x, 0.0, 1e-6);
     EXPECT_NEAR(up.y, 1.0, 1e-6);
     EXPECT_NEAR(up.z, 0.0, 1e-6);
@@ -548,7 +548,7 @@ TEST(FbxAxisConversion, EngineConversionKeepsPlusZFront)
     axes.front = UFBX_COORDINATE_AXIS_POSITIVE_Z;
 
     const AxisConversion c = GameEngine::FbxImport::MakeEngineConversion(axes, DefaultFbxOptions());
-    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, c, 1.0f);
+    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, c, 1.0f);
     EXPECT_NEAR(front.x, 0.0, 1e-6);
     EXPECT_NEAR(front.y, 0.0, 1e-6);
     EXPECT_NEAR(front.z, 1.0, 1e-6);
@@ -563,7 +563,7 @@ TEST(FbxAxisConversion, LegacyNegZFrontFlipsZ)
 
     AxisConversion legacy = Make(axes);
     ApplyEngineMirrors(legacy, true, false, true);
-    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({0.0, 0.0, 1.0}, legacy, 1.0f);
+    const ufbx_vec3 front = GameEngine::FbxImport::ConvertVec3({{{0.0, 0.0, 1.0}}}, legacy, 1.0f);
     EXPECT_NEAR(front.z, -1.0, 1e-6);
 }
 

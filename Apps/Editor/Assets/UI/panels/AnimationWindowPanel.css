@@ -89,7 +89,7 @@
 
 /* Preview toggle button */
 .anim-preview-toggle-icon {
-    background-image: url("editor:Icons/eye.png");
+    background-image: url("editor:Icons/eye.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -226,60 +226,60 @@ button.toolbar-gap.dragging {
 
 /* Keyframe and Marker button icons */
 .select-all-keys-icon {
-    background-image: url("editor:Icons/checkmark-circle.png");
+    background-image: url("editor:Icons/checkmark-circle.svg");
 }
 
 .deselect-keys-icon {
-    background-image: url("editor:Icons/xclose.png");
+    background-image: url("editor:Icons/xclose.svg");
 }
 
 .add-keyframe-icon {
-    background-image: url("editor:Icons/add_key_marker.png");
+    background-image: url("editor:Icons/add_key_marker.svg");
 }
 
 .duplicate-keyframe-icon {
-    background-image: url("editor:Icons/copy.png");
+    background-image: url("editor:Icons/copy.svg");
 }
 
 .delete-keyframe-icon {
-    background-image: url("editor:Icons/trash.png");
+    background-image: url("editor:Icons/trash.svg");
 }
 
 .prev-keyframe-icon {
-    background-image: url("editor:Icons/arrow-left.png");
+    background-image: url("editor:Icons/arrow-left.svg");
 }
 
 .next-keyframe-icon {
-    background-image: url("editor:Icons/arrow-right.png");
+    background-image: url("editor:Icons/arrow-right.svg");
 }
 
 .prev-frame-icon {
-    background-image: url("editor:Icons/fold-left.png");
+    background-image: url("editor:Icons/fold-left.svg");
 }
 
 .next-frame-icon {
-    background-image: url("editor:Icons/fold-right.png");
+    background-image: url("editor:Icons/fold-right.svg");
 }
 
 .add-marker-icon {
-    background-image: url("editor:Icons/marker.png");
+    background-image: url("editor:Icons/marker.svg");
 }
 
 .center-playhead-icon {
-    background-image: url("editor:Icons/timer.png");
+    background-image: url("editor:Icons/timer.svg");
 }
 
 .go-to-start-icon {
-    background-image: url("editor:Icons/left-arrow.png");
+    background-image: url("editor:Icons/left-arrow.svg");
 }
 
 .go-to-end-icon {
-    background-image: url("editor:Icons/right-arrow.png");
+    background-image: url("editor:Icons/right-arrow.svg");
 }
 
 /* Grid icon background */
 .animationwindow-toolbar .icon-button.anim-grid-icon {
-    background-image: url("editor:Icons/grid-icon.png");
+    background-image: url("editor:Icons/grid-icon.svg");
 }
 
 
@@ -441,7 +441,7 @@ button.toolbar-gap.dragging {
     height: 14px;
     min-width: 14px;
     min-height: 14px;
-    background-image: url("editor:Icons/eye.png");
+    background-image: url("editor:Icons/eye.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -547,7 +547,7 @@ button.toolbar-gap.dragging {
     padding: 0;
     flex-shrink: 0;
     margin-left: 0;
-    background-image: url("editor:Icons/eye.png");
+    background-image: url("editor:Icons/eye.svg");
     background-size: 14px 14px;
     background-repeat: no-repeat;
     background-position: center;
@@ -687,7 +687,7 @@ button.toolbar-gap.dragging {
 }
 
 .animationwindow-properties-tree .tree-row-action-lock {
-    background-image: url("editor:Icons/LockOpen.png");
+    background-image: url("editor:Icons/LockOpen.svg");
     background-color: transparent;
     border-width: 0px;
     margin-left: 4px;
@@ -699,26 +699,26 @@ button.toolbar-gap.dragging {
 }
 .animationwindow-properties-tree .tree-row-action-lock.active,
 .animationwindow-properties-tree .tree-row-action-lock.active:hover {
-    background-image: url("editor:Icons/LockClosed.png");
+    background-image: url("editor:Icons/LockClosed.svg");
     background-image-tint: rgba(255, 255, 255, 1.0);
     background-color: transparent;
     border-radius: 0px;
 }
 .animationwindow-properties-tree .tree-row-action-prev-key {
-    background-image: url("editor:Icons/arrow-left.png");
+    background-image: url("editor:Icons/arrow-left.svg");
 }
 .animationwindow-properties-tree .tree-row-action-add-key {
-    background-image: url("editor:Icons/dot.png");
+    background-image: url("editor:Icons/dot.svg");
     width: 7px;
     height: 7px;
     min-width: 7px;
     min-height: 7px;
 }
 .animationwindow-properties-tree .tree-row-action-next-key {
-    background-image: url("editor:Icons/arrow-right.png");
+    background-image: url("editor:Icons/arrow-right.svg");
 }
 .animationwindow-properties-tree .tree-row-action-pin {
-    background-image: url("editor:Icons/pin.png");
+    background-image: url("editor:Icons/pin.svg");
     margin-left: 6px;
 }
 
@@ -926,13 +926,13 @@ button.toolbar-gap.dragging {
     background-color: transparent;
 }
 
-/* Per-marker icon (editor:Icons/marker.png) */
+/* Per-marker icon (editor:Icons/marker.svg) */
 .animationwindow-marker-icon {
     width: 16px;
     height: 16px;
     min-width: 16px;
     min-height: 16px;
-    background-image: url("editor:Icons/marker.png");
+    background-image: url("editor:Icons/marker.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -1123,7 +1123,7 @@ button.toolbar-gap.dragging {
 .anim-options-title {
     color: #4aa3ff;
     font-size: 12px;
-    font-weight: bold;
+    font-weight: 500;
     margin-right: 8px;
 }
 
@@ -1178,6 +1178,6 @@ button.toolbar-gap.dragging {
 
 /* Bone icon in animation properties tree */
 .animationwindow-properties-tree .tree-item.anim-tree-bone .tree-title {
-    background-image: url("editor:Icons/bone_icon.png");
+    background-image: url("editor:Icons/bone_icon.svg");
     background-image-tint: #808080;
 }

@@ -5,7 +5,7 @@
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Components/Rendering/PostProcessEffects/VignetteEffect.h"
 #include "Components/Rendering/PostProcessVolume.h"
-#include "Components/Rendering/TonemapMode.h"
+#include "Components/Rendering/Look.h"
 #include "ECS/ComponentFactory.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -13,9 +13,11 @@
 #include "EditorChangeNotifications.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 
+#include "Inspectors/InspectorComponentColorRow.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Inspectors/RenderLayersRow.h"
 #include "SceneView/PostProcessVolumeGizmo.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/SearchDialog.h"
@@ -27,6 +29,7 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
+#include <array>
 #include <any>
 #include <string>
 #include <utility>
@@ -38,18 +41,13 @@ namespace GameEngine
 namespace
 {
 
-using Components::TonemapMode;
+using Components::Look;
 using Components::PostProcessVolumeShape;
 
-static constexpr EnumEntry<TonemapMode> kTonemapModes[] = {
-    {TonemapMode::ACES,     "ACES"},
-    {TonemapMode::Reinhard, "Reinhard"},
-    {TonemapMode::AgX,      "AgX"},
-    {TonemapMode::Filmic,   "Filmic"},
-    {TonemapMode::Neutral,  "Khronos PBR Neutral"},
-    {TonemapMode::Linear,   "Linear"},
-    {TonemapMode::GranTurismo7, "ICtCp Tonemapper (2025, GT7)"},
-    {TonemapMode::ACES2,    "ACES 2"},
+static constexpr EnumEntry<Look> kLooks[] = {
+    {Look::Neutral,      Components::LookName(Look::Neutral).data()},
+    {Look::Filmic,       Components::LookName(Look::Filmic).data()},
+    {Look::Photographic, Components::LookName(Look::Photographic).data()},
 };
 
 static constexpr EnumEntry<PostProcessVolumeShape> kVolumeShapes[] = {
@@ -57,11 +55,6 @@ static constexpr EnumEntry<PostProcessVolumeShape> kVolumeShapes[] = {
     {PostProcessVolumeShape::Sphere,   "Sphere"},
     {PostProcessVolumeShape::Capsule,  "Capsule"},
     {PostProcessVolumeShape::Cylinder, "Cylinder"},
-};
-
-static constexpr EnumEntry<int32_t> kDitherModes[] = {
-    {0, "Bayer 8x8"},
-    {1, "Blue Noise"},
 };
 
 constexpr float kPostProcessEffectPickerWidthPx = 360.0f;
@@ -399,11 +392,10 @@ void RegisterPostProcessVolumeInspector()
             [](PP& u, float v) { u.Weight = std::clamp(v, 0.0f, 1.0f); },
             1.0f, "Blend weight [0..1]");
 
-        AddComponentIntRowWithDrag<PP>(ctx.Parent, "PostProcessMask", static_cast<int>(vol->PostProcessMask), w, e, n,
-            undo, "Change PP Layer Mask",
-            [](PP& u, int v) { u.PostProcessMask = static_cast<uint32_t>(v); },
-            static_cast<int>(0xFFFFFFFFu),
-            "Camera filter bitmask: only cameras with (Camera.postProcessMask & this) != 0 receive this volume. -1 = all cameras.");
+        AddComponentRenderLayersRow<PP>(ctx.Parent, "Volume Layers", &PP::VolumeLayers, w, e, n, undo,
+            "Change Post-Process Volume Layers",
+            "The cameras this volume affects: those whose Volume Layers share a layer with these.",
+            "Affects no camera.");
 
         // --- Bounds ---
         InspectorUI::AddTextBlock(ctx.Parent, "Bounds", "inspector-section-subheader");
@@ -424,32 +416,41 @@ void RegisterPostProcessVolumeInspector()
         // Camera inspector's Exposure section. Camera-less views (the editor Scene View) auto-meter
         // from the world default.
 
-        // --- Tonemapping ---
-        InspectorUI::AddTextBlock(ctx.Parent, "Tonemapping", "inspector-section-subheader");
+        // --- Image ---
+        InspectorUI::AddTextBlock(ctx.Parent, "Image", "inspector-section-subheader");
 
-        auto* tmField = InspectorUI::AddEnumRow(ctx.Parent, "Tonemap", kTonemapModes, vol->Tonemap,
-            "Tonemap operator: ACES (legacy RRT+ODT fit), Reinhard, AgX, Filmic, Khronos PBR Neutral, Linear, ICtCp Tonemapper (2025, GT7), or ACES 2. "
-            "In HDR, every operator except Linear extends its own output into the display's headroom above paper-white; Linear rolls the scene value directly.");
-        tmField->SetOnValueChanged([w, e, n, undo](TonemapMode v) {
-            CommitComponentWithUndo<PP>(w, e, n, undo, "Change Tonemap Mode",
-                [v](PP& u) { u.Tonemap = v; });
+        auto* lookField = InspectorUI::AddEnumRow(ctx.Parent, "Look", kLooks, vol->Look,
+            "The display transform the image is rendered with.");
+        lookField->SetOnValueChanged([w, e, n, undo](Look v) {
+            CommitComponentWithUndo<PP>(w, e, n, undo, "Change Look",
+                [v](PP& u) { u.Look = v; });
         });
+        // What the chosen look does, then the technique for the expert; the inspector rebuilds on
+        // commit, so the caption follows the list.
+        UIElement* lookCaption = InspectorUI::AddActionRow(ctx.Parent, "inspector-caption-row");
+        InspectorUI::AddTextBlock(lookCaption, std::string(Components::LookDescription(vol->Look)),
+                                  "inspector-field-caption");
+        InspectorUI::AddTextBlock(lookCaption, "Technique: " + std::string(Components::LookTechnique(vol->Look)),
+                                  "inspector-field-caption-technique");
 
-        auto* ditherField = InspectorUI::AddEnumRow(ctx.Parent, "DitherMode", kDitherModes, vol->DitherMode,
-            "Dithering method for banding reduction");
-        ditherField->SetOnValueChanged([w, e, n, undo](int32_t v) {
-            CommitComponentWithUndo<PP>(w, e, n, undo, "Change Dither Mode",
-                [v](PP& u) { u.DitherMode = v; });
-        });
-
-        AddComponentFloatRowWithDrag<PP>(ctx.Parent, "ICtCp Chroma Compression",
-            std::clamp(vol->IctcpChromaCompression, 0.0f, 1.0f), w, e, n, undo,
-            "Change ICtCp Chroma Compression",
-            [](PP& u, float v) { u.IctcpChromaCompression = std::clamp(v, 0.0f, 1.0f); },
-            0.0f,
-            "Perceptually reduces chroma in highlights after tonemapping. Applies only to "
-            "HDR10 PQ and HDR10+ output; SDR, HLG, and scRGB are unchanged. 0 = off.",
-            {}, 0.0f, 1.0f);
+        // --- Night tint (artistic) ---
+        InspectorUI::AddTextBlock(ctx.Parent, "Night tint (artistic)", "inspector-section-subheader");
+        AddComponentSliderWithValueRow<PP>(ctx.Parent, "Strength", vol->NightTintStrength, 0.0f, 1.0f, w, e, n,
+            [](PP& u, float v) { u.NightTintStrength = std::clamp(v, 0.0f, 1.0f); },
+            "Night tint strength, artistic: the film convention of a blue night. 1 gives the dark field of a "
+            "night image exactly the color's hue; 0 is physical. It follows the exposure: in full when the "
+            "view adapts to a night below 0.005 cd/m2, gone above 3 cd/m2, so a day image is untouched.");
+        InspectorUI::ComponentColorBinding<PP> tintColor;
+        tintColor.World = w;
+        tintColor.Entity = e;
+        tintColor.Notifications = n;
+        tintColor.Undo = undo;
+        tintColor.OpenPicker = ctx.OpenColorPickerWindow;
+        tintColor.Color = &PP::NightTintColor;
+        tintColor.ChangeLabel = "Change Night Tint Color";
+        InspectorUI::AddComponentColorRow<PP>(ctx.Parent, "Color",
+            "Night tint color: the hue the dark field takes. Only its hue is used; the image keeps its "
+            "brightness.", std::move(tintColor));
 
         // The button is owned and mounted by the volume inspector. Nested effect
         // sections are appended later, and the button's flex order keeps it last.

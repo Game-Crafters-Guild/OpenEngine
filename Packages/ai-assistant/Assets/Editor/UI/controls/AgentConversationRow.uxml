@@ -5,6 +5,8 @@
     <Button id="AgentRowStop" class="small secondary agent-row-stop hidden" text="Stop" focusable="false" />
   </UIElement>
   <TextArea id="AgentRowText" class="script-editor-textarea agent-row-text" readonly="true" focusable="false" />
+  <MarkdownText id="AgentRowReply" class="agent-row-reply hidden" />
+  <UIElement id="AgentRowMarkups" class="agent-row-markups hidden" />
   <UIElement id="AgentRowCalls" class="agent-row-calls hidden" />
   <UIElement class="agent-row-footer">
     <UIElement id="AgentRowStatus" class="agent-row-status" />

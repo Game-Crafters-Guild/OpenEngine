@@ -27,7 +27,6 @@ struct WindVolume
     float32 BlendDistance = 2.0f;
     float32 Weight = 1.0f;
     int32 Priority = 0;
-    uint32 LayerMask = 0xFFFFFFFFu;
 
     float32 DirectionX = 0.5f;
     float32 DirectionY = 0.0f;

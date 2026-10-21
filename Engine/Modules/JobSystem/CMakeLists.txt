@@ -20,6 +20,7 @@ set(JOBSYSTEM_SOURCES
 # Core Job System header files
 set(JOBSYSTEM_HEADERS
     Include/JobSystem/WorkStealingThreadPool.h
+    Include/JobSystem/ConcurrentQueue.h
     Include/JobSystem/ParallelForOptions.h
     Include/JobSystem/JobChannel.h
     Include/JobSystem/JobSystemStatistics.h

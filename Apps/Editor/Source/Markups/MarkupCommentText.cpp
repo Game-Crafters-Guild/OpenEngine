@@ -2,7 +2,9 @@
 
 #include "ECS/Entity.h"
 #include "Markups/MarkupEditorBridge.h"
+#include "Markups/MarkupEditorSurfaces.h"
 #include "Platform/Shell.h"
+#include "SceneViewController.h"
 #include "UI/Controls/EntityLink.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
@@ -167,7 +169,13 @@ std::vector<MarkupCommentPiece> ParseMarkupComment(std::string_view text)
 
 MarkupEntitySelect SelectThroughBridge(MarkupEditorBridge& bridge, ECS::World& world)
 {
-    return [&bridge, &world](ECS::EntityHandle entity, bool frame) { bridge.SelectMarkup(world, entity, frame); };
+    return [&bridge, &world](ECS::EntityHandle entity, bool frame) {
+        if (frame && FrameMarkupInSceneView(entity) == MarkupFrameOutcome::Framed)
+            return;
+        bridge.SelectMarkup(world, entity);
+        if (SceneViewController* view = frame ? bridge.GetSceneView() : nullptr)
+            view->FrameOrigin();
+    };
 }
 
 std::unique_ptr<UIElement> BuildMarkupCommentText(const std::string& text, const char* textClass,

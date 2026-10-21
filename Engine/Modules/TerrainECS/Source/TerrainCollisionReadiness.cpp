@@ -99,10 +99,12 @@ bool FindPendingTerrainCollision(ECS::World& world, const Physics::AABB& box,
             if (pending || terrain.Domain != Components::TerrainDomain::Planar)
                 return;
             const bool tiled = terrain.TiledTerrainHandle != 0 || terrain.TiledTerrainGeneration != 0;
-            if (!transform)
+            if (!transform || transform->Version == 0u)
             {
-                pending = true; // Without a placed footprint, disjointness is not established.
-                wait = {entity, "terrain has no world transform yet"};
+                // Without a placed footprint, disjointness is not established
+                // (Version 0: TransformHierarchySystem has not resolved it yet).
+                pending = true;
+                wait = {entity, "terrain's world transform is not resolved yet"};
                 return;
             }
             if (!tiled)

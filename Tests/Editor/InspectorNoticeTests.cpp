@@ -16,16 +16,19 @@
 #include "UI/Controls/Button.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
+#include "UI/Parsers/CSSParser.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 using GameEngine::Button;
 using GameEngine::kEventButtonClick;
 using GameEngine::Label;
+using GameEngine::HashStringId;
 using GameEngine::UIElement;
 using GameEngine::UIEvent;
 using GameEngine::EditorUI::InspectorNotice;
@@ -119,16 +122,27 @@ TEST(InspectorNotice, ShowsItsTextAndFiresItsAction)
 // Focus is tracked by element id, so two notices whose actions shared one would hand the keyboard
 // to the first whichever was focused: Tab to the second notice's Discard and Enter discards the
 // first field.
-// A notice is a warning unless it is built to inform; each kind carries its own class, which the
-// stylesheet paints.
-TEST(InspectorNotice, TheKindIsOneClassOnTheControl)
+// A notice is a warning unless it is built to inform or to report a failure; the kind is one class on
+// the control and one on each part (the action included), which the stylesheet paints.
+TEST(InspectorNotice, TheKindIsOneClassOnTheControlAndOnEachPart)
 {
-    InspectorNotice warning("Authored value could not be read.");
-    InspectorNotice information("The sky sets this light's direction.", InspectorNotice::Kind::Information);
-    EXPECT_TRUE(warning.HasClass("inspector-notice-warning"));
-    EXPECT_FALSE(warning.HasClass("inspector-notice-information"));
-    EXPECT_TRUE(information.HasClass("inspector-notice-information"));
-    EXPECT_FALSE(information.HasClass("inspector-notice-warning"));
+    const std::vector<std::string> parts{"plate", "glyph", "title", "text", "action"};
+    const std::vector<std::pair<InspectorNotice::Kind, std::string>> kinds{
+        {InspectorNotice::Kind::Warning, "warning"},
+        {InspectorNotice::Kind::Information, "information"},
+        {InspectorNotice::Kind::Error, "error"}};
+    for (const auto& [kind, suffix] : kinds)
+    {
+        InspectorNotice notice("Authored value could not be read.", kind);
+        for (const auto& [otherKind, otherSuffix] : kinds)
+            EXPECT_EQ(notice.HasClass("inspector-notice-" + otherSuffix), otherSuffix == suffix) << suffix;
+        for (const std::string& part : parts)
+        {
+            UIElement* element = FindByClass(&notice, "inspector-notice-" + part);
+            ASSERT_NE(element, nullptr) << part;
+            EXPECT_TRUE(element->HasClass("inspector-notice-" + part + "-" + suffix)) << part << " of " << suffix;
+        }
+    }
 }
 
 TEST(InspectorNotice, EachActionIsAFocusTargetOfItsOwn)
@@ -150,7 +164,7 @@ TEST(InspectorNotice, EachActionIsAFocusTargetOfItsOwn)
     fixture.Ui->FocusElement(secondAction);
     const std::string& focusedId = fixture.Ui->GetFocusedElementId();
     ASSERT_FALSE(focusedId.empty());
-    EXPECT_EQ(fixture.Ui->GetRootElement()->FindById(focusedId), secondAction)
+    EXPECT_EQ(fixture.Ui->GetRootElement()->FindById(HashStringId(focusedId)), secondAction)
         << "the focus resolves to another notice's action (id '" << focusedId << "')";
 }
 
@@ -273,6 +287,118 @@ TEST(InspectorNoticeLayout, WithNoRoomBesideTheTextTheActionWrapsUnderIt)
         EXPECT_TRUE(Contains(*plate, *action));
         EXPECT_LE(Right(*plate), static_cast<float>(viewportWidth) + kLayoutTolerance)
             << "the plate runs out of the panel at " << viewportWidth << " px";
+    }
+}
+
+// Attaches the sheets each element in the tree requested, in request order, the way the editor's
+// UIManager attaches them when the element joins it. A control's sheet attached to an element sits
+// after its ancestors' sheets in that element's cascade.
+bool AttachRequestedSheets(UIElement& element, std::string& diagnostic)
+{
+    for (const UIElement::SubtreeStyleAssetRequest& request : element.ConsumeRequestedSubtreeStyleAssetPaths())
+    {
+        const std::string css = InspectorLayoutTesting::ReadEditorFile("Assets/" + request.Path);
+        GameEngine::Stylesheet sheet{};
+        if (css.empty() || !GameEngine::UIParsing::CSSParser::ParseStylesFromString(css, sheet))
+        {
+            diagnostic = "stylesheet did not load: " + request.Path;
+            return false;
+        }
+        sheet.SourceName = request.Path;
+        element.AddStylesheet(std::make_shared<const GameEngine::Stylesheet>(std::move(sheet)));
+    }
+    for (const auto& child : element.GetChildren())
+    {
+        if (!AttachRequestedSheets(*child, diagnostic))
+            return false;
+    }
+    return true;
+}
+
+// The action's edge is its kind's color, over the shared button's border, with the sheets attached in
+// the editor's order: the notice's on the notice, then the button's own on the action.
+TEST(InspectorNoticeLayout, TheActionsEdgeIsItsKindsColor)
+{
+    auto root = std::make_unique<UIElement>();
+    auto plainButton = std::make_unique<Button>();
+    plainButton->SetText("Plain");
+    Button* plainRaw = plainButton.get();
+    root->AddChild(std::move(plainButton));
+    std::vector<InspectorNotice*> notices;
+    for (const InspectorNotice::Kind kind :
+         {InspectorNotice::Kind::Warning, InspectorNotice::Kind::Information, InspectorNotice::Kind::Error})
+    {
+        auto notice = std::make_unique<InspectorNotice>("Failed: the bounds need 390,625 tiles.", kind);
+        notice->SetAction("Bake", "", []() {});
+        notices.push_back(notice.get());
+        root->AddChild(std::move(notice));
+    }
+    std::string diagnostic;
+    ASSERT_TRUE(AttachRequestedSheets(*root, diagnostic)) << diagnostic;
+
+    InspectorLayoutFixture fixture;
+    fixture.ViewportW = 600;
+    fixture.ExtraSheets = {"Assets/UI/theme/core.css"};
+    if (!fixture.Build(std::move(root)))
+        GTEST_SKIP() << fixture.Diagnostic;
+
+    const uint32_t buttonEdge = plainRaw->GetResolvedStyle().Visual.BorderColor.Top;
+    for (size_t i = 0; i < notices.size(); ++i)
+    {
+        InspectorNotice* notice = notices[i];
+        Button* action = ActionOf(*notice);
+        UIElement* plate = FindByClass(notice, "inspector-notice-plate");
+        ASSERT_NE(action, nullptr);
+        ASSERT_NE(plate, nullptr);
+        // The plate's edge color is the kind's, drawn only by the opaque variant.
+        const uint32_t kindEdge = plate->GetResolvedStyle().Visual.BorderColor.Top;
+        ASSERT_NE(kindEdge, buttonEdge) << "the kind's edge is the button's; this test is vacuous";
+        EXPECT_EQ(action->GetResolvedStyle().Visual.BorderColor.Top, kindEdge)
+            << "the action keeps the shared button's edge in notice " << i;
+    }
+}
+
+// A titled notice's glyph is tinted in its kind's color (the color of the kind's edge) and its title
+// reads in the color of its text, for every kind: the first titled notice of a kind ships styled.
+TEST(InspectorNoticeLayout, ATitledNoticesGlyphAndTitleTakeItsKindsColors)
+{
+    auto root = std::make_unique<UIElement>();
+    std::vector<InspectorNotice*> notices;
+    for (const InspectorNotice::Kind kind :
+         {InspectorNotice::Kind::Warning, InspectorNotice::Kind::Information, InspectorNotice::Kind::Error})
+    {
+        auto notice = std::make_unique<InspectorNotice>("Failed: the bounds need 390,625 tiles.", kind);
+        notice->SetTitle("Bake failed");
+        notices.push_back(notice.get());
+        root->AddChild(std::move(notice));
+    }
+    std::string diagnostic;
+    ASSERT_TRUE(AttachRequestedSheets(*root, diagnostic)) << diagnostic;
+
+    InspectorLayoutFixture fixture;
+    fixture.ViewportW = 600;
+    fixture.ExtraSheets = {"Assets/UI/theme/core.css"};
+    if (!fixture.Build(std::move(root)))
+        GTEST_SKIP() << fixture.Diagnostic;
+
+    constexpr uint32_t kUntinted = 0xFFFFFFFFu;
+    for (size_t i = 0; i < notices.size(); ++i)
+    {
+        InspectorNotice* notice = notices[i];
+        UIElement* plate = FindByClass(notice, "inspector-notice-plate");
+        UIElement* glyph = FindByClass(notice, "inspector-notice-glyph");
+        UIElement* title = FindByClass(notice, "inspector-notice-title");
+        Label* text = TextOf(*notice);
+        ASSERT_NE(plate, nullptr);
+        ASSERT_NE(glyph, nullptr);
+        ASSERT_NE(title, nullptr);
+        ASSERT_NE(text, nullptr);
+        const uint32_t kindEdge = plate->GetResolvedStyle().Visual.BorderColor.Top;
+        ASSERT_NE(kindEdge, kUntinted) << "the kind's color is white; this test is vacuous";
+        EXPECT_EQ(glyph->GetResolvedStyle().Visual.BackgroundImage.Tint, kindEdge)
+            << "the glyph is not tinted in its kind's color in notice " << i;
+        EXPECT_EQ(title->GetResolvedStyle().Visual.Color, text->GetResolvedStyle().Visual.Color)
+            << "the title does not read in its text's color in notice " << i;
     }
 }
 

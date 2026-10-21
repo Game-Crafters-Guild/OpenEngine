@@ -57,13 +57,12 @@ if(_identity STREQUAL "")
   set(_identity "-")
 endif()
 
-# The engine_abi markers beside prebuilt engine-package modules hash the staged
-# SDK libraries' size and modification time, and signing a library changes
-# both. The first signature replaces a linker's and changes the size, so the
-# Editor signs these libraries (GE_CODESIGN_SDK_LIBRARIES) before it writes the
-# markers; every later signature with the same identity keeps that size. SDK
-# symlinks resolve to their Frameworks targets here, so the deduplicated and
-# regular-file layouts behave identically.
+# The engine_abi markers beside prebuilt engine-package modules fold the staged
+# SDK libraries' LC_UUID, which signing leaves alone, so neither the Editor's
+# signing of these libraries (GE_CODESIGN_SDK_LIBRARIES) nor the deep sign below
+# moves them (EnginePackageMarkersTest checks the markers against the signed
+# bundle). SDK symlinks resolve to their Frameworks targets here, so the
+# deduplicated and regular-file layouts behave identically.
 file(GLOB _sdk_dylibs "${GE_APP_BUNDLE}/Contents/MacOS/SDK/lib/*/*.dylib")
 set(_sdk_libraries "")
 foreach(_sdk_dylib IN LISTS _sdk_dylibs)
@@ -111,61 +110,12 @@ if(_ge_xattr)
   )
 endif()
 
-# The deep sign below re-signs the SDK libraries with the same signature and
-# size but updates their mtime; snapshot and restore it so the markers stay
-# valid.
-set(_mtime_paths "${_sdk_libraries}")
-set(_mtime_stamps "")
-if(_mtime_paths)
-  find_program(_ge_touch touch REQUIRED)
-  string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef _mtime_nonce)
-  if(DEFINED ENV{TMPDIR} AND NOT "$ENV{TMPDIR}" STREQUAL "")
-    set(_mtime_dir "$ENV{TMPDIR}/ge-codesign-mtimes-${_mtime_nonce}")
-  else()
-    set(_mtime_dir "/tmp/ge-codesign-mtimes-${_mtime_nonce}")
-  endif()
-  file(MAKE_DIRECTORY "${_mtime_dir}")
-  set(_mtime_index 0)
-  foreach(_mtime_path IN LISTS _mtime_paths)
-    set(_mtime_stamp "${_mtime_dir}/${_mtime_index}")
-    file(TOUCH "${_mtime_stamp}")
-    execute_process(
-      COMMAND "${_ge_touch}" -r "${_mtime_path}" "${_mtime_stamp}"
-      RESULT_VARIABLE _touch_snapshot_rc
-    )
-    if(NOT _touch_snapshot_rc EQUAL 0)
-      message(FATAL_ERROR
-        "CodesignMacAppBundle: failed to snapshot mtime for '${_mtime_path}'")
-    endif()
-    list(APPEND _mtime_stamps "${_mtime_stamp}")
-    math(EXPR _mtime_index "${_mtime_index} + 1")
-  endforeach()
-endif()
-
 execute_process(
   COMMAND "${_ge_codesign}" --force --deep --sign "${_identity}" "${GE_APP_BUNDLE}"
   RESULT_VARIABLE _rc
   OUTPUT_VARIABLE _out
   ERROR_VARIABLE _err
 )
-
-if(_mtime_paths)
-  list(LENGTH _mtime_paths _mtime_count)
-  math(EXPR _mtime_last "${_mtime_count} - 1")
-  foreach(_mtime_index RANGE "${_mtime_last}")
-    list(GET _mtime_paths "${_mtime_index}" _mtime_path)
-    list(GET _mtime_stamps "${_mtime_index}" _mtime_stamp)
-    execute_process(
-      COMMAND "${_ge_touch}" -r "${_mtime_stamp}" "${_mtime_path}"
-      RESULT_VARIABLE _touch_restore_rc
-    )
-    if(NOT _touch_restore_rc EQUAL 0)
-      message(FATAL_ERROR
-        "CodesignMacAppBundle: failed to restore mtime for '${_mtime_path}'")
-    endif()
-  endforeach()
-  file(REMOVE_RECURSE "${_mtime_dir}")
-endif()
 
 if(NOT _rc EQUAL 0)
   message(FATAL_ERROR "CodesignMacAppBundle: codesign failed (rc=${_rc})\n${_err}")

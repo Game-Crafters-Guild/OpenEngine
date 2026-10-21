@@ -43,6 +43,11 @@ struct CompileServerRequestDesc
 
 std::string BuildCompileServerRequestJson(const CompileServerRequestDesc& desc);
 
+// The `"ScriptSurface":[...],` field of a compile-server request: the file names of
+// ScriptingPaths::kScriptSurfaceAssemblyFileNames, which the server references from EngineBinDir.
+// The engine owns the list; the server holds none of its own.
+std::string ScriptSurfaceRequestField();
+
 // Generated SDK-style csproj for one package C# module: AssemblyName from the
 // deterministic package mapping, sources globbed from the module root
 // (csproj-relative when both stay inside the package root), DefineConstants

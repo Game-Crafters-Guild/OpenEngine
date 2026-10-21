@@ -6,7 +6,8 @@ namespace GameEngine::Engine::Renderer
 {
 /** Prepares one authored material and builds its shader-package variants.
     The caller owns context for the builder's lifetime. Preparation extends its
-    include roots; multiple builders in a serial cook share that context. */
+    include roots, so builders sharing a context are prepared one at a time;
+    Build only reads the context, and builds may run concurrently. */
 class MaterialShaderPackageBuilder
 {
 public:

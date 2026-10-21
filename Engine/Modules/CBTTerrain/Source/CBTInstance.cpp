@@ -200,7 +200,7 @@ bool CBTInstance::InitializeRoots(uint32_t domainMode)
           static_cast<size_t>(m_PoolSize - rootCount) * sizeof(uint64_t));
     clear(CBTBinding::Bitfield, sizeof(uint32_t),
           static_cast<size_t>(CBTBitfieldWords(m_PoolSize) - 1u) * sizeof(uint32_t));
-    for (const auto [binding, words] : {
+    for (const auto& [binding, words] : {
              std::pair{CBTBinding::WorkQueue, kWQCounterSlots},
              std::pair{CBTBinding::IndirectDispatch, kIndirectDispatchWords},
              std::pair{CBTBinding::IndirectDraw, kIndirectDrawWords},

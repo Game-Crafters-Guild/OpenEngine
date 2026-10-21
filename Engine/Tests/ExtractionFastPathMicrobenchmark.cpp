@@ -92,7 +92,7 @@ TEST_F(ExtractionFastPathTest, DISABLED_RendererIncrementalMicrobenchmark)
                 mr = {};
                 mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
                 mr.materialAssetGuid.Set(h.materialGuid);
-                mr.renderLayerMask = 1u;
+                mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
                 bridge = {};
             });
         h.extraction->Update(*h.world, kDt); // allocate stable slots outside timing

@@ -1,0 +1,25 @@
+---
+title: Screen-space reflections
+description: What the Forward+ screen-space reflections node replaces in the forward shading, the buffers it adds per view, and its limits.
+---
+
+The Forward+ SSR node replaces one term of the forward shading: the base GGX environment lobe. It traces the depth buffer for a better estimate of the incident radiance along that lobe's direction and substitutes it, weighted by the response the forward pass itself computed. Coat, fuzz, direct light, and diffuse are untouched.
+
+The composite evaluates `scene + replacement · weight · (traced − exported)`. A ray that misses writes the exported radiance back, so the term cancels exactly and a miss changes no pixel. A ray that hits contributes the difference, weighted by the real material response rather than by a reconstruction of it.
+
+## Cost
+
+| Buffer | Bytes / pixel | Notes |
+|---|---|---|
+| Surface-history pair | 16 | 31.6 MiB at 1080p |
+| Forward specular slices | 16 | Two RGBA16F attachments on the world pass |
+| Motion vectors | 8 | RGBA16F, shared with TAA |
+
+The table lists the buffers SSR adds to the world pass and keeps per view. Its radiance, hit data, reprojection, prefilter, and color history targets are not counted here.
+
+## Limits
+
+- **Single-sample inputs.** The SSR slices are single-sample, so a multisampled view withholds them and the node stays disabled for that view.
+- **Letterboxed views.** The passes address the whole render target while the world raster fills only the letterbox rectangle, so the view rays they reconstruct use the target's aspect rather than the camera's and the reflections drift from the surfaces they belong to. The motion pass publishes a cleared sentinel there, so reprojection is analytic and object motion is not exact.
+- **Eight-influence skinning** is excluded from exact object motion: the shared motion stage blends four influences, so such a mover keeps the sentinel and reprojects analytically.
+- **Screen space.** Geometry that is off screen or hidden behind another surface cannot be traced. Those rays fall back to the exported forward radiance, which is why a miss is invisible rather than a hole.

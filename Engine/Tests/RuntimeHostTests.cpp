@@ -9,6 +9,10 @@
 // for the fixture's whole run, a frame or two plus the engine bring-up and shutdown: about 2 s
 // with warm caches, about 30 s cold.
 // Skips when no window or Vulkan device can be created.
+//
+// A headless application brings the same host up with no window and no device: the scene
+// opens, the engine's schedule and a native script run every fixed frame in real time, and the
+// script's quit ends the run. It needs neither, so it never skips.
 
 #include <gtest/gtest.h>
 
@@ -16,20 +20,26 @@
 #include "Assets/AssetManager.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
+#include "ECS/Systems.h"
+#include "ECS/World.h"
+#include "ECSModules/Rendering/RenderingLoop.h"
 #include "Engine/Hosting/RuntimeFrameReadback.h"
 #include "Engine/Hosting/RuntimeHost.h"
 #include "Engine/Rendering/FrameOrchestrator.h"
 #include "Engine/Rendering/RenderDeviceContext.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
+#include "NativeScripting/UserSystemRegistry.h"
 #include "Platform/Window.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
+#include "ScopedPlatformCacheRoot.h"
 #include "Scripting/ScriptsConfig.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <thread>
 
@@ -84,6 +94,10 @@ protected:
     {
         m_PreviousCwd = fs::current_path();
         m_Root = fs::temp_directory_path() / ("runtime-host-" + GUID::Generate().ToString());
+        // The host's device persists its pipeline cache (RuntimeHost opts in for the Player), so
+        // the platform cache root lives under m_Root for the test: the user's cache is neither
+        // read nor written, and the test's file goes with m_Root.
+        m_CacheRoot.emplace(m_Root / "cache-root");
         // A pipeline with no passes presents the host's own colour target; the empty scene gets
         // the host's default camera, so the frame has a view.
         WriteFile(m_Root / "Assets/RenderPipelines/HostTest.rendergraph",
@@ -131,6 +145,7 @@ protected:
         if (m_Application)
             m_Application->Shutdown();
         m_Application.reset();
+        m_CacheRoot.reset();
         std::error_code ec;
         fs::current_path(m_PreviousCwd, ec);
         fs::remove_all(m_Root, ec);
@@ -138,6 +153,7 @@ protected:
 
     fs::path m_PreviousCwd;
     fs::path m_Root;
+    std::optional<TestUtils::ScopedPlatformCacheRoot> m_CacheRoot;
     std::unique_ptr<HostTestApplication> m_Application;
     std::unique_ptr<RuntimeHost> m_Host;
     CompositeProbe m_Probe;
@@ -213,4 +229,141 @@ TEST_F(RuntimeHostFrame, AFramebufferResizeRecreatesTheSwapchainAtTheNewSize)
     device.WaitForIdle();
     EXPECT_EQ(m_Probe.Calls, 1) << "the first frame after the resize renders";
     EXPECT_EQ(m_DeviceFailures, 0);
+}
+
+namespace
+{
+constexpr int kHeadlessFrames = 30;
+constexpr double kHeadlessFps = 60.0;
+
+// An ECS system on the engine's schedule, as a package or the managed bridge adds one.
+class FrameCountingSystem final : public ECS::ISystem
+{
+public:
+    int Updates = 0;
+    void Update(ECS::World&, float32) override { ++Updates; }
+    const char* GetName() const override { return "RuntimeHostTests.FrameCounting"; }
+};
+
+// A native user script: counts its update and post-simulation hooks, and on its
+// kHeadlessFrames-th update asks the application to quit, as a game's script would.
+class QuittingScript final : public NativeScripting::IUserSystem
+{
+public:
+    int Updates = 0;
+    int PostSimulations = 0;
+    void OnStart(ECS::World&) override {}
+    void OnUpdate(ECS::World&, float) override
+    {
+        if (++Updates == kHeadlessFrames)
+            Application::Get()->RequestExit();
+    }
+    void OnDestroy(ECS::World&) override {}
+    const char* Name() const override { return "RuntimeHostTests.QuittingScript"; }
+    void OnPostSimulation(ECS::World&, float) override { ++PostSimulations; }
+    bool HasPostSimulation() const override { return true; }
+};
+
+// The Player's frame: user scripts tick in Update, the host renders in Render.
+class HeadlessTestApplication final : public Application
+{
+public:
+    using Application::Application;
+    RuntimeHost* Host = nullptr;
+
+protected:
+    void Update(float64 deltaTime) override
+    {
+        if (ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld())
+            NativeScripting::TickUserSystems(*world, static_cast<float>(deltaTime));
+    }
+    void Render() override { Host->Render(static_cast<float>(GetDeltaTime())); }
+};
+
+class HeadlessRuntimeHost : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        m_PreviousCwd = fs::current_path();
+        m_Root = fs::temp_directory_path() / ("runtime-host-headless-" + GUID::Generate().ToString());
+        WriteFile(m_Root / "Assets/Scenes/Empty.scene", "[scene name=\"Empty\" version=1]\n");
+
+        ScriptsConfig scripts{};
+        scripts.disableClr = true;
+        scripts.enableHotReload = false;
+        scripts.enableAsyncHotReload = false;
+        scripts.enableAutoProjectGeneration = false;
+        EngineCore::GetInstance().SetScriptsConfig(scripts);
+        ApplicationConfig config{};
+        config.Name = "RuntimeHostHeadlessTest";
+        config.WorkspaceDirectory = m_Root.string();
+        config.AssetDirectory = "Assets";
+        config.Headless = true;
+        m_Application = std::make_unique<HeadlessTestApplication>(config);
+        ASSERT_TRUE(m_Application->Initialize());
+        EngineCore::GetInstance().GetAssetManager().WaitForStartupScan(kAssetSourceAliasProject);
+
+        RuntimeHostDesc desc;
+        desc.Title = "RuntimeHostHeadlessTest";
+        m_Host = std::make_unique<RuntimeHost>(*m_Application, desc, RuntimeHostHooks{});
+        m_Application->Host = m_Host.get();
+    }
+
+    void TearDown() override
+    {
+        if (ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld())
+            NativeScripting::StopUserSystems(*world);
+        NativeScripting::ClearUserSystems();
+        if (m_Host)
+            m_Host->Shutdown();
+        m_Host.reset();
+        if (m_Application)
+            m_Application->Shutdown();
+        m_Application.reset();
+        std::error_code ec;
+        fs::current_path(m_PreviousCwd, ec);
+        fs::remove_all(m_Root, ec);
+    }
+
+    fs::path m_PreviousCwd;
+    fs::path m_Root;
+    std::unique_ptr<HeadlessTestApplication> m_Application;
+    std::unique_ptr<RuntimeHost> m_Host;
+};
+} // namespace
+
+TEST_F(HeadlessRuntimeHost, RunsTheScheduleAndAScriptOnAFixedStepWithNoWindowOrDeviceUntilTheScriptQuits)
+{
+    ASSERT_EQ(Application::Get(), m_Application.get());
+    ASSERT_TRUE(m_Host->InitWindow());
+    EXPECT_EQ(m_Host->GetWindow(), nullptr) << "a headless host opens no window";
+    ASSERT_TRUE(m_Host->InitRendering());
+    EXPECT_EQ(m_Host->GetRenderDeviceContext(), nullptr) << "a headless host creates no render device";
+    EXPECT_EQ(EngineCore::GetInstance().GetAudioSystem(), nullptr) << "a headless engine opens no audio device";
+    ASSERT_EQ(m_Host->LoadRenderPipeline(), Engine::Renderer::PipelineResolveFailure::None);
+    ASSERT_TRUE(m_Host->OpenScene("Scenes/Empty.scene"));
+
+    Engine::Renderer::RenderingLoop* loop = EngineCore::GetInstance().GetRenderingLoop();
+    ASSERT_NE(loop, nullptr) << "the engine's schedule runs without render services";
+    FrameCountingSystem* system = loop->GetSystemManager()->AddSystem<FrameCountingSystem>();
+    QuittingScript script;
+    ASSERT_TRUE(NativeScripting::RegisterUserSystem(&script));
+    ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld();
+    ASSERT_NE(world, nullptr);
+    NativeScripting::StartUserSystems(*world);
+
+    m_Application->SetFixedFrameRate(kHeadlessFps);
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(m_Application->Run(), 0);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+
+    EXPECT_EQ(m_Application->GetFrameCount(), static_cast<uint64>(kHeadlessFrames))
+        << "the script's quit ends the run after the frame it was asked in";
+    EXPECT_EQ(script.Updates, kHeadlessFrames);
+    EXPECT_EQ(script.PostSimulations, kHeadlessFrames) << "the schedule's native post-simulation hook runs every frame";
+    EXPECT_EQ(system->Updates, kHeadlessFrames) << "the engine's schedule ticks every frame";
+    EXPECT_DOUBLE_EQ(m_Application->GetDeltaTime(), 1.0 / kHeadlessFps);
+    EXPECT_GE(seconds, (kHeadlessFrames - 1) / kHeadlessFps)
+        << "a headless fixed step is paced to real time, not run as fast as the CPU allows";
 }

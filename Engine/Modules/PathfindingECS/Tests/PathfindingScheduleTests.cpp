@@ -45,14 +45,11 @@ size_t FindWaveOf(const ECS::SystemManager& manager, std::string_view name)
 
 } // namespace
 
-// NavigationBuildSystem queries Jolt (raycasts for heights, box overlaps for
-// obstacles). PhysicsSystem::Update is the one phase Jolt does not permit
-// concurrent queries against, and systems sharing a wave dispatch to parallel
-// job workers — so the bake must land in a strictly later wave than the step.
-// Depending on PhysicsWriteback, the pipeline's terminal system, is what
-// constructs that margin; it also means bodies have their final poses for the
-// frame before anything is sampled.
-TEST(PathfindingScheduleTests, NavigationBuildRunsAfterWholePhysicsPipeline)
+// NavigationSurfaceSystem reads PhysicsBody and the collider shape components to find the static
+// colliders it bakes, and the physics pipeline's systems write them; systems sharing a wave dispatch
+// to parallel job workers. Depending on PhysicsWriteback, the pipeline's terminal system, puts the
+// bake in a strictly later wave than every one of them.
+TEST(PathfindingScheduleTests, NavigationSurfaceRunsAfterWholePhysicsPipeline)
 {
     ECS::SystemScheduleBuilder builder;
     PhysicsECS::AddPhysicsSystemsToSchedule(builder);
@@ -67,7 +64,7 @@ TEST(PathfindingScheduleTests, NavigationBuildRunsAfterWholePhysicsPipeline)
     const size_t initWave = FindWaveOf(manager, "PhysicsInit");
     const size_t stepWave = FindWaveOf(manager, "PhysicsStep");
     const size_t writebackWave = FindWaveOf(manager, "PhysicsWriteback");
-    const size_t navBuildWave = FindWaveOf(manager, "NavigationBuildSystem");
+    const size_t navBuildWave = FindWaveOf(manager, "NavigationSurfaceSystem");
 
     ASSERT_NE(bootstrapWave, kWaveNotFound);
     ASSERT_NE(initWave, kWaveNotFound);
@@ -81,10 +78,9 @@ TEST(PathfindingScheduleTests, NavigationBuildRunsAfterWholePhysicsPipeline)
     EXPECT_GT(navBuildWave, bootstrapWave);
 }
 
-// A grid takes its origin from the entity's WorldTransform, which
-// TransformHierarchySystem produces. Initializing in an earlier wave latches
-// origin (0,0,0) for the entity's whole life, so the ordering edge is the fix.
-TEST(PathfindingScheduleTests, NavigationBuildRunsAfterTransformHierarchy)
+// A surface bakes around the entity's WorldTransform and places its geometry with theirs, which
+// TransformHierarchySystem produces. Baking in an earlier wave reads unresolved poses.
+TEST(PathfindingScheduleTests, NavigationSurfaceRunsAfterTransformHierarchy)
 {
     ECS::SystemScheduleBuilder builder;
     builder.Add<StubSystem>("TransformHierarchy", ECS::SystemPhase::Extraction, 1, {});
@@ -98,40 +94,11 @@ TEST(PathfindingScheduleTests, NavigationBuildRunsAfterTransformHierarchy)
     builder.BuildAndRegisterWithWaves(manager, ECS::ScheduleCompleteness::Complete);
 
     const size_t hierarchyWave = FindWaveOf(manager, "TransformHierarchy");
-    const size_t navBuildWave = FindWaveOf(manager, "NavigationBuildSystem");
+    const size_t navBuildWave = FindWaveOf(manager, "NavigationSurfaceSystem");
 
     ASSERT_NE(hierarchyWave, kWaveNotFound);
     ASSERT_NE(navBuildWave, kWaveNotFound);
     EXPECT_GT(navBuildWave, hierarchyWave);
-}
-
-// OceanBuoyancy is the other post-physics Jolt writer, and the bake's raycasts
-// must not share its wave. The edge is declared optional because Ocean is an
-// optional module, so this fixture has to supply the name for it to bind at all.
-//
-// This is the cheapest discriminator in the file: SystemPhase is a within-wave
-// sort key rather than a wave separator, so without the edge NavigationBuildSystem
-// (Early) and OceanBuoyancy (Extraction) simply share wave 0 and the assertion
-// fails on equality.
-TEST(PathfindingScheduleTests, NavigationBuildRunsAfterOceanBuoyancy)
-{
-    ECS::SystemScheduleBuilder builder;
-    builder.Add<StubSystem>("TransformHierarchy", ECS::SystemPhase::Extraction, 1, {});
-    builder.Add<StubSystem>("OceanBuoyancy", ECS::SystemPhase::Extraction, 6, {});
-    PhysicsECS::AddPhysicsSystemsToSchedule(builder);
-    PathfindingECS::AddPathfindingSystemsToSchedule(builder);
-
-    ECS::SystemManager manager;
-    builder.BuildAndRegisterWithWaves(manager, ECS::ScheduleCompleteness::Complete);
-
-    const size_t oceanWave = FindWaveOf(manager, "OceanBuoyancy");
-    const size_t navBuildWave = FindWaveOf(manager, "NavigationBuildSystem");
-
-    ASSERT_NE(oceanWave, kWaveNotFound);
-    ASSERT_NE(navBuildWave, kWaveNotFound);
-    EXPECT_GT(navBuildWave, oceanWave)
-        << "the bake shares a wave with Ocean's buoyancy pass and would query "
-           "Jolt while it applies forces";
 }
 
 // The nav systems' own chain stays strictly ordered; each reads what the
@@ -146,7 +113,7 @@ TEST(PathfindingScheduleTests, NavigationSystemsFormAStrictChain)
     ECS::SystemManager manager;
     builder.BuildAndRegisterWithWaves(manager, ECS::ScheduleCompleteness::Complete);
 
-    const size_t buildWave = FindWaveOf(manager, "NavigationBuildSystem");
+    const size_t buildWave = FindWaveOf(manager, "NavigationSurfaceSystem");
     const size_t pathWave = FindWaveOf(manager, "NavigationPathfindingSystem");
     const size_t moveWave = FindWaveOf(manager, "NavigationMovementSystem");
     const size_t debugWave = FindWaveOf(manager, "NavigationDebugSystem");

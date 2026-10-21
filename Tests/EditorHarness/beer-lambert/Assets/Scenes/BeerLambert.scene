@@ -48,7 +48,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_wall"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/Background.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 Name.value = "CheckerWall"
@@ -59,7 +59,7 @@ Transform.scale = (14, 9, 0.4)
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Materials/Background.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
 Transform.position = (0, 0, 0)
@@ -69,7 +69,7 @@ Transform.scale = (40, 1, 40)
 [entity id="e_glass_thin"]
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Glass_Thin.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 Name.value = "GlassThin"
 Transform.position = (-1.8, 2, 0.5)
@@ -79,7 +79,7 @@ Transform.scale = (1.3, 1.3, 1.3)
 [entity id="e_glass_thick"]
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Glass_Thick.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 Name.value = "GlassThick"
 Transform.position = (1.8, 2, 0.5)

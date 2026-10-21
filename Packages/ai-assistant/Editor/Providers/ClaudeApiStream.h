@@ -2,6 +2,7 @@
 
 #include "ClaudeApiProvider.h"
 #include "IAgentProvider.h"
+#include "ReplyTextBlocks.h"
 #include "SseParser.h"
 
 #include "Platform/HttpClient.h"
@@ -62,6 +63,7 @@ private:
     AgentTurnEvents& m_Events;
     SseParser m_Parser;
     TurnResult m_Result;
+    ReplyTextBlocks m_TextBlocks;
     std::string m_StopReason;
     bool m_MessageStopped = false;
     bool m_Failed = false;

@@ -22,10 +22,13 @@ public:
     // Load HTML content directly (for better control over iframe embeds)
     virtual bool LoadHTML(const std::string& html, const std::string& baseURL = "https://www.youtube.com") = 0;
 
-    // Get the native view handle (platform-specific)
-    // macOS: returns NSView*
-    // Windows: returns HWND
-    // Linux: returns GtkWidget*
+    // The native handle the view lives in, or nullptr once it is destroyed; callers use it only as
+    // "the view exists".
+    // macOS: the WKWebView (NSView*)
+    // Windows: the host window (HWND) the WebView2 controller is parented to, also while creation is
+    //   pending or has failed (SetOnUnavailable reports a failure)
+    // Linux: the WebKitWebView (GtkWidget*)
+    // Web: a stable non-null token while the element exists
     virtual void* GetNativeView() const = 0;
 
     // Resize the web view to the given dimensions (in pixels)
@@ -52,14 +55,23 @@ public:
     // (e.g. a focused URL field). Currently fired on macOS only.
     virtual void SetOnMouseDown(std::function<void()> callback) = 0;
 
+    // Invoked once if the view cannot be created, with a message for the user that states the
+    // fix (for example the runtime to install). A view whose creation has already failed invokes
+    // it at registration. Fired on Windows only: elsewhere CreateWebView returns nullptr instead.
+    virtual void SetOnUnavailable(std::function<void(const std::string& message)> callback) = 0;
+
     // Destroy the web view and clean up resources
     virtual void Destroy() = 0;
 };
 
 // Factory function to create a platform-specific web view
 // parentWindow: The GLFW window that will host the web view
+// userDataFolder: a per-user folder the process can write, where the view keeps its profile
+//   (cookies, cache); the caller names it, since only the application knows its own paths. The
+//   profile is browser cache, so it belongs under local (not roaming) application data.
+//   Windows only: macOS and Linux keep the system's default website data store.
 // Returns nullptr if web view creation fails or is not supported on this platform
-std::unique_ptr<IWebView> CreateWebView(Window* parentWindow);
+std::unique_ptr<IWebView> CreateWebView(Window* parentWindow, const std::filesystem::path& userDataFolder);
 
 } // namespace Platform
 } // namespace GameEngine

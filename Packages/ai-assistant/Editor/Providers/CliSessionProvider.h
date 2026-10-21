@@ -2,6 +2,7 @@
 
 #include "CliSessionList.h"
 #include "IAgentProvider.h"
+#include "ReplyTextBlocks.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -80,6 +81,8 @@ protected:
     {
         AgentTurnEvents& Events;
         TurnResult Result;
+        /// Joins the reply's text blocks into Result.Text.
+        ReplyTextBlocks TextBlocks;
         /// Set by ReadLine() on the record that ends the turn, with Result.Outcome
         /// Succeeded or Failed (Result.Error then says why).
         bool Completed = false;

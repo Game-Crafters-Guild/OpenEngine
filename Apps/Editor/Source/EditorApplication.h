@@ -6,6 +6,8 @@
 #include "Core/WindowInputRouter.h"
 #include "Core/WindowUiBootstrap.h"
 #include "DeviceLossSurfacer.h"
+#include "Diagnostics/EditorFrameTimings.h"
+#include "Diagnostics/FramePhaseRecorder.h"
 #include "EditorContext.h"
 #include "Platform/ContextMenu.h"
 #include "Platform/Window.h"
@@ -21,6 +23,7 @@
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Panels/PlayModeChangeReviewModal.h"
 #include "Editor/RenderGraphTickRegistry.h"
+#include "Editor/Registries/StatusBarItemRegistry.h"
 #include "EditorVideoPlayerController.h"
 #include "Startup/EditorSessionDescriptor.h"
 #include "JobSystem/TaskHandle.h"
@@ -80,8 +83,11 @@ class SceneThumbnailCapture;
 class PackageManagerController;
 class MovieRecorderController;
 class PlayModeManager;
+class GameViewPointerLock;
 class RecipeControllers;
+class ScriptStatusIndicator;
 class UniversalSearchController;
+class DiagnosticShortcuts;
 enum class PlayModeState : std::uint8_t;
 namespace Telemetry
 {
@@ -169,8 +175,14 @@ class EditorApplication : public Application
     // Editor toolbar accessor
     EditorToolbar* GetToolbar() const { return m_EditorToolbar.get(); }
 
-    // Update project folder (called when user selects a folder)
-    void SetProjectFolder(const std::filesystem::path& projectPath);
+    // Switches the open project: the boot auto-load, and OpenPickedProject once the scene is saved
+    // or discarded.
+    // outgoingChangesDiscarded: the user chose Don't Save for the outgoing scene, so the
+    // project's startup scene replaces it without asking again.
+    void SetProjectFolder(const std::filesystem::path& projectPath, bool outgoingChangesDiscarded);
+    // The picker's choice: asks to save a dirty scene first, then switches; Cancel keeps the
+    // current project.
+    void OpenPickedProject(const std::filesystem::path& projectPath);
     void RequestHdrOutputRefreshForAllWindows();
     // Re-apply the project settings file's renderer knobs (MSAA, AA mode, TAAU
     // render scale, render-scale mode + dynamic target, mesh LOD) to every
@@ -289,6 +301,8 @@ class EditorApplication : public Application
     // RenderGraph declaration path (spine, pipeline outputs, submit stamps) must use
     // the MAIN RS — the controllers were constructed on it.
     Engine::Renderer::RenderServices* MainRenderServices() const;
+    // The newest frames' phase timings (get_frame_phases).
+    const Editor::FramePhaseHistory& GetFramePhaseHistory() const { return m_FramePhaseRecorder.GetHistory(); }
     // Framebuffer size callback (used by ColorPickerWindow and main window). Public so utilities can wire it.
     void OnFramebufferResized(EditorWindowContext* ctx, int width, int height);
     void OnFilesDropped(EditorWindowContext* ctx, const std::vector<std::filesystem::path>& paths);
@@ -303,27 +317,6 @@ class EditorApplication : public Application
 
     // Helper for debug/profiling hotkeys (F2): format a perf line similar to the SceneView overlay.
     std::string BuildPerfDumpLine() const;
-    struct FramePerfBreakdown
-    {
-        double pollMs = 0.0;
-        double inputMs = 0.0;
-        double appUpdateMs = 0.0;
-        double engineUpdateMs = 0.0;
-        double beginFrameMs = 0.0;
-        double worldViewsMs = 0.0;     // RecordWindowWorldViews (entity / scene rendering record)
-        double thumbnailsMs = 0.0;
-        double uiRecordMs = 0.0;
-        double terminalPassesMs = 0.0; // BuildWindowTerminalPasses + debug callbacks
-        double rgCompileMs = 0.0;
-        double rgExecuteMs = 0.0;
-        // First-use SPIR-V variant compile time. Front-loaded by
-        // RenderServices::PrewarmActiveVariants before rg->Compile so it no
-        // longer inflates rgExecuteMs; reported here so the spike is still
-        // visible in render_stats.
-        double variantCompileMs = 0.0;
-        double prewarmMs = 0.0;
-        double presentMs = 0.0;
-    };
 
     // Shared editor context (services, assets root)
     std::unique_ptr<EditorContext> m_EditorContext;
@@ -342,6 +335,8 @@ class EditorApplication : public Application
     std::unique_ptr<Editor::SceneEditorController> m_SceneEditor;
     std::unique_ptr<Editor::SceneThumbnailCapture> m_SceneThumbnailCapture;
     std::unique_ptr<Editor::PlayModeManager> m_PlayMode;
+    // Shows m_PlayMode's entry gate.
+    class PlayModeEntryModal* m_PlayEntryModal = nullptr; // owned by UI tree
     std::unique_ptr<Editor::MovieRecorderController> m_MovieRecorder;
     std::unique_ptr<Editor::RecipeControllers> m_RecipeControllers;
     std::unique_ptr<MissingAssetTracker> m_MissingAssetTracker;
@@ -350,6 +345,8 @@ class EditorApplication : public Application
     // play mode is active and a Game View tab is showing. Mouse position is
     // Game View local (viewport origin), not window client pixels.
     std::unique_ptr<Input::InputSystem> m_RuntimeInput;
+    // Grants the game's pointer lock request to the window showing the Game View.
+    std::unique_ptr<Editor::GameViewPointerLock> m_GameViewPointerLock;
     // Cached once per frame: play mode + Game View is the active tab of some
     // window. Session-scoped (context enable, stuck-key reset), not per-window.
     bool m_RuntimeInputActive = false;
@@ -390,8 +387,9 @@ class EditorApplication : public Application
     // finished (or can never produce providers), so VCS detection may run.
     bool m_VcsProvidersReadySignaled = false;
     bool m_PendingPostInit = false;
-    // GE_EDITOR_STARTUP_SCENE is opened from Update after the world path has
-    // settled — the same boot-open class the wasm last-project skip avoids.
+    // A non-empty workspace marks a pending boot open after the world path settles.
+    // It opens the project startup scene, or the GE_EDITOR_STARTUP_SCENE override
+    // held in m_DeferredStartupScene, and suppresses the interim untitled save prompt.
     std::filesystem::path m_DeferredStartupScene;
     std::filesystem::path m_DeferredStartupSceneWorkspace;
     bool m_PendingWindowShow = true;
@@ -399,6 +397,8 @@ class EditorApplication : public Application
     // were wired to; Update() re-wires when the engine workspace root changes
     // (project open/switch).
     std::filesystem::path m_WiredProjectRoot;
+    // The bottom bar's scripts status (C# and C++); polled for the C# side in Update().
+    std::unique_ptr<Editor::ScriptStatusIndicator> m_ScriptStatus;
     uint32_t m_StartupFrameCount = 0;
     // The startup preloads (a compute job for the UI assets, an "Engine startup" channel
     // job for the shader packages); OnShutdown waits for both before teardown.
@@ -417,6 +417,9 @@ class EditorApplication : public Application
 
     // Global search/command palette (provider, dialog, registrations).
     std::unique_ptr<Editor::UniversalSearchController> m_UniversalSearch;
+
+    // F2 CPU profiler and F3 UI Demo, as Editor.Global actions a game in Play can take first.
+    std::unique_ptr<Editor::DiagnosticShortcuts> m_DiagnosticShortcuts;
 
     std::filesystem::path m_AssetsDirectory;
 
@@ -482,6 +485,10 @@ class EditorApplication : public Application
     // EditorContext. Drained once per window per frame; the application never
     // learns what is in it.
     Editor::RenderGraphTickRegistry m_RenderGraphTicks;
+
+    // The status bar's registered items, updated every frame; the application never learns
+    // what they are.
+    Editor::StatusBarItemRegistry m_StatusBarItems;
 
     // Generic "exit after N frames" (applies even without UI replay).
     std::optional<std::uint64_t> m_ExitAfterFrames;
@@ -554,10 +561,15 @@ class EditorApplication : public Application
     void TickPlayFullscreenFocus();
     void BindPlayFullscreenChangedHandler(Platform::Window& window);
 
-    // Persisted layout presets (Editor-global per-user settings).
+    // Layout presets, persisted in the project's shared settings.
     void LoadLayoutPresetsFromPreferences();
     void SaveLayoutPresetsToPreferences() const;
     void OnLayoutPresetRestoreFailed();
+    // The working layout, persisted per user and per project
+    // (Editor::WorkingLayoutPersistence). Restore runs after the active preset
+    // is applied and replaces it when a usable working layout is saved.
+    void RestoreWorkingLayout(bool rebuildDockspace);
+    void SaveWorkingLayout();
 
     // Generic deferred action runners used to move callback-triggered work to
     // stable points in the frame. Payload-specific handling stays in editor code.
@@ -580,24 +592,19 @@ class EditorApplication : public Application
     EditorWindowContext* m_DispatchingWindow = nullptr;
 
     // Last measured perf breakdown for the primary Scene View window (best-effort).
-    FramePerfBreakdown m_LastSceneViewPerf{};
+    Editor::SceneViewFrameTimings m_LastSceneViewPerf{};
 
     // Sub-phase breakdown of AppUpdateMs (diagnostic for --bench-rg-csv captures).
-    // Sums roughly equal the outer AppUpdateMs minus small untimed fillers.
-    struct AppUpdateSubPhases
-    {
-        double preUiMs = 0.0;         // startup + modals + polls + base Update + ECS ProcessCommands + SceneEditor + flushes + pre-UI deferred
-        double debugPanelsMs = 0.0;   // CollectEditorDebugMetrics + PanelManager->UpdatePanels (log flush + debug panels)
-        double uiWindowsMs = 0.0;     // UI UpdateAllWindows loop (per-window UIManager::Update)
-        double tailMs = 0.0;          // post-UI deferred actions + TickPlayFullscreenFocus + input routing + hotkeys
-    };
-    AppUpdateSubPhases m_LastAppUpdateSubPhases{};
+    Editor::AppUpdateSubPhaseTimings m_LastAppUpdateSubPhases{};
 
     // Time spent in EditorApplication::Render() before the per-window
     // render loop begins (cross-window DnD, tear-off, OS-drag overlays).
     // Surfaced in get_render_stats so the gap between Application::RenderMs
     // and the per-window sub-phase total can be attributed.
     double m_LastRenderPreloopMs = 0.0;
+
+    // Records each frame's phase timings at the top of the next Update (get_frame_phases).
+    Editor::FramePhaseRecorder m_FramePhaseRecorder;
 
     // Cross-window drag-drop / tear-off / dock-preview policy and state live
     // in the controller; window/GPU creation stays here (UndockToFloatingWindow).
@@ -636,6 +643,8 @@ class EditorApplication : public Application
 
     /// Unmount torn-off panels without restoring tabs. Layout apply places them.
     void DismissTornOffPanelsForLayoutRestore();
+    /// Panels shown outside the main dock: in-canvas frames and separate OS windows.
+    std::vector<std::string> SeparateWindowPanelIds() const;
 
     void QueueOpenInternalFile(std::filesystem::path path);
     void FlushPreUiDeferredActions();
@@ -670,7 +679,7 @@ class EditorApplication : public Application
     // Heavy UI/asset-browser refresh after project open; queued so SetProjectFolder returns quickly
     // (avoids stalling the modal callback and nested UI work on the same stack).
     void ApplyProjectFolderUiAsync(const std::filesystem::path& projectPath,
-                                   const std::filesystem::path& newAssetRoot);
+                                   const std::filesystem::path& newAssetRoot, bool outgoingChangesDiscarded);
 
     // What a project switch still needs once its asset sources have finished
     // ejecting. Unmounting the old packages and rebinding the project source
@@ -683,6 +692,7 @@ class EditorApplication : public Application
         std::filesystem::path OldAssetRoot;
         std::filesystem::path OldDbFile;
         std::filesystem::path OldCacheRoot;
+        bool OutgoingChangesDiscarded = false;
     };
 
     // The second half of SetProjectFolder: everything that may only run once

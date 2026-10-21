@@ -1,8 +1,8 @@
 # Standalone Player tests.
 #
-# PlayerHdrOptions and PlayerLog are leaf TUs — header-only mode parsing plus Logger,
-# and the log file's sinks — so the production sources compile in directly: no Player
-# executable, no window, no device.
+# PlayerHdrOptions, PlayerRunOptions and PlayerLog are leaf TUs — command-line parsing
+# plus Logger, and the log file's sinks — so the production sources compile in
+# directly: no Player executable, no window, no device.
 
 if(BUILD_TESTING)
     # PrepareBundle invokes /usr/bin/ditto and preserves bundle symlinks, and
@@ -46,8 +46,10 @@ if(BUILD_TESTING)
     add_executable(PlayerTests
         PlayerHdrOptionsTests.cpp
         PlayerLogTests.cpp
+        PlayerRunOptionsTests.cpp
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerHdrOptions.cpp
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerLog.cpp
+        ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerRunOptions.cpp
     )
     target_include_directories(PlayerTests PRIVATE
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source

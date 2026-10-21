@@ -93,7 +93,7 @@ constexpr char kLeafCss[] = R"(
 const UI::UIClipRect* ClipSlotOf(const IsolatedUIFixture& fx, const std::string& id)
 {
     UIElement* root = fx.Manager().GetRootElement();
-    UIElement* el = root ? root->FindById(id) : nullptr;
+    UIElement* el = root ? root->FindById(HashStringId(id)) : nullptr;
     if (!el || el->m_ClipSlotIdx == UI::kNoClip)
         return nullptr;
     return fx.Manager().PeekClipRectForTesting(el->m_ClipSlotIdx);

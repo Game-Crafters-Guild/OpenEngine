@@ -28,7 +28,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
@@ -270,14 +269,37 @@ const ExtractedLight* SelectLitPrimaryDirectional(std::span<const ExtractedLight
     return primary;
 }
 
+uint32 SelectShadedDirectionals(std::span<const ExtractedLight> sortedLights,
+                                std::array<const ExtractedLight*, kMaxDirectionalLights>& out)
+{
+    const ExtractedLight* primary = SelectPrimaryDirectional(sortedLights);
+    if (!primary)
+        return 0;
+    out[0] = primary;
+    uint32 count = 1;
+    for (const auto& l : sortedLights)
+    {
+        if (count >= kMaxDirectionalLights)
+            break;
+        if (l.type != GameEngine::Components::LightType::Directional || &l == primary)
+            continue;
+        if (l.castsLight == 0u || DeliveredLuminance(l) <= 0.0f)
+            continue; // contributes nothing — don't spend a per-pixel BRDF on it
+        out[count++] = &l;
+    }
+    return count;
+}
+
 void PackForwardLightDirectionals(std::span<const ExtractedLight> sortedLights, ForwardLightUBO& ubo)
 {
     // Primary: THE directional every shadow/fog/sky consumer agrees on — its
     // direction, color, intensity AND castsShadows gate all come from the one
     // light SelectPrimaryDirectional picks (never a weaker fill's flags).
-    const ExtractedLight* sun = SelectPrimaryDirectional(sortedLights);
-    if (!sun)
+    std::array<const ExtractedLight*, kMaxDirectionalLights> shaded{};
+    const uint32 shadedCount = SelectShadedDirectionals(sortedLights, shaded);
+    if (shadedCount == 0)
         return; // no directional: leave the zeroed lanes (count 0, dark sun)
+    const ExtractedLight* sun = shaded[0];
     ubo.uLightDirWorld[0] = sun->directionWS[0];
     ubo.uLightDirWorld[1] = sun->directionWS[1];
     ubo.uLightDirWorld[2] = sun->directionWS[2];
@@ -292,14 +314,9 @@ void PackForwardLightDirectionals(std::span<const ExtractedLight> sortedLights, 
     // secondary can brighten but never darken). Premultiplying color*intensity
     // here keeps the shader loop to one MAD per channel.
     uint32 packed = 0;
-    for (const auto& l : sortedLights)
+    for (uint32 i = 1; i < shadedCount; ++i)
     {
-        if (packed >= kMaxSecondaryDirectionals)
-            break;
-        if (l.type != GameEngine::Components::LightType::Directional || &l == sun)
-            continue;
-        if (l.castsLight == 0u || DeliveredLuminance(l) <= 0.0f)
-            continue; // contributes nothing — don't spend a per-pixel BRDF on it
+        const ExtractedLight& l = *shaded[i];
         ubo.uSecondaryDirs[packed][0] = l.directionWS[0];
         ubo.uSecondaryDirs[packed][1] = l.directionWS[1];
         ubo.uSecondaryDirs[packed][2] = l.directionWS[2];

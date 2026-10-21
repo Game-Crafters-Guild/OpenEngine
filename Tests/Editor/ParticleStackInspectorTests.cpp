@@ -19,11 +19,17 @@
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/Checkbox.h"
+#include "UI/Controls/MaskField.h"
+#include "UI/Internal/MaskFieldAccess.h"
+#include "UI/Internal/LayoutAccess.h"
+#include "UI/UIEvents.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIElement.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <any>
+#include <sstream>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -120,6 +126,30 @@ FloatField* RowField(Foldout& section, const std::string& rowLabel)
         if (FloatField* field = FindUnder<FloatField>(*around, IsAny, {}))
             return field;
     return nullptr;
+}
+
+bool IsAnyMask(const MaskField&, const std::string&)
+{
+    return true;
+}
+
+// The flags field of the row `rowLabel` names, under `section`.
+MaskField* RowMask(Foldout& section, const std::string& rowLabel)
+{
+    Label* label = FindUnder<Label>(section, HasText, rowLabel);
+    for (UIElement* around = label ? label->GetParent() : nullptr; around && around != &section;
+         around = around->GetParent())
+        if (MaskField* field = FindUnder<MaskField>(*around, IsAnyMask, {}))
+            return field;
+    return nullptr;
+}
+
+std::string ReadFile(const std::filesystem::path& file)
+{
+    std::ifstream in(file, std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    return text.str();
 }
 
 // The wind strength the stack file holds.
@@ -321,5 +351,62 @@ TEST(ParticleStackInspector, AnUndoOutlivesTheStackObjectItEdited)
     EXPECT_FLOAT_EQ(StoredStrength(file), 2.5f);
     EXPECT_FLOAT_EQ(FindProcessor(*reloaded->Document(), 3)->Params<ParticleStackInspectorTestTypes::WindParameters>().Strength,
                     2.5f);
+    std::filesystem::remove(file);
+}
+
+// A Flags parameter (the event processor's Inherit) is one MaskField row: a click on an option turns that
+// one flag on, keeps the others, and saves the stack file as one undo step.
+TEST(ParticleStackInspector, AFlagsRowIsOneMaskFieldAndAClickSetsOneFlag)
+{
+    RegisterParticleStackInspector();
+    const char* source =
+        R"({"version":1,"entryPhase":1,"lifetime":2,"phases":[{"id":1,"label":"Spawn","processors":[)"
+        R"({"type":"emitRate","id":2,"stage":"emission"},)"
+        R"({"type":"event","id":3,"label":"Burst","stage":"event","parameters":{"action":"emit","inherit":["velocity"]}}]}]})";
+    const auto file = std::filesystem::temp_directory_path() / "ge_particle_stack_flags.particlestack";
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out << source;
+    }
+    auto asset = std::make_shared<ParticleStackAsset>(GUID::Generate(), file);
+    ASSERT_TRUE(asset->Load()) << asset->Diagnostics().front().Message;
+
+    Editor::UndoRedoService undo;
+    UIElement root;
+    InspectorContext context{};
+    context.Parent = &root;
+    context.Object = asset.get();
+    context.Undo = &undo;
+    auto* inspector = InspectorRegistry::Get().TryGetAssetInspector(AssetType::ParticleStack);
+    ASSERT_NE(inspector, nullptr);
+    (*inspector)(context);
+
+    Foldout* section = FindUnder<Foldout>(root, HasTitle, "Event \xC2\xB7 Burst");
+    ASSERT_NE(section, nullptr);
+    MaskField* inherit = RowMask(*section, "Inherit");
+    ASSERT_NE(inherit, nullptr) << "the Inherit flags are one MaskField row";
+    EXPECT_EQ(MaskFieldAccess::Summary(*inherit), "Velocity");
+
+    MaskFieldAccess::OpenPopup(*inherit);
+    ASSERT_EQ(MaskFieldAccess::OptionRows(*inherit).size(), 5u);
+    // Color, not Size: Velocity and Size together are the default, which the file leaves out.
+    Checkbox* color = MaskFieldAccess::OptionRows(*inherit)[2];
+    ASSERT_EQ(color->GetText(), "Color");
+    UILayoutAccess::SetLastLayoutRect(*color, 0.0f, 0.0f, 100.0f, 20.0f);
+    UIEvent press{};
+    press.Id = kEventMouseDown;
+    press.X = 5.0f;
+    press.Y = 5.0f;
+    press.Target = color;
+    press.CurrentTarget = color;
+    color->DispatchEvent(press);
+    UIEvent release = press;
+    release.Id = kEventMouseUp;
+    color->DispatchEvent(release);
+
+    const std::string stored = ReadFile(file);
+    EXPECT_NE(stored.find("\"velocity\""), std::string::npos) << stored;
+    EXPECT_NE(stored.find("\"color\""), std::string::npos) << stored;
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
     std::filesystem::remove(file);
 }

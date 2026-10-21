@@ -658,10 +658,13 @@ bool VulkanDevice::Initialize(const DeviceDesc& desc)
     m_FaultInjection = FaultInjectionFromEnv();
     m_FaultFrameCounter = 0;
     m_FaultSubmitCounter = 0;
+    m_FaultAcquireCounter = 0;
+    m_FaultAcquireForcedSuboptimal = false;
     m_InitDesc = desc; // stashed for RebuildDevice (Q6 slice 2)
     if (m_FaultInjection.Active())
     {
-        Logger::Log::Warning("VulkanDevice: [fault-injection] active — GE_VK_FORCE_DEVICE_LOST / GE_VK_FORCE_BEGINFRAME_TIMEOUT set");
+        Logger::Log::Warning("VulkanDevice: [fault-injection] active — GE_VK_FORCE_DEVICE_LOST / GE_VK_FORCE_BEGINFRAME_TIMEOUT / "
+                             "GE_VK_FORCE_GPU_HANG / GE_VK_FORCE_ACQUIRE_SUBOPTIMAL set");
     }
     m_DebugLayerEnabled = desc.enableDebugLayer;
     m_ApplicationName = desc.applicationName;
@@ -931,6 +934,7 @@ bool VulkanDevice::CreateDeviceAndResources(const DeviceDesc& desc)
     // Configure pipeline cache with platform-specific directory
     VulkanPipelineCache::Config cacheConfig;
     cacheConfig.CacheDirectory = VulkanPipelineCache::GetPlatformCacheDirectory();
+    cacheConfig.PersistToDisk = desc.persistPipelineCache;
 
     m_VkDiskPipelineCache = std::make_unique<VulkanPipelineCache>(m_Device, cacheConfig);
     if (!m_VkDiskPipelineCache->Initialize())
@@ -5192,10 +5196,12 @@ PipelineHandle VulkanDevice::CreatePipelineInternal(const PipelineDesc& desc)
             pipelineInfo.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
 
         VkPipeline pipeline{};
-        PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false);
         VkResult res;
         {
-            auto cacheLock = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->LockForCreation() : std::unique_lock<std::mutex>();
+            const std::span<const uint8_t> stageCode[] = {reflected.meshShader, reflected.pixelShader};
+            const VulkanPipelineCompileGate::Hold compileTurn =
+                m_PipelineCompileGate.Enter(VulkanPipelineCompileGate::StageKey(stageCode, nullptr));
+            PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false);
             VkPipelineCache pc = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->GetVkPipelineCache() : VK_NULL_HANDLE;
             res = vkCreateGraphicsPipelines(m_Device, pc, 1, &pipelineInfo, nullptr, &pipeline);
         }
@@ -5651,6 +5657,23 @@ void VulkanDevice::QueueDeferredSamplerDestroy(SamplerHandle handle)
         slot->deferredSamplers.push_back(handle);
 }
 
+void VulkanDevice::QueueDeferredDescriptorBytesRelease(const PersistentDescriptorBytes& bytes)
+{
+    // No duplicate guard: DestroyDescriptorSet erases the set's entry before it
+    // queues the bytes, so a second destroy of the handle finds nothing to queue.
+    std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
+    if (HasGraphicsTimelineSemaphore())
+        m_DeferredDescriptorBytesTimeline.push_back({bytes, NextSubmitTagsLocked()});
+    else if (PerQueueFrame* slot = DeferralFrameSlotLocked())
+        slot->deferredDescriptorBytes.push_back(bytes);
+}
+
+void VulkanDevice::ReleaseDescriptorBytesImmediate(const PersistentDescriptorBytes& bytes)
+{
+    if (m_DescriptorBufferPool && m_DescriptorBufferPool->InstanceId() == bytes.PoolInstance)
+        m_DescriptorBufferPool->ReleasePersistent(bytes.Alloc);
+}
+
 // Immediate destruction helpers. Reached only once GPU completion is confirmed
 // (the deferred drains) or during teardown — never from the public Destroy* entry
 // points while the device is running. They touch VkDevice/VMA with no deferral,
@@ -5971,10 +5994,12 @@ VulkanDevice::PipelineCreationResult VulkanDevice::CreateComputePipeline(const s
     VkPipeline pipeline;
     VkPipelineCache pipelineCache = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->GetVkPipelineCache() : VK_NULL_HANDLE;
 
-    PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false); // Assume cache miss for timing
     VkResult result;
     {
-        auto cacheLock = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->LockForCreation() : std::unique_lock<std::mutex>();
+        const std::span<const uint8_t> stageCode[] = {computeShaderCode};
+        const VulkanPipelineCompileGate::Hold compileTurn =
+            m_PipelineCompileGate.Enter(VulkanPipelineCompileGate::StageKey(stageCode, nullptr));
+        PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false); // Assume cache miss for timing
         result = vkCreateComputePipelines(m_Device, pipelineCache, 1, &pipelineInfo, nullptr, &pipeline);
     }
 
@@ -6134,10 +6159,12 @@ VulkanDevice::PipelineCreationResult VulkanDevice::CreateComputePipelineFromDesc
     VkPipeline pipeline;
     VkPipelineCache pipelineCache = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->GetVkPipelineCache() : VK_NULL_HANDLE;
 
-    PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false);
     VkResult result;
     {
-        auto cacheLock = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->LockForCreation() : std::unique_lock<std::mutex>();
+        const std::span<const uint8_t> stageCode[] = {desc.computeShader};
+        const VulkanPipelineCompileGate::Hold compileTurn =
+            m_PipelineCompileGate.Enter(VulkanPipelineCompileGate::StageKey(stageCode, specializationInfo));
+        PIPELINE_CREATION_TIMER(m_VkDiskPipelineCache.get(), false);
         result = vkCreateComputePipelines(m_Device, pipelineCache, 1, &pipelineInfo, nullptr, &pipeline);
     }
 
@@ -8307,13 +8334,17 @@ bool VulkanDevice::BeginFrame()
             std::vector<TextureViewHandle> views;
             std::vector<TextureHandle> textures;
             std::vector<SamplerHandle> samplers;
+            std::vector<PersistentDescriptorBytes> descriptorBytes;
             {
                 std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
                 buffers.swap(pq.deferredBuffers);
                 views.swap(pq.deferredTextureViews);
                 textures.swap(pq.deferredTextures);
                 samplers.swap(pq.deferredSamplers);
+                descriptorBytes.swap(pq.deferredDescriptorBytes);
             }
+            for (const PersistentDescriptorBytes& bytes : descriptorBytes)
+                ReleaseDescriptorBytesImmediate(bytes);
             if (s_DeferLogEnabled && !(buffers.empty() && textures.empty()) && s_DeferLogBudget-- > 0)
             {
                 Logger::Log::Info("[VulkanDefer] drain frame={} buffers={} textures={}",
@@ -8358,6 +8389,7 @@ bool VulkanDevice::BeginFrame()
         std::vector<TextureHandle> textures;
         std::vector<SamplerHandle> samplers;
         std::vector<BufferHandle> buffers;
+        std::vector<PersistentDescriptorBytes> descriptorBytes;
         {
             std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
             auto partition = [&progress](auto& deferred, auto& retired)
@@ -8383,7 +8415,10 @@ bool VulkanDevice::BeginFrame()
             partition(m_DeferredTexturesTimeline, textures);
             partition(m_DeferredSamplersTimeline, samplers);
             partition(m_DeferredBuffersTimeline, buffers);
+            partition(m_DeferredDescriptorBytesTimeline, descriptorBytes);
         }
+        for (const PersistentDescriptorBytes& bytes : descriptorBytes)
+            ReleaseDescriptorBytesImmediate(bytes);
         // Views first: a live view holds a refcount on its owning image.
         for (auto h : views)
             DestroyTextureViewImmediate(h);
@@ -8443,6 +8478,8 @@ bool VulkanDevice::BeginFrame()
         if (!AcquireNextImage(imageIndex))
         {
             // Expected during resize/move (VK_TIMEOUT/OUT_OF_DATE); skip this frame quietly.
+            // No semaphore was signaled on either path, so the slot's
+            // imageAvailable semaphore is free for the next acquire.
             m_CurrentSwapchainImage = UINT32_MAX;
             m_AcquiredThisFrame = false;
             return false;
@@ -9589,13 +9626,17 @@ void VulkanDevice::FlushPerFrameDeferredResourcesAfterIdle()
             std::vector<TextureViewHandle> views;
             std::vector<SamplerHandle> samplers;
             std::vector<TextureHandle> textures;
+            std::vector<PersistentDescriptorBytes> descriptorBytes;
             {
                 std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
                 buffers.swap(q.deferredBuffers);
                 views.swap(q.deferredTextureViews);
                 samplers.swap(q.deferredSamplers);
                 textures.swap(q.deferredTextures);
+                descriptorBytes.swap(q.deferredDescriptorBytes);
             }
+            for (const PersistentDescriptorBytes& bytes : descriptorBytes)
+                ReleaseDescriptorBytesImmediate(bytes);
             for (auto h : views)
                 if (h.IsValid())
                     DestroyTextureViewImmediate(h);
@@ -9623,13 +9664,17 @@ void VulkanDevice::FlushTimelineDeferredResourcesAfterIdle()
     std::vector<DeferredSampler> samplers;
     std::vector<DeferredTexture> textures;
     std::vector<DeferredBuffer> buffers;
+    std::vector<DeferredDescriptorBytes> descriptorBytes;
     {
         std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
         views.swap(m_DeferredTextureViewsTimeline);
         samplers.swap(m_DeferredSamplersTimeline);
         textures.swap(m_DeferredTexturesTimeline);
         buffers.swap(m_DeferredBuffersTimeline);
+        descriptorBytes.swap(m_DeferredDescriptorBytesTimeline);
     }
+    for (const DeferredDescriptorBytes& deferred : descriptorBytes)
+        ReleaseDescriptorBytesImmediate(deferred.handle);
     for (const auto& dv : views)
         if (dv.handle.IsValid())
             DestroyTextureViewImmediate(dv.handle);
@@ -10364,7 +10409,7 @@ bool VulkanDevice::RecreateActiveSwapchain(uint32_t width, uint32_t height)
     // safe to drop. Without this, frameSlot-tagged entries outlive the swapchain-
     // recreate boundary and get mis-purged when the old slot index wraps around
     // (e.g., alt-tab / resize storms). Persistent entries (kPersistentFrameSlot
-    // sentinel) are retained — they live in the DB pool's app-lifetime region.
+    // sentinel) are retained — they live in the DB pool's persistent region.
     if (m_DescriptorBufferPool)
     {
         std::unique_lock lock(m_DescriptorBufferSetsMutex);
@@ -10411,6 +10456,7 @@ bool VulkanDevice::RecreateActiveSwapchain(uint32_t width, uint32_t height)
     m_SwapchainTextures.clear();
     m_CurrentSwapchainImage = UINT32_MAX;
     m_AcquiredThisFrame = false;
+    m_AcquireReportedSuboptimal = false;
     m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
     m_WaitedOnImageAvailableThisFrame = false;
     m_AnyGraphicsSubmitThisFrame = false;
@@ -11072,7 +11118,7 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
             hdrDisplay.hdrAvailable = true;
         }
     }
-    hdrDisplay.diagnosticHints.push_back(m_SwapchainColorSpaceExtEnabled
+    hdrDisplay.diagnosticHints.emplace_back(m_SwapchainColorSpaceExtEnabled
                                              ? "VK_EXT_swapchain_colorspace enabled."
                                              : "VK_EXT_swapchain_colorspace not exposed; HDR10/HLG Vulkan color spaces are unavailable.");
     if (m_HdrState.enabled && !hdrDisplay.hdrAvailable)
@@ -12397,10 +12443,29 @@ bool VulkanDevice::AcquireNextImage(uint32_t& imageIndex)
     const auto t1 = std::chrono::high_resolution_clock::now();
     m_LastFrameSyncTimings.acquireMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
+    m_FaultAcquireForcedSuboptimal = false;
+    if (result == VK_SUCCESS && m_FaultInjection.acquireSuboptimalEvery > 0)
+    {
+        ++m_FaultAcquireCounter;
+        if (m_FaultInjection.ShouldForceAcquireSuboptimal(m_FaultAcquireCounter))
+        {
+            result = VK_SUBOPTIMAL_KHR;
+            m_FaultAcquireForcedSuboptimal = true;
+            Logger::Log::Warning("VulkanDevice: [fault-injection] forcing VK_SUBOPTIMAL_KHR on acquire {}", m_FaultAcquireCounter);
+        }
+    }
+    m_AcquireReportedSuboptimal = (result == VK_SUBOPTIMAL_KHR);
+
     // Mark that we must wait on the imageAvailable semaphore once this frame
     m_WaitedOnImageAvailableThisFrame = false;
 
-    if (result == VK_SUCCESS)
+    // VK_SUBOPTIMAL_KHR is a successful acquire: the image is valid and the
+    // imageAvailable semaphore will be signaled, so the frame must go on to
+    // render and present it. Skipping the frame here would leave that binary
+    // semaphore signaled, and the next acquire on this frame slot would reuse it
+    // (VUID-vkAcquireNextImageKHR-semaphore-01286). PresentImage recreates the
+    // swapchain after the present, whatever the present itself returns.
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
     {
         m_CurrentSwapchainImage = imageIndex;
         m_AcquireSemaphoreThisFrame = (m_CurrentFrame < m_ImageAvailableSemaphores.size()) ? m_ImageAvailableSemaphores[m_CurrentFrame] : VK_NULL_HANDLE;
@@ -12433,23 +12498,6 @@ bool VulkanDevice::AcquireNextImage(uint32_t& imageIndex)
             }
         }
         // Skip this frame; the loop will continue and try acquire again next frame
-        m_AcquiredThisFrame = false;
-        m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
-        return false;
-    }
-    else if (result == VK_SUBOPTIMAL_KHR)
-    {
-        // Suboptimal means the swapchain can still be used but should be recreated.
-        // We must NOT use the old imageIndex after recreation because it's from the
-        // old swapchain. Skip this frame and let the next frame acquire from the new swapchain.
-        if (m_SwapchainExtent.width > 0 && m_SwapchainExtent.height > 0)
-        {
-            const WindowTargetHandle activeTarget = GetActiveWindowTarget();
-            if (activeTarget.IsValid())
-            {
-                RecreateWindowTargetSwapchain(activeTarget, m_SwapchainExtent.width, m_SwapchainExtent.height);
-            }
-        }
         m_AcquiredThisFrame = false;
         m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
         return false;
@@ -12561,6 +12609,12 @@ bool VulkanDevice::PresentImage(uint32_t imageIndex)
     const auto t1 = std::chrono::high_resolution_clock::now();
     m_LastFrameSyncTimings.presentMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
+    if (m_FaultAcquireForcedSuboptimal && m_FaultInjection.acquireSuboptimalAlsoPresent && result == VK_SUCCESS)
+    {
+        result = VK_SUBOPTIMAL_KHR;
+    }
+    m_FaultAcquireForcedSuboptimal = false;
+
     if (result == VK_SUCCESS)
     {
 
@@ -12573,6 +12627,16 @@ bool VulkanDevice::PresentImage(uint32_t imageIndex)
             auto it = m_WindowTargets.find(m_ActiveWindowTargetId);
             if (it != m_WindowTargets.end())
                 it->second.frameIndex = m_ActiveWindowTargetFrameIndex;
+        }
+        // A present can succeed on a swapchain its acquire reported as suboptimal;
+        // the surface still no longer matches it.
+        if (m_AcquireReportedSuboptimal && m_SwapchainExtent.width > 0 && m_SwapchainExtent.height > 0)
+        {
+            const WindowTargetHandle activeTarget = GetActiveWindowTarget();
+            if (activeTarget.IsValid())
+            {
+                RecreateWindowTargetSwapchain(activeTarget, m_SwapchainExtent.width, m_SwapchainExtent.height);
+            }
         }
         return true;
     }
@@ -13495,13 +13559,29 @@ VulkanDevice::PipelineCreationResult VulkanDevice::CreateVulkanPipelineFromDesc(
     }
 #endif
     {
-        // Lock the VkPipelineCache for thread safety. The Vulkan spec requires
-        // external synchronization when multiple threads call vkCreate*Pipelines
-        // with the same VkPipelineCache handle.
-        auto cacheLock = m_VkDiskPipelineCache ? m_VkDiskPipelineCache->LockForCreation() : std::unique_lock<std::mutex>();
+        const std::span<const uint8_t> stageCode[] = {desc.vertexShader, desc.pixelShader};
+        const VulkanPipelineCompileGate::Hold compileTurn =
+            m_PipelineCompileGate.Enter(VulkanPipelineCompileGate::StageKey(stageCode, specializationInfo));
+        // Creation feedback (core in 1.3) says whether the pipeline cache served the
+        // pipeline: the statistics count a hit only when the driver reports one.
+        VkPipelineCreationFeedback feedback{};
+        VkPipelineCreationFeedbackCreateInfo feedbackInfo{};
+        const void* const createInfoNext = pipelineInfo.pNext;
+        if (m_DeviceProperties.apiVersion >= VK_API_VERSION_1_3)
+        {
+            feedbackInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+            feedbackInfo.pNext = createInfoNext;
+            feedbackInfo.pPipelineCreationFeedback = &feedback;
+            pipelineInfo.pNext = &feedbackInfo;
+        }
         auto t0 = std::chrono::high_resolution_clock::now();
         result = vkCreateGraphicsPipelines(m_Device, pipelineCache, 1, &pipelineInfo, nullptr, &graphicsPipeline);
         auto ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
+        pipelineInfo.pNext = createInfoNext;
+        constexpr VkPipelineCreationFeedbackFlags kReportedHit =
+            VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT | VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+        if (result == VK_SUCCESS && m_VkDiskPipelineCache)
+            m_VkDiskPipelineCache->RecordPipelineCreation(ms, (feedback.flags & kReportedHit) == kReportedHit);
         if (ms > 10.0)
             Logger::Log::Info("[PSOCreate] '{}': {:.1f}ms", desc.debugName ? desc.debugName : "?", ms);
     }
@@ -13761,7 +13841,7 @@ DescriptorSetHandle VulkanDevice::CreateDescriptorSet(const DescriptorSetDesc& d
     // is on, allocate bytes from the device's DB pool and return a tagged handle
     // (high bit set so downstream routing can distinguish DB from pool handles).
     // All callers are unchanged — the unified DescriptorSetHandle looks the same.
-    // Persistent (transient=false) sets use the DB pool's app-lifetime region so
+    // Persistent (transient=false) sets use the DB pool's persistent region so
     // they're not rewound by BeginFrameReset; their entries carry a sentinel
     // frameSlot (UINT32_MAX) that never matches a real current-frame slot.
     if (layoutDescriptorBufferEligible && m_DescriptorBufferPool)
@@ -13779,6 +13859,7 @@ DescriptorSetHandle VulkanDevice::CreateDescriptorSet(const DescriptorSetDesc& d
         entry.alloc = alloc;
         entry.layout = layout;
         entry.frameSlot = persistent ? kPersistentFrameSlot : m_CurrentFrame.load(std::memory_order_relaxed);
+        entry.poolInstance = m_DescriptorBufferPool->InstanceId();
         if (desc.debugName) entry.debugName = desc.debugName;
         if (DescriptorValidationActive())
             entry.layoutDesc = desc.layout;
@@ -13842,18 +13923,30 @@ void VulkanDevice::DestroyDescriptorSet(DescriptorSetHandle descriptorSet)
 {
     if (!DescriptorSetOwnerMatches(descriptorSet, m_Device))
         return;
-    // Descriptor-buffer handle: release the m_DescriptorBufferSets entry and
-    // return. The underlying bump-allocated persistent region doesn't get
-    // reclaimed (audit §7.1.3), but dropping the entry stops the map from
-    // growing unboundedly across view churn / shutdown cycles. Without this
-    // branch, the raw reinterpret_cast below on a tagged id (high bit set)
-    // produces a garbage VkDescriptorSet pointer that gets handed to
-    // vkFreeDescriptorSets on the legacy pool — silent leak + undefined
-    // behaviour.
+    // Descriptor-buffer handle: drop the m_DescriptorBufferSets entry and return.
+    // A persistent set's bytes go back to the pool once every queue is past the
+    // work that could read them, so view churn reuses them instead of spilling
+    // the persistent region into further descriptor buffers (each one costs a
+    // binding, and past the device's limit the bind path refuses sets). A
+    // per-frame set's bytes are rewound with its frame. Without this branch,
+    // the raw reinterpret_cast below on a tagged id (high bit set) produces a
+    // garbage VkDescriptorSet pointer that gets handed to vkFreeDescriptorSets
+    // on the legacy pool.
     if (IsDescriptorBufferHandle(descriptorSet))
     {
-        std::unique_lock lock(m_DescriptorBufferSetsMutex);
-        m_DescriptorBufferSets.erase(descriptorSet.id);
+        PersistentDescriptorBytes released;
+        {
+            std::unique_lock lock(m_DescriptorBufferSetsMutex);
+            const auto it = m_DescriptorBufferSets.find(descriptorSet.id);
+            if (it == m_DescriptorBufferSets.end())
+                return;
+            if (it->second.frameSlot == kPersistentFrameSlot)
+                released = {it->second.alloc, it->second.poolInstance};
+            m_DescriptorBufferSets.erase(it);
+        }
+        // At teardown the pool goes with everything it holds.
+        if (released.Alloc.IsValid() && !InTeardown())
+            QueueDeferredDescriptorBytesRelease(released);
         return;
     }
     VkDescriptorSet vkSet = reinterpret_cast<VkDescriptorSet>(descriptorSet.id);

@@ -23,10 +23,31 @@ inline constexpr std::string_view kScriptingRuntimeAssemblyFileName = "GameEngin
 inline constexpr std::array<std::string_view, 3> kHostLoadedEngineAssemblyFileNames = {
     kCoreBridgeAssemblyFileName, kHotReloadAssemblyFileName, kScriptingRuntimeAssemblyFileName};
 
+/// The generated C# bindings of the engine's script API (Managed/Scripting.Bindings).
+inline constexpr std::string_view kScriptBindingsAssemblyFileName = "GameEngine.Scripting.Bindings.dll";
+
+/// The assemblies scripts compile against, by file name: the generated bindings and the
+/// hand-written engine ABI surfaces, the editor's own (GameEngine.Editor.Scripting.ABI.dll)
+/// included. A list, not a pattern: a file the build no longer stages, left in an existing
+/// output folder, is never referenced or shipped. Compile-server requests carry it
+/// (ScriptSurfaceRequestField), so the server holds no copy.
+inline constexpr std::array<std::string_view, 5> kScriptSurfaceAssemblyFileNames = {
+    kScriptBindingsAssemblyFileName, "GameEngine.Scripting.ABI.dll", "GameEngine.ECS.ABI.dll",
+    "GameEngine.Platform.ABI.dll", "GameEngine.Editor.Scripting.ABI.dll"};
+
+/// True for an assembly of kScriptSurfaceAssemblyFileNames.
+inline bool IsScriptSurfaceAssembly(std::string_view fileName)
+{
+    for (std::string_view name : kScriptSurfaceAssemblyFileNames)
+        if (name == fileName)
+            return true;
+    return false;
+}
+
 /**
  * @brief Directory holding the engine's managed assemblies.
  *
- * GameEngine.*.ABI.dll, CoreBridge, HotReload, Scripting.Runtime and SourceGenerators/ —
+ * The script surface (IsScriptSurfaceAssembly), CoreBridge, HotReload, Scripting.Runtime and SourceGenerators/ —
  * the EngineBinDir every generated csproj, compile-server request and dotnet build resolves
  * engine references from. The executable directory, except inside a macOS app bundle, where
  * the assemblies are staged as resources under Contents/Resources/Managed (Contents/MacOS

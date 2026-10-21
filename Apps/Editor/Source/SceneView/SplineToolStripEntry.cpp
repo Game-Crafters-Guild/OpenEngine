@@ -1,7 +1,7 @@
 #include "SceneView/SplineToolStripEntry.h"
 
 #include "Components/Spline/SplineComponent.h"
-#include "ECS/Entity.h"
+#include "ECS/ECSTemplates.h"
 #include "SceneView/SplineTool.h"
 #include "SceneView/SplineToolMenu.h"
 #include "SceneViewController.h"

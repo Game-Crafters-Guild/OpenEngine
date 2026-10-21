@@ -43,10 +43,18 @@ public:
     bool Compile(const std::string& requestJson, CompileServerResponse& outResponse);
 
     // Launches a CompileServerHost for the given pipe through the engine's real
-    // spawn path (host discovery + ephemeral job-object treatment, issue #357).
+    // spawn path (host discovery, and a host that dies with this process).
     // Test fixtures must spawn through this instead of hand-rolling
     // CreateProcess so test-spawned hosts share production launch semantics.
+    // The caller owns the host's orderly stop: StopStartedServers skips it.
     static bool StartServerForPipe(const std::string& pipeNameUtf8);
+
+    // Stops every CompileServerHost this process launched to serve a compile:
+    // terminates it, waits at most 2 s per host for the exit and removes its
+    // pid file. Needs no reply from the host, so a hung host cannot hold the
+    // caller. Logs each host's process id and the outcome. Hosts started
+    // through StartServerForPipe are not stopped. Called by ScriptManager::Shutdown.
+    static void StopStartedServers();
 
     // Lightweight counters for observability
     static int GetCompileServerSuccessCount();

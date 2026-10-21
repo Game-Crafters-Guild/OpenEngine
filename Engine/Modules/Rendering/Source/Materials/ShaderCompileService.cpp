@@ -82,6 +82,18 @@ ShaderCompileService::SpirvTarget ShaderCompileService::MaxSupportedSpirv()
     return g_MaxBackendSpirv.load(std::memory_order_relaxed);
 }
 
+std::string_view ShaderCompileService::CacheKeyTarget()
+{
+    // The version stands for everything the engine itself writes into a package that the key's
+    // inputs cannot see (the key format, the embedded compiler, the reflection walker's output), so
+    // it is bumped whenever any of those changes, and the entries an older engine wrote are
+    // orphaned rather than migrated: never addressed again.
+    // v8: reflection preserves unsigned sampled-image types for WebGPU layouts.
+    return MaxSupportedSpirv() == SpirvTarget::Spirv_1_6
+        ? "ShaderCompileServiceTarget:v8:backend-max=spv1.6;mesh-floor=spv1.6"
+        : "ShaderCompileServiceTarget:v8:backend-max=spv1.5;mesh-floor=spv1.6";
+}
+
 namespace {
 
 // Resolve a stage's source text: the in-memory inlineSource when present, else read srcPath.
@@ -451,7 +463,92 @@ static bool CompileOneStage(const ShaderStageCompileSpec& spec,
 
 #endif // shaderc
 
+// Every stage of `req` with its source file and the defines it compiles with: "vs:file [defines: A B],
+// fs:file [defines: ...]". The defines are the variant key in its compiled form (pass and material
+// keywords, vertex layout, profile), so a program named this way can be diffed against what an offline
+// cook asked for.
+std::string DescribeStages(const ShaderProgramCompileRequest& req)
+{
+    std::string stages;
+    for (const auto& s : req.stages)
+    {
+        if (!stages.empty())
+            stages += ", ";
+        stages += s.stage + ":" + s.sourcePath.filename().string() + " [defines:";
+        for (const auto& d : s.defines)
+            stages += " " + d;
+        stages += "]";
+    }
+    return stages;
+}
+
+// Serves the cached package at `pkgPath` into `out` when it exists, loads and is still valid for
+// this request: every dependency the key could not cover (`closure` lists what it did) still hashes
+// as recorded. A missing, unreadable or stale package returns false and leaves `out`'s payload empty.
+bool TryServeCachedProgram(const std::filesystem::path& pkgPath, ShaderSourceKind kind,
+                           const IncludeClosure& closure, ShaderProgramCompileResult& out)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(pkgPath, ec))
+        return false;
+    ShaderPackage pkg{};
+    std::string loadErr;
+    if (!LoadShaderPkg(pkgPath.string(), kind, pkg, &loadErr))
+        return false;
+
+    // Residual staleness check for dependencies the KEY cannot cover. Everything in
+    // `closure.covered` is already keyed by content, so reaching this entry proves those bytes are
+    // what was compiled. What remains are dependencies no textual #include scan can resolve (Slang
+    // `import` modules recorded from slangc's depfile, macro-form directives), which still need a
+    // content hash. There is deliberately no mtime shortcut: an mtime-preserving rewrite is
+    // precisely the case that must be caught.
+    //
+    // Stale until proven fresh: a missing or unparseable cacheInfoJson, an unreadable include or a
+    // hash mismatch recompiles. Recompiling needlessly costs time; serving stale SPIR-V is wrong.
+    if (!pkg.cacheInfoJson.has_value() || pkg.cacheInfoJson->empty())
+        return false;
+    ShaderCacheInfo ci{};
+    std::string ciErr;
+    if (!ParseShaderCacheInfoJson(*pkg.cacheInfoJson, ci, &ciErr))
+        return false;
+    for (const auto& inc : ci.includes)
+    {
+        // An include folded into the key needs no re-read: the key match already proved it.
+        if (inc.path.empty() || closure.covered.count(inc.path) != 0)
+            continue;
+        // Through the shared source cache: it re-reads and re-compares the bytes, so this is as
+        // strict as a direct read, and these are the same engine headers every other program's
+        // revalidation asks about.
+        const ShaderSourceCache::EntryPtr cached = ShaderSourceCache::Get().Read(inc.path, inc.path);
+        if (!cached || cached->Hash != inc.hash64)
+            return false;
+    }
+
+    // The recorded include set can exceed the scanned closure (Slang module imports, macro-form
+    // directives): merge the extras so the exposed dependency list is ground truth.
+    for (const auto& inc : ci.includes)
+    {
+        if (!inc.path.empty() && closure.covered.count(inc.path) == 0)
+            out.includeClosurePaths.push_back(inc.path);
+    }
+    out.meta = std::move(pkg.meta);
+    out.stageBytes = std::move(pkg.stageBytes);
+    out.cacheInfoJson = std::move(pkg.cacheInfoJson);
+    return true;
+}
+
 } // namespace
+
+bool ShaderCompileService::ServeCachedProgram(const std::filesystem::path& shaderPkgPath, ShaderSourceKind kind,
+                                              ShaderProgramCompileResult& out)
+{
+    out = ShaderProgramCompileResult{};
+    out.outputDir = shaderPkgPath.parent_path();
+    out.shaderPkgPath = shaderPkgPath;
+    // No key was computed, so no include is proven by one: every dependency the package's cache
+    // info records is revalidated by content.
+    return TryServeCachedProgram(shaderPkgPath, kind, IncludeClosure{}, out);
+}
 
 bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileRequest& req,
                                                 ShaderSourceKind kind,
@@ -494,15 +591,8 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
     // CONTENT, so dropping them loses no discrimination.
     uint64_t h = kShaderHashOffsetBasis;
     // Encode key-format version + chosen compile target so 1.2 and 1.3 builds
-    // never collide in a shared cache. The version stands for everything the
-    // engine itself writes into a package that the key's inputs cannot see —
-    // the key format, the embedded compiler, the reflection walker's output —
-    // so it is bumped whenever any of those changes, and the entries an older
-    // engine wrote are orphaned rather than migrated: never addressed again.
-    // v8: reflection preserves unsigned sampled-image types for WebGPU layouts.
-    h = HashShaderString(h, g_MaxBackendSpirv.load(std::memory_order_relaxed) == ShaderCompileService::SpirvTarget::Spirv_1_6
-            ? "ShaderCompileServiceTarget:v8:backend-max=spv1.6;mesh-floor=spv1.6"
-            : "ShaderCompileServiceTarget:v8:backend-max=spv1.5;mesh-floor=spv1.6");
+    // never collide in a shared cache (CacheKeyTarget).
+    h = HashShaderString(h, std::string(CacheKeyTarget()));
     // Accumulated across stages: vs and fs of one material share most of their
     // include closure, so a file already folded by an earlier stage need not be
     // read again — the key covers it either way.
@@ -580,133 +670,41 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
     }
 
     const std::string key = Hex64(h);
-    out.outputDir = req.cacheRoot / key;
 
-    // Cache hit: if artifacts already exist for this key, load and return.
-    // Fixed file name inside the key-named directory: the package path is cache
-    // addressing, so debugName (diagnostics/log output only) must not decide
-    // whether a same-key request hits.
-    out.shaderPkgPath = out.outputDir / "program.shaderpkg";
+    // Cache hit: the read-only roots in order (a packaged game's cooked cache), then the writable
+    // root. Fixed file name inside the key-named directory: the package path is cache addressing,
+    // so debugName (diagnostics/log output only) must not decide whether a same-key request hits.
+    std::vector<std::filesystem::path> probedRoots = req.readOnlyCacheRoots;
+    probedRoots.push_back(req.cacheRoot);
+    for (const std::filesystem::path& root : probedRoots)
     {
-        std::error_code ec;
-        if (std::filesystem::exists(out.shaderPkgPath, ec))
+        out.outputDir = root / key;
+        out.shaderPkgPath = out.outputDir / "program.shaderpkg";
+        if (TryServeCachedProgram(out.shaderPkgPath, kind, closure, out))
         {
-            ShaderPackage pkg{};
-            std::string loadErr;
-            if (LoadShaderPkg(out.shaderPkgPath.string(), kind, pkg, &loadErr))
-            {
-                // Residual staleness check for dependencies the KEY cannot cover.
-                // Everything in `closure.covered` is already keyed by content, so
-                // reaching this entry proves those bytes are what was compiled.
-                // What remains are dependencies no textual #include scan can
-                // resolve — Slang `import` modules (recorded from slangc's
-                // depfile) and macro-form directives — which still need a content
-                // hash. There is deliberately NO mtime shortcut: an
-                // mtime-preserving rewrite is precisely the case that must be
-                // caught, and a timestamp is not evidence about content.
-                //
-                // CONSERVATIVE: missing/empty cacheInfoJson means we can't validate includes —
-                // treat as stale rather than risk loading SPIR-V compiled against a now-changed
-                // include. Older cache entries written before include tracking landed have no
-                // cacheInfoJson; this path forces them to recompile on first hit.
-                // Start with "stale until proven fresh" so any failure to validate
-                // (missing cacheInfoJson, parse failure, include unreadable, hash mismatch)
-                // forces a recompile. The OLD logic defaulted to fresh and bumped to
-                // stale on detected mismatch — but that defaulted-to-fresh path silently
-                // returned stale binaries when cacheInfoJson was missing or the JSON
-                // failed to parse. Conservative-by-default is the right choice for cache
-                // correctness; recompiling unnecessarily is a perf regression but
-                // returning stale SPIR-V is a correctness regression.
-                bool includesStale = true;
-                ShaderCacheInfo ci{};
-                if (pkg.cacheInfoJson.has_value() && !pkg.cacheInfoJson->empty())
-                {
-                    std::string ciErr;
-                    if (ParseShaderCacheInfoJson(*pkg.cacheInfoJson, ci, &ciErr))
-                    {
-                        // Tentatively fresh; flip back to stale if any include fails.
-                        includesStale = false;
-                        for (const auto& inc : ci.includes)
-                        {
-                            if (inc.path.empty())
-                                continue;
-                            // Already folded into the key — re-reading it could
-                            // only confirm what the key match already proved.
-                            if (closure.covered.count(inc.path) != 0)
-                                continue;
-                            // Through the shared source cache: it re-reads
-                            // and re-compares the bytes, so this is as strict
-                            // as a direct read, and these are the same engine
-                            // headers every other program's revalidation asks
-                            // about.
-                            const ShaderSourceCache::EntryPtr cached =
-                                ShaderSourceCache::Get().Read(inc.path, inc.path);
-                            if (!cached)
-                            {
-                                includesStale = true;
-                                break;
-                            }
-                            const uint64_t hNow = cached->Hash;
-                            if (hNow != inc.hash64)
-                            {
-                                includesStale = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!includesStale)
-                {
-                    // The recorded include set can exceed the scanned closure
-                    // (Slang module imports, macro-form directives) — merge the
-                    // extras so the exposed dependency list is ground truth.
-                    for (const auto& inc : ci.includes)
-                    {
-                        if (!inc.path.empty() && closure.covered.count(inc.path) == 0)
-                            out.includeClosurePaths.push_back(inc.path);
-                    }
-                    out.meta = std::move(pkg.meta);
-                    out.stageBytes = std::move(pkg.stageBytes);
-                    out.cacheInfoJson = std::move(pkg.cacheInfoJson);
-                    {
-                        auto ms = std::chrono::duration<double, std::milli>(
-                            std::chrono::high_resolution_clock::now() - tCompileStart).count();
-                        if (ms > 5.0)
-                            Logger::Log::Info("[ShaderCache] HIT '{}': {:.1f}ms", req.debugName, ms);
-                    }
-                    return true;
-                }
-                // Include changed: fall through to recompile.
-            }
-            // If load failed, fall through to recompile.
+            const auto ms = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - tCompileStart).count();
+            if (ms > 5.0)
+                Logger::Log::Info("[ShaderCache] HIT '{}': {:.1f}ms", req.debugName, ms);
+            return true;
         }
     }
 
-    // Genuine miss. Only now does a compiler become a requirement: a runtime
-    // built without one (wasm) serves cooked entries perfectly well, and gating
-    // on the compiler before the probe would make every cooked cache unusable
-    // there. Name the key so the miss is actionable — it is the exact directory
-    // the offline cook must have produced.
+    // Genuine miss, compiled into the writable root (out.outputDir, the last root
+    // probed). Only now does a compiler become a requirement: a runtime built
+    // without one (wasm) serves cooked entries perfectly well, and gating on the
+    // compiler before the probe would make every cooked cache unusable there.
+    // Name the key so the miss is actionable: it is the exact directory the
+    // offline cook must have produced.
     if (!IsCompilerAvailable())
     {
         // The key folds the per-stage defines and source bytes, so a miss that
         // "should" have been cooked is almost always a define or source-text
         // skew between the cook and this runtime — list the defines so the two
         // sides can be diffed from this one message.
-        std::string stages;
-        for (const auto& s : req.stages)
-        {
-            if (!stages.empty())
-                stages += ", ";
-            stages += s.stage + ":" + s.sourcePath.filename().string() + " [defines:";
-            for (const auto& d : s.defines)
-                stages += " " + d;
-            stages += "]";
-        }
-        setErr("ShaderCompileService: no cooked program for '" + req.debugName + "' (" + stages
+        setErr("ShaderCompileService: no cooked program for '" + req.debugName + "' (" + DescribeStages(req)
                + ") and this runtime has no shader compiler. Expected "
-               + out.shaderPkgPath.string()
+               + (probedRoots.front() / key / "program.shaderpkg").string()
                + ". Cook this variant offline (Tools/MaterialVariantCook) and ship the cache root"
                  " with the content, or run on a build that has shaderc.");
         return false;
@@ -761,7 +759,10 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
     {
         auto ms = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - tCompileStart).count();
-        Logger::Log::Info("[ShaderCache] COMPILE '{}': {:.1f}ms ({} stages)", req.debugName, ms, req.stages.size());
+        // A runtime that ships a cooked cache compiles only what the cook missed; the stages and
+        // their defines name the missed key so it can be added to the cook.
+        Logger::Log::Info("[ShaderCache] COMPILE '{}': {:.1f}ms ({} stages: {})", req.debugName, ms,
+                          req.stages.size(), DescribeStages(req));
     }
 
     // Merge compiler-recorded dependencies the textual scan cannot resolve

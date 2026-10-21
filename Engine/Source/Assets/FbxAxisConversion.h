@@ -75,14 +75,14 @@ inline ufbx_vec3 ConvertVec3(const ufbx_vec3& v, const ModelImport::AxisConversi
 {
     const ModelImport::Vec3 r = ModelImport::ConvertVec3(
         {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)}, c, scale);
-    return {r.x, r.y, r.z};
+    return {{{r.x, r.y, r.z}}};
 }
 
 inline ufbx_vec3 ConvertScale(const ufbx_vec3& v, const ModelImport::AxisConversion& c)
 {
     const ModelImport::Vec3 r = ModelImport::ConvertScale(
         {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)}, c);
-    return {r.x, r.y, r.z};
+    return {{{r.x, r.y, r.z}}};
 }
 
 inline ufbx_quat ConvertQuat(const ufbx_quat& q, const ModelImport::AxisConversion& c)
@@ -90,7 +90,7 @@ inline ufbx_quat ConvertQuat(const ufbx_quat& q, const ModelImport::AxisConversi
     const ModelImport::Quat r = ModelImport::ConvertQuat(
         {static_cast<float>(q.x), static_cast<float>(q.y),
          static_cast<float>(q.z), static_cast<float>(q.w)}, c);
-    return {r.x, r.y, r.z, r.w};
+    return {{{r.x, r.y, r.z, r.w}}};
 }
 
 inline void StoreMatrixColumnMajor(const ufbx_matrix& m,

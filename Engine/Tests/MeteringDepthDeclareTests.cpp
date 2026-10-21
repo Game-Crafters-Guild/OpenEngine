@@ -1,6 +1,9 @@
 // Which depth the auto-exposure meter splits the frame with, and who owns the depth with the water in
 // it: the ocean's surface step resolves it once and publishes View.DepthResolvedPostOcean; the fog and
-// the meter read it when it resolves, else View.DepthResolved. Part of RenderPipelineDeclareTests.
+// the meter read it when it resolves, else View.DepthResolved. And which passes each meter declares.
+// Part of RenderPipelineDeclareTests.
+#include "Engine/Rendering/IEnvironmentSource.h"
+#include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/Pipeline/Nodes/AutoExposureNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/DepthResolveNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/VolumetricFogNode.h"
@@ -57,6 +60,17 @@ TextureDesc TargetDesc(TextureFormat format, uint32_t usage)
     d.usage = usage;
     return d;
 }
+// An environment that lights the scene and never bakes, so its irradiance reading never lands: the
+// state a view is in between a sky appearing and its first reading.
+class EnvironmentWithoutReading final : public IEnvironmentSource
+{
+  public:
+    const char* Name() const override { return "EnvironmentWithoutReading"; }
+    uint64_t InputDigest() const override { return 1u; }
+    bool HasActiveContent() const override { return true; }
+    void ScheduleBake(const EnvironmentBakeContext&) override {}
+};
+
 TextureDesc ColorTargetDesc()
 {
     return TargetDesc(TextureFormat::RGBA8_UNORM,
@@ -82,9 +96,25 @@ struct MeteringDepthFixture
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
 
-    bool Up(float waterCenterZ, bool fog)
+    // `validation` creates the device with the validation layer and descriptor sets rather than
+    // descriptor buffers, for a test that checks what the frame binds: the layer tracks the writes
+    // of a descriptor set, and an unwritten descriptor is visible to nothing else.
+    bool Up(float waterCenterZ, bool fog, Components::ExposureMeter meter = Components::ExposureMeter::Picture,
+            bool environmentWithoutReading = false, bool validation = false)
     {
-        Device = CreateVulkanDeviceFast();
+        if (validation)
+        {
+            DeviceDesc desc{};
+            desc.preferredAPI = GraphicsAPI::Vulkan;
+            desc.enableDebugLayer = true;
+            desc.enableDynamicRendering = true;
+            desc.descriptorBuffers = DescriptorBufferMode::Disabled;
+            Device = DeviceFactory::CreateDevice(desc);
+            if (Device && !Device->Initialize(desc))
+                Device.reset();
+        }
+        else
+            Device = CreateVulkanDeviceFast();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
@@ -112,7 +142,7 @@ struct MeteringDepthFixture
         const CameraId cam = Rs->Views().AllocateCamera("MeteringDepthCam");
         Rs->Views().SetCameraData(cam, camera);
         View = Rs->Views().AllocateView("MeteringDepthView", cam);
-        Rs->Views().SetViewRenderLayerMask(View, 1u);
+        Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -120,9 +150,13 @@ struct MeteringDepthFixture
 
         PostProcessSettings pp{};
         pp.AutoExposureActive = true;
+        pp.AutoExposureMeter = static_cast<int32>(meter);
         pp.VolumetricFogIntensity = fog ? 1.0f : 0.0f;
         pp.VolumetricFogDensity = 0.02f;
         Rs->Views().SetViewPostProcessOverride(View, pp);
+        if (environmentWithoutReading)
+            Rs->EnsureFeature<ImageBasedLightingFeature>().SetEnvironmentSource(
+                std::make_unique<EnvironmentWithoutReading>());
 
         if (waterCenterZ != 0.0f)
         {
@@ -195,7 +229,10 @@ struct MeteringDepthFrame
     std::vector<std::string> FogDepthReads;   // depth-like textures the fog passes sample
     uint32_t PostOceanResolves = 0;           // passes that write the post-ocean depth
     bool SurfaceDrawn = false;                // an OceanSurface pass was declared
-    bool MeterDeclared = false;
+    bool MeterDeclared = false;               // the histogram pass was declared
+    bool MeterReadsExposure = false;          // the histogram pass reads the view's ExposureHistory
+    bool ResolveDeclared = false;             // the resolve pass was declared
+    bool ResolveWritesCompensation = false;   // the resolve writes the view's exposure compensation state
 };
 
 MeteringDepthFrame DeclareOneFrame(MeteringDepthFixture& f, RenderPipelineInstance& instance, uint32_t index)
@@ -228,9 +265,20 @@ MeteringDepthFrame DeclareOneFrame(MeteringDepthFixture& f, RenderPipelineInstan
             resolveWriters.insert(a.Pass);
         const bool sampled = a.Access == RenderGraph::RGAccess::Sampled ||
                              a.Access == RenderGraph::RGAccess::SampledCompute;
+        if (pass.find("AutoExposureResolve") != std::string::npos)
+        {
+            out.ResolveDeclared = true;
+            if (res.find("AutoExposure.Compensation") != std::string::npos && RenderGraph::IsWrite(a.Access))
+                out.ResolveWritesCompensation = true;
+        }
         if (pass.find("AutoExposureHistogram") != std::string::npos)
         {
             out.MeterDeclared = true;
+            // The view's ExposureHistory: the blueprint resource, or the import for a graph without one.
+            if ((res.find("ExposureHistory") != std::string::npos ||
+                 res.find("AutoExposure.History") != std::string::npos) &&
+                a.Access == RenderGraph::RGAccess::StorageRead)
+                out.MeterReadsExposure = true;
             if (sampled && isDepth)
                 out.MeterDepthReads.push_back(res);
         }
@@ -300,6 +348,58 @@ TEST(RenderPipelineDeclareTests, FogAndAutoExposureShareTheOceanStepsPostOceanRe
     EXPECT_EQ(r.PostOceanResolves, 1u) << "the fog no longer resolves its own copy";
     EXPECT_TRUE(OnlyPostOcean(r.MeterDepthReads));
     EXPECT_TRUE(OnlyPostOcean(r.FogDepthReads)) << "the fog reads the same post-ocean depth";
+    f.Down();
+}
+
+// The picture meter builds its histograms from the frame and resolves them.
+TEST(RenderPipelineDeclareTests, ThePictureMeterDeclaresTheHistogramAndTheResolve)
+{
+    MeteringDepthFixture f;
+    if (!f.Up(/*waterCenterZ=*/0.0f, /*fog=*/false, Components::ExposureMeter::Picture,
+              /*environmentWithoutReading=*/false, /*validation=*/true))
+        GTEST_SKIP() << "No Vulkan device available";
+    const MeteringDepthFrame r = DeclareMeteringDepthFrame(f, /*withOcean=*/false, /*withFog=*/false);
+    EXPECT_TRUE(r.MeterDeclared);
+    EXPECT_TRUE(r.ResolveDeclared);
+    // The colour it bins is stored at the frame's pre-exposure: the read orders it after the snapshot,
+    // and the binding hands the shader P (an unwritten one is a validation error).
+    EXPECT_TRUE(r.MeterReadsExposure) << "the histogram pass must read the view's ExposureHistory";
+    // The stars undo the compensation the resolve applied: the resolve records it every frame.
+    EXPECT_TRUE(r.ResolveWritesCompensation) << "the resolve must write the view's exposure compensation state";
+    const ValidationStats stats = f.Device->GetValidationStats();
+    f.Down();
+    if (!stats.Enabled)
+        GTEST_SKIP() << "the Vulkan validation layer is not installed: the histogram pass's bindings went unchecked";
+    EXPECT_EQ(stats.ErrorCount, 0u) << "the frame's descriptors are not all written";
+    for (const ValidationVuidStat& v : stats.Vuids)
+        EXPECT_FALSE(v.IsError) << v.Vuid << " x" << v.Count << ": " << v.FirstMessage;
+}
+
+// The lights meter reads the world's lights, never the frame: the resolve runs and no histogram pass
+// reads the color or the depth.
+TEST(RenderPipelineDeclareTests, TheLightsMeterDeclaresTheResolveWithoutTheHistogram)
+{
+    MeteringDepthFixture f;
+    if (!f.Up(/*waterCenterZ=*/0.0f, /*fog=*/false, Components::ExposureMeter::Lights))
+        GTEST_SKIP() << "No Vulkan device available";
+    const MeteringDepthFrame r = DeclareMeteringDepthFrame(f, /*withOcean=*/false, /*withFog=*/false);
+    EXPECT_FALSE(r.MeterDeclared);
+    EXPECT_TRUE(r.MeterDepthReads.empty());
+    EXPECT_TRUE(r.ResolveDeclared);
+    f.Down();
+}
+
+// Before the sky's first irradiance reading lands there is nothing to meter: the lights meter declares
+// no resolve, so the exposure history holds instead of flashing a reading without the sky.
+TEST(RenderPipelineDeclareTests, TheLightsMeterDeclaresNoResolveBeforeTheSkysFirstReading)
+{
+    MeteringDepthFixture f;
+    if (!f.Up(/*waterCenterZ=*/0.0f, /*fog=*/false, Components::ExposureMeter::Lights,
+              /*environmentWithoutReading=*/true))
+        GTEST_SKIP() << "No Vulkan device available";
+    const MeteringDepthFrame r = DeclareMeteringDepthFrame(f, /*withOcean=*/false, /*withFog=*/false);
+    EXPECT_FALSE(r.MeterDeclared);
+    EXPECT_FALSE(r.ResolveDeclared);
     f.Down();
 }
 

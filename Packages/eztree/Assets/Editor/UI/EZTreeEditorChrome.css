@@ -12,17 +12,8 @@
 	background-image: url("editor:Icons/leaf.svg");
 }
 
-/* Inspector section icon */
+/* Inspector section icon; the Add Component picker draws the same class */
 .inspector-section-icon.inspector-section-icon-tree-generator {
-	background-image: url("editor:Icons/leaf.svg");
-}
-
-/* Component-picker search result icon (matches the editor's shared
-   component-icon treatment in SearchDialog.css) */
-.search-result-icon.inspector-section-icon-tree-generator {
-	background-size: 16px 16px;
-	background-image-tint: rgba(200, 200, 200, 1.0);
-	background-image-saturation: 1.0;
 	background-image: url("editor:Icons/leaf.svg");
 }
 

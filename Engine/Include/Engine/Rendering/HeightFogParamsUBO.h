@@ -2,9 +2,15 @@
 
 #include "Types/Types.h"
 
+namespace GameEngine::Rendering
+{
+struct SkySettings;
+} // namespace GameEngine::Rendering
+
 namespace GameEngine::Engine::Renderer {
 
-// std140 layout shared by height_fog.frag and HeightFogParamsUploadNode.
+// std140 layout of the HeightFogParams UBO: filled by HeightFogParamsUploadNode, mirrored field for
+// field by height_fog_params_fields.glsl.
 struct HeightFogParamsUBO
 {
     float intensity = 0.0f;
@@ -61,11 +67,40 @@ struct HeightFogParamsUBO
     float noiseFadeEnd = 0.0f;
     float skyHorizonOffset = 0.0f;
     float skyBottomStrength = 0.0f;
+    // HeightFogColorSource: where the fog colour comes from this frame.
+    int32 colorSource = 0;
+    // The sky's exposure trim (2^exposureEV), times the HDRI intensity for an HDRI backdrop.
+    float skyHorizonScale = 1.0f;
+    // The sky's night blend, for the night composite at the horizon (backdrop source only).
+    float skyNightAmount = 0.0f;
+    // Added to the view azimuth before the backdrop tap, in radians: the HDRI's rotation.
+    float skyAzimuthOffset = 0.0f;
+    // Backdrop source: the night sky's horizon colour. Constant source: the horizon radiance before
+    // skyHorizonScale.
+    float skyHorizonColorR = 0.0f;
+    float skyHorizonColorG = 0.0f;
+    float skyHorizonColorB = 0.0f;
     float _pad0 = 0.0f;
     float _pad1 = 0.0f;
+    float _pad2 = 0.0f;
 };
 
-static_assert(sizeof(HeightFogParamsUBO) == 224, "HeightFogParamsUBO must be 224 bytes");
+static_assert(sizeof(HeightFogParamsUBO) == 256, "HeightFogParamsUBO must be 256 bytes");
+
+// Values of HeightFogParamsUBO::colorSource. The sky values are sky_composite.glsl's
+// GE_SKY_HORIZON_SOURCE_* values, which the fog term (height_fog_term.glsl) hands to
+// GE_SkyHorizonColor.
+enum class HeightFogColorSource : int32
+{
+    // Emissive, the gradient and the sun in-scatter term.
+    Fixed = 0,
+    // The sky-view LUT's horizon row at the view azimuth, under the night composite.
+    SkyViewLut = 1,
+    // skyHorizonColor, already the sky's horizon radiance (gradient sky, stylized ground rim).
+    SkyConstant = 2,
+    // The HDRI's horizon row at the view azimuth, averaged over a 64th of a turn.
+    SkyHdri = 3,
+};
 
 enum HeightFogFlags : int32
 {
@@ -76,5 +111,12 @@ enum HeightFogFlags : int32
 };
 
 void FillHeightFogParamsUBO(const struct PostProcessSettings& settings, HeightFogParamsUBO& out);
+
+// Fills colorSource and the sky colour fields: in the sky horizon colour mode, the source the sky
+// draws its horizon from and the terms it draws it with, so the fog's colour is the sky's at the
+// horizon. activeSky is the frame's sky, null without one; then, and in the fixed colour mode, the
+// fog keeps its fixed colour.
+void FillHeightFogSkyColor(const struct PostProcessSettings& settings,
+                           const Rendering::SkySettings* activeSky, HeightFogParamsUBO& out);
 
 } // namespace GameEngine::Engine::Renderer

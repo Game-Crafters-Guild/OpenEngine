@@ -306,7 +306,9 @@ TEST(SkeletonTopologicalSort, BranchingHierarchy)
         posInOrder[skel.TopologicalOrder[i]] = i;
     for (uint32_t i = 0; i < 5; ++i) {
         if (skel.Parent[i] >= 0)
+        {
             EXPECT_LT(posInOrder[static_cast<uint32_t>(skel.Parent[i])], posInOrder[i]);
+        }
     }
 }
 

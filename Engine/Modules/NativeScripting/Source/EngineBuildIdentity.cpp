@@ -2,8 +2,11 @@
 
 #include "NativeScripting/BuildCacheRecord.h" // Fnv1aHash / ToHexDigest
 
+#include <algorithm>
 #include <cstdint>
+#include <fstream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -49,9 +52,38 @@ void IdentityAnchor() {}
 #if defined(_WIN32)
 
 // The linker writes a fresh CodeView GUID+Age on every link, so it is the exact
-// "this build of this binary" stamp. Read from the MAPPED image: the debug
-// directory's AddressOfRawData is an RVA, valid in memory (PointerToRawData is
-// the file offset and would be wrong here).
+// "this build of this binary" stamp. RSDS record: 4-byte signature, 16-byte GUID,
+// 4-byte age, then the PDB path. Only the GUID+age are the identity; the path is
+// where the symbols happened to be written and differs between worktrees that
+// produced byte-identical engines.
+constexpr DWORD kRsdsPrefix = 4 + 16 + 4;
+
+std::string CodeViewStamp(const char* record, DWORD size)
+{
+    if (size < kRsdsPrefix || record[0] != 'R' || record[1] != 'S' || record[2] != 'D' || record[3] != 'S')
+        return {};
+    return std::string(record + 4, kRsdsPrefix - 4);
+}
+
+// No CodeView record (symbols stripped). The optional header always exists,
+// and these fields move together on a relink, so identity survives — it just
+// stops being guaranteed-unique. The mapped image and its file carry the same
+// fields, so both readers agree on such a build.
+std::string HeaderStamp(const IMAGE_NT_HEADERS& nt)
+{
+    struct Fields
+    {
+        std::uint32_t TimeDateStamp;
+        std::uint32_t SizeOfImage;
+        std::uint32_t CheckSum;
+        std::uint32_t EntryPoint;
+    } stamp{nt.FileHeader.TimeDateStamp, nt.OptionalHeader.SizeOfImage, nt.OptionalHeader.CheckSum,
+            nt.OptionalHeader.AddressOfEntryPoint};
+    return std::string(reinterpret_cast<const char*>(&stamp), sizeof(stamp));
+}
+
+// Read from the MAPPED image: the debug directory's AddressOfRawData is an RVA,
+// valid in memory (PointerToRawData is the file offset and would be wrong here).
 std::string ReadImageStamp()
 {
     const auto* base = reinterpret_cast<const unsigned char*>(&__ImageBase);
@@ -71,39 +103,88 @@ std::string ReadImageStamp()
         {
             if (entries[i].Type != IMAGE_DEBUG_TYPE_CODEVIEW || entries[i].AddressOfRawData == 0)
                 continue;
-            // RSDS record: 4-byte signature, 16-byte GUID, 4-byte age, then the
-            // PDB path. Only the GUID+age are the identity; the path is where the
-            // symbols happened to be written and differs between worktrees that
-            // produced byte-identical engines.
-            constexpr DWORD kRsdsPrefix = 4 + 16 + 4;
-            if (entries[i].SizeOfData < kRsdsPrefix)
-                continue;
-            const auto* cv = reinterpret_cast<const char*>(base + entries[i].AddressOfRawData);
-            if (cv[0] != 'R' || cv[1] != 'S' || cv[2] != 'D' || cv[3] != 'S')
-                continue;
-            return std::string(cv + 4, kRsdsPrefix - 4);
+            std::string stamp = CodeViewStamp(reinterpret_cast<const char*>(base + entries[i].AddressOfRawData),
+                                              entries[i].SizeOfData);
+            if (!stamp.empty())
+                return stamp;
         }
     }
+    return HeaderStamp(*nt);
+}
 
-    // No CodeView record (symbols stripped). The optional header always exists,
-    // and these fields move together on a relink, so identity survives — it just
-    // stops being guaranteed-unique. Both writer and reader use this same
-    // fallback on such a build, so comparisons stay consistent.
-    struct HeaderStamp
+// The same stamp read from a PE file on disk: the debug directory is located through
+// the section table (its data directory holds an RVA) and each entry's record is read
+// at its file offset, PointerToRawData.
+std::string ReadFileStamp(std::ifstream& in)
+{
+    IMAGE_DOS_HEADER dos{};
+    if (!in.read(reinterpret_cast<char*>(&dos), sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE)
+        return {};
+    IMAGE_NT_HEADERS nt{};
+    in.seekg(dos.e_lfanew);
+    if (!in.read(reinterpret_cast<char*>(&nt), sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+        nt.FileHeader.SizeOfOptionalHeader != sizeof(nt.OptionalHeader))
+        return {};
+    std::vector<IMAGE_SECTION_HEADER> sections(nt.FileHeader.NumberOfSections);
+    if (!in.read(reinterpret_cast<char*>(sections.data()),
+                 static_cast<std::streamsize>(sections.size() * sizeof(IMAGE_SECTION_HEADER))))
+        return {};
+
+    const IMAGE_DATA_DIRECTORY& dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    const IMAGE_SECTION_HEADER* holder = nullptr;
+    for (const IMAGE_SECTION_HEADER& section : sections)
     {
-        std::uint32_t TimeDateStamp;
-        std::uint32_t SizeOfImage;
-        std::uint32_t CheckSum;
-        std::uint32_t EntryPoint;
-    } stamp{nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage, nt->OptionalHeader.CheckSum,
-            nt->OptionalHeader.AddressOfEntryPoint};
-    return std::string(reinterpret_cast<const char*>(&stamp), sizeof(stamp));
+        const DWORD extent = (std::max)(section.Misc.VirtualSize, section.SizeOfRawData);
+        if (dir.VirtualAddress >= section.VirtualAddress && dir.VirtualAddress < section.VirtualAddress + extent)
+            holder = &section;
+    }
+    if (dir.VirtualAddress != 0 && dir.Size >= sizeof(IMAGE_DEBUG_DIRECTORY) && holder)
+    {
+        std::vector<IMAGE_DEBUG_DIRECTORY> entries(dir.Size / sizeof(IMAGE_DEBUG_DIRECTORY));
+        in.seekg(dir.VirtualAddress - holder->VirtualAddress + holder->PointerToRawData);
+        if (!in.read(reinterpret_cast<char*>(entries.data()),
+                     static_cast<std::streamsize>(entries.size() * sizeof(IMAGE_DEBUG_DIRECTORY))))
+            return {};
+        for (const IMAGE_DEBUG_DIRECTORY& entry : entries)
+        {
+            if (entry.Type != IMAGE_DEBUG_TYPE_CODEVIEW || entry.PointerToRawData == 0 ||
+                entry.SizeOfData < kRsdsPrefix)
+                continue;
+            char record[kRsdsPrefix];
+            in.seekg(entry.PointerToRawData);
+            if (!in.read(record, sizeof(record)))
+                return {};
+            std::string stamp = CodeViewStamp(record, sizeof(record));
+            if (!stamp.empty())
+                return stamp;
+        }
+    }
+    return HeaderStamp(nt);
 }
 
 #elif defined(__APPLE__)
 
 // LC_UUID is the Mach-O equivalent of the CodeView GUID: ld stamps a fresh one
-// per link.
+// per link, and code signing leaves it alone. `commands` holds the header's
+// `count` load commands, `size` bytes of them.
+std::string FindUuid(const unsigned char* commands, std::uint32_t count, std::size_t size)
+{
+    std::size_t offset = 0;
+    for (std::uint32_t i = 0; i < count && offset + sizeof(load_command) <= size; ++i)
+    {
+        const auto* cmd = reinterpret_cast<const load_command*>(commands + offset);
+        if (cmd->cmd == LC_UUID && offset + sizeof(uuid_command) <= size)
+        {
+            const auto* uuidCmd = reinterpret_cast<const uuid_command*>(cmd);
+            return std::string(reinterpret_cast<const char*>(uuidCmd->uuid), sizeof(uuidCmd->uuid));
+        }
+        if (cmd->cmdsize == 0)
+            break;
+        offset += cmd->cmdsize;
+    }
+    return {};
+}
+
 std::string ReadImageStamp()
 {
     Dl_info info{};
@@ -112,18 +193,19 @@ std::string ReadImageStamp()
     const auto* header = reinterpret_cast<const mach_header_64*>(info.dli_fbase);
     if (header->magic != MH_MAGIC_64)
         return {};
-    const auto* cmd = reinterpret_cast<const load_command*>(header + 1);
-    for (std::uint32_t i = 0; i < header->ncmds; ++i)
-    {
-        if (cmd->cmd == LC_UUID)
-        {
-            const auto* uuidCmd = reinterpret_cast<const uuid_command*>(cmd);
-            return std::string(reinterpret_cast<const char*>(uuidCmd->uuid), sizeof(uuidCmd->uuid));
-        }
-        cmd = reinterpret_cast<const load_command*>(reinterpret_cast<const unsigned char*>(cmd) +
-                                                   cmd->cmdsize);
-    }
-    return {};
+    return FindUuid(reinterpret_cast<const unsigned char*>(header + 1), header->ncmds, header->sizeofcmds);
+}
+
+// A thin 64-bit Mach-O file, as the engine links; a universal (fat) file reads as no stamp.
+std::string ReadFileStamp(std::ifstream& in)
+{
+    mach_header_64 header{};
+    if (!in.read(reinterpret_cast<char*>(&header), sizeof(header)) || header.magic != MH_MAGIC_64)
+        return {};
+    std::vector<unsigned char> commands(header.sizeofcmds);
+    if (!in.read(reinterpret_cast<char*>(commands.data()), static_cast<std::streamsize>(commands.size())))
+        return {};
+    return FindUuid(commands.data(), header.ncmds, commands.size());
 }
 
 #elif defined(__EMSCRIPTEN__)
@@ -137,11 +219,35 @@ std::string ReadImageStamp()
     return {};
 }
 
+std::string ReadFileStamp(std::ifstream&)
+{
+    return {};
+}
+
 #else
 
 // ELF: .note.gnu.build-id, present whenever the link ran with --build-id (the
 // default for GCC/Clang on the distros this engine targets). Absent otherwise,
-// which surfaces as "cannot verify" rather than a false mismatch.
+// which surfaces as "cannot verify" rather than a false mismatch. Scans one
+// PT_NOTE segment's notes, [cursor, end).
+std::string FindGnuBuildId(const unsigned char* cursor, const unsigned char* end)
+{
+    const auto aligned = [](ElfW(Word) size) { return (size + 3u) & ~3u; };
+    while (cursor + sizeof(ElfW(Nhdr)) <= end)
+    {
+        const auto* note = reinterpret_cast<const ElfW(Nhdr)*>(cursor);
+        const unsigned char* name = cursor + sizeof(ElfW(Nhdr));
+        const unsigned char* desc = name + aligned(note->n_namesz);
+        if (desc + note->n_descsz > end)
+            break;
+        if (note->n_type == NT_GNU_BUILD_ID && note->n_namesz == 4 &&
+            std::string(reinterpret_cast<const char*>(name), 3) == "GNU")
+            return std::string(reinterpret_cast<const char*>(desc), note->n_descsz);
+        cursor = desc + aligned(note->n_descsz);
+    }
+    return {};
+}
+
 struct BuildIdSearch
 {
     const void* Anchor;
@@ -162,24 +268,10 @@ int VisitObject(struct dl_phdr_info* info, std::size_t, void* userData)
         const ElfW(Phdr)& phdr = info->dlpi_phdr[i];
         if (phdr.p_type != PT_NOTE)
             continue;
-        const auto* cursor = reinterpret_cast<const unsigned char*>(info->dlpi_addr + phdr.p_vaddr);
-        const unsigned char* end = cursor + phdr.p_memsz;
-        while (cursor + sizeof(ElfW(Nhdr)) <= end)
-        {
-            const auto* note = reinterpret_cast<const ElfW(Nhdr)*>(cursor);
-            const auto aligned = [](ElfW(Word) size) { return (size + 3u) & ~3u; };
-            const unsigned char* name = cursor + sizeof(ElfW(Nhdr));
-            const unsigned char* desc = name + aligned(note->n_namesz);
-            if (desc + note->n_descsz > end)
-                break;
-            if (note->n_type == NT_GNU_BUILD_ID && note->n_namesz == 4 &&
-                std::string(reinterpret_cast<const char*>(name), 3) == "GNU")
-            {
-                search.Result.assign(reinterpret_cast<const char*>(desc), note->n_descsz);
-                return 1;
-            }
-            cursor = desc + aligned(note->n_descsz);
-        }
+        const auto* notes = reinterpret_cast<const unsigned char*>(info->dlpi_addr + phdr.p_vaddr);
+        search.Result = FindGnuBuildId(notes, notes + phdr.p_memsz);
+        if (!search.Result.empty())
+            return 1;
     }
     return 1; // the anchor's object was found; done either way
 }
@@ -189,6 +281,34 @@ std::string ReadImageStamp()
     BuildIdSearch search{reinterpret_cast<const void*>(&IdentityAnchor), {}};
     ::dl_iterate_phdr(&VisitObject, &search);
     return search.Result;
+}
+
+// The same note read from an ELF file on disk, through its program headers' file offsets.
+std::string ReadFileStamp(std::ifstream& in)
+{
+    ElfW(Ehdr) header{};
+    if (!in.read(reinterpret_cast<char*>(&header), sizeof(header)) ||
+        std::string(reinterpret_cast<const char*>(header.e_ident), SELFMAG) != ELFMAG ||
+        header.e_phentsize != sizeof(ElfW(Phdr)))
+        return {};
+    std::vector<ElfW(Phdr)> programHeaders(header.e_phnum);
+    in.seekg(static_cast<std::streamoff>(header.e_phoff));
+    if (!in.read(reinterpret_cast<char*>(programHeaders.data()),
+                 static_cast<std::streamsize>(programHeaders.size() * sizeof(ElfW(Phdr)))))
+        return {};
+    for (const ElfW(Phdr)& phdr : programHeaders)
+    {
+        if (phdr.p_type != PT_NOTE)
+            continue;
+        std::vector<unsigned char> notes(phdr.p_filesz);
+        in.seekg(static_cast<std::streamoff>(phdr.p_offset));
+        if (!in.read(reinterpret_cast<char*>(notes.data()), static_cast<std::streamsize>(notes.size())))
+            return {};
+        std::string stamp = FindGnuBuildId(notes.data(), notes.data() + notes.size());
+        if (!stamp.empty())
+            return stamp;
+    }
+    return {};
 }
 
 #endif
@@ -204,6 +324,14 @@ const std::string& EngineBuildIdentity()
         return stamp.empty() ? std::string{} : ToHexDigest(Fnv1aHash(stamp));
     }();
     return identity;
+}
+
+std::string ReadBinaryLinkStamp(const std::filesystem::path& binary)
+{
+    std::ifstream in(binary, std::ios::binary);
+    if (!in)
+        return {};
+    return ReadFileStamp(in);
 }
 
 } // namespace NativeScripting

@@ -13,6 +13,7 @@
     {
       "kind": "selectedCount",
       "subtreeId": "assets-list",
+      "requiredClass": "assets-list-row",
       "frameStart": 120,
       "frameEnd": 200,
       "exact": 2
@@ -37,17 +38,17 @@
     { "frame": 103, "type": "mouseDown", "button": 0 },
     { "frame": 104, "type": "mouseUp", "button": 0 },
     { "frame": 106, "type": "keyUp", "key": 341, "mods": 0 },
-    { "frame": 108, "type": "waitSelectedCount", "subtreeId": "assets-list", "exact": 2, "timeoutFrames": 300 },
+    { "frame": 108, "type": "waitSelectedCount", "subtreeId": "assets-list", "requiredClass": "assets-list-row", "exact": 2, "timeoutFrames": 300 },
 
-    { "frame": 210, "type": "mouseMove", "target": { "kind": "elementId", "id": "assets-views-container", "relX": 0.8, "relY": 0.92 } },
+    { "frame": 210, "type": "mouseMove", "target": { "kind": "elementId", "id": "assets-views-container", "relX": 0.8, "relY": 0.7 } },
     { "frame": 211, "type": "mouseDown", "button": 0 },
     { "frame": 212, "type": "mouseUp", "button": 0 },
-    { "frame": 220, "type": "waitSelectedCount", "subtreeId": "assets-list", "exact": 0, "timeoutFrames": 300 },
+    { "frame": 220, "type": "waitSelectedCount", "subtreeId": "assets-list", "requiredClass": "assets-list-row", "exact": 0, "timeoutFrames": 300 },
 
     { "frame": 240, "type": "mouseMove", "target": { "kind": "ancestorOfLabelTextUnderId", "underId": "assets-list", "labelClass": "list-label", "ancestorClass": "assets-list-row", "needle": "A", "relX": 0.35, "relY": 0.5 } },
     { "frame": 241, "type": "mouseDown", "button": 0 },
     { "frame": 242, "type": "mouseUp", "button": 0 },
-    { "frame": 250, "type": "waitSelectedCount", "subtreeId": "assets-list", "exact": 1, "timeoutFrames": 300 }
+    { "frame": 250, "type": "waitSelectedCount", "subtreeId": "assets-list", "requiredClass": "assets-list-row", "exact": 1, "timeoutFrames": 300 }
   ]
 }
 

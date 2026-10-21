@@ -4,6 +4,7 @@
 #include "Jobs/WideStringUtil.h"
 #include "Logger/Logger.h"
 #include "Core/Application.h"
+#include "Platform/Process.h"
 #include "Platform/Shell.h"
 #include "Scripting/ScriptTargetFramework.h"
 #include <atomic>
@@ -17,11 +18,12 @@
 #else
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #ifdef __linux__
-#include <csignal>
 #include <sys/prctl.h>
 #endif
 #endif
@@ -31,7 +33,9 @@
 #include <chrono>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <vector>
 namespace GameEngine
 {
 static std::atomic<int> g_SuccessCount{0};
@@ -318,41 +322,44 @@ static bool WaitForServerReady(const std::string& pipeNameUtf8)
     return false;
 }
 
-// The host is a resident service by design: its pipe name is keyed to the
-// workspace (ComputeCompileServerPipeName), not to the spawning process, so a
-// host deliberately survives its Editor's exit and serves the next session
-// with warm Roslyn caches. Test runs must opt out of that persistence: a test
-// process that crashes or is killed would otherwise strand hosts that hold
-// locks on the managed DLLs and break subsequent builds (issue #357). Test
-// harnesses set GE_COMPILE_SERVER_EPHEMERAL=1 before the first spawn; every
-// host launched by that process then dies with it.
-static bool IsEphemeralHostRequested()
+static bool IsStaleCompileServerPidFile(const std::filesystem::path& pidPath);
+
+// A CompileServerHost this process launched. A host belongs to the process
+// that launched it: it dies with it (the Windows kill-on-close job, the Linux
+// parent-death signal, and on every platform the host's own watch on the
+// --parent-pid it is given), so a stopped or crashed Editor never leaves a host
+// holding its install folder open.
+struct LaunchedHost
 {
-    const char* v = std::getenv("GE_COMPILE_SERVER_EPHEMERAL");
-    return v && v[0] == '1' && v[1] == '\0';
-}
+    uint32_t ProcessId = 0;
+    std::string PipeNameUtf8;
+#ifdef _WIN32
+    // Waited on instead of the process id, which the OS may reuse.
+    HANDLE Process = nullptr;
+#endif
+};
 
 #ifdef _WIN32
-// Job object that ephemeral hosts are assigned to. KILL_ON_JOB_CLOSE means the
-// OS terminates every host in the job when the last handle closes — which
+// Job object every launched host is assigned to. KILL_ON_JOB_CLOSE means the
+// OS terminates every host in the job when the last handle closes, which
 // happens when this process exits for any reason, including crashes and
 // TerminateProcess. The handle is intentionally kept open for the lifetime of
 // the process.
-static HANDLE EphemeralHostJobObject()
+static HANDLE HostJobObject()
 {
     static HANDLE job = []() -> HANDLE
     {
         HANDLE h = CreateJobObjectW(nullptr, nullptr);
         if (!h)
         {
-            Logger::Log::Warning("[CompileServerClient] CreateJobObject failed (err={}); ephemeral hosts will rely on fixture teardown only", (unsigned)GetLastError());
+            Logger::Log::Warning("[CompileServerClient] CreateJobObject failed (err={}); hosts will rely on their parent watch only", (unsigned)GetLastError());
             return nullptr;
         }
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if (!SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info, sizeof(info)))
         {
-            Logger::Log::Warning("[CompileServerClient] SetInformationJobObject failed (err={}); ephemeral hosts will rely on fixture teardown only", (unsigned)GetLastError());
+            Logger::Log::Warning("[CompileServerClient] SetInformationJobObject failed (err={}); hosts will rely on their parent watch only", (unsigned)GetLastError());
             CloseHandle(h);
             return nullptr;
         }
@@ -362,18 +369,19 @@ static HANDLE EphemeralHostJobObject()
 }
 #endif
 
-void* GetCompileServerEphemeralJobHandleForTests()
+void* GetCompileServerHostJobHandleForTests()
 {
 #ifdef _WIN32
-    return IsEphemeralHostRequested() ? EphemeralHostJobObject() : nullptr;
+    return HostJobObject();
 #else
     return nullptr;
 #endif
 }
 
 // Launch the managed CompileServerHost process for the given pipe name.
-static bool LaunchCompileServerProcess(const std::string& hostDll, const std::string& pipeNameUtf8)
+static std::optional<LaunchedHost> LaunchCompileServerProcess(const std::string& hostDll, const std::string& pipeNameUtf8)
 {
+    const std::string parentPid = std::to_string(Platform::GetCurrentProcessId());
 #ifdef _WIN32
     // Shared engine-wide dotnet discovery (DOTNET_ROOT / PATH / standard install
     // locations); bare "dotnet" only as a last resort for CreateProcess's own lookup.
@@ -381,7 +389,8 @@ static bool LaunchCompileServerProcess(const std::string& hostDll, const std::st
     const bool resolved = dotnetCmd != "dotnet";
     std::wstring dotnetPathW = ToWide(dotnetCmd);
     const wchar_t* app = resolved ? dotnetPathW.c_str() : nullptr;
-    std::wstring cmd = L"\"" + dotnetPathW + L"\" \"" + ToWide(hostDll) + L"\" " + ToWide(pipeNameUtf8);
+    std::wstring cmd = L"\"" + dotnetPathW + L"\" \"" + ToWide(hostDll) + L"\" " + ToWide(pipeNameUtf8) +
+                       L" --parent-pid " + ToWide(parentPid);
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
     STARTUPINFOW si{};
@@ -391,32 +400,30 @@ static bool LaunchCompileServerProcess(const std::string& hostDll, const std::st
     Logger::Log::Debug("[CompileServerClient] Launching server: dotnet={} host={} pipe={}",
                        dotnetCmd, hostDll, pipeNameUtf8);
 
-    // Ephemeral hosts start suspended so they are inside the kill-on-close job
-    // before their first instruction; a host that raced ahead of the
-    // assignment could outlive a crashing test run.
-    HANDLE job = IsEphemeralHostRequested() ? EphemeralHostJobObject() : nullptr;
+    // Hosts start suspended so they are inside the kill-on-close job before
+    // their first instruction; a host that raced ahead of the assignment could
+    // outlive a crashing launcher.
+    HANDLE job = HostJobObject();
     DWORD creationFlags = CREATE_NO_WINDOW | (job ? CREATE_SUSPENDED : 0);
 
     if (!CreateProcessW(app, cmdBuf.data(), nullptr, nullptr, FALSE, creationFlags, nullptr, wd.c_str(), &si, &pi))
     {
         DWORD err = GetLastError();
         Logger::Log::Error("[CompileServerClient] Failed to start CompileServerHost process (err={})", (unsigned)err);
-        return false;
+        return std::nullopt;
     }
     if (job)
     {
         if (!AssignProcessToJobObject(job, pi.hProcess))
         {
-            Logger::Log::Warning("[CompileServerClient] AssignProcessToJobObject failed (err={}); host pid={} will rely on fixture teardown only",
+            Logger::Log::Warning("[CompileServerClient] AssignProcessToJobObject failed (err={}); host pid={} will rely on its parent watch only",
                                  (unsigned)GetLastError(), (unsigned)pi.dwProcessId);
         }
         ResumeThread(pi.hThread);
     }
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return true;
+    return LaunchedHost{static_cast<uint32_t>(pi.dwProcessId), pipeNameUtf8, pi.hProcess};
 #else
-    const bool ephemeral = IsEphemeralHostRequested();
     // Resolve in the parent: only async-signal-safe calls are allowed between
     // fork and exec, which rules out the resolver's getenv/filesystem probing.
     const std::string dotnetCmd = DotnetHostCommand();
@@ -424,21 +431,18 @@ static bool LaunchCompileServerProcess(const std::string& hostDll, const std::st
     if (pid < 0)
     {
         Logger::Log::Error("[CompileServerClient] fork() failed while starting CompileServerHost (errno={})", errno);
-        return false;
+        return std::nullopt;
     }
     if (pid == 0)
     {
 #ifdef __linux__
-        if (ephemeral)
-        {
-            // Linux analogue of the Windows kill-on-close job: die with the parent.
-            ::prctl(PR_SET_PDEATHSIG, SIGKILL);
-            if (::getppid() == 1)
-                _exit(127); // parent already gone between fork and prctl
-        }
-#else
-        (void)ephemeral; // macOS has no parent-death signal; fixture teardown reaps
+        // Linux analogue of the Windows kill-on-close job: die with the parent.
+        ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+        if (::getppid() == 1)
+            _exit(127); // parent already gone between fork and prctl
 #endif
+        // macOS has no parent-death signal: the host's --parent-pid watch
+        // is what ends it when this process exits.
         namespace fs = std::filesystem;
 
         fs::path hostPath(hostDll);
@@ -472,7 +476,7 @@ static bool LaunchCompileServerProcess(const std::string& hostDll, const std::st
             // Must be executable. If it's not, just skip and fall back to dotnet.
             // (We avoid stat() / permission checks here; execv will fail with 13 if needed.)
             const std::string exeUtf8 = exePath.string();
-            const char* argv[] = {exeUtf8.c_str(), pipeNameUtf8.c_str(), nullptr};
+            const char* argv[] = {exeUtf8.c_str(), pipeNameUtf8.c_str(), "--parent-pid", parentPid.c_str(), nullptr};
             ::execv(exeUtf8.c_str(), const_cast<char* const*>(argv));
         };
 
@@ -484,16 +488,136 @@ static bool LaunchCompileServerProcess(const std::string& hostDll, const std::st
 
         // Fallback: run the framework-dependent host via the parent-resolved
         // dotnet, then a bare PATH lookup as the last resort.
-        const char* argvResolved[] = {dotnetCmd.c_str(), hostDll.c_str(), pipeNameUtf8.c_str(), nullptr};
+        const char* argvResolved[] = {dotnetCmd.c_str(), hostDll.c_str(), pipeNameUtf8.c_str(), "--parent-pid", parentPid.c_str(), nullptr};
         ::execv(dotnetCmd.c_str(), const_cast<char* const*>(argvResolved));
         const char* dotnet = "dotnet";
-        const char* argv[] = {dotnet, hostDll.c_str(), pipeNameUtf8.c_str(), nullptr};
+        const char* argv[] = {dotnet, hostDll.c_str(), pipeNameUtf8.c_str(), "--parent-pid", parentPid.c_str(), nullptr};
         ::execvp(dotnet, const_cast<char* const*>(argv));
         _exit(127);
     }
 
-    return true;
+    return LaunchedHost{static_cast<uint32_t>(pid), pipeNameUtf8};
 #endif
+}
+
+// True once the host has exited (POSIX: and been reaped), waiting up to `timeout`.
+static bool WaitForHostExit(const LaunchedHost& host, std::chrono::milliseconds timeout)
+{
+#ifdef _WIN32
+    return WaitForSingleObject(host.Process, static_cast<DWORD>(timeout.count())) == WAIT_OBJECT_0;
+#else
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;)
+    {
+        // Nonzero: reaped now, or reaped earlier and no longer our child.
+        if (::waitpid(static_cast<pid_t>(host.ProcessId), nullptr, WNOHANG) != 0)
+            return true;
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        SleepMs(50);
+    }
+#endif
+}
+
+static void TerminateHost(const LaunchedHost& host)
+{
+#ifdef _WIN32
+    TerminateProcess(host.Process, 1);
+#else
+    ::kill(static_cast<pid_t>(host.ProcessId), SIGKILL);
+#endif
+}
+
+static void ReleaseHost(LaunchedHost& host)
+{
+#ifdef _WIN32
+    if (host.Process)
+        CloseHandle(host.Process);
+    host.Process = nullptr;
+#else
+    (void)host;
+#endif
+}
+
+// The host's pid file, <Temp>/GE_CompileServer/<pipe>.pid, once its process has
+// exited: a terminated host cannot delete it, and a file another live instance
+// of the pipe has written since is kept.
+static void RemoveStalePidFile(const std::string& pipeNameUtf8)
+{
+    std::error_code ec;
+    const std::filesystem::path tempDir = std::filesystem::temp_directory_path(ec);
+    if (ec)
+        return;
+    const std::filesystem::path pidPath = tempDir / "GE_CompileServer" / (pipeNameUtf8 + ".pid");
+    if (std::filesystem::exists(pidPath, ec) && IsStaleCompileServerPidFile(pidPath))
+        std::filesystem::remove(pidPath, ec);
+}
+
+// How long stopping one host waits for it to exit after it is terminated.
+static constexpr auto kHostExitWait = std::chrono::milliseconds(2000);
+
+// Terminates the host rather than asking it over the pipe: the pipe has no
+// buffering, so a request to a host that stopped reading blocks the writer,
+// and the Editor's exit with it. Termination needs nothing from the host, so
+// the stop is bounded by kHostExitWait.
+static void StopLaunchedHost(LaunchedHost& host)
+{
+    if (WaitForHostExit(host, std::chrono::milliseconds(0)))
+    {
+        Logger::Log::Info("[CompileServerClient] CompileServerHost pid={} had already exited", host.ProcessId);
+    }
+    else
+    {
+        TerminateHost(host);
+        if (WaitForHostExit(host, kHostExitWait))
+            Logger::Log::Info("[CompileServerClient] Stopped CompileServerHost pid={} (pipe '{}')", host.ProcessId, host.PipeNameUtf8);
+        else
+            Logger::Log::Warning("[CompileServerClient] CompileServerHost pid={} still running {} ms after it was terminated",
+                                 host.ProcessId, kHostExitWait.count());
+    }
+    RemoveStalePidFile(host.PipeNameUtf8);
+    ReleaseHost(host);
+}
+
+static std::mutex& StartedHostsMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+// Hosts StartServerIfNeeded launched; StopStartedServers stops them.
+static std::vector<LaunchedHost>& StartedHosts()
+{
+    static std::vector<LaunchedHost> hosts;
+    return hosts;
+}
+
+static bool ReleaseIfExited(LaunchedHost& host)
+{
+    if (!WaitForHostExit(host, std::chrono::milliseconds(0)))
+        return false;
+    ReleaseHost(host);
+    return true;
+}
+
+static void RecordStartedHost(LaunchedHost host)
+{
+    std::lock_guard<std::mutex> lock(StartedHostsMutex());
+    std::vector<LaunchedHost>& hosts = StartedHosts();
+    // A host that ended on its idle timeout is dropped when its successor starts.
+    std::erase_if(hosts, ReleaseIfExited);
+    hosts.push_back(std::move(host));
+}
+
+void CompileServerClient::StopStartedServers()
+{
+    std::vector<LaunchedHost> hosts;
+    {
+        std::lock_guard<std::mutex> lock(StartedHostsMutex());
+        hosts.swap(StartedHosts());
+    }
+    for (LaunchedHost& host : hosts)
+        StopLaunchedHost(host);
 }
 
 static bool DecodeBase64(const std::string& in, std::vector<uint8_t>& out)
@@ -869,13 +993,17 @@ bool CompileServerClient::StartServerIfNeeded()
         // the throttle window expires).
         return false;
     case ServerLaunchGate::Launch:
+    {
         PruneStaleCompileServerPidFilesOnce();
-        if (!LaunchCompileServerProcess(hostDll, m_PipeNameUtf8))
+        std::optional<LaunchedHost> host = LaunchCompileServerProcess(hostDll, m_PipeNameUtf8);
+        if (!host)
         {
             RecordServerLaunchFailure(m_PipeNameUtf8);
             return false;
         }
+        RecordStartedHost(std::move(*host));
         break;
+    }
     case ServerLaunchGate::Wait:
         break;
     }
@@ -898,7 +1026,12 @@ bool CompileServerClient::StartServerForPipe(const std::string& pipeNameUtf8)
     std::string hostDll;
     if (!FindHostPath(hostDll))
         return false;
-    return LaunchCompileServerProcess(hostDll, pipeNameUtf8);
+    std::optional<LaunchedHost> host = LaunchCompileServerProcess(hostDll, pipeNameUtf8);
+    if (!host)
+        return false;
+    // The caller owns this host's orderly stop; it still dies with this process.
+    ReleaseHost(*host);
+    return true;
 }
 
 bool CompileServerClient::CompileJson(const std::string& requestJson, bool /*incremental*/)

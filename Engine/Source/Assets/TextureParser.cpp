@@ -14,8 +14,6 @@ AssetParseResult TextureParser::Parse(const AssetMetadata& metadata, [[maybe_unu
 std::filesystem::path TextureParser::ResolveReadPath(
     const AssetMetadata& metadata, const AssetManager& assetManager) const
 {
-    const auto payload = ResolvePackagedTexturePayload(assetManager.GetRegistry(), metadata.Guid,
-        TextureAsset::GetGpuTranscodeTarget() == TextureGpuTranscodeTarget::BC7);
-    return payload.value_or(metadata.Path);
+    return ResolvePackagedTexturePayload(assetManager.GetRegistry(), metadata.Guid).value_or(metadata.Path);
 }
 } // namespace GameEngine

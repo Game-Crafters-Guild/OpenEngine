@@ -19,6 +19,7 @@
 #include "Rendering/Core/NoneCullingStrategy.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 
+#include "BatchTableTesting.h"
 #include "TestDeviceHelper.h"
 
 #include <algorithm>
@@ -701,14 +702,14 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
         input.viewMatrix = input.projMatrix = input.viewProjMatrix = Matrix4x4::Identity();
         GPUCullingUtils::ExtractFrustumPlanes(input.viewProjMatrix, input.frustumPlanes);
         input.instanceCount = m_Scene->GetInstanceCount();
-        input.renderLayerMask = mask;
+        input.renderLayerMask = GameEngine::Rendering::RenderLayerMask{mask};
         if (fused)
         {
             CascadeCullingGroup group{};
             group.viewId = input.viewId;
             group.cascadeCount = 4;
             group.instanceCount = input.instanceCount;
-            group.renderLayerMask = mask;
+            group.renderLayerMask = GameEngine::Rendering::RenderLayerMask{mask};
             group.shadowCasterDispatch = shadow;
             for (uint32_t c = 0; c < 4; ++c)
             {
@@ -724,7 +725,7 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
             context.Id = input.viewId;
             context.CascadeIndex = input.cascadeIndex;
             context.InstanceCount = input.instanceCount;
-            context.RenderLayerMask = mask;
+            context.Layers = GameEngine::Rendering::RenderLayerMask{mask};
             context.CullingPipeline = culling.get();
             context.Scene = m_Scene.get();
             for (uint32_t p = 0; p < 6; ++p)
@@ -811,8 +812,8 @@ TEST_P(BatchScatterComputeTest, RenderLayersFilterSameBatchColorAndShadow)
                 SCOPED_TRACE(::testing::Message() << "shadow=" << shadow << " fused=" << fused << " mask=" << mask);
                 uint32_t total = 0;
                 const auto table = shadow
-                                       ? GPUDrawStreamBuilder::BuildShadowBatchTable(m_Scene->GetBatchRegistry(), classes, {}, &total)
-                                       : GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+                                       ? BatchTableTesting::BuildShadow(m_Scene->GetBatchRegistry(), classes, {}, &total)
+                                       : BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
                 ASSERT_EQ(table.size(), 1u);
                 const auto r = Dispatch(table, total, 0, 0, 1, total,
                                         shadow ? GPUDrawStreamBuilder::kClassModeShadow : 0u, {}, 0xFFFFFFFFu, {}, 0u, {},
@@ -893,7 +894,7 @@ TEST(BatchTableBuild, SortsByMaterialThenMeshWithExclusivePrefix)
     reg.OnInstanceAdded(2u, 3u, /*mirrored=*/false);
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(reg, {}, &total);
+    const auto table = BatchTableTesting::Build(reg, {}, &total);
     ASSERT_EQ(table.size(), 3u);
     EXPECT_EQ(total, 4u);
 
@@ -971,7 +972,7 @@ void BatchScatterComputeTest::ExpectScattersInstancesIntoCorrectRegions()
     m_Scene->RemoveInstance(doomed); // tombstone mid-array
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(table.size(), 2u);
     ASSERT_EQ(total, 5u);
     ASSERT_EQ(table[0].capacity, 3u); // (1, meshA)
@@ -1025,7 +1026,7 @@ TEST_P(BatchScatterComputeTest, ArenaBasesOffsetCursorsAndRecords)
     m_Scene->AddInstance(MakeInstance(1u, meshA));
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
 
     // Simulate a second schedule call in the same device frame: this slice's
@@ -1117,7 +1118,7 @@ void BatchScatterComputeTest::ExpectShadowClassModeRoutesByFlagsIntoSentinelRegi
 
     uint32_t total = 0u;
     const auto shadow =
-        GPUDrawStreamBuilder::BuildShadowBatchTable(m_Scene->GetBatchRegistry(), classes, {}, &total);
+        BatchTableTesting::BuildShadow(m_Scene->GetBatchRegistry(), classes, {}, &total);
     ASSERT_EQ(total, 4u);
     ASSERT_EQ(shadow.size(), 3u);
     // Sorted by (materialIndex, mesh): dependent(2) < DS sentinel < SS sentinel.
@@ -1174,7 +1175,7 @@ TEST_P(BatchScatterComputeTest, ColorClassModeMergesSharedPsoAndKeepsTransmissiv
     const std::vector<uint32_t> colorClass{C0, C0, 2u}; // map[mat] domain rule
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildColorBatchTable(
+    const auto table = BatchTableTesting::BuildColor(
         m_Scene->GetBatchRegistry(), colorClass, {}, &total);
     ASSERT_EQ(total, 4u);
     ASSERT_EQ(table.size(), 2u);
@@ -1228,7 +1229,7 @@ TEST_P(BatchScatterComputeTest, StaleColorClassMapTripsTableMissMatchingMapDoesN
 
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildColorBatchTable(m_Scene->GetBatchRegistry(), freshMap, {}, &total);
+        BatchTableTesting::BuildColor(m_Scene->GetBatchRegistry(), freshMap, {}, &total);
     ASSERT_EQ(total, 3u);
     ASSERT_EQ(table.size(), 1u); // all three merge into the single C0 row
     ASSERT_EQ(table[0].materialIndex, C0);
@@ -1266,7 +1267,7 @@ void BatchScatterComputeTest::ExpectMirroredInstancesRouteIntoParityOneRegion()
     evenIdx.push_back(m_Scene->AddInstance(MakeInstance(1u, meshA, 0u)));
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 5u);
     ASSERT_EQ(table.size(), 2u);          // parity-0 + parity-1 sibling rows
     ASSERT_EQ(table[0].capacity, 3u);     // parity-0 (non-mirrored)
@@ -1311,7 +1312,7 @@ TEST_P(BatchScatterComputeTest, ShadowDoubleSidedMirroredCasterRoutesToParityZer
 
     uint32_t total = 0u;
     const auto shadow =
-        GPUDrawStreamBuilder::BuildShadowBatchTable(m_Scene->GetBatchRegistry(), classes, {}, &total);
+        BatchTableTesting::BuildShadow(m_Scene->GetBatchRegistry(), classes, {}, &total);
     ASSERT_EQ(total, 2u);
     ASSERT_EQ(shadow.size(), 1u) << "double-sided sentinel is a single parity-0 row (no split)";
     ASSERT_EQ(shadow[0].materialIndex, GPUDrawStreamBuilder::kSharedDepthDoubleSidedSentinel);
@@ -1347,7 +1348,7 @@ TEST_P(BatchScatterComputeTest, LodVertexOffsetComposesIntoDrawRecord)
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // LOD0: vertexOffset == base, indexCount == LOD0's.
@@ -1411,7 +1412,7 @@ TEST_P(BatchScatterComputeTest, LodAutoSelectMatchesTheCpuRuleAcrossSpaces)
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // coverage = boundingRadius * projScaleY / distance, so sweeping the camera
@@ -1485,7 +1486,7 @@ TEST_P(BatchScatterComputeTest, OffModeZeroThresholdsDrawLod0WhereABudgetOfZeroD
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // Far enough that coverage (= 1/distance at projScaleY 1) sits below every
@@ -1648,7 +1649,7 @@ void BatchScatterComputeTest::ExpectConservativeBoundsPreserveReferenceSwitchesA
         instanceIds[i] = m_Scene->AddInstance(instances[i]);
     }
     uint32_t total = 0;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 3u);
     struct Sample { float coverage; float bias; uint32_t expected; };
     const Sample samples[] = {{.404f,0,0}, {.396f,0,1}, {.202f,0,1}, {.198f,0,2},
@@ -1711,7 +1712,7 @@ TEST_P(BatchScatterComputeTest, ConservativeBoundsPreserveReferenceHysteresis)
         m_Scene->AddInstance(instance);
     }
     uint32_t total = 0;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
     struct Sample { float distance; uint32_t previous; uint32_t expected; };
     const Sample samples[] = {{kInBandDist,1,1}, {kInBandDist,0,0}, {kNearDist,1,0},
@@ -1759,7 +1760,7 @@ TEST_P(BatchScatterComputeTest, ConservativeBoundsPreserveSseReferenceAndCeiling
         m_Scene->AddInstance(instance);
     }
     uint32_t total = 0;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
     bool ceilingMatters = false;
     bool allLevels[4] = {};
@@ -1820,7 +1821,7 @@ TEST_P(BatchScatterComputeTest, DegenerateReferenceKeepsZeroCoverageAndForcedLod
         m_Scene->AddInstance(instance);
     }
     uint32_t total = 0;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
     for (uint32_t forced : {0xFFFFFFFFu, 0u, 2u, 99u})
     {
@@ -1856,7 +1857,7 @@ TEST_P(BatchScatterComputeTest, SmallObjectCullUsesConservativeCoverageBeforeRef
         m_Scene->AddInstance(instance);
     }
     uint32_t total = 0;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
     ASSERT_EQ(table.size(), 2u);
     LodDispatchParams lod{};
@@ -1883,7 +1884,7 @@ TEST_P(BatchScatterComputeTest, LodBandOffIgnoresHistoryEntirely)
     const uint32_t meshIdx = m_Scene->AddMesh(MakeHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // Seed "was coarse". At kInBandDist the bare threshold is cleared, so the
@@ -1908,7 +1909,7 @@ TEST_P(BatchScatterComputeTest, LodBandWithoutUsableHistoryTakesTheStatelessPick
     const uint32_t meshIdx = m_Scene->AddMesh(MakeHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     LodDispatchParams lod{};
@@ -1934,7 +1935,7 @@ TEST_P(BatchScatterComputeTest, LodBandJumpsAllRequiredLevelsInOneStep)
     const uint32_t meshIdx = m_Scene->AddMesh(MakeMultiLevelHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     LodDispatchParams lod{};
@@ -1965,7 +1966,7 @@ TEST_P(BatchScatterComputeTest, LodBandConvergesToAFixedPointInOneStep)
     m_Scene->AddInstance(MakeInstance(1u, twoLevel));
     m_Scene->AddInstance(MakeInstance(2u, fourLevel));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
 
     LodDispatchParams lod{};
@@ -2014,7 +2015,7 @@ void BatchScatterComputeTest::ExpectLodBandHistoryIsIndexedPerInstanceNotPerSlot
     for (uint32_t i = 0; i < kInstances; ++i)
         m_Scene->AddInstance(MakeInstance(i < kPerBatch ? 1u : 2u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, kInstances);
     ASSERT_EQ(table.size(), 2u);
 
@@ -2081,7 +2082,7 @@ TEST_P(BatchScatterComputeTest, GroupModeMergesMultiMeshGroupIntoOneRegion)
 
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), groups, &total);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), groups, &total);
     ASSERT_EQ(table.size(), 1u); // one (mat 1, group 7) row
     ASSERT_EQ(table[0].meshIndex, 7u);
     ASSERT_EQ(table[0].capacity, 3u);
@@ -2164,9 +2165,9 @@ TEST_P(BatchScatterComputeTest, GroupModeKillSwitchParityIdenticalDrawSets)
 
     uint32_t totalOff = 0u, totalOn = 0u;
     const auto tableOff =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &totalOff);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &totalOff);
     const auto tableOn =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), groups, &totalOn);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), groups, &totalOn);
     ASSERT_EQ(totalOff, totalOn);
     ASSERT_EQ(tableOff.size(), 4u); // per (mat, mesh): (1,A) (1,B) (2,B) (2,C)
     ASSERT_EQ(tableOn.size(), 3u);  // (1,g0) (2,g0) (2,g1)
@@ -2196,7 +2197,7 @@ TEST_P(BatchScatterComputeTest, GroupModeShadowMergesEligibleAcrossMeshes)
     groups[meshB] = 4u;
 
     uint32_t total = 0u;
-    const auto shadow = GPUDrawStreamBuilder::BuildShadowBatchTable(
+    const auto shadow = BatchTableTesting::BuildShadow(
         m_Scene->GetBatchRegistry(), classes, groups, &total);
     ASSERT_EQ(shadow.size(), 1u); // one (SS sentinel, group 4) row
     ASSERT_EQ(shadow[0].materialIndex, GPUDrawStreamBuilder::kSharedDepthSingleSidedSentinel);
@@ -2563,7 +2564,7 @@ TEST_P(GroupCompactComputeTest, PacksRunsMeshMajorWithExactCounts)
     const std::vector<uint32_t> orderedToGroup{0u, 0u, 1u};
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(
+    const auto table = BatchTableTesting::Build(
         m_Scene->GetBatchRegistry(), meshOrdered, &total);
     ASSERT_EQ(table.size(), 3u); // per-mesh rows survive the ordered axis
     ASSERT_EQ(total, 12u);
@@ -2619,7 +2620,7 @@ TEST_P(GroupCompactComputeTest, CulledInstancesCompactDenselyWithShrunkCounts)
     const std::vector<uint32_t> orderedToGroup{0u, 0u};
 
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(
+    const auto table = BatchTableTesting::Build(
         m_Scene->GetBatchRegistry(), meshOrdered, &total);
     ASSERT_EQ(table.size(), 2u);
     ASSERT_EQ(total, 6u);
@@ -2690,7 +2691,7 @@ TEST_P(GroupCompactComputeTest, KillSwitchParityIdenticalDrawSetsThroughCompact)
     // OFF arm: per-bucket scatter (mode 0), every capacity slot populated.
     uint32_t totalOff = 0u;
     const auto tableOff =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &totalOff);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &totalOff);
     const auto off = Dispatch(tableOff, totalOff, 0u, 0u,
                               static_cast<uint32_t>(tableOff.size()), totalOff);
     EXPECT_EQ(off.stats.tableMisses, 0u);
@@ -2706,7 +2707,7 @@ TEST_P(GroupCompactComputeTest, KillSwitchParityIdenticalDrawSetsThroughCompact)
     // ON arm: ordered-axis scatter + mesh-major compact; collect the DRAW
     // block through the per-run counts (exactly what a consumer executes).
     uint32_t totalOn = 0u;
-    const auto tableOn = GPUDrawStreamBuilder::BuildBatchTable(
+    const auto tableOn = BatchTableTesting::Build(
         m_Scene->GetBatchRegistry(), meshOrdered, &totalOn);
     ASSERT_EQ(totalOn, totalOff);
     const auto runs = ComputeRuns(tableOn, orderedToGroup);
@@ -2923,7 +2924,7 @@ constexpr uint32_t kFadeTailRecordBase = 2u;
 std::vector<GPUDrawStreamBuilder::BatchTableEntry> PairableFadeTable(
     const BatchRegistry& registry, uint32_t* outTotal)
 {
-    auto table = GPUDrawStreamBuilder::BuildBatchTable(registry, {}, outTotal);
+    auto table = BatchTableTesting::Build(registry, {}, outTotal);
     if (table.size() == 1u && table[0].capacity < 2u)
     {
         table[0].capacity = 2u;
@@ -2959,7 +2960,7 @@ TEST_P(BatchScatterComputeTest, CrossfadeOffIsByteIdenticalToNoCrossfade)
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // A state that is mid-transition 0 -> 1 at t = 0.
@@ -3225,7 +3226,7 @@ TEST_P(BatchScatterComputeTest, CrossfadeTailExhaustionFallsBackToOneOpaqueHeadR
     uint32_t total = 0u;
     // Capacity 1: a pair does not fit, which is exactly the exhausted-tail state.
     const auto table =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
     ASSERT_EQ(table[0].capacity, 1u);
     ASSERT_EQ(GPUDrawStreamBuilder::TailDrawBound(1u), 0u)
@@ -3369,7 +3370,7 @@ TEST_P(BatchScatterComputeTest, CrossfadeTailOverflowPopsTheSurplusWithoutLosing
         m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, kInstances);
 
     // Every instance settled on LOD0 while the camera selects LOD1.
@@ -3429,7 +3430,7 @@ TEST_P(BatchScatterComputeTest, CrossfadeOddTailCapacityLeavesItsLastSlotUnwritt
         m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
     const auto table =
-        GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+        BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, kInstances);
     ASSERT_EQ(table[0].capacity, 3u);
 
@@ -3613,7 +3614,7 @@ TEST_P(BatchScatterComputeTest, RenderedHistoryOffTouchesNeitherHalfAndKeepsReco
     const uint32_t meshIdx = m_Scene->AddMesh(MakeHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // A pattern neither half could produce, so any write shows up.
@@ -3645,7 +3646,7 @@ TEST_P(BatchScatterComputeTest, RenderedHistoryTracksLevelContinuityWithTheDwell
     const uint32_t meshIdx = m_Scene->AddMesh(MakeHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     SeedPrevLod(1u, GPUDrawStreamBuilder::kLodNoHistory);
@@ -3697,7 +3698,7 @@ TEST_P(BatchScatterComputeTest, RenderedHistoryPreviousSurvivesEveryDispatchOfTh
     const uint32_t slotA = m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     const uint32_t slotB = m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
 
     // The previous frame rendered both instances at the level this frame also
@@ -3762,7 +3763,7 @@ TEST_P(BatchScatterComputeTest, RenderedHistoryDeniesContinuityToAReappearingIns
     const uint32_t nearSlot = m_Scene->AddInstance(nearInstance);
     const uint32_t farSlot  = m_Scene->AddInstance(farInstance);
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 2u);
 
     SeedRenderedHistory(std::vector<uint32_t>(2u, GPUDrawStreamBuilder::kLodNoHistory));
@@ -3844,7 +3845,7 @@ TEST_P(BatchScatterComputeTest, RenderedHistoryAgreesWithTheDwellBandAndLeavesIt
     const uint32_t meshIdx = m_Scene->AddMesh(MakeHysteresisMesh());
     m_Scene->AddInstance(MakeInstance(1u, meshIdx));
     uint32_t total = 0u;
-    const auto table = GPUDrawStreamBuilder::BuildBatchTable(m_Scene->GetBatchRegistry(), {}, &total);
+    const auto table = BatchTableTesting::Build(m_Scene->GetBatchRegistry(), {}, &total);
     ASSERT_EQ(total, 1u);
 
     // History OFF, band on, in the dwell region: the band holds LOD1.

@@ -12,9 +12,12 @@
 
 #include "InspectorLayoutFixture.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "UI/Controls/Label.h"
 #include "UI/InspectorSection.h"
+#include "UI/Parsers/CSSParser.h"
 #include "UI/UIElement.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -38,6 +41,9 @@ constexpr float kMinShareOfABodyRow = 0.5f;
 // any usable inspector width, so a title taking its row's slack clears this and a content-sized
 // one does not.
 constexpr float kMinShareOfItsRow = 0.5f;
+
+// Layout rounds to a fraction of a pixel; extents are compared to this tolerance.
+constexpr float kLayoutTolerance = 0.5f;
 
 using InspectorLayoutTesting::FindByClass;
 using InspectorLayoutTesting::InspectorLayoutFixture;
@@ -114,6 +120,76 @@ TEST(InspectorSectionHeaderLayout, TheComponentTitleStillFillsItsHeaderRow)
            "options affordance no longer sit at opposite ends";
     EXPECT_LE(title->GetLayoutX() + title->GetLayoutWidth(), options->GetLayoutX())
         << "the title overruns the options affordance beside it";
+}
+
+// A header badge sits after the title's text, never over it, and a badged title keeps to one line of
+// the fixed-height header. At 360 px a long title such as "Navigation Surface" runs past the 37% value
+// column the badge starts on when the title is short; at 260 px it no longer fits beside its badge
+// and ends in an ellipsis rather than wrapping onto a second line the header clips. The title's text
+// width is measured on a content-sized label carrying the title's own class beside the section.
+TEST(InspectorSectionHeaderLayout, AHeaderBadgeFollowsTheTitleOnOneLineAtNarrowInspectors)
+{
+    const std::string titleText = "Navigation Surface";
+    for (const uint32_t viewportWidth : {360u, 260u})
+    {
+        auto root = std::make_unique<UIElement>();
+        auto section = std::make_unique<InspectorSection>(titleText);
+        InspectorSection* sectionRaw = section.get();
+        sectionRaw->SetHeaderIconClass("inspector-section-icon-unloaded");
+        sectionRaw->SetHeaderBadge("Failed", "", InspectorSection::BadgeKind::Error);
+        root->AddChild(std::move(section));
+        auto measureRow = std::make_unique<UIElement>();
+        measureRow->AddClass("test-measure-row");
+        auto measure = std::make_unique<GameEngine::Label>();
+        measure->AddClass("inspector-section-header");
+        measure->AddClass("test-title-measure");
+        measure->SetText(titleText);
+        GameEngine::Label* measureRaw = measure.get();
+        measureRow->AddChild(std::move(measure));
+        root->AddChild(std::move(measureRow));
+
+        InspectorLayoutFixture fixture;
+        fixture.ViewportW = viewportWidth;
+        // The enable dot's own sheet gives it the footprint it has in the editor, which places the title.
+        fixture.ExtraSheets.push_back("Assets/UI/controls/EnableDot/EnableDot.css");
+        if (!fixture.Build(std::move(root)))
+            GTEST_SKIP() << fixture.Diagnostic;
+        // Content-sized and on one line; the font is the title rule's own.
+        GameEngine::Stylesheet sheet{};
+        ASSERT_TRUE(GameEngine::UIParsing::CSSParser::ParseStylesFromString(
+            ".test-measure-row { display: flex; flex-direction: row; } "
+            ".test-title-measure { flex: 0 0 auto; width: auto; max-width: none; white-space: nowrap; }",
+            sheet));
+        sheet.SourceName = "test-title-measure";
+        fixture.Ui->AddStylesheet(std::make_shared<const GameEngine::Stylesheet>(std::move(sheet)));
+        for (int i = 0; i < 3; ++i)
+            fixture.Ui->Update(1.0f / 60.0f, /*interactive=*/true);
+
+        UIElement* row = FindByClass(sectionRaw, "inspector-section-header-row");
+        ASSERT_NE(row, nullptr);
+        UIElement* title = FindByClass(row, "inspector-section-header");
+        UIElement* badge = FindByClass(row, "inspector-section-header-badge");
+        UIElement* options = FindByClass(row, "inspector-section-header-options");
+        ASSERT_NE(title, nullptr);
+        ASSERT_NE(badge, nullptr);
+        ASSERT_NE(options, nullptr);
+        const float textWidth = measureRaw->GetLayoutWidth();
+        const float lineHeight = measureRaw->GetLayoutHeight();
+        ASSERT_GT(textWidth, 0.0f) << "the title's text measured no width; this test is vacuous";
+        ASSERT_GT(badge->GetLayoutWidth(), 0.0f) << "the badge has no width; this test is vacuous";
+
+        // The title's text runs to the end of its content box, or to the end of the text when that is
+        // shorter (an ellipsis ends a text the box cannot hold).
+        const float contentRight = title->GetLayoutX() + title->GetLayoutWidth() - title->GetLayoutPadding().Right;
+        const float textRight = std::min(title->GetLayoutX() + textWidth, contentRight);
+        EXPECT_GE(badge->GetLayoutX(), textRight) << "the badge covers the title's text at " << viewportWidth << " px";
+        EXPECT_LE(title->GetLayoutHeight(), lineHeight + kLayoutTolerance)
+            << "the title wraps onto a second line the header clips at " << viewportWidth << " px";
+        EXPECT_LE(badge->GetLayoutX() + badge->GetLayoutWidth(), options->GetLayoutX())
+            << "the badge runs into the options affordance at " << viewportWidth << " px";
+        EXPECT_LE(options->GetLayoutX() + options->GetLayoutWidth(), row->GetLayoutX() + row->GetLayoutWidth())
+            << "the options affordance is pushed out of its row at " << viewportWidth << " px";
+    }
 }
 
 // A component with no on/off state keeps the dot's footprint as an invisible placeholder. A click

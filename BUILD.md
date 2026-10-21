@@ -16,7 +16,7 @@ How to build the editor from a fresh clone on **Windows** (primary), **macOS** a
 - [Disk footprint](#disk-footprint)
 - [Tests](#tests)
 - [Standalone CLI (gameenginecli)](#standalone-cli-gameenginecli)
-- [AddressSanitizer](#addresssanitizer)
+- [Sanitizers](#sanitizers)
 - [Build options](#build-options)
 - [Version](#version)
 - [vcpkg manifest features](#vcpkg-manifest-features)
@@ -24,9 +24,9 @@ How to build the editor from a fresh clone on **Windows** (primary), **macOS** a
 
 ## Quick start
 
-Install the [prerequisites](#prerequisites), then copy the block for your platform. `Editor` also builds `Player`, the runtime the editor exports games with. `McpServer` builds the `mcp/` server that `node mcp/ge.mjs` and AI tools drive the editor with; it exists only when Node.js was on PATH at configure, so skip that line without it. The same tools build as a terminal command with `GameEngineCli` ([Standalone CLI](#standalone-cli-gameenginecli)). On first launch the editor asks you to create or open a project: [Your first project](docs/first-project.html).
+Install the [prerequisites](#prerequisites), then copy the block for your platform. `Editor` also builds `Player`, the runtime the editor exports games with. `McpServer` builds the `mcp/` server that `node mcp/ge.mjs` and AI tools drive the editor with; it exists only when Node.js was on PATH at configure, so skip that line without it. The same tools build as a terminal command with `GameEngineCli` ([Standalone CLI](#standalone-cli-gameenginecli)). On first launch the editor asks you to create or open a project: [Your first project](docs/getting-started/first-project.mdx).
 
-The first configure compiles about 60 third-party libraries (tens of minutes) unless the binary cache has them; later configures take about a minute. When a dependency version moves (a `git pull` that changes `vcpkg.json`, `cmake/VcpkgPin.cmake` or `cmake/ports/`, or a Visual Studio update), the configure stops and tells you to delete `build/<preset>` and reconfigure.
+The first configure compiles about 60 third-party libraries (tens of minutes) unless the binary cache has them; later configures take about a minute. When a dependency version moves (a `git pull` that changes `vcpkg.json` or `cmake/ports/`), the configure installs the new version in place and marks its headers as changed, so the next build recompiles the files that include them. When a dependency is rebuilt at the same version with a different ABI (a Visual Studio update, or a `cmake/VcpkgPin.cmake` change that moves the vcpkg checkout), no file would recompile against it, so the configure stops and tells you to delete `build/<preset>` and reconfigure.
 
 ### Windows (Visual Studio)
 
@@ -88,7 +88,7 @@ cmake --build --preset linux-x64-local --target McpServer
 
 ## Prerequisites
 
-The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the newest installed 10.0 patch. Other .NET SDKs beside it are fine (`dotnet --list-sdks`); an older SDK alone fails with `NETSDK1045`, and without `dotnet` the configure stops and names the fix.
+The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the newest installed 10.0 patch. Other .NET SDKs beside it are fine (`dotnet --list-sdks`); an older SDK alone fails with `NETSDK1045`, and without `dotnet` the configure stops and names the fix. A build without C# scripting needs no .NET at all: see [Building without .NET](#building-without-net).
 
 ### Windows
 
@@ -96,7 +96,7 @@ The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the
 |---|---|---|
 | **A clone path with no spaces, outside `Program Files`** (for example `C:\Dev\OpenEngine`) | Several third-party build systems break on a space in the path, and `Program Files` is write-protected. | — |
 | **Visual Studio 2026** with the *Desktop development with C++* workload | Includes MSVC, **CMake 3.25 or newer**, **Ninja** and Git. A standalone CMake and Ninja on PATH also work. Visual Studio 2022 works too: swap `vs2026-` for `vs2022-` in preset names. | [visualstudio.microsoft.com/downloads](https://visualstudio.microsoft.com/downloads/) |
-| **.NET 10 SDK** | C# scripting host and managed assemblies. | `winget install Microsoft.DotNet.SDK.10` |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | `winget install Microsoft.DotNet.SDK.10` |
 | **Vulkan-capable GPU driver** | Runtime requirement (Vulkan 1.3). | GPU vendor |
 | **Vulkan SDK** *(recommended)* | Not needed to compile. Supplies the validation layers Debug builds enable, and `spirv-val`. | [vulkan.lunarg.com](https://vulkan.lunarg.com/) |
 | **Node.js 20 or newer** *(optional)* | Builds the `McpServer` and `GameEngineCli` targets; without it configure omits both, and `node mcp/ge.mjs` and `publish_game.py build` cannot drive the editor. | [nodejs.org](https://nodejs.org/) |
@@ -109,7 +109,7 @@ The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the
 | **Xcode**, full install | The presets use ad-hoc signing; no developer account needed. | Mac App Store |
 | **CMake 3.25 or newer** and **Ninja** | | `brew install cmake ninja` |
 | **Vulkan SDK for macOS** | Bundles MoltenVK. Detected under `~/VulkanSDK/<version>`; set `VULKAN_SDK` if it is elsewhere. Without it the build succeeds with the Vulkan backend disabled. | [vulkan.lunarg.com](https://vulkan.lunarg.com/) |
-| **.NET 10 SDK** | C# scripting host and managed assemblies; the arm64 build on Apple Silicon. | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; the arm64 build on Apple Silicon. Not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | `brew install node` |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows, and the macOS editor's Steam Deck export. The `python3` that ships with Xcode is 3.9, which is too old. | `brew install python` |
 
@@ -125,11 +125,24 @@ node --version && python3 --version    # optional tools
 | Requirement | Notes | Where |
 |---|---|---|
 | **C++20 toolchain** (recent GCC or Clang), **CMake 3.25 or newer**, **Ninja**, **pkg-config**, **Git** | | your distribution's packages |
+| **NASM (x86/x64)** | Required by FFmpeg when the video feature is enabled. | `sudo apt install nasm` |
 | **Windowing packages** | Required by vcpkg's `glfw3`. | `sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config` |
 | **Vulkan driver and tools** | Runtime requirement, plus the validation layers. | `sudo apt install mesa-vulkan-drivers vulkan-tools vulkan-validationlayers` |
-| **.NET 10 SDK** | C# scripting host and managed assemblies. | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | your distribution's `nodejs` package, or [nodejs.org](https://nodejs.org/) |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows. | your distribution's `python3` package |
+
+On Fedora (checked on Fedora 44), these two commands install everything above, including the system packages the vcpkg ports build with (Perl modules for OpenSSL, `nasm`, `autoconf-archive`):
+
+```bash
+sudo dnf group install development-tools c-development
+sudo dnf install cmake ninja-build git pkgconf-pkg-config \
+  perl-IPC-Cmd perl-FindBin perl-Time-Piece nasm autoconf-archive \
+  libX11-devel libxcb-devel libXinerama-devel libXcursor-devel libXrandr-devel libXi-devel \
+  libxkbcommon-devel wayland-devel mesa-libGLU-devel \
+  mesa-vulkan-drivers vulkan-tools vulkan-validation-layers \
+  dotnet-sdk-10.0 nodejs python3
+```
 
 If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader with X11 and Wayland surface support; GLFW is built for X11, so a Wayland session needs XWayland. For a pure Wayland session, add the `wayland` feature to `glfw3` in `vcpkg.json` and install your distribution's Wayland development packages.
 
@@ -159,6 +172,21 @@ On every platform (`cmake --list-presets` lists every configuration):
 - Pass `RelWithDebInfo` or `Release` as `CMAKE_BUILD_TYPE` for an optimized build. `linux-x64-local-unity` compiles faster cold.
 - From Windows without a Linux machine, `.\Tools\Scripts\run-linux-build.ps1` (Docker Desktop running) builds the `Editor` inside a container from `Tools/Docker/Dockerfile.linux-dev`, in `build-linux-docker`, with scripting off.
 
+### Building without .NET
+
+`-DENABLE_SCRIPTING=OFF` builds the Editor and the Player with no .NET SDK or runtime on the machine: the configure does not look for `dotnet`, no C# project is built, and the component reflection the engine compiles is generated by the native `ComponentScanner` tool (`Tools/ComponentScanner`). On Debian 13 or Ubuntu, the Linux prerequisites above without the .NET SDK are:
+
+```bash
+sudo apt install build-essential cmake ninja-build pkg-config git ca-certificates nasm \
+  curl zip unzip tar python3 autoconf autoconf-archive automake libtool \
+  libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev \
+  mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
+cmake --preset linux-x64-local -DENABLE_SCRIPTING=OFF
+cmake --build --preset linux-x64-local --target Editor Player
+```
+
+What that build does not have: C# scripting (C# components, entity systems and game systems), C# hot reload and the compile server, the C# play-mode driver, and the C# steps of game publishing. The status bar reads "C# scripting is off in this build"; a project's C# components stay in its scenes with their values, marked Not Registered, and apply when the project opens in a build with scripting; a project without C# scripts packages as in a full build, and packaging a project that has C# scripts is refused with that reason. Native C++ scripting, the editor and every engine feature written in C++ work as in a full build. Test targets that link `GameEngine.Native` (the UI test family and `FilePatternTests` among them) do not link in this build, so build the test targets you need by name. The same flag is what the Steam Deck and web presets set.
+
 ## Steam Deck
 
 Linux x64, Player only (`BUILD_EDITOR=OFF`, `ENABLE_SCRIPTING=OFF`, `RelWithDebInfo`):
@@ -174,16 +202,18 @@ From a Mac, `./Tools/Scripts/build-steamdeck-docker.sh` produces the same build 
 ## Build configurations
 
 - **Debug**: `/Od /Zi /MDd /RTC1`, iterator debugging, static analysis as warnings, Vulkan validation layers on. The slowest; use it when you want every check firing.
-- **DebugFast**: the default and the daily configuration. Same source-level debugging as Debug without the debug CRT (`/MD`, no `/RTC1`, no static analysis), validation layers off by default, asserts live.
+- **DebugFast**: the default and the daily configuration. Same source-level debugging as Debug without the debug CRT (`/MD`, no `/RTC1`, no static analysis), validation layers off by default, asserts live, compiler warnings treated as errors by default on MSVC, GCC and Clang (including AppleClang).
 - **RelWithDebInfo**: `/O2` with symbols, asserts compiled out. For performance checks with usable crash stacks.
 - **Release**: optimized; the shipping configuration, and the only one a performance number comes from.
+
+MSVC treats compiler warnings as errors in Debug, DebugFast and RelWithDebInfo. Non-MSVC compilers use the same configurations when `ENABLE_WERROR_NON_MSVC` is ON. A fresh configure defaults to ON for GCC, Clang and AppleClang. Existing build caches retain their saved value; use `-DENABLE_WERROR_NON_MSVC=ON` to enable it there. An explicit `OFF` opts out on non-MSVC compilers. Release does not use this option.
 
 Choosing one:
 
 - Visual Studio, Xcode and Ninja Multi-Config trees list DebugFast first, so the IDE opens on it and `cmake --build --preset <preset>` builds it. Pass `--config Debug`, `--config Release` or another configuration to build that one instead.
 - A build that names neither a preset nor `--config` (`cmake --build build/<preset>`) builds Debug in a Visual Studio tree: CMake picks Debug there, not the project.
 - Single-configuration trees (Ninja: Linux, `macos-arm64-ninja`, `macos-x64-ninja`) fix the configuration at configure time: DebugFast unless `-DCMAKE_BUILD_TYPE=Debug`, `Release` or another one is passed.
-- `vs2026-x64-local-asan` builds Debug, the configuration AddressSanitizer instruments. `wasm-debug` builds Debug, `wasm-release` Release and the `steamdeck` presets RelWithDebInfo.
+- `vs2026-x64-local-asan`, `macos-arm64-local-asan` and `macos-arm64-local-tsan` build Debug, the configuration the sanitizers instrument. `wasm-debug` builds Debug, `wasm-release` Release and the `steamdeck` presets RelWithDebInfo.
 
 `GE_VK_VALIDATION=1` forces the Vulkan validation layers on in any configuration, `GE_VK_NO_VALIDATION=1` forces them off, and `GE_VK_VALIDATION_VERBOSE=1` turns on the verbose messenger.
 
@@ -253,16 +283,27 @@ build\vs2026-x64-local\bin\DebugFast\gameenginecli.exe get_editor_state
 build\vs2026-x64-local\bin\DebugFast\gameenginecli.exe get_log --count 50 --min-level warning
 ```
 
-Usage, argument shapes and exit codes: [docs/MCP_SETUP.md](docs/MCP_SETUP.md).
+Usage, argument shapes and exit codes: [docs/getting-started/mcp-setup.mdx](docs/getting-started/mcp-setup.mdx).
 
-## AddressSanitizer
+## Sanitizers
 
-For memory bugs, a separate tree with `/fsanitize=address` on the **Debug** configuration; tests are on in this preset and the ASan runtime DLLs are staged beside the executables:
+Each sanitizer instruments the **Debug** configuration in a tree of its own, with tests on. AddressSanitizer (memory bugs) on Windows, with the ASan runtime DLLs staged beside the executables:
 
 ```bat
 cmake --preset vs2026-x64-local-asan
 cmake --build --preset vs2026-x64-local-asan --config Debug --target <Target> -j 12
 ```
+
+AddressSanitizer and ThreadSanitizer (data races) on macOS (Apple Silicon); the two cannot share a tree:
+
+```bash
+cmake --preset macos-arm64-local-asan
+cmake --build --preset macos-arm64-local-asan --target <Target>
+cmake --preset macos-arm64-local-tsan
+cmake --build --preset macos-arm64-local-tsan --target <Target>
+```
+
+Run the test executables from `build/<preset>/bin/Debug/Tests/` as usual; a sanitizer report goes to stderr and fails the run.
 
 ## Build options
 
@@ -273,9 +314,10 @@ cmake --build --preset vs2026-x64-local-asan --config Debug --target <Target> -j
 | `BUILD_EXAMPLES` | OFF | Standalone demos (`Examples/`, UI module examples) |
 | `BUILD_TOOLS` | OFF | Developer tools |
 | `BUILD_BENCHMARKS` | OFF | Benchmark executables |
-| `ENABLE_SCRIPTING` | ON | CoreCLR hosting and C# integration |
+| `ENABLE_SCRIPTING` | ON | CoreCLR hosting and C# integration; OFF needs no .NET ([Building without .NET](#building-without-net)) |
 | `PLAYER_MOVIE_RECORDER` | OFF | `--write-movie` capture and encode in the Player |
 | `ENABLE_ASAN` | OFF | AddressSanitizer (Debug configuration) |
+| `ENABLE_TSAN` | OFF | ThreadSanitizer (Debug configuration; clang or gcc, not with `ENABLE_ASAN`) |
 | `RENDERING_ENABLE_GPU_CULLING` | OFF | GPU culling examples and tests |
 
 Example: `cmake --preset vs2026-x64-local -DBUILD_TESTING=ON -DBUILD_EXAMPLES=ON`. `cmake --fresh` resets cached variables, so pass your `-D` options again.

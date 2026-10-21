@@ -1,16 +1,32 @@
 #include "NativeScripting/BuildCacheRecord.h"
 
+#include "NativeScripting/EngineBuildIdentity.h"
 #include "NativeScripting/NativeBuildConfig.h"
 
 #include <cstdio>
 #include <fstream>
-#include <sstream>
 #include <system_error>
 
 namespace GameEngine
 {
 namespace NativeScripting
 {
+namespace
+{
+
+// Continues `seed` over a binary's link stamp (ReadBinaryLinkStamp), never its path or
+// timestamps: the engine_abi marker written against the build tree's staged SDK must
+// match the same SDK in any copy of the tree (a release zip extract, an isolated editor
+// copy). Empty when the binary has no readable stamp.
+std::optional<std::uint64_t> HashBinaryLinkStamp(const std::filesystem::path& binary, std::uint64_t seed)
+{
+    const std::string stamp = ReadBinaryLinkStamp(binary);
+    if (stamp.empty())
+        return std::nullopt;
+    return Fnv1aHash(stamp, seed);
+}
+
+} // namespace
 
 std::optional<BuildCacheRecord> ReadBuildCacheRecord(const std::filesystem::path& dir)
 {
@@ -81,42 +97,30 @@ std::string ToHexDigest(std::uint64_t hash)
     return std::string(hex);
 }
 
-std::uint64_t HashEngineAbiInputs(const NativeBuildConfig& config)
+std::optional<std::uint64_t> HashEngineAbiInputs(const NativeBuildConfig& config)
 {
-    // Config first, then the import-lib identity, then the compile definitions — the
-    // exact input order the pre-C2 in-manager hash used, so existing build caches
-    // stay valid across this refactor.
-    const auto hashImportLib = [](const std::filesystem::path& lib, std::uint64_t seed) {
-        std::error_code ec;
-        const auto libSize = static_cast<std::uintmax_t>(std::filesystem::file_size(lib, ec));
-        const auto libMtime = static_cast<long long>(
-            std::filesystem::last_write_time(lib, ec).time_since_epoch().count());
-        std::ostringstream stream;
-        stream << lib.generic_string() << ':' << libSize << ':' << libMtime;
-        return Fnv1aHash(stream.str(), seed);
-    };
-
-    std::uint64_t hash = Fnv1aHash(config.Config);
-    hash = hashImportLib(config.EngineImportLib, hash);
+    std::optional<std::uint64_t> hash = HashBinaryLinkStamp(config.EngineBinary, Fnv1aHash(config.Config));
+    if (!hash)
+        return std::nullopt;
     for (const std::string& def : config.CompileDefinitions)
-        hash = Fnv1aHash(def, hash);
-    // Editor-kind modules additionally fold the EditorSDK identity — appended
-    // AFTER the legacy inputs so every Runtime-module digest (EditorImportLib
-    // empty) is byte-identical to the pre-EditorSDK hash and existing caches
-    // stay valid.
+        hash = Fnv1aHash(def, *hash);
+    // Editor-kind modules (EditorImportLib set) additionally fold the EditorSDK binary;
+    // a Runtime module hashes no editor input at all.
     if (!config.EditorImportLib.empty())
-        hash = hashImportLib(config.EditorImportLib, hash);
+        hash = HashBinaryLinkStamp(config.EditorBinary, *hash);
     return hash;
 }
 
 std::string ComputeEngineAbiDigest(const NativeBuildConfig& config)
 {
-    return ToHexDigest(HashEngineAbiInputs(config));
+    const std::optional<std::uint64_t> hash = HashEngineAbiInputs(config);
+    return hash ? ToHexDigest(*hash) : std::string{};
 }
 
 std::string ComputeRuntimeEngineAbiDigest(NativeBuildConfig config)
 {
     config.EditorImportLib.clear();
+    config.EditorBinary.clear();
     config.EditorIncludeDirs.clear();
     return ComputeEngineAbiDigest(config);
 }

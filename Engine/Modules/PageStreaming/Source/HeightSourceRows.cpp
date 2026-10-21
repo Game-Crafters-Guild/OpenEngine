@@ -1,8 +1,10 @@
 #include "HeightSourceRows.h"
 
-#include <cstring>
+#include "AssetCore/SharedFileRead.h"
+#include "Image/Decode.h"
 
-#include <stb_image.h>
+#include <cstring>
+#include <utility>
 
 namespace GameEngine::PageStreaming
 {
@@ -29,19 +31,15 @@ std::string HeightSourceRows::Open(const HeightCookSource& source, AssetIOServic
         return m_Reader->IsOpen() ? std::string{} : "the heightmap " + source.File.string() + " could not be opened";
     }
 
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    stbi_us* pixels = stbi_load_16(source.File.string().c_str(), &width, &height, &channels, 1);
-    if (!pixels)
+    Vector<uint8> fileBytes;
+    if (!ReadFileBytesShared(source.File, fileBytes))
+        return "the PNG " + source.File.string() + " could not be read";
+    Image::Image16 decoded = Image::Decode16(fileBytes, source.File.string(), Image::DecodeChannels::Gray);
+    if (!decoded.Valid)
         return "the PNG " + source.File.string() + " could not be decoded";
-    if (static_cast<uint32>(width) != source.SamplesX || static_cast<uint32>(height) != source.SamplesZ)
-    {
-        stbi_image_free(pixels);
+    if (decoded.Width != source.SamplesX || decoded.Height != source.SamplesZ)
         return "the PNG " + source.File.string() + " changed size since it was resolved; cook it again";
-    }
-    m_Decoded.assign(pixels, pixels + static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
-    stbi_image_free(pixels);
+    m_Decoded = std::move(decoded.Pixels);
     return {};
 }
 

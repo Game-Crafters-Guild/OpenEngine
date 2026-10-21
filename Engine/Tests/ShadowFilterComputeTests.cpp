@@ -204,7 +204,9 @@ TEST_F(ShadowFilterComputeTest, NineSamplesMatchFullConvolutionAcrossPhasesLayer
         if (r[0] > 0.01f && r[0] < 0.99f)
             ++fractional;
         if (queries[i].UVDepthLayer[2] == 1.0f)
+        {
             EXPECT_NEAR(r[0], 1.0f, 0.00001f); // reverse-Z fully-lit invariant
+        }
     }
     EXPECT_GT(fractional, 1000u); // ensure the equality was tested on edges, not just constants
     EXPECT_LT(largestError, 0.004f); // permits hardware subtexel filtering precision
@@ -234,9 +236,13 @@ TEST_F(ShadowFilterComputeTest, NormalBiasPreservesAuthoredCapsAndShrinksWithTex
         EXPECT_GE(bias, 0.0f);
         EXPECT_LE(bias, authored + 1e-7f);
         if (q.Bias[0] <= 0.001f)
+        {
             EXPECT_NEAR(bias, authored, 1e-7f);
+        }
         if (q.Bias[0] == 0.5f && q.Control[0] == 3.0f && q.Control[1] == 0.0f)
+        {
             EXPECT_NEAR(bias, 2.0f * q.Bias[1], 1e-7f);
+        }
     }
 }
 
@@ -360,9 +366,13 @@ TEST_F(ShadowFilterComputeTest, DistanceFadeEndsShadowsSmoothlyAtMaxShadowDistan
             const float fade = m_Results[index][4];
             ASSERT_TRUE(std::isfinite(fade));
             if (depth <= 0.9f * maxDistance)
+            {
                 EXPECT_LE(fade, 1e-6f) << "shadow weakened before the band at " << depth << " of " << maxDistance;
+            }
             if (depth >= maxDistance)
+            {
                 EXPECT_EQ(fade, 1.0f) << "shadow survives past the distance at " << depth << " of " << maxDistance;
+            }
             if (i > 0)
             {
                 const float step = fade - m_Results[index - 1][4];
@@ -432,9 +442,13 @@ TEST_F(ShadowFilterComputeTest, DistanceFadeEndsTheCascadeTermAndLeavesTheTerrai
             EXPECT_NEAR(joined, ranged + (1.0f - ranged) * fade, 1e-6f)
                 << "the cascade term must fade by the band's weight: " << where;
         if (terrain == 1.0f && depth >= maxDistance)
+        {
             EXPECT_EQ(joined, 1.0f) << "a cascade-only shadow must be gone past the distance: " << where;
+        }
         if (terrain == 1.0f && depth <= 0.9f * maxDistance)
+        {
             EXPECT_NEAR(joined, ranged, 1e-6f) << "the cascade term must be whole before the band: " << where;
+        }
     }
     // Mid-band, a cascade-only shadow is half faded, and a terrain-shadowed point is not faded at all.
     const size_t perDistance = kDepthFractions.size() * kTerms.size();

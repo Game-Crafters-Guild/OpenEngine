@@ -62,10 +62,8 @@ inline std::mutex& GetBootstrapMutex()
     return s_Mutex;
 }
 
-inline GE_Result EnsureEngineInitialized()
+inline GE_Result EnsureEngineInitializedFor(EngineCore& eng)
 {
-    auto& eng = EngineCore::GetInstance();
-
     // Running, or initializing on this very thread (ScriptManager -> CoreCLR -> GE_*):
     // nothing to do. The second case must return before the lock below, which the
     // standalone Initialize on this thread may be holding.
@@ -83,6 +81,9 @@ inline GE_Result EnsureEngineInitialized()
         return GE_Result_NotInitialized;
 
     ApplicationConfig cfg;
+    // Nothing else in this process drives the engine: no frame loop, no pump. The caller is the
+    // only thread, so the thread predicates answer yes and MainThread.Post runs inline.
+    cfg.StandaloneHosted = true;
     if (const char* nativeDirEnv = std::getenv("GE_NATIVE_DIR"); nativeDirEnv && nativeDirEnv[0] != '\0')
     {
         std::filesystem::path nativeDir(nativeDirEnv);
@@ -101,6 +102,12 @@ inline GE_Result EnsureEngineInitialized()
     }
 
     return eng.Initialize(cfg) ? GE_Result_Ok : GE_Result_Fail;
+}
+
+/// EnsureEngineInitialized for the engine instance this process binds.
+inline GE_Result EnsureEngineInitialized()
+{
+    return EnsureEngineInitializedFor(EngineCore::GetInstance());
 }
 
 } // namespace GameEngine::DllBootstrap

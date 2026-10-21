@@ -72,12 +72,12 @@ void DragDropOverlay::EnsureGhost(UIElement* root)
 
     if (!m_Ghost)
     {
-        if (UIElement* el = root->FindById("ui-dnd-ghost"))
+        if (UIElement* el = root->FindById("ui-dnd-ghost"_sid))
         {
             m_Ghost = el;
-            m_GhostIcon = m_Ghost->FindById("ui-dnd-ghost-icon");
-            m_GhostLabel = dynamic_cast<Label*>(m_Ghost->FindById("ui-dnd-ghost-text"));
-            m_GhostBadge = dynamic_cast<Label*>(m_Ghost->FindById("ui-dnd-ghost-badge"));
+            m_GhostIcon = m_Ghost->FindById("ui-dnd-ghost-icon"_sid);
+            m_GhostLabel = dynamic_cast<Label*>(m_Ghost->FindById("ui-dnd-ghost-text"_sid));
+            m_GhostBadge = dynamic_cast<Label*>(m_Ghost->FindById("ui-dnd-ghost-badge"_sid));
         }
     }
 
@@ -158,10 +158,10 @@ void DragDropOverlay::EnsureTooltip(UIElement* root)
 
     if (!m_Tooltip)
     {
-        if (UIElement* el = root->FindById("ui-dnd-tooltip"))
+        if (UIElement* el = root->FindById("ui-dnd-tooltip"_sid))
         {
             m_Tooltip = el;
-            m_TooltipLabel = dynamic_cast<Label*>(m_Tooltip->FindById("ui-dnd-tooltip-text"));
+            m_TooltipLabel = dynamic_cast<Label*>(m_Tooltip->FindById("ui-dnd-tooltip-text"_sid));
         }
     }
 

@@ -9,6 +9,7 @@
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
 #include "PhysicsECS/Systems/PhysicsInitSystem.h"
+#include "PhysicsECS/Systems/PhysicsStepSystem.h"
 #include "PhysicsECS/Systems/PhysicsWorldHooks.h"
 #include "PhysicsECS/Systems/PhysicsWritebackSystem.h"
 #include "PhysicsECS/Systems/RegisterPhysicsSystems.h"
@@ -32,6 +33,7 @@
 #include "ECS/SystemScheduling.h"
 #include "ECS/Systems.h"
 #include "ECS/World.h"
+#include "JobSystem/WorkStealingThreadPool.h"
 #include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
 #include "Scene/SceneIO.h"
 
@@ -44,6 +46,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace
@@ -399,6 +402,236 @@ TEST(Physics, EntityCallbacks_UnsubscribeStopsCallbacks)
         world.Step(dt, 1);
 
     EXPECT_EQ(beginCount, 0);
+}
+
+namespace
+{
+// A static plane at y=0 and a bouncing sphere dropped from y=5, with the ECS entity ids as user data.
+void DropBallOnPlane(GameEngine::Physics::PhysicsWorld& world, GameEngine::uint64 groundEid, GameEngine::uint64 ballEid)
+{
+    using namespace GameEngine::Physics;
+    PlaneShapeDef plane{};
+    plane.normal = Vector3(0.0f, 1.0f, 0.0f);
+    plane.halfExtent = 2000.0f;
+    BodySettings ground{};
+    ground.shape = world.CreateShape(plane);
+    ground.motionType = MotionType::Static;
+    ground.layer = Layers::Static;
+    ground.restitution = 0.9f;
+    ground.userData = groundEid;
+    ASSERT_TRUE(world.CreateBody(ground).IsValid());
+
+    SphereShapeDef sphere{};
+    sphere.radius = 0.5f;
+    BodySettings ball{};
+    ball.shape = world.CreateShape(sphere);
+    ball.motionType = MotionType::Dynamic;
+    ball.layer = Layers::Dynamic;
+    ball.position = Vector3(0.0f, 5.0f, 0.0f);
+    ball.restitution = 0.9f;
+    ball.userData = ballEid;
+    ASSERT_TRUE(world.CreateBody(ball).IsValid());
+}
+} // namespace
+
+TEST(Physics, EntityCallbacks_HandlerThatUnsubscribesItselfLeavesTheOthersCalled)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    constexpr uint64 groundEid = 3101;
+    constexpr uint64 ballEid = 3102;
+    const ECS::EntityHandle ballEntity(static_cast<uint32>(ballEid));
+
+    // The first contact reaches both handlers; the first one ends its own subscription while the
+    // delivery runs, and the second must still be called for that contact.
+    int step = 0;
+    int onceCount = 0;
+    int onceStep = -1;
+    bool otherCalledWithOnce = false;
+    PhysicsEntityEventCallbacks::SubscriptionId onceId = 0;
+    onceId = PhysicsEntityEventCallbacks::SubscribeContactBegin(ballEntity, [&](const EntityContactEvent&)
+                                                                {
+                                                                    ++onceCount;
+                                                                    onceStep = step;
+                                                                    PhysicsEntityEventCallbacks::Unsubscribe(onceId);
+                                                                });
+    PhysicsEntityEventCallbacks::SubscribeContactBegin(ballEntity, [&](const EntityContactEvent&)
+                                                       { otherCalledWithOnce = otherCalledWithOnce || step == onceStep; });
+
+    DropBallOnPlane(PhysicsWorldService::Get(), groundEid, ballEid);
+    for (step = 0; step < 600; ++step)
+        PhysicsWorldService::Get().Step(1.0f / 60.0f, 1);
+
+    EXPECT_EQ(onceCount, 1);
+    EXPECT_TRUE(otherCalledWithOnce);
+}
+
+TEST(Physics, EntityCallbacks_EndedRunsOnceWhenTheSubscriptionEnds)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    const ECS::EntityHandle entity(static_cast<uint32>(3201));
+    int unsubscribedEnded = 0;
+    int clearedEnded = 0;
+    const auto unsubscribed = PhysicsEntityEventCallbacks::SubscribeContactBegin(
+        entity, [](const EntityContactEvent&) {}, [&] { ++unsubscribedEnded; });
+    PhysicsEntityEventCallbacks::SubscribeTriggerEnter(entity, [](const EntityTriggerEvent&) {}, [&] { ++clearedEnded; });
+
+    PhysicsEntityEventCallbacks::Unsubscribe(unsubscribed);
+    PhysicsEntityEventCallbacks::Unsubscribe(unsubscribed);
+    EXPECT_EQ(unsubscribedEnded, 1);
+    EXPECT_EQ(clearedEnded, 0);
+
+    PhysicsEntityEventCallbacks::ClearAll();
+    EXPECT_EQ(unsubscribedEnded, 1);
+    EXPECT_EQ(clearedEnded, 1);
+}
+
+TEST(Physics, EntityCallbacks_WorldShutdownEndsEverySubscription)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    int ended = 0;
+    PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle(static_cast<uint32>(3301)),
+                                                       [](const EntityContactEvent&) {}, [&] { ++ended; });
+
+    PhysicsWorldService::Shutdown();
+
+    EXPECT_EQ(ended, 1);
+}
+
+// The last subscription ends inside its own handler while another world contact listener exists:
+// the router's world listeners stay in place for the rest of that delivery, so the other listener
+// still sees the contact.
+TEST(Physics, EntityCallbacks_LastSubscriptionEndingInItsHandlerKeepsLaterWorldListeners)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    constexpr uint64 groundEid = 3401;
+    constexpr uint64 ballEid = 3402;
+    int step = 0;
+    int oursStep = -1;
+    int ours = 0;
+    bool laterSawIt = false;
+    PhysicsEntityEventCallbacks::SubscriptionId id = 0;
+    id = PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle(static_cast<uint32>(ballEid)),
+                                                            [&](const EntityContactEvent&)
+                                                            {
+                                                                ++ours;
+                                                                oursStep = step;
+                                                                PhysicsEntityEventCallbacks::Unsubscribe(id);
+                                                            });
+    const auto later = PhysicsWorldService::Get().AddContactListener(
+        [&](const Physics::ContactEvent& e)
+        {
+            if (e.state == Physics::ContactState::Begin && step == oursStep)
+                laterSawIt = true;
+        });
+    DropBallOnPlane(PhysicsWorldService::Get(), groundEid, ballEid);
+    for (step = 0; step < 600; ++step)
+        PhysicsWorldService::Get().Step(1.0f / 60.0f, 1);
+    PhysicsWorldService::Get().RemoveContactListener(later);
+
+    EXPECT_EQ(ours, 1);
+    EXPECT_TRUE(laterSawIt);
+}
+
+namespace
+{
+// A system with no access that shares the physics step's wave.
+class StepWavePeerSystem : public GameEngine::ECS::ISystem
+{
+  public:
+    const char* GetName() const override { return "StepWavePeer"; }
+    void Update(GameEngine::ECS::World&, GameEngine::float32) override {}
+};
+} // namespace
+
+// Event handlers run inside the physics step and call the script API, whose functions are for the
+// main thread outside a job. Scheduled in one wave with other systems, the step still runs on the
+// thread that updates the systems, outside any job, so a handler that sets a velocity and ends its
+// own subscription runs where those calls are allowed.
+TEST(Physics, PhysicsStepRunsOnTheCallerOutsideAJobInASharedWave)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    JobSystem::WorkStealingThreadPool pool(2);
+    ECS::SystemManager manager(&pool);
+    ECS::World world;
+    manager.AddSystem<StepWavePeerSystem>();
+    manager.AddSystem<PhysicsStepSystem>();
+    manager.AddSystem<StepWavePeerSystem>();
+    ECS::SystemExecutionPlan plan;
+    plan.Waves.push_back({{0, 1, 2}});
+    manager.SetExecutionPlan(std::move(plan));
+
+    constexpr uint64 groundEid = 3701;
+    constexpr uint64 ballEid = 3702;
+    const std::thread::id caller = std::this_thread::get_id();
+    int calls = 0;
+    bool onCaller = false;
+    bool inJob = true;
+    PhysicsEntityEventCallbacks::SubscriptionId id = 0;
+    id = PhysicsEntityEventCallbacks::SubscribeContactBegin(
+        ECS::EntityHandle(static_cast<uint32>(ballEid)),
+        [&](const EntityContactEvent&)
+        {
+            ++calls;
+            onCaller = std::this_thread::get_id() == caller;
+            inJob = JobSystem::WorkStealingThreadPool::IsExecutingJob();
+            PhysicsEntityEventCallbacks::Unsubscribe(id);
+        });
+    DropBallOnPlane(PhysicsWorldService::Get(), groundEid, ballEid);
+    const float32 fixed = PhysicsWorldService::GetSettings().fixedTimeStep > 0.0f
+                              ? PhysicsWorldService::GetSettings().fixedTimeStep
+                              : 1.0f / 60.0f;
+    for (int frame = 0; frame < 600 && calls == 0; ++frame)
+        manager.Update(world, fixed);
+
+    ASSERT_EQ(calls, 1);
+    EXPECT_TRUE(onCaller);
+    EXPECT_FALSE(inJob);
+}
+
+// The contact normal points from other into self, for each of the two entities.
+TEST(Physics, EntityCallbacks_ContactNormalPointsFromOtherIntoSelf)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    constexpr uint64 groundEid = 3501;
+    constexpr uint64 ballEid = 3502;
+    float ballNormalY = 0.0f;
+    float groundNormalY = 0.0f;
+    PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle(static_cast<uint32>(ballEid)),
+                                                       [&](const EntityContactEvent& e)
+                                                       {
+                                                           if (ballNormalY == 0.0f)
+                                                               ballNormalY = e.normal.y;
+                                                       });
+    PhysicsEntityEventCallbacks::SubscribeContactBegin(ECS::EntityHandle(static_cast<uint32>(groundEid)),
+                                                       [&](const EntityContactEvent& e)
+                                                       {
+                                                           if (groundNormalY == 0.0f)
+                                                               groundNormalY = e.normal.y;
+                                                       });
+    DropBallOnPlane(PhysicsWorldService::Get(), groundEid, ballEid);
+    for (int i = 0; i < 600; ++i)
+        PhysicsWorldService::Get().Step(1.0f / 60.0f, 1);
+
+    EXPECT_GT(ballNormalY, 0.5f) << "self is the ball: from the ground up into the ball";
+    EXPECT_LT(groundNormalY, -0.5f) << "self is the ground: from the ball down into the ground";
 }
 
 TEST(Physics, TriggerDoesNotBlockFallingSphere)

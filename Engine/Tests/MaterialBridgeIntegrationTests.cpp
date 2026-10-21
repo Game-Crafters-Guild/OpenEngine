@@ -23,6 +23,9 @@
 #include "Engine/Rendering/MaterialSystem.h"
 #include "Engine/Rendering/PipelineVariantCache.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "HeldPipelineBuilds.h"
+#include "SceneDrawWarm.h"
+#include "Engine/Rendering/SceneProbeRecaptureSchedule.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineCache.h"
 #include "Rendering/Core/PipelineTypes.h"
@@ -91,36 +94,7 @@ TEST_F(MaterialBridgeIntegrationTest, VertexModifierDocumentAlwaysCarriesOneModi
     EXPECT_FALSE(simple && extended) << "both modifier defines would co-emit into one variant";
 }
 
-namespace
-{
-// Stands in for the engine's worker dispatcher: keeps every pipeline build the
-// device queues until the test runs it, so the window in which a build is
-// pending is observable. Removes itself from the device before its jobs go.
-class HeldPipelineBuilds
-{
-  public:
-    explicit HeldPipelineBuilds(IDevice& device) : m_Device(device)
-    {
-        m_Device.SetPipelineBuildDispatcher([this](std::function<void()> job) { Jobs.push_back(std::move(job)); });
-    }
-    ~HeldPipelineBuilds() { m_Device.SetPipelineBuildDispatcher({}); }
-    HeldPipelineBuilds(const HeldPipelineBuilds&) = delete;
-    HeldPipelineBuilds& operator=(const HeldPipelineBuilds&) = delete;
-
-    void RunAll()
-    {
-        std::vector<std::function<void()>> jobs = std::move(Jobs);
-        Jobs.clear();
-        for (std::function<void()>& job : jobs)
-            job();
-    }
-
-    std::vector<std::function<void()>> Jobs;
-
-  private:
-    IDevice& m_Device;
-};
-} // namespace
+using GameEngine::Testing::HeldPipelineBuilds;
 
 // ---- Real shader compilation integration tests ----
 // These tests inject real shader paths via SetMaterialBuildContext so
@@ -2222,6 +2196,7 @@ TEST_F(TextureHotReloadPropagationTest, EvictQueuesARebindForEveryReferencingMat
     // count and the per-material answers must agree about the same window.
     textures.Evict(texGuid);
     EXPECT_EQ(textures.PendingMaterialTextureBindCount(), kMatCount);
+    EXPECT_EQ(textures.PendingMaterialTextureCount(), 1u) << "three bindings wait on one texture";
     for (size_t i = 0; i < kMatCount; ++i)
     {
         EXPECT_FALSE(textures.IsMaterialTextureBindingComplete(mats[i]))
@@ -2524,8 +2499,12 @@ TEST_F(MaterialPipelineCompilationTest, ConcreteWarm_MaterialWaitsWhileItsBacken
     variants.PruneSettledConcreteWarmWaits();
     EXPECT_TRUE(variants.HasPipelineBuildsInFlight(*mat)) << "the prune dropped a wait whose build is still pending";
 
+    const uint64_t beforeLanding = m_rs->Materials().PipelineReadinessEpoch();
     held.RunAll();
     EXPECT_FALSE(variants.HasPipelineBuildsInFlight(*mat)) << "the landed build kept the material waiting";
+    variants.PruneSettledConcreteWarmWaits();
+    const uint64_t afterLanding = m_rs->Materials().PipelineReadinessEpoch();
+    EXPECT_GT(afterLanding, beforeLanding) << "a cold pipeline that turned warm makes its skipped draws drawable";
     EXPECT_TRUE(variants.EnsureConcreteWarm(*mat, id, fk));
 
     // An id with no interned desc: its build fails, once.
@@ -2536,11 +2515,81 @@ TEST_F(MaterialPipelineCompilationTest, ConcreteWarm_MaterialWaitsWhileItsBacken
     EXPECT_FALSE(variants.HasPipelineBuildsInFlight(*mat)) << "a failed build kept the material waiting";
     EXPECT_FALSE(variants.EnsureConcreteWarm(*mat, neverInterned, fk));
     EXPECT_TRUE(held.Jobs.empty()) << "a failed build was queued again";
+    variants.PruneSettledConcreteWarmWaits();
+    EXPECT_EQ(m_rs->Materials().PipelineReadinessEpoch(), afterLanding) << "a failed build makes nothing drawable";
 
     variants.PruneSettledConcreteWarmWaits();
     m_device->GetMutablePipelineCache().Clear(); // hot reload
     EXPECT_FALSE(variants.HasPipelineBuildsInFlight(*mat)) << "a settled wait outlived the prune";
     EXPECT_TRUE(held.Jobs.empty()) << "the invalidation re-requested a pipeline no draw uses";
+}
+
+// The scene warm (SceneDrawWarm) asks for the colour variant a world-pass draw records against before
+// that draw: the variant compiles on the compile workers (inline here, with no job system), and once
+// it publishes the device's build of its pipeline for the warmed pass formats is requested on a
+// worker, never run on the calling thread. The draw then finds the variant cached under its own key.
+TEST_F(MaterialPipelineCompilationTest, SceneWarm_CompilesTheDrawsVariantAndRequestsItsPipelineForThePass)
+{
+    MaterialDocument doc{};
+    doc.materialName = "SceneWarmPBR";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+    Material* mat = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    ASSERT_NE(mat, nullptr);
+    ASSERT_TRUE(mat->GetGraphicsPipelineId().IsValid());
+
+    auto& variants = m_rs->Materials().Variants();
+    HeldPipelineBuilds held(*m_device);
+    PipelineFormatKey fk{};
+    fk.ColorCount = 1;
+    fk.ColorFormats[0] = TextureFormat::R16G16B16A16_FLOAT;
+    fk.DepthFormat = TextureFormat::D32_FLOAT;
+    const VertexAttributeFlags vf = VertexAttributeFlags::StandardMesh | VertexAttributeFlags::HasColor;
+    const MaterialKeyword passKw = MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows;
+
+    variants.WarmColorVariant(*mat, vf, PrimitiveTopology::TriangleList, passKw, FrontFace::CounterClockwise, fk);
+    EXPECT_EQ(variants.PendingVariantCompileCount(), 1u) << "the warm queues the variant's compile";
+    EXPECT_TRUE(held.Jobs.empty()) << "no pipeline can build before its variant has compiled";
+    variants.SubmitPendingVariantCompiles();
+    variants.ApplyPendingVariantPublishes();
+
+    // The key the draw path looks the variant up by.
+    const auto key = variants.EnqueueColorVariantCompileForTesting(
+        *mat, vf, PrimitiveTopology::TriangleList, passKw, fk.RasterizationSamples, FrontFace::CounterClockwise);
+    ASSERT_TRUE(variants.HasColorVariantForTesting(key)) << "the warm compiled a different variant than the draw asks for";
+    const GraphicsPipelineId id = variants.SnapshotColorVariantForTesting(key).CurrentPipelineId;
+    ASSERT_TRUE(id.IsValid());
+    ASSERT_EQ(held.Jobs.size(), 1u) << "the published variant's pipeline build was not requested for the pass";
+    EXPECT_FALSE(m_device->TryGetWarmGraphicsPipeline(id, fk).IsValid()) << "the build ran on the calling thread";
+    held.RunAll();
+    EXPECT_TRUE(m_device->TryGetWarmGraphicsPipeline(id, fk).IsValid())
+        << "the warmed pipeline is not the one the pass draws with";
+}
+
+// The scene's colour keys for a material: one head per mesh layout it draws on, and the crossfading
+// tail (LodCrossfade, which the world pass adds per tail segment) only on a mesh with an LOD chain.
+TEST_F(MaterialPipelineCompilationTest, SceneWarm_EnumeratesAHeadPerLayoutAndATailOnlyWithAnLodChain)
+{
+    MaterialDocument doc{};
+    doc.materialName = "SceneKeysPBR";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+    const Material* first = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    doc.materialName = "SceneKeysMaskPBR";
+    doc.alphaMode = MaterialAlphaMode::Mask;
+    const Material* second = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+
+    const MaterialKeyword world = MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL;
+    const VertexAttributeFlags plain = VertexAttributeFlags::StandardMesh;
+    const VertexAttributeFlags tangent = VertexAttributeFlags::StandardMeshWithTangent;
+    const MaterialKeyword head = world | MaterialKeyword::Instanced;
+
+    EXPECT_EQ(EnumerateSceneColorDrawKeys(*first, plain, 1u, world, ReliefDepthSource::PrepassReadable),
+              (std::vector<SceneColorDrawKey>{{plain, head}}));
+    EXPECT_EQ(EnumerateSceneColorDrawKeys(*second, tangent, 2u, world, ReliefDepthSource::PrepassReadable),
+              (std::vector<SceneColorDrawKey>{{tangent, head}, {tangent, head | MaterialKeyword::LodCrossfade}}));
 }
 
 // Depth mirror of the publish-gate success path: a depth-variant miss enqueues,
@@ -2757,6 +2806,46 @@ TEST_F(MaterialPipelineCompilationTest, PublishGate_LatePublishForUnregisteredMa
             << "a dropped publish must not notify listeners for a dead GUID";
     }
     publishedSub.Reset();
+}
+
+// A draw the publish gate skipped draws once its variant publishes, so the
+// publish moves the pipeline readiness epoch that frame-keeping consumers (a
+// scene reflection probe's capture) recapture on. A publish the apply drops
+// makes nothing drawable and leaves the epoch alone.
+TEST_F(MaterialPipelineCompilationTest, PublishGate_LandedPublishMovesPipelineReadinessEpoch)
+{
+    MaterialDocument doc{};
+    doc.materialName = "ReadinessEpoch";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+
+    const GUID guid = GUID::Generate();
+    Material* mat = m_rs->Materials().RegisterMaterialFromDocument(guid, doc);
+    ASSERT_NE(mat, nullptr);
+    ASSERT_TRUE(mat->GetGraphicsPipelineId().IsValid());
+
+    auto& variants = m_rs->Materials().Variants();
+    const PipelineVariantCache::InstancedVariantKey key{
+        mat, VertexAttributeFlags::StandardMesh | VertexAttributeFlags::HasColor,
+        /*SampleCount=*/1u,
+        MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows,
+        PrimitiveTopology::TriangleList};
+
+    // Read the way a scene reflection probe reads it, so the wire into its
+    // recapture schedule is covered too.
+    constexpr uint64_t kWorld = 1;
+    const uint64_t before = SceneProbeWorldEpochs::Read(*m_rs, kWorld).Pipelines;
+    variants.EnqueueColorVariantPublishForTesting(key, mat->GetGraphicsPipelineId(), mat->GetVersion(), guid);
+    variants.ApplyPendingVariantPublishes();
+    ASSERT_TRUE(variants.HasColorVariantForTesting(key));
+    const uint64_t afterLanded = SceneProbeWorldEpochs::Read(*m_rs, kWorld).Pipelines;
+    EXPECT_GT(afterLanded, before) << "a landed publish makes a skipped draw drawable";
+
+    const GUID goneGuid = GUID::Generate();
+    variants.EnqueueColorVariantPublishForTesting(key, mat->GetGraphicsPipelineId(), mat->GetVersion(), goneGuid);
+    variants.ApplyPendingVariantPublishes();
+    EXPECT_EQ(SceneProbeWorldEpochs::Read(*m_rs, kWorld).Pipelines, afterLanded)
+        << "a publish for a material that is not registered is dropped and lands nothing";
 }
 
 // A variant republish (a material edit while the old unit is on screen) must

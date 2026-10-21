@@ -1,8 +1,9 @@
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
-#include "PathfindingECS/Components/NavigationGrid.h"
-#include "PathfindingECS/Systems/NavigationBuildSystem.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
+#include "NavigationTestSurfaces.h"
+#include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationPathfindingSystem.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"
 #include "Components/Transform.h"
@@ -44,19 +45,7 @@ protected:
 
     ECS::Entity CreateGrid(uint32 width = 16, uint32 depth = 16)
     {
-        auto entity = m_World->Create();
-        Components::NavigationGrid grid{};
-        grid.GridType = Pathfinding::GridType::Square;
-        grid.CellSize = 1.0f;
-        grid.Width = width;
-        grid.Depth = depth;
-        entity.Set(grid);
-        m_World->ProcessCommands();
-
-        NavigationBuildSystem buildSystem;
-        buildSystem.Update(*m_World, kDt);
-        m_World->ProcessCommands();
-        return entity;
+        return Testing::CreateFlatGridSurface(*m_World, width, depth, 1.0f);
     }
 
     ECS::Entity CreateAgent(float32 startX, float32 startZ,
@@ -113,7 +102,7 @@ protected:
 TEST_F(NavigationRepathingTest, ProximityCheckTriggersRepathWhenCellBlocked)
 {
     auto gridEntity = CreateGrid();
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
     ASSERT_NE(gridSrc, nullptr);
 
     auto agentEntity = CreateAgent(1.5f, 8.5f, 14.5f, 8.5f,
@@ -159,7 +148,7 @@ TEST_F(NavigationRepathingTest, ProximityCheckTriggersRepathWhenCellBlocked)
 TEST_F(NavigationRepathingTest, ProximityIgnoresBlockedCellAdjacentToDest)
 {
     auto gridEntity = CreateGrid();
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
     ASSERT_NE(gridSrc, nullptr);
 
     auto agentEntity = CreateAgent(1.5f, 8.5f, 8.5f, 8.5f,
@@ -198,6 +187,95 @@ TEST_F(NavigationRepathingTest, ProximityIgnoresBlockedCellAdjacentToDest)
         << "A dest-adjacent stamp clip must not invalidate an otherwise open dest";
 }
 
+// A body pushed off its smoothed route (by avoidance or a stand-off) heads
+// straight for its next waypoint. The lookahead sweeps the body's radius along
+// that segment, as the smoother does, so a segment whose centre line clears a
+// blocked cell but whose body clips it re-paths.
+TEST_F(NavigationRepathingTest, ProximityKeepsTheAgentRadiusFromBlockedCells)
+{
+    auto gridEntity = CreateGrid();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
+    ASSERT_NE(gridSrc, nullptr);
+    auto* navWorld = NavigationService::TryGet();
+    ASSERT_NE(navWorld, nullptr);
+    auto* gridMap = navWorld->GetGridMap(
+        Pathfinding::NavMapHandle{gridSrc->NavMapIndex, gridSrc->NavMapGeneration});
+    ASSERT_NE(gridMap, nullptr);
+    // Cell (5, 8) is the rectangle [5, 6] x [8, 9]: 0.5 m from the route along z = 7.5.
+    gridMap->SetCellBlocked(5, 8, true);
+
+    auto agentEntity = CreateAgent(1.5f, 7.5f, 10.5f, 7.5f,
+                                   gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.0f);
+    agentEntity.GetForWrite<Components::NavigationAgent>()->Radius = 0.45f;
+    m_World->ProcessCommands();
+
+    NavigationPathfindingSystem pathSystem;
+    pathSystem.Update(*m_World, kDt);
+    m_World->ProcessCommands();
+    ASSERT_EQ(static_cast<Pathfinding::PathStatus>(
+                  agentEntity.Get<Components::NavigationAgentState>()->Status),
+              Pathfinding::PathStatus::Complete);
+
+    const auto placeAgentAndStep = [&](float32 x, float32 z)
+    {
+        auto* xf = agentEntity.GetForWrite<Components::Transform>();
+        auto* wt = agentEntity.GetForWrite<Components::WorldTransform>();
+        xf->matrix[12] = x;
+        xf->matrix[14] = z;
+        wt->matrix[12] = x;
+        wt->matrix[14] = z;
+        auto* state = agentEntity.GetForWrite<Components::NavigationAgentState>();
+        state->PathDirty = false;
+        state->CurrentPathPointIndex = 1;
+        NavigationMovementSystem moveSystem;
+        moveSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+        return agentEntity.Get<Components::NavigationAgentState>()->PathDirty;
+    };
+
+    EXPECT_FALSE(placeAgentAndStep(3.5f, 7.5f)) << "the route itself keeps 0.5 m from the cell";
+    // From (3.5, 7.9) the segment to the route's end passes the cell 0.2 m away: the centre line
+    // stays in row 7, the 0.45 m body overlaps row 8.
+    EXPECT_TRUE(placeAgentAndStep(3.5f, 7.9f)) << "the body clips the blocked cell without a re-path";
+}
+
+// A hex cell centre is sqrt(3)/4 of a cell (0.433 m here) from the row beside
+// it, so a 0.45 m body swept along a valid route next to a blocked row would
+// re-path every frame and never move. A hex grid's lookahead tests the line.
+TEST_F(NavigationRepathingTest, HexAgentWiderThanHalfARowStillWalksBesideABlockedRow)
+{
+    auto gridEntity = Testing::CreateFlatGridSurface(*m_World, 16, 16, 1.0f, Pathfinding::GridType::Hex);
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
+    ASSERT_NE(gridSrc, nullptr);
+    auto* navWorld = NavigationService::TryGet();
+    ASSERT_NE(navWorld, nullptr);
+    auto* gridMap = navWorld->GetGridMap(
+        Pathfinding::NavMapHandle{gridSrc->NavMapIndex, gridSrc->NavMapGeneration});
+    ASSERT_NE(gridMap, nullptr);
+    for (uint32 x = 3; x < 10; ++x)
+        gridMap->SetCellBlocked(x, 4, true);
+
+    auto agentEntity = CreateAgent(1.5f, 3.0f, 12.5f, 3.0f,
+                                   gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.0f);
+    agentEntity.GetForWrite<Components::NavigationAgent>()->Radius = 0.45f;
+    m_World->ProcessCommands();
+
+    NavigationPathfindingSystem pathSystem;
+    NavigationMovementSystem moveSystem;
+    constexpr int kFrames = 600; // 10 s for an 11 m walk at 3.5 m/s
+    for (int frame = 0; frame < kFrames && agentEntity.Get<Components::NavigationAgentState>()->HasDestination;
+         ++frame)
+    {
+        pathSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+        moveSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+    }
+
+    EXPECT_FALSE(agentEntity.Get<Components::NavigationAgentState>()->HasDestination)
+        << "the agent never arrived: its route re-paths every frame";
+}
+
 // ---------------------------------------------------------------------------
 // Timer-based replan fires after interval
 // ---------------------------------------------------------------------------
@@ -205,7 +283,7 @@ TEST_F(NavigationRepathingTest, ProximityIgnoresBlockedCellAdjacentToDest)
 TEST_F(NavigationRepathingTest, TimerReplanFiresAfterInterval)
 {
     auto gridEntity = CreateGrid();
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
 
     auto agentEntity = CreateAgent(1.5f, 1.5f, 14.5f, 14.5f,
                                     gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.5f);
@@ -246,7 +324,7 @@ TEST_F(NavigationRepathingTest, TimerReplanFiresAfterInterval)
 TEST_F(NavigationRepathingTest, NoReplanWhenIntervalIsZero)
 {
     auto gridEntity = CreateGrid();
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
 
     auto agentEntity = CreateAgent(1.5f, 1.5f, 14.5f, 14.5f,
                                     gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.0f);
@@ -268,16 +346,18 @@ TEST_F(NavigationRepathingTest, NoReplanWhenIntervalIsZero)
 }
 
 // ---------------------------------------------------------------------------
-// Budget limiting: only MaxReplansPerFrame agents replan per frame
+// Timer replans share the solve budget: every expired timer marks its agent,
+// and only MaxPathSolvesPerFrame of them are solved in one Update
 // ---------------------------------------------------------------------------
 
-TEST_F(NavigationRepathingTest, ReplanBudgetLimitsPerFrame)
+TEST_F(NavigationRepathingTest, TimerReplansShareTheSolveBudget)
 {
     auto gridEntity = CreateGrid(32, 32);
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
 
     // Create 20 agents all with the same short replan interval
     constexpr uint32 kAgentCount = 20;
+    constexpr uint32 kBudget = 4;
     std::vector<ECS::Entity> agents;
     for (uint32 i = 0; i < kAgentCount; ++i)
     {
@@ -288,52 +368,41 @@ TEST_F(NavigationRepathingTest, ReplanBudgetLimitsPerFrame)
         agents.push_back(e);
     }
 
-    // Run initial pathfinding
     NavigationPathfindingSystem pathSystem;
-    pathSystem.MaxReplansPerFrame = 4; // strict budget
+    pathSystem.MaxPathSolvesPerFrame = kAgentCount;
     pathSystem.Update(*m_World, kDt);
     m_World->ProcessCommands();
 
-    // Clear all PathDirty flags
+    // Expire every timer at once
     for (auto& e : agents)
     {
         auto* s = e.GetForWrite<Components::NavigationAgentState>();
         ASSERT_NE(s, nullptr);
-        s->PathDirty = false;
-        s->ReplanTimer = 0.0f; // force all timers to expire on next update
+        ASSERT_FALSE(s->PathDirty);
+        s->ReplanTimer = 0.0f;
     }
     m_World->ProcessCommands();
 
-    // Run one pathfinding update - should only mark MaxReplansPerFrame agents
-    NavigationMovementSystem moveSystem;
-    moveSystem.Update(*m_World, kDt);
+    pathSystem.MaxPathSolvesPerFrame = kBudget;
     pathSystem.Update(*m_World, kDt);
     m_World->ProcessCommands();
 
-    uint32 dirtyCount = 0;
+    // Every timer marked its agent; the budget solved four and queued the
+    // rest, which keep the path they are walking.
+    uint32 queuedCount = 0;
     for (auto& e : agents)
     {
         auto* s = e.Get<Components::NavigationAgentState>();
-        if (s && s->PathDirty)
-            ++dirtyCount;
+        EXPECT_FALSE(s->PathDirty);
+        if (!s->ReplanRequested)
+            continue;
+        ++queuedCount;
+        EXPECT_EQ(static_cast<Pathfinding::PathStatus>(s->Status), Pathfinding::PathStatus::Complete);
+        EXPECT_NE(s->PathIndex, 0u);
     }
-
-    // The budget system marks up to MaxReplansPerFrame agents as dirty,
-    // then those get processed in the same Update call (Step 2).
-    // After processing, PathDirty is cleared. So we check that the system
-    // didn't process more than the budget in a single frame by verifying
-    // that some agents still have expired timers (they got deferred).
-    uint32 unexpiredTimerCount = 0;
-    for (auto& e : agents)
-    {
-        auto* s = e.Get<Components::NavigationAgentState>();
-        if (s && s->ReplanTimer <= 0.0f && !s->PathDirty)
-            ++unexpiredTimerCount;
-    }
-
-    // At least some agents should have been deferred (not all 20 could replan in one frame)
-    EXPECT_GT(unexpiredTimerCount, 0u)
-        << "Some agents should have been deferred by the replan budget";
+    EXPECT_EQ(queuedCount, kAgentCount - kBudget);
+    EXPECT_EQ(pathSystem.GetStatistics().Solved, kBudget);
+    EXPECT_EQ(pathSystem.GetStatistics().Backlog, kAgentCount - kBudget);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +412,7 @@ TEST_F(NavigationRepathingTest, ReplanBudgetLimitsPerFrame)
 TEST_F(NavigationRepathingTest, StaggeredReplanTimers)
 {
     auto gridEntity = CreateGrid();
-    auto* gridSrc = gridEntity.Get<Components::NavigationGrid>();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
 
     // Create several agents with same ReplanInterval
     std::vector<ECS::Entity> agents;

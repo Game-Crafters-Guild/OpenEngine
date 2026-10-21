@@ -226,7 +226,6 @@ private:
     size_t m_MaxFlushPerFrame = 2000;
     float m_RowHeight = kDefaultRowHeight;
     bool m_AutoScroll = true;
-    bool m_NeedsRefresh = false;
     bool m_Paused = false;
 
     struct RowState

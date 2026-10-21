@@ -156,6 +156,10 @@ static_assert(sizeof(GPURetargetCharacterParams) == 32, "GPURetargetCharacterPar
 //   Shutdown()                       teardown
 class RetargetGPUDataStore {
 public:
+    // Takes this store's bytes out of the process-wide stats record, so a store
+    // destroyed without Shutdown leaves no count behind.
+    ~RetargetGPUDataStore();
+
     bool Initialize(GameEngine::Rendering::IDevice* device);
     void Shutdown();
 
@@ -281,7 +285,9 @@ private:
         size_t requiredSize,
         const char* debugName);
 
-    void UpdateCategoryBytes();
+    // Recomputes m_ResidentBytes and reports the change to the process-wide
+    // "Animation.RetargetGPUData" stats record (Memory::TrackedBytes).
+    void UpdateResidentBytes();
 
     GameEngine::Rendering::IDevice* m_Device = nullptr;
 

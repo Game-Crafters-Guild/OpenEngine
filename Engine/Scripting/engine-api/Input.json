@@ -1,0 +1,1301 @@
+{
+  "format": 1,
+  "name": "Input",
+  "hash": "0x1283fe4e7111c269",
+  "constants": [],
+  "enums": [
+    {
+      "id": "Input.ActionKind",
+      "name": "ActionKind",
+      "cpp": "GameEngine::Input::ActionKind",
+      "header": "Input/InputScriptApi.h",
+      "line": 227,
+      "doc": "What an action reports: a button is pressed or released, an axis carries a value.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "Button",
+          "value": 0
+        },
+        {
+          "name": "Axis",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "Input.GamepadAxis",
+      "name": "GamepadAxis",
+      "cpp": "GameEngine::Input::GamepadAxis",
+      "header": "Input/InputScriptApi.h",
+      "line": 177,
+      "doc": "A stick or trigger axis of a gamepad. A stick reads -1 to 1, a trigger 0 to 1.",
+      "underlying": "Int32",
+      "values": [
+        {
+          "name": "LeftX",
+          "value": 0
+        },
+        {
+          "name": "LeftY",
+          "value": 1
+        },
+        {
+          "name": "RightX",
+          "value": 2
+        },
+        {
+          "name": "RightY",
+          "value": 3
+        },
+        {
+          "name": "LeftTrigger",
+          "value": 4
+        },
+        {
+          "name": "RightTrigger",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "id": "Input.GamepadButton",
+      "name": "GamepadButton",
+      "cpp": "GameEngine::Input::GamepadButton",
+      "header": "Input/InputScriptApi.h",
+      "line": 156,
+      "doc": "A button of a gamepad, by its place on an Xbox-style pad: A is the bottom face button.",
+      "underlying": "Int32",
+      "values": [
+        {
+          "name": "A",
+          "value": 0
+        },
+        {
+          "name": "B",
+          "value": 1
+        },
+        {
+          "name": "X",
+          "value": 2
+        },
+        {
+          "name": "Y",
+          "value": 3
+        },
+        {
+          "name": "LeftBumper",
+          "value": 4
+        },
+        {
+          "name": "RightBumper",
+          "value": 5
+        },
+        {
+          "name": "Back",
+          "value": 6
+        },
+        {
+          "name": "Start",
+          "value": 7
+        },
+        {
+          "name": "Guide",
+          "value": 8
+        },
+        {
+          "name": "LeftThumb",
+          "value": 9
+        },
+        {
+          "name": "RightThumb",
+          "value": 10
+        },
+        {
+          "name": "DpadUp",
+          "value": 11
+        },
+        {
+          "name": "DpadRight",
+          "value": 12
+        },
+        {
+          "name": "DpadDown",
+          "value": 13
+        },
+        {
+          "name": "DpadLeft",
+          "value": 14
+        }
+      ]
+    },
+    {
+      "id": "Input.Key",
+      "name": "Key",
+      "cpp": "GameEngine::Input::Key",
+      "header": "Input/InputScriptApi.h",
+      "line": 19,
+      "doc": "A key of the keyboard, by its place on a US layout: Key.Q is the key left of W on every layout. World1 and World2 are the two extra keys some non-US layouts have.",
+      "underlying": "Int32",
+      "values": [
+        {
+          "name": "LeftShift",
+          "value": 340
+        },
+        {
+          "name": "LeftControl",
+          "value": 341
+        },
+        {
+          "name": "LeftAlt",
+          "value": 342
+        },
+        {
+          "name": "LeftSuper",
+          "value": 343
+        },
+        {
+          "name": "RightShift",
+          "value": 344
+        },
+        {
+          "name": "RightControl",
+          "value": 345
+        },
+        {
+          "name": "RightAlt",
+          "value": 346
+        },
+        {
+          "name": "RightSuper",
+          "value": 347
+        },
+        {
+          "name": "A",
+          "value": 65
+        },
+        {
+          "name": "B",
+          "value": 66
+        },
+        {
+          "name": "C",
+          "value": 67
+        },
+        {
+          "name": "D",
+          "value": 68
+        },
+        {
+          "name": "E",
+          "value": 69
+        },
+        {
+          "name": "F",
+          "value": 70
+        },
+        {
+          "name": "G",
+          "value": 71
+        },
+        {
+          "name": "H",
+          "value": 72
+        },
+        {
+          "name": "I",
+          "value": 73
+        },
+        {
+          "name": "J",
+          "value": 74
+        },
+        {
+          "name": "K",
+          "value": 75
+        },
+        {
+          "name": "L",
+          "value": 76
+        },
+        {
+          "name": "M",
+          "value": 77
+        },
+        {
+          "name": "N",
+          "value": 78
+        },
+        {
+          "name": "O",
+          "value": 79
+        },
+        {
+          "name": "P",
+          "value": 80
+        },
+        {
+          "name": "Q",
+          "value": 81
+        },
+        {
+          "name": "R",
+          "value": 82
+        },
+        {
+          "name": "S",
+          "value": 83
+        },
+        {
+          "name": "T",
+          "value": 84
+        },
+        {
+          "name": "U",
+          "value": 85
+        },
+        {
+          "name": "V",
+          "value": 86
+        },
+        {
+          "name": "W",
+          "value": 87
+        },
+        {
+          "name": "X",
+          "value": 88
+        },
+        {
+          "name": "Y",
+          "value": 89
+        },
+        {
+          "name": "Z",
+          "value": 90
+        },
+        {
+          "name": "Digit0",
+          "value": 48
+        },
+        {
+          "name": "Digit1",
+          "value": 49
+        },
+        {
+          "name": "Digit2",
+          "value": 50
+        },
+        {
+          "name": "Digit3",
+          "value": 51
+        },
+        {
+          "name": "Digit4",
+          "value": 52
+        },
+        {
+          "name": "Digit5",
+          "value": 53
+        },
+        {
+          "name": "Digit6",
+          "value": 54
+        },
+        {
+          "name": "Digit7",
+          "value": 55
+        },
+        {
+          "name": "Digit8",
+          "value": 56
+        },
+        {
+          "name": "Digit9",
+          "value": 57
+        },
+        {
+          "name": "F1",
+          "value": 290
+        },
+        {
+          "name": "F2",
+          "value": 291
+        },
+        {
+          "name": "F3",
+          "value": 292
+        },
+        {
+          "name": "F4",
+          "value": 293
+        },
+        {
+          "name": "F5",
+          "value": 294
+        },
+        {
+          "name": "F6",
+          "value": 295
+        },
+        {
+          "name": "F7",
+          "value": 296
+        },
+        {
+          "name": "F8",
+          "value": 297
+        },
+        {
+          "name": "F9",
+          "value": 298
+        },
+        {
+          "name": "F10",
+          "value": 299
+        },
+        {
+          "name": "F11",
+          "value": 300
+        },
+        {
+          "name": "F12",
+          "value": 301
+        },
+        {
+          "name": "Up",
+          "value": 265
+        },
+        {
+          "name": "Down",
+          "value": 264
+        },
+        {
+          "name": "Left",
+          "value": 263
+        },
+        {
+          "name": "Right",
+          "value": 262
+        },
+        {
+          "name": "Home",
+          "value": 268
+        },
+        {
+          "name": "End",
+          "value": 269
+        },
+        {
+          "name": "PageUp",
+          "value": 266
+        },
+        {
+          "name": "PageDown",
+          "value": 267
+        },
+        {
+          "name": "Insert",
+          "value": 260
+        },
+        {
+          "name": "Space",
+          "value": 32
+        },
+        {
+          "name": "Escape",
+          "value": 256
+        },
+        {
+          "name": "Enter",
+          "value": 257
+        },
+        {
+          "name": "Tab",
+          "value": 258
+        },
+        {
+          "name": "Backspace",
+          "value": 259
+        },
+        {
+          "name": "Delete",
+          "value": 261
+        },
+        {
+          "name": "CapsLock",
+          "value": 280
+        },
+        {
+          "name": "ScrollLock",
+          "value": 281
+        },
+        {
+          "name": "NumLock",
+          "value": 282
+        },
+        {
+          "name": "PrintScreen",
+          "value": 283
+        },
+        {
+          "name": "Pause",
+          "value": 284
+        },
+        {
+          "name": "Apostrophe",
+          "value": 39
+        },
+        {
+          "name": "Comma",
+          "value": 44
+        },
+        {
+          "name": "Minus",
+          "value": 45
+        },
+        {
+          "name": "Period",
+          "value": 46
+        },
+        {
+          "name": "Slash",
+          "value": 47
+        },
+        {
+          "name": "Semicolon",
+          "value": 59
+        },
+        {
+          "name": "Equal",
+          "value": 61
+        },
+        {
+          "name": "LeftBracket",
+          "value": 91
+        },
+        {
+          "name": "Backslash",
+          "value": 92
+        },
+        {
+          "name": "RightBracket",
+          "value": 93
+        },
+        {
+          "name": "GraveAccent",
+          "value": 96
+        },
+        {
+          "name": "World1",
+          "value": 161
+        },
+        {
+          "name": "World2",
+          "value": 162
+        },
+        {
+          "name": "NumPad0",
+          "value": 320
+        },
+        {
+          "name": "NumPad1",
+          "value": 321
+        },
+        {
+          "name": "NumPad2",
+          "value": 322
+        },
+        {
+          "name": "NumPad3",
+          "value": 323
+        },
+        {
+          "name": "NumPad4",
+          "value": 324
+        },
+        {
+          "name": "NumPad5",
+          "value": 325
+        },
+        {
+          "name": "NumPad6",
+          "value": 326
+        },
+        {
+          "name": "NumPad7",
+          "value": 327
+        },
+        {
+          "name": "NumPad8",
+          "value": 328
+        },
+        {
+          "name": "NumPad9",
+          "value": 329
+        },
+        {
+          "name": "NumPadDecimal",
+          "value": 330
+        },
+        {
+          "name": "NumPadDivide",
+          "value": 331
+        },
+        {
+          "name": "NumPadMultiply",
+          "value": 332
+        },
+        {
+          "name": "NumPadSubtract",
+          "value": 333
+        },
+        {
+          "name": "NumPadAdd",
+          "value": 334
+        },
+        {
+          "name": "NumPadEnter",
+          "value": 335
+        },
+        {
+          "name": "NumPadEqual",
+          "value": 336
+        }
+      ]
+    },
+    {
+      "id": "Input.ModifierFlags",
+      "name": "ModifierFlags",
+      "cpp": "GameEngine::Input::ModifierFlags",
+      "header": "Input/InputScriptApi.h",
+      "line": 190,
+      "doc": "The modifier keys held with a key. They combine with |, as in a binding's requiredMods and forbiddenMods.",
+      "underlying": "Int32",
+      "flags": true,
+      "values": [
+        {
+          "name": "None",
+          "value": 0
+        },
+        {
+          "name": "Shift",
+          "value": 1
+        },
+        {
+          "name": "Control",
+          "value": 2
+        },
+        {
+          "name": "Alt",
+          "value": 4
+        },
+        {
+          "name": "Super",
+          "value": 8
+        },
+        {
+          "name": "CapsLock",
+          "value": 16
+        },
+        {
+          "name": "NumLock",
+          "value": 32
+        }
+      ]
+    },
+    {
+      "id": "Input.MouseAxis",
+      "name": "MouseAxis",
+      "cpp": "GameEngine::Input::MouseAxis",
+      "header": "Input/InputScriptApi.h",
+      "line": 146,
+      "doc": "What a mouse axis binding reads: the pointer's motion over the frame, or the wheel's.",
+      "underlying": "Int32",
+      "values": [
+        {
+          "name": "MotionX",
+          "value": -1
+        },
+        {
+          "name": "MotionY",
+          "value": -2
+        },
+        {
+          "name": "ScrollX",
+          "value": -3
+        },
+        {
+          "name": "ScrollY",
+          "value": -4
+        }
+      ]
+    },
+    {
+      "id": "Input.MouseButton",
+      "name": "MouseButton",
+      "cpp": "GameEngine::Input::MouseButton",
+      "header": "Input/InputScriptApi.h",
+      "line": 132,
+      "doc": "A button of the mouse. Back and Forward are the two side buttons; Button6 to Button8 are the extra buttons some mice have.",
+      "underlying": "Int32",
+      "values": [
+        {
+          "name": "Left",
+          "value": 0
+        },
+        {
+          "name": "Right",
+          "value": 1
+        },
+        {
+          "name": "Middle",
+          "value": 2
+        },
+        {
+          "name": "Back",
+          "value": 3
+        },
+        {
+          "name": "Forward",
+          "value": 4
+        },
+        {
+          "name": "Button6",
+          "value": 5
+        },
+        {
+          "name": "Button7",
+          "value": 6
+        },
+        {
+          "name": "Button8",
+          "value": 7
+        }
+      ]
+    },
+    {
+      "id": "Input.PointerLockState",
+      "name": "PointerLockState",
+      "cpp": "GameEngine::Input::PointerLockState",
+      "header": "Input/InputScriptApi.h",
+      "line": 260,
+      "doc": "Where the game's pointer lock stands.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "Unlocked",
+          "value": 0
+        },
+        {
+          "name": "Pending",
+          "value": 1
+        },
+        {
+          "name": "Locked",
+          "value": 2
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "functions": [
+    {
+      "id": "Input.BindGamepadAxis",
+      "name": "BindGamepadAxis",
+      "cpp": "GameEngine::Input::Script::BindGamepadAxis",
+      "header": "Input/InputScriptApi.h",
+      "line": 376,
+      "doc": "Binds a gamepad stick or trigger to an axis action: the action's value is the axis times the scale.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "axis",
+          "kind": "Enum",
+          "type": "Input.GamepadAxis"
+        },
+        {
+          "name": "scale",
+          "kind": "Float",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "Input.BindGamepadButton",
+      "name": "BindGamepadButton",
+      "cpp": "GameEngine::Input::Script::BindGamepadButton",
+      "header": "Input/InputScriptApi.h",
+      "line": 371,
+      "doc": "Binds a gamepad button to a button action. An axis action reads a gamepad's axes only: bind a stick or trigger with BindGamepadAxis.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "button",
+          "kind": "Enum",
+          "type": "Input.GamepadButton"
+        }
+      ]
+    },
+    {
+      "id": "Input.BindKey",
+      "name": "BindKey",
+      "cpp": "GameEngine::Input::Script::BindKey",
+      "header": "Input/InputScriptApi.h",
+      "line": 355,
+      "doc": "Binds a key to an action. On an axis action the held key adds the scale to the action's value, so A at -1 and D at +1 make one axis. The binding counts while every required modifier is held and no forbidden one: forbid Control on S to tell S from Control+S.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "key",
+          "kind": "Enum",
+          "type": "Input.Key"
+        },
+        {
+          "name": "scale",
+          "kind": "Float",
+          "default": "1"
+        },
+        {
+          "name": "requiredMods",
+          "kind": "Enum",
+          "type": "Input.ModifierFlags",
+          "default": "None"
+        },
+        {
+          "name": "forbiddenMods",
+          "kind": "Enum",
+          "type": "Input.ModifierFlags",
+          "default": "None"
+        }
+      ]
+    },
+    {
+      "id": "Input.BindMouseAxis",
+      "name": "BindMouseAxis",
+      "cpp": "GameEngine::Input::Script::BindMouseAxis",
+      "header": "Input/InputScriptApi.h",
+      "line": 366,
+      "doc": "Binds the pointer's motion or the wheel to an axis action: the action's value is the movement over the frame times the scale.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "axis",
+          "kind": "Enum",
+          "type": "Input.MouseAxis"
+        },
+        {
+          "name": "scale",
+          "kind": "Float",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "Input.BindMouseButton",
+      "name": "BindMouseButton",
+      "cpp": "GameEngine::Input::Script::BindMouseButton",
+      "header": "Input/InputScriptApi.h",
+      "line": 360,
+      "doc": "Binds a mouse button to an action, with the scale and the modifiers as BindKey takes them.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "button",
+          "kind": "Enum",
+          "type": "Input.MouseButton"
+        },
+        {
+          "name": "scale",
+          "kind": "Float",
+          "default": "1"
+        },
+        {
+          "name": "requiredMods",
+          "kind": "Enum",
+          "type": "Input.ModifierFlags",
+          "default": "None"
+        },
+        {
+          "name": "forbiddenMods",
+          "kind": "Enum",
+          "type": "Input.ModifierFlags",
+          "default": "None"
+        }
+      ]
+    },
+    {
+      "id": "Input.ClearBindings",
+      "name": "ClearBindings",
+      "cpp": "GameEngine::Input::Script::ClearBindings",
+      "header": "Input/InputScriptApi.h",
+      "line": 349,
+      "doc": "Removes every binding of an action.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        }
+      ]
+    },
+    {
+      "id": "Input.GetActionState",
+      "name": "GetActionState",
+      "cpp": "GameEngine::Input::Script::GetActionState",
+      "header": "Input/InputScriptApi.h",
+      "line": 337,
+      "doc": "The state of an action this frame, from the enabled contexts that hold it.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Record",
+        "type": "Input.ActionState"
+      },
+      "params": [
+        {
+          "name": "action",
+          "kind": "StringId"
+        }
+      ]
+    },
+    {
+      "id": "Input.GetMouseDelta",
+      "name": "GetMouseDelta",
+      "cpp": "GameEngine::Input::Script::GetMouseDelta",
+      "header": "Input/InputScriptApi.h",
+      "line": 319,
+      "doc": "How far the pointer moved over the last frame. Unlocked, the units are the pixels of GetMousePosition. Locked, the delta keeps counting however far the mouse travels, in the window's cursor units: raw device counts where the platform gives raw motion, otherwise cursor pixels.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Vec2"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.GetMousePosition",
+      "name": "GetMousePosition",
+      "cpp": "GameEngine::Input::Script::GetMousePosition",
+      "header": "Input/InputScriptApi.h",
+      "line": 292,
+      "doc": "Where the last move put the pointer, in pixels of the play surface, with the origin at the top-left corner and +Y down. It is (0, 0) before the first move. It stays where it is when the pointer leaves the window or the window loses focus: read IsPointerInWindow and IsWindowFocused before you act on it.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Vec2"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.GetPointerLockState",
+      "name": "GetPointerLockState",
+      "cpp": "GameEngine::Input::Script::GetPointerLockState",
+      "header": "Input/InputScriptApi.h",
+      "line": 333,
+      "doc": "Where the pointer lock stands: Unlocked while the game does not ask, Pending while it asks and the host has not granted the lock, Locked while the host holds the pointer.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Enum",
+        "type": "Input.PointerLockState"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.IsKeyDown",
+      "name": "IsKeyDown",
+      "cpp": "GameEngine::Input::Script::IsKeyDown",
+      "header": "Input/InputScriptApi.h",
+      "line": 277,
+      "doc": "True while the key is held down.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "key",
+          "kind": "Enum",
+          "type": "Input.Key"
+        }
+      ]
+    },
+    {
+      "id": "Input.IsMouseButtonDown",
+      "name": "IsMouseButtonDown",
+      "cpp": "GameEngine::Input::Script::IsMouseButtonDown",
+      "header": "Input/InputScriptApi.h",
+      "line": 304,
+      "doc": "True while the mouse button is held down.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "button",
+          "kind": "Enum",
+          "type": "Input.MouseButton"
+        }
+      ]
+    },
+    {
+      "id": "Input.IsPointerInWindow",
+      "name": "IsPointerInWindow",
+      "cpp": "GameEngine::Input::Script::IsPointerInWindow",
+      "header": "Input/InputScriptApi.h",
+      "line": 296,
+      "doc": "True from the first move into the window until the pointer leaves it.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.IsWindowFocused",
+      "name": "IsWindowFocused",
+      "cpp": "GameEngine::Input::Script::IsWindowFocused",
+      "header": "Input/InputScriptApi.h",
+      "line": 300,
+      "doc": "True while the window that feeds the game has focus.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.LockPointer",
+      "name": "LockPointer",
+      "cpp": "GameEngine::Input::Script::LockPointer",
+      "header": "Input/InputScriptApi.h",
+      "line": 324,
+      "doc": "Asks the host to hide the cursor and hold the pointer in the window, so the mouse steers the game. The request stays until UnlockPointer or the end of the session.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.PopContext",
+      "name": "PopContext",
+      "cpp": "GameEngine::Input::Script::PopContext",
+      "header": "Input/InputScriptApi.h",
+      "line": 384,
+      "doc": "Removes a context from the context stack.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        }
+      ]
+    },
+    {
+      "id": "Input.PushContext",
+      "name": "PushContext",
+      "cpp": "GameEngine::Input::Script::PushContext",
+      "header": "Input/InputScriptApi.h",
+      "line": 380,
+      "doc": "Puts a context on top of the context stack, which gives its actions priority.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        }
+      ]
+    },
+    {
+      "id": "Input.RegisterAction",
+      "name": "RegisterAction",
+      "cpp": "GameEngine::Input::Script::RegisterAction",
+      "header": "Input/InputScriptApi.h",
+      "line": 341,
+      "doc": "Adds an action to a context. An action of an enabled context is live at once.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        },
+        {
+          "name": "kind",
+          "kind": "Enum",
+          "type": "Input.ActionKind"
+        }
+      ]
+    },
+    {
+      "id": "Input.RemoveAction",
+      "name": "RemoveAction",
+      "cpp": "GameEngine::Input::Script::RemoveAction",
+      "header": "Input/InputScriptApi.h",
+      "line": 345,
+      "doc": "Removes an action and its bindings from a context.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "action",
+          "kind": "StringId"
+        }
+      ]
+    },
+    {
+      "id": "Input.SetContextEnabled",
+      "name": "SetContextEnabled",
+      "cpp": "GameEngine::Input::Script::SetContextEnabled",
+      "header": "Input/InputScriptApi.h",
+      "line": 388,
+      "doc": "Turns a context's actions on or off.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "context",
+          "kind": "StringId"
+        },
+        {
+          "name": "enabled",
+          "kind": "Bool"
+        }
+      ]
+    },
+    {
+      "id": "Input.UnlockPointer",
+      "name": "UnlockPointer",
+      "cpp": "GameEngine::Input::Script::UnlockPointer",
+      "header": "Input/InputScriptApi.h",
+      "line": 328,
+      "doc": "Withdraws the pointer lock request.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": []
+    },
+    {
+      "id": "Input.WasKeyPressed",
+      "name": "WasKeyPressed",
+      "cpp": "GameEngine::Input::Script::WasKeyPressed",
+      "header": "Input/InputScriptApi.h",
+      "line": 281,
+      "doc": "True in the frame the key went down.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "key",
+          "kind": "Enum",
+          "type": "Input.Key"
+        }
+      ]
+    },
+    {
+      "id": "Input.WasKeyReleased",
+      "name": "WasKeyReleased",
+      "cpp": "GameEngine::Input::Script::WasKeyReleased",
+      "header": "Input/InputScriptApi.h",
+      "line": 285,
+      "doc": "True in the frame the key came up.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "key",
+          "kind": "Enum",
+          "type": "Input.Key"
+        }
+      ]
+    },
+    {
+      "id": "Input.WasMouseButtonPressed",
+      "name": "WasMouseButtonPressed",
+      "cpp": "GameEngine::Input::Script::WasMouseButtonPressed",
+      "header": "Input/InputScriptApi.h",
+      "line": 308,
+      "doc": "True in the frame the mouse button went down, also when it came up again in the same frame.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "button",
+          "kind": "Enum",
+          "type": "Input.MouseButton"
+        }
+      ]
+    },
+    {
+      "id": "Input.WasMouseButtonReleased",
+      "name": "WasMouseButtonReleased",
+      "cpp": "GameEngine::Input::Script::WasMouseButtonReleased",
+      "header": "Input/InputScriptApi.h",
+      "line": 312,
+      "doc": "True in the frame the mouse button came up, also when it went down in the same frame.",
+      "thread": "engine",
+      "context": "InputSystem",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "button",
+          "kind": "Enum",
+          "type": "Input.MouseButton"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "Input.ActionState",
+      "name": "ActionState",
+      "cpp": "GameEngine::Input::ActionState",
+      "header": "Input/InputScriptApi.h",
+      "line": 235,
+      "doc": "The state of an action for the current frame.",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {
+          "name": "pressed",
+          "kind": "Bool",
+          "offset": 0,
+          "default": "false"
+        },
+        {
+          "name": "justPressed",
+          "kind": "Bool",
+          "offset": 1,
+          "default": "false"
+        },
+        {
+          "name": "justReleased",
+          "kind": "Bool",
+          "offset": 2,
+          "default": "false"
+        },
+        {
+          "name": "value",
+          "kind": "Float",
+          "offset": 4,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

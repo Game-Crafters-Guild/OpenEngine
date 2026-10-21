@@ -56,7 +56,7 @@ RenderExtractionSystem::WorldRenderableRecord MakeRecord(
     rec.worldTransform.matrix[14] = worldPos.z;
     rec.worldTransform.Version = version;
 
-    rec.meshRenderer.renderLayerMask = layerMask;
+    rec.meshRenderer.RenderLayers = GameEngine::Rendering::RenderLayerMask{layerMask};
 
     rec.hasBounds = true;
     rec.bounds.Box.center      = {0.0f, 0.0f, 0.0f};
@@ -307,7 +307,7 @@ TEST_F(SceneTlasFixture, TraverseRayLayerMaskFilters)
 
     // Only bit 1 — e2 only.
     TraverseRayOptions opts;
-    opts.LayerMask = 0x2u;
+    opts.LayerMask = GameEngine::Rendering::RenderLayerMask::FromLayer(1);
 
     std::vector<uint32> hits;
     auto cb = [&](const TlasInstance& inst, float32, float32) {
@@ -488,7 +488,7 @@ TEST_F(SceneTlasFixture, TraverseSphereLayerMaskFilters)
     });
 
     TraverseSphereOptions opts;
-    opts.LayerMask = 0x2u;
+    opts.LayerMask = GameEngine::Rendering::RenderLayerMask::FromLayer(1);
 
     std::vector<uint32> hits;
     auto cb = [&](const TlasInstance& inst) { hits.push_back(inst.Entity.id); };
@@ -1640,7 +1640,7 @@ TEST_F(MeshPickingIntegrationFixture, LayerMaskFiltersAcrossSectors)
     ray.origin    = {0.0f, 0.0f, 0.0f};
     ray.direction = {1.0f, 0.0f, 0.0f};
     TraverseRayOptions opts;
-    opts.LayerMask = 0x1u;  // only entities on layer 0x1
+    opts.LayerMask = GameEngine::Rendering::RenderLayerMask::Default();  // only entities on layer 0
 
     std::vector<uint32> ids;
     tlas.TraverseRay(ray, opts, [&](const TlasInstance& inst, float32, float32) {
@@ -1703,7 +1703,7 @@ ECS::EntityHandle MakeRealEntity(ECS::World& world,
     world.AddComponentImmediate<Components::WorldTransform>(e, wt);
 
     Components::MeshRenderer mr{};
-    mr.renderLayerMask = 0xFFFFFFFFu;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::All();
     world.AddComponentImmediate<Components::MeshRenderer>(e, mr);
 
     Components::LocalBounds lb{};

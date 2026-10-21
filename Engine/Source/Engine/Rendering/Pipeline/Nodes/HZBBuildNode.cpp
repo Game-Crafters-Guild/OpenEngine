@@ -490,7 +490,8 @@ bool HZBBuildNode::TryCompileSlangChainShader(ShaderSourceKind kind, ShaderPacka
                     "resolve; falling back to the prebuilt GLSL package");
         return false;
     }
-    const std::filesystem::path& cacheRoot = ShaderProgramAsset::GetShaderCacheRoot();
+    const ShaderCacheRoots& cacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
+    const std::filesystem::path& cacheRoot = cacheRoots.Writable;
     if (cacheRoot.empty())
     {
         LOG_WARNING("HZBBuildNode: Slang lane is on but the shader cache root is unset; "
@@ -502,6 +503,7 @@ bool HZBBuildNode::TryCompileSlangChainShader(ShaderSourceKind kind, ShaderPacka
     req.debugName = "hzb_build.slang";
     const std::filesystem::path srcPath(src);
     req.baseDirectory = srcPath.parent_path();
+    req.readOnlyCacheRoots = cacheRoots.ReadOnly;
     req.cacheRoot = cacheRoot;
     ShaderStageCompileSpec spec{};
     spec.stage = "cs";

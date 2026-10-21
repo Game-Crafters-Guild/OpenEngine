@@ -142,7 +142,7 @@ inline void SetLabelDragHighlight(Label* label, bool on)
         return;
 
     const unsigned flags = UIElement::StyleDirty | UIElement::VisualDirty;
-    std::function<void(UIElement*)> markSubtree = [&markSubtree, flags](UIElement* el) {
+    std::function<void(UIElement*)> markSubtree = [&markSubtree](UIElement* el) {
         if (!el)
             return;
         el->MarkDirty(flags);

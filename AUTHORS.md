@@ -9,6 +9,7 @@
 - Tim Aidley (TimAidley)
 - Amelia Mesdag (AmeliaMesdag)
 - Max (maxchaos1985)
+- Sho (CultivationEra)
 
 Published by Game Crafters' Guild (Gamecrafters Guild Limited, registered in England and Wales, number 15379752).
 Contact: Game Crafters' Guild, contact@gamecraftersguild.com.

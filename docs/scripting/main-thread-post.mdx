@@ -1,0 +1,58 @@
+---
+title: The main thread from a thread of your own
+description: MainThread.Post runs an action on the engine's main thread at the end of the frame, and which threads each scripting call admits.
+sidebar:
+  order: 11
+---
+
+A script's systems run where the engine schedules them, and most scripting calls expect that. A thread of your own (`Task.Run`, a timer, a socket callback) runs whenever it likes, including while a frame is writing what a call reads. `MainThread.Post` is how such a thread hands work to the engine's main thread.
+
+## Posting to the main thread
+
+```csharp title="Apply a download's result on the main thread"
+using GameEngine.Scripting;
+
+static readonly HttpClient s_Client = new();
+
+async Task DownloadAndApply(Uri uri)
+{
+    byte[] bytes = await s_Client.GetByteArrayAsync(uri);    // a thread-pool thread
+    MainThread.Post(() => ApplyDownloadedLevel(bytes));       // runs on the main thread
+}
+```
+
+`MainThread.Post(Action)` in `GameEngine.Scripting`:
+
+- **When.** The action runs on the main thread at the end of the current frame, after this frame's systems and before the next frame's first system.
+- **Order.** Actions run in the order they were posted, all of a frame's posts in that frame's batch. An action that posts again lands in the next frame's batch, so an action that reposts itself runs once a frame.
+- **Never on another thread.** The action waits for the main thread however long the main thread is busy (a long load, a shader compile). It never runs on another thread instead, the NativeAOT Player included.
+- **Exceptions.** An exception the action throws is reported on the console and does not reach the frame or the other actions.
+- **Hot reload.** An action whose code lives in a script assembly that unloads before it runs is discarded. It would run code that is going away.
+- **Quit.** Actions still queued when the engine shuts down are discarded, not run. A post after the engine shut down is dropped, and the log says so.
+- **No frame loop.** In a process with no frame loop (no engine initialized, or a `dotnet test` host whose engine the scripting library started) the action runs at once, on the posting thread: nothing else drives the engine there.
+
+:::note[Why there is no waiting form]
+
+`Post` returns nothing and nothing waits for the action. The main thread inside a frame waits for the frame's systems to finish, so a system that waited for the main thread would wait for itself. To get a result back, have the action write it somewhere your thread reads.
+
+:::
+
+## Which threads each call admits
+
+| Call | Admitted on |
+|---|---|
+| `ModelApi.GetExtras` | Any thread, while the engine runs: a reload replaces a model's extras whole, and a read sees the extras before it or after it. |
+| `AnimatorApi.PollEvents` | The engine's threads: the main thread, or a system's update on whichever thread the scheduler runs it. Refused on a thread of your own, with a message naming `MainThread.Post`. |
+| The element-type registration and reload verdict (`GE_UI_RegisterElementType`, `GE_UI_NotifyReloadCompleted`) | Only inside a registration window (`GE_UI_RequestTypeRegistrationWindow`), on the thread running it. The C# element types make both calls there for you. |
+| The element-type unload sweep (`GE_UI_OrphanElementTypes`) | The main thread outside any job body: the hot reload's own unload. |
+
+Two questions decide the thread rules, and the engine answers them the same way whichever thread the scheduler picked:
+
+- *Is this thread inside the engine's scheduling order?* True on the main thread and inside any job body, on a worker or on the main thread. A thread of your own answers no. `PollEvents` asks this.
+- *May this thread change frame state now?* True on the main thread outside any job body. The unload sweep asks this.
+
+:::caution[One answer that depends on the schedule]
+
+A script that calls `GE_UI_OrphanElementTypes` itself from a system's update is admitted while its systems run on the main thread outside a job body, which is where they run today. It is refused for the rest of the process if they run as a job body. Nothing documented makes that call. The C# element types sweep only from the hot reload's unload.
+
+:::

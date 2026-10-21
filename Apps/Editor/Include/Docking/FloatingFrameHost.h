@@ -54,6 +54,9 @@ class FloatingFrameHost
     /// panels itself.
     void DismissAll();
 
+    /// The panel id of every frame shown now.
+    std::vector<std::string> PanelIds() const;
+
   private:
     void TearOff(const std::string& panelId, float cursorX, float cursorY);
     void QueueClose(FloatingPanel* frame);

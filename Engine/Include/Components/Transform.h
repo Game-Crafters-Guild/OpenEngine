@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ECS/RequiredComponents.h"
 #include "Types/Types.h"
 #include "Mathematics/Vector3.h"
 #include "Mathematics/Quaternion.h"
@@ -21,7 +22,7 @@ namespace Components
 // Authoring/editor code should treat this as the local transform. World-space
 // consumers (rendering, bounds, physics, etc.) are expected to read from
 // WorldTransform, which is derived from Transform + Parent hierarchy by
-// TransformHierarchySystem (see docs/TransformHierarchySystem.md).
+// TransformHierarchySystem (see docs/scripting/transform-hierarchy.mdx).
 // @ge-no-add  every entity always has a Transform; not user-addable via the menu.
 struct Transform
 {
@@ -271,7 +272,12 @@ struct Transform
 //
 // VERSION SEMANTICS: monotonic uint32, may wrap at ~4 billion frames (>2 years
 // at 60 FPS). Consumers compare cached vs current value; equality means "no
-// change since last observation." Wrap is not handled in v1 — if it ever
+// change since last observation." On an entity with a Transform, Version 0
+// means TransformHierarchySystem has not resolved it yet: the component is
+// placed with the Transform (it is required), so a consumer that needs the
+// placed pose before the first resolve waits for a nonzero Version, not for the
+// component. On an entity with no Transform, nothing resolves it, and whatever
+// it holds is the entity's pose. Wrap is not handled in v1 — if it ever
 // matters, switch to uint64 or rebuild detection logic.
 // [DoNotSerialize] — derived world matrix, recomputed from Transform each frame; never authored.
 struct WorldTransform
@@ -349,3 +355,11 @@ using LocalTransform = Transform;
 
 } // namespace Components
 } // namespace GameEngine
+
+// Every entity with a Transform holds its WorldTransform from creation, so
+// nothing adds it a frame later with an archetype move per entity.
+template <>
+struct GameEngine::ECS::Detail::RequiredComponents<GameEngine::Components::Transform>
+{
+    using type = TypeList<GameEngine::Components::WorldTransform>;
+};

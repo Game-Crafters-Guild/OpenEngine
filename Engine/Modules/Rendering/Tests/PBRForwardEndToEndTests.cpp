@@ -319,7 +319,7 @@ TEST(PBRForward, EndToEnd_ComputeLUT_Draw_Tonemap_Readback)
     TextureHandle ldr = dev->CreateTexture(ldrD);
     ASSERT_TRUE(ldr.IsValid());
 
-    // Reflection-driven ACES tonemap: HDR -> LDR
+    // Reflection-driven tonemap: HDR -> LDR
     std::vector<uint8_t> vsFS = Utils::LoadShaderFile("fullscreen_noinput.vert.spv");
     std::vector<uint8_t> fsTM = Utils::LoadShaderFile("tonemap.frag.spv");
     ASSERT_FALSE(vsFS.empty());
@@ -334,7 +334,7 @@ TEST(PBRForward, EndToEnd_ComputeLUT_Draw_Tonemap_Readback)
     tm.type = PipelineType::Graphics;
     tm.vertexShader = vsFS;
     tm.pixelShader = fsTM;
-    tm.debugName = "TonemapACES";
+    tm.debugName = "Tonemap";
     MaterialBuilder::FormatsHint tmF{};
     tmF.ColorFormats = {(uint32_t)TextureFormat::RGBA8_UNORM};
     std::string tmErr;
@@ -641,7 +641,7 @@ TEST(PBRForward, EndToEnd_Tonemap_FromClearedHDR)
     TextureHandle ldr = dev->CreateTexture(ldrD);
     ASSERT_TRUE(ldr.IsValid());
 
-    // Tonemap pipeline (fullscreen no-input VS + ACES FS), reflection-driven
+    // Tonemap pipeline (fullscreen no-input VS + tonemap FS), reflection-driven
     std::vector<uint8_t> vsFS = Utils::LoadShaderFile("fullscreen_noinput.vert.spv");
     std::vector<uint8_t> fsTM = Utils::LoadShaderFile("tonemap.frag.spv");
     ASSERT_FALSE(vsFS.empty());

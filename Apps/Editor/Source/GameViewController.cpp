@@ -174,12 +174,7 @@ std::optional<Engine::Renderer::Camera> GameViewController::PrepareView(
     else
         rs->Views().SetViewCamera(m_ViewId, m_CameraId);
 
-    // OnDemand views participate in the next extraction frame when armed on
-    // tab press, then are armed again by the normal declaration on mouse-up.
-    // A hidden view still lapses within two frames when no activation is armed.
-    rs->Views().RequestViewFrame(m_ViewId);
-    rs->Views().SetCameraPostProcessMask(m_CameraId, 0xFFFFFFFFu);
-    rs->Views().SetViewRenderLayerMask(m_ViewId, 1u);
+    rs->Views().SetCameraVolumeLayers(m_CameraId, Rendering::RenderLayerMask::All());
     rs->Views().SetViewActiveRenderPipeline(m_ViewId, true);
     rs->Views().SetViewCullingStrategy(m_ViewId, Rendering::MakeDefaultOcclusionStrategyOrNull());
     // Render scale is per-view pipeline state: the render targets stay 1:1 with
@@ -204,11 +199,14 @@ std::optional<Engine::Renderer::Camera> GameViewController::PrepareView(
         activeCam = Engine::Renderer::FindActiveCamera(*world);
     m_HadCameraThisFrame = activeCam.has_value();
     UpdateExposureReadback(activeCam && activeCam->params.ExposureControl == Components::ExposureMode::Auto);
+    // The view is OnDemand: armed here, on tab press and on the normal declaration after it, it
+    // draws its camera's Visible Layers for the frame. With no camera it is not armed and sleeps,
+    // and a hidden view lapses within two frames of its last arm.
+    Engine::Renderer::DeclareGameCameraView(rs->Views(), m_ViewId, activeCam ? &*activeCam : nullptr);
     if (!activeCam)
     {
         m_DeclaredCamera.reset();
         rs->Views().SetViewActiveRenderPipeline(m_ViewId, false);
-        rs->Views().SetViewRenderLayerMask(m_ViewId, 0u);
         return std::nullopt;
     }
 
@@ -216,7 +214,7 @@ std::optional<Engine::Renderer::Camera> GameViewController::PrepareView(
     m_PixelPerfectStateRG = rs->Views().GetViewPixelPerfect(m_ViewId);
     m_PanelWRG = w;
     m_PanelHRG = h;
-    rs->Views().SetCameraPostProcessMask(m_CameraId, activeCam->params.PostProcessMask);
+    rs->Views().SetCameraVolumeLayers(m_CameraId, activeCam->params.VolumeLayers);
     rs->Views().SetCameraExposure(m_CameraId, Engine::Renderer::ToCameraExposure(activeCam->params));
 
     Rendering::ViewClearConfig clear{};
@@ -339,7 +337,7 @@ bool GameViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& frame
     m_PixelPerfectStateRG = rs->Views().GetViewPixelPerfect(m_ViewId);
     m_PanelWRG = w;
     m_PanelHRG = h;
-    rs->Views().SetCameraPostProcessMask(m_CameraId, activeCam->params.PostProcessMask);
+    rs->Views().SetCameraVolumeLayers(m_CameraId, activeCam->params.VolumeLayers);
     rs->Views().SetCameraExposure(m_CameraId, Engine::Renderer::ToCameraExposure(activeCam->params));
     // The camera's explicit render scale outranks the editor-side override set
     // earlier this frame (0 = inherit; see Components::Camera::RenderScale).
@@ -404,7 +402,8 @@ bool GameViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& frame
 
     const auto& letterbox = rs->Views().GetViewLetterbox(m_ViewId);
     m_DeclaredCamera = DeclaredCamera{rs->Views().ResolveCameraData(m_ViewId),
-                                     activeCam->params.ExposureControl, frame.FrameIndex(),
+                                     activeCam->params.ExposureControl, activeCam->params.AutoExposureMeter,
+                                     frame.FrameIndex(),
                                      letterbox.active ? letterbox.width : renderW,
                                      letterbox.active ? letterbox.height : renderH};
     outTargets.View = m_ViewId;

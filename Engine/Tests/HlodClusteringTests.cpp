@@ -49,6 +49,28 @@ TEST(HlodClustering, SingleMemberFormsOneCluster) {
     EXPECT_EQ((t.Clusters[0].Cell), (CellCoord{0, 0, 0}));
 }
 
+// Members in one cell on different layers never share a proxy: a shared proxy would draw a layer-2 member
+// in a view that draws only layer 0. Each cluster carries its members' layers.
+TEST(HlodClustering, MembersInOneCellOnDifferentLayersFormTwoClusters) {
+    MemberInput members[] = {
+        MakeMember(0, 1.0f, 1.0f, 1.0f, 1.0f),
+        MakeMember(1, 8.0f, 8.0f, 8.0f, 1.0f),
+        MakeMember(2, 5.0f, 5.0f, 5.0f, 1.0f),
+    };
+    members[1].RenderLayers = Rendering::RenderLayerMask::FromLayer(2);
+    ClusterTable t = BuildClusters(members, DefaultConfig());
+    ASSERT_EQ(t.Clusters.size(), 2u);
+    for (const Cluster& c : t.Clusters) {
+        EXPECT_EQ((c.Cell), (CellCoord{0, 0, 0}));
+        for (uint32 mi : c.MemberIndices)
+            EXPECT_EQ(members[mi].RenderLayers, c.RenderLayers) << "member " << mi;
+    }
+    EXPECT_EQ(t.Clusters[0].RenderLayers, Rendering::RenderLayerMask::Default());
+    EXPECT_EQ(t.Clusters[0].MemberIndices, (std::vector<uint32>{0u, 2u}));
+    EXPECT_EQ(t.Clusters[1].RenderLayers, Rendering::RenderLayerMask::FromLayer(2));
+    EXPECT_EQ(t.Clusters[1].MemberIndices, (std::vector<uint32>{1u}));
+}
+
 TEST(HlodClustering, MembersInSameCellCluster) {
     // Both centers within cell (0,0,0) of a 10-unit grid.
     MemberInput members[] = {

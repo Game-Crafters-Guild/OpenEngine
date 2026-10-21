@@ -51,7 +51,7 @@ TEST(AssetDatabase, NormalizesLegacyAssetsPrefixedPathsWhenAssetRootIsAssetsDir)
         std::ofstream out(dbPath, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.is_open()) << dbPath.string();
         out << "{\"guid\":\"" << guid.ToString() << "\","
-            << "\"path\":\"Assets/Icons/Folder@64px.png\","
+            << "\"path\":\"Assets/Icons/Folder@64px.svg\","
             << "\"type\":\"Texture\","
             << "\"missing\":false,"
             << "\"kv\":{}}\n";
@@ -77,8 +77,8 @@ TEST(AssetDatabase, NormalizesLegacyAssetsPrefixedPathsWhenAssetRootIsAssetsDir)
     // Saving should persist the normalized canonical path (no leading "Assets/").
     EXPECT_TRUE(reg.SaveToFile({}));
     const std::string txt = ReadAllText(dbPath);
-    EXPECT_NE(txt.find("\"path\":\"Icons/Folder@64px.png\""), std::string::npos);
-    EXPECT_EQ(txt.find("\"path\":\"Assets/Icons/Folder@64px.png\""), std::string::npos);
+    EXPECT_NE(txt.find("\"path\":\"Icons/Folder@64px.svg\""), std::string::npos);
+    EXPECT_EQ(txt.find("\"path\":\"Assets/Icons/Folder@64px.svg\""), std::string::npos);
 
     reg.Shutdown();
     fs::remove_all(tmpRoot, ec);

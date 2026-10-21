@@ -42,7 +42,7 @@
 }
 
 .missing-assets-refresh-icon {
-    background-image: url("editor:Icons/ResetReload.png");
+    background-image: url("editor:Icons/ResetReload.svg");
     background-image-tint: rgba(200, 200, 200, 1.0);
     background-size: 16px 16px;
     background-repeat: no-repeat;
@@ -85,7 +85,7 @@
 
 .missing-assets-row-title {
     font-size: var(--ui_font_size_base);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ui_color_text);
 }
 

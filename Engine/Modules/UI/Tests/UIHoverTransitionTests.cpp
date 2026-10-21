@@ -52,7 +52,7 @@ TEST(UIManagerHoverTests, MouseEnterAndLeaveOnlyOnTransitions)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
 
     int rootEnterCount = 0;
@@ -144,7 +144,7 @@ TEST(UIManagerHoverTests, CursorLeaveDispatchesMouseLeave)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* a = r->FindById("a");
+    UIElement* a = r->FindById("a"_sid);
     ASSERT_NE(a, nullptr);
 
     int rootEnterCount = 0;
@@ -222,8 +222,8 @@ TEST(UIManagerHoverTests, PointerEventsNoneIsIgnoredForHover)
 
     UIElement* r = ui.GetRootElement();
     ASSERT_NE(r, nullptr);
-    UIElement* under = r->FindById("under");
-    UIElement* overlay = r->FindById("overlay");
+    UIElement* under = r->FindById("under"_sid);
+    UIElement* overlay = r->FindById("overlay"_sid);
     ASSERT_NE(under, nullptr);
     ASSERT_NE(overlay, nullptr);
 
@@ -269,7 +269,7 @@ TEST(UIManagerHoverTests, OverlayLayerPriorityMatchesRenderOrdering)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIElement* modal = root->FindById("modal");
+    UIElement* modal = root->FindById("modal"_sid);
     ASSERT_NE(modal, nullptr);
     modal->SetOverlayLayer(OverlayLayer::Modal);
 
@@ -289,7 +289,7 @@ TEST(UIManagerHoverTests, OverlayLayerPriorityMatchesRenderOrdering)
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* ordinary = ui.GetRootElement()->FindById("ordinary");
+    UIElement* ordinary = ui.GetRootElement()->FindById("ordinary"_sid);
     ASSERT_NE(ordinary, nullptr);
 
     int modalEnter = 0;
@@ -323,8 +323,8 @@ TEST(UIManagerHoverTests, NestedDropdownKeepsContainingModalPriority)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIElement* modal = root->FindById("modal");
-    UIElement* popup = root->FindById("dropdown-popup");
+    UIElement* modal = root->FindById("modal"_sid);
+    UIElement* popup = root->FindById("dropdown-popup"_sid);
     ASSERT_NE(modal, nullptr);
     ASSERT_NE(popup, nullptr);
     modal->SetOverlayLayer(OverlayLayer::Modal);
@@ -346,7 +346,7 @@ TEST(UIManagerHoverTests, NestedDropdownKeepsContainingModalPriority)
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    UIElement* backdrop = ui.GetRootElement()->FindById("backdrop");
+    UIElement* backdrop = ui.GetRootElement()->FindById("backdrop"_sid);
     ASSERT_NE(backdrop, nullptr);
     int backdropEnter = 0;
     int popupEnter = 0;
@@ -380,8 +380,8 @@ TEST(UIManagerHoverTests, BlockingDialogOutranksLaterModalFloatingPanel)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIElement* dialog = root->FindById("dialog");
-    UIElement* floating = root->FindById("floating");
+    UIElement* dialog = root->FindById("dialog"_sid);
+    UIElement* floating = root->FindById("floating"_sid);
     ASSERT_NE(dialog, nullptr);
     ASSERT_NE(floating, nullptr);
     dialog->SetOverlayLayer(OverlayLayer::BlockingDialog);
@@ -403,8 +403,8 @@ TEST(UIManagerHoverTests, BlockingDialogOutranksLaterModalFloatingPanel)
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
 
-    dialog = ui.GetRootElement()->FindById("dialog");
-    floating = ui.GetRootElement()->FindById("floating");
+    dialog = ui.GetRootElement()->FindById("dialog"_sid);
+    floating = ui.GetRootElement()->FindById("floating"_sid);
     int dialogEnter = 0;
     int floatingEnter = 0;
     dialog->RegisterEventHandler(kEventMouseEnter, [&](UIEvent&) { ++dialogEnter; });

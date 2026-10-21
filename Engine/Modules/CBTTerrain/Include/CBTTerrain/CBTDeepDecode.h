@@ -57,13 +57,16 @@
 
 // The error-free transforms below are correct ONLY without FP contraction (see header
 // note). MSVC: float_control(push) saves the includer's fp_contract state so this
-// header cannot leak a contraction change into the including TU; GCC/Clang honor the
-// STDC pragma (leaking OFF there is conservative — stricter, never wrong). The
-// Df64ArithmeticHoldsExtendedPrecision probe fails loudly if contraction ever breaks
+// header cannot leak a contraction change into the including TU. GCC uses its scoped
+// optimization options; Clang honors the STDC pragma (leaking OFF there is conservative).
+// The Df64ArithmeticHoldsExtendedPrecision probe fails loudly if contraction ever breaks
 // the transforms regardless of pragma behavior.
 #if defined(_MSC_VER)
 #pragma float_control(push)
 #pragma fp_contract(off)
+#elif defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize ("fp-contract=off")
 #else
 #pragma STDC FP_CONTRACT OFF
 #endif
@@ -343,4 +346,6 @@ inline void DecodeExact(const CubeNum& num, double radiusMeters, double reliefMe
 
 #if defined(_MSC_VER)
 #pragma float_control(pop)
+#elif defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
 #endif

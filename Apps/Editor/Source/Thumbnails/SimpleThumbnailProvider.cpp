@@ -107,23 +107,22 @@ std::string SimpleThumbnailProvider::GetOrRequest(const std::filesystem::path& a
     // Non-image assets: provide a sensible default for common model types so that
     // FBX/OBJ/GLTF/etc. show a model icon instead of an empty background.
     // The returned path is relative to the Assets/ root, matching the
-    // IThumbnailProvider contract. The actual icon file is expected at:
-    //   Assets/Icons/ModelThumbnail@64px.png
+    // IThumbnailProvider contract: the editor's model icon, Assets/Icons/3d.svg.
     if (!isImage && isModel && relStr.empty())
     {
-        relStr = "Icons/ModelThumbnail@64px.png";
+        relStr = "Icons/3d.svg";
     }
 
     // Audio assets: use music note icon.
     if (!isImage && isAudio && relStr.empty())
     {
-        relStr = "Icons/music-note-icon@64px.png";
+        relStr = "Icons/music-note-icon@64px.svg";
     }
 
     // Video assets: use film/play icon.
     if (!isImage && isVideo && relStr.empty())
     {
-        relStr = "Icons/videocam.png";
+        relStr = "Icons/videocam.svg";
     }
 
     // Cache result (may be empty if not supported)

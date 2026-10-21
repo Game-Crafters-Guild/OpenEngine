@@ -1,0 +1,51 @@
+---
+title: ECS immediate and deferred operations
+description: When to use immediate or deferred ECS operations, and how to reserve entity and archetype capacity ahead of a bulk load.
+sidebar:
+  order: 7
+---
+
+This short guide explains when to use immediate or deferred operations, and how to reserve capacity ahead of time for better performance.
+
+## Immediate and deferred
+
+- **Deferred (the default):**
+  - Operations such as `Entity::Set`, `Entity::Remove<T>()`, and `World::AddComponent` enqueue commands that `World::ProcessCommands()` applies.
+  - Batching reduces contention and lets structural changes coalesce.
+  - Effects are not visible until `ProcessCommands()`, so reads (`Get`, `Has`, view iteration) must allow for that.
+- **Immediate:**
+  - Use the explicit immediate calls where they exist (such as `DestroyEntityImmediate`), or the direct bulk mode, to bypass the command buffer.
+  - For bulk updates and streaming: `World::BeginBulkOperations()`, `World::CreateDirect()` for fast handle creation without enqueuing, `World::SetComponentDirect(entity, component)`, then `World::EndBulkOperations()`.
+  - Timing is deterministic and the command buffer's capacity does not apply.
+  - There is less batching: take care with thread safety and contention.
+
+:::tip
+Prefer deferred operations in general gameplay code. Use the direct bulk path for imports, large streaming loads, or tight loops where you control the ordering.
+:::
+
+## Reserving capacity
+
+- `ReserveEntities(count)` pre-allocates entity metadata, to reduce growth overhead.
+- `ReserveArchetypeCapacity<Components...>(count)` makes sure the archetype for that component set has room for at least `count` entities. It avoids costly reallocation when many matching entities are created, or moved into that archetype, in a short time.
+
+```cpp title="Reserve, then create in bulk"
+World world;
+
+// Reserve global entity metadata.
+world.ReserveEntities(100000);
+
+// Reserve capacity for the Position and Velocity archetype.
+world.ReserveArchetypeCapacity<Position, Velocity>(50000);
+
+// The bulk creation path.
+world.BeginBulkOperations();
+for (int i = 0; i < 50000; ++i) {
+    auto h = world.CreateDirect();
+    world.SetComponentDirect(h, Position{float(i), 0, 0});
+    world.SetComponentDirect(h, Velocity{1, 0, 0});
+}
+world.EndBulkOperations();
+```
+
+- Reserve calls are hints. They do not change semantics.
+- Use direct operations only in carefully controlled sections, so they do not race with other systems iterating the world.

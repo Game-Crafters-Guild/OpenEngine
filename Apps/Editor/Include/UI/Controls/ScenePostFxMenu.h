@@ -18,12 +18,12 @@ namespace Editor
 // effect sits on an enabled PostProcessVolume in the scene, so the set comes out of an ECS
 // scan. Empty when `controller` is null — the manipulator shows nothing.
 //
-// `onAutoExposureToggled` runs after the auto-exposure toggle: it seeds Fixed EV100 as a
-// side effect (AE-lock), and an open camera-settings popup must pick up the seeded value
-// or its stale field would clobber the seed.
+// `onExposureModeChanged` runs after an exposure mode row: a switch to Fixed seeds Fixed
+// EV100 as a side effect (AE-lock), and an open camera-settings popup must pick up the
+// seeded value or its stale field would clobber the seed.
 std::vector<ContextMenuManipulator::Item> BuildScenePostFxMenuItems(
     SceneViewController* controller, SceneViewToolbar* toolbar,
-    std::function<void()> onAutoExposureToggled);
+    std::function<void()> onExposureModeChanged);
 
 } // namespace Editor
 } // namespace GameEngine

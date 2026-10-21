@@ -1,0 +1,18 @@
+---
+title: Panel layouts
+description: How the editor keeps your panel layout between sessions, and how layout presets save named layouts that travel with the project.
+---
+
+Drag a panel's tab to move it to another group, or to the edge of a group to split it.
+
+## The working layout
+
+The editor reopens each project with the panels where you left them. The working layout is kept per user and per project, in the editor's user data folder: `%APPDATA%\GameEngine\Editor\` on Windows, `~/Library/Application Support/GameEngine/Editor/` on macOS, `$XDG_DATA_HOME/GameEngine/Editor/` (else `~/.local/share/GameEngine/Editor/`) on Linux, or the folder `GE_EDITOR_USER_DATA_ROOT` names. Each project has its own folder under `Projects/` there, named by an id made from the project's path, and the layout is in that folder's `UserSettings.json`. When the editor restores the layout, the Log panel names the file. The editor saves the layout when it quits and when you open another project.
+
+- A panel that was in its own window when the editor quit starts closed.
+- A panel from a package keeps its place: its tab is empty until the package loads, then the panel appears in it. If the package is no longer installed, the empty tab stays for that session and is gone at the next start.
+- When the saved layout cannot be read, or names a panel the editor no longer has, the editor opens with the active layout preset instead. The Log panel says why.
+
+## Layout presets
+
+Presets are the shared, named layouts. The **+** button in the layout toolbar saves the current layout as a preset, and a click on a preset switches to it. Presets are stored in the project's `.Editor/ProjectSettings.json`, so they travel with the project when it is shared or committed. When the working layout differs from the active preset, a click on any preset, the active one included, first asks whether to save the changes as a new preset.

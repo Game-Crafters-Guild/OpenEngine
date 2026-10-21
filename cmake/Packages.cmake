@@ -109,8 +109,8 @@ include(${CMAKE_CURRENT_LIST_DIR}/EnginePackageDefines.cmake)
 # the ${CMAKE_BINARY_DIR}/PackagesPrebuilt/ per-config intermediate;
 # ge_stage_packages overlays it onto every
 # consumer's staged tree, and ge_stage_engine_package_markers writes the
-# engine_abi markers after the SDK is staged (the digest hashes the STAGED
-# import libs' identity).
+# engine_abi markers after the SDK is staged (the digest reads the link stamps
+# of the STAGED SDK binaries).
 #
 # The module's EFFECTIVE compile defines come from its package manifest through
 # ge_engine_package_module_defines (cmake/EnginePackageDefines.cmake), the same
@@ -226,9 +226,8 @@ endfunction()
 
 # Writes the engine_abi markers into <exe dir>/Packages/... AFTER the
 # SDK and the packages are staged (POST_BUILD order = call order): the digest
-# hashes the STAGED SDK import libs, so it must run against their final
-# identity. A marker mismatch at load time is a loud source-build fallback,
-# never a wrong load. The module list rides a configure-time file — embedding
+# reads the link stamps of the STAGED SDK binaries. A marker mismatch at load
+# time is a loud source-build fallback. The module list rides a configure-time file — embedding
 # a ;-list in a COMMAND argument does not survive MSBuild quoting.
 function(ge_stage_engine_package_markers host_target)
     get_property(_gepkg_modules GLOBAL PROPERTY GE_ENGINE_PACKAGE_PREBUILT_MODULES)
