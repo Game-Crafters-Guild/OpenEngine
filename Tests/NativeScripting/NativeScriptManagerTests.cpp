@@ -957,6 +957,7 @@ struct FaultingUserSystem : ns::IUserSystem
     }
     void OnDestroy(GameEngine::ECS::World&) override {}
     const char* Name() const override { return "FaultingUserSystem"; }
+    int Order() const override { return -1; } // runs ahead of the healthy system
 };
 #endif
 } // namespace
@@ -968,8 +969,8 @@ TEST(NativeScriptCrashIsolation, HardFaultDisablesSystemAndHostSurvives)
 
     FaultingUserSystem faulty;
     CountingUserSystem healthy;
-    ns::RegisterUserSystem(&faulty);  // index 0 — faults in OnUpdate
     ns::RegisterUserSystem(&healthy); // index 1 — must still run despite the fault before it
+    ns::RegisterUserSystem(&faulty);  // index 0 (lower Order) — faults in OnUpdate
 
     GameEngine::ECS::World world;
 
@@ -1029,9 +1030,10 @@ TEST(UserSystemRegistry, PerModuleClearDropsOnlyThatModulesSystems)
     ns::RegisterUserSystem(&packageSystem);
     ns::SetActiveRegistrationModule({});
 
+    // Same Order and name: the module id breaks the tie.
     ASSERT_EQ(ns::GetUserSystems().size(), 2u);
-    EXPECT_EQ(ns::GetUserSystems()[0].ModuleId, "UserScripts");
-    EXPECT_EQ(ns::GetUserSystems()[1].ModuleId, "OceanPack");
+    EXPECT_EQ(ns::GetUserSystems()[0].ModuleId, "OceanPack");
+    EXPECT_EQ(ns::GetUserSystems()[1].ModuleId, "UserScripts");
 
     // Package reload: clear + re-register the package module only.
     ns::ClearUserSystems("OceanPack");

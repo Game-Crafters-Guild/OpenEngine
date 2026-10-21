@@ -29,7 +29,8 @@
 // has none of them.
 //
 // ORDER: every hook visits the user systems in ascending `static constexpr int Order` (0 when
-// the struct declares none); systems of equal order run in registration order.
+// the struct declares none); systems of equal order run by qualified name. A member named Order
+// of any other kind is a compile error.
 //
 // Unlike ComponentBase, a system is NOT a POD: it may hold member state (caches, handles), but
 // that state is reset on every hot-reload (the instance is recreated). Durable world state lives

@@ -25,7 +25,9 @@ Every hook is optional; the adapter detects each one with a `requires` expressio
 
 ## The order systems run in
 
-Each hook visits the user systems in ascending `Order`, a `static constexpr int` the struct may declare; a system without one has order 0. Systems of equal order run in the order they registered, which within a module is the order the scanner generates them: by name.
+Each hook visits the user systems in ascending `Order`, a `static constexpr int` the struct may declare; a system without one has order 0. Systems of equal order run by qualified name, compared byte by byte (`Game::Damage` before `Game::Movement`, and any uppercase letter before any lowercase one). A member named `Order` of any other type or kind, such as a `float`, an `unsigned` or a function, fails the build with the declaration to write.
+
+`Order` places native user systems among themselves only. It does not order them against C# systems, which keep their own list, or against the engine's systems; [where each hook runs](#where-each-hook-runs) gives their place in the frame.
 
 ```cpp title="Damage after movement, within the same frame"
 struct MovementSystem : ECS::SystemBase
@@ -43,7 +45,7 @@ struct DamageSystem : ECS::SystemBase
 | Rule | Detail |
 |---|---|
 | Every hook | `OnStart`, `OnUpdate`, `OnPostSimulation` and `OnDestroy` all visit the systems in the same order. |
-| Across modules | The order spans every loaded module: a package's system at order 15 runs between the project's at 10 and 20. Reloading a module puts its systems back in their places. |
+| Across modules | The order spans every loaded module: a package's system at order 15 runs between the project's at 10 and 20. Equal orders still run by name, so the order does not depend on which module loaded first, and reloading a module puts its systems back in their places. |
 | Read once | The order is read when the module registers its systems; changing it takes a rebuild, as any edit does. |
 | A disabled system | A system disabled by a hard fault keeps its place; the others do not move. |
 
@@ -107,11 +109,10 @@ Mesh extraction declares the movement writers as optional dependencies and the b
 
 ## Verification
 
-`NativePostSimulationTests` covers adapter detection, once-per-tick delivery with the native delta, revocation on Stop, module replacement and reset, guarded faults, deferred-command semantics, exclusive execution in mixed and legacy parallel waves, and the assembled rendering, physics and navigation schedule placing the bridge after the writers and before extraction. `CpuTextureSourceTests` drives navigation movement followed by a hook that creates and publishes a lease and reads the pixels back in the same frame. `NativeModuleRejectionTests` loads an ABI-1 probe and checks it is refused before registration. `UserSystemOrderTests` covers the adapter reading `Order`, every hook visiting systems by order and then registration, and a module reload putting its systems back among another module's.
+`NativePostSimulationTests` covers adapter detection, once-per-tick delivery with the native delta, revocation on Stop, module replacement and reset, guarded faults, deferred-command semantics, exclusive execution in mixed and legacy parallel waves, and the assembled rendering, physics and navigation schedule placing the bridge after the writers and before extraction. `CpuTextureSourceTests` drives navigation movement followed by a hook that creates and publishes a lease and reads the pixels back in the same frame. `NativeModuleRejectionTests` loads an ABI-1 probe and checks it is refused before registration. `UserSystemOrderTests` covers the adapter reading `Order` and refusing a misdeclared one, every hook visiting systems by order and then name, equal orders across modules independent of load and reload order, and a disabled system keeping its place.
 
 ## Changelog
 
-- 2026-10-15: User systems run in ascending `Order`; ABI 3.
 - 2026-10-13: Converted from `docs/scripting/native-user-systems.html`.
 - 2026-09-28: The rendering loop uses the shared dependency-aware schedule; remove the unsupported flat-scheduling mode.
 - 2026-09-17: Initial canonical: hook placement, late-hook contract, delivery rules, ABI 2.

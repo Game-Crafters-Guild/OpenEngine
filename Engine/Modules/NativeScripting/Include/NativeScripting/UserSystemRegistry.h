@@ -7,7 +7,7 @@
 // build-time scanner generates a registration TU that wraps each one in a UserSystemAdapter<T>
 // (an IUserSystem) and calls RegisterUserSystem at module load. The bridge (Phase C) walks
 // GetUserSystems() each play-mode frame, in order of each system's Order(): lowest first, and
-// systems of equal order in the order they registered.
+// systems of equal order by Name(), so the order never depends on which module loaded first.
 //
 // Registrations carry an owning MODULE id (P1 packages): NativeScriptManager::LoadModule
 // brackets a module's registrars with SetActiveRegistrationModule, so reloading one module
@@ -47,18 +47,20 @@ public:
     virtual void OnPostSimulation(ECS::World&, float) {}
     virtual bool HasPostSimulation() const { return false; }
     // Where the system runs among the others: every hook visits systems in ascending order,
-    // systems of equal order in registration order. Read once, at registration. The adapter
-    // returns the user struct's `static constexpr int Order`, or 0 without one.
+    // systems of equal order by Name(). Read once, at registration. The adapter returns the user
+    // struct's `static constexpr int Order`, or 0 without one.
     virtual int Order() const { return 0; }
 };
 
-// One registration: the system plus the module that owns it. System is nulled (not erased)
-// when a hard fault disables it for the session; iteration skips null slots.
+// One registration: the system, the module that owns it, and the key it runs by. System is
+// nulled (not erased) when a hard fault disables it for the session; iteration skips null
+// slots. Order and Name are copied at registration, so a disabled entry keeps its place.
 struct UserSystemEntry
 {
     IUserSystem* System = nullptr;
     std::string ModuleId;
-    int Order = 0; // System->Order() at registration
+    int Order = 0;    // System->Order()
+    std::string Name; // System->Name()
 };
 
 // Stamp subsequent RegisterUserSystem calls with `moduleId`. LoadModule sets this around a
@@ -67,8 +69,9 @@ struct UserSystemEntry
 // only, like the registries themselves.
 void SetActiveRegistrationModule(std::string_view moduleId);
 
-// Register a user system under the active registration module, after every registered system
-// whose Order() is not greater than its own. NON-OWNING: the user DLL
+// Register a user system under the active registration module, at its place in the run order:
+// ascending Order(), then Name(), then module id (byte-wise comparisons), so where a system
+// lands does not depend on the order modules load or reload in. NON-OWNING: the user DLL
 // allocates the adapter and the registry keeps the raw pointer. Entries are dropped WITHOUT
 // deleting (the adapter leaks with the never-unloaded user DLL — consistent with the
 // module-leak model). Called from the user DLL's generated registration at module load.
@@ -86,7 +89,7 @@ void ClearUserSystems(std::string_view moduleId);
 // Drop ALL registered user systems (tests + shutdown).
 void ClearUserSystems();
 
-// The registered user systems, in the order they run: by Order(), then registration order.
+// The registered user systems, in the order they run: by Order(), then Name(), then module id.
 const std::vector<UserSystemEntry>& GetUserSystems();
 
 // Play-mode lifecycle: the editor's PlayModeManager (and the standalone Player around its game
