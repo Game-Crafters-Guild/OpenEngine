@@ -58,6 +58,10 @@ layout(set = 0, binding = 8) uniform sampler2D uReprojectedMoments;
 #define GE_SSSR_ARGS_BINDING 6
 #define GE_SSSR_ARGS_READONLY
 #include "ScreenSpaceReflections/sssr_dispatch.glsl"
+// The view's exposure state: radiance is stored at the frame's pre-exposure P, so the absolute
+// luminance floor below is scaled by it, as the temporal resolve's clip floor is.
+#define GE_EXPOSURE_HISTORY_BINDING 9
+#include "Includes/exposure_history.glsl"
 
 // Footprint radii, in texels. The narrow end is what this pass used on a
 // near-mirror; the wide end is the reach a dense-box prototype measured against
@@ -126,7 +130,7 @@ const float kRoughnessSigma = 16.0;
 // scale-invariance rule the depth stop follows.
 const float kRadianceWeightBias = 0.6;
 const float kRadianceWeightFloor = 1e-2;
-const float kRadianceSigmaFloor = 1e-4;
+const float kRadianceSigmaFloor = 1e-4; // absolute luminance; scaled by P where used
 
 // An untraced centre still anchors the result slightly, so a filtered value
 // never drifts entirely off the pixel it belongs to.
@@ -159,7 +163,7 @@ TileSample LoadTileSample(int index)
 
 float RadianceWeight(vec3 reference, float referenceLuminance, vec3 sampleRadiance)
 {
-    float sigma = max(referenceLuminance, kRadianceSigmaFloor);
+    float sigma = max(referenceLuminance, kRadianceSigmaFloor * GE_PreExposure());
     return max(exp(-kRadianceWeightBias * length(sampleRadiance - reference) / sigma),
                kRadianceWeightFloor);
 }

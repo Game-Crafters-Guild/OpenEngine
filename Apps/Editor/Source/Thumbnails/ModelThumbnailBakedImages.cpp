@@ -9,6 +9,7 @@
 #include "Assets/AssetRegistry.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Image/Decode.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Utils/TextureUploadHelpers.h"
@@ -81,12 +82,12 @@ void ModelThumbnailHandler::RequestBakedImages(WindowState& ws)
                 if (!sourceError && !pngError && pngTime >= sourceTime &&
                     ReadFileBytesShared(pngPath, bytes))
                 {
-                    DecodedImage decoded = DecodeImageToRGBA(bytes.data(), bytes.size());
-                    if (decoded.valid)
+                    Image::Image8 decoded = Image::Decode8(bytes, pngPath.string(), Image::DecodeChannels::Rgba);
+                    if (decoded.Valid)
                     {
-                        image.width = decoded.width;
-                        image.height = decoded.height;
-                        image.pixels = std::move(decoded.pixels);
+                        image.width = decoded.Width;
+                        image.height = decoded.Height;
+                        image.pixels = std::move(decoded.Pixels);
                     }
                 }
                 std::lock_guard lock(inbox->mutex);

@@ -3,6 +3,7 @@
 #include "Components/AssetRef.h"
 #include "Components/Rendering/MeshGPUData.h"
 #include "ECS/RequiredComponents.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/StringId.h"
 #include "Types/Types.h"
 #include <string_view>
@@ -38,7 +39,8 @@ struct MeshRenderer
     // Asset-backed model reference. Extraction bind uses this when the
     // handle is still zero (Ensure model GPU resources, then cache the handle).
     Components::ModelRef modelAssetGuid;
-    uint32 renderLayerMask = 1u;
+    // The views that draw this mesh: a view draws it when their layers intersect.
+    Rendering::RenderLayerMask RenderLayers;
     bool castShadows = true;
     bool receiveShadows = true;
     bool motionVectors = true;

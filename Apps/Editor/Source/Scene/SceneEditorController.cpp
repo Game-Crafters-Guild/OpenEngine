@@ -1211,20 +1211,21 @@ void SceneEditorController::PromptDegradedThenSave()
     const std::size_t dropped = degraded->DroppedCount();
     const std::size_t preserved = degraded->SkippedCount() - dropped;
 
-    std::string msg = "This scene loaded with " + std::to_string(degraded->SkippedCount()) +
-                      " assignment(s) this build could not read";
+    std::string msg = "This scene has " + std::to_string(degraded->SkippedCount()) +
+                      " line(s) that did not apply: a value that could not be read, a reference that did not "
+                      "resolve, a field the component does not have, or a line that is not an assignment.";
     if (dropped > 0)
     {
-        msg += ", and saving will permanently drop " + std::to_string(dropped) + " of them from ";
+        msg += " Saving removes " + std::to_string(dropped) + " of them from ";
         msg += degraded->DocumentPath.filename().string() + ".";
     }
     else
     {
-        msg += ". Their original text was preserved and will be written back unchanged.";
+        msg += " Saving writes them back unchanged.";
     }
     if (preserved > 0 && dropped > 0)
-        msg += " The other " + std::to_string(preserved) + " will be written back unchanged.";
-    msg += " See the log for the full list.";
+        msg += " The other " + std::to_string(preserved) + " are written back unchanged.";
+    msg += " The Log panel lists each line and how to fix it.";
 
     m_SaveChangesModal->SetOnSave([this]() { DoSaveConfirmed(DegradedSavePolicy::SaveAnyway); });
     m_SaveChangesModal->SetOnDontSave([this]() { DoSaveAsFlow(); });
@@ -1259,8 +1260,9 @@ bool SceneEditorController::SaveActiveScene(std::string* outError, DegradedSaveP
     {
         if (outError)
             *outError = "scene loaded with " + std::to_string(degraded->SkippedCount()) +
-                        " unreadable assignment(s) (" + std::to_string(degraded->DroppedCount()) +
-                        " would be lost); pass force=true to save anyway, or save to a new path";
+                        " line(s) that did not apply (a save would not keep " +
+                        std::to_string(degraded->DroppedCount()) +
+                        "); pass force=true to save anyway, or save to a new path";
         return false;
     }
     if (!m_Doc->Save(degradedPolicy))

@@ -1,6 +1,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h"
 
 #include "Engine/Rendering/DDGIProbeFeature.h"
+#include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
@@ -87,6 +88,7 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     // Screen-space GTAO, published by the AmbientOcclusion node earlier in the
     // graph; invalid when absent (the binder falls back to the no-occlusion default).
     t.GTAO = d.ResolveTexture(Names::View::GTAO);
+    t.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);
     t.ResolveFromPipeline = d.ResolveFromPipeline;
     // Peel transmissive glass into the dedicated post-grab transmissive pass when this view has any
     // AND this pipeline actually has that pass; otherwise glass renders inline here via the env-cube
@@ -100,6 +102,8 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     Rendering::MaterialKeyword effectiveKeywords = m_PassKeywords;
     if (d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsAOActive())
         effectiveKeywords |= Rendering::MaterialKeyword::GTAO;
+    // The height fog is evaluated in every surface's own shader (forward_fog.glsl).
+    effectiveKeywords |= HeightFogPassKeyword(d);
     // DDGI is consumed only when a DDGIVolume resolved and converged for
     // THIS view's world — mirrors the GTAO gate above. Requires IBL too
     // (DDGI replaces the IBL diffuse term, see ibl.glsl); a pipeline without

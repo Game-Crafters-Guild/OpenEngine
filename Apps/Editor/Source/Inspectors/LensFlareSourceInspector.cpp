@@ -255,7 +255,7 @@ class FlareElementPreview : public UIElement
             return;
 
         const Rendering::TextureHandle texture =
-            ctx.Manager->TryGetBackgroundTextureHandleByGuid(m_TextureGuid);
+            ctx.Manager->BackgroundImages().TryGetHandle(m_TextureGuid);
         if (!texture.IsValid())
             return;
         const uint32_t textureSlot = ctx.Textures->Register(texture);

@@ -308,6 +308,18 @@ void FloatingFrameHost::DismissAll()
     }
 }
 
+std::vector<std::string> FloatingFrameHost::PanelIds() const
+{
+    std::vector<std::string> ids;
+    ids.reserve(m_Frames.size());
+    for (const FloatingPanel* frame : m_Frames)
+    {
+        if (frame)
+            ids.push_back(frame->GetPanelId());
+    }
+    return ids;
+}
+
 void FloatingFrameHost::Unmount(FloatingPanel* frame, EditorWindowContext* mainWindow)
 {
     m_Frames.erase(std::remove(m_Frames.begin(), m_Frames.end(), frame), m_Frames.end());

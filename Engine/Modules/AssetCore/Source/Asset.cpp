@@ -22,7 +22,7 @@ Asset::Asset(const GUID& guid, AssetType type, const std::filesystem::path& path
 }
 
 String Asset::GetName() const {
-    return m_Path.stem().string();
+    return m_Name.empty() ? m_Path.stem().string() : m_Name;
 }
 
 String Asset::GetExtension() const {

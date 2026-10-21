@@ -1,7 +1,10 @@
 #include "Panels/AssetViewPanel.h"
 
+#include "AssetCore/SharedFileRead.h"
 #include "Editor/EditorPaths.h"
 #include "EditorContext.h"
+#include "Image/Decode.h"
+#include "Image/Encode.h"
 #include "Logger/Logger.h"
 #include "Platform/SystemMetrics.h"
 #include "Thumbnails/IThumbnailProvider.h"
@@ -17,8 +20,6 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/CommandList.h"
 #include "Types/StringUtils.h"
-#include <stb_image.h>
-#include <stb_image_write.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -179,17 +180,18 @@ bool GenerateHdriExposurePreview(const std::filesystem::path& assetPath,
     if (std::filesystem::exists(cachePath, ec))
         return true;
 
-    int srcW = 0;
-    int srcH = 0;
-    int srcComp = 0;
-    float* src = stbi_loadf(assetPath.string().c_str(), &srcW, &srcH, &srcComp, 3);
-    if (!src || srcW <= 0 || srcH <= 0)
+    Vector<uint8> fileBytes;
+    const bool read = ReadFileBytesShared(assetPath, fileBytes);
+    const Image::ImageFloat decoded =
+        read ? Image::DecodeFloat(fileBytes, assetPath.string(), Image::DecodeChannels::Rgb) : Image::ImageFloat{};
+    if (!decoded.Valid)
     {
-        if (src)
-            stbi_image_free(src);
         Logger::Log::Warning("AssetViewPanel: failed to load HDRI preview '{}'", assetPath.string());
         return false;
     }
+    const int srcW = static_cast<int>(decoded.Width);
+    const int srcH = static_cast<int>(decoded.Height);
+    const float* src = decoded.Pixels.data();
 
     const int maxDim = std::max(srcW, srcH);
     const int targetMax = std::clamp(desiredSize, 128, 2048);
@@ -232,8 +234,6 @@ bool GenerateHdriExposurePreview(const std::filesystem::path& assetPath,
         }
     }
 
-    stbi_image_free(src);
-
     std::filesystem::create_directories(cachePath.parent_path(), ec);
     if (ec)
     {
@@ -242,7 +242,7 @@ bool GenerateHdriExposurePreview(const std::filesystem::path& assetPath,
         return false;
     }
 
-    const bool ok = stbi_write_png(cachePath.string().c_str(), outW, outH, 4, out.data(), outW * 4) != 0;
+    const bool ok = Image::WritePngFile(cachePath, out, static_cast<uint32_t>(outW), static_cast<uint32_t>(outH));
     if (!ok)
         Logger::Log::Warning("AssetViewPanel: failed to write HDRI preview '{}'", cachePath.string());
     return ok;
@@ -546,7 +546,7 @@ void AssetViewPanel::EnsureUi()
         return button;
     };
 
-    auto prevAnimButton = makeAnimStepButton("Icons/left-arrow.png", "Previous Animation", -1.0f);
+    auto prevAnimButton = makeAnimStepButton("Icons/left-arrow.svg", "Previous Animation", -1.0f);
     m_AnimPrevButton = prevAnimButton.get();
     animBadgeBubble->AddChild(std::move(prevAnimButton));
 
@@ -569,7 +569,7 @@ void AssetViewPanel::EnsureUi()
 
     animBadgeBubble->AddChild(std::move(animLabel));
 
-    auto nextAnimButton = makeAnimStepButton("Icons/right-arrow.png", "Next Animation", 1.0f);
+    auto nextAnimButton = makeAnimStepButton("Icons/right-arrow.svg", "Next Animation", 1.0f);
     m_AnimNextButton = nextAnimButton.get();
     animBadgeBubble->AddChild(std::move(nextAnimButton));
 
@@ -648,7 +648,7 @@ void AssetViewPanel::EnsureUi()
         return button;
     };
 
-    auto prevExposureButton = makeHdriExposureButton("Icons/left-arrow.png", "Lower Exposure", -kHdriExposureScrollStepEV);
+    auto prevExposureButton = makeHdriExposureButton("Icons/left-arrow.svg", "Lower Exposure", -kHdriExposureScrollStepEV);
     m_HdriExposurePrevButton = prevExposureButton.get();
     hdriExposureBubble->AddChild(std::move(prevExposureButton));
 
@@ -670,7 +670,7 @@ void AssetViewPanel::EnsureUi()
     m_HdriExposureLabel = exposureLabel.get();
     hdriExposureBubble->AddChild(std::move(exposureLabel));
 
-    auto nextExposureButton = makeHdriExposureButton("Icons/right-arrow.png", "Raise Exposure", kHdriExposureScrollStepEV);
+    auto nextExposureButton = makeHdriExposureButton("Icons/right-arrow.svg", "Raise Exposure", kHdriExposureScrollStepEV);
     m_HdriExposureNextButton = nextExposureButton.get();
     hdriExposureBubble->AddChild(std::move(nextExposureButton));
 

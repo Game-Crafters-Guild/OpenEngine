@@ -32,6 +32,7 @@ namespace GameEngine.ECS
         EntityHandle = 19,
         String = 20,
         Bytes = 21,
+        RenderLayerMask = 22,
     }
 
     /// <summary>

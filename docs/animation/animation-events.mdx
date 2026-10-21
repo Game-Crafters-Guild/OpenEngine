@@ -5,11 +5,11 @@ sidebar:
   order: 4
 ---
 
-An animation event marks a moment on a clip: the frame a sword connects, a foot lands, an arrow leaves the bow. A glTF clip declares its events in the `events` list of its [clip schema](./gltf-clip-schema.mdx), each at a frame; the engine times each at that frame over the clip's frame rate, so frame 19 of a clip sampled at 30 frames per second is at 19 / 30 = 0.633 seconds. As an Animator plays the clip, each event *fires* in the frame whose playback reaches its time. The Animator keeps the events it fired in a frame; a script reads them with `AnimatorApi.PollEvents`, an engine system with `GetFiredEvents`.
+An animation event marks a moment on a clip: the frame a sword connects, a foot lands, an arrow leaves the bow. A glTF clip declares its events in the `events` list of its [clip schema](./gltf-clip-schema.mdx), each at a frame. The engine times each at that frame over the clip's frame rate, so frame 19 of a clip sampled at 30 frames per second is at 19 / 30 = 0.633 seconds. As an Animator plays the clip, each event *fires* in the frame whose playback reaches its time. The Animator keeps the events it fired in a frame. A script reads them with `AnimatorApi.PollEvents`, an engine system with `GetFiredEvents`.
 
 ## Reading events from a script
 
-Poll every frame an event matters. `PollEvents` fills a buffer the script owns and returns how many events it wrote; it allocates nothing. Compare names by id: `AnimatorApi.EventNameId` gives the id an event's `NameId` holds, and is worth computing once.
+Poll every frame an event matters. `PollEvents` fills a buffer the script owns and returns how many events it wrote. It allocates nothing. Compare names by id: `AnimatorApi.EventNameId` gives the id an event's `NameId` holds, and is worth computing once.
 
 ```csharp title="React to a hit event from a script"
 public sealed class KnightImpacts : GameSystem
@@ -39,7 +39,7 @@ public sealed class KnightImpacts : GameSystem
 | `NameId` | The name's id, `AnimatorApi.EventNameId(name)` of the whole name. |
 | `TimeSeconds` | The event's time on its clip, in seconds from the clip's start: its frame over the clip's frame rate. |
 | `NameLength` | The name's length in UTF-8 bytes. |
-| `Name` | The name as a string. Reading it allocates a string each time; a name longer than 64 bytes reads as its first 64 bytes, while `NameId` and `NameLength` stay the whole name's. When byte 64 falls inside a character of more than one byte, the name read ends in U+FFFD, the replacement character. |
+| `Name` | The name as a string. Reading it allocates a string each time. A name longer than 64 bytes reads as its first 64 bytes, while `NameId` and `NameLength` stay the whole name's. When byte 64 falls inside a character of more than one byte, the name read ends in U+FFFD, the replacement character. |
 
 ### The buffer
 
@@ -49,7 +49,7 @@ The events belong to the Animator, not to the caller: two systems that poll one 
 
 :::caution
 
-`PollEvents` reads an Animator's events on the engine's threads: call it from a system's update, on whichever thread the scheduler runs it (the main thread or a worker), which the animation wave that writes the events always precedes. A thread of your own (`Task.Run`, a timer) can run while the wave writes, so a call from one throws `InvalidOperationException` and logs once; post the poll to the main thread with [`MainThread.Post`](../scripting/main-thread-post.mdx). A call for an entity that is gone or has no Animator throws too.
+`PollEvents` reads an Animator's events on the engine's threads: call it from a system's update, on whichever thread the scheduler runs it (the main thread or a worker), which the animation wave that writes the events always precedes. A thread of your own (`Task.Run`, a timer) can run while the wave writes, so a call from one throws `InvalidOperationException` and logs once. Post the poll to the main thread with [`MainThread.Post`](../scripting/main-thread-post.mdx). A call for an entity that is gone or has no Animator throws too.
 
 :::
 
@@ -71,13 +71,13 @@ Each frame, playback moves a clip from the time it had at the frame's start to i
 
 ### Blends
 
-A clip fires only while its share of the Animator's output pose is above 0. In an animation graph, each blend gives its inputs their share of its own: a two-way blend at weight *w* gives the first input 1 − *w* and the second *w*; a blend space gives each sample it blends that sample's weight; a state machine's transition gives the state it leaves 1 − *t* and the one it enters *t*, so the state it leaves fires until the transition ends. A layered blend without a bone mask gives its base 1 − *w* and its overlay *w*; under a bone mask, and under an additive layer, the base keeps its share, because it still shows on the bones the layer leaves. A clip blended out entirely fires nothing; one at weight 0.01 fires as at 1.
+A clip fires only while its share of the Animator's output pose is above 0. In an animation graph, each blend gives its inputs their share of its own: a two-way blend at weight *w* gives the first input 1 − *w* and the second *w*; a blend space gives each sample it blends that sample's weight; a state machine's transition gives the state it leaves 1 − *t* and the one it enters *t*, so the state it leaves fires until the transition ends. A layered blend without a bone mask gives its base 1 − *w* and its overlay *w*. Under a bone mask, and under an additive layer, the base keeps its share, because it still shows on the bones the layer leaves. A clip blended out entirely fires nothing. One at weight 0.01 fires as at 1.
 
-Without a graph, a crossfade (`CrossFadeSeconds`) plays two clips: the outgoing clip fires until the fade ends, and the incoming clip from the fade's first frame. The outgoing clip's events come before the incoming clip's in a frame; a graph's come in the order it evaluates its clips.
+Without a graph, a crossfade (`CrossFadeSeconds`) plays two clips: the outgoing clip fires until the fade ends, and the incoming clip from the fade's first frame. The outgoing clip's events come before the incoming clip's in a frame. A graph's come in the order it evaluates its clips.
 
 A montage fires its own events from its first frame to the frame it finishes, whatever its blend weight, while the montage slot's own share is above 0.
 
-An Animator over several skinned meshes plays the same clip on each; its events fire once.
+An Animator over several skinned meshes plays the same clip on each. Its events fire once.
 
 ## How long events last
 
@@ -85,7 +85,7 @@ The animation wave empties every Animator's events before its playback runs, and
 
 ## From engine code
 
-An engine system reads an Animator's events with `GetFiredEvents(animator)` (`Engine/Include/Engine/Rendering/AnimationEventDispatch.h`): a span of `FiredEvent`, each holding a copy of the `AnimationEvent` with its `Name`, `Time` and payload, in the order they fired. Reading leaves them for scripts. A system that reads them declares a dependency on `HumanoidRetarget`, the last system in the wave that fires events, so it runs after all of them.
+An engine system reads an Animator's events with `GetFiredEvents(animator)` (`Engine/Include/Engine/Rendering/AnimationEventDispatch.h`): a span of `FiredEvent`, each holding a copy of the `AnimationEvent` with its `Name`, `Time`, and payload, in the order they fired. Reading leaves them for scripts. A system that reads them declares a dependency on `HumanoidRetarget`, the last system in the wave that fires events, so it runs after all of them.
 
 A host that is not C# calls the export behind `PollEvents` directly:
 
@@ -95,11 +95,4 @@ GE_Result GE_Animator_PollEventsOnEntity(GE_Handle worldHandle, uint64_t entityI
                                          int32_t* outCount);
 ```
 
-`GE_AnimationEventRecord` (`Engine/Include/Scripting/AnimatorABI.h`) is the record above: 80 bytes, the name's id, its time, its length and its first 64 bytes. The export returns `GE_Result_InvalidArg` for a null `outCount`, a negative capacity or a null buffer with a capacity, `GE_Result_NotFound` for an entity that is gone or has no Animator, and `GE_Result_Fail` on a thread the engine does not schedule (neither the main thread nor a job body).
-
-## Changelog
-
-- 2026-10-13: `PollEvents` is admitted from a system's update on any engine thread, a worker included, and refused only on a thread the engine does not schedule, with a message naming `MainThread.Post`.
-- 2026-10-13: Converted from `docs/animation/animation-events.html`; the ABI version number dropped from the first line.
-- 2026-09-30: a frame longer than the whole clip fires each event once; the events belong to the Animator, so several listeners share one poll; a name cut inside a character ends in U+FFFD; an event at a seek's target fires in the next frame.
-- 2026-09-30: first version. Events fire on the clip path, in animation graphs and in montage slots; scripts poll them with `AnimatorApi.PollEvents`, engine systems read them with `GetFiredEvents`.
+`GE_AnimationEventRecord` (`Engine/Include/Scripting/AnimatorABI.h`) is the record above: 80 bytes, the name's id, its time, its length, and its first 64 bytes. The export returns `GE_Result_InvalidArg` for a null `outCount`, a negative capacity, or a null buffer with a capacity, `GE_Result_NotFound` for an entity that is gone or has no Animator, and `GE_Result_Fail` on a thread the engine does not schedule (neither the main thread nor a job body).

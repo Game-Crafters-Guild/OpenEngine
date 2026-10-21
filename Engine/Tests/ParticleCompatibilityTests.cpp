@@ -162,6 +162,9 @@ TEST(ParticleCompatibility, EveryRenderMaterialCompilesToACookedShape)
 // keywords on the sprite's layout and a mesh particle's. The pass takes kLateTransparentKeywords of its
 // pipeline's TransmissiveRender keywords; the shipped nodes carry ForwardPlus, Instanced and Shadows,
 // with IBL (Assets ForwardPlus, the web library's Web) and without (the web smoke and DDGI projects).
+// ForwardPlus, whose graph has the height fog, the volumetric fog and the volumetric clouds, adds the
+// keywords a view with any of them active draws with (HeightFogPassKeyword, VolumetricFogPassKeyword,
+// VolumetricCloudsPassKeyword).
 TEST(ParticleCompatibility, TheRequestSetCoversEveryVariantTheRendererDraws)
 {
     using Rendering::MaterialKeyword;
@@ -175,11 +178,24 @@ TEST(ParticleCompatibility, TheRequestSetCoversEveryVariantTheRendererDraws)
     std::vector<std::pair<MaterialKeyword, VertexAttributeFlags>> reached = {
         {MaterialKeyword::None, VertexAttributeFlags::StandardMesh}};
     const MaterialKeyword node = MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows;
-    for (const MaterialKeyword transmissive : {node, node | MaterialKeyword::IBL})
+    const MaterialKeyword ibl = node | MaterialKeyword::IBL;
+    for (const MaterialKeyword transmissive : {node, ibl})
         for (const VertexAttributeFlags layout :
              {VertexAttributeFlags::StandardMesh, VertexAttributeFlags::StandardMeshWithTangent})
             reached.push_back(
                 {(transmissive & TransmissivePassNode::kLateTransparentKeywords) | Particles::kParticleDrawKeywords, layout});
+    for (const MaterialKeyword fog : {MaterialKeyword::HeightFog, MaterialKeyword::VolumetricFog,
+                                      MaterialKeyword::HeightFog | MaterialKeyword::VolumetricFog,
+                                      MaterialKeyword::VolumetricClouds,
+                                      MaterialKeyword::HeightFog | MaterialKeyword::VolumetricClouds,
+                                      MaterialKeyword::VolumetricFog | MaterialKeyword::VolumetricClouds,
+                                      MaterialKeyword::HeightFog | MaterialKeyword::VolumetricFog |
+                                          MaterialKeyword::VolumetricClouds})
+        for (const VertexAttributeFlags layout :
+             {VertexAttributeFlags::StandardMesh, VertexAttributeFlags::StandardMeshWithTangent})
+            reached.push_back({(ibl & TransmissivePassNode::kLateTransparentKeywords) | fog |
+                                   Particles::kParticleDrawKeywords,
+                               layout});
 
     const auto variants = Particles::ParticleRenderVariants();
     for (const auto& [keywords, layout] : reached)

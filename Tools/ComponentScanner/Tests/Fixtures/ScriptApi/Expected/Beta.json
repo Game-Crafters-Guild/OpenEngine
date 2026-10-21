@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "name": "Beta",
+  "hash": "0xaff7c91abb308607",
+  "constants": [],
+  "enums": [],
+  "events": [],
+  "functions": [
+    {
+      "id": "Beta.UseHit",
+      "name": "UseHit",
+      "cpp": "GameEngine::Beta::Script::UseHit",
+      "header": "Beta/BetaScriptApi.h",
+      "line": 18,
+      "doc": "Uses Beta's hit.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "hit",
+          "kind": "Record",
+          "type": "Beta.Hit"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "Beta.Hit",
+      "name": "Hit",
+      "cpp": "GameEngine::Beta::Script::Hit",
+      "header": "Beta/BetaScriptApi.h",
+      "line": 10,
+      "doc": "Beta's hit.",
+      "size": 16,
+      "align": 4,
+      "fields": [
+        {
+          "name": "point",
+          "kind": "Vec3",
+          "offset": 0,
+          "default": [
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        {
+          "name": "distance",
+          "kind": "Float",
+          "offset": 12,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

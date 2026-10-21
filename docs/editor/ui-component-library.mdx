@@ -1,6 +1,6 @@
 ---
 title: Editor UI component library
-description: A reference for the editor's native UI, its registered controls, CSS classes, panel patterns, design tokens, behavior rules and authoring conventions, so new UI belongs in the editor.
+description: A reference for the editor's native UI, its registered controls, CSS classes, panel patterns, design tokens, behavior rules, and authoring conventions, so new UI belongs in the editor.
 ---
 
 A visual reference for the current native editor UI: registered controls, CSS classes, panel patterns, design tokens, behavior rules, and authoring conventions. This page documents what already exists so new UI can feel like it belongs in the editor. [Browse the components](#components) or [read the guidelines](#authoring-guidelines).
@@ -37,7 +37,7 @@ Shared values come from `theme/tokens.css`. Reuse them before adding new colors 
 | `--ui_color_bg_tabbar` | `#1D1D1C` | Tab bar background |
 | `--ui_color_text` | `#E5E5E5` | Text |
 | `--ui_color_border` | `#272727` | Borders |
-| `--ui_color_accent` | `#006FFF` | Focus, selection and the primary accent |
+| `--ui_color_accent` | `#006FFF` | Focus, selection, and the primary accent |
 | `--ui_color_accent_green` | `#4CAF50` | Green accent |
 
 ### Orange and warning colors
@@ -112,14 +112,14 @@ Toolbar, chrome, and repeated compact actions. Classes: `icon-button`, `save-ico
 <Button class="small secondary icon-button settings-icon" />
 ```
 
-Standard toolbar hit area is 24 x 24 px; playback uses 32 x 32 px.
+Standard toolbar hit area is 24 x 24 px. Playback uses 32 x 32 px.
 
 ### Editor icon assets
 
 Toolbar, hierarchy, inspector, and panel sprites as PNG/SVG files under Assets/Icons, referenced from theme and panel CSS. Where they live: `Apps/Editor/Assets/Icons`, `editor:Icons/*.png`, `url("Icons/…")` in panels.
 
 ```css title="An icon from the editor's icon folder"
-background-image: url("editor:Icons/save.png");
+background-image: url("editor:Icons/save.svg");
 ```
 
 - **Global playback / folds / dock layouts**: `theme/core.css`
@@ -158,9 +158,9 @@ Bounded option sets in UI or native OS mode. Classes: `dropdown`, `inspector-dro
 <Dropdown class="inspector-dropdown" options="Directional,Point,Spot" />
 ```
 
-Inspector dropdowns stretch to the field column; bottom bar popups open upward.
+Inspector dropdowns stretch to the field column. Bottom bar popups open upward.
 
-An option may carry an icon. The field names a CSS class beside the option's value and label; `theme/dropdown-option-icons.css` says which image that class is, so nothing in C++ names an image file and the theme can restyle or retint the icons without a rebuild. A control whose options declare icons gives every row the slot, so an option with no icon still lines its text up with the rest.
+An option may carry an icon. The field names a CSS class beside the option's value and label. `theme/dropdown-option-icons.css` says which image that class is, so nothing in C++ names an image file and the theme can restyle or retint the icons without a rebuild. A control whose options declare icons gives every row the slot, so an option with no icon still lines its text up with the rest.
 
 ```cpp title="Options that carry an icon class"
 Dropdown::Option{"soft", "Soft", {}, "dropdown-icon--light-area"};
@@ -175,7 +175,7 @@ Text input, multiline text, float/int values, and vector groups. Controls: `Text
 <Vector3Field id="Position" class="inspector-vector3" />
 ```
 
-Vector components shrink to 40 px minimum; preserve focused fields during refresh.
+Vector components shrink to 40 px minimum. Preserve focused fields during refresh.
 
 ### Sliders
 
@@ -185,7 +185,7 @@ Continuous and stepped values that benefit from scrubbing. Classes: `inspector-s
 <Slider min="0" max="10" value="1" step="0.01" />
 ```
 
-Pair with numeric fields when precision matters; commit once per gesture.
+Pair with numeric fields when precision matters. Commit once per gesture.
 
 ### Foldout and accordion
 
@@ -266,7 +266,7 @@ Viewport toolbar, camera bookmarks, ruler overlays, and rotation gizmo. Controls
 <ViewportRotationGizmo class="viewport-rotation-gizmo" />
 ```
 
-Overlay viewport UI without covering core content; move/hide on overlap.
+Overlay viewport UI without covering core content. Move/hide on overlap.
 
 ### Animation timeline
 
@@ -318,7 +318,7 @@ Global editor commands, playback, layout presets, and panel-local tools. Classes
 <Button class="small secondary icon-button play-icon" />
 ```
 
-Toolbars are 40 px tall; center playback controls keep natural width.
+Toolbars are 40 px tall. Center playback controls keep natural width.
 
 ## Authoring guidelines
 
@@ -339,7 +339,7 @@ Rules for adding new editor UI without drifting away from the current system.
 ### Behavior
 
 - `UIManager::Update` owns input, focus, hover, dispatch, and layout.
-- `UIManager::RenderRG(frame, target, targetSpace)` prepares geometry and declares the current frame's UI pass; the host supplies the target color space.
+- `UIManager::RenderRG(frame, target, targetSpace)` prepares geometry and declares the current frame's UI pass. The host supplies the target color space.
 - Interactive edits preview while dragging and commit once when the gesture ends.
 
 ### Naming
@@ -361,7 +361,3 @@ A compact review list before a new panel or control lands.
 - Make data changes through editor edit APIs and preserve preview/commit semantics.
 
 The canonical component catalog; authoring rules live in [Editor UI guidelines](../contributing/editor-ui-guidelines.mdx). The [documentation index](../README.md) lists every page.
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/Editor/UI_COMPONENT_LIBRARY.html`. The drawn previews (mock controls and color swatches) are left out; the colors are listed with their tokens, at the values in `tokens.css`.

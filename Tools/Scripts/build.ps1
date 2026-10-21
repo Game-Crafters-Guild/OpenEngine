@@ -109,7 +109,7 @@ if (-not $SkipCSharp -and $dotnetAvailable) {
         "Managed/HotReload/GameEngine.HotReload.csproj",
         "Managed/CoreBridge/GameEngine.CoreBridge.csproj",
         "Managed/Scripting.ABI/GameEngine.Scripting.ABI.csproj",
-        "Managed/Input.ABI/GameEngine.Input.ABI.csproj",
+        "Managed/Scripting.Bindings/GameEngine.Scripting.Bindings.csproj",
         "Managed/Platform.ABI/GameEngine.Platform.ABI.csproj",
         "Managed/ECS.ABI/GameEngine.ECS.ABI.csproj",
         "Managed/Editor.Managed/GameEngine.Editor.Managed.csproj",

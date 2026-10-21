@@ -91,17 +91,16 @@ namespace GameEngine.Interop
         /// Major ABI version; moves WITH the native <c>GE_ABI_VERSION_CURRENT</c> on a breaking change.
         /// 2: the per-project domain exports (<c>GE_ScriptsDomainSwapForProject</c> and friends) were removed.
         /// 3: <c>GE_ScriptingConfig</c> lost <c>projectIdUtf8</c>.
+        /// 4: the <c>GE_Input_*</c> exports were removed; Input is the generated table (GameEngine.Scripting.Bindings).
         /// </summary>
-        public const uint kAbiMajor = 3;
+        public const uint kAbiMajor = 4;
         /// <summary>
         /// Minor ABI version within <see cref="kAbiMajor"/>. Bump this WITH the native
         /// <c>GE_ABI_VERSION_CURRENT</c> whenever an additive change means managed code reads
         /// something an older native never wrote — most sharply a widened blittable payload
         /// struct, which carries no size field of its own and so cannot be checked per call.
-        /// 1: <c>GE_Model_GetExtras</c>, which <c>ModelApi.GetExtras</c> calls.
-        /// 2: <c>GE_Animator_PollEventsOnEntity</c>, which <c>AnimatorApi.PollEvents</c> calls.
         /// </summary>
-        public const uint kAbiMinor = 2;
+        public const uint kAbiMinor = 0;
 
         /// <summary>Combined ABI version (major&lt;&lt;16 | minor).</summary>
         public static readonly uint kAbi = (kAbiMajor << 16) | kAbiMinor;

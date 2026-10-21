@@ -400,6 +400,9 @@ bool OceanLightShafts::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d
         msaa ? d.Frame.CreateTexture((base + ".CompositeColor").c_str(), copyDesc) : sceneColor;
     if (!compositeTarget.IsValid())
         return false;
+    // The snapshot and a separate composite target hold scene colour at the frame's pre-exposure.
+    d.MarkPreExposed(sceneCopy);
+    d.MarkPreExposed(compositeTarget);
 
     // Scene copy: snapshot SceneColor so the composite can read the scene while
     // writing it. The helper picks the sampler2DMS resolve fork off SceneColor's

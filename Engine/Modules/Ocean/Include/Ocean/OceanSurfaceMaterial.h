@@ -16,6 +16,11 @@ namespace GameEngine::Ocean
 /// Stable derived GUID for the ocean material (not a real asset GUID).
 const GUID& OceanSurfaceMaterialGuid();
 
+/// Stable derived GUID for the same material registered with the HeightFog pass keyword, which a
+/// view whose height fog is active draws the surface with: the surface takes the fog by its own
+/// distance in its own shader.
+const GUID& OceanSurfaceFogMaterialGuid();
+
 /// The material document the surface registers: StandardPBR lighting with the
 /// ocean surface shader and clipmap vertex modifier.
 MaterialDocument BuildOceanSurfaceMaterialDocument();

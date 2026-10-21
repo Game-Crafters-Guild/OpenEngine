@@ -10,6 +10,8 @@
 #include "AgentStatusMessages.h"
 #include "AiAssistantSettings.h"
 #include "AssistantMode.h"
+#include "DictationText.h"
+#include "PromptMicButton.h"
 #include "AiAssistantPanelService.h"
 #include "MarkupChips.h"
 #include "MarkupContext.h"
@@ -30,6 +32,9 @@
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIElement.h"
+#include "UI/Controls/ItemSizeSlider.h"
+#include "UI/Interaction/ContextMenuManipulator.h"
+#include "UI/Interaction/ItemResizeGesture.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 #include "UI/UIStyle.h"
@@ -71,6 +76,8 @@ constexpr float kInputRowBorderPx = 2.0f;
 // The controls' own line when they sit under the field. Keep in sync with
 // .prompt-panel-input-controls-stacked in PromptPanel.css.
 constexpr float kStackedControlsRowPx = 36.0f;
+// The size slider's step, and the text size one notch of the Resize Items gesture moves by.
+constexpr float kTextSizeStepPx = 1.0f;
 // The history list narrower than this stacks each call row: the action, then the summary
 // with the undo state and Details beside it when they fit (AgentCallRow::SetStacked). The
 // list is the panel less its scrollbar.
@@ -153,6 +160,9 @@ float MinWidthPx(const UIElement& element)
 auto s_PromptTextAreaRegistration =
     UIRegistration::RegisterWithFactory<PromptTextArea>(
         "PromptTextArea", []() { return std::make_unique<PromptTextArea>(); });
+auto s_PromptMicButtonRegistration =
+    UIRegistration::RegisterWithFactory<PromptMicButton>(
+        "PromptMicButton", []() { return std::make_unique<PromptMicButton>(); });
 
 // The ids of the registered reply actions a reply to `prompt` offers, in registration order.
 std::vector<std::string> ReplyActionsFor(const ConversationMessage& prompt)
@@ -177,6 +187,8 @@ PromptPanel::PromptPanel()
 
 PromptPanel::~PromptPanel()
 {
+    if (m_SpeechInput)
+        m_SpeechInput->Cancel();
     if (UIManager* manager = m_RefreshManager.Get(); manager && m_RefreshToken != 0)
         manager->UnregisterPeriodicRefresh(m_RefreshToken);
 }
@@ -304,6 +316,16 @@ void PromptPanel::OnLayoutBound()
     });
     m_HistoryList->SetFocusable(true);
     m_HistoryList->RegisterEventHandler(kEventKeyDown, [this](UIEvent& event) { OnHistoryKeyDown(event); });
+    // The Resize Items gesture over the conversation sizes its text, as over the slider. The list
+    // sees the wheel before the scroll view does, so a matching wheel never scrolls.
+    m_HistoryList->RegisterEventHandler(kEventScroll, [this](UIEvent& event)
+    {
+        if (event.ScrollY == 0.0f || !UI::MatchesItemResizeGesture(event.Mods))
+            return;
+        StepTextSize(event.ScrollY);
+        event.Stop();
+    });
+    BuildTextSizeSlider(findElement("PromptTextSizeHost"_sid));
 
     UIElement* splitter = findElement("PromptPanelInputSplitter"_sid);
     if (splitter)
@@ -365,6 +387,9 @@ void PromptPanel::OnLayoutBound()
         AutoSizePromptInputPane();
         updatePromptInputScroll();
         UpdatePromptPlaceholderVisibility(value);
+        // Typing takes the field back from dictation.
+        if (!m_SettingPromptText)
+            AbandonDictation();
         if (m_MarkupPicker)
             m_MarkupPicker->OnPromptChanged(value);
     });
@@ -397,8 +422,11 @@ void PromptPanel::OnLayoutBound()
     {
         if (!m_PromptText || m_PromptText->GetValue().empty())
             return;
+        m_SettingPromptText = true;
         m_PromptText->SetValue("");
         m_PromptText->SetSelection(0, 0);
+        m_SettingPromptText = false;
+        RestartDictationText();
         m_PromptRecallCursor = -1;
         m_PromptRecallDraft.clear();
         AutoSizePromptInputPane();
@@ -409,6 +437,8 @@ void PromptPanel::OnLayoutBound()
     });
     m_SendButton->SetTooltip("Send prompt (Enter); a prompt sent while a reply runs waits its turn");
     m_SendButton->SetOnClick([this](UIEvent&) { SubmitPrompt(); });
+    BindMicButton(dynamic_cast<PromptMicButton*>(findElement("PromptMicButton"_sid)));
+    BindSpeechLevels(findElement("PromptSpeechLevelsLeft"_sid), findElement("PromptSpeechLevelsRight"_sid));
 
     ApplyPromptInputPaneHeight(PromptInputPaneHeightForLines(1));
     updatePromptInputScroll();
@@ -734,6 +764,13 @@ void PromptPanel::SubmitPrompt()
 {
     if (!m_PromptText)
         return;
+    // Sending ends dictation: the prompt goes as it stands.
+    if (m_SpeechInput && m_SpeechInput->IsRunning())
+    {
+        m_SendWhenDictationEnds = false;
+        m_SpeechInput->Cancel();
+        ShowDictationState(false, "Dictation stopped");
+    }
 
     const std::string prompt = TrimWhitespace(m_PromptText->GetValue());
     if (prompt.empty())
@@ -911,6 +948,11 @@ void PromptPanel::SyncRows()
         if (!row->Build(*ui))
             break;
         row->SetCallsStacked(m_HistoryNarrow);
+        row->RegisterEventHandler(kEventMouseDown, [this, index](UIEvent& event)
+        {
+            if (event.Button == 0)
+                SelectRow(index);
+        });
         m_Rows.push_back(row.get());
         m_HistoryList->AddChild(std::move(row));
     }
@@ -1057,6 +1099,215 @@ void PromptPanel::OnPostLayout()
     }
 }
 
+// The microphone beside Send, where the platform offers speech input (Platform::SpeechInput);
+// elsewhere it stays hidden. A click starts dictation into the prompt and a second click stops it,
+// or, with Hold the microphone to speak, a press starts and the release stops. Its right-click
+// menu holds the two dictation settings.
+void PromptPanel::BindMicButton(PromptMicButton* button)
+{
+    m_MicButton = button;
+    if (!m_MicButton || !Platform::SpeechInput::IsAvailable())
+        return;
+    m_SpeechInput = std::make_unique<Platform::SpeechInput>();
+    m_MicButton->RemoveClass("hidden");
+    m_MicButton->SetTooltip("Dictate the prompt. Right-click for hold to speak and send when it stops.");
+    m_MicButton->SetOnClick([this](UIEvent&)
+    {
+        if (m_SpeechInput->IsRunning())
+            StopDictationFromMic();
+        else
+            StartDictation();
+    });
+    m_MicButton->SetHold([] { return AiAssistantSettings::HoldToSpeak(); }, [this] { StartDictation(); },
+                         [this] { StopDictationFromMic(); });
+    m_MicButton->AddManipulator(ContextMenuManipulator::Create({
+        {.Path = "Hold to speak",
+         .OnActivate = [] { AiAssistantSettings::SetHoldToSpeak(!AiAssistantSettings::HoldToSpeak()); },
+         .State = [] { return ContextMenuManipulator::ItemState{.Checked = AiAssistantSettings::HoldToSpeak()}; }},
+        {.Path = "Send when the microphone stops",
+         .OnActivate = [] { AiAssistantSettings::SetSendWhenMicStops(!AiAssistantSettings::SendWhenMicStops()); },
+         .State = [] { return ContextMenuManipulator::ItemState{.Checked = AiAssistantSettings::SendWhenMicStops()}; }},
+    }));
+}
+
+// The microphone stopped by the user: with Send when the microphone stops, the prompt goes once
+// the last words arrive (ShowDictationState).
+void PromptPanel::StopDictationFromMic()
+{
+    if (!m_SpeechInput || !m_SpeechInput->IsRunning())
+        return;
+    m_SendWhenDictationEnds = AiAssistantSettings::SendWhenMicStops();
+    m_SpeechInput->Finish();
+}
+
+void PromptPanel::StartDictation()
+{
+    if (!m_SpeechInput || !m_PromptText || m_SpeechInput->IsRunning())
+        return;
+    m_SendWhenDictationEnds = false;
+    // The dictated words follow whatever the prompt already holds.
+    m_DictationBase = m_PromptText->GetValue();
+    if (!m_DictationBase.empty() && m_DictationBase.back() != ' ' && m_DictationBase.back() != '\n')
+        m_DictationBase += ' ';
+    m_DictationSkippedWords = 0;
+    m_LastDictation.clear();
+    Platform::SpeechInput::Callbacks callbacks;
+    callbacks.Transcript = [this](const std::string& transcript) { ApplyDictation(transcript); };
+    callbacks.State = [this](bool listening, const std::string& message) { ShowDictationState(listening, message); };
+    callbacks.Levels = [this](const Platform::SpeechInput::LevelArray& levels) { ShowSpeechLevels(levels); };
+    m_SpeechInput->Start(std::move(callbacks));
+}
+
+// The transcript is the whole session so far; words of text cleared since are skipped.
+void PromptPanel::ApplyDictation(const std::string& transcript)
+{
+    if (!m_PromptText)
+        return;
+    m_LastDictation = transcript;
+    const std::string text = m_DictationBase + DictationTextAfterWords(transcript, m_DictationSkippedWords);
+    m_SettingPromptText = true;
+    m_PromptText->SetValue(text);
+    const int caret = static_cast<int>(text.size());
+    m_PromptText->SetSelection(caret, caret);
+    m_SettingPromptText = false;
+}
+
+// The prompt was cleared while dictation listens: keep listening, and let only the words
+// spoken from now on reach the empty field.
+void PromptPanel::RestartDictationText()
+{
+    if (!m_SpeechInput || !m_SpeechInput->IsRunning())
+        return;
+    m_DictationBase.clear();
+    m_DictationSkippedWords = CountDictationWords(m_LastDictation);
+}
+
+// The user typed while dictation listens: the field is theirs again, so the session ends at
+// once with no late transcript, and the microphone shows it stopped.
+void PromptPanel::AbandonDictation()
+{
+    if (!m_SpeechInput || !m_SpeechInput->IsRunning())
+        return;
+    m_SendWhenDictationEnds = false;
+    m_SpeechInput->Cancel();
+    ShowDictationState(false, "Dictation stopped: you typed in the prompt");
+}
+
+void PromptPanel::ShowDictationState(bool listening, const std::string& message)
+{
+    if (m_MicButton)
+    {
+        if (listening)
+            m_MicButton->AddClass("listening");
+        else
+            m_MicButton->RemoveClass("listening");
+    }
+    for (UIElement* group : m_SpeechLevelGroups)
+    {
+        if (!group)
+            continue;
+        if (listening)
+            group->RemoveClass("idle");
+        else
+            group->AddClass("idle");
+    }
+    if (!listening)
+        ShowSpeechLevels({});
+    SetStatus(message);
+    if (listening || !m_SendWhenDictationEnds)
+        return;
+    m_SendWhenDictationEnds = false;
+    SubmitPrompt();
+}
+
+// The level meter's two halves sit beside the microphone and exist only where it does: idle
+// (space kept, nothing drawn) until a dictation session reports that it listens.
+void PromptPanel::BindSpeechLevels(UIElement* left, UIElement* right)
+{
+    m_SpeechLevelGroups = {left, right};
+    if (!m_SpeechInput)
+        return;
+    size_t bar = 0;
+    for (UIElement* group : m_SpeechLevelGroups)
+    {
+        if (!group)
+            continue;
+        group->RemoveClass("hidden");
+        group->AddClass("idle");
+        for (const auto& child : group->GetChildren())
+            if (bar < m_SpeechLevelBars.size())
+                m_SpeechLevelBars[bar++] = child.get();
+    }
+}
+
+// Bar height from a level in [0, 1]: kSpeechBarMinPx at silence, up to a peak that grows
+// toward the microphone, so the bars beside it rise highest.
+void PromptPanel::ShowSpeechLevels(const Platform::SpeechInput::LevelArray& levels)
+{
+    constexpr float kSpeechBarMinPx = 2.0f;
+    constexpr float kSpeechBarPeakPx = 14.0f;
+    constexpr float kSpeechBarPeakStepPx = 2.0f;
+    const size_t half = m_SpeechLevelBars.size() / 2;
+    for (size_t i = 0; i < m_SpeechLevelBars.size(); ++i)
+    {
+        UIElement* bar = m_SpeechLevelBars[i];
+        if (!bar)
+            continue;
+        const size_t towardMic = i < half ? i : m_SpeechLevelBars.size() - 1 - i;
+        const float peak = kSpeechBarPeakPx + kSpeechBarPeakStepPx * static_cast<float>(towardMic);
+        const float height = kSpeechBarMinPx + (peak - kSpeechBarMinPx) * levels[i];
+        PinHeightPx(*bar, height);
+    }
+}
+
+// The size slider at the end of the status line: the conversation's text size in px.
+void PromptPanel::BuildTextSizeSlider(UIElement* host)
+{
+    if (!host)
+        return;
+    auto slider = std::make_unique<EditorUI::ItemSizeSlider>(
+        EditorUI::ItemSizeSlider::Subject{"Text size", "the conversation", "changes its text size"});
+    m_TextSizeSlider = slider.get();
+    m_TextSizeSlider->SetMin(AiAssistantSettings::kDefaultTextSizePx);
+    m_TextSizeSlider->SetMax(AiAssistantSettings::kMaxTextSizePx);
+    m_TextSizeSlider->SetStep(kTextSizeStepPx);
+    m_TextSizeSlider->SetValueWithoutNotify(AiAssistantSettings::TextSize());
+    m_TextSizeSlider->SetOnValueChanging([this](const float& px) { ApplyTextSize(px); });
+    m_TextSizeSlider->SetOnValueChanged([this](const float& px)
+    {
+        ApplyTextSize(px);
+        AiAssistantSettings::SetTextSize(px);
+    });
+    m_TextSizeSlider->SetOnResizeGesture([this](float scrollY) { StepTextSize(scrollY); });
+    host->AddChild(std::move(slider));
+    ApplyTextSize(AiAssistantSettings::TextSize());
+}
+
+// One slider step per wheel notch; wheel up (a negative scrollY) makes the text bigger.
+void PromptPanel::StepTextSize(float scrollY)
+{
+    if (!m_TextSizeSlider)
+        return;
+    const float step = scrollY < 0.0f ? kTextSizeStepPx : -kTextSizeStepPx;
+    const float px = std::clamp(m_TextSizeSlider->GetValue() + step, AiAssistantSettings::kDefaultTextSizePx,
+                                AiAssistantSettings::kMaxTextSizePx);
+    m_TextSizeSlider->SetValueWithoutNotify(px);
+    ApplyTextSize(px);
+    AiAssistantSettings::SetTextSize(px);
+}
+
+// The conversation's text scale over its default size, the custom property every conversation
+// font size in PromptPanel.css multiplies by.
+void PromptPanel::ApplyTextSize(float px)
+{
+    const float scale = px / AiAssistantSettings::kDefaultTextSizePx;
+    if (scale == m_TextScale)
+        return;
+    m_TextScale = scale;
+    Overrides().SetCustomNumber("--prompt_text_scale"_sid, scale);
+    MarkDirtySubtree(StyleDirty | LayoutDirty | VisualDirty);
+}
+
 void PromptPanel::RefreshHistoryTextVisuals()
 {
     for (AgentConversationRow* row : m_Rows)
@@ -1087,8 +1338,19 @@ void PromptPanel::SelectRowByOffset(int offset)
     const int target = m_SelectedRow >= m_Rows.size()
         ? (offset < 0 ? last : 0)
         : std::clamp(static_cast<int>(m_SelectedRow) + offset, 0, last);
-    m_SelectedRow = static_cast<size_t>(target);
+    SelectRow(static_cast<size_t>(target));
     ScrollRowIntoView(m_SelectedRow);
+}
+
+// The selected row (a click, or Up and Down in the history) is the one row drawn with the
+// accent outline.
+void PromptPanel::SelectRow(size_t rowIndex)
+{
+    if (m_SelectedRow < m_Rows.size())
+        m_Rows[m_SelectedRow]->RemoveClass("selected");
+    m_SelectedRow = rowIndex;
+    if (m_SelectedRow < m_Rows.size())
+        m_Rows[m_SelectedRow]->AddClass("selected");
 }
 
 void PromptPanel::ScrollRowIntoView(size_t rowIndex)

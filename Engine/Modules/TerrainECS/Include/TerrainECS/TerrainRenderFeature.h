@@ -73,6 +73,8 @@ struct TerrainInstanceInfo
     bool IsTiled = false;
     // Terrain.CastShadows: whether the terrain shadows the directional light (its clearance map).
     bool CastShadows = true;
+    // Terrain.RenderLayers: a view draws the terrain when its layers share one with these.
+    Rendering::RenderLayerMask RenderLayers;
 
     // Phase E resident-window atlas (design §3). When AtlasBacked, the CBT height sample
     // resolves terrain UV -> tile -> slot through AtlasRows + AtlasHeightTexture instead of
@@ -614,6 +616,9 @@ public:
         Rendering::TextureHandle AtlasHeightTexture;
     };
     ActiveHeightSource GetActiveHeightSource() const;
+    // Whether a view whose effective layers are `viewLayers` draws the first active terrain, the one the
+    // CBT renderer draws: false when no terrain is active or their layers share none.
+    bool ViewDrawsActiveTerrain(Rendering::RenderLayerMask viewLayers) const;
 
     // ---- Frame lifecycle ----
 

@@ -96,6 +96,16 @@ inline constexpr const char* DepthMinMaxBuffer = "DepthMinMaxBuffer";
 // The texture the sky pass draws its backdrop from (the sky-view LUT or the HDRI), published per
 // view by SkyRender; a black texture when no sky is active.
 inline constexpr const char* SkyBackdrop = "SkyBackdrop";
+// The volumetric fog the VolumetricFog node composites into the scene, published per view for the
+// blended surfaces drawn after the composite, which take it by their own distance
+// (volumetric_fog_forward.glsl): its parameter block, and its in-scattered light and transmittance
+// by froxel. Absent without the fog.
+inline constexpr const char* VolumetricFogParams = "VolumetricFogParams";
+inline constexpr const char* VolumetricFog = "VolumetricFog";
+// The light the star pass added to scene colour, as luminance at the frame's pre-exposure (R16F at the
+// view's render extent), published per view by SkyRender; a black texture when no stars are drawn.
+// The tonemap's night tint reads it to keep the stars' colour.
+inline constexpr const char* SkyStarLight = "SkyStarLight";
 } // namespace Res
 
 // Pipeline output-slot names (RenderPipelineBlueprint::outputs keys).

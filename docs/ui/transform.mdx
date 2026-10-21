@@ -1,0 +1,113 @@
+---
+title: Transforms
+description: Rotating, scaling, moving and skewing any UI element and its children in CSS with transform and transform-origin, from code, in transitions, with clipping, pointer input and limits.
+---
+
+The `transform` property rotates, scales, moves and skews an element and everything inside it, the way it does on the web. It is a paint-time change: layout never sees it, so the element keeps its place in the flow, its siblings do not move, and the layout getters (`GetLayoutX`, `GetLayoutY`, `GetLayoutWidth`, `GetLayoutHeight`) report the untransformed box. The pointer follows the drawn shape: a rotated button is clicked where it is drawn, and a scaled slider or text field reads the pointer where its thumb or its text is drawn.
+
+Use it for dials and needles, compass roses, minimaps that turn with the player, spinners, and hover and press feedback that grows or shrinks a control.
+
+## Declare a transform
+
+```css title="A needle, and a card that grows on hover"
+.needle {
+    position: absolute;
+    left: 60px;
+    top: 10px;
+    width: 8px;
+    height: 70px;
+    background-image: url("UI/needle.png");
+    transform-origin: 50% 100%;
+    transform: rotate(35deg);
+}
+
+.card {
+    transition: transform 0.15s ease;
+}
+
+.card:hover {
+    transform: scale(1.04);
+}
+```
+
+## Properties
+
+| Property | Values | Initial |
+|---|---|---|
+| `transform` | `none`, or a space-separated list of the functions below, applied left to right | `none` |
+| `transform-origin` | One or two of `left`, `center`, `right`, `top`, `bottom`, a length in px, or a percentage of the border box: the point the transform pivots about | `50% 50%` |
+
+| Function | Arguments |
+|---|---|
+| `translate(x, y)`, `translateX(x)`, `translateY(y)` | px (or a `calc()` that folds to px), or a percentage of the element's own border box. `y` defaults to 0. |
+| `scale(x, y)`, `scaleX(x)`, `scaleY(y)` | Numbers or percentages (`50%` is 0.5). `y` defaults to `x`. |
+| `rotate(a)` | An angle in `deg`, `rad`, `grad` or `turn`. Positive turns clockwise. |
+| `skew(ax, ay)`, `skewX(a)`, `skewY(a)` | Angles. `ay` defaults to 0. |
+| `matrix(a, b, c, d, e, f)` | Numbers, as in CSS: x' = ax + cy + e, y' = bx + dy + f, with e and f in px. |
+
+A declaration with any function the engine does not support (the 3D ones such as `rotateX()`, `perspective()` and `matrix3d()`) is invalid as a whole, and the earlier rule stays in force.
+
+## Set it from code
+
+A transform that changes every frame, such as a needle following a value, is set as a style override. Changing a transform every frame is cheap: only that element is updated, not its children or the rest of the UI. Switching between `none` and a transform updates the element and its children only.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="A speedometer needle"
+#include "UI/StyleProperties.h"
+
+void UpdateSpeedo(GameEngine::UIElement& needle, float speed)
+{
+    using namespace GameEngine;
+    needle.Overrides().Set(Style::Transform, TransformValue{}.Rotate(speed * 2.7f - 135.0f));
+}
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call sets a transform yet; tracked as [OpenEngine issue #33](https://github.com/Game-Crafters-Guild/OpenEngine/issues/33). The native call is `UIElement::Overrides().Set(Style::Transform, ...)`. Until then, a script toggles a class whose rule carries the transform (`Ui.Element.AddClass` and `RemoveClass`), and a `transition` on the rule animates it.
+:::
+
+::::
+:::::
+
+`TransformValue` has a builder for each function, applied in the order you call them: `Translate(x, y)`, `Scale(x, y)`, `Rotate(degrees)`, `Skew(xDegrees, yDegrees)` and `Matrix(a, b, c, d, e, f)`. `Translate` takes `StyleLength` values, so a percentage says so at the call site: `Translate(StyleLength::Percent(-50), StyleLength::Percent(-50))` is `translate(-50%, -50%)`. A default `TransformValue{}` is `none`. `Style::TransformOrigin` takes a `TransformOriginValue{x, y}` of two `StyleLength` values, for example `TransformOriginValue{StyleLength::Px(0), StyleLength::Percent(100)}` for `0 100%`.
+
+## Transitions
+
+`transform` and `transform-origin` can be transitioned, and both are part of `transition: all`. Two transform lists interpolate function by function when they have the same functions in the same order (and the same units on each `translate()`); `none` interpolates as the other list with identity arguments. Lists that differ in shape switch at the midpoint rather than interpolating their matrices.
+
+## Clipping
+
+Clips behave as on the web:
+
+- An ancestor with `overflow: hidden` clips a transformed descendant where it is painted. A round clip (`overflow: hidden; border-radius: 50%`) around a rotated image makes a turning minimap.
+- A transformed element with `overflow: hidden` clips its children to its own transformed box, so the clip turns with it.
+
+## Pointer input
+
+Hit testing maps the pointer through every transformed ancestor, so hover, press and click land on what is drawn. Hit-testing clips use the clip's rectangle and ignore its rounded corners.
+
+Event positions follow the transform too. A `UIEvent`'s `X` and `Y` are in the layout space of the element handling it: the window position carried back through every transform that applies to that element, worked out again at each step as the event bubbles. A handler compares them with the element's own layout rect, as it would without a transform, which is why a slider's thumb, a text field's caret, a scroll bar's thumb and a list's rows work inside a rotated or scaled panel. Outside any transform the positions are window positions.
+
+`WindowX` and `WindowY` are the window position, the same at every step: use them to compare against another element or to place something at the pointer, as a drag that drops onto another panel does.
+
+To go between the two spaces yourself:
+
+```cpp title="UI/UIElement.h"
+Mathematics::Rect GetWindowRect() const;
+bool WindowToLayout(const Mathematics::Vector2& window, Mathematics::Vector2& out) const;
+```
+
+`GetWindowRect` is the element's box where it is drawn, as the axis-aligned bounds of the transformed box (the browser's `getBoundingClientRect`). A popup, tooltip or menu that opens at the window level anchors to it, and the engine's tooltips, dropdowns and context menus do. `WindowToLayout` takes a window point to the element's layout space, and returns false when a transform draws the element as nothing (`scale(0)`).
+
+## Limits
+
+- 2D only. There are no 3D transforms, no `perspective` and no `backface-visibility`.
+- A transform does not create a stacking context or a containing block. Paint order is the usual document and `z-index` order.
+- Overlays (dropdown popups, modals, drag previews) escape their ancestors' clips but keep their transforms, as a popup inside a transformed element does on the web: a dropdown under a header scaled 2x opens under it, drawn at 2x. The hover tooltip and the context menu open at the window level, beside the element where it is drawn.
+- A chain of up to 32 nested transformed elements composes. A transformed element under 32 transformed ancestors has its transform ignored: it is drawn and hit untransformed, in the same place, and the log says so once. A primitive is clipped by at most four nested clips.
+- Elements inside a transformed element are never culled against an off-screen clip. That costs a little extra drawing for large transformed scroll content; ordinary transformed panels are unaffected. When a switch between `none` and a transform reaches an element that was culled, the whole UI is regenerated once, because the transform may have moved it into view.

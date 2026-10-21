@@ -1,33 +1,76 @@
 ---
 title: Exposure
-description: How a camera turns physical light values into a picture, the exposure modes, how Auto metering treats the sky, and how the Scene View sets its own exposure.
+description: How a camera turns physical light values into a picture, the exposure modes, the two meters under Auto, how a night stays dark, how the picture meter treats the sky, and how the Scene View sets its own exposure.
 ---
 
-Lights in this engine use physical units: the sun is about 100,000 lux, a lamp a few hundred lumens. Exposure turns those values into a picture, the way a camera's aperture, shutter and sensitivity do. Exposure belongs to the **Camera** component; a Post Process Volume can only offset it (the **Exposure Adjustment** effect, in stops). The editor's Scene View has no camera and sets its own exposure; see [The Scene View's exposure](#the-scene-views-exposure).
+Lights in this engine use physical units: the sun is about 100,000 lux, a lamp a few hundred lumens. Exposure turns those values into a picture, the way a camera's aperture, shutter, and sensitivity do. Exposure belongs to the **Camera** component. A Post Process Volume can only offset it (the **Exposure Adjustment** effect, in stops). The editor's Scene View has no camera and sets its own exposure. See [The Scene View's exposure](#the-scene-views-exposure).
 
 ## What the sun's lux means
 
-A directional light's illuminance is what it delivers on the ground when it is straight overhead: a light at 100,000 lux puts 100,000 lux on a surface facing it with the sun straight overhead. While the sky drives the light (the default), the light's color carries the extra air a lower sun shines through, so it turns warmer and dimmer as the sun sinks; leave the intensity at its overhead value. A directional light that no sky drives keeps the color you give it. The physical sky lights its atmosphere from that same number. It lifts the value to what arrives above the atmosphere and scatters it from there, so the sun drawn in the sky delivers exactly the light's lux overhead, and the sky's own light adds to it. With the default atmosphere, a 100,000 lux sun at 60 degrees gives about 84,000 lux of direct light and 13,000 lux of skylight on the ground.
+A directional light's illuminance is what it delivers on the ground when it is straight overhead: a light at 100,000 lux puts 100,000 lux on a surface facing it with the sun straight overhead. While the sky drives the light (the default), the light's color carries the extra air a lower sun shines through, so it turns warmer and dimmer as the sun sinks. Leave the intensity at its overhead value. A directional light that no sky drives keeps the color you give it. The physical sky lights its atmosphere from that same number. It lifts the value to what arrives above the atmosphere and scatters it from there, so the sun drawn in the sky delivers exactly the light's lux overhead, and the sky's own light adds to it. With the default atmosphere, a 100,000 lux sun at 60 degrees gives about 84,000 lux of direct light and 13,000 lux of skylight on the ground.
 
-The default atmosphere is a crisp clear day: a deep blue zenith over a light haze that pales the sky toward the horizon and fills shadows with skylight. The ground below the horizon reflects light back into the sky too, by the sky's **Ground albedo ramp**. The atmosphere has no other settings yet, so **Exposure Compensation** is the way to brighten or darken it. A camera on **Manual** or **Physical** exposure keeps its number when the sky changes, and the Scene Light meter counts the skylight it measures: a scene exposed by hand against an earlier, brighter sky reads darker without notice. To re-meter it, switch the camera to **Auto**, note the metered EV it settles on, and type that number back into **Manual EV100**.
+The default atmosphere is a crisp clear day: a deep blue zenith over a light haze that pales the sky toward the horizon and fills shadows with skylight. The ground below the horizon reflects light back into the sky too, by the sky's **Ground albedo ramp**. The atmosphere has no other settings yet, so **Exposure Compensation** is the way to brighten or darken it. A camera on **Manual** or **Physical** exposure keeps its number when the sky changes, and the **Lights** meter counts the skylight it measures: a scene exposed by hand against an earlier, brighter sky reads darker without notice. To re-meter it, switch the camera to **Auto**, note the metered EV it settles on, and type that number back into **Manual EV100**.
 
 ## Exposure modes
 
 | Mode | What sets the exposure | Use it for |
 |---|---|---|
-| **Auto** (default) | The camera meters the scene every frame and adapts over time, like an eye. | Games where the player moves between bright and dark places. |
-| **Manual** | **Manual EV100**, an absolute EV100: 15 is bright sun, 12 overcast, 7 to 9 an interior, 2 to 5 night. | Shots that must not change with what is on screen. |
-| **Physical** | Aperture, shutter time and ISO, as on a real camera (f/16, 1/100 s, ISO 100 is about EV 14.6). | Matching photographic reference. |
+| **Auto** (default) | The camera's **Meter** reads the scene, and the exposure adapts to the reading over time, like an eye. See [The two meters](#the-two-meters). | Most games. |
+| **Manual** | **Manual EV100**, an absolute EV100: 15 is bright sun, 12 overcast, 7 to 9 an interior, 2 to 5 night. | Shots that must not change with what is on screen or with the light. |
+| **Physical** | Aperture, shutter time, and ISO, as on a real camera (f/16, 1/100 s, ISO 100 is about EV 14.6). | Matching photographic reference. |
 | **Fixed** | A plain linear multiplier. | Non-physical content. |
 
 **Exposure Compensation** applies in every mode, in stops: +1 doubles the brightness, -1 halves it.
 
-## How Auto metering works
+## The two meters
 
-Auto exposure looks at the pixels of the frame before bloom and tone mapping and sets the exposure so their average lands at 18 % gray, the middle gray of a photograph. Two rules keep it from being fooled:
+Under **Auto**, the **Meter** chooses what the camera reads. Every Auto setting applies to both meters and means the same thing: **Auto Min EV** and **Auto Max EV** clamp the reading, **Auto Speed Up** and **Auto Speed Down** smooth it, and the **Compensation Curve** and **Exposure Compensation** apply on top.
+
+| Meter | What it reads | Use it for |
+|---|---|---|
+| **Picture** (the camera's default) | Meters what the camera sees and adapts over time, like an eye. The pixels of the frame are metered, the world in view, with the sky as a ceiling. See [How the picture meter works](#how-the-picture-meter-works). | Games where the player moves between bright and dark places: interiors, caves, a door into daylight. |
+| **Lights** (the Scene View's default) | Reads the light falling on the world; steady, follows the time of day, never hunts. The reading is the light on a horizontal surface, as an incident light meter takes it: every directional light's illuminance times the sine of its height above the horizon, plus the sky's light on the ground, `EV100 = log2(lux / 2.5)` (a 100,000 lux sun overhead reads 15.3). | Open worlds under a day cycle, flight and space scenes, strategy views, and cutscenes that must not breathe as the framing changes. |
+
+What the Lights meter counts:
+
+- The directional lights the renderer lights: the four strongest, as the renderer draws them. A fifth and weaker one adds nothing to the picture or the reading. A light below the horizon adds nothing.
+- The sky's light on the ground, or a reflection probe's while one replaces the sky.
+- Not point, spot, or area lights, and not where the camera stands: walking into a cave does not brighten the picture. Use the Picture meter where that matters.
+- A scene with no directional light and no sky reads EV 15.4.
+
+The reading changes only when a directional light or the sky changes (time of day, latitude, a light's illuminance, a light added, removed, enabled, or disabled, an atmosphere edit), never with the pixels on screen, so the picture does not drift while the camera moves. When it does change, **Auto Speed Up** and **Auto Speed Down** carry the exposure to the new reading. The Lights meter follows the light, not the materials: a scene of white or very dark surfaces is not pulled toward middle gray the way the Picture meter pulls it.
+
+## How a night stays dark
+
+A meter alone exposes every scene to middle gray, so a moonlit night would come out like a dull day. Auto exposure keeps a night dark with the **Compensation Curve**: the stops added to the exposure at each scene brightness the meter reads. Its horizontal axis is the metered EV100, dark on the left and bright on the right. Its vertical axis is the compensation in stops; a negative value darkens the picture.
+
+The default curve leaves day, dusk and lamp-lit interiors as metered and darkens a moonlit night. The readings below are the Picture meter's on the Basic 3D template (equinox, latitude 40, a full moon):
+
+| Scene | Picture meter reads | Curve | What you see |
+|---|---|---|---|
+| Bright sun (10:00) | EV100 14.7 | 0 | Metered to middle gray. |
+| Shade under a roof (10:00) | EV100 13.1 | 0 | Metered to middle gray. |
+| Dusk (18:00) | EV100 9.2 | 0 | Metered to middle gray. |
+| A room lit by one 60 W lamp | EV100 0.8 | 0 | Metered to middle gray. |
+| Full moon (21:00) | EV100 -4.3 | -2.5 | The ground sits about 4 stops under middle gray, the moon reads bright, the stars stand out. |
+| Moonless night (23:00) | EV100 -10.7 | -2.5 | Below **Auto Min EV**: the exposure is held at the floor of -7, so the night shows darker than it reads, and the curve darkens it 2.5 stops more. The ground is near black; the stars and the night sky's glow carry the picture. |
+
+The meter reads the scene before **Auto Min EV** clamps it, and the curve applies after the clamp, so a moonless night held at the floor is darkened by the curve too. To keep a moonless night's ground legible, ease the curve back toward 0 below the floor: add -2.5 at EV100 -7 (the floor) and 0 at -11. Add the keys only below the floor. Above it, a curve that rises toward the dark shows a darker night brighter. Move the keys when you change **Auto Min EV**.
+
+The stars do not take the curve: it darkens a night's sky and ground, and each star keeps the brightness the metered exposure gives it, so the stars stand out more the darker the curve makes the night.
+
+The two meters read a night differently: the Lights meter reads the light on the ground (a full moon at about EV100 -4, a moonless night near -12); the Picture meter reads the ground and the sky in view, not the stars. The same curve applies to either reading.
+
+To make a game's nights brighter, raise the -2.5 key toward 0; to darken them, lower it. To turn the curve off, set every key to 0. **Auto Min EV** only bounds how far the meter may brighten; shape the night with the curve.
+
+The curve is set in the Camera inspector and in the scene file. It cannot be set from C#, the debug port or the web library yet.
+
+## How the picture meter works
+
+The Picture meter looks at the pixels of the frame before bloom and tone mapping and sets the exposure so their average lands at 18 % gray, the middle gray of a photograph. Two rules keep it from being fooled:
 
 - **The darkest and brightest tenth are ignored.** Deep shadows and specular highlights do not move the meter.
-- **The sky is not part of the average.** The meter reads what the camera sees of the world: the ground, buildings and characters. Pixels where nothing was drawn (the sky, the sun, clouds) are counted apart. The sea is part of the world: an ocean surface is metered like the ground, so a coast, a ship or a flight over water is exposed for the water and what stands on it. A character standing against a bright sky is exposed for the character, not for the sky behind it.
+- **The sky is not part of the average.** The meter reads what the camera sees of the world: the ground, buildings, and characters. Pixels where nothing was drawn (the sky, the sun, clouds) are counted apart. The sea is part of the world: an ocean surface is metered like the ground, so a coast, a ship, or a flight over water is exposed for the water and what stands on it. A character standing against a bright sky is exposed for the character, not for the sky behind it.
 
 The sky still has a say when it fills a large part of the frame. If its average would sit more than **two stops** over middle gray, it holds the exposure back so it does not burn to white. How much it holds back follows its share of the frame:
 
@@ -53,34 +96,45 @@ What lands at middle gray is the average of the world in view (the middle 80 % o
 
 | Setting | Default | Meaning |
 |---|---|---|
-| **Auto Min EV** | 4 | The darkest scene the meter fully brightens. Lower it to let night scenes brighten more. |
+| **Meter** | Picture | What the camera reads: the picture or the lights. See [The two meters](#the-two-meters). |
+| **Auto Min EV** | -7 | The darkest scene the meter fully brightens. A scene that reads darker shows at this value. |
 | **Auto Max EV** | 18 | The brightest scene the meter fully darkens. |
 | **Auto Speed Up** | 1 | How fast the picture brightens when the scene gets darker (stops per second, roughly). |
 | **Auto Speed Down** | 3 | How fast the picture darkens when the scene gets brighter. |
+| **Compensation Curve** | 0 from EV100 0.5 up, -2.5 from -4.25 down | Stops added at each metered scene EV100. With the Lights meter, the inspector's graph marks the light on the scene now. See [How a night stays dark](#how-a-night-stays-dark). |
+
+In a scene file the meter is written by name: `Camera.autoExposureMeter = picture` or `lights`. The curve is one line of keys separated by `;`, each `EV100,stops,in tangent,out tangent,interpolation,tangent mode`, where interpolation 0 is Linear, 1 Smooth and 2 Step, and tangent mode 0 is Auto and 1 Flat. The default is `Camera.autoExposureCompensationCurve = -4.25,-2.5,0,0,1,1;0.5,0,0,0,1,1`.
 
 ## The Scene View's exposure
 
-The Scene View has no Camera component, so it chooses its exposure with its own **Mode**. The Game View always shows its camera's exposure; the two views may differ.
+The Scene View has no Camera component, so it sets its exposure with its own settings. The Game View always shows its camera's exposure. The two views may differ.
 
 | Mode | What sets the exposure |
 |---|---|
-| **Scene Light** (default) | A fixed exposure derived from the light falling on a horizontal surface: every directional light's illuminance times the sine of its height above the horizon (a light below the horizon adds nothing), plus the sky's light on the ground, as an incident light meter reads it (`EV100 = log2(lux / 2.5)`; a 100,000 lux sun overhead reads 15.3). The meter counts the directional lights the renderer lights: the four strongest, as the renderer draws them; a fifth and weaker one adds nothing to the picture or the reading. It is worked out again whenever a directional light or the sky changes (time of day, latitude, a light's illuminance, a light added, removed, enabled or disabled, an atmosphere edit), never from the pixels on screen, so the picture does not drift while you move. A scene with no directional light and no sky uses EV 15.4. |
-| **Auto** | The same meter as a camera in Auto (see above), with its own Min/Max EV and adaptation delay. |
-| **Fixed** | The EV100 you set with **Fixed EV100**. Switching to Fixed from Scene Light or Auto starts it at the exposure the view was showing, so the picture does not jump. |
+| **Auto** (default) | The Scene View's **Meter**, Lights by default, within its own **Min EV100** and **Max EV100**. Each new reading applies at once: the Lights reading lands in the frame a light or the sky changes. Turn on **Adaptation Delay** to smooth it at the camera's default speeds. With the Picture meter and the delay off, the view re-meters every frame, unsmoothed. |
+| **Fixed** | The EV100 you set with **Fixed EV100**. Switching to Fixed from Auto starts it at the exposure the view was showing, so the picture does not jump. |
 
-Change the mode from the Scene View toolbar's camera button (the **Exposure** section shows the derived EV under Scene Light), from the right-click menu on the toolbar's post-processing button, or in **Project Settings > Scene View > Exposure**. **EV Compensation** applies on top in every mode. Scene Light follows the light, not the materials: a scene of white or very dark surfaces is not pulled toward middle gray the way Auto pulls it.
+The Scene View shows a night by the same rule as a game camera: the same **Min EV** floor of -7 and the scene's main camera's **Compensation Curve** (the engine's default when the scene has no camera), so a curve you tune on the camera shows in the Scene View too. It keeps two differences, so the picture stays steady while you fly the view: it meters the Lights by default and applies each reading at once. The two meters read a scene differently, so a night in the Scene View can sit a stop or so away from the Game View's.
+
+| Setting | Camera | Scene View |
+|---|---|---|
+| Exposure | Auto | Auto |
+| Meter | Picture | Lights |
+| Min EV | -7 | -7, the lowest the slider goes |
+| Compensation Curve | The camera's own | The scene's main camera's; the default when the scene has none |
+| Max EV | 18 | 20, the highest the slider goes |
+| Adaptation | Speed Up 1, Speed Down 3 | At once (**Adaptation Delay** off); on smooths at Speed Up 1, Speed Down 3 |
+| Exposure Compensation | 0 | 0 |
+
+Change the Scene View's exposure from the Scene View toolbar's camera button (the **Exposure** section; under the Lights meter its **Reading** line shows the EV100 the lights give and, when the clamps or the curve move it, the EV100 the view is exposed at), from the right-click menu on the toolbar's post-processing button (**Exposure: Auto, Picture**, **Exposure: Auto, Lights**, **Exposure: Fixed**), or in **Project Settings > Scene View > Exposure**. **EV Compensation** applies on top in every mode.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Everything reads dark in bright sun, and the ground is very light | The meter keys the average to middle gray; light materials (snow, sand, pale grass) average brighter than 18 %. | Check material base colors against real albedos (grass 0.1 to 0.25); or add positive Exposure Compensation. |
-| Loading a scene reports a skipped `Camera.autoExposureKey` | The property no longer exists; the target is fixed at 18 % gray. | Delete the line; use `Camera.exposureCompensation` (stops) instead. |
-
-## Changelog
-
-- 2026-10-13: what the sun's lux means for the light and the physical sky; the clean-air day sky; re-metering a hand-exposed scene.
-- 2026-10-12: Converted from `docs/Rendering/exposure.html`; American spelling (gray).
-- 2026-10-12: Scene Light sums every directional light, not only the sun.
-- 2026-10-11: the Scene View's exposure modes (Scene Light, the new default; Auto; Fixed); the Default Material's base color is 0.8.
-- 2026-10-10: first version: exposure modes; Auto metering excludes the sky and uses it as a ceiling; the Auto key setting was removed; what lands at middle gray, and the compensation a light floor needs.
+| Everything reads dark in bright sun, and the ground is very light | The Picture meter keys the average to middle gray. Light materials (snow, sand, pale grass) average brighter than 18 %. | Check material base colors against real albedos (grass 0.1 to 0.25); add positive Exposure Compensation; or use the Lights meter, which does not read the materials. |
+| A night is darker or brighter than the game should show | The camera's **Compensation Curve** sets how dark a night reads. | Raise the curve's night key toward 0 to brighten the night, lower it to darken it. |
+| A night scene is black | **Auto Min EV** is above the night's reading. | Set **Auto Min EV** to -7 and shape the night with the curve. |
+| Walking indoors does not brighten the picture | The camera uses the Lights meter, which reads the daylight, not the room. | Use the Picture meter for that camera. |
+| Loading a scene reports a skipped `Camera.autoExposureMeter` | The value is neither `picture` nor `lights`. | Set it to `picture` or `lights`. |
+| Loading a scene reports a skipped `Camera.autoExposureKey` | The property no longer exists. The target is fixed at 18 % gray. | Delete the line. Use `Camera.exposureCompensation` (stops) instead. |

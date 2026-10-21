@@ -20,6 +20,7 @@
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/PostProcessEffects/ShadowSettingsEffect.h"
 #include "Rendering/Core/GPUCulling.h"
+#include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/Nodes/AONode.h"
 #include "Engine/Rendering/Pipeline/Nodes/AutoExposureNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/ShadowMapNode.h"
@@ -51,6 +52,8 @@
 #include "StagedTestPaths.h"
 #include "StorageImageLayoutHelper.h"
 #include "TestDeviceHelper.h"
+#include "HeldPipelineBuilds.h"
+#include "SceneDrawWarm.h"
 #include "Components/Terrain/TerrainGrass.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "TerrainECS/TerrainGrassAlpha.h"
@@ -67,6 +70,8 @@
 #include "TerrainECS/TerrainRuleNoise.h"
 #include "TerrainECS/TerrainSplatComposite.h"
 #include "TerrainECS/TerrainSurfaceRuleEval.h"
+#include "TerrainGrass/GrassClumpModel.h"
+#include "TerrainGrass/GrassMaterialKeywords.h"
 #include "TerrainGrass/TerrainGrassRenderFeature.h"
 #include "TerrainGrass/TerrainGrassRenderNode.h"
 #include "TerrainGrass/RegisterTerrainGrass.h"
@@ -123,6 +128,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -309,7 +315,7 @@ Rendering::ViewDesc MakeViewDesc(Rendering::ViewId id, uint32_t mask)
 {
     Rendering::ViewDesc v{};
     v.id = id;
-    v.renderLayerMask = mask;
+    v.renderLayerMask = Rendering::RenderLayerMask{mask};
     return v;
 }
 
@@ -362,7 +368,7 @@ CrossfadeDepthDecl DeclareCrossfadePrepassWorld(Rendering::IDevice* device, bool
     }
     rs.Views().SetCameraData(camId, cd);
     const ViewId viewId = rs.Views().AllocateView("XfView", camId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
     clear.clearColor = true;
     clear.clearColorValue[3] = 1.0f;
@@ -434,7 +440,7 @@ CrossfadeDepthDecl DeclareCrossfadePrepassWorld(Rendering::IDevice* device, bool
             rec.viewId = viewId;
             rec.meshHandle = mesh;
             rec.material = material;
-            rec.renderLayerMask = 1u;
+            rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
             records.push_back(rec);
         }
         rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(records));
@@ -548,7 +554,7 @@ PrepassOrderDecl DeclarePrepassResolveWorld(Rendering::IDevice* device, bool wit
     std::memcpy(cd.viewProjRel, cd.viewProj, sizeof(cd.viewProj));
     rs.Views().SetCameraData(camId, cd);
     const ViewId viewId = rs.Views().AllocateView("NoView", camId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
     clear.clearDepth = true;
     rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
@@ -802,17 +808,18 @@ TEST(RenderPipelineDeclareTests, BlueprintOrderMaskGateAndBlackboardThreading)
 
         const std::vector<ViewTargetsRG> targets = {
             ViewTargetsRG{7u, color, depth, {}},
-            ViewTargetsRG{9u, color, depth, {}}, // masked off below
+            ViewTargetsRG{9u, color, depth, {}}, // asleep below
         };
-        const std::vector<Rendering::ViewDesc> views = {MakeViewDesc(7u, 1u),
-                                                        MakeViewDesc(9u, 0u)};
+        Rendering::ViewDesc asleep = MakeViewDesc(9u, 1u);
+        asleep.participation = Rendering::ViewParticipation::OnDemand;
+        const std::vector<Rendering::ViewDesc> views = {MakeViewDesc(7u, 1u), asleep};
 
         instance.Declare(frame, targets, views);
         DeclareProbeNode::s_Calls = nullptr;
         DeclareProbeNode::s_ToPublish = {};
 
         // Blueprint order, active view only: a then b; the disabled node and
-        // the masked view declare nothing.
+        // the sleeping view declare nothing.
         ASSERT_EQ(calls.size(), 2u);
         EXPECT_EQ(calls[0].NodeId, "a");
         EXPECT_EQ(calls[1].NodeId, "b");
@@ -834,11 +841,66 @@ TEST(RenderPipelineDeclareTests, BlueprintOrderMaskGateAndBlackboardThreading)
 
         // Output resolution through the blackboard.
         EXPECT_EQ(instance.GetOutputRG(7u, "FinalColor").Id, color.Id);
-        EXPECT_FALSE(instance.GetOutputRG(9u, "FinalColor").IsValid()) << "masked view seeded nothing";
+        EXPECT_FALSE(instance.GetOutputRG(9u, "FinalColor").IsValid()) << "sleeping view seeded nothing";
 
         // Frame-identity guard.
         EXPECT_NE(instance.FrameResourcesFor(&frame), nullptr);
         EXPECT_EQ(instance.FrameResourcesFor(nullptr), nullptr);
+
+        device->WaitForIdle();
+    }
+    device->Shutdown();
+}
+
+// A view on no layer still runs its pipeline, so it draws its clear and its sky and follows its camera;
+// an OnDemand view with no armed frame declares nothing, and declares again once it is armed.
+TEST(RenderPipelineDeclareTests, AViewOnNoLayerDeclaresAndASleepingViewDoesNot)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderServices rs;
+        RenderPipelineNodeRegistry registry;
+        ASSERT_TRUE(registry.Register(
+            "DeclareProbe", [] { return std::make_unique<DeclareProbeNode>(); }, true));
+
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "NoLayerTest";
+        bp.passes.push_back(MakePass("a"));
+        bp.outputs.push_back({"FinalColor", "View.Resolve"});
+
+        RenderPipelineInstance instance(rs, registry);
+        instance.SetBlueprint(bp);
+
+        FramePools pools(device.get());
+        RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("NL.Color", ColorTargetDesc());
+        RenderGraph::RGTexture depth = frame.ImportPersistentTexture("NL.Depth", DepthTargetDesc());
+
+        std::vector<DeclareProbeNode::Call> calls;
+        DeclareProbeNode::s_Calls = &calls;
+        const std::vector<ViewTargetsRG> targets = {
+            ViewTargetsRG{3u, color, depth, {}},
+            ViewTargetsRG{4u, color, depth, {}},
+            ViewTargetsRG{5u, color, depth, {}},
+        };
+        Rendering::ViewDesc unarmed = MakeViewDesc(4u, 1u);
+        unarmed.participation = Rendering::ViewParticipation::OnDemand;
+        Rendering::ViewDesc armedOnNoLayer = MakeViewDesc(5u, 0u);
+        armedOnNoLayer.participation = Rendering::ViewParticipation::OnDemand;
+        armedOnNoLayer.participationFrames = 1;
+        const std::vector<Rendering::ViewDesc> views = {MakeViewDesc(3u, 0u), unarmed, armedOnNoLayer};
+
+        instance.Declare(frame, targets, views);
+        DeclareProbeNode::s_Calls = nullptr;
+
+        ASSERT_EQ(calls.size(), 2u) << "the two views on no layer declare, the sleeping one does not";
+        EXPECT_EQ(calls[0].View, 3u);
+        EXPECT_EQ(calls[1].View, 5u);
+        EXPECT_TRUE(instance.GetOutputRG(3u, "FinalColor").IsValid());
+        EXPECT_FALSE(instance.GetOutputRG(4u, "FinalColor").IsValid());
 
         device->WaitForIdle();
     }
@@ -1154,6 +1216,72 @@ TEST(RenderPipelineDeclareTests, PrePassSplitsWithoutTemporalAA)
         ASSERT_TRUE(b.MaterializedPostTex.IsValid());
         EXPECT_EQ(frame.Graph().ResourceDesc(b.MaterializedPostTex.Id).Width, 64u)
             << "extent.basis=output materializes at the display extent";
+
+        device->WaitForIdle();
+    }
+    device->Shutdown();
+}
+
+// A render scale on a multisampled view cannot split (the split needs a single-sample raster),
+// so the view draws at full resolution. That is said once, naming the fix, instead of the
+// scale silently doing nothing: a web page that sets renderScale under the default MSAA.
+TEST(RenderPipelineDeclareTests, RenderScaleOnAMultisampledViewWarnsOnceNamingTheFix)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderServices rs;
+        RenderPipelineNodeRegistry registry;
+        ASSERT_TRUE(registry.Register(
+            "DeclareProbe", [] { return std::make_unique<DeclareProbeNode>(); }, true));
+        ASSERT_TRUE(registry.Register(
+            "RenderScaleUpscale",
+            [] { return std::make_unique<Nodes::RenderScaleUpscaleNode>(); }, true));
+
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "MsaaScaleTest";
+        bp.passes.push_back(MakePass("a"));
+        RenderPipelineBlueprint::Pass cross;
+        cross.id = "RenderScaleUpscale";
+        cross.type = "RenderScaleUpscale";
+        cross.enabled = true;
+        cross.perView = true;
+        cross.passJson =
+            R"({"id":"RenderScaleUpscale","type":"RenderScaleUpscale","input":"SceneColor","output":"PostTex"})";
+        bp.passes.push_back(cross);
+        bp.worldColorResolveTargetRef = "SceneColor";
+        bp.resources.push_back({"SceneColor", R"({"kind":"texture","scope":"perView","format":"r16g16b16a16_float","extent":{"scale":[1,1]},"usage":["renderTarget","shaderResource"]})"});
+        bp.resources.push_back({"PostTex", R"({"kind":"texture","scope":"perView","format":"r16g16b16a16_float","extent":{"basis":"output"},"usage":["renderTarget","shaderResource"]})"});
+
+        RenderPipelineInstance instance(rs, registry);
+        instance.SetBlueprint(bp);
+        rs.Views().SetViewRenderScale(7u, 0.5f);
+
+        FramePools pools(device.get());
+        RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("MS.Color", ColorTargetDesc(4));
+        RenderGraph::RGTexture depth = frame.ImportPersistentTexture("MS.Depth", DepthTargetDesc());
+
+        const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{7u, color, depth, {}}};
+        const std::vector<Rendering::ViewDesc> views = {MakeViewDesc(7u, 1u)};
+        std::vector<std::string> log;
+        std::vector<DeclareProbeNode::Call> calls;
+        {
+            GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+            DeclareProbeNode::s_Calls = &calls;
+            instance.Declare(frame, targets, views);
+            instance.Declare(frame, targets, views);
+            DeclareProbeNode::s_Calls = nullptr;
+        }
+        ASSERT_FALSE(calls.empty());
+        EXPECT_EQ(calls[0].RenderWidth, 64u) << "a multisampled view does not split";
+        EXPECT_EQ(GameEngine::TestLog::CountLinesContaining(log, "applies only to a single-sample view"), 1u)
+            << "one warning across frames";
+        const std::string warning = GameEngine::TestLog::FirstLineContaining(log, "applies only to a single-sample view");
+        EXPECT_NE(warning.find("antiAliasing 3"), std::string::npos) << warning;
+        EXPECT_NE(warning.find("msaaSamples 1"), std::string::npos) << warning;
 
         device->WaitForIdle();
     }
@@ -1695,7 +1823,7 @@ TEST(RenderPipelineDeclareTests, TaauMipBiasUploadReadsBackExtentRatio)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("BiasView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
         rs.Views().SetViewAntiAliasing(viewId, true, AntiAliasingMode::TAA, 8u);
         rs.SetDefaultRenderScale(0.76f);
@@ -1785,7 +1913,7 @@ TEST(RenderPipelineDeclareTests, ViewParamsUploadCarriesTheViewsExposure)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("ExposureView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         RenderPipelineNodeRegistry registry;
@@ -1852,7 +1980,7 @@ TEST(RenderPipelineDeclareTests, RealNodesShareOneDepthAndSuppressTheWorldClear)
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("NodeCam");
         const ViewId viewId = rs.Views().AllocateView("NodeView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearColorValue[3] = 1.0f;
@@ -2198,7 +2326,7 @@ TEST(RenderPipelineDeclareTests, NonOccludingPrepassTakesNoEntityBatchEdges)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("NoOcclSpineView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -2303,7 +2431,7 @@ TEST(RenderPipelineDeclareTests, UploadNodesDissolveIntoTheRing)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("UploadView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         RenderPipelineNodeRegistry registry;
@@ -2393,7 +2521,7 @@ TEST(RenderPipelineDeclareTests, ComputeNodeWithoutItsPipelineDeclaresNothing)
         RenderServices rs;
         ASSERT_TRUE(rs.Initialize(device.get()));
         const ViewId viewId = rs.Views().AllocateView("CSView", rs.Views().AllocateCamera("CSCam"));
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
         RenderPipelineNodeRegistry registry;
         ASSERT_TRUE(registry.Register(
@@ -2458,7 +2586,7 @@ TEST(RenderPipelineDeclareTests, CsmNodeCachesFrameDataBeforeTheCascadeArms)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("CsmView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -2608,7 +2736,7 @@ class SceneFitRig
         m_CameraId = m_Services.Views().AllocateCamera("SceneFitCam");
         SetCamera(0.0f, false);
         m_ViewId = m_Services.Views().AllocateView("SceneFitView", m_CameraId);
-        m_Services.Views().SetViewRenderLayerMask(m_ViewId, 1u);
+        m_Services.Views().SetViewRenderLayerMask(m_ViewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -2852,7 +2980,7 @@ TEST(RenderPipelineDeclareTests, GlassTintDeclaresOnlyForTransmissiveCasters)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("TintView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -2934,7 +3062,7 @@ TEST(RenderPipelineDeclareTests, GlassTintDeclaresOnlyForTransmissiveCasters)
         rec.meshHandle = meshHandle;
         rec.material = &glass;
         rec.instanceIndex = 0u;
-        rec.renderLayerMask = 1u;
+        rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
         rec.flags = transmissiveCastsShadows ? 1u : 0u; // bit 0 == castsShadows
         rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&rec, 1u));
         rs.BuildWorldBatchKeys();
@@ -3027,7 +3155,7 @@ TEST(RenderPipelineDeclareTests, SdsmReduceDeclaresOnlyWithCastersOverAnyDepthSa
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("SdsmView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         // The reduce gate requires the staged depth_reduce.shaderpkg and its
@@ -3179,7 +3307,7 @@ TEST(RenderPipelineDeclareTests, SdsmDepthReduceDeclaresComputeScopedSampledRead
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("SdsmScopeView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         // The reduce declares only with depth_reduce.shaderpkg resolvable; a
@@ -3305,7 +3433,7 @@ TEST(RenderPipelineDeclareTests, SdsmReduceReadsTheViewDepthAfterLaterNodesWrite
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("SdsmLateView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         {
@@ -3478,7 +3606,7 @@ TEST(RenderPipelineDeclareTests, CascadeCasterCullRunsOnTheFitTheCascadesRenderW
 
         const CameraId camId = rs.Views().AllocateCamera("CullStageCam");
         const ViewId viewId = rs.Views().AllocateView("CullStageView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -3603,7 +3731,7 @@ TEST(RenderPipelineDeclareTests, ShadowVolumeFiltersRestoreBaseAndFollowViewWorl
         {
             viewIds[i] = rs.Views().AllocateView("ShadowVolumeView", camera);
             rs.Views().SetViewWorldId(viewIds[i], worldIds[i]);
-            rs.Views().SetViewRenderLayerMask(viewIds[i], 1u);
+            rs.Views().SetViewRenderLayerMask(viewIds[i], GameEngine::Rendering::RenderLayerMask::Default());
             Rendering::ViewClearConfig clear{};
             clear.clearColor = clear.clearDepth = true;
             rs.Views().SetViewTargets(viewIds[i], 0, 0, 0, clear);
@@ -3872,7 +4000,7 @@ TEST(RenderPipelineDeclareTests, MsmDeclaresPerCascadeWritesOnlyWhenMsm4Active)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("MsmView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -4314,7 +4442,7 @@ TEST(RenderPipelineDeclareTests, SpineIsIdempotentPerFrameAndMarksOutput)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("SpineView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -4414,7 +4542,7 @@ TEST(RenderPipelineDeclareTests, SpineDeclaresFourQuadViewsInOneCall)
             auto& viewName = viewNames[i];
             std::snprintf(viewName.data(), viewName.size(), "QuadView%zu", i);
             viewIds[i] = rs.Views().AllocateView(viewName.data(), camId);
-            rs.Views().SetViewRenderLayerMask(viewIds[i], 1u);
+            rs.Views().SetViewRenderLayerMask(viewIds[i], GameEngine::Rendering::RenderLayerMask::Default());
             Rendering::ViewClearConfig clear{};
             clear.clearColor = true;
             clear.clearDepth = true;
@@ -4664,8 +4792,8 @@ TEST(RenderPipelineDeclareTests, SubmitStampsOnlyTheSubmittedFrameStreamsPending
         const CameraId camId = rs.Views().AllocateCamera("StreamCam");
         const ViewId viewA = rs.Views().AllocateView("StreamViewA", camId);
         const ViewId viewB = rs.Views().AllocateView("StreamViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 1u);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -4829,8 +4957,8 @@ TEST(RenderPipelineDeclareTests, TwoFrameStreamsOneAppFrameIsolateAndShareGlobal
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewA = rs.Views().AllocateView("TwoStreamViewA", camId);
         const ViewId viewB = rs.Views().AllocateView("TwoStreamViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 1u);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -4967,8 +5095,8 @@ TEST(RenderPipelineDeclareTests, BuildFrameGraphNeverBumpsAppFrameEpoch)
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewA = rs.Views().AllocateView("EpochViewA", camId);
         const ViewId viewB = rs.Views().AllocateView("EpochViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 1u);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -5062,7 +5190,7 @@ TEST(RenderPipelineDeclareTests, ReBegunFrameInvalidatesUntilRedeclareAndReapDro
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("ReBeginView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -5191,8 +5319,8 @@ TEST(RenderPipelineDeclareTests, TwoViewsOneSpineCallBothResolveAndRepeatOmissio
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewA = rs.Views().AllocateView("EdViewA", camId);
         const ViewId viewB = rs.Views().AllocateView("EdViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 1u);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -5247,10 +5375,11 @@ TEST(RenderPipelineDeclareTests, TwoViewsOneSpineCallBothResolveAndRepeatOmissio
     device->Shutdown();
 }
 
-// Slice-7d — a renderLayerMask==0 view carried in the view set contributes
-// no per-view pipeline (the suspended-controller shape: the view exists in
-// the registry but renders nothing); the active view is unaffected.
-TEST(RenderPipelineDeclareTests, ZeroLayerMaskViewDeclaresNoPipelineOutput)
+// A sleeping view carried in the view set contributes no per-view pipeline
+// (the suspended-controller shape: an OnDemand view the controller stopped
+// arming exists in the registry but renders nothing); the active view is
+// unaffected. A view on no layer is not asleep: AViewOnNoLayerDeclaresAndASleepingViewDoesNot.
+TEST(RenderPipelineDeclareTests, ASleepingViewDeclaresNoPipelineOutput)
 {
     auto device = CreateVulkanDeviceFast();
     if (!device)
@@ -5269,14 +5398,18 @@ TEST(RenderPipelineDeclareTests, ZeroLayerMaskViewDeclaresNoPipelineOutput)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewA = rs.Views().AllocateView("MaskViewA", camId);
-        const ViewId viewB = rs.Views().AllocateView("MaskViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 0u);
+        const ViewId viewB = rs.Views().AllocateView("MaskViewB", camId, Rendering::ViewPurpose::Game,
+                                                     Rendering::ViewParticipation::OnDemand);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
+        const ViewId viewC = rs.Views().AllocateView("MaskViewC", camId);
+        rs.Views().SetViewRenderLayerMask(viewC, GameEngine::Rendering::RenderLayerMask::None());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
         rs.Views().SetViewClearConfig(viewA, clear);
         rs.Views().SetViewClearConfig(viewB, clear);
+        rs.Views().SetViewClearConfig(viewC, clear);
 
         FramePools pools(device.get());
         RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
@@ -5286,19 +5419,24 @@ TEST(RenderPipelineDeclareTests, ZeroLayerMaskViewDeclaresNoPipelineOutput)
         RenderGraph::RGTexture depthA = frame.ImportPersistentTexture("MaskA.Depth", DepthTargetDesc());
         RenderGraph::RGTexture colorB = frame.ImportPersistentTexture("MaskB.Color", ColorTargetDesc());
         RenderGraph::RGTexture depthB = frame.ImportPersistentTexture("MaskB.Depth", DepthTargetDesc());
+        RenderGraph::RGTexture colorC = frame.ImportPersistentTexture("MaskC.Color", ColorTargetDesc());
+        RenderGraph::RGTexture depthC = frame.ImportPersistentTexture("MaskC.Depth", DepthTargetDesc());
 
         rs.BeginWorldDrawFrame();
         rs.BuildWorldBatchKeys();
 
-        const ViewTargetsRG vts[2] = {{viewA, colorA, depthA, {}},
-                                      {viewB, colorB, depthB, {}}};
+        const ViewTargetsRG vts[3] = {{viewA, colorA, depthA, {}},
+                                      {viewB, colorB, depthB, {}},
+                                      {viewC, colorC, depthC, {}}};
         RenderServices::FrameGraphBuildParamsRG params{};
-        params.ViewTargets = std::span<const ViewTargetsRG>(vts, 2);
+        params.ViewTargets = std::span<const ViewTargetsRG>(vts, 3);
         rs.Spine().BuildFrameGraph(frame, params);
 
         EXPECT_TRUE(rs.GetPipelineOutputRG(frame, viewA).IsValid());
         EXPECT_FALSE(rs.GetPipelineOutputRG(frame, viewB).IsValid())
-            << "a mask-0 view must declare no pipeline output";
+            << "a sleeping view must declare no pipeline output";
+        EXPECT_TRUE(rs.GetPipelineOutputRG(frame, viewC).IsValid())
+            << "a view on no layer still has its output: its clear and its sky";
 
         frame.Execute();
         device->WaitForIdle();
@@ -5331,8 +5469,8 @@ TEST(RenderPipelineDeclareTests, TwoViewsAsymmetricMsaaOneSpineCall)
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewA = rs.Views().AllocateView("AsymViewA", camId);
         const ViewId viewB = rs.Views().AllocateView("AsymViewB", camId);
-        rs.Views().SetViewRenderLayerMask(viewA, 1u);
-        rs.Views().SetViewRenderLayerMask(viewB, 1u);
+        rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
+        rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -5392,7 +5530,7 @@ TEST(RenderPipelineDeclareTests, ClearViewTargetsDropsPublishedRegistryTargets)
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("ClrCam");
         const ViewId viewId = rs.Views().AllocateView("ClrView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         rs.Views().SetViewTargets(viewId, /*color*/ 7u, /*depth*/ 9u, /*resolve*/ 0u, clear);
@@ -5474,7 +5612,7 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("MsaaCam");
         const ViewId viewId = rs.Views().AllocateView("MsaaView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -5569,10 +5707,14 @@ struct SssrGateRig
     std::unique_ptr<RenderGraph::RGFrame> Frame;
     Rendering::ViewId View = 0;
     Rendering::ViewId ViewB = 0; // second view when Init's samplesB > 0
+    uint32_t Samples = 1;
+    uint32_t SamplesB = 0;
 
     bool Init(Rendering::IDevice* device, uint32_t samples, uint32_t samplesB = 0,
-              bool letterboxed = false)
+              bool letterboxed = false, bool temporalAA = false)
     {
+        Samples = samples;
+        SamplesB = samplesB;
         if (!Services.Initialize(device))
             return false;
         const CameraId camId = Services.Views().AllocateCamera("SssrGateCam");
@@ -5597,13 +5739,13 @@ struct SssrGateRig
             box.active = true;
             Services.Views().SetViewLetterbox(View, box);
         }
-        Services.Views().SetViewRenderLayerMask(View, 1u);
+        Services.Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Services.Views().SetViewTargets(View, 0, 0, 0, clear);
         Services.Views().SetViewPostProcessOverride(View, pp);
         if (samplesB > 0)
         {
             ViewB = Services.Views().AllocateView("SssrGateViewB", camId);
-            Services.Views().SetViewRenderLayerMask(ViewB, 1u);
+            Services.Views().SetViewRenderLayerMask(ViewB, GameEngine::Rendering::RenderLayerMask::Default());
             Services.Views().SetViewTargets(ViewB, 0, 0, 0, clear);
             Services.Views().SetViewPostProcessOverride(ViewB, pp);
         }
@@ -5620,6 +5762,11 @@ struct SssrGateRig
                 "ScreenSpaceReflections",
                 [] { return std::make_unique<Nodes::ScreenSpaceReflectionsNode>(); }, true))
             return false;
+        if (!Registry.Register(
+                "TemporalAA", [] { return std::make_unique<Nodes::TemporalAANode>(); }, true))
+            return false;
+        if (temporalAA)
+            Services.Views().SetViewAntiAliasing(View, true, AntiAliasingMode::TAA, 8u);
 
         RenderPipelineBlueprint bp;
         bp.pipelineName = "SssrGate";
@@ -5638,6 +5785,9 @@ struct SssrGateRig
         addPass("World", "WorldRender", R"({"id":"World","type":"WorldRender"})");
         addPass("Sssr", "ScreenSpaceReflections",
                 R"({"id":"Sssr","type":"ScreenSpaceReflections","input":"SceneColor","output":"HDRSSSR"})");
+        if (temporalAA)
+            addPass("Taa", "TemporalAA",
+                    R"({"id":"Taa","type":"TemporalAA","input":"HDRSSSR","output":"HDRTemporalAA"})");
         bp.worldColorResolveTargetRef = "SceneColor";
         bp.resources.push_back(
             {"SceneColor",
@@ -5660,14 +5810,20 @@ struct SssrGateRig
         Instance->SetBlueprint(bp);
 
         Pools = std::make_unique<FramePools>(device);
+        DeclareFrame(device, 0);
+        return true;
+    }
+
+    void DeclareFrame(Rendering::IDevice* device, uint64_t frameIndex)
+    {
         Frame = std::make_unique<RenderGraph::RGFrame>(device, &Pools->Persistent,
                                                        &Pools->Transient, &Pools->Ring);
-        Frame->BeginFrame(0);
+        Frame->BeginFrame(frameIndex);
 
         const RenderGraph::RGTexture color =
-            Frame->ImportPersistentTexture("SssrGate.Color", ColorTargetDesc(samples));
+            Frame->ImportPersistentTexture("SssrGate.Color", ColorTargetDesc(Samples));
         const RenderGraph::RGTexture depth =
-            Frame->ImportPersistentTexture("SssrGate.Depth", DepthTargetDesc(samples));
+            Frame->ImportPersistentTexture("SssrGate.Depth", DepthTargetDesc(Samples));
 
         Services.BeginWorldDrawFrame();
         Services.BuildWorldBatchKeys();
@@ -5676,15 +5832,14 @@ struct SssrGateRig
         if (ViewB != 0)
         {
             const RenderGraph::RGTexture colorB =
-                Frame->ImportPersistentTexture("SssrGate.ColorB", ColorTargetDesc(samplesB));
+                Frame->ImportPersistentTexture("SssrGate.ColorB", ColorTargetDesc(SamplesB));
             const RenderGraph::RGTexture depthB =
-                Frame->ImportPersistentTexture("SssrGate.DepthB", DepthTargetDesc(samplesB));
+                Frame->ImportPersistentTexture("SssrGate.DepthB", DepthTargetDesc(SamplesB));
             targets.push_back(ViewTargetsRG{ViewB, colorB, depthB, {}});
         }
         const std::vector<Rendering::ViewDesc> views(Services.Views().GetViews().begin(),
                                                      Services.Views().GetViews().end());
         Instance->Declare(*Frame, targets, views);
-        return true;
     }
 
     RenderGraph::RGTexture Tex(const char* name) const { return TexFor(View, name); }
@@ -5706,7 +5861,7 @@ struct SssrGateRig
         return false;
     }
 
-    void Finish(Rendering::IDevice* device)
+    void ExecuteFrame(Rendering::IDevice* device)
     {
         const auto out = Instance->GetOutputRG(View, "FinalColor");
         if (out.IsValid())
@@ -5719,9 +5874,104 @@ struct SssrGateRig
         }
         Frame->Execute();
         device->WaitForIdle();
+    }
+
+    // Executes the declared frame and declares the next one.
+    void NextFrame(Rendering::IDevice* device, uint64_t frameIndex)
+    {
+        ExecuteFrame(device);
+        DeclareFrame(device, frameIndex);
+    }
+
+    void Finish(Rendering::IDevice* device)
+    {
+        ExecuteFrame(device);
         Services.Shutdown();
     }
+
+    void SetReflectionsActive(bool active)
+    {
+        PostProcessSettings pp{};
+        pp.SSSRIntensity = active ? 1.0f : 0.0f;
+        Services.Views().SetViewPostProcessOverride(View, pp);
+    }
+
+    void SetLetterboxed(bool letterboxed)
+    {
+        ViewLetterbox box{};
+        box.active = letterboxed;
+        Services.Views().SetViewLetterbox(View, box);
+    }
+
+    // Names of the colour history planes (<owner>.View<N>.History<k>) the view's pass accesses this
+    // frame, as reads or as writes.
+    std::vector<std::string> HistoryPlanes(std::string_view owner, std::string_view pass,
+                                           bool writes) const
+    {
+        const std::string prefix = std::string(owner) + ".View" +
+                                   std::to_string(static_cast<uint32_t>(View)) + ".History";
+        const auto& graph = Frame->Graph();
+        std::vector<std::string> names;
+        for (const auto id : RGQuery::DeclaredIds(graph, RGQuery::Family{pass}))
+            for (const auto& access : graph.Accesses())
+            {
+                if (access.Pass != id || RenderGraph::IsWrite(access.Access) != writes)
+                    continue;
+                const std::string name = graph.ResourceName(access.Resource);
+                if (name.rfind(prefix, 0) == 0)
+                    names.push_back(name);
+            }
+        return names;
+    }
 };
+
+// The history the SSSR chain writes in frame 0 (its only history plane), and the history the next
+// frame that runs the chain reprojects, after a number of frames in which the view renders without it.
+struct HistoryAcrossFrames
+{
+    std::vector<std::string> WrittenFirst;
+    std::vector<std::string> ReadNext;
+};
+
+std::optional<HistoryAcrossFrames> RunHistoryAcrossFrames(Rendering::IDevice* device,
+                                                                  uint32_t framesWithoutChain)
+{
+    SssrGateRig rig;
+    if (!rig.Init(device, 1))
+        return std::nullopt;
+    HistoryAcrossFrames result;
+    result.WrittenFirst = rig.HistoryPlanes("SSSR", "TemporalResolve", true);
+    uint64_t frameIndex = 0;
+    rig.SetReflectionsActive(false);
+    for (uint32_t i = 0; i < framesWithoutChain; ++i)
+        rig.NextFrame(device, ++frameIndex);
+    rig.SetReflectionsActive(true);
+    rig.NextFrame(device, ++frameIndex);
+    result.ReadNext = rig.HistoryPlanes("SSSR", "Reproject", false);
+    rig.Finish(device);
+    return result;
+}
+
+// The same for the TAA history, across frames in which the view is letterboxed (the resolve passes
+// a letterboxed view through).
+std::optional<HistoryAcrossFrames> RunTaaHistoryAcrossFrames(Rendering::IDevice* device,
+                                                                 uint32_t framesWithoutResolve)
+{
+    SssrGateRig rig;
+    if (!rig.Init(device, 1, 0, false, true))
+        return std::nullopt;
+    HistoryAcrossFrames result;
+    result.WrittenFirst = rig.HistoryPlanes("TAA", "TAAResolve", true);
+    uint64_t frameIndex = 0;
+    rig.SetLetterboxed(true);
+    for (uint32_t i = 0; i < framesWithoutResolve; ++i)
+        rig.NextFrame(device, ++frameIndex);
+    rig.SetLetterboxed(false);
+    rig.NextFrame(device, ++frameIndex);
+    result.ReadNext = rig.HistoryPlanes("TAA", "TAAResolve", false);
+    rig.Finish(device);
+    return result;
+}
 } // namespace
 
 // The MSAA refusal must be POSITIVE: under a multisampled world color the
@@ -5827,6 +6077,68 @@ TEST(RenderPipelineDeclareTests, SssrNodeDeclaresChainOffWrittenSignalSingleSamp
                "publish the real HDRSSSR output, not the stitch-through";
 
         rig.Finish(device.get());
+    }
+    device->Shutdown();
+}
+
+// The SSSR histories are stored at the pre-exposure of the frame that wrote them and are rescaled by
+// the ratio of this frame's pre-exposure to the previous frame's. A frame in which the view renders
+// without the chain moves that pre-exposure on without rewriting the histories, so the chain drops
+// them: the first frame after the gap must not reproject what was written before it.
+TEST(RenderPipelineDeclareTests, SssrDropsItsHistoryAfterAFrameWithoutTheChain)
+{
+    Rendering::ShaderPackage pkg{};
+    std::string error;
+    if (!Rendering::LoadShaderPkg("Shaders/sssr_classify.shaderpkg", Rendering::ShaderSourceKind::SpirV, pkg, &error))
+        GTEST_SKIP() << "sssr shader packages not staged: " << error;
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        const auto continuous = RunHistoryAcrossFrames(device.get(), 0);
+        ASSERT_TRUE(continuous.has_value());
+        ASSERT_EQ(continuous->WrittenFirst.size(), 1u) << "the first frame writes one history plane";
+        // Control: the frame after a write reprojects the plane that was written.
+        EXPECT_EQ(continuous->ReadNext, continuous->WrittenFirst);
+
+        for (const uint32_t gap : {1u, 2u})
+        {
+            const auto skipped = RunHistoryAcrossFrames(device.get(), gap);
+            ASSERT_TRUE(skipped.has_value());
+            ASSERT_EQ(skipped->WrittenFirst, continuous->WrittenFirst);
+            ASSERT_EQ(skipped->ReadNext.size(), 1u) << "the reprojection reads one history plane";
+            EXPECT_NE(skipped->ReadNext, skipped->WrittenFirst)
+                << "after " << gap << " frame(s) without the chain, the history written before the "
+                   "gap was reprojected at the wrong pre-exposure ratio";
+        }
+    }
+    device->Shutdown();
+}
+
+// The TAA history follows the same rule: a frame in which the view renders without the resolve
+// drops it.
+TEST(RenderPipelineDeclareTests, TemporalAADropsItsHistoryAfterAFrameWithoutTheResolve)
+{
+    Rendering::ShaderPackage pkg{};
+    std::string error;
+    if (!Rendering::LoadShaderPkg("Shaders/taa_resolve.shaderpkg", Rendering::ShaderSourceKind::SpirV, pkg, &error))
+        GTEST_SKIP() << "taa shader package not staged: " << error;
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        const auto continuous = RunTaaHistoryAcrossFrames(device.get(), 0);
+        ASSERT_TRUE(continuous.has_value());
+        ASSERT_EQ(continuous->WrittenFirst.size(), 1u) << "the first frame writes one history plane";
+        EXPECT_EQ(continuous->ReadNext, continuous->WrittenFirst);
+
+        const auto skipped = RunTaaHistoryAcrossFrames(device.get(), 1);
+        ASSERT_TRUE(skipped.has_value());
+        ASSERT_EQ(skipped->WrittenFirst, continuous->WrittenFirst);
+        ASSERT_EQ(skipped->ReadNext.size(), 1u) << "the resolve reads one history plane";
+        EXPECT_NE(skipped->ReadNext, skipped->WrittenFirst)
+            << "after a frame without the resolve, the history written before the gap was "
+               "reprojected at the wrong pre-exposure ratio";
     }
     device->Shutdown();
 }
@@ -5973,7 +6285,7 @@ TEST(RenderPipelineDeclareTests, DepthResolveDeclaresComputeAndPublishesDepthRes
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("DrCam");
         const ViewId viewId = rs.Views().AllocateView("DrView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         RenderPipelineNodeRegistry registry;
@@ -6069,7 +6381,7 @@ TEST(RenderPipelineDeclareTests, DeviceLocalPipelineBufferComputeWriterOrdersBef
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("SeamCam");
         const ViewId viewId = rs.Views().AllocateView("SeamView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -6177,7 +6489,7 @@ struct FxChainFixture
             return false;
         const CameraId camId = Rs->Views().AllocateCamera("FxCam");
         View = Rs->Views().AllocateView("FxView", camId);
-        Rs->Views().SetViewRenderLayerMask(View, 1u);
+        Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -6298,6 +6610,79 @@ TEST(RenderPipelineDeclareTests, PostFxChainStitchesSkippedStagesInBlueprintOrde
         EXPECT_EQ(pools.Persistent.Size(), 3u) << "skipped PostA never materializes";
 
         frame.MarkOutput(sceneColor);
+        frame.Execute();
+        f.Device->WaitForIdle();
+    }
+    f.Down();
+}
+
+// A shader that samples a texture only RenderServices provides (the Cube LUT's tables) runs only
+// from a node that lists it in "serviceTextures": unlisted, the binding would get a placeholder of
+// the wrong kind (a 2D texture for a sampler3D), so the node refuses and threads its input through.
+// Listed, the same node declares its pass.
+TEST(RenderPipelineDeclareTests, ANodeRefusesAShaderSamplingAServiceTextureItDoesNotList)
+{
+    FxChainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    for (const bool listed : {false, true})
+    {
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "ServiceTextures";
+        bp.passes.push_back(FxChainFixture::WorldPass());
+        const std::string service = listed ? R"(,"serviceTextures":["uLut3d","uLut1d"])" : "";
+        bp.passes.push_back(FxChainFixture::FxPass(
+            "Tonemap",
+            R"({"id":"Tonemap","type":"FullscreenShader","inputs":{"uHDRColor":"SceneColor"},"output":"PostA","shaderPkg":"Shaders/tonemap.shaderpkg")" +
+                service + "}"));
+        bp.worldColorResolveTargetRef = "SceneColor";
+        FxChainFixture::AddTexResource(bp, "SceneColor");
+        FxChainFixture::AddTexResource(bp, "PostA");
+        bp.outputs.push_back({"FinalColor", "PostA"});
+
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+
+        FramePools pools(f.Device.get());
+        RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("ST.Color", ColorTargetDesc());
+        RenderGraph::RGTexture depth = frame.ImportPersistentTexture("ST.Depth", DepthTargetDesc());
+
+        f.Rs->BeginWorldDrawFrame();
+        f.Rs->BuildWorldBatchKeys();
+        const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{f.View, color, depth, {}}};
+        const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                     f.Rs->Views().GetViews().end());
+        std::vector<std::string> log;
+        {
+            GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+            instance.Declare(frame, targets, views);
+            Logger::Log::Flush();
+        }
+        std::string logText;
+        for (const auto& line : log)
+            logText += line + "\n";
+
+        EXPECT_EQ(frame.Graph().PassCount(), listed ? 2u : 1u)
+            << (listed ? "the listed node declares its pass" : "the unlisted node refuses") << "\n" << logText;
+        const auto* fr = instance.FrameResourcesFor(&frame);
+        ASSERT_NE(fr, nullptr);
+        const auto effIt = fr->Textures.find({f.View, "View.EffectiveColor"});
+        ASSERT_NE(effIt, fr->Textures.end());
+        const bool named = logText.find("\"uLut3d\", \"uLut1d\"") != std::string::npos &&
+                           logText.find("serviceTextures") != std::string::npos;
+        if (!listed)
+        {
+            EXPECT_EQ(instance.GetOutputRG(f.View, "FinalColor").Id, effIt->second.Id)
+                << "the refusing node threads its input through";
+            EXPECT_TRUE(named) << "the refusal names the textures and the fix:\n" << logText;
+        }
+        else
+        {
+            EXPECT_FALSE(named) << logText;
+        }
+        frame.MarkOutput(instance.GetOutputRG(f.View, "FinalColor"));
         frame.Execute();
         f.Device->WaitForIdle();
     }
@@ -6430,7 +6815,7 @@ TEST(RenderPipelineDeclareTests, WorldAndLateTransparentPassesReadTheViewsExposu
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("LateExposureCam");
         const ViewId viewId = rs.Views().AllocateView("LateExposureView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -7757,7 +8142,7 @@ struct FogFixture
         }
         Rs->Views().SetCameraData(cam, cd);
         View = Rs->Views().AllocateView("FogView", cam);
-        Rs->Views().SetViewRenderLayerMask(View, 1u);
+        Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -7955,6 +8340,75 @@ TEST(RenderPipelineDeclareTests, FogHistoryParityRotatesOnlyWhenTemporalEnabled)
                 << "temporal-off frames import no history (pool ages out)";
             EXPECT_EQ(off.History1, RenderGraph::kInvalidId)
                 << "temporal-off frames import no history (pool ages out)";
+        }
+    }
+    f.Down();
+}
+
+namespace
+{
+// Stands after the VolumetricFog node and records what a pass drawn after its composite is handed.
+struct FogVolumeProbeNode final : IRenderPipelineNode
+{
+    static inline Rendering::MaterialKeyword s_Keyword = Rendering::MaterialKeyword::None;
+    static inline bool s_ParamsPublished = false;
+    static inline bool s_VolumePublished = false;
+
+    const char* GetTypeName() const override { return "FogVolumeProbe"; }
+    bool Initialize(std::string, std::string, std::string*) override { return true; }
+    void DeclareForView(ViewDeclare& d) override
+    {
+        s_ParamsPublished = d.ResolveBuffer(Names::Res::VolumetricFogParams).IsValid();
+        s_VolumePublished = d.ResolveTexture(Names::Res::VolumetricFog).IsValid();
+        s_Keyword = VolumetricFogPassKeyword(d);
+    }
+};
+} // namespace
+
+// A pass drawn after the volumetric fog composite takes the VolumetricFog keyword, and with it the
+// parameters and the froxel volume the composite read, so its blended surfaces are fogged by their own
+// distance; a view whose volumetric fog is off hands it neither.
+TEST(RenderPipelineDeclareTests, FogPublishesItsVolumeForThePassesDrawnAfterItsComposite)
+{
+    FogFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        ASSERT_TRUE(f.Registry.Register(
+            "FogVolumeProbe", [] { return std::make_unique<FogVolumeProbeNode>(); }, true));
+        RenderPipelineBlueprint bp = f.MakeBlueprint();
+        RenderPipelineBlueprint::Pass probe;
+        probe.id = "AfterFog";
+        probe.type = "FogVolumeProbe";
+        probe.enabled = true;
+        probe.perView = true;
+        probe.passJson = R"({"id":"AfterFog","type":"FogVolumeProbe"})";
+        bp.passes.push_back(probe);
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device.get());
+        for (const bool enabled : {true, false})
+        {
+            SCOPED_TRACE(enabled ? "volumetric fog on" : "volumetric fog off");
+            f.SetFog(enabled, /*temporal=*/false);
+            FogVolumeProbeNode::s_Keyword = Rendering::MaterialKeyword::None;
+            RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+            frame.BeginFrame(enabled ? 0 : 1);
+            RenderGraph::RGTexture color = frame.ImportPersistentTexture("FV.Color", ColorTargetDesc());
+            RenderGraph::RGTexture depth = frame.ImportPersistentTexture("FV.Depth", DepthTargetDesc());
+            f.Rs->BeginWorldDrawFrame();
+            f.Rs->BuildWorldBatchKeys();
+            const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{f.View, color, depth, {}}};
+            const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                         f.Rs->Views().GetViews().end());
+            instance.Declare(frame, targets, views);
+            EXPECT_EQ(FogVolumeProbeNode::s_ParamsPublished, enabled);
+            EXPECT_EQ(FogVolumeProbeNode::s_VolumePublished, enabled);
+            EXPECT_EQ(FogVolumeProbeNode::s_Keyword,
+                      enabled ? Rendering::MaterialKeyword::VolumetricFog : Rendering::MaterialKeyword::None);
+            frame.MarkOutput(color);
+            frame.Execute();
+            f.Device->WaitForIdle();
         }
     }
     f.Down();
@@ -8259,7 +8713,7 @@ struct TerrainFixture
     ViewId AddView(const char* name, uint32_t mask)
     {
         const ViewId v = Rs->Views().AllocateView(name, Cam);
-        Rs->Views().SetViewRenderLayerMask(v, mask);
+        Rs->Views().SetViewRenderLayerMask(v, GameEngine::Rendering::RenderLayerMask{mask});
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -9000,17 +9454,18 @@ bool ArmGrassMaterialCompile(TerrainFixture& f)
 
 // Drives frames until the grass forward contributor emits its draws (the first declared frame
 // only registers the contributor, and the material may compile asynchronously), then returns the
-// view's forward commands. Empty after `maxFrames` = the contributor never emitted.
+// view's forward commands. Empty after `maxFrames` = the contributor never emitted. Frames are
+// numbered from `firstFrame`, so a test that pumps in steps keeps one frame sequence.
 std::span<const DrawCommand> PumpGrassForwardCommands(TerrainFixture& f,
                                                       RenderPipelineInstance& instance,
-                                                      ViewId v, uint32 maxFrames)
+                                                      ViewId v, uint32 maxFrames, uint32 firstFrame = 0)
 {
     for (uint32 i = 0; i < maxFrames; ++i)
     {
         FramePools pools(f.Device.get());
         RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient,
                                    &pools.Ring);
-        frame.BeginFrame(i);
+        frame.BeginFrame(firstFrame + i);
         RenderGraph::RGTexture color =
             frame.ImportPersistentTexture("GO.Color", ColorTargetDesc());
         RenderGraph::RGTexture depth =
@@ -9328,6 +9783,124 @@ TEST(RenderPipelineDeclareTests, GrassNoAlphaNeededTakesTheOpaqueFastPath)
     f.Down();
 }
 
+// #4020: the grass contributor registers its material as every scene material registers: the base
+// program resolves and the pipeline builds on a worker, so the frame that first draws grass does not
+// build them on the main thread. With the engine (and so its job system) up, the material has no
+// pipeline yet right after the frame that registered it, and grass draws once the publish lands.
+TEST(RenderPipelineDeclareTests, GrassRegistersItsMaterialOffTheMainThread)
+{
+    namespace fs = std::filesystem;
+    const fs::path tempRoot =
+        fs::temp_directory_path() /
+        ("ge_grass_async_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::create_directories(tempRoot / "Assets", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    // Scripting-free EngineCore (no .NET runtime in this target), as the pipeline hot-reload test
+    // brings it up; it moves the working directory, which the guard restores.
+    ScriptsConfig scriptsConfig{};
+    scriptsConfig.disableClr = true;
+    scriptsConfig.enableHotReload = false;
+    scriptsConfig.enableAsyncHotReload = false;
+    scriptsConfig.enableAutoProjectGeneration = false;
+    GameEngine::EngineCore::GetInstance().SetScriptsConfig(scriptsConfig);
+    ApplicationConfig cfg{};
+    cfg.Name = "GrassAsyncRegistrationTest";
+    cfg.WorkspaceDirectory = tempRoot.string();
+    cfg.AssetDirectory = "Assets";
+    const fs::path callerWorkingDirectory = fs::current_path(ec);
+    const bool engineUp = GameEngine::EngineCore::GetInstance().Initialize(cfg);
+    struct EngineGuard
+    {
+        bool Up;
+        fs::path Temp;
+        fs::path CallerWorkingDirectory;
+        ~EngineGuard()
+        {
+            if (Up)
+                GameEngine::EngineCore::GetInstance().Shutdown();
+            std::error_code ignored;
+            fs::current_path(CallerWorkingDirectory, ignored);
+            fs::remove_all(Temp, ignored);
+        }
+    } engineGuard{engineUp, tempRoot, callerWorkingDirectory};
+    ASSERT_TRUE(engineUp) << "EngineCore failed to initialize (scripting-free config)";
+
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        EXPECT_TRUE(terrain.Initialize(f.Device.get()));
+        const ViewId v = f.AddView("GrassAsyncView", 1u);
+        EXPECT_TRUE(f.Registry.Register(
+            "TerrainGrass", [] { return std::make_unique<TerrainGrass::TerrainGrassRenderNode>(); }, true));
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "GrassAsyncTest";
+        {
+            RenderPipelineBlueprint::Pass p;
+            p.id = "Grass";
+            p.type = "TerrainGrass";
+            p.enabled = true;
+            p.perView = true;
+            p.passJson = R"({"id":"Grass","type":"TerrainGrass"})";
+            bp.passes.push_back(p);
+        }
+        bp.outputs.push_back({"FinalColor", "View.Resolve"});
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        Terrain::TerrainGPUParams params{};
+        // bit0 enabled, no alpha anywhere: the opaque fast path, Terrain/GrassOpaque (#4020's material).
+        params.GrassEnabled = 1u;
+        terrain.UploadTerrainParamsArray(&params, 1u, GameEngine::Terrain::kDefaultTerrainMaterials,
+                                         GameEngine::Terrain::kTerrainLayerRoleCount, 0u);
+        if (!ArmGrassMaterialCompile(f))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources not found";
+        }
+
+        // One frame registers the material (the first declared frame may only register the
+        // contributor); the publish of an async build is applied at a later frame begin, never inside
+        // the frame that requested it.
+        const GUID opaqueGuid = GUID::Derive(GUID{}, "terrain_grass/opaque_material");
+        Material* material = nullptr;
+        uint32 frameIndex = 0;
+        for (; frameIndex < 8u && !material; ++frameIndex)
+        {
+            (void)PumpGrassForwardCommands(f, instance, v, 1u, frameIndex);
+            material = f.Rs->Materials().Registry().Find(opaqueGuid);
+        }
+        ASSERT_NE(material, nullptr) << "the grass contributor never registered its opaque material";
+        EXPECT_TRUE(f.Rs->Materials().IsBaseCompileInFlight(opaqueGuid))
+            << "the grass material's base program and pipeline must build on a worker";
+        EXPECT_FALSE(material->GetGraphicsPipelineId().IsValid())
+            << "a pipeline the registering frame already holds was built on the main thread";
+
+        f.Rs->Materials().FlushAsyncMaterialCompiles();
+
+        // The blade pipeline is built on a worker for the formats the view's world pass draws
+        // with, and grass draws only once the device holds it. The fixture declares no world pass,
+        // so its snapshot is set as one would set it.
+        Rendering::PipelineFormatKey worldFormats{};
+        worldFormats.ColorCount = 1;
+        worldFormats.ColorFormats[0] = TextureFormat::RGBA8_UNORM;
+        worldFormats.DepthFormat = TextureFormat::D32_FLOAT;
+        f.Rs->Views().PerView(v).WorldColorFormatKey = worldFormats;
+        {
+            GameEngine::Testing::HeldPipelineBuilds held(*f.Device);
+            EXPECT_TRUE(PumpGrassForwardCommands(f, instance, v, 2u, frameIndex).empty())
+                << "grass emitted draws whose blade pipeline the device has not built";
+            frameIndex += 2u;
+            EXPECT_FALSE(held.Jobs.empty()) << "the blade pipeline's build was not requested for the world-pass formats";
+            held.RunAll();
+        }
+        const auto cmds = PumpGrassForwardCommands(f, instance, v, 8u, frameIndex);
+        EXPECT_EQ(cmds.size(), 2u) << "grass draws once its blade pipeline has been built";
+    }
+    f.Down();
+}
+
 namespace
 {
 // Compiles a test blueprint against the fixture's registry.
@@ -9415,7 +9988,7 @@ GrassPrepassFrame PumpGrassPrepassFrames(TerrainFixture& f, RenderPipelineInstan
         record.viewId = v;
         record.meshHandle = mesh;
         record.material = &relief;
-        record.renderLayerMask = 1u;
+        record.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
         f.Rs->SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&record, 1u));
         f.Rs->BuildWorldBatchKeys();
         const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{v, color, depth, {}}};
@@ -9937,10 +10510,13 @@ std::vector<std::string> VertexReadBindingsMissingFrom(const Rendering::ShaderMe
 
 // The rule both prepass heads are held to (#3367). Under the compatibility profile the head declares no
 // binding that only the fragment stage reads, and every binding the desktop head's vertex stage reads is
-// still declared. The desktop head keeps the variant's whole reflected layout, shadow and IBL slots included.
+// still declared, except `desktopOnlyVertexReads`: work the full profile does in its vertex stage that
+// the compat profile does elsewhere. The desktop head keeps the variant's whole reflected layout, shadow
+// and IBL slots included.
 void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDocument& doc,
                                              Rendering::MaterialKeyword keywords,
-                                             Rendering::VertexAttributeFlags vertexFlags)
+                                             Rendering::VertexAttributeFlags vertexFlags,
+                                             std::span<const std::string_view> desktopOnlyVertexReads = {})
 {
     PrepassHeadDeclaration compat;
     {
@@ -9956,7 +10532,11 @@ void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDo
         << doc.materialName << ": the desktop head keeps the variant's whole reflected layout";
     if (!compat.Meta || !desktop.Meta)
         return;
-    const std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::erase_if(missing, [&](const std::string& name) {
+        return std::find(desktopOnlyVertexReads.begin(), desktopOnlyVertexReads.end(), name) !=
+               desktopOnlyVertexReads.end();
+    });
     EXPECT_TRUE(missing.empty()) << doc.materialName << ": the compat head drops " << missing.size()
                                  << " binding(s) the vertex stage reads, first '"
                                  << (missing.empty() ? std::string{} : missing.front()) << "'";
@@ -9977,10 +10557,6 @@ MaterialDocument OpaqueGrassMaterialDocument()
     return doc;
 }
 
-constexpr Rendering::MaterialKeyword kGrassMaterialKeywords =
-    Rendering::MaterialKeyword::ForwardPlus | Rendering::MaterialKeyword::Shadows |
-    Rendering::MaterialKeyword::Instanced | Rendering::MaterialKeyword::IBL |
-    Rendering::MaterialKeyword::ProceduralVertexOutput;
 } // namespace
 
 // The CBT terrain's camera-prepass head has no fragment stage, but its material is composed lit
@@ -10016,8 +10592,15 @@ TEST(RenderPipelineDeclareTests, CompatGrassPrepassHeadDeclaresOnlyWhatItsVertex
         f.Down();
         GTEST_SKIP() << "staged shader sources not found";
     }
-    ExpectCompatHeadDeclaresOnlyVertexReads(f, OpaqueGrassMaterialDocument(), kGrassMaterialKeywords,
-                                            Rendering::VertexAttributeFlags::None);
+    // The full profile resolves each blade's root ground colour in its vertex stage
+    // (grass_root_ground_color.glsl): the material table and the two atlas blocks. The compat profile
+    // still resolves that colour in the fragment stage, so its head rightly declares none of them.
+    static constexpr std::string_view kDesktopRootGroundColorReads[] = {
+        "TerrainMaterialTableBuffer", "Atlas", "gAtlasRows"};
+    ExpectCompatHeadDeclaresOnlyVertexReads(f, OpaqueGrassMaterialDocument(),
+                                            TerrainGrass::kGrassMaterialKeywords,
+                                            Rendering::VertexAttributeFlags::None,
+                                            kDesktopRootGroundColorReads);
     f.Down();
 }
 
@@ -10368,7 +10951,6 @@ Terrain::TerrainGPUParams StillGrassParams(uint32 grassBits, uint32 albedoBindle
     params.GrassDensity = 60.0f;
     params.GrassBladeHeight = 0.72f;
     params.GrassBladeWidth = 0.3f;
-    params.GrassMaxWidthRatio = 0.6f;
     params.GrassRange = 60.0f;
     params.GrassWindStrength = 0.0f;
     params.GrassWindFlutterAmount = 0.0f;
@@ -11612,6 +12194,305 @@ TEST(RenderPipelineDeclareTests, GrassPlacesWithRealBakedTiledSplat)
 // XZ inside the terrain domain and RootY within tolerance of the CPU-sampled height at that XZ. This
 // pins the "blades placed but rendered at wrong world positions / floating arcs" class the reviewer
 // saw, which a count-only oracle cannot catch.
+namespace
+{
+// What the real classify, plan and emit kernels place on a FLAT terrain with nothing bound: no
+// heightmap, no splatmap, no control map. With no splat the mask reads channel 0 at full weight, so
+// every candidate passes it, and what the readback shows is the placement itself. The camera looks
+// straight down at the centre of a 2 x 2 block of cells, which sits inside the frustum at every
+// density these tests author.
+struct FlatGrassPlacement
+{
+    std::vector<float32> SiteXZ; // accepted blades inside the window, flat X,Z pairs
+    std::vector<float32> Height; // each of those blades' BladeHeight, in the same order
+    uint32 PlacedSlots = 0;      // both LODs, from the indirect records
+    std::string Failure;         // empty when the readback succeeded
+};
+
+constexpr float32 kFlatGrassCentre = 512.0f;
+constexpr float32 kFlatGrassWindowHalf = 8.0f; // the four cells around the centre
+constexpr uint32 kGrassInstanceBytes = 48u;    // GrassBladeInstance: 12 x 4 B
+constexpr uint32 kGrassInstanceFloats = kGrassInstanceBytes / 4u;
+
+// The flat terrain the placement oracles run on. Every grass field not set here keeps the
+// TerrainGPUParams default, which GrassGpuParamDefaultsMatchTheComponent pins to the component's:
+// the clumping under test is the shipped clumping. Falloff 0 holds the density flat out to the
+// range, and the short range keeps the whole disc inside the instance budget, so no fit moves the
+// number under test.
+Terrain::TerrainGPUParams FlatGrassParams(float32 bladesPerSquareMeter)
+{
+    Terrain::TerrainGPUParams params{};
+    params.WorldOriginX = 0.0f; params.WorldOriginZ = 0.0f;
+    params.WorldSizeX = 1024.0f; params.WorldSizeZ = 1024.0f;
+    params.HeightScale = 10.0f;
+    params.GrassEnabled = 1u;
+    params.GrassDensity = bladesPerSquareMeter;
+    params.GrassDensityFalloff = 0.0f;
+    params.GrassRange = 40.0f;
+    return params;
+}
+
+FlatGrassPlacement PlaceFlatGrass(TerrainFixture& f, const Terrain::TerrainGPUParams& params)
+{
+    FlatGrassPlacement out;
+    auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+    if (!terrain.Initialize(f.Device.get()))
+    {
+        out.Failure = "terrain feature failed to initialize";
+        return out;
+    }
+    f.SetCameraLookingAt(Mathematics::Vector3(kFlatGrassCentre, 25.0f, kFlatGrassCentre),
+                         Mathematics::Vector3(kFlatGrassCentre, 0.0f, kFlatGrassCentre + 1.0f));
+    const ViewId v = f.AddView("GrassFlatView", 1u);
+    f.Registry.Register("TerrainGrass",
+                        [] { return std::make_unique<TerrainGrass::TerrainGrassRenderNode>(); },
+                        true);
+    RenderPipelineBlueprint bp;
+    bp.pipelineName = "GrassFlatTest";
+    {
+        RenderPipelineBlueprint::Pass p;
+        p.id = "Grass"; p.type = "TerrainGrass"; p.enabled = true; p.perView = true;
+        p.passJson = R"({"id":"Grass","type":"TerrainGrass"})";
+        bp.passes.push_back(p);
+    }
+    bp.outputs.push_back({"FinalColor", "View.Resolve"});
+    RenderPipelineInstance instance(*f.Rs, f.Registry);
+    instance.SetBlueprint(bp);
+    FramePools pools(f.Device.get());
+
+    constexpr uint32 kArgsBytes = 64u;
+    uint32 lodCount[2] = {0u, 0u};
+    uint32 capacity = 0u;
+    for (uint32 frameIdx = 0; frameIdx < 2; ++frameIdx)
+    {
+        terrain.UploadTerrainParamsArray(&params, 1u, GameEngine::Terrain::kDefaultTerrainMaterials,
+                                         GameEngine::Terrain::kTerrainLayerRoleCount, frameIdx);
+        RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(frameIdx);
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("GFlat.Color", ColorTargetDesc());
+        RenderGraph::RGTexture depth = frame.ImportPersistentTexture("GFlat.Depth", DepthTargetDesc());
+        f.Rs->BeginWorldDrawFrame();
+        f.Rs->BuildWorldBatchKeys();
+        const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{v, color, depth, {}}};
+        const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                     f.Rs->Views().GetViews().end());
+        instance.Declare(frame, targets, views);
+
+        const RenderGraph::RGBuffer argsRG = GrassWorldReadArgs(*f.Rs, frame, v);
+        const RenderGraph::RGBuffer instRG = GrassInstancesInFrame(*f.Rs, frame, v);
+        if (!argsRG.IsValid() || !instRG.IsValid())
+        {
+            out.Failure = "the grass node declared no placement";
+            return out;
+        }
+        // Frame 0 learns the two LOD counts; frame 1 places the same inputs into its own slot and
+        // reads both ends of the pool they fill.
+        auto argsT = Rendering::RequestBufferReadbackRG(f.Device.get(), frame, argsRG, 0u, kArgsBytes,
+                                                        "GFlatArgs");
+        std::shared_ptr<Rendering::RGBufferReadbackTicket> lodT[2];
+        if (frameIdx == 1)
+        {
+            if (lodCount[0] > 0u)
+                lodT[0] = Rendering::RequestBufferReadbackRG(f.Device.get(), frame, instRG, 0u,
+                                                             lodCount[0] * kGrassInstanceBytes, "GFlatLod0");
+            if (lodCount[1] > 0u)
+                lodT[1] = Rendering::RequestBufferReadbackRG(
+                    f.Device.get(), frame, instRG, (capacity - lodCount[1]) * kGrassInstanceBytes,
+                    lodCount[1] * kGrassInstanceBytes, "GFlatLod1");
+        }
+        frame.MarkOutput(color);
+        frame.Execute();
+        Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
+        f.Device->WaitForIdle();
+
+        Rendering::BufferReadbackResult args{};
+        if (!argsT || !argsT->TryGet(args) || args.bytes.size() < kArgsBytes)
+        {
+            out.Failure = "the indirect args readback never resolved";
+            return out;
+        }
+        const uint32* words = reinterpret_cast<const uint32*>(args.bytes.data());
+        lodCount[0] = words[1]; // DrawIndexedIndirectCommand::InstanceCount, LOD 0
+        lodCount[1] = words[6]; // the same field of the LOD 1 record, 20 B later
+        capacity = words[14];   // Args.Capacity, after the two records and five counters
+        out.PlacedSlots = lodCount[0] + lodCount[1];
+        if (frameIdx == 0)
+            continue;
+
+        for (uint32 lod = 0; lod < 2u; ++lod)
+        {
+            if (!lodT[lod])
+                continue;
+            Rendering::BufferReadbackResult res{};
+            if (!lodT[lod]->TryGet(res) || res.bytes.size() < lodCount[lod] * kGrassInstanceBytes)
+            {
+                out.Failure = "an instance readback never resolved";
+                return out;
+            }
+            const float32* fp = reinterpret_cast<const float32*>(res.bytes.data());
+            for (uint32 i = 0; i < lodCount[lod]; ++i)
+            {
+                const float32 x = fp[i * kGrassInstanceFloats + 0];
+                const float32 z = fp[i * kGrassInstanceFloats + 1];
+                const float32 height = fp[i * kGrassInstanceFloats + 3];
+                if (height <= 0.0f) // a rejected candidate keeps its slot as a zero-size blade
+                    continue;
+                if (std::abs(x - kFlatGrassCentre) >= kFlatGrassWindowHalf ||
+                    std::abs(z - kFlatGrassCentre) >= kFlatGrassWindowHalf)
+                    continue;
+                out.SiteXZ.push_back(x);
+                out.SiteXZ.push_back(z);
+                out.Height.push_back(height);
+            }
+        }
+    }
+    return out;
+}
+
+float32 FlatGrassWindowDensity(const FlatGrassPlacement& placed)
+{
+    const float32 windowArea = 4.0f * kFlatGrassWindowHalf * kFlatGrassWindowHalf;
+    return static_cast<float32>(placed.SiteXZ.size() / 2u) / windowArea;
+}
+
+bool FlatGrassBinHoldsHalfDensity(uint32 count, float32 halfDensityCount)
+{
+    return static_cast<float32>(count) >= halfDensityCount;
+}
+} // namespace
+
+// #4205: blades clumped into tufts and left bare ground between them at every density. The
+// accepted blades over a uniform mask must cover EVERY part of the ground at the authored density:
+// binned at a quarter metre (four bins to the shipped 1.1 m clump), at least 98% of the bins hold
+// half the authored density or more, and the mean over the window is the authored density within
+// 2%. A clump term that moves blades toward the tuft centre concentrates them there and empties
+// the outer band of every tuft.
+TEST(RenderPipelineDeclareTests, GrassClumpsKeepEveryPartOfTheGroundAtTheAuthoredDensity)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        constexpr float32 kDensity = 64.0f;
+        const FlatGrassPlacement placed = PlaceFlatGrass(f, FlatGrassParams(kDensity));
+        ASSERT_TRUE(placed.Failure.empty()) << placed.Failure;
+
+        constexpr float32 kBin = 0.25f;
+        constexpr uint32 kBinsPerSide = static_cast<uint32>(2.0f * kFlatGrassWindowHalf / kBin);
+        std::vector<uint32> bins(kBinsPerSide * kBinsPerSide, 0u);
+        const size_t accepted = placed.SiteXZ.size() / 2u;
+        for (size_t i = 0; i < accepted; ++i)
+        {
+            const float32 lx = placed.SiteXZ[i * 2 + 0] - (kFlatGrassCentre - kFlatGrassWindowHalf);
+            const float32 lz = placed.SiteXZ[i * 2 + 1] - (kFlatGrassCentre - kFlatGrassWindowHalf);
+            const uint32 bx = std::min(static_cast<uint32>(lx / kBin), kBinsPerSide - 1u);
+            const uint32 bz = std::min(static_cast<uint32>(lz / kBin), kBinsPerSide - 1u);
+            ++bins[bz * kBinsPerSide + bx];
+        }
+        const float32 meanDensity = FlatGrassWindowDensity(placed);
+        const float32 halfDensityCount = 0.5f * kDensity * kBin * kBin;
+        size_t coveredBins = 0;
+        for (uint32 count : bins)
+            coveredBins += FlatGrassBinHoldsHalfDensity(count, halfDensityCount) ? 1u : 0u;
+        const float32 coverage = static_cast<float32>(coveredBins) / static_cast<float32>(bins.size());
+
+        EXPECT_NEAR(meanDensity, kDensity, 0.02f * kDensity)
+            << "accepted blades per m2 over the window (placed slots " << placed.PlacedSlots << ")";
+        EXPECT_GE(coverage, 0.98f)
+            << "share of " << kBin << " m bins holding at least half the authored density: "
+            << coverage << " (mean " << meanDensity << " per m2)";
+    }
+    f.Down();
+}
+
+// #4205 / #4203: the inspector stopped at 64 blades per m2 because a cell held at most 4096 slots,
+// so 64 and 200 placed the same near field and only the range changed. Above the old ceiling a
+// denser authored field must place a denser near field.
+// The clump taper as the KERNEL applies it: with the per-blade and per-tuft height randoms
+// switched off, every accepted blade's height is its slot's growth and scale random times the
+// taper at its distance from its tuft's site, all evaluated here on the CPU mirrors
+// (GrassPlacementModel.h, GrassClumpModel.h). A drift between grass_clump.glsl and its mirror (the
+// taper edge, or the distance the taper reads) moves every height and reds this.
+TEST(RenderPipelineDeclareTests, GrassBladeHeightsFollowTheClumpTaper)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        constexpr float32 kDensity = 21.0f;
+        Terrain::TerrainGPUParams params = FlatGrassParams(kDensity);
+        params.GrassRandomScale = 0.0f;
+        params.GrassClumpHeightVariance = 0.0f;
+        const FlatGrassPlacement placed = PlaceFlatGrass(f, params);
+        ASSERT_TRUE(placed.Failure.empty()) << placed.Failure;
+        ASSERT_FALSE(placed.Height.empty()) << "no blade was read back";
+
+        const uint32 seed = TerrainGrass::GrassSeedBits(params.GrassPlacementSeed);
+        const float32 slotsWanted = kDensity * TerrainGrass::kGrassCellArea;
+        const uint32 slotCount = TerrainGrass::GrassSlotsToIterate(slotsWanted);
+        size_t matched = 0;
+        size_t tapered = 0;
+        float32 worstRelativeError = 0.0f;
+        for (size_t i = 0; i < placed.Height.size(); ++i)
+        {
+            const float32 x = placed.SiteXZ[i * 2 + 0];
+            const float32 z = placed.SiteXZ[i * 2 + 1];
+            const int32 cellX = static_cast<int32>(std::floor(x / TerrainGrass::kGrassCellSize));
+            const int32 cellZ = static_cast<int32>(std::floor(z / TerrainGrass::kGrassCellSize));
+            // The blade's slot: the one whose site the kernel would have put here.
+            uint32 bestSlot = 0;
+            float32 bestDistanceSq = 3.4e38f;
+            for (uint32 slot = 0; slot < slotCount; ++slot)
+            {
+                const TerrainGrass::GrassSlotSample s = TerrainGrass::GrassSampleSlot(cellX, cellZ, slot, seed);
+                const float32 sx = static_cast<float32>(cellX) * TerrainGrass::kGrassCellSize +
+                                   s.CellU * TerrainGrass::kGrassCellSize;
+                const float32 sz = static_cast<float32>(cellZ) * TerrainGrass::kGrassCellSize +
+                                   s.CellV * TerrainGrass::kGrassCellSize;
+                const float32 d = (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                if (d < bestDistanceSq)
+                {
+                    bestDistanceSq = d;
+                    bestSlot = slot;
+                }
+            }
+            if (bestDistanceSq > 1e-6f)
+                continue;
+            ++matched;
+            const TerrainGrass::GrassSlotSample s = TerrainGrass::GrassSampleSlot(cellX, cellZ, bestSlot, seed);
+            const TerrainGrass::GrassClumpSample clump =
+                TerrainGrass::GrassSampleClump(x, z, params.GrassClumpSize, seed);
+            const float32 taper = TerrainGrass::GrassClumpTaperMultiplier(clump.DistanceCells, params.GrassClumpTaper);
+            tapered += taper < 0.8f ? 1u : 0u;
+            const float32 expected = params.GrassBladeHeight * TerrainGrass::GrassGrowthForSlot(slotsWanted, bestSlot) *
+                                     std::lerp(0.65f, 1.35f, s.ScaleRand) * taper;
+            worstRelativeError =
+                std::max(worstRelativeError, std::abs(placed.Height[i] - expected) / std::max(expected, 1e-6f));
+        }
+        EXPECT_GE(matched, placed.Height.size() * 99 / 100) << "blades whose slot the CPU mirror could not find";
+        EXPECT_GT(tapered, matched / 10) << "the window holds too few tuft-edge blades to test the taper";
+        EXPECT_LT(worstRelativeError, 1e-3f) << "a blade's height is not the mirrors' growth x scale x taper";
+    }
+    f.Down();
+}
+
+TEST(RenderPipelineDeclareTests, GrassDensityAboveTheOldCeilingPlacesMoreBlades)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        constexpr float32 kDensity = 128.0f;
+        const FlatGrassPlacement placed = PlaceFlatGrass(f, FlatGrassParams(kDensity));
+        ASSERT_TRUE(placed.Failure.empty()) << placed.Failure;
+        const float32 meanDensity = FlatGrassWindowDensity(placed);
+        EXPECT_NEAR(meanDensity, kDensity, 0.02f * kDensity)
+            << "accepted blades per m2 at an authored " << kDensity << " (placed slots "
+            << placed.PlacedSlots << ")";
+    }
+    f.Down();
+}
+
 TEST(RenderPipelineDeclareTests, GrassRootsSitOnTerrainSurface)
 {
     TerrainFixture f;
@@ -12145,22 +13026,25 @@ TEST(RenderPipelineDeclareTests, HzbRecoverDoesNotRedrawForwardContributors)
 
 // The shipped grass defaults, pinned against a silent drift. Density is blades per square metre at
 // the camera, so it is terrain-size independent: the same value reads the same on a 512 m and a
-// 10 km terrain. Height and width are pinned together because the aspect ceiling ties them: the
-// ceiling is a fraction of the height, so moving the height alone can put the authored width out of
-// reach — see GrassAspectCeilingLeavesTheAuthoredWidthReachable directly below.
+// 10 km terrain.
 TEST(RenderPipelineDeclareTests, GrassDefaultsCalibrated)
 {
     const GameEngine::Components::TerrainGrass g{};
     EXPECT_FLOAT_EQ(g.BladesPerSquareMeter, 21.0f) << "default blades/m2 at the camera regressed";
     EXPECT_FLOAT_EQ(g.Range, 500.0f) << "default grass range regressed";
     EXPECT_FLOAT_EQ(g.DensityFalloff, 2.0f) << "default density falloff regressed";
-    EXPECT_FLOAT_EQ(g.BladeWidth, 0.043f) << "default blade width regressed";
+    EXPECT_FLOAT_EQ(g.BladeWidth, 0.036f) << "default blade width regressed";
     EXPECT_FLOAT_EQ(g.BladeHeight, 0.72f) << "default blade height regressed";
-    EXPECT_FLOAT_EQ(g.MaxWidthRatio, 0.06f) << "default blade aspect ceiling regressed";
+    // The physical blade (grass-blade-silhouette design, section 3.1).
+    EXPECT_FLOAT_EQ(g.BladeTilt, 0.25f) << "default blade tilt regressed";
+    EXPECT_FLOAT_EQ(g.BladeBend, 0.35f) << "default blade bend regressed";
+    EXPECT_FLOAT_EQ(g.BladeTwist, 0.25f) << "default blade twist regressed";
+    EXPECT_FLOAT_EQ(g.BladeTaperStart, 0.6f) << "default blade taper start regressed";
+    EXPECT_FLOAT_EQ(g.TuftFan, 0.25f) << "default tuft fan regressed";
     EXPECT_FLOAT_EQ(g.ClumpSize, 1.1f) << "default clump size regressed";
     EXPECT_FLOAT_EQ(g.ClumpHeightVariance, 0.3f) << "default clump height variance regressed";
     EXPECT_FLOAT_EQ(g.ClumpAlignment, 0.45f) << "default clump alignment regressed";
-    EXPECT_FLOAT_EQ(g.ClumpGather, 0.25f) << "default clump gather regressed";
+    EXPECT_FLOAT_EQ(g.ClumpTaper, 0.35f) << "default clump taper regressed";
     // The two levers a noon field's blade-to-blade variety comes off, pinned together because they
     // are chosen together: RandomBrightness carries the tonal separation and HueVariation the
     // chroma spread, and a field with one and not the other reads either as one colour lit unevenly
@@ -12169,13 +13053,10 @@ TEST(RenderPipelineDeclareTests, GrassDefaultsCalibrated)
     // are in the grass-look-design.html changelog under 2026-09-04.
     EXPECT_FLOAT_EQ(g.RandomBrightness, 0.42f) << "default per-blade value jitter regressed";
     EXPECT_FLOAT_EQ(g.HueVariation, 0.45f) << "default hue variation regressed";
-    // Not a look choice at the shipped gradient span: there the root-shade ramp acts only where the
-    // colour schedule's weight is near zero, so no value of it moves the field. Pinned to hold it
-    // steady, not because this value was selected over another.
-    EXPECT_FLOAT_EQ(g.RootShade, 0.82f) << "default root shade regressed";
-    // The gradient ships as the whole blade: a shorter span reads as a band across it.
+    // The gradient ships as the lowest quarter of the blade (#4206): the blade's ground colour is
+    // one root colour per blade, and above the quarter the blade is its own colour.
     EXPECT_FLOAT_EQ(g.RootFadeStart, 0.0f) << "default gradient start regressed";
-    EXPECT_FLOAT_EQ(g.RootFadeEnd, 1.0f) << "default gradient end regressed";
+    EXPECT_FLOAT_EQ(g.RootFadeEnd, 0.25f) << "default gradient end regressed";
     // Clumping ships ON: a zero size would leave the golf-lawn field the slice exists to end.
     EXPECT_GT(g.ClumpSize, 0.0f) << "clumping is off by default";
 }
@@ -12251,14 +13132,22 @@ constexpr GrassFloatTwin kGrassFloatTwins[] = {
      &Terrain::TerrainGPUParams::GrassClumpHeightVariance},
     {"ClumpAlignment", "GrassClumpAlignment",
      &Components::TerrainGrass::ClumpAlignment, &Terrain::TerrainGPUParams::GrassClumpAlignment},
-    {"ClumpGather", "GrassClumpGather",
-     &Components::TerrainGrass::ClumpGather, &Terrain::TerrainGPUParams::GrassClumpGather},
+    {"ClumpTaper", "GrassClumpTaper",
+     &Components::TerrainGrass::ClumpTaper, &Terrain::TerrainGPUParams::GrassClumpTaper},
     {"BladeHeight", "GrassBladeHeight",
      &Components::TerrainGrass::BladeHeight, &Terrain::TerrainGPUParams::GrassBladeHeight},
     {"BladeWidth", "GrassBladeWidth",
      &Components::TerrainGrass::BladeWidth, &Terrain::TerrainGPUParams::GrassBladeWidth},
-    {"MaxWidthRatio", "GrassMaxWidthRatio",
-     &Components::TerrainGrass::MaxWidthRatio, &Terrain::TerrainGPUParams::GrassMaxWidthRatio},
+    {"BladeTilt", "GrassBladeTilt",
+     &Components::TerrainGrass::BladeTilt, &Terrain::TerrainGPUParams::GrassBladeTilt},
+    {"BladeBend", "GrassBladeBend",
+     &Components::TerrainGrass::BladeBend, &Terrain::TerrainGPUParams::GrassBladeBend},
+    {"BladeTwist", "GrassBladeTwist",
+     &Components::TerrainGrass::BladeTwist, &Terrain::TerrainGPUParams::GrassBladeTwist},
+    {"BladeTaperStart", "GrassBladeTaperStart",
+     &Components::TerrainGrass::BladeTaperStart, &Terrain::TerrainGPUParams::GrassBladeTaperStart},
+    {"TuftFan", "GrassTuftFan",
+     &Components::TerrainGrass::TuftFan, &Terrain::TerrainGPUParams::GrassTuftFan},
     {"RandomScale", "GrassRandomScale",
      &Components::TerrainGrass::RandomScale, &Terrain::TerrainGPUParams::GrassRandomScale},
     {"MaskThreshold", "GrassMaskThreshold",
@@ -12288,17 +13177,10 @@ constexpr GrassFloatTwin kGrassFloatTwins[] = {
      &Terrain::TerrainGPUParams::GrassRandomBrightness},
     {"HueVariation", "GrassHueVariation",
      &Components::TerrainGrass::HueVariation, &Terrain::TerrainGPUParams::GrassHueVariation},
-    {"RootShade", "GrassRootShade",
-     &Components::TerrainGrass::RootShade, &Terrain::TerrainGPUParams::GrassRootShade},
     {"RootFadeStart", "GrassRootFadeStart",
      &Components::TerrainGrass::RootFadeStart, &Terrain::TerrainGPUParams::GrassRootFadeStart},
     {"RootFadeEnd", "GrassRootFadeEnd",
      &Components::TerrainGrass::RootFadeEnd, &Terrain::TerrainGPUParams::GrassRootFadeEnd},
-    {"BladeNormalForm", "GrassBladeNormalForm",
-     &Components::TerrainGrass::BladeNormalForm, &Terrain::TerrainGPUParams::GrassBladeNormalForm},
-    {"BladeScatterGain", "GrassBladeScatterGain",
-     &Components::TerrainGrass::BladeScatterGain,
-     &Terrain::TerrainGPUParams::GrassBladeScatterGain},
     {"GroundingStrength", "GrassGroundingStrength",
      &Components::TerrainGrass::GroundingStrength,
      &Terrain::TerrainGPUParams::GrassGroundingStrength},
@@ -12320,8 +13202,6 @@ constexpr GrassUintTwin kGrassUintTwins[] = {
      &Components::TerrainGrass::BladeSegments, &Terrain::TerrainGPUParams::GrassBladeSegments},
     {"LayerIndex", "GrassLayerIndex",
      &Components::TerrainGrass::LayerIndex, &Terrain::TerrainGPUParams::GrassLayerIndex},
-    {"RootColor", "GrassRootColor",
-     &Components::TerrainGrass::RootColor, &Terrain::TerrainGPUParams::GrassRootColor},
     {"TipColor", "GrassTipColor",
      &Components::TerrainGrass::TipColor, &Terrain::TerrainGPUParams::GrassTipColor},
     {"BacklightColor", "GrassBacklightColor",
@@ -12335,8 +13215,12 @@ constexpr GrassUintTwin kGrassUintTwins[] = {
 };
 
 // The component fields with no scalar twin: RenderMode, TextureGrass and UseSplatRootColor are
-// packed into GrassEnabled's bits, and the three texture refs upload as bindless indices.
-constexpr size_t kGrassFieldsWithoutAScalarTwin = 6;
+// packed into GrassEnabled's bits, the three texture refs upload as bindless indices, and RootColor
+// uploads RESOLVED (TerrainGrassResolvedRootColor), so its GPU default is the resolved component
+// default rather than the component's Auto sentinel (pinned in GrassGpuParamDefaultsMatchTheComponent).
+// CanopyShade folds into GrassCanopyOcclusion at extraction (TerrainGrassCanopyOcclusionDepth), and
+// Preset is the inspector's label of where the dials came from, which no shader reads.
+constexpr size_t kGrassFieldsWithoutAScalarTwin = 9;
 } // namespace
 
 // Every authored default and its GPU twin are the same number. A drift here is invisible at runtime
@@ -12355,6 +13239,8 @@ TEST(RenderPipelineDeclareTests, GrassGpuParamDefaultsMatchTheComponent)
         EXPECT_EQ(gpu.*twin.Gpu, authored.*twin.Authored)
             << "TerrainGPUParams::" << twin.GpuName << " defaults away from TerrainGrass::"
             << twin.AuthoredName;
+    EXPECT_EQ(gpu.GrassRootColor, Components::TerrainGrassResolvedRootColor(authored))
+        << "TerrainGPUParams::GrassRootColor defaults away from the component's resolved root";
 
     // The THIRD carrier of the same number. GrassPlacementParams is a fit input, always assigned
     // before use on the production path, so nothing else notices when it drifts — it was set back
@@ -12380,27 +13266,6 @@ TEST(RenderPipelineDeclareTests, EveryGrassFieldIsTwinnedOrDeliberatelyNot)
                   + kGrassFieldsWithoutAScalarTwin,
               ECS::ComponentFieldRegistry::Get(typeId).size())
         << "a TerrainGrass field is neither pinned to a GPU twin nor counted as twinless";
-}
-
-// The aspect ceiling is a sanity ceiling, not the width control. If it is tight enough to clamp the
-// shipped BladeWidth then the component lies about what it renders: the author sets a width, every
-// blade comes out narrower, and no amount of authoring reaches the value in the field. Coverage is
-// proportional to width, so a ceiling that binds by default is a field of whiskers by default.
-TEST(RenderPipelineDeclareTests, GrassAspectCeilingLeavesTheAuthoredWidthReachable)
-{
-    const GameEngine::Components::TerrainGrass g{};
-    ASSERT_GT(g.MaxWidthRatio, 0.0f) << "a zero aspect ceiling clamps every blade to zero width";
-
-    const float ceiling = g.BladeHeight * g.MaxWidthRatio;
-    EXPECT_LE(g.BladeWidth, ceiling)
-        << "shipped BladeWidth " << g.BladeWidth << " m is unreachable under the aspect ceiling ("
-        << g.MaxWidthRatio << " x BladeHeight " << g.BladeHeight << " m = " << ceiling
-        << " m): the ceiling is setting the width, not the author";
-
-    // The ceiling is still a real bound, not a disabled one: a blade authored as wide as it is tall
-    // must come back clamped, so short grass cannot degenerate into squares.
-    EXPECT_LT(ceiling, g.BladeHeight)
-        << "aspect ceiling no longer clamps a blade authored as wide as it is tall";
 }
 
 // Range gate: density falls to zero at GrassRange metres from the camera, so Range is the hard
@@ -12685,6 +13550,73 @@ TEST(RenderPipelineDeclareTests, DeviceTextureReadbackRestoresTheDeclaredSampled
     device->Shutdown();
 }
 
+// capture_resource reads a texture another owner imported this frame: the sky-view LUT or an IBL
+// cube, imported at its resting sampled layout and claimed there again next frame. The readback of
+// that import must end the frame with the image back in the claimed layout, or the next frame's first
+// sampled read finds it in TRANSFER_SRC (VUID-vkCmdDraw-None-09600).
+TEST(RenderPipelineDeclareTests, SubresourceReadbackOfAnImportRestoresItsClaimedLayout)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        FramePools pools(device.get());
+        RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        TextureDesc td{};
+        td.width = 4;
+        td.height = 4;
+        td.depth = 1;
+        td.mipLevels = 1;
+        td.arrayLayers = 1;
+        td.sampleCount = 1;
+        td.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+        td.usage = static_cast<uint32_t>(TextureUsage::RenderTarget) |
+                   static_cast<uint32_t>(TextureUsage::ShaderResource) |
+                   static_cast<uint32_t>(TextureUsage::TransferSrc);
+        td.debugName = "ImportReadback.Lut";
+        const TextureHandle lut = device->CreateTexture(td);
+        ASSERT_TRUE(lut.IsValid());
+
+        // Frame 1 fills it and leaves it sampled, as the LUT's owner does.
+        frame.BeginFrame(1);
+        const RenderGraph::RGTexture target = frame.ImportExternalTexture(
+            "ImportReadback.Lut", lut, Rendering::ResourceState::Undefined, TextureFormat::RGBA8_UNORM);
+        ASSERT_TRUE(target.IsValid());
+        frame.AddPass(
+            "ImportReadback.Fill", static_cast<int32_t>(PassPhase::kWorldRender),
+            [&](RenderGraph::RGPassBuilder& p)
+            {
+                RenderGraph::RGAttachmentOps ops{};
+                ops.Load = RenderGraph::RGLoadOp::Clear;
+                ops.Store = RenderGraph::RGStoreOp::Store;
+                p.AttachColor(0, target, ops);
+            },
+            [](RenderGraph::RGContext&) {});
+        frame.MarkOutput(target, RenderGraph::RGImageLayout::ShaderReadOnly);
+        frame.Execute();
+        device->WaitForIdle();
+
+        // Frame 2: the owner imports it at its resting state; nothing writes it; the tool reads it back.
+        frame.BeginFrame(2);
+        const RenderGraph::RGTexture imported = frame.ImportExternalTexture(
+            "ImportReadback.Lut", lut, Rendering::ResourceState::ShaderResource, TextureFormat::RGBA8_UNORM);
+        ASSERT_TRUE(imported.IsValid());
+        const auto ticket = Rendering::RequestTextureSubresourceReadbackRG(device.get(), frame, imported, 0, 0, 0, 0,
+                                                                           0, 0, "ImportReadback");
+        ASSERT_NE(ticket, nullptr);
+        frame.Execute();
+        Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
+        device->WaitForIdle();
+        EXPECT_EQ(frame.Graph().FinalLayout(imported.Id), RenderGraph::RGImageLayout::ShaderReadOnly)
+            << "the readback must leave the import in the layout its owner claims next frame";
+        Rendering::ViewReadbackResult result{};
+        EXPECT_TRUE(ticket->TryGet(result));
+
+        device->DestroyTexture(lut);
+    }
+    device->Shutdown();
+}
+
 // Slice-8c-1 — the RenderGraph readback utility's completion contract: a ticket
 // resolves ONLY when its declaring frame incarnation was submitted (stamped
 // post-Execute) AND the GPU finished; an unstamped/re-begun incarnation can
@@ -12908,7 +13840,7 @@ TEST(RenderPipelineDeclareTests, ThumbnailShapedViewChainsWorldTonemapEncode)
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId mainView = rs.Views().AllocateView("MainView", camId);
-        rs.Views().SetViewRenderLayerMask(mainView, 1u);
+        rs.Views().SetViewRenderLayerMask(mainView, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -13216,7 +14148,7 @@ TEST(RenderPipelineDeclareTests, ActivePipelineHotReloadRecompilesOffPollAndRelo
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("S3View", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -15678,7 +16610,7 @@ TEST(RenderPipelineDeclareTests, ModuleReloadReconcileTearsDownAndRebuildsInstan
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("ReloadCam");
         const ViewId viewId = rs.Views().AllocateView("ReloadView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewId, 0, 0, 0, Rendering::ViewClearConfig{});
 
         ReloadProbeCounters::Reset();
@@ -15785,7 +16717,7 @@ TEST(RenderPipelineDeclareTests, WorldPassDeclaresGtaoAndSceneGrabReads)
         ASSERT_TRUE(rs.Initialize(device.get()));
         const CameraId camId = rs.Views().AllocateCamera("GtaoReadCam");
         const ViewId viewId = rs.Views().AllocateView("GtaoReadView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -15927,7 +16859,7 @@ struct HzbTwoViewRig
         ViewB = Services.Views().AllocateView("HzbViewB", camId);
         for (Rendering::ViewId v : {ViewA, ViewB})
         {
-            Services.Views().SetViewRenderLayerMask(v, 1u);
+            Services.Views().SetViewRenderLayerMask(v, GameEngine::Rendering::RenderLayerMask::Default());
             Services.Views().SetViewTargets(v, 0, 0, 0, clear);
             Services.Views().SetViewPostProcessOverride(v, pp);
         }
@@ -16223,7 +17155,7 @@ TEST(RenderPipelineDeclareTests, BothWorldArmsReadThePcssPyramidSoTheReductionOr
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("PyramidEdgeView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -16662,7 +17594,7 @@ TEST(RenderPipelineDeclareTests, ShadowMinMaxPyramidDeclaresAndPublishesOnlyForE
         }
         rs.Views().SetCameraData(camId, cd);
         const ViewId viewId = rs.Views().AllocateView("PyramidView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -17479,6 +18411,98 @@ MeshGPUHandle RegisterTestTriangle(RenderServices& rs, bool retainCpuMesh)
 constexpr int kSceneAsPurgeFrames = 900;
 }  // namespace
 
+// The scene warm (MaterialSystem::SceneWarm) requests a noted draw's colour variant and its pipeline
+// for the formats of the world pass the view declared, at the frame begin after that declaration: a
+// step reads the view's declared keywords, which outlive the frame that declared them. Before the view
+// has declared a world pass there is nothing to warm for, and the draw stays noted.
+TEST(RenderPipelineDeclareTests, SceneWarmRequestsANotedDrawsPipelineOnceTheViewDeclaredItsWorldPass)
+{
+    namespace fs = std::filesystem;
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    const fs::path adapterDir = GameEngine::TestPaths::StagedRenderingShadersDir();
+    if (!fs::exists(adapterDir / "Adapters"))
+        GTEST_SKIP() << "staged shader sources not found: " << adapterDir.string();
+    {
+        RenderServices rs;
+        ASSERT_TRUE(rs.Initialize(device.get()));
+        const CameraId camId = rs.Views().AllocateCamera("WarmCam");
+        const ViewId viewId = rs.Views().AllocateView("WarmView", camId);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
+        Rendering::ViewClearConfig clear{};
+        clear.clearColor = true;
+        clear.clearDepth = true;
+        clear.clearDepthValue = 0.0f;
+        rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
+        Rendering::MaterialBuildContext mbc{};
+        mbc.AdapterShaderDir = adapterDir;
+        mbc.CacheRoot = fs::temp_directory_path() / "ge_scene_warm_cache";
+        mbc.IncludeDirs = {adapterDir};
+        rs.Materials().SetMaterialBuildContext(mbc);
+
+        MaterialDocument doc{};
+        doc.materialName = "SceneWarmProbe";
+        doc.lightingModel = "StandardPBR";
+        doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+        const GUID guid = GUID::Generate();
+        Material* material = rs.Materials().RegisterMaterialFromDocument(guid, doc);
+        ASSERT_NE(material, nullptr);
+        ASSERT_TRUE(material->GetGraphicsPipelineId().IsValid());
+        const MeshGPUHandle mesh = RegisterTestTriangle(rs, /*retainCpuMesh=*/false);
+        SceneDrawWarm& warm = rs.Materials().SceneWarm();
+        warm.Note(mesh, guid);
+
+        FramePools pools(device.get());
+        RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        const RenderGraph::RGTexture color = frame.ImportPersistentTexture("Warm.Color", ColorTargetDesc());
+        const RenderGraph::RGTexture depth = frame.ImportPersistentTexture("Warm.Depth", DepthTargetDesc());
+        rs.BeginWorldDrawFrame();
+        EXPECT_EQ(warm.PendingCount(), 1u) << "a view that has declared no world pass has nothing to warm for";
+        rs.BuildWorldBatchKeys();
+        RenderServices::WorldPassTargetsRG targets{};
+        targets.Color = color;
+        targets.Depth = depth;
+        ASSERT_TRUE(rs.AddWorldPassForView(frame, viewId, targets, MaterialKeyword::ForwardPlus).Pass.IsValid());
+        frame.Execute();
+        device->WaitForIdle();
+
+        GameEngine::Testing::HeldPipelineBuilds held(*device);
+        frame.BeginFrame(1);
+        rs.BeginWorldDrawFrame();
+        EXPECT_EQ(warm.PendingCount(), 0u) << "the frame begin after the declaration did not request the noted draw";
+        warm.Note(mesh, guid);
+        EXPECT_EQ(warm.PendingCount(), 1u) << "a draw noted again after its request (a scene opened again) was dropped";
+
+        // The variant the world pass's entity draw looks up, compiled (inline: no job system here)
+        // and published at that frame begin, with its pipeline's build requested for the pass.
+        const std::optional<MaterialKeyword> declared = rs.Views().GetViewDeclaredWorldPassKeywords(viewId);
+        ASSERT_TRUE(declared.has_value());
+        const PipelineFormatKey fk = rs.Views().GetViewWorldColorFormatKey(viewId);
+        const MeshGPUEntry* entry = rs.GetMeshGPURegistry().Find(mesh);
+        ASSERT_NE(entry, nullptr);
+        MeshGPUEntryBindings bindings{};
+        ASSERT_TRUE(rs.GetMeshGPURegistry().TryGetDrawableBindings(*entry, bindings));
+        auto& variants = rs.Materials().Variants();
+        const auto key = variants.EnqueueColorVariantCompileForTesting(
+            *material, BoundStreamVertexFlags(*entry, bindings, material->IgnoresVertexColor()), entry->topology,
+            WorldEntityColorKeywords(*declared, material->GetVariantKey().materialKeywords, material->GetAlphaMode(),
+                                     rs.Views().GetViewWorldReliefDepthSource(viewId)),
+            fk.RasterizationSamples, rs.GetFrontFace());
+        ASSERT_TRUE(variants.HasColorVariantForTesting(key)) << "the warm did not compile the draw's variant";
+        const GraphicsPipelineId id = variants.SnapshotColorVariantForTesting(key).CurrentPipelineId;
+        EXPECT_FALSE(held.Jobs.empty()) << "the variant's pipeline build was not requested";
+        held.RunAll();
+        EXPECT_TRUE(device->TryGetWarmGraphicsPipeline(id, fk).IsValid())
+            << "the warmed pipeline is not the one the world pass draws with";
+        frame.Execute();
+        device->WaitForIdle();
+        rs.Shutdown();
+    }
+    device->Shutdown();
+}
+
 // A cascade (re)allocation clears its probe state with a compute pass recorded
 // before the views. The resolve reads both cascades' buffers, and only a
 // declared read orders it after each clear: without one the resolve could read the uncleared
@@ -17647,7 +18671,7 @@ void ExpectWorldPassDeclaresDdgiGatherReads(IDevice* device, Components::DDGIGlo
 
         const CameraId camId = rs.Views().AllocateCamera("DdgiGatherCam");
         const ViewId viewId = rs.Views().AllocateView("DdgiGatherView", camId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -18266,6 +19290,135 @@ TEST(RenderPipelineDeclareTests, TerrainExtractionUploadsAgainAfterADeviceRebuil
         extraction.Update(world, 1.0f / 60.0f);
         EXPECT_EQ(terrain.GetActiveHeightSource().HeightmapTexture, terrain.GetHeightmapTexture(handle))
             << "the extraction did not publish the height texture once it was initialized";
+    }
+    f.Down();
+}
+
+namespace
+{
+// Ticks the extraction and returns the first TerrainGPUParams row it published, read back from the
+// persistently mapped params ring element the feature just wrote.
+Terrain::TerrainGPUParams ExtractFirstTerrainParams(TerrainFixture& f, TerrainECS::TerrainRenderFeature& terrain,
+                                                    TerrainECS::TerrainExtractionSystem& extraction, ECS::World& world)
+{
+    extraction.Update(world, 1.0f / 60.0f);
+    const uint32 slot = terrain.GetLastTerrainParamsSlot();
+    Terrain::TerrainGPUParams row{};
+    EXPECT_GE(terrain.GetTerrainParamsCount(slot), 1u) << "the extraction published no terrain row";
+    const Rendering::BufferHandle ssbo = terrain.GetTerrainParamsSSBO(slot);
+    if (void* mapped = f.Device->MapBuffer(ssbo))
+    {
+        std::memcpy(&row, mapped, sizeof(row));
+        f.Device->UnmapBuffer(ssbo);
+    }
+    return row;
+}
+
+// Extracts `authored` with a default TerrainGrass and then with an authored root, and checks the
+// GrassRootColor each upload carries.
+void ExpectTheResolvedGrassRootColorIsUploaded(const Components::Terrain& authored)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        EXPECT_TRUE(terrain.Initialize(f.Device.get()));
+        ECS::World world(nullptr);
+        auto entity = world.Create();
+        entity.Set(Components::WorldTransform{});
+        entity.Set(authored);
+        entity.Set(Components::TerrainGrass{});
+        world.ProcessCommands();
+        TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+
+        constexpr uint32 kDefaultResolvedRoot = 0xFF637A3Eu;
+        ASSERT_EQ(Components::TerrainGrassAutoRootColor(Components::TerrainGrass{}.TipColor), kDefaultResolvedRoot)
+            << "the default Tip Color moved: update the expected resolved root";
+        EXPECT_EQ(ExtractFirstTerrainParams(f, terrain, extraction, world).GrassRootColor, kDefaultResolvedRoot)
+            << "a default (Auto) Root Color must upload the root derived from Tip Color, not the sentinel";
+
+        constexpr uint32 kAuthoredRoot = 0xFF233712u;
+        Components::TerrainGrass grass{};
+        grass.RootColor = kAuthoredRoot;
+        entity.Set(grass);
+        world.ProcessCommands();
+        EXPECT_EQ(ExtractFirstTerrainParams(f, terrain, extraction, world).GrassRootColor, kAuthoredRoot)
+            << "an authored Root Color must reach the GPU unchanged";
+    }
+    f.Down();
+}
+} // namespace
+
+// The GPU never sees the Auto sentinel: both extraction paths write the grass row through one
+// function, which uploads TerrainGrassResolvedRootColor, so a default component's blades take the
+// derived root (the default Tip Color at 0.65 of its luminance in linear light) and an authored root
+// reaches the shaders unchanged. Uploading the raw RootColor sends 0 (a black, transparent root) for every scene that
+// does not author one. One case per path: a small terrain extracts untiled, and the component's
+// default size tiles.
+TEST(RenderPipelineDeclareTests, UntiledTerrainExtractionUploadsTheResolvedGrassRootColor)
+{
+    Components::Terrain authored{};
+    authored.SizeX = 64.0f;
+    authored.SizeZ = 64.0f;
+    authored.HeightScale = 8.0f;
+    authored.SamplesPerMeter = 1.0f;
+    ASSERT_FALSE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter));
+    ExpectTheResolvedGrassRootColorIsUploaded(authored);
+}
+
+TEST(RenderPipelineDeclareTests, DefaultSizeTiledTerrainExtractionUploadsTheResolvedGrassRootColor)
+{
+    const Components::Terrain authored{};
+    ASSERT_TRUE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter))
+        << "the default terrain no longer tiles: this case no longer drives the tiled path";
+    ExpectTheResolvedGrassRootColorIsUploaded(authored);
+}
+
+// The five blade-shape dials reach the terrain's GPU row through the extraction, clamped to their
+// ranges, and the row's canopy depth is the one its own density, width, height and Canopy Shade give.
+TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToTheirRanges)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        EXPECT_TRUE(terrain.Initialize(f.Device.get()));
+        ECS::World world(nullptr);
+        auto entity = world.Create();
+        entity.Set(Components::WorldTransform{});
+        Components::Terrain authored{};
+        authored.SizeX = 64.0f;
+        authored.SizeZ = 64.0f;
+        authored.HeightScale = 8.0f;
+        authored.SamplesPerMeter = 1.0f;
+        entity.Set(authored);
+        Components::TerrainGrass grass{};
+        grass.BladeTilt = 0.4f;
+        grass.BladeBend = 9.0f;      // above its ceiling
+        grass.BladeTwist = 0.75f;
+        grass.BladeTaperStart = -1.0f; // below its floor
+        grass.TuftFan = 1.25f;
+        entity.Set(grass);
+        world.ProcessCommands();
+        TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+        const Terrain::TerrainGPUParams row = ExtractFirstTerrainParams(f, terrain, extraction, world);
+        EXPECT_FLOAT_EQ(row.GrassBladeTilt, 0.4f);
+        EXPECT_FLOAT_EQ(row.GrassBladeBend, Components::kMaxTerrainGrassBladeBend);
+        EXPECT_FLOAT_EQ(row.GrassBladeTwist, 0.75f);
+        EXPECT_FLOAT_EQ(row.GrassBladeTaperStart, 0.0f);
+        EXPECT_FLOAT_EQ(row.GrassTuftFan, 1.25f);
+        EXPECT_GT(row.GrassCanopyOcclusion, 0.0f) << "a placing row carries a canopy depth";
+        EXPECT_FLOAT_EQ(row.GrassCanopyOcclusion,
+                        Terrain::TerrainGrassCanopyOcclusionDepth(row, Components::TerrainGrass{}.CanopyShade));
+
+        // Canopy Shade reaches the row: 0 lights the ground under the grass as open ground.
+        grass.CanopyShade = 0.0f;
+        entity.Set(grass);
+        world.ProcessCommands();
+        EXPECT_EQ(ExtractFirstTerrainParams(f, terrain, extraction, world).GrassCanopyOcclusion, 0.0f)
+            << "Canopy Shade 0 still shades the ground under the grass";
     }
     f.Down();
 }
@@ -19147,4 +20300,67 @@ TEST(RenderPipelineDeclareTests, TerrainShadowRebakesOnTheRebuiltDevice)
         f.Device->DestroyTexture(heights);
     }
     f.Down();
+}
+
+// Every committed pipeline's fullscreen node whose shader samples the Cube LUT's tables lists them
+// in serviceTextures with a LinearClamp sampler each (a node that samples them unlisted refuses to
+// run: the Tonemap node at the Finish stage, the HDRColorFx node at Grade). The shaders' own
+// reflection says which nodes sample them.
+TEST(RenderPipelineDeclareTests, CommittedPipelinesListTheLutTablesWhereTheirShadersSampleThem)
+{
+    const std::filesystem::path root(GE_RENDERER_REPO_ROOT);
+    std::map<std::string, bool> samplesLut; // shaderPkg -> whether its reflection binds uLut3d
+    size_t checkedNodes = 0;
+    for (const char* dir : {"Engine/Assets", "Tests/EditorHarness", "Tools/Web", "Apps"})
+    {
+        std::error_code ec;
+        for (auto it = std::filesystem::recursive_directory_iterator(root / dir, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        {
+            if (it->is_directory() && (it->path().filename() == "node_modules" || it->path().filename() == "build"))
+            {
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (it->path().extension() != ".rendergraph")
+                continue;
+            std::ifstream stream(it->path());
+            const nlohmann::json graph = nlohmann::json::parse(stream, nullptr, false);
+            if (graph.is_discarded() || !graph.contains("passes"))
+                continue;
+            for (const auto& pass : graph.at("passes"))
+            {
+                if (pass.value("type", "") != "FullscreenShader" || !pass.contains("shaderPkg"))
+                    continue;
+                const std::string package = pass.at("shaderPkg").get<std::string>();
+                if (!samplesLut.contains(package))
+                {
+                    Rendering::ShaderPackage pkg{};
+                    std::string error;
+                    bool binds = false;
+                    if (Rendering::LoadShaderPkg(package, Rendering::ShaderSourceKind::SpirV, pkg, &error))
+                        for (const auto& set : pkg.meta.Sets)
+                            for (const auto& binding : set.Bindings)
+                                binds = binds || binding.Name == "uLut3d";
+                    samplesLut[package] = binds;
+                }
+                if (!samplesLut[package])
+                    continue;
+                ++checkedNodes;
+                const std::string where = it->path().lexically_relative(root).generic_string() + " node " +
+                                          pass.value("id", std::string("?"));
+                const auto listed = pass.value("serviceTextures", nlohmann::json::array());
+                for (const char* table : {"uLut3d", "uLut1d"})
+                {
+                    EXPECT_TRUE(std::find(listed.begin(), listed.end(), table) != listed.end())
+                        << where << " samples " << table << " without listing it in serviceTextures";
+                    EXPECT_EQ(pass.value("samplers", nlohmann::json::object()).value(table, std::string{}), "LinearClamp")
+                        << where << " has no LinearClamp sampler for " << table;
+                }
+            }
+        }
+    }
+    if (checkedNodes == 0)
+        GTEST_SKIP() << "no staged package binds uLut3d (shaderpkgs not staged under the build root's Shaders/)";
+    EXPECT_GE(checkedNodes, 2u) << "at least the engine's Tonemap and HDRColorFx nodes";
 }

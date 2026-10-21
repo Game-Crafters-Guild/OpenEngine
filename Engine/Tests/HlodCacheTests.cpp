@@ -73,6 +73,8 @@ HlodBakedScene MakeScene() {
     c1.Cell = {4, 0, 0};
     c1.SphereCenter[0] = 60.0f; c1.SphereRadius = 2.0f;
     c1.Members = {MakeMember("e/2", 0xCC, "m/c")};
+    c1.Members[0].RenderLayers = Rendering::RenderLayerMask::FromLayer(5);
+    c1.RenderLayers = Rendering::RenderLayerMask::FromLayer(5);
     c1.ClusterSourceHash = ComputeClusterSourceHash(c1.Members);
     c1.Submeshes = {MakeSubmesh("m/c", 4, false, false)};
 
@@ -132,11 +134,13 @@ TEST_F(HlodCacheTest, RoundTripEqualsInMemory) {
         EXPECT_EQ(a.Cell, b.Cell);
         EXPECT_FLOAT_EQ(a.SphereRadius, b.SphereRadius);
         EXPECT_EQ(a.ClusterSourceHash, b.ClusterSourceHash);
+        EXPECT_EQ(a.RenderLayers, b.RenderLayers);
         ASSERT_EQ(a.Members.size(), b.Members.size());
         for (size_t m = 0; m < a.Members.size(); ++m) {
             EXPECT_EQ(a.Members[m].StableId, b.Members[m].StableId);
             EXPECT_EQ(a.Members[m].MaterialGuid, b.Members[m].MaterialGuid);
             EXPECT_EQ(a.Members[m].ChosenLod, b.Members[m].ChosenLod);
+            EXPECT_EQ(a.Members[m].RenderLayers, b.Members[m].RenderLayers);
         }
         ASSERT_EQ(a.Submeshes.size(), b.Submeshes.size());
         for (size_t s = 0; s < a.Submeshes.size(); ++s)
@@ -250,6 +254,10 @@ TEST(HlodClusterSourceHash, PerturbingAnyMemberFieldChangesHash) {
 
     perturbed = base;
     perturbed[0].ChosenLod += 1; // chosen LOD
+    EXPECT_NE(ComputeClusterSourceHash(perturbed), h0);
+
+    perturbed = base;
+    perturbed[0].RenderLayers = Rendering::RenderLayerMask::FromLayer(3); // layer edit
     EXPECT_NE(ComputeClusterSourceHash(perturbed), h0);
 
     // Unrelated: re-hashing the untouched set is stable.

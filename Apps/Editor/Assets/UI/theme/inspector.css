@@ -71,6 +71,13 @@
 	padding: 4px 6px 4px 10px;
 }
 
+/* A disabled dropdown draws no plate (controls/Dropdown.css), so its value starts on the row's value
+   column like the text values around it; the property row's padding above would otherwise win. */
+.inspector-field .dropdown.inspector-dropdown:disabled > .dropdown-header {
+	padding-left: 0px;
+	border-left-width: 0px;
+}
+
 /* Optical inset: 8×8 glyph reads a few px right of where the header padding centers it. */
 .inspector-field .dropdown.inspector-dropdown > .dropdown-header > .dropdown-chevron {
 	margin-right: 4px;
@@ -131,7 +138,7 @@
 .inspector-guide-title {
 	color: var(--ui_color_text);
 	font-size: 11px;
-	font-weight: 600;
+	font-weight: 500;
 }
 /* Interactive color-temperature picker (KelvinSlider): a chunky gradient track so the painted
    Kelvin gradient + thumb caret read clearly. */
@@ -335,6 +342,23 @@
 	color: #B3B3B3;
 }
 
+/* A pending asset's name in the inspector header (Editor::MakePendingAssetHeaderLabels): it
+   sizes to its text and is the one to shrink and ellipsise, so the state after it stays whole. */
+.inspector-header-fit {
+	flex: 0 1 auto;
+}
+
+/* The state right after that name while its load runs ("preparing…"). It never shrinks, and
+   the row's free space goes after it, so it stays beside the name at every width. */
+.inspector-header-suffix {
+	flex-shrink: 0;
+	margin-right: auto;
+	font-size: var(--ui_font_size_header);
+	white-space: nowrap;
+	align-self: center;
+	color: var(--ui_color_text_soft);
+}
+
 /* Editable entity name field: match label look (no box) */
 .inspector-header-container input.inspector-header,
 .inspector-header-container .inspector-header input {
@@ -382,11 +406,11 @@
 }
 
 .inspector-header-history .inspector-history-forward-btn {
-	background-image: url("editor:Icons/right-arrow.png");
+	background-image: url("editor:Icons/right-arrow.svg");
 }
 
 .inspector-header-history .inspector-history-back-btn {
-	background-image: url("editor:Icons/left-arrow.png");
+	background-image: url("editor:Icons/left-arrow.svg");
 }
 
 .inspector-header-history .icon-button.inspector-header-history-icon:hover,
@@ -476,24 +500,24 @@
 }
 
 .inspector-header-container .inspector-header-kind-icon.inspector-header-kind-empty {
-	background-image: url("editor:Icons/info.png");
+	background-image: url("editor:Icons/info.svg");
 	background-image-tint: var(--ui_icon_tint_standard);
 }
 
 .inspector-header-container .inspector-header-kind-icon.inspector-header-kind-asset {
-	background-image: url("editor:Icons/box.png");
+	background-image: url("editor:Icons/box.svg");
 }
 
 .inspector-header-container .inspector-header-kind-icon.inspector-header-kind-folder {
-	background-image: url("editor:Icons/Folder@32px.png");
+	background-image: url("editor:Icons/Folder@32px.svg");
 }
 
 .inspector-header-container .inspector-header-kind-icon.inspector-header-kind-script {
-	background-image: url("editor:Icons/codeicon.png");
+	background-image: url("editor:Icons/codeicon.svg");
 }
 
 .inspector-header-container .inspector-header-kind-icon.inspector-header-kind-node {
-	background-image: url("editor:Icons/node.png");
+	background-image: url("editor:Icons/node.svg");
 }
 
 /* When a real asset thumbnail (texture/model/scene) is applied, fill the slot
@@ -793,7 +817,7 @@ button.flare-element-header-menu,
 	border-style: none;
 	border-color: transparent;
 	border-radius: 4px;
-	background-image: url("editor:Icons/options.png");
+	background-image: url("editor:Icons/options.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -867,46 +891,46 @@ button.flare-element-header-menu:focus,
 }
 
 .inspector-section-icon.inspector-section-icon-transform {
-	background-image: url("editor:Icons/vector.png");
+	background-image: url("editor:Icons/vector.svg");
 }
 .inspector-section-icon.inspector-section-icon-mesh-renderer {
-	background-image: url("editor:Icons/Sphere.png");
+	background-image: url("editor:Icons/Sphere.svg");
 }
 .inspector-section-icon.inspector-section-icon-skinned-mesh {
-	background-image: url("editor:Icons/person.png");
+	background-image: url("editor:Icons/person.svg");
 }
 .inspector-section-icon.inspector-section-icon-material {
-	background-image: url("editor:Icons/material.png");
+	background-image: url("editor:Icons/material.svg");
 }
 .inspector-section-icon.inspector-section-icon-camera {
-	background-image: url("editor:Icons/videocam.png");
+	background-image: url("editor:Icons/videocam.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-ambient {
-	background-image: url("editor:Icons/AmbientLight.png");
+	background-image: url("editor:Icons/AmbientLight.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-directional {
-	background-image: url("editor:Icons/DirectionalLight.png");
+	background-image: url("editor:Icons/DirectionalLight.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-spot {
-	background-image: url("editor:Icons/SpotLight.png");
+	background-image: url("editor:Icons/SpotLight.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-point {
-	background-image: url("editor:Icons/PointLight.png");
+	background-image: url("editor:Icons/PointLight.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-area {
-	background-image: url("editor:Icons/arealight.png");
+	background-image: url("editor:Icons/arealight.svg");
 }
 .inspector-section-icon.inspector-section-icon-light-volume {
-	background-image: url("editor:Icons/PointLight.png");
+	background-image: url("editor:Icons/PointLight.svg");
 }
 .inspector-section-icon.inspector-section-icon-sky {
-	background-image: url("editor:Icons/skyenvironment.png");
+	background-image: url("editor:Icons/skyenvironment.svg");
 }
 .inspector-section-icon.inspector-section-icon-reflection-probe {
-	background-image: url("editor:Icons/probe.png");
+	background-image: url("editor:Icons/probe.svg");
 }
 .inspector-section-icon.inspector-section-icon-post-process {
-	background-image: url("editor:Icons/postfx.png");
+	background-image: url("editor:Icons/postfx.svg");
 }
 .inspector-section-icon.inspector-section-icon-post-process-volume {
 	background-image: url("editor:Icons/color-filter.svg");
@@ -918,10 +942,10 @@ button.flare-element-header-menu:focus,
 	background-image: url("editor:Icons/wind.svg");
 }
 .inspector-section-icon.inspector-section-icon-terrain {
-	background-image: url("editor:Icons/terrain.png");
+	background-image: url("editor:Icons/terrain.svg");
 }
 .inspector-section-icon.inspector-section-icon-grass {
-	background-image: url("editor:Icons/grass.png");
+	background-image: url("editor:Icons/grass.svg");
 }
 .inspector-section-icon.inspector-section-icon-terrain-surface-rules {
 	background-image: url("editor:Icons/terrain-surface-rules.svg");
@@ -937,52 +961,49 @@ button.flare-element-header-menu:focus,
 	background-image: url("editor:Icons/markup-path.svg");
 }
 .inspector-section-icon.inspector-section-icon-particles {
-	background-image: url("editor:Icons/sparkles.png");
+	background-image: url("editor:Icons/sparkles.svg");
 }
 .inspector-section-icon.inspector-section-icon-video-texture {
-	background-image: url("editor:Icons/film.png");
+	background-image: url("editor:Icons/film.svg");
 }
 .inspector-section-icon.inspector-section-icon-lens-flare {
-	background-image: url("editor:Icons/flame.png");
+	background-image: url("editor:Icons/flame.svg");
 }
 .inspector-section-icon.inspector-section-icon-spline {
-	background-image: url("editor:Icons/GizmoSpline.png");
+	background-image: url("editor:Icons/GizmoSpline.svg");
 }
 .inspector-section-icon.inspector-section-icon-measure {
-	background-image: url("editor:Icons/Ruler.png");
+	background-image: url("editor:Icons/Ruler.svg");
 }
 .inspector-section-icon.inspector-section-icon-physics,
 .inspector-section-icon.inspector-section-icon-physics-settings {
-	background-image: url("editor:Icons/PhysicsSettings.png");
+	background-image: url("editor:Icons/PhysicsSettings.svg");
 }
 .inspector-section-icon.inspector-section-icon-shape-cube {
-	background-image: url("editor:Icons/Cube.png");
+	background-image: url("editor:Icons/Cube.svg");
 }
 .inspector-section-icon.inspector-section-icon-shape-sphere {
-	background-image: url("editor:Icons/Sphere.png");
+	background-image: url("editor:Icons/Sphere.svg");
 }
 .inspector-section-icon.inspector-section-icon-shape-capsule {
-	background-image: url("editor:Icons/Capsule.png");
+	background-image: url("editor:Icons/Capsule.svg");
 }
 .inspector-section-icon.inspector-section-icon-shape-plane {
-	background-image: url("editor:Icons/Plane.png");
+	background-image: url("editor:Icons/Plane.svg");
 }
 .inspector-section-icon.inspector-section-icon-audio-emitter,
 .inspector-section-icon.inspector-section-icon-audio-listener {
-	background-image: url("editor:Icons/music-note-icon@32px.png");
+	background-image: url("editor:Icons/music-note-icon@32px.svg");
 }
 .inspector-section-icon.inspector-section-icon-animator,
 .inspector-section-icon.inspector-section-icon-animated-node {
-	background-image: url("editor:Icons/film.png");
+	background-image: url("editor:Icons/film.svg");
 }
 .inspector-section-icon.inspector-section-icon-lod-group {
-	background-image: url("editor:Icons/layout3split.png");
-}
-.inspector-section-icon.inspector-section-icon-render-layer {
-	background-image: url("editor:Icons/list.png");
+	background-image: url("editor:Icons/layout3split.svg");
 }
 .inspector-section-icon.inspector-section-icon-default {
-	background-image: url("editor:Icons/node.png");
+	background-image: url("editor:Icons/node.svg");
 }
 
 /* The component title inside .inspector-section-header-row. It fills its row by shrinking the
@@ -1008,7 +1029,7 @@ button.flare-element-header-menu:focus,
    often enough ("Ambient gradient tint (diffuse only)"), and the inspector docks narrow. */
 .inspector-section-subheader {
 	font-size: 13px;
-	font-weight: 600;
+	font-weight: 500;
 	margin-top: 10px;
 	margin-bottom: 2px;
 	color: var(--ui_color_text_soft);
@@ -1033,7 +1054,7 @@ button.flare-element-header-menu:focus,
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
-	background-image: url("editor:Icons/options.png");
+	background-image: url("editor:Icons/options.svg");
 	background-image-tint: rgba(255, 255, 255, 0.66);
 	background-color: transparent;
 	border-radius: 4px;
@@ -1073,11 +1094,11 @@ button.flare-element-header-menu:focus,
 }
 
 .inspector-section-header-chevron.arrow-down {
-	background-image: url("editor:Icons/ArrowDown.png");
+	background-image: url("editor:Icons/ArrowDown.svg");
 }
 
 .inspector-section-header-chevron.arrow-up {
-	background-image: url("editor:Icons/ArrowUp.png");
+	background-image: url("editor:Icons/ArrowUp.svg");
 	opacity: 0.125;
 }
 
@@ -1111,7 +1132,7 @@ button.flare-element-header-menu:focus,
 }
 
 .inspector-section-collapse-arrow.arrow-up {
-	background-image: url("editor:Icons/ArrowUp.png");
+	background-image: url("editor:Icons/ArrowUp.svg");
 	opacity: 0.125;
 }
 
@@ -1157,7 +1178,7 @@ button.flare-element-header-menu:focus,
 .inspector-body-subheader {
 	color: var(--ui_color_text);
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
 	height: 20px;
 	min-height: 20px;
 	margin-top: 8px;
@@ -1605,6 +1626,21 @@ button.flare-element-header-menu:focus,
 	color: #FFFFFF;
 }
 
+/* A caption under a field column: what the value above it does, in plain words. */
+.inspector-field-caption {
+	font-size: 12px;
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+	margin-top: 2px;
+}
+
+.inspector-field-caption-technique {
+	font-size: 12px;
+	color: var(--ui_color_switched_off_label);
+	margin-top: 2px;
+	margin-bottom: 6px;
+}
+
 .inspector-type-hint {
 	flex: 0 0 auto;
 	font-size: 13px;
@@ -1861,7 +1897,8 @@ button.flare-element-header-menu:focus,
 	background-color: #5A4A12;
 }
 
-/* Model asset inspector: Model / LOD / Rig segmented tabs. */
+/* The row of segmented buttons (Button.css: segmented-button): the Model asset inspector's Model / LOD / Rig
+   tabs, the Sky Environment's Star look. */
 .inspector-subtab-row {
 	flex-direction: row;
 	align-items: stretch;
@@ -1874,41 +1911,9 @@ button.flare-element-header-menu:focus,
 	border-radius: 6px;
 }
 
-.inspector-asset-content button.inspector-subtab,
-.inspector-asset-content .button.inspector-subtab {
-	flex: 1 1 0;
-	min-width: 0;
-	min-height: 26px;
-	height: 26px;
-	margin: 0;
-	padding: 3px 8px;
-	border-width: 0;
-	border-style: none;
-	border-radius: 4px;
-	background-color: transparent;
-	background-image: none;
-	color: rgba(255, 255, 255, 0.68);
-	font-size: 12px;
-	font-weight: 500;
-}
-
-.inspector-asset-content button.inspector-subtab:hover,
-.inspector-asset-content .button.inspector-subtab:hover {
-	background-color: rgba(255, 255, 255, 0.08);
-	color: rgba(255, 255, 255, 0.9);
-}
-
-.inspector-asset-content button.inspector-subtab.active,
-.inspector-asset-content .button.inspector-subtab.active,
-.inspector-asset-content button.inspector-subtab.active:hover,
-.inspector-asset-content .button.inspector-subtab.active:hover {
-	background-color: rgba(255, 255, 255, 0.16);
-	color: var(--ui_color_text);
-}
-
-.inspector-asset-content button.inspector-subtab.pressed,
-.inspector-asset-content .button.inspector-subtab.pressed {
-	background-color: rgba(255, 255, 255, 0.12);
+/* A row of four choices too wide for one line: two rows of two (its buttons are segmented-button-pair). */
+.inspector-subtab-wrap {
+	flex-wrap: wrap;
 }
 
 .inspector-bake-axis-field {
@@ -1982,7 +1987,7 @@ button.flare-element-header-menu:focus,
 
 .inspector-model-axis-name {
 	font-size: 13px;
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .inspector-model-axis-direction {
@@ -2111,7 +2116,7 @@ button.flare-element-header-menu:focus,
 	border-style: none;
 	border-color: transparent;
 	border-radius: 4px;
-	background-image: url("editor:Icons/options.png");
+	background-image: url("editor:Icons/options.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -2654,7 +2659,7 @@ button.inspector-button.inspector-new-material-button,
 	min-height: 16px;
 	max-height: 16px;
 	cursor: pointer;
-	background-image: url("editor:Icons/LockOpen.png");
+	background-image: url("editor:Icons/LockOpen.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -2678,7 +2683,7 @@ button.inspector-button.inspector-new-material-button,
 }
 
 .tab .inspector-lock-button.icon-button.locked {
-	background-image: url("editor:Icons/LockClosed.png");
+	background-image: url("editor:Icons/LockClosed.svg");
 	background-image-tint: #FF5456;
 	opacity: 1.0;
 	background-color: transparent;
@@ -3047,7 +3052,7 @@ button.inspector-button.inspector-new-material-button,
 
 /* Warning icon in the section title for a component whose native module isn't loaded. */
 .inspector-section-icon.inspector-section-icon-unloaded {
-	background-image: url("editor:Icons/alert-circle.png");
+	background-image: url("editor:Icons/alert-circle.svg");
 }
 
 /* Status tag in the section title (an unloaded component, a bake state), after the title; its
@@ -3180,11 +3185,11 @@ button.inspector-button.inspector-new-material-button,
     background-size: 12px 12px;
     background-repeat: no-repeat;
     background-position: center;
-    background-image: url("editor:Icons/arrow-right.png");
+    background-image: url("editor:Icons/arrow-right.svg");
     background-image-tint: rgba(200, 200, 200, 1.0);
 }
 .inspector-leading-disclosure > .inspector-section-header-row > .foldout-chevron.expanded {
-    background-image: url("editor:Icons/arrow-down.png");
+    background-image: url("editor:Icons/arrow-down.svg");
 }
 
 /* One global preference covers component arrows and every inspector foldout. */

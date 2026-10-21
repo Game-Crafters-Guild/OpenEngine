@@ -91,6 +91,8 @@ struct TonemapFixture
     std::unique_ptr<RenderServices> Rs;
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
+    // The last frame's Tonemap pass read the view's exposure compensation state (the night tint's gate).
+    bool TonemapReadsCompensation = false;
 
     bool Up()
     {
@@ -109,7 +111,7 @@ struct TonemapFixture
         const CameraId cam = Rs->Views().AllocateCamera("TonemapViewOutputCam");
         Rs->Views().SetCameraData(cam, camera);
         View = Rs->Views().AllocateView("TonemapViewOutputView", cam);
-        Rs->Views().SetViewRenderLayerMask(View, 1u);
+        Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rs->Views().SetViewTargets(View, 0, 0, 0, Rendering::ViewClearConfig{});
         Nodes::RegisterEngineNodeTypes(Registry);
         return true;
@@ -117,11 +119,11 @@ struct TonemapFixture
 
     // One frame: the view's colour filled with the scene value, the Tonemap pass from it into a
     // float target, read back. Returns the red channel of the first pixel.
-    float Tonemap(PostProcessViewOutput output)
+    float Tonemap(PostProcessViewOutput output, bool autoExposure = false)
     {
         PostProcessSettings pp{};
         pp.Exposure = 1.0f;
-        pp.AutoExposureActive = false;
+        pp.AutoExposureActive = autoExposure;
         pp.Look = static_cast<int32>(Components::Look::Neutral);
         pp.ViewOutput = output;
         Rs->Views().SetViewPostProcessOverride(View, pp);
@@ -165,6 +167,17 @@ struct TonemapFixture
         const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{View, color, depth, resolve}};
         const std::vector<Rendering::ViewDesc> views(Rs->Views().GetViews().begin(), Rs->Views().GetViews().end());
         instance.Declare(frame, targets, views);
+        TonemapReadsCompensation = false;
+        const RenderGraph::RGGraph& g = frame.Graph();
+        for (const RenderGraph::RGAccessRecord& a : g.Accesses())
+        {
+            const char* pn = g.PassName(a.Pass);
+            const char* rn = g.ResourceName(a.Resource);
+            if (pn && rn && std::string(pn).find("Tonemap") != std::string::npos &&
+                std::string(rn).rfind("Pipeline.AutoExposure.Compensation.View", 0) == 0 &&
+                !RenderGraph::IsWrite(a.Access))
+                TonemapReadsCompensation = true;
+        }
         frame.MarkOutput(resolve, RenderGraph::RGImageLayout::ShaderReadOnly);
         frame.Execute();
         Device->WaitForIdle();
@@ -217,5 +230,22 @@ TEST(TonemapViewOutput, NoLookViewOutputSkipsTheBlendedLook)
     EXPECT_NEAR(noLook, kSceneValue, 2e-3f)
         << "a view asking for no look still got the blended look (" << look << ")";
 
+    f.Down();
+}
+
+// The night tint gates on what the view meters: under Auto exposure the shipped Tonemap pass reads the
+// view's exposure compensation state with no entry in its pipeline JSON (the engine binds
+// uCompensation), so every pipeline, a game's own included, reads it. Without Auto exposure nothing
+// writes the state and the pass does not wait on it.
+TEST(TonemapViewOutput, TheTonemapReadsTheViewsMeteredReading)
+{
+    TonemapFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    f.Tonemap(PostProcessViewOutput::Look, /*autoExposure=*/true);
+    EXPECT_TRUE(f.TonemapReadsCompensation)
+        << "the Tonemap pass must read Pipeline.AutoExposure.Compensation.View<id> (uCompensation)";
+    f.Tonemap(PostProcessViewOutput::Look, /*autoExposure=*/false);
+    EXPECT_FALSE(f.TonemapReadsCompensation) << "a view without Auto exposure has no compensation state to read";
     f.Down();
 }

@@ -63,7 +63,7 @@ void AgentCallImageView::ReleasePicture()
         return;
     UIManager* ui = GetOwnerManager();
     if (ui && source->Kind == BackgroundImageSource::SourceKind::Path && !source->Value.empty())
-        ui->EvictBackgroundTexture(source->Value);
+        ui->BackgroundImages().Evict(source->Value);
     UI::Layout::DisableBackgroundOverride(*this);
 }
 

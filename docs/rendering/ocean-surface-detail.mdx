@@ -1,9 +1,9 @@
 ---
 title: Ocean surface detail, rivers and spray
-description: The ocean features that add to the analytic surface (a normal-mapped surface, water-body materials, spline rivers, accumulated shadows, crest spray, reflected caustics) and the shallow clarity window.
+description: The ocean features that add to the analytic surface (a normal-mapped surface, water-body materials, spline rivers, accumulated shadows, crest spray, and reflected caustics) and the shallow clarity window.
 ---
 
-The ocean renders an analytic surface by default. This guide covers the features that add to it: a detailed surface driven by a normal texture, materials on individual water bodies, continuous spline rivers, accumulated water shadows and crest spray. Each one is off until you use it, so an ocean that uses none of them renders and costs what it did without them. The one exception is the shallow clarity window below, which is on by default and reproduces the look the ocean always had.
+The ocean renders an analytic surface by default. This guide covers the features that add to it: a detailed surface driven by a normal texture, materials on individual water bodies, continuous spline rivers, accumulated water shadows, and crest spray. Each one is off until you use it, so an ocean that uses none of them renders and costs what it did without them. The one exception is the shallow clarity window below, which is on by default and reproduces the look the ocean always had.
 
 ## Example scenes
 
@@ -18,7 +18,7 @@ The textures in `Examples/Materials/Ocean` (`crest_foam.png`, `crest_wave_normal
 
 ## Detailed surface
 
-Assign a tangent-space normal map to `OceanSurface.NormalTexture` (X/Y slopes in red/green; RGB or BC5). With it, the surface filters its ripples by the pixel footprint, reflects with the rippled normal, gives foam relief and roughness, adds a submerged bubble layer and widens the sun glint where ripples are unresolved. Without it every one of those terms is the analytic surface's.
+Assign a tangent-space normal map to `OceanSurface.NormalTexture` (X/Y slopes in red/green; RGB or BC5). With it, the surface filters its ripples by the pixel footprint, reflects with the rippled normal, gives foam relief and roughness, adds a submerged bubble layer, and widens the sun glint where ripples are unresolved. Without it every one of those terms is the analytic surface's.
 
 | Field | Effect |
 |---|---|
@@ -47,17 +47,17 @@ Add `OceanSplineInput` next to a `SplineComponent`. The curve becomes a continuo
 | `UnderwaterVolume`, `UnderwaterDepth` | Extrudes a confined ribbon downward so the camera can dive into the river. | `ConfineSurface` |
 | `Albedo`, `Color`, `AlbedoCoverage` | Paints the surface along the curve. | Ocean Albedo on |
 
-The ribbon does not use the analytic source budgets, and its fields are rebuilt only when the spline, the ribbon settings or the ocean origin change. Very sharp reversals fold a wide ribbon; smooth the curve or narrow the ribbon there.
+The ribbon does not use the analytic source budgets, and its fields are rebuilt only when the spline, the ribbon settings, or the ocean origin change. Very sharp reversals fold a wide ribbon. Smooth the curve or narrow the ribbon there.
 
 To run a river through terrain, give the same spline entity a `TerrainModifierVolume` with shape SplinePath and a `TerrainHeightOffsetEffect` that lowers the ground: one curve then carves the channel and carries the water. Set the spline height to the water level and make `Width` reach past the point where the banks rise above it, so the edge of a confined surface ends inside the bank instead of standing in the open as a cut edge.
 
 ## Accumulated water shadows
 
-Assign an `.oceansettings` asset of kind Shadows (the example is `temporal_shadows.oceansettings`) to `OceanRenderer.ShadowSettings` and set `Shadows.Enabled`. The ocean then accumulates the sun's shadow in world space over time, with a hard channel for the sun glint and a soft, jittered channel for the water's scattered light. `JitterDiameter` and `HardJitterDiameter` are in meters; `TemporalWeight` and `SimulationFrequency` set how much history each update keeps. Camera cuts, paused time and a moving sun discard the history. `OceanShadowInput` rectangles add authored shadow.
+Assign an `.oceansettings` asset of kind Shadows (the example is `temporal_shadows.oceansettings`) to `OceanRenderer.ShadowSettings` and set `Shadows.Enabled`. The ocean then accumulates the sun's shadow in world space over time, with a hard channel for the sun glint and a soft, jittered channel for the water's scattered light. `JitterDiameter` and `HardJitterDiameter` are in meters. `TemporalWeight` and `SimulationFrequency` set how much history each update keeps. Camera cuts, paused time, and a moving sun discard the history. `OceanShadowInput` rectangles add authored shadow.
 
 ## Crest spray
 
-`OceanSurface.Spray` tears fine droplets from raised, breaking crests once the wind exceeds `SprayWindThreshold`. Droplets are born within `SpraySpawnRadius` meters of the camera, fly with the wind under gravity and are lit like the water: sun through the shadow map plus the sky and environment light. Raise `SprayEmissionThreshold` to keep only the strongest crests.
+`OceanSurface.Spray` tears fine droplets from raised, breaking crests once the wind exceeds `SprayWindThreshold`. Droplets are born within `SpraySpawnRadius` meters of the camera, fly with the wind under gravity, and are lit like the water: sun through the shadow map plus the sky and environment light. Raise `SprayEmissionThreshold` to keep only the strongest crests.
 
 | Field | Effect |
 |---|---|
@@ -71,15 +71,8 @@ A calm ocean schedules no spray work once the last droplets have landed.
 
 ## Reflected caustics
 
-`OceanSurface.ReflectedCausticsStrength` lights geometry just above the water with the caustics the surface reflects (piers, hulls, banks); `ReflectedCausticsHeight` and `ReflectedCausticsFalloff` set how far up they reach. They are off by default: a strength of 0 draws nothing, and a scene turns them on by raising it.
+`OceanSurface.ReflectedCausticsStrength` lights geometry just above the water with the caustics the surface reflects (piers, hulls, banks). `ReflectedCausticsHeight` and `ReflectedCausticsFalloff` set how far up they reach. They are off by default: a strength of 0 draws nothing, and a scene turns them on by raising it.
 
 ## Shallow clarity window
 
-Seen from above, the surface eases its depth fog in over the first meters of the view ray's path through the water, so the seabed and its caustics stay readable in the shallows however dense the fog is. `OceanSurface.ShallowClarityDistance` is that path length in meters (default 8, range 0.01 to 50): shorter brings the deep color in sooner. `OceanSurface.ShallowClarityFloor` is the fraction of the depth fog applied where the path starts at the surface (default 0.22, range 0 to 1); the fog ramps smoothly from it up to full strength over the distance and is unscaled beyond. Unlike the features above, the window is on by default; a floor of 1 turns it off. It does not apply to the water seen from below the surface.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/ocean-surface-detail.html`.
-- 2026-10-05: the shallow clarity window: its two settings, their defaults and how to turn it off.
-- 2026-10-02: reflected caustics: the setting and its off default.
-- 2026-09-24: created with the detailed surface, water-body materials, spline rivers, accumulated shadows and GPU crest spray.
+Seen from above, the surface eases its depth fog in over the first meters of the view ray's path through the water, so the seabed and its caustics stay readable in the shallows however dense the fog is. `OceanSurface.ShallowClarityDistance` is that path length in meters (default 8, range 0.01 to 50): shorter brings the deep color in sooner. `OceanSurface.ShallowClarityFloor` is the fraction of the depth fog applied where the path starts at the surface (default 0.22, range 0 to 1). The fog ramps smoothly from it up to full strength over the distance and is unscaled beyond. Unlike the features above, the window is on by default. A floor of 1 turns it off. It does not apply to the water seen from below the surface.

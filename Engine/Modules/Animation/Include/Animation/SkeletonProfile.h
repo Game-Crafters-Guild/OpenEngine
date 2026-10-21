@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -69,6 +70,8 @@ class SkeletonProfile : public ::GameEngine::Asset
 
   private:
     bool ParseJson(const std::string& text);
+    // Logs that the file is not loaded and why and fails the asset; returns false.
+    bool Refuse(std::string_view reason);
     std::string SerializeJson() const;
 
     std::string m_Name;

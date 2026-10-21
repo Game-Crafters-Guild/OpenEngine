@@ -1,7 +1,10 @@
 #include <Types/ParseNumber.h>
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
+using GameEngine::ParseNumberStatus;
 using GameEngine::ParseStrictDecimal;
 
 namespace {
@@ -80,4 +83,36 @@ TEST(ParseStrictDecimal, RefusesAnOverflowRatherThanReturningInfinity)
 {
     EXPECT_TRUE(Rejects("1e400"));
     EXPECT_TRUE(Rejects("-1e400"));
+}
+
+TEST(ParseNumber, ReportsAValuePastTheRangeApartFromANonNumber)
+{
+    float floatValue = 0.0f;
+    double doubleValue = 0.0;
+    std::size_t consumed = 0;
+    for (const char* text : {"1e39", "-1e39", "1e-46"})
+        EXPECT_EQ(ParseNumberStatus::OutOfRange, GameEngine::ParseFloat(text, floatValue, consumed)) << text;
+    for (const char* text : {"1e400", "-1e400", "1e-400"})
+        EXPECT_EQ(ParseNumberStatus::OutOfRange, GameEngine::ParseDouble(text, doubleValue, consumed)) << text;
+    for (const char* text : {"", "abc", "-", "e5"})
+    {
+        EXPECT_EQ(ParseNumberStatus::NoNumber, GameEngine::ParseFloat(text, floatValue, consumed)) << text;
+        EXPECT_EQ(ParseNumberStatus::NoNumber, GameEngine::ParseDouble(text, doubleValue, consumed)) << text;
+    }
+    ASSERT_EQ(ParseNumberStatus::Ok, GameEngine::ParseDouble("2.5px", doubleValue, consumed));
+    EXPECT_EQ(2.5, doubleValue);
+    EXPECT_EQ(3u, consumed);
+}
+
+TEST(ParseNumber, AcceptsSubnormals)
+{
+    float floatValue = 0.0f;
+    double doubleValue = 0.0;
+    std::size_t consumed = 0;
+    ASSERT_EQ(ParseNumberStatus::Ok, GameEngine::ParseFloat("1e-45", floatValue, consumed));
+    EXPECT_EQ(std::numeric_limits<float>::denorm_min(), floatValue);
+    ASSERT_EQ(ParseNumberStatus::Ok, GameEngine::ParseDouble("-5e-324", doubleValue, consumed));
+    EXPECT_EQ(-std::numeric_limits<double>::denorm_min(), doubleValue);
+    EXPECT_EQ(std::numeric_limits<float>::denorm_min(), GameEngine::ParseFloat("1e-45"));
+    EXPECT_EQ(std::numeric_limits<double>::denorm_min(), GameEngine::ParseDouble("5e-324"));
 }

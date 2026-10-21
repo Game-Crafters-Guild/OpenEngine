@@ -11,6 +11,7 @@
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/MaskField.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Scrollbar.h"
 #include "UI/Controls/Slider.h"
@@ -169,6 +170,9 @@ void DefineBuiltInControls()
                                 { return std::make_unique<Toggle>(); })
         .Attr("checked", &Toggle::SetChecked)
         .TagAlias("toggle");
+
+    RegisterWithFactory<MaskField>("MaskField", []()
+                                   { return std::make_unique<MaskField>(); });
 
     RegisterWithFactory<Slider>("Slider", []()
                                 { return std::make_unique<Slider>(); })

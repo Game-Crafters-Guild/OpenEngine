@@ -1,7 +1,7 @@
 #pragma once
 
 // Demo: query a UIDocument, register a click, drive the HP bar.
-// Uses GameUI::GetHost / FindElementById (the #1051 accessor, not EngineCore::GetGameUIHost).
+// Uses GameUI::GetHost / FindDocumentRoot (the #1051 accessor, not EngineCore::GetGameUIHost).
 
 #include "GameSDK/System.h"
 
@@ -35,10 +35,17 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
 
     static constexpr int kLowHealthPercent = 50;
 
+    // Element `id` inside the one UIDocument this system drives, or nullptr.
+    static GameEngine::UIElement* FindInDocument(uint64_t entityId, GameEngine::StringId id)
+    {
+        GameEngine::UIElement* root = GameEngine::GameUI::FindDocumentRoot(entityId);
+        return root ? root->FindById(id) : nullptr;
+    }
+
     static void ApplyHp(uint64_t entityId, int hp)
     {
         using namespace GameEngine;
-        if (UIElement* fill = GameUI::FindElementById(entityId, "hp-fill"_sid))
+        if (UIElement* fill = FindInDocument(entityId, "hp-fill"_sid))
         {
             fill->Overrides().Set(Style::Width, StyleLength::Percent(static_cast<float>(hp)));
             // State goes on as a CSS class; the stylesheet owns what it looks like.
@@ -47,7 +54,7 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
             else
                 fill->RemoveClass("low-health");
         }
-        if (auto* label = dynamic_cast<Label*>(GameUI::FindElementById(entityId, "hp-label"_sid)))
+        if (auto* label = dynamic_cast<Label*>(FindInDocument(entityId, "hp-label"_sid)))
             label->SetText(std::to_string(hp) + " / 100");
     }
 
@@ -56,7 +63,7 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
         using namespace GameEngine;
         if (m_ButtonInstanceId != 0)
         {
-            UIElement* button = GameUI::FindElementById(m_EntityId, "damage-btn"_sid);
+            UIElement* button = FindInDocument(m_EntityId, "damage-btn"_sid);
             // The id can resolve to a REPLACEMENT button, which never saw this token.
             if (button && button->GetInstanceId() == m_ButtonInstanceId)
                 button->UnregisterEventHandler(m_Token);
@@ -95,7 +102,7 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
         // a subscription left on the destroyed button invisible until someone clicks.
         if (m_ButtonInstanceId != 0)
         {
-            UIElement* wired = GameUI::FindElementById(m_EntityId, "damage-btn"_sid);
+            UIElement* wired = FindInDocument(m_EntityId, "damage-btn"_sid);
             if (wired && wired->GetInstanceId() == m_ButtonInstanceId)
                 return;
             Unwire();
@@ -105,7 +112,7 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
             [&](ECS::EntityHandle e, const Components::UIDocument&) {
             if (m_ButtonInstanceId != 0)
                 return;
-            UIElement* button = GameUI::FindElementById(e.id, "damage-btn"_sid);
+            UIElement* button = FindInDocument(e.id, "damage-btn"_sid);
             if (!button)
                 return;
             m_EntityId = e.id;

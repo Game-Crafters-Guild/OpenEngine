@@ -230,6 +230,7 @@ TEST(PlayerEditorSource, DistinctStagedRootMountsSecondSource)
     EXPECT_EQ(desc->Root, stagedAssets);
     EXPECT_TRUE(desc->RequiresScan);
     EXPECT_FALSE(desc->RegisterFileWatcher);
+    EXPECT_FALSE(desc->InfersTextureImportSettings) << "the mount has no metadata store, so a bind cannot save inferred settings";
 }
 
 TEST(PlayerEditorSource, SameRootDevRunMountsAliasWithoutScan)

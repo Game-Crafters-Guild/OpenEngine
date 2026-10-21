@@ -5,7 +5,8 @@
 //   * descriptors round-trip intact (the editor consumes title/icon and the
 //     alias-scoped layout/style asset paths verbatim),
 //   * consumers attached AFTER registrations get them replayed; later
-//     registrations fire immediately,
+//     registrations reach them at the next DeliverPendingRegistrations, never
+//     inside the registering call (a module registers under the loader lock),
 //   * editor-chrome stylesheet contributions dedupe by (alias, path) but
 //     still re-notify (the downstream global attach is idempotent),
 //   * OpenPanel dispatches through the editor-installed opener and is a loud
@@ -21,7 +22,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <future>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ed = GameEngine::Editor;
@@ -56,6 +61,53 @@ std::size_t CountPanelsWithId(const std::vector<ed::EditorPanelDescriptor>& pane
 struct ConsumerDetachGuard
 {
     ~ConsumerDetachGuard() { ed::EditorPanelRegistry::Get().SetConsumers({}); }
+};
+
+// Stands in for the OS loader lock a module's static initializers run under: a
+// thread can end only by taking it (LdrShutdownThread).
+struct LoaderLockModel
+{
+    std::mutex LoaderLock;
+    bool DestructorTimedOut = false;
+    std::vector<std::thread> Unjoined;
+};
+
+// A panel whose destructor waits for the worker it started, as the AI
+// Assistant's login status row does. The wait is bounded so a deadlock reads as
+// a failure; a worker it gave up on is joined by the test once the lock is free.
+class ThreadJoiningPanel : public GameEngine::DockPanel
+{
+public:
+    explicit ThreadJoiningPanel(LoaderLockModel& model) : DockPanel("Joining"), m_Model(model)
+    {
+        m_Worker = std::thread(&ThreadJoiningPanel::RunWorker, m_Stop.get_future(),
+                               std::ref(m_Model.LoaderLock), std::move(m_Exited));
+    }
+    ~ThreadJoiningPanel() override
+    {
+        m_Stop.set_value();
+        if (m_ExitedFuture.wait_for(std::chrono::seconds(5)) == std::future_status::timeout)
+        {
+            m_Model.DestructorTimedOut = true;
+            m_Model.Unjoined.push_back(std::move(m_Worker));
+            return;
+        }
+        m_Worker.join();
+    }
+
+private:
+    static void RunWorker(std::future<void> stop, std::mutex& loaderLock, std::promise<void> exited)
+    {
+        stop.wait();
+        const std::lock_guard threadExit(loaderLock);
+        exited.set_value();
+    }
+
+    LoaderLockModel& m_Model;
+    std::promise<void> m_Stop;
+    std::promise<void> m_Exited;
+    std::future<void> m_ExitedFuture = m_Exited.get_future();
+    std::thread m_Worker;
 };
 
 } // namespace
@@ -144,7 +196,133 @@ TEST(EditorPanelRegistry, ConsumersReplayEarlierRegistrationsAndSeeLaterOnes)
     // Editor order: consumer already attached when the module registers.
     consumedPanels.clear();
     registry.RegisterPanel(MakeDescriptor("sdkTest.panel.live", "Live"));
+    EXPECT_FALSE(contains(consumedPanels, "sdkTest.panel.live"))
+        << "a registration must not reach the consumer inside the registering call";
+    registry.DeliverPendingRegistrations();
     EXPECT_TRUE(contains(consumedPanels, "sdkTest.panel.live"));
+}
+
+// A package module reload registers its panel from DllMain, under the loader
+// lock. If the registration destroys the panel it replaces there, a destructor
+// that joins a thread waits on a thread that can only end by taking that lock:
+// the editor hangs.
+TEST(EditorPanelRegistry, ReplacedPanelIsDestroyedOutsideTheRegisteringCall)
+{
+    auto& registry = ed::EditorPanelRegistry::Get();
+    ConsumerDetachGuard detach;
+    LoaderLockModel model;
+
+    // The editor's consumer: build the new panel, drop the one it replaces.
+    std::vector<std::unique_ptr<GameEngine::UIElement>> openPanels;
+    ed::EditorPanelRegistry::Consumers consumers;
+    consumers.Panel = [&](const ed::EditorPanelDescriptor& d) {
+        openPanels.clear();
+        openPanels.push_back(d.Factory());
+    };
+    registry.SetConsumers(std::move(consumers));
+
+    ed::EditorPanelDescriptor descriptor = MakeDescriptor("sdkTest.panel.joining", "Joining");
+    descriptor.Factory = [&model]() -> std::unique_ptr<GameEngine::UIElement> {
+        return std::make_unique<ThreadJoiningPanel>(model);
+    };
+    registry.RegisterPanel(descriptor);
+    registry.DeliverPendingRegistrations();
+    ASSERT_EQ(openPanels.size(), 1u);
+
+    {
+        const std::lock_guard dllMain(model.LoaderLock);
+        registry.RegisterPanel(descriptor);
+    }
+    registry.DeliverPendingRegistrations();
+    for (std::thread& worker : model.Unjoined)
+        worker.join();
+
+    EXPECT_FALSE(model.DestructorTimedOut)
+        << "the replaced panel was destroyed inside the registration, under the loader lock";
+    EXPECT_EQ(openPanels.size(), 1u);
+    openPanels.clear();
+}
+
+// The editor delivers on every update: a registration reaches the consumer once,
+// with the descriptor registered last, however often it was registered before the
+// delivery, and never again on a later update.
+TEST(EditorPanelRegistry, PendingPanelIsDeliveredOnceWithItsLatestDescriptor)
+{
+    auto& registry = ed::EditorPanelRegistry::Get();
+    ConsumerDetachGuard detach;
+
+    std::vector<std::string> deliveredTitles;
+    ed::EditorPanelRegistry::Consumers consumers;
+    consumers.Panel = [&](const ed::EditorPanelDescriptor& d) {
+        if (d.PanelId == "sdkTest.panel.once")
+            deliveredTitles.push_back(d.Title);
+    };
+    registry.SetConsumers(std::move(consumers));
+
+    registry.RegisterPanel(MakeDescriptor("sdkTest.panel.once", "First"));
+    registry.RegisterPanel(MakeDescriptor("sdkTest.panel.once", "Second"));
+    registry.DeliverPendingRegistrations();
+    EXPECT_EQ(deliveredTitles, std::vector<std::string>{"Second"})
+        << "two registrations of one id before a delivery must reach the consumer once, with the last one";
+
+    registry.DeliverPendingRegistrations();
+    EXPECT_EQ(deliveredTitles.size(), 1u) << "a later update delivered the same registration again";
+}
+
+// Attaching consumers replays every registration, the pending ones included, so
+// the next update must not deliver those a second time.
+TEST(EditorPanelRegistry, AttachingConsumersDeliversAPendingRegistrationOnce)
+{
+    auto& registry = ed::EditorPanelRegistry::Get();
+    ConsumerDetachGuard detach;
+
+    registry.SetConsumers({.Panel = [](const ed::EditorPanelDescriptor&) {}});
+    registry.RegisterPanel(MakeDescriptor("sdkTest.panel.attach", "Attach"));
+
+    int deliveries = 0;
+    ed::EditorPanelRegistry::Consumers consumers;
+    consumers.Panel = [&](const ed::EditorPanelDescriptor& d) {
+        if (d.PanelId == "sdkTest.panel.attach")
+            ++deliveries;
+    };
+    registry.SetConsumers(std::move(consumers));
+    EXPECT_EQ(deliveries, 1) << "attach must replay the pending registration";
+    registry.DeliverPendingRegistrations();
+    EXPECT_EQ(deliveries, 1) << "the update after the attach delivered the replayed registration again";
+}
+
+// Overlays and editor stylesheets register from the same DllMain as panels: their
+// consumers run on the next delivery, never inside the registering call.
+TEST(EditorPanelRegistry, OverlayAndStyleSheetRegisteredAfterAttachWaitForDelivery)
+{
+    auto& registry = ed::EditorPanelRegistry::Get();
+    ConsumerDetachGuard detach;
+    LoaderLockModel model;
+
+    int overlays = 0;
+    int styleSheets = 0;
+    ed::EditorPanelRegistry::Consumers consumers;
+    consumers.Overlay = [&](const ed::EditorOverlayDescriptor& d) {
+        if (d.OverlayId == "sdkTest.overlay.deferred")
+            ++overlays;
+    };
+    consumers.StyleSheet = [&](const ed::EditorStyleSheetContribution& c) {
+        if (c.StyleAssetPath == "UI/SdkTestDeferred.css")
+            ++styleSheets;
+    };
+    registry.SetConsumers(std::move(consumers));
+
+    {
+        const std::lock_guard dllMain(model.LoaderLock);
+        registry.RegisterOverlay({"sdkTest.overlay.deferred",
+                                  [] { return std::make_unique<GameEngine::DockPanel>("Deferred"); }});
+        registry.RegisterEditorStyleSheet({"sdk-test-pack", "UI/SdkTestDeferred.css"});
+        EXPECT_EQ(overlays, 0) << "the overlay consumer ran inside the registering call";
+        EXPECT_EQ(styleSheets, 0) << "the stylesheet consumer ran inside the registering call";
+    }
+    registry.DeliverPendingRegistrations();
+    EXPECT_EQ(overlays, 1);
+    EXPECT_EQ(styleSheets, 1);
 }
 
 TEST(EditorPanelRegistry, StyleSheetContributionsDedupeButRenotify)
@@ -168,7 +346,9 @@ TEST(EditorPanelRegistry, StyleSheetContributionsDedupeButRenotify)
 
     const int baseline = notifications;
     registry.RegisterEditorStyleSheet({"sdk-test-pack", "UI/SdkTestDedupe.css"});
+    registry.DeliverPendingRegistrations();
     registry.RegisterEditorStyleSheet({"sdk-test-pack", "UI/SdkTestDedupe.css"}); // module reload
+    registry.DeliverPendingRegistrations();
     EXPECT_EQ(countSheet(), 1) << "re-registration must not duplicate the contribution";
     EXPECT_EQ(notifications, baseline + 2)
         << "a reloaded module must still re-notify (global attach is idempotent)";
@@ -194,6 +374,7 @@ TEST(EditorPanelRegistry, OverlaysReplaceForwardReplayAndNotifyLive)
     consumed.clear();
     registry.RegisterOverlay({"sdkTest.overlay.live",
                               [] { return std::make_unique<GameEngine::DockPanel>("Live"); }});
+    registry.DeliverPendingRegistrations();
     EXPECT_NE(std::find(consumed.begin(), consumed.end(), "sdkTest.overlay.live"), consumed.end());
 
     // Replace-forward: same-id re-registration must not grow the registry and

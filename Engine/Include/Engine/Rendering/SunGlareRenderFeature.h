@@ -110,6 +110,7 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t GetViewParamsBinding() const { return m_ViewParamsBinding; }
     uint32_t GetShadowArrayBinding() const { return m_ShadowArrayBinding; }
     uint32_t GetShadowDataBinding() const { return m_ShadowDataBinding; }
+    uint32_t GetExposureBinding() const { return m_ExposureBinding; }
 
   private:
     ::GameEngine::Rendering::IDevice* m_Device = nullptr;
@@ -128,6 +129,7 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t m_ViewParamsBinding = 2;
     uint32_t m_ShadowArrayBinding = 3;
     uint32_t m_ShadowDataBinding = 4;
+    uint32_t m_ExposureBinding = 5;
     // Flat rather than a map: a frame has a handful of views, this is written once and read
     // once per view per frame, and a linear scan beats a hash at that size. Reused across
     // frames so the per-frame refill does not allocate.

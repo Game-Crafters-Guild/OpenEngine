@@ -1,6 +1,7 @@
 #include "Engine/Rendering/Camera.h"
 
 #include "Components/Transform.h"
+#include "Engine/Rendering/ViewRegistry.h"
 #include "ECS/ECSTemplates.h"
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Common/Math.h"
@@ -114,6 +115,14 @@ std::optional<Camera> FindActiveCamera(ECS::World& world)
     if (!found)
         return std::nullopt;
     return result;
+}
+
+void DeclareGameCameraView(ViewRegistry& views, Rendering::ViewId view, const Camera* activeCamera)
+{
+    if (!activeCamera)
+        return;
+    views.RequestViewFrame(view);
+    views.SetViewRenderLayerMask(view, activeCamera->params.VisibleLayers);
 }
 
 } // namespace GameEngine::Engine::Renderer

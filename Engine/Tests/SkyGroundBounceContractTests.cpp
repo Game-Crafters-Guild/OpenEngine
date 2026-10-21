@@ -464,18 +464,11 @@ TEST(SkyGroundBounceContract, SkylightEstimatorIntegratesTheCosineWeightedHemisp
         << "a horizon-only sample would pass this bar, so the bar is not testing anything";
 }
 
-// At night the physical bounce has nothing to reflect -- the sun is below the horizon so
-// the N.L clamp zeroes the direct term, and the sky-view LUT the skylight integrates is
-// near-black -- so an unguarded floor goes black. That is wrong for a mechanical reason
-// rather than a taste one: the LUT is NOT the sky this engine renders at night. The night
-// gradient is composited ON TOP of it by GE_ApplySkyGroundAndNight, so a floor derived
-// from the LUT alone reflects a sky nobody sees, which is the exact capture-vs-visible
-// divergence this whole path exists to remove.
-//
-// Measured, TimeOfDayHours 23 (physamb2, 2026-08-17): unguarded, a vertical surface loses
-// 72% of its ambient and a down-facing one 98%. Guarded, the floor lands on the authored
-// GroundNightColor and the down-facing face reads within 9% of that authored value.
-TEST(SkyGroundBounceContract, BounceCrossesToTheAuthoredNightGroundColour)
+// At night the moon is the primary source, so the bounce's direct and skylight terms are the
+// moonlit floor. The night sky's own glow is composited over the LUT by GE_ApplySkyGroundAndNight
+// and is not in the LUT the skylight term integrates, so its share of the floor, groundNightColor,
+// is added on the same clamped nightAmount: the capture and the visible floor see one night.
+TEST(SkyGroundBounceContract, BounceAddsTheNightGlowsShareToTheMoonlitFloor)
 {
     const std::string composite = LoadComposite();
     ASSERT_FALSE(composite.empty()) << "sky_composite.glsl not found via GE_RENDERER_REPO_ROOT";
@@ -487,13 +480,10 @@ TEST(SkyGroundBounceContract, BounceCrossesToTheAuthoredNightGroundColour)
     const std::string body = composite.substr(begin, end - begin);
 
     EXPECT_NE(body.find("groundNightColor"), std::string::npos)
-        << "the bounce must reach the authored night ground colour; without it a night "
-           "floor is black and the IBL reflects a sky the engine never renders";
-    EXPECT_NE(body.find("mix(lit, groundNightColor, clamp(nightAmount, 0.0, 1.0))"),
-              std::string::npos)
-        << "the night crossover must be the same mix, on the same clamped nightAmount, that "
-           "GE_ApplySkyGroundAndNight already uses for the stylized ground -- one night "
-           "semantics, not two";
+        << "the bounce must carry the night glow's share of the floor";
+    EXPECT_NE(body.find("lit + groundNightColor * clamp(nightAmount, 0.0, 1.0)"), std::string::npos)
+        << "the night glow's share is added to the moonlit floor on the clamped nightAmount; "
+           "replacing the floor with it would drop the moonlight";
 
     // Both consumers must feed it, or the capture and the visible sky disagree at night.
     const std::string render = LoadSkyRender();

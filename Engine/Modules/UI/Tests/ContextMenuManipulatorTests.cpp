@@ -420,6 +420,25 @@ TEST(ContextMenuManipulatorTests, PressAndReleaseInsideOpensTheMenu)
 }
 
 // The whole point of arming: this release is not on a press of ours.
+// Under a CSS transform the menu opens below the element where it is drawn: a
+// 50x20 box at (0, 0) scaled 2x about its centre (25, 10) is drawn at
+// (-25, -10)-(75, 30).
+TEST(ContextMenuManipulatorTests, TheMenuAnchorsBelowTheDrawnElement)
+{
+    GestureFixture fx;
+    auto el = MakeElement(0, 0, 50, 20);
+    el->GetMutableResolvedStyle().Visual.Transform = TransformValue{}.Scale(2.0f, 2.0f);
+    Attach(*el);
+
+    EXPECT_TRUE(Send(*el, kEventMouseDown, 10, 10, kRightButton));
+    EXPECT_TRUE(Send(*el, kEventMouseUp, 10, 10, kRightButton));
+
+    ASSERT_EQ(fx.Opens(), 1u);
+    ASSERT_EQ(fx.Menu()->Shows.size(), 1u);
+    EXPECT_EQ(fx.Menu()->Shows[0].X, -25);
+    EXPECT_EQ(fx.Menu()->Shows[0].Y, 30) << "the menu did not anchor below the drawn element";
+}
+
 TEST(ContextMenuManipulatorTests, ReleaseWithoutAPressOpensNothingAndIsNotClaimed)
 {
     GestureFixture fx;

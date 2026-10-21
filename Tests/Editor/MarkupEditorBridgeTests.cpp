@@ -29,6 +29,7 @@
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/WorldSnapshotCommand.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
 #include "UI/Controls/Button.h"
@@ -48,6 +49,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -427,6 +429,84 @@ TEST_F(MarkupEditorBridgeTest, TwoScenesWithTheSameTagKeepTheirOwnState)
     World.Clear();
     m_ScenePath = m_Project / "Scenes" / "Village.scene";
     EXPECT_TRUE(m_Bridge->IsHidden(World, CreateTaggedMarkup("lake")));
+}
+
+// Undoing a world snapshot command (a spline stroke, an additive scene load, a version-control
+// revert) restores the world in place, under the same handles: every mark-up keeps its notes and
+// its viewer state, and the bridge does not adopt it again as a new mark-up (#3103).
+TEST_F(MarkupEditorBridgeTest, UndoingAWorldSnapshotCommandKeepsEveryMarkupsNotesAndViewerState)
+{
+    const ECS::EntityHandle lake = CreateMarkup();
+    ASSERT_TRUE(MarkupService::Get().SetDescription(World, lake, MarkupAuthor::User, m_Now, "keep me"));
+    AgentComment(lake, "walls first");
+    Hide(lake);
+    const std::size_t entries = MarkupService::Get().FindNotes(World, lake)->Entries.size();
+    const Markup stamps = MarkupOf(lake);
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    const ECS::EntityHandle stroke = World.CreateEntity();
+    World.AddComponentImmediate(stroke, Components::Transform{});
+    World.ProcessCommands();
+    Editor::WorldSnapshotCommand command("Spline stroke", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 60;
+    command.Undo();
+
+    ASSERT_TRUE(World.IsValid(lake));
+    const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(World, lake);
+    ASSERT_NE(notes, nullptr) << "the undo dropped the mark-up's notes";
+    EXPECT_EQ(notes->Description, "keep me");
+    EXPECT_EQ(notes->Entries.size(), entries);
+    EXPECT_TRUE(m_Bridge->IsHidden(World, lake)) << "the undo dropped the mark-up's viewer state";
+    EXPECT_EQ(MarkupOf(lake).CreatedUnix, stamps.CreatedUnix) << "the bridge adopted the mark-up again";
+    EXPECT_EQ(MarkupOf(lake).Revision, stamps.Revision);
+}
+
+// A mark-up created after the snapshot an undo restores is gone, and its handle is never issued
+// again: a mark-up created next starts with no notes and no viewer state of its own.
+TEST_F(MarkupEditorBridgeTest, AMarkupCreatedAfterAnUndoDoesNotInheritAnUndoneMarkupsNotes)
+{
+    const ECS::EntityHandle keeper = CreateMarkup();
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    const ECS::EntityHandle gone = CreateMarkup();
+    ASSERT_TRUE(MarkupService::Get().SetDescription(World, gone, MarkupAuthor::User, m_Now, "from the undone load"));
+    AgentComment(gone, "walls first");
+    Hide(gone);
+    Editor::WorldSnapshotCommand command("Load Scene Additive", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 60;
+    command.Undo();
+    ASSERT_TRUE(World.IsValid(keeper));
+    ASSERT_FALSE(World.IsValid(gone));
+    const ECS::EntityHandle fresh = CreateMarkup();
+
+    EXPECT_NE(fresh, gone) << "the undone mark-up's handle was issued again";
+    const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(World, fresh);
+    ASSERT_NE(notes, nullptr);
+    EXPECT_EQ(notes->Description, "");
+    EXPECT_EQ(notes->Entries.size(), 1u);
+    EXPECT_FALSE(m_Bridge->IsHidden(World, fresh));
+}
+
+// An in-place restore replaces the components the bridge read its edit baselines from: the
+// next commit is read against the restored state, so the undo of a move records no move.
+TEST_F(MarkupEditorBridgeTest, AnEditAfterAnUndoIsReadAgainstTheRestoredState)
+{
+    const ECS::EntityHandle docks = CreateMarkup();
+    Notifications.NotifyWorldStructureChanged({&World, EditorChangeNotifications::ChangeKind::Commit});
+    const std::vector<std::uint8_t> before = World.SerializeWorld();
+    Components::Transform moved;
+    moved.matrix[12] = 5.0f;
+    World.AddComponentImmediate(docks, moved);
+    Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Commit);
+    const auto& entries = MarkupService::Get().FindNotes(World, docks)->Entries;
+    ASSERT_EQ(entries.size(), 2u); // created, moved
+    Editor::WorldSnapshotCommand command("Move", &World, &Notifications, before, World.SerializeWorld());
+
+    m_Now += 600;
+    command.Undo();
+    Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Commit);
+
+    EXPECT_EQ(entries.size(), 2u) << "the commit after the undo was read against the undone move";
 }
 
 // Hiding every mark-up is one write of the user's project settings, not one per mark-up.

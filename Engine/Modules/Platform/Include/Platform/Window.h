@@ -146,6 +146,11 @@ class Window
 #if defined(__EMSCRIPTEN__)
     // Called from the browser fullscreenchange event thunk.
     void NotifyWebFullscreenChanged(bool isFullscreen);
+    /// Device pixels per CSS pixel of the canvas's drawing buffer: the drawing buffer is the
+    /// canvas's CSS size times `ratio`. 0 follows the browser's devicePixelRatio. A page
+    /// lowers it to cap the drawing buffer (a phone's devicePixelRatio of 2.6 over a full
+    /// screen is over two megapixels).
+    void SetWebPixelRatio(double ratio);
 #endif
     void SetTitleBarRightClickHandler(TitleBarRightClickHandler h);
 

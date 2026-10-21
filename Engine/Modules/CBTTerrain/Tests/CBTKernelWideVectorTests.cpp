@@ -91,7 +91,7 @@ WideVectorScan ScanWideVectorOps(const std::vector<uint32_t>& words)
             scan.Error = "malformed instruction stream at word " + std::to_string(i);
             return scan;
         }
-        const uint32_t* operands = &words[i + 1u];
+        const uint32_t* operands = words.data() + i + 1u;
         const uint32_t operandCount = wordCount - 1u;
         if (opcode == kSpvOpTypeInt && operandCount >= 2u && operands[1] == kWideIntegerBits)
             wideIntegers.insert(operands[0]);

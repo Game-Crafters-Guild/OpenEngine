@@ -23,6 +23,7 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/StyleInterpolation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/StyleApplier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/TransitionEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UITransform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/ResolvedStyle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UIManager_StyleResolve.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UIManager_StyleAnalysis.cpp
@@ -39,6 +40,10 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Assets/UILayoutAsset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Assets/UIStyleAsset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Assets/CssImports.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/BackgroundImageCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/BackgroundImageGeometry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/BackgroundImageUpload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/SvgBackgroundRaster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Parsers/XMLParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Parsers/CSSParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Parsers/CSSValueParsers.cpp
@@ -59,6 +64,7 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Layout/Docking.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Layout/DockLayoutController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Layout/DockingHitTest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Layout/DropdownPopupPlacement.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Mount.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Button.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Registration/ElementRegistration.cpp
@@ -75,6 +81,7 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Toggle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Checkbox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Dropdown.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/MaskField.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/PopoverArrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Slider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Controls/Foldout.cpp
@@ -138,16 +145,6 @@ target_include_directories(UI PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Include)
 # AssetManager.h includes FileWatcher/FileWatcher.h. Headers only: the
 # FileWatcher objects reach the binary through the Engine module splice.
 target_include_directories(UI PRIVATE $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>)
-
-# libktx: UI background/preview uploads re-decode block-compressed KTX2
-# containers (material path transcodes them to BC7, which is not per-pixel
-# addressable for the RGBA8 UI upload). PUBLIC so Engine, which splices this
-# OBJECT library's objects in, inherits the link requirement.
-find_package(Ktx CONFIG QUIET)
-if(TARGET KTX::ktx)
-    target_link_libraries(UI PUBLIC KTX::ktx)
-    target_compile_definitions(UI PRIVATE GE_HAVE_KTX)
-endif()
 
 # Third-party dependencies via vcpkg (optional for now; linked when present)
 find_package(pugixml CONFIG QUIET)
@@ -229,6 +226,8 @@ endif()
 # ContextMenuManipulator builds into through the host-installed factory. Platform::Window
 # stays opaque throughout the UI module.
 target_link_libraries(UI PUBLIC Logger AssetCore GameEngineRendering Text Types JobSystem Scheduler Input NumericExpression Platform)
+# BackgroundImageUpload decodes image files.
+target_link_libraries(UI PRIVATE Image)
 
 
 # Manually inherit compile definitions from Text module to ensure font generation is enabled
@@ -317,8 +316,9 @@ if(UI_BUILD_EXAMPLES AND BUILD_EXAMPLES)
         "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/SearchDialog.css"
         "${CMAKE_CURRENT_BINARY_DIR}/Assets/UI/controls/SearchDialog.css" COPYONLY)
 
-    # Stage nethost.dll so the delay-loaded Engine dependency resolves at runtime.
-    if(WIN32)
+    # Stage nethost.dll so the delay-loaded Engine dependency resolves at runtime (a
+    # scripting build only: the helper exists when ENABLE_SCRIPTING is on).
+    if(WIN32 AND COMMAND ge_add_dotnet_hosting_runtime)
         ge_add_dotnet_hosting_runtime(UISearchDialogDemo)
     endif()
 
@@ -375,11 +375,6 @@ if(BUILD_TESTING)
             ${ARGN}
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests/SharedHeadlessDevice.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UITestShaderSetup.cpp)
-        if(WIN32)
-            # nethost.dll/hostfxr.dll next to the exe, so delay-loaded hosting calls
-            # from Engine/Scripting can succeed in this test binary.
-            ge_add_dotnet_hosting_runtime(${target_name})
-        endif()
         target_link_libraries(${target_name} PRIVATE
             Engine GameEngine.Native RenderGraphTestSupport GTest::gtest GTest::gtest_main)
         # Layout, parser and cascade tests drive the YG* C API directly (LayoutYogaTests,
@@ -439,6 +434,9 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PercentageUnitsLengthTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PercentMinWidthShrinkTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShadowGlowPrimitiveTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformRenderTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformPointerTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformWindowRectTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextEffectsTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/BackgroundOriginPaddingBoxTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/NineSliceLayoutTests.cpp
@@ -526,11 +524,15 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextSelectionColorTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedMarkupUnseenDotTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedSearchPlaceholderTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedHeadingWeightTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FontWeightMatchTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedFontFaceTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/StyleApplierTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIHoverTransitionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/MathInterpolationTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CSSTransitionParserTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/StyleInterpolationTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformStyleTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TransitionEngineTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/SearchDialogFocusTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/DefaultStylesheetTests.cpp)
@@ -590,6 +592,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ContextMenuManipulatorTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ToggleCheckboxTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/DropdownTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/MaskFieldTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/DisabledControlInputTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/DismissablePopupTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PopupPlacementTests.cpp
@@ -628,6 +631,7 @@ if(BUILD_TESTING)
     # AbiNativeSmokeTest links the exports but has no host, so every call there
     # stops at not-found before a type is ever examined.
     ge_add_ui_test(UITests
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementIdAttachmentTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementIdLookupTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ModuleOwnedHandlerRevocationTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementFactoryOwnershipTests.cpp
@@ -651,6 +655,9 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIManagerRenderRGTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UITargetSpaceTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UITextureSpaceTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIBackgroundTextureMipTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/SvgBackgroundRasterTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UISvgBackgroundVariantTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/GameUIHostTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/GameUIHostKeyboardTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/GameUIElementHandleTests.cpp

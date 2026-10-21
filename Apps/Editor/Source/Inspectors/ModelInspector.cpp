@@ -789,9 +789,9 @@ void AddSubtabBar(UIElement* root,
         auto button = std::make_unique<Button>();
         button->SetText(spec.Label);
         button->SetId(std::string("model-inspector-tab-") + spec.Label);
-        button->AddClass("inspector-subtab");
+        button->AddClass("segmented-button");
         if (spec.Tab == current)
-            button->AddClass("active");
+            button->AddClass("segmented-button-selected");
         const ModelInspectorTab tab = spec.Tab;
         button->RegisterEventHandler(kEventButtonClick,
             [assetPath, tab, requestInspectorRefresh](UIEvent&) {

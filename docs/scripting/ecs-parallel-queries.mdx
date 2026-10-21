@@ -1,12 +1,12 @@
 ---
 title: ECS parallel queries
-description: Running an ECS query on the job system with Parallel, ParallelBatchEach and ParallelChunks, and the rules that come with it.
+description: Running an ECS query on the job system with Parallel, ParallelBatchEach, and ParallelChunks, and the rules that come with it.
 sidebar:
   order: 8
 ---
 
 Three of `Query`'s iteration modes run on the job system: `Parallel`,
-`ParallelBatchEach` and `ParallelChunks`. Each has a sequential twin with the same
+`ParallelBatchEach`, and `ParallelChunks`. Each has a sequential twin with the same
 callback shape, so the choice of mode is a scheduling decision and not a rewrite.
 
 | Parallel mode | Sequential twin | Callback |
@@ -18,14 +18,14 @@ callback shape, so the choice of mode is a scheduling decision and not a rewrite
 All three are **synchronous fork-join**: they dispatch through a job counter and
 join before returning. When the world has no job system they fall through to
 their sequential twin, so the same code runs in a headless test as in the editor.
-Calling one from a worker thread is safe — the join participates and executes only
+Calling one from a worker thread is safe: the join participates and executes only
 this query's batches, so it cannot deadlock against the pool.
 
 ## Declaring access
 
 A query declares its intent per component. `Read<T>` binds the callback parameter as
-`const T&`; `Write<T>` binds it as `T&`; an unqualified generic parameter is a compile
-error. Reads never stamp a chunk's change version, writes always do — which is what
+`const T&`. `Write<T>` binds it as `T&`. An unqualified generic parameter is a compile
+error. Reads never stamp a chunk's change version, writes always do. That is what
 makes `Changed<>` filtering work, and why declaring a write you do not perform costs
 every downstream consumer a wasted visit.
 
@@ -62,8 +62,8 @@ world.Query<ECS::Write<Position>, ECS::Read<Velocity>>()
 ```
 
 The entity-aware form takes a parallel `const EntityHandle*` column first, indexed the
-same way as the component columns — what a producer needs when it is recording which
-entities it touched:
+same way as the component columns (what a producer needs when it is recording which
+entities it touched):
 
 ```cpp title="Recording the entities a kernel touched"
 world.Query<ECS::Read<Position>>()
@@ -92,7 +92,7 @@ so a mutable capture is a data race unless it is an atomic or thread-local. The
 counting examples above use `fetch_add` for exactly this reason.
 
 **No structural changes during iteration.** Creating or destroying an entity, adding or
-removing a component, compacting chunks or pruning empty archetypes on the same world
+removing a component, compacting chunks, or pruning empty archetypes on the same world
 while a parallel query is in flight is undefined. Queue the work and apply it after the
 join, or use the deferred command path.
 
@@ -106,7 +106,7 @@ element.
 
 ## Batch size
 
-`minBatchSize` is the smallest number of entities a task will be handed; chunks are
+`minBatchSize` is the smallest number of entities a task is handed. Chunks are
 grouped until the batch reaches it. Pass `0` to take the policy default, which differs
 per mode because the workloads differ:
 
@@ -115,7 +115,7 @@ per mode because the workloads differ:
 - `ParallelBatchEach` defaults to `QueryPolicy::MinBatchSizeDefaultBatch` (10000). A
   per-chunk kernel is memory-bound and fine-grained batching is pure overhead.
 
-Under job-system pressure the batch size is raised automatically — see
+Under job-system pressure the batch size is raised automatically. See
 [ECS query policy](../contributing/ecs-query-policy.mdx) for the backpressure thresholds and how to
 reason about them. Pass an explicit value only when you have measured that the default
 is wrong for your kernel.
@@ -136,7 +136,7 @@ gate.LastRunVersion = entrySample;
 ```
 
 Two rules come with it. Sample `GetGlobalSystemVersion()` **before** iterating and write
-that sample back as the next gate — an end-of-run resample can overtake a concurrent
+that sample back as the next gate: an end-of-run resample can overtake a concurrent
 writer's stamp and skip its entities permanently. And gate on a column you *read*, never
 on one you *write*: writes stamp the chunks they visit, so `Changed<T>` over your own
 `Write<T>` re-triggers itself forever.
@@ -149,7 +149,3 @@ on one you *write*: writes stamp the chunks they visit, so `Changed<T>` over you
 - Small populations: measure before reaching for any of them. The sequential twin has
   no dispatch cost at all, and the fork-join only pays for itself once the callback
   work exceeds it.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/ECS_ParallelQueries.md`.

@@ -6,9 +6,11 @@
 #include "Assets/AssetManager.h"
 #include "Assets/SvgRasterizer.h"
 #include "Assets/TextureCook.h"
+#include "Assets/TextureCookActivity.h"
 #include "Assets/PackagedTexturePayload.h"
 #include "Core/Engine.h"
 #include "FileSystem/FileSystem.h"
+#include "Image/Decode.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -29,9 +31,6 @@
 #include <unistd.h>
 #endif
 
-#if defined(GE_HAVE_STB)
-#include <stb_image.h>
-#endif
 #if defined(GE_HAVE_KTX)
 #include <ktx.h>
 #include <vulkan/vulkan_core.h>
@@ -260,7 +259,7 @@ bool TextureAsset::Load() {
         }
     }
     else {
-        success = LoadWithSTB();
+        success = DecodeSourceFile();
     }
 
     if (success) {
@@ -317,7 +316,7 @@ bool TextureAsset::LoadFromData(const Vector<uint8>& data) {
         success = LoadFromSvgData(svgText, extension);
     }
     else {
-        success = LoadWithSTBFromData(data);
+        success = DecodeSourceBytes(data);
     }
 
     if (success) {
@@ -342,49 +341,94 @@ std::optional<bool> TextureAsset::LoadPackagedTexture([[maybe_unused]] const Vec
     if (GetGUID().IsNull())
         return std::nullopt;
     AssetManager* manager = AssetManager::GetThreadCurrent();
-    const bool preferCompressed = (manager || m_AdoptCookedArtifacts) &&
-        GetGpuTranscodeTarget() == TextureGpuTranscodeTarget::BC7;
+    // A load inside an AssetManager scope feeds a GPU upload; any other Load() is a CPU reader
+    // (terrain masks, ocean extraction) that needs pixels.
+    const bool gpuUpload = manager != nullptr;
     if (!manager && EngineCore::GetInstance().IsInitialized())
         manager = &EngineCore::GetInstance().GetAssetManager();
     if (!manager)
         return std::nullopt;
     const auto& registry = manager->GetRegistry();
-    const auto payload = ResolvePackagedTexturePayload(registry, GetGUID(), preferCompressed);
+    const auto payload = ResolvePackagedTexturePayload(registry, GetGUID());
     if (!payload)
         return std::nullopt;
 #if defined(GE_HAVE_KTX)
-    if (!payload->empty())
+    Vector<uint8> bytes;
+    if (!payload->empty() &&
+        (data ? LoadWithKTXFromData(*data) : ReadFileBytesShared(*payload, bytes) && LoadWithKTXFromData(bytes)))
     {
-        Vector<uint8> bytes;
-        bool loaded = data ? LoadWithKTXFromData(*data) :
-            ReadFileBytesShared(*payload, bytes) && LoadWithKTXFromData(bytes);
-        // A damaged compressed variant can still use the shipped portable pixels.
-        const auto portable = ResolvePackagedTexturePayload(registry, GetGUID(), false);
-        if (!loaded && portable && !portable->empty() && *portable != *payload)
+        if (IsBlockCompressed() && gpuUpload && GetGpuTranscodeTarget() != TextureGpuTranscodeTarget::BC7)
         {
-            Unload();
-            loaded = ReadFileBytesShared(*portable, bytes) && LoadWithKTXFromData(bytes);
+            Logger::Log::Error("TextureAsset[{}]: the packaged payload is block-compressed and this device "
+                               "cannot sample block-compressed textures; export the game for a target whose "
+                               "GPU samples BC formats", GetName());
+            return false;
         }
-        if (loaded)
+        if (IsBlockCompressed() && !gpuUpload && !DecodeBlockPayloadForCpuReaders())
+            return false;
+        AssetMetadata metadata;
+        std::string swizzle;
+        char channels[4]{};
+        if (registry.TryGetAssetMetadata(GetGUID(), metadata) &&
+            registry.TryGetMetaValue(metadata.Path, kTextureSwizzleMetaKey, swizzle))
         {
-            m_PackagedPortablePath = portable && !portable->empty() ? *portable : *payload;
-            AssetMetadata metadata;
-            std::string swizzle;
-            char channels[4]{};
-            if (registry.TryGetAssetMetadata(GetGUID(), metadata) &&
-                registry.TryGetMetaValue(metadata.Path, kTextureSwizzleMetaKey, swizzle))
-            {
-                auto extension = metadata.Path.extension().string();
-                std::transform(extension.begin(), extension.end(), extension.begin(),
-                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-                m_SwizzleBaked = ParseTextureSwizzleMeta(swizzle, channels) && channels[0] != 0 && extension != ".hdr";
-            }
-            return true;
+            auto extension = metadata.Path.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            m_SwizzleBaked = ParseTextureSwizzleMeta(swizzle, channels) && channels[0] != 0 && extension != ".hdr";
         }
+        return true;
     }
 #endif
     Logger::Log::Error("TextureAsset[{}]: packaged payload missing or corrupt; rebuild the package", GetName());
     return false;
+}
+
+bool TextureAsset::DecodeBlockPayloadForCpuReaders()
+{
+    std::vector<TextureMipDesc> levels = m_MipChain;
+    if (levels.empty())
+        levels.push_back({0, m_DataSize, m_Width, m_Height});
+    const bool hdr = m_Format == TextureFormat::BC6H;
+    std::vector<std::vector<uint8>> decoded(levels.size());
+    uint64 total = 0;
+    for (size_t level = 0; level < levels.size(); ++level)
+    {
+        const auto& mip = levels[level];
+        bool ok = mip.Offset + mip.Size <= m_DataSize;
+        if (ok && hdr)
+        {
+            std::vector<float> texels;
+            ok = DecodeBlockPayloadRGBA32F(m_Format, mip.Width, mip.Height, m_PixelData + mip.Offset, mip.Size,
+                                           texels);
+            const auto* bytes = reinterpret_cast<const uint8*>(texels.data());
+            decoded[level].assign(bytes, bytes + texels.size() * sizeof(float));
+        }
+        else if (ok)
+            ok = DecodeBlockPayloadRGBA8(m_Format, mip.Width, mip.Height, m_PixelData + mip.Offset, mip.Size,
+                                         decoded[level]);
+        if (!ok)
+        {
+            Logger::Log::Error("TextureAsset[{}]: this packaged block-compressed payload cannot be decoded for a CPU "
+                               "reader; rebuild the package", GetName());
+            return false;
+        }
+        total += decoded[level].size();
+    }
+    delete[] m_PixelData;
+    m_PixelData = new uint8[total];
+    m_DataSize = total;
+    m_MipChain.clear();
+    uint64 offset = 0;
+    for (size_t level = 0; level < levels.size(); ++level)
+    {
+        std::memcpy(m_PixelData + offset, decoded[level].data(), decoded[level].size());
+        m_MipChain.push_back({offset, decoded[level].size(), levels[level].Width, levels[level].Height});
+        offset += decoded[level].size();
+    }
+    m_Format = hdr ? TextureFormat::RGBA32F : TextureFormat::RGBA8;
+    m_Channels = 4;
+    return true;
 }
 
 void TextureAsset::Unload() {
@@ -403,6 +447,10 @@ void TextureAsset::Unload() {
     m_SwizzleBaked = false;
     m_MipmapLevels = 1;
     m_MipChain.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_SvgSourceMutex);
+        m_SvgSource.reset();
+    }
 
     SetState(AssetState::Unloaded);
     Logger::Log::Debug("Unloaded texture: {}", GetName());
@@ -429,7 +477,17 @@ bool TextureAsset::AdoptReloadedPayload(Asset& staged) {
     std::swap(m_SwizzleBaked, other->m_SwizzleBaked);
     std::swap(m_MipmapLevels, other->m_MipmapLevels);
     std::swap(m_MipChain, other->m_MipChain);
+    {
+        std::scoped_lock lock(m_SvgSourceMutex, other->m_SvgSourceMutex);
+        std::swap(m_SvgSource, other->m_SvgSource);
+    }
     return true;
+}
+
+std::shared_ptr<const TextureAsset::SvgSource> TextureAsset::SnapshotSvgSource() const
+{
+    std::lock_guard<std::mutex> lock(m_SvgSourceMutex);
+    return m_SvgSource;
 }
 
 void TextureAsset::SetFilter(TextureFilter minFilter, TextureFilter magFilter) {
@@ -507,23 +565,11 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
     // Cook policy by caller context:
     //   - Inside an AssetManager load (worker / reload dispatch): full cook —
     //     adopt a cached artifact, or cook + cache on miss.
-    //   - Outside a load context with SetAdoptCookedArtifacts(true) (the GPU
-    //     upload path — render-thread GetOrUpload): adopt an EXISTING artifact
-    //     only; a miss falls back to the raw decode (the encode is seconds-to-
-    //     minutes scale and must never run on the render/main thread) and
-    //     converges when a worker-side load or recook next cooks it.
     //   - Plain direct Load() (terrain masks, ocean extraction): raw decode —
     //     CPU consumers keep raw per-pixel payloads and source channel counts.
     AssetManager* assetManager = AssetManager::GetThreadCurrent();
-    // Captured before the adoption-only fallback below reassigns assetManager;
-    // only the full cook path (stb + libktx) reads it.
-    [[maybe_unused]] const bool canCookOnMiss = assetManager != nullptr;
     if (!assetManager)
-    {
-        if (!m_AdoptCookedArtifacts || !EngineCore::GetInstance().IsInitialized())
-            return false;
-        assetManager = &EngineCore::GetInstance().GetAssetManager();
-    }
+        return false;
     if (sourceBytes.empty())
         return false;
 
@@ -551,20 +597,12 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
     coveragePolicy = inputs.Settings.PreserveAlphaCoverage ? AlphaCoveragePolicy::Enabled : AlphaCoveragePolicy::Disabled;
     // Invalid opt-in policy is never hidden by the raw fallback or kill switch.
     // Valid raw uploads use the same builder even when cooking is disabled.
-#if !defined(GE_HAVE_STB)
-    if (inputs.Settings.PreserveAlphaCoverage)
-    {
-        Logger::Log::Error("TextureAsset[{}]: alpha coverage requires the source-image decoder", GetName());
-        coveragePolicy = AlphaCoveragePolicy::Invalid;
-        return false;
-    }
-#endif
     // Kill switch (GE_TEXTURE_COOK_DISABLE=1): raw decode, no cook, no cache
     // I/O — the ops escape hatch and the A/B baseline. Not an exact pre-branch
     // frame: the shader Z-reconstruct stays active (see IsTextureCookDisabled).
     if (IsTextureCookDisabled())
         return false;
-#if defined(GE_HAVE_KTX) && defined(GE_HAVE_STB)
+#if defined(GE_HAVE_KTX)
     const std::optional<std::filesystem::path> cacheRoot = registry.TryGetCacheRoot(GetGUID());
     if (!cacheRoot)
     {
@@ -640,11 +678,7 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
             return true;
     }
 
-    // Miss: cook now (worker thread), cache, then adopt. Adoption-only callers
-    // (render/main thread) stop here and raw-decode instead.
-    if (!canCookOnMiss)
-        return false;
-
+    // Miss: cook now (worker thread), cache, then adopt.
     static const char* kOutputNames[] = {"Uncompressed", "BC1", "BC4", "BC5", "BC6H", "BC7"};
 
     // Bracket the cook. A block-compression encode of a large source runs for
@@ -653,6 +687,9 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
     // With only the completion line below, that window leaves no trace at all —
     // a screenshot taken inside it is a plausible frame of an unbound texture,
     // indistinguishable from a binding failure.
+    // The cook counts as running until its payload is loaded below: the editor's status bar
+    // and a texture inspector waiting on this load read it.
+    const TextureCookActivity::Scope cooking = assetManager->GetTextureCookActivity().Begin(GetGUID());
     Logger::Log::Info("Texture cook: {} -> {} started ({} KB source)",
                       GetName(), kOutputNames[static_cast<uint8>(output)],
                       sourceBytes.size() / 1024);
@@ -663,12 +700,12 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
     std::vector<uint8> cookedBytes;
     std::string cookError;
     const auto cancelRequested = CurrentAssetDecodeCancellation();
-    if (!CookTexture(sourceBytes.data(), sourceBytes.size(), std::string(extensionLower),
+    if (!CookTexture(sourceBytes.data(), sourceBytes.size(), GetPath().string(), std::string(extensionLower),
                      inputs, output, cookedBytes, cookError,
                      [cancelRequested]() {
                          return cancelRequested && cancelRequested->load(std::memory_order_acquire);
                      },
-                     /*quality=*/{}, assetManager->GetTextureCookWorkers()))
+                     assetManager->GetTextureCookWorkers()))
     {
         // Debug, not a warning: undecodable sources (test placeholders) are
         // routine here, and so is a cancelled load — that one reports
@@ -711,7 +748,7 @@ bool TextureAsset::TryLoadViaCook(const Vector<uint8>& sourceBytes, const String
 #endif
 }
 
-bool TextureAsset::LoadWithSTB() {
+bool TextureAsset::DecodeSourceFile() {
     // Read through the shared-open path (never lets stb fopen the file
     // directly — see AssetCore/SharedFileRead.h), then decode from memory.
     Vector<uint8> bytes;
@@ -730,65 +767,42 @@ bool TextureAsset::LoadWithSTB() {
         return true;
     if (coveragePolicy == AlphaCoveragePolicy::Invalid)
         return false;
-#if defined(GE_HAVE_STB)
-    int width = 0, height = 0, channels = 0;
-    // Decide whether this is an HDR texture based on file extension
-    const bool isHDRFile = (extension == ".hdr");
-
-    // For glTF baseColor textures we do not flip (UVs match), but if needed:
-    stbi_set_flip_vertically_on_load(false);
-
-    if (isHDRFile) {
-        float* data = stbi_loadf_from_memory(bytes.data(), static_cast<int>(bytes.size()),
-                                             &width, &height, &channels, 0);
-        if (!data) {
-            Logger::Log::Error("STB failed to load HDR image '{}': {}", GetPath().string(), stbi_failure_reason());
+    // HDR files decode to float; everything else to 8 bits. Both keep the file's
+    // own channels, so a gray source stays R8 and gray + alpha stays RG8.
+    if (extension == ".hdr") {
+        Image::ImageFloat decoded =
+            Image::DecodeFloat(bytes, GetPath().string(), Image::DecodeChannels::FromFile);
+        if (!decoded.Valid) {
+            Logger::Log::Error("TextureAsset: '{}' could not be decoded as an HDR image", GetPath().string());
             return false;
         }
-        m_Width = static_cast<uint32>(width);
-        m_Height = static_cast<uint32>(height);
-        m_Channels = static_cast<uint32>(channels);
+        m_Width = decoded.Width;
+        m_Height = decoded.Height;
+        m_Channels = decoded.Channels;
         m_Format = DetermineFormat(m_Channels, true);
-	        m_ColorSpace = GuessTextureColorSpace(extension);
-        m_DataSize = static_cast<uint64>(m_Width) * static_cast<uint64>(m_Height) *
-                     static_cast<uint64>(m_Channels) * sizeof(float);
+        m_ColorSpace = GuessTextureColorSpace(extension);
+        m_DataSize = static_cast<uint64>(decoded.Pixels.size()) * sizeof(float);
         m_PixelData = new uint8[m_DataSize];
-        std::memcpy(m_PixelData, data, static_cast<size_t>(m_DataSize));
-        stbi_image_free(data);
-        return true;
-    } else {
-        unsigned char* data = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
-                                                    &width, &height, &channels, 0);
-        if (!data) {
-            Logger::Log::Error("STB failed to load image '{}': {}", GetPath().string(), stbi_failure_reason());
-            return false;
-        }
-        m_Width = static_cast<uint32>(width);
-        m_Height = static_cast<uint32>(height);
-        m_Channels = static_cast<uint32>(channels);
-        m_Format = DetermineFormat(m_Channels, false);
-	        m_ColorSpace = GuessTextureColorSpace(extension);
-        m_DataSize = static_cast<uint64>(m_Width) * static_cast<uint64>(m_Height) *
-                     static_cast<uint64>(m_Channels);
-        m_PixelData = new uint8[m_DataSize];
-        std::memcpy(m_PixelData, data, static_cast<size_t>(m_DataSize));
-        stbi_image_free(data);
+        std::memcpy(m_PixelData, decoded.Pixels.data(), static_cast<size_t>(m_DataSize));
         return true;
     }
-#else
-    // Fallback: keep the previous 2x2 dummy so the app still runs without stb
-    Logger::Log::Warning("STB not available at build time; using dummy texture for {}", GetPath().string());
-    m_Width = 2; m_Height = 2; m_Channels = 4; m_Format = DetermineFormat(m_Channels, false);
-	    m_ColorSpace = TextureColorSpace::SRGB;
-    m_DataSize = m_Width * m_Height * m_Channels;
+    Image::Image8 decoded = Image::Decode8(bytes, GetPath().string(), Image::DecodeChannels::FromFile);
+    if (!decoded.Valid) {
+        Logger::Log::Error("TextureAsset: '{}' could not be decoded as an image", GetPath().string());
+        return false;
+    }
+    m_Width = decoded.Width;
+    m_Height = decoded.Height;
+    m_Channels = decoded.Channels;
+    m_Format = DetermineFormat(m_Channels, false);
+    m_ColorSpace = GuessTextureColorSpace(extension);
+    m_DataSize = static_cast<uint64>(decoded.Pixels.size());
     m_PixelData = new uint8[m_DataSize];
-    const uint8 pattern[] = { 255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255 };
-    std::memcpy(m_PixelData, pattern, sizeof(pattern));
+    std::memcpy(m_PixelData, decoded.Pixels.data(), static_cast<size_t>(m_DataSize));
     return true;
-#endif
 }
 
-bool TextureAsset::LoadWithSTBFromData(const Vector<uint8>& data) {
+bool TextureAsset::DecodeSourceBytes(const Vector<uint8>& data) {
     AlphaCoveragePolicy coveragePolicy;
     String extension = GetExtension();
     std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -805,33 +819,29 @@ bool TextureAsset::LoadWithSTBFromData(const Vector<uint8>& data) {
         if (IsAssetDecodeCancelled())
             return false;
     }
-#if defined(GE_HAVE_STB)
-    int width=0, height=0, channels=0;
-    stbi_set_flip_vertically_on_load(false);
     // Worker loads arrive as bytes too: retain HDR range on a missing package
     // bake just as the direct file path does, without an implicit LDR conversion.
+    // Both decodes keep the file's own channels.
     if (extension == ".hdr")
     {
-        float* pixels = stbi_loadf_from_memory(data.data(), static_cast<int>(data.size()),
-                                              &width, &height, &channels, 0);
-        if (!pixels)
+        Image::ImageFloat decoded = Image::DecodeFloat(data, GetPath().string(), Image::DecodeChannels::FromFile);
+        if (!decoded.Valid)
         {
-            Logger::Log::Error("STB failed to load HDR image '{}': {}", GetPath().string(), stbi_failure_reason());
+            Logger::Log::Error("TextureAsset: '{}' could not be decoded as an HDR image", GetPath().string());
             return false;
         }
-        m_Width = static_cast<uint32>(width);
-        m_Height = static_cast<uint32>(height);
-        m_Channels = static_cast<uint32>(channels);
+        m_Width = decoded.Width;
+        m_Height = decoded.Height;
+        m_Channels = decoded.Channels;
         m_Format = DetermineFormat(m_Channels, true);
         m_ColorSpace = TextureColorSpace::Linear;
-        m_DataSize = static_cast<uint64>(m_Width) * m_Height * m_Channels * sizeof(float);
+        m_DataSize = static_cast<uint64>(decoded.Pixels.size()) * sizeof(float);
         m_PixelData = new uint8[m_DataSize];
-        std::memcpy(m_PixelData, pixels, static_cast<size_t>(m_DataSize));
-        stbi_image_free(pixels);
+        std::memcpy(m_PixelData, decoded.Pixels.data(), static_cast<size_t>(m_DataSize));
         return true;
     }
-    unsigned char* imageData = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()), &width, &height, &channels, 0);
-    if (!imageData) {
+    Image::Image8 decoded = Image::Decode8(data, GetPath().string(), Image::DecodeChannels::FromFile);
+    if (!decoded.Valid) {
         if (coveragePolicy == AlphaCoveragePolicy::Enabled)
         {
             Logger::Log::Error("TextureAsset[{}]: alpha coverage requires decoded source pixels; placeholder refused", GetName());
@@ -879,29 +889,18 @@ bool TextureAsset::LoadWithSTBFromData(const Vector<uint8>& data) {
             return true;
         }
 
-        Logger::Log::Error("STB failed to load image from memory for '{}': {}", GetName(), stbi_failure_reason());
+        Logger::Log::Error("TextureAsset[{}]: '{}' could not be decoded as an image", GetName(), GetPath().string());
         return false;
     }
-    m_Width = static_cast<uint32>(width);
-    m_Height = static_cast<uint32>(height);
-    m_Channels = static_cast<uint32>(channels);
+    m_Width = decoded.Width;
+    m_Height = decoded.Height;
+    m_Channels = decoded.Channels;
     m_Format = DetermineFormat(m_Channels, false);
     m_ColorSpace = GuessTextureColorSpace(extension);
-    m_DataSize = static_cast<uint64>(m_Width) * static_cast<uint64>(m_Height) * static_cast<uint64>(m_Channels);
+    m_DataSize = static_cast<uint64>(decoded.Pixels.size());
     m_PixelData = new uint8[m_DataSize];
-    std::memcpy(m_PixelData, imageData, static_cast<size_t>(m_DataSize));
-    stbi_image_free(imageData);
+    std::memcpy(m_PixelData, decoded.Pixels.data(), static_cast<size_t>(m_DataSize));
     return true;
-#else
-    Logger::Log::Warning("STB not available at build time; using dummy memory texture for {}", GetName());
-    m_Width = 2; m_Height = 2; m_Channels = 4; m_Format = DetermineFormat(m_Channels, false);
-	    m_ColorSpace = TextureColorSpace::SRGB;
-    m_DataSize = m_Width * m_Height * m_Channels;
-    m_PixelData = new uint8[m_DataSize];
-    const uint8 pattern[] = { 255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255 };
-    std::memcpy(m_PixelData, pattern, sizeof(pattern));
-    return true;
-#endif
 }
 
 bool TextureAsset::LoadDDS() {
@@ -1112,7 +1111,6 @@ bool TextureAsset::LoadFromSvgData(const std::string& svgText, const String& ext
         assetManager = &EngineCore::GetInstance().GetAssetManager();
 
     std::filesystem::path assetPath = GetPath();
-    bool isEditorUiAsset = false;
     if (assetManager)
     {
         auto& registry = assetManager->GetRegistry();
@@ -1122,19 +1120,23 @@ bool TextureAsset::LoadFromSvgData(const std::string& svgText, const String& ext
         {
             assetPath = registryMeta.Path;
         }
-        isEditorUiAsset = assetManager->GetSourceAliasForPath(assetPath) == kAssetSourceAliasEditor;
     }
 
-    const float32 defaultSize = isEditorUiAsset
-        ? GetSvgRasterizerUserScale()
-        : GetSvgTextureRasterizerDefaultSize();
-    uint32 targetPixels = static_cast<uint32>(defaultSize + 0.5f);
+    uint32 targetPixels = static_cast<uint32>(GetSvgTextureRasterizerDefaultSize() + 0.5f);
     if (assetManager)
     {
         std::string metaValue;
         if (assetManager->GetRegistry().TryGetMetaValue(assetPath, kSvgRasterSizeMetaKey, metaValue))
             ParseSvgRasterSizeMeta(metaValue, targetPixels);
     }
+
+    auto source = std::make_shared<SvgSource>();
+    if (!GameEngine::GetSvgSourceSize(svgText, source->Width, source->Height))
+    {
+        Logger::Log::Error("TextureAsset: failed to parse SVG for '{}'", GetName());
+        return false;
+    }
+    source->Text = svgText;
 
     SvgRasterizedImage img{};
     if (!RasterizeSvgToRgbaAtSize(svgText, static_cast<float32>(targetPixels), img) ||
@@ -1144,6 +1146,10 @@ bool TextureAsset::LoadFromSvgData(const std::string& svgText, const String& ext
         return false;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_SvgSourceMutex);
+        m_SvgSource = std::move(source);
+    }
     m_Width = img.Width;
     m_Height = img.Height;
     m_Channels = 4;

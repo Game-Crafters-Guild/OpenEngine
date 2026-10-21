@@ -38,6 +38,8 @@ public:
     void SetBusVolume(AudioBusId bus, float linearVolume);
     float GetBusVolume(AudioBusId bus) const;
     float GetBusMeterLevel(AudioBusId bus) const;
+    /** Silences the device write while keeping the capture tap on the full mix. Independent of every bus group's volume. */
+    void SetOutputMuted(bool muted);
     /** Buffer latency in ms (period frames / sample rate). 0 when device not initialized. */
     float GetOutputLatencyMs() const;
     /** Set bus meter level (e.g. from AudioSystem when that bus has playing voices). */
@@ -87,6 +89,7 @@ private:
     static constexpr unsigned kMaxBuses = 6;
     float m_BusMeterLevels[kMaxBuses] = {};
     std::atomic<float> m_MasterMeterPeak{0.0f};  // written in device callback, read in Update()
+    std::atomic<bool> m_OutputMuted{false};      // read in device callback
     std::mutex m_OutputCaptureMutex;
     OutputCaptureCallback m_OutputCaptureCallback;
 

@@ -1086,7 +1086,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});
@@ -1691,7 +1691,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});
@@ -2497,7 +2497,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                     {
                         const std::string ext = pp->paths[0].extension().string();
                         if (ext == ".scene")
-                            out.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                            out.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                         else if (m_Context && m_Context->Thumbnails)
                         {
                             const std::string thumb = m_Context->Thumbnails->GetOrRequest(pp->paths[0], 128, [](const std::string&) {});

@@ -120,11 +120,11 @@ void ClampPointerToViewport(float& localX, float& localY, float viewW, float vie
 
 // The built-in buttons' icons; the registered entries' icons join them in the reveal gate.
 constexpr std::array<std::string_view, 5> kSceneToolOverlayIconPaths = {
-    "Icons/arrowmouse.png",
-    "Icons/GiszmoTranslate.png",
-    "Icons/GizmoRotate.png",
-    "Icons/Giszmo_scale.png",
-    "Icons/Ruler.png",
+    "Icons/arrowmouse.svg",
+    "Icons/GiszmoTranslate.svg",
+    "Icons/GizmoRotate.svg",
+    "Icons/Giszmo_scale.svg",
+    "Icons/Ruler.svg",
 };
 
 // Window-space anchor for a scene tool button's context menu. A vertical row
@@ -2686,16 +2686,16 @@ void SceneViewPanel::ApplySceneToolIconBackgrounds()
         const char* id;
         std::string_view path;
     } kButtons[] = {
-        {"SelectModeBtn",     "Icons/arrowmouse.png"},
-        {"InlineSelectBtn",   "Icons/arrowmouse.png"},
-        {"TranslateModeBtn",  "Icons/GiszmoTranslate.png"},
-        {"InlineTranslateBtn", "Icons/GiszmoTranslate.png"},
-        {"RotateModeBtn",     "Icons/GizmoRotate.png"},
-        {"InlineRotateBtn",   "Icons/GizmoRotate.png"},
-        {"ScaleModeBtn",      "Icons/Giszmo_scale.png"},
-        {"InlineScaleBtn",    "Icons/Giszmo_scale.png"},
-        {"MeasureToolBtn",    "Icons/Ruler.png"},
-        {"InlineMeasureBtn",  "Icons/Ruler.png"},
+        {"SelectModeBtn",     "Icons/arrowmouse.svg"},
+        {"InlineSelectBtn",   "Icons/arrowmouse.svg"},
+        {"TranslateModeBtn",  "Icons/GiszmoTranslate.svg"},
+        {"InlineTranslateBtn", "Icons/GiszmoTranslate.svg"},
+        {"RotateModeBtn",     "Icons/GizmoRotate.svg"},
+        {"InlineRotateBtn",   "Icons/GizmoRotate.svg"},
+        {"ScaleModeBtn",      "Icons/Giszmo_scale.svg"},
+        {"InlineScaleBtn",    "Icons/Giszmo_scale.svg"},
+        {"MeasureToolBtn",    "Icons/Ruler.svg"},
+        {"InlineMeasureBtn",  "Icons/Ruler.svg"},
     };
 
     for (const auto& entry : kButtons)
@@ -2752,7 +2752,7 @@ void SceneViewPanel::PrepareToolOverlayReveal()
 
     for (std::string_view path : iconPaths)
     {
-        const GUID guid = ui->ResolveBackgroundImagePath(
+        const GUID guid = ui->BackgroundImages().ResolvePath(
             std::string(path), std::string(GameEngine::kAssetSourceAliasEditor));
         if (guid.IsNull())
         {
@@ -2760,7 +2760,7 @@ void SceneViewPanel::PrepareToolOverlayReveal()
             continue;
         }
 
-        ui->RequestBackgroundTexture(
+        ui->BackgroundImages().Request(
             guid,
             [completeOne](Rendering::TextureHandle, uint32_t, uint32_t) mutable {
                 completeOne();
@@ -3322,6 +3322,10 @@ void SceneViewPanel::UpdateHoverHighlightPill()
 
 void SceneViewPanel::UpdateFPS(float deltaTime)
 {
+    // The camera popover shows this view's own exposure readings.
+    if (m_CameraSettingsPopup && m_CameraSettingsPopup->IsVisible() && m_Controller)
+        m_CameraSettingsPopup->RefreshReading(m_Controller->GetMeteredExposureEv(), m_Controller->GetLightsReadingEv());
+
     // The registered entries' availability and badges follow state outside the strips.
     RefreshRegisteredToolStrips();
 

@@ -165,6 +165,23 @@ class IrradianceReadbackTest : public ::testing::Test
         m_Device->WaitForIdle();
     }
 
+    // Schedules and executes one frame of the sky's bake (the schedule ticks the frames since the
+    // last bake); returns whether a bake was declared.
+    bool RunSkyBakeFrame(SkyEnvironmentSource& source, uint64_t frameIndex)
+    {
+        RenderGraph::RGFrame& frame = *m_Frame;
+        frame.BeginFrame(frameIndex);
+        Engine::Renderer::EnvironmentBakeContext ctx{};
+        ctx.Frame = &frame;
+        ctx.Device = m_Device.get();
+        ctx.Feature = &Ibl();
+        source.ScheduleBake(ctx);
+        const bool bakes = FindPass(frame.Graph(), kConvolvePass) != RenderGraph::kInvalidId;
+        frame.Execute();
+        m_Device->WaitForIdle();
+        return bakes;
+    }
+
     std::unique_ptr<IDevice> m_Device;
     std::unique_ptr<RenderServices> m_Services;
     std::unique_ptr<FramePools> m_Pools;
@@ -243,7 +260,7 @@ TEST_F(IrradianceReadbackTest, TheSkyDeclaresTheCopyOnlyWithItsBake)
         if (out.Bakes)
         {
             Ibl().SetLastBakedDigest(source.InputDigest());
-            Ibl().ResetFramesSinceBake();
+            Ibl().MarkBaked();
         }
         return out;
     };
@@ -274,6 +291,27 @@ TEST_F(IrradianceReadbackTest, TheSkyDeclaresTheCopyOnlyWithItsBake)
     ASSERT_TRUE(changed.Bakes) << "a changed sky must bake again; the check is void";
     EXPECT_TRUE(changed.Copies);
     EXPECT_TRUE(changed.CopyReadsTheConvolvedCube) << "the copy must read the cube the convolve writes, after it";
+}
+
+// get_render_stats reports the bake count and the frames since the last bake, and a capture waits
+// until the count stops rising. An executed sky bake counts once and restarts the frame count; a
+// steady sky bakes nothing. (A reflection probe's bake ends in the same MarkBaked, and needs the
+// capture views' culling and extraction, which a bare RenderServices does not run.)
+TEST_F(IrradianceReadbackTest, AnExecutedSkyBakeCountsOnceAndRestartsTheFramesSinceBake)
+{
+    auto& sky = m_Services->EnsureFeature<SkyRenderFeature>();
+    ASSERT_TRUE(sky.Initialize(m_Device.get()));
+    sky.SetSettings(SkySettings{}, SkySystemState{});
+    SkyEnvironmentSource source(*m_Services);
+    EXPECT_EQ(Ibl().GetBakeCount(), 0u);
+
+    ASSERT_TRUE(RunSkyBakeFrame(source, 0)) << "the first frame with a sky must bake; the check is void";
+    EXPECT_EQ(Ibl().GetBakeCount(), 1u) << "one executed bake counts once";
+    EXPECT_EQ(Ibl().GetFramesSinceBake(), 0u) << "the bake restarted the frame count";
+
+    ASSERT_FALSE(RunSkyBakeFrame(source, 1)) << "a steady sky must not bake again";
+    EXPECT_EQ(Ibl().GetBakeCount(), 1u);
+    EXPECT_EQ(Ibl().GetFramesSinceBake(), 1u);
 }
 
 // A reflection probe the camera stands in replaces the sky as the scene's environment and bakes

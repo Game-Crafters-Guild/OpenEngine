@@ -19,6 +19,12 @@ vec3 GE_EvaluateSurfaceLight(SurfaceOutput so, vec3 V, vec3 L)
     // The response maps hold the light each signed axis of the particle's basis lets through.
     return so.baseColor * GE_SixWayResponse(so.particlePositive, so.particleNegative,
                                            transpose(so.particleBasis) * L) / GE_PI;
+#elif defined(GE_DIFFUSE_TRANSMISSION_ENABLED)
+    // A thin surface answers from both faces: the near face's reflection, and the light through it
+    // from a light behind it.
+    return GE_EvaluateStandardPBR(so, V, L)
+         + GE_DiffuseTransmissionFarFace(so.diffuseTransmissionAlbedo * (1.0 - so.metallic),
+                                         so.diffuseTransmission, dot(so.normalWS, L));
 #else
     return GE_EvaluateStandardPBR(so, V, L);
 #endif

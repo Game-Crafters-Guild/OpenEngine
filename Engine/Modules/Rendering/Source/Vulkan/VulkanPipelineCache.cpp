@@ -420,7 +420,7 @@ void VulkanPipelineCache::ClearCache()
 
 void VulkanPipelineCache::RecordPipelineCreation(double creationTimeMs, bool wasCached)
 {
-    std::lock_guard<std::mutex> lock(m_CreationMutex);
+    std::lock_guard<std::mutex> lock(m_StatisticsMutex);
     m_Statistics.TotalPipelines++;
 
     if (wasCached)

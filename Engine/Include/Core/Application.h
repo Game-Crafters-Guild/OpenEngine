@@ -14,12 +14,14 @@
 #include "Core/WindowInputRouter.h"
 #include "Types/Types.h"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 
 namespace GameEngine {
 
 namespace Input { class GamepadEdgeTracker; class InputSystem; }
+namespace Audio { enum class AudioOutput : std::uint8_t; }
 
 /**
  * @brief Utility functions for path resolution
@@ -227,6 +229,10 @@ struct ApplicationConfig {
     // instead of running as fast as the CPU allows. For dedicated servers and
     // simulation runs; the host brings up no window or device of its own either.
     bool Headless = false;
+    // Where the engine's audio goes (Audio/AudioTypes.h). Value-initialized to
+    // AudioOutput::Device; AudioOutput::Silent mixes with no output device, for
+    // isolated and automated runs. Ignored under Headless, which opens no audio.
+    Audio::AudioOutput AudioOutput{};
     // Set only by the scripting ABI's bootstrap (DllBootstrap::EnsureEngineInitialized),
     // which initializes an engine for a host that has no frame loop of its own (a
     // `dotnet test` process): the caller is the only thread that drives the engine,

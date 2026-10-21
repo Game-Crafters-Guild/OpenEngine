@@ -20,20 +20,27 @@ class WorkStealingThreadPool;
 namespace GameEngine::Pathfinding
 {
 
+class AStarSolverPool;
+struct SolverScratchStatistics;
+
 // Thread safety: NavigationWorld is NOT internally synchronized for map/link
 // management. Map add/remove, NavLink mutations and map content writes happen
 // on one thread (the main thread). PathBuffer operations ARE mutex-protected.
 // The only reads from other threads are SolveGridPaths' solves, which run and
 // finish inside that call: nothing may write a map or the map table while it
 // runs (HasActivePathJobs() is true then, and every GridMap writer and every
-// map add, remove or replace asserts).
+// map add, remove or replace asserts). Grid path solves of the world run on
+// A* solvers the world owns, one per solve running at once; GridMap::FindPath
+// called directly, on any grid map, uses the calling thread's solver.
 class NavigationWorld
 {
 public:
     NavigationWorld();
     ~NavigationWorld();
 
-    // Map management
+    // Map management. Removing or replacing a grid map frees the scratch of
+    // the world's idle grid A* solvers beyond what the largest grid map left
+    // needs.
     NavMapHandle AddGridMap(const GridSettings& settings);
     NavMapHandle AddDetourNavMap();
     void RemoveMap(NavMapHandle handle);
@@ -41,6 +48,10 @@ public:
     // grid stays bound across a re-bake. Null, leaving the old grid in place, when `handle` names no
     // grid.
     GridMap* ReplaceGridMap(NavMapHandle handle, std::unique_ptr<GridMap> grid);
+
+    // This world's grid A* solver scratch, read by a game's memory budget and by the editor's
+    // navigation statistics. Takes the solvers' mutex.
+    SolverScratchStatistics GetSolverScratchStatistics() const;
 
     GridMap* GetGridMap(NavMapHandle handle);
     DetourNavMap* GetDetourNavMap(NavMapHandle handle);
@@ -50,8 +61,10 @@ public:
     PathStatus FindPath(NavMapHandle map, const PathRequest& request, PathHandle& outPath);
 
     // Solves every grid request in `solves` before it returns: one unit of
-    // JobSystem::ParallelFor per solve on `pool`, the calling thread included;
-    // a null pool solves them on the caller in order. Each solve writes only
+    // JobSystem::ParallelFor per lane on `pool`, at most one lane per worker
+    // plus the calling thread, each lane on one of the world's solvers and
+    // claiming solves one at a time, so a long solve does not hold back the
+    // rest; a null pool solves them on the caller in order. Each solve writes only
     // its own Status and Points (Failed for a handle that names no grid map)
     // and allocates nothing in the PathBuffer, so the results do not depend
     // on the pool or on timing. Opens a path-solve window on every grid map
@@ -110,6 +123,13 @@ private:
     MapEntry* GetMapEntry(NavMapHandle handle);
     const MapEntry* GetMapEntry(NavMapHandle handle) const;
     void AssertNoPathSolves() const;
+    // One lane of SolveGridPaths: leases one of the world's solvers, then claims solves from `next`
+    // one at a time until none are left, writing only the results of the solves it claims.
+    void SolveGridPathLane(std::span<GridPathSolve> solves, std::atomic<size_t>& next);
+    // A path on one map; a grid map solves on one of the world's solvers.
+    PathStatus FindPathOnMap(const MapEntry& entry, const PathRequest& request, PathHandle& outPath);
+    // Frees the idle solvers' scratch above what the largest active grid map needs.
+    void ReleaseSolverScratch();
 
     std::vector<MapEntry> m_Maps;
     std::vector<uint32> m_FreeMapSlots;
@@ -120,6 +140,7 @@ private:
 
     PathBuffer m_PathBuffer;
     CrowdManager m_CrowdManager;
+    std::unique_ptr<AStarSolverPool> m_GridSolvers;
 
     // Nonzero while SolveGridPaths runs. Raised before the first solve starts;
     // lowered (release) after the last one has finished.

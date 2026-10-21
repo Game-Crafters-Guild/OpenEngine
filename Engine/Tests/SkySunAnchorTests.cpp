@@ -406,6 +406,8 @@ struct LinkedSunHarness
     {
         Sun = Rig.AddDirectional(lux, Components::LightUnit::Lux);
         Components::SkyEnvironment sky{};
+        // The goldens are recorded at the equator on the March equinox, where the noon sun stands overhead.
+        sky.Latitude = 0.0f;
         sky.SunLight = Sun;
         EXPECT_TRUE(sky.TimeOfDayDrivesSunLight) << "the shipped sky drives its linked light";
         Rig.SetSky(sky);
@@ -619,11 +621,11 @@ constexpr GoldenHour kDeliveredGoldens[] = {
      {0x43F64E30u, 0x43F64E30u, 0x43F64E30u}, {0x3F800000u, 0x3F800000u, 0x3F800000u}},
     {17.75f, GoldenMatch::Day, {0x42EBF23Du, 0x424507D3u, 0x40E086E0u},
      {0x42EBF23Du, 0x424507D3u, 0x40E086E0u}, {0x3E753BACu, 0x3DCCC923u, 0x3C695D3Eu}},
-    {18.15f, GoldenMatch::Twilight, {0x3A34F798u, 0x39540D8Bu, 0x375B3DCBu},
+    {18.15f, GoldenMatch::Twilight, {0x3839C19Eu, 0x371D617Bu, 0x34DA1491u},
      {0x34F12713u, 0x2D050AC8u, 0x1E565126u}, {}},
-    {18.5f, GoldenMatch::Twilight, {0x3C1ED17Au, 0x3BDD3F58u, 0x3B3F447Eu},
+    {18.5f, GoldenMatch::Twilight, {0x3A217911u, 0x39A43462u, 0x38BE412Fu},
      {0x10DB09A5u, 0x00000000u, 0x00000000u}, {}},
-    {0.0f, GoldenMatch::FullNight, {0x3CC0C5BCu, 0x3CD11934u, 0x3CF41945u},
+    {0.0f, GoldenMatch::FullNight, {0x3AC3FE9Fu, 0x3A9B301Du, 0x3A72CE58u},
      {0x00000000u, 0x00000000u, 0x00000000u}, {}},
 };
 
@@ -806,17 +808,17 @@ TEST(SkyLinkedSun, EndingTheDriveHandsTheLightBackWhite)
 // The fog's sun at full night. Height fog and clouds take their sun from the primary directional
 // when it lights anything, and from the sky otherwise. With the moon hidden the driven sun is black
 // at its authored intensity, so a gate on the intensity alone hands the fog a black sun where it
-// used to fall back to the sky. Expected values are what the system produced before the night moved
-// into the colour, when the hidden moon zeroed the intensity instead; the hidden-moon fallback is the
-// sky's own source, so its value carries the sky's top-of-atmosphere lift (SkySourceIlluminanceScale).
-TEST(SkyLinkedSun, TheFogSunAtNightIsUnchanged)
+// used to fall back to the sky. Under the default full moon the fog's sun is the moonlight (0.25 lx
+// overhead, extinguished at the moon's midnight elevation); with the moon hidden the sky's own night
+// source is nothing either, so the fog has no sun.
+TEST(SkyLinkedSun, TheFogSunAtNightIsTheMoon)
 {
     struct NightFog
     {
         bool ShowMoon;
         float DeliveredLuminance; // luminance(fog colour) x fog intensity
     };
-    constexpr NightFog kNightFog[] = {{true, 0.0254095f}, {false, 0.0153712f}};
+    constexpr NightFog kNightFog[] = {{true, 0.00123157f}, {false, 0.0f}};
     constexpr float kRecordedPrecision = 1e-5f; // the values were recorded to six significant digits
 
     for (const NightFog& expected : kNightFog)

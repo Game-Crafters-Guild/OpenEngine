@@ -117,7 +117,7 @@ public class EntitySystemGeneratorTests
                 Unknown = 0, Bool = 1, Int8 = 2, Int16 = 3, Int32 = 4, Int64 = 5,
                 UInt8 = 6, UInt16 = 7, UInt32 = 8, UInt64 = 9, Float = 10, Double = 11,
                 Vec2 = 12, Vec3 = 13, Vec4 = 14, Quat = 15, Mat4 = 16, Color = 17,
-                AssetGuid = 18, EntityHandle = 19, String = 20, Bytes = 21,
+                AssetGuid = 18, EntityHandle = 19, String = 20, Bytes = 21, RenderLayerMask = 22,
             }
 
             public readonly struct ComponentFieldDesc
@@ -2603,6 +2603,40 @@ class Outer
         Assert.False(f.ContainsKey("Nested"));
         Assert.Equal(0u, f["Before"].Offset);
         Assert.Equal(12u, f["After"].Offset); // the skipped 8-byte Inner still consumed layout
+    }
+
+    [Fact]
+    public void ComponentSchema_RenderLayerMaskField_IsTheRenderLayerMaskFieldType()
+    {
+        // A render layer field registers as the native RenderLayerMask field type (22), one 4-byte word,
+        // so the scene writes it as layer numbers; an unmapped struct would be skipped instead.
+        const string source = """
+            using System.Runtime.InteropServices;
+            using GameEngine.Scripting;
+
+            namespace GameEngine.Scripting
+            {
+                [StructLayout(LayoutKind.Sequential)]
+                public readonly struct RenderLayerMask { public readonly uint Bits; }
+            }
+
+            namespace TestGame
+            {
+                [StructLayout(LayoutKind.Sequential)]
+                public struct Layered : IComponent
+                {
+                    public float Before;
+                    public RenderLayerMask Layers;
+                }
+            }
+            """;
+
+        var (_, hubText, diagnostics) = RunGeneratorSchemaHub(source);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+
+        var f = ParseHubFields(hubText, "TestGame.Layered");
+        Assert.Equal(2, f.Count);
+        AssertHubField(f, "Layers", 4, 4, 22);
     }
 
     [Fact]

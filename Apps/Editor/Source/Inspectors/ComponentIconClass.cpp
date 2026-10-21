@@ -14,7 +14,6 @@
 #include "Components/Rendering/Ocean.h"
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/ReflectionProbe.h"
-#include "Components/Rendering/RenderLayer.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/Skybox.h"
@@ -117,7 +116,6 @@ std::string ComponentIconClass(ECS::World* world, ECS::EntityHandle entity, ECS:
     static const ECS::ComponentTypeId valueCurveId = ECS::GetComponentTypeId<ValueCurve>();
     static const ECS::ComponentTypeId animatedNodeRefId = ECS::GetComponentTypeId<AnimatedNodeRef>();
     static const ECS::ComponentTypeId lodGroupId = ECS::GetComponentTypeId<LODGroup>();
-    static const ECS::ComponentTypeId renderLayerId = ECS::GetComponentTypeId<RenderLayer>();
 
     if (typeId == transformId)
         return "inspector-section-icon-transform";
@@ -207,8 +205,6 @@ std::string ComponentIconClass(ECS::World* world, ECS::EntityHandle entity, ECS:
         return "inspector-section-icon-animated-node";
     if (typeId == lodGroupId)
         return "inspector-section-icon-lod-group";
-    if (typeId == renderLayerId)
-        return "inspector-section-icon-render-layer";
     return kDefaultIconClass;
 }
 

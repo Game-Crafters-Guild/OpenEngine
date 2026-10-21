@@ -72,6 +72,7 @@ nlohmann::json DescribeCameraProjection(const float proj[16],
 
 nlohmann::json DescribeGameViewCamera(const Rendering::CameraData& camera,
                                       Components::ExposureMode mode,
+                                      Components::ExposureMeter meter,
                                       std::uint32_t viewportWidthPx,
                                       std::uint32_t viewportHeightPx)
 {
@@ -87,10 +88,13 @@ nlohmann::json DescribeGameViewCamera(const Rendering::CameraData& camera,
     case Components::ExposureMode::Physical: modeName = "physical"; break;
     case Components::ExposureMode::Auto: modeName = "auto"; break;
     }
+    nlohmann::json meterName = nullptr;
+    if (mode == Components::ExposureMode::Auto)
+        meterName = meter == Components::ExposureMeter::Lights ? "lights" : "picture";
     return {{"position", {camera.cameraPos[0], camera.cameraPos[1], camera.cameraPos[2]}},
             {"worldTransform", std::move(transform)},
             {"projection", DescribeCameraProjection(camera.proj, viewportWidthPx, viewportHeightPx)},
-            {"exposure", {{"mode", modeName}, {"metered", nullptr}}}};
+            {"exposure", {{"mode", modeName}, {"meter", std::move(meterName)}, {"metered", nullptr}}}};
 }
 
 nlohmann::json DescribeMeteredExposure(float linearScale, std::uint64_t frameIndex)

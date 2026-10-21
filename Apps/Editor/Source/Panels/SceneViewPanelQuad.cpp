@@ -30,19 +30,35 @@ namespace GameEngine
 {
 namespace
 {
-constexpr const char* kRulerOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewRulerOverlay",
-    "SceneViewRulerOverlayTop",
-    "SceneViewRulerOverlayFront",
-    "SceneViewRulerOverlaySide",
+constexpr StringId kRulerOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
+    "SceneViewRulerOverlay"_sid,
+    "SceneViewRulerOverlayTop"_sid,
+    "SceneViewRulerOverlayFront"_sid,
+    "SceneViewRulerOverlaySide"_sid,
 };
 
-constexpr const char* kMeasureOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewMeasureOverlay",
-    "SceneViewMeasureOverlayTop",
-    "SceneViewMeasureOverlayFront",
-    "SceneViewMeasureOverlaySide",
+constexpr StringId kMeasureOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
+    "SceneViewMeasureOverlay"_sid,
+    "SceneViewMeasureOverlayTop"_sid,
+    "SceneViewMeasureOverlayFront"_sid,
+    "SceneViewMeasureOverlaySide"_sid,
 };
+
+// The overlay of type T with `id` that `held` names while it is alive; once it is destroyed
+// (or before the first call), the first T with `id` in `viewport`, else in `panel`, which
+// `held` then names. The per-viewport overlays are refreshed every frame, so this keeps
+// that refresh off the id lookup.
+template <typename T>
+T* HeldViewportOverlay(UIElement::WeakRef<T>& held, UIElement* viewport, UIElement& panel, StringId id)
+{
+    if (T* overlay = held.Get())
+        return overlay;
+    T* overlay = viewport ? dynamic_cast<T*>(viewport->FindById(id)) : nullptr;
+    if (!overlay)
+        overlay = dynamic_cast<T*>(panel.FindById(id));
+    held = UIElement::MakeWeakRef(overlay);
+    return overlay;
+}
 
 constexpr const char* kSharedViewportOverlayIds[] = {
     "SceneToolOverlay",
@@ -500,21 +516,18 @@ UIElement* SceneViewPanel::GetViewportForOverlay() const
 
 void SceneViewPanel::RefreshViewportRotationGizmos()
 {
-    static constexpr const char* kRotationGizmoIds[static_cast<size_t>(ViewportSlot::Count)] = {
-        "ViewportRotationGizmo",
-        "ViewportRotationGizmoTop",
-        "ViewportRotationGizmoFront",
-        "ViewportRotationGizmoSide",
+    static constexpr StringId kRotationGizmoIds[static_cast<size_t>(ViewportSlot::Count)] = {
+        "ViewportRotationGizmo"_sid,
+        "ViewportRotationGizmoTop"_sid,
+        "ViewportRotationGizmoFront"_sid,
+        "ViewportRotationGizmoSide"_sid,
     };
 
     for (size_t i = 0; i < m_RotationGizmos.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        ViewportRotationGizmo* gizmo = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            gizmo = dynamic_cast<ViewportRotationGizmo*>(viewport->FindById(HashStringId(kRotationGizmoIds[i])));
-        if (!gizmo)
-            gizmo = dynamic_cast<ViewportRotationGizmo*>(FindById(HashStringId(kRotationGizmoIds[i])));
+        ViewportRotationGizmo* gizmo =
+            HeldViewportOverlay(m_HeldRotationGizmos[i], m_ViewportSlots[i], *this, kRotationGizmoIds[i]);
         m_RotationGizmos[i] = gizmo;
         if (!gizmo)
             continue;
@@ -544,11 +557,8 @@ void SceneViewPanel::RefreshViewportRulerOverlays()
     for (size_t i = 0; i < m_RulerOverlays.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewRulerOverlay* overlay = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            overlay = dynamic_cast<SceneViewRulerOverlay*>(viewport->FindById(HashStringId(kRulerOverlayIds[i])));
-        if (!overlay)
-            overlay = dynamic_cast<SceneViewRulerOverlay*>(FindById(HashStringId(kRulerOverlayIds[i])));
+        SceneViewRulerOverlay* overlay =
+            HeldViewportOverlay(m_HeldRulerOverlays[i], m_ViewportSlots[i], *this, kRulerOverlayIds[i]);
 
         m_RulerOverlays[i] = overlay;
         if (!overlay)
@@ -567,11 +577,8 @@ void SceneViewPanel::RefreshViewportMeasureOverlays()
     for (size_t i = 0; i < m_MeasureOverlays.size(); ++i)
     {
         const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewMeasureOverlay* overlay = nullptr;
-        if (UIElement* viewport = m_ViewportSlots[i])
-            overlay = dynamic_cast<SceneViewMeasureOverlay*>(viewport->FindById(HashStringId(kMeasureOverlayIds[i])));
-        if (!overlay)
-            overlay = dynamic_cast<SceneViewMeasureOverlay*>(FindById(HashStringId(kMeasureOverlayIds[i])));
+        SceneViewMeasureOverlay* overlay =
+            HeldViewportOverlay(m_HeldMeasureOverlays[i], m_ViewportSlots[i], *this, kMeasureOverlayIds[i]);
 
         m_MeasureOverlays[i] = overlay;
         if (!overlay)

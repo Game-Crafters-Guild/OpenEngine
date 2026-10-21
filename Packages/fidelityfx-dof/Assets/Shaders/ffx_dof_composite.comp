@@ -18,11 +18,10 @@ layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
     vec4 ge_nearFar;
     vec4 ge_cameraPosWS;
 } ViewParams;
-layout(set = 0, binding = 6, std430) readonly buffer ExposureHistory
-{
-    float exposureScale;
-    uint valid;
-} uExposure;
+// The view's exposure state. The focus visualizer's colour is display-referred (divided by the
+// exposure) and lands in scene colour at the frame's pre-exposure P.
+#define GE_EXPOSURE_HISTORY_BINDING 6
+#include "Includes/exposure_history.glsl"
 
 layout(push_constant) uniform DofPC
 {
@@ -131,7 +130,8 @@ void main()
         float effectiveExposure = (pc.useAutoExposure != 0 && uExposure.valid != 0u &&
                                    autoExposure > 0.0 && autoExposure < 1e9)
                                   ? autoExposure : pc.exposure;
-        vec3 debugColor = mix(sharp, blur, t) / max(effectiveExposure, 1e-6);
+        vec3 debugColor = mix(sharp, blur, t) / max(effectiveExposure, 1e-6) *
+                          GE_PreExposure();
         rgb = mix(rgb, debugColor, clamp(pc.dofDebugAlpha, 0.0, 1.0));
     }
 

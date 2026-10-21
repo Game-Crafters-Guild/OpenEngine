@@ -114,7 +114,7 @@ std::vector<SubmissionSnapshot> SnapshotSubmissions(
         snap.meshHandle = static_cast<uint64>(s.meshHandle);
         snap.materialGuid = s.material ? s.material->GetGuid() : GUID::Null();
         snap.instanceIndex = s.instanceIndex;
-        snap.renderLayerMask = s.renderLayerMask;
+        snap.renderLayerMask = s.renderLayerMask.Bits;
         snap.flagsMasked = s.flags & 0x0000FFFFu;
         out.push_back(snap);
     }
@@ -261,7 +261,7 @@ TEST_F(ExtractionFastPathTest, SpawnHoldsItsDerivedComponentsBeforeTheFirstTick)
 
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     constexpr size_t kSpawned = 256;
     const std::vector<EntityHandle> batch =
@@ -293,7 +293,7 @@ MeshRenderer HarnessRenderer(const ExtractionHarness& h)
 {
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     return mr;
 }
@@ -406,7 +406,7 @@ TEST_F(ExtractionFastPathTest, RenderableSpawnedAfterTheHierarchyWaitsForItsPose
     h.hierarchy.Update(*h.world, kDt);
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     const EntityHandle late = h.world->CreateHandle(MakeTransformAt(50.0f, 0.0f, 0.0f), mr);
     h.extraction->Update(*h.world, kDt);
@@ -457,7 +457,7 @@ LaneState CaptureLane(ExtractionHarness& h)
     {
         const auto owner = entityOfSlot.find(sub.instanceIndex);
         state.submissions.emplace_back(owner == entityOfSlot.end() ? ~0u : owner->second,
-                                       static_cast<uint32>(sub.viewId), sub.renderLayerMask,
+                                       static_cast<uint32>(sub.viewId), sub.renderLayerMask.Bits,
                                        sub.flags & 0x0000FFFFu, static_cast<uint64>(sub.meshHandle),
                                        sub.material ? sub.material->GetGuid() : GUID{});
     }
@@ -504,7 +504,7 @@ ParityRun RunStructuralParity(Rendering::IDevice* device, bool fastPath, uint32 
             live.erase(live.begin() + static_cast<std::ptrdiff_t>(index));
         }
         if (std::uniform_int_distribution<int>(0, 3)(rng) == 0)
-            h.world->GetComponentForWrite<MeshRenderer>(PickLive(live, rng))->renderLayerMask ^= 0x2u;
+            h.world->GetComponentForWrite<MeshRenderer>(PickLive(live, rng))->RenderLayers.Bits ^= 0x2u;
         for (int i = 0; i < 6; ++i)
             *h.world->GetComponentForWrite<Transform>(PickLive(live, rng)) =
                 MakeTransformAt(static_cast<float>(i), static_cast<float>(frame), 1.0f);
@@ -570,7 +570,7 @@ std::vector<SubmissionSlot> FullLaneSubmissionsAfterSpawn(Rendering::IDevice* de
         return {};
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     h.world->CreateBatchHandle(3000, MakeTransformAt(0.0f, 0.0f, 0.0f), mr);
     h.StepFrame();
@@ -669,7 +669,7 @@ TEST_F(ExtractionFastPathTest, LayerOnlyChangesPublishPayloadAndInvalidateShadow
     const auto siblingSlot = h.world->GetComponent<MeshGPUData>(sibling.GetHandle())->instanceIndex;
     const auto original = h.rs.GetGPUScene()->GetInstances()[slot];
     const auto epoch = h.rs.ShadowCasterContentVersion(h.worldId);
-    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->renderLayerMask = 0;
+    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->RenderLayers = GameEngine::Rendering::RenderLayerMask::None();
     h.StepFrame();
     EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[slot].renderLayerMask, 0u);
     EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[siblingSlot].renderLayerMask, 1u);
@@ -682,12 +682,53 @@ TEST_F(ExtractionFastPathTest, LayerOnlyChangesPublishPayloadAndInvalidateShadow
     h.StepFrame();
     EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[slot].renderLayerMask, 0u)
         << "transform feed must retain the authored mask";
-    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->renderLayerMask = 0x80000000u;
-    h.rs.Views().SetViewRenderLayerMask(h.viewId, 0x80000000u);
+    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->RenderLayers = GameEngine::Rendering::RenderLayerMask::FromLayer(31);
+    h.rs.Views().SetViewRenderLayerMask(h.viewId, GameEngine::Rendering::RenderLayerMask{0x80000000u});
     h.StepFrame();
     EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[slot].renderLayerMask, 0x80000000u);
     ASSERT_EQ(h.extraction->GetSubmissionsForTest().size(), 1u);
     EXPECT_EQ(h.extraction->GetSubmissionsForTest()[0].instanceIndex, slot);
+}
+
+// A renderer whose layers miss every view's is drawn by none of them. Moving it to another layer is a
+// write into its MeshRenderer: the entity keeps its archetype, and the next frame puts the new layers in
+// its GPU instance word.
+TEST_F(ExtractionFastPathTest, RendererOutsideTheViewLayersEmitsNoSubmissionAndALayerEditKeepsTheArchetype)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), true));
+    auto actor = h.SpawnRenderable(0, 0, 0);
+    h.SpawnRenderable(1, 0, 0);
+    ASSERT_TRUE(h.PrimeToFastPath());
+    ASSERT_EQ(h.extraction->GetSubmissionsForTest().size(), 2u);
+    const ECS::Archetype* archetype = h.world->GetEntityArchetype(actor.GetHandle());
+    ASSERT_NE(archetype, nullptr);
+
+    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->RenderLayers =
+        GameEngine::Rendering::RenderLayerMask::FromLayer(2);
+    h.StepFrame();
+
+    EXPECT_EQ(h.world->GetEntityArchetype(actor.GetHandle()), archetype) << "a layer edit never moves the entity";
+    const auto slot = h.world->GetComponent<MeshGPUData>(actor.GetHandle())->instanceIndex;
+    EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[slot].renderLayerMask, 1u << 2);
+    const auto& subs = h.extraction->GetSubmissionsForTest();
+    ASSERT_EQ(subs.size(), 1u) << "the view draws layer 0 only, so the renderer on layer 2 has no submission";
+    EXPECT_NE(subs[0].instanceIndex, slot);
+}
+
+// A view on no layer gets no submission but is still extracted this frame, so its controller presents its
+// clear and sky instead of holding its last image while it waits for an extraction that never comes.
+TEST_F(ExtractionFastPathTest, AViewOnNoLayerIsExtractedWithNoSubmission)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), true));
+    h.SpawnRenderable(0, 0, 0);
+    h.rs.Views().SetViewRenderLayerMask(h.viewId, GameEngine::Rendering::RenderLayerMask::None());
+    h.StepFrame();
+
+    EXPECT_TRUE(h.extraction->GetSubmissionsForTest().empty());
+    EXPECT_TRUE(h.rs.Views().IsViewExtractionCurrent(h.viewId))
+        << "the view on no layer was extracted this frame";
 }
 
 TEST_F(ExtractionFastPathTest, LayerPayloadRecoversAnOutOfRangeDerivedSlot)
@@ -698,7 +739,7 @@ TEST_F(ExtractionFastPathTest, LayerPayloadRecoversAnOutOfRangeDerivedSlot)
     MeshGPUData stale{};
     stale.instanceIndex = 64;
     actor.Set(stale);
-    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->renderLayerMask = 0;
+    h.world->GetComponentForWrite<MeshRenderer>(actor.GetHandle())->RenderLayers = GameEngine::Rendering::RenderLayerMask::None();
     h.StepFrame();
     const auto* gpu = h.world->GetComponent<MeshGPUData>(actor.GetHandle());
     ASSERT_NE(gpu, nullptr);
@@ -960,7 +1001,7 @@ TEST_F(ExtractionFastPathTest, UnregisterSubmeshEventEscalates)
     e.Set(MakeTransformAt(3.0f, 0.0f, 0.0f));
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(second);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     e.Set(mr);
     h.world->ProcessCommands();
@@ -1010,7 +1051,7 @@ TEST_F(ExtractionFastPathTest, ViewOpenCloseAndMaskEditEscalate)
     // Open a second matching view.
     ViewId second = h.rs.Views().AllocateView("FastPathView2", h.cameraId);
     h.rs.Views().SetViewWorldId(second, h.worldId);
-    h.rs.Views().SetViewRenderLayerMask(second, 0x1u);
+    h.rs.Views().SetViewRenderLayerMask(second, GameEngine::Rendering::RenderLayerMask::Default());
     h.StepFrame();
     EXPECT_EQ(h.Stats().FastFrame, 0u);
     EXPECT_NE(h.Stats().EscalationReasonBits & RenderExtractionSystem::kEscalationViewSet,
@@ -1020,7 +1061,7 @@ TEST_F(ExtractionFastPathTest, ViewOpenCloseAndMaskEditEscalate)
     ASSERT_TRUE(h.PrimeToFastPath());
 
     // Layer-mask edit invalidates the cached per-view emission set.
-    h.rs.Views().SetViewRenderLayerMask(second, 0x2u);
+    h.rs.Views().SetViewRenderLayerMask(second, GameEngine::Rendering::RenderLayerMask{0x2u});
     h.StepFrame();
     EXPECT_EQ(h.Stats().FastFrame, 0u);
     EXPECT_NE(h.Stats().EscalationReasonBits & RenderExtractionSystem::kEscalationViewSet,
@@ -1050,7 +1091,7 @@ TEST_F(ExtractionFastPathTest, OnDemandViewChurnLeavesContentVersions)
                                                Rendering::ViewPurpose::UtilityCapture,
                                                Rendering::ViewParticipation::OnDemand);
     h.rs.Views().SetViewWorldId(capture, h.worldId);
-    h.rs.Views().SetViewRenderLayerMask(capture, 0x1u);
+    h.rs.Views().SetViewRenderLayerMask(capture, GameEngine::Rendering::RenderLayerMask::Default());
     ASSERT_TRUE(h.PrimeToFastPath());
     const uint64_t renderVersion = h.rs.RenderContentVersion(h.worldId);
     const uint64_t casterVersion = h.rs.ShadowCasterContentVersion(h.worldId);
@@ -1071,7 +1112,7 @@ TEST_F(ExtractionFastPathTest, OnDemandViewChurnLeavesContentVersions)
     EXPECT_EQ(h.rs.ShadowCasterContentVersion(h.worldId), casterVersion);
 
     ASSERT_TRUE(h.PrimeToFastPath());
-    h.rs.Views().SetViewRenderLayerMask(h.viewId, 0x2u);
+    h.rs.Views().SetViewRenderLayerMask(h.viewId, GameEngine::Rendering::RenderLayerMask{0x2u});
     h.StepFrame();
     EXPECT_GT(h.rs.RenderContentVersion(h.worldId), renderVersion);
     EXPECT_GT(h.rs.ShadowCasterContentVersion(h.worldId), casterVersion);
@@ -1088,7 +1129,7 @@ TEST_F(ExtractionFastPathTest, OnDemandActivationWithAMoverStillBumps)
                                                Rendering::ViewPurpose::UtilityCapture,
                                                Rendering::ViewParticipation::OnDemand);
     h.rs.Views().SetViewWorldId(capture, h.worldId);
-    h.rs.Views().SetViewRenderLayerMask(capture, 0x1u);
+    h.rs.Views().SetViewRenderLayerMask(capture, GameEngine::Rendering::RenderLayerMask::Default());
     ASSERT_TRUE(h.PrimeToFastPath());
     const uint64_t renderVersion = h.rs.RenderContentVersion(h.worldId);
     const uint64_t casterVersion = h.rs.ShadowCasterContentVersion(h.worldId);
@@ -1219,13 +1260,13 @@ TEST_F(ExtractionFastPathTest, UnsubscribedWorldStaysOnFullLane)
 
     ViewId thumbView = h.rs.Views().AllocateView("ThumbView", h.cameraId);
     h.rs.Views().SetViewWorldId(thumbView, thumbWorld->GetWorldId());
-    h.rs.Views().SetViewRenderLayerMask(thumbView, 0x1u);
+    h.rs.Views().SetViewRenderLayerMask(thumbView, GameEngine::Rendering::RenderLayerMask::Default());
 
     ECS::Entity e = thumbWorld->Create();
     e.Set(MakeTransformAt(0.0f, 0.0f, 0.0f));
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     e.Set(mr);
     thumbWorld->ProcessCommands();
@@ -1457,7 +1498,7 @@ TEST_F(ExtractionFastPathTest, FirstMorphWeightEditSwapsSubmissionMeshHandle)
         MeshRenderer mr{};
         mr.modelAssetGuid.Set(modelGuid);
         mr.meshId = 0;
-        mr.renderLayerMask = 0x1u;
+        mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
         mr.materialAssetGuid.Set(h.materialGuid);
         morph.Set(mr);
     }
@@ -1637,7 +1678,7 @@ TEST_F(ExtractionFastPathTest, SubsetOverCeilingPinsFullLane)
         e.Set(MakeTransformAt(static_cast<float>(i % 64), 0.0f, static_cast<float>(i / 64)));
         MeshRenderer mr{};
         mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
-        mr.renderLayerMask = 0x1u;
+        mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
         mr.materialAssetGuid.Set(h.materialGuid);
         e.Set(mr);
         e.Set(AnimatorRef{});
@@ -2698,7 +2739,7 @@ TEST_F(ExtractionFastPathTest, ContinuityStampMovesOnAStableHandleMeshReload)
     e.Set(MakeTransformAt(0.0f, 0.0f, 0.0f));
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(handles[0]);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     mr.materialAssetGuid.Set(h.materialGuid);
     e.Set(mr);
     h.world->ProcessCommands();

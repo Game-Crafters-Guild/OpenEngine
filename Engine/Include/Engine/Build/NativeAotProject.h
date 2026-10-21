@@ -13,7 +13,7 @@ namespace GameEngine
 /// the project scripts and every runtime package C# module).
 struct NativeAotProjectDesc
 {
-    std::filesystem::path ScriptSources;               ///< project scripts root, globbed recursively
+    std::filesystem::path ScriptSources;               ///< authored scripts root, globbed recursively; empty for none
     std::vector<PackageCodeModule> PackageModules;     ///< only runtime C# modules are compiled in
     std::vector<std::string> PackageDefines;           ///< union of enabled-package defines
     std::vector<std::filesystem::path> ReferenceDlls;  ///< staged SDK assemblies, referenced by HintPath

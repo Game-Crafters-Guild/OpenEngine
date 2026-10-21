@@ -1,13 +1,13 @@
 ---
 title: Particle processor stacks
-description: The .particlestack asset that says what an emitter's particles do, its phases, stages, values and built-in processors, its file format, and how a game registers its own processor.
+description: The .particlestack asset that says what an emitter's particles do, its phases, stages, values, and built-in processors, its file format, and how a game registers its own processor.
 ---
 
-A processor stack says what an emitter's particles do: when they are born, where, how they move, how they change, and what happens to them. It is a `.particlestack` asset that any number of emitters reference (see [Particles](particles.mdx) for the emitter, its preview and the renderer). Select the asset in the Assets panel to edit it, or edit it in place in an emitter's Processor Stack section; both edit the same asset, and every emitter running it follows the edit. Every edit is one undo step, and a drag previews live and records one step when it ends.
+A processor stack says what an emitter's particles do: when they are born, where, how they move, how they change, and what happens to them. It is a `.particlestack` asset that any number of emitters reference (see [Particles](particles.mdx) for the emitter, its preview, and the renderer). Select the asset in the Assets panel to edit it, or edit it in place in an emitter's Processor Stack section. Both edit the same asset, and every emitter running it follows the edit. Every edit is one undo step, and a drag previews live and records one step when it ends.
 
 ## Phases, stages and processors
 
-A stack holds up to 16 **phases**. A particle is in one phase at a time; every particle is born in the **entry phase**. Each phase holds up to 64 **processors** (64 in the whole stack), and each processor runs in one **stage**:
+A stack holds up to 16 **phases**. A particle is in one phase at a time. Every particle is born in the **entry phase**. Each phase holds up to 64 **processors** (64 in the whole stack), and each processor runs in one **stage**:
 
 | Stage | Runs |
 |---|---|
@@ -18,13 +18,13 @@ A stack holds up to 16 **phases**. A particle is in one phase at a time; every p
 | Exit | When a particle leaves the phase. |
 | Event | Event rules, evaluated when their trigger fires. |
 
-Within a stage, processors run in their order in the phase; drag a processor's header to reorder, or use its header menu (Move Up, Move Down, Remove). The round toggle on the header switches a processor off without removing it. **Add Processor** opens a searchable list of every registered processor type, including a game's own. A phase's header menu sets it as the entry phase or removes it; **Add Phase** adds one. The stack's **Particle Lifetime** is how long a particle lives unless a processor sets its lifetime.
+Within a stage, processors run in their order in the phase. Drag a processor's header to reorder, or use its header menu (Move Up, Move Down, Remove). The round toggle on the header switches a processor off without removing it. **Add Processor** opens a searchable list of every registered processor type, including a game's own. A phase's header menu sets it as the entry phase or removes it. **Add Phase** adds one. The stack's **Particle Lifetime** is how long a particle lives unless a processor sets its lifetime.
 
 An Update or Emission processor can be limited to an interval: **Active From** and, with **Stops** on, **Active Until**, in seconds of the particle's phase age (or its total age, with **Active On**, Particle Age). Intervals take effect at simulation ticks.
 
 ### Moving between phases
 
-An Event processor's *Move to Phase* action sends the particle to another phase. The particle keeps its identity and its total age; its phase age starts again at zero. The source phase's Exit processors and exit rules run, then the destination's Enter processors and enter rules, in the same tick. A tick resolves up to eight rounds of moves, so rules that bounce a particle between phases cannot loop forever.
+An Event processor's *Move to Phase* action sends the particle to another phase. The particle keeps its identity and its total age. Its phase age starts again at zero. The source phase's Exit processors and exit rules run, then the destination's Enter processors and enter rules, in the same tick. A tick resolves up to eight rounds of moves, so rules that bounce a particle between phases cannot loop forever.
 
 ## Values
 
@@ -37,7 +37,7 @@ Most numbers in a processor are **values**, and each value picks how it varies:
 | Curve | A curve over the processor's input. |
 | Random Curves | A random blend between two curves, picked once per particle. |
 
-Curves hold up to 32 keys with linear, smooth or stepped interpolation and editable tangents. The processor's **Curve Input** says what the curves are evaluated at, remapped from **Input From** and **Input To** onto the curve's 0 to 1, with **Outside the Range** clamping, repeating or ping-ponging beyond them:
+Curves hold up to 32 keys with linear, smooth, or stepped interpolation and editable tangents. The processor's **Curve Input** says what the curves are evaluated at, remapped from **Input From** and **Input To** onto the curve's 0 to 1, with **Outside the Range** clamping, repeating, or ping-ponging beyond them:
 
 | Input | Reads |
 |---|---|
@@ -49,7 +49,7 @@ Curves hold up to 32 keys with linear, smooth or stepped interpolation and edita
 | Size | The particle's size. |
 | Emitter Speed | How fast the emitter moves. |
 
-Random picks come from the emitter's seed, the particle and the processor, so an effect replays exactly and reordering processors does not reroll them.
+Random picks come from the emitter's seed, the particle, and the processor, so an effect replays exactly and reordering processors does not reroll them.
 
 ## Processors
 
@@ -72,13 +72,13 @@ Every built-in processor. Each row's parameters are the processor's rows in the 
 | Light | Update | Makes each particle a point light of its color while active. | Intensity, Range. |
 | Trail | Update | Records each particle's recent path; the renderer draws it as a ribbon. | Trail Lifetime, Points (2 to 64), Point Spacing, Remove with Particle. |
 
-The Mesh Vertices and Mesh Surface shapes carry their geometry in the stack file, as the processor's `"vertices"` and `"indices"` arrays (up to 65,536 vertices); the inspector shows how many vertices and triangles a shape holds. Mesh Surface picks triangles by area, so particles spread evenly over the surface.
+The Mesh Vertices and Mesh Surface shapes carry their geometry in the stack file, as the processor's `"vertices"` and `"indices"` arrays (up to 65,536 vertices). The inspector shows how many vertices and triangles a shape holds. Mesh Surface picks triangles by area, so particles spread evenly over the surface.
 
-A spawn rule names one of the emitter's four sub-emitter slots rather than an entity, so one stack works for every emitter that runs it; each emitter says which entity each slot is (see [Particles](particles.mdx)). A game-event rule reacts to the name a game sends with `ParticlePlayback::SendEvent`.
+A spawn rule names one of the emitter's four sub-emitter slots rather than an entity, so one stack works for every emitter that runs it. Each emitter says which entity each slot is (see [Particles](particles.mdx)). A game-event rule reacts to the name a game sends with `ParticlePlayback::SendEvent`.
 
 ## The file
 
-A `.particlestack` is JSON, written with a two-space indent so it reads and merges well. Processor ids are unique in the stack and keep a processor's identity across edits; parameters are keyed by their names in camel case and enumerations by their wire names. A parameter left out takes its default, so files stay short. Unknown keys are refused rather than ignored, and a file that does not validate keeps the last valid stack running and lists what is wrong in the inspector.
+A `.particlestack` is JSON, written with a two-space indent so it reads and merges well. Processor ids are unique in the stack and keep a processor's identity across edits. Parameters are keyed by their names in camel case and enumerations by their wire names. A parameter left out takes its default, so files stay short. Unknown keys are refused rather than ignored, and a file that does not validate keeps the last valid stack running and lists what is wrong in the inspector.
 
 ```json title="A burst of sparks that fade out"
 {
@@ -104,13 +104,13 @@ A `.particlestack` is JSON, written with a two-space indent so it reads and merg
 }
 ```
 
-A processor may also carry `"label"`, `"enabled": false`, `"clock": "age"`, `"start"` and `"end"` (its active interval). A value is `{"mode": "constant", "value": v}`, `{"mode": "range", "minimum", "maximum"}`, `{"mode": "curve", "curve": [keys]}` or `{"mode": "curveRange", "minimumCurve", "maximumCurve"}`; a key is `{"time", "value"}` with optional `"interpolation"` (`"smooth"` or `"step"`) and tangents. A curve input is `{"driver", "minimum", "maximum", "wrap"}`.
+A processor may also carry `"label"`, `"enabled": false`, `"clock": "age"`, `"start"`, and `"end"` (its active interval). A value is `{"mode": "constant", "value": v}`, `{"mode": "range", "minimum", "maximum"}`, `{"mode": "curve", "curve": [keys]}`, or `{"mode": "curveRange", "minimumCurve", "maximumCurve"}`. A key is `{"time", "value"}` with optional `"interpolation"` (`"smooth"` or `"step"`) and tangents. A curve input is `{"driver", "minimum", "maximum", "wrap"}`.
 
 Packaged games carry stacks in a cooked binary form the build writes; see [Particles](particles.mdx).
 
 ## Writing a processor
 
-A game or package adds processor types without changing the engine. A processor is a descriptor registered with `ParticleProcessorRegistry`: a stable id with the game's own prefix, the stages it may run in, the particle channels it reads and writes, a parameter struct reflected with `GE_REFLECT` and one presentation entry per field, and a function that runs over a batch of particles. The stack's file format, validation, cooked form, inspector rows and the Add Processor list all come from the descriptor.
+A game or package adds processor types without changing the engine. A processor is a descriptor registered with `ParticleProcessorRegistry`: a stable id with the game's own prefix, the stages it may run in, the particle channels it reads and writes, a parameter struct reflected with `GE_REFLECT` and one presentation entry per field, and a function that runs over a batch of particles. The stack's file format, validation, cooked form, inspector rows, and the Add Processor list all come from the descriptor.
 
 ```cpp title="A game's own Spin processor"
 #include "ECS/Reflection.h"
@@ -155,7 +155,7 @@ void RegisterSpinProcessor()
 
 :::note
 
-Call the registration from the module's initialization, before any stack that uses the processor loads. A stack naming a processor type nobody registered does not validate; its emitters run nothing and the inspector says why. An id keeps the parameter struct it was first registered with for the whole run: registering it again with another struct is refused with an error, because loaded stacks hold parameter bytes laid out for the first; give a changed struct a new id, or restart. When a native module reloads, its processors are registered again in place and the stacks that hold them run the new code; the module's earlier image stays mapped until the editor restarts, since stacks compiled while it served may still hold data it built. The execute function runs once per processor per tick over a contiguous batch, never once per particle through a virtual call, so a processor costs what its loop costs.
+Call the registration from the module's initialization, before any stack that uses the processor loads. A stack naming a processor type nobody registered does not validate. Its emitters run nothing and the inspector says why. An id keeps the parameter struct it was first registered with for the whole run: registering it again with another struct is refused with an error, because loaded stacks hold parameter bytes laid out for the first. Give a changed struct a new id, or restart. When a native module reloads, its processors are registered again in place and the stacks that hold them run the new code. The module's earlier image stays mapped until the editor restarts, since stacks compiled while it served may still hold data it built. The execute function runs once per processor per tick over a contiguous batch, never once per particle through a virtual call, so a processor costs what its loop costs.
 
 :::
 
@@ -164,9 +164,3 @@ Call the registration from the module's initialization, before any stack that us
 - 16 phases, 64 processors in a stack, 32 keys per curve, 65,536 vertices of mesh geometry.
 - Each tick holds up to 4,096 spawn events and 4,096 child spawn requests per emitter, and up to 256 game events.
 - Emission processors run only in the entry phase.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/particle-processor-stack.html`.
-- 2026-09-30: A processor id keeps its parameter struct; module reloads swap processor code in place. The Noise field defaults to Analytic, scrolled by the emitter's clock from a seeded place; Gradient is chosen explicitly.
-- 2026-09-29: Rewritten for stack assets, registered processor types, sub-emitter slots and game events.

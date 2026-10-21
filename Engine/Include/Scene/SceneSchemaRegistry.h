@@ -80,8 +80,10 @@ class ISceneComponentSchema
 
     // Apply a whole component's property assignments in one call. Lets a schema create the
     // component and capture/apply its bytes once for the group rather than per property.
-    // Semantics match calling ApplyProperty for each pair in order: skips (unknown field,
-    // transient, no serializer) keep going and the call still succeeds; a malformed value
+    // Semantics match calling ApplyProperty for each pair in order: skips (transient, no
+    // serializer) keep going and the call still succeeds. A field name the component does not have
+    // is skipped and put in ctx.UnknownFields (ReportUnknownField; the reflected schema does the
+    // same), the loader records it, and the call still succeeds; a malformed value
     // returns false with the same error string ApplyProperty would set. On failure,
     // `*outFailedIndex` (when non-null) receives the index of the offending pair so the
     // caller can report its source line. The default impl loops ApplyProperty, so schemas
@@ -150,6 +152,18 @@ class ISceneComponentSchema
         (void)visitor;
     }
 };
+
+// The one message for an authored property name a component has no field for, with its fix:
+// "<component> has no field named '<field>': delete the line or correct the spelling". The scene
+// load report, the editor's property apply and every schema refusal give this text.
+std::string UnknownFieldMessage(std::string_view component, std::string_view field);
+
+// What a hand-written schema's ApplyProperty does with a property name its component has no field
+// for. In a scene load (ctx.UnknownFields set) it puts the name in ctx.UnknownFields and returns
+// true, so the loader records the line in the load report and applies the rest of the block.
+// Outside a load it sets *outError to UnknownFieldMessage and returns false.
+bool ReportUnknownField(const SceneLoadContext& ctx, std::string_view component, std::string_view field,
+                        std::string* outError);
 
 // Global registry of component schemas (module-extensible).
 class SceneSchemaRegistry

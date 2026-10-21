@@ -35,6 +35,8 @@ class VulkanPipelineCache
         uint32_t CacheVersion = 1;
     };
 
+    // Hits are driver-reported only on the graphics path (creation feedback, Vulkan 1.3);
+    // mesh and compute creations are always counted as misses.
     struct Statistics
     {
         uint32_t TotalPipelines = 0;
@@ -64,21 +66,23 @@ class VulkanPipelineCache
     // and bringup immediately reconstructs one that reloads the same on-disk
     // bytes, so re-persisting the (up to tens-of-MB) blob mid-recovery is pure
     // latency — the slice-2 smoke measured it dominating recovery wall-time.
+    // The saved bytes are one vkGetPipelineCacheData snapshot taken here, at device
+    // teardown, after IDevice::InvokePerDeviceCacheCleanups has waited for every
+    // running build of the pipeline build table. A creation outside that table
+    // (IDevice::CreateGraphicsPipelineDirect, the fault-injection pipeline) may overlap
+    // the snapshot (the implementation synchronizes the cache; the snapshot merely
+    // misses that pipeline) but must have ended before this call destroys the cache:
+    // the handle is externally synchronized at vkDestroyPipelineCache.
     void Shutdown(bool saveToDisk = true);
 
+    // The cache is created without VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT,
+    // so the implementation synchronizes it: any number of threads may call
+    // vkCreateGraphicsPipelines / vkCreateComputePipelines / vkGetPipelineCacheData
+    // with it at once, and no caller locks around them. Setting that flag would make
+    // every such call need external synchronization again.
     VkPipelineCache GetVkPipelineCache() const
     {
         return m_PipelineCache;
-    }
-
-    // Lock for external synchronization of VkPipelineCache during concurrent
-    // vkCreate*Pipelines calls. The Vulkan spec requires that the application
-    // externally synchronize the pipeline cache object when used from multiple
-    // threads simultaneously. Callers must hold this lock for the duration of
-    // vkCreateGraphicsPipelines / vkCreateComputePipelines calls.
-    std::unique_lock<std::mutex> LockForCreation()
-    {
-        return std::unique_lock<std::mutex>(m_CreationMutex);
     }
 
     bool SaveCache();
@@ -89,8 +93,8 @@ class VulkanPipelineCache
     {
         return m_Statistics;
     }
-    // Thread-safe: guarded by m_CreationMutex so concurrent pipeline creation
-    // from the pre-warm worker thread and the render thread don't race on stats.
+    // Thread-safe: pipelines are created on several threads at once, so the
+    // statistics are updated under m_StatisticsMutex.
     void RecordPipelineCreation(double creationTimeMs, bool wasCached);
     bool IsValid() const
     {
@@ -106,7 +110,7 @@ class VulkanPipelineCache
     Statistics m_Statistics;
     bool m_Initialized = false;
 
-    std::mutex m_CreationMutex; // See LockForCreation()
+    std::mutex m_StatisticsMutex; // Guards m_Statistics in RecordPipelineCreation
 
     struct CacheHeader
     {

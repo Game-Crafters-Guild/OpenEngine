@@ -3,8 +3,10 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
 #include <algorithm>
+#include <format>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -29,15 +31,22 @@ AssetType MotionAssetTypeFromString(const std::string& value)
     return AssetType::Animation;
 }
 
-AnimationStateMotion LoadMotion(const json& doc)
+// A motion object; a field of the wrong type is refused into `reader`, named after `context`.
+AnimationStateMotion LoadMotion(const json& doc, Serialization::JsonFieldReader& reader, std::string context)
 {
+    reader.SetContext(std::move(context));
     AnimationStateMotion motion;
     if (doc.contains("assetGuid") && doc["assetGuid"].is_string())
         motion.AssetGuid = GUID(doc["assetGuid"].get<std::string>());
-    motion.Type = MotionAssetTypeFromString(doc.value("type", std::string("Animation")));
-    motion.LibraryName = doc.value("libraryName", std::string());
-    motion.Speed = doc.value("speed", 1.0f);
-    motion.Loop = doc.value("loop", true);
+    std::string type = "Animation";
+    reader.Read(doc, "type", type);
+    motion.Type = MotionAssetTypeFromString(type);
+    motion.LibraryName.clear();
+    reader.Read(doc, "libraryName", motion.LibraryName);
+    motion.Speed = 1.0f;
+    reader.Read(doc, "speed", motion.Speed);
+    motion.Loop = true;
+    reader.Read(doc, "loop", motion.Loop);
     return motion;
 }
 
@@ -173,105 +182,147 @@ void AnimationController::SetDataForTest(std::vector<AnimationParameter> paramet
 
 bool AnimationController::ParseJson(const std::string& text)
 {
-    try
+    json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+    if (!doc.is_object())
+        return Refuse("its JSON is not an object; write it as an object of parameters, states and transitions");
+
+    Serialization::JsonFieldReader reader;
+    m_EntryState.clear();
+    reader.Read(doc, "entryState", m_EntryState);
+    m_Parameters.clear();
+    m_States.clear();
+    m_Transitions.clear();
+
+    if (doc.contains("parameters") && doc["parameters"].is_array())
     {
-        const auto doc = json::parse(text);
-        if (!doc.is_object())
+        const json& parameters = doc["parameters"];
+        for (size_t index = 0; index < parameters.size(); ++index)
         {
-            SetState(AssetState::Failed);
-            return false;
+            const json& item = parameters[index];
+            reader.SetContext(std::format("parameters[{}].", index));
+            AnimationParameter parameter;
+            std::string type = "Float";
+            parameter.DefaultFloat = 0.0f;
+            parameter.DefaultInt = 0;
+            parameter.DefaultBool = false;
+            reader.Read(item, "name", parameter.Name);
+            reader.Read(item, "type", type);
+            reader.Read(item, "defaultFloat", parameter.DefaultFloat);
+            reader.Read(item, "defaultInt", parameter.DefaultInt);
+            reader.Read(item, "defaultBool", parameter.DefaultBool);
+            parameter.Type = AnimationParameterTypeFromString(type);
+            if (!parameter.Name.empty())
+                m_Parameters.push_back(std::move(parameter));
         }
+    }
 
-        m_EntryState = doc.value("entryState", std::string());
-        m_Parameters.clear();
-        m_States.clear();
-        m_Transitions.clear();
-
-        if (doc.contains("parameters") && doc["parameters"].is_array())
+    if (doc.contains("states") && doc["states"].is_array())
+    {
+        const json& states = doc["states"];
+        for (size_t index = 0; index < states.size(); ++index)
         {
-            for (const auto& item : doc["parameters"])
+            const json& item = states[index];
+            const std::string context = std::format("states[{}].", index);
+            reader.SetContext(context);
+            AnimationControllerState state;
+            reader.Read(item, "name", state.Name);
+            if (item.is_object() && item.contains("motion") && item["motion"].is_object())
+                state.Motion = LoadMotion(item["motion"], reader, context + "motion.");
+            if (item.is_object() && item.contains("blendTree") && item["blendTree"].is_object())
             {
-                AnimationParameter parameter;
-                parameter.Name = item.value("name", std::string());
-                parameter.Type = AnimationParameterTypeFromString(item.value("type", std::string("Float")));
-                parameter.DefaultFloat = item.value("defaultFloat", 0.0f);
-                parameter.DefaultInt = item.value("defaultInt", 0);
-                parameter.DefaultBool = item.value("defaultBool", false);
-                if (!parameter.Name.empty())
-                    m_Parameters.push_back(std::move(parameter));
-            }
-        }
-
-        if (doc.contains("states") && doc["states"].is_array())
-        {
-            for (const auto& item : doc["states"])
-            {
-                AnimationControllerState state;
-                state.Name = item.value("name", std::string());
-                if (item.contains("motion") && item["motion"].is_object())
-                    state.Motion = LoadMotion(item["motion"]);
-                if (item.contains("blendTree") && item["blendTree"].is_object())
+                const auto& bt = item["blendTree"];
+                reader.SetContext(context + "blendTree.");
+                std::string type = "None";
+                reader.Read(bt, "type", type);
+                state.BlendTree.Type = BlendTreeTypeFromString(type);
+                state.BlendTree.ParameterX.clear();
+                state.BlendTree.ParameterY.clear();
+                reader.Read(bt, "parameterX", state.BlendTree.ParameterX);
+                reader.Read(bt, "parameterY", state.BlendTree.ParameterY);
+                if (bt.contains("children") && bt["children"].is_array())
                 {
-                    const auto& bt = item["blendTree"];
-                    state.BlendTree.Type = BlendTreeTypeFromString(bt.value("type", std::string("None")));
-                    state.BlendTree.ParameterX = bt.value("parameterX", std::string());
-                    state.BlendTree.ParameterY = bt.value("parameterY", std::string());
-                    if (bt.contains("children") && bt["children"].is_array())
+                    const json& children = bt["children"];
+                    for (size_t childIndex = 0; childIndex < children.size(); ++childIndex)
                     {
-                        for (const auto& childJson : bt["children"])
-                        {
-                            AnimationBlendTreeChild child;
-                            if (childJson.contains("motion") && childJson["motion"].is_object())
-                                child.Motion = LoadMotion(childJson["motion"]);
-                            child.ThresholdX = childJson.value("thresholdX", 0.0f);
-                            child.ThresholdY = childJson.value("thresholdY", 0.0f);
-                            state.BlendTree.Children.push_back(std::move(child));
-                        }
+                        const json& childJson = children[childIndex];
+                        const std::string childContext =
+                            std::format("{}blendTree.children[{}].", context, childIndex);
+                        AnimationBlendTreeChild child;
+                        if (childJson.is_object() && childJson.contains("motion") && childJson["motion"].is_object())
+                            child.Motion = LoadMotion(childJson["motion"], reader, childContext + "motion.");
+                        reader.SetContext(childContext);
+                        child.ThresholdX = 0.0f;
+                        child.ThresholdY = 0.0f;
+                        reader.Read(childJson, "thresholdX", child.ThresholdX);
+                        reader.Read(childJson, "thresholdY", child.ThresholdY);
+                        state.BlendTree.Children.push_back(std::move(child));
                     }
                 }
-                if (!state.Name.empty())
-                    m_States.push_back(std::move(state));
             }
+            if (!state.Name.empty())
+                m_States.push_back(std::move(state));
         }
-
-        if (doc.contains("transitions") && doc["transitions"].is_array())
-        {
-            for (const auto& item : doc["transitions"])
-            {
-                AnimationControllerTransition transition;
-                transition.FromState = item.value("fromState", std::string());
-                transition.ToState = item.value("toState", std::string());
-                transition.DurationSeconds = std::max(0.0f, item.value("durationSeconds", 0.2f));
-                transition.ExitTimeSeconds = item.value("exitTimeSeconds", -1.0f);
-                transition.CanInterrupt = item.value("canInterrupt", true);
-                if (item.contains("conditions") && item["conditions"].is_array())
-                {
-                    for (const auto& condJson : item["conditions"])
-                    {
-                        AnimationTransitionConditionDef condition;
-                        condition.Parameter = condJson.value("parameter", std::string());
-                        condition.Comparison = AnimationTransitionComparisonFromString(condJson.value("comparison", std::string("Always")));
-                        condition.FloatValue = condJson.value("floatValue", 0.0f);
-                        condition.IntValue = condJson.value("intValue", 0);
-                        condition.BoolValue = condJson.value("boolValue", false);
-                        transition.Conditions.push_back(std::move(condition));
-                    }
-                }
-                if (!transition.FromState.empty() && !transition.ToState.empty())
-                    m_Transitions.push_back(std::move(transition));
-            }
-        }
-
-        SetState(AssetState::Loaded);
-        return true;
     }
-    catch (const std::exception& e)
+
+    if (doc.contains("transitions") && doc["transitions"].is_array())
     {
-        Logger::Log::Error("AnimationController: failed to parse '{}': {}", GetPath().string(), e.what());
-        Unload();
-        SetState(AssetState::Failed);
-        return false;
+        const json& transitions = doc["transitions"];
+        for (size_t index = 0; index < transitions.size(); ++index)
+        {
+            const json& item = transitions[index];
+            const std::string context = std::format("transitions[{}].", index);
+            reader.SetContext(context);
+            AnimationControllerTransition transition;
+            transition.DurationSeconds = 0.2f;
+            transition.ExitTimeSeconds = -1.0f;
+            transition.CanInterrupt = true;
+            reader.Read(item, "fromState", transition.FromState);
+            reader.Read(item, "toState", transition.ToState);
+            reader.Read(item, "durationSeconds", transition.DurationSeconds);
+            transition.DurationSeconds = std::max(0.0f, transition.DurationSeconds);
+            reader.Read(item, "exitTimeSeconds", transition.ExitTimeSeconds);
+            reader.Read(item, "canInterrupt", transition.CanInterrupt);
+            if (item.is_object() && item.contains("conditions") && item["conditions"].is_array())
+            {
+                const json& conditions = item["conditions"];
+                for (size_t conditionIndex = 0; conditionIndex < conditions.size(); ++conditionIndex)
+                {
+                    const json& condJson = conditions[conditionIndex];
+                    reader.SetContext(std::format("{}conditions[{}].", context, conditionIndex));
+                    AnimationTransitionConditionDef condition;
+                    std::string comparison = "Always";
+                    condition.FloatValue = 0.0f;
+                    condition.IntValue = 0;
+                    condition.BoolValue = false;
+                    reader.Read(condJson, "parameter", condition.Parameter);
+                    reader.Read(condJson, "comparison", comparison);
+                    reader.Read(condJson, "floatValue", condition.FloatValue);
+                    reader.Read(condJson, "intValue", condition.IntValue);
+                    reader.Read(condJson, "boolValue", condition.BoolValue);
+                    condition.Comparison = AnimationTransitionComparisonFromString(comparison);
+                    transition.Conditions.push_back(std::move(condition));
+                }
+            }
+            if (!transition.FromState.empty() && !transition.ToState.empty())
+                m_Transitions.push_back(std::move(transition));
+        }
     }
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
+
+    SetState(AssetState::Loaded);
+    return true;
+}
+
+bool AnimationController::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("AnimationController: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    Unload();
+    SetState(AssetState::Failed);
+    return false;
 }
 
 std::string AnimationController::SerializeJson() const

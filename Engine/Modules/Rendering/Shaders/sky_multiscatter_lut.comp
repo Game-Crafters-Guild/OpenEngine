@@ -178,5 +178,7 @@ void main()
     vec3 clampedFms = clamp(fms, vec3(0.0), vec3(0.9999));
     vec3 psiMs = L2 / (vec3(1.0) - clampedFms);
 
+    // Absolute scene-linear, never pre-exposed (P = 1 by construction): the passes that sample
+    // this LUT into scene colour apply the pre-exposure themselves.
     imageStore(oMultiscatterLUT, pixel, vec4(psiMs, 1.0));
 }

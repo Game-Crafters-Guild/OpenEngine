@@ -1,0 +1,137 @@
+---
+title: Script API markers
+description: How an engine author marks a function, a record, an enum, a handle, or an event for scripts, which kinds a declaration may use, and what the scanner refuses.
+---
+
+A script calls the engine through the module's script API. You declare that API once, in C++, in the module's script API headers. A marker comment on a declaration adds it to the module's script API description, `Engine/Scripting/engine-api/<Name>.json`.
+
+This page is for engine authors. It tells you how to mark a declaration, which kinds a declaration may use, and what the scanner refuses.
+
+:::note
+The build generates the native and the C# bindings from the description: [Exposing a function to scripts](../scripting/exposing-a-function.mdx) tells what each one is and which kinds they cross.
+:::
+
+## The facade headers
+
+A module's script API headers are the files `Engine/Modules/<Module>/Include/<Module>/*ScriptApi.h`. Each `<Name>ScriptApi.h` is the `<Name>` script module, with its own description, `Engine/Scripting/engine-api/<Name>.json`, and its own C# class: `Input/InputScriptApi.h` is `Input`, and `PhysicsECS/PhysicsScriptApi.h` is `Physics`. The scanner reads only these headers for markers. A marker in any other file under the module's `Include` folder fails the scan. So does a marker in a file under `Engine/Include` or `Engine/ECSModules`.
+
+The header declares free functions in the `GameEngine::<Module>::Script` namespace. Each function takes the system that it reaches as its first parameter. Its body is in the module, in `Source/<Module>ScriptApi.cpp`. Native code calls the same functions.
+
+```cpp title="Input/InputScriptApi.h"
+namespace GameEngine::Input::Script
+{
+
+/// True while the key is held down.
+// @ge-script @ge-context @ge-engine-thread
+bool IsKeyDown(InputSystem& input, Key key);
+
+} // namespace GameEngine::Input::Script
+```
+
+## How to mark a declaration
+
+A marker is a `//` comment that starts with the marker. Put it on the line directly above the declaration, or at the end of the declaration's first line. A run of comment lines can hold the markers and the documentation. A blank line ends the run. A marker on a `///` line fails the scan. A marker in an `#if 0` group or in a `/* */` block comment is not read.
+
+| Marker | On | Meaning |
+|---|---|---|
+| `@ge-script` | a free or static function | Scripts can call the function. |
+| `@ge-script` | a `struct` | A record: a value of plain fields that crosses as its bytes. |
+| `@ge-script` | an `enum class` with an explicit underlying type | An enum. |
+| `@ge-script-handle` | `using Name = StrongHandle<NameTag>;` or a `GenerationalVector::Handle` | A 64-bit generational handle. The value 0 means no object. |
+| `@ge-script-event <Delivery>` | `SubscriptionId Subscribe<Name>(scope, ScriptCallback<Payload> callback)` | An event. The scope is an entity or a handle. The payload is a record. |
+| `@ge-script-event` | `void Unsubscribe<Name>(SubscriptionId subscription)` | The end of the event's subscription. |
+| `@ge-script-try` | a function that returns `bool` and has one out parameter | A `false` result is an answer, not an error. |
+| `@ge-script-flags` | a marked `enum class` | Its values are bits that combine with `\|`. C# gets a `[Flags]` enum. |
+| `@ge-context` | a function or an event | The first parameter is the system the function reaches. The binding supplies it, so it is not in the description. |
+| `@ge-engine-thread` | a function | Call it on the main thread or in a job. |
+| `@ge-any-thread` | a function | Call it on any thread. |
+
+A `@ge-` word in a marker comment that is not in this table fails the scan, so a misspelled thread marker such as `@ge-any-thead` cannot leave a function on the main thread without a message.
+
+A function without a thread marker is for the main thread. An event's delivery tells when its handler runs:
+
+| Delivery | The handler runs |
+|---|---|
+| `PhysicsStep` | On the main thread, inside the physics step, after the simulation. |
+| `UiEventRouting` | On the main thread, while the UI routes the event. |
+
+## Documentation
+
+The `///` lines in the run are the entry's documentation. Write them for a game developer. Give the units and the conventions. Do not name a C++-only type or idiom.
+
+## The kinds
+
+A parameter, a return value, or a record field must be of a kind in this table. Write a qualified name as a tail of the full name: `Vector2`, `Mathematics::Vector2`, and `GameEngine::Mathematics::Vector2` are all `Vec2`. A marked type is found as C++ finds it: a type in a namespace around the declaration comes first. When two modules mark a type of the same name and neither is in a namespace around the declaration, qualify the name.
+
+| Kind | C++ type | Notes |
+|---|---|---|
+| `Bool` | `bool` | One byte. |
+| `Int8` to `Int64`, `UInt8` to `UInt64` | `std::int8_t` to `std::uint64_t`, `int8` to `uint64`, `int` | Fixed-width integers. `int` is `Int32`. |
+| `Float`, `Double` | `float`, `double`, `float32`, `float64` | |
+| `Angle` | `Mathematics::Radians` | An angle in radians. |
+| `Vec2`, `Vec3`, `Vec4` | `Mathematics::Vector2`, `Vector3`, `Vector4` | |
+| `Quat` | `Mathematics::Quaternion` | Stored x, y, z, w. The constructor takes w, x, y, z. |
+| `Mat4` | `Mathematics::Matrix4x4` | Column-major. |
+| `ColorLinear` | `ColorLinear` | Four floats, linear. |
+| `Entity` | `ECS::EntityHandle` | The packed 32-bit entity id. |
+| `StringId` | `StringId` | The 64-bit hash of a name. |
+| `String` | `std::string_view` | In parameters only. UTF-8. |
+| `Span` | `std::span<const T>` | In parameters only. `T` is a value kind or a record. |
+| `Record`, `Enum`, `Handle` | a type marked in a script API header | |
+| `Void` | `void` | A return type only. |
+
+A parameter passes in by value or as `const T&`. A `T&` parameter is an out parameter, which the function writes. A pointer parameter (`T*` or `const T*`) is refused. A function has one out parameter at most, and the out parameter comes before every parameter with a default.
+
+### Defaults
+
+A parameter default is one of these:
+
+- A literal of the parameter's kind: `true`, `0`, `0xFFu`, `1.0f`. The description writes it in one form for each kind: `0xFFu` is `255`, and `1.0f` and `1.f` are `1`.
+- An enumerator of the parameter's enum: `PointerLockState::Locked`.
+- `{}` on a record parameter. The record's own field defaults apply.
+- A `constexpr` scalar declared in the same header. The description keeps the literal and the constant's name.
+
+A record field has a default member initializer of the same forms. A field of kind `Vec2`, `Vec3`, `Vec4`, `Quat`, or `ColorLinear` takes a brace list of number literals in the constructor's order, or no initializer for the type's default. The description lists the components in memory order:
+
+| Kind | No initializer | Brace list |
+|---|---|---|
+| `Vec2`, `Vec3`, `Vec4` | zeros | `{x, y}`, `{x, y, z}`, `{x, y, z, w}` |
+| `Quat` | the identity, `0, 0, 0, 1` | `{w, x, y, z}`, described as x, y, z, w |
+| `ColorLinear` | `0, 0, 0, 1` | `{r, g, b}` (alpha 1) or `{r, g, b, a}` |
+| `Mat4` | the identity | refused: leave the field without an initializer |
+
+### Layout
+
+The scanner computes each record's size, alignment, and field offsets. It uses the natural alignment of each field and no packing. A `Bool` is one byte. The math kinds and `ColorLinear` align to 4 bytes.
+
+## What the scanner refuses
+
+The scan fails when a marked declaration breaks a rule. It prints each refusal as `error: <file>:<line>: <problem>. Fix: <fix>`, and it writes no description.
+
+| Refused | Fix |
+|---|---|
+| A marker with no declaration directly below it, such as a marker above a blank line | Put the marker on the line directly above the declaration, or delete it. |
+| A marked declaration in an `#if`, `#ifdef`, or `#ifndef` group (`#if 0` is ignored) | Move the declaration out of the group. A platform difference belongs in the function body. |
+| Two marked functions with the same name | Give each function its own name. |
+| A template | Declare one function for each type, each with its own name. |
+| An instance method, or a member function with `const` after its parameters | Declare a free function whose first parameter is the object, marked `@ge-context`. |
+| An enum without an explicit underlying type, or a plain `enum` | Declare `enum class Name : std::uint8_t`. |
+| A record field of a type that is not a kind | Use a kind, or mark the type. |
+| A standard container, such as a `std::vector` parameter | Take `std::span<const T>`, or `std::string_view` for text. |
+| A pointer parameter, a reference return, or a platform-sized integer | Take `T&` for the value the function writes and `const T&` or a span to read, return by value, or use a fixed-width integer. |
+| A handle alias that is not a generational handle | Alias `StrongHandle<NameTag>`. |
+| A marker in a module header that is not a `*ScriptApi.h`, or in `Engine/Include` or `Engine/ECSModules` | Move the declaration to a module's `Include/<Module>/<Module>ScriptApi.h`. |
+| A marker on a `///` line | Write the marker on its own `//` line. |
+| A type name that two modules mark, used from a third | Qualify the name, or rename one of the types. |
+| Two headers that name the same script module, such as two `SoundScriptApi.h` in two modules | Rename one of the headers. |
+| A `Mat4` field with an initializer | Leave the field without an initializer: it is the identity. |
+
+## Regenerate the description
+
+The build scans the script API headers. A refused declaration fails the build. The build does not change the committed description. After you change a marked declaration, regenerate the files and commit them with the header change:
+
+```bash title="Regenerate Engine/Scripting/engine-api"
+cmake --build --preset vs2026-x64-local --target UpdateEngineApi
+```
+
+`ApiDescriptionDriftTests`, in `ComponentScannerTests`, fails while a committed file differs from a fresh scan, and names the module file. The diff of `Engine/Scripting/engine-api/<Name>.json` in a pull request shows the change to that module's script API.

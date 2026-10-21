@@ -1,13 +1,13 @@
 ---
 title: Your first surface shader
-description: Author a custom lit surface entirely from your project directory, with no engine edits, no descriptor plumbing and no Vulkan.
+description: Author a custom lit surface entirely from your project directory, with no engine edits, no descriptor plumbing, and no Vulkan.
 ---
 
-A **surface shader** is a fragment of GLSL that describes *what a surface looks like*: colors, textures, normals, emission. The engine wraps it in an adapter that owns everything else: vertex I/O, descriptor sets, lighting (Forward+ clustered, shadows, IBL), and the OpenPBR BRDF. You write one function; the engine turns it into full pipeline variants.
+A **surface shader** is a fragment of GLSL that describes *what a surface looks like*: colors, textures, normals, emission. The engine wraps it in an adapter that owns everything else: vertex I/O, descriptor sets, lighting (Forward+ clustered, shadows, IBL), and the OpenPBR BRDF. You write one function. The engine turns it into full pipeline variants.
 
 ## 1 · Quick start
 
-Right-click a folder in the Assets browser → **Create → Surface Shader**. This creates a *pair*: `NewSurface.glsl` (a commented, compiling template demonstrating every mechanism below) and `NewSurface.material` pre-wired to it. Drag the .material onto a mesh; it renders immediately. Then open the .glsl (the material inspector's **Open Surface Shader in Editor** button) and start editing; saving recompiles and updates the scene.
+Right-click a folder in the Assets browser → **Create → Surface Shader**. This creates a *pair*: `NewSurface.glsl` (a commented, compiling template demonstrating every mechanism below) and `NewSurface.material` pre-wired to it. Drag the .material onto a mesh. It renders immediately. Then open the .glsl (the material inspector's **Open Surface Shader in Editor** button) and start editing. Saving recompiles and updates the scene.
 
 ## 2 · The contract
 
@@ -25,10 +25,10 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 }
 ```
 
-The full `SurfaceInput` / `SurfaceOutput` field lists live in `Engine/Modules/Rendering/Shaders/Includes/surface_io.glsl`: the input carries UVs, world position/normal/tangent, view direction, vertex color, per-slot UV transforms; the output carries the complete OpenPBR surface (base/metallic/roughness/normal/emissive/opacity plus coat, sheen, fuzz, anisotropy, subsurface, transmission, thin-film lanes). Start from `DefaultSurfaceOutput()` and write only what you use.
+The full `SurfaceInput` / `SurfaceOutput` field lists live in `Engine/Modules/Rendering/Shaders/Includes/surface_io.glsl`: the input carries UVs, world position/normal/tangent, view direction, vertex color, per-slot UV transforms. The output carries the complete OpenPBR surface (base/metallic/roughness/normal/emissive/opacity plus coat, sheen, fuzz, anisotropy, subsurface, transmission, thin-film lanes). Start from `DefaultSurfaceOutput()` and write only what you use.
 
 :::caution[Rules]
-No `#version`, no `layout(...)` declarations, no descriptor bindings: the adapter owns those. Read material parameters only through `Mat` (the per-instance material row the adapter fetches for you). Helper functions are fine; the file is included into the adapter as-is.
+No `#version`, no `layout(...)` declarations, no descriptor bindings: the adapter owns those. Read material parameters only through `Mat` (the per-instance material row the adapter fetches for you). Helper functions are fine. The file is included into the adapter as-is.
 :::
 
 ### Where the file can live
@@ -64,12 +64,12 @@ The .material assigns them by the same name, `"textures": { "dissolveMask": { ..
 A surface that declares any `@texture` name owns its slot set: a name it does not declare, well-known or not, binds nothing, and a .material that assigns one gets an `unknown texture key` warning naming the valid keys. A surface with no declarations keeps the fixed slots in the table.
 
 :::danger[Two hard-failure traps]
-Both fail loudly at compile, never silently: a surface that declares user `@texture` names must not *also* read slots by raw ordinal (`GE_SLOT_TEX(2)` or the triplanar helpers), because the packed name would alias the ordinal. And a comment line whose first token is `@texture` IS a declaration: when quoting the syntax in prose, don't start the line with the tag.
+Both fail loudly at compile, never silently: a surface that declares user `@texture` names must not *also* read slots by raw ordinal (`GE_SLOT_TEX(2)` or the triplanar helpers), because the packed name would alias the ordinal. And a comment line whose first token is `@texture` IS a declaration: when quoting the syntax in prose, do not start the line with the tag.
 :::
 
 A slot name works with four sampling forms: `texture(name, uv)`; `textureLod(name, uv, lod)`; `textureGrad(name, uv, uvPerPixelX, uvPerPixelY)`, for a UV whose own screen derivatives are meaningless (a UV displaced per pixel, as the standard surface's parallax does), with the footprint in repeats per pixel; and `textureSize(name, lod)`, in texels.
 
-Slot samples (the well-known names and `GE_USER_TEXTURE`) automatically receive the per-view TAAU texture-sharpness mip bias (the adapter's `texture()` overload adds `ge_mipBiasParams.x`; `textureGrad` scales the footprint by the same amount; `textureLod` takes the level as given). Raw-ordinal `GE_SLOT_TEX` sampling bypasses it; pass the bias explicitly if the texture carries surface detail (see `GE_SampleTriplanarSlot`).
+Slot samples (the well-known names and `GE_USER_TEXTURE`) automatically receive the per-view TAAU texture-sharpness mip bias (the adapter's `texture()` overload adds `ge_mipBiasParams.x`; `textureGrad` scales the footprint by the same amount; `textureLod` takes the level as given). Raw-ordinal `GE_SLOT_TEX` sampling bypasses it. Pass the bias explicitly if the texture carries surface detail (see `GE_SampleTriplanarSlot`).
 
 Per-slot tiling/offset authored on the material is applied with `GE_TransformUV`:
 
@@ -108,9 +108,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 | `int` | `int` | integer drag field |
 | `enum` | `int` (the index) | dropdown from `values=A,B,C` |
 
-`default=` is the single source of truth: the `.material` stores only what a material overrides, so a new material's file can have no `"properties"` at all. `group=` collects rows into a collapsible section (sections appear where their first member is declared); `visibleIf=name`, `visibleIf=name=value` and `visibleIf=name!=value` hide a row against another property, `alphaMode` or `lightingModel`; `hidden` stores a value without a row. The engine packs the storage (greedy first-fit into the 30-lane material block: 120 floats per surface; a following scalar takes a vec3's spare `.w`). Appending a declaration never moves an earlier property; inserting or reordering repacks the surface, which the edit's recompile already covers.
+`default=` is the single source of truth: the `.material` stores only what a material overrides, so a new material's file can have no `"properties"` at all. `group=` collects rows into a collapsible section (sections appear where their first member is declared). `visibleIf=name`, `visibleIf=name=value`, and `visibleIf=name!=value` hide a row against another property, `alphaMode`, or `lightingModel`. `hidden` stores a value without a row. The engine packs the storage (greedy first-fit into the 30-lane material block: 120 floats per surface; a following scalar takes a vec3's spare `.w`). Appending a declaration never moves an earlier property. Inserting or reordering repacks the surface, which the edit's recompile already covers.
 
-Every declaration error (unknown type, malformed `range=`, the same name declared with two types, more than 120 floats, `Mat.<name>` where `Props.<name>` was meant) fails the compile with `your_file.glsl:<line>` in the Shader Errors panel and the material inspector; the material keeps its last good shader. A declared property the file never reads is a warning. Textures are still declared with `@texture` (§3), and `keyword=` on a bool is not wired yet: use `"keywords"` (§5).
+Every declaration error (unknown type, malformed `range=`, the same name declared with two types, more than 120 floats, `Mat.<name>` where `Props.<name>` was meant) fails the compile with `your_file.glsl:<line>` in the Shader Errors panel and the material inspector. The material keeps its last good shader. A declared property the file never reads is a warning. Textures are still declared with `@texture` (§3), and `keyword=` on a bool is not wired yet: use `"keywords"` (§5).
 
 ## 5 · Keywords (static variants)
 
@@ -163,7 +163,7 @@ Nothing yet cross-checks that a material keyword is consumed by the surface (or 
 }
 ```
 
-The editor writes GUID references alongside paths when you assign assets through the inspector; hand-authored paths self-heal into GUIDs. `alphaMode` owns blending: the shader just writes `o.opacity` (`Mask` discards below the adapter's `alphaCutoff` property; declare it in your surface to expose the slider; `Blend` composites it). A key no declaration owns is stored but never reaches the shader; the inspector lists it with the nearest declared name.
+The editor writes GUID references alongside paths when you assign assets through the inspector. Hand-authored paths self-heal into GUIDs. `alphaMode` owns blending: the shader just writes `o.opacity` (`Mask` discards below the adapter's `alphaCutoff` property; declare it in your surface to expose the slider; `Blend` composites it). A key no declaration owns is stored but never reaches the shader. The inspector lists it with the nearest declared name.
 
 ## 8 · The iteration loop
 
@@ -189,13 +189,13 @@ Materials referencing your file recompile automatically on save: the file watche
 
 The second rule has one precondition: the material must have *compiled at least once this session*, because the closure is recorded by a build. Before that first build there is nothing for an include edit to match, and the manual **Recompile Shader** button is the way through. Authored references carry no such precondition.
 
-A `.Cache/Shaders` purge is **not** part of the fix for a missed trigger: a stale trigger is not a stale cache. The disk cache key hashes the CONTENT of every file in a shader's `#include` closure (your surface, the helpers it pulls in, the adapters, the engine `Includes/*.glsl`, at any depth), so once a recompile does run (the button, a material re-register, or an editor restart) it cannot serve a package built from the old bytes. That holds even when the edit leaves the file's timestamp and byte length untouched, which is what a timestamp-preserving copy or sync produces; the old key covered only the top-level composed source and leaned on a timestamp comparison, so those edits could silently serve pre-edit SPIR-V. If you have been purging `.Cache/Shaders` after touching adapters or includes, that habit is no longer needed.
+A `.Cache/Shaders` purge is **not** part of the fix for a missed trigger: a stale trigger is not a stale cache. The disk cache key hashes the CONTENT of every file in a shader's `#include` closure (your surface, the helpers it pulls in, the adapters, the engine `Includes/*.glsl`, at any depth), so once a recompile does run (the button, a material re-register, or an editor restart) it cannot serve a package built from the old bytes. That holds even when the edit leaves the file's timestamp and byte length untouched, which is what a timestamp-preserving copy or sync produces. The old key covered only the top-level composed source and leaned on a timestamp comparison, so those edits could silently serve pre-edit SPIR-V. If you have been purging `.Cache/Shaders` after touching adapters or includes, that habit is no longer needed.
 
 Recompiles are also *budgeted*: the drain runs a small fixed number of material recompiles per frame and carries the rest to following frames, so a surface shared by many materials spreads its cost instead of stalling one frame on every compile. Materials still awaiting their turn keep their last-good shader on screen.
 
 ## 9 · When it breaks
 
-A material whose shader has *never* compiled draws nothing (the mesh is invisible, not magenta): the draw is skipped rather than fed a broken pipeline. A material that compiled before keeps its last good shader on screen while you fix the error. Where to look, and what you'll see:
+A material whose shader has *never* compiled draws nothing (the mesh is invisible, not magenta): the draw is skipped rather than fed a broken pipeline. A material that compiled before keeps its last good shader on screen while you fix the error. Where to look, and what you will see:
 
 | Surface | Behavior |
 |---|---|
@@ -214,13 +214,3 @@ The Material Graph panel (NodeGraphPanel in Material mode) builds surfaces visua
 :::note
 A surface shader is a lit shader graph written as text: `EvaluateSurface` is your graph, `SurfaceOutput` is the master stack, keywords are static feature branches, and the `@property` lines are the material's property block: a ranged float with a display name and a default is `// @property float foo "Foo" default=0.5 range=0,1`, read as `Props.foo`. Textures still come from `@texture` tags for now. The adapter (`adapter_forward.glsl`) is the lit pass library: lighting, shadows, instancing, and depth/shadow variants are inherited, never written.
 :::
-
-## Changelog
-
-- 2026-10-12: Converted from `Engine/Modules/Rendering/docs/SurfaceShaderAuthoring.html`; American spelling (color swatch).
-- 2026-10-01: §11 retitled and restated without other engines' names.
-- 2026-09-28: §3 states that a declaring surface owns its slot set and lists the textureGrad and textureSize forms.
-- 2026-08-28: §5 caveat scoped to the "keywords" list and reconciled against §4's hard errors.
-- 2026-08-26: §4 rewritten for declared properties (`@property` / `Props`; the uUser lanes are gone), §7 and §11 updated; the contract verified against surface_io.glsl / adapter_forward.glsl / ShaderComposer.cpp at the time of writing.
-- 2026-07-27: §8 rewritten for the include-closure trigger.
-- 2026-07-24: First version.

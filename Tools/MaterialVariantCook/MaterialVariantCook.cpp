@@ -36,9 +36,16 @@
 // terrain grass placement's), reported on the same "ok" lines, so an export
 // ships them with the materials.
 //
+// Beside the programs, the cook writes the cache's program index
+// (ShaderProgramIndex, program-index.bin): each cooked variant's build inputs
+// mapped to its program, so the runtime that ships the cache loads a variant's
+// program without composing its source or hashing its include closure. Every
+// run rewrites it from that run's variants.
+//
 // --verify re-resolves every cooked variant with the compiler switched off,
-// which is the same code path the shipped runtime takes. A variant that only
-// resolves with a compiler present is a cook that did not actually land.
+// which is the same code path the shipped runtime takes, and checks the program
+// index serves every variant. A variant that only resolves with a compiler
+// present is a cook that did not actually land.
 //
 // --web cooks the WebGPU-class profile: the compat shader profile (no
 // buffer_device_address, no descriptor indexing — the two things naga refuses
@@ -81,10 +88,12 @@
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "CBTTerrainECS/CBTTerrainMaterial.h"
 #include "EZTreeECS/EZTreeRuntimeMaterials.h"
 #include "TerrainGrass/GrassComputePrograms.h"
 #include "TerrainGrass/GrassDrawMode.h"
+#include "TerrainGrass/GrassMaterialKeywords.h"
 #include "Ocean/OceanSurfaceMaterial.h"
 #include "Platform/Process.h"
 #include "CookWorkers.h"
@@ -620,6 +629,11 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
                          Ocean::BuildOceanSurfaceMaterialDocument(), {}};
         ocean.Variants.push_back({"ocean-forward", Ocean::OceanSurfaceMaterialKeywords(web),
                                   VertexAttributeFlags::None});
+        // The fogged surface (OceanSurfaceFogMaterialGuid), drawn by a view whose height fog is active.
+        if (!web)
+            ocean.Variants.push_back({"ocean-forward-fog",
+                                      Ocean::OceanSurfaceMaterialKeywords(web) | MaterialKeyword::HeightFog,
+                                      VertexAttributeFlags::None});
         targets.push_back(std::move(ocean));
     }
 
@@ -668,6 +682,9 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
         terrain.Variants.push_back({"cbt-forward-ddgi-gtao-sssr",
                                     base | MaterialKeyword::DDGI | MaterialKeyword::GTAO |
                                         MaterialKeyword::SSSRNormalRoughness,
+                                    VertexAttributeFlags::None});
+        // The height fog re-keys the colour pass the same way, in the shipped templates on its own.
+        terrain.Variants.push_back({"cbt-forward-fog", base | MaterialKeyword::HeightFog,
                                     VertexAttributeFlags::None});
         targets.push_back(std::move(terrain));
     }
@@ -720,9 +737,7 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
         // its rows key on a different define set — HAS_VERTEX_MODIFIER missing —
         // and the cooked-only runtime resolves nothing for the draw.
         const MaterialKeyword base =
-            MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::Instanced |
-            MaterialKeyword::IBL | MaterialKeyword::ProceduralVertexOutput |
-            MaterialKeyword::HasVertexMod;
+            TerrainGrass::kGrassMaterialKeywords | MaterialKeyword::HasVertexMod;
         // None resolves to StandardMesh inside the build (MaterialBuildService),
         // which is what the blade draw asks for.
         const VertexAttributeFlags bladeFlags = VertexAttributeFlags::None;
@@ -773,6 +788,8 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
                                       base | MaterialKeyword::DDGI | MaterialKeyword::GTAO |
                                           MaterialKeyword::SSSRNormalRoughness,
                                       bladeFlags});
+            grass.Variants.push_back(
+                {"grass-forward-fog", base | MaterialKeyword::HeightFog, bladeFlags});
             targets.push_back(std::move(grass));
         }
     }
@@ -896,6 +913,10 @@ struct RowBuild
     bool Success = false;
     std::vector<std::string> Errors;
     std::string PackagePath;
+    // The key the program index addresses this row's program by (MaterialBuildResult::programIndexKey).
+    uint64_t ProgramIndexKey = 0;
+    // The files the build read (MaterialBuildResult::includeClosurePaths): the index records them.
+    std::vector<std::string> SourcePaths;
     std::string VertexSource;
     std::string FragmentSource;
     std::vector<std::string> Defines;
@@ -915,7 +936,8 @@ RowBuild BuildRow(const CookRow& row, bool web)
 {
     MaterialBuildResult result = row.Target->Builder.Build(
         ShaderSourceKind::SpirV, row.Variant.PassKeywords, row.Variant.VertexFlags);
-    RowBuild build{result.success, std::move(result.errors), std::move(result.generatedShaderPkgPath)};
+    RowBuild build{result.success, std::move(result.errors), std::move(result.generatedShaderPkgPath),
+                   result.programIndexKey, std::move(result.includeClosurePaths)};
     if (web)
     {
         build.VertexSource = std::move(result.composedVertexSource);
@@ -957,6 +979,36 @@ bool CopyIntoCache(std::string& packagePath, const fs::path& fromCache, const fs
     }
     packagePath = destination.string();
     return true;
+}
+
+// The program index entry of a built row: its input key and its package's path under `cache`.
+// Empty when the package does not lie under the cache (it was not copied in).
+std::optional<ShaderProgramIndex::Entry> ProgramIndexEntry(const RowBuild& build, const std::string& packagePath,
+                                                           const fs::path& cache)
+{
+    if (build.ProgramIndexKey == 0 || !IsUnderRoot(packagePath, cache))
+        return std::nullopt;
+    const fs::path relative =
+        AssetPaths::NormalizeMountRoot(packagePath).lexically_relative(AssetPaths::NormalizeMountRoot(cache));
+    return ShaderProgramIndex::Entry{build.ProgramIndexKey, relative.generic_string()};
+}
+
+// Checks the written index the way the runtime reads it: loaded for this cook's compile inputs,
+// every entry found under its key and naming its row's package. Returns the rows it does not serve.
+std::vector<std::string> UnservedByProgramIndex(const fs::path& indexPath,
+                                                const std::vector<ShaderProgramIndex::Entry>& entries,
+                                                const MaterialBuildContext& context)
+{
+    std::string reason;
+    const std::shared_ptr<const ShaderProgramIndex> index = ShaderProgramIndex::Load(indexPath, context, &reason);
+    if (!index)
+        return {reason};
+    std::vector<std::string> unserved;
+    for (const ShaderProgramIndex::Entry& entry : entries)
+        if (AssetPaths::NormalizeMountRoot(index->Find(entry.InputKey)) !=
+            AssetPaths::NormalizeMountRoot(index->CacheRoot() / entry.PackagePath))
+            unserved.push_back(entry.PackagePath);
+    return unserved;
 }
 
 void PrintUsage(std::ostream& out)
@@ -1071,6 +1123,11 @@ int main(int argc, char** argv)
     // are collected and run concurrently afterwards, so no translation runs while a build can
     // still rewrite its package. The results are reported in row order whatever order the
     // builds and translations finish in: the export reads these lines.
+    // The index is rewritten from this run's rows only, so one left by an earlier cook never ships
+    // beside programs it does not describe.
+    const fs::path programIndexPath = context.CacheRoot / kShaderProgramIndexFileName;
+    std::error_code removeError;
+    fs::remove(programIndexPath, removeError);
     const std::vector<CookRow> rows = CookRows(targets, context, options.Web);
     const std::vector<RowBuild> builds = BuildRows(rows, jobs, options.Web);
     size_t reused = 0;
@@ -1137,8 +1194,11 @@ int main(int argc, char** argv)
 
     size_t cooked = 0;
     size_t webTranslationsReused = 0;
-    for (const VariantOutcome& outcome : outcomes)
+    std::vector<ShaderProgramIndex::Entry> programIndexEntries;
+    std::unordered_set<std::string> programIndexSourceSet;
+    for (size_t index = 0; index < outcomes.size(); ++index)
     {
+        const VariantOutcome& outcome = outcomes[index];
         if (!outcome.Built)
         {
             std::cerr << ResultLines("  FAIL " + outcome.Label, outcome.BuildErrors);
@@ -1154,7 +1214,21 @@ int main(int argc, char** argv)
         if (outcome.SharesTranslation)
             ++webTranslationsReused;
         ++cooked;
+        if (std::optional<ShaderProgramIndex::Entry> entry =
+                ProgramIndexEntry(builds[index], outcome.PackagePath, context.CacheRoot))
+        {
+            programIndexEntries.push_back(std::move(*entry));
+            programIndexSourceSet.insert(builds[index].SourcePaths.begin(), builds[index].SourcePaths.end());
+        }
         std::cout << ResultLines("  ok   " + outcome.Label + " -> " + outcome.PackagePath, {});
+    }
+    std::string programIndexError;
+    const std::vector<fs::path> programIndexSources(programIndexSourceSet.begin(), programIndexSourceSet.end());
+    if (!ShaderProgramIndex::Write(programIndexPath, programIndexEntries, programIndexSources, context,
+                                   &programIndexError))
+    {
+        std::cerr << ResultLines("  FAIL program index", {programIndexError});
+        ++failed;
     }
 
     const fs::path engineShaders = fs::absolute(options.EngineShaders);
@@ -1223,6 +1297,12 @@ int main(int argc, char** argv)
             if (!BuildComputeProgram(row, context, programError).empty())
                 continue;
             std::cerr << ResultLines("  UNSERVED " + row.Target + " [" + row.Variant + "]", {programError});
+            ++unserved;
+        }
+        // The runtime finds a cooked variant through the index before it composes anything.
+        for (const std::string& missing : UnservedByProgramIndex(programIndexPath, programIndexEntries, context))
+        {
+            std::cerr << ResultLines("  UNSERVED program index", {missing});
             ++unserved;
         }
         ShaderCompileService::SetCompilerAvailable(true);

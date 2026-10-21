@@ -1,6 +1,6 @@
 ---
 title: Compile server
-description: The cross-platform compile server the editor and tools use for C# scripts, with its transports, lifetime, wire protocol, native client and the language settings scripts compile with.
+description: The cross-platform compile server the editor and tools use for C# scripts, with its transports, lifetime, wire protocol, native client, and the language settings scripts compile with.
 ---
 
 This page describes the cross-platform compile server used by the Editor and tools, the wire protocol, transports, and how the native client interacts with the managed host.
@@ -10,7 +10,7 @@ This page describes the cross-platform compile server used by the Editor and too
 - **Managed host:** `GameEngine.CompileServerHost` (`Managed/CompileServerHost`)
   - Built as `GameEngine.CompileServerHost.dll` for .NET 10.
   - Repository build output: `Managed/CompileServerHost/bin/<Config>/net10.0/GameEngine.CompileServerHost.dll`, where `<Config>` is the selected build configuration (for example, `DebugFast`).
-  - The editor stages the host under the same `Managed/CompileServerHost/bin/<Config>/net10.0` layout beside the application; macOS app bundles use `Contents/Resources`.
+  - The editor stages the host under the same `Managed/CompileServerHost/bin/<Config>/net10.0` layout beside the application. macOS app bundles use `Contents/Resources`.
   - Native discovery checks bundle resources, then searches upward from the current working directory and executable directory. At each location it prefers its own configuration, then probes `DebugFast`, `RelWithDebInfo`, `Debug`, `Release`, and `MinSizeRel`. `CompileServerHost.dll` is accepted as a legacy filename. There is no single shared Debug-only output.
 - **Native client:** `GameEngine::CompileServerClient` + `PipeTransport` (`Engine/Source/Jobs`).
   - Used by scripting / Editor to offload C# compilation to a long-lived Roslyn process.
@@ -47,7 +47,7 @@ This page describes the cross-platform compile server used by the Editor and too
 ## Host lifetime and idle shutdown
 
 - On startup the host writes `<Temp>/GE_CompileServer/<pipe>.pid`: line 1 its process ID, line 2 the full path of the `GameEngine.CompileServerHost.dll` it runs from. Once per process, before it first launches a host, the client deletes stale files: files without the path line, files whose process has exited (a host that was killed leaves its file behind), and on Windows files whose process ID now belongs to a process started after the file was written.
-- Building the host stops only the host running from that build's own output DLL: that host would keep serving the replaced code, and on Windows it keeps the file it loaded open, so the copy would fail. The build first runs `--shutdown-running-from` with the previous output; on Windows a host that did not answer is then force-stopped through line 2 of the PID files. Hosts running from other worktrees or from an editor's staged copy keep running; a host from an older protocol version is replaced by the client's version check on its next compile.
+- Building the host stops only the host running from that build's own output DLL: that host would keep serving the replaced code, and on Windows it keeps the file it loaded open, so the copy would fail. The build first runs `--shutdown-running-from` with the previous output. On Windows a host that did not answer is then force-stopped through line 2 of the PID files. Hosts running from other worktrees or from an editor's staged copy keep running. A host from an older protocol version is replaced by the client's version check on its next compile.
 - The server tracks:
   - `s_StartTimeUtc` – start time.
   - `s_LastActivityUtc` – last successful compile request.
@@ -57,9 +57,9 @@ This page describes the cross-platform compile server used by the Editor and too
   - `0` disables idle shutdown.
 - When the idle timeout elapses with no compile requests, the server exits and deletes its PID/socket.
 - **Host ownership:** a host belongs to the process that launched it (the Editor, or a test run). Its pipe name is keyed to the workspace, so another process on the same workspace may use it while it runs, but it never outlives its launcher:
-  - **Orderly shutdown:** `ScriptManager::Shutdown` stops every host the process launched for a compile: it terminates the host, waits at most 2 seconds for it to exit and deletes its PID file. The stop needs no reply from the host, so a hung host cannot hold up the Editor's exit. The log records each host's process ID and the outcome.
+  - **Orderly shutdown:** `ScriptManager::Shutdown` stops every host the process launched for a compile: it terminates the host, waits at most 2 seconds for it to exit, and deletes its PID file. The stop needs no reply from the host, so a hung host cannot hold up the Editor's exit. The log records each host's process ID and the outcome.
   - **Forced stop or crash:** the client passes `--parent-pid <launcher pid>`, and the host exits when that process exits. The launch path also binds the host to the launcher at the OS level:
-    - **Windows:** the host is created suspended, assigned to a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed; the OS kills it when the launcher exits for any reason.
+    - **Windows:** the host is created suspended, assigned to a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed. The OS kills it when the launcher exits for any reason.
     - **Linux:** the forked child sets `PR_SET_PDEATHSIG` (`SIGKILL`).
     - **macOS:** no OS-level parent-death hook; the `--parent-pid` watch is the binding.
 
@@ -121,7 +121,7 @@ Semantics:
 - `EngineBinDir` (optional):
   - Tells the server where to find `GameEngine.Scripting.ABI.dll`, `GameEngine.CoreBridge.dll`, and `GameEngine.HotReload.dll` for metadata references.
   - If omitted, the server tries to infer this from `ProjectRoot` or its own `AppContext.BaseDirectory`.
-- `AllowUnsafe`, `ImplicitUsings`, `Nullable` (optional, absent means `false`): the language settings of the generated csproj (`AllowUnsafeBlocks`, `ImplicitUsings`, `Nullable`), so the live compile accepts and warns about exactly what `dotnet build` of that csproj does. The editor sends all three as `true` for project scripts, editor scripts and package C# modules.
+- `AllowUnsafe`, `ImplicitUsings`, `Nullable` (optional, absent means `false`): the language settings of the generated csproj (`AllowUnsafeBlocks`, `ImplicitUsings`, `Nullable`), so the live compile accepts and warns about exactly what `dotnet build` of that csproj does. The editor sends all three as `true` for project scripts, editor scripts, and package C# modules.
   - `AllowUnsafe` permits `unsafe` blocks and pointer types.
   - `ImplicitUsings` adds the global usings of `Microsoft.NET.Sdk`: `System`, `System.Collections.Generic`, `System.IO`, `System.Linq`, `System.Net.Http`, `System.Threading`, `System.Threading.Tasks`.
   - `Nullable` enables the nullable context, so nullable warnings such as `CS8602` are reported. It changes diagnostics only, never whether a compile succeeds.
@@ -129,10 +129,10 @@ Semantics:
 
 ### Language settings for script authors
 
-Project scripts, editor scripts and the C# modules of packages all compile with the same settings, whether the editor compiles them live, you build the generated `.csproj` with `dotnet build`, or a ship-optimized export compiles them ahead of time:
+Project scripts, editor scripts, and the C# modules of packages all compile with the same settings, whether the editor compiles them live, you build the generated `.csproj` with `dotnet build`, or a ship-optimized export compiles them ahead of time:
 
 - `unsafe` code is allowed.
-- The implicit usings listed above are in scope, so `List<T>`, `File`, `Task` or LINQ need no `using` directive.
+- The implicit usings listed above are in scope, so `List<T>`, `File`, `Task`, or LINQ need no `using` directive.
   - A type of your own with the same name as a type in those namespaces (`Path`, `Timer`, `Task`, `Thread`, `Lock`) is ambiguous (`CS0104`) in a file that imports its namespace with a `using` directive. Qualify the name (`MyGame.Nav.Path`) or add an alias in that file (`using Path = MyGame.Nav.Path;`).
 - The nullable context is enabled: `string?` marks a reference that may be null, and dereferencing one without a check produces a warning, not an error.
 
@@ -161,7 +161,7 @@ Notes:
 High-level flow for `CompileServerClient::Compile`:
 
 1. Ensure a `PipeTransport` exists for the configured pipe name.
-2. Attempt to connect; if it fails, call `StartServerIfNeeded()`:
+2. Attempt to connect. If it fails, call `StartServerIfNeeded()`:
    - Locates `GameEngine.CompileServerHost.dll` using the configuration and location search described above.
    - Starts `dotnet GameEngine.CompileServerHost.dll <pipe>` (via `CreateProcessW` on Windows, `fork/execvp` on Unix).
    - Waits for the server to accept connections (up to ~10 seconds).
@@ -173,7 +173,7 @@ High-level flow for `CompileServerClient::Compile`:
 5. Parse the `BuildResponse` JSON and base64-decode `AssemblyBytes` / `PdbBytes`.
 6. If `Success == false`, log a summarized diagnostic block and return `false`.
 
-The client has a budget of three attempts with backoff when no host is coming. While a host it has just launched is still warming up, the retries extend, bounded by a fixed budget, so a cold start does not fall back early. Then it gives up. `ScriptManager` then builds with the `dotnet` command line only when `GE_ALLOW_CLI_FALLBACK=1` is set; otherwise it logs that the fallback is disabled.
+The client has a budget of three attempts with backoff when no host is coming. While a host it has just launched is still warming up, the retries extend, bounded by a fixed budget, so a cold start does not fall back early. Then it gives up. `ScriptManager` then builds with the `dotnet` command line only when `GE_ALLOW_CLI_FALLBACK=1` is set. Otherwise it logs that the fallback is disabled.
 
 ## Testing and workflows
 
@@ -191,7 +191,7 @@ The client has a budget of three attempts with backoff when no host is coming. W
 
 ## Useful command-line commands
 
-From the repository root, use the configuration that was built; the examples below use `DebugFast`. For a staged application, use its managed host path:
+From the repository root, use the configuration that was built. The examples below use `DebugFast`. For a staged application, use its managed host path:
 
 - Query status for a specific pipe:
   - `dotnet Managed/CompileServerHost/bin/DebugFast/net10.0/GameEngine.CompileServerHost.dll --status GE_CompileServer_smoke`
@@ -205,7 +205,3 @@ From the repository root, use the configuration that was built; the examples bel
 These commands use the same transports and control messages as the native client and are safe to use during development to inspect or recycle compile-server instances.
 
 On Windows hosts that also run Linux tests inside Docker (for example via `Tools/Scripts/run-linux-editor-iol-test.ps1` or `Tools/Scripts/run-linux-scripting-smoke-tests.ps1`), it is important to avoid leaving background `GameEngine.CompileServerHost.dll` processes running while a container build is rebuilding the host into a shared `Managed/CompileServerHost/bin/<Config>/net10.0` output. The Linux harnesses perform a **pre-flight shutdown** of any such Windows-hosted compile-server processes before invoking `dotnet build` to avoid MSB3021 "Access to the path ... is denied" errors when copying the host DLL on a shared volume.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/scripting/CompileServer.md`; section numbers dropped; the in-process compiler references (removed from the engine) replaced: the request's file lists are described directly, and the fallback after failed retries is the `dotnet` command line under `GE_ALLOW_CLI_FALLBACK=1`.

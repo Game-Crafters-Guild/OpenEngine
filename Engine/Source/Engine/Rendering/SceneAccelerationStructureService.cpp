@@ -112,8 +112,8 @@ SceneAccelerationStructureService::BlasSourceKey SceneAccelerationStructureServi
 {
     BlasSourceKey k{};
     k.ContentHash      = entry.contentHash;
-    k.CoreOffsetBytes  = entry.coreSubAlloc.offset;
-    k.IndexOffsetBytes = entry.indexSubAlloc.offset;
+    k.CoreOffsetBytes  = entry.coreSubAlloc.Offset;
+    k.IndexOffsetBytes = entry.indexSubAlloc.Offset;
     k.BucketKey        = static_cast<uint32_t>(entry.bucketKey);
     k.CorePoolIndex    = entry.corePoolIndex;
     k.IndexPoolIndex   = entry.indexPoolIndex;
@@ -199,7 +199,7 @@ void SceneAccelerationStructureService::SweepRegistryForNewBlas()
             g.VertexAddress     = m_Device->GetBufferDeviceAddress(bindings.coreVB);
             g.VertexStrideBytes = coreStrideBytes;
             g.FirstVertex       = entry.vertexOffset;
-            const uint64_t localVertexCount = entry.coreSubAlloc.size / coreStrideBytes;
+            const uint64_t localVertexCount = entry.coreSubAlloc.Size / coreStrideBytes;
             if (localVertexCount == 0)
                 return;
             g.MaxVertex    = entry.vertexOffset + static_cast<uint32_t>(localVertexCount) - 1u;

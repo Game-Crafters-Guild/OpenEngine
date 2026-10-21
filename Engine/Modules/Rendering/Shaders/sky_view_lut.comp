@@ -1,10 +1,18 @@
 #version 450
 
+#include "Includes/moon_disc.glsl"
 #include "Includes/sky_composite.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+// Absolute radiance from a noon sky down to a moonless night (8e-7): binary32, as
+// SkyRenderer::SkyViewLutFormat creates it. The compat (WebGPU) kernel keeps binary16, whose
+// 32-bit float filtering is an optional feature there.
+#if defined(GE_COMPAT_PROFILE)
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D oSkyViewLUT;
+#else
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D oSkyViewLUT;
+#endif
 
 layout(set = 0, binding = 1) uniform sampler2D uTransmittanceLUT;
 
@@ -30,14 +38,32 @@ layout(set = 0, binding = 3) uniform SkyUBO
     float timeOfDayHours;     float skyPad0;
     float viewportAspect;     float tanHalfFovY;
     vec2  viewportResolution; float nightSkyBlend; float skyTimeSeconds;
-    vec4  starSizeShape;
-    vec4  starTwinkleParams;
-    vec4  starTwinkleAmp;
-    vec4  starDensityHorizon;
-    vec4  starSizeRange;
+    vec4  starModel;    // x = limiting magnitude, y = highlight compression, z = scintillation, w = twinkle speed
+    vec4  skyboxParams; // x = HDRI rotation radians; y = HDRI intensity if >= 0, else the procedural sky
 } uSky;
 
 const float PI = 3.14159265359;
+
+// A source's in-scatter at a march sample, per unit length: single scattering with the source's
+// transmittance to the top of the atmosphere (0 in the planet's shadow) and the aerosol and Rayleigh
+// phases, plus Hillaire's multiple scattering, whose LUT is per unit white source and keyed by the
+// source's zenith, so the sun and the moon read the same LUT.
+vec3 SourceInScatter(vec3 rayDir, vec3 upP, float r, float h, vec3 sigmaS_Ray, vec3 sigmaS_Mie,
+                     vec3 srcDir, vec3 srcRadiance)
+{
+    float srcZenith = dot(upP, srcDir);
+    vec3 transToSrc = GE_SkyTransmittanceToTop(uTransmittanceLUT, r, srcZenith,
+                                               uAtmos.planetRadius, uAtmos.atmosphereRadius);
+    float mu = dot(rayDir, srcDir);
+    float phaseRay = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+    float phaseMie = GE_SkyAerosolPhase(mu);
+    vec3 single = (sigmaS_Ray * phaseRay + sigmaS_Mie * phaseMie) * transToSrc;
+    vec2 msSize = vec2(textureSize(uMultiscatterLUT, 0));
+    vec3 msSample = textureLod(uMultiscatterLUT,
+        GE_SkyMultiscatterLutUv(srcZenith, h / (uAtmos.atmosphereRadius - uAtmos.planetRadius), msSize),
+        0.0).rgb;
+    return (single + (sigmaS_Ray + sigmaS_Mie) * msSample) * srcRadiance;
+}
 
 void main()
 {
@@ -47,10 +73,24 @@ void main()
     vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
 
     vec3 sunDir = normalize(uSky.sunDirectionWS);
+    vec3 moonDir = normalize(uSky.moonDirectionWS);
     vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
     vec3 camPos = uSky.cameraPositionWS;
     float camHeight = length(camPos - planetCenter);
     vec3 up = (camPos - planetCenter) / camHeight;
+
+    // Two sources, each only while it can matter (uniform across the dispatch): the sun until it is
+    // 20 degrees under, where the planet's shadow has taken its in-scatter below the night sky's own
+    // glow; the moon while it is up to 20 degrees under and the sun is below 10 degrees, above which
+    // the sun outshines it by a million. So a day or a deep-night bake runs one source and only the
+    // twilight band, with both bodies near the horizon, runs two.
+    const float kSourceFloorUp = -0.342;  // sin(-20 degrees)
+    const float kMoonSunCeilingUp = 0.174; // sin(10 degrees)
+    bool sunActive = uSky.sunIntensity > 0.0 && dot(sunDir, up) > kSourceFloorUp;
+    bool moonActive = uSky.moonIntensity > 0.0 && dot(moonDir, up) > kSourceFloorUp &&
+                      dot(sunDir, up) < kMoonSunCeilingUp;
+    vec3 sunRadiance = uSky.sunColor * uSky.sunIntensity;
+    vec3 moonRadiance = GE_MOON_TINT * uSky.moonIntensity;
 
     // Azimuth/elevation directions in the camera/planet-local horizon frame
     // (same mapping the render + capture passes encode with). No polar
@@ -141,30 +181,13 @@ void main()
         // Step Transmittance
         vec3 stepTrans = exp(-sigmaE * dt);
 
-        // Sunlight reaching the sample: the transmittance to the top of the atmosphere along
-        // the sun ray, 0 where the planet is in the way (the planet's shadow).
+        // The sources' light reaching the sample, single and multiple scattering.
         vec3 upP = (p - planetCenter) / r;
-        float sunZenith = dot(upP, sunDir);
-        vec3 transToSun = GE_SkyTransmittanceToTop(uTransmittanceLUT, r, sunZenith,
-                                                   uAtmos.planetRadius, uAtmos.atmosphereRadius);
-        
-        // Phase Functions
-        float mu = dot(rayDir, sunDir);
-        float phaseRay = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
-        float phaseMie = GE_SkyAerosolPhase(mu);
-        
-        vec3 S = (sigmaS_Ray * phaseRay + sigmaS_Mie * phaseMie) * transToSun * uSky.sunColor * uSky.sunIntensity;
-
-        // Multiple scattering (Hillaire 2020): the Psi_ms LUT stores the
-        // infinite-bounce in-scatter per unit scattering coefficient for the
-        // sun illuminance normalized to white. The scattering coefficient at
-        // this altitude (Rayleigh + Mie) modulates it; the real sun color /
-        // intensity is applied here (the LUT used white). Isotropic — no phase.
-        vec2 msSize = vec2(textureSize(uMultiscatterLUT, 0));
-        vec3 msSample = textureLod(uMultiscatterLUT,
-            GE_SkyMultiscatterLutUv(sunZenith, h / (uAtmos.atmosphereRadius - uAtmos.planetRadius), msSize),
-            0.0).rgb;
-        vec3 multiScatter = (sigmaS_Ray + sigmaS_Mie) * msSample * uSky.sunColor * uSky.sunIntensity;
+        vec3 inScatter = vec3(0.0);
+        if (sunActive)
+            inScatter += SourceInScatter(rayDir, upP, r, h, sigmaS_Ray, sigmaS_Mie, sunDir, sunRadiance);
+        if (moonActive)
+            inScatter += SourceInScatter(rayDir, upP, r, h, sigmaS_Ray, sigmaS_Mie, moonDir, moonRadiance);
 
         // Hillaire 2020's energy-conserving step integral: the in-scatter source is held
         // constant over the step and integrated against the transmittance from the
@@ -172,10 +195,11 @@ void main()
         // the path transmittance advances. Weighting by the transmittance after the step
         // instead darkens long steps (17.7 km for an even 64-step horizon ray, blue optical depth
         // 0.63 on the first one).
-        vec3 inScatter = S + multiScatter;
         accumScattering += accumTransmittance * (inScatter - inScatter * stepTrans) / max(sigmaE, vec3(1e-9));
         accumTransmittance *= stepTrans;
     }
 
+    // Absolute scene-linear, never pre-exposed (P = 1 by construction): the passes that sample
+    // this LUT into scene colour apply the pre-exposure themselves.
     imageStore(oSkyViewLUT, pixel, vec4(accumScattering, 1.0));
 }

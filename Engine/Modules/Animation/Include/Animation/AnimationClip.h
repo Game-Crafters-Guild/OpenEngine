@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -202,6 +203,8 @@ class AnimationClip : public ::GameEngine::Asset
 
   private:
     bool LoadEditableData(const Vector<uint8>& data);
+    // Logs that the .anim file is not loaded and why, and clears the channels; returns false.
+    bool RefuseEditableData(std::string_view reason);
     void RecomputeDuration();
 
     uint32 m_SelectedAnimation = 0u;

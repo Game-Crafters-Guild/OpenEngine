@@ -17,8 +17,8 @@ Camera.perspective = true
 Camera.fovY = 60
 Camera.nearZ = 0.1
 Camera.farZ = 500
-Camera.cullingMask = 4294967295
-Camera.postProcessMask = 4294967295
+Camera.visibleLayers = all
+Camera.volumeLayers = all
 Name.value = "Main Camera"
 ; Looking straight down at the shadow, so the cut reads as a straight line in
 ; screen space rather than being foreshortened.
@@ -53,7 +53,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
@@ -63,7 +63,7 @@ Transform.scale = (400, 1, 400)
 
 [entity id="e_caster"]
 MeshRenderer.meshPrimitive = Sphere
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = false
 Name.value = "HighSphere"

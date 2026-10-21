@@ -1,5 +1,6 @@
 #version 450
 
+
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
 
@@ -48,6 +49,11 @@ layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
 #undef GE_VP_VEC4
 #undef GE_VP_MAT4
 } ViewParams;
+
+// The view's exposure state (ExposureHistory): the additive light lands in scene colour at the
+// frame's pre-exposure P.
+#define GE_EXPOSURE_HISTORY_BINDING 6
+#include "Includes/exposure_history.glsl"
 
 float Saturate(float x) { return clamp(x, 0.0, 1.0); }
 
@@ -182,5 +188,5 @@ void main()
     }
 
     // Pure additive contribution.
-    oColor = vec4(accum, 1.0);
+    oColor = vec4(accum * GE_PreExposure(), 1.0);
 }

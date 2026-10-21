@@ -1,5 +1,6 @@
 #include "Audio/AudioSystem.h"
 
+#include "Audio/AudioDecoderConfig.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AudioAsset.h"
 #include "AssetCore/AssetTypes.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <limits>
@@ -30,6 +32,99 @@ static std::uint8_t NextGeneration(std::uint8_t g)
     if (g == 0)
         g = 1;
     return g;
+}
+
+ma_attenuation_model ToMiniaudioModel(AudioAttenuationModel model)
+{
+    switch (model)
+    {
+    case AudioAttenuationModel::None:
+        return ma_attenuation_model_none;
+    case AudioAttenuationModel::Linear:
+        return ma_attenuation_model_linear;
+    case AudioAttenuationModel::Exponential:
+        return ma_attenuation_model_exponential;
+    case AudioAttenuationModel::Inverse:
+        break;
+    }
+    return ma_attenuation_model_inverse;
+}
+
+AudioAttenuationModel FromMiniaudioModel(ma_attenuation_model model)
+{
+    switch (model)
+    {
+    case ma_attenuation_model_none:
+        return AudioAttenuationModel::None;
+    case ma_attenuation_model_linear:
+        return AudioAttenuationModel::Linear;
+    case ma_attenuation_model_exponential:
+        return AudioAttenuationModel::Exponential;
+    case ma_attenuation_model_inverse:
+        break;
+    }
+    return AudioAttenuationModel::Inverse;
+}
+
+// The sanitizing rules documented on AudioFalloff.
+AudioFalloff SanitizeFalloff(const AudioFalloff& falloff)
+{
+    const AudioFalloff defaults{};
+    AudioFalloff out = falloff;
+    out.maxDistance = std::isnan(falloff.maxDistance)
+                          ? defaults.maxDistance
+                          : std::min(falloff.maxDistance, std::numeric_limits<float>::max());
+    out.maxDistance = std::max(out.maxDistance, out.minDistance);
+    out.rolloff = std::isfinite(falloff.rolloff) ? std::max(falloff.rolloff, 0.0f) : defaults.rolloff;
+    return out;
+}
+
+void ApplyFalloff(ma_sound& sound, const AudioFalloff& falloff)
+{
+    const AudioFalloff f = SanitizeFalloff(falloff);
+    ma_sound_set_attenuation_model(&sound, ToMiniaudioModel(f.model));
+    ma_sound_set_min_distance(&sound, f.minDistance);
+    ma_sound_set_max_distance(&sound, f.maxDistance);
+    ma_sound_set_rolloff(&sound, f.rolloff);
+}
+
+// A non-finite volume, pitch or pan makes every sample of the mix non-finite, not only the
+// voice's. False, with a warning naming the voice, for such a value.
+bool IsFiniteVoiceValue(float value, const char* what, std::uint64_t voiceIndex)
+{
+    if (std::isfinite(value))
+        return true;
+    Logger::Log::Warning("Audio: voice {} ignored a non-finite {} ({})", voiceIndex, what, value);
+    return false;
+}
+
+// A falloff's minimum distance must be finite and above 0: full volume holds inside it, and
+// at 0 the voice is silent from the first unit out (Inverse and Exponential divide by it).
+// False, with a warning naming the voice, otherwise.
+bool IsUsableMinDistance(float minDistance, std::uint64_t voiceIndex)
+{
+    if (std::isfinite(minDistance) && minDistance > 0.0f)
+        return true;
+    Logger::Log::Warning("Audio: voice {} ignored a falloff with minimum distance {}; it must be above 0", voiceIndex,
+                         minDistance);
+    return false;
+}
+
+// PlayOptions as a voice keeps them: a non-finite volume, pitch or pan, or (on a spatialized
+// voice) an unusable falloff minimum distance, takes its default.
+PlayOptions SanitizePlayOptions(const PlayOptions& opts, bool spatialized, std::uint64_t voiceIndex)
+{
+    const PlayOptions defaults{};
+    PlayOptions out = opts;
+    if (!IsFiniteVoiceValue(opts.volume, "volume", voiceIndex))
+        out.volume = defaults.volume;
+    if (!IsFiniteVoiceValue(opts.pitch, "pitch", voiceIndex))
+        out.pitch = defaults.pitch;
+    if (!IsFiniteVoiceValue(opts.pan, "pan", voiceIndex))
+        out.pan = defaults.pan;
+    if (spatialized && !IsUsableMinDistance(opts.falloff.minDistance, voiceIndex))
+        out.falloff.minDistance = defaults.falloff.minDistance;
+    return out;
 }
 } // namespace
 
@@ -126,6 +221,7 @@ struct AudioSystem::Impl
         std::uint8_t generation = 1;
         bool alive = false;
         VoiceState state = VoiceState::Empty;
+        bool paused = false; // Pause(): a pending voice does not start, a playing one is stopped in place
         std::uint64_t startSeq = 0; // monotonically increasing when a voice begins playing (for simple priority/stealing)
 
         AudioClipHandle clip = INVALID_AUDIO_CLIP_HANDLE;
@@ -147,6 +243,23 @@ struct AudioSystem::Impl
         ma_decoder decoder{};
         bool decoderInit = false;
     };
+
+    // The live slot a handle names, or nullptr for an invalid or stale handle.
+    VoiceSlot* FindVoice(AudioEmitterHandle emitter)
+    {
+        if (!emitter.IsValid() || emitter.Index() >= voices.size())
+            return nullptr;
+        VoiceSlot& v = voices[emitter.Index()];
+        return (v.alive && v.generation == emitter.Generation()) ? &v : nullptr;
+    }
+
+    const VoiceSlot* FindVoice(AudioEmitterHandle emitter) const
+    {
+        return const_cast<Impl*>(this)->FindVoice(emitter);
+    }
+
+    // Matches the MA_SOUND_FLAG_NO_SPATIALIZATION choice made when the sound starts.
+    static bool IsSpatialized(const VoiceSlot& v) { return v.is3D || v.opts.spatialized; }
 
     // Asset hot-reload integration (queue-only callback)
     std::mutex assetEventMutex;
@@ -193,6 +306,7 @@ bool AudioSystem::Initialize(const AudioSystemConfig& config)
     }
 
     m_Initialized = true;
+    m_Backend->SetOutputMuted(m_MasterMuted);
     if (m_Impl)
     {
         m_Impl->clips.reserve(256);
@@ -496,7 +610,7 @@ void AudioSystem::Update(float dt)
     for (std::uint64_t i = 0; i < m_Impl->voices.size(); ++i)
     {
         auto& v = m_Impl->voices[i];
-        if (!v.alive || v.state != Impl::VoiceState::Pending)
+        if (!v.alive || v.state != Impl::VoiceState::Pending || v.paused)
             continue;
 
         const AudioEmitterHandle vh(i, v.generation);
@@ -560,7 +674,7 @@ void AudioSystem::Update(float dt)
         else
         {
             // Initialize per-voice decoder from in-memory encoded data.
-            ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+            ma_decoder_config cfg = MakeDecoderConfig();
             const ma_result dr = ma_decoder_init_memory(c.encodedBytes.data(), c.encodedBytes.size(), &cfg, &v.decoder);
             if (dr != MA_SUCCESS)
             {
@@ -596,12 +710,14 @@ void AudioSystem::Update(float dt)
 
         ma_sound_set_volume(&v.sound, v.opts.volume);
         ma_sound_set_pitch(&v.sound, v.opts.pitch);
+        if (!Impl::IsSpatialized(v))
+            ma_sound_set_pan(&v.sound, v.opts.pan);
 
         if (v.is3D || v.opts.spatialized)
         {
             ma_sound_set_position(&v.sound, v.pos.x, v.pos.y, v.pos.z);
             ma_sound_set_velocity(&v.sound, v.vel.x, v.vel.y, v.vel.z);
-            ma_sound_set_attenuation_model(&v.sound, ma_attenuation_model_inverse);
+            ApplyFalloff(v.sound, v.opts.falloff);
         }
 
         // Verify device is started before attempting to play sound
@@ -642,7 +758,7 @@ void AudioSystem::Update(float dt)
     for (std::uint64_t i = 0; i < m_Impl->voices.size(); ++i)
     {
         auto& v = m_Impl->voices[i];
-        if (!v.alive || v.state != Impl::VoiceState::Playing || !v.soundInit)
+        if (!v.alive || v.state != Impl::VoiceState::Playing || !v.soundInit || v.paused)
             continue;
 
         if (!v.opts.loop && ma_sound_at_end(&v.sound))
@@ -950,9 +1066,10 @@ AudioEmitterHandle AudioSystem::Play2D(AudioClipHandle clip, const PlayOptions& 
     auto& v = m_Impl->voices[idx];
     v.alive = true;
     v.state = Impl::VoiceState::Pending;
+    v.paused = false;
     v.startSeq = 0;
     v.clip = clip;
-    v.opts = opts;
+    v.opts = SanitizePlayOptions(opts, opts.spatialized, idx);
     v.is3D = false;
     v.world = 0;
     v.pos = Mathematics::Vector3{};
@@ -1070,9 +1187,10 @@ AudioEmitterHandle AudioSystem::Play3D(AudioClipHandle clip,
     auto& v = m_Impl->voices[idx];
     v.alive = true;
     v.state = Impl::VoiceState::Pending;
+    v.paused = false;
     v.startSeq = 0;
     v.clip = clip;
-    v.opts = opts;
+    v.opts = SanitizePlayOptions(opts, /*spatialized*/ true, idx);
     v.is3D = true;
     v.world = world;
     v.pos = pos;
@@ -1211,6 +1329,117 @@ bool AudioSystem::IsPlaying(AudioEmitterHandle emitter) const
     return ma_sound_is_playing(&v.sound) != MA_FALSE;
 }
 
+void AudioSystem::SetVolume(AudioEmitterHandle emitter, float linearVolume)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !IsFiniteVoiceValue(linearVolume, "volume", emitter.Index()))
+        return;
+    v->opts.volume = std::max(linearVolume, 0.0f);
+    if (v->soundInit)
+        ma_sound_set_volume(&v->sound, v->opts.volume);
+}
+
+void AudioSystem::SetPitch(AudioEmitterHandle emitter, float pitch)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !IsFiniteVoiceValue(pitch, "pitch", emitter.Index()) || !(pitch > 0.0f))
+        return;
+    v->opts.pitch = pitch;
+    if (v->soundInit)
+        ma_sound_set_pitch(&v->sound, pitch);
+}
+
+void AudioSystem::SetPan(AudioEmitterHandle emitter, float pan)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || Impl::IsSpatialized(*v) || !IsFiniteVoiceValue(pan, "pan", emitter.Index()))
+        return;
+    v->opts.pan = std::clamp(pan, -1.0f, 1.0f);
+    if (v->soundInit)
+        ma_sound_set_pan(&v->sound, v->opts.pan);
+}
+
+float AudioSystem::GetVolume(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_volume(&v->sound) : v->opts.volume;
+}
+
+float AudioSystem::GetPitch(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_pitch(&v->sound) : v->opts.pitch;
+}
+
+float AudioSystem::GetPan(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v)
+        return 0.0f;
+    return v->soundInit ? ma_sound_get_pan(&v->sound) : v->opts.pan;
+}
+
+void AudioSystem::Pause(AudioEmitterHandle emitter)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || v->paused)
+        return;
+    v->paused = true;
+    // ma_sound_stop halts the node in place; the data source keeps its cursor.
+    if (v->soundInit)
+        ma_sound_stop(&v->sound);
+}
+
+void AudioSystem::Resume(AudioEmitterHandle emitter)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !v->paused)
+        return;
+    v->paused = false;
+    if (!v->soundInit)
+        return; // pending: starts in Update once its clip is ready
+    // ma_sound_start rewinds a sound sitting at its end; a finished one-shot
+    // is left for the reaper instead of replaying.
+    if (!v->opts.loop && ma_sound_at_end(&v->sound))
+        return;
+    ma_sound_start(&v->sound);
+}
+
+bool AudioSystem::IsPaused(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    return v && v->paused;
+}
+
+void AudioSystem::SetFalloff(AudioEmitterHandle emitter, const AudioFalloff& falloff)
+{
+    Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !Impl::IsSpatialized(*v) || !IsUsableMinDistance(falloff.minDistance, emitter.Index()))
+        return;
+    v->opts.falloff = SanitizeFalloff(falloff);
+    if (v->soundInit)
+        ApplyFalloff(v->sound, v->opts.falloff);
+}
+
+AudioFalloff AudioSystem::GetFalloff(AudioEmitterHandle emitter) const
+{
+    const Impl::VoiceSlot* v = m_Impl ? m_Impl->FindVoice(emitter) : nullptr;
+    if (!v || !Impl::IsSpatialized(*v))
+        return {};
+    if (!v->soundInit)
+        return SanitizeFalloff(v->opts.falloff);
+    AudioFalloff f{};
+    f.model = FromMiniaudioModel(ma_sound_get_attenuation_model(&v->sound));
+    f.minDistance = ma_sound_get_min_distance(&v->sound);
+    f.maxDistance = ma_sound_get_max_distance(&v->sound);
+    f.rolloff = ma_sound_get_rolloff(&v->sound);
+    return f;
+}
+
 std::size_t AudioSystem::GetAliveVoiceCount() const
 {
     if (!m_Impl)
@@ -1237,6 +1466,14 @@ float AudioSystem::GetBusVolume(AudioBusId bus) const
     if (!m_Backend || !m_Initialized)
         return 1.0f;
     return m_Backend->GetBusVolume(bus);
+}
+
+void AudioSystem::SetMasterMuted(bool muted)
+{
+    m_MasterMuted = muted;
+    if (!m_Backend || !m_Initialized)
+        return;
+    m_Backend->SetOutputMuted(muted);
 }
 
 float AudioSystem::GetBusMeterLevel(AudioBusId bus) const

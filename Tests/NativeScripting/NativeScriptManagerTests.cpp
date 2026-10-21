@@ -11,6 +11,7 @@
 #include "Engine/Build/MacBundleAssembler.h"
 #include "Engine/Build/NativeScriptStaging.h"
 #include "NativeScripting/BuildCacheRecord.h"
+#include "NativeScripting/CMakeInvoker.h"
 #include "NativeScripting/EngineBuildIdentity.h"
 #include "NativeScripting/NativeBuildConfig.h"
 #include "NativeScripting/NativeScriptManager.h"
@@ -22,6 +23,7 @@
 #include "StampedBinary.h"
 
 #include "InFlightModuleBuild.h"
+#include "../TestTempDir.h"
 
 #include "ECS/Entity.h" // full ECS::World definition (ECS.h only forward-declares it)
 
@@ -1220,7 +1222,11 @@ TEST(NativeScriptManager, PlayWaitsOnShippedModuleBuildsAndReadsTheirFailure)
 {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("ge_nsm_shipped_pending_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    // Each block runs a real cmake configure and a failing build after up to 20 s of toolchain
+    // detection; the two together took 143 s on a loaded machine. Each gets its own bound well
+    // above that, which only stops a build that never completes.
+    constexpr auto kBuildDeadline = std::chrono::seconds(240);
+    auto deadline = std::chrono::steady_clock::now() + kBuildDeadline;
     {
         ns::Testing::InFlightModuleBuild editorOnly(root / "editor" / "src", root / "editor" / "cache",
                                                     root / "editor" / "scratch", "Probe.Editor",
@@ -1230,6 +1236,7 @@ TEST(NativeScriptManager, PlayWaitsOnShippedModuleBuildsAndReadsTheirFailure)
         editorOnly.TickUntilCompleted(deadline);
         EXPECT_TRUE(editorOnly.Manager().FailedShippedModules().empty());
     }
+    deadline = std::chrono::steady_clock::now() + kBuildDeadline;
     {
         ns::Testing::InFlightModuleBuild shipped(root / "shipped" / "src", root / "shipped" / "cache",
                                                  root / "shipped" / "scratch", "Probe", ns::Testing::ModuleKind::Shipped,
@@ -1371,4 +1378,51 @@ TEST(NativeScriptManager, ARebuildRequestedDuringTheFirstBatchGoesAheadOfEditorO
     manager.Shutdown();
     std::error_code ec;
     fs::remove_all(root, ec);
+}
+
+// A scanner the SDK manifest names but the disk lacks is reported by its path and the fix,
+// before a shell runs it and answers with its own "not recognized" line.
+TEST(CMakeInvoker, MissingComponentScannerIsNamedWithTheFix)
+{
+    GameEngine::TestUtils::ScopedTempDir scratch(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nsm_missing_scanner"));
+    const fs::path root = scratch.Path();
+    ns::NativeBuildConfig config;
+    config.SourceDir = root / "Assets";
+    config.BuildDir = root / "build";
+    config.ComponentScannerExe = root / "nativescripting" / "ComponentScanner.exe";
+    std::string output;
+    std::string error;
+    ns::ComponentScanStats stats;
+
+    EXPECT_TRUE(ns::CMakeInvoker::RunComponentScanner(config, output, error, stats).empty());
+    EXPECT_NE(std::string::npos, error.find("component scanner is missing at")) << error;
+    EXPECT_NE(std::string::npos, error.find("nativescripting/ComponentScanner.exe")) << error;
+
+    error.clear();
+    EXPECT_TRUE(ns::CMakeInvoker::RunSystemScanner(config, output, error).empty());
+    EXPECT_NE(std::string::npos, error.find("component scanner is missing at")) << error;
+}
+
+// The scan command carries the project's paths as UTF-8, the encoding the shell process converts a
+// command from: a project under a folder the Windows ANSI code page cannot spell still scans.
+TEST(CMakeInvoker, ScansAProjectWhosePathIsNotAscii)
+{
+    GameEngine::TestUtils::ScopedTempDir scratch(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nsm_utf8_scan"));
+    const fs::path root = scratch.Path() / fs::path(u8"\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8");
+    ns::NativeBuildConfig config;
+    config.SourceDir = root / "Assets";
+    config.BuildDir = root / "build";
+    config.ComponentScannerExe = GE_COMPONENT_SCANNER_EXE;
+    config.DetectBase = "ComponentBase";
+    fs::create_directories(config.SourceDir);
+    std::ofstream(config.SourceDir / "Speed.h", std::ios::binary) << "struct Speed : ECS::ComponentBase { float Value; };\n";
+    std::string output;
+    std::string error;
+    ns::ComponentScanStats stats;
+
+    const fs::path generated = ns::CMakeInvoker::RunComponentScanner(config, output, error, stats);
+
+    EXPECT_EQ("", error) << output;
+    EXPECT_EQ(1, stats.Reflected) << output;
+    EXPECT_TRUE(fs::exists(generated)) << output;
 }

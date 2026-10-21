@@ -5,8 +5,8 @@ description: How gameplay code consumes physics collision and trigger events thr
 
 This guide shows how gameplay code should consume physics collision/trigger events via ECS.
 
-:::caution[C# binding pending]
-No managed call subscribes to collision or trigger events yet; tracked as [OpenEngine issue #18](https://github.com/Game-Crafters-Guild/OpenEngine/issues/18). The native calls are `PhysicsEntityEventCallbacks::SubscribeContactBegin`, `SubscribeContactEnd`, `SubscribeTriggerEnter`, `SubscribeTriggerExit` and `Unsubscribe`, and the `PhysicsContactEventsBuffer` and `PhysicsTriggerEventsBuffer` components.
+:::tip[From a C# script]
+A C# script subscribes to the contact and trigger events of an entity with `entity.Physics.ContactBegin += handler`. [Physics from scripts](../scripting/physics-from-scripts.mdx#contact-and-trigger-events) gives the events and their rules. The buffered events below have no C# call.
 :::
 
 ## Preferred approach (entity-scoped callbacks)
@@ -191,9 +191,4 @@ In ECS, “listen to every collision” just means iterating the buffers without
 
 ## Limits
 
-- **Impulse/strength**: the contact event carries no impulse; Jolt does not provide the final impulse at `OnContactAdded`.
-
-## Changelog
-
-- 2026-10-13: The C# caution links OpenEngine issue #18; the impulse note states the limit.
-- 2026-10-13: Converted from `docs/Physics_Events_Guide.md`.
+- **Impulse/strength**: the contact event carries no impulse. Jolt does not provide the final impulse at `OnContactAdded`.

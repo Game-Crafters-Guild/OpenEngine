@@ -131,6 +131,26 @@ Mesh LoadOnlyMesh(std::string_view json, const std::filesystem::path& name)
     return asset.GetMeshCount() == 1u ? asset.GetMesh(0) : Mesh{};
 }
 
+// A triangle on node 0 at the bottom of a reversed parent chain of `depth` nodes: node i is the
+// parent of node i - 1 and the scene's root is the last node. About 20 bytes of JSON a node.
+std::string TriangleUnderParentChain(size_t depth)
+{
+    std::string nodes = R"({"mesh": 0})";
+    nodes.reserve(depth * 20);
+    for (size_t index = 1; index < depth; ++index)
+        nodes += R"(,{"children": [)" + std::to_string(index - 1) + "]}";
+    return R"({
+  "asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [)" + std::to_string(depth - 1) + R"(]}],
+  "nodes": [)" + nodes + R"(],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                 "min": [0, 0, 0], "max": [1, 1, 1]}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"}]
+})";
+}
+
 // Three float positions (1,0,0), (0,1,0), (0,0,1), then one u16 sparse index (3, two bytes of
 // padding) and one float sparse value: the sparse index equals the accessor's count.
 constexpr std::string_view kSparseIndexPastCount = R"({
@@ -2995,6 +3015,107 @@ TEST(GltfImport, EveryNodeThatDrawsAMeshPlacesIt)
     EXPECT_NEAR(maximum[0], 1.0f, 1e-6f);
     EXPECT_NEAR(maximum[1], 3.0f, 1e-6f);
     EXPECT_NEAR(maximum[2], 1.0f, 1e-6f);
+}
+
+
+// A reversed parent chain one level past the depth limit, and the 2 MB chain of 100 000 levels, are
+// refused by depth before cgltf_validate walks every node's ancestors, naming the file and the limit.
+TEST(GltfImport, NodeHierarchyPastTheDepthLimitIsRefused)
+{
+    for (const size_t depth : {kMaxGltfNodeDepth + 1, size_t{100000}}) {
+        SCOPED_TRACE(depth);
+        const ModelLoad load = LoadModel(TriangleUnderParentChain(depth), "deep_hierarchy.gltf");
+        ASSERT_EQ(TestLog::CountLinesContaining(load.Lines, "sink is live"), 1u);
+        EXPECT_FALSE(load.Loaded);
+        const std::string refusal = TestLog::FirstLineContaining(load.Lines, "deep_hierarchy.gltf");
+        EXPECT_NE(refusal.find("more than " + std::to_string(kMaxGltfNodeDepth) + " levels"), std::string::npos)
+            << refusal;
+    }
+}
+
+// A hierarchy at the depth limit loads: the rest pose is built without recursion, so the depth
+// costs no stack.
+TEST(GltfImport, NodeHierarchyAtTheDepthLimitLoads)
+{
+    const Mesh mesh = LoadOnlyMesh(TriangleUnderParentChain(kMaxGltfNodeDepth), "deep_hierarchy.gltf");
+    EXPECT_EQ(mesh.Vertices.size(), 3u);
+}
+
+// cgltf allocates a base64 data URI buffer's declared byteLength before it decodes the payload: a
+// buffer that declares 2 GiB over a 100-character payload is refused before that allocation, with
+// the declared and decodable sizes named.
+TEST(GltfImport, DataUriBufferDeclaringMoreThanItsPayloadIsRefused)
+{
+    const std::string json = R"({
+  "asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                 "min": [0, 0, 0], "max": [1, 1, 1]}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 2147483648, "uri": "data:application/octet-stream;base64,)" +
+                           std::string(100, 'A') + R"("}]
+})";
+    const ModelLoad load = LoadModel(json, "oversized_data_uri.gltf");
+    ASSERT_EQ(TestLog::CountLinesContaining(load.Lines, "sink is live"), 1u);
+    EXPECT_FALSE(load.Loaded);
+    const std::string refusal = TestLog::FirstLineContaining(load.Lines, "oversized_data_uri.gltf");
+    EXPECT_NE(refusal.find("buffer 0 declares a byteLength of 2147483648 bytes, but its base64 data URI decodes to 75"),
+              std::string::npos)
+        << refusal;
+}
+
+// Static meshes sharing a material merge into one mesh whose indices are uint32; a group whose
+// merged vertex count passes the limit stays unmerged, with a warning naming the model and the material.
+// The limit is lowered here to the size of a few triangles, so no geometry of 2^32 vertices is built.
+TEST(GltfImport, StaticMergePastTheVertexLimitLeavesTheGroupUnmerged)
+{
+    constexpr size_t kTriangles = 32;
+    constexpr size_t kMergedVertices = kTriangles * 3;
+    const auto triangles = [] {
+        Vector<Mesh> meshes(kTriangles);
+        for (Mesh& mesh : meshes) {
+            mesh.Vertices.resize(3);
+            mesh.Indices = {0, 1, 2};
+        }
+        return meshes;
+    };
+
+    Vector<Mesh> atTheLimit = triangles();
+    MergeStaticPrimitivesByMaterial(atTheLimit, "merge.gltf", kMergedVertices);
+    ASSERT_EQ(atTheLimit.size(), 1u);
+    EXPECT_EQ(atTheLimit[0].Vertices.size(), kMergedVertices);
+    EXPECT_EQ(atTheLimit[0].Indices.back(), kMergedVertices - 1);
+
+    Vector<Mesh> pastTheLimit = triangles();
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Warning);
+        MergeStaticPrimitivesByMaterial(pastTheLimit, "merge.gltf", kMergedVertices - 1);
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(pastTheLimit.size(), kTriangles);
+    const std::string warning = TestLog::FirstLineContaining(lines, "merge.gltf");
+    EXPECT_NE(warning.find("the 32 static primitives of material 0 are not merged"), std::string::npos) << warning;
+}
+
+// An .anim file that is not JSON, or whose key holds a value of the wrong type, is refused with the
+// file and the place or the field named, and never throws: the web build has no exception catching.
+TEST(AnimationClipEditableData, AnUnreadableAnimFileIsRefusedNamingThePlaceOrTheField)
+{
+    const ClipLoad truncated = LoadClip(R"({"version": 1, "channels": [ truncated)", "Clips/Truncated.anim");
+    EXPECT_FALSE(truncated.Loaded);
+    const std::string notJson = TestLog::FirstLineContaining(truncated.Lines, "Truncated.anim");
+    EXPECT_NE(notJson.find("'Clips/Truncated.anim' is not loaded: it is not JSON (parse error at line 1, column"),
+              std::string::npos)
+        << notJson;
+
+    const ClipLoad mistyped =
+        LoadClip(R"({"channels": [{"keys": [{"time": 0, "rotation": [0, "a", 0, 1]}]}]})", "Clips/Mistyped.anim");
+    EXPECT_FALSE(mistyped.Loaded);
+    const std::string field = TestLog::FirstLineContaining(mistyped.Lines, "Mistyped.anim");
+    EXPECT_NE(field.find("'channels[0].keys[0].rotation[1]' is a string; write it as a number"), std::string::npos)
+        << field;
 }
 
 } // namespace GameEngine

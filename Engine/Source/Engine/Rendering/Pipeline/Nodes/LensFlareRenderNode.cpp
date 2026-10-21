@@ -4,6 +4,7 @@
 #include "Engine/Rendering/LensFlareRenderFeature.h"
 #include "Mathematics/Curve.h" // ::GameEngine::Math::EvaluateCurveKeys
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SunScreenProjection.h"
 #include "Rendering/CameraTypes.h"
@@ -467,6 +468,11 @@ void LensFlareRenderNode::DeclareForView(ViewDeclare& d)
     const uint32_t atlasBinding = feature.GetAtlasBinding();
     const uint32_t instanceBinding = feature.GetInstanceBinding();
     const uint32_t depthBinding = feature.GetDepthBinding();
+    const uint32_t exposureBinding = feature.GetExposureBinding();
+    // The flare light lands in scene colour at the frame's pre-exposure P.
+    const PipelineBufferBindingRG exposure = ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return;
     const uint32_t renderW = d.RenderWidth;
     const uint32_t renderH = d.RenderHeight;
 
@@ -482,9 +488,10 @@ void LensFlareRenderNode::DeclareForView(ViewDeclare& d)
             p.AttachColor(0, target, ops);
             if (depth.IsValid())
                 p.Read(depth, RenderGraph::RGTextureRead::Sampled);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
         },
         [pipe, layout, sampler, draws, depth, instanceBuf, renderW, renderH, atlasBinding,
-         instanceBinding, depthBinding](RenderGraph::RGContext& ctx)
+         instanceBinding, depthBinding, exposureBinding, exposure](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
             auto* cl = ctx.Cmd;
@@ -520,6 +527,8 @@ void LensFlareRenderNode::DeclareForView(ViewDeclare& d)
                     static_cast<size_t>(drawBatch.Count) * sizeof(FlareInstanceGPU));
                 dev->UpdateCombinedImageSamplerBinding(
                     ds, depthBinding, depthPhys.IsValid() ? depthPhys : drawBatch.Atlas, sampler);
+                dev->UpdateStorageBufferBinding(ds, exposureBinding, exposure.Buffer, exposure.Offset,
+                                                exposure.Size);
 
                 cl->BindDescriptorSet(0, ds, pso);
                 const int32_t atlasHasAuthoredAlpha = drawBatch.HasAuthoredAlpha ? 1 : 0;

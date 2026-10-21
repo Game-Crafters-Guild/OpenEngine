@@ -1,0 +1,17 @@
+/* MaskField: the parts the .dropdown family (theme/widgets.css) does not draw.
+   Attached by MaskField's constructor (RequestSubtreeStyleAssetPath). */
+
+/* "Everything" and "Nothing" are actions, not options: no check column. */
+.mask-field-action {
+	padding-left: 10px;
+}
+
+/* An option row is a checkbox: the box, then the option label. */
+.mask-field-option {
+	padding-left: 6px;
+}
+
+/* A value that no view or camera would draw reads as a warning. */
+.mask-field-nothing {
+	color: var(--ui_color_warning_text);
+}

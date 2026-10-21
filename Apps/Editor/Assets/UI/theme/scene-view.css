@@ -301,7 +301,7 @@
 /* Camera bookmark icon button (always visible) - do not override; keep 26px */
 .camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon,
 .camera-bookmarks-row button.camera-bookmarks-slot.cambookmark-icon {
-    background-image: url("editor:Icons/cambookmark.png");
+    background-image: url("editor:Icons/cambookmark.svg");
     background-size: 26px 26px;
     background-repeat: no-repeat;
     background-position: center;

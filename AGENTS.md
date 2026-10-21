@@ -8,7 +8,7 @@ Entry point for coding agents working in this repository, whichever tool runs th
 - `CONTRIBUTING.md` for the short form of the rules, written for people.
 - `.claude/rules/rendering.md` when touching the renderer, shaders or GPU debugging; `ecs.md` for ECS components and systems; `editor-ui.md` for editor UI, CSS, settings pages and asset mounts; `scripting.md` for the managed side; `documentation.md` for `docs/`.
 - `CodingStyle.md` for naming and layout; `BUILD.md` for building from a fresh clone on every platform.
-- The workbench (sibling repository `../GameEngine-Workbench`, or `GE_WORKBENCH`; nothing in the engine build reads it) holds the team workflow content: `agent/pr-review-rules.md` before opening or reviewing a pull request; `test-map/path-to-suite.md` for which suites gate a path; `agent/evidence-checklists.md` for the captures visible work ships with; `agent/coordination.md` when coordinating lanes, reviewing or merging.
+- The workbench (sibling repository `../GameEngine-Workbench`, or `GE_WORKBENCH`; nothing in the engine build reads it) holds the team workflow content: `agent/pr-review-rules.md` before opening or reviewing a pull request; `test-map/path-to-suite.md` for which suites gate a path; `agent/evidence-checklists.md` for the captures visible work ships with; `agent/coordination.md` when coordinating lanes, reviewing or merging. The workbench is the team's private workflow repository; a contributor without it follows `CONTRIBUTING.md`.
 
 ## What this is
 

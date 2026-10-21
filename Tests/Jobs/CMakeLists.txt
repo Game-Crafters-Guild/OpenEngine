@@ -298,6 +298,33 @@ set_tests_properties(ManagedInteropTests PROPERTIES
     ENVIRONMENT "DOTNET_ROLL_FORWARD=LatestPatch;DOTNET_ROOT=${DOTNET_DIR};GE_NATIVE_DIR=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;PATH=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;${DOTNET_DIR};$ENV{PATH}")
 
 
+# The generated C# bindings against the real GameEngine.Native, in-process (Managed/BindingTests):
+# the build copies the engine's own GameEngine.Native and Engine beside the test assembly, where the
+# bindings load them first, and the vcpkg runtime the test executables stage is on PATH.
+if(TARGET GameEngine.Native)
+  # The physics scene the tests step (bodies, entities, the world's shutdown), on the same Engine.
+  add_library(BindingTestScene SHARED ${CMAKE_SOURCE_DIR}/Tests/ScriptBindings/BindingTestScene.cpp)
+  target_link_libraries(BindingTestScene PRIVATE Engine)
+  set_target_properties(BindingTestScene PROPERTIES FOLDER "Tests")
+  add_custom_target(BuildManagedBindingTests ALL
+      COMMAND ${DOTNET_EXECUTABLE} build ${CMAKE_SOURCE_DIR}/Managed/BindingTests/BindingTests.csproj -c ${GE_MANAGED_TEST_CFG}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:GameEngine.Native> $<TARGET_FILE:Engine>
+              $<TARGET_FILE:BindingTestScene>
+              ${CMAKE_SOURCE_DIR}/Managed/BindingTests/bin/${GE_MANAGED_TEST_CFG}/net10.0
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Building the managed binding tests")
+  add_dependencies(BuildManagedBindingTests GameEngine.Native BindingTestScene AbiNativeSmokeTest)
+  # The same CS2012 serialization as the other managed test builds: they share csprojs.
+  add_dependencies(BuildManagedBindingTests BuildManagedCoreBridgeTests)
+  add_test(NAME ManagedBindingTests
+      COMMAND ${DOTNET_EXECUTABLE} test ${CMAKE_SOURCE_DIR}/Managed/BindingTests/BindingTests.csproj
+              -c ${GE_MANAGED_TEST_CFG} --no-build)
+  set_tests_properties(ManagedBindingTests PROPERTIES
+      TIMEOUT 120
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      ENVIRONMENT "DOTNET_ROLL_FORWARD=LatestPatch;DOTNET_ROOT=${DOTNET_DIR};PATH=${CMAKE_BINARY_DIR}/bin/$<CONFIG>/Tests;${DOTNET_DIR};$ENV{PATH}")
+endif()
+
 # Build and run a tiny managed smoke to validate DllImport resolution
 add_custom_target(ManagedInteropSmoke ALL
     COMMAND ${DOTNET_EXECUTABLE} build ${CMAKE_SOURCE_DIR}/Managed/InteropSmoke/InteropSmoke.csproj -c Debug
@@ -354,21 +381,12 @@ if(WIN32)
             $<TARGET_FILE_DIR:HotReloadPipelineTests>
         COMMENT "Staging managed CoreBridge/HotReload/ABI set to HotReloadPipelineTests output")
 
-    # CompileServerHost probes <EngineBinDir>/SourceGenerators for source generators.
     # CompileServerEndToEnd.GeneratorErrorFailsCompile and
     # GeneratorWarningKeepsCompileSuccessful point EngineBinDir at this exe's directory,
-    # so the generator has to be staged there or those tests would silently exercise a
-    # generator-less server and pass for the wrong reason. The generator comes from
-    # EntitySystemGeneratorAssembly, which builds it in the native configuration
-    # ($<CONFIG>), not in the managed test configuration the set above uses.
-    add_dependencies(HotReloadPipelineTests EntitySystemGeneratorAssembly)
-    add_custom_command(TARGET HotReloadPipelineTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            $<TARGET_FILE_DIR:HotReloadPipelineTests>/SourceGenerators
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/Managed/SourceGenerators/EntitySystemGenerator/bin/$<CONFIG>/netstandard2.0/EntitySystemGenerator.dll
-            $<TARGET_FILE_DIR:HotReloadPipelineTests>/SourceGenerators/EntitySystemGenerator.dll
-        COMMENT "Staging EntitySystemGenerator to HotReloadPipelineTests output")
+    # so without the generator they would exercise a generator-less server and pass for
+    # the wrong reason. Built in the native configuration, not the managed test one
+    # the set above uses.
+    ge_stage_entity_system_generator(HotReloadPipelineTests)
 endif()
 
 

@@ -3,8 +3,10 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
 #include <algorithm>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
@@ -90,45 +92,53 @@ const AnimationLibraryEntry* AnimationLibrary::Find(const std::string& name) con
 
 bool AnimationLibrary::ParseJson(const std::string& text)
 {
-    try
+    json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+    if (!doc.is_object())
+        return Refuse("its JSON is not an object; write it as an object holding an \"animations\" array");
+
+    m_Entries.clear();
+    Serialization::JsonFieldReader reader;
+    if (doc.contains("animations") && doc["animations"].is_array())
     {
-        const auto doc = json::parse(text);
-        if (!doc.is_object())
+        const json& animations = doc["animations"];
+        for (size_t index = 0; index < animations.size(); ++index)
         {
-            SetState(AssetState::Failed);
-            return false;
+            const json& entryJson = animations[index];
+            reader.SetContext(std::format("animations[{}].", index));
+            AnimationLibraryEntry entry;
+            reader.Read(entryJson, "name", entry.Name);
+            if (entry.Name.empty())
+                continue;
+
+            if (entryJson.contains("assetGuid") && entryJson["assetGuid"].is_string())
+                entry.AssetGuid = GUID(entryJson["assetGuid"].get<std::string>());
+
+            std::string type = "Animation";
+            reader.Read(entryJson, "type", type);
+            entry.Type = AnimationAssetTypeFromString(type);
+            float defaultBlendSeconds = 0.0f;
+            reader.Read(entryJson, "defaultBlendSeconds", defaultBlendSeconds);
+            entry.DefaultBlendSeconds = std::max(0.0f, defaultBlendSeconds);
+            reader.Read(entryJson, "loop", entry.Loop);
+            m_Entries.push_back(std::move(entry));
         }
-
-        m_Entries.clear();
-        if (doc.contains("animations") && doc["animations"].is_array())
-        {
-            for (const auto& entryJson : doc["animations"])
-            {
-                AnimationLibraryEntry entry;
-                entry.Name = entryJson.value("name", std::string());
-                if (entry.Name.empty())
-                    continue;
-
-                if (entryJson.contains("assetGuid") && entryJson["assetGuid"].is_string())
-                    entry.AssetGuid = GUID(entryJson["assetGuid"].get<std::string>());
-
-                entry.Type = AnimationAssetTypeFromString(entryJson.value("type", std::string("Animation")));
-                entry.DefaultBlendSeconds = std::max(0.0f, entryJson.value("defaultBlendSeconds", 0.0f));
-                entry.Loop = entryJson.value("loop", true);
-                m_Entries.push_back(std::move(entry));
-            }
-        }
-
-        SetState(AssetState::Loaded);
-        return true;
     }
-    catch (const std::exception& e)
-    {
-        Logger::Log::Error("AnimationLibrary: failed to parse '{}': {}", GetPath().string(), e.what());
-        m_Entries.clear();
-        SetState(AssetState::Failed);
-        return false;
-    }
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
+
+    SetState(AssetState::Loaded);
+    return true;
+}
+
+bool AnimationLibrary::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("AnimationLibrary: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    m_Entries.clear();
+    SetState(AssetState::Failed);
+    return false;
 }
 
 std::string AnimationLibrary::SerializeJson() const

@@ -1,9 +1,9 @@
 ---
 title: Terrain shadows
-description: How a terrain shadows the sun, what casts and receives, how soft the edge is, the one setting, its cost and its limits.
+description: How a terrain shadows the sun, what casts and receives, how soft the edge is, the one setting, its cost, and its limits.
 ---
 
-A terrain shadows the sun: a ridge darkens the valley behind it, a hill throws its shadow across the lake, at any sun angle and as far as the shadow reaches. This page is what casts, what receives, how soft the edge is, the one setting, what it costs and what it does not do yet.
+A terrain shadows the sun: a ridge darkens the valley behind it, a hill throws its shadow across the lake, at any sun angle and as far as the shadow reaches. This page is what casts, what receives, how soft the edge is, the one setting, what it costs, and what it does not do yet.
 
 ## The short version
 
@@ -57,10 +57,3 @@ The map takes four bytes per sample (the shadow's height and the distance to wha
 :::
 
 With the sun below the horizon, or within half a degree of straight overhead, the terrain casts no shadow.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Terrain/terrain-shadows.html`.
-- 2026-10-05: the edge's resolution under Limits.
-- 2026-10-05: the soft edge: the terrain's shadow blurs with the sun's angular size and the distance to the ridge casting it, as mesh shadows do.
-- 2026-10-04: first version: the terrain shadows the sun in both directional shadow modes; `Cast Shadows` takes effect.

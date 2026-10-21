@@ -80,8 +80,8 @@ struct SkyBodyGroundColors
 };
 
 /// `sunTint` is the SUN's above-atmosphere colour: white for the physical sky, or the authored
-/// stylistic tint. The moon's source is `config.moonColor` ALONE, deliberately untinted, its
-/// magnitude carrying the stylized moon-to-sun illuminance ratio. Keep that asymmetry: the moon
+/// stylistic tint. The moon's source is `config.moonColor` ALONE, deliberately untinted: the lunar
+/// tint at unit luminance (its illuminance is applied by the caller). Keep that asymmetry: the moon
 /// disc is drawn from the same untinted colour, so tinting moonlight here would light the ground
 /// with a colour the visible moon does not have.
 SkyBodyGroundColors EvaluateBodyGroundColors(const AtmosphereParametersGPU& atmosphere,

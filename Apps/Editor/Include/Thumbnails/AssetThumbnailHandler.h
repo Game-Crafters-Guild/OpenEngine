@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
 
 namespace GameEngine {
+
+class UIManager;
+namespace Rendering::RenderGraph { class RGFrame; }
 
 // Base interface for per-asset-type thumbnail generators used by
 // ThumbnailService. Each handler is responsible for a single asset
@@ -39,6 +43,37 @@ public:
                                      int desiredSize,
                                      std::function<void(const std::string& relPath)> onReady,
                                      bool StaticModelListThumbnail = false) = 0;
+
+    // Handlers that render on the GPU: ThumbnailService calls these for every registered handler,
+    // each window frame. Declare this window's pending renders into its frame.
+    virtual void TickRenderRG(uint64_t windowId, Rendering::RenderGraph::RGFrame& frame)
+    {
+        (void)windowId;
+        (void)frame;
+    }
+    // Bind (or publish, on a pure RenderGraph frame) the window's rendered thumbnails to its UI.
+    // Returns true when a binding was added or removed.
+    virtual bool RegisterReadyThumbnailsRG(uint64_t windowId, UIManager* ui,
+                                           Rendering::RenderGraph::RGFrame* pureFrame)
+    {
+        (void)windowId;
+        (void)ui;
+        (void)pureFrame;
+        return false;
+    }
+    // The UI asked for an engine texture name nothing has rendered in this window yet. A handler
+    // that recognises the name queues it; others ignore it.
+    virtual void EnsureEngineThumbnailRequested(uint64_t windowId, const std::string& engineName)
+    {
+        (void)windowId;
+        (void)engineName;
+    }
+    virtual bool IsEngineThumbnailReadyForWindow(uint64_t windowId, const std::string& engineName) const
+    {
+        (void)windowId;
+        (void)engineName;
+        return false;
+    }
 
 protected:
     std::filesystem::path m_AssetsRoot;

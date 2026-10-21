@@ -188,13 +188,15 @@ TEST(RuntimeDependencyStaging, ManagedAssembliesShipWithSidecarsAndWithoutEditor
     EXPECT_FALSE(fs::exists(dirs.Dest / "GameEngine.Editor.Scripting.ABI.dll", ec));
 }
 
-// The managed set is derived, not listed: every engine ABI surface beside the engine ships (a new
-// one included), and so does each assembly a staged assembly's deps.json declares at runtime.
+// The managed set is the script surface assemblies (ScriptingPaths::kScriptSurfaceAssemblyFileNames)
+// that sit beside the engine, and each assembly a staged assembly's deps.json declares at runtime.
+// An ABI-named file the build no longer stages, left in the folder, does not ship.
 TEST(RuntimeDependencyStaging, ManagedSetIsTheAbiSurfacesAndTheDepsJsonClosure)
 {
     StagingDirs dirs("ge_rds_managed_closure");
     for (const char* name : {"GameEngine.CoreBridge.dll", "GameEngine.HotReload.dll",
-                             "GameEngine.Scripting.Runtime.dll", "GameEngine.Audio.ABI.dll",
+                             "GameEngine.Scripting.Runtime.dll", "GameEngine.Platform.ABI.dll",
+                             "GameEngine.Scripting.Bindings.dll", "GameEngine.Stale.ABI.dll",
                              "GameEngine.Runtime.Support.dll", "GameEngine.Runtime.Support.Extra.dll",
                              "GameEngine.Unreferenced.dll"})
         Touch(dirs.Source / name);
@@ -207,11 +209,14 @@ TEST(RuntimeDependencyStaging, ManagedSetIsTheAbiSurfacesAndTheDepsJsonClosure)
     ASSERT_TRUE(StageManagedRuntimeAssemblies(dirs.Source, dirs.Dest, dirs.Errors))
         << (dirs.Errors.empty() ? "" : dirs.Errors.front());
     std::error_code ec;
-    for (const char* shipped : {"GameEngine.Scripting.Runtime.dll", "GameEngine.Audio.ABI.dll",
-                                "GameEngine.Runtime.Support.dll", "GameEngine.Runtime.Support.Extra.dll"})
+    for (const char* shipped : {"GameEngine.Scripting.Runtime.dll", "GameEngine.Platform.ABI.dll",
+                                "GameEngine.Scripting.Bindings.dll", "GameEngine.Runtime.Support.dll",
+                                "GameEngine.Runtime.Support.Extra.dll"})
         EXPECT_TRUE(fs::exists(dirs.Dest / shipped, ec)) << "not staged: " << shipped;
     EXPECT_FALSE(fs::exists(dirs.Dest / "GameEngine.Unreferenced.dll", ec))
         << "an assembly nothing loads must not ship";
+    EXPECT_FALSE(fs::exists(dirs.Dest / "GameEngine.Stale.ABI.dll", ec))
+        << "an ABI-named file outside the script surface list must not ship";
 }
 
 TEST(RuntimeDependencyStaging, DepsJsonDependencyMissingFromTheEditorFailsNamingIt)
@@ -292,7 +297,8 @@ TEST(RuntimeDependencyStaging, MultiDirSearchEarlierDirShadowsLaterSameName)
                                           EngineRuntimeDependencySet(), dirs.Errors))
         << (dirs.Errors.empty() ? "" : dirs.Errors.front());
     EXPECT_TRUE(fs::exists(dirs.Dest / "Engine.dll", ec));
-    EXPECT_TRUE(fs::exists(dirs.Dest / "GameEngine.Native.dll", ec));
+    // The C ABI shim ships only from a build with C# scripting, which is the only one that has it.
+    EXPECT_EQ(fs::exists(dirs.Dest / "GameEngine.Native.dll", ec), GE_ENABLE_SCRIPTING != 0);
     std::ifstream staged(dirs.Dest / "glfw3.dll", std::ios::binary);
     std::string content((std::istreambuf_iterator<char>(staged)), std::istreambuf_iterator<char>());
     EXPECT_EQ(content, "first-dir") << "earlier source dir must shadow the later one";
@@ -344,6 +350,31 @@ TEST(RuntimeDependencyStaging, DirectXTexShipsWhenPresentAndStaysOptional)
         << (dirs.Errors.empty() ? "" : dirs.Errors.front());
     EXPECT_TRUE(fs::exists(dirs.Dest / "DirectXTex.dll", ec))
         << "DirectXTex.dll beside the engine must ship with the package";
+}
+
+TEST(RuntimeDependencyStaging, OggVorbisShipsWhenPresentAndStaysOptional)
+{
+    // Engine.dll imports vorbisfile.dll on dynamic triplets (Ogg Vorbis decodes through
+    // libvorbis), and vorbisfile.dll imports vorbis.dll and ogg.dll: the load-time import
+    // guard sees only the first, so all three are checked here. Static triplets (macOS,
+    // Linux, the web) link them in and ship none, so a package without them stays valid.
+    StagingDirs dirs("ge_rds_oggvorbis");
+    dirs.PopulateAllRequired(EngineRuntimeDependencySet());
+    std::error_code ec;
+    const char* const kDlls[] = {"vorbisfile.dll", "vorbis.dll", "ogg.dll"};
+
+    ASSERT_TRUE(StageCuratedDependencySet({dirs.Source}, dirs.Dest, EngineRuntimeDependencySet(), dirs.Errors))
+        << (dirs.Errors.empty() ? "" : dirs.Errors.front());
+    for (const char* dll : kDlls)
+        EXPECT_FALSE(fs::exists(dirs.Dest / dll, ec)) << dll;
+
+    for (const char* dll : kDlls)
+        Touch(dirs.Source / dll);
+    dirs.Errors.clear();
+    ASSERT_TRUE(StageCuratedDependencySet({dirs.Source}, dirs.Dest, EngineRuntimeDependencySet(), dirs.Errors))
+        << (dirs.Errors.empty() ? "" : dirs.Errors.front());
+    for (const char* dll : kDlls)
+        EXPECT_TRUE(fs::exists(dirs.Dest / dll, ec)) << dll << " beside the engine must ship with the package";
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +583,12 @@ TEST(RuntimeDependencyStaging, ThePackagedEngineIsTheRuntimeOfTheConfigurationTh
                                           dirs.Errors))
         << (dirs.Errors.empty() ? "" : dirs.Errors.front());
     EXPECT_EQ(ReadFile(dirs.Dest / kEngineRuntimeFile), "sdk-release-engine");
+#if GE_ENABLE_SCRIPTING
     EXPECT_EQ(ReadFile(dirs.Dest / kNativeRuntimeFile), "sdk-release-native");
+#else
+    // A build without C# scripting has no C ABI shim, so its runtime ships none.
+    EXPECT_FALSE(fs::exists(dirs.Dest / kNativeRuntimeFile));
+#endif
 
     const BuildPipeline::PackagedEngineRuntime own =
         BuildPipeline::ResolvePackagedEngineRuntime(fixture.Settings, "DebugFast", "DebugFast", "");
@@ -563,6 +599,25 @@ TEST(RuntimeDependencyStaging, ThePackagedEngineIsTheRuntimeOfTheConfigurationTh
                                           dirs.Errors))
         << (dirs.Errors.empty() ? "" : dirs.Errors.front());
     EXPECT_EQ(ReadFile(dirs.Dest / kEngineRuntimeFile), "editor-debugfast-engine");
+}
+
+// Without C# scripting the engine runtime is the engine alone, so an editor built that way packages
+// any project; with scripting a directory without the C ABI shim is no runtime, and the refusal
+// names the missing library.
+TEST(RuntimeDependencyStaging, TheEngineAloneIsTheRuntimeOnlyWithoutCSharpScripting)
+{
+    LinkedRuntimeFixture fixture;
+    WriteFile(fixture.Release / kEngineRuntimeFile, "sdk-release-engine");
+
+    const BuildPipeline::PackagedEngineRuntime runtime =
+        BuildPipeline::ResolvePackagedEngineRuntime(fixture.Settings, "Release", "DebugFast", "");
+#if GE_ENABLE_SCRIPTING
+    EXPECT_TRUE(runtime.Dir.empty());
+    EXPECT_NE(runtime.Refusal.find("Engine and GameEngine.Native"), std::string::npos) << runtime.Refusal;
+#else
+    EXPECT_TRUE(runtime.Refusal.empty()) << runtime.Refusal;
+    EXPECT_EQ(runtime.Dir, fixture.Release);
+#endif
 }
 
 // A linked configuration whose runtime the SDK does not stage is refused by name, never replaced by

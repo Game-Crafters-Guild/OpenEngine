@@ -37,7 +37,7 @@ Include/Pathfinding/
 Source/
   PathBuffer.cpp
   GridMap.cpp
-  AStarSolver.h / .cpp     Private. Stateless, thread-safe A* implementation.
+  AStarSolver.h / .cpp     Private. A* with scratch reused across solves; GridMap keeps one solver per thread.
   HexGridHelpers.h / .cpp  Private. Odd-r offset hex coordinate math.
   DetourNavMap.cpp          Full Recast pipeline + Detour queries (behind #if guard)
   ObstacleAvoidance.cpp     dtCrowd wrapper (behind #if guard)
@@ -76,11 +76,12 @@ In-house grid-based navigation map. Supports both square (8-neighbor) and hex (6
 
 #### A* Solver
 
-Private, stateless class. All working memory is local to each `Solve()` call, so multiple requests run concurrently on different threads.
+Private class whose working buffers belong to the solver instance; a solve never yields, so it finishes on the thread that started it. The buffers (11 bytes per cell) grow to exactly the largest grid the solver has solved on. A `NavigationWorld` owns its grid solvers (`AStarSolverPool`): a grid solve of the world (`FindPath`, `FindPathAcrossLinks`) leases an idle solver, or a new one when every solver is leased, and returns it when it finishes; `SolveGridPaths` leases one solver per lane (at most one per pool worker plus the caller), and each lane claims the batch's solves one at a time on it. The world therefore keeps one solver per solve or lane it has run at once, and the pool mutex is taken twice per solve or lane. Removing or replacing a grid map frees the scratch of the world's idle solvers beyond what its largest remaining grid map needs, and destroying the world frees all of them; a leased solver is never trimmed, and no other world's or thread's scratch is touched. `GridMap::FindPath` called directly, on a standalone grid map or on a world's grid map through `GetGridMap`/`GetMap`, solves on the calling thread's solver (`static thread_local`). That scratch lives as long as the thread, and the world neither frees nor reports it. Solve through `NavigationWorld::FindPath` or `SolveGridPaths` to use the world's solvers. `NavigationWorld::GetSolverScratchStatistics` reports the world's solvers, the bytes they hold and the most one has held (the editor's `get_navigation_stats`, `solverScratch`).
 
 - Open list: array-backed binary heap (`std::vector<Node>`)
 - Closed set: flat `std::vector<uint8>`
 - gScore + parent: flat `std::vector<float32>` / `std::vector<uint32>`
+- Visit stamps: a `uint16` per cell; a cell's gScore, parent and closed flag count only when its stamp equals the solve's generation, so a solve does not clear the buffers (the stamps are cleared once every 65,535 solves)
 - Square: 8 neighbors, octile heuristic, diagonal cost = 1.414
 - Hex: 6 neighbors, hex distance heuristic
 - Step cost = `base_distance * cell_cost * (1 + kReservationPenalty)` if reserved
@@ -115,7 +116,7 @@ Top-level facade that owns everything.
 
 - **Map management**: `AddGridMap`, `AddDetourNavMap`, `RemoveMap` with generational handle validation
 - **Sync queries**: `FindPath(mapHandle, request, outPath)` -- blocks, for editor/tools
-- **Batched grid solves**: `SolveGridPaths(pool, solves)` -- solves every grid request with `JobSystem::ParallelFor` on the given pool (null: on the caller, in order) and returns once all are done; each solve writes only its own status and points, so the caller allocates the paths in its own order. `HasActivePathJobs()` is true only during this call, and every `GridMap` writer and every map add, remove or replace asserts (Debug, DebugFast) while it runs
+- **Batched grid solves**: `SolveGridPaths(pool, solves)` -- solves every grid request with `JobSystem::ParallelFor` on the given pool, one unit per lane, each lane on one leased solver claiming solves one at a time (null pool: on the caller, in order) and returns once all are done; each solve writes only its own status and points, so the caller allocates the paths in its own order. `HasActivePathJobs()` is true only during this call, and every `GridMap` writer and every map add, remove or replace asserts (Debug, DebugFast) while it runs
 - **Cross-map**: `FindPathAcrossLinks(request, outPath)` -- cheapest map sequence over the links (Dijkstra on `TraversalCost`), then solves per segment and joins them; blocks
 - **NavLinks**: `AddNavLink`, `RemoveNavLink`, `GetNavLink`, `ForEachNavLink`, `AutoGenerateBoundaryLinks`
 - **PathBuffer**: Thread-safe pool of variable-length path buffers
@@ -219,7 +220,7 @@ The Editor layer is responsible for consuming this data and drawing it via `Gizm
 | PathBuffer | `std::mutex` | All alloc/free/read operations lock |
 | GridMap reservations | `std::shared_mutex` | A path-solve window holds it shared for all of its solves (A* reads through the `ReadView`, unlocked); `GetCellReservation` and `IsOccupiedByOther` share it per call; writers (Reserve, Clear) take it exclusive and assert (Debug, DebugFast) while a window is open |
 | GridMap cell data | None; no writer inside a path-solve window | Written on the main thread outside `SolveGridPaths`; every writer asserts (Debug, DebugFast) while a window is open |
-| A* solver | Stateless | All working memory is stack-local per Solve() call |
+| A* solver | World: `std::mutex` per world's solver pool; outside a world: per-thread instance | A world's grid solve, or a `SolveGridPaths` lane, leases one of the world's solvers (the pool mutex is taken to lease and to return) and shares no scratch with another solve; the scratch release trims only idle solvers of that world, under the same mutex. `GridMap::FindPath` outside a world uses one `thread_local` solver per thread |
 | NavigationWorld maps | None (single-threaded access assumed) | Map add/remove/replace on the main thread, gated on `HasActivePathJobs()`; `SolveGridPaths`' solves only read the map table, and each of those writers asserts (Debug, DebugFast) while it runs |
 | NavigationPathfindingSystem | Exclusive update | No other managed system runs while its solves read the grids; results are applied on its own thread |
 

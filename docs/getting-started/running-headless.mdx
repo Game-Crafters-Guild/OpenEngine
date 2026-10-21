@@ -1,11 +1,11 @@
 ---
 title: Running the Player headless
-description: Running a project with no window, graphics device or audio for dedicated servers and simulations, with exit codes and restarting under a service manager.
+description: Running a project with no window, graphics device, or audio for dedicated servers and simulations, with exit codes and restarting under a service manager.
 sidebar:
   order: 2
 ---
 
-The Player can run a project with no window, no graphics device, no audio device and no input device. The project's startup scene loads, its native and C# scripts, physics, pathfinding and the rest of the engine's systems run on a fixed step, and the log file is the only output. Terrain, ocean and skinned characters are the exceptions: see [What does not run](#what-does-not-run). Use it for a dedicated game server, a simulation or soak test, or any machine without a GPU. The engine has no networking module: a server brings its own transport, for example in a native script.
+The Player can run a project with no window, no graphics device, no audio device, and no input device. The project's startup scene loads, its native and C# scripts, physics, pathfinding, and the rest of the engine's systems run on a fixed step, and the log file is the only output. Terrain, ocean, and skinned characters are the exceptions: see [What does not run](#what-does-not-run). Use it for a dedicated game server, a simulation or soak test, or any machine without a GPU. The engine has no networking module: a server brings its own transport, for example in a native script.
 
 ## Command line
 
@@ -15,7 +15,7 @@ Player.exe --headless [--fixed-fps 60] [--quit-after <frames>] [--config <game.c
 
 | Flag | Meaning |
 |---|---|
-| `--headless` | Run with no window, graphics device, audio device or input device. |
+| `--headless` | Run with no window, graphics device, audio device, or input device. |
 | `--fixed-fps <rate>` | The headless step, in frames per second; 60 when not given. Without `--headless` (and outside movie capture) it is ignored, with a warning in the log. Each frame advances the simulation by exactly `1 / rate` seconds and waits out the rest of its slot, so the game runs in real time. A frame that takes longer than its slot is not caught up. |
 | `--quit-after <frames>` | Exit after that many frames, in a headless or a windowed run. Without it the run lasts until a script asks to quit or the process is stopped. A value that is not a non-negative whole number is refused. |
 | `--config`, `--asset-root` | As for a windowed run: the `game.config` to load and the project's `Assets` folder. A packaged game finds both beside the executable. |
@@ -51,7 +51,7 @@ No managed quit call yet: a C# script cannot end the run. The native call is `Ga
 
 ## What does not run
 
-Nothing is drawn: no render pipeline is loaded, the game UI is not built, and models and materials are not uploaded. Audio emitters play nothing. Keyboard, mouse and gamepad input reads as idle. Systems that only prepare rendering skip their work; game logic, physics and navigation over scene geometry run as they do in a windowed run.
+Nothing is drawn: no render pipeline is loaded, the game UI is not built, and models and materials are not uploaded. Audio emitters play nothing. Keyboard, mouse, and gamepad input reads as idle. Systems that only prepare rendering skip their work. Game logic, physics, and navigation over scene geometry run as they do in a windowed run.
 
 Some simulation data is still produced only by the systems that prepare rendering, so a headless run does not have it yet:
 
@@ -75,9 +75,9 @@ The Player writes its log to `%APPDATA%\<gameName>\Logs\game-<process id>.log`, 
 | Exit code | Meaning |
 |---|---|
 | `0` | The run ended normally: `--quit-after` reached, or a script asked to quit. |
-| `1` | The command line or configuration was refused: `--config` names a missing file, a flag that needs a graphics device was given, `--fixed-fps` is not a positive number, or `--quit-after` is not a non-negative whole number. Restarting will not help; the log names the fix. |
+| `1` | The command line or configuration was refused: `--config` names a missing file, a flag that needs a graphics device was given, `--fixed-fps` is not a positive number, or `--quit-after` is not a non-negative whole number. Restarting will not help. The log names the fix. |
 | `-1` (`4294967295`) | Startup failed, for example the startup scene could not be loaded. The log line before `Player: Failed to initialize` names the cause. |
-| `-2`, `-3` | An unhandled exception ended the run; the log holds its message. |
+| `-2`, `-3` | An unhandled exception ended the run. The log holds its message. |
 
 :::caution
 
@@ -108,8 +108,3 @@ do {
     Start-Sleep -Seconds 5
 } while ($p.ExitCode -ne 0)
 ```
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/running-headless.html`; the quit call is a C++ and C# view with the C# binding pending.
-- 2026-10-11: First version: `--headless` and its `--fixed-fps` step; `--quit-after` for any run.

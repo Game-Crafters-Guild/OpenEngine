@@ -21,8 +21,6 @@ Transform.scale = (1, 1, 1)
 HierarchyOrder.order = 20
 Name.value = "Sky Environment"
 SkyEnvironment.Enabled = true
-SkyEnvironment.TimeOfDayHours = 10
-SkyEnvironment.Latitude = 40
 SkyEnvironment.SunLight = "directional_light"
 Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
@@ -30,6 +28,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="main_camera"]
 Camera.enabled = true
+Camera.farZ = 3000
 HierarchyOrder.order = 30
 Name.value = "Main Camera"
 Transform.position = (0, 3, -10)
@@ -37,6 +36,7 @@ Transform.rotation = (0.08715574274765817, 0, 0, 0.9961946980917455)
 Transform.scale = (1, 1, 1)
 
 [entity id="post_process_volume"]
+HeightFogEffect.enabled = true
 HierarchyOrder.order = 40
 Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true

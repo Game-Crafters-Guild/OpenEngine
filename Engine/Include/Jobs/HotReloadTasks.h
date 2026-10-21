@@ -588,6 +588,10 @@ class HotReloadPipeline
     void SetAssemblyLoaderFactory(std::function<std::unique_ptr<Jobs::IAssemblyLoader>()> factory) { m_LoaderFactory = std::move(factory); }
     void SetSwapperFactory(std::function<std::unique_ptr<Jobs::IAssemblySwapper>()> factory) { m_SwapperFactory = std::move(factory); }
 
+    /// Called on the pipeline's worker thread at the end of every run, with its stats, before the
+    /// run's future is ready. Set before the first ExecuteAsync.
+    void SetRunCompletedCallback(std::function<void(const PipelineStats&)> callback) { m_RunCompletedCallback = std::move(callback); }
+
     /**
      * @brief Request cancellation of the current run and return without waiting.
      *
@@ -692,6 +696,7 @@ class HotReloadPipeline
 
     std::function<std::unique_ptr<Jobs::IAssemblyLoader>()> m_LoaderFactory;
     std::function<std::unique_ptr<Jobs::IAssemblySwapper>()> m_SwapperFactory;
+    std::function<void(const PipelineStats&)> m_RunCompletedCallback;
 
     DISALLOW_COPY_AND_ASSIGN(HotReloadPipeline);
 };

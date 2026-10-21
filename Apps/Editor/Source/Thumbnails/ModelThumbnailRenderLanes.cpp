@@ -183,10 +183,9 @@ void ModelThumbnailHandler::DispatchSlotRender(WindowState& ws, RenderLane& lane
             return;
 
         EnsureViewAndCamera(lane);
-        m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 1u);
+        m_RenderServices->Views().RequestViewFrame(lane.viewId);
         m_RenderServices->Views().SetViewWorldId(
             lane.viewId, lane.world->GetWorldId());
-        m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 0u);
 
         SubmitThumbnailRenderRG(ws, lane, slot, slotIdx, guid, *arm.frame);
         return;
@@ -249,12 +248,10 @@ void ModelThumbnailHandler::DispatchSlotRender(WindowState& ws, RenderLane& lane
         UpdatePreviewLights(lane, orbitYaw);
         EnsureViewAndCamera(lane);
 
-        m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 1u);
+        m_RenderServices->Views().RequestViewFrame(lane.viewId);
         m_RenderServices->Views().SetViewWorldId(lane.viewId, thumbWorld.GetWorldId());
 
         TickThumbnailSystems(thumbWorld);
-
-        m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 0u);
 
         SubmitThumbnailRenderRG(ws, lane, slot, slotIdx, guid, *arm.frame);
         return;
@@ -327,15 +324,12 @@ void ModelThumbnailHandler::DispatchSlotRender(WindowState& ws, RenderLane& lane
     UpdatePreviewLights(lane, orbitYaw);
     EnsureViewAndCamera(lane);
 
-    // Enable the view for extraction so entities match against it.
-    m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 1u);
+    // Arm the view for this frame and the next, so extraction matches the thumbnail world against it;
+    // it lapses on its own after them.
+    m_RenderServices->Views().RequestViewFrame(lane.viewId);
     m_RenderServices->Views().SetViewWorldId(lane.viewId, thumbWorld.GetWorldId());
 
     TickThumbnailSystems(thumbWorld);
-
-    // Disable the view's render layer mask after extraction to prevent
-    // the main pipeline from re-rendering this view every frame.
-    m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 0u);
 
     SubmitThumbnailRenderRG(ws, lane, slot, slotIdx, guid, *arm.frame);
 }
@@ -364,10 +358,6 @@ void ModelThumbnailHandler::FinalizeInFlightRender(WindowState& ws, RenderLane& 
     if (lane.viewId != 0)
     {
         m_RenderServices->GetWorldDrawBuilder().ClearView(lane.viewId);
-
-        // Disable the view's render layer mask and clear flags so the activation
-        // predicate returns false even if the world pass is re-enabled.
-        m_RenderServices->Views().SetViewRenderLayerMask(lane.viewId, 0u);
 
         // Detach the camera so the view is fully headless until the next
         // thumbnail render reassigns it.

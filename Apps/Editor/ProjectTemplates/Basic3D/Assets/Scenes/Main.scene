@@ -21,8 +21,6 @@ Transform.scale = (1, 1, 1)
 HierarchyOrder.order = 20
 Name.value = "Sky Environment"
 SkyEnvironment.Enabled = true
-SkyEnvironment.TimeOfDayHours = 10
-SkyEnvironment.Latitude = 40
 SkyEnvironment.SunLight = "directional_light"
 Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
@@ -38,22 +36,11 @@ Transform.rotation = (0.08715574274765817, 0, 0, 0.9961946980917455)
 Transform.scale = (1, 1, 1)
 
 [entity id="post_process_volume"]
-; Horizon haze in the sky's own horizon color at every time of day. It starts 150 m out and is
-; dense only in the last few degrees below the horizon, from the default camera and from 40 m up.
-; The ground reaches 3000 m from the origin, the Main Camera's far clip. Past the fog's maxDistance
-; the ground is fogged to 97.5 percent while the sky fill below the horizon reaches 98 percent, so by
-; day the end of the ground does not show; that 0.5-point gap is the fog model's, not the far clip's,
-; and under the Scene View's brighter night exposure it still reads as a faint line where the ground ends.
+; The default height fog: a horizon haze in the sky's own horizon color at every time of day. From the
+; default camera it starts 150 m out and is dense only in the last few degrees above the horizon. The
+; ground reaches 3000 m from the origin, the Main Camera's far clip and the fog's maxDistance, so by
+; day the end of the ground does not show; at night it reads as a faint line where the ground ends.
 HeightFogEffect.enabled = true
-HeightFogEffect.intensity = 1
-HeightFogEffect.density = 1
-HeightFogEffect.maxOpacity = 1
-HeightFogEffect.minDistance = 150
-HeightFogEffect.smoothLength = 150
-HeightFogEffect.maxDistance = 3000
-HeightFogEffect.heightFogEnabled = false
-HeightFogEffect.colorMode = 1
-HeightFogEffect.skyFillEnd = 0.05
 HierarchyOrder.order = 40
 Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true
@@ -62,10 +49,12 @@ Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (1, 1, 1)
 
+; The ground is the engine's grid ground, Materials/GroundGrid.material in the engine content: a 1 m
+; grid on this 6000 m plane, the same ground a new scene starts with.
 [entity id="plane"]
 HierarchyOrder.order = 50
 MeshRenderer.meshPrimitive = Plane
-MeshRenderer.material = [path="Materials/Ground.material"]
+MeshRenderer.material = [guid="f9bf4ef2-0e5e-4632-87e2-dd600f27fde5"]
 Name.value = "Ground"
 PhysicsBody.motionType = 0
 PhysicsBody.gravityScale = 0

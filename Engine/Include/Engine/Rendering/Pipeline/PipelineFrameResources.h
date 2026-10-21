@@ -77,6 +77,10 @@ struct PipelineFrameResources
     std::unordered_map<Key, ::GameEngine::Rendering::RenderGraph::RGTexture, KeyHash> Textures;
     std::unordered_map<Key, PipelineBufferBindingRG, KeyHash> Buffers;
     std::unordered_map<::GameEngine::Rendering::ViewId, ViewInfo> Views;
+    // Textures holding scene colour stored at a view's pre-exposure P (pre_exposure_snapshot.comp),
+    // by render graph resource id: the view's colour target, the blueprint's "preExposed" textures
+    // when they materialize, and the ones nodes create (ViewDeclare::MarkPreExposed).
+    std::unordered_map<uint32_t, ::GameEngine::Rendering::ViewId> PreExposedTextures;
 
     // Per-view entries first, then frame-scope — the enumeration shape the
     // old ForEachBufferRef had (per-view names shadow frame-scope ones at

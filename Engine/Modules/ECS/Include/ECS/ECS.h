@@ -116,16 +116,16 @@ struct EntityHandle
         uint32 id;
     };
 
-    EntityHandle() : id(kInvalidEntity) {}
+    constexpr EntityHandle() : id(kInvalidEntity) {}
     EntityHandle(EntityIndex idx, EntityVersion ver) : index(idx), version(ver) {}
 
     static EntityHandle Invalid()
     {
         return EntityHandle();
     }
-    explicit EntityHandle(uint32 entityId) : id(entityId) {}
+    constexpr explicit EntityHandle(uint32 entityId) : id(entityId) {}
 
-    bool IsValid() const
+    constexpr bool IsValid() const
     {
         return id != kInvalidEntity;
     }
@@ -458,7 +458,8 @@ struct EntityMetadata
     uint16_t chunkIndex = 0;       // Which 16KB chunk in the table (max 65535)
     uint16_t indexInChunk = 0;     // Slot within that chunk (max 65535, typical ~200)
     EntityVersion version = 0;     // 2 bytes
-    bool alive = false;            // 1 byte + 1 padding = 16 bytes total
+    bool alive = false;            // 1 byte
+    bool onFreeList = false;       // 1 byte (16 bytes total): the index is in World's free list
 
     EntityLocation GetLocation() const { return {chunkIndex, indexInChunk}; }
     void SetLocation(const EntityLocation& loc)

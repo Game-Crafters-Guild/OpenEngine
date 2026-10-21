@@ -95,8 +95,11 @@ GE_API GE_Result GE_CDECL GE_GameUI_FindElement(uint64_t entityId, const char* i
             return GE_Result_InvalidArg;
         // Script ids arrive as strings; this is where they are hashed, once per call.
         const GameEngine::StringId key = GameEngine::HashStringId(id);
-        GameEngine::UIElement* el = (entityId == 0) ? GameEngine::GameUI::FindElementByIdAny(key)
-                                                    : GameEngine::GameUI::FindElementById(entityId, key);
+        GameEngine::UIElement* el = nullptr;
+        if (entityId == 0)
+            el = GameEngine::GameUI::FindElementById(key);
+        else if (GameEngine::UIElement* root = GameEngine::GameUI::FindDocumentRoot(entityId))
+            el = root->FindById(key);
         if (!el)
         {
             ReportUnresolvableHostOnce();

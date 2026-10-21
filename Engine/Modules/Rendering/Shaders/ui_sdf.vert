@@ -20,8 +20,18 @@ layout(std430, set = 0, binding = 2) readonly buffer DrawOrderBuf {
     uint drawOrder[];
 } sb_order;
 
+layout(std430, set = 0, binding = 1) readonly buffer ClipBuf {
+    UIClipRect clips[];
+} cb;
+
+// CSS transforms (UITransformSlot): each element's map into its parent's
+// space, chained by parentIndex. NO_TRANSFORM is never read.
+layout(std430, set = 0, binding = 3) readonly buffer TransformBuf {
+    UITransformSlot transforms[];
+} tb;
+
 layout(location = 0) flat out uint vInstance;
-layout(location = 1) out vec2 vLocal;  // Pixel position (top-left origin, Y-down)
+layout(location = 1) out vec2 vLocal;  // Pixel position in the primitive's own (untransformed) space
 layout(location = 2) out vec2 vUV;     // Interpolated UV for textured/Slug modes
 // Stage 2 part 3: pass the resolved slot index from vertex to fragment so the
 // fragment shader reads the SAME primitive the vertex shader used. Without
@@ -29,6 +39,15 @@ layout(location = 2) out vec2 vUV;     // Interpolated UV for textured/Slug mode
 // DrawOrder indirection and points at waste / wrong slots in the persistent
 // buffer (the cause of the missing-primitive bugs in initial Stage 2 part 3).
 layout(location = 3) flat out uint vSlot;
+// The fragment's position in each clip of the primitive's clip chain (levels
+// 0-3, two per vec4), each in that clip's own space, and that space's units
+// per vLocal unit (flat: constant over an affine map). A clip in the
+// primitive's own space reads vLocal's value exactly; one across a transform
+// is the screen position carried back through the clip's inverse. Affine maps
+// interpolate linearly, so per-vertex mapping is exact.
+layout(location = 5) out vec4 vClipPos01;
+layout(location = 6) out vec4 vClipPos23;
+layout(location = 7) flat out vec4 vClipScale;
 #if defined(GE_COMPAT_PROFILE)
 // Run-local texture slot ordinal. The compat profile has no binding arrays, so
 // the CPU partitions the draw order into runs whose distinct textures fit the
@@ -75,6 +94,95 @@ const float kSlugDilatePixels = kTextFilterOuterRadiusPx + 1.0 / 3.0;
 const float kSlugDilatePixels = kTextFilterOuterRadiusPx;
 #endif
 
+// --- CSS transforms ---
+struct Affine
+{
+    mat2 m;
+    vec2 t;
+};
+
+// The deepest chain the CPU builds (UI::kMaxTransformChainDepth,
+// UIPrimitive.h): it gives an element past it no slot of its own, so the walk
+// never cuts a chain. A shallow chain stops at NO_TRANSFORM.
+const int kMaxTransformChainDepth = 32;
+
+Affine identityAffine()
+{
+    Affine a;
+    a.m = mat2(1.0);
+    a.t = vec2(0.0);
+    return a;
+}
+
+// The map from slot `idx`'s element space to the screen: its own transform,
+// then each transformed ancestor's in turn.
+Affine composeTransform(uint idx)
+{
+    Affine a = identityAffine();
+    for (int i = 0; i < kMaxTransformChainDepth && idx != NO_TRANSFORM; ++i)
+    {
+        UITransformSlot s = tb.transforms[idx];
+        mat2 m = mat2(s.m.xy, s.m.zw);
+        a.t = m * a.t + s.t;
+        a.m = m * a.m;
+        idx = s.parentIndex;
+    }
+    return a;
+}
+
+Affine invertAffine(Affine a)
+{
+    float det = a.m[0][0] * a.m[1][1] - a.m[1][0] * a.m[0][1];
+    float invDet = abs(det) > 1e-12 ? 1.0 / det : 0.0;
+    Affine r;
+    r.m = mat2(a.m[1][1], -a.m[0][1], -a.m[1][0], a.m[0][0]) * invDet;
+    r.t = -(r.m * a.t);
+    return r;
+}
+
+// The smallest stretch the map gives any direction: how many screen pixels
+// one local unit spans at worst. Screen-pixel AA dilations divide by it.
+float minStretch(mat2 m)
+{
+    float frob = dot(m[0], m[0]) + dot(m[1], m[1]);
+    float det = abs(m[0][0] * m[1][1] - m[1][0] * m[0][1]);
+    float disc = sqrt(max(frob * frob - 4.0 * det * det, 0.0));
+    return sqrt(max(0.5 * (frob - disc), 1e-8));
+}
+
+// Fills the clip-chain varyings for a vertex at `local` (screen = toScreen).
+void writeClipVaryings(uint flags, uint primTransform, vec2 local, Affine toScreen)
+{
+    vec2 q[kMaxClipChainDepth];
+    vec4 scale = vec4(1.0);
+    for (int i = 0; i < kMaxClipChainDepth; ++i)
+        q[i] = local;
+
+    // Clips come from the primitive's own element and its ancestors (an
+    // overlay restarts its clip chain at the window-space viewport clip and
+    // keeps its owner's transform), so an untransformed primitive only ever
+    // sits under untransformed clips: no walk, and a UI without transforms
+    // reads no clip in this stage.
+    uint idx = primTransform != NO_TRANSFORM ? (flags >> CLIP_INDEX_SHIFT) & 0xFFFFu : NO_CLIP;
+    for (int i = 0; i < kMaxClipChainDepth && idx != NO_CLIP; ++i)
+    {
+        UIClipRect clip = cb.clips[idx];
+        uint clipTransform = clip.params.y;
+        if (clipTransform != primTransform)
+        {
+            Affine fromScreen = invertAffine(composeTransform(clipTransform));
+            vec2 screen = toScreen.m * local + toScreen.t;
+            q[i] = fromScreen.m * screen + fromScreen.t;
+            mat2 toClip = fromScreen.m * toScreen.m;
+            scale[i] = sqrt(abs(toClip[0][0] * toClip[1][1] - toClip[1][0] * toClip[0][1]));
+        }
+        idx = clip.params.x;
+    }
+    vClipPos01 = vec4(q[0], q[1]);
+    vClipPos23 = vec4(q[2], q[3]);
+    vClipScale = scale;
+}
+
 void main()
 {
 #if defined(GE_COMPAT_PROFILE)
@@ -106,6 +214,16 @@ void main()
     uint mode = prim.packed.x & MODE_MASK;
     bool isSlug = (mode == MODE_SLUG) && ((prim.packed.x & COLOR_GLYPH_BIT) == 0u);
 
+    // The primitive's geometry is in its element's space; the transform
+    // chain carries it to the screen. Untransformed primitives skip the walk
+    // and keep their exact pixel positions.
+    uint primTransform = floatBitsToUint(prim.modeParams.y);
+    Affine toScreen = primTransform != NO_TRANSFORM ? composeTransform(primTransform) : identityAffine();
+    // Screen-pixel AA dilations, in local units: a shrunk element needs a
+    // wider skirt in its own space to cover the same screen pixels.
+    float pxToLocal = primTransform != NO_TRANSFORM ? 1.0 / minStretch(toScreen.m) : 1.0;
+    vec2 local;
+
     // A glyph's effect instance paints its shadow, glow and outline inside its
     // own quad, so the quad grows by their reach (zero for a plain fill).
     float textEffectPad = mode == MODE_SLUG ? uiTextEffectReachPx(prim) : 0.0;
@@ -116,8 +234,9 @@ void main()
         // The SSBO stores undilated rect and undilated em-space bounds.
 
         // Expand screen-space rect outward by kSlugDilatePixels on each edge.
-        vec2 rectPos = prim.rectXYWH.xy - vec2(kSlugDilatePixels + textEffectPad);
-        vec2 rectSize = prim.rectXYWH.zw + vec2(2.0 * (kSlugDilatePixels + textEffectPad));
+        float slugDilate = kSlugDilatePixels * pxToLocal;
+        vec2 rectPos = prim.rectXYWH.xy - vec2(slugDilate + textEffectPad);
+        vec2 rectSize = prim.rectXYWH.zw + vec2(2.0 * (slugDilate + textEffectPad));
 
         // Compute how much em-space corresponds to kSlugDilatePixels screen pixels.
         // uvRect stores undilated em bounds: (emXMin, emYMax, emXMax, emYMin).
@@ -129,18 +248,15 @@ void main()
 
         // ems per pixel along each axis; guard against degenerate zero-size glyphs.
         vec2 epp = emExtent / max(screenExtent, vec2(0.001));
-        vec2 deltaEm = (kSlugDilatePixels + textEffectPad) * epp;
+        vec2 deltaEm = (slugDilate + textEffectPad) * epp;
 
         // Dilated em-space bounds for interpolation.
         // uvRect convention: (emXMin, emYMax, emXMax, emYMin) — Y flipped for screen Y-down.
         vec2 dilatedUVxy = vec2(emMin.x - deltaEm.x, emMax.y + deltaEm.y);
         vec2 dilatedUVzw = vec2(emMax.x + deltaEm.x, emMin.y - deltaEm.y);
 
-        vec2 local = rectPos + p01 * rectSize;
-        vLocal = local;
+        local = rectPos + p01 * rectSize;
         vUV = mix(dilatedUVxy, dilatedUVzw, p01);
-
-        gl_Position = clipFromPixel(local);
     }
     else if (mode == MODE_SLUG && textEffectPad > 0.0)
     {
@@ -148,10 +264,9 @@ void main()
         // UVs; the fragment stage bounds its samples to uvRect.
         vec2 padUV = textEffectPad * (prim.uvRect.zw - prim.uvRect.xy)
             / max(prim.rectXYWH.zw, vec2(0.001));
-        vLocal = prim.rectXYWH.xy - vec2(textEffectPad)
+        local = prim.rectXYWH.xy - vec2(textEffectPad)
             + p01 * (prim.rectXYWH.zw + vec2(2.0 * textEffectPad));
         vUV = mix(prim.uvRect.xy - padUV, prim.uvRect.zw + padUV, p01);
-        gl_Position = clipFromPixel(vLocal);
     }
     else
     {
@@ -171,13 +286,14 @@ void main()
             // its geometry is untouched. (Shadow/glow reach is a separate,
             // larger pad already baked into rectXYWH by ExpandForEffects.)
             const float kRectAADilatePx = 1.0;
-            rectPos -= vec2(kRectAADilatePx);
-            rectSize += vec2(2.0 * kRectAADilatePx);
+            rectPos -= vec2(kRectAADilatePx * pxToLocal);
+            rectSize += vec2(2.0 * kRectAADilatePx * pxToLocal);
         }
-        vec2 local = rectPos + p01 * rectSize;
-        vLocal = local;
+        local = rectPos + p01 * rectSize;
         vUV = mix(prim.uvRect.xy, prim.uvRect.zw, p01);
-
-        gl_Position = clipFromPixel(local);
     }
+
+    vLocal = local;
+    writeClipVaryings(prim.packed.x, primTransform, local, toScreen);
+    gl_Position = clipFromPixel(toScreen.m * local + toScreen.t);
 }

@@ -6,6 +6,7 @@
 #include "Core/CpuProfiler.h"
 #include "Engine/Rendering/AntiAliasingEnvOverrides.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
+#include "Engine/Rendering/HeightFogParamsUBO.h"
 #include "Engine/Rendering/IRenderFeature.h"
 #include "Engine/Rendering/RTShadowMaskService.h"
 #include "Engine/Rendering/SceneAccelerationStructureService.h"
@@ -30,7 +31,6 @@
 #include "Assets/Packages/PackageResolver.h"
 #include "Assets/TextureAsset.h"
 #include "Engine/Rendering/DepthDrawRecorder.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Engine/Rendering/HlodRuntime.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
@@ -540,6 +540,12 @@ void RenderServices::CreateFallbackBuffers()
         const ExposureReadbackFeature::State unmetered{};
         registerFallback("ExposureHistory", Rendering::BufferUsage::Storage, sizeof(unmetered),
                          "RenderServices.Fallback.ExposureHistory", &unmetered);
+        // HeightFogParams: intensity 0, which the fog term reads as no fog, for a draw keyed with the
+        // HeightFog keyword in a pass whose view uploads no parameters (a contributor that chose its
+        // keywords a frame earlier than the pass it draws in).
+        const HeightFogParamsUBO noHeightFog{};
+        registerFallback("HeightFogParams", Rendering::BufferUsage::Uniform, sizeof(noHeightFog),
+                         "RenderServices.Fallback.HeightFogParams", &noHeightFog);
 
         // ShadowData fallback: zero-filled means numCascades=0, so GE_SampleShadow returns 1.0 (no shadow).
         {

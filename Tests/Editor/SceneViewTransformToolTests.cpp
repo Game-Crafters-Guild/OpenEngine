@@ -903,141 +903,157 @@ TEST_F(SceneViewTransformToolTests, RootEntityScaleDeltaUpdatesLocalAndWorldScal
     EXPECT_NEAR(worldScaleAfter.z, newLocalScale.z, kPosEpsilon);
 }
 
-TEST_F(SceneViewTransformToolTests, WorldAndLocalAxisSpacesAreSwappedForPreRotatedRootEntity)
+namespace
 {
-    World* world = GetWorld();
+// A pointer event whose ray comes straight down `ringNormal` onto the point `pivot + onRing`.
+ScenePointerEvent RingPointerEvent(PointerPhase phase, const Vector3& pivot, const Vector3& onRing,
+                                   const Vector3& ringNormal, bool rotateSnap45)
+{
+    ScenePointerEvent event{};
+    event.button = PointerButton::Left;
+    event.phase = phase;
+    event.rotateSnap45 = rotateSnap45;
+    event.ray.origin = pivot + onRing + ringNormal * 10.0f;
+    event.ray.direction = ringNormal * -1.0f;
+    return event;
+}
 
-    Entity entity = world->Create();
-
-    // Start with a non-trivial rotation: 45 degrees around X axis.
-    Vector3 startPos(0.0f, 0.0f, 0.0f);
-    const float s = std::sqrt(0.5f);
-    Quaternion startRot(s, s, 0.0f, 0.0f);
-    Vector3 startScale(1.0f, 1.0f, 1.0f);
-
-    Transform local = Transform::FromTRS(startPos, startRot, startScale);
-    entity.Set(local);
-
-    world->ProcessCommands();
-
-    TransformHierarchySystem hierarchySystem;
-    hierarchySystem.Update(*world, 0.0f);
-
-    auto* worldBefore = world->GetComponent<WorldTransform>(entity.GetHandle());
-    ASSERT_NE(worldBefore, nullptr);
-
-    // Extract starting world rotation.
-    Transform worldTrsBefore;
-    std::memcpy(worldTrsBefore.matrix, worldBefore->matrix, sizeof(worldBefore->matrix));
-    Quaternion worldRotBefore = worldTrsBefore.GetRotation();
-
-    // Compute expected world rotations for pure world-axis and local-axis semantics
-    // using the Mathematics module, independent of TransformTool.
-    const auto& q0g = worldRotBefore.GetGLM();
-    Quaternion q0(q0g.w, q0g.x, q0g.y, q0g.z);
-
-    const float kAngle = 0.5f * 3.14159265358979323846f; // 90 degrees
-
-    // World-axis semantics: rotate around canonical world Y.
-    Quaternion qWorldSemantic = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), kAngle) * q0;
-
-    // Local-axis semantics: rotate around the entity's local Y axis in world space.
-    Vector3 localYAxisWorld = q0.Rotate(Vector3(0.0f, 1.0f, 0.0f));
-    Quaternion qLocalSemantic = Quaternion::FromAxisAngle(localYAxisWorld, kAngle) * q0;
-
-    // 1) World axis space should now behave like the previous "local" semantics.
+// Drags `ring` a quarter turn around `normal`, from `tangent` through the halfway point to
+// `bitangent`, through the rotate gizmo's pointer path.
+void DragRingQuarterTurn(GameEngine::Editor::SceneTools::TransformRotateGizmo& rotateGizmo, const GizmoHit& ring,
+                         const Vector3& pivot, const Vector3& normal, const Vector3& tangent,
+                         const Vector3& bitangent, bool rotateSnap45)
+{
+    const Vector3 halfway = (tangent + bitangent) * std::sqrt(0.5f);
+    const Vector3 path[] = {tangent, halfway, bitangent, bitangent};
+    const PointerPhase phases[] = {PointerPhase::Down, PointerPhase::Move, PointerPhase::Move, PointerPhase::Up};
+    for (int step = 0; step < 4; ++step)
     {
-        Vector3 pivot(worldBefore->matrix[12], worldBefore->matrix[13], worldBefore->matrix[14]);
-
-        TransformTool tool(*GetWorld());
-        tool.SetTargetEntity(entity.GetHandle());
-        tool.SetPivot(pivot);
-        tool.SetMode(TransformMode::Rotate);
-        tool.SetAxisSpace(GameEngine::Editor::SceneTools::TransformAxisSpace::World);
-
-        tool.ApplyRotationDelta(1u, kAngle);
-
-        world->ProcessCommands();
-        hierarchySystem.Update(*world, 0.0f);
-
-        auto* worldAfter = world->GetComponent<WorldTransform>(entity.GetHandle());
-        ASSERT_NE(worldAfter, nullptr);
-
-        Transform worldTrsAfter;
-        std::memcpy(worldTrsAfter.matrix, worldAfter->matrix, sizeof(worldAfter->matrix));
-        Quaternion worldRotAfter = worldTrsAfter.GetRotation();
-
-        const glm::quat gLocal = qLocalSemantic.GetGLM();
-        Quaternion expectedLocalSemRot(gLocal.w, gLocal.x, gLocal.y, gLocal.z);
-
-        // Quaternions represent the same rotation up to a global sign flip.
-        // If the dot product is negative, flip the expected quaternion so we
-        // compare against the equivalent representation.
-        const auto& wra = worldRotAfter.GetGLM();
-        auto els = expectedLocalSemRot.GetGLM();
-        float dotLocal = wra.x * els.x + wra.y * els.y + wra.z * els.z + wra.w * els.w;
-        if (dotLocal < 0.0f)
-        {
-            els.x = -els.x;
-            els.y = -els.y;
-            els.z = -els.z;
-            els.w = -els.w;
-        }
-
-        EXPECT_NEAR(wra.x, els.x, kRotEpsilon);
-        EXPECT_NEAR(wra.y, els.y, kRotEpsilon);
-        EXPECT_NEAR(wra.z, els.z, kRotEpsilon);
-        EXPECT_NEAR(wra.w, els.w, kRotEpsilon);
+        ScenePointerEvent event = RingPointerEvent(phases[step], pivot, path[step], normal, rotateSnap45);
+        // The screen-space ring measures in the camera's (right, up) frame about its forward axis;
+        // the camera looks down -normal.
+        event.cameraRight = tangent;
+        event.cameraUp = bitangent;
+        event.cameraForward = normal * -1.0f;
+        ASSERT_TRUE(rotateGizmo.HandlePointerEvent(event, ring));
     }
+}
+} // namespace
 
-    // Reset entity to starting local transform.
-    entity.Set(local);
+// Dragging a rotate ring turns the entity about the axis the ring is drawn around, the way the
+// pointer went, in both axis spaces. The rings are drawn along the world axes in World space and
+// along the entity's axes in Local space (TransformTool::GetAxisDirections). The pointer goes a
+// quarter turn around the Y ring, from the ring's tangent (the Z axis) to its bitangent (the X
+// axis), so the entity's Z axis must end on the ring's X axis and its Y axis must stay where it was.
+TEST_F(SceneViewTransformToolTests, RotateRingDragTurnsAboutTheDrawnAxisTowardThePointer)
+{
+    using GameEngine::Editor::SceneTools::TransformAxisSpace;
+    using GameEngine::Editor::SceneTools::TransformRotateGizmo;
+    World* world = GetWorld();
+    TransformHierarchySystem hierarchySystem;
+
+    // 45 degrees about X, so the entity's Y and Z axes are not world axes.
+    const float halfAngle = 0.125f * 3.14159265358979323846f;
+    const Quaternion startRot(std::cos(halfAngle), std::sin(halfAngle), 0.0f, 0.0f);
+    const Vector3 pivot(0.0f, 0.0f, 0.0f);
+
+    for (const bool rotateSnap45 : {false, true})
+    {
+        for (const TransformAxisSpace space : {TransformAxisSpace::World, TransformAxisSpace::Local})
+        {
+            SCOPED_TRACE(space == TransformAxisSpace::World ? "World" : "Local");
+            SCOPED_TRACE(rotateSnap45 ? "snapped" : "free");
+            world->Clear();
+            Entity entity = world->Create(Transform::FromTRS(pivot, startRot, Vector3(1.0f, 1.0f, 1.0f)));
+            world->ProcessCommands();
+            hierarchySystem.Update(*world, 0.0f);
+
+            Vector3 ringAxes[3] = {Vector3(1.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f)};
+            if (space == TransformAxisSpace::Local)
+            {
+                for (Vector3& ringAxis : ringAxes)
+                {
+                    ringAxis = startRot.Rotate(ringAxis);
+                }
+            }
+
+            TransformTool tool(*GetWorld());
+            tool.SetTargetEntity(entity.GetHandle());
+            tool.SetMode(TransformMode::Rotate);
+            tool.SetAxisSpace(space);
+            tool.SetPivot(pivot);
+
+            GizmoCollector collector;
+            tool.GatherGizmos(collector);
+            ASSERT_EQ(collector.GetGizmos().size(), 1u);
+            auto* rotateGizmo = dynamic_cast<TransformRotateGizmo*>(collector.GetGizmos()[0]);
+            ASSERT_NE(rotateGizmo, nullptr);
+
+            GizmoHit yRing{};
+            yRing.kind = GizmoHitKind::Axis;
+            yRing.handleId = 1u;
+            const Vector3& normal = ringAxes[1];
+            const Vector3& tangent = ringAxes[2];
+            const Vector3& bitangent = ringAxes[0];
+            DragRingQuarterTurn(*rotateGizmo, yRing, pivot, normal, tangent, bitangent, rotateSnap45);
+
+            const Quaternion after = world->GetComponent<Transform>(entity.GetHandle())->GetRotation();
+            const Vector3 entityY = after.Rotate(Vector3(0.0f, 1.0f, 0.0f));
+            const Vector3 entityZ = after.Rotate(Vector3(0.0f, 0.0f, 1.0f));
+            const Vector3 startY = startRot.Rotate(Vector3(0.0f, 1.0f, 0.0f));
+            const Vector3 startZ = startRot.Rotate(Vector3(0.0f, 0.0f, 1.0f));
+            // The turn about the ring's normal by +90 degrees, which carries the tangent onto the bitangent.
+            const Quaternion turn = Quaternion::FromAxisAngle(normal, 0.5f * 3.14159265358979323846f);
+            EXPECT_NEAR(Vector3::Dot(turn.Rotate(tangent), bitangent), 1.0f, kRotEpsilon);
+            EXPECT_NEAR(Vector3::Dot(entityY, turn.Rotate(startY)), 1.0f, kRotEpsilon);
+            EXPECT_NEAR(Vector3::Dot(entityZ, turn.Rotate(startZ)), 1.0f, kRotEpsilon);
+        }
+    }
+}
+
+// Dragging the screen-space ring (enhanced mode) a quarter turn from the camera's right to its up
+// turns the entity a quarter turn about the camera's forward axis, the way the pointer went: on
+// screen, the entity's point on the right moves to the top.
+TEST_F(SceneViewTransformToolTests, ScreenRingDragTurnsAboutTheViewAxisTowardThePointer)
+{
+    using GameEngine::Editor::SceneTools::TransformRotateGizmo;
+    World* world = GetWorld();
+    TransformHierarchySystem hierarchySystem;
+
+    const float halfAngle = 0.125f * 3.14159265358979323846f;
+    const Quaternion startRot(std::cos(halfAngle), std::sin(halfAngle), 0.0f, 0.0f);
+    const Vector3 pivot(0.0f, 0.0f, 0.0f);
+    Entity entity = world->Create(Transform::FromTRS(pivot, startRot, Vector3(1.0f, 1.0f, 1.0f)));
     world->ProcessCommands();
     hierarchySystem.Update(*world, 0.0f);
 
-    auto* worldBefore2 = world->GetComponent<WorldTransform>(entity.GetHandle());
-    ASSERT_NE(worldBefore2, nullptr);
+    TransformTool tool(*GetWorld());
+    tool.SetTargetEntity(entity.GetHandle());
+    tool.SetMode(TransformMode::Rotate);
+    tool.SetRotateGizmoEnhanced(true);
+    tool.SetPivot(pivot);
 
-    // 2) Local axis space should now behave like the previous "world" semantics.
+    GizmoCollector collector;
+    tool.GatherGizmos(collector);
+    ASSERT_EQ(collector.GetGizmos().size(), 1u);
+    auto* rotateGizmo = dynamic_cast<TransformRotateGizmo*>(collector.GetGizmos()[0]);
+    ASSERT_NE(rotateGizmo, nullptr);
+
+    // A camera looking down +Z with +X right and +Y up.
+    const Vector3 right(1.0f, 0.0f, 0.0f);
+    const Vector3 up(0.0f, 1.0f, 0.0f);
+    const Vector3 forward(0.0f, 0.0f, 1.0f);
+    GizmoHit screenRing{};
+    screenRing.kind = GizmoHitKind::Axis;
+    screenRing.handleId = 3u; // TransformRotateGizmo's screen-space ring handle
+    DragRingQuarterTurn(*rotateGizmo, screenRing, pivot, forward * -1.0f, right, up, false);
+
+    const Quaternion after = world->GetComponent<Transform>(entity.GetHandle())->GetRotation();
+    const Quaternion turn = Quaternion::FromAxisAngle(forward, 0.5f * 3.14159265358979323846f);
+    EXPECT_NEAR(Vector3::Dot(turn.Rotate(right), up), 1.0f, kRotEpsilon);
+    for (const Vector3& axis : {Vector3(1.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f)})
     {
-        Vector3 pivot(worldBefore2->matrix[12], worldBefore2->matrix[13], worldBefore2->matrix[14]);
-
-        TransformTool tool(*GetWorld());
-        tool.SetTargetEntity(entity.GetHandle());
-        tool.SetPivot(pivot);
-        tool.SetMode(TransformMode::Rotate);
-        tool.SetAxisSpace(GameEngine::Editor::SceneTools::TransformAxisSpace::Local);
-
-        tool.ApplyRotationDelta(1u, kAngle);
-
-        world->ProcessCommands();
-        hierarchySystem.Update(*world, 0.0f);
-
-        auto* worldAfter = world->GetComponent<WorldTransform>(entity.GetHandle());
-        ASSERT_NE(worldAfter, nullptr);
-
-        Transform worldTrsAfter;
-        std::memcpy(worldTrsAfter.matrix, worldAfter->matrix, sizeof(worldAfter->matrix));
-        Quaternion worldRotAfter = worldTrsAfter.GetRotation();
-
-        const glm::quat gWorld = qWorldSemantic.GetGLM();
-        Quaternion expectedWorldSemRot(gWorld.w, gWorld.x, gWorld.y, gWorld.z);
-
-        const auto& wra2 = worldRotAfter.GetGLM();
-        auto ews = expectedWorldSemRot.GetGLM();
-        float dotWorld = wra2.x * ews.x + wra2.y * ews.y + wra2.z * ews.z + wra2.w * ews.w;
-        if (dotWorld < 0.0f)
-        {
-            ews.x = -ews.x;
-            ews.y = -ews.y;
-            ews.z = -ews.z;
-            ews.w = -ews.w;
-        }
-
-        EXPECT_NEAR(wra2.x, ews.x, kRotEpsilon);
-        EXPECT_NEAR(wra2.y, ews.y, kRotEpsilon);
-        EXPECT_NEAR(wra2.z, ews.z, kRotEpsilon);
-        EXPECT_NEAR(wra2.w, ews.w, kRotEpsilon);
+        EXPECT_NEAR(Vector3::Dot(after.Rotate(axis), turn.Rotate(startRot.Rotate(axis))), 1.0f, kRotEpsilon);
     }
 }
 

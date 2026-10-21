@@ -34,6 +34,7 @@
 #include "UI/UICompatDrawRuns.h"
 #include "UI/SimpleSlotAllocator.h"
 #include "UI/SlotAllocator.h"
+#include "UI/BackgroundImageCache.h"
 #include "UI/UIEvents.h"
 #include "UI/UIPlatform.h"
 #include "UI/UIPrimitive.h"
@@ -366,12 +367,6 @@ class UIManager
     // text metrics in response to pointer events (e.g., fields, scrollbars).
     const std::vector<StylesheetHandle>& GetStylesheets() const { return m_GlobalStylesheets; }
 
-    // How many background images have a load or upload in flight. Non-zero means
-    // some element is drawing nothing where it will draw once its texture lands,
-    // so a capture taken now is of a transient frame. The material-side counter
-    // says nothing about this — the two decode paths are separate — so a
-    // screenshot of UI chrome reads this one.
-    size_t PendingBackgroundImageCount() const { return m_BgUploadInFlight.size(); }
     Rendering::Text::FontAtlas* GetDefaultFontAtlas() const { return m_FontAtlas.get(); }
     Rendering::Text::FontAtlas* ResolveFontForStyle(const ResolvedStyle& style);
     /// The lines `text` takes in `element`'s text face (the font, size, line height and line
@@ -638,62 +633,18 @@ public:
     void MarkStyleDirtySubtree(UIElement* subtreeRoot);
     // Convenience: mark the entire UI tree dirty for style recomputation.
     void MarkStyleDirtyAll();
-    // Request background texture. Asset loads are deduped centrally in AssetManager; UI dedupes the GPU upload only.
-    // Callback is invoked on the UI thread (via deferred action flush) with (handle,width,height). Handle may be null on failure.
-    void RequestBackgroundTexture(const GUID& guid,
-                                  std::function<void(Rendering::TextureHandle, uint32_t, uint32_t)> onReady);
-    // Resolve a CSS background-image path to an asset GUID. When `sourceAlias`
-    // is non-empty, the path is looked up under exactly that asset source
-    // ("editor", "project", etc.) — matches CSS `url("editor:path")` syntax.
-    // When empty, falls back to implicit source priority (project first).
-    GUID ResolveBackgroundImagePath(const std::string& path,
-                                    const std::string& sourceAlias = {});
-    void EnsureBackgroundTextureUploaded(const GUID& guid);
-    // Resolve `path` (+ optional `sourceAlias`, e.g. "editor") like CSS background-image,
-    // ensure GPU upload when possible, and register the cached texture into `reg`.
-    // Returns UITextureRegistry index 0 if not cached yet (async load) or on failure.
-    // Optional outputs are image pixel dimensions when the cache entry exists.
-    // Pass a sampler handle to override the default (e.g. GetNearestClampSampler() for pixel-art).
-    uint32_t TryRegisterResolvedBackgroundTexture(const std::string& path,
-                                                  const std::string& sourceAlias,
-                                                  UI::UITextureRegistry& reg,
-                                                  uint32_t* outWidth = nullptr,
-                                                  uint32_t* outHeight = nullptr,
-                                                  Rendering::SamplerHandle sampler = {});
+    /// The textures this manager draws CSS background images from: resolve a
+    /// background-image path, upload or request an image, evict it after the
+    /// file changed. The cache is owned here and fed by paint and frame end.
+    UI::BackgroundImageCache& BackgroundImages() { return m_BackgroundImages; }
+    const UI::BackgroundImageCache& BackgroundImages() const { return m_BackgroundImages; }
     // Returns the nearest-neighbor (point) clamp sampler used for pixel-art / no-filter rendering.
     Rendering::SamplerHandle GetNearestClampSampler() const { return m_SamplerNearestClamp; }
-    // Returns the GPU texture handle and pixel dimensions for a background image path if it is
-    // already in the cache (does NOT trigger a load). Returns an invalid handle if not cached.
-    Rendering::TextureHandle TryGetBackgroundTextureHandle(const std::string& path,
-                                                           uint32_t* outWidth = nullptr,
-                                                           uint32_t* outHeight = nullptr) const;
-    // As above, resolved by GUID. Triggers an upload if not yet cached (so editor
-    // controls — e.g. the 9-slice inspector — can draw a texture they reference by
-    // GUID). Returns an invalid handle until the upload completes.
-    Rendering::TextureHandle TryGetBackgroundTextureHandleByGuid(const GUID& guid,
-                                                                 uint32_t* outWidth = nullptr,
-                                                                 uint32_t* outHeight = nullptr);
-    // Evict a cached background texture so the next render re-loads it from disk.
-    // Call this before re-applying the same path when the file on disk has changed.
-    void EvictBackgroundTexture(const std::string& path);
-    // Evict by GUID (used by the AssetReloaded hot-reload listener).
-    void EvictBackgroundTexture(const GUID& guid);
-    // Once per rendered frame: age the background-texture cache and, when it
-    // exceeds its byte budget, evict the least-recently-painted entries.
-    void EvictStaleBackgroundTextures();
+    // Once per rendered frame: age the background-image cache (evicting idle
+    // textures over its budget, never one the current draw binds) and repaint
+    // for SVG sizes that finished settling.
+    void EndBackgroundImageFrame();
 
-    // Test-only inspection of the background texture cache. Returns true when
-    // the cache currently holds a valid handle for `guid`. Used by hot-reload
-    // tests to verify that AssetReloaded events evicted the cached entry.
-    bool HasBackgroundTextureCachedForTesting(const GUID& guid) const;
-    // Test-only seed of the background texture cache. Skips disk load + GPU
-    // upload so hot-reload tests can assert eviction without booting a real
-    // texture pipeline. The dummy handle is stored as 'sharedOwned' so the
-    // destructor / eviction path does not try to destroy it.
-    void SeedBackgroundTextureForTesting(const GUID& guid,
-                                         Rendering::TextureHandle handle,
-                                         uint32_t width = 1,
-                                         uint32_t height = 1);
     // Test-only seed of the font GUID -> atlas key map without going through
     // the resolver. Used by C2 tests to assert that a Font reload triggers
     // eviction of the matching atlas entry.
@@ -707,6 +658,9 @@ public:
     // Test-only peek at a persistent clip slot. Returns nullptr when the slot
     // is out of bounds. Used by text-overflow clip regression tests.
     const UI::UIClipRect* PeekClipRectForTesting(uint16_t slot) const;
+    // Test-only peek at a persistent transform slot (UIElement::
+    // m_TransformSlotIdx). Returns nullptr when the slot is out of bounds.
+    const UI::UITransformSlot* PeekTransformSlotForTesting(uint32_t slot) const;
     // Test-only: position of `el`'s first persistent primitive slot in the
     // frame's draw order, or -1 when the element emitted nothing. Later
     // positions draw on top. Used by overlay-ordering regression tests.
@@ -1356,12 +1310,10 @@ public:
     // also removing its sheets is never what a caller wants).
     void UnregisterSubtreeStyleBinding(UIElement* target, const GUID& styleGuid);
 
-    // Internal helpers
-    static Rendering::TextureHandle CreateUIBackgroundTextureFromAsset(Rendering::IDevice* device, const TextureAsset* texA);
-    // Read a cached background texture's 9-slice metadata (AssetRegistry KV) for the
-    // GUID; returns a disabled NineSlice when absent/unparseable. Internal only —
-    // the hot path reads the resolved slice off CachedTexture.Slice.
-    NineSlice ResolveNineSlice(const GUID& guid);
+    // The background-image cache's hooks: repaint the tree when a texture
+    // lands, and drop the texture-registry slot of a texture it destroys.
+    void RepaintForBackgroundImages();
+    void ReleaseBackgroundImageSlot(Rendering::TextureHandle handle);
     std::string EnsureElementId(UIElement* element);
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
@@ -1523,6 +1475,9 @@ public:
     // any thread may read; ~UIManager closes it, so a post that arrives after that is refused
     // instead of queued where nothing will drain it. Never null.
     std::shared_ptr<UI::UiDispatcher> m_Dispatcher = std::make_shared<UI::UiDispatcher>();
+    // CSS background images: uploads, SVG bakes, settle waits and eviction.
+    // Declared after m_Dispatcher, which it posts its completions through.
+    UI::BackgroundImageCache m_BackgroundImages;
 
     // The lifetime token UIManagerRefs observe: reset after detach notifications and before
     // destroying the owned tree. Owned by this manager alone, so no reference can revive it.
@@ -1798,6 +1753,7 @@ public:
     // SDF per-frame SSBO buffers (auto-growing)
     std::unique_ptr<UI::FrameBufferRing<UI::UIPrimitive>> m_SdfPrimRing;
     std::unique_ptr<UI::FrameBufferRing<UI::UIClipRect>> m_SdfClipRing;
+    std::unique_ptr<UI::FrameBufferRing<UI::UITransformSlot>> m_SdfTransformRing;
     // Stage 2 part 3: ring buffer for the DrawOrder SSBO. Size mirrors
     // m_DrawOrder; each entry is a uint32_t slot index into m_PersistentPrimitives.
     std::unique_ptr<UI::FrameBufferRing<uint32_t>> m_SdfDrawOrderRing;
@@ -1816,6 +1772,7 @@ public:
     // uploads the touched slot span instead of the whole store.
     uint64_t m_PrimitiveStoreVersion = 1;
     uint64_t m_ClipStoreVersion = 1;
+    uint64_t m_TransformStoreVersion = 1;
     uint64_t m_DrawOrderStoreVersion = 1;
 
     // Compat profile only: the per-texture partition of the draw order, and the
@@ -2206,8 +2163,11 @@ public:
     void GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext& ctx, float parentAbsX, float parentAbsY);
     // Generate one deferred overlay subtree: overlays escape their ancestors'
     // clip and opacity, so the subtree runs against a fresh viewport clip at
-    // full opacity.
-    void GenerateOverlayPrimitives(UIElement* el, PrimitiveGenContext& ctx, float parentAbsX, float parentAbsY);
+    // full opacity. It keeps its owner's CSS transform, `ownerTransformIdx`
+    // (the slot in effect where the walk found it), as a popup inside a
+    // transformed element does on the web.
+    void GenerateOverlayPrimitives(UIElement* el, PrimitiveGenContext& ctx, float parentAbsX, float parentAbsY,
+                                   uint32_t ownerTransformIdx);
     // Emit the hover tooltip's arrow into its dedicated persistent slot. The
     // arrow has no UIElement; GenerateAllPrimitives calls this between the
     // lower overlay layers and the HoverTooltip layer so the arrow draws
@@ -2218,6 +2178,29 @@ public:
     // element the last full DFS skipped has become visible and needs a full
     // regen to re-establish its slots.
     bool ElementRectIntersectsNearestClip(const UIElement* el) const;
+    // CSS transform support: writes `el`'s transform slot from its current
+    // layout rect and style, chained to `parentIdx`, allocating the slot if
+    // the element has none. Returns the slot, or kNoTransform when the
+    // element's transform is `none` (a slot it held is freed).
+    uint32_t WriteElementTransformSlot(UIElement* el, uint32_t parentIdx);
+    // Drain support for a CSS transform that switched to or from `none`:
+    // gives `el` its own transform slot or frees it, then re-points what
+    // paints in the element's space at the space it paints in now: its own
+    // primitives and clip, and its descendants' down to the next transformed
+    // element, whose slot is re-chained (an overlay in the subtree paints in
+    // the same space and is re-pointed with it). False, with nothing
+    // changed, when part of the subtree was culled at the last full DFS: the
+    // transform may have moved it into view, and only the full walk emits it.
+    bool RepointTransformSpace(UIElement* el);
+    // RepointTransformSpace's precondition: every visible element it would
+    // re-point was emitted by the last full DFS.
+    bool SubtreeEmittedForRepoint(UIElement* el, bool isRoot) const;
+    // RepointTransformSpace's walk: stamps `space` on what paints in it.
+    void RepointSubtreeTransform(UIElement* el, uint32_t space, bool isRoot);
+    // Drain support: rewrites the clip slot `el` owns from its current layout
+    // rect, folding in the recorded parent clip when both are in one
+    // transform space. False when `el` owns no clip slot.
+    bool RewriteClipSlotFromLayout(UIElement* el);
     // Drain support: whether a control that renders its own text, and owned
     // no primitive range at its last full DFS, would emit anything now. Emits
     // into the drain context's scratch tail and discards the result.
@@ -2262,7 +2245,9 @@ public:
     // x/y/w/h stay the border box it is clipped to (background-clip).
     void EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext& ctx, const VisualStyle& vs, const Box4& borderWidth, float x, float y, float w, float h, uint16_t clipIdx);
     struct ResolvedBgSlot;
-    ResolvedBgSlot ResolveBackgroundTextureSlot(UIElement* el, PrimitiveGenContext& ctx, const BackgroundImageStyle& bgImg, float elW, float elH);
+    // `paddingW/H` is the positioning area in physical px: background-size
+    // measures against it, and an SVG's raster size is chosen from it.
+    ResolvedBgSlot ResolveBackgroundTextureSlot(UIElement* el, PrimitiveGenContext& ctx, const BackgroundImageStyle& bgImg, float paddingW, float paddingH);
     Rendering::Text::FontAtlas* ResolveFontForVisualStyle(const VisualStyle& vs, PrimitiveGenContext& ctx);
     std::vector<UI::UIPrimitive> m_SdfPrimitiveBuffer;
     std::vector<UI::UIClipRect> m_SdfClipBuffer;
@@ -2308,40 +2293,15 @@ public:
     Rendering::SamplerHandle m_SamplerRepeatY{}; // U:Clamp  V:Repeat
     Rendering::SamplerHandle m_SamplerNearestClamp{}; // U:Clamp V:Clamp nearest filter
 
-    struct CachedTexture
-    {
-        Rendering::TextureHandle Handle = Rendering::INVALID_TEXTURE_HANDLE;
-        uint32_t Width = 1;
-        uint32_t Height = 1;
-        // True when the handle comes from the device-level shared background
-        // texture broker. Shared handles are not destroyed by individual
-        // UIManager instances.
-        bool SharedOwned = false;
-        // 9-slice layout authored on the texture asset (resolved from AssetRegistry
-        // metadata at upload). Default = un-sliced (single-quad fast path).
-        NineSlice Slice{};
-        // m_BgCacheFrame value the last time this entry was resolved for paint.
-        // EvictStaleBackgroundTextures ages entries on it once the cache
-        // exceeds its byte budget.
-        uint64_t LastUsedFrame = 0;
-    };
 
-    // Path->GUID resolution cache. Keys include the optional asset source
-    // alias so editor:Icons/foo.png cannot collide with project Icons/foo.png.
-    std::unordered_map<std::string, GUID> m_BgPathToGuid; // caches successful GUIDs
-
-    std::unordered_map<GUID, CachedTexture> m_BgTextureCache;                // GUID -> texture handle + size
-    // Monotonic paint-frame counter for m_BgTextureCache aging; advanced by
-    // EvictStaleBackgroundTextures once per rendered frame.
-    uint64_t m_BgCacheFrame = 0;
     Rendering::TextureHandle m_White1x1 = Rendering::INVALID_TEXTURE_HANDLE; // fallback
 
     // Asset hot-reload integration.
     // Subscribes to AssetEventDispatcher for Texture/Font reload + modified events
     // and propagates them to the relevant UIManager caches:
-    //   - Texture: EvictBackgroundTexture(guid) tears down the cached GPU handle
-    //     so the next paint creates a fresh one from disk; also drops the old
-    //     UITextureRegistry slot (E7).
+    //   - Texture: m_BackgroundImages.OnTextureReloaded(guid) tears down the
+    //     cached GPU textures so the next paint creates fresh ones from disk;
+    //     also drops the old UITextureRegistry slots (E7).
     //   - Font:    drops m_FontAtlases / m_FontAtlasAliases entries that resolved
     //     to that font GUID and triggers reflow.
     // Pending lists are populated from the dispatcher (any thread) and drained
@@ -2427,21 +2387,6 @@ public:
     // check does not accept.
     bool AcceptTextureSpaceForFormat(const std::string& name, Rendering::TextureFormat format,
                                      UI::UITextureSpace space);
-
-    // In-flight GPU upload dedupe and ready-callback fan-out for background textures
-    // In-flight upload markers, stamped. The dedupe check reads this before
-    // issuing a request, so a completion that never arrives would otherwise
-    // block every later attempt for the session — a background image that
-    // misses its callback once stays missing. A stale entry is retried instead
-    // of believed, and a bounded number of times so a genuinely absent image
-    // cannot spin.
-    struct BackgroundUploadRequest
-    {
-        std::chrono::steady_clock::time_point Issued;
-        uint32_t Attempts = 0;
-    };
-    std::unordered_map<GUID, BackgroundUploadRequest> m_BgUploadInFlight;
-    std::unordered_map<GUID, std::vector<std::function<void(Rendering::TextureHandle, uint32_t, uint32_t)>>> m_BgReadyCallbacks;
 
     // Keyboard and text events dispatch synchronously from OnKey/OnChar, so
     // there is no queue to inspect for "was there input this frame". This
@@ -2823,6 +2768,14 @@ public:
     UI::SlotAllocator            m_PrimitiveAllocator;
     std::vector<UI::UIClipRect>  m_PersistentClipRects;
     UI::SimpleSlotAllocator      m_ClipAllocator;
+    // CSS transforms: one slot per transformed element (UIElement::
+    // m_TransformSlotIdx). Slot 0 is the identity every untransformed
+    // primitive points at; AllocateTransformSlot never hands it out.
+    std::vector<UI::UITransformSlot> m_PersistentTransforms;
+    UI::SimpleSlotAllocator          m_TransformAllocator;
+    // Set once a transform past UI::kMaxTransformChainDepth has been
+    // ignored and logged, so the log says it once per manager.
+    bool m_LoggedTransformChainDepth = false;
     std::vector<uint32_t>        m_DrawOrder;
     UI::SlotAllocator            m_DrawOrderAllocator;
 

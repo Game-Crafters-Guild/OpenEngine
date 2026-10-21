@@ -146,8 +146,11 @@ class PlayModeManager
     std::optional<Snapshot> m_EnteredSnapshot;
     std::unordered_set<std::uint32_t> m_PrePlayEntityIds; // packed entity ids present before play
     std::unique_ptr<UndoHistoryStash> m_UndoStash;
-    // The mark-ups' notes as play began: the snapshot restore resets the world, which drops
-    // them from MarkupService, and brings the same entities back under their handles.
+    // The mark-ups' notes as play began. The exit restore keeps the run of handles they
+    // belong to when the world is still in it, but what play wrote to them would stay; after
+    // a scene opened during play the restore starts a new run, which reads as having no
+    // notes. Restoring them ends the session with the notes as it began, like the rest of
+    // the world.
     std::unique_ptr<MarkupECS::MarkupWorldNotes> m_EnteredMarkupNotes;
     std::vector<PendingChange> m_PendingChanges;
     ManagedPlayModeCallbacks m_ManagedPlayMode;

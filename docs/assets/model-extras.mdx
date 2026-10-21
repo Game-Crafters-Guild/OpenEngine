@@ -1,9 +1,9 @@
 ---
 title: Model extras
-description: Reading the custom data a glTF file attaches to its scenes, nodes, meshes, materials and animations from a script.
+description: Reading the custom data a glTF file attaches to its scenes, nodes, meshes, materials, and animations from a script.
 ---
 
-A glTF file can attach custom JSON to any of its objects through the object's `extras` property; most exporters write an object's custom properties there. When a `.gltf` or `.glb` model is imported, the engine keeps that text for the file's scenes, nodes, meshes, materials and animations, and a script reads it back by object name with `ModelApi.GetExtras`. The engine itself reads one key there, `clip` on an animation (see the [glTF clip schema](../animation/gltf-clip-schema.mdx)); what every other key means is up to the game.
+A glTF file can attach custom JSON to any of its objects through the object's `extras` property. Most exporters write an object's custom properties there. When a `.gltf` or `.glb` model is imported, the engine keeps that text for the file's scenes, nodes, meshes, materials, and animations, and a script reads it back by object name with `ModelApi.GetExtras`. The engine itself reads one key there, `clip` on an animation (see the [glTF clip schema](../animation/gltf-clip-schema.mdx)). What every other key means is up to the game.
 
 :::tip[Typical use]
 
@@ -21,10 +21,10 @@ An artist tags a node `Hand_R` with `{"socket": "weapon"}` and a material with `
 | Material | `ModelObjectKind.Material` | As for a scene |
 | Animation | `ModelObjectKind.Animation` | As for a scene |
 
-- **The text is the file's own.** An object, array, number or literal reads back exactly as written, with its spacing, key order and escapes. A JSON string value reads back without its quotes; the glTF specification recommends an object. The text is decoded as UTF-8, so an invalid byte sequence in the file reads as U+FFFD.
+- **The text is the file's own.** An object, array, number, or literal reads back exactly as written, with its spacing, key order, and escapes. A JSON string value reads back without its quotes. The glTF specification recommends an object. The text is decoded as UTF-8, so an invalid byte sequence in the file reads as U+FFFD.
 - **One block per kind and name.** When two objects of one kind share a name (two unnamed nodes included), the first in the file is read, and the import warns once, naming the first object that could not be read. Give objects whose extras you read unique names.
-- **Only those five kinds.** The extras of the file's root, primitives, accessors, textures, images, cameras, lights and skins are not kept.
-- **glTF and GLB only.** FBX, OBJ and Blend models keep no extras; `GetExtras` returns an empty string for them.
+- **Only those five kinds.** The extras of the file's root, primitives, accessors, textures, images, cameras, lights, and skins are not kept.
+- **glTF and GLB only.** FBX, OBJ, and Blend models keep no extras. `GetExtras` returns an empty string for them.
 - **Re-import replaces it.** When the source file changes and the model reloads, the next read returns the new text.
 
 ## Reading it from a script
@@ -57,14 +57,14 @@ if (text.Length > 0)
 
 ## Bounds
 
-A model file can come from anywhere, so the import keeps a bounded amount of it. A block that does not fit is dropped with a warning that names the object; the model itself always loads.
+A model file can come from anywhere, so the import keeps a bounded amount of it. A block that does not fit is dropped with a warning that names the object. The model itself always loads.
 
 | Bound | Rule | Warning |
 |---|---|---|
 | 256 KiB per object | An object whose extras hold more than 262 144 bytes keeps none. | One line per such object: `glTF 'knight.glb': the extras of node 3 ('Regions') are not kept: they hold 300000 bytes, and an object keeps at most 262144 bytes (256 KiB) of extras; the model loads without them.` |
 | 1 MiB per model | A model keeps at most 1 048 576 bytes of extras in all, each block counted with its object's name, taken in the order scenes, nodes, meshes, materials, animations, each in file order. The first block that does not fit, and every block after it in that order, is not kept. | One line per model, naming the first block not kept and counting the rest: `glTF 'knight.glb': the extras of mesh 2 ('Body') (40004 bytes with its name) and of 6 later objects are not kept: a model keeps at most 1048576 bytes (1024 KiB) of extras and their objects' names, taken from its scenes, nodes, meshes, materials and animations in that order; the model loads without them.` |
 
-A block over the per-object bound does not count toward the per-model bound. Large per-vertex data (region masks, corrective tables) fits well inside both; data that does not belongs in a file of its own that the game loads.
+A block over the per-object bound does not count toward the per-model bound. Large per-vertex data (region masks, corrective tables) fits well inside both. Data that does not belongs in a file of its own that the game loads.
 
 ## For bindings: the native export
 
@@ -81,10 +81,3 @@ GE_Result GE_Model_GetExtras(const uint8_t modelGuidBytes[16], uint32_t kind,
 - The buffer contract is the one the element text exports use: it copies what fits, with no NUL terminator, and always reports the text's full length in `*outLen`, so a call with a null buffer and a zero length asks the length. `*outLen` is 0 when the model kept nothing for the object.
 - Any thread: the model's extras are an immutable snapshot that a reload replaces whole, and the export reads the snapshot it found.
 - `GE_Result_NotFound` when no loaded model has the GUID. `GE_Result_InvalidArg`, checked before the model is looked up, for a kind past animation, a null GUID or `outLen`, a null name with a nonzero length, a negative `bufferLen`, or a null buffer with a nonzero `bufferLen`.
-
-## Changelog
-
-- 2026-10-13: `GetExtras` is callable from any thread while the engine runs; the main-thread refusal is gone.
-- 2026-10-13: Converted from `docs/Assets/model-extras.html`; the ABI version note dropped.
-- 2026-09-30: the engine reads the `clip` key of an animation's extras (the glTF clip schema); a model keeps that block like any other.
-- 2026-09-30: first version. Scene, node, mesh, material and animation extras of glTF and GLB models, read with `ModelApi.GetExtras` on the main thread; 256 KiB per object and 1 MiB per model, names included.

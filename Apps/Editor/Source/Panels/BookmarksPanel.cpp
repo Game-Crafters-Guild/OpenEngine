@@ -302,7 +302,7 @@ void BookmarksPanel::BuildUI()
         if (bm.Type == BookmarkType::Scene || bm.Type == BookmarkType::Entity)
         {
             dragPayload.GhostIconKind = UI::Interaction::DragGhostIconKind::AssetFile;
-            dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.png";
+            dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.svg";
         }
         else if (bm.Type == BookmarkType::Asset && m_Context)
         {
@@ -352,7 +352,7 @@ void BookmarksPanel::BuildUI()
                 {
                     const std::string ext = assetPath.extension().string();
                     if (ext == ".scene")
-                        dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.png";
+                        dragPayload.GhostThumbnailEngineName = "Icons/sceneicon.svg";
                     else if (m_Context->Thumbnails)
                     {
                         const std::string thumb = m_Context->Thumbnails->GetOrRequest(assetPath, 128, [](const std::string&) {});
@@ -2365,7 +2365,7 @@ void BookmarksPanel::HandleAssetDrop(const std::filesystem::path& assetPath, int
             else
                 bookmark.Name = pathStr;
         }
-        bookmark.IconPath = "Icons/Folder@32px.png"; // Set folder icon path explicitly
+        bookmark.IconPath = "Icons/Folder@32px.svg"; // Set folder icon path explicitly
         
         AddBookmarkAt(bookmark, at);
         return;

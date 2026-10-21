@@ -3,6 +3,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/QueryPool.h"
+#include "Rendering/Geometry/VertexLayoutBuilder.h"
 
 #include <webgpu/webgpu.h>
 
@@ -112,7 +113,6 @@ class WebGpuCommandList : public CommandList
     IDevice::QueueType GetQueueType() const { return m_Queue; }
 
   private:
-    static constexpr uint32_t kMaxVertexBufferSlots = 6;
     static constexpr uint32_t kMaxPushConstantBytes = 128;
 
     void EnsureEncoder();
@@ -183,9 +183,9 @@ class WebGpuCommandList : public CommandList
     bool m_PassDepthReadOnly = false;
     BufferHandle m_IndexBuffer{};
     IndexType m_IndexType = IndexType::Uint16;
-    // Indexed by engine vertex binding; ApplyRenderState maps each to the
-    // current pipeline's WebGPU slot (WebGpuPipeline::vertexBindings).
-    std::array<BufferHandle, kMaxVertexBufferSlots> m_VertexBuffers{};
+    // Indexed by engine vertex binding, every one of them; ApplyRenderState maps
+    // each to the current pipeline's WebGPU slot (WebGpuPipeline::vertexBindings).
+    std::array<BufferHandle, VertexBinding::Count> m_VertexBuffers{};
 
     // Bind groups persist in the engine's command-list state but not in a WebGPU
     // pass encoder, so they are re-applied on the next draw or dispatch.

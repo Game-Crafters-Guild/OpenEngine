@@ -336,6 +336,10 @@ struct JoltPhysicsBackend::Impl
         return true;
     }
 
+    // A ray query's result for one hit on `ray`: the body's handle, the point, the distance, the
+    // surface normal and the user data.
+    RayCastResult RayHit(const JPH::RRayCast& ray, float32 maxDistance, const JPH::RayCastResult& hit) const;
+
     void OnContact(const JPH::Body& inBody1,
                    const JPH::Body& inBody2,
                    const JPH::ContactManifold& inManifold,
@@ -1309,7 +1313,113 @@ struct ActiveQueryScope
     }
     ~ActiveQueryScope() { Count.fetch_sub(1, std::memory_order_relaxed); }
 };
+
+// The broad-phase trees a query's layer mask reaches: object layer 0 lives in the Static tree and
+// every other layer in the Dynamic tree (GE_BroadPhaseLayerInterface).
+class QueryBroadPhaseLayerFilter final : public JPH::BroadPhaseLayerFilter
+{
+public:
+    explicit QueryBroadPhaseLayerFilter(const CollisionFilter& filter) : m_LayerMask(filter.layerMask) {}
+    bool ShouldCollide(JPH::BroadPhaseLayer layer) const override
+    {
+        constexpr uint32 kStaticBit = 1u << static_cast<uint32>(Layers::Static);
+        return (m_LayerMask & (layer == BroadPhaseLayers::Static ? kStaticBit : ~kStaticBit)) != 0u;
+    }
+private:
+    uint32 m_LayerMask;
+};
+
+class QueryLayerFilter final : public JPH::ObjectLayerFilter
+{
+public:
+    explicit QueryLayerFilter(const CollisionFilter& filter) : m_Filter(filter) {}
+    bool ShouldCollide(JPH::ObjectLayer layer) const override { return m_Filter.PassesLayer(layer); }
+private:
+    const CollisionFilter& m_Filter;
+};
+
+class QueryBodyFilter final : public JPH::BodyFilter
+{
+public:
+    explicit QueryBodyFilter(bool ignoreSensors) : m_IgnoreSensors(ignoreSensors) {}
+    bool ShouldCollideLocked(const JPH::Body& body) const override
+    {
+        return !m_IgnoreSensors || !body.IsSensor();
+    }
+private:
+    bool m_IgnoreSensors;
+};
+
+// Keeps each body's nearest hit along a ray: a mesh or a compound reports one hit per triangle or
+// child it crosses, and RayCastAll returns bodies, not surface crossings.
+class NearestHitPerBodyCollector final : public JPH::CastRayCollector
+{
+public:
+    std::vector<JPH::RayCastResult> hits;
+
+    void AddHit(const JPH::RayCastResult& hit) override
+    {
+        for (JPH::RayCastResult& kept : hits)
+        {
+            if (kept.mBodyID == hit.mBodyID)
+            {
+                if (hit.mFraction < kept.mFraction)
+                    kept = hit;
+                return;
+            }
+        }
+        hits.push_back(hit);
+    }
+};
+
+// Nearest first; equal distances by body id, so the order does not follow the broad phase's tree
+// layout, which changes when the broad phase is rebuilt.
+bool IsNearerHit(const JPH::RayCastResult& a, const JPH::RayCastResult& b)
+{
+    if (a.mFraction != b.mFraction)
+        return a.mFraction < b.mFraction;
+    return a.mBodyID < b.mBodyID;
+}
+
+// The ray a query casts: the direction normalised and scaled to maxDistance, so a hit's fraction
+// times maxDistance is its distance. False for a zero direction.
+bool MakeQueryRay(const RayCastQuery& query, JPH::RRayCast& outRay)
+{
+    const Vector3 dir = query.ray.direction;
+    const float32 lenSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+    if (lenSq <= 0.0f)
+        return false;
+
+    const float32 scale = query.maxDistance / std::sqrt(lenSq);
+    outRay.mOrigin = JPH::RVec3(static_cast<float>(query.ray.origin.x), static_cast<float>(query.ray.origin.y),
+                                static_cast<float>(query.ray.origin.z));
+    outRay.mDirection = JPH::Vec3(dir.x * scale, dir.y * scale, dir.z * scale);
+    return true;
+}
 } // namespace
+
+RayCastResult JoltPhysicsBackend::Impl::RayHit(const JPH::RRayCast& ray, float32 maxDistance,
+                                               const JPH::RayCastResult& hit) const
+{
+    RayCastResult result;
+    const auto it = bodyHandleByBodyIdKey.find(hit.mBodyID.GetIndexAndSequenceNumber());
+    if (it != bodyHandleByBodyIdKey.end())
+        result.body = BodyHandle(it->second);
+
+    const JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
+    result.hitPoint = Vector3(static_cast<float32>(p.GetX()), static_cast<float32>(p.GetY()), static_cast<float32>(p.GetZ()));
+    result.distance = maxDistance * static_cast<float32>(hit.mFraction);
+
+    JPH::BodyLockRead lock(physicsSystem.GetBodyLockInterface(), hit.mBodyID);
+    if (lock.Succeeded())
+    {
+        const JPH::Body& b = lock.GetBody();
+        const JPH::Vec3 n = b.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, p);
+        result.hitNormal = Vector3(static_cast<float32>(n.GetX()), static_cast<float32>(n.GetY()), static_cast<float32>(n.GetZ()));
+        result.userData = static_cast<uint64>(b.GetUserData());
+    }
+    return result;
+}
 
 bool JoltPhysicsBackend::RayCast(const RayCastQuery& query, RayCastResult& outResult) const
 {
@@ -1318,61 +1428,46 @@ bool JoltPhysicsBackend::RayCast(const RayCastQuery& query, RayCastResult& outRe
         return false;
     ActiveQueryScope queryScope(m_Impl->activeQueryCount);
 
-    const Vector3 dir = query.ray.direction;
-    const float32 lenSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-    if (lenSq <= 0.0f)
+    JPH::RRayCast ray;
+    if (!MakeQueryRay(query, ray))
         return false;
 
-    const float32 invLen = 1.0f / std::sqrt(lenSq);
-    const Vector3 nd(dir.x * invLen, dir.y * invLen, dir.z * invLen);
-
-    const JPH::RVec3 origin(static_cast<float>(query.ray.origin.x), static_cast<float>(query.ray.origin.y), static_cast<float>(query.ray.origin.z));
-    const JPH::Vec3 direction(nd.x * query.maxDistance, nd.y * query.maxDistance, nd.z * query.maxDistance);
-
-    const JPH::RRayCast ray(origin, direction);
     JPH::RayCastResult hit;
-
-    const auto& npq = m_Impl->physicsSystem.GetNarrowPhaseQuery();
-    if (!npq.CastRay(ray, hit))
+    if (!m_Impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit, QueryBroadPhaseLayerFilter(query.filter),
+                                                             QueryLayerFilter(query.filter),
+                                                             QueryBodyFilter(query.filter.ignoreSensors)))
         return false;
 
-    // Map body id back to our handle
-    const uint32_t key = hit.mBodyID.GetIndexAndSequenceNumber();
-    auto it = m_Impl->bodyHandleByBodyIdKey.find(key);
-    if (it != m_Impl->bodyHandleByBodyIdKey.end())
-    {
-        outResult.body = BodyHandle(it->second);
-    }
-
-    const JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
-    outResult.hitPoint = Vector3(static_cast<float32>(p.GetX()), static_cast<float32>(p.GetY()), static_cast<float32>(p.GetZ()));
-    outResult.distance = query.maxDistance * static_cast<float32>(hit.mFraction);
-
-    // Fetch normal + user data
-    {
-        JPH::BodyLockRead lock(m_Impl->physicsSystem.GetBodyLockInterface(), hit.mBodyID);
-        if (lock.Succeeded())
-        {
-            const JPH::Body& b = lock.GetBody();
-            const JPH::Vec3 n = b.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, p);
-            outResult.hitNormal = Vector3(static_cast<float32>(n.GetX()), static_cast<float32>(n.GetY()), static_cast<float32>(n.GetZ()));
-            outResult.userData = static_cast<uint64>(b.GetUserData());
-        }
-    }
-
+    outResult = m_Impl->RayHit(ray, query.maxDistance, hit);
     return true;
 }
 
 bool JoltPhysicsBackend::RayCastAll(const RayCastQuery& query, std::vector<RayCastResult>& outResults, uint32 maxResults) const
 {
     outResults.clear();
-    outResults.reserve(std::min<uint32>(maxResults, 64u));
-
-    RayCastResult first{};
-    if (!RayCast(query, first))
+    if (!m_Impl || !m_Impl->initialized || maxResults == 0)
         return false;
-    outResults.push_back(first);
-    return true;
+    ActiveQueryScope queryScope(m_Impl->activeQueryCount);
+
+    JPH::RRayCast ray;
+    if (!MakeQueryRay(query, ray))
+        return false;
+
+    // Default settings, as the single-hit cast: convex shapes are solid, back faces are not hit.
+    NearestHitPerBodyCollector collector;
+    m_Impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, JPH::RayCastSettings{}, collector,
+                                                        QueryBroadPhaseLayerFilter(query.filter),
+                                                        QueryLayerFilter(query.filter),
+                                                        QueryBodyFilter(query.filter.ignoreSensors));
+
+    std::vector<JPH::RayCastResult>& hits = collector.hits;
+    std::sort(hits.begin(), hits.end(), IsNearerHit);
+    hits.resize(std::min<size_t>(hits.size(), maxResults));
+
+    outResults.reserve(hits.size());
+    for (const JPH::RayCastResult& hit : hits)
+        outResults.push_back(m_Impl->RayHit(ray, query.maxDistance, hit));
+    return !outResults.empty();
 }
 
 bool JoltPhysicsBackend::BoxOverlap(const BoxOverlapQuery& query, std::vector<OverlapResult>& outResults, uint32 maxResults) const
@@ -1393,26 +1488,8 @@ bool JoltPhysicsBackend::BoxOverlap(const BoxOverlapQuery& query, std::vector<Ov
         return false;
 
     ActiveQueryScope queryScope(m_Impl->activeQueryCount);
-    class QueryLayerFilter final : public JPH::ObjectLayerFilter
-    {
-    public:
-        explicit QueryLayerFilter(const CollisionFilter& filter) : m_Filter(filter) {}
-        bool ShouldCollide(JPH::ObjectLayer layer) const override { return m_Filter.PassesLayer(layer); }
-    private:
-        const CollisionFilter& m_Filter;
-    } layerFilter(query.filter);
-
-    class QueryBodyFilter final : public JPH::BodyFilter
-    {
-    public:
-        explicit QueryBodyFilter(bool ignoreSensors) : m_IgnoreSensors(ignoreSensors) {}
-        bool ShouldCollideLocked(const JPH::Body& body) const override
-        {
-            return !m_IgnoreSensors || !body.IsSensor();
-        }
-    private:
-        bool m_IgnoreSensors;
-    } bodyFilter(query.filter.ignoreSensors);
+    const QueryLayerFilter layerFilter(query.filter);
+    const QueryBodyFilter bodyFilter(query.filter.ignoreSensors);
 
     class OverlapCollector final : public JPH::CollideShapeCollector
     {

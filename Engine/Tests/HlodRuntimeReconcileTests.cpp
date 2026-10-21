@@ -245,6 +245,61 @@ TEST(HlodRuntimeReconcile, ReconcileSpawnsEvictedProxiesAndTagsMembers) {
     std::filesystem::remove(out, ec);
 }
 
+// Members in one cell on two layers bake into one cluster per layer set, and each proxy draws on its
+// members' layers: no proxy draws a member in a view that does not draw that member.
+TEST(HlodRuntimeReconcile, ProxyLayersEqualTheirMembersLayers) {
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    RenderServices rs;
+    ASSERT_TRUE(rs.Initialize(device.get()));
+    auto world = std::make_unique<ECS::World>(nullptr);
+    ModelBank bank;
+    Hlod::HlodRuntime& runtime = rs.GetHlodRuntime();
+
+    const GUID matGuid = GUID::Derive(GUID::Null(), "reconcile/material-layers");
+    AddVolume(*world);
+    for (int i = 0; i < 2 * kMemberCount; ++i) {
+        const GUID modelGuid = GUID::Derive(GUID::Null(), "reconcile/layers/model/" + std::to_string(i));
+        bank.Add(modelGuid, 0xA000u + static_cast<uint64>(i));
+        ECS::Entity e = world->Create();
+        e.Set(WorldAt(static_cast<float>(i) * 2.0f, 0.0f, 0.0f));
+        e.Set(BoxBounds(1.0f));
+        e.Set(Tag("layered_" + std::to_string(i)));
+        MeshRenderer mr{};
+        mr.materialAssetGuid.Set(matGuid);
+        mr.modelAssetGuid.Set(modelGuid);
+        mr.RenderLayers = (i % 2 == 0) ? Rendering::RenderLayerMask::Default() : Rendering::RenderLayerMask::FromLayer(3);
+        e.Set(mr);
+        e.Set(MeshGPUData{});
+    }
+    world->ProcessCommands();
+
+    const std::filesystem::path out = TempPath("hlod_reconcile_layers.gehlod");
+    std::filesystem::remove(out);
+    ASSERT_EQ(Hlod::BakeHlodForWorld(*world, bank.Resolver(), out).Outcome, Hlod::BakeOutcome::Wrote);
+    runtime.ReconcileScene(*world, rs.GetMeshGPURegistry(), out, "test", bank.Resolver());
+
+    ASSERT_EQ(runtime.GetClusters().size(), 2u) << "one cluster per layer set in the cell";
+    for (const Hlod::RuntimeCluster& cluster : runtime.GetClusters()) {
+        ASSERT_FALSE(cluster.Proxies.empty());
+        ASSERT_FALSE(cluster.Members.empty());
+        for (ECS::EntityHandle proxy : cluster.Proxies) {
+            const auto* proxyRenderer = world->GetComponent<MeshRenderer>(proxy);
+            ASSERT_NE(proxyRenderer, nullptr);
+            for (ECS::EntityHandle member : cluster.Members)
+                EXPECT_EQ(proxyRenderer->RenderLayers, world->GetComponent<MeshRenderer>(member)->RenderLayers);
+        }
+    }
+
+    runtime.Retire(*world, rs.GetMeshGPURegistry());
+    world.reset();
+    rs.Shutdown();
+    std::error_code ec;
+    std::filesystem::remove(out, ec);
+}
+
 TEST(HlodRuntimeReconcile, SelectSystemFlipsResidencyByCoverage) {
     auto device = CreateVulkanDeviceFast();
     if (!device)

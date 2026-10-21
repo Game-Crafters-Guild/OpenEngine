@@ -83,11 +83,6 @@ void RegisterWindVolumeInspector()
                 [](Wind& u, float v) { u.Weight = std::clamp(v, 0.0f, 1.0f); },
                 1.0f, "Volume influence [0..1].");
 
-            AddComponentIntRowWithDrag<Wind>(ctx.Parent, "Layer Mask", static_cast<int>(wind->LayerMask), w, e, n, undo,
-                "Change Wind Volume Layer Mask",
-                [](Wind& u, int v) { u.LayerMask = static_cast<uint32>(v); },
-                static_cast<int>(0xFFFFFFFFu), "Wind consumer mask. -1 affects all consumers.");
-
             InspectorUI::AddTextBlock(ctx.Parent, "Bounds", "inspector-section-subheader");
             auto* shape = InspectorUI::AddEnumRow(ctx.Parent, "Shape", kWindVolumeShapes, wind->Shape,
                 "Bounding shape for local wind volumes. Transform controls orientation and scale.");

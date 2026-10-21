@@ -13,6 +13,7 @@
 #include "UI/Layout/PopupPlacement.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIManager.h"
+#include "UI/ExposureMeterText.h"
 
 #include <algorithm>
 #include <array>
@@ -134,34 +135,75 @@ constexpr const char* kAccelerationTooltip =
 constexpr const char* kExposureSectionTooltip =
     "Editor-only Scene View exposure override.";
 constexpr const char* kExposureModeTooltip =
-    "Auto meters the image like the Game View. Scene Light holds a fixed exposure derived from the "
-    "scene's directional lights and sky, re-derived when either changes. Fixed holds the Fixed EV100 below.";
-constexpr const char* kSceneLightEvTooltip =
-    "The EV100 Scene Light derives from the light on a horizontal surface: every directional light at "
-    "its elevation plus the sky. Switch to Fixed to start from it.";
+    "Auto meters the view with the Meter below, within Min and Max EV100. Fixed holds the Fixed EV100 below.";
+constexpr const char* kLightsReadingTooltip =
+    "What the Lights meter reads from the light on a horizontal surface: every directional light at its "
+    "elevation plus the sky. When Min or Max EV100 or the Compensation Curve moves the exposure, the "
+    "EV100 the view is exposed at follows it. EV Compensation applies on top.";
+constexpr const char* kPictureReadingTooltip =
+    "The EV100 the view is exposed at: the Picture meter's reading after Min and Max EV100 and the "
+    "Compensation Curve. EV Compensation applies on top.";
+// The Reading line notes a clamp once it moves the value by at least the line's precision.
+constexpr float kReadingClampNoticeEv = 0.05f;
 constexpr const char* kAdaptationDelayTooltip =
-    "Smooth exposure changes over time using the sensor's adaptation speeds. "
-    "Disable to apply each newly metered exposure immediately.";
+    "Smooth exposure changes over time using the sensor's adaptation speeds, with either meter. "
+    "Off (the default) applies each new reading at once: the Lights reading lands in the frame the light "
+    "changes, and the Picture meter re-meters every frame, unsmoothed.";
 constexpr const char* kMinEvTooltip =
-    "Auto mode: brightest the metering may expose to (lower EV = more brightening in dark scenes).";
+    "Auto mode, either meter: brightest the metering may expose to (lower EV = more brightening in dark scenes).";
 constexpr const char* kMaxEvTooltip =
-    "Auto mode: darkest the metering may expose to (higher EV = more darkening in bright scenes).";
+    "Auto mode, either meter: darkest the metering may expose to (higher EV = more darkening in bright scenes).";
 constexpr const char* kCompensationTooltip =
     "+/- stops applied after auto metering (+ brightens).";
 constexpr std::array kExposureModes = {Editor::SceneViewExposureMode::Auto,
-                                       Editor::SceneViewExposureMode::SceneLight,
                                        Editor::SceneViewExposureMode::Fixed};
+constexpr std::array kExposureMeters = {Components::ExposureMeter::Picture,
+                                        Components::ExposureMeter::Lights};
 
-int ExposureModeIndex(Editor::SceneViewExposureMode mode)
+template <typename T, size_t N>
+int IndexOf(const std::array<T, N>& values, T value)
 {
-    for (size_t i = 0; i < kExposureModes.size(); ++i)
-        if (kExposureModes[i] == mode)
+    for (size_t i = 0; i < N; ++i)
+        if (values[i] == value)
             return static_cast<int>(i);
     return 0;
 }
 
+std::vector<std::string> ExposureModeLabels()
+{
+    std::vector<std::string> labels;
+    for (const Editor::SceneViewExposureMode mode : kExposureModes)
+        labels.emplace_back(Editor::SceneViewExposureModeLabel(mode));
+    return labels;
+}
+
+std::vector<std::string> ExposureMeterLabels()
+{
+    std::vector<std::string> labels;
+    for (const Components::ExposureMeter meter : kExposureMeters)
+        labels.emplace_back(Editor::ExposureMeterLabel(meter));
+    return labels;
+}
+
 constexpr const char* kFixedEvTooltip =
-    "Absolute photographic EV100. Sunny ~15, overcast ~12, interior ~7-9, night ~2-5.";
+    "Absolute photographic EV100: sun ~15, overcast ~12, interior ~7-9, full moon ~-4.";
+// The Reading line for the shown value: under Lights the reading, with the EV100 the view is exposed
+// at when the clamps or the curve move it; under Picture the EV100 the view is exposed at.
+std::string ReadingText(const Editor::SceneViewSettings& settings, std::optional<float> shownEv,
+                        std::optional<float> exposedEv)
+{
+    char text[64] = "—";
+    if (!shownEv)
+        return text;
+    const float ev = *shownEv;
+    if (settings.GetExposureMeter() == Components::ExposureMeter::Lights && exposedEv &&
+        std::fabs(*exposedEv - ev) >= kReadingClampNoticeEv)
+        std::snprintf(text, sizeof(text), "%.1f EV100, exposed at %.1f", ev, *exposedEv);
+    else
+        std::snprintf(text, sizeof(text), "%.1f EV100", ev);
+    return text;
+}
+
 } // namespace
 
 SceneCameraSettingsPopup::SceneCameraSettingsPopup()
@@ -231,45 +273,44 @@ SceneCameraSettingsPopup::SceneCameraSettingsPopup()
                                      SceneViewSettings::kDefaultMoveAccelerationTime, kAccelerationTooltip);
 
     AddSectionHeader(*panel, "Exposure", kExposureSectionTooltip);
+    m_ExposureModeDropdown =
+        AddDropdownRow(*panel, "SceneCameraExposureMode", "Mode", kExposureModeTooltip, ExposureModeLabels(),
+                       [this](int index)
+                       {
+                           Editor::SceneViewSettings::Get().SetExposureMode(
+                               kExposureModes[static_cast<size_t>(index)], /*fromUserSwitch=*/true);
+                           // Full re-sync, not just visibility: switching to Fixed seeds
+                           // Fixed EV100 from what the view showed (AE-lock), so the
+                           // fixed-EV slider must pick up the new value.
+                           SyncFromSettings();
+                       })
+            .dropdown;
+    m_ExposureMeterRow =
+        AddDropdownRow(*panel, "SceneCameraExposureMeter", "Meter", Editor::kExposureMeterTooltip,
+                       ExposureMeterLabels(),
+                       [this](int index)
+                       {
+                           Editor::SceneViewSettings::Get().SetExposureMeter(kExposureMeters[static_cast<size_t>(index)]);
+                           UpdateExposureRowVisibility();
+                       });
     {
         auto row = std::make_unique<UIElement>();
-        row->SetId("SceneCameraExposureModeRow");
+        row->SetId("SceneCameraReadingRow");
         row->AddClass("popover-row");
+        row->SetTooltip(kLightsReadingTooltip);
 
-        // On the label only: the open dropdown list sits inside this row, and a row tooltip would
-        // pop up over it.
         auto label = std::make_unique<Label>();
-        label->SetText("Mode");
+        label->SetText("Reading");
         label->AddClass("popover-row-label");
-        label->SetTooltip(kExposureModeTooltip);
         row->AddChild(std::move(label));
 
-        auto control = std::make_unique<UIElement>();
-        control->AddClass("popover-row-toggle");
+        auto value = std::make_unique<Label>();
+        value->SetId("SceneCameraReading");
+        value->AddClass("popover-row-toggle");
+        m_ReadingLabel = value.get();
+        row->AddChild(std::move(value));
 
-        auto modes = std::make_unique<Dropdown>();
-        modes->SetId("SceneCameraExposureMode");
-        // Fill the value column so "Scene Light" fits on one line in the list.
-        modes->Overrides().Set(Style::FlexGrow, 1.0f);
-        std::vector<Dropdown::Option> options;
-        for (size_t i = 0; i < kExposureModes.size(); ++i)
-            options.push_back({std::to_string(i), Editor::SceneViewExposureModeLabel(kExposureModes[i])});
-        modes->SetOptions(options, ExposureModeIndex(Editor::SceneViewSettings::Get().GetExposureMode()));
-        modes->SetOnValueChanged([this](const std::string&)
-                                 {
-                                     const int index = m_ExposureModeDropdown->GetSelectedIndex();
-                                     if (index < 0 || index >= static_cast<int>(kExposureModes.size()))
-                                         return;
-                                     Editor::SceneViewSettings::Get().SetExposureMode(
-                                         kExposureModes[static_cast<size_t>(index)], /*fromUserSwitch=*/true);
-                                     // Full re-sync, not just visibility: switching to Fixed seeds
-                                     // Fixed EV100 from what the view showed (AE-lock), so the
-                                     // fixed-EV slider must pick up the new value.
-                                     SyncFromSettings();
-                                 });
-        m_ExposureModeDropdown = modes.get();
-        control->AddChild(std::move(modes));
-        row->AddChild(std::move(control));
+        m_ReadingRow = row.get();
         panel->AddChild(std::move(row));
     }
     {
@@ -311,26 +352,6 @@ SceneCameraSettingsPopup::SceneCameraSettingsPopup()
                                   SceneViewSettings::kExposureSliderStep,
                                   [](float v, bool commit) { SceneViewSettings::Get().SetPostFxAutoExposureMaxEv(v, commit); },
                                   SceneViewSettings::kDefaultAutoExposureMaxEv, kMaxEvTooltip);
-    {
-        auto row = std::make_unique<UIElement>();
-        row->SetId("SceneCameraSceneLightEvRow");
-        row->AddClass("popover-row");
-        row->SetTooltip(kSceneLightEvTooltip);
-
-        auto label = std::make_unique<Label>();
-        label->SetText("EV100");
-        label->AddClass("popover-row-label");
-        row->AddChild(std::move(label));
-
-        auto value = std::make_unique<Label>();
-        value->SetId("SceneCameraSceneLightEv");
-        value->AddClass("popover-row-toggle");
-        m_SceneLightEvLabel = value.get();
-        row->AddChild(std::move(value));
-
-        m_SceneLightEvRow = row.get();
-        panel->AddChild(std::move(row));
-    }
     m_ExposureEvRow = AddSliderRow(*panel, "SceneCameraFixedEv", "Fixed EV100",
                                    SceneViewSettings::kMinExposureEv, SceneViewSettings::kMaxExposureEv,
                                    SceneViewSettings::kExposureSliderStep,
@@ -450,6 +471,49 @@ SceneCameraSettingsPopup::SliderRow SceneCameraSettingsPopup::AddSliderRow(
     return result;
 }
 
+SceneCameraSettingsPopup::DropdownRow SceneCameraSettingsPopup::AddDropdownRow(
+    UIElement& parent, const char* idPrefix, const char* labelText, const char* tooltip,
+    const std::vector<std::string>& labels, std::function<void(int index)> onSelected)
+{
+    DropdownRow result;
+
+    auto row = std::make_unique<UIElement>();
+    row->SetId(std::string(idPrefix) + "Row");
+    row->AddClass("popover-row");
+    result.row = row.get();
+
+    auto label = std::make_unique<Label>();
+    label->SetText(labelText);
+    label->AddClass("popover-row-label");
+    label->SetTooltip(tooltip ? tooltip : "");
+    row->AddChild(std::move(label));
+
+    auto control = std::make_unique<UIElement>();
+    control->AddClass("popover-row-toggle");
+
+    auto dropdown = std::make_unique<Dropdown>();
+    dropdown->SetId(idPrefix);
+    // Fill the value column so every option fits on one line in the list.
+    dropdown->Overrides().Set(Style::FlexGrow, 1.0f);
+    std::vector<Dropdown::Option> options;
+    for (size_t i = 0; i < labels.size(); ++i)
+        options.push_back({std::to_string(i), labels[i]});
+    dropdown->SetOptions(options, 0);
+    Dropdown* dropdownPtr = dropdown.get();
+    const int optionCount = static_cast<int>(labels.size());
+    dropdown->SetOnValueChanged([dropdownPtr, optionCount, onSelected = std::move(onSelected)](const std::string&)
+                                {
+                                    const int index = dropdownPtr->GetSelectedIndex();
+                                    if (index >= 0 && index < optionCount)
+                                        onSelected(index);
+                                });
+    result.dropdown = dropdownPtr;
+    control->AddChild(std::move(dropdown));
+    row->AddChild(std::move(control));
+    parent.AddChild(std::move(row));
+    return result;
+}
+
 void SceneCameraSettingsPopup::AddSectionHeader(UIElement& parent, const char* text,
                                                 const char* tooltip)
 {
@@ -548,15 +612,11 @@ void SceneCameraSettingsPopup::SyncFromSettings()
     sync(m_AutoMaxEvRow, settings.GetPostFxAutoExposureMaxEv());
     sync(m_CompensationRow, settings.GetPostFxExposureCompensation());
     if (m_ExposureModeDropdown)
-        m_ExposureModeDropdown->SetSelectedIndexWithoutNotify(ExposureModeIndex(settings.GetExposureMode()));
-    if (m_SceneLightEvLabel)
-    {
-        float derivedEv = 0.0f;
-        char text[64] = "—";
-        if (settings.TryGetSceneLightExposureEv(derivedEv))
-            std::snprintf(text, sizeof(text), "%.1f, derived from the directional lights and sky", derivedEv);
-        m_SceneLightEvLabel->SetText(text);
-    }
+        m_ExposureModeDropdown->SetSelectedIndexWithoutNotify(IndexOf(kExposureModes, settings.GetExposureMode()));
+    if (m_ExposureMeterRow.dropdown)
+        m_ExposureMeterRow.dropdown->SetSelectedIndexWithoutNotify(IndexOf(kExposureMeters, settings.GetExposureMeter()));
+    if (m_ReadingLabel)
+        m_ReadingLabel->SetText(ReadingText(settings, m_ReadingFilter.Shown(), m_ExposedEv));
     if (m_UseAdaptationDelayToggle)
         m_UseAdaptationDelayToggle->SetValueWithoutNotify(
             settings.GetPostFxAutoExposureUseAdaptationDelay());
@@ -565,24 +625,49 @@ void SceneCameraSettingsPopup::SyncFromSettings()
 
 void SceneCameraSettingsPopup::UpdateExposureRowVisibility()
 {
-    const Editor::SceneViewExposureMode mode = Editor::SceneViewSettings::Get().GetExposureMode();
-    const bool autoOn = mode == Editor::SceneViewExposureMode::Auto;
-    const bool fixedOn = mode == Editor::SceneViewExposureMode::Fixed;
-    const bool sceneLightOn = mode == Editor::SceneViewExposureMode::SceneLight;
+    const Editor::SceneViewSettings& settings = Editor::SceneViewSettings::Get();
+    const bool autoOn = settings.GetExposureMode() == Editor::SceneViewExposureMode::Auto;
+    const bool fixedOn = !autoOn;
+    const bool lightsOn = autoOn && settings.GetExposureMeter() == Components::ExposureMeter::Lights;
     auto setVisible = [](UIElement* el, bool visible)
     {
         if (el)
             el->Overrides().Set(Style::Display,
                                 visible ? DisplayMode::Flex : DisplayMode::None);
     };
+    setVisible(m_ExposureMeterRow.row, autoOn);
+    setVisible(m_ReadingRow, autoOn);
+    if (m_ReadingRow)
+        m_ReadingRow->SetTooltip(lightsOn ? kLightsReadingTooltip : kPictureReadingTooltip);
     setVisible(m_AdaptationDelayRow, autoOn);
     setVisible(m_AutoMinEvRow.row, autoOn);
     setVisible(m_AutoMaxEvRow.row, autoOn);
-    setVisible(m_SceneLightEvRow, sceneLightOn);
     setVisible(m_ExposureEvRow.row, fixedOn);
     setVisible(m_ExposureEvLegend, fixedOn);
-    // Compensation (row + ticks) stays visible in every mode: it trims the
-    // metering, the derived EV and the fixed EV pin alike.
+    // Compensation (row + ticks) stays visible in every mode: it trims either
+    // meter and the fixed EV pin alike.
+}
+
+void SceneCameraSettingsPopup::RefreshReading(std::optional<float> meteredEv, std::optional<float> lightsReadingEv)
+{
+    if (!m_Visible || !m_ReadingLabel)
+        return;
+    const Editor::SceneViewSettings& settings = Editor::SceneViewSettings::Get();
+    const Components::ExposureMeter meter = settings.GetExposureMeter();
+    if (meter != m_ReadingMeter)
+    {
+        m_ReadingMeter = meter;
+        m_ReadingFilter.Reset();
+    }
+    const bool readingChanged =
+        m_ReadingFilter.Accept(meter == Components::ExposureMeter::Lights ? lightsReadingEv : meteredEv);
+    // The exposed EV100 is shown to the line's precision: a change below it does not redraw.
+    const std::optional<float> exposed =
+        meteredEv ? std::optional<float>(std::round(*meteredEv * 10.0f) / 10.0f) : std::nullopt;
+    const bool exposedChanged = exposed != m_ExposedEv;
+    m_ExposedEv = exposed;
+    if (readingChanged || exposedChanged)
+        m_ReadingLabel->SetText(ReadingText(settings, m_ReadingFilter.Shown(), m_ExposedEv));
 }
 
 void SceneCameraSettingsPopup::ShowAt(float anchorCenterX, float anchorBottomY,

@@ -18,6 +18,8 @@
 
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
+// The environment cube is absolute scene-linear, never pre-exposed (P = 1 by construction):
+// it binds no ExposureHistory, and forward shading that samples it applies P to its output.
 
 // SkyUBO (set 0, binding 0). std140: every vec3 is followed by a float so each
 // row is 16 bytes. Mirrors the prefix sky_view_lut.comp / sky_render.frag read;

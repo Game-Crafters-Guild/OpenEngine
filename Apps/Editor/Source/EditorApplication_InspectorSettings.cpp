@@ -11,6 +11,7 @@
 #include "Editor/Settings/SceneViewExposureSettingsPage.h"
 #include "Editor/Settings/GraphSettingsPage.h"
 #include "Editor/Settings/LodSettingsPage.h"
+#include "Editor/Settings/RenderLayersSettingsPage.h"
 #include "Editor/Settings/EditorSettingsRegistry.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Editor/Settings/TooltipSettings.h"
@@ -466,6 +467,8 @@ void EditorApplication::InitializeAssetsGridAndSmartFolderSettings(SettingsPanel
 
     // Level of Detail owns its descriptor next to the settings it reads.
     Editor::RegisterLodSettingsCategory();
+    // Render Layers likewise: the project's 32 layer names.
+    Editor::RegisterRenderLayersSettingsCategory();
     // Game UI Scaling likewise; the game UI hosts read it back from the project.
     Editor::RegisterGameUIScaleSettingsCategory();
     // The Scene View's exposure rows, inline on its Preferences page.

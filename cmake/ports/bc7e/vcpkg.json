@@ -1,0 +1,23 @@
+{
+  "name": "bc7e",
+  "version-date": "2021-03-06",
+  "port-version": 2,
+  "description": "Binomial's bc7e.ispc BC7 encoder (from bc7enc_rdo), compiled with ISPC (runtime instruction-set dispatch on x64, one neon object on arm64): the texture cook's BC7 encoder.",
+  "homepage": "https://github.com/richgel999/bc7enc_rdo",
+  "license": "Apache-2.0",
+  "supports": "(windows & (x64 | arm64) & !uwp) | (linux & (x64 | arm64)) | osx",
+  "dependencies": [
+    {
+      "name": "ispc",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

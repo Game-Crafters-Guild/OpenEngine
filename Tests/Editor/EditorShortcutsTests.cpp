@@ -452,6 +452,9 @@ struct EditorAndGame
     Input::InputSystem Editor;
     Input::InputSystem Game{Input::SinkRole::Gameplay};
     WindowInputRouterConfig Config;
+    // The editor hands the window's play surface to the router only while play
+    // runs with the Game View as that window's active tab.
+    bool GameViewActiveInPlay = true;
 
     EditorAndGame()
     {
@@ -460,7 +463,8 @@ struct EditorAndGame
         Config.getPlaySurface = [this]
         {
             WindowInputRouterConfig::PlaySurface surface;
-            surface.gameplaySink = &Game;
+            if (GameViewActiveInPlay)
+                surface.gameplaySink = &Game;
             return surface;
         };
     }
@@ -543,4 +547,67 @@ TEST(EditorReservedShortcuts, RebindingOrDisablingAShortcutMovesItsKeyToTheGame)
     Editor::ApplyShortcutBindings(input.Editor, CatalogEntry("Toggle Play Mode"), {});
     input.Tap(Input::kKeyCode_F9, 0);
     EXPECT_TRUE(input.Game.WasKeyPressed(Input::kKeyCode_F9)) << "an unbound shortcut reserved nothing";
+}
+
+// The diagnostic hotkeys (F2 CPU profiler, Shift+F2 off, F3 UI Demo) are bare
+// Editor.Global actions: a game in a focused Game View that binds them receives
+// them, modified variants included, and the editor acts on them only outside
+// that, with the modifiers matched.
+TEST(EditorReservedShortcuts, AFocusedGameTakesTheDiagnosticKeysAndTheEditorKeepsThemOutsidePlay)
+{
+    ScopedCatalogDefaultBindings defaults;
+    EditorAndGame input;
+    const Input::ContextId gameContext = Input::HashInput("Test.Game");
+    const auto bindGame = [&](const char* name, int key, int mods)
+    {
+        Input::ActionBinding binding{Input::DeviceType::Keyboard, key, 1.0f};
+        binding.requiredMods = static_cast<Input::ModifierFlags>(mods);
+        binding.forbiddenMods = Input::kShortcutModifiers & ~binding.requiredMods;
+        const Input::ActionId id = Input::HashInput(name);
+        input.Game.RegisterAction(gameContext, {id, {binding}, /*isAxis=*/false});
+        return id;
+    };
+    struct Chord
+    {
+        Input::ActionId GameAction;
+        int Key;
+        int Mods;
+    };
+    const Chord chords[] = {
+        {bindGame("Test.Game.F2", Input::kKeyCode_F2, 0), Input::kKeyCode_F2, 0},
+        {bindGame("Test.Game.ShiftF2", Input::kKeyCode_F2, Input::kModShift), Input::kKeyCode_F2, Input::kModShift},
+        {bindGame("Test.Game.F3", Input::kKeyCode_F3, 0), Input::kKeyCode_F3, 0},
+        {bindGame("Test.Game.ShiftF3", Input::kKeyCode_F3, Input::kModShift), Input::kKeyCode_F3, Input::kModShift},
+    };
+    input.Game.PushContext(gameContext);
+
+    std::vector<Input::ActionId> diagnostics{EditorInput::kEditorShowUIDemo};
+#if GE_ENABLE_CPU_PROFILING
+    diagnostics.push_back(EditorInput::kEditorCpuProfiler);
+    diagnostics.push_back(EditorInput::kEditorCpuProfilerOff);
+#endif
+    for (const Chord& chord : chords)
+    {
+        SCOPED_TRACE(testing::Message() << "focused game, key=" << chord.Key << " mods=" << chord.Mods);
+        input.Tap(chord.Key, chord.Mods);
+        EXPECT_TRUE(input.Game.WasActionTriggered(chord.GameAction)) << "the editor took the game's key";
+        for (const Input::ActionId action : diagnostics)
+            EXPECT_FALSE(input.Editor.WasActionTriggered(action));
+    }
+
+    input.GameViewActiveInPlay = false;
+    input.Tap(Input::kKeyCode_F3, 0);
+    EXPECT_TRUE(input.Editor.WasActionTriggered(EditorInput::kEditorShowUIDemo));
+    input.Tap(Input::kKeyCode_F3, Input::kModShift);
+    EXPECT_FALSE(input.Editor.WasActionTriggered(EditorInput::kEditorShowUIDemo)) << "Shift+F3 is not F3";
+#if GE_ENABLE_CPU_PROFILING
+    input.Tap(Input::kKeyCode_F2, 0);
+    EXPECT_TRUE(input.Editor.WasActionTriggered(EditorInput::kEditorCpuProfiler));
+    EXPECT_FALSE(input.Editor.WasActionTriggered(EditorInput::kEditorCpuProfilerOff));
+    input.Tap(Input::kKeyCode_F2, Input::kModShift);
+    EXPECT_TRUE(input.Editor.WasActionTriggered(EditorInput::kEditorCpuProfilerOff));
+    EXPECT_FALSE(input.Editor.WasActionTriggered(EditorInput::kEditorCpuProfiler));
+#endif
+    input.Tap(Input::kKeyCode_F3, Input::kModControl);
+    EXPECT_FALSE(input.Editor.WasActionTriggered(EditorInput::kEditorShowUIDemo)) << "Ctrl+F3 is not F3";
 }

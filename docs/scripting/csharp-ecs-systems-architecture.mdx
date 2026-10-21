@@ -1,6 +1,6 @@
 ---
 title: C# ECS systems
-description: Authoring ECS systems and components in C# with GameSystem, IEntitySystem and IComponent, the generated chunk iteration, built-in component mirrors and hot reload.
+description: Authoring ECS systems and components in C# with GameSystem, IEntitySystem, and IComponent, the generated chunk iteration, built-in component mirrors, and hot reload.
 sidebar:
   order: 1
 ---
@@ -13,11 +13,11 @@ Two complementary abstractions are provided:
 
 | Abstraction | Purpose | Entity Iteration? | Generated Entity Iteration? |
 |---|---|---|---|
-| **`GameSystem`** | Global per-frame logic (spawners, state machines, managers) | No — manual ECS access if needed | No |
-| **`IEntitySystem`** | Per-entity component processing | Yes — source-generated chunk iteration | Yes |
+| **`GameSystem`** | Global per-frame logic (spawners, state machines, managers) | No: manual ECS access if needed | No |
+| **`IEntitySystem`** | Per-entity component processing | Yes: source-generated chunk iteration | Yes |
 
 Both participate in the same managed update loop. Generated module initializers register
-entity systems; `GameSystem` discovery also has a reflection fallback.
+entity systems. `GameSystem` discovery also has a reflection fallback.
 
 ## Naming and namespace
 
@@ -108,9 +108,9 @@ All component types must be `unmanaged` structs implementing `IComponent`.
 
 ### Component struct rules
 
-- Must be `unmanaged` (no managed references — no `string`, `object`, arrays, classes)
+- Must be `unmanaged` (no managed references: no `string`, `object`, arrays, classes)
 - Must use `[StructLayout(LayoutKind.Sequential)]`
-- **No `bool` fields** — use `byte` instead (C#/C++ `bool` size can differ)
+- **No `bool` fields**: use `byte` instead (C#/C++ `bool` size can differ)
 - **Enums must have explicit backing type** matching C++ side (e.g., `: int`, `: byte`)
 - Safe types: `float`, `double`, `int`, `uint`, `short`, `ushort`, `byte`, `sbyte`, `long`, `ulong`
 - No `nint`/`nuint` (pointer-sized, not portable)
@@ -122,7 +122,7 @@ The generator adds a companion partial struct with these entry points:
 1. `[ModuleInitializer] __RegisterSystem()` registers execution and cleanup callbacks
    with `GameSystemRunner` when the assembly loads.
 2. `__EnsureTypeIds()` resolves component IDs lazily on the first execution. IDs are
-   `ulong`; built-in IDs must be resolved after native components are registered.
+   `ulong`. Built-in IDs must be resolved after native components are registered.
 3. `__Execute(ulong worldHandle, float deltaTime)` creates a cached query, resets it,
    and visits each matching archetype and chunk. It obtains writable spans for `ref`
    parameters and read-only spans for `in` parameters, then calls the user method
@@ -136,10 +136,10 @@ fields are not persistent system state. Store persistent per-entity state in
 components or global state in a `GameSystem`.
 
 Query and component IDs are cached between executions. Generated iteration makes
-ABI calls to acquire chunk spans; the per-entity loop itself is managed code over
+ABI calls to acquire chunk spans. The per-entity loop itself is managed code over
 native memory. Calls made by the user's `Execute` method can still cross the ABI.
 
-The generated file is the authoritative expansion for a particular system; inspect
+The generated file is the authoritative expansion for a particular system. Inspect
 it through the IDE's generated sources instead of maintaining a handwritten copy.
 
 ## GameSystem
@@ -273,7 +273,7 @@ their own ABI cost.
 
 The implementation is in `Managed/Scripting.Runtime/GameSystemRunner.cs`.
 `GameSystemRunnerExports.cs` provides the standalone native entry points. Keep
-user logic in `GameSystem` callbacks or `IEntitySystem.Execute`; these runtime
+user logic in `GameSystem` callbacks or `IEntitySystem.Execute`. These runtime
 entry points are infrastructure.
 
 ### System discovery
@@ -281,14 +281,14 @@ entry points are infrastructure.
 The generator emits `[ModuleInitializer]` registration for entity systems and
 eligible `GameSystem` subclasses. `GameSystemRunner` also discovers unregistered
 `GameSystem` subclasses through reflection where dynamic code is available.
-Registrations survive play-mode cycles; registrations owned by an unloading
+Registrations survive play-mode cycles. Registrations owned by an unloading
 assembly context are purged.
 
 ## Built-in C++ component access
 
 C# systems can directly iterate over registered C++ engine components through
 `[BuiltInComponent]`. Use the supplied `GameEngine.Scripting.Transform` mirror for
-`GameEngine::Components::Transform`; it stores the same 64-byte, column-major matrix.
+`GameEngine::Components::Transform`. It stores the same 64-byte, column-major matrix.
 Do not redeclare that mirror. The `Position` struct in the earlier example is a
 user component, not a built-in native component.
 
@@ -310,8 +310,8 @@ public partial struct MoveNativeSystem : IEntitySystem
 
 The source generator detects `[BuiltInComponent]` and emits `Ecs.GetComponentTypeIdByName`
 instead of `Ecs.RegisterBlobComponent`, resolving to the same type ID the C++ engine uses. The attribute must name an
-existing native registration exactly, and the mirror must match its size and layout;
-it does not create a native component from an arbitrary name.
+existing native registration exactly, and the mirror must match its size and layout.
+It does not create a native component from an arbitrary name.
 
 ### Chunk-based iteration
 
@@ -348,17 +348,17 @@ structural changes. They must be destroyed when their owning system shuts down.
 ### C++ side
 
 Use the declarations in `Engine/Include/Scripting/ECSABI.h`. Component type IDs use
-`GE_ECS_ComponentTypeId` (`uint64_t`); entity IDs remain 32-bit. The cached-query
+`GE_ECS_ComponentTypeId` (`uint64_t`). Entity IDs remain 32-bit. The cached-query
 functions include `CachedQueryCreate`, `CachedQueryReset`, `CachedQueryGetArchetypeInfo`,
 `CachedQueryGetChunkData`, and `CachedQueryDestroy`, all with the `GE_ECSABI_` prefix.
 
 Check each function's `GE_Result` before consuming its outputs. Handles must refer
-to live engine objects; an arbitrary nonzero integer is not a valid query handle.
+to live engine objects. An arbitrary nonzero integer is not a valid query handle.
 
 ### C# side
 
 `Managed/ECS.ABI/Internal/ChunkQueryNative.cs` exposes the wrappers used by generated
-code. Required and excluded component lists use `ReadOnlySpan<ulong>`; component
+code. Required and excluded component lists use `ReadOnlySpan<ulong>`. Component
 arguments are `ulong`. The wrappers return typed spans over the current native
 chunk. User systems should normally use generated `Execute` parameters instead
 of managing these query handles directly.
@@ -367,17 +367,17 @@ of managing these query handles directly.
 
 ### Location
 
-`Managed/SourceGenerators/EntitySystemGenerator/` — a standalone Roslyn analyzer/generator
+`Managed/SourceGenerators/EntitySystemGenerator/`: a standalone Roslyn analyzer/generator
 project targeting **.NET Standard 2.0** (Roslyn requirement for source generators).
 
 ### Integration paths
 
 The generator must work in two contexts:
 
-1. **MSBuild / IDE** — referenced as an `<Analyzer>` in the user's `.csproj`. VS/Rider
+1. **MSBuild / IDE**: referenced as an `<Analyzer>` in the user's `.csproj`. VS/Rider
    run it automatically, providing intellisense and error squiggles for generated code.
 
-2. **CompileServerHost** — loaded explicitly via `CSharpGeneratorDriver`:
+2. **CompileServerHost**: loaded explicitly via `CSharpGeneratorDriver`:
    ```csharp title="Running the generator in the compile server"
    var generator = LoadGeneratorFromAssembly(generatorPath);
    var driver = CSharpGeneratorDriver.Create(generator);
@@ -391,10 +391,10 @@ The generator must work in two contexts:
 
 For each `partial struct` implementing `IEntitySystem` with an `Execute` method:
 
-1. **`[ModuleInitializer]` registration method** — registers system callbacks with
+1. **`[ModuleInitializer]` registration method**: registers system callbacks with
    `GameSystemRunner`. Component type IDs are resolved lazily on first execution.
-2. **`__Execute(ulong world, float dt)` static method** — the chunk iteration loop.
-3. **`__Destroy()` static method** — destroys cached query handle on shutdown/hot-reload.
+2. **`__Execute(ulong world, float dt)` static method**: the chunk iteration loop.
+3. **`__Destroy()` static method**: destroys cached query handle on shutdown/hot-reload.
 4. **Diagnostic errors** for invalid signatures.
 
 ### Diagnostic IDs
@@ -430,11 +430,11 @@ reload. Native world data and system-local managed state have separate lifetimes
 Generated component schemas describe field names, types, offsets, and defaults.
 `GE_ECSABI_RegisterBlobComponentWithSchema` supports field-aware migration of
 existing blob components, including same-size field reorders and size changes.
-Diagnostics warn about fields or layouts that cannot be exported in the schema;
-those fields are excluded from inspection, persistence, and migration.
+Diagnostics warn about fields or layouts that cannot be exported in the schema.
+Those fields are excluded from inspection, persistence, and migration.
 
 The older name-and-size-only `RegisterBlobComponent` path cannot perform this
-schema migration; it is to be removed, tracked by issue #3940. Treat registration failures as errors; re-entering play mode is
+schema migration. It is to be removed, tracked by issue #3940. Treat registration failures as errors. Re-entering play mode is
 not a general repair for an incompatible layout. Native built-in mirrors must
 continue to match their C++ definitions.
 
@@ -448,7 +448,7 @@ arbitrary `dotnet publish` command is not a complete engine packaging recipe.
 ## Integration with play mode
 
 `PlayModeDriver` (in `Editor.Managed`) **hard-wires** calls to `Scripting.Runtime`'s
-`GameSystemRunner` — no `[PlayModeTick]` attribute discovery needed for the bootstrap
+`GameSystemRunner`: no `[PlayModeTick]` attribute discovery needed for the bootstrap
 itself. This avoids the issue where `PlayModeDriver.IsCandidateAssembly()` skips
 `GameEngine.Editor.Managed` assemblies.
 
@@ -490,15 +490,11 @@ through the complete archetype layout. There is no fixed transition count for a
 given entity count alone.
 
 The legacy per-entity `QueryNext` API is not the current iteration contract. Use
-Release builds and a representative workload when comparing performance; this
+Release builds and a representative workload when comparing performance. This
 architecture does not imply a fixed speedup.
 
 ### SIMD and auto-vectorization
 
 `Span<Position>` contains contiguous `Position` structs, each with its own X, Y,
-and Z fields. Vectorization depends on the generated code, runtime, and operation;
-inspect or measure the specific loop before relying on it.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/scripting/CSharp_ECS_Systems_Architecture.md`.
+and Z fields. Vectorization depends on the generated code, runtime, and operation.
+Inspect or measure the specific loop before relying on it.

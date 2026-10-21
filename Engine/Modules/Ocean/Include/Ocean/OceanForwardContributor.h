@@ -51,7 +51,9 @@ public:
     OceanForwardContributor(OceanRenderFeature& feature,
                             Engine::Renderer::RenderServices& renderServices);
 
-    bool EnsureMaterial();
+    // The surface material for a view, registered on first use: the HeightFog variant when the
+    // view's world pass draws the height fog. Null when the registration failed.
+    Engine::Renderer::Material* EnsureMaterial(bool heightFog);
     // Builds the surface draw. Every DYNAMIC sim cascade the command binds is
     // also RG-imported (when a frame stream is active) so the consuming pass
     // can declare the sampled reads (the bind alone forms no producer->consumer
@@ -68,14 +70,15 @@ public:
 private:
     OceanRenderFeature& m_Feature;
     Engine::Renderer::RenderServices& m_RenderServices;
-    Engine::Renderer::Material* m_Material = nullptr;
-    bool m_MaterialInitAttempted = false;
+    // The surface materials: [0] without the height fog, [1] with it (OceanSurfaceFogMaterialGuid).
+    Engine::Renderer::Material* m_Materials[2]{};
+    bool m_MaterialInitAttempted[2]{};
 
-    // Lazy-interned pipeline variants for the ocean's vec2 grid-pos vertex layout.
-    // Index 0 = one-sided above water, index 1 = two-sided underwater. Keeping both
-    // avoids quad-view cameras repeatedly replacing one shared pipeline variant.
-    ::GameEngine::Rendering::GraphicsPipelineId m_OceanPipelineIds[2]{};
-    uint32_t m_PipelineMaterialVersion = 0;
+    // Lazy-interned pipeline variants for the ocean's vec2 grid-pos vertex layout, per material:
+    // [fog][sided], sided 0 = one-sided above water, 1 = two-sided underwater. Keeping both avoids
+    // quad-view cameras repeatedly replacing one shared pipeline variant.
+    ::GameEngine::Rendering::GraphicsPipelineId m_OceanPipelineIds[2][2]{};
+    uint32_t m_PipelineMaterialVersions[2]{};
 
     // 1x1 zeroed cascade-array stand-in for uOceanDisplacement / uOceanFoam when
     // their sims are unavailable. The compat shader profile declares exactly

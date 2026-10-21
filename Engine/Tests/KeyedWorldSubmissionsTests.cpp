@@ -18,7 +18,7 @@ WorldSubmissionRecord MakeRecord(uint32 instance, uint32 view)
     WorldSubmissionRecord record{};
     record.instanceIndex = instance;
     record.viewId = Rendering::ViewId{view};
-    record.renderLayerMask = instance * 7u + view;
+    record.renderLayerMask = GameEngine::Rendering::RenderLayerMask{instance * 7u + view};
     return record;
 }
 
@@ -29,7 +29,7 @@ std::vector<Key> InOrder(std::span<const WorldSubmissionRecord> records)
 {
     std::vector<Key> keys;
     for (const auto& record : records)
-        keys.emplace_back(record.instanceIndex, static_cast<uint64>(record.viewId), record.renderLayerMask);
+        keys.emplace_back(record.instanceIndex, static_cast<uint64>(record.viewId), record.renderLayerMask.Bits);
     return keys;
 }
 

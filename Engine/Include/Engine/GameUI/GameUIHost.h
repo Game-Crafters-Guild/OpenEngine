@@ -182,17 +182,14 @@ class GameUIHost
     // Per-entity subtree root for a live UIDocument, or nullptr if unbound.
     UIElement* FindDocumentRoot(uint64_t entityId) const;
 
-    // Element `id` ("hp-label"_sid) inside that document's mounted subtree, or nullptr.
-    UIElement* FindElementById(uint64_t entityId, StringId id);
-
     // First match of `id` across mounted documents. Shared ids resolve to the
     // lowest entity id so the winner is stable. On a match, outOwnerEntityId (if
     // non-null) receives the owning UIDocument entity, so a caller that searched
     // every document can pin later lookups to that one subtree instead of
     // re-walking all of them. Left untouched when nothing matches.
     //
-    // An empty id is never registered; FindElementByIdAny(0) returns nullptr.
-    UIElement* FindElementByIdAny(StringId id, uint64_t* outOwnerEntityId = nullptr);
+    // An empty id is never registered; FindElementById(0) returns nullptr.
+    UIElement* FindElementById(StringId id, uint64_t* outOwnerEntityId = nullptr);
 
     // Bumps when a document layout binds, a subtree is removed, or a .uxml hot
     // reload reconciles a bound subtree. The reconcile bump comes from the

@@ -42,7 +42,7 @@ struct WorldSubmissionRecord
     Rendering::MeshGPUHandle meshHandle{};   // MeshGPURegistry handle
     const Material* material = nullptr;      // Runtime material (non-owning)
     uint32 instanceIndex{0};                 // Index into GPUScene instance buffer
-    uint32 renderLayerMask{0};
+    Rendering::RenderLayerMask renderLayerMask = Rendering::RenderLayerMask::None();
     uint32 flags{0};                         // e.g., opaque/transparent, castsShadows
 };
 

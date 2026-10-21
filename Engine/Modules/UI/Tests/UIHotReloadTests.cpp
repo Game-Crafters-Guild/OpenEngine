@@ -880,7 +880,7 @@ TEST(UIHotReloadTests, AssetModifiedEventReloadsLayoutAndReconcilesOnNextUpdate)
 }
 
 // -----------------------------------------------------------------------------
-// C1 + E7: AssetReloaded(Texture) evicts m_BgTextureCache so the next paint
+// C1 + E7: AssetReloaded(Texture) evicts the background-image cache entry so the next paint
 // re-resolves the background-image URL to a fresh GPU handle. Without this
 // listener, panel-background .png edits never propagate without a restart.
 // -----------------------------------------------------------------------------
@@ -921,8 +921,8 @@ TEST(UIHotReloadTests, TextureAssetReloadedEvictsBackgroundCache)
     // skips DestroyTexture for sharedOwned entries.
     Rendering::TextureHandle dummy{};
     dummy.id = 0xDEADBEEFu;
-    ui.SeedBackgroundTextureForTesting(guid, dummy, 64, 64);
-    ASSERT_TRUE(ui.HasBackgroundTextureCachedForTesting(guid));
+    ui.BackgroundImages().SeedRasterForTesting(guid, dummy, 64, 64);
+    ASSERT_TRUE(ui.BackgroundImages().HasRasterForTesting(guid));
 
     // Dispatch AssetReloaded(Texture) and pump Update once.
     assets.GetEventDispatcher().DispatchEvent(
@@ -930,7 +930,7 @@ TEST(UIHotReloadTests, TextureAssetReloadedEvictsBackgroundCache)
 
     ui.Update(0.0f, /*interactive=*/false);
 
-    EXPECT_FALSE(ui.HasBackgroundTextureCachedForTesting(guid))
+    EXPECT_FALSE(ui.BackgroundImages().HasRasterForTesting(guid))
         << "AssetReloaded(Texture) should have evicted the cached background texture";
 }
 
@@ -969,15 +969,15 @@ TEST(UIHotReloadTests, TextureAssetModifiedEvictsBackgroundCache)
 
     Rendering::TextureHandle dummy{};
     dummy.id = 0xCAFEBABEu;
-    ui.SeedBackgroundTextureForTesting(guid, dummy);
-    ASSERT_TRUE(ui.HasBackgroundTextureCachedForTesting(guid));
+    ui.BackgroundImages().SeedRasterForTesting(guid, dummy);
+    ASSERT_TRUE(ui.BackgroundImages().HasRasterForTesting(guid));
 
     assets.GetEventDispatcher().DispatchEvent(
         AssetEvent(AssetEventType::AssetModified, guid, AssetType::Texture, pngPath.string()));
 
     ui.Update(0.0f, /*interactive=*/false);
 
-    EXPECT_FALSE(ui.HasBackgroundTextureCachedForTesting(guid));
+    EXPECT_FALSE(ui.BackgroundImages().HasRasterForTesting(guid));
 }
 
 // -----------------------------------------------------------------------------

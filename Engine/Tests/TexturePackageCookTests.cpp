@@ -248,7 +248,7 @@ protected:
     bool Bake()
     {
         return StagePackagedTextureCooks(Temp.Path(), Manifest, Manager.GetRegistry(),
-            TextureCookEncodeQualityFor(TextureCookOutput::BC7), /*encodeWorkers=*/nullptr, ManifestParsePool,
+            /*encodeWorkers=*/nullptr, ManifestParsePool,
             [this]() { return Cancel->load(); }, Stats, Error);
     }
     fs::path Artifact(TextureCookOutput output, uint8 red = 80) const
@@ -288,7 +288,9 @@ TEST_F(TexturePackageCookTest, ColdMaterialExportInfersColorWithoutViewingOrMuta
     AssetDatabase::AssetRecord record;
     ASSERT_TRUE(store.TryGetAsset(Id, record));
     for (const auto& [key, value] : Meta) EXPECT_EQ(record.kv.at(key), value);
-    EXPECT_TRUE(record.kv.contains(kTexturePackagedPortableMetaKey));
+    EXPECT_EQ(record.kv.at(kTexturePackagedMetaKey), Artifact(TextureCookOutput::BC7).filename().string());
+    EXPECT_EQ(Stats.Artifacts, 1u);
+    EXPECT_FALSE(fs::exists(Artifact(TextureCookOutput::Uncompressed)));
     EXPECT_FALSE(fs::exists(MountRoot / "Assets" / "Leaves.tga"));
     // Remount in a fresh Player context to consume the staged metadata and cook.
     AssetManager player;
@@ -525,7 +527,7 @@ TEST_F(TexturePackageCookTest, PreservesAuthoredLeavesAndPortableSamplerMetadata
     EXPECT_EQ(value, "point");
 }
 
-TEST_F(TexturePackageCookTest, PackedOrmKeepsAllChannelsAndProvidesPortableVariant)
+TEST_F(TexturePackageCookTest, PackedOrmKeepsAllChannelsInOneBc7Payload)
 {
     if (!IsTextureCookEncoderAvailable()) GTEST_SKIP() << "BC encoder unavailable";
     Meta[kTextureColorSpaceMetaKey] = "linear";
@@ -533,23 +535,14 @@ TEST_F(TexturePackageCookTest, PackedOrmKeepsAllChannelsAndProvidesPortableVaria
     Meta[kTextureUsageMetaKey] = "packed";
     StageSource();
     ASSERT_TRUE(Bake()) << Error;
-    EXPECT_EQ(Stats.Artifacts, 2u);
+    EXPECT_EQ(Stats.Artifacts, 1u);
     ASSERT_TRUE(fs::exists(Artifact(TextureCookOutput::BC7)));
-    ASSERT_TRUE(fs::exists(Artifact(TextureCookOutput::Uncompressed)));
+    EXPECT_FALSE(fs::exists(Artifact(TextureCookOutput::Uncompressed)));
     Mount();
     TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
     auto bc = LoadInWorkerContext();
     EXPECT_EQ(bc->GetFormat(), TextureFormat::BC7); // Never inferred single-channel BC4.
     EXPECT_EQ(bc->GetColorSpace(), TextureColorSpace::Linear);
-    TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::RGBA32);
-    auto portable = LoadInWorkerContext();
-    EXPECT_EQ(portable->GetFormat(), TextureFormat::RGBA8);
-    ASSERT_NE(portable->GetPixelData(), nullptr);
-    ASSERT_GE(portable->GetDataSize(), 3u);
-    EXPECT_EQ(portable->GetPixelData()[0], 80);
-    EXPECT_EQ(portable->GetPixelData()[1], 120);
-    EXPECT_EQ(portable->GetPixelData()[2], 180);
-    EXPECT_EQ(portable->GetMipmapLevels(), 4u);
 }
 
 TEST_F(TexturePackageCookTest, ReusesOnlyValidExactSourceAndSettingsKey)
@@ -587,7 +580,7 @@ TEST_F(TexturePackageCookTest, UsesStagedBytesAndMetadataInEachMountNamespace)
     AssetDatabase::AssetRecord record;
     ASSERT_TRUE(store.TryGetAsset(Id, record));
     for (const auto& [key, value] : Meta) EXPECT_EQ(record.kv.at(key), value);
-    EXPECT_TRUE(record.kv.contains(kTexturePackagedPortableMetaKey));
+    EXPECT_EQ(record.kv.at(kTexturePackagedMetaKey), Artifact(TextureCookOutput::Uncompressed).filename().string());
     EXPECT_FALSE(fs::exists(MountRoot / "Assets" / "Leaves.tga"));
 }
 
@@ -626,7 +619,7 @@ TEST_F(TexturePackageCookTest, CancellationAndInvalidSourceFailWithoutPublishing
     EXPECT_FALSE(fs::exists(MountRoot / "Tex"));
 }
 
-TEST_F(TexturePackageCookTest, RejectsMismatchedStagedIdentityAndSupportsBothTargetQualities)
+TEST_F(TexturePackageCookTest, RejectsMismatchedStagedIdentityAndBakesTheCookBytes)
 {
     Manifest.entries[0].outputPath = "Assets/Other.tga";
     EXPECT_FALSE(Bake()); EXPECT_NE(Error.find("path disagrees"), std::string::npos);
@@ -636,24 +629,16 @@ TEST_F(TexturePackageCookTest, RejectsMismatchedStagedIdentityAndSupportsBothTar
     auto bytes = SmallTga();
     for (size_t i = 18; i < bytes.size(); ++i) bytes[i] = static_cast<uint8>((i * 73 + i / 9) % 256);
     WriteBytes(MountRoot / "Assets" / "Leaves.tga", bytes);
-    Vector<uint8> previous;
-    for (const auto quality : {TextureCookEncodeQuality::Full, TextureCookEncodeQuality::QuickBC7})
-    {
-        StageSource();
-        WriteBytes(MountRoot / "Assets" / "Leaves.tga", bytes);
-        ASSERT_TRUE(StagePackagedTextureCooks(Temp.Path(), Manifest, Manager.GetRegistry(),
-            quality, /*encodeWorkers=*/nullptr, /*manifestParsePool=*/nullptr, {}, Stats, Error)) << Error;
-        const auto name = TextureCookArtifactName(Id, ComputeTextureCookSourceHash(bytes.data(), bytes.size()),
-                                                  Inputs(Meta), TextureCookOutput::BC7, quality);
-        Vector<uint8> actual;
-        ASSERT_TRUE(ReadFileBytesShared(MountRoot / "Tex" / name, actual));
-        std::vector<uint8> expected;
-        ASSERT_TRUE(CookTexture(bytes.data(), bytes.size(), ".tga", Inputs(Meta), TextureCookOutput::BC7,
-                               expected, Error, {}, quality)) << Error;
-        EXPECT_EQ(actual, expected); // Target quality drives both bytes and artifact identity.
-        if (!previous.empty()) EXPECT_NE(actual, previous);
-        previous = actual;
-    }
+    ASSERT_TRUE(StagePackagedTextureCooks(Temp.Path(), Manifest, Manager.GetRegistry(),
+        /*encodeWorkers=*/nullptr, /*manifestParsePool=*/nullptr, {}, Stats, Error)) << Error;
+    const auto name = TextureCookArtifactName(Id, ComputeTextureCookSourceHash(bytes.data(), bytes.size()),
+                                              Inputs(Meta), TextureCookOutput::BC7);
+    Vector<uint8> actual;
+    ASSERT_TRUE(ReadFileBytesShared(MountRoot / "Tex" / name, actual));
+    std::vector<uint8> expected;
+    ASSERT_TRUE(CookTexture(bytes.data(), bytes.size(), "fixture.tga", ".tga", Inputs(Meta), TextureCookOutput::BC7,
+                           expected, Error)) << Error;
+    EXPECT_EQ(actual, expected); // The export bakes the editor cook's bytes under the editor cook's name.
 }
 
 // A package texture loads only through its packaged payload. One without payload
@@ -671,7 +656,7 @@ TEST_F(TexturePackageCookTest, PackageTextureWithoutPayloadNeverAdoptsOrCooks)
         if (output == TextureCookOutput::BC7 && !IsTextureCookEncoderAvailable())
             continue;
         std::vector<uint8> cooked;
-        ASSERT_TRUE(CookTexture(source.data(), source.size(), ".tga", Inputs(Meta), output, cooked, Error)) << Error;
+        ASSERT_TRUE(CookTexture(source.data(), source.size(), "fixture.tga", ".tga", Inputs(Meta), output, cooked, Error)) << Error;
         WriteBytes(Artifact(output), Vector<uint8>(cooked.begin(), cooked.end()));
     }
     const auto before = fs::file_size(Artifact(TextureCookOutput::Uncompressed));
@@ -752,28 +737,6 @@ TEST_F(TexturePackageCookTest, EnginePackageMountCooksAMissingArtifactAndLeavesI
     EXPECT_EQ(ReadWholeFile(manifest), authored) << "the cook authored the committed manifest";
 }
 
-TEST_F(TexturePackageCookTest, PrebuiltPortableFallbackAndDirectCpuReadRemainValid)
-{
-    if (!IsTextureCookEncoderAvailable()) GTEST_SKIP() << "BC encoder unavailable";
-    Meta[kTextureCompressionMetaKey] = "bc7";
-    StageSource();
-    ASSERT_TRUE(Bake()) << Error;
-    fs::remove(Artifact(TextureCookOutput::BC7));
-    Mount();
-    TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
-    auto portable = LoadInWorkerContext();
-    EXPECT_EQ(portable->GetFormat(), TextureFormat::RGBA8);
-    EXPECT_EQ(portable->GetMipmapLevels(), 4u);
-    EXPECT_FALSE(fs::exists(Artifact(TextureCookOutput::BC7)));
-    // CPU readers consume the portable container with full pixel access.
-    TextureAsset cpu(GUID::Null(), Artifact(TextureCookOutput::Uncompressed));
-    ASSERT_TRUE(cpu.Load());
-    EXPECT_EQ(cpu.GetFormat(), TextureFormat::RGBA8);
-    EXPECT_EQ(cpu.GetMipmapLevels(), 4u);
-    ASSERT_NE(cpu.GetPixelData(), nullptr);
-    EXPECT_EQ(cpu.GetPixelData()[0], 80);
-}
-
 TEST_F(TexturePackageCookTest, NoopRawAndUnknownUsageHaveStableDefaults)
 {
     Meta.clear();
@@ -831,10 +794,10 @@ TEST_P(TexturePackageCoverageTest, StagedCoverageKeepsExactCutoffAndLoadsBakedMi
     EXPECT_EQ(fs::last_write_time(artifact), modified); // packaged loading never rewrites the bake
     EXPECT_FALSE(fs::exists(MountRoot / "Tex" / ordinaryName));
 
-    // The portable bake really applied coverage: compare against an ordinary
+    // The uncompressed bake really applied coverage: compare against an ordinary
     // mip chain of the same pixels, independently loaded from its container.
     std::vector<uint8> ordinaryBytes;
-    ASSERT_TRUE(CookTexture(source.data(), source.size(), ".tga", ordinaryInputs,
+    ASSERT_TRUE(CookTexture(source.data(), source.size(), "fixture.tga", ".tga", ordinaryInputs,
                            TextureCookOutput::Uncompressed, ordinaryBytes, Error));
     TextureAsset ordinary(GUID::Null(), "ordinary.ktx2");
     ASSERT_TRUE(ordinary.LoadFromData(Vector<uint8>(ordinaryBytes.begin(), ordinaryBytes.end())));
@@ -845,7 +808,7 @@ TEST_P(TexturePackageCoverageTest, StagedCoverageKeepsExactCutoffAndLoadsBakedMi
 INSTANTIATE_TEST_SUITE_P(ProjectAndPackage, TexturePackageCoverageTest,
                         testing::Values("project", "art"));
 
-TEST_F(TexturePackageCookTest, CoveredBc7AndPortableVariantsLoadWithoutRuntimeEncoding)
+TEST_F(TexturePackageCookTest, CoveredBc7LoadsWithoutRuntimeEncodingOnlyWhereTheDeviceSamplesBc)
 {
     if (!IsTextureCookEncoderAvailable()) GTEST_SKIP() << "BC encoder unavailable";
     Cutout = true;
@@ -854,36 +817,30 @@ TEST_F(TexturePackageCookTest, CoveredBc7AndPortableVariantsLoadWithoutRuntimeEn
     Meta[kTextureAlphaCutoffMetaKey] = ".538";
     StageSource("art");
     ASSERT_TRUE(Bake()) << Error;
-    ASSERT_EQ(Stats.Artifacts, 2u);
+    ASSERT_EQ(Stats.Artifacts, 1u);
     Mount();
-    for (auto target : {TextureGpuTranscodeTarget::BC7, TextureGpuTranscodeTarget::RGBA32})
-    {
-        TextureAsset::SetGpuTranscodeTarget(target);
-        auto texture = LoadInWorkerContext();
-        EXPECT_EQ(texture->GetFormat(), target == TextureGpuTranscodeTarget::BC7
-            ? TextureFormat::BC7 : TextureFormat::RGBA8);
-        EXPECT_EQ(texture->GetMipmapLevels(), 5u);
-    }
-    const auto compressed = Artifact(TextureCookOutput::BC7);
-    const auto portable = Artifact(TextureCookOutput::Uncompressed);
-    fs::remove(compressed);
-    fs::remove(portable);
     TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
-    AssetManager::ScopedThreadAssetManager context(&Manager);
-    TextureAsset damaged(Id, MountRoot / "Assets" / "Leaves.tga");
-    EXPECT_FALSE(damaged.Load());
-    EXPECT_EQ(damaged.GetState(), AssetState::Failed);
-    EXPECT_FALSE(fs::exists(compressed));
-    EXPECT_FALSE(fs::exists(portable));
+    auto texture = LoadInWorkerContext();
+    EXPECT_EQ(texture->GetFormat(), TextureFormat::BC7);
+    EXPECT_EQ(texture->GetMipmapLevels(), 5u);
+
+    std::vector<std::string> logLines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&logLines);
+        TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::RGBA32);
+        AssetManager::ScopedThreadAssetManager context(&Manager);
+        TextureAsset upload(Id, MountRoot / "Assets" / "Leaves.tga");
+        EXPECT_FALSE(upload.Load());
+        EXPECT_EQ(upload.GetState(), AssetState::Failed);
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(logLines, "cannot sample block-compressed textures"), 1u);
 }
 
-// A package exported where a BC encoder exists ships each texture twice, and
-// its manifest records both payloads: the BC artifact and the portable RGBA8
-// one. The Player picks between them by the transcode target the texture
-// service publishes from the device at init, so on a Mac the Metal device's BC
-// support decides whether the game reads and uploads the BC7 artifact or four
-// times the bytes of RGBA8.
-TEST_F(TexturePackageCookTest, MetalDeviceAdoptsTheShippedBc7ArtifactOverThePortableOne)
+// A package exported where a BC encoder exists ships a colour texture once, as
+// BC7. On a Mac the texture service publishes the Metal device's BC support at
+// init, and the game reads and uploads that artifact.
+TEST_F(TexturePackageCookTest, MetalDeviceAdoptsTheShippedBc7Artifact)
 {
 #if !defined(GE_HAVE_KTX)
     GTEST_SKIP() << "libktx unavailable";
@@ -898,8 +855,8 @@ TEST_F(TexturePackageCookTest, MetalDeviceAdoptsTheShippedBc7ArtifactOverThePort
                                     Rendering::RendererProfile::FromCapabilities(device->GetCapabilities())));
     EXPECT_EQ(TextureAsset::GetGpuTranscodeTarget(), TextureGpuTranscodeTarget::BC7);
 
-    // This host bakes only the portable payload, so the BC7 one is written by
-    // hand and recorded in the staged manifest, as a Windows export records it.
+    // A host without the encoder bakes uncompressed pixels, so the BC7 payload is
+    // written by hand and recorded in the staged manifest, as a Windows export records it.
     Meta[kTextureCompressionMetaKey] = "bc7";
     StageSource();
     ASSERT_TRUE(Bake()) << Error;
@@ -910,7 +867,7 @@ TEST_F(TexturePackageCookTest, MetalDeviceAdoptsTheShippedBc7ArtifactOverThePort
     const fs::path manifest = MountRoot / "Assets" / ".assetmanifest";
     AssetDatabase::AssetStore_TextJsonl store(nullptr);
     ASSERT_TRUE(store.LoadFromFile(manifest, &Error)) << Error;
-    ASSERT_TRUE(store.SetKeyValue(Id, kTexturePackagedCompressedMetaKey,
+    ASSERT_TRUE(store.SetKeyValue(Id, kTexturePackagedMetaKey,
                                   Artifact(TextureCookOutput::BC7).filename().string(), &Error)) << Error;
     ASSERT_TRUE(store.SaveToFile(manifest, &Error)) << Error;
     Mount();
@@ -1010,14 +967,14 @@ TEST_F(TexturePackageCookTest, MissingOrCorruptHdrBakePreservesFloatRangeForFile
     ASSERT_TRUE(ResolveTextureCookInputs(".hdr", [](const char*, std::string&) { return false; }, inputs, Error));
     const auto sourceHash = ComputeTextureCookSourceHash(source.data(), source.size());
     const auto compressed = MountRoot / "Tex" / TextureCookArtifactName(Id, sourceHash, inputs, TextureCookOutput::BC6H);
-    const auto portable = MountRoot / "Tex" / TextureCookArtifactName(Id, sourceHash, inputs, TextureCookOutput::Uncompressed);
+    const auto uncompressed = MountRoot / "Tex" / TextureCookArtifactName(Id, sourceHash, inputs, TextureCookOutput::Uncompressed);
     for (bool corrupt : {false, true})
     {
         SCOPED_TRACE(corrupt);
         if (corrupt)
         {
             WriteBytes(compressed, {1, 2, 3});
-            WriteBytes(portable, {1, 2, 3});
+            WriteBytes(uncompressed, {1, 2, 3});
         }
         for (bool fromMemory : {false, true})
         {
@@ -1035,7 +992,7 @@ TEST_F(TexturePackageCookTest, MissingOrCorruptHdrBakePreservesFloatRangeForFile
             if (corrupt)
             {
                 EXPECT_EQ(fs::file_size(compressed), 3u);
-                EXPECT_EQ(fs::file_size(portable), 3u);
+                EXPECT_EQ(fs::file_size(uncompressed), 3u);
             }
             else
                 EXPECT_FALSE(fs::exists(MountRoot / "Tex"));
@@ -1076,25 +1033,25 @@ TEST_F(TexturePackageCookTest, SourceFreePackageKeepsImplicitExplicitAndReferrer
     EXPECT_EQ(texture->GetMipmapLevels(), 4u);
 }
 
-TEST_F(TexturePackageCookTest, SourceFreeCompressionWithoutMipsStillShipsPortablePixels)
+TEST_F(TexturePackageCookTest, SourceFreeCompressionWithoutMipsShipsOneBc7Level)
 {
     if (!IsTextureCookEncoderAvailable()) GTEST_SKIP() << "BC encoder unavailable";
     Meta[kTextureCompressionMetaKey] = "bc7";
     Meta[kTextureMipsMetaKey] = "0";
     StageSource();
     ASSERT_TRUE(Bake()) << Error;
-    EXPECT_EQ(Stats.Artifacts, 2u);
+    EXPECT_EQ(Stats.Artifacts, 1u);
     EXPECT_FALSE(fs::exists(MountRoot / "Assets" / "Leaves.tga"));
     Mount();
-    TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::RGBA32);
+    TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
     auto texture = LoadInWorkerContext();
-    EXPECT_EQ(texture->GetFormat(), TextureFormat::RGBA8);
+    EXPECT_EQ(texture->GetFormat(), TextureFormat::BC7);
     EXPECT_EQ(texture->GetMipmapLevels(), 1u);
-    ASSERT_NE(texture->GetPixelData(), nullptr);
-    EXPECT_EQ(texture->GetPixelData()[0], 80);
 }
 
-TEST_F(TexturePackageCookTest, CorruptCompressedPayloadUsesPortableWithoutSourceOrRecook)
+// A damaged payload is refused with the fix named: nothing else of the texture ships,
+// and a package never recooks or reads a source.
+TEST_F(TexturePackageCookTest, DamagedPayloadIsRefusedWithoutSourceOrRecook)
 {
     if (!IsTextureCookEncoderAvailable()) GTEST_SKIP() << "BC encoder unavailable";
     Meta[kTextureCompressionMetaKey] = "bc7";
@@ -1104,10 +1061,18 @@ TEST_F(TexturePackageCookTest, CorruptCompressedPayloadUsesPortableWithoutSource
     WriteBytes(compressed, {1, 2, 3});
     Mount();
     TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
-    auto texture = LoadInWorkerContext();
-    EXPECT_EQ(texture->GetFormat(), TextureFormat::RGBA8);
-    EXPECT_EQ(texture->GetMipmapLevels(), 4u);
+    std::vector<std::string> logLines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&logLines);
+        AssetManager::ScopedThreadAssetManager context(&Manager);
+        TextureAsset texture(Id, MountRoot / "Assets" / "Leaves.tga");
+        EXPECT_FALSE(texture.Load());
+        EXPECT_EQ(texture.GetState(), AssetState::Failed);
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(logLines, "rebuild the package"), 1u);
     EXPECT_EQ(fs::file_size(compressed), 3u);
+    EXPECT_FALSE(fs::exists(Artifact(TextureCookOutput::Uncompressed)));
     EXPECT_FALSE(fs::exists(MountRoot / "Assets" / "Leaves.tga"));
 }
 
@@ -1117,7 +1082,7 @@ TEST_F(TexturePackageCookTest, PackagedPayloadFilenameCannotEscapeTheMount)
     AssetDatabase::AssetStore_TextJsonl store(nullptr);
     const auto manifest = MountRoot / "Assets" / ".assetmanifest";
     ASSERT_TRUE(store.LoadFromFile(manifest, &Error));
-    ASSERT_TRUE(store.SetKeyValue(Id, kTexturePackagedPortableMetaKey, "../outside.ktx2", &Error));
+    ASSERT_TRUE(store.SetKeyValue(Id, kTexturePackagedMetaKey, "../outside.ktx2", &Error));
     ASSERT_TRUE(store.SaveToFile(manifest, &Error));
     Mount();
     AssetManager::ScopedThreadAssetManager context(&Manager);

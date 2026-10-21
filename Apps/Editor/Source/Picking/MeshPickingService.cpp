@@ -205,7 +205,7 @@ bool TestEntityHit(const Mathematics::Ray3D& ray,
                    float32 maxT,
                    PickHit& outHit)
 {
-    if ((mr.renderLayerMask & options.LayerMask) == 0u)
+    if (!mr.RenderLayers.Intersects(options.LayerMask))
         return false;
 
     const Mathematics::BoundingBox kDefault{};
@@ -343,7 +343,7 @@ bool RaycastSyntheticPick(const Mathematics::Ray3D& ray,
                           const SyntheticMeshPick& pick,
                           PickHit& outHit)
 {
-    if ((options.LayerMask & pick.RenderLayerMask) == 0u || pick.MeshGpuHandleId == 0u ||
+    if (!options.LayerMask.Intersects(pick.RenderLayers) || pick.MeshGpuHandleId == 0u ||
         IsIgnored(entity, options))
         return false;
     const auto* worldXf = world.GetComponent<Components::WorldTransform>(entity);
@@ -354,7 +354,7 @@ bool RaycastSyntheticPick(const Mathematics::Ray3D& ray,
 
     Components::MeshRenderer synthetic{};
     synthetic.meshGpuHandleId = pick.MeshGpuHandleId;
-    synthetic.renderLayerMask = pick.RenderLayerMask;
+    synthetic.RenderLayers = pick.RenderLayers;
     synthetic.modelAssetGuid.Set(pick.ModelAssetGuid);
 
     const float32 sectorSize = Scene::GetSceneTlas(world).GetSectorSize();

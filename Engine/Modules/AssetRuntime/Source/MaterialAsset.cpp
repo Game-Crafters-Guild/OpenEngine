@@ -3,15 +3,19 @@
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
 #include "Rendering/Materials/UserKeyword.h"
+#include "Types/ParseNumber.h"
 #include "Types/StringUtils.h"
 
 #include "AssetCore/SharedFileRead.h"
 #include "Components/Rendering/LightPhotometry.h"
+#include "Serialization/JsonRead.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <initializer_list>
 #include <regex>
 #include <sstream>
 #include <unordered_set>
@@ -76,7 +80,23 @@ static void ParseProperties(const nlohmann::json& j, MaterialDocument& outDoc)
     }
 }
 
-static void ParseTextures(const nlohmann::json& j, MaterialDocument& outDoc)
+// Reads the leading elements of the array `name` of `texture` into the transform `st`, element i
+// into slot `slots[i]`.
+static void ReadTextureTransformArray(const nlohmann::json& texture, const char* name,
+                                      std::initializer_list<size_t> slots, std::array<float, 8>& st,
+                                      Serialization::JsonFieldReader& reader)
+{
+    const nlohmann::json& values = texture[name];
+    size_t element = 0;
+    for (const size_t slot : slots)
+    {
+        reader.ReadValue(values[element], std::format("{}[{}]", name, element), st[slot]);
+        ++element;
+    }
+}
+
+static void ParseTextures(const nlohmann::json& j, MaterialDocument& outDoc,
+                          Serialization::JsonFieldReader& reader)
 {
     if (!j.contains("textures") || !j["textures"].is_object())
         return;
@@ -95,32 +115,23 @@ static void ParseTextures(const nlohmann::json& j, MaterialDocument& outDoc)
         else if (it.value().is_object())
         {
             const auto& obj = it.value();
-            outDoc.textures[k] = obj.value("guid", "");
+            reader.SetContext("textures." + k + ".");
+            std::string guid;
+            reader.Read(obj, "guid", guid);
+            outDoc.textures[k] = guid;
             // Source-relative path companion (path-hash self-heal). Optional —
             // a guid-only object form simply omits it.
-            const std::string texPath = obj.value("path", "");
+            std::string texPath;
+            reader.Read(obj, "path", texPath);
             if (!texPath.empty())
                 outDoc.texturePaths[k] = texPath;
             std::array<float, 8> st = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
             if (obj.contains("uvMatrix") && obj["uvMatrix"].is_array() && obj["uvMatrix"].size() >= 6)
-            {
-                st[0] = obj["uvMatrix"][0].get<float>();
-                st[1] = obj["uvMatrix"][1].get<float>();
-                st[2] = obj["uvMatrix"][2].get<float>();
-                st[4] = obj["uvMatrix"][3].get<float>();
-                st[5] = obj["uvMatrix"][4].get<float>();
-                st[6] = obj["uvMatrix"][5].get<float>();
-            }
+                ReadTextureTransformArray(obj, "uvMatrix", {0, 1, 2, 4, 5, 6}, st, reader);
             if (obj.contains("tiling") && obj["tiling"].is_array() && obj["tiling"].size() >= 2)
-            {
-                st[0] = obj["tiling"][0].get<float>();
-                st[5] = obj["tiling"][1].get<float>();
-            }
+                ReadTextureTransformArray(obj, "tiling", {0, 5}, st, reader);
             if (obj.contains("offset") && obj["offset"].is_array() && obj["offset"].size() >= 2)
-            {
-                st[2] = obj["offset"][0].get<float>();
-                st[6] = obj["offset"][1].get<float>();
-            }
+                ReadTextureTransformArray(obj, "offset", {2, 6}, st, reader);
             if (st[0] != 1.0f || st[1] != 0.0f || st[2] != 0.0f ||
                 st[4] != 0.0f || st[5] != 1.0f || st[6] != 0.0f)
                 outDoc.textureTransforms[k] = st;
@@ -143,19 +154,23 @@ static void ParseBindings(const nlohmann::json& j, MaterialDocument& outDoc)
     }
 }
 
-static void ParseShaderGraphPublicProperties(const nlohmann::json& j, MaterialDocument& outDoc)
+static void ParseShaderGraphPublicProperties(const nlohmann::json& j, MaterialDocument& outDoc,
+                                             Serialization::JsonFieldReader& reader)
 {
     if (!j.contains("shaderGraphPublicProperties") || !j["shaderGraphPublicProperties"].is_array())
         return;
 
-    for (const auto& entry : j["shaderGraphPublicProperties"])
+    const nlohmann::json& entries = j["shaderGraphPublicProperties"];
+    for (size_t index = 0; index < entries.size(); ++index)
     {
+        const nlohmann::json& entry = entries[index];
         if (!entry.is_object())
             continue;
 
+        reader.SetContext(std::format("shaderGraphPublicProperties[{}].", index));
         MaterialShaderGraphPublicProperty prop;
-        prop.GraphName = entry.value("graphName", std::string());
-        prop.Type = entry.value("type", std::string());
+        reader.Read(entry, "graphName", prop.GraphName);
+        reader.Read(entry, "type", prop.Type);
         if (entry.contains("materialPropertyKeys") && entry["materialPropertyKeys"].is_array())
         {
             for (const auto& key : entry["materialPropertyKeys"])
@@ -170,12 +185,13 @@ static void ParseShaderGraphPublicProperties(const nlohmann::json& j, MaterialDo
     }
 }
 
-static bool ParseAlphaMode(const nlohmann::json& j, MaterialDocument& outDoc)
+static void ParseAlphaMode(const nlohmann::json& j, MaterialDocument& outDoc, Serialization::JsonFieldReader& reader)
 {
     if (!j.contains("alphaMode"))
-        return true;
-    outDoc.alphaMode = MaterialAlphaModeFromString(j.value("alphaMode", std::string("Opaque")));
-    return true;
+        return;
+    std::string alphaMode = "Opaque";
+    reader.Read(j, "alphaMode", alphaMode);
+    outDoc.alphaMode = MaterialAlphaModeFromString(alphaMode);
 }
 
 // Parse explicit blend authoring (T1): the optional `blend` object of
@@ -269,78 +285,108 @@ static void ParseKeywords(const nlohmann::json& j, MaterialDocument& outDoc,
     }
 }
 
+// A .material's JSON. A file that is not JSON, or a field of a type it cannot hold, is refused
+// with the reason in `outErrors`; the parse never throws (the web build has no exception catching).
 static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc, std::vector<std::string>& outErrors)
 {
-    try
+    nlohmann::json j;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, j, parseError))
     {
-        auto j = nlohmann::json::parse(text);
-        outDoc.schemaVersion = j.value("schemaVersion", 2);
-
-        if (outDoc.schemaVersion != 2 && outDoc.schemaVersion != 3)
-        {
-            outErrors.push_back("MaterialAsset: unsupported schemaVersion (expected 2 or 3).");
-            return false;
-        }
-
-        outDoc.materialName = j.value("materialName", j.value("material_name", std::string()));
-        outDoc.lightingModel = j.value("lightingModel", std::string());
-
-        if (outDoc.schemaVersion >= 3)
-        {
-            // V3: GUID-based shader references. Surface shader is optional.
-            outDoc.surfaceShaderGuid = j.value("surfaceShaderGuid", std::string());
-            outDoc.vertexModifierGuid = j.value("vertexModifierGuid", std::string());
-            outDoc.surfaceGraphGuid = j.value("surfaceGraphGuid", std::string());
-
-            // Resolved-path hints carried alongside the GUID refs above (v3
-            // emits these too; ShaderComposer reads them at compile time).
-            outDoc.surfaceShader = j.value("surfaceShader", std::string());
-            outDoc.vertexModifier = j.value("vertexModifier", std::string());
-            outDoc.surfaceGraph = j.value("surfaceGraph", std::string());
-        }
-        else
-        {
-            // V2: path-based shader references. Surface shader was required.
-            outDoc.surfaceShader = j.value("surfaceShader", std::string());
-            outDoc.vertexModifier = j.value("vertexModifier", std::string());
-
-            if (outDoc.surfaceShader.empty())
-                outErrors.push_back("MaterialAsset: missing required field 'surfaceShader'.");
-        }
-
-        ParseAlphaMode(j, outDoc);
-        ParseBlend(j, outDoc, outErrors);
-        outDoc.doubleSided = j.value("doubleSided", false);
-        outDoc.ignoreVertexColor = j.value("ignoreVertexColor", false);
-        outDoc.customVertexShader = j.value("customVertexShader", false);
-        outDoc.textureFilter = MaterialTextureFilterFromString(
-            j.value("textureFilter", std::string("Trilinear")));
-
-        ParseProperties(j, outDoc);
-
-        // Fill the rest of the StandardPBR property set, so a partial .material (only a
-        // few keys authored) still exposes every control — toggles, specular, emissive,
-        // AO — in the inspector, matching a freshly-created material. Runs after
-        // ParseProperties so the fill only ever plugs gaps and every authored value
-        // wins; that ordering is what lets DefaultOpacity see the authored baseColor
-        // instead of the factory colour. A foreign lighting model is left untouched
-        // entirely — the fill's own unlit/shadow-only skips serve the inspector, which
-        // seeds a document whose lighting model the user is in the act of changing.
-        if (outDoc.lightingModel == "StandardPBR")
-            outDoc.FillMissingStandardPBRDefaults();
-
-        ParseTextures(j, outDoc);
-        ParseBindings(j, outDoc);
-        ParseShaderGraphPublicProperties(j, outDoc);
-        ParseKeywords(j, outDoc, outErrors);
-
-        return true;
-    }
-    catch (const std::exception& e)
-    {
-        outErrors.push_back(std::string("JSON parse error: ") + e.what());
+        outErrors.push_back("MaterialAsset: the file is not JSON (" + parseError + "); fix the text at that place.");
         return false;
     }
+    if (!j.is_object())
+    {
+        outErrors.push_back("MaterialAsset: the file's JSON is not an object; a material is a JSON object.");
+        return false;
+    }
+
+    Serialization::JsonFieldReader reader;
+    outDoc.schemaVersion = 2;
+    reader.Read(j, "schemaVersion", outDoc.schemaVersion);
+
+    if (!reader.Refused() && outDoc.schemaVersion != 2 && outDoc.schemaVersion != 3)
+    {
+        outErrors.push_back("MaterialAsset: unsupported schemaVersion (expected 2 or 3).");
+        return false;
+    }
+
+    // materialName, or the older material_name when it is absent. An absent string field reads
+    // as empty, whatever the document's default.
+    outDoc.materialName.clear();
+    reader.Read(j, "material_name", outDoc.materialName);
+    reader.Read(j, "materialName", outDoc.materialName);
+    outDoc.lightingModel.clear();
+    reader.Read(j, "lightingModel", outDoc.lightingModel);
+
+    if (outDoc.schemaVersion >= 3)
+    {
+        // V3: GUID-based shader references. Surface shader is optional.
+        outDoc.surfaceShaderGuid.clear();
+        reader.Read(j, "surfaceShaderGuid", outDoc.surfaceShaderGuid);
+        outDoc.vertexModifierGuid.clear();
+        reader.Read(j, "vertexModifierGuid", outDoc.vertexModifierGuid);
+        outDoc.surfaceGraphGuid.clear();
+        reader.Read(j, "surfaceGraphGuid", outDoc.surfaceGraphGuid);
+
+        // Resolved-path hints carried alongside the GUID refs above (v3
+        // emits these too; ShaderComposer reads them at compile time).
+        outDoc.surfaceShader.clear();
+        reader.Read(j, "surfaceShader", outDoc.surfaceShader);
+        outDoc.vertexModifier.clear();
+        reader.Read(j, "vertexModifier", outDoc.vertexModifier);
+        outDoc.surfaceGraph.clear();
+        reader.Read(j, "surfaceGraph", outDoc.surfaceGraph);
+    }
+    else
+    {
+        // V2: path-based shader references. Surface shader was required.
+        outDoc.surfaceShader.clear();
+        reader.Read(j, "surfaceShader", outDoc.surfaceShader);
+        outDoc.vertexModifier.clear();
+        reader.Read(j, "vertexModifier", outDoc.vertexModifier);
+
+        if (outDoc.surfaceShader.empty())
+            outErrors.push_back("MaterialAsset: missing required field 'surfaceShader'.");
+    }
+
+    ParseAlphaMode(j, outDoc, reader);
+    ParseBlend(j, outDoc, outErrors);
+    outDoc.doubleSided = false;
+    reader.Read(j, "doubleSided", outDoc.doubleSided);
+    outDoc.ignoreVertexColor = false;
+    reader.Read(j, "ignoreVertexColor", outDoc.ignoreVertexColor);
+    outDoc.customVertexShader = false;
+    reader.Read(j, "customVertexShader", outDoc.customVertexShader);
+    std::string textureFilter = "Trilinear";
+    reader.Read(j, "textureFilter", textureFilter);
+    outDoc.textureFilter = MaterialTextureFilterFromString(textureFilter);
+
+    ParseProperties(j, outDoc);
+
+    // Fill the rest of the StandardPBR property set, so a partial .material (only a
+    // few keys authored) still exposes every control — toggles, specular, emissive,
+    // AO — in the inspector, matching a freshly-created material. Runs after
+    // ParseProperties so the fill only ever plugs gaps and every authored value
+    // wins; that ordering is what lets DefaultOpacity see the authored baseColor
+    // instead of the factory colour. A foreign lighting model is left untouched
+    // entirely — the fill's own unlit/shadow-only skips serve the inspector, which
+    // seeds a document whose lighting model the user is in the act of changing.
+    if (outDoc.lightingModel == "StandardPBR")
+        outDoc.FillMissingStandardPBRDefaults();
+
+    ParseTextures(j, outDoc, reader);
+    ParseBindings(j, outDoc);
+    ParseShaderGraphPublicProperties(j, outDoc, reader);
+    ParseKeywords(j, outDoc, outErrors);
+
+    if (reader.Refused())
+    {
+        outErrors.push_back("MaterialAsset: " + reader.Refusal() + ".");
+        return false;
+    }
+    return true;
 }
 
 static std::string TrimCopy(std::string value)
@@ -367,15 +413,11 @@ static bool TryFindFloat(const std::string& text, const std::string& key, float&
     if (!std::regex_search(text, match, pattern) || match.size() < 2)
         return false;
 
-    try
-    {
-        outValue = std::stof(match[1].str());
-        return true;
-    }
-    catch (...)
-    {
+    const std::optional<float> value = ParseLeadingFloat(match[1].str());
+    if (!value)
         return false;
-    }
+    outValue = *value;
+    return true;
 }
 
 static bool TryFindColor(const std::string& text, const std::string& key, std::vector<float>& outColor)
@@ -386,19 +428,16 @@ static bool TryFindColor(const std::string& text, const std::string& key, std::v
     if (!std::regex_search(text, match, pattern) || match.size() < 5)
         return false;
 
-    try
+    std::vector<float> color;
+    for (size_t channel = 1; channel <= 4; ++channel)
     {
-        outColor = {
-            std::stof(match[1].str()),
-            std::stof(match[2].str()),
-            std::stof(match[3].str()),
-            std::stof(match[4].str())};
-        return true;
+        const std::optional<float> value = ParseLeadingFloat(match[channel].str());
+        if (!value)
+            return false;
+        color.push_back(*value);
     }
-    catch (...)
-    {
-        return false;
-    }
+    outColor = std::move(color);
+    return true;
 }
 
 static std::string FindUnityTextureGuid(const std::string& text, const std::string& key)

@@ -56,8 +56,9 @@ private:
 
     RenderServices* m_RenderServices = nullptr;
     float32 m_AccumulatedSkyTime = 0.0f;
-    // Last skybox HDRI GUID we synced GPU texture eviction for (Polyhaven resolution swaps, etc.).
-    GUID m_LastSkyboxHdriEvictionGuid{};
+    // The skybox HDRI the sky pass samples. A switched-to HDRI loads (and cooks) asynchronously;
+    // this one stays resident and bound until the new one is on the GPU, and is evicted then.
+    GUID m_BoundSkyboxHdriGuid{};
 
     // The light the sky drove last frame, the fields it drove (SkySunIlluminance::kDrives*), and the
     // last colour and Intensity it wrote there.

@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 #include "Pathfinding/NavigationWorld.h"
+#include "Pathfinding/SolverScratchStatistics.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <thread>
 #include <vector>
 
 using namespace GameEngine;
@@ -274,6 +279,37 @@ TEST_F(NavigationWorldTest, FindPathAcrossLinksJoinsTheSegments)
     EXPECT_EQ(m_World.FindPathAcrossLinks(request, unlinked), PathStatus::Failed);
 }
 
+// The map a path starts and ends on is the one that holds the point: an agent standing closer to a
+// wall or to its map's edge than its radius still finds its map and leaves (#4044 review).
+TEST_F(NavigationWorldTest, FindPathAcrossLinksStartsBesideAWallOrAMapEdge)
+{
+    GridSettings settingsA;
+    settingsA.Width = 8; settingsA.Depth = 8; settingsA.CellSize = 1.0f;
+    GridSettings settingsB = settingsA;
+    settingsB.OriginX = 8.0f;
+    const NavMapHandle mapA = m_World.AddGridMap(settingsA);
+    const NavMapHandle mapB = m_World.AddGridMap(settingsB);
+    m_World.GetGridMap(mapA)->SetCellBlocked(2, 4, true); // [2, 3] x [4, 5]
+
+    NavLink link;
+    link.SourceMap = mapA;
+    link.SourceX = 7.5f; link.SourceZ = 4.5f;
+    link.TargetMap = mapB;
+    link.TargetX = 8.5f; link.TargetZ = 4.5f;
+    ASSERT_TRUE(m_World.AddNavLink(link).IsValid());
+
+    const float32 starts[][2] = {{1.8f, 4.5f}, {7.8f, 6.5f}}; // 0.2 m from the wall; from map A's edge
+    for (const auto& start : starts)
+    {
+        PathRequest request;
+        request.StartX = start[0]; request.StartZ = start[1];
+        request.EndX = 14.5f; request.EndZ = 4.5f;
+        request.AgentRadius = 0.5f;
+        PathHandle path;
+        EXPECT_EQ(m_World.FindPathAcrossLinks(request, path), PathStatus::Complete) << start[0] << ", " << start[1];
+    }
+}
+
 TEST_F(NavigationWorldTest, AutoGenerateBoundaryLinksCreatesLinks)
 {
     GridSettings settingsA;
@@ -369,4 +405,193 @@ TEST(NavigationWorldTests, MapHandlesNeverAliasAcrossInstances)
     EXPECT_NE(fresh.Generation, stale.Generation);
     EXPECT_EQ(second.GetGridMap(stale), nullptr);
     EXPECT_NE(second.GetGridMap(fresh), nullptr);
+}
+
+namespace
+{
+
+// A grid A* solver's scratch per cell: g score, parent, closed flag and visit stamp.
+constexpr uint64 kSolverBytesPerCell = sizeof(float32) + sizeof(uint32) + sizeof(uint8) + sizeof(uint16);
+
+GridSettings SquareGrid(uint32 size)
+{
+    GridSettings settings;
+    settings.Width = size;
+    settings.Depth = size;
+    settings.CellSize = 1.0f;
+    return settings;
+}
+
+// A request from one corner of a square grid of `size` cells to the opposite one.
+PathRequest CornerToCorner(uint32 size)
+{
+    PathRequest request;
+    request.StartX = 0.5f; request.StartZ = 0.5f;
+    request.EndX = static_cast<float32>(size) - 0.5f; request.EndZ = static_cast<float32>(size) - 0.5f;
+    return request;
+}
+
+} // namespace
+
+// Removing the world's only grid map frees the scratch of every solver its solves used, the pool
+// workers' included, and keeps the solvers for the next solve.
+TEST(NavigationWorldTests, RemovingTheOnlyGridMapFreesEverySolversScratch)
+{
+    constexpr uint32 kSize = 256;
+    NavigationWorld world;
+    const NavMapHandle handle = world.AddGridMap(SquareGrid(kSize));
+    std::vector<GridPathSolve> solves(16);
+    for (GridPathSolve& solve : solves)
+    {
+        solve.Map = handle;
+        solve.Request = CornerToCorner(kSize);
+    }
+    JobSystem::WorkStealingThreadPool pool(4);
+    world.SolveGridPaths(&pool, solves);
+    for (const GridPathSolve& solve : solves)
+        ASSERT_EQ(solve.Status, PathStatus::Complete);
+
+    const SolverScratchStatistics before = world.GetSolverScratchStatistics();
+    EXPECT_GE(before.Solvers, 1u);
+    EXPECT_EQ(before.SolversHoldingScratch, before.Solvers);
+    EXPECT_EQ(before.HeldBytes, before.Solvers * kSolverBytesPerCell * kSize * kSize);
+
+    world.RemoveMap(handle);
+    const SolverScratchStatistics after = world.GetSolverScratchStatistics();
+    EXPECT_EQ(after.Solvers, before.Solvers);
+    EXPECT_EQ(after.SolversHoldingScratch, 0u);
+    EXPECT_EQ(after.HeldBytes, 0u);
+}
+
+// Removing a grid map keeps the scratch the largest grid map left needs; replacing a grid map with
+// a smaller one frees a solver's scratch beyond the new largest grid map. The high-water mark keeps
+// the most one solver held.
+TEST(NavigationWorldTests, SolverScratchShrinksToTheLargestGridMapLeft)
+{
+    constexpr uint32 kLarge = 512;
+    constexpr uint32 kSmall = 64;
+    NavigationWorld world;
+    const NavMapHandle large = world.AddGridMap(SquareGrid(kLarge));
+    const NavMapHandle small = world.AddGridMap(SquareGrid(kSmall));
+    PathHandle path;
+    ASSERT_EQ(world.FindPath(large, CornerToCorner(kLarge), path), PathStatus::Complete);
+    world.GetPathBuffer().FreePath(path);
+    const uint64 largeBytes = kSolverBytesPerCell * kLarge * kLarge;
+    EXPECT_EQ(world.GetSolverScratchStatistics().SolverHighWaterBytes, largeBytes);
+
+    world.RemoveMap(small);
+    EXPECT_EQ(world.GetSolverScratchStatistics().HeldBytes, largeBytes) << "the large grid map is still in the world";
+
+    ASSERT_NE(world.ReplaceGridMap(large, std::make_unique<GridMap>(SquareGrid(kSmall))), nullptr);
+    const SolverScratchStatistics replaced = world.GetSolverScratchStatistics();
+    EXPECT_EQ(replaced.HeldBytes, 0u);
+    EXPECT_EQ(replaced.SolverHighWaterBytes, largeBytes);
+}
+
+// A solver's scratch is no larger than the largest grid it solved on, so removing a map smaller than
+// a grid still in the world keeps it, whatever order the solver grew in. The sizes overshoot under
+// both doubling and 1.5x vector growth.
+TEST(NavigationWorldTests, SolverScratchGrownTwiceIsKeptForTheLargestGridMapLeft)
+{
+    NavigationWorld world;
+    const NavMapHandle medium = world.AddGridMap(SquareGrid(100));
+    const NavMapHandle large = world.AddGridMap(SquareGrid(110));
+    const NavMapHandle tiny = world.AddGridMap(SquareGrid(8));
+    PathHandle path;
+    ASSERT_EQ(world.FindPath(medium, CornerToCorner(100), path), PathStatus::Complete);
+    world.GetPathBuffer().FreePath(path);
+    ASSERT_EQ(world.FindPath(large, CornerToCorner(110), path), PathStatus::Complete);
+    world.GetPathBuffer().FreePath(path);
+    const uint64 heldBefore = world.GetSolverScratchStatistics().HeldBytes;
+    world.RemoveMap(tiny);
+    const uint64 heldAfter = world.GetSolverScratchStatistics().HeldBytes;
+    EXPECT_EQ(heldAfter, kSolverBytesPerCell * 110 * 110) << "before " << heldBefore << " after " << heldAfter;
+}
+
+namespace
+{
+
+// A wall across the middle column of a square grid with one gap at the far edge, so a path between
+// the two near corners detours around it and the solve expands most of the grid.
+void WallWithFarGap(GridMap& grid, uint32 size)
+{
+    for (uint32 z = 0; z + 1 < size; ++z)
+        grid.SetCellBlocked(size / 2, z, true);
+}
+
+// A request between the two near corners of a square grid of `size` cells, across the wall,
+// unsmoothed so the path keeps one point per cell it crosses.
+PathRequest AcrossTheWall(uint32 size)
+{
+    PathRequest request;
+    request.StartX = 0.5f; request.StartZ = 0.5f;
+    request.EndX = static_cast<float32>(size) - 0.5f; request.EndZ = 0.5f;
+    request.SmoothPath = false;
+    return request;
+}
+
+// The point count of a Complete path, or 0 when the solve did not complete; frees the path.
+uint32 PointCount(PathStatus status, PathBuffer& pathBuffer, PathHandle path)
+{
+    const uint32 points = status == PathStatus::Complete ? pathBuffer.GetPointCount(path) : 0;
+    pathBuffer.FreePath(path);
+    return points;
+}
+
+// Solves `solves` paths through the world's FindPath on `handle` and as many on the standalone
+// grid, counting those whose point count matches `expectedPoints`, then sets `done`.
+void SolveWhileOtherWorldsChurn(NavigationWorld& world, NavMapHandle handle, const GridMap& standalone,
+                                const PathRequest& request, uint32 solves, uint32 expectedPoints,
+                                std::atomic<uint32>& matched, std::atomic<bool>& done)
+{
+    PathBuffer standalonePathBuffer;
+    for (uint32 i = 0; i < solves; ++i)
+    {
+        PathHandle worldPath;
+        const PathStatus worldStatus = world.FindPath(handle, request, worldPath);
+        if (PointCount(worldStatus, world.GetPathBuffer(), worldPath) == expectedPoints)
+            matched.fetch_add(1, std::memory_order_relaxed);
+        PathHandle standalonePath;
+        const PathStatus standaloneStatus = standalone.FindPath(request, standalonePathBuffer, standalonePath);
+        if (PointCount(standaloneStatus, standalonePathBuffer, standalonePath) == expectedPoints)
+            matched.fetch_add(1, std::memory_order_relaxed);
+    }
+    done.store(true, std::memory_order_release);
+}
+
+} // namespace
+
+// A world's grid map removal and its destruction touch only that world's solver scratch: solves
+// through another world's FindPath and on a standalone grid map run on another thread meanwhile and
+// find the same path as a solve alone does.
+TEST(NavigationWorldTests, AWorldsScratchReleaseLeavesOtherSolvesRunning)
+{
+    constexpr uint32 kSize = 512;
+    constexpr uint32 kSolves = 3;
+    NavigationWorld solving;
+    const NavMapHandle handle = solving.AddGridMap(SquareGrid(kSize));
+    WallWithFarGap(*solving.GetGridMap(handle), kSize);
+    GridMap standalone(SquareGrid(kSize));
+    WallWithFarGap(standalone, kSize);
+    const PathRequest request = AcrossTheWall(kSize);
+    PathHandle alone;
+    const PathStatus aloneStatus = standalone.FindPath(request, solving.GetPathBuffer(), alone);
+    const uint32 expectedPoints = PointCount(aloneStatus, solving.GetPathBuffer(), alone);
+    ASSERT_GT(expectedPoints, kSize) << "the path detours around the wall";
+
+    std::atomic<uint32> matched{0};
+    std::atomic<bool> done{false};
+    std::thread solver(SolveWhileOtherWorldsChurn, std::ref(solving), handle, std::cref(standalone),
+                       std::cref(request), kSolves, expectedPoints, std::ref(matched), std::ref(done));
+    do
+    {
+        NavigationWorld other;
+        const NavMapHandle otherHandle = other.AddGridMap(SquareGrid(8));
+        PathHandle otherPath;
+        other.FindPath(otherHandle, CornerToCorner(8), otherPath);
+        other.GetPathBuffer().FreePath(otherPath);
+        other.RemoveMap(otherHandle);
+    } while (!done.load(std::memory_order_acquire));
+    solver.join();
+    EXPECT_EQ(matched.load(), 2 * kSolves);
 }

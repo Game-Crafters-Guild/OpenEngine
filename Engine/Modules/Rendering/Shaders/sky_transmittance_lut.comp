@@ -69,5 +69,6 @@ void main()
     // is neither: it is the untouched above-atmosphere tint (SkyEnvironmentSystem.cpp
     // primarySunColor), which is what makes this LUT the sky's only extinction.
     vec3 transmittance = exp(-tau);
+    // A ratio, independent of the pre-exposure.
     imageStore(uTransLUT, pix, vec4(transmittance, 1.0));
 }

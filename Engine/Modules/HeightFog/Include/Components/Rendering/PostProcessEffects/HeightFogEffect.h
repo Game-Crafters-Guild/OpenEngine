@@ -47,27 +47,37 @@ enum class HeightFogPreset : int32 {
 };
 
 // Analytical screen-space height fog. Attach to the same entity as a PostProcessVolume.
+// The defaults are a horizon haze in the sky's own horizon color: clear near the camera, thick
+// only at the far end of a 3000 m view, and dense on the sky only in the last few degrees above
+// the horizon, so the end of ground that reaches a 3000 m far clip does not show by day.
 struct HeightFogEffect {
     bool Enabled{true};
     // Off pins the effect off wherever its volume applies: a value the volume blend reads.
     static constexpr bool KeepsOwnEnabledField = true;
     HeightFogPreset Preset{HeightFogPreset::Custom};
 
-    // 0 = bypass, 1 = full contribution.
-    float32 Intensity{0.65f};
+    // 0 = bypass, 1 = full contribution. Full by default: Density and the distances shape the haze.
+    float32 Intensity{1.0f};
     // Density is intentionally artist-scaled in [0, 1]; the shader remaps it
-    // to extinction over MaxDistance.
-    float32 Density{0.28f};
-    // Caps the final fog opacity so dense fog cannot wash the whole frame to white.
-    float32 MaxOpacity{0.85f};
+    // to extinction over MaxDistance. Full by default, so the fog is thick at MaxDistance.
+    float32 Density{1.0f};
+    // Caps the final fog opacity so dense fog cannot wash the whole frame to white. No cap by
+    // default, so far ground fades fully into the horizon color.
+    float32 MaxOpacity{1.0f};
 
     bool DistanceFogEnabled{true};
-    float32 MinDistance{5.0f};
-    float32 SmoothLength{80.0f};
-    float32 MaxDistance{1000.0f};
+    // Meters from the camera where the fog starts: 150 m keeps a close-up and the near scene clear.
+    float32 MinDistance{150.0f};
+    // Meters over which the fog fades in after MinDistance.
+    float32 SmoothLength{150.0f};
+    // Meters over which Density reaches full strength: 3000 m, about where a landscape dissolves
+    // into the horizon haze on a clear day. Ground at a 3000 m far clip is fogged to 97.5 percent;
+    // at the Camera's default 1000 m far clip it is fogged to 64 percent, so the clip shows.
+    float32 MaxDistance{3000.0f};
     HeightFogLayerMode LayerMode{HeightFogLayerMode::Dominant};
 
-    bool HeightFogEnabled{true};
+    // Off by default: the default haze depends on distance only, the same at every height.
+    bool HeightFogEnabled{false};
     float32 BaseHeight{0.0f};
     float32 TransitionLength{120.0f};
     float32 HorizonHeightOffset{0.0f};
@@ -108,7 +118,9 @@ struct HeightFogEffect {
     bool SkyEnabled{true};
     float32 SkyPower{1.0f};
     float32 SkyFillStart{0.0f};
-    float32 SkyFillEnd{1.0f};
+    // Sine of the elevation above the horizon where the haze on the sky ends: 0.05 is about
+    // 3 degrees, so the sky stays clear and only its band at the horizon takes the haze.
+    float32 SkyFillEnd{0.05f};
     float32 SkyHorizonOffset{0.0f};
     float32 SkyBottomStrength{0.0f};
 

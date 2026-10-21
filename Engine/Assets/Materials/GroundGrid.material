@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "materialName": "Ground Grid",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": false,
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [1.0, 1.0, 1.0, 1.0],
+    "metallic": 0.0,
+    "roughness": 0.5
+  },
+  "textures": {
+    "albedoMap": {
+      "guid": "0168a52e-df35-4b8e-917e-bd4c024316c7",
+      "path": "Textures/GroundGrid.png",
+      "tiling": [6000.0, 6000.0]
+    }
+  }
+}

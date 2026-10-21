@@ -19,6 +19,7 @@ using namespace GameEngine::Rendering;
 //   primitives  : 262144 * 144B = 36 MB / frame
 //   clips       :   1024 *  64B = 64 KB / frame
 //   draw order  :  32768 *   4B = 128 KB / frame
+//   transforms  :    256 *  32B =   8 KB / frame
 // At 3 frames-in-flight per UIManager: ~108 MB primitives, plus clips/order.
 // Elliptical corner radii cost the +16B/primitive and +16B/clip in those
 // figures -- about +12 MB of persistent ring at this capacity. Capacities are
@@ -27,6 +28,7 @@ using namespace GameEngine::Rendering;
 static constexpr size_t kInitialPrimCapacity      = 262144;
 static constexpr size_t kInitialClipCapacity      = 1024;
 static constexpr size_t kInitialDrawOrderCapacity = 32768;
+static constexpr size_t kInitialTransformCapacity = 256;
 
 namespace
 {
@@ -62,6 +64,9 @@ void UIManager::CreateSdfRingBuffers()
 
     m_SdfDrawOrderRing = std::make_unique<UI::FrameBufferRing<uint32_t>>();
     m_SdfDrawOrderRing->Create(m_Device, framesInFlight, kInitialDrawOrderCapacity, "UISdfDrawOrder");
+
+    m_SdfTransformRing = std::make_unique<UI::FrameBufferRing<UI::UITransformSlot>>();
+    m_SdfTransformRing->Create(m_Device, framesInFlight, kInitialTransformCapacity, "UISdfTransforms");
 }
 
 void UIManager::InitSdfRenderer()
@@ -91,16 +96,18 @@ void UIManager::HealDeviceResourcesIfRebuilt()
     // Counts are logged with the populations they came from: a UIManager that
     // had cached nothing at rebuild time drops zero of zero, which must stay
     // distinguishable from a heal that never ran at all.
-    const size_t backgroundTextures = m_BgTextureCache.size();
     const size_t externalTextures = m_ExternalDeviceTextures.size();
     const size_t deferredBindings = m_SdfDeferredRGBindings.size();
-    const size_t uploadsInFlight = m_BgUploadInFlight.size();
     const bool hadRings = m_SdfPrimRing != nullptr;
 
     // Drop, never destroy: the rebuild already destroyed every VkObject these
     // handles named. The background cache re-uploads from disk on the next
-    // paint, which is the same path hot-reload eviction relies on.
-    m_BgTextureCache.clear();
+    // paint, which is the same path hot-reload eviction relies on. Its
+    // in-flight markers go too: left set, an upload early-returns on the dedupe
+    // check forever. A completion already marshalled when the heal runs still
+    // lands afterwards and re-caches its dead handle for the session, contained
+    // by the IsTextureHandleLive substitution (the publisher case below).
+    const auto [backgroundTextures, uploadsInFlight] = m_BackgroundImages.DropAfterDeviceRebuild();
 
     // Externally published handles are borrowed, so UI does not free them — but
     // it must stop resolving them. ResolveExternalTexture gates only on
@@ -120,13 +127,6 @@ void UIManager::HealDeviceResourcesIfRebuilt()
     // they name no longer exist.
     m_SdfDeferredRGBindings.clear();
 
-    // In-flight upload markers survive the textures they were tracking. Left
-    // set, EnsureBackgroundTextureUploaded early-returns on the dedupe check
-    // forever. EvictBackgroundTexture drops these for the same reason. A
-    // completion already marshalled when the heal runs still lands afterwards
-    // and re-caches its dead handle for the session — contained by the
-    // IsTextureHandleLive substitution, same shape as the publisher case above.
-    m_BgUploadInFlight.clear();
 
     m_White1x1 = Rendering::INVALID_TEXTURE_HANDLE;
     m_SamplerRepeat = {};
@@ -145,6 +145,7 @@ void UIManager::HealDeviceResourcesIfRebuilt()
         m_SdfPrimRing.reset();
         m_SdfClipRing.reset();
         m_SdfDrawOrderRing.reset();
+        m_SdfTransformRing.reset();
         CreateSdfRingBuffers();
     }
 
@@ -258,6 +259,9 @@ void UIManager::EnsureSdfPipelineDesc()
     //               its primitive slot via drawOrder[gl_InstanceIndex],
     //               so the persistent primitive buffer can hold elements
     //               in slot order (with holes) while still rendering in DFS.
+    //   binding 3 — UITransformSlot SSBO: CSS transforms, composed by the
+    //               vertex stage, which also maps each primitive into its
+    //               clips' spaces (hence ClipRects reaching the vertex stage).
     //
     // All three are `readonly buffer` in the GLSL, and the layout has to say so:
     // a WebGPU pipeline whose module declares var<storage, read> is rejected
@@ -271,9 +275,12 @@ void UIManager::EnsureSdfPipelineDesc()
         {0, DescriptorType::StorageBuffer, 1, kShaderStageVertex | kShaderStageFragment,
          "Primitives", kReadOnly});
     m_SdfSsboSetLayout.bindings.push_back(
-        {1, DescriptorType::StorageBuffer, 1, kShaderStageFragment, "ClipRects", kReadOnly});
+        {1, DescriptorType::StorageBuffer, 1, kShaderStageVertex | kShaderStageFragment, "ClipRects",
+         kReadOnly});
     m_SdfSsboSetLayout.bindings.push_back(
         {2, DescriptorType::StorageBuffer, 1, kShaderStageVertex, "DrawOrder", kReadOnly});
+    m_SdfSsboSetLayout.bindings.push_back(
+        {3, DescriptorType::StorageBuffer, 1, kShaderStageVertex, "Transforms", kReadOnly});
 
     // Descriptor set 1: Texture array (from UITextureRegistry)
     const auto& texLayout = m_SdfTextureRegistry
@@ -376,7 +383,7 @@ UIManager::SdfFrameData UIManager::PrepareSdfFrameData()
     // Protect the actual current draw, including retained primitives, before
     // reclaiming idle background images. Cache eviction never drops a texture
     // this frame is about to sample.
-    EvictStaleBackgroundTextures();
+    EndBackgroundImageFrame();
 
     fd.Ready = true;
 
@@ -415,6 +422,7 @@ UIManager::SdfFrameData UIManager::PrepareSdfFrameData()
     m_SdfPrimRing->BeginFrame(frameIndex);
     m_SdfClipRing->BeginFrame(frameIndex);
     m_SdfDrawOrderRing->BeginFrame(frameIndex);
+    m_SdfTransformRing->BeginFrame(frameIndex);
 
     if (!m_SdfPrimRing->UploadIfChanged(frameIndex, m_PersistentPrimitives.data(), fd.TotalSlots,
                                         m_PrimitiveStoreVersion))
@@ -493,6 +501,18 @@ UIManager::SdfFrameData UIManager::PrepareSdfFrameData()
             Logger::Log::Warning("[UI] SDF clip ring upload failed (count={}).", totalClipSlots);
             return fd;
         }
+    }
+
+    // Transforms: slot 0 is the identity and always uploaded, so the binding
+    // is never empty; the rest cover the allocator's high-water mark.
+    const size_t totalTransformSlots = std::max<size_t>(1, m_TransformAllocator.GetTotalSlots());
+    if (m_PersistentTransforms.size() < totalTransformSlots)
+        m_PersistentTransforms.resize(totalTransformSlots);
+    if (!m_SdfTransformRing->UploadIfChanged(frameIndex, m_PersistentTransforms.data(), totalTransformSlots,
+                                             m_TransformStoreVersion))
+    {
+        Logger::Log::Warning("[UI] SDF transform ring upload failed (count={}).", totalTransformSlots);
+        return fd;
     }
 
     fd.UploadsOk = true;

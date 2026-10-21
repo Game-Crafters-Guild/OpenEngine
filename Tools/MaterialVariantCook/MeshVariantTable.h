@@ -65,6 +65,10 @@ constexpr MaterialKeyword kForwardColorIblDdgi = kForwardColorIbl | MaterialKeyw
 constexpr MaterialKeyword kForwardColorIblDdgiSssr = kForwardColorIblSssr | MaterialKeyword::DDGI;
 constexpr MaterialKeyword kForwardColorIblDdgiGtao = kForwardColorIblGtao | MaterialKeyword::DDGI;
 constexpr MaterialKeyword kForwardColorIblDdgiGtaoSssr = kForwardColorIblGtaoSssr | MaterialKeyword::DDGI;
+// The height fog is evaluated in every surface's own shader, so a view whose height fog is active
+// re-keys its colour pass with the HeightFog keyword, as an AO volume does with GTAO. The shipped
+// templates draw the fog with no other per-view keyword.
+constexpr MaterialKeyword kForwardColorIblFog = kForwardColorIbl | MaterialKeyword::HeightFog;
 
 inline const VariantRequest kMeshVariants[] = {
     // The keyword-less base variant material registration prewarms before any
@@ -118,6 +122,11 @@ inline const VariantRequest kMeshVariants[] = {
     {"forward-color-ibl-gtao-sssr+skin", kForwardColorIblGtaoSssr, VertexAttributeFlags::SkinnedMesh},
     {"forward-color-ibl-gtao-sssr+skin+tangent", kForwardColorIblGtaoSssr, VertexAttributeFlags::SkinnedMeshWithTangent},
 
+    {"forward-color-ibl-fog", kForwardColorIblFog, VertexAttributeFlags::StandardMesh},
+    {"forward-color-ibl-fog+tangent", kForwardColorIblFog, VertexAttributeFlags::StandardMeshWithTangent},
+    {"forward-color-ibl-fog+skin", kForwardColorIblFog, VertexAttributeFlags::SkinnedMesh},
+    {"forward-color-ibl-fog+skin+tangent", kForwardColorIblFog, VertexAttributeFlags::SkinnedMeshWithTangent},
+
     {"depth", kDepth, VertexAttributeFlags::StandardMesh},
     {"depth+tangent", kDepth, VertexAttributeFlags::StandardMeshWithTangent},
     {"depth+skin", kDepth, VertexAttributeFlags::SkinnedMesh},
@@ -144,6 +153,10 @@ inline const VariantRequest kBlendMeshVariants[] = {
     {"forward-color-ibl-ddgi-sssr+tangent", kForwardColorIblDdgiSssr, VertexAttributeFlags::StandardMeshWithTangent},
     {"forward-color-ibl-ddgi-sssr+skin", kForwardColorIblDdgiSssr, VertexAttributeFlags::SkinnedMesh},
     {"forward-color-ibl-ddgi-sssr+skin+tangent", kForwardColorIblDdgiSssr, VertexAttributeFlags::SkinnedMeshWithTangent},
+    {"forward-color-ibl-fog", kForwardColorIblFog, VertexAttributeFlags::StandardMesh},
+    {"forward-color-ibl-fog+tangent", kForwardColorIblFog, VertexAttributeFlags::StandardMeshWithTangent},
+    {"forward-color-ibl-fog+skin", kForwardColorIblFog, VertexAttributeFlags::SkinnedMesh},
+    {"forward-color-ibl-fog+skin+tangent", kForwardColorIblFog, VertexAttributeFlags::SkinnedMeshWithTangent},
     {"depth", kDepth, VertexAttributeFlags::StandardMesh},
     {"depth+tangent", kDepth, VertexAttributeFlags::StandardMeshWithTangent},
     {"depth+skin", kDepth, VertexAttributeFlags::SkinnedMesh},

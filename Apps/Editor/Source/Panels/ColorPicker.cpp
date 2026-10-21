@@ -1064,7 +1064,7 @@ void ColorPicker::BuildUI()
         .Set(Style::BackgroundColor, (uint32_t)0xFF3C3C3C)
         .Set(Style::BorderWidth, Box4{0.0f, 0.0f, 0.0f, 0.0f})
         .Set(Style::BorderRadius, CornerRadiiTLTRBRBL{4.0f, 4.0f, 4.0f, 4.0f})
-        .Set(Style::BackgroundImage, BackgroundImageSource{BackgroundImageSource::SourceKind::Path, GUID::Null(), "Icons/colorpicker.png"})
+        .Set(Style::BackgroundImage, BackgroundImageSource{BackgroundImageSource::SourceKind::Path, GUID::Null(), "Icons/colorpicker.svg"})
         .Set(Style::BackgroundSize, BackgroundSizeValue{BackgroundSizeMode::Explicit, kEyedropperIconSizePx, false, kEyedropperIconSizePx, false})
         .Set(Style::BackgroundRepeatProp, BackgroundRepeat::NoRepeat)
         .Set(Style::BackgroundPosition, BackgroundPositionValue{50.0f, true, 50.0f, true});

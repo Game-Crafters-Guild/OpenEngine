@@ -501,6 +501,12 @@ function(ge_stage_engine_sdk host_target sdk_output_dir)
         set(_ge_sdk_engine_binary "lib/$<CONFIG>/$<TARGET_FILE_NAME:Engine>")
         set(_ge_sdk_editor_binary "lib/$<CONFIG>/$<TARGET_FILE_NAME:EditorSDK>")
     endif()
+    # The build machine's dotnet, for the C# steps of game packaging; a scripting-disabled
+    # build has none and packages without C#.
+    set(_ge_sdk_dotnet_line "")
+    if(ENABLE_SCRIPTING)
+        set(_ge_sdk_dotnet_line "dotnet=${DOTNET_EXECUTABLE}\n")
+    endif()
     set(_ge_sdk_editor_lines "")
     if(TARGET EditorSDK)
         set(_ge_sdk_editor_lines
@@ -519,13 +525,12 @@ includedir=include
 importlib=lib/$<CONFIG>/$<TARGET_LINKER_FILE_NAME:Engine>
 enginebinary=${_ge_sdk_engine_binary}
 sdkentry=nativescripting/UserModuleEntry.cpp
-scannerdll=nativescripting/ComponentScanner/ComponentScanner.dll
+scanner=nativescripting/$<TARGET_FILE_NAME:ComponentScanner>
 defs=$<TARGET_PROPERTY:Engine,INTERFACE_COMPILE_DEFINITIONS>
 globaldefs=GLM_FORCE_DEPTH_ZERO_TO_ONE;NOMINMAX;WIN32_LEAN_AND_MEAN;GE_DEBUG_INSTRUMENTATION=${GE_DEBUG_INSTRUMENTATION_VALUE}
 engineincludes=vcpkg-include;vcpkg-include/harfbuzz;generated-include
 cmake=${CMAKE_COMMAND}
-dotnet=${DOTNET_EXECUTABLE}
-${_ge_sdk_editor_lines}")
+${_ge_sdk_dotnet_line}${_ge_sdk_editor_lines}")
 
     # Create the SDK directories
     add_custom_command(TARGET ${host_target} POST_BUILD
@@ -767,22 +772,22 @@ endforeach()
         VERBATIM
     )
 
-    # ComponentScanner (.NET) publish dir — copied whole (dll + .deps.json +
-    # .runtimeconfig.json) so the editor can run `dotnet ComponentScanner.dll` from the
-    # staged SDK. Built by the Engine build (Editor depends on Engine). $<CONFIG> in the
-    # source path → NO VERBATIM (MSBuild double-quotes genexes under VERBATIM).
+    # ComponentScanner, the native user-script scanner the editor runs from the staged
+    # SDK. Built by the Engine build (its generated reflection TU depends on it).
     add_custom_command(TARGET ${host_target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            ${CMAKE_SOURCE_DIR}/Managed/ComponentScanner/bin/$<CONFIG>/net10.0
-            ${sdk_output_dir}/nativescripting/ComponentScanner
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:ComponentScanner>"
+            "${sdk_output_dir}/nativescripting/"
         COMMENT "Staging ComponentScanner to SDK ($<CONFIG>)"
+        VERBATIM
     )
 
     # Managed scripting runtime + source generator (ship-safety C4): the NativeAOT
     # csproj the BuildPipeline generates for packaged games references these STAGED
     # copies — never the engine repo's Managed/ tree, which a relocated or shipped
-    # editor does not have. Copy-if-exists: a scripting-disabled engine build has no
-    # managed outputs, and the pipeline reports the absence at package time instead.
+    # editor does not have. Copy-if-exists: a managed output not built yet is reported
+    # at package time instead. A scripting-disabled build stages none.
+    if(ENABLE_SCRIPTING)
     set(_ge_sdk_managed_stage_script "${CMAKE_BINARY_DIR}/cmake/StageSDKManagedFile.cmake")
     file(WRITE "${_ge_sdk_managed_stage_script}" "\
 if(EXISTS \"\${SRC}\")
@@ -801,10 +806,14 @@ endif()
             -DSRC=${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/bin/$<CONFIG>/GameEngine.ECS.ABI.dll
             -DDST=${sdk_output_dir}/managed -P ${_ge_sdk_managed_stage_script}
         COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/bin/$<CONFIG>/GameEngine.Scripting.Bindings.dll
+            -DDST=${sdk_output_dir}/managed -P ${_ge_sdk_managed_stage_script}
+        COMMAND ${CMAKE_COMMAND}
             -DSRC=${CMAKE_SOURCE_DIR}/Managed/SourceGenerators/EntitySystemGenerator/bin/$<CONFIG>/netstandard2.0/EntitySystemGenerator.dll
             -DDST=${sdk_output_dir}/managed/analyzers -P ${_ge_sdk_managed_stage_script}
         COMMENT "Staging managed scripting assemblies to SDK ($<CONFIG>)"
     )
+    endif()
 
     # Self-containment: the engine's public headers pull in vcpkg headers (glm, nlohmann,
     # concurrentqueue, …) and a few generated headers. Stage them INTO the SDK so a machine

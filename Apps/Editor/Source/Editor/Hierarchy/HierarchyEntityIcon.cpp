@@ -636,12 +636,12 @@ void ApplyInspectorEntityIcon(ECS::World* world,
         if (std::filesystem::exists(thumbPath, ec) && uiManager && ctx->Assets)
         {
             std::string pathStr = thumbPath.string();
-            GUID thumbGuid = uiManager->ResolveBackgroundImagePath(pathStr);
+            GUID thumbGuid = uiManager->BackgroundImages().ResolvePath(pathStr);
             if (!thumbGuid.IsNull())
             {
                 // Uploads at once when the texture is loaded, otherwise requests it; never
                 // waits (a first open can still be cooking it).
-                uiManager->EnsureBackgroundTextureUploaded(thumbGuid);
+                uiManager->BackgroundImages().EnsureUploaded(thumbGuid);
 
                 const float icon = modelThumbPx;
                 BackgroundImageSource source{};
@@ -678,7 +678,7 @@ void ApplyInspectorEntityIcon(ECS::World* world,
             if (std::filesystem::exists(spritePath, ec))
             {
                 const std::string pathStr = spritePath.string();
-                const GUID bgGuid = uiManager->ResolveBackgroundImagePath(pathStr);
+                const GUID bgGuid = uiManager->BackgroundImages().ResolvePath(pathStr);
                 if (!bgGuid.IsNull())
                 {
                     auto texAsset = ctx->Assets->GetAsset(bgGuid);
@@ -690,7 +690,7 @@ void ApplyInspectorEntityIcon(ECS::World* world,
                                                AssetLoadResultCallback{},
                                                AssetLoadPriority::High);
                     }
-                    uiManager->EnsureBackgroundTextureUploaded(bgGuid);
+                    uiManager->BackgroundImages().EnsureUploaded(bgGuid);
 
                     (void)modelThumbPx;
                     BackgroundImageSource source{};

@@ -275,3 +275,8 @@ add_custom_command(TARGET HumanoidStandardProfileTests POST_BUILD
 gtest_discover_tests(HumanoidStandardProfileTests
     WORKING_DIRECTORY $<TARGET_FILE_DIR:HumanoidStandardProfileTests>
 )
+
+# The refusal tests capture the log through the engine tests' shared LogCapture.h.
+foreach(target AnimationLibraryTests AnimationControllerTests SpriteFramesTests SkeletonProfileTests HumanoidRigTests RetargetMapTests)
+    target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Tests)
+endforeach()

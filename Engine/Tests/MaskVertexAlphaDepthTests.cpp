@@ -256,7 +256,7 @@ void DrawTheCardOverTheFloor(IDevice* device, const MaterialDocument& cardDocume
     }
     rs.Views().SetCameraData(cameraId, camera);
     const ViewId viewId = rs.Views().AllocateView("MaskVertexAlpha.View", cameraId);
-    rs.Views().SetViewRenderLayerMask(viewId, 1u);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     rs.Views().SetViewWorldId(viewId, kWorldId);
     ViewClearConfig clear{};
     clear.clearColor = true;

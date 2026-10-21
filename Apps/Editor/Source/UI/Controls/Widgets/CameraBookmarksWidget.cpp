@@ -22,14 +22,16 @@
 #include "Core/Application.h"
 #include "Editor/EditorPaths.h"
 #include "Editor/Settings/SettingsStore.h"
+#include "AssetCore/SharedFileRead.h"
+#include "Image/Decode.h"
+#include "Image/Encode.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Vector2.h"
 #include "UI/Registration/ElementRegistration.h"
 
 #include <cmath>
 #include <memory>
-#include <stb_image_write.h>
-#include <stb_image.h>
+#include <utility>
 
 #include <filesystem>
 #include <algorithm>
@@ -53,6 +55,19 @@ bool IsPointInside(const UIElement& el, float x, float y)
     const float w = el.GetLayoutWidth();
     const float h = el.GetLayoutHeight();
     return (x >= lx && y >= ly && x < (lx + w) && y < (ly + h));
+}
+
+// A saved bookmark preview's RGBA8 pixels; empty when the PNG cannot be read or
+// decoded, or is not `width` x `height`.
+std::vector<uint8_t> ReadPreviewPng(const std::filesystem::path& path, uint32_t width, uint32_t height)
+{
+    Vector<uint8> fileBytes;
+    if (!ReadFileBytesShared(path, fileBytes))
+        return {};
+    Image::Image8 decoded = Image::Decode8(fileBytes, path.string(), Image::DecodeChannels::Rgba);
+    if (!decoded.Valid || decoded.Width != width || decoded.Height != height)
+        return {};
+    return std::move(decoded.Pixels);
 }
 } // namespace
 
@@ -796,18 +811,7 @@ void CameraBookmarksWidget::DisplayStoredPreview(size_t index)
     {
         std::filesystem::path previewPath = GetBookmarkPreviewPath(index);
         if (std::filesystem::exists(previewPath))
-        {
-            // Load PNG file
-            int w, h, channels;
-            unsigned char* data = stbi_load(previewPath.string().c_str(), &w, &h, &channels, 4);
-            if (data && w == static_cast<int>(kPreviewWidth) && h == static_cast<int>(kPreviewHeight))
-            {
-                size_t pixelCount = static_cast<size_t>(w) * h * 4;
-                m_Bookmarks[index].previewPixels.assign(data, data + pixelCount);
-            }
-            if (data)
-                stbi_image_free(data);
-        }
+            m_Bookmarks[index].previewPixels = ReadPreviewPng(previewPath, kPreviewWidth, kPreviewHeight);
     }
 
     // If we have stored preview pixels, we need to create a texture from them
@@ -851,7 +855,7 @@ void CameraBookmarksWidget::SavePreviewImage(size_t index, uint32_t width, uint3
 
     // Convert to RGBA8 if the readback is in a different format (e.g. float16 HDR).
     std::vector<uint8_t> rgba8;
-    const void* pngSrc = pixels.data();
+    const uint8_t* pngSrc = pixels.data();
 
     if (format == Rendering::TextureFormat::R16G16B16A16_FLOAT)
     {
@@ -884,13 +888,7 @@ void CameraBookmarksWidget::SavePreviewImage(size_t index, uint32_t width, uint3
 
     std::filesystem::path previewPath = GetBookmarkPreviewPath(index);
 
-    stbi_write_png(
-        previewPath.string().c_str(),
-        static_cast<int>(width),
-        static_cast<int>(height),
-        4,
-        pngSrc,
-        static_cast<int>(width * 4));
+    Image::WritePngFile(previewPath, std::span(pngSrc, static_cast<size_t>(width) * height * 4), width, height);
 }
 
 void CameraBookmarksWidget::SaveBookmarks()
@@ -1034,18 +1032,7 @@ void CameraBookmarksWidget::LoadBookmarks()
                         std::string previewPathStr = bookmarkJson["previewPath"].get<std::string>();
                         std::filesystem::path previewPath(previewPathStr);
                         if (std::filesystem::exists(previewPath))
-                        {
-                            // Load PNG file
-                            int w, h, channels;
-                            unsigned char* data = stbi_load(previewPath.string().c_str(), &w, &h, &channels, 4);
-                            if (data && w == static_cast<int>(kPreviewWidth) && h == static_cast<int>(kPreviewHeight))
-                            {
-                                size_t pixelCount = static_cast<size_t>(w) * h * 4;
-                                bm.previewPixels.assign(data, data + pixelCount);
-                            }
-                            if (data)
-                                stbi_image_free(data);
-                        }
+                            bm.previewPixels = ReadPreviewPng(previewPath, kPreviewWidth, kPreviewHeight);
                     }
                     catch (...)
                     {

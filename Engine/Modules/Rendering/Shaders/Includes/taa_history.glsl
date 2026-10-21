@@ -91,41 +91,52 @@ bool TaaStaticHistoryMatches(sampler2D depthTexture, ivec2 center, ivec2 extent,
 // missed subpixel coverage still overlaps the surrounding history background.
 // Disjoint neighborhoods indicate a shading change and must not retain stale
 // HDR color merely because the surface depth and camera stayed still.
+// historyScale brings the history's colour to this frame's pre-exposure
+// (preExposure / previousPreExposure); the tolerance's absolute floor is scaled
+// by preExposure, the unit the colours are stored in.
 bool TaaShadingChanged(sampler2D historyTexture, ivec2 center, ivec2 extent,
-                       vec3 currentMin, vec3 currentMax, ivec2 radius)
+                       vec3 currentMin, vec3 currentMax, ivec2 radius, float historyScale,
+                       float preExposure)
 {
     vec3 historyMin = vec3(3.402823e38);
     vec3 historyMax = vec3(0.0);
     for (int y = -radius.y; y <= radius.y; ++y)
         for (int x = -radius.x; x <= radius.x; ++x)
         {
-            vec3 h = texelFetch(historyTexture, clamp(center + ivec2(x, y), ivec2(0), extent - 1), 0).rgb;
+            vec3 h = texelFetch(historyTexture, clamp(center + ivec2(x, y), ivec2(0), extent - 1), 0).rgb *
+                     historyScale;
             historyMin = min(historyMin, h);
             historyMax = max(historyMax, h);
         }
-    vec3 tolerance = max(historyMax, currentMax) * 0.002 + vec3(1e-5);
+    vec3 tolerance = max(historyMax, currentMax) * 0.002 + vec3(1e-5 * preExposure);
     return any(greaterThan(currentMin, historyMax + tolerance)) ||
            any(lessThan(currentMax, historyMin - tolerance));
 }
 
-bool TaaHistoryNeighborhoodUniform(sampler2D historyTexture, ivec2 center, ivec2 extent)
+// historyScale as above. The spread is measured against at least 1.0 in absolute scene-linear
+// units, which is preExposure in stored units.
+bool TaaHistoryNeighborhoodUniform(sampler2D historyTexture, ivec2 center, ivec2 extent,
+                                   float historyScale, float preExposure)
 {
     vec3 historyMin = vec3(3.402823e38);
     vec3 historyMax = vec3(0.0);
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
         {
-            vec3 h = texelFetch(historyTexture, clamp(center + ivec2(x, y), ivec2(0), extent - 1), 0).rgb;
+            vec3 h = texelFetch(historyTexture, clamp(center + ivec2(x, y), ivec2(0), extent - 1), 0).rgb *
+                     historyScale;
             historyMin = min(historyMin, h);
             historyMax = max(historyMax, h);
         }
     vec3 spread = historyMax - historyMin;
-    return all(lessThanEqual(spread, max(historyMax, vec3(1.0)) * kTaaUniformHistorySpread + vec3(1e-5)));
+    return all(lessThanEqual(spread, max(historyMax, vec3(preExposure)) * kTaaUniformHistorySpread +
+                                         vec3(1e-5 * preExposure)));
 }
 
-bool TaaSampleOutsideCurrent(vec3 historyRgb, vec3 currentMin, vec3 currentMax)
+// The tolerance's absolute floor is scaled by preExposure, the unit the colours are stored in.
+bool TaaSampleOutsideCurrent(vec3 historyRgb, vec3 currentMin, vec3 currentMax, float preExposure)
 {
-    vec3 tolerance = max(historyRgb, currentMax) * 0.002 + vec3(1e-5);
+    vec3 tolerance = max(historyRgb, currentMax) * 0.002 + vec3(1e-5 * preExposure);
     return any(greaterThan(historyRgb, currentMax + tolerance)) ||
            any(lessThan(historyRgb, currentMin - tolerance));
 }

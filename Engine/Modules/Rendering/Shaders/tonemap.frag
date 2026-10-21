@@ -1,6 +1,8 @@
 #version 450
 
 #include "Includes/tonemap_aces2.glsl"
+#include "Includes/cube_lut.glsl"
+#include "Includes/night_tint.glsl"
 
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
@@ -8,12 +10,27 @@ layout(location = 0) out vec4 oColor;
 layout(set = 0, binding = 0) uniform sampler2D uHDRColor;
 
 // Auto-exposure history (AutoExposureNode). exposureScale is the metered+adapted linear multiplier;
-// read only when useAutoExposure != 0. Always bound (the node publishes it every frame) so the
-// fullscreen stage never skips for a missing buffer.
-layout(set = 0, binding = 1, std430) readonly buffer ExposureHistory {
-    float exposureScale;
-    uint  valid;
-} uExposure;
+// read only when useAutoExposure != 0. preExposure is the scale P the input is stored at
+// (pre_exposure_snapshot.comp), divided out of the applied exposure in every mode. Always bound
+// (the node publishes it every frame) so the fullscreen stage never skips for a missing buffer.
+#define GE_EXPOSURE_HISTORY_BINDING 1
+#include "Includes/exposure_history.glsl"
+
+// The meter's reading, for the night tint's adaptation gate (bound by the engine, FullscreenShaderNode).
+#define GE_EXPOSURE_COMPENSATION_BINDING 7
+#include "Includes/exposure_compensation.glsl"
+
+// The volume's Cube LUT (set 0, bindings 3 and 4; identity textures when none is bound). At the
+// Finish stage it runs here, on the look's display-referred output before the HDR highlight
+// extension; at the Grade stage hdr_color_fx.frag samples it instead.
+layout(set = 0, binding = 3) uniform sampler3D uLut3d;
+layout(set = 0, binding = 4) uniform sampler2D uLut1d;
+
+// The night tint's inputs (Includes/night_tint.glsl): the light the star pass added (SkyStarLight,
+// luminance at the frame's pre-exposure; black when no stars are drawn) and the view's depth
+// (reverse-Z, 0 = sky).
+layout(set = 0, binding = 5) uniform sampler2D uStarLight;
+layout(set = 0, binding = 6) uniform sampler2D uDepth;
 
 layout(push_constant) uniform TonemapPC {
     float exposure;
@@ -29,14 +46,16 @@ layout(push_constant) uniform TonemapPC {
     float maxOutputNits;
     int preserveAlpha; // 0 = opaque; 1 = pass source .a; 2 = derive RGB coverage for UI
     int useAutoExposure; // 0 = use pc.exposure; 1 = read the metered exposure from uExposure
-    float ictcpChromaCompression; // effective HDR10/HDR10+ strength; 0 = exact pass-through
+    float nightTintStrength; // the artistic night tint's strength (PostProcessVolume::NightTintStrength), 0 = none
+    float nightTintR;        // its hue, linear Rec.709 at luminance 1
+    float nightTintG;
+    float nightTintB;
+    GE_CUBE_LUT_PUSH_MEMBERS // the Cube LUT: intensity 0 = none; sampled here at the Finish stage
 } pc;
 
 // Canonical HDR paper-white floor (framebuffer 1.0 == 80 nits anchor). Mirrors
 // Rendering::kHdrPaperWhiteFloorNits and the same const in encode_srgb.frag.
 const float kHdrPaperWhiteFloorNits = 80.0;
-
-#include "Includes/ictcp.glsl"
 
 // --- The looks ---
 
@@ -226,18 +245,22 @@ vec3 ApplyOutputRangeTonemap(vec3 sceneLinear, vec3 sdrTonemapped)
     return min(ApplyHdrHighlightExtension(sdrTonemapped, outputMax), vec3(outputMax));
 }
 
-vec3 ApplyIctcpHighlightChromaCompression(vec3 rec709Linear)
+// The Cube LUT on the look's display-referred output, before the HDR extension. A LUT is authored
+// for display values in [0, 1], so each pixel is looked up at the value it shows: a pixel inside
+// [0, 1] as it is, under SDR and HDR alike (midtones grade as in SDR, at any panel peak), and a
+// pixel above 1.0 (Filmic's HDR highlights) divided by its own largest channel and scaled back, so
+// above 1.0 the LUT grades a highlight's color, not its tone. A grade of the HDR range that does not
+// depend on the display is the Grade stage, sampled before the look (hdr_color_fx.frag). The no-look
+// view shows the image without any grade, and a slot with no usable LUT (no tables flagged)
+// samples nothing.
+vec3 ApplyCubeLutFinish(vec3 displayReferred)
 {
-    // Exact pass-through at zero strength: no clamp, no matrix round trip.
-    if (pc.ictcpChromaCompression <= 0.0)
-        return rec709Linear;
-
-    const vec3 compressed =
-        GE_IctcpCompressHighlightChroma(rec709Linear,
-                                        pc.ictcpChromaCompression,
-                                        max(pc.paperWhiteNits, kHdrPaperWhiteFloorNits),
-                                        pc.maxOutputNits);
-    return min(compressed, vec3(HdrOutputMaxLinearValue()));
+    if (pc.look == kNoLookArm || pc.lutStage != kCubeLutStageFinish || pc.lutIntensity <= 1e-5 ||
+        pc.lutFlags == 0)
+        return displayReferred;
+    GE_CubeLutParams lut = GE_CUBE_LUT_PARAMS(pc);
+    float scale = max(max(max(displayReferred.r, displayReferred.g), displayReferred.b), 1.0);
+    return GE_ApplyCubeLut(displayReferred / scale, lut, uLut3d, uLut1d) * scale;
 }
 
 vec3 LuminanceHeatmap(vec3 sceneLinear)
@@ -246,6 +269,25 @@ vec3 LuminanceHeatmap(vec3 sceneLinear)
     float nits = dot(max(sceneLinear, vec3(0.0)), lumaWeights) * max(pc.paperWhiteNits, kHdrPaperWhiteFloorNits);
     float t = clamp(log2(max(nits, 0.01) / 100.0) / 6.0 + 0.5, 0.0, 1.0);
     return mix(vec3(0.0, 0.1, 0.8), mix(vec3(0.0, 0.9, 0.2), vec3(1.0, 0.1, 0.0), smoothstep(0.45, 1.0, t)), smoothstep(0.0, 0.55, t));
+}
+
+// The artistic night tint (Includes/night_tint.glsl). Its two reads (an explicit-LOD sample and a texel
+// fetch) are legal after the per-pixel early-outs: WGSL refuses implicit-LOD sampling in non-uniform
+// flow. The depth is fetched, not filtered, so WebGPU binds the depth texture as unfilterable.
+vec3 ApplyNightTint(vec3 lin, float adaptationNits, vec2 uv, vec3 storedColor)
+{
+    const vec3 kY = vec3(0.2126, 0.7152, 0.0722);
+    vec3 tint = max(vec3(pc.nightTintR, pc.nightTintG, pc.nightTintB), vec3(0.0));
+    if (pc.nightTintStrength <= 0.0 || dot(tint, kY) <= 0.0)
+        return lin;
+    float sceneNits = GE_NightTintSceneNits(dot(storedColor, kY), GE_PreExposure());
+    // Skip the fetches where the rest of the rule already spares the pixel.
+    if (GE_NightTintAmount(pc.nightTintStrength, adaptationNits, sceneNits, 0.0) <= 0.0)
+        return lin;
+    ivec2 depthTexel = min(ivec2(uv * vec2(textureSize(uDepth, 0))), textureSize(uDepth, 0) - 1);
+    float contrast = GE_NightTintStarContrast(dot(storedColor, kY), textureLod(uStarLight, uv, 0.0).r,
+                                              texelFetch(uDepth, depthTexel, 0).r);
+    return GE_NightTintApply(lin, tint, GE_NightTintAmount(pc.nightTintStrength, adaptationNits, sceneNits, contrast));
 }
 
 void main()
@@ -261,15 +303,24 @@ void main()
     float exposure = (pc.useAutoExposure != 0 && autoExposure > 0.0 && autoExposure < 1e9)
                          ? autoExposure
                          : pc.exposure;
+    // The input already carries P, so the exposure left to apply is exposure / P (near 1).
+    exposure /= GE_PreExposure();
 
     // Debug modes
     if (pc.ditherMode == 99) { oColor = vec4(1.0, 0.0, 1.0, 1.0); return; }
     if (pc.ditherMode == 98) { vec3 raw = texture(uHDRColor, uv).rgb * exposure; oColor = vec4(raw, 1.0); return; }
 
-    vec3 hdr = max(texture(uHDRColor, uv).rgb * exposure, vec3(0.0));
+    vec3 stored = texture(uHDRColor, uv).rgb;
+    vec3 hdr = max(stored * exposure, vec3(0.0));
     vec3 lin = ApplyTonemap(hdr);
+    lin = ApplyCubeLutFinish(lin);
+    // The gate's adaptation: the meter's reading while Auto exposure runs (before the clamps and the
+    // curve), else what the exposure maps to mid-grey. exposure x P is the scale from absolute
+    // scene-linear to display.
+    float meteredNits = pc.useAutoExposure != 0 ? GE_MeteredNits() : -1.0;
+    float adaptationNits = GE_NightTintAdaptationNits(meteredNits, exposure * GE_PreExposure());
+    lin = ApplyNightTint(lin, adaptationNits, uv, stored);
     lin = ApplyOutputRangeTonemap(hdr, lin);
-    lin = ApplyIctcpHighlightChromaCompression(lin);
     // Default to opaque (1.0) so the main view is unchanged. Lens-flare thumbnails
     // use mode 2 because their RGB atlas is luminous data on black rather than a
     // conventional alpha texture. Normalize the straight RGB representation before

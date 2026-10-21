@@ -107,7 +107,8 @@ export interface MeshRenderer {
     meshGpuHandleId: bigint;
     materialAssetGuid: AssetRef;
     modelAssetGuid: AssetRef;
-    renderLayerMask: number;
+    /** The render layers this mesh is on; bit i is layer i. */
+    renderLayers: number;
     castShadows: boolean;
     receiveShadows: boolean;
     motionVectors: boolean;
@@ -118,6 +119,8 @@ export declare const MeshRenderer: ComponentType<MeshRenderer>;
 // Camera (Components/Rendering/Camera.h). The camera looks along the entity's +Z.
 
 export type ExposureMode = 'Fixed' | 'Manual' | 'Physical' | 'Auto';
+/** What Auto meters: the frame's pixels, or the light falling on the world. */
+export type ExposureMeter = 'Picture' | 'Lights';
 export type CameraSensorPreset =
     | 'Custom' | 'Standard8' | 'Super8' | 'Film16' | 'Super16' | 'Film35TwoPerf' | 'Film35ThreePerf'
     | 'Film35Academy' | 'Super35' | 'Film65FivePerf' | 'Imax15Perf' | 'MicroFourThirds' | 'ApsC'
@@ -133,15 +136,26 @@ export interface Camera {
     nearZ: number;
     /** Meters. */
     farZ: number;
-    cullingMask: number;
+    /** The render layers this camera draws; bit i is layer i. */
+    visibleLayers: number;
     postProcessProfileId: number;
     /** 0 = the engine default, 1 = off, 2, 4 or 8 samples. */
     msaaSamples: number;
-    /** 0 = the engine default; otherwise the anti-aliasing mode + 1. */
+    /**
+     * The anti-aliasing mode plus one. 0 = the engine default (MSAA), 1 = off, 2 = MSAA (the count is
+     * `msaaSamples`), 3 = TAA. 4 = FXAA, 5 = SMAA and 6 = two-frame FXAA have no pass in the web
+     * pipeline, so on a page they give no anti-aliasing.
+     */
     antiAliasing: number;
-    /** 0 = inherit the engine's render scale; otherwise a fixed scale. */
+    /**
+     * 0 = inherit the engine's render scale (1). Otherwise the fraction of the width and height the
+     * scene draws at before it is scaled up to the canvas (TAA upscales when it runs). It applies only
+     * to a single-sample camera (TAA, anti-aliasing off, or `msaaSamples` 1); under MSAA it does
+     * nothing, and the engine logs one warning.
+     */
     renderScale: number;
-    postProcessMask: number;
+    /** The volume layers this camera takes; bit i is layer i. */
+    volumeLayers: number;
     exposureControl: ExposureMode;
     /** Fixed mode: linear multiplier. */
     exposure: number;
@@ -170,6 +184,7 @@ export interface Camera {
     autoExposureMaxEv: number;
     autoExposureSpeedUp: number;
     autoExposureSpeedDown: number;
+    autoExposureMeter: ExposureMeter;
     aspectPreset: number;
     customAspectWidth: number;
     customAspectHeight: number;

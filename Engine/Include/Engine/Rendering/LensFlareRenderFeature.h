@@ -117,6 +117,7 @@ class LensFlareRenderFeature : public IRenderFeature
     uint32_t GetAtlasBinding() const { return m_AtlasBinding; }       // uAtlas
     uint32_t GetInstanceBinding() const { return m_InstanceBinding; } // Instances (SSBO)
     uint32_t GetDepthBinding() const { return m_DepthBinding; }       // uSceneDepth
+    uint32_t GetExposureBinding() const { return m_ExposureBinding; } // uExposure (ExposureHistory)
 
   private:
     bool m_Initialized = false;
@@ -131,6 +132,7 @@ class LensFlareRenderFeature : public IRenderFeature
     uint32_t m_AtlasBinding = 0u;
     uint32_t m_InstanceBinding = 1u;
     uint32_t m_DepthBinding = 2u;
+    uint32_t m_ExposureBinding = 3u;
 
     // Sized from the device's frames-in-flight so a slot is never reused while the
     // GPU may still be reading it.

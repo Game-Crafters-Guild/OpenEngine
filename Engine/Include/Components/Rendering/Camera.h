@@ -1,7 +1,10 @@
 #pragma once
 
 #include "Types/Types.h"
+#include "Rendering/RenderLayerMask.h"
+#include "Components/Rendering/ExposureCompensationCurve.h"
 #include "Components/Rendering/PostProcessVolume.h" // ExposureMode (exposure is a camera/sensor property)
+#include "Mathematics/Curve.h"
 
 #include <algorithm>
 #include <cmath>
@@ -94,7 +97,8 @@ struct Camera {
     float32 OrthographicSize {10.0f};
     float32 NearZ {0.01f};
     float32 FarZ {1000.0f};
-    uint32 CullingMask {0xFFFFFFFFu};
+    // The render layers this camera draws.
+    Rendering::RenderLayerMask VisibleLayers = Rendering::RenderLayerMask::All();
     uint32 PostProcessProfileId {0};
     // 0 = Default (uses scene view MSAA from RenderServices), 1 = Off, 2/4/8 = explicit.
     uint32 MSAASamples {0};
@@ -111,15 +115,15 @@ struct Camera {
     // controller. Applied as the view's per-view render-scale override.
     float32 RenderScale {0.0f};
 
-    // Bitmask of post-process volume layers this camera samples. ANDed against
-    // PostProcessVolume::PostProcessMask; volume contributes when non-zero.
-    uint32 PostProcessMask {0xFFFFFFFFu};
+    // The volume layers this camera takes: a PostProcessVolume affects it when the
+    // volume's VolumeLayers intersect these.
+    Rendering::RenderLayerMask VolumeLayers = Rendering::RenderLayerMask::All();
 
     // Exposure (the camera's sensor/eye) — the single source of truth for exposure. When this camera
     // drives a view, its exposure sets that view's exposure (PostProcessVolumes contribute only grading
     // / tonemap / bloom / fog, not exposure). Views without a Camera (e.g. the editor Scene View) expose
     // from the world default (Auto). Fields mirror the photographic controls: Fixed linear, Manual EV100,
-    // Physical camera, or Auto (histogram metering + eye adaptation). See Engine/Rendering/Exposure.h.
+    // Physical camera, or Auto (a meter + eye adaptation). See Engine/Rendering/Exposure.h.
     ExposureMode ExposureControl {ExposureMode::Auto};
     float32 Exposure {1.0f};              // Fixed mode: linear scene multiplier (1 = identity)
     float32 ManualExposureEV {kDefaultManualExposureEv}; // Manual mode: absolute EV100
@@ -151,13 +155,21 @@ struct Camera {
     // it — the inspector flips it to Custom when the height is edited by hand.
     CameraSensorPreset SensorPreset {CameraSensorPreset::FullFrame};
     float32 SensorHeightMm {24.0f};
-    // Auto: the darkest scene EV100 the meter may fully expose (the max-gain clamp). +4 lets a
-    // moonlit night meter near-correct while a starlit scene stays several stops under — night
-    // reads as night. Lower it per-camera for deliberate day-for-night brightening (-4 ≈ 3250x gain).
-    float32 AutoExposureMinEv {4.0f};
+    // Auto: the darkest scene EV100 the meter may fully expose (the max-gain clamp); a scene that reads
+    // below it shows at the floor. The Lights meter reads a full moon at about EV100 -4, a moonless
+    // twilight at about -7 and a moonless night near -12. The Picture meter (the default below) reads
+    // the ground and the sky, never the stars: on the Basic 3D template a full moon at about -4.3 and a
+    // moonless night at about -10.7. The compensation curve below, not the floor, keeps a night dark.
+    float32 AutoExposureMinEv {kDefaultAutoExposureMinEv};
     float32 AutoExposureMaxEv {18.0f};
     float32 AutoExposureSpeedUp {1.0f};
     float32 AutoExposureSpeedDown {3.0f};
+    // Auto: what the camera meters. The clamps, speeds and compensation apply to either meter.
+    ExposureMeter AutoExposureMeter {ExposureMeter::Picture};
+    // Auto: stops added to the exposure at each metered scene EV100 (key Time the EV100, Value the
+    // stops; ExposureCompensationCurve.h). The default is 0 by day and in a lamp-lit room and darkens a
+    // moonlit night by 2.5 stops.
+    Math::Curve AutoExposureCompensationCurve = DefaultExposureCompensationCurve();
 
     // Aspect ratio preset for projection and letterboxing. 0 = match viewport (native).
     uint32 AspectPreset {0};

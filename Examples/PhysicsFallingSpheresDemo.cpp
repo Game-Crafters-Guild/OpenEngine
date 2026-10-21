@@ -151,7 +151,7 @@ static GroundEntities CreateGround(GameEngine::ECS::World& world)
 
     MeshRenderer mr{};
     mr.meshId = 1u;
-    mr.renderLayerMask = 1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
     world.AddComponentImmediate(e, mr);
 
     // Physics: static floor. Use a box (more robust than infinite plane for demos).
@@ -214,7 +214,7 @@ static GroundEntities CreateGround(GameEngine::ECS::World& world)
         // Visualize the post (otherwise it's physics-only and you won't see it).
         MeshRenderer postMr{};
         postMr.meshId = 1u; // cube
-        postMr.renderLayerMask = 1u;
+        postMr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
         world.AddComponentImmediate(c, postMr);
 
         GameEngine::Components::PhysicsColliderOwner owner{};
@@ -267,7 +267,7 @@ static std::vector<GameEngine::ECS::EntityHandle> CreateSpheres(GameEngine::ECS:
 
             MeshRenderer mr{};
             mr.meshId = 2u;
-            mr.renderLayerMask = 1u;
+            mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
             world.AddComponentImmediate(e, mr);
 
             PhysicsBody pb{};
@@ -458,7 +458,7 @@ int main()
     // Camera + view setup (owned by RenderServices, independent of ECS).
     const Rendering::CameraId camId = rs->Views().AllocateCamera("DemoCamera");
     const Rendering::ViewId viewId = rs->Views().AllocateView("DemoView", camId);
-    rs->Views().SetViewRenderLayerMask(viewId, 1u);
+    rs->Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     rs->Views().SetViewWorldId(viewId, world.GetWorldId());
 
     // Fixed timestep

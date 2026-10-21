@@ -1,11 +1,11 @@
 ---
 title: glTF clip schema
-description: Declaring a clip's loop, speed, root motion bone, translation mode and events in a glTF animation's extras.
+description: Declaring a clip's loop, speed, root motion bone, translation mode, and events in a glTF animation's extras.
 sidebar:
   order: 5
 ---
 
-A `.gltf` or `.glb` file can declare how each of its animations plays, in a block the engine reads at import: the `clip` key of the animation's `extras`. The block sets the clip's loop and speed, its root motion bone, how its translation keys apply, and its events. It is the one key of an animation's extras the engine reads itself; every other key is the game's (see [Model extras](../assets/model-extras.mdx)). The block applies to clips embedded in a model and to clip files alike.
+A `.gltf` or `.glb` file can declare how each of its animations plays, in a block the engine reads at import: the `clip` key of the animation's `extras`. The block sets the clip's loop and speed, its root motion bone, how its translation keys apply, and its events. It is the one key of an animation's extras the engine reads itself. Every other key is the game's (see [Model extras](../assets/model-extras.mdx)). The block applies to clips embedded in a model and to clip files alike.
 
 ```json title="A clip block in an animation's extras"
 "animations": [{
@@ -26,7 +26,7 @@ A `.gltf` or `.glb` file can declare how each of its animations plays, in a bloc
 
 ## Fields
 
-Every field but `schemaVersion` is optional; a field the block leaves out keeps the default. A whole number may be written with or without a decimal point (`19` or `19.0`); a name is a non-empty string with no control characters (no byte below U+0020, and not U+007F).
+Every field but `schemaVersion` is optional. A field the block leaves out keeps the default. A whole number may be written with or without a decimal point (`19` or `19.0`). A name is a non-empty string with no control characters (no byte below U+0020, and not U+007F).
 
 | Field | Value | Default | What the engine does with it |
 |---|---|---|---|
@@ -41,9 +41,9 @@ Every field but `schemaVersion` is optional; a field the block leaves out keeps 
 
 An event's `frame` counts from the clip's start, frame 0, at the rate the clip is sampled: the key count of the clip's channel with the most keys (the first such channel on a tie), less one, over that channel's time span. A clip exported with a key on every frame at 30 frames per second is sampled at 30, so frame 19 is at 19 / 30 = 0.633 seconds. Events need that rate: a clip whose channel with the most keys has no two keys apart in time cannot carry events.
 
-The clip ends at frame *length × rate*, which need not be a whole number: a clip keyed at 10 frames per second that lasts 1.06 seconds ends at frame 10.6. An event at the end frame or before it is read; an event after it could never fire, so it refuses the block (frame 11 in that clip, even though it is less than one frame past the end). An exporter that counts frames from 1 shows up here.
+The clip ends at frame *length × rate*, which need not be a whole number: a clip keyed at 10 frames per second that lasts 1.06 seconds ends at frame 10.6. An event at the end frame or before it is read. An event after it could never fire, so it refuses the block (frame 11 in that clip, even though it is less than one frame past the end). An exporter that counts frames from 1 shows up here.
 
-Key times are 32-bit floats, so a clip keyed on every frame computes its end a rounding error away from its last frame, and the error grows with the clip's length. An event counts as on the end frame when it lies within four float epsilons of it (about 5e-7 of the end frame: 0.012 frames at frame 25 600, 1 024 seconds at 25 frames per second), and never more than half a frame past it (the limit from about a million frames on). So an event on the frame after the end is refused up to about sixteen million frames (155 hours at 30 frames per second), and an event on the last frame of a clip keyed on every frame is read up to about four million frames (39 hours at 30 frames per second); past those lengths, 32-bit key times cannot place a frame to within half a frame, so neither the last frame nor the one after it is certain.
+Key times are 32-bit floats, so a clip keyed on every frame computes its end a rounding error away from its last frame, and the error grows with the clip's length. An event counts as on the end frame when it lies within four float epsilons of it (about 5e-7 of the end frame: 0.012 frames at frame 25 600, 1 024 seconds at 25 frames per second), and never more than half a frame past it (the limit from about a million frames on). So an event on the frame after the end is refused up to about sixteen million frames (155 hours at 30 frames per second), and an event on the last frame of a clip keyed on every frame is read up to about four million frames (39 hours at 30 frames per second). Past those lengths, 32-bit key times cannot place a frame to within half a frame, so neither the last frame nor the one after it is certain.
 
 ## Loop and speed
 
@@ -59,20 +59,20 @@ The clip's `loop` and `speed` have the lowest precedence of every loop and speed
 
 :::caution
 
-Every one of these settings always holds a value (loop on and speed 1 unless changed), so a clip's `loop` and `speed` do not change playback today. Set the loop and speed you want on the Animator, the library entry, the controller motion or the graph node that plays the clip.
+Every one of these settings always holds a value (loop on and speed 1 unless changed), so a clip's `loop` and `speed` do not change playback today. Set the loop and speed you want on the Animator, the library entry, the controller motion, or the graph node that plays the clip.
 
 :::
 
 ## Refusals and bounds
 
-A block the engine cannot read whole is refused whole: the clip imports with its keys and without any of the block's settings or events, and the import logs one warning that names the file, the animation and the field at fault. A block is refused when:
+A block the engine cannot read whole is refused whole: the clip imports with its keys and without any of the block's settings or events, and the import logs one warning that names the file, the animation, and the field at fault. A block is refused when:
 
 - its `schemaVersion` is missing or is not `1`;
-- a field has a value of the wrong kind (a `loop` that is not `true` or `false`, a `speed` of 0, a frame of 2.5, an event with no `name`, a name holding a control character), or the block, `rootMotion` or an event has a field this schema does not define: a misspelled field is refused rather than ignored. The fields read before the one at fault are discarded with the rest;
+- a field has a value of the wrong kind (a `loop` that is not `true` or `false`, a `speed` of 0, a frame of 2.5, an event with no `name`, a name holding a control character), or the block, `rootMotion`, or an event has a field this schema does not define: a misspelled field is refused rather than ignored. The fields read before the one at fault are discarded with the rest;
 - an event lies after the clip's end, or the clip has events and no sampling rate;
 - the animation's extras hold more than 262 144 bytes (256 KiB), nest objects and arrays more than 16 levels deep, or give one object the same key twice (JSON leaves which value wins to the reader, so this reader refuses it). These rules apply to the whole of the animation's extras, the `clip` key and any other key beside it: a model file can come from anywhere.
 
-The import checks these rules in one pass over the extras and then parses them in a second, and both take time in proportion to the size of the text, so a block at the 256 KiB bound reads as quickly as its size allows whatever it holds.
+The import checks these rules in one pass over the extras and then parses them in a second. Both take time in proportion to the size of the text, so a block at the 256 KiB bound reads as quickly as its size allows whatever it holds.
 
 A warning quotes at most 64 bytes of any text from the file (a field name, an event name), followed by that text's length in bytes when it is longer.
 
@@ -87,12 +87,3 @@ An animation with no `clip` key, or whose extras are not a JSON object, imports 
 ## Editable copies
 
 The settings and events belong to the clip read from the glTF file. An editable copy of that clip, the `.anim` file the Animation window saves when you edit an imported clip, holds its keys only: the `.anim` format has no place for the clip schema, so the copy has no settings and no events, and undo in the Animation window leaves none behind. Keep the settings and events in the glTF file.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/animation/gltf-clip-schema.html`; the Loop and speed links follow the heading's anchor.
-- 2026-09-30: playback fires a clip's events; [Animation events](./animation-events.mdx) says when and how a game reads them.
-- 2026-09-30: the tolerance on the end frame is at most half a frame, so the next frame is refused at every length a 32-bit key time can resolve (about sixteen million frames); a warning prints the file's frame as the shortest number that reads back as it.
-- 2026-09-30: an event on the end frame is read within four float epsilons of it, at any clip length; a warning prints frames as plain numbers; the extras are read in time proportional to their size.
-- 2026-09-30: whole numbers may be written with a decimal point; a speed that rounds to 0 as a float, a key given twice in one object and a name holding a control character are refused; the clip's end is its length times its rate, not rounded; the rate comes from the channel with the most keys; warnings quote at most 64 bytes of file text; editable copies hold no settings or events.
-- 2026-09-30: first version. `schemaVersion` 1: `loop`, `speed`, `rootMotion`, `translations` and `events` read at import from glTF and GLB animations; the loop and speed precedence; refusals and bounds.

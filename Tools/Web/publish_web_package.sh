@@ -6,7 +6,8 @@
 #   bash Tools/Web/publish_web_package.sh <package dir>              a dry run (the default)
 #   bash Tools/Web/publish_web_package.sh <package dir> --publish    the real publish
 #
-# It refuses a package that build_web_package.py --check does not pass, or that carries the
+# It refuses a package that build_web_package.py --check does not pass (the structural check,
+# seconds; the compressed-size report is a build-time report, not run here), or that carries the
 # engine pack as parts (a --site package: npm would ship neither the pack nor its parts), and it
 # reads the file list back from npm's own dry run (npm pack --dry-run) before a real publish;
 # the dist-tag comes from the version and is checked against package.json's publishConfig. npm

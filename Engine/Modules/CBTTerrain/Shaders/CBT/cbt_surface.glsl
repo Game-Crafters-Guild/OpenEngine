@@ -227,15 +227,17 @@ struct TerrainParamsEntry
     float GrassTextureCardsPerSquareMeter;
     float GrassTextureSize;
     float GrassPlacementSeed;
-    float GrassMaxWidthRatio;
+    float GrassBladeTilt;
+    float GrassBladeBend;
+    float GrassBladeTwist;
+    float GrassBladeTaperStart;
+    float GrassTuftFan;
     float GrassClumpSize;
     float GrassClumpHeightVariance;
     float GrassClumpAlignment;
-    float GrassClumpGather;
+    float GrassClumpTaper;
     float GrassHueVariation;
-    float GrassRootShade;
-    float GrassBladeNormalForm;
-    float GrassBladeScatterGain;
+    float GrassCanopyOcclusion;
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
@@ -366,10 +368,15 @@ struct CBTSurfaceParamsData
     uint AtlasNormalBindless;
     uint AtlasSplatCoarseBindless;
     uint AtlasNormalCoarseBindless;
+    // The atlas grass control field and its coarse field (mirror CBTSurfaceParams in CBTLayout.h).
+    uint AtlasGrassBindless;
+    uint AtlasGrassCoarseBindless;
+    uint _PadAtlasGrass0;
+    uint _PadAtlasGrass1;
     // Analytic sphere modifiers (sculpt shape-accuracy S2/S3 — mirror CBTSurfaceParams tail in
-    // CBTLayout.h; math in cbt_analytic.glsl). DabCount (S3, the old pad slot) keeps the
-    // vec4-struct array 16-aligned (std430: 88 + 4 + 4 = 96); transient brush dabs occupy slots
-    // [Count, Count+DabCount). Both 0 = every analytic branch below is skipped (flag-off dark-ship).
+    // CBTLayout.h; math in cbt_analytic.glsl). DabCount keeps the vec4-struct array 16-aligned
+    // (std430: 104 + 4 + 4 = 112); transient brush dabs occupy slots [Count, Count+DabCount). Both
+    // 0 = every analytic branch below is skipped (flag-off dark-ship).
     uint SphereAnalyticCount;
     uint SphereAnalyticDabCount;
     CBTSphereAnalyticFlatten SphereAnalytic[CBT_MAX_SPHERE_ANALYTIC];
@@ -383,7 +390,7 @@ const uint CBT_DEBUG_ATLAS_SLOTS = 2u; // tint by the per-pixel resolved atlas s
 // guarantees only 10 storage buffers per stage, and this surface reaches exactly that on its own
 // (6 here + 4 from the lit path) — so the moment the lit path adds one, the terrain pipeline fails
 // to CREATE and the terrain is not degraded but absent. Uniform buffers have their own, separate
-// budget. The record fits: 864 B against the 64 KiB uniform binding limit, and the ring's
+// budget. The record fits: 880 B against the 64 KiB uniform binding limit, and the ring's
 // per-slot stride is already 256-aligned, which is what a uniform offset-bind needs.
 //
 // One element, because the fragment only ever reads element 0 — CBTRenderFeature offset-binds this
@@ -879,6 +886,36 @@ vec3 CBT_MaterialOrm(uint layerOrd, TerrainMaterialRecordData mat, CBTTriplanarC
 // the functions ExtractShaderBlock.cmake lifts out of that file for CBTMaterialBlendTests to compile
 // as C++, so the tests execute them exactly as they ship here.
 #include "Includes/terrain_blend_resolve.glsl"
+// The grass canopy's coverage and occlusion, shared with the placement and the blade surface.
+#include "Includes/terrain_grass_canopy.glsl"
+
+// The grass control field (RG8: height, density) at a terrain UV, read where the placement reads it:
+// the unified map on a planar terrain, the resident atlas slot or its coarse field on an
+// atlas-backed one, (1, 1) where no region is authored. The compat profile binds no control map on
+// this surface and reads (1, 1): under a grass region its ground takes the field's splat coverage.
+vec2 CBT_GrassRegionControls(TerrainParamsEntry tp, vec2 uv)
+{
+#if defined(GE_COMPAT_PROFILE)
+    return vec2(1.0);
+#else
+    if (gCbtSurf.Params.AtlasBacked != 0u)
+    {
+        CBTSurfaceParamsData sp = gCbtSurf.Params;
+        if (sp.AtlasGrassBindless == 0u && sp.AtlasGrassCoarseBindless == 0u)
+            return vec2(1.0);
+        AtlasResolve r = CBT_SurfResolve(uv, sp);
+        if (r.Resident && sp.AtlasGrassBindless != 0u)
+            return texture(GE_BTEX(sp.AtlasGrassBindless, GE_TS_CLAMP), r.SlotUV).rg;
+        if (sp.AtlasGrassCoarseBindless != 0u)
+            return texture(GE_BTEX(sp.AtlasGrassCoarseBindless, GE_TS_CLAMP),
+                           CBT_SurfCoarseUV(uv, sp.AtlasCoarseDim)).rg;
+        return vec2(1.0);
+    }
+    if (tp.GrassControlBindless == 0u)
+        return vec2(1.0);
+    return CBT_LATTICE_TAP(tp.GrassControlBindless, uv).rg;
+#endif
+}
 
 SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 {
@@ -1131,6 +1168,24 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     else
         weights.x = 1.0;
 
+    // The grass canopy over this ground: the field coverage here, the probability the placement
+    // spawns a blade with. The splat half reads the CHANNEL weights (the placement's mask reads the
+    // grass layer as a channel, before any role resolve) with the same splat-or-not answer the
+    // placement takes; the region half reads the same grass control field. A sphere places no grass
+    // and carries a zero canopy depth. A terrain with no grass pays nothing for the reads.
+    float grassCanopy = 1.0;
+    if (tp.GrassCanopyOcclusion > 0.0)
+    {
+        grassCanopy = GrassGroundCanopyOcclusion(
+            tp.GrassCanopyOcclusion,
+            GrassFieldCoverage(
+                GrassSplatCoverage(weights, min(tp.GrassLayerIndex, 3u), tp.GrassMaskThreshold,
+                                   !isSphere && (CBT_HAS_SPLATMAP(tp)
+                                                || (gCbtSurf.Params.AtlasBacked != 0u
+                                                    && CBT_HAS_ATLAS_MAP(gCbtSurf.Params.AtlasSplatBindless)))),
+                CBT_GrassRegionControls(tp, sIn.uv0)));
+    }
+
     // The channel -> material indirection (SF2 telemetry seam): the splat carries four channel
     // weights and this is where a weight stops meaning "layer i" and starts meaning "whatever
     // material role i points at". Both domains take it — the sphere's slope+altitude blend and the
@@ -1196,7 +1251,10 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         anyNormalMap = anyNormalMap || CBT_MAT_HAS_NORMAL(mat);
     }
 
-    o.baseColor = baseColor;
+    // The canopy shade of the grass standing here, the same depth its blade roots take
+    // (terrain_grass_surface.glsl): the soil under a field gets less of the sun and the sky than open
+    // ground, and the contact is shaded on both sides or on neither.
+    o.baseColor = baseColor * grassCanopy;
     // Renormalize only when a map actually contributed. With none bound the accumulation is just
     // normalWS scaled by the weight sum, so leaving it alone keeps every untextured terrain
     // byte-identical to the pre-Phase-B path rather than routing it through a normalize().

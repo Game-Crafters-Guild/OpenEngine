@@ -103,14 +103,14 @@
 	width: 14px;
 	height: 14px;
 	flex-shrink: 0;
-	background-image: url("editor:Icons/alert-circle.png");
+	background-image: url("editor:Icons/alert-circle.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
 }
 
 .inspector-notice-title {
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .inspector-notice-glyph-warning {
@@ -122,7 +122,7 @@
 }
 
 .inspector-notice-glyph-information {
-	background-image: url("editor:Icons/info.png");
+	background-image: url("editor:Icons/info.svg");
 	background-image-tint: var(--ui_color_text_dim);
 }
 

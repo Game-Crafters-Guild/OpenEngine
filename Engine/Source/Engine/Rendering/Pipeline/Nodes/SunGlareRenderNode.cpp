@@ -1,6 +1,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.h"
 
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Engine/Rendering/SunGlareRenderFeature.h"
@@ -295,6 +296,11 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
     const uint32_t viewParamsBinding = feature.GetViewParamsBinding();
     const uint32_t shadowArrayBinding = feature.GetShadowArrayBinding();
     const uint32_t shadowDataBinding = feature.GetShadowDataBinding();
+    const uint32_t exposureBinding = feature.GetExposureBinding();
+    // The glare lands in scene colour at the frame's pre-exposure P.
+    const PipelineBufferBindingRG exposure = ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return;
     const SamplerHandle shadowSampler = feature.GetShadowSampler();
     // A view without casters still needs a depth array in the shadow slot: WebGPU
     // bakes the depth sample type into the layout, so the LUT cannot stand in.
@@ -321,10 +327,12 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
                 p.Read(shadowArray, RenderGraph::RGTextureRead::Sampled);
             if (shadowData.Graph.IsValid())
                 p.Read(shadowData.Graph, RenderGraph::RGBufferRead::Uniform);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
         },
         [pipe, layout, sampler, shadowSampler, shadowFallback, pc, trans, depth, viewParams,
          shadowArray, shadowData, vpX, vpY, vpW, vpH, transBinding, depthBinding,
-         viewParamsBinding, shadowArrayBinding, shadowDataBinding](RenderGraph::RGContext& ctx)
+         viewParamsBinding, shadowArrayBinding, shadowDataBinding, exposureBinding,
+         exposure](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
             auto* cl = ctx.Cmd;
@@ -368,6 +376,8 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
                 shadowData.IsValid() ? shadowData.Buffer : viewParams.Buffer,
                 static_cast<size_t>(shadowData.IsValid() ? shadowData.Offset : viewParams.Offset),
                 static_cast<size_t>(shadowData.IsValid() ? shadowData.Size : viewParams.Size));
+            dev->UpdateStorageBufferBinding(ds, exposureBinding, exposure.Buffer, exposure.Offset,
+                                            exposure.Size);
 
             cl->SetPipeline(pso);
             cl->SetViewport(static_cast<float>(vpX), static_cast<float>(vpY),

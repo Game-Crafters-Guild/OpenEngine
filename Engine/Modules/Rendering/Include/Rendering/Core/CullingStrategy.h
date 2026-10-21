@@ -47,7 +47,7 @@ struct ViewCullingContext
     // subrange without having to plumb a parallel API.
     uint32_t FirstInstance = 0;
     uint32_t InstanceCount = 0;
-    uint32_t RenderLayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
 
     uint32_t FrameIndex = 0;
     float DeltaTime = 0.0f;

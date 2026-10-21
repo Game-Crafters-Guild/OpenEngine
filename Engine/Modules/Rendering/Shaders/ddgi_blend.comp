@@ -1,5 +1,8 @@
 #version 450
 
+// Probe irradiance is absolute scene-linear, never pre-exposed (P = 1 by construction): the
+// forward pass that samples it applies P to its output (adapter_forward.glsl).
+
 // DDGI blend kernel (M2/M3): cosine-weighted Monte-Carlo hemisphere-irradiance
 // gather from this tick's traced rays into the persistent irradiance STATE
 // buffer (read_write SSBO — the atlas TEXTURE is a separate write-only

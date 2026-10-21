@@ -9,6 +9,7 @@
 #include <mutex>
 #include <vector>
 
+#include "AssetCore/GUID.h"
 #include "ECS/ECS.h"
 #include "ECS/ModuleRegistration.h"
 #include "AssetCore/AssetTypes.h"
@@ -130,6 +131,12 @@ struct InspectorContext {
 
 using InspectorFn = std::function<void(const InspectorContext&)>;
 
+// The state a selected asset's inspector header shows after the asset's name while its load has
+// not landed ("preparing…"), or empty for none, which leaves the default "Loading <file>..."
+// line. Main thread, polled a few times a second while the load runs, so it reads state rather
+// than doing work.
+using AssetLoadingSuffixFn = std::function<std::string(const GUID& guid)>;
+
 // Simple registry for custom inspectors.
 class InspectorRegistry {
 public:
@@ -197,6 +204,29 @@ public:
         m_AssetInspectorOwners[key] = ECS::GetActiveRegistrationModule();
     }
 
+    // Register the pending-load header suffix for an asset type, beside its asset inspector and
+    // from the same module.
+    void RegisterAssetLoadingSuffix(AssetType type, AssetLoadingSuffixFn fn)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_AssetLoadingSuffixes[static_cast<int>(type)] = std::move(fn);
+    }
+
+    // The registered pending-load header suffix for an asset of `type`, or empty when none is
+    // registered or it has nothing to say now.
+    std::string AssetLoadingSuffix(AssetType type, const GUID& guid)
+    {
+        AssetLoadingSuffixFn fn;
+        {
+            std::lock_guard<std::mutex> lock(m_Mutex);
+            auto it = m_AssetLoadingSuffixes.find(static_cast<int>(type));
+            if (it == m_AssetLoadingSuffixes.end())
+                return {};
+            fn = it->second;
+        }
+        return fn(guid);
+    }
+
     // Try to get a registered inspector for an asset type. Returns nullptr if none.
     InspectorFn* TryGetAssetInspector(AssetType type)
     {
@@ -215,6 +245,7 @@ private:
     std::unordered_map<std::type_index, InspectorFn> m_ComponentInspectors;
     std::unordered_map<ECS::ComponentTypeId, InspectorFn> m_ComponentInspectorsById;
     std::unordered_map<int, InspectorFn> m_AssetInspectors;
+    std::unordered_map<int, AssetLoadingSuffixFn> m_AssetLoadingSuffixes;
     // Module stamp per component-inspector registration (C12 attribution;
     // registry bookkeeping — see ECS/ModuleRegistration.h).
     std::unordered_map<ECS::ComponentTypeId, ECS::ModuleRegistrationStamp> m_ModuleOwners;

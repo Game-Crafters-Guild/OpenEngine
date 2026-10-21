@@ -1,13 +1,13 @@
 ---
 title: Gradient-aware deband
-description: The deband filter in the terminal encode that breaks up visible banding in 8-bit gradients, how a Post Process Volume turns it on, where it runs and what it does to a pixel.
+description: The deband filter in the terminal encode that breaks up visible banding in 8-bit gradients, how a Post Process Volume turns it on, where it runs, and what it does to a pixel.
 ---
 
 Content authored as an 8-bit gradient can reach the screen as a visible staircase once lighting and exposure gain magnify each authored step into several output code values. The dither cannot break a step several times its own amplitude, so the engine carries a gradient-aware deband filter in the terminal encode. It is **off unless a volume turns it on**.
 
 ## Turning it on
 
-Attach a `DebandEffect` component to the same entity as a `PostProcessVolume`. A world with no volume, and a volume with no `DebandEffect`, run with the filter off; attaching the component is the explicit enable, and `Enabled = false` is an explicit pin-off. `ThresholdLsb` lerps across volume blends like any other volume property.
+Attach a `DebandEffect` component to the same entity as a `PostProcessVolume`. A world with no volume, and a volume with no `DebandEffect`, run with the filter off. Attaching the component is the explicit enable, and `Enabled = false` is an explicit pin-off. `ThresholdLsb` lerps across volume blends like any other volume property.
 
 | Control | Default | Meaning |
 |---|---|---|
@@ -17,7 +17,7 @@ Attach a `DebandEffect` component to the same entity as a `PostProcessVolume`. A
 | `GE_DEBAND_THRESHOLD` | unset | Debug override for the gate; beats any volume value (clamped 0–16, 0 disables). |
 | `GE_DEBAND_RADIUS` | 8.0 | Debug override for the first-iteration tap radius in pixels (clamped 1–64, ×i per iteration). Process-wide, not a volume knob. |
 
-Precedence is resolved in one place, `Passes::ResolveOutputDebandThresholdLsb()`: environment kill → environment threshold override → the volume value. The environment is read once per process; the volume value flows per frame from `PostProcessSettings::DebandThresholdLsb` to every terminal-encode call site, movie encodes included. Radii and iteration count are compile-time.
+Precedence is resolved in one place, `Passes::ResolveOutputDebandThresholdLsb()`: environment kill → environment threshold override → the volume value. The environment is read once per process. The volume value flows per frame from `PostProcessSettings::DebandThresholdLsb` to every terminal-encode call site, movie encodes included. Radii and iteration count are compile-time.
 
 ## Where it runs
 
@@ -31,13 +31,13 @@ The bands are output-referred (they are born from albedo × lighting × exposure
 
 ## What it does to a pixel
 
-Three iterations; each takes a 4-tap cross at a per-pixel random rotation and distance, with the radius growing per iteration (8/16/24 px reach by default) so it covers plateaus of the widths a camera actually produces. Each tap samples the source and applies the active transfer curve, and the four-tap average is compared against the *original* encoded center, never the evolving result, which is what bounds total displacement to one threshold. The average is adopted only when every channel passes the gate, which keeps hue stable and lets one high-contrast channel veto the blend. The dither then breaks the residual sub-code-value structure; its amplitude is unchanged.
+Three iterations; each takes a 4-tap cross at a per-pixel random rotation and distance, with the radius growing per iteration (8/16/24 px reach by default) so it covers plateaus of the widths a camera actually produces. Each tap samples the source and applies the active transfer curve, and the four-tap average is compared against the *original* encoded center, never the evolving result, which is what bounds total displacement to one threshold. The average is adopted only when every channel passes the gate, which keeps hue stable and lets one high-contrast channel veto the blend. The dither then breaks the residual sub-code-value structure. Its amplitude is unchanged.
 
 The threshold is always scaled by the destination's own quantizer step (`EncodeDitherLsbForFormat`: 1/255 for 8-bit, 1/1023 for RGB10A2, nothing for a float target), the same sizing rule the dither amplitude uses. Neither filter can be sized for a depth the target does not have.
 
 ## Editor views and editor chrome
 
-Editor chrome is never debanded, and this is structural rather than a list of rectangles to avoid. Each editor world view finalizes at its own resolve (`Engine::Renderer::DeclareViewFinalize` applies the transfer curve, this deband and the dither to that view's image alone), and the interface composites onto the finished result. The window's terminal encode then names `FinalizeQuantizer::None` and filters nothing: it rounds the composite onto the backbuffer's step and adds neither filter. Editor viewport pixels therefore run exactly the filter the player runs, so the volume lever previews truthfully.
+Editor chrome is never debanded, and this is structural rather than a list of rectangles to avoid. Each editor world view finalizes at its own resolve (`Engine::Renderer::DeclareViewFinalize` applies the transfer curve, this deband, and the dither to that view's image alone), and the interface composites onto the finished result. The window's terminal encode then names `FinalizeQuantizer::None` and filters nothing: it rounds the composite onto the backbuffer's step and adds neither filter. Editor viewport pixels therefore run exactly the filter the player runs, so the volume lever previews truthfully.
 
 Views finalize only while `Engine::Renderer::ViewFinalizeEligible` holds, which means no active HDR output mode. Under HDR the views decline, the terminal encode owns the transfer curve and its quantizer full-frame, and the chrome exclusion does not apply: the 10-bit step puts that grain at about 0.1%.
 
@@ -50,7 +50,3 @@ Views finalize only while `Engine::Renderer::ViewFinalizeEligible` holds, which 
 ## Checking it is alive
 
 The backbuffer state log line carries `debandThreshold` and `debandRadius`, and `get_render_stats` reports the effective gate as `debandThresholdLsb` in its `output` block, so a filter that is off reads as off rather than having to be seen.
-
-## Changelog
-
-- 2026-10-12: Converted from `Engine/Modules/Rendering/docs/deband-pass.html`; American spelling (center).

@@ -297,12 +297,13 @@ void ShutdownWorldServices()
     }
 }
 
-// Opens the audio device. False (audio disabled) when the init fails or throws.
-bool InitializeAudio(Audio::AudioSystem& audio)
+// Opens the audio output. False (audio disabled) when the init fails or throws.
+bool InitializeAudio(Audio::AudioSystem& audio, Audio::AudioOutput output)
 {
     try
     {
         Audio::AudioSystemConfig audioCfg{};
+        audioCfg.output = output;
         if (!audio.Initialize(audioCfg))
         {
             Logger::Log::Warning("AudioSystem init failed; audio disabled");
@@ -879,11 +880,10 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     }
 #else
     SetPostGate(PostGate::NoQueue);
-    // Even when scripting is compiled out, we still want asset hot
-    // reloading (e.g., UI CSS/layout, textures, shaders) to work when
-    // requested via ScriptsConfig. Honor the engine-level scripts config
-    // for the AssetManager here.
-    if (m_ScriptsConfig.has_value() && m_ScriptsConfig->enableHotReload)
+    // Asset hot reloading (UI CSS and layouts, textures, shaders, terrain material libraries)
+    // does not depend on C# scripting: the same default as a scripting build (on unless the
+    // engine-level scripts config turns it off).
+    if (!m_ScriptsConfig.has_value() || m_ScriptsConfig->enableHotReload)
     {
         m_AssetManager->SetHotReloadEnabled(true);
         Logger::Log::Info("Asset hot reloading enabled (scripting disabled at build time)");
@@ -921,7 +921,8 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         if (Platform::SupportsTransientThreads())
         {
             Audio::AudioSystem* audioRaw = m_AudioSystem.get();
-            m_AudioInit = m_StartupChannel->Submit([audioRaw]() -> bool { return InitializeAudio(*audioRaw); });
+            const Audio::AudioOutput output = config.AudioOutput;
+            m_AudioInit = m_StartupChannel->Submit([audioRaw, output]() -> bool { return InitializeAudio(*audioRaw, output); });
         }
         else
         {
@@ -1039,7 +1040,7 @@ bool EngineCore::JoinAudioInitLocked()
     if (m_AudioInitDeferred)
     {
         m_AudioInitDeferred = false;
-        return m_AudioSystem && InitializeAudio(*m_AudioSystem);
+        return m_AudioSystem && InitializeAudio(*m_AudioSystem, m_Config.AudioOutput);
     }
     if (!m_AudioInit.IsValid())
         return true;

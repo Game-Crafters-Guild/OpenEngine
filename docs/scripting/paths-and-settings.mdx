@@ -106,7 +106,7 @@ Convenience constructors:
 The Player never writes inside its install directory or app bundle, so a signed
 macOS bundle stays valid after the game runs. Its writable files sit in per-user
 directories named after the game: the `gameName` in `game.config`, or `My Game`
-when the configuration is missing, unreadable or names none.
+when the configuration is missing, unreadable, or names none.
 
 **Log.** Each run writes `game-<process id>.log` under
 `StandardPaths::UserLogsRoot(gameName)`, so two copies of a game running at once
@@ -137,7 +137,3 @@ its cooked textures in `<asset cache root>/Packages/<alias>/Tex`. A package
 without an `.assetmanifest` keeps its asset metadata in memory and scans its
 files each time it is mounted. Embedded and `file:` packages keep their derived
 data in their own `.Cache`.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/PathsAndSettings.md`; the notes on preserved and older layouts state the current layout; the note on old package-cache data dropped.

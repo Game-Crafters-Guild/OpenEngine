@@ -110,6 +110,56 @@ the cursor on Win32. When updating GLFW, rebase or remove the patch if upstream
 reports button positions itself, and keep `GlfwButtonCoordinates.*` and
 `PlatformWindowButtonTests` (`Engine/Modules/Platform/Tests`) green.
 
+### ispc and bc7e â€” the texture cook's BC7 encoder
+
+`bc7e` builds Binomial's `bc7e.ispc` (Apache-2.0) from
+[bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo) at commit `b9438627`; the
+kernel itself last changed in `c4a839c5` (2021-03-06). Only the kernel is built:
+the repository's other encoders and the old `ispc.exe` it carries are not used.
+The repository grants Apache-2.0 for the kernel in its `LICENSE` file but holds
+no copy of the licence text, so the portfile downloads the text from apache.org
+and writes both into the port's `copyright`, which the third-party notices
+staging (`cmake/StageThirdPartyNotices.cmake`) picks up with every other port's.
+
+`ispc` installs the official ISPC release binary (`1.32.0`, BSD-3-Clause) as a
+host tool for `bc7e`; nothing of it ships. ISPC publishes no Windows arm64 build,
+so a Windows arm64 host runs the x64 compiler.
+
+On x64, `bc7e` compiles one object per instruction set (`sse4`, `avx2`,
+`avx512skx`) plus ISPC's dispatcher, which picks the best set the CPU has at
+the first call. On arm64 it compiles one `neon` object and no dispatcher.
+`bc7e_isa.ispc`, compiled with the same target list, reports the set bc7e runs
+on: the instruction sets emit different bytes for a small share of blocks, so
+the texture cook folds that set into its cache key. The port also defines
+`BC7E_VERSION` (the commit, the ISPC version and, on arm64, the ISPC CPU) for
+that key. ISPC tunes `neon` code for the machine that runs the compiler unless
+`--cpu` is given, so the arm64 build pins the CPU and every build host emits the
+same object: `apple-a14` (the M1's core, the oldest arm64 Mac) on macOS and
+`cortex-a35`, the plain ARMv8-A baseline, elsewhere. The x64 sets each fix
+their own CPU, and ISPC refuses `--cpu` with more than one target. The port's
+`-O2` comes after CMake's per-configuration optimization
+flag and assertions are compiled out, so the Debug and Release libraries encode
+the same bytes (checked on the texture-cook fixtures when the port was added).
+It is built without `--opt=fast-math`, which changes the bytes as well.
+
+### miniaudio — the libvorbis decoding backend
+
+The registry port installs `miniaudio.h` only. This overlay keeps the baseline
+registry's **0.11.25** source and also installs miniaudio's
+`extras/decoders/libvorbis/miniaudio_libvorbis.{h,c}` beside it, with the
+header's repository-relative `#include "../../../miniaudio.h"` rewritten to
+`#include "miniaudio.h"`. `Engine/Modules/Audio/Source/miniaudio_impl.c`
+compiles the backend and `Audio::MakeDecoderConfig` hands it to every decoder;
+the `libvorbis` port (and `libogg` through it) supplies the decoder.
+
+Ogg Vorbis decodes through libvorbis rather than miniaudio's stb_vorbis
+backend because stb_vorbis 1.22 corrupts the heap or reads through a null
+pointer on malformed comment headers (two of 150 random corruptions of a test
+clip, both with valid page CRCs); libvorbis refused or decoded all 700 cases of
+the same sweep under AddressSanitizer. The two crash files are fixtures of
+`AudioOggVorbisTests`. Remove the overlay when the registry port installs the
+extras.
+
 ## macOS-only overlays (`cmake/macos-ports`)
 
 An overlay in `cmake/ports` reaches every triplet, and vcpkg hashes its files
@@ -207,7 +257,7 @@ removes every configure option. Autotools falls back to `/usr/local`, and
 
 The failure requires `VCPKG_FORCE_SYSTEM_BINARIES=1` with system CMake older
 than 3.31 (3.28.3 in the ARM64 development image). The default x64 Linux and
-Steam Deck builds use vcpkg's pinned CMake 4.3.3 and are unaffected, although
+Steam Deck builds use vcpkg's pinned CMake 4.4.3 and are unaffected, although
 they use the same helper. An x64 build forced to use older system CMake has
 the same failure. `VcpkgMakeOptions.KeepsDefaultInstallPaths` checks omitted,
 empty and explicit exclusion filters for release and debug with the older

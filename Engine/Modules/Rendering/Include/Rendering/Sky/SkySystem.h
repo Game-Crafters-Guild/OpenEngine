@@ -147,8 +147,11 @@ inline void SampleSkyVec3KeyframeCurve(float timeOfDayHours,
 /// end. At latitude 0 on the equinox with north 0 the frame is exactly east = +X, meridian = +Y,
 /// declination 0, and this is the great circle through the zenith.
 ///
-/// The moon rides the SAME circle (the sun's declination), offset in hour angle by
-/// 2pi * moonArcPosition; the visual phase mask is separate. It has no declination of its own.
+/// The moon rides the SAME circle (the sun's declination), 2pi * moonArcPosition of hour angle behind
+/// the sun, as the real moon trails it eastward through the month: at 0.25 it is due south at sunset
+/// (the evening first quarter), and a growing moonArcPosition (AutoMoonArc) makes it rise later each
+/// day. It has no declination of its own. The disc is lit toward the sun's direction, so its phase
+/// follows from where the two sit.
 // The handover band's spans in the sun's up component, below and above sunBelowHorizonDotThreshold.
 inline constexpr float kMoonBlendSpanBelow = 0.12f;
 inline constexpr float kMoonBlendSpanAbove = 0.07f;
@@ -171,9 +174,21 @@ inline float PrimaryMoonBlend(const SkySystemConfig& config, float sunUpDot)
     return 1.0f - Smoothstep01(edgeMoonFull, SunOnlyUpDot(config), sunUpDot);
 }
 
-// The default moon's illuminance as a fraction of a clear sun's: the stylized
-// moonLightIlluminanceScale, or 0 when the moon is hidden, so a hidden moon does not keep lighting
-// the scene. The sky scales it to its Moonlight and to the light it drives.
+// The moon's illuminance as a fraction of its full-moon value, for the moon at `moonArcPosition` on
+// its cycle (0 new, 0.5 full): Krisciunas and Schaefer's phase law (1991, PASP 103:1033),
+// 10^(-0.4 (0.026 a + 4e-9 a^4)) for the phase angle a in degrees, the sun-moon angle seen from the
+// moon, 180 - elongation. A quarter moon gives 0.091, a new moon nothing.
+inline float MoonPhaseIlluminanceFraction(float moonArcPosition)
+{
+    float cycle = moonArcPosition - std::floor(moonArcPosition);
+    const float phaseAngleDeg = std::abs(cycle - 0.5f) * 360.0f;
+    const float magnitudes = 0.026f * phaseAngleDeg + 4e-9f * phaseAngleDeg * phaseAngleDeg * phaseAngleDeg * phaseAngleDeg;
+    return phaseAngleDeg >= 179.0f ? 0.0f : std::pow(10.0f, -0.4f * magnitudes);
+}
+
+// The default moon's illuminance as a fraction of a clear sun's at full moon: moonLightIlluminanceScale,
+// or 0 when the moon is hidden, so a hidden moon does not keep lighting the scene. The sky scales it to
+// its Moonlight, the phase and the light it drives.
 inline float LinkedLightMoonScale(const SkySystemConfig& config, bool showMoon)
 {
     return showMoon ? config.moonLightIlluminanceScale : 0.0f;
@@ -196,7 +211,7 @@ inline void ComputeSimpleSunMoon(const SkySettings& settings,
 
     float cycle = settings.moonArcPosition;
     cycle = cycle - std::floor(cycle);
-    const float moonTheta = theta + cycle * kTwoPi;
+    const float moonTheta = theta - cycle * kTwoPi;
     SolarDirection(solarFrame, std::cos(moonTheta), std::sin(moonTheta), outState.moonDirWS);
 
     outState.primaryMoonBlend = PrimaryMoonBlend(config, outState.sunDirWS[1]);
@@ -211,9 +226,13 @@ inline void ComputeSimpleSunMoon(const SkySettings& settings,
 // applied, so tinting the moon's light too would hang an orange dome over a grey moon. Pass white
 // for no tint.
 //
-// `moonSourceIntensity` is the moonlight's own source on the same scale as primarySunIntensity, the
-// moonlight's magnitude before moonIntensityScale: the night's source follows it rather than the
-// sun's, so dimming the sun leaves the night sky where it is.
+// `moonSourceIntensity` is the moon's own source on the same scale as primarySunIntensity: its
+// illuminance for the phase, lifted to the top of the atmosphere as the sun's is. It follows the
+// sky's Moonlight rather than the sun, so dimming the sun leaves the night sky where it is.
+//
+// The sky-view LUT lights the sky with both bodies at once, each at its own direction and source
+// (sunSourceColor / sunSourceIntensity, moonDirWS / moonIntensity); the primary light's crossfade
+// below is what the presentation and the linked directional light take.
 inline void ApplySimpleLightingToSkySettings(const SkySystemState& state,
                                              const SkySystemConfig& config,
                                              const float sunTint[3],
@@ -247,8 +266,11 @@ inline void ApplySimpleLightingToSkySettings(const SkySystemState& state,
     ioSky.primarySunDir[1] = blendedDir[1];
     ioSky.primarySunDir[2] = blendedDir[2];
 
-    const float moonIntensity = moonSourceIntensity * config.moonIntensityScale;
-    ioSky.primarySunIntensity = kSunIntensity * (1.0f - w) + moonIntensity * w;
+    ioSky.sunSourceIntensity = kSunIntensity;
+    for (int c = 0; c < 3; ++c)
+        ioSky.sunSourceColor[c] = sunTint[c];
+    ioSky.moonIntensity = moonSourceIntensity;
+    ioSky.primarySunIntensity = kSunIntensity * (1.0f - w) + moonSourceIntensity * w;
 
     ioSky.primarySunColor[0] = (1.0f - w) * sunTint[0] + w * config.moonColor[0];
     ioSky.primarySunColor[1] = (1.0f - w) * sunTint[1] + w * config.moonColor[1];

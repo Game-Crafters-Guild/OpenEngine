@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -53,6 +54,8 @@ public:
 
 private:
     bool ParseJson(const std::string& text);
+    // Logs that the file is not loaded and why, clears the animations and fails the asset; returns false.
+    bool Refuse(std::string_view reason);
     std::string SerializeJson() const;
 
     std::vector<SpriteFrameAnimation> m_Animations;

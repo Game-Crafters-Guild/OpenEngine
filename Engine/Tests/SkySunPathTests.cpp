@@ -80,8 +80,8 @@ void ExpectSameDirection(const Mathematics::Vector3& actual, const Mathematics::
 
 // The sky's Latitude, DayOfYear and NorthHeading are what the renderer's sun follows: a London
 // winter noon is low and, with north turned to +X, leans to -X, whatever the sky entity's own
-// rotation. Its identity case is every sky saved before the site existed: no Latitude, DayOfYear or
-// north, and the previous great circle with the sunrise due east.
+// rotation. Its identity case is the equator on the March equinox with north at +Z: the great circle
+// with the sunrise due east.
 TEST(SkySunPath, TheSkysSiteFieldsPlaceTheRenderedSun)
 {
     {
@@ -105,12 +105,13 @@ TEST(SkySunPath, TheSkysSiteFieldsPlaceTheRenderedSun)
         const ECS::EntityHandle skyEntity = harness.World.CreateEntity();
         harness.World.AddComponentImmediate(skyEntity, Components::Transform{});
         Components::SkyEnvironment sky{};
+        sky.Latitude = 0.0f;
         sky.TimeOfDayHours = 7.0f;
         harness.World.AddComponentImmediate(skyEntity, sky);
 
         const Mathematics::Vector3 sun = harness.RenderedSun();
         ExpectSameDirection(sun, ExpectedSun({}, 7.0f));
-        EXPECT_EQ(sun.z, 0.0f) << "the default path stays in the east-up plane";
+        EXPECT_EQ(sun.z, 0.0f) << "the equinox path at the equator stays in the east-up plane";
         EXPECT_GT(sun.x, 0.9f);
     }
 }
@@ -225,7 +226,7 @@ TEST(SkySunPath, ThePreviewIsWhatTheDrivenLightDeliversByDay)
 
     const float overhead =
         Components::SkySunPath::PhysicalSunIlluminanceLux(Components::SkyEnvironment{}, 90.0f, kSunLux, 12.0f);
-    EXPECT_NEAR(overhead, kSunLux, kSunLux * kRelativeTolerance) << "the default noon sun is overhead";
+    EXPECT_NEAR(overhead, kSunLux, kSunLux * kRelativeTolerance) << "a sun at 90 degrees delivers the light's lux";
 }
 
 // The Sun path choice selects which fields place the sun. Under Earth the Custom fields do nothing;
@@ -358,7 +359,7 @@ TEST(SkySunPath, TheSunsShareOfTheDrivenLightEndsAtTheTwilightFloor)
         {
             EXPECT_EQ(sunShare, 0.0f) << "hour " << hour.Hours;
             EXPECT_EQ(Components::SkySunPath::DrivenMoonBlend(sky, elevation), 1.0f);
-            // At the default equinox midnight the moon is overhead: the light gives the full-night value.
+            // At the default equinox midnight the moon stands at its highest: the light gives the full-night value.
             EXPECT_NEAR(Components::SkySunPath::FullNightMoonLux(sky), delivered, delivered * 1e-3f);
         }
         else

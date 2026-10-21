@@ -2,6 +2,7 @@
 
 #include "Components/AssetRef.h"
 #include "Components/Terrain/Terrain.h" // TerrainDomain
+#include "Types/Color.h"
 #include "Types/Types.h"
 
 #include <type_traits>
@@ -11,6 +12,17 @@ namespace GameEngine::Components
 
 inline constexpr uint32 kMinTerrainGrassBladeSegments = 1u;
 inline constexpr uint32 kMaxTerrainGrassBladeSegments = 12u;
+// The blade shape dials' ranges (TerrainGrass::BladeTilt and the four after it): radians, radians,
+// turns, a height fraction short of the tip, and radians per Clump Size of distance.
+inline constexpr float32 kMaxTerrainGrassBladeTilt = 1.2f;
+inline constexpr float32 kMaxTerrainGrassBladeBend = 1.5f;
+inline constexpr float32 kMaxTerrainGrassBladeTwist = 2.0f;
+inline constexpr float32 kMaxTerrainGrassBladeTaperStart = 0.95f;
+inline constexpr float32 kMaxTerrainGrassTuftFan = 2.0f;
+// The most light through a blade's tip, against the light its sunlit face reflects: as much through
+// a thin leaf as off it (TerrainGrass::Translucency). Mirror of kGrassMaxTranslucency in
+// terrain_grass_surface.glsl.
+inline constexpr float32 kMaxTerrainGrassTranslucency = 1.0f;
 // smoothstep is undefined on an empty span: the root fade's end is held this far above its start.
 inline constexpr float32 kMinTerrainGrassRootFadeSpan = 0.01f;
 // The gradient may start below the root: a negative start puts part of the tip colour on the
@@ -41,6 +53,16 @@ enum class TerrainGrassRenderMode : uint8
     Blend = 1,
 };
 
+// The kind of field the palette and blade dials were set from (TerrainGrass/TerrainGrassPresets.h).
+// Meadow is the component's defaults. Custom once any of the preset's dials is edited away from it.
+enum class TerrainGrassPreset : uint8
+{
+    Custom = 0,
+    Meadow = 1,
+    Lawn = 2,
+    Steppe = 3,
+};
+
 // Grass placement is planar-only. The placement compute (terrain_grass_place.comp) lays blade
 // candidates on a world-anchored XZ cell lattice inside a camera-relative window and roots each at
 // y = WorldOriginY + height, with blade up = the world-Y-dominant terrain normal. On a cube-sphere
@@ -54,11 +76,44 @@ inline constexpr bool TerrainGrassSupportsDomain(TerrainDomain domain)
     return domain == TerrainDomain::Planar;
 }
 
+// Root Color's "Auto" value: no colour is authored, and the root of a blade's own gradient derives
+// from Tip Color (TerrainGrassResolvedRootColor). Alpha 0 is never an authored colour: the inspector
+// and the colour picker write opaque colours only.
+inline constexpr uint32 kTerrainGrassAutoRootColor = 0u;
+
+// How much of Tip Color's luminance an automatic root keeps. The three grass colours are stored as
+// sRGB bytes and the surface decodes them to linear albedo on read (grassColorFromArgb in
+// terrain_grass_surface.glsl), so the rule runs in linear light: decode the tip, scale every channel
+// by this, encode back to bytes. Scaling linear RGB scales luminance by exactly this and keeps hue
+// and chromaticity: the root is the tip in shade, so the blade always darkens toward the ground
+// whatever tip a scene authors. A fixed default root cannot do that: against a dark authored tip it
+// is the lighter end and the gradient brightens toward the ground.
+inline constexpr float32 kTerrainGrassAutoRootLuminance = 0.65f;
+
+// The ARGB the root of a blade's gradient uses: the authored Root Color, or under Auto the tip
+// darkened to kTerrainGrassAutoRootLuminance in linear light.
+inline uint32 TerrainGrassAutoRootColor(uint32 tipColor)
+{
+    const ColorSRGB tip = ColorSRGB::FromSRGB255(static_cast<uint8>((tipColor >> 16) & 0xFFu),
+                                                 static_cast<uint8>((tipColor >> 8) & 0xFFu),
+                                                 static_cast<uint8>(tipColor & 0xFFu));
+    ColorLinear root = tip.ToLinear();
+    root.r *= kTerrainGrassAutoRootLuminance;
+    root.g *= kTerrainGrassAutoRootLuminance;
+    root.b *= kTerrainGrassAutoRootLuminance;
+    const ColorSRGB encoded = root.ToSRGB();
+    const auto toByte = [](float32 channel) { return static_cast<uint32>(channel * 255.0f + 0.5f); };
+    return 0xFF000000u | (toByte(encoded.r) << 16) | (toByte(encoded.g) << 8) | toByte(encoded.b);
+}
+
 // @ge-no-add  Requires a Terrain on the same entity (only read inside Query<Terrain,...>); inert
 // standalone, so it's reflected (MCP/snapshot + its custom inspector) but kept out of the Add menu.
 struct TerrainGrass
 {
     TerrainGrassRenderMode RenderMode = TerrainGrassRenderMode::Dither;
+    // The kind of field the palette, blade size, density and tilt below come from. Picking one in
+    // the inspector writes those dials (ApplyTerrainGrassPreset); they stay editable.
+    TerrainGrassPreset Preset = TerrainGrassPreset::Meadow;
     // Blades per square metre AT THE CAMERA, independent of terrain size: the same value reads the
     // same on a 512 m and a 10 km terrain. Density falls off to zero at Range along DensityFalloff,
     // and blades leave by not being spawned, so there is no fade band.
@@ -67,6 +122,10 @@ struct TerrainGrass
     // shortens the RANGE and holds the near density (GrassFitPlacementToBudget). That is the
     // intended trade: density at the camera is what a field's look is judged on, distance is what
     // pays for it.
+    //
+    // Ceiling: 256 blades/m² (TerrainGrass::kGrassMaxBladesPerSquareMeter, the per-cell slot
+    // limit). A denser value costs no memory, because the instance pool is a fixed per-view budget;
+    // it costs range, which the fit gives up to hold the near density.
     float32 BladesPerSquareMeter = 21.0f;
     float32 Range = 500.0f;
     float32 DensityFalloff = 2.0f;
@@ -75,6 +134,9 @@ struct TerrainGrass
     // construction — a field of it reads as mown rather than grown. A second, coarser, world-
     // anchored lattice groups blades into tufts that share a height, a facing and a colour. Edge
     // of a clump in metres; 0 or less turns the whole mechanism off and restores the plain field.
+    //
+    // A clump never moves a blade and never removes one: every part of the ground keeps the
+    // authored density, and a tuft reads by its shape (ClumpTaper), its height, facing and hue.
     float32 ClumpSize = 1.1f;
     // How far a clump's height departs from the authored one, +/- this fraction. 0 = every clump
     // the same height as every other.
@@ -82,17 +144,40 @@ struct TerrainGrass
     // How far each blade's yaw is pulled toward its clump's common facing. 0 = independent yaw per
     // blade (the unclumped field), 1 = every blade in a tuft faces identically.
     float32 ClumpAlignment = 0.45f;
-    // How far each blade is pulled toward its clump's centre. Gathers the tuft without thinning
-    // the field: the blade count per square metre is unchanged, only where they stand.
-    float32 ClumpGather = 0.25f;
+    // How much shorter a tuft's outer blades are than its centre blades: a blade's height is scaled
+    // by 1 - ClumpTaper x smoothstep(0, 0.75, d), where d is its distance from the tuft's centre in
+    // clump cells (0.75 is about the edge of a tuft). 0 = every blade of a tuft at the tuft's
+    // height; 1 = the edge blades shrink to nothing, which bares the ground between tufts again.
+    // Blade positions do not depend on it, so the density is the authored density everywhere.
+    float32 ClumpTaper = 0.35f;
     float32 BladeHeight = 0.72f;
-    // Sits just under BladeHeight * MaxWidthRatio. At or above that product the aspect ceiling below
-    // clamps every blade, and the width the component reports stops being the width it renders.
-    float32 BladeWidth = 0.043f;
-    // Aspect ceiling: a blade is never wider than BladeHeight * MaxWidthRatio, whatever BladeWidth
-    // asks for. It exists so a short blade cannot become a square, not to set the shipped width —
-    // BladeWidth is the width control and this only intervenes at extreme aspect ratios.
-    float32 MaxWidthRatio = 0.06f;
+    // The whole leaf's width at its base, in metres. A meadow leaf is 3 to 8 mm wide on a 0.4 to
+    // 0.8 m blade; the default is wider so the default 21 blades per square metre still cover the
+    // ground from eye height and from a strategy camera. A game that places more blades, or looks
+    // from close up, narrows it. The sides stay parallel up to BladeTaperStart, which is what gives
+    // a narrow blade its coverage. Never wider than a fifth of the blade's height
+    // (kGrassMaxBladeAspect in the vertex stage), so a short blade cannot become a square.
+    float32 BladeWidth = 0.036f;
+    // THE BLADE'S SHAPE: five physical dials. The spine's angle from the terrain normal at height
+    // fraction t is BladeTilt + BladeBend t^2 + 0.6 BladeBend t^4: a tilted base, the cantilever
+    // bend of a leaf under its own weight, and the tip's droop. Each blade draws its tilt and its
+    // bend +/-40% about these, and its twist +/-50% in a random direction, from its site.
+    //
+    // Radians from vertical at the root (the inspector shows degrees). The default suits a meadow of
+    // upright leaves; a lawn is near 0.1, a loose meadow 0.3 to 0.5.
+    float32 BladeTilt = 0.25f;
+    // Radians of bend over the blade's length (the tip droop adds 0.6 of this again). The wind
+    // adds its own bend on top, along the wind.
+    float32 BladeBend = 0.35f;
+    // Turns of torsion from root to tip: a quarter turn turns the leaf's face through 90 degrees,
+    // so its width and its shading change along its length. 0 is a flat ribbon.
+    float32 BladeTwist = 0.25f;
+    // Height fraction where the leaf stops being parallel-sided and tapers smoothly to its point.
+    float32 BladeTaperStart = 0.6f;
+    // Radians of lean per Clump Size of distance from the tuft's centre: a blade leans away from
+    // its tuft's centre, the outer ones the most, so a tuft reads as a fan. 0 = no fan. Needs
+    // ClumpSize above 0.
+    float32 TuftFan = 0.25f;
     uint32 BladeSegments = 5u;
     float32 RandomScale = 0.35f;
     uint32 LayerIndex = 0;
@@ -117,16 +202,9 @@ struct TerrainGrass
     // therefore taste rather than a defect boundary, and the trade to weigh is field variety
     // against how dark the darkest blade may be.
     //
-    // TRAP: it is driven by the instance's WIDTH random, unrehashed. The placement compute writes
-    // one random per blade and the blade's width is a function of it (terrain_grass_place.comp,
-    // blade.Rand = s.WidthRand, and the width's mix(0.65, 1.25, s.WidthRand)); the surface reads
-    // that value as `tint` and scales the canopy by it directly. So per-blade brightness is a
-    // MONOTONE FUNCTION OF BLADE WIDTH — at this default the widest blade in a field is always the
-    // brightest (x1.42) and the narrowest always the dimmest (x0.58). That is the same coupling the
-    // hue draw below deliberately breaks by rehashing (grassHash11(tint + 41.0)), for the same
-    // reason. Decoupling this one is a look change and needs its own measurement, so it is a
-    // follow-up rather than a silent fix; until then, raising this dial also strengthens the
-    // width-brightness correlation.
+    // The draw is the instance's per-blade random REHASHED (terrain_grass_surface.glsl), as the hue
+    // draw below is, so a blade's brightness does not follow its width: a twisted blade changes width
+    // along its length, and a coupling between the two would read as a rule.
     float32 RandomBrightness = 0.42f;
     // Hue jitter, in [0,1] where 1 is a 30-degree swing either way between whole tufts. Value-only
     // variation (the two Brightness knobs above) makes a field read as one colour lit unevenly; a
@@ -145,80 +223,64 @@ struct TerrainGrass
     // statement about the SHIPPED palette — a bound albedo texture multiplies in before this
     // rotation, so a textured blade's hue excursion is whatever its texture makes it.
     float32 HueVariation = 0.45f;
-    // The blade's base belongs to the ground it grows out of. A blade is one gradient from the
-    // terrain's own colour at the root to its canopy colour at the tip, and this shapes the canopy
-    // end of it.
-    //
-    // RootShade dips the CANOPY end toward the root, over t < kGrassRootShadeRange (0.22). It rides
-    // INSIDE that schedule, which weights the canopy chain by smoothstep(RootFadeStart,
-    // RootFadeEnd, t), so it can only shape what that weight lets through — and over the whole-blade
-    // span this component ships the weight there is 0.03 to 0.12, i.e. the ramp acts exactly where
-    // the schedule discards its input. AT THE SHIPPED SPAN NO VALUE OF THIS DIAL CHANGES THE FIELD
-    // (the full 0.82 -> 0.00 swing stays within two 8-bit levels). It shapes a blade only when
-    // RootFadeEnd is authored short enough to raise the weight inside that range, so it belongs to
-    // a short authored gradient; reach for the two RootFade thumbs first.
-    //
-    // It is weighted to almost nothing at the very bottom, so it cannot move the contact, and no
-    // dial SCALES the contact: at a non-negative RootFadeStart the
-    // root's albedo is the terrain's own resolved albedo exactly, measured at a close pose as
-    // 99.95% of the lowest-height-bin fragments byte-identical to the ground's. A factor there
-    // would put a value step on the contact line and read as the blade being a slightly different
-    // colour from the ground rather than as shadow. A negative RootFadeStart is the deliberate
-    // exception: it starts the blend under the root, so the root carries some tip colour and the
-    // step is the authored choice.
-    //
-    // A RootFadeStart at or above the 0.22 recovery range is the other way to strand it: below the
-    // fade start the canopy chain this ramp multiplies is discarded entirely. That is a second
-    // route to the same dead end, not the only one — the shipped span already leaves it inert.
-    float32 RootShade = 0.82f;
-    // THE BLADE'S GRADIENT: the height fractions between which a blade leaves the ground colour it
-    // grows out of and becomes its tip colour. Below RootFadeStart the blade IS the terrain; above
-    // RootFadeEnd it is entirely itself. A negative start begins the blend below the root, so the
-    // root already carries part of the tip colour. This is a material lever over the blade's albedo
+    // THE GROUND HANDOVER: the height fractions between which a blade leaves the ground colour it
+    // grows out of and becomes its own canopy colour. Below RootFadeStart the blade IS the terrain;
+    // above RootFadeEnd it is entirely itself. The canopy's own RootColor-to-TipColor gradient runs
+    // the whole blade whatever this span is, so a short span cannot flatten the upper blade. A
+    // negative start begins the blend below the root, so the root already carries part of the tip
+    // colour. This is a material lever over the blade's albedo
     // only: the shading normal still settles onto the terrain normal over the whole blade, whatever
-    // span is authored. The shipped span is the whole blade.
+    // span is authored. The shipped span is the lowest quarter of the blade.
+    //
+    // The ground colour is ONE colour per blade: the terrain's albedo resolved at the blade's ROOT
+    // over a 1 m footprint (terrain_grass_vertex_modifier.glsl, kGrassRootGroundFootprint), carried
+    // to every fragment of the blade. It cannot draw the ground's pattern up the blade. The blade's
+    // root is therefore the ground's local average colour, not the exact texel beside it.
     float32 RootFadeStart = 0.0f;
-    float32 RootFadeEnd = 1.0f;
-    // How a blade is SHADED across its width, and what that costs in brightness.
-    //
-    // A blade is a near-vertical ribbon, so the normal its geometry actually has is near-horizontal.
-    // Shading on it the whole way (BladeNormalForm 1) gives the strongest lit and shaded sides and
-    // costs about a fifth of the field's brightness, because a horizontal normal catches far less of
-    // a high sun than an up-facing one. 0 shades every blade on the up-dominant canopy normal: no
-    // per-blade form, and the brightness of flat ground.
-    float32 BladeNormalForm = 0.75f;
-    // The brightness that form gives up, handed back. It stands in for the inter-blade scattering
-    // nothing here models — light that misses one blade's face reaches it off its neighbours. It is
-    // exactly zero at the blade base and in the far field, where the shading normal has settled onto
-    // the canopy normal, nothing has been given up, and the grass has to match the ground it stands
-    // in. In between it hands back the loss actually taken at each fragment, capped at what the
-    // swing could have cost.
-    //
-    // It is NOT a uniform brightening: the loss is largest where the shading normal lost the most
-    // light, so the darkest fragments are lifted hardest, and the dial therefore trades the field's
-    // mean brightness against its blade-scale contrast. Lower it if a distant vista reads too
-    // bright; 0 disables it. Raising it past the shipped value to cure a dark-looking field brings
-    // back a bright band across the mid distance — see terrain_grass_surface.glsl, which carries the
-    // measurements.
-    float32 BladeScatterGain = 0.6f;
+    float32 RootFadeEnd = 0.25f;
     // The master gate over the whole GROUNDING read, and nothing to do with cast shadows: it scales
-    // the wind-gust shading, the root-shade ramp, and the blade's blend into the ground colour it
-    // grows out of. At 0 a blade never adopts its terrain's colour at all, which destroys the
-    // contact identity the rest of this component is built around, so it is an escape hatch for a
-    // deliberately stylised field rather than a look dial.
+    // the wind-gust shading and the blade's blend into the ground colour it
+    // grows out of (the root colour above, over the RootFade span). At 0 a blade never adopts its
+    // terrain's colour at all, which destroys the contact identity the rest of this component is
+    // built around, so it is an escape hatch for a deliberately stylised field rather than a look
+    // dial.
     float32 GroundingStrength = 1.0f;
-    // Sunlight through a thin blade, seen on the face turned away from the sun: scales that
-    // transmission (0 switches it off). Added after the lighting, so cast shadows do not attenuate it.
-    float32 Translucency = 0.35f;
+    // How much light the field keeps from its own lower blades and from the soil under it, sun and
+    // sky alike. 1 is the physical amount for the authored density, width and height: under a
+    // field the ground is darker than open ground and the blade base stays the ground's colour, so
+    // the lit tips are the brightest part of the field. 0 lights the ground under the grass as open
+    // ground (a bright lawn); above 1 the field is shaded more, up to the depth cap. The blade base and the ground beside it
+    // always take the same shade (Includes/terrain_grass_canopy.glsl).
+    float32 CanopyShade = 1.0f;
+    // How much light passes through a blade's tip, against the light its sunlit face reflects: a
+    // face turned away from the sun is lit by the light through the leaf, and a field seen against
+    // the sun glows at its tips. 1 is a thin leaf, as much light through it as off it, and the most:
+    // a back-lit blade is never brighter than the same blade lit from the front. 0 makes the blade
+    // opaque. The light through falls to nothing toward the thick root. Cast shadows dim it like any
+    // other light.
+    float32 Translucency = 1.0f;
     bool TextureGrass = false;
     float32 TextureCardsPerSquareMeter = 1.5f;
     float32 TextureSize = 1.0f;
     bool UseSplatRootColor = true;
-    uint32 RootColor = 0xFF335F1Au;
-    uint32 TipColor = 0xFFB3DB4Du;
-    // The colour of that transmitted light, multiplied by the sun's colour: the blade's tint as seen
-    // against the sun, independent of RootColor / TipColor and of the brightness and hue jitter.
-    uint32 BacklightColor = 0xFFE6F06Au;
+    // THE COLOUR CONTRACT for RootColor, TipColor and BacklightColor: sRGB bytes packed 0xAARRGGBB,
+    // the bytes the colour picker writes and the inspector swatch shows. The surface decodes each to
+    // linear albedo on read (grassColorFromArgb), so the swatch is the blade's colour before
+    // lighting.
+    //
+    // The root of each blade's own gradient. kTerrainGrassAutoRootColor (the default) derives it
+    // from TipColor; any opaque colour is used as authored. Read it through
+    // TerrainGrassResolvedRootColor, never directly.
+    uint32 RootColor = kTerrainGrassAutoRootColor;
+    // A leaf's albedo, linear (0.19, 0.30, 0.075): a meadow green that a lit tip carries above the
+    // soil it grows in (Terrain::kDefaultTerrainMaterials' grass role is that soil). sRGB bytes, as
+    // the picker writes them; the surface decodes them (grassColorFromArgb).
+    uint32 TipColor = 0xFF79954Du;
+    // The colour of the light through a blade: its hue and saturation. Its brightness is the
+    // blade's own (the root-to-tip tone, the brightness jitter and the canopy shade carry over), so
+    // only the colour of the glow is authored here. Linear (0.50, 0.62, 0.12): light through a green
+    // leaf is a more yellow green.
+    uint32 BacklightColor = 0xFFBCCE61u;
     Components::TextureRef AlbedoTextureAssetGuid;
     Components::TextureRef AlphaTextureAssetGuid;
     Components::TextureRef NormalTextureAssetGuid;
@@ -228,6 +290,12 @@ struct TerrainGrass
     float32 AlphaCutoff = 0.35f;
     float32 NormalStrength = 0.75f;
 };
+
+inline uint32 TerrainGrassResolvedRootColor(const TerrainGrass& grass)
+{
+    return grass.RootColor == kTerrainGrassAutoRootColor ? TerrainGrassAutoRootColor(grass.TipColor)
+                                                         : grass.RootColor;
+}
 
 static_assert(std::is_trivially_copyable_v<TerrainGrass>,
               "TerrainGrass must be trivially copyable for ECS storage");

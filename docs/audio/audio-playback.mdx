@@ -1,0 +1,146 @@
+---
+title: Playing audio
+description: The audio formats a project can import, and how a game plays a sound in 2D or in the world.
+sidebar:
+  order: 1
+---
+
+The audio formats a project can import, and how a game plays a sound in 2D or in the world. Every API item shows its C++ and its C# form: pick a language on any code view and the whole site follows.
+
+## Supported formats
+
+An audio file in a project's assets becomes an audio clip. The engine decodes these formats:
+
+| Format | Extension |
+|---|---|
+| WAV | `.wav` |
+| FLAC | `.flac` |
+| MP3 | `.mp3` |
+| Ogg Vorbis | `.ogg` |
+
+Ogg Opus shares the `.ogg` extension with Ogg Vorbis but does not decode. Loading one fails, and the log names the codec: `Audio '<name>' is Ogg Opus, which the engine does not decode; re-encode it as Ogg Vorbis, FLAC, MP3 or WAV`.
+
+## Playing a sound
+
+A game plays a clip through the engine's `Audio::AudioSystem`. `Play2D` plays it without a position (music, interface sounds). `Play3D` plays it at a point in the world, panned and attenuated by its distance from the listener. Both return an `AudioEmitterHandle` that names the playing voice. A clip still loading when it is played starts as soon as it is ready.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Play a looping track and a one-shot in the world"
+#include "Audio/AudioSystem.h"
+#include "Core/Engine.h"
+
+auto* audio = GameEngine::EngineCore::GetInstance().GetAudioSystem(); // null when audio failed to start
+
+GameEngine::Audio::PlayOptions music{};
+music.loop = true;
+GameEngine::Audio::AudioEmitterHandle track = audio->Play2D(musicClipGuid, music);
+
+audio->Play3D(explosionClipGuid, /*world*/ 0, explosionPosition, /*velocity*/ {0.0f, 0.0f, 0.0f});
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are `Audio::AudioSystem::Play2D` and `Play3D`.
+:::
+
+::::
+:::::
+
+`PlayOptions` sets the voice's linear `volume`, its `pitch` (a playback-rate multiplier, 1 is the recording's own), whether it loops, whether a `Play2D` voice is spatialized, and the mixer `bus` it plays on. An entity with an `AudioEmitter` component plays its clip through the same system without any code.
+
+## Controlling a playing voice
+
+A voice's volume, pitch, and pan can change while it plays, and a voice can pause and resume where it stopped. Every call takes the handle `Play2D` or `Play3D` returned, runs on the game thread like the play calls, and does nothing for a handle whose voice has ended. A value set while the clip is still loading applies when the voice starts. A NaN or infinite value is ignored with a warning naming the voice, since it would silence or corrupt the whole mix.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Audio/AudioSystem.h"
+void SetVolume(AudioEmitterHandle emitter, float linearVolume); // negative values clamp to 0
+void SetPitch(AudioEmitterHandle emitter, float pitch);         // rate multiplier; non-positive values are ignored
+void SetPan(AudioEmitterHandle emitter, float pan);             // -1 left .. 1 right; 2D voices only
+float GetVolume(AudioEmitterHandle emitter) const;              // 0 for a handle whose voice has ended
+float GetPitch(AudioEmitterHandle emitter) const;
+float GetPan(AudioEmitterHandle emitter) const;
+
+void Pause(AudioEmitterHandle emitter);
+void Resume(AudioEmitterHandle emitter);
+bool IsPaused(AudioEmitterHandle emitter) const;
+```
+
+```cpp title="An engine drone that follows the throttle, and music that pauses during a boost"
+// Each frame:
+audio->SetPitch(drone, 0.8f + 0.8f * throttle);
+audio->SetVolume(drone, 0.4f + 0.6f * throttle);
+
+// When the boost starts and ends:
+audio->Pause(track);
+audio->Resume(track); // continues from where it paused
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are the `Audio::AudioSystem` members above.
+:::
+
+::::
+:::::
+
+A paused voice stays alive (`IsAlive` is true, `IsPlaying` is false) and is never reclaimed as finished. A one-shot paused at its very end is reclaimed when it resumes instead of playing again. A paused voice still holds one of the voices, so when every voice is in use and a new sound starts, a paused voice can be the oldest one taken for it: music paused through a long cutscene full of sounds may not be there to resume. A spatialized voice is panned by its position relative to the listener, so `SetPan` leaves it alone. `PlayOptions::pan` sets the pan of a 2D voice from its start. An `AudioEmitter` component's volume and pitch follow the component while its voice plays, so an edit in the inspector is heard at once.
+
+## Distance falloff
+
+A spatialized voice gets quieter with its distance from the listener. `AudioFalloff` sets the curve and its distances in world units, so a world whose units are large (a flight or space game) or small sets them to match. `PlayOptions::falloff` sets it when the voice starts. `SetFalloff` changes it while the voice plays. A 2D voice has no distance and ignores it.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Audio/AudioTypes.h, Audio/AudioSystem.h"
+enum class AudioAttenuationModel : std::uint8_t { None, Inverse, Linear, Exponential };
+
+struct AudioFalloff
+{
+    AudioAttenuationModel model = AudioAttenuationModel::Inverse;
+    float minDistance = 1.0f;                               // full volume inside this distance
+    float maxDistance = 10000.0f;                           // the gain stops changing past it
+    float rolloff = 1.0f;                                   // how steeply the gain falls
+};
+
+void SetFalloff(AudioEmitterHandle emitter, const AudioFalloff& falloff);
+AudioFalloff GetFalloff(AudioEmitterHandle emitter) const; // what the voice uses, after the rules below
+```
+
+```cpp title="Full volume within 50 units, then falling as 50 over the distance"
+GameEngine::Audio::PlayOptions opts{};
+opts.falloff.minDistance = 50.0f;
+audio->Play3D(engineClipGuid, /*world*/ 0, enginePosition, /*velocity*/ {0.0f, 0.0f, 0.0f}, opts);
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native types and calls are above.
+:::
+
+::::
+:::::
+
+With `d` the distance clamped between `minDistance` and `maxDistance`:
+
+| Model | Gain |
+|---|---|
+| `Inverse` (default) | `minDistance / (minDistance + rolloff * (d - minDistance))` |
+| `Linear` | `1 - rolloff * (d - minDistance) / (maxDistance - minDistance)`, never below 0 |
+| `Exponential` | `(d / minDistance)^-rolloff` |
+| `None` | 1 |
+
+The defaults give a gain of 1/distance from one unit out to 10000 units, where it holds at 1/10000 (-80 dB). An infinite `maxDistance` removes the limit. `Inverse` never reaches silence. A sound that should go quiet at a distance uses `Linear` with `maxDistance` there. `minDistance` must be above 0: full volume holds inside it, and close to 0 the sound is inaudible from the first unit out, so `SetFalloff` ignores a falloff whose minimum distance is 0, negative, infinite, or NaN, and a voice started with one takes the default, each with a warning naming the voice (the inspector's Min Distance starts at 0.01). Other values out of range are corrected when the voice takes them: a NaN `maxDistance` or a non-finite `rolloff` takes its default, `maxDistance` is at least `minDistance` (equal values turn attenuation off), and `rolloff` is at least 0.
+
+An `AudioEmitter` component carries the same four settings (Attenuation, Min Distance, Max Distance, and Rolloff in the inspector), and an edit reaches the playing voice at once.

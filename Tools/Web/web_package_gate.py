@@ -29,7 +29,9 @@ console, the centre pixel and a screenshot. The cases and the rule each exercise
             leaves the section disabled with its note; the Fox's credit is on screen over the
             canvas; at the default size the panel fits the viewport with its Pause button
             uncovered, and on a phone the open strip takes at most half the page with Pause in its
-            view. The landing (a cold first load), every pick, the narrow and phone steps are
+            view. With a phone's user agent and pixel ratio (a Pixel 6) the canvas keeps the page's
+            width and its drawing buffer holds at most a megapixel, with no validation error. The
+            landing (a cold first load), every pick, the narrow and phone steps are
             framed in the free area's middle at the page's fit (kModelFramed, its numbers in each
             record); the visitor's zoom survives F and the panel's toggle; a turntable revolution
             keeps the Fox inside the free area and a re-frame at a turn lands where one at yaw 0
@@ -52,6 +54,11 @@ console, the centre pixel and a screenshot. The cases and the rule each exercise
             turning switch, its copies stay at rest and its panel does not mention turning; with
             the flag, the slider's top, 100,000 copies, read back as entities that carry a
             MeshRenderer, draws with no validation error.
+  canvas-*  a 400 x 300 canvas at pixel ratio 2, served as the viewer is: sized by the page's
+            CSS, or bare (its attributes give its size, as the package's quick start writes it),
+            it keeps a 400 x 300 CSS size and an 800 x 600 drawing buffer for 60 frames. Hidden
+            at Engine.create, the create is refused naming why, and once shown the canvas keeps
+            its 400 x 300 attribute size.
 
 Exit 0 when every case matches its expectation. Builds on browser_gate.py's Chrome driver.
 """
@@ -310,8 +317,20 @@ def RunCase(cdp: browser_gate.Cdp, case: Case, url: str, seconds: float, out: Pa
 kViewerPage = "package/examples/model-viewer/index.html"
 # The exposure compensation, in stops, the viewer's steps run at: the page's default, which the
 # landing step checks on the engine's Camera; every pose records the compensation it was taken at.
-kViewerExposureEv = 2
+kViewerExposureEv = 0
 kExposureNow = "globalThis.viewer?.engine.scene.camera.get({ name: 'Camera' })?.exposureCompensation"
+# Whether the panel's clock shows the engine's own default time of day: the default is read from a
+# fresh Sky Environment on a probe entity (destroyed before the frame draws), not from the sky the
+# page already wrote, so a page that pins an hour of its own fails this.
+kOpensAtSkyDefault = """(async () => {
+    const { SkyEnvironment } = await import('@game-crafters-guild/openengine-web');
+    const probe = globalThis.viewer.engine.scene.create('sky default probe');
+    const hours = probe.set(SkyEnvironment, {}).timeOfDayHours;
+    probe.destroy();
+    const clock = `${Math.floor(hours)}:${String(Math.round((hours % 1) * 60) % 60).padStart(2, '0')}`;
+    const shown = document.querySelector('.panel output[name=clock]').value;
+    return shown === clock ? 'the sky default' : `${shown}, the sky default is ${clock}`;
+})()"""
 # The model the viewer opens on, as its status and its list name it.
 kDefaultModel = "Fox"
 # The default model's clips in the model's order, the clip the motion step plays, the listed
@@ -1105,9 +1124,42 @@ def SetViewport(cdp: browser_gate.Cdp, width: int, height: int) -> None:
     Navigate(cdp, "Page.reload", ignoreCache=False)
 
 
-def SetTimeOfDay(cdp: browser_gate.Cdp, hours: int) -> None:
+# A Pixel 6 in portrait: its CSS viewport and device pixel ratio, and an Android user agent, so the
+# library treats the page as a phone.
+kPhoneViewport = (411, 785)
+kPhonePixelRatio = 2.625
+kPhoneUserAgent = ("Mozilla/5.0 (Linux; Android 17; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/155.0.0.0 Mobile Safari/537.36")
+# The library's default drawing-buffer cap on a phone (EngineOptions.maxDrawingBufferPixels).
+kPhoneDrawingBufferPixels = 1_000_000
+# The canvas's drawing buffer against its CSS size: the layout viewport keeps the phone's width (the
+# engine pins no canvas style), and the buffer is the CSS size times the pixel ratio, lowered to the
+# phone's cap. 'at the cap', or the numbers.
+kPhoneDrawingBuffer = f"""(() => {{
+    const canvas = document.querySelector('canvas');
+    const cssWidth = canvas.clientWidth, cssHeight = canvas.clientHeight;
+    const ratio = Math.min(devicePixelRatio, Math.sqrt({kPhoneDrawingBufferPixels} / (cssWidth * cssHeight)));
+    const fits = innerWidth === {kPhoneViewport[0]} && cssWidth === innerWidth
+        && Math.abs(canvas.width - Math.floor(cssWidth * ratio)) <= 1
+        && Math.abs(canvas.height - Math.floor(cssHeight * ratio)) <= 1
+        && canvas.width * canvas.height <= {kPhoneDrawingBufferPixels} * 1.01;
+    return fits ? 'at the cap' : JSON.stringify({{ innerWidth, cssWidth, cssHeight, width: canvas.width,
+                                                  height: canvas.height, devicePixelRatio }});
+}})()"""
+
+
+def SetPhone(cdp: browser_gate.Cdp) -> None:
+    """Emulates the phone (kPhoneViewport at kPhonePixelRatio, mobile, an Android user agent) and
+    reloads the page into it."""
+    cdp.Send("Emulation.setUserAgentOverride", userAgent=kPhoneUserAgent)
+    cdp.Send("Emulation.setDeviceMetricsOverride", width=kPhoneViewport[0], height=kPhoneViewport[1],
+             deviceScaleFactor=kPhonePixelRatio, mobile=True)
+    Navigate(cdp, "Page.reload", ignoreCache=False)
+
+
+def SetTimeOfDay(cdp: browser_gate.Cdp, hours: float) -> None:
     Evaluate(cdp, "(() => { const slider = document.querySelector('.panel [name=time]');"
-                  f" slider.value = '{hours}'; slider.dispatchEvent(new Event('input')); }})()")
+                  f" slider.value = '{hours:g}'; slider.dispatchEvent(new Event('input')); }})()")
 
 
 def RunViewer(cdp: browser_gate.Cdp, origins: Origins, localModel: Path, seconds: float,
@@ -1129,12 +1181,13 @@ def RunViewer(cdp: browser_gate.Cdp, origins: Origins, localModel: Path, seconds
         Evaluate(cdp, kRestAtYawZero)
     # The landing: the page's first load, cold, captured without a second load of the model.
     results = [ViewerStep(cdp, "viewer-default",
-                          "the page opens on its default model, framed in the middle of the area the panel leaves free, at the steps' exposure compensation",
-                          OpenWithTurntableOff, f"(async () => {kStatus} + ' | ' + (await {kModelFramed}) + ' | EV ' + {kExposureNow})()",
-                          f"Showing {kDefaultModel} | framed | EV {kViewerExposureEv}", seconds, out, pose=kAnimationPose,
+                          "the page opens on its default model, framed in the middle of the area the panel leaves free, at the steps' exposure compensation, at the sky's default time of day",
+                          OpenWithTurntableOff, f"(async () => {kStatus} + ' | ' + (await {kModelFramed}) + ' | EV ' + {kExposureNow} + ' | opens at ' + (await {kOpensAtSkyDefault}))()",
+                          f"Showing {kDefaultModel} | framed | EV {kViewerExposureEv} | opens at the sky default", seconds, out, pose=kAnimationPose,
                           record="globalThis.framing")]
     labels = Evaluate(cdp, "[...document.querySelectorAll('.panel [name=model] option')].map(o => o.dataset.name)") or []
     startPitch = Evaluate(cdp, kPitchNow)   # the page's own starting elevation, which the landing model keeps
+    openingHours = float(Evaluate(cdp, "globalThis.viewer.engine.scene.sky.timeOfDay"))   # the sky's time the page opened at, restored after the slider-end steps
     results.append(PlaysOnLoad(cdp, ViewerStep(
         cdp, "viewer-animation-clips",
         "the Fox's Animation section lists the clips the engine names and plays the first, its clip time "
@@ -1243,7 +1296,7 @@ def RunViewer(cdp: browser_gate.Cdp, origins: Origins, localModel: Path, seconds
                                   lambda hours=hours: SetTimeOfDay(cdp, hours),
                                   "document.querySelector('.panel output[name=clock]').value",
                                   f"{hours}:00", 10.0, out))
-    SetTimeOfDay(cdp, 15)
+    SetTimeOfDay(cdp, openingHours)
     flight = labels.index(kClosestZoomModel)
     results.append(ViewerStep(cdp, "viewer-closest-zoom",
                               "at the closest zoom the model still fills the frame",
@@ -1258,6 +1311,21 @@ def RunViewer(cdp: browser_gate.Cdp, origins: Origins, localModel: Path, seconds
                                       WaitFor(cdp, kStatus, f"Showing {kDefaultModel}", seconds),
                                       Evaluate(cdp, kRestAtYawZero)),
                                   kModelFramed, "framed", seconds, out, record="globalThis.framing"))
+    # On a phone the page's CSS keeps the canvas at the phone's width, and the drawing buffer is
+    # that size at the pixel ratio the library's phone cap allows (#4131).
+    desktopUserAgent = Evaluate(cdp, "navigator.userAgent")
+    results.append(ViewerStep(cdp, "viewer-phone-drawing-buffer",
+                              "on a phone the layout keeps the phone's width and the canvas's drawing buffer is its CSS "
+                              "size times the pixel ratio, lowered to the phone's megapixel cap",
+                              lambda: (SetPhone(cdp), WaitFor(cdp, kStatus, f"Showing {kDefaultModel}", seconds)),
+                              kPhoneDrawingBuffer, "at the cap", seconds, out, drawsModel=False,
+                              record="(() => { const c = document.querySelector('canvas'); return { innerWidth, "
+                                     "cssWidth: c.clientWidth, cssHeight: c.clientHeight, width: c.width, "
+                                     "height: c.height, devicePixelRatio }; })()"))
+    # Back to the desktop user agent at the last narrow viewport, where the next steps run.
+    cdp.Send("Emulation.setUserAgentOverride", userAgent=desktopUserAgent)
+    SetViewport(cdp, *kNarrowViewports[-1])
+    WaitFor(cdp, kStatus, f"Showing {kDefaultModel}", seconds)
     # At the phone's viewport, panel opened: the page re-frames the model above it.
     phone = f"{kNarrowViewports[-1][0]}x{kNarrowViewports[-1][1]}"
     results.append(ViewerStep(cdp, f"viewer-credit-{phone}",
@@ -1801,6 +1869,93 @@ def RunDemos(cdp: browser_gate.Cdp, origins: Origins, seconds: float, out: Path,
     return [withoutFlag, instancing]
 
 
+# A page whose canvas the page's CSS sizes (?styled=1, 400 x 300 px) or does not (a bare
+# <canvas width=400 height=300>, as the package's quick start writes it). It records the canvas's
+# CSS and drawing-buffer size over 60 frames into globalThis.canvasSizes.
+kCanvasSizingPage = "package/examples/canvas-sizing/index.html"
+kCanvasSizingHtml = """<!doctype html>
+<html><head><meta charset="utf-8"><style id="styled"></style></head>
+<body style="margin:0"><canvas width="400" height="300"></canvas>
+<script type="module">
+import { Engine } from '../../opengine.mjs';
+const styled = new URLSearchParams(location.search).get('styled');
+if (styled === '1')
+    document.getElementById('styled').textContent = 'canvas { display: block; width: 400px; height: 300px; }';
+const canvas = document.querySelector('canvas');
+const sizes = [];
+const sample = () => sizes.push([canvas.clientWidth, canvas.clientHeight, canvas.width, canvas.height]);
+if (styled === 'hidden') {
+    // Hidden at Engine.create, shown after: the create is refused, and nothing runs on the canvas.
+    canvas.style.display = 'none';
+    globalThis.createError = await Engine.create({ canvas, threads: 'auto' }).then(() => null, (error) => String(error.message));
+    canvas.style.display = '';
+} else {
+    await Engine.create({ canvas, threads: 'auto' });
+}
+for (let frame = 0; frame < 60; ++frame) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    sample();
+}
+globalThis.canvasSizes = sizes;
+</script></body></html>
+"""
+kCanvasSizingRatio = 2
+
+
+def RunCanvasSizing(cdp: browser_gate.Cdp, origins: Origins, pageRoot: Path, seconds: float, out: Path,
+                    build: str) -> list[dict]:
+    """A 400 x 300 canvas at pixel ratio 2, its CSS size given by the page or by its attributes: over
+    60 frames its CSS size stays 400 x 300 and its drawing buffer is 800 x 600. Hidden at
+    Engine.create, the create is refused naming why, and once shown the canvas keeps its attribute
+    size with no engine resizing it."""
+    page = pageRoot / kCanvasSizingPage
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(kCanvasSizingHtml, encoding="utf-8")
+    cdp.Send("Emulation.setDeviceMetricsOverride", width=1280, height=720, deviceScaleFactor=kCanvasSizingRatio,
+             mobile=False)
+    if build == "st":
+        cdp.Send("Network.enable")
+        cdp.Send("Network.setBlockedURLs", urls=["*coi-serviceworker.js"])
+    drawn = [400, 300, 400 * kCanvasSizingRatio, 300 * kCanvasSizingRatio]
+    results = []
+    for styled, name, rule, expected in (
+            ("1", "canvas-css-sized-2x", "a canvas the page's CSS sizes keeps that size, its drawing buffer twice it",
+             drawn),
+            ("0", "canvas-unstyled-2x", "a bare canvas keeps the size its attributes give it, its drawing buffer twice "
+                                        "it, frame after frame", drawn),
+            ("hidden", "canvas-hidden-at-create", "a canvas hidden at Engine.create is refused naming why, and once "
+                                                  "shown keeps its attribute size", [400, 300, 400, 300])):
+        first = len(cdp.events)
+        Navigate(cdp, "Page.navigate",
+                 url=f"{origins.Url('isolated' if build == 'mt' else 'page')}/{kCanvasSizingPage}?styled={styled}")
+        WaitFor(cdp, "Array.isArray(globalThis.canvasSizes)", True, seconds)
+        sizes = Evaluate(cdp, "globalThis.canvasSizes") or []
+        lines = [line for line in map(browser_gate.ConsoleText, cdp.events[first:]) if line]
+        (out / f"{name}.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        failures = []
+        if styled == "hidden":
+            createError = Evaluate(cdp, "globalThis.createError")
+            if not createError or "it is hidden" not in createError:
+                failures.append(f"Engine.create was not refused for the hidden canvas: {createError!r}")
+        wrong = [index for index, size in enumerate(sizes) if size != expected]
+        if len(sizes) != 60:
+            failures.append(f"the page recorded {len(sizes)} frames, expected 60")
+        if wrong:
+            failures.append(f"{len(wrong)} of {len(sizes)} frames are not {expected} (CSS, then buffer): frame "
+                            f"{wrong[0]} is {sizes[wrong[0]]}, the last {sizes[-1]}")
+        validation = [line for line in lines if any(marker in line for marker in kErrorMarkers)]
+        if validation:
+            failures.append(f"{len(validation)} WebGPU validation errors")
+        failures += [f"the page threw: {exception}" for exception in kPageExceptions]
+        del kPageExceptions[:]
+        results.append({"case": name, "rule": rule, "outcome": sizes[-1] if sizes else None,
+                        "validationErrors": len(validation), "build": PageBuild(cdp),
+                        "record": {"devicePixelRatio": kCanvasSizingRatio, "sizes": sizes},
+                        "pass": not failures, "failures": failures})
+    cdp.Send("Emulation.clearDeviceMetricsOverride")
+    return results
+
+
 def PackageVersion(package: Path, siteUrl: str | None) -> str:
     """The version of the package the viewer's steps ran: the published site's with --site-url,
     else the local package's."""
@@ -1907,6 +2062,7 @@ def main() -> int:
                                      args.viewer_build, args.site_url)
         if not args.no_demos and not args.viewer_only and not args.site_url:
             pageResults += RunDemos(cdp, origins, args.viewer_seconds, args.out, args.viewer_build)
+            pageResults += RunCanvasSizing(cdp, origins, pageRoot, args.viewer_seconds, args.out, args.viewer_build)
         if pageResults:
             version = PackageVersion(args.module, args.site_url)
             expectBuild = kExpectedBuild[args.viewer_build]

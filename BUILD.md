@@ -88,7 +88,7 @@ cmake --build --preset linux-x64-local --target McpServer
 
 ## Prerequisites
 
-The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the newest installed 10.0 patch. Other .NET SDKs beside it are fine (`dotnet --list-sdks`); an older SDK alone fails with `NETSDK1045`, and without `dotnet` the configure stops and names the fix.
+The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the newest installed 10.0 patch. Other .NET SDKs beside it are fine (`dotnet --list-sdks`); an older SDK alone fails with `NETSDK1045`, and without `dotnet` the configure stops and names the fix. A build without C# scripting needs no .NET at all: see [Building without .NET](#building-without-net).
 
 ### Windows
 
@@ -96,7 +96,7 @@ The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the
 |---|---|---|
 | **A clone path with no spaces, outside `Program Files`** (for example `C:\Dev\OpenEngine`) | Several third-party build systems break on a space in the path, and `Program Files` is write-protected. | — |
 | **Visual Studio 2026** with the *Desktop development with C++* workload | Includes MSVC, **CMake 3.25 or newer**, **Ninja** and Git. A standalone CMake and Ninja on PATH also work. Visual Studio 2022 works too: swap `vs2026-` for `vs2022-` in preset names. | [visualstudio.microsoft.com/downloads](https://visualstudio.microsoft.com/downloads/) |
-| **.NET 10 SDK** | C# scripting host and managed assemblies. | `winget install Microsoft.DotNet.SDK.10` |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | `winget install Microsoft.DotNet.SDK.10` |
 | **Vulkan-capable GPU driver** | Runtime requirement (Vulkan 1.3). | GPU vendor |
 | **Vulkan SDK** *(recommended)* | Not needed to compile. Supplies the validation layers Debug builds enable, and `spirv-val`. | [vulkan.lunarg.com](https://vulkan.lunarg.com/) |
 | **Node.js 20 or newer** *(optional)* | Builds the `McpServer` and `GameEngineCli` targets; without it configure omits both, and `node mcp/ge.mjs` and `publish_game.py build` cannot drive the editor. | [nodejs.org](https://nodejs.org/) |
@@ -109,7 +109,7 @@ The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the
 | **Xcode**, full install | The presets use ad-hoc signing; no developer account needed. | Mac App Store |
 | **CMake 3.25 or newer** and **Ninja** | | `brew install cmake ninja` |
 | **Vulkan SDK for macOS** | Bundles MoltenVK. Detected under `~/VulkanSDK/<version>`; set `VULKAN_SDK` if it is elsewhere. Without it the build succeeds with the Vulkan backend disabled. | [vulkan.lunarg.com](https://vulkan.lunarg.com/) |
-| **.NET 10 SDK** | C# scripting host and managed assemblies; the arm64 build on Apple Silicon. | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; the arm64 build on Apple Silicon. Not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | `brew install node` |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows, and the macOS editor's Steam Deck export. The `python3` that ships with Xcode is 3.9, which is too old. | `brew install python` |
 
@@ -128,7 +128,7 @@ node --version && python3 --version    # optional tools
 | **NASM (x86/x64)** | Required by FFmpeg when the video feature is enabled. | `sudo apt install nasm` |
 | **Windowing packages** | Required by vcpkg's `glfw3`. | `sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config` |
 | **Vulkan driver and tools** | Runtime requirement, plus the validation layers. | `sudo apt install mesa-vulkan-drivers vulkan-tools vulkan-validationlayers` |
-| **.NET 10 SDK** | C# scripting host and managed assemblies. | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | your distribution's `nodejs` package, or [nodejs.org](https://nodejs.org/) |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows. | your distribution's `python3` package |
 
@@ -171,6 +171,21 @@ On every platform (`cmake --list-presets` lists every configuration):
 
 - Pass `RelWithDebInfo` or `Release` as `CMAKE_BUILD_TYPE` for an optimized build. `linux-x64-local-unity` compiles faster cold.
 - From Windows without a Linux machine, `.\Tools\Scripts\run-linux-build.ps1` (Docker Desktop running) builds the `Editor` inside a container from `Tools/Docker/Dockerfile.linux-dev`, in `build-linux-docker`, with scripting off.
+
+### Building without .NET
+
+`-DENABLE_SCRIPTING=OFF` builds the Editor and the Player with no .NET SDK or runtime on the machine: the configure does not look for `dotnet`, no C# project is built, and the component reflection the engine compiles is generated by the native `ComponentScanner` tool (`Tools/ComponentScanner`). On Debian 13 or Ubuntu, the Linux prerequisites above without the .NET SDK are:
+
+```bash
+sudo apt install build-essential cmake ninja-build pkg-config git ca-certificates nasm \
+  curl zip unzip tar python3 autoconf autoconf-archive automake libtool \
+  libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev \
+  mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
+cmake --preset linux-x64-local -DENABLE_SCRIPTING=OFF
+cmake --build --preset linux-x64-local --target Editor Player
+```
+
+What that build does not have: C# scripting (C# components, entity systems and game systems), C# hot reload and the compile server, the C# play-mode driver, and the C# steps of game publishing. The status bar reads "C# scripting is off in this build"; a project's C# components stay in its scenes with their values, marked Not Registered, and apply when the project opens in a build with scripting; a project without C# scripts packages as in a full build, and packaging a project that has C# scripts is refused with that reason. Native C++ scripting, the editor and every engine feature written in C++ work as in a full build. Test targets that link `GameEngine.Native` (the UI test family and `FilePatternTests` among them) do not link in this build, so build the test targets you need by name. The same flag is what the Steam Deck and web presets set.
 
 ## Steam Deck
 
@@ -299,7 +314,7 @@ Run the test executables from `build/<preset>/bin/Debug/Tests/` as usual; a sani
 | `BUILD_EXAMPLES` | OFF | Standalone demos (`Examples/`, UI module examples) |
 | `BUILD_TOOLS` | OFF | Developer tools |
 | `BUILD_BENCHMARKS` | OFF | Benchmark executables |
-| `ENABLE_SCRIPTING` | ON | CoreCLR hosting and C# integration |
+| `ENABLE_SCRIPTING` | ON | CoreCLR hosting and C# integration; OFF needs no .NET ([Building without .NET](#building-without-net)) |
 | `PLAYER_MOVIE_RECORDER` | OFF | `--write-movie` capture and encode in the Player |
 | `ENABLE_ASAN` | OFF | AddressSanitizer (Debug configuration) |
 | `ENABLE_TSAN` | OFF | ThreadSanitizer (Debug configuration; clang or gcc, not with `ENABLE_ASAN`) |

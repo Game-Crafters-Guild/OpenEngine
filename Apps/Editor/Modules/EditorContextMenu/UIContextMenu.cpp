@@ -1,4 +1,5 @@
 #include "EditorContextMenu/UIContextMenu.h"
+#include "Assets/AssetSourceAlias.h"
 #include "UI/UIManager.h"
 #include "UI/UIElement.h"
 #include "UI/Controls/Label.h"
@@ -308,6 +309,27 @@ private:
     float m_LastAppliedX = std::numeric_limits<float>::infinity();
     float m_LastAppliedY = std::numeric_limits<float>::infinity();
 };
+
+// The image an item's icon path names. `alias:path` (`editor:Icons/x.svg`,
+// `ai-assistant:Editor/Icons/x.svg`) names a mounted source; anything else is a
+// file loaded as given. A one-letter prefix is a Windows drive (`C:\...`), never
+// an alias, as AssetPathSyntax::TrySplitAssetSourcePrefix reads it, and a prefix
+// that is not an alias spelling (a POSIX path with a colon in it) is not split.
+BackgroundImageSource IconImageSource(const std::string& iconPath)
+{
+    BackgroundImageSource source{};
+    source.Kind = BackgroundImageSource::SourceKind::Path;
+    source.Value = iconPath;
+    const size_t colon = iconPath.find(':');
+    if (colon == std::string::npos || colon == 1)
+        return source;
+    const std::string_view prefix(iconPath.data(), colon);
+    if (!AssetPathSyntax::IsValidAssetSourceAlias(prefix))
+        return source;
+    source.SourceAlias = std::string(prefix);
+    source.Value = iconPath.substr(colon + 1);
+    return source;
+}
 } // namespace
 
 
@@ -1013,18 +1035,8 @@ UIContextMenu::UIContextMenu() = default;
         const std::string& iconPath = item.iconPath;
         if (!iconPath.empty())
         {
-            BackgroundImageSource source{};
-            source.Kind = BackgroundImageSource::SourceKind::Path;
-            source.Value = iconPath;
-            const auto colon = iconPath.find(':');
-            if (colon != std::string::npos)
-            {
-                source.SourceAlias = iconPath.substr(0, colon);
-                source.Value = iconPath.substr(colon + 1);
-            }
-
             icon->Overrides()
-                .Set(Style::BackgroundImage, std::move(source))
+                .Set(Style::BackgroundImage, IconImageSource(iconPath))
                 .Set(Style::BackgroundRepeatProp, BackgroundRepeat::NoRepeat)
                 .Set(Style::BackgroundSize, BackgroundSizeValue{BackgroundSizeMode::Contain})
                 .Set(Style::BackgroundPosition, BackgroundPositionValue{50.0f, true, 50.0f, true});

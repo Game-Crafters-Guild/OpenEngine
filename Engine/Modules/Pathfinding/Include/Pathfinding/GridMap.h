@@ -11,9 +11,25 @@
 namespace GameEngine::Pathfinding
 {
 
+class AStarSolver;
+
 class GridMap : public INavigationMap
 {
 public:
+    // The cells from (MinX, MinZ) to (MaxX, MaxZ), both corners included.
+    struct CellRange
+    {
+        uint32 MinX = 0;
+        uint32 MinZ = 0;
+        uint32 MaxX = 0;
+        uint32 MaxZ = 0;
+
+        bool Contains(uint32 cellX, uint32 cellZ) const
+        {
+            return cellX >= MinX && cellX <= MaxX && cellZ >= MinZ && cellZ <= MaxZ;
+        }
+    };
+
     // Read-only access to the cell arrays for path solves: the settings by
     // value and raw pointers to the five arrays, with inline accessors and no
     // lock. A view is valid only inside a path-solve window, which holds the
@@ -61,6 +77,13 @@ public:
         // included; GridMap::Raycast's contract.
         bool Raycast(float32 startX, float32 startZ, float32 endX, float32 endZ,
                      float32& hitX, float32& hitY, float32& hitZ) const;
+        // True when the start's cell is open and a disc of `radius` moved
+        // from start to end stays on the grid and at least `radius` from
+        // every blocked cell's rectangle. A zero radius tests the line as
+        // Raycast does. Blocked cells inside `openCells` count as open; it
+        // applies to a radius above zero only.
+        bool IsSegmentClear(float32 startX, float32 startZ, float32 endX, float32 endZ,
+                            float32 radius, const CellRange* openCells = nullptr) const;
 
     private:
         friend class GridMap;
@@ -77,18 +100,25 @@ public:
     explicit GridMap(const GridSettings& settings);
 
     // INavigationMap. Opens a path-solve window for the one solve.
+    // GridMap::FindPath called directly, on a standalone grid map or on a
+    // world's grid map through GetGridMap/GetMap, solves on the calling
+    // thread's solver (static thread_local). That scratch lives as long as the
+    // thread, and the world neither frees nor reports it. Solve through
+    // NavigationWorld::FindPath or SolveGridPaths to use the world's solvers.
     PathStatus FindPath(const PathRequest& request, PathBuffer& pathBuffer, PathHandle& outPath) const override;
-    // FindPath without the PathBuffer and without a window of its own: called
-    // inside an open path-solve window, it reads through View(), writes a
-    // Complete path's points to outPoints (cleared first) and nothing else, so
-    // solves on several threads may run at once inside one window.
-    PathStatus FindPathPoints(const PathRequest& request, std::vector<PathPoint>& outPoints) const;
+    // True when the point's cell is open and a disc of `radius` around the
+    // point stays on the grid and at least `radius` from every blocked cell's
+    // rectangle (ReadView::IsSegmentClear with start and end at the point).
     bool IsPointNavigable(float32 x, float32 y, float32 z, float32 radius) const override;
     bool GetClosestNavigablePoint(float32 x, float32 y, float32 z, float32 searchRadius,
                                    float32& outX, float32& outY, float32& outZ) const override;
     bool Raycast(float32 startX, float32 startY, float32 startZ,
                  float32 endX, float32 endY, float32 endZ,
                  float32& hitX, float32& hitY, float32& hitZ) const override;
+    // ReadView::IsSegmentClear on this map. Like Raycast it reads only the
+    // blocked arrays, so it needs no path-solve window.
+    bool IsSegmentClear(float32 startX, float32 startZ, float32 endX, float32 endZ,
+                        float32 radius, const CellRange* openCells = nullptr) const;
 
     // Configuration
     const GridSettings& GetSettings() const;
@@ -162,6 +192,19 @@ public:
     const uint8* GetBlockedData() const;
 
 private:
+    // NavigationWorld solves its grid maps on solvers it owns.
+    friend class NavigationWorld;
+
+    // FindPath on `solver`'s scratch.
+    PathStatus FindPath(const PathRequest& request, AStarSolver& solver, PathBuffer& pathBuffer,
+                        PathHandle& outPath) const;
+    // FindPath on `solver`'s scratch, without the PathBuffer and without a
+    // window of its own: called inside an open path-solve window, it reads
+    // through View(), writes a Complete path's points to outPoints (cleared
+    // first) and nothing else, so solves on several threads, each on its own
+    // solver, may run at once inside one window.
+    PathStatus FindPathPoints(const PathRequest& request, AStarSolver& solver, std::vector<PathPoint>& outPoints) const;
+
     GridSettings m_Settings;
     std::vector<float32> m_Costs;
     std::vector<float32> m_Heights;

@@ -140,6 +140,7 @@ class GameViewController
     {
         Rendering::CameraData Data{};
         Components::ExposureMode ExposureMode = Components::ExposureMode::Auto;
+        Components::ExposureMeter ExposureMeter = Components::ExposureMeter::Picture;
         uint64_t FrameIndex = 0;
         uint32_t Width = 0;
         uint32_t Height = 0;

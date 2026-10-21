@@ -15,12 +15,9 @@
 #include <sstream>
 #include <unordered_map>
 #include <cstring>
+#include "Image/ImageHeader.h"
 #include "Logger/Logger.h"
 #include <cctype>
-
-#ifdef GE_HAVE_STB
-#include <stb_image.h>
-#endif
 
 
 
@@ -51,7 +48,6 @@ static int GetStatusPriority(VCSFileStatus status)
 // Helper: Check if file is an image and get its dimensions
 static bool GetImageDimensions(const std::filesystem::path& path, int& outWidth, int& outHeight)
 {
-#ifdef GE_HAVE_STB
     if (!path.has_extension())
         return false;
     
@@ -63,19 +59,12 @@ static bool GetImageDimensions(const std::filesystem::path& path, int& outWidth,
         ext != ".tga" && ext != ".gif" && ext != ".hdr" && ext != ".psd")
         return false;
     
-    int w = 0, h = 0, comp = 0;
-    if (stbi_info(path.string().c_str(), &w, &h, &comp))
-    {
-        outWidth = w;
-        outHeight = h;
-        return true;
-    }
-#else
-    (void)path;
-    (void)outWidth;
-    (void)outHeight;
-#endif
-    return false;
+    const Image::ImageHeader header = Image::ReadImageHeader(path);
+    if (!header.Valid)
+        return false;
+    outWidth = static_cast<int>(header.Width);
+    outHeight = static_cast<int>(header.Height);
+    return true;
 }
 
 static std::string FormatByteSize(uintmax_t bytes)

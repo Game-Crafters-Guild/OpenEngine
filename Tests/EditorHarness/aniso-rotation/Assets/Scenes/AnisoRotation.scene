@@ -45,7 +45,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Plane
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
 Transform.position = (0, 0, 0)
@@ -55,7 +55,7 @@ Transform.scale = (40, 1, 40)
 [entity id="e_sphere_rot0"]
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Aniso_Rot0.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 Name.value = "AnisoRot0"
 Transform.position = (-1.6, 2, 0)
 Transform.rotation = (0, 0, 0, 1)
@@ -64,7 +64,7 @@ Transform.scale = (1.4, 1.4, 1.4)
 [entity id="e_sphere_rot90"]
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Aniso_Rot90.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 Name.value = "AnisoRot90"
 Transform.position = (1.6, 2, 0)
 Transform.rotation = (0, 0, 0, 1)

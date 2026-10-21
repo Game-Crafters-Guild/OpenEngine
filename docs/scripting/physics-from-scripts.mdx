@@ -1,0 +1,151 @@
+---
+title: Physics from scripts
+description: Cast a ray, move a body, drive a character controller, and receive contact and trigger events from a C# script, with the thread and hot reload rules.
+sidebar:
+  order: 12
+---
+
+A script reaches the physics world through the `Physics` class in `GameEngine.Scripting`, and reaches one entity's body through that entity's view, `entity.Physics`. A native C++ script calls the same functions in `PhysicsECS/PhysicsScriptApi.h`. Distances are in meters, velocities in meters per second, and impulses in newton seconds. +Y is up.
+
+The physics world exists in play mode only. Outside play mode a ray cast returns false, a getter returns zero, and a setter does nothing. None of them throws.
+
+## Entities
+
+`GameEngine.Entity` names an entity of the scene. It holds the engine's 32-bit entity id, so an id that a world call returns becomes an entity with `new Entity(id)`. `Entity.None` names no entity. A `default(Entity)` is the entity with id 0, which can be a real entity, so use `Entity.None` for "no entity".
+
+## Cast a ray
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PhysicsECS/PhysicsScriptApi.h"
+bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
+             float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.Bindings"
+public static bool RayCast(Vector3 origin, Vector3 direction, out RayHit hit,
+                           float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
+```
+
+::::
+:::::
+
+`RayCast` finds the nearest body along the ray within `maxDistance`. It returns false when the ray hits nothing. The direction does not have to be of length 1. Only bodies on a layer of `layerMask` are hit. Trigger bodies stop the ray unless `ignoreTriggers` is true. [Physics queries](../physics/physics-queries.mdx#the-filter) tells how the filter works.
+
+`RayHit` holds the body's `Entity`, the hit `Point`, the surface `Normal` there, and the `Distance` from the origin. After a miss, `hit` holds the defaults: `Entity.None`, a zero point, and a normal of +Y.
+
+```csharp title="Damage what the crosshair points at"
+if (Physics.RayCast(cameraPosition, cameraForward, out RayHit hit, maxDistance: 100f))
+    ApplyDamage(hit.Entity, hit.Point, hit.Normal);
+```
+
+## Move a body
+
+The view of an entity reads and changes the velocity of the entity's `PhysicsBody`. For an entity with no body, a getter returns zero and a setter does nothing.
+
+| Call | What it does |
+|---|---|
+| `GetLinearVelocity()`, `SetLinearVelocity(v)` | The body's velocity. A static body does not move. |
+| `GetAngularVelocity()`, `SetAngularVelocity(v)` | The body's spin, in radians per second about each axis. |
+| `AddImpulse(impulse)` | Changes the velocity at once by `impulse / mass`, at the center of mass. |
+| `AddImpulseAtPosition(impulse, position)` | The same at a point in world space, which also spins the body. |
+
+```csharp title="Kick a ball"
+Entity ball = new Entity(ballId);
+ball.Physics.AddImpulse(new Vector3(0f, 2f, 5f));
+```
+
+The view is a value. A call on it goes to the engine at once, and the view keeps no state, so `ball.Physics` costs nothing to make.
+
+## Drive a character controller
+
+| Call | What it does |
+|---|---|
+| `SetDesiredVelocity(v)`, `GetDesiredVelocity()` | The velocity the entity's `CharacterController` moves at. X and Z replace the motion every physics step. A Y above 0 is a jump at that speed. |
+| `IsGrounded()` | True while the controller stands on ground. |
+
+```csharp title="Walk and jump"
+Vector3 move = new Vector3(input.X * speed, 0f, input.Y * speed);
+if (jumpPressed && player.Physics.IsGrounded())
+    move.Y = jumpSpeed;
+player.Physics.SetDesiredVelocity(move);
+```
+
+## Contact and trigger events
+
+Each event of an entity's view calls your handler for that entity only.
+
+| Event | When the handler runs | Payload |
+|---|---|---|
+| `ContactBegin` | A solid body of the entity starts to touch another. | `ContactEvent` |
+| `ContactEnd` | A solid body of the entity stops touching another. | `ContactEvent` |
+| `TriggerEnter` | A body enters a trigger. It runs for the trigger's entity and for the body's entity. | `TriggerEvent` |
+| `TriggerExit` | A body leaves a trigger, for both entities. | `TriggerEvent` |
+
+`ContactEvent` holds `Self` (the entity you subscribed to), `Other` (the entity it touches), and the contact `Point` and `Normal` in world space. `Normal` points from `Other` into `Self`, so a box that lands on the ground gets a `Normal` of about +Y. `TriggerEvent` holds `Self`, `Other`, and `SelfIsTrigger`, which is true when `Self` is the trigger.
+
+A handler takes the payload with `in`. Add it with `+=` and remove it with `-=`, on the main thread. Subscribe in `OnEnable` and unsubscribe in `OnDisable`.
+
+```csharp title="Score when the ball hits the brick"
+using System.Numerics;
+using GameEngine;
+using GameEngine.Scripting;
+
+public sealed class BrickScore : GameSystem
+{
+    private Entity m_Brick;
+    private Entity m_Ball;
+
+    public override void OnEnable()
+    {
+        m_Brick = new Entity(BrickId);
+        m_Ball = new Entity(BallId);
+        m_Brick.Physics.ContactBegin += OnBrickHit;
+    }
+
+    public override void OnDisable()
+    {
+        m_Brick.Physics.ContactBegin -= OnBrickHit;
+    }
+
+    private void OnBrickHit(in ContactEvent e)
+    {
+        if (e.Other == m_Ball)
+            AddScore(10);
+    }
+}
+```
+
+`BrickId`, `BallId` and `AddScore` stand for your own code.
+
+The rules of an event:
+
+- **When.** The handler runs on the main thread inside the physics step, after the bodies moved. A handler may call any physics function, also on the entity it handles. It may also add or remove handlers. A handler that is removed while an event is delivered is not called again, also not later in the same step.
+- **Exceptions.** An exception the handler throws is reported on the console. It does not reach the physics step or the other handlers.
+- **Removing.** `-=` removes the newest subscription of the same handler on the same event of the same entity, as a C# event does. A `-=` of a handler that is not subscribed does nothing.
+
+## When a subscription ends
+
+A subscription ends in one of three ways. After it ends, the handler is not called again and the engine holds no reference to it.
+
+- **You unsubscribe** with `-=`.
+- **Play mode stops.** Leaving play mode shuts the physics world down, which ends every subscription. Subscribe again in the next session's `OnEnable`.
+- **Your script unloads.** A hot reload unloads the old script assembly. The subscriptions whose handler code is in that assembly end at once, and the old handlers are not called again. The new script's `OnEnable` subscribes its own handlers. Because the engine calls the old system's `OnDisable` before the new system's `OnEnable`, a script that follows the `OnEnable` and `OnDisable` pattern has exactly one live subscription after a reload.
+
+A subscription of an entity that is destroyed stays until play mode stops, and it is not called for another entity.
+
+## Threads
+
+| Call | Who may call |
+|---|---|
+| `RayCast`, every call of the view, and `+=` and `-=` on an event | the main thread, outside a job |
+
+A call from another thread, such as `Task.Run`, a timer or a job, throws `EngineCallException`. [The main thread from a thread of your own](main-thread-post.mdx) tells how to reach the main thread from there.
+
+## What scripts cannot do yet
+
+`RayCastAll`, `BoxOverlap` and shape casts have no script call. A native C++ script calls `PhysicsWorld::RayCastAll` and `PhysicsWorld::BoxOverlap` directly.

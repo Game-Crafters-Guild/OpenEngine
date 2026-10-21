@@ -9,12 +9,14 @@
 #include "ECS/SwapGenerationGuard.h"
 #include "ECS/World.h"
 
+#include <cmath>
 #include <unordered_map>
 
 namespace GameEngine { namespace Engine::Audio {
 using namespace ::GameEngine::Audio;
 
 using GameEngine::Components::AudioEmitter;
+using GameEngine::Components::AudioEmitterAttenuation;
 using GameEngine::Components::WorldTransform;
 
 namespace
@@ -26,7 +28,18 @@ struct RuntimeEmitter
     Audio::AudioEmitterHandle voice = Audio::INVALID_AUDIO_EMITTER_HANDLE;
     bool started = false; // played once for playOnStart semantics
     uint16_t busUsedAtStart = 2; // bus we used when starting the voice; if emitter.bus changes, we restart to re-route
+    Audio::AudioFalloff falloffApplied{}; // the component's falloff as last handed to the voice
+    // The component's volume and pitch as last handed to the voice.
+    float32 volumeHanded = 1.0f;
+    float32 pitchHanded = 1.0f;
 };
+
+// Equal, with NaN equal to NaN: a component value the voice refuses (a non-finite one, with
+// its warning) is handed once, not on every frame.
+bool SameValue(float32 a, float32 b)
+{
+    return a == b || (std::isnan(a) && std::isnan(b));
+}
 
 // Stops the voice and re-arms playOnStart, so the emitter plays again from the
 // start once it is back on.
@@ -38,6 +51,32 @@ void StopEmitterVoice(Audio::AudioSystem& audio, RuntimeEmitter& rt)
         rt.voice = Audio::INVALID_AUDIO_EMITTER_HANDLE;
     }
     rt.started = false;
+}
+
+Audio::AudioAttenuationModel ToAttenuationModel(AudioEmitterAttenuation attenuation)
+{
+    switch (attenuation)
+    {
+    case AudioEmitterAttenuation::None:
+        return Audio::AudioAttenuationModel::None;
+    case AudioEmitterAttenuation::Linear:
+        return Audio::AudioAttenuationModel::Linear;
+    case AudioEmitterAttenuation::Exponential:
+        return Audio::AudioAttenuationModel::Exponential;
+    case AudioEmitterAttenuation::Inverse:
+        break;
+    }
+    return Audio::AudioAttenuationModel::Inverse;
+}
+
+Audio::AudioFalloff MakeFalloff(const AudioEmitter& emitter)
+{
+    Audio::AudioFalloff falloff{};
+    falloff.model = ToAttenuationModel(emitter.attenuation);
+    falloff.minDistance = emitter.minDistance;
+    falloff.maxDistance = emitter.maxDistance;
+    falloff.rolloff = emitter.rolloff;
+    return falloff;
 }
 
 } // namespace
@@ -209,6 +248,7 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                opts.loop = emitter.loop;
                opts.spatialized = spatialize;
                opts.bus = static_cast<Audio::AudioBusId>(emitter.bus);
+               opts.falloff = MakeFalloff(emitter);
 
                // Start if requested.
                const bool shouldStart = !rt.voice.IsValid() && (emitter.loop || (emitter.playOnStart && !rt.started));
@@ -231,6 +271,31 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                    {
                        rt.started = true;
                        rt.busUsedAtStart = emitter.bus;
+                       rt.falloffApplied = opts.falloff;
+                       rt.volumeHanded = emitter.volume;
+                       rt.pitchHanded = emitter.pitch;
+                   }
+               }
+
+               // Volume, pitch and a spatialized voice's distance falloff follow the
+               // component for the life of the voice: a changed value is handed to it
+               // once, whatever the voice makes of it.
+               if (rt.voice.IsValid())
+               {
+                   if (!SameValue(emitter.volume, rt.volumeHanded))
+                   {
+                       m_Audio->SetVolume(rt.voice, emitter.volume);
+                       rt.volumeHanded = emitter.volume;
+                   }
+                   if (!SameValue(emitter.pitch, rt.pitchHanded))
+                   {
+                       m_Audio->SetPitch(rt.voice, emitter.pitch);
+                       rt.pitchHanded = emitter.pitch;
+                   }
+                   if (spatialize && opts.falloff != rt.falloffApplied)
+                   {
+                       m_Audio->SetFalloff(rt.voice, opts.falloff);
+                       rt.falloffApplied = opts.falloff;
                    }
                }
 

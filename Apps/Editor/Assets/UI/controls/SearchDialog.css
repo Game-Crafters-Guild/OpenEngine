@@ -82,11 +82,11 @@ button.search-dialog-result-view-toggle,
 }
 
 .search-dialog-result-view-toggle.grid-view-icon {
-	background-image: url("editor:Icons/grid.png");
+	background-image: url("editor:Icons/grid.svg");
 }
 
 .search-dialog-result-view-toggle.list-view-icon {
-	background-image: url("editor:Icons/column-horizontal.png");
+	background-image: url("editor:Icons/column-horizontal.svg");
 }
 
 .search-dialog-result-view-toggle:hover,
@@ -400,51 +400,51 @@ button.search-dialog-result-view-toggle,
 }
 
 .icon-command-save {
-	background-image: url("editor:Icons/save.png");
+	background-image: url("editor:Icons/save.svg");
 }
 
 .icon-command-new-scene {
-	background-image: url("editor:Icons/sceneicon.png");
+	background-image: url("editor:Icons/sceneicon.svg");
 }
 
 .icon-command-open-project {
-	background-image: url("editor:Icons/folder_open.png");
+	background-image: url("editor:Icons/folder_open.svg");
 }
 
 .icon-command-undo {
-	background-image: url("editor:Icons/undo.png");
+	background-image: url("editor:Icons/undo.svg");
 }
 
 .icon-command-redo {
-	background-image: url("editor:Icons/ResetReload.png");
+	background-image: url("editor:Icons/ResetReload.svg");
 }
 
 .icon-command-play {
-	background-image: url("editor:Icons/play.png");
+	background-image: url("editor:Icons/play.svg");
 }
 
 .icon-command-pause {
-	background-image: url("editor:Icons/pause.png");
+	background-image: url("editor:Icons/pause.svg");
 }
 
 .icon-command-stop {
-	background-image: url("editor:Icons/stop.png");
+	background-image: url("editor:Icons/stop.svg");
 }
 
 .icon-command-reset-layout {
-	background-image: url("editor:Icons/layout3split.png");
+	background-image: url("editor:Icons/layout3split.svg");
 }
 
 .icon-command-reindex {
-	background-image: url("editor:Icons/search.png");
+	background-image: url("editor:Icons/search.svg");
 }
 
 .icon-panel {
-	background-image: url("editor:Icons/layout3split.png");
+	background-image: url("editor:Icons/layout3split.svg");
 }
 
 .icon-settings {
-	background-image: url("editor:Icons/settings.png");
+	background-image: url("editor:Icons/settings.svg");
 }
 
 .icon-unknown {

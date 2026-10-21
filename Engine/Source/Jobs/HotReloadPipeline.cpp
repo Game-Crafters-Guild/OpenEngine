@@ -265,6 +265,9 @@ std::future<HotReloadPipeline::PipelineStats> HotReloadPipeline::ExecuteAsync(
         // Don't reset progress to 0.0f - leave it at the final value (1.0f for success, or intermediate value for failure)
         // This allows the test to read the final progress value after the pipeline completes
 
+        if (m_RunCompletedCallback) {
+            m_RunCompletedCallback(stats);
+        }
         runResult->set_value(std::move(stats));
 
         // A cancelled or failed run stops monitoring while a stage can still

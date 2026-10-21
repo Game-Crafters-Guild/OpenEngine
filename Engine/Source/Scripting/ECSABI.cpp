@@ -288,7 +288,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreatePrimitive(GE_Handle world,
         GameEngine::Components::MeshRenderer mr{};
         mr.meshGpuHandleId = static_cast<uint64_t>(meshHandle);
         mr.materialAssetGuid.Set(materialGuid);
-        mr.renderLayerMask = 1u;
+        mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
         w->AddComponentImmediate(created, mr);
 
         // LocalBounds so the entity is pickable + cullable from day one
@@ -591,7 +591,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_RegisterBlobComponentWithSchema(
         {
             const GE_ECS_FieldDesc& d = fields[i];
             const bool typeKnown =
-                d.fieldType != 0 && d.fieldType <= static_cast<uint16_t>(FieldTypeId::Bytes);
+                d.fieldType != 0 && d.fieldType <= static_cast<uint16_t>(FieldTypeId::RenderLayerMask);
             const uint32_t elem = typeKnown ? FieldElementSize(static_cast<FieldTypeId>(d.fieldType)) : 0;
             const bool spanValid = d.size != 0 &&
                                    static_cast<uint64_t>(d.offset) + d.size <= sizeBytes &&

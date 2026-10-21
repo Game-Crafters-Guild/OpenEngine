@@ -104,13 +104,13 @@ LogPanel::LogPanel()
             if (initialOn)
                 btn->AddClass("checked");
 
-            // Replace default label: [checked icon] [level name] (Assets/Icons/checked.png).
+            // Replace default label: [checked icon] [level name] (Assets/Icons/checked.svg).
             if (!btn->GetChildren().empty())
                 btn->RemoveChild(btn->GetChildren()[0].get());
 
             auto checkIcon = std::make_unique<UIElement>();
             checkIcon->AddClass("log-filter-toggle-check");
-            UI::Layout::SetBackgroundPath(*checkIcon, "Icons/checked.png");
+            UI::Layout::SetBackgroundPath(*checkIcon, "Icons/checked.svg");
 
             auto textLbl = std::make_unique<Label>();
             textLbl->AddClass(logLineColorClass);

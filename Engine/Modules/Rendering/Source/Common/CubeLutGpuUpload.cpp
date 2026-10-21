@@ -196,4 +196,83 @@ bool CreateCubeLutGpuTextures(IDevice* device,
     return true;
 }
 
+CubeLutGpuTextures CreateIdentityCubeLutTextures(IDevice* device)
+{
+    CubeLutGpuTextures out{};
+    if (!device)
+        return out;
+    constexpr uint16_t kHalfZero = 0x0000u;
+    constexpr uint16_t kHalfOne = 0x3C00u;
+    constexpr uint32_t n3 = 2u;
+    std::vector<uint16_t> rgba3(static_cast<size_t>(n3) * n3 * n3 * 4u);
+    for (uint32_t b = 0; b < n3; ++b)
+    {
+        for (uint32_t g = 0; g < n3; ++g)
+        {
+            for (uint32_t r = 0; r < n3; ++r)
+            {
+                const size_t idx = ((static_cast<size_t>(b) * n3 + g) * n3 + r) * 4u;
+                rgba3[idx + 0u] = r != 0u ? kHalfOne : kHalfZero;
+                rgba3[idx + 1u] = g != 0u ? kHalfOne : kHalfZero;
+                rgba3[idx + 2u] = b != 0u ? kHalfOne : kHalfZero;
+                rgba3[idx + 3u] = kHalfOne;
+            }
+        }
+    }
+
+    TextureDesc td3{};
+    td3.width = n3;
+    td3.height = n3;
+    td3.depth = n3;
+    td3.mipLevels = 1;
+    td3.arrayLayers = 1;
+    td3.format = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+    td3.usage = static_cast<uint32_t>(TextureUsage::ShaderResource)
+              | static_cast<uint32_t>(TextureUsage::TransferDst);
+    td3.persistent = true;
+    td3.debugName = "IdentityLut3D";
+    out.Lut3D = device->CreateTexture(td3);
+    if (out.Lut3D.IsValid())
+    {
+        const size_t rowPitch3 = static_cast<size_t>(n3) * 4u * sizeof(uint16_t);
+        UploadTexture3D(device, out.Lut3D, rgba3.data(), n3, n3, n3, rowPitch3, 0, "IdentityLut3DStaging");
+    }
+
+    constexpr uint32_t n1 = 2u;
+    std::vector<uint16_t> rgba1(static_cast<size_t>(n1) * 3u * 4u, kHalfZero);
+    for (uint32_t row = 0; row < 3u; ++row)
+    {
+        rgba1[(static_cast<size_t>(row) * n1 + 0u) * 4u + 3u] = kHalfOne;
+        rgba1[(static_cast<size_t>(row) * n1 + 1u) * 4u + 0u] = kHalfOne;
+        rgba1[(static_cast<size_t>(row) * n1 + 1u) * 4u + 3u] = kHalfOne;
+    }
+
+    TextureDesc td1{};
+    td1.width = n1;
+    td1.height = 3u;
+    td1.depth = 1;
+    td1.mipLevels = 1;
+    td1.arrayLayers = 1;
+    td1.format = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+    td1.usage = static_cast<uint32_t>(TextureUsage::ShaderResource)
+              | static_cast<uint32_t>(TextureUsage::TransferDst);
+    td1.persistent = true;
+    td1.debugName = "IdentityLut1DStrip";
+    out.Lut1DStrip = device->CreateTexture(td1);
+    if (out.Lut1DStrip.IsValid())
+    {
+        const size_t rowPitch1 = static_cast<size_t>(n1) * 4u * sizeof(uint16_t);
+        UploadTexture2D(device, out.Lut1DStrip, rgba1.data(), n1, 3u, rowPitch1, "IdentityLut1DStaging");
+    }
+    return out;
+}
+
+CubeLutGpuBindingState IdentityCubeLutBinding(const CubeLutGpuTextures& identity)
+{
+    CubeLutGpuBindingState out{};
+    out.Lut3D = identity.Lut3D;
+    out.Lut1DStrip = identity.Lut1DStrip;
+    return out;
+}
+
 } // namespace GameEngine::Rendering

@@ -78,7 +78,7 @@ public:
     static void SetFieldEnum(ComponentTypeId typeId, std::string_view fieldName,
                              std::span<const EnumNameValue> enumNames);
 
-    // Canonical type name (e.g. "GameEngine::Components::RenderLayer"), or empty if
+    // Canonical type name (e.g. "GameEngine::Components::MeshRenderer"), or empty if
     // unregistered / registered without a name.
     static std::string_view GetCanonicalName(ComponentTypeId typeId);
 

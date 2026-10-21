@@ -1283,6 +1283,22 @@ HRM_READY:
         }
 
         /// <summary>
+        /// The number of C# components and systems the loaded scripts assembly defines
+        /// (HotReloadManager.CountScriptTypes); 0 when none is loaded or the count is unavailable.
+        /// </summary>
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        public static int GetCurrentScriptTypeCount()
+        {
+            try
+            {
+                if (!EnsureHotReloadTypeLoaded()) return 0;
+                var method = s_hotReloadType!.GetMethod("CountScriptTypes", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                return method?.Invoke(null, null) is int count ? count : 0;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>
         /// Dump HotReloadManager state for diagnostics (verbose). Returns 0 on success.
         /// </summary>
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]

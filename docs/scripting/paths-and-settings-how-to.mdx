@@ -44,7 +44,7 @@ std::filesystem::path saves    = GameEngine::StandardPaths::GameSavesRoot("My Ga
   - `GameSavesRoot(app)` → `<UserDataRoot>/saves`
 
 Notes:
-- `app` is sanitized via `PathUtils::SanitizeForFolderName()` to keep folder names filesystem-safe across platforms.
+- `PathUtils::SanitizeForFolderName()` sanitizes `app` to keep folder names filesystem-safe across platforms.
 
 ## Engine-resolved workspace and project roots
 
@@ -164,7 +164,3 @@ Platform behavior:
 - **Windows**: Known Folder Documents (fallback `%USERPROFILE%\Documents`)
 - **macOS**: `~/Documents`
 - **Linux**: reads `XDG_DOCUMENTS_DIR` from `user-dirs.dirs` when available (fallback `~/Documents`)
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/PathsAndSettings_HowTo.md`; "historical layout" and "current implementation" notes dropped.

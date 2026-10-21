@@ -1,10 +1,16 @@
 #version 450
 
+
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
 
 layout(set = 0, binding = 0) uniform sampler2D uSceneColor;
 layout(set = 0, binding = 1) uniform sampler2D uDepth;
+// The view's exposure state (ExposureHistory). The scene is stored at the frame's
+// pre-exposure P while the cloud lighting is absolute: the scene's luminance is divided by P where
+// it feeds the lighting, and the scattering is multiplied by P where it joins the scene.
+#define GE_EXPOSURE_HISTORY_BINDING 3
+#include "Includes/exposure_history.glsl"
 
 layout(set = 0, binding = 2, std140) uniform ViewParamsBlock
 {
@@ -17,6 +23,18 @@ layout(set = 0, binding = 2, std140) uniform ViewParamsBlock
 #undef GE_VP_VEC4
 #undef GE_VP_MAT4
 } ViewParams;
+
+// The height fog in front of what each pixel shows (height_fog_pixel.glsl). The scene already
+// carries it: every surface took it in its own shader and the sky pass drew the sky fill. The layer
+// stands in front of what the pixel shows, so it takes the fog in front of that, and the fog's light
+// in front of what the layer now hides is taken back by the layer's opacity.
+layout(set = 0, binding = 4, std140) uniform HeightFogParamsBlock
+{
+#include "Includes/height_fog_params_fields.glsl"
+} HeightFogParams;
+layout(set = 0, binding = 5) uniform sampler2D uSkyBackdrop;
+#define GE_HEIGHT_FOG_BACKDROP uSkyBackdrop
+#include "Includes/height_fog_pixel.glsl"
 
 layout(push_constant) uniform AtmosLayerPC
 {
@@ -146,6 +164,7 @@ float CloudDensity(vec3 worldPos, vec3 drift)
 void main()
 {
     vec4 scene = texture(uSceneColor, vUV);
+    float preExposure = GE_PreExposure();
     float rawDepth = texture(uDepth, vUV).r;
     float fill = Saturate(pc.atmosSkyFill);
     float mass = Saturate(pc.atmosVaporMass);
@@ -221,7 +240,7 @@ void main()
         float rim = pow(1.0 - Saturate(density), 2.0) * Saturate(pc.atmosRimBoost);
         float selfShade = mix(1.0, 1.0 - density * 0.68, Saturate(pc.atmosOcclusion));
         float cloudLighting = mix(0.58, 1.0, Saturate(lightWrap + rim * 0.55 + h * 0.22));
-        float sceneLuminance = dot(max(scene.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+        float sceneLuminance = dot(max(scene.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) / preExposure;
         cloudLighting = mix(cloudLighting, sceneLuminance + 0.10,
                             Saturate(pc.atmosSkyBounce) * 0.30);
         vec3 cloudLight = cloudColor * max(cloudLighting, 0.0) * selfShade;
@@ -239,6 +258,12 @@ void main()
     // Beer-Lambert integration already carries transmittance. Mixing the
     // result by alpha a second time suppresses the authored scattering color
     // and lets the background hue dominate thin and medium-density clouds.
-    vec3 rgb = scene.rgb * transmittance + scattering;
+    ivec2 depthSize = textureSize(uDepth, 0);
+    ivec2 pixel = ivec2(clamp(vUV * vec2(depthSize), vec2(0.0), vec2(depthSize) - vec2(1.0)));
+    vec3 fogScattering;
+    float fogTransmittance;
+    GE_HeightFogAtPixel(vUV, texelFetch(uDepth, pixel, 0).r, fogScattering, fogTransmittance);
+    vec3 rgb = scene.rgb * transmittance +
+               (scattering * fogTransmittance + fogScattering * (1.0 - transmittance)) * preExposure;
     oColor = vec4(max(rgb, vec3(0.0)), scene.a);
 }

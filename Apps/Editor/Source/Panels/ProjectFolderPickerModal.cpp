@@ -855,7 +855,7 @@ void ProjectFolderPickerModal::BuildTree()
 
     auto communityIcon = std::make_unique<UIElement>();
     communityIcon->AddClass("project-community-icon");
-    UI::Layout::SetBackgroundPath(*communityIcon, "Icons/cloud.png");
+    UI::Layout::SetBackgroundPath(*communityIcon, "Icons/cloud.svg");
 
     auto communityTitle = std::make_unique<Label>();
     m_CommunityStatusTitle = communityTitle.get();
@@ -1938,9 +1938,9 @@ Button* ProjectFolderPickerModal::AddCatalogCard(UIElement& row, const std::stri
     {
         if (UIManager* manager = GetOwnerManager())
         {
-            const GUID thumbnailGuid = manager->ResolveBackgroundImagePath(entry.ThumbnailRef);
+            const GUID thumbnailGuid = manager->BackgroundImages().ResolvePath(entry.ThumbnailRef);
             if (!thumbnailGuid.IsNull())
-                manager->EnsureBackgroundTextureUploaded(thumbnailGuid);
+                manager->BackgroundImages().EnsureUploaded(thumbnailGuid);
         }
     }
     preview->AddChild(std::move(previewImage));
@@ -2989,7 +2989,7 @@ void ProjectFolderPickerModal::RefreshRecentProjectsList()
     auto plusIcon = std::make_unique<UIElement>();
     plusIcon->AddClass("project-card-plus-icon");
     plusIcon->AddClass("project-card-action-icon");
-    UI::Layout::SetBackgroundPath(*plusIcon, "Icons/plus.png");
+    UI::Layout::SetBackgroundPath(*plusIcon, "Icons/plus.svg");
     newPreview->AddChild(std::move(plusIcon));
 
     auto newBody = std::make_unique<UIElement>();
@@ -3023,7 +3023,7 @@ void ProjectFolderPickerModal::RefreshRecentProjectsList()
     auto folderIcon = std::make_unique<UIElement>();
     folderIcon->AddClass("project-card-folder-icon");
     folderIcon->AddClass("project-card-action-icon");
-    UI::Layout::SetBackgroundPath(*folderIcon, "Icons/Folder@64px.png");
+    UI::Layout::SetBackgroundPath(*folderIcon, "Icons/Folder@64px.svg");
     openPreview->AddChild(std::move(folderIcon));
 
     auto openBody = std::make_unique<UIElement>();

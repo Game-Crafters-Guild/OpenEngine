@@ -78,6 +78,7 @@ target_link_libraries(AssetRuntime
     PRIVATE
         Platform
         FileSystem
+        Serialization
 )
 
 # Optional JSON dependency (ParserRegistry / tasks)

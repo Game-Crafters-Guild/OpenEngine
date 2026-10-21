@@ -74,9 +74,10 @@ inline bool IsSuperKey(KeyCode key)
 // claims a combination its action would then ignore.
 inline bool MatchesMods(int mods, const ActionBinding& b)
 {
-    if ((mods & b.requiredMods) != b.requiredMods)
+    const int required = static_cast<int>(b.requiredMods);
+    if ((mods & required) != required)
         return false;
-    if ((mods & b.forbiddenMods) != 0)
+    if ((mods & static_cast<int>(b.forbiddenMods)) != 0)
         return false;
     return true;
 }

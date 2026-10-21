@@ -292,6 +292,29 @@ layout(set = 0, binding = 6) uniform LightUBO {
 
 #include "../Includes/view_params.glsl"
 
+// Every shape that shades colour reads the view's exposure state: its output is scene colour,
+// stored at the frame's pre-exposure P (GE_PreExposure). Shapes that shade no colour (depth only,
+// motion vectors, the glass shadow colour, a transmittance rather than a radiance) read none. Included ahead of the IBL and the surface,
+// whose scene-colour grabs are stored at P too.
+#if !defined(GE_DEPTH_ONLY_FRAGMENT) && !defined(GE_MOTION_VECTORS) && !defined(GE_GLASS_SHADOW_COLOR)
+#define GE_SHADES_SCENE_COLOUR
+#include "../Includes/view_exposure.glsl"
+// The fog by this surface's own distance, under the HeightFog and VolumetricFog pass keywords: no pass
+// fogs a surface after it is drawn. Declared ahead of the IBL, which keeps the glass's view of the
+// scene grab apart for it.
+#if defined(GE_HEIGHT_FOG) || defined(GE_VOLUMETRIC_FOG_FORWARD) || defined(GE_CLOUDS_IN_FRONT)
+#define GE_FORWARD_FOG
+#include "../Includes/forward_fog.glsl"
+#endif
+#elif defined(GE_GLASS_SHADOW_COLOR)
+// The glass shadow colour returns a transmittance before the shading code, which still compiles but
+// never runs; it binds no exposure state.
+float GE_PreExposure()
+{
+    return 1.0;
+}
+#endif
+
 // Forward+ clustered lighting (when available and a lit model is active).
 // Included AFTER LightUBO so GE_AccumulateClusteredLighting can read
 // Light.uLightDirWorld / uLightColorWorld for the out-of-band directional.
@@ -494,12 +517,9 @@ vec4 textureLod(GE_MaterialTexture t, vec2 uv, float lod)
 // A surface whose emission follows the view's exposure only partly defines
 // GE_SURFACE_EMISSIVE_EXPOSURE_WEIGHT as the expression that reads its weight, in [0, 1]. The
 // shading shape then reads the view's exposure (one frame behind the tonemap: the forward passes run
-// before this frame's metering) to scale the emission by exposure^(weight - 1). Every other surface,
-// and every shape that shades no colour, reads no exposure.
-#if defined(GE_SURFACE_EMISSIVE_EXPOSURE_WEIGHT) && !defined(GE_DEPTH_ONLY_FRAGMENT) && \
-    !defined(GE_MOTION_VECTORS) && !defined(GE_GLASS_SHADOW_COLOR)
+// before this frame's metering) to scale the emission by exposure^(weight - 1).
+#if defined(GE_SURFACE_EMISSIVE_EXPOSURE_WEIGHT) && defined(GE_SHADES_SCENE_COLOUR)
 #define GE_EMISSION_FOLLOWS_EXPOSURE_WEIGHT
-#include "../Includes/view_exposure.glsl"
 #endif
 
 // A surface whose coverage the colour variant resolves by alpha-to-coverage (it defines
@@ -733,11 +753,17 @@ void main()
     si.linearDepth = (ge_view * vec4(vPosWS, 1.0)).z;
 
     // Populate per-texture UV transforms.
+#ifdef GE_COMPAT_PROFILE
+    // Whole-array copies, no loop (see DefaultSurfaceInput in surface_io.glsl).
+    si.textureST = ge_MatData.TextureST;
+    si.textureST2 = ge_MatData.TextureST2;
+#else
     for (int i = 0; i < 8; ++i)
     {
         si.textureST[i] = ge_MatData.TextureST[i];
         si.textureST2[i] = ge_MatData.TextureST2[i];
     }
+#endif
 
 #ifdef GE_PARALLAX_MARCH
     si.uvFootprint = parallaxUvFootprint;
@@ -966,7 +992,7 @@ void main()
         vec3 debugColor;
         if (GE_GetShadowDebugColor(ge_lastShadowResult, debugColor))
         {
-            oColor = vec4(debugColor, 1.0);
+            oColor = vec4(debugColor * GE_PreExposure(), 1.0);
             return;
         }
     }
@@ -1006,7 +1032,8 @@ void main()
     // the anisotropy bend used by IBL, without adding a direction attachment.
     vec2 reflectionOct = GE_OctEncode(normalize(mat3(ge_view) * ge_sssrReflectionDirection));
     oSpecularWeight = vec4(ge_sssrSpecularWeight * ambientMultiplier, reflectionOct.x);
-    oSpecularRadiance = vec4(ge_sssrIncidentRadiance, reflectionOct.y);
+    // Scene colour units: SSR composites this against the stored scene colour.
+    oSpecularRadiance = vec4(ge_sssrIncidentRadiance * GE_PreExposure(), reflectionOct.y);
     #endif
   #else
     finalColor += so.baseColor * so.ao * Light.uAmbient.xyz * Light.uAmbient.w * ambientMultiplier;
@@ -1077,14 +1104,45 @@ void main()
     // NOTE: this no-op is exact for a SINGLE glass layer (dst == grab). Overlapping transmissive is
     // order-dependent — the pass sorts nothing and writes no depth — so a partially-occluded
     // stack reads approximately; accepted until stacked glass is a target.
+    // The grab is already stored at P, so it bypasses the multiply below.
     {
         const float kRawDepthSlack = 1e-4; // reverse-Z raw-depth silhouette guard
         float sceneRaw = texelFetch(ge_sceneDepth, ivec2(gl_FragCoord.xy), 0).r;
         if (sceneRaw > gl_FragCoord.z + kRawDepthSlack) // opaque is in front of the glass
-            finalColor = texelFetch(ge_sceneColor, ivec2(gl_FragCoord.xy), 0).rgb;
+        {
+            oColor = vec4(texelFetch(ge_sceneColor, ivec2(gl_FragCoord.xy), 0).rgb, alpha);
+            return;
+        }
     }
 #endif
 
-    oColor = vec4(finalColor, alpha);
+#if defined(GE_FORWARD_FOG) && !defined(GE_PARALLAX_STEPS_VIEW)
+    // The fog in front of this surface, after its lighting and emission, on the radiance it writes.
+    {
+        GE_ForwardFog fog = GE_EvaluateForwardFog(vPosWS, gl_FragCoord.xy * ge_screenSize.zw);
+  #if defined(GE_IBL_TRACKS_GRAB)
+        // Glass: the scene grab seen through it already carries the fog of what is behind it, so
+        // only the glass's own radiance takes this fog, and the fog's light only as far as the
+        // glass hides the grab.
+        vec3 grabRadiance = ge_iblGrabRadiance * ambientMultiplier;
+        finalColor = GE_ApplyForwardFog(finalColor - grabRadiance, alpha,
+                                        vec3(1.0) - ge_iblGrabThroughput * ambientMultiplier, fog) +
+                     grabRadiance;
+  #else
+        finalColor = GE_ApplyForwardFog(finalColor, alpha, vec3(1.0), fog);
+  #endif
+  #ifdef GE_SSSR_NORMAL_ROUGHNESS
+        // The reflection the screen-space pass adds later replaces part of this surface's own
+        // radiance, so it takes the same fog: the composite's weight carries the transmittance.
+        oSpecularWeight.rgb *= fog.Transmittance;
+  #endif
+  #ifdef GE_CLOUDS_IN_FRONT
+        GE_ApplyCloudsInFront(vPosWS, gl_FragCoord.xy * ge_screenSize.zw, finalColor, alpha);
+  #endif
+    }
+#endif
+
+    // finalColor is absolute scene-linear radiance; scene colour stores it at P.
+    oColor = vec4(finalColor * GE_PreExposure(), alpha);
 #endif // GE_DEPTH_ONLY_FRAGMENT || GE_MOTION_VECTORS
 }

@@ -312,6 +312,18 @@ if [[ "\${GE_LINUX_CROSS_COMPILE_X64:-0}" == "1" ]]; then
     echo "ERROR: Host ShaderReflect was not built at \$host_sr_exe" >&2
     exit 1
   fi
+  # The component scanner runs on the build host too (Engine's generated reflection
+  # TU is its output); the standalone project needs no vcpkg dependency.
+  host_cs_dir="build/componentscanner-host-linux-arm64"
+  host_cs_exe="\${host_cs_dir}/ComponentScanner"
+    echo "Updating native host ComponentScanner (Tools/ComponentScanner)..."
+    cmake -S Tools/ComponentScanner -B "\$host_cs_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    cmake --build "\$host_cs_dir" --target ComponentScanner -j "$jobs_expr"
+  if [[ ! -x "\$host_cs_exe" ]]; then
+    echo "ERROR: Host ComponentScanner was not built at \$host_cs_exe" >&2
+    exit 1
+  fi
 fi
 
 # Keep CMake's dependency graph: configure detects changed inputs and the
@@ -333,6 +345,7 @@ if [[ "\${GE_LINUX_CROSS_COMPILE_X64:-0}" == "1" ]]; then
   if [[ -n "\$host_sr_exe" ]]; then
     cmake_configure_args+=(-DGE_SHADERREFLECT_EXECUTABLE="\$host_sr_exe")
   fi
+  cmake_configure_args+=(-DGE_COMPONENT_SCANNER_EXECUTABLE="\$host_cs_exe")
 fi
 cmake "\${cmake_configure_args[@]}"
 cmake --build --preset "$build_preset" -j "$jobs_expr"

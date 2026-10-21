@@ -76,6 +76,7 @@ inline constexpr const char* TopToolbarRecord = "TopToolbarRecord";
 inline constexpr const char* TopToolbarCenter2 = "TopToolbarCenter2";
 inline constexpr const char* TopToolbarCenter3 = "TopToolbarCenter3";
 inline constexpr const char* TopToolbarCenter4 = "TopToolbarCenter4";
+inline constexpr const char* TopToolbarAudio = "TopToolbarAudio";
 inline constexpr const char* TopToolbarLeft1 = "TopToolbarLeft1";
 inline constexpr const char* TopToolbarLeft2 = "TopToolbarLeft2";
 inline constexpr const char* TopToolbarLeft3 = "TopToolbarLeft3";

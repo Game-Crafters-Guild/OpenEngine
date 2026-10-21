@@ -73,6 +73,18 @@ inline Rendering::MaterialKeyword WorldPassReliefDepthKeywords(Rendering::Materi
     return MaterialKeyword::ParallaxDepthOffset;
 }
 
+// The keywords a world pass draws a scene entity's colour with: the pass's keywords, GE_INSTANCED
+// (entity batches fetch their instances indirectly, even for a caller that passes no keywords) and
+// the relief depth a parallax material writes or reads (WorldPassReliefDepthKeywords). The world
+// pass's entity draws and the scene warm (SceneDrawWarm) both take their keys from here.
+inline Rendering::MaterialKeyword WorldEntityColorKeywords(Rendering::MaterialKeyword passKeywords,
+                                                           Rendering::MaterialKeyword materialKeywords,
+                                                           MaterialAlphaMode alphaMode, ReliefDepthSource source)
+{
+    return passKeywords | Rendering::MaterialKeyword::Instanced |
+           WorldPassReliefDepthKeywords(materialKeywords, alphaMode, source);
+}
+
 // Whether a colour variant's pipeline writes depth: the material's own setting, off for a variant that
 // reads the prepass's relief depth or tests against it with a tolerance, either of which must leave it in
 // the buffer exactly as the prepass wrote it.

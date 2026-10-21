@@ -1,12 +1,12 @@
 ---
 title: GPU debugging guide
-description: How to find a wrong-pixel GPU bug, starting from the data rather than the math, with the engine's capture tools, RenderDoc, the Vulkan pitfalls and the shadow checks.
+description: How to find a wrong-pixel GPU bug, starting from the data rather than the math, with the engine's capture tools, RenderDoc, the Vulkan pitfalls, and the shadow checks.
 ---
 
 ## Core principle: start with data, not math
 
-Most GPU rendering bugs are **data pipeline issues** — wrong buffer bound,
-stale descriptor set, aliased memory, wrong resource — NOT math errors.
+Most GPU rendering bugs are **data pipeline issues** (wrong buffer bound,
+stale descriptor set, aliased memory, wrong resource), NOT math errors.
 Before investigating matrix conventions, Y-flips, or shader logic, verify
 the GPU is reading the correct data.
 
@@ -53,7 +53,7 @@ The engine uses `VK_KHR_maintenance1` negative viewport height for Y-up
 rasterization. This means +clip.Y maps to texture V=0 (top). When sampling
 a render target that was written with the negative viewport, the UV mapping
 needs `uv.y = 1.0 - uv.y` to compensate. This applies to shadow maps,
-reflection probes, or any render-to-texture that's sampled later.
+reflection probes, or any render-to-texture that is sampled later.
 
 ### Render graph transient reuse
 Render graph transients are pooled across frames, not aliased within a frame:
@@ -61,7 +61,7 @@ a transient is acquired when the frame's graph is realized, returned at the end
 of the frame, and the next frame reuses an entry with a matching description
 (`Engine/Modules/Rendering/Include/Rendering/Core/RenderGraph/RGTransientPool.h`).
 A transient therefore holds whatever an earlier frame left in it until a pass
-writes it this frame; the next section shows how to catch a read that comes
+writes it this frame. The next section shows how to catch a read that comes
 first. CPU data written each frame goes through the upload ring
 (`AllocUpload<T>()`), not through a transient buffer.
 
@@ -81,24 +81,24 @@ An integer storage buffer read before its first write reads 2143322048, which
 can make an indirect dispatch or draw count huge. Read back the pass outputs (for example
 with the editor's `capture_resource`) and the first target that holds NaN
 names the pass that consumed an unwritten input. The switch is read once at
-startup; off, it costs nothing per frame. A persistent history the pool keeps
+startup. Off, it costs nothing per frame. A persistent history the pool keeps
 under its name across frames keeps its contents, as it must. The NaN reaches
 the reading pass only because the driver keeps the memory through the render
 graph's first transition from the undefined layout, which the Vulkan
-specification allows it to discard; this holds on NVIDIA drivers and has not
+specification allows it to discard. This holds on NVIDIA drivers and has not
 been verified on other vendors.
 
 ### Descriptor set binding validation
-Vulkan silently ignores `BindDescriptorSet` if the pipeline doesn't declare
+Vulkan silently ignores `BindDescriptorSet` if the pipeline does not declare
 a matching descriptor set layout. Always verify the depth/compute pipeline
 includes `descriptorSetLayouts` in its `PipelineDesc`.
 
 ### Shader variant keyword interaction
 Depth-only passes compile with minimal keywords (e.g., only `Instanced`)
 to avoid pulling in Forward+ bindings (ClusterBuffer, LightBuffer) that the
-depth pass doesn't provide. The engine's depth passes narrow their keywords
+depth pass does not provide. The engine's depth passes narrow their keywords
 when they execute (`DepthOnlyPassParamsRG` in
-`Engine/Include/Engine/Rendering/DepthPassTypes.h`); a new depth-only pass
+`Engine/Include/Engine/Rendering/DepthPassTypes.h`). A new depth-only pass
 should do the same.
 
 ## Shadow mapping specific
@@ -121,8 +121,8 @@ should do the same.
 ### Cascade verification
 
 1. Capture all 4 layers: they should show different scales (cascade 0 tightest).
-2. Log VP[0] and VP[5] per cascade — they should differ by ~2x between adjacent cascades.
-3. Check `ge_shadowSplits` values — they should be increasing positive values
+2. Log VP[0] and VP[5] per cascade: they should differ by ~2x between adjacent cascades.
+3. Check `ge_shadowSplits` values: they should be increasing positive values
    in view-space depth.
 
 ### Common shadow pitfalls
@@ -132,7 +132,7 @@ should do the same.
 - **Cascade camera UBO**: Must use persistent buffers, not render graph transient pool
   (see the transient note above).
 - **Frame data timing**: Upload lambda must execute before cascade exec reads cached data.
-  Don't clear the frame cache in the build phase.
+  Do not clear the frame cache in the build phase.
 
 ## RenderDoc
 
@@ -142,32 +142,32 @@ have diagnosed the shadow buffer aliasing bug in one session.
 
 ### Taking a capture
 
-1. `launch_editor renderdoc=true` — runs the staged editor under
+1. `launch_editor renderdoc=true`: runs the staged editor under
    `renderdoccmd capture`. It defaults `captureCompat=true`
    (`GE_VK_CAPTURE_COMPAT=1`), which drops `VK_EXT_descriptor_buffer` for the
-   session; without it nearly every resource sits behind a buffer device address
+   session. Without it nearly every resource sits behind a buffer device address
    and the `.rdc` routinely fails to replay.
    **Caveat:** that same variable makes HZB occlusion culling report zero culled
    draws (`VulkanDevice.cpp`, capture-compat path), so a compat session is not
-   valid for occlusion or perf analysis — pass `captureCompat=false` for those,
+   valid for occlusion or perf analysis. Pass `captureCompat=false` for those,
    and accept that the capture may not replay.
    To use the GUI's launch options instead, launch under `qrenderdoc` by hand.
 2. `wait_for_editor`, then `trigger_capture`. It returns
    `{captured, captureIndex, filePath}` once RenderDoc has finished writing.
    The render loop stalls while RenderDoc serializes, so a >100 MB capture can
    take seconds of wall time while consuming only tens of frames.
-3. If `trigger_capture` times out, the capture is still finishing — recover its
+3. If `trigger_capture` times out, the capture is still finishing. Recover its
    path with `get_capture_status`, which answers immediately.
 
 Captures land at `<editor exe dir>/Captures/editor_frameN.rdc` (the folder beside the editor executable). The editor only
-replaces RenderDoc's own `%TEMP%\RenderDoc\...` default — a template set by
+replaces RenderDoc's own `%TEMP%\RenderDoc\...` default. A template set by
 `renderdoccmd --capture-file` or the qrenderdoc launch dialog is left as-is.
 `GE_RENDERDOC_CAPTURE_DIR` (or `launch_editor`'s `captureDir`) overrides either.
 When RenderDoc is not attached, `trigger_capture` answers with an `{error: ...}`
 body rather than a thrown error.
 
 If the editor never comes up under `renderdoc=true`, read the `renderdoccmdLog`
-path in the launch result — a failed inject is reported only there.
+path in the launch result: a failed inject is reported only there.
 
 The Render Graph panel's "Capture in RenderDoc" button does the same thing and
 shows the resulting filename next to itself.
@@ -176,7 +176,7 @@ shows the resulting filename next to itself.
 
 Drive `qrenderdoc --python <script>` over the `.rdc`. A script opens the
 capture with `renderdoc.OpenCaptureFile`, walks the action tree, and reads
-pipeline state per action — the same API the qrenderdoc interface uses.
+pipeline state per action, the same API the qrenderdoc interface uses.
 
 **First-run gotcha:** qrenderdoc's analytics dialog blocks `--python` until it is
 answered, so a scripted run hangs with no output on a fresh profile. Pre-seed
@@ -194,9 +194,9 @@ all untested. Verify each of those on AMD before trusting a result.
 :::
 
 RGP is the AMD counterpart to Nsight: per-event GPU timing, occupancy, and
-barrier/stall attribution — the tool to reach for when a pass is slow on Radeon
+barrier/stall attribution, the tool to reach for when a pass is slow on Radeon
 rather than wrong. The engine's `VK_EXT_debug_utils` labels should surface as
-RGP user markers, naming passes in the timeline — untested on AMD, and worth
+RGP user markers, naming passes in the timeline. This is untested on AMD, and worth
 confirming first, since an unnamed timeline is much harder to read.
 
 Requires an AMD Radeon GPU, the developer-mode driver, and the Radeon Developer
@@ -214,7 +214,7 @@ See also [External GPU profilers](external-gpu-profilers.mdx#radeon-gpu-profiler
 ensures the service broker is running (spawning it detached if needed), drives
 the panel CLI to trigger a capture, and returns the newest `.rgp` written after
 the trigger. Every spawned CLI's output goes to `build/mcp-rgp-logs/`, and those
-paths are in the tool result — read them first when a capture comes back empty.
+paths are in the tool result. Read them first when a capture comes back empty.
 
 ## Key engine tools
 
@@ -227,7 +227,3 @@ paths are in the tool result — read them first when a capture comes back empty
 | `get_render_graph_pass_detail passName` | Inspect per-pass resource accesses |
 | `get_render_graph_resources type aliveOnly` | List all RG resources |
 | `get_render_graph_dependencies` | Check pass ordering |
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/gpu-debugging-guide.md`. The transient section describes the render graph's pooled transients (the aliasing guard it named no longer exists), and the depth keyword note names `DepthOnlyPassParamsRG` (the option it named no longer exists).

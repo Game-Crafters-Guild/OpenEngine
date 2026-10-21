@@ -603,6 +603,10 @@ if(NOT CMAKE_HOST_WIN32)
     find_package(PkgConfig REQUIRED)
 endif()
 
+# .NET hosting libraries (nethost) with architecture detection, and the helper that
+# stages the hosting runtime beside an executable: scripting-only, so a build with
+# ENABLE_SCRIPTING=OFF never looks for a .NET install.
+if(ENABLE_SCRIPTING)
 # Find .NET hosting libraries (nethost) with architecture detection
 include(cmake/DotnetHostVersions.cmake)
 include(cmake/DotnetLinuxHostRids.cmake)
@@ -830,6 +834,7 @@ function(ge_add_dotnet_hosting_runtime target_name)
     endif()
   endif()
 endfunction()
+endif() # ENABLE_SCRIPTING
 
 #
 # Helper: copy MSVC AddressSanitizer runtime DLLs next to an executable target.
@@ -1079,6 +1084,7 @@ if(EMSCRIPTEN)
     add_subdirectory(Engine/Modules/Mathematics)
     add_subdirectory(Engine/Modules/Serialization)
     add_subdirectory(Engine/Modules/Noise)
+    add_subdirectory(Engine/Modules/Image)
     add_subdirectory(Engine/Modules/Memory)
     add_subdirectory(Engine/Modules/Animation)
     add_subdirectory(Engine/ECSModules/Components)
@@ -1166,6 +1172,8 @@ add_subdirectory(Engine/Modules/Mathematics)
 add_subdirectory(Engine/Modules/Serialization)
 # Noise depends on Types: shared CPU noise primitives for terrain and any other sampler
 add_subdirectory(Engine/Modules/Noise)
+# Image depends on Logger: the one CPU image decode, resample and encode (owns stb)
+add_subdirectory(Engine/Modules/Image)
 add_subdirectory(Engine/Modules/Animation)     # Animation pose, graph nodes, retargeting primitives
 
 # ECSModules/Components: shared ECS/authoring component headers

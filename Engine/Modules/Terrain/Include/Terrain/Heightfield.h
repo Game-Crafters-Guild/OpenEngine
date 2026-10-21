@@ -30,10 +30,11 @@ struct PngHeightmapSize
     uint32 Height = 0;
 };
 
-/// Reads the grid of the PNG at `file` from its header and checks it against the PNG decoder
-/// (HeightfieldData::LoadFromPNG16), which decodes a PNG whole and refuses more than 2^30 samples
-/// times channels (a palette image counts 4): about 1.07 billion grayscale samples, 32768 x 32767.
-/// For .png files only; other image formats have no such check. Returns an empty string and fills
+/// Reads the grid of the PNG at `file` from its header and checks it against
+/// HeightfieldData::LoadFromPNG16, which decodes a PNG whole to one 16-bit sample per pixel: the
+/// PNG decoder's limits (Image::ImageHeader::WithinDecoderLimits) and a result of at most 2^31 - 1
+/// bytes: up to 32768 x 32766 samples for a 16-bit grayscale PNG, 32768 x 32767 for an 8-bit one.
+/// For .png files; other image formats have no such check. Returns an empty string and fills
 /// `out`, else the reason worded as the fix (export the heightmap as .r32, which has no size limit).
 std::string ResolvePngHeightmapSize(const std::filesystem::path& file, PngHeightmapSize& out);
 

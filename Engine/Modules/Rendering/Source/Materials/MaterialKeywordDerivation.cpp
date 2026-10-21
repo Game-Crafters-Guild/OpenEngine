@@ -1,5 +1,6 @@
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
 
+#include "Rendering/Materials/MaterialBlendComposite.h"
 #include "Rendering/Materials/MaterialBuildContext.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/ShaderCapabilityDetector.h"
@@ -57,12 +58,33 @@ void ApplyVertexModifierKeyword(ShaderVariantKey& key,
                                 : MaterialKeyword::HasVertexMod;
 }
 
-void ApplyAlphaModeKeyword(ShaderVariantKey& key, MaterialAlphaMode alphaMode)
+void ApplyAlphaModeKeywords(ShaderVariantKey& key, MaterialAlphaMode alphaMode,
+                            const std::optional<MaterialBlendState>& blend)
 {
     if (alphaMode == MaterialAlphaMode::Mask)
         key.materialKeywords |= MaterialKeyword::AlphaTest;
-    else if (alphaMode == MaterialAlphaMode::Blend)
-        key.materialKeywords |= MaterialKeyword::AlphaBlend;
+    if (alphaMode != MaterialAlphaMode::Blend)
+        return;
+    key.materialKeywords |= MaterialKeyword::AlphaBlend;
+    switch (ClassifyBlendComposite(blend))
+    {
+    case BlendComposite::Over:
+        break;
+    case BlendComposite::PremultipliedOver:
+        key.materialKeywords |= MaterialKeyword::PremultipliedBlend;
+        break;
+    case BlendComposite::AdditiveStraight:
+    case BlendComposite::AdditivePremultiplied:
+    case BlendComposite::AdditiveOther:
+        key.materialKeywords |= MaterialKeyword::AdditiveBlend;
+        break;
+    case BlendComposite::Multiply:
+        key.materialKeywords |= MaterialKeyword::MultiplyBlend;
+        break;
+    case BlendComposite::Other:
+        key.materialKeywords |= MaterialKeyword::UnfoggedBlend;
+        break;
+    }
 }
 
 ParallaxRefusal ApplyParallaxKeyword(ShaderVariantKey& key,
@@ -107,6 +129,11 @@ MaterialKeyword NarrowColorPassKeywords(MaterialKeyword materialKeywords, Materi
         passKeywords = passKeywords & ~(MaterialKeyword::ParallaxStepsView | parallaxDepth);
     if (IsCompatShaderProfile())
         passKeywords = passKeywords & ~parallaxDepth;
+    if (!HasKeyword(materialKeywords, MaterialKeyword::AlphaBlend) &&
+        !HasKeyword(materialKeywords, MaterialKeyword::Transmission))
+        passKeywords = passKeywords & ~MaterialKeyword::VolumetricFog;
+    if (!HasKeyword(materialKeywords, MaterialKeyword::AlphaBlend))
+        passKeywords = passKeywords & ~MaterialKeyword::VolumetricClouds;
     return passKeywords;
 }
 

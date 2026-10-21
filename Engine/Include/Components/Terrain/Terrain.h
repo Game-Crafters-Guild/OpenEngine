@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/AssetRef.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 #include <limits>
@@ -173,7 +174,7 @@ struct Terrain
     uint32 LayerHexTiling = 0u;
 
     // ---- Rendering ----
-    uint32 RenderLayerMask = 1u;
+    Rendering::RenderLayerMask RenderLayers;
     bool CastShadows = true;
     bool ReceiveShadows = true;
 };

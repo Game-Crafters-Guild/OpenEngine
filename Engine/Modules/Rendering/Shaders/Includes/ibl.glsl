@@ -18,6 +18,16 @@ vec3 ge_sssrSpecularWeight = vec3(0.0);
 vec3 ge_sssrReflectionDirection = vec3(0.0, 0.0, 1.0);
 #endif
 
+#if defined(GE_TRANSMISSION_ENABLED) && defined(GE_SCENECOLOR_GRAB) && defined(GE_FORWARD_FOG)
+// The part of GE_EvaluateIBL's result that is the scene grab seen through the glass, absolute
+// scene-linear, and the fraction of the grab it lets through per channel. The grab already carries
+// the fog of what is behind the glass, so the forward fog (forward_fog.glsl) fogs the glass's own
+// radiance and leaves this part as it is.
+#define GE_IBL_TRACKS_GRAB
+vec3 ge_iblGrabRadiance = vec3(0.0);
+vec3 ge_iblGrabThroughput = vec3(0.0);
+#endif
+
 #include "compat_profile.glsl"  // GE_TAP_LOD0
 #include "standard_pbr.glsl"   // GE_SchlickFresnelRoughness + the F0 = mix(0.04, base, metallic) convention
 #include "surface_io.glsl"     // SurfaceOutput
@@ -243,6 +253,11 @@ vec3 GE_LayerAmbientFuzzOverCoat(vec3 beneath, vec3 fuzzColor, float fuzzRoughne
     float E        = GE_CharlieDirectionalAlbedo(NdotV, fuzzRoughness);
     vec3  fuzzAmb  = fuzzColor * irradiance * E * ao;
     float refl     = clamp(max(max(fuzzColor.r, fuzzColor.g), fuzzColor.b) * E, 0.0, 1.0);
+#ifdef GE_IBL_TRACKS_GRAB
+    // The grab seen through the glass is part of `beneath`, so the fuzz attenuates it the same way.
+    ge_iblGrabRadiance *= 1.0 - refl;
+    ge_iblGrabThroughput *= 1.0 - refl;
+#endif
     return beneath * (1.0 - refl) + fuzzAmb;
 }
 
@@ -549,7 +564,13 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
     vec2  ssUV       = ssScreenUV + ssOffset;
     vec2  ssEdge     = min(ssUV, vec2(1.0) - ssUV);
     float ssEdgeFade = clamp(min(ssEdge.x, ssEdge.y) / kScreenEdgeFadeMargin, 0.0, 1.0);
-    vec3  ssBg       = textureLod(ge_sceneColor, clamp(ssUV, 0.0, 1.0), 0.0).rgb * so.transmissionColor;
+    // The grab is stored at the pre-exposure P; this radiance is absolute until the adapter's output.
+    vec3  ssBg       = textureLod(ge_sceneColor, clamp(ssUV, 0.0, 1.0), 0.0).rgb / GE_PreExposure() *
+                       so.transmissionColor;
+   #ifdef GE_IBL_TRACKS_GRAB
+    // The fraction of the grab that reaches the camera through the glass, per channel.
+    vec3  ssThrough  = so.transmissionColor;
+   #endif
    #ifdef GE_TRANSMISSION_THICK
     // THICK path (two-surface, sphere-proxy): refract the view ray at the front face, walk the
     // authored thickness through the glass, refract again at an approximate back face, and sample the
@@ -585,7 +606,7 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
                     float fragEye  = abs(P0.z); // == GE_EyeDepthFromRaw(gl_FragCoord.z, ssScreenUV)
                     float sceneEye = GE_EyeDepthFromRaw(texelFetch(ge_sceneDepth, GE_ScreenTexel(uvE), 0).r, uvE);
                     if (sceneEye >= fragEye) // exit tap is behind the glass -> use it; else keep thin
-                        ssBg = textureLod(ge_sceneColor, uvE, 0.0).rgb * so.transmissionColor;
+                        ssBg = textureLod(ge_sceneColor, uvE, 0.0).rgb / GE_PreExposure() * so.transmissionColor;
                 }
             }
             // Beer–Lambert volume absorption: the transmitted background deepens toward
@@ -605,11 +626,18 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
                 // it steers the sample, this steers how much of it survives.)
                 float pathLen    = 2.0 * thick * abs(dot(T1, Nv));
                 ssBg            *= exp(-absorption * pathLen);
+   #ifdef GE_IBL_TRACKS_GRAB
+                ssThrough       *= exp(-absorption * pathLen);
+   #endif
             }
         }
     }
    #endif
     background       = mix(background, ssBg, ssEdgeFade);
+   #ifdef GE_IBL_TRACKS_GRAB
+    ge_iblGrabRadiance   = kD * wT * ssEdgeFade * ssBg;
+    ge_iblGrabThroughput = kD * wT * ssEdgeFade * ssThrough;
+   #endif
   #endif
     transmission  = kD * wT * background;
     diffuseScale  = 1.0 - wT;
@@ -662,6 +690,10 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
     ge_sssrSpecularWeight *= coatDarken * so.coatColor * (1.0 - ccFc);
 #endif
     // coatColor tints the through-coat base ambient (coat-medium absorption; white = no tint), matching the direct lobe.
+#ifdef GE_IBL_TRACKS_GRAB
+    ge_iblGrabRadiance *= coatDarken * so.coatColor * (1.0 - ccFc);
+    ge_iblGrabThroughput *= coatDarken * so.coatColor * (1.0 - ccFc);
+#endif
 #ifdef GE_FUZZ_ENABLED
     // Over-coat ambient fuzz: layer it over the WHOLE coated ambient stack (mirrors the direct
     // path), unlike the ambient sheen above which is folded into baseAmbient UNDER the coat.

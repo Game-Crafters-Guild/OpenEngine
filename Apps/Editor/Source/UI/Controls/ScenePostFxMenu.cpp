@@ -12,6 +12,7 @@
 #include "ECS/Query.h"
 #include "ECS/World.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
+#include "UI/ExposureMeterText.h"
 
 #include <set>
 #include <string>
@@ -113,22 +114,36 @@ std::vector<ContextMenuManipulator::Item> BuildScenePostFxMenuItems(
                          }});
 
     // The Scene View's exposure applies to the camera-less view regardless of post-process
-    // volumes, so its modes always appear and are independent of the master toggle.
+    // volumes, so its choices always appear and are independent of the master toggle: one radio
+    // row per look, Auto with each meter and Fixed.
     items.push_back({.Separator = true});
-    for (const SceneViewExposureMode mode :
-         {SceneViewExposureMode::Auto, SceneViewExposureMode::SceneLight, SceneViewExposureMode::Fixed})
+    const bool autoOn = settings.GetExposureMode() == SceneViewExposureMode::Auto;
+    for (const Components::ExposureMeter meter : {Components::ExposureMeter::Picture, Components::ExposureMeter::Lights})
     {
-        items.push_back({.Path = std::string("Exposure: ") + SceneViewExposureModeLabel(mode),
+        items.push_back({.Path = std::string("Exposure: Auto, ") + ExposureMeterLabel(meter),
                          .IconPath = EditorIcons::kPostFx,
-                         .Flags = checkedFlag(settings.GetExposureMode() == mode) | MenuItemFlag_Radio,
+                         .Flags = checkedFlag(autoOn && settings.GetExposureMeter() == meter) | MenuItemFlag_Radio,
                          .OnActivate =
-                             [mode, onExposureModeChanged]
+                             [meter, onExposureModeChanged]
                              {
-                                 Editor::SceneViewSettings::Get().SetExposureMode(mode, /*fromUserSwitch=*/true);
+                                 auto& s = Editor::SceneViewSettings::Get();
+                                 s.SetExposureMeter(meter);
+                                 s.SetExposureMode(SceneViewExposureMode::Auto, /*fromUserSwitch=*/true);
                                  if (onExposureModeChanged)
                                      onExposureModeChanged();
                              }});
     }
+    items.push_back({.Path = std::string("Exposure: ") + SceneViewExposureModeLabel(SceneViewExposureMode::Fixed),
+                     .IconPath = EditorIcons::kPostFx,
+                     .Flags = checkedFlag(!autoOn) | MenuItemFlag_Radio,
+                     .OnActivate =
+                         [onExposureModeChanged]
+                         {
+                             Editor::SceneViewSettings::Get().SetExposureMode(SceneViewExposureMode::Fixed,
+                                                                             /*fromUserSwitch=*/true);
+                             if (onExposureModeChanged)
+                                 onExposureModeChanged();
+                         }});
 
     const bool anySceneEffect = bloomInScene || colorFilterInScene || casInScene || crtInScene;
     if (anySceneEffect)

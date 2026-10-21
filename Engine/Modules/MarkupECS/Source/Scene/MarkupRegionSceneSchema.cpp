@@ -115,7 +115,7 @@ class MarkupRegionSceneSchema final : public ISceneComponentSchema
         {
             uint32 index = 0;
             if (ParseIntegerToken(property.substr(kMemberPrefix.size()), index) != IntegerTokenResult::Ok)
-                return Refuse(outError, "Unknown MarkupRegion property");
+                return ReportUnknownField(ctx, GetComponentName(), property, outError);
             if (index >= Components::kMaxRegionMembers)
                 return Refuse(outError, "A region holds at most 32 members; MarkupRegion." + std::string(property) +
                                             " is past the last");
@@ -133,7 +133,7 @@ class MarkupRegionSceneSchema final : public ISceneComponentSchema
         }
         else
         {
-            return Refuse(outError, "Unknown MarkupRegion property");
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
         world.AddComponentImmediate(entity, region);
         return true;

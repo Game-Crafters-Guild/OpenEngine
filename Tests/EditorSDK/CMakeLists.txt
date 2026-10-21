@@ -39,6 +39,14 @@ add_executable(EditorSdkRegistryTests
     # in here directly.
     LodSettingsPageTests.cpp
     ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/LodSettingsPage.cpp
+    # The Render Layers page: its rows, their refusals and a rename's writes. The page feeds the
+    # editor's layer pickers, so their helper compiles in too.
+    # A settings text row: its refusal, its placeholder and its commit.
+    SettingsTextFieldRowTests.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/SettingsTextFieldRow.cpp
+    RenderLayersSettingsPageTests.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/RenderLayersSettingsPage.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/RenderLayerField.cpp
     # Game UI scale policy: the editor-side write and the Game UI Scaling page,
     # which SettingsPageOpenIsNotAnEditTests also seeds. Same arrangement.
     UIScaleProjectSettingsWriterTests.cpp

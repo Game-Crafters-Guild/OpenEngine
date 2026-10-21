@@ -13,6 +13,9 @@
 #include "Assets/TextureAsset.h"
 #include "EditorContextMenu/UIContextMenu.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
+#include "Editor/Hierarchy/HierarchyEmptyParent.h"
+#include "Editor/Hierarchy/HierarchyOrdering.h"
+#include "Editor/Hierarchy/HierarchyReparent.h"
 #include "Editor/Hierarchy/HierarchyReparentRules.h"
 #include "Editor/Hierarchy/HierarchySearch.h"
 #include "Components/Hierarchy.h"
@@ -27,7 +30,6 @@
 #include "Components/Rendering/DDGIVolume.h"
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/ReflectionProbe.h"
-#include "Components/Rendering/RenderLayer.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
@@ -55,6 +57,7 @@
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
 #include "Editor/Hierarchy/HierarchyLightIconTint.h"
 #include "Editor/Hierarchy/HierarchyRenderLayerEdit.h"
+#include "Inspectors/RenderLayerField.h"
 #include "Editor/Hierarchy/HierarchyEntityIcon.h"
 #include "Editor/Hierarchy/HierarchyOrdering.h"
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
@@ -87,6 +90,7 @@
 #include "Thumbnails/ModelThumbnailHandler.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/MaskField.h"
 #include "UI/EditorIcons.h"
 #include "UI/EditorSearchBars.h"
 #include "UI/Interaction/Payload.h"
@@ -172,85 +176,6 @@ struct ScopedFlag
     ScopedFlag& operator=(const ScopedFlag&) = delete;
 };
 
-static bool IsDescendantOf(ECS::World& world, ECS::EntityHandle node, ECS::EntityHandle possibleAncestor)
-{
-    if (!node.IsValid() || !possibleAncestor.IsValid())
-        return false;
-    if (!world.IsValid(node) || !world.IsValid(possibleAncestor))
-        return false;
-
-    ECS::EntityHandle cur = node;
-    while (cur.IsValid() && world.IsValid(cur))
-    {
-        if (cur.id == possibleAncestor.id)
-            return true;
-        auto* p = world.GetComponent<Components::Parent>(cur);
-        if (!p || !p->parent.IsValid() || !world.IsValid(p->parent))
-            break;
-        cur = p->parent;
-    }
-    return false;
-}
-
-static ECS::EntityHandle GetEffectiveParent(ECS::World& world, ECS::EntityHandle e)
-{
-    if (!e.IsValid() || !world.IsValid(e))
-        return {};
-    if (auto* p = world.GetComponent<Components::Parent>(e))
-    {
-        if (p->parent.IsValid() && world.IsValid(p->parent))
-            return p->parent;
-    }
-    return {};
-}
-
-static std::int32_t GetOrderOrDefault(ECS::World& world, ECS::EntityHandle e)
-{
-    if (!e.IsValid() || !world.IsValid(e))
-        return 0;
-    if (auto* o = world.GetComponent<Components::HierarchyOrder>(e))
-        return o->order;
-    return 0;
-}
-
-static std::vector<ECS::EntityHandle> CollectAllEntities(ECS::World& world)
-{
-    std::vector<ECS::EntityHandle> out;
-    auto archetypes = world.GetAllArchetypes();
-    for (auto* arch : archetypes)
-    {
-        if (!arch)
-            continue;
-        auto ents = arch->CollectEntities();
-        for (const auto& e : ents)
-        {
-            if (e.IsValid() && world.IsValid(e))
-                out.push_back(e);
-        }
-    }
-
-    return out;
-}
-
-static void RenormalizeOrderForParent(ECS::World& world,
-                                      ECS::EntityHandle parent, // {} = root
-                                      const std::vector<ECS::EntityHandle>& allEntities,
-                                      const std::vector<ECS::EntityHandle>& forcedOrder,
-                                      std::unordered_map<std::uint32_t, Components::HierarchyOrder>& outNewOrders)
-{
-    // forcedOrder is already in desired final order for that parent.
-    for (std::size_t i = 0; i < forcedOrder.size(); ++i)
-    {
-        ECS::EntityHandle e = forcedOrder[i];
-        if (!e.IsValid() || !world.IsValid(e))
-            continue;
-        Components::HierarchyOrder o{};
-        o.order = static_cast<std::int32_t>(i * 10);
-        outNewOrders[e.index] = o;
-    }
-    (void)parent;
-    (void)allEntities;
-}
 } // namespace
 
 using Components::MeshRenderer;
@@ -331,15 +256,15 @@ constexpr uint32_t kCmdAddToBookmarks = 0x4190;
 constexpr uint32_t kCmdLoadRecentSceneBase = 0x41A0;
 constexpr uint32_t kCmdLoadRecentSceneCount = 10;
 constexpr uint32_t kCmdLoadRecentSceneEmpty = 0x41AF;
-constexpr const char* kIconEmptyEntity = "editor:Icons/EmptyEntity.png";
-constexpr const char* kIconCamera = "editor:Icons/videocam.png";
-constexpr const char* kIconLightDirectional = "editor:Icons/DirectionalLight.png";
-constexpr const char* kIconLightSpot = "editor:Icons/SpotLight.png";
-constexpr const char* kIconLightAmbient = "editor:Icons/AmbientLight.png";
-constexpr const char* kIconLightArea = "editor:Icons/arealight.png";
+constexpr const char* kIconEmptyEntity = "editor:Icons/EmptyEntity.svg";
+constexpr const char* kIconCamera = "editor:Icons/videocam.svg";
+constexpr const char* kIconLightDirectional = "editor:Icons/DirectionalLight.svg";
+constexpr const char* kIconLightSpot = "editor:Icons/SpotLight.svg";
+constexpr const char* kIconLightAmbient = "editor:Icons/AmbientLight.svg";
+constexpr const char* kIconLightArea = "editor:Icons/arealight.svg";
 constexpr const char* kIconPlanet = "editor:Icons/planet.svg";
-constexpr const char* kIconParticles = "editor:Icons/sparkles.png";
-constexpr const char* kIconSkyEnvironment = "editor:Icons/skyenvironment.png";
+constexpr const char* kIconParticles = "editor:Icons/sparkles.svg";
+constexpr const char* kIconSkyEnvironment = "editor:Icons/skyenvironment.svg";
 
 bool IsLoadRecentSceneCommand(uint32_t cmd)
 {
@@ -669,89 +594,6 @@ class CreateReflectionProbeEntityCommand final : public Editor::IEditorCommand
     Parent m_Parent{};
     Components::ReflectionProbe m_Probe{};
     Components::HierarchyOrder m_HierarchyOrder{};
-};
-
-class CreateAsEmptyParentCommand final : public Editor::IEditorCommand
-{
-  public:
-    CreateAsEmptyParentCommand(std::string name,
-                               ECS::World* world,
-                               Editor::EditorChangeNotifications* notifications,
-                               ECS::EntityHandle child,
-                               ECS::EntityHandle newParent,
-                               bool childHadParent,
-                               Parent childParentBefore,
-                               Transform childTransformBefore,
-                               Name parentName)
-        : m_Name(std::move(name)), m_World(world), m_Notifications(notifications), m_Child(child), m_NewParent(newParent), m_ChildHadParent(childHadParent), m_ChildParentBefore(childParentBefore), m_ChildTransformBefore(childTransformBefore), m_ParentName(parentName)
-    {
-    }
-
-    const char* GetName() const override { return m_Name.c_str(); }
-
-    void Do() override { Redo(); }
-
-    void Undo() override
-    {
-        if (!m_World || !m_Child.IsValid() || !m_NewParent.IsValid())
-            return;
-
-        // Restore child first so it doesn't reference a destroyed parent.
-        m_World->AddComponentImmediate(m_Child, m_ChildTransformBefore);
-        if (m_ChildHadParent)
-        {
-            m_World->AddComponentImmediate(m_Child, m_ChildParentBefore);
-        }
-        else
-        {
-            m_World->RemoveComponentImmediate<Parent>(m_Child);
-        }
-
-        m_World->DestroyEntityImmediatePreserveHandle(m_NewParent);
-        NotifyWorldStructure(m_Notifications, m_World);
-    }
-
-    void Redo() override
-    {
-        if (!m_World || !m_Child.IsValid() || !m_NewParent.IsValid())
-            return;
-
-        if (!m_World->ReviveEntityImmediatePreserveHandle(m_NewParent))
-            return;
-
-        // New parent local transform is the child's previous local transform.
-        m_World->AddComponentImmediate(m_NewParent, m_ChildTransformBefore);
-        m_World->AddComponentImmediate(m_NewParent, m_ParentName);
-        if (m_ChildHadParent)
-        {
-            // Parent the new entity under the child's previous parent.
-            m_World->AddComponentImmediate(m_NewParent, m_ChildParentBefore);
-        }
-        else
-        {
-            // Ensure no Parent component on the inserted parent if original child was root.
-            m_World->RemoveComponentImmediate<Parent>(m_NewParent);
-        }
-
-        // Reparent child under the new parent and reset its local transform to identity.
-        Parent p{};
-        p.parent = m_NewParent;
-        m_World->AddComponentImmediate(m_Child, p);
-        m_World->AddComponentImmediate(m_Child, MakeIdentityTransform());
-
-        NotifyWorldStructure(m_Notifications, m_World);
-    }
-
-  private:
-    std::string m_Name;
-    ECS::World* m_World = nullptr;                                // not owned
-    Editor::EditorChangeNotifications* m_Notifications = nullptr; // not owned
-    ECS::EntityHandle m_Child{};
-    ECS::EntityHandle m_NewParent{};
-    bool m_ChildHadParent = false;
-    Parent m_ChildParentBefore{};
-    Transform m_ChildTransformBefore{};
-    Name m_ParentName{};
 };
 
 } // namespace
@@ -1736,7 +1578,7 @@ HierarchyPanel::HierarchyPanel()
             // reuse it across bindings just like the Assets tree does.
             UIElement* titleEl = nullptr;
             UIElement* previewIconEl = nullptr;
-            Dropdown* renderLayerDropdown = nullptr;
+            MaskField* renderLayerField = nullptr;
             for (const auto& child : row->GetChildren())
             {
                 if (child && child->HasClass("tree-title"))
@@ -1746,7 +1588,7 @@ HierarchyPanel::HierarchyPanel()
                 else if (child && child->HasClass("hierarchy-preview-icon"))
                     previewIconEl = child.get();
                 else if (child && child->HasClass("hierarchy-render-layer-dropdown"))
-                    renderLayerDropdown = dynamic_cast<Dropdown*>(child.get());
+                    renderLayerField = dynamic_cast<MaskField*>(child.get());
             }
             if (m_VcsController)
                 m_VcsController->DecorateRow(handle, *row);
@@ -1765,9 +1607,9 @@ HierarchyPanel::HierarchyPanel()
                 row->AddChild(std::move(previewIcon));
             }
             m_RowActivity.Present(*m_World, handle, id, *row);
-            if (!renderLayerDropdown)
+            if (!renderLayerField)
             {
-                // A pooled row's first bind: the dropdown is created once per row, so the
+                // A pooled row's first bind: the layer field is created once per row, so the
                 // row's own handlers are wired here too. Each asks the tree which item the
                 // row shows now, so a recycled row never answers for its previous item.
                 row->RegisterEventHandler(kEventMouseEnter, [this, row](UIEvent&)
@@ -1785,11 +1627,12 @@ HierarchyPanel::HierarchyPanel()
                         m_OnHoverEntity({});
                 });
 
-                auto dropdown = std::make_unique<Dropdown>();
-                dropdown->AddClass("hierarchy-render-layer-dropdown");
-                dropdown->SetAutoWidthPopup(true);
-                renderLayerDropdown = dropdown.get();
-                renderLayerDropdown->SetOnValueChanged([this, row](const std::string& value)
+                auto layers = std::make_unique<MaskField>();
+                layers->AddClass("hierarchy-render-layer-dropdown");
+                Editor::FeedRenderLayerNames(*layers);
+                layers->SetNothingTooltip(Editor::kRenderLayersNothingTooltip);
+                renderLayerField = layers.get();
+                renderLayerField->SetOnBitsChanged([this, row](uint32 bits, bool on)
                 {
                     if (!m_World || !m_Tree)
                         return;
@@ -1800,34 +1643,18 @@ HierarchyPanel::HierarchyPanel()
                     if (!entity.IsValid() || !m_World->IsValid(entity))
                         return;
 
-                    uint32 mask = 0;
-                    try
-                    {
-                        mask = static_cast<uint32>(std::stoul(value));
-                    }
-                    catch (...)
-                    {
-                        return;
-                    }
-
                     // A row inside the selection applies the layer to the whole selection,
-                    // the same rule the enable-toggle icon follows.
-                    Editor::ApplyRenderLayerMask(*m_World, ResolveRowActionTargets(entity), mask,
+                    // the same rule the enable-toggle icon follows; each entity keeps its
+                    // other layers.
+                    Editor::ApplyRenderLayerBits(*m_World, ResolveRowActionTargets(entity), bits, on,
                                                  m_Undo, m_ChangeNotifications);
                 });
-                row->AddChild(std::move(dropdown));
+                row->AddChild(std::move(layers));
             }
 
-            const uint32* renderLayerMask = nullptr;
-            if (const auto* layer = m_World->GetComponent<Components::RenderLayer>(handle))
-                renderLayerMask = &layer->mask;
-            else if (const auto* renderer = m_World->GetComponent<Components::MeshRenderer>(handle))
-                renderLayerMask = &renderer->renderLayerMask;
-            else if (const auto* skinned = m_World->GetComponent<Components::SkinnedMeshRenderer>(handle))
-                renderLayerMask = &skinned->renderLayerMask;
-
-            const bool showRenderLayerDropdown = m_ShowRenderLayer && renderLayerMask;
-            UI::Layout::SetElementHidden(*renderLayerDropdown, !showRenderLayerDropdown);
+            const auto* layerRenderer = m_World->GetComponent<Components::MeshRenderer>(handle);
+            const bool showRenderLayerDropdown = m_ShowRenderLayer && layerRenderer;
+            UI::Layout::SetElementHidden(*renderLayerField, !showRenderLayerDropdown);
             // The dropdown is anchored to the row's right edge rather than flowed,
             // so the title has to reserve its strip explicitly (theme/views.css).
             if (showRenderLayerDropdown)
@@ -1844,27 +1671,7 @@ HierarchyPanel::HierarchyPanel()
             else
                 row->RemoveClass("render-layer-narrow");
             if (showRenderLayerDropdown)
-            {
-                std::vector<Dropdown::Option> options;
-                options.reserve(33);
-                int selectedIndex = -1;
-                const uint32 currentMask = *renderLayerMask;
-                if (currentMask == 0 || (currentMask & (currentMask - 1u)) != 0)
-                {
-                    char customLabel[32]{};
-                    std::snprintf(customLabel, sizeof(customLabel), "Mask 0x%08X", currentMask);
-                    options.push_back({std::to_string(currentMask), customLabel});
-                    selectedIndex = 0;
-                }
-                for (int layer = 0; layer < 32; ++layer)
-                {
-                    const uint32 mask = uint32{1} << layer;
-                    if (mask == currentMask)
-                        selectedIndex = static_cast<int>(options.size());
-                    options.push_back({std::to_string(mask), "Layer " + std::to_string(layer)});
-                }
-                renderLayerDropdown->SetOptions(options, std::max(0, selectedIndex));
-            }
+                renderLayerField->SetValueWithoutNotify(layerRenderer->RenderLayers.Bits);
             if (titleEl && previewIconEl)
             {
                 titleEl->AddClass("tree-title-no-icon");
@@ -1911,12 +1718,12 @@ HierarchyPanel::HierarchyPanel()
                             if (mgr)
                             {
                                 std::string pathStr = thumbPath.string();
-                                GUID thumbGuid = mgr->ResolveBackgroundImagePath(pathStr);
+                                GUID thumbGuid = mgr->BackgroundImages().ResolvePath(pathStr);
                                 if (!thumbGuid.IsNull())
                                 {
                                     // Uploads at once when the texture is loaded, otherwise requests it;
                                     // never waits (a first open can still be cooking it).
-                                    mgr->EnsureBackgroundTextureUploaded(thumbGuid);
+                                    mgr->BackgroundImages().EnsureUploaded(thumbGuid);
 
                                     // Fit thumbnail inside the square icon area (1:1), keeping aspect ratio.
                                     BackgroundImageSource source{};
@@ -1957,13 +1764,13 @@ HierarchyPanel::HierarchyPanel()
                             if (mgr)
                             {
                                 const std::string pathStr = spritePath.string();
-                                const GUID bgGuid = mgr->ResolveBackgroundImagePath(pathStr);
+                                const GUID bgGuid = mgr->BackgroundImages().ResolvePath(pathStr);
                                 if (!bgGuid.IsNull())
                                 {
                                     // Uploads at once when the texture is loaded, otherwise requests it;
                                     // never waits (a first open can still be cooking it). The upload's
                                     // completion repaints the icon.
-                                    mgr->EnsureBackgroundTextureUploaded(bgGuid);
+                                    mgr->BackgroundImages().EnsureUploaded(bgGuid);
 
                                     // Fit inside the square icon box while preserving the texture's
                                     // aspect ratio, left-aligned and vertically centred like other
@@ -2168,7 +1975,7 @@ HierarchyPanel::HierarchyPanel()
                  req.hit.Location == UI::Interaction::DropLocation::AfterItem)
         {
             if (target.IsValid())
-                destParent = GetEffectiveParent(*m_World, target); // {} means root
+                destParent = Editor::GetEffectiveParent(*m_World, target); // {} means root
         }
 
         if (!Editor::CanAcceptAuthoredChildren(*m_World, destParent))
@@ -2185,7 +1992,7 @@ HierarchyPanel::HierarchyPanel()
 
             if (destParent.IsValid() && destParent.id == moved.id)
                 return {false, "Cannot parent under self"};
-            if (destParent.IsValid() && IsDescendantOf(*m_World, destParent, moved))
+            if (destParent.IsValid() && Editor::IsDescendantOf(*m_World, destParent, moved))
                 return {false, "Cycle"};
         }
 
@@ -3044,7 +2851,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                  req.hit.Location == UI::Interaction::DropLocation::AfterItem)
         {
             if (target.IsValid())
-                dropParent = GetEffectiveParent(*m_World, target);
+                dropParent = Editor::GetEffectiveParent(*m_World, target);
         }
 
         // Compute inverse parent world matrix for proper reparenting.
@@ -3167,34 +2974,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
         // Set sibling ordering so entities appear at the correct drop position.
         if (!createdEntities.empty())
         {
-            const std::vector<ECS::EntityHandle> all = CollectAllEntities(*m_World);
-
-            std::unordered_map<std::uint32_t, std::vector<ECS::EntityHandle>> childrenByParent;
-            std::vector<ECS::EntityHandle> roots;
-            childrenByParent.reserve(256);
-            roots.reserve(256);
-            for (auto& e : all)
-            {
-                ECS::EntityHandle p = GetEffectiveParent(*m_World, e);
-                if (p.IsValid())
-                    childrenByParent[p.index].push_back(e);
-                else
-                    roots.push_back(e);
-            }
-
-            auto sortByOrderThenId = [&](std::vector<ECS::EntityHandle>& v) {
-                std::sort(v.begin(), v.end(), [&](const ECS::EntityHandle& a, const ECS::EntityHandle& b) {
-                    const std::int32_t oa = GetOrderOrDefault(*m_World, a);
-                    const std::int32_t ob = GetOrderOrDefault(*m_World, b);
-                    if (oa != ob) return oa < ob;
-                    return a.id < b.id;
-                });
-            };
-            sortByOrderThenId(roots);
-            for (auto& kv : childrenByParent)
-                sortByOrderThenId(kv.second);
-
-            auto& dstList = dropParent.IsValid() ? childrenByParent[dropParent.index] : roots;
+            std::vector<ECS::EntityHandle> dstList = Editor::ChildrenInHierarchyOrder(*m_World, dropParent);
 
             // Remove created entities from their current position in the list.
             dstList.erase(std::remove_if(dstList.begin(), dstList.end(), [&](const ECS::EntityHandle& e) {
@@ -3226,15 +3006,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                            createdEntities.begin(), createdEntities.end());
 
             // Renormalize order for the destination parent.
-            std::unordered_map<std::uint32_t, Components::HierarchyOrder> newOrders;
-            newOrders.reserve(dstList.size());
-            RenormalizeOrderForParent(*m_World, dropParent, all, dstList, newOrders);
-            for (auto& e : dstList)
-            {
-                auto it = newOrders.find(e.index);
-                if (it != newOrders.end())
-                    m_World->AddComponentImmediate(e, it->second);
-            }
+            Editor::WriteSiblingOrder(*m_World, dstList);
         }
 
         NotifyWorldStructure(m_ChangeNotifications, m_World);
@@ -3273,7 +3045,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
              req.hit.Location == UI::Interaction::DropLocation::AfterItem)
     {
         if (target.IsValid())
-            destParent = GetEffectiveParent(*m_World, target); // {} = root
+            destParent = Editor::GetEffectiveParent(*m_World, target); // {} = root
     }
 
     // Build moved entity list.
@@ -3295,168 +3067,35 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
     {
         if (destParent.IsValid() && destParent.id == m.id)
             return;
-        if (destParent.IsValid() && IsDescendantOf(*m_World, destParent, m))
+        if (destParent.IsValid() && Editor::IsDescendantOf(*m_World, destParent, m))
             return;
     }
 
-    // Collect all entities for order rebuild.
-    const std::vector<ECS::EntityHandle> all = CollectAllEntities(*m_World);
-
-    // Build parent -> children lists using effective parents.
-    std::unordered_map<std::uint32_t, std::vector<ECS::EntityHandle>> childrenByParent;
-    std::vector<ECS::EntityHandle> roots;
-    childrenByParent.reserve(256);
-    roots.reserve(256);
-    for (auto& e : all)
-    {
-        ECS::EntityHandle p = GetEffectiveParent(*m_World, e);
-        if (p.IsValid())
-            childrenByParent[p.index].push_back(e);
-        else
-            roots.push_back(e);
-    }
-
-    auto sortByOrderThenId = [&](std::vector<ECS::EntityHandle>& v) {
-        std::sort(v.begin(), v.end(), [&](const ECS::EntityHandle& a, const ECS::EntityHandle& b) {
-            const std::int32_t oa = GetOrderOrDefault(*m_World, a);
-            const std::int32_t ob = GetOrderOrDefault(*m_World, b);
-            if (oa != ob)
-                return oa < ob;
-            return a.id < b.id;
-        });
-    };
-    sortByOrderThenId(roots);
-    for (auto& kv : childrenByParent)
-        sortByOrderThenId(kv.second);
-
-    // Helper to get list for a parent key (0 = root).
-    auto& dstList = destParent.IsValid() ? childrenByParent[destParent.index] : roots;
-
-    // Remove moved from their current containers.
-    auto eraseFrom = [&](std::vector<ECS::EntityHandle>& v) {
-        v.erase(std::remove_if(v.begin(), v.end(), [&](const ECS::EntityHandle& e) {
-            for (auto& m : moved)
-                if (m.id == e.id)
-                    return true;
-            return false;
-        }),
-                v.end());
-    };
-    eraseFrom(roots);
-    for (auto& kv : childrenByParent)
-        eraseFrom(kv.second);
-
     // Preserve moved ordering by current order/id.
-    sortByOrderThenId(moved);
+    Editor::SortByHierarchyOrder(*m_World, moved);
 
-    // Compute insertion index.
-    std::size_t insertIndex = dstList.size();
-    if (req.hit.Location == UI::Interaction::DropLocation::BeforeItem ||
-        req.hit.Location == UI::Interaction::DropLocation::AfterItem)
+    // Insertion index among the destination's children other than the moved ones.
+    std::size_t insertIndex = Editor::kInsertAtEnd;
+    if ((req.hit.Location == UI::Interaction::DropLocation::BeforeItem ||
+         req.hit.Location == UI::Interaction::DropLocation::AfterItem) &&
+        target.IsValid())
     {
-        if (target.IsValid())
+        std::vector<ECS::EntityHandle> siblings = Editor::ChildrenInHierarchyOrder(*m_World, destParent);
+        std::erase_if(siblings, [&moved](const ECS::EntityHandle& e) {
+            return std::any_of(moved.begin(), moved.end(), [&e](const ECS::EntityHandle& m) { return m.id == e.id; });
+        });
+        for (std::size_t i = 0; i < siblings.size(); ++i)
         {
-            for (std::size_t i = 0; i < dstList.size(); ++i)
+            if (siblings[i].id == target.id)
             {
-                if (dstList[i].id == target.id)
-                {
-                    insertIndex = (req.hit.Location == UI::Interaction::DropLocation::AfterItem) ? (i + 1) : i;
-                    break;
-                }
+                insertIndex = (req.hit.Location == UI::Interaction::DropLocation::AfterItem) ? (i + 1) : i;
+                break;
             }
         }
     }
 
-    // Insert moved.
-    insertIndex = std::min(insertIndex, dstList.size());
-    dstList.insert(dstList.begin() + static_cast<std::ptrdiff_t>(insertIndex), moved.begin(), moved.end());
-
-    // Capture before/after states for affected entities.
-    auto captureState = [&](ECS::EntityHandle e) -> Editor::ReparentReorderEntitiesCommand::EntityState {
-        Editor::ReparentReorderEntitiesCommand::EntityState s{};
-        s.entity = e;
-        if (auto* p = m_World->GetComponent<Components::Parent>(e))
-        {
-            s.hadParent = p->parent.IsValid() && m_World->IsValid(p->parent);
-            s.parent = *p;
-        }
-        if (auto* o = m_World->GetComponent<Components::HierarchyOrder>(e))
-        {
-            s.hadOrder = true;
-            s.order = *o;
-        }
-        if (auto* t = m_World->GetComponent<Transform>(e))
-        {
-            s.hadTransform = true;
-            s.transform = *t;
-        }
-        return s;
-    };
-
-    // Determine which entities are affected: moved + any entities in the destination list (order renormalized).
-    std::vector<ECS::EntityHandle> affected = dstList;
-    for (auto& m : moved)
-        affected.push_back(m);
-    std::sort(affected.begin(), affected.end(), [](auto& a, auto& b) { return a.id < b.id; });
-    affected.erase(std::unique(affected.begin(), affected.end(), [](auto& a, auto& b) { return a.id == b.id; }), affected.end());
-
-    std::vector<Editor::ReparentReorderEntitiesCommand::EntityState> before;
-    before.reserve(affected.size());
-    for (auto& e : affected)
-        before.push_back(captureState(e));
-
-    // Apply parent changes for moved immediately (we commit already-applied for undo).
-    // Adjust local transforms so world-space position/rotation/scale are preserved.
-    for (auto& m : moved)
-    {
-        if (destParent.IsValid())
-        {
-            Components::Parent p{};
-            p.parent = destParent;
-            m_World->AddComponentImmediate(m, p);
-
-            auto* childWorld = m_World->GetComponent<Components::WorldTransform>(m);
-            auto* parentWorld = m_World->GetComponent<Components::WorldTransform>(destParent);
-            if (childWorld && parentWorld)
-            {
-                glm::mat4 parentMat = glm::make_mat4(parentWorld->matrix);
-                glm::mat4 childMat = glm::make_mat4(childWorld->matrix);
-                glm::mat4 newLocal = glm::inverse(parentMat) * childMat;
-
-                Transform xf{};
-                std::memcpy(xf.matrix, &newLocal[0][0], sizeof(float32) * 16);
-                m_World->AddComponentImmediate(m, xf);
-            }
-        }
-        else
-        {
-            // Moving to root: local transform becomes the current world transform.
-            auto* childWorld = m_World->GetComponent<Components::WorldTransform>(m);
-            if (childWorld)
-            {
-                Transform xf{};
-                std::memcpy(xf.matrix, childWorld->matrix, sizeof(float32) * 16);
-                m_World->AddComponentImmediate(m, xf);
-            }
-            m_World->RemoveComponentImmediate<Components::Parent>(m);
-        }
-    }
-
-    // Renormalize order for destination list (including moved).
-    std::unordered_map<std::uint32_t, Components::HierarchyOrder> newOrders;
-    newOrders.reserve(dstList.size());
-    RenormalizeOrderForParent(*m_World, destParent, all, dstList, newOrders);
-    for (auto& e : dstList)
-    {
-        auto it = newOrders.find(e.index);
-        if (it != newOrders.end())
-            m_World->AddComponentImmediate(e, it->second);
-    }
-
-    std::vector<Editor::ReparentReorderEntitiesCommand::EntityState> after;
-    after.reserve(affected.size());
-    for (auto& e : affected)
-        after.push_back(captureState(e));
+    // Applied immediately (committed already-applied for undo); world poses are preserved.
+    Editor::HierarchyMoveStates states = Editor::MoveEntitiesKeepingWorldPose(*m_World, moved, destParent, insertIndex);
 
     // Group the reparent and the follow-up selection change into one undo step so a single
     // Ctrl+Z restores both the hierarchy AND the selection that was active before the drag.
@@ -3481,8 +3120,8 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             "Reparent Entities",
             m_World,
             m_ChangeNotifications,
-            std::move(before),
-            std::move(after));
+            std::move(states.Before),
+            std::move(states.After));
         m_Undo->CommitAlreadyApplied(std::move(cmd));
     }
 
@@ -3733,7 +3372,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         if (withRenderer)
         {
             mr.meshId = meshId;
-            mr.renderLayerMask = 1u; // Scene View layer only (for now)
+            mr.RenderLayers = Rendering::RenderLayerMask::Default();
 
             // Resolve primitive GUID once (single source of truth — adding
             // a 5th primitive ID requires updating only this switch).
@@ -3973,75 +3612,40 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         if (!m_ContextTargetEntity.IsValid() || !world->IsValid(m_ContextTargetEntity))
             return;
 
-        const ECS::EntityHandle child = m_ContextTargetEntity;
-
-        // Capture the child's current local transform (relative to its current parent).
-        Transform childLocal = MakeIdentityTransform();
-        if (auto* t = world->GetComponent<Transform>(child))
+        // The whole selection when the clicked row is part of it, the clicked row alone otherwise.
+        std::vector<ECS::EntityHandle> targets{m_ContextTargetEntity};
+        if (m_Selection)
         {
-            childLocal = *t;
-        }
-        else
-        {
-            // Best-effort: ensure Transform exists so we can preserve it.
-            world->AddComponentImmediate(child, childLocal);
-        }
-
-        bool childHadParent = false;
-        Parent childParentBefore{};
-        if (auto* p = world->GetComponent<Parent>(child))
-        {
-            childHadParent = true;
-            childParentBefore = *p;
+            const auto selected = m_Selection->GetSelection();
+            const UI::Interaction::ItemId clicked = HierarchyDataProvider::Encode(m_ContextTargetEntity);
+            if (std::find(selected.begin(), selected.end(), clicked) != selected.end())
+            {
+                targets.clear();
+                for (const auto id : selected)
+                    targets.push_back(HierarchyDataProvider::Decode(static_cast<TreeId>(id)));
+            }
         }
 
-        ECS::EntityHandle newParent = world->CreateEntity();
-        if (!newParent.IsValid())
+        Editor::EmptyParentResult created = Editor::CreateEmptyParent(*world, m_ChangeNotifications, targets, MakeName("Empty Parent"));
+        if (!created.NewParent.IsValid())
+        {
+            Logger::Log::Warning("[Hierarchy] Create Empty Parent: a generated entity takes no authored children; select entities outside it");
             return;
-
-        // New parent inherits the child's previous local transform so its world pose matches.
-        world->AddComponentImmediate(newParent, childLocal);
-        Name parentName = MakeName("Empty Parent");
-        world->AddComponentImmediate(newParent, parentName);
-        if (childHadParent)
-        {
-            // Insert between child's old parent and the child.
-            world->AddComponentImmediate(newParent, childParentBefore);
         }
-
-        // Reparent child under new parent and reset child's local transform to identity.
-        Parent newParentComp{};
-        newParentComp.parent = newParent;
-        world->AddComponentImmediate(child, newParentComp);
-        world->AddComponentImmediate(child, MakeIdentityTransform());
-
         if (m_Undo)
-        {
-            auto cmdObj = std::make_unique<CreateAsEmptyParentCommand>(
-                "Create Empty Parent",
-                world,
-                m_ChangeNotifications,
-                child,
-                newParent,
-                childHadParent,
-                childParentBefore,
-                childLocal,
-                parentName);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
-        }
+            m_Undo->CommitAlreadyApplied(std::move(created.Command));
 
         // Select after the hierarchy refresh posted by the structure notification.
         if (m_Tree)
         {
-            if (childHadParent && childParentBefore.parent.IsValid())
-            {
-                m_Tree->SetExpanded(HierarchyDataProvider::Encode(childParentBefore.parent), true);
-            }
-            m_Tree->SetExpanded(HierarchyDataProvider::Encode(newParent), true);
+            const ECS::EntityHandle placedUnder = Editor::GetEffectiveParent(*world, created.NewParent);
+            if (placedUnder.IsValid())
+                m_Tree->SetExpanded(HierarchyDataProvider::Encode(placedUnder), true);
+            m_Tree->SetExpanded(HierarchyDataProvider::Encode(created.NewParent), true);
         }
 
         NotifyWorldStructure(m_ChangeNotifications, world);
-        scheduleSelectCreatedEntity(newParent);
+        scheduleSelectCreatedEntity(created.NewParent);
     };
 
     auto createParticleEmitter = [&]()
@@ -4469,14 +4073,6 @@ HierarchyPanel::~HierarchyPanel()
     {
         m_ChangeNotifications->Unsubscribe(m_MeshRendererChangedSub);
     }
-    if (m_ChangeNotifications && m_SkinnedMeshRendererChangedSub)
-    {
-        m_ChangeNotifications->Unsubscribe(m_SkinnedMeshRendererChangedSub);
-    }
-    if (m_ChangeNotifications && m_RenderLayerChangedSub)
-    {
-        m_ChangeNotifications->Unsubscribe(m_RenderLayerChangedSub);
-    }
     if (m_ChangeNotifications && m_NameChangedSub)
     {
         m_ChangeNotifications->Unsubscribe(m_NameChangedSub);
@@ -4505,14 +4101,6 @@ void HierarchyPanel::SetChangeNotifications(Editor::EditorChangeNotifications* n
     {
         m_ChangeNotifications->Unsubscribe(m_MeshRendererChangedSub);
     }
-    if (m_ChangeNotifications && m_SkinnedMeshRendererChangedSub)
-    {
-        m_ChangeNotifications->Unsubscribe(m_SkinnedMeshRendererChangedSub);
-    }
-    if (m_ChangeNotifications && m_RenderLayerChangedSub)
-    {
-        m_ChangeNotifications->Unsubscribe(m_RenderLayerChangedSub);
-    }
     if (m_ChangeNotifications && m_NameChangedSub)
     {
         m_ChangeNotifications->Unsubscribe(m_NameChangedSub);
@@ -4522,8 +4110,6 @@ void HierarchyPanel::SetChangeNotifications(Editor::EditorChangeNotifications* n
     m_StructureSub = {};
     m_LightChangedSub = {};
     m_MeshRendererChangedSub = {};
-    m_SkinnedMeshRendererChangedSub = {};
-    m_RenderLayerChangedSub = {};
     m_NameChangedSub = {};
 
     if (!m_ChangeNotifications)
@@ -4575,31 +4161,6 @@ void HierarchyPanel::SetChangeNotifications(Editor::EditorChangeNotifications* n
                              {
                                  m_RefreshQueued = false;
                                  this->Refresh(false); });
-        });
-
-    const auto refreshRenderLayerLabel = [this](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
-    {
-        if (e.world != m_World || !m_ShowRenderLayer || m_RefreshQueued)
-            return;
-        m_RefreshQueued = true;
-        this->PostAction([this]()
-                         {
-                             m_RefreshQueued = false;
-                             this->Refresh(false); });
-    };
-    const ECS::ComponentTypeId skinnedMeshRendererTypeId = ECS::GetComponentTypeId<Components::SkinnedMeshRenderer>();
-    m_SkinnedMeshRendererChangedSub = m_ChangeNotifications->SubscribeComponentChanged(
-        [refreshRenderLayerLabel](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
-        {
-            if (e.componentType == skinnedMeshRendererTypeId)
-                refreshRenderLayerLabel(e);
-        });
-    const ECS::ComponentTypeId renderLayerTypeId = ECS::GetComponentTypeId<Components::RenderLayer>();
-    m_RenderLayerChangedSub = m_ChangeNotifications->SubscribeComponentChanged(
-        [refreshRenderLayerLabel](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
-        {
-            if (e.componentType == renderLayerTypeId)
-                refreshRenderLayerLabel(e);
         });
 
     // Label text comes from Name; inspector edits notify Commit without always sending

@@ -1,4 +1,5 @@
 #include "UI/Internal/AttachDetachInternal.h"
+#include "UI/Internal/AttachedRootAccess.h"
 #include "UI/UIHotReload.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureRegistry.h"
@@ -31,6 +32,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -150,19 +152,6 @@ static std::unordered_map<std::string, int> BuildCssUrlLineMap(const std::string
         pos = (i < cssText.size()) ? i + 1 : i;
     }
     return m;
-}
-
-static std::string MakeBackgroundPathCacheKey(std::string_view path, std::string_view sourceAlias)
-{
-    if (sourceAlias.empty())
-        return std::string(path);
-
-    std::string key;
-    key.reserve(sourceAlias.size() + 1u + path.size());
-    key.append(sourceAlias);
-    key.push_back('|');
-    key.append(path);
-    return key;
 }
 
 struct ParsedCssFileResult
@@ -1281,6 +1270,10 @@ void UIManager::AdoptRoot(std::unique_ptr<UIElement> newRoot)
 {
     if (m_Root)
         UI::DispatchDestructionDetach(m_Root.get());
+    // The outgoing tree's elements keep naming the outgoing root until they die, which no
+    // lookup from the new root can match, so nothing unmarks them.
+    if (newRoot)
+        UIAttachedRootAccess::MarkManagerRoot(*newRoot);
     m_Root = std::move(newRoot);
 }
 
@@ -1724,495 +1717,33 @@ void UIManager::DrainDeferredActionsOnce()
     }
 }
 
-GUID UIManager::ResolveBackgroundImagePath(const std::string& path,
-                                           const std::string& sourceAlias)
+void UIManager::EndBackgroundImageFrame()
 {
-    if (path.empty() || !m_AssetManager)
-        return GUID::Null();
-
-    std::string norm = UIUtil::NormalizeCssUrlPath(path);
-    if (norm.empty())
-        return GUID::Null();
-
-    // Source-aware resolution: when CSS specified `url("editor:path")` or
-    // `url("@editor/path")`, look up under exactly that source (no implicit
-    // priority fallback). Let AssetManager register the file as part of
-    // resolving the GUID; this covers first-run editor assets whose registry
-    // entries do not exist yet immediately after a fresh build.
-    GUID g = sourceAlias.empty()
-                 ? m_AssetManager->ResolveAssetGuid(norm)
-                 : m_AssetManager->ResolveAssetGuid(norm, sourceAlias);
-
-    if (!g.IsNull())
-    {
-        m_BgPathToGuid[MakeBackgroundPathCacheKey(path, sourceAlias)] = g;
-        if (norm != path)
-            m_BgPathToGuid[MakeBackgroundPathCacheKey(norm, sourceAlias)] = g;
-    }
-
-    return g;
+    m_BackgroundImages.EndFrame(
+        [this]()
+        {
+            // The textures the current draw order binds: protected from
+            // eviction even when their primitives were retained.
+            std::vector<uint32_t> slots;
+            slots.reserve(m_DrawOrder.size());
+            for (const auto index : m_DrawOrder)
+                if (index < m_PersistentPrimitives.size())
+                    slots.push_back(m_PersistentPrimitives[index].TextureIndex);
+            return m_SdfTextureRegistry ? m_SdfTextureRegistry->GetTextureHandlesForSlots(slots)
+                                        : std::vector<Rendering::TextureHandle>{};
+        });
 }
 
-void UIManager::EvictBackgroundTexture(const std::string& path)
+void UIManager::RepaintForBackgroundImages()
 {
-    if (path.empty())
-        return;
-
-    // Resolve to GUID via the path-to-guid cache.
-    std::string norm = UIUtil::NormalizeCssUrlPath(path);
-    GUID guid = GUID::Null();
-
-    auto it = m_BgPathToGuid.find(path);
-    if (it != m_BgPathToGuid.end())
-        guid = it->second;
-    else if (norm != path)
-    {
-        auto it2 = m_BgPathToGuid.find(norm);
-        if (it2 != m_BgPathToGuid.end())
-            guid = it2->second;
-    }
-
-    // Remove cached entries so the next load starts fresh.
-    m_BgPathToGuid.erase(path);
-    if (norm != path)
-        m_BgPathToGuid.erase(norm);
-
-    if (!guid.IsNull())
-        EvictBackgroundTexture(guid);
+    MarkPrimitivesNeedRegen(0x200u);
+    MarkStyleDirtyAll();
 }
 
-void UIManager::EvictBackgroundTexture(const GUID& guid)
+void UIManager::ReleaseBackgroundImageSlot(Rendering::TextureHandle handle)
 {
-    if (guid.IsNull())
-        return;
-
-    auto itCache = m_BgTextureCache.find(guid);
-    if (itCache == m_BgTextureCache.end())
-        return;
-
-    Rendering::TextureHandle oldHandle = itCache->second.Handle;
-    const bool sharedOwned = itCache->second.SharedOwned;
-
-    // E7: drop the old slot in the SDF texture registry. Its dedup key is the
-    // raw handle id; once we destroy the underlying GPU texture the slot would
-    // otherwise reference a freed handle and CreateTransientFrameSet would
-    // bind it to descriptors next frame.
-    if (m_SdfTextureRegistry && oldHandle.IsValid())
-        m_SdfTextureRegistry->UnregisterByHandle(oldHandle);
-
-    if (m_Device && oldHandle.IsValid() && !sharedOwned)
-        m_Device->DestroyTexture(oldHandle);
-
-    m_BgTextureCache.erase(itCache);
-
-    // Drop any in-flight upload state so a subsequent EnsureBackgroundTextureUploaded
-    // can re-trigger an async load.
-    m_BgUploadInFlight.erase(guid);
-}
-
-void UIManager::EvictStaleBackgroundTextures()
-{
-    // The cache retains one GPU texture per distinct background/thumbnail ever
-    // painted, so a long asset-browsing session grows it without bound. Once
-    // it exceeds the byte budget, entries idle past the grace window drop
-    // oldest-first. Current draw-order textures are protected even when their
-    // primitives were retained without regenerating. The budget is soft when
-    // the visible working set alone exceeds it.
-    ++m_BgCacheFrame;
-
-    constexpr uint64_t kSweepIntervalFrames = 120;
-    constexpr uint64_t kBudgetBytes = 256ull * 1024 * 1024;
-    // Nothing painted this recently is evictable, whatever the budget says —
-    // it is likely still on screen (retained primitives don't re-touch).
-    constexpr uint64_t kMinIdleFrames = 600;
-
-    if ((m_BgCacheFrame % kSweepIntervalFrames) != 0)
-        return;
-
-    const auto entryBytes = [](const CachedTexture& e) -> uint64_t
-    { return static_cast<uint64_t>(e.Width) * e.Height * 4u; };
-
-    uint64_t totalBytes = 0;
-    for (const auto& kv : m_BgTextureCache)
-    {
-        if (kv.second.Handle.IsValid() && !kv.second.SharedOwned)
-            totalBytes += entryBytes(kv.second);
-    }
-    if (totalBytes <= kBudgetBytes)
-        return;
-
-    std::unordered_set<uint64_t> visibleHandles;
-    if (m_SdfTextureRegistry)
-    {
-        std::vector<uint32_t> slots;
-        slots.reserve(m_DrawOrder.size());
-        for (const auto index : m_DrawOrder)
-            if (index < m_PersistentPrimitives.size())
-                slots.push_back(m_PersistentPrimitives[index].TextureIndex);
-        for (const auto handle : m_SdfTextureRegistry->GetTextureHandlesForSlots(slots))
-            visibleHandles.insert(static_cast<uint64_t>(handle.id));
-    }
-
-    struct Candidate
-    {
-        GUID Guid;
-        uint64_t LastUsed = 0;
-        uint64_t Bytes = 0;
-    };
-    std::vector<Candidate> candidates;
-    candidates.reserve(m_BgTextureCache.size());
-    for (auto& kv : m_BgTextureCache)
-    {
-        if (!kv.second.Handle.IsValid() || kv.second.SharedOwned)
-            continue;
-        if (visibleHandles.contains(static_cast<uint64_t>(kv.second.Handle.id)))
-        {
-            kv.second.LastUsedFrame = m_BgCacheFrame;
-            continue;
-        }
-        if (kv.second.LastUsedFrame + kMinIdleFrames > m_BgCacheFrame)
-            continue;
-        candidates.push_back({kv.first, kv.second.LastUsedFrame, entryBytes(kv.second)});
-    }
-    if (candidates.empty())
-        return;
-
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate& a, const Candidate& b) { return a.LastUsed < b.LastUsed; });
-
-    size_t evictedCount = 0;
-    uint64_t evictedBytes = 0;
-    for (const Candidate& c : candidates)
-    {
-        if (totalBytes <= kBudgetBytes)
-            break;
-        EvictBackgroundTexture(c.Guid);
-        totalBytes -= std::min(totalBytes, c.Bytes);
-        evictedBytes += c.Bytes;
-        ++evictedCount;
-    }
-
-    if (evictedCount > 0 && m_Root)
-    {
-        // Mirror the async-upload completion path: a style-dirty pass alone can
-        // skip regen when CSS is unchanged, leaving retained primitives bound to
-        // the dummy slot until some unrelated layout refresh. Force a primitive
-        // rebuild so still-visible tiles re-resolve immediately.
-        MarkPrimitivesNeedRegen(0x200u);
-        MarkStyleDirtyAll();
-        Logger::Log::Debug("[UI] Background texture cache over budget: evicted {} entries ({} KB)",
-                           evictedCount, evictedBytes / 1024);
-    }
-}
-
-void UIManager::EnsureBackgroundTextureUploaded(const GUID& guid)
-{
-    if (guid.IsNull() || !m_AssetManager || !m_Device)
-        return;
-
-    auto itCache = m_BgTextureCache.find(guid);
-    if (itCache != m_BgTextureCache.end() && itCache->second.Handle.IsValid())
-    {
-        itCache->second.LastUsedFrame = m_BgCacheFrame;
-        return;
-    }
-
-    // Try synchronous path: asset already loaded → upload GPU texture directly.
-    auto asset = m_AssetManager->GetAsset(guid);
-    if (asset)
-    {
-        auto* texA = dynamic_cast<TextureAsset*>(asset.get());
-        if (texA)
-        {
-            uint32_t w = texA->GetWidth();
-            uint32_t h = texA->GetHeight();
-            if (w > 0 && h > 0)
-            {
-                Rendering::TextureHandle handle = CreateUIBackgroundTextureFromAsset(m_Device, texA);
-                if (handle.IsValid())
-                {
-                    auto& entry = m_BgTextureCache[guid];
-                    entry.Handle = handle;
-                    entry.Width = w;
-                    entry.Height = h;
-                    entry.SharedOwned = false;
-                    entry.Slice = ResolveNineSlice(guid);
-                    entry.LastUsedFrame = m_BgCacheFrame;
-                    return;
-                }
-            }
-        }
-    }
-
-    // Asset not loaded yet — trigger async load. RequestBackgroundTexture
-    // dedupes via m_BgUploadInFlight so repeated calls are cheap.
-    RequestBackgroundTexture(guid, nullptr);
-}
-
-NineSlice UIManager::ResolveNineSlice(const GUID& guid)
-{
-    NineSlice slice;
-    if (guid.IsNull() || !m_AssetManager)
-        return slice;
-
-    auto asset = m_AssetManager->GetAsset(guid);
-    if (!asset)
-        return slice;
-
-    std::string value;
-    if (m_AssetManager->GetRegistry().TryGetMetaValue(asset->GetPath(), kTextureNineSliceMetaKey, value))
-        ParseTextureNineSliceMeta(value, slice);
-    return slice;
-}
-
-uint32_t UIManager::TryRegisterResolvedBackgroundTexture(const std::string& path,
-                                                        const std::string& sourceAlias,
-                                                        UI::UITextureRegistry& reg,
-                                                        uint32_t* outWidth,
-                                                        uint32_t* outHeight,
-                                                        Rendering::SamplerHandle sampler)
-{
-    if (outWidth)
-        *outWidth = 0;
-    if (outHeight)
-        *outHeight = 0;
-
-    const GUID g = ResolveBackgroundImagePath(path, sourceAlias);
-    if (g.IsNull())
-        return 0;
-
-    EnsureBackgroundTextureUploaded(g);
-
-    auto it = m_BgTextureCache.find(g);
-    if (it == m_BgTextureCache.end() || !it->second.Handle.IsValid())
-        return 0;
-
-    if (outWidth)
-        *outWidth = it->second.Width;
-    if (outHeight)
-        *outHeight = it->second.Height;
-
-    return reg.Register(it->second.Handle, sampler);
-}
-
-Rendering::TextureHandle UIManager::TryGetBackgroundTextureHandleByGuid(const GUID& guid,
-                                                                        uint32_t* outWidth,
-                                                                        uint32_t* outHeight)
-{
-    if (outWidth)  *outWidth = 0;
-    if (outHeight) *outHeight = 0;
-    if (guid.IsNull())
-        return Rendering::INVALID_TEXTURE_HANDLE;
-
-    EnsureBackgroundTextureUploaded(guid);
-
-    auto it = m_BgTextureCache.find(guid);
-    if (it == m_BgTextureCache.end() || !it->second.Handle.IsValid())
-        return Rendering::INVALID_TEXTURE_HANDLE;
-
-    if (outWidth)  *outWidth  = it->second.Width;
-    if (outHeight) *outHeight = it->second.Height;
-    return it->second.Handle;
-}
-
-Rendering::TextureHandle UIManager::TryGetBackgroundTextureHandle(const std::string& path,
-                                                                    uint32_t* outWidth,
-                                                                    uint32_t* outHeight) const
-{
-    if (outWidth)  *outWidth = 0;
-    if (outHeight) *outHeight = 0;
-
-    // Cast away const — resolution and upload are logically read-only (lazy cache population).
-    auto* self = const_cast<UIManager*>(this);
-
-    const GUID g = self->ResolveBackgroundImagePath(path, "");
-    if (g.IsNull())
-        return Rendering::INVALID_TEXTURE_HANDLE;
-
-    // Trigger upload if not yet cached (mirrors TryRegisterResolvedBackgroundTexture).
-    self->EnsureBackgroundTextureUploaded(g);
-
-    auto it = m_BgTextureCache.find(g);
-    if (it == m_BgTextureCache.end() || !it->second.Handle.IsValid())
-        return Rendering::INVALID_TEXTURE_HANDLE;
-
-    if (outWidth)  *outWidth  = it->second.Width;
-    if (outHeight) *outHeight = it->second.Height;
-    return it->second.Handle;
-}
-
-void UIManager::RequestBackgroundTexture(const GUID& guid,
-                                         std::function<void(Rendering::TextureHandle, uint32_t, uint32_t)> onReady)
-{
-    // Async background loads can outlive a tool window. The load completes on a worker, which
-    // posts through the shared dispatcher: once this manager is gone the closed dispatcher
-    // refuses the post, and posted work runs only from this manager's own drains.
-    std::shared_ptr<UI::UiDispatcher> dispatcher = m_Dispatcher;
-
-    if (guid.IsNull() || !m_AssetManager)
-    {
-        if (onReady)
-            onReady(Rendering::TextureHandle{}, 0, 0);
-        return;
-    }
-
-    // If already uploaded, invoke immediately
-    auto it = m_BgTextureCache.find(guid);
-    if (it != m_BgTextureCache.end() && it->second.Handle)
-    {
-        it->second.LastUsedFrame = m_BgCacheFrame;
-        if (onReady)
-            onReady(it->second.Handle, it->second.Width, it->second.Height);
-        return;
-    }
-
-    // Queue callback for when ready
-    if (onReady)
-    {
-        m_BgReadyCallbacks[guid].push_back(std::move(onReady));
-    }
-
-    // Already in flight — unless the request that set the marker never came
-    // back. A completion can be lost (a dispatcher that stops draining, a load
-    // that never resolves), and the marker outlives it, so every later attempt
-    // returns here and the image never appears. Past the stale window the
-    // request is re-issued rather than assumed to still be coming.
-    static constexpr auto kUploadStale = std::chrono::seconds(5);
-    static constexpr uint32_t kMaxUploadAttempts = 3;
-    const auto now = std::chrono::steady_clock::now();
-    auto itFlight = m_BgUploadInFlight.find(guid);
-    if (itFlight != m_BgUploadInFlight.end())
-    {
-        if (now - itFlight->second.Issued < kUploadStale)
-            return;
-        if (itFlight->second.Attempts >= kMaxUploadAttempts)
-        {
-            if (itFlight->second.Attempts == kMaxUploadAttempts)
-            {
-                ++itFlight->second.Attempts; // log once, not every paint
-                Logger::Log::Warning(
-                    "UI: background texture {} never completed in {} attempts; it stays blank",
-                    guid.ToString(), kMaxUploadAttempts);
-            }
-            return;
-        }
-        itFlight->second.Issued = now;
-        ++itFlight->second.Attempts;
-    }
-    else
-    {
-        m_BgUploadInFlight.emplace(guid, BackgroundUploadRequest{now, 1});
-    }
-
-    auto completeLocal = [this, guid](Rendering::TextureHandle handle, uint32_t w, uint32_t h)
-    {
-        auto& entry = m_BgTextureCache[guid];
-        if (handle && entry.Handle.IsValid() && entry.Handle != handle)
-        {
-            // A retried request can land after the one it replaced finally
-            // arrives. Keep the texture already in the cache — primitives may
-            // reference its slot — and free the late duplicate rather than
-            // overwriting the handle and leaking it.
-            if (m_Device && !entry.SharedOwned)
-                m_Device->DestroyTexture(handle);
-            handle = entry.Handle;
-        }
-        if (handle)
-        {
-            entry.Handle = handle;
-            entry.Width = w;
-            entry.Height = h;
-            // Per-UIManager ownership: background textures are local to the manager.
-            entry.SharedOwned = false;
-            entry.Slice = ResolveNineSlice(guid);
-            entry.LastUsedFrame = m_BgCacheFrame;
-        }
-        static const bool s_Log = []() -> bool
-        {
-            const char* e = std::getenv("GE_UI_GEOM_INVALIDATE_LOG");
-            return (e && e[0] == '1');
-        }();
-        static int s_Budget = 24;
-        if (s_Log && s_Budget-- > 0)
-        {
-            Logger::Log::Warning("[UI GeoInvalidate] BackgroundTextureReady(guid={})", guid.ToString());
-        }
-
-        m_BgUploadInFlight.erase(guid);
-        if (!handle)
-        {
-            // The request completed with nothing to draw — the asset is not a
-            // texture, or it decoded to zero. The element stays blank, and
-            // nothing further is coming, so say so once.
-            Logger::Log::Warning("UI: background image {} completed with no texture; it stays blank",
-                                 guid.ToString());
-        }
-        auto itcb = m_BgReadyCallbacks.find(guid);
-        if (itcb != m_BgReadyCallbacks.end())
-        {
-            for (auto& cb : itcb->second)
-                cb(entry.Handle, entry.Width, entry.Height);
-            m_BgReadyCallbacks.erase(itcb);
-        }
-
-        // Icon/background images often trigger this path with no readiness callback
-        // (ResolveBackgroundTextureSlot calls RequestBackgroundTexture(guid, nullptr)).
-        // A style-dirty refresh alone can be ignored by elements that have no layout
-        // yet, leaving stale primitives until some unrelated layout refresh happens.
-        // Force the primitive snapshot to rebuild as soon as the texture is available.
-        if (handle)
-        {
-            MarkPrimitivesNeedRegen(0x200u);
-            MarkStyleDirtyAll();
-        }
-    };
-
-    auto runUploadFromAsset = [this, guid, completeLocal]()
-    {
-        if (!m_AppliesAsyncResults)
-            return;
-        Rendering::TextureHandle handle{};
-        uint32_t w = 0, h = 0;
-        auto a2 = m_AssetManager ? m_AssetManager->GetAsset(guid) : SharedPtr<Asset>{};
-        if (a2)
-        {
-            if (auto* texA = dynamic_cast<TextureAsset*>(a2.get()))
-            {
-                w = texA->GetWidth();
-                h = texA->GetHeight();
-                if (w && h)
-                {
-                    handle = UIManager::CreateUIBackgroundTextureFromAsset(m_Device, texA);
-                }
-            }
-        }
-        completeLocal(handle, w, h);
-    };
-
-    // If already loaded in AssetManager, schedule the upload now via deferred UI action
-    if (auto asset = m_AssetManager->GetAsset(guid))
-    {
-        if (dynamic_cast<TextureAsset*>(asset.get()))
-        {
-            dispatcher->Post(runUploadFromAsset);
-        }
-        else
-        {
-            // Not a texture asset; complete callbacks with failure on UI thread
-            dispatcher->Post([this, completeLocal]()
-                             {
-                                 if (!m_AppliesAsyncResults)
-                                     return;
-                                 completeLocal(Rendering::TextureHandle{}, 0, 0); });
-        }
-        return;
-    }
-
-    // Submit async load and fan-out on completion
-    m_AssetManager->LoadAsset(guid, [dispatcher, runUploadFromAsset](Result<SharedPtr<Asset>, AssetError>)
-                              {
-                                  // Switch to UI thread via UI dispatcher
-                                  dispatcher->Post(runUploadFromAsset); });
+    if (m_SdfTextureRegistry && handle.IsValid())
+        m_SdfTextureRegistry->UnregisterByHandle(handle);
 }
 
 std::optional<UIManager::ResolvedExternalTexture>
@@ -2258,32 +1789,6 @@ UIManager::ResolveExternalTexture(const std::string& name) const
 
     diag("UNRESOLVED", 0, 0);
     return std::nullopt;
-}
-
-// ---------------------------------------------------------------------------
-// Test-only accessors. These let UIHotReloadTests assert on internal cache
-// state without exposing the maps publicly to non-test consumers.
-// ---------------------------------------------------------------------------
-bool UIManager::HasBackgroundTextureCachedForTesting(const GUID& guid) const
-{
-    auto it = m_BgTextureCache.find(guid);
-    return it != m_BgTextureCache.end() && it->second.Handle.IsValid();
-}
-
-void UIManager::SeedBackgroundTextureForTesting(const GUID& guid,
-                                                 Rendering::TextureHandle handle,
-                                                 uint32_t width,
-                                                 uint32_t height)
-{
-    if (guid.IsNull())
-        return;
-    auto& entry = m_BgTextureCache[guid];
-    entry.Handle = handle;
-    entry.Width = width;
-    entry.Height = height;
-    // Mark as shared-owned so eviction and ~UIManager don't call DestroyTexture
-    // on a synthetic handle.
-    entry.SharedOwned = true;
 }
 
 void UIManager::SeedFontGuidForTesting(const GUID& fontGuid, const std::string& atlasKey)
@@ -2391,22 +1896,15 @@ void UIManager::DrainPendingAssetReloads()
 
 void UIManager::HandleTextureAssetReloaded(const GUID& guid)
 {
-    if (guid.IsNull())
+    // Not a background image we've cached: nothing to do.
+    if (!m_BackgroundImages.OnTextureReloaded(guid))
         return;
-    auto itCache = m_BgTextureCache.find(guid);
-    if (itCache == m_BgTextureCache.end())
-        return; // Not a background image we've cached; nothing to do.
-
-    EvictBackgroundTexture(guid);
 
     // Mark every element that may reference this background as dirty so the
-    // next paint re-resolves the URL → fresh handle. The conservative-but-cheap
-    // approach is a tree-wide style/visual invalidation: hot reloads are rare
-    // and the cost is bounded by the live element count. Walking the tree to
-    // pick exactly the elements whose ResolvedStyle.Visual.BackgroundImage
-    // resolves to this GUID would also miss elements where the source kind is
-    // Path (lazy-resolved through m_BgPathToGuid) and whose resolved guid was
-    // not yet cached on the element.
+    // next paint re-resolves the URL to a fresh handle. A tree-wide
+    // invalidation: hot reloads are rare, and picking exactly the elements
+    // whose background resolves to this GUID would miss elements whose path
+    // was not yet resolved to it.
     if (m_Root)
         MarkStyleDirtyAll();
 }

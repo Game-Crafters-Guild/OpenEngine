@@ -85,7 +85,7 @@ public:
     // decided by timestamp at request time, not by the name.
     static std::string MakeCacheFileName(const std::filesystem::path& assetPath);
 
-    // True when the engine's CPU image decoder (DecodeImageToRGBA, stb_image)
+    // True when the engine's CPU image decoder (Image::Decode8, stb_image)
     // can produce an RGBA8 payload for this extension AND the asset registry
     // routes that extension here. Container formats that decode to GPU blocks
     // (.ktx/.ktx2/.dds) and vector sources (.svg) are excluded: those keep

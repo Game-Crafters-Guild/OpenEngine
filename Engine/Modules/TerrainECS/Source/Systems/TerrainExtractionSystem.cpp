@@ -235,6 +235,65 @@ void ClearGrassEnabledIfNothingToPlace(Terrain::TerrainGPUParams& params)
         params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
 }
 
+// The one writer of a terrain row's grass parameters, shared by the tiled and the untiled path:
+// the authored component clamped to its supported ranges, Root Color resolved (Auto derives it
+// from Tip Color, so the GPU never sees the sentinel), the texture-card bindings, and the enabled
+// bit cleared when the row places nothing. A terrain with no TerrainGrass (`grass` null) gets the
+// disabled row with the GPU defaults.
+void WriteGrassParams(Terrain::TerrainGPUParams& params,
+                      const Components::TerrainGrass* grass,
+                      Engine::Renderer::RenderServices* renderServices)
+{
+    params.GrassEnabled = (grass ? Terrain::kTerrainGrassBitEnabled : 0u)
+        | (grass && grass->UseSplatRootColor ? Terrain::kTerrainGrassBitSplatRootColor : 0u)
+        | (grass && grass->TextureGrass ? Terrain::kTerrainGrassBitTextureCard : 0u)
+        | (grass && grass->RenderMode == Components::TerrainGrassRenderMode::Blend
+               ? Terrain::kTerrainGrassBitBlendMode : 0u);
+    params.GrassDensity = grass ? std::max(0.0f, grass->BladesPerSquareMeter) : 0.0f;
+    params.GrassBladeHeight = grass ? std::max(0.0f, grass->BladeHeight) : 0.0f;
+    params.GrassBladeWidth = grass ? std::max(0.0f, grass->BladeWidth) : 0.0f;
+    params.GrassBladeTilt = grass ? std::clamp(grass->BladeTilt, 0.0f, Components::kMaxTerrainGrassBladeTilt) : 0.0f;
+    params.GrassBladeBend = grass ? std::clamp(grass->BladeBend, 0.0f, Components::kMaxTerrainGrassBladeBend) : 0.0f;
+    params.GrassBladeTwist = grass ? std::clamp(grass->BladeTwist, 0.0f, Components::kMaxTerrainGrassBladeTwist) : 0.0f;
+    params.GrassBladeTaperStart = grass ? std::clamp(grass->BladeTaperStart, 0.0f, Components::kMaxTerrainGrassBladeTaperStart) : 0.0f;
+    params.GrassTuftFan = grass ? std::clamp(grass->TuftFan, 0.0f, Components::kMaxTerrainGrassTuftFan) : 0.0f;
+    params.GrassBladeSegments = grass ? std::clamp(grass->BladeSegments,
+        Components::kMinTerrainGrassBladeSegments,
+        Components::kMaxTerrainGrassBladeSegments) : 5u;
+    params.GrassMaskThreshold = grass ? std::clamp(grass->MaskThreshold, 0.0f, 1.0f) : 1.0f;
+    params.GrassDensityFalloff = grass ? std::max(0.0f, grass->DensityFalloff) : 0.0f;
+    params.GrassRange = grass ? std::max(0.0f, grass->Range) : 0.0f;
+    params.GrassPlacementSeed = grass ? grass->PlacementSeed : 0.0f;
+    params.GrassWindStrength = grass ? std::max(0.0f, grass->WindStrength) : 0.0f;
+    params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
+    params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
+    params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
+    params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
+    params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
+    params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
+    params.GrassRootColor = grass ? Components::TerrainGrassResolvedRootColor(*grass) : 0xFF637A3Eu;
+    params.GrassTipColor = grass ? grass->TipColor : 0xFF79954Du;
+    params.GrassBacklightColor = grass ? grass->BacklightColor : 0xFFBCCE61u;
+    params.GrassWindDirection = grass ? grass->WindDirection : -2.5f;
+    params.GrassWindGustSpeed = grass ? grass->WindGustSpeed : 0.9f;
+    params.GrassWindGustScale = grass ? grass->WindGustScale : 0.05f;
+    params.GrassWindRestingLean = grass ? grass->WindRestingLean : 0.12f;
+    params.GrassWindFlutterAmount = grass ? grass->WindFlutterAmount : 0.16f;
+    params.GrassWindFlutterSpeed = grass ? grass->WindFlutterSpeed : 2.2f;
+    params.GrassWindSeed = grass ? grass->WindSeed : 3.0f;
+    params.GrassClumpSize = grass ? std::max(0.0f, grass->ClumpSize) : 0.0f;
+    params.GrassClumpHeightVariance = grass ? std::clamp(grass->ClumpHeightVariance, 0.0f, 1.0f) : 0.0f;
+    params.GrassClumpAlignment = grass ? std::clamp(grass->ClumpAlignment, 0.0f, 1.0f) : 0.0f;
+    params.GrassClumpTaper = grass ? std::clamp(grass->ClumpTaper, 0.0f, 1.0f) : 0.0f;
+    params.GrassHueVariation = grass ? std::clamp(grass->HueVariation, 0.0f, 1.0f) : 0.0f;
+    params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
+    params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
+    ApplyGrassTextureParams(params, grass, renderServices);
+    ClearGrassEnabledIfNothingToPlace(params);
+    params.GrassCanopyOcclusion =
+        Terrain::TerrainGrassCanopyOcclusionDepth(params, grass ? grass->CanopyShade : 0.0f);
+}
+
 // The quarantine depth must be >= the frames the GPU can have in flight (triple-buffered worst
 // case), so a slot freed this frame is never handed to a new tile while an in-flight frame still
 // samples it (Risk 2). The slot budget itself is no longer a fixed 36 — DeriveAtlasSlotCount scales
@@ -1991,51 +2050,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                            ? Terrain::kTerrainFlagHasNormalmap : 0u)
                     | (feature->GetSplatmapTexture(globalGpuHandle).IsValid()
                            ? Terrain::kTerrainFlagHasSplatmap : 0u);
-                params.GrassEnabled = (grass ? Terrain::kTerrainGrassBitEnabled : 0u)
-                    | (grass && grass->UseSplatRootColor ? Terrain::kTerrainGrassBitSplatRootColor : 0u)
-                    | (grass && grass->TextureGrass ? Terrain::kTerrainGrassBitTextureCard : 0u)
-                    | (grass && grass->RenderMode == Components::TerrainGrassRenderMode::Blend
-                           ? Terrain::kTerrainGrassBitBlendMode : 0u);
-                params.GrassDensity = grass ? std::max(0.0f, grass->BladesPerSquareMeter) : 0.0f;
-                params.GrassBladeHeight = grass ? std::max(0.0f, grass->BladeHeight) : 0.0f;
-                params.GrassBladeWidth = grass ? std::max(0.0f, grass->BladeWidth) : 0.0f;
-                params.GrassMaxWidthRatio = grass ? std::max(0.0f, grass->MaxWidthRatio) : 0.0f;
-                params.GrassBladeSegments = grass ? std::clamp(grass->BladeSegments,
-                    Components::kMinTerrainGrassBladeSegments,
-                    Components::kMaxTerrainGrassBladeSegments) : 5u;
-                params.GrassMaskThreshold = grass ? std::clamp(grass->MaskThreshold, 0.0f, 1.0f) : 1.0f;
-                params.GrassDensityFalloff = grass ? std::max(0.0f, grass->DensityFalloff) : 0.0f;
-                params.GrassRange = grass ? std::max(0.0f, grass->Range) : 0.0f;
-                params.GrassPlacementSeed = grass ? grass->PlacementSeed : 0.0f;
-                params.GrassWindStrength = grass ? std::max(0.0f, grass->WindStrength) : 0.0f;
-                params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
-                params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
-                params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
-                params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
-                params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
-                params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
-                params.GrassRootColor = grass ? grass->RootColor : 0xFF335F1Au;
-                params.GrassTipColor = grass ? grass->TipColor : 0xFFB3DB4Du;
-                params.GrassBacklightColor = grass ? grass->BacklightColor : 0xFFE6F06Au;
-                params.GrassWindDirection = grass ? grass->WindDirection : -2.5f;
-                params.GrassWindGustSpeed = grass ? grass->WindGustSpeed : 0.9f;
-                params.GrassWindGustScale = grass ? grass->WindGustScale : 0.05f;
-                params.GrassWindRestingLean = grass ? grass->WindRestingLean : 0.12f;
-                params.GrassWindFlutterAmount = grass ? grass->WindFlutterAmount : 0.16f;
-                params.GrassWindFlutterSpeed = grass ? grass->WindFlutterSpeed : 2.2f;
-                params.GrassWindSeed = grass ? grass->WindSeed : 3.0f;
-                params.GrassClumpSize = grass ? std::max(0.0f, grass->ClumpSize) : 0.0f;
-                params.GrassClumpHeightVariance = grass ? std::clamp(grass->ClumpHeightVariance, 0.0f, 1.0f) : 0.0f;
-                params.GrassClumpAlignment = grass ? std::clamp(grass->ClumpAlignment, 0.0f, 1.0f) : 0.0f;
-                params.GrassClumpGather = grass ? std::clamp(grass->ClumpGather, 0.0f, 1.0f) : 0.0f;
-                params.GrassHueVariation = grass ? std::clamp(grass->HueVariation, 0.0f, 1.0f) : 0.0f;
-                params.GrassRootShade = grass ? std::clamp(grass->RootShade, 0.0f, 1.0f) : 1.0f;
-                params.GrassBladeNormalForm = grass ? std::clamp(grass->BladeNormalForm, 0.0f, 1.0f) : 0.0f;
-                params.GrassBladeScatterGain = grass ? std::max(0.0f, grass->BladeScatterGain) : 0.0f;
-                params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
-                params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
-                ApplyGrassTextureParams(params, grass, m_RenderServices);
-                ClearGrassEnabledIfNothingToPlace(params);
+                WriteGrassParams(params, grass, m_RenderServices);
 
                 // Atlas-backed terrains have no unified heightmap (HeightmapBindless == 0). The grass
                 // placement compute reads the kTerrainFlagAtlasBacked bit (set above) and routes its
@@ -2126,6 +2141,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 info.NormalmapBindlessIndex = normalmapBindless;
                 info.IsTiled = true;
                 info.CastShadows = terrain.CastShadows;
+                info.RenderLayers = terrain.RenderLayers;
                 // Phase E: the CBT render feature reads these to bind the atlas height texture
                 // + indirection SSBO and set the atlas-enabled flag in the frame params.
                 info.AtlasBacked = atlasBacked;
@@ -2467,51 +2483,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                        ? Terrain::kTerrainFlagHasNormalmap : 0u)
                 | (feature->GetSplatmapTexture(handle).IsValid()
                        ? Terrain::kTerrainFlagHasSplatmap : 0u);
-            params.GrassEnabled = (grass ? Terrain::kTerrainGrassBitEnabled : 0u)
-                | (grass && grass->UseSplatRootColor ? Terrain::kTerrainGrassBitSplatRootColor : 0u)
-                | (grass && grass->TextureGrass ? Terrain::kTerrainGrassBitTextureCard : 0u)
-                | (grass && grass->RenderMode == Components::TerrainGrassRenderMode::Blend
-                       ? Terrain::kTerrainGrassBitBlendMode : 0u);
-            params.GrassDensity = grass ? std::max(0.0f, grass->BladesPerSquareMeter) : 0.0f;
-            params.GrassBladeHeight = grass ? std::max(0.0f, grass->BladeHeight) : 0.0f;
-            params.GrassBladeWidth = grass ? std::max(0.0f, grass->BladeWidth) : 0.0f;
-            params.GrassMaxWidthRatio = grass ? std::max(0.0f, grass->MaxWidthRatio) : 0.0f;
-            params.GrassBladeSegments = grass ? std::clamp(grass->BladeSegments,
-                Components::kMinTerrainGrassBladeSegments,
-                Components::kMaxTerrainGrassBladeSegments) : 5u;
-            params.GrassMaskThreshold = grass ? std::clamp(grass->MaskThreshold, 0.0f, 1.0f) : 1.0f;
-            params.GrassDensityFalloff = grass ? std::max(0.0f, grass->DensityFalloff) : 0.0f;
-            params.GrassRange = grass ? std::max(0.0f, grass->Range) : 0.0f;
-            params.GrassPlacementSeed = grass ? grass->PlacementSeed : 0.0f;
-            params.GrassWindStrength = grass ? std::max(0.0f, grass->WindStrength) : 0.0f;
-            params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
-            params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
-            params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
-            params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
-            params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
-            params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
-            params.GrassRootColor = grass ? grass->RootColor : 0xFF335F1Au;
-            params.GrassTipColor = grass ? grass->TipColor : 0xFFB3DB4Du;
-            params.GrassBacklightColor = grass ? grass->BacklightColor : 0xFFE6F06Au;
-            params.GrassWindDirection = grass ? grass->WindDirection : -2.5f;
-            params.GrassWindGustSpeed = grass ? grass->WindGustSpeed : 0.9f;
-            params.GrassWindGustScale = grass ? grass->WindGustScale : 0.05f;
-            params.GrassWindRestingLean = grass ? grass->WindRestingLean : 0.12f;
-            params.GrassWindFlutterAmount = grass ? grass->WindFlutterAmount : 0.16f;
-            params.GrassWindFlutterSpeed = grass ? grass->WindFlutterSpeed : 2.2f;
-            params.GrassWindSeed = grass ? grass->WindSeed : 3.0f;
-            params.GrassClumpSize = grass ? std::max(0.0f, grass->ClumpSize) : 0.0f;
-            params.GrassClumpHeightVariance = grass ? std::clamp(grass->ClumpHeightVariance, 0.0f, 1.0f) : 0.0f;
-            params.GrassClumpAlignment = grass ? std::clamp(grass->ClumpAlignment, 0.0f, 1.0f) : 0.0f;
-            params.GrassClumpGather = grass ? std::clamp(grass->ClumpGather, 0.0f, 1.0f) : 0.0f;
-            params.GrassHueVariation = grass ? std::clamp(grass->HueVariation, 0.0f, 1.0f) : 0.0f;
-            params.GrassRootShade = grass ? std::clamp(grass->RootShade, 0.0f, 1.0f) : 1.0f;
-            params.GrassBladeNormalForm = grass ? std::clamp(grass->BladeNormalForm, 0.0f, 1.0f) : 0.0f;
-            params.GrassBladeScatterGain = grass ? std::max(0.0f, grass->BladeScatterGain) : 0.0f;
-            params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
-            params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
-            ApplyGrassTextureParams(params, grass, m_RenderServices);
-            ClearGrassEnabledIfNothingToPlace(params);
+            WriteGrassParams(params, grass, m_RenderServices);
             bool grassControlsSuppressed = false;
             if (grass)
             {
@@ -2548,6 +2520,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             info.MaterialTiling = terrain.MaterialTiling;
             info.Handle = handle;
             info.CastShadows = terrain.CastShadows;
+            info.RenderLayers = terrain.RenderLayers;
             info.HeightmapTexture = feature->GetInitializedCbtHeightTexture(handle, TerrainCbtHeightTexture::Heightmap);
             info.HeightmapBindlessIndex = feature->GetHeightmapBindlessIndex(handle);
             info.SplatmapTexture = feature->GetSplatmapTexture(handle);

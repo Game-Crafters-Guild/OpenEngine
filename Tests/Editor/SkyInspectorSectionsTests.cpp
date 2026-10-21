@@ -163,15 +163,14 @@ TEST(SkyInspectorSections, EachSectionContainsTheRowsItTook)
     };
     const Group groups[] = {
         {"fallingStars", "addSkyDiskToggle(fallingStars, \"Falling stars\"",
-         "\"Star density\"",
+         "AddSkyStarLookRow(stars",
          {"\"Falling amount\"", "\"Falling frequency\"", "\"Falling speed\"", "\"Falling length\"",
           "\"Falling thickness\"", "\"Falling dot size\""}},
         // The star rows end where the Sun Dir override rows begin. Those go to `physical`, so a
         // span that runs past them reads three of its rows as stars that landed elsewhere.
-        {"stars", "AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, \"Star density\"",
-         "if (!sky->AutoSunMoon)",
-         {"\"Brightness\"", "\"Size\"", "\"Sparkle Points\"", "\"Core Size\"", "\"Glow Falloff\"",
-          "\"Twinkle Speed\"", "\"Twinkle Intensity\""}},
+        {"stars", "AddSkyStarLookRow(stars", "if (!sky->AutoSunMoon)",
+         {"\"Observer\"", "\"Limit\"", "\"Twinkle\"", "\"Artistic\"", "\"Highlights\"", "\"Glow\"",
+          "\"Twinkle rate\"", "\"Shape\"", "\"Core\"", "\"Spikes\"", "\"Spike length\""}},
         // Sun size 2D leads the group: it belongs with the other 2D-only knobs rather than beside
         // the sun's real size, because it is a screen fraction and not an angle.
         {"backdrop2D", "(backdrop2D, \"Sun size 2D\"", "",

@@ -9,11 +9,14 @@
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Panels/CameraCustomAspectModal.h"
 
+#include "Inspectors/ExposureCompensationCurveRow.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Inspectors/RenderLayersRow.h"
 
 #include "UI/UIManager.h"
+#include "UI/ExposureMeterText.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -56,6 +59,11 @@ static constexpr EnumEntry<Components::ExposureMode> kExposureModes[] = {
     {Components::ExposureMode::Manual,   "Manual (EV100)",    "dropdown-icon--exposure-manual"},
     {Components::ExposureMode::Physical, "Physical (camera)", "dropdown-icon--exposure-physical"},
     {Components::ExposureMode::Auto,     "Auto (metered)",    "dropdown-icon--exposure-auto"},
+};
+
+static constexpr EnumEntry<Components::ExposureMeter> kExposureMeters[] = {
+    {Components::ExposureMeter::Picture, Editor::kExposureMeterPictureLabel},
+    {Components::ExposureMeter::Lights,  Editor::kExposureMeterLightsLabel},
 };
 
 CameraCustomAspectModal* g_CustomAspectModal = nullptr;
@@ -456,11 +464,12 @@ void RegisterCameraInspector()
             });
         }
 
-        // Editable: CullingMask, PostProcessProfileId
-        AddComponentIntRowWithDrag<Components::Camera>(ctx.Parent, "CullingMask", static_cast<int>(cam->CullingMask), w, e, n, undo,
-            "Change Camera Culling Mask",
-            [](Components::Camera& u, int v) { u.CullingMask = static_cast<uint32>(std::max(0, v)); },
-            static_cast<int>(cam->CullingMask), "Layer visibility mask for this camera", extras);
+        // Editable: VisibleLayers, PostProcessProfileId
+        AddComponentRenderLayersRow<Components::Camera>(
+            ctx.Parent, "Visible Layers", &Components::Camera::VisibleLayers, w, e, n, undo,
+            "Change Camera Visible Layers",
+            "The render layers this camera draws. A layer it does not draw casts no shadow in this camera's view.",
+            Editor::kVisibleLayersNothingTooltip, extras);
         AddComponentIntRowWithDrag<Components::Camera>(ctx.Parent, "PostProcessProfileId", static_cast<int>(cam->PostProcessProfileId), w, e, n, undo,
             "Change Camera PostProcess Profile",
             [](Components::Camera& u, int v) { u.PostProcessProfileId = static_cast<uint32>(std::max(0, v)); },
@@ -638,19 +647,19 @@ void RegisterCameraInspector()
             "Per-camera render scale override. 0 = inherit the engine default (including Dynamic "
             "resolution). An explicit 0.25-2.0 pins this camera to a fixed scale; above 1.0 "
             "supersamples (SSAA). Not with MSAA — a multisampled view cannot be scaled.", extras);
-        AddComponentIntRowWithDrag<Components::Camera>(ctx.Parent, "PostProcessMask", static_cast<int>(cam->PostProcessMask), w, e, n, undo,
-            "Change Camera PostProcess Mask",
-            [](Components::Camera& u, int v) { u.PostProcessMask = static_cast<uint32>(v); },
-            static_cast<int>(cam->PostProcessMask),
-            "Volume layer bitmask: only volumes with (PostProcessVolume.postProcessMask & this) != 0 affect this camera. -1 = accept all.", extras);
+        AddComponentRenderLayersRow<Components::Camera>(
+            ctx.Parent, "Volume Layers", &Components::Camera::VolumeLayers, w, e, n, undo,
+            "Change Camera Volume Layers",
+            "The volume layers this camera takes: a post-process volume affects it when their Volume Layers share a layer.",
+            "Takes no post-process volume.", extras);
 
         // --- Exposure (the camera's sensor; the active camera's exposure drives its view) ---
         InspectorUI::AddTextBlock(ctx.Parent, "Exposure", "inspector-section-subheader");
 
         auto* exModeField = InspectorUI::AddEnumRow(ctx.Parent, "Exposure Mode", kExposureModes, cam->ExposureControl,
             "Fixed = a linear multiplier. Manual = an absolute photographic EV100 anchored to 203-nit "
-            "reference white (sun ~15, overcast ~12, interior ~7-9, night ~2-5). Physical = EV100 from "
-            "camera Aperture/Shutter/ISO. Auto = histogram metering + eye adaptation.");
+            "reference white (sun ~15, overcast ~12, interior ~7-9, full moon ~-4). Physical = EV100 from "
+            "camera Aperture/Shutter/ISO. Auto = the Meter below + eye adaptation.");
         exModeField->SetOnValueChanged([w, e, n, undo, extras](Components::ExposureMode v) {
             CommitComponentWithUndo<Components::Camera>(w, e, n, undo, "Change Exposure Mode",
                 [v](Components::Camera& u) { u.ExposureControl = v; });
@@ -662,6 +671,17 @@ void RegisterCameraInspector()
                     n->NotifyComponentChange<Components::Camera>(w, ex, Editor::EditorChangeNotifications::ChangeKind::InspectorRebuild);
             }
         });
+
+        // The meter sits directly under the mode it belongs to, as in the Scene View's popover.
+        if (cam->ExposureControl == Components::ExposureMode::Auto)
+        {
+            auto* meterField = InspectorUI::AddEnumRow(ctx.Parent, "Meter", kExposureMeters, cam->AutoExposureMeter,
+                                                       Editor::kExposureMeterTooltip);
+            meterField->SetOnValueChanged([w, e, n, undo](Components::ExposureMeter v) {
+                CommitComponentWithUndo<Components::Camera>(w, e, n, undo, "Change Exposure Meter",
+                    [v](Components::Camera& u) { u.AutoExposureMeter = v; });
+            });
+        }
 
         AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Exposure Compensation", cam->ExposureCompensation, w, e, n,
             undo, "Change Exposure Compensation",
@@ -681,7 +701,7 @@ void RegisterCameraInspector()
                 undo, "Change Manual EV",
                 [](Components::Camera& u, float v) { u.ManualExposureEV = v; },
                 Components::kDefaultManualExposureEv,
-                "Manual mode: absolute photographic EV100. Sunny ~15, overcast ~12, interior ~7-9, night ~2-5.", extras);
+                "Manual mode: absolute photographic EV100: sun ~15, overcast ~12, interior ~7-9, full moon ~-4.", extras);
         }
         else if (cam->ExposureControl == Components::ExposureMode::Physical)
         {
@@ -699,11 +719,13 @@ void RegisterCameraInspector()
             AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Auto Min EV", cam->AutoExposureMinEv, w, e, n,
                 undo, "Change Auto Min EV",
                 [](Components::Camera& u, float v) { u.AutoExposureMinEv = v; },
-                4.0f, "Auto mode: brightest the metering may expose to (lower EV = more brightening in dark scenes).", extras);
+                Components::kDefaultAutoExposureMinEv,
+                "Auto mode, either meter: the darkest scene EV100 the meter fully exposes (lower EV = more "
+                "brightening in dark scenes). The Compensation Curve keeps a night dark.", extras);
             AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Auto Max EV", cam->AutoExposureMaxEv, w, e, n,
                 undo, "Change Auto Max EV",
                 [](Components::Camera& u, float v) { u.AutoExposureMaxEv = v; },
-                18.0f, "Auto mode: darkest the metering may expose to (higher EV = more darkening in bright scenes).", extras);
+                18.0f, "Auto mode, either meter: darkest the metering may expose to (higher EV = more darkening in bright scenes).", extras);
             AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Auto Speed Up", cam->AutoExposureSpeedUp, w, e, n,
                 undo, "Change Auto Speed Up",
                 [](Components::Camera& u, float v) { u.AutoExposureSpeedUp = std::max(0.0f, v); },
@@ -712,6 +734,7 @@ void RegisterCameraInspector()
                 undo, "Change Auto Speed Down",
                 [](Components::Camera& u, float v) { u.AutoExposureSpeedDown = std::max(0.0f, v); },
                 3.0f, "Auto mode: rate the exposure FALLS (the scene brightened, image darkens). Higher = faster.", extras);
+            AddExposureCompensationCurveRow(ctx);
         }
 
         // Lens controls remain visible in every exposure mode. Aperture is a

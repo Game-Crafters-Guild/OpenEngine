@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "Engine/Rendering/RenderServices.h"
+#include "Engine/Rendering/Camera.h"
 #include "Rendering/CameraTypes.h"
 
 using namespace GameEngine;
@@ -61,15 +62,15 @@ TEST(ViewRegistryTests, ReleaseCameraErasesPerCameraSideTables)
     ViewRegistry::CameraExposure exposure{};
     exposure.Mode = 1;
     rs.Views().SetCameraExposure(cam, exposure);
-    rs.Views().SetCameraPostProcessMask(cam, 0x2u);
+    rs.Views().SetCameraVolumeLayers(cam, GameEngine::Rendering::RenderLayerMask{0x2u});
 
     ASSERT_NE(rs.Views().FindCameraExposure(cam), nullptr);
-    EXPECT_TRUE(rs.Views().HasCameraPostProcessMask(cam));
+    EXPECT_TRUE(rs.Views().HasCameraVolumeLayers(cam));
 
     ASSERT_TRUE(rs.Views().ReleaseCamera(cam));
 
     EXPECT_EQ(rs.Views().FindCameraExposure(cam), nullptr);
-    EXPECT_FALSE(rs.Views().HasCameraPostProcessMask(cam));
+    EXPECT_FALSE(rs.Views().HasCameraVolumeLayers(cam));
 }
 
 // L5(d) — S0 subset: ReleaseView succeeds exactly once (double-release is a
@@ -144,17 +145,17 @@ TEST(ViewRegistryTests, OnDemandViewStartsExpiredUntilArmed)
     const CameraId cam = rs.Views().AllocateCamera("cam");
     const ViewId view = rs.Views().AllocateView("onDemand", cam, ViewPurpose::EditorScene,
                                         ViewParticipation::OnDemand);
-    rs.Views().SetViewRenderLayerMask(view, 1u);
+    rs.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
 
     const ViewDesc* dormant = rs.Views().FindViewDesc(view);
     ASSERT_NE(dormant, nullptr);
-    EXPECT_EQ(dormant->ActiveRenderLayerMask(), 0u) << "unarmed OnDemand view is dormant";
+    EXPECT_EQ(dormant->ActiveRenderLayerMask().Bits, 0u) << "unarmed OnDemand view is dormant";
 
     rs.Views().RequestViewFrame(view);
 
     const ViewDesc* armed = rs.Views().FindViewDesc(view);
     ASSERT_NE(armed, nullptr);
-    EXPECT_NE(armed->ActiveRenderLayerMask(), 0u) << "armed OnDemand view participates";
+    EXPECT_NE(armed->ActiveRenderLayerMask().Bits, 0u) << "armed OnDemand view participates";
 }
 
 // A1.6 (D9) hide -> lapse: when a scene/game pane hides, the editor routing
@@ -170,16 +171,16 @@ TEST(ViewRegistryTests, A16_HideLapsesOnDemandViewWithoutReleasing)
     const CameraId cam = rs.Views().AllocateCamera("cam");
     const ViewId view = rs.Views().AllocateView("onDemand", cam, ViewPurpose::EditorScene,
                                         ViewParticipation::OnDemand);
-    rs.Views().SetViewRenderLayerMask(view, 1u);
+    rs.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
 
     // Visible frame: the pane declares, arming the view for this frame + the next.
     rs.Views().RequestViewFrame(view);
-    ASSERT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), 0u)
+    ASSERT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask().Bits, 0u)
         << "armed OnDemand view participates while visible";
 
     // Frame 1 after hide (no re-arm): still fed by the prior request.
     rs.Views().BeginFrame();
-    EXPECT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), 0u)
+    EXPECT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask().Bits, 0u)
         << "still participates one frame after hide (request covers this frame)";
 
     // Frame 2 after hide: lapses to dormant. View is NOT released — it is still
@@ -187,13 +188,13 @@ TEST(ViewRegistryTests, A16_HideLapsesOnDemandViewWithoutReleasing)
     rs.Views().BeginFrame();
     const ViewDesc* lapsed = rs.Views().FindViewDesc(view);
     ASSERT_NE(lapsed, nullptr) << "hidden view stays registered (release is destroy-only)";
-    EXPECT_EQ(lapsed->ActiveRenderLayerMask(), 0u) << "lapsed within two frames of hide";
+    EXPECT_EQ(lapsed->ActiveRenderLayerMask().Bits, 0u) << "lapsed within two frames of hide";
 
     // A further frame with no re-arm stays dormant — nothing self-arms it.
     rs.Views().BeginFrame();
     const ViewDesc* stillDormant = rs.Views().FindViewDesc(view);
     ASSERT_NE(stillDormant, nullptr);
-    EXPECT_EQ(stillDormant->ActiveRenderLayerMask(), 0u)
+    EXPECT_EQ(stillDormant->ActiveRenderLayerMask().Bits, 0u)
         << "no re-arm while hidden: stays dormant, no orphan cull loop";
 }
 
@@ -208,13 +209,13 @@ TEST(ViewRegistryTests, A16_QuickReshowReusesSameViewIdAndRearms)
     const CameraId cam = rs.Views().AllocateCamera("cam");
     const ViewId view = rs.Views().AllocateView("onDemand", cam, ViewPurpose::EditorScene,
                                         ViewParticipation::OnDemand);
-    rs.Views().SetViewRenderLayerMask(view, 1u);
+    rs.Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
 
     // Visible, then hide -> lapse to dormant (two decrements, no re-arm).
     rs.Views().RequestViewFrame(view);
     rs.Views().BeginFrame();
     rs.Views().BeginFrame();
-    ASSERT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), 0u)
+    ASSERT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask().Bits, 0u)
         << "dormant after hide";
 
     // Reshow: the controller declares again and re-arms. It never re-allocated,
@@ -223,11 +224,11 @@ TEST(ViewRegistryTests, A16_QuickReshowReusesSameViewIdAndRearms)
     const ViewDesc* rearmed = rs.Views().FindViewDesc(view);
     ASSERT_NE(rearmed, nullptr);
     EXPECT_EQ(rearmed->id, view) << "same viewId across hide/reshow (never released)";
-    EXPECT_NE(rearmed->ActiveRenderLayerMask(), 0u) << "reshow re-arms participation";
+    EXPECT_NE(rearmed->ActiveRenderLayerMask().Bits, 0u) << "reshow re-arms participation";
 
     // Next frame's extraction is fed: still participating after one decrement.
     rs.Views().BeginFrame();
-    EXPECT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), 0u)
+    EXPECT_NE(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask().Bits, 0u)
         << "reshown view renders the next frame";
 }
 
@@ -247,4 +248,29 @@ TEST(ViewRegistryTests, A16_DestroyReleasesViewFromRegistry)
     EXPECT_TRUE(rs.Views().ReleaseView(view)) << "destroy releases the view";
     EXPECT_EQ(rs.Views().FindViewDesc(view), nullptr) << "view gone from registry after destroy";
     EXPECT_TRUE(rs.Views().ReleaseCamera(cam)) << "camera releasable once its view is gone";
+}
+
+// A Game View whose world has no camera sleeps: it is OnDemand and nothing arms it, so its effective
+// layers are None and no extraction, culling slice or pass reads it. With a camera it draws the camera's
+// Visible Layers for the frame it is declared in and the next.
+TEST(ViewRegistryTests, ACameraLessGameViewSleepsAndACameraGivesItsLayers)
+{
+    RenderServices rs;
+    const CameraId cam = rs.Views().AllocateCamera("cam");
+    const ViewId view = rs.Views().AllocateView("Game View", cam, ViewPurpose::Game, ViewParticipation::OnDemand);
+
+    DeclareGameCameraView(rs.Views(), view, nullptr);
+    EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), RenderLayerMask::None())
+        << "a camera-less Game View gets no submissions and no culling slice";
+
+    Camera camera{};
+    camera.params.VisibleLayers = RenderLayerMask::FromLayer(0) | RenderLayerMask::FromLayer(4);
+    DeclareGameCameraView(rs.Views(), view, &camera);
+    EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), camera.params.VisibleLayers);
+
+    rs.Views().BeginFrame();
+    rs.Views().BeginFrame();
+    DeclareGameCameraView(rs.Views(), view, nullptr);
+    EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), RenderLayerMask::None())
+        << "the camera went away: the view sleeps again once its last arm lapses";
 }

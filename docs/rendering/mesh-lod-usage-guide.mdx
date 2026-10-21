@@ -1,6 +1,6 @@
 ---
 title: Mesh LODs
-description: How static models get LOD chains automatically, the per-asset and project settings that control them, what generation costs and how the GPU selects a level.
+description: How static models get LOD chains automatically, the per-asset and project settings that control them, what generation costs, and how the GPU selects a level.
 ---
 
 :::tip[TL;DR]
@@ -10,7 +10,7 @@ Static (non-animated) models get LOD chains **automatically**: nothing to set up
 ## Zero-config path (what happens by default)
 
 1. Drop FBX/glTF files into your project's `Assets/` folder (or open a project that has them).
-2. On load, each non-skinned mesh gets up to 4 LOD levels. You'll see one log line per model:
+2. On load, each non-skinned mesh gets up to 4 LOD levels. You will see one log line per model:
 
    ```text title="The log line for one model"
    LOD gen: 3 meshes -> 4 LODs in 0.64 ms (7262 tris) (assets/fbx/props/sm_prop_tent_01.fbx)
@@ -19,7 +19,7 @@ Static (non-animated) models get LOD chains **automatically**: nothing to set up
 3. At runtime the GPU picks the LOD per instance from projected screen coverage: distant instances render with fewer triangles. Shadow cascades benefit the most (measured: generated chains cut cascaded-shadow GPU time by up to **10×** on heavy scenes).
 
 :::note
-Meshes that are already simple stay LOD0-only: the simplifier only keeps a level when it actually reduces triangles meaningfully. On stylized low-poly content (Synty), ~80% of meshes are correctly left untouched; the heavy 20% (buildings, rocks, props) get chains.
+Meshes that are already simple stay LOD0-only: the simplifier only keeps a level when it actually reduces triangles meaningfully. On stylized low-poly content (Synty), ~80% of meshes are correctly left untouched. The heavy 20% (buildings, rocks, props) get chains.
 :::
 
 ## Per-asset settings (Model Inspector)
@@ -54,10 +54,10 @@ Generation runs on background asset workers during load: it never blocks the fra
 
 ## Runtime behavior (how selection works)
 
-- A LOD level is either **index-only** or **own-vertex**. An index-only level is an index buffer over LOD0's vertices and adds no vertex memory. An own-vertex level carries its own vertex block, uploaded after LOD0's block in the same vertex buffer; an authored level on a mesh with vertex colors also carries its own RGBA block. Levels of an authored LOD chain are own-vertex, and so are generated far levels that fell back to the sloppy simplifier (rebuilt with their own vertices so normals and UVs stay correct); every other generated level is index-only.
+- A LOD level is either **index-only** or **own-vertex**. An index-only level is an index buffer over LOD0's vertices and adds no vertex memory. An own-vertex level carries its own vertex block, uploaded after LOD0's block in the same vertex buffer. An authored level on a mesh with vertex colors also carries its own RGBA block. Levels of an authored LOD chain are own-vertex, and so are generated far levels that fell back to the sloppy simplifier (rebuilt with their own vertices so normals and UVs stay correct). Every other generated level is index-only.
 - Per-mesh switch thresholds are **derived from the achieved simplification error**: a level that simplified almost losslessly switches in earlier (bigger win, invisible), a lossy level waits until the instance is small on screen.
-- Selection happens in the GPU draw-command scatter pass per instance per view, from projected coverage of the bounding sphere; this includes shadow cascade views.
-- A switch between levels dissolves instead of popping: for **LOD Crossfade (s)** in **Settings → Level of Detail** (default 0.25 s, 0 turns it off) both levels draw, each keeping a complementary half of a screen-space dither; shadow casters switch without a fade.
+- Selection happens in the GPU draw-command scatter pass per instance per view, from projected coverage of the bounding sphere. This includes shadow cascade views.
+- A switch between levels dissolves instead of popping: for **LOD Crossfade (s)** in **Settings → Level of Detail** (default 0.25 s, 0 turns it off) both levels draw, each keeping a complementary half of a screen-space dither. Shadow casters switch without a fade.
 - An LOD chain imported with the model (`_LOD<N>` name suffixes, `MSFT_lod`, FBX LOD groups, explicit slots) takes precedence over generation for that mesh.
 - A global LOD bias is available for debugging/perf work (`lodBiasGlobal`, exposed via render stats tooling).
 
@@ -70,11 +70,3 @@ There is no LOD component to add to an object and no per-renderer switch heights
 :::caution[Opt-in by design]
 Skinned meshes are skipped by default: position-only simplification ignores joint-assignment seams, which can produce "weight swim" on animated silhouettes. If you want chains on a specific character, turn OFF **Use project defaults** on that asset and enable **Generate for skinned meshes**, then verify animation quality with the Preview LOD slider (static poses) and in Play mode.
 :::
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/Rendering/mesh-lod-usage-guide.html`; the screenshot moves to `img/mesh-lod-usage-guide-inspector.png`.
-- 2026-10-05: the roadmap table is removed; the dithered LOD crossfade and the precedence of an imported chain are stated in the runtime section.
-- 2026-10-01: the runtime section's mapping panel is stated in the engine's own terms; the scene-converter smoke-test section is removed.
-- 2026-10-01: runtime behavior states the index-only and own-vertex level rule; roadmap phases B and C marked shipped.
-- 2026-07-12: first version; screenshots from the POLYGON ElvenRealm verification run.

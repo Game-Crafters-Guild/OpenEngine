@@ -180,7 +180,7 @@ TEST(StagedAssetCook, TheBuildsContentCookShipsAStackCooked)
 
     TexturePackageCookStats textureStats;
     std::string error;
-    ASSERT_TRUE(CookStagedContent(content.Root, content.Manifest, registry, parsers, TextureCookEncodeQuality::QuickBC7,
+    ASSERT_TRUE(CookStagedContent(content.Root, content.Manifest, registry, parsers,
                                   /*textureWorkers=*/nullptr, /*manifestParsePool=*/nullptr,
                                   NeverCancelled, textureStats, error))
         << error;

@@ -51,7 +51,7 @@ async function setStage(/** @type {'floor' | 'gi'} */ part, /** @type {boolean} 
     if (part === 'gi') stage.gi?.set(DDGIVolume, {});
     fitStage(stage, shape);
 }
-const panel = controlPanel(document, { show, timeOfDay: 15, setTimeOfDay: (hours) => { scene.sky.timeOfDay = hours; }, exposure: 2, setExposure: (ev) => scene.camera.set(Camera, { exposureCompensation: ev }), setStage, play: (clip, speed) => model?.animation.play(clip, { speed }), pause: () => model?.animation.pause(), reframe: () => frame(true) });
+const panel = controlPanel(document, { show, timeOfDay: scene.sky.timeOfDay, setTimeOfDay: (hours) => { scene.sky.timeOfDay = hours; }, exposure: 0, setExposure: (ev) => scene.camera.set(Camera, { exposureCompensation: ev }), setStage, play: (clip, speed) => model?.animation.play(clip, { speed }), pause: () => model?.animation.pause(), reframe: () => frame(true) });
 engine.onFrame((dt) => {
     if (panel.turning() && model && shape) turnAbout(model, shape, 10 * dt);
     panel.frame(dt);

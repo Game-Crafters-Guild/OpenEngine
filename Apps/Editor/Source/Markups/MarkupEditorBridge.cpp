@@ -369,11 +369,20 @@ uint8 MarkupEditorBridge::TakeEditChanges(const ECS::World& world, ECS::EntityHa
 MarkupEditorBridge::WorldState& MarkupEditorBridge::StateOf(const ECS::World& world) const
 {
     WorldState& state = m_Worlds[world.GetWorldId()];
-    const uint64 generation = world.GetLifecycleResetGeneration();
-    if (state.Generation != generation)
+    const uint64 epoch = world.GetEntityHandleEpoch();
+    const uint64 reset = world.GetLifecycleResetGeneration();
+    if (state.HandleEpoch != epoch)
     {
         state = WorldState{};
-        state.Generation = generation;
+        state.HandleEpoch = epoch;
+        state.ResetGeneration = reset;
+    }
+    else if (state.ResetGeneration != reset)
+    {
+        state.Baselines.clear();
+        state.RegionDisplays.Clear();
+        state.FrameGroundFrame.reset();
+        state.ResetGeneration = reset;
     }
     return state;
 }

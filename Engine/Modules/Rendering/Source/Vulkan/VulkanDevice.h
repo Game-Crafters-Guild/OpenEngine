@@ -15,6 +15,7 @@
 #include "Rendering/Core/ResourceManager.h"
 #include "Rendering/Core/TextureManager.h"
 #include "VulkanPipelineCache.h"
+#include "VulkanPipelineCompileGate.h"
 
 #include "DescriptorSetAllocator.h"
 #include "DeviceHealthState.h"
@@ -1386,6 +1387,14 @@ class VulkanDevice : public IDevice
     void RecycleThreadPoolsForFrame(uint32_t frameSlot);
     void DestroyAllThreadPools();
 
+    // A destroyed persistent descriptor set's bytes, waiting for the GPU before they
+    // return to the descriptor-buffer pool that made them.
+    struct PersistentDescriptorBytes
+    {
+        DescriptorBufferAllocation Alloc;
+        uint64_t PoolInstance = 0; // VulkanDescriptorBufferPool::InstanceId
+    };
+
     // Per-frame command buffer tracking (simple pool per queue)
     struct PerQueueFrame
     {
@@ -1398,6 +1407,7 @@ class VulkanDevice : public IDevice
         std::vector<TextureHandle> deferredTextures;
         std::vector<TextureViewHandle> deferredTextureViews;
         std::vector<SamplerHandle> deferredSamplers;
+        std::vector<PersistentDescriptorBytes> deferredDescriptorBytes;
         VkFence fence = VK_NULL_HANDLE;                // signals when this frame finishes (graphics path)
         bool fenceArmed = false;                       // true only if we submitted using this fence last time this frame index was active
         // Compute only: true once any command list was routed on the compute queue in this slot
@@ -1477,11 +1487,17 @@ class VulkanDevice : public IDevice
         QueueRetireTags tags;
     };
     std::vector<DeferredSampler> m_DeferredSamplersTimeline; // destroyed when every queue passes its tag
+    struct DeferredDescriptorBytes
+    {
+        PersistentDescriptorBytes handle;
+        QueueRetireTags tags;
+    };
+    std::vector<DeferredDescriptorBytes> m_DeferredDescriptorBytesTimeline; // released when every queue passes its tag
 
-    // Guards m_Deferred{Buffers,Textures,TextureViews,Samplers}Timeline, the
-    // m_Pending*DestroyIds sets, the per-frame
-    // PerQueueFrame::deferred{Buffers,Textures,TextureViews,Samplers} vectors,
-    // and m_DeferralFrameSlot.
+    // Guards m_Deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes}Timeline,
+    // the m_Pending*DestroyIds sets, the per-frame
+    // PerQueueFrame::deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes}
+    // vectors, and m_DeferralFrameSlot.
     //
     // The public Destroy* entry points are genuinely concurrent: ECS extraction
     // systems (TerrainExtractionSystem, RenderExtractionSystem) resolve bindless
@@ -1518,6 +1534,7 @@ class VulkanDevice : public IDevice
     void QueueDeferredTextureDestroy(TextureHandle handle);
     void QueueDeferredTextureViewDestroy(TextureViewHandle handle);
     void QueueDeferredSamplerDestroy(SamplerHandle handle);
+    void QueueDeferredDescriptorBytesRelease(const PersistentDescriptorBytes& bytes);
 
     struct DeferredStagingBuffer
     {
@@ -1591,6 +1608,8 @@ class VulkanDevice : public IDevice
     // Internal helper: destroy view immediately (no deferral)
     void DestroyTextureViewImmediate(TextureViewHandle h);
     void DestroySamplerImmediate(SamplerHandle handle);
+    // Returns the bytes to their pool; dropped when the pool that made them is gone.
+    void ReleaseDescriptorBytesImmediate(const PersistentDescriptorBytes& bytes);
 
     VkCommandBuffer AcquireCmdBuffer(IDevice::QueueType queue);
     void RecycleCmdBuffer(IDevice::QueueType queue, VkCommandBuffer cmd);
@@ -2110,6 +2129,7 @@ class VulkanDevice : public IDevice
         DescriptorBufferAllocation alloc;
         VkDescriptorSetLayout      layout = VK_NULL_HANDLE;
         uint32_t                   frameSlot = 0;
+        uint64_t                   poolInstance = 0; // VulkanDescriptorBufferPool::InstanceId
         std::string                debugName;
         // Layout metadata for UpdateDescriptorSet validation; empty when
         // m_EnableDescriptorValidation is off. Deliberately NOT part of the per-draw
@@ -2122,7 +2142,7 @@ class VulkanDevice : public IDevice
     // DB-backed descriptor sets indexed by tagged handle id. Entries for a given
     // frameSlot are purged at BeginFrameReset(frameSlot) since their backing memory
     // is rewound. Entries with frameSlot == kPersistentFrameSlot live in the DB
-    // pool's app-lifetime region and are never purged.
+    // pool's persistent region and are never purged; DestroyDescriptorSet removes them.
     //
     // shared_mutex so the hot-path lookup (per-draw in BindDescriptorSet) takes
     // a shared lock — many parallel-recording workers can resolve handles at
@@ -2188,9 +2208,10 @@ class VulkanDevice : public IDevice
     // descriptor-buffer pool. Returns an invalid allocation if DB is off. Asserts in
     // debug if the layout has UPDATE_AFTER_BIND bindings — DB layouts must be
     // created without that flag (vkGetDescriptorSetLayoutSizeEXT VUID).
-    // When persistent=true, the memory is allocated from the pool's app-lifetime
-    // region and is never rewound by BeginFrameReset. Intended for long-lived
-    // descriptor sets like the bindless texture array.
+    // When persistent=true, the memory is allocated from the pool's persistent
+    // region and is never rewound by BeginFrameReset; DestroyDescriptorSet returns
+    // a persistent set's bytes for reuse once every queue is past it. Intended for
+    // long-lived descriptor sets like the bindless texture array.
     DescriptorBufferAllocation AllocateDescriptorSetBytes(VkDescriptorSetLayout layout, bool persistent = false);
 
     // Public accessor for the cached VkDescriptorSetLayout corresponding to a
@@ -2309,6 +2330,8 @@ class VulkanDevice : public IDevice
     bool m_SupportsDynamicRendering = false;
 
     std::unique_ptr<VulkanPipelineCache> m_VkDiskPipelineCache;
+    // Every vkCreate*Pipelines call passes it; see VulkanPipelineCompileGate.
+    VulkanPipelineCompileGate m_PipelineCompileGate;
     // Backend-agnostic pipeline cache interface (wraps native Vulkan cache)
     std::unique_ptr<IPipelineCache> m_PipelineCacheIface;
 

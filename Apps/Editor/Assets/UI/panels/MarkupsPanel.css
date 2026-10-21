@@ -212,7 +212,7 @@
 }
 
 .markup-entry-marker.markup-entry-edit {
-	background-image: url("editor:Icons/draw_curve.png");
+	background-image: url("editor:Icons/draw_curve.svg");
 }
 
 .markup-entry-marker.markup-entry-status {
@@ -233,7 +233,7 @@
 /* The way back to the status color, beside the color row's swatch: a bare glyph. */
 /* The reset glyph on the theme's icon button (.icon-button sizes and plates it). */
 .markup-inspector-color-reset {
-	background-image: url("editor:Icons/ResetReload.png");
+	background-image: url("editor:Icons/ResetReload.svg");
 	background-size: 14px 14px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -290,7 +290,7 @@
 	min-height: 20px;
 	padding: 0;
 	flex-shrink: 0;
-	background-image: url("editor:Icons/eye.png");
+	background-image: url("editor:Icons/eye.svg");
 	background-size: 14px 14px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -432,7 +432,7 @@
 
 .markup-inspector-thread-title {
 	padding: 4px 8px;
-	font-weight: 600;
+	font-weight: 500;
 	border-bottom-width: 1px;
 	border-color: var(--ui_color_border_subtle);
 }
@@ -487,7 +487,7 @@
 }
 
 .markup-kind-glyph.markup-kind-box {
-	background-image: url("editor:Icons/cube.svg");
+	background-image: url("editor:Icons/Cube.svg");
 }
 
 .markup-kind-glyph.markup-kind-sphere {
@@ -518,7 +518,7 @@
 .markup-region-title {
 	margin-top: 8px;
 	padding: 2px 0;
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .markup-region-value {
@@ -537,7 +537,7 @@
 
 .markup-member-heading {
 	padding: 4px 8px;
-	font-weight: 600;
+	font-weight: 500;
 	border-bottom-width: 1px;
 	border-color: var(--ui_color_border_subtle);
 }
@@ -621,5 +621,5 @@
 .markup-path-heading {
 	margin-top: 6px;
 	padding: 4px 0px;
-	font-weight: 600;
+	font-weight: 500;
 }

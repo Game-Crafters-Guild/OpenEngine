@@ -69,7 +69,8 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         "TransmissiveRender",
         []() -> std::unique_ptr<IRenderPipelineNode>
         { return std::make_unique<TransmissivePassNode>(); },
-        /*perView*/ true);
+        /*perView*/ true,
+        RenderPipelineNodeResourceFields{.RefKeys = {"output", "clouds"}});
 
     (void)registry.Register(
         "DepthPrepass",
@@ -215,7 +216,8 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         /*perView*/ true,
         RenderPipelineNodeResourceFields{.RefKeys = {"output"},
                                          .PublishKeys = {{"output", Names::View::Color}},
-                                         .StaticPublishNames = {Names::Res::SkyBackdrop}});
+                                         .StaticPublishNames = {Names::Res::SkyBackdrop,
+                                                                Names::Res::SkyStarLight}});
 
     (void)registry.Register(
         "ShadowMap",
@@ -271,7 +273,8 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         /*perView*/ true,
         RenderPipelineNodeResourceFields{.RefKeys = {"output"},
          .PublishKeys = {{"output", Names::View::Resolve}},
-         .StaticPublishNames = {Names::View::DepthResolvedPostOcean}});
+         .StaticPublishNames = {Names::View::DepthResolvedPostOcean, Names::Res::VolumetricFogParams,
+                                Names::Res::VolumetricFog}});
 
     // Two-phase HZB occlusion (R2.1) nodes, wired into the ForwardPlus
     // blueprints after WorldRender. HZBBuild builds the MIN/occlusion

@@ -51,7 +51,7 @@ button.todo-add-button,
     padding: 0;
     background: transparent;
     background-color: transparent;
-    background-image: url("editor:Icons/plus.png");
+    background-image: url("editor:Icons/plus.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: center;
@@ -105,7 +105,7 @@ button.todo-add-button:hover,
 .todo-section-header {
     padding: 8px 12px;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     text-transform: uppercase;
     color: var(--text-secondary, rgba(255, 255, 255, 0.77));
     background-color: var(--bg-secondary, rgba(0, 0, 0, 0.13));
@@ -167,7 +167,7 @@ button.todo-add-button:hover,
     cursor: move;
     user-select: none;
     opacity: 0.35;
-    background-image: url("editor:Icons/reorder-two.png");
+    background-image: url("editor:Icons/reorder-two.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -193,7 +193,7 @@ button.todo-checkbox,
     cursor: pointer;
     background: transparent;
     background-color: transparent;
-    background-image: url("editor:Icons/checkmark-circle_un.png");
+    background-image: url("editor:Icons/checkmark-circle_un.svg");
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -213,7 +213,7 @@ button.todo-checkbox:hover,
 .todo-panel button.todo-checkbox:hover {
     background: transparent;
     background-color: transparent;
-    background-image: url("editor:Icons/checkmark-circle.png");
+    background-image: url("editor:Icons/checkmark-circle.svg");
     border-color: transparent;
     opacity: 1.0;
 }
@@ -225,7 +225,7 @@ button.todo-checkbox.todo-checkbox-checked,
 .todo-panel button.todo-checkbox.todo-checkbox-checked {
     background: transparent;
     background-color: transparent;
-    background-image: url("editor:Icons/checkmark-circle.png");
+    background-image: url("editor:Icons/checkmark-circle.svg");
     opacity: 1.0;
 }
 

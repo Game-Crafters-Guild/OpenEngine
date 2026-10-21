@@ -350,6 +350,15 @@ private:
     std::size_t m_WorldGeneration = 0;
 
 private:
+    // GetEntityHandleEpoch, and the last epoch Clear handed out: every Clear takes a new one,
+    // so a run of handles once left is never named again by a later Clear.
+    uint64 m_EntityHandleEpoch = 0;
+    uint64 m_LastEntityHandleEpoch = 0;
+    // Per slot, the highest version issued in this run when it is above the slot's own: a
+    // restore brought back an older entity in a slot that had issued newer handles since.
+    // Empty unless a restore needed it; Clear empties it.
+    std::vector<EntityVersion> m_IssuedVersionFloor;
+
     // Bulk operations mode
     bool bulkOperationMode = false;
     // When true, ABI structural operations (create/destroy/add/remove component) queue
@@ -650,7 +659,8 @@ public:
     // Editor/tooling: destroy without releasing the entity index back to the free list.
     // This allows undo/redo flows to revive the same EntityHandle (index+version) later.
     void DestroyEntityImmediatePreserveHandle(EntityHandle entity);
-    // Editor/tooling: revive a previously preserved entity handle (same index+version).
+    // Editor/tooling: revive a previously preserved entity handle (same index+version), taking
+    // its slot off the free list when a restore or a destroy put it there.
     // Returns true on success (or if already alive); false if the handle is incompatible.
     bool ReviveEntityImmediatePreserveHandle(EntityHandle entity);
 
@@ -847,9 +857,10 @@ public:
 	    void CopyComponent(EntityHandle src, EntityHandle dst, ComponentTypeId typeId);
 	    EntityHandle CloneEntity(EntityHandle source);
 	    // In-memory snapshots preserve entity handles, including undo-reserved dead
-	    // slots. Restore still resets the World's lifecycle generation via Clear(),
-	    // and leaves the World untouched for any stream that is not a snapshot of
-	    // the current format.
+	    // slots, and record the run they belong to (GetEntityHandleEpoch); a restore keeps
+	    // the world's run only for a snapshot of that run. Restore still resets
+	    // the World's lifecycle generation via Clear(), and leaves the World untouched
+	    // for any stream that is not a snapshot of the current format.
 	    std::vector<uint8_t> SerializeWorld();
 	    void DeserializeWorld(const std::vector<uint8_t>& data);
             void Clear();
@@ -1203,6 +1214,16 @@ public:
     // consumer needs regardless).
     uint64 GetLifecycleResetGeneration() const { return m_LifecycleEvents.ResetGeneration(); }
 
+    // Which run of entity handles the world's handles belong to. Within one run no handle is
+    // issued twice. Clear starts a new run (entity versions restart, so a handle kept from an
+    // earlier run may name an unrelated entity). DeserializeWorld brings back a snapshot's
+    // handles: a snapshot of the run the world is in keeps the run, and every slot stays past
+    // the versions it issued, so an entity created after the snapshot never has its handle
+    // issued again; a snapshot from an earlier run starts a new one. Data kept outside the
+    // world by entity handle stays valid while this is unchanged, including through the
+    // in-place restore of a snapshot, which still moves GetLifecycleResetGeneration.
+    uint64 GetEntityHandleEpoch() const { return m_EntityHandleEpoch; }
+
     // Swap generation — the consumer-cadence guard (F1 pattern). Increments
     // once per SwapLifecycleEvents(). A consumer caches the generation it
     // last consumed; on observing a gap > 1 (it was disabled or throttled
@@ -1346,6 +1367,9 @@ private:
 
     // Create entity without acquiring mutex (for internal use when mutex is already held)
     EntityHandle CreateEntityUnsafe();
+    // The version the next entity in `index` takes: one past the highest the slot issued in
+    // this run of handles. Caller holds worldMutex.
+    EntityVersion NextIssuedVersion(EntityIndex index) const;
 
     // Get thread-local command buffer
     CommandBuffer& GetCommandBuffer();

@@ -1,6 +1,9 @@
 #include "Engine/Build/WebExportRunner.h"
 
+#include "WebExportContent.h"
+
 #include "Core/Application.h"
+#include "Core/Engine.h"
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/GameConfig.h"
 #include "Engine/Build/MaterialVariantCookTool.h"
@@ -212,17 +215,40 @@ bool RunWebExport(const BuildSettings& settings,
         return false;
     }
 
+    // The export's own scratch folder beside its output (the script replaces the output folder):
+    // the generated game.config, the content list and the stripped scenes, removed after the run.
+    const auto scratch = settings.outputDirectory.parent_path() /
+                         (settings.outputDirectory.filename().string() + ".web-export");
+    std::filesystem::remove_all(scratch, ec);
+    std::filesystem::create_directories(scratch, ec);
+
     // The project directory holds no game.config; the export needs one, and the
     // Editor's build settings are what a desktop package would be built from.
-    const auto generatedConfig = settings.outputDirectory.parent_path() / ".web-export-game.config";
-    std::filesystem::create_directories(generatedConfig.parent_path(), ec);
+    const auto generatedConfig = scratch / "game.config";
     GameConfig config = settings.playerConfig;
     config.uiScale = UIScaleProjectSettings::Load(settings.projectRoot);
     if (!SaveGameConfig(generatedConfig, config))
     {
         outError = "Failed to write the generated game.config at " + generatedConfig.generic_string() +
                    ". Check that the build folder is writable.";
+        std::filesystem::remove_all(scratch, ec);
         return false;
+    }
+
+    // What ships is decided here, by the desktop export's collection; the script
+    // stages exactly this list.
+    const auto contentList = scratch / kWebExportContentListName;
+    std::vector<std::string> contentWarnings;
+    if (!StageWebExportContent(EngineCore::GetInstance().GetAssetManager(), settings,
+                               EngineCore::GetInstance().GetResolvedAssetRoot(), scratch, contentWarnings, outError))
+    {
+        std::filesystem::remove_all(scratch, ec);
+        return false;
+    }
+    for (const std::string& warning : contentWarnings)
+    {
+        if (onLine)
+            onLine("warning: " + warning);
     }
 
     std::string command;
@@ -234,6 +260,7 @@ bool RunWebExport(const BuildSettings& settings,
     command += Quote(python) + " " + Quote(exportScript) +
                " --project " + Quote(settings.projectRoot) +
                " --game-config " + Quote(generatedConfig) +
+               " --content-list " + Quote(contentList) +
                " --out " + Quote(settings.outputDirectory) +
                " --template " + Quote(playerTemplate) +
                " --shaderpkg-dir " + Quote(shaderPackages) +
@@ -248,7 +275,7 @@ bool RunWebExport(const BuildSettings& settings,
             onLine(line);
     });
 
-    std::filesystem::remove(generatedConfig, ec);
+    std::filesystem::remove_all(scratch, ec);
 
     if (result.cancelled || pipeline.IsCancelled())
     {

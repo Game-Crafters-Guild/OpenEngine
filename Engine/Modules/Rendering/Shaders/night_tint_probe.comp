@@ -1,0 +1,47 @@
+#version 450
+
+// Test-only probe for the night tint's rule (NightTintTests): evaluates Includes/night_tint.glsl on the
+// device, so the tests measure the shipped GLSL.
+//
+// Each query is two vec4 slots; the probe overwrites the second with the answer.
+//   slot0.x = 0: GE_NightTintAmount(strength slot0.y, adaptation nits slot0.z, scene nits slot0.w,
+//                contrast slot1.y)                            -> slot1.x = the amount
+//   slot0.x = 1: GE_NightTintStarContrast(stored luminance slot0.y, star light slot0.z, depth slot0.w)
+//                                                              -> slot1.x = the contrast
+//   slot0.x = 2: GE_NightTintSceneNits(stored luminance slot0.y, pre-exposure slot0.z)
+//                                                              -> slot1.x = the scene nits
+//   slot0.x = 3: GE_NightTintAdaptationNits(metered nits slot0.y, applied exposure slot0.z)
+//                                                              -> slot1.x = the adaptation nits
+//   slot0.x = 4: GE_NightTintApply(display colour slot0.yzw, tint slot1.yzw, amount 1)
+//                                                              -> slot1.xyz = the tinted colour
+
+#include "Includes/night_tint.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) buffer ProbeData { vec4 slots[]; } uData;
+
+layout(push_constant) uniform ProbePC
+{
+    vec4 counts; // x = query count
+} pc;
+
+void main()
+{
+    uint q = gl_GlobalInvocationID.x;
+    if (q >= uint(pc.counts.x))
+        return;
+    vec4 inSlot = uData.slots[q * 2u];
+    vec4 outSlot = vec4(0.0);
+    if (inSlot.x < 0.5)
+        outSlot.x = GE_NightTintAmount(inSlot.y, inSlot.z, inSlot.w, uData.slots[q * 2u + 1u].y);
+    else if (inSlot.x < 1.5)
+        outSlot.x = GE_NightTintStarContrast(inSlot.y, inSlot.z, inSlot.w);
+    else if (inSlot.x < 2.5)
+        outSlot.x = GE_NightTintSceneNits(inSlot.y, inSlot.z);
+    else if (inSlot.x < 3.5)
+        outSlot.x = GE_NightTintAdaptationNits(inSlot.y, inSlot.z);
+    else
+        outSlot.xyz = GE_NightTintApply(inSlot.yzw, uData.slots[q * 2u + 1u].yzw, 1.0);
+    uData.slots[q * 2u + 1u] = outSlot;
+}

@@ -204,16 +204,16 @@ bool MarkupService::SetTagColor(uint32 id, const float32 (&color)[4])
 MarkupService::WorldMarkups& MarkupService::WritableState(const ECS::World& world)
 {
     WorldMarkups& state = m_Worlds[world.GetWorldId()];
-    const uint64 generation = world.GetLifecycleResetGeneration();
-    if (state.ResetGeneration != generation)
-        state = WorldMarkups{generation};
+    const uint64 epoch = world.GetEntityHandleEpoch();
+    if (state.HandleEpoch != epoch)
+        state = WorldMarkups{epoch};
     return state;
 }
 
 const MarkupService::WorldMarkups* MarkupService::ReadableState(const ECS::World& world) const
 {
     const auto it = m_Worlds.find(world.GetWorldId());
-    if (it == m_Worlds.end() || it->second.ResetGeneration != world.GetLifecycleResetGeneration())
+    if (it == m_Worlds.end() || it->second.HandleEpoch != world.GetEntityHandleEpoch())
         return nullptr;
     return &it->second;
 }

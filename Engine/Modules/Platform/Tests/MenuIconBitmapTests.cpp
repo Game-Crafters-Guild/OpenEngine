@@ -100,14 +100,14 @@ TEST(MenuIconBitmapTests, MenuIconPixelSizeIsPositive)
 TEST(MenuIconBitmapTests, DecodesAPngIconToPremultipliedBgra)
 {
     const int size = MenuIconPixelSize();
-    ScopedBitmap bmp(CreateMenuIconBitmap("editor:Icons/save.png", size, size));
-    ASSERT_NE(bmp.Handle, nullptr) << "editor:Icons/save.png did not resolve or decode";
+    ScopedBitmap bmp(CreateMenuIconBitmap("editor:Icons/menu-icon-partial-alpha.png", size, size));
+    ASSERT_NE(bmp.Handle, nullptr) << "editor:Icons/menu-icon-partial-alpha.png did not resolve or decode";
 
     BitmapPixels px;
     ASSERT_TRUE(ReadBitmap(bmp.Handle, px));
     EXPECT_EQ(px.Width, size);
     EXPECT_EQ(px.Height, size);
-    ExpectPremultiplied(px, "save.png");
+    ExpectPremultiplied(px, "menu-icon-partial-alpha.png");
 }
 
 // SVG, through ThorVG. Four shipped panel icons are SVG, so a build without
@@ -150,8 +150,8 @@ TEST(MenuIconBitmapTests, WritesTheTopSourceRowIntoTheTopDestinationRow)
 TEST(MenuIconBitmapTests, AcceptsBothEditorAliasSpellings)
 {
     const int size = MenuIconPixelSize();
-    ScopedBitmap colon(CreateMenuIconBitmap("editor:Icons/save.png", size, size));
-    ScopedBitmap slash(CreateMenuIconBitmap("@editor/Icons/save.png", size, size));
+    ScopedBitmap colon(CreateMenuIconBitmap("editor:Icons/menu-icon-partial-alpha.png", size, size));
+    ScopedBitmap slash(CreateMenuIconBitmap("@editor/Icons/menu-icon-partial-alpha.png", size, size));
     ASSERT_NE(colon.Handle, nullptr);
     EXPECT_NE(slash.Handle, nullptr) << "@editor/ spelling did not resolve";
 }
@@ -172,7 +172,7 @@ TEST(MenuIconBitmapTests, YieldsNothingWhenTheUriCannotBeResolved)
     ScopedBitmap empty(CreateMenuIconBitmap("", size, size));
     EXPECT_EQ(empty.Handle, nullptr);
 
-    ScopedBitmap degenerate(CreateMenuIconBitmap("editor:Icons/save.png", 0, 0));
+    ScopedBitmap degenerate(CreateMenuIconBitmap("editor:Icons/menu-icon-partial-alpha.png", 0, 0));
     EXPECT_EQ(degenerate.Handle, nullptr);
 }
 

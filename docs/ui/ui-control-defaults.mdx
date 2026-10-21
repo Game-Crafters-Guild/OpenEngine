@@ -1,11 +1,11 @@
 ---
 title: UI control defaults
-description: The default stylesheet under every UI document, why your rules always win, its color properties, the slider track, selected text, Markdown text and the resize gesture.
+description: The default stylesheet under every UI document, why your rules always win, its color properties, the slider track, selected text, Markdown text, and the resize gesture.
 sidebar:
   order: 3
 ---
 
-A game UI document ships only its own stylesheet. So that a `<slider>`, `<toggle>` or `<checkbox>` you have not styled is still visible and usable, the UI module has a **default stylesheet** that every UI manager loads under your sheets, the way a browser's built-in sheet sits under every page. It gives each control the parts that would otherwise draw nothing: a slider's track and thumb, a toggle's knob, a checkbox's box and a scrollbar's thumb. It also defines the `hidden` class, which controls put on parts they are not showing.
+A game UI document ships only its own stylesheet. So that a `<slider>`, `<toggle>`, or `<checkbox>` you have not styled is still visible and usable, the UI module has a **default stylesheet** that every UI manager loads under your sheets, the way a browser's built-in sheet sits under every page. It gives each control the parts that would otherwise draw nothing: a slider's track and thumb, a toggle's knob, a checkbox's box, and a scrollbar's thumb. It also defines the `hidden` class, which controls put on parts they are not showing.
 
 The sheet is compiled into the engine, so every game and every exported build has it with nothing to copy. It is engine code: an edit to `Engine/Modules/UI/Assets/defaults.css` takes a rebuild, and it is not hot-reloaded.
 
@@ -52,17 +52,17 @@ A `var()` inside one of these properties resolves in the scope of the element th
 
 ### The slider track
 
-A slider paints its track itself rather than through child elements, so its three track colors are the properties `--slider-track-fill`, `--slider-track` and `--slider-tick`, read from the slider. The slider element's own `background-color` and border colors are not track colors; set the track properties instead.
+A slider paints its track itself rather than through child elements, so its three track colors are the properties `--slider-track-fill`, `--slider-track`, and `--slider-tick`, read from the slider. The slider element's own `background-color` and border colors are not track colors. Set the track properties instead.
 
 The track properties take any color `background-color` takes: hex, a color name, `rgb()`/`rgba()`, `hsl()`/`hsla()`, or a `var()` that resolves to one. A value that is not a color leaves that part of the track undrawn.
 
 ### The thumb, knob and box
 
-These are child elements with ordinary classes, so any property can be restyled on them, sizes included: `.slider-thumb` (8×8 px by default), `.toggle-knob` (12×12 px), `.checkbox-box` (16×16 px) and `.scrollbar-thumb`. A checked toggle moves its knob to the end with `.toggle:checked { justify-content: flex-end; }`; a rule of yours on the toggle's `justify-content` replaces that.
+These are child elements with ordinary classes, so any property can be restyled on them, sizes included: `.slider-thumb` (8×8 px by default), `.toggle-knob` (12×12 px), `.checkbox-box` (16×16 px), and `.scrollbar-thumb`. A checked toggle moves its knob to the end with `.toggle:checked { justify-content: flex-end; }`. A rule of yours on the toggle's `justify-content` replaces that.
 
 ### Selected text
 
-Every text control (a `<textinput>`, a `<textarea>` and the controls built on them) fills selected text with the `selection-color` property. It is inherited like `color`, so one declaration on `:root` recolors every field, and a declaration on a panel recolors only the fields inside it. A control's border never changes its selection: a field with a gray border or a red error border selects in the same color as every other field.
+Every text control (a `<textinput>`, a `<textarea>`, and the controls built on them) fills selected text with the `selection-color` property. It is inherited like `color`, so one declaration on `:root` recolors every field, and a declaration on a panel recolors only the fields inside it. A control's border never changes its selection: a field with a gray border or a red error border selects in the same color as every other field.
 
 ```css title="Recolor selected text"
 :root {
@@ -74,13 +74,13 @@ Every text control (a `<textinput>`, a `<textarea>` and the controls built on th
 }
 ```
 
-A control draws the color at 40% of its alpha while it has the focus, so the text stays legible over it. A text area keeps its selection after it loses the focus and draws it at 27%; a single-line field hides its selection until it has the focus again. An `rgba()` color is scaled the same way. Without a stylesheet the selection is `#3A8FFF`; the editor theme sets it to its accent.
+A control draws the color at 40% of its alpha while it has the focus, so the text stays legible over it. A text area keeps its selection after it loses the focus and draws it at 27%. A single-line field hides its selection until it has the focus again. An `rgba()` color is scaled the same way. Without a stylesheet the selection is `#3A8FFF`. The editor theme sets it to its accent.
 
 ## Markdown text
 
-A `<MarkdownText>` element shows read-only text written in Markdown, the way a chat reply or a patch note is written: paragraphs, headings, bold and italic, inline code, code blocks, bulleted and numbered lists (nested one level), quotes, rules, tables and links. A web link (`http` or `https`) opens in the player's browser when clicked; a link to any other address shows as its text. Markdown it does not know, and a delimiter that never closes (`**bold` without its end), shows as the characters written.
+A `<MarkdownText>` element shows read-only text written in Markdown, the way a chat reply or a patch note is written: paragraphs, headings, bold and italic, inline code, code blocks, bulleted and numbered lists (nested one level), quotes, rules, tables, and links. A web link (`http` or `https`) opens in the player's browser when clicked. A link to any other address shows as its text. Markdown it does not know, and a delimiter that never closes (`**bold` without its end), shows as the characters written.
 
-The element takes its font, size, line height and color from your stylesheet like any text, and every block inherits them; the default sheet adds only what Markdown changes: bold and italic faces, the monospace face for code (`--ui_font_mono` when your theme defines it, else the system's monospace font), heading sizes (130% and 115% for the first two levels), the list indent and the code tint. A code block keeps its lines and scrolls sideways; a vertical wheel over it scrolls the page around it.
+The element takes its font, size, line height, and color from your stylesheet like any text, and every block inherits them. The default sheet adds only what Markdown changes: bold and italic faces, the monospace face for code (`--ui_font_mono` when your theme defines it, else the system's monospace font), heading sizes (130% and 115% for the first two levels), the list indent, and the code tint. A code block keeps its lines and scrolls sideways. A vertical wheel over it scrolls the page around it.
 
 ```xml title="A patch notes panel"
 <MarkdownText id="PatchNotes" class="patch-notes" />
@@ -96,7 +96,7 @@ void SetMarkdown(std::string_view markdown);
 ```cpp title="Show the patch notes"
 using namespace GameEngine;
 
-if (auto* notes = dynamic_cast<MarkdownText*>(ui.GetRootElement()->FindById("PatchNotes")))
+if (auto* notes = dynamic_cast<MarkdownText*>(ui.GetRootElement()->FindById("PatchNotes"_sid)))
     notes->SetMarkdown("## 1.2\n- **Lanterns** light the gate\n- Fixed `F` framing");
 ```
 
@@ -121,7 +121,7 @@ Recolor it through these properties, like the other controls:
 | `--ui_color_markdown_muted` | `#9A9A9A` | List markers and quoted text |
 | `--ui_color_markdown_code_inline` | `rgba(128, 128, 128, 0.2)` | The tint behind inline code (`.markdown-code`) |
 | `--ui_color_markdown_code_block` | `rgba(0, 0, 0, 0.25)` | A code block's background (`.markdown-code-block`) |
-| `--ui_color_markdown_line` | `rgba(128, 128, 128, 0.4)` | Rules, a quote's bar and table borders |
+| `--ui_color_markdown_line` | `rgba(128, 128, 128, 0.4)` | Rules, a quote's bar, and table borders |
 | `--ui_color_markdown_table_header` | `rgba(128, 128, 128, 0.12)` | A table's header row |
 
 ## The editor theme
@@ -130,14 +130,6 @@ The editor does not rely on the default sheet's colors: its theme defines its ow
 
 ## Resizing items with the scroll wheel
 
-In the editor, **Resize Items** (default Ctrl+Scroll, Cmd+Scroll on macOS) makes the items of the Hierarchy and the Assets panel bigger on wheel up and smaller on wheel down, over the items or over the panel's size slider. The slider's tooltip names the current chord. Rebind it under *Keyboard Shortcuts › View Navigation › Resize Items*; the binding needs a modifier, so a plain wheel always scrolls. See [Editor keyboard shortcuts](../editor/keyboard-shortcuts.mdx).
+In the editor, **Resize Items** (default Ctrl+Scroll, Cmd+Scroll on macOS) makes the items of the Hierarchy and the Assets panel bigger on wheel up and smaller on wheel down, over the items or over the panel's size slider. The slider's tooltip names the current chord. Rebind it under *Keyboard Shortcuts › View Navigation › Resize Items*. The binding needs a modifier, so a plain wheel always scrolls. See [Editor keyboard shortcuts](../editor/keyboard-shortcuts.mdx).
 
 A game UI grid view resizes its icons with the same gesture. In a shipped game it is Ctrl+wheel (Cmd+wheel on macOS); while the game runs in the editor's Play mode, it follows the editor's Resize Items binding instead.
-
-## Changelog
-
-- 2026-10-13: Markdown text: the `<MarkdownText>` element, what it renders and its color properties.
-- 2026-10-13: Converted from `docs/ui-control-defaults.html`; the color swatches dropped (the table keeps the values).
-- 2026-10-08: The `selection-color` property.
-- 2026-09-24: The track properties take every color form; where a `var()` resolves.
-- 2026-09-23: First version: the default stylesheet, the user-agent precedence rule, the slider track properties and the resize gesture.

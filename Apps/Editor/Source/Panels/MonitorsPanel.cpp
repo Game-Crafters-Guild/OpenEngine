@@ -863,8 +863,11 @@ void MonitorsPanel::AttachChartDragHandlers(UIElement* strip, UIElement* header,
 
         ClearChartDragState();
         m_DragChartName = name;
-        m_DragStartX = e.X;
-        m_DragStartY = e.Y;
+        // Window space throughout the drag: it measures, ghosts and drops across
+        // strips, so it reads the window point, which a transform on a strip or
+        // on the panel does not move away from the window.
+        m_DragStartX = e.WindowX;
+        m_DragStartY = e.WindowY;
         m_ChartDragActive = false;
         strip->AddClass("drag-source");
         e.Capture(e.CurrentTarget ? e.CurrentTarget : strip);
@@ -875,8 +878,8 @@ void MonitorsPanel::AttachChartDragHandlers(UIElement* strip, UIElement* header,
         if (m_DragChartName != name)
             return;
 
-        const float dx = e.X - m_DragStartX;
-        const float dy = e.Y - m_DragStartY;
+        const float dx = e.WindowX - m_DragStartX;
+        const float dy = e.WindowY - m_DragStartY;
         if (!m_ChartDragActive && (std::abs(dx) > 4.0f || std::abs(dy) > 4.0f))
         {
             m_ChartDragActive = true;
@@ -885,8 +888,8 @@ void MonitorsPanel::AttachChartDragHandlers(UIElement* strip, UIElement* header,
 
         if (m_ChartDragActive)
         {
-            ShowChartDragGhost(name, e.X, e.Y);
-            SetChartDropTarget(HitTestChartDropTarget(e.X, e.Y, name));
+            ShowChartDragGhost(name, e.WindowX, e.WindowY);
+            SetChartDropTarget(HitTestChartDropTarget(e.WindowX, e.WindowY, name));
         }
         e.Stop();
     });

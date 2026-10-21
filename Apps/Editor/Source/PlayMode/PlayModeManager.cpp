@@ -83,6 +83,8 @@ void PlayModeManager::InvalidateManagedPlayModeBindings()
 
 void PlayModeManager::EnsureManagedPlayModeBindings()
 {
+    // A build without C# scripting has no managed play-mode driver to bind.
+#if GE_ENABLE_SCRIPTING
     if (m_ManagedPlayMode.IsValid())
         return;
     if (m_ManagedPlayMode.triedResolve)
@@ -111,6 +113,7 @@ void PlayModeManager::EnsureManagedPlayModeBindings()
     m_ManagedPlayMode.enter = enterPtr;
     m_ManagedPlayMode.exit = exitPtr;
     m_ManagedPlayMode.tick = tickPtr;
+#endif
 }
 
 bool PlayModeManager::IsRuntimeEntity(std::uint32_t packedEntityId) const
@@ -226,7 +229,7 @@ void PlayModeManager::EnterPlayMode()
         terrain->SnapshotZonePayloadsForPlay();
 
     // The mark-ups' notes live in MarkupService, not on components, so the ECS snapshot
-    // does not carry them either; the exit restore puts them back.
+    // does not carry them; the exit restore puts them back as they were.
     if (auto* markups = MarkupECS::MarkupService::TryGet(); markups && m_World)
         m_EnteredMarkupNotes = std::make_unique<MarkupECS::MarkupWorldNotes>(markups->CaptureWorld(*m_World));
 
@@ -287,6 +290,7 @@ void PlayModeManager::EnterPlayMode()
     if (!m_ManagedPlayMode.IsValid())
         m_ManagedPlayMode.triedResolve = false;
     EnsureManagedPlayModeBindings();
+#if GE_ENABLE_SCRIPTING
     if (!m_ManagedPlayMode.IsValid())
     {
         Logger::Log::Error(
@@ -294,6 +298,7 @@ void PlayModeManager::EnterPlayMode()
             "this Play session (will re-attempt on the next play-enter; check earlier "
             "script-compile/CLR errors)");
     }
+#endif
 
     if (m_ManagedPlayMode.enter)
     {

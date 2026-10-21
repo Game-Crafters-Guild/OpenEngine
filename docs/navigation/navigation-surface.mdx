@@ -1,6 +1,6 @@
 ---
 title: Navigation surface
-description: Where navigation agents can walk, baked from the scene's terrain, static colliders and meshes, with its settings, the bake notice and the C++ calls.
+description: Where navigation agents can walk, baked from the scene's terrain, static colliders, and meshes, with its settings, the bake notice, and the C++ calls.
 ---
 
 A **Navigation Surface** is where navigation agents can walk. It is baked from what is already in the scene: the terrain, the collider shapes of static physics bodies, and the meshes of mesh renderers inside its bounds. The bake needs no physics world, so a surface bakes in the editor as soon as you add it, and again in Play and in a game.
@@ -10,9 +10,9 @@ A **Navigation Surface** is where navigation agents can walk. It is baked from w
 :::steps
 
 1. Select an entity (an empty one is fine) and choose **Add Component > Navigation > Navigation Surface**. With **Fit Bounds** on, the surface covers the terrain's footprint, or everything it bakes from when the scene has no terrain.
-2. Set the agent: **Agent Radius**, **Agent Height**, **Max Slope** and **Step Height** describe the character that walks the surface.
+2. Set the agent: **Agent Radius**, **Agent Height**, **Max Slope**, and **Step Height** describe the character that walks the surface.
 3. The surface bakes on its own the first time. After you change the scene or a setting, press **Bake** on the notice at the bottom of the component.
-4. Read the notice: it says what the bake is doing or what it made. While the entity is selected, the Scene View tints the walkable surface blue and outlines its edge in yellow, in both modes; an outlined hole is ground an agent cannot walk.
+4. Read the notice: it says what the bake is doing or what it made. While the entity is selected, the Scene View tints the walkable surface blue and outlines its edge in yellow, in both modes. An outlined hole is ground an agent cannot walk.
 
 :::
 
@@ -20,12 +20,12 @@ A **Navigation Surface** is where navigation agents can walk. It is baked from w
 
 | Setting | Default | What it does |
 |---|---|---|
-| Mode | Mesh | **Mesh**: a navigation mesh agents walk anywhere their size fits. **Grid**: one height and one walkable flag per cell, for per-cell costs, cell reservations, hex cells and the grid cost brush. Switching the mode moves Cell Size between 0.5 m (mesh) and 1 m (grid) when it is still at the other mode's value. |
-| Agent Radius | 0.5 m | The surface stays this far from walls; gaps narrower than twice it close. |
+| Mode | Mesh | **Mesh**: a navigation mesh agents walk anywhere their size fits. **Grid**: one height and one walkable flag per cell, for per-cell costs, cell reservations, hex cells, and the grid cost brush. Switching the mode moves Cell Size between 0.5 m (mesh) and 1 m (grid) when it is still at the other mode's value. |
+| Agent Radius | 0.5 m | The surface stays this far from walls. Gaps narrower than twice it close. |
 | Agent Height | 1.8 m | Space under an overhang lower than this is not walkable. |
 | Max Slope | 45° | Ground steeper than this is not walkable. |
-| Step Height | 0.4 m | The least rise between neighboring cells an agent climbs; Max Slope can allow more (see [Slopes and steps](#settings)). |
-| Cell Size | 0.5 m | The resolution. A mesh is cut into tiles of 64 cells (32 m at 0.5 m); a grid has one cell of this size. The caption under the value gives the tile or cell count the current settings make, before a bake. Smaller follows the ground more closely and takes longer to bake. |
+| Step Height | 0.4 m | The least rise between neighboring cells an agent climbs. Max Slope can allow more (see [Slopes and steps](#settings)). |
+| Cell Size | 0.5 m | The resolution. A mesh is cut into tiles of 64 cells (32 m at 0.5 m). A grid has one cell of this size. The caption under the value gives the tile or cell count the current settings make, before a bake. Smaller follows the ground more closely and takes longer to bake. |
 | Fit Bounds | on | On: Center and Extent show the fitted box, read only. Off: the surface covers the box of half size **Extent** around **Center**, measured from the entity's position. |
 | Authored Cells | none | Grid only: the costs and blocked cells painted with the navigation grid brush (a `.navgrid` asset). Applied when its size matches the grid. |
 
@@ -33,26 +33,48 @@ A **Navigation Surface** is where navigation agents can walk. It is baked from w
 
 A surface sampled in cells cannot tell a slope from a staircase of cell-sized steps, so the rise an agent climbs between neighboring cells is the larger of Step Height and the rise of a Max Slope slope over the distance between them: `max(Step Height, distance × tan(Max Slope))`, on a mesh and a grid alike. Wherever a cell is wide enough for that slope rise to exceed Step Height, any step up to the slope rise is walkable too. At the mesh defaults (0.5 m cells, 45°) a rise of up to 0.5 m between neighboring cells is walkable; on a grid at its defaults (1 m cells, 45°) up to 1 m between side neighbors and 1.41 m between diagonal ones. Step Height limits steps only where it exceeds the slope rise: on a mesh's stairs, or on a grid with smaller cells. Lower Cell Size where low walls must block.
 
+On a grid, a wall, a fence, or the side of a box blocks every cell it stands in, wherever in the cell it stands, when it rises higher than the climb between side neighbors (1 m at the grid defaults) and starts lower than Agent Height above the cell's ground. A 4 m wall between two columns of cell centers blocks both columns. A 0.6 m wall is walkable, on a column of centers or between two. A face with no thickness that lies exactly on a grid line belongs to neither cell and blocks nothing: give a fence some thickness.
+
 :::
 
 ## What the surface bakes
 
 - **Terrain**: the first enabled planar terrain's heights, after its modifiers. A terrain tile that has not streamed in holds the bake until it arrives. Planet terrains are not baked.
-- **Collider shapes**: box, sphere, capsule and plane colliders on **Static** physics bodies. Triggers are not baked.
-- **Mesh renderers**: each renderer's own mesh, models and primitives alike. A model that is still loading holds the bake until it arrives; one that cannot be loaded is left out, with a warning in the log.
+- **Collider shapes**: box, sphere, capsule, and plane colliders on **Static** physics bodies. Triggers are not baked.
+- **Mesh renderers**: each renderer's own mesh, models and primitives alike, as its [Navigation Source](#leave-out-or-bring-in-a-mesh) policy admits it. A model that is still loading holds the bake until it arrives. One that cannot be loaded is left out, with a warning in the log.
 
-Dynamic and kinematic bodies and navigation agents are not part of the surface: they move.
+By default, dynamic and kinematic bodies and navigation agents are not part of the surface, nor are the meshes under them: they move.
+
+## Leave out or bring in a mesh
+
+By default the surface bakes every mesh that does not move, so a flower, a reed, or a leaf card with no collider changes where agents walk. Add **Add Component > Navigation > Navigation Source** to the entity and pick a **Policy**:
+
+| Policy | The entity's mesh |
+|---|---|
+| Auto | Baked when neither the entity nor any of its parents moves: none has a navigation agent, or a physics body that is not Static. This is the rule with no Navigation Source. |
+| Include | Always baked, where it stands when the bake runs, also on a kinematic or dynamic body or a navigation agent. The surface does not follow it when it moves. A child that inherits Include and moves on its own, such as a crew member on an included deck, is left out unless it sets Include itself. |
+| Exclude | Never baked. Colliders are separate sources: a Static collider on the same entity or a child is still baked. |
+
+The policy covers the entity's own mesh and the meshes of its children: the children of a blueprint, and the submesh entities a model makes under the entity that shows it. A child with its own Navigation Source, Auto included, follows its own policy instead. Saving the scene or the blueprint keeps the policy.
+
+:::tip[A tree agents walk under]
+
+Put a Navigation Source with **Exclude** on the tree's root and keep the trunk's Static collider. The crown and any leaves under the root leave the bake, so the ground under the crown is walkable, and the trunk's collider stays an obstacle. Mesh-only architecture, such as stairs and platforms with no collider, needs no Navigation Source: Auto bakes it. Under an excluded root, give it **Include**.
+
+:::
+
+To see what a bake reads, ask the editor's debug port: `node mcp/ge.mjs get_navigation_sources` lists every collider and mesh inside the surface's bounds, with its kind and, for a mesh, the policy that admitted it. From C++, `GameEngine::Navigation::ListBakeSources(world, surfaceEntity, sources)` in `PathfindingECS/Navigation.h` fills the same list. Both gather the scene: call them when it changes, not every frame.
 
 ## Reading the notice
 
 | The notice says | Meaning |
 |---|---|
-| `Baking: 212 of 1,024 tiles` | The mesh is being built tile by tile in the background; tiles already built are in use. |
+| `Baking: 212 of 1,024 tiles` | The mesh is being built tile by tile in the background. Tiles already built are in use. |
 | `Baked: 1,024 tiles, 1,948 polygons, 0.5 MiB, version 12` | Done. The version counts bakes. |
-| `Out of date: the settings changed since the last bake (1,024 tiles). Bake to apply.` | A setting changed after the last bake; the surface still holds that bake until Bake is pressed. After a Mode change the text names the mode of the bake it holds. |
-| `Waiting for: terrain tile (3, 7) is not resident` | Part of the bounds lies on a terrain tile that has not streamed in; the bake continues once it has. |
-| `Waiting for: model Rock is still loading` | A mesh renderer shows a model that has not loaded yet; the bake starts once it has. |
-| `Failed: no geometry inside the bounds; …` | Nothing the surface bakes from is inside its bounds. Move the bounds, or add a terrain, a static collider or a mesh. |
+| `Out of date: the settings changed since the last bake (1,024 tiles). Bake to apply.` | A setting changed after the last bake. The surface still holds that bake until Bake is pressed. After a Mode change the text names the mode of the bake it holds. |
+| `Waiting for: terrain tile (3, 7) is not resident` | Part of the bounds lies on a terrain tile that has not streamed in. The bake continues once it has. |
+| `Waiting for: model Rock is still loading` | A mesh renderer shows a model that has not loaded yet. The bake starts once it has. |
+| `Failed: no geometry inside the bounds; …` | Nothing the surface bakes from is inside its bounds. Move the bounds, or add a terrain, a static collider, or a mesh. |
 | `Failed: the bounds need 40,000 tiles: …` | The bounds are too large for the cell size. Raise Cell Size or shrink the bounds. |
 
 ## From C++
@@ -119,13 +141,8 @@ if (path.IsValid())
     navigation.GetPathBuffer().FreePath(path);
 ```
 
-`Partial` ends at the reachable point nearest the destination; `Failed` means the start or the destination has no walkable ground near it, or nothing connects them. The map handle stays the same across bakes in one Mode, so an agent's `NavigationAgent.NavMapIndex` and `NavMapGeneration` set from it stay valid. Changing Mode bakes into a new map with a new handle: read it again after the bake.
+`Partial` ends at the reachable point nearest the destination. `Failed` means the start or the destination has no walkable ground near it, or nothing connects them. The map handle stays the same across bakes in one Mode, so an agent's `NavigationAgent.NavMapIndex` and `NavMapGeneration` set from it stay valid. Changing Mode bakes into a new map with a new handle: read it again after the bake.
 
 ### From the debug port
 
 The editor's `find_path` tool answers the same query: `node mcp/ge.mjs find_path --from "[-400,20,-400]" --to "[400,33,400]"`.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/navigation-surface.html`.
-- 2026-10-12: first version: one surface component, mesh or grid, baked in the editor without a physics world.

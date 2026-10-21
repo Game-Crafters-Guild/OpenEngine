@@ -7,6 +7,9 @@
 #include "Engine/GameUI/GameUIHost.h" // complete type for m_GameUI's unique_ptr dtor
 #include "ECS/ECSTemplates.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
+#include "Engine/Rendering/IncidentLightMeter.h"
+#include "SceneView/SceneViewAutoExposure.h"
+#include "SceneView/SceneViewLayerFilter.h"
 #include "Engine/Rendering/PlanetCameraFraming.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
@@ -324,17 +327,29 @@ GameEngine::Engine::Renderer::ViewRegistry::CameraExposure SceneViewLensExposure
         return result;
 
     Components::Camera lens = camera->params;
-    lens.ExposureControl = Components::ExposureMode::Auto;
-    lens.Exposure = 1.0f;
-    lens.ManualExposureEV = Components::kDefaultManualExposureEv;
-    lens.ExposureCompensation = 0.0f;
-    lens.AutoExposureMinEv = 4.0f;
-    lens.AutoExposureMaxEv = 18.0f;
-    lens.AutoExposureSpeedUp = 1.0f;
-    lens.AutoExposureSpeedDown = 3.0f;
+    const Components::Camera sensorDefaults{};
+    lens.ExposureControl = sensorDefaults.ExposureControl;
+    lens.Exposure = sensorDefaults.Exposure;
+    lens.ManualExposureEV = sensorDefaults.ManualExposureEV;
+    lens.ExposureCompensation = sensorDefaults.ExposureCompensation;
+    lens.AutoExposureMinEv = sensorDefaults.AutoExposureMinEv;
+    lens.AutoExposureMaxEv = sensorDefaults.AutoExposureMaxEv;
+    lens.AutoExposureSpeedUp = sensorDefaults.AutoExposureSpeedUp;
+    lens.AutoExposureSpeedDown = sensorDefaults.AutoExposureSpeedDown;
+    lens.AutoExposureMeter = sensorDefaults.AutoExposureMeter;
+    lens.AutoExposureCompensationCurve = sensorDefaults.AutoExposureCompensationCurve;
     lens.Perspective = true;
     lens.FovY = GetSceneViewFieldOfViewDeg();
     return Engine::Renderer::ToCameraExposure(lens);
+}
+
+// The compensation curve the Scene View's Auto exposure takes: the scene's main camera's, else the
+// engine default.
+GameEngine::Math::Curve SceneViewCompensationCurve(GameEngine::ECS::World* world)
+{
+    using namespace GameEngine;
+    const auto camera = world ? Engine::Renderer::FindActiveCamera(*world) : std::nullopt;
+    return camera ? camera->params.AutoExposureCompensationCurve : Components::DefaultExposureCompensationCurve();
 }
 
 inline float GetSceneViewMoveSpeed()
@@ -2374,11 +2389,12 @@ bool SceneViewController::DeclarePreviewTargetsRG(
         rs->Views().SetViewCamera(m_PreviewViewId, m_PreviewCameraId);
     // Arm the OnDemand preview view for this frame: RequestViewFrame feeds
     // extraction, batch-key build, and the culling loop once, then the effective
-    // arm (ActiveRenderLayerMask) auto-expires. The configured RenderLayerMask
-    // stays 1 so the arm selects render layer 0; a frame we stop declaring the
+    // arm (ActiveRenderLayerMask) auto-expires. The preview draws the layers
+    // the Scene View draws (SceneViewLayerFilter); a frame we stop declaring the
     // preview simply isn't armed and the view lapses to dormant.
     rs->Views().RequestViewFrame(m_PreviewViewId);
-    rs->Views().SetViewRenderLayerMask(m_PreviewViewId, 1u);
+    rs->Views().SetViewRenderLayerMask(
+        m_PreviewViewId, Editor::SceneViewLayerFilter::Get().Layers(EngineCore::GetInstance().GetWorkspaceRoot()));
     m_PreviewSubmittedThisFrame = true;
 
     // Always clear (deliberate divergence from the old arm's one-shot
@@ -2475,7 +2491,7 @@ bool SceneViewController::DeclarePreviewTargetsRG(
         {
             rs->Views().SetCameraData(m_PreviewCameraId, cam);
             // Participate in per-view post-process filtering.
-            rs->Views().SetCameraPostProcessMask(m_PreviewCameraId, 0xFFFFFFFFu);
+            rs->Views().SetCameraVolumeLayers(m_PreviewCameraId, Rendering::RenderLayerMask::All());
         }
     }
 
@@ -3196,9 +3212,9 @@ void SceneViewController::UpdateCamera(float deltaSeconds, bool moveForward, boo
         {
             m_RenderServices->Views().SetCameraData(m_CameraId, cam);
             // Register every frame alongside SetCameraData (before rendering systems run),
-            // so RenderExtractionSystem's per-view post-process path sees HasCameraPostProcessMask true
-            // in the same phase as world/culling — mask was previously only applied in Record.
-            m_RenderServices->Views().SetCameraPostProcessMask(m_CameraId, 0xFFFFFFFFu);
+            // so RenderExtractionSystem's per-view post-process path sees HasCameraVolumeLayers true
+            // in the same phase as world/culling.
+            m_RenderServices->Views().SetCameraVolumeLayers(m_CameraId, Rendering::RenderLayerMask::All());
             m_RenderServices->Views().SetCameraExposure(m_CameraId, SceneViewLensExposure(&GetWorld()));
             if (m_ViewId != 0)
             {
@@ -3970,7 +3986,9 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
     // HZB visibility history (keyed by viewId) survives and re-declaring revives
     // it at once.
     rs->Views().RequestViewFrame(m_ViewId);
-    rs->Views().SetViewRenderLayerMask(m_ViewId, 1u);
+    // The layers the Scene View toolbar's filter keeps, every layer by default.
+    rs->Views().SetViewRenderLayerMask(
+        m_ViewId, Editor::SceneViewLayerFilter::Get().Layers(EngineCore::GetInstance().GetWorkspaceRoot()));
     rs->Views().SetViewActiveRenderPipeline(m_ViewId, true);
     rs->Views().SetViewAntiAliasing(m_ViewId, registerViewAA, aa.Mode, rs->GetTaaSequenceLength());
     rs->Views().SetViewWorldId(m_ViewId, GetWorld().GetWorldId());
@@ -4056,7 +4074,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         m_HasFrameCameraData = true;
 
         rs->Views().SetCameraData(m_CameraId, cam);
-        rs->Views().SetCameraPostProcessMask(m_CameraId, 0xFFFFFFFFu);
+        rs->Views().SetCameraVolumeLayers(m_CameraId, Rendering::RenderLayerMask::All());
         rs->Views().SetCameraExposure(m_CameraId, SceneViewLensExposure(&GetWorld()));
     }
 
@@ -4099,8 +4117,8 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         const bool crtOn = svSettings.GetPostFxCrtEnabled();
         const Editor::SceneViewExposureMode exposureMode = svSettings.GetExposureMode();
         const bool autoExposureOn = exposureMode == Editor::SceneViewExposureMode::Auto;
-        const bool useAdaptationDelay =
-            svSettings.GetPostFxAutoExposureUseAdaptationDelay();
+        const bool lightsMeterOn =
+            autoExposureOn && svSettings.GetExposureMeter() == Components::ExposureMeter::Lights;
 
         // Feed the Auto -> Fixed EV handoff: while this view meters, keep the
         // GPU exposure readback enabled (AutoExposureNode copies the adapted
@@ -4112,6 +4130,8 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         // fetched lazily so views that never meter never create it.
         if (autoExposureOn && !m_ExposureReadback)
             m_ExposureReadback = &rs->EnsureFeature<Engine::Renderer::ExposureReadbackFeature>();
+        if (!autoExposureOn)
+            m_MeteredExposureEv.reset();
         if (m_ExposureReadback)
         {
             m_ExposureReadback->SetReadbackEnabled(m_ViewId, autoExposureOn);
@@ -4119,41 +4139,26 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
             if (autoExposureOn &&
                 m_ExposureReadback->TryResolveAdaptedExposure(m_ViewId, adaptedScale))
             {
-                Editor::SceneViewSettings::Get().SetLastShownExposureEv(
-                    Rendering::LinearExposureToEv(adaptedScale) +
-                    svSettings.GetPostFxExposureCompensation());
+                m_MeteredExposureEv = Rendering::LinearExposureToEv(adaptedScale) +
+                                      svSettings.GetPostFxExposureCompensation();
+                Editor::SceneViewSettings::Get().SetLastShownExposureEv(*m_MeteredExposureEv);
             }
         }
 
-        // Scene Light: the EV100 derived from the shaded directional lights and sky, held until either
-        // changes. Until the first derivation lands it shows the fallback. The derived EV
-        // is also the Fixed handoff seed: Fixed re-applies the same compensation.
-        float sceneLightEv = Editor::SceneLightFallbackEv100();
-        if (exposureMode == Editor::SceneViewExposureMode::SceneLight)
+        // The lights meter's reading for the popover: the same measurement AutoExposureNode meters
+        // this view with (IncidentLightMeter), before the clamps and compensation.
+        if (lightsMeterOn)
         {
-            const Editor::SceneLightUpdate update =
-                m_SceneLightExposure.Update(rs->GetWorldLights(GetWorld().GetWorldId()),
-                                            Editor::ReadSceneLightEnvironment(*rs));
-            if (update != Editor::SceneLightUpdate::NotYet)
-                sceneLightEv = m_SceneLightExposure.GetEv100();
-            if (update == Editor::SceneLightUpdate::Rederived)
-                Editor::SceneViewSettings::Get().SetSceneLightExposureEv(sceneLightEv);
-            Editor::SceneViewSettings::Get().SetLastShownExposureEv(sceneLightEv);
+            const std::optional<Engine::Renderer::IncidentLight> light = Engine::Renderer::MeasureIncidentLight(
+                rs->GetWorldLights(GetWorld().GetWorldId()), Engine::Renderer::ReadIncidentEnvironment(*rs));
+            if (light)
+                m_LightsReadingEv = Engine::Renderer::IncidentLightEv100(*light);
+        }
+        else
+        {
+            m_LightsReadingEv.reset();
         }
 
-        // Auto-metering tune: engages the override when the adaptation clamps or the
-        // compensation were moved off their defaults, or temporal adaptation was
-        // disabled, while Auto Exposure is on. The epsilon absorbs slider-step float
-        // drift so landing back on a default tick releases the override (0.001 stops
-        // is far below perception).
-        constexpr float kExposureTuneEpsilonEv = 1e-3f;
-        auto differsEv = [](float a, float b) { return std::fabs(a - b) > kExposureTuneEpsilonEv; };
-        const bool autoExposureTuned =
-            autoExposureOn &&
-            (differsEv(svSettings.GetPostFxAutoExposureMinEv(), Editor::SceneViewSettings::kDefaultAutoExposureMinEv) ||
-             differsEv(svSettings.GetPostFxAutoExposureMaxEv(), Editor::SceneViewSettings::kDefaultAutoExposureMaxEv) ||
-             differsEv(svSettings.GetPostFxExposureCompensation(), 0.0f) ||
-             !useAdaptationDelay);
         const bool needsToolbarOverride =
             !masterOn || !bloomOn || !tonemapOn || !colorFilterOn || !casOn || !crtOn ||
             !autoExposureOn;
@@ -4192,7 +4197,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         pp.DofDebugMode = lens.FocusDebugMode != 0 ? 1 : 0;
         pp.DofDebugAlpha = std::clamp(lens.FocusDebugAlpha, 0.0f, 1.0f);
 
-        if (needsToolbarOverride || pp2dAlignCrt || autoExposureTuned)
+        if (needsToolbarOverride || pp2dAlignCrt || autoExposureOn)
         {
             if (pp2dAlignCrt)
             {
@@ -4214,8 +4219,8 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
                      .ContrastAdaptiveSharpening = casOn,
                      .Crt = crtOn},
                     hdrOutputActive, pp);
-                // Fixed and Scene Light: pin the Scene View to the fixed or the derived EV100
-                // instead of leaving a metered/stale scale. This override is authoritative for
+                // Fixed: pin the Scene View to the Fixed EV100 instead of leaving a
+                // metered/stale scale. This override is authoritative for
                 // the view, so exposure is set here rather than via the clobbered camera path.
                 // Compensation trims the pinned EV exactly as the camera-sensor resolve does
                 // (ResolveExposureScale: a +/- stop multiplier in every mode). Stack the
@@ -4223,43 +4228,24 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
                 // ExposureAdjustmentEffect remains effective while the meter is off.
                 if (!autoExposureOn)
                 {
-                    const float pinnedEv = exposureMode == Editor::SceneViewExposureMode::Fixed
-                                               ? svSettings.GetPostFxFixedExposureEv()
-                                               : sceneLightEv;
                     pp.AutoExposureActive = false;
                     pp.Exposure = Rendering::ResolveExposureScale(
-                        Components::ExposureMode::Manual, 1.0f, pinnedEv,
+                        Components::ExposureMode::Manual, 1.0f, svSettings.GetPostFxFixedExposureEv(),
                         svSettings.GetPostFxExposureCompensation() +
                             pp.ExposureCompensationEv);
                 }
             }
-            if (autoExposureTuned)
-            {
-                // Mirror the camera-sensor resolve (RenderExtractionSystem::applyCameraExposure):
-                // metering stays active, the popup's EV envelope replaces the world-default
-                // sensor's, and compensation adds to the post-clamp metering bias. Active is
-                // set explicitly because the world settings default to inactive until
-                // extraction stamps the world sensor. Volume ExposureAdjustmentEffect
-                // modifiers still stack: the clamp fields riding the copied world settings
-                // re-narrow the popup's envelope, and the volume compensation is already in
-                // the bias, so the popup compensation is a view nudge on top of scene content.
-                pp.AutoExposureActive = true;
-                pp.AutoExposureMinEv = svSettings.GetPostFxAutoExposureMinEv();
-                pp.AutoExposureMaxEv = svSettings.GetPostFxAutoExposureMaxEv();
-                Rendering::NarrowAutoExposureEnvelope(pp.AutoExposureMinEv, pp.AutoExposureMaxEv,
-                                                      pp.ExposureClampMinEv, pp.ExposureClampMaxEv);
-                pp.AutoExposureBiasEv += svSettings.GetPostFxExposureCompensation();
-                if (!useAdaptationDelay)
-                {
-                    // Instant adaptation = adaptation speed high enough that the resolve
-                    // shader's smoothing factor (1 - exp2(-dt * speed)) saturates to exactly
-                    // 1.0 in float32, snapping to the freshly metered target every frame.
-                    // Only this view's copy is touched; scene-authored sensor speeds are not.
-                    constexpr float kInstantAdaptationSpeed = 1.0e9f;
-                    pp.AutoExposureSpeedUp = kInstantAdaptationSpeed;
-                    pp.AutoExposureSpeedDown = kInstantAdaptationSpeed;
-                }
-            }
+            // Active is set explicitly because the world settings default to inactive until
+            // extraction stamps the world sensor. Only this view's copy is touched.
+            if (autoExposureOn)
+                Editor::ApplySceneViewAutoExposure(
+                    {.Meter = svSettings.GetExposureMeter(),
+                     .MinEv = svSettings.GetPostFxAutoExposureMinEv(),
+                     .MaxEv = svSettings.GetPostFxAutoExposureMaxEv(),
+                     .CompensationEv = svSettings.GetPostFxExposureCompensation(),
+                     .AdaptationDelay = svSettings.GetPostFxAutoExposureUseAdaptationDelay(),
+                     .CompensationCurve = SceneViewCompensationCurve(&GetWorld())},
+                    pp);
         }
         rs->Views().SetViewPostProcessOverride(m_ViewId, pp);
     }

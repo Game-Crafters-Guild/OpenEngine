@@ -1,5 +1,7 @@
 #include "Pathfinding/NavigationWorld.h"
 
+#include "AStarSolverPool.h"
+#include "Pathfinding/SolverScratchStatistics.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 
 #include <algorithm>
@@ -60,22 +62,9 @@ private:
     std::atomic<uint32>& m_ActivePathJobs;
 };
 
-// One unit of SolveGridPaths: writes only `solve`'s result.
-void SolveGridPath(NavigationWorld& world, GridPathSolve& solve)
-{
-    const GridMap* grid = world.GetGridMap(solve.Map);
-    if (!grid)
-    {
-        solve.Points.clear();
-        solve.Status = PathStatus::Failed;
-        return;
-    }
-    solve.Status = grid->FindPathPoints(solve.Request, solve.Points);
-}
-
 } // anonymous namespace
 
-NavigationWorld::NavigationWorld() = default;
+NavigationWorld::NavigationWorld() : m_GridSolvers(std::make_unique<AStarSolverPool>()) {}
 NavigationWorld::~NavigationWorld() = default;
 
 NavigationWorld::MapEntry* NavigationWorld::GetMapEntry(NavMapHandle handle)
@@ -163,6 +152,8 @@ void NavigationWorld::RemoveMap(NavMapHandle handle)
     entry->Map.reset();
     entry->Active = false;
     m_FreeMapSlots.push_back(handle.Index);
+    if (entry->Type == MapType::Grid)
+        ReleaseSolverScratch();
 }
 
 GridMap* NavigationWorld::ReplaceGridMap(NavMapHandle handle, std::unique_ptr<GridMap> grid)
@@ -172,7 +163,24 @@ GridMap* NavigationWorld::ReplaceGridMap(NavMapHandle handle, std::unique_ptr<Gr
     if (!entry || entry->Type != MapType::Grid || !grid)
         return nullptr;
     entry->Map = std::move(grid);
+    ReleaseSolverScratch();
     return static_cast<GridMap*>(entry->Map.get());
+}
+
+SolverScratchStatistics NavigationWorld::GetSolverScratchStatistics() const
+{
+    return m_GridSolvers->Statistics();
+}
+
+void NavigationWorld::ReleaseSolverScratch()
+{
+    uint32 maxCells = 0;
+    for (const MapEntry& entry : m_Maps)
+    {
+        if (entry.Active && entry.Type == MapType::Grid)
+            maxCells = std::max(maxCells, static_cast<const GridMap*>(entry.Map.get())->GetCellCount());
+    }
+    m_GridSolvers->ReleaseScratchAbove(maxCells);
 }
 
 GridMap* NavigationWorld::GetGridMap(NavMapHandle handle)
@@ -199,12 +207,40 @@ INavigationMap* NavigationWorld::GetMap(NavMapHandle handle)
     return entry->Map.get();
 }
 
+PathStatus NavigationWorld::FindPathOnMap(const MapEntry& entry, const PathRequest& request, PathHandle& outPath)
+{
+    if (entry.Type != MapType::Grid)
+        return entry.Map->FindPath(request, m_PathBuffer, outPath);
+    const AStarSolverPool::Lease lease = m_GridSolvers->Acquire();
+    return static_cast<const GridMap&>(*entry.Map).FindPath(request, lease.Solver(), m_PathBuffer, outPath);
+}
+
 PathStatus NavigationWorld::FindPath(NavMapHandle map, const PathRequest& request, PathHandle& outPath)
 {
-    INavigationMap* navMap = GetMap(map);
-    if (!navMap)
+    const MapEntry* entry = GetMapEntry(map);
+    if (!entry)
         return PathStatus::Failed;
-    return navMap->FindPath(request, m_PathBuffer, outPath);
+    return FindPathOnMap(*entry, request, outPath);
+}
+
+void NavigationWorld::SolveGridPathLane(std::span<GridPathSolve> solves, std::atomic<size_t>& next)
+{
+    if (next.load(std::memory_order_relaxed) >= solves.size())
+        return;
+    const AStarSolverPool::Lease lease = m_GridSolvers->Acquire();
+    for (size_t i = next.fetch_add(1, std::memory_order_relaxed); i < solves.size();
+         i = next.fetch_add(1, std::memory_order_relaxed))
+    {
+        GridPathSolve& solve = solves[i];
+        const GridMap* grid = GetGridMap(solve.Map);
+        if (!grid)
+        {
+            solve.Points.clear();
+            solve.Status = PathStatus::Failed;
+            continue;
+        }
+        solve.Status = grid->FindPathPoints(solve.Request, lease.Solver(), solve.Points);
+    }
 }
 
 void NavigationWorld::SolveGridPaths(JobSystem::WorkStealingThreadPool* pool, std::span<GridPathSolve> solves)
@@ -220,7 +256,9 @@ void NavigationWorld::SolveGridPaths(JobSystem::WorkStealingThreadPool* pool, st
     }
 
     const PathSolveWindow window(m_SolveGrids, m_ActivePathJobs);
-    JobSystem::ParallelFor(pool, solves.size(), [this, solves](size_t unit) { SolveGridPath(*this, solves[unit]); });
+    std::atomic<size_t> next{0};
+    const size_t lanes = pool ? std::min(solves.size(), pool->GetWorkerCount() + 1) : 1;
+    JobSystem::ParallelFor(pool, lanes, [this, solves, &next](size_t) { SolveGridPathLane(solves, next); });
 }
 
 PathStatus NavigationWorld::FindPathAcrossLinks(const PathRequest& request, PathHandle& outPath)
@@ -254,11 +292,14 @@ PathStatus NavigationWorld::FindPathAcrossLinks(const PathRequest& request, Path
 
         NavMapHandle handle{i, entry.Generation};
 
-        if (!startMap.IsValid() && entry.Map->IsPointNavigable(request.StartX, request.StartY, request.StartZ, request.AgentRadius))
+        // The map that holds the point: on a mesh the radius is how far from the mesh the point may
+        // lie; on a grid it is a clearance, and the point's own open cell is what holds it.
+        const float32 holdRadius = entry.Type == MapType::Grid ? 0.0f : request.AgentRadius;
+        if (!startMap.IsValid() && entry.Map->IsPointNavigable(request.StartX, request.StartY, request.StartZ, holdRadius))
         {
             startMap = handle;
         }
-        if (!endMap.IsValid() && entry.Map->IsPointNavigable(request.EndX, request.EndY, request.EndZ, request.AgentRadius))
+        if (!endMap.IsValid() && entry.Map->IsPointNavigable(request.EndX, request.EndY, request.EndZ, holdRadius))
         {
             endMap = handle;
         }
@@ -272,10 +313,10 @@ PathStatus NavigationWorld::FindPathAcrossLinks(const PathRequest& request, Path
     // If same map, direct path
     if (startMap == endMap)
     {
-        INavigationMap* navMap = GetMap(startMap);
-        if (!navMap)
+        const MapEntry* entry = GetMapEntry(startMap);
+        if (!entry)
             return PathStatus::Failed;
-        return navMap->FindPath(request, m_PathBuffer, outPath);
+        return FindPathOnMap(*entry, request, outPath);
     }
 
     // Dijkstra to find cheapest map sequence from startMap to endMap,
@@ -366,8 +407,8 @@ PathStatus NavigationWorld::FindPathAcrossLinks(const PathRequest& request, Path
 
     for (uint32 s = 0; s < static_cast<uint32>(mapSequence.size()); ++s)
     {
-        INavigationMap* navMap = GetMap(mapSequence[s].Map);
-        if (!navMap)
+        const MapEntry* entry = GetMapEntry(mapSequence[s].Map);
+        if (!entry)
             return PathStatus::Failed;
 
         PathRequest segRequest;
@@ -427,7 +468,7 @@ PathStatus NavigationWorld::FindPathAcrossLinks(const PathRequest& request, Path
         segRequest.SmoothPath = request.SmoothPath;
 
         PathHandle segPath;
-        PathStatus segStatus = navMap->FindPath(segRequest, m_PathBuffer, segPath);
+        PathStatus segStatus = FindPathOnMap(*entry, segRequest, segPath);
         if (segStatus == PathStatus::Failed)
             return PathStatus::Failed;
 

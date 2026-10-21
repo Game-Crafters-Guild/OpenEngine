@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+#include "LogCapture.h"
+
 #include "Animation/HumanBone.h"
 #include "Animation/HumanoidRig.h"
 
@@ -196,4 +200,29 @@ TEST(HumanoidRigTest, MissingFieldsHaveSensibleDefaults)
     // TranslationBones defaults to {Hips} when omitted.
     ASSERT_EQ(rig.TranslationBones().size(), 1u);
     EXPECT_EQ(rig.TranslationBones()[0], HumanBone::Hips);
+}
+
+// A humanoid rig that is not JSON, or whose field holds a value of the wrong type, is refused with
+// the file and the place or the field named, and never throws: the web build has no exception
+// catching.
+TEST(HumanoidRigTest, AnUnreadableFileIsRefusedNamingThePlaceOrTheField)
+{
+    std::vector<std::string> lines;
+    bool truncatedLoaded = true;
+    bool mistypedLoaded = true;
+    {
+        TestLog::ScopedLogCapture capture(&lines);
+        const std::string truncatedText = R"({"name": [)";
+        const std::string mistypedText = R"({"boneMap": [{"canonical": 5}]})";
+        HumanoidRig truncated(GUID(), std::filesystem::path("Animations/Truncated.humanoidrig.json"));
+        truncatedLoaded = truncated.LoadFromData(Vector<uint8>(truncatedText.begin(), truncatedText.end()));
+        HumanoidRig mistyped(GUID(), std::filesystem::path("Animations/Mistyped.humanoidrig.json"));
+        mistypedLoaded = mistyped.LoadFromData(Vector<uint8>(mistypedText.begin(), mistypedText.end()));
+    }
+    EXPECT_FALSE(truncatedLoaded);
+    EXPECT_FALSE(mistypedLoaded);
+    EXPECT_NE(TestLog::FirstLineContaining(
+                  lines, "'Animations/Truncated.humanoidrig.json' is not loaded: it is not JSON (parse error at line 1, column"),
+              "");
+    EXPECT_NE(TestLog::FirstLineContaining(lines, "'Animations/Mistyped.humanoidrig.json' is not loaded: 'boneMap[0].canonical' is a number; write it as a string"), "");
 }

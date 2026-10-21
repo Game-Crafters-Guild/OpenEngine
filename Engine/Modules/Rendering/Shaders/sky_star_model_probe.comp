@@ -1,0 +1,163 @@
+#version 450
+
+// Test-only probe for the night sky's star model (StarModelTests): evaluates sky_star_model.glsl on
+// the device, so the tests measure the shipped GLSL.
+//
+// Each query is six vec4 slots: three in, three out. in0.x selects the function; in2 is the artistic
+// shape for the GE_StarShade ops (Star core, Star spikes, Spike length, shape). The observer is the eye
+// unless an op says a camera:
+//   0 GE_StarIlluminance(in0.y)                                        -> out0.x
+//   1 GE_StarEnergy(in0.y, in0.z)                                      -> out0.x
+//   2 GE_StarLimitAgainstSky(limit in0.y, sky nits in0.z), GE_StarThresholdMagnitude(in0.z) -> out0.xy
+//   3 GE_StarScintillationAmplitude(in0.y, in0.z), GE_StarAirmass(in0.y) -> out0.xy
+//   4 GE_StarShade(magnitude in0.y, grey transmittance in0.z, sky nits in0.w,
+//                  limit in1.x, compression in1.y, glow in1.z, pixel solid angle in1.w, shape in2) for a white star
+//       -> out0 = (core peak nits, core radius, glare scale nits, cut radius),
+//          out1 = (glare fraction, visibility, core energy in lux, glare energy in lux),
+//          out2 = (glow fraction, glow peak nits, glow radius, glow energy in lux)
+//   5 GE_StarColourSaturation(in0.y)                                   -> out0.x
+//   6 GE_StarShade as op 4 for an orange star (1.8, 0.85, 0.3)          -> out0.rgb = the core's peak colour
+//   8 GE_StarShade as op 4 for an orange star seen through the reddened transmittance of the air at
+//     the zenith (0.95, 0.88, 0.74)                                     -> out0.rgb = the core's peak colour
+//   9 GE_StarShade as op 4, and GE_StarRadianceAt integrated over the quad's disc on a 0.25 px grid
+//       -> out0 = (total energy in nits px^2, the integral in nits px^2, spike fraction, cut radius),
+//          out1 = (spike peak nits, spike length, core radius, shape), out2 = (glow fraction, 0, 0, 0)
+//  10 GE_StarRadianceAt at offset (in0.z, in0.w) for op 4's star (clear air, no sky) -> out0.x = luminance
+//  12 GE_StarShade as op 6 (the orange star) for the camera observer -> out0.rgb = the core's colour
+//  13 GE_StarShade as op 4 for the camera observer                  -> the outputs of op 4
+//  11 GE_StarGeometry(star direction in0.yzw, up in1.xyz, tanHalfFovY in1.w, rows in2.x)
+//       -> out0 = (LUT direction, sine of the altitude), out1.x = pixel solid angle
+//   7 the lowest channel of GE_StarRadianceAt over 0 to the cut radius for op 4's star, and the radiance
+//     just inside the cut                                              -> out0 = (lowest, at the cut edge, 0, 0)
+
+#include "Includes/sky_star_model.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) buffer ProbeData { vec4 slots[]; } uData;
+
+layout(push_constant) uniform ProbePC
+{
+    vec4 counts; // x = query count
+} pc;
+
+const vec3 kOrange = vec3(1.8, 0.85, 0.3);
+const vec3 kZenithTransmittance = vec3(0.95, 0.88, 0.74);
+
+GE_StarShapeDials ShapeFrom(vec4 v, float eye)
+{
+    GE_StarShapeDials shape;
+    shape.CoreScale = v.x;
+    shape.Spikes = v.y;
+    shape.SpikeLength = v.z;
+    shape.Shape = v.w;
+    shape.Eye = eye;
+    return shape;
+}
+
+void main()
+{
+    uint q = gl_GlobalInvocationID.x;
+    if (q >= uint(pc.counts.x))
+        return;
+    vec4 in0 = uData.slots[q * 6u + 0u];
+    vec4 in1 = uData.slots[q * 6u + 1u];
+    vec4 in2 = uData.slots[q * 6u + 2u];
+    vec4 out0 = vec4(0.0);
+    vec4 out1 = vec4(0.0);
+    vec4 out2 = vec4(0.0);
+    int op = int(in0.x + 0.5);
+    float eye = op == 12 || op == 13 ? 0.0 : 1.0;
+    if (op == 0)
+    {
+        out0.x = GE_StarIlluminance(in0.y);
+    }
+    else if (op == 1)
+    {
+        float energy = GE_StarEnergy(in0.y, in0.z);
+        out0 = vec4(energy, 0.0, 0.0, 0.0);
+    }
+    else if (op == 2)
+    {
+        out0 = vec4(GE_StarLimitAgainstSky(in0.y, in0.z), GE_StarThresholdMagnitude(in0.z), 0.0, 0.0);
+    }
+    else if (op == 3)
+    {
+        out0 = vec4(GE_StarScintillationAmplitude(in0.y, in0.z), GE_StarAirmass(in0.y), 0.0, 0.0);
+    }
+    else if (op == 11)
+    {
+        GE_StarViewGeometry g = GE_StarGeometry(in0.yzw, in1.xyz, in1.w, in2.x);
+        out0 = vec4(g.LutDirection, g.SinAltitude);
+        out1 = vec4(g.PixelSolidAngle, 0.0, 0.0, 0.0);
+    }
+    else if (op == 10)
+    {
+        GE_StarDrawn star = GE_StarShade(in0.y, vec3(1.0), vec3(1.0), 0.0, in1.x, in1.y, in1.z, ShapeFrom(in2, eye), 1.0, in1.w);
+        out0.x = dot(GE_StarRadianceAt(vec2(in0.z, in0.w), star), vec3(0.2126, 0.7152, 0.0722));
+    }
+    else if (op == 9)
+    {
+        GE_StarDrawn star = GE_StarShade(in0.y, vec3(1.0), vec3(in0.z), in0.w, in1.x, in1.y, in1.z, ShapeFrom(in2, eye), 1.0, in1.w);
+        float sum = 0.0;
+        const float step = 0.25;
+        int n = int(ceil(star.CutRadius / step));
+        for (int y = -n; y < n; ++y)
+            for (int x = -n; x < n; ++x)
+            {
+                vec2 o = (vec2(x, y) + 0.5) * step;
+                if (length(o) < star.CutRadius)
+                    sum += dot(GE_StarRadianceAt(o, star), vec3(0.2126, 0.7152, 0.0722));
+            }
+        out0 = vec4(star.TotalEnergy, sum * step * step * kStarSceneLinearNits, star.SpikeFraction, star.CutRadius);
+        out1 = vec4(star.SpikePeak.g * kStarSceneLinearNits, star.SpikeLength, star.CoreRadius, star.Shape);
+        out2 = vec4(star.GlowFraction, 0.0, 0.0, 0.0);
+    }
+    else if (op == 12)
+    {
+        GE_StarDrawn star = GE_StarShade(in0.y, kOrange / dot(kOrange, vec3(0.2126, 0.7152, 0.0722)), vec3(in0.z), in0.w,
+                                         in1.x, in1.y, in1.z, ShapeFrom(in2, eye), 1.0, in1.w);
+        out0 = vec4(star.CorePeak, 0.0);
+    }
+    else if (op == 4 || op == 6 || op == 7 || op == 8 || op == 13)
+    {
+        vec3 colour = op == 6 || op == 8 ? kOrange / dot(kOrange, vec3(0.2126, 0.7152, 0.0722)) : vec3(1.0);
+        vec3 transmittance = op == 8 ? kZenithTransmittance : vec3(in0.z);
+        GE_StarDrawn star = GE_StarShade(in0.y, colour, transmittance, in0.w, in1.x, in1.y, in1.z, ShapeFrom(in2, eye), 1.0, in1.w);
+        if (op == 6 || op == 8)
+        {
+            out0 = vec4(star.CorePeak, 0.0);
+        }
+        else if (op == 7)
+        {
+            float lowest = 1e30;
+            for (int i = 0; i <= 256; ++i)
+            {
+                vec3 r = GE_StarRadianceAt(vec2(star.CutRadius * float(i) / 256.0, 0.0), star);
+                lowest = min(lowest, min(r.r, min(r.g, r.b)));
+            }
+            vec3 edge = GE_StarRadianceAt(vec2(star.CutRadius * 0.999, 0.0), star);
+            out0 = vec4(lowest, edge.g, 0.0, 0.0);
+        }
+        else
+        {
+            float corePeakNits = star.CorePeak.g * kStarSceneLinearNits;
+            float glareNits = star.GlareScale.g * kStarSceneLinearNits;
+            float glowNits = star.GlowPeak.g * kStarSceneLinearNits;
+            float coreEnergy = corePeakNits * 3.14159265 * star.CoreRadius * star.CoreRadius * in1.w;
+            float glareEnergy = GE_StarGlareEnergy(glareNits, star.CoreRadius, star.CutRadius) * in1.w;
+            float glowEnergy = glowNits * 3.14159265 * star.GlowRadius * star.GlowRadius *
+                               (1.0 - 1.0 / (1.0 + kStarGlowCutRadii * kStarGlowCutRadii)) * in1.w;
+            out0 = vec4(corePeakNits, star.CoreRadius, glareNits, star.CutRadius);
+            out1 = vec4(star.GlareFraction, star.Visibility, coreEnergy, glareEnergy);
+            out2 = vec4(star.GlowFraction, glowNits, star.GlowRadius, glowEnergy);
+        }
+    }
+    else if (op == 5)
+    {
+        out0.x = GE_StarColourSaturation(in0.y);
+    }
+    uData.slots[q * 6u + 3u] = out0;
+    uData.slots[q * 6u + 4u] = out1;
+    uData.slots[q * 6u + 5u] = out2;
+}

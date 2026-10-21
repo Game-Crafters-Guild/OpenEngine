@@ -1,6 +1,7 @@
 #include "UI/Internal/ElementIdIndex.h"
 
 #include "Logger/Logger.h"
+#include "UI/Internal/AttachedRootAccess.h"
 #include "UI/UIElement.h"
 
 #include <algorithm>
@@ -106,12 +107,17 @@ UIElement* ElementIdIndex::Find(const UIElement& subtree, StringId id) const
     const auto entry = m_Elements.find(id);
     if (entry == m_Elements.end())
         return nullptr;
+    // From a manager root, membership is the element's attached root: every element under
+    // that root names it, and nothing else does. Anywhere else the parent chain decides.
+    const bool fromManagerRoot = UIAttachedRootAccess::AttachedRoot(subtree) == &subtree;
     UIElement* firstMatch = nullptr;
     for (UIElement* element : entry->second)
     {
-        // Ownership outlives a dock tab's mount. The current parent chain excludes
-        // inactive targets immediately, without rebuilding an index on tab switches.
-        if (!IsInSubtree(*element, subtree))
+        // Ownership outlives a dock tab's mount, so an owned element may sit outside every
+        // manager root (an inactive tab's panel) and is skipped here.
+        const bool inSubtree = fromManagerRoot ? UIAttachedRootAccess::AttachedRoot(*element) == &subtree
+                                               : IsInSubtree(*element, subtree);
+        if (!inSubtree)
             continue;
         if (element == &subtree)
             return element;

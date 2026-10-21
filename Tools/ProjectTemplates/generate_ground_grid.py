@@ -1,10 +1,11 @@
-"""Generates the Basic 3D template's ground texture: a faint prototype grid, one 1 m cell per repeat.
+"""Generates the engine's grid ground texture: a faint prototype grid, one 1 m cell per repeat.
 
 The image is one tileable repeat: a flat 0.22 linear grey (the ground's albedo, that of dry soil or
 short grass; the auto exposure meters the frame against it, so a lighter ground darkens the whole frame)
-with a light line through its middle row and column. The texture is sRGB-encoded and the Ground
-material's base colour is white, so the grey is carried by the texture alone. The plane primitive spans
-1 m and UV 0..1, so a material tiling equal to the template's plane scale puts one repeat on each metre
+with a light line through its middle row and column. The texture is sRGB-encoded and the Ground Grid
+material's base color is white, so the gray is carried by the texture alone. The material is the ground of
+the New Scene and of the Basic 3D template. The plane primitive spans 1 m and UV 0..1, so a material tiling
+equal to the plane scale (6000 on both grounds) puts one repeat on each meter
 with the repeat's edges on whole metres; the line in the middle of the repeat therefore falls on the
 half metres, and a 1 m cube centred on a whole metre fills exactly one cell.
 
@@ -16,12 +17,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-SIZE = 128                 # texels per repeat, i.e. per metre at the template's tiling
+SIZE = 128                 # texels per repeat, i.e. per meter at the material's tiling
 LINE_WIDTH_TEXELS = 4.0    # about 3 cm on the ground
 GROUND_LINEAR = 0.22       # dry soil or short grass; a grey card is 0.18
 LINE_LINEAR = 0.35         # light enough that the 1 m cells read near the camera
-OUT = (Path(__file__).resolve().parents[2] / "Apps" / "Editor" / "ProjectTemplates" / "Basic3D"
-       / "Assets" / "Textures" / "GroundGrid.png")
+OUT = Path(__file__).resolve().parents[2] / "Engine" / "Assets" / "Textures" / "GroundGrid.png"
 
 
 def linear_to_srgb(value):

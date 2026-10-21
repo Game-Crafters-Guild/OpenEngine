@@ -13,6 +13,8 @@
 #include "Mathematics/Vector3.h"
 #include "Types/StringUtils.h"
 
+#include <unordered_set>
+
 namespace GameEngine::Navigation
 {
 
@@ -140,6 +142,30 @@ bool SurfaceBounds(ECS::World& world, ECS::EntityHandle surface, Mathematics::Ve
         return false;
     outMin = Mathematics::Vector3(bounds.Min[0], bounds.Min[1], bounds.Min[2]);
     outMax = Mathematics::Vector3(bounds.Max[0], bounds.Max[1], bounds.Max[2]);
+    return true;
+}
+
+bool ListBakeSources(ECS::World& world, ECS::EntityHandle surface, std::vector<BakeSource>& out)
+{
+    out.clear();
+    const auto* component = world.GetComponent<NavigationSurface>(surface);
+    if (!component)
+        return false;
+    const auto* transform = world.GetComponent<Components::WorldTransform>(surface);
+    const PathfindingECS::NavigationTerrainSource terrain = PathfindingECS::ResolveNavigationTerrainSource(world);
+    const PathfindingECS::NavigationStaticGeometry geometry = PathfindingECS::GatherNavigationStaticGeometry(world);
+    const PathfindingECS::NavigationBounds bounds =
+        PathfindingECS::NavigationSurfaceBounds(*component, transform, terrain, geometry);
+    // One entry per entity and kind: an entity with several collider shapes is one collider source.
+    std::unordered_set<uint64> listed;
+    for (const auto& item : geometry.Items)
+    {
+        if (!item.Bounds.OverlapsXZ(bounds.Min[0], bounds.Min[2], bounds.Max[0], bounds.Max[2]))
+            continue;
+        const uint64 key = (static_cast<uint64>(item.Source.Entity.id) << 8) | static_cast<uint64>(item.Source.Kind);
+        if (listed.insert(key).second)
+            out.push_back(item.Source);
+    }
     return true;
 }
 

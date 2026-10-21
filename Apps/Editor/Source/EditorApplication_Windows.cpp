@@ -9,6 +9,7 @@
 #include "Core/WindowInputRouter.h"
 #include "Core/WindowUiBootstrap.h"
 #include "Display/HdrOutputController.h"
+#include "Docking/FloatingFrameHost.h"
 #include "Docking/WindowDockingController.h"
 #include "EditorContextMenu/UIContextMenu.h"
 #include "EditorPanelManager.h"
@@ -104,6 +105,19 @@ void EditorApplication::DismissTornOffPanelsForLayoutRestore()
         if (ctx->window)
             ctx->window->RequestClose();
     }
+}
+
+std::vector<std::string> EditorApplication::SeparateWindowPanelIds() const
+{
+    std::vector<std::string> ids = m_DockDnd ? m_DockDnd->FloatingFrames().PanelIds()
+                                             : std::vector<std::string>{};
+    for (size_t i = 1; i < m_Windows.size(); ++i)
+    {
+        const EditorWindowContext* ctx = m_Windows[i].get();
+        if (ctx && !ctx->floatingPanelId.empty())
+            ids.push_back(ctx->floatingPanelId);
+    }
+    return ids;
 }
 
 void EditorApplication::AttachDeferredNativeToolWindows()
@@ -611,28 +625,6 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
     floatingInput.onKeyPre = [this, ctxRaw](int k, int a, int m) -> bool
     {
         m_GameViewPointerLock->OnKey(k, a);
-#if GE_ENABLE_CPU_PROFILING
-        if (k == Input::kKeyCode_F2 && a == Input::kKeyActionPress)
-        {
-            auto& prof = GameEngine::Profiling::CpuProfiler::Get();
-            if ((m & Input::kModShift) != 0)
-            {
-                prof.SetEnabled(false);
-                Logger::Log::Info("[CPU Profiler] OFF");
-                return true;
-            }
-            if (!prof.IsEnabled())
-            {
-                prof.SetEnabled(true);
-                Logger::Log::Info("[CPU Profiler] ON (press F2 again to dump)");
-            }
-            else
-            {
-                prof.RequestDump(this->BuildPerfDumpLine());
-            }
-            return true;
-        }
-#endif
 
         // Global editor hotkey: F11 toggles dock debug overlay regardless of UI focus.
         if (k == Input::kKeyCode_F11 && a == Input::kKeyActionPress)

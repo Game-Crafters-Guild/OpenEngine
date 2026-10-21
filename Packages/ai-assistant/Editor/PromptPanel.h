@@ -3,9 +3,11 @@
 #include "AgentConversationController.h"
 #include "AssistantActionLedger.h"
 
+#include "Platform/SpeechInput.h"
 #include "UI/AssetBoundDockPanel.h"
 #include "UI/UIManagerRef.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -24,7 +26,12 @@ class Button;
 class Dropdown;
 class Label;
 class ScrollView;
+class PromptMicButton;
 class PromptTextArea;
+namespace EditorUI
+{
+class ItemSizeSlider;
+}
 struct AgentConversationRowModel;
 struct AgentReplyAction;
 struct AgentSessionChoice;
@@ -73,6 +80,19 @@ private:
     void RefreshHistoryTextVisuals();
     void OnHistoryKeyDown(UIEvent& e);
     void SelectRowByOffset(int offset);
+    void SelectRow(size_t rowIndex);
+    void BuildTextSizeSlider(UIElement* host);
+    void BindMicButton(PromptMicButton* button);
+    void StartDictation();
+    void StopDictationFromMic();
+    void ApplyDictation(const std::string& transcript);
+    void RestartDictationText();
+    void AbandonDictation();
+    void ShowDictationState(bool listening, const std::string& message);
+    void BindSpeechLevels(UIElement* left, UIElement* right);
+    void ShowSpeechLevels(const Platform::SpeechInput::LevelArray& levels);
+    void StepTextSize(float scrollY);
+    void ApplyTextSize(float px);
     void ScrollRowIntoView(size_t rowIndex);
     bool NavigatePromptRecall(int direction);
     void UpdatePromptPlaceholderVisibility(const std::string& value);
@@ -139,6 +159,25 @@ private:
     bool m_HistoryNarrow = false;
     Label* m_PromptPlaceholder = nullptr;
     Label* m_StatusLabel = nullptr;
+    EditorUI::ItemSizeSlider* m_TextSizeSlider = nullptr;
+    // The --prompt_text_scale the panel last set (PromptPanel.css); 0 before the first.
+    float m_TextScale = 0.0f;
+    PromptMicButton* m_MicButton = nullptr;
+    // The level meter's two halves and its bars, left half first, in the order the
+    // speech input reports its time slices.
+    std::array<UIElement*, 2> m_SpeechLevelGroups{};
+    std::array<UIElement*, Platform::SpeechInput::kLevelCount> m_SpeechLevelBars{};
+    // Set when the user stops the microphone with Send when the microphone stops on.
+    bool m_SendWhenDictationEnds = false;
+    // Present only where the platform offers speech input.
+    std::unique_ptr<Platform::SpeechInput> m_SpeechInput;
+    // The prompt text that dictated words follow, and how many leading words of the session's
+    // cumulative transcript belong to text the user has since cleared.
+    std::string m_DictationBase;
+    size_t m_DictationSkippedWords = 0;
+    std::string m_LastDictation;
+    // True while the panel itself writes the prompt, so the change is not read as typing.
+    bool m_SettingPromptText = false;
     Button* m_SendButton = nullptr;
     Button* m_ClearPromptButton = nullptr;
 

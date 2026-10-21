@@ -13,11 +13,10 @@
 #include "Thumbnails/TextureThumbnailHandler.h"
 #include "Thumbnails/ThumbnailService.h"
 
+#include "Image/Encode.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 
 #include "Assets/AssetManager.h"
-
-#include <stb_image_write.h>
 
 #include <gtest/gtest.h>
 
@@ -60,7 +59,8 @@ bool WriteTestPng(const std::filesystem::path& path, int width, int height)
     std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 200);
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
-    return stbi_write_png(path.string().c_str(), width, height, 4, pixels.data(), width * 4) != 0;
+    return GameEngine::Image::WritePngFile(path, pixels, static_cast<uint32_t>(width),
+                                           static_cast<uint32_t>(height));
 }
 
 void WriteTextFile(const std::filesystem::path& path, const std::string& contents)

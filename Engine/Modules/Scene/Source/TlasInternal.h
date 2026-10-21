@@ -232,7 +232,7 @@ struct TlasLeaf
 {
     GameEngine::ECS::EntityHandle Entity{};
     AABB                          WorldBounds{};
-    uint32                        LayerMask        = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask    LayerMask        = Rendering::RenderLayerMask::All();
     uint8                         InstanceMask     = 0xFFu;
     uint8                         _pad             = 0u;
     uint32                        CachedXfVersion  = 0u;  // last-seen WorldTransform.Version

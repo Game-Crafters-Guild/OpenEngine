@@ -8,6 +8,7 @@ set(MEMORY_SOURCES
     Source/AllocationCounter.cpp
     Source/Arena.cpp
     Source/ObjectPool.cpp
+    Source/RangeAllocator.cpp
     Source/ScratchScope.cpp
     Source/StatsRegistry.cpp
     Source/TrackedBytes.cpp

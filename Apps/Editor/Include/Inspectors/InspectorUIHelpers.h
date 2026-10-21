@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -17,6 +18,7 @@
 #include "UI/Controls/EnumField.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/IntField.h"
+#include "UI/Controls/MaskField.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextArea.h"
 #include "UI/Controls/TextField.h"
@@ -91,16 +93,25 @@ inline void SetRowLabelsEnabled(UIElement* node, bool enabled)
     }
 }
 
+// Enables or disables `node` and every element under it.
+inline void SetSubtreeEnabled(UIElement* node, bool enabled)
+{
+    node->SetEnabled(enabled);
+    for (const auto& child : node->GetChildren())
+        SetSubtreeEnabled(child.get(), enabled);
+}
+
 // Makes the inspector row holding `control` active or inactive. The disabled row is what blocks
 // input to everything in it, label scrub included (the UI manager delivers no press, key or focus
-// into a disabled element). The control and the row's labels are disabled too only for their look
-// (Toggle.css, FloatField.css, inspector.css: .inspector-label:disabled, .inspector-row:disabled),
-// which keys off each element's own state.
+// into a disabled element). The control, every element inside it and the row's labels are disabled
+// too only for their look (Toggle.css, FloatField.css, Dropdown.css, inspector.css:
+// .inspector-label:disabled, .inspector-row:disabled), which keys off each element's own state: an
+// EnumField's look is its inner .dropdown's.
 inline void SetRowOfControlEnabled(UIElement* control, bool enabled)
 {
     if (!control)
         return;
-    control->SetEnabled(enabled);
+    SetSubtreeEnabled(control, enabled);
     for (UIElement* up = control->GetParent(); up; up = up->GetParent())
     {
         if (up->HasClass("inspector-row"))
@@ -131,9 +142,7 @@ inline void DisableRow(UIElement* row, const char* reason = nullptr)
 {
     if (!row)
         return;
-    row->SetEnabled(false);
-    for (const auto& child : row->GetChildren())
-        DisableRow(child.get());
+    SetSubtreeEnabled(row, false);
     if (reason)
         row->SetTooltip(reason);
 }
@@ -193,6 +202,24 @@ inline Dropdown* AddDropdownRow(UIElement* parent, const std::string& labelText,
     dropdown->AddClass("inspector-dropdown");
     Dropdown* raw = dropdown.get();
     fieldContainer->AddChild(std::move(dropdown));
+    return raw;
+}
+
+// A row whose value is a set of options, each with its own bit: the label cell and a MaskField. The
+// caller wires SetOnBitsChanged and, for a multi-selection, SetMixedBits.
+inline MaskField* AddMaskRow(UIElement* parent, const std::string& labelText, std::span<const MaskOption> options,
+                             uint32_t value, const char* tooltip = nullptr)
+{
+    UIElement* row = AddRow(parent);
+    AddLabel(row, labelText, tooltip);
+    UIElement* fieldContainer = AddFieldContainer(row);
+
+    auto field = std::make_unique<MaskField>();
+    field->SetOptions(options);
+    field->SetValueWithoutNotify(value);
+    field->AddClass("inspector-dropdown");
+    MaskField* raw = field.get();
+    fieldContainer->AddChild(std::move(field));
     return raw;
 }
 

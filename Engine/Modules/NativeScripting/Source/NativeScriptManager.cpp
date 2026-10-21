@@ -609,7 +609,7 @@ std::filesystem::path NativeScriptManager::BuildOnly(const NativeBuildConfig& co
     // Scan SourceDir for ECS::ComponentBase / ECS::SystemBase inheritors (optional) →
     // generated registration TUs written into BuildDir as *.gen.cpp, picked up by the
     // generated project's glob. Skipped when the scanner isn't configured (macros-only mode).
-    const bool scannerConfigured = !cfg.DotnetExe.empty() && !cfg.ComponentScannerDll.empty();
+    const bool scannerConfigured = !cfg.ComponentScannerExe.empty();
     if (scannerConfigured)
     {
         SetBuildStage("scanning components and systems");

@@ -3,6 +3,7 @@
 #include "Assets/AssetManager.h"
 #include "Core/Engine.h"
 #include "EditorPanelManager.h"
+#include "Editor/Settings/AudioEnabledSettings.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "EditorPanelIds.h"
 #include "EditorContextMenu/UIContextMenu.h"
@@ -10,10 +11,12 @@
 #include "Platform/ContextMenu.h"
 #include "UI/EditorIcons.h"
 #include "Platform/Window.h"
+#include "PlayMode/AudioToggleButton.h"
+#include "PlayMode/PlayButtonMenu.h"
+#include "PlayMode/PlayButtonState.h"
 #include "PlayMode/PlayModeManager.h"
 #include "UI/Assets/UILayoutAsset.h"
 #include "UI/Assets/UIStyleAsset.h"
-#include "UI/ClassBackgroundImageQuery.h"
 #include "UI/Controls/Button.h"
 #include "UI/Interaction/ContextMenuManipulator.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -43,35 +46,36 @@ struct ToolbarButtonInfo
 // Friendly titles for the right-click "show/hide icon" menu. Keep in sync with
 // the buttons declared in EditorTopToolbar.uxml (top-toolbar-left/center/right).
 constexpr ToolbarButtonInfo kToolbarButtons[] = {
-    {"TopToolbarUniversalSearch", "Universal Search",    "editor:Icons/usearch.png"},
-    {"TopToolbarLeft1",          "Save Scene",          "editor:Icons/save.png"},
-    {"TopToolbarLeft2",          "Open Project Folder", "editor:Icons/folder_open.png"},
-    {"TopToolbarPackages",       "Packages",            "editor:Icons/box.png"},
-    {"TopToolbarLeft3",          "Web Panel",           "editor:Icons/computer.png"},
-    {"TopToolbarTodos",          "Todos",               "editor:Icons/todolist.png"},
-    {"TopToolbarBookmarks",      "Bookmarks",           "editor:Icons/book.png"},
-    {"TopToolbarBuild",          "Build",               "editor:Icons/game-controller.png"},
-    {"TopToolbarSettings",       "Settings",            "editor:Icons/settings.png"},
-    {"TopToolbarHelp",           "Help",                "editor:Icons/help.png"},
-    {"TopToolbarCenter2",        "Stop",                "editor:Icons/stop.png"},
-    {"TopToolbarRecord",         "Record",              "editor:Icons/recording_off_button.png"},
-    {"TopToolbarCenter3",        "Pause",               "editor:Icons/pause.png"},
-    {"TopToolbarCenter4",        "Play",                "editor:Icons/play.png"},
-    {"TopToolbarCenter1",        "Play Fullscreen",     "editor:Icons/fullscreen.png"},
-    {"TopToolbarUndoHistory",    "Undo History",        "editor:Icons/undo.png"},
-    {"TopToolbarRight1",         "Script Editor",       "editor:Icons/log.png"},
-    {"TopToolbarNodeGraph",      "Node Graph",          "editor:Icons/node.png"},
-    {"TopToolbarMixer",          "Mixer",               "editor:Icons/mixer.png"},
-    {"TopToolbarAnimation",      "Animation",           "editor:Icons/alarm.png"},
-    {"TopToolbarTimeline",       "Timeline",            "editor:Icons/film.png"},
-    {"TopToolbarVisualProfiler", "Visual Profiler",     "editor:Icons/pulse.png"},
-    {"TopToolbarCpuProfiler",    "CPU Profiler",        "editor:Icons/timer.png"},
-    {"TopToolbarMonitors",       "Monitors",            "editor:Icons/stats.png"},
-    {"TopToolbarVram",           "VRAM",                "editor:Icons/hardware-chip.png"},
-    {"TopToolbarRenderGraph",    "Render Graph",        "editor:Icons/pie-chart.png"},
-    {"TopToolbarLog",            "Log",                 "editor:Icons/alert-circle.png"},
-    {"TopToolbarRight2",         "Info",                "editor:Icons/info.png"},
-    {"TopToolbarPanelMenu",      "Panels",              "editor:Icons/menulist.png"},
+    {"TopToolbarUniversalSearch", "Universal Search",    "editor:Icons/usearch.svg"},
+    {"TopToolbarLeft1",          "Save Scene",          "editor:Icons/save.svg"},
+    {"TopToolbarLeft2",          "Open Project Folder", "editor:Icons/folder_open.svg"},
+    {"TopToolbarPackages",       "Packages",            "editor:Icons/box.svg"},
+    {"TopToolbarLeft3",          "Web Panel",           "editor:Icons/computer.svg"},
+    {"TopToolbarTodos",          "Todos",               "editor:Icons/todolist.svg"},
+    {"TopToolbarBookmarks",      "Bookmarks",           "editor:Icons/book.svg"},
+    {"TopToolbarBuild",          "Build",               "editor:Icons/game-controller.svg"},
+    {"TopToolbarSettings",       "Settings",            "editor:Icons/settings.svg"},
+    {"TopToolbarHelp",           "Help",                "editor:Icons/help.svg"},
+    {"TopToolbarCenter2",        "Stop",                "editor:Icons/stop.svg"},
+    {"TopToolbarRecord",         "Record",              "editor:Icons/recording_off_button.svg"},
+    {"TopToolbarCenter3",        "Pause",               "editor:Icons/pause.svg"},
+    {"TopToolbarCenter4",        "Play",                "editor:Icons/play.svg"},
+    {"TopToolbarAudio",          "Audio",               "editor:Icons/audio-on-speaker.svg"},
+    {"TopToolbarCenter1",        "Play Fullscreen",     "editor:Icons/fullscreen.svg"},
+    {"TopToolbarUndoHistory",    "Undo History",        "editor:Icons/undo.svg"},
+    {"TopToolbarRight1",         "Script Editor",       "editor:Icons/log.svg"},
+    {"TopToolbarNodeGraph",      "Node Graph",          "editor:Icons/node.svg"},
+    {"TopToolbarMixer",          "Mixer",               "editor:Icons/mixer.svg"},
+    {"TopToolbarAnimation",      "Animation",           "editor:Icons/alarm.svg"},
+    {"TopToolbarTimeline",       "Timeline",            "editor:Icons/film.svg"},
+    {"TopToolbarVisualProfiler", "Visual Profiler",     "editor:Icons/pulse.svg"},
+    {"TopToolbarCpuProfiler",    "CPU Profiler",        "editor:Icons/timer.svg"},
+    {"TopToolbarMonitors",       "Monitors",            "editor:Icons/stats.svg"},
+    {"TopToolbarVram",           "VRAM",                "editor:Icons/hardware-chip.svg"},
+    {"TopToolbarRenderGraph",    "Render Graph",        "editor:Icons/pie-chart.svg"},
+    {"TopToolbarLog",            "Log",                 "editor:Icons/alert-circle.svg"},
+    {"TopToolbarRight2",         "Info",                "editor:Icons/info.svg"},
+    {"TopToolbarPanelMenu",      "Panels",              "editor:Icons/menulist.svg"},
 };
 
 std::string MakeVisibilityPrefKey(const char* buttonId)
@@ -128,25 +132,6 @@ UIElement* FindFirstByClass(UIElement* el, const char* className)
     return nullptr;
 }
 
-// The launcher button's own mark, worn by a row for a panel that declares no
-// icon class of its own. Authored in CSS like every other icon, so the class
-// name — not an image path — is what appears here.
-constexpr const char* kPanelMenuGenericIconClass = "menulist-icon";
-
-std::string PanelMenuIconPath(const UIManager& ui, std::string_view iconClass)
-{
-    // Panel launcher rows belong to the platform context menu, not the retained
-    // UI tree, so no stylesheet can style them. The image each row shows is
-    // still authored in CSS — `background-image` on the panel's tab-icon class
-    // — and is read back from the loaded cascade, so the URL exists in exactly
-    // one place. An empty result means CSS declared nothing for either class,
-    // and a row with no icon beats a row with a guessed one.
-    std::string url = UIStyleQuery::ResolveClassBackgroundImageUrl(ui.GetStylesheets(), iconClass);
-    if (url.empty())
-        url = UIStyleQuery::ResolveClassBackgroundImageUrl(ui.GetStylesheets(),
-                                                          kPanelMenuGenericIconClass);
-    return url;
-}
 } // namespace
 
 EditorTopToolbar::EditorTopToolbar()
@@ -250,14 +235,11 @@ void EditorTopToolbar::WireControls(UIElement* rootEl, Platform::Window* window,
                 if (!m_PanelMenu)
                     return;
 
-                const UIManager* ui = GetOwnerManager();
                 for (uint32_t i = 0; i < entries.size(); ++i)
                 {
                     const uint32_t commandId = i + 1;
                     m_PanelMenu->AddItem(0, entries[i].title, commandId);
-                    if (ui)
-                        m_PanelMenu->SetItemIcon(commandId,
-                                                 PanelMenuIconPath(*ui, entries[i].iconClass));
+                    m_PanelMenu->SetItemIcon(commandId, entries[i].iconPath);
                 }
                 m_PanelMenu->SetCommandHandler(
                     [entries = std::move(entries), openPanel](uint32_t commandId)
@@ -345,13 +327,25 @@ void EditorTopToolbar::WireControls(UIElement* rootEl, Platform::Window* window,
             pauseBtn->RegisterEventHandler(kEventButtonClick, [fn = cb.onPauseClicked](UIEvent&) { fn(); });
     }
 
-    // Play button
+    // Play button. Its right-click menu carries the editor-wide "Audio Enabled" toggle; the
+    // saved choice is applied to the engine's audio system here, at startup.
     if (auto* playBtn = dynamic_cast<Button*>(rootEl->FindById(HashStringId(EditorPanelIds::TopToolbarCenter4))))
     {
-        playBtn->SetTooltip("Play");
         m_PlayButton = playBtn;
         if (cb.onPlayClicked)
             playBtn->RegisterEventHandler(kEventButtonClick, [fn = cb.onPlayClicked](UIEvent&) { fn(); });
+        Audio::AudioSystem* audio = EngineCore::GetInstance().GetAudioSystem();
+        SetAudioEnabled(Editor::AudioEnabledSettings::ApplySaved(audio));
+        playBtn->AddManipulator(ContextMenuManipulator::Create(
+            Editor::PlayButtonMenuItems(audio, [this](bool enabled) { SetAudioEnabled(enabled); })));
+    }
+
+    // Audio toggle right of Play: the same state as the Play button menu's "Audio Enabled" row.
+    if (auto* audioBtn = dynamic_cast<Button*>(rootEl->FindById(HashStringId(EditorPanelIds::TopToolbarAudio))))
+    {
+        m_AudioToggleButton = audioBtn;
+        Editor::WireAudioToggleButton(*audioBtn, EngineCore::GetInstance().GetAudioSystem(),
+                                      [this](bool enabled) { SetAudioEnabled(enabled); });
     }
 
     // Save scene (same as Editor.Global.SaveScene: save to path, or Save As modal if untitled)
@@ -522,24 +516,12 @@ void EditorTopToolbar::WireControls(UIElement* rootEl, Platform::Window* window,
 void EditorTopToolbar::UpdatePlayModeState(Editor::PlayModeState s)
 {
     // Toolbar behavior:
-    // - Play: only enabled in Edit (Enter play). Disabled while playing/paused/review.
-    //         Keep the green "active" icon while in play/paused/entering/exiting.
+    // - Play: see Editor::ApplyPlayButtonState (clickable in Edit, menu reachable during
+    //         play, the green icon from its own state class while play mode runs).
     // - Pause: enabled only while playing/paused; pressed styling indicates paused.
     // - Stop: enabled while playing/paused/review; disabled in Edit.
     if (m_PlayButton)
-    {
-        const bool enablePlay = (s == Editor::PlayModeState::Edit);
-        const bool playActive =
-            (s == Editor::PlayModeState::Play ||
-             s == Editor::PlayModeState::Paused ||
-             s == Editor::PlayModeState::EnteringPlay ||
-             s == Editor::PlayModeState::ExitingPlay);
-        m_PlayButton->SetDisabled(!enablePlay);
-        if (playActive)
-            m_PlayButton->AddClass("pressed");
-        else
-            m_PlayButton->RemoveClass("pressed");
-    }
+        Editor::ApplyPlayButtonState(*m_PlayButton, s);
     if (m_PauseButton)
     {
         const bool enablePause =
@@ -595,6 +577,14 @@ void EditorTopToolbar::SetFullscreenActive(bool active)
         m_FullscreenButton->AddClass("pressed");
     else
         m_FullscreenButton->RemoveClass("pressed");
+}
+
+void EditorTopToolbar::SetAudioEnabled(bool enabled)
+{
+    if (m_PlayButton)
+        m_PlayButton->SetTooltip(enabled ? "Play. Right-click for options." : "Play (audio muted). Right-click for options.");
+    if (m_AudioToggleButton)
+        Editor::ApplyAudioToggleState(*m_AudioToggleButton, enabled);
 }
 
 void EditorTopToolbar::SetRecordActive(bool active)

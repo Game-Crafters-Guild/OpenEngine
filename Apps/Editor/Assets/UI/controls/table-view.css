@@ -90,11 +90,11 @@
 }
 
 .axis-header-sort.ascending {
-    background-image: url("editor:Icons/dropdownsmallup.png");
+    background-image: url("editor:Icons/dropdownsmallup.svg");
 }
 
 .axis-header-sort.descending {
-    background-image: url("editor:Icons/dropdownsmall.png");
+    background-image: url("editor:Icons/dropdownsmall.svg");
 }
 
 /* The divider decouples the grab target from the visible line. The divider itself is a

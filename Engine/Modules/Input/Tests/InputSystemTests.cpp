@@ -46,7 +46,7 @@ TEST(InputSystemTests, ModifierShortcutDistinguishesShiftAFromPlainA)
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -54,7 +54,7 @@ TEST(InputSystemTests, ModifierShortcutDistinguishesShiftAFromPlainA)
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -96,7 +96,7 @@ TEST(InputSystemTests, ModifierShortcutUsesModifierKeyStateWhenEventModsMissing)
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -104,7 +104,7 @@ TEST(InputSystemTests, ModifierShortcutUsesModifierKeyStateWhenEventModsMissing)
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -132,7 +132,7 @@ TEST(InputSystemTests, ModifierStateClearsOnModifierReleaseEvenIfEventModsStillS
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -140,7 +140,7 @@ TEST(InputSystemTests, ModifierStateClearsOnModifierReleaseEvenIfEventModsStillS
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -170,7 +170,7 @@ TEST(InputSystemTests, ModifierShortcutUsesPressTimeModifiersNotLastEventModifie
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -178,7 +178,7 @@ TEST(InputSystemTests, ModifierShortcutUsesPressTimeModifiersNotLastEventModifie
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -205,7 +205,7 @@ TEST(InputSystemTests, ModifierShortcutUsesModsFromPressEventEvenIfCurrentModsCh
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -213,7 +213,7 @@ TEST(InputSystemTests, ModifierShortcutUsesModsFromPressEventEvenIfCurrentModsCh
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -239,7 +239,7 @@ TEST(InputSystemTests, ModifierShortcutFallsBackToCurrentModsWhenPressEventModsI
     plain.id = kPlainAction;
     plain.isAxis = false;
     ActionBinding plainBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    plainBind.forbiddenMods = kModShift;
+    plainBind.forbiddenMods = ModifierFlags::Shift;
     plain.bindings.push_back(plainBind);
 
     // Shift+A: requires Shift.
@@ -247,7 +247,7 @@ TEST(InputSystemTests, ModifierShortcutFallsBackToCurrentModsWhenPressEventModsI
     shift.id = kShiftAction;
     shift.isAxis = false;
     ActionBinding shiftBind{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftBind.requiredMods = kModShift;
+    shiftBind.requiredMods = ModifierFlags::Shift;
     shift.bindings.push_back(shiftBind);
 
     input.RegisterAction(kTestContext, plain);
@@ -1194,7 +1194,7 @@ TEST(InputSystemTests, GameplaySinkClaimsOnlyTheModifierCombinationItBinds)
     InputSystem input{SinkRole::Gameplay};
 
     ActionBinding shiftA{DeviceType::Keyboard, kKeyA, 1.0f};
-    shiftA.requiredMods = kModShift;
+    shiftA.requiredMods = ModifierFlags::Shift;
     input.BindKey(kTestContext, kShiftAction, shiftA);
     input.PushContext(kTestContext);
 
@@ -1442,7 +1442,7 @@ TEST(InputSystemTests, ChordedScrollClaimIsJudgedFromTheEventMods)
     zoom.id = kMouseAxisAction;
     zoom.isAxis = true;
     ActionBinding ctrlWheel{DeviceType::Mouse, kMouseScrollAxisY, 1.0f};
-    ctrlWheel.requiredMods = kModControl;
+    ctrlWheel.requiredMods = ModifierFlags::Control;
     zoom.bindings.push_back(ctrlWheel);
     input.RegisterAction(kMouseContext, zoom);
     input.PushContext(kMouseContext);
@@ -1471,7 +1471,7 @@ TEST(InputSystemTests, MouseChordPressFiresWhenTheModifierLeavesBeforeUpdate)
 {
     InputSystem input{SinkRole::Gameplay};
     ActionBinding ctrlRight{DeviceType::Mouse, kMouseButtonRight, 1.0f};
-    ctrlRight.requiredMods = kModControl;
+    ctrlRight.requiredMods = ModifierFlags::Control;
     input.BindKey(kMouseContext, kTestAction, ctrlRight);
     input.PushContext(kMouseContext);
 
@@ -1488,8 +1488,8 @@ TEST(InputSystemTests, KeyBindingQueryUsesCurrentEnabledBindingsAndModifierRules
     InputSystem input{SinkRole::Gameplay};
     EXPECT_FALSE(input.MatchesKeyBinding(kTestContext, kTestAction, kKeyA, kModControl));
     ActionBinding ctrlA{DeviceType::Keyboard, kKeyA, 1.0f};
-    ctrlA.requiredMods = kModControl;
-    ctrlA.forbiddenMods = kModShift | kModAlt | kModSuper;
+    ctrlA.requiredMods = ModifierFlags::Control;
+    ctrlA.forbiddenMods = ModifierFlags::Shift | ModifierFlags::Alt | ModifierFlags::Super;
     input.BindKey(kTestContext, kTestAction, ctrlA);
     EXPECT_TRUE(input.MatchesKeyBinding(kTestContext, kTestAction, kKeyA, kModControl | kModCapsLock));
     EXPECT_FALSE(input.MatchesKeyBinding(kTestContext, kTestAction, kKeyA, 0));
@@ -1516,7 +1516,7 @@ TEST(InputSystemTests, HostReservedKeysFollowTheFlaggedActionsCurrentBindings)
 {
     InputSystem input;
     ActionBinding ctrlA{DeviceType::Keyboard, kKeyA, 1.0f};
-    ctrlA.requiredMods = kModControl;
+    ctrlA.requiredMods = ModifierFlags::Control;
     input.RegisterAction(kTestContext, {kTestAction, {ctrlA}, false, /*hostReserved=*/true});
     input.RegisterAction(kTestContext, {kPlainAction, {{DeviceType::Keyboard, kKeyB, 1.0f}}, false});
     EXPECT_TRUE(input.IsHostReservedKey(kKeyA, kModControl));
@@ -1524,7 +1524,7 @@ TEST(InputSystemTests, HostReservedKeysFollowTheFlaggedActionsCurrentBindings)
     EXPECT_FALSE(input.IsHostReservedKey(kKeyB, 0)) << "an unflagged action reserves nothing";
 
     input.ClearBindings(kTestContext, kTestAction);
-    input.BindKey(kTestContext, kTestAction, {DeviceType::Keyboard, kKeyB, 1.0f, kModAlt});
+    input.BindKey(kTestContext, kTestAction, {DeviceType::Keyboard, kKeyB, 1.0f, ModifierFlags::Alt});
     EXPECT_FALSE(input.IsHostReservedKey(kKeyA, kModControl));
     EXPECT_TRUE(input.IsHostReservedKey(kKeyB, kModAlt));
 
@@ -1551,7 +1551,7 @@ TEST(InputSystemTests, MouseChordReleaseEdgeSurvivesTheModifierLeavingFirst)
 {
     InputSystem input{SinkRole::Gameplay};
     ActionBinding ctrlRight{DeviceType::Mouse, kMouseButtonRight, 1.0f};
-    ctrlRight.requiredMods = kModControl;
+    ctrlRight.requiredMods = ModifierFlags::Control;
     input.BindKey(kMouseContext, kTestAction, ctrlRight);
     input.PushContext(kMouseContext);
 

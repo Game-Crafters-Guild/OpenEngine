@@ -3,8 +3,8 @@
 // Test-only probe for the height fog's sky horizon colour (HeightFogSkyColorTests).
 //
 // Per probed view direction it writes two colours:
-//   [2i]     the fog's: GE_SkyHorizonColor, the call height_fog.frag makes for every sky source,
-//            fed the values FillHeightFogSkyColor put in the fog's UBO;
+//   [2i]     the fog's: GE_SkyHorizonColor, the call the fog term makes (height_fog_term.glsl) for
+//            every sky source, fed the values FillHeightFogSkyColor put in the fog's UBO;
 //   [2i + 1] the sky's: sky_render.frag's atmosphere backdrop at the horizon of the same azimuth
 //            (the LUT tap, the shared ground and night composite at viewZenithCos 0, the exposure
 //            multiply), fed the sky settings the way SkyRenderNode fills the sky UBO.

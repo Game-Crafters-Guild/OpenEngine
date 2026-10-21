@@ -476,7 +476,8 @@ void RuntimeHost::Render(float deltaTime)
 
             if (m_ViewId != 0)
             {
-                rs->Views().SetViewRenderLayerMask(m_ViewId, 1u);
+                // The view draws the camera's Visible Layers.
+                Engine::Renderer::DeclareGameCameraView(rs->Views(), m_ViewId, &*activeCam);
                 rs->Views().SetViewWorldId(m_ViewId, world->GetWorldId());
                 // Two-phase HZB occlusion for the shipped player's main view,
                 // matching the editor game view + free scene view (#253):
@@ -495,7 +496,7 @@ void RuntimeHost::Render(float deltaTime)
                     .SampleCount;
 
             Engine::Renderer::ApplyActiveCameraAspect(*rs, m_ViewId, m_CameraId, *activeCam, w, h);
-            rs->Views().SetCameraPostProcessMask(m_CameraId, activeCam->params.PostProcessMask);
+            rs->Views().SetCameraVolumeLayers(m_CameraId, activeCam->params.VolumeLayers);
             rs->Views().SetCameraExposure(m_CameraId, Engine::Renderer::ToCameraExposure(activeCam->params));
             // Per-camera render scale: an explicit value pins this view to a
             // fixed scale (opting out of the engine-wide dynamic controller);

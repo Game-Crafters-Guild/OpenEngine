@@ -2,9 +2,11 @@
 
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -103,54 +105,63 @@ const SpriteFrame* SpriteFrames::Sample(const std::string& animationName, float3
 
 bool SpriteFrames::ParseJson(const std::string& text)
 {
-    try
-    {
-        const auto doc = json::parse(text);
-        if (!doc.is_object())
-        {
-            SetState(AssetState::Failed);
-            return false;
-        }
+    json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+    if (!doc.is_object())
+        return Refuse("its JSON is not an object; write it as an object holding an \"animations\" array");
 
-        m_Animations.clear();
-        if (doc.contains("animations") && doc["animations"].is_array())
+    m_Animations.clear();
+    Serialization::JsonFieldReader reader;
+    if (doc.contains("animations") && doc["animations"].is_array())
+    {
+        const json& animations = doc["animations"];
+        for (size_t animationIndex = 0; animationIndex < animations.size(); ++animationIndex)
         {
-            for (const auto& animJson : doc["animations"])
+            const json& animJson = animations[animationIndex];
+            const std::string context = std::format("animations[{}].", animationIndex);
+            reader.SetContext(context);
+            SpriteFrameAnimation animation;
+            reader.Read(animJson, "name", animation.Name);
+            reader.Read(animJson, "loop", animation.Loop);
+            if (animJson.is_object() && animJson.contains("frames") && animJson["frames"].is_array())
             {
-                SpriteFrameAnimation animation;
-                animation.Name = animJson.value("name", std::string());
-                animation.Loop = animJson.value("loop", true);
-                if (animJson.contains("frames") && animJson["frames"].is_array())
+                const json& frames = animJson["frames"];
+                for (size_t frameIndex = 0; frameIndex < frames.size(); ++frameIndex)
                 {
-                    for (const auto& frameJson : animJson["frames"])
-                    {
-                        SpriteFrame frame;
-                        frame.Name = frameJson.value("name", std::string());
-                        frame.DurationSeconds = std::max(0.0f, frameJson.value("durationSeconds", 0.1f));
-                        if (frameJson.contains("textureGuid") && frameJson["textureGuid"].is_string())
-                            frame.TextureGuid = GUID(frameJson["textureGuid"].get<std::string>());
-                        frame.U0 = frameJson.value("u0", 0.0f);
-                        frame.V0 = frameJson.value("v0", 0.0f);
-                        frame.U1 = frameJson.value("u1", 1.0f);
-                        frame.V1 = frameJson.value("v1", 1.0f);
-                        animation.Frames.push_back(std::move(frame));
-                    }
+                    const json& frameJson = frames[frameIndex];
+                    reader.SetContext(std::format("{}frames[{}].", context, frameIndex));
+                    SpriteFrame frame;
+                    reader.Read(frameJson, "name", frame.Name);
+                    reader.Read(frameJson, "durationSeconds", frame.DurationSeconds);
+                    frame.DurationSeconds = std::max(0.0f, frame.DurationSeconds);
+                    if (frameJson.is_object() && frameJson.contains("textureGuid") && frameJson["textureGuid"].is_string())
+                        frame.TextureGuid = GUID(frameJson["textureGuid"].get<std::string>());
+                    reader.Read(frameJson, "u0", frame.U0);
+                    reader.Read(frameJson, "v0", frame.V0);
+                    reader.Read(frameJson, "u1", frame.U1);
+                    reader.Read(frameJson, "v1", frame.V1);
+                    animation.Frames.push_back(std::move(frame));
                 }
-                if (!animation.Name.empty())
-                    m_Animations.push_back(std::move(animation));
             }
+            if (!animation.Name.empty())
+                m_Animations.push_back(std::move(animation));
         }
+    }
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
 
-        SetState(AssetState::Loaded);
-        return true;
-    }
-    catch (const std::exception& e)
-    {
-        Logger::Log::Error("SpriteFrames: failed to parse '{}': {}", GetPath().string(), e.what());
-        m_Animations.clear();
-        SetState(AssetState::Failed);
-        return false;
-    }
+    SetState(AssetState::Loaded);
+    return true;
+}
+
+bool SpriteFrames::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("SpriteFrames: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    m_Animations.clear();
+    SetState(AssetState::Failed);
+    return false;
 }
 
 std::string SpriteFrames::SerializeJson() const

@@ -1,9 +1,9 @@
 ---
 title: Creating render pipelines
-description: How to read, modify and create .rendergraph pipelines, with the file format, how a pipeline loads, the shipped pipelines, and worked deferred and raytracing examples.
+description: How to read, modify, and create .rendergraph pipelines, with the file format, how a pipeline loads, the shipped pipelines, and worked deferred and raytracing examples.
 ---
 
-A render *pipeline* in this engine is the **complete frame-level execution plan** for rendering a view: which passes run, in what order, with what resources, producing what final output. This guide covers reading existing pipelines, modifying them, and creating new ones — including a deferred pipeline and a raytracing/path-tracing pipeline.
+A render *pipeline* in this engine is the **complete frame-level execution plan** for rendering a view: which passes run, in what order, with what resources, producing what final output. This guide covers reading existing pipelines, modifying them, and creating new ones, including a deferred pipeline and a raytracing/path-tracing pipeline.
 
 For individual pass authoring (the pieces a pipeline is made of), see the [recipes section of the rendering architecture guide](rendering-architecture.mdx#writing-a-render-pass-recipes) and [Render graph quick reference](render-graph.mdx). For the broader rendering architecture, see [Rendering architecture](rendering-architecture.mdx).
 
@@ -17,13 +17,13 @@ A pipeline answers these questions for every frame:
 | What passes run, in what order, with what dependencies? | The `passes` array |
 | What is the *final* output the editor / swapchain presents? | The `outputs` block |
 
-The pipeline is **per-project**: a project selects which `.rendergraph` to use (default is `ForwardPlus.rendergraph` shipped with the editor). Different projects can use entirely different pipelines — a stylized 2D project might use a very minimal pipeline; a high-fidelity 3D project uses the full ForwardPlus chain.
+The pipeline is **per-project**: a project selects which `.rendergraph` to use (default is `ForwardPlus.rendergraph` shipped with the editor). Different projects can use entirely different pipelines: a stylized 2D project might use a very minimal pipeline; a high-fidelity 3D project uses the full ForwardPlus chain.
 
 ### Why is this data-driven rather than code?
 
 Three reasons:
 
-1. **Hot-reload.** Editing JSON is instant feedback in the running editor — no rebuild.
+1. **Hot-reload.** Editing JSON is instant feedback in the running editor: no rebuild.
 2. **Variants without recompilation.** A `ForwardPlus_DebugOverlay.rendergraph` can enable cluster visualization without code changes.
 3. **Engine vs Game separation.** Game projects can ship their own pipelines without forking the engine.
 
@@ -142,7 +142,7 @@ Each entry is one pipeline node instantiation:
 }
 ```
 
-`type` is the critical field — it dictates which `IRenderPipelineNode` subclass instantiates. Available built-in types:
+`type` is the critical field: it dictates which `IRenderPipelineNode` subclass instantiates. Available built-in types:
 
 | Type | What it does | Where to find more |
 |---|---|---|
@@ -155,7 +155,7 @@ Each entry is one pipeline node instantiation:
 | `ComputeShader` | JSON-driven generic compute dispatch | `ComputeShaderNode.cpp` |
 | `FullscreenShader` | JSON-driven generic fullscreen pass | `FullscreenShaderNode.cpp` |
 
-**Adding new types** = implementing `IRenderPipelineNode` + registering — see [Add a new node type](customizable-render-pipeline.mdx#add-a-new-node-type).
+**Adding new types** = implementing `IRenderPipelineNode` + registering. See [Add a new node type](customizable-render-pipeline.mdx#add-a-new-node-type).
 
 ### Resource reference grammar
 
@@ -168,13 +168,13 @@ Inside a pass entry, resource refs are strings:
 | `"View.Resolve"` | Per-view final-resolve target (display output) |
 | `"MyResource"` | A resource declared in the pipeline's `resources` block |
 
-Per-view resources are automatically expanded per view by the framework — you reference them by name regardless of how many cameras are active.
+Per-view resources are automatically expanded per view by the framework. You reference them by name regardless of how many cameras are active.
 
 ### Pass ordering
 
 The order of the `passes` array is the order of the frame. The pipeline declares its passes in array order every frame, and the render graph derives the dependencies from the resources each pass reads and writes (if pass A writes resource X and pass B reads it, B runs after A). Put every producer before its consumers.
 
-- `"phase"`: `"EarlySetup"`, `"WorldRender"`, `"PostProcess"`, `"Overlay"`, `"UI"`, `"Finalize"`, `"Present"` or an integer. It only breaks ties among passes that are otherwise ready to run; it does not move a pass ahead of a pass it depends on, or after one that depends on it.
+- `"phase"`: `"EarlySetup"`, `"WorldRender"`, `"PostProcess"`, `"Overlay"`, `"UI"`, `"Finalize"`, `"Present"`, or an integer. It only breaks ties among passes that are otherwise ready to run. It does not move a pass ahead of a pass it depends on, or after one that depends on it.
 - `"tags"` and `"after"` are read from the file but have no effect on the order. `"afterTag"` is not read at all. Order passes by their place in the array instead.
 
 The same rule is stated in [Pass order](customizable-render-pipeline.mdx#pass-order).
@@ -211,8 +211,8 @@ flowchart TD
 Key types in `Engine/Include/Engine/Rendering/Pipeline/RenderPipeline.h`:
 
 - `RenderPipelineCompiler::Compile(asset, registry)` returns a `RenderPipelineBlueprint`, validated against the registered node types and hashed for change detection.
-- `RenderPipelineInstance::SetBlueprint(blueprint)` replaces the active blueprint; the node instances are rebuilt on the next `Declare`.
-- `RenderPipelineInstance::Declare(frame, targets, views)` runs every frame. It walks the blueprint's passes in array order and each node declares its work into that frame's render graph; per-view nodes run once for each view.
+- `RenderPipelineInstance::SetBlueprint(blueprint)` replaces the active blueprint. The node instances are rebuilt on the next `Declare`.
+- `RenderPipelineInstance::Declare(frame, targets, views)` runs every frame. It walks the blueprint's passes in array order and each node declares its work into that frame's render graph. Per-view nodes run once for each view.
 
 Nothing is retained between frames: passes and frame resource handles are declared fresh every frame, and only the node instances and the GPU resources they own persist (see [How the pipeline is used at runtime](customizable-render-pipeline.mdx#how-the-pipeline-is-used-at-runtime)).
 
@@ -246,7 +246,7 @@ Two passes: `World` renders meshes, then `SolidColor` (disabled by default) writ
 
 ## Walkthrough: `ForwardPlus.rendergraph` (the canonical pipeline)
 
-The full production pipeline. Worth reading the whole file (`Engine/Assets/RenderPipelines/ForwardPlus.rendergraph`) end-to-end — it's the most concrete reference for everything below.
+The full production pipeline. Worth reading the whole file (`Engine/Assets/RenderPipelines/ForwardPlus.rendergraph`) end-to-end: it is the most concrete reference for everything below.
 
 ### Frame flow
 
@@ -336,9 +336,95 @@ Per-view buffers:   ClusterBuffer, LightIndexBuffer, ClusterParams, LightBuffer,
 
 - **DepthPrepass** writes depth before world rendering, enabling early-Z rejection
 - **ClusteredLightCull** runs after the prepass with depth available, building per-cluster (16×16 screen tile × 24 depth slice) light index lists
-- **World** pass samples the cluster lists per fragment — only iterating lights that affect this cluster instead of all lights
+- **World** pass samples the cluster lists per fragment: only iterating lights that affect this cluster instead of all lights
 
 This is dramatically more efficient than naive forward rendering for scenes with many lights, while keeping forward's per-material MSAA support and transparency flexibility.
+
+## Scene color and the pre-exposure
+
+`ForwardPlus.rendergraph` and `Web.rendergraph` store scene color multiplied by a factor P, the pre-exposure.
+P is the view's exposure rounded to a power of two.
+A bright noon scene and a dark night scene then use the same part of the half-float range, so dim light keeps its precision.
+
+The `PreExposureSnapshot` pass writes P once per frame, before any pass writes scene color.
+It writes P into the view's `ExposureHistory` buffer.
+The tonemap divides P out again, so the picture on screen does not change.
+A pipeline without the snapshot pass stores scene color at P = 1.
+
+### What a pass must do
+
+A pass that reads or writes scene color binds `ExposureHistory` and includes `Includes/exposure_history.glsl`.
+That include gives three functions:
+
+| Function | Returns | Use |
+|---|---|---|
+| `GE_PreExposure()` | P for this frame | Multiply radiance by it before you write scene color. Divide a scene color value by it before you compare it with an absolute value. |
+| `GE_PreExposureHistoryScale()` | P of this frame divided by P of the previous frame | Multiply a temporal history by it before you blend the history with this frame. Use it only for a history that the previous frame of the view wrote. |
+| `GE_ResolvePreExposure(p)` | `p`, or 1 when `p` is 0 | Read a P value that no snapshot wrote. |
+
+```glsl title="Store radiance at the pre-exposure"
+#define GE_EXPOSURE_HISTORY_BINDING 3
+#include "Includes/exposure_history.glsl"
+
+void main()
+{
+    oColor = vec4(radiance * GE_PreExposure(), 1.0);
+}
+```
+
+In the pipeline file, the pass binds the buffer by name:
+
+```json title="Bind ExposureHistory to a FullscreenShader pass"
+"buffers": { "uExposure": "ExposureHistory" },
+"bufferUsages": { "uExposure": "Storage" }
+```
+
+Each of these mistakes renders wrong by a factor of P:
+
+- A custom `FullscreenShader` writes radiance into scene color and does not multiply by `GE_PreExposure()`.
+- A pass compares scene color with an absolute threshold and does not divide by `GE_PreExposure()`.
+- A `TemporalFullscreenShader` keeps a history of scene color and blends it without a correction for P.
+
+### Temporal histories
+
+A history that a pass wrote at an earlier frame holds the P of that frame.
+The engine's TAA and screen-space reflection nodes multiply their histories by `GE_PreExposureHistoryScale()`.
+If a frame of the view renders without the node, the node discards its history, and the next frame starts a new history.
+
+The `TemporalFullscreenShader` node does not rescale its history.
+Use one of these two methods in your shader:
+
+- Store the history in absolute units: divide by `GE_PreExposure()` before you write the history, and multiply by `GE_PreExposure()` after you read it. This method is correct on every frame.
+- Multiply the history by `GE_PreExposureHistoryScale()` when you read it. This method is correct only when the node reports the history as valid.
+
+The node reports the validity through the push constant that `temporalHistory.validPushConstant` names.
+The value is 1 only when the node wrote the history in the frame immediately before this one, at the same size and for the same world.
+On any other frame the value is 0, and the shader must not read the history.
+
+### The preExposed flag
+
+Set `"preExposed": true` on a texture resource that holds scene color at P.
+The editor's resource capture divides such a texture by P, so a capture shows scene-linear values.
+The flag does not change what renders.
+
+### The clear color of a view without a sky
+
+A clear color is a constant that the CPU sets, and P lives on the GPU.
+The CPU cannot multiply the clear color by P.
+For a view without a sky, the `SkyRender` node adds a pass named `ClearColorBackdrop`.
+The pass draws the clear color over the full view, multiplied by P.
+The world pass then loads the color target and does not clear it.
+
+You do not add `ClearColorBackdrop` to a pipeline file.
+It is part of the `SkyRender` node, and the render graph inspector shows it as `Pipeline.<pipeline>.<SkyRender id>.View<N>.ClearColorBackdrop`.
+The node skips the pass in these cases:
+
+- The view has an active sky. The sky draws the background.
+- The view does not clear its color target.
+- The clear color is black, because black times P is still black.
+
+If your pipeline has the `PreExposureSnapshot` pass, keep the `SkyRender` node before the world pass.
+Without `SkyRender`, a view without a sky stores its clear color without P, and the screen shows that color divided by P.
 
 ## Creating a new pipeline from scratch
 
@@ -527,7 +613,7 @@ flowchart TD
 }
 ```
 
-### What's new compared with ForwardPlus
+### What is new compared with ForwardPlus
 
 | Difference | Effect |
 |---|---|
@@ -537,11 +623,11 @@ flowchart TD
 
 ### What stays the same
 
-- Clustered light culling, light upload, shadow rendering — unchanged
-- Post-process chain — copy as-is from ForwardPlus
-- View targets (`View.Color`, `View.Depth`, `View.Resolve`) — managed by RenderServices
+- Clustered light culling, light upload, shadow rendering: unchanged
+- Post-process chain: copy as-is from ForwardPlus
+- View targets (`View.Color`, `View.Depth`, `View.Resolve`): managed by RenderServices
 
-### Tradeoffs you've just signed up for
+### Tradeoffs you have just signed up for
 
 | Forward+ | Deferred |
 |---|---|
@@ -551,11 +637,11 @@ flowchart TD
 | Higher overdraw cost | Constant overdraw (one lighting evaluation per pixel) |
 | ~equal VRAM | More VRAM (4+ GBuffer targets) |
 
-The engine's existing surface-shader-on-adapter system means transparent geometry can run **both** paths — the deferred adapter for opaques, the forward adapter for transparents. You'd add a `ForwardTransparent` pass after `DeferredLighting` that uses the forward adapter for `MaterialAlphaMode::Blended` materials only.
+The engine's existing surface-shader-on-adapter system means transparent geometry can run **both** paths: the deferred adapter for opaques, the forward adapter for transparents. You would add a `ForwardTransparent` pass after `DeferredLighting` that uses the forward adapter for `MaterialAlphaMode::Blended` materials only.
 
 ## Worked example: a raytracing pipeline
 
-This is the more ambitious case. **The engine does not yet have a complete ray-tracing pipeline** — but the pieces are in place to build one without ripping anything out.
+This is the more ambitious case. **The engine does not yet have a complete ray-tracing pipeline**, but the pieces are in place to build one without ripping anything out.
 
 ### What exists today
 
@@ -608,34 +694,34 @@ flowchart TD
     classDef exists fill:#1a3a2a,stroke:#7bd88f,color:#d8dde6;
 ```
 
-*Raytracing implementation gap — three layers*
+*Raytracing implementation gap: three layers*
 
 ### Layer 1: Rendering module primitives (rendering library)
 
 Additions to `Engine/Modules/Rendering/`:
 
-1. **`IDevice` extensions** — add:
+1. **`IDevice` extensions**. Add:
    - `AccelerationStructureHandle CreateAccelerationStructure(const ASDesc&)`
    - `RayTracingPipelineHandle CreateRayTracingPipeline(const RTPipelineDesc&)`
    - `void BuildSBT(SBTBuffer& out, const RTPipelineHandle&, const SBTLayout&)`
-2. **`CommandList` extensions** — add:
+2. **`CommandList` extensions**. Add:
    - `BindRayTracingPipeline(handle)`
    - `BindAccelerationStructure(set, binding, handle)`
    - `TraceRays(uint32_t width, uint32_t height, uint32_t depth)`
-3. **Vulkan backend** — actually implement the above using `VK_KHR_acceleration_structure` and `VK_KHR_ray_tracing_pipeline`. The DX12 backend can be a follow-up.
-4. **Shader compilation routing** — extend `ShaderCompileService` to handle `.rgen`/`.rmiss`/`.rchit`/`.rahit`/`.rint` files; `shaderc` already compiles these to SPIR-V given the right `shaderc_glsl_*_shader` kind.
-5. **`.shaderpkg` layout** — extend the package format to bundle the RT shader group table alongside the SPIR-V (for SBT construction).
+3. **Vulkan backend**: actually implement the above using `VK_KHR_acceleration_structure` and `VK_KHR_ray_tracing_pipeline`. The DX12 backend can be a follow-up.
+4. **Shader compilation routing**: extend `ShaderCompileService` to handle `.rgen`/`.rmiss`/`.rchit`/`.rahit`/`.rint` files. `shaderc` already compiles these to SPIR-V given the right `shaderc_glsl_*_shader` kind.
+5. **`.shaderpkg` layout**: extend the package format to bundle the RT shader group table alongside the SPIR-V (for SBT construction).
 
 ### Layer 2: Engine glue (RenderServices + pipeline node)
 
 Once primitives exist, add to `Engine/{Include,Source}/Engine/Rendering/`:
 
-1. **`RaytracingRenderFeature`** — owns the SBT, RT pipeline handle, denoiser state, output texture, and the GPU TLAS it exposes to passes (to be built; `SceneTlas` is the CPU picking BVH, not this).
-2. **`RaytracingPassNode`** — new `IRenderPipelineNode`:
+1. **`RaytracingRenderFeature`**: owns the SBT, RT pipeline handle, denoiser state, output texture, and the GPU TLAS it exposes to passes (to be built; `SceneTlas` is the CPU picking BVH, not this).
+2. **`RaytracingPassNode`** (new `IRenderPipelineNode`):
    - Resolves the TLAS via the feature
    - Sets up: reads world data buffers (geometry + materials + textures, all bindless), writes a per-view output color/normal/depth (for denoising)
    - Execute: bind RT pipeline, bind TLAS + descriptors, `cmdTraceRays`
-3. **`DenoisePassNode`** — consumes RT outputs (color + variance + albedo + normal + depth), produces denoised color. Implementation can be a fullscreen shader (SVGF) or a custom node integrating an external denoiser library.
+3. **`DenoisePassNode`**: consumes RT outputs (color + variance + albedo + normal + depth), produces denoised color. Implementation can be a fullscreen shader (SVGF) or a custom node integrating an external denoiser library.
 
 ### Three-layer implementation plan at a glance
 
@@ -649,7 +735,7 @@ RaytracingRenderFeature owns SBT, RT pipeline, denoiser state, output tex. Raytr
 
 #### Layer 3: pipeline JSON
 
-MyRaytracing.rendergraph wires Raytracing -> Denoise -> Composite -> post chain. Trivial once Layers 1+2 exist — pure configuration.
+MyRaytracing.rendergraph wires Raytracing -> Denoise -> Composite -> post chain. Trivial once Layers 1+2 exist: pure configuration.
 
 ### Layer 3: the pipeline JSON
 
@@ -754,7 +840,7 @@ MyRaytracing.rendergraph wires Raytracing -> Denoise -> Composite -> post chain.
 
 :::caution[Persistent across frames]
 
-Note `RT_History` is `scope: Persistent` — temporal denoising requires the previous frame's denoised output to weight the new sample. The render graph will not transient-alias it.
+Note `RT_History` is `scope: Persistent`: temporal denoising requires the previous frame's denoised output to weight the new sample. The render graph does not transient-alias it.
 
 :::
 
@@ -797,50 +883,50 @@ flowchart TD
 
 ### Path-tracing variant
 
-For full path tracing (not just primary-ray RT), the shader does multiple bounces inside the `.rgen`/`.rchit` shaders and the JSON above changes minimally — bump `maxBounces` and `samplesPerPixel`, accept slower frame times. The denoiser handles the variance with temporal accumulation.
+For full path tracing (not just primary-ray RT), the shader does multiple bounces inside the `.rgen`/`.rchit` shaders and the JSON above changes minimally: bump `maxBounces` and `samplesPerPixel`, accept slower frame times. The denoiser handles the variance with temporal accumulation.
 
 ### Engine integration plan
 
 If you implement this, the recommended order is:
 
-1. **Layer 1 primitive work first** — get a hello-world ray tracing demo running against a hand-built RG (no JSON). Pure Vulkan backend extension work.
-2. **Add a TraceRays unit test** — confirm the device + command list flow works.
-3. **Then Layer 2** — `RaytracingRenderFeature` + `RaytracingPassNode`. Now you can describe RT passes in JSON.
-4. **Layer 3 last** — the `.rendergraph` is the easy part once the substrate exists.
+1. **Layer 1 primitive work first**: get a hello-world ray tracing demo running against a hand-built RG (no JSON). Pure Vulkan backend extension work.
+2. **Add a TraceRays unit test**: confirm the device + command list flow works.
+3. **Then Layer 2**: `RaytracingRenderFeature` + `RaytracingPassNode`. Now you can describe RT passes in JSON.
+4. **Layer 3 last**: the `.rendergraph` is the easy part once the substrate exists.
 
-Each layer is testable in isolation. You don't need to commit to the whole stack to start.
+Each layer is testable in isolation. You do not need to commit to the whole stack to start.
 
 ## Switching pipelines at runtime
 
 The editor switches pipelines without a restart:
 
-1. **Render Pipeline → Set Active** in the Assets panel, the project settings or the render pipeline inspector saves the choice and calls `renderServices.Spine().SetActiveRenderPipelinePath(path)` (`Engine/Include/Engine/Rendering/FrameOrchestrator.h`).
+1. **Render Pipeline → Set Active** in the Assets panel, the project settings, or the render pipeline inspector saves the choice and calls `renderServices.Spine().SetActiveRenderPipelinePath(path)` (`Engine/Include/Engine/Rendering/FrameOrchestrator.h`).
 2. At the next frame the spine loads the `.rendergraph`, runs `RenderPipelineCompiler::Compile` and, when the blueprint has no errors, calls `RenderPipelineInstance::SetBlueprint`.
 3. The next `Declare` rebuilds the node instances for the new blueprint and declares its passes. A rejected pipeline leaves the previous one drawing and reports why.
 
-So switching between forward and deferred at runtime is supported; just make sure both pipelines' resources are correctly scoped.
+So switching between forward and deferred at runtime is supported. Just make sure both pipelines' resources are correctly scoped.
 
 ## Validating and debugging pipelines
 
 ### Validate at load time
 
-`RenderPipelineCompiler::Compile` returns `Blueprint::issues` — an array of warnings/errors. Inspect via `Blueprint::HasErrors()`. The Editor logs these on load.
+`RenderPipelineCompiler::Compile` returns `Blueprint::issues`: an array of warnings/errors. Inspect via `Blueprint::HasErrors()`. The Editor logs these on load.
 
 Common issues:
 
 - Unknown `type` (node not registered)
 - Resource referenced by a pass but not declared in `resources`
-- A `DepthPrepass` or `WorldRender` declared before `ViewParamsUpload`: passes are declared in blueprint order and bind their buffers when declared, so a pass above the upload would read the fallback view parameters (no projection, no texture-sharpness bias). The compiler rejects the order; move `ViewParamsUpload` above them.
-- A `TerrainUpload`, `CBTRender` or `TerrainGrass` listed after `DepthPrepass` (a warning): these passes feed the depth prepass, which draws the terrain's and the grass's depth from the buffers they fill this frame, so the compiler declares them just above the first `DepthPrepass`, in their listed order, and reports each one it moved. List them there to clear the warning.
+- A `DepthPrepass` or `WorldRender` declared before `ViewParamsUpload`: passes are declared in blueprint order and bind their buffers when declared, so a pass above the upload would read the fallback view parameters (no projection, no texture-sharpness bias). The compiler rejects the order. Move `ViewParamsUpload` above them.
+- A `TerrainUpload`, `CBTRender`, or `TerrainGrass` listed after `DepthPrepass` (a warning): these passes feed the depth prepass, which draws the terrain's and the grass's depth from the buffers they fill this frame, so the compiler declares them just above the first `DepthPrepass`, in their listed order, and reports each one it moved. List them there to clear the warning.
 
 ### Inspect the live pipeline
 
 When the editor is running:
 
-- **RenderGraph panel** — live list of passes, resources, barriers
-- **RenderPipelineInspector** — shows the active blueprint's structure
-- **VRAM panel** — per-resource memory usage
-- **Visual Profiler panel** — per-pass GPU timings
+- **RenderGraph panel**: live list of passes, resources, barriers
+- **RenderPipelineInspector**: shows the active blueprint's structure
+- **VRAM panel**: per-resource memory usage
+- **Visual Profiler panel**: per-pass GPU timings
 
 ### Render graph debug flags (per-process)
 
@@ -862,9 +948,4 @@ Both are read once per process, in `Engine/Modules/Rendering/Include/Rendering/C
 
 The `Tests/Projects/WASDDemo/` directory contains test projects with their own `.rendergraph` files. You can copy these as starting templates for new pipelines and run them in the demo via the WASD smoke test.
 
-*Pipelines are configuration, not code — and that's the point. When in doubt about adding C++, try JSON first.*
-
-## Changelog
-
-- 2026-10-13: Pass order is the array order (phase is a tiebreak; `tags`, `after` and `afterTag` have no effect); a project's pipeline lives in the project's assets; the load and switch model, the debug variables and the build path match the engine; the Graphviz export, which does not exist, is gone.
-- 2026-10-12: Converted from `Engine/Modules/Rendering/docs/RenderPipelineAuthoring.html`. Links to source files become code paths, and the two references to the deleted RenderPassAuthoring.html point at the architecture guide's recipes.
+*Pipelines are configuration, not code, and that is the point. When in doubt about adding C++, try JSON first.*

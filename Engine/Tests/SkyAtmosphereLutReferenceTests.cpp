@@ -21,6 +21,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Sky/SkyRenderer.h"
+#include "Rendering/Sky/SkySystemConfig.h"
 
 #include "TestDeviceHelper.h"
 
@@ -30,8 +31,10 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -50,6 +53,9 @@ constexpr uint32_t kTransmittanceWidth = 256u;
 constexpr uint32_t kTransmittanceHeight = 64u;
 constexpr uint32_t kMultiscatterSize = 32u;
 constexpr uint32_t kSkyViewSize = 256u;
+
+// The sky-view LUT's production format for the SPIR-V kernels these tests dispatch.
+const TextureFormat kSkyViewFormat = SkyRenderer::SkyViewLutFormat(ShaderSourceKind::SpirV);
 
 // The camera stands 3 m above the ground, on the planet's +Y axis.
 constexpr double kCameraHeight = 3.0;
@@ -327,7 +333,9 @@ uint32_t SkyViewRowAtElevation(double elevationDegrees)
 
 std::string Describe(const Rgb& v)
 {
-    return "(" + std::to_string(v[0]) + ", " + std::to_string(v[1]) + ", " + std::to_string(v[2]) + ")";
+    std::ostringstream text;
+    text << std::setprecision(4) << "(" << v[0] << ", " << v[1] << ", " << v[2] << ")";
+    return text.str();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -358,7 +366,7 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
                                       {2, DescriptorType::UniformBuffer},
                                       {3, DescriptorType::UniformBuffer},
                                       {4, DescriptorType::CombinedImageSampler}},
-                                     0);
+                                     0, kSkyViewFormat);
         m_LookupPipe = MakePipeline("sky_transmittance_lookup_probe", m_LookupLayout,
                                     {{0, DescriptorType::CombinedImageSampler}, {1, DescriptorType::StorageBuffer}},
                                     sizeof(float) * 4u);
@@ -377,7 +385,7 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
         m_Transmittance = MakeLut(kTransmittanceWidth, kTransmittanceHeight, "Transmittance");
         m_Multiscatter = MakeLut(kMultiscatterSize, kMultiscatterSize, "Multiscatter");
         m_NoMultiscatter = MakeLut(kMultiscatterSize, kMultiscatterSize, "NoMultiscatter");
-        m_SkyView = MakeLut(kSkyViewSize, kSkyViewSize, "SkyView");
+        m_SkyView = MakeLut(kSkyViewSize, kSkyViewSize, "SkyView", kSkyViewFormat);
 
         m_AtmoUbo = MakeBuffer(sizeof(AtmosphereParametersGPU), static_cast<uint32_t>(BufferUsage::Uniform),
                                BufferMemoryUsage::Upload, "Atmosphere");
@@ -403,7 +411,8 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
     }
 
     PipelineHandle MakePipeline(const char* shader, DescriptorSetLayoutDesc& layout,
-                                std::vector<std::pair<uint32_t, DescriptorType>> bindings, uint32_t pushBytes)
+                                std::vector<std::pair<uint32_t, DescriptorType>> bindings, uint32_t pushBytes,
+                                TextureFormat storageFormat = TextureFormat::R16G16B16A16_FLOAT)
     {
         const std::string rel = std::string("Shaders/") + shader + ".comp.spv";
         const std::filesystem::path path = GameEngine::Testing::EngineTestShaderPathResolver(rel);
@@ -422,7 +431,7 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
             b.count = 1;
             b.shaderStages = kShaderStageCompute;
             if (type == DescriptorType::StorageImage)
-                b.storageTexelFormat = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+                b.storageTexelFormat = static_cast<uint32_t>(storageFormat);
             if (type == DescriptorType::CombinedImageSampler)
                 b.imageFilterableFloat = true;
             layout.bindings.push_back(b);
@@ -441,12 +450,13 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
         return pipe;
     }
 
-    TextureHandle MakeLut(uint32_t w, uint32_t h, const char* name)
+    TextureHandle MakeLut(uint32_t w, uint32_t h, const char* name,
+                          TextureFormat format = TextureFormat::R16G16B16A16_FLOAT)
     {
         TextureDesc d{};
         d.width = w;
         d.height = h;
-        d.format = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
+        d.format = static_cast<uint32_t>(format);
         d.usage = static_cast<uint32_t>(TextureUsage::UnorderedAccess) |
                   static_cast<uint32_t>(TextureUsage::ShaderResource) |
                   static_cast<uint32_t>(TextureUsage::TransferSrc) | static_cast<uint32_t>(TextureUsage::TransferDst);
@@ -534,10 +544,13 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
         });
     }
 
-    // Reads an rgba16f texture back as rgb doubles, row-major.
-    std::vector<Rgb> ReadBack(TextureHandle tex, uint32_t w, uint32_t h)
+    // Reads an rgba16f or rgba32f texture back as rgb doubles, row-major.
+    std::vector<Rgb> ReadBack(TextureHandle tex, uint32_t w, uint32_t h,
+                              TextureFormat format = TextureFormat::R16G16B16A16_FLOAT)
     {
-        const size_t bytes = static_cast<size_t>(w) * h * 4u * sizeof(uint16_t);
+        const bool wide = format == TextureFormat::R32G32B32A32_FLOAT;
+        const size_t channelBytes = wide ? sizeof(float) : sizeof(uint16_t);
+        const size_t bytes = static_cast<size_t>(w) * h * 4u * channelBytes;
         const BufferHandle readback = MakeBuffer(bytes, static_cast<uint32_t>(BufferUsage::TransferDst),
                                                  BufferMemoryUsage::Readback, "Readback");
         Submit([&](CommandList& cl) {
@@ -547,22 +560,37 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
             cl.Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopySource,
                                                              ResourceState::ShaderResource));
         });
-        std::vector<uint16_t> halfs(bytes / sizeof(uint16_t));
+        std::vector<uint8_t> raw(bytes);
         const void* mapped = m_Device->MapBuffer(readback);
         EXPECT_NE(mapped, nullptr);
         if (mapped)
-            std::memcpy(halfs.data(), mapped, bytes);
+            std::memcpy(raw.data(), mapped, bytes);
         m_Device->UnmapBuffer(readback);
         std::vector<Rgb> out(static_cast<size_t>(w) * h);
         for (size_t i = 0; i < out.size(); ++i)
-            for (int c = 0; c < 3; ++c)
-                out[i][c] = Mathematics::HalfToFloat(halfs[i * 4u + static_cast<size_t>(c)]);
+            for (size_t c = 0; c < 3u; ++c)
+            {
+                const size_t offset = (i * 4u + c) * channelBytes;
+                if (wide)
+                {
+                    float value = 0.0f;
+                    std::memcpy(&value, raw.data() + offset, sizeof(value));
+                    out[i][c] = value;
+                }
+                else
+                {
+                    uint16_t half = 0u;
+                    std::memcpy(&half, raw.data() + offset, sizeof(half));
+                    out[i][c] = Mathematics::HalfToFloat(half);
+                }
+            }
         return out;
     }
 
-    // Runs the sky-view pass for a white unit sun along sunDir, for a camera cameraHeight up, and
-    // returns its texels.
-    std::vector<Rgb> RunSkyView(const double sunDir[3], bool withMultiscatter, double cameraHeight = kCameraHeight)
+    // Runs the sky-view pass for a white sun of the given intensity along sunDir, and a white unit
+    // moon along moonDir when one is given, for a camera cameraHeight up, and returns its texels.
+    std::vector<Rgb> RunSkyView(const double sunDir[3], bool withMultiscatter, double cameraHeight = kCameraHeight,
+                                float sunIntensity = 1.0f, const double* moonDir = nullptr)
     {
         SkyUBOGPU sky{};
         sky.cameraPosition[1] = static_cast<float>(cameraHeight);
@@ -570,8 +598,10 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
         {
             sky.sunDirection[c] = static_cast<float>(sunDir[c]);
             sky.sunColor[c] = 1.0f;
+            sky.moonDirection[c] = moonDir ? static_cast<float>(moonDir[c]) : 0.0f;
         }
-        sky.sunIntensity = 1.0f;
+        sky.sunIntensity = sunIntensity;
+        sky.moonIntensity = moonDir ? 1.0f : 0.0f;
         Upload(m_SkyUbo, &sky, sizeof(sky));
 
         const DescriptorSetHandle ds = MakeSet(m_SkyViewLayout);
@@ -590,7 +620,7 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
             cl.Barrier(ResourceBarrier::CreateTextureBarrier(m_SkyView, ResourceState::UnorderedAccess,
                                                              ResourceState::ShaderResource));
         });
-        return ReadBack(m_SkyView, kSkyViewSize, kSkyViewSize);
+        return ReadBack(m_SkyView, kSkyViewSize, kSkyViewSize, kSkyViewFormat);
     }
 
     // The transmittance LUT read through GE_SkyTransmittanceToTop at each (r, mu).
@@ -879,6 +909,66 @@ TEST_F(SkyAtmosphereLutReferenceTest, TheSkyViewRadianceMatchesTheIntegralWithMu
     }
 }
 
+// The moon lights the night sky as the sun lights the day, from its own direction through the same
+// transmittance, phases and multiple scattering, in the moon's colour (SkySystemConfig::moonColor,
+// sunlight off a surface redder than grey). The sun 30 degrees under contributes nothing, so the night sky toward the
+// moon at the horizon and 10 degrees up is the moon's integral alone.
+TEST_F(SkyAtmosphereLutReferenceTest, TheMoonLightsTheNightSkyFromItsOwnDirection)
+{
+    double sun[3];
+    SunDirection(-30.0, sun);
+    const double moonElevation = 40.0 * kPi / 180.0;
+    const double moon[3] = {-std::cos(moonElevation), std::sin(moonElevation), 0.0};
+    const Rendering::SkySystemConfig config{};
+    const std::vector<Rgb> lut = RunSkyView(sun, true, kCameraHeight, 1.0f, moon);
+    for (const uint32_t row : {kSkyViewSize / 2u, SkyViewRowAtElevation(10.0)})
+    {
+        double dir[3];
+        SkyViewTexelDirection(m_Atmo, 0u, row, dir);
+        Rgb expected = SkyRadiance(m_Atmo, dir, moon, 4096, true);
+        for (int c = 0; c < 3; ++c)
+            expected[c] *= config.moonColor[c];
+        const Rgb& actual = lut[static_cast<size_t>(row) * kSkyViewSize];
+        EXPECT_LT(WorstRatioError(actual, expected), 0.03)
+            << "row " << row << ": LUT " << Describe(actual) << ", the moon's integral " << Describe(expected);
+    }
+}
+
+// In the twilight band both bodies light the sky in the same bake: the sun 6 degrees under and the
+// moon 25 degrees up on the opposite side. Scattering is linear in each source, so the two-source
+// bake is the sum of the sun's bake and the moon's bake at every texel; the moon's share must be a
+// real part of the sky there, or the sum would hold for a bake that drops the moon.
+TEST_F(SkyAtmosphereLutReferenceTest, InTheTwilightBandTheSkyIsTheSumOfTheSunsAndTheMoonsLight)
+{
+    double sun[3];
+    SunDirection(-6.0, sun);
+    const double moonElevation = 25.0 * kPi / 180.0;
+    const double moon[3] = {std::cos(moonElevation), std::sin(moonElevation), 0.0};
+    const std::vector<Rgb> both = RunSkyView(sun, true, kCameraHeight, 1.0f, moon);
+    const std::vector<Rgb> sunOnly = RunSkyView(sun, true, kCameraHeight, 1.0f);
+    const std::vector<Rgb> moonOnly = RunSkyView(sun, true, kCameraHeight, 0.0f, moon);
+
+    double worst = 0.0;
+    size_t worstTexel = 0;
+    for (size_t texel = 0; texel < both.size(); ++texel)
+        for (int c = 0; c < 3; ++c)
+        {
+            const double sum = sunOnly[texel][c] + moonOnly[texel][c];
+            const double error = std::abs(both[texel][c] - sum) / std::max(sum, 1e-30);
+            if (error > worst)
+            {
+                worst = error;
+                worstTexel = texel;
+            }
+        }
+    const size_t zenith = static_cast<size_t>(SkyViewRowAtElevation(89.0)) * kSkyViewSize;
+    const double moonShareAtZenith = moonOnly[zenith][1] / std::max(both[zenith][1], 1e-30);
+    EXPECT_LT(worst, 1e-4) << "texel " << worstTexel << ": both " << Describe(both[worstTexel]) << ", sun "
+                           << Describe(sunOnly[worstTexel]) << " + moon " << Describe(moonOnly[worstTexel]);
+    EXPECT_GT(moonShareAtZenith, 0.05) << "the moon's share of the zenith's green, " << moonShareAtZenith
+                                       << ", is too small for the sum to say anything about the moon";
+}
+
 // A camera 30 km up sees the sky down to the planet's horizon, 5.6 degrees below the horizontal:
 // 3 degrees down, the view ray grazes the air 21 km up. A bake that folds every texel below the
 // horizontal up to it reads the thin air above the camera there instead, 0.26x to 0.31x this.
@@ -980,4 +1070,50 @@ TEST_F(SkyAtmosphereLutReferenceTest, TheSkyViewReadsTheMultiscatterTexelTheBake
             << "height " << queries[i][1] << " of the shell: read row " << got[i][1] << ", the bake wrote row "
             << want[i][1] << " there";
     }
+}
+
+// A moonless night sky is about 1.7e-4 cd/m2 (Leinert et al. 1998): 8.4e-7 scene-linear on the
+// 203-nit anchor, below binary16's smallest normal, 6.1e-5. The sky-view march is linear in the
+// sun's intensity, so a sun dimmed until the zenith texel holds that level makes the real pass
+// write a night radiance into the LUT. Every texel must then read back as the day sky times the
+// dimming, within 1 %. A binary16 LUT keeps such values only as subnormals, 6e-8 apart (about 7 %
+// of the zenith's level), or flushes them to 0.
+TEST_F(SkyAtmosphereLutReferenceTest, ANightRadianceBelowTheHalfFloatFloorReadsBackWithinOnePercent)
+{
+    constexpr double kNightZenithRadiance = 1.7e-4 / 203.0;
+    constexpr double kHalfSmallestNormal = 6.103515625e-5;
+
+    double sun[3];
+    SunDirection(41.6, sun);
+    const std::vector<Rgb> day = RunSkyView(sun, true);
+    const Rgb& dayZenith = day[static_cast<size_t>(kSkyViewSize - 1u) * kSkyViewSize + kSkyViewSize / 2u];
+    const double dimming = kNightZenithRadiance / std::max({dayZenith[0], dayZenith[1], dayZenith[2]});
+
+    double brightest = 0.0;
+    for (const Rgb& texel : day)
+        brightest = std::max({brightest, texel[0], texel[1], texel[2]});
+    ASSERT_LT(brightest * dimming, kHalfSmallestNormal) << "the dimmed sky must lie wholly below the binary16 floor";
+
+    const std::vector<Rgb> night = RunSkyView(sun, true, kCameraHeight, static_cast<float>(dimming));
+    double worst = 0.0;
+    size_t worstTexel = 0u;
+    size_t outside = 0u;
+    for (size_t i = 0; i < day.size(); ++i)
+    {
+        if (day[i][0] <= 0.0 || day[i][1] <= 0.0 || day[i][2] <= 0.0)
+            continue;
+        const Rgb expected{day[i][0] * dimming, day[i][1] * dimming, day[i][2] * dimming};
+        const double error = WorstRatioError(night[i], expected);
+        if (error > 0.01)
+            ++outside;
+        if (error > worst)
+        {
+            worst = error;
+            worstTexel = i;
+        }
+    }
+    const Rgb& zenith = night[static_cast<size_t>(kSkyViewSize - 1u) * kSkyViewSize + kSkyViewSize / 2u];
+    EXPECT_EQ(outside, 0u) << outside << " of " << day.size() << " texels are more than 1 % off; the worst, texel "
+                           << worstTexel << ", is " << worst * 100.0 << " % off: read " << Describe(night[worstTexel])
+                           << ". The zenith reads " << Describe(zenith) << " for " << kNightZenithRadiance;
 }

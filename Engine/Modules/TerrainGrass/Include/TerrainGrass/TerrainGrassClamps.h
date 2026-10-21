@@ -11,12 +11,14 @@
 // This is not every bound in the editor, and deliberately so. TerrainInspector.cpp carries its
 // own per-widget limits — slider travel, step size, display ranges — which are choices about how
 // far a drag goes, not statements about which values are storable; those stay with the widgets.
-// What belongs here is the subset that is true of the DATA: the per-field ranges below, plus the
+// What belongs here is the subset that is true of the DATA: the per-field ranges below (the two
+// densities are capped at the per-cell slot ceiling, past which a value cannot render), plus the
 // atlas invariant relating three fields to each other, which the inspector enforced alone until
 // every other writer could set a tile count no atlas grid could address.
 
 #include "Components/Terrain/TerrainGrass.h"
 #include "Terrain/TerrainTypes.h"
+#include "TerrainGrass/GrassPlacementModel.h"
 
 #include <algorithm>
 
@@ -31,6 +33,9 @@ inline constexpr float32 kMinWindGustScale = 0.0001f;
 inline constexpr uint32 kMinGrassAtlasDimension = 1u;
 inline constexpr uint32 kMaxGrassAtlasDimension = 16u;
 inline constexpr uint32 kMinGrassAtlasTileCount = 1u;
+// Twice the physical canopy shade: the most the dial asks for. The depth itself is capped
+// at kTerrainGrassCanopyOcclusionMax whatever the dial says.
+inline constexpr float32 kMaxGrassCanopyShade = 2.0f;
 
 // Bring every field of `grass` inside its valid range.
 //
@@ -40,16 +45,22 @@ inline constexpr uint32 kMinGrassAtlasTileCount = 1u;
 // refs, the enum) are deliberately absent.
 inline void ClampFields(Components::TerrainGrass& grass)
 {
-    grass.BladesPerSquareMeter = std::max(0.0f, grass.BladesPerSquareMeter);
+    grass.BladesPerSquareMeter =
+        std::clamp(grass.BladesPerSquareMeter, 0.0f, kGrassMaxBladesPerSquareMeter);
     grass.Range = std::max(0.0f, grass.Range);
     grass.DensityFalloff = std::max(0.0f, grass.DensityFalloff);
     grass.ClumpSize = std::max(0.0f, grass.ClumpSize);
     grass.ClumpHeightVariance = std::clamp(grass.ClumpHeightVariance, 0.0f, 1.0f);
     grass.ClumpAlignment = std::clamp(grass.ClumpAlignment, 0.0f, 1.0f);
-    grass.ClumpGather = std::clamp(grass.ClumpGather, 0.0f, 1.0f);
+    grass.ClumpTaper = std::clamp(grass.ClumpTaper, 0.0f, 1.0f);
     grass.BladeHeight = std::max(0.0f, grass.BladeHeight);
     grass.BladeWidth = std::max(0.0f, grass.BladeWidth);
-    grass.MaxWidthRatio = std::max(0.0f, grass.MaxWidthRatio);
+    grass.BladeTilt = std::clamp(grass.BladeTilt, 0.0f, Components::kMaxTerrainGrassBladeTilt);
+    grass.BladeBend = std::clamp(grass.BladeBend, 0.0f, Components::kMaxTerrainGrassBladeBend);
+    grass.BladeTwist = std::clamp(grass.BladeTwist, 0.0f, Components::kMaxTerrainGrassBladeTwist);
+    grass.BladeTaperStart =
+        std::clamp(grass.BladeTaperStart, 0.0f, Components::kMaxTerrainGrassBladeTaperStart);
+    grass.TuftFan = std::clamp(grass.TuftFan, 0.0f, Components::kMaxTerrainGrassTuftFan);
     grass.BladeSegments = std::clamp(grass.BladeSegments,
                                      Components::kMinTerrainGrassBladeSegments,
                                      Components::kMaxTerrainGrassBladeSegments);
@@ -64,16 +75,15 @@ inline void ClampFields(Components::TerrainGrass& grass)
     grass.Brightness = std::max(0.0f, grass.Brightness);
     grass.RandomBrightness = std::max(0.0f, grass.RandomBrightness);
     grass.HueVariation = std::clamp(grass.HueVariation, 0.0f, 1.0f);
-    grass.RootShade = std::clamp(grass.RootShade, 0.0f, 1.0f);
     grass.RootFadeStart = std::clamp(grass.RootFadeStart, Components::kMinTerrainGrassRootFadeStart,
                                      1.0f - Components::kMinTerrainGrassRootFadeSpan);
     grass.RootFadeEnd = std::clamp(grass.RootFadeEnd,
                                    grass.RootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f);
-    grass.BladeNormalForm = std::clamp(grass.BladeNormalForm, 0.0f, 1.0f);
-    grass.BladeScatterGain = std::max(0.0f, grass.BladeScatterGain);
     grass.GroundingStrength = std::clamp(grass.GroundingStrength, 0.0f, 1.0f);
-    grass.Translucency = std::max(0.0f, grass.Translucency);
-    grass.TextureCardsPerSquareMeter = std::max(0.0f, grass.TextureCardsPerSquareMeter);
+    grass.CanopyShade = std::clamp(grass.CanopyShade, 0.0f, kMaxGrassCanopyShade);
+    grass.Translucency = std::clamp(grass.Translucency, 0.0f, Components::kMaxTerrainGrassTranslucency);
+    grass.TextureCardsPerSquareMeter =
+        std::clamp(grass.TextureCardsPerSquareMeter, 0.0f, kGrassMaxBladesPerSquareMeter);
     grass.TextureSize = std::max(0.0f, grass.TextureSize);
     grass.AtlasColumns =
         std::clamp(grass.AtlasColumns, kMinGrassAtlasDimension, kMaxGrassAtlasDimension);

@@ -16,7 +16,7 @@ The texture's asset metadata stores these values:
 
 | Key | Value |
 | --- | --- |
-| `assets.texture.alphaCoverage` | Absent or `0` disables correction; `1` enables it. |
+| `assets.texture.alphaCoverage` | Absent or `0` disables correction. `1` enables it. |
 | `assets.texture.alphaCutoff` | Finite decimal in `[0, 1]`; absent uses `0.5`. |
 
 An invalid enable token or an invalid cutoff while enabled refuses the upload
@@ -25,10 +25,10 @@ use the normal recook and upload replacement path.
 
 Use decoded LDR source images with alpha-preserving compression: **None**, **BC7**,
 or **Auto** with Color, Packed, or unknown usage. Normal and HDR inputs are
-unsupported. Explicit BC1, BC4, BC5 and BC6H requests are refused even when the
+unsupported. Explicit BC1, BC4, BC5, and BC6H requests are refused even when the
 current device would resolve those formats to uncompressed storage. Authored
 KTX/DDS mip chains and SVG rasterization do not use this source-image policy.
-No source-image decoder means enabled coverage is unavailable; a dummy texture
+No source-image decoder means enabled coverage is unavailable. A dummy texture
 cannot stand in for successful correction.
 
 ## What correction guarantees
@@ -52,7 +52,7 @@ Mip disabling and mip limits use their own settings.
 
 This is a precompression texel-space guarantee. BC7 encoding and
 bilinear/trilinear sampling can change measured coverage. Reference tests report
-those effects separately; the policy does not guarantee a particular silhouette
+those effects separately. The policy does not guarantee a particular silhouette
 at every camera distance, sample phase, material tint, vertex alpha, or cutoff.
 
 Disabled settings leave the cook configuration key and bytes unchanged. An
@@ -63,19 +63,15 @@ and subsequent cooked artifacts use the same correction implementation.
 ## Verification targets
 
 `EngineTextureTests` includes the CPU policy, independent
-coverage oracle, cache invalidation and corrupt-source tests.
+coverage oracle, cache invalidation, and corrupt-source tests.
 `TextureAlphaCoverageGpuTests` separately initializes a disposable EngineCore
 workspace and exercises raw/cooked uploads, queued failure recovery, and masked
 cards through the 1×1 tail. Cook-dependent cases require KTX. GPU cases can skip
-on an unavailable Vulkan device or BC7 encoder; an acceptance run must check its
+on an unavailable Vulkan device or BC7 encoder. An acceptance run must check its
 actual skip count before claiming that coverage.
 
 The raw/cooked GPU comparison requires identical RGBA values between both paths.
 Its additional analytical sRGB check bounds hardware conversion by adjacent
-encoded source codes; it does not require exact agreement with a CPU `pow`.
+encoded source codes. It does not require exact agreement with a CPU `pow`.
 Alpha is compared directly. BC7 decoder comparisons have separate tolerances.
 These tests do not enable the policy on any shipped foliage asset.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/TextureAlphaCoverage.md`; five mentions of "existing" settings and paths reworded to state what applies.

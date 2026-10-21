@@ -198,6 +198,22 @@ struct DeclaredReadback
 
 // Region (0,0,0,0) means full texture extent. Regions are clamped to the
 // source desc; a region clamped to nothing fails the declare.
+// A copy leaves the image TRANSFER_SRC. An imported texture is claimed again at its import layout
+// next frame (an external import at its owner's resting state, a pool import at the tracked
+// layout), so a copy as its last access would leave the next frame's first sampled read on an
+// image in the wrong layout (VUID-vkCmdDraw-None-09600). A texture imported sampled therefore gets
+// that layout back after the copy: the graph emits one trailing transition. An export contract
+// already on the texture stays authoritative, and a texture imported at CopySource needs nothing.
+void RestoreImportLayoutAfterCopy(RenderGraph::RGFrame& frame, RenderGraph::RGTexture src)
+{
+    const RenderGraph::RGGraph& graph = frame.Graph();
+    if (!graph.IsImported(src.Id) || graph.ExportLayout(src.Id) != RenderGraph::RGImageLayout::Undefined)
+        return;
+    const RenderGraph::RGImageLayout claimed = graph.ImportLayout(src.Id);
+    if (claimed == RenderGraph::RGImageLayout::ShaderReadOnly || claimed == RenderGraph::RGImageLayout::General)
+        frame.MarkOutput(src, claimed);
+}
+
 DeclaredReadback DeclareReadbackPass(IDevice* device, RenderGraph::RGFrame& frame, RenderGraph::RGTexture src,
                                      const char* debugName, uint32_t srcX = 0, uint32_t srcY = 0,
                                      uint32_t regionW = 0, uint32_t regionH = 0)
@@ -245,6 +261,7 @@ DeclaredReadback DeclareReadbackPass(IDevice* device, RenderGraph::RGFrame& fram
             if (tex.IsValid())
                 ctx.Cmd->CopyTextureToBuffer(tex, buffer, w, h, srcX, srcY, 0, rowPitch);
         });
+    RestoreImportLayoutAfterCopy(frame, src);
 
     out.Buffer = buffer;
     out.Width = w;
@@ -317,6 +334,7 @@ DeclaredReadback DeclareSubresourceReadbackPass(IDevice* device, RenderGraph::RG
                 ctx.Cmd->CopyTextureSubresourceToBuffer(tex, mip, layer, buffer, w, h,
                                                         srcX, srcY, 0, rowPitch);
         });
+    RestoreImportLayoutAfterCopy(frame, src);
 
     out.Buffer = buffer;
     out.Width = w;
@@ -529,19 +547,8 @@ std::shared_ptr<RGReadbackTicket> RequestDeviceTextureReadbackRG(IDevice* device
         importName.c_str(), texture, currentState, device->GetTextureFormat(texture));
     if (!src.IsValid())
         return nullptr;
-    // Round-trip the import claim: the copy leaves the image TRANSFER_SRC, but
-    // the caller keeps treating it as `currentState` and the next capture
-    // imports at that state again — under the graph-authoritative oldLayout
-    // rule that stale claim records a transition whose oldLayout mismatches
-    // the image's actual layout. A contractual export restores the declared
-    // layout after the last access. Only ShaderReadOnly/General are export
-    // contracts; a caller declaring CopySource needs no restore (the copy
-    // leaves exactly that), and same-frame dedup shares one contract (both
-    // capture-class importers declare the texture's resting sampled state).
-    const RenderGraph::RGImageLayout declared = RenderGraph::ToImageLayout(currentState);
-    if (declared == RenderGraph::RGImageLayout::ShaderReadOnly ||
-        declared == RenderGraph::RGImageLayout::General)
-        frame.MarkOutput(src, declared);
+    // The caller keeps treating the texture as `currentState`; the readback gives the copy's
+    // TRANSFER_SRC back as that layout (RestoreImportLayoutAfterCopy).
     return RequestTextureReadbackRG(device, frame, src, debugName);
 }
 

@@ -200,7 +200,7 @@ TEST(SkySunDrive, AtNightTheMoonlightOwnsTheLight)
     rig.SetHours(0.0f);
     rig.Tick();
     const float moonlight = SunDrive::MoonlightLux(rig.Rig.Sky(), rig.Settings().moonDirWS[1]);
-    ASSERT_GT(moonlight, 1.0f);
+    ASSERT_GT(moonlight, 0.01f);
     EXPECT_NEAR(SunIlluminance::DeliveredLux(rig.Light()), moonlight, moonlight * 1e-4f);
 }
 

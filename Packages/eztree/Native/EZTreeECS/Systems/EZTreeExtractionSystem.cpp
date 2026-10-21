@@ -606,9 +606,9 @@ void SubmitPart(Engine::Renderer::RenderServices& renderServices,
         instance.normalMatrixCol2,
         &mirrored);
     instance.normalMatrixCol0 = Rendering::Vector3(normalColumn0.x, normalColumn0.y, normalColumn0.z);
-    // EZTree has a fixed layer-1 contract, shared by CPU submission and GPU culling.
-    constexpr uint32 kRenderLayerMask = 1u;
-    instance.renderLayerMask = kRenderLayerMask;
+    // EZTree draws on the default layer (layer 0), shared by CPU submission and GPU culling.
+    constexpr Rendering::RenderLayerMask kRenderLayers = Rendering::RenderLayerMask::Default();
+    instance.renderLayerMask = kRenderLayers.Bits;
     instance.meshIndex = meshIndex;
     instance.materialIndex = materialIndex;
     const uint64 worldId = world.GetWorldId();
@@ -651,7 +651,7 @@ void SubmitPart(Engine::Renderer::RenderServices& renderServices,
     {
         if (view.worldId != 0 && view.worldId != world.GetWorldId())
             continue;
-        if ((kRenderLayerMask & view.renderLayerMask) == 0u)
+        if (!kRenderLayers.Intersects(view.ActiveRenderLayerMask()))
             continue;
 
         Engine::Renderer::WorldSubmissionRecord sub{};
@@ -659,7 +659,7 @@ void SubmitPart(Engine::Renderer::RenderServices& renderServices,
         sub.meshHandle = meshHandle;
         sub.material = material;
         sub.instanceIndex = instanceIndex;
-        sub.renderLayerMask = kRenderLayerMask;
+        sub.renderLayerMask = kRenderLayers;
         sub.flags = instance.flags;
         submissions.push_back(sub);
     }

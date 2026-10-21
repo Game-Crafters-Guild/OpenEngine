@@ -10,9 +10,9 @@ This document describes how InitializeOnLoad (IoL) works in the Editor and other
 ## High-level picture
 
 - IoL allows scripts to mark static methods with `[InitializeOnLoad]`.
-- When the Editor boots (and when it hot-reloads scripts), IoL methods are discovered and invoked by **GameEngine.HotReload** running inside **GameEngine.CoreBridge**.
-- IoL methods can call `Console.WriteLine`; at runtime this is redirected through **EngineLogWriter** into native logging (`GE_Log` → `Logger::Log`).
-- Engine-owned content is staged with the application; project scripts belong to the open project:
+- When the Editor boots (and when it hot-reloads scripts), **GameEngine.HotReload**, running inside **GameEngine.CoreBridge**, discovers and invokes IoL methods.
+- IoL methods can call `Console.WriteLine`. At runtime this is redirected through **EngineLogWriter** into native logging (`GE_Log` → `Logger::Log`).
+- Engine-owned content is staged with the application. Project scripts belong to the open project:
   - On Windows, managed core assemblies are next to `Editor.exe` in `build/<preset>/bin/<Config>/Apps/Editor`.
   - Project script sources: `<project>/Assets`.
   - Project script output: `<project>/ScriptAssemblies/GameEngine.Scripts.dll`.
@@ -100,8 +100,8 @@ If you are writing a new host (other than the Editor):
    - If the host configures the logger, share its state with the ABI through `GE_SetHostLoggerState` before managed code logs. Configuring an independent logger copy does not configure the ABI copy.
 
 2. **Understand the bridge behavior:**
-   - If your host shares a logger state that already has sinks before any `GE_Log` calls, the bridge will **not** attach a `FileSink` or read `GE_LOGFILE`.
-   - If you do not configure sinks and `GE_LOGFILE` is set, the bridge will attach a `FileSink` for you on first `GE_Log`.
+   - If your host shares a logger state that already has sinks before any `GE_Log` calls, the bridge does **not** attach a `FileSink` or read `GE_LOGFILE`.
+   - If you do not configure sinks and `GE_LOGFILE` is set, the bridge attaches a `FileSink` for you on first `GE_Log`.
 
 3. **Console redirection is opt-in:**
    - IoL console redirection (via `EngineLogWriter`) is currently wired for the Editor.
@@ -153,7 +153,3 @@ When IoL logs do not appear where expected:
 ## Related scripting ABI pages
 
 - **Scripting ABI spec:** [Scripting ABI](../contributing/scripting-abi.mdx) describes the C ABI surface (including `GE_Log` and ECS helpers) that IoL and logging ultimately route through.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/scripting/InitializeOnLoadAndLogging.md`; section numbers dropped from the headings.

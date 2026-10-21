@@ -65,6 +65,7 @@ function(_ge_engine_public_interface_lists)
         "RenderServices|<src>/Engine/Modules/VolumetricFog/Include|#3695"
         "RenderServices|<src>/Engine/ECSModules/Rendering/Include|#3695"
         "Graph|<src>/Engine/Modules/Rendering/Include|#3695"
+        "Particles|<src>/Engine/Modules/Rendering/Include|Components/Rendering/ParticleRenderer.h (Rendering/RenderLayerMask.h)"
         "PathfindingECS|$<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>|#3695"
     )
     set(_GE_PUBLIC_DEFINITIONS "${_GE_PUBLIC_DEFINITIONS}" PARENT_SCOPE)

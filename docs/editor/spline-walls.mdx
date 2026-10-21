@@ -17,7 +17,7 @@ A **Spline Wall** is a wall you draw. Place a spline, add the **Spline Wall** co
 :::
 
 :::tip[Nothing else to set]
-A plain wall needs no settings. The spline's width does not affect the wall; its thickness is the component's **Thickness**. Edits rebuild the wall a quarter of a second after you stop dragging.
+A plain wall needs no settings. The spline's width does not affect the wall. Its thickness is the component's **Thickness**. Edits rebuild the wall a quarter of a second after you stop dragging.
 :::
 
 ## Settings
@@ -44,15 +44,15 @@ The two faces meet on one sharp vertical edge, and the top meets on the miter li
 :::
 
 :::card[Round]
-The outside of the corner sweeps an arc, and the inside meets at a point. Use it for earthworks, hedges and rounded bastions. This is what a wall on a curved spline starts with.
+The outside of the corner sweeps an arc, and the inside meets at a point. Use it for earthworks, hedges, and rounded bastions. This is what a wall on a curved spline starts with.
 :::
 
 ::::
 
-Adding the component picks the corner from the spline's type at that moment. Changing the spline's type afterwards leaves your choice alone, and resetting the component restores the values it had when you first selected it, not a corner picked again from the type.
+Adding the component picks the corner from the spline's type at that moment. Changing the spline's type afterwards leaves your choice alone. Resetting the component restores the values it had when you first selected it, not a corner picked again from the type.
 
 :::caution[Turns sharper than 120 degrees are always round]
-A mitered corner on a very sharp turn would reach out toward infinity, so a turn past 120 degrees is built round even with **Corner** set to **Mitre**, and the log says so, naming the point. Its inside meets where the two inside faces cross. On a leg too short to reach that point, the inside narrows toward the corner instead.
+A mitered corner on a very sharp turn would reach out toward infinity, so a turn past 120 degrees is built round even with **Corner** set to **Mitre**. The log says so, naming the point. Its inside meets where the two inside faces cross. On a leg too short to reach that point, the inside narrows toward the corner instead.
 :::
 
 ## Slopes
@@ -66,7 +66,7 @@ The top runs parallel to the ground, as a hedge or a palisade does. This is the 
 :::
 
 :::card[Stepped]
-The top of each stretch between two points is level, at **Height** above that stretch's highest ground, and the wall steps up or down where two stretches meet, as coursed masonry does. No part of the wall is shorter than **Height**; it grows taller toward the downhill end of each stretch. Put a point wherever you want a step.
+The top of each stretch between two points is level, at **Height** above that stretch's highest ground. The wall steps up or down where two stretches meet, as coursed masonry does. No part of the wall is shorter than **Height**. It grows taller toward the downhill end of each stretch. Put a point wherever you want a step.
 :::
 
 ::::
@@ -98,15 +98,11 @@ Each problem is logged once, naming the wall and the point, with the fix. Rebuil
 | A point is too close to the end of the wall for its corner. | Lengthen the end leg or thin the wall. |
 | Two points turn the same way too close together. | Lengthen the leg between them or thin the wall. |
 | The curve between two points bends tighter than half the wall's thickness, so the inside face folds there. | Widen the curve or thin the wall. |
-| Thickness or Height is below 0.05 m. | Set at least 0.05 m; the wall is built at that size until you do. |
+| Thickness or Height is below 0.05 m. | Set at least 0.05 m. The wall is built at that size until you do. |
 
 ## Limits
 
 - The wall is built in the editor. It is saved with the scene as its settings, not as a mesh, and a game built from the scene does not generate it.
 - The wall has no collider yet: characters and physics objects pass through it.
-- Towers, gates and battlements are not part of the wall. Place kit pieces for them by hand.
+- Towers, gates, and battlements are not part of the wall. Place kit pieces for them by hand.
 - A spline longer than 4096 m is followed less closely past that length, and the log says so.
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/Editor/spline-walls.html`; American spelling in the prose (the **Mitre** value keeps the name the editor shows).

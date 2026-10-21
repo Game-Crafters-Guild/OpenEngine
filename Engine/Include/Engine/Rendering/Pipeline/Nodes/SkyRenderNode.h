@@ -1,14 +1,12 @@
 #pragma once
 
+#include "Engine/Rendering/Pipeline/Nodes/ClearColorBackdrop.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Sky/SkyRenderer.h"
-#include "Rendering/Sky/StarSparkleEnergy.h"
 
-#include <array>
-#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -38,13 +36,25 @@ class SkyRenderNode final : public IRenderPipelineNode
     // reflected binding slots. Cached as members so the per-frame execute
     // callbacks never heap-allocate a bindings vector (the property the old
     // static Get*DSD() helpers preserved).
-    void EnsureDescriptorSetDescs(const Rendering::SkyRenderer::SkyBindingSlots& slots);
+    void EnsureDescriptorSetDescs(const Rendering::SkyRenderer& renderer);
+
+    // The height fog's sky fill for one view: whether the sky and the stars draw their height fog
+    // variants, and the buffers and the sampler those bind.
+    struct SkyHeightFog
+    {
+        bool Active = false;
+        PipelineBufferBindingRG ViewParams{};
+        PipelineBufferBindingRG Params{};
+        Rendering::SamplerHandle BackdropSampler{};
+    };
+    // Active when the view's height fog is active (HeightFogPassKeyword), the variants were built and
+    // the view's graph published the ViewParams and HeightFogParams buffers.
+    static SkyHeightFog ResolveSkyHeightFog(ViewDeclare& d, const Rendering::SkyRenderer& renderer);
 
     Rendering::BufferHandle GetOrCreatePerViewSkyUBO(Rendering::IDevice* dev, uint32_t viewKey, uint32_t slot);
-
-    // The star's energy gains for the settings' Sparkle Points, Core Size and Glow Falloff,
-    // recomputed only when one of them changes (ComputeStarSparkleEnergy integrates numerically).
-    Rendering::StarSparkleEnergy StarSparkleEnergyFor(const Rendering::SkySettings& settings);
+    void RecordStars(Rendering::RenderGraph::RGContext& passCtx, Rendering::SkyRenderer& renderer, uint32_t viewKey,
+                     uint32_t vpX, uint32_t vpY, uint32_t vpW, uint32_t vpH, const PipelineBufferBindingRG& exposure,
+                     const PipelineBufferBindingRG& compensation, uint32_t starCount, const SkyHeightFog& fog);
 
     std::string m_Id;
     std::string m_Json;
@@ -68,19 +78,15 @@ class SkyRenderNode final : public IRenderPipelineNode
     Rendering::IDevice* m_Device = nullptr;
     bool m_WarnedNoComponent = false;
 
-    // Transient descriptor set descs, built once from reflected binding slots.
+    // The background of a view whose sky draws nothing: its clear colour at the frame's pre-exposure.
+    ClearColorBackdrop m_ClearColorBackdrop;
+
+    // The LUT passes' transient descriptor set descs, built once from reflected binding slots. The
+    // sky and star passes bind the renderer's (SkyRenderer::GetSkyRenderSetDesc).
     bool m_DescriptorSetDescsBuilt = false;
     Rendering::DescriptorSetDesc m_TransmittanceDSD;
     Rendering::DescriptorSetDesc m_MultiscatterDSD;
     Rendering::DescriptorSetDesc m_SkyViewLutDSD;
-    Rendering::DescriptorSetDesc m_SkyRenderDSD;
-    Rendering::DescriptorSetDesc m_StarBillboardDSD;
-
-    // Inputs of the cached star energy gains; NaN until the first computation, so it never matches.
-    std::array<float, 3> m_StarSparkleEnergyInputs{std::numeric_limits<float>::quiet_NaN(),
-                                                 std::numeric_limits<float>::quiet_NaN(),
-                                                 std::numeric_limits<float>::quiet_NaN()};
-    Rendering::StarSparkleEnergy m_StarSparkleEnergy;
 };
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

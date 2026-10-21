@@ -13,6 +13,8 @@ class PhysicsWorldService
 {
 public:
     static void Initialize(const Physics::PhysicsWorldSettings& settings = {});
+    // Ends every entity event subscription (PhysicsEntityEventCallbacks::ClearAll), then destroys
+    // the world.
     static void Shutdown();
 
     static Physics::PhysicsWorld& Get();

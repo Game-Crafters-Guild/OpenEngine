@@ -10,7 +10,7 @@
 
 #include "AssetCore/Asset.h"         // SharedPtr<Asset> in PendingGpuUpload
 #include "Assets/AssetManager.h"     // AssetLoadHandle in m_TextureLoadHandles
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
+#include "Image/PixelImage.h"
 #include "Engine/Rendering/CpuTextureSource.h"
 #include "Engine/Rendering/MaterialBindingCache.h"
 #include "Engine/Rendering/TextureGPUCache.h"
@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "Rendering/Utils/CubeLutGpuBinding.h"
 
 namespace GameEngine
 {
@@ -65,19 +66,7 @@ enum class SlotDefaultTexture : uint8_t;
 class MaterialRegistry;
 struct PostProcessSettings;
 
-// GPU-backed Resolve .cube LUT (3D + optional 1D strip). Used by fullscreen passes.
-struct CubeLutGpuBindingState
-{
-    TextureHandle Lut3D{};
-    TextureHandle Lut1DStrip{};
-    int32 Size3D = 0;
-    int32 Size1D = 0;
-    int32 Flags = 0; // bit0 = has 3D, bit1 = has 1D
-    float In1DMin = 0.0f;
-    float In1DMax = 1.0f;
-    float In3DMin = 0.0f;
-    float In3DMax = 1.0f;
-};
+using ::GameEngine::Rendering::CubeLutGpuBindingState;
 
 class TextureService
 {
@@ -236,7 +225,12 @@ class TextureService
     void DeclareTextureClassification(const GUID& textureGuid, TextureColorSpace colorSpace,
                                       TextureCookUsage usage);
 
-    // Upload a texture asset to the GPU (cached by GUID). Invalid handle on failure.
+    // The GPU texture of a texture asset (cached by GUID); an invalid handle while it is not
+    // uploaded, and after a failure. A source the import cook reads (PNG, JPG, TGA, HDR, ...)
+    // never loads on the calling thread: a miss starts its AssetManager load, which adopts the
+    // cooked artifact or cooks it on a worker, and FlushPendingUploads uploads it; the caller
+    // samples its default meanwhile and asks again next frame. DDS, KTX2 and SVG, and every
+    // texture when no engine runs, upload synchronously on the calling thread.
     TextureHandle GetOrUpload(const GUID& textureGuid);
 
     // True when this texture's sampled alpha is provably 1.0 over every texel, so a consumer's
@@ -279,8 +273,9 @@ class TextureService
     // AssetManager::StartAsyncReload) so a cook-setting change (compression /
     // usage / mips meta) rebuilds the cached artifact; the reload's
     // AssetReloaded event then evicts + re-uploads. No-op while the asset
-    // isn't resident — the next load cooks with fresh meta anyway.
-    void RequestRecook(const GUID& textureGuid);
+    // isn't resident — the next load cooks with fresh meta anyway. `priority`: High for a
+    // person's setting edit, Low for a usage re-key a material bind starts.
+    void RequestRecook(const GUID& textureGuid, AssetLoadPriority priority);
     // Hand a reloaded model's embedded images to the materials that sample it,
     // then release the embedded textures (and decode-cache entries) no model
     // references any more. Every material slot ResolveEmbeddedTextures bound
@@ -362,6 +357,10 @@ class TextureService
     // is what lets a capture harness tell "not bound yet" from "never binds".
     size_t PendingMaterialTextureBindCount() const;
 
+    // The distinct textures those pending bindings wait on: what the editor's status bar
+    // counts, since several materials and slots can wait on one texture.
+    size_t PendingMaterialTextureCount() const;
+
     // Drop all reference tracking for a material being unregistered (installed
     // as the MaterialRegistry pre-unregister callback).
     void OnMaterialUnregistered(const GUID& matGuid);
@@ -371,7 +370,8 @@ class TextureService
     // Returns false only if the device is missing; out is always usable
     // (identity fallbacks).
     bool TryGetCubeLutGpuBinding(const PostProcessSettings& pp, CubeLutGpuBindingState& out) const;
-    // Push-constant names for the LDR stack LUT controls (lutSize3d, lutFlags, ...).
+    // Writes a push member the uploaded LUT owns (lutInputEncoding, lutSize3d, lutFlags, the domains)
+    // by name, for any pass that samples the LUT; false for a name it does not own.
     static bool TryWriteCubeLutPushMember(const std::string& name,
                                           const CubeLutGpuBindingState& lut,
                                           Rendering::NamedPushConstantWriter& pcw);
@@ -415,6 +415,10 @@ class TextureService
     // then destroy the old texture (no default-texture gap, unlike Evict).
     // Render-thread only; called from FlushPendingUploads.
     void HotSwapTexture(const GUID& textureGuid);
+    // The new texture a hot swap binds: a cook source's resident AssetManager instance
+    // re-uploaded (invalid when none is resident), anything else through GetOrUpload.
+    // Render-thread only.
+    Rendering::TextureHandle UploadForHotSwap(const GUID& textureGuid);
 
     // Park a GPU texture this thread uploaded but lost the race to publish, for
     // the render thread to destroy in FlushPendingUploads. Callable from any
@@ -503,16 +507,16 @@ class TextureService
     {
         // An AssetManager load: adopts a cooked artifact or cooks on a miss (registration).
         AssetManagerLoad,
-        // An upload job: adopts a cooked artifact or decodes and builds mips, never cooks
-        // (the editor's texture assign and a restored override), so the texture shows within
-        // the decode instead of an encode. The cook for a newly tagged usage happens at the
-        // next AssetManager load of the texture.
+        // The editor's texture assign and a restored override: a cook source takes the
+        // AssetManager load too (it cooks on a miss); any other texture runs an upload job that
+        // decodes it and builds its mips on a worker.
         UploadJob,
     };
     void BindMaterialTextureSlot(Material* mat, const GUID& matGuid, StringId slotName, const GUID& texGuid,
                                  TextureLoadRoute route);
     // Queues the (material, slot, texture) bind and runs the CPU half of the upload on a job on a
-    // texture instance of its own; FlushPendingUploads submits it. A texture the AssetManager
+    // texture instance of its own; FlushPendingUploads submits it. A cook source is handed to
+    // ScheduleMaterialTextureLoad instead. A texture the AssetManager
     // already holds is queued for the drain instead, which prepares it on the render thread: its
     // instance is shared, and a reload swaps the payload in place. Thread-safe.
     void ScheduleTextureUploadJob(const GUID& texGuid, const GUID& matGuid, StringId slotName);
@@ -535,10 +539,10 @@ class TextureService
     struct CubeLutGpuCacheKey
     {
         GUID AssetGuid{};
-        int32 TextureFormat = 0;
+        Rendering::TextureFormat Format = Rendering::TextureFormat::R32G32B32A32_FLOAT;
         bool operator==(const CubeLutGpuCacheKey& other) const
         {
-            return AssetGuid == other.AssetGuid && TextureFormat == other.TextureFormat;
+            return AssetGuid == other.AssetGuid && Format == other.Format;
         }
     };
     struct CubeLutGpuCacheKeyHash
@@ -546,7 +550,7 @@ class TextureService
         size_t operator()(const CubeLutGpuCacheKey& key) const
         {
             size_t h = std::hash<GUID>{}(key.AssetGuid);
-            h ^= std::hash<int32>{}(key.TextureFormat) * 0x9E3779B1u;
+            h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(key.Format)) * 0x9E3779B1u;
             return h;
         }
     };
@@ -644,7 +648,7 @@ class TextureService
     // as both sRGB albedo and linear data needs two GPU textures but only one
     // decode, and byte-identical images embedded by different models share one
     // entry (asset packs embed the same atlas into every FBX).
-    std::unordered_map<GUID, GameEngine::DecodedImage> m_EmbeddedDecodeCache;
+    std::unordered_map<GUID, Image::Image8> m_EmbeddedDecodeCache;
     // Parent ModelAsset GUID -> derived content GUIDs of embedded images it
     // references; ReloadEmbeddedForModel walks this (the parent GUID itself
     // never keys m_TextureGPUCache).

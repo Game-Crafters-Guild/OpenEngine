@@ -1,0 +1,53 @@
+---
+title: Texture compression
+description: How a source texture is block-compressed when it is cooked, which format each usage gets, and which encoder writes it.
+---
+
+A source image (PNG, JPG, TGA, BMP, or HDR) is cooked before the GPU samples it:
+the cook decodes it once, builds its mip chain, block-compresses each level, and
+stores the result in the project's derived cache, so later loads read the cooked
+file. Two settings in the Texture Inspector decide the format: **Compression** and
+**Usage**.
+
+## Compression
+
+| Compression | Format | Use |
+| --- | --- | --- |
+| Auto (from usage) | Chosen from **Usage**, below. | The default. |
+| BC7 (RGBA, high quality) | BC7, 8 bits per texel. | Color, packed data, alpha. |
+| BC5 (normal XY) | BC5, 8 bits per texel. | Tangent-space normal maps; the shader rebuilds Z. |
+| BC4 (single channel) | BC4, 4 bits per texel. | One channel: roughness, metallic, occlusion, height. |
+| BC6H (HDR) | BC6H unsigned, 8 bits per texel. | HDR images. |
+| BC1 (RGB, size-critical) | BC1, 4 bits per texel. | Only where size matters more than smooth gradients, which band. |
+| Uncompressed | RGBA8, or RGBA32F for HDR. | Pixel-exact content; still mipmapped. |
+
+With **Auto**, Color and Packed usage cook to BC7, Normal to BC5, Mask to BC4, and
+an HDR image to BC6H. A texture whose usage is unknown stays uncompressed until a
+material slot that binds it tags its usage. Auto never picks BC1.
+
+## Encoders
+
+BC7 is encoded by bc7e, an ISPC-compiled BC7 encoder, at its `slow` profile with
+RGB error weighting. DirectXTex encodes BC1, BC4, BC5, and BC6H. There is no
+quality setting, and every build configuration writes the same bytes. The cache key includes the CPU instruction set the BC7 encoder ran
+on, so a cache copied to a computer with a different instruction set is cooked
+again there, once.
+
+## The cache
+
+Cooked textures are kept in the project's `.Cache/Tex` folder. Deleting it costs one
+recook of each texture and nothing else. When an update changes the encoder, each
+texture recooks once, the first time it loads after the update: the status bar reads
+"Preparing N textures" meanwhile, and materials show their fallback (white color, flat normals)
+until their textures are ready.
+
+## Export
+
+An exported game ships one cooked form of each texture: the compressed format its
+settings choose, or uncompressed pixels when **Compression** is set to None or no
+material says how an LDR texture is used (an HDR image ships as BC6H unless its
+Compression is None). Every desktop target (Windows, Linux, macOS,
+and Steam Deck) samples these formats, so nothing ships twice. The export reuses a cooked
+texture from the project's `.Cache/Tex` when one matches, and puts each texture it
+cooks there too, so the editor does not cook it again. A cooked texture in a game that
+fails to load is reported in the log with the fix, "rebuild the package": export the game again.

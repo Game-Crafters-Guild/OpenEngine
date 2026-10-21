@@ -1,5 +1,6 @@
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneValue.h"
+#include "Scene/RenderLayerMaskText.h"
 #include "Types/StringUtils.h"
 
 #include "Components/Animation/Animator.h"
@@ -27,7 +28,6 @@
 #include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
 #include "Components/Rendering/AmbientLight.h"
 #include "Components/Rendering/PostProcessVolume.h"
-#include "Components/Rendering/RenderLayer.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/Skybox.h"
@@ -81,7 +81,7 @@ class NameSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -99,7 +99,7 @@ class TransformSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -108,7 +108,7 @@ class TransformSchema final : public ISceneComponentSchema
     // one at a time re-decomposes the matrix per line, and each decomposition moves the values.
     bool ApplyProperties(ECS::World& world,
                          ECS::EntityHandle entity,
-                         [[maybe_unused]] const SceneLoadContext& ctx,
+                         const SceneLoadContext& ctx,
                          std::span<const std::pair<std::string_view, std::string_view>> props,
                          std::string* outError,
                          std::size_t* outFailedIndex) const override;
@@ -132,17 +132,13 @@ class HierarchyOrderSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
     {
         if (property != "order")
-        {
-            if (outError)
-                *outError = "Unknown property";
-            return false;
-        }
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
 
         SceneValue v;
         std::string err;
@@ -188,7 +184,7 @@ class MeshRendererSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -210,7 +206,7 @@ class MorphTargetWeightsSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -228,7 +224,7 @@ class PhysicsWorldSettingsSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -246,7 +242,7 @@ class PhysicsBodySchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -264,7 +260,7 @@ class CharacterControllerSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -282,7 +278,7 @@ class PhysicsColliderSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -300,7 +296,7 @@ class PhysicsColliderOwnerSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -318,7 +314,7 @@ class BoxColliderShapeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -336,7 +332,7 @@ class SphereColliderShapeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -354,7 +350,7 @@ class CapsuleColliderShapeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -372,7 +368,7 @@ class PlaneColliderShapeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -396,16 +392,14 @@ void NameSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[
 
 bool NameSchema::ApplyProperty(ECS::World& world,
                                ECS::EntityHandle entity,
-                               [[maybe_unused]] const SceneLoadContext& ctx,
+                               const SceneLoadContext& ctx,
                                std::string_view property,
                                std::string_view value,
                                std::string* outError) const
 {
     if (property != "value")
     {
-        if (outError)
-            *outError = "Unknown Name property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
     std::string s;
     if (!ParseQuotedString(value, s))
@@ -480,8 +474,8 @@ static TransformFields ReadTransformFields(const ECS::World& world, ECS::EntityH
     return fields;
 }
 
-static bool ParseTransformField(TransformFields& fields, std::string_view property, std::string_view value,
-                                std::string* outError)
+static bool ParseTransformField(const SceneLoadContext& ctx, TransformFields& fields, std::string_view property,
+                                std::string_view value, std::string* outError)
 {
     if (property == "position")
     {
@@ -507,9 +501,7 @@ static bool ParseTransformField(TransformFields& fields, std::string_view proper
             *outError = "Transform.scale must be (x, y, z)";
         return false;
     }
-    if (outError)
-        *outError = "Unknown Transform property";
-    return false;
+    return ReportUnknownField(ctx, "Transform", property, outError);
 }
 
 static void WriteTransformFields(ECS::World& world, ECS::EntityHandle entity, const TransformFields& fields)
@@ -523,13 +515,13 @@ static void WriteTransformFields(ECS::World& world, ECS::EntityHandle entity, co
 
 bool TransformSchema::ApplyProperty(ECS::World& world,
                                     ECS::EntityHandle entity,
-                                    [[maybe_unused]] const SceneLoadContext& ctx,
+                                    const SceneLoadContext& ctx,
                                     std::string_view property,
                                     std::string_view value,
                                     std::string* outError) const
 {
     TransformFields fields = ReadTransformFields(world, entity);
-    if (!ParseTransformField(fields, property, value, outError))
+    if (!ParseTransformField(ctx, fields, property, value, outError))
         return false;
     WriteTransformFields(world, entity, fields);
     return true;
@@ -537,7 +529,7 @@ bool TransformSchema::ApplyProperty(ECS::World& world,
 
 bool TransformSchema::ApplyProperties(ECS::World& world,
                                       ECS::EntityHandle entity,
-                                      [[maybe_unused]] const SceneLoadContext& ctx,
+                                      const SceneLoadContext& ctx,
                                       std::span<const std::pair<std::string_view, std::string_view>> props,
                                       std::string* outError,
                                       std::size_t* outFailedIndex) const
@@ -547,7 +539,7 @@ bool TransformSchema::ApplyProperties(ECS::World& world,
     TransformFields fields = ReadTransformFields(world, entity);
     for (std::size_t i = 0; i < props.size(); ++i)
     {
-        if (!ParseTransformField(fields, props[i].first, props[i].second, outError))
+        if (!ParseTransformField(ctx, fields, props[i].first, props[i].second, outError))
         {
             if (outFailedIndex)
                 *outFailedIndex = i;
@@ -660,7 +652,7 @@ void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle en
                                FormatAssetReferenceForSave(ctx, g, ""));
         }
     }
-    outLines.push_back(std::string("MeshRenderer.renderLayerMask = ") + std::to_string(mr->renderLayerMask));
+    outLines.push_back(std::string("MeshRenderer.renderLayers = ") + FormatRenderLayerMask(mr->RenderLayers));
     outLines.push_back(std::string("MeshRenderer.castShadows = ") + (mr->castShadows ? "true" : "false"));
     outLines.push_back(std::string("MeshRenderer.receiveShadows = ") + (mr->receiveShadows ? "true" : "false"));
     outLines.push_back(std::string("MeshRenderer.motionVectors = ") + (mr->motionVectors ? "true" : "false"));
@@ -837,7 +829,7 @@ static bool ParseU8(std::string_view value, uint8& out, std::string* outError)
 
 bool MeshRendererSchema::ApplyProperty(ECS::World& world,
                                        ECS::EntityHandle entity,
-                                       [[maybe_unused]] const SceneLoadContext& ctx,
+                                       const SceneLoadContext& ctx,
                                        std::string_view property,
                                        std::string_view value,
                                        std::string* outError) const
@@ -998,12 +990,10 @@ bool MeshRendererSchema::ApplyProperty(ECS::World& world,
         if (!ParseU32(value, v, outError))
             return false;
     }
-    else if (property == "renderlayermask")
+    else if (property == "renderlayers")
     {
-        uint32_t v = 0;
-        if (!ParseU32(value, v, outError))
+        if (!ParseRenderLayerMask(value, "renderLayers", mr.RenderLayers, outError))
             return false;
-        mr.renderLayerMask = v;
     }
     else if (property == "castshadows")
     {
@@ -1026,16 +1016,9 @@ bool MeshRendererSchema::ApplyProperty(ECS::World& world,
             return false;
         mr.motionVectors = b;
     }
-    else if (property == "lodgroupid")
-    {
-        // Legacy field (pre-2026-07 scenes): accepted and ignored. LOD grouping
-        // never had a consumer; per-entity LOD control is LODGroup.Bias.
-    }
     else
     {
-        if (outError)
-            *outError = "Unknown MeshRenderer property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, mr);
@@ -1075,7 +1058,7 @@ void MorphTargetWeightsSchema::Serialize(const ECS::World& world, ECS::EntityHan
 
 bool MorphTargetWeightsSchema::ApplyProperty(ECS::World& world,
                                              ECS::EntityHandle entity,
-                                             [[maybe_unused]] const SceneLoadContext& ctx,
+                                             const SceneLoadContext& ctx,
                                              std::string_view property,
                                              std::string_view value,
                                              std::string* outError) const
@@ -1111,9 +1094,7 @@ bool MorphTargetWeightsSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown MorphTargetWeights property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, morph);
@@ -1155,7 +1136,7 @@ void PhysicsWorldSettingsSchema::Serialize(const ECS::World& world, ECS::EntityH
 
 bool PhysicsWorldSettingsSchema::ApplyProperty(ECS::World& world,
                                                ECS::EntityHandle entity,
-                                               [[maybe_unused]] const SceneLoadContext& ctx,
+                                               const SceneLoadContext& ctx,
                                                std::string_view property,
                                                std::string_view value,
                                                std::string* outError) const
@@ -1233,9 +1214,7 @@ bool PhysicsWorldSettingsSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown PhysicsWorldSettingsComponent property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1282,7 +1261,7 @@ void PhysicsBodySchema::Serialize(const ECS::World& world, ECS::EntityHandle ent
 
 bool PhysicsBodySchema::ApplyProperty(ECS::World& world,
                                       ECS::EntityHandle entity,
-                                      [[maybe_unused]] const SceneLoadContext& ctx,
+                                      const SceneLoadContext& ctx,
                                       std::string_view property,
                                       std::string_view value,
                                       std::string* outError) const
@@ -1402,9 +1381,7 @@ bool PhysicsBodySchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown PhysicsBody property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, b);
@@ -1445,7 +1422,7 @@ void CharacterControllerSchema::Serialize(const ECS::World& world, ECS::EntityHa
 
 bool CharacterControllerSchema::ApplyProperty(ECS::World& world,
                                               ECS::EntityHandle entity,
-                                              [[maybe_unused]] const SceneLoadContext& ctx,
+                                              const SceneLoadContext& ctx,
                                               std::string_view property,
                                               std::string_view value,
                                               std::string* outError) const
@@ -1508,9 +1485,7 @@ bool CharacterControllerSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown CharacterController property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     if (previousCharacter.IsValid())
@@ -1562,7 +1537,7 @@ void PhysicsColliderSchema::Serialize(const ECS::World& world, ECS::EntityHandle
 
 bool PhysicsColliderSchema::ApplyProperty(ECS::World& world,
                                           ECS::EntityHandle entity,
-                                          [[maybe_unused]] const SceneLoadContext& ctx,
+                                          const SceneLoadContext& ctx,
                                           std::string_view property,
                                           std::string_view value,
                                           std::string* outError) const
@@ -1628,9 +1603,7 @@ bool PhysicsColliderSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown PhysicsCollider property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1665,20 +1638,16 @@ void PhysicsColliderOwnerSchema::Serialize(const ECS::World& world, ECS::EntityH
     (void)outLines;
 }
 
-bool PhysicsColliderOwnerSchema::ApplyProperty(ECS::World& world,
-                                               ECS::EntityHandle entity,
-                                               [[maybe_unused]] const SceneLoadContext& ctx,
+bool PhysicsColliderOwnerSchema::ApplyProperty([[maybe_unused]] ECS::World& world,
+                                               [[maybe_unused]] ECS::EntityHandle entity,
+                                               const SceneLoadContext& ctx,
                                                std::string_view property,
                                                std::string_view /*value*/,
                                                std::string* outError) const
 {
-    // EntityHandles are not stable across scene save/load yet. Accept properties to avoid failing loads,
-    // but leave the owner handle invalid so the collider defaults to owning itself.
-    (void)world;
-    (void)entity;
-    (void)property;
-    (void)outError;
-    return true;
+    // The component saves no field (its owner handle is not stable across a save and a load), so
+    // every authored key is one it does not have.
+    return ReportUnknownField(ctx, GetComponentName(), property, outError);
 }
 
 bool PhysicsColliderOwnerSchema::AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* outError) const
@@ -1707,7 +1676,7 @@ void BoxColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandl
 
 bool BoxColliderShapeSchema::ApplyProperty(ECS::World& world,
                                            ECS::EntityHandle entity,
-                                           [[maybe_unused]] const SceneLoadContext& ctx,
+                                           const SceneLoadContext& ctx,
                                            std::string_view property,
                                            std::string_view value,
                                            std::string* outError) const
@@ -1746,9 +1715,7 @@ bool BoxColliderShapeSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown BoxColliderShape property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1781,7 +1748,7 @@ void SphereColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHa
 
 bool SphereColliderShapeSchema::ApplyProperty(ECS::World& world,
                                               ECS::EntityHandle entity,
-                                              [[maybe_unused]] const SceneLoadContext& ctx,
+                                              const SceneLoadContext& ctx,
                                               std::string_view property,
                                               std::string_view value,
                                               std::string* outError) const
@@ -1797,9 +1764,7 @@ bool SphereColliderShapeSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown SphereColliderShape property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1834,7 +1799,7 @@ void CapsuleColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityH
 
 bool CapsuleColliderShapeSchema::ApplyProperty(ECS::World& world,
                                                ECS::EntityHandle entity,
-                                               [[maybe_unused]] const SceneLoadContext& ctx,
+                                               const SceneLoadContext& ctx,
                                                std::string_view property,
                                                std::string_view value,
                                                std::string* outError) const
@@ -1862,9 +1827,7 @@ bool CapsuleColliderShapeSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown CapsuleColliderShape property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1899,7 +1862,7 @@ void PlaneColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHan
 
 bool PlaneColliderShapeSchema::ApplyProperty(ECS::World& world,
                                              ECS::EntityHandle entity,
-                                             [[maybe_unused]] const SceneLoadContext& ctx,
+                                             const SceneLoadContext& ctx,
                                              std::string_view property,
                                              std::string_view value,
                                              std::string* outError) const
@@ -1933,9 +1896,7 @@ bool PlaneColliderShapeSchema::ApplyProperty(ECS::World& world,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown PlaneColliderShape property";
-        return false;
+        return ReportUnknownField(ctx, GetComponentName(), property, outError);
     }
 
     world.AddComponentImmediate(entity, c);
@@ -1978,16 +1939,14 @@ class DisabledSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
     {
         if (property != "present")
         {
-            if (outError)
-                *outError = "Unknown Disabled property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
         bool present = false;
         if (!ParseBool(value, present, outError))
@@ -2348,6 +2307,26 @@ static Math::Curve ParseCurveKeys(std::string_view value)
     return curve;
 }
 
+// A camera's exposure compensation curve as the resolve reads it: a key with a non-finite EV100 or
+// compensation is dropped and a non-finite tangent reads 0. An empty curve stays empty: no
+// compensation at any EV.
+static Math::Curve SanitisedExposureCompensationCurve(const Math::Curve& parsed)
+{
+    Math::Curve curve{};
+    for (uint8 i = 0; i < parsed.KeyCount; ++i)
+    {
+        Math::CurveKey key = parsed.Keys[i];
+        if (!std::isfinite(key.Time) || !std::isfinite(key.Value))
+            continue;
+        if (!std::isfinite(key.InTangent))
+            key.InTangent = 0.0f;
+        if (!std::isfinite(key.OutTangent))
+            key.OutTangent = 0.0f;
+        curve.TryInsert(key);
+    }
+    return curve;
+}
+
 // The sky's sun illuminance curve as the sky reads it: every key's time inside the day [0, 24) and its
 // value a finite illuminance of 0 or more; a key with a non-finite time is dropped. An empty curve is
 // the component's default.
@@ -2421,6 +2400,117 @@ Components::SkySunPathKind ParseSunPath(std::string_view value)
     return Components::SkySunPathKind::Earth;
 }
 
+// The star shape is stored by name, so reordering the enum cannot change what a saved scene means.
+std::string_view StarShapeName(Components::StarShapeKind shape)
+{
+    return shape == Components::StarShapeKind::Sparkle ? "Sparkle" : "Point";
+}
+
+bool ParseStarShape(std::string_view value, Components::StarShapeKind& out, std::string* outError)
+{
+    const std::string lowered = ToLowerAscii(value);
+    if (lowered == "point")
+        out = Components::StarShapeKind::Point;
+    else if (lowered == "sparkle")
+        out = Components::StarShapeKind::Sparkle;
+    else
+    {
+        if (outError)
+            *outError = "'" + std::string(value) + "' is not a star shape; valid shapes: Point, Sparkle.";
+        return false;
+    }
+    return true;
+}
+
+// The star observer is stored by name, as the shape is.
+std::string_view StarObserverName(Components::StarObserverKind observer)
+{
+    return observer == Components::StarObserverKind::Camera ? "Camera" : "Eye";
+}
+
+bool ParseStarObserver(std::string_view value, Components::StarObserverKind& out, std::string* outError)
+{
+    const std::string lowered = ToLowerAscii(value);
+    if (lowered == "eye")
+        out = Components::StarObserverKind::Eye;
+    else if (lowered == "camera")
+        out = Components::StarObserverKind::Camera;
+    else
+    {
+        if (outError)
+            *outError = "'" + std::string(value) + "' is not a star observer; valid observers: Eye, Camera.";
+        return false;
+    }
+    return true;
+}
+
+// The star dials' scene keys, kept out of the sky schema's long property chain (MSVC caps how deeply
+// an else-if chain may nest). Unhandled names fall through to the rest of the chain.
+enum class StarPropertyResult
+{
+    NotAStarProperty,
+    Applied,
+    Failed,
+};
+
+StarPropertyResult ApplyStarProperty(Components::SkyEnvironment& c, std::string_view property, std::string_view value,
+                                     std::string* outError)
+{
+    if (property == "starlimitingmagnitude")
+    {
+        if (!ParseF32(value, c.StarLimitingMagnitude, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starhighlightcompression")
+    {
+        if (!ParseF32(value, c.StarHighlightCompression, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "startwinkleamount")
+    {
+        if (!ParseF32(value, c.StarTwinkleAmount, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starglow")
+    {
+        if (!ParseF32(value, c.StarGlow, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "startwinklerate")
+    {
+        if (!ParseF32(value, c.StarTwinkleRate, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starcorescale")
+    {
+        if (!ParseF32(value, c.StarCoreScale, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starspikes")
+    {
+        if (!ParseF32(value, c.StarSpikes, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starspikelength")
+    {
+        if (!ParseF32(value, c.StarSpikeLength, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starobserver")
+    {
+        if (!ParseStarObserver(value, c.StarObserver, outError))
+            return StarPropertyResult::Failed;
+    }
+    else if (property == "starshape")
+    {
+        if (!ParseStarShape(value, c.StarShape, outError))
+            return StarPropertyResult::Failed;
+    }
+    else
+        return StarPropertyResult::NotAStarProperty;
+    return StarPropertyResult::Applied;
+}
+
 class SkyEnvironmentSchema final : public ISceneComponentSchema
 {
   public:
@@ -2472,7 +2562,6 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("SkyEnvironment.SunSize = ") + FormatFloat(c->SunSize));
         outLines.push_back(std::string("SkyEnvironment.SunSize2D = ") + FormatFloat(c->SunSize2D));
         outLines.push_back(std::string("SkyEnvironment.SkyPan2D = ") + FormatFloat(c->SkyPan2D));
-        outLines.push_back(std::string("SkyEnvironment.MoonPhase01 = ") + FormatFloat(c->MoonPhase01));
         outLines.push_back(std::string("SkyEnvironment.MoonArcPosition = ") + FormatFloat(c->MoonArcPosition));
         outLines.push_back(std::string("SkyEnvironment.AutoMoonArc = ") + (c->AutoMoonArc ? "true" : "false"));
         outLines.push_back(std::string("SkyEnvironment.MoonCycleDays = ") + FormatFloat(c->MoonCycleDays));
@@ -2559,19 +2648,21 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("SkyEnvironment.GroundHorizonNightCosWidthCurve = ") + FormatSkyCurve(c->GroundHorizonNightCosWidthKeys));
         outLines.push_back(std::string("SkyEnvironment.GroundHorizonNightCosWidthCurveMode = ") + std::string(ToSkyScalarCurveShapeModeName(c->GroundHorizonNightCosWidthShapeMode)));
         outLines.push_back(std::string("SkyEnvironment.GroundHorizonNightCosWidthBezier = ") + FormatSkyScalarBezier(c->GroundHorizonNightCosWidthBezier));
-        outLines.push_back(std::string("SkyEnvironment.StarDensity = ") + FormatFloat(c->StarDensity));
-        outLines.push_back(std::string("SkyEnvironment.StarBrightness = ") + FormatFloat(c->StarBrightness));
-        outLines.push_back(std::string("SkyEnvironment.StarSize = ") + FormatFloat(c->StarSize));
-        outLines.push_back(std::string("SkyEnvironment.StarDiamondShape = ") + FormatFloat(c->StarDiamondShape));
-        outLines.push_back(std::string("SkyEnvironment.StarCoreSize = ") + FormatFloat(c->StarCoreSize));
-        outLines.push_back(std::string("SkyEnvironment.StarGlowFalloff = ") + FormatFloat(c->StarGlowFalloff));
-        outLines.push_back(std::string("SkyEnvironment.TwinkleSpeed = ") + FormatFloat(c->TwinkleSpeed));
-        outLines.push_back(std::string("SkyEnvironment.TwinkleIntensity = ") + FormatFloat(c->TwinkleIntensity));
+        outLines.push_back(std::string("SkyEnvironment.StarLimitingMagnitude = ") + FormatFloat(c->StarLimitingMagnitude));
+        outLines.push_back(std::string("SkyEnvironment.StarHighlightCompression = ") + FormatFloat(c->StarHighlightCompression));
+        outLines.push_back(std::string("SkyEnvironment.StarTwinkleAmount = ") + FormatFloat(c->StarTwinkleAmount));
+        outLines.push_back(std::string("SkyEnvironment.StarGlow = ") + FormatFloat(c->StarGlow));
+        outLines.push_back(std::string("SkyEnvironment.StarTwinkleRate = ") + FormatFloat(c->StarTwinkleRate));
+        outLines.push_back(std::string("SkyEnvironment.StarCoreScale = ") + FormatFloat(c->StarCoreScale));
+        outLines.push_back(std::string("SkyEnvironment.StarSpikes = ") + FormatFloat(c->StarSpikes));
+        outLines.push_back(std::string("SkyEnvironment.StarSpikeLength = ") + FormatFloat(c->StarSpikeLength));
+        outLines.push_back(std::string("SkyEnvironment.StarShape = ") + std::string(StarShapeName(c->StarShape)));
+        outLines.push_back(std::string("SkyEnvironment.StarObserver = ") + std::string(StarObserverName(c->StarObserver)));
     }
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -2592,7 +2683,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
             c.Latitude = std::isfinite(c.Latitude)
                              ? std::clamp(c.Latitude, -Rendering::kMaximumLatitudeDegrees,
                                           Rendering::kMaximumLatitudeDegrees)
-                             : 0.0f;
+                             : Components::SkyEnvironment{}.Latitude;
         }
         else if (property == "dayofyear")
         {
@@ -2671,7 +2762,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         }
         // Migration: the old per-time-of-day sky-EV curve collapsed to one flat trim. Adopt the
         // daytime key (or the legacy single value) as the trim; the night/dawn/sunset keys fall
-        // through to the unknown-property tolerance below (the atmosphere + auto-exposure own the
+        // through to the unknown-field report below (the atmosphere + auto-exposure own the
         // day/night arc now).
         else if (property == "exposureevmidday" || property == "exposureev")
         {
@@ -2885,12 +2976,6 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
             if (!ParseF32(value, c.SkyPan2D, outError))
                 return false;
             c.SkyPan2D = std::clamp(c.SkyPan2D, -1.0f, 1.0f);
-        }
-        else if (property == "moonphase01")
-        {
-            if (!ParseF32(value, c.MoonPhase01, outError))
-                return false;
-            c.MoonPhase01 = std::clamp(c.MoonPhase01, 0.0f, 1.0f);
         }
         else if (property == "moonarcposition")
         {
@@ -3549,49 +3634,15 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
                 return false;
             }
         }
-        else if (property == "stardensity")
+        else if (const StarPropertyResult star = ApplyStarProperty(c, property, value, outError);
+                 star != StarPropertyResult::NotAStarProperty)
         {
-            if (!ParseF32(value, c.StarDensity, outError))
-                return false;
-        }
-        else if (property == "starbrightness")
-        {
-            if (!ParseF32(value, c.StarBrightness, outError))
-                return false;
-        }
-        else if (property == "starsize")
-        {
-            if (!ParseF32(value, c.StarSize, outError))
-                return false;
-        }
-        else if (property == "stardiamondshape")
-        {
-            if (!ParseF32(value, c.StarDiamondShape, outError))
-                return false;
-        }
-        else if (property == "starcoresize")
-        {
-            if (!ParseF32(value, c.StarCoreSize, outError))
-                return false;
-        }
-        else if (property == "starglowfalloff")
-        {
-            if (!ParseF32(value, c.StarGlowFalloff, outError))
-                return false;
-        }
-        else if (property == "twinklespeed")
-        {
-            if (!ParseF32(value, c.TwinkleSpeed, outError))
-                return false;
-        }
-        else if (property == "twinkleintensity")
-        {
-            if (!ParseF32(value, c.TwinkleIntensity, outError))
+            if (star == StarPropertyResult::Failed)
                 return false;
         }
         else if (const RetiredSkyProperty* retired = FindRetiredSkyProperty(property))
         {
-            // A retired knob, named and accounted for rather than left to the silent skip below.
+            // A retired knob, named and accounted for rather than reported as an unknown field below.
             // A malformed value still fails like any other.
             if (property == "usesunlightcolor")
             {
@@ -3657,11 +3708,10 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         }
         else
         {
-            // Tolerate an unrecognized property NAME (an older/renamed/removed field, or one a newer
-            // editor added) per the ISceneComponentSchema contract: skip it and keep loading rather
-            // than aborting the entire scene. A malformed VALUE still fails in the branch that parses
-            // it; only an unknown name reaches here. This retires the per-key legacy-ignore blocks.
-            return true;
+            // An unknown property NAME (a renamed or removed field, a misspelling, or one a newer
+            // editor added) goes to the load report and the scene keeps loading. A malformed VALUE
+            // still fails in the branch that parses it; only an unknown name reaches here.
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         // Keep day-key times ordered and inside a safe [0, 24) range.
@@ -3718,7 +3768,7 @@ class AmbientLightSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -3804,9 +3854,9 @@ class AmbientLightSchema final : public ISceneComponentSchema
         }
         else
         {
-            // Tolerate an unrecognized property name (older/renamed/newer field): skip and keep
-            // loading rather than aborting the scene. A malformed VALUE still fails in its branch.
-            return true;
+            // An unknown property name (a renamed, removed or newer field) goes to the load report,
+            // and the scene keeps loading. A malformed VALUE fails in its branch.
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -3873,7 +3923,7 @@ class SkyboxSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -3995,9 +4045,7 @@ class SkyboxSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown Skybox property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -4042,6 +4090,27 @@ class SkyboxSchema final : public ISceneComponentSchema
     }
 };
 
+// Camera.autoExposureMeter is written by name: picture or lights.
+const char* ExposureMeterName(Components::ExposureMeter meter)
+{
+    return meter == Components::ExposureMeter::Lights ? "lights" : "picture";
+}
+
+bool ParseExposureMeter(std::string_view value, Components::ExposureMeter& out, std::string* outError)
+{
+    if (value == "picture")
+        out = Components::ExposureMeter::Picture;
+    else if (value == "lights")
+        out = Components::ExposureMeter::Lights;
+    else
+    {
+        if (outError)
+            *outError = "Camera.autoExposureMeter is '" + std::string(value) + "'; expected picture or lights";
+        return false;
+    }
+    return true;
+}
+
 class CameraSchema final : public ISceneComponentSchema
 {
   public:
@@ -4057,12 +4126,12 @@ class CameraSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Camera.orthographicSize = ") + FormatFloat(c->OrthographicSize));
         outLines.push_back(std::string("Camera.nearZ = ") + FormatFloat(c->NearZ));
         outLines.push_back(std::string("Camera.farZ = ") + FormatFloat(c->FarZ));
-        outLines.push_back(std::string("Camera.cullingMask = ") + std::to_string(c->CullingMask));
+        outLines.push_back(std::string("Camera.visibleLayers = ") + FormatRenderLayerMask(c->VisibleLayers));
         outLines.push_back(std::string("Camera.postProcessProfileId = ") + std::to_string(c->PostProcessProfileId));
         outLines.push_back(std::string("Camera.msaaSamples = ") + std::to_string(c->MSAASamples));
         outLines.push_back(std::string("Camera.antiAliasing = ") + std::to_string(c->AntiAliasing));
         outLines.push_back(std::string("Camera.renderScale = ") + FormatFloat(c->RenderScale));
-        outLines.push_back(std::string("Camera.postProcessMask = ") + std::to_string(c->PostProcessMask));
+        outLines.push_back(std::string("Camera.volumeLayers = ") + FormatRenderLayerMask(c->VolumeLayers));
         outLines.push_back(std::string("Camera.aspectPreset = ") + std::to_string(c->AspectPreset));
         outLines.push_back(std::string("Camera.customAspectWidth = ") + FormatFloat(c->CustomAspectWidth));
         outLines.push_back(std::string("Camera.customAspectHeight = ") + FormatFloat(c->CustomAspectHeight));
@@ -4092,11 +4161,13 @@ class CameraSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Camera.autoExposureMaxEv = ") + FormatFloat(c->AutoExposureMaxEv));
         outLines.push_back(std::string("Camera.autoExposureSpeedUp = ") + FormatFloat(c->AutoExposureSpeedUp));
         outLines.push_back(std::string("Camera.autoExposureSpeedDown = ") + FormatFloat(c->AutoExposureSpeedDown));
+        outLines.push_back(std::string("Camera.autoExposureMeter = ") + ExposureMeterName(c->AutoExposureMeter));
+        outLines.push_back(std::string("Camera.autoExposureCompensationCurve = ") + FormatCurveKeys(c->AutoExposureCompensationCurve));
     }
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -4130,9 +4201,9 @@ class CameraSchema final : public ISceneComponentSchema
             if (!ParseF32(value, c.FarZ, outError))
                 return false;
         }
-        else if (property == "cullingmask")
+        else if (property == "visiblelayers")
         {
-            if (!ParseU32(value, c.CullingMask, outError))
+            if (!ParseRenderLayerMask(value, "visibleLayers", c.VisibleLayers, outError))
                 return false;
         }
         else if (property == "postprocessprofileid")
@@ -4155,9 +4226,9 @@ class CameraSchema final : public ISceneComponentSchema
             if (!ParseF32(value, c.RenderScale, outError))
                 return false;
         }
-        else if (property == "postprocessmask")
+        else if (property == "volumelayers")
         {
-            if (!ParseU32(value, c.PostProcessMask, outError))
+            if (!ParseRenderLayerMask(value, "volumeLayers", c.VolumeLayers, outError))
                 return false;
         }
         else if (property == "aspectpreset")
@@ -4323,11 +4394,18 @@ class CameraSchema final : public ISceneComponentSchema
             if (!ParseF32(value, c.AutoExposureSpeedDown, outError))
                 return false;
         }
+        else if (property == "autoexposuremeter")
+        {
+            if (!ParseExposureMeter(value, c.AutoExposureMeter, outError))
+                return false;
+        }
+        else if (property == "autoexposurecompensationcurve")
+        {
+            c.AutoExposureCompensationCurve = SanitisedExposureCompensationCurve(ParseCurveKeys(value));
+        }
         else
         {
-            if (outError)
-                *outError = "Unknown Camera property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -4422,7 +4500,7 @@ class LightSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Light.colorTemperature = ") + FormatFloat(c->ColorTemperature));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -4586,9 +4664,7 @@ class LightSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown Light property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -4675,6 +4751,7 @@ static bool CompleteAnimatorClipSource(Components::Animator& c, std::string* err
 // Parse into staged bytes so grouped source assignments commit together.
 static bool ParseAnimatorProperty(Components::Animator& c,
                                   const SceneLoadContext& ctx,
+                                  std::string_view component,
                                   std::string_view property,
                                   std::string_view value,
                                   std::string* outError)
@@ -4954,24 +5031,22 @@ static bool ParseAnimatorProperty(Components::Animator& c,
     }
     else
     {
-        if (outError)
-            *outError = "Unknown Animator property";
-        return false;
+        return ReportUnknownField(ctx, component, property, outError);
     }
 
     return true;
 }
 
 static bool ApplyAnimatorProperty(ECS::World& world, ECS::EntityHandle entity,
-                                  const SceneLoadContext& ctx, std::string_view property,
-                                  std::string_view value, std::string* outError)
+                                  const SceneLoadContext& ctx, std::string_view component,
+                                  std::string_view property, std::string_view value, std::string* outError)
 {
     Components::Animator c{};
     if (const auto* existing = world.GetComponent<Components::Animator>(entity)) c = *existing;
     if (property == "clipguid") c.ClearClipSource();
     const bool sourceProperty = property == "clipsourcemodelguid" || property == "clipsourceanimationindex";
     if (sourceProperty) c.clipGuid.Clear();
-    if (!ParseAnimatorProperty(c, ctx, property, value, outError)) return false;
+    if (!ParseAnimatorProperty(c, ctx, component, property, value, outError)) return false;
     if (sourceProperty && (property != "clipsourcemodelguid" || !c.clipSourceModelGuid.IsNull()))
     {
         // SceneIO diagnoses a failed group by retrying individual properties.
@@ -5083,12 +5158,12 @@ class AnimatorSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
     {
-        return ApplyAnimatorProperty(world, entity, ctx, property, value, outError);
+        return ApplyAnimatorProperty(world, entity, ctx, GetComponentName(), property, value, outError);
     }
 
     bool ApplyProperties(ECS::World& world, ECS::EntityHandle entity,
@@ -5108,7 +5183,7 @@ class AnimatorSchema final : public ISceneComponentSchema
         if (clip && !source) staged.ClearClipSource();
         for (std::size_t i = 0; i < props.size(); ++i)
         {
-            if (!ParseAnimatorProperty(staged, ctx, props[i].first, props[i].second, outError))
+            if (!ParseAnimatorProperty(staged, ctx, GetComponentName(), props[i].first, props[i].second, outError))
             {
                 if (outFailedIndex) *outFailedIndex = i;
                 return false;
@@ -5231,9 +5306,7 @@ class GameLogicGraphRefSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown GameLogicGraph property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -5273,11 +5346,11 @@ class ModelAnimationPlaybackLegacySchema final : public ISceneComponentSchema
     std::string_view GetComponentName() const override { return "ModelAnimationPlayback"; }
     void Serialize(const ECS::World&, ECS::EntityHandle, const SceneSaveContext&, std::vector<std::string>&) const override {}
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
-        return ApplyAnimatorProperty(world, entity, ctx, property, value, outError);
+        return ApplyAnimatorProperty(world, entity, ctx, GetComponentName(), property, value, outError);
     }
 
     bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* /*outError*/) const override
@@ -5496,7 +5569,7 @@ class ValueCurveSchema final : public ISceneComponentSchema
         outLines.push_back((prefix + "shape = ") + FormatCurveKeys(c->Shape));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -5504,14 +5577,14 @@ class ValueCurveSchema final : public ISceneComponentSchema
         if (auto* existing = world.GetComponent<Components::ValueCurve>(entity))
             c = *existing;
 
-        if (!ApplyValueProperty(c, property, value, outError))
+        if (!ApplyValueProperty(c, ctx, property, value, outError))
             return false;
         world.AddComponentImmediate(entity, c);
         return true;
     }
 
-    static bool ApplyValueProperty(Components::ValueCurve& c, std::string_view property,
-                                   std::string_view value, std::string* outError)
+    static bool ApplyValueProperty(Components::ValueCurve& c, const SceneLoadContext& ctx,
+                                   std::string_view property, std::string_view value, std::string* outError)
     {
 
         if (property == "enabled")
@@ -5681,8 +5754,10 @@ class ValueCurveSchema final : public ISceneComponentSchema
         }
         else
         {
-            // Legacy point/preset-library fields are not modeled by the restored compact Bezier mode.
-            // Keep ignoring them so old scenes still load without losing the component.
+            // An unknown property name (a retired point or preset-library field, a misspelling, or a
+            // newer field) goes to the load report, and the scene keeps loading.
+            if (!ReportUnknownField(ctx, "ValueCurve", property, outError))
+                return false;
         }
 
         return true;
@@ -5741,16 +5816,17 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
             return;
         outLines.push_back(std::string("PostProcessVolume.weight = ") + FormatFloat(c->Weight));
         outLines.push_back(std::string("PostProcessVolume.priority = ") + std::to_string(c->Priority));
-        outLines.push_back(std::string("PostProcessVolume.postProcessMask = ") + std::to_string(c->PostProcessMask));
+        outLines.push_back(std::string("PostProcessVolume.volumeLayers = ") + FormatRenderLayerMask(c->VolumeLayers));
         outLines.push_back(std::string("PostProcessVolume.look = ") + std::string(Components::LookName(c->Look)));
-        outLines.push_back(std::string("PostProcessVolume.ictcpChromaCompression = ") +
-                           FormatFloat(c->IctcpChromaCompression));
+        outLines.push_back(std::string("PostProcessVolume.nightTintStrength = ") + FormatFloat(c->NightTintStrength));
+        outLines.push_back(std::string("PostProcessVolume.nightTintColor = ") +
+                           FormatFloat3(c->NightTintColor[0], c->NightTintColor[1], c->NightTintColor[2]));
         outLines.push_back(std::string("PostProcessVolume.isGlobal = ") + (c->IsGlobal ? "true" : "false"));
         outLines.push_back(std::string("PostProcessVolume.shape = ") + std::to_string(static_cast<int32_t>(c->Shape)));
         outLines.push_back(std::string("PostProcessVolume.blendDistance = ") + FormatFloat(c->BlendDistance));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -5768,9 +5844,9 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
             if (!ParseI32(value, c.Priority, outError))
                 return false;
         }
-        else if (property == "postprocessmask")
+        else if (property == "volumelayers")
         {
-            if (!ParseU32(value, c.PostProcessMask, outError))
+            if (!ParseRenderLayerMask(value, "volumeLayers", c.VolumeLayers, outError))
                 return false;
         }
         else if (property == "exposurecompensation" || property == "autoexposureminev" ||
@@ -5845,11 +5921,31 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
             if (!ParseLook(value, c.Look, outError))
                 return false;
         }
-        else if (property == "ictcpchromacompression")
+        else if (property == "nighttintstrength")
         {
-            if (!ParseF32(value, c.IctcpChromaCompression, outError))
+            if (!ParseF32(value, c.NightTintStrength, outError))
                 return false;
-            c.IctcpChromaCompression = std::clamp(c.IctcpChromaCompression, 0.0f, 1.0f);
+        }
+        else if (property == "nighttintcolor")
+        {
+            Float3 v{};
+            if (!ParseFloat3(value, v))
+            {
+                if (outError)
+                    *outError = "PostProcessVolume.nightTintColor must be (r, g, b)";
+                return false;
+            }
+            const auto inUnitRange = [](float channel) { return channel >= 0.0f && channel <= 1.0f; };
+            if (!inUnitRange(v.X) || !inUnitRange(v.Y) || !inUnitRange(v.Z))
+            {
+                if (outError)
+                    *outError = "PostProcessVolume.nightTintColor is a color: each channel is 0 to 1, and only its "
+                                "hue is used. Fix: divide every channel by the largest one.";
+                return false;
+            }
+            c.NightTintColor[0] = v.X;
+            c.NightTintColor[1] = v.Y;
+            c.NightTintColor[2] = v.Z;
         }
         else if (property == "isglobal")
         {
@@ -6047,9 +6143,7 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
             }
             else
             {
-                if (outError)
-                    *outError = "Unknown legacy PostProcessVolume volumetricFog property";
-                return false;
+                return ReportUnknownField(ctx, GetComponentName(), property, outError);
             }
 
             world.AddComponentImmediate(entity, fog);
@@ -6058,9 +6152,7 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown PostProcessVolume property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -6102,7 +6194,6 @@ class WindVolumeSchema final : public ISceneComponentSchema
         outLines.push_back("WindVolume.blendDistance = " + FormatFloat(c->BlendDistance));
         outLines.push_back("WindVolume.weight = " + FormatFloat(c->Weight));
         outLines.push_back("WindVolume.priority = " + std::to_string(c->Priority));
-        outLines.push_back("WindVolume.layerMask = " + std::to_string(c->LayerMask));
         outLines.push_back("WindVolume.direction = (" +
                            FormatFloat(c->DirectionX) + ", " +
                            FormatFloat(c->DirectionY) + ", " +
@@ -6115,7 +6206,7 @@ class WindVolumeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -6172,11 +6263,6 @@ class WindVolumeSchema final : public ISceneComponentSchema
             if (!ParseI32(value, c.Priority, outError))
                 return false;
         }
-        else if (property == "layermask")
-        {
-            if (!ParseU32(value, c.LayerMask, outError))
-                return false;
-        }
         else if (property == "direction")
         {
             Float3 v{c.DirectionX, c.DirectionY, c.DirectionZ};
@@ -6216,9 +6302,7 @@ class WindVolumeSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown WindVolume property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -6309,7 +6393,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
                                FormatAssetReferenceForSave(ctx, c->LensDirtTexture.ToGuid(), ""));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -6497,9 +6581,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown BloomEffect property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         c.Radius = std::clamp(c.Radius, 1.0f, 7.0f);
@@ -6540,6 +6622,25 @@ class BloomEffectSchema final : public ISceneComponentSchema
     }
 };
 
+// A Cube LUT stage by its name (Components::kCubeLutStageNames), matched without regard to case.
+static bool ParseCubeLutStage(std::string_view value, Components::CubeLutStage& out, std::string* outError)
+{
+    const std::string lowered = ToLowerAscii(value);
+    for (uint32 i = 0; i < Components::kCubeLutStageCount; ++i)
+    {
+        if (lowered == ToLowerAscii(Components::kCubeLutStageNames[i]))
+        {
+            out = static_cast<Components::CubeLutStage>(i);
+            return true;
+        }
+    }
+    if (outError)
+        *outError = "'" + std::string(value) + "' is not a LUT stage; valid stages: " +
+                    std::string(Components::CubeLutStageName(Components::CubeLutStage::Finish)) + " (after the look), " +
+                    std::string(Components::CubeLutStageName(Components::CubeLutStage::Grade)) + " (before the look).";
+    return false;
+}
+
 class CubeLutEffectSchema final : public ISceneComponentSchema
 {
   public:
@@ -6551,10 +6652,8 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
         if (!c)
             return;
         outLines.push_back(std::string("CubeLutEffect.enabled = ") + (c->Enabled ? "true" : "false"));
-        outLines.push_back(std::string("CubeLutEffect.stackOrder = ") + std::to_string(c->StackOrder));
         outLines.push_back(std::string("CubeLutEffect.intensity = ") + FormatFloat(c->Intensity));
-        outLines.push_back(std::string("CubeLutEffect.inputEncoding = ") + std::to_string(c->InputEncoding));
-        outLines.push_back(std::string("CubeLutEffect.textureFormat = ") + std::to_string(c->TextureFormat));
+        outLines.push_back(std::string("CubeLutEffect.stage = ") + std::string(Components::CubeLutStageName(c->Stage)));
         // AssetRef stores only a GUID; a cleared slot has nothing to reference, so skip the
         // line rather than emit an empty [] that would round-trip back to a parse error.
         if (!c->LutAssetGuid.IsNull())
@@ -6575,24 +6674,14 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
             if (!ParseBool(value, c.Enabled, outError))
                 return false;
         }
-        else if (property == "stackorder")
-        {
-            if (!ParseI32(value, c.StackOrder, outError))
-                return false;
-        }
         else if (property == "intensity")
         {
             if (!ParseF32(value, c.Intensity, outError))
                 return false;
         }
-        else if (property == "inputencoding")
+        else if (property == "stage")
         {
-            if (!ParseU32(value, c.InputEncoding, outError))
-                return false;
-        }
-        else if (property == "textureformat")
-        {
-            if (!ParseU32(value, c.TextureFormat, outError))
+            if (!ParseCubeLutStage(value, c.Stage, outError))
                 return false;
         }
         else if (property == "lutasset")
@@ -6614,9 +6703,7 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown CubeLutEffect property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         c.Intensity = std::clamp(c.Intensity, 0.0f, 1.0f);
@@ -6711,7 +6798,7 @@ class HeightFogEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("HeightFogEffect.fogGlowAntiFlicker = ") + (c->FogGlowAntiFlicker ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7091,9 +7178,7 @@ class HeightFogEffectSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown HeightFogEffect property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -7146,7 +7231,7 @@ class AtmosphericCloudLayerSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("AtmosphericCloudLayer.pixelScale = ") + FormatFloat(c->PixelScale));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7254,9 +7339,7 @@ class AtmosphericCloudLayerSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown AtmosphericCloudLayer property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -7318,7 +7401,7 @@ class VolumetricCloudsSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VolumetricClouds.historyWeight = ") + FormatFloat(c->HistoryWeight));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7494,9 +7577,7 @@ class VolumetricCloudsSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown VolumetricClouds property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -7578,7 +7659,7 @@ class VolumetricFogEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VolumetricFogEffect.fogGlowAntiFlicker = ") + (c->FogGlowAntiFlicker ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7947,9 +8028,7 @@ class VolumetricFogEffectSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown VolumetricFogEffect property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -7983,12 +8062,11 @@ class SkinnedMeshRendererSchema final : public ISceneComponentSchema
         if (!c)
             return;
         outLines.push_back(std::string("SkinnedMeshRenderer.meshId = ") + std::to_string(c->meshId));
-        outLines.push_back(std::string("SkinnedMeshRenderer.renderLayerMask = ") + std::to_string(c->renderLayerMask));
         outLines.push_back(std::string("SkinnedMeshRenderer.castShadows = ") + (c->castShadows ? "true" : "false"));
         outLines.push_back(std::string("SkinnedMeshRenderer.receiveShadows = ") + (c->receiveShadows ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8015,11 +8093,6 @@ class SkinnedMeshRendererSchema final : public ISceneComponentSchema
             if (!ParseU32(value, ignored, outError))
                 return false;
         }
-        else if (property == "renderlayermask")
-        {
-            if (!ParseU32(value, c.renderLayerMask, outError))
-                return false;
-        }
         else if (property == "castshadows")
         {
             if (!ParseBool(value, c.castShadows, outError))
@@ -8032,9 +8105,7 @@ class SkinnedMeshRendererSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown SkinnedMeshRenderer property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8070,7 +8141,7 @@ class AudioListenerSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("AudioListener.worldId = ") + std::to_string(c->worldId));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8098,9 +8169,7 @@ class AudioListenerSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown AudioListener property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8135,7 +8204,7 @@ class LODGroupSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("LODGroup.bias = ") + FormatFloat(c->Bias));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8148,16 +8217,9 @@ class LODGroupSchema final : public ISceneComponentSchema
             if (!ParseF32(value, c.Bias, outError))
                 return false;
         }
-        else if (property == "lodcount" || property.rfind("threshold", 0) == 0)
-        {
-            // Legacy fields (pre-2026-07 scenes): accepted and ignored. Per-mesh
-            // thresholds live on the GPUMesh row (MeshGPURegistry), not per entity.
-        }
         else
         {
-            if (outError)
-                *outError = "Unknown LODGroup property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8179,58 +8241,6 @@ class LODGroupSchema final : public ISceneComponentSchema
     }
 };
 
-class RenderLayerSchema final : public ISceneComponentSchema
-{
-  public:
-    std::string_view GetComponentName() const override { return "RenderLayer"; }
-
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
-    {
-        const auto* c = world.GetComponent<Components::RenderLayer>(entity);
-        if (!c)
-            return;
-        outLines.push_back(std::string("RenderLayer.mask = ") + std::to_string(c->mask));
-    }
-
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
-                       std::string_view property, std::string_view value,
-                       std::string* outError) const override
-    {
-        Components::RenderLayer c{};
-        if (auto* existing = world.GetComponent<Components::RenderLayer>(entity))
-            c = *existing;
-
-        if (property == "mask")
-        {
-            if (!ParseU32(value, c.mask, outError))
-                return false;
-        }
-        else
-        {
-            if (outError)
-                *outError = "Unknown RenderLayer property";
-            return false;
-        }
-
-        world.AddComponentImmediate(entity, c);
-        return true;
-    }
-
-    bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* /*outError*/) const override
-    {
-        if (world.GetComponent<Components::RenderLayer>(entity))
-            return true;
-        world.AddComponentImmediate(entity, Components::RenderLayer{});
-        return true;
-    }
-
-    bool Remove(ECS::World& world, ECS::EntityHandle entity) const override
-    {
-        world.RemoveComponentImmediate<Components::RenderLayer>(entity);
-        return true;
-    }
-};
-
 class VideoTextureSchema final : public ISceneComponentSchema
 {
   public:
@@ -8248,7 +8258,7 @@ class VideoTextureSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VideoTextureComponent.playbackSpeed = ") + FormatFloat(c->playbackSpeed));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8309,9 +8319,7 @@ class VideoTextureSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown VideoTextureComponent property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8383,7 +8391,7 @@ class SplineComponentSchema final : public ISceneComponentSchema
         }
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8556,17 +8564,13 @@ class SplineComponentSchema final : public ISceneComponentSchema
             }
             else
             {
-                if (outError)
-                    *outError = "Unknown Spline point field";
-                return false;
+                return ReportUnknownField(ctx, GetComponentName(), property, outError);
             }
             data->MarkDirty();
         }
         else
         {
-            if (outError)
-                *outError = "Unknown Spline property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8622,7 +8626,7 @@ class MeasureComponentSchema final : public ISceneComponentSchema
                            FormatFloat4(c->Color[0], c->Color[1], c->Color[2], c->Color[3]));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8677,9 +8681,7 @@ class MeasureComponentSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown Measure property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -8745,7 +8747,6 @@ void RegisterBuiltInSceneSchemas()
     SceneSchemaRegistry::Register(std::make_unique<SkinnedMeshRendererSchema>());
     SceneSchemaRegistry::Register(std::make_unique<AudioListenerSchema>());
     SceneSchemaRegistry::Register(std::make_unique<LODGroupSchema>());
-    SceneSchemaRegistry::Register(std::make_unique<RenderLayerSchema>());
     SceneSchemaRegistry::Register(std::make_unique<VideoTextureSchema>());
     SceneSchemaRegistry::Register(std::make_unique<SplineComponentSchema>());
     SceneSchemaRegistry::Register(std::make_unique<MeasureComponentSchema>());

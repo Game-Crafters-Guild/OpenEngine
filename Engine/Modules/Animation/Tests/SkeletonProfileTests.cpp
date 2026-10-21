@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+#include "LogCapture.h"
+
 #include "Animation/HumanBone.h"
 #include "Animation/SkeletonProfile.h"
 
@@ -147,14 +151,6 @@ TEST(SkeletonProfileTest, RoundTripByteExact)
     }
 }
 
-TEST(SkeletonProfileTest, MalformedJsonReturnsFalse)
-{
-    SkeletonProfile p(GUID(), std::filesystem::path("test://malformed.profile.json"));
-    const std::string broken = "{ this is not valid json :: ";
-    Vector<uint8> bytes(broken.begin(), broken.end());
-    EXPECT_FALSE(p.LoadFromData(bytes));
-}
-
 TEST(SkeletonProfileTest, MissingVersionDefaultsToZero)
 {
     SkeletonProfile p(GUID(), std::filesystem::path("test://no-version.profile.json"));
@@ -181,4 +177,29 @@ TEST(SkeletonProfileTest, FindBoneReturnsNullForMissing)
     FillFiveBoneProfile(profile);
     EXPECT_NE(profile.FindBone(HumanBone::Hips), nullptr);
     EXPECT_EQ(profile.FindBone(HumanBone::LeftEye), nullptr);
+}
+
+// A skeleton profile that is not JSON, or whose field holds a value of the wrong type, is refused with
+// the file and the place or the field named, and never throws: the web build has no exception
+// catching.
+TEST(SkeletonProfileTest, AnUnreadableFileIsRefusedNamingThePlaceOrTheField)
+{
+    std::vector<std::string> lines;
+    bool truncatedLoaded = true;
+    bool mistypedLoaded = true;
+    {
+        TestLog::ScopedLogCapture capture(&lines);
+        const std::string truncatedText = R"({"name": [)";
+        const std::string mistypedText = R"({"bones": [{"bone": "Hips", "restRotation": [1, 0, "x", 0]}]})";
+        SkeletonProfile truncated(GUID(), std::filesystem::path("Animations/Truncated.profile.json"));
+        truncatedLoaded = truncated.LoadFromData(Vector<uint8>(truncatedText.begin(), truncatedText.end()));
+        SkeletonProfile mistyped(GUID(), std::filesystem::path("Animations/Mistyped.profile.json"));
+        mistypedLoaded = mistyped.LoadFromData(Vector<uint8>(mistypedText.begin(), mistypedText.end()));
+    }
+    EXPECT_FALSE(truncatedLoaded);
+    EXPECT_FALSE(mistypedLoaded);
+    EXPECT_NE(TestLog::FirstLineContaining(
+                  lines, "'Animations/Truncated.profile.json' is not loaded: it is not JSON (parse error at line 1, column"),
+              "");
+    EXPECT_NE(TestLog::FirstLineContaining(lines, "'Animations/Mistyped.profile.json' is not loaded: 'bones[0].restRotation[2]' is a string; write it as a number"), "");
 }

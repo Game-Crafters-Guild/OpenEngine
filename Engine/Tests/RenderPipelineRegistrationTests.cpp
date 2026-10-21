@@ -117,7 +117,7 @@ class PipelineRegistrationTest : public testing::Test
         services = std::make_unique<RenderServices>();
         ASSERT_TRUE(services->Initialize(device.get()));
         view = services->Views().AllocateView("Registration", services->Views().AllocateCamera("Registration"));
-        services->Views().SetViewRenderLayerMask(view, 1u);
+        services->Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
         services->Views().SetViewTargets(view, 0, 0, 0, ViewClearConfig{});
         persistent = std::make_unique<RenderGraph::RGResourcePool>(device.get());
         transient = std::make_unique<RenderGraph::RGTransientPool>(device.get());

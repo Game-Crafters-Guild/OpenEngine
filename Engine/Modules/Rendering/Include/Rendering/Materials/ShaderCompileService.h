@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "Rendering/Materials/ShaderMeta.h"
@@ -123,6 +124,20 @@ public:
     // to set it and put back what it found — a device published its own value here and
     // every later compile in the process inherits it.
     static SpirvTarget MaxSupportedSpirv();
+
+    // The compile target as the program cache key folds it in: the key format's version and the
+    // SPIR-V target set above. Anything recorded against cache keys (a cook's program index)
+    // records this beside them, since keys made under another target name other programs.
+    static std::string_view CacheKeyTarget();
+
+    // Serves the cooked program at `shaderPkgPath` the way a cache hit is served: the package's
+    // stages in `kind`, its meta, and the dependencies its cache info records (only those a key
+    // cannot cover, so none for a GLSL program) revalidated by content. It proves nothing about the
+    // sources the program was composed from: a caller that found the program by other means than
+    // the key (a cook's program index) must have checked those itself (ShaderProgramIndex::Load).
+    // False when the package is missing, unreadable or stale.
+    static bool ServeCachedProgram(const std::filesystem::path& shaderPkgPath, ShaderSourceKind kind,
+                                   ShaderProgramCompileResult& out);
 };
 
 }} // namespace GameEngine::Rendering

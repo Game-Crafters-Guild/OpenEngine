@@ -1,4 +1,5 @@
 #include "Engine/Rendering/PostProcessSettings.h"
+#include "Components/Rendering/PostProcessEffects/CubeLutEffect.h"
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 #include "Engine/Rendering/VolumetricFogSettings.h"
@@ -101,8 +102,9 @@ bool PostProcessSettings::IsBloomLensDirtActive(float32 epsilon) const
 
 bool PostProcessSettings::IsFogGlowActive(float32 epsilon) const
 {
-    return FogGlowEnabled != 0 && FogGlowIntensity > epsilon &&
-           (IsVolumetricFogActive(epsilon) || IsHeightFogActive(epsilon));
+    // The glow's source is the height fog's own light (fog_glow_layer.glsl), so it runs only with an
+    // active height fog.
+    return FogGlowEnabled != 0 && FogGlowIntensity > epsilon && IsHeightFogActive(epsilon);
 }
 
 bool PostProcessSettings::IsFogGlowFastActive(float32 epsilon) const
@@ -262,7 +264,7 @@ bool PostProcessSettings::IsColorGradeActive(float32 epsilon) const
 
 bool PostProcessSettings::IsHdrColorFxActive(float32 epsilon) const
 {
-    return IsColorFilterActive(epsilon) || IsColorGradeActive(epsilon);
+    return IsColorFilterActive(epsilon) || IsColorGradeActive(epsilon) || IsGradeLutActive(epsilon);
 }
 
 bool PostProcessSettings::IsCasActive(float32 epsilon) const
@@ -275,6 +277,11 @@ bool PostProcessSettings::IsLutActive(float32 epsilon) const
     return LutIntensity > epsilon && (LutAssetGuidWords[0] != 0 || LutAssetGuidWords[1] != 0);
 }
 
+bool PostProcessSettings::IsGradeLutActive(float32 epsilon) const
+{
+    return LutStage == static_cast<int32>(Components::CubeLutStage::Grade) && IsLutActive(epsilon);
+}
+
 bool PostProcessSettings::IsVignetteActive(float32 epsilon) const
 {
     return VignetteIntensity > epsilon;
@@ -282,7 +289,7 @@ bool PostProcessSettings::IsVignetteActive(float32 epsilon) const
 
 bool PostProcessSettings::IsLdrStackActive(float32 epsilon) const
 {
-    return IsCasActive(epsilon) || IsLutActive(epsilon) || IsVignetteActive(epsilon);
+    return IsCasActive(epsilon) || IsVignetteActive(epsilon);
 }
 
 bool PostProcessSettings::IsCrtActive(float32 epsilon) const
@@ -349,7 +356,10 @@ bool PostProcessSettings::IsVolumetricCloudsActive(float32 epsilon) const
 #define PP_CORE_SHARED_FIELDS(X)                \
     X("exposure", Exposure)                     \
     X("look", Look)                             \
-    X("ictcpChromaCompression", IctcpChromaCompression) \
+    X("nightTintStrength", NightTintStrength)   \
+    X("nightTintR", NightTintR)                 \
+    X("nightTintG", NightTintG)                 \
+    X("nightTintB", NightTintB)                 \
     X("fogGlowIntensity", FogGlowIntensity)     \
     X("fogGlowQuality", FogGlowQuality)         \
     X("fogGlowThreshold", FogGlowThreshold)     \
@@ -476,6 +486,18 @@ bool PostProcessSettings::TryWriteField(
     if (name == "minExposure")   return pcw.Add(name, ::GameEngine::Rendering::EvToLinearExposure(AutoExposureMaxEv) * std::exp2(AutoExposureBiasEv));
     if (name == "maxExposure")   return pcw.Add(name, ::GameEngine::Rendering::EvToLinearExposure(AutoExposureMinEv) * std::exp2(AutoExposureBiasEv));
     if (name == "useAutoExposure") return pcw.Add(name, AutoExposureActive ? 1 : 0);
+    // The compensation samples, addressed in the resolve's metered unit (MeteredLogLuminance): the
+    // log2 luminance of Stops[0], and samples per stop (0 for a constant curve, which reads Stops[0]).
+    if (name == "compensationStartLogLuminance")
+        return pcw.Add(name, ::GameEngine::Rendering::MeteredLogLuminance(AutoExposureCompensation.StartEv));
+    if (name == "compensationSamplesPerStop")
+    {
+        const float32 span = AutoExposureCompensation.EndEv - AutoExposureCompensation.StartEv;
+        constexpr float32 kIntervals = static_cast<float32>(ExposureCompensationSamples::kCount - 1);
+        return pcw.Add(name, span > 1.0e-4f ? kIntervals / span : 0.0f);
+    }
+    if (name == "compensationStops")
+        return pcw.AddRaw(name, AutoExposureCompensation.Stops, sizeof(AutoExposureCompensation.Stops));
     if (name == "heightFogEmissiveR")    return pcw.Add(name, HeightFogEmissiveR);
     if (name == "heightFogEmissiveG")    return pcw.Add(name, HeightFogEmissiveG);
     if (name == "heightFogEmissiveB")    return pcw.Add(name, HeightFogEmissiveB);
@@ -600,12 +622,16 @@ constexpr EffectSettingsField kCoreBlendFields[]{
     // (one stop), not the arithmetic 2.5x.
     PP_CORE_BLEND(Exposure, Log2Lerp, Always),
     PP_CORE_BLEND(Look, Dominant, Always),
-    PP_CORE_BLEND(IctcpChromaCompression, Lerp, Always),
+    PP_CORE_BLEND(NightTintStrength, Lerp, Always),
+    PP_CORE_BLEND(NightTintR, Lerp, Always),
+    PP_CORE_BLEND(NightTintG, Lerp, Always),
+    PP_CORE_BLEND(NightTintB, Lerp, Always),
     PP_CORE_BLEND(AutoExposureMinEv, Lerp, Always),
     PP_CORE_BLEND(AutoExposureMaxEv, Lerp, Always),
     PP_CORE_BLEND(AutoExposureSpeedUp, Lerp, Always),
     PP_CORE_BLEND(AutoExposureSpeedDown, Lerp, Always),
     PP_CORE_BLEND(AutoExposureBiasEv, Lerp, Always),
+    PP_CORE_BLEND(AutoExposureMeter, Dominant, Always),
     // Shared post-fog glow: authored by BOTH fog effects, so it lives here
     // rather than either registration; the group gates on either contributing.
     PP_CORE_BLEND(FogGlowEnabled, Dominant, FogGlow),

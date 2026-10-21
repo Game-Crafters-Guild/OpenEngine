@@ -76,6 +76,8 @@ class ScreenSpaceReflectionsNode final : public IRenderPipelineNode
         uint32_t Height = 0;
     };
 
+    // Declares the SSSR chain for the view; false when the view renders without it this frame.
+    bool DeclareChain(ViewDeclare& d);
     void LoadShaders(Rendering::IDevice* device);
     Rendering::DescriptorSetHandle NewSet(Rendering::IDevice* device, Program program,
                                            const char* debugName) const;

@@ -3,6 +3,7 @@
 
 #include "AssetCore/GUID.h"
 #include "Logger/Logger.h"
+#include "Types/ParseNumber.h"
 
 #include <pugixml.hpp>
 
@@ -77,9 +78,10 @@ std::optional<std::string> ConstantInput(const pugi::xml_node& shader, const cha
     return std::nullopt;
 }
 
+// The number `s` starts with, or `def`; never throws (a decode of authored data never does).
 float ParseFloat(const std::string& s, float def)
 {
-    try { return std::stof(s); } catch (...) { return def; }
+    return GameEngine::ParseLeadingFloat(s).value_or(def);
 }
 
 // MaterialX color3/vector values are comma-separated ("0.8, 0.2, 0.1").
@@ -90,7 +92,7 @@ std::vector<float> ParseColor(const std::string& s, size_t comps)
     std::string tok;
     while (std::getline(ss, tok, ','))
     {
-        try { out.push_back(std::stof(tok)); } catch (...) { out.push_back(0.0f); }
+        out.push_back(GameEngine::ParseLeadingFloat(tok).value_or(0.0f));
     }
     out.resize(comps, out.empty() ? 0.0f : out.back());
     return out;

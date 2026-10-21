@@ -17,7 +17,9 @@
 #include "Engine/Rendering/CameraAspectRatio.h"   // ViewLetterbox, PixelPerfectViewState
 #include "Engine/Rendering/DrawCommand.h"         // DrawCommand
 #include "Engine/Rendering/DepthPassTypes.h"      // DepthPassType
+#include "Engine/Rendering/ParallaxReliefDepth.h" // ReliefDepthSource
 #include "Components/Rendering/PostProcessVolume.h" // kDefaultManualExposureEv
+#include "Components/Rendering/ExposureCompensationCurve.h"
 #include "Engine/Rendering/PostProcessSettings.h" // PostProcessSettings
 #include "Engine/Rendering/VolumetricFogTypes.h"  // VolumetricFogLocalVolume
 #include "Types/Types.h"
@@ -67,10 +69,13 @@ public:
         float32 Aperture = 16.0f;
         float32 ShutterTime = 0.01f;
         float32 Iso = 100.0f;
-        float32 AutoExposureMinEv = 4.0f; // keep in lockstep with Components::Camera::AutoExposureMinEv
+        float32 AutoExposureMinEv = Components::kDefaultAutoExposureMinEv;
         float32 AutoExposureMaxEv = 18.0f;
         float32 AutoExposureSpeedUp = 1.0f;
         float32 AutoExposureSpeedDown = 3.0f;
+        int32 AutoExposureMeter = 0; // Components::ExposureMeter as int32; 0 = Picture
+        // Components::Camera::AutoExposureCompensationCurve; the resolve samples it per view per frame.
+        ::GameEngine::Math::Curve AutoExposureCompensationCurve = Components::DefaultExposureCompensationCurve();
         // Lens focus for physical DoF: focus-plane distance in world units, the
         // focal length ToCameraExposure derives from the camera's FovY, and the
         // sensor/gate height the derivation (and CoC-to-pixel scale) used.
@@ -203,6 +208,20 @@ public:
         // (PipelineVariantCache::EnsureConcreteWarm). DepthFormat undefined = no prepass yet.
         Rendering::PipelineFormatKey PrepassFormatKey{};
 
+        // Attachment formats of the view's opaque world pass (colour, the providers' extra colour
+        // slices, depth), snapshotted at its declaration the same way. A forward producer that
+        // re-interns a pipeline at emit requests its build for these formats on a worker and draws
+        // only once the device has built it (PipelineVariantCache::EnsureConcreteWarm).
+        // ColorCount 0 = no world pass yet.
+        Rendering::PipelineFormatKey WorldColorFormatKey{};
+        // Where that world pass's parallax materials take their relief depth from, snapshotted with
+        // it: the scene warm keys a parallax material's colour variant on it as the pass does.
+        ReliefDepthSource WorldReliefDepthSource = ReliefDepthSource::NoPrepass;
+        // The keywords that world pass drew its entities with, snapshotted with it and, unlike
+        // WorldPassKeywords, kept across BeginFrame: the scene warm reads it outside the frame's
+        // declaration window. nullopt = no world pass yet.
+        std::optional<Rendering::MaterialKeyword> DeclaredWorldPassKeywords;
+
         // Light UBO ring, one slot per device frame in flight: WriteViewLightBuffer
         // fills the slot GetFrameIndex() names inside an acquired frame while older
         // frames still read theirs. GPU-owned: device-destroyed by
@@ -223,9 +242,9 @@ public:
     void SetViewpointCamera(Rendering::CameraId id) { m_ViewpointCamera = id; }
     Rendering::CameraId GetViewpointCamera() const { return m_ViewpointCamera; }
 
-    void SetCameraPostProcessMask(Rendering::CameraId id, uint32 mask);
-    uint32 GetCameraPostProcessMask(Rendering::CameraId id) const;
-    bool HasCameraPostProcessMask(Rendering::CameraId id) const;
+    void SetCameraVolumeLayers(Rendering::CameraId id, Rendering::RenderLayerMask volumeLayers);
+    Rendering::RenderLayerMask GetCameraVolumeLayers(Rendering::CameraId id) const;
+    bool HasCameraVolumeLayers(Rendering::CameraId id) const;
     void SetCameraExposure(Rendering::CameraId id, const CameraExposure& exposure);
     const CameraExposure* FindCameraExposure(Rendering::CameraId id) const;
 
@@ -320,7 +339,7 @@ public:
                                                     uint32 renderWidth, uint32 renderHeight);
 
     void SetViewCamera(Rendering::ViewId id, Rendering::CameraId cameraId);
-    void SetViewRenderLayerMask(Rendering::ViewId id, uint32 mask);
+    void SetViewRenderLayerMask(Rendering::ViewId id, Rendering::RenderLayerMask layers);
     void SetViewActiveRenderPipeline(Rendering::ViewId id, bool enabled);
 
     void SetViewWorldId(Rendering::ViewId id, uint64 worldId);
@@ -345,6 +364,12 @@ public:
     uint32 GetViewWorldColorSampleCount(Rendering::ViewId id) const;
     // PerViewResources::PrepassFormatKey (DepthFormat undefined until the view's first prepass).
     Rendering::PipelineFormatKey GetViewPrepassFormatKey(Rendering::ViewId id) const;
+    // PerViewResources::WorldColorFormatKey (ColorCount 0 until the view's first world pass).
+    Rendering::PipelineFormatKey GetViewWorldColorFormatKey(Rendering::ViewId id) const;
+    // PerViewResources::WorldReliefDepthSource (NoPrepass until the view's first world pass).
+    ReliefDepthSource GetViewWorldReliefDepthSource(Rendering::ViewId id) const;
+    // PerViewResources::DeclaredWorldPassKeywords (nullopt until the view's first world pass).
+    std::optional<Rendering::MaterialKeyword> GetViewDeclaredWorldPassKeywords(Rendering::ViewId id) const;
     // PerViewResources::WorldViewportHeight in pixels, after render scale (0 until the view's
     // first world pass). Callers converting a world size to a screen size need this paired with
     // the projection's Y scale; 0 means "not known yet" and must not be divided by.
@@ -507,8 +532,8 @@ private:
     std::unordered_map<Rendering::ViewId, uint64> m_ViewExtractionFrames;
     std::unordered_map<uint64, uint64> m_WorldExtractionFrames;
 
-    // Per-camera post-process layer mask (defaults to 0xFFFFFFFFu when absent).
-    std::unordered_map<Rendering::CameraId, uint32> m_CameraPostProcessMasks;
+    // Per-camera volume layers (every layer when absent).
+    std::unordered_map<Rendering::CameraId, Rendering::RenderLayerMask> m_CameraVolumeLayers;
     // Per-camera exposure (absent => the view falls back to volume/world exposure).
     std::unordered_map<Rendering::CameraId, CameraExposure> m_CameraExposures;
 

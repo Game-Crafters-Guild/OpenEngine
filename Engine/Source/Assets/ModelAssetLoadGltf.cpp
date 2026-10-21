@@ -30,10 +30,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -95,7 +95,7 @@ static void AssignEmbeddedTextureRefs(ImportedMaterialData& mat, const Vector<Em
 static constexpr size_t kMergeMinPrimitives = 32;
 static constexpr size_t kMergeMinReductionFactor = 2;
 
-static void MergeStaticPrimitivesByMaterial(Vector<Mesh>& meshes)
+void MergeStaticPrimitivesByMaterial(Vector<Mesh>& meshes, std::string_view modelName, size_t maxMergedVertices)
 {
     if (meshes.size() < kMergeMinPrimitives)
         return;
@@ -191,6 +191,18 @@ static void MergeStaticPrimitivesByMaterial(Vector<Mesh>& meshes)
             outHasColor0 = outHasColor0 || staticMeshes[gi].HasColor0();
             outHasTexCoords1 = outHasTexCoords1 || staticMeshes[gi].HasTexCoords1();
             outExtraUvCount = std::max(outExtraUvCount, staticMeshes[gi].ExtraTexCoords.size());
+        }
+
+        // The merged indices are each source index plus the vertices merged before it: past
+        // maxMergedVertices they would not fit, so the group's primitives stay separate.
+        if (outVertCount > maxMergedVertices)
+        {
+            Logger::Log::Warning("glTF '{}': the {} static primitives of material {} are not merged: they hold {} "
+                                 "vertices, past the {} one merged mesh can index; they import as separate meshes.",
+                                 modelName, group.size(), matIdx, outVertCount, maxMergedVertices);
+            for (size_t gi : group)
+                merged.push_back(std::move(staticMeshes[gi]));
+            continue;
         }
         out.Vertices.reserve(outVertCount);
         out.Indices.reserve(outIndexCount);
@@ -359,10 +371,10 @@ static void MergeStaticPrimitivesByMaterial(Vector<Mesh>& meshes)
 
     Logger::Log::Info(
         "[ModelLoad] Merged {} static primitives into {} per-material draws ({} verts, {} indices)",
-        static_cast<uint32>(staticMeshes.size()),
-        static_cast<uint32>(merged.size()),
-        static_cast<uint32>(totalSrcVerts),
-        static_cast<uint32>(totalSrcIndices));
+        staticMeshes.size(),
+        merged.size(),
+        totalSrcVerts,
+        totalSrcIndices);
 
     // Reassemble: skinned first (so any skeleton-bound rendering stays adjacent
     // for cache locality), then merged static groups.
@@ -636,6 +648,35 @@ std::string SkinShortOfInverseBindMatrices(const cgltf_data& document)
         return "skin " + std::to_string(i) + " has " + std::to_string(skin.joints_count) +
                " joints but its inverseBindMatrices accessor holds " +
                std::to_string(skin.inverse_bind_matrices->count) + " matrices";
+    }
+    return {};
+}
+
+// The first node more than kMaxGltfNodeDepth levels below its scene root, described for a refusal;
+// empty when every node is within the bound. A parent cycle never reaches a root, so it is refused
+// here too. Each node's walk up stops at the first ancestor whose level is known, so the pass is
+// linear in the node count.
+std::string NodeDeeperThanItsLimit(const cgltf_data& document)
+{
+    std::vector<size_t> levels(document.nodes_count, 0); // 1 for a root; 0 while unknown
+    std::vector<cgltf_size> unknownChain;
+    for (cgltf_size i = 0; i < document.nodes_count; ++i) {
+        unknownChain.clear();
+        const cgltf_node* node = &document.nodes[i];
+        while (node && levels[static_cast<size_t>(node - document.nodes)] == 0 &&
+               unknownChain.size() <= kMaxGltfNodeDepth) {
+            unknownChain.push_back(static_cast<cgltf_size>(node - document.nodes));
+            node = node->parent;
+        }
+        size_t level = node ? levels[static_cast<size_t>(node - document.nodes)] : 0;
+        if (level + unknownChain.size() > kMaxGltfNodeDepth) {
+            const cgltf_node& deep = document.nodes[i];
+            return "node " + std::to_string(i) + " ('" + (deep.name ? deep.name : "<unnamed>") +
+                   "') is more than " + std::to_string(kMaxGltfNodeDepth) +
+                   " levels below its scene root, or its parents form a cycle";
+        }
+        for (auto chained = unknownChain.rbegin(); chained != unknownChain.rend(); ++chained)
+            levels[static_cast<size_t>(*chained)] = ++level;
     }
     return {};
 }
@@ -1035,26 +1076,42 @@ void* AllocateIntoImageBytes(void* imageBytes, cgltf_size size)
 
 void ReleaseNothing(void* /*imageBytes*/, void* /*data*/) {}
 
-// Decodes an image's base64 data URI ("data:<type>[;<parameter>];base64,<payload>") into `image`,
-// taking the MIME type from the URI, lower-cased and without parameters, when the image declares
-// none. cgltf decodes the data URIs of buffers itself and leaves those of images to the importer.
-// The decoded bytes are three quarters of the payload the file already holds, so a data URI cannot
-// size an allocation past the file. False, with `image` left empty, when the URI is not base64 or
-// its payload does not decode.
-bool DecodeDataUriImage(std::string_view uri, EmbeddedImage& image)
+// A base64 data URI ("data:<type>[;<parameter>];base64,<payload>"): its media type, without
+// parameters, and its payload without the trailing padding, which decodes to three quarters of its
+// length.
+struct Base64DataUri
+{
+    std::string_view MediaType;
+    std::string_view Payload;
+};
+
+std::optional<Base64DataUri> ParseBase64DataUri(std::string_view uri)
 {
     constexpr std::string_view kScheme = "data:";
     constexpr std::string_view kBase64Suffix = ";base64";
     const size_t comma = uri.find(',');
     if (uri.substr(0, kScheme.size()) != kScheme || comma == std::string_view::npos)
-        return false;
+        return std::nullopt;
     const std::string_view header = uri.substr(kScheme.size(), comma - kScheme.size());
     if (header.size() < kBase64Suffix.size() || header.substr(header.size() - kBase64Suffix.size()) != kBase64Suffix)
-        return false;
+        return std::nullopt;
     std::string_view payload = uri.substr(comma + 1);
     while (!payload.empty() && payload.back() == '=')
         payload.remove_suffix(1);
-    const cgltf_size decodedSize = payload.size() * 3 / 4;
+    return Base64DataUri{header.substr(0, header.find(';')), payload};
+}
+
+// Decodes an image's base64 data URI into `image`, taking the MIME type from the URI, lower-cased,
+// when the image declares none. cgltf decodes the data URIs of buffers itself and leaves those of
+// images to the importer. The decoded bytes are three quarters of the payload the file already
+// holds, so a data URI cannot size an allocation past the file. False, with `image` left empty,
+// when the URI is not base64 or its payload does not decode.
+bool DecodeDataUriImage(std::string_view uri, EmbeddedImage& image)
+{
+    const std::optional<Base64DataUri> dataUri = ParseBase64DataUri(uri);
+    if (!dataUri)
+        return false;
+    const cgltf_size decodedSize = dataUri->Payload.size() * 3 / 4;
     if (decodedSize == 0)
         return false;
 
@@ -1063,13 +1120,34 @@ bool DecodeDataUriImage(std::string_view uri, EmbeddedImage& image)
     options.memory.free_func = &ReleaseNothing;
     options.memory.user_data = &image.Data;
     void* decoded = nullptr;
-    if (cgltf_load_buffer_base64(&options, decodedSize, payload.data(), &decoded) != cgltf_result_success) {
+    if (cgltf_load_buffer_base64(&options, decodedSize, dataUri->Payload.data(), &decoded) != cgltf_result_success) {
         image.Data.clear();
         return false;
     }
     if (image.MimeType.empty())
-        image.MimeType = ToLowerAscii(header.substr(0, header.find(';')));
+        image.MimeType = ToLowerAscii(dataUri->MediaType);
     return true;
+}
+
+// cgltf_load_buffers allocates a base64 data URI buffer's declared byteLength before it decodes
+// the payload. The first such buffer that declares more bytes than its payload decodes to,
+// described for a refusal; empty when none does. A data URI that is not base64 is left to
+// cgltf_load_buffers, which refuses it.
+std::string DataUriBufferPastItsPayload(const cgltf_data& document)
+{
+    for (cgltf_size i = 0; i < document.buffers_count; ++i) {
+        const cgltf_buffer& buffer = document.buffers[i];
+        if (buffer.data || !buffer.uri)
+            continue;
+        const std::optional<Base64DataUri> dataUri = ParseBase64DataUri(buffer.uri);
+        if (!dataUri)
+            continue;
+        const cgltf_size decodedSize = dataUri->Payload.size() * 3 / 4;
+        if (buffer.size > decodedSize)
+            return "buffer " + std::to_string(i) + " declares a byteLength of " + std::to_string(buffer.size) +
+                   " bytes, but its base64 data URI decodes to " + std::to_string(decodedSize);
+    }
+    return {};
 }
 
 } // namespace
@@ -1103,6 +1181,12 @@ GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem:
         return {};
     }
 
+    const std::string pastItsPayload = DataUriBufferPastItsPayload(*document);
+    if (!pastItsPayload.empty()) {
+        RefuseGltfFile(path, pastItsPayload + "; re-export it.");
+        return {};
+    }
+
     // External buffer URIs resolve relative to the full file path.
     const std::string fullPath = path.string();
     auto& backing = document.get_deleter().ExternalBuffers;
@@ -1128,6 +1212,12 @@ GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem:
     const std::string pastItsLimit = AccessorWithoutABufferViewPastItsLimit(*document);
     if (!pastItsLimit.empty()) {
         RefuseGltfFile(path, pastItsLimit + "; re-export it.");
+        return {};
+    }
+
+    const std::string tooDeep = NodeDeeperThanItsLimit(*document);
+    if (!tooDeep.empty()) {
+        RefuseGltfFile(path, tooDeep + "; flatten its node hierarchy and re-export it.");
         return {};
     }
 
@@ -1293,27 +1383,26 @@ bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loa
             }
         }
 
+        // Each node's unbuilt ancestors are gathered walking up, then built walking down, so a deep
+        // hierarchy costs heap, not stack.
         std::vector<uint8_t> built(nodeCount, 0u);
-        std::function<void(size_t)> buildWorld = [&](size_t index)
-        {
-            if (built[index])
-                return;
-            const int parentIndex = parent[index];
-            const glm::mat4 localMatrix = glm::make_mat4(&restLocalRM[index * 16u]);
-            if (parentIndex >= 0)
-            {
-                buildWorld(static_cast<size_t>(parentIndex));
-                restWorld[index] = restWorld[static_cast<size_t>(parentIndex)] * localMatrix;
-            }
-            else
-            {
-                restWorld[index] = localMatrix;
-            }
-            built[index] = 1u;
-        };
-
+        std::vector<size_t> unbuiltChain;
         for (size_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex)
-            buildWorld(nodeIndex);
+        {
+            for (int32 index = static_cast<int32>(nodeIndex); index >= 0 && !built[static_cast<size_t>(index)];
+                 index = parent[static_cast<size_t>(index)])
+                unbuiltChain.push_back(static_cast<size_t>(index));
+            while (!unbuiltChain.empty())
+            {
+                const size_t index = unbuiltChain.back();
+                unbuiltChain.pop_back();
+                const int parentIndex = parent[index];
+                const glm::mat4 localMatrix = glm::make_mat4(&restLocalRM[index * 16u]);
+                restWorld[index] =
+                    parentIndex >= 0 ? restWorld[static_cast<size_t>(parentIndex)] * localMatrix : localMatrix;
+                built[index] = 1u;
+            }
+        }
     }
 
     // Iterate meshes/primitives and convert into engine Mesh records.
@@ -1968,7 +2057,7 @@ bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loa
     // ModelEntityFactory. Merging those drops the SourceNodeIndex link
     // and silently breaks any animator hot-attached later.
     if (gltf->animations_count == 0 && gltf->skins_count == 0)
-        MergeStaticPrimitivesByMaterial(m_Meshes);
+        MergeStaticPrimitivesByMaterial(m_Meshes, GetPath().string(), kMaxMergedGltfVertices);
 
     return !m_Meshes.empty();
 #else

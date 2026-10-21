@@ -175,9 +175,10 @@ VolumeGeometry ReadGeometry(const ECS::World& world, ECS::EntityHandle entity)
     return geometry;
 }
 
-// Which run of revisions an answer's `revision` belongs to: the world and its lifecycle
-// reset generation. A reader whose epoch changed since its last answer (the scene was
-// reopened or replaced) lists everything again instead of trusting `since`.
+// When a reader's `since` stops being enough: the world and its lifecycle reset generation.
+// A reader whose epoch changed since its last answer (the scene was reopened, replaced or
+// restored in place by an undo, a redo or the end of play, which can remove mark-ups without
+// a revision) lists everything again instead of trusting `since`.
 std::string Epoch(const ECS::World& world)
 {
     return std::to_string(world.GetWorldId()) + "." + std::to_string(world.GetLifecycleResetGeneration());

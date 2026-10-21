@@ -41,6 +41,8 @@ const char* KindName(Memory::StatsKind kind)
         return "Scratch";
     case Memory::StatsKind::ObjectPool:
         return "ObjectPool";
+    case Memory::StatsKind::RangeAllocator:
+        return "RangeAllocator";
     }
     return "Unknown";
 }

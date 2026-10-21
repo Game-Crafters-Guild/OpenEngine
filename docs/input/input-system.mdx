@@ -1,18 +1,18 @@
 ---
 title: The input system
-description: How a game reads the keyboard, the mouse and pointer lock, and how the editor and the Player deliver that input to it.
+description: How a game reads the keyboard, the mouse, and pointer lock, and how the editor and the Player deliver that input to it.
 sidebar:
   order: 1
 ---
 
-How a game reads the keyboard, the mouse and pointer lock, and how the editor and the Player deliver that input to it. Every API item shows its C++ and its C# form: pick a language on any code view and the whole site follows. Input actions and bindings from C# are covered in [Play mode, input and ECS](../scripting/play-mode-input-ecs.mdx).
+How a game reads the keyboard, the mouse, and pointer lock, and how the editor and the Player deliver that input to it. Every API item shows its C++ and its C# form: pick a language on any code view and the whole site follows. Input actions and bindings from C# are covered in [Play mode, input and ECS](../scripting/play-mode-input-ecs.mdx).
 
 ## How input reaches a game
 
 - **Routing.** Each window passes its platform events through stages in order: the editor's own UI (in the editor), the game's UI (the HUD), the game, and last the window's own input. A press stops at the first stage that acts on it: a button that was clicked, a field that took a key, or a key the game reads. Releases reach every stage, so a key or button is never left down.
 - **The play surface.** The part of a window the game runs in: in the editor, the Game View while play runs and its tab is active; in the Player, the whole window. Only input on the play surface reaches the game.
-- **The game's input system.** The game reads one `Input::InputSystem`, which receives the raw events (keys, characters, mouse moves and buttons, the wheel, gamepads, focus) and keeps the state a game polls. Reading a key or button claims it for the game, so in the editor it does not also fire an editor shortcut during play.
-- **Per-frame state.** The input system takes a snapshot once a frame, before game systems run. "Pressed this frame", "released this frame" and the mouse delta describe the events delivered before that snapshot, and read the same however late in the frame the game reads them.
+- **The game's input system.** The game reads one `Input::InputSystem`, which receives the raw events (keys, characters, mouse moves and buttons, the wheel, gamepads, and focus) and keeps the state a game polls. Reading a key or button claims it for the game, so in the editor it does not also fire an editor shortcut during play.
+- **Per-frame state.** The input system takes a snapshot once a frame, before game systems run. "Pressed this frame", "released this frame", and the mouse delta describe the events delivered before that snapshot. They read the same however late in the frame the game reads them.
 
 ## Getting the input system
 
@@ -31,13 +31,13 @@ auto* input = GameEngine::EngineCore::GetInstance().GetRuntimeInput();
 ::::
 ::::tab[C#]
 
-```csharp title="GameEngine.Input.ABI.dll"
+```csharp title="GameEngine.Scripting.Bindings.dll"
 using GameEngine.Scripting;
 
-// A static class. Every call returns a result code (0 on success) and
-// writes its answer to an out parameter. Key and button codes are the
-// constants of KeyCode and MouseButton.
-int rc = Input.IsKeyDown(KeyCode.W, out bool down);
+// A static class: each call returns its answer. Keys and buttons are the
+// Key and MouseButton enums. Before play, with no input system running,
+// a query answers false (or zero) and a request does nothing.
+bool down = Input.IsKeyDown(Key.W);
 ```
 
 ::::
@@ -45,7 +45,7 @@ int rc = Input.IsKeyDown(KeyCode.W, out bool down);
 
 ## Keys and mouse buttons
 
-Three questions per key or button: is it down, was it pressed this frame, was it released this frame. The "this frame" pair reports a press and release that complete inside one frame, which an is-down poll loses.
+Three questions per key or button: is it down, was it pressed this frame, and was it released this frame. The "this frame" pair reports a press and release that complete inside one frame, which an is-down poll loses.
 
 :::::tabs
 ::::tab[C++]
@@ -68,19 +68,19 @@ const bool firing = input->IsMouseButtonDown(Input::kMouseButton_Left);
 ::::
 ::::tab[C#]
 
-```csharp title="GameEngine.Input.ABI.dll"
-public static int IsKeyDown(int key, out bool down);
-public static int WasKeyPressed(int key, out bool pressed);
-public static int WasKeyReleased(int key, out bool released);
-public static int IsMouseButtonDown(int button, out bool down);
-public static int WasMouseButtonPressed(int button, out bool pressed);
-public static int WasMouseButtonReleased(int button, out bool released);
+```csharp title="GameEngine.Scripting.Bindings.dll"
+public static bool IsKeyDown(Key key);
+public static bool WasKeyPressed(Key key);
+public static bool WasKeyReleased(Key key);
+public static bool IsMouseButtonDown(MouseButton button);
+public static bool WasMouseButtonPressed(MouseButton button);
+public static bool WasMouseButtonReleased(MouseButton button);
 ```
 
 ```csharp title="Jump on space, fire while the left button is held"
-if (Input.WasKeyPressed(KeyCode.Space, out bool jumped) == 0 && jumped)
+if (Input.WasKeyPressed(Key.Space))
     Jump();
-Input.IsMouseButtonDown(MouseButton.Left, out bool firing);
+bool firing = Input.IsMouseButtonDown(MouseButton.Left);
 ```
 
 ::::
@@ -102,10 +102,10 @@ bool IsWindowFocused() const;
 ::::
 ::::tab[C#]
 
-```csharp title="GameEngine.Input.ABI.dll"
-public static int GetMousePosition(out float x, out float y);
-public static int IsPointerInWindow(out bool inWindow);
-public static int IsWindowFocused(out bool focused);
+```csharp title="GameEngine.Scripting.Bindings.dll"
+public static Vector2 GetMousePosition();
+public static bool IsPointerInWindow();
+public static bool IsWindowFocused();
 ```
 
 ::::
@@ -115,8 +115,8 @@ public static int IsWindowFocused(out bool focused);
 
 How far the mouse moved over the last frame: the movement delivered before this frame's input snapshot.
 
-- **Unlocked**, the delta is in the units of the mouse position, counts only movement between two positions inside the window (a pointer entering from outside adds nothing) and stops when the cursor stops at the screen edge.
-- **Locked** (see [Pointer lock](#pointer-lock)), the delta keeps counting however far the mouse travels, in the window's cursor units, the same in the editor and the Player and unaffected by the editor's UI scale: raw, unaccelerated device counts where the platform offers raw mouse motion (Windows, Linux X11), otherwise cursor pixels. A sensitivity tuned in the editor holds in the Player.
+- **Unlocked**, the delta is in the units of the mouse position, counts only movement between two positions inside the window (a pointer entering from outside adds nothing). It stops when the cursor stops at the screen edge.
+- **Locked** (see [Pointer lock](#pointer-lock)), the delta keeps counting however far the mouse travels. It is in the window's cursor units, the same in the editor and the Player and unaffected by the editor's UI scale: raw, unaccelerated device counts where the platform offers raw mouse motion (Windows, Linux X11), otherwise cursor pixels. A sensitivity tuned in the editor holds in the Player.
 - When the lock begins or ends, the platform moves the cursor (to the window's center, then back to where the lock began). That move is not counted: the delta starts again from the first position after the change.
 
 :::::tabs
@@ -129,20 +129,20 @@ Mathematics::Vector2 GetMouseDelta() const;
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-No managed call yet. The binding is tracked as [OpenEngine issue #14](https://github.com/Game-Crafters-Guild/OpenEngine/issues/14); it will sit beside `Input.GetMousePosition(out float x, out float y)` and answer the same way. The native call is `Mathematics::Vector2 GetMouseDelta() const`.
-:::
+```csharp title="GameEngine.Scripting.Bindings.dll"
+public static Vector2 GetMouseDelta();
+```
 
 ::::
 :::::
 
 ## Pointer lock
 
-For mouse look, mouse steering or anything else where the mouse moves the game rather than a cursor, the game asks for the pointer to be locked: the cursor is hidden and held by the window, and the mouse reports movement without bound. The game asks, the host (the editor or the Player) decides when to grant it, and the game reads the outcome each frame.
+For mouse look, mouse steering, or anything else where the mouse moves the game rather than a cursor, the game asks for the pointer to be locked. The cursor is hidden and held by the window, and the mouse reports movement without bound. The game asks, the host (the editor or the Player) decides when to grant it, and the game reads the outcome each frame.
 
 - **The request** stands until the game withdraws it or play ends. Ending the session clears it along with every action registration, so the next session starts unlocked.
 - **The grant** is the host's. The game reads where the lock stands each frame as one of three states, below. Read movement as mouse look only while it is `Locked`.
-- While the pointer is locked, its moves, clicks and wheel reach only the game: no editor panel or HUD element hovers or clicks under a cursor that is not there. Releases still reach every stage. The mouse position runs on without bound and names no place on screen.
+- While the pointer is locked, its moves, clicks, and wheel reach only the game: no editor panel or HUD element hovers or clicks under a cursor that is not there. Releases still reach every stage. The mouse position runs on without bound and names no place on screen.
 - A game that releases the lock itself, for a pause menu say, withdraws its request and asks again when it resumes.
 
 | State | Meaning |
@@ -158,7 +158,7 @@ For mouse look, mouse steering or anything else where the mouse moves the game r
 | --- | --- |
 | `LockPointer()` | Asks for the lock. The request stands until `UnlockPointer()` or the session ends. |
 | `UnlockPointer()` | Withdraws the request. |
-| `GetPointerLockState()` | Where the lock stands this frame: `Input::PointerLockState::Unlocked`, `Pending` or `Locked`. |
+| `GetPointerLockState()` | Where the lock stands this frame: `Input::PointerLockState::Unlocked`, `Pending`, or `Locked`. |
 
 The host reports its grant through the input system's raw input interface, not through these calls, so a game cannot claim a lock the platform does not hold. There is no change event: read the state each frame.
 
@@ -200,9 +200,42 @@ struct MouseLookSystem : ECS::SystemBase
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-Pointer lock has no managed calls yet; they are tracked with the mouse delta as [OpenEngine issue #14](https://github.com/Game-Crafters-Guild/OpenEngine/issues/14). The binding carries the same three calls and the same three states, and nothing of the host's grant. The native calls are `LockPointer()`, `UnlockPointer()` and `GetPointerLockState()`.
-:::
+| Call on `Input` | Contract |
+| --- | --- |
+| `LockPointer()` | Asks for the lock. The request stands until `UnlockPointer()` or the session ends. |
+| `UnlockPointer()` | Withdraws the request. |
+| `GetPointerLockState()` | Where the lock stands this frame: `PointerLockState.Unlocked`, `Pending`, or `Locked`. |
+
+As in C++, the host's grant has no call: read the state each frame.
+
+A mouse-look system that says "click to capture" while the lock is pending:
+
+```csharp title="MouseLook.cs"
+using GameEngine.Scripting;
+
+public class MouseLook : GameSystem
+{
+    public float Yaw;
+    public float Pitch;
+    // The HUD shows "click to capture" while this is set.
+    public bool ShowCapturePrompt;
+
+    public override void OnEnable() => Input.LockPointer();
+
+    public override void OnDisable() => Input.UnlockPointer();
+
+    public override void OnUpdate(float deltaTime)
+    {
+        PointerLockState lockState = Input.GetPointerLockState();
+        ShowCapturePrompt = lockState == PointerLockState.Pending;
+        if (lockState != PointerLockState.Locked)
+            return;
+        var delta = Input.GetMouseDelta();
+        Yaw += delta.X * 0.1f;
+        Pitch -= delta.Y * 0.1f;
+    }
+}
+```
 
 ::::
 :::::
@@ -214,18 +247,12 @@ Pointer lock has no managed calls yet; they are tracked with the mouse delta as 
 - <kbd>Esc</kbd> hands the pointer back to the editor. The game still receives the key, and its request stands.
 - Leaving the window while locked (switching to another application) also hands the pointer back, so coming back with a click on another panel uses that panel.
 - A click on the Game View returns the pointer to the game.
-- Pausing, stopping or the game withdrawing its request ends a hand-back: resuming play locks again without a click.
+- Pausing, stopping, or the game withdrawing its request ends a hand-back: resuming play locks again without a click.
 
 ## In the Player
 
-The whole window is the play surface. The Player holds the lock for as long as the game asks and the window has focus: the platform lets the cursor go while the window is unfocused and takes it back when it regains focus, and `GetPointerLockState()` reads `Locked` only while the lock is held.
+The whole window is the play surface. The Player holds the lock for as long as the game asks and the window has focus. The platform lets the cursor go while the window is unfocused and takes it back when it regains focus. `GetPointerLockState()` reads `Locked` only while the lock is held.
 
 ## In the browser build
 
 Pointer lock is not available: the request is kept but never granted, and `GetPointerLockState()` reads `Pending` while the game asks. A browser grants pointer lock only inside a click handler, which the per-frame grant is not.
-
-## Changelog
-
-- 2026-10-12: Moved to Markdown: each API item is one code view with a C++ tab and a C# tab.
-- 2026-10-12: Pointer lock calls are `LockPointer`, `UnlockPointer` and `GetPointerLockState`, with the `Pending` state; the host's grant is no longer a game-facing call.
-- 2026-10-12: First version: routing, the play surface, keys, buttons, mouse position, mouse delta and pointer lock, in the editor, the Player and the browser build.

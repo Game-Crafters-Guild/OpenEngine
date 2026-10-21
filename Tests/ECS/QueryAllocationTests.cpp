@@ -10,6 +10,10 @@
 // signatures on every construction returns exactly the same entities as one that reads them
 // from a per-instantiation constant; only an allocation count separates them.
 //
+// The parallel forks (Parallel, ParallelBatchEach, ParallelChunks) join before they return,
+// so once warm they allocate nothing either: the functor stays on the caller's stack and
+// each unit fits a task slab.
+//
 // Its own target on purpose: the measurement is a process-wide allocation window, and
 // ECSCoreTests is one binary of 28 suites. EntityDestroyNotificationTests is split out too:
 // it arms allocation faults (Tests/ECS/CMakeLists.txt).
@@ -23,10 +27,14 @@
 #include "ECS/World.h"
 #include "ArchetypeSpread.h"
 #include "TestComponents.h"
+#include "JobSystem/WorkStealingThreadPool.h"
 #include "Memory/AllocationCountScope.h"
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <utility>
 
 namespace
 {
@@ -320,6 +328,137 @@ TEST(QueryAllocationTests, ReEnablingAnAuthoredDisabledTagAllocatesNothingInStea
         << "re-enabling an entity that carries Disabled alone allocated " << allocations
         << " times across " << kMeasuredConstructions
         << " transitions: the single-tag transition is not going through the cached edges.";
+}
+
+namespace
+{
+// The parallel forks: several archetypes, several one-chunk batches in each, so every
+// archetype's units are in flight under one Wait.
+constexpr unsigned kForkArchetypeCount = 3;
+constexpr std::size_t kForkEntitiesPerArchetype = 3000;
+constexpr std::size_t kForkEntityCount = kForkArchetypeCount * kForkEntitiesPerArchetype;
+constexpr std::size_t kForkMinBatchSize = 1;
+// A chunk holds a few hundred of these entities, so each archetype spans several chunks.
+constexpr std::size_t kForkMinChunksPerCall = kForkArchetypeCount * 4;
+constexpr int kForkWarmupCalls = 100;
+constexpr int kForkMeasuredCalls = 100;
+constexpr int kForkCalls = kForkWarmupCalls + kForkMeasuredCalls;
+constexpr std::size_t kForkWorkerCount = 4;
+
+void PopulateForkArchetypes(World& world)
+{
+    for (unsigned mask = 0; mask < kForkArchetypeCount; ++mask)
+    {
+        for (std::size_t i = 0; i < kForkEntitiesPerArchetype; ++i)
+        {
+            auto entity = world.Create();
+            entity.Set(Position{1.0f, 0.0f, 0.0f});
+            entity.Set(Velocity{0.0f, 0.0f, 0.0f});
+            AddArchetypeSpreadTags(entity, mask, std::make_index_sequence<kArchetypeSpreadTagCount>{});
+        }
+    }
+    world.ProcessCommands();
+}
+
+// Warms the fork, then counts what kForkMeasuredCalls more calls allocate on every thread.
+template <typename Fork>
+std::uint64_t CountForkAllocationsAfterWarmup(const Fork& fork)
+{
+    for (int call = 0; call < kForkWarmupCalls; ++call)
+        fork();
+    const Memory::AllocationCountScope probe(Memory::CountWindow::Process);
+    for (int call = 0; call < kForkMeasuredCalls; ++call)
+        fork();
+    return probe.Count();
+}
+} // namespace
+
+// A parallel fork joins before it returns, so neither its functor nor its units' shared
+// state needs the heap: once the slab freelist and the tagged queue are warm, a retained
+// query's fork allocates nothing on any thread.
+TEST(QueryAllocationTests, ParallelAllocatesNothingAfterWarmup)
+{
+    JobSystem::WorkStealingThreadPool pool(kForkWorkerCount);
+    World world(&pool);
+    PopulateForkArchetypes(world);
+    Query<Read<Position>, Write<Velocity>> query(&world);
+
+    std::atomic<std::size_t> visited{0};
+    const auto fork = [&]
+    {
+        query.Parallel(
+            [&visited](EntityHandle, const Position& position, Velocity& velocity)
+            {
+                velocity.x += position.x;
+                visited.fetch_add(1, std::memory_order_relaxed);
+            },
+            kForkMinBatchSize);
+    };
+    const std::uint64_t allocations = CountForkAllocationsAfterWarmup(fork);
+
+    ASSERT_EQ(visited.load(), kForkEntityCount * kForkCalls);
+    std::printf("[Alloc] %d Parallel calls after warm-up: %llu allocations\n", kForkMeasuredCalls,
+                static_cast<unsigned long long>(allocations));
+    EXPECT_EQ(allocations, 0u);
+}
+
+TEST(QueryAllocationTests, ParallelBatchEachAllocatesNothingAfterWarmup)
+{
+    JobSystem::WorkStealingThreadPool pool(kForkWorkerCount);
+    World world(&pool);
+    PopulateForkArchetypes(world);
+    Query<Read<Position>, Write<Velocity>> query(&world);
+
+    std::atomic<std::size_t> visited{0};
+    std::atomic<std::size_t> chunks{0};
+    const auto fork = [&]
+    {
+        query.ParallelBatchEach(
+            [&visited, &chunks](const Position* positions, Velocity* velocities, std::size_t count)
+            {
+                for (std::size_t i = 0; i < count; ++i)
+                    velocities[i].x += positions[i].x;
+                visited.fetch_add(count, std::memory_order_relaxed);
+                chunks.fetch_add(1, std::memory_order_relaxed);
+            },
+            kForkMinBatchSize);
+    };
+    const std::uint64_t allocations = CountForkAllocationsAfterWarmup(fork);
+
+    ASSERT_EQ(visited.load(), kForkEntityCount * kForkCalls);
+    ASSERT_GE(chunks.load(), kForkMinChunksPerCall * kForkCalls);
+    std::printf("[Alloc] %d ParallelBatchEach calls after warm-up: %llu allocations\n",
+                kForkMeasuredCalls, static_cast<unsigned long long>(allocations));
+    EXPECT_EQ(allocations, 0u);
+}
+
+TEST(QueryAllocationTests, ParallelChunksAllocatesNothingAfterWarmup)
+{
+    JobSystem::WorkStealingThreadPool pool(kForkWorkerCount);
+    World world(&pool);
+    PopulateForkArchetypes(world);
+    Query<Read<Position>, Write<Velocity>> query(&world);
+
+    std::atomic<std::size_t> visited{0};
+    std::atomic<std::size_t> chunks{0};
+    const auto fork = [&]
+    {
+        query.ParallelChunks(
+            [&visited, &chunks](const Position* positions, Velocity* velocities, std::size_t count)
+            {
+                for (std::size_t i = 0; i < count; ++i)
+                    velocities[i].x += positions[i].x;
+                visited.fetch_add(count, std::memory_order_relaxed);
+                chunks.fetch_add(1, std::memory_order_relaxed);
+            });
+    };
+    const std::uint64_t allocations = CountForkAllocationsAfterWarmup(fork);
+
+    ASSERT_EQ(visited.load(), kForkEntityCount * kForkCalls);
+    ASSERT_GE(chunks.load(), kForkMinChunksPerCall * kForkCalls);
+    std::printf("[Alloc] %d ParallelChunks calls after warm-up: %llu allocations\n",
+                kForkMeasuredCalls, static_cast<unsigned long long>(allocations));
+    EXPECT_EQ(allocations, 0u);
 }
 
 // Positive control. A probe that never counts would make the arms above pass whatever the

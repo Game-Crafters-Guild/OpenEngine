@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-A game can author its interface at a reference viewport size. The complete interface then grows with its render target: fonts, spacing, icons, slider handles, borders and effects use the same scale. Percentage positions continue to follow the target aspect ratio.
+A game can author its interface at a reference viewport size. The complete interface then grows with its render target: fonts, spacing, icons, slider handles, borders, and effects use the same scale. Percentage positions continue to follow the target aspect ratio.
 
 ## Project setting
 
@@ -15,21 +15,14 @@ Choose the policy in **Project Settings > Game UI Scaling**: a scale mode and a 
 { "uiScale": { "mode": "fit", "referenceWidth": 1600, "referenceHeight": 800 } }
 ```
 
-The reference dimensions are authored UI pixels. Modes `width` and `height` scale against one axis. `fit` uses the smaller target/reference ratio so the reference canvas fits; `fill` uses the larger ratio so it covers the target. These modes preserve proportions, without stretching. Layout percentages follow the actual target and do not add letterboxing. Omit the object or choose `platform` for normal DPI scaling. Reference dimensions are clamped to 16–16384 UI pixels.
+The reference dimensions are authored UI pixels. Modes `width` and `height` scale against one axis. `fit` uses the smaller target/reference ratio so the reference canvas fits. `fill` uses the larger ratio so it covers the target. These modes preserve proportions, without stretching. Layout percentages follow the actual target and do not add letterboxing. Omit the object or choose `platform` for normal DPI scaling. Reference dimensions are clamped to 16–16384 UI pixels.
 
 ## Custom game hosts
 
 `UIManager::SetScaleSettings` accepts `UIScaleSettings{UIScaleMode::Fit, 1600.0f, 800.0f}` to select this policy for a manager. It is evaluated against the current render target on each update, including offscreen game views. It replaces platform DPI scaling rather than multiplying it, because the target extent is already measured in physical pixels.
 
-`GameUIHost` receives pointer coordinates in composite-target pixels and converts them to the same logical space used by layout. After a resize it remaps the last pointer position; controls retain the shared press, release and capture behavior.
+`GameUIHost` receives pointer coordinates in composite-target pixels and converts them to the same logical space used by layout. After a resize it remaps the last pointer position; controls retain the shared press, release, and capture behavior.
 
 ## Text during resizing
 
-Glyph geometry, measured advances and caret positions preserve fractional font sizes. Atlas storage remains at its raster size, so scaling does not require a new raster for each window size. Text at a fixed logical width retains its line breaks as the reference scale changes; responsive layout can still reflow text when its logical width changes.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/game-ui-scaling.html`; an undated first-version line (reference-height scaling and its Player configuration) dropped, as the 2026-09-22 lines cover it.
-- 2026-09-26: Authored in Project Settings, previewed in the Game View and Scene View, and written into `game.config` by the build.
-- 2026-09-22: Preserved fractional text geometry and measurement during continuous scaling.
-- 2026-09-22: Added width, height, fit and fill modes with a reference viewport size.
+Glyph geometry, measured advances and caret positions preserve fractional font sizes. Atlas storage remains at its raster size, so scaling does not require a new raster for each window size. Text at a fixed logical width retains its line breaks as the reference scale changes. Responsive layout can still reflow text when its logical width changes.

@@ -18,6 +18,7 @@
 #include "Jobs/PipeTransport.h"
 #include "Jobs/ScopedHotReloadTestHooks.h"
 #include "Scripting/PackageScriptCompile.h"
+#include "Scripting/PathResolver.h"
 #include "Scripting/ScriptManager.h"
 
 #include <gtest/gtest.h>
@@ -132,6 +133,36 @@ TEST(PackageCompileRequest, OmitsOptionalFieldsWhenEmpty)
     EXPECT_EQ(json.find("\"AllowUnsafe\""), std::string::npos) << json;
     EXPECT_EQ(json.find("\"ImplicitUsings\""), std::string::npos) << json;
     EXPECT_EQ(json.find("\"Nullable\""), std::string::npos) << json;
+}
+
+// The engine owns the script surface: every request names exactly its assemblies, which the
+// server references from EngineBinDir and holds no list of its own for.
+TEST(PackageCompileRequest, JsonCarriesTheScriptSurfaceList)
+{
+    CompileServerRequestDesc desc;
+    desc.ProjectRoot = "X:/proj";
+    const nlohmann::json request = nlohmann::json::parse(BuildCompileServerRequestJson(desc));
+
+    std::vector<std::string> expected(ScriptingPaths::kScriptSurfaceAssemblyFileNames.begin(),
+                                      ScriptingPaths::kScriptSurfaceAssemblyFileNames.end());
+    EXPECT_EQ(request.at("ScriptSurface").get<std::vector<std::string>>(), expected);
+}
+
+// A package module's project references the script surface list and nothing else ABI-named: a
+// file an earlier build staged beside the engine is never referenced.
+TEST(PackageModuleCsproj, ReferencesOnlyTheScriptSurfaceList)
+{
+    const fs::path pkgRoot = MakeTempDir("csproj_surface");
+    const PackageCodeModule module = MakeCsModule(pkgRoot);
+    const fs::path engineBin = pkgRoot / "engine";
+    WriteFileAt(engineBin / "GameEngine.Scripting.Bindings.dll", "");
+    WriteFileAt(engineBin / "GameEngine.Stale.ABI.dll", "");
+
+    const std::string xml =
+        GeneratePackageModuleCsprojXml(module, pkgRoot / ".Cache" / "ScriptProjects", fs::path("X:/ws/out"), engineBin, {});
+
+    EXPECT_NE(xml.find("<Reference Include=\"GameEngine.Scripting.Bindings\">"), std::string::npos) << xml;
+    EXPECT_EQ(xml.find("GameEngine.Stale.ABI"), std::string::npos) << xml;
 }
 
 TEST(PackageModuleCsproj, RuntimeModuleShape)

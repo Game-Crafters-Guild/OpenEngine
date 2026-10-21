@@ -17,6 +17,7 @@
 #include "Types/Color.h"
 #include <utility> // std::as_const
 #include "Components/MathReflectionTraits.h"  // Vector2/3/4 + Quaternion field traits
+#include "Components/RenderLayerMaskReflectionTraits.h"  // Rendering::RenderLayerMask field trait
 
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/Light.h"
@@ -91,9 +92,17 @@ struct MathReflectProbe
 };
 GE_REFLECT(MathReflectProbe, V2, V3, V4, Rot);
 
+// A render layer mask, mapped via Components/RenderLayerMaskReflectionTraits.h.
+struct LayerReflectProbe
+{
+    GameEngine::Rendering::RenderLayerMask Layers;
+    std::uint32_t                          Plain;
+};
+GE_REFLECT(LayerReflectProbe, Layers, Plain);
+
 GE_REFLECT(GameEngine::Components::Camera,
-    Perspective, FovY, OrthographicSize, NearZ, FarZ, CullingMask,
-    PostProcessProfileId, MSAASamples, PostProcessMask, AspectPreset,
+    Perspective, FovY, OrthographicSize, NearZ, FarZ, VisibleLayers,
+    PostProcessProfileId, MSAASamples, VolumeLayers, AspectPreset,
     CustomAspectWidth, CustomAspectHeight);
 
 GE_REFLECT(GameEngine::Components::Light,
@@ -277,6 +286,23 @@ TEST(ComponentReflectionTests, MathCompositesMapToVecAndQuat)
     }
 }
 
+// A render layer mask is its own field type, one 4-byte element, not the UInt32 it holds: that is what
+// lets the scene serializer write it as a layer list. Its JSON is the layer word.
+TEST(ComponentReflectionTests, RenderLayerMaskMapsToItsOwnFieldType)
+{
+    const auto fields = GetReflectedFields<LayerReflectProbe>();
+    ASSERT_EQ(fields.size(), 2u);
+    EXPECT_EQ(fields[0].Type, FieldTypeId::RenderLayerMask);
+    EXPECT_EQ(fields[0].Size, 4u);
+    EXPECT_EQ(FieldElementSize(FieldTypeId::RenderLayerMask), 4u);
+    EXPECT_EQ(fields[1].Type, FieldTypeId::UInt32);
+
+    LayerReflectProbe probe{GameEngine::Rendering::RenderLayerMask::FromLayer(1) |
+                                GameEngine::Rendering::RenderLayerMask::FromLayer(2),
+                            7u};
+    EXPECT_EQ(ComponentToJson(probe), R"({"Layers":6,"Plain":7})");
+}
+
 TEST(ComponentReflectionTests, FieldFlagsRegisterAndApply)
 {
     // Owned-copy registration: Get returns the registered fields, and per-field
@@ -343,13 +369,13 @@ TEST(ComponentReflectionTests, OffsetsMatchOffsetof)
 
 TEST(ComponentReflectionTests, RealComponentsReflectCorrectly)
 {
-    // Camera: all scalars.
+    // Camera: scalars and its layer masks.
     {
         const auto f = GetReflectedFields<GameEngine::Components::Camera>();
         EXPECT_EQ(f.size(), 12u);
         EXPECT_EQ(FindField(f, "Perspective")->Type, FieldTypeId::Bool);
         EXPECT_EQ(FindField(f, "FovY")->Type, FieldTypeId::Float);
-        EXPECT_EQ(FindField(f, "CullingMask")->Type, FieldTypeId::UInt32);
+        EXPECT_EQ(FindField(f, "VisibleLayers")->Type, FieldTypeId::RenderLayerMask);
     }
     // Light: enum -> UInt32, raw RGB float[3].
     {

@@ -31,6 +31,17 @@ list(APPEND PLATFORM_SOURCES Source/HttpHeaderRules.cpp)
 # A child process's environment, built from this process's: every platform.
 list(APPEND PLATFORM_SOURCES Source/Process.cpp)
 
+# Speech input (Platform/SpeechInput.h): the Speech framework on macOS, a stub that reports it
+# unavailable everywhere else.
+if(APPLE)
+	list(APPEND PLATFORM_SOURCES Source/SpeechInput_mac.mm)
+	# The one ARC file in the module: its session object owns AVFoundation and Speech objects
+	# across blocks, which manual retain/release would have to track by hand.
+	set_source_files_properties(Source/SpeechInput_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+else()
+	list(APPEND PLATFORM_SOURCES Source/SpeechInput_Stub.cpp)
+endif()
+
 # Platform-specific sources
 if(EMSCRIPTEN)
 	# SystemMetrics reuses the Linux TU's constant defaults (600 ms caret
@@ -121,6 +132,8 @@ target_include_directories(Platform
 # Dependencies
 # Logger is used by Platform.cpp
 target_link_libraries(Platform PUBLIC Logger Types)
+# MenuIconBitmap_Win32 decodes menu icons.
+target_link_libraries(Platform PRIVATE Image)
 if(NOT EMSCRIPTEN)
     find_package(glfw3 CONFIG REQUIRED)
     find_package(CURL REQUIRED)
@@ -144,7 +157,8 @@ endif()
  endif()
 
 if (APPLE)
-    target_link_libraries(Platform PRIVATE "-framework CoreText" "-framework CoreFoundation" "-framework Cocoa" "-framework WebKit")
+    target_link_libraries(Platform PRIVATE "-framework CoreText" "-framework CoreFoundation" "-framework Cocoa" "-framework WebKit"
+        "-framework AVFoundation" "-framework Speech")
 endif()
 
 # Emscripten sets UNIX; keep it out of the Linux desktop-integration probes.
@@ -232,14 +246,14 @@ if(BUILD_TESTING)
     if (WIN32)
         target_sources(PlatformContextMenuTests PRIVATE Tests/MenuIconBitmapTests.cpp)
 
-        # One PNG and one SVG of the editor's real artwork, staged at the same
-        # relative path the editor mount uses, so the test resolves
+        # A PNG with partial alpha and one SVG of the editor's artwork, staged at
+        # the same relative path the editor mount uses, so the test resolves
         # `editor:Icons/...` exactly as the running menu does.
         add_custom_command(TARGET PlatformContextMenuTests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_FILE_DIR:PlatformContextMenuTests>/Assets/Icons"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Icons/save.png"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/menu-icon-partial-alpha.png"
                 "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Icons/DockLog.svg"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/menu-icon-orientation.png"
                 "$<TARGET_FILE_DIR:PlatformContextMenuTests>/Assets/Icons/"
@@ -268,6 +282,7 @@ if(BUILD_TESTING)
 
     add_executable(PlatformCapabilitiesTests
         Tests/CapabilitiesTests.cpp
+        Tests/SpeechInputTests.cpp
         Tests/ThreadNameTests.cpp
     )
 
@@ -325,6 +340,17 @@ if(BUILD_TESTING)
     ge_set_output_tests(PlatformEnvironmentTests)
     ge_stage_runtime_dependencies(PlatformEnvironmentTests)
     add_test(NAME PlatformEnvironmentTests COMMAND PlatformEnvironmentTests)
+
+    if(APPLE)
+        add_executable(PlatformWebViewPageStyleTests Tests/WebViewPageStyleTests_mac.mm)
+        target_compile_features(PlatformWebViewPageStyleTests PRIVATE cxx_std_20)
+        target_compile_options(PlatformWebViewPageStyleTests PRIVATE -fobjc-arc)
+        target_include_directories(PlatformWebViewPageStyleTests PRIVATE Source)
+        target_link_libraries(PlatformWebViewPageStyleTests PRIVATE GTest::gtest_main "-framework Cocoa" "-framework WebKit")
+        ge_set_output_tests(PlatformWebViewPageStyleTests)
+        add_test(NAME PlatformWebViewPageStyleTests COMMAND PlatformWebViewPageStyleTests)
+        set_tests_properties(PlatformWebViewPageStyleTests PROPERTIES TIMEOUT 30)
+    endif()
 
     # The Windows web view's parts that need no window and no WebView2 runtime. The
     # helpers under test live in Source/ beside the backend.

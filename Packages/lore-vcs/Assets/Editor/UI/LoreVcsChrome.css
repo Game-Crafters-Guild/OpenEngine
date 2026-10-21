@@ -3,5 +3,5 @@
    EditorPanelRegistry stylesheet contribution, after the editor theme. */
 
 .settings-tree-pane .lore-row .tree-title {
-    background-image: url("lore-vcs:Icons/SettingsLore.png");
+    background-image: url("lore-vcs:Icons/SettingsLore.svg");
 }

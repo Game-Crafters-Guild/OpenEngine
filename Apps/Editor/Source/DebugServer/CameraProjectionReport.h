@@ -32,9 +32,12 @@ nlohmann::json DescribeCameraProjection(const float proj[16],
                                         std::uint32_t viewportHeightPx);
 
 // Game View uses its declared camera matrix, including roll, rather than the
-// Scene View orbit pose. The world transform is a column-major 4x4 matrix.
+// Scene View orbit pose. The world transform is a column-major 4x4 matrix. The
+// exposure reports the camera's mode and, under Auto, its meter ("picture" or
+// "lights"; null in the other modes).
 nlohmann::json DescribeGameViewCamera(const Rendering::CameraData& camera,
                                       Components::ExposureMode mode,
+                                      Components::ExposureMeter meter,
                                       std::uint32_t viewportWidthPx,
                                       std::uint32_t viewportHeightPx);
 

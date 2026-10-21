@@ -6,6 +6,7 @@
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Logger/Logger.h"
@@ -565,6 +566,8 @@ bool VolumetricFogRenderer::Initialize(IDevice* device)
         // Irradiance cube for the analytic far-fog in-scatter color (gated by
         // iblEnabled; bound only when the IBL feature is live).
         {3, DescriptorType::CombinedImageSampler, 1, kFragmentStage},
+        // The view's ExposureHistory: the in-scatter is stored at the pre-exposure P.
+        {4, DescriptorType::StorageBuffer, 1, kFragmentStage},
     };
     m_Initialized = CreateJitterAtlasTexture() && CreateDensityNoiseAtlasTexture() && CreatePipelines();
     return m_Initialized;
@@ -1204,6 +1207,10 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
     const CameraData* camera = services.Views().FindCameraData(d.View.cameraId);
     if (!camera || !sceneColor.IsValid() || !depth.IsValid())
         return;
+    // The composite stores its in-scatter at the frame's pre-exposure P.
+    const Pipeline::PipelineBufferBindingRG exposure = Pipeline::ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return;
 
     // THE extent for grid sizing — the same numbers the old path derived from
     // the color target desc.
@@ -1737,6 +1744,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
         {
             p.Read(finalFogTex, RenderGraph::RGTextureRead::Sampled);
             p.Read(depth, RenderGraph::RGTextureRead::Sampled);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             if (iblIrradianceTex.IsValid())
                 p.Read(iblIrradianceTex, RenderGraph::RGTextureRead::Sampled);
             RenderGraph::RGAttachmentOps ops{};
@@ -1745,7 +1753,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             p.AttachColor(0, sceneColor, ops);
         },
         [this, finalFogTex, depth, iblIrradianceTex, iblCubeSampler, uboBuf, uboOffset, renderW,
-         renderH](RenderGraph::RGContext& ctx)
+         renderH, exposure](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
             auto* cl = ctx.Cmd;
@@ -1767,6 +1775,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             w.CombinedImageSampler(0, fogPhysical, m_LinearClampSampler);
             w.CombinedImageSampler(1, depthPhysical, m_LinearClampSampler);
             w.UniformBuffer(2, uboBuf, uboOffset, sizeof(FogGpuParams));
+            w.StorageBuffer(4, exposure.Buffer, exposure.Offset, exposure.Size);
             if (iblIrradianceTex.IsValid() && iblCubeSampler.IsValid())
             {
                 const auto iblTex = ctx.GetTexture(iblIrradianceTex);
@@ -1779,6 +1788,11 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             cl->BindDescriptorSet(0, ds, pipe);
             cl->Draw(3, 1);
         });
+
+    // For the passes that draw after the composite and fog their blended surfaces by their own
+    // distance (volumetric_fog_forward.glsl): the parameters and the volume the composite read.
+    d.PublishBuffer(Pipeline::Names::Res::VolumetricFogParams, {uboBuf, uboOffset, sizeof(FogGpuParams), {}});
+    d.PublishTexture(Pipeline::Names::Res::VolumetricFog, finalFogTex);
 
     // ── History/state commit, AT DECLARATION (declared == will run). Exec
     // lambdas stayed read-only above; the previous-VP / frame counter / history

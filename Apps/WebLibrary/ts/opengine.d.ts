@@ -303,9 +303,22 @@ export interface FloatColumn {
 export type ThreadsOption = 'auto' | 'single' | 'multi';
 
 export interface EngineOptions {
-    /** The canvas the engine draws into. Its CSS size is tracked; the drawing buffer follows it times devicePixelRatio. */
+    /**
+     * The canvas the engine draws into. The page sizes it: its CSS size, or its `width` and
+     * `height` attributes when no CSS sizes it. The engine tracks that size, and the drawing
+     * buffer is that size times devicePixelRatio, lowered to fit `maxDrawingBufferPixels`.
+     */
     canvas: HTMLCanvasElement;
     threads?: ThreadsOption;
+    /**
+     * The most pixels the canvas's drawing buffer may hold; the engine lowers the pixel ratio
+     * it draws at to fit. A phone draws a full-screen canvas at a devicePixelRatio near 3, which
+     * is several megapixels its GPU cannot afford. Default: 1,000,000 on a phone or tablet
+     * (navigator.userAgentData.mobile, an Android or iOS user agent string, or an iPad), no limit
+     * elsewhere. `Infinity` draws at the full devicePixelRatio everywhere. Anything but a number
+     * above 0 or `Infinity` is refused.
+     */
+    maxDrawingBufferPixels?: number;
     /** URL of the folder holding opengine-core.st/mt.js and .wasm; defaults to the folder of the library's own module. */
     coreUrl?: string;
     /**

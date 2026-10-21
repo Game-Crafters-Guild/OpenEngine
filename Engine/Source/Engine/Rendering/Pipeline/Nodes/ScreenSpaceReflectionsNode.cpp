@@ -4,6 +4,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/RenderServices.h"
 
@@ -187,6 +188,16 @@ Mathematics::Rect ScreenSpaceReflectionsNode::ComputeViewportRect(const ViewLett
 
 void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
 {
+    // The histories are stored at the pre-exposure P of the frame that wrote them, and the readers
+    // rescale them by P over the previous frame's P. A frame of this view that renders without the
+    // chain (SSSR inactive, an input missing) advances that P without writing the histories, so the
+    // history state is dropped: the next frame that declares the chain starts it from scratch.
+    if (!DeclareChain(d))
+        m_ViewHistory.erase(static_cast<uint32_t>(d.View.id));
+}
+
+bool ScreenSpaceReflectionsNode::DeclareChain(ViewDeclare& d)
+{
     const RenderGraph::RGTexture input = d.ResolveTexture(m_InputKey);
     // Resolve the actual pool-backed output before publishing the inactive
     // stitch-through under the same blackboard name.
@@ -208,7 +219,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                      settings.SSSRIntensity, settings.SSSRMaxDistance, settings.SSSRMaxSteps,
                      m_ShadersLoaded, input.IsValid(), output.IsValid());
         }
-        return;
+        return false;
     }
 
     const RenderGraph::RGTexture depth = d.ViewDepthResolved;
@@ -235,10 +246,14 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                         "MSAA or disable SSSR for this view.",
                         static_cast<uint32_t>(d.View.id));
         }
-        return;
+        return false;
     }
     const PipelineBufferBindingRG viewParams = d.ResolveBuffer(Names::Res::ViewParams);
-    if (!depth.IsValid() || !hzb.IsValid() || !viewParams.IsValid())
+    // Scene colour and the specular radiance are stored at the frame's pre-exposure P and the
+    // histories at the previous frame's: the trace, the reprojection and the temporal resolve read
+    // the view's ExposureHistory.
+    const PipelineBufferBindingRG exposure = ResolveViewExposureHistory(d);
+    if (!depth.IsValid() || !hzb.IsValid() || !viewParams.IsValid() || !exposure.IsValid())
     {
         if (!m_LoggedSkipReason)
         {
@@ -249,7 +264,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                         static_cast<uint32_t>(d.View.id), depth.IsValid(), hzb.IsValid(),
                         viewParams.IsValid());
         }
-        return;
+        return false;
     }
 
     const uint32_t width = d.RenderWidth;
@@ -263,7 +278,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             LOG_WARNING("ScreenSpaceReflectionsNode: view {} skipping SSSR — extent {}x{}",
                         static_cast<uint32_t>(d.View.id), width, height);
         }
-        return;
+        return false;
     }
 
     // The kernels convert between target UV and the camera's NDC on every ray,
@@ -281,11 +296,12 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             LOG_WARNING("ScreenSpaceReflectionsNode: view {} skipping SSSR — motion vectors unavailable",
                         static_cast<uint32_t>(d.View.id));
         }
-        return;
+        return false;
     }
     struct ReprojectionParams { float PrevInvViewProj[16]; };
     auto reprojectionParams = d.Frame.AllocUpload<ReprojectionParams>();
-    if (!reprojectionParams.Valid()) return;
+    if (!reprojectionParams.Valid())
+        return false;
     const ViewDeformationClock clock =
         d.Services.TemporalHistory().ResolveDeformationClock(Time::GetCumulativeSeconds());
     const ViewTemporalSample currentSample{d.Services.Views().ResolveCameraData(d.View.id),
@@ -360,6 +376,12 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
     avgDesc.debugName = "SSSR.AverageRadiance";
     const auto avgRadiance =
         d.Frame.CreateTexture(d.PassName("AverageRadiance").c_str(), avgDesc);
+    // Reflection radiance at the frame's pre-exposure (rgb; the alphas are confidence). The hit
+    // data and the moments are not colour.
+    d.MarkPreExposed(radiance);
+    d.MarkPreExposed(reprojected);
+    d.MarkPreExposed(prefiltered);
+    d.MarkPreExposed(avgRadiance);
 
     TextureDesc historyDesc = workDesc;
     historyDesc.persistent = true;
@@ -401,6 +423,12 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
     const auto sceneHistoryRead = d.Frame.ImportPersistentTexture(
         (historyBase + ".Scene" + std::to_string(parity ^ 1u)).c_str(), historyDesc,
         &sceneHistoryReadFresh);
+    // Reflection radiance and the composited scene, stored at the frame's pre-exposure (the
+    // moments hold luminance and its square, not colour).
+    d.MarkPreExposed(historyRead);
+    d.MarkPreExposed(historyWrite);
+    d.MarkPreExposed(sceneHistoryRead);
+    d.MarkPreExposed(sceneHistoryWrite);
 
     // A fresh physical on any history plane means nothing we wrote survives:
     // accumulate from scratch this frame rather than blending against undefined
@@ -459,7 +487,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                         "resource create failed",
                         static_cast<uint32_t>(d.View.id));
         }
-        return;
+        return false;
     }
 
     if (!m_LoggedChainDeclared)
@@ -574,6 +602,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             p.Read(specularWeight, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(specularRadiance, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(sceneHistoryRead, RenderGraph::RGTextureRead::SampledCompute);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Read(rayList, RenderGraph::RGBufferRead::Storage);
             // Two accesses on one buffer: the dispatch grid as indirect args, and
             // the ray count the shader gates its lanes on as an SSBO. The graph ORs
@@ -601,6 +630,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             writer.AddCombinedImageSampler("uSpecularRadiance", ctx.GetTexture(specularRadiance), m_PointSampler);
             writer.AddCombinedImageSampler("uPrevScene", ctx.GetTexture(sceneHistoryRead),
                                            m_LinearSampler);
+            writer.AddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size);
             writer.AddStorageBuffer("RayList", ctx.GetBuffer(rayList), 0, rayBytes);
             writer.AddStorageBuffer("Args", ctx.GetBuffer(indirectArgs), 0, kArgsBytes);
             writer.AddCombinedImageSampler("uMotionVectors", ctx.GetTexture(motionVectors),
@@ -629,6 +659,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             p.Read(historyRead, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(momentsRead, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(surfaceRead, RenderGraph::RGTextureRead::SampledCompute);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Write(reprojected, RenderGraph::RGTextureWrite::Storage);
             p.Write(reprojectedMoments, RenderGraph::RGTextureWrite::Storage);
             // Full-screen, so every average-radiance texel is defined. The
@@ -655,6 +686,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                                            m_PointSampler);
             writer.AddUniformBuffer("SssrReprojection", reprojectionParams.Buffer,
                                     reprojectionParams.Offset, sizeof(ReprojectionParams));
+            writer.AddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size);
             writer.AddUniformBuffer("ViewParams", viewParams.Buffer, viewParams.Offset,
                                     viewParams.Size);
             writer.Flush();
@@ -679,6 +711,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             // The temporal half of the drive signal. Zero on a converged static
             // pose by construction, which is why the spatial half exists.
             p.Read(reprojectedMoments, RenderGraph::RGTextureRead::SampledCompute);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Read(tileList, RenderGraph::RGBufferRead::Storage);
             // As for Intersect: indirect args plus an SSBO read of the tile count
             // the workgroup gate gets its bound from.
@@ -704,6 +737,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
                                            ctx.GetTexture(reprojectedMoments), m_PointSampler);
             writer.AddStorageBuffer("TileList", ctx.GetBuffer(tileList), 0, tileBytes);
             writer.AddStorageBuffer("Args", ctx.GetBuffer(indirectArgs), 0, kArgsBytes);
+            writer.AddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size);
             writer.AddUniformBuffer("ViewParams", viewParams.Buffer, viewParams.Offset,
                                     viewParams.Size);
             writer.Flush();
@@ -728,6 +762,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             p.Read(reprojectedMoments, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(depth, RenderGraph::RGTextureRead::SampledCompute);
             p.Read(normalRoughness, RenderGraph::RGTextureRead::SampledCompute);
+            p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Write(historyWrite, RenderGraph::RGTextureWrite::Storage);
             p.Write(momentsWrite, RenderGraph::RGTextureWrite::Storage);
             p.Write(surfaceWrite, RenderGraph::RGTextureWrite::Storage);
@@ -742,6 +777,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
             writer.AddCombinedImageSampler("uCurrent", ctx.GetTexture(prefiltered), m_PointSampler);
             writer.AddCombinedImageSampler("uHitData", ctx.GetTexture(hitData), m_PointSampler);
             writer.AddCombinedImageSampler("uReprojected", ctx.GetTexture(reprojected), m_PointSampler);
+            writer.AddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size);
             writer.AddCombinedImageSampler("uReprojectedMoments",
                                            ctx.GetTexture(reprojectedMoments), m_PointSampler);
             writer.AddCombinedImageSampler("uDepth", ctx.GetTexture(depth), m_PointSampler);
@@ -807,6 +843,7 @@ void ScreenSpaceReflectionsNode::DeclareForView(ViewDeclare& d)
     d.Frame.MarkPersistentTextureInitialized(sceneHistoryWrite);
 
     d.PublishTexture(m_OutputKey, output);
+    return true;
 }
 
 void ScreenSpaceReflectionsNode::LoadShaders(IDevice* device)

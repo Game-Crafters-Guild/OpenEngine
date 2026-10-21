@@ -25,7 +25,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/RTShadowMaskService.h"
@@ -72,6 +71,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -140,6 +140,31 @@ void DeclareDdgiGatherReads(RenderGraph::RGPassBuilder& p, const DDGIProbeFeatur
     for (const RenderGraph::RGBuffer& probeState : reads.ProbeStates)
         if (probeState.IsValid())
             p.Read(probeState, RenderGraph::RGBufferRead::Storage);
+}
+
+// The reads the forward fog's textures need (forward_fog.glsl): the sky backdrop, bound on every pass
+// (BuildPassResourcesRG), and the froxel volume on VolumetricFog-keyword passes.
+void DeclareForwardFogReads(RenderGraph::RGPassBuilder& p, const RenderServices::WorldPassTargetsRG& targets,
+                            Rendering::MaterialKeyword passKeywords)
+{
+    if (targets.SkyBackdrop.IsValid())
+        p.Read(targets.SkyBackdrop, RenderGraph::RGTextureRead::Sampled);
+    if (targets.VolumetricFog.IsValid() && HasKeyword(passKeywords, Rendering::MaterialKeyword::VolumetricFog))
+        p.Read(targets.VolumetricFog, RenderGraph::RGTextureRead::Sampled);
+    if (targets.VolumetricClouds.IsValid() && HasKeyword(passKeywords, Rendering::MaterialKeyword::VolumetricClouds))
+        p.Read(targets.VolumetricClouds, RenderGraph::RGTextureRead::Sampled);
+}
+
+// The froxel volume a VolumetricFog-keyword pass samples (ge_volumetricFog): a transient of the frame
+// (the integrated grid, or the temporal history the composite reads), so its physical texture exists
+// only at record time.
+void BindVolumetricFogVolume(RenderGraph::RGContext& ctx, RenderGraph::RGTexture volume, SamplerHandle sampler,
+                             ResolvedPassResources& res)
+{
+    if (!volume.IsValid())
+        return;
+    if (const TextureHandle texture = ctx.GetTexture(volume); texture.IsValid())
+        res.Textures.push_back({HashStringId("ge_volumetricFog"), texture, sampler});
 }
 
 // --- Distant-prop coverage census (GE_PROP_CENSUS=1; diagnostic, default off) ---
@@ -220,6 +245,35 @@ void LogPropCoverageCensus(const Rendering::GPUScene& gpuScene,
         sub8);
 }
 
+// The pipeline format key the world pass draws with, from the attachments it declares: the colour
+// target it renders into (the resolve target when MSAA is off and the pass renders straight into
+// it), the providers' extra colour slices and the depth target. Empty when an attachment is a
+// formatless import, whose format only the record context can query.
+std::optional<Rendering::PipelineFormatKey> WorldColorFormatKey(const Rendering::RenderGraph::RGFrame& frame,
+                                                                const RenderServices::WorldPassTargetsRG& targets,
+                                                                bool rendersIntoResolve)
+{
+    namespace RenderGraph = Rendering::RenderGraph;
+    std::array<RenderGraph::RGAttachmentKeyInput, RenderServices::WorldPassTargetsRG::kMaxExtraColorAttachments + 2>
+        inputs{};
+    uint32_t count = 0;
+    const auto add = [&](RenderGraph::RGTexture texture, uint32_t slot, bool isDepth) {
+        const RenderGraph::RGResourceDesc& desc = frame.Graph().ResourceDesc(texture.Id);
+        inputs[count++] = {slot, isDepth, static_cast<Rendering::TextureFormat>(desc.Format), desc.SampleCount};
+        return desc.Format != 0u;
+    };
+    bool resolved = true;
+    if (targets.Color.IsValid())
+        resolved &= add(rendersIntoResolve ? targets.Resolve : targets.Color, 0u, false);
+    for (uint32_t i = 0; i < targets.ExtraColorCount; ++i)
+        if (targets.ExtraColor[i].Texture.IsValid())
+            resolved &= add(targets.ExtraColor[i].Texture, targets.ExtraColor[i].Location, false);
+    if (targets.Depth.IsValid())
+        resolved &= add(targets.Depth, 0u, true);
+    if (!resolved || count == 0)
+        return std::nullopt;
+    return RenderGraph::DeriveFormatKey(inputs.data(), count, Rendering::TextureFormat{});
+}
 } // namespace
 
 ResolvedPassResources RenderServices::BuildPassResourcesRG(
@@ -420,6 +474,47 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
                 gtao = viewGtao;
         }
         addTexture(HashStringId("ge_gtao"), gtao,
+                   m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp));
+    }
+
+    // ge_skyBackdrop: what the sky pass draws its backdrop from, for the height fog's colour taken
+    // from the sky (forward_fog.glsl). Bound whatever the keywords: the terrain and the grass draw in
+    // this pass with the keywords their nodes chose, and every set this pass hands out must carry it.
+    // Black without a sky; the fog reads it only when its colour source names the sky.
+    if (targets)
+    {
+        TextureHandle backdrop = m_Textures->GetDefaultBlackTexture();
+        if (targets->SkyBackdrop.IsValid())
+        {
+            const TextureHandle viewBackdrop = frame.PhysicalTexture(targets->SkyBackdrop);
+            if (viewBackdrop.IsValid())
+                backdrop = viewBackdrop;
+        }
+        addTexture(HashStringId("ge_skyBackdrop"), backdrop,
+                   m_Textures->GetSampler(Rendering::SamplerPreset::LinearRepeat));
+    }
+
+    // ge_volumetricFogIrradiance: the IBL irradiance cube the volumetric fog lights its continuation
+    // past the volume with (volumetric_fog_forward.glsl), as its composite does. The volume itself
+    // is a transient of the frame, bound at record time (BindVolumetricFogVolume).
+    if (HasKeyword(passKeywords, MaterialKeyword::VolumetricFog))
+    {
+        TextureHandle irradiance = m_Textures->GetDefaultBlackCubeTexture();
+        SamplerHandle cubeSampler = m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp);
+        if (auto* ibl = GetFeature<ImageBasedLightingFeature>(); ibl && ibl->IsInitialized())
+        {
+            irradiance = ibl->GetIrradianceCube();
+            cubeSampler = ibl->GetCubeSampler();
+        }
+        addTexture(HashStringId("ge_volumetricFogIrradiance"), irradiance, cubeSampler);
+    }
+
+    // ge_volumetricClouds: the view's resolved clouds (a pool texture of the graph), for the blended
+    // surfaces drawn after the clouds composite that stand beyond them (forward_fog.glsl).
+    if (HasKeyword(passKeywords, MaterialKeyword::VolumetricClouds) && targets && targets->VolumetricClouds.IsValid())
+    {
+        const TextureHandle clouds = frame.PhysicalTexture(targets->VolumetricClouds);
+        addTexture(HashStringId("ge_volumetricClouds"), clouds.IsValid() ? clouds : m_Textures->GetDefaultWhiteTexture(),
                    m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp));
     }
 
@@ -893,7 +988,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
         return result;
 
     // The old activation predicate, evaluated at declaration: not declared =
-    // not compiled. (The renderLayerMask/external-request term is the
+    // not compiled. (The render-layer/external-request term is the
     // slice-4 spine's job — calling this function IS the request.)
     const bool hasTargets = targets.Color.IsValid() || targets.Depth.IsValid();
     // The recover pass never activates just to clear (it always loads) — it only
@@ -1104,6 +1199,15 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
     if (targets.Color.IsValid())
         m_ViewRegistry.PerView(viewId).WorldColorSampleCount =
             frame.Graph().ResourceDesc(targets.Color.Id).SampleCount;
+    // And the formats it draws with, for the forward producers that request a pipeline's build
+    // at next frame's emit (PerViewResources::WorldColorFormatKey).
+    if (!isRecover && scope == WorldPassDrawScope::All)
+    {
+        if (const std::optional<Rendering::PipelineFormatKey> fk =
+                WorldColorFormatKey(frame, targets, collapseToResolve))
+            m_ViewRegistry.PerView(viewId).WorldColorFormatKey = *fk;
+        m_ViewRegistry.PerView(viewId).WorldReliefDepthSource = reliefDepthSource;
+    }
 
     // Camera UBO: upload-ring alloc written NOW. Clear-only frames still get
     // valid camera data — the old arm wrote before its draw guard for the
@@ -1155,6 +1259,8 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
     // None, which leaves the recorded value unchanged.
     if (passKeywords != Rendering::MaterialKeyword::None)
         m_ViewRegistry.PerView(viewId).WorldPassKeywords = passKeywords;
+    if (!isRecover && scope == WorldPassDrawScope::All)
+        m_ViewRegistry.PerView(viewId).DeclaredWorldPassKeywords = passKeywords;
 
     // Coverage census (GE_PROP_CENSUS; throttled). Declaration-time: extraction
     // is complete and this pass's scatter snapshot was captured from the same
@@ -1182,6 +1288,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
     // resolved to its physical texture at record time, below.
     const RenderGraph::RGTexture prepassDepth = readsReliefDepth ? targets.Depth : RenderGraph::RGTexture{};
     const SamplerHandle prepassDepthSampler = m_Textures->GetSampler(Rendering::SamplerPreset::PointClamp);
+    const RenderGraph::RGTexture volumetricFog =
+        HasKeyword(passKeywords, MaterialKeyword::VolumetricFog) ? targets.VolumetricFog : RenderGraph::RGTexture{};
+    const SamplerHandle volumetricFogSampler = m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp);
 
     // Snapshot the view's forward-contributor commands AT DECLARATION: the
     // stream is per view and REPLACED by every emit, so a second pass declared
@@ -1276,6 +1385,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
             // ge_gtao binding in BuildPassResourcesRG.
             if (targets.GTAO.IsValid() && HasKeyword(passKeywords, MaterialKeyword::GTAO))
                 p.Read(targets.GTAO, RenderGraph::RGTextureRead::Sampled);
+            // ge_skyBackdrop and ge_volumetricFog: the sky-view LUT and the froxel volume are written
+            // by compute earlier in the frame; the by-name bindings alone form no edge.
+            DeclareForwardFogReads(p, targets, passKeywords);
             // ge_ddgiResolveRough/Glossy sample the DDGI glossy-resolve
             // compute outputs: same compute->fragment RAW edge + layout
             // transition the ge_gtao read above provides, gated exactly like
@@ -1416,7 +1528,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
         },
         [this, viewId, passKeywords, reliefDepthSource, scope, viewportW, viewportH, letterbox, flipViewportY, phase,
          sliceCascadeIndex, fwdCommands = std::move(forwardSnapshot),
-         prepassDepth, prepassDepthSampler,
+         prepassDepth, prepassDepthSampler, volumetricFog, volumetricFogSampler,
          res = std::move(resources)](RenderGraph::RGContext& ctx) mutable
         {
             auto* cl = ctx.Cmd;
@@ -1490,6 +1602,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 if (const TextureHandle depth = ctx.GetTexture(prepassDepth); depth.IsValid())
                     res.Textures.push_back({HashStringId("ge_prepassDepth"), depth, prepassDepthSampler});
             }
+            BindVolumetricFogVolume(ctx, volumetricFog, volumetricFogSampler, res);
             [[maybe_unused]] const uint64_t uploadedCompatListBytes = UploadedCompatInstanceListBytes(res);
             auto pass = binder.BeginPass(*cl, viewId, ctx, passKeywords, std::move(res),
                                          WorldPassInstanceIndex(sliceCascadeIndex, phase));
@@ -1622,15 +1735,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 const Rendering::VertexAttributeFlags effectiveFlags =
                     BoundStreamVertexFlags(*entry, entryBindings, material->IgnoresVertexColor());
 
-                // Entity batches always need GE_INSTANCED (indirect vertex
-                // fetch) even when callers pass keywords=None (thumbnails).
-                // A parallax material writes its relief's depth when no prepass
-                // wrote it, and reads the prepass's when one did
-                // (WorldPassReliefDepthKeywords).
                 const Rendering::MaterialKeyword entityKeywords =
-                    passKeywords | Rendering::MaterialKeyword::Instanced
-                    | WorldPassReliefDepthKeywords(material->GetVariantKey().materialKeywords,
-                                                   material->GetAlphaMode(), reliefDepthSource);
+                    WorldEntityColorKeywords(passKeywords, material->GetVariantKey().materialKeywords,
+                                             material->GetAlphaMode(), reliefDepthSource);
 
                 // Compatibility profile: no GPU scatter and no device addresses.
                 // The CPU draw stream's frustum-culled instance list replaces
@@ -2109,6 +2216,10 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
     const DDGIProbeFeature::GatherReadsRG ddgiReads =
         ImportDdgiGatherReads(frame, GetFeature<DDGIProbeFeature>(), passKeywords);
 
+    const RenderGraph::RGTexture volumetricFog =
+        HasKeyword(passKeywords, MaterialKeyword::VolumetricFog) ? targets.VolumetricFog : RenderGraph::RGTexture{};
+    const SamplerHandle volumetricFogSampler = m_Textures->GetSampler(Rendering::SamplerPreset::LinearClamp);
+
     std::vector<DrawCommand> passCommands(commands.begin(), commands.end());
     std::string debugName = passName && passName[0] != '\0' ? passName : "ForwardCommands";
     debugName += "[";
@@ -2159,6 +2270,9 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
             // exactly like the ge_gtao binding in BuildPassResourcesRG.
             if (targets.GTAO.IsValid() && HasKeyword(passKeywords, MaterialKeyword::GTAO))
                 p.Read(targets.GTAO, RenderGraph::RGTextureRead::Sampled);
+            // ge_skyBackdrop and ge_volumetricFog: the sky-view LUT and the froxel volume are written
+            // by compute earlier in the frame; the by-name bindings alone form no edge.
+            DeclareForwardFogReads(p, targets, passKeywords);
             // ge_ddgiResolveRough/Glossy sample the DDGI glossy-resolve
             // compute outputs: same compute->fragment RAW edge + layout
             // transition the ge_gtao read above provides, gated exactly like
@@ -2247,12 +2361,14 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
                 p.AttachDepth(targets.Depth, dops, depthAccess, targets.DepthRange);
             }
         },
-        [this, viewId, passKeywords, viewportW, viewportH, letterbox, flipViewportY,
-         passCommands = std::move(passCommands), res = std::move(resources)](RenderGraph::RGContext& ctx) mutable
+        [this, viewId, passKeywords, viewportW, viewportH, letterbox, flipViewportY, volumetricFog,
+         volumetricFogSampler, passCommands = std::move(passCommands),
+         res = std::move(resources)](RenderGraph::RGContext& ctx) mutable
         {
             auto* cl = ctx.Cmd;
             if (!cl)
                 return;
+            BindVolumetricFogVolume(ctx, volumetricFog, volumetricFogSampler, res);
 
             if (viewportW != 0 && viewportH != 0)
             {

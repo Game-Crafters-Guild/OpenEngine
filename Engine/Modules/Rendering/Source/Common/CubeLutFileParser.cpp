@@ -149,9 +149,18 @@ bool ParseRgbLine(std::string_view line, float32& r, float32& g, float32& b)
     return static_cast<bool>(iss >> r >> g >> b);
 }
 
-bool IsSkippableMetadata(std::string_view line)
+// TITLE "text": the quoted text, or the rest of the line when it is not quoted.
+bool ParseTitleLine(std::string_view line, std::string& title)
 {
-    return StartsWith(line, "TITLE");
+    if (!StartsWith(line, "TITLE"))
+        return false;
+    std::string_view rest = TrimLeft(line.substr(5));
+    while (!rest.empty() && (rest.back() == ' ' || rest.back() == '\t'))
+        rest.remove_suffix(1);
+    if (rest.size() >= 2 && rest.front() == '"' && rest.back() == '"')
+        rest = rest.substr(1, rest.size() - 2);
+    title.assign(rest);
+    return true;
 }
 } // namespace
 
@@ -234,7 +243,7 @@ bool ParseCubeLutFromText(std::string_view text, CubeLutParseResult& out)
                 continue;
             if (!out.Error.empty())
                 return false;
-            if (IsSkippableMetadata(line))
+            if (ParseTitleLine(line, out.Title))
                 continue;
 
             if (!saw3dSize && !saw1dSize)

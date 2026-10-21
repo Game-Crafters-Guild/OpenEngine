@@ -292,6 +292,10 @@ class RGGraph
     bool IsExternal(RGResourceId r) const { return m_ResourceExternal[r] != 0; }
     // True for cross-frame pool imports (MarkImported): the "persistent" class.
     bool IsImported(RGResourceId r) const { return m_ResourceImported[r] != 0; }
+    // The layout the importer claimed for r (MarkImported); Undefined for a resource the graph creates.
+    RGImageLayout ImportLayout(RGResourceId r) const { return m_ResourceInitLayout[r]; }
+    // r's contractual final layout (SetExportLayout); Undefined when r has none.
+    RGImageLayout ExportLayout(RGResourceId r) const { return m_ResourceExportLayout[r]; }
     // True when any LIVE pass accesses r. This is the REALIZATION gate: a live
     // pass's depth attachment must exist even if nothing downstream reads it
     // (needed = reaches a sink, drives culling; used = must be allocated).

@@ -13,6 +13,7 @@
 #include "Scripting/ECSABI.h"
 #include "ECS/ECS.h"
 #include "ECS/ComponentRegistry.h"
+#include "Audio/AudioTypes.h"
 #include "Core/CommandLine.h"
 #include "Startup/EditorCommandLine.h"
 #include "Startup/EditorStartup.h"
@@ -27,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <filesystem>
+#include <optional>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -434,6 +436,22 @@ namespace {
 #endif
 }
 
+// GE_AUDIO_OUTPUT=silent mixes the editor's audio with no output device, for isolated
+// and automated runs. Unset or empty plays on the device; an unrecognized value is
+// logged and ignored.
+static GameEngine::Audio::AudioOutput ReadAudioOutputOverride()
+{
+    const char* value = std::getenv("GE_AUDIO_OUTPUT");
+    if (!value || value[0] == '\0')
+        return GameEngine::Audio::AudioOutput::Device;
+    if (const std::optional<GameEngine::Audio::AudioOutput> output = GameEngine::Audio::TryParseAudioOutput(value))
+        return *output;
+    Logger::Log::Warning("Editor: GE_AUDIO_OUTPUT='{}' is not an audio output; ignoring it and playing on the "
+                         "device. Recognized values: silent, device.",
+                         value);
+    return GameEngine::Audio::AudioOutput::Device;
+}
+
 static int EditorMainImpl(int argc, char** argv) {
     GameEngine::Platform::SetCurrentThreadName("Main Thread");
 
@@ -617,6 +635,7 @@ static int EditorMainImpl(int argc, char** argv) {
 
     GameEngine::ApplicationConfig config =
         GameEngine::Editor::Startup::BuildEditorApplicationConfig(editorArgs, engineArgs);
+    config.AudioOutput = ReadAudioOutputOverride();
 
     if (editorArgs.projectRoot.has_value())
     {
@@ -648,6 +667,7 @@ static int EditorMainImpl(int argc, char** argv) {
     }
     GameEngine::EngineCore::GetInstance().SetScriptsConfig(scriptsConfig);
 
+#if GE_ENABLE_SCRIPTING
     // Unify the DLL-local logger with this module's state (same fix as the
     // exe<->Engine.dll split): without it, GameEngine.Native.dll logs vanish.
     GE_SetHostLoggerState(GameEngine::GetEngineLoggerState());
@@ -660,6 +680,7 @@ static int EditorMainImpl(int argc, char** argv) {
         GameEngine::ECS::ComponentRegistry::GetComponentsPtr(),
         GameEngine::ECS::ComponentRegistry::GetNameToTypeIdPtr(),
         GameEngine::ECS::ComponentRegistry::GetHandlersPtr());
+#endif
 
     #if defined(GE_ENABLE_MIMALLOC) && GE_ENABLE_MIMALLOC
     Logger::Log::Info("mimalloc version {}", mimallocVersion);

@@ -13,7 +13,7 @@
 //
 // That identity is a hard requirement, not a convenience: ComponentScanner emits the
 // same macros in both modes and only switches which registration header it includes
-// (Managed/ComponentScanner/Program.cs). A macro defined in one header and not the
+// (Tools/ComponentScanner/ReflectionEmitter.cpp). A macro defined in one header and not the
 // other is a compile error in generated code.
 //
 // Place GE_REGISTER_COMPONENT_* and the metadata macros in a .cpp, never a header:
@@ -24,6 +24,7 @@
 #include "ECS/Reflection.h"             // GE_REFLECT_BEGIN/_FIELD/_END, FieldFlags, EnumNameValue, GE_PP_CONCAT
 #include "ECS/ComponentFieldRegistry.h" // ComponentFieldRegistry
 #include "Components/MathReflectionTraits.h"  // Vector2/3/4 + Quaternion -> Vec/Quat field types
+#include "Components/RenderLayerMaskReflectionTraits.h"  // Rendering::RenderLayerMask -> RenderLayerMask field type
 
 #include <limits>  // generated code passes std::numeric_limits<float>::infinity() for an open range maximum
 #include <span>

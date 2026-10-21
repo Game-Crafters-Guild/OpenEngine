@@ -63,8 +63,8 @@ TEST(SceneViewToolStrip, ARegisteredEntryIsAppendedActivatesItsToolAndShowsItsBa
     SceneViewToolStripEntry entry;
     entry.Id = "notes";
     entry.Tooltip = "Notes";
-    entry.Icon = "editor:Icons/marker.png";
-    entry.BadgeButtonIcon = "editor:Icons/pulse.png";
+    entry.Icon = "editor:Icons/marker.svg";
+    entry.BadgeButtonIcon = "editor:Icons/pulse.svg";
     int badgeReads = 0;
     entry.BadgeCount = [&unseen, &badgeReads]() {
         ++badgeReads;
@@ -101,7 +101,7 @@ TEST(SceneViewToolStrip, ARegisteredEntryIsAppendedActivatesItsToolAndShowsItsBa
     ASSERT_NE(button, nullptr);
     ASSERT_NE(badgeButton, nullptr);
     EXPECT_EQ(button->GetId(), Editor::RegisteredToolButtonId(ToolStripPlacement::Floating, "notes"));
-    EXPECT_EQ(icons, (std::vector<std::string>{"editor:Icons/marker.png", "editor:Icons/pulse.png"}));
+    EXPECT_EQ(icons, (std::vector<std::string>{"editor:Icons/marker.svg", "editor:Icons/pulse.svg"}));
 
     Click(*button);
     EXPECT_EQ(toggled, std::vector<std::string>{"notes"});

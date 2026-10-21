@@ -76,7 +76,7 @@ class BuildRenderPipelineExport : public ::testing::Test
 
     void TearDown() override { m_AssetManager.Shutdown(); }
 
-    // BuildPipeline::CollectAssets' order: the startup scene's walk, then the pipeline the
+    // AssetCollector::CollectGameContent's order: the startup scene's walk, then the pipeline the
     // export resolved from the build settings.
     AssetManifest CollectExport()
     {

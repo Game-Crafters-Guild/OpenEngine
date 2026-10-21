@@ -18,6 +18,12 @@ layout(set = 0, binding = 13) uniform sampler2D uMotionVectors;
 // reprojected, so reflections contain last frame's reflections (cheap
 // multi-bounce) and late-frame shading the pre-SSR input lacks.
 layout(set = 0, binding = 11) uniform sampler2D uPrevScene;
+// The view's exposure state (ExposureHistory). Scene colour, the specular
+// radiance and the rays' radiance are stored at this frame's pre-exposure P; the previous
+// frame's composited scene at the previous P, so a bounce read from it is rescaled by their ratio.
+// The firefly knee is absolute scene-linear luminance.
+#define GE_EXPOSURE_HISTORY_BINDING 14
+#include "Includes/exposure_history.glsl"
 layout(std430, set = 0, binding = 5) readonly buffer RayListBuffer { uint rays[]; } RayList;
 #include "ScreenSpaceReflections/sssr_common.glsl"
 #include "ScreenSpaceReflections/sssr_reprojection.glsl"
@@ -265,13 +271,13 @@ void main()
                     float prevDepth = texelFetch(uPrevScene, prevPix, 0).a;
                     float depthTol = max(0.002, abs(expectedPrevDepth) * 0.02);
                     if (abs(prevDepth - expectedPrevDepth) <= depthTol)
-                        radiance = textureLod(uPrevScene, prevUv, 0.0).rgb;
+                        radiance = textureLod(uPrevScene, prevUv, 0.0).rgb * GE_PreExposureHistoryScale();
                 }
                 // Soft firefly clamp: an emissive hit can be orders of magnitude
                 // brighter than its neighborhood; one such single-sample spike
                 // defeats the temporal variance clamp and sparkles. Compressing
                 // (not truncating) above the knee keeps highlights readable.
-                float lum = GE_Luminance(radiance);
+                float lum = GE_Luminance(radiance) / GE_PreExposure();
                 const float kFireflyKnee = 4.0;
                 if (lum > kFireflyKnee)
                     radiance *= (kFireflyKnee + sqrt(lum - kFireflyKnee)) / lum;

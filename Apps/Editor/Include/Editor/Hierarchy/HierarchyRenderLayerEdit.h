@@ -15,18 +15,14 @@ namespace GameEngine::Editor
 class EditorChangeNotifications;
 class UndoRedoService;
 
-/// Writes `mask` into whichever component carries the render layer on each entity and
-/// records the whole list as ONE undo step, so a multi-row edit undoes in one press.
-///
-/// The component search order is RenderLayer, then MeshRenderer, then
-/// SkinnedMeshRenderer — the same order the hierarchy row reads to populate its
-/// dropdown, so the row and the edit never disagree about which component owns the
-/// mask. An entity that already holds `mask`, and an entity with none of the three
-/// components, contributes nothing and leaves the undo step no larger.
-void ApplyRenderLayerMask(
+/// Turns the layers `bits` on (or off) in each entity's MeshRenderer::RenderLayers and keeps every other
+/// layer of that entity, recorded as ONE undo step, so a multi-row edit undoes in one press. An entity whose
+/// layers do not change, and an entity with no MeshRenderer, contributes nothing to the undo step.
+void ApplyRenderLayerBits(
     ECS::World& world,
     const std::vector<ECS::EntityHandle>& entities,
-    uint32 mask,
+    uint32 bits,
+    bool on,
     UndoRedoService* undo,
     EditorChangeNotifications* notifications);
 

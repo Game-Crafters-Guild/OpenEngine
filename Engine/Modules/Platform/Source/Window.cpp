@@ -117,17 +117,19 @@ namespace {
             css);
     }
 
-    // The browser owns the window geometry on this target: the canvas fills
-    // the page, so the GLFW window tracks the viewport (CSS px). emscripten's
-    // GLFW only pushes sizes canvas-ward (glfwSetWindowSize -> canvas), so
-    // viewport changes have to be pushed back into GLFW here. The resize event
-    // also fires on browser zoom, where the viewport's CSS size and
+    // The page owns the window geometry on this target: its CSS sizes the
+    // canvas, so the GLFW window tracks the canvas's CSS size (CSS px).
+    // emscripten's GLFW only pushes sizes canvas-ward (glfwSetWindowSize ->
+    // canvas), so a browser resize has to be pushed back into GLFW here. The
+    // resize event also fires on browser zoom, where the CSS size and
     // devicePixelRatio change together.
-    bool WebViewportResizeThunk(int /*eventType*/, const EmscriptenUiEvent* event, void* userData)
+    bool WebViewportResizeThunk(int /*eventType*/, const EmscriptenUiEvent* /*event*/, void* userData)
     {
         auto* handle = static_cast<GLFWwindow*>(userData);
-        if (handle && event && event->windowInnerWidth > 0 && event->windowInnerHeight > 0)
-            glfwSetWindowSize(handle, event->windowInnerWidth, event->windowInnerHeight);
+        const int width = EM_ASM_INT({ return Module['canvas'] ? Module['canvas'].clientWidth : 0; });
+        const int height = EM_ASM_INT({ return Module['canvas'] ? Module['canvas'].clientHeight : 0; });
+        if (handle && width > 0 && height > 0)
+            glfwSetWindowSize(handle, width, height);
         return true;
     }
 
@@ -339,7 +341,24 @@ bool Window::Create(const WindowDesc& desc)
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 #endif
 
-    m_Handle = glfwCreateWindow(desc.Width, desc.Height, desc.Title.c_str(), nullptr, desc.Share);
+    int createWidth = desc.Width;
+    int createHeight = desc.Height;
+#if defined(__EMSCRIPTEN__)
+    // The requested size is a desktop concept: here the page's CSS sizes the
+    // canvas, and the window starts at that size. Created at the desktop
+    // default (1280 x 720) instead, GLFW pins the canvas to 1280 CSS px, which
+    // widens a phone's layout viewport to 1280 before the size can be read.
+    {
+        const int cssWidth = EM_ASM_INT({ return Module['canvas'] ? Module['canvas'].clientWidth : 0; });
+        const int cssHeight = EM_ASM_INT({ return Module['canvas'] ? Module['canvas'].clientHeight : 0; });
+        if (cssWidth > 0 && cssHeight > 0)
+        {
+            createWidth = cssWidth;
+            createHeight = cssHeight;
+        }
+    }
+#endif
+    m_Handle = glfwCreateWindow(createWidth, createHeight, desc.Title.c_str(), nullptr, desc.Share);
     if (!m_Handle)
     {
 #if defined(__EMSCRIPTEN__)
@@ -350,8 +369,8 @@ bool Window::Create(const WindowDesc& desc)
         Logger::Log::Error(
             "Window::Create: glfwCreateWindow failed for '{}' ({}x{}, hidden={}, errorCode={}, error='{}')",
             desc.Title,
-            desc.Width,
-            desc.Height,
+            createWidth,
+            createHeight,
             createHidden ? "true" : "false",
             glfwErrorCode,
             glfwError ? glfwError : "");
@@ -395,13 +414,56 @@ bool Window::Create(const WindowDesc& desc)
     CheckMonitorChanged();
 
 #if defined(__EMSCRIPTEN__)
-    // The requested size is a desktop concept; here the canvas fills the page,
-    // so the window is the viewport — at creation and on every browser resize.
+    // The page's CSS owns the canvas's displayed size where it gives one; the
+    // engine owns only the drawing buffer (the CSS size times the pixel ratio).
+    // emscripten's GLFW writes the window size into the canvas's style as
+    // `!important` on every size change. On an axis the page's CSS sizes, that
+    // write would pin the canvas against the page (and, on a phone, widen the
+    // layout viewport), so it is dropped after each update. On an axis the
+    // page leaves to the canvas's intrinsic size (a bare <canvas>), the write
+    // stays: it holds the canvas at the window size, which without it would
+    // follow the drawing buffer and grow by the pixel ratio on every resize.
+    // Which axes the page sizes is decided once, on the first window: with
+    // the inline size removed, an axis whose CSS size follows the canvas's
+    // width or height attribute is not sized by the page.
+    EM_ASM({
+        if (Browser.geCanvasAxesSizedByPage)
+            return;
+        var canvas = Module['canvas'];
+        if (!canvas || !canvas.style)
+            return;
+        var glfwWidth = canvas.style.getPropertyValue('width');
+        var glfwHeight = canvas.style.getPropertyValue('height');
+        canvas.style.removeProperty('width');
+        canvas.style.removeProperty('height');
+        var bufferWidth = canvas.width;
+        var bufferHeight = canvas.height;
+        var cssWidth = canvas.clientWidth;
+        var cssHeight = canvas.clientHeight;
+        canvas.width = bufferWidth + 7;
+        canvas.height = bufferHeight + 7;
+        var sized = {};
+        sized.width = canvas.clientWidth === cssWidth;
+        sized.height = canvas.clientHeight === cssHeight;
+        canvas.width = bufferWidth;
+        canvas.height = bufferHeight;
+        if (!sized.width && glfwWidth)
+            canvas.style.setProperty('width', glfwWidth, 'important');
+        if (!sized.height && glfwHeight)
+            canvas.style.setProperty('height', glfwHeight, 'important');
+        Browser.geCanvasAxesSizedByPage = sized;
+        var updateCanvasDimensions = Browser.updateCanvasDimensions;
+        Browser.updateCanvasDimensions = function(target, wNative, hNative) {
+            updateCanvasDimensions(target, wNative, hNative);
+            if (target !== Module['canvas'] || !target.style)
+                return;
+            if (sized.width)
+                target.style.removeProperty('width');
+            if (sized.height)
+                target.style.removeProperty('height');
+        };
+    });
     {
-        const int viewportW = EM_ASM_INT({ return window.innerWidth; });
-        const int viewportH = EM_ASM_INT({ return window.innerHeight; });
-        if (viewportW > 0 && viewportH > 0)
-            glfwSetWindowSize(m_Handle, viewportW, viewportH);
         emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, m_Handle, false,
                                        &WebViewportResizeThunk);
         emscripten_set_fullscreenchange_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, m_Handle,
@@ -811,6 +873,28 @@ void Window::SetFullscreen(bool enable)
 }
 
 #if defined(__EMSCRIPTEN__)
+void Window::SetWebPixelRatio(double ratio)
+{
+    if (!m_Handle)
+        return;
+    // emscripten's GLFW sizes the drawing buffer by GLFW.getDevicePixelRatio(), on every
+    // size change and on a devicePixelRatio change; the page's ratio replaces it.
+    EM_ASM(
+        {
+            GLFW.geRequestedPixelRatio = $0;
+            if (!GLFW.geBrowserDevicePixelRatio)
+            {
+                GLFW.geBrowserDevicePixelRatio = GLFW.getDevicePixelRatio;
+                GLFW.getDevicePixelRatio = function() {
+                    return GLFW.geRequestedPixelRatio > 0 ? GLFW.geRequestedPixelRatio
+                                                          : GLFW.geBrowserDevicePixelRatio();
+                };
+            }
+            GLFW.onDevicePixelRatioChange();
+        },
+        ratio);
+}
+
 void Window::NotifyWebFullscreenChanged(bool isFullscreen)
 {
     if (m_IsFullscreen == isFullscreen)

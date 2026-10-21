@@ -241,8 +241,7 @@ TEST(NativeUserModuleBuildLoad, CompilesAndRegistersAComponentViaMacro)
 TEST(NativeUserModuleBuildLoad, ScansAndRegistersInheritedComponent)
 {
     const auto kv = LoadConfigOrFail();
-    for (const char* required : {"dotnet", "scannerdll"})
-        ASSERT_TRUE(kv.count(required)) << "missing config key: " << required;
+    ASSERT_TRUE(kv.count("scanner")) << "missing config key: scanner";
 
     const fs::path root = fs::path(kv.at("workdir")) / "scanned";
     // Deliberately name the source dir "Components": this reproduces the include-root bug
@@ -250,8 +249,7 @@ TEST(NativeUserModuleBuildLoad, ScansAndRegistersInheritedComponent)
     // `#include "Components/X.h"` the user DLL (which has only SourceDir on its include path)
     // could not resolve. User-mode include roots must be relative to SourceDir.
     ns::NativeBuildConfig config = MakeBaseConfig(kv, root, "Components");
-    config.DotnetExe = kv.at("dotnet");
-    config.ComponentScannerDll = kv.at("scannerdll");
+    config.ComponentScannerExe = kv.at("scanner");
     config.DetectBase = "ComponentBase";
     const fs::path sourceDir = config.SourceDir;
     std::error_code ec;

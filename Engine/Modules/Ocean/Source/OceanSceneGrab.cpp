@@ -204,6 +204,7 @@ bool OceanSceneGrab::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d, 
     const RenderGraph::RGTexture grab = d.Frame.ImportExternalTexture(
         grabName.c_str(), viewGrab.Texture, ResourceState::ShaderResource,
         static_cast<TextureFormat>(viewGrab.Format));
+    d.MarkPreExposed(grab); // a copy of scene colour, stored at the frame's pre-exposure
     if (outGraphTexture)
         *outGraphTexture = grab;
 

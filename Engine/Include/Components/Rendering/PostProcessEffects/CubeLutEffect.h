@@ -3,38 +3,45 @@
 #include "Components/AssetRef.h"
 #include "Types/Types.h"
 
+#include <cstdint>
+#include <string_view>
+
 namespace GameEngine {
 namespace Components {
 
-enum class CubeLutInputEncoding : uint32
+/// Where in the image chain a volume's Cube LUT runs. Stored in a scene by name
+/// (`CubeLutEffect.stage = Grade`), never by number.
+enum class CubeLutStage : uint32
 {
-    Linear = 0,
-    Rec709SRGB = 1,
-    ArriLogC3 = 2,
-    DaVinciWideGamutIntermediate = 3,
-    ACEScct = 4,
-    Cineon = 5,
+    /// After the look: the LUT grades the look's display-referred output inside the Tonemap pass,
+    /// before the HDR highlight extension and every display-referred effect. The default.
+    Finish = 0,
+    /// Before the look: the LUT is the grade's last stage (the HDRColorFx pass), on the exposed
+    /// scene-linear image; the look then renders its output.
+    Grade = 1,
 };
 
-enum class CubeLutTextureFormat : uint32
-{
-    R32G32B32A32_FLOAT = 0,
-    R16G16B16A16_FLOAT = 1,
-};
+inline constexpr uint32 kCubeLutStageCount = 2;
 
-// Resolve-style .cube color LUT (1D, 3D, or 1D shaper + 3D). Attach to the same entity as PostProcessVolume.
+/// The one name table for the stages: the scene format and the loader's message read it.
+inline constexpr std::string_view kCubeLutStageNames[kCubeLutStageCount] = {"Finish", "Grade"};
+
+constexpr std::string_view CubeLutStageName(CubeLutStage stage)
+{
+    return kCubeLutStageNames[stage == CubeLutStage::Grade ? 1 : 0];
+}
+
+// Resolve-style .cube color LUT (1D, 3D, or 1D shaper + 3D). Attach to the same entity as
+// PostProcessVolume. The LUT asset declares the encoding its input is authored in (the asset's
+// inspector); the effect chooses the stage it runs at.
 struct CubeLutEffect {
     bool Enabled{true};
     // Off pins the effect off wherever its volume applies: a value the volume blend reads.
     static constexpr bool KeepsOwnEnabledField = true;
-    // Relative execution order among reorderable LDR post FX.
-    int32 StackOrder{0};
     // 0 = bypass, 1 = full LUT blend.
     float32 Intensity{1.0f};
-    // Encoding expected by the LUT. Shader converts from/to scene linear around the LUT sample.
-    uint32 InputEncoding{static_cast<uint32>(CubeLutInputEncoding::Linear)};
-    // GPU texture precision for uploaded LUT tables.
-    uint32 TextureFormat{static_cast<uint32>(CubeLutTextureFormat::R32G32B32A32_FLOAT)};
+    // Where the LUT runs: after the look (Finish) or before it (Grade).
+    CubeLutStage Stage{CubeLutStage::Finish};
     // The .cube color LUT asset.
     AssetRef<AssetType::CubeLut> LutAssetGuid{};
 };

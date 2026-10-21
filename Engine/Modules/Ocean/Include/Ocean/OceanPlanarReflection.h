@@ -33,7 +33,7 @@ namespace GameEngine::Ocean
 //   - A persistent secondary view + camera, allocated once. The view is marked
 //     activeRenderPipeline=false (the main pipeline skips it) but keeps the main
 //     view's render-layer mask + world id, so render extraction STILL submits the
-//     whole scene to it (extraction gates on renderLayerMask directly, not on the
+//     whole scene to it (extraction gates on the view's render layers, not on the
 //     pipeline-active flag). We then drive its world pass explicitly, mirroring
 //     the editor thumbnail path.
 //   - Each frame: mirror the main camera across y = SeaLevel (a Householder

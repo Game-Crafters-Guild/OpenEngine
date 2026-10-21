@@ -1,6 +1,10 @@
 #include "Assets/FlareAtlasAsset.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Logger/Logger.h"
+#include "Serialization/JsonRead.h"
+
+#include <format>
 
 #include <nlohmann/json.hpp>
 
@@ -44,33 +48,50 @@ int32_t FlareAtlasAsset::FindSprite(const std::string& name) const
     return -1;
 }
 
+bool FlareAtlasAsset::Refuse(std::string_view reason)
+{
+    Logger::Log::Error("FlareAtlasAsset: '{}' is not loaded: {}", GetPath().generic_string(), reason);
+    m_TextureRef.clear();
+    m_Sprites.clear();
+    return false;
+}
+
 bool FlareAtlasAsset::ParseFromText(const std::string& text)
 {
     m_TextureRef.clear();
     m_Sprites.clear();
 
-    nlohmann::json doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions*/ false);
-    if (doc.is_discarded() || !doc.is_object())
-        return false;
+    nlohmann::json doc;
+    std::string parseError;
+    if (!Serialization::ParseJson(text, doc, parseError))
+        return Refuse(std::format("it is not JSON ({}); fix the text at that place", parseError));
+    if (!doc.is_object())
+        return Refuse("its JSON is not an object; write it as an object of texture and sprites");
 
-    m_TextureRef = doc.value("texture", std::string{});
+    Serialization::JsonFieldReader reader;
+    reader.Read(doc, "texture", m_TextureRef);
 
     if (doc.contains("sprites") && doc["sprites"].is_array())
     {
-        for (const auto& s : doc["sprites"])
+        const nlohmann::json& sprites = doc["sprites"];
+        for (size_t index = 0; index < sprites.size(); ++index)
         {
+            const nlohmann::json& s = sprites[index];
             if (!s.is_object())
                 continue;
+            reader.SetContext(std::format("sprites[{}].", index));
             LensFlare::AtlasSprite sprite;
-            sprite.Name = s.value("name", std::string{});
-            sprite.U = s.value("u", 0.0f);
-            sprite.V = s.value("v", 0.0f);
-            sprite.W = s.value("w", 1.0f);
-            sprite.H = s.value("h", 1.0f);
+            reader.Read(s, "name", sprite.Name);
+            reader.Read(s, "u", sprite.U);
+            reader.Read(s, "v", sprite.V);
+            reader.Read(s, "w", sprite.W);
+            reader.Read(s, "h", sprite.H);
             m_Sprites.push_back(std::move(sprite));
         }
     }
 
+    if (reader.Refused())
+        return Refuse(reader.Refusal());
     return true;
 }
 

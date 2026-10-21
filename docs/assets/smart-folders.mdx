@@ -1,6 +1,6 @@
 ---
 title: Smart folders
-description: Saved asset queries in the Assets panel, with their settings, filters, undo, examples and where they are stored.
+description: Saved asset queries in the Assets panel, with their settings, filters, undo, examples, and where they are stored.
 ---
 
 Smart folders are virtual folders that show the assets matching a set of filters. They organize and reach files across the project without moving them from where they are.
@@ -61,7 +61,7 @@ Filters decide which files appear in the smart folder. **Add Filter** adds a fil
 
 ## Undo
 
-Creating, deleting and editing smart folders can be undone and redone:
+Creating, deleting, and editing smart folders can be undone and redone:
 
 - **Create:** undo removes the smart folder.
 - **Delete:** undo restores it with all its settings.
@@ -82,7 +82,7 @@ Press **Cmd+Z** on macOS or **Ctrl+Z** on Windows and Linux to undo.
 
 The **Assets** page of the editor's preferences has two settings for smart folders:
 
-- **Smart Folders At Top** (on by default) puts the smart folders at the top of the Assets tree; off puts them at the bottom.
+- **Smart Folders At Top** (on by default) puts the smart folders at the top of the Assets tree. Off puts them at the bottom.
 - **Expand Smart Folders** (off by default) expands the smart folders section when the editor starts.
 
 ## Where smart folders are stored
@@ -92,8 +92,4 @@ The **Assets** page of the editor's preferences has two settings for smart folde
 
 ## How the files are found
 
-Smart folders look files up in the asset registry rather than scanning the file system, so they are fast, follow `.assetignore` rules and show only registered assets. When the registry lookup yields no candidates (for example while the registry's mappings are being rebuilt), the smart folder scans the file system instead.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/SmartFolders.md`; the Tag and VCS Status filters and the Expand Smart Folders preference added from the editor; the three-level depth stated as the Location list's, not the search's; the filesystem fallback stated as it applies (no registry candidates); the examples became a table; the global path gives Linux and the `GE_EDITOR_USER_DATA_ROOT` override.
+Smart folders look files up in the asset registry rather than scanning the file system, so they are fast, follow `.assetignore` rules, and show only registered assets. When the registry lookup yields no candidates (for example while the registry's mappings are being rebuilt), the smart folder scans the file system instead.

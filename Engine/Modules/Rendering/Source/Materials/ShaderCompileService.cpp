@@ -82,6 +82,18 @@ ShaderCompileService::SpirvTarget ShaderCompileService::MaxSupportedSpirv()
     return g_MaxBackendSpirv.load(std::memory_order_relaxed);
 }
 
+std::string_view ShaderCompileService::CacheKeyTarget()
+{
+    // The version stands for everything the engine itself writes into a package that the key's
+    // inputs cannot see (the key format, the embedded compiler, the reflection walker's output), so
+    // it is bumped whenever any of those changes, and the entries an older engine wrote are
+    // orphaned rather than migrated: never addressed again.
+    // v8: reflection preserves unsigned sampled-image types for WebGPU layouts.
+    return MaxSupportedSpirv() == SpirvTarget::Spirv_1_6
+        ? "ShaderCompileServiceTarget:v8:backend-max=spv1.6;mesh-floor=spv1.6"
+        : "ShaderCompileServiceTarget:v8:backend-max=spv1.5;mesh-floor=spv1.6";
+}
+
 namespace {
 
 // Resolve a stage's source text: the in-memory inlineSource when present, else read srcPath.
@@ -527,6 +539,17 @@ bool TryServeCachedProgram(const std::filesystem::path& pkgPath, ShaderSourceKin
 
 } // namespace
 
+bool ShaderCompileService::ServeCachedProgram(const std::filesystem::path& shaderPkgPath, ShaderSourceKind kind,
+                                              ShaderProgramCompileResult& out)
+{
+    out = ShaderProgramCompileResult{};
+    out.outputDir = shaderPkgPath.parent_path();
+    out.shaderPkgPath = shaderPkgPath;
+    // No key was computed, so no include is proven by one: every dependency the package's cache
+    // info records is revalidated by content.
+    return TryServeCachedProgram(shaderPkgPath, kind, IncludeClosure{}, out);
+}
+
 bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileRequest& req,
                                                 ShaderSourceKind kind,
                                                 ShaderProgramCompileResult& out,
@@ -568,15 +591,8 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
     // CONTENT, so dropping them loses no discrimination.
     uint64_t h = kShaderHashOffsetBasis;
     // Encode key-format version + chosen compile target so 1.2 and 1.3 builds
-    // never collide in a shared cache. The version stands for everything the
-    // engine itself writes into a package that the key's inputs cannot see —
-    // the key format, the embedded compiler, the reflection walker's output —
-    // so it is bumped whenever any of those changes, and the entries an older
-    // engine wrote are orphaned rather than migrated: never addressed again.
-    // v8: reflection preserves unsigned sampled-image types for WebGPU layouts.
-    h = HashShaderString(h, g_MaxBackendSpirv.load(std::memory_order_relaxed) == ShaderCompileService::SpirvTarget::Spirv_1_6
-            ? "ShaderCompileServiceTarget:v8:backend-max=spv1.6;mesh-floor=spv1.6"
-            : "ShaderCompileServiceTarget:v8:backend-max=spv1.5;mesh-floor=spv1.6");
+    // never collide in a shared cache (CacheKeyTarget).
+    h = HashShaderString(h, std::string(CacheKeyTarget()));
     // Accumulated across stages: vs and fs of one material share most of their
     // include closure, so a file already folded by an earlier stage need not be
     // read again — the key covers it either way.

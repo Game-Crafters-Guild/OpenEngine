@@ -112,5 +112,8 @@ constexpr StyleProp<uint32_t> TextGlowColor{StylePropertyId::TextGlowColor};
 constexpr StyleProp<float> TextOutlineWidth{StylePropertyId::TextOutlineWidth};
 constexpr StyleProp<uint32_t> TextOutlineColor{StylePropertyId::TextOutlineColor};
 constexpr StyleProp<GlowValue> GlowProp{StylePropertyId::Glow};
+// Paint-time 2D transform about transform-origin; see TransformValue.
+constexpr StyleProp<TransformValue> Transform{StylePropertyId::Transform};
+constexpr StyleProp<TransformOriginValue> TransformOrigin{StylePropertyId::TransformOrigin};
 
 } // namespace GameEngine::Style

@@ -14,22 +14,17 @@ struct SkySystemConfig
     // around this value so primary color does not pop at sunset.
     float sunBelowHorizonDotThreshold = -0.05f;
 
-    // Simple parameters for moon lighting when it becomes the primary light.
-    float moonIntensityScale = 0.05f;
-    // The default moonlight as a fraction of a clear sun's illuminance: with moonColor below it sets
-    // SkyEnvironment's default Moonlight (kDefaultMoonlightIlluminanceLux), and the linked light's
-    // full night at that default and a clear sun. Real moonlight is ~1/400000 of the sun, which meters
-    // to black, so the light runs a stylized ~1/100 instead — against moonColor below, whose own
-    // ~1/200 magnitude lands the pair at a few lux: a bright cinematic moonlit night that still sits
-    // under the auto-exposure floor. Deliberately smaller than moonIntensityScale: the visible disc is
-    // an emitter, the light is its illuminance.
-    float moonLightIlluminanceScale = 0.01f;
-    // Colour of the primary source at full night, on the same scene-linear scale as the daytime
-    // sun's white. Its MAGNITUDE is the stylized moon-to-sun ratio, not a normalized tint: real
-    // moonlight is ~1/400000 of sunlight and meters to black, so the sky runs ~1/200 instead — a
-    // moonlit night that still sits below the auto-exposure floor and reads as night. The
-    // chromaticity is the cool grey of sRGB #0F1012.
-    float moonColor[3] = { 0.004776953f, 0.005181517f, 0.006048833f };
+    // A full moon's illuminance as a fraction of a clear sun's, both on a surface facing them high in
+    // the sky: 0.25 lx against 100 000 lx (Krisciunas and Schaefer 1991, PASP 103:1033: V = -12.73,
+    // about 0.27 lx above the atmosphere). The same fraction sets the moon's light, its in-scatter in
+    // the sky and its disc; the phase scales all three (MoonPhaseIlluminanceFraction).
+    float moonLightIlluminanceScale = 2.5e-6f;
+    // The moon's colour at unit luminance, linear Rec.709: sunlight reflected by a surface redder than
+    // grey (lunar B-V 0.92 against the sun's 0.65, Allen's Astrophysical Quantities), a reflectance
+    // rising as lambda^1.1, sampled at the 680, 550 and 440 nm the sky's coefficients use. The
+    // atmosphere reddens it further at moonrise through the same transmittance as the sun.
+    // Includes/moon_disc.glsl carries the same values as GE_MOON_TINT for the sky-view LUT and the disc.
+    float moonColor[3] = { 1.2142f, 0.9614f, 0.7521f };
 };
 
 } // namespace Rendering

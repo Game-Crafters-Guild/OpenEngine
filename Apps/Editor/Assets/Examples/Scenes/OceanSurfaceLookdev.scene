@@ -44,6 +44,9 @@ PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.isGlobal = true
 PostProcessVolume.look = Neutral
+Transform.position = (0, 0, 0)
+Transform.rotation = (0, 0, 0, 1)
+Transform.scale = (1, 1, 1)
 
 [entity id="ocean"]
 Name.value = "Ocean - foam and ripple detail"

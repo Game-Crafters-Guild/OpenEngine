@@ -47,7 +47,9 @@ enum class GradientMode : uint8_t
 };
 
 // Bit layout of UIPrimitive::modeAndFlags:
-//   [0:7]   PrimitiveMode
+//   [0:2]   PrimitiveMode
+//   [3]     pointFilter (Textured mode: nearest-neighbour sampling)
+//   [4:7]   unused
 //   [8:10]  GradientMode
 //   [11]    encodedSourceContent (Textured mode; see kPrimEncodedSourceBit)
 //   [12]    isColorGlyph (Slug mode: 1 = color emoji atlas, sample RGBA directly)
@@ -55,7 +57,9 @@ enum class GradientMode : uint8_t
 //   [14]    squareLineCap (Line mode: 1 = square caps instead of default round/capsule)
 //   [15]    hdrTextureContent (Textured mode: preserve values above SDR white)
 //   [16:31] clipIndex (index into ClipRect SSBO; 0xFFFF = no clip)
-constexpr uint32_t kPrimModeMask        = 0x000000FFu;
+constexpr uint32_t kPrimModeMask        = 0x00000007u;
+// Textured mode: sample nearest-neighbour instead of bilinear.
+constexpr uint32_t kPrimPointFilterBit  = 0x00000008u;
 constexpr uint32_t kPrimGradientShift   = 8;
 constexpr uint32_t kPrimGradientMask    = 0x00000700u;
 // The external source's colour space, as two mutually exclusive bits: both clear
@@ -79,6 +83,8 @@ constexpr uint16_t kNoClip              = 0xFFFFu;
 // GradientMode needs three bits, so the fourth bit of the field it used to
 // occupy carries the space flag above. An eighth gradient mode must claim a bit
 // elsewhere rather than silently overwrite it.
+static_assert(static_cast<uint32_t>(PrimitiveMode::Triangle) <= kPrimModeMask,
+              "PrimitiveMode no longer fits its 3-bit field — kPrimPointFilterBit owns bit 3");
 static_assert(static_cast<uint32_t>(GradientMode::PolarHSVGrading) <=
                   (kPrimGradientMask >> kPrimGradientShift),
               "GradientMode no longer fits its 3-bit field — kPrimEncodedSourceBit owns bit 11");
@@ -134,7 +140,11 @@ struct alignas(16) UIPrimitive
 
     // --- vec4[6]: Mode parameters ---
     float Opacity        = 1.0f;
-    float PointFilter    = 0.0f; // Textured mode: 1.0 = nearest-neighbor, 0.0 = linear (modeParams.y)
+    // Every mode: the UITransformSlot this primitive's geometry is in, the slot
+    // of its nearest transformed ancestor-or-self (kNoTransform = untransformed;
+    // a uint the shader reads with floatBitsToUint(modeParams.y)). The emit
+    // walk stamps it over each element's primitives; emitters leave it alone.
+    uint32_t TransformIndex = 0;
     float CaretTime      = 0.0f; // "force visible until" time for caret blink
     float Saturation     = 1.0f; // Textured mode: 1 = full color, 0 = grayscale (luma)
 
@@ -154,6 +164,32 @@ struct alignas(16) UIPrimitive
 static_assert(sizeof(UIPrimitive) == 144, "UIPrimitive must be 144 bytes (9 x vec4)");
 static_assert(alignof(UIPrimitive) == 16, "UIPrimitive must be 16-byte aligned");
 
+// No transform: the slot index every primitive and clip defaults to. Slot 0 of
+// the transform buffer is the identity and never handed to an element.
+constexpr uint32_t kNoTransform = 0;
+
+// The most nested CSS transforms the UI composes (ui_sdf.vert's
+// kMaxTransformChainDepth matches it). A transformed element under this many
+// transformed ancestors is drawn and hit as untransformed, and the manager
+// logs it once, so what is drawn and what is hit always agree.
+constexpr int kMaxTransformChainDepth = 32;
+
+// One element's CSS transform in the transform SSBO (32 bytes, 2 x vec4):
+// a 2D affine map from the element's untransformed layout space (physical px)
+// into its parent's, in CSS matrix() order — x' = M[0]x + M[2]y + T[0],
+// y' = M[1]x + M[3]y + T[1]. ParentIndex chains to the nearest transformed
+// ancestor's slot (kNoTransform ends it); the vertex stage composes the chain,
+// so a changed transform is one slot rewrite, whatever lies beneath it.
+struct alignas(16) UITransformSlot
+{
+    float M[4] = {1, 0, 0, 1};
+    float T[2] = {0, 0};
+    uint32_t ParentIndex = kNoTransform;
+    uint32_t _pad = 0;
+};
+
+static_assert(sizeof(UITransformSlot) == 32, "UITransformSlot must be 32 bytes (2 x vec4)");
+
 // Clip rect stored in a separate SSBO. Primitives reference clips by index
 // via modeAndFlags[16:31]. Each clip stores an optional parent index so the
 // shader can walk the clip chain and evaluate all ancestor clips (rounded
@@ -165,7 +201,10 @@ struct alignas(16) UIClipRect
     float Radii[4]  = {0, 0, 0, 0};   // tl, tr, br, bl horizontal radii (0 = sharp edge)
     float RadiiY[4] = {0, 0, 0, 0};   // tl, tr, br, bl vertical radii
     uint32_t ParentIndex = kNoClip;    // index of enclosing clip, or kNoClip
-    uint32_t _pad[3] = {0, 0, 0};
+    // The UITransformSlot the rect is in (its owner's own space, so an
+    // overflow clip on a rotated element rotates with it).
+    uint32_t TransformIndex = kNoTransform;
+    uint32_t _pad[2] = {0, 0};
 };
 
 static_assert(sizeof(UIClipRect) == 64, "UIClipRect must be 64 bytes (4 x vec4)");

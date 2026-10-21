@@ -197,6 +197,23 @@ bool NewPositionOccupiedByOther(const Pathfinding::GridMap& grid, float32 x, flo
     return NewCellOccupiedByOther(grid, cx, cz, start, agentId, currentTime);
 }
 
+// The segment clears every blocked cell outside `openCells` by `radius`. A
+// zero radius has no swept test to exempt cells from, so it takes Raycast's
+// line and forgives a first hit inside `openCells`.
+bool SegmentClearOfWalls(const Pathfinding::GridMap& grid, float32 startX, float32 startZ,
+                         float32 endX, float32 endZ, float32 radius,
+                         const Pathfinding::GridMap::CellRange* openCells)
+{
+    if (radius > 0.0f)
+        return grid.IsSegmentClear(startX, startZ, endX, endZ, radius, openCells);
+
+    float32 hitX = 0.0f, hitY = 0.0f, hitZ = 0.0f;
+    if (!grid.Raycast(startX, 0.0f, startZ, endX, 0.0f, endZ, hitX, hitY, hitZ))
+        return true;
+    uint32 hitCx = 0, hitCz = 0;
+    return openCells && grid.WorldToCell(hitX, hitZ, hitCx, hitCz) && openCells->Contains(hitCx, hitCz);
+}
+
 } // anonymous namespace
 
 // Runtime-spawned agents (no authored NavigationAgent in repo scenes) still
@@ -349,10 +366,16 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
             // (obstacle placed, etc.), trigger immediate re-pathing instead of
             // waiting for the replan timer.
             //
-            // Raycasts between consecutive waypoints so intermediate cells are
-            // covered — important when SmoothPaths collapses a straight segment
-            // to just endpoints, leaving many walkable cells between them.
-            // For large agents, also checks the full footprint at each waypoint.
+            // Sweeps the agent's body from its position along consecutive
+            // waypoints (GridMap::IsSegmentClear, the test the path smoother
+            // keeps shortcuts to), so a body pushed off its route that would
+            // clip a blocked cell re-paths, and the cells between endpoints of
+            // a smoothed straight segment are covered. A hex grid sweeps the
+            // line, as Raycast does: IsSegmentClear models a hex cell as a
+            // rectangle, and its rows are only sqrt(3)/4 of a cell from a cell
+            // centre, so a body wider than that re-paths a valid route every
+            // frame and never moves. For large agents, also checks the full
+            // footprint at each waypoint, the cell clearance A* solves with.
             Pathfinding::NavMapHandle proxyMapHandle{agent.NavMapIndex, agent.NavMapGeneration};
             auto* proxyGridMap = navWorld->GetGridMap(proxyMapHandle);
             StartingFootprint startFootprint;
@@ -374,34 +397,33 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                 const bool destOk = proxyGridMap->WorldToCell(
                     state.DestinationX, state.DestinationZ, destCx, destCz);
 
+                // Dest sits on an obstacle stamp ring. A smoothed shortcut can
+                // clip that 8-neighbour stamp every frame, so the ring counts
+                // as open unless the dest cell itself is blocked. A blocked
+                // cell beyond the ring is a real wall.
+                Pathfinding::GridMap::CellRange destRing;
+                const bool destRingOpen = destOk && !proxyGridMap->IsCellBlocked(destCx, destCz);
+                if (destRingOpen)
+                {
+                    destRing.MinX = destCx > 0 ? destCx - 1 : 0;
+                    destRing.MinZ = destCz > 0 ? destCz - 1 : 0;
+                    destRing.MaxX = destCx + 1;
+                    destRing.MaxZ = destCz + 1;
+                }
+                const float32 sweepRadius =
+                    proxyGridMap->GetSettings().Type == Pathfinding::GridType::Square ? agent.Radius : 0.0f;
+
                 float32 rayStartX = wt.matrix[12];
                 float32 rayStartZ = wt.matrix[14];
                 for (uint32 pi = state.CurrentPathPointIndex; pi < checkEnd && !state.PathDirty; ++pi)
                 {
                     Pathfinding::PathPoint pt = pathBuffer.GetPoint(proxyPath, pi);
 
-                    float32 hitX = 0.0f, hitY = 0.0f, hitZ = 0.0f;
-                    if (proxyGridMap->Raycast(rayStartX, 0.0f, rayStartZ,
-                                              pt.X, 0.0f, pt.Z,
-                                              hitX, hitY, hitZ))
+                    if (!SegmentClearOfWalls(*proxyGridMap, rayStartX, rayStartZ, pt.X, pt.Z, sweepRadius,
+                                             destRingOpen ? &destRing : nullptr))
                     {
-                        // Dest sits on an obstacle stamp ring. A smoothed
-                        // shortcut can clip that 8-neighbour stamp every
-                        // frame. Ignore only that ring unless the dest cell
-                        // itself is blocked. A farther hit is a real wall.
-                        uint32 hitCx = 0, hitCz = 0;
-                        const bool destBlocked =
-                            destOk && proxyGridMap->IsCellBlocked(destCx, destCz);
-                        const bool hitOk = proxyGridMap->WorldToCell(hitX, hitZ, hitCx, hitCz);
-                        const bool destAdjacent =
-                            destOk && hitOk &&
-                            std::abs(static_cast<int32>(hitCx) - static_cast<int32>(destCx)) <= 1 &&
-                            std::abs(static_cast<int32>(hitCz) - static_cast<int32>(destCz)) <= 1;
-                        if (destBlocked || !destAdjacent)
-                        {
-                            state.PathDirty = true;
-                            break;
-                        }
+                        state.PathDirty = true;
+                        break;
                     }
                     rayStartX = pt.X;
                     rayStartZ = pt.Z;

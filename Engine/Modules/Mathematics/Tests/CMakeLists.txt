@@ -8,6 +8,7 @@ add_executable(MathematicsTests
     CurveEvaluationTests.cpp
     GeometryTests.cpp
     TriangulationTests.cpp
+    Matrix3x3AffineTests.cpp
     Matrix4x4Tests.cpp
     Vector3Tests.cpp
     VectorComponentTests.cpp

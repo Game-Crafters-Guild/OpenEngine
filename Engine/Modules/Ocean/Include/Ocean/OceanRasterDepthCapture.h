@@ -29,7 +29,7 @@ struct OceanRasterDepthCaptureSettings
 {
     bool Enabled = false;
     uint32 Resolution = 512u;
-    uint32 RenderLayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask CaptureLayers = Rendering::RenderLayerMask::All();
     float32 SizeX = 512.0f;
     float32 SizeZ = 512.0f;
     float32 TopPadding = 64.0f;
@@ -124,7 +124,7 @@ private:
     bool m_HasCaptureFootprint = false;
     bool m_HaveLastCaptureFrame = false;
     uint64 m_LastCaptureFrame = 0u;
-    uint32 m_CaptureMask = 0u;
+    Rendering::RenderLayerMask m_CaptureMask = Rendering::RenderLayerMask::None();
     uint64 m_CaptureWorldId = 0u;
     float32 m_CaptureSeaLevel = 0.0f;
     float32 m_CaptureTopPadding = 0.0f;

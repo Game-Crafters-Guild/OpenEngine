@@ -1,12 +1,12 @@
 ---
 title: Humanoid retargeting architecture
-description: How the humanoid retargeter runs inside the engine, with the per-frame pipeline, the GPU and CPU paths, hot reload, auto-bootstrap, LOD levels and rig import.
+description: How the humanoid retargeter runs inside the engine, with the per-frame pipeline, the GPU and CPU paths, hot reload, auto-bootstrap, LOD levels, and rig import.
 sidebar:
   order: 3
 ---
 
 How the retargeter runs inside the engine: the per-frame pipeline, the GPU
-and CPU paths, hot reload, auto-bootstrap, LOD levels and rig import. For
+and CPU paths, hot reload, auto-bootstrap, LOD levels, and rig import. For
 the feature overview, see
 [`humanoid-retargeting.mdx`](humanoid-retargeting.mdx).
 
@@ -35,8 +35,8 @@ source's bind pose and the target's, onto the target. Stage 2 scales root
 motion to the target's size. Stage 3 lets the instanced skinned draw path
 read retargeted palettes exactly like non-retargeted ones.
 
-A `RetargetMap` also stores per-chain FK modes, IK settings and an op
-stack; no stage reads them. See
+A `RetargetMap` also stores per-chain FK modes, IK settings, and an op
+stack. No stage reads them. See
 [`humanoid-retargeting.mdx`](humanoid-retargeting.mdx#authored-but-not-evaluated).
 
 ## GPU residency
@@ -45,9 +45,9 @@ Retargeting runs on the GPU by default in one compute kernel,
 `retarget_full.comp`, which `RetargetFullPass` dispatches once per frame
 for every retargeted character (one workgroup per character). The kernel
 runs all four stages: it samples the source clip, walks the source and
-target FK chains, applies the hip translation and writes each character's
+target FK chains, applies the hip translation, and writes each character's
 skin palette into `SkinPaletteAtlas`. `RetargetGPUDataStore` holds the
-uploaded rig pairs, clips and per-character parameters, and releases a rig
+uploaded rig pairs, clips, and per-character parameters, and releases a rig
 pair or clip when its asset unloads.
 
 Skinned playback without retargeting samples on the GPU in
@@ -80,7 +80,7 @@ RetargetMap reload      -> drop that map; mark the characters using it dirty
 dirty character         -> RetargetNode rebuilt on its next update
 ```
 
-Editing a `*.profile.json`, `*.humanoidrig.json` or `*.retargetmap.json`
+Editing a `*.profile.json`, `*.humanoidrig.json`, or `*.retargetmap.json`
 by hand or in an inspector therefore takes effect on the next frame.
 
 ## Auto-bootstrap data flow
@@ -115,10 +115,10 @@ world change. Same-skeleton clips add no component and play through
 ## ECS placement
 
 - `AnimationSystem` skips every entity that carries
-  `HumanoidRetargeterComponent`; `HumanoidRetargetSystem` animates it
+  `HumanoidRetargeterComponent`. `HumanoidRetargetSystem` animates it
   instead.
 - When the entity also has an `AnimatorRef`, `HumanoidRetargetSystem`
-  copies its `Speed`, `Loop` and `Paused` flags, advances its time, and
+  copies its `Speed`, `Loop`, and `Paused` flags, advances its time, and
   writes the time back, so the Animator inspector drives retarget playback.
   During its crossfade, both clips are sampled and blended before
   retargeting, on the GPU and the CPU path alike.
@@ -154,12 +154,8 @@ heuristic. The import pipeline does not call the dispatcher, so a VRM or
 `KHR_humanoid` file is mapped by bone name like any other model.
 
 When called, `ImportFromVRM1` reads the first-person mesh annotations
-(`VRMC_vrm.firstPerson`), the look-at settings (`VRMC_vrm.lookAt`) and the
+(`VRMC_vrm.firstPerson`), the look-at settings (`VRMC_vrm.lookAt`), and the
 expression names (`VRMC_vrm.expressions`) into `VRM1Metadata`. Spring bones
 (`VRMC_springBone`) are not read. Nothing in the engine consumes
-`VRM1Metadata`: there is no spring-bone, expression or look-at runtime for
+`VRM1Metadata`: there is no spring-bone, expression, or look-at runtime for
 VRM avatars.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Animation/Architecture.md`.

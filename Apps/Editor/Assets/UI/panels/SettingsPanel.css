@@ -48,40 +48,40 @@
 
 /* Custom icons for settings tree */
 .settings-tree-pane .project-settings-row .tree-title {
-    background-image: url("editor:Icons/computer.png");
-    font-weight: bold;
+    background-image: url("editor:Icons/computer.svg");
+    font-weight: 500;
     color: #FFFFFF;
 }
 
 .settings-tree-pane .user-settings-row .tree-title {
-    background-image: url("editor:Icons/person.png");
-    font-weight: bold;
+    background-image: url("editor:Icons/person.svg");
+    font-weight: 500;
     color: #FFFFFF;
 }
 
 /* Project Settings children icons */
 .settings-tree-pane .audio-settings-row .tree-title {
-    background-image: url("editor:Icons/music-note-icon@32px.png");
+    background-image: url("editor:Icons/music-note-icon@32px.svg");
 }
 
 .settings-tree-pane .camera-row .tree-title {
-    background-image: url("editor:Icons/camera.png");
+    background-image: url("editor:Icons/camera.svg");
 }
 
 .settings-tree-pane .animation-row .tree-title {
-    background-image: url("editor:Icons/film.png");
+    background-image: url("editor:Icons/film.svg");
 }
 
 .settings-tree-pane .input-row .tree-title {
-    background-image: url("editor:Icons/game-controller.png");
+    background-image: url("editor:Icons/game-controller.svg");
 }
 
 .settings-tree-pane .asset-import-row .tree-title {
-    background-image: url("editor:Icons/SettingsAssetImport.png");
+    background-image: url("editor:Icons/SettingsAssetImport.svg");
 }
 
 .settings-tree-pane .rendering-row .tree-title {
-    background-image: url("editor:Icons/SettingsRendering.png");
+    background-image: url("editor:Icons/SettingsRendering.svg");
 }
 
 .settings-tree-pane .hdr-row .tree-title {
@@ -89,36 +89,36 @@
 }
 
 .settings-tree-pane .recording-row .tree-title {
-    background-image: url("editor:Icons/record.png");
+    background-image: url("editor:Icons/record.svg");
 }
 
 .settings-tree-pane .level-of-detail-row .tree-title {
-    background-image: url("editor:Icons/sorting.png");
+    background-image: url("editor:Icons/sorting.svg");
 }
 
 .settings-tree-pane .game-ui-scaling-row .tree-title {
-    background-image: url("editor:Icons/SettingsGameUIScaling.png");
+    background-image: url("editor:Icons/SettingsGameUIScaling.svg");
 }
 
 .settings-tree-pane .scene-row .tree-title {
-    background-image: url("editor:Icons/SettingsScene.png");
+    background-image: url("editor:Icons/SettingsScene.svg");
 }
 
 .settings-tree-pane .tags-row .tree-title {
-    background-image: url("editor:Icons/SettingsTags.png");
+    background-image: url("editor:Icons/SettingsTags.svg");
 }
 
 .settings-tree-pane .build-row .tree-title,
 .settings-tree-pane .platform-row .tree-title {
-    background-image: url("editor:Icons/game-controller.png");
+    background-image: url("editor:Icons/game-controller.svg");
 }
 
 .settings-tree-pane .platform-linux-row .tree-title {
-    background-image: url("editor:Icons/SettingsLinux.png");
+    background-image: url("editor:Icons/SettingsLinux.svg");
 }
 
 .settings-tree-pane .version-control-row .tree-title {
-    background-image: url("editor:Icons/SettingsVersionControl.png");
+    background-image: url("editor:Icons/SettingsVersionControl.svg");
 }
 
 /* Provider rows (.git-row, .svn-row, …) are styled by each VCS package's
@@ -126,79 +126,79 @@
 
 /* User Settings children icons */
 .settings-tree-pane .script-row .tree-title {
-    background-image: url("editor:Icons/SettingsScript.png");
+    background-image: url("editor:Icons/SettingsScript.svg");
 }
 
 .settings-tree-pane .ui-row .tree-title {
-    background-image: url("editor:Icons/SettingsUI.png");
+    background-image: url("editor:Icons/SettingsUI.svg");
 }
 
 .settings-tree-pane .ui-appearance-row .tree-title {
-    background-image: url("editor:Icons/SettingsAppearance.png");
+    background-image: url("editor:Icons/SettingsAppearance.svg");
 }
 
 .settings-tree-pane .ui-font-rendering-row .tree-title {
-    background-image: url("editor:Icons/SettingsFontRendering.png");
+    background-image: url("editor:Icons/SettingsFontRendering.svg");
 }
 
 .settings-tree-pane .ui-trees-row .tree-title {
-    background-image: url("editor:Icons/SettingsTrees.png");
+    background-image: url("editor:Icons/SettingsTrees.svg");
 }
 
 .settings-tree-pane .ui-assets-row .tree-title {
-    background-image: url("editor:Icons/SettingsAssets.png");
+    background-image: url("editor:Icons/SettingsAssets.svg");
 }
 
 .settings-tree-pane .ui-inspector-row .tree-title {
-    background-image: url("editor:Icons/SettingsInspector.png");
+    background-image: url("editor:Icons/SettingsInspector.svg");
 }
 
 .settings-tree-pane .ui-hidpi-row .tree-title {
-    background-image: url("editor:Icons/SettingsHiDPI.png");
+    background-image: url("editor:Icons/SettingsHiDPI.svg");
 }
 
 .settings-tree-pane .ui-node-graph-row .tree-title {
-    background-image: url("editor:Icons/node.png");
+    background-image: url("editor:Icons/node.svg");
 }
 
 .settings-tree-pane .ui-asset-preview-row .tree-title {
-    background-image: url("editor:Icons/SettingsAssetPreview.png");
+    background-image: url("editor:Icons/SettingsAssetPreview.svg");
 }
 
 .settings-tree-pane .shortcuts-row .tree-title {
-    background-image: url("editor:Icons/SettingsShortcuts.png");
+    background-image: url("editor:Icons/SettingsShortcuts.svg");
 }
 
 .settings-tree-pane .gizmo-row .tree-title {
-    background-image: url("editor:Icons/gizmo.png");
+    background-image: url("editor:Icons/Gizmo.svg");
 }
 
 .settings-tree-pane .physics-row .tree-title {
-    background-image: url("editor:Icons/PhysicsSettings.png");
+    background-image: url("editor:Icons/PhysicsSettings.svg");
 }
 
 .settings-tree-pane .grid-snapping-row .tree-title {
-    background-image: url("editor:Icons/grid-icon.png");
+    background-image: url("editor:Icons/grid-icon.svg");
 }
 
 .settings-tree-pane .tooltips-row .tree-title {
-    background-image: url("editor:Icons/SettingsTooltips.png");
+    background-image: url("editor:Icons/SettingsTooltips.svg");
 }
 
 .settings-tree-pane .online-assets-row .tree-title {
-    background-image: url("editor:Icons/SettingsOnlineAssets.png");
+    background-image: url("editor:Icons/SettingsOnlineAssets.svg");
 }
 
 .settings-tree-pane .universal-search-row .tree-title {
-    background-image: url("editor:Icons/usearch.png");
+    background-image: url("editor:Icons/usearch.svg");
 }
 
 .settings-tree-pane .performance-row .tree-title {
-    background-image: url("editor:Icons/SettingsPerformance.png");
+    background-image: url("editor:Icons/SettingsPerformance.svg");
 }
 
 .settings-tree-pane .experimental-row .tree-title {
-    background-image: url("editor:Icons/SettingsExperimental.png");
+    background-image: url("editor:Icons/SettingsExperimental.svg");
 }
 
 /* Tags settings: fixed-size name field and icon-only delete button (toolbar style) */
@@ -220,7 +220,7 @@
 .trash-icon,
 button.trash-icon,
 .button.trash-icon {
-    background-image: url("editor:Icons/trash.png");
+    background-image: url("editor:Icons/trash.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: center;
@@ -375,6 +375,17 @@ button.trash-icon.pressed,
     margin-bottom: var(--settings-row-gap);
     width: 100%;
     box-sizing: border-box;
+}
+
+/* Why a text row refused the value typed into it, under the row, beside the
+   label column (37% of the row). */
+.settings-row-refusal {
+    padding: 0px var(--ui_spacing_md);
+    margin: 0px 0px var(--settings-row-gap) 37%;
+    color: var(--ui_color_error_text);
+    font-size: 13px;
+    line-height: 16px;
+    white-space: normal;
 }
 
 .settings-row-label {
@@ -670,7 +681,7 @@ button.trash-icon.pressed,
     padding: 4px 8px 4px 32px;
     min-height: 24px;
     background-color: #262727;
-    background-image: url("editor:Icons/game-controller.png");
+    background-image: url("editor:Icons/game-controller.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: 10px 50%;
@@ -865,7 +876,7 @@ button.settings-vcs-refresh-button,
 /* Subsection headers (e.g. Build â†’ platform names) */
 .settings-subsection-header {
     font-size: var(--ui_font_size_base);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ui_color_text);
     padding: 0px var(--ui_spacing_md);
     margin-top: 0px;
@@ -963,7 +974,7 @@ button.settings-vcs-refresh-button,
     margin-top: -6px;
     width: 12px;
     height: 12px;
-    background-image: url("editor:Icons/search.png");
+    background-image: url("editor:Icons/search.svg");
     background-size: 12px 12px;
     background-repeat: no-repeat;
     background-position: center;
@@ -1267,7 +1278,7 @@ button.settings-search-clear:hover,
 }
 
 .shortcut-reset-button {
-    background-image: url("editor:Icons/ResetReload.png");
+    background-image: url("editor:Icons/ResetReload.svg");
     background-image-tint: rgba(200, 200, 200, 1.0);
     width: 22px;
     height: 22px;

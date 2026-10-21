@@ -17,14 +17,14 @@
 
 /* Smart Folder items - blue icon tint on the dedicated icon element (overridden by --ui_smartfolder_icon_tint when set) */
 .tree .tree-item.smart-folder .tree-folder-icon {
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	background-image-tint: rgba(107, 164, 248, 1.0);
 	background-image-tint: var(--ui_smartfolder_icon_tint, rgba(107, 164, 248, 1.0));
 }
 
 /* Smart Folders section header: also use the blue-tinted folder icon */
 .tree .tree-item.smart-folders-section .tree-folder-icon {
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	background-image-tint: rgba(107, 164, 248, 1.0);
 	background-image-tint: var(--ui_smartfolder_icon_tint, rgba(107, 164, 248, 1.0));
 }
@@ -55,7 +55,7 @@
 	min-height: 32px;
 	background-color: #191919;
 	border-color: #191919;
-	background-image: url("editor:Icons/plus.png");
+	background-image: url("editor:Icons/plus.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: 12px 7px;
@@ -135,7 +135,7 @@
 	border-color: #191919;
 	color: var(--ui_color_text);
 	margin-top: 16px;
-	background-image: url("editor:Icons/trash.png");
+	background-image: url("editor:Icons/trash.svg");
 	background-size: 20px 20px;
 	background-repeat: no-repeat;
 	background-position: 12px 5px;

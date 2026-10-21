@@ -27,15 +27,15 @@ constexpr float kArrowSize = 15.0f;  // arrow triangle height
 
 // An explicit side the bubble does not fit on, between the source and the window
 // edge, flips to the opposite side when that one fits. Auto picks its side itself.
-static UIElement::TooltipPlacement FitPlacement(UIElement::TooltipPlacement placement, const UIElement& source,
+static UIElement::TooltipPlacement FitPlacement(UIElement::TooltipPlacement placement, const Mathematics::Rect& source,
                                                 float tipW, float tipH, float vpW, float vpH)
 {
     using Placement = UIElement::TooltipPlacement;
     const float reach = kGap + kArrowSize;
-    const float left = source.GetLayoutX();
-    const float top = source.GetLayoutY();
-    const float right = left + source.GetLayoutWidth();
-    const float bottom = top + source.GetLayoutHeight();
+    const float left = source.X;
+    const float top = source.Y;
+    const float right = source.Right();
+    const float bottom = source.Bottom();
     const bool fitsRight = right + reach + tipW + kEdgePad <= vpW;
     const bool fitsLeft = left - reach - tipW >= kEdgePad;
     const bool fitsBelow = bottom + reach + tipH + kEdgePad <= vpH;
@@ -228,7 +228,10 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
 
     m_ResolvedArrowColorARGB = m_ArrowColorARGB;
 
-    auto placement = source ? FitPlacement(source->GetTooltipPlacement(), *source, tipW, tipH, vpW, vpH)
+    // The bubble is a window-level overlay: it anchors to the source where the
+    // source is drawn, which a CSS transform moves away from its layout rect.
+    const Mathematics::Rect src = source ? source->GetWindowRect() : Mathematics::Rect{};
+    auto placement = source ? FitPlacement(source->GetTooltipPlacement(), src, tipW, tipH, vpW, vpH)
                             : UIElement::TooltipPlacement::Auto;
 
     float x, y;
@@ -236,8 +239,8 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
 
     if (placement == UIElement::TooltipPlacement::Right && source)
     {
-        const float srcRight = source->GetLayoutX() + source->GetLayoutWidth();
-        const float srcMidY  = source->GetLayoutY() + source->GetLayoutHeight() * 0.5f;
+        const float srcRight = src.Right();
+        const float srcMidY  = src.Y + src.Height * 0.5f;
         x = ClampF(srcRight + kGap + kArrowSize, kEdgePad, vpW - tipW - kEdgePad);
         y = srcMidY - tipH * 0.5f;
         y = ClampF(y, kEdgePad, vpH - tipH - kEdgePad);
@@ -253,8 +256,8 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
     }
     else if (placement == UIElement::TooltipPlacement::Left && source)
     {
-        const float srcLeft = source->GetLayoutX();
-        const float srcMidY = source->GetLayoutY() + source->GetLayoutHeight() * 0.5f;
+        const float srcLeft = src.X;
+        const float srcMidY = src.Y + src.Height * 0.5f;
         x = ClampF(srcLeft - kGap - kArrowSize - tipW, kEdgePad, vpW - tipW - kEdgePad);
         y = srcMidY - tipH * 0.5f;
         y = ClampF(y, kEdgePad, vpH - tipH - kEdgePad);
@@ -270,8 +273,8 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
     }
     else if (placement == UIElement::TooltipPlacement::Below && source)
     {
-        const float srcBot  = source->GetLayoutY() + source->GetLayoutHeight();
-        const float srcMidX = source->GetLayoutX() + source->GetLayoutWidth() * 0.5f;
+        const float srcBot  = src.Bottom();
+        const float srcMidX = src.X + src.Width * 0.5f;
         x = srcMidX - tipW * 0.5f;
         x = ClampF(x, kEdgePad, vpW - tipW - kEdgePad);
         y = ClampF(srcBot + kGap + kArrowSize, kEdgePad, vpH - tipH - kEdgePad);
@@ -287,8 +290,8 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
     }
     else if (placement == UIElement::TooltipPlacement::Above && source)
     {
-        const float srcTop  = source->GetLayoutY();
-        const float srcMidX = source->GetLayoutX() + source->GetLayoutWidth() * 0.5f;
+        const float srcTop  = src.Y;
+        const float srcMidX = src.X + src.Width * 0.5f;
         x = srcMidX - tipW * 0.5f;
         x = ClampF(x, kEdgePad, vpW - tipW - kEdgePad);
         y = ClampF(srcTop - kGap - kArrowSize - tipH, kEdgePad, vpH - tipH - kEdgePad);
@@ -311,15 +314,9 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
         const bool sourceUsesCursorAnchor = source && source->HasClass("node-canvas");
         // Prefer below the element; fall back to above.
         const bool hasSource = source != nullptr && !sourceUsesCursorAnchor;
-        const float anchorX = hasSource
-            ? source->GetLayoutX() + source->GetLayoutWidth() * 0.5f
-            : mouseX;
-        const float anchorTop = hasSource
-            ? source->GetLayoutY()
-            : mouseY - kGapAbove;
-        const float anchorBot = hasSource
-            ? source->GetLayoutY() + source->GetLayoutHeight()
-            : mouseY;
+        const float anchorX = hasSource ? src.X + src.Width * 0.5f : mouseX;
+        const float anchorTop = hasSource ? src.Y : mouseY - kGapAbove;
+        const float anchorBot = hasSource ? src.Bottom() : mouseY;
 
         const float yBelow = anchorBot + kGap + kArrowSize;
         const float yAbove = anchorTop - kGap - kArrowSize - tipH;

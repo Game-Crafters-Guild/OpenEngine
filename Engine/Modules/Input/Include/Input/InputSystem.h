@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Input/GamepadCodes.h"
+#include "Input/InputScriptApi.h"
 
 #include <cstdint>
 #include <functional>
@@ -49,57 +50,27 @@ constexpr int kKeyActionRepeat = 2;
 
 // Synthetic mouse axis codes for ActionBinding::code when device == Mouse and isAxis == true.
 // We use negative values to avoid colliding with real button codes (which are >= 0).
-constexpr int kMouseAxisX = -1;       // horizontal mouse delta (pixels per frame)
-constexpr int kMouseAxisY = -2;       // vertical mouse delta (pixels per frame)
-constexpr int kMouseScrollAxisX = -3; // horizontal scroll delta per frame
-constexpr int kMouseScrollAxisY = -4; // vertical scroll delta per frame;
+constexpr int kMouseAxisX = static_cast<int>(MouseAxis::MotionX); // horizontal mouse delta (pixels per frame)
+constexpr int kMouseAxisY = static_cast<int>(MouseAxis::MotionY);       // vertical mouse delta (pixels per frame)
+constexpr int kMouseScrollAxisX = static_cast<int>(MouseAxis::ScrollX); // horizontal scroll delta per frame
+constexpr int kMouseScrollAxisY = static_cast<int>(MouseAxis::ScrollY); // vertical scroll delta per frame;
 
 // Modifier mask bits. Values follow GLFW's modifier bit layout so they can be
 // sourced directly from platform callbacks without including GLFW headers.
 enum ModifierMask : int
 {
-    kModShift = 0x0001,
-    kModControl = 0x0002,
-    kModAlt = 0x0004,
-    kModSuper = 0x0008,
-    kModCapsLock = 0x0010,
-    kModNumLock = 0x0020,
+    kModShift = static_cast<int>(ModifierFlags::Shift),
+    kModControl = static_cast<int>(ModifierFlags::Control),
+    kModAlt = static_cast<int>(ModifierFlags::Alt),
+    kModSuper = static_cast<int>(ModifierFlags::Super),
+    kModCapsLock = static_cast<int>(ModifierFlags::CapsLock),
+    kModNumLock = static_cast<int>(ModifierFlags::NumLock),
 };
 
-// Common mask for differentiating shortcut-style modifier combinations.
-constexpr int kModShortcutMask = kModShift | kModControl | kModAlt | kModSuper;
-
-enum class DeviceType
-{
-    Keyboard,
-    Mouse,
-    Gamepad,
-    Unknown
-};
-
-struct ActionState
-{
-    bool pressed = false;      // currently held
-    bool justPressed = false;  // transitioned to pressed this frame
-    bool justReleased = false; // transitioned to released this frame
-    float value = 0.0f;        // for axes (e.g. -1..1, scroll delta)
-};
-
-struct ActionBinding
-{
-    DeviceType device = DeviceType::Keyboard;
-    int code = 0;       // key/button/axis code (platform-specific for now)
-    float scale = 1.0f; // for analog axes
-
-    // Optional modifier requirements. If set, the binding is only considered when:
-    // - (currentMods & requiredMods) == requiredMods
-    // - (currentMods & forbiddenMods) == 0
-    //
-    // This allows distinguishing e.g. A from Shift+A by setting forbiddenMods on
-    // the plain binding.
-    int requiredMods = 0;
-    int forbiddenMods = 0;
-};
+// The modifiers that make a shortcut-style combination: Shift, Control, Alt and Super.
+constexpr ModifierFlags kShortcutModifiers =
+    ModifierFlags::Shift | ModifierFlags::Control | ModifierFlags::Alt | ModifierFlags::Super;
+constexpr int kModShortcutMask = static_cast<int>(kShortcutModifiers);
 
 struct ActionDesc
 {
@@ -120,17 +91,6 @@ struct ActionEvent
 };
 
 using ActionCallback = std::function<void(ActionEvent&)>;
-
-// Where the game's pointer lock stands (InputSystem::GetPointerLockState).
-enum class PointerLockState
-{
-    // The game does not ask for the lock.
-    Unlocked,
-    // The game asks and the host has not granted it.
-    Pending,
-    // The host holds the pointer locked for the game.
-    Locked,
-};
 
 // Where a sink sits in a window's input chain.
 //

@@ -8,6 +8,7 @@
 #include "Assets/AssetManager.h"
 #include "Assets/TextureAsset.h"
 #include "Assets/TextureCook.h"
+#include "Assets/TextureCookActivity.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/TextureService.h"
@@ -267,6 +268,43 @@ TEST_F(TextureCookUsageTag, ATagWrittenWhileTheFirstLoadCooksReachesTheLoadedTex
     ASSERT_NE(loaded, nullptr);
     EXPECT_TRUE(PumpUntil([&] { return ResidentFormat(loaded) == TextureFormat::BC4; }))
         << "resident format " << static_cast<int>(ResidentFormat(loaded)) << ", stored usage " << StoredUsage(path);
+}
+
+// A first load's cook on a miss is reported while it runs, by texture, and not once the cooked
+// payload has loaded: the editor's "Preparing N textures" status and a texture inspector waiting
+// on the load read it. The 2048 source keeps the cook running long enough to be seen.
+TEST_F(TextureCookUsageTag, AFirstLoadsCookIsReportedWhileItRunsAndNotAfter)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "BC encoder unavailable";
+    TextureAsset::SetGpuTranscodeTarget(TextureGpuTranscodeTarget::BC7);
+    GUID texture;
+    const fs::path path = WriteTexture(texture, 2048);
+    ASSERT_FALSE(texture.IsNull());
+    const TextureCookActivity& activity = Assets().GetTextureCookActivity();
+    ASSERT_EQ(activity.CookingCount(), 0u);
+
+    std::atomic<bool> cookStarted{false};
+    std::vector<std::string> lines;
+    TestLog::ScopedEngineLogCapture capture(&lines);
+    Logger::Log::AddSink(
+        std::make_unique<LogLineFlagSink>(&cookStarted, path.stem().string() + " -> Uncompressed started"));
+    AssetLoadHandle load = Assets().LoadAsset(texture, [](Result<SharedPtr<Asset>, AssetError>) {});
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!cookStarted.load() && !load.IsComplete() && std::chrono::steady_clock::now() < deadline)
+    {
+        Logger::Log::Flush();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(cookStarted.load()) << "the first load's cook start was never logged";
+    ASSERT_FALSE(load.IsComplete()) << "the load finished before it was read; the window was missed";
+    EXPECT_TRUE(activity.IsCooking(texture));
+    EXPECT_EQ(activity.CookingCount(), 1u);
+
+    ASSERT_TRUE(PumpUntil([&] { return load.IsComplete(); }));
+    ASSERT_NE(load.GetResult(), nullptr);
+    EXPECT_FALSE(activity.IsCooking(texture));
+    EXPECT_EQ(activity.CookingCount(), 0u);
 }
 
 } // namespace

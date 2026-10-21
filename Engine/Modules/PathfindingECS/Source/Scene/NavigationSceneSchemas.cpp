@@ -139,7 +139,7 @@ class NavigationAgentSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -205,9 +205,7 @@ class NavigationAgentSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown NavigationAgent property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -250,7 +248,7 @@ class NavigationObstacleSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -271,9 +269,7 @@ class NavigationObstacleSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown NavigationObstacle property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);
@@ -322,7 +318,7 @@ class NavigationDebugSettingsSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       [[maybe_unused]] const SceneLoadContext& ctx,
+                       const SceneLoadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -373,9 +369,7 @@ class NavigationDebugSettingsSchema final : public ISceneComponentSchema
         }
         else
         {
-            if (outError)
-                *outError = "Unknown NavigationDebugSettings property";
-            return false;
+            return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
         world.AddComponentImmediate(entity, c);

@@ -1,6 +1,6 @@
 ---
 title: Editor keyboard shortcuts
-description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, view navigation and tab management.
+description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, view navigation, and tab management.
 ---
 
 ## Gizmo tools (Scene View)
@@ -50,7 +50,19 @@ description: The editor's keyboard and mouse shortcuts for the gizmo tools, the 
 | **Cmd + W** (macOS) | Close Tab/Window | Close active tab or floating window |
 | **Ctrl + W** (PC/Linux) | Close Tab/Window | Close active tab or floating window |
 | **F11** | Toggle Debug Zones | Show/hide dock debug overlay |
-| **F3** | UI Demo Panel | Open UI demo/test panel |
+
+### Diagnostics
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| **F2** | CPU Profiler | Turn the CPU profiler on. Press again to print the last frame's scope summary to the log |
+| **Shift + F2** | CPU Profiler Off | Turn the CPU profiler off |
+| **F3** | UI Demo | Open the UI demo panel |
+
+The CPU profiler keys exist in builds with CPU profiling compiled in. All three can be rebound under
+**Keyboard Shortcuts > Diagnostics**. While a game runs in a focused Game View, a game that binds or
+reads one of these keys receives it and the editor does not act on it. A key the game does not use
+still reaches the editor.
 
 ---
 
@@ -93,13 +105,9 @@ Tabs have no close button: right-click a tab or use the shortcut to close it.
 ## Tips
 
 - **WASD navigation** requires holding the right mouse button (RMB)
-- **Alt-based camera controls** work independently and don't require RMB
+- **Alt-based camera controls** work independently and do not require RMB
 - Press **Shift** while moving to triple your movement speed
 - Press **F** to quickly frame and zoom to a selected object
 - Press **Alt + F** to frame all objects in the scene
 - **Right-click on any tab** to access the context menu with close option
-- **Cmd/Ctrl + W** closes the active tab; if no tabs remain in a floating window, it closes the window
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/EditorKeyboardShortcuts.md`.
+- **Cmd/Ctrl + W** closes the active tab. If no tabs remain in a floating window, it closes the window

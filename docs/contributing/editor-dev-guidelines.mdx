@@ -1,9 +1,9 @@
 ---
 title: Editor developer guidelines
-description: How editor code changes ECS data through one edit path with undo, redo and live notifications, and how inspectors and tools stay in sync.
+description: How editor code changes ECS data through one edit path with undo, redo, and live notifications, and how inspectors and tools stay in sync.
 ---
 
-This page describes **how editor code should mutate ECS data** and **how to keep the editor UI/tools in sync** without introducing latency, stale inspectors, or undo/redo regressions.
+This page describes **how editor code should mutate ECS data**. It also describes **how to keep the editor UI/tools in sync** without introducing latency, stale inspectors, or undo/redo regressions.
 
 ## Core rule: one edit path
 
@@ -29,7 +29,7 @@ This page describes **how editor code should mutate ECS data** and **how to keep
 
 - **Preview** is for "in-progress" updates that should be visible immediately (scene rendering + inspector fields).
 - **Commit** is for the "final" update that becomes one undo entry.
-- Do not spam undo stack on every mouse move; always coalesce interactive gestures.
+- Do not spam undo stack on every mouse move. Always coalesce interactive gestures.
 
 ## Notifications (live editor sync)
 
@@ -61,7 +61,3 @@ This page describes **how editor code should mutate ECS data** and **how to keep
   - Use `World::CaptureComponentBytes(...)` / `World::ApplyComponentBytesImmediate(...)`.
 
 - If a component is not safely serializable as a POD blob, it must provide a proper handler-based serialize/apply path (via the ECS component registry).
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/EDITOR_DEV_GUIDELINES.md`.

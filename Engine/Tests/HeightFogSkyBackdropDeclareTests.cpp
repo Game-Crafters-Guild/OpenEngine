@@ -1,6 +1,6 @@
-// The height fog's sky colour reaches the fog pass through the render graph: SkyRender publishes
-// the texture it draws its backdrop from as SkyBackdrop, and the shipped HeightFog pass reads it
-// only while the fog takes its colour from the sky. Part of RenderPipelineDeclareTests.
+// The sky pass as the shipped graph declares it: SkyRender publishes the texture it draws its
+// backdrop from as SkyBackdrop (the surfaces' fog reads it for the fog's sky colour), bakes and
+// imports its LUTs, and draws the stars into the star light. Part of RenderPipelineDeclareTests.
 #include "Engine/Rendering/Pipeline/Nodes/EngineNodeTypes.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
@@ -11,6 +11,7 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/RenderGraph/RGBarrier.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -81,9 +83,23 @@ struct SkyBackdropFixture
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
 
-    bool Up(Components::HeightFogColorMode mode)
+    // night: the stars are up (the night sky blend at 1). validation: the device runs the Vulkan
+    // validation layer, so the frame's pipelines and barriers are checked as the editor checks them.
+    bool Up(Components::HeightFogColorMode mode, bool night = false, bool validation = false)
     {
-        Device = CreateVulkanDeviceFast();
+        if (validation)
+        {
+            DeviceDesc desc{};
+            desc.preferredAPI = GraphicsAPI::Vulkan;
+            desc.enableDebugLayer = true;
+            desc.enableDynamicRendering = true;
+            desc.descriptorBuffers = DescriptorBufferMode::Disabled;
+            Device = DeviceFactory::CreateDevice(desc);
+            if (Device && !Device->Initialize(desc))
+                Device.reset();
+        }
+        else
+            Device = CreateVulkanDeviceFast();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
@@ -103,7 +119,7 @@ struct SkyBackdropFixture
         const CameraId cam = Rs->Views().AllocateCamera("SkyBackdropCam");
         Rs->Views().SetCameraData(cam, camera);
         View = Rs->Views().AllocateView("SkyBackdropView", cam);
-        Rs->Views().SetViewRenderLayerMask(View, 1u);
+        Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;
@@ -118,7 +134,9 @@ struct SkyBackdropFixture
         // The physical sky, active: what a scene with a Sky Environment hands the renderer.
         auto& sky = Rs->EnsureFeature<SkyRenderFeature>();
         EXPECT_TRUE(sky.Initialize(Device.get()));
-        sky.SetSettings(Rendering::SkySettings{}, Rendering::SkySystemState{});
+        Rendering::SkySettings settings{};
+        settings.nightSkyBlend = night ? 1.0f : 0.0f;
+        sky.SetSettings(settings, Rendering::SkySystemState{});
 
         Nodes::RegisterEngineNodeTypes(Registry);
         return true;
@@ -138,8 +156,7 @@ struct SkyBackdropFixture
         bp.pipelineName = "SkyBackdrop";
         bp.worldColorResolveTargetRef = "VolumetricClouds";
         bp.resources.push_back({"VolumetricClouds", kTextureResource});
-        bp.resources.push_back({"HDRHeightFog", kTextureResource});
-        for (const char* id : {"ViewParamsUpload", "HeightFogParamsUpload", "Sky", "HeightFog"})
+        for (const char* id : {"ViewParamsUpload", "HeightFogParamsUpload", "Sky"})
             bp.passes.push_back(Step(ShippedPass(pipeline, id)));
         bp.outputs.push_back({"FinalColor", "View.Resolve"});
         return bp;
@@ -153,14 +170,19 @@ struct SkyBackdropFixture
     }
 };
 
-struct FogReads
+struct DeclaredFrame
 {
-    bool FogDeclared = false;   // the fog pass is in the graph at all
-    bool ReadsBackdrop = false; // the fog pass samples the texture the sky published
-    std::string Accesses;       // every resource the fog pass touches, for the failure message
+    bool SkyViewLutImported = false;
+    uint32_t SkyViewLutFormat = 0; // the format the graph holds for the imported sky-view LUT
+    bool SkyViewLutBaked = false;  // a live pass bakes the sky-view LUT this frame
+    // Every texture the sky's draw pass samples, with the stage mask the graph's barrier for that read covers.
+    std::vector<std::pair<std::string, uint32_t>> SkySampleStages;
+    bool StarsWriteStarLight = false; // the stars pass (Sky.View<N>.Stars) draws into Sky_StarLight.View<N>
+    bool StarsReadCompensation = false; // the stars pass reads the view's exposure compensation state
+    bool TonemapBindsStarLight = false; // the published star light has its physical image at declaration
 };
 
-FogReads DeclareFrame(SkyBackdropFixture& f)
+DeclaredFrame DeclareFrame(SkyBackdropFixture& f)
 {
     RenderPipelineInstance instance(*f.Rs, f.Registry);
     instance.SetBlueprint(f.Blueprint());
@@ -184,28 +206,59 @@ FogReads DeclareFrame(SkyBackdropFixture& f)
 
     // The backdrop texture is identified by what the sky's own draw samples: the per-view import
     // dedups by handle onto the frame-scope LUT import, so its name is not the published one.
-    FogReads out;
+    DeclaredFrame out;
     const RenderGraph::RGGraph& g = frame.Graph();
+    for (RenderGraph::RGPassId pass = 0; pass < g.PassCount(); ++pass)
+    {
+        const std::string name = g.PassName(pass) ? g.PassName(pass) : "";
+        const std::string suffix = "SkyViewLUT";
+        if (!g.IsCulled(pass) && name.size() >= suffix.size() &&
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+            out.SkyViewLutBaked = true;
+    }
+    for (RenderGraph::RGResourceId r = 0; r < g.ResourceCount(); ++r)
+    {
+        const char* rn = g.ResourceName(r);
+        if (rn && std::string(rn).rfind("Sky_StarLight.View", 0) == 0)
+            out.TonemapBindsStarLight = frame.PhysicalTexture(RenderGraph::RGTexture{r}).IsValid();
+        if (rn && std::string(rn) == "Sky_View_LUT")
+        {
+            out.SkyViewLutImported = true;
+            out.SkyViewLutFormat = g.ResourceDesc(r).Format;
+        }
+    }
     const auto isSampled = [](const RenderGraph::RGAccessRecord& a)
-    { return a.Access == RenderGraph::RGAccess::Sampled; };
+    {
+        return a.Access == RenderGraph::RGAccess::Sampled || a.Access == RenderGraph::RGAccess::SampledVertex ||
+               a.Access == RenderGraph::RGAccess::SampledCompute;
+    };
     std::vector<std::string> skySamples;
     for (const RenderGraph::RGAccessRecord& a : g.Accesses())
     {
         const char* pn = g.PassName(a.Pass);
         const char* rn = g.ResourceName(a.Resource);
         if (pn && rn && isSampled(a) && std::string(pn).find(".Sky.") != std::string::npos)
+        {
             skySamples.emplace_back(rn);
+            // The sky's draw (Sky.View<N>), not the compute passes that bake its LUTs.
+            if (std::string(pn).find(".Sky.View") != std::string::npos)
+                out.SkySampleStages.emplace_back(rn, RenderGraph::MapAccess(a.Access, g.PassQueue(a.Pass)).Stage);
+        }
     }
     for (const RenderGraph::RGAccessRecord& a : g.Accesses())
     {
         const char* pn = g.PassName(a.Pass);
         const char* rn = g.ResourceName(a.Resource);
-        if (!pn || !rn || std::string(pn).find("HeightFog") == std::string::npos)
-            continue;
-        out.FogDeclared = true;
-        out.Accesses += std::string(pn) + ":" + rn + " ";
-        if (isSampled(a) && std::find(skySamples.begin(), skySamples.end(), rn) != skySamples.end())
-            out.ReadsBackdrop = true;
+        const std::string suffix = ".Stars";
+        const std::string passName = pn ? pn : "";
+        if (rn && std::string(rn).rfind("Sky_StarLight", 0) == 0 && passName.size() >= suffix.size() &&
+            passName.compare(passName.size() - suffix.size(), suffix.size(), suffix) == 0 && !g.IsCulled(a.Pass))
+            out.StarsWriteStarLight = true;
+        if (rn && std::string(rn).rfind("Pipeline.AutoExposure.Compensation.View", 0) == 0 &&
+            passName.size() >= suffix.size() &&
+            passName.compare(passName.size() - suffix.size(), suffix.size(), suffix) == 0 && !g.IsCulled(a.Pass) &&
+            !RenderGraph::IsWrite(a.Access))
+            out.StarsReadCompensation = true;
     }
     if (skySamples.empty())
         ADD_FAILURE() << "the sky's draw sampled nothing: no backdrop to compare against";
@@ -217,29 +270,123 @@ FogReads DeclareFrame(SkyBackdropFixture& f)
 
 } // namespace
 
-// Sky colour mode: the fog pass samples the backdrop SkyRender published. Without the publication
-// the input does not resolve and the fog pass declines, so the haze would vanish in this mode.
-TEST(RenderPipelineDeclareTests, HeightFogInTheSkyColorModeReadsTheSkysBackdrop)
+// The sky-view LUT that production creates is RGBA32F on a device that loads the SPIR-V kernels, so a
+// moonless night's radiance (about 8e-7 scene-linear) survives it; the SkyAtmosphereLutReference
+// tests make their own texture through the same accessor and cannot see the renderer's.
+TEST(RenderPipelineDeclareTests, TheSkyViewLutTheRendererCreatesIsRgba32fForSpirVKernels)
 {
     SkyBackdropFixture f;
     if (!f.Up(Components::HeightFogColorMode::SkyHorizon))
         GTEST_SKIP() << "No Vulkan device available";
-    const FogReads r = DeclareFrame(f);
-    EXPECT_TRUE(r.FogDeclared) << "the fog pass must run in the sky colour mode";
-    EXPECT_TRUE(r.ReadsBackdrop) << "the fog pass must sample SkyRender's published backdrop; it touches "
-                                 << r.Accesses;
+    ASSERT_EQ(f.Device->PreferredShaderSource(), ShaderSourceKind::SpirV);
+    const SkyRenderFeature* sky = f.Rs->GetFeature<SkyRenderFeature>();
+    ASSERT_NE(sky, nullptr);
+    EXPECT_EQ(f.Device->GetTextureFormat(sky->GetRenderer().GetSkyViewLutTexture()),
+              TextureFormat::R32G32B32A32_FLOAT);
     f.Down();
 }
 
-// Fixed colour mode: the gate binds a placeholder, so the fog pass has no edge to the sky's texture.
-TEST(RenderPipelineDeclareTests, HeightFogInTheFixedColorModeHasNoEdgeToTheSkysBackdrop)
+// The render graph holds the sky-view LUT's import at the texture's own format, so the graph's
+// readback (capture_resource) can read the LUT in a live editor; an import without a format reads
+// as unknown and the readback refuses it.
+TEST(RenderPipelineDeclareTests, TheSkyViewLutImportCarriesItsFormat)
 {
     SkyBackdropFixture f;
-    if (!f.Up(Components::HeightFogColorMode::FixedColor))
+    if (!f.Up(Components::HeightFogColorMode::SkyHorizon))
         GTEST_SKIP() << "No Vulkan device available";
-    const FogReads r = DeclareFrame(f);
-    EXPECT_TRUE(r.FogDeclared) << "the fog pass must run in the fixed colour mode";
-    EXPECT_FALSE(r.ReadsBackdrop) << "the fixed colour mode must not wait on the sky's texture; it touches "
-                                  << r.Accesses;
+    const DeclaredFrame r = DeclareFrame(f);
+    ASSERT_TRUE(r.SkyViewLutImported) << "the sky pass must import the sky-view LUT";
+    EXPECT_EQ(r.SkyViewLutFormat, static_cast<uint32_t>(TextureFormat::R32G32B32A32_FLOAT));
+    f.Down();
+}
+
+// The star billboard reads both LUTs in its vertex shader (the sky behind each star and the extinction
+// along it), and the sky-view LUT is baked by compute earlier in the frame. So every texture the sky's
+// passes sample is read under a barrier that reaches the vertex stage; a fragment-only read would leave
+// the compute write invisible to the vertex shader.
+TEST(RenderPipelineDeclareTests, TheSkyPassSamplesItsLutsFromTheVertexStage)
+{
+    SkyBackdropFixture f;
+    if (!f.Up(Components::HeightFogColorMode::SkyHorizon, /*night=*/true))
+        GTEST_SKIP() << "No Vulkan device available";
+    const DeclaredFrame r = DeclareFrame(f);
+    ASSERT_GE(r.SkySampleStages.size(), 2u) << "the sky pass samples the sky-view and transmittance LUTs";
+    for (const auto& [name, stage] : r.SkySampleStages)
+    {
+        EXPECT_TRUE(stage & RenderGraph::RGStage::VertexShader)
+            << "the sky pass samples " << name << " under a barrier scoped to stage mask " << stage
+            << ", which omits VertexShader: the star billboard's vertex shader reads it";
+        EXPECT_TRUE(stage & RenderGraph::RGStage::FragmentShader) << name;
+    }
+    f.Down();
+}
+
+// At night the stars draw in their own pass, into scene colour and into the star light (SkyStarLight)
+// that the tonemap's night tint reads, which exists at declaration so the tonemap binds it. The pass
+// reads the view's exposure compensation state, which it undoes. The frame records and runs under the
+// validation layer with no error.
+TEST(RenderPipelineDeclareTests, AtNightTheStarsPassWritesTheStarLightWithoutAValidationError)
+{
+    SkyBackdropFixture f;
+    if (!f.Up(Components::HeightFogColorMode::SkyHorizon, /*night=*/true, /*validation=*/true))
+        GTEST_SKIP() << "No Vulkan device available";
+    const DeclaredFrame r = DeclareFrame(f);
+    EXPECT_TRUE(r.StarsWriteStarLight) << "the stars pass must draw into Sky_StarLight.View<N>";
+    EXPECT_TRUE(r.StarsReadCompensation)
+        << "the stars pass must read Pipeline.AutoExposure.Compensation.View<N> to undo the compensation curve";
+    EXPECT_TRUE(r.TonemapBindsStarLight)
+        << "the published star light needs its physical image at declaration: the tonemap's fullscreen stage builds "
+           "its bindings then, and binds black for a texture that has none";
+    const ValidationStats stats = f.Device->GetValidationStats();
+    f.Down();
+    if (!stats.Enabled)
+        GTEST_SKIP() << "the Vulkan validation layer is not installed: the stars pass's pipeline went unchecked";
+    EXPECT_EQ(stats.ErrorCount, 0u);
+    for (const ValidationVuidStat& v : stats.Vuids)
+        EXPECT_FALSE(v.IsError) << v.Vuid << " x" << v.Count << ": " << v.FirstMessage;
+}
+
+namespace
+{
+// The default sky with a moon of a full moon's source (about 0.25 lx lifted to the top of the air)
+// toward (x, y, z), shown or hidden.
+Rendering::SkySettings SkyWithMoonAt(float x, float y, float z, bool shown)
+{
+    Rendering::SkySettings s{};
+    s.moonDirWS[0] = x;
+    s.moonDirWS[1] = y;
+    s.moonDirWS[2] = z;
+    s.moonIntensity = 1.5e-3f;
+    s.showMoonDisk = shown;
+    return s;
+}
+} // namespace
+
+// The sky-view LUT bakes only when what it holds changes. The moon is its second source, so moving the
+// moon re-bakes it; a hidden moon is not in the bake, so moving a hidden moon does not.
+TEST(RenderPipelineDeclareTests, MovingTheMoonRebakesTheSkyViewLutAndAHiddenMoonDoesNot)
+{
+    SkyBackdropFixture f;
+    if (!f.Up(Components::HeightFogColorMode::SkyHorizon))
+        GTEST_SKIP() << "No Vulkan device available";
+    auto& sky = f.Rs->EnsureFeature<SkyRenderFeature>();
+    struct Step
+    {
+        Rendering::SkySettings Settings;
+        bool Rebakes;
+        const char* What;
+    };
+    const Step steps[] = {
+        {SkyWithMoonAt(0.0f, 0.6f, 0.8f, true), true, "the first frame bakes"},
+        {SkyWithMoonAt(0.0f, 0.6f, 0.8f, true), false, "a steady sky does not re-bake"},
+        {SkyWithMoonAt(0.6f, 0.8f, 0.0f, true), true, "a moved moon re-bakes"},
+        {SkyWithMoonAt(0.6f, 0.8f, 0.0f, false), true, "hiding the moon re-bakes (its light leaves the sky)"},
+        {SkyWithMoonAt(0.0f, 0.6f, 0.8f, false), false, "a hidden moon that moves does not re-bake"},
+    };
+    for (const Step& step : steps)
+    {
+        sky.SetSettings(step.Settings, Rendering::SkySystemState{});
+        EXPECT_EQ(DeclareFrame(f).SkyViewLutBaked, step.Rebakes) << step.What;
+    }
     f.Down();
 }

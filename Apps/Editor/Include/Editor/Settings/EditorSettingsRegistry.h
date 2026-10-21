@@ -130,9 +130,19 @@ struct SettingsFieldDescriptor
     {
         std::string DefaultValue;
         std::function<std::string()> Get; // optional when PrefKey is set
-        // Fired on edit and on focus-out, never at build time — unlike the
-        // toggle and slider rows, a text row has nothing to react to on open.
+        // Fired on Enter and on focus-out with a changed value, never at build
+        // time — unlike the toggle and slider rows, a text row has nothing to
+        // react to on open.
         std::function<void(const std::string&)> Set;
+        // Optional. Returns why a value is refused, or an empty string when it
+        // is accepted. The row shows the message under itself while the user
+        // types a refused value; a refused commit never reaches Set, and the
+        // field goes back to the stored value with the message still shown
+        // until an accepted value is typed or the stored value comes back.
+        std::function<std::string(const std::string&)> Validate;
+        // Optional. Shown faint in the field while its value is empty: what an
+        // empty value stands for ("Default").
+        std::string Placeholder;
     };
     // A filesystem path: a StringField plus a Browse button that opens the
     // native picker for Kind and writes the chosen path back through Set.

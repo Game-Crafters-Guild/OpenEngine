@@ -8,12 +8,16 @@
 #include "TestComponents.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <thread>
 #include <unordered_set>
 
 using namespace GameEngine::ECS;
 using GameEngine::ECS::test::Position;
 using GameEngine::ECS::test::Velocity;
 using GameEngine::ECS::test::Health;
+using GameEngine::ECS::test::Rotation;
 
 TEST(ParallelBatchEachTest, VisitsEveryEntityAcrossChunks) {
     JobSystem::WorkStealingThreadPool js;
@@ -193,4 +197,55 @@ TEST(ParallelBatchEachTest, FragmentedArchetypesAllCovered) {
         }); // synchronous fork-join (slice 5)
 
     EXPECT_EQ(total.load(), static_cast<std::size_t>(2 * perArchetype));
+}
+
+namespace {
+// Each fork copies its functor into a ForkCall on its own stack, and the units borrow it. The
+// ForkCall must outlive every unit, so the fork's Wait stays in the ForkCall's scope. The copy's
+// destructor poisons its canary: a unit that runs after the copy died reads the poison.
+constexpr std::uint64_t kCanaryAlive = 0xA11CE5A11CE5ull;
+constexpr std::uint64_t kCanaryDead = 0xDEADDEADDEADull;
+constexpr std::chrono::microseconds kCanaryBatchDelay{50};
+
+struct CanaryFunctor {
+    std::atomic<std::size_t>* DeadReads;
+    std::uint64_t Canary = kCanaryAlive;
+    explicit CanaryFunctor(std::atomic<std::size_t>* deadReads) : DeadReads(deadReads) {}
+    CanaryFunctor(const CanaryFunctor& other) : DeadReads(other.DeadReads), Canary(other.Canary) {}
+    ~CanaryFunctor() { *const_cast<volatile std::uint64_t*>(&Canary) = kCanaryDead; }
+    void CheckCanary() const {
+        if (*const_cast<const volatile std::uint64_t*>(&Canary) != kCanaryAlive)
+            DeadReads->fetch_add(1, std::memory_order_relaxed);
+    }
+    void operator()(const Position*, Velocity*, std::size_t) const {
+        std::this_thread::sleep_for(kCanaryBatchDelay); // keeps units queued while the fork runs on
+        CheckCanary();
+    }
+};
+
+struct CanaryEntityFunctor : CanaryFunctor {
+    using CanaryFunctor::CanaryFunctor;
+    void operator()(EntityHandle, const Position&, Velocity&) const { CheckCanary(); }
+};
+} // namespace
+
+TEST(ParallelBatchEachTest, ForkCallOutlivesEveryUnit) {
+    JobSystem::WorkStealingThreadPool js;
+    World w(&js);
+    w.RegisterComponents<Position, Velocity, Health, Rotation>();
+    constexpr int perArchetype = 3'000;
+    w.CreateBatchHandle<Position, Velocity>(perArchetype, Position{}, Velocity{});
+    w.CreateBatchHandle<Position, Velocity, Health>(perArchetype, Position{}, Velocity{}, Health{});
+    w.CreateBatchHandle<Position, Velocity, Rotation>(perArchetype, Position{}, Velocity{}, Rotation{});
+
+    constexpr std::size_t oneChunkBatches = 1;
+    constexpr int callsPerFork = 20;
+    Query<Read<Position>, Write<Velocity>> query(&w);
+    std::atomic<std::size_t> deadReads{0};
+    for (int call = 0; call < callsPerFork; ++call) {
+        query.ParallelBatchEach(CanaryFunctor{&deadReads}, oneChunkBatches);
+        query.ParallelChunks(CanaryFunctor{&deadReads});
+        query.Parallel(CanaryEntityFunctor{&deadReads}, oneChunkBatches);
+    }
+    EXPECT_EQ(deadReads.load(), 0u);
 }

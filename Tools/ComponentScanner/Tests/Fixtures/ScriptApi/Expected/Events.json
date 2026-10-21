@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "name": "Events",
+  "hash": "0xef94213466acca13",
+  "constants": [],
+  "enums": [],
+  "events": [
+    {
+      "id": "Events.ContactBegin",
+      "name": "ContactBegin",
+      "header": "Events/EventsScriptApi.h",
+      "line": 23,
+      "doc": "Calls the handler when a body of the entity starts to touch another.",
+      "scope": {
+        "kind": "Entity"
+      },
+      "payload": "Events.ContactEvent",
+      "delivery": "PhysicsStep",
+      "subscribe": "GameEngine::Events::SubscribeContactBegin",
+      "unsubscribe": "GameEngine::Events::UnsubscribeContactBegin",
+      "context": "EventsSystem"
+    }
+  ],
+  "functions": [],
+  "handles": [],
+  "records": [
+    {
+      "id": "Events.ContactEvent",
+      "name": "ContactEvent",
+      "cpp": "GameEngine::Events::ContactEvent",
+      "header": "Events/EventsScriptApi.h",
+      "line": 12,
+      "doc": "Two bodies touched.",
+      "size": 24,
+      "align": 4,
+      "fields": [
+        {
+          "name": "self",
+          "kind": "Entity",
+          "offset": 0
+        },
+        {
+          "name": "other",
+          "kind": "Entity",
+          "offset": 4
+        },
+        {
+          "name": "point",
+          "kind": "Vec3",
+          "offset": 8,
+          "default": [
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        {
+          "name": "impulse",
+          "kind": "Float",
+          "offset": 20,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

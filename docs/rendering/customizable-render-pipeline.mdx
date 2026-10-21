@@ -1,6 +1,6 @@
 ---
 title: Customizable render pipelines
-description: How to use the data-driven render pipeline asset (.rendergraph), its format, pass types and resource references, and how to extend it with new node types.
+description: How to use the data-driven render pipeline asset (.rendergraph), its format, pass types, and resource references, and how to extend it with new node types.
 ---
 
 This guide explains how to **use** the new data-driven render pipeline system and how to **extend** it with new pass types.
@@ -50,12 +50,12 @@ Call:
 
 ## How SceneView (Editor) composes with gizmos
 
-SceneView supplies the current frame's color, resolve and depth targets to the frame
+SceneView supplies the current frame's color, resolve, and depth targets to the frame
 spine. The pipeline declares its world and post-process work, then the editor declares
 gizmos over `FinalColor` with the scene depth. The UI consumes that frame's output.
 
 Resource accesses establish graph dependencies. Declaration order determines the order
-of conflicting accesses; a pass phase is a scheduling priority among otherwise ready
+of conflicting accesses. A pass phase is a scheduling priority among otherwise ready
 passes, not a substitute for the producer/consumer order.
 
 ## RenderPipeline asset format (schemaVersion 2)
@@ -89,7 +89,7 @@ The asset is JSON. Minimal world-only example:
 
 Put passes in producer-before-consumer order in the `passes` array. The runtime walks
 that array to declare the frame. The `phase` field accepts a named phase or an integer
-and supplies a scheduling priority; it does not reverse resource dependencies.
+and supplies a scheduling priority. It does not reverse resource dependencies.
 The parser retains `tags` and `after` metadata, but the immediate render graph path does
 not create tag-ordering edges from them. Do not use those fields to repair array order.
 
@@ -98,7 +98,7 @@ See [Render graph quick reference](render-graph.mdx) for the graph's resource an
 ## Shader references (`shaderPkg`, `shaderDesc`, `stages`)
 
 A bare name such as `tonemap.frag.spv` is an **engine** shader: it resolves in the
-`editor` mount — the `Assets/` tree staged next to `Editor.exe` / `Player.exe` — and
+`editor` mount (the `Assets/` tree staged next to `Editor.exe` / `Player.exe`) and
 nowhere else. When that mount exists and does not hold the file, resolution fails
 rather than falling back to the project, so a stale copy in an unrelated project tree
 can never be picked up.
@@ -110,18 +110,18 @@ A **project or package** shader is named with its asset source prefix:
   "shaderPkg": "project:RenderPipelines/Shaders/custom.shaderpkg" }
 ```
 
-The prefix selects exactly one source — `project:`, `editor:`, or a mounted package
+The prefix selects exactly one source: `project:`, `editor:`, or a mounted package
 alias such as `nature-pack:`. The alias is case-insensitive, and the remainder may be
 written rooted (`nature-pack:/Shaders/custom.shaderpkg`) or with a leading `Assets/`.
 A prefixed name never falls back to another source: an unknown alias or an absent file
 is reported as a missing shader.
 
-Absolute paths are used as given. A deployment with no `editor` mount — unit tests and
-packaged games, which fuse the engine shaders into the project mount — resolves bare
+Absolute paths are used as given. A deployment with no `editor` mount (unit tests and
+packaged games, which fuse the engine shaders into the project mount) resolves bare
 names project-first.
 
 An export ships a prefixed `.shaderpkg` through the build manifest, from the source the
-prefix names; bare names ship with the engine `Shaders` folder, which the export copies whole.
+prefix names. Bare names ship with the engine `Shaders` folder, which the export copies whole.
 
 ## Resource references
 
@@ -133,7 +133,7 @@ Many node fields refer to textures/buffers via a string "ref".
 - **`View.Depth`**: view's depth attachment
 - **`View.Resolve`**: view's resolve attachment (or `View.Color` if no explicit resolve)
 - **`View.DepthResolved`**: a single-sample copy of the view depth, published by the `DepthResolve` node. It holds everything the color pass depth-tests against, grass included. Bind it in any pass that measures distance to what is on screen or decides what is in front: fog, water, reflections, temporal reprojection, depth of field.
-- **`View.OccluderDepthResolved`**: the same copy without the non-occluding grass heads. Only occlusion passes that grass must not darken read it: the engine's GTAO and contact-shadow nodes. A C++ node of that kind takes it from `ViewDeclare::ViewOccluderDepthResolved`; every other pass binds `View.DepthResolved`. Without grass in view, both names are the same texture.
+- **`View.OccluderDepthResolved`**: the same copy without the non-occluding grass heads. Only occlusion passes that grass must not darken read it: the engine's GTAO and contact-shadow nodes. A C++ node of that kind takes it from `ViewDeclare::ViewOccluderDepthResolved`. Every other pass binds `View.DepthResolved`. Without grass in view, both names are the same texture.
 
 ### Pipeline-defined resources
 
@@ -171,7 +171,7 @@ Schedules world/entity rendering for each active view. Keywords control which sh
 variant is used for all draws in the pass.
 
 Optional fields:
-- `keywords` (string array) — pass-level shader keywords, e.g. `"ForwardPlus"`, `"Instanced"`
+- `keywords` (string array): pass-level shader keywords, e.g. `"ForwardPlus"`, `"Instanced"`
 
 Example:
 
@@ -202,13 +202,13 @@ Example (tonemap-like):
 
 Notes / limitations:
 - Currently binds **only set 0**.
-- Uses linear clamp by default. `samplers` maps binding names to presets; `linearRepeat` selects linear repeat.
+- Uses linear clamp by default. `samplers` maps binding names to presets. `linearRepeat` selects linear repeat.
 - `pushConstants` supplies named float or integer defaults. `ppOverrides: true` lets matching post-process settings override them.
 
 Skipping a stage and gating an input:
 
 - `skipWhen` (object, post-process settings field name to value): the stage is skipped for a
-  view when every listed field reads within 1/1024 of its value; a field name the settings do
+  view when every listed field reads within 1/1024 of its value. A field name the settings do
   not know keeps the stage running, and the compiler warns about it. A skipped stage publishes
   its input under its `output` name, so the stages after it read the chain unchanged.
   `passthroughInput` names which input is published when the stage has more than one, and
@@ -216,11 +216,11 @@ Skipping a stage and gating an input:
   reads while it is skipped.
 - `inputGates` (object, input binding to a post-process settings gate such as
   `bloomScatteringActive`): while the gate reads inactive, this stage neither resolves nor
-  reads that input and its binding samples the engine's black texture; a skipped stage
+  reads that input and its binding samples the engine's black texture. A skipped stage
   upstream that passes its input through can still allocate that input (#2158). The key must
   be one of the stage's `inputs` and the value the name
   of a computed `*Active` gate (not a value field such as `bloomOctaves`); the compiler warns
-  otherwise. The stage itself still runs; combine it with `skipWhen` to skip the whole stage.
+  otherwise. The stage itself still runs. Combine it with `skipWhen` to skip the whole stage.
 
 ```json title="A bloom combine pass with gated inputs and a skip rule"
 {
@@ -255,7 +255,8 @@ Example:
 ```
 
 Notes / limitations:
-- `inputs` and `buffers` map reflected set-0 binding names to graph resources; `inputUsages` and `bufferUsages` declare their access modes. The package must contain the compute stage and matching metadata.
+- `inputs` and `buffers` map reflected set-0 binding names to graph resources. `inputUsages` and `bufferUsages` declare their access modes. The package must contain the compute stage and matching metadata.
+- `shaderPkgFallbacks` (optional) lists the same kernel packaged at smaller workgroups, largest first. The node runs the first package, of `shaderPkg` and these, whose workgroup the device can run. A phone's WebGPU allows 256 invocations per workgroup, and a desktop GPU allows 1024. The last package runs regardless. Every package must write the same output for the same `dispatch`. The shipped graphs list `Shaders/cluster_depth_minmax_t16.shaderpkg` and `_t8` after the 32 x 32 depth min/max kernel.
 
 ### `CpuTextureInput`
 
@@ -275,11 +276,11 @@ its texture under `output` and its fixed metadata block under `parameters`, so a
 }
 ```
 
-- `source` is the publisher's `StringId` name; `parameters` is optional and must be omitted for a
-  source without metadata; `viewPurpose` defaults to `Game`.
+- `source` is the publisher's `StringId` name. `parameters` is optional and must be omitted for a
+  source without metadata. `viewPurpose` defaults to `Game`.
 - Publishes nothing when the source is absent, stale, not yet uploaded, or the device is not
-  healthy — the consuming stage then skips (see the `FullscreenShader` missing-input behavior).
-- Producer API, lifetime and upload contract: [CPU texture source](cpu-texture-source.mdx).
+  healthy: the consuming stage then skips (see the `FullscreenShader` missing-input behavior).
+- Producer API, lifetime, and upload contract: [CPU texture source](cpu-texture-source.mdx).
 
 ## Extending the system
 
@@ -292,10 +293,10 @@ its texture under `output` and its fixed metadata block under `parameters`, so a
 
 2) **Register it** through the frame spine:
 - `renderServices.Spine().RegisterPipelineNodeType("MyNodeType", factory, perView)`
-- Registration can arrive **after** the graph that needs it was compiled — a project's native
+- Registration can arrive **after** the graph that needs it was compiled: a project's native
   module loads at project open, well after the editor compiled the authored pipeline and rejected
   it for the unknown type. A successful registration schedules one retry of that rejected compile,
-  so the authored pipeline applies by itself: no asset edit, reselection or restart. Several
+  so the authored pipeline applies by itself: no asset edit, reselection, or restart. Several
   registrations before the next frame coalesce into a single attempt, a graph that is still invalid
   caches its new rejection, and a blueprint installed programmatically
   (`SetActiveRenderPipelineBlueprint`) keeps ownership.
@@ -308,8 +309,8 @@ its texture under `output` and its fixed metadata block under `parameters`, so a
   and declare accesses with the typed `Read(...)` / `Write(...)` overloads.
 
 Declare passes every frame they are needed. Persistent node state may cache device resources,
-but must not retain frame handles or capture declaration-local references in execute callbacks;
-those callbacks execute after declaration returns.
+but must not retain frame handles or capture declaration-local references in execute callbacks.
+Those callbacks execute after declaration returns.
 
 ### Add a new output name
 
@@ -335,7 +336,7 @@ current output and its physical texture. Do not cache the result across frames.
 
 The current MVP already:
 - Validates `ShaderMeta` (push constant limits, etc.) for `FullscreenShader`
-- Warns if `inputs` names don't exist as bindings in the shader package's metadata
+- Warns if `inputs` names do not exist as bindings in the shader package's metadata
 
 To extend validation further:
 - Read metadata from the shader package and validate via `ValidateShaderMeta`.
@@ -344,17 +345,17 @@ To extend validation further:
 
 ## Troubleshooting
 
-- **Pipeline not found / doesn't load**:
-  - Ensure the `.rendergraph` file exists in a mounted asset root. GUIDs and import metadata live in `AssetDatabase.assetdb`; `.meta` sidecars are ignored.
-- **Fullscreen shader inputs don't work**:
+- **Pipeline not found / does not load**:
+  - Ensure the `.rendergraph` file exists in a mounted asset root. GUIDs and import metadata live in `AssetDatabase.assetdb`. `.meta` sidecars are ignored.
+- **Fullscreen shader inputs do not work**:
   - Ensure the `.shaderpkg` metadata uses matching **binding names** for set 0 (e.g., `uHDRColor` in the tonemap package).
 - **No post effect visible**:
   - Confirm your node is `enabled: true` and its `output` is `View.Resolve` (or is referenced by `outputs.FinalColor`).
 - **The scene renders through the engine's ForwardPlus (or the previous pipeline) instead of the authored one**:
   - The compile was rejected. The log names the graph and every issue, including the node id whose
     `type` did not resolve, and the Scene View and Game View show a notice with the reason. The
-    engine's copy in the Editor's `Assets/` folder stands in, never a project file of the same name;
-    if that copy cannot be used either, nothing is drawn and the notice says why.
+    engine's copy in the Editor's `Assets/` folder stands in, never a project file of the same name.
+    If that copy cannot be used either, nothing is drawn and the notice says why.
   - A packaged game has no stand-in: a pipeline it cannot use, or one missing from the package, draws
     nothing, and the log has the reason.
 - **Some passes are missing while the project's scripts build**:
@@ -365,7 +366,3 @@ To extend validation further:
   - A pass that reads what a waiting script pass writes waits with it, and the note names it.
     Declare a script pass's outputs under `resources`: a pass that reads an undeclared output of a
     script pass is refused.
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/CUSTOMIZABLE_RENDER_PIPELINE_GUIDE.md`.

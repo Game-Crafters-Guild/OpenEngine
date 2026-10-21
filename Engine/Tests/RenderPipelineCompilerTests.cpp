@@ -266,6 +266,8 @@ TEST(RenderPipelineCompiler, MissingShaderPkgFileIsError)
     const auto bp = CompileText(json);
     EXPECT_TRUE(bp.HasErrors()) << IssuesToString(bp);
     EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Error, "could not be loaded")) << IssuesToString(bp);
+    // The error states the fix: a pipeline that names a removed shader is repaired by the user.
+    EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Error, "or delete the pass")) << IssuesToString(bp);
 }
 
 TEST(RenderPipelineCompiler, ReflectionSkippedWhenResolverUnconfigured)

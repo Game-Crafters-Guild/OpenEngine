@@ -21,17 +21,25 @@ namespace GameEngine::Engine::Renderer
 class ExposureReadbackFeature : public IRenderFeature
 {
   public:
-    // CPU mirror of auto_exposure_resolve.comp's ExposureState SSBO — the one
-    // layout both the node's copy size and the ring slot size derive from.
+    // CPU mirror of the per-view ExposureHistory SSBO (auto_exposure_resolve.comp
+    // writes Scale and Valid, pre_exposure_snapshot.comp the pre-exposure pair) —
+    // the one layout both the node's copy size and the ring slot size derive from.
     struct State
     {
-        float Scale;    // resolved LINEAR scene-exposure multiplier
-        uint32_t Valid; // != 1 -> the resolve shader has not written yet
-        float PadA;
-        float PadB;
+        float Scale;               // resolved LINEAR scene-exposure multiplier
+        uint32_t Valid;            // != 1 -> the resolve shader has not written yet
+        float PreExposure;         // P this frame's scene colour is stored at; 0 = no snapshot (reads as 1)
+        float PreviousPreExposure; // P of the previous frame
     };
     static constexpr uint32_t kStateBytes = sizeof(State);
     static_assert(kStateBytes == 16u, "must match the shader's ExposureState layout");
+
+    // The pre-exposure P a view's scene colour was stored at, read the way the shaders read it
+    // (GE_ResolvePreExposure, exposed_brightness.glsl): a field no snapshot wrote reads as 1.
+    static float ResolvePreExposure(const State& state)
+    {
+        return state.PreExposure > 0.0f ? state.PreExposure : 1.0f;
+    }
 
     ExposureReadbackFeature();
     ~ExposureReadbackFeature() override;

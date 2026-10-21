@@ -336,7 +336,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     }
 
     if (!foundSkybox)
-        m_LastSkyboxHdriEvictionGuid = GUID{};
+        m_BoundSkyboxHdriGuid = GUID{};
 
     if (foundSkybox)
     {
@@ -353,19 +353,17 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
 
         GUID guid(std::string(skyboxComp.GetHDRIAssetGuid()));
 
-        // Force a fresh GPU upload when the skybox switches HDRIs so cached textures cannot
-        // stick across Polyhaven resolution changes (GUID swap or stale metadata/bind path).
-        if (!guid.IsNull() && guid != m_LastSkyboxHdriEvictionGuid)
-        {
-            if (!m_LastSkyboxHdriEvictionGuid.IsNull())
-                rs->Textures().Evict(m_LastSkyboxHdriEvictionGuid);
-            rs->Textures().Evict(guid);
-            m_LastSkyboxHdriEvictionGuid = guid;
-        }
-
+        // A switched-to HDRI is not on the GPU until its load (a cook on a miss) lands: until
+        // then the sky keeps last frame's settings, whose texture stays resident, and the
+        // previous HDRI is evicted only once the new one is bound. A file replaced on disk
+        // (a Polyhaven resolution swap) reloads through the asset reload, which evicts it.
         Rendering::TextureHandle envTex{};
         if (!guid.IsNull())
             envTex = rs->Textures().GetOrUpload(guid);
+        const bool switchedHdri = envTex.IsValid() && guid != m_BoundSkyboxHdriGuid;
+        const GUID replacedHdri = switchedHdri ? m_BoundSkyboxHdriGuid : GUID{};
+        if (switchedHdri)
+            m_BoundSkyboxHdriGuid = guid;
 
         if (!envTex.IsValid() && fallbackSkySettings &&
             fallbackSkySettings->environmentTexture.IsValid())
@@ -385,6 +383,8 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
 
         Rendering::SkySystemState state{};
         sky.SetSettings(settings, state);
+        if (!replacedHdri.IsNull())
+            rs->Textures().Evict(replacedHdri);
         return;
     }
 
@@ -513,17 +513,6 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
                                comp.NightSkyHorizonColorKeys.Midday,
                                comp.NightSkyHorizonColorKeys.Sunset,
                                settings.nightSkyHorizonColor);
-    // The night horizon's keys are authored against the default moonlight: the dome above them takes its
-    // night source from Moonlight (the moon branch below), so they scale with it too, or a bright moon
-    // leaves the horizon band at the default's darkness under a bright sky. Exactly 1 at the default.
-    {
-        const float moonlightRatio = Components::SkySunDrive::MoonlightRatio(comp);
-        for (int c = 0; c < 3; ++c)
-        {
-            settings.groundHorizonNightColor[c] *= moonlightRatio;
-            settings.nightSkyHorizonColor[c] *= moonlightRatio;
-        }
-    }
     settings.groundHorizonCosWidth = std::clamp(
         Components::EvaluateSkyScalarDayCurve(
             comp.GroundHorizonCosWidthKeys,
@@ -540,16 +529,16 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
             tod),
         0.001f,
         0.2f);
-    settings.starDensity = comp.StarDensity;
-    settings.starBrightness = comp.StarBrightness;
-    // The inspector's range. Past it the shader clamps the points' radius before the core's, and
-    // the core-to-points ratio the star's energy gains assume (kStarSparkleCoreRadius) drifts.
-    settings.starSize = std::clamp(comp.StarSize, 0.1f, 3.0f);
-    settings.starDiamondShape = comp.StarDiamondShape;
-    settings.starCoreSize = comp.StarCoreSize;
-    settings.starGlowFalloff = comp.StarGlowFalloff;
-    settings.twinkleSpeed = comp.TwinkleSpeed;
-    settings.twinkleIntensity = comp.TwinkleIntensity;
+    settings.starLimitingMagnitude = std::clamp(comp.StarLimitingMagnitude, 0.0f, 8.0f);
+    settings.starGlow = std::clamp(comp.StarGlow, 0.0f, 4.0f);
+    settings.starHighlightCompression = std::clamp(comp.StarHighlightCompression, 0.1f, 1.0f);
+    settings.starTwinkleAmount = std::clamp(comp.StarTwinkleAmount, 0.0f, 1.0f);
+    settings.starTwinkleRate = std::clamp(comp.StarTwinkleRate, 0.0f, Components::kStarTwinkleRateMax);
+    settings.starObserver = static_cast<uint32_t>(comp.StarObserver);
+    settings.starCoreScale = std::clamp(comp.StarCoreScale, 0.5f, 3.0f);
+    settings.starSpikes = std::clamp(comp.StarSpikes, 0.0f, 1.0f);
+    settings.starSpikeLength = std::clamp(comp.StarSpikeLength, 0.5f, 4.0f);
+    settings.starShape = static_cast<uint32_t>(comp.StarShape);
     settings.showSunDisk = comp.ShowSun;
     settings.showMoonDisk = comp.ShowMoon;
     // This one multiplies the radius the sun disc is DRAWN at, which sun_disc.glsl divides the
@@ -633,18 +622,21 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     if (comp.AutoSunMoon)
     {
         settings.moonArcPosition = std::clamp(comp.MoonArcPosition, 0.0f, 1.0f);
-        settings.moonPhase01 = std::clamp(comp.MoonPhase01, 0.0f, 1.0f);
         settings.moonAngularRadius =
             kDefaultMoonAngularRadiusRad * std::clamp(comp.MoonSize, 0.1f, 6.0f);
         Rendering::ComputeSimpleSunMoon(settings, config, solarFrame, state);
-        // The night's source is the moonlight's, on the same scale as the day's: the default
-        // moonlight comes from a clear 100 000 lx sun, so the night dome and the moon disc follow
-        // Moonlight and are left where they are when the sun is dimmed.
+        // The moon's own source on the day's scale: its full-moon illuminance (Moonlight) times the
+        // phase, lifted to the top of the atmosphere as the sun's is. It lights the sky-view LUT
+        // beside the sun and sets the disc, and it follows Moonlight rather than the sun, so the
+        // night is left where it is when the sun is dimmed.
         const float moonSourceUnitless =
-            Components::LightIntensityToUnitless(Components::kClearNoonSunIlluminanceLux *
-                                                     Components::SkySunDrive::MoonlightRatio(comp),
-                                                 Components::LightUnit::Lux) *
-            SkyIrradianceScale();
+            comp.ShowMoon
+                ? Components::LightIntensityToUnitless(
+                      Components::SkySunDrive::SanitisedMoonlightLux(comp.MoonlightIlluminance) *
+                          Rendering::MoonPhaseIlluminanceFraction(settings.moonArcPosition),
+                      Components::LightUnit::Lux) *
+                      SkyIrradianceScale()
+                : 0.0f;
         Rendering::ApplySimpleLightingToSkySettings(state, config, sunTint, moonSourceUnitless, settings);
         settings.scatteringSunDir[0] = state.sunDirWS[0];
         settings.scatteringSunDir[1] = state.sunDirWS[1];
@@ -653,7 +645,6 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.moonDirWS[0] = state.moonDirWS[0];
         settings.moonDirWS[1] = state.moonDirWS[1];
         settings.moonDirWS[2] = state.moonDirWS[2];
-        settings.moonIntensity = settings.primarySunIntensity * config.moonIntensityScale;
     }
     else
     {
@@ -687,6 +678,9 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.primarySunColor[0] = sunTint[0];
         settings.primarySunColor[1] = sunTint[1];
         settings.primarySunColor[2] = sunTint[2];
+        for (int c = 0; c < 3; ++c)
+            settings.sunSourceColor[c] = sunTint[c];
+        settings.sunSourceIntensity = settings.primarySunIntensity;
     }
 
     // What the ground is lit by: each celestial body's source colour minus the extra air mass its
@@ -745,9 +739,9 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
             // The light owns the illuminance, its Intensity the author's clear-noon value, so the
             // colour carries the rest. Across the handover it is the energy blend of the two bodies,
             // each at what it delivers: the sun's ground colour, and the moon's scaled so that at full
-            // night the light delivers Moonlight, whatever the light's own value (the stylized
-            // fraction of the day SkySystemConfig owns, times Moonlight over its default, times a
-            // clear sun over this light's). By day the blend is exactly zero, so the colour is the
+            // night the light delivers Moonlight for the phase, whatever the light's own value (a
+            // full moon's fraction of a clear sun, which SkySystemConfig owns, times Moonlight over its
+            // default, times the phase law, times a clear sun over this light's). By day the blend is exactly zero, so the colour is the
             // sun's ground colour to the bit; at the defaults the moon's scale is that fraction
             // exactly.
             const float lightUnitless = Components::LightIntensityToUnitless(light->Intensity, light->IntensityUnit);
@@ -758,7 +752,8 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
                           lightUnitless
                     : 0.0f;
             const float moonScale = Rendering::LinkedLightMoonScale(config, comp.ShowMoon) *
-                                    Components::SkySunDrive::MoonlightRatio(comp) * clearSunOverLight;
+                                    Components::SkySunDrive::MoonlightRatio(comp) *
+                                    Rendering::MoonPhaseIlluminanceFraction(comp.MoonArcPosition) * clearSunOverLight;
             if (drivenFields & Components::SkySunIlluminance::kDrivesColor)
             {
                 float linkedLightColor[3];

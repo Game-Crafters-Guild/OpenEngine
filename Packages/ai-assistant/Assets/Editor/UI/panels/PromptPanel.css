@@ -1,3 +1,7 @@
+/* --prompt_text_scale: the conversation's text size over its 14 px default. Each conversation
+   font size is its 1.0 size times this; the input and the status line keep their sizes.
+   PromptPanel::ApplyTextSize sets it on the panel from the size slider's value; without it
+   every use falls back to 1. */
 .prompt-panel-root {
 	display: flex;
 	flex-direction: column;
@@ -56,7 +60,8 @@
 	flex-shrink: 0;
 	min-width: 0;
 	min-height: 0;
-	padding: 0 0 8px 0;
+	/* The edge gap of a narrow panel; a wide one centres the 800 px column (.agent-row). */
+	padding: 0 8px 8px 8px;
 	background-color: var(--ui_color_bg_tabbar);
 }
 
@@ -64,10 +69,17 @@
 /* The first row of a conversation that continues an earlier session: a break in the
    history, in the status tier of a reply's footer, set in italic over a hairline so
    it does not read as the empty-conversation hint. */
+/* The continued-session hint and the empty state sit in the conversation's reading column,
+   as .agent-row does, so the first message appears where the hint was. */
 .prompt-panel-continued {
+	width: 100%;
+	max-width: 800px;
+	margin-left: auto;
+	margin-right: auto;
+	box-sizing: border-box;
 	padding: 10px 12px 6px 12px;
 	margin-bottom: 4px;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	font-style: italic;
 	color: var(--ui_color_text_secondary);
 	border-bottom: 1px solid var(--ui_color_border_subtle);
@@ -76,8 +88,13 @@
 }
 
 .prompt-panel-history-empty {
+	width: 100%;
+	max-width: 800px;
+	margin-left: auto;
+	margin-right: auto;
+	box-sizing: border-box;
 	padding: 10px 12px;
-	font-size: 14px;
+	font-size: calc(14px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_dim);
 	white-space: normal;
 	flex-shrink: 0;
@@ -85,7 +102,8 @@
 
 /* One message: AgentConversationRow.uxml. The card is capped to a reading column
    (its text wraps at about 100 characters of the body font) so a wide dock keeps
-   lines readable and the reply actions beside the text they act on. */
+   lines readable and the reply actions beside the text they act on, and the column
+   sits in the middle of the panel. */
 .agent-row {
 	display: flex;
 	flex-direction: column;
@@ -94,22 +112,25 @@
 	flex-shrink: 0;
 	min-width: 0;
 	min-height: 0;
+	width: 100%;
 	max-width: 800px;
 	overflow: hidden;
-	margin: 8px 8px 0 8px;
+	margin: 8px auto 0 auto;
 	padding: 4px 0 8px 0;
 	background-color: var(--ui_color_bg_panel);
 	border: 1px solid var(--ui_color_border_panel);
 	border-radius: 6px;
 }
 
-/* The user's own messages: a darker card framed in the accent, thicker on the
-   leading edge. The frame is one colour all round: a box draws a single border
-   colour, so a left edge alone cannot carry the accent. */
+/* The user's own messages: a darker card, framed like every other card. */
 .agent-row-user {
 	background-color: var(--ui_color_bg_tabbar);
-	border-color: var(--ui_color_accent_blue_inactive);
-	border-left-width: 3px;
+}
+
+/* The selected row (a click, or Up and Down in the history): the one card framed in the
+   accent. */
+.agent-row.selected {
+	border-color: var(--ui_color_accent_blue);
 }
 
 .agent-row-header-line {
@@ -117,8 +138,8 @@
 	flex-direction: row;
 	align-items: center;
 	flex-shrink: 0;
-	height: 28px;
-	min-height: 28px;
+	height: calc(28px * var(--prompt_text_scale, 1));
+	min-height: calc(28px * var(--prompt_text_scale, 1));
 	padding: 0 8px 0 12px;
 	gap: 8px;
 }
@@ -127,7 +148,7 @@
 	flex-grow: 1;
 	flex-shrink: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_primary);
 	white-space: nowrap;
 	overflow: hidden;
@@ -136,7 +157,7 @@
 
 .agent-row-time {
 	flex-shrink: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: nowrap;
 }
@@ -156,7 +177,7 @@
 	min-width: 0;
 	min-height: 0;
 	font-family: var(--ui_font_family);
-	font-size: 14px;
+	font-size: calc(14px * var(--prompt_text_scale, 1));
 	line-height: var(--script_line_height, 1.0);
 	padding: 4px 12px;
 	background-color: transparent;
@@ -176,7 +197,7 @@
 	min-width: 0;
 	padding: 4px 12px;
 	font-family: var(--ui_font_family);
-	font-size: 14px;
+	font-size: calc(14px * var(--prompt_text_scale, 1));
 	line-height: var(--script_line_height, 1.0);
 	text-align: left;
 	color: var(--ui_color_text);
@@ -237,31 +258,31 @@
 }
 
 .agent-call-glyph-done {
-	background-image: url("editor:Icons/checked.png");
+	background-image: url("editor:Icons/checked.svg");
 	background-image-tint: var(--ui_color_accent_green);
 }
 
 /* A ring with a stroke of about 1.75 px at the glyph's 14 px, tinted bright: thick enough
    to clear the 3:1 floor for a glyph. */
 .agent-call-glyph-view {
-	background-image: url("ai-assistant:Editor/Icons/view-ring.png");
+	background-image: url("ai-assistant:Editor/Icons/view-ring.svg");
 	background-image-tint: var(--ui_color_text_bright);
 }
 
 .agent-call-glyph-refused {
-	background-image: url("editor:Icons/xclose.png");
+	background-image: url("editor:Icons/xclose.svg");
 	background-image-tint: var(--ui_color_badge_background);
 }
 
 .agent-call-glyph-waiting {
-	background-image: url("editor:Icons/help.png");
+	background-image: url("editor:Icons/help.svg");
 	background-image-tint: var(--ui_color_warning_text);
 }
 
 /* The action leads the row: a step heavier and brighter than the summary beside it. */
 .agent-call-action {
 	flex-shrink: 0;
-	font-size: 13px;
+	font-size: calc(13px * var(--prompt_text_scale, 1));
 	font-weight: 500;
 	color: var(--ui_color_text_bright);
 	white-space: nowrap;
@@ -286,7 +307,7 @@
 /* Words wrap between words only: a word is never broken, so a component name stays whole. */
 .agent-call-words {
 	flex-shrink: 1;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: normal;
 	text-align: left;
@@ -307,7 +328,7 @@
    text floor. */
 .agent-call-muted {
 	flex-shrink: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	opacity: 0.8;
 	white-space: nowrap;
@@ -317,7 +338,7 @@
 .agent-call-comma {
 	flex-shrink: 0;
 	margin-left: -4px;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	opacity: 0.8;
 }
@@ -325,7 +346,7 @@
 /* An entity link in a summary takes the summary's face, so the row reads its action first
    (its name inherits the size). */
 .agent-call-link {
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 }
 
 /* A Details line's indentation: one step per nesting level. */
@@ -346,7 +367,7 @@
 
 .agent-call-vector-axis {
 	white-space: nowrap;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	opacity: 0.8;
 }
@@ -355,7 +376,7 @@
 	white-space: nowrap;
 	margin-right: 5px;
 	font-family: var(--ui_font_script);
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_primary);
 }
 
@@ -375,7 +396,7 @@
 .agent-call-undo {
 	flex-shrink: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: normal;
 	text-align: right;
@@ -392,7 +413,7 @@
 .agent-call-details-toggle {
 	flex-shrink: 0;
 	padding: 0 4px;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_dim);
 	cursor: pointer;
 }
@@ -417,7 +438,7 @@
 .agent-call-waiting {
 	flex-grow: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	font-style: italic;
 	color: var(--ui_color_warning_text);
 	white-space: normal;
@@ -504,7 +525,7 @@
    capture being downscaled reads as loading, not as a tiny asset or an empty box. After the
    well and image rules, so its background wins at the same specificity. */
 .thumbnail-pending {
-	background-image: url("editor:Icons/timer.png");
+	background-image: url("editor:Icons/timer.svg");
 	background-image-tint: var(--ui_color_text_dim);
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
@@ -514,7 +535,7 @@
 /* No picture came (EditorAssetActions::kThumbnailUnavailableClass): a dimmed object glyph, so
    the well reads as "no preview" rather than as an empty or broken thumbnail. */
 .thumbnail-unavailable {
-	background-image: url("editor:Icons/Cube.png");
+	background-image: url("editor:Icons/Cube.svg");
 	background-image-tint: var(--ui_color_text_disabled);
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
@@ -524,14 +545,14 @@
 .agent-call-resource-name {
 	flex-shrink: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_bright);
 	white-space: nowrap;
 }
 
 .agent-call-resource-type {
 	flex-shrink: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: nowrap;
 }
@@ -539,7 +560,7 @@
 /* "not found" in the refused family, so a missing asset reads as a problem, not a type. */
 .agent-call-resource-missing-text {
 	flex-shrink: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_error_text);
 	white-space: nowrap;
 }
@@ -551,7 +572,7 @@
 	margin-left: 2px;
 	padding: 1px 5px;
 	border-left: 1px solid var(--ui_color_border_subtle);
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_primary);
 	cursor: pointer;
 }
@@ -591,7 +612,7 @@
 .agent-call-detail-value {
 	flex-shrink: 1;
 	font-family: var(--ui_font_script);
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_muted);
 	white-space: normal;
 	text-align: left;
@@ -601,7 +622,7 @@
 .agent-call-detail-key {
 	flex-shrink: 0;
 	font-family: var(--ui_font_script);
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	opacity: 0.8;
 	white-space: nowrap;
@@ -633,7 +654,7 @@
 .agent-row-status-part {
 	flex-shrink: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: normal;
 }
@@ -682,7 +703,7 @@
 }
 
 .agent-row-retried {
-	font-size: 12px;
+	font-size: calc(12px * var(--prompt_text_scale, 1));
 	color: var(--ui_color_text_secondary);
 	white-space: nowrap;
 }
@@ -731,7 +752,8 @@
 	border-width: 0;
 }
 
-.prompt-panel-input-splitter:focus {
+/* Keyboard focus only: a click to drag the splitter draws no ring. */
+.prompt-panel-input-splitter:focus-visible {
 	outline: 2px solid var(--ui_color_accent_blue);
 	outline-offset: -2px;
 }
@@ -746,6 +768,8 @@
 	background-color: var(--ui_color_bg_grid);
 }
 
+/* The input spans the panel's width, so the field and its controls share one line
+   wherever the panel leaves the field its 288 px minimum (PromptPanel::UpdateInputStacking). */
 .prompt-panel-input-column {
 	display: flex;
 	flex-direction: column;
@@ -845,7 +869,7 @@
 	flex-shrink: 0;
 	padding: 0;
 	margin: 0 8px 0 0;
-	background-image: url("ai-assistant:Editor/Icons/arrow-up-circle.png");
+	background-image: url("ai-assistant:Editor/Icons/arrow-up-circle.svg");
 	background-size: 24px 24px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -855,6 +879,73 @@
 	opacity: 0.5;
 	cursor: pointer;
 	transition: opacity 0.15s ease;
+}
+
+/* The microphone beside Send (shown where the platform offers speech input): the send
+   button's size and rest opacity, and its own icon while it listens. */
+.prompt-panel-mic-button {
+	width: 24px;
+	min-width: 24px;
+	max-width: 24px;
+	height: 28px;
+	min-height: 28px;
+	max-height: 28px;
+	flex-shrink: 0;
+	padding: 0;
+	/* The level meter on each side spaces it; the meter shows only with the button. */
+	margin: 0;
+	background-image: url("ai-assistant:Editor/Icons/mic.svg");
+	background-size: 18px 18px;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-color: transparent;
+	border-width: 0;
+	border-color: transparent;
+	opacity: 0.5;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.prompt-panel-mic-button:hover {
+	background-color: transparent;
+	border-color: transparent;
+	opacity: 1;
+}
+
+/* mic-listening.svg adds 10 units of glow around mic.svg's 24-unit glyph (a 44-unit view
+   box), so it draws at 18px * 44 / 24 = 33px to keep the microphone the size it has at rest. */
+.prompt-panel-mic-button.listening {
+	background-image: url("ai-assistant:Editor/Icons/mic-listening.svg");
+	background-size: 33px 33px;
+	opacity: 1;
+}
+
+/* The level meter beside the microphone: five bars a side, shown while it listens. Its
+   space stays reserved while idle so the controls do not shift when dictation starts. */
+.prompt-panel-speech-levels {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	align-self: center;
+	gap: 1px;
+	width: 14px;
+	height: 24px;
+	flex-shrink: 0;
+	margin: 0 6px 0 6px;
+	pointer-events: none;
+}
+
+.prompt-panel-speech-levels.idle {
+	opacity: 0;
+}
+
+.prompt-panel-speech-bar {
+	width: 2px;
+	min-width: 2px;
+	height: 2px;
+	flex-shrink: 0;
+	border-radius: 1px;
+	background-color: var(--ui_color_accent_blue_hover);
 }
 
 .prompt-panel-send-button:hover {
@@ -927,16 +1018,45 @@
 	outline: none;
 }
 
-.prompt-panel-status {
+/* The status line and the text size slider at its end: one strip. The status text takes the
+   width the slider leaves and may shrink; the slider keeps its size. */
+.prompt-panel-status-row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
 	flex-shrink: 0;
-	width: 100%;
+	border-top: 1px solid var(--ui_color_border);
+	background-color: var(--ui_color_bg_hover_alt);
+}
+
+/* The letter glyph in front of the text size slider, as the Assets footer shows a glyph in
+   front of its size slider. */
+.prompt-panel-text-size-glyph {
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
+	margin-right: 4px;
+	background-image: url("editor:Icons/SettingsFontRendering.svg");
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-image-tint: var(--ui_icon_tint_standard);
+}
+
+.prompt-panel-text-size-host {
+	flex-shrink: 0;
+	padding-right: 8px;
+}
+
+.prompt-panel-status {
+	flex-grow: 1;
+	flex-shrink: 1;
+	min-width: 0;
 	box-sizing: border-box;
 	min-height: 24px;
 	padding: 0 8px 4px 8px;
-	border-top: 1px solid var(--ui_color_border);
 	color: var(--ui_color_text_primary);
 	font-size: 12px;
-	background-color: var(--ui_color_bg_hover_alt);
 }
 
 .prompt-panel-icon-button {
@@ -1125,7 +1245,7 @@
 	padding: 0;
 	margin-left: auto;
 	margin-right: 2px;
-	background-image: url("editor:Icons/options.png");
+	background-image: url("editor:Icons/options.svg");
 	background-size: 16px 16px;
 	background-image-tint: var(--ui_color_text_soft);
 	background-color: transparent;

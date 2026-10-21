@@ -10,7 +10,7 @@ This short guide explains when to use immediate or deferred operations, and how 
 ## Immediate and deferred
 
 - **Deferred (the default):**
-  - Operations such as `Entity::Set`, `Entity::Remove<T>()` and `World::AddComponent` enqueue commands that `World::ProcessCommands()` applies.
+  - Operations such as `Entity::Set`, `Entity::Remove<T>()`, and `World::AddComponent` enqueue commands that `World::ProcessCommands()` applies.
   - Batching reduces contention and lets structural changes coalesce.
   - Effects are not visible until `ProcessCommands()`, so reads (`Get`, `Has`, view iteration) must allow for that.
 - **Immediate:**
@@ -47,9 +47,5 @@ for (int i = 0; i < 50000; ++i) {
 world.EndBulkOperations();
 ```
 
-- Reserve calls are hints; they do not change semantics.
+- Reserve calls are hints. They do not change semantics.
 - Use direct operations only in carefully controlled sections, so they do not race with other systems iterating the world.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/ECS_Immediate_Deferred_and_Reserve.md`; API names as code; the closing tip as an aside.

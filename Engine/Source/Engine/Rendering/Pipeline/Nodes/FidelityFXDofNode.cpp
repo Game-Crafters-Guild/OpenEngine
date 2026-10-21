@@ -174,6 +174,11 @@ void FidelityFXDofNode::DeclareForView(ViewDeclare& d)
         "FidelityFXDoF.FarField",
         MakeTransientDesc(halfW, halfH, TextureFormat::R16G16B16A16_FLOAT,
                           "FidelityFXDoF.FarField"));
+    // Scene colour at the frame's pre-exposure (rgb; the half-resolution alpha is the CoC). The
+    // CoC tiles are not colour.
+    d.MarkPreExposed(half);
+    d.MarkPreExposed(nearField);
+    d.MarkPreExposed(farField);
     if (!half.IsValid() || !tile.IsValid() || !dilated.IsValid() ||
         !nearField.IsValid() || !farField.IsValid())
     {
@@ -258,9 +263,10 @@ void FidelityFXDofNode::DeclareForView(ViewDeclare& d)
         [&](RenderGraph::RGPassBuilder& p)
         {
             p.Read(half, RenderGraph::RGTextureRead::Sampled); p.Read(dilated, RenderGraph::RGTextureRead::Sampled);
+            if (exposure.Graph.IsValid()) p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Write(nearField, RenderGraph::RGTextureWrite::Storage); p.Write(farField, RenderGraph::RGTextureWrite::Storage);
         },
-        [this, half, dilated, nearField, farField, settings, halfGX, halfGY](RenderGraph::RGContext& ctx)
+        [this, half, dilated, nearField, farField, exposure, settings, halfGX, halfGY](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice(); auto* cl = ctx.Cmd; if (!dev || !cl) return;
             const auto src = ctx.GetTexture(half), tiles = ctx.GetTexture(dilated), nearTex = ctx.GetTexture(nearField), farTex = ctx.GetTexture(farField);
@@ -268,7 +274,8 @@ void FidelityFXDofNode::DeclareForView(ViewDeclare& d)
             const auto& stage = m_Stages[3]; DescriptorSetDesc dd{}; dd.layout = stage.Set0; dd.transient = true; dd.debugName = "FidelityFXDoF.Blur.Set0";
             auto ds = dev->CreateDescriptorSet(dd); NamedDescriptorWriter wd(dev, ds, *stage.Meta, 0);
             wd.AddCombinedImageSampler("uHalfColorCoc", src, m_LinearSampler)
-              .AddCombinedImageSampler("uDilatedCoc", tiles, m_LinearSampler); wd.Flush();
+              .AddCombinedImageSampler("uDilatedCoc", tiles, m_LinearSampler)
+              .AddStorageBuffer("uExposure", exposure.Buffer, exposure.Offset, exposure.Size); wd.Flush();
             Detail::BindStorageImageByName(dev, ds, *stage.Meta, "uNearField", nearTex);
             Detail::BindStorageImageByName(dev, ds, *stage.Meta, "uFarField", farTex);
             auto pipe = ctx.GetOrCreatePipelineVariant(stage.Pipeline); if (!pipe.IsValid()) return;

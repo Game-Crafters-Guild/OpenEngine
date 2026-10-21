@@ -31,7 +31,7 @@
 #endif
 #endif
 
-#ifdef PLATFORM_WINDOWS
+#if defined(PLATFORM_WINDOWS) && defined(NETHOST_AVAILABLE)
 static std::string Utf8FromWide(const std::wstring& w)
 {
     if (w.empty())
@@ -238,16 +238,16 @@ bool CoreCLRHost::Initialize(const std::filesystem::path& runtimeConfigPath)
             ++g_runtimeRefCount;
         }
     }
-#else
-    Logger::Log::Warning("CoreCLR hosting not available (NETHOST_AVAILABLE not defined)");
-    return false;
-#endif
 
     m_Initialized = true;
     Logger::Log::Info("CoreCLR Host initialized successfully");
     if (m_HostSwitches != 0 && !PushHostSwitches())
         Logger::Log::Error("CoreCLRHost: host switches 0x{:X} set before startup did not reach CoreBridge", m_HostSwitches);
     return true;
+#else
+    Logger::Log::Warning("CoreCLR hosting not available (NETHOST_AVAILABLE not defined)");
+    return false;
+#endif
 }
 
 void CoreCLRHost::SetNativeLibraryOverride(const std::string& nativeLibraryPathUtf8)
@@ -1269,6 +1269,25 @@ uint64 CoreCLRHost::GetCurrentRuntimeDomainId()
 #endif
 }
 
+uint32 CoreCLRHost::GetCurrentScriptTypeCount()
+{
+#if defined(NETHOST_AVAILABLE)
+    if (!m_Initialized || !m_LoadAssemblyAndGetFunctionPointer)
+        return 0;
+    using get_type_count_fn = int32 (CORECLR_DELEGATE_CALLTYPE*)();
+    void* function = GetCoreBridgeExport(GE_HOST_STR("GetCurrentScriptTypeCount"));
+    if (function == nullptr)
+    {
+        Logger::Log::Error("CoreBridge.GetCurrentScriptTypeCount function pointer resolve failed");
+        return 0;
+    }
+    const int32 count = reinterpret_cast<get_type_count_fn>(function)();
+    return count > 0 ? static_cast<uint32>(count) : 0;
+#else
+    return 0;
+#endif
+}
+
 void* CoreCLRHost::GetManagedFunction(const String& assemblyName,
                                       const String& typeName,
                                       const String& methodName)
@@ -1397,7 +1416,7 @@ bool CoreCLRHost::LoadHostfxr()
 #endif
 }
 
-bool CoreCLRHost::InitializeHostfxr(const std::filesystem::path& runtimeConfigPath)
+bool CoreCLRHost::InitializeHostfxr([[maybe_unused]] const std::filesystem::path& runtimeConfigPath)
 {
 #if !defined(NETHOST_AVAILABLE)
     return false;

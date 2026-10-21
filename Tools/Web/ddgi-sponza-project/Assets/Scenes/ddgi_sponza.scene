@@ -75,7 +75,6 @@ DDGIVolume.FilterSmoothness = 0.5
 DDGIVolume.EnableGlossy = true
 DDGIVolume.ReflectionIntensity = 1
 DDGIVolume.ContinuousSolve = true
-DDGIVolume.EnableFineCascade = false
 DDGIVolume.FineCascadeExtentFraction = 0.35
 
 
@@ -139,100 +138,9 @@ HierarchyOrder.order = 30
 Name.value = "Sky Environment"
 SkyEnvironment.Enabled = true
 SkyEnvironment.TimeOfDayHours = 13.768756
-SkyEnvironment.DayKeyTimeMidnight = 0
-SkyEnvironment.DayKeyTimeDawn = 6
-SkyEnvironment.DayKeyTimeMidday = 12
-SkyEnvironment.DayKeyTimeSunset = 18
-SkyEnvironment.AnimateTimeOfDay = false
-SkyEnvironment.TimeOfDayCycleSeconds = 120
-SkyEnvironment.SkyExposureTrim = 0
-SkyEnvironment.IblIntensity = 1
-SkyEnvironment.IblLowerHemisphereDarkness = 0.3
-SkyEnvironment.AmbientTintSky = (1, 1, 1)
-SkyEnvironment.AmbientTintEquator = (1, 1, 1)
-SkyEnvironment.AmbientTintGround = (1, 1, 1)
-SkyEnvironment.Mode = 0
-SkyEnvironment.GradientSkyTopColor = (0.2, 0.42, 0.78)
-SkyEnvironment.GradientSkyHorizonColor = (0.6, 0.72, 0.86)
-SkyEnvironment.GradientSkyBottomColor = (0.32, 0.3, 0.28)
-SkyEnvironment.GradientSkyIntensity = 4000
-SkyEnvironment.BelowHorizonMode = 0
-SkyEnvironment.GroundHazeStrength = 1
+SkyEnvironment.Latitude = 0
 SkyEnvironment.SunLight = "directional_light"
-SkyEnvironment.UseSunLightColor = false
-SkyEnvironment.TimeOfDayDrivesSunLight = true
-SkyEnvironment.AutoSunMoon = true
-SkyEnvironment.ShowSun = true
-SkyEnvironment.ShowMoon = true
-SkyEnvironment.SunSize2D = 1
-SkyEnvironment.SkyPan2D = 0
-SkyEnvironment.MoonPhase01 = 0.5
 SkyEnvironment.MoonArcPosition = 0.96618974
-SkyEnvironment.AutoMoonArc = true
-SkyEnvironment.MoonCycleDays = 29.5
-SkyEnvironment.MoonSize = 2.39
-SkyEnvironment.MoonSize2D = 0.334
-SkyEnvironment.MoonExposureEV = 4
-SkyEnvironment.FallingStarsEnabled = true
-SkyEnvironment.FallingStarAmount = 0.35
-SkyEnvironment.FallingStarFrequency = 0.35
-SkyEnvironment.FallingStarSpeed = 4
-SkyEnvironment.FallingStarLength = 1
-SkyEnvironment.FallingStarThickness = 0.485
-SkyEnvironment.FallingStarDotSize = 0.1
-SkyEnvironment.FallingStarDotSize2D = 0.979
-SkyEnvironment.SunDirOverride = (0, 1, 0)
-SkyEnvironment.SunColorMidnight = (0.004776953, 0.005181517, 0.006048833)
-SkyEnvironment.SunColorDawn = (0.2746773, 0.14412847, 0.099898726)
-SkyEnvironment.SunColorMidday = (1, 1, 1)
-SkyEnvironment.SunColorSunset = (1, 0.1651322, 0.49102086)
-SkyEnvironment.GroundAlbedoMidnight = (0.04, 0.045, 0.055)
-SkyEnvironment.GroundAlbedoDawn = (0.085, 0.078, 0.072)
-SkyEnvironment.GroundAlbedoMidday = (0.3, 0.3, 0.3)
-SkyEnvironment.GroundAlbedoSunset = (0.18, 0.14, 0.11)
-SkyEnvironment.GroundNightColorMidnight = (0.03, 0.032, 0.045)
-SkyEnvironment.GroundNightColorDawn = (0.022, 0.022, 0.03)
-SkyEnvironment.GroundNightColorMidday = (0.008, 0.008, 0.012)
-SkyEnvironment.GroundNightColorSunset = (0.02, 0.018, 0.028)
-SkyEnvironment.GroundBrightnessCurve = 0,0.22;6,0.34;12,0.9;18,0.5
-SkyEnvironment.GroundBrightnessCurveMode = keyCurve
-SkyEnvironment.GroundBrightnessBezier = 0.25,0.34,0.75,0.9,0.22,0.22
-SkyEnvironment.BelowHorizonBlendSharpnessCurve = 0,2.3;6,1.4;12,1.8;18,2.1
-SkyEnvironment.BelowHorizonBlendSharpnessCurveMode = keyCurve
-SkyEnvironment.BelowHorizonBlendSharpnessBezier = 0.25,1.4,0.75,1.8,2.3,2.3
-SkyEnvironment.BelowHorizonDarknessCurve = 0,1;6,0.8;12,0.35;18,0.75
-SkyEnvironment.BelowHorizonDarknessCurveMode = keyCurve
-SkyEnvironment.BelowHorizonDarknessBezier = 0.25,0.8,0.75,0.35,1,1
-SkyEnvironment.BelowHorizonDarkColorMidnight = (0.012, 0.014, 0.022)
-SkyEnvironment.BelowHorizonDarkColorDawn = (0.018, 0.017, 0.02)
-SkyEnvironment.BelowHorizonDarkColorMidday = (0.03, 0.031, 0.034)
-SkyEnvironment.BelowHorizonDarkColorSunset = (0.024, 0.018, 0.02)
-SkyEnvironment.GroundHorizonColorMidnight = (0.01, 0.015, 0.03)
-SkyEnvironment.GroundHorizonColorDawn = (0.08, 0.065, 0.055)
-SkyEnvironment.GroundHorizonColorMidday = (0.07843137, 0.12156863, 0.21960784)
-SkyEnvironment.GroundHorizonColorSunset = (0.13, 0.08, 0.09)
-SkyEnvironment.GroundHorizonNightColorMidnight = (0.000607054, 0.000910581, 0.001517635)
-SkyEnvironment.GroundHorizonNightColorDawn = (0.003, 0.0025, 0.0035)
-SkyEnvironment.GroundHorizonNightColorMidday = (0.000607054, 0.000910581, 0.001517635)
-SkyEnvironment.GroundHorizonNightColorSunset = (0.002, 0.0016, 0.0026)
-SkyEnvironment.NightSkyHorizonColorMidnight = (0.0012, 0.00035, 0.0019)
-SkyEnvironment.NightSkyHorizonColorDawn = (9e-04, 5e-04, 0.0011)
-SkyEnvironment.NightSkyHorizonColorMidday = (2e-04, 2e-04, 3e-04)
-SkyEnvironment.NightSkyHorizonColorSunset = (0.0018, 7e-04, 0.0016)
-SkyEnvironment.GroundHorizonCosWidthCurve = 0,0.02;6,0.03;12,0.03;18,0.055
-SkyEnvironment.GroundHorizonCosWidthCurveMode = keyCurve
-SkyEnvironment.GroundHorizonCosWidthBezier = 0.25,0.03,0.75,0.03,0.02,0.02
-SkyEnvironment.GroundHorizonNightCosWidthCurve = 0,0.06;6,0.03;12,0.02;18,0.05
-SkyEnvironment.GroundHorizonNightCosWidthCurveMode = keyCurve
-SkyEnvironment.GroundHorizonNightCosWidthBezier = 0.25,0.03,0.75,0.02,0.06,0.06
-SkyEnvironment.StarDensity = 0.5
-SkyEnvironment.StarBrightness = 0.6
-SkyEnvironment.StarSize = 1
-SkyEnvironment.StarDiamondShape = 0.5
-SkyEnvironment.StarCoreSize = 0.15
-SkyEnvironment.StarGlowFalloff = 10
-SkyEnvironment.TwinkleSpeed = 0.5
-SkyEnvironment.TwinkleIntensity = 0.3
 Transform.position = (0, 0, 0)
 Transform.rotation = (-0, -0, -0, 1)
 Transform.scale = (1, 1, 1)
@@ -256,11 +164,11 @@ Camera.fovY = 60
 Camera.orthographicSize = 10
 Camera.nearZ = 0.01
 Camera.farZ = 1000
-Camera.cullingMask = 4294967295
+Camera.visibleLayers = all
 Camera.postProcessProfileId = 0
 Camera.msaaSamples = 0
 Camera.antiAliasing = 0
-Camera.postProcessMask = 4294967295
+Camera.volumeLayers = all
 Camera.aspectPreset = 0
 Camera.customAspectWidth = 16
 Camera.customAspectHeight = 9
@@ -344,9 +252,7 @@ Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.priority = 0
-PostProcessVolume.postProcessMask = 4294967295
-PostProcessVolume.look = Neutral
-PostProcessVolume.ictcpChromaCompression = 0
+PostProcessVolume.volumeLayers = all
 PostProcessVolume.isGlobal = true
 PostProcessVolume.shape = 0
 PostProcessVolume.blendDistance = 1
@@ -464,7 +370,7 @@ HierarchyOrder.order = 60
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -518,7 +424,7 @@ HierarchyOrder.order = 70
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/NewMaterial1.material" guid="95733180-c8f8-4739-8347-77a4e2b8caf5"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -571,7 +477,7 @@ HierarchyOrder.order = 80
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="61feaec8-7114-499d-93b7-7ac6603b7165"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -639,7 +545,7 @@ ReflectionProbe.CaptureResolution = 256
 ReflectionProbe.UpdateMode = Once
 ReflectionProbe.RealtimeUpdateInterval = 0.5
 ReflectionProbe.MaxDistance = 0
-ReflectionProbe.CullMask = 4294967295
+ReflectionProbe.CapturedLayers = all
 
 
 
@@ -677,7 +583,7 @@ HierarchyOrder.order = 0
 MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-4811-8d49-43a75b7b292b"]
 MeshRenderer.material = [guid="821fa7e5-1934-446d-bf33-e47b0e8c2c1e"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -704,7 +610,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 1
 MeshRenderer.material = [guid="3521a7e5-1935-446d-9114-6a1eaaf64cca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -731,7 +637,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 2
 MeshRenderer.material = [guid="1c1ca7e5-1932-446d-9450-0598b3035b79"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -768,7 +674,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 3
 MeshRenderer.material = [guid="cf1da7e5-1933-446d-a7b5-4917475d5666"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -795,7 +701,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 4
 MeshRenderer.material = [guid="b618a7e5-1930-446d-84e4-0866657b951b"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -822,7 +728,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 5
 MeshRenderer.material = [guid="691aa7e5-1931-446d-acef-f027b566cc66"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -849,7 +755,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 6
 MeshRenderer.material = [guid="5015a7e5-192e-446d-afc1-cd6a6bdabdfe"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -876,7 +782,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 7
 MeshRenderer.material = [guid="0317a7e5-192f-446d-bedd-2cc14aabcefb"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -903,7 +809,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 8
 MeshRenderer.material = [guid="1a2da7e5-193c-446d-9896-920080599dbd"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -930,7 +836,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 9
 MeshRenderer.material = [guid="cd2ea7e5-193d-446d-98c3-6ba4bc2db78d"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -957,7 +863,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 10
 MeshRenderer.material = [guid="7f1bfd3a-0140-4788-bf25-9177b9ba6d85"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -984,7 +890,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 11
 MeshRenderer.material = [guid="cc19fd3a-013f-4788-9c23-2a259fcb27e3"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1011,7 +917,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 12
 MeshRenderer.material = [guid="e51efd3a-0142-4788-92a2-3f9562a8bcd9"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1048,7 +954,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 13
 MeshRenderer.material = [guid="321dfd3a-0141-4788-8c96-59fb36518034"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1075,7 +981,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 14
 MeshRenderer.material = [guid="b314fd3a-013c-4788-ba80-ed9b996b4210"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1102,7 +1008,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 15
 MeshRenderer.material = [guid="0013fd3a-013b-4788-aa2e-16e41012eb79"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1129,7 +1035,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 16
 MeshRenderer.material = [guid="1918fd3a-013e-4788-bcf2-50678fe33b98"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1156,7 +1062,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 17
 MeshRenderer.material = [guid="6616fd3a-013d-4788-98aa-212ad2bdaab3"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1183,7 +1089,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 18
 MeshRenderer.material = [guid="1729fd3a-0148-4788-a1e4-b976ef712686"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1210,7 +1116,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 19
 MeshRenderer.material = [guid="6427fd3a-0147-4788-b206-578a65df1332"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1237,7 +1143,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 20
 MeshRenderer.material = [guid="c4def43a-014e-4d88-bd31-ab52e26f9273"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1264,7 +1170,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 21
 MeshRenderer.material = [guid="77e0f43a-014f-4d88-8624-8d97eb258943"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1291,7 +1197,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 22
 MeshRenderer.material = [guid="2ae2f43a-0150-4d88-a503-08e617575367"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1328,7 +1234,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 23
 MeshRenderer.material = [guid="dde3f43a-0151-4d88-bb7f-373fb4f66e99"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1355,7 +1261,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.meshId = 24
 MeshRenderer.material = [guid="f8d7f43a-014a-4d88-b224-cc4df7c01df0"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true

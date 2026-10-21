@@ -1,5 +1,7 @@
 #include "EditorPanelManager.h"
 
+#include "Assets/AssetManager.h"
+#include "Core/Engine.h"
 #include "Docking/FloatingFrameHost.h"
 #include "EditorPanelIds.h"
 #include "Editor/Registries/EditorPanelRegistry.h"
@@ -24,12 +26,37 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <typeinfo>
 
 namespace GameEngine
 {
+
+namespace
+{
+// Panel launcher rows belong to platform menus, not the retained UI tree, so no
+// stylesheet can style them. The image each row shows is still authored in CSS
+// (`background-image` on the panel's tab-icon class, else the launcher's own
+// `menulist-icon`) and read back from the loaded cascade, so the URL exists in
+// one place. The platform menus resolve only the editor mount, and a package
+// panel's URL (`ai-assistant:Editor/Icons/...`) names a source only the asset
+// manager knows, so the row carries the resolved file. Empty when CSS declares
+// neither class or the URL names no registered source; the path is not checked
+// for a file, and a platform menu that cannot load it shows the row without an
+// icon, which beats a guessed one.
+std::string ResolvePanelMenuIconFile(const UIManager& ui, const std::string& iconClass)
+{
+    std::string url = UIStyleQuery::ResolveClassBackgroundImageUrl(ui.GetStylesheets(), iconClass);
+    if (url.empty())
+        url = UIStyleQuery::ResolveClassBackgroundImageUrl(ui.GetStylesheets(), "menulist-icon");
+    if (url.empty())
+        return url;
+    const std::filesystem::path file = EngineCore::GetInstance().GetAssetManager().ResolveAssetPath(url);
+    return file.empty() ? std::string{} : file.string();
+}
+} // namespace
 
 std::vector<EditorPanelManager::PanelMenuEntry> EditorPanelManager::GetPanelMenuEntries() const
 {
@@ -50,15 +77,7 @@ std::vector<EditorPanelManager::PanelMenuEntry> EditorPanelManager::GetPanelMenu
         entry.title = (panel && !panel->GetTitle().empty()) ? panel->GetTitle() : panelId;
         entry.iconClass = panel ? std::string(panel->GetTabIcon()) : std::string{};
         if (ui)
-        {
-            entry.iconPath = UIStyleQuery::ResolveClassBackgroundImageUrl(
-                ui->GetStylesheets(), entry.iconClass);
-            if (entry.iconPath.empty())
-            {
-                entry.iconPath = UIStyleQuery::ResolveClassBackgroundImageUrl(
-                    ui->GetStylesheets(), "menulist-icon");
-            }
-        }
+            entry.iconPath = ResolvePanelMenuIconFile(*ui, entry.iconClass);
         entries.push_back(std::move(entry));
     }
 

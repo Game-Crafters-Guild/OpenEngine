@@ -402,7 +402,7 @@ TEST(DropdownTests, HeaderIconPaintsItsImageWithNoInteraction)
         painted = drawsItsImage();
     }
     EXPECT_TRUE(painted) << "the header icon never drew its image (" << frames << " frames)";
-    EXPECT_EQ(ui.PendingBackgroundImageCount(), 0u) << "a background image is still in flight";
+    EXPECT_EQ(ui.BackgroundImages().PendingCount(), 0u) << "a background image is still in flight";
 
     fs::remove_all(assetRoot, ec);
 }

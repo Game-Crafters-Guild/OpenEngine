@@ -124,8 +124,34 @@
 	background-image-tint: var(--ui_icon_tint_hover);
 }
 
+/* The Play button while play mode runs (Editor::kPlayButtonActiveClass). Its own class,
+   not `pressed`: Button removes `pressed` on every left click, and the Play button stays
+   clickable during play so its right-click menu is reachable. */
+.icon-button.play-icon.toolbar-play-active {
+	opacity: 1.0;
+	background-image: url("editor:Icons/playactive.svg");
+	background-color: transparent !important;
+	background-image-tint: var(--ui_icon_tint_active);
+}
+
+/* The audio toggle right of Play (PlayMode/AudioToggleButton.h): Editor::ApplyAudioToggleState
+   sets exactly one of the two icon classes; tint and hover come from the section's rules above. */
+.audio-on-speaker-icon {
+	background-image: url("editor:Icons/audio-on-speaker.svg");
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
+.audio-muted-speaker-icon {
+	background-image: url("editor:Icons/audio-muted-speaker.svg");
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
 .top-toolbar-help-icon {
-	background-image: url("editor:Icons/help.png");
+	background-image: url("editor:Icons/help.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -133,10 +159,11 @@
 }
 
 .top-toolbar-search-icon {
-	background-image: url("editor:Icons/usearch.png");
+	background-image: url("editor:Icons/usearch.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
-	background-position: center;
+	/* The image fills the button; 1 px down centres the magnifier's mass on its neighbours. */
+	background-position: 0px 1px;
 }
 
 .top-toolbar-help-icon:hover {
@@ -145,7 +172,7 @@
 }
 
 .toolbar-record-icon {
-	background-image: url("editor:Icons/recording_off_button.png");
+	background-image: url("editor:Icons/recording_off_button.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -158,7 +185,7 @@
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/recording_on_button.png");
+	background-image: url("editor:Icons/recording_on_button.svg");
 	background-image-tint: var(--ui_icon_tint_standard);
 }
 
@@ -166,14 +193,14 @@
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/recording_on_button.png");
+	background-image: url("editor:Icons/recording_on_button.svg");
 }
 
 .toolbar-record-icon.pressed {
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/recording_on_button.png");
+	background-image: url("editor:Icons/recording_on_button.svg");
 }
 
 /* Live recording keeps the red icon when the pointer leaves. */
@@ -181,5 +208,5 @@
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/recording_on_button.png");
+	background-image: url("editor:Icons/recording_on_button.svg");
 }

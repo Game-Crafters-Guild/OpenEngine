@@ -2,6 +2,7 @@
 
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
+#include "Assets/ModelAsset.h"
 #include "Components/Animation/SkeletonRef.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
@@ -13,6 +14,8 @@
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Engine/Rendering/MaterialSystem.h"
+#include "SceneDrawWarm.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -135,6 +138,20 @@ class StepScope
     bool& m_InStep;
 };
 
+// Notes each submesh of a registered model with the material the model draws it with, the pairs
+// its entities draw unless they author their own material.
+void NoteModelDraws(SceneDrawWarm& warm, const ModelRenderResources& resources)
+{
+    if (!resources.modelAsset)
+        return;
+    const uint32 meshCount = static_cast<uint32>(resources.meshHandles.size());
+    for (uint32 submesh = 0; submesh < meshCount && submesh < resources.modelAsset->GetMeshCount(); ++submesh)
+    {
+        const uint32 materialIndex = resources.modelAsset->GetMesh(submesh).MaterialIndex;
+        if (materialIndex < resources.materials.size())
+            warm.Note(resources.meshHandles[submesh], resources.materials[materialIndex].derivedGuid);
+    }
+}
 } // namespace
 
 SceneResolveService::SceneResolveService() = default;
@@ -350,6 +367,9 @@ SceneResolveService::KeptBinding SceneResolveService::Keep(RenderServices& rende
     kept->Resources = std::move(*resources);
     kept->CheckedAtStep = m_Steps;
     const ModelRenderResources* stored = &kept->Resources;
+    // The pipelines of the model's draws are requested as it lands (SceneDrawWarm), not at each
+    // draw's first record.
+    NoteModelDraws(renderServices.Materials().SceneWarm(), *stored);
     m_Kept.insert_or_assign(modelGuid, std::move(kept));
     return {asset, stored};
 }
@@ -373,7 +393,12 @@ void SceneResolveService::BindEntity(ECS::World& world, RenderServices& renderSe
     // After the model registered its own materials, so an embedded one is not
     // requested as a standalone .material.
     if (const auto* resolved = world.GetComponent<Components::MeshRenderer>(entity))
+    {
+        // An entity's own material (an authored override) draws its mesh too.
+        renderServices.Materials().SceneWarm().Note(Rendering::MeshGPUHandle(resolved->meshGpuHandleId),
+                                                    resolved->materialAssetGuid.ToGuid());
         RequestMaterial(renderServices, resolved->materialAssetGuid.ToGuid(), batch);
+    }
 }
 
 void SceneResolveService::EvictModels(const std::vector<GUID>& invalidatedModels)

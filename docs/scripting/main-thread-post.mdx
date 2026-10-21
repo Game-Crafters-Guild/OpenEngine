@@ -25,9 +25,9 @@ async Task DownloadAndApply(Uri uri)
 
 - **When.** The action runs on the main thread at the end of the current frame, after this frame's systems and before the next frame's first system.
 - **Order.** Actions run in the order they were posted, all of a frame's posts in that frame's batch. An action that posts again lands in the next frame's batch, so an action that reposts itself runs once a frame.
-- **Never on another thread.** The action waits for the main thread however long the main thread is busy (a long load, a shader compile) and never runs on another thread instead, the NativeAOT Player included.
+- **Never on another thread.** The action waits for the main thread however long the main thread is busy (a long load, a shader compile). It never runs on another thread instead, the NativeAOT Player included.
 - **Exceptions.** An exception the action throws is reported on the console and does not reach the frame or the other actions.
-- **Hot reload.** An action whose code lives in a script assembly that unloads before it runs is discarded; it would run code that is going away.
+- **Hot reload.** An action whose code lives in a script assembly that unloads before it runs is discarded. It would run code that is going away.
 - **Quit.** Actions still queued when the engine shuts down are discarded, not run. A post after the engine shut down is dropped, and the log says so.
 - **No frame loop.** In a process with no frame loop (no engine initialized, or a `dotnet test` host whose engine the scripting library started) the action runs at once, on the posting thread: nothing else drives the engine there.
 
@@ -53,10 +53,6 @@ Two questions decide the thread rules, and the engine answers them the same way 
 
 :::caution[One answer that depends on the schedule]
 
-A script that calls `GE_UI_OrphanElementTypes` itself from a system's update is admitted while its systems run on the main thread outside a job body, which is where they run today, and refused for the rest of the process if they run as a job body. Nothing documented makes that call; the C# element types sweep only from the hot reload's unload.
+A script that calls `GE_UI_OrphanElementTypes` itself from a system's update is admitted while its systems run on the main thread outside a job body, which is where they run today. It is refused for the rest of the process if they run as a job body. Nothing documented makes that call. The C# element types sweep only from the hot reload's unload.
 
 :::
-
-## Changelog
-
-- 2026-10-13: first version. `MainThread.Post`, and the threads `ModelApi.GetExtras`, `AnimatorApi.PollEvents` and the element-type registry admit.

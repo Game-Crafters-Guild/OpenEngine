@@ -38,7 +38,7 @@ bool LayoutPresetController::Apply(DockingManager& docking,
                                    bool rebuildDockspace)
 {
     DockLayoutController layoutController(docking);
-    if (!layoutController.ApplyForRegisteredPanels(preset))
+    if (!layoutController.ApplyForRegisteredPanels(preset, {}))
         return false;
 
     if (rebuildDockspace)
@@ -53,11 +53,10 @@ bool LayoutPresetController::IsCurrentLayoutDirty(DockingManager& docking,
                                                   UIManager* mainUi,
                                                   const DockNode* preset)
 {
-    if (auto* dockspace = GetDockspace(mainUi))
-        dockspace->SyncSplitRatiosFromUI();
+    SyncSplitRatios(mainUi);
 
     DockLayoutController layoutController(docking);
-    auto sanitized = layoutController.CloneForRegisteredPanels(preset);
+    auto sanitized = layoutController.CloneForRegisteredPanels(preset, {});
     return DockNodeToJson(docking.GetRoot()) != DockNodeToJson(sanitized.get());
 }
 
@@ -65,6 +64,12 @@ void LayoutPresetController::SetActiveToolbarIndex(UIManager* mainUi, int active
 {
     if (auto* toolbar = GetToolbar(mainUi))
         toolbar->SetActiveIndex(activeIndex);
+}
+
+void LayoutPresetController::SyncSplitRatios(UIManager* mainUi)
+{
+    if (auto* dockspace = GetDockspace(mainUi))
+        dockspace->SyncSplitRatiosFromUI();
 }
 
 } // namespace GameEngine::Editor

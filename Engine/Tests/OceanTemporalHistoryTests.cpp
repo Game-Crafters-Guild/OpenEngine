@@ -172,7 +172,7 @@ TEST(OceanShadowSimTest, DeclaresEveryFrameAcrossDeviceSlotWraps)
         }
         rs.Views().SetCameraData(cameraId, camera);
         const ViewId viewId = rs.Views().AllocateView("OceanShadowView", cameraId);
-        rs.Views().SetViewRenderLayerMask(viewId, 1u);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearDepth = true;

@@ -122,13 +122,6 @@ target_link_libraries(EditorThumbnailTests
         GTest::gtest_main
 )
 
-# stb's implementations live inside Engine.dll; the headers are needed here so
-# the handler can call stbir_resize_uint8_srgb and the test can read back PNGs.
-if(TARGET stb::stb)
-    target_link_libraries(EditorThumbnailTests PRIVATE stb::stb)
-endif()
-target_compile_definitions(EditorThumbnailTests PRIVATE GE_HAVE_STB)
-
 target_compile_features(EditorThumbnailTests PRIVATE cxx_std_20)
 
 ge_set_output_tests(EditorThumbnailTests)
@@ -168,6 +161,9 @@ add_executable(EditorThumbnailRoutingTests
     ThumbnailServiceRoutingTests.cpp
     ThumbnailResultCacheTests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/ThumbnailService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/CubeLutStripBands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/CubeLutStripRequest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/CubeLutThumbnailHandler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/FolderBakeReport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/TextureThumbnailHandler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/ModelThumbnailHandler.cpp
@@ -196,10 +192,6 @@ target_link_libraries(EditorThumbnailRoutingTests
         GTest::gtest_main
 )
 
-if(TARGET stb::stb)
-    target_link_libraries(EditorThumbnailRoutingTests PRIVATE stb::stb)
-endif()
-target_compile_definitions(EditorThumbnailRoutingTests PRIVATE GE_HAVE_STB)
 target_compile_features(EditorThumbnailRoutingTests PRIVATE cxx_std_20)
 
 ge_set_output_tests(EditorThumbnailRoutingTests)
@@ -239,10 +231,8 @@ add_executable(EditorThumbnailPersistenceTests ThumbnailPersistenceTests.cpp
 target_include_directories(EditorThumbnailPersistenceTests PRIVATE
     ../Include ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_SOURCE_DIR}/Engine/Modules/AssetCore/Include)
-target_link_libraries(EditorThumbnailPersistenceTests PRIVATE GTest::gtest_main)
-if(TARGET stb::stb)
-    target_link_libraries(EditorThumbnailPersistenceTests PRIVATE stb::stb)
-endif()
+# Image: the extracted block's resample and encode, and the readback's decode.
+target_link_libraries(EditorThumbnailPersistenceTests PRIVATE Image Logger GTest::gtest_main)
 target_compile_features(EditorThumbnailPersistenceTests PRIVATE cxx_std_20)
 if(MSVC)
     target_compile_definitions(EditorThumbnailPersistenceTests PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -321,6 +311,7 @@ add_custom_command(TARGET AgentProviderTests POST_BUILD
 add_executable(AiAssistantPanelTests
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Tests/AiAssistantPanelTests.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Tests/AssistantGateTests.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Tests/DictationTextTests.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Tests/MarkupContextTests.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AssistantGate.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AssistantActionLedger.cpp
@@ -352,6 +343,7 @@ add_executable(AiAssistantPanelTests
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/MarkupSearchProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Conversation.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentStatusMessages.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/DictationText.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/TurnMailbox.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentSessionState.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AiAssistantLoginStatusRow.cpp

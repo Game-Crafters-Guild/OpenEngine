@@ -34,15 +34,20 @@ struct BoundedField
     float32 Components::TerrainGrass::* Member;
 };
 
+// The two densities, floored at zero and capped at the per-cell slot ceiling: a cell cannot place
+// more, so a stored value above it would read as a density the field never renders.
+constexpr BoundedField kDensityFields[] = {
+    {"BladesPerSquareMeter", &Components::TerrainGrass::BladesPerSquareMeter},
+    {"TextureCardsPerSquareMeter", &Components::TerrainGrass::TextureCardsPerSquareMeter},
+};
+
 // Every float field the pass floors at zero and does not cap.
 constexpr BoundedField kNonNegativeFields[] = {
-    {"BladesPerSquareMeter", &Components::TerrainGrass::BladesPerSquareMeter},
     {"Range", &Components::TerrainGrass::Range},
     {"DensityFalloff", &Components::TerrainGrass::DensityFalloff},
     {"ClumpSize", &Components::TerrainGrass::ClumpSize},
     {"BladeHeight", &Components::TerrainGrass::BladeHeight},
     {"BladeWidth", &Components::TerrainGrass::BladeWidth},
-    {"MaxWidthRatio", &Components::TerrainGrass::MaxWidthRatio},
     {"RandomScale", &Components::TerrainGrass::RandomScale},
     {"WindGustSpeed", &Components::TerrainGrass::WindGustSpeed},
     {"WindStrength", &Components::TerrainGrass::WindStrength},
@@ -50,9 +55,6 @@ constexpr BoundedField kNonNegativeFields[] = {
     {"WindFlutterSpeed", &Components::TerrainGrass::WindFlutterSpeed},
     {"Brightness", &Components::TerrainGrass::Brightness},
     {"RandomBrightness", &Components::TerrainGrass::RandomBrightness},
-    {"BladeScatterGain", &Components::TerrainGrass::BladeScatterGain},
-    {"Translucency", &Components::TerrainGrass::Translucency},
-    {"TextureCardsPerSquareMeter", &Components::TerrainGrass::TextureCardsPerSquareMeter},
     {"TextureSize", &Components::TerrainGrass::TextureSize},
     {"NormalStrength", &Components::TerrainGrass::NormalStrength},
 };
@@ -61,13 +63,27 @@ constexpr BoundedField kNonNegativeFields[] = {
 constexpr BoundedField kNormalizedFields[] = {
     {"ClumpHeightVariance", &Components::TerrainGrass::ClumpHeightVariance},
     {"ClumpAlignment", &Components::TerrainGrass::ClumpAlignment},
-    {"ClumpGather", &Components::TerrainGrass::ClumpGather},
+    {"ClumpTaper", &Components::TerrainGrass::ClumpTaper},
     {"MaskThreshold", &Components::TerrainGrass::MaskThreshold},
     {"HueVariation", &Components::TerrainGrass::HueVariation},
-    {"RootShade", &Components::TerrainGrass::RootShade},
-    {"BladeNormalForm", &Components::TerrainGrass::BladeNormalForm},
     {"GroundingStrength", &Components::TerrainGrass::GroundingStrength},
     {"AlphaCutoff", &Components::TerrainGrass::AlphaCutoff},
+};
+
+// The blade shape dials, each floored at zero and capped at its own ceiling.
+struct CappedField
+{
+    const char* Name;
+    float32 Components::TerrainGrass::* Member;
+    float32 Ceiling;
+};
+constexpr CappedField kBladeShapeFields[] = {
+    {"BladeTilt", &Components::TerrainGrass::BladeTilt, Components::kMaxTerrainGrassBladeTilt},
+    {"BladeBend", &Components::TerrainGrass::BladeBend, Components::kMaxTerrainGrassBladeBend},
+    {"BladeTwist", &Components::TerrainGrass::BladeTwist, Components::kMaxTerrainGrassBladeTwist},
+    {"BladeTaperStart", &Components::TerrainGrass::BladeTaperStart,
+     Components::kMaxTerrainGrassBladeTaperStart},
+    {"TuftFan", &Components::TerrainGrass::TuftFan, Components::kMaxTerrainGrassTuftFan},
 };
 
 } // namespace
@@ -92,6 +108,46 @@ TEST(TerrainGrassClamps, NonNegativeFieldsFloorAtZeroAndKeepLargeValues)
     }
 }
 
+TEST(TerrainGrassClamps, DensitiesHoldBetweenZeroAndTheSlotCeiling)
+{
+    for (const BoundedField& field : kDensityFields)
+    {
+        Components::TerrainGrass grass{};
+        grass.*field.Member = -1.0f;
+        ClampFields(grass);
+        EXPECT_FLOAT_EQ(grass.*field.Member, 0.0f) << field.Name << " was not floored at zero";
+
+        grass = Components::TerrainGrass{};
+        grass.*field.Member = 200.0f;
+        ClampFields(grass);
+        EXPECT_FLOAT_EQ(grass.*field.Member, 200.0f) << field.Name << " was capped below the ceiling";
+
+        grass = Components::TerrainGrass{};
+        grass.*field.Member = 1000.0f;
+        ClampFields(grass);
+        EXPECT_FLOAT_EQ(grass.*field.Member, kGrassMaxBladesPerSquareMeter)
+            << field.Name << " was not capped at the slot ceiling";
+    }
+}
+
+// The taper start stays short of the tip, where the width profile's smoothstep span would be empty.
+TEST(TerrainGrassClamps, BladeShapeDialsHoldBetweenZeroAndTheirCeilings)
+{
+    for (const CappedField& field : kBladeShapeFields)
+    {
+        Components::TerrainGrass grass{};
+        grass.*field.Member = -1.0f;
+        ClampFields(grass);
+        EXPECT_FLOAT_EQ(grass.*field.Member, 0.0f) << field.Name << " was not floored at zero";
+
+        grass = Components::TerrainGrass{};
+        grass.*field.Member = 100.0f;
+        ClampFields(grass);
+        EXPECT_FLOAT_EQ(grass.*field.Member, field.Ceiling) << field.Name << " was not capped";
+    }
+    EXPECT_LT(Components::kMaxTerrainGrassBladeTaperStart, 1.0f);
+}
+
 TEST(TerrainGrassClamps, NormalizedFieldsHoldBothEndsOfTheUnitRange)
 {
     for (const BoundedField& field : kNormalizedFields)
@@ -110,6 +166,32 @@ TEST(TerrainGrassClamps, NormalizedFieldsHoldBothEndsOfTheUnitRange)
 
 // smoothstep is undefined on an empty span, so the root fade's end is held above its start. A
 // shader precondition, not a taste bound.
+TEST(TerrainGrassClamps, CanopyShadeHoldsBetweenOpenGroundAndTwiceThePhysicalShade)
+{
+    Components::TerrainGrass grass{};
+    grass.CanopyShade = -1.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.CanopyShade, 0.0f);
+    grass.CanopyShade = 9.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.CanopyShade, kMaxGrassCanopyShade);
+}
+
+TEST(TerrainGrassClamps, TranslucencyHoldsBetweenOpaqueAndAThinLeaf)
+{
+    Components::TerrainGrass grass{};
+    grass.Translucency = -1.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.Translucency, 0.0f);
+    grass.Translucency = 0.6f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.Translucency, 0.6f);
+    grass.Translucency = 2.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.Translucency, Components::kMaxTerrainGrassTranslucency);
+    EXPECT_FLOAT_EQ(Components::kMaxTerrainGrassTranslucency, 1.0f);
+}
+
 TEST(TerrainGrassClamps, RootFadeSpanStaysNonEmpty)
 {
     constexpr float32 kSpan = Components::kMinTerrainGrassRootFadeSpan;
@@ -284,7 +366,7 @@ TEST(TerrainGrassClamps, PassIsIdempotent)
 {
     Components::TerrainGrass grass{};
     grass.BladesPerSquareMeter = -5.0f;
-    grass.RootShade = 4.0f;
+    grass.HueVariation = 4.0f;
     grass.BladeSegments = 999u;
     grass.LayerIndex = 99u;
     grass.WindGustScale = -1.0f;
@@ -302,19 +384,19 @@ TEST(TerrainGrassClamps, PassIsIdempotent)
 TEST(TerrainGrassClamps, NonFiniteInputsAreRecordedNotAssumed)
 {
     Components::TerrainGrass grass{};
-    grass.RootShade = std::numeric_limits<float32>::infinity();
+    grass.HueVariation = std::numeric_limits<float32>::infinity();
     grass.BladeHeight = -std::numeric_limits<float32>::infinity();
     ClampFields(grass);
-    EXPECT_FLOAT_EQ(grass.RootShade, 1.0f);
+    EXPECT_FLOAT_EQ(grass.HueVariation, 1.0f);
     EXPECT_FLOAT_EQ(grass.BladeHeight, 0.0f);
 
     // NaN is the case std::clamp cannot repair: it returns the value unchanged because every
     // comparison against it is false. Pinned so the behaviour is a recorded fact rather than a
     // surprise found in a shader.
     grass = Components::TerrainGrass{};
-    grass.RootShade = std::numeric_limits<float32>::quiet_NaN();
+    grass.HueVariation = std::numeric_limits<float32>::quiet_NaN();
     ClampFields(grass);
-    EXPECT_TRUE(std::isnan(grass.RootShade));
+    EXPECT_TRUE(std::isnan(grass.HueVariation));
 }
 
 // --- The single source stays single ------------------------------------------------------------

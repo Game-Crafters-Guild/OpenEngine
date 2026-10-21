@@ -603,8 +603,11 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         // over; sky (rawDepth ~0 → huge sceneEye) reads as fully deep water.
         vec3 fogAlpha = OceanDepthFogAlpha(uDepthFogRefraction.rgb, waterDist);
         fogAlpha *= OceanShallowFogScale(waterDist, underBelow);
-        vec3 sceneColour = uRefractionFlags.y != 0u ? OceanRefractionColor(grabUV, sceneRaw)
-                                                    : texture(uOceanSceneColor, grabUV).rgb;
+        // The grab is scene colour, stored at the pre-exposure P; the water shades in absolute
+        // units and the adapter stores its output at P.
+        vec3 sceneColour = (uRefractionFlags.y != 0u ? OceanRefractionColor(grabUV, sceneRaw)
+                                                     : texture(uOceanSceneColor, grabUV).rgb) /
+                           GE_PreExposure();
         // Underwater caustics: refracted-sunlight focusing modulates whatever the
         // water refracts, before the depth fog blends it toward the water body.
         // Driven by the path length to the seabed (waterDist) for the focal blur.

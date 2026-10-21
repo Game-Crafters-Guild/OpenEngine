@@ -174,14 +174,14 @@ TEST(ContextMenuBuilderTests, AppliesIconToCommandlessSubmenu)
     FakeContextMenu menu;
 
     BuildContextMenuFromPaths(&menu,
-                              {{ "Create/Terrain", 0u, MenuItemFlag_None, 0, "editor:Icons/terrain.png" },
+                              {{ "Create/Terrain", 0u, MenuItemFlag_None, 0, "editor:Icons/terrain.svg" },
                                { "Create/Terrain/Planet", 1u, MenuItemFlag_None, 0 }},
                               /*SortByPriorityThenPath=*/true);
 
     ASSERT_EQ(menu.m_SubMenuIcons.size(), 1u);
     ASSERT_EQ(menu.m_SubMenus.size(), 2u);
     EXPECT_EQ(menu.m_SubMenuIcons[0].first, menu.m_SubMenus[1].id);
-    EXPECT_EQ(menu.m_SubMenuIcons[0].second, "editor:Icons/terrain.png");
+    EXPECT_EQ(menu.m_SubMenuIcons[0].second, "editor:Icons/terrain.svg");
 }
 
 

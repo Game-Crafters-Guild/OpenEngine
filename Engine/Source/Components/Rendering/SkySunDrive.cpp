@@ -138,35 +138,33 @@ float LuminanceOfGround(const float source[3], float upDot)
 // 1 Smooth).
 constexpr float kDefaultSunIlluminanceKeys[][3] = {
     {0.0f, 0.001f, 0.0f},
-    {5.86666679f, 0.001f, 0.0f},
-    {5.9000001f, 0.0248f, 0.0f},
-    {5.9333334f, 2.52f, 0.0f},
-    {5.94999981f, 26.6f, 0.0f},
-    {5.9666667f, 67.3f, 0.0f},
+    {5.82592058f, 0.001f, 0.0f},
+    {5.86666679f, 0.0185f, 0.0f},
+    {5.91296959f, 2.52f, 0.0f},
+    {5.9333334f, 22.9f, 0.0f},
+    {5.94999981f, 67.3f, 0.0f},
     {6.0f, 67.3f, 0.0f},
-    {6.0333333f, 406.0f, 0.0f},
-    {6.0666666f, 1190.0f, 0.0f},
-    {6.13333321f, 4170.0f, 0.0f},
-    {6.33333349f, 19000.0f, 1.0f},
-    {6.66666651f, 42900.0f, 1.0f},
-    {7.33333349f, 69800.0f, 1.0f},
-    {8.33333302f, 86800.0f, 1.0f},
-    {9.66666698f, 95900.0f, 1.0f},
-    {12.0f, 100000.0f, 1.0f},
-    {14.333333f, 95900.0f, 1.0f},
-    {15.666667f, 86800.0f, 1.0f},
-    {16.666666f, 69800.0f, 1.0f},
-    {17.333334f, 42900.0f, 1.0f},
-    {17.666666f, 19000.0f, 0.0f},
-    {17.8666668f, 4170.0f, 0.0f},
-    {17.9333324f, 1190.0f, 0.0f},
-    {17.9666672f, 406.0f, 0.0f},
+    {6.0333333f, 291.0f, 0.0f},
+    {6.08703041f, 1190.0f, 0.0f},
+    {6.17407942f, 4170.0f, 0.0f},
+    {6.43552685f, 19000.0f, 1.0f},
+    {6.87345219f, 42900.0f, 1.0f},
+    {7.76785231f, 69800.0f, 1.0f},
+    {9.23215294f, 86800.0f, 1.0f},
+    {12.0f, 94300.0f, 1.0f},
+    {14.7678471f, 86800.0f, 1.0f},
+    {16.2321472f, 69800.0f, 1.0f},
+    {17.1265488f, 42900.0f, 1.0f},
+    {17.5644741f, 19000.0f, 0.0f},
+    {17.8259201f, 4170.0f, 0.0f},
+    {17.9129696f, 1190.0f, 0.0f},
+    {17.9666672f, 291.0f, 0.0f},
     {18.0f, 67.3f, 0.0f},
-    {18.0333328f, 67.3f, 0.0f},
-    {18.0499992f, 26.7f, 0.0f},
-    {18.0666676f, 2.52f, 0.0f},
-    {18.1000004f, 0.0248f, 0.0f},
-    {18.1333332f, 0.001f, 0.0f},
+    {18.0499992f, 67.3f, 0.0f},
+    {18.0666676f, 22.9f, 0.0f},
+    {18.0870304f, 2.52f, 0.0f},
+    {18.1333332f, 0.0185f, 0.0f},
+    {18.1740799f, 0.001f, 0.0f},
 };
 
 float ModelLux(const SkyEnvironment& sky, const Rendering::SolarFrame& frame, float sunLux, float hours)
@@ -342,8 +340,9 @@ float MoonlightLuxFromGround(const SkyEnvironment& sky, const float moonGround[3
     if (!sky.ShowMoon)
         return 0.0f;
     const Rendering::SkySystemConfig config{};
-    return SanitisedMoonlightLux(sky.MoonlightIlluminance) * ColorUtils::LinearRec709Luminance(moonGround) /
-           ColorUtils::LinearRec709Luminance(config.moonColor);
+    return SanitisedMoonlightLux(sky.MoonlightIlluminance) *
+           Rendering::MoonPhaseIlluminanceFraction(sky.MoonArcPosition) *
+           ColorUtils::LinearRec709Luminance(moonGround) / ColorUtils::LinearRec709Luminance(config.moonColor);
 }
 
 float MoonlightRatio(const SkyEnvironment& sky)

@@ -1,0 +1,152 @@
+---
+title: Render layers
+description: Put renderers on named layers, choose the layers each camera and the Scene View draw, and find a layer by name from code.
+---
+
+A render layer is a group of renderers that a camera can draw or leave out. There are 32 layers, numbered 0 to 31. Every renderer is on a set of layers, and every camera draws a set of layers. A camera draws a renderer when they share a layer. Use layers to give a camera its own content: the arms of a first-person view on a near camera, map icons on a top-down camera, or a cockpit on a camera with its own depth range.
+
+To hide an object, turn its renderer off with the entity's enable toggle. Do not take it off every layer: a renderer on no layer is drawn by no camera, and the inspector shows its layers as **Nothing** in the warning color.
+
+## The layers of a project
+
+Layer 0 is named **Default**, and every new renderer is on it. The other layers are named **Layer 1** to **Layer 31** until you name them.
+
+To name a layer, open **Settings, Project, Render Layers** and type the name in the layer's row. The row refuses a name and says why when the name is:
+
+- the name of another layer, for example "'Props' is already layer 1",
+- the default name of another layer, for example "'Layer 2' is the default name of layer 2", even while that layer has a name of its own,
+- longer than 63 bytes of UTF-8, or
+- only spaces.
+
+Clear a row to give the layer its default name again. Layer 0 can have a name of its own too.
+
+A scene stores layer numbers, not names. A rename changes every picker and every lookup from code, and it changes no scene. The project saves the names in `.Editor/ProjectSettings.json`, and a build copies them into the game's `game.config`, so a game finds its layers by the same names.
+
+The page cannot show where a layer is used. To see the layers of each object, turn on **Show Render Layer** in the Hierarchy's options.
+
+## Putting a renderer on layers
+
+The **Render Layers** row is on the Mesh Renderer, the Terrain and the Particle Renderer. The Ocean Surface has the same row for its spray, **Spray Render Layers**. The row shows a summary of the layers:
+
+| Summary | Layers |
+|---|---|
+| `Default` | one layer, by its name |
+| `Props, Foliage` | two layers |
+| `All but Foliage` | every layer except one or two |
+| `5 layers` | any other set |
+| `Everything` | every layer |
+| `Nothing` | no layer |
+| `Mixed` | the selected objects do not agree |
+
+Click the row to open the picker. **Everything** and **Nothing** at the top set or clear every layer. Below them is one row per layer: a click turns that layer on or off. With several objects selected, a click changes that one layer on each object and keeps the other layers of each object. A layer the selection does not agree on is drawn mixed, and a click turns it on for every selected object. The change is one undo step.
+
+With **Show Render Layer** on, each row of the Hierarchy shows the same summary and opens the same picker. A click on a row inside the selection applies to the whole selection.
+
+## The layers a camera draws
+
+The Camera's **Visible Layers** row chooses the layers the camera draws. The default is **Everything**. The Game View and a built game draw what the active camera's Visible Layers allow.
+
+A layer that a camera does not draw casts no shadow in that camera's view, because the camera's shadows draw the same layers. The ocean's planar reflection and its raster depth capture also draw the camera's layers.
+
+The Camera's **Volume Layers** and the Post-Process Volume's **Volume Layers** are a different choice: a post-process volume affects a camera when their Volume Layers share a layer.
+
+The ocean's three filters (the renderer's **Raster Depth Capture Layers**, the depth-cache source's **Source Layers** and the mesh contributor's **Contributor Layers**) and the Reflection Probe's **Captured Layers** use the same picker.
+
+## The Scene View filter
+
+The **layers** field in the Scene View toolbar chooses the layers the Scene View draws. The default is **Everything**. The filter is yours alone: the editor saves it for you and for this project, never in a scene. Every pane of the Scene View and its camera preview use it. The Game View ignores it and draws its camera's layers.
+
+## Layers in a scene file
+
+A scene writes a renderer's layers as layer numbers in brackets, in ascending order, each once. The words `all` and `none` stand for every layer and no layer.
+
+```text title="Layer lines in a .scene file"
+MeshRenderer.renderLayers = [0]
+MeshRenderer.renderLayers = [1, 2]
+Terrain.renderLayers = [3]
+Camera.visibleLayers = all
+Camera.visibleLayers = none
+Camera.volumeLayers = [0, 4]
+PostProcessVolume.volumeLayers = [0, 4]
+ParticleRenderer.RenderLayers = [0, 2]
+OceanDepthCacheSource.SourceLayers = [0]
+```
+
+A value in any other form is refused. The load report names the key and the forms it takes.
+
+## Layers from code
+
+A game finds a layer by its name once, when a system starts, and keeps the layer number. Do not look names up every frame. A name that no layer has gives no layer, never layer 0.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Engine/Rendering/RenderLayers.h"
+namespace GameEngine::Rendering
+{
+std::optional<uint32> FindRenderLayer(std::string_view name); // exact and case-sensitive
+std::string RenderLayerName(uint32 layer);                    // "Props", "Default", "Layer 7"
+}
+```
+
+```cpp title="Put the minimap icons on the Minimap layer"
+const auto minimap = Rendering::FindRenderLayer("Minimap");
+if (!minimap)
+{
+    Logger::Log::Error("MinimapSystem: no render layer named 'Minimap' (Settings, Project, Render Layers)");
+    return;
+}
+m_MinimapLayer = Rendering::RenderLayerMask::FromLayer(*minimap);
+
+// Later, for each icon: a 4-byte write.
+entity.GetForWrite<Components::MeshRenderer>()->RenderLayers = m_MinimapLayer;
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+C# cannot look up a layer by name yet. Native code uses `Rendering::FindRenderLayer` and `Rendering::RenderLayerName`. A C# script sets layers by number with `GameEngine.Scripting.RenderLayerMask`, for example `RenderLayerMask.FromLayer(3)`.
+:::
+
+::::
+:::::
+
+`RenderLayerMask` holds the layers of one field, one bit per layer:
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Rendering/RenderLayerMask.h"
+struct RenderLayerMask
+{
+    uint32 Bits = 1u; // layer 0
+    static constexpr RenderLayerMask Default();
+    static constexpr RenderLayerMask All();
+    static constexpr RenderLayerMask None();
+    static constexpr RenderLayerMask FromLayer(uint32 layer);
+    constexpr bool Contains(uint32 layer) const;
+    constexpr bool Intersects(RenderLayerMask other) const;
+    constexpr RenderLayerMask operator|(RenderLayerMask other) const;
+};
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.ABI"
+public readonly struct RenderLayerMask
+{
+    public readonly uint Bits;
+    public static RenderLayerMask Default { get; }
+    public static RenderLayerMask All { get; }
+    public static RenderLayerMask None { get; }
+    public static RenderLayerMask FromLayer(int layer);
+    public bool Contains(int layer);
+    public bool Intersects(RenderLayerMask other);
+    public static RenderLayerMask operator |(RenderLayerMask a, RenderLayerMask b);
+}
+```
+
+::::
+:::::

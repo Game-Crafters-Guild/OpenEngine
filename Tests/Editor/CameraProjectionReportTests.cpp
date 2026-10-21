@@ -192,7 +192,8 @@ TEST(CameraProjectionReport, GameCameraReportsDeclaredTranslationRollProjectionA
     camera.cameraPos[0] = 12;
     camera.cameraPos[1] = 3;
     camera.cameraPos[2] = -4;
-    auto out = Editor::DescribeGameViewCamera(camera, Components::ExposureMode::Auto, 160, 90);
+    auto out = Editor::DescribeGameViewCamera(camera, Components::ExposureMode::Auto,
+                                              Components::ExposureMeter::Lights, 160, 90);
     EXPECT_EQ(out["position"], (json{12.0f, 3.0f, -4.0f}));
     ASSERT_EQ(out["worldTransform"].size(), 16u);
     for (int index = 0; index < 16; ++index)
@@ -201,13 +202,18 @@ TEST(CameraProjectionReport, GameCameraReportsDeclaredTranslationRollProjectionA
     EXPECT_EQ(out["projection"]["viewportWidthPx"], 160);
     EXPECT_EQ(out["projection"]["viewportHeightPx"], 90);
     EXPECT_EQ(out["exposure"]["mode"], "auto");
+    EXPECT_EQ(out["exposure"]["meter"], "lights");
+    EXPECT_EQ(Editor::DescribeGameViewCamera(camera, Components::ExposureMode::Auto,
+                                             Components::ExposureMeter::Picture, 160, 90)["exposure"]["meter"],
+              "picture");
     EXPECT_TRUE(out["exposure"]["metered"].is_null()) << "settings are not a meter sample";
     for (const auto& [mode, name] : {std::pair{Components::ExposureMode::Fixed, "fixed"},
                                   std::pair{Components::ExposureMode::Manual, "manual"},
                                   std::pair{Components::ExposureMode::Physical, "physical"}})
     {
-        out = Editor::DescribeGameViewCamera(camera, mode, 160, 90);
+        out = Editor::DescribeGameViewCamera(camera, mode, Components::ExposureMeter::Lights, 160, 90);
         EXPECT_EQ(out["exposure"]["mode"], name);
+        EXPECT_TRUE(out["exposure"]["meter"].is_null()) << "a meter only reads under Auto";
         EXPECT_TRUE(out["exposure"]["metered"].is_null());
     }
 }

@@ -34,11 +34,12 @@ PathPoint MakePoint(float32 x, float32 y, float32 z)
     return p;
 }
 
-// Smooths inside a path-solve window on the map, as GridMap::FindPath does.
+// Smooths inside a path-solve window on the map, as GridMap::FindPath does, for
+// a point-sized agent.
 uint32 SmoothInWindow(const GridMap& map, std::vector<PathPoint>& points)
 {
     map.OpenPathSolveWindow();
-    const uint32 count = PathSmoother::Smooth(map.View(), points);
+    const uint32 count = PathSmoother::Smooth(map.View(), points, 0.0f);
     map.ClosePathSolveWindow();
     return count;
 }

@@ -11,7 +11,7 @@ namespace GameEngine::Memory::Detail
 {
 
 /// One entry of the process's stats registry, stored inside the object it describes (a
-/// `TrackedBytes`, an `Arena` or an `ObjectPool<T>`) and linked into the registry for that
+/// `TrackedBytes`, an `Arena`, an `ObjectPool<T>` or a `RangeAllocator`) and linked into the registry for that
 /// object's life.
 ///
 /// The owner writes the counts and the destructor bounds with relaxed atomics, except the
@@ -22,7 +22,8 @@ namespace GameEngine::Memory::Detail
 /// registration and unregistration. A `TrackedBytes`, written on every counted
 /// allocation from any thread, keeps its record in a `FalseSharingPadded`; an `Arena` writes
 /// its record only at block acquisition, `Rewind` and `Reset`, an `ObjectPool<T>` only at
-/// block acquisition, and both keep it unpadded. A thread's scratch arena, written at scope
+/// block acquisition, a `RangeAllocator` at each call that changes its counts (its owner
+/// serializes them), and all three keep it unpadded. A thread's scratch arena, written at scope
 /// closes, lives in that thread's state, which is false-sharing aligned.
 struct StatsRecord
 {

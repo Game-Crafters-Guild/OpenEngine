@@ -15,6 +15,34 @@
       "type": "ViewParamsUpload"
     },
     {
+      "buffer": "HeightFogParams",
+      "enabled": true,
+      "id": "HeightFogParamsUpload",
+      "type": "HeightFogParamsUpload"
+    },
+    {
+      "bufferUsages": {
+        "state": "StorageReadWrite"
+      },
+      "buffers": {
+        "state": "ExposureHistory"
+      },
+      "dispatch": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "enabled": true,
+      "id": "PreExposureSnapshot",
+      "ppOverrides": true,
+      "pushConstants": {
+        "exposure": 1.0,
+        "useAutoExposure": 0
+      },
+      "shaderPkg": "Shaders/pre_exposure_snapshot.shaderpkg",
+      "type": "ComputeShader"
+    },
+    {
       "enabled": true,
       "id": "TerrainUpload",
       "type": "TerrainUpload"
@@ -48,12 +76,6 @@
       "type": "AmbientOcclusion"
     },
     {
-      "buffer": "HeightFogParams",
-      "enabled": true,
-      "id": "HeightFogParamsUpload",
-      "type": "HeightFogParamsUpload"
-    },
-    {
       "buffer": "LightBuffer",
       "enabled": true,
       "id": "LightUpload",
@@ -81,6 +103,10 @@
         "DepthTex": "View.DepthResolved"
       },
       "shaderPkg": "Shaders/cluster_depth_minmax.shaderpkg",
+      "shaderPkgFallbacks": [
+        "Shaders/cluster_depth_minmax_t16.shaderpkg",
+        "Shaders/cluster_depth_minmax_t8.shaderpkg"
+      ],
       "targetBuffer": "DepthMinMaxBuffer",
       "type": "ComputeShader"
     },
@@ -202,6 +228,9 @@
       "type": "OceanRender"
     },
     {
+      "draws": [
+        "glass"
+      ],
       "enabled": true,
       "id": "Transmissive",
       "keywords": [
@@ -224,12 +253,14 @@
       "bufferUsages": {
         "ClusterBuffer": "StorageRead",
         "ClusterParams": "Sampled",
-        "LightIndexBuffer": "StorageRead"
+        "LightIndexBuffer": "StorageRead",
+        "uExposure": "Storage"
       },
       "buffers": {
         "ClusterBuffer": "ClusterBuffer",
         "ClusterParams": "ClusterParams",
-        "LightIndexBuffer": "LightIndexBuffer"
+        "LightIndexBuffer": "LightIndexBuffer",
+        "uExposure": "ExposureHistory"
       },
       "enabled": false,
       "id": "ClusterDebugOverlay",
@@ -240,18 +271,26 @@
     {
       "enabled": true,
       "id": "AtmosphericCloudLayer",
+      "inputGates": {
+        "uSkyBackdrop": "heightFogSkyColorActive"
+      },
       "inputs": {
         "uSceneColor": "HDRSSSR",
-        "uDepth": "View.DepthResolved"
+        "uDepth": "View.DepthResolved",
+        "uSkyBackdrop": "SkyBackdrop"
       },
       "inputUsages": {
         "uDepth": "Sampled"
       },
       "buffers": {
-        "ViewParams": "ViewParams"
+        "uExposure": "ExposureHistory",
+        "ViewParams": "ViewParams",
+        "HeightFogParams": "HeightFogParams"
       },
       "bufferUsages": {
-        "ViewParams": "ConstantBuffer"
+        "uExposure": "Storage",
+        "ViewParams": "ConstantBuffer",
+        "HeightFogParams": "ConstantBuffer"
       },
       "output": "AtmosphericCloudLayer",
       "passthroughInput": "uSceneColor",
@@ -279,7 +318,8 @@
       },
       "samplers": {
         "uDepth": "LinearClamp",
-        "uSceneColor": "LinearClamp"
+        "uSceneColor": "LinearClamp",
+        "uSkyBackdrop": "LinearRepeat"
       },
       "shaderPkg": "Shaders/atmospheric_cloud_layer.shaderpkg",
       "skipWhen": {
@@ -474,21 +514,37 @@
     {
       "enabled": true,
       "id": "VolumetricCloudsComposite",
+      "inputGates": {
+        "uSkyBackdrop": "heightFogSkyColorActive"
+      },
       "inputs": {
         "uSceneColor": "AtmosphericCloudLayer",
-        "uClouds": "CloudResolve"
+        "uClouds": "CloudResolve",
+        "uDepth": "View.DepthResolved",
+        "uSkyBackdrop": "SkyBackdrop"
+      },
+      "inputUsages": {
+        "uDepth": "Sampled"
       },
       "buffers": {
-        "CloudParams": "CloudParams"
+        "uExposure": "ExposureHistory",
+        "CloudParams": "CloudParams",
+        "ViewParams": "ViewParams",
+        "HeightFogParams": "HeightFogParams"
       },
       "bufferUsages": {
-        "CloudParams": "ConstantBuffer"
+        "uExposure": "Storage",
+        "CloudParams": "ConstantBuffer",
+        "ViewParams": "ConstantBuffer",
+        "HeightFogParams": "ConstantBuffer"
       },
       "output": "VolumetricClouds",
       "passthroughInput": "uSceneColor",
       "samplers": {
         "uClouds": "LinearClamp",
-        "uSceneColor": "LinearClamp"
+        "uDepth": "LinearClamp",
+        "uSceneColor": "LinearClamp",
+        "uSkyBackdrop": "LinearRepeat"
       },
       "shaderPkg": "Shaders/volumetric_clouds_composite.shaderpkg",
       "skipWhen": {
@@ -498,61 +554,41 @@
     },
     {
       "enabled": true,
-      "id": "FogGlowSceneSource",
-      "inputs": { "uTex": "VolumetricClouds" },
-      "output": "FogGlowSceneSource",
-      "samplers": { "uTex": "LinearClamp" },
-      "shaderPkg": "Shaders/copy.shaderpkg",
-      "skipWhen": { "fogGlowActive": 0.0 },
-      "type": "FullscreenShader"
-    },
-    {
-      "enabled": true,
       "id": "VolumetricFog",
       "output": "VolumetricClouds",
       "type": "VolumetricFog"
     },
     {
+      "clouds": "CloudResolve",
+      "draws": [
+        "lateTransparents"
+      ],
       "enabled": true,
-      "id": "HeightFog",
+      "id": "LateTransparent",
+      "keywords": [
+        "ForwardPlus",
+        "Instanced",
+        "Shadows",
+        "IBL"
+      ],
+      "output": "VolumetricClouds",
+      "type": "TransmissiveRender"
+    },
+    {
+      "bufferUsages": { "uExposure": "Storage", "ViewParams": "ConstantBuffer", "HeightFogParams": "ConstantBuffer" },
+      "buffers": { "uExposure": "ExposureHistory", "ViewParams": "ViewParams", "HeightFogParams": "HeightFogParams" },
+      "enabled": true,
+      "id": "FogGlowFast",
       "inputGates": {
         "uSkyBackdrop": "heightFogSkyColorActive"
       },
       "inputs": {
-        "uSceneColor": "VolumetricClouds",
+        "uFogged": "VolumetricClouds",
         "uDepth": "View.DepthResolved",
         "uSkyBackdrop": "SkyBackdrop"
       },
       "inputUsages": {
         "uDepth": "Sampled"
-      },
-      "buffers": {
-        "ViewParams": "ViewParams",
-        "HeightFogParams": "HeightFogParams"
-      },
-      "bufferUsages": {
-        "ViewParams": "ConstantBuffer",
-        "HeightFogParams": "ConstantBuffer"
-      },
-      "output": "HDRHeightFog",
-      "passthroughInput": "uSceneColor",
-      "samplers": {
-        "uDepth": "LinearClamp",
-        "uSceneColor": "LinearClamp",
-        "uSkyBackdrop": "LinearRepeat"
-      },
-      "shaderPkg": "Shaders/height_fog.shaderpkg",
-      "skipWhen": {
-        "heightFogActive": 0.0
-      },
-      "type": "FullscreenShader"
-    },
-    {
-      "enabled": true,
-      "id": "FogGlowFast",
-      "inputs": {
-        "uFogged": "HDRHeightFog",
-        "uSceneSource": "FogGlowSceneSource"
       },
       "output": "HDRFogGlowFast",
       "passthroughInput": "uFogged",
@@ -570,19 +606,28 @@
         "fogGlowAntiFlicker": 1
       },
       "samplers": {
+        "uDepth": "LinearClamp",
         "uFogged": "LinearClamp",
-        "uSceneSource": "LinearClamp"
+        "uSkyBackdrop": "LinearRepeat"
       },
       "shaderPkg": "Shaders/fog_glow_fast.shaderpkg",
       "skipWhen": { "fogGlowFastActive": 0.0 },
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage", "ViewParams": "ConstantBuffer", "HeightFogParams": "ConstantBuffer" },
+      "buffers": { "uExposure": "ExposureHistory", "ViewParams": "ViewParams", "HeightFogParams": "HeightFogParams" },
       "enabled": true,
       "id": "FogGlowPrefilter",
+      "inputGates": {
+        "uSkyBackdrop": "heightFogSkyColorActive"
+      },
       "inputs": {
-        "uFogged": "HDRFogGlowFast",
-        "uSceneSource": "FogGlowSceneSource"
+        "uDepth": "View.DepthResolved",
+        "uSkyBackdrop": "SkyBackdrop"
+      },
+      "inputUsages": {
+        "uDepth": "Sampled"
       },
       "output": "FogGlowHalf",
       "ppOverrides": true,
@@ -597,14 +642,16 @@
         "fogGlowAntiFlicker": 1
       },
       "samplers": {
-        "uFogged": "LinearClamp",
-        "uSceneSource": "LinearClamp"
+        "uDepth": "LinearClamp",
+        "uSkyBackdrop": "LinearRepeat"
       },
       "shaderPkg": "Shaders/fog_glow_prefilter.shaderpkg",
       "skipWhen": { "fogGlowPyramidActive": 0.0 },
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownQuarter",
       "inputs": { "uSrc": "FogGlowHalf" },
@@ -617,6 +664,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownEighth",
       "inputs": { "uSrc": "FogGlowQuarter" },
@@ -629,6 +678,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownSixteenth",
       "inputs": { "uSrc": "FogGlowEighth" },
@@ -641,6 +692,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownThirtySecond",
       "inputs": { "uSrc": "FogGlowSixteenth" },
@@ -653,6 +706,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownSixtyFourth",
       "inputs": { "uSrc": "FogGlowThirtySecond" },
@@ -665,6 +720,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownOneTwentyEighth",
       "inputs": { "uSrc": "FogGlowSixtyFourth" },
@@ -677,6 +734,8 @@
       "type": "FullscreenShader"
     },
     {
+      "bufferUsages": { "uExposure": "Storage" },
+      "buffers": { "uExposure": "ExposureHistory" },
       "enabled": true,
       "id": "FogGlowDownTwoFiftySixth",
       "inputs": { "uSrc": "FogGlowOneTwentyEighth" },
@@ -1465,8 +1524,14 @@
         "useAutoExposure": 0
       },
       "samplers": {
+        "uLut1d": "LinearClamp",
+        "uLut3d": "LinearClamp",
         "uSceneColor": "LinearClamp"
       },
+      "serviceTextures": [
+        "uLut3d",
+        "uLut1d"
+      ],
       "shaderPkg": "Shaders/hdr_color_fx.shaderpkg",
       "skipWhen": {
         "hdrColorFxActive": 0.0
@@ -1528,8 +1593,13 @@
     {
       "enabled": true,
       "id": "Tonemap",
+      "inputUsages": {
+        "uDepth": "Sampled"
+      },
       "inputs": {
-        "uHDRColor": "HDRPhysicalDoF"
+        "uDepth": "View.DepthResolved",
+        "uHDRColor": "HDRPhysicalDoF",
+        "uStarLight": "SkyStarLight"
       },
       "buffers": {
         "uExposure": "ExposureHistory"
@@ -1542,12 +1612,19 @@
       "pushConstants": {
         "ditherMode": 0,
         "exposure": 1.0,
-        "ictcpChromaCompression": 0.0,
         "useAutoExposure": 0
       },
       "samplers": {
-        "uHDRColor": "LinearClamp"
+        "uLut1d": "LinearClamp",
+        "uLut3d": "LinearClamp",
+        "uDepth": "PointClamp",
+        "uHDRColor": "LinearClamp",
+        "uStarLight": "LinearClamp"
       },
+      "serviceTextures": [
+        "uLut3d",
+        "uLut1d"
+      ],
       "shaderPkg": "Shaders/tonemap.shaderpkg",
       "type": "FullscreenShader"
     },
@@ -1600,16 +1677,6 @@
       "pushConstants": {
         "casStackOrder": 1,
         "casStrength": 0.0,
-        "lut1dInMax": 1.0,
-        "lut1dInMin": 0.0,
-        "lut3dInMax": 1.0,
-        "lut3dInMin": 0.0,
-        "lutFlags": 0,
-        "lutInputEncoding": 0,
-        "lutIntensity": 0.0,
-        "lutSize1d": 0,
-        "lutSize3d": 0,
-        "lutStackOrder": 0,
         "vignetteColorB": 0.0,
         "vignetteColorG": 0.0,
         "vignetteColorR": 0.0,
@@ -1620,15 +1687,9 @@
         "shaderAnimationTime": 0.0
       },
       "samplers": {
-        "uLut1d": "LinearClamp",
-        "uLut3d": "LinearClamp",
         "uSceneColor": "LinearClamp"
       },
       "passthroughInput": "uSceneColor",
-      "serviceTextures": [
-        "uLut3d",
-        "uLut1d"
-      ],
       "shaderPkg": "Shaders/post_fx_ldr_stack.shaderpkg",
       "skipWhen": {
         "ldrStackActive": 0.0
@@ -2009,6 +2070,7 @@
     {
       "blendMode": "Additive",
       "bufferUsages": {
+        "uExposure": "Storage",
         "ClusterBuffer": "StorageRead",
         "ClusterParams": "Sampled",
         "LightBuffer": "StorageRead",
@@ -2016,6 +2078,7 @@
         "ViewParams": "ConstantBuffer"
       },
       "buffers": {
+        "uExposure": "ExposureHistory",
         "ClusterBuffer": "ClusterBuffer",
         "ClusterParams": "ClusterParams",
         "LightBuffer": "LightBuffer",
@@ -2122,6 +2185,7 @@
       ]
     },
     "VolumetricClouds": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2148,6 +2212,7 @@
       "zeroOnCreate": true
     },
     "BloomA": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2193,6 +2258,7 @@
       ]
     },
     "HDRUpscaled": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2206,6 +2272,7 @@
       ]
     },
     "BloomQuarter": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2225,6 +2292,7 @@
       ]
     },
     "BloomEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2244,6 +2312,7 @@
       ]
     },
     "BloomSixteenth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.0625, 0.0625]
@@ -2255,6 +2324,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomThirtySecond": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.03125, 0.03125]
@@ -2266,6 +2336,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomSixtyFourth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.015625, 0.015625]
@@ -2277,6 +2348,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomOneTwentyEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.0078125, 0.0078125]
@@ -2288,6 +2360,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomTwoFiftySixth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.00390625, 0.00390625]
@@ -2299,6 +2372,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomLensDirtLight": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [0.125, 0.125]
@@ -2310,6 +2384,7 @@
       "usage": ["RenderTarget", "ShaderResource"]
     },
     "BloomNormalized": {
+      "preExposed": true,
       "extent": { "basis": "output", "scale": [0.5, 0.5] },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2365,6 +2440,7 @@
       ]
     },
     "AtmosphericCloudLayer": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2377,6 +2453,7 @@
       ]
     },
     "HDRCombined": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2390,6 +2467,7 @@
       ]
     },
     "HDRBloomWithDirt": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2410,6 +2488,7 @@
       ]
     },
     "HDRFiltered": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2423,75 +2502,71 @@
       ]
     },
     "HDRFogGlowFast": {
-      "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
-      "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
-    },
-    "FogGlowSceneSource": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowHalf": {
+      "preExposed": true,
       "extent": { "scale": [0.5, 0.5] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowQuarter": {
+      "preExposed": true,
       "extent": { "scale": [0.25, 0.25] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowEighth": {
+      "preExposed": true,
       "extent": { "scale": [0.125, 0.125] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowSixteenth": {
+      "preExposed": true,
       "extent": { "scale": [0.0625, 0.0625] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowThirtySecond": {
+      "preExposed": true,
       "extent": { "scale": [0.03125, 0.03125] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowSixtyFourth": {
+      "preExposed": true,
       "extent": { "scale": [0.015625, 0.015625] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowOneTwentyEighth": {
+      "preExposed": true,
       "extent": { "scale": [0.0078125, 0.0078125] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowTwoFiftySixth": {
+      "preExposed": true,
       "extent": { "scale": [0.00390625, 0.00390625] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "FogGlowNormalized": {
+      "preExposed": true,
       "extent": { "scale": [0.5, 0.5] },
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
     "HDRFogGlow": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT", "kind": "Texture", "scope": "PerView",
       "size": { "variables": {} }, "usage": ["RenderTarget", "ShaderResource"]
     },
-    "HDRHeightFog": {
-      "format": "R16G16B16A16_FLOAT",
-      "kind": "Texture",
-      "scope": "PerView",
-      "size": {
-        "variables": {}
-      },
-      "usage": [
-        "RenderTarget",
-        "ShaderResource"
-      ]
-    },
     "HDRHeatDistortion": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2517,6 +2592,7 @@
       ]
     },
     "HDRDefocused": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2530,6 +2606,7 @@
       ]
     },
     "HDRPhysicalDoF": {
+      "preExposed": true,
       "extent": { "basis": "output" },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
@@ -2711,6 +2788,7 @@
       ]
     },
     "SceneColor": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2723,6 +2801,7 @@
       ]
     },
     "HDRSSSR": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2760,6 +2839,7 @@
       ]
     },
     "View.SSRSpecularRadiance": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -2820,6 +2900,7 @@
       ]
     },
     "ScatteringA": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2839,6 +2920,7 @@
       ]
     },
     "ScatteringQuarter": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2858,6 +2940,7 @@
       ]
     },
     "ScatteringEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2877,6 +2960,7 @@
       ]
     },
     "ScatteringSixteenth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2896,6 +2980,7 @@
       ]
     },
     "ScatteringThirtySecond": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2915,6 +3000,7 @@
       ]
     },
     "ScatteringSixtyFourth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2934,6 +3020,7 @@
       ]
     },
     "ScatteringOneTwentyEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2953,6 +3040,7 @@
       ]
     },
     "ScatteringTwoFiftySixth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2972,6 +3060,7 @@
       ]
     },
     "ScatteringNormalized": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -2991,6 +3080,7 @@
       ]
     },
     "HalationHighlights": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -3010,6 +3100,7 @@
       ]
     },
     "HalationHorizontal": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -3029,6 +3120,7 @@
       ]
     },
     "HDRWithHalation": {
+      "preExposed": true,
       "extent": {
         "basis": "output"
       },

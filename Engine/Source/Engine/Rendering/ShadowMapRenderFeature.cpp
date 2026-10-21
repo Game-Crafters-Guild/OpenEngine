@@ -2348,7 +2348,7 @@ void ShadowMapRenderFeature::OnScheduleCulling(const FeatureCullingContext& ctx)
         // cascade culling too — matching the per-view frustum/HZB loop and the
         // area/spot/point shadow gates. Without this a dormant scene view (e.g.
         // a hidden editor quad pane) keeps dispatching fused-cascade culling.
-        if (view.cameraId == 0 || view.ActiveRenderLayerMask() == 0u)
+        if (view.cameraId == 0 || view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
             continue;
 
         const Rendering::CameraData* camData = findCamera(view.cameraId);

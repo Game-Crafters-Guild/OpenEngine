@@ -39,7 +39,7 @@ Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.priority = 0
-PostProcessVolume.postProcessMask = 4294967295
+PostProcessVolume.volumeLayers = all
 PostProcessVolume.look = Neutral
 PostProcessVolume.isGlobal = true
 PostProcessVolume.shape = 0
@@ -53,7 +53,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_1010"]
 MeshRenderer.meshPrimitive = Plane
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
@@ -64,7 +64,7 @@ Transform.scale = (500, 1, 500)
 
 [entity id="e_1011"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
@@ -87,7 +87,7 @@ Name.value = "TargetCharacter"
 Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (1, 1, 1)
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Animator.active = true

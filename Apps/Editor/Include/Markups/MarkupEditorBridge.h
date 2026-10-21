@@ -217,7 +217,8 @@ private:
     struct WorldState
     {
         std::unordered_map<ECS::EntityHandle, EditBaseline, ECS::EntityHandleHash> Baselines;
-        uint64 Generation = 0;
+        uint64 HandleEpoch = 0;     // World::GetEntityHandleEpoch the state belongs to
+        uint64 ResetGeneration = 0; // World::GetLifecycleResetGeneration the derived caches were read in
         HandleSet Hidden;
         std::unordered_map<ECS::EntityHandle, SeenMark, ECS::EntityHandleHash> Seen;
         HandleSet Read; // handles whose saved state was read, or that were set this session
@@ -242,7 +243,10 @@ private:
     // its state now; 0, and a new baseline, for one it had none for.
     uint8 TakeEditChanges(const ECS::World& world, ECS::EntityHandle entity);
 
-    // The world's state; a reset world starts empty.
+    // The world's state. A world in a new run of handles (World::GetEntityHandleEpoch) starts
+    // empty; an in-place restore keeps the viewer state, as MarkupService keeps the notes, and
+    // drops what was read from the components (the edit baselines, the region displays and
+    // the frame's ground), which the restore replaced.
     WorldState& StateOf(const ECS::World& world) const;
     // Reads `entity`'s saved state on first sight, when it owns its scene tag.
     void ReadSaved(const ECS::World& world, WorldState& state, ECS::EntityHandle entity) const;

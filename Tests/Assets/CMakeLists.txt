@@ -27,6 +27,7 @@ set(ASSET_TEST_SOURCES
     AssetErrorHandlingTests.cpp
     Complete4StagePipelineIntegrationTest.cpp
     AudioAssetPolicyTests.cpp
+    CubeLutAssetTests.cpp
     MetaFileRegistryTests.cpp
     AssetMetaMaintenanceTests.cpp
     FilePatternTests.cpp
@@ -69,6 +70,7 @@ set(ASSET_TEST_SOURCES
     BuildRenderPipelineCollectionTests.cpp
     BuildSceneCollectionTests.cpp
     BuildDefaultUIFontCollectionTests.cpp
+    WebExportContentTests.cpp
     FbxLoaderOptionsTests.cpp
 )
 
@@ -105,6 +107,8 @@ target_include_directories(AssetSystemTests PRIVATE
     # StagedTestPaths.h — exe-anchored fixture resolution, same as the Graph
     # module's test target uses.
     ${CMAKE_SOURCE_DIR}/Engine/Tests
+    # WebExportContent.h: the web export's content staging, private to the engine's build code.
+    ${CMAKE_SOURCE_DIR}/Engine/Source/Engine/Build
 )
 
 # Output layout: bin/<Config>/Tests

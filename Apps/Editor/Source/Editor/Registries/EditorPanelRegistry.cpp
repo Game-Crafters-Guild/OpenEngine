@@ -46,8 +46,9 @@ void EditorPanelRegistry::RegisterPanel(EditorPanelDescriptor descriptor)
         m_Panels.push_back(PanelEntry{descriptor, ECS::GetActiveRegistrationModule()});
     }
 
-    if (m_Consumers.Panel)
-        m_Consumers.Panel(descriptor);
+    if (m_Consumers.Panel && std::find(m_PendingPanelIds.begin(), m_PendingPanelIds.end(),
+                                       descriptor.PanelId) == m_PendingPanelIds.end())
+        m_PendingPanelIds.push_back(descriptor.PanelId);
 }
 
 void EditorPanelRegistry::RegisterEditorStyleSheet(EditorStyleSheetContribution contribution)
@@ -70,9 +71,13 @@ void EditorPanelRegistry::RegisterEditorStyleSheet(EditorStyleSheetContribution 
     // Re-registration (module reload) still notifies the consumer: the global
     // stylesheet attach downstream is idempotent, and a reloaded asset needs
     // the re-poke.
-
-    if (m_Consumers.StyleSheet)
-        m_Consumers.StyleSheet(contribution);
+    const auto samePending = [&](const EditorStyleSheetContribution& pending) {
+        return pending.AssetSourceAlias == contribution.AssetSourceAlias &&
+               pending.StyleAssetPath == contribution.StyleAssetPath;
+    };
+    if (m_Consumers.StyleSheet &&
+        std::none_of(m_PendingStyleSheets.begin(), m_PendingStyleSheets.end(), samePending))
+        m_PendingStyleSheets.push_back(contribution);
 }
 
 void EditorPanelRegistry::RegisterOverlay(EditorOverlayDescriptor descriptor)
@@ -107,8 +112,9 @@ void EditorPanelRegistry::RegisterOverlay(EditorOverlayDescriptor descriptor)
         m_Overlays.push_back(OverlayEntry{descriptor, ECS::GetActiveRegistrationModule()});
     }
 
-    if (m_Consumers.Overlay)
-        m_Consumers.Overlay(descriptor);
+    if (m_Consumers.Overlay && std::find(m_PendingOverlayIds.begin(), m_PendingOverlayIds.end(),
+                                         descriptor.OverlayId) == m_PendingOverlayIds.end())
+        m_PendingOverlayIds.push_back(descriptor.OverlayId);
 }
 
 void EditorPanelRegistry::RegisterPanelType(EditorPanelTypeDescriptor descriptor)
@@ -229,6 +235,10 @@ void EditorPanelRegistry::OpenPanel(std::string_view panelId) const
 void EditorPanelRegistry::SetConsumers(Consumers consumers)
 {
     m_Consumers = std::move(consumers);
+    // The replay below delivers every entry, the pending ones included.
+    m_PendingPanelIds.clear();
+    m_PendingStyleSheets.clear();
+    m_PendingOverlayIds.clear();
 
     // Replay for entries that registered before the consumer existed, so
     // attach order never decides whether a panel appears.
@@ -241,6 +251,36 @@ void EditorPanelRegistry::SetConsumers(Consumers consumers)
     if (m_Consumers.Overlay)
         for (const OverlayEntry& entry : m_Overlays)
             m_Consumers.Overlay(entry.Descriptor);
+}
+
+void EditorPanelRegistry::DeliverPendingRegistrations()
+{
+    // Taken before delivering: a consumer may register again (a factory that
+    // registers), and that registration waits for the next call.
+    const std::vector<EditorStyleSheetContribution> styleSheets = std::exchange(m_PendingStyleSheets, {});
+    const std::vector<std::string> panelIds = std::exchange(m_PendingPanelIds, {});
+    const std::vector<std::string> overlayIds = std::exchange(m_PendingOverlayIds, {});
+
+    if (m_Consumers.StyleSheet)
+        for (const EditorStyleSheetContribution& contribution : styleSheets)
+            m_Consumers.StyleSheet(contribution);
+    for (const std::string& panelId : panelIds)
+    {
+        EditorPanelDescriptor descriptor;
+        if (m_Consumers.Panel && TryGetPanel(panelId, descriptor))
+            m_Consumers.Panel(descriptor);
+    }
+    for (const std::string& overlayId : overlayIds)
+    {
+        const auto entry = std::find_if(m_Overlays.begin(), m_Overlays.end(),
+                                        [&](const OverlayEntry& e) { return e.Descriptor.OverlayId == overlayId; });
+        if (m_Consumers.Overlay && entry != m_Overlays.end())
+        {
+            // A copy: the consumer may register an overlay and grow m_Overlays.
+            const EditorOverlayDescriptor descriptor = entry->Descriptor;
+            m_Consumers.Overlay(descriptor);
+        }
+    }
 }
 
 } // namespace GameEngine::Editor

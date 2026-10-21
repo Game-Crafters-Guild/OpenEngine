@@ -66,6 +66,10 @@
                 "DepthTex": "View.DepthResolved"
             },
             "shaderPkg": "Shaders/cluster_depth_minmax.shaderpkg",
+            "shaderPkgFallbacks": [
+              "Shaders/cluster_depth_minmax_t16.shaderpkg",
+              "Shaders/cluster_depth_minmax_t8.shaderpkg"
+            ],
             "targetBuffer": "DepthMinMaxBuffer",
             "type": "ComputeShader"
         },
@@ -169,8 +173,14 @@
                 "paperWhiteNits": 350.0
             },
             "samplers": {
+              "uLut1d": "LinearClamp",
+              "uLut3d": "LinearClamp",
                 "uHDRColor": "LinearClamp"
             },
+            "serviceTextures": [
+              "uLut3d",
+              "uLut1d"
+            ],
             "shaderPkg": "Shaders/tonemap.shaderpkg",
             "type": "FullscreenShader"
         },

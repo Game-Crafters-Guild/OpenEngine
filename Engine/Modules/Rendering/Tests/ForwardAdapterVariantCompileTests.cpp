@@ -436,11 +436,12 @@ bool FragmentReadsTheViewsExposure(const MaterialBuildResult& result)
 }
 } // namespace
 
-// The standard surfaces opt into the emissive exposure weight, so their shading variant reads the
-// view's exposure; their depth-only variant shades nothing and reads none, and a surface that does not
-// opt in reads none in any variant. The motion-vector shape is pinned with the motion variant's tests
-// (DeformationMotionVariantTests.cpp), which compose it on a surface with a vertex modifier.
-TEST(ForwardAdapterVariantCompile, OnlyTheStandardSurfacesShadingVariantReadsTheViewsExposure)
+// Every shading variant writes scene colour, which is stored at the frame's pre-exposure
+// (GE_PreExposure), so it reads the view's exposure state whether or not its surface opts into the
+// emissive exposure weight; the depth-only variant shades nothing and reads none. The motion-vector
+// shape is pinned with the motion variant's tests (DeformationMotionVariantTests.cpp), which compose
+// it on a surface with a vertex modifier.
+TEST(ForwardAdapterVariantCompile, EveryShadingVariantReadsTheViewsExposure)
 {
     constexpr MaterialKeyword kColour = kWorldDrawBase | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows;
     constexpr MaterialKeyword kDepth = kWorldDrawBase | MaterialKeyword::DepthOnlyFragment;
@@ -457,7 +458,150 @@ TEST(ForwardAdapterVariantCompile, OnlyTheStandardSurfacesShadingVariantReadsThe
     }
     const auto plain = BuildStockMaterial("StandardPBR", kColour);
     ExpectBuildSucceeded(plain);
-    EXPECT_FALSE(FragmentReadsTheViewsExposure(plain)) << "a surface without the opt-in reads no exposure";
+    EXPECT_TRUE(FragmentReadsTheViewsExposure(plain))
+        << "a surface without the emissive opt-in still stores its colour at the pre-exposure";
+    const auto plainDepth = BuildStockMaterial("StandardPBR", kDepth);
+    ExpectBuildSucceeded(plainDepth);
+    EXPECT_FALSE(FragmentReadsTheViewsExposure(plainDepth));
+}
+
+namespace
+{
+// A material document built as registration builds it (BuildMaterialToShaderPackage derives the alpha
+// mode's and the blend's keywords from the document).
+MaterialBuildResult BuildDocument(MaterialDocument doc, MaterialKeyword keywords)
+{
+    doc.materialName = "ForwardAdapterFogProbe";
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = GameEngine::Rendering::Tests::GetAdapterShaderDir();
+    ctx.CacheRoot = MakeTempCacheRoot();
+    auto result = BuildMaterialToShaderPackage(doc, TestPaths::StagedEngineAssetsDir() / "Materials" /
+                                                        "ForwardAdapterFogProbe.material",
+                                               "ForwardAdapterFogProbe", ctx, ShaderSourceKind::SpirV, keywords);
+    std::error_code ec;
+    fs::remove_all(ctx.CacheRoot, ec);
+    return result;
+}
+
+// The set-0 bindings a compiled fragment stage declares, by name.
+bool FragmentDeclares(const MaterialBuildResult& result, const std::string& name, uint32_t binding)
+{
+    constexpr uint32_t kFragmentStageBit = 1u << 1;
+    if (result.package == nullptr)
+        return false;
+    for (const DescriptorSetMeta& set : result.package->meta.Sets)
+        for (const DescriptorBindingMeta& b : set.Bindings)
+            if (set.Set == 0u && b.Name == name && b.Binding == binding && (b.StagesMask & kFragmentStageBit) != 0u)
+                return true;
+    return false;
+}
+
+// One colour variant the fog reaches: its document and the pass keywords it is drawn with.
+struct FoggedVariant
+{
+    const char* Name;
+    MaterialDocument Document;
+    MaterialKeyword PassKeywords;
+};
+
+std::vector<FoggedVariant> FoggedVariants()
+{
+    constexpr MaterialKeyword kWorld = kWorldDrawBase | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows |
+                                       MaterialKeyword::IBL;
+    std::vector<FoggedVariant> variants;
+    MaterialDocument opaque{};
+    opaque.lightingModel = "StandardPBR";
+    variants.push_back({"opaque", opaque, kWorld});
+    variants.push_back({"opaque with reflections", opaque, kWorld | MaterialKeyword::SSSRNormalRoughness});
+    MaterialDocument masked = opaque;
+    masked.alphaMode = MaterialAlphaMode::Mask;
+    variants.push_back({"alpha tested", masked, kWorld});
+    MaterialDocument unlit{};
+    unlit.lightingModel = "Unlit";
+    variants.push_back({"unlit", unlit, kWorld});
+    MaterialDocument blended = opaque;
+    blended.alphaMode = MaterialAlphaMode::Blend;
+    variants.push_back({"straight alpha", blended, kWorld});
+    MaterialDocument additive = blended;
+    additive.blend = MaterialBlendState{MaterialBlendFactor::One, MaterialBlendFactor::One};
+    variants.push_back({"additive", additive, kWorld});
+    MaterialDocument multiply = blended;
+    multiply.blend = MaterialBlendState{MaterialBlendFactor::DstColor, MaterialBlendFactor::Zero};
+    variants.push_back({"multiply", multiply, kWorld});
+    variants.push_back({"glass over the scene grab", opaque,
+                        kWorld | MaterialKeyword::Transmission | MaterialKeyword::SceneColorGrab});
+    return variants;
+}
+} // namespace
+
+// The zero-cost proof of the fog's pass keywords: a colour variant declares the height fog's parameters
+// (set 0, binding 52) and the sky backdrop its colour can come from (binding 53) exactly when it is
+// compiled with HeightFog, and the volumetric fog's block, volume and irradiance cube (54 to 56) exactly
+// when it is compiled with VolumetricFog, which reaches blended and transmissive materials only, and
+// the resolved clouds (57) exactly when it is compiled with VolumetricClouds.
+TEST(ForwardAdapterVariantCompile, FoggedVariantDeclaresTheFogsAndTheSkyBackdrop)
+{
+    for (const FoggedVariant& variant : FoggedVariants())
+    {
+        SCOPED_TRACE(variant.Name);
+        const auto plain = BuildDocument(variant.Document, variant.PassKeywords);
+        SKIP_WITHOUT_SHADERC(plain);
+        ExpectBuildSucceeded(plain);
+        EXPECT_FALSE(FragmentDeclares(plain, "HeightFogParams", 52));
+        EXPECT_FALSE(FragmentDeclares(plain, "ge_skyBackdrop", 53));
+        EXPECT_FALSE(FragmentDeclares(plain, "VolumetricFogParams", 54));
+
+        const auto fogged = BuildDocument(variant.Document, variant.PassKeywords | MaterialKeyword::HeightFog);
+        ExpectBuildSucceeded(fogged);
+        EXPECT_TRUE(FragmentDeclares(fogged, "HeightFogParams", 52));
+        EXPECT_TRUE(FragmentDeclares(fogged, "ge_skyBackdrop", 53));
+        EXPECT_FALSE(FragmentDeclares(fogged, "VolumetricFogParams", 54));
+
+        const bool takesVolumetric = variant.Document.alphaMode == MaterialAlphaMode::Blend;
+        const auto both = BuildDocument(variant.Document, variant.PassKeywords | MaterialKeyword::HeightFog |
+                                                              (takesVolumetric ? MaterialKeyword::VolumetricFog |
+                                                                                     MaterialKeyword::VolumetricClouds
+                                                                               : MaterialKeyword::None));
+        ExpectBuildSucceeded(both);
+        EXPECT_EQ(FragmentDeclares(both, "VolumetricFogParams", 54), takesVolumetric);
+        EXPECT_EQ(FragmentDeclares(both, "ge_volumetricFog", 55), takesVolumetric);
+        EXPECT_EQ(FragmentDeclares(both, "ge_volumetricFogIrradiance", 56), takesVolumetric);
+        EXPECT_EQ(FragmentDeclares(both, "ge_volumetricClouds", 57), takesVolumetric);
+    }
+}
+
+// The fog's keywords change no other program: a blend's keyword, which only the fog reads, leaves its
+// program as the straight-alpha one without the fog, and the shapes that shade nothing (the depth-only
+// coverage variant) compose the same program with the fog's pass keywords as without.
+TEST(ForwardAdapterVariantCompile, TheFogKeywordsLeaveAnUnfoggedProgramUnchanged)
+{
+    constexpr MaterialKeyword kWorld = kWorldDrawBase | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows |
+                                       MaterialKeyword::IBL;
+    MaterialDocument blended{};
+    blended.lightingModel = "StandardPBR";
+    blended.alphaMode = MaterialAlphaMode::Blend;
+    MaterialDocument additive = blended;
+    additive.blend = MaterialBlendState{MaterialBlendFactor::One, MaterialBlendFactor::One};
+    const auto straight = BuildDocument(blended, kWorld);
+    SKIP_WITHOUT_SHADERC(straight);
+    const auto added = BuildDocument(additive, kWorld);
+    ExpectBuildSucceeded(straight);
+    ExpectBuildSucceeded(added);
+    ASSERT_TRUE(straight.package && added.package);
+    EXPECT_EQ(straight.package->stageBytes.at("fs"), added.package->stageBytes.at("fs"));
+    EXPECT_EQ(straight.package->stageBytes.at("vs"), added.package->stageBytes.at("vs"));
+
+    MaterialDocument masked{};
+    masked.lightingModel = "StandardPBR";
+    masked.alphaMode = MaterialAlphaMode::Mask;
+    constexpr MaterialKeyword kCoverage = kWorldDrawBase | MaterialKeyword::DepthOnlyFragment;
+    const auto coverage = BuildDocument(masked, kCoverage);
+    const auto coverageFogged =
+        BuildDocument(masked, kCoverage | MaterialKeyword::HeightFog | MaterialKeyword::VolumetricFog);
+    ExpectBuildSucceeded(coverage);
+    ExpectBuildSucceeded(coverageFogged);
+    ASSERT_TRUE(coverage.package && coverageFogged.package);
+    EXPECT_EQ(coverage.package->stageBytes.at("fs"), coverageFogged.package->stageBytes.at("fs"));
 }
 
 namespace

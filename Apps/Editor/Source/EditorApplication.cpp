@@ -3,6 +3,7 @@
 #include "Editor/BuildExporters/WebBuildExporter.h"
 #include "Editor/Application/BuildConfigStatus.h"
 #include "Editor/Application/EditorVersion.h"
+#include "Editor/Registries/BuiltInStatusBarItems.h"
 #include "EditorPanelIds.h"
 #include "EditorPanelManager.h"
 #include "Mathematics/Vector2.h"
@@ -58,6 +59,7 @@
 #include "Assets/Packages/PackageNativeCache.h"
 #include "Core/Application.h"
 #include "Core/CpuProfiler.h"
+#include "Editor/Shortcuts/DiagnosticShortcuts.h"
 #include "Core/Engine.h"
 #include "Core/Time.h"
 #include "Core/WindowInputRouter.h"
@@ -88,6 +90,8 @@
 #include "VersionControl/EditorVersionControlService.h"
 #include "VersionControl/EditorVersionControlUi.h"
 #include "Scripting/EditorScriptMenuRegistry.h"
+#include "Scripting/ScriptStatusIndicator.h"
+#include "Scene/KeptComponentResolver.h"
 #include "ScriptEditor/SourceLocation.h"
 #include "ScriptEditor/SourceLocationOpener.h"
 #include "Startup/BuiltinAssetSync.h"
@@ -221,6 +225,7 @@
 #include "UI/Registration/ElementRegistration.h"
 
 #include "Thumbnails/ModelThumbnailHandler.h"
+#include "Thumbnails/CubeLutThumbnailHandler.h"
 #include "Thumbnails/TextureThumbnailHandler.h"
 #include "Thumbnails/ThumbnailMenuItems.h"
 #include "Thumbnails/ThumbnailService.h"
@@ -240,10 +245,11 @@
 #include "UI/DragDropGhostRenderers.h"
 #include "UI/Interaction/Types.h"
 
-// Linux runtime icon loading via stb_image. On Windows we use the embedded
-// .ico resource (set via Win32 APIs) and on macOS the app bundle's .icns.
-#if !defined(_WIN32) && !defined(__APPLE__) && defined(GE_HAVE_STB)
-#include <stb_image.h>
+// Linux runtime icon loading. On Windows we use the embedded .ico resource
+// (set via Win32 APIs) and on macOS the app bundle's .icns.
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include "AssetCore/SharedFileRead.h"
+#include "Image/Decode.h"
 #endif
 
 #include "UI/Controls/Dropdown.h"
@@ -694,6 +700,8 @@ static bool RegisterEditorAssetSource(AssetManager& assetManager,
     AssetSourceDesc editorSource{};
     editorSource.Alias = "editor";
     editorSource.Root = editorAssetsRoot;
+    // The mount has no metadata store, so a bind cannot save inferred settings.
+    editorSource.InfersTextureImportSettings = false;
     if (!assetManager.RegisterSource(editorSource))
     {
         Logger::Log::Warning("Editor: {} failed to register editor asset source '{}'",
@@ -1247,39 +1255,6 @@ static void EnsureWorldHasPhysicsSettingsFromProject(GameEngine::ECS::World& wor
 }
 } // namespace
 
-std::unique_ptr<DockNode> CloneDockNode(const DockNode* src)
-{
-    if (!src)
-        return nullptr;
-
-    if (src->IsLeaf())
-    {
-        auto out = DockNode::MakeLeaf();
-        for (const auto& tab : src->GetTabs())
-        {
-            out->AddTab(tab);
-        }
-        const std::string& active = src->GetActivePanelId();
-        if (!active.empty())
-        {
-            (void)out->ActivateTab(active);
-        }
-        return out;
-    }
-
-    if (src->IsSplit())
-    {
-        auto out = std::make_unique<DockNode>();
-        auto first = CloneDockNode(src->First());
-        auto second = CloneDockNode(src->Second());
-        out->SetSplit(src->GetSplitDirection(), src->GetSplitRatio(), std::move(first), std::move(second));
-        out->SetMinChildSizes(src->GetMinFirstPx(), src->GetMinSecondPx());
-        return out;
-    }
-
-    return nullptr;
-}
-
 std::unique_ptr<DockNode> EditorApplication::CloneCurrentDockLayout() const
 {
     return m_Docking && m_Docking->GetRoot() ? CloneDockNode(m_Docking->GetRoot()) : nullptr;
@@ -1359,7 +1334,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         rootEntity.Set(renderer);
     }
 
@@ -1380,7 +1355,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         child1.Set(renderer);
     }
     child1.Set(Parent{rootHandle});
@@ -1402,7 +1377,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
         MeshRenderer renderer{};
         renderer.meshGpuHandleId = meshHandle.IsValid() ? static_cast<uint64>(meshHandle) : 0;
         renderer.materialAssetGuid.Set(matGuid);
-        renderer.renderLayerMask = 1u; // Scene View layer only
+        renderer.RenderLayers = Rendering::RenderLayerMask::Default();
         child2.Set(renderer);
     }
     child2.Set(Parent{rootHandle});
@@ -1508,6 +1483,17 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
         return m_SceneEditor ? m_SceneEditor->GetActiveScenePath() : std::nullopt;
     });
     m_SceneThumbnailCapture = std::make_unique<GameEngine::Editor::SceneThumbnailCapture>();
+    m_ScriptStatus = std::make_unique<Editor::ScriptStatusIndicator>(
+        [this]() -> Label* {
+            if (m_Windows.empty() || !m_Windows[0] || !m_Windows[0]->ui)
+                return nullptr;
+            UIElement* root = m_Windows[0]->ui->GetRootElement();
+            return root ? dynamic_cast<Label*>(root->FindById("ScriptStatus"_sid)) : nullptr;
+        },
+        [this]() {
+            if (m_PanelManager && !m_Windows.empty() && m_Windows[0])
+                m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), "Log");
+        });
     m_VcsUi = std::make_unique<EditorVersionControlUi>();
     m_VcsUi->SetScenePathProvider([this]() -> std::optional<std::filesystem::path>
     {
@@ -1798,9 +1784,9 @@ bool EditorApplication::Initialize()
     }
     Logger::Log::Info("[Startup] Application::Initialize (Engine): {:.1f}ms", MsSince(tPhase));
 
-    // The Settings panel is lazy. Apply both SVG defaults before any editor UI
-    // or project SVG texture can be loaded, rather than waiting for its page.
-    Editor::SvgRasterSettings::ApplySavedDefaults(
+    // The Settings panel is lazy. Apply the SVG texture default before any
+    // project SVG texture can be loaded, rather than waiting for its page.
+    Editor::SvgRasterSettings::ApplySavedDefault(
         EngineCore::GetInstance().GetWorkspaceRoot());
     // The engine now knows the project and runs MarkupService; a later project switch
     // reloads in FinishProjectFolderSwitch.
@@ -1921,6 +1907,7 @@ bool EditorApplication::Initialize()
     m_EditorContext->PlayMode = m_PlayMode.get();
     m_EditorContext->DownloadManager = m_DownloadManager.get();
     m_EditorContext->RenderGraphTicks = &m_RenderGraphTicks;
+    Editor::RegisterBuiltInStatusBarItems(m_StatusBarItems);
     m_DownloadManager->SetContext(m_EditorContext.get(), m_ChangeNotifications.get());
     // Pin the active world on the context so consumers (MissingAssetTracker
     // rescan, etc.) read it from one place instead of each reaching into
@@ -2198,15 +2185,16 @@ bool EditorApplication::Initialize()
 
     // Linux: load window icon at runtime via GLFW. Windows/macOS rely on
     // embedded resources or bundle icons.
-#if !defined(_WIN32) && !defined(__APPLE__) && defined(GE_HAVE_STB)
+#if !defined(_WIN32) && !defined(__APPLE__)
     {
-        auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
-        int iconW = 0, iconH = 0, iconChannels = 0;
-        unsigned char* iconPixels = stbi_load(iconPath.string().c_str(), &iconW, &iconH, &iconChannels, 4);
-        if (iconPixels)
+        const auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
+        Vector<uint8> iconBytes;
+        if (ReadFileBytesShared(iconPath, iconBytes))
         {
-            mainCtx->window->SetIcon(iconPixels, iconW, iconH);
-            stbi_image_free(iconPixels);
+            const Image::Image8 icon = Image::Decode8(iconBytes, iconPath.string(), Image::DecodeChannels::Rgba);
+            if (icon.Valid)
+                mainCtx->window->SetIcon(icon.Pixels.data(), static_cast<int>(icon.Width),
+                                         static_cast<int>(icon.Height));
         }
     }
 #endif
@@ -2301,42 +2289,6 @@ bool EditorApplication::Initialize()
                     return true;
                 }
             }
-        }
-
-        // Global editor hotkey: F2 controls CPU profiler (opt-in diagnostics).
-        // - Press F2 once to enable.
-        // - Press F2 again to dump the last frame's scope summary to the console.
-        // - Press Shift+F2 to disable.
-#if GE_ENABLE_CPU_PROFILING
-        if (key == Input::kKeyCode_F2 && action == Input::kKeyActionPress)
-        {
-            auto& prof = GameEngine::Profiling::CpuProfiler::Get();
-            if ((mods & Input::kModShift) != 0)
-            {
-                prof.SetEnabled(false);
-                Logger::Log::Info("[CPU Profiler] OFF");
-                return true;
-            }
-            if (!prof.IsEnabled())
-            {
-                prof.SetEnabled(true);
-                Logger::Log::Info("[CPU Profiler] ON (press F2 again to dump)");
-            }
-            else
-            {
-                // Include the current perf breakdown so dumps are self-contained.
-                prof.RequestDump(this->BuildPerfDumpLine());
-            }
-            return true;
-        }
-#endif
-
-        // Global editor hotkey: F3 toggles UI Demo panel.
-        if (key == Input::kKeyCode_F3 && action == Input::kKeyActionPress)
-        {
-            if (m_PanelManager)
-                m_PanelManager->ShowOrActivateUIDemoPanel(mainCtxRaw);
-            return true;
         }
 
         // Global editor hotkey: F11 toggles dock debug overlay regardless of UI focus.
@@ -2759,6 +2711,10 @@ bool EditorApplication::Initialize()
             // thumbnail, ThumbnailService falls back to the static model icon.
             auto modelHandler = std::make_unique<ModelThumbnailHandler>(assetManager, renderServices);
             thumbnailServiceRaw->RegisterHandler(AssetType::Model, std::move(modelHandler));
+
+            // Cube LUT preview strips: the ramp through the Tonemap pass, with and without the LUT.
+            thumbnailServiceRaw->RegisterHandler(
+                AssetType::CubeLut, std::make_unique<CubeLutThumbnailHandler>(assetManager, renderServices));
 
             // Register video thumbnail handler (extracts representative frame).
             auto videoHandler = std::make_unique<VideoThumbnailHandler>();
@@ -3248,6 +3204,7 @@ bool EditorApplication::Initialize()
         if (!m_UiReplayScenarioPath.has_value())
         {
             LoadLayoutPresetsFromPreferences();
+            RestoreWorkingLayout(/*rebuildDockspace=*/false);
         }
 
         auto* mainWindowCtx = !m_Windows.empty() ? m_Windows[0].get() : nullptr;
@@ -3256,6 +3213,9 @@ bool EditorApplication::Initialize()
         Logger::Log::Info("[Startup]   Panel creation + layout config: {:.1f}ms", MsSince(tPhase));
         tDockSub = std::chrono::high_resolution_clock::now();
         m_PanelManager = std::make_unique<EditorPanelManager>();
+        m_DiagnosticShortcuts = std::make_unique<Editor::DiagnosticShortcuts>(
+            [this] { return BuildPerfDumpLine(); },
+            [this] { m_PanelManager->ShowOrActivateUIDemoPanel(m_Windows.empty() ? nullptr : m_Windows[0].get()); });
         m_PanelManager->SetDocking(m_Docking.get());
         m_PanelManager->SetPanelStorage(&m_PanelStorage);
         m_PanelManager->SetWindows(&m_Windows);
@@ -4482,7 +4442,7 @@ bool EditorApplication::Initialize()
                                 entries.push_back({
                                     panel.panelId,
                                     panel.title,
-                                    panel.iconClass,
+                                    panel.iconPath,
                                 });
                             }
                             return entries;
@@ -5412,11 +5372,13 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
     EngineCore& engine = EngineCore::GetInstance();
     AssetManager& am = engine.GetAssetManager();
 
+    // The outgoing project keeps its working layout for its next session.
+    SaveWorkingLayout();
     // Update Engine's workspace root so that GetCurrentEditorProjectPaths() returns correct paths
     engine.SetWorkspaceRoot(projectPath);
     if (m_MarkupBridge)
         m_MarkupBridge->LoadProjectState(projectPath);
-    Editor::SvgRasterSettings::ApplySavedDefaults(projectPath);
+    Editor::SvgRasterSettings::ApplySavedDefault(projectPath);
     // Plugin enablement lives in the project's settings, so the workspace
     // switch changes the answers: drop the memoized states before package
     // modules mount and re-resolve against the new project.
@@ -5437,6 +5399,7 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
     // active preset explicitly so the live dockspace is rebuilt from the loaded model.
     if (m_ActiveLayoutPresetIndex >= 0)
         RecallLayoutPreset(m_ActiveLayoutPresetIndex);
+    RestoreWorkingLayout(/*rebuildDockspace=*/true);
     SyncLayoutPresetToolbar();
 
     // Re-apply project-scoped runtime settings after workspace/project switch.
@@ -5750,45 +5713,25 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
     GameEngine::NativeScripting::AppendPackageDefines(cfg, m_Packages->GetPackageDefines());
     nativeScripts->SetBuildConfig(cfg);
 
-    // Bottom-bar status indicator: set the status Label's text + state-color class. Looked
-    // up by id per call (cheap — only fires on build edges) so a UI/layout rebuild can never
-    // leave a dangling pointer. State colors live in core.css (.is-building/.is-ok/.is-fail).
-    auto setNativeScriptStatus = [this](const std::string& text, const char* stateClass) {
-        if (m_Windows.empty() || !m_Windows[0] || !m_Windows[0]->ui)
-            return;
-        UIElement* root = m_Windows[0]->ui->GetRootElement();
-        if (!root)
-            return;
-        auto* label = dynamic_cast<Label*>(root->FindById("NativeScriptStatus"_sid));
-        if (!label)
-            return;
-        label->RemoveClass("is-building");
-        label->RemoveClass("is-ok");
-        label->RemoveClass("is-fail");
-        label->AddClass(stateClass);
-        label->SetText(text);
-    };
 
     // Build STARTED (main thread): only fires for a real compile, not a cached no-op load.
-    nativeScripts->SetBuildStartedCallback([setNativeScriptStatus]() {
-        setNativeScriptStatus("Building scripts...", "is-building");
+    nativeScripts->SetBuildStartedCallback([this]() {
+        m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Building);
     });
 
-    // Build-complete callback (main thread): on failure bring the log forward (the error
-    // lines are already routed there) and flag the status bar. A successful module load
+    // Build-complete callback (main thread): the status bar records the outcome (a failure brings
+    // the Log forward, where the error lines are already routed). A successful module load
     // refreshes only panels currently showing a custom inspector owned by that module.
     // This covers inspectors first registered by a late package load as well as replaced
     // inspector code, without rebuilding unrelated selections for every startup package.
     // Component layout changes use the more precise InspectorRebuild notifications below.
-    nativeScripts->SetBuildCompletedCallback([this, setNativeScriptStatus](const GameEngine::NativeScripting::NativeBuildResult& result) {
+    nativeScripts->SetBuildCompletedCallback([this](const GameEngine::NativeScripting::NativeBuildResult& result) {
         if (!result.Success())
         {
-            setNativeScriptStatus("Build failed - using last good build", "is-fail");
-            if (m_PanelManager && !m_Windows.empty() && m_Windows[0])
-                m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), "Log");
+            m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Failed);
             return;
         }
-        setNativeScriptStatus("Scripts loaded", "is-ok");
+        m_ScriptStatus->SetNativeState(Editor::NativeScriptState::Loaded);
         if (result.RegistrationsChanged && !result.ModuleId.empty())
         {
             for (const auto& panel : m_PanelStorage)
@@ -5846,78 +5789,17 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
             const std::vector<ECS::ComponentTypeId> migratedIds =
                 layoutMigrator->MigrateChangedLayouts(*world);
 
-            // Re-apply preserved unknown components whose type just became registered (e.g. a user
-            // native module finished compiling after the scene had already loaded, so the loader
-            // stashed the component verbatim instead of dropping it). Runs AFTER layout migration so
-            // a freshly-instantiated component lands at the current layout. Resolved entries are
-            // removed (so the next save emits them once, via the real reflected path); still-unknown
-            // entries stay for a later reload.
-            auto& unresolved = world->GetUnresolvedComponents();
-            if (!unresolved.Empty())
-            {
-                GameEngine::Scene::SceneLoadContext loadCtx{};
-                loadCtx.TargetWorld = world;
-                for (auto entIt = unresolved.Map().begin(); entIt != unresolved.Map().end();)
-                {
-                    const ECS::EntityHandle e = entIt->first;
-                    if (!world->IsValid(e))
-                    {
-                        entIt = unresolved.Map().erase(entIt); // entity destroyed before module loaded
-                        continue;
-                    }
-                    auto& preserved = entIt->second;
-                    for (auto compIt = preserved.begin(); compIt != preserved.end();)
-                    {
-                        const GameEngine::Scene::ISceneComponentSchema* schema =
-                            GameEngine::Scene::SceneSchemaRegistry::Find(compIt->Name);
-                        if (!schema)
-                        {
-                            ++compIt; // type still not registered — keep it preserved
-                            continue;
-                        }
-                        bool ok = true;
-                        std::string applyErr;
-                        if (compIt->Props.empty())
-                        {
-                            ok = schema->AddDefault(*world, e, &applyErr);
-                        }
-                        else
-                        {
-                            for (const auto& [prop, value] : compIt->Props)
-                            {
-                                if (!schema->ApplyProperty(*world, e, loadCtx, prop, value, &applyErr))
-                                {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if (ok)
-                        {
-                            Logger::Log::Info("[NativeScripting] re-applied preserved component '{}'", compIt->Name);
-                            compIt = preserved.erase(compIt);
-                        }
-                        else
-                        {
-                            Logger::Log::Warning("[NativeScripting] re-apply of preserved component '{}' failed: {}",
-                                                 compIt->Name, applyErr);
-                            ++compIt;
-                        }
-                    }
-                    if (preserved.empty())
-                        entIt = unresolved.Map().erase(entIt);
-                    else
-                        ++entIt;
-                }
-                world->ProcessCommands();
-            }
+            // Apply kept scene components whose type a module just registered (it finished
+            // compiling after the scene loaded). After layout migration, so a component lands at
+            // the current layout.
+            (void)GameEngine::Scene::ResolveKeptComponents(*world);
 
             // A migration re-packs bytes under the SAME ComponentTypeId, so panels
             // watching component-ID signatures (the inspector's rebuild poll) cannot
             // see it — a stale field plan would keep displaying, and WireEdit keep
             // committing, pre-migration offsets. Broadcast InspectorRebuild for every
             // entity holding a migrated component so every observing panel rebuilds
-            // from the new field table. Fired after the preserved-component re-apply
+            // from the new field table. Fired after the kept-component apply
             // above so a triggered rebuild reads fully settled state. Idempotent
             // (the after-hook contract): a re-fire just forces a redundant rebuild.
             if (!migratedIds.empty() && m_ChangeNotifications)
@@ -6381,6 +6263,9 @@ void EditorApplication::Update(float64 deltaTime)
         }
     }
 
+    if (m_ScriptStatus && !m_IsShuttingDown)
+        m_ScriptStatus->Update(EngineCore::GetInstance().GetScriptManager().GetScriptAssemblyStatus());
+
     // First-detect gate: open VCS workspace detection once every package
     // module reached its first terminal outcome — all VCS providers live in
     // package modules, and detecting earlier would let a later-ordered
@@ -6405,6 +6290,12 @@ void EditorApplication::Update(float64 deltaTime)
     // fire from module static init under the loader lock. Run it here.
     if (m_VcsService && !m_IsShuttingDown)
         m_VcsService->PumpDeferredWork();
+
+    // Package panels, overlays and editor stylesheets register from module
+    // static init under the loader lock too: building a panel and destroying
+    // the one it replaces happen here.
+    if (!m_IsShuttingDown)
+        Editor::EditorPanelRegistry::Get().DeliverPendingRegistrations();
 
     // Panel construction can finish after the second startup frame (notably
     // while package editor modules are loading).  Keep the deferred request
@@ -6514,6 +6405,9 @@ void EditorApplication::Update(float64 deltaTime)
         if (shouldRefreshTitle)
             RefreshMainWindowTitle();
     }
+
+    if (!m_IsShuttingDown && !m_Windows.empty() && m_Windows[0] && m_Windows[0]->ui)
+        m_StatusBarItems.Update(std::chrono::duration<double>(deltaTime), m_Windows[0]->ui->GetRootElement());
 
     // Bottom-bar status refresh, 1 Hz. Both labels are looked up by id here rather than cached
     // so a UI rebuild can never leave a dangling pointer.
@@ -6672,7 +6566,7 @@ void EditorApplication::Update(float64 deltaTime)
                 for (auto& win : m_Windows)
                 {
                     if (win && win->ui)
-                        win->ui->EvictBackgroundTexture(cachePath);
+                        win->ui->BackgroundImages().Evict(cachePath);
                 }
                 if (!scenePath.empty())
                 {
@@ -7240,6 +7134,9 @@ void EditorApplication::Update(float64 deltaTime)
             {
             if (inputSystem->WasActionTriggered(kEditorUniversalSearch) && m_UniversalSearch)
                 m_UniversalSearch->Toggle();
+
+            if (m_DiagnosticShortcuts)
+                m_DiagnosticShortcuts->Update(*inputSystem);
 
             // Cmd/Ctrl+P: toggle play mode (global, works even without Scene View focus).
             if (inputSystem->WasActionTriggered(kEditorTogglePlayMode) && m_PlayMode)
@@ -8350,6 +8247,9 @@ EditorApplication::EditorWindowContext* EditorApplication::FindWindowHostingGame
 
 void EditorApplication::OnShutdown()
 {
+    // While the dock and its UI are alive: the next session reopens this layout.
+    SaveWorkingLayout();
+
     // Stop input while every host is alive, then revoke deferred viewport
     // callbacks before their UI dispatchers and this application are destroyed.
     for (auto& win : m_Windows)

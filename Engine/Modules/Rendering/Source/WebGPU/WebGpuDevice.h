@@ -27,6 +27,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace GameEngine::Rendering
@@ -424,6 +425,10 @@ class WebGpuDevice : public IDevice
     std::unique_ptr<WebGpuQueryPool> m_QueryPool;
     WGPULimits m_AdapterLimits{};
     WGPULimits m_DeviceLimits{};
+    // The compute pipeline refusals already logged, by message: the pipeline is requested again
+    // every frame it is declared, and refused again, but reported once.
+    std::mutex m_ReportedComputeRefusalsMutex;
+    std::unordered_set<std::string> m_ReportedComputeRefusals;
     bool m_SupportsImmediates = false;
     bool m_SupportsSpirv = false;
     std::string m_HardwareDescription;

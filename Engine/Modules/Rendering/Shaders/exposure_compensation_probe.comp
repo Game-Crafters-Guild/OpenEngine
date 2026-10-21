@@ -1,0 +1,17 @@
+#version 450
+
+// Test-only probe for the view's exposure compensation state (ExposureCompensationUndoTests): evaluates
+// Includes/exposure_compensation.glsl on the device, so the tests measure the shipped GLSL.
+// One invocation writes uResult.values = (GE_ExposureCompensationUndo(), GE_MeteredNits(), 0, 0).
+
+#define GE_EXPOSURE_COMPENSATION_BINDING 1
+#include "Includes/exposure_compensation.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer ProbeResult { vec4 values; } uResult;
+
+void main()
+{
+    uResult.values = vec4(GE_ExposureCompensationUndo(), GE_MeteredNits(), 0.0, 0.0);
+}

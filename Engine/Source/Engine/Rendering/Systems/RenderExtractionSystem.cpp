@@ -2,6 +2,7 @@
 #include "ECS/Components.h"
 #include "ECS/Entity.h"
 #include "ECS/OrderedHandleSet.h"
+#include "Types/ColorUtils.h"
 
 #include "ECS/ECSTemplates.h"
 #include "Engine/Rendering/DrawCommand.h"
@@ -10,6 +11,7 @@
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
+#include "CameraExposureStamp.h"
 #include "Engine/Rendering/Exposure.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Engine/Rendering/RenderOrigin.h"
@@ -243,7 +245,7 @@ struct RenderExtractionParallelState
         MeshGPUHandle meshHandle{};
         const Material* material = nullptr;
         uint32 flags = 0u;
-        uint32 renderLayerMask = 0u;
+        RenderLayerMask renderLayerMask = RenderLayerMask::None();
         uint32 stableInstanceIndex = 0xFFFFFFFFu;    // Update/Skip emission index
         // Mover qualification needs both palette endpoints, and Skip carries no
         // payload to read the current one from.
@@ -450,7 +452,7 @@ void BuildGpuInstancePayload(GPUInstance& instance, const float* matrix,
                              const float boundsCenter[3], float localBoundsRadius,
                              uint32 mshIdx, uint32 matIdx, uint32 flags, float lodBias,
                              uint32 skinPaletteOffset, uint32 runtimeId,
-                             int32 sectorX, int32 sectorY, int32 sectorZ, uint32 renderLayerMask)
+                             int32 sectorX, int32 sectorY, int32 sectorZ, RenderLayerMask renderLayers)
 {
     instance = GPUInstance{};
     std::memcpy(instance.transform.Data(), matrix, sizeof(float) * 16);
@@ -464,7 +466,7 @@ void BuildGpuInstancePayload(GPUInstance& instance, const float* matrix,
                                             instance.normalMatrixCol2,
                                             &mirrored);
     instance.normalMatrixCol0 = Vector3(normalColumn0.x, normalColumn0.y, normalColumn0.z);
-    instance.renderLayerMask = renderLayerMask;
+    instance.renderLayerMask = renderLayers.Bits;
     // Camera-relative rendering: the transform column stays SECTOR-LOCAL (small);
     // the integer sector is packed into the reserved words and the vertex stage
     // reconstructs the camera-relative position. boundingCenter, by contrast, is
@@ -515,18 +517,18 @@ void BuildGpuInstancePayload(GPUInstance& instance, const float* matrix,
 void EmitSubmissions(std::vector<WorldSubmissionRecord>& subs,
                      const std::vector<const ViewDesc*>& matchingViews,
                      MeshGPUHandle meshHandle, const Material* material,
-                     uint32 instanceIndex, uint32 flags, uint32 renderLayerMask)
+                     uint32 instanceIndex, uint32 flags, RenderLayerMask renderLayers)
 {
     for (const ViewDesc* view : matchingViews)
     {
-        if ((renderLayerMask & view->ActiveRenderLayerMask()) == 0u)
+        if (!renderLayers.Intersects(view->ActiveRenderLayerMask()))
             continue;
         WorldSubmissionRecord sub{};
         sub.viewId = view->id;
         sub.meshHandle = meshHandle;
         sub.material = material;
         sub.instanceIndex = instanceIndex;
-        sub.renderLayerMask = renderLayerMask;
+        sub.renderLayerMask = renderLayers;
         sub.flags = flags;
         subs.push_back(sub);
     }
@@ -541,7 +543,7 @@ uint64 RecordDigestTerm(const WorldRenderableRecord& rec)
     uint64 recDigest = HashValue(kFnvOffsetBasis, rec.meshRenderer.meshGpuHandleId);
     recDigest = HashValue(recDigest, rec.meshRenderer.materialAssetGuid);
     recDigest = HashValue(recDigest, rec.meshRenderer.castShadows);
-    recDigest = HashValue(recDigest, rec.meshRenderer.renderLayerMask);
+    recDigest = HashValue(recDigest, rec.meshRenderer.RenderLayers.Bits);
     // In the digest or a live toggle does nothing until an unrelated field
     // happens to re-arm extraction.
     recDigest = HashValue(recDigest, rec.giEmitter);
@@ -754,7 +756,7 @@ void PrepareRecord(const WorldRenderableRecord& rec,
         meshGpu->materialIndex == matIdx &&
         meshGpu->LastMeshUploadSequence == meshEntry->uploadSeq &&
         meshGpu->LastFlags == flags &&
-        scene.GetInstances()[meshGpu->instanceIndex].renderLayerMask == rec.meshRenderer.renderLayerMask &&
+        scene.GetInstances()[meshGpu->instanceIndex].renderLayerMask == rec.meshRenderer.RenderLayers.Bits &&
         meshGpu->LastSkinPaletteOffset == skinPaletteOffset &&
         meshGpu->LastLodBias == rec.lodBias &&
         meshGpu->LastRuntimeId == rec.runtimeId &&
@@ -797,7 +799,7 @@ void PrepareRecord(const WorldRenderableRecord& rec,
     out.meshHandle = meshHandle;
     out.material = material;
     out.flags = flags;
-    out.renderLayerMask = rec.meshRenderer.renderLayerMask;
+    out.renderLayerMask = rec.meshRenderer.RenderLayers;
     out.skinPaletteOffset = paletteOffsets.Current;
     out.prevSkinPaletteOffset = paletteOffsets.Previous;
 
@@ -808,7 +810,7 @@ void PrepareRecord(const WorldRenderableRecord& rec,
         out.stableInstanceIndex = meshGpu->instanceIndex;
         const std::size_t emittedBefore = cr.subs.size();
         EmitSubmissions(cr.subs, matchingViews, meshHandle, material,
-                        meshGpu->instanceIndex, flags, rec.meshRenderer.renderLayerMask);
+                        meshGpu->instanceIndex, flags, rec.meshRenderer.RenderLayers);
         out.subCount = static_cast<uint32>(cr.subs.size() - emittedBefore);
         return;
     }
@@ -830,7 +832,7 @@ void PrepareRecord(const WorldRenderableRecord& rec,
     BuildGpuInstancePayload(out.payload, rec.worldTransform.matrix, prevMatrix, rec.hasBounds,
                             boundsCenter, boundsRadius, mshIdx, matIdx, flags,
                             rec.lodBias, skinPaletteOffset, rec.runtimeId, secX, secY, secZ,
-                            rec.meshRenderer.renderLayerMask);
+                            rec.meshRenderer.RenderLayers);
     const bool prevDiffers = PayloadPrevDiffers(out.payload);
 
     if (meshGpu->instanceIndex == 0xFFFFFFFFu)
@@ -855,7 +857,7 @@ void PrepareRecord(const WorldRenderableRecord& rec,
                     boundsRadius, secX, secY, secZ, prevDiffers);
     const std::size_t emittedBefore = cr.subs.size();
     EmitSubmissions(cr.subs, matchingViews, meshHandle, material,
-                    meshGpu->instanceIndex, flags, rec.meshRenderer.renderLayerMask);
+                    meshGpu->instanceIndex, flags, rec.meshRenderer.RenderLayers);
     out.subCount = static_cast<uint32>(cr.subs.size() - emittedBefore);
 }
 
@@ -953,7 +955,7 @@ void BuildPatchedInstances(std::span<const RenderExtractionParallelState::DirtyR
                                 meshGpu->meshIndex, meshGpu->materialIndex, meshGpu->LastFlags,
                                 meshGpu->LastLodBias, meshGpu->LastSkinPaletteOffset,
                                 meshGpu->LastRuntimeId, meshGpu->LastSectorX,
-                                meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->renderLayerMask);
+                                meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->RenderLayers);
         const bool differs = PayloadPrevDiffers(write.Instance);
         isMover[i] = (differs && mr) ? 1u : 0u;
         if (isMover[i] != 0u)
@@ -1407,10 +1409,10 @@ struct ResolvedVolumeStack
 };
 
 // Folds the priority-sorted volumes, as seen from cameraPos, into one settings
-// block. With a layerMask, volumes whose PostProcessMask misses it are skipped.
+// block. With camera volume layers, volumes whose VolumeLayers miss them are skipped.
 ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolume> volumes,
                                        const float cameraPos[3], bool hasCameraPos,
-                                       std::optional<uint32> layerMask)
+                                       std::optional<RenderLayerMask> cameraVolumeLayers)
 {
     ResolvedVolumeStack stack;
     stack.FogVolumes.reserve(std::min<size_t>(volumes.size(), kMaxVolumetricFogLocalVolumes));
@@ -1421,7 +1423,7 @@ ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolum
     DominantVolume dominantShadow;
     for (const PostProcessExtractedVolume& v : volumes)
     {
-        if (layerMask && (v.LayerMask & *layerMask) == 0u)
+        if (cameraVolumeLayers && !v.VolumeLayers.Intersects(*cameraVolumeLayers))
             continue;
         float spatialWeight = 1.0f;
         const bool spatialContributes = ComputeSpatialWeight(v, cameraPos, hasCameraPos, spatialWeight);
@@ -1469,17 +1471,13 @@ ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolum
         resolved.CasStackOrder = dominant.Volume->Settings.CasStackOrder;
         if (dominantCubeLut.Volume)
         {
-            resolved.LutStackOrder = dominantCubeLut.Volume->Settings.LutStackOrder;
-            resolved.LutInputEncoding = dominantCubeLut.Volume->Settings.LutInputEncoding;
-            resolved.LutTextureFormat = dominantCubeLut.Volume->Settings.LutTextureFormat;
+            resolved.LutStage = dominantCubeLut.Volume->Settings.LutStage;
             const auto& gd = dominantCubeLut.Volume->CubeLutAssetGuid.GetData();
             std::memcpy(resolved.LutAssetGuidWords, gd.data(), sizeof(resolved.LutAssetGuidWords));
         }
         else
         {
-            resolved.LutStackOrder = dominant.Volume->Settings.LutStackOrder;
-            resolved.LutInputEncoding = dominant.Volume->Settings.LutInputEncoding;
-            resolved.LutTextureFormat = dominant.Volume->Settings.LutTextureFormat;
+            resolved.LutStage = dominant.Volume->Settings.LutStage;
             resolved.LutAssetGuidWords[0] = 0;
             resolved.LutAssetGuidWords[1] = 0;
         }
@@ -1500,67 +1498,29 @@ ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolum
     stack.ShadowVolume = dominantShadow.Volume;
     return stack;
 }
+
+// The volume's night tint for the tonemap: its strength, and its color's hue at luminance 1 (the color
+// is authored as a picker shows it; only its hue is used). A black color has no hue and tints nothing.
+void ExtractNightTint(const Components::PostProcessVolume& volume, PostProcessSettings& settings)
+{
+    const float* color = volume.NightTintColor;
+    const float luminance = ColorUtils::LinearRec709Luminance(color);
+    if (luminance <= 0.0f)
+    {
+        settings.NightTintStrength = 0.0f;
+        return;
+    }
+    settings.NightTintStrength = volume.NightTintStrength;
+    settings.NightTintR = color[0] / luminance;
+    settings.NightTintG = color[1] / luminance;
+    settings.NightTintB = color[2] / luminance;
+}
 } // namespace
 
 void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64 worldId, RenderServices* rs)
 {
     m_Volumes.clear();
     const WorldTimeOfDayState worldTimeOfDay = FindWorldTimeOfDayState(world);
-    // Overwrite a view's exposure with its camera's (the camera owns the sensor; volumes contribute
-    // only grading). Mirrors the volume exposure resolve but sourced from the registered camera.
-    auto applyCameraExposure = [](PostProcessSettings& s, const ViewRegistry::CameraExposure& ce)
-    {
-        const auto mode = static_cast<Components::ExposureMode>(ce.Mode);
-        const float ev100 = Rendering::ExposureEv100ForMode(mode, ce.ManualExposureEV,
-                                                            ce.Aperture, ce.ShutterTime, ce.Iso);
-        s.Exposure = Rendering::ResolveExposureScale(mode, ce.Exposure, ev100, ce.ExposureCompensation);
-        if (mode == Components::ExposureMode::Auto)
-        {
-            s.AutoExposureActive    = true;
-            s.AutoExposureMinEv     = ce.AutoExposureMinEv;
-            s.AutoExposureMaxEv     = ce.AutoExposureMaxEv;
-            s.AutoExposureSpeedUp   = ce.AutoExposureSpeedUp;
-            s.AutoExposureSpeedDown = ce.AutoExposureSpeedDown;
-            // All EV trims ride the bias, applied post-clamp (TryWriteField), so compensation
-            // stays effective even when adaptation is pinned at the MinEv/MaxEv envelope edge.
-            // The default bias is the engine's display-brightness anchor for Auto metering
-            // (see kDefaultAutoExposureBiasEv) — Manual/Physical/Fixed take no default trim.
-            s.AutoExposureBiasEv    = kDefaultAutoExposureBiasEv + ce.ExposureCompensation;
-        }
-        else
-        {
-            s.AutoExposureActive = false;
-        }
-        // The lens: physical DoF reads the camera's focus plane, derived focal
-        // length, and the same f-number that drives physical exposure.
-        s.DofFocusDistance = std::max(ce.FocusDistance, Components::Camera::kFocusDistanceMin);
-        s.DofFocalLengthMm = std::max(ce.FocalLengthMm, 1.0f);
-        s.DofAperture = std::max(ce.Aperture, Components::Camera::kApertureMin);
-        s.DofSensorHeightMm = std::max(ce.SensorHeightMm, 1.0f);
-        s.DofApertureBladeCount = std::clamp(
-            ce.ApertureBladeCount,
-            static_cast<int32>(Components::Camera::kApertureBladeCountMin),
-            static_cast<int32>(Components::Camera::kApertureBladeCountMax));
-        s.DofApertureRoundness = std::clamp(ce.ApertureRoundness, 0.0f, 1.0f);
-        s.DofApertureRotation = std::clamp(ce.ApertureRotation, 0.0f, 360.0f);
-        s.DofAnamorphicSqueeze = std::clamp(ce.AnamorphicSqueeze, 1.0f, 4.0f);
-        s.DofDebugMode = ce.FocusDebugMode != 0 ? 1 : 0;
-        s.DofDebugAlpha = std::clamp(ce.FocusDebugAlpha, 0.0f, 1.0f);
-        // Volume exposure modifiers (ExposureAdjustmentEffect) ride the blended settings and
-        // stack on the sensor resolve above: compensation in log space (added to the post-clamp
-        // metering bias in Auto, like the camera's own compensation); the clamps only narrow
-        // the adaptation envelope — a volume can tighten the camera's range, never widen it.
-        if (s.AutoExposureActive)
-        {
-            Rendering::NarrowAutoExposureEnvelope(s.AutoExposureMinEv, s.AutoExposureMaxEv,
-                                                  s.ExposureClampMinEv, s.ExposureClampMaxEv);
-            s.AutoExposureBiasEv += s.ExposureCompensationEv;
-        }
-        else
-        {
-            s.Exposure *= std::exp2(s.ExposureCompensationEv);
-        }
-    };
 
     // Snapshot the effect registrations once per extraction (descriptor storage
     // is process-lifetime stable; ForEach allocates, the volume loop must not).
@@ -1587,7 +1547,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                   PostProcessExtractedVolume ev{};
                   ev.Priority = vol.Priority;
                   ev.BaseWeight = vol.Weight;
-                  ev.LayerMask = vol.PostProcessMask;
+                  ev.VolumeLayers = vol.VolumeLayers;
                   ev.IsGlobal = vol.IsGlobal;
                   ev.Shape = static_cast<int32>(vol.Shape);
                   ev.BlendDistance = vol.BlendDistance;
@@ -1598,8 +1558,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                   // per-view below, or to the world default for camera-less views. Volumes contribute
                   // only grading / tonemap / bloom / fog.
                   ev.Settings.Look           = static_cast<int32>(vol.Look);
-                  ev.Settings.IctcpChromaCompression =
-                      std::clamp(vol.IctcpChromaCompression, 0.0f, 1.0f);
+                  ExtractNightTint(vol, ev.Settings);
                   ev.ValidSpatial = true;
 
                   const float* mtx = xf.matrix;
@@ -1649,7 +1608,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
         // Still stamp the default Auto sensor so camera-less views (the editor Scene View) auto-meter
         // even with zero volumes, matching the resolved-volumes path below.
         PostProcessSettings worldSettings{};
-        applyCameraExposure(worldSettings, ViewRegistry::CameraExposure{});
+        ApplyCameraExposure(worldSettings, ViewRegistry::CameraExposure{});
         rs->SetWorldPostProcessSettings(worldId, worldSettings);
         rs->SetWorldVolumetricFogVolumes(worldId, {});
     }
@@ -1689,15 +1648,15 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
         // the blended world settings so a scene with post-processing auto-meters even though no volume
         // carries exposure. Camera-driven views override this per-view from their own sensor below.
         PostProcessSettings worldSettings = worldStack.Any ? worldStack.Settings : PostProcessSettings{};
-        applyCameraExposure(worldSettings, ViewRegistry::CameraExposure{});
+        ApplyCameraExposure(worldSettings, ViewRegistry::CameraExposure{});
         rs->SetWorldPostProcessSettings(worldId, worldSettings);
         rs->SetWorldVolumetricFogVolumes(worldId, std::move(worldStack.FogVolumes));
     }
 
-    // Per-view filtering: views whose camera registered a PostProcess mask via
+    // Per-view filtering: views whose camera registered volume layers via
     // CameraSystem get a filtered blend that only includes volumes whose
-    // PostProcessMask intersects the camera's mask. Views without a registered
-    // mask (e.g. the editor Scene View, which manages its own override) are
+    // VolumeLayers intersect the camera's. Views without registered
+    // volume layers (e.g. the editor Scene View, which manages its own override) are
     // left untouched and fall back to the world-level settings.
     {
         const auto& views = rs->Views().GetViews();
@@ -1707,10 +1666,10 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                 continue;
             if (view.cameraId == 0)
                 continue;
-            if (!rs->Views().HasCameraPostProcessMask(view.cameraId))
+            if (!rs->Views().HasCameraVolumeLayers(view.cameraId))
                 continue;
 
-            const uint32 cameraMask = rs->Views().GetCameraPostProcessMask(view.cameraId);
+            const RenderLayerMask cameraMask = rs->Views().GetCameraVolumeLayers(view.cameraId);
             const auto* cam = rs->Views().FindCameraData(view.cameraId);
             const bool hasViewCameraPos = (cam != nullptr);
             float viewCameraPos[3] = {0.0f, 0.0f, 0.0f};
@@ -1742,15 +1701,17 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                     perView.ExposureCompensationEv = 0.0f;
                     perView.ExposureClampMinEv = kExposureClampNoOpMinEv;
                     perView.ExposureClampMaxEv = kExposureClampNoOpMaxEv;
+                    perView.ExposureClampMinWeight = 0.0f;
+                    perView.ExposureClampMaxWeight = 0.0f;
                 }
-                applyCameraExposure(perView, *camExp);
+                ApplyCameraExposure(perView, *camExp);
             }
             else if (any)
             {
                 // Masked but camera-less view (e.g. the bookmark preview): the contributing volume
                 // carries only grading, so stamp the world-default Auto sensor instead of leaving the
                 // static Exposure=1.0 default, which would blow the preview out under physical lighting.
-                applyCameraExposure(perView, ViewRegistry::CameraExposure{});
+                ApplyCameraExposure(perView, ViewRegistry::CameraExposure{});
             }
 
             if (any)
@@ -1926,13 +1887,13 @@ RenderExtractionSystem::ComputeViewFingerprints(uint64 worldId) const
             continue;
         fingerprints.All = HashValue(fingerprints.All, view.id);
         fingerprints.All = HashValue(fingerprints.All, view.worldId);
-        fingerprints.All = HashValue(fingerprints.All, view.ActiveRenderLayerMask());
+        fingerprints.All = HashValue(fingerprints.All, view.ActiveRenderLayerMask().Bits);
         ++matchingCount;
         if (view.participation == Rendering::ViewParticipation::OnDemand)
             continue;
         fingerprints.Persistent = HashValue(fingerprints.Persistent, view.id);
         fingerprints.Persistent = HashValue(fingerprints.Persistent, view.worldId);
-        fingerprints.Persistent = HashValue(fingerprints.Persistent, view.ActiveRenderLayerMask());
+        fingerprints.Persistent = HashValue(fingerprints.Persistent, view.ActiveRenderLayerMask().Bits);
         ++persistentCount;
     }
     fingerprints.All = HashValue(fingerprints.All, matchingCount);
@@ -2271,7 +2232,7 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
         BuildGpuInstancePayload(payload, wt->matrix, prevMatrix, hasBounds, boundsCenter,
                                 boundsRadius, mshIdx, matIdx, flags, lodBias,
                                 skinPaletteOffset, runtimeId,
-                                meshGpu->LastSectorX, meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->renderLayerMask);
+                                meshGpu->LastSectorX, meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->RenderLayers);
         const bool prevDiffers = PayloadPrevDiffers(payload);
         // Before UpdateInstance overwrites the mirror `previousInstance` aliases.
         // A refreshed caster counts as changed whatever field moved — a palette
@@ -2697,7 +2658,10 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (view.worldId != 0 && view.worldId != worldId)
                     continue;
                 matchingViews.push_back(&view);
-                if (view.ActiveRenderLayerMask() != 0u)
+                // Every participating view is extracted this frame, one on no layer included: its
+                // image (clear and sky) is current, so its controller presents it instead of the
+                // last one.
+                if (view.Participates())
                     rs->Views().MarkViewExtracted(view.id, sceneFrameIndex);
             }
             rs->Views().MarkWorldExtracted(worldId, sceneFrameIndex);

@@ -95,8 +95,40 @@ links what is found. Uncompressed `.blend` files always parse.
 - The copy constructor and copy assignment are deleted: the stream owns
   `m_buffer`, and upstream's implicit copies would free it twice.
 
-`BlendSmokeParseTests` feeds junk, a truncated zstd blend and a gzip
-legacy blend through the in-memory parse the model loader uses.
+The block and type-table readers also differ, so a truncated `.blend`, or
+one whose type tables are corrupt, is refused instead of read past its
+buffer:
+
+- `fbtChunk::read` refuses a block header the file ends inside, and
+  `fbtFile::parseStreamImpl` refuses a block longer than the rest of the
+  file before it allocates the block's declared length, and a short read
+  after it, freeing the block. Upstream accepted any non-empty read, so a
+  short header left the block's fields uninitialised and a short block
+  handed its unread, uninitialised tail to the readers.
+- `fbtBinTables::read` bounds every read of the SDNA tables by the
+  block's length: each table tag and count, every name and type string
+  (its terminator must lie inside the block), the type lengths and every
+  struct entry. A struct's type, member count, member types and member
+  names must index the tables read before it. A name's array dimensions
+  stop at the end of the name and at `FBT_ARRAY_SLOTS`, are decimal digits,
+  never empty or zero, and multiply to at most 65535 elements (a struct's
+  length is 16 bits). Upstream scanned for `]` and for terminators without
+  a bound and wrote `m_slots` past its end (a heap overflow on a truncated
+  uncompressed file), and a zero dimension divided by zero when a data
+  block was linked.
+
+A file whose type tables are in bounds but whose data blocks or struct
+layout are corrupt can still fail after the tables are read (a block count
+past its length, a block's struct index at the struct count, a struct that
+contains itself): issue #4090.
+
+`BlendSmokeParseTests` feeds junk, a truncated zstd blend, a gzip legacy
+blend, truncations of a minimal blend (raw and inside a valid gzip or zstd
+archive), type tables cut short inside their block, type tables with an
+index or an array dimension out of range, and a block longer than its file
+through the in-memory parse the model loader uses. Run it under the ASan
+preset (`vs2026-x64-local-asan`) as well to see an overread as a failure;
+its parse-time budget is relaxed there.
 
 ## Why vendored, not vcpkg
 

@@ -2,6 +2,7 @@
 
 #include "Platform/WebView.h"
 #include "Platform/Window.h"
+#include "WebViewPageStyle_mac.h"
 
 #define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3.h>
@@ -24,43 +25,6 @@
 @interface WebViewFileDragSource : NSObject <NSDraggingSource>
 @end
 
-// Dark background injected into every loaded page so a light page never flashes white
-// before it paints. Runs at document-start, where document.body and document.head are
-// still null, and again after navigation for pages that rebuild <head> during load.
-//
-// The page scrollbar is deliberately left alone: macOS WebKit draws it as a native
-// scroller, which ignores ::-webkit-scrollbar and scrollbar-color (scrollbar-width is
-// the only property that takes effect), so it cannot be themed to match the editor.
-static NSString* const kPageStyleScript = @""
-    "(function() {"
-    "  var root = document.documentElement;"
-    "  if (root) {"
-    "    root.style.backgroundColor = '#272727';"
-    "  }"
-    "  if (document.body) {"
-    "    document.body.style.backgroundColor = '#272727';"
-    "  }"
-    "  var style = document.getElementById('ge-injected-style');"
-    "  if (style) {"
-    "    if (document.head) {"
-    "      document.head.appendChild(style);"  // move last so it outranks page styles
-    "    }"
-    "    return;"
-    "  }"
-    "  style = document.createElement('style');"
-    "  style.id = 'ge-injected-style';"
-    "  style.textContent = 'html, body { background-color: #272727 !important; }';"
-    "  var attach = function() {"
-    "    if (document.head) {"
-    "      document.head.appendChild(style);"
-    "    }"
-    "  };"
-    "  if (document.head) {"
-    "    attach();"
-    "  } else {"
-    "    document.addEventListener('DOMContentLoaded', attach);"
-    "  }"
-    "})();";
 
 @implementation YouTubeNavigationDelegate
 
@@ -85,7 +49,7 @@ static NSString* const kPageStyleScript = @""
     
     // Inject JavaScript to ensure dark background persists and check for YouTube errors
     // Re-assert after navigation: some pages replace <head> during load.
-    NSString* script = [kPageStyleScript stringByAppendingString:@""
+    NSString* script = [GameEngine::Platform::Detail::kPageStyleScript stringByAppendingString:@""
         "(function() {"
         "  var iframes = document.querySelectorAll('iframe');"
         "  for (var i = 0; i < iframes.length; i++) {"
@@ -156,6 +120,9 @@ public:
 
         // Create WKWebView with configuration for YouTube embeds
         WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
+        // Keep the previous page visible until the next document is complete;
+        // painting a partial document can expose empty content and changing scrollbars.
+        config.suppressesIncrementalRendering = YES;
         config.allowsAirPlayForMediaPlayback = YES;
         config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
         
@@ -187,7 +154,7 @@ public:
         WKUserContentController* userContentController = [[WKUserContentController alloc] init];
         
         // Inject referrer policy and dark background script at document start
-        NSString* injectScript = [kPageStyleScript stringByAppendingString:@""
+        NSString* injectScript = [GameEngine::Platform::Detail::kPageStyleScript stringByAppendingString:@""
             "(function() {"
             "  if (document.querySelector('meta[name=\"referrer\"]') !== null) {"
             "    return;"

@@ -1,11 +1,11 @@
 ---
 title: Humanoid retargeting
-description: Playing a clip authored on one humanoid skeleton on another, with the assets that describe a retarget, import, auto-bootstrap, the component, what runs each frame and what is authored but not evaluated.
+description: Playing a clip authored on one humanoid skeleton on another, with the assets that describe a retarget, import, auto-bootstrap, the component, what runs each frame, and what is authored but not evaluated.
 sidebar:
   order: 1
 ---
 
-Humanoid retargeting plays an animation clip authored on one humanoid skeleton (the **source rig**) on another (the **target rig**), even when the two differ in bone names (`mixamorig:LeftArm` vs `Bip001 L Shoulder`), hierarchy, proportions or bind pose (T-pose vs A-pose). Start with the [quickstart](humanoid-retargeting-quickstart.mdx); the [architecture](humanoid-retargeting-architecture.mdx) page covers how it runs. An example scene, `CrossRigWalk`, plays a clip authored for one humanoid skeleton on a model with another: `Apps/Editor/Assets/Examples/Animation/Retargeting/`.
+Humanoid retargeting plays an animation clip authored on one humanoid skeleton (the **source rig**) on another (the **target rig**), even when the two differ in bone names (`mixamorig:LeftArm` vs `Bip001 L Shoulder`), hierarchy, proportions, or bind pose (T-pose vs A-pose). Start with the [quickstart](humanoid-retargeting-quickstart.mdx). The [architecture](humanoid-retargeting-architecture.mdx) page covers how it runs. An example scene, `CrossRigWalk`, plays a clip authored for one humanoid skeleton on a model with another: `Apps/Editor/Assets/Examples/Animation/Retargeting/`.
 
 ## Assets
 
@@ -14,12 +14,12 @@ Three JSON asset types describe a retarget. All are GUID-keyed and hot-reload-wa
 | Type | Filename pattern | Where it lives | Purpose |
 |---|---|---|---|
 | `SkeletonProfile` | `*.profile.json` | Default: `Engine/Assets/SkeletonProfiles/HumanoidStandard.profile.json`, staged beside Editor/Player, or included in a packaged project manifest with its original GUID | The canonical humanoid bone set and reference T-pose that rigs map onto |
-| `HumanoidRig` | `*.humanoidrig.json` | Next to the model, named after it: `<model>.humanoidrig.json` | Per-model bone map, retarget pose, chains, attachments and translation bones |
-| `RetargetMap` | `*.retargetmap.json` | Next to the target model: `<source>_to_<target>.retargetmap.json` | Source-to-target pairing: the two rigs, per-chain settings and an op stack |
+| `HumanoidRig` | `*.humanoidrig.json` | Next to the model, named after it: `<model>.humanoidrig.json` | Per-model bone map, retarget pose, chains, attachments, and translation bones |
+| `RetargetMap` | `*.retargetmap.json` | Next to the target model: `<source>_to_<target>.retargetmap.json` | Source-to-target pairing: the two rigs, per-chain settings, and an op stack |
 
 ## Import
 
-Importing a skinned model writes its `HumanoidRig` sidecar beside it. Bones are mapped to the profile by name, and the importer bakes a retarget pose: for each mapped bone whose bind rotation differs from the profile's T-pose, the rotation that takes the bind pose to the T-pose. A T-pose bind gets identity rotations; an A-pose bind gets the shoulder and arm corrections that let it drive a T-pose target.
+Importing a skinned model writes its `HumanoidRig` sidecar beside it. Bones are mapped to the profile by name, and the importer bakes a retarget pose: for each mapped bone whose bind rotation differs from the profile's T-pose, the rotation that takes the bind pose to the T-pose. A T-pose bind gets identity rotations. An A-pose bind gets the shoulder and arm corrections that let it drive a T-pose target.
 
 A sidecar the user has edited (`auto: false`) is never overwritten. A model whose `rigKind` import setting is `none` gets no sidecar, and a generated one is removed.
 
@@ -45,7 +45,7 @@ Each skeleton-and-clip pair is tried once until its assets or the world change. 
 | `IKEnabled`, `IKBlendAlpha` | Stored; retargeting runs no IK (see [Authored but not evaluated](#authored-but-not-evaluated)). |
 | `LODOverride`, `LODOverrideEnabled` | Force a level (`Full`, `NoOps`, `FKOnly`, `PoseHold`). `PoseHold` skips retargeting for the character. |
 
-An entity with this component is animated by `HumanoidRetargetSystem` instead of the normal animation system.
+`HumanoidRetargetSystem` animates an entity with this component instead of the normal animation system.
 
 ## What runs each frame
 
@@ -58,7 +58,7 @@ For each retargeted character:
 
 By default this runs on the GPU: one compute kernel, `retarget_full.comp`, processes every character in a single dispatch and writes the palettes into the atlas directly. A character whose rig pair or clip cannot be uploaded, or which gets no atlas slot, is evaluated on the CPU by `RetargetNode` with the same rotation and hip-translation math. Setting the environment variable `GE_RETARGET_CPU=1` before the process starts turns the GPU dispatch off.
 
-`RetargetNode` runs only inside `HumanoidRetargetSystem`; animation graph assets cannot contain it.
+`RetargetNode` runs only inside `HumanoidRetargetSystem`. Animation graph assets cannot contain it.
 
 ## Authored but not evaluated
 
@@ -66,28 +66,22 @@ By default this runs on the GPU: one compute kernel, `retarget_full.comp`, proce
 
 A `RetargetMap` stores more than the runtime reads today:
 
-- **Per-chain FK modes** (`OneToOne`, `Transport`, `SlerpAlongArc`), rotation alpha and translation modes are saved and edited, but every mapped bone is retargeted as described above.
-- **Per-chain IK settings** are saved and edited; no IK runs.
-- **The op stack** accepts the three registered ops, `FootLockOp`, `AttachmentPassthroughOp` and `LookAtOp`, but neither the GPU kernel nor `RetargetNode` evaluates it.
+- **Per-chain FK modes** (`OneToOne`, `Transport`, `SlerpAlongArc`), rotation alpha, and translation modes are saved and edited, but every mapped bone is retargeted as described above.
+- **Per-chain IK settings** are saved and edited. No IK runs.
+- **The op stack** accepts the three registered ops, `FootLockOp`, `AttachmentPassthroughOp`, and `LookAtOp`, but neither the GPU kernel nor `RetargetNode` evaluates it.
 
 :::
 
 ## Editor inspectors
 
-- **`SkeletonProfileInspector`** — read-only view of a profile.
-- **`HumanoidRigInspector`** — edits a rig and saves on each change: one row per profile bone with a status pill, the mapped source bone as text and a clear button; retarget-pose buttons ("Force bind = retarget pose" resets every retarget-pose rotation to identity, so the bind pose is the anchor); an attachments list.
-- **`RetargetMapInspector`** — edits a map: per-chain FK and IK settings and the op stack (reorder, remove, add, parameters as JSON).
+- **`SkeletonProfileInspector`**: read-only view of a profile.
+- **`HumanoidRigInspector`**: edits a rig and saves on each change: one row per profile bone with a status pill, the mapped source bone as text, and a clear button; retarget-pose buttons ("Force bind = retarget pose" resets every retarget-pose rotation to identity, so the bind pose is the anchor); an attachments list.
+- **`RetargetMapInspector`**: edits a map: per-chain FK and IK settings and the op stack (reorder, remove, add, parameters as JSON).
 
-Hand-editing the JSON works as well; hot reload picks up the change.
+Hand-editing the JSON works as well. Hot reload picks up the change.
 
 ## What this does not do
 
 - Non-humanoid rigs (quadrupeds, tentacles, vehicles).
 - Cloth simulation.
 - Facial blendshape retargeting.
-
-## Changelog
-
-- 2026-10-13: The reading order and the example scene pointer move here from the deleted `docs/animation/README.md`.
-- 2026-10-13: Converted from `docs/Animation/HumanoidRetargeting.html`.
-- 2026-10-01: Converted from `HumanoidRetargeting.md`, which this page replaces; adds that an `AnimatorRef` crossfade samples and blends both clips.

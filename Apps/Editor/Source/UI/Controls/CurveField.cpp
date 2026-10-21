@@ -958,7 +958,19 @@ void CurveField::DrawValueAxisMarks(UI::PrimitiveEmitContext& ctx, const Resolve
     }
 }
 
-// Hour labels follow the vertical grid, omitting alternate labels when space is tight.
+// A time as the axis writes it: hours of the day, or the host's format.
+std::string CurveField::TimeLabelText(float time) const
+{
+    if (m_Config.TimeAxisLabels == TimeLabels::HoursOfDay)
+        return HoursOfDayLabel(time);
+    if (m_Config.TimeLabel)
+        return m_Config.TimeLabel(time);
+    char text[16];
+    std::snprintf(text, sizeof(text), "%g", time);
+    return text;
+}
+
+// Time labels follow the vertical grid, omitting alternate labels when space is tight.
 // The playback time appears in a pill
 // where the playback line meets them; an hour label the pill would cover is left out.
 void CurveField::DrawTimeLabels(UI::PrimitiveEmitContext& ctx, const ResolvedStyle& style, const GraphRect& r,
@@ -981,7 +993,7 @@ void CurveField::DrawTimeLabels(UI::PrimitiveEmitContext& ctx, const ResolvedSty
     const bool showPlayback = m_Config.ShowPlaybackIndicator && m_PlaybackIndicatorVisible;
     if (showPlayback)
     {
-        playbackText = HoursOfDayLabel(m_PlaybackTime);
+        playbackText = TimeLabelText(m_PlaybackTime);
         const float padding = kPlaybackLabelPaddingPx * cs;
         const float textW = ctx.FontAtlas->MeasureUtf8(playbackText, pixelSize).width;
         const float pillW = textW + 2.0f * padding;
@@ -989,14 +1001,15 @@ void CurveField::DrawTimeLabels(UI::PrimitiveEmitContext& ctx, const ResolvedSty
         pillRight = pillLeft + pillW;
     }
 
-    const float labelWidth = ctx.FontAtlas->MeasureUtf8("00:00", pixelSize).width;
+    const float labelWidth = std::max(ctx.FontAtlas->MeasureUtf8(TimeLabelText(m_Config.TimeMin), pixelSize).width,
+                                      ctx.FontAtlas->MeasureUtf8(TimeLabelText(m_Config.TimeMax), pixelSize).width);
     const float minimumGap = ctx.FontAtlas->MeasureUtf8("000", pixelSize).width;
     const int labelStep = r.W / static_cast<float>(kGridSpans) < labelWidth + minimumGap ? 2 : 1;
     for (int i = 0; i <= kGridSpans; i += labelStep)
     {
         const float time = m_Config.TimeMin + (m_Config.TimeMax - m_Config.TimeMin) * static_cast<float>(i) /
                                                   static_cast<float>(kGridSpans);
-        const std::string text = HoursOfDayLabel(time);
+        const std::string text = TimeLabelText(time);
         const float textW = ctx.FontAtlas->MeasureUtf8(text, pixelSize).width;
         const float textX = std::clamp(ToScreenX(r, time) - 0.5f * textW, left, std::max(left, right - textW));
         if (showPlayback && textX < pillRight && textX + textW > pillLeft)

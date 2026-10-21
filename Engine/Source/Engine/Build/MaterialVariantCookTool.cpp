@@ -1,6 +1,7 @@
 #include "Engine/Build/MaterialVariantCookTool.h"
 
 #include "Core/Application.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 
 #include <algorithm>
 #include <system_error>
@@ -136,6 +137,21 @@ bool StageCookedShaderPackages(const std::vector<std::filesystem::path>& package
                     destination.string() + "': " + ec.message();
             return false;
         }
+    }
+    // The program index names the packages of the variants this cook reported, so it ships with them.
+    const std::filesystem::path index = cookCache / Rendering::kShaderProgramIndexFileName;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(index, ec))
+        return true;
+    std::filesystem::create_directories(bundleCache, ec);
+    if (!ec)
+        std::filesystem::copy_file(index, bundleCache / Rendering::kShaderProgramIndexFileName,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec)
+    {
+        error = "Could not copy the material cook's program index '" + index.string() + "' to '" +
+                bundleCache.string() + "': " + ec.message();
+        return false;
     }
     return true;
 }

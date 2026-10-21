@@ -29,6 +29,9 @@ endif()
 #   Engine/Tests/Fixtures/             authored-LOD glTF/FBX fixtures
 #   Engine/Modules/Rendering/Shaders/  real-GLSL material compile tests
 #   Tests/Projects/Biggles/Assets/Scenes/  SceneIO real-scene fixture
+#   Tests/Projects/WASDDemo/Assets/, Tests/Projects/Biggles/Assets/Scripts/,
+#   Tests/EditorHarness/game-ui-hud-csharp/Assets/Scripts/
+#                                      committed C# the script-project gate compiles
 #   Tools/Web/smoke-project/Assets/Scenes/ web seed-project scenes
 #   Tools/Web/smoke-project/Assets/Particles/ the particle stack they reference
 #   Tests/Assets/TestData/BigglesCaseShadow.assetdb  frozen pre-migration journal
@@ -82,6 +85,29 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/Engine/Assets)
     COMMAND ${CMAKE_COMMAND}
             -DSRC=${CMAKE_SOURCE_DIR}/Tests/Projects/Biggles/Assets/Scenes
             -DDST=${CMAKE_BINARY_DIR}/Tests/Projects/Biggles/Assets/Scenes
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    # The committed script projects' C# sources: ProjectScriptsOnOpenTests
+    # compiles each one, so a sample that stops compiling fails a suite.
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Tests/Projects/WASDDemo/Assets
+            ${CMAKE_BINARY_DIR}/Tests/Projects/WASDDemo/Assets
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Tests/Projects/WASDDemo/Assets
+            -DDST=${CMAKE_BINARY_DIR}/Tests/Projects/WASDDemo/Assets
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Tests/Projects/Biggles/Assets/Scripts
+            ${CMAKE_BINARY_DIR}/Tests/Projects/Biggles/Assets/Scripts
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Tests/Projects/Biggles/Assets/Scripts
+            -DDST=${CMAKE_BINARY_DIR}/Tests/Projects/Biggles/Assets/Scripts
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Tests/EditorHarness/game-ui-hud-csharp/Assets/Scripts
+            ${CMAKE_BINARY_DIR}/Tests/EditorHarness/game-ui-hud-csharp/Assets/Scripts
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Tests/EditorHarness/game-ui-hud-csharp/Assets/Scripts
+            -DDST=${CMAKE_BINARY_DIR}/Tests/EditorHarness/game-ui-hud-csharp/Assets/Scripts
             -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
     # The web seed project's scenes: ShippedSceneExposureTests reads the
     # shipped bytes, and only the scenes — the rest of the seed project is
@@ -317,6 +343,8 @@ add_test(NAME VcpkgMakeOptions.KeepsDefaultInstallPaths
           -DVCPKG_DIR=${VCPKG_DIR}
           -P ${CMAKE_SOURCE_DIR}/cmake/Tests/VcpkgMakeOptionsTest.cmake)
 
+# The nethost discovery helpers run only in a scripting build, so their script tests do too.
+if(ENABLE_SCRIPTING)
 # The nethost and hostfxr the build stages come from the newest installed .NET;
 # this exercises the version ordering against scratch pack paths, without a build.
 add_test(NAME DotnetHostVersions.NewestVersionFirst
@@ -332,6 +360,7 @@ add_test(NAME DotnetLinuxHostRids.PortableThenDistroPacks
           -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/DotnetLinuxHostRids.cmake
           -DWORK=${CMAKE_BINARY_DIR}/Tests/DotnetLinuxHostRidsScratch
           -P ${CMAKE_SOURCE_DIR}/cmake/Tests/DotnetLinuxHostRidsTest.cmake)
+endif()
 
 # The compiler vcpkg resolves is part of every package's ABI, and a configure
 # the build system re-runs inherits the build system's PATH; this re-configures
@@ -502,6 +531,21 @@ if(ENABLE_SCRIPTING)
 # name the configuration that actually produced the file.
 set(GE_MANAGED_FIXTURE_CONFIG Debug)
 
+# Stages the EntitySystemGenerator beside a test executable. CompileServerHost probes
+# <EngineBinDir>/SourceGenerators for source generators, and a test that points EngineBinDir at its
+# own directory compiles without the generator otherwise: components never register and generator
+# diagnostics never fire. The generator is built in the native configuration ($<CONFIG>).
+function(ge_stage_entity_system_generator target_name)
+  add_dependencies(${target_name} EntitySystemGeneratorAssembly)
+  add_custom_command(TARGET ${target_name} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      $<TARGET_FILE_DIR:${target_name}>/SourceGenerators
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${CMAKE_SOURCE_DIR}/Managed/SourceGenerators/EntitySystemGenerator/bin/$<CONFIG>/netstandard2.0/EntitySystemGenerator.dll
+      $<TARGET_FILE_DIR:${target_name}>/SourceGenerators/EntitySystemGenerator.dll
+    COMMENT "Staging EntitySystemGenerator to ${target_name} output")
+endfunction()
+
 # Hand a suite the two configuration names, plus the header that turns them into
 # fixture paths (Tests/ManagedFixturePaths.h). Every scripting-ABI suite resolves
 # its managed fixtures through this and never spells a configuration itself.
@@ -542,6 +586,46 @@ if(TARGET StageTestAssets)
   add_dependencies(AbiNativeSmokeTest StageTestAssets)
 endif()
 
+# The generated native binding of the binding generators' fixture script API
+# (Tools/ComponentScanner/Tests/Fixtures/Bindings), generated by this build's scanner and called
+# through its table: the argument checks, the thread rules, the hash refusal, the last error.
+if(TARGET EngineScriptBindings)
+  set(_ge_probe_binding_dir "${CMAKE_CURRENT_BINARY_DIR}/ScriptBindings/generated")
+  set(_ge_probe_fixture "${CMAKE_SOURCE_DIR}/Tools/ComponentScanner/Tests/Fixtures/Bindings/Good")
+  add_custom_command(
+    OUTPUT "${_ge_probe_binding_dir}/Probe.script.gen.cpp" "${_ge_probe_binding_dir}/Probe.script.gen.h"
+    COMMAND ComponentScanner --api-modules "${_ge_probe_fixture}" --emit-api "${_ge_probe_binding_dir}/api"
+            --emit-native "${_ge_probe_binding_dir}"
+    DEPENDS "${_ge_probe_fixture}/Probe/Include/Probe/ProbeScriptApi.h" ComponentScanner
+    COMMENT "Generating the native binding of the binding fixture"
+    VERBATIM)
+  add_executable(ScriptBindingTests
+    ScriptBindings/ScriptBindingTests.cpp
+    ScriptBindings/ProbeScriptApi.cpp
+    ScriptBindings/ProbeBinding.cpp
+    "${_ge_probe_binding_dir}/Probe.script.gen.h"
+    ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
+  set_source_files_properties("${_ge_probe_binding_dir}/Probe.script.gen.h" PROPERTIES GENERATED TRUE)
+  # ProbeBinding.cpp includes the generated unit, which is compiled there and nowhere else.
+  set_source_files_properties(ScriptBindings/ProbeBinding.cpp PROPERTIES
+    OBJECT_DEPENDS "${_ge_probe_binding_dir}/Probe.script.gen.cpp")
+  target_include_directories(ScriptBindingTests PRIVATE
+    "${_ge_probe_fixture}/Probe/Include"
+    "${_ge_probe_binding_dir}"
+    "${CMAKE_SOURCE_DIR}/Engine/Source")
+  # The probe's GE_Probe_GetInterface is defined here, as the generated units of the engine are in
+  # GameEngine.Native.
+  target_compile_definitions(ScriptBindingTests PRIVATE GE_SCRIPTING_BUILD)
+  target_link_libraries(ScriptBindingTests PRIVATE Engine EngineScriptBindings GTest::gtest GTest::gtest_main)
+  ge_set_output_tests(ScriptBindingTests)
+  ge_stage_runtime_dependencies(ScriptBindingTests)
+  add_test(NAME ScriptBindingTests COMMAND $<TARGET_FILE:ScriptBindingTests>)
+  set_tests_properties(ScriptBindingTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  if(TARGET StageTestAssets)
+    add_dependencies(ScriptBindingTests StageTestAssets)
+  endif()
+endif()
+
 # Scripting ABI Integration Tests (GTest)
 add_executable(ScriptingAbiIntegrationTests
     Integration/ScriptingAbiPackageTest.cpp
@@ -569,6 +653,8 @@ add_executable(ScriptingAbiIntegrationTests
     Integration/ScriptingAbiUiTypeOwnerTests.cpp
     Integration/ScriptingAbiInputActionTests.cpp
     Integration/ScriptingAbiPathMaskTests.cpp
+    # Opening a project loads its C# scripts and applies the kept components (#4050).
+    Integration/ProjectScriptsOnOpenTests.cpp
     # The unity-import package's converter assembly on the engine's CoreCLR,
     # through the hosting seam the import modal calls (an EditorSDK TU, which
     # needs only Engine).
@@ -596,8 +682,14 @@ add_custom_command(TARGET ScriptingAbiIntegrationTests POST_BUILD
     ${CMAKE_SOURCE_DIR}/Packages/unity-import/Tools/UnityConverter.dll
     $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>/TestData/Packages/unity-import/Tools/UnityConverter.dll
   COMMENT "Staging the unity-import converter assembly for ScriptingAbiIntegrationTests")
+# ProjectScriptsOnOpenTests compile C# components through the compile server.
+ge_stage_entity_system_generator(ScriptingAbiIntegrationTests)
 ge_managed_fixture_paths(ScriptingAbiIntegrationTests)
 ge_set_output_tests(ScriptingAbiIntegrationTests)
+# ProjectScriptsOnOpenTests compile through the compile server staged beside this suite.
+if(TARGET StageTestCompileServerHost)
+  add_dependencies(ScriptingAbiIntegrationTests StageTestCompileServerHost)
+endif()
 ge_stage_runtime_dependencies(ScriptingAbiIntegrationTests)
 if(TARGET StageTestAssets)
   add_dependencies(ScriptingAbiIntegrationTests StageTestAssets)
@@ -719,6 +811,15 @@ add_custom_target(BuildScriptsAssembly ALL
   COMMENT "Building + staging GameEngine.Scripts (skips when the emitted project is absent)")
 add_dependencies(ScriptingAbiIntegrationTests BuildScriptsAssembly)
 
+include(${CMAKE_SOURCE_DIR}/cmake/ScriptSurfaceAssemblies.cmake)
+set(_ge_script_surface_copies)
+foreach(_ge_surface_dir IN LISTS GE_SCRIPT_SURFACE_MANAGED_DIRS)
+  list(APPEND _ge_script_surface_copies
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+      ${CMAKE_SOURCE_DIR}/Managed/${_ge_surface_dir}/bin/$<CONFIG>
+      $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>)
+endforeach()
+
 # Stage CoreBridge and HotReload near the test exe and ScriptAssemblies for robust resolution
 add_custom_target(StageCoreBridgeAndHotReload ALL
   # Next to test exe (Editor/CoreBridge resolution)
@@ -753,20 +854,15 @@ add_custom_target(StageCoreBridgeAndHotReload ALL
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_SOURCE_DIR}/Managed/HotReload/bin/$<CONFIG>/net10.0/GameEngine.HotReload.deps.json
     $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>/GameEngine.HotReload.deps.json
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>/GameEngine.Scripting.Runtime.dll
-    $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>/GameEngine.Scripting.Runtime.dll
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>/GameEngine.Scripting.ABI.dll
-    $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>/GameEngine.Scripting.ABI.dll
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>/GameEngine.ECS.ABI.dll
-    $<TARGET_FILE_DIR:ScriptingAbiIntegrationTests>/GameEngine.ECS.ABI.dll
+  # The assemblies a game's scripts compile against, the editor's set
+  # (cmake/ScriptSurfaceAssemblies.cmake): ProjectScriptsOnOpenTests compiles
+  # committed samples here.
+  ${_ge_script_surface_copies}
   COMMENT "Staging CoreBridge and HotReload near test exe, test exe dir, and under ScriptAssemblies")
 # This target only copies; the assemblies it copies are produced by the managed
 # targets below. Without these edges a fresh worktree fails the copy outright
 # (MSB8066) because nothing has run `dotnet build` yet.
-foreach(_ge_staged_assembly CoreBridgeAssembly HotReloadAssembly ScriptingRuntimeAssembly)
+foreach(_ge_staged_assembly CoreBridgeAssembly HotReloadAssembly ${GE_SCRIPT_SURFACE_ASSEMBLY_TARGETS})
   if(TARGET ${_ge_staged_assembly})
     add_dependencies(StageCoreBridgeAndHotReload ${_ge_staged_assembly})
   endif()
@@ -947,6 +1043,13 @@ if(GE_PHYSICS_BACKEND_JOLT)
   ge_stage_runtime_dependencies(PhysicsBoxOverlapTests)
   add_test(NAME PhysicsBoxOverlapTests COMMAND $<TARGET_FILE:PhysicsBoxOverlapTests>)
   set_tests_properties(PhysicsBoxOverlapTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+  add_executable(PhysicsRayCastTests PhysicsRayCastTests.cpp)
+  target_link_libraries(PhysicsRayCastTests PRIVATE Engine GTest::gtest)
+  ge_set_output_tests(PhysicsRayCastTests)
+  ge_stage_runtime_dependencies(PhysicsRayCastTests)
+  add_test(NAME PhysicsRayCastTests COMMAND $<TARGET_FILE:PhysicsRayCastTests>)
+  set_tests_properties(PhysicsRayCastTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 
 add_executable(CharacterControllerTests
@@ -1422,3 +1525,7 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/Tools/Benchmarks/ECS
 # Particle runtime timing tool, built only on request (--target ParticleRuntimeBenchmark).
 add_subdirectory(${CMAKE_SOURCE_DIR}/Tools/Benchmarks/Particles
                  ${CMAKE_BINARY_DIR}/Tools/Benchmarks/Particles)
+
+# Texture cook encode timing tool, built only on request (--target TextureCookBenchmark).
+add_subdirectory(${CMAKE_SOURCE_DIR}/Tools/Benchmarks/TextureCook
+                 ${CMAKE_BINARY_DIR}/Tools/Benchmarks/TextureCook)

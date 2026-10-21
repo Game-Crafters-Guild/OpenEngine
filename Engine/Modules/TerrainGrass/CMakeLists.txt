@@ -3,10 +3,13 @@ cmake_minimum_required(VERSION 3.20)
 project(TerrainGrass LANGUAGES CXX)
 
 add_library(TerrainGrass OBJECT
+    Include/TerrainGrass/GrassBladeRows.h
     Include/TerrainGrass/GrassComputePrograms.h
+    Include/TerrainGrass/GrassMaterialKeywords.h
     Include/TerrainGrass/GrassPlacementElisionInputs.h
     Include/TerrainGrass/GrassPlacementModel.h
     Include/TerrainGrass/TerrainGrassClamps.h
+    Include/TerrainGrass/TerrainGrassPresets.h
     Include/TerrainGrass/TerrainGrassPlacementStats.h
     Include/TerrainGrass/TerrainGrassRenderFeature.h
     Include/TerrainGrass/TerrainGrassRenderNode.h
@@ -106,29 +109,133 @@ if(BUILD_TESTING)
             COMMENT "Extracting the wind seed offset from terrain_grass_vertex_modifier.glsl"
             VERBATIM)
 
-        # Same seam again for the scatter-gain deficit, so the BOUND that keeps that term from
-        # handing back more brightness than the settle cost is pinned by the shipped expression.
-        # GrassScatterBoundTests executes this; deleting the min() cap in the shader reds it.
+        # And for one blade vertex's shape and ground-colour sample point, so GrassBladeVertexTests
+        # executes the shipped geometry: a sample point that followed the vertex up the blade drew
+        # the ground's pattern up it (#4206).
+        set(GRASS_BLADE_VERTEX_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassBladeVertexExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_BLADE_VERTEX_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_VERTEX_MODIFIER_GLSL}
+                                     -DOUT=${GRASS_BLADE_VERTEX_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_BLADE_VERTEX_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_BLADE_VERTEX_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_VERTEX_MODIFIER_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the blade vertex from terrain_grass_vertex_modifier.glsl"
+            VERBATIM)
+
+        # And for the grass canopy's coverage and occlusion, which the ground and the blade root
+        # share, so the contact's occlusion parity is pinned by the shipped expressions.
+        set(GRASS_CANOPY_GLSL
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes/terrain_grass_canopy.glsl)
+        set(GRASS_CANOPY_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassCanopyExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_CANOPY_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_CANOPY_GLSL}
+                                     -DOUT=${GRASS_CANOPY_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_CANOPY_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_CANOPY_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_CANOPY_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the grass canopy from terrain_grass_canopy.glsl"
+            VERBATIM)
+
+        # And for the instance's packed blade shape and per-blade random, so the round trip runs on
+        # the shipped GLSL pack and unpack.
+        set(GRASS_CLUMP_GLSL ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass/grass_clump.glsl)
+        set(GRASS_BLADE_SHAPE_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassBladeShapeExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_BLADE_SHAPE_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_CLUMP_GLSL}
+                                     -DOUT=${GRASS_BLADE_SHAPE_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_BLADE_SHAPE_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_BLADE_SHAPE_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_CLUMP_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the blade shape pack from grass_clump.glsl"
+            VERBATIM)
+
+        # And for the authored colour decode: the shared sRGB curve and the surface's read of the three
+        # packed colours, so the decode is checked on the expressions that render.
+        set(GRASS_SRGB_TRANSFER_GLSL
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes/srgb_transfer.glsl)
+        set(GRASS_SRGB_TRANSFER_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassSrgbTransferExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_SRGB_TRANSFER_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_SRGB_TRANSFER_GLSL}
+                                     -DOUT=${GRASS_SRGB_TRANSFER_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_SRGB_TRANSFER_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_SRGB_TRANSFER_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_SRGB_TRANSFER_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the sRGB transfer curve from srgb_transfer.glsl"
+            VERBATIM)
         set(GRASS_SURFACE_GLSL
             ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass/terrain_grass_surface.glsl)
-        set(GRASS_SCATTER_DEFICIT_HEADER
-            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassScatterDeficitExtracted.h)
+        set(GRASS_COLOR_DECODE_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassColorDecodeExtracted.h)
         add_custom_command(
-            OUTPUT ${GRASS_SCATTER_DEFICIT_HEADER}
+            OUTPUT ${GRASS_COLOR_DECODE_HEADER}
             COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_SURFACE_GLSL}
-                                     -DOUT=${GRASS_SCATTER_DEFICIT_HEADER}
-                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_SCATTER_DEFICIT_BEGIN"
-                                     "-DEND_MARKER=// GE_SHARED_GRASS_SCATTER_DEFICIT_END"
+                                     -DOUT=${GRASS_COLOR_DECODE_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_COLOR_DECODE_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_COLOR_DECODE_END"
                                      -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
             DEPENDS ${GRASS_SURFACE_GLSL}
                     ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
-            COMMENT "Extracting the scatter-gain deficit from terrain_grass_surface.glsl"
+            COMMENT "Extracting the grass colour decode from terrain_grass_surface.glsl"
+            VERBATIM)
+
+        # And for the light through a blade: the lighting model's far-face lobe and the surface's
+        # translucency profile and transmitted albedo, so the energy rule is checked on the
+        # expressions that render.
+        set(GRASS_STANDARD_PBR_GLSL
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes/standard_pbr.glsl)
+        set(GRASS_DIFFUSE_TRANSMISSION_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassDiffuseTransmissionExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_DIFFUSE_TRANSMISSION_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_STANDARD_PBR_GLSL}
+                                     -DOUT=${GRASS_DIFFUSE_TRANSMISSION_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_DIFFUSE_TRANSMISSION_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_DIFFUSE_TRANSMISSION_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_STANDARD_PBR_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the diffuse transmission lobe from standard_pbr.glsl"
+            VERBATIM)
+        set(GRASS_TRANSLUCENCY_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassTranslucencyExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_TRANSLUCENCY_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_SURFACE_GLSL}
+                                     -DOUT=${GRASS_TRANSLUCENCY_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_TRANSLUCENCY_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_TRANSLUCENCY_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_SURFACE_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the grass translucency from terrain_grass_surface.glsl"
             VERBATIM)
 
         add_executable(TerrainGrassStatsTests
+            ${GRASS_DIFFUSE_TRANSMISSION_HEADER}
+            ${GRASS_TRANSLUCENCY_HEADER}
+            ${GRASS_SRGB_TRANSFER_HEADER}
+            ${GRASS_COLOR_DECODE_HEADER}
+            ${GRASS_BLADE_SHAPE_HEADER}
             ${GRASS_SPLAT_SOURCE_HEADER}
+            ${GRASS_CANOPY_HEADER}
+            ${GRASS_BLADE_VERTEX_HEADER}
             ${GRASS_WIND_SEED_HEADER}
-            ${GRASS_SCATTER_DEFICIT_HEADER}
             Tests/TerrainGrassPlacementStatsTests.cpp
             Tests/GrassPlacementModelTests.cpp
             Tests/GrassPlacementElisionTests.cpp
@@ -136,7 +243,9 @@ if(BUILD_TESTING)
             Tests/GrassAtlasSplatResolveTests.cpp
             Tests/GrassDrawModeTests.cpp
             Tests/GrassWindSeedTests.cpp
-            Tests/GrassScatterBoundTests.cpp
+            Tests/GrassBladeVertexTests.cpp
+            Tests/GrassColorDecodeTests.cpp
+            Tests/GrassBladeLightTests.cpp
             Source/TerrainGrassPlacementStats.cpp
         )
         set_target_properties(TerrainGrassStatsTests PROPERTIES FOLDER "TerrainGrass/Tests")
@@ -147,20 +256,15 @@ if(BUILD_TESTING)
             GTest::gtest_main
         )
         # OBJECT->OBJECT object files are not spliced transitively on the VS
-        # generator: splice Logger and Memory in directly (the CBT and Rendering
-        # suites do the same) and provide the stb_image impl GameEngineRendering
-        # pulls in but does not export.
-        target_sources(TerrainGrassStatsTests PRIVATE $<TARGET_OBJECTS:Logger> $<TARGET_OBJECTS:Memory>)
-        target_sources(TerrainGrassStatsTests PRIVATE
-            ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/stb_image_impl.cpp)
-        target_compile_definitions(TerrainGrassStatsTests PRIVATE GE_HAVE_STB)
+        # generator: splice Logger, Memory and Image (whose decode SkyRenderer calls)
+        # in directly, as the CBT and Rendering suites do.
+        target_sources(TerrainGrassStatsTests PRIVATE $<TARGET_OBJECTS:Logger> $<TARGET_OBJECTS:Memory>
+            $<TARGET_OBJECTS:Image>)
         # GrassShaderSitePurity reads the shipped grass GLSL and fails on any seed path
         # that draws from the per-frame instance slot instead of the blade's site.
         target_compile_definitions(TerrainGrassStatsTests PRIVATE
-            TERRAIN_GRASS_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass")
-        if(TARGET stb::stb)
-            target_link_libraries(TerrainGrassStatsTests PRIVATE stb::stb)
-        endif()
+            TERRAIN_GRASS_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass"
+            CBT_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT")
         target_include_directories(TerrainGrassStatsTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/Include
             # GlslShim.h, the extracted-block header, and Terrain/TerrainTypes.h — the last so the

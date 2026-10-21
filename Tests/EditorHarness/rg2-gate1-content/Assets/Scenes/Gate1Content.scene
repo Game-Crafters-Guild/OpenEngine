@@ -42,7 +42,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_3010"]
 MeshRenderer.meshPrimitive = Plane
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
@@ -55,7 +55,7 @@ Transform.scale = (60, 1, 60)
 
 [entity id="e_3100"]
 MeshRenderer.meshAsset = [path="Models/Fox/Fox.glb"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Animator.active = true
@@ -71,7 +71,7 @@ Transform.scale = (0.025, 0.025, 0.025)
 
 [entity id="e_3101"]
 MeshRenderer.meshAsset = [path="Models/Fox/Fox.glb"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Animator.active = true
@@ -89,7 +89,7 @@ Transform.scale = (0.025, 0.025, 0.025)
 
 [entity id="e_3110"]
 MeshRenderer.meshAsset = [path="Models/Duck/Duck.glb"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Duck"
@@ -100,7 +100,7 @@ Transform.scale = (0.01, 0.01, 0.01)
 
 [entity id="e_3111"]
 MeshRenderer.meshAsset = [path="Models/Lantern/Lantern.glb"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Lantern"
@@ -125,7 +125,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_4000"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4000"
@@ -135,7 +135,7 @@ Transform.scale = (1.5, 2.48, 1.5)
 
 [entity id="e_4001"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4001"
@@ -145,7 +145,7 @@ Transform.scale = (1.5, 2.53, 1.5)
 
 [entity id="e_4002"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4002"
@@ -155,7 +155,7 @@ Transform.scale = (1.5, 3.03, 1.5)
 
 [entity id="e_4003"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4003"
@@ -165,7 +165,7 @@ Transform.scale = (1.5, 3.3, 1.5)
 
 [entity id="e_4004"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4004"
@@ -175,7 +175,7 @@ Transform.scale = (1.5, 3.15, 1.5)
 
 [entity id="e_4005"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4005"
@@ -185,7 +185,7 @@ Transform.scale = (1.5, 1.51, 1.5)
 
 [entity id="e_4006"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4006"
@@ -195,7 +195,7 @@ Transform.scale = (1.5, 2.74, 1.5)
 
 [entity id="e_4007"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4007"
@@ -205,7 +205,7 @@ Transform.scale = (1.5, 1.93, 1.5)
 
 [entity id="e_4008"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4008"
@@ -215,7 +215,7 @@ Transform.scale = (1.5, 3.36, 1.5)
 
 [entity id="e_4009"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4009"
@@ -225,7 +225,7 @@ Transform.scale = (1.5, 2.66, 1.5)
 
 [entity id="e_4010"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4010"
@@ -235,7 +235,7 @@ Transform.scale = (1.5, 0.84, 1.5)
 
 [entity id="e_4011"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4011"
@@ -245,7 +245,7 @@ Transform.scale = (1.5, 0.7, 1.5)
 
 [entity id="e_4012"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4012"
@@ -255,7 +255,7 @@ Transform.scale = (1.5, 2.13, 1.5)
 
 [entity id="e_4013"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4013"
@@ -265,7 +265,7 @@ Transform.scale = (1.5, 2.48, 1.5)
 
 [entity id="e_4014"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4014"
@@ -275,7 +275,7 @@ Transform.scale = (1.5, 2.29, 1.5)
 
 [entity id="e_4015"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4015"
@@ -285,7 +285,7 @@ Transform.scale = (1.5, 2.2, 1.5)
 
 [entity id="e_4016"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4016"
@@ -295,7 +295,7 @@ Transform.scale = (1.5, 1.17, 1.5)
 
 [entity id="e_4017"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4017"
@@ -305,7 +305,7 @@ Transform.scale = (1.5, 3.24, 1.5)
 
 [entity id="e_4018"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4018"
@@ -315,7 +315,7 @@ Transform.scale = (1.5, 2.59, 1.5)
 
 [entity id="e_4019"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4019"
@@ -325,7 +325,7 @@ Transform.scale = (1.5, 1.51, 1.5)
 
 [entity id="e_4020"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4020"
@@ -335,7 +335,7 @@ Transform.scale = (1.5, 1.92, 1.5)
 
 [entity id="e_4021"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4021"
@@ -345,7 +345,7 @@ Transform.scale = (1.5, 0.96, 1.5)
 
 [entity id="e_4022"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4022"
@@ -355,7 +355,7 @@ Transform.scale = (1.5, 0.57, 1.5)
 
 [entity id="e_4023"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4023"
@@ -365,7 +365,7 @@ Transform.scale = (1.5, 2.46, 1.5)
 
 [entity id="e_4024"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4024"
@@ -375,7 +375,7 @@ Transform.scale = (1.5, 0.94, 1.5)
 
 [entity id="e_4025"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4025"
@@ -385,7 +385,7 @@ Transform.scale = (1.5, 0.83, 1.5)
 
 [entity id="e_4026"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4026"
@@ -395,7 +395,7 @@ Transform.scale = (1.5, 1.43, 1.5)
 
 [entity id="e_4027"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4027"
@@ -405,7 +405,7 @@ Transform.scale = (1.5, 1.5, 1.5)
 
 [entity id="e_4028"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4028"
@@ -415,7 +415,7 @@ Transform.scale = (1.5, 2.27, 1.5)
 
 [entity id="e_4029"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4029"
@@ -425,7 +425,7 @@ Transform.scale = (1.5, 1.31, 1.5)
 
 [entity id="e_4030"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4030"
@@ -435,7 +435,7 @@ Transform.scale = (1.5, 1.96, 1.5)
 
 [entity id="e_4031"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4031"
@@ -445,7 +445,7 @@ Transform.scale = (1.5, 3.08, 1.5)
 
 [entity id="e_4032"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4032"
@@ -455,7 +455,7 @@ Transform.scale = (1.5, 3.45, 1.5)
 
 [entity id="e_4033"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4033"
@@ -465,7 +465,7 @@ Transform.scale = (1.5, 1.81, 1.5)
 
 [entity id="e_4034"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4034"
@@ -475,7 +475,7 @@ Transform.scale = (1.5, 2.22, 1.5)
 
 [entity id="e_4035"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4035"
@@ -485,7 +485,7 @@ Transform.scale = (1.5, 2.82, 1.5)
 
 [entity id="e_4036"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4036"
@@ -495,7 +495,7 @@ Transform.scale = (1.5, 1.63, 1.5)
 
 [entity id="e_4037"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4037"
@@ -505,7 +505,7 @@ Transform.scale = (1.5, 1.22, 1.5)
 
 [entity id="e_4038"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4038"
@@ -515,7 +515,7 @@ Transform.scale = (1.5, 2.97, 1.5)
 
 [entity id="e_4039"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4039"
@@ -525,7 +525,7 @@ Transform.scale = (1.5, 1.06, 1.5)
 
 [entity id="e_4040"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4040"
@@ -535,7 +535,7 @@ Transform.scale = (1.5, 2.64, 1.5)
 
 [entity id="e_4041"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4041"
@@ -545,7 +545,7 @@ Transform.scale = (1.5, 3.28, 1.5)
 
 [entity id="e_4042"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4042"
@@ -555,7 +555,7 @@ Transform.scale = (1.5, 2.68, 1.5)
 
 [entity id="e_4043"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4043"
@@ -565,7 +565,7 @@ Transform.scale = (1.5, 1.83, 1.5)
 
 [entity id="e_4044"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4044"
@@ -575,7 +575,7 @@ Transform.scale = (1.5, 1.36, 1.5)
 
 [entity id="e_4045"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4045"
@@ -585,7 +585,7 @@ Transform.scale = (1.5, 1.04, 1.5)
 
 [entity id="e_4046"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4046"
@@ -595,7 +595,7 @@ Transform.scale = (1.5, 2.95, 1.5)
 
 [entity id="e_4047"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4047"
@@ -605,7 +605,7 @@ Transform.scale = (1.5, 0.67, 1.5)
 
 [entity id="e_4048"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4048"
@@ -615,7 +615,7 @@ Transform.scale = (1.5, 1.53, 1.5)
 
 [entity id="e_4049"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4049"
@@ -625,7 +625,7 @@ Transform.scale = (1.5, 3.11, 1.5)
 
 [entity id="e_4050"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4050"
@@ -635,7 +635,7 @@ Transform.scale = (1.5, 1.61, 1.5)
 
 [entity id="e_4051"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4051"
@@ -645,7 +645,7 @@ Transform.scale = (1.5, 2.05, 1.5)
 
 [entity id="e_4052"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4052"
@@ -655,7 +655,7 @@ Transform.scale = (1.5, 2.21, 1.5)
 
 [entity id="e_4053"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4053"
@@ -665,7 +665,7 @@ Transform.scale = (1.5, 1.97, 1.5)
 
 [entity id="e_4054"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4054"
@@ -675,7 +675,7 @@ Transform.scale = (1.5, 2.33, 1.5)
 
 [entity id="e_4055"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4055"
@@ -685,7 +685,7 @@ Transform.scale = (1.5, 3.1, 1.5)
 
 [entity id="e_4056"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4056"
@@ -695,7 +695,7 @@ Transform.scale = (1.5, 1.99, 1.5)
 
 [entity id="e_4057"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4057"
@@ -705,7 +705,7 @@ Transform.scale = (1.5, 2.61, 1.5)
 
 [entity id="e_4058"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4058"
@@ -715,7 +715,7 @@ Transform.scale = (1.5, 1.08, 1.5)
 
 [entity id="e_4059"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4059"
@@ -725,7 +725,7 @@ Transform.scale = (1.5, 2.49, 1.5)
 
 [entity id="e_4060"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4060"
@@ -735,7 +735,7 @@ Transform.scale = (1.5, 1.74, 1.5)
 
 [entity id="e_4061"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4061"
@@ -745,7 +745,7 @@ Transform.scale = (1.5, 3.06, 1.5)
 
 [entity id="e_4062"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4062"
@@ -755,7 +755,7 @@ Transform.scale = (1.5, 2.15, 1.5)
 
 [entity id="e_4063"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4063"
@@ -765,7 +765,7 @@ Transform.scale = (1.5, 0.67, 1.5)
 
 [entity id="e_4064"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4064"
@@ -775,7 +775,7 @@ Transform.scale = (1.5, 2.07, 1.5)
 
 [entity id="e_4065"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4065"
@@ -785,7 +785,7 @@ Transform.scale = (1.5, 3.34, 1.5)
 
 [entity id="e_4066"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4066"
@@ -795,7 +795,7 @@ Transform.scale = (1.5, 1.47, 1.5)
 
 [entity id="e_4067"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4067"
@@ -805,7 +805,7 @@ Transform.scale = (1.5, 0.56, 1.5)
 
 [entity id="e_4068"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4068"
@@ -815,7 +815,7 @@ Transform.scale = (1.5, 2.5, 1.5)
 
 [entity id="e_4069"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4069"
@@ -825,7 +825,7 @@ Transform.scale = (1.5, 0.92, 1.5)
 
 [entity id="e_4070"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4070"
@@ -835,7 +835,7 @@ Transform.scale = (1.5, 3.27, 1.5)
 
 [entity id="e_4071"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4071"
@@ -845,7 +845,7 @@ Transform.scale = (1.5, 1.94, 1.5)
 
 [entity id="e_4072"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4072"
@@ -855,7 +855,7 @@ Transform.scale = (1.5, 1.21, 1.5)
 
 [entity id="e_4073"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4073"
@@ -865,7 +865,7 @@ Transform.scale = (1.5, 0.89, 1.5)
 
 [entity id="e_4074"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4074"
@@ -875,7 +875,7 @@ Transform.scale = (1.5, 0.53, 1.5)
 
 [entity id="e_4075"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4075"
@@ -885,7 +885,7 @@ Transform.scale = (1.5, 1.29, 1.5)
 
 [entity id="e_4076"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4076"
@@ -895,7 +895,7 @@ Transform.scale = (1.5, 3.42, 1.5)
 
 [entity id="e_4077"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4077"
@@ -905,7 +905,7 @@ Transform.scale = (1.5, 3.21, 1.5)
 
 [entity id="e_4078"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4078"
@@ -915,7 +915,7 @@ Transform.scale = (1.5, 2.39, 1.5)
 
 [entity id="e_4079"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4079"
@@ -925,7 +925,7 @@ Transform.scale = (1.5, 3.06, 1.5)
 
 [entity id="e_4080"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 Name.value = "Cube_4080"

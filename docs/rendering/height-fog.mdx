@@ -1,9 +1,27 @@
 ---
 title: Height fog
-description: The Height Fog Effect, a screen-space haze that thickens with distance, thins with height and veils the sky near the horizon, and where its color comes from.
+description: The Height Fog Effect, a haze that thickens with distance, thins with height, and veils the sky near the horizon, where it is applied, and where its color comes from.
 ---
 
-The **Height Fog Effect** is a screen-space haze: it thickens with distance from the camera, can thin out with height above a base level, and can veil the sky near the horizon. Add it to an entity that carries a **Post Process Volume**; it applies wherever that volume does, and blends with other volumes like every other effect. It is the cheap way to put air between the camera and the distance. For light shafts and local fog volumes, use the **Volumetric Fog Effect**.
+The **Height Fog Effect** is a haze: it thickens with distance from the camera, can thin out with height above a base level, and can veil the sky near the horizon. Add it to an entity that carries a **Post Process Volume**. It applies wherever that volume does, and blends with other volumes like every other effect. It is the cheap way to put air between the camera and the distance. For light shafts and local fog volumes, use the **Volumetric Fog Effect**.
+
+## Where the fog is applied
+
+Each surface takes the fog where it is drawn, by its own distance from the camera: the ground, meshes, the terrain, grass, the ocean surface, glass, particles and every transparent material. The sky takes the fog's sky fill where the sky is drawn, and the stars and the moon are veiled with it. Every surface is fogged as it is drawn; no pass fogs the finished image. So:
+
+- A transparent surface in front of something far away keeps its own fog. Smoke 4 m from the camera stays clear in front of the horizon haze, and smoke 1 km away takes the haze of 1 km.
+- An anti-aliased edge keeps each side's fog: the edge pixels of a near object against the sky blend the object's color and the sky's fill by how much of the pixel each one covers.
+- How a transparent surface takes the fog depends on its blend. A surface blended over what is behind it (straight or premultiplied alpha) fades into the fog color. An additive surface, such as a glow or a spark, fades out instead: the fog dims what it adds and adds no fog color of its own, so overlapping sprites do not brighten the haze. A multiply surface fades toward no tint. A surface with another blend (min, max, subtract) is not fogged.
+- Glass takes the fog on its own reflection and tint, by the glass's own distance. What you see through the glass carries the fog of its own distance.
+- The ocean surface takes the fog by its own distance. What is seen through the water carries its own fog and then the surface's once more, so a sea bed seen through clear water at a fogged distance reads a little hazier than the shore beside it. This is a limit of fogging each surface where it is drawn, not a rule the fog keeps.
+- A reflection takes the fog of the surface that shows it, not the fog along the reflected path, so the rim of a glossy or glass object in a dense fog can read darker than the fogged scene behind it.
+- Clouds take the fog that lies in front of what they cover, as the sky does. A pixel where nothing is drawn in front of the sky takes the clouds' sky fog.
+- The volumetric clouds publish one mean distance per pixel. A particle nearer than that mean draws over the clouds and one farther is covered, so a particle on a thin cloud edge can draw over cloud that lies in front of it. The atmospheric cloud layer has no distance, so it never covers a particle.
+- Particles are drawn after the screen-space reflections, so they do not show in a reflection.
+- With the **Volumetric Fog Effect** also on, particles take the volumetric fog by their own distance too. Other surfaces, glass and transparent materials included, take it from the volumetric fog's pass, by the distance of the opaque surface behind them.
+- The fog glow (the **Fog Glow** rows) blooms the fog's own light.
+
+A view with no active Height Fog Effect draws every surface exactly as it would without the effect, at no cost.
 
 ## Color modes
 
@@ -11,36 +29,35 @@ The **Height Fog Effect** is a screen-space haze: it thickens with distance from
 
 | Mode | The fog's color | Use it when |
 |---|---|---|
-| **Sky Horizon** (default) | The sky's own color at the horizon, in the direction the camera looks, at the sky's brightness. | The scene has a **Sky Environment** and its time of day can change: the haze stays the color of the sky behind it at noon, at dusk and at night, with nothing to retune. |
+| **Sky Horizon** (default) | The sky's own color at the horizon, in the direction the camera looks, at the sky's brightness. | The scene has a **Sky Environment** and its time of day can change: the haze stays the color of the sky behind it at noon, at dusk, and at night, with nothing to retune. |
 | **Fixed Color** | **Emissive**, optionally blended by a **Gradient Mode**, plus sunlight scattered by the fog (the **Directional Light** rows). | The look is authored for one sky: a stylized color, a colored mist, a scene whose time of day never changes. |
 
 ### Sky Horizon in detail
 
 - Each pixel takes the sky's color at the horizon of its own compass direction, so a haze in front of a sunset is orange on the sun's side and blue on the other.
 - Distant ground and the sky meet without a band: where the fog is thick, the ground fades into exactly the color the sky shows at the horizon.
-- It follows every kind of sky the **Sky Environment** draws: the physical atmosphere (including its night sky), the gradient sky (its horizon color) and an HDRI skybox (its horizon row, with the skybox's rotation and intensity). With the stylized ground, the fog takes the stylized horizon rim color.
-- An HDRI's horizon row carries the photo's detail: trees, buildings, the sun. The fog averages the row over about 6 degrees of compass direction, so that detail does not turn into vertical streaks in the haze; the fog's color still turns with the sky around the horizon.
-- **Emissive**, the gradient and the directional light rows do not apply and are hidden, and a line in the inspector says the sky supplies the color: the sky's color at the horizon already contains the sunlight the air scatters.
+- It follows every kind of sky the **Sky Environment** draws: the physical atmosphere (including its night sky), the gradient sky (its horizon color), and an HDRI skybox (its horizon row, with the skybox's rotation and intensity). With the stylized ground, the fog takes the stylized horizon rim color.
+- An HDRI's horizon row carries the photo's detail: trees, buildings, the sun. The fog averages the row over about 6 degrees of compass direction, so that detail does not turn into vertical streaks in the haze. The fog's color still turns with the sky around the horizon.
+- **Emissive**, the gradient, and the directional light rows do not apply and are hidden, and a line in the inspector says the sky supplies the color: the sky's color at the horizon already contains the sunlight the air scatters.
 - Without a **Sky Environment** in the scene there is no sky color to follow, and the fog uses its fixed color.
 - **Color Mode** is kept when you pick a **Preset** and under the time-of-day keyframes (**Use Time Of Day**): they set the fog's shape (density, distances, heights), and the colors they carry apply in Fixed Color only.
 - Where two Post Process Volumes in different color modes overlap, the fog switches mode halfway through the blend, so its color changes in one step there. Give volumes that blend into each other the same color mode. Space no volume covers counts as Sky Horizon: a Fixed Color volume that fades in over it switches to its own color halfway through the fade.
 
 :::caution[Custom render pipelines]
-The mode reads the sky's backdrop texture, which the `SkyRender` pass publishes as `SkyBackdrop`. A pipeline whose `HeightFog` pass was copied before this mode existed has no `uSkyBackdrop` input: copy the input, its `inputGates` entry and its sampler from `Engine/Assets/RenderPipelines/ForwardPlus.rendergraph`, or the fog shows black in Sky Horizon mode. A pipeline without a `SkyRender` pass skips the fog in this mode.
+The fog reads its parameters from the `HeightFogParams` buffer that the `HeightFogParamsUpload` pass publishes, and the sky's backdrop texture from the `SkyRender` pass (`SkyBackdrop`). Put `HeightFogParamsUpload` near the top of the pipeline, before the terrain (`CBTRender`) and the world passes, as `Engine/Assets/RenderPipelines/ForwardPlus.rendergraph` does. Besides the surfaces, four passes bind `HeightFogParams` and `SkyBackdrop`: the atmospheric cloud layer, the volumetric clouds composite, `FogGlowFast` and `FogGlowPrefilter`. Copy their inputs from `ForwardPlus.rendergraph`; a pass whose input does not resolve is skipped. Every surface is fogged as it is drawn, so a pipeline has no `HeightFog` pass: one that lists it names a shader that does not exist (`Shaders/height_fog.shaderpkg`). Delete that pass, and point the passes that read its output at the color it read. A pipeline without a `SkyRender` pass fogs its surfaces with the fixed color in Sky Horizon mode.
 :::
 
 ## Shape
 
 | Setting | What it does |
 |---|---|
-| **Intensity**, **Density**, **Max Opacity** | How strongly the fog applies; **Max Opacity** caps it so dense fog cannot wash the frame out. |
+| **Intensity**, **Density**, **Max Opacity** | How strongly the fog applies. **Max Opacity** caps it so dense fog cannot wash the frame out. |
 | **Distance Fog**: **Min Distance**, **Smooth Length**, **Max Distance** | Where the fog starts, how softly it fades in, and the distance over which **Density** reaches full strength. |
-| **Height Fog**: **Base Height**, **Transition Length** | Below the base the fog is uniform; above it, it thins over the transition length. |
+| **Height Fog**: **Base Height**, **Transition Length** | Below the base the fog is uniform. Above it, it thins over the transition length. |
 | **Sky**: **Sky Fill Start**, **Sky Fill End**, **Sky Power** | How far up the sky the haze reaches above the horizon. |
 
-## Changelog
+## Defaults
 
-- 2026-10-12: Converted from `docs/Rendering/height-fog.html`.
-- 2026-10-12: Sky Horizon is the default color mode for a new fog.
-- 2026-10-12: an HDRI's horizon is averaged around each direction; presets keep the color mode; the blend between volumes in different modes; the inspector line in Sky Horizon.
-- 2026-10-12: first version: the effect's purpose and shape settings; the Fixed Color and Sky Horizon color modes.
+A new **Height Fog Effect** is a horizon haze in **Sky Horizon** mode. The near scene stays clear: the fog starts 150 m from the camera and fades in over the next 150 m. **Density** reaches full strength at 3000 m, about where a landscape dissolves into the horizon haze on a clear day. With the camera's **FarZ** at 3000 m, as the editor's **New Scene** and the **Basic 3D** and **Blank** templates set it, ground that reaches the far clip is fogged to 97.5 percent there, and by day its end does not show. At the camera's default **FarZ** of 1000 m the ground is fogged to 64 percent where it ends, so the end of the ground shows; set **FarZ** to 3000 m for a long view. **Height Fog** is off, so the haze is the same at every height. **Sky Fill End** is 0.05, so on the sky the haze covers only a band about 3 degrees high above the horizon. **Intensity**, **Density** and **Max Opacity** are 1.
+
+The editor's **New Scene** and both project templates put this fog on their global **Post Process Volume**. A scene without a Height Fog Effect has no height fog.

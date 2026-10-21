@@ -1,6 +1,6 @@
 ---
 title: Rendering buffers and frames in flight
-description: How to think about per-frame data and frames in flight, and when to use BufferRing, RingBuffer, the transient pools or dedicated GPU buffers such as GPUScene's.
+description: How to think about per-frame data and frames in flight, and when to use BufferRing, RingBuffer, the transient pools, or dedicated GPU buffers such as GPUScene's.
 ---
 
 This document clarifies how to think about **per-frame data**, **frames in flight**, and when to use
@@ -14,7 +14,7 @@ GPU is still reading it for frame _N_) and to make it obvious which abstraction 
 
 - **Frame**: A single logical update + render of the world.
 - **Frames in flight**: How many frames the GPU can have "in progress" at once (3 on the Vulkan
-  backend — `VulkanDevice::MAX_FRAMES_IN_FLIGHT`; always query `IDevice::GetFramesInFlight()` rather
+  backend, `VulkanDevice::MAX_FRAMES_IN_FLIGHT`; always query `IDevice::GetFramesInFlight()` rather
   than hard-coding a count).
 - **Per-frame data**: Data produced fresh every frame (camera constants, UI vertices, indirect args).
 - **Multi-frame data**: Data that is stable across many frames (meshes, static materials, lightmaps).
@@ -39,11 +39,11 @@ one frame**.
    - After present / frame finalization, call `ResetForNewFrame()` **once**.
    - Call `Allocate(size, align)` for all per-frame writes.
 3. Do **not** hold onto offsets or pointers across frames.
-4. `BufferRing` **does not know about frames in flight**; it assumes the GPU is done with the
+4. `BufferRing` **does not know about frames in flight**. It assumes the GPU is done with the
    previous frame by the time you call `ResetForNewFrame()`.
 
 If you need the GPU to read different slices of a buffer concurrently for multiple frames in flight,
-**do not use a single BufferRing** -- use `RingBuffer<T>` or per-frame buffers instead.
+**do not use a single BufferRing**. Use `RingBuffer<T>` or per-frame buffers instead.
 
 ## 3. `RingBuffer<T>`: per-frame slices with frames-in-flight awareness
 
@@ -72,7 +72,7 @@ Characteristics:
 - `frameIndex` **must** match the device's current frame-in-flight index.
 - Do not write to slice _i_ for frame _N+1_ until the device has signaled that frame _N_ using slice
   _i_ is complete.
-- Capacity is per frame; if you overflow a slice you will get `nullptr` from `MapRingBuffer` and
+- Capacity is per frame. If you overflow a slice you will get `nullptr` from `MapRingBuffer` and
   `overflowed[frameIndex]` becomes `true`.
 
 Use `RingBuffer<T>` for things like UI vertices/indices or other streaming data that must be
@@ -94,15 +94,15 @@ Rules of thumb:
 - Call `ResetFrame()` once per device frame to mark all resources as not in-use and optionally evict
   idle ones.
 - Do **not** assume a resource will survive indefinitely across many frames unless you keep acquiring
-  it frequently; the pool may evict it when over budget or idle for too long.
+  it frequently. The pool may evict it when over budget or idle for too long.
 
-The pool does **not** by itself ensure CPU/GPU synchronization; it relies on the device's per-frame
+The pool does **not** by itself ensure CPU/GPU synchronization. It relies on the device's per-frame
 fences and the caller not reusing a handle while the GPU is still using it.
 
 ## 5. GPUScene: global scene buffers
 
 `Rendering::GPUScene` owns the GPU-resident representation of the scene (instances, meshes,
-materials). Historically it also owned visibility buffers and culling data; in the
+materials). Historically it also owned visibility buffers and culling data. In the
 target architecture **per-view visibility lists and HZB/occlusion resources live in a dedicated
 GPU visibility/HZB pipeline** (fronted by `GPUCullingPipeline`).
 GPUScene remains the scene data backend that those pipelines consume.
@@ -112,7 +112,7 @@ Current behavior:
 - Uses `static constexpr uint32_t kMaxFramesInFlight = IDevice::kMaxSupportedFramesInFlight` for
   array sizing and `m_FramesInFlight` (queried from `device->GetFramesInFlight()` at construction)
   for runtime logic.
-- CPU-side vectors are updated as ECS changes; `UpdateGPUBuffers()` uploads them via `UpdateBuffer`.
+- CPU-side vectors are updated as ECS changes. `UpdateGPUBuffers()` uploads them via `UpdateBuffer`.
 - `BeginFrame()` increments an internal `m_frameIndex` and derives the active frame slot from
   `m_device->GetFrameIndex() % m_FramesInFlight`. Calls `UpdateGPUBuffers()`.
 - `EndFrame()` clears dirty flags once culling work is scheduled.
@@ -181,7 +181,7 @@ Notes:
   usage class).
 - "I need a buffer inside a render graph pass." -> **Transient RG buffers** via
   `RGFrame::CreateBuffer()` before declaring the consuming pass. Declare its accesses with
-  `RGPassBuilder::Read` / `Write` inside the setup callback; the frame manages its transient allocation.
+  `RGPassBuilder::Read` / `Write` inside the setup callback. The frame manages its transient allocation.
 - "I need to stream per-frame vertex/index data safely across N frames in flight." ->
   **`RingBuffer<T>`** / **`FrameBufferRing<T>`** (single buffer divided into per-frame slices).
 - "I need temporary large buffers/textures with a budget and reuse across frames." ->
@@ -193,7 +193,3 @@ Notes:
 block that manages a single physical buffer with no frame-in-flight awareness. Use it only when you
 manage frame rotation externally (e.g., `PerFrameWritePool` already owns one `BufferRing` per frame
 slot). For any new per-frame allocation, prefer `FrameBufferAllocator` or transient RG buffers.
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/RENDERING_GPU_BUFFERS_AND_FRAMES_IN_FLIGHT.md`.

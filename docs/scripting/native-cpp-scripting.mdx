@@ -1,6 +1,6 @@
 ---
 title: Native C++ scripting
-description: Authoring components and systems against the engine's C++ API, with project layout, registration, reloading, shipping and troubleshooting.
+description: Authoring components and systems against the engine's C++ API, with project layout, registration, reloading, shipping, and troubleshooting.
 sidebar:
   order: 4
 ---
@@ -9,7 +9,7 @@ Author components and systems against the engine's C++ API.
 
 ## Overview
 
-Native project scripts compile into a separate user module against the staged SDK beside the editor. The SDK supplies the module entry points; component and system registration can be generated from headers. Keep the SDK, engine and user modules from the same build and configuration.
+Native project scripts compile into a separate user module against the staged SDK beside the editor. The SDK supplies the module entry points. Component and system registration can be generated from headers. Keep the SDK, engine, and user modules from the same build and configuration.
 
 ## Project layout
 
@@ -28,7 +28,7 @@ MyGame/
     active/                       # loaded module copies
 ```
 
-Packages declare their own native modules. Each package module has a separate generated project, build directory and active directory in its writable derived cache. An Editor-kind module also links the EditorSDK. See the [package data model](../packages/package-data-model.mdx) for module declarations and source ownership.
+Packages declare their own native modules. Each package module has a separate generated project, build directory, and active directory in its writable derived cache. An Editor-kind module also links the EditorSDK. See the [package data model](../packages/package-data-model.mdx) for module declarations and source ownership.
 
 ## Your first component
 
@@ -47,9 +47,11 @@ struct EnemyHealth : ECS::ComponentBase
 
 The build scanner finds tagged components in headers and generates their registration. A tagged component defined only in a `.cpp` file is not scanned.
 
+The scanner does not run the preprocessor. It skips the lines of an `#if 0` branch and reads every branch of any other condition. A component that a macro declares is not registered. The scan warns with the macro's name, so declare the struct directly or register it with `GE_REGISTER_COMPONENT`. A component's name must be ASCII. A component with any other name is listed as skipped.
+
 ### Marker comments
 
-A component the component scanner registers takes marker comments that change how the editor and the build treat it: the engine's own components, and a component a game declares in a header as `struct EnemyHealth : ECS::ComponentBase` (`GameSDK/Component.h`). A marker is a `//` line comment. A struct marker sits on the line of the `struct` or in the comment lines directly above it; a field marker sits on the field's line or directly above it. Text after the marker is free.
+A component the component scanner registers takes marker comments that change how the editor and the build treat it: the engine's own components, and a component a game declares in a header as `struct EnemyHealth : ECS::ComponentBase` (`GameSDK/Component.h`). A marker is a `//` line comment. A struct marker sits on the line of the `struct` or in the comment lines directly above it. A field marker sits on the field's line or directly above it. Text after the marker is free.
 
 ```cpp title="Component and field markers"
 #include <GameSDK/Component.h>
@@ -89,7 +91,7 @@ struct EnemyHealth
 GE_REGISTER_COMPONENT(EnemyHealth, Current, Maximum);
 ```
 
-These are alternative declarations of the same example; use one registration path for a type.
+These are alternative declarations of the same example. Use one registration path for a type.
 
 ## Adding a system
 
@@ -115,7 +117,7 @@ struct DamageSystem : ECS::SystemBase
 };
 ```
 
-`OnStart`, `OnUpdate`, `OnPostSimulation` and `OnDestroy` are optional hooks. Their ordering and permitted world access are defined in [Native User Systems](./native-user-systems.mdx). Use that contract when choosing between gameplay before simulation and presentation after simulation.
+`OnStart`, `OnUpdate`, `OnPostSimulation`, and `OnDestroy` are optional hooks. Their ordering and permitted world access are defined in [Native User Systems](./native-user-systems.mdx). Use that contract when choosing between gameplay before simulation and presentation after simulation.
 
 User systems run in ascending order of a `static constexpr int Order` member, 0 when a system declares none, and by name at equal order; give a system an `Order` when it must run after another in the same frame. See [the order systems run in](./native-user-systems.mdx#the-order-systems-run-in).
 
@@ -129,11 +131,11 @@ The API, its contract and how the editor and the Player deliver input are in [Th
 
 The native script manager watches source changes and rebuilds the affected module. Build output and errors are reported through the editor's log. It validates the candidate module's ABI and toolchain fingerprint before accepting it. A failed build is not a successful reload: read the diagnostic before continuing.
 
-Build duration depends on the source and toolchain. Component data restoration and module replacement have failure paths; keep authored scenes saved rather than relying on a reload to preserve every live change.
+Build duration depends on the source and toolchain. Component data restoration and module replacement have failure paths. Keep authored scenes saved rather than relying on a reload to preserve every live change.
 
 ### Play mode
 
-User systems start when Play begins and stop when Play ends. `OnUpdate` runs before the engine simulation; `OnPostSimulation` runs later in the scheduled frame. See [the lifecycle guide](./native-user-systems.mdx) for delivery, pause and reset behavior.
+User systems start when Play begins and stop when Play ends. `OnUpdate` runs before the engine simulation. `OnPostSimulation` runs later in the scheduled frame. See [the lifecycle guide](./native-user-systems.mdx) for delivery, pause, and reset behavior.
 
 ## Editor extensions
 
@@ -143,13 +145,13 @@ For game UI, use the engine's UI API and authored UXML/CSS. See [game UI scaling
 
 ## Shipping a Player build
 
-Export from the editor's [game publishing workflow](../publishing/game-publishing.mdx). The export stages compatible prebuilt runtime modules and their load records; the shipped Player loads those modules without a compiler. Editor-kind modules do not ship.
+Export from the editor's [game publishing workflow](../publishing/game-publishing.mdx). The export stages compatible prebuilt runtime modules and their load records. The shipped Player loads those modules without a compiler. Editor-kind modules do not ship.
 
 The native gameplay module and the Player application have distinct source ownership. See [Desktop Player source ownership](../publishing/desktop-player-source-ownership.mdx) before adding a custom application entry point.
 
 ## IDE integration
 
-The generated CMake project carries the SDK include directories, import libraries and compile definitions. Engine-driven configuration passes the current `GAMEENGINE_SDK_DIR`; the generated file's baked path is a last-known-good IDE default. Let the editor regenerate the project after changing engine installations.
+The generated CMake project carries the SDK include directories, import libraries, and compile definitions. Engine-driven configuration passes the current `GAMEENGINE_SDK_DIR`. The generated file's baked path is a last-known-good IDE default. Let the editor regenerate the project after changing engine installations.
 
 ## When things go wrong
 
@@ -157,9 +159,3 @@ The generated CMake project carries the SDK include directories, import librarie
 - **A component does not register:** put its tagged declaration in a header, or use explicit registration with the field list.
 - **A module is refused:** rebuild it against the matching engine and configuration. An ABI or fingerprint mismatch is not bypassed.
 - **A build fails:** inspect the compiler output under `.Cache/NativeScripts/build` and the editor log.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/scripting/native-cpp-scripting.html`; the page's own section menu dropped (the site's page outline replaces it).
-- 2026-10-12: input for native systems; the reference moved to [The input system](../input/input-system.mdx).
-- 2026-10-08: use the implemented GameSDK headers, registration paths, lifecycle hooks and generated build layout; link the canonical package and publishing guides.

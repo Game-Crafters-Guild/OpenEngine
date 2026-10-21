@@ -24,7 +24,7 @@ Get facts from a debugger, a capture or the live editor before theorizing, and c
 - Native crashes and hangs: cdb from the Windows SDK Debugging Tools (usually `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\`). Snapshot a running process without stopping it: `cdb -pv -p <pid> -c "~*k; qd"`. Reproduce under the debugger: `cdb -g -G <exe> <args>`, then `!analyze -v`, `~*k`, `.frame N` and `dv /t`. Post-mortem: `cdb -z <dump> -c "!analyze -v; ~*k; q"`. PDBs sit beside the staged binaries. Several editors are often alive: verify PID and path before attaching, and never kill an editor you did not launch.
 - Memory bugs: the `vs2026-x64-local-asan` preset (`macos-arm64-local-asan` on macOS), Debug configuration, ASan runtime DLLs staged automatically on Windows, `GE_ENABLE_ASAN=1` defined so perf-sensitive tests can relax thresholds. Data races: `macos-arm64-local-tsan` (ThreadSanitizer, Debug, tests on).
 - GPU: RenderDoc and the Vulkan instruments, in `.claude/rules/rendering.md` and the `renderdoc-gpu-debug` skill.
-- Live editor: the MCP tools (`mcp__gameengine__*`, setup in `docs/MCP_SETUP.md`) and the CLI `node mcp/ge.mjs <tool>` (`--help` lists all; `--port` or `GE_EDITOR_DEBUG_PORT` targets a non-default editor; `ge raw <method> '{...}'` reaches methods with no tool). Adding a `RegisterHandler` without exposing it as a tool or listing a reason in `mcp/ipc-method-coverage.json` fails `EditorIpcMethodDrift`. A backgrounded or occluded editor window may render black or throttled; bring it to the foreground before drawing visual conclusions.
+- Live editor: the MCP tools (`mcp__gameengine__*`, setup in `docs/getting-started/mcp-setup.mdx`) and the CLI `node mcp/ge.mjs <tool>` (`--help` lists all; `--port` or `GE_EDITOR_DEBUG_PORT` targets a non-default editor; `ge raw <method> '{...}'` reaches methods with no tool). Adding a `RegisterHandler` without exposing it as a tool or listing a reason in `mcp/ipc-method-coverage.json` fails `EditorIpcMethodDrift`. A backgrounded or occluded editor window may render black or throttled; bring it to the foreground before drawing visual conclusions.
 
 ## Architecture in one screen
 
@@ -48,13 +48,17 @@ Convention traps that invert habits from other engines, always called out when i
 - Named functions over lambdas: a lambda is a short adapter handed to an API; anything longer, captured across a screen, defined then called once, or needed twice becomes a named function in the owning file.
 - One class per file; a file that outgrows its responsibility is split in the change that grows it. No dead code, no commented-out code, no vague TODOs, no magic numbers. Migrate old-style code on contact, never in unprompted bulk.
 - Headers: forward declarations in headers, includes in the .cpp; order own header, module headers, stdlib, third-party.
-- Comments describe the code as it is now: the invariant, the unit or coordinate convention, the trap and the rule. Never narrate history, never address reviewers, no author or date stamps. Doxygen on public APIs.
+- Comments describe the code as it is now: the invariant, the unit or coordinate convention, the trap and the rule. Never narrate history, never say what a value used to be, never address reviewers, no author or date stamps. Plain words, short sentences, a term of art only when it is the engine's own and there is no plain word for it. Doxygen on public APIs.
 
 ## Landing a change
 
 Commit verified work to a feature branch early; main is strict. A clean compile plus green unit tests is not proof for rendering, GPU or runtime changes: confirm in a running editor first, say what to look for (fps, flicker, the interaction), and verify builds from exit status and fresh binaries, never from a wrapper's output. Never push an unverified rendering, GPU or runtime change to main; when verification is hard, stage and ask.
 
 Review: direction fit comes before correctness: say whether the change is right for the engine at all, in the subsystem that owns the concept, in the shape the design agreed, and state that judgement separately from the findings. Security, input parsing, threading, lifetime, GPU resources and user-visible quality get the full adversarial review (`adversarial-review` skill: probes, mutants, a live check where owed); mechanical classes get the same skill at the depth the change needs. Whoever coordinates lanes, reviews or merges reads `GameEngine-Workbench/agent/coordination.md` first: the batched review round, review trees, the ledger, pull requests from the other platform's agents, and when a timing measurement may take the machine.
+
+## Coordination
+
+Whoever coordinates lanes, reviews or merges runs the `coordinator` skill (`/coordinator`, under `.claude/skills/coordinator/`). The skill reads the project's values from the workbench's `agent/coordinator.md` (the workbench is `GE_WORKBENCH`, default `../GameEngine-Workbench`) and the process from the workbench's `agent/coordination.md`, `agent/pr-review-rules.md` (the kit's `reviews.md`), `agent/evidence-checklists.md` (the kit's `evidence.md`), `agent/owner.md`, `agent/timing.md` and `agent/other-teams.md`. A lane that only implements needs this file, `AGENTS.md` and its brief.
 
 ## Working discipline
 

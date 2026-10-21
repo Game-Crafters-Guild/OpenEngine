@@ -30,14 +30,12 @@ public:
                                   float32 worldX,
                                   float32 worldY,
                                   float32 worldZ,
-                                  const ResolvedWind& baseWind = {},
-                                  uint32 layerMask = 0xFFFFFFFFu);
+                                  const ResolvedWind& baseWind = {});
 
     // Snapshot enabled volumes for spatial GPU consumers into `out` (cleared first),
-    // using the CPU resolver's transforms, layer filtering and deterministic priority
-    // order. Callers own `out` so a per-frame extraction reuses its capacity.
-    static void ExtractGPU(ECS::World& world, std::vector<Rendering::WindVolumeGPU>& out,
-                           uint32 layerMask = 0xFFFFFFFFu);
+    // using the CPU resolver's transforms and deterministic priority order. Callers
+    // own `out` so a per-frame extraction reuses its capacity.
+    static void ExtractGPU(ECS::World& world, std::vector<Rendering::WindVolumeGPU>& out);
 
     static uint64 QuantizedHash(const ResolvedWind& wind);
 };

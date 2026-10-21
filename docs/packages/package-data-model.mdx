@@ -1,9 +1,9 @@
 ---
 title: Package data model
-description: Where every piece of package data lives (the package, the consuming project and the machine cache) and which copy owns it.
+description: Where every piece of package data lives (the package, the consuming project, and the machine cache) and which copy owns it.
 ---
 
-Three storage worlds exist: **the package itself**, **the consuming project**, and **the global machine cache** (git packages only). The rule that makes everything work: *a package's asset identity and metadata live with the package; everything derived or project-specific lives outside it.* The code behind it is `PackageResolver`, `PackageMounts` and `PackageGitSource`.
+Three storage worlds exist: **the package itself**, **the consuming project**, and **the global machine cache** (git packages only). The rule that makes everything work: *a package's asset identity and metadata live with the package; everything derived or project-specific lives outside it.* The code behind it is `PackageResolver`, `PackageMounts`, and `PackageGitSource`.
 
 ## The three worlds on disk
 
@@ -66,25 +66,25 @@ A Mac game is a `.app` bundle whose `Contents/Resources` is this `<game>/` folde
 
 :::tip[Embedded and `file:` packages: yes, it just works]
 
-Drop `coral.png` into `my-pack/Assets/Textures/` with Explorer while the editor runs (or before opening it): the package mount is **watched**, the watcher registers the file, the GUID derives deterministically from `hash(package-alias + relative-path)` — no editor round-trip needed to "assign" it, because derived identity means the GUID is a pure function of where the file sits. The metadata record (type, KV) is written to **the package's own `AssetDatabase.assetdb`**, never the consuming project's, so when the package author commits their package folder, the metadata travels with it. There are no `.meta` sidecar files anywhere in this engine — identity needs no per-file sidecar, which is exactly why out-of-editor adds are safe. Same story for edits and deletes (watched → re-fingerprinted / tombstoned in the package DB).
+Drop `coral.png` into `my-pack/Assets/Textures/` with Explorer while the editor runs (or before opening it): the package mount is **watched**, the watcher registers the file, the GUID derives deterministically from `hash(package-alias + relative-path)`. No editor round-trip is needed to "assign" it, because derived identity means the GUID is a pure function of where the file sits. The metadata record (type, KV) is written to **the package's own `AssetDatabase.assetdb`**, never the consuming project's, so when the package author commits their package folder, the metadata travels with it. There are no `.meta` sidecar files anywhere in this engine: identity needs no per-file sidecar, which is exactly why out-of-editor adds are safe. Same story for edits and deletes (watched → re-fingerprinted / tombstoned in the package DB).
 
 :::
 
-:::caution[Git packages: by design, you don't add files on the consumer side]
+:::caution[Git packages: by design, you do not add files on the consumer side]
 
-The cache entry is immutable and unwatched; a consumer adding files there would be editing a checkout that re-resolving replaces. The authoring flow is: the package author works on the package as a file:/embedded package (everything above applies — out-of-editor adds included), then publishes by pushing + tagging. Consumers bump the ref in their manifest → new cache entry → the new asset appears, with the *same GUID everywhere* because derived GUIDs are deterministic from alias+path. Optional at publish: freeze a `.assetmanifest` into the package to switch it to stored identity (GUIDs read verbatim — this is what makes GUIDs survive even a package *rename*, and it is how an existing project folder is extracted into a package with its original GUIDs intact).
+The cache entry is immutable and unwatched. A consumer adding files there would be editing a checkout that re-resolving replaces. The authoring flow is: the package author works on the package as a file:/embedded package (everything above applies, out-of-editor adds included), then publishes by pushing + tagging. Consumers bump the ref in their manifest → new cache entry → the new asset appears, with the *same GUID everywhere* because derived GUIDs are deterministic from alias+path. Optional at publish: freeze a `.assetmanifest` into the package to switch it to stored identity (GUIDs read verbatim: this is what makes GUIDs survive even a package *rename*, and it is how an existing project folder is extracted into a package with its original GUIDs intact).
 
 :::
 
 :::tip[Editing a package's C# code: recompiles live in embedded and `file:` packages]
 
-While hot reload is on, saving a `.cs` (or `.csproj`) under the C# module root of an embedded or `file:` package starts the same reload a project script edit starts: every package module recompiles in dependency order, then the editor and project scripts, and the editor swaps them all at once. The Log panel prints `[Packages] compiled package assembly <Name>.dll (N ms)` for each module, where N is the compile server's round trip. If the module fails to compile, its errors stay in the Script Errors panel next to any project script errors until that module compiles again, and the previous build keeps running in the meantime. Git and engine packages are not watched, because the cache never changes in place: to edit one, add a checkout of it by `file:` path, which takes precedence over the engine copy with the same name.
+While hot reload is on, saving a `.cs` (or `.csproj`) under the C# module root of an embedded or `file:` package starts the same reload a project script edit starts: every package module recompiles in dependency order, then the editor and project scripts, and the editor swaps them all at once. The Log panel prints `[Packages] compiled package assembly <Name>.dll (N ms)` for each module, where N is the compile server's round trip. If the module fails to compile, its errors stay in the Script Errors panel next to any project script errors until that module compiles again. The previous build keeps running in the meantime. Git and engine packages are not watched, because the cache never changes in place: to edit one, add a checkout of it by `file:` path, which takes precedence over the engine copy with the same name.
 
 :::
 
 :::tip[Shipping a prebuilt C# assembly: loads without a compile]
 
-A package can ship a C# module as a compiled assembly instead of sources. Declare it in `package.json`: a `modules[]` entry with `"lang": "CSharp"`, the `kind` (`"Runtime"`, or `"Editor"` for the editor half), a `root`, and `"prebuilt": "Binaries/"`. Then put `<Assembly>.dll` (and its `.pdb` if you have one) in that directory. The assembly name is the one the package name derives (`closed-pack` → `ClosedPack`, or `ClosedPack.Editor` for the editor half). When the module has no `.cs` sources, the editor copies the declared DLL into `ScriptAssemblies/Packages/`, the same place a compiled module lands, and loads it with the other script assemblies. Nothing is compiled, so no compile server is needed for that module, and the Log panel prints `[Packages] using prebuilt assembly <Assembly>.dll from <dir>`. Project scripts can use its types just as they use a compiled package's, and a shipping (NativeAOT) build links the assembly in by reference.
+A package can ship a C# module as a compiled assembly instead of sources. Declare it in `package.json`: a `modules[]` entry with `"lang": "CSharp"`, the `kind` (`"Runtime"`, or `"Editor"` for the editor half), a `root`, and `"prebuilt": "Binaries/"`. Then put `<Assembly>.dll` (and its `.pdb` if you have one) in that directory. The assembly name is the one the package name derives (`closed-pack` → `ClosedPack`, or `ClosedPack.Editor` for the editor half). When the module has no `.cs` sources, the editor copies the declared DLL into `ScriptAssemblies/Packages/`, the same place a compiled module lands, and loads it with the other script assemblies. Nothing is compiled, so no compile server is needed for that module. The Log panel prints `[Packages] using prebuilt assembly <Assembly>.dll from <dir>`. Project scripts can use its types just as they use a compiled package's. A shipping (NativeAOT) build links the assembly in by reference.
 
 **Sources win.** If the module has any `.cs` sources, it compiles from them and the declared DLL is not used (the Log panel says so). A module that gains sources switches to compiling when the project is reopened, and until then the Package Manager shows the change as pending. The declaration is the instruction: a DLL anywhere else in the package is a plain file and is never loaded. If the declared DLL is missing, the module is not loaded, and an error names the path the editor expected and the `modules[]` entry to fix.
 
@@ -112,10 +112,10 @@ A game ships the listed files, and what they reference, only when one of its sce
 
 | Mode | How the GUID is determined | Used by | Survives |
 |---|---|---|---|
-| **Derived** (default) | `hash(alias + canonical-relative-path)` — deterministic, no stored state needed at all | project mount, embedded/file: packages, manifest-less git packages | fresh checkouts, machine moves, cache wipes — anything except renaming the package or moving the file |
-| **Stored** | read verbatim from a shipped `.assetmanifest` (JSONL, committed/published with the package) | packaged games (always), git packages that publish a manifest, the extraction route above | everything, including package renames and file moves — the manifest IS the identity |
+| **Derived** (default) | `hash(alias + canonical-relative-path)`: deterministic, no stored state needed at all | project mount, embedded/file: packages, manifest-less git packages | fresh checkouts, machine moves, cache wipes: anything except renaming the package or moving the file |
+| **Stored** | read verbatim from a shipped `.assetmanifest` (JSONL, committed/published with the package) | packaged games (always), git packages that publish a manifest, the extraction route above | everything, including package renames and file moves: the manifest IS the identity |
 
-Cross-package references are plain GUID references and work in both modes because every mount is an **independent GUID namespace** (per-alias namespace hash — collisions between sources are impossible by construction).
+Cross-package references are plain GUID references and work in both modes because every mount is an **independent GUID namespace** (per-alias namespace hash: collisions between sources are impossible by construction).
 
 ## What compiles or derives where
 
@@ -128,14 +128,3 @@ Cross-package references are plain GUID references and work in both modes becaus
 | Dependency pins | `package.json` declares ranges | ✔ manifest + lock (committed) | — | the project owns what it depends on |
 | Prebuilt C# assemblies | ✔ the declared `prebuilt` dir | ✔ copied to `ScriptAssemblies/Packages/` | ✔ (inside the entry) | used only when the module has no sources; ship-without-compile |
 | Prebuilt native binaries | ✔ `Binaries/<platform-fingerprint>/` | — | ✔ (inside the entry) | ship-without-toolchain; fingerprint-gated |
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Packages/package-data-model.html`; the runtimeAssets panel became a section, so the publishing page can link it; the phase label on prebuilt native binaries dropped.
-- 2026-10-06: a Mac game ships each enabled package's runtime native module in `Contents/Frameworks/Packages/<alias>`, signed with the bundle.
-- 2026-10-06: a game ships only the package assets its scenes reference, the `Shaders/` folder and the `runtimeAssets` listed for the components it uses.
-- 2026-10-06: the generated `GameEngine.Scripts.csproj` sits at the project root, not in `Assets/`.
-- 2026-10-06: a C# module can ship a prebuilt assembly: declared in `modules[]` with `prebuilt`, used only when the module has no sources, and linked into shipping (NativeAOT) builds by reference.
-- 2026-10-06: editing a package's C# code in an embedded or `file:` package recompiles it live.
-- 2026-09-23: where the Player's log and derived package caches live.
-- 2026-09-21: rewritten as a concept page.

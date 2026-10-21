@@ -28,7 +28,7 @@ constexpr float kCellHPx = 50.0f;
 constexpr float kGridPadBottomPx = 6.0f;
 constexpr float kPadBottomPx = 8.0f;
 constexpr int kColumns = 4;
-constexpr const char kEditorPlusIconPath[] = "Icons/plus.png";
+constexpr const char kEditorPlusIconPath[] = "Icons/plus.svg";
 constexpr const char kEditorAssetMountAlias[] = "editor";
 // The curve area inside a cell leaves a strip at the bottom for the name label.
 constexpr float kCellLabelStripPx = 13.0f;
@@ -414,7 +414,7 @@ void CurvePresetPicker::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx, cons
             {
                 uint32_t plusImgW = 0;
                 uint32_t plusImgH = 0;
-                const uint32_t plusTexSlot = owner->TryRegisterResolvedBackgroundTexture(
+                const uint32_t plusTexSlot = owner->BackgroundImages().TryRegister(
                     kEditorPlusIconPath, kEditorAssetMountAlias, *ctx.Textures, &plusImgW, &plusImgH);
                 if (plusTexSlot != 0 && plusImgW > 0 && plusImgH > 0)
                 {

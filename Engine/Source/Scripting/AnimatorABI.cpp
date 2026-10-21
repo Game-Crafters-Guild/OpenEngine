@@ -253,7 +253,7 @@ GE_Result PollEvents(World* world, uint64_t entityId, GE_AnimationEventRecord* r
         return GE_Result_InvalidArg;
     // Admitted on the engine's threads only: the animation wave that writes the collectors runs on them, and a
     // system's update (wherever the scheduler runs it) is ordered after that wave.
-    if (!GameEngine::ScriptingAbi::OnEngineThread())
+    if (!GameEngine::ScriptingAbi::OnEngineThreadFor(GameEngine::EngineCore::GetInstance()))
     {
         ReportPollRefusedOffEngineThreads();
         return GE_Result_Fail;

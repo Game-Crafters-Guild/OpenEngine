@@ -35,10 +35,10 @@
 
 #include "Types/ScopedSubscription.h"
 #include "AssetCore/GUID.h"
-#include "Engine/Rendering/BucketPoolAllocator.h"
 #include "Engine/Rendering/MeshGPUResidency.h"
 #include "Engine/Rendering/MeshLODThresholds.h"
 #include "Mathematics/Geometry.h"
+#include "Memory/RangeAllocator.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
@@ -79,14 +79,19 @@ inline constexpr uint32_t kInvalidMeshGPUPoolIndex = UINT32_MAX;
 struct MeshGPUStreamPool
 {
     BufferHandle buffer{};
-    BucketPoolAllocator allocator;
+    // In bytes. Held by pointer: the allocator's stats record cannot move, and
+    // the pool vectors reallocate as sibling pools are appended.
+    std::unique_ptr<Memory::RangeAllocator> allocator;
     uint64_t capacityBytes = 0;
-    uint32_t strideBytes = 1;
+    // The stream's stride in bytes (4 for index pools). Every range's size is
+    // rounded up to a whole multiple of it, so every offset is one too; any
+    // nonzero value works, and 0 or 1 leaves sizes unrounded.
+    uint64_t alignmentBytes = 1;
 };
 
 // Per-bucket GPU storage. One or more VkBuffers per stream the bucket owns +
 // lazy uint16 / uint32 index pools. Allocations are suballocated via
-// BucketPoolAllocator (byte-offsets), and the result is recorded on each
+// Memory::RangeAllocator (byte offsets), and the result is recorded on each
 // MeshGPUEntry as (pool index, vertexOffset/firstIndex) in *vertices* /
 // *indices* -- the conversion happens at upload time using per-stream strides.
 struct MeshGPUBucket
@@ -197,16 +202,16 @@ struct MeshGPUEntry
     // bytes). Returned to the pools' deferred-free queue on
     // UnregisterModel so frames-in-flight that were still reading the
     // range can finish before it is reused.
-    BucketPoolAllocator::Allocation coreSubAlloc{};
-    BucketPoolAllocator::Allocation tangentSubAlloc{};
-    BucketPoolAllocator::Allocation colorSubAlloc{};
-    BucketPoolAllocator::Allocation uv1SubAlloc{};
-    BucketPoolAllocator::Allocation jointsSubAlloc{};
-    BucketPoolAllocator::Allocation weightsSubAlloc{};
-    BucketPoolAllocator::Allocation joints1SubAlloc{};
-    BucketPoolAllocator::Allocation weights1SubAlloc{};
-    std::array<BucketPoolAllocator::Allocation, 6> extraUvSubAlloc{};
-    BucketPoolAllocator::Allocation indexSubAlloc{};
+    Memory::RangeAllocator::Allocation coreSubAlloc{};
+    Memory::RangeAllocator::Allocation tangentSubAlloc{};
+    Memory::RangeAllocator::Allocation colorSubAlloc{};
+    Memory::RangeAllocator::Allocation uv1SubAlloc{};
+    Memory::RangeAllocator::Allocation jointsSubAlloc{};
+    Memory::RangeAllocator::Allocation weightsSubAlloc{};
+    Memory::RangeAllocator::Allocation joints1SubAlloc{};
+    Memory::RangeAllocator::Allocation weights1SubAlloc{};
+    std::array<Memory::RangeAllocator::Allocation, 6> extraUvSubAlloc{};
+    Memory::RangeAllocator::Allocation indexSubAlloc{};
 
     // Per-stream pool selectors into the owning bucket. Optional streams keep
     // kInvalidMeshGPUPoolIndex when absent.
@@ -398,10 +403,11 @@ struct MeshGPUResidencyStats
 // which sibling pool within that stream it is.
 //
 // Fragmentation in these pools has a cost the allocator's own counters are the
-// only witness to: a failed best-fit appends a sibling pool at double the
+// only witness to: a failed allocation appends a sibling pool at double the
 // capacity, so fragmentation converts into GPU memory growth and into extra
-// pool groups (and therefore extra indirect draws). Reporting Stats::fragRatio
-// and Stats::freeRangeCount is what lets that be measured rather than asserted.
+// pool groups (and therefore extra indirect draws). Reporting
+// Stats::Fragmentation and Stats::FreeRanges is what lets that be measured
+// rather than asserted.
 struct MeshGPUPoolStats
 {
     MeshGPUBucketKey BucketKey = VertexAttributeFlags::None;
@@ -410,7 +416,8 @@ struct MeshGPUPoolStats
     const char* Stream = "";
     // Index of this pool within its stream's sibling list.
     uint32_t PoolIndex = 0;
-    BucketPoolAllocator::Stats Allocator{};
+    // In bytes.
+    Memory::RangeAllocator::Stats Allocator{};
 };
 
 class MeshGPURegistry

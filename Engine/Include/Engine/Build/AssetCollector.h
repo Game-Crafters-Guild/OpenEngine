@@ -67,6 +67,17 @@ class AssetCollector
 public:
     explicit AssetCollector(AssetManager& assetManager);
 
+    /// Everything a game export ships from the mounted sources, on every target (the
+    /// desktop BuildPipeline and the Web export): the walk from `scenePaths` (the project's
+    /// shippable content when the walk finds nothing, and the shippable files under
+    /// `projectAssetRoot` when the registry holds none), the render pipeline
+    /// `renderPipelinePath` names, the runtime humanoid profile and the default game UI font.
+    /// Every entry passed IsShippableContent. False with `outError` set when the humanoid
+    /// profile or the font cannot ship; `outWarnings` receives what ships incomplete.
+    bool CollectGameContent(const std::vector<std::string>& scenePaths, const std::string& renderPipelinePath,
+                            const std::filesystem::path& projectAssetRoot, AssetManifest& outManifest,
+                            std::vector<std::string>& outWarnings, std::string& outError);
+
     /// Build a manifest by walking transitive dependencies from scene roots.
     AssetManifest CollectFromScenes(const std::vector<std::string>& scenePaths);
 

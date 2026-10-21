@@ -10,15 +10,22 @@
 #include "Assets/TextureCook.h"
 #include "Assets/TextureCookWorkers.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "StagedTestPaths.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -173,11 +180,12 @@ TEST(TextureCookResolve, BcDegradesToUncompressedWithoutDeviceOrEncoder)
     EXPECT_EQ(ResolveTextureCookOutput(s, false, false, true), TextureCookOutput::Uncompressed);
 }
 
-// Every desktop host cooks BC: vcpkg.json installs DirectXTex on Windows, Linux
-// and macOS, and the Editor's import cook and the export's package cook encode
-// through it. A host build without it (a platform missing from the manifest's
-// gate, or the quiet find_package in Engine/CMakeLists.txt failing) resolves
-// every texture to RGBA8, four times the bytes of BC7, and nothing else says so.
+// Every desktop host cooks BC: vcpkg.json installs bc7e and DirectXTex on
+// Windows, Linux and macOS, and the Editor's import cook and the export's package
+// cook encode through them. A host build without either (a platform missing from
+// the manifest's gate, or a quiet find_package in Engine/CMakeLists.txt failing)
+// resolves every texture to RGBA8, four times the bytes of BC7, and nothing else
+// says so.
 TEST(TextureCookEncoder, DesktopHostsCompileTheBcEncoder)
 {
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
@@ -313,55 +321,6 @@ TEST(TextureCookKey, ConfigHashKeysEveryInput)
     EXPECT_NE(ComputeTextureCookConfigHash(base, TextureCookOutput::Uncompressed), h0);
 }
 
-// The Debug-only quick BC7 encode emits different bytes for the same source and
-// settings, so it must land on a different cache key — otherwise a Debug-cooked
-// low-quality artifact is silently adopted by a DebugFast/Release build. Quality
-// defaults to the host configuration; export explicitly supplies the Player
-// target quality. Both policies must use the same byte/key input.
-TEST(TextureCookKey, ConfigHashSeparatesEncodeQuality)
-{
-    const TextureCookInputs base = MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB);
-
-    const uint64 full = ComputeTextureCookConfigHash(base, TextureCookOutput::BC7,
-                                                            TextureCookEncodeQuality::Full);
-    const uint64 quick = ComputeTextureCookConfigHash(base, TextureCookOutput::BC7,
-                                                             TextureCookEncodeQuality::QuickBC7);
-    EXPECT_NE(full, quick) << "quick and full BC7 share a cache key";
-
-    // The production hash must key as the build actually encodes, or the seam
-    // above proves nothing about the artifacts that really get written.
-    EXPECT_EQ(ComputeTextureCookConfigHash(base, TextureCookOutput::BC7),
-              ComputeTextureCookConfigHash(
-                  base, TextureCookOutput::BC7,
-                  TextureCookEncodeQualityFor(TextureCookOutput::BC7)));
-
-    // Quality is a BC7 property: every other output encodes full quality in
-    // every config, so the two arms must not fork a key that cannot differ.
-    for (auto out : {TextureCookOutput::BC1, TextureCookOutput::BC4, TextureCookOutput::BC5,
-                     TextureCookOutput::BC6H})
-    {
-        EXPECT_EQ(TextureCookEncodeQualityFor(out), TextureCookEncodeQuality::Full);
-        EXPECT_EQ(ComputeTextureCookConfigHash(base, out, TextureCookEncodeQuality::Full),
-                  ComputeTextureCookConfigHash(base, out, TextureCookEncodeQuality::QuickBC7));
-    }
-
-    // And the policy itself, not merely its agreement with the key: the
-    // mode-6-only search is a Debug-config cost tradeoff, and a shipping build
-    // that quietly adopted it would ship visibly worse textures. Nothing else
-    // catches that — a decoded-error bound cannot, because the smooth-gradient
-    // content BC7 is near-lossless on decodes to the same error under both
-    // searches (TextureCookQuality.Bc1BandsOnSmoothGradientsBc7DoesNot).
-#if defined(_DEBUG)
-    EXPECT_EQ(TextureCookEncodeQualityFor(TextureCookOutput::BC7),
-              TextureCookEncodeQuality::QuickBC7)
-        << "Debug must cook the quick BC7 search; the full search is minutes per level here";
-#else
-    EXPECT_EQ(TextureCookEncodeQualityFor(TextureCookOutput::BC7),
-              TextureCookEncodeQuality::Full)
-        << "a non-Debug build must cook the full BC7 search — quick is a Debug-only tradeoff";
-#endif
-}
-
 TEST(TextureCookKey, SourceHashSeparatesContent)
 {
     const uint8 a[] = {1, 2, 3, 4};
@@ -392,7 +351,7 @@ TEST(TextureCookFilter, SrgbDownsampleAveragesInLinearSpace)
 
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga",
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                             MakeInputs(TextureCookUsage::Auto, TextureColorSpace::SRGB),
                             TextureCookOutput::Uncompressed, cooked, error))
         << error;
@@ -419,7 +378,7 @@ TEST(TextureCookFilter, LinearDownsampleAveragesBytes)
 
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga",
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                             MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear),
                             TextureCookOutput::Uncompressed, cooked, error))
         << error;
@@ -447,7 +406,7 @@ TEST(TextureCookFilter, NormalUsageRenormalizesMips)
 
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga",
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                             MakeInputs(TextureCookUsage::Normal, TextureColorSpace::Linear),
                             TextureCookOutput::Uncompressed, cooked, error))
         << error;
@@ -460,6 +419,73 @@ TEST(TextureCookFilter, NormalUsageRenormalizesMips)
     EXPECT_GE(mip1[2], 250) << "renormalized filtered normal must point +Z (unnormalized would be ~218)";
     EXPECT_NEAR(mip1[0], 128, 3);
     EXPECT_NEAR(mip1[1], 128, 3);
+}
+
+// ── Mip-chain golden ─────────────────────────────────────────────────────────
+
+namespace
+{
+// 37x23 with varying alpha: the odd extents reach the filters' edge taps, and the
+// alpha separates the color path's alpha weighting from the data path's.
+std::vector<uint8> MakeMipGoldenPattern()
+{
+    std::vector<uint8> rgba(37u * 23u * 4u);
+    for (uint32 y = 0; y < 23; ++y)
+        for (uint32 x = 0; x < 37; ++x)
+        {
+            uint8* px = rgba.data() + (static_cast<size_t>(y) * 37 + x) * 4;
+            px[0] = static_cast<uint8>(x * 37 + y * 91);
+            px[1] = static_cast<uint8>(x * x + 3 * y);
+            px[2] = static_cast<uint8>((x ^ y) * 11);
+            px[3] = static_cast<uint8>(x * 7 + y * 13);
+        }
+    return rgba;
+}
+
+uint64 HashMipChain(const std::vector<TextureCookMipLevel>& chain)
+{
+    uint64 hash = Hashing::kFnv1a64OffsetBasis;
+    for (const TextureCookMipLevel& level : chain)
+        hash = Hashing::Fnv1a64(level.Bytes.data(), level.Bytes.size(), hash);
+    return hash;
+}
+
+uint64 HashGoldenChain(bool isFloat, bool srgb)
+{
+    const std::vector<uint8> pattern = MakeMipGoldenPattern();
+    TextureCookMipLevel base;
+    base.Width = 37;
+    base.Height = 23;
+    if (isFloat)
+    {
+        std::vector<float> texels(pattern.size());
+        for (size_t i = 0; i < pattern.size(); ++i)
+            texels[i] = static_cast<float>(pattern[i]) / 64.0f;
+        base.Bytes.resize(texels.size() * sizeof(float));
+        std::memcpy(base.Bytes.data(), texels.data(), base.Bytes.size());
+    }
+    else
+    {
+        base.Bytes = pattern;
+    }
+    const TextureCookSettings settings;
+    std::vector<TextureCookMipLevel> chain{base};
+    EXPECT_TRUE(BuildTextureCookMipChain(chain, ComputeTextureCookMipCount(37, 23, settings), isFloat, srgb,
+                                         settings));
+    EXPECT_EQ(chain.size(), 6u);
+    return HashMipChain(chain);
+}
+} // namespace
+
+TEST(TextureCookFilter, MipChainBytesMatchGolden)
+{
+    // Recorded on Windows x64 with stb_image_resize2 2.10; ImageTests pins the
+    // same bytes. A changed hash is a changed cook output for every texture: a
+    // change that means it changes the stbir version key or the recipe hash too,
+    // never only these constants.
+    EXPECT_EQ(HashGoldenChain(false, true), 0x9763e30eb4d47a5cull) << "8-bit sRGB";
+    EXPECT_EQ(HashGoldenChain(false, false), 0xc3ea2747e3b97022ull) << "8-bit linear";
+    EXPECT_EQ(HashGoldenChain(true, false), 0x814873443db92b10ull) << "float linear";
 }
 
 // ── Swizzle baking ───────────────────────────────────────────────────────────
@@ -483,7 +509,7 @@ TEST(TextureCookSwizzle, BakedIntoPayload)
 
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in,
                             TextureCookOutput::Uncompressed, cooked, error))
         << error;
 
@@ -508,9 +534,9 @@ TEST(TextureCookDeterminism, UncompressedCookIsByteIdentical)
 
     std::vector<uint8> cookedA, cookedB;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::Uncompressed,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::Uncompressed,
                             cookedA, error)) << error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::Uncompressed,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::Uncompressed,
                             cookedB, error)) << error;
     ASSERT_EQ(cookedA.size(), cookedB.size());
     EXPECT_EQ(std::memcmp(cookedA.data(), cookedB.data(), cookedA.size()), 0);
@@ -528,9 +554,9 @@ TEST(TextureCookDeterminism, Bc7CookIsByteIdentical)
 
     std::vector<uint8> cookedA, cookedB;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::BC7,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::BC7,
                             cookedA, error)) << error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::BC7,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::BC7,
                             cookedB, error)) << error;
     ASSERT_EQ(cookedA.size(), cookedB.size());
     EXPECT_EQ(std::memcmp(cookedA.data(), cookedB.data(), cookedA.size()), 0);
@@ -583,7 +609,7 @@ TextureCookMipLevel MakeLevel(uint32 width, uint32 height, bool isFloat)
 // Band size is a latency knob, not a quality one: the tight per-band payloads
 // must concatenate into exactly the bytes a single whole-level Compress
 // produces. That byte-exactness is the whole safety argument for banding (BCn
-// blocks encode independently at TEX_COMPRESS_DEFAULT, and every band starts on
+// blocks encode independently, and every band starts on
 // a block-row boundary), so it is asserted directly rather than inferred —
 // every level of a full mip chain down to 1x1, encoded three ways: as one
 // whole-level call, at the cook's default granularity, and at maximum banding
@@ -718,7 +744,7 @@ TEST(TextureCookBc, RoundtripsThroughKtx2Loader)
     {
         std::vector<uint8> cooked;
         std::string error;
-        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga",
+        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                                 MakeInputs(TextureCookUsage::Auto, TextureColorSpace::SRGB),
                                 c.Output, cooked, error))
             << error << " (output " << static_cast<int>(c.Output) << ")";
@@ -744,7 +770,7 @@ TEST(TextureCookBc, HdrCooksToBc6hLinear)
     const std::vector<uint8> hdr = MakeHdr(8, 8, 2.5f, 1.0f, 0.25f);
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), ".hdr",
+    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), "fixture.hdr", ".hdr",
                             MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear),
                             TextureCookOutput::BC6H, cooked, error))
         << error;
@@ -764,10 +790,6 @@ TEST(TextureCookBc, HdrCooksToBc6hLinear)
 // to BC1 and BC7, decode both, and compare max per-pixel error. BC1's 5:6:5
 // endpoints + 4-level interpolation band visibly; BC7 stays near-lossless.
 //
-// Keep the ramp 1-D — every channel varying together along one diagonal. That is
-// not just a BC1 argument: Debug encodes BC7 with a single-subset mode only (see
-// TextureCookEncodeQualityFor), so content whose channels ramp along DIFFERENT
-// axes cannot be fitted by one line and reds the BC7 bound in Debug alone.
 TEST(TextureCookQuality, Bc1BandsOnSmoothGradientsBc7DoesNot)
 {
     if (!IsTextureCookEncoderAvailable())
@@ -796,7 +818,7 @@ TEST(TextureCookQuality, Bc1BandsOnSmoothGradientsBc7DoesNot)
     auto maxError = [&](TextureCookOutput out, TextureFormat fmt) -> int {
         std::vector<uint8> cooked;
         std::string error;
-        EXPECT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, out, cooked, error)) << error;
+        EXPECT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, out, cooked, error)) << error;
         TextureAsset asset(GUID::Null(), "cooktest.ktx2");
         EXPECT_TRUE(LoadCooked(cooked, asset));
         EXPECT_EQ(asset.GetFormat(), fmt);
@@ -823,6 +845,147 @@ TEST(TextureCookQuality, Bc1BandsOnSmoothGradientsBc7DoesNot)
     RecordProperty("bc7MaxError", bc7Err);
 }
 
+// ── BC7 against DirectXTex's full search, on photographic content ─────────────
+//
+// BC7 is encoded by bc7e at its `slow` profile, chosen because it is closer to the
+// source than DirectXTex's full search on every measure taken, at a small fraction
+// of the time (design `designs/assets/texture-cook-speed.md`). These pin that
+// choice on two 256x256 crops of a CC0 photographic albedo (provenance in
+// Engine/Tests/Fixtures/ASSET_PROVENANCE.md): level-0 PSNR and the worst 4x4
+// block's RMSE at or better than DirectXTex's full search, and on a cut-out no
+// more alpha-test flips. The references were measured with DirectXTex 2026-05-07's
+// full search through this cook's band encode (CompressTextureCookLevel at
+// TEX_COMPRESS_DEFAULT); a search that drops modes, the mode-6-only quick encode
+// among them, fails them.
+
+// The fixture's pixels as RGBA8, decoded through the cook itself (no mips, no
+// compression), so the encoder sees exactly what a cook of the file would.
+TextureCookMipLevel LoadFixtureLevel(const char* name)
+{
+    const std::filesystem::path path = TestPaths::StagedRoot() / "Engine/Tests/Fixtures" / name;
+    std::ifstream in(path, std::ios::binary);
+    const std::vector<uint8> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    TextureCookMipLevel level;
+    EXPECT_FALSE(bytes.empty()) << "fixture not staged: " << path.string();
+    if (bytes.empty())
+        return level;
+    std::vector<uint8> cooked;
+    std::string error;
+    EXPECT_TRUE(CookTexture(bytes.data(), bytes.size(), "fixture.png", ".png",
+                            MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear, /*mips=*/false),
+                            TextureCookOutput::Uncompressed, cooked, error))
+        << error;
+    TextureAsset asset(GUID::Null(), "fixture.ktx2");
+    EXPECT_TRUE(LoadCooked(cooked, asset));
+    level.Width = asset.GetWidth();
+    level.Height = asset.GetHeight();
+    level.Bytes.assign(asset.GetPixelData(), asset.GetPixelData() + static_cast<size_t>(level.Width) * level.Height * 4);
+    return level;
+}
+
+std::vector<uint8> EncodeAndDecodeBC7(const TextureCookMipLevel& level, std::vector<uint8>* payloadOut = nullptr)
+{
+    std::vector<uint8> payload, decoded;
+    std::string error;
+    EXPECT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/false, TextureCookOutput::BC7, /*bandBlocks=*/0, payload,
+                                         error))
+        << error;
+    EXPECT_TRUE(DecodeBlockPayloadRGBA8(TextureFormat::BC7, level.Width, level.Height, payload.data(), payload.size(),
+                                        decoded));
+    if (payloadOut)
+        *payloadOut = payload;
+    return decoded;
+}
+
+double RgbPsnr(const std::vector<uint8>& source, const std::vector<uint8>& decoded)
+{
+    double sum = 0.0;
+    size_t count = 0;
+    for (size_t i = 0; i < source.size(); ++i)
+    {
+        if (i % 4 == 3)
+            continue;
+        const double d = static_cast<double>(source[i]) - static_cast<double>(decoded[i]);
+        sum += d * d;
+        ++count;
+    }
+    const double mse = sum / static_cast<double>(count);
+    return mse == 0.0 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+// The largest RGB RMSE of any 4x4 block: a PSNR can hide a few badly fitted blocks.
+double WorstBlockRgbRmse(const TextureCookMipLevel& level, const std::vector<uint8>& decoded)
+{
+    double worst = 0.0;
+    for (uint32 by = 0; by < level.Height / 4; ++by)
+    {
+        for (uint32 bx = 0; bx < level.Width / 4; ++bx)
+        {
+            double sum = 0.0;
+            for (uint32 y = by * 4; y < by * 4 + 4; ++y)
+                for (uint32 x = bx * 4; x < bx * 4 + 4; ++x)
+                    for (uint32 c = 0; c < 3; ++c)
+                    {
+                        const size_t i = (static_cast<size_t>(y) * level.Width + x) * 4 + c;
+                        const double d = static_cast<double>(level.Bytes[i]) - static_cast<double>(decoded[i]);
+                        sum += d * d;
+                    }
+            worst = std::max(worst, std::sqrt(sum / 48.0));
+        }
+    }
+    return worst;
+}
+
+TEST(TextureCookQuality, Bc7MatchesTheFullSearchOnPhotographicAlbedo)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+    // DirectXTex full search on this fixture: 44.27 dB, worst block RMSE 6.28.
+    constexpr double kFullSearchPsnr = 44.27;
+    constexpr double kFullSearchWorstBlock = 6.28;
+
+    const TextureCookMipLevel level = LoadFixtureLevel("bc7_albedo_256.png");
+    ASSERT_EQ(level.Width, 256u);
+    std::vector<uint8> payload;
+    const std::vector<uint8> decoded = EncodeAndDecodeBC7(level, &payload);
+    ASSERT_EQ(decoded.size(), level.Bytes.size());
+
+    const double psnr = RgbPsnr(level.Bytes, decoded);
+    const double worstBlock = WorstBlockRgbRmse(level, decoded);
+    RecordProperty("psnr", std::to_string(psnr));
+    RecordProperty("worstBlockRmse", std::to_string(worstBlock));
+    EXPECT_GE(psnr, kFullSearchPsnr);
+    EXPECT_LE(worstBlock, kFullSearchWorstBlock);
+
+    // The search uses the modes the content needs, not mode 6 alone, the quick
+    // encode's signature. A BC7 block's mode is the index of the lowest set bit of
+    // its first byte.
+    size_t notMode6 = 0;
+    for (size_t block = 0; block < payload.size(); block += 16)
+        notMode6 += (payload[block] & 0x7F) != 0x40 ? 1u : 0u;
+    RecordProperty("blocksNotMode6", static_cast<int>(notMode6));
+    EXPECT_GT(notMode6, 0u) << "every block is mode 6: the encoder ran a mode-6-only search";
+}
+
+TEST(TextureCookQuality, Bc7KeepsTheFullSearchsAlphaTestOnACutout)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+    // Texels whose alpha falls on the other side of 128 after DirectXTex's full search.
+    constexpr size_t kFullSearchFlips = 430;
+
+    const TextureCookMipLevel level = LoadFixtureLevel("bc7_cutout_256.png");
+    ASSERT_EQ(level.Width, 256u);
+    const std::vector<uint8> decoded = EncodeAndDecodeBC7(level);
+    ASSERT_EQ(decoded.size(), level.Bytes.size());
+
+    size_t flips = 0;
+    for (size_t i = 3; i < decoded.size(); i += 4)
+        flips += (level.Bytes[i] >= 128) != (decoded[i] >= 128) ? 1u : 0u;
+    RecordProperty("alphaTestFlips", static_cast<int>(flips));
+    EXPECT_LE(flips, kFullSearchFlips);
+}
+
 TEST(TextureCookBc, MipLimitClampsChain)
 {
     if (!IsTextureCookEncoderAvailable())
@@ -830,7 +993,7 @@ TEST(TextureCookBc, MipLimitClampsChain)
     const std::vector<uint8> tga = GradientTga(16);
     std::vector<uint8> cooked;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga",
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                             MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB,
                                        /*mips=*/true, /*mipLimit=*/2),
                             TextureCookOutput::BC7, cooked, error))
@@ -838,6 +1001,51 @@ TEST(TextureCookBc, MipLimitClampsChain)
     TextureAsset asset(GUID::Null(), "cooktest.ktx2");
     ASSERT_TRUE(LoadCooked(cooked, asset));
     EXPECT_EQ(asset.GetMipmapLevels(), 2u);
+}
+
+// Blocks past a level's right and bottom edges (every extent that is not a
+// multiple of 4, which includes every chain's 2x2 and 1x1 tails) are encoded from
+// edge-replicated texels: the payload equals the encode of the same level padded
+// to whole blocks by repeating its last column and row. Every texel differs, so a
+// gather that fills the padding any other way changes some block.
+TEST(TextureCookBc, Bc7PartialBlocksEncodeAsEdgeReplicatedBlocks)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+
+    for (const auto [width, height] : {std::pair<uint32, uint32>{6, 5}, {2, 2}, {1, 1}})
+    {
+        const std::string where = std::to_string(width) + "x" + std::to_string(height);
+        TextureCookMipLevel level;
+        level.Width = width;
+        level.Height = height;
+        level.Bytes.resize(static_cast<size_t>(width) * height * 4);
+        for (size_t texel = 0; texel < static_cast<size_t>(width) * height; ++texel)
+        {
+            level.Bytes[texel * 4 + 0] = static_cast<uint8>(40 + texel * 37);
+            level.Bytes[texel * 4 + 1] = static_cast<uint8>(200 - texel * 23);
+            level.Bytes[texel * 4 + 2] = static_cast<uint8>(90 + texel * 11);
+            level.Bytes[texel * 4 + 3] = 255;
+        }
+
+        TextureCookMipLevel padded;
+        padded.Width = (width + 3) & ~3u;
+        padded.Height = (height + 3) & ~3u;
+        padded.Bytes.resize(static_cast<size_t>(padded.Width) * padded.Height * 4);
+        for (uint32 y = 0; y < padded.Height; ++y)
+            for (uint32 x = 0; x < padded.Width; ++x)
+                std::memcpy(&padded.Bytes[(static_cast<size_t>(y) * padded.Width + x) * 4],
+                            &level.Bytes[(static_cast<size_t>(std::min(y, height - 1)) * width + std::min(x, width - 1)) * 4],
+                            4);
+
+        std::vector<uint8> partial, whole;
+        std::string error;
+        ASSERT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/false, TextureCookOutput::BC7, 0, partial, error))
+            << where << ": " << error;
+        ASSERT_TRUE(CompressTextureCookLevel(padded, /*isFloat=*/false, TextureCookOutput::BC7, 0, whole, error))
+            << where << ": " << error;
+        EXPECT_EQ(partial, whole) << where << ": partial blocks are not encoded from edge-replicated texels";
+    }
 }
 
 // A huge bandBlocks over a NARROW level is the corner where the band arithmetic
@@ -889,15 +1097,9 @@ TEST(TextureCookBc, HugeBandBlocksOnNarrowLevelEncodesWholeLevel)
 // to a single-block-row offset. (Only of assembly: both arms are handed the same
 // row pitch and source format, so a bug in those is invisible here.)
 //
-// The differential is deliberately not a decoded-error bound. How closely BC7
-// tracks the source is a property of the encoder's mode SEARCH, which is a build
-// property, not a cook one: Debug encodes BC7 mode-6-only (see
-// TextureCookEncodeQualityFor), and one mode-6 line cannot follow this image's R
-// ramp along Y and G ramp along X at once, so the same correctly-assembled bytes
-// decode 4 off in Debug and 2 off in a full-search build. Which search a build is
-// entitled to use is pinned directly, per config, by
-// TextureCookKey.ConfigHashSeparatesEncodeQuality; near-losslessness itself by
-// TextureCookQuality.Bc1BandsOnSmoothGradientsBc7DoesNot, on 1-D ramp content.
+// The differential is deliberately not a decoded-error bound: how closely BC7
+// tracks the source is the encoder's property, pinned by the TextureCookQuality
+// tests, not the assembly's.
 //
 // What this adds over TextureCookDeterminism.BandedEncodeMatchesWholeLevel, which
 // differences CompressTextureCookLevel directly: the whole path through
@@ -939,7 +1141,7 @@ TEST(TextureCookBc, BandedEncodeAssemblesCorrectly)
 
     std::vector<uint8> cooked, cooked2;
     std::string error;
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::BC7,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::BC7,
                             cooked, error))
         << error;
     TextureAsset asset(GUID::Null(), "cooktest.ktx2");
@@ -967,26 +1169,22 @@ TEST(TextureCookBc, BandedEncodeAssemblesCorrectly)
            "band read the wrong source rows, or the bands were appended out of order";
 
     // And the banded encode is stable run to run.
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::BC7,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::BC7,
                             cooked2, error))
         << error;
     ASSERT_EQ(cooked.size(), cooked2.size());
     EXPECT_EQ(std::memcmp(cooked.data(), cooked2.data(), cooked.size()), 0);
 }
 
-// A sprite exported white under its alpha mask (issue 2237). DirectXTex picks each
-// BC7 mode 6 and mode 7 endpoint's p-bit by a vote of the channel LSBs, so a
-// transparent endpoint under white RGB decodes to alpha 1/255 (mode 6) or 4/255
-// (mode 7), and an HDR particle colour turns that floor into a visible quad. Three
-// blocks, encoded at both searches the cook uses. Without the repair every alpha 0
-// texel of all three blocks (16 + 4 + 8) decodes to 1/255 under both searches: the
-// full search does not escape the vote by picking another mode.
+// A sprite exported white under its alpha mask (issue 2237). A BC7 mode 6 or mode 7
+// endpoint whose p-bit is 1 decodes a transparent endpoint under white RGB to alpha
+// 1/255 (mode 6) or 4/255 (mode 7), and an HDR particle colour turns that floor
+// into a visible quad. Three blocks:
 //  - block 0: transparent white.
 //  - block 1: white with an alpha ramp from four transparent texels up to 96, the
 //    soft edge of a glow.
-//  - block 2: two transparent white columns next to two opaque orange columns. The
-//    same vote holds its opaque endpoint under even RGB at alpha 254 (issue 2477);
-//    this test does not check that floor.
+//  - block 2: two transparent white columns next to two opaque orange columns. An
+//    opaque endpoint held at alpha 254 by its p-bit (issue 2477) is not checked here.
 // Every alpha 0 source texel must decode to alpha 0. Opaque texels stay within 2
 // steps of the source per channel: each colour is an exact endpoint, so only the
 // encoder's own endpoint quantization (1 step) is left, and the repair never
@@ -1027,38 +1225,34 @@ TEST(TextureCookBc, Bc7TransparentTexelsDecodeToZeroAlpha)
         }
     }
 
-    for (const auto quality : {TextureCookEncodeQuality::Full, TextureCookEncodeQuality::QuickBC7})
-    {
-        SCOPED_TRACE(quality == TextureCookEncodeQuality::Full ? "full search" : "QuickBC7");
-        std::vector<uint8> payload;
-        std::string error;
-        ASSERT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/false, TextureCookOutput::BC7,
-                                             /*bandBlocks=*/0, payload, error, {}, quality))
-            << error;
-        std::vector<uint8> decoded;
-        ASSERT_TRUE(DecodeBlockPayloadRGBA8(TextureFormat::BC7, kWidth, kHeight, payload.data(),
-                                            payload.size(), decoded));
-        ASSERT_EQ(decoded.size(), level.Bytes.size());
+    std::vector<uint8> payload;
+    std::string error;
+    ASSERT_TRUE(CompressTextureCookLevel(level, /*isFloat=*/false, TextureCookOutput::BC7,
+                                         /*bandBlocks=*/0, payload, error))
+        << error;
+    std::vector<uint8> decoded;
+    ASSERT_TRUE(DecodeBlockPayloadRGBA8(TextureFormat::BC7, kWidth, kHeight, payload.data(),
+                                        payload.size(), decoded));
+    ASSERT_EQ(decoded.size(), level.Bytes.size());
 
-        for (uint32 y = 0; y < kHeight; ++y)
+    for (uint32 y = 0; y < kHeight; ++y)
+    {
+        for (uint32 x = 0; x < kWidth; ++x)
         {
-            for (uint32 x = 0; x < kWidth; ++x)
+            const size_t offset = (static_cast<size_t>(y) * kWidth + x) * 4;
+            const uint8* source = level.Bytes.data() + offset;
+            const uint8* result = decoded.data() + offset;
+            if (source[3] == 0)
             {
-                const size_t offset = (static_cast<size_t>(y) * kWidth + x) * 4;
-                const uint8* source = level.Bytes.data() + offset;
-                const uint8* result = decoded.data() + offset;
-                if (source[3] == 0)
-                {
-                    EXPECT_EQ(result[3], 0) << "transparent texel (" << x << ", " << y << ") decodes to alpha "
-                                            << static_cast<int>(result[3]) << "/255";
-                    continue;
-                }
-                const int bound = source[3] == 255 ? kOpaqueBound : kRampRgbBound;
-                const int channels = source[3] == 255 ? 4 : 3;
-                for (int c = 0; c < channels; ++c)
-                    EXPECT_LE(std::abs(static_cast<int>(result[c]) - static_cast<int>(source[c])), bound)
-                        << "texel (" << x << ", " << y << ") channel " << c;
+                EXPECT_EQ(result[3], 0) << "transparent texel (" << x << ", " << y << ") decodes to alpha "
+                                        << static_cast<int>(result[3]) << "/255";
+                continue;
             }
+            const int bound = source[3] == 255 ? kOpaqueBound : kRampRgbBound;
+            const int channels = source[3] == 255 ? 4 : 3;
+            for (int c = 0; c < channels; ++c)
+                EXPECT_LE(std::abs(static_cast<int>(result[c]) - static_cast<int>(source[c])), bound)
+                    << "texel (" << x << ", " << y << ") channel " << c;
         }
     }
 }
@@ -1081,7 +1275,7 @@ TEST(TextureCookCancel, FlagSetBeforeStartProducesNoOutput)
 
     std::vector<uint8> cooked;
     std::string error;
-    EXPECT_FALSE(CookTexture(tga.data(), tga.size(), ".tga",
+    EXPECT_FALSE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                              MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear),
                              TextureCookOutput::Uncompressed, cooked, error, [cancel]() { return cancel && cancel->load(); }));
     EXPECT_EQ(error, std::string(kTextureCookCancelledError));
@@ -1097,7 +1291,7 @@ TEST(TextureCookCancel, FlagSetBeforeStartSkipsBlockEncode)
 
     std::vector<uint8> cooked;
     std::string error;
-    EXPECT_FALSE(CookTexture(tga.data(), tga.size(), ".tga",
+    EXPECT_FALSE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga",
                              MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB),
                              TextureCookOutput::BC7, cooked, error, [cancel]() { return cancel && cancel->load(); }));
     EXPECT_EQ(error, std::string(kTextureCookCancelledError));
@@ -1112,44 +1306,17 @@ TEST(TextureCookCancel, UnsetFlagCooksIdenticallyToNoFlag)
     std::vector<uint8> withFlag, withoutFlag;
     std::string error;
     const TextureCookInputs in = MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear);
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::Uncompressed,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::Uncompressed,
                             withFlag, error, [cancel]() { return cancel && cancel->load(); }))
         << error;
     // A null token is the not-cancellable case (synchronous load, tooling); it
     // must cook byte-identically to an unset flag.
-    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::Uncompressed,
+    ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::Uncompressed,
                             withoutFlag, error))
         << error;
     ASSERT_FALSE(withFlag.empty());
     ASSERT_EQ(withFlag.size(), withoutFlag.size());
     EXPECT_EQ(std::memcmp(withFlag.data(), withoutFlag.data(), withFlag.size()), 0);
-}
-
-// A cancel racing the start of a cook. The canceller sets the flag as soon as it
-// is scheduled, so in practice this lands on the pre-encode check and returns in
-// single-digit milliseconds; what it pins is that a flag set concurrently (not
-// before the call) is still observed, whichever poll sees it first. Preemption of
-// an encode ALREADY under way is PreemptsEncodeInProgress below — this test
-// cannot cover it, because it never reaches the band loop.
-TEST(TextureCookCancel, CancelRacingTheStartIsObserved)
-{
-    if (!IsTextureCookEncoderAvailable())
-        GTEST_SKIP() << "no BC encoder compiled in";
-    const std::vector<uint8> tga = GradientTga(256);
-    auto cancel = std::make_shared<std::atomic<bool>>(false);
-
-    std::thread canceller([cancel] { cancel->store(true, std::memory_order_release); });
-
-    std::vector<uint8> cooked;
-    std::string error;
-    const bool ok = CookTexture(tga.data(), tga.size(), ".tga",
-                                MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB),
-                                TextureCookOutput::BC7, cooked, error, [cancel]() { return cancel && cancel->load(); });
-    canceller.join();
-
-    EXPECT_FALSE(ok);
-    EXPECT_EQ(error, std::string(kTextureCookCancelledError));
-    EXPECT_TRUE(cooked.empty());
 }
 
 // The band poll is what bounds a cancel's wait once a single large level is
@@ -1164,13 +1331,12 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
     if (!IsTextureCookEncoderAvailable())
         GTEST_SKIP() << "no BC encoder compiled in";
 
-    // BC7, and sized so the level splits into four bands (1600 blocks over
-    // kTextureCookBandBlocks). BC7 is not incidental here: it is the format whose
-    // per-block cost makes a base level minutes long, and it dwarfs the source
-    // decode, so the cancel below lands inside the encode rather than ahead of
-    // it — which is what makes this a test of the BAND poll and not of the
-    // per-level one.
-    const std::vector<uint8> tga = GradientTga(160);
+    // BC7, the costliest format per block, and sized so the encode dwarfs the
+    // source decode and runs long enough to discriminate (65536 blocks, 128 bands
+    // of kTextureCookBandBlocks), so the cancel below lands inside the encode
+    // rather than ahead of it — which is what makes this a test of the BAND poll
+    // and not of the per-level one.
+    const std::vector<uint8> tga = GradientTga(1024);
     const TextureCookInputs in = MakeInputs(TextureCookUsage::Color, TextureColorSpace::Linear,
                                             /*mips=*/false);
 
@@ -1178,7 +1344,7 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
                                std::string& errorOut) {
         std::vector<uint8> cooked;
         const auto start = std::chrono::steady_clock::now();
-        okOut = CookTexture(tga.data(), tga.size(), ".tga", in, TextureCookOutput::BC7, cooked,
+        okOut = CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", in, TextureCookOutput::BC7, cooked,
                             errorOut, [cancel]() { return cancel && cancel->load(); });
         const double ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
@@ -1195,7 +1361,7 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
     ASSERT_TRUE(controlOk) << controlError;
     // Instrument check: with a control this short there is no room to tell
     // "stopped at a band" from "ran to the end", so a pass would mean nothing.
-    // A fast config (Release, or a quick-mode encoder) is not a defect in the
+    // A fast config (Release, or a faster machine) is not a defect in the
     // cook, so skip rather than fail — the reading, not the code, is what the
     // configuration invalidated.
     if (controlMs <= 40.0)
@@ -1230,9 +1396,9 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
     // Ran until the cancel, so it was preempted mid-encode rather than at one of
     // those two early polls...
     EXPECT_GE(cancelledMs, delayMs * 0.9);
-    // ...and stopped a band in, not a level in. Measured 2026-08-18 (DebugFast):
-    // 1231ms against a 3648ms control, i.e. 34%; with the band poll deleted the
-    // cook runs the control's full duration and returns true.
+    // ...and stopped a band in, not a level in. Measured 2026-10-14 (DebugFast,
+    // Ryzen 9 9950X3D): 20ms against a 149ms control, i.e. 13%; with the band poll
+    // deleted the cook runs the control's full duration and returns true.
     EXPECT_LT(cancelledMs, controlMs * 0.7)
         << "cancel did not preempt the level: " << cancelledMs << "ms vs " << controlMs
         << "ms uncancelled";
@@ -1274,17 +1440,16 @@ TEST(TextureCookParallel, SpreadEncodeMatchesOneThread)
         uint32 Width;
         uint32 Height;
         bool IsFloat;
-        TextureCookEncodeQuality Quality;
     };
     const SpreadCase cases[] = {
         // 33 blocks per row: the default band is 15 block rows, so 126 px (32 block
         // rows) splits into 15 + 15 + 2.
-        {TextureCookOutput::BC1, 130, 126, false, TextureCookEncodeQuality::Full},
-        {TextureCookOutput::BC4, 130, 126, false, TextureCookEncodeQuality::Full},
-        {TextureCookOutput::BC5, 66, 62, false, TextureCookEncodeQuality::Full},
-        {TextureCookOutput::BC7, 66, 62, false, TextureCookEncodeQuality::Full},
-        {TextureCookOutput::BC7, 258, 98, false, TextureCookEncodeQuality::QuickBC7},
-        {TextureCookOutput::BC6H, 34, 30, true, TextureCookEncodeQuality::Full},
+        {TextureCookOutput::BC1, 130, 126, false},
+        {TextureCookOutput::BC4, 130, 126, false},
+        {TextureCookOutput::BC5, 66, 62, false},
+        {TextureCookOutput::BC7, 66, 62, false},
+        {TextureCookOutput::BC7, 258, 98, false},
+        {TextureCookOutput::BC6H, 34, 30, true},
     };
     constexpr uint32 kWholeLevelBand = 1u << 24;
 
@@ -1301,14 +1466,13 @@ TEST(TextureCookParallel, SpreadEncodeMatchesOneThread)
 
             std::vector<uint8> oneThread, maxSplit, defaultSplit;
             std::string error;
-            ASSERT_TRUE(CompressTextureCookLevel(src, c.IsFloat, c.Output, kWholeLevelBand, oneThread, error, {},
-                                                 c.Quality))
+            ASSERT_TRUE(CompressTextureCookLevel(src, c.IsFloat, c.Output, kWholeLevelBand, oneThread, error))
                 << where << ": " << error;
             ASSERT_TRUE(CompressTextureCookLevel(src, c.IsFloat, c.Output, /*bandBlocks=*/1, maxSplit, error, {},
-                                                 c.Quality, &spread.Workers))
+                                                 &spread.Workers))
                 << where << ": " << error;
             ASSERT_TRUE(CompressTextureCookLevel(src, c.IsFloat, c.Output, /*bandBlocks=*/0, defaultSplit, error, {},
-                                                 c.Quality, &spread.Workers))
+                                                 &spread.Workers))
                 << where << ": " << error;
 
             ASSERT_FALSE(oneThread.empty()) << where;
@@ -1367,8 +1531,8 @@ TEST(TextureCookParallel, SpreadCookMatchesOneThreadCook)
         SCOPED_TRACE("output " + std::to_string(static_cast<int>(c.Output)));
         std::vector<uint8> oneThread, spreadCook;
         std::string error;
-        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", c.Inputs, c.Output, oneThread, error)) << error;
-        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), ".tga", c.Inputs, c.Output, spreadCook, error, {}, {},
+        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", c.Inputs, c.Output, oneThread, error)) << error;
+        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", c.Inputs, c.Output, spreadCook, error, {},
                                 &spread.Workers))
             << error;
         ASSERT_FALSE(oneThread.empty());
@@ -1379,10 +1543,10 @@ TEST(TextureCookParallel, SpreadCookMatchesOneThreadCook)
     const TextureCookInputs hdrInputs = MakeInputs(TextureCookUsage::Color, TextureColorSpace::Linear);
     std::vector<uint8> oneThread, spreadCook;
     std::string error;
-    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), ".hdr", hdrInputs, TextureCookOutput::BC6H, oneThread, error))
+    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), "fixture.hdr", ".hdr", hdrInputs, TextureCookOutput::BC6H, oneThread, error))
         << error;
-    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), ".hdr", hdrInputs, TextureCookOutput::BC6H, spreadCook, error,
-                            {}, {}, &spread.Workers))
+    ASSERT_TRUE(CookTexture(hdr.data(), hdr.size(), "fixture.hdr", ".hdr", hdrInputs, TextureCookOutput::BC6H, spreadCook, error,
+                            {}, &spread.Workers))
         << error;
     EXPECT_EQ(spreadCook, oneThread);
     EXPECT_GT(spread.HelperSlotsReleased.load(), 0u)
@@ -1405,8 +1569,7 @@ TEST(TextureCookParallel, CancelStopsSpreadEncode)
     std::vector<uint8> payload;
     std::string error;
     EXPECT_FALSE(CompressTextureCookLevel(src, /*isFloat=*/false, TextureCookOutput::BC7, /*bandBlocks=*/1, payload,
-                                          error, cancelOnThirdPoll, TextureCookEncodeQuality::QuickBC7,
-                                          &spread.Workers));
+                                          error, cancelOnThirdPoll, &spread.Workers));
     EXPECT_EQ(error, std::string(kTextureCookCancelledError));
     EXPECT_TRUE(payload.empty());
     EXPECT_EQ(polls, kPollsBeforeCancel) << "the encode must stop polling once it has been cancelled";

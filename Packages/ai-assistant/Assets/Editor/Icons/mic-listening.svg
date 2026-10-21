@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -10 44 44" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Layered translucent strokes keep the glow on the microphone silhouette. -->
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="20" opacity="0.025"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="18" opacity="0.035"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="16" opacity="0.045"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="14" opacity="0.06"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="12" opacity="0.08"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="10" opacity="0.025"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="9" opacity="0.035"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="8" opacity="0.045"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="7" opacity="0.065"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="6" opacity="0.09"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="5" opacity="0.13"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="4" opacity="0.2"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#3b82f6" stroke-width="3" opacity="0.3"/>
+  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z M19 10v1a7 7 0 0 1-14 0v-1 M12 18v3 M8 21h8" stroke="#f4f8ff" stroke-width="2"/>
+</svg>

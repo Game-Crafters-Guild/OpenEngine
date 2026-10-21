@@ -19,12 +19,12 @@ namespace WASDDemo
         {
             float speed = vel.X * deltaTime;
 
-            Input.IsKeyDown(KeyCode.W, out bool w);
-            Input.IsKeyDown(KeyCode.S, out bool s);
-            Input.IsKeyDown(KeyCode.A, out bool a);
-            Input.IsKeyDown(KeyCode.D, out bool d);
-            Input.IsKeyDown(KeyCode.Space, out bool space);
-            Input.IsKeyDown(KeyCode.LeftControl, out bool ctrl);
+            bool w = Input.IsKeyDown(Key.W);
+            bool s = Input.IsKeyDown(Key.S);
+            bool a = Input.IsKeyDown(Key.A);
+            bool d = Input.IsKeyDown(Key.D);
+            bool space = Input.IsKeyDown(Key.Space);
+            bool ctrl = Input.IsKeyDown(Key.LeftControl);
 
             if (w) pos.Z += speed;
             if (s) pos.Z -= speed;

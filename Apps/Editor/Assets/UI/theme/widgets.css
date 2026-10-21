@@ -56,7 +56,7 @@
 	min-width: 8px;
 	min-height: 8px;
 	flex-shrink: 0;
-	background-image: url("editor:Icons/dropdownsmall.png");
+	background-image: url("editor:Icons/dropdownsmall.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -64,7 +64,7 @@
 }
 
 .dropdown.open .dropdown-chevron {
-	background-image: url("editor:Icons/dropdownsmallup.png");
+	background-image: url("editor:Icons/dropdownsmallup.svg");
 	opacity: 0.85;
 }
 
@@ -480,7 +480,7 @@
 	/* The row's own height, not a fixed 24: centring a taller box inside a 22px
 	   row drops the mark a pixel below the label. */
 	height: 100%;
-	background-image: url("editor:Icons/checked.png");
+	background-image: url("editor:Icons/checked.svg");
 	/* Both axes explicit: a single value can resolve height as auto against
 	   the canvas, rendering larger than the box it is drawn into. */
 	background-size: 14px 14px;
@@ -510,7 +510,7 @@
 /* Selected item: native-menu-style check in the shared leading gutter. */
 .dropdown-item.selected {
 	color: var(--ui_color_text_bright);
-	background-image: url("editor:Icons/checked.png");
+	background-image: url("editor:Icons/checked.svg");
 	background-image-tint: rgba(255, 255, 255, 0.95);
 }
 
@@ -612,7 +612,7 @@
 	margin-top: -6px;
 	width: 12px;
 	height: 12px;
-	background-image: url("editor:Icons/search.png");
+	background-image: url("editor:Icons/search.svg");
 	background-size: 12px 12px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -805,7 +805,7 @@ Label.dragging {
 	height: 10px;
 	flex-shrink: 0;
 	margin-left: 8px;
-	background-image: url("editor:Icons/arrow-right.png");
+	background-image: url("editor:Icons/arrow-right.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -937,6 +937,13 @@ checkbox:checked:hover .checkbox-box,
 .checkbox.checked:hover .checkbox-box {
 	background-color: var(--ui_color_accent_blue_hover);
 	border-color: var(--ui_color_accent_blue_hover);
+}
+
+/* Indeterminate ("mixed"): the selected objects disagree. A neutral box, neither empty nor checked; a
+   click resolves every selected object to one value. */
+.checkbox.mixed .checkbox-box {
+	background-color: var(--ui_color_bg_grid);
+	border-color: var(--ui_color_mixed_indicator);
 }
 
 /* Pressed feedback slightly darkens the box */
@@ -1359,7 +1366,7 @@ checkbox:checked:hover .checkbox-box,
 }
 
 .log-detail-title {
-	font-weight: bold;
+	font-weight: 500;
 	font-size: var(--ui_font_size_base);
 	color: var(--ui_color_text_bright);
 	margin-right: 12px;
@@ -1555,7 +1562,7 @@ checkbox:checked:hover .checkbox-box,
 	margin-top: -6px;
 	width: 12px;
 	height: 12px;
-	background-image: url("editor:Icons/search.png");
+	background-image: url("editor:Icons/search.svg");
 	background-size: 12px 12px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1683,7 +1690,7 @@ button.script-editor-search-clear:hover,
 	flex-grow: 0;
 	flex-basis: 24px;
 	padding: 0;
-	background-image: url("editor:Icons/save.png");
+	background-image: url("editor:Icons/save.svg");
 	background-size: 18px 18px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1721,7 +1728,7 @@ button.script-editor-save-button.icon-button.linenumbers-icon,
 	flex-grow: 0;
 	flex-basis: 24px;
 	padding: 0;
-	background-image: url("editor:Icons/save.png");
+	background-image: url("editor:Icons/save.svg");
 	background-size: 18px 18px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1739,14 +1746,14 @@ button.script-editor-save-button.icon-button.linenumbers-icon,
 .script-editor-save-button.linenumbers-icon,
 button.script-editor-save-button.icon-button.linenumbers-icon,
 .button.script-editor-save-button.icon-button.linenumbers-icon {
-	background-image: url("editor:Icons/list.png");
+	background-image: url("editor:Icons/list.svg");
 }
 
 /* Wrap toggle icon shares the save-button styling, different background image. */
 .script-editor-save-button.wrap-icon,
 button.script-editor-save-button.icon-button.wrap-icon,
 .button.script-editor-save-button.icon-button.wrap-icon {
-	background-image: url("editor:Icons/reorder-two.png");
+	background-image: url("editor:Icons/reorder-two.svg");
 }
 
 #ScriptEditorSaveButton:hover,
@@ -2376,19 +2383,19 @@ button.large,
 }
 
 .tooltip-arrow-up {
-	background-image: url("editor:Icons/fold-up.png");
+	background-image: url("editor:Icons/fold-up.svg");
 }
 
 .tooltip-arrow-down {
-	background-image: url("editor:Icons/fold-down.png");
+	background-image: url("editor:Icons/fold-down.svg");
 }
 
 .tooltip-arrow-left {
-	background-image: url("editor:Icons/fold-left.png");
+	background-image: url("editor:Icons/fold-left.svg");
 }
 
 .tooltip-arrow-right {
-	background-image: url("editor:Icons/fold-right.png");
+	background-image: url("editor:Icons/fold-right.svg");
 }
 
 /* Drag/drop ghost (payload display label) */
@@ -2448,19 +2455,19 @@ button.large,
 }
 
 .dnd-ghost .dnd-ghost-icon.dnd-ghost-icon-asset-file {
-	background-image: url("editor:Icons/codeicon.png");
+	background-image: url("editor:Icons/codeicon.svg");
 	/* Align drag ghost asset icon with neutral asset icon tint */
 	background-image-tint: rgba(150, 150, 150, 1.0);
 }
 
 .dnd-ghost .dnd-ghost-icon.dnd-ghost-icon-asset-folder {
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	/* Match folder icon tint used in grid/list/tree */
 	background-image-tint: rgba(150, 150, 150, 1.0);
 }
 
 .dnd-ghost .dnd-ghost-icon.dnd-ghost-icon-entity {
-	background-image: url("editor:Icons/cube.svg");
+	background-image: url("editor:Icons/Cube.svg");
 	background-image-tint: rgba(255, 255, 255, 0.87);
 }
 

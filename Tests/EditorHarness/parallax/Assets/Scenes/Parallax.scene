@@ -49,7 +49,7 @@ Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.priority = 0
-PostProcessVolume.postProcessMask = 4294967295
+PostProcessVolume.volumeLayers = all
 PostProcessVolume.look = Neutral
 PostProcessVolume.isGlobal = true
 Transform.position = (0, 0, 0)
@@ -71,7 +71,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Materials/CobbledGround.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Cobbled Ground"
 Transform.position = (0, 0, 10)
@@ -81,7 +81,7 @@ Transform.scale = (60, 1, 60)
 [entity id="e_wall"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/BrickWall.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Brick Wall"
 Transform.position = (0, 2, 20)
@@ -92,7 +92,7 @@ Transform.scale = (16, 4, 0.6)
 ; with the eave would stand above the carved tiles there and show as a line along it.
 [entity id="e_house"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "House"
 Transform.position = (14, 2.95, 10)
@@ -101,7 +101,7 @@ Transform.scale = (10, 6, 8)
 
 [entity id="e_house_front"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "House Front Wall"
 Transform.position = (14, 7.87, 6.15)
@@ -111,7 +111,7 @@ Transform.scale = (10, 3.73, 0.3)
 [entity id="e_roof"]
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Materials/RoofTiles.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Roof"
 Transform.position = (14, 7.87, 10)
@@ -120,7 +120,7 @@ Transform.scale = (10, 1, 8.83)
 
 [entity id="e_crate1"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Crate 1"
 Transform.position = (3, 0.5, 8)
@@ -129,7 +129,7 @@ Transform.scale = (1, 1, 1)
 
 [entity id="e_crate2"]
 MeshRenderer.meshPrimitive = Cube
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.receiveShadows = true
 Name.value = "Crate 2"
 Transform.position = (-2.5, 0.4, 15)

@@ -6,10 +6,9 @@
 
 #include "Thumbnails/TextureThumbnailHandler.h"
 
+#include "Image/Encode.h"
+#include "Image/ImageHeader.h"
 #include "JobSystem/WorkStealingThreadPool.h"
-
-#include <stb_image.h>
-#include <stb_image_write.h>
 
 #include <gtest/gtest.h>
 
@@ -74,7 +73,8 @@ bool WriteTestPng(const std::filesystem::path& path, int width, int height)
     }
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
-    return stbi_write_png(path.string().c_str(), width, height, 4, pixels.data(), width * 4) != 0;
+    return GameEngine::Image::WritePngFile(path, pixels, static_cast<uint32_t>(width),
+                                           static_cast<uint32_t>(height));
 }
 
 void WriteBytes(const std::filesystem::path& path, const std::string& content)
@@ -141,10 +141,8 @@ struct ImageSize
 
 ImageSize ReadPngSize(const std::filesystem::path& path)
 {
-    ImageSize size;
-    int channels = 0;
-    size.Valid = stbi_info(path.string().c_str(), &size.Width, &size.Height, &channels) != 0;
-    return size;
+    const GameEngine::Image::ImageHeader header = GameEngine::Image::ReadImageHeader(path);
+    return ImageSize{static_cast<int>(header.Width), static_cast<int>(header.Height), header.Valid};
 }
 
 // Rewrites a PNG's IHDR dimensions in place. A real image of these dimensions
@@ -654,10 +652,10 @@ TEST(TextureThumbnailHandler, OversizedSourceIsRefusedWithoutDecoding)
     ASSERT_TRUE(WriteTestPng(source, 8, 8));
     ASSERT_TRUE(ForgePngDimensions(source, 8192, 8192)); // 67 Mpx, past the budget
 
-    int w = 0, h = 0, c = 0;
-    ASSERT_TRUE(stbi_info(source.string().c_str(), &w, &h, &c));
-    ASSERT_EQ(static_cast<uint64_t>(w) * h, 8192ull * 8192ull);
-    ASSERT_GT(static_cast<uint64_t>(w) * h, TextureThumbnailHandler::kMaxSourcePixels);
+    const ImageSize forged = ReadPngSize(source);
+    ASSERT_TRUE(forged.Valid);
+    ASSERT_EQ(static_cast<uint64_t>(forged.Width) * forged.Height, 8192ull * 8192ull);
+    ASSERT_GT(static_cast<uint64_t>(forged.Width) * forged.Height, TextureThumbnailHandler::kMaxSourcePixels);
 
     HandlerHarness harness;
     TextureThumbnailHandler& handler = harness.Handler;

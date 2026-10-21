@@ -10,8 +10,8 @@ in five steps.
 
 This walks the auto-bootstrap path: the editor detects a clip-skeleton
 mismatch, auto-imports `HumanoidRig`s for both rigs, auto-creates a
-`RetargetMap` and attaches `HumanoidRetargeterComponent`, with no dialog.
-Hit Play; the character walks.
+`RetargetMap`, and attaches `HumanoidRetargeterComponent`, with no dialog.
+Hit Play. The character walks.
 
 ## Step 1: drop the character into the project
 
@@ -24,18 +24,18 @@ runs:
 
 1. The bone-name regex matcher (`Animation::HumanoidNameMatcher`) maps
    each source-rig bone name onto a `HumanBone` canonical slot. Mixamo
-   (`mixamorig:` prefix), Synty, MetaHuman, Maya, VRM, glTF — all covered.
+   (`mixamorig:` prefix), Synty, MetaHuman, Maya, VRM, glTF: all covered.
 2. Body proportions (hip height, shoulder width, leg / arm length) are
    computed from world-rest positions.
 3. Canonical chains (LeftArm = Shoulder -> Hand, etc.) are derived.
 4. Per-bone retarget-pose rotations are baked from rest-pose deltas. Synty
-   A-pose binds get non-identity rotations on shoulders / upper arms;
+   A-pose binds get non-identity rotations on shoulders / upper arms.
    Mixamo / MetaHuman T-pose binds get identity (no fix-up needed).
 
 The result lands at `Assets/Models/MyCharacter.humanoidrig.json`.
 
 If required-bone coverage drops below `kAutoImportCoverageThreshold`
-(0.8), the import fails and logs a warning with the coverage; fix the
+(0.8), the import fails and logs a warning with the coverage. Fix the
 mapping in `HumanoidRigInspector`. Otherwise: silent success.
 
 ## Step 2: drop the animation clip
@@ -45,7 +45,7 @@ Copy a clip authored on another humanoid skeleton into
 `Assets/Animations/Walk.glb`.
 
 The clip's source skeleton triggers a second `AutoImportHumanoidRig`
-pass — one rig per skeleton, even if many clips share a skeleton. The
+pass: one rig per skeleton, even if many clips share a skeleton. The
 result lands at `Assets/Animations/Walk.humanoidrig.json`.
 
 ## Step 3: place the character in a scene
@@ -79,14 +79,14 @@ entity's skeleton, `AnimationSystem` runs the auto-bootstrap:
    `Map = <map GUID>`, `SourceClipIndex = <clip store index>`, defaults
    for the rest.
 
-No dialog is shown; the log records the setup:
+No dialog is shown. The log records the setup:
 
 ```text title="The log line auto-bootstrap writes"
 [AnimationSystem] auto-bootstrap: cross-rig clip routed via HumanoidRetargetSystem (src='...', tgt='...', map='...')
 ```
 
 To change the pairing, open the map in `RetargetMapInspector` or edit the
-JSON; hot reload applies the change on the next frame.
+JSON. Hot reload applies the change on the next frame.
 
 ## Step 5: hit Play
 
@@ -104,7 +104,7 @@ The character walks. Per-frame, `HumanoidRetargetSystem`:
    rasterization path consumes the palette unchanged.
 6. For a character the GPU path cannot take, or with
    `GE_RETARGET_CPU=1` set, evaluates `RetargetNode` on the CPU and writes
-   into `SkeletonRuntimeState::CompactSkinMatrices`;
+   into `SkeletonRuntimeState::CompactSkinMatrices`.
    `SkinningUploadSystem` ships them to the atlas.
 
 `ClipTimeSeconds` advances by `deltaTime * Speed`. If `Loop = true`,
@@ -113,23 +113,23 @@ wraps at clip duration. If `Paused = true`, holds.
 ## Verifying it worked
 
 If the character is in T-pose with arms splayed: the source rig's
-retarget pose didn't bake correctly. Check `HumanoidRigInspector` —
+retarget pose did not bake correctly. Check `HumanoidRigInspector`:
 shoulder / upper-arm rotations should be ~15-30 deg for Synty A-pose
 binds, identity for Mixamo / MetaHuman T-pose binds. Use the "Force bind
 = retarget pose" button if the source rig was authored canonically.
 
 If the feet slide: the retargeter carries rotations and scales the hip
-translation, and runs no foot locking or IK; a source and target with
+translation, and runs no foot locking or IK. A source and target with
 different leg proportions slide. FootLock settings in a `RetargetMap` are
 stored but not evaluated (see
 [Authored but not evaluated](humanoid-retargeting.mdx#authored-but-not-evaluated)).
 
-If the character drifts off-screen: the source clip has hip translation;
-this is correct retargeting behavior. Use `Components::HumanoidRetargeterComponent::Loop` + a Position component to handle world placement.
+If the character drifts off-screen: the source clip has hip translation.
+This is correct retargeting behavior. Use `Components::HumanoidRetargeterComponent::Loop` + a Position component to handle world placement.
 
 If hot-reload regresses retargeting: edit the rig / map JSON and save.
 The watcher fires `RetargetAssetWatcher`'s reload callback;
-`HumanoidRetargetSystem::DrainHotReloadEvents` clears caches; next frame
+`HumanoidRetargetSystem::DrainHotReloadEvents` clears caches. Next frame
 re-resolves. No editor restart needed.
 
 ## Adding the component yourself
@@ -147,7 +147,7 @@ Use this for:
 - A hand-authored or hand-edited `RetargetMap`.
 - Programmatic spawning (crowd scenes, replays).
 
-`RetargetNode` runs only inside `HumanoidRetargetSystem`; animation graph
+`RetargetNode` runs only inside `HumanoidRetargetSystem`. Animation graph
 assets cannot contain it.
 
 ## Drop in a VRM avatar
@@ -172,20 +172,16 @@ only when actual retargeting is needed.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Auto-import didn't run | Skeleton coverage < 80% required bones | Open `HumanoidRigInspector`, fix red bone slots manually |
+| Auto-import did not run | Skeleton coverage < 80% required bones | Open `HumanoidRigInspector`, fix red bone slots manually |
 | Character T-poses with splayed arms | Synty A-pose source, retarget pose not baked | Verify shoulder / upper-arm `RetargetPoseRotation` are non-identity in `HumanoidRigInspector` |
 | Foot sliding | Source and target leg proportions differ; no foot locking runs | Use a source clip authored on similar proportions |
-| Cloak / sword / hair doesn't follow | No `AttachmentBone` declared, or wrong parent | Add via `HumanoidRigInspector` with parent canonical bone |
+| Cloak / sword / hair does not follow | No `AttachmentBone` declared, or wrong parent | Add via `HumanoidRigInspector` with parent canonical bone |
 | Clip plays once and stops | `Loop = false` | Toggle `Loop` on the component |
 | Character locks at first frame | `Paused = true` | Toggle on the component |
 
 ## Next steps
 
-- [Humanoid retargeting architecture](humanoid-retargeting-architecture.mdx) — per-frame pipeline, GPU and CPU
+- [Humanoid retargeting architecture](humanoid-retargeting-architecture.mdx): per-frame pipeline, GPU and CPU
   paths, hot-reload chain.
-- [Humanoid retargeting](humanoid-retargeting.mdx) — overview of the
-  assets, components, inspectors and what runs each frame.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Animation/Quickstart.md`. The code that adds the component by hand uses the ECS API as it is (`World::AddComponent` with a filled component; `AssetRef`'s GUID constructor is explicit).
+- [Humanoid retargeting](humanoid-retargeting.mdx): overview of the
+  assets, components, inspectors, and what runs each frame.

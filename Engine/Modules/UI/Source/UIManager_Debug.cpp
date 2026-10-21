@@ -259,7 +259,7 @@ void UIManager::EmitDebugCapture()
     m_DebugCaptureOut << "\"fileStylesheets\":" << m_FileStylesheets.size() << ",";
     m_DebugCaptureOut << "\"externalTextures\":" << m_ExternalRGRegistrations.size() << ",";
     m_DebugCaptureOut << "\"externalDeviceTextures\":" << m_ExternalDeviceTextures.size() << ",";
-    m_DebugCaptureOut << "\"bgTextureCache\":" << m_BgTextureCache.size() << ",";
+    m_DebugCaptureOut << "\"bgTextureCache\":" << m_BackgroundImages.EntryCount() << ",";
     m_DebugCaptureOut << "\"rootChildCount\":" << (m_Root ? m_Root->GetChildren().size() : 0u);
     m_DebugCaptureOut << "},";
 

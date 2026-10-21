@@ -19,6 +19,11 @@
 // do not need to manage a separate dependency. The vcpkg port provides the header.
 #include <miniaudio.h>
 
+// Ogg Vorbis: miniaudio has no Vorbis decoder of its own; its libvorbis decoding backend
+// (from miniaudio's extras, installed beside miniaudio.h by the overlay port) decodes through
+// libvorbisfile. Decoders reach it through Audio::MakeDecoderConfig.
+#include <miniaudio_libvorbis.c>
+
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

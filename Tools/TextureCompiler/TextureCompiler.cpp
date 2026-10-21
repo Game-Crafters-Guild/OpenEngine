@@ -27,18 +27,9 @@
 //   Inflates + transcodes the KTX2 back to RGBA8 (UASTC payloads via the same
 //   libktx transcode family the engine uses) and writes one mip level as PNG.
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_ONLY_TGA
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_BMP
-#include <stb_image.h>
-
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include <stb_image_resize2.h>
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
+#include "Image/Decode.h"
+#include "Image/Encode.h"
+#include "Image/Resample.h"
 
 #include <ktx.h>
 #include <vulkan/vulkan_core.h>
@@ -48,8 +39,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -123,8 +118,8 @@ int DecodeKtx2ToPng(const std::string& inPath, const std::string& outPath, uint3
     const uint8_t* data = ktxTexture_GetData(ktxTexture(tex)) + offset;
     const uint32_t w = std::max(tex->baseWidth >> level, 1u);
     const uint32_t h = std::max(tex->baseHeight >> level, 1u);
-    const int ok = stbi_write_png(outPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4, data,
-                                  static_cast<int>(w) * 4);
+    const bool ok = GameEngine::Image::WritePngFile(
+        outPath, std::span<const uint8_t>(data, static_cast<size_t>(w) * h * 4), w, h);
     ktxTexture_Destroy(ktxTexture(tex));
     if (!ok)
     {
@@ -254,7 +249,7 @@ void RenormalizeNormals(MipImage& mip)
 }
 
 // Build the full mip chain from the base level. sRGB content filters in linear
-// space via stb_image_resize2's sRGB path; data textures filter linearly.
+// light; linear content filters as plain numbers. Both weight color by alpha.
 std::vector<MipImage> BuildMipChain(MipImage base, const Options& opt)
 {
     std::vector<MipImage> chain;
@@ -270,21 +265,9 @@ std::vector<MipImage> BuildMipChain(MipImage base, const Options& opt)
         dst.Height = std::max(src.Height / 2u, 1u);
         dst.Pixels.resize(static_cast<size_t>(dst.Width) * dst.Height * 4);
 
-        const stbir_pixel_layout layout = STBIR_RGBA;
-        if (opt.Srgb)
-        {
-            stbir_resize_uint8_srgb(src.Pixels.data(), static_cast<int>(src.Width),
-                                    static_cast<int>(src.Height), 0,
-                                    dst.Pixels.data(), static_cast<int>(dst.Width),
-                                    static_cast<int>(dst.Height), 0, layout);
-        }
-        else
-        {
-            stbir_resize_uint8_linear(src.Pixels.data(), static_cast<int>(src.Width),
-                                      static_cast<int>(src.Height), 0,
-                                      dst.Pixels.data(), static_cast<int>(dst.Width),
-                                      static_cast<int>(dst.Height), 0, layout);
-        }
+        GameEngine::Image::ResampleRgba8(src.Pixels, src.Width, src.Height, dst.Pixels, dst.Width, dst.Height,
+                                         opt.Srgb ? GameEngine::Image::ResampleColorSpace::Srgb
+                                                  : GameEngine::Image::ResampleColorSpace::LinearAlphaWeighted);
         if (opt.NormalMap)
             RenormalizeNormals(dst);
         chain.push_back(std::move(dst));
@@ -314,22 +297,22 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    stbi_uc* decoded = stbi_load(opt.InputPath.c_str(), &width, &height, &channels, 4);
-    if (!decoded || width <= 0 || height <= 0)
+    std::ifstream input(opt.InputPath, std::ios::binary);
+    const std::vector<uint8_t> inputBytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    GameEngine::Image::Image8 decoded =
+        GameEngine::Image::Decode8(inputBytes, opt.InputPath, GameEngine::Image::DecodeChannels::Rgba);
+    if (!decoded.Valid)
     {
-        std::fprintf(stderr, "Failed to decode '%s': %s\n", opt.InputPath.c_str(),
-                     stbi_failure_reason() ? stbi_failure_reason() : "unknown");
+        std::fprintf(stderr, "Failed to decode '%s'\n", opt.InputPath.c_str());
         return 1;
     }
+    const uint32_t width = decoded.Width;
+    const uint32_t height = decoded.Height;
 
     MipImage baseMip;
-    baseMip.Width = static_cast<uint32_t>(width);
-    baseMip.Height = static_cast<uint32_t>(height);
-    baseMip.Pixels.assign(decoded, decoded + static_cast<size_t>(width) * height * 4);
-    stbi_image_free(decoded);
+    baseMip.Width = width;
+    baseMip.Height = height;
+    baseMip.Pixels = std::move(decoded.Pixels);
 
     const std::vector<MipImage> chain = BuildMipChain(std::move(baseMip), opt);
 

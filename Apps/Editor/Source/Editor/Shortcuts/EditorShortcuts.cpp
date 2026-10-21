@@ -237,6 +237,13 @@ const std::vector<ShortcutCatalogEntry>& GetShortcutCatalog()
                                          kKeyCode_W,      kAlternatePrimaryShortcutModifier},
         {"Global", "CSS Inspector",      0, 0, kKeyCode_I, kModControl, false},
 
+        // --- Diagnostics (editable; consumed by Editor::DiagnosticShortcuts) ---
+#if GE_ENABLE_CPU_PROFILING
+        {"Diagnostics", "CPU Profiler",     kEditorGlobalContext, kEditorCpuProfiler,    kKeyCode_F2, 0,         false},
+        {"Diagnostics", "CPU Profiler Off", kEditorGlobalContext, kEditorCpuProfilerOff, kKeyCode_F2, kModShift, false},
+#endif
+        {"Diagnostics", "UI Demo",          kEditorGlobalContext, kEditorShowUIDemo,     kKeyCode_F3, 0,         false},
+
         // --- Scene View ---------------------------------------------------
         {"Scene View", "Move Forward",   kSceneViewContext, kSceneViewMoveForward,  kKeyCode_W, 0, false},
         {"Scene View", "Move Backward",  kSceneViewContext, kSceneViewMoveBackward, kKeyCode_S, 0, false},
@@ -400,8 +407,8 @@ void ApplyShortcutBindings(Input::InputSystem& input,
         b.device = Input::DeviceType::Keyboard;
         b.code = c.key;
         b.scale = 1.0f;
-        b.requiredMods = c.mods;
-        b.forbiddenMods = Input::kModShortcutMask & ~c.mods;
+        b.requiredMods = static_cast<Input::ModifierFlags>(c.mods);
+        b.forbiddenMods = Input::kShortcutModifiers & ~b.requiredMods;
         input.BindKey(entry.context, entry.action, b);
     }
 }

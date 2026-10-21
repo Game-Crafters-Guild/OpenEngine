@@ -21,17 +21,17 @@ Dither writes depth, so blades sort correctly against each other and against eve
 | **Dither** (default), on a single-sample view | a screen-door discard against a static interleaved-gradient pattern | write + test | depth-correct |
 | **Blend** | alpha blending | test only, no write | placement order within a distance band |
 
-Alpha-to-coverage needs real samples: on a single-sample view the hardware degenerates it to a hard 0.5 cutoff, so Dither takes the screen-door discard there instead. You do not choose between those two — the view's sample count does, and both are depth-correct.
+Alpha-to-coverage needs real samples: on a single-sample view the hardware degenerates it to a hard 0.5 cutoff, so Dither takes the screen-door discard there instead. You do not choose between those two: the view's sample count does, and both are depth-correct.
 
 ### The opaque fast path, which outranks your choice
 
 A view whose grass binds nothing carrying live alpha has no soft alpha to resolve. That view draws grass opaque: no alpha-to-coverage, and no discard instruction at all, so the hardware can early-Z the blades. This covers geometric ribbon grass, which binds no texture, and card grass whose bound texture probes uniformly opaque.
 
-This is checked **before** the authored mode and overrides it, Blend included. Blending a blade that is opaque everywhere buys nothing back except Blend's ordering artifact, so the authored value is simply not consulted. The editor says so: with nothing carrying alpha, the Render Mode row shows a note explaining that the choice currently resolves nothing, and the row stays enabled rather than graying out, because the scoping rule below means your choice can still count.
+This is checked **before** the authored mode and overrides it, Blend included. Blending a blade that is opaque everywhere buys nothing back except Blend's ordering artifact, so the authored value is simply not consulted. The editor says so: with nothing carrying alpha, the Render Mode row shows a note explaining that the choice currently resolves nothing. The row stays enabled rather than graying out, because the scoping rule below means your choice can still count.
 
 :::caution[A texture classified opaque renders solid]
 
-An alpha probe decides whether a bound texture carries alpha. Under the opaque path the card cutout is compiled out, so a texture that does carry soft alpha but is classified opaque renders as a solid card instead of having its holes punched. The probe accepts KTX2 only; for a PNG or TGA source it answers from the header (no alpha channel) or not at all, because the cook re-encodes to BC7 and that result is not a function of the source alpha.
+An alpha probe decides whether a bound texture carries alpha. Under the opaque path the card cutout is compiled out, so a texture that does carry soft alpha but is classified opaque renders as a solid card instead of having its holes punched. The probe accepts KTX2 only. For a PNG or TGA source it answers from the header (no alpha channel) or not at all, because the cook re-encodes to BC7 and that result is not a function of the source alpha.
 
 :::
 
@@ -39,7 +39,7 @@ An alpha probe decides whether a bound texture carries alpha. Under the opaque p
 
 Blades from every terrain share one instance buffer and one indirect draw per distance band, and blend-versus-depth-write is pipeline state on the draw. One draw cannot serve two pipeline classes.
 
-So **Blend requires every active grass terrain to author it**. If any active terrain authors Dither, every terrain in that view draws Dither — the depth-correct choice wins the tie. The reduction runs once per parameter upload over every *active* terrain in the world, not per view and not frustum-filtered, so a terrain no camera can currently see still counts toward the answer. That is why the inspector's note is scoped to every active terrain rather than to the one you have selected.
+So **Blend requires every active grass terrain to author it**. If any active terrain authors Dither, every terrain in that view draws Dither. The depth-correct choice wins the tie. The reduction runs once per parameter upload over every *active* terrain in the world, not per view and not frustum-filtered, so a terrain no camera can currently see still counts toward the answer. That is why the inspector's note is scoped to every active terrain rather than to the one you have selected.
 
 The only genuinely per-view input is the view's color sample count, which is what splits Dither into its alpha-to-coverage and screen-door forms.
 
@@ -51,18 +51,18 @@ A geometric blade is opaque everywhere. In Blend's no-depth-write bucket, "blend
 
 ### Card grass with texture alpha: either, and Blend is the reason Blend exists
 
-Blend keeps its authored alpha genuinely blended, at the cost of ordering within a band; the far band is drawn first so it can never composite over near blades, but blade against blade inside a band follows placement order. Dither resolves the same alpha through coverage or a screen door and stays depth-correct. Pick Blend when the soft edges matter more than the ordering.
+Blend keeps its authored alpha genuinely blended, at the cost of ordering within a band. The far band is drawn first so it can never composite over near blades, but blade against blade inside a band follows placement order. Dither resolves the same alpha through coverage or a screen door and stays depth-correct. Pick Blend when the soft edges matter more than the ordering.
 
 ### What it costs
 
-Dither and the opaque path write depth and get early-Z; Blend does not. Removing the discard for opaque grass measurably shortens the world pass, because a fragment module that carries a kill loses early-Z whether or not the kill is reachable. The first view to enter opaque mode compiles its own shader variant once per content hash per machine, then hits the disk cache. The Release measurements behind those statements, and the alternatives that were weighed and rejected (GPU sort, weighted blended order-independent transparency, z-write-only variants), are in the grass render modes design record in the support repository.
+Dither and the opaque path write depth and get early-Z. Blend does not. Removing the discard for opaque grass measurably shortens the world pass, because a fragment module that carries a kill loses early-Z whether or not the kill is reachable. The first view to enter opaque mode compiles its own shader variant once per content hash per machine, then hits the disk cache. The Release measurements behind those statements, and the alternatives that were weighed and rejected (GPU sort, weighted blended order-independent transparency, and z-write-only variants), are in the grass render modes design record in the support repository.
 
 ## Where to author it
 
 | Surface | How |
 |---|---|
 | Inspector | Terrain inspector → Grass → Advanced → **Render Mode** dropdown. Its tooltip names what each mode does, and adds the "resolves nothing" sentence when nothing in the view carries alpha. |
-| Component field | `TerrainGrass.RenderMode`, a `TerrainGrassRenderMode` — `Dither` (default) or `Blend`. |
+| Component field | `TerrainGrass.RenderMode`, a `TerrainGrassRenderMode`: `Dither` (default) or `Blend`. |
 | Scene file | `TerrainGrass.renderMode = Dither\|Blend`. The name or the numeric value is accepted, case and quotes tolerant. |
 | Debug server | `set_component TerrainGrass {"RenderMode": "Blend"}`. The value comes back in the component snapshot and in the per-terrain grass JSON. |
 
@@ -70,10 +70,6 @@ The neighboring **Alpha Cutoff** row appears only while a bound texture actually
 
 ## Limits
 
-- Blend's ordering within a distance band cannot be fixed by emission order. Instance order inside a band comes from subgroup atomic compaction in the placement compute and is not deterministic; only depth can order blades against each other, which is what Dither does.
-- The alpha probe's reach is narrower than it looks — see the warning above.
+- Blend's ordering within a distance band cannot be fixed by emission order. Instance order inside a band comes from subgroup atomic compaction in the placement compute and is not deterministic. Only depth can order blades against each other, which is what Dither does.
+- The alpha probe's reach is narrower than it looks. See the warning above.
 - Grass placement is planar only. A spherical terrain sources no grass at all, so no mode applies to it.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Terrain/grass-render-modes.html`; American spelling (artifact).

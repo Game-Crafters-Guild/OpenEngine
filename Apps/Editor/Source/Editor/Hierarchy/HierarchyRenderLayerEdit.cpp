@@ -1,14 +1,11 @@
 #include "Editor/Hierarchy/HierarchyRenderLayerEdit.h"
 
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/Rendering/RenderLayer.h"
-#include "Components/Rendering/SkinnedMeshRenderer.h"
 #include "ECS/World.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <string>
-#include <utility>
 
 namespace GameEngine::Editor
 {
@@ -16,30 +13,12 @@ namespace
 {
 const std::string kEditName = "Change Render Layer";
 
-// Commits `mask` to the one component that owns the layer on this entity. `current`
-// is taken by value because the commit reinserts the component and invalidates every
-// pointer into it. An entity already standing at `mask` commits nothing, so a no-op
-// row never enlarges the undo step.
-template <typename TComponent, typename ApplyFn>
-void CommitMaskTo(ECS::World& world,
-                  ECS::EntityHandle entity,
-                  uint32 current,
-                  uint32 mask,
-                  UndoRedoService* undo,
-                  EditorChangeNotifications* notifications,
-                  ApplyFn&& apply)
-{
-    if (current == mask)
-        return;
-
-    InspectorDrag::CommitComponentWithUndo<TComponent>(
-        &world, entity, notifications, undo, kEditName, std::forward<ApplyFn>(apply));
-}
 }  // namespace
 
-void ApplyRenderLayerMask(ECS::World& world,
+void ApplyRenderLayerBits(ECS::World& world,
                           const std::vector<ECS::EntityHandle>& entities,
-                          uint32 mask,
+                          uint32 bits,
+                          bool on,
                           UndoRedoService* undo,
                           EditorChangeNotifications* notifications)
 {
@@ -56,24 +35,18 @@ void ApplyRenderLayerMask(ECS::World& world,
         if (!entity.IsValid() || !world.IsValid(entity))
             continue;
 
-        if (const auto* layer = world.GetComponent<Components::RenderLayer>(entity))
-        {
-            CommitMaskTo<Components::RenderLayer>(
-                world, entity, layer->mask, mask, undo, notifications,
-                [mask](Components::RenderLayer& target) { target.mask = mask; });
-        }
-        else if (const auto* renderer = world.GetComponent<Components::MeshRenderer>(entity))
-        {
-            CommitMaskTo<Components::MeshRenderer>(
-                world, entity, renderer->renderLayerMask, mask, undo, notifications,
-                [mask](Components::MeshRenderer& target) { target.renderLayerMask = mask; });
-        }
-        else if (const auto* skinned = world.GetComponent<Components::SkinnedMeshRenderer>(entity))
-        {
-            CommitMaskTo<Components::SkinnedMeshRenderer>(
-                world, entity, skinned->renderLayerMask, mask, undo, notifications,
-                [mask](Components::SkinnedMeshRenderer& target) { target.renderLayerMask = mask; });
-        }
+        // An entity whose layers this edit leaves as they are commits nothing, so a
+        // no-op row never enlarges the undo step.
+        const auto* renderer = world.GetComponent<Components::MeshRenderer>(entity);
+        if (!renderer)
+            continue;
+        const uint32 current = renderer->RenderLayers.Bits;
+        const uint32 updated = on ? (current | bits) : (current & ~bits);
+        if (updated == current)
+            continue;
+        InspectorDrag::CommitComponentWithUndo<Components::MeshRenderer>(
+            &world, entity, notifications, undo, kEditName,
+            [updated](Components::MeshRenderer& target) { target.RenderLayers.Bits = updated; });
     }
 
     if (undo)

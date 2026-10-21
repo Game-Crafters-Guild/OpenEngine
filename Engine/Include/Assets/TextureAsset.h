@@ -4,6 +4,8 @@
 #include "AssetCore/Asset.h"
 #include "AssetCore/NineSlice.h"
 
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -268,27 +270,24 @@ public:
      */
     bool IsSwizzleBaked() const { return m_SwizzleBaked; }
 
-    /**
-     * @brief The file a CPU reader decodes for this texture's pixels: the packaged
-     * portable payload when the texture loaded from an exported package (whose
-     * source the export removes), otherwise the source.
-     */
-    const std::filesystem::path& GetCpuDecodePath() const
+    /// The SVG text an asset loaded from, with its intrinsic size in CSS px
+    /// (its width/height or viewBox). Immutable once built; a reload swaps the
+    /// asset's pointer to a new one. Rasterize it at any size with
+    /// RasterizeSvgToRgbaAtDimensions (Assets/SvgRasterizer.h).
+    struct SvgSource
     {
-        return m_PackagedPortablePath.empty() ? GetPath() : m_PackagedPortablePath;
-    }
+        std::string Text;
+        float32 Width = 0.0f;
+        float32 Height = 0.0f;
+    };
 
     /**
-     * @brief Opt this asset into adopting an EXISTING cooked artifact even when
-     * loaded outside an AssetManager context. For GPU-upload consumers only
-     * (the render thread's synchronous GetOrUpload path): artifact adoption is
-     * cheap (source hash + cache read + KTX2 parse), and a cache MISS never
-     * cooks on these threads — cooking stays worker-only (async loads and
-     * TextureService::RequestRecook). Direct Load() CPU consumers (terrain
-     * masks, ocean extraction) must NOT set this: they rely on raw per-pixel
-     * payloads and source channel counts.
+     * @brief The SVG source the asset holds right now, null for a non-SVG
+     * asset. Safe from any thread; two snapshots compare equal by pointer
+     * exactly when no reload happened between them, which is how a consumer
+     * that baked from one tells a stale result from a current one.
      */
-    void SetAdoptCookedArtifacts(bool adopt) { m_AdoptCookedArtifacts = adopt; }
+    std::shared_ptr<const SvgSource> SnapshotSvgSource() const;
 
     /**
      * @brief Set texture filtering
@@ -311,27 +310,31 @@ private:
      * resolve per-asset cook settings from AssetDatabase meta, then load the
      * cached KTX2 artifact (or, inside an AssetManager load context, cook +
      * cache it) instead of raw-decoding the source. Returns false (caller falls
-     * back to the raw decode) outside both an AssetManager context and the
-     * SetAdoptCookedArtifacts opt-in, on a cache miss outside a load context,
-     * for authored containers, or when the cook would be byte-identical to the
-     * raw path. Invalid policy forbids fallback; enabled policy requires actual
+     * back to the raw decode) outside an AssetManager context, for authored
+     * containers, or when the cook would be byte-identical to the raw path. Invalid policy forbids fallback; enabled policy requires actual
      * decoded pixels and forbids placeholder success. See Assets/TextureCook.h.
      */
     bool TryLoadViaCook(const Vector<uint8>& sourceBytes, const String& extensionLower,
                         AlphaCoveragePolicy& coveragePolicy);
 
     /**
-     * @brief Load texture using stb_image
+     * @brief Reads the source image file at GetPath() and loads it through the cook, or
+     * decodes it with the Image module (the file's own channels; float for .hdr).
      */
-    bool LoadWithSTB();
+    bool DecodeSourceFile();
 
     // Nullopt for authored input; packaged input succeeds or fails without raw fallback.
     std::optional<bool> LoadPackagedTexture(const Vector<uint8>* data);
 
+    // Replace a loaded block-compressed payload with its decode, every level, for a CPU reader
+    // of a package (whose source the export removed): RGBA32F for BC6H, RGBA8 otherwise.
+    bool DecodeBlockPayloadForCpuReaders();
+
     /**
-     * @brief Load texture from memory data using stb_image
+     * @brief Loads the source image file's bytes through the cook, or decodes them with
+     * the Image module (the file's own channels; float for .hdr).
      */
-    bool LoadWithSTBFromData(const Vector<uint8>& data);
+    bool DecodeSourceBytes(const Vector<uint8>& data);
 
     /**
      * @brief Load DDS texture
@@ -363,7 +366,8 @@ private:
 #endif
 
 
-    /// Rasterize an SVG string via ThorVG and populate pixel data members.
+    /// Rasterize an SVG string via ThorVG at the asset's own raster size,
+    /// populate the pixel data members and keep the source for SnapshotSvgSource.
     bool LoadFromSvgData(const std::string& svgText, const String& extensionLower);
 
     /**
@@ -381,14 +385,14 @@ private:
 	    uint64 m_DataSize;
 	    bool m_HasMipmaps;
 	    bool m_SwizzleBaked = false;
-	    bool m_AdoptCookedArtifacts = false;
-	    std::filesystem::path m_PackagedPortablePath;
 	    uint32 m_MipmapLevels;
 	    std::vector<TextureMipDesc> m_MipChain;
 	    TextureFilter m_MinFilter;
 	    TextureFilter m_MagFilter;
 	    TextureWrap m_WrapS;
 	    TextureWrap m_WrapT;
+	    std::shared_ptr<const SvgSource> m_SvgSource;
+	    mutable std::mutex m_SvgSourceMutex;
 
     DISALLOW_COPY_AND_ASSIGN(TextureAsset);
 };

@@ -1,8 +1,13 @@
 #version 450
 
+
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
 layout(set = 0, binding = 0) uniform sampler2D uSrc;
+// The view's exposure state: the source is stored at the frame's pre-exposure P, and the Karis
+// weight 1 / (1 + B) is written against absolute scene-linear brightness, so B is divided by P.
+#define GE_EXPOSURE_HISTORY_BINDING 1
+#include "Includes/exposure_history.glsl"
 
 layout(push_constant) uniform FogGlowDownsamplePC
 {
@@ -10,7 +15,7 @@ layout(push_constant) uniform FogGlowDownsamplePC
     int antiFlickerStage;
 } pc;
 
-float Brightness(vec3 c) { return max(max(c.r, c.g), c.b); }
+float Brightness(vec3 c) { return max(max(c.r, c.g), c.b) / GE_PreExposure(); }
 
 void main()
 {

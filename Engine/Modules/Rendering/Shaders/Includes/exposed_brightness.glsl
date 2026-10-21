@@ -35,4 +35,15 @@ float GE_ResolveExposureScale(float staticScale, int useAutoExposure, float hist
     return (expScale > 0.0) ? expScale : 1.0;
 }
 
+// The pre-exposure P that scene colour is stored at, from an ExposureHistory buffer's
+// `preExposure` field (pre_exposure_snapshot.comp writes it once per frame, before any pass
+// writes scene colour). Every pass that writes radiance into scene colour multiplies by P;
+// every pass that compares scene colour against an absolute value divides by it. A field that
+// holds no snapshot (zero-initialized, the unmetered fallback buffer, a view whose render
+// graph has no snapshot) reads as 1: that view stores absolute scene-linear values.
+float GE_ResolvePreExposure(float storedPreExposure)
+{
+    return (storedPreExposure > 0.0) ? storedPreExposure : 1.0;
+}
+
 #endif // GE_EXPOSED_BRIGHTNESS_GLSL

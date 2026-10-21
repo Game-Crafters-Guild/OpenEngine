@@ -247,6 +247,21 @@ add_custom_command(TARGET Player POST_BUILD
     VERBATIM
 )
 
+# Stage engine-level materials into the Player's staged Assets.
+# Scenes reference built-in materials by their 'editor' mount GUID (the grid ground of the New
+# Scene and the Basic 3D template), and a Player run from the build tree resolves them from
+# this tree.
+# A POST_BUILD copy runs only when the Player relinks: an edited material stays stale and a
+# deleted one is not pruned until then. The dependency-tracked mirror is issue #2473.
+add_custom_command(TARGET Player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Materials"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_SOURCE_DIR}/Engine/Assets/Materials"
+            "${_GE_PLAYER_CONTENT_DIR}/Assets/Materials"
+    COMMENT "Staging engine material assets for Player"
+    VERBATIM
+)
+
 # Stage the engine render pipelines into the Player's staged Assets.
 # A Player run from the build tree mounts <install assets root> as 'editor', and the
 # pipeline game.config names (ForwardPlus when it names none) resolves from there.
@@ -321,10 +336,7 @@ if(ENABLE_SCRIPTING)
                     "${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
             COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-                    "${CMAKE_SOURCE_DIR}/Managed/Input.ABI/bin/$<CONFIG>"
-                    "$<TARGET_FILE_DIR:Player>"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-                    "${CMAKE_SOURCE_DIR}/Managed/Physics.ABI/bin/$<CONFIG>"
+                    "${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/bin/$<CONFIG>"
                     "$<TARGET_FILE_DIR:Player>"
             COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${CMAKE_SOURCE_DIR}/Managed/Platform.ABI/bin/$<CONFIG>"
@@ -354,8 +366,7 @@ if(ENABLE_SCRIPTING)
                 # Scripting ABI surfaces (no editor-specific assemblies)
                 "${CMAKE_SOURCE_DIR}/Managed/Scripting.ABI/bin/$<CONFIG>"
                 "${CMAKE_SOURCE_DIR}/Managed/ECS.ABI/bin/$<CONFIG>"
-                "${CMAKE_SOURCE_DIR}/Managed/Input.ABI/bin/$<CONFIG>"
-                "${CMAKE_SOURCE_DIR}/Managed/Physics.ABI/bin/$<CONFIG>"
+                "${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/bin/$<CONFIG>"
                 "${CMAKE_SOURCE_DIR}/Managed/Platform.ABI/bin/$<CONFIG>"
                 # GameSystem runner (ManagedSystemBridge resolves it beside CoreBridge)
                 "${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/bin/$<CONFIG>"
@@ -376,7 +387,7 @@ endif()
 if(ENABLE_SCRIPTING)
     set(_ge_player_managed_deps
         CoreBridgeAssembly HotReloadAssembly ScriptingAbiAssembly
-        EcsAbiAssembly InputAbiAssembly PhysicsAbiAssembly PlatformAbiAssembly
+        EcsAbiAssembly ScriptingBindingsAssembly PlatformAbiAssembly
         ScriptingRuntimeAssembly)
     add_dependencies(Player ${_ge_player_managed_deps})
 

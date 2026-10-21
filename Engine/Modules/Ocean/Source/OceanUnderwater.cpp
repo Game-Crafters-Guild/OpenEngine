@@ -7,6 +7,7 @@
 
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
@@ -163,7 +164,8 @@ bool OceanUnderwater::EnsurePipeline(IDevice& device)
                         {15, DescriptorType::CombinedImageSampler, 1, kUnderwaterFragmentStage},
                         {16, DescriptorType::CombinedImageSampler, 1, kUnderwaterFragmentStage},
                         {17, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
-                        {18, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage}};
+                        {18, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
+                        {19, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage}};
                     m_Pipeline = RenderGraph::MakeFullscreenPipelineDesc("Ocean.Underwater");
                     m_Pipeline.vertexShader = vs->second;
                     m_Pipeline.pixelShader = fs->second;
@@ -216,7 +218,8 @@ bool OceanUnderwater::EnsurePipeline(IDevice& device)
                         {15, DescriptorType::CombinedImageSampler, 1, kUnderwaterFragmentStage},
                         {16, DescriptorType::CombinedImageSampler, 1, kUnderwaterFragmentStage},
                         {17, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
-                        {18, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage}};
+                        {18, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
+                        {19, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage}};
                     m_ShadowPipeline =
                         RenderGraph::MakeFullscreenPipelineDesc("Ocean.Underwater.Shadowed");
                     m_ShadowPipeline.vertexShader = vs->second;
@@ -502,6 +505,33 @@ void FillUnderwaterParams(OceanUnderwaterParamsGPU& out, const OceanParamsGPU& p
     // upload-ring memory rather than field-by-field writes.
     out = u;
 }
+
+// The overlay's fullscreen inputs, collected in a list of fixed capacity. An input past the
+// capacity is written to a slot outside the list and marks it overflowed, so a collection that
+// grows past what the pass can bind never writes out of bounds: the overlay refuses the pass.
+template <class Input, size_t Capacity>
+class OverlayInputs
+{
+  public:
+    Input& Add()
+    {
+        if (m_Count == Capacity)
+        {
+            m_Overflowed = true;
+            m_Discard = {};
+            return m_Discard;
+        }
+        return m_Items[m_Count++];
+    }
+    bool Overflowed() const { return m_Overflowed; }
+    std::span<const Input> Inputs() const { return {m_Items.data(), m_Count}; }
+
+  private:
+    std::array<Input, Capacity> m_Items{};
+    Input m_Discard{};
+    uint32_t m_Count = 0;
+    bool m_Overflowed = false;
+};
 } // namespace
 
 bool IsUnderwaterPortalInView(const OceanUnderwaterPortalData& data, const float* viewProj)
@@ -664,6 +694,9 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
         msaa ? d.Frame.CreateTexture((base + ".CompositeColor").c_str(), copyDesc) : sceneColor;
     if (!compositeTarget.IsValid())
         return false;
+    // The snapshot and a separate composite target hold scene colour at the frame's pre-exposure.
+    d.MarkPreExposed(sceneCopy);
+    d.MarkPreExposed(compositeTarget);
 
     const GraphicsPipelineId overlayPipe = useShadowedGodRays ? m_ShadowPipelineId : m_PipelineId;
     const DescriptorSetLayoutDesc overlayLayout = useShadowedGodRays ? m_ShadowLayout : m_Layout;
@@ -685,24 +718,23 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     // absent caustics) still need valid descriptors, so they fall back to the
     // never-read dummies — a per-input fallback, hence the dedicated 2D dummy
     // for caustics instead of reusing another binding's physical.
-    std::array<RenderGraph::RGFullscreenTextureInput, 15> textureInputs{};
-    uint32_t textureCount = 0;
+    OverlayInputs<RenderGraph::RGFullscreenTextureInput, RenderGraph::kMaxFullscreenTextureInputs> textureInputs;
     {
-        auto& in = textureInputs[textureCount++]; // scene snapshot
+        auto& in = textureInputs.Add(); // scene snapshot
         in.Binding = 0;
         in.Texture = sceneCopy;
         in.Sampler = sampler;
         in.Required = true;
     }
     {
-        auto& in = textureInputs[textureCount++]; // resolved depth
+        auto& in = textureInputs.Add(); // resolved depth
         in.Binding = 1;
         in.Texture = depth;
         in.Sampler = sampler;
         in.Required = true;
     }
     {
-        auto& in = textureInputs[textureCount++]; // FFT displacement cascades
+        auto& in = textureInputs.Add(); // FFT displacement cascades
         in.Binding = 3;
         in.Texture = shape.DisplacementRG; // declared read: orders after the FFT sim
         in.RawTexture = shape.Displacement;
@@ -711,7 +743,7 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
         in.FallbackSampler = sampler;
     }
     {
-        auto& in = textureInputs[textureCount++]; // caustics web (uShape.x gates use)
+        auto& in = textureInputs.Add(); // caustics web (uShape.x gates use)
         in.Binding = 4;
         in.RawTexture = caustics;
         in.Sampler = causticsSampler;
@@ -722,7 +754,7 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
         {5u, 6u, 7u, 10u, 12u, 13u, 14u, 15u};
     for (uint32_t stream = 0; stream < kMaxOceanLocalFFTStreams; ++stream)
     {
-        auto& in = textureInputs[textureCount++]; // local FFT displacement streams
+        auto& in = textureInputs.Add(); // local FFT displacement streams
         in.Binding = kLocalBindings[stream];
         if ((validLocalFFTMask & (1u << stream)) != 0u)
         {
@@ -736,7 +768,7 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     constexpr uint32_t kLocalMaskBindings[kOceanLocalFFTMaskPages] = {11u, 16u};
     for (uint32_t page = 0; page < kOceanLocalFFTMaskPages; ++page)
     {
-        auto& in = textureInputs[textureCount++]; // local FFT mask pages
+        auto& in = textureInputs.Add(); // local FFT mask pages
         in.Binding = kLocalMaskBindings[page];
         if (shape.LocalFFTMasks[page].IsValid() && shape.LocalFFTMaskSamplers[page].IsValid())
         {
@@ -749,17 +781,16 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     }
     if (useShadowedGodRays)
     {
-        auto& in = textureInputs[textureCount++]; // CSM array for god-ray shafts
+        auto& in = textureInputs.Add(); // CSM array for god-ray shafts
         in.Binding = 9;
         in.Texture = shadowArr;
         in.Sampler = shadowSampler;
         in.Required = true;
     }
 
-    std::array<RenderGraph::RGFullscreenBufferInput, 4> bufferInputs{};
-    uint32_t bufferCount = 0;
+    OverlayInputs<RenderGraph::RGFullscreenBufferInput, RenderGraph::kMaxFullscreenBufferInputs> bufferInputs;
     {
-        auto& b = bufferInputs[bufferCount++]; // params UBO (frame upload ring)
+        auto& b = bufferInputs.Add(); // params UBO (frame upload ring)
         b.Binding = 2;
         b.Buffer = paramsAlloc.Buffer;
         b.Offset = paramsAlloc.Offset;
@@ -767,7 +798,7 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     }
     if (useShadowedGodRays)
     {
-        auto& b = bufferInputs[bufferCount++]; // shadow cascade data
+        auto& b = bufferInputs.Add(); // shadow cascade data
         b.Binding = 8;
         b.Buffer = shadowData.Buffer;
         b.Offset = shadowData.Offset;
@@ -788,7 +819,7 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     paramsAlloc.Ptr->PortalExtra[1] = static_cast<float>(ribbonCount);
     if (ribbonCount > 0u)
         paramsAlloc.Ptr->Portal[0] = 1.0f;
-    auto &ribbonBinding = bufferInputs[bufferCount++];
+    auto &ribbonBinding = bufferInputs.Add();
     ribbonBinding.Binding = 17;
     ribbonBinding.IsStorage = true;
     ribbonBinding.Buffer = ribbons.Buffer;
@@ -805,28 +836,50 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     if (materialCount)
         std::memcpy(static_cast<uint8 *>(materials.Ptr) + 16, portalData->Materials.data(),
                     materialBytes - 16);
-    auto &materialBinding = bufferInputs[bufferCount++];
+    auto &materialBinding = bufferInputs.Add();
     materialBinding.Binding = 18;
     materialBinding.IsStorage = true;
     materialBinding.Buffer = materials.Buffer;
     materialBinding.Offset = materials.Offset;
     materialBinding.Size = materialBytes;
 
+    // The view's ExposureHistory: the overlay reads the scene back to absolute units and stores
+    // its result at the frame's pre-exposure P.
+    const Engine::Renderer::Pipeline::PipelineBufferBindingRG exposure =
+        Engine::Renderer::Pipeline::ResolveViewExposureHistory(d);
+    if (!exposure.IsValid())
+        return false;
+    auto& exposureBinding = bufferInputs.Add();
+    exposureBinding.Binding = 19;
+    exposureBinding.IsStorage = true;
+    exposureBinding.Buffer = exposure.Buffer;
+    exposureBinding.Offset = exposure.Offset;
+    exposureBinding.Size = exposure.Size;
+    exposureBinding.Declare = exposure.Graph;
+
+    if (textureInputs.Overflowed() || bufferInputs.Overflowed())
+    {
+        Logger::Log::Error("OceanUnderwater '{}': more inputs than a fullscreen pass binds ({} textures, {} "
+                           "buffers; RGFullscreen.h); the overlay is not drawn",
+                           compositeName, RenderGraph::kMaxFullscreenTextureInputs,
+                           RenderGraph::kMaxFullscreenBufferInputs);
+        return false;
+    }
+
     RenderGraph::RGFullscreenDesc composite{};
     composite.Name = compositeName.c_str();
     composite.Phase = Rendering::PassPhase::kPostProcess;
     composite.Pipeline = overlayPipe;
     composite.Layout = overlayLayout;
-    composite.Textures =
-        std::span<const RenderGraph::RGFullscreenTextureInput>(textureInputs.data(), textureCount);
-    composite.Buffers =
-        std::span<const RenderGraph::RGFullscreenBufferInput>(bufferInputs.data(), bufferCount);
+    composite.Textures = textureInputs.Inputs();
+    composite.Buffers = bufferInputs.Inputs();
     composite.Target = compositeTarget;
     composite.Ops.Load = RenderGraph::RGLoadOp::DontCare;
     composite.Ops.Store = RenderGraph::RGStoreOp::Store;
     composite.Width = renderW;
     composite.Height = renderH;
-    RenderGraph::AddFullscreenPass(d.Frame, composite);
+    if (!RenderGraph::AddFullscreenPass(d.Frame, composite).IsValid())
+        return false;
 
     if (compositeTarget.Id != sceneColor.Id)
         d.PublishTexture(Engine::Renderer::Pipeline::Names::Res::SceneColor, compositeTarget);

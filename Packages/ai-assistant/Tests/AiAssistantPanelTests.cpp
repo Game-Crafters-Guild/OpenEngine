@@ -1257,6 +1257,105 @@ TEST(AiAssistantPanelTests, ALongReasonTakesTwoLinesInTheConversation)
     }
 }
 
+// The text size slider and the Resize Items gesture set --prompt_text_scale on the panel: the
+// conversation's text, a prompt's and a reply's alike, grows with it from its 14 px default.
+TEST(AiAssistantPanelTests, TheConversationTextFollowsTheTextScale)
+{
+    float fontSizes[2] = {0.0f, 0.0f};
+    float replySizes[2] = {0.0f, 0.0f};
+    const float scales[2] = {0.0f, 1.5f};
+    for (int index = 0; index < 2; ++index)
+    {
+        ConversationLayout layout;
+        if (!layout.Device)
+            GTEST_SKIP() << "No device";
+        const std::string built = BuildConversation(layout, 1200.0f, TurnWithALongReason("(failed) short"));
+        ASSERT_TRUE(built.empty()) << built;
+        if (scales[index] > 0.0f)
+            layout.List->Overrides().SetCustomNumber("--prompt_text_scale"_sid, scales[index]);
+        layout.List->MarkDirtySubtree(UIElement::StyleDirty | UIElement::LayoutDirty | UIElement::VisualDirty);
+        layout.Ui->Update(0.016f, /*interactive=*/false);
+        const UIElement* text = FindByClass(*layout.Row, "agent-row-text");
+        ASSERT_NE(text, nullptr);
+        fontSizes[index] = text->GetResolvedStyle().Visual.FontSize;
+        const UIElement* reply = FindByClass(*layout.Row, "agent-row-reply");
+        ASSERT_NE(reply, nullptr);
+        replySizes[index] = reply->GetResolvedStyle().Visual.FontSize;
+    }
+    EXPECT_FLOAT_EQ(fontSizes[0], 14.0f) << "the default size";
+    EXPECT_NEAR(fontSizes[1], 21.0f, 0.01f) << "scale 1.5 of the 14 px default";
+    EXPECT_FLOAT_EQ(replySizes[0], 14.0f) << "the reply's default size";
+    EXPECT_NEAR(replySizes[1], 21.0f, 0.01f) << "the reply follows the scale too";
+}
+
+// The conversation is a reading column in the middle of the panel: in a wide panel each card is
+// 800 px wide with equal space on both sides, and in a narrow one it keeps the list's 8 px gap on
+// each side.
+// The status line and the text size slider share one row: the status text takes the width the
+// slider leaves and the slider stays inside the panel at its own size, however narrow the panel.
+TEST(AiAssistantPanelTests, TheTextSizeSliderStaysInsideTheStatusRow)
+{
+    constexpr float kSliderWidth = 120.0f;
+    for (const float listWidth : {1200.0f, 320.0f})
+    {
+        ConversationLayout layout;
+        if (!layout.Device)
+            GTEST_SKIP() << "No device";
+        const std::string built = BuildConversation(layout, listWidth, TurnWithALongReason("(failed) short"));
+        ASSERT_TRUE(built.empty()) << built;
+        auto row = std::make_unique<UIElement>();
+        row->AddClass("prompt-panel-status-row");
+        auto status = std::make_unique<Label>();
+        status->AddClass("prompt-panel-status");
+        status->SetText("Ready, with a status line long enough to want the whole row for itself");
+        row->AddChild(std::move(status));
+        auto host = std::make_unique<UIElement>();
+        host->AddClass("prompt-panel-text-size-host");
+        auto slider = std::make_unique<UIElement>();
+        slider->Overrides().Set(Style::Width, StyleLength::Px(kSliderWidth));
+        slider->Overrides().Set(Style::Height, StyleLength::Px(16.0f));
+        UIElement* hostRaw = host.get();
+        host->AddChild(std::move(slider));
+        row->AddChild(std::move(host));
+        UIElement* rowRaw = row.get();
+        layout.List->AddChild(std::move(row));
+        layout.Ui->Update(0.016f, /*interactive=*/false);
+        const float rowRight = rowRaw->GetLayoutX() + rowRaw->GetLayoutWidth();
+        const float hostRight = hostRaw->GetLayoutX() + hostRaw->GetLayoutWidth();
+        EXPECT_GE(hostRaw->GetLayoutWidth(), kSliderWidth) << listWidth;
+        EXPECT_LE(hostRight, rowRight + 0.5f) << "the slider is laid out past the row at " << listWidth;
+    }
+}
+
+TEST(AiAssistantPanelTests, TheConversationIsACentredColumn)
+{
+    struct Case
+    {
+        float ListWidth;
+        float RowWidth;
+        float RowX;
+    };
+    for (const Case& expected : {Case{1200.0f, 800.0f, 200.0f}, Case{500.0f, 484.0f, 8.0f}})
+    {
+        ConversationLayout layout;
+        if (!layout.Device)
+            GTEST_SKIP() << "No device";
+        const std::string built = BuildConversation(layout, expected.ListWidth, TurnWithALongReason("(failed) short"));
+        ASSERT_TRUE(built.empty()) << built;
+        layout.List->AddClass("prompt-panel-history-list");
+        auto empty = std::make_unique<Label>();
+        empty->AddClass("prompt-panel-history-empty");
+        empty->SetText("Your conversation appears here.");
+        const UIElement* emptyRaw = empty.get();
+        layout.List->AddChild(std::move(empty));
+        layout.Ui->Update(0.016f, /*interactive=*/false);
+        EXPECT_NEAR(layout.Row->GetLayoutWidth(), expected.RowWidth, 0.5f) << expected.ListWidth;
+        EXPECT_NEAR(layout.Row->GetLayoutX() - layout.List->GetLayoutX(), expected.RowX, 0.5f) << expected.ListWidth;
+        EXPECT_NEAR(emptyRaw->GetLayoutX() - layout.List->GetLayoutX(), expected.RowX, 0.5f)
+            << "the empty state sits in the column at " << expected.ListWidth;
+    }
+}
+
 // In a narrow panel the footer stacks: the status takes the card's whole line and the reply's
 // actions sit under it, right-aligned.
 TEST(AiAssistantPanelTests, ANarrowFooterPutsTheStatusOnItsOwnLineAndTheActionsUnderIt)

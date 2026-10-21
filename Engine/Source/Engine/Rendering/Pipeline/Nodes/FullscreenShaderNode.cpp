@@ -3,6 +3,7 @@
 #include "Core/Engine.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
+#include "Engine/Rendering/Pipeline/ViewExposureCompensation.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"
@@ -45,6 +46,8 @@ class FullscreenShaderNodeRenderer
     struct PassCustomization
     {
         RenderGraph::RGTexture Output{};
+        // Textures the pass samples besides its declared inputs: its own output from an earlier
+        // frame (a temporal history), so they hold what the output holds.
         std::vector<std::pair<std::string, RenderGraph::RGTexture>> SampledTextures;
         std::vector<std::pair<std::string, float>> FloatPushConstants;
     };
@@ -57,6 +60,7 @@ class FullscreenShaderNodeRenderer
         const PassCustomizer& customizePass = {});
     static bool HasShaderTextureBinding(
         const FullscreenShaderNode& node, std::string_view binding);
+    static std::string MissingServiceTextures(const FullscreenShaderNode& node);
     static const std::string& NodeId(const FullscreenShaderNode& node)
     {
         return node.m_Id;
@@ -67,6 +71,37 @@ class FullscreenShaderNodeRenderer
 
 namespace
 {
+// The textures only RenderServices can provide, by the shader binding name a node lists in
+// "serviceTextures". The bind and the refusal of an unlisted one both read this table.
+enum class ServiceTexture : uint8_t
+{
+    CubeLut3D,
+    CubeLut1DStrip,
+    BloomLensDirt,
+};
+
+struct ServiceTextureName
+{
+    std::string_view Name;
+    ServiceTexture Texture;
+};
+
+constexpr ServiceTextureName kServiceTextures[] = {
+    {"uLut3d", ServiceTexture::CubeLut3D},
+    {"uLut1d", ServiceTexture::CubeLut1DStrip},
+    {"uLensDirt", ServiceTexture::BloomLensDirt},
+};
+
+const ServiceTextureName* FindServiceTexture(std::string_view name)
+{
+    for (const ServiceTextureName& entry : kServiceTextures)
+    {
+        if (entry.Name == name)
+            return &entry;
+    }
+    return nullptr;
+}
+
 // ~6e-4 tolerance: below any user-visible PP slider step, above
 // PostProcessVolume float-blend noise.
 constexpr float kSkipEpsilon = 1.0f / 1024.0f;
@@ -886,6 +921,28 @@ bool Detail::FullscreenShaderNodeRenderer::HasShaderTextureBinding(
     return false;
 }
 
+// A shader binding a service texture (kServiceTextures) that its node does not list would get a
+// placeholder of the wrong kind (a 2D texture for the Cube LUT's sampler3D), so the node refuses.
+std::string Detail::FullscreenShaderNodeRenderer::MissingServiceTextures(const FullscreenShaderNode& node)
+{
+    std::string missing;
+    for (const ServiceTextureName& entry : kServiceTextures)
+    {
+        const std::string_view name = entry.Name;
+        if (!HasShaderTextureBinding(node, name))
+            continue;
+        if (std::find(node.m_ServiceTextureBindings.begin(), node.m_ServiceTextureBindings.end(), name) !=
+            node.m_ServiceTextureBindings.end())
+            continue;
+        if (!missing.empty())
+            missing += ", ";
+        missing += "\"";
+        missing += name;
+        missing += "\"";
+    }
+    return missing;
+}
+
 void Detail::FullscreenShaderNodeRenderer::Declare(
     FullscreenShaderNode& node, ViewDeclare& d,
     const PassCustomizer& customizePass)
@@ -907,6 +964,22 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
         return;
     }
 
+    if (const std::string missing = MissingServiceTextures(node); !missing.empty())
+    {
+        if (!node.m_LoggedMissingServiceTextures)
+        {
+            node.m_LoggedMissingServiceTextures = true;
+            Logger::Log::Error(
+                "RenderPipeline FullscreenShader '{}': shaderpkg '{}' samples {} but the node does not list "
+                "it; the node does not run. Add the names to the \"serviceTextures\" array of node '{}' (for "
+                "the Cube LUT's tables, sampled by the Tonemap and HDRColorFx nodes: \"serviceTextures\": "
+                "[\"uLut3d\", \"uLut1d\"], with a LinearClamp sampler for each).",
+                node.m_Id, node.m_ShaderPkg, missing, node.m_Id);
+        }
+        node.StitchThrough(d);
+        return;
+    }
+
     const auto viewId = d.View.id;
     const uint64 worldId = d.View.worldId;
 
@@ -924,7 +997,6 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
             settings.Exposure = 1.0f;
             settings.AutoExposureActive = false;
             settings.ViewOutput = PostProcessViewOutput::NoLook; // preserve the diagnostic values
-            settings.IctcpChromaCompression = 0.0f;
         }
     }
     // The same volume stack can feed views with different render heights, so the
@@ -1095,6 +1167,26 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
             bufEdges.push_back({b.Graph, isWrite});
         }
         bufBinds.push_back({name, b.Buffer, b.Offset, b.Size});
+    }
+    // The view's exposure compensation state is a per-view input the engine provides, like the view's
+    // exposure: a shader that declares uCompensation (Includes/exposure_compensation.glsl) reads it
+    // without a pipeline entry, while the view's Auto exposure resolves it. Otherwise the binding takes
+    // the placeholder, which reads as not written.
+    if (settings.IsAutoExposureActive())
+    {
+        constexpr const char* kCompensationBinding = "uCompensation";
+        uint32_t binding = 0;
+        Rendering::DescriptorType dtype{};
+        if (node.m_ShaderMeta && node.m_Buffers.find(kCompensationBinding) == node.m_Buffers.end() &&
+            Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, kCompensationBinding, binding, dtype))
+        {
+            const PipelineBufferBindingRG compensation = ResolveViewExposureCompensation(d);
+            if (compensation.IsValid())
+            {
+                bufEdges.push_back({compensation.Graph, false});
+                bufBinds.push_back({kCompensationBinding, compensation.Buffer, compensation.Offset, compensation.Size});
+            }
+        }
     }
 
     // Output resolved LAST: a declined stage never materializes a pool
@@ -1268,6 +1360,17 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
             chainCount = 1;
     }
 
+    // The textures standing in for the output (a temporal history written and read back, the
+    // ping-pong chain) hold scene colour at the frame's pre-exposure when the output does.
+    if (d.IsPreExposed(out))
+    {
+        d.MarkPreExposed(passOutput);
+        for (const auto& [binding, texture] : customization.SampledTextures)
+            d.MarkPreExposed(texture);
+        d.MarkPreExposed(ping[0]);
+        d.MarkPreExposed(ping[1]);
+    }
+
     static const char* const kSegSuffix[FullscreenShaderNode::kMaxPingPongChainSegments] = {"", ".Pp1", ".Pp2", ".Pp3"};
 
     for (int32_t seg = 0; seg < chainCount; ++seg)
@@ -1375,13 +1478,6 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                             // the reflected write; no volume authors it.
                             if (settings.ViewOutput == PostProcessViewOutput::NoLook)
                                 pcw.Add("look", Passes::kTonemapNoLookArm);
-                            const HdrOutputMode mode = device->GetActiveHdrOutputMode();
-                            const bool ictcpOutput = mode == HdrOutputMode::HDR10_PQ ||
-                                                     mode == HdrOutputMode::HDR10Plus;
-                            pcw.Add("ictcpChromaCompression",
-                                    ictcpOutput
-                                        ? std::clamp(settings.IctcpChromaCompression, 0.0f, 1.0f)
-                                        : 0.0f);
                         }
                         for (const auto& [name, value] : floatPushConstants)
                         {
@@ -1459,12 +1555,21 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                         if (!wdesc.Has(svc))
                             continue;
                         Rendering::TextureHandle svcTex{};
-                        if (svc == "uLut3d")
-                            svcTex = cubeLut.Lut3D;
-                        else if (svc == "uLut1d")
-                            svcTex = cubeLut.Lut1DStrip;
-                        else if (svc == "uLensDirt")
-                            svcTex = bloomLensDirt;
+                        if (const ServiceTextureName* service = FindServiceTexture(svc))
+                        {
+                            switch (service->Texture)
+                            {
+                            case ServiceTexture::CubeLut3D:
+                                svcTex = cubeLut.Lut3D;
+                                break;
+                            case ServiceTexture::CubeLut1DStrip:
+                                svcTex = cubeLut.Lut1DStrip;
+                                break;
+                            case ServiceTexture::BloomLensDirt:
+                                svcTex = bloomLensDirt;
+                                break;
+                            }
+                        }
                         if (svcTex.IsValid())
                         {
                             wdesc.AddCombinedImageSampler(svc, svcTex, node.m_LinearClampSampler);

@@ -214,6 +214,12 @@ class RenderPipelineInstance
 
     Engine::Renderer::RenderServices& GetRenderServices() const { return m_Rs; }
 
+    // The view's ExposureHistory buffer for a texture holding scene colour stored at the frame's
+    // pre-exposure P (PipelineFrameResources::PreExposedTextures), by render graph resource id in the
+    // frame Declare last ran. Invalid for any other texture, and when the view resolved no
+    // ExposureHistory.
+    Rendering::RenderGraph::RGBuffer FindPreExposureSource(uint32_t textureResourceId) const;
+
     // Collect interned graphics-pipeline ids from all nodes that have a base
     // pipeline. Used for PSO pre-warming.
     std::vector<Rendering::GraphicsPipelineId> CollectBaseGraphicsPipelineIds(Rendering::IDevice& device) const;
@@ -266,6 +272,7 @@ class RenderPipelineInstance
     std::unordered_map<std::string, std::unique_ptr<ResourceDescription>> m_ResourceDescriptions;
     bool m_BlueprintDirty = false;
     bool m_WarnedDrsArmedProfiler = false;
+    bool m_WarnedRenderScaleUnderMsaa = false;
     // Applied render/output extent ratio from the last Declare, and whether any
     // view is TAA-eligible at all (i.e. the render-scale lever is connected).
     float m_DrsLastAppliedScale = 1.0f;

@@ -57,7 +57,7 @@ constexpr std::array<std::string_view, 10> kTrailFields = {
     "TrailTextureScaleV",
 };
 constexpr std::array<std::string_view, 3> kVisibilityFields = {
-    "RenderLayerMask",
+    "RenderLayers",
     "ThinningStart",
     "ThinningEnd",
 };

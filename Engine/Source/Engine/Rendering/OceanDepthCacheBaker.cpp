@@ -45,7 +45,7 @@ struct SceneMeshCandidate
 {
     GUID ModelGuid;
     uint32 MeshId = 0;
-    uint32 RenderLayerMask = 1u;
+    Rendering::RenderLayerMask RenderLayers;
     bool IsSkinnedRenderer = false;
     float32 WorldTransform[16] = {
         1.0f, 0.0f, 0.0f, 0.0f,
@@ -81,13 +81,13 @@ void CollectSceneMeshCandidates(ECS::World& world,
                     ++stats.SkippedUntagged;
                     return;
                 }
-                if ((renderer.renderLayerMask & depthContributor->RenderLayerMask) == 0u)
+                if (!renderer.RenderLayers.Intersects(depthContributor->ContributorLayers))
                 {
                     ++stats.SkippedLayer;
                     return;
                 }
             }
-            if ((renderer.renderLayerMask & options.RenderLayerMask) == 0u)
+            if (!renderer.RenderLayers.Intersects(options.Layers))
             {
                 ++stats.SkippedLayer;
                 return;
@@ -108,7 +108,7 @@ void CollectSceneMeshCandidates(ECS::World& world,
             SceneMeshCandidate candidate{};
             candidate.ModelGuid = renderer.modelAssetGuid.ToGuid();
             candidate.MeshId = renderer.meshId;
-            candidate.RenderLayerMask = renderer.renderLayerMask;
+            candidate.RenderLayers = renderer.RenderLayers;
             candidate.IsSkinnedRenderer = isSkinned;
             std::memcpy(candidate.WorldTransform, worldTransform.matrix, sizeof(candidate.WorldTransform));
             outCandidates.push_back(candidate);
@@ -119,7 +119,7 @@ void CollectSceneMeshCandidates(ECS::World& world,
 void AppendTerrainHeightfieldSource(
     const Terrain::HeightfieldData& heightfield,
     float32 originX, float32 originY, float32 originZ,
-    float32 sizeX, float32 sizeZ, float32 heightScale, uint32 layerMask,
+    float32 sizeX, float32 sizeZ, float32 heightScale, Rendering::RenderLayerMask layers,
     std::vector<Ocean::OceanDepthCacheHeightfieldSource>& outSources,
     OceanSceneDepthBakeStats& stats)
 {
@@ -140,7 +140,7 @@ void AppendTerrainHeightfieldSource(
     source.SizeZ = sizeZ;
     source.HeightScale = heightScale;
     source.WorldOriginY = originY;
-    source.LayerMask = layerMask;
+    source.Layers = layers;
     outSources.push_back(source);
     ++stats.TerrainSources;
 }
@@ -168,7 +168,7 @@ void CollectSceneTerrainSources(ECS::World& world,
                 ++stats.SkippedTerrain;
                 return;
             }
-            if ((terrain.RenderLayerMask & options.RenderLayerMask) == 0u)
+            if (!terrain.RenderLayers.Intersects(options.Layers))
             {
                 ++stats.SkippedLayer;
                 return;
@@ -177,7 +177,7 @@ void CollectSceneTerrainSources(ECS::World& world,
             const float32 originX = worldTransform.matrix[12];
             const float32 originY = worldTransform.matrix[13];
             const float32 originZ = worldTransform.matrix[14];
-            const uint32 layerMask = terrain.RenderLayerMask;
+            const Rendering::RenderLayerMask layers = terrain.RenderLayers;
 
             if (terrain.TiledTerrainHandle != 0u || terrain.TiledTerrainGeneration != 0u)
             {
@@ -207,7 +207,7 @@ void CollectSceneTerrainSources(ECS::World& world,
                         tileSize,
                         tileSize,
                         terrain.HeightScale,
-                        layerMask,
+                        layers,
                         outSources,
                         stats);
                 }
@@ -233,7 +233,7 @@ void CollectSceneTerrainSources(ECS::World& world,
                 terrain.SizeX,
                 terrain.SizeZ,
                 terrain.HeightScale,
-                layerMask,
+                layers,
                 outSources,
                 stats);
         });
@@ -307,7 +307,7 @@ bool BakeOceanDepthCacheFromSceneMeshes(ECS::World& world,
         source.Indices = mesh.Indices.data();
         source.IndexCount = static_cast<uint32>(mesh.Indices.size());
         source.UseLocalToWorld = true;
-        source.LayerMask = candidate.RenderLayerMask;
+        source.Layers = candidate.RenderLayers;
         MultiplyMatrices(candidate.WorldTransform, mesh.SourceNodeTransform, source.LocalToWorld);
 
         sources.push_back(source);
@@ -325,7 +325,7 @@ bool BakeOceanDepthCacheFromSceneMeshes(ECS::World& world,
         if (!Ocean::BakeOceanDepthCacheFromMeshes(desc,
                                                   sources.data(),
                                                   static_cast<uint32>(sources.size()),
-                                                  options.RenderLayerMask,
+                                                  options.Layers,
                                                   meshCache,
                                                   error))
         {
@@ -343,7 +343,7 @@ bool BakeOceanDepthCacheFromSceneMeshes(ECS::World& world,
                 desc,
                 heightfieldSources.data(),
                 static_cast<uint32>(heightfieldSources.size()),
-                options.RenderLayerMask,
+                options.Layers,
                 terrainCache,
                 error))
         {

@@ -117,7 +117,7 @@ static MeshRenderer MakeTestMeshRenderer(const TestRenderableSetup& setup)
 {
     MeshRenderer mr{};
     mr.meshGpuHandleId = static_cast<uint64>(setup.meshHandle);
-    mr.renderLayerMask = 0x1u;
+    mr.RenderLayers = GameEngine::Rendering::RenderLayerMask::Default();
 
     mr.materialAssetGuid.Set(setup.materialGuid);
 
@@ -286,16 +286,16 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_UsesWorldTransform
 
 	ViewId viewId = rs.Views().AllocateView("TestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, worldId);
-	rs.Views().SetViewRenderLayerMask(viewId, 0x1u);
+	rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
 	// Views that must receive no world draw items: another world, another layer.
 	World otherWorld(nullptr);
 	ViewId viewWrongWorld = rs.Views().AllocateView("ViewWrongWorld", cameraId);
 	rs.Views().SetViewWorldId(viewWrongWorld, otherWorld.GetWorldId());
-	rs.Views().SetViewRenderLayerMask(viewWrongWorld, 0x1u);
+	rs.Views().SetViewRenderLayerMask(viewWrongWorld, GameEngine::Rendering::RenderLayerMask::Default());
 	ViewId viewWrongLayer = rs.Views().AllocateView("ViewWrongLayer", cameraId);
 	rs.Views().SetViewWorldId(viewWrongLayer, worldId);
-	rs.Views().SetViewRenderLayerMask(viewWrongLayer, 0x2u);
+	rs.Views().SetViewRenderLayerMask(viewWrongLayer, GameEngine::Rendering::RenderLayerMask{0x2u});
 
 	Entity parent = world.Create();
 	Entity child  = world.Create();
@@ -402,7 +402,7 @@ TEST(RenderServicesWorldMaterialTests, DisabledRendererClearsCachedGPUSceneInsta
 
 	ViewId viewId = rs.Views().AllocateView("DisableTestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, worldId);
-	rs.Views().SetViewRenderLayerMask(viewId, 0x1u);
+	rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
 	Entity entity = world.Create();
 	entity.Set(Transform::FromTRS(
@@ -514,7 +514,7 @@ TEST(RenderServicesWorldMaterialTests, LateExtractionRedirtiesGPUSceneForBuckete
 	{
 		ViewId viewMain = rs.Views().AllocateView("MainTestView", cameraId);
 		rs.Views().SetViewWorldId(viewMain, mainWorld.GetWorldId());
-		rs.Views().SetViewRenderLayerMask(viewMain, 0x1u);
+		rs.Views().SetViewRenderLayerMask(viewMain, GameEngine::Rendering::RenderLayerMask::Default());
 
 		Entity e = mainWorld.Create();
 		e.Set(Transform::FromTRS(
@@ -549,7 +549,7 @@ TEST(RenderServicesWorldMaterialTests, LateExtractionRedirtiesGPUSceneForBuckete
 	{
 		ViewId viewThumb = rs.Views().AllocateView("ThumbTestView", cameraId);
 		rs.Views().SetViewWorldId(viewThumb, thumbnailWorld.GetWorldId());
-		rs.Views().SetViewRenderLayerMask(viewThumb, 0x1u);
+		rs.Views().SetViewRenderLayerMask(viewThumb, GameEngine::Rendering::RenderLayerMask::Default());
 
 		Entity e = thumbnailWorld.Create();
 		e.Set(Transform::FromTRS(
@@ -965,7 +965,7 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_LODGroupBiasReache
 	rs.Views().SetCameraData(cameraId, MakeIdentityCameraData());
 	ViewId viewId = rs.Views().AllocateView("TestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, world.GetWorldId());
-	rs.Views().SetViewRenderLayerMask(viewId, 0x1u);
+	rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
 	Entity plain = world.Create();
 	plain.Set(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, {1.0f, 1.0f, 1.0f}));

@@ -1,6 +1,6 @@
 ---
 title: UI API guide
-description: Building UI with XML, CSS and C++, registering controls, and changing styles and properties at runtime.
+description: Building UI with XML, CSS, and C++, registering controls, and changing styles and properties at runtime.
 sidebar:
   order: 1
 ---
@@ -32,7 +32,7 @@ while (running) {
 and `targetSpace` is the host's explicit `UI::UITargetSpace` for the attachment.
 The three-argument overload clears the target. To composite a HUD over existing
 scene content, pass `Rendering::RenderGraph::RGLoadOp::Load` as the fourth argument.
-The host executes the completed graph after declaration; do not retain frame texture IDs.
+The host executes the completed graph after declaration. Do not retain frame texture IDs.
 
 Manual root setup:
 
@@ -76,12 +76,15 @@ Notes:
 ## Styling (CSS)
 
 Every UI manager loads the UI module's default stylesheet under your sheets. It gives unstyled
-engine controls a visible track, thumb, knob and box, and any rule of yours wins over it. Its
-color properties, including the slider track's `--slider-track-fill`, `--slider-track` and
+engine controls a visible track, thumb, knob, and box, and any rule of yours wins over it. Its
+color properties, including the slider track's `--slider-track-fill`, `--slider-track`, and
 `--slider-tick`, are listed in [UI control defaults](./ui-control-defaults.mdx).
 
+`transform` and `transform-origin` rotate, scale, move and skew an element and its
+children at paint time, without changing layout; see [Transforms](./transform.mdx).
+
 Selectors supported include tag, `.class`, `#id`, `[attr=value]`, and pseudo-classes
-like `:hover`, `:active`, `:focus`, `:focus-visible` and `:checked`.
+like `:hover`, `:active`, `:focus`, `:focus-visible`, and `:checked`.
 
 `:focus-visible` matches keyboard focus only: focus that Tab moved, or that your code moved
 (`UIManager::FocusElement`, `SetFocusById`) while a key event was being dispatched, such as a
@@ -90,7 +93,7 @@ use `:focus-visible` for focus rings.
 
 Attribute selectors read authored attributes stored on the element. `id` and `name`
 are special-cased to `UIElement::GetId()`. Attribute names are normalized to
-lowercase and matched case-insensitively; prefer lowercase attribute names in
+lowercase and matched case-insensitively. Prefer lowercase attribute names in
 XML and CSS for consistency.
 
 Custom properties (`--vars`) can be read from code:
@@ -129,7 +132,7 @@ propagates automatically.
 ## Style overrides (code)
 
 Use `StyleOverrides` for programmatic overrides. Typed property keys provide
-compile-time safety; dirty flags are tracked automatically via the
+compile-time safety. Dirty flags are tracked automatically via the
 `StyleProp<T, StyleImpact>` template.
 
 ```cpp title="Override styles from code"
@@ -200,9 +203,12 @@ if (Ui.FindElement("StartButton") is Ui.Button start)
 ::::tab[C++]
 
 ```cpp title="Find a label and set its text"
+#include "Engine/GameUI/GameplayUI.h"
+#include "UI/Controls/Label.h"
+
 using namespace GameEngine;
 
-if (auto* score = dynamic_cast<Label*>(ui.GetRootElement()->FindById("Score")))
+if (auto* score = dynamic_cast<Label*>(GameUI::FindElementById("Score"_sid)))
     score->SetText("42");
 ```
 
@@ -219,7 +225,9 @@ if (Ui.FindElement("Score") is Ui.Label score)
 ::::
 :::::
 
-`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag (`Ui.Button`, `Ui.Label` or `Ui.Element`). Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides and expresses state through its stylesheet.
+`GameUI::FindElementById` searches every mounted UI document. In C++ an element id is a `StringId`: write an id you know in code as a `"Score"_sid` literal, which is hashed at compile time, and hash an id built at runtime with `HashStringId(name)`. When two documents use the same id, the document owned by the lowest entity id wins, so the result is stable. To look in one document only, call `FindById` on its root, `GameUI::FindDocumentRoot(entity)`. The optional second argument of `FindElementById` receives the entity whose document matched.
+
+`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag (`Ui.Button`, `Ui.Label`, or `Ui.Element`). Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
 
 ## Creating new controls
 
@@ -274,7 +282,3 @@ Prefer dedicated APIs:
 
 Inline `style` and arbitrary attributes are intended for XML/CSS parsing rather
 than runtime code.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/UI_API_GUIDE.md`; the example control's member follows the engine's naming (`m_Text`); the live texture is bound by name (`SetBackgroundResourceName`), as the header shows, not through a `SetBackgroundTexture` call that does not exist; events and setting a label's text show the C# form beside the C++.

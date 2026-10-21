@@ -43,8 +43,9 @@ are cooked beside the engine's own documents. The pipeline is the library's: the
 export's compatibility-profile graph (the seed project's Web.rendergraph) with the sky pass
 and the sky's image-based lighting added, because a page's default world has a sky and no
 other light on the model's shaded side, and with the desktop default pipeline's
-(ForwardPlus.rendergraph) sun glare, bloom and auto exposure, whose
-packages (builtin_shader_cook.kLibraryPackages) the pack cooks on top of the web export's.
+(ForwardPlus.rendergraph) sun glare, bloom, auto exposure, TAA and render-scale crossing
+(TemporalAA, RenderScaleUpscale), whose packages (builtin_shader_cook.kLibraryPackages) the pack
+cooks on top of the web export's.
 
     python3 Tools/Web/engine_pack.py --out opengine-core.gepak --build-tree build/vs2026-x64-local
 """

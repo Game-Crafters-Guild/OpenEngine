@@ -50,10 +50,10 @@ constexpr const char* kReplaceTooltip =
     "Replace this curve with what the physical model delivers for the current sun path and date, for a "
     "clear sun of 100 000 lx: the grey line behind the curve. Undo restores your curve.";
 constexpr const char* kMoonlightTooltip =
-    "The moon's illuminance on a surface facing it, in lux, with a full moon high in the sky: the sun "
-    "light's brightness at night. It also sets how bright the night sky and the moon are. 5.16 lx is a "
-    "bright night that still reads as night; a real full moon gives about 0.25 lx. Dimming the sun leaves "
-    "it where it is.";
+    "The moon's illuminance on a surface facing it, in lux, with a full moon high in the sky. It sets the "
+    "brightness of the sky-driven directional light at night, the moonlit sky and the moon's disk. The "
+    "default, 0.25 lx, is a real full moon; the moon's phase (Moon arc position) scales it, a quarter moon "
+    "to about a tenth. Dimming the sun leaves it where it is.";
 // The curve's value axis: from a lit twilight to a bright noon, marked every two decades.
 constexpr float kCurveAxisMinimumLux = 1.0f;
 constexpr float kCurveAxisMaximumLux = 200000.0f;

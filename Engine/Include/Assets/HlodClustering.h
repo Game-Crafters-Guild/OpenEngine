@@ -9,6 +9,7 @@
 // index) so a re-bake of an unchanged scene reproduces the same cluster table.
 
 #include "AssetCore/GUID.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 #include <cstdint>
@@ -48,6 +49,7 @@ struct MemberInput {
     uint32   VertexCount = 0u;        // baked verts: chosen level's own block, else LOD0 (VB budget)
     uint32   ChosenLod = 0u;          // coarsest LOD index baked into the proxy
     bool     CastsShadow = true;      // for the caster-saving benefit term
+    Rendering::RenderLayerMask RenderLayers; // the views that draw the member; a cluster never mixes layers
 };
 
 // Integer cell coordinate. floor((center - origin) / cellSize) per axis.
@@ -75,10 +77,11 @@ struct Cluster {
     float     BoundsMax[3] = {0.0f, 0.0f, 0.0f};
     float     SphereCenter[3] = {0.0f, 0.0f, 0.0f}; // proxy WorldTransform origin
     float     SphereRadius = 0.0f;
+    Rendering::RenderLayerMask RenderLayers; // every member's layers, so the proxy draws in the same views
     std::vector<uint32> MemberIndices; // indices into the BuildClusters member span, ascending
 };
 
-// Output of clustering: the owned clusters (in ascending cell-coord order) plus
+// Output of clustering: the owned clusters (in ascending (cell, layers) order) plus
 // the members that were excluded because their world AABB exceeds one cell on
 // some axis (drawn directly; the caller logs a warning per the design).
 struct ClusterTable {
@@ -86,9 +89,12 @@ struct ClusterTable {
     std::vector<uint32>  OversizedMembers; // indices into the member span
 };
 
-// Partition `members` into grid cells. Single-owner by world-AABB center;
-// members larger than one cell are moved to OversizedMembers. Deterministic for
-// a fixed (members, config). A zero/negative CellSize yields an empty table.
+// Partition `members` into grid cells and render layers: members in one cell on
+// different layers land in different clusters, so a proxy never draws a member in
+// a view that does not draw it. Single-owner by world-AABB center; members larger
+// than one cell are moved to OversizedMembers. Clusters are emitted in ascending
+// (cell, layers) order, deterministic for a fixed (members, config). A
+// zero/negative CellSize yields an empty table.
 ClusterTable BuildClusters(std::span<const MemberInput> members, const GridConfig& config);
 
 } // namespace Hlod

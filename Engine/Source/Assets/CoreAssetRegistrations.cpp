@@ -10,6 +10,7 @@
 #include "Assets/AnimationClip.h"
 #include "Assets/BinaryAsset.h"
 #include "Assets/ClipSetAsset.h"
+#include "Assets/CubeLutAsset.h"
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/RenderPipelineAsset.h"
@@ -92,6 +93,7 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
 #endif
 
     RegisterCoreType(typeRegistry, AssetType::Texture, &CreateAssetAtPath<TextureAsset>, "Texture Asset");
+    RegisterCoreType(typeRegistry, AssetType::CubeLut, &CreateAssetAtPath<CubeLutAsset>, "Cube LUT Asset");
     RegisterCoreType(typeRegistry, AssetType::Animation, &CreateAssetAtPath<AnimationClip>, "Animation Asset");
 
     // Humanoid retargeting. The compound extensions (.profile.json /

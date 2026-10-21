@@ -379,6 +379,13 @@ private:
     // Shows the selected asset once its pending load has landed; drops the load when the
     // inspector has moved on to something else.
     void PollPendingAssetLoad();
+    // Shows the pending load's state: the asset type's header suffix
+    // (InspectorRegistry::AssetLoadingSuffix) after the name, or the "Loading <file>..." line
+    // when the type has none to show now.
+    void RefreshPendingAssetLoadState();
+    // Replaces the header's name field with the pending asset's name and state labels
+    // (MakePendingAssetHeaderLabels).
+    void ShowPendingAssetHeaderTitle(const std::string& name);
 
     SharedPtr<Asset> m_SelectedAsset;
     // The load of a selected asset that was not loaded when it was selected: the inspector
@@ -386,6 +393,9 @@ private:
     // never waiting for a cook or an import on the main thread.
     std::unique_ptr<AssetFuture> m_PendingAssetLoad;
     std::filesystem::path m_PendingAssetPath;
+    GUID m_PendingAssetGuid = GUID::Null();
+    AssetType m_PendingAssetType = AssetType::Unknown;
+    std::chrono::steady_clock::time_point m_PendingAssetLineRefreshedAt{};
     // The asset whose load came back empty, so the next presentation reports the failure
     // rather than starting the load again.
     GUID m_FailedAssetLoad = GUID::Null();

@@ -3,12 +3,12 @@
 ## Scene converter
 
 `Tools/UnityConverter.dll` is built from
-[OpenEngine-Unity-Scene-Converter, commit eb14acb935f08c300df61ca61e060141e81dd941](https://github.com/Game-Crafters-Guild/OpenEngine-Unity-Scene-Converter/tree/eb14acb935f08c300df61ca61e060141e81dd941).
+[OpenEngine-Unity-Scene-Converter, commit 87b2ba990607f50804cfe9e3c0b0e0f040e39044](https://github.com/Game-Crafters-Guild/OpenEngine-Unity-Scene-Converter/tree/87b2ba990607f50804cfe9e3c0b0e0f040e39044).
 The source revision, SDK, build command and binary SHA-256 are recorded in
 [`Tools/UnityConverter.dll.source`](Tools/UnityConverter.dll.source).
 
 The MIT license below is copied verbatim from that revision's
-[`LICENSE`](https://github.com/Game-Crafters-Guild/OpenEngine-Unity-Scene-Converter/blob/520790ec52331832f69f983d57c31ec18be96ab0/LICENSE).
+[`LICENSE`](https://github.com/Game-Crafters-Guild/OpenEngine-Unity-Scene-Converter/blob/87b2ba990607f50804cfe9e3c0b0e0f040e39044/LICENSE).
 An identical copy is adjacent to the binary at
 [`Tools/UnityConverter.LICENSE.txt`](Tools/UnityConverter.LICENSE.txt).
 Retain the license and copyright notice when redistributing the converter.

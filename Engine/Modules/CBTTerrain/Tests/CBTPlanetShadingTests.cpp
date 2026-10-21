@@ -685,8 +685,9 @@ TEST(RefinePlanetHit, RejectsNonPositiveRadius)
 // --- Untextured-fallback layer variation (round-8e: purple grass / cliff banding fixes) ----------
 namespace
 {
-// Default grass / rock palette entries (Terrain::kDefaultTerrainMaterials, TerrainMaterialRecord.h)
-// — the tint + (scale, strength, saturation) the untextured planet shades with.
+// A green grass tint and the default rock entry (Terrain::kDefaultTerrainMaterials, TerrainMaterialRecord.h)
+// with their (scale, strength, saturation): a saturated green is where the purple-grass hue drift
+// showed, so the variation is pinned on it rather than on the default grass channel's soil.
 constexpr Vec3 kGrassTint = {0.35f, 0.55f, 0.18f};
 constexpr float kGrassScale = 0.030f, kGrassStrength = 0.16f, kGrassSat = 0.10f;
 constexpr Vec3 kRockTint = {0.55f, 0.50f, 0.42f};

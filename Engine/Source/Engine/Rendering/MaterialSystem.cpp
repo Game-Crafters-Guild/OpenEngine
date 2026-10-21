@@ -21,6 +21,7 @@
 #include "Engine/Rendering/ProjectMaterialPrewarmService.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/TextureService.h"
+#include "SceneDrawWarm.h"
 
 #include "AssetCore/AssetEvents.h"
 #include "Assets/AssetManager.h"
@@ -49,6 +50,7 @@
 #include "Rendering/Materials/MaterialParamsLayout.h"
 #include "Rendering/Materials/ShaderComposer.h"
 #include "Rendering/Materials/ShaderPropertyTableCache.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "Types/StringId.h"
 #include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
@@ -100,10 +102,6 @@ std::string SurfaceDisplayName(const std::filesystem::path& surfacePath, const s
     return relative.generic_string();
 }
 
-// Seed for the PackMaterialSSBO content stamp (FNV-1a offset basis, the same
-// chaining HashUtils::HashValue continues).
-constexpr uint64_t kMaterialStampSeed = 1469598103934665603ull;
-
 // The bindless texture indices an UNASSIGNED material slot must carry, slot for
 // slot as Material::InitBindlessDefaults bakes them. Bindless index 0 is the
 // engine-wide "not set" sentinel and the texture array's descriptor[0] is never
@@ -136,6 +134,44 @@ void WriteUnassignedRowDefaults(uint8_t* rowPtr,
         stPtr[s * 4 + 0] = 1.0f;                           // TextureST[s].x  (row0)
         stPtr[(kTextureSlotArraySize + s) * 4 + 1] = 1.0f; // TextureST2[s].y (row1)
     }
+}
+
+// Write one whole MaterialParams row: the material's parameters, texture
+// indices, UV transforms and sampler word, or the unassigned-slot defaults for a
+// null material. The row is cleared first, so the bytes match a full pack's
+// whatever the row held before.
+void WriteMaterialRow(uint8_t* rowPtr, const Material* mat,
+                      const std::array<uint32_t, kTextureSlotArraySize>& unassignedTextureIndices)
+{
+    std::memset(rowPtr, 0, kMaterialEntryStride);
+    if (!mat)
+    {
+        WriteUnassignedRowDefaults(rowPtr, unassignedTextureIndices);
+        return;
+    }
+
+    const uint32_t copyBytes = std::min(mat->GetCacheSize(), kMaterialParamBytes);
+    if (copyBytes > 0)
+        std::memcpy(rowPtr, mat->GetCacheData(), copyBytes);
+
+    std::memcpy(rowPtr + kMaterialParamBytes, mat->GetBindlessTextureIndices(), kTextureIndexBytes);
+
+    // Material stores texture transforms interleaved by slot:
+    //   slot0 row0, slot0 row1, slot1 row0, slot1 row1, ...
+    // The shader SSBO stores them as two arrays:
+    //   TextureST[8] row0s, then TextureST2[8] row1s.
+    // Repack instead of bulk-copying, otherwise default identity transforms
+    // become (u, u) for albedo in bindless draws.
+    const float* srcRows = mat->GetTextureTransforms();
+    float* dstRows = reinterpret_cast<float*>(rowPtr + kMaterialParamBytes + kTextureIndexBytes);
+    for (uint32_t slot = 0; slot < kTextureSlotArraySize; ++slot)
+    {
+        std::memcpy(dstRows + slot * 4u, srcRows + slot * 8u, 4u * sizeof(float));
+        std::memcpy(dstRows + (kTextureSlotArraySize + slot) * 4u, srcRows + slot * 8u + 4u, 4u * sizeof(float));
+    }
+
+    const uint32_t packedSamplers = mat->GetPackedSamplerIndices();
+    std::memcpy(rowPtr + kSamplerIndicesOffset, &packedSamplers, sizeof(uint32_t));
 }
 
 // Material recompiles a single shader-source drain runs before carrying the
@@ -210,7 +246,7 @@ Rendering::GraphicsPipelineId InternBaseMaterialPipeline(
 }
 } // namespace
 
-MaterialSystem::MaterialSystem() = default;
+MaterialSystem::MaterialSystem() : m_SceneWarm(std::make_unique<SceneDrawWarm>()) {}
 
 MaterialSystem::~MaterialSystem()
 {
@@ -332,8 +368,10 @@ void MaterialSystem::ShutdownPhaseA()
     // left holding GUIDs into a registry that is about to tear down.
     m_CarriedShaderEdits.clear();
 
-    // No new device pipeline builds reach this system; the ones it holds end in
-    // the drain below, before the device is destroyed.
+    // No new device pipeline builds reach this system. A build job it still
+    // holds may run or be destroyed after the drain below: the job owns only its
+    // build table and claims its row before it touches the device, so a device
+    // that is gone by then is never reached.
     if (m_Device)
         m_Device->SetPipelineBuildDispatcher({});
 
@@ -428,6 +466,10 @@ void MaterialSystem::BeginFrame()
     //   - PreloadSharedDepthShaders force-loads both shared-depth variants.
     EnsureMaterialBuildContextReady();
     m_PipelineVariants->PreloadSharedDepthShaders();
+
+    // The scene warm's requests join the compiles submitted just below.
+    if (m_RenderServices)
+        m_SceneWarm->Step(*m_RenderServices);
 
     // Publish-gate: submit the variant compiles a record worker enqueued on a cold
     // miss last frame (option c). Runs here on the serial thread — after the build
@@ -943,94 +985,69 @@ void MaterialSystem::PackMaterialSSBO()
         return;
     }
 
-    // O(1) content stamp over everything this function packs: the slot
-    // mapping (m_MaterialSSBOGeneration, bumped when that mapping moves — an
-    // index assigned, an index freed, or a shutdown clear; a re-registration
-    // keeps its index and does NOT bump it),
-    // the process-wide material content epoch (bumped by every MarkDirty —
-    // properties, bindless indices, UV transforms, sampler preset), and the
-    // default bindless indices seeded into unvisited rows. Equal stamp
-    // implies a byte-identical pack. Whole-array granularity matches the
-    // pack itself: any material change repacks everything.
-    uint64_t stamp = Rendering::HashUtils::HashValue(kMaterialStampSeed, m_MaterialSSBOGeneration);
+    // O(1) layout stamp over everything a row does not carry: the slot mapping
+    // (m_MaterialSSBOGeneration, bumped when that mapping moves — an index
+    // assigned, an index freed, or a shutdown clear; a re-registration keeps its
+    // index and does NOT bump it), the row count, and the default bindless
+    // indices seeded into unassigned rows. The process-wide content epoch
+    // (bumped by every MarkDirty — properties, bindless indices, UV transforms,
+    // sampler preset) is kept beside it: it says whether any row can differ, and
+    // each row's material revision says which.
+    // Seeded with the FNV-1a offset basis, the chain HashUtils::HashValue continues.
+    uint64_t stamp = Rendering::HashUtils::HashValue(Hashing::kFnv1a64OffsetBasis, m_MaterialSSBOGeneration);
     stamp = Rendering::HashUtils::HashValue(stamp, materialCount);
-    stamp = Rendering::HashUtils::HashValue(stamp, Material::GetGlobalContentEpoch());
     stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultWhiteBindlessIndex());
     stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultFlatNormalBindlessIndex());
     stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultBlackBindlessIndex());
+    const uint64_t contentEpoch = Material::GetGlobalContentEpoch();
 
     // Publish the SSBO binding every frame — buffer/offset differ per slot.
     m_MaterialParamsSSBOBuffer = alloc.buffer;
     m_MaterialParamsSSBOOffset = alloc.offset;
     m_MaterialParamsSSBOSize = totalBytes;
 
-    // Skip the repack when this frame slot's ring memory already holds this
-    // exact pack. Valid because MaterialParams is this function's exclusive
-    // usage bucket and it runs once per pool BeginFrame — the ring hands back
-    // the same {buffer, offset} every cycle while sizes are stable (placement
-    // verified below; growth or buffer recreation fails the check and
-    // repacks). A second call in one frame would allocate at a shifted offset
-    // and permanently disengage the skip — visible as m_MaterialSSBOPackCount
-    // climbing while idle.
+    // The slot's ring memory still holds its last pack when the ring hands back
+    // the same {buffer, offset}. Valid because MaterialParams is this function's
+    // exclusive usage bucket and it runs once per pool BeginFrame — the ring
+    // hands back the same placement every cycle while sizes are stable; growth
+    // or buffer recreation fails the check and packs in full (a device rebuild
+    // destroys every buffer by handle, and a handle index never reissues a
+    // generation, so the rebuilt ring's buffer id can never equal the old one).
+    // A second call in
+    // one frame would allocate at a shifted offset and permanently disengage the
+    // delta — visible as m_MaterialSSBORowWriteCount climbing by whole tables.
     auto& packedSlot =
         m_PackedMaterialSlots[m_FramePool->GetCurrentSlot(FrameWriteUsage::MaterialParams)];
-    if (packedSlot.Stamp == stamp && packedSlot.Buffer == alloc.buffer
-        && packedSlot.Offset == alloc.offset)
-    {
+    const bool sameLayout = packedSlot.Stamp == stamp && packedSlot.Buffer == alloc.buffer
+                            && packedSlot.Offset == alloc.offset && packedSlot.RowRevisions.size() == materialCount;
+    if (sameLayout && packedSlot.ContentEpoch == contentEpoch)
         return;
-    }
 
     ++m_MaterialSSBOPackCount;
 
-    // Zero-fill the entire allocation (default values for unvisited slots).
-    std::memset(alloc.ptr, 0, totalBytes);
-
-    // Seed every row with valid defaults so an unvisited/recycled row is never
-    // sampled as zero (see WriteUnassignedRowDefaults for why zero is unsafe).
-    // Populated rows overwrite these below.
+    // A delta pack rewrites only the rows whose revision moved since this slot
+    // was last packed; a full pack rewrites every row, so an unvisited or
+    // recycled row is never sampled as zero (see WriteUnassignedRowDefaults).
     const auto defaultTexIdx = UnassignedSlotTextureIndices(*m_Textures);
-    for (uint32_t i = 0; i < materialCount; ++i)
-        WriteUnassignedRowDefaults(static_cast<uint8_t*>(alloc.ptr) + i * kMaterialEntryStride,
-                                   defaultTexIdx);
-
-    // Sequential flat-vector scan replaces unordered_map ForEach for cache-friendly iteration.
+    if (!sameLayout)
+        packedSlot.RowRevisions.assign(materialCount, 0u);
     const uint32_t lookupSize = static_cast<uint32_t>(m_MaterialsBySSBOIndex.size());
-    for (uint32_t idx = 0; idx < materialCount && idx < lookupSize; ++idx)
+    for (uint32_t idx = 0; idx < materialCount; ++idx)
     {
-        const Material* mat = m_MaterialsBySSBOIndex[idx];
-        if (!mat)
+        const Material* mat = idx < lookupSize ? m_MaterialsBySSBOIndex[idx] : nullptr;
+        const uint32_t revision = mat ? mat->GetContentRevision() : 0u;
+        uint32_t& packedRevision = packedSlot.RowRevisions[idx];
+        if (sameLayout && packedRevision == revision)
             continue;
-
-        uint8_t* entryPtr = static_cast<uint8_t*>(alloc.ptr) + idx * kMaterialEntryStride;
-
-        const uint32_t cacheSize = mat->GetCacheSize();
-        const uint32_t copyBytes = std::min(cacheSize, kMaterialParamBytes);
-        if (copyBytes > 0)
-            std::memcpy(entryPtr, mat->GetCacheData(), copyBytes);
-
-        std::memcpy(entryPtr + kMaterialParamBytes, mat->GetBindlessTextureIndices(), kTextureIndexBytes);
-
-        // Material stores texture transforms interleaved by slot:
-        //   slot0 row0, slot0 row1, slot1 row0, slot1 row1, ...
-        // The shader SSBO stores them as two arrays:
-        //   TextureST[8] row0s, then TextureST2[8] row1s.
-        // Repack instead of bulk-copying, otherwise default identity transforms
-        // become (u, u) for albedo in bindless draws.
-        const float* srcRows = mat->GetTextureTransforms();
-        float* dstRows = reinterpret_cast<float*>(entryPtr + kMaterialParamBytes + kTextureIndexBytes);
-        for (uint32_t slot = 0; slot < kTextureSlotArraySize; ++slot)
-        {
-            std::memcpy(dstRows + slot * 4u, srcRows + slot * 8u, 4u * sizeof(float));
-            std::memcpy(dstRows + (kTextureSlotArraySize + slot) * 4u,
-                        srcRows + slot * 8u + 4u,
-                        4u * sizeof(float));
-        }
-
-        const uint32_t packedSamplers = mat->GetPackedSamplerIndices();
-        std::memcpy(entryPtr + kSamplerIndicesOffset, &packedSamplers, sizeof(uint32_t));
+        WriteMaterialRow(static_cast<uint8_t*>(alloc.ptr) + idx * kMaterialEntryStride, mat, defaultTexIdx);
+        packedRevision = revision;
+        ++m_MaterialSSBORowWriteCount;
     }
 
-    packedSlot = PackedMaterialSlot{alloc.buffer, alloc.offset, stamp};
+    packedSlot.Buffer = alloc.buffer;
+    packedSlot.Offset = alloc.offset;
+    packedSlot.Stamp = stamp;
+    packedSlot.ContentEpoch = contentEpoch;
 }
 
 Material* MaterialSystem::RegisterMaterialFromDocument(
@@ -1863,6 +1880,36 @@ void MaterialSystem::RecompileMaterialPipeline(const GUID& guid, const MaterialD
     }
 }
 
+namespace
+{
+// The program index of the first read-only shader cache root that carries one (the cook writes it
+// beside the programs it ships), or null. An index that cannot be used is reported, never trusted.
+std::shared_ptr<const Rendering::ShaderProgramIndex> LoadProgramIndex(
+    const Rendering::MaterialBuildContext& context)
+{
+    for (const std::filesystem::path& root : context.ReadOnlyCacheRoots)
+    {
+        const std::filesystem::path path = root / Rendering::kShaderProgramIndexFileName;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec))
+            continue;
+        std::string reason;
+        const auto start = std::chrono::steady_clock::now();
+        if (auto index = Rendering::ShaderProgramIndex::Load(path, context, &reason))
+        {
+            Logger::Log::Info("Shader program index: {} cooked variant(s) resolve without composing, from '{}' "
+                              "(sources checked in {:.1f} ms)",
+                              index->Size(), path.string(),
+                              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+            return index;
+        }
+        Logger::Log::Warning("Shader program index ignored: {}. Every variant composes and hashes its "
+                             "source to find its cooked program.", reason);
+    }
+    return nullptr;
+}
+} // namespace
+
 bool MaterialSystem::EnsureMaterialBuildContextReady()
 {
     // Lazy-init from the asset mount table. The asset sources can be registered
@@ -1889,6 +1936,7 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
         m_MaterialBuildContext.PackageShaderDirs = CollectPackageShaderDirs(am);
         AppendStagedModuleShaderDirs(m_MaterialBuildContext.AdapterShaderDir,
                                      m_MaterialBuildContext.PackageShaderDirs);
+        m_MaterialBuildContext.ProgramIndex = LoadProgramIndex(m_MaterialBuildContext);
         m_MaterialBuildContextSourceVersion = am.GetSourceSetVersion();
     }
     else if (m_MaterialBuildContextSourceVersion != 0

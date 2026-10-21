@@ -187,6 +187,95 @@ TEST_F(NavigationRepathingTest, ProximityIgnoresBlockedCellAdjacentToDest)
         << "A dest-adjacent stamp clip must not invalidate an otherwise open dest";
 }
 
+// A body pushed off its smoothed route (by avoidance or a stand-off) heads
+// straight for its next waypoint. The lookahead sweeps the body's radius along
+// that segment, as the smoother does, so a segment whose centre line clears a
+// blocked cell but whose body clips it re-paths.
+TEST_F(NavigationRepathingTest, ProximityKeepsTheAgentRadiusFromBlockedCells)
+{
+    auto gridEntity = CreateGrid();
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
+    ASSERT_NE(gridSrc, nullptr);
+    auto* navWorld = NavigationService::TryGet();
+    ASSERT_NE(navWorld, nullptr);
+    auto* gridMap = navWorld->GetGridMap(
+        Pathfinding::NavMapHandle{gridSrc->NavMapIndex, gridSrc->NavMapGeneration});
+    ASSERT_NE(gridMap, nullptr);
+    // Cell (5, 8) is the rectangle [5, 6] x [8, 9]: 0.5 m from the route along z = 7.5.
+    gridMap->SetCellBlocked(5, 8, true);
+
+    auto agentEntity = CreateAgent(1.5f, 7.5f, 10.5f, 7.5f,
+                                   gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.0f);
+    agentEntity.GetForWrite<Components::NavigationAgent>()->Radius = 0.45f;
+    m_World->ProcessCommands();
+
+    NavigationPathfindingSystem pathSystem;
+    pathSystem.Update(*m_World, kDt);
+    m_World->ProcessCommands();
+    ASSERT_EQ(static_cast<Pathfinding::PathStatus>(
+                  agentEntity.Get<Components::NavigationAgentState>()->Status),
+              Pathfinding::PathStatus::Complete);
+
+    const auto placeAgentAndStep = [&](float32 x, float32 z)
+    {
+        auto* xf = agentEntity.GetForWrite<Components::Transform>();
+        auto* wt = agentEntity.GetForWrite<Components::WorldTransform>();
+        xf->matrix[12] = x;
+        xf->matrix[14] = z;
+        wt->matrix[12] = x;
+        wt->matrix[14] = z;
+        auto* state = agentEntity.GetForWrite<Components::NavigationAgentState>();
+        state->PathDirty = false;
+        state->CurrentPathPointIndex = 1;
+        NavigationMovementSystem moveSystem;
+        moveSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+        return agentEntity.Get<Components::NavigationAgentState>()->PathDirty;
+    };
+
+    EXPECT_FALSE(placeAgentAndStep(3.5f, 7.5f)) << "the route itself keeps 0.5 m from the cell";
+    // From (3.5, 7.9) the segment to the route's end passes the cell 0.2 m away: the centre line
+    // stays in row 7, the 0.45 m body overlaps row 8.
+    EXPECT_TRUE(placeAgentAndStep(3.5f, 7.9f)) << "the body clips the blocked cell without a re-path";
+}
+
+// A hex cell centre is sqrt(3)/4 of a cell (0.433 m here) from the row beside
+// it, so a 0.45 m body swept along a valid route next to a blocked row would
+// re-path every frame and never move. A hex grid's lookahead tests the line.
+TEST_F(NavigationRepathingTest, HexAgentWiderThanHalfARowStillWalksBesideABlockedRow)
+{
+    auto gridEntity = Testing::CreateFlatGridSurface(*m_World, 16, 16, 1.0f, Pathfinding::GridType::Hex);
+    auto* gridSrc = gridEntity.Get<Components::NavigationSurface>();
+    ASSERT_NE(gridSrc, nullptr);
+    auto* navWorld = NavigationService::TryGet();
+    ASSERT_NE(navWorld, nullptr);
+    auto* gridMap = navWorld->GetGridMap(
+        Pathfinding::NavMapHandle{gridSrc->NavMapIndex, gridSrc->NavMapGeneration});
+    ASSERT_NE(gridMap, nullptr);
+    for (uint32 x = 3; x < 10; ++x)
+        gridMap->SetCellBlocked(x, 4, true);
+
+    auto agentEntity = CreateAgent(1.5f, 3.0f, 12.5f, 3.0f,
+                                   gridSrc->NavMapIndex, gridSrc->NavMapGeneration, 0.0f);
+    agentEntity.GetForWrite<Components::NavigationAgent>()->Radius = 0.45f;
+    m_World->ProcessCommands();
+
+    NavigationPathfindingSystem pathSystem;
+    NavigationMovementSystem moveSystem;
+    constexpr int kFrames = 600; // 10 s for an 11 m walk at 3.5 m/s
+    for (int frame = 0; frame < kFrames && agentEntity.Get<Components::NavigationAgentState>()->HasDestination;
+         ++frame)
+    {
+        pathSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+        moveSystem.Update(*m_World, kDt);
+        m_World->ProcessCommands();
+    }
+
+    EXPECT_FALSE(agentEntity.Get<Components::NavigationAgentState>()->HasDestination)
+        << "the agent never arrived: its route re-paths every frame";
+}
+
 // ---------------------------------------------------------------------------
 // Timer-based replan fires after interval
 // ---------------------------------------------------------------------------

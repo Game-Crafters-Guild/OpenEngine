@@ -1166,3 +1166,47 @@ TEST(GameUIElementHandleTests, PlainElementReceivesPointerEventsOnlyWhenSubscrib
     EXPECT_FLOAT_EQ(lastMove.X, HudFixture::kInsideX);
     EXPECT_FLOAT_EQ(lastMove.Y, HudFixture::kInsideY);
 }
+
+// GE_GameUI_FindElement with an entity searches that UIDocument's subtree only; with 0 it
+// searches every bound document. The scoped path is FindDocumentRoot(entity)->FindById, so an
+// id that lives in another document, or an entity with no bound document, is NotFound.
+TEST(GameUIElementHandleTests, FindElementWithAnEntitySearchesOnlyThatDocument)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    HudFixture hud(dev.get(), "gameui_handle_scopedfind", kOneButtonHud);
+    ASSERT_TRUE(hud.Ok);
+
+    const auto secondUxml =
+        WriteUxml(hud.Root, "second.uxml", "<uielement><label id='only-second' /></uielement>\n");
+    auto& reg = hud.Assets.GetRegistry();
+    ASSERT_TRUE(reg.RegisterAsset(secondUxml));
+    const GUID secondGuid = reg.GetAssetGUID(secondUxml);
+    hud.Assets.LoadAssetAsync(secondGuid, AssetLoadPriority::Normal).get();
+    Components::UIDocument secondDoc;
+    secondDoc.Layout.Set(secondGuid);
+    const uint64_t second = hud.World->Create<Components::UIDocument>(secondDoc).GetHandle().id;
+    hud.World->ProcessCommands();
+    hud.Sync();
+
+    UIElement* button = hud.Find("take-damage"_sid);
+    UIElement* label = hud.Find("only-second"_sid);
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    uint64_t instanceId = 0;
+    ASSERT_EQ(GE_GameUI_FindElement(hud.Entity, "take-damage", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, button->GetInstanceId());
+    ASSERT_EQ(GE_GameUI_FindElement(second, "only-second", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, label->GetInstanceId());
+    ASSERT_EQ(GE_GameUI_FindElement(0, "only-second", &instanceId), GE_Result_Ok);
+    EXPECT_EQ(instanceId, label->GetInstanceId());
+
+    EXPECT_EQ(GE_GameUI_FindElement(hud.Entity, "only-second", &instanceId), GE_Result_NotFound)
+        << "a scoped lookup must not reach another document's element";
+    EXPECT_EQ(GE_GameUI_FindElement(second + hud.Entity + 1, "take-damage", &instanceId), GE_Result_NotFound)
+        << "an entity with no bound document has nothing to search";
+}

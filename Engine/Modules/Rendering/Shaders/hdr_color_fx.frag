@@ -1,5 +1,6 @@
 #version 450
 
+
 // Combined HDR color effects before tonemap — the grade block. Composition
 // order follows URP's LutBuilderHdr chain (the industry reference the authoring
 // model mirrors):
@@ -13,6 +14,9 @@
 //                        saturation; shipped slice-1/2 structure, unchanged).
 //   4. hue shift       — HSV rotation on the graded linear color (URP's HSV ops
 //                        close its chain too).
+//   5. Cube LUT        — a volume's LUT at the Grade stage (lutStage 1): the grade's
+//                        last stage, on the exposed scene-linear color, before the
+//                        look (tonemap.frag samples the Finish stage instead).
 // Documented deviations from URP, both inherited from the unified corrector:
 //   - URP applies log contrast BEFORE its color filter; our contrast lives
 //     inside the corrector, so with contrast != 1 the filter push is
@@ -36,6 +40,8 @@
 // EXPOSED values — under auto-exposure that is the point (a stable look for a
 // stable displayed image); Multiply is exposure-invariant either way.
 
+#include "Includes/cube_lut.glsl"
+
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 oColor;
 
@@ -43,11 +49,14 @@ layout(set = 0, binding = 0) uniform sampler2D uSceneColor;
 
 // Metered auto-exposure history (AutoExposureNode). Read the same way tonemap.frag
 // reads it so the grade anchors at the exact scalar the tonemap will apply. Bound by
-// the rendergraph (ExposureHistory); a zero placeholder falls back to pc.exposure.
-layout(set = 0, binding = 1, std430) readonly buffer ExposureHistory {
-    float exposureScale;
-    uint  valid;
-} uExposure;
+// the rendergraph (ExposureHistory); a zero placeholder falls back to pc.exposure. The input is
+// stored at the frame's pre-exposure P (preExposure), so the anchor is exposure / P.
+#define GE_EXPOSURE_HISTORY_BINDING 1
+#include "Includes/exposure_history.glsl"
+
+// The volume's Cube LUT (identity textures when none is bound), sampled when its Stage is Grade.
+layout(set = 0, binding = 3) uniform sampler3D uLut3d;
+layout(set = 0, binding = 4) uniform sampler2D uLut1d;
 
 // std140 grade block (ColorGradeParamsUBO). Zero-filled == identity grade. No
 // instance name so the reflected binding is the block name "ColorGradeParams"
@@ -75,6 +84,7 @@ layout(push_constant) uniform ColorFxPC
     int colorFilterBlendMode;
     float exposure;       // static/manual/physical scalar (matches tonemap.frag)
     int useAutoExposure;  // 1 = read metered exposure from uExposure
+    GE_CUBE_LUT_PUSH_MEMBERS
 } pc;
 
 const vec3 kLumaWeights = vec3(0.2126, 0.7152, 0.0722);
@@ -231,6 +241,7 @@ void main()
                uExposure.exposureScale < 1e9)
                   ? uExposure.exposureScale
                   : pc.exposure;
+    e /= GE_PreExposure();
     float eDiv = max(e, 1e-4);
     vec3 exposed = max(rgb, vec3(0.0)) * eDiv;
 
@@ -256,6 +267,11 @@ void main()
 
     if (hueActive)
         exposed = ApplyHueShift(exposed);
+
+    // A Grade LUT sees the exposed scene-linear color, as a colorist's LUT on a camera's
+    // exposed image does; the look then renders its output. No usable table samples nothing.
+    if (pc.lutStage == kCubeLutStageGrade && pc.lutIntensity > 1e-5 && pc.lutFlags != 0)
+        exposed = GE_ApplyCubeLut(exposed, GE_CUBE_LUT_PARAMS(pc), uLut3d, uLut1d);
 
     rgb = exposed / eDiv;  // un-anchor: tonemap re-applies *exposure once
 

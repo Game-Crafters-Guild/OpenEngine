@@ -20,7 +20,6 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
@@ -276,7 +275,7 @@ void RenderServices::EmitProducerForwardCommands()
         // Mask-0 views render no world content (disarmed probe capture views,
         // parked utility views); special views that do want producer commands
         // (thumbnails, probe bakes) drive their own per-view emit explicitly.
-        if (view.ActiveRenderLayerMask() == 0u)
+        if (view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
             continue;
         EmitProducerForwardCommandsForView(view.id);
     }

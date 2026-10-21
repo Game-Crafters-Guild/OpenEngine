@@ -97,7 +97,7 @@ struct RsFixture
         }
         Rs.Views().SetCameraData(camId, cd);
         View = Rs.Views().AllocateView("RGPassTestView", camId);
-        Rs.Views().SetViewRenderLayerMask(View, 1u);
+        Rs.Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};
         clear.clearColor = true;
         clear.clearColorValue[3] = 1.0f;
@@ -1409,12 +1409,12 @@ TEST(RenderServicesRGPassTests, OnDemandViewLapsesOutOfCullingWhenNotReArmed)
         const ViewId onDemand = f.Rs.Views().AllocateView("OnDemandTestView", camId,
                                                   ViewPurpose::EditorScene,
                                                   ViewParticipation::OnDemand);
-        f.Rs.Views().SetViewRenderLayerMask(onDemand, 1u);
+        f.Rs.Views().SetViewRenderLayerMask(onDemand, GameEngine::Rendering::RenderLayerMask::Default());
 
         const auto mask = [&](ViewId id) -> uint32_t
         {
             const ViewDesc* v = f.Rs.Views().FindViewDesc(id);
-            return v ? v->ActiveRenderLayerMask() : 0u;
+            return v ? v->ActiveRenderLayerMask().Bits : 0u;
         };
 
         // f.View is an Always view (fixture default); the fresh OnDemand view is
@@ -1463,7 +1463,7 @@ TEST(RenderServicesRGPassTests, WorldScatterRegistersSlicesOnlyForParticipatingV
 
         const ViewId dormant = f.Rs.Views().AllocateView(
             "DormantTestView", f.Rs.Views().FindViewDesc(f.View)->cameraId);
-        f.Rs.Views().SetViewRenderLayerMask(dormant, 0u);
+        f.Rs.Views().SetViewRenderLayerMask(dormant, GameEngine::Rendering::RenderLayerMask::None());
 
         FramePools pools(f.Device.get());
         RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
@@ -1753,6 +1753,134 @@ TEST(RenderServicesRGPassTests, MaterialParamsPackSkipGate)
             RunFrame();
         EXPECT_GT(f.Rs.Materials().GetMaterialSSBOPackCount(), afterEdit)
             << "an unregister (generation bump) must bust the pack-skip stamp";
+    }
+    f.Down();
+}
+
+// A property edit rewrites only the edited material's row in each ring slot,
+// and every row still holds its material's current bytes. Animating one
+// material per frame must not cost a copy of the whole material table.
+TEST(RenderServicesRGPassTests, MaterialParamsRepackWritesOnlyTheChangedRow)
+{
+    RsFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    if (!f.Rs.Textures().IsBindlessEnabled())
+    {
+        f.Down();
+        GTEST_SKIP() << "Bindless unavailable — PackMaterialSSBO is gated on it";
+    }
+    {
+        std::vector<Material*> materials;
+        std::vector<GUID> guids;
+        for (int i = 0; i < 4; ++i)
+        {
+            guids.push_back(GUID::Generate());
+            materials.push_back(RegisterPackGateMaterial(f.Rs, guids.back(), "DeltaPack"));
+            ASSERT_NE(materials.back(), nullptr);
+        }
+
+        uint32_t frameCounter = 0;
+        auto RunFrame = [&]()
+        {
+            f.Rs.BeginWorldDrawFrame();
+            f.Rs.GetPerFrameWritePool().BeginFrame(frameCounter++);
+            f.Rs.BuildWorldBatchKeys();
+            f.Rs.Materials().FinalizeFrameBuffers();
+        };
+        auto& pool = f.Rs.GetPerFrameWritePool();
+        pool.BeginFrame(frameCounter++);
+        const uint32_t slots = Testing::RotateBackToCurrentSlot(
+            pool, FrameWriteUsage::MaterialParams, [&] { pool.BeginFrame(frameCounter++); });
+
+        // Each packed row must equal its material's parameter bytes.
+        auto ExpectRowsMatchMaterials = [&](const char* when)
+        {
+            const auto packed = f.Rs.Materials().PackedMaterialParams();
+            const size_t stride = kMaterialEntryStride;
+            const auto* base = static_cast<const uint8_t*>(f.Device->MapBuffer(packed.Buffer));
+            ASSERT_NE(base, nullptr);
+            for (const Material* mat : materials)
+            {
+                const size_t bytes = std::min<size_t>(mat->GetCacheSize(), kMaterialParamBytes);
+                const uint8_t* row = base + packed.Offset + mat->GetGpuSceneMaterialIndex() * stride;
+                EXPECT_EQ(std::memcmp(row, mat->GetCacheData(), bytes), 0)
+                    << mat->GetName() << " row differs from its material " << when;
+            }
+            f.Device->UnmapBuffer(packed.Buffer);
+        };
+
+        for (uint32_t i = 0; i < slots; ++i)
+            RunFrame();
+        const uint64_t afterFirstCycle = f.Rs.Materials().GetMaterialSSBORowWriteCount();
+        ASSERT_GT(afterFirstCycle, 0u) << "the first cycle packs every slot in full";
+
+        materials[1]->SetFloat(HashStringId("roughness"), 0.37f);
+        for (uint32_t i = 0; i < slots; ++i)
+        {
+            RunFrame();
+            ExpectRowsMatchMaterials("after the edit");
+        }
+        EXPECT_EQ(f.Rs.Materials().GetMaterialSSBORowWriteCount() - afterFirstCycle, slots)
+            << "one edited material must rewrite one row per ring slot";
+
+        // Idle frames write nothing.
+        const uint64_t afterEdit = f.Rs.Materials().GetMaterialSSBORowWriteCount();
+        for (uint32_t i = 0; i < slots * 2u; ++i)
+            RunFrame();
+        EXPECT_EQ(f.Rs.Materials().GetMaterialSSBORowWriteCount(), afterEdit);
+
+        // The packed bytes of the current slot's row for `mat`: parameters,
+        // texture indices, UV transforms, sampler word and the zeroed tail.
+        auto CopyRow = [&](const Material* mat)
+        {
+            const auto packed = f.Rs.Materials().PackedMaterialParams();
+            const auto* base = static_cast<const uint8_t*>(f.Device->MapBuffer(packed.Buffer));
+            std::vector<uint8_t> row(kMaterialEntryStride);
+            if (base)
+            {
+                const uint8_t* src =
+                    base + packed.Offset + mat->GetGpuSceneMaterialIndex() * kMaterialEntryStride;
+                std::memcpy(row.data(), src, row.size());
+                f.Device->UnmapBuffer(packed.Buffer);
+            }
+            return row;
+        };
+
+        // A UV-transform edit, packed as a delta. Every slot's rows are kept to
+        // compare with the full pack that follows.
+        materials[2]->SetTextureTransform(TextureSlot::kAlbedo, 2.0f, 3.0f, 0.25f, 0.5f);
+        std::vector<std::vector<std::vector<uint8_t>>> deltaRows(slots);
+        for (uint32_t i = 0; i < slots; ++i)
+        {
+            RunFrame();
+            const uint32_t slot = pool.GetCurrentSlot(FrameWriteUsage::MaterialParams);
+            ASSERT_LT(slot, slots);
+            for (int m = 0; m < 3; ++m)
+                deltaRows[slot].push_back(CopyRow(materials[m]));
+        }
+        EXPECT_EQ(f.Rs.Materials().GetMaterialSSBORowWriteCount() - afterEdit, slots)
+            << "a UV-transform edit must rewrite one row per ring slot";
+        const uint64_t afterTransformEdit = f.Rs.Materials().GetMaterialSSBORowWriteCount();
+
+        // An unregister moves the slot mapping, so each slot packs in full again,
+        // and every surviving row must be byte-identical to its delta-packed bytes.
+        f.Rs.Materials().Registry().Unregister(guids[3]);
+        materials.pop_back();
+        for (uint32_t i = 0; i < slots; ++i)
+        {
+            RunFrame();
+            ExpectRowsMatchMaterials("after an unregister");
+            const uint32_t slot = pool.GetCurrentSlot(FrameWriteUsage::MaterialParams);
+            ASSERT_LT(slot, slots);
+            for (int m = 0; m < 3; ++m)
+                EXPECT_EQ(CopyRow(materials[m]), deltaRows[slot][m])
+                    << materials[m]->GetName() << " in ring slot " << slot
+                    << ": the delta pack and the full pack wrote different bytes";
+        }
+        EXPECT_GE(f.Rs.Materials().GetMaterialSSBORowWriteCount() - afterTransformEdit,
+                  static_cast<uint64_t>(slots) * materials.size())
+            << "a mapping change must repack every row of every slot";
     }
     f.Down();
 }

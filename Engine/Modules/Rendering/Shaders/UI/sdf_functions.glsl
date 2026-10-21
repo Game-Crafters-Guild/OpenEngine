@@ -77,6 +77,21 @@ float pixelFootprint(vec2 p)
     return max(sqrt(abs(dpdx.x * dpdy.y - dpdx.y * dpdy.x)), 1e-4);
 }
 
+// The footprint for the edge of `rect` nearest `p`: how far along that edge's
+// normal, in local units, one screen pixel reaches, from the local position's
+// screen derivatives. pixelFootprint's isotropic sqrt(det) is exact under a
+// rotation or a uniform scale and equals this there; under a non-uniform scale
+// or a skew it is not, and an edge across the stretched axis comes out a
+// fraction of a pixel too soft while the other one aliases. Inside the rect
+// the nearest edge decides; off a rounded corner the corner's direction does.
+float rectEdgeFootprint(vec2 p, vec4 rect, vec2 dpdx, vec2 dpdy)
+{
+    vec2 halfSize = rect.zw * 0.5;
+    vec2 q = abs(p - (rect.xy + halfSize)) - halfSize;
+    vec2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+    return max(length(vec2(dot(dpdx, n), dot(dpdy, n))), 1e-4);
+}
+
 // Box-filter coverage of the half-plane at signed distance `sd` (positive
 // inside) for a fragment whose pixel footprint spans `w` SDF units.
 //

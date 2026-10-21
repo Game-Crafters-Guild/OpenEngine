@@ -15,6 +15,7 @@
 #include "Inspectors/InspectorComponentSection.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/SkyDayCurveRow.h"
+#include "Inspectors/SkyStarLookRow.h"
 #include "Inspectors/SkySunDriveRows.h"
 #include "Inspectors/SkySunIlluminanceRow.h"
 #include "Sky/SkyEnvironmentComponentTraits.h"
@@ -38,6 +39,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace GameEngine
 {
@@ -79,6 +81,17 @@ constexpr EnumEntry<Rendering::SkyBelowHorizonMode> kBelowHorizonModes[] = {
 
 // Sky-type dropdown options (mirrors Components::SkyMode). Switching rebuilds the inspector so
 // the physical vs gradient control sets show/hide.
+// Star shape dropdown options (mirrors Components::StarShapeKind).
+constexpr EnumEntry<Components::StarObserverKind> kStarObservers[] = {
+    {Components::StarObserverKind::Eye, "Eye"},
+    {Components::StarObserverKind::Camera, "Camera"},
+};
+
+constexpr EnumEntry<Components::StarShapeKind> kStarShapes[] = {
+    {Components::StarShapeKind::Point, "Point"},
+    {Components::StarShapeKind::Sparkle, "Sparkle"},
+};
+
 constexpr EnumEntry<Components::SkyMode> kSkyModes[] = {
     {Components::SkyMode::Physical, "Physical (atmosphere)"},
     {Components::SkyMode::Gradient, "Gradient"},
@@ -927,8 +940,8 @@ void RegisterSkyEnvironmentInspector()
             ctx.ShowInfoCards);
         Foldout* starsSection = AddSkySection(
             ctx.Parent, "Stars",
-            "The night star field: how many, how bright, how large, and how they twinkle. Faded "
-            "out by day and by the moon.",
+            "The night star field: a real sky's magnitudes and star colors, dimmed and reddened by the "
+            "air toward the horizon, hidden by a bright sky and by the moon's disk.",
             ctx.ShowInfoCards);
         Foldout* backdrop2DSection = AddSkySection(
             ctx.Parent, "2D backdrop",
@@ -1848,7 +1861,7 @@ void RegisterSkyEnvironmentInspector()
             "Change Sky Moon Size",
             [](Components::SkyEnvironment& u, float v) { u.MoonSize = std::clamp(v, 0.1f, 6.0f); },
             sky->MoonSize,
-            "Angular scale on the moon disk (~1 ≈ plausible real size); available with Auto Sun/Moon off for manual sun/moon setup.",
+            "Scale on the drawn moon disk: 1 draws its radius at 1.5 degrees, about 5.7 times the real moon; the default 2.39 draws 3.6 degrees. The disk keeps the real moon's surface brightness at any size, and the moonlight does not change.",
             extras,
             0.1f,
             6.0f);
@@ -1864,29 +1877,13 @@ void RegisterSkyEnvironmentInspector()
             "Change Sky Moon Exposure",
             [](Components::SkyEnvironment& u, float v) { u.MoonExposureEV = std::clamp(v, -8.0f, 8.0f); },
             sky->MoonExposureEV,
-            "Exposure offset applied only to the visible moon disk.",
+            "Stylistic trim on the visible moon disk, in stops. 0 is the real moon's surface brightness, at any Moon size.",
             extras,
             -8.0f,
             8.0f);
 
         if (sky->AutoSunMoon)
         {
-            AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-                physical,
-                "Moon phase",
-                sky->MoonPhase01,
-                w,
-                e,
-                n,
-                undo,
-                "Change Sky Moon Phase",
-                [](Components::SkyEnvironment& u, float v) { u.MoonPhase01 = std::clamp(v, 0.0f, 1.0f); },
-                sky->MoonPhase01,
-                "Visible moon illumination only: 0=new, 0.25=first quarter, 0.5=full, 0.75=last quarter.",
-                extras,
-                0.0f,
-                1.0f);
-
             AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
                 physical,
                 "Moon arc position",
@@ -1898,7 +1895,7 @@ void RegisterSkyEnvironmentInspector()
                 "Change Sky Moon Cycle",
                 [](Components::SkyEnvironment& u, float v) { u.MoonArcPosition = std::clamp(v, 0.0f, 1.0f); },
                 sky->MoonArcPosition,
-                "Where the moon is in its movement cycle around the sky: 0=new position, 0.5=full-moon position.",
+                "Where the moon is in its cycle, which is also its phase: 0=new, 0.25=first quarter, 0.5=full, 0.75=last quarter. It sets the lit shape of the disk and the moonlight.",
                 extras,
                 0.0f,
                 1.0f);
@@ -1958,7 +1955,7 @@ void RegisterSkyEnvironmentInspector()
                         Editor::CommitComponentUpdate(w, ex, n, u);
                     }
                 },
-                "When Time of Day is animating, advance the moon movement cycle. This does not change the visible moon phase slider.");
+                "When Time of Day is animating, advance the moon's cycle: the moon moves around the sky and its phase changes with it.");
 
             AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
                 physical,
@@ -2069,47 +2066,103 @@ void RegisterSkyEnvironmentInspector()
             0.1f,
             4.0f);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Star density", sky->StarDensity, w, e, n,
-            undo, "Change Sky Star Density",
-            [](Components::SkyEnvironment& u, float v) { u.StarDensity = std::clamp(v, 0.0f, 1.0f); },
-            sky->StarDensity,
-            "Star density.", extras);
+        AddSkyStarLookRow(stars, w, e, n, undo);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Brightness", sky->StarBrightness, w, e, n,
-            undo, "Change Sky Star Brightness",
-            [](Components::SkyEnvironment& u, float v) { u.StarBrightness = std::clamp(v, 0.0f, 2.0f); },
-            sky->StarBrightness, "Star brightness.", extras);
+        {
+            auto* observerField = InspectorUI::AddEnumRow(
+                stars, "Observer", kStarObservers, sky->StarObserver,
+                "Observer: Eye draws the stars as a dark-adapted eye sees them (glare, faint stars fading to white); Camera draws the same stars "
+                "without the glare, each in its catalog color.");
+            observerField->SetOnValueChanged([w, e, n, undo](Components::StarObserverKind v) {
+                CommitComponentWithUndo<Components::SkyEnvironment>(w, e, n, undo, "Change Sky Star Observer",
+                    [v](Components::SkyEnvironment& u) { u.StarObserver = v; });
+            });
+        }
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Size", sky->StarSize, w, e, n,
-            undo, "Change Sky Star Size",
-            [](Components::SkyEnvironment& u, float v) { u.StarSize = std::clamp(v, 0.1f, 3.0f); },
-            sky->StarSize, "Star size.", extras);
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Limit", sky->StarLimitingMagnitude,
+            w, e, n, undo, "Change Sky Star Limiting Magnitude",
+            [](Components::SkyEnvironment& u, float v) { u.StarLimitingMagnitude = std::clamp(v, 0.0f, 8.0f); },
+            Components::SkyEnvironment{}.StarLimitingMagnitude,
+            "Limiting magnitude, physical: the faintest star drawn under a moonless sky, as a visual magnitude. "
+            "6.5 is the naked-eye limit, about 9,000 stars over the whole sky; each magnitude fainter about "
+            "triples the count. Stars near the horizon are fainter by the air they cross, and a bright sky "
+            "hides the faint ones.",
+            extras, 0.0f, 8.0f);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Sparkle Points", sky->StarDiamondShape, w, e, n,
-            undo, "Change Sky Star Sparkle Points",
-            [](Components::SkyEnvironment& u, float v) { u.StarDiamondShape = std::clamp(v, 0.0f, 1.0f); },
-            sky->StarDiamondShape,
-            "How bright the sparkle's four points are against its core.", extras);
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Twinkle", sky->StarTwinkleAmount, w, e, n,
+            undo, "Change Sky Star Twinkle Amount",
+            [](Components::SkyEnvironment& u, float v) { u.StarTwinkleAmount = std::clamp(v, 0.0f, 1.0f); },
+            Components::SkyEnvironment{}.StarTwinkleAmount,
+            "Twinkle (scintillation), physical: how much a star's brightness swings at about 6 degrees "
+            "above the horizon. It grows with the air the light crosses, so stars overhead hold steady. "
+            "Twinkle rate sets how fast it swings.",
+            extras, 0.0f, 1.0f);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Core Size", sky->StarCoreSize, w, e, n,
-            undo, "Change Sky Star Core Size",
-            [](Components::SkyEnvironment& u, float v) { u.StarCoreSize = std::clamp(v, 0.0f, 0.6f); },
-            sky->StarCoreSize, "Star core size.", extras);
+        InspectorUI::AddTextBlock(stars, "Artistic", "inspector-section-subheader");
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Glow Falloff", sky->StarGlowFalloff, w, e, n,
-            undo, "Change Sky Star Glow Falloff",
-            [](Components::SkyEnvironment& u, float v) { u.StarGlowFalloff = std::clamp(v, 0.5f, 16.0f); },
-            sky->StarGlowFalloff, "Star glow falloff.", extras);
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Highlights",
+            sky->StarHighlightCompression, w, e, n, undo, "Change Sky Star Highlight Compression",
+            [](Components::SkyEnvironment& u, float v) { u.StarHighlightCompression = std::clamp(v, 0.1f, 1.0f); },
+            Components::SkyEnvironment{}.StarHighlightCompression,
+            "Highlights (star highlight compression), artistic: compresses the bright stars against the faint "
+            "ones. 1 is physical (a magnitude -1.5 star is 1,585 times a magnitude 6.5 star); the default 0.775 makes it "
+            "300 times, so the brightest stars do not clip at a night exposure.",
+            extras, 0.1f, 1.0f);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Twinkle Speed", sky->TwinkleSpeed, w, e, n,
-            undo, "Change Sky Twinkle Speed",
-            [](Components::SkyEnvironment& u, float v) { u.TwinkleSpeed = std::clamp(v, 0.0f, 3.0f); },
-            sky->TwinkleSpeed, "Twinkle speed.", extras);
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Glow", sky->StarGlow, w, e, n,
+            undo, "Change Sky Star Glow",
+            [](Components::SkyEnvironment& u, float v) { u.StarGlow = std::clamp(v, 0.0f, 4.0f); },
+            Components::SkyEnvironment{}.StarGlow,
+            "Star glow, artistic: a soft glow around the brightest stars, as a multiple of the star's own light "
+            "(0.5 adds half its light again). It acts on stars brighter than magnitude 3, with either shape, and "
+            "adds light: the core or the sparkle keeps its brightness. 0 is physical.",
+            extras, 0.0f, 4.0f);
 
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Twinkle Intensity", sky->TwinkleIntensity, w, e, n,
-            undo, "Change Sky Twinkle Intensity",
-            [](Components::SkyEnvironment& u, float v) { u.TwinkleIntensity = std::clamp(v, 0.0f, 1.0f); },
-            sky->TwinkleIntensity, "Twinkle amount.", extras);
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Twinkle rate", sky->StarTwinkleRate, w, e, n,
+            undo, "Change Sky Star Twinkle Rate",
+            [](Components::SkyEnvironment& u, float v) {
+                u.StarTwinkleRate = std::clamp(v, 0.0f, Components::kStarTwinkleRateMax);
+            },
+            Components::SkyEnvironment{}.StarTwinkleRate,
+            "Twinkle rate, artistic: how fast the twinkle swings, as a multiple of a slow twinkle; Twinkle "
+            "sets how far. At 1 the fastest swing is about 2 Hz. 12, the most (the Physical look), keeps the "
+            "fastest swing under 30 times a second; real scintillation is faster still.",
+            extras, 0.0f, Components::kStarTwinkleRateMax);
+
+        {
+            auto* shapeField = InspectorUI::AddEnumRow(
+                stars, "Shape", kStarShapes, sky->StarShape,
+                "Star shape, artistic: Point is the physical round core; Sparkle draws every star as a "
+                "four-pointed sparkle (the Classic look). Spikes are separate and work with either.");
+            shapeField->SetOnValueChanged([w, e, n, undo](Components::StarShapeKind v) {
+                CommitComponentWithUndo<Components::SkyEnvironment>(w, e, n, undo, "Change Sky Star Shape",
+                    [v](Components::SkyEnvironment& u) { u.StarShape = v; });
+            });
+        }
+
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Core", sky->StarCoreScale, w, e, n,
+            undo, "Change Sky Star Core",
+            [](Components::SkyEnvironment& u, float v) { u.StarCoreScale = std::clamp(v, 0.5f, 3.0f); },
+            Components::SkyEnvironment{}.StarCoreScale,
+            "Star core, artistic: the size of every star's core point. 1 is the physical point; smaller is a "
+            "tighter, brighter point, larger a softer one.",
+            extras, 0.5f, 3.0f);
+
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Spikes", sky->StarSpikes, w, e, n,
+            undo, "Change Sky Star Spikes",
+            [](Components::SkyEnvironment& u, float v) { u.StarSpikes = std::clamp(v, 0.0f, 1.0f); },
+            Components::SkyEnvironment{}.StarSpikes,
+            "Star spikes, artistic: four diffraction spikes on the stars that carry the glow, as the share of "
+            "the glow's light they take, so a star's total light does not change. 0 is none; they need Glow.",
+            extras, 0.0f, 1.0f);
+
+        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Spike length", sky->StarSpikeLength, w, e, n,
+            undo, "Change Sky Star Spike Length",
+            [](Components::SkyEnvironment& u, float v) { u.StarSpikeLength = std::clamp(v, 0.5f, 4.0f); },
+            Components::SkyEnvironment{}.StarSpikeLength,
+            "Spike length, artistic: the distance over which a spike fades to a third, in glow radii (1 is "
+            "about 7 pixels on a 900-pixel-tall view). A bright spike stays visible for a few times that.",
+            extras, 0.5f, 4.0f);
 
         if (!sky->AutoSunMoon)
         {

@@ -7,6 +7,7 @@
 #include "Logger/Logger.h"
 #include "Platform/SystemFonts.h"
 #include "Rendering/Common/Utils.h"
+#include "UI/FontWeightMatch.h"
 
 #include <algorithm>
 #include <cctype>
@@ -313,31 +314,8 @@ bool FontFamilyIndex::TryResolveFontAssetPath(const std::string& family,
             score += (c.style == FontStyle::Normal) ? 2000 : 5000;
         }
 
-        // CSS Fonts Level 4, §5.2: weight matching direction depends on the
-        // requested weight. Candidates in the "wrong" direction get a large
-        // base penalty so the "right" direction always wins, then distance
-        // breaks ties within the same direction.
-        const int diff = c.weight - reqW; // positive = heavier
-        if (reqW > 500)
-        {
-            // Prefer heavier first, then lighter.
-            score += (diff >= 0) ? diff : (1000 + (-diff));
-        }
-        else if (reqW >= 400)
-        {
-            // Prefer [requested..500] first, then lighter, then heavier.
-            if (diff >= 0 && c.weight <= 500)
-                score += diff;
-            else if (diff < 0)
-                score += 500 + (-diff);
-            else
-                score += 1000 + diff;
-        }
-        else
-        {
-            // Prefer lighter first, then heavier.
-            score += (diff <= 0) ? (-diff) : (1000 + diff);
-        }
+        // CSS Fonts Level 4, §5.2: every weight cost stays below the style penalties above.
+        score += ::GameEngine::UI::FontWeightMatchCost(reqW, c.weight);
 
         if (score < bestScore)
         {

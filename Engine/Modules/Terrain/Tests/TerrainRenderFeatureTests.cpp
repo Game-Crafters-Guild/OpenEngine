@@ -94,6 +94,22 @@ TEST_F(TerrainRenderFeatureTest, ActiveTerrains_SetGet)
     EXPECT_FLOAT_EQ(retrieved[1].SizeX, 1024.0f);
 }
 
+// The CBT node draws the first active terrain only for a view whose layers share one with the terrain's.
+TEST_F(TerrainRenderFeatureTest, AViewDrawsTheTerrainOnlyWhenTheirLayersShareOne)
+{
+    m_Feature = std::make_unique<TerrainRenderFeature>();
+    EXPECT_FALSE(m_Feature->ViewDrawsActiveTerrain(RenderLayerMask::All())) << "no active terrain";
+
+    std::vector<TerrainInstanceInfo> terrains(1);
+    terrains[0].RenderLayers = RenderLayerMask::FromLayer(3);
+    m_Feature->SetActiveTerrains(std::move(terrains));
+
+    EXPECT_FALSE(m_Feature->ViewDrawsActiveTerrain(RenderLayerMask::Default()))
+        << "a view without layer 3 declares nothing of a terrain on layer 3";
+    EXPECT_FALSE(m_Feature->ViewDrawsActiveTerrain(RenderLayerMask::None())) << "a sleeping view draws nothing";
+    EXPECT_TRUE(m_Feature->ViewDrawsActiveTerrain(RenderLayerMask::Default() | RenderLayerMask::FromLayer(3)));
+}
+
 // ---- C8: unified tiled-terrain heightmap render-source oracles ----
 //
 // A tiled terrain renders through one unified heightmap that per-tile band uploads

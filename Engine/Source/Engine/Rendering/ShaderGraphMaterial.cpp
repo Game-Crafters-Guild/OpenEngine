@@ -127,33 +127,14 @@ constexpr const char* kGeneratedSurfaceDirName = "Generated";
 
 // Generated surfaces are derived data outside watched project content. The
 // name reaches the composed include and so the shader-package key, so it hashes
-// the material's identity in the asset system's derived-identity spelling,
-// "<alias>/<path under the root>", taken from the deepest mounted source that
-// holds the material. Sources sharing one root spelling tie; the one listed
-// first wins, and AssetSourceRoots lists sources in mount priority order, so a
-// Player development run that mounts the project and the editor at one folder
-// names it "project", as the cook does. Moving the project and its cache, or
-// mounting a package or the editor assets from another directory, keeps every
-// name; a project material and a package material with the same relative path
-// get two.
+// the material's identity in the asset system's derived-identity spelling
+// (MaterialSourceIdentity), which stays the same when the project and its cache
+// move.
 std::filesystem::path MaterializedSurfacePath(
     const std::filesystem::path& materialPath,
     const ::GameEngine::Rendering::MaterialBuildContext& context)
 {
-    namespace fs = std::filesystem;
-    const fs::path material = fs::absolute(materialPath).lexically_normal();
-    fs::path sourceIdentity;
-    size_t matchedRootLength = 0;
-    for (const auto& source : context.AssetSourceRoots)
-    {
-        const fs::path root = fs::absolute(source.Root).lexically_normal();
-        const fs::path relative = material.lexically_relative(root);
-        const size_t rootLength = root.native().size();
-        if (relative.empty() || *relative.begin() == ".." || rootLength <= matchedRootLength)
-            continue;
-        sourceIdentity = fs::path(source.Alias) / relative;
-        matchedRootLength = rootLength;
-    }
+    const std::filesystem::path sourceIdentity = ::GameEngine::Rendering::MaterialSourceIdentity(materialPath, context);
     if (sourceIdentity.empty())
         return {};
 

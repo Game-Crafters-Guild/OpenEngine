@@ -45,7 +45,7 @@ namespace
 
     for (const auto& view : rs.Views().GetViews())
     {
-        if (!view.activeRenderPipeline || view.ActiveRenderLayerMask() == 0u)
+        if (!view.activeRenderPipeline || view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
             continue;
         if (view.purpose == ::GameEngine::Rendering::ViewPurpose::EditorScene &&
             view.cameraId != 0 && rs.Views().FindCameraData(view.cameraId))
@@ -203,8 +203,11 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
                 targets.Depth = d.ViewDepth;
                 targets.Resolve = d.ViewResolve;
                 targets.DepthResolved = d.ViewDepthResolved;
+                targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
                 targets.ResolveFromPipeline = d.ResolveFromPipeline;
 
+                // The world pass's keywords this frame, the height fog among them: the surface takes
+                // the fog by its own distance.
                 auto passKeywords = ::GameEngine::Rendering::MaterialKeyword::None;
                 if (auto kw = rs.GetWorldPassKeywords(d.View.id))
                     passKeywords = *kw;

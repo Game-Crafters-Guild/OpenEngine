@@ -1,5 +1,6 @@
 #include "Engine/Rendering/Pipeline/Nodes/TransmissivePassNode.h"
 
+#include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h" // ParseWorldPassKeywords
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
@@ -7,24 +8,67 @@
 
 #include "Logger/Logger.h"
 
+#include <nlohmann/json.hpp>
+
 namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 {
 using namespace ::GameEngine::Rendering;
 
-bool TransmissivePassNode::Initialize(std::string nodeId, std::string nodeJson, std::string* /*outError*/)
+bool TransmissivePassNode::Initialize(std::string nodeId, std::string nodeJson, std::string* outError)
 {
     m_Id = std::move(nodeId);
     m_Json = std::move(nodeJson);
     // Same keyword set as the world pass (ForwardPlus / IBL / Shadows / Instanced) so the
     // glass variant compiles with full lighting + the IBL env-cube refraction fallback.
     m_PassKeywords = ParseWorldPassKeywords(m_Json);
+    try
+    {
+        const auto j = nlohmann::json::parse(m_Json);
+        if (j.contains("output") && j["output"].is_string())
+            m_LateOutputRef = j["output"].get<std::string>();
+        if (j.contains("clouds") && j["clouds"].is_string())
+            m_CloudsRef = j["clouds"].get<std::string>();
+        if (j.contains("draws"))
+        {
+            if (!j["draws"].is_array() || j["draws"].empty())
+            {
+                if (outError)
+                    *outError = "TransmissiveRender: \"draws\" must be a non-empty array of \"glass\" and "
+                                "\"lateTransparents\"; leave it out to draw both";
+                return false;
+            }
+            m_DrawsGlass = false;
+            m_DrawsLateTransparents = false;
+            for (const auto& entry : j["draws"])
+            {
+                const std::string name = entry.is_string() ? entry.get<std::string>() : std::string();
+                if (name == "glass")
+                    m_DrawsGlass = true;
+                else if (name == "lateTransparents")
+                    m_DrawsLateTransparents = true;
+                else
+                {
+                    if (outError)
+                        *outError = "TransmissiveRender: unknown \"draws\" entry \"" + name +
+                                    "\"; use \"glass\" or \"lateTransparents\"";
+                    return false;
+                }
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        if (outError)
+            *outError = std::string("TransmissiveRender JSON parse error: ") + e.what();
+        return false;
+    }
     return true;
 }
 
 void TransmissivePassNode::DeclareForView(ViewDeclare& d)
 {
-    const bool hasGlass = d.Services.HasTransmissionInView(d.View.id);
-    const bool hasLateForward = d.Services.HasLateForwardCommands(d.View.id);
+    const bool hasGlass = m_DrawsGlass && d.Services.HasTransmissionInView(d.View.id);
+    const bool hasLateForward = m_DrawsLateTransparents && d.Services.HasLateForwardCommands(d.View.id);
     // Glass-free and particle-free views pay nothing.
     if (!hasGlass && !hasLateForward)
         return;
@@ -39,9 +83,14 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
     {
         Engine::Renderer::RenderServices::WorldPassTargetsRG lateTargets{};
         // Ocean has already made the resolved HDR scene colour authoritative.
-        // Blend late particles into that target rather than resolving the
-        // pre-ocean MSAA colour a second time.
-        lateTargets.Color = d.ViewResolve;
+        // Blend late particles into that target (or the post chain's colour this node names)
+        // rather than resolving the pre-ocean MSAA colour a second time.
+        lateTargets.Color = m_LateOutputRef.empty() ? d.ViewResolve : d.ResolveTexture(m_LateOutputRef);
+        lateTargets.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);
+        lateTargets.VolumetricFog = d.ResolveTexture(Names::Res::VolumetricFog);
+        const Rendering::MaterialKeyword clouds = VolumetricCloudsPassKeyword(d, m_CloudsRef);
+        if (clouds != Rendering::MaterialKeyword::None)
+            lateTargets.VolumetricClouds = d.ResolveTexture(m_CloudsRef);
         lateTargets.Resolve = {};
         lateTargets.DepthResolved = d.ViewDepthResolved;
         lateTargets.ResolveFromPipeline = false;
@@ -92,7 +141,11 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
         // Individual commands carry their vertex/instancing keywords. Lit
         // particles need the same clustered local lights and shadow receivers
         // as the world pass; IBL alone silently drops point and spot lights.
-        const Rendering::MaterialKeyword lateKeywords = m_PassKeywords & kLateTransparentKeywords;
+        // The fog by their own distance: the height fog, and the volumetric fog when this node draws
+        // after its composite (the volume is published then).
+        const Rendering::MaterialKeyword lateKeywords = (m_PassKeywords & kLateTransparentKeywords) |
+                                                        HeightFogPassKeyword(d) | VolumetricFogPassKeyword(d) |
+                                                        clouds;
         // Read-only: these contributors test depth and never own it. The producer is
         // registered writesDepth=false (RenderExtractionSystem), and a ReadWrite attach would
         // declare a depth WRITE the graph would then order every later depth reader against.
@@ -120,7 +173,9 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
     auto& grab = d.Services.GetOrCreateTransmissionSceneGrab();
     const bool grabReady = grab.DeclareForView(d, static_cast<uint32_t>(d.Frame.FrameIndex()));
 
-    Rendering::MaterialKeyword keywords = m_PassKeywords;
+    // The glass's own radiance takes the fog by its own distance; the grab already carries the fog of
+    // what is behind it (forward_fog.glsl).
+    Rendering::MaterialKeyword keywords = m_PassKeywords | HeightFogPassKeyword(d) | VolumetricFogPassKeyword(d);
     if (grabReady)
         keywords |= Rendering::MaterialKeyword::SceneColorGrab;
 
@@ -144,6 +199,8 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
     Engine::Renderer::RenderServices::WorldPassTargetsRG t{};
     t.Color = effectiveColor;
     t.DepthResolved = d.ViewDepthResolved;
+    t.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);
+    t.VolumetricFog = d.ResolveTexture(Names::Res::VolumetricFog);
     if (d.ViewDepth.IsValid())
     {
         const auto& colorDesc = d.Frame.Graph().ResourceDesc(effectiveColor.Id);

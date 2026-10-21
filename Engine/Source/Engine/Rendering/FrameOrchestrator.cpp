@@ -26,7 +26,6 @@
 #include "Assets/ModelAsset.h"
 #include "Assets/RenderPipelineAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
@@ -1384,7 +1383,9 @@ void FrameOrchestrator::BuildFrameGraph(Rendering::RenderGraph::RGFrame& frame,
         for (const auto& vt : params.ViewTargets)
         {
             const Rendering::ViewDesc* view = m_Services->Views().FindViewDesc(vt.View);
-            if (!view || view->ActiveRenderLayerMask() == 0)
+            // The pipeline's own rule (it declares every participating view, one on no layer
+            // included), so the output of a view drawing only its clear and sky is kept too.
+            if (!view || !view->activeRenderPipeline || !view->Participates())
                 continue;
             if (auto out = slot->Instance->GetOutputRG(vt.View, "FinalColor");
                 out.IsValid() && !frame.IsBackbuffer(out))

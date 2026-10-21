@@ -158,11 +158,13 @@
   /* Text that says something did not happen (an action refused or failed): the badge's red
      lightened to read as 12 px text on a panel (5.4:1 on #272727). */
   --ui_color_error_text: #FF6B6B;
+  /* The neutral edge of a control in its mixed state (the selected objects disagree). */
+  --ui_color_mixed_indicator: #888888;
   /* The wash behind an error notice: the badge's red over the panel, as the warning wash is amber. */
   --ui_color_error_background: rgba(209, 52, 56, 0.14);
   /* A layer that sits over scrolled content casts this along its top edge (the AI
      Assistant's input pane over its conversation). */
-  --ui_shadow_layer_above: 0 -4px 10px rgba(0, 0, 0, 0.35);
+  --ui_shadow_layer_above: 0 -4px 10px rgba(0, 0, 0, 0.15);
 
   /* A count badge over a button (the Scene View tool strip's Activity badge); white text
      on it is 4.9:1. */

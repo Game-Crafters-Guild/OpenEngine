@@ -7,13 +7,13 @@ sidebar:
 
 This guide covers:
 - **How Play Mode calls your C# code**
-- **How to read input** (via `GameEngine.Input.ABI.dll`)
+- **How to read input** (via `GameEngine.Scripting.Bindings.dll`)
 - **How to read/write ECS** (via `GameEngine.ECS.ABI.dll`)
-- **How the Editor gates input** (only while the **Game View is the active tab**)
+- **When the Editor feeds the game input** (only while play runs and the **Game View is the active tab**)
 
 ## What the scripting API offers
 - **Play Mode lifecycle hooks**: `[PlayModeEnter]`, `[PlayModeTick]`, `[PlayModeExit]` on **static methods**
-- **Input ABI** (polling + user-defined actions/bindings), but **context gating is editor-owned**
+- **Input** (polling, pointer lock, and actions with their bindings and contexts)
 - **ECS ABI**:
   - basic entity/name/transform helpers
   - **runtime-defined "blob" components** (C# `unmanaged` structs stored as bytes)
@@ -66,37 +66,62 @@ namespace GameScripts
 
 Polling keys, buttons and the mouse, the mouse delta and pointer lock, from C++ and C#: [The input system](../input/input-system.mdx).
 
-### Editor-owned input gating
-The Editor enables gameplay input only when:
+### When the game receives input
+Scripts read the game's own input system. In the Editor, that input system receives keys, buttons and the mouse only while:
 - **Play Mode is playing or paused**, and
 - the **Game View is the active tab** of its window
 
-This is implemented via an editor-managed input context:
-- **context name**: `Editor.GameView`
-
-Your scripts should register actions under that context so they are automatically gated.
+Outside that, it receives nothing: a poll reads as nothing held, and every action reads as released. A script does not gate its input itself; its contexts and actions are its own.
 
 ### Creating actions and bindings
-Namespace: `GameEngine.Scripting` (assembly `GameEngine.Input.ABI.dll`)
+Namespace: `GameEngine.Scripting` (assembly `GameEngine.Scripting.Bindings.dll`)
 
 ```csharp title="Register an action and bind a key"
 using GameEngine.Scripting;
 
 public static class Controls
 {
-    private const string Ctx = "Editor.GameView";
-
-    // You can also pre-hash names via InputIds.HashInput.
-    private const string ActionJump = "Game.Jump";
+    // Ids made once: hashing a name costs more than the call that takes it.
+    private static readonly StringId Gameplay = StringId.Of("Gameplay");
+    private static readonly StringId ActionJump = StringId.Of("Game.Jump");
 
     public static void Setup()
     {
-        // isAxis: false for digital actions
-        Input.RegisterAction(Ctx, ActionJump, isAxis: false);
+        Input.RegisterAction(Gameplay, ActionJump, ActionKind.Button);
 
-        // Bind the space bar.
-        Input.Bind(Ctx, ActionJump, Input.DeviceType.Keyboard, code: KeyCode.Space);
+        // The space bar, not with Control held, and the gamepad's A button.
+        Input.BindKey(Gameplay, ActionJump, Key.Space, forbiddenMods: ModifierFlags.Control);
+        Input.BindGamepadButton(Gameplay, ActionJump, GamepadButton.A);
     }
+}
+```
+
+### An axis from two keys
+
+```csharp title="WASD as two axes, and the left stick on the same actions"
+using GameEngine.Scripting;
+
+public static class Movement
+{
+    private static readonly StringId Gameplay = StringId.Of("Gameplay");
+    private static readonly StringId MoveX = StringId.Of("Game.MoveX");
+    private static readonly StringId MoveY = StringId.Of("Game.MoveY");
+
+    public static void Setup()
+    {
+        Input.RegisterAction(Gameplay, MoveX, ActionKind.Axis);
+        Input.RegisterAction(Gameplay, MoveY, ActionKind.Axis);
+        Input.BindKey(Gameplay, MoveX, Key.A, -1f);
+        Input.BindKey(Gameplay, MoveX, Key.D, 1f);
+        Input.BindKey(Gameplay, MoveY, Key.S, -1f);
+        Input.BindKey(Gameplay, MoveY, Key.W, 1f);
+        Input.BindGamepadAxis(Gameplay, MoveX, GamepadAxis.LeftX);
+        Input.BindGamepadAxis(Gameplay, MoveY, GamepadAxis.LeftY, -1f);
+    }
+
+    // -1 to 1 on each axis; A and D together cancel.
+    public static float Strafe() => Input.GetActionState(MoveX).Value;
+    public static float Forward() => Input.GetActionState(MoveY).Value;
 }
 ```
 
@@ -107,17 +132,17 @@ using GameEngine.Scripting;
 
 public static class Controls
 {
-    public static bool JumpPressedThisFrame()
-    {
-        Input.GetActionState("Game.Jump", out Input.ActionState s);
-        return s.justPressed != 0;
-    }
+    private static readonly StringId ActionJump = StringId.Of("Game.Jump");
+
+    public static bool JumpPressedThisFrame() => Input.GetActionState(ActionJump).JustPressed;
 }
 ```
 
 Notes:
-- Polling returns `GE_Result_NotInitialized` if the native InputSystem is not available.
-- Context stack operations are intentionally **not exposed** to gameplay scripts; the Editor owns them.
+- Before an input system runs (in the editor, outside play), a poll answers the default (`false`, zero, an empty `ActionState`) and a call that changes input does nothing.
+- `BindKey`, `BindMouseButton`, `BindMouseAxis`, `BindGamepadButton` and `BindGamepadAxis` each name their device and take its own enum. On an axis action, a held key or mouse button adds its scale to the value, and `BindMouseAxis` (pointer motion or the wheel) and `BindGamepadAxis` (a stick or trigger) add the axis times their scale. A gamepad button drives button actions only.
+- An id of 0 throws `ArgumentException`. A call from a thread the engine does not run (`Task.Run`, a timer) throws `EngineCallException`.
+- A context's actions are live while the context is enabled, which it is from its first action on. `SetContextEnabled` switches a context off and on (a menu over gameplay, a vehicle); `PushContext` and `PopContext` order contexts, the top one first, when two hold the same action.
 
 ## ECS in C#
 
@@ -176,17 +201,16 @@ Per-entity iteration is an `IEntitySystem`: a partial struct whose `Execute` met
 ## Making it work in the editor
 
 ### Where scripts live
-The Editor's script compilation pipeline references all `GameEngine.*.ABI.dll` assemblies that are staged next to `Editor.exe`, including:
+The Editor's script compilation pipeline references the script API assemblies staged next to `Editor.exe`:
+- `GameEngine.Scripting.Bindings.dll` (Input and Physics)
 - `GameEngine.Scripting.ABI.dll`
-- `GameEngine.Input.ABI.dll`
 - `GameEngine.ECS.ABI.dll`
+- `GameEngine.Platform.ABI.dll`
 
 Place your gameplay scripts under the project `Assets/` folder (e.g. `Assets/MyGame.cs`).
 
-### How input gating works
-- Actions registered under context **`Editor.GameView`** only receive input when:
-  - Play Mode is playing or paused, and
-  - the Game View is the active tab of its window
+### When input reaches a script
+- The game's input system receives input only while Play Mode is playing or paused and the Game View is the active tab of its window ([When the game receives input](#when-the-game-receives-input)).
 
 ### Play Mode call order
 - Enter:
@@ -203,7 +227,3 @@ Place your gameplay scripts under the project `Assets/` folder (e.g. `Assets/MyG
   - world snapshot restored
   - edit-mode undo history restored
   - **Change Review UI** (if user made undoable changes during Play)
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Scripting_PlayMode_Input_ECS_HowTo.md`; the handle query (`CreateQuery` / `TryNext`), removed from the ABI, gives way to `IEntitySystem`; `ComponentType<T>` used as the static class it is; the key binding uses `KeyCode.Space`; the V1 labels dropped; the input gate described as the code applies it (the Game View is the active tab, not focused).

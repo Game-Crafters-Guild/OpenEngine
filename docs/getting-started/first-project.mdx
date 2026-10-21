@@ -1,6 +1,6 @@
 ---
 title: Your first project
-description: Taking a project from the editor's first launch to a game you can run, with creating, opening and saving a project and a plain game export.
+description: Taking a project from the editor's first launch to a game you can run, with creating, opening, and saving a project and a plain game export.
 sidebar:
   order: 1
 ---
@@ -11,7 +11,7 @@ A project is a folder: its content lives under `Assets/`, and the editor keeps i
 
 Started without a project, the editor opens the last project you used. On the first launch there is none, so it shows the project picker. Hold **Shift** while the editor starts to get the picker instead of the last project.
 
-The picker's home screen has a **New project** card, an **Open project** card and the list of recent projects. Behind the picker the editor holds an empty placeholder project, the default project; it cannot become one of your projects, so the picker stays open until you create or open one.
+The picker's home screen has a **New project** card, an **Open project** card, and the list of recent projects. Behind the picker the editor holds an empty placeholder project, the default project. It cannot become one of your projects, so the picker stays open until you create or open one.
 
 | Platform | Default project folder |
 |---|---|
@@ -24,15 +24,15 @@ The picker's home screen has a **New project** card, an **Open project** card an
 :::steps
 
 1. In the picker, choose **New project**. The **Templates** tab lists the built-in templates.
-2. Pick a template. **Blank** starts with a camera, a sun and a sky in `Assets/Scenes/Main.scene`. **Basic 3D** adds a ground plane and a few cubes to the same scene.
-3. Type a name under **PROJECT NAME** and choose a folder under **LOCATION** with **Browse**. The location must be an existing folder; the editor creates `<location>/<name>` and refuses a name that already exists there. Keep projects outside the engine checkout and its `build/` folder.
+2. Pick a template. **Blank** starts with a camera, a sun, a sky at mid-morning, and a horizon haze (the default [height fog](../rendering/height-fog.mdx#defaults)) in `Assets/Scenes/Main.scene`. **Basic 3D** adds a ground plane and a few cubes to the same scene.
+3. Type a name under **PROJECT NAME** and choose a folder under **LOCATION** with **Browse**. The location must be an existing folder. The editor creates `<location>/<name>` and refuses a name that already exists there. Keep projects outside the engine checkout and its `build/` folder.
 4. Choose **Create project**. The editor opens the new project on its startup scene (see [Open a project](#open-a-project)).
 
 :::
 
 ## Open a project
 
-- **From the picker:** choose a project in the recent list, or choose **Open project** and then **Browse** to pick a folder. The editor opens the folder where it is; it does not copy it. The same view can also import a project from a `.zip` archive or a Git URL.
+- **From the picker:** choose a project in the recent list, or choose **Open project** and then **Browse** to pick a folder. The editor opens the folder where it is. It does not copy it. The same view can also import a project from a `.zip` archive or a Git URL.
 - **From a running editor:** the **Open Project Folder** button in the top toolbar, or the **Open Project** command in the search (**Cmd+K** on macOS, **Ctrl+K** on Windows and Linux), shows the picker. The editor switches projects without restarting.
 - **From the command line:** pass `--project <folder>`. The editor skips the picker and opens that folder, creating it if it does not exist.
 
@@ -57,7 +57,9 @@ Each time it opens a project, the editor writes `GameEngine.Scripts.csproj` at t
 
 ## Save a scene
 
-Press **Cmd+S** on macOS or **Ctrl+S** on Windows and Linux, or use the **Save Scene** button in the top toolbar. A scene that has never been saved asks for a **Scene name** and a **Folder**, starting at the project's `Assets/` folder; scenes are `.scene` files. **Cmd+Shift+S** or **Ctrl+Shift+S** saves under a new name.
+Press **Cmd+S** on macOS or **Ctrl+S** on Windows and Linux, or use the **Save Scene** button in the top toolbar. A scene that has never been saved asks for a **Scene name** and a **Folder**, starting at the project's `Assets/` folder. Scenes are `.scene` files. **Cmd+Shift+S** or **Ctrl+Shift+S** saves under a new name.
+
+A line in a `.scene` file that names a field its component does not have, such as a misspelled or removed field, does not stop the scene from loading. The Log panel names the file and the line with one message, `<Component> has no field named '<field>': delete the line or correct the spelling`, and the editor asks before a save drops the line.
 
 ## Export your game
 
@@ -66,23 +68,17 @@ The editor exports a game for the platform it runs on: the macOS editor builds m
 :::steps
 
 1. Open the Build panel with the **Build** button in the top toolbar (the game-controller icon), or **Window > Build**.
-2. Choose **Settings** in the panel. Under **Global scene list**, drop the scenes to ship from the asset browser onto the list; the first one is the startup scene. A build with no scenes stops with `No scenes configured`. **Game name** sets the name of the exported game; without it the game takes the project folder's name.
+2. Choose **Settings** in the panel. Under **Global scene list**, drop the scenes to ship from the asset browser onto the list. The first one is the startup scene. A build with no scenes stops with `No scenes configured`. **Game name** sets the name of the exported game. Without it the game takes the project folder's name.
 3. In the platform table, turn **On** your platform only: **Mac** or **Windows**. Windows is on by default. The panel builds one platform at a time, the first one turned on in the table's order.
-4. Choose **Build**. The **Progress** and **Done** columns follow the build; the button becomes **Cancel** while it runs.
+4. Choose **Build**. The **Progress** and **Done** columns follow the build. The button becomes **Cancel** while it runs.
 
 :::
 
-The game goes to `Build Folder/<Platform>` inside the project, for example `Build Folder/Mac`. **Build path** in the panel, or **Build folder** in the platform's settings, chooses another folder; an absolute path still gets the platform folder appended.
+The game goes to `Build Folder/<Platform>` inside the project, for example `Build Folder/Mac`. **Build path** in the panel, or **Build folder** in the platform's settings, chooses another folder. An absolute path still gets the platform folder appended.
 
 | Platform | Output | Run it |
 |---|---|---|
 | macOS | `<Game name>.app`, with the game's content inside the bundle | Open the `.app` from Finder, or `open "Build Folder/Mac/<Game name>.app"` |
-| Windows | `<Game name>.exe`, `game.config` and the game's content | Run the `.exe` |
+| Windows | `<Game name>.exe`, `game.config`, and the game's content | Run the `.exe` |
 
-A build replaces the previous output folder only when it has succeeded; until then the previous output is kept. When the folder cannot be replaced, for example because the previous game is still running, the build stops with an error that names the folder. [Game builds and Steam publishing](../publishing/game-publishing.mdx) explains how the output is replaced, and how to prepare, verify and upload a release.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/first-project.html`.
-- 2026-10-06: The C# project for your IDE: `GameEngine.Scripts.csproj` at the project root.
-- 2026-10-04: First version: first launch, creating, opening and saving, and a plain game export.
+A build replaces the previous output folder only when it has succeeded. Until then the previous output is kept. When the folder cannot be replaced, for example because the previous game is still running, the build stops with an error that names the folder. [Game builds and Steam publishing](../publishing/game-publishing.mdx) explains how the output is replaced, and how to prepare, verify, and upload a release.

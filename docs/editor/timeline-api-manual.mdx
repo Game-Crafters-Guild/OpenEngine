@@ -1,6 +1,6 @@
 ---
 title: Timeline API manual
-description: Reference for the timeline evaluator, the .timeline asset format, timeline playback from C++ and C#, the editor's animation windows and the timeline bar controls.
+description: Reference for the timeline evaluator, the .timeline asset format, timeline playback from C++ and C#, the editor's animation windows, and the timeline bar controls.
 ---
 
 Reference for the engine timeline evaluator (`GameEngine::Animation`), `.timeline` assets, editor animation windows, and timeline bar UI controls. C# scripts evaluate timelines and drive playback through `TimelineApi` ([C# scripting API](#c-scripting-api)).
@@ -116,7 +116,7 @@ flowchart TB
 
 :badge[primary API]{variant=note}
 
-The C# side evaluates a timeline from its JSON text or from its asset and returns the result as JSON; loading, saving and the track type names have no managed call.
+The C# side evaluates a timeline from its JSON text or from its asset and returns the result as JSON. Loading, saving, and the track type names have no managed call.
 
 :::::tabs
 ::::tab[C++]
@@ -260,7 +260,7 @@ for (const auto& sample : result.ActiveClips) {
 
 ### Animator component
 
-`PlayTimeline` sets the animator's timeline and plays it; from C#, `TimelineApi` plays, pauses, stops and seeks the timeline on an entity.
+`PlayTimeline` sets the animator's timeline and plays it. From C#, `TimelineApi` plays, pauses, stops, and seeks the timeline on an entity.
 
 :::::tabs
 ::::tab[C++]
@@ -288,7 +288,7 @@ Playback source enum includes `AnimatorPlaybackSource::Timeline` alongside clip 
 
 :badge[runtime]{variant=note}
 
-When `Animator.source == Timeline`, `TimelinePlaybackSystem` advances `TimelinePlaybackState`, calls `EvaluateTimeline`, and applies results via `ApplyTimelineEvaluation`. Register gameplay hooks with `RegisterTimelineMethodCallback` (`Engine/Include/Engine/Rendering/TimelinePlayback.h`); method-track keys dispatch by `MethodName` during playback. From C#, one listener receives every method key.
+When `Animator.source == Timeline`, `TimelinePlaybackSystem` advances `TimelinePlaybackState`, calls `EvaluateTimeline`, and applies results via `ApplyTimelineEvaluation`. Register gameplay hooks with `RegisterTimelineMethodCallback` (`Engine/Include/Engine/Rendering/TimelinePlayback.h`). Method-track keys dispatch by `MethodName` during playback. From C#, one listener receives every method key.
 
 :::::tabs
 ::::tab[C++]
@@ -486,8 +486,3 @@ TimelineApi.SetMethodListener((entity, method, args) => { /* method track */ });
 - Video tracks are editor-only until a runtime video evaluator exists.
 
 :::
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/Editor/Timeline-API-Manual.html`; the free functions, the animator's playback and the method callbacks show their C++ and C# forms side by side.
-- 2026-05-28: The manual as it stood on this date.

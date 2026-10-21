@@ -162,14 +162,15 @@ bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
             outConfig.EditorIncludeDirs.emplace_back(sdkRoot / dir);
     }
 
-    // Scanner is optional — when dotnet or the scanner DLL is absent, BuildAndLoad runs
-    // in macros-only mode (no auto-detection of `: ECS::ComponentBase`).
     outConfig.DotnetExe = ResolveDotnetExecutable(get("dotnet"));
-    const std::string scanner = get("scannerdll");
-    outConfig.ComponentScannerDll = scanner.empty() ? std::filesystem::path{} : (sdkRoot / scanner);
+
+    // Scanner is optional — when it is absent, BuildAndLoad runs in macros-only mode (no
+    // auto-detection of `: ECS::ComponentBase`).
+    const std::string scanner = get("scanner");
+    outConfig.ComponentScannerExe = scanner.empty() ? std::filesystem::path{} : (sdkRoot / scanner);
     outConfig.DetectBase = "ComponentBase";
 
-    if (outConfig.DotnetExe.empty() || outConfig.ComponentScannerDll.empty())
+    if (outConfig.ComponentScannerExe.empty())
         Logger::Log::Info("[NativeScripting] SDK manifest has no scanner; user DLLs build in macros-only mode");
 
     return true;

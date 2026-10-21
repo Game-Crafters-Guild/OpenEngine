@@ -3,11 +3,11 @@ title: Device-loss instrumentation
 description: What to arm, and in what order, when the engine takes a VK_ERROR_DEVICE_LOST, and what each instrument can and cannot see while VK_EXT_descriptor_buffer is on.
 ---
 
-What to arm, and in what order, when the engine takes a `VK_ERROR_DEVICE_LOST`. Scope is crash/hang forensics — for wrong-pixel debugging see the [GPU debugging guide](../rendering/gpu-debugging-guide.mdx).
+What to arm, and in what order, when the engine takes a `VK_ERROR_DEVICE_LOST`. Scope is crash/hang forensics. For wrong-pixel debugging, see the [GPU debugging guide](../rendering/gpu-debugging-guide.mdx).
 
 :::caution[The constraint that shapes everything here]
 
-This engine ships with `VK_EXT_descriptor_buffer` ON, and several standard instruments are partly or wholly disabled by it. Each entry below states explicitly whether it survives descriptor buffer, because an instrument that silently does nothing is worse than no instrument — its silence reads as a clean result.
+This engine ships with `VK_EXT_descriptor_buffer` ON, and several standard instruments are partly or wholly disabled by it. Each entry below states explicitly whether it survives descriptor buffer, because an instrument that silently does nothing is worse than no instrument: its silence reads as a clean result.
 
 :::
 
@@ -15,12 +15,12 @@ This engine ships with `VK_EXT_descriptor_buffer` ON, and several standard instr
 
 | Instrument | Answers | Survives descriptor buffer? | Perturbs the app? |
 |---|---|---|---|
-| `VK_NV_device_diagnostic_checkpoints` :badge[existing]{variant=note} | WHERE execution stopped, at pass granularity | Yes | No — records a marker payload only |
-| `VK_EXT_device_fault` :badge[added]{variant=success} | WHAT the hardware faulted on — address, access type, vendor code | Yes, and independent of checkpoint granularity | No — post-mortem query only |
-| GPU-AV *buffer-content* checks :badge[added]{variant=success} | Malformed indirect draw/dispatch args, out-of-bounds indices | Yes — this half is not disabled | Yes — see the caveat below |
-| GPU-AV *shader instrumentation* | Descriptor / BDA out-of-bounds inside shaders | No — force-disabled by the layer | n/a |
-| DebugPrintf | Shader-side printf | No — force-disabled by the layer | n/a |
-| Crash Diagnostic Layer :badge[external]{variant=note} | WHERE execution stopped, at *per-command* granularity | Yes — inserts buffer markers, touches no descriptors | Marker writes only; `sync_after_commands` does add barriers |
+| `VK_NV_device_diagnostic_checkpoints` :badge[existing]{variant=note} | WHERE execution stopped, at pass granularity | Yes | No: records a marker payload only |
+| `VK_EXT_device_fault` :badge[added]{variant=success} | WHAT the hardware faulted on: address, access type, vendor code | Yes, and independent of checkpoint granularity | No: post-mortem query only |
+| GPU-AV *buffer-content* checks :badge[added]{variant=success} | Malformed indirect draw/dispatch args, out-of-bounds indices | Yes: this half is not disabled | Yes: see the caveat below |
+| GPU-AV *shader instrumentation* | Descriptor / BDA out-of-bounds inside shaders | No: force-disabled by the layer | n/a |
+| DebugPrintf | Shader-side printf | No: force-disabled by the layer | n/a |
+| Crash Diagnostic Layer :badge[external]{variant=note} | WHERE execution stopped, at *per-command* granularity | Yes: inserts buffer markers, touches no descriptors | Marker writes only; `sync_after_commands` does add barriers |
 
 ### Measured capability on the current dev machine
 
@@ -32,17 +32,17 @@ From `DeviceDiagnosticsTests` (headless, prints on every run — re-check rather
 [ probe    ] VK_AMD_buffer_marker advertised=yes (crash-diagnostic-layer per-command granularity)
 ```
 
-All three instruments are therefore available here, and because `VK_AMD_buffer_marker` is present the Crash Diagnostic Layer can use its buffer-marker path rather than falling back to checkpoints.
+All three instruments are therefore available here. Because `VK_AMD_buffer_marker` is present, the Crash Diagnostic Layer can use its buffer-marker path rather than falling back to checkpoints.
 
 ### Why checkpoints alone are not enough here
 
-On this machine every queue family reports `checkpointExecutionStageMask = 0x2001` — `TOP_OF_PIPE | BOTTOM_OF_PIPE` and nothing else. A pass therefore reports only "started" and "finished". When a checkpoint dump brackets a fault as *the same pass at both stages*, the pass ran to completion and checkpoints cannot narrow the window further, no matter how many markers are added. That is a hardware/driver granularity limit, not a wiring gap — which is what motivates the other two instruments.
+On this machine every queue family reports `checkpointExecutionStageMask = 0x2001`: `TOP_OF_PIPE | BOTTOM_OF_PIPE` and nothing else. A pass therefore reports only "started" and "finished". When a checkpoint dump brackets a fault as *the same pass at both stages*, the pass ran to completion and checkpoints cannot narrow the window further, no matter how many markers are added. That is a hardware/driver granularity limit, not a wiring gap, which is what motivates the other two instruments.
 
 ## Arming them
 
 ### Device fault — on by default in Debug/DebugFast, opt-in in Release
 
-Enabled whenever the device advertises the extension and its `deviceFault` feature, and the config default says to ask for it. Retrieval costs nothing until a loss, so the developer configs keep it armed; a shipped build should not silently take on an extension nothing in it reads, so Release asks explicitly. `GE_VK_DEVICE_FAULT` overrides in both directions — `=1` arms a Release investigation, `=0` disarms a developer build to A/B whether the extension itself changed anything. Startup logs exactly one of:
+Enabled whenever the device advertises the extension and its `deviceFault` feature, and the config default says to ask for it. Retrieval costs nothing until a loss, so the developer configs keep it armed. A shipped build should not silently take on an extension nothing in it reads, so Release asks explicitly. `GE_VK_DEVICE_FAULT` overrides in both directions: `=1` arms a Release investigation, `=0` disarms a developer build to A/B whether the extension itself changed anything. Startup logs exactly one of:
 
 ```text title="The three startup states"
 VulkanDevice: VK_EXT_device_fault ARMED — a device loss will report fault address/vendor records automatically
@@ -62,7 +62,7 @@ VulkanDevice: device fault records: description='...'; address records (N): [0] 
 
 :::note[Match on the range; treat the reported address as an extra hint]
 
-Reported addresses are precise only to a power-of-two granule (`addressPrecision`). The half-open `range=[begin,end)` is the set of GPU virtual addresses one of which faulted, and is what you match against a buffer's device address. The spec also allows a driver to report a *more* precise address than its stated precision, in which case `reported=` is a valid additional hint — which is why both are printed.
+Reported addresses are precise only to a power-of-two granule (`addressPrecision`). The half-open `range=[begin,end)` is the set of GPU virtual addresses one of which faulted, and is what you match against a buffer's device address. The spec also allows a driver to report a *more* precise address than its stated precision, in which case `reported=` is a valid additional hint. That is why both are printed.
 
 :::
 
@@ -70,19 +70,19 @@ Reported addresses are precise only to a power-of-two granule (`addressPrecision
 
 The retrieval is a two-call protocol and `VK_INCOMPLETE` has three independent causes, so the report names which one fired rather than asserting that records were lost:
 
-- `NOTE: records TRUNCATED (n/m address, n/m vendor)` — records were genuinely lost. If it adds `— capped at 256 records per array`, *we* dropped them: the driver reported an implausible count and the request was capped rather than allowed to allocate unbounded inside the crash handler.
+- `NOTE: records TRUNCATED (n/m address, n/m vendor)`: records were genuinely lost. If it adds `— capped at 256 records per array`, *we* dropped them: the driver reported an implausible count and the request was capped rather than allowed to allocate unbounded inside the crash handler.
 - `NOTE: all records retrieved; driver also holds an N-byte vendor binary
- crash dump (not requested...)` — **nothing was lost.** The vendor blob is declined on purpose (it needs a vendor offline tool), and declining it returns `VK_INCOMPLETE` by itself. Since `deviceFaultVendorBinary` is not enabled, a conformant driver should report 0 here, so a nonzero size also says something about the driver.
-- `NOTE: driver returned VK_INCOMPLETE but reported nothing short` — the driver's record counts moved between the sizing and retrieval calls, which the spec forbids. Records may be missing that these numbers cannot name.
-- No NOTE at all — everything the driver had was retrieved.
+ crash dump (not requested...)`: **nothing was lost.** The vendor blob is declined on purpose (it needs a vendor offline tool), and declining it returns `VK_INCOMPLETE` by itself. Since `deviceFaultVendorBinary` is not enabled, a conformant driver should report 0 here, so a nonzero size also says something about the driver.
+- `NOTE: driver returned VK_INCOMPLETE but reported nothing short`: the driver's record counts moved between the sizing and retrieval calls, which the spec forbids. Records may be missing that these numbers cannot name.
+- No NOTE at all: everything the driver had was retrieved.
 
 :::
 
-If the extension is unavailable, or the loss was synthesized (fault injection or the hung-escalation cap, neither of which puts the device in the *lost* state that `vkGetDeviceFaultInfoEXT` requires), the loss path says so explicitly rather than printing nothing — an absent report is never mistaken for a clean one.
+If the extension is unavailable, or the loss was synthesized (fault injection or the hung-escalation cap, neither of which puts the device in the *lost* state that `vkGetDeviceFaultInfoEXT` requires), the loss path says so explicitly rather than printing nothing. An absent report is never mistaken for a clean one.
 
 ### GPU-AV buffer-content checks — `GE_VK_GPU_AV=1`
 
-Off by default. It also needs the validation layer actually *loaded*, which DebugFast does not do by default — set `GE_VK_VALIDATION=1` alongside it, or the run reports nothing at all. Startup states whether it actually engaged; if it did not, it says that too, and names this as the likely reason.
+Off by default. It also needs the validation layer actually *loaded*, which DebugFast does not do by default. Set `GE_VK_VALIDATION=1` alongside it, or the run reports nothing at all. Startup states whether it actually engaged. If it did not, it says that too, and names this as the likely reason.
 
 ```bat title="Arm GPU-AV buffer-content checks"
 set GE_VK_VALIDATION=1
@@ -94,21 +94,21 @@ What it covers, and what it deliberately does not:
 - :badge[covered]{variant=success} indirect draw arguments (`VkDrawIndirectCommand`, `VkDrawIndexedIndirectCommand`)
 - :badge[covered]{variant=success} indirect dispatch arguments (`VUID-VkDispatchIndirectCommand-x/y/z-00417/18/19`)
 - :badge[covered]{variant=success} indirect trace-rays arguments (no consumer in this engine today — it comes with the family)
-- :badge[covered]{variant=success} index buffers — indices within the index buffer, and within the fetched vertex buffers
+- :badge[covered]{variant=success} index buffers: indices within the index buffer, and within the fetched vertex buffers
 - :badge[covered]{variant=success} buffer copies
-- :badge[not covered]{variant=danger} descriptor out-of-bounds, buffer device address out-of-bounds, ray-query validation, DebugPrintf — all shader-instrumentation checks, all disabled while `VK_EXT_descriptor_buffer` is *enabled on the device*. The gate is the extension being enabled, not this engine using it: `GE_VK_USE_DESCRIPTOR_BUFFER=0` only flips the runtime path and leaves the extension enabled, so it does not restore them, whereas `GE_VK_CAPTURE_COMPAT=1` drops the extension and does. Request them with `GE_VK_GPU_AV_SHADER_INSTRUMENTATION` (default `auto` — asked for exactly when the extension is ruled out)
+- :badge[not covered]{variant=danger} descriptor out-of-bounds, buffer device address out-of-bounds, ray-query validation, DebugPrintf — all shader-instrumentation checks, all disabled while `VK_EXT_descriptor_buffer` is *enabled on the device*. The gate is the extension being enabled, not this engine using it: `GE_VK_USE_DESCRIPTOR_BUFFER=0` only flips the runtime path and leaves the extension enabled, so it does not restore them, whereas `GE_VK_CAPTURE_COMPAT=1` drops the extension and does. Request them with `GE_VK_GPU_AV_SHADER_INSTRUMENTATION` (default `auto`: asked for exactly when the extension is ruled out)
 
-Each of those five checks is requested explicitly, not inherited. The layer reads the `gpuav_buffers_validation` parent and, when it is true, then reads the five individually — so pinning only the parent would leave each check governed by its own default, and a default flip would empty the instrument while the parent still reported the family as enabled.
+Each of those five checks is requested explicitly, not inherited. The layer reads the `gpuav_buffers_validation` parent and, when it is true, then reads the five individually. So pinning only the parent would leave each check governed by its own default, and a default flip would empty the instrument while the parent still reported the family as enabled.
 
 :::danger[GPU-AV perturbs the state it measures]
 
-It inserts a validation dispatch ahead of each indirect command using its own pipeline and normal descriptor sets. Its `RestorablePipelineState` (`gpuav/core/gpuav_validation_pipeline.cpp`) restores pipeline, descriptor sets, push constants and rendering state — but has *no handling of `VK_EXT_descriptor_buffer` bindings*. Under descriptor buffer the app's descriptor-buffer offsets are therefore not re-established after an inserted dispatch. Treat GPU-AV findings as leads to corroborate against a `GE_VK_GPU_AV=0` run, never as standalone proof, and treat a *new* failure mode under GPU-AV as possibly the instrument's own.
+It inserts a validation dispatch ahead of each indirect command using its own pipeline and normal descriptor sets. Its `RestorablePipelineState` (`gpuav/core/gpuav_validation_pipeline.cpp`) restores pipeline, descriptor sets, push constants, and rendering state, but has *no handling of `VK_EXT_descriptor_buffer` bindings*. Under descriptor buffer the app's descriptor-buffer offsets are therefore not re-established after an inserted dispatch. Treat GPU-AV findings as leads to corroborate against a `GE_VK_GPU_AV=0` run, never as standalone proof. Treat a *new* failure mode under GPU-AV as possibly the instrument's own.
 
 :::
 
 ### Crash Diagnostic Layer — per-command granularity, zero engine changes
 
-Ships with the Vulkan SDK as `VK_LAYER_LUNARG_crash_diagnostic`. It is registered as an **explicit** layer, so `VK_CRASH_DIAGNOSTIC_ENABLE=1` alone will not load it — force it on through the loader:
+Ships with the Vulkan SDK as `VK_LAYER_LUNARG_crash_diagnostic`. It is registered as an **explicit** layer, so `VK_CRASH_DIAGNOSTIC_ENABLE=1` alone does not load it. Force it on through the loader:
 
 ```bat title="Load the Crash Diagnostic Layer"
 set VK_LOADER_LAYERS_ENABLE=VK_LAYER_LUNARG_crash_diagnostic
@@ -134,18 +134,11 @@ With `VK_AMD_buffer_marker` it writes a per-command marker value and gets true p
 
 :::
 
-`CDL_INSTRUMENT_ALL_COMMANDS=true` is expensive; it is a forensic mode, never a default. `CDL_SYNC_AFTER_COMMANDS` adds a barrier after each instrumented command — it sharpens attribution but changes scheduling, so a fault that disappears under it is evidence of a synchronization bug, not a fixed one.
+`CDL_INSTRUMENT_ALL_COMMANDS=true` is expensive. It is a forensic mode, never a default. `CDL_SYNC_AFTER_COMMANDS` adds a barrier after each instrumented command. It sharpens attribution but changes scheduling, so a fault that disappears under it is evidence of a synchronization bug, not a fixed one.
 
 ## Suggested order for a device-loss investigation
 
 1. **Read the existing loss log first.** Checkpoints plus device fault are already armed and cost nothing. If the fault records name an address, correlate it with buffer device addresses before adding any instrument.
-2. **If the fault window is a single pass that both started and finished**, checkpoints are exhausted — go to per-command granularity with the Crash Diagnostic Layer rather than adding more markers.
-3. **If the suspect pass consumes GPU-written indirect arguments or an index buffer**, run `GE_VK_GPU_AV=1`; that is exactly the check that is otherwise missing, and it produces a VUID rather than a silent fault. Corroborate any hit against a control run.
-4. **Only then reach for RenderDoc.** A capture of a run that device-losses is often unobtainable; the passive instruments above survive the loss, which is why they come first.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/device-loss-instrumentation.html`.
-- 2026-08-02: shader instrumentation is requestable again when `VK_EXT_descriptor_buffer` is out of the way (`GE_VK_GPU_AV_SHADER_INSTRUMENTATION`, default `auto`). Corrected the coverage list: the layer's gate is the extension being *enabled on the device*, not this engine using it, so `GE_VK_USE_DESCRIPTOR_BUFFER=0` does not restore the shader-instrumentation checks and `GE_VK_CAPTURE_COMPAT=1` does.
-- 2026-08-01: review pass on the branch. Device fault became default-on in Debug/DebugFast and opt-in in Release (`GE_VK_DEVICE_FAULT`), so the arming section now lists three startup states rather than two. Added how to read the trailing `VK_INCOMPLETE` note, which no longer claims lost records for a vendor binary that was declined on purpose. Softened the address-range guidance to match the spec: the range is what you match on, but a driver may report more precisely than it claims, so the raw address is a valid hint. Recorded that GPU-AV needs `GE_VK_VALIDATION=1` to load the layer at all, that indirect trace-rays buffers are part of the buffer-content family, and that the family's five checks are each pinned explicitly.
-- 2026-08-01: first version, with the GPU fault instrumentation: documents the `0x2001` checkpoint limit, the descriptor-buffer split in GPU-AV (shader instrumentation disabled, buffer-content checks retained), the newly wired `VK_EXT_device_fault` path, and the Crash Diagnostic Layer procedure.
+2. **If the fault window is a single pass that both started and finished**, checkpoints are exhausted. Go to per-command granularity with the Crash Diagnostic Layer rather than adding more markers.
+3. **If the suspect pass consumes GPU-written indirect arguments or an index buffer**, run `GE_VK_GPU_AV=1`. That is exactly the check that is otherwise missing, and it produces a VUID rather than a silent fault. Corroborate any hit against a control run.
+4. **Only then reach for RenderDoc.** A capture of a run that device-losses is often unobtainable. The passive instruments above survive the loss, which is why they come first.

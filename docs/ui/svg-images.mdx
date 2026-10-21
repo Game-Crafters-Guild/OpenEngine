@@ -1,0 +1,46 @@
+---
+title: SVG images in UI
+description: How the UI draws an SVG background at the exact pixel size it is shown, how the size is chosen, and what the SVG texture import default still controls.
+sidebar:
+  order: 4
+---
+
+An SVG used as a `background-image` in editor or game UI is drawn from a raster made at the size it appears on screen, in device pixels. A 15 px icon is a 15 x 15 raster, the same icon at UI scale 2 is a 30 x 30 raster, and each raster pixel lands on exactly one screen pixel. Icons stay sharp at every UI scale and on every display without a raster size to tune.
+
+```css title="An icon drawn at 16 px from an SVG"
+.save-button {
+    background-image: url("editor:Icons/save.svg");
+    background-size: 16px 16px;
+}
+```
+
+## How the size is chosen
+
+The drawn box comes from `background-size`, measured against the element's padding box, and is rounded up to whole device pixels on each axis.
+
+| `background-size` | Drawn box |
+|---|---|
+| Two lengths (`16px 12px`) | Those lengths times the UI scale. The SVG is stretched to that box on each axis. Its `preserveAspectRatio` is not honored. |
+| One length (`20px`) | That width; the height keeps the SVG's aspect ratio. |
+| A percentage | That share of the padding box. |
+| `contain` / `cover` | The SVG's aspect ratio fitted inside, or covering, the padding box. |
+| `auto` (the default) | The SVG's own `width` and `height` (or `viewBox`) times the UI scale, shrunk to fit the padding box. |
+
+A drawn box that is not a whole number of device pixels is rounded up, so the icon can draw up to one device pixel larger than its CSS size: 15 CSS px at UI scale 1.5 is 22.5 px and draws from a 23 px raster.
+
+The raster is placed on the device-pixel grid: its origin is rounded to the nearest whole pixel, the way the element's own background and border are, and a position exactly halfway between two pixels rounds toward the bottom-right. A centered icon can therefore sit up to half a device pixel right of and below the center of its box. Because each raster pixel covers one screen pixel, linear and nearest filtering draw identical pixels, and the default linear filter is kept. Each raster pixel holds the SVG's coverage of it, measured at 4 x 4 samples, so strokes that cross unite instead of brightening the crossing.
+
+The `ui-bg-point-filter` class applies to raster images (PNG and the like): add it to pixel art that should stay blocky when drawn larger than its pixels. An SVG drawn from the raster baked for its size looks the same with either filter.
+
+## Resizing and changes
+
+- **First draw.** An SVG is drawn once its raster is ready, a frame or two after it first appears.
+- **Resizing.** While an element resizes, as during a slider drag or a move to a monitor with another UI scale, the icon is drawn from the nearest size already made, so it never blanks. The new size is made once it has held for a moment, or at once when the nearest size already made is more than twice, or less than half, the new one.
+- **Editing the file.** Saving the SVG remakes every size in use from the new file.
+- **Memory.** Sizes nobody draws any more are released when the UI image cache is over its budget.
+
+## The SVG texture import default
+
+**Settings > Asset Import > Default Raster Size** is the raster size an SVG texture asset loads at when it has no size of its own: what a material or a sprite samples. It does not affect UI backgrounds, which are always drawn at their on-screen size. Changing it reloads the project's SVG textures.
+
+An SVG background that uses `border-image-slice`, or an SVG asset with nine-slice settings, is drawn from that asset raster instead, because slice positions are measured in its pixels.

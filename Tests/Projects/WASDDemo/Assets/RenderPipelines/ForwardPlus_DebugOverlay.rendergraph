@@ -2,6 +2,14 @@
   "schemaVersion": 2,
   "pipelineName": "ForwardPlus_DebugOverlay",
   "resources": {
+    "ExposureHistory": {
+      "kind": "Buffer",
+      "scope": "PerView",
+      "usage": ["Storage", "CopySrc"],
+      "memoryUsage": "DeviceLocal",
+      "size": { "bytes": 16 },
+      "zeroOnCreate": true
+    },
     "ClusterParams": {
       "kind": "Buffer",
       "scope": "PerView",
@@ -79,6 +87,10 @@
       "type": "ComputeShader",
       "enabled": true,
       "shaderPkg": "Shaders/cluster_depth_minmax.shaderpkg",
+      "shaderPkgFallbacks": [
+        "Shaders/cluster_depth_minmax_t16.shaderpkg",
+        "Shaders/cluster_depth_minmax_t8.shaderpkg"
+      ],
       "inputs": { "DepthTex": "View.DepthResolved" },
       "inputUsages": { "DepthTex": "Sampled" },
       "buffers": { "DepthMinMaxBuffer": "DepthMinMaxBuffer" },
@@ -123,12 +135,14 @@
       "buffers": {
         "ClusterBuffer": "ClusterBuffer",
         "LightIndexBuffer": "LightIndexBuffer",
-        "ClusterParams": "ClusterParams"
+        "ClusterParams": "ClusterParams",
+        "uExposure": "ExposureHistory"
       },
       "bufferUsages": {
         "ClusterBuffer": "StorageRead",
         "LightIndexBuffer": "StorageRead",
-        "ClusterParams": "Sampled"
+        "ClusterParams": "Sampled",
+        "uExposure": "Storage"
       }
     }
     ,

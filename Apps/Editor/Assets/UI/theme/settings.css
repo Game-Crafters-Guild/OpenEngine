@@ -11,7 +11,7 @@
 .settings-icon,
 button.settings-icon,
 .button.settings-icon {
-	background-image: url("editor:Icons/settings.png");
+	background-image: url("editor:Icons/settings.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;

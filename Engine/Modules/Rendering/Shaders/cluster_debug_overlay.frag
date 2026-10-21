@@ -23,6 +23,11 @@ layout(set = 0, binding = 2, std140) uniform ClusterParamsBlock
     uvec4 params0; // tileX, tileY, depthSlices, maxLightsPerCluster
 } ClusterParams;
 
+// View.Color holds scene colour at the frame's pre-exposure P, so the overlay's colours are stored
+// times P to reach the screen unchanged.
+#define GE_EXPOSURE_HISTORY_BINDING 3
+#include "Includes/exposure_history.glsl"
+
 void main()
 {
     const uvec2 tileSize = max(uvec2(ClusterParams.params0.xy), uvec2(1u, 1u));
@@ -81,6 +86,6 @@ void main()
         alpha = 0.45;
     }
 
-    oColor = vec4(col, alpha);
+    oColor = vec4(col * GE_PreExposure(), alpha);
 }
 

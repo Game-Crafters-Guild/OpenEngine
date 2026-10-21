@@ -405,6 +405,14 @@ private:
     class SceneViewRulerOverlay* m_RulerOverlay = nullptr; // active slot, not owned
     std::array<class SceneViewMeasureOverlay*, static_cast<size_t>(ViewportSlot::Count)> m_MeasureOverlays{};
     class SceneViewMeasureOverlay* m_MeasureOverlay = nullptr; // active slot, not owned
+    // The per-viewport overlays above, held between refreshes; each is looked up by id
+    // again only once the element it names is destroyed (RefreshViewport*).
+    std::array<UIElement::WeakRef<class ViewportRotationGizmo>, static_cast<size_t>(ViewportSlot::Count)>
+        m_HeldRotationGizmos{};
+    std::array<UIElement::WeakRef<class SceneViewRulerOverlay>, static_cast<size_t>(ViewportSlot::Count)>
+        m_HeldRulerOverlays{};
+    std::array<UIElement::WeakRef<class SceneViewMeasureOverlay>, static_cast<size_t>(ViewportSlot::Count)>
+        m_HeldMeasureOverlays{};
     bool m_MeasureToolEnabled = false;
     bool m_MeasureDragActive = false;
     bool m_MeasureCreateEntitiesMode = false;

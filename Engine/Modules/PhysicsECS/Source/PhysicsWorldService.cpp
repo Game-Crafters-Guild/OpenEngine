@@ -1,5 +1,7 @@
 #include "PhysicsECS/PhysicsWorldService.h"
 
+#include "PhysicsECS/PhysicsEntityEventCallbacks.h"
+
 #include "Logger/Logger.h"
 
 namespace GameEngine::PhysicsECS
@@ -28,6 +30,7 @@ void PhysicsWorldService::Initialize(const Physics::PhysicsWorldSettings& settin
 
 void PhysicsWorldService::Shutdown()
 {
+    PhysicsEntityEventCallbacks::ClearAll();
     s_World.reset();
     s_RenderInterpolationAlpha = 1.0f;
     s_LastStepMs = 0.0f;

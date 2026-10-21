@@ -6,7 +6,7 @@ sidebar:
 ---
 
 Parenting an entity makes its transform relative to its parent. `Transform` is always
-local space, `WorldTransform` is the derived world-space matrix that rendering, bounds
+local space, `WorldTransform` is the derived world-space matrix that rendering, bounds,
 and physics read, and `TransformHierarchySystem` is what turns one into the other. This
 page is the contract between those three: which component you write, which one you read,
 and when the derived value is valid.
@@ -26,7 +26,7 @@ and when the derived value is valid.
   - For root entities (no `Parent` or `Parent.parent == 0`): local == world.
   - For children: `WorldTransform = ParentWorldTransform * Transform`.
 - Stores a full 4x4 matrix (`float[16]`), the layout GPUScene reads.
-- Changes are detected through ECS component-column versions and an exact cached local-matrix snapshot; no per-component `isDirty` flag is required.
+- Changes are detected through ECS component-column versions and an exact cached local-matrix snapshot. No per-component `isDirty` flag is required.
 
 ### WorldTransform (world)
 
@@ -89,7 +89,7 @@ Concretely, the order relative to the rendering systems is:
 
 - **Cycles in the hierarchy**
   - Cycles are invalid (e.g., A is parent of B and B is parent of A).
-  - The topology rebuild detects them: it walks parent links from every node, marking the nodes on the current walk, so a link back into that walk is a cycle. It then clears the parent edge of the node the walk re-entered — that entity becomes a root — and logs an error naming it. The break lives in the cached topology, so it holds until the next rebuild rather than being redone each frame, and the cached graph is always a forest, which is what keeps the dirty walks iterative and bounded.
+  - The topology rebuild detects them: it walks parent links from every node, marking the nodes on the current walk, so a link back into that walk is a cycle. It then clears the parent edge of the node the walk re-entered (that entity becomes a root) and logs an error naming it. The break lives in the cached topology, so it holds until the next rebuild rather than being redone each frame. The cached graph is always a forest, which is what keeps the dirty walks iterative and bounded.
 
 - **Dynamic reparenting**
   - When `Parent` changes at runtime, the system recomputes `WorldTransform` using the new hierarchy on the next update.
@@ -101,7 +101,3 @@ Render extraction reads `WorldTransform` when it uploads GPUScene rows, and view
 cameras read it for their world placement. Both observe the propagation order above, so
 a system that wants the world matrix of an entity it just moved must run after
 `TransformHierarchySystem`, not before it.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/TransformHierarchySystem.md`; headings in sentence case; four sentences that described the component as new or planned now state what it is.

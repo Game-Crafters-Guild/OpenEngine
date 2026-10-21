@@ -14,7 +14,11 @@
  * that frame's region so the next frame's allocations reuse the same
  * memory. Persistent region (AllocatePersistent) is never rewound and
  * holds long-lived descriptor sets (e.g. the global bindless texture
- * array, cached depth-pass set0).
+ * array, cached depth-pass set0); a persistent allocation released with
+ * ReleasePersistent is handed to the next persistent allocation of the
+ * same size. The per-size free lists never coalesce, so the region holds,
+ * for each set size, the most sets of that size alive at once; bytes freed
+ * at one size are not reused for another.
  *
  * Overflow: if a region runs out, a spill block (separate VkBuffer) is
  * added. Downstream code handles the buffer switch via rebind — the
@@ -26,6 +30,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -95,13 +100,23 @@ class VulkanDescriptorBufferPool
     // m_Mutex.
     DescriptorBufferAllocation Allocate(VkDeviceSize size, VkDeviceSize alignment);
 
-    // Application-lifetime allocation. Draws from the persistent region of
-    // the backing buffer, which is never rewound by BeginFrameReset and stays
-    // valid until Destroy(). Intended for long-lived descriptor sets like the
-    // global bindless texture array and cached cross-frame draw sets. Memory
-    // accumulates — callers are expected to allocate a bounded set of
-    // persistent regions, not grow unboundedly per frame.
+    // Long-lived allocation. Draws first from the released persistent
+    // allocations of the same size, then from the persistent region of the
+    // backing buffer, which is never rewound by BeginFrameReset. Stays valid
+    // until ReleasePersistent or Destroy(). Intended for long-lived descriptor
+    // sets like the global bindless texture array and cached cross-frame draw
+    // sets.
     DescriptorBufferAllocation AllocatePersistent(VkDeviceSize size, VkDeviceSize alignment);
+
+    // Returns an AllocatePersistent allocation for reuse. The caller guarantees
+    // the GPU no longer reads it: the device releases through its deferred
+    // destruction, after every queue has passed the work that could reference it.
+    void ReleasePersistent(const DescriptorBufferAllocation& alloc);
+
+    // Distinguishes this pool from the device's earlier ones (a device rebuild
+    // creates a new pool): an allocation is released only into the pool that
+    // made it.
+    uint64_t InstanceId() const { return m_InstanceId; }
 
     VkDeviceSize OffsetAlignment() const { return m_OffsetAlignment; }
 
@@ -161,7 +176,10 @@ class VulkanDescriptorBufferPool
     VkDeviceSize             m_BackingSize        = 0;
 
     std::vector<FrameState>  m_Frames;
-    FrameState               m_Persistent;        // Never rewound; app-lifetime sets.
+    FrameState               m_Persistent;        // Never rewound; long-lived sets.
+    // Released persistent allocations by size, reused before the region's cursor moves.
+    std::unordered_map<VkDeviceSize, std::vector<DescriptorBufferAllocation>> m_PersistentFree;
+    uint64_t                 m_InstanceId         = 0;
     uint32_t                 m_CurrentFrame       = 0;
     std::mutex               m_Mutex;
     bool                     m_Initialized        = false;

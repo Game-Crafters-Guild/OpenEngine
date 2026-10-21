@@ -92,10 +92,13 @@ bool WebLibraryApplication::Start(std::string& outError)
     return true;
 }
 
-void WebLibraryApplication::Resize(int width, int height)
+void WebLibraryApplication::Resize(int width, int height, double devicePixelRatio)
 {
     if (Platform::Window* window = m_Host->GetWindow())
+    {
         window->SetWindowSize(width, height);
+        window->SetWebPixelRatio(devicePixelRatio);
+    }
 }
 
 Engine::Renderer::RenderServices* WebLibraryApplication::GetRenderServices() const

@@ -9,6 +9,7 @@
 #include "ECS/World.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
+#include "TerrainGrass/Scene/TerrainGrassSceneSchemas.h"
 
 #include <nlohmann/json.hpp>
 
@@ -101,6 +102,46 @@ TEST(SchemaComponentApplyTests, ARefusedKeyLeavesTheComponentsOtherKeysWroteAsTh
     EXPECT_FALSE(refusal.empty());
     EXPECT_EQ(world.GetComponent<Components::TerrainGrass>(e), nullptr)
         << "the refused request left a TerrainGrass it added";
+}
+
+// A key the component has no field for is refused with the one unknown-field message, and the key
+// before it does not land: on an entity with the component its value stays, and on an entity
+// without it nothing is left behind.
+TEST(SchemaComponentApplyTests, AnUnknownKeyIsRefusedWithTheOneMessageAndTheKnownKeyBeforeItDoesNotLand)
+{
+    const std::string expected = "Terrain.nosuchfield: " + Scene::UnknownFieldMessage("Terrain", "nosuchfield");
+
+    ECS::World world;
+    const ECS::EntityHandle withTerrain = world.CreateEntity();
+    world.AddComponentImmediate(withTerrain, Components::Terrain{});
+    EXPECT_EQ(ApplyTerrain(world, withTerrain, {{"castShadows", false}, {"nosuchfield", 1}}), expected);
+    const auto* terrain = world.GetComponent<Components::Terrain>(withTerrain);
+    ASSERT_NE(terrain, nullptr);
+    EXPECT_TRUE(terrain->CastShadows);
+
+    const ECS::EntityHandle bare = world.CreateEntity();
+    EXPECT_EQ(ApplyTerrain(world, bare, {{"castShadows", false}, {"nosuchfield", 1}}), expected);
+    EXPECT_EQ(world.GetComponent<Components::Terrain>(bare), nullptr)
+        << "the refused request left a Terrain it added";
+}
+
+// The TerrainGrass schema refuses a misspelled key the same way: the request names the key with the
+// one unknown-field message, and the key before it does not land.
+TEST(SchemaComponentApplyTests, AMisspelledTerrainGrassKeyIsRefusedWithTheOneMessage)
+{
+    Scene::EnsureTerrainGrassSceneSchemasRegistered();
+    const Scene::ISceneComponentSchema* schema = Scene::SceneSchemaRegistry::Find("TerrainGrass");
+    ASSERT_NE(schema, nullptr);
+
+    ECS::World world;
+    const ECS::EntityHandle e = world.CreateEntity();
+    world.AddComponentImmediate(e, Components::TerrainGrass{});
+    const std::string refusal = Editor::ApplyComponentViaSchema(world, e, "TerrainGrass", *schema,
+                                                                {{"bladeHeight", 2.0f}, {"bladewidht", 0.01f}});
+    EXPECT_EQ(refusal, "TerrainGrass.bladewidht: " + Scene::UnknownFieldMessage("TerrainGrass", "bladewidht"));
+    const auto* grass = world.GetComponent<Components::TerrainGrass>(e);
+    ASSERT_NE(grass, nullptr);
+    EXPECT_FLOAT_EQ(grass->BladeHeight, Components::TerrainGrass{}.BladeHeight);
 }
 
 } // namespace

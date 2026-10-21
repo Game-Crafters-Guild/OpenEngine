@@ -470,8 +470,11 @@ void ModelThumbnailHandler::EnsureViewAndCamera(RenderLane& lane)
 
     if (lane.viewId == 0)
     {
+        // OnDemand: a render arms the view for its frame (RequestViewFrame) and it sleeps after. The
+        // thumbnail draws through its own world pass; it is never a pipeline view target.
         lane.viewId = m_RenderServices->Views().AllocateView("Editor Model Thumbnail View", lane.cameraId,
-                                                            Rendering::ViewPurpose::EditorPreview);
+                                                            Rendering::ViewPurpose::EditorPreview,
+                                                            Rendering::ViewParticipation::OnDemand);
         // Thumbnails skip GPU frustum culling: their bucketer reads from
         // per-frame extraction (every entity in the thumbnail world is meant
         // to render). Skipping the culling dispatch saves a per-view compute
@@ -1183,7 +1186,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
         Components::MeshRenderer mr =
             Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
                 m_RenderServices, shapeGuid, materialGuid);
-        mr.renderLayerMask = 1u;
+        mr.RenderLayers = Rendering::RenderLayerMask::Default();
         mr.castShadows = false;
         mr.receiveShadows = false;
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, mr);

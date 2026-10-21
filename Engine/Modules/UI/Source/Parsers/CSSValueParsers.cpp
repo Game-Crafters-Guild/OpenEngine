@@ -6,6 +6,7 @@
 #include "UI/StyleProperties.h"
 #include "UI/UIStyle.h"
 
+#include "Types/ParseNumber.h"
 #include "Types/StringUtils.h"
 #include "Logger/Logger.h"
 #include <algorithm>
@@ -15,7 +16,9 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -43,6 +46,21 @@ static inline std::string RemoveWhitespace(const std::string& s)
             out.push_back(c);
     }
     return out;
+}
+
+// The integer std::stoi reads at the start of `text`, without its throw: nullopt when no integer
+// starts the text or it is out of an int's range. A stylesheet is authored data, and its parse
+// never throws: the web build has no exception catching.
+static std::optional<int> ReadIntPrefix(const std::string& text)
+{
+    const char* begin = text.c_str();
+    char* end = nullptr;
+    errno = 0;
+    const long value = std::strtol(begin, &end, 10);
+    if (end == begin || errno == ERANGE || value < std::numeric_limits<int>::min() ||
+        value > std::numeric_limits<int>::max())
+        return std::nullopt;
+    return static_cast<int>(value);
 }
 
 // Every CSS colour form the engine reads: hex, 0xAARRGGBB, named colours, rgb()/rgba(),
@@ -136,14 +154,10 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
     // rgb()/rgba() and hsl()/hsla() parsing helpers
     auto parseFloat = [](const std::string& t) -> std::optional<float>
     {
-        try
-        {
-            size_t consumed = 0;
-            const float value = std::stof(t, &consumed);
-            if (consumed != t.size() || !std::isfinite(value)) return std::nullopt;
-            return value;
-        }
-        catch (...) { return std::nullopt; }
+        size_t consumed = 0;
+        const std::optional<float> value = ParseLeadingFloat(t, &consumed);
+        if (!value || consumed != t.size() || !std::isfinite(*value)) return std::nullopt;
+        return value;
     };
     auto parseChannel = [&](const std::string& t) -> std::optional<int>
     {
@@ -319,15 +333,10 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
     // 0xAARRGGBB
     if (sl.size() > 2 && sl[0] == '0' && (sl[1] == 'x' || sl[1] == 'X'))
     {
-        try
-        {
-            if (sl.size() > 10 || !std::all_of(sl.begin() + 2, sl.end(),
-                    [](unsigned char c) { return std::isxdigit(c); })) return std::nullopt;
-            return static_cast<uint32_t>(std::stoul(sl, nullptr, 16));
-        }
-        catch (...)
-        {
-        }
+        // At most eight hex digits: the value always fits.
+        if (sl.size() > 10 || !std::all_of(sl.begin() + 2, sl.end(),
+                [](unsigned char c) { return std::isxdigit(c); })) return std::nullopt;
+        return static_cast<uint32_t>(std::strtoul(sl.c_str(), nullptr, 16));
     }
 
     // Fast-path CSS named colors (including "transparent") before decimal parse so we
@@ -335,9 +344,8 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
     if (auto nc = lookupNamed(sl))
         return *nc;
 
-    // Decimal ARGB or RGB? treat as ARGB if >= 0x01000000. To keep debugger noise
-    // down when first-chance C++ exceptions are enabled, avoid calling std::stoul
-    // on obviously non-numeric tokens such as "transparent".
+    // Decimal ARGB or RGB? treat as ARGB if >= 0x01000000; only an all-digit token
+    // is read as one.
     bool decimalLike = !sl.empty();
     if (decimalLike)
     {
@@ -352,15 +360,10 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
     }
     if (decimalLike)
     {
-        try
-        {
-            const auto dec = std::stoull(sl, nullptr, 10);
-            if (dec >= 0x01000000u && dec <= 0xffffffffu)
-                return static_cast<uint32_t>(dec);
-        }
-        catch (...)
-        {
-        }
+        errno = 0;
+        const unsigned long long dec = std::strtoull(sl.c_str(), nullptr, 10);
+        if (errno != ERANGE && dec >= 0x01000000u && dec <= 0xffffffffu)
+            return static_cast<uint32_t>(dec);
     }
 
     return std::nullopt;
@@ -912,6 +915,15 @@ static StyleValue ParseFontSizeValue(const std::string& raw)
     const std::string v = ToLowerAscii(Trim(toks[0]));
     if (v.empty() || v == "auto")
         return std::monostate{};
+    // Math functions fold as they do for every length (ParseLengthValue): after var()
+    // substitution, `calc(14px * var(--scale))` reads `calc(14px * 1.5)`.
+    if (CssMath::IsMathFunctionToken(v))
+    {
+        StyleLength folded{};
+        if (CssMath::EvalToLength(v, folded))
+            return folded;
+        return std::monostate{};
+    }
     bool ok = false;
     const bool isPercent = (v.back() == '%');
     const float f = ParseFloatPx(v, &ok);
@@ -1202,14 +1214,8 @@ static StyleValue ParseFontWeightValue(const std::string& value)
     else if (v != "normal")
     {
         // Numeric 1..1000 (CSS commonly uses 100..900)
-        try
-        {
-            weight = std::clamp(std::stoi(v), 1, 1000);
-        }
-        catch (...)
-        {
-            weight = 400;
-        }
+        const std::optional<int> numeric = ReadIntPrefix(v);
+        weight = numeric ? std::clamp(*numeric, 1, 1000) : 400;
     }
     return weight;
 }
@@ -1334,20 +1340,10 @@ static StyleValue ParsePositionValue(const std::string& value)
 static StyleValue ParseOrderValue(const std::string& value)
 {
     const std::string v = Trim(value);
-    try
-    {
-        return std::stoi(v);
-    }
-    catch (...)
-    {
-    }
-    try
-    {
-        return static_cast<int>(std::round(std::stof(v)));
-    }
-    catch (...)
-    {
-    }
+    if (const std::optional<int> integer = ReadIntPrefix(v))
+        return *integer;
+    if (const std::optional<float> number = ParseLeadingFloat(v))
+        return static_cast<int>(std::round(*number));
     return 0;
 }
 
@@ -1366,22 +1362,15 @@ static StyleValue ParseAspectRatioValue(const std::string& value)
     if (!Ieq(v, "auto") && !v.empty())
     {
         const size_t slash = v.find('/');
-        try
+        if (slash != std::string::npos)
         {
-            if (slash != std::string::npos)
-            {
-                const float w = std::stof(v.substr(0, slash));
-                const float h = std::stof(v.substr(slash + 1));
-                ratio = (h > 0.0f) ? (w / h) : 0.0f;
-            }
-            else
-            {
-                ratio = std::stof(v);
-            }
+            const std::optional<float> w = ParseLeadingFloat(v.substr(0, slash));
+            const std::optional<float> h = ParseLeadingFloat(v.substr(slash + 1));
+            ratio = (w && h && *h > 0.0f) ? (*w / *h) : 0.0f;
         }
-        catch (...)
+        else
         {
-            ratio = 0.0f;
+            ratio = ParseLeadingFloat(v).value_or(0.0f);
         }
     }
     return ratio;
@@ -1493,34 +1482,22 @@ static StyleValue ParseBackgroundImageValue(const std::string& value)
                 inner = inner.substr(5);
             // Trim again
             inner = Trim(inner);
-            try
+            // GUID's string constructor reads a malformed GUID as the null GUID; it never throws.
+            GameEngine::GUID g{GameEngine::String(inner)};
+            if (!g.IsNull())
             {
-                GameEngine::GUID g{GameEngine::String(inner)};
-                if (!g.IsNull())
-                {
-                    src.Kind = BackgroundImageSource::SourceKind::Guid;
-                    src.Guid = g;
-                    // sourceAlias on a Guid is meaningless (GUID is
-                    // already global). Drop it to avoid misleading
-                    // future readers.
-                }
-                else if (!inner.empty())
-                {
-                    // Not a GUID: treat as path relative to AssetRoot
-                    src.Kind = BackgroundImageSource::SourceKind::Path;
-                    src.Value = inner;
-                    src.SourceAlias = std::move(sourceAlias);
-                }
+                src.Kind = BackgroundImageSource::SourceKind::Guid;
+                src.Guid = g;
+                // sourceAlias on a Guid is meaningless (GUID is
+                // already global). Drop it to avoid misleading
+                // future readers.
             }
-            catch (...)
+            else if (!inner.empty())
             {
-                // Not a GUID: treat as path
-                if (!inner.empty())
-                {
-                    src.Kind = BackgroundImageSource::SourceKind::Path;
-                    src.Value = inner;
-                    src.SourceAlias = std::move(sourceAlias);
-                }
+                // Not a GUID: treat as path relative to AssetRoot
+                src.Kind = BackgroundImageSource::SourceKind::Path;
+                src.Value = inner;
+                src.SourceAlias = std::move(sourceAlias);
             }
         }
     }
@@ -1576,6 +1553,35 @@ static StyleValue ParseBackgroundSizeValue(const std::string& value)
             parseLen(b, size.SizeY, size.SizeYIsPercent);
     }
     return size;
+}
+
+// The second token of a background position after a horizontal one: a vertical
+// keyword or a length. A keyword read as a length is 0, which pins the image to
+// the top edge instead of centering it, so the keywords are matched first.
+static void ParseVerticalBackgroundPositionToken(const std::string& token, BackgroundPositionValue& pos)
+{
+    if (token.empty())
+        return;
+    if (token == "top")
+    {
+        pos.Y = 0;
+        pos.YIsPercent = true;
+    }
+    else if (token == "center")
+    {
+        pos.Y = 50;
+        pos.YIsPercent = true;
+    }
+    else if (token == "bottom")
+    {
+        pos.Y = 100;
+        pos.YIsPercent = true;
+    }
+    else
+    {
+        pos.YIsPercent = token.back() == '%';
+        pos.Y = ParseFloatPx(token);
+    }
 }
 
 static StyleValue ParseBackgroundPositionValue(const std::string& value)
@@ -1643,13 +1649,7 @@ static StyleValue ParseBackgroundPositionValue(const std::string& value)
     if (!xTok.empty() && (xTok == "left" || xTok == "center" || xTok == "right"))
     {
         setKeyword(xTok, true);
-        if (!yTok.empty())
-        {
-            if (yTok == "top" || yTok == "center" || yTok == "bottom")
-                setKeyword(yTok, false);
-            else
-                parseLen(yTok, pos.Y, pos.YIsPercent);
-        }
+        ParseVerticalBackgroundPositionToken(yTok, pos);
     }
     else if (!xTok.empty() && (xTok == "top" || xTok == "bottom"))
     {
@@ -1664,10 +1664,10 @@ static StyleValue ParseBackgroundPositionValue(const std::string& value)
     }
     else
     {
+        // A length then a keyword or a length (`6px center`, `6px 4px`).
         if (!xTok.empty())
             parseLen(xTok, pos.X, pos.XIsPercent);
-        if (!yTok.empty())
-            parseLen(yTok, pos.Y, pos.YIsPercent);
+        ParseVerticalBackgroundPositionToken(yTok, pos);
     }
     return pos;
 }
@@ -1713,6 +1713,212 @@ static StyleValue ParseBorderImageRepeatValue(const std::string& value)
     r.X = toMode(a);
     r.Y = b.empty() ? r.X : toMode(b);
     return r;
+}
+
+// --- transform (css-transforms-1, 2D functions) ------------------------------
+
+// Splits a function's argument list at its top-level commas.
+static std::vector<std::string> SplitTransformArgs(const std::string& args)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    int depth = 0;
+    for (char c : args)
+    {
+        if (c == '(')
+            ++depth;
+        else if (c == ')')
+            --depth;
+        if (c == ',' && depth == 0)
+        {
+            out.push_back(Trim(cur));
+            cur.clear();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    out.push_back(Trim(cur));
+    return out;
+}
+
+// An <angle> in degrees: deg, rad, grad or turn, or a bare 0.
+static bool ParseTransformAngle(const std::string& tok, float& outDegrees)
+{
+    const std::string v = ToLowerAscii(Trim(tok));
+    const char* begin = v.c_str();
+    char* end = nullptr;
+    const float f = std::strtof(begin, &end);
+    if (end == begin)
+        return false;
+    const std::string unit(end);
+    if (unit == "deg")
+        outDegrees = f;
+    else if (unit == "rad")
+        outDegrees = f * (180.0f / std::numbers::pi_v<float>);
+    else if (unit == "grad")
+        outDegrees = f * 0.9f;
+    else if (unit == "turn")
+        outDegrees = f * 360.0f;
+    else if (unit.empty() && f == 0.0f)
+        outDegrees = 0.0f;
+    else
+        return false;
+    return true;
+}
+
+// A <number> or <percentage> (scale() takes either; 50% is 0.5).
+static bool ParseTransformNumber(const std::string& tok, float& out)
+{
+    const std::string v = Trim(tok);
+    const char* begin = v.c_str();
+    char* end = nullptr;
+    const float f = std::strtof(begin, &end);
+    if (end == begin)
+        return false;
+    const std::string unit(end);
+    if (unit.empty())
+        out = f;
+    else if (unit == "%")
+        out = f * 0.01f;
+    else
+        return false;
+    return true;
+}
+
+// A <length-percentage> for translate(): px (calc() folds) or a percentage of
+// the border box.
+static bool ParseTransformLength(const std::string& tok, StyleLength& out)
+{
+    const StyleValue parsed = ParseLengthValue(tok);
+    const StyleLength* len = std::get_if<StyleLength>(&parsed);
+    if (!len || len->IsAuto())
+        return false;
+    out = *len;
+    return true;
+}
+
+static bool ParseTransformFunction(const std::string& token, TransformOpList& out)
+{
+    const size_t open = token.find('(');
+    if (open == std::string::npos || token.back() != ')')
+        return false;
+    const std::string name = ToLowerAscii(Trim(token.substr(0, open)));
+    const std::vector<std::string> args = SplitTransformArgs(token.substr(open + 1, token.size() - open - 2));
+    const size_t n = args.size();
+    if (n == 1 && args[0].empty())
+        return false;
+
+    TransformOp op{};
+    if (name == "translate" || name == "translatex" || name == "translatey")
+    {
+        op.Function = TransformFunction::Translate;
+        if (name == "translate")
+        {
+            if (n > 2 || !ParseTransformLength(args[0], op.TranslateX))
+                return false;
+            if (n == 2 && !ParseTransformLength(args[1], op.TranslateY))
+                return false;
+        }
+        else if (n != 1 || !ParseTransformLength(args[0], name == "translatey" ? op.TranslateY : op.TranslateX))
+        {
+            return false;
+        }
+    }
+    else if (name == "scale" || name == "scalex" || name == "scaley")
+    {
+        op.Function = TransformFunction::Scale;
+        op.Args[0] = op.Args[1] = 1.0f;
+        if (name == "scale")
+        {
+            if (n > 2 || !ParseTransformNumber(args[0], op.Args[0]))
+                return false;
+            op.Args[1] = op.Args[0];
+            if (n == 2 && !ParseTransformNumber(args[1], op.Args[1]))
+                return false;
+        }
+        else if (n != 1 || !ParseTransformNumber(args[0], op.Args[name == "scaley" ? 1 : 0]))
+        {
+            return false;
+        }
+    }
+    else if (name == "rotate")
+    {
+        op.Function = TransformFunction::Rotate;
+        if (n != 1 || !ParseTransformAngle(args[0], op.Args[0]))
+            return false;
+    }
+    else if (name == "skew" || name == "skewx" || name == "skewy")
+    {
+        op.Function = TransformFunction::Skew;
+        if (name == "skew")
+        {
+            if (n > 2 || !ParseTransformAngle(args[0], op.Args[0]))
+                return false;
+            if (n == 2 && !ParseTransformAngle(args[1], op.Args[1]))
+                return false;
+        }
+        else if (n != 1 || !ParseTransformAngle(args[0], op.Args[name == "skewy" ? 1 : 0]))
+        {
+            return false;
+        }
+    }
+    else if (name == "matrix")
+    {
+        op.Function = TransformFunction::Matrix;
+        if (n != 6)
+            return false;
+        for (size_t i = 0; i < 6; ++i)
+        {
+            const std::string v = Trim(args[i]);
+            const char* begin = v.c_str();
+            char* end = nullptr;
+            op.Args[i] = std::strtof(begin, &end);
+            if (end == begin || *end != '\0')
+                return false;
+        }
+    }
+    else
+    {
+        // 3D functions (rotateX, perspective, matrix3d...) and unknown names:
+        // the whole declaration is invalid, as CSS treats an unsupported one.
+        return false;
+    }
+    out.push_back(op);
+    return true;
+}
+
+// `none`, or a whitespace-separated list of transform functions. Any function
+// that does not parse invalidates the declaration (monostate), so an earlier
+// rule survives instead of a partial list.
+static StyleValue ParseTransformValue(const std::string& value)
+{
+    const std::string trimmed = Trim(value);
+    if (ToLowerAscii(trimmed) == "none")
+        return TransformValue{};
+    const auto toks = TokenizeWhitespaceOutsideParens(trimmed);
+    if (toks.empty())
+        return std::monostate{};
+    TransformOpList ops;
+    ops.reserve(toks.size());
+    for (const std::string& tok : toks)
+    {
+        if (!ParseTransformFunction(tok, ops))
+            return std::monostate{};
+    }
+    return TransformValue::FromOps(std::move(ops));
+}
+
+// `transform-origin`: the background-position grammar (keywords, lengths and
+// percentages, one or two of them). The optional third, z, component is a 3D
+// concept and is not read.
+static StyleValue ParseTransformOriginValue(const std::string& value)
+{
+    const StyleValue parsed = ParseBackgroundPositionValue(value);
+    const BackgroundPositionValue* pos = std::get_if<BackgroundPositionValue>(&parsed);
+    if (!pos)
+        return std::monostate{};
+    return TransformOriginValue{pos->XIsPercent ? StyleLength::Percent(pos->X) : StyleLength::Px(pos->X),
+                                pos->YIsPercent ? StyleLength::Percent(pos->Y) : StyleLength::Px(pos->Y)};
 }
 
 static StyleValue ParseBoxShadowValue(const std::string& value)
@@ -2677,6 +2883,8 @@ constexpr PropertyRow kPropertyRows[] = {
     {"text-outline-width", StylePropertyId::TextOutlineWidth, &ParseFloatPxValue},
     {"text-outline-color", StylePropertyId::TextOutlineColor, &ParseColorValue},
     {"selection-color", StylePropertyId::SelectionColor, &ParseColorValue},
+    {"transform", StylePropertyId::Transform, &ParseTransformValue},
+    {"transform-origin", StylePropertyId::TransformOrigin, &ParseTransformOriginValue},
     {"glow", StylePropertyId::Glow, &ParseGlowValue},
     {"transition", StylePropertyId::Transition, &ParseTransitionValue},
 };

@@ -369,9 +369,9 @@ TEST(ScriptingAbi, ExportAfterHostShutdownDoesNotStartAnotherEngine)
 	ASSERT_FALSE(engine.IsInitialized());
 
 	// An export that needs the engine must be refused by the bootstrap — GE_Result_Fail, the
-	// export's mapping of that refusal; a bootstrapped engine would answer NotInitialized for
-	// its null RuntimeInput instead — and the engine must stay down.
-	int32_t down = 42;
-	EXPECT_EQ(GE_Input_IsKeyDown(0, &down), GE_Result_Fail);
+	// export's mapping of that refusal; a bootstrapped engine would answer the asset count
+	// instead — and the engine must stay down.
+	int32_t count = 42;
+	EXPECT_EQ(GE_GetAssetCount(&count), GE_Result_Fail);
 	EXPECT_FALSE(engine.IsInitialized()) << "the ABI started an engine this process had already shut down";
 }

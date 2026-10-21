@@ -11,14 +11,11 @@
 #ifndef GE_VIEW_EXPOSURE_GLSL
 #define GE_VIEW_EXPOSURE_GLSL
 
-#include "exposed_brightness.glsl"
 #include "view_params.glsl"
 
-layout(set = 0, binding = 47, std430) readonly buffer ExposureHistoryBlock
-{
-    float exposureScale;
-    uint valid;
-} ExposureHistory;
+#define GE_EXPOSURE_HISTORY_BINDING 47
+#define GE_EXPOSURE_HISTORY_NAME ExposureHistory
+#include "exposure_history.glsl"
 
 float GE_ViewExposureScale()
 {

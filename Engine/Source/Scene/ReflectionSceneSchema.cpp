@@ -424,12 +424,19 @@ enum class PropertyApply
     Failed   // malformed value; outError set to the bare parse error
 };
 
-// One warning for the authored keys a component block names and the component no longer has (renamed
-// or removed since the file was written), however many there are.
-void WarnUnknownFields(const std::string& componentName, std::span<const std::string_view> unknown)
+// The authored keys a component block names and the component has no field for (renamed or removed
+// since the file was written, or misspelled). A scene load takes them for its load report; any other
+// apply gets one warning for all of them.
+void ReportUnknownFields(const SceneLoadContext& ctx, const std::string& componentName,
+                         std::span<const std::string_view> unknown)
 {
     if (unknown.empty())
         return;
+    if (ctx.UnknownFields)
+    {
+        ctx.UnknownFields->insert(ctx.UnknownFields->end(), unknown.begin(), unknown.end());
+        return;
+    }
     std::string names;
     for (const std::string_view key : unknown)
         names += (names.empty() ? "'" : ", '") + std::string(key) + "'";
@@ -761,7 +768,7 @@ bool ReflectionSceneSchema::ApplyProperty(ECS::World& world, ECS::EntityHandle e
     std::vector<std::string_view> unknownFields;
     const PropertyApply applied = ApplyPropertyToBytes(m_TypeId, m_Name, desc, bytes, ctx, property, value, &err,
                                                        unknownFields);
-    WarnUnknownFields(m_Name, unknownFields);
+    ReportUnknownFields(ctx, m_Name, unknownFields);
     if (applied == PropertyApply::Failed)
     {
         if (outError)
@@ -817,7 +824,7 @@ bool ReflectionSceneSchema::ApplyProperties(ECS::World& world, ECS::EntityHandle
             return false;
         }
     }
-    WarnUnknownFields(m_Name, unknownFields);
+    ReportUnknownFields(ctx, m_Name, unknownFields);
 
     if (!world.ApplyComponentBytesImmediate(entity, m_TypeId, bytes))
     {

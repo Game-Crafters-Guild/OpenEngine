@@ -39,6 +39,8 @@ target_compile_features(Particles PUBLIC cxx_std_20)
 target_include_directories(Particles
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
+        # Rendering/RenderLayerMask.h (header-only, Types only): ParticleRenderer's layers.
+        ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         ${CMAKE_SOURCE_DIR}/Engine/Include

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Components/Rendering/PostProcessVolume.h" // kDefaultAutoExposureMinEv
+#include "Engine/Rendering/ExposureCompensationSamples.h"
 #include "Types/Types.h"
 
 #include <cstdint>
@@ -125,11 +127,15 @@ struct PostProcessSettings
     // Neutral by default: the display transform is a baseline of the pipeline, so a
     // volume-less world is rendered through a look too. A PostProcessVolume overrides it.
     int32   Look           = 0; // Components::Look as int32 (0 = Neutral)
+    // The night tint (Components::PostProcessVolume::NightTintStrength and NightTintColor): its strength
+    // and its hue as linear Rec.709 at luminance 1, which the extraction computes from the volume's color.
+    // The defaults match the volume's, so a volume-less world renders the same night.
+    float32 NightTintStrength = 1.0f;
+    float32 NightTintR     = 0.547f;
+    float32 NightTintG     = 0.879f;
+    float32 NightTintB     = 3.532f;
     // View-only, never blended and never reflected: the Tonemap node reads it directly.
     PostProcessViewOutput ViewOutput = PostProcessViewOutput::Look;
-    // HDR10/HDR10+ highlight-chroma compression in ICtCp. The tonemap node
-    // forces this to zero for SDR, HLG, and scRGB. Zero is exact pass-through.
-    float32 IctcpChromaCompression = 0.0f;
 
     // Radial red/blue separation applied in the LDR post-process stack.
     float32 ChromaticAberrationIntensity = 0.0f;
@@ -167,7 +173,7 @@ struct PostProcessSettings
     // Physical depth of field. Intensity/MaxRadius come from the volume's
     // DepthOfFieldEffect; FocusDistance/FocalLengthMm/Aperture are stamped
     // per-view from the camera after volume blending (the lens, like exposure,
-    // is a camera property — see applyCameraExposure).
+    // is a camera property — see ApplyCameraExposure, CameraExposureStamp.h).
     float32 DofIntensity = 0.0f;
     float32 DofMaxRadius = 16.0f;
     int32 DofSamplingQuality = 1;
@@ -213,11 +219,11 @@ struct PostProcessSettings
     float32 CasStrength          = 0.0f;
     int32   CasStackOrder        = 1;
 
-    // .cube LUT (LDR stack; intensity 0 disables sampling in shader).
+    // .cube LUT (intensity 0 samples nothing). LutStage is a Components::CubeLutStage: 0 = Finish,
+    // sampled inside the Tonemap pass on the look's output; 1 = Grade, sampled by the HDRColorFx
+    // pass before the look. The LUT's input encoding comes from its asset, not from the volume.
     float32 LutIntensity     = 0.0f;
-    int32   LutStackOrder    = 0;
-    int32   LutInputEncoding = 0;
-    int32   LutTextureFormat = 0; // Components::CubeLutTextureFormat as int32
+    int32   LutStage         = 0;
     // Dominant volume's LUT asset GUID stored as raw bytes.
     uint64  LutAssetGuidWords[2]{0, 0};
 
@@ -581,7 +587,7 @@ struct PostProcessSettings
     // Auto. The EV range becomes the linear-exposure clamp; speeds drive the log-space adaptation;
     // the metered average is keyed to Rendering::kAutoExposureMiddleGrey times 2^AutoExposureBiasEv.
     bool    AutoExposureActive    = false;
-    float32 AutoExposureMinEv     = 4.0f; // keep in lockstep with Components::Camera::AutoExposureMinEv
+    float32 AutoExposureMinEv     = Components::kDefaultAutoExposureMinEv;
     float32 AutoExposureMaxEv     = 18.0f; // keep in lockstep with PostProcessVolume::AutoExposureMaxEv
     float32 AutoExposureSpeedUp   = 1.0f; // dark adaptation (exposure rises) is slow...
     float32 AutoExposureSpeedDown = 3.0f; // ...light adaptation (exposure falls) is fast
@@ -592,6 +598,16 @@ struct PostProcessSettings
     // TryWriteField folds it into the resolve shader's key AND clamp bounds (mathematically
     // identical to a post-clamp multiply), keeping the shader interface unchanged.
     float32 AutoExposureBiasEv    = kDefaultAutoExposureBiasEv;
+    // What Auto meters: Components::ExposureMeter as int32 (0 = Picture, the histogram; 1 = Lights, the
+    // incident reading AutoExposureNode takes from the world's lights). Stamped from the camera, never
+    // authored by a volume.
+    int32   AutoExposureMeter     = 0;
+    // The exposure compensation curve over the metered scene EV100, sampled: the resolve adds its
+    // value at the meter's reading to the exposure after the clamps, beside AutoExposureBiasEv.
+    // Stamped after the blend with the meter (from the camera, or the engine default for a view with
+    // no camera); never authored by a volume and never blended, so the blend output holds the zero
+    // default.
+    ExposureCompensationSamples AutoExposureCompensation;
 
     // Volume exposure modifiers (ExposureAdjustmentEffect), applied on top of the camera-sensor
     // resolve — never owning it. Compensation is ± stops; the clamps intersect (narrow) the
@@ -600,6 +616,12 @@ struct PostProcessSettings
     float32 ExposureCompensationEv = 0.0f;
     float32 ExposureClampMinEv     = kExposureClampNoOpMinEv;
     float32 ExposureClampMaxEv     = kExposureClampNoOpMaxEv;
+    // How much of each clamp the volumes contribute, 0 to 1: each clamping volume blends in a 1 for its
+    // side with its weight, as its clamp blends in from the no-op endpoint. NarrowAutoExposureEnvelope
+    // recovers the volumes' authored clamp from the two and fades it in by this weight, so a volume's
+    // blend region never pops an envelope whose floor sits below the no-op endpoint.
+    float32 ExposureClampMinWeight = 0.0f;
+    float32 ExposureClampMaxWeight = 0.0f;
 
     bool IsBloomActive(float32 epsilon = 1.0f / 1024.0f) const;
     void ResolveBloomPyramid(uint32 renderHeight);
@@ -630,6 +652,8 @@ struct PostProcessSettings
     bool IsHdrColorFxActive(float32 epsilon = 1.0f / 1024.0f) const;
     bool IsCasActive(float32 epsilon = 1.0f / 1024.0f) const;
     bool IsLutActive(float32 epsilon = 1.0f / 1024.0f) const;
+    // A LUT at the Grade stage: it turns the HDRColorFx pass on.
+    bool IsGradeLutActive(float32 epsilon = 1.0f / 1024.0f) const;
     bool IsVignetteActive(float32 epsilon = 1.0f / 1024.0f) const;
     bool IsLdrStackActive(float32 epsilon = 1.0f / 1024.0f) const;
     bool IsVhsActive(float32 epsilon = 1.0f / 1024.0f) const;

@@ -858,21 +858,28 @@ struct CBTSurfaceParams
     uint32_t AtlasNormalBindless = 0u;
     uint32_t AtlasSplatCoarseBindless = 0u;
     uint32_t AtlasNormalCoarseBindless = 0u;
+    // The atlas-resident grass control field (RG8: height, density) and its coarse field, for the
+    // canopy occlusion the ground takes where grass stands (terrain_grass_canopy.glsl). 0 when the
+    // terrain authors no grass region; the ground then reads the field as (1, 1), as placement does.
+    uint32_t AtlasGrassBindless = 0u;
+    uint32_t AtlasGrassCoarseBindless = 0u;
+    uint32_t _PadAtlasGrass0 = 0u;
+    uint32_t _PadAtlasGrass1 = 0u;
     // Analytic sphere modifiers (sculpt shape-accuracy S2 — mirror the tail of CBTSurfaceParamsData
     // in cbt_surface.glsl). The same placement set CBTFrameParams carries, here for the fragment's
-    // per-pixel composed sculpt (centre height + gradient taps + tap gate). DabCount (S3, the old
-    // pad slot) keeps the vec4-struct array 16-aligned in std430 (88 + 4 + 4 = 96); transient
-    // dabs occupy slots [Count, Count+DabCount). Both 0 = every analytic branch skipped.
+    // per-pixel composed sculpt (centre height + gradient taps + tap gate). DabCount keeps the
+    // vec4-struct array 16-aligned in std430 (104 + 4 + 4 = 112); transient dabs occupy slots
+    // [Count, Count+DabCount). Both 0 = every analytic branch skipped.
     uint32_t SphereAnalyticCount = 0u;
     uint32_t SphereAnalyticDabCount = 0u;
     float SphereAnalytic[kMaxSphereAnalyticModifiers * kSphereAnalyticFloatsPerModifier] = {};
 };
-static_assert(sizeof(CBTSurfaceParams) == 864,
-              "CBTSurfaceParams must be 864B (22 scalars + count/pad + 16 x 3 vec4 analytic set, "
+static_assert(sizeof(CBTSurfaceParams) == 880,
+              "CBTSurfaceParams must be 880B (26 scalars + count/pad + 16 x 3 vec4 analytic set, "
               "std430 mirror)");
-static_assert(offsetof(CBTSurfaceParams, SphereAnalyticCount) == 88 &&
-                  offsetof(CBTSurfaceParams, SphereAnalytic) == 96,
-              "analytic tail is appended after the leading 88B block, array 16-aligned (std430)");
+static_assert(offsetof(CBTSurfaceParams, SphereAnalyticCount) == 104 &&
+                  offsetof(CBTSurfaceParams, SphereAnalytic) == 112,
+              "analytic tail is appended after the leading 104B block, array 16-aligned (std430)");
 
 // Per-slot stride, padded well past sizeof so slot * stride satisfies every device's
 // minStorageBufferOffsetAlignment when the fragment offset-binds a single ring slot.

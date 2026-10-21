@@ -527,6 +527,7 @@ EntityHandle World::CreateEntity()
         {
             index = freeIndices.back();
             freeIndices.pop_back();
+            entityMetadata[index].onFreeList = false;
         }
         else
         {
@@ -535,7 +536,7 @@ EntityHandle World::CreateEntity()
         }
 
         auto& metadata = entityMetadata[index];
-        metadata.version++;
+        metadata.version = NextIssuedVersion(index);
         metadata.alive = true;
         metadata.archetype = nullptr;
         metadata.SetLocation(0, 0);
@@ -547,6 +548,14 @@ EntityHandle World::CreateEntity()
     return EntityHandle(index, version);
 }
 
+EntityVersion World::NextIssuedVersion(EntityIndex index) const
+{
+    EntityVersion issued = entityMetadata[index].version;
+    if (index < m_IssuedVersionFloor.size())
+        issued = std::max(issued, m_IssuedVersionFloor[index]);
+    return static_cast<EntityVersion>(issued + 1u);
+}
+
 EntityHandle World::CreateEntityUnsafe()
 {
     // This method assumes worldMutex is already held by the caller
@@ -556,6 +565,7 @@ EntityHandle World::CreateEntityUnsafe()
     {
         index = freeIndices.back();
         freeIndices.pop_back();
+        entityMetadata[index].onFreeList = false;
     }
     else
     {
@@ -564,7 +574,7 @@ EntityHandle World::CreateEntityUnsafe()
     }
 
     auto& metadata = entityMetadata[index];
-    metadata.version++;
+    metadata.version = NextIssuedVersion(index);
     metadata.alive = true;
     metadata.archetype = nullptr;
     metadata.SetLocation(0, 0);
@@ -650,6 +660,7 @@ void World::DestroyPreparedEntityInternal(EntityHandle entity, bool preserveHand
     else
     {
         freeIndices.push_back(entity.index);
+        metadata.onFreeList = true;
 
         // The scene loader's preserved overrides describe components this entity no longer has, and
         // the handle is going back into circulation. Only on this path: the preserve-handle destroy
@@ -743,6 +754,21 @@ bool World::ReviveEntityImmediatePreserveHandle(EntityHandle entity)
     if (metadata.alive)
     {
         return true; // idempotent
+    }
+    // Within one run of handles the slot's version names this entity alone, so a slot that a
+    // restore or a destroy put back on the free list is this entity's again. The editor's
+    // delete never frees the slot, so its undo skips the search. The erase keeps the order of
+    // the other free indices, which a snapshot records and a restore brings back.
+    if (metadata.onFreeList)
+    {
+        const auto freed = std::find(freeIndices.begin(), freeIndices.end(), entity.index);
+        assert(freed != freeIndices.end() && "a slot marked as on the free list is not on it");
+        if (freed != freeIndices.end())
+            freeIndices.erase(freed);
+        else
+            Logger::Log::Error("[ECS] Revive of entity {}: its slot is marked as on the free list but is not on it",
+                               entity.id);
+        metadata.onFreeList = false;
     }
 
     metadata.alive = true;
@@ -2052,6 +2078,8 @@ void World::Clear()
     entityCount.store(0);
     structuralChangeVersion.fetch_add(1);
     ++m_WorldGeneration; // Invalidate thread_local archetype caches in CreateHandle
+    m_EntityHandleEpoch = ++m_LastEntityHandleEpoch;
+    m_IssuedVersionFloor.clear();
     bulkOperationMode = false;
     m_Singletons.clear();
 
@@ -2108,6 +2136,7 @@ std::vector<EntityHandle> World::CreateBatchHandle(size_t count)
         {
             index = freeIndices.back();
             freeIndices.pop_back();
+            entityMetadata[index].onFreeList = false;
         }
         else
         {
@@ -2116,7 +2145,7 @@ std::vector<EntityHandle> World::CreateBatchHandle(size_t count)
         }
 
         auto& metadata = entityMetadata[index];
-        metadata.version++;
+        metadata.version = NextIssuedVersion(index);
         metadata.alive = true;
         metadata.archetype = nullptr;
         metadata.SetLocation(0, 0);
@@ -2200,6 +2229,7 @@ EntityHandle World::CreateDirect()
     {
         index = freeIndices.back();
         freeIndices.pop_back();
+        entityMetadata[index].onFreeList = false;
     }
     else
     {
@@ -2208,7 +2238,7 @@ EntityHandle World::CreateDirect()
     }
 
     auto& metadata = entityMetadata[index];
-    metadata.version++;
+    metadata.version = NextIssuedVersion(index);
     metadata.alive = true;
     metadata.archetype = nullptr;
     metadata.SetLocation(0, 0);
@@ -2542,7 +2572,7 @@ std::string World::GetEntityAsJson(EntityHandle entity)
 namespace
 {
 constexpr uint32_t kWorldSnapshotMagic = 0x57435345; // ECSW
-constexpr uint32_t kWorldSnapshotVersion = 1;
+constexpr uint32_t kWorldSnapshotVersion = 2;
 }
 
 std::vector<uint8_t> World::SerializeWorld()
@@ -2555,14 +2585,15 @@ std::vector<uint8_t> World::SerializeWorld()
         const auto* bytes = reinterpret_cast<const uint8_t*>(&value);
         result.insert(result.end(), bytes, bytes + sizeof(value));
     };
-    // ECSW v1: magic, format version, slot count, free count, then each slot's
-    // generation + entity-data length + data (length 0 = dead), then free indices
-    // in allocation order. Dead slots absent from the free list are undo-reserved.
+    // ECSW v2: magic, format version, slot count, free count, entity handle epoch, then
+    // each slot's generation + entity-data length + data (length 0 = dead), then free
+    // indices in allocation order. Dead slots absent from the free list are undo-reserved.
     // Explicit fields only: archetype pointers/locations are rebuilt, not serialized.
     append(kWorldSnapshotMagic);
     append(kWorldSnapshotVersion);
     append(static_cast<uint32_t>(entityMetadata.size()));
     append(static_cast<uint32_t>(freeIndices.size()));
+    append(m_EntityHandleEpoch);
 
     for (EntityIndex i = 0; i < entityMetadata.size(); ++i)
     {
@@ -2610,8 +2641,9 @@ void World::DeserializeWorld(const std::vector<uint8_t>& data)
         return true;
     };
     uint32_t formatVersion, slotCount, freeCount;
+    uint64 handleEpoch;
     if (!read(formatVersion) || formatVersion != kWorldSnapshotVersion || !read(slotCount) || !read(freeCount)
-        || slotCount > kEntityIndexMask + 1u || freeCount > slotCount
+        || !read(handleEpoch) || slotCount > kEntityIndexMask + 1u || freeCount > slotCount
         || uint64_t{slotCount} * (sizeof(EntityVersion) + sizeof(uint32_t))
            + uint64_t{freeCount} * sizeof(EntityIndex) > data.size() - offset)
         return;
@@ -2683,20 +2715,56 @@ void World::DeserializeWorld(const std::vector<uint8_t>& data)
     // A snapshot restore brings back the same document with the same entity handles, so the scene
     // data this binary could not represent stays with it: Clear would otherwise hand the next save a
     // world that silently lost its preserved components, fields and reference paths.
+    // A snapshot of the run the world is in keeps the run: every version each slot issued
+    // since the snapshot stays issued, so none is handed out again.
+    const bool sameRun = handleEpoch == m_EntityHandleEpoch;
+    std::vector<EntityVersion> issued;
+    if (sameRun)
+    {
+        std::shared_lock lock(worldMutex);
+        issued.resize(entityMetadata.size());
+        for (std::size_t i = 0; i < issued.size(); ++i)
+            issued[i] = static_cast<EntityVersion>(NextIssuedVersion(static_cast<EntityIndex>(i)) - 1u);
+    }
+
     std::unique_ptr<UnresolvedComponentStore> unresolved = std::move(m_UnresolvedComponents);
     Clear();
     m_UnresolvedComponents = std::move(unresolved);
     {
         CheckRemovalReentry();
         std::unique_lock lock(worldMutex);
-        entityMetadata.resize(slotCount);
-        freeIndices = std::move(restoredFreeIndices);
-        for (uint32_t i = 0; i < slotCount; ++i)
+        const std::size_t slotTotal = std::max<std::size_t>(slotCount, issued.size());
+        entityMetadata.resize(slotTotal);
+        std::vector<EntityVersion> floors;
+        // Slots past the snapshot's go back on the free list below its own free indices, lowest
+        // index popped first, so the next creates take the indices they would have taken.
+        freeIndices.clear();
+        for (std::size_t i = slotTotal; i > slotCount; --i)
+            freeIndices.push_back(static_cast<EntityIndex>(i - 1));
+        freeIndices.insert(freeIndices.end(), restoredFreeIndices.begin(), restoredFreeIndices.end());
+        for (std::size_t i = 0; i < slotTotal; ++i)
         {
-            entityMetadata[i].version = slots[i].Version;
-            entityMetadata[i].alive = !slots[i].Data.empty();
+            const EntityVersion issuedVersion = i < issued.size() ? issued[i] : EntityVersion{0};
+            auto& metadata = entityMetadata[i];
+            metadata.onFreeList = i >= slotCount || isFree[i];
+            if (metadata.onFreeList)
+            {
+                metadata.version = std::max(i < slotCount ? slots[i].Version : EntityVersion{0}, issuedVersion);
+                metadata.alive = false;
+                continue;
+            }
+            metadata.version = slots[i].Version;
+            metadata.alive = !slots[i].Data.empty();
+            if (issuedVersion > metadata.version)
+            {
+                floors.resize(slotTotal, EntityVersion{0});
+                floors[i] = issuedVersion;
+            }
         }
         entityCount.store(aliveCount, std::memory_order_relaxed);
+        m_IssuedVersionFloor = std::move(floors);
+        if (sameRun)
+            m_EntityHandleEpoch = handleEpoch;
     }
     for (uint32_t i = 0; i < slotCount; ++i)
     {

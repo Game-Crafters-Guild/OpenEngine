@@ -12,7 +12,6 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include <array>
 #include <cassert>
-#include <memory>
 #include <shared_mutex>
 #include <span>
 #include <thread>
@@ -271,6 +270,20 @@ class Query
                 table.StampColumnVersion(chunkIdx, static_cast<std::size_t>(colIdx[s]), version);
         }
     }
+
+    // What every unit of one parallel fork shares: the caller's functor and the dispatch's
+    // gate and stamp. It lives on the forking function's stack until Wait, which returns
+    // only after every unit has run, so a unit holds a pointer to it instead of a copy;
+    // that keeps the functor off the heap and the unit's closure inside a task slab.
+    // Non-const, so a functor with a non-const call operator still compiles.
+    template <typename F>
+    struct ForkCall
+    {
+        F Fn;
+        uint64_t GateVersion;
+        uint64_t StampVersion;
+        bool HasGate;
+    };
 
   public:
     explicit Query(World* w) : world(w) {}
@@ -730,7 +743,6 @@ void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t m
     }
 
     JobSystem::JobCounter counter;
-    auto fnShared = std::make_shared<std::decay_t<Func>>(std::forward<Func>(func));
 
     // Changed<> gate: clean chunks are excluded from batch accounting so a
     // clean frame dispatches zero tasks, and re-checked inside the task
@@ -738,6 +750,7 @@ void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t m
     // the re-check can only ADD a visit, never lose one).
     const bool kHasGate = m_HasChangedGate;
     const uint64_t kGateVersion = m_ChangedGate;
+    ForkCall<F> forkCall{std::forward<Func>(func), kGateVersion, stampVersion, kHasGate};
 
     for (auto* archetype : m_CachedArchetypes)
     {
@@ -800,7 +813,7 @@ void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t m
 
             const std::size_t batchEnd = (chunkIdx < numChunks) ? chunkIdx + 1 : numChunks;
 
-            auto task = [=]()
+            auto task = [=, call = &forkCall]()
             {
                 for (std::size_t ci = batchStart; ci < batchEnd; ++ci)
                 {
@@ -808,19 +821,19 @@ void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t m
                     uint32_t chunkCount = chunk.GetCount();
                     if (chunkCount == 0)
                         continue;
-                    if (kHasGate && !tablePtr->AnyColumnChangedSince(
-                                        ci,
-                                        std::span<const int>(changedCols.data(), changedColCount),
-                                        kGateVersion))
+                    if (call->HasGate && !tablePtr->AnyColumnChangedSince(
+                                             ci,
+                                             std::span<const int>(changedCols.data(), changedColCount),
+                                             call->GateVersion))
                         continue;
                     if constexpr (kWriteMask != 0u)
-                        StampWriteColumns(*tablePtr, ci, colIdx, kWriteMask, stampVersion);
+                        StampWriteColumns(*tablePtr, ci, colIdx, kWriteMask, call->StampVersion);
 
                     [&]<std::size_t... Is>(std::index_sequence<Is...>)
                     {
                         if constexpr (kWantsEntity)
                         {
-                            (*fnShared)(
+                            call->Fn(
                                 static_cast<const EntityHandle*>(
                                     chunk.GetEntityHandlesByOffset(ehOffset)),
                                 Detail::EffPtrCast<((kReadMask >> Is) & 1u) != 0u>(
@@ -831,7 +844,7 @@ void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t m
                         }
                         else
                         {
-                            (*fnShared)(
+                            call->Fn(
                                 Detail::EffPtrCast<((kReadMask >> Is) & 1u) != 0u>(
                                     colIdx[Is] >= 0
                                         ? chunk.template GetColumnByOffset<U<NthType<Is>>>(colOffsets[Is])
@@ -901,10 +914,10 @@ void Query<Ts...>::Parallel(Func&& func, [[maybe_unused]] std::size_t minBatchSi
     }
 
     JobSystem::JobCounter counter;
-    auto fnShared = std::make_shared<std::decay_t<Func>>(std::forward<Func>(func));
 
     const bool kHasGate = m_HasChangedGate;
     const uint64_t kGateVersion = m_ChangedGate;
+    ForkCall<F> forkCall{std::forward<Func>(func), kGateVersion, stampVersion, kHasGate};
 
     for (auto* archetype : m_CachedArchetypes)
     {
@@ -970,7 +983,7 @@ void Query<Ts...>::Parallel(Func&& func, [[maybe_unused]] std::size_t minBatchSi
             // At sentinel (chunkIdx == numChunks), don't add 1 — there's no chunk there.
             const std::size_t batchEnd = (chunkIdx < numChunks) ? chunkIdx + 1 : numChunks;
 
-            auto task = [=]()
+            auto task = [=, call = &forkCall]()
             {
                 for (std::size_t ci = batchStart; ci < batchEnd; ++ci)
                 {
@@ -978,13 +991,13 @@ void Query<Ts...>::Parallel(Func&& func, [[maybe_unused]] std::size_t minBatchSi
                     uint32_t chunkCount = chunk.GetCount();
                     if (chunkCount == 0)
                         continue;
-                    if (kHasGate && !tablePtr->AnyColumnChangedSince(
-                                        ci,
-                                        std::span<const int>(changedCols.data(), changedColCount),
-                                        kGateVersion))
+                    if (call->HasGate && !tablePtr->AnyColumnChangedSince(
+                                             ci,
+                                             std::span<const int>(changedCols.data(), changedColCount),
+                                             call->GateVersion))
                         continue;
                     if constexpr (kWriteMask != 0u)
-                        StampWriteColumns(*tablePtr, ci, colIdx, kWriteMask, stampVersion);
+                        StampWriteColumns(*tablePtr, ci, colIdx, kWriteMask, call->StampVersion);
 
                     const EntityHandle* entityPtr = chunk.GetEntityHandlesByOffset(ehOffset);
 
@@ -1019,8 +1032,7 @@ void Query<Ts...>::Parallel(Func&& func, [[maybe_unused]] std::size_t minBatchSi
                         };
 
                         for (uint32_t i = 0; i < chunkCount; ++i)
-                            (*fnShared)(entityPtr[i],
-                                        argAt(std::integral_constant<std::size_t, Is>{}, i)...);
+                            call->Fn(entityPtr[i], argAt(std::integral_constant<std::size_t, Is>{}, i)...);
                     }(std::make_index_sequence<sizeof...(Ts)>{});
                 }
             };
@@ -1143,12 +1155,11 @@ void Query<Ts...>::ParallelChunks(Func&& func)
 
     JobSystem::JobCounter counter;
 
-    // Share the functor ONCE across all tasks and all archetypes.
+    // One functor across all tasks and all archetypes.
     // Callers must ensure the functor is thread-safe (no mutable shared state).
-    auto fnShared = std::make_shared<std::decay_t<Func>>(std::forward<Func>(func));
-
     const bool kHasGate = m_HasChangedGate;
     const uint64_t kGateVersion = m_ChangedGate;
+    ForkCall<F> forkCall{std::forward<Func>(func), kGateVersion, stampVersion, kHasGate};
 
     for (auto* archetype : m_CachedArchetypes)
     {
@@ -1186,7 +1197,7 @@ void Query<Ts...>::ParallelChunks(Func&& func)
                                 kGateVersion))
                 continue;
 
-            auto task = [=]()
+            auto task = [=, call = &forkCall]()
             {
                 auto& chunk = chunks[chunkIdx];
                 uint32_t count = chunk.GetCount();
@@ -1194,9 +1205,9 @@ void Query<Ts...>::ParallelChunks(Func&& func)
                     return;
 
                 if constexpr (kWriteMask != 0u)
-                    StampWriteColumns(*tablePtr, chunkIdx, colIdx, kWriteMask, stampVersion);
+                    StampWriteColumns(*tablePtr, chunkIdx, colIdx, kWriteMask, call->StampVersion);
 
-                auto adapter = Detail::ChunkCallAdapter<std::decay_t<Func>>{*fnShared};
+                auto adapter = Detail::ChunkCallAdapter<F&>{call->Fn};
 
                 [&]<std::size_t... Is>(std::index_sequence<Is...>)
                 {

@@ -75,6 +75,7 @@
 #include "Inspectors/ComponentPresets.h"
 #include "Inspectors/GeneratedEntityNotice.h"
 #include "Inspectors/InspectorEntityActivity.h"
+#include "Inspectors/PendingAssetHeader.h"
 #include "Graph/GraphInspectorRows.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorSectionHosts.h"
@@ -142,17 +143,15 @@
 // Post-process effect chrome comes from PostProcessEffectRegistry; the typed
 // includes that remain serve the scanner-unreflectable Enabled fallbacks
 // (VolumetricFog, HeightFog, AtmosphericCloudLayer), the LDR StackOrder sync
-// (CAS, CubeLut, Vignette), and HeightFog's add-time tuning.
+// (CAS, Vignette), and HeightFog's add-time tuning.
 #include "Components/Rendering/PostProcessEffects/AtmosphericCloudLayer.h"
 #include "Components/Rendering/PostProcessEffects/VolumetricClouds.h"
 #include "Components/Rendering/PostProcessEffects/ContrastAdaptiveSharpenEffect.h"
-#include "Components/Rendering/PostProcessEffects/CubeLutEffect.h"
 #include "Components/Rendering/PostProcessEffects/VignetteEffect.h"
 #include "Components/Rendering/ReflectionProbe.h"
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
 #include "Components/Rendering/PostProcessVolume.h"
-#include "Components/Rendering/RenderLayer.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
@@ -561,6 +560,12 @@ constexpr float kInspectorPickerWidthPx = 360.0f;
 constexpr float kInspectorAssetContentHorizontalInsetPx = 16.0f;
 // Vertical inset when framing script-variable empty state (matches type-line spacing).
 constexpr float kInspectorAssetContentVerticalInsetPx = 8.0f;
+// What a selected asset shows while its load runs: the "Loading <file>..." line and the header
+// suffix after the name (Editor::kPendingAssetSuffixLabelId); PollPendingAssetLoad updates both
+// by id.
+constexpr const char* kPendingAssetLoadLabelId = "InspectorPendingAssetLoad";
+// How often that state is re-read while the load runs.
+constexpr std::chrono::milliseconds kPendingAssetLineRefreshInterval{250};
 static std::unique_ptr<UIElement> MakeInspectorPaddedContentColumn()
 {
     auto column = std::make_unique<UIElement>();
@@ -705,7 +710,6 @@ static const std::unordered_map<ECS::ComponentTypeId, std::string>& GetComponent
         s_Names[ECS::GetComponentTypeId<Components::WindVolume>()] = "Wind Volume";
         // Post-process effect names come from the PostProcessEffectRegistry
         // descriptors (ComponentTitle consults it before this map).
-        s_Names[ECS::GetComponentTypeId<RenderLayer>()] = "Render Layer";
         s_Names[ECS::GetComponentTypeId<LocalBounds>()] = "World Bounds";
 
         s_Names[ECS::GetComponentTypeId<AudioEmitter>()] = "Audio Emitter";
@@ -744,7 +748,6 @@ static std::string ComponentCategory(ECS::ComponentTypeId typeId)
     static const ECS::ComponentTypeId meshRendererId = ECS::GetComponentTypeId<MeshRenderer>();
     static const ECS::ComponentTypeId skinnedMeshRendererId = ECS::GetComponentTypeId<SkinnedMeshRenderer>();
     static const ECS::ComponentTypeId lodGroupId = ECS::GetComponentTypeId<LODGroup>();
-    static const ECS::ComponentTypeId renderLayerId = ECS::GetComponentTypeId<RenderLayer>();
     static const ECS::ComponentTypeId skyEnvId = ECS::GetComponentTypeId<SkyEnvironment>();
     static const ECS::ComponentTypeId skyboxId = ECS::GetComponentTypeId<Skybox>();
     static const ECS::ComponentTypeId reflectionProbeId = ECS::GetComponentTypeId<Components::ReflectionProbe>();
@@ -783,7 +786,7 @@ static std::string ComponentCategory(ECS::ComponentTypeId typeId)
         return "Transform";
 
     if (typeId == meshRendererId || typeId == skinnedMeshRendererId || typeId == lodGroupId ||
-        typeId == renderLayerId || typeId == skyEnvId || typeId == skyboxId ||
+        typeId == skyEnvId || typeId == skyboxId ||
         typeId == reflectionProbeId || typeId == postProcessId || typeId == windVolumeId || typeId == videoTextureId)
         return "Rendering";
 
@@ -3154,7 +3157,6 @@ void InspectorPanel::PersistComponentOrderFromSections()
 
     // Keep reorderable LDR post-FX components in sync with the visual order.
     static const ECS::ComponentTypeId casId = ECS::GetComponentTypeId<Components::ContrastAdaptiveSharpenEffect>();
-    static const ECS::ComponentTypeId cubeLutId = ECS::GetComponentTypeId<Components::CubeLutEffect>();
     static const ECS::ComponentTypeId vignetteId = ECS::GetComponentTypeId<Components::VignetteEffect>();
 
     int nextOrder = 0;
@@ -3163,11 +3165,6 @@ void InspectorPanel::PersistComponentOrderFromSections()
         if (orderedId == casId)
         {
             if (auto* c = m_World->GetComponentForWrite<Components::ContrastAdaptiveSharpenEffect>(m_Entity))
-                c->StackOrder = nextOrder++;
-        }
-        else if (orderedId == cubeLutId)
-        {
-            if (auto* c = m_World->GetComponentForWrite<Components::CubeLutEffect>(m_Entity))
                 c->StackOrder = nextOrder++;
         }
         else if (orderedId == vignetteId)
@@ -3538,13 +3535,20 @@ void InspectorPanel::ShowSelectedAssets(const std::vector<std::filesystem::path>
         // it lands. Waiting here would hold the main thread for the asset's cook or import.
         m_PendingAssetLoad = std::make_unique<AssetFuture>(assetManager.LoadAssetAsync(guid, AssetLoadPriority::High));
         m_PendingAssetPath = selectedPath;
+        m_PendingAssetGuid = guid;
+        AssetMetadata pendingMeta{};
+        m_PendingAssetType = assetManager.GetRegistry().TryGetAssetMetadata(guid, pendingMeta) ? pendingMeta.Type
+                                                                                              : AssetType::Unknown;
         m_SelectedAsset = nullptr;
         BuildSimpleTopHeader(selectedPath.stem().string(), ClassifyAssetHeaderKind(selectedPath));
         ApplyAssetIconToHeader(m_HeaderIconHost, selectedPath);
+        ShowPendingAssetHeaderTitle(selectedPath.stem().string());
         auto label = std::make_unique<Label>();
         label->AddClass("inspector-text");
+        label->SetId(kPendingAssetLoadLabelId);
         label->SetText("Loading " + selectedPath.filename().string() + "...");
         AddInspectorPaddedContent(m_ContentRoot, std::move(label));
+        RefreshPendingAssetLoadState();
         return;
     }
     m_SelectedAsset = asset;
@@ -3561,11 +3565,10 @@ void InspectorPanel::ShowSelectedAssets(const std::vector<std::filesystem::path>
         return;
     }
 
-    // The selected path, not Asset::GetName(): an asset's own path is the registry's key, which
-    // NormalizePathForMap case-folds on Windows and macOS (AssetRegistry.cpp:69-78), so its stem
-    // spells "islandterrain" for a file named IslandTerrain. This path came from the asset
-    // browser's directory enumeration and carries the real on-disk spelling — the same string the
-    // browser row shows. The two branches above already header from it.
+    // The selected path: it came from the asset browser's directory enumeration and carries the
+    // on-disk spelling, the same string the browser row shows, and the two branches above already
+    // header from it. (Asset::GetPath() is the registry's case-folded key; Asset::GetName() keeps
+    // the spelling too.)
     BuildSimpleTopHeader(selectedPath.stem().string(), ClassifyAssetHeaderKind(selectedPath));
     ApplyAssetIconToHeader(m_HeaderIconHost, selectedPath);
 
@@ -5138,9 +5141,18 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
     // (ShowEntity runs on selection/refresh — no extra load-event hook needed here).
     if (!isMultiEdit)
     {
+#if GE_ENABLE_SCRIPTING
         const char* const kUnloadedTooltip =
             "No loaded code registers this component, so it does nothing. Its values are kept in "
             "the scene and applied when a module that registers it loads; remove it if none does.";
+#else
+        // A C# component can never register in a build without C# scripting, so "remove it"
+        // would delete authored data a scripting build still reads.
+        const char* const kUnloadedTooltip =
+            "No loaded code registers this component, so it does nothing. This build has no C# "
+            "scripting: a C# component's values are kept in the scene and apply when the project "
+            "opens in a build with scripting.";
+#endif
         if (const ECS::UnresolvedComponentStore* store = m_World->TryGetUnresolvedComponents())
         {
             const auto& table = store->Map();
@@ -6677,6 +6689,52 @@ void InspectorPanel::SyncEntityActivityPresentation()
         section->SetInactive(!active);
 }
 
+void InspectorPanel::ShowPendingAssetHeaderTitle(const std::string& name)
+{
+    // The editable name field cannot ellipsise its value (an input scrolls), and nothing can be
+    // renamed before the asset loads, so a pending asset's header shows its name as a label with
+    // the state suffix right after it.
+    UIElement* headerRow = m_HeaderTitleField ? m_HeaderTitleField->GetParent() : nullptr;
+    if (!headerRow)
+        return;
+    const auto& children = headerRow->GetChildren();
+    const auto field = std::find_if(children.begin(), children.end(), [this](const auto& child)
+                                    { return child.get() == m_HeaderTitleField; });
+    if (field == children.end())
+        return;
+    const size_t fieldIndex = static_cast<size_t>(field - children.begin());
+    Editor::PendingAssetHeaderLabels labels = Editor::MakePendingAssetHeaderLabels(name);
+    headerRow->InsertChild(fieldIndex + 1, std::move(labels.Name));
+    headerRow->InsertChild(fieldIndex + 2, std::move(labels.Suffix));
+    headerRow->RemoveChild(m_HeaderTitleField);
+    m_HeaderTitleField = nullptr;
+}
+
+void InspectorPanel::RefreshPendingAssetLoadState()
+{
+    // By id, so a rebuilt header or content root never leaves a dangling label.
+    auto* suffix = m_TopRoot ? dynamic_cast<Label*>(m_TopRoot->FindById(HashStringId(Editor::kPendingAssetSuffixLabelId)))
+                             : nullptr;
+    UIElement* line = m_ContentRoot ? m_ContentRoot->FindById(HashStringId(kPendingAssetLoadLabelId)) : nullptr;
+    const std::string text = InspectorRegistry::Get().AssetLoadingSuffix(m_PendingAssetType, m_PendingAssetGuid);
+    if (suffix)
+    {
+        suffix->SetText(text);
+        if (text.empty())
+            suffix->AddClass("hidden");
+        else
+            suffix->RemoveClass("hidden");
+    }
+    // While the header says what the load is doing, the line would only repeat the name above it.
+    if (line)
+    {
+        if (text.empty())
+            line->RemoveClass("hidden");
+        else
+            line->AddClass("hidden");
+    }
+}
+
 void InspectorPanel::PollPendingAssetLoad()
 {
     if (!m_PendingAssetLoad)
@@ -6688,7 +6746,17 @@ void InspectorPanel::PollPendingAssetLoad()
     }
     if (!m_PendingAssetLoad->Valid() ||
         m_PendingAssetLoad->wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    {
+        // The state follows the load while it runs (a texture's cook starts after its load was
+        // queued), a few times a second rather than every frame.
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_PendingAssetLineRefreshedAt >= kPendingAssetLineRefreshInterval)
+        {
+            m_PendingAssetLineRefreshedAt = now;
+            RefreshPendingAssetLoadState();
+        }
         return;
+    }
     // Held until the presentation below takes it from the asset manager.
     const SharedPtr<Asset> landed = m_PendingAssetLoad->get();
     m_PendingAssetLoad.reset();

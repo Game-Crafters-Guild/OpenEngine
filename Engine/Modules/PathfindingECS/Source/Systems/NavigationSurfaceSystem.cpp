@@ -569,7 +569,8 @@ void NavigationSurfaceSystem::BakeGrid(ECS::World& world, ECS::EntityHandle enti
     settings.Depth = extent.Z;
 
     int32 waitX = 0, waitZ = 0;
-    std::unique_ptr<Pathfinding::GridMap> grid = BakeNavigationGrid(settings, terrain, geometry, waitX, waitZ);
+    std::unique_ptr<Pathfinding::GridMap> grid =
+        BakeNavigationGrid(settings, terrain, geometry, surface.StepHeight, surface.AgentHeight, waitX, waitZ);
     if (!grid)
     {
         surface.BakePhase = NavigationBakePhase::Waiting;

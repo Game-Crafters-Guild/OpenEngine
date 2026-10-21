@@ -30,21 +30,21 @@
     height: 12px;
     min-width: 12px;
     min-height: 12px;
-    background-image: url("editor:Icons/plus.png");
+    background-image: url("editor:Icons/plus.svg");
 }
 
 .inspector-action-restart {
-    background-image: url("editor:Icons/ResetReload.png");
+    background-image: url("editor:Icons/ResetReload.svg");
 }
 
 .inspector-action-play {
-    background-image: url("editor:Icons/play.png");
+    background-image: url("editor:Icons/play.svg");
 }
 
 .inspector-action-pause {
-    background-image: url("editor:Icons/pause.png");
+    background-image: url("editor:Icons/pause.svg");
 }
 
 .inspector-action-step {
-    background-image: url("editor:Icons/fastforward.png");
+    background-image: url("editor:Icons/fastforward.svg");
 }

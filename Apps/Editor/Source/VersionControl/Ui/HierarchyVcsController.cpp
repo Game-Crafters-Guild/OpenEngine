@@ -186,6 +186,16 @@ std::vector<std::pair<std::string_view, std::string_view>> PropertyViews(
 {
     return {component.Properties.begin(), component.Properties.end()};
 }
+
+// A baseline line naming a field the component does not have is left out of the revert, as a scene
+// load leaves it out, and the rest of the entity reverts. Logs each one and empties the list.
+void LogSkippedBaselineFields(const std::string& component, std::vector<std::string>& unknownFields)
+{
+    for (const std::string& field : unknownFields)
+        Logger::Log::Warning("Hierarchy scene diff: the revert skips a line of the committed version: {}",
+                             Scene::UnknownFieldMessage(component, field));
+    unknownFields.clear();
+}
 } // namespace
 
 HierarchyVcsController::HierarchyVcsController(HierarchyPanel& panel)
@@ -672,8 +682,10 @@ void HierarchyVcsController::RevertEntityToBaseline(
                     property.OriginalValue);
         }
 
+        std::vector<std::string> unknownFields;
         Scene::SceneLoadContext loadContext{};
         loadContext.TargetWorld = &world;
+        loadContext.UnknownFields = &unknownFields;
         for (const ComponentBaseline& component : components)
         {
             const Scene::ISceneComponentSchema* schema =
@@ -705,6 +717,7 @@ void HierarchyVcsController::RevertEntityToBaseline(
                 applied = false;
                 break;
             }
+            LogSkippedBaselineFields(component.Name, unknownFields);
         }
     }
 
@@ -832,8 +845,10 @@ void HierarchyVcsController::RestoreGhostEntity(TreeId id)
                 property.OriginalValue);
         }
 
+        std::vector<std::string> unknownFields;
         Scene::SceneLoadContext loadContext{};
         loadContext.TargetWorld = &world;
+        loadContext.UnknownFields = &unknownFields;
         for (const ComponentBaseline& component : components)
         {
             const Scene::ISceneComponentSchema* schema =
@@ -854,6 +869,7 @@ void HierarchyVcsController::RestoreGhostEntity(TreeId id)
                 applied = false;
                 break;
             }
+            LogSkippedBaselineFields(component.Name, unknownFields);
         }
     }
 

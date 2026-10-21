@@ -1,4 +1,5 @@
 #include "MiniaudioBackend.h"
+#include "Audio/AudioDecoderConfig.h"
 
 #include "Audio/SpatializerHandedness.h"
 #include "Logger/Logger.h"
@@ -116,6 +117,9 @@ bool AudioSystem::MiniaudioBackend::Initialize(const AudioSystemConfig& config)
         rmCfg.decodedSampleRate = static_cast<ma_uint32>(config.mixSampleRate);
         rmCfg.jobThreadCount = 0;
         rmCfg.flags = MA_RESOURCE_MANAGER_FLAG_NO_THREADING;
+        const ma_decoder_config decoderCfg = MakeDecoderConfig();
+        rmCfg.ppCustomDecodingBackendVTables = decoderCfg.ppCustomBackendVTables;
+        rmCfg.customDecodingBackendCount = decoderCfg.customBackendCount;
         const ma_result rmResult = ma_resource_manager_init(&rmCfg, &m_ResourceManager);
         if (rmResult != MA_SUCCESS)
         {
@@ -126,7 +130,15 @@ bool AudioSystem::MiniaudioBackend::Initialize(const AudioSystemConfig& config)
     }
 
     // Try custom device first so we can read PCM in the callback for real-time master VU metering.
-    ma_result ctxResult = ma_context_init(nullptr, 0, nullptr, &m_Context);
+    // Silent output runs the same device path on miniaudio's null backend, whose thread calls the
+    // data callback on the period clock a real device would, so voices, metering and output capture
+    // behave as with a device while nothing reaches the operating system.
+    const bool silent = config.output == AudioOutput::Silent;
+    const ma_backend nullBackend = ma_backend_null;
+    ma_result ctxResult = silent ? ma_context_init(&nullBackend, 1, nullptr, &m_Context)
+                                 : ma_context_init(nullptr, 0, nullptr, &m_Context);
+    if (silent)
+        Logger::Log::Info("Audio: output Silent; mixing on the null backend, no audio device is opened");
     if (ctxResult == MA_SUCCESS)
     {
         ma_device_config deviceCfg = ma_device_config_init(ma_device_type_playback);
@@ -184,7 +196,8 @@ bool AudioSystem::MiniaudioBackend::Initialize(const AudioSystemConfig& config)
     }
 
     // Fallback: engine-owned device (no real-time metering; VU will peak on sound start and decay).
-    if (!m_EngineInitialized)
+    // Never under Silent output: the engine-owned device is the system's default playback device.
+    if (!m_EngineInitialized && !silent)
     {
         auto tryEngineInit = [&](const ma_engine_config& engineCfg, const char* attemptName) -> ma_result
         {
@@ -467,8 +480,23 @@ void AudioSystem::MiniaudioBackend::OnDeviceDataCallback(ma_device* pDevice, voi
     const ma_uint32 channels = pDevice->playback.channels;
     if (channels == 0)
         return;
-    const float* samples = static_cast<const float*>(pOutput);
+    float* samples = static_cast<float*>(pOutput);
     const ma_uint32 totalSamples = frameCount * channels;
+
+    // The capture tap reads the full mix: recordings keep their sound while the
+    // speakers are muted. The mute is applied after it, on the device write only.
+    OutputCaptureCallback capture;
+    {
+        std::lock_guard<std::mutex> lock(m_OutputCaptureMutex);
+        capture = m_OutputCaptureCallback;
+    }
+    if (capture)
+        capture(samples, static_cast<std::uint32_t>(frameCount), static_cast<std::uint32_t>(channels), static_cast<std::uint32_t>(pDevice->sampleRate));
+
+    if (m_OutputMuted.load(std::memory_order_relaxed))
+        std::memset(samples, 0, static_cast<std::size_t>(totalSamples) * sizeof(float));
+
+    // The master meter reads what reaches the speakers.
     float peak = 0.0f;
     for (ma_uint32 i = 0; i < totalSamples; ++i)
     {
@@ -477,14 +505,6 @@ void AudioSystem::MiniaudioBackend::OnDeviceDataCallback(ma_device* pDevice, voi
             peak = a;
     }
     m_MasterMeterPeak.store(peak, std::memory_order_relaxed);
-
-    OutputCaptureCallback capture;
-    {
-        std::lock_guard<std::mutex> lock(m_OutputCaptureMutex);
-        capture = m_OutputCaptureCallback;
-    }
-    if (capture)
-        capture(samples, static_cast<std::uint32_t>(frameCount), static_cast<std::uint32_t>(channels), static_cast<std::uint32_t>(pDevice->sampleRate));
 }
 
 void AudioSystem::MiniaudioBackend::SetOutputCaptureCallback(OutputCaptureCallback callback)
@@ -586,6 +606,15 @@ float AudioSystem::MiniaudioBackend::GetBusVolume(AudioBusId bus) const
     if (group == nullptr)
         return 1.0f;
     return ma_sound_group_get_volume(group);
+}
+
+void AudioSystem::MiniaudioBackend::SetOutputMuted(bool muted)
+{
+    m_OutputMuted.store(muted, std::memory_order_relaxed);
+    // An engine-owned device has no data callback of ours, and so no capture tap to
+    // preserve: mute it through the engine's endpoint gain instead.
+    if (m_EngineInitialized && !m_DeviceOwned)
+        ma_engine_set_volume(&m_Engine, muted ? 0.0f : 1.0f);
 }
 
 float AudioSystem::MiniaudioBackend::GetBusMeterLevel(AudioBusId bus) const

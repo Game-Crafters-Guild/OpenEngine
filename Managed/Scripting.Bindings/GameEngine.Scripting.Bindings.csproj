@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The generated C# bindings of the engine's script API (Generated/<Module>.g.cs, written by
+       Tools/ComponentScanner through the UpdateEngineApi target and committed) and the few types
+       they share. Runtime marshalling is off for the whole assembly (AssemblyAttributes.cs): every
+       call passes blittable values and pointers, a record crosses as its bytes, and a bool field is
+       one byte on both sides. Keep hand-written DllImports out of this assembly. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>GameEngine.Scripting.Bindings</AssemblyName>
+    <RootNamespace>GameEngine.Scripting</RootNamespace>
+    <!-- The XML documentation is what a game developer reads in the editor's completion. The
+         generated records' fields carry no documentation of their own. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BindingTableTests drives BindingTable.Acquire with a table of its own. -->
+    <InternalsVisibleTo Include="InteropTests" />
+    <!-- PhysicsBindingTests counts the subscription registry's listeners. -->
+    <InternalsVisibleTo Include="BindingTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Common\NativeEngineLibrary.cs" Link="NativeEngineLibrary.cs" />
+    <Compile Include="..\Common\StringIds.cs" Link="StringIds.cs" />
+  </ItemGroup>
+</Project>

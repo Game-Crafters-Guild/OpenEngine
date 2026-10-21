@@ -77,17 +77,17 @@ void CameraSystem::Update(ECS::World& world, float32 /*deltaTime*/) {
         // View targets (color/depth/resolve) are intentionally left for the
         // application/render-setup layer to configure via SetViewTargets or
         // SetViewTargetsFromRefs, since they depend on RenderGraph surfaces.
-        m_ViewId = rs->Views().AllocateView("Game View", m_CameraId);
-        // IMPORTANT: a view with no targets should not participate in pipeline validation
-        // or scheduling. Leave it disabled until a render-setup layer binds targets.
-        rs->Views().SetViewRenderLayerMask(m_ViewId, 0u);
+        // OnDemand and never armed: a view with no targets sleeps, so no extraction, culling or
+        // pass reads it.
+        m_ViewId = rs->Views().AllocateView("Game View", m_CameraId, Rendering::ViewPurpose::Game,
+                                            Rendering::ViewParticipation::OnDemand);
         rs->Views().SetViewWorldId(m_ViewId, world.GetWorldId());
     } else {
         rs->Views().SetViewCamera(m_ViewId, m_CameraId);
     }
 
     ApplyActiveCameraAspect(*rs, m_ViewId, m_CameraId, activeCamera, viewportW, viewportH);
-    rs->Views().SetCameraPostProcessMask(m_CameraId, cameraComp.PostProcessMask);
+    rs->Views().SetCameraVolumeLayers(m_CameraId, cameraComp.VolumeLayers);
 }
 
 } } // namespace GameEngine::Engine::Renderer

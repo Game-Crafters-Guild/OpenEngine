@@ -3,6 +3,7 @@
 #include "Animation/AnimationClip.h"
 #include "Animation/AnimationEvent.h"
 #include "Assets/ModelExtras.h"
+#include "Serialization/JsonRead.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,14 +23,13 @@ namespace
 {
 
 using json = nlohmann::json;
+using Serialization::Quoted;
 
 // The one version of the clip schema this reader reads.
 constexpr double kClipSchemaVersion = 1.0;
 // The deepest an extras block holding a schema may nest its objects and arrays; the block itself is level 1.
 constexpr int kSchemaDepthLimit = 16;
 constexpr size_t kBytesPerKibibyte = 1024u;
-// The most bytes of file text a refusal quotes; longer text is cut there and its length given.
-constexpr size_t kQuotedTextLimit = 64u;
 // How far past the clip's end an event still counts as on its last frame, in float epsilons of the end frame. The
 // clip's length and rate come from 32-bit float key times, so the end frame, length x rate, carries a relative
 // rounding error of up to about one float epsilon (at most 0.93 of one for clips keyed on every frame at 24 to
@@ -42,21 +42,6 @@ constexpr double kLastFrameToleranceLimit = 0.5;
 // C string boundary, and a line break would split the log line that names it.
 constexpr unsigned char kFirstPrintableCharacter = 0x20u;
 constexpr unsigned char kDeleteCharacter = 0x7Fu;
-
-// `text` as a JSON string literal: quoted and escaped, on one line.
-std::string JsonStringLiteral(std::string_view text)
-{
-    return json(std::string(text)).dump(-1, ' ', false, json::error_handler_t::replace);
-}
-
-// File text as a refusal quotes it: a JSON string literal of at most kQuotedTextLimit bytes of it, followed by
-// its length when it is longer.
-std::string Quoted(std::string_view text)
-{
-    if (text.size() <= kQuotedTextLimit)
-        return JsonStringLiteral(text);
-    return std::format("{}... ({} bytes)", JsonStringLiteral(text.substr(0, kQuotedTextLimit)), text.size());
-}
 
 // A pass over extras text that checks what only a parse sees: objects and arrays nested past the depth limit, and a
 // key an object already holds (a parsed document keeps only the last). It stops at the first of either. The text is

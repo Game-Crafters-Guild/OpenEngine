@@ -2,8 +2,8 @@
 #include "HexGridHelpers.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -26,6 +26,40 @@ struct NodeCompare
 {
     bool operator()(const AStarNode& a, const AStarNode& b) const { return a.FCost > b.FCost; }
 };
+
+namespace
+{
+
+template <class T>
+uint64 CapacityBytes(const std::vector<T>& buffer)
+{
+    return static_cast<uint64>(buffer.capacity()) * sizeof(T);
+}
+
+template <class T>
+void FreeBuffer(std::vector<T>& buffer)
+{
+    std::vector<T>().swap(buffer);
+}
+
+} // namespace
+
+uint64 AStarSolver::HeldBytes() const
+{
+    return CapacityBytes(m_GScore) + CapacityBytes(m_Parent) + CapacityBytes(m_Closed) + CapacityBytes(m_VisitStamp);
+}
+
+void AStarSolver::ReleaseScratchAbove(uint32 maxCells)
+{
+    if (m_GScore.capacity() <= maxCells)
+        return;
+    // A solve resizes the buffers before it stamps a cell, and a resize stamps the cells it adds 0,
+    // which is never the current generation: emptied buffers need no other reset.
+    FreeBuffer(m_GScore);
+    FreeBuffer(m_Parent);
+    FreeBuffer(m_Closed);
+    FreeBuffer(m_VisitStamp);
+}
 
 bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32 endIndex,
                          uint32 excludeAgentId, float32 currentTime,
@@ -56,17 +90,25 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
     // on a 1024 x 1024 grid in Release (a detour around a wall across it, about 55 ms).
     const uint32 maxExpansions = cellCount;
 
+    // Growth reserves exactly cellCount, so capacity is the largest grid solved on: ReleaseScratchAbove
+    // compares it with a grid's cell count, and geometric growth would leave more than any grid needs.
+    if (cellCount > m_GScore.capacity())
+    {
+        m_GScore.reserve(cellCount);
+        m_Parent.reserve(cellCount);
+        m_Closed.reserve(cellCount);
+        m_VisitStamp.reserve(cellCount);
+    }
     m_GScore.resize(cellCount);
     m_Parent.resize(cellCount);
     m_Closed.resize(cellCount);
-
-    std::fill_n(m_GScore.data(), cellCount, kInfinity);
-    std::fill_n(m_Parent.data(), cellCount, UINT32_MAX);
-    std::memset(m_Closed.data(), 0, cellCount);
+    m_VisitStamp.resize(cellCount);
+    BeginGeneration();
 
     std::vector<AStarNode> openList;
     openList.reserve(256);
 
+    Visit(startIndex);
     m_GScore[startIndex] = 0.0f;
     openList.push_back({startIndex, Heuristic(grid, startIndex, endIndex)});
 
@@ -83,6 +125,8 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
             while (idx != UINT32_MAX)
             {
                 outPathCellIndices.push_back(idx);
+                assert(outPathCellIndices.size() <= cellCount &&
+                       "AStarSolver: the parent chain loops; a cell on it was not visited in this generation");
                 idx = m_Parent[idx];
             }
             std::reverse(outPathCellIndices.begin(), outPathCellIndices.end());
@@ -106,7 +150,7 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
         for (uint32 i = 0; i < neighborCount; ++i)
         {
             const uint32 neighbor = neighbors[i];
-            if (m_Closed[neighbor])
+            if (IsClosed(neighbor))
                 continue;
 
             uint32 nx = 0, nz = 0;
@@ -170,8 +214,9 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
             }
 
             const float32 tentativeG = m_GScore[current.CellIndex] + moveCost;
-            if (tentativeG < m_GScore[neighbor])
+            if (tentativeG < GScore(neighbor))
             {
+                Visit(neighbor);
                 m_GScore[neighbor] = tentativeG;
                 m_Parent[neighbor] = current.CellIndex;
                 const float32 fCost = tentativeG + Heuristic(grid, neighbor, endIndex);
@@ -182,6 +227,37 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
     }
 
     return false;
+}
+
+void AStarSolver::BeginGeneration()
+{
+    ++m_Generation;
+    if (m_Generation == 0)
+    {
+        // The stamps wrapped: a stamp left from 65,535 solves ago would read as current.
+        std::fill(m_VisitStamp.begin(), m_VisitStamp.end(), uint16{0});
+        m_Generation = 1;
+    }
+}
+
+void AStarSolver::Visit(uint32 cellIndex)
+{
+    if (m_VisitStamp[cellIndex] == m_Generation)
+        return;
+    m_VisitStamp[cellIndex] = m_Generation;
+    m_GScore[cellIndex] = kInfinity;
+    m_Parent[cellIndex] = UINT32_MAX;
+    m_Closed[cellIndex] = 0;
+}
+
+bool AStarSolver::IsClosed(uint32 cellIndex) const
+{
+    return m_VisitStamp[cellIndex] == m_Generation && m_Closed[cellIndex] != 0;
+}
+
+float32 AStarSolver::GScore(uint32 cellIndex) const
+{
+    return m_VisitStamp[cellIndex] == m_Generation ? m_GScore[cellIndex] : kInfinity;
 }
 
 void AStarSolver::GetNeighbors(const GridMap::ReadView& grid, uint32 cellIndex,

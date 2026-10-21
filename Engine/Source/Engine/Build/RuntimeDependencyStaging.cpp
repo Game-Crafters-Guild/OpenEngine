@@ -18,9 +18,16 @@ namespace GameEngine {
 
 namespace {
 
-constexpr RuntimeDependency kEngineRuntimeSet[] = {
+constexpr RuntimeDependency kEngineRuntimeLibraries[] = {
     {"Engine", "Engine", true},
+#if GE_ENABLE_SCRIPTING
+    // The C ABI shim C# scripts call into: a build without C# scripting has none.
     {"GameEngine.Native (C ABI shim)", "GameEngine.Native", true},
+#endif
+};
+
+// What the engine libraries import, and the platform loader set.
+constexpr RuntimeDependency kEngineLibraryDependencies[] = {
     // The loader is a driver/runtime-installed system component (System32);
     // modern LunarG SDKs ship no redistributable vulkan-1.dll, so no build
     // stages one beside the Editor — it only ever appeared there hand-copied.
@@ -43,6 +50,13 @@ constexpr RuntimeDependency kEngineRuntimeSet[] = {
     // source-dir order picks the flavor. The vcpkg dependency is platform-gated
     // (windows | linux | osx), so not every engine imports it — ship when present.
     {"DirectXTex", "DirectXTex", false},
+    // Ogg Vorbis decode (miniaudio's libvorbis backend): Engine.dll imports vorbisfile,
+    // which imports vorbis and ogg. Same file names in both vcpkg flavors. The static triplets
+    // (macOS, the web) link them in and have no library file; the shared ones (Windows, Linux,
+    // Steam Deck) carry it beside the engine, so ship when present.
+    {"libvorbisfile", "vorbisfile", false},
+    {"libvorbis", "vorbis", false},
+    {"libogg", "ogg", false},
     {"zstd", "zstd", true},
     {"zlib", "zd;z;zlib1", true},
     {"SQLite", "sqlite3", true},
@@ -75,15 +89,12 @@ constexpr RuntimeDependency kManagedHostingSet[] = {
 
 constexpr const char* kManagedSidecarExtensions[] = {".deps.json", ".runtimeconfig.json", ".xml"};
 
-// Engine ABI surfaces a game's scripts compile against: every GameEngine.*.ABI.dll beside the
-// engine except the editor's own (GameEngine.Editor.*), which never ships in a game.
+// The script surface a game's scripts compile against (ScriptingPaths::IsScriptSurfaceAssembly)
+// except the editor's own (GameEngine.Editor.*), which never ships in a game.
 bool IsRuntimeAbiAssembly(std::string_view fileName)
 {
-    constexpr std::string_view kEnginePrefix = "GameEngine.";
     constexpr std::string_view kEditorPrefix = "GameEngine.Editor.";
-    constexpr std::string_view kAbiSuffix = ".ABI.dll";
-    return fileName.size() > kEnginePrefix.size() + kAbiSuffix.size() && fileName.starts_with(kEnginePrefix) &&
-           fileName.ends_with(kAbiSuffix) && !fileName.starts_with(kEditorPrefix);
+    return ScriptingPaths::IsScriptSurfaceAssembly(fileName) && !fileName.starts_with(kEditorPrefix);
 }
 
 // Appends the assembly file names a deps.json declares under targets/<framework>/<library>/runtime:
@@ -130,11 +141,24 @@ std::string NormalizedDependencyStem(std::string stem)
     return stem;
 }
 
+std::vector<RuntimeDependency> JoinEngineRuntimeDependencySet()
+{
+    std::vector<RuntimeDependency> set(std::begin(kEngineRuntimeLibraries), std::end(kEngineRuntimeLibraries));
+    set.insert(set.end(), std::begin(kEngineLibraryDependencies), std::end(kEngineLibraryDependencies));
+    return set;
+}
+
 } // namespace
+
+std::span<const RuntimeDependency> EngineRuntimeLibrarySet()
+{
+    return kEngineRuntimeLibraries;
+}
 
 std::span<const RuntimeDependency> EngineRuntimeDependencySet()
 {
-    return kEngineRuntimeSet;
+    static const std::vector<RuntimeDependency> set = JoinEngineRuntimeDependencySet();
+    return set;
 }
 
 std::span<const RuntimeDependency> ManagedHostingDependencySet()

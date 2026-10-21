@@ -16,7 +16,7 @@
 }
 
 .particle-choice-curve {
-    background-image: url("editor:Icons/linear_curve.png");
+    background-image: url("editor:Icons/linear_curve.svg");
     background-tint: var(--particle_tint_property);
 }
 
@@ -25,27 +25,27 @@
 }
 
 .particle-choice-move {
-    background-image: url("editor:Icons/GiszmoTranslate.png");
+    background-image: url("editor:Icons/GiszmoTranslate.svg");
     background-tint: var(--particle_tint_motion);
 }
 
 .particle-choice-size {
-    background-image: url("editor:Icons/Ruler.png");
+    background-image: url("editor:Icons/Ruler.svg");
     background-tint: var(--particle_tint_motion);
 }
 
 .particle-choice-animation {
-    background-image: url("editor:Icons/film.png");
+    background-image: url("editor:Icons/film.svg");
     background-tint: var(--particle_tint_motion);
 }
 
 .particle-choice-emission {
-    background-image: url("editor:Icons/sparkles.png");
+    background-image: url("editor:Icons/sparkles.svg");
     background-tint: var(--particle_tint_motion);
 }
 
 .particle-choice-drag {
-    background-image: url("editor:Icons/magnet.png");
+    background-image: url("editor:Icons/magnet.svg");
     background-tint: var(--particle_tint_motion);
 }
 
@@ -55,37 +55,37 @@
 }
 
 .particle-choice-collision {
-    background-image: url("editor:Icons/PhysicsSettings.png");
+    background-image: url("editor:Icons/PhysicsSettings.svg");
     background-tint: var(--particle_tint_collision);
 }
 
 .particle-choice-loop {
-    background-image: url("editor:Icons/looptime.png");
+    background-image: url("editor:Icons/looptime.svg");
     background-tint: var(--particle_tint_event);
 }
 
 .particle-choice-time {
-    background-image: url("editor:Icons/alarm.png");
+    background-image: url("editor:Icons/alarm.svg");
     background-tint: var(--particle_tint_event);
 }
 
 .particle-choice-custom {
-    background-image: url("editor:Icons/node.png");
+    background-image: url("editor:Icons/node.svg");
     background-tint: var(--particle_tint_shape);
 }
 
 .particle-choice-shape {
-    background-image: url("editor:Icons/Capsule.png");
+    background-image: url("editor:Icons/Capsule.svg");
     background-tint: var(--particle_tint_shape);
 }
 
 .particle-choice-light {
-    background-image: url("editor:Icons/PointLight.png");
+    background-image: url("editor:Icons/PointLight.svg");
     background-tint: var(--particle_tint_light);
 }
 
 .particle-phase-icon {
-    background-image: url("editor:Icons/looptime.png");
+    background-image: url("editor:Icons/looptime.svg");
     background-tint: var(--particle_tint_phase);
 }
 

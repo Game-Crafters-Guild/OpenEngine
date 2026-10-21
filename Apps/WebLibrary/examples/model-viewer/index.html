@@ -37,7 +37,7 @@
 <div class="sliders">
 <label>Time of day <output name="clock"></output><input type="range" name="time" min="6" max="18" step="0.05" title="6:00 to 18:00: the lit hours" disabled></label>
 <label>Exposure <output name="ev"></output><input type="range" name="exposure" min="-2" max="4" step="0.5" list="exposure-ticks" title="Exposure compensation in stops: each stop doubles the brightness (+) or halves it (&#8722;)" disabled></label>
-<!-- Ticks at 0 and at the page's default (panel.js adds it), so either can be found again. -->
+<!-- A tick at 0, the page's default, so it can be found again. -->
 <datalist id="exposure-ticks"><option value="0"></option></datalist>
 </div>
 <!-- The two switches share a row, so the open panel fits a 1264x625 page without scrolling. -->

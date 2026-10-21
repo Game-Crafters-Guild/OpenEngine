@@ -73,7 +73,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "get_render_stats",
     category: "profiling",
-    description: "Get rendering performance statistics. renderServices.renderThreadCpu.ecsSystems[].maxMs is each ECS system's slowest update since tracking began; pass resetSystemMaxima:true to clear it after this read, so the next read reports the worst single frame in between (read, act, read).",
+    description: "Get rendering performance statistics. renderServices.ibl.bakeCount counts the image-based-lighting bakes (sky and reflection probes) since the renderer started, with framesSinceBake (absent before the first bake): a capture is settled once bakeCount stops rising. renderServices.renderThreadCpu.ecsSystems[].maxMs is each ECS system's slowest update since tracking began; pass resetSystemMaxima:true to clear it after this read, so the next read reports the worst single frame in between (read, act, read).",
     schema: {
       resetSystemMaxima: z.coerce.boolean().optional().describe("Clear every ECS system's maxMs after this read (default false)"),
     },
@@ -207,7 +207,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "get_memory_stats",
     category: "profiling",
-    description: "Read the Memory module's stats registry right now: frame (the editor's frame count), entries[] newest first as {name, kind, residency, bytes} where kind is TrackedBytes (bytes its owner reported), Arena, Scratch or ObjectPool (bytes in use plus reservedBytes, highWaterBytes, blocks; an ObjectPool counts slot bytes as of its last block acquisition); a Scratch entry is one thread's ScratchScope arena and adds threadId (OS id), threadName, outOfOrder (allocations through a scope that was not the innermost, served from the heap) and shrinks (retained blocks released by the hysteresis). scratch sums the Scratch entries {threads, bytes, reservedBytes, outOfOrder, shrinks}; a thread writes its scratch counts when it acquires a block and at every 64th outermost close, so bytes lags: compare reservedBytes and highWaterBytes across reads. processResidentBytes is the process's resident size now, where the platform reports it.",
+    description: "Read the Memory module's stats registry right now: frame (the editor's frame count), entries[] newest first as {name, kind, residency, bytes} where kind is TrackedBytes (bytes its owner reported), Arena, Scratch, ObjectPool or RangeAllocator (bytes in use plus reservedBytes, highWaterBytes, blocks; an ObjectPool counts slot bytes as of its last block acquisition; a RangeAllocator counts its live ranges' bytes, reservedBytes is the end of its highest range ever handed out and blocks its outstanding ranges); a Scratch entry is one thread's ScratchScope arena and adds threadId (OS id), threadName, outOfOrder (allocations through a scope that was not the innermost, served from the heap) and shrinks (retained blocks released by the hysteresis). scratch sums the Scratch entries {threads, bytes, reservedBytes, outOfOrder, shrinks}; a thread writes its scratch counts when it acquires a block and at every 64th outermost close, so bytes lags: compare reservedBytes and highWaterBytes across reads. processResidentBytes is the process's resident size now, where the platform reports it.",
     schema: {},
   }),
 
@@ -236,7 +236,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "get_navigation_stats",
     category: "profiling",
-    description: "Read NavigationPathfindingSystem's path solve budget. Every navigation request (an agent with HasDestination and PathDirty or ReplanRequested, whatever set them: orders, the replan timer, the Failed retry, the movement system's corridor checks) joins one queue; each frame solves the oldest maxPathSolvesPerFrame and leaves the rest waiting: a PathDirty request as Pending, a replan timer refresh still walking its current path. frames: Updates run. frame (the newest Update): newRequests (requests that joined the queue), solved, backlog (requests left queued), oldestWaitFrames and oldestWaitSeconds (the oldest request still queued, 0 when none is), longestSolvedWaitFrames and longestSolvedWaitSeconds (the longest wait among the requests solved; a request solved in the frame it joined waited 0). totals: newRequests and solved since the system was created; read twice and subtract for a rate. Refused when no ECS system manager runs or the navigation systems are not scheduled.",
+    description: "Read NavigationPathfindingSystem's path solve budget. Every navigation request (an agent with HasDestination and PathDirty or ReplanRequested, whatever set them: orders, the replan timer, the Failed retry, the movement system's corridor checks) joins one queue; each frame solves the oldest maxPathSolvesPerFrame and leaves the rest waiting: a PathDirty request as Pending, a replan timer refresh still walking its current path. frames: Updates run. frame (the newest Update): newRequests (requests that joined the queue), solved, backlog (requests left queued), oldestWaitFrames and oldestWaitSeconds (the oldest request still queued, 0 when none is), longestSolvedWaitFrames and longestSolvedWaitSeconds (the longest wait among the requests solved; a request solved in the frame it joined waited 0). totals: newRequests and solved since the system was created; read twice and subtract for a rate. solverScratch (the navigation world's grid A* solvers, one per grid path solve it has run at once; 11 bytes per cell, grown to the largest grid the solver solved on and freed entirely, whenever a grid map is removed or replaced, if it holds more than the largest grid map left needs; the next solve regrows it): solvers, solversHoldingScratch, heldBytes (what they hold as of each one's last solve or release), solverHighWaterBytes (the most any one of them has held). Refused when no ECS system manager runs or the navigation systems are not scheduled.",
     schema: {},
   }),
 
@@ -248,6 +248,16 @@ export const tools: ToolDef[] = [
     schema: {
       from: worldPoint().describe("Start as a world point [x, y, z]"),
       to: worldPoint().describe("End as a world point [x, y, z]"),
+      entityId: z.coerce.number().optional().describe("The NavigationSurface entity; optional when the scene has one"),
+    },
+  }),
+
+  proxyTool({
+    name: "get_navigation_sources",
+    category: "scene",
+    description:
+      "List what a bake of a NavigationSurface reads besides the terrain, gathered on the editor's main thread between frames: every collider and mesh inside the surface's bounds, one entry per entity and kind. Returns surfaceEntityId, count and sources, each with entityId, name (when the entity has one), kind (Collider: a box, sphere, capsule or plane collider on a Static body; Mesh: a mesh renderer's model submesh or primitive) and, for a mesh, policy (the NavigationSource policy that admitted it: Auto, or Include for a mesh Auto would leave out); colliders carry no policy. A mesh under NavigationSource Exclude, on itself or inherited from an ancestor, is not listed. Refused with the reason when the scene has no surface, or has several and entityId is missing.",
+    schema: {
       entityId: z.coerce.number().optional().describe("The NavigationSurface entity; optional when the scene has one"),
     },
   }),

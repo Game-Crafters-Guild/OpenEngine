@@ -69,6 +69,12 @@
 	display: none;
 }
 
+/* The Scene View's layer filter: wide enough for "All but <name>" before it cuts. */
+.sceneview-layers-field {
+	min-width: 120px;
+	max-width: 200px;
+}
+
 /* Draggable spacer used to insert a one-button-wide gap between toolbar
    sections. A faint reorder handle distinguishes it from a disabled button. */
 .button.toolbar-spacer-btn {
@@ -77,7 +83,7 @@
 	min-width: 24px;
 	min-height: 24px;
 	padding: 0;
-	background-image: url("editor:Icons/reorder-two.png");
+	background-image: url("editor:Icons/reorder-two.svg");
 	background-size: 12px 12px;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -298,7 +304,7 @@
 .scene-tool-divider {
 	height: 1px;
 	align-self: stretch;
-	background-color: rgba(255, 255, 255, 0.31);
+	background-color: rgba(255, 255, 255, 0.25);
 	margin-top: 2px;
 	margin-bottom: 2px;
 }
@@ -365,11 +371,11 @@ button.scene-tool-btn.icon-active:active,
 
 /* Tool icons; each class is self-contained so a button keeps its image
    wherever it is dragged to. */
-.select-tool-icon    { background-image: url("editor:Icons/arrowmouse.png"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
-.translate-tool-icon { background-image: url("editor:Icons/GiszmoTranslate.png"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
-.rotate-tool-icon    { background-image: url("editor:Icons/GizmoRotate.png"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
-.scale-tool-icon     { background-image: url("editor:Icons/Giszmo_scale.png"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
-.ruler-tool-icon     { background-image: url("editor:Icons/Ruler.png"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
+.select-tool-icon    { background-image: url("editor:Icons/arrowmouse.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
+.translate-tool-icon { background-image: url("editor:Icons/GiszmoTranslate.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
+.rotate-tool-icon    { background-image: url("editor:Icons/GizmoRotate.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
+.scale-tool-icon     { background-image: url("editor:Icons/Giszmo_scale.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
+.ruler-tool-icon     { background-image: url("editor:Icons/Ruler.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
 /* The spline tool's registered button (SceneView/SplineToolStripEntry.cpp) keeps its own
    active color. Every Button carries .button, so the shared active rule's .button variant
    (0,3,0) is the one to outrank. */
@@ -434,14 +440,14 @@ button.scene-tool-btn.ruler-tool-icon.icon-active:hover,
 }
 
 /* Space toggle: global (default) / local (when icon-active) */
-.tool-space-icon { background-image: url("editor:Icons/global.png"); }
-.tool-space-icon.icon-active { background-image: url("editor:Icons/local.png"); }
+.tool-space-icon { background-image: url("editor:Icons/global.svg"); }
+.tool-space-icon.icon-active { background-image: url("editor:Icons/local.svg"); }
 
 /* 2D/3D view toggle button */
 .view2d-icon,
 button.view2d-icon,
 .button.view2d-icon {
-	background-image: url("editor:Icons/3d.png");
+	background-image: url("editor:Icons/3d.svg");
 	background-size: 20px 20px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -451,7 +457,7 @@ button.view2d-icon,
 .view2d-icon.icon-active,
 button.view2d-icon.icon-active,
 .button.view2d-icon.icon-active {
-	background-image: url("editor:Icons/2d.png");
+	background-image: url("editor:Icons/2d.svg");
 	opacity: 1.0;
 }
 
@@ -498,7 +504,7 @@ button.pixelperfect-toggle.icon-active:hover,
 .transform-space-icon,
 button.transform-space-icon,
 .button.transform-space-icon {
-	background-image: url("editor:Icons/global.png");
+	background-image: url("editor:Icons/global.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -508,7 +514,7 @@ button.transform-space-icon,
 .transform-space-icon.icon-active,
 button.transform-space-icon.icon-active,
 .button.transform-space-icon.icon-active {
-	background-image: url("editor:Icons/local.png");
+	background-image: url("editor:Icons/local.svg");
 	opacity: 1.0;
 }
 
@@ -526,7 +532,7 @@ button.transform-space-icon.icon-active:hover,
 .grid-icon,
 button.grid-icon,
 .button.grid-icon {
-	background-image: url("editor:Icons/grid-icon.png");
+	background-image: url("editor:Icons/grid-icon.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -553,7 +559,7 @@ button.grid-icon.icon-active:hover,
 .snap-icon,
 button.snap-icon,
 .button.snap-icon {
-	background-image: url("editor:Icons/magnet.png");
+	background-image: url("editor:Icons/magnet.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -578,7 +584,7 @@ button.snap-icon.icon-active:hover,
 
 /* Pick mode toggle button (exact pick vs model-root pick) */
 .pick-mode-icon {
-	background-image: url("editor:Icons/arrowmouse.png");
+	background-image: url("editor:Icons/arrowmouse.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -627,7 +633,7 @@ button.gizmo-icon.icon-active:hover,
 .camera-settings-icon,
 button.camera-settings-icon,
 .button.camera-settings-icon {
-	background-image: url("editor:Icons/videocam.png");
+	background-image: url("editor:Icons/videocam.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -645,7 +651,7 @@ button.camera-settings-icon:hover,
 .projection-icon,
 button.projection-icon,
 .button.projection-icon {
-	background-image: url("editor:Icons/camera.png");
+	background-image: url("editor:Icons/camera.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -665,7 +671,7 @@ button.projection-icon:hover,
 .quad-view-icon,
 button.quad-view-icon,
 .button.quad-view-icon {
-	background-image: url("editor:Icons/layout3split.png");
+	background-image: url("editor:Icons/layout3split.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -692,7 +698,7 @@ button.quad-view-icon.icon-active:hover,
 .post-process-icon,
 button.post-process-icon,
 .button.post-process-icon {
-	background-image: url("editor:Icons/post.png");
+	background-image: url("editor:Icons/post.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -719,7 +725,7 @@ button.post-process-icon.icon-active:hover,
 .nav-gizmo-icon,
 button.nav-gizmo-icon,
 .button.nav-gizmo-icon {
-	background-image: url("editor:Icons/navgizmo.png");
+	background-image: url("editor:Icons/navgizmo.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -746,7 +752,7 @@ button.nav-gizmo-icon.icon-active:hover,
 .tool-overlay-icon,
 button.tool-overlay-icon,
 .button.tool-overlay-icon {
-	background-image: url("editor:Icons/layout-left.png");
+	background-image: url("editor:Icons/layout-left.svg");
 	background-size: 16px 16px;
 	background-position: center center;
 	opacity: 0.15;

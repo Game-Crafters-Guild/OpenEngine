@@ -2,6 +2,7 @@
 
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/PackageScriptCompile.h"
+#include "Scripting/ScriptAssemblyStatus.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Types/Types.h"
 
@@ -73,7 +74,11 @@ class ScriptManager
      *
      * Editor scripts, CLR host, and managed state are preserved.
      * Stops the project file watcher, updates paths, restarts watcher on new directory.
-     * Unloads old project assemblies and kicks off compilation of the new project's scripts.
+     * Then loads the new project's scripts the way Initialize does: its current
+     * ScriptAssemblies/GameEngine.Scripts.dll when that is neither a reference stub nor older
+     * than the scripting ABI, otherwise a compile (in the background when Initialize was told
+     * to defer the initial load) followed by the load. The loaded assembly replaces the
+     * previous project's.
      * Reads only the path fields of newConfig; the hot-reload and project-generation policy
      * stays as Initialize set it.
      */
@@ -149,6 +154,13 @@ class ScriptManager
      * when IsAsyncHotReloadInProgress sees the reload finish.
      */
     String GetLastAsyncHotReloadError() const;
+
+    /**
+     * @brief Where the bound project's C# scripts assembly stands: not loaded, building, loaded
+     * with how many C# components and systems it defines, or failed; disabled in a build without
+     * C# scripting. Any thread.
+     */
+    ScriptAssemblyStatus GetScriptAssemblyStatus() const;
 
     /**
      * @brief Get CoreCLR host
@@ -314,6 +326,22 @@ class ScriptManager
     bool RunCompile(const std::function<void()>& compile);
 
   private:
+    // The bound project's initial scripts load, shared by Initialize and RebindProjectScripts:
+    // the packaged game's staged assembly, or in a dev session the editor scripts assembly
+    // (built when missing or stale) and then the project's assembly, loaded when current and
+    // otherwise compiled and loaded (in the background under deferInitialLoad). Main thread.
+    void LoadInitialScriptAssembly();
+
+    // A scripts assembly finished loading (any thread): queues ApplyArrivedScriptAssembly.
+    void NotifyScriptAssemblyArrived();
+
+    // Main thread, after every assembly load or swap: records the loaded status and applies the
+    // primary world's kept components whose types the assembly registered.
+    void ApplyArrivedScriptAssembly();
+
+    // The async pipeline's end of a run (pipeline worker thread).
+    void OnHotReloadRunCompleted(const HotReloadPipeline::PipelineStats& stats);
+
     // Delete <assemblies>/Packages[/Editor] dll/pdb files no resolved package
     // module produces. The hot-reload domain loads that directory wholesale, so
     // a removed package's assembly would otherwise keep loading (and keep
@@ -516,7 +544,7 @@ class ScriptManager
     // us to join fire-and-forget tasks that capture `this`.
     std::atomic<bool> m_ShuttingDown{false};
 
-    // When deferInitialLoad is enabled we queue a one-shot background build.
+    // When deferInitialLoad is enabled the initial build runs in the background.
     // This TaskHandle is used to wait for completion during shutdown so worker
     // threads can't execute lambdas that captured `this` after destruction.
     JobSystem::TaskHandle m_DeferredInitialBuildTask{};
@@ -545,8 +573,21 @@ class ScriptManager
     // m_MainThreadTasksMutex, so it lives and dies with this queue.
     bool m_ManagedPostDrainRequested = false;
 
-    // One-shot deferred initial build scheduling (when startup must not block)
+    // A deferred initial build is queued or running (one at a time); cleared by its main-thread
+    // completion, which reruns LoadInitialScriptAssembly when a request was refused meanwhile.
     std::atomic<bool> m_DeferredInitialBuildQueued{false};
+    // A deferred build request was refused because one was running; that build's completion
+    // then loads the bound project. Main thread.
+    std::atomic<bool> m_InitialLoadAfterRunningBuild{false};
+    // Bumped by every RebindProjectScripts: a deferred build started under an older binding
+    // does not load its output.
+    std::atomic<uint64> m_ProjectBindGeneration{0};
+
+    // ScriptsConfig::disableClr as Initialize received it; the rebind honours it too.
+    bool m_ClrDisabled = false;
+    // GetScriptAssemblyStatus: the state and the type count of the last arrived assembly.
+    std::atomic<ScriptAssemblyState> m_ScriptAssemblyState{ScriptAssemblyState::NotLoaded};
+    std::atomic<uint32> m_ScriptTypeCount{0};
 
     // One-shot package-module compile retry (compile-server cold-start race):
     // queued through the main thread onto the compile channel (the next pipeline tick)

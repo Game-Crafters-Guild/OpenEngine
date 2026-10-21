@@ -1135,6 +1135,9 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         surfaceParams.AtlasNormalBindless = t.AtlasNormalBindlessIndex;
         surfaceParams.AtlasSplatCoarseBindless = t.AtlasSplatCoarseBindlessIndex;
         surfaceParams.AtlasNormalCoarseBindless = t.AtlasNormalCoarseBindlessIndex;
+        surfaceParams.AtlasGrassBindless = t.GrassRegionsActive ? t.AtlasGrassBindlessIndex : 0u;
+        surfaceParams.AtlasGrassCoarseBindless =
+            t.GrassRegionsActive ? t.AtlasGrassCoarseBindlessIndex : 0u;
     }
     if (spherical)
     {

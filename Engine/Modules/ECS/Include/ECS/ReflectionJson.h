@@ -114,6 +114,8 @@ inline void AppendScalar(std::string& out, FieldTypeId type, const std::byte* by
         case FieldTypeId::Float:  AppendNumber(out, ReadUnaligned<float>(bytes)); break;
         case FieldTypeId::Double: AppendNumber(out, ReadUnaligned<double>(bytes)); break;
         case FieldTypeId::EntityHandle: AppendNumber(out, ReadUnaligned<std::uint32_t>(bytes)); break;
+        // The layer word as one number (bit i = layer i); the scene text is the bracketed layer list.
+        case FieldTypeId::RenderLayerMask: AppendNumber(out, ReadUnaligned<std::uint32_t>(bytes)); break;
         case FieldTypeId::Vec2:   AppendFloats(out, bytes, 2); break;
         case FieldTypeId::Vec3:   AppendFloats(out, bytes, 3); break;
         case FieldTypeId::Vec4:

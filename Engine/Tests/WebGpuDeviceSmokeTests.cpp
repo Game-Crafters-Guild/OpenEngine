@@ -9,6 +9,9 @@
 #include "Rendering/Core/WebGpuPushConstantRing.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
+#include "Engine/Rendering/LensFlareRenderFeature.h"
+#include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/Sky/SkyRenderer.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -297,45 +300,49 @@ TEST(WebGpuDeviceSmoke, UnalignedUploadRowPitchRoundTrips)
     device->Shutdown();
 }
 
+namespace
+{
+// values[i] = i * 3 + 7 over one 64-wide workgroup; glslc-compiled from
+// the shader in the comment history of this test's PR, vulkan1.1 target
+// (the SPIR-V level naga and wgpu's frontend both accept).
+const uint32_t kStorageWriteKernel[] = {
+0x07230203, 0x00010300, 0x000d000b, 0x00000021, 0x00000000, 0x00020011,
+0x00000001, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0006000f, 0x00000005,
+0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00060010, 0x00000004,
+0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00040047, 0x0000000b,
+0x0000000b, 0x0000001c, 0x00040047, 0x00000010, 0x00000006, 0x00000004,
+0x00030047, 0x00000011, 0x00000002, 0x00050048, 0x00000011, 0x00000000,
+0x00000023, 0x00000000, 0x00040047, 0x00000013, 0x00000021, 0x00000000,
+0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000020,
+0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017,
+0x00000009, 0x00000006, 0x00000003, 0x00040020, 0x0000000a, 0x00000001,
+0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x0004002b,
+0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001,
+0x00000006, 0x0003001d, 0x00000010, 0x00000006, 0x0003001e, 0x00000011,
+0x00000010, 0x00040020, 0x00000012, 0x0000000c, 0x00000011, 0x0004003b,
+0x00000012, 0x00000013, 0x0000000c, 0x00040015, 0x00000014, 0x00000020,
+0x00000001, 0x0004002b, 0x00000014, 0x00000015, 0x00000000, 0x0004002b,
+0x00000006, 0x00000018, 0x00000003, 0x0004002b, 0x00000006, 0x0000001a,
+0x00000007, 0x00040020, 0x0000001c, 0x0000000c, 0x00000006, 0x0004002b,
+0x00000006, 0x0000001e, 0x00000040, 0x0004002b, 0x00000006, 0x0000001f,
+0x00000001, 0x0006002c, 0x00000009, 0x00000020, 0x0000001e, 0x0000001f,
+0x0000001f, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+0x000200f8, 0x00000005, 0x00050041, 0x0000000d, 0x0000000e, 0x0000000b,
+0x0000000c, 0x0004003d, 0x00000006, 0x0000000f, 0x0000000e, 0x00050084,
+0x00000006, 0x00000019, 0x0000000f, 0x00000018, 0x00050080, 0x00000006,
+0x0000001b, 0x00000019, 0x0000001a, 0x00060041, 0x0000001c, 0x0000001d,
+0x00000013, 0x00000015, 0x0000000f, 0x0003003e, 0x0000001d, 0x0000001b,
+0x000100fd, 0x00010038,
+};
+} // namespace
+
 TEST(WebGpuDeviceSmoke, ComputeDispatchThroughSpirvIngestion)
 {
     auto device = CreateWebGpuDevice();
     ASSERT_NE(device, nullptr);
 
-    // values[i] = i * 3 + 7 over one 64-wide workgroup; glslc-compiled from
-    // the shader in the comment history of this test's PR, vulkan1.1 target
-    // (the SPIR-V level naga and wgpu's frontend both accept).
-    static const uint32_t kKernel[] = {
-    0x07230203, 0x00010300, 0x000d000b, 0x00000021, 0x00000000, 0x00020011,
-    0x00000001, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
-    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0006000f, 0x00000005,
-    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00060010, 0x00000004,
-    0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00040047, 0x0000000b,
-    0x0000000b, 0x0000001c, 0x00040047, 0x00000010, 0x00000006, 0x00000004,
-    0x00030047, 0x00000011, 0x00000002, 0x00050048, 0x00000011, 0x00000000,
-    0x00000023, 0x00000000, 0x00040047, 0x00000013, 0x00000021, 0x00000000,
-    0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000020,
-    0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
-    0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017,
-    0x00000009, 0x00000006, 0x00000003, 0x00040020, 0x0000000a, 0x00000001,
-    0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x0004002b,
-    0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001,
-    0x00000006, 0x0003001d, 0x00000010, 0x00000006, 0x0003001e, 0x00000011,
-    0x00000010, 0x00040020, 0x00000012, 0x0000000c, 0x00000011, 0x0004003b,
-    0x00000012, 0x00000013, 0x0000000c, 0x00040015, 0x00000014, 0x00000020,
-    0x00000001, 0x0004002b, 0x00000014, 0x00000015, 0x00000000, 0x0004002b,
-    0x00000006, 0x00000018, 0x00000003, 0x0004002b, 0x00000006, 0x0000001a,
-    0x00000007, 0x00040020, 0x0000001c, 0x0000000c, 0x00000006, 0x0004002b,
-    0x00000006, 0x0000001e, 0x00000040, 0x0004002b, 0x00000006, 0x0000001f,
-    0x00000001, 0x0006002c, 0x00000009, 0x00000020, 0x0000001e, 0x0000001f,
-    0x0000001f, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
-    0x000200f8, 0x00000005, 0x00050041, 0x0000000d, 0x0000000e, 0x0000000b,
-    0x0000000c, 0x0004003d, 0x00000006, 0x0000000f, 0x0000000e, 0x00050084,
-    0x00000006, 0x00000019, 0x0000000f, 0x00000018, 0x00050080, 0x00000006,
-    0x0000001b, 0x00000019, 0x0000001a, 0x00060041, 0x0000001c, 0x0000001d,
-    0x00000013, 0x00000015, 0x0000000f, 0x0003003e, 0x0000001d, 0x0000001b,
-    0x000100fd, 0x00010038,
-    };
 
     constexpr uint32_t kElements = 64;
     constexpr size_t kByteSize = kElements * sizeof(uint32_t);
@@ -365,8 +372,8 @@ TEST(WebGpuDeviceSmoke, ComputeDispatchThroughSpirvIngestion)
 
     ComputePipelineDesc pipelineDesc{};
     pipelineDesc.ComputeShader = std::make_shared<const std::vector<uint8_t>>(
-        reinterpret_cast<const uint8_t*>(kKernel),
-        reinterpret_cast<const uint8_t*>(kKernel) + sizeof(kKernel));
+        reinterpret_cast<const uint8_t*>(kStorageWriteKernel),
+        reinterpret_cast<const uint8_t*>(kStorageWriteKernel) + sizeof(kStorageWriteKernel));
     pipelineDesc.DescriptorSetLayouts.push_back(layoutId);
     pipelineDesc.DebugName = "WebGpuSmoke.Compute";
     const ComputePipelineId pipelineId = device->InternComputePipeline(pipelineDesc);
@@ -700,16 +707,33 @@ const uint32_t kVertexColorFrag[] = {
 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x00000007, 0x0000000c,
 0x0000000b, 0x0003003e, 0x00000009, 0x0000000c, 0x000100fd, 0x00010038,
 };
-} // namespace
 
-// The engine's vertex bindings are fixed numbers (VertexLayoutBuilder.h) and a
-// mesh without a stream leaves its number unused: position and colour alone
-// are bindings 0 and 2, and every draw binds the colour stream as binding 2.
-// The pipeline's WebGPU buffer slots are dense (colour is its slot 1), so the
-// backend binds binding 2 at slot 1; bound at slot 2, slot 1 stays empty and
-// the whole submit fails validation and draws nothing.
-TEST(WebGpuDeviceSmoke, SparseVertexBindingsDraw)
+// The vertex-colour pipeline (position at location 0, colour at location 4), with
+// no vertex layout yet.
+GraphicsPipelineDesc VertexColorPipelineDesc(const char* debugName)
 {
+    GraphicsPipelineDesc pipelineDesc{};
+    pipelineDesc.VertexShader = std::make_shared<const std::vector<uint8_t>>(
+        reinterpret_cast<const uint8_t*>(kVertexColorVert),
+        reinterpret_cast<const uint8_t*>(kVertexColorVert) + sizeof(kVertexColorVert));
+    pipelineDesc.PixelShader = std::make_shared<const std::vector<uint8_t>>(
+        reinterpret_cast<const uint8_t*>(kVertexColorFrag),
+        reinterpret_cast<const uint8_t*>(kVertexColorFrag) + sizeof(kVertexColorFrag));
+    pipelineDesc.Rasterization.cullMode = CullModeFlagBits::None;
+    pipelineDesc.ColorBlend.attachments.emplace_back();
+    pipelineDesc.DebugName = debugName;
+    return pipelineDesc;
+}
+
+// Draws a full-screen triangle, green at every vertex, through `layout`'s vertex
+// layout: its first binding carries the position stream and its second the colour
+// stream. Checks the centre pixel turned green.
+void ExpectGreenTriangleThroughVertexLayout(const GraphicsPipelineDesc& layout)
+{
+    ASSERT_EQ(layout.VertexBindings.size(), 2u);
+    const uint32_t positionBinding = layout.VertexBindings[0].binding;
+    const uint32_t colorBinding = layout.VertexBindings[1].binding;
+
     auto device = CreateWebGpuDevice();
     ASSERT_NE(device, nullptr);
 
@@ -743,19 +767,9 @@ TEST(WebGpuDeviceSmoke, SparseVertexBindingsDraw)
     device->UpdateBuffer(positionBuffer, 0, sizeof(positions), positions);
     device->UpdateBuffer(colorBuffer, 0, sizeof(colors), colors);
 
-    GraphicsPipelineDesc pipelineDesc{};
-    pipelineDesc.VertexShader = std::make_shared<const std::vector<uint8_t>>(
-        reinterpret_cast<const uint8_t*>(kVertexColorVert),
-        reinterpret_cast<const uint8_t*>(kVertexColorVert) + sizeof(kVertexColorVert));
-    pipelineDesc.PixelShader = std::make_shared<const std::vector<uint8_t>>(
-        reinterpret_cast<const uint8_t*>(kVertexColorFrag),
-        reinterpret_cast<const uint8_t*>(kVertexColorFrag) + sizeof(kVertexColorFrag));
-    pipelineDesc.Rasterization.cullMode = CullModeFlagBits::None;
-    pipelineDesc.ColorBlend.attachments.emplace_back();
-    pipelineDesc.DebugName = "WebGpuSmoke.SparseVertexBindings";
-    BuildVertexLayoutFromFlags(VertexAttributeFlags::HasPosition | VertexAttributeFlags::HasColor, pipelineDesc);
-    ASSERT_EQ(pipelineDesc.VertexBindings.size(), 2u);
-    ASSERT_EQ(pipelineDesc.VertexBindings[1].binding, VertexBinding::Color);
+    GraphicsPipelineDesc pipelineDesc = VertexColorPipelineDesc("WebGpuSmoke.VertexBindings");
+    pipelineDesc.VertexBindings = layout.VertexBindings;
+    pipelineDesc.VertexAttributes = layout.VertexAttributes;
     const GraphicsPipelineId pipelineId = device->InternGraphicsPipeline(pipelineDesc);
 
     PipelineFormatKey formatKey{};
@@ -777,8 +791,8 @@ TEST(WebGpuDeviceSmoke, SparseVertexBindingsDraw)
     commandList->SetPipeline(pipeline);
     commandList->SetViewport(0.0f, 0.0f, static_cast<float>(kSize), static_cast<float>(kSize));
     commandList->SetScissor(0, 0, kSize, kSize);
-    commandList->SetVertexBuffer(positionBuffer, VertexBinding::Core);
-    commandList->SetVertexBuffer(colorBuffer, VertexBinding::Color);
+    commandList->SetVertexBuffer(positionBuffer, positionBinding);
+    commandList->SetVertexBuffer(colorBuffer, colorBinding);
     commandList->Draw(3);
     commandList->EndRenderPass();
     commandList->CopyTextureToBuffer(target, readback, kSize, kSize);
@@ -799,6 +813,65 @@ TEST(WebGpuDeviceSmoke, SparseVertexBindingsDraw)
     device->DestroyBuffer(positionBuffer);
     device->DestroyBuffer(readback);
     device->DestroyTexture(target);
+    device->Shutdown();
+}
+} // namespace
+
+// The engine's vertex bindings are fixed numbers (VertexLayoutBuilder.h) and a
+// mesh without a stream leaves its number unused: position and colour alone
+// are bindings 0 and 2, and every draw binds the colour stream as binding 2.
+// The pipeline's WebGPU buffer slots are dense (colour is its slot 1), so the
+// backend binds binding 2 at slot 1; bound at slot 2, slot 1 stays empty and
+// the whole submit fails validation and draws nothing.
+TEST(WebGpuDeviceSmoke, SparseVertexBindingsDraw)
+{
+    GraphicsPipelineDesc layout{};
+    BuildVertexLayoutFromFlags(VertexAttributeFlags::HasPosition | VertexAttributeFlags::HasColor, layout);
+    ASSERT_EQ(layout.VertexBindings.size(), 2u);
+    ASSERT_EQ(layout.VertexBindings[1].binding, VertexBinding::Color);
+    ExpectGreenTriangleThroughVertexLayout(layout);
+}
+
+// A second skin set (Joints1 and Weights1) and UV2 to UV7 are bindings 6 to 13. A
+// stream bound at any of them reaches its pipeline slot like the first six; left
+// unbound, Chrome refuses the draw and wgpu-native aborts the process.
+TEST(WebGpuDeviceSmoke, VertexBindingsPastTheFirstSixDraw)
+{
+    GraphicsPipelineDesc layout{};
+    layout.VertexBindings = {{VertexBinding::UV7, 3 * sizeof(float), /*inputRate=*/0},
+                             {VertexBinding::Weights1, 4 * sizeof(float), /*inputRate=*/0}};
+    layout.VertexAttributes = {
+        {VertexLocation::Position, VertexBinding::UV7, Format::R32G32B32_FLOAT, 0},
+        {VertexLocation::Color, VertexBinding::Weights1, Format::R32G32B32A32_FLOAT, 0}};
+    ExpectGreenTriangleThroughVertexLayout(layout);
+}
+
+// A layout that reads a binding past the engine's last (UV7, 13) is refused at pipeline
+// creation, naming the binding and the range: the command list keeps one stream per
+// engine binding and has nothing to bind there.
+TEST(WebGpuDeviceSmoke, AStreamPastTheLastEngineBindingIsRefusedNamingIt)
+{
+    auto device = CreateWebGpuDevice();
+    ASSERT_NE(device, nullptr);
+
+    GraphicsPipelineDesc pipelineDesc = VertexColorPipelineDesc("WebGpuSmoke.Binding14");
+    pipelineDesc.VertexBindings = {{VertexBinding::Core, 3 * sizeof(float), /*inputRate=*/0},
+                                   {VertexBinding::Count, 4 * sizeof(float), /*inputRate=*/0}};
+    pipelineDesc.VertexAttributes = {
+        {VertexLocation::Position, VertexBinding::Core, Format::R32G32B32_FLOAT, 0},
+        {VertexLocation::Color, VertexBinding::Count, Format::R32G32B32A32_FLOAT, 0}};
+    PipelineFormatKey formatKey{};
+    formatKey.ColorFormats[0] = TextureFormat::RGBA8_UNORM;
+    formatKey.ColorCount = 1;
+    const PipelineHandle pipeline =
+        device->GetOrCreateGraphicsPipeline(device->InternGraphicsPipeline(pipelineDesc), formatKey);
+
+    EXPECT_FALSE(pipeline.IsValid());
+    const std::string failure = device->GetLastGraphicsPipelineFailure();
+    EXPECT_NE(failure.find("graphics pipeline 'WebGpuSmoke.Binding14' is refused: it reads vertex binding 14, "
+                           "which is not an engine vertex binding (0 to 13)"),
+              std::string::npos)
+        << failure;
     device->Shutdown();
 }
 
@@ -1373,5 +1446,282 @@ TEST(WebGpuDeviceSmoke, PushConstantRingRefusesDrawsPastItsSlotsAndKeepsTheFrame
 
     device->DestroyTexture(overflow);
     device->DestroyTexture(accepted);
+    device->Shutdown();
+}
+
+namespace
+{
+// A compute pipeline over kStorageWriteKernel with its workgroup set to `x` by `y`
+// threads (OpExecutionMode LocalSize), as `name`.
+PipelineHandle CreateStorageWriteKernel(IDevice& device, uint32_t x, uint32_t y, const char* name)
+{
+    std::vector<uint32_t> words(std::begin(kStorageWriteKernel), std::end(kStorageWriteKernel));
+    for (size_t at = 0; at + 5 < words.size(); ++at)
+    {
+        if (words[at] == 0x00060010u && words[at + 2] == 0x11u)
+        {
+            words[at + 3] = x;
+            words[at + 4] = y;
+            break;
+        }
+    }
+    DescriptorSetLayoutDesc layoutDesc{};
+    DescriptorBinding binding{};
+    binding.binding = 0;
+    binding.type = DescriptorType::StorageBuffer;
+    binding.shaderStages = kShaderStageCompute;
+    layoutDesc.bindings.push_back(binding);
+    ComputePipelineDesc pipelineDesc{};
+    pipelineDesc.ComputeShader = std::make_shared<const std::vector<uint8_t>>(
+        reinterpret_cast<const uint8_t*>(words.data()),
+        reinterpret_cast<const uint8_t*>(words.data()) + words.size() * sizeof(uint32_t));
+    pipelineDesc.DescriptorSetLayouts.push_back(device.InternDescriptorSetLayout(layoutDesc));
+    pipelineDesc.DebugName = name;
+    return device.GetOrCreateComputePipeline(device.InternComputePipeline(pipelineDesc));
+}
+} // namespace
+
+// A phone's browser grants 256 invocations per compute workgroup, the WebGPU default.
+// A kernel past the device's limit is refused at creation with its name, its
+// workgroup and the limit: created, it would be invalid, and every command buffer that
+// records it would be rejected, leaving the page black. A node requests its pipeline every
+// frame: the second request is refused too, and the refusal is logged once. A kernel within
+// the limit is created.
+TEST(WebGpuDeviceSmoke, AComputeWorkgroupPastTheDeviceLimitIsRefusedNamingIt)
+{
+    const ScopedEnvironmentVariable clamp("GE_WEBGPU_MAX_COMPUTE_INVOCATIONS", "256");
+    auto device = CreateWebGpuDevice();
+    ASSERT_NE(device, nullptr);
+
+    std::vector<std::string> lines;
+    PipelineHandle tooWide{};
+    PipelineHandle fits{};
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Error);
+        tooWide = CreateStorageWriteKernel(*device, 32, 32, "WebGpuSmoke.Workgroup32x32");
+        EXPECT_FALSE(CreateStorageWriteKernel(*device, 32, 32, "WebGpuSmoke.Workgroup32x32").IsValid());
+        fits = CreateStorageWriteKernel(*device, 16, 16, "WebGpuSmoke.Workgroup16x16");
+        Logger::Log::Flush();
+    }
+    EXPECT_FALSE(tooWide.IsValid());
+    EXPECT_TRUE(fits.IsValid());
+    const std::string refusal = TestLog::FirstLineContaining(lines, "WebGpuSmoke.Workgroup32x32");
+    EXPECT_TRUE(LineContains(refusal, "compute pipeline 'WebGpuSmoke.Workgroup32x32' is refused: its workgroup is "
+                                      "32x32x1 (1024 invocations) and this device allows 256 invocations per "
+                                      "workgroup"))
+        << refusal;
+    EXPECT_EQ(std::count_if(lines.begin(), lines.end(),
+                            [](const std::string& line) { return LineContains(line, "WebGpuSmoke.Workgroup32x32"); }),
+              1);
+    device->Shutdown();
+}
+
+// Every storage buffer a pass's shader reads through a `readonly buffer` block is read-only
+// storage in the pass's pipeline layout, and the layout its render node builds descriptor sets
+// from is that same layout. WebGPU bakes the access class into the bind group layout: it refuses
+// a read_write entry against a read-only module, and a bind group whose layout differs from its
+// pipeline's, and either leaves every frame that draws the pass invalid in the browser.
+TEST(WebGpuDeviceSmoke, HandBuiltPassLayoutsDeclareTheShadersReadOnlyStorage)
+{
+    auto device = CreateWebGpuDevice();
+    if (!device)
+        GTEST_SKIP() << "WebGPU adapter not available";
+
+    SkyRenderer sky;
+    ASSERT_TRUE(sky.Initialize(device.get(), SkyRenderer::Config{}));
+    Engine::Renderer::LensFlareRenderFeature lensFlare;
+    ASSERT_TRUE(lensFlare.Initialize(device.get()));
+    struct Pass
+    {
+        const char* Package;
+        GraphicsPipelineId Pipeline;
+        const DescriptorSetLayoutDesc* NodeLayout; // what the render node binds its descriptor sets with
+    };
+    const Pass passes[] = {
+        {"Shaders/sky_render.shaderpkg", sky.EnsureSkyRenderId(*device), &sky.GetSkyRenderSetDesc().layout},
+        {"Shaders/sky_stars_billboard.shaderpkg", sky.EnsureStarBillboardId(*device),
+         &sky.GetStarBillboardSetDesc().layout},
+        {"Shaders/lens_flare.shaderpkg", lensFlare.GetPipelineId(), &lensFlare.GetLayout()},
+    };
+    for (const Pass& pass : passes)
+    {
+        SCOPED_TRACE(pass.Package);
+        ShaderPackage pkg{};
+        std::string error;
+        ASSERT_TRUE(LoadShaderPkg(pass.Package, device->PreferredShaderSource(), pkg, &error)) << error;
+        const GraphicsPipelineDesc* desc = device->LookupGraphicsPipeline(pass.Pipeline);
+        ASSERT_NE(desc, nullptr);
+        ASSERT_FALSE(desc->DescriptorSetLayouts.empty());
+        const DescriptorSetLayoutDesc* layout = device->LookupDescriptorSetLayout(desc->DescriptorSetLayouts[0]);
+        ASSERT_NE(layout, nullptr);
+
+        uint32_t readOnlyBindings = 0;
+        for (const auto& setMeta : pkg.meta.Sets)
+        {
+            if (setMeta.Set != 0)
+                continue;
+            for (const auto& reflected : setMeta.Bindings)
+            {
+                if (!reflected.ReadOnly)
+                    continue;
+                ++readOnlyBindings;
+                const auto declared = std::find_if(layout->bindings.begin(), layout->bindings.end(),
+                                                   [&](const DescriptorBinding& b) { return b.binding == reflected.Binding; });
+                ASSERT_NE(declared, layout->bindings.end()) << reflected.Name;
+                EXPECT_NE(declared->flags & kDescriptorBindingReadOnlyStorage, 0u)
+                    << "'" << reflected.Name << "' is a readonly buffer in the shader";
+            }
+        }
+        EXPECT_GT(readOnlyBindings, 0u) << "the package reflects no read-only storage buffer";
+
+        ASSERT_EQ(pass.NodeLayout->bindings.size(), layout->bindings.size());
+        for (size_t i = 0; i < layout->bindings.size(); ++i)
+        {
+            const DescriptorBinding& node = pass.NodeLayout->bindings[i];
+            const DescriptorBinding& pipeline = layout->bindings[i];
+            EXPECT_TRUE(node.binding == pipeline.binding && node.type == pipeline.type &&
+                        node.count == pipeline.count && node.shaderStages == pipeline.shaderStages &&
+                        node.flags == pipeline.flags &&
+                        node.imageFilterableFloat == pipeline.imageFilterableFloat &&
+                        node.imageUsageReflected == pipeline.imageUsageReflected)
+                << "binding " << pipeline.binding << ": the node's descriptor set layout differs from the pipeline's";
+        }
+    }
+    device->Shutdown();
+}
+
+// The depth probe's vertex stage, as the WGSL cook emits a GLSL `sampler2D` read with texelFetch
+// (sun_glare.vert's probe of the scene depth): the texture at its binding, the split sampler at
+// binding + 64, and a textureLoad whose result reaches the position, so the binding stays live.
+// One triangle covers the whole target at the fetched depth (0: WebGPU zero-fills a new texture).
+// WGSL rather than SPIR-V: the native backend's SPIR-V front end does not take a combined sampler.
+// The GLSL it stands for:
+//
+//     layout(set = 0, binding = 0) uniform sampler2D uDepth;
+//     void main()
+//     {
+//         const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+//         gl_Position = vec4(corners[gl_VertexIndex], texelFetch(uDepth, ivec2(0, 0), 0).r, 1.0);
+//     }
+constexpr std::string_view kDepthProbeVert = R"(
+@group(0) @binding(0) var uDepth: texture_2d<f32>;
+@group(0) @binding(64) var uDepthSampler: sampler;
+
+@vertex
+fn main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    var corners = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    let depth = textureLoad(uDepth, vec2<i32>(0, 0), 0).r;
+    return vec4<f32>(corners[index], depth, 1.0);
+}
+)";
+
+// A combined image sampler that reflection saw no stage filter is read with textureLoad alone,
+// so its layout entry is unfilterable float: a single-sample depth attachment binds to it. As a
+// filterable float entry the bind group is refused and every command buffer that sets it is
+// invalid, which blacked the web frame whenever a view ran without MSAA.
+TEST(WebGpuDeviceSmoke, ATexelFetchedCombinedSamplerBindsADepthTexture)
+{
+    auto device = CreateWebGpuDevice();
+    if (!device)
+        GTEST_SKIP() << "WebGPU adapter not available";
+
+    constexpr uint32_t kSize = 64;
+    TextureDesc targetDesc{};
+    targetDesc.width = kSize;
+    targetDesc.height = kSize;
+    targetDesc.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+    targetDesc.usage = static_cast<uint32_t>(TextureUsage::RenderTarget | TextureUsage::TransferSrc);
+    TextureHandle target = device->CreateTexture(targetDesc);
+    ASSERT_TRUE(target.IsValid());
+    TextureDesc depthDesc{};
+    depthDesc.width = kSize;
+    depthDesc.height = kSize;
+    depthDesc.format = static_cast<uint32_t>(TextureFormat::D32_FLOAT);
+    depthDesc.usage = static_cast<uint32_t>(TextureUsage::DepthStencil | TextureUsage::ShaderResource);
+    TextureHandle depth = device->CreateTexture(depthDesc);
+    ASSERT_TRUE(depth.IsValid());
+    SamplerHandle sampler = device->CreateSampler(SamplerDesc{});
+    ASSERT_TRUE(sampler.IsValid());
+
+    // What reflection reports for depth_probe.vert's binding.
+    DescriptorSetLayoutDesc layoutDesc{};
+    DescriptorBinding binding{};
+    binding.binding = 0;
+    binding.type = DescriptorType::CombinedImageSampler;
+    binding.shaderStages = kShaderStageVertex;
+    binding.imageDim = 2;
+    binding.imageUsageReflected = true;
+    binding.imageFilterableFloat = false;
+    layoutDesc.bindings.push_back(binding);
+
+    GraphicsPipelineDesc pipelineDesc{};
+    pipelineDesc.VertexShader = std::make_shared<const std::vector<uint8_t>>(kDepthProbeVert.begin(),
+                                                                             kDepthProbeVert.end());
+    pipelineDesc.PixelShader = std::make_shared<const std::vector<uint8_t>>(
+        reinterpret_cast<const uint8_t*>(kTriangleFrag),
+        reinterpret_cast<const uint8_t*>(kTriangleFrag) + sizeof(kTriangleFrag));
+    pipelineDesc.Rasterization.cullMode = CullModeFlagBits::None;
+    pipelineDesc.ColorBlend.attachments.emplace_back();
+    pipelineDesc.DescriptorSetLayouts.push_back(device->InternDescriptorSetLayout(layoutDesc));
+    pipelineDesc.DebugName = "WebGpuSmoke.DepthProbe";
+    PipelineFormatKey formatKey{};
+    formatKey.ColorFormats[0] = TextureFormat::RGBA8_UNORM;
+    formatKey.ColorCount = 1;
+
+    BufferDesc readbackDesc{};
+    readbackDesc.size = kSize * kSize * 4;
+    readbackDesc.usage = static_cast<uint32_t>(BufferUsage::TransferDst);
+    readbackDesc.memoryUsage = BufferMemoryUsage::Readback;
+    BufferHandle readback = device->CreateBuffer(readbackDesc);
+    ASSERT_TRUE(readback.IsValid());
+
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Error);
+        const PipelineHandle pipeline =
+            device->GetOrCreateGraphicsPipeline(device->InternGraphicsPipeline(pipelineDesc), formatKey);
+        ASSERT_TRUE(pipeline.IsValid());
+        DescriptorSetDesc setDesc{};
+        setDesc.layout = layoutDesc;
+        DescriptorSetHandle set = device->CreateDescriptorSet(setDesc);
+        ASSERT_TRUE(set.IsValid());
+        device->UpdateCombinedImageSamplerBinding(set, 0, depth, sampler);
+
+        auto commandList = device->CreateCommandList(IDevice::QueueType::Graphics);
+        commandList->Begin();
+        RenderPassDesc pass{};
+        pass.colorTargets[0] = target;
+        pass.colorTargetCount = 1;
+        pass.clearColor[0] = true;
+        pass.clearColorValue[0][3] = 1.0f;
+        pass.depthTarget = INVALID_TEXTURE_HANDLE;
+        commandList->BeginRenderPass(pass);
+        commandList->SetPipeline(pipeline);
+        commandList->BindDescriptorSet(0, set, pipeline);
+        commandList->SetViewport(0.0f, 0.0f, static_cast<float>(kSize), static_cast<float>(kSize));
+        commandList->SetScissor(0, 0, kSize, kSize);
+        commandList->Draw(3);
+        commandList->EndRenderPass();
+        commandList->CopyTextureToBuffer(target, readback, kSize, kSize);
+        commandList->End();
+        std::vector<CommandList*> lists{commandList.get()};
+        device->ExecuteCommandLists(lists);
+        device->WaitForIdle();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "WebGPU error"), 0u)
+        << TestLog::FirstLineContaining(lines, "WebGPU error");
+    const uint8_t* pixels = static_cast<const uint8_t*>(device->MapBuffer(readback));
+    ASSERT_NE(pixels, nullptr);
+    // The triangle covers the target and its depth (0: WebGPU zero-fills a new texture) is inside the clip
+    // volume: every pixel is the fragment stage's red unless the command buffer was refused.
+    for (const uint32_t row : {2u, kSize / 2, kSize - 3})
+        for (const uint32_t x : {2u, kSize / 2, kSize - 3})
+            EXPECT_GT(pixels[(row * kSize + x) * 4], 200u)
+                << "pixel (" << x << ", " << row << ") is not drawn: the command buffer was refused";
+    device->UnmapBuffer(readback);
+    device->DestroyBuffer(readback);
+    device->DestroySampler(sampler);
+    device->DestroyTexture(depth);
+    device->DestroyTexture(target);
     device->Shutdown();
 }

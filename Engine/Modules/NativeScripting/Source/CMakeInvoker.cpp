@@ -18,9 +18,18 @@ namespace NativeScripting
 
 namespace
 {
+// The path as UTF-8 text with forward slashes: the encoding the shell process converts a command
+// from on Windows (CancellableShellProcess), where generic_string() would mean the ANSI code page
+// and fail on a folder that page cannot spell.
+std::string Utf8(const std::filesystem::path& p)
+{
+    const std::u8string text = p.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
+
 std::string Quote(const std::filesystem::path& p)
 {
-    return "\"" + p.generic_string() + "\"";
+    return "\"" + Utf8(p) + "\"";
 }
 
 std::mutex& ProcessRunnerMutex()
@@ -145,6 +154,18 @@ void ResetCacheForProjectMove(const std::filesystem::path& buildDir,
     }
 }
 
+// False, with outError naming the missing file and the fix, when the scanner the SDK manifest
+// names is not on disk: the shell's own "not recognized" line would otherwise be the only clue.
+bool ScannerPresent(const NativeBuildConfig& config, std::string& outError)
+{
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(config.ComponentScannerExe, ec))
+        return true;
+    outError = "the component scanner is missing at '" + config.ComponentScannerExe.generic_string() +
+               "'; build the Editor again, which stages it into the SDK";
+    return false;
+}
+
 // 'call "<env.bat>" && ' prefix that loads the cached MSVC environment so cl.exe finds its
 // headers/libs without re-running vcvars; empty when no env batch (POSIX / VS generator).
 // The batch path uses the native (backslash) form for cmd's `call`.
@@ -173,13 +194,16 @@ std::filesystem::path CMakeInvoker::RunComponentScanner(const NativeBuildConfig&
     // project scans as zero components (matching how Generate tolerates an empty dir).
     std::filesystem::create_directories(config.SourceDir, ec);
     const std::filesystem::path genCpp = config.BuildDir / "UserComponentReflection.gen.cpp";
+    if (!ScannerPresent(config, outError))
+        return {};
 
     std::ostringstream cmd;
-    cmd << Quote(config.DotnetExe) << " " << Quote(config.ComponentScannerDll)
+    cmd << Quote(config.ComponentScannerExe)
         << " --in " << Quote(config.SourceDir)
         << " --out " << Quote(genCpp)
         << " --detect-base \"" << config.DetectBase << "\"";
-    Logger::Log::Info("[NativeScripting] scanning components in {}", config.SourceDir.string());
+    Logger::Log::Info("[NativeScripting] scanning components in {} with {}", Utf8(config.SourceDir),
+                      Utf8(config.ComponentScannerExe));
     const int rc = RunCaptured(cmd.str(), outOutput, {});
     if (rc != 0)
     {
@@ -198,14 +222,17 @@ std::filesystem::path CMakeInvoker::RunSystemScanner(const NativeBuildConfig& co
     std::filesystem::create_directories(config.BuildDir, ec);
     std::filesystem::create_directories(config.SourceDir, ec);
     const std::filesystem::path genCpp = config.BuildDir / "UserSystemRegistration.gen.cpp";
+    if (!ScannerPresent(config, outError))
+        return {};
 
     constexpr const char* kSystemDetectBase = "SystemBase";
     std::ostringstream cmd;
-    cmd << Quote(config.DotnetExe) << " " << Quote(config.ComponentScannerDll)
+    cmd << Quote(config.ComponentScannerExe)
         << " --in " << Quote(config.SourceDir)
         << " --out " << Quote(genCpp)
         << " --detect-system-base \"" << kSystemDetectBase << "\"";
-    Logger::Log::Info("[NativeScripting] scanning systems in {}", config.SourceDir.string());
+    Logger::Log::Info("[NativeScripting] scanning systems in {} with {}", Utf8(config.SourceDir),
+                      Utf8(config.ComponentScannerExe));
 
     // RunCaptured appends, so pass outOutput straight through (it already holds the component scan).
     const int rc = RunCaptured(cmd.str(), outOutput, {});

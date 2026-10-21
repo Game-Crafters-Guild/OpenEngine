@@ -16,11 +16,13 @@ struct StatsEntry
     std::string Name;
     StatsKind Kind = StatsKind::TrackedBytes;
     Memory::Residency Residency = Memory::Residency::Cpu;
-    /// A `TrackedBytes`' count; an arena's bytes in use; a pool's live slot bytes (`StatsKind`).
+    /// A `TrackedBytes`' count; an arena's bytes in use; a pool's live slot bytes; a range
+    /// allocator's live range bytes (`StatsKind`).
     std::uint64_t Bytes = 0;
     /// An arena's or a pool's block bytes, its largest bytes in use so far (a pool's equals
-    /// its `Bytes`, both as of its last block acquisition), and its block count; 0 for a
-    /// `TrackedBytes`.
+    /// its `Bytes`, both as of its last block acquisition), and its block count; for a range
+    /// allocator, the end of its highest range ever handed out, its most live bytes and its
+    /// outstanding ranges; 0 for a `TrackedBytes`.
     std::uint64_t ReservedBytes = 0;
     std::uint64_t HighWaterBytes = 0;
     std::uint64_t Blocks = 0;
@@ -35,7 +37,7 @@ struct StatsEntry
 };
 
 /// Copies every record registered at the moment of the call (every live `TrackedBytes`,
-/// `Arena` and `ObjectPool`, and the scratch arena of every thread that has opened a
+/// `Arena`, `ObjectPool` and `RangeAllocator`, and the scratch arena of every thread that has opened a
 /// `ScratchScope` and not exited), newest first. Takes the registry mutex; meant for tools,
 /// tests and debug views, not for a per-frame path.
 std::vector<StatsEntry> SnapshotStats();

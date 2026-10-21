@@ -85,7 +85,7 @@ Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true
 PostProcessVolume.weight = 1
 PostProcessVolume.priority = 0
-PostProcessVolume.postProcessMask = 4294967295
+PostProcessVolume.volumeLayers = all
 PostProcessVolume.look = Neutral
 PostProcessVolume.isGlobal = true
 PostProcessVolume.shape = 0
@@ -127,7 +127,7 @@ ReflectionProbe.IblLowerHemisphereDarkness = 0
 ReflectionProbe.CaptureResolution = 512
 ReflectionProbe.UpdateMode = Realtime
 ReflectionProbe.RealtimeUpdateInterval = 0.5
-ReflectionProbe.CullMask = 4294967295
+ReflectionProbe.CapturedLayers = all
 Transform.position = (0, 3, -1)
 Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (26, 13, 34)
@@ -138,7 +138,7 @@ Name.value = "Studio Ground"
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_ground.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -152,7 +152,7 @@ Name.value = "Studio Backdrop"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_backdrop.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -166,7 +166,7 @@ Name.value = "Key Panel"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
@@ -180,7 +180,7 @@ Name.value = "Fill Panel"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
@@ -194,7 +194,7 @@ Name.value = "Top Panel"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
@@ -208,7 +208,7 @@ Name.value = "Pedestal Car Paint (metallic base + clear coat)"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -222,7 +222,7 @@ Name.value = "Car Paint (metallic base + clear coat)"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/car_paint_coated_metallic.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -236,7 +236,7 @@ Name.value = "Pedestal Brushed Anisotropic Steel"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -250,7 +250,7 @@ Name.value = "Brushed Anisotropic Steel"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/anisotropy_brushed.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -264,7 +264,7 @@ Name.value = "Pedestal Sheen Velvet"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -278,7 +278,7 @@ Name.value = "Sheen Velvet"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/sheen_velvet.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -292,7 +292,7 @@ Name.value = "Pedestal Thick Absorbing Glass"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -306,7 +306,7 @@ Name.value = "Thick Absorbing Glass"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/glass_thick_absorbing.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -320,7 +320,7 @@ Name.value = "Pedestal Thin-Film Iridescent Titanium"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -334,7 +334,7 @@ Name.value = "Thin-Film Iridescent Titanium"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/iridescent_metal_titanium.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -348,7 +348,7 @@ Name.value = "Pedestal F82 Gold"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -362,7 +362,7 @@ Name.value = "F82 Gold"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/f82_gold.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -376,7 +376,7 @@ Name.value = "Pedestal Lacquered Walnut"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -390,7 +390,7 @@ Name.value = "Lacquered Walnut"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/coated_lacquer_wood.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -404,7 +404,7 @@ Name.value = "Pedestal Skin (DICE back-transmission)"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -418,7 +418,7 @@ Name.value = "Diffuse + Back-Transmission (NOT subsurface scattering)"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/diffuse_back_transmission.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -432,7 +432,7 @@ Name.value = "Pedestal Oren-Nayar Clay"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -446,7 +446,7 @@ Name.value = "Oren-Nayar Clay"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/oren_nayar_clay.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -460,7 +460,7 @@ Name.value = "Pedestal Candy Coat (tinted coat medium)"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -474,7 +474,7 @@ Name.value = "Candy Coat (tinted coat medium)"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/coat_color_candy.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -488,7 +488,7 @@ Name.value = "Pedestal Thin Clear Glass"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -502,7 +502,7 @@ Name.value = "Thin Clear Glass"
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/clear_glass.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -516,7 +516,7 @@ Name.value = "Brushed Steel Capsule (anisotropy along sweep)"
 MeshRenderer.meshPrimitive = Capsule
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/anisotropy_brushed.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -530,7 +530,7 @@ Name.value = "Thick Glass Cube (short path: same glass, half the chord)"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/glass_thick_absorbing_short.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -551,7 +551,7 @@ Name.value = "Checker Card (refraction reference)"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_light.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -565,7 +565,7 @@ Name.value = "Checker Tile 0x1"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -579,7 +579,7 @@ Name.value = "Checker Tile 0x3"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -593,7 +593,7 @@ Name.value = "Checker Tile 0x5"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -607,7 +607,7 @@ Name.value = "Checker Tile 0x7"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -621,7 +621,7 @@ Name.value = "Checker Tile 1x0"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -635,7 +635,7 @@ Name.value = "Checker Tile 1x2"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -649,7 +649,7 @@ Name.value = "Checker Tile 1x4"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -663,7 +663,7 @@ Name.value = "Checker Tile 1x6"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -677,7 +677,7 @@ Name.value = "Checker Tile 2x1"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -691,7 +691,7 @@ Name.value = "Checker Tile 2x3"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -705,7 +705,7 @@ Name.value = "Checker Tile 2x5"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -719,7 +719,7 @@ Name.value = "Checker Tile 2x7"
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = false
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true

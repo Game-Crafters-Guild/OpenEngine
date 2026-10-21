@@ -79,12 +79,14 @@ struct NativeBuildConfig
     // user never writes them. Added to the generated target's sources.
     std::filesystem::path SdkEntrySource;
 
-    // Component scanner (optional). When both DotnetExe and ComponentScannerDll are
-    // set, the pipeline runs the scanner over SourceDir before building and compiles
-    // the generated registration into the user DLL — so `struct X : ECS::ComponentBase`
-    // is auto-registered with no macro. Leave empty to use explicit macros only.
+    // The build machine's dotnet as the SDK manifest recorded it (empty in a build without
+    // C# scripting); game packaging resolves its C# steps through it.
     std::filesystem::path DotnetExe;
-    std::filesystem::path ComponentScannerDll;
+    // Component scanner (optional). When set, the pipeline runs the scanner executable
+    // over SourceDir before building and compiles the generated registration into the
+    // user DLL — so `struct X : ECS::ComponentBase` is auto-registered with no macro.
+    // Leave empty to use explicit macros only.
+    std::filesystem::path ComponentScannerExe;
     std::string           DetectBase = "ComponentBase"; // inheritors of this base are detected
 
     // Fast-build toolchain (filled by the manager from the detected MsvcToolchain). When

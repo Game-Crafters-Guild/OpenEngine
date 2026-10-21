@@ -222,7 +222,8 @@ struct ParticleExtraction::Impl
         const Material* MaterialPtr = nullptr;
         GameEngine::Rendering::MeshGPUHandle Mesh{};
         ECS::EntityId Emitter = 0;
-        uint32 SpawnIndex = 0, LayerMask = 1;
+        uint32 SpawnIndex = 0;
+        GameEngine::Rendering::RenderLayerMask Layers;
         // The emitter's particles moved since the previous frame (its clock or transform changed).
         bool Moving = false;
         Components::ParticleDrawOrder Order = Components::ParticleDrawOrder::ViewDepth;
@@ -479,7 +480,7 @@ struct ParticleExtraction::Impl
         item.Emitter = entity.id;
         item.Moving = moving;
         item.Order = renderer.DrawOrder;
-        item.LayerMask = renderer.RenderLayerMask;
+        item.Layers = renderer.RenderLayers;
         item.LodStart = renderer.ThinningStart;
         item.LodEnd = renderer.ThinningEnd;
         std::copy_n(xf.matrix + 12, 3, &item.EmitterPosition.x);
@@ -724,7 +725,7 @@ void ParticleExtraction::Extract(ECS::World& world, uint64 worldId, RenderServic
     auto& matchingViews = m_Impl->m_MatchingViews;
     matchingViews.clear();
     for (const auto& view : views)
-        if ((view.worldId == 0 || view.worldId == worldId) && view.ActiveRenderLayerMask() != 0)
+        if ((view.worldId == 0 || view.worldId == worldId) && view.ActiveRenderLayerMask() != GameEngine::Rendering::RenderLayerMask::None())
             matchingViews.push_back(&view);
     if (matchingViews.empty())
         return;
@@ -818,7 +819,7 @@ void ParticleExtraction::Extract(ECS::World& world, uint64 worldId, RenderServic
         {
             const auto& item = m_Impl->m_DrawItems[i];
             const auto& particle = m_Impl->m_Particles[i];
-            if ((item.LayerMask & view->ActiveRenderLayerMask()) == 0)
+            if (!item.Layers.Intersects(view->ActiveRenderLayerMask()))
                 continue;
             const auto& p = particle.PositionSize;
             if (!Rendering::TestSphereFrustum(Rendering::Vector3(p[0], p[1], p[2]), item.Radius, planes))

@@ -20,6 +20,8 @@ namespace NativeScripting
 class NativeScriptManager;
 }
 
+struct ShippedScriptSources;
+
 struct BuildSettings
 {
     std::string platformName;
@@ -107,7 +109,8 @@ struct BuildStep
 ///  3. CompilePlayer          — cmake configure + build
 ///  4. CompileScripts         — dotnet build
 ///  5. hooks: PostCompile
-///  6. CollectAssets           — produces AssetManifest (NOT a hook, core phase)
+///  6. AssetCollector::CollectGameContent — produces AssetManifest (NOT a hook, core
+///     phase); the Web export ships the same set
 ///  7. hooks: PreAssetCopy    — receives mutable AssetManifest& (baking hooks go here)
 ///  8. CopyAssets             — copies files listed in manifest
 ///  9. CopyEngineShaders      — engine shaders (not GUID-tracked)
@@ -218,18 +221,20 @@ private:
     // user scripts and every package's native runtime module. Empty when there are none.
     std::string DescribeStagedNativeModules(const BuildSettings& s) const;
     bool CompileScripts(const BuildSettings& s, const std::filesystem::path& stagingDir);
-    // Regenerates the scripts csproj and resolves it and the dotnet that builds it. True
-    // with `outNothingToCompile` when the project has no script project and no C# sources.
-    bool PrepareScriptProject(const BuildSettings& s, std::filesystem::path& outProject,
-                              std::filesystem::path& outDotnet, bool& outNothingToCompile);
+    // Regenerates the scripts csproj and resolves it and the dotnet that builds the
+    // sources (DecideScriptCompile). True with `outNothingToCompile` when there is nothing
+    // to compile; false, with the error recorded, when the build needs the generated
+    // project and it is missing.
+    bool PrepareScriptProject(const BuildSettings& s, const ShippedScriptSources& sources, bool nativeAot,
+                              std::filesystem::path& outProject, std::filesystem::path& outDotnet,
+                              bool& outNothingToCompile);
     // The Debug package's managed build of `scriptsProj` into <staging>/Managed.
     bool BuildManagedScripts(const BuildSettings& s, const std::filesystem::path& stagingDir,
                              const std::filesystem::path& scriptsProj, const std::filesystem::path& dotnetExe);
     bool CompileScriptsNativeAOT(const BuildSettings& s,
                                   const std::filesystem::path& stagingDir,
-                                  const std::filesystem::path& scriptsProj,
+                                  const ShippedScriptSources& sources,
                                   const std::filesystem::path& dotnetExe);
-    AssetManifest CollectAssets(const BuildSettings& s);
     bool CopyAssets(const std::filesystem::path& stagingDir, const AssetManifest& manifest);
     bool CopyEngineShaders(const std::filesystem::path& stagingDir);
     bool CookMaterialVariants(const std::filesystem::path& contentRoot, const BuildSettings& s);

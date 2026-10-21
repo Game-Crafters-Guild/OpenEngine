@@ -15,9 +15,8 @@
 //     (successor of the PP_SHARED_FIELDS X-macro) consumed by TryWriteField /
 //     TryReadField / ReadableFieldNames, and — since Phase 2 — by the
 //     BlendPostProcessSettings fold (each entry carries its blend rule and
-//     contributes-group). Volume-core names (exposure, look,
-//     ictcpChromaCompression) and the fog-glow group shared by both fog effects stay in
-//     PostProcessSettings.cpp appendices.
+//     contributes-group). Volume-core names (exposure, look) and the fog-glow
+//     group shared by both fog effects stay in PostProcessSettings.cpp appendices.
 //   - Gates: the computed "<effect>Active" skipWhen names this effect alone
 //     decides, with their predicates. Gates that combine effects live in the
 //     core gate table in PostProcessSettings.cpp.
@@ -600,9 +599,7 @@ constexpr EffectSettingsField kContrastAdaptiveSharpenSettings[]{
 
 constexpr EffectSettingsField kCubeLutSettings[]{
     PP_SETTING("lutIntensity", LutIntensity),
-    PP_SETTING("lutStackOrder", LutStackOrder),
-    PP_SETTING("lutInputEncoding", LutInputEncoding),
-    PP_SETTING("lutTextureFormat", LutTextureFormat),
+    PP_SETTING("lutStage", LutStage),
 };
 
 constexpr EffectSettingsField kVignetteSettings[]{
@@ -980,6 +977,8 @@ constexpr EffectSettingsField kExposureAdjustmentSettings[]{
     PP_BLEND(ExposureCompensationEv),
     PP_BLEND(ExposureClampMinEv),
     PP_BLEND(ExposureClampMaxEv),
+    PP_BLEND(ExposureClampMinWeight),
+    PP_BLEND(ExposureClampMaxWeight),
 };
 
 // A lens-dirt composite samples the full bloom pyramid, so it keeps every
@@ -1328,9 +1327,15 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             {
                 out.Settings.ExposureCompensationEv = exposureAdjust->Compensation;
                 if (exposureAdjust->ClampMin)
+                {
                     out.Settings.ExposureClampMinEv = exposureAdjust->MinEv;
+                    out.Settings.ExposureClampMinWeight = 1.0f;
+                }
                 if (exposureAdjust->ClampMax)
+                {
                     out.Settings.ExposureClampMaxEv = exposureAdjust->MaxEv;
+                    out.Settings.ExposureClampMaxWeight = 1.0f;
+                }
             }
         },
     });
@@ -1799,12 +1804,11 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             if (auto* clut = world.GetComponent<GameEngine::Components::CubeLutEffect>(entity);
                 clut && clut->Enabled)
             {
-                out.Settings.LutIntensity = std::clamp(clut->Intensity, 0.0f, 1.0f);
-                out.Settings.LutStackOrder = clut->StackOrder;
-                out.Settings.LutInputEncoding = static_cast<int32>(std::min<uint32>(clut->InputEncoding, 5u));
-                out.Settings.LutTextureFormat = static_cast<int32>(std::min<uint32>(clut->TextureFormat, 1u));
                 out.CubeLutAssetGuid = clut->LutAssetGuid.ToGuid();
                 out.HasCubeLutAsset = !out.CubeLutAssetGuid.IsNull();
+                // An effect with no LUT picked grades nothing: no intensity reaches the pass.
+                out.Settings.LutIntensity = out.HasCubeLutAsset ? std::clamp(clut->Intensity, 0.0f, 1.0f) : 0.0f;
+                out.Settings.LutStage = static_cast<int32>(clut->Stage);
             }
         },
     });

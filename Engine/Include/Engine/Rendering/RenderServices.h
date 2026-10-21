@@ -52,7 +52,6 @@
 #include "Engine/Rendering/PointShadowAtlasPlanner.h"
 #include "Engine/Rendering/VolumetricFogTypes.h"
 #include "Engine/Rendering/AnimationComputePass.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Engine/Rendering/GPUAnimationDataStore.h"
 #include "Engine/Rendering/PerFrameWritePool.h"
 #include "Engine/Rendering/ShaderCompilationCache.h"
@@ -401,6 +400,8 @@ class RenderServices
     // by AddWorldPassForView. Forward contributors read these to drive
     // MaterialBinder::BeginPass with the same keyword set the world pass uses.
     std::optional<Rendering::MaterialKeyword> GetWorldPassKeywords(Rendering::ViewId viewId) const;
+    // The base winding the world pass draws entities with (mirrored instances flip it per segment).
+    Rendering::FrontFace GetFrontFace() const { return m_FrontFace; }
 
     // GPU culling pipeline (frustum/HZB). Owned by RenderServices and created
     // during Initialize(); ScheduleViewCullingDispatches drives it per frame
@@ -811,6 +812,17 @@ class RenderServices
         // on SceneColorGrab-keyword passes; the pass declares the Read(Sampled) that
         // forms the copy->draw RAW edge. Invalid = env-cube refraction fallback.
         Rendering::RenderGraph::RGTexture SceneGrab{};
+        // The sky's backdrop (Names::Res::SkyBackdrop, the sky-view LUT or the HDRI), bound as
+        // ge_skyBackdrop for the height fog's colour taken from the sky (HeightFog-keyword
+        // variants). Invalid = black, which the fog reads only under a sky colour source.
+        Rendering::RenderGraph::RGTexture SkyBackdrop{};
+        // The view's froxel volume (Names::Res::VolumetricFog), bound as ge_volumetricFog on
+        // VolumetricFog-keyword passes, which their node sets only when the volume was published.
+        Rendering::RenderGraph::RGTexture VolumetricFog{};
+        // The view's resolved volumetric clouds, bound as ge_volumetricClouds on
+        // VolumetricClouds-keyword passes, which their node sets only when the clouds composited this
+        // frame.
+        Rendering::RenderGraph::RGTexture VolumetricClouds{};
         // DDGI scaled glossy-reflection resolve outputs
         // (DDGIProbeFeature::DeclareGlossyResolveForView), bound as
         // ge_ddgiResolveRough/ge_ddgiResolveGlossy on DDGI-keyword passes.
@@ -2314,6 +2326,8 @@ class RenderServices
     // PerViewResources::WorldPassKeywords). Lets prewarm match the loaded pipeline (IBL in
     // the editor, non-IBL in WASDDemo) instead of guessing.
     Rendering::MaterialKeyword ResolveWorldPassKeywordsForPrewarm() const;
+    // HeightFog when any view's world pass recorded it, None otherwise (ResolveWorldPassKeywordsForPrewarm).
+    Rendering::MaterialKeyword RecordedHeightFogKeyword() const;
 
     Rendering::SamplerHandle m_AreaShadowSampler;
     Rendering::SamplerHandle m_AreaShadowRawSampler;

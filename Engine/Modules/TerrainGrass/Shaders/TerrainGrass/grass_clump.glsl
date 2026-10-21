@@ -72,6 +72,7 @@ struct GrassClumpSample
     float ColorRand;  // [0,1) clump tint / hue offset
     float HeightRand; // [0,1) clump height multiplier
     float FacingRand; // [0,1) clump common facing, as a fraction of a turn
+    float DistanceCells; // from the blade to the winning site, in clump cells
 };
 
 // Nearest of the nine jittered sites around worldXZ.
@@ -102,6 +103,7 @@ GrassClumpSample GrassSampleClump(vec2 worldXZ, float clumpSize, uint seed)
     best.ColorRand = 0.0;
     best.HeightRand = 0.0;
     best.FacingRand = 0.0;
+    best.DistanceCells = 0.0;
     float bestDistanceSq = 3.4e38;
     // Fixed iteration order with a strict less-than, so an exact tie always resolves to the same
     // neighbour on both mirrors rather than to whichever one the compiler evaluated last.
@@ -129,6 +131,7 @@ GrassClumpSample GrassSampleClump(vec2 worldXZ, float clumpSize, uint seed)
                 best.ColorRand = GrassHashToUnit(h2);
                 best.HeightRand = GrassHashToUnit(h3);
                 best.FacingRand = GrassHashToUnit(h4);
+                best.DistanceCells = sqrt(distanceSq);
             }
         }
     }
@@ -183,12 +186,125 @@ uint GrassClumpCodeFromFlags(uint flags)
     return (flags >> kGrassClumpCodeShift) & kGrassClumpCodeMask;
 }
 
+// GrassBladeInstance::BladeShape bit layout: the per-blade shape draws and the blade's place in its
+// tuft, all from the site, in the instance word that carries nothing else.
+//
+//   bits 0-7    tilt random, unorm8 (the bend random and the lean side are rehashed from this code)
+//   bits 8-15   twist random, unorm8: below the midpoint the blade twists one way, above it the
+//               other, and the distance from the midpoint scales the twist
+//   bits 16-23  fan direction: the heading from the tuft's site to the blade, a fraction of a turn
+//   bits 24-31  distance from the tuft's site in clump cells, unorm8 over [0, max distance]
+//
+// An unclumped blade carries a fan direction and a distance of 0, and the vertex stage applies no
+// fan because the terrain authors no clump.
+//
+// GrassBladeInstance::RandAndCoverage: bits 0-15 the per-blade random (unorm16), bits 16-23 the
+// field coverage at the blade's site (unorm8, terrain_grass_canopy.glsl), bits 24-31 unused.
+//
+// Lifted verbatim into the host suite (GrassPlacementModelTests runs the shipped pack and unpack),
+// so its literals carry the `f` suffix.
+// GE_SHARED_GRASS_BLADE_SHAPE_BEGIN
+const uint kGrassBladeShapeFieldMask = 255u;
+const uint kGrassBladeShapeTwistShift = 8u;
+const uint kGrassBladeShapeFanShift = 16u;
+const uint kGrassBladeShapeDistanceShift = 24u;
+// The nearest of nine jittered sites is never further than a cell diagonal; 1.5 cells covers it.
+const float kGrassBladeShapeMaxDistanceCells = 1.5f;
+// Salt for the bend draw rehashed off the tilt code. Bend and the lean side are fixed functions of
+// the 8-bit tilt code, so a field holds 256 (tilt, bend, side) combinations.
+const uint kGrassBladeBendSalt = 0x2C9F85A1u;
+const uint kGrassRandLevels = 65535u;
+const uint kGrassCoverageShift = 16u;
+
+uint GrassBladeShapeUnorm8(float value)
+{
+    return uint(floor(clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f)) & kGrassBladeShapeFieldMask;
+}
+
+uint GrassPackBladeShape(float tiltRand, float twistRand, float fanTurn, float distanceCells)
+{
+    uint fan = uint(floor(fract(fanTurn) * 256.0f)) & kGrassBladeShapeFieldMask;
+    return GrassBladeShapeUnorm8(tiltRand)
+        | (GrassBladeShapeUnorm8(twistRand) << kGrassBladeShapeTwistShift)
+        | (fan << kGrassBladeShapeFanShift)
+        | (GrassBladeShapeUnorm8(distanceCells / kGrassBladeShapeMaxDistanceCells)
+           << kGrassBladeShapeDistanceShift);
+}
+
+float GrassBladeShapeTiltRand(uint shape)
+{
+    return float(shape & kGrassBladeShapeFieldMask) * (1.0f / 255.0f);
+}
+
+// The bend draw, rehashed from the tilt code so the word carries one byte for both.
+float GrassBladeShapeBendRand(uint shape)
+{
+    return GrassHashToUnit(GrassHashNext((shape & kGrassBladeShapeFieldMask) ^ kGrassBladeBendSalt));
+}
+
+// The side the blade's lean jitter takes, +1 or -1, from the low bit of the same rehash; the bend
+// draw takes the top bits.
+float GrassBladeShapeJitterSign(uint shape)
+{
+    uint h = GrassHashNext((shape & kGrassBladeShapeFieldMask) ^ kGrassBladeBendSalt);
+    return (h & 1u) != 0u ? 1.0f : -1.0f;
+}
+
+// The twist random as a signed scale in [-1, 1].
+float GrassBladeShapeTwistSigned(uint shape)
+{
+    return float((shape >> kGrassBladeShapeTwistShift) & kGrassBladeShapeFieldMask) * (2.0f / 255.0f)
+        - 1.0f;
+}
+
+float GrassBladeShapeFanTurn(uint shape)
+{
+    return float((shape >> kGrassBladeShapeFanShift) & kGrassBladeShapeFieldMask) * (1.0f / 256.0f);
+}
+
+float GrassBladeShapeDistanceCells(uint shape)
+{
+    return float((shape >> kGrassBladeShapeDistanceShift) & kGrassBladeShapeFieldMask)
+        * (kGrassBladeShapeMaxDistanceCells / 255.0f);
+}
+
+uint GrassPackRandAndCoverage(float rand, float coverage)
+{
+    uint r = uint(floor(clamp(rand, 0.0f, 1.0f) * float(kGrassRandLevels) + 0.5f)) & kGrassRandLevels;
+    return r | (GrassBladeShapeUnorm8(coverage) << kGrassCoverageShift);
+}
+
+float GrassUnpackRand(uint packed)
+{
+    return float(packed & kGrassRandLevels) * (1.0f / float(kGrassRandLevels));
+}
+
+float GrassUnpackCoverage(uint packed)
+{
+    return float((packed >> kGrassCoverageShift) & kGrassBladeShapeFieldMask) * (1.0f / 255.0f);
+}
+// GE_SHARED_GRASS_BLADE_SHAPE_END
+
 // Symmetric variance around 1: `variance` 0 returns exactly 1.0, so an unclumped field is
 // bit-identical to one with the height multiplier applied rather than merely indistinguishable.
 float GrassClumpHeightMultiplier(float heightRand, float variance)
 {
     float v = clamp(variance, 0.0, 1.0);
     return 1.0 + (heightRand * 2.0 - 1.0) * v;
+}
+
+// Distance from a tuft's site, in clump cells, at which its taper is complete: about the edge of a
+// tuft (half of all blades stand within 0.42 cells of their site, nine in ten within 0.68).
+const float kGrassClumpTaperEdge = 0.75;
+
+// The tuft's shape: 1 at the site, falling to 1 - taper at kGrassClumpTaperEdge and beyond. A taper
+// of 0 returns exactly 1.0. Height only: a clump never moves or removes a blade, because pulling
+// blades toward the site emptied the outer band of every tuft and left bare ground (#4205).
+float GrassClumpTaperMultiplier(float distanceCells, float taper)
+{
+    float x = clamp(distanceCells / kGrassClumpTaperEdge, 0.0, 1.0);
+    float edge = x * x * (3.0 - 2.0 * x);
+    return 1.0 - clamp(taper, 0.0, 1.0) * edge;
 }
 
 // THE custom0 CHANNEL LAYOUT. One file owns all four components so the vertex stage and the

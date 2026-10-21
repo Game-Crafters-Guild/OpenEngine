@@ -314,3 +314,87 @@ TEST(MaterialKeywordDerivation, TheStepsViewKeywordHasItsOwnDefine)
     const auto plain = GenerateDefines(key, "StandardPBR");
     EXPECT_EQ(std::find(plain.begin(), plain.end(), "GE_PARALLAX_STEPS_VIEW_ENABLED"), plain.end());
 }
+
+namespace
+{
+// The blend keyword the fog reads for one colour equation, by the rule the fog applies: straight alpha
+// over takes none (c T + S), premultiplied over takes PremultipliedBlend (c T + S a), anything added onto
+// the destination AdditiveBlend (c T), the two multiplies MultiplyBlend (mix(1, c, T)) and every other
+// equation UnfoggedBlend (no identity colour to fade toward).
+MaterialKeyword ExpectedBlendKeyword(GameEngine::MaterialBlendOp op, GameEngine::MaterialBlendFactor src,
+                                     GameEngine::MaterialBlendFactor dst)
+{
+    using GameEngine::MaterialBlendFactor;
+    using GameEngine::MaterialBlendOp;
+    if (op != MaterialBlendOp::Add)
+        return MaterialKeyword::UnfoggedBlend;
+    if (dst == MaterialBlendFactor::OneMinusSrcAlpha && src == MaterialBlendFactor::SrcAlpha)
+        return MaterialKeyword::None;
+    if (dst == MaterialBlendFactor::OneMinusSrcAlpha && src == MaterialBlendFactor::One)
+        return MaterialKeyword::PremultipliedBlend;
+    if (dst == MaterialBlendFactor::One)
+        return MaterialKeyword::AdditiveBlend;
+    if ((src == MaterialBlendFactor::DstColor && dst == MaterialBlendFactor::Zero) ||
+        (src == MaterialBlendFactor::Zero && dst == MaterialBlendFactor::SrcColor))
+        return MaterialKeyword::MultiplyBlend;
+    return MaterialKeyword::UnfoggedBlend;
+}
+} // namespace
+
+// Every colour blend equation a material can author reaches exactly the blend keyword the fog's rule
+// gives it, and only a Blend material carries one: an opaque or alpha-tested surface hides what is
+// behind it whatever blend its document names.
+TEST(MaterialKeywordDerivation, EveryBlendTakesTheFogWeightOfItsComposite)
+{
+    using GameEngine::MaterialAlphaMode;
+    using GameEngine::MaterialBlendFactor;
+    using GameEngine::MaterialBlendOp;
+    using GameEngine::MaterialBlendState;
+    using GameEngine::Rendering::ApplyAlphaModeKeywords;
+    constexpr MaterialKeyword kBlendKeywords = MaterialKeyword::PremultipliedBlend | MaterialKeyword::AdditiveBlend |
+                                               MaterialKeyword::MultiplyBlend | MaterialKeyword::UnfoggedBlend;
+    size_t equations = 0;
+    for (int op = 0; op <= static_cast<int>(MaterialBlendOp::Max); ++op)
+        for (int src = 0; src <= static_cast<int>(MaterialBlendFactor::AlphaSaturate); ++src)
+            for (int dst = 0; dst <= static_cast<int>(MaterialBlendFactor::AlphaSaturate); ++dst)
+            {
+                MaterialBlendState blend{};
+                blend.ColorOp = static_cast<MaterialBlendOp>(op);
+                blend.SrcColorFactor = static_cast<MaterialBlendFactor>(src);
+                blend.DstColorFactor = static_cast<MaterialBlendFactor>(dst);
+                SCOPED_TRACE("op " + std::to_string(op) + " src " + std::to_string(src) + " dst " + std::to_string(dst));
+                ShaderVariantKey key{};
+                ApplyAlphaModeKeywords(key, MaterialAlphaMode::Blend, blend);
+                EXPECT_EQ(key.materialKeywords & kBlendKeywords,
+                          ExpectedBlendKeyword(blend.ColorOp, blend.SrcColorFactor, blend.DstColorFactor));
+                EXPECT_TRUE(GameEngine::Rendering::HasKeyword(key.materialKeywords, MaterialKeyword::AlphaBlend));
+                for (MaterialAlphaMode covering : {MaterialAlphaMode::Opaque, MaterialAlphaMode::Mask})
+                {
+                    ShaderVariantKey opaque{};
+                    ApplyAlphaModeKeywords(opaque, covering, blend);
+                    EXPECT_EQ(opaque.materialKeywords & kBlendKeywords, MaterialKeyword::None);
+                }
+                ++equations;
+            }
+    EXPECT_EQ(equations, 5u * 15u * 15u);
+    // An unauthored blend is the default straight alpha over.
+    ShaderVariantKey unauthored{};
+    ApplyAlphaModeKeywords(unauthored, MaterialAlphaMode::Blend, std::nullopt);
+    EXPECT_EQ(unauthored.materialKeywords & kBlendKeywords, MaterialKeyword::None);
+}
+
+// The volumetric fog by a surface's own distance reaches the blended and the transmissive materials;
+// every other surface takes it from the composite. The clouds in front of a far surface reach the
+// blended materials. The height fog reaches every colour variant.
+TEST(MaterialKeywordDerivation, TheVolumetricPassKeywordsReachTheSurfacesDrawnAfterTheirComposites)
+{
+    using GameEngine::Rendering::NarrowColorPassKeywords;
+    const MaterialKeyword pass = MaterialKeyword::ForwardPlus | MaterialKeyword::HeightFog |
+                                 MaterialKeyword::VolumetricFog | MaterialKeyword::VolumetricClouds;
+    const MaterialKeyword opaquePass = MaterialKeyword::ForwardPlus | MaterialKeyword::HeightFog;
+    EXPECT_EQ(NarrowColorPassKeywords(MaterialKeyword::AlphaBlend, pass), pass);
+    EXPECT_EQ(NarrowColorPassKeywords(MaterialKeyword::Transmission, pass), opaquePass | MaterialKeyword::VolumetricFog)
+        << "the clouds in front reach blended surfaces only";
+    EXPECT_EQ(NarrowColorPassKeywords(MaterialKeyword::None, pass), opaquePass);
+    EXPECT_EQ(NarrowColorPassKeywords(MaterialKeyword::AlphaTest, pass), opaquePass);
+}

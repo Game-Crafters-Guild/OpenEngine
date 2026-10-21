@@ -273,11 +273,11 @@ uint64_t SkyEnvironmentSource::InputDigest() const
 
     // FNV-1a over exactly the inputs the capture's baked sky depends on: the
     // sun + the atmosphere/composite block. Deliberately excludes per-frame
-    // animated fields (skyTimeSeconds, stars, moon, time-of-day) so a
+    // animated fields (skyTimeSeconds, stars, the moon's disc, time-of-day) so a
     // steady sky bakes once.
     //
     // The capture SAMPLES the atmospheric sky-view LUT, which is a function of
-    // the sun + the full atmosphere block (see ComputeSkyLutSettingsDigest in
+    // the sun, the moon as its second source and the full atmosphere block (see ComputeSkyLutSettingsDigest in
     // SkyRenderNode) and of the camera's altitude band, which reaches this
     // digest through MaterializedLutDigest. Folding the same atmosphere fields here means the IBL
     // re-bakes exactly once whenever the sky-view LUT (and therefore the sky the
@@ -596,7 +596,7 @@ void SkyEnvironmentSource::RecordSpecularPrefilter(RenderGraph::RGContext& ctx,
     // Last bake stage: record the digest the bake was scheduled FOR (captured at
     // declaration, not re-read here) so steady-state frames skip the rebake.
     feature.SetLastBakedDigest(bakedDigest);
-    feature.ResetFramesSinceBake();
+    feature.MarkBaked();
 }
 
 bool SkyEnvironmentSource::ScheduleCaptureFacesOnly(const EnvironmentBakeContext& ctx,
@@ -619,8 +619,8 @@ bool SkyEnvironmentSource::ScheduleCaptureFacesOnly(const EnvironmentBakeContext
         TextureFormat::R16G16B16A16_FLOAT, feature.GetEnvCaptureMipCount(),
         ImageBasedLightingFeature::kNumCaptureFaces);
     const RenderGraph::RGTexture skyView = frame.ImportExternalTexture(
-        "Sky_View_LUT", GetSky()->GetRenderer().GetSkyViewLutTexture(),
-        ResourceState::ShaderResource);
+        "Sky_View_LUT", GetSky()->GetRenderer().GetSkyViewLutTexture(), ResourceState::ShaderResource,
+        Rendering::SkyRenderer::SkyViewLutFormat(GetSky()->GetRenderer().GetDevice()->PreferredShaderSource()));
     // The capture's ground bounce samples the transmittance LUT. Dedup-by-handle lands
     // this on SkyRenderNode's id, so RG orders the captures after the transmittance
     // compute and inserts the StorageWrite->SampledRead barrier when it is recomputed.
@@ -734,8 +734,8 @@ void SkyEnvironmentSource::ScheduleBake(const EnvironmentBakeContext& ctx)
     // declared, the captures read the resting (ShaderResource) LUT, and nothing reorders.
     // ShaderResource is the LUT's resting state (the convolves/world pass leave it sampled).
     const RenderGraph::RGTexture skyView = frame.ImportExternalTexture(
-        "Sky_View_LUT", GetSky()->GetRenderer().GetSkyViewLutTexture(),
-        ResourceState::ShaderResource);
+        "Sky_View_LUT", GetSky()->GetRenderer().GetSkyViewLutTexture(), ResourceState::ShaderResource,
+        Rendering::SkyRenderer::SkyViewLutFormat(GetSky()->GetRenderer().GetDevice()->PreferredShaderSource()));
     // Same dedup-by-handle reasoning as the sky-view LUT above: the capture's ground
     // bounce samples the transmittance LUT, so declaring the read orders these passes
     // after the transmittance compute and inserts its barrier.

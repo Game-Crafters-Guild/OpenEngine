@@ -414,13 +414,7 @@ UIElement* GameUIHost::FindDocumentRoot(uint64_t entityId) const
     return it != m_Subtrees.end() ? it->second.Root : nullptr;
 }
 
-UIElement* GameUIHost::FindElementById(uint64_t entityId, StringId id)
-{
-    UIElement* root = FindDocumentRoot(entityId);
-    return root ? root->FindById(id) : nullptr;
-}
-
-UIElement* GameUIHost::FindElementByIdAny(StringId id, uint64_t* outOwnerEntityId)
+UIElement* GameUIHost::FindElementById(StringId id, uint64_t* outOwnerEntityId)
 {
     // Lowest owning entity id wins a shared id. m_Subtrees is an unordered_map whose
     // iteration order changes across rehashes (documents mount/unmount every

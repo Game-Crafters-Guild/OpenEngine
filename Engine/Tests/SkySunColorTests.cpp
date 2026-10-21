@@ -349,10 +349,10 @@ TEST(SkySunColor, TheSourceAboveTheAtmosphereIsWhiteWhileTheGroundColourIsNot)
     EXPECT_GT(ground[1], ground[2]);
 }
 
-// At full night the primary source is the moon, and its stylized illuminance lives in the colour's
-// MAGNITUDE (SkySystemConfig::moonColor). Restoring a normalized tint there would brighten every
-// night scene by more than two orders of magnitude while looking like a cosmetic edit.
-TEST(SkySunColor, TheNightSourceCarriesTheStylizedMoonIlluminance)
+// At full night the primary source is the moon: its colour is the lunar tint at unit luminance,
+// warmer than the sun's white (the moon reflects red better than blue), and its illuminance is in the
+// intensity, the moon's own source, never in the colour.
+TEST(SkySunColor, TheNightSourceIsTheMoonsWarmTintAtUnitLuminance)
 {
     Rendering::SkySettings settings{};
     settings.timeOfDayHours = 0.0f;
@@ -361,12 +361,13 @@ TEST(SkySunColor, TheNightSourceCarriesTheStylizedMoonIlluminance)
 
     Rendering::ComputeSimpleSunMoon(settings, config, Rendering::MakeSolarFrame(Rendering::EarthPathAngles({})), state);
     ASSERT_FLOAT_EQ(state.primaryMoonBlend, 1.0f) << "midnight must be full moon blend";
-    Rendering::ApplySimpleLightingToSkySettings(state, config, kWhite, settings.primarySunIntensity, settings);
+    constexpr float kMoonSource = 0.004f;
+    Rendering::ApplySimpleLightingToSkySettings(state, config, kWhite, kMoonSource, settings);
 
-    const float nightLuminance = Luminance(settings.primarySunColor);
-    EXPECT_GT(nightLuminance, 1.0f / 400.0f);
-    EXPECT_LT(nightLuminance, 1.0f / 100.0f);
-    EXPECT_GT(settings.primarySunColor[2], settings.primarySunColor[0]) << "moonlight reads cool";
+    EXPECT_NEAR(Luminance(settings.primarySunColor), 1.0f, 1e-4f);
+    EXPECT_GT(settings.primarySunColor[0], settings.primarySunColor[2]) << "moonlight is warmer than sunlight";
+    EXPECT_EQ(settings.primarySunIntensity, kMoonSource);
+    EXPECT_EQ(settings.moonIntensity, kMoonSource);
 }
 
 // THE CHAIN, not the function. `DimsAndReddensMonotonicallyAsTheSunDescends` above pins the
@@ -538,8 +539,10 @@ TEST(SkySunColor, SkyViewLutStillAppliesItsOwnTransmittanceToTheSunColour)
 {
     const std::string lut = LoadShader("sky_view_lut.comp");
     ASSERT_FALSE(lut.empty()) << "sky_view_lut.comp not found via GE_RENDERER_REPO_ROOT";
-    EXPECT_NE(lut.find("transToSun * uSky.sunColor * uSky.sunIntensity"), std::string::npos)
+    EXPECT_NE(lut.find("* transToSrc;"), std::string::npos)
         << "the in-scatter source term must keep applying the transmittance itself";
+    EXPECT_NE(lut.find("vec3 sunRadiance = uSky.sunColor * uSky.sunIntensity;"), std::string::npos)
+        << "the sun's source enters above the atmosphere";
 }
 
 // ---------------------------------------------------------------------------------------------

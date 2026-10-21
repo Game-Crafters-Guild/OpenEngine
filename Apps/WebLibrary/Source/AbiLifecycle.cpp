@@ -288,7 +288,8 @@ EMSCRIPTEN_KEEPALIVE int32_t ge_update_assets()
     return kOk;
 }
 
-/// Sizes the drawing buffer to the canvas's CSS size times the device pixel ratio.
+/// Sizes the drawing buffer to the canvas's CSS size times `devicePixelRatio`: the page passes
+/// the browser's ratio, or a lower one to cap the drawing buffer's pixels.
 EMSCRIPTEN_KEEPALIVE int32_t ge_resize(int32_t width, int32_t height, double devicePixelRatio)
 {
     const AbiCallScope scope("ge_resize");
@@ -302,7 +303,7 @@ EMSCRIPTEN_KEEPALIVE int32_t ge_resize(int32_t width, int32_t height, double dev
                      devicePixelRatio);
         return kFailed;
     }
-    g_Application->Resize(width, height);
+    g_Application->Resize(width, height, devicePixelRatio);
     return kOk;
 }
 

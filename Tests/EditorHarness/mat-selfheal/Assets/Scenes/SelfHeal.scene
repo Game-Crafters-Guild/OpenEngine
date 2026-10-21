@@ -34,7 +34,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_10"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/SelfHeal.material"]
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 Name.value = "TexturedCube"
 Transform.position = (0, 1.2, 0)
 Transform.rotation = (0, 0.38, 0, 0.92)

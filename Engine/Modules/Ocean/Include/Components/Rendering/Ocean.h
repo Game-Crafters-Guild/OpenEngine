@@ -5,6 +5,7 @@
 #include "Types/StringUtils.h"
 #include "Types/Types.h"
 #include "Components/AssetRef.h"
+#include "Rendering/RenderLayerMask.h"
 
 #include <string_view>
 
@@ -139,7 +140,7 @@ struct OceanSurface
     float32 SprayUpVelocity = 1.6f;
     float32 SprayWindVelocityScale = 0.55f;
     float32 SprayOpacity = 0.85f;
-    uint32 SprayRenderLayerMask = 1u;
+    Rendering::RenderLayerMask SprayRenderLayers;
 
     // Emits extra short splash bursts where opaque geometry cuts the waterline
     // (ship hulls, piers, rocks), found by comparing the wave surface with the
@@ -498,12 +499,12 @@ struct OceanRenderer
     // Optional runtime hidden top-down mesh raster capture for dynamic geometry
     // seabed depth. Off by default because it renders a secondary orthographic
     // world pass. When enabled, regular MeshRenderer geometry matching
-    // RasterDepthCaptureRenderLayerMask is captured into a one-frame-latent R32F
+    // RasterDepthCaptureLayers is captured into a one-frame-latent R32F
     // water-depth texture and merged with saved caches, analytic seabeds, and live
     // contributors by the seabed-depth compute.
     bool RasterDepthCapture = false;
     uint32 RasterDepthCaptureResolution = 512u;
-    uint32 RasterDepthCaptureRenderLayerMask = 0xFFFFFFFFu;
+    Rendering::RenderLayerMask RasterDepthCaptureLayers = Rendering::RenderLayerMask::All();
     float32 RasterDepthCaptureSizeX = 512.0f;
     float32 RasterDepthCaptureSizeZ = 512.0f;
     float32 RasterDepthCaptureTopPadding = 64.0f;
@@ -1124,7 +1125,8 @@ struct OceanDepthCacheSource
     // scene geometry when requested.
     uint32 BakeWidth = 512u;
     uint32 BakeHeight = 512u;
-    uint32 RenderLayerMask = 0xFFFFFFFFu;
+    // The renderers the bake captures: those whose RenderLayers intersect these.
+    Rendering::RenderLayerMask SourceLayers = Rendering::RenderLayerMask::All();
     // When true, the editor/engine scene-mesh bake only captures MeshRenderer
     // entities that also have OceanMeshDepthContributor. This is the exact
     // triangle-cache companion to the runtime contributor's cheaper bounds stamp.
@@ -1191,9 +1193,9 @@ struct OceanDepthContributor
 // is acceptable. For exact static geometry, bake an OceanDepthCacheSource instead.
 struct OceanMeshDepthContributor
 {
-    // Only contribute when the optional MeshRenderer's renderLayerMask overlaps
-    // this mask. Ignored when the entity has no MeshRenderer.
-    uint32 RenderLayerMask = 0xFFFFFFFFu;
+    // Only contribute when the optional MeshRenderer's RenderLayers intersect
+    // these. Ignored when the entity has no MeshRenderer.
+    Rendering::RenderLayerMask ContributorLayers = Rendering::RenderLayerMask::All();
 
     // Extra footprint padding in meters around the projected world-space bounds.
     float32 ExtentPadding = 0.0f;

@@ -64,7 +64,7 @@ if __name__ == "__main__":
         settings = json.loads(source.read_text()) if source.exists() else {}
         # This writes only the isolated profile. Exposure is fixed and recorded;
         # sharpen/bloom/CRT cannot disguise reconstruction artifacts.
-        settings.update({"sceneView.postFxAutoExposureEnabled": False,
+        settings.update({"sceneView.exposure": "fixed",
                          "sceneView.postFxFixedExposureEv": 16.9,
                          "sceneView.postFxExposureCompensation": 0,
                          "sceneView.postFxBloomEnabled": False,

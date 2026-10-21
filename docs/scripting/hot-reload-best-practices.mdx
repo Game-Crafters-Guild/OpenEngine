@@ -1,11 +1,11 @@
 ---
 title: Hot reload and scripting best practices
-description: Recommended patterns for C# hot reload exports, tokens, domains and assembly swaps, for fast iteration and stable reloads.
+description: Recommended patterns for C# hot reload exports, tokens, domains, and assembly swaps, for fast iteration and stable reloads.
 sidebar:
   order: 2
 ---
 
-This guide summarizes the recommended usage patterns for hot reload, to keep iteration fast and reloads stable. Scripts are compiled by the compile server, outside the editor process: see [Compile server](../contributing/compile-server.mdx).
+This guide summarizes the recommended usage patterns for hot reload, to keep iteration fast and reloads stable. The compile server compiles scripts, outside the editor process: see [Compile server](../contributing/compile-server.mdx). A project's scripts load when the project opens (the assembly last compiled into its `ScriptAssemblies/` folder, or a fresh compile when there is none or it is older than the editor) and again after every save of a `.cs` file. A scene opened before they arrive gets its C# components when they do.
 
 ## Public export shape for fast invocation
 
@@ -14,18 +14,18 @@ This guide summarizes the recommended usage patterns for hot reload, to keep ite
 - Use the `HotReloadHelper` facades:
   - `TryQuery(string name, out ulong token, ulong domain = 0)`
   - `TryInvoke(ulong token, ulong domain = 0)`
-- Return `ScriptingOpResult.Ok` (0) on success; use the negative codes from `ScriptingOpResult` for errors.
+- Return `ScriptingOpResult.Ok` (0) on success. Use the negative codes from `ScriptingOpResult` for errors.
 
 ## Token lifecycle and domains
 
-- Tokens are stable within a domain for a given export; they may become invalid after swaps.
+- Tokens are stable within a domain for a given export. They may become invalid after swaps.
 - After `SwapPreloadedContext` or `LoadCompiledAssembly`, query the tokens again.
 - Domain 0 means "current domain". `HotReloadManager` keeps a positive domain id per loaded context.
 
 ## Query and invoke performance
 
 - `QueryExportInDomain` uses a prebuilt index (full name and simple name) for constant-time lookup after a load or swap.
-- Query by full name when possible; simple names are supported, but the first match wins.
+- Query by full name when possible. Simple names are supported, but the first match wins.
 - Cache tokens on the caller side, and invoke by token on the hot path.
 
 ## Assembly loading and swapping
@@ -35,17 +35,17 @@ For the fastest swaps:
 1. `PreloadAssemblyContext(byte[] asm, byte[]? pdb)`
 2. `SwapPreloadedContext()`
 
-Preloading does all the heavy work (context creation, load) off the main thread; the swap is atomic and fast. Loading by file path is supported, but loading from a stream or bytes avoids file locks.
+Preloading does all the heavy work (context creation, load) off the main thread. The swap is atomic and fast. Loading by file path is supported, but loading from a stream or bytes avoids file locks.
 
 ## Environment flags
 
-- `GE_HOTRELOAD_VERBOSE=1` enables info-level logs for `HotReloadManager`. The default is quiet; warnings and errors still print.
+- `GE_HOTRELOAD_VERBOSE=1` enables info-level logs for `HotReloadManager`. The default is quiet. Warnings and errors still print.
 - `GE_HRM_PATH` lets tests and tools locate the built `HotReloadManager` assembly.
 
 ## Error handling
 
 - Methods return `int` codes; 0 is success. `CoreBridge` maps them to its `ScriptingOpResult`, whose values are `GE_Result`'s.
-- Common failure codes include `Fail` (-1), `InvalidArg` (-2), `NotFound` (-3) and `NotInitialized` (-4); a missing script assembly file is `NotFound`.
+- Common failure codes include `Fail` (-1), `InvalidArg` (-2), `NotFound` (-3), and `NotInitialized` (-4). A missing script assembly file is `NotFound`.
 
 ## Testing patterns
 
@@ -54,8 +54,4 @@ Preloading does all the heavy work (context creation, load) off the main thread;
 ## Diagnostics
 
 - `HotReloadManager` keeps its logs minimal by default, for clean test output.
-- Enable verbose mode during an investigation; leave it off for normal runs to avoid the overhead.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/scripting/HotReload_BestPractices.md`; identifiers as code; "HRM" spelled out as `HotReloadManager`; the IncrementalCompiler sections, its cache note and its micro-benchmarks dropped (the in-process compiler is gone; the compile server compiles scripts).
+- Enable verbose mode during an investigation. Leave it off for normal runs to avoid the overhead.

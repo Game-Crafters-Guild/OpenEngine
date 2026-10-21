@@ -11,6 +11,7 @@
 
 #include "Engine/Rendering/DrawCommand.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
 
 #include "Rendering/CameraTypes.h" // ViewPurpose
@@ -78,6 +79,8 @@ void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
     // both the recorded world-pass keywords and the published *Written texture
     // names are still empty at this point every frame.
     passKeywords |= Engine::Renderer::Pipeline::ReflectionsProvider::WorldPassKeyword(d);
+    // The height fog the same way: this frame's answer, not the one the world pass recorded last frame.
+    passKeywords = (passKeywords & ~MaterialKeyword::HeightFog) | Engine::Renderer::Pipeline::HeightFogPassKeyword(d);
 
     DrawCommand cmd{};
     if (!feature.BuildDrawCommand(rs, d.View.id, passKeywords, cmd))
@@ -181,6 +184,10 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
     // nothing.
     auto& feature = rs.EnsureFeature<CBTRenderFeature>();
     if (!feature.IsActive())
+        return;
+    // A view whose layers miss the terrain's declares nothing of it: no update, draw or shadow.
+    const auto* terrainRender = rs.GetFeature<TerrainECS::TerrainRenderFeature>();
+    if (!terrainRender || !terrainRender->ViewDrawsActiveTerrain(d.View.ActiveRenderLayerMask()))
         return;
     if (!feature.EnsureInitialized(*device, rs))
         return;

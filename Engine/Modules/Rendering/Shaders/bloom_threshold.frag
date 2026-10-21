@@ -6,8 +6,11 @@ layout(set=0,binding=0) uniform sampler2D uHDR;
 // Auto-exposure scale (last frame's adapted exposure; the "ExposureHistory" blueprint resource,
 // zero-initialized on creation). Read only when useAutoExposure != 0 — matches the Tonemap node's
 // exposure resolution so the bright-pass threshold operates in the same exposed space the
-// tonemap will display, keeping the bloom knee stable as auto-exposure adapts.
-layout(set=0,binding=1,std430) readonly buffer ExposureHistory { float exposureScale; uint valid; } uExposure;
+// tonemap will display, keeping the bloom knee stable as auto-exposure adapts. The input is
+// stored at the frame's pre-exposure P, so stored values reach display units through
+// exposure / P; the output (and the depth veil it injects) stays in stored units.
+#define GE_EXPOSURE_HISTORY_BINDING 1
+#include "Includes/exposure_history.glsl"
 layout(set=0,binding=2) uniform sampler2D uDepth;
 layout(set=0,binding=3,std140) uniform ViewParamsBlock {
 #define GE_VP_MAT4(name) mat4 name;
@@ -118,7 +121,8 @@ vec3 WidePrefilter(vec2 d, float expScale)
 }
 
 void main(){
-    float expScale = GE_ResolveExposureScale(pc.exposure, pc.useAutoExposure, uExposure.exposureScale);
+    float expScale = GE_ResolveExposureScale(pc.exposure, pc.useAutoExposure, uExposure.exposureScale) /
+                     GE_PreExposure();
 
     vec2 texel = 1.0 / vec2(textureSize(uHDR, 0));
     vec3 bloomSource = pc.bloomAntiFlicker != 0 ? WidePrefilter(texel, expScale)

@@ -84,6 +84,10 @@ private:
     void RefreshButtonStates();
     void UpdateProjectionButtonState();
     void UpdateRotationGizmoButtonState();
+    /// The button `held` names while it is alive; once it is destroyed (or before the
+    /// first call), the first Button with `id` in this toolbar, which `held` then names.
+    /// The state refreshes run every frame, so this keeps them off the id lookup.
+    Button* HeldButton(UIElement::WeakRef<Button>& held, StringId id);
 
     SceneViewController*   m_Controller = nullptr; // not owned
     Editor::ToolbarDragDrop* m_DragDrop = nullptr; // not owned
@@ -116,6 +120,16 @@ private:
     // see BeginWiringPass for why the generation alone is not enough.
     bool m_WiringAllResolved = false;
     bool m_WiringPassOpen = false;
+    // The buttons whose icon-active class mirrors controller and settings state
+    // (RefreshButtonStates), held between frames through HeldButton.
+    UIElement::WeakRef<Button> m_GizmoButton;
+    UIElement::WeakRef<Button> m_GridButton;
+    UIElement::WeakRef<Button> m_SnapButton;
+    UIElement::WeakRef<Button> m_View2DButton;
+    UIElement::WeakRef<Button> m_PickModeButton;
+    UIElement::WeakRef<Button> m_PostProcessButton;
+    UIElement::WeakRef<Button> m_ProjectionButton;
+    UIElement::WeakRef<Button> m_RotationGizmoButton;
 };
 
 } // namespace GameEngine

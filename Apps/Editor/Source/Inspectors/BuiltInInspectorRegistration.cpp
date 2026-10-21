@@ -15,6 +15,7 @@
 #include "Inspectors/ColorGradeEffectInspector.h"
 #include "Inspectors/ContrastAdaptiveSharpenEffectInspector.h"
 #include "Inspectors/CrtEffectInspector.h"
+#include "Inspectors/CubeLutAssetInspector.h"
 #include "Inspectors/CubeLutEffectInspector.h"
 #include "Inspectors/DebandEffectInspector.h"
 #include "Inspectors/DepthOfFieldEffectInspector.h"
@@ -28,6 +29,7 @@
 #include "Inspectors/LightInspector.h"
 #include "Inspectors/MaterialInspector.h"
 #include "Inspectors/MeasureInspector.h"
+#include "Inspectors/NavigationSourceComponentTraits.h"
 #include "Inspectors/NavigationSurfaceInspector.h"
 #include "Inspectors/MeshRendererInspector.h"
 #include "Inspectors/ModelInspector.h"
@@ -89,6 +91,7 @@ void RegisterBuiltInInspectors()
     RegisterPostProcessVolumeInspector();
     RegisterWindVolumeInspector();
     RegisterNavigationSurfaceInspector();
+    RegisterNavigationSourceComponentTraits();
     RegisterBloomEffectInspector();
     RegisterChromaticAberrationEffectInspector();
     RegisterDepthOfFieldEffectInspector();
@@ -125,6 +128,7 @@ void RegisterBuiltInInspectors()
     RegisterModelInspector();
     RegisterTextureInspector();
     RegisterAudioInspector();
+    RegisterCubeLutAssetInspector();
     RegisterScriptInspector();
     RegisterNativeSourceInspector();
     RegisterShaderInspector();

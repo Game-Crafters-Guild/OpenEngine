@@ -115,7 +115,7 @@ MemberLoads CountMemberLoads(const std::vector<uint8_t>& bytes, std::string_view
         const uint32_t count = words[at] >> 16;
         if (count == 0 || at + count > words.size())
             return result;
-        const uint32_t* operands = &words[at + 1];
+        const uint32_t* operands = words.data() + at + 1;
         switch (opcode)
         {
         case kOpName:
@@ -176,7 +176,7 @@ size_t CountGlslStd450Instructions(const std::vector<uint8_t>& bytes, uint32_t i
         const uint32_t count = words[at] >> 16;
         if (count == 0 || at + count > words.size())
             return result;
-        const uint32_t* operands = &words[at + 1];
+        const uint32_t* operands = words.data() + at + 1;
         if (opcode == kOpExtInstImport && LiteralString(operands + 1, count - 2) == "GLSL.std.450")
             glslStd450 = operands[0];
         else if (opcode == kOpExtInst && count >= 5 && glslStd450 && operands[2] == *glslStd450 &&

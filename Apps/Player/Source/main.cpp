@@ -386,7 +386,8 @@ static int PlayerMainImpl(int argc, char** argv)
 
     // --headless: no window, render device, audio device or input device; the
     // project's scene, scripts and systems run on a fixed step paced to real time.
-    const std::optional<GameEngine::PlayerRunOptions> runOptions = GameEngine::ParsePlayerRunOptions(argc, argv);
+    const std::optional<GameEngine::PlayerRunOptions> runOptions =
+        GameEngine::ParsePlayerRunOptions(argc, argv, std::getenv("GE_AUDIO_OUTPUT"));
     if (!runOptions)
     {
         Logger::Log::Flush();
@@ -412,6 +413,7 @@ static int PlayerMainImpl(int argc, char** argv)
     appConfig.WindowHeight = gameConfig.windowHeight;
     appConfig.Fullscreen = (gameConfig.windowMode != GameEngine::WindowMode::Windowed);
     appConfig.Headless = runOptions->Headless;
+    appConfig.AudioOutput = runOptions->AudioOutput;
     // Resolve the asset root to an absolute path. A relative value from the
     // command line resolves against the LAUNCH cwd (where the user ran the
     // command); without one, the root is the Assets/ the build staged.
@@ -506,6 +508,8 @@ static int PlayerMainImpl(int argc, char** argv)
             "— packaged script mode, runtime compilation disabled",
             packagedLayout.ContentRoot.string());
     }
+    // A Player built without C# scripting loads no assembly, so a missing one is not an error.
+#if GE_ENABLE_SCRIPTING
     if (!useNativeAOT && !packagedLayout.PrebuiltScriptAssembly.empty() &&
         !packagedLayout.PrebuiltScriptAssemblyExists)
     {
@@ -514,6 +518,7 @@ static int PlayerMainImpl(int argc, char** argv)
             "scripts will not load (repackage the game or fix game.config)",
             gameConfig.scriptAssemblyPath, packagedLayout.PrebuiltScriptAssembly.string());
     }
+#endif
 
     GameEngine::ScriptsConfig scriptsConfig =
         GameEngine::BuildPlayerScriptsConfig(packagedLayout, useNativeAOT);

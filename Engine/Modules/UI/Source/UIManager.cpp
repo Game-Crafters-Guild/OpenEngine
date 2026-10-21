@@ -34,8 +34,6 @@
 #include "UI/UIEvents.h"
 #include "UI/UIStyle.h"
 
-#include "AssetCore/SharedFileRead.h"
-#include "Engine/Rendering/EmbeddedImageDecoder.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
 
@@ -60,14 +58,9 @@
 #include <cstddef>
 
 #include "Assets/AssetManager.h"
-#include "Assets/TextureAsset.h"
 
 #include "UI/Assets/UILayoutAsset.h"
 #include "UI/Assets/UIStyleAsset.h"
-
-#if defined(GE_HAVE_KTX)
-#include <ktx.h>
-#endif
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
 #include <yoga/Yoga.h>
@@ -390,6 +383,11 @@ void UIManager::FreeRenderSlots(UIElement* el)
         m_ClipAllocator.Free(el->m_ClipSlotIdx);
         el->m_ClipSlotIdx = 0xFFFFu;
     }
+    if (el->m_TransformSlotIdx != UI::kNoTransform)
+    {
+        m_TransformAllocator.Free(el->m_TransformSlotIdx);
+        el->m_TransformSlotIdx = UI::kNoTransform;
+    }
     // Draw-order is a compact array (no allocator); nothing to free.
     el->m_DrawOrderIdx = 0xFFFFFFFFu;
 }
@@ -598,338 +596,6 @@ void UIElementAttachYogaChild(UIElement* parent, UIElement* child)
 #endif
 }
 } // namespace GameEngine
-
-// A UI element can end up pointing at a block-compressed payload two ways, and
-// the per-pixel RGBA a preview needs comes from a different place in each.
-//
-//  - An AUTHORED container (.ktx2 / .basis) holds a Basis-supercompressed
-//    payload the container itself transcodes, and the asset's path names it.
-//  - A cooked artifact of an ordinary image is plain BC4/BC5/BC7 — no
-//    transcoder decodes that — and the asset's path still names the .png/.jpg
-//    it was cooked from, so the source file is what answers.
-//
-// Getting this wrong is silent: the upload is refused and the element draws
-// nothing where a picture should be.
-static bool IsTranscodableContainerPath(const std::filesystem::path& path)
-{
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext == ".ktx2" || ext == ".basis";
-}
-
-// Decode an ordinary image file to RGBA8 for a preview. Full resolution: the
-// caller caches the upload per asset, and a UI background is scaled by the
-// style, not by the payload.
-static bool DecodeSourceImageToRgba8(const std::filesystem::path& path,
-                                     std::vector<unsigned char>& outRgba,
-                                     uint32_t& outWidth, uint32_t& outHeight)
-{
-    Vector<uint8> bytes;
-    if (!ReadFileBytesShared(path, bytes) || bytes.empty())
-        return false;
-
-    const DecodedImage decoded = DecodeImageToRGBA(bytes.data(), bytes.size());
-    if (!decoded.valid || decoded.width == 0 || decoded.height == 0)
-        return false;
-
-    outRgba = std::vector<unsigned char>(decoded.pixels.begin(), decoded.pixels.end());
-    outWidth = decoded.width;
-    outHeight = decoded.height;
-    return true;
-}
-
-#if defined(GE_HAVE_KTX)
-// Transcode an authored container to RGBA32 and take level 0 only — previews
-// never need the mip chain.
-static bool DecodeKtx2Level0ToRgba8(const std::filesystem::path& path,
-                                    std::vector<unsigned char>& outRgba,
-                                    uint32_t& outWidth, uint32_t& outHeight)
-{
-    ktxTexture2* ktexture = nullptr;
-    if (ktxTexture2_CreateFromNamedFile(path.string().c_str(),
-                                        KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
-                                        &ktexture) != KTX_SUCCESS || !ktexture)
-        return false;
-
-    ktxTexture* base = ktxTexture(ktexture);
-    bool ok = ktxTexture2_NeedsTranscoding(ktexture) &&
-              ktxTexture2_TranscodeBasis(ktexture, KTX_TTF_RGBA32, KTX_TF_HIGH_QUALITY) == KTX_SUCCESS;
-    if (ok)
-    {
-        ktx_size_t level0Offset = 0;
-        ok = ktxTexture_GetImageOffset(base, 0, 0, 0, &level0Offset) == KTX_SUCCESS;
-        if (ok)
-        {
-            const ktx_size_t level0Size = ktxTexture_GetImageSize(base, 0);
-            const ktx_uint8_t* data = ktxTexture_GetData(base);
-            const ktx_size_t totalSize = ktxTexture_GetDataSize(base);
-            const uint64 expected = static_cast<uint64>(base->baseWidth) * base->baseHeight * 4u;
-            ok = data && level0Size == expected && level0Offset + level0Size <= totalSize;
-            if (ok)
-            {
-                outRgba.assign(data + level0Offset, data + level0Offset + level0Size);
-                outWidth = base->baseWidth;
-                outHeight = base->baseHeight;
-            }
-        }
-    }
-    ktxTexture2_Destroy(ktexture);
-    return ok && outWidth != 0 && outHeight != 0;
-}
-#endif // GE_HAVE_KTX
-
-// Helper used by background-image handling to upload a TextureAsset into a
-// RGBA8 UI texture, converting common 8-bit formats (R8/RG8/RGB8) to RGBA8
-// when needed so that 24-bit PNGs and similar assets can be used as
-// thumbnails/backgrounds.
-Rendering::TextureHandle UIManager::CreateUIBackgroundTextureFromAsset(Rendering::IDevice* device, const TextureAsset* texA)
-{
-    if (!device || !texA)
-        return Rendering::TextureHandle{};
-
-    uint32_t width = texA->GetWidth();
-    uint32_t height = texA->GetHeight();
-    if (!width || !height)
-        return Rendering::TextureHandle{};
-
-    const auto fmt = texA->GetFormat();
-    const uint32_t channels = texA->GetChannels();
-    const uint64 dataSize = texA->GetDataSize();
-    const uint8* pixelsTyped = texA->GetPixelData();
-    if (!pixelsTyped || dataSize == 0)
-        return Rendering::TextureHandle{};
-
-    const unsigned char* src = reinterpret_cast<const unsigned char*>(pixelsTyped);
-    const uint64 pixelCount = static_cast<uint64>(width) * static_cast<uint64>(height);
-    if (pixelCount == 0)
-        return Rendering::TextureHandle{};
-
-    const void* uploadData = src;
-    uint64 uploadSize = dataSize;
-    std::vector<unsigned char> converted;
-
-    // Block-compressed container payloads (KTX2 -> BC7) are not per-pixel
-    // addressable; re-decode the CPU-readable file (the source, or a package's
-    // portable payload) to RGBA32 for the preview.
-    bool decodedFromContainer = false;
-    if (texA->IsBlockCompressed())
-    {
-        const std::filesystem::path& assetPath = texA->GetCpuDecodePath();
-        bool decoded = false;
-#if defined(GE_HAVE_KTX)
-        if (IsTranscodableContainerPath(assetPath))
-            decoded = DecodeKtx2Level0ToRgba8(assetPath, converted, width, height);
-        else
-#endif
-            decoded = DecodeSourceImageToRgba8(assetPath, converted, width, height);
-
-        if (!decoded)
-        {
-            static bool sWarnedBlockCompressedOnce = false;
-            if (!sWarnedBlockCompressedOnce)
-            {
-                Logger::Log::Warning("UIManager: failed to re-decode block-compressed texture '{}' for UI preview.",
-                                     assetPath.string());
-                sWarnedBlockCompressedOnce = true;
-            }
-            return Rendering::TextureHandle{};
-        }
-        uploadData = converted.data();
-        uploadSize = static_cast<uint64>(converted.size());
-        decodedFromContainer = true;
-    }
-
-    auto isSupported8Bit = [](GameEngine::TextureFormat f) -> bool
-    {
-        switch (f)
-        {
-        case GameEngine::TextureFormat::R8:
-        case GameEngine::TextureFormat::RG8:
-        case GameEngine::TextureFormat::RGB8:
-        case GameEngine::TextureFormat::RGBA8:
-            return true;
-        default:
-            return false;
-        }
-    };
-
-    auto isSupportedFloat = [](GameEngine::TextureFormat f) -> bool
-    {
-        switch (f)
-        {
-        case GameEngine::TextureFormat::R32F:
-        case GameEngine::TextureFormat::RG32F:
-        case GameEngine::TextureFormat::RGB32F:
-        case GameEngine::TextureFormat::RGBA32F:
-            return true;
-        default:
-            return false;
-        }
-    };
-
-    if (decodedFromContainer)
-    {
-        // RGBA8 level-0 data is already in `converted`; skip format handling.
-    }
-    else if (isSupportedFloat(fmt))
-    {
-        if (dataSize < pixelCount * channels * sizeof(float))
-            return Rendering::TextureHandle{};
-
-        auto toByte = [](float v) -> unsigned char
-        {
-            if (!std::isfinite(v))
-                v = 0.0f;
-            v = std::max(0.0f, v);
-            v = v / (1.0f + v);
-            v = std::pow(v, 1.0f / 2.2f);
-            v = std::clamp(v, 0.0f, 1.0f);
-            return static_cast<unsigned char>(v * 255.0f + 0.5f);
-        };
-
-        auto alphaToByte = [](float v) -> unsigned char
-        {
-            if (!std::isfinite(v))
-                v = 1.0f;
-            v = std::clamp(v, 0.0f, 1.0f);
-            return static_cast<unsigned char>(v * 255.0f + 0.5f);
-        };
-
-        converted.resize(static_cast<size_t>(pixelCount * 4u));
-        const float* srcIt = reinterpret_cast<const float*>(pixelsTyped);
-        unsigned char* dst = converted.data();
-        for (uint64 i = 0; i < pixelCount; ++i)
-        {
-            const float r = channels >= 1 ? srcIt[0] : 0.0f;
-            const float g = channels >= 2 ? srcIt[1] : r;
-            const float b = channels >= 3 ? srcIt[2] : g;
-            const float a = channels >= 4 ? srcIt[3] : 1.0f;
-            dst[0] = toByte(r);
-            dst[1] = toByte(g);
-            dst[2] = toByte(b);
-            dst[3] = alphaToByte(a);
-            srcIt += channels;
-            dst += 4;
-        }
-
-        uploadData = converted.data();
-        uploadSize = static_cast<uint64>(converted.size());
-    }
-    else if (!isSupported8Bit(fmt))
-    {
-        static bool sWarnedOnce = false;
-        if (!sWarnedOnce)
-        {
-            Logger::Log::Warning("UIManager: background image texture '{}' has unsupported format for UI backgrounds; expected 8-bit LDR or HDR float texture. Background will not render.", texA->GetPath().string());
-            sWarnedOnce = true;
-        }
-        return Rendering::TextureHandle{};
-    }
-
-    // Fast path: already RGBA8 with four channels, upload directly.
-    if (!decodedFromContainer &&
-        isSupported8Bit(fmt) && !(fmt == GameEngine::TextureFormat::RGBA8 && channels == 4))
-    {
-        // Convert to RGBA8 with opaque alpha so we can upload as UI texture.
-        converted.resize(static_cast<size_t>(pixelCount * 4u));
-        unsigned char* dst = converted.data();
-
-        if (fmt == GameEngine::TextureFormat::RGB8 && channels >= 3)
-        {
-            const unsigned char* srcIt = src;
-            for (uint64 i = 0; i < pixelCount; ++i)
-            {
-                dst[0] = srcIt[0];
-                dst[1] = srcIt[1];
-                dst[2] = srcIt[2];
-                dst[3] = 255u;
-                srcIt += channels;
-                dst += 4;
-            }
-        }
-        else if (fmt == GameEngine::TextureFormat::R8 && channels >= 1)
-        {
-            const unsigned char* srcIt = src;
-            for (uint64 i = 0; i < pixelCount; ++i)
-            {
-                unsigned char v = srcIt[0];
-                dst[0] = v;
-                dst[1] = v;
-                dst[2] = v;
-                dst[3] = 255u;
-                srcIt += channels;
-                dst += 4;
-            }
-        }
-        else if (fmt == GameEngine::TextureFormat::RG8 && channels >= 2)
-        {
-            const unsigned char* srcIt = src;
-            for (uint64 i = 0; i < pixelCount; ++i)
-            {
-                unsigned char r = srcIt[0];
-                unsigned char g = srcIt[1];
-                dst[0] = r;
-                dst[1] = g;
-                dst[2] = g;
-                dst[3] = 255u;
-                srcIt += channels;
-                dst += 4;
-            }
-        }
-        else
-        {
-            // Unexpected combination; fail gracefully.
-            return Rendering::TextureHandle{};
-        }
-
-        uploadData = converted.data();
-        uploadSize = static_cast<uint64>(converted.size());
-    }
-
-    TextureDesc td{};
-    td.width = width;
-    td.height = height;
-    td.mipLevels = 1;
-    td.arrayLayers = 1;
-    Rendering::TextureFormat gpuFormat =
-        (texA->GetColorSpace() == TextureColorSpace::SRGB)
-            ? Rendering::TextureFormat::RGBA8_SRGB
-            : Rendering::TextureFormat::RGBA8_UNORM;
-    td.format = (uint32_t)gpuFormat;
-    td.usage = (uint32_t)Rendering::TextureUsage::ShaderResource | (uint32_t)Rendering::TextureUsage::TransferDst;
-    td.debugName = "UI_BG";
-
-    Rendering::TextureHandle tex = device->CreateTexture(td);
-    if (!tex)
-        return Rendering::TextureHandle{};
-
-    BufferDesc staging{};
-    staging.size = uploadSize;
-    staging.usage = (uint32_t)BufferUsage::TransferSrc;
-    staging.memoryUsage = BufferMemoryUsage::Upload;
-    staging.debugName = "UI_BG_Staging";
-    BufferHandle sb = device->CreateBuffer(staging);
-    if (!sb)
-    {
-        device->DestroyTexture(tex);
-        return Rendering::TextureHandle{};
-    }
-
-    device->UpdateBuffer(sb, 0, staging.size, uploadData);
-    auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
-    cl->Begin();
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::Undefined, ResourceState::CopyDest, 0, 1, 0, 1));
-    cl->CopyBufferToTextureSubresource(sb, tex, 0, 0, td.width, td.height, 0, 0);
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopyDest, ResourceState::ShaderResource, 0, 1, 0, 1));
-    cl->End();
-    device->ExecuteCommandLists(std::vector<CommandList*>{cl.get()});
-    // Do not stall the GPU here. Backends are expected to either:
-    // - defer buffer destruction until GPU completion (e.g., Vulkan timelines), or
-    // - execute command lists synchronously (e.g., the current D3D12 backend).
-    device->DestroyBuffer(sb);
-    return tex;
-}
 
 // Ensure a UIElement has a non-empty id. Many controls created from C++ do
 // not explicitly assign ids but still participate in focus and text input.
@@ -1507,7 +1173,12 @@ UIManager::UIManager(IDevice* device)
 }
 
 UIManager::UIManager(IDevice* device, AssetManager* assetManager)
-    : m_Device(device), m_AssetManager(assetManager)
+    : m_Device(device),
+      m_AssetManager(assetManager),
+      m_BackgroundImages(device, assetManager, m_Dispatcher,
+                         UI::BackgroundImageCache::Hooks{[this]() { RepaintForBackgroundImages(); },
+                                                         [this](Rendering::TextureHandle handle)
+                                                         { ReleaseBackgroundImageSlot(handle); }})
 {
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
@@ -1743,6 +1414,7 @@ UIManager::~UIManager()
     ResetRetainedYogaTree();
 #endif
     m_AppliesAsyncResults = false;
+    m_BackgroundImages.StopApplyingAsyncResults();
     if (m_Scheduler)
     {
         m_Scheduler->ProcessDue();
@@ -1766,11 +1438,6 @@ UIManager::~UIManager()
             m_Device->DestroySampler(m_SamplerRepeatY);
         if (m_SamplerNearestClamp)
             m_Device->DestroySampler(m_SamplerNearestClamp);
-        for (auto& kv : m_BgTextureCache)
-        {
-            if (kv.second.Handle && !kv.second.SharedOwned)
-                m_Device->DestroyTexture(kv.second.Handle);
-        }
     }
 }
 

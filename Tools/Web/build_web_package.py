@@ -31,7 +31,7 @@ The package, flat so the facade finds the engine module beside itself (its defau
 the layout of the demo site, with the engine pack split into parts under 100 MB that the
 binding joins (opengine-core.gepak.parts.json lists them); `--site-models <dir>` adds the
 .glb files the site hosts itself under <dir>/models, and `--site-without-particles` drops the
-particle programs from the site's pack. `--check` verifies the file list and prints the raw,
+particle programs from the site's pack. `--check` verifies the file list; `--check --sizes` also prints the raw,
 gzip and brotli size of each file and of what a page downloads at each build.
 
 The version is the engine's, from the repository root's VERSION file: `<year>.<month>.<patch>`,
@@ -431,8 +431,9 @@ def CompressedSizes(paths: list[Path]) -> dict[Path, tuple[int, int, int]]:
             for path, size in zip(paths, brotli)}
 
 
-def Check(out: Path, allowStub: bool) -> list[str]:
-    """Problems with the package at `out`; prints its sizes when it is complete."""
+def Check(out: Path, allowStub: bool, reportSizes: bool) -> list[str]:
+    """Problems with the package at `out`. With `reportSizes`, a complete package also prints its
+    compressed sizes (gzip 9 and brotli 11 over the whole package: minutes; a report, not a check)."""
     packFiles = PackFiles(out)
     expected = [name for name in PackageFiles() if name != kEnginePackName] + packFiles
     problems = [f"{name} is missing" for name in expected if not (out / name).is_file()]
@@ -452,6 +453,10 @@ def Check(out: Path, allowStub: bool) -> list[str]:
     if problems:
         return problems
 
+    manifest = json.loads((out / "package.json").read_text(encoding="utf-8"))
+    if not reportSizes:
+        print(f"package {kPackageName}@{manifest['version']}: {len(expected)} files and examples/ complete")
+        return []
     shared = [kFacadeName, kBindingName, *packFiles]
     names = sorted({*shared, *(name for build in kBuilds for name in ModuleFiles(build))})
     sizes = CompressedSizes([out / name for name in names])
@@ -463,7 +468,6 @@ def Check(out: Path, allowStub: bool) -> list[str]:
         files = [out / name for name in (*shared, *ModuleFiles(build))]
         totals = [sum(sizes[path][column] for path in files) for column in range(3)]
         print(f"{'page download at ' + build:32} {totals[0]:12,} {totals[1]:12,} {totals[2]:12,}")
-    manifest = json.loads((out / "package.json").read_text(encoding="utf-8"))
     print(f"package {kPackageName}@{manifest['version']}: {len(expected)} files and examples/ complete")
     return []
 
@@ -480,7 +484,10 @@ def main() -> int:
                         help="with --site: drop the particle programs from the site's engine pack "
                              "(its pages draw no particles; the package keeps the full pack)")
     parser.add_argument("--check", action="store_true",
-                        help="verify the package and print its sizes; builds nothing")
+                        help="verify the package; builds nothing")
+    parser.add_argument("--sizes", action="store_true",
+                        help="with --check: also print the raw, gzip and brotli size of each file "
+                             "and of a page download (minutes over the whole package)")
     parser.add_argument("--st-dir", type=Path, help="the single-threaded tree's bin directory")
     parser.add_argument("--mt-dir", type=Path, help="the threaded tree's bin directory")
     parser.add_argument("--component-dts", type=Path,
@@ -517,7 +524,7 @@ def main() -> int:
                           f"{dropped} particle programs")
                 SplitPack(out)
             print(f"build_web_package: {kPackageName}@{version} -> {out}")
-        problems = Check(out, args.allow_stub)
+        problems = Check(out, args.allow_stub, reportSizes=args.sizes or not args.check)
     except (PackageError, EnginePackError, ExportError, subprocess.CalledProcessError) as error:
         print(f"build_web_package: {error}", file=sys.stderr)
         return 1

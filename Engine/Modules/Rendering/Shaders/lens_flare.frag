@@ -6,8 +6,13 @@
 // the sprite's coverage so RGB-only black-backed atlases can still be composed
 // transparently by the editor UI.
 
+
 layout(set = 0, binding = 0) uniform sampler2D uAtlas;
 layout(set = 0, binding = 2) uniform sampler2D uSceneDepth;
+// The view's exposure state (ExposureHistory). The instance colour is display-referred (divided by
+// the view's exposure on the CPU); the light lands in scene colour at the frame's pre-exposure P.
+#define GE_EXPOSURE_HISTORY_BINDING 3
+#include "Includes/exposure_history.glsl"
 
 layout(location = 0) in vec2 vUV;
 layout(location = 1) in vec4 vColor;
@@ -52,5 +57,5 @@ void main()
     vec3 flareRgb = texel.rgb * texel.a * vColor.rgb * visibility;
     float modulation = clamp(max(vColor.r, max(vColor.g, vColor.b)), 0.0, 1.0);
     float flareAlpha = clamp(coverage * modulation * visibility, 0.0, 1.0);
-    outColor = vec4(flareRgb, flareAlpha);
+    outColor = vec4(flareRgb * GE_PreExposure(), flareAlpha);
 }

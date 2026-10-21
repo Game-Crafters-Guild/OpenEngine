@@ -10,6 +10,28 @@
       "type": "ViewParamsUpload"
     },
     {
+      "bufferUsages": {
+        "state": "StorageReadWrite"
+      },
+      "buffers": {
+        "state": "ExposureHistory"
+      },
+      "dispatch": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "enabled": true,
+      "id": "PreExposureSnapshot",
+      "ppOverrides": true,
+      "pushConstants": {
+        "exposure": 1.0,
+        "useAutoExposure": 0
+      },
+      "shaderPkg": "Shaders/pre_exposure_snapshot.shaderpkg",
+      "type": "ComputeShader"
+    },
+    {
       "enabled": true,
       "id": "TerrainUpload",
       "type": "TerrainUpload"
@@ -66,6 +88,10 @@
         "DepthTex": "View.DepthResolved"
       },
       "shaderPkg": "Shaders/cluster_depth_minmax.shaderpkg",
+      "shaderPkgFallbacks": [
+        "Shaders/cluster_depth_minmax_t16.shaderpkg",
+        "Shaders/cluster_depth_minmax_t8.shaderpkg"
+      ],
       "targetBuffer": "DepthMinMaxBuffer",
       "type": "ComputeShader"
     },
@@ -174,6 +200,20 @@
       "type": "SunGlare"
     },
     {
+      "enabled": true,
+      "id": "TemporalAA",
+      "input": "HDRSSSR",
+      "output": "HDRTemporalAA",
+      "type": "TemporalAA"
+    },
+    {
+      "enabled": true,
+      "id": "RenderScaleUpscale",
+      "input": "HDRTemporalAA",
+      "output": "HDRUpscaled",
+      "type": "RenderScaleUpscale"
+    },
+    {
       "bufferUsages": {
         "ViewParams": "ConstantBuffer",
         "uExposure": "Storage"
@@ -189,7 +229,7 @@
       },
       "inputs": {
         "uDepth": "View.DepthResolved",
-        "uHDR": "HDRSSSR"
+        "uHDR": "HDRUpscaled"
       },
       "output": "BloomA",
       "ppOverrides": true,
@@ -444,7 +484,7 @@
       },
       "inputs": {
         "uDepth": "View.DepthResolved",
-        "uHDR": "HDRSSSR"
+        "uHDR": "HDRUpscaled"
       },
       "output": "ScatteringA",
       "ppOverrides": true,
@@ -657,7 +697,7 @@
       },
       "inputs": {
         "uBloom": "BloomNormalized",
-        "uHDR": "HDRSSSR",
+        "uHDR": "HDRUpscaled",
         "uScattering": "ScatteringNormalized"
       },
       "output": "HDRCombined",
@@ -748,8 +788,13 @@
       },
       "enabled": true,
       "id": "Tonemap",
+      "inputUsages": {
+        "uDepth": "Sampled"
+      },
       "inputs": {
-        "uHDRColor": "HDRBloomWithDirt"
+        "uDepth": "View.DepthResolved",
+        "uHDRColor": "HDRBloomWithDirt",
+        "uStarLight": "SkyStarLight"
       },
       "output": "LDRFinal",
       "ppOverrides": true,
@@ -761,8 +806,16 @@
         "useAutoExposure": 0
       },
       "samplers": {
-        "uHDRColor": "LinearClamp"
+        "uLut1d": "LinearClamp",
+        "uLut3d": "LinearClamp",
+        "uDepth": "PointClamp",
+        "uHDRColor": "LinearClamp",
+        "uStarLight": "LinearClamp"
       },
+      "serviceTextures": [
+        "uLut3d",
+        "uLut1d"
+      ],
       "shaderPkg": "Shaders/tonemap.shaderpkg",
       "type": "FullscreenShader"
     },
@@ -784,6 +837,7 @@
   "pipelineName": "Web Library",
   "resources": {
     "BloomA": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -803,6 +857,7 @@
       ]
     },
     "BloomEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -822,6 +877,7 @@
       ]
     },
     "BloomLensDirtLight": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -841,6 +897,7 @@
       ]
     },
     "BloomNormalized": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -860,6 +917,7 @@
       ]
     },
     "BloomOneTwentyEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -879,6 +937,7 @@
       ]
     },
     "BloomQuarter": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -898,6 +957,7 @@
       ]
     },
     "BloomSixteenth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -917,6 +977,7 @@
       ]
     },
     "BloomSixtyFourth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -936,6 +997,7 @@
       ]
     },
     "BloomThirtySecond": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -955,6 +1017,7 @@
       ]
     },
     "BloomTwoFiftySixth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1036,6 +1099,7 @@
       "zeroOnCreate": true
     },
     "HDRBloomWithDirt": {
+      "preExposed": true,
       "extent": {
         "basis": "output"
       },
@@ -1051,6 +1115,7 @@
       ]
     },
     "HDRCombined": {
+      "preExposed": true,
       "extent": {
         "basis": "output"
       },
@@ -1066,6 +1131,7 @@
       ]
     },
     "HDRSSSR": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -1078,7 +1144,26 @@
         "UnorderedAccess"
       ]
     },
+    "HDRUpscaled": {
+      "preExposed": true,
+      "extent": {
+        "basis": "output"
+      },
+      "format": "R16G16B16A16_FLOAT",
+      "kind": "Texture",
+      "scope": "PerView",
+      "size": {
+        "variables": {}
+      },
+      "usage": [
+        "RenderTarget",
+        "ShaderResource"
+      ]
+    },
     "LDRFinal": {
+      "extent": {
+        "basis": "output"
+      },
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",
@@ -1124,6 +1209,7 @@
       ]
     },
     "ScatteringA": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1143,6 +1229,7 @@
       ]
     },
     "ScatteringEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1162,6 +1249,7 @@
       ]
     },
     "ScatteringNormalized": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1181,6 +1269,7 @@
       ]
     },
     "ScatteringOneTwentyEighth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1200,6 +1289,7 @@
       ]
     },
     "ScatteringQuarter": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1219,6 +1309,7 @@
       ]
     },
     "ScatteringSixteenth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1238,6 +1329,7 @@
       ]
     },
     "ScatteringSixtyFourth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1257,6 +1349,7 @@
       ]
     },
     "ScatteringThirtySecond": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1276,6 +1369,7 @@
       ]
     },
     "ScatteringTwoFiftySixth": {
+      "preExposed": true,
       "extent": {
         "basis": "output",
         "scale": [
@@ -1295,6 +1389,7 @@
       ]
     },
     "SceneColor": {
+      "preExposed": true,
       "format": "R16G16B16A16_FLOAT",
       "kind": "Texture",
       "scope": "PerView",

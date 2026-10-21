@@ -5,220 +5,220 @@
 # exposure <i> <bits>: Exposure blends through libm and is pinned to a ULP
 #   bound, not to these bits — see kExposureUlpBound.
 # field <i> <name> <bytes>: full member dump of two representative cases.
-case 0 e415b30658f7a18b
-case 1 e415b30658f7a18b
-case 2 e415b30658f7a18b
-case 3 e415b30658f7a18b
-case 4 e415b30658f7a18b
-case 5 5c4a573fc3a4b437
-case 6 5c4a573fc3a4b437
-case 7 d9ebfa21f5d67b96
-case 8 407c84272c84165e
-case 9 92d21329fa7cda57
-case 10 3a16bd33d8ae771
-case 11 cc03668ba3aa0a3f
-case 12 53857b693bba3b1e
-case 13 ee0ac962c8f2da4f
-case 14 8276329543f48af1
-case 15 6b3db82796fec8ed
-case 16 d4e25322e448bc16
-case 17 a3f18a62c3c5fe81
-case 18 d4b026d0237a6842
-case 19 b06e87f3c95655ab
-case 20 f29ef0a86b0ffec0
-case 21 bdd52135fabb1bb1
-case 22 83cf7cdaeb262640
-case 23 914bde6f1d49f5eb
-case 24 f38eb426ade42e0d
-case 25 55de9aedb04fdc7f
-case 26 29d484ff66e53153
-case 27 8537e66f4509fa58
-case 28 cace8ab61f3fe0b4
-case 29 e33a7fe67c0f3dba
-case 30 ecc6e9590ec6d7fe
-case 31 5b7875f2c549a760
-case 32 e09b4d23c86775b5
-case 33 14431f6dd9daa577
-case 34 1c4ca16486037e28
-case 35 5f52afda6a16923b
-case 36 5f52afda6a16923b
-case 37 5f52afda6a16923b
-case 38 5f52afda6a16923b
-case 39 5f52afda6a16923b
-case 40 41c78fe419d15d40
-case 41 41c78fe419d15d40
-case 42 adbee180b1a44c51
-case 43 fb53306534a1be74
-case 44 697a6d75cae9c0d3
-case 45 54901566882ddedb
-case 46 8aee1ed0e219995a
-case 47 dd82212d895a6173
-case 48 182d65fc9b783965
-case 49 3f34bfc0d5fb2d21
-case 50 91d4273e9a72bc74
-case 51 20967ee5c16660b8
-case 52 1e453eb3fad5594d
-case 53 dde8a03cb9fee10e
-case 54 67d751e03e098f97
-case 55 d828392fe2659489
-case 56 a4bdefe61d1b1b32
-case 57 7982402cf4ac6563
-case 58 dcfa2a4391ddc98d
-case 59 f3ce3bc3970627dc
-case 60 597ac82d85816df
-case 61 c4a9153fd2b04707
-case 62 5fb58f53aacf197f
-case 63 a9ee3cc3696c9024
-case 64 3bd1c0136fa98e83
-case 65 5efb987fb961c498
-case 66 43be37cdab758964
-case 67 bcd96d06694c60ba
-case 68 6aae7dd3ce309d35
-case 69 b01d9ca1b926af44
-case 70 d450d720df30b911
-case 71 d450d720df30b911
-case 72 d450d720df30b911
-case 73 d450d720df30b911
-case 74 d450d720df30b911
-case 75 9037cf7164215312
-case 76 9037cf7164215312
-case 77 73e39dcad33a41e6
-case 78 ead1bce2e5105b38
-case 79 96aa606550d2193
-case 80 a58046b119ffc0c2
-case 81 40a497cf2b3b5063
-case 82 45306d1508710ead
-case 83 1b7827e507ba3c02
-case 84 23f32be728e579ce
-case 85 4a64e0e17fed1740
-case 86 1fc608ecedc8dc3
-case 87 3916a7cfc845f50c
-case 88 d2676b8ce14a7804
-case 89 8e94ff4e013beb1d
-case 90 fc313eee1bb875c5
-case 91 2e6082830f56709b
-case 92 dfac78474e3a15
-case 93 12d62f516f1a598d
-case 94 905c287d344b71ab
-case 95 854fb11d20f43955
-case 96 701617ffb08f5a49
-case 97 2fcea6184922f3d5
-case 98 8a1c4890e50bcbe0
-case 99 62c772149140213d
-case 100 80b3b118fba84ed6
-case 101 35cadc592de19988
-case 102 35503bade32ae917
-case 103 e0e2fffb918a41b8
-case 104 5454d75ca8499f2
-case 105 bfed624dc53c1f6
-case 106 bfed624dc53c1f6
-case 107 bfed624dc53c1f6
-case 108 bfed624dc53c1f6
-case 109 bfed624dc53c1f6
-case 110 991b7d03867ff7c9
-case 111 991b7d03867ff7c9
-case 112 d9e25e0af202edea
-case 113 c2dbfc3d9b9fd4fb
-case 114 98e41cda3050e564
-case 115 19b02add083f26ed
-case 116 47c26b30412d5a0c
-case 117 b8039af782c931a0
-case 118 40726c354fac94fb
-case 119 a8acaf903121e958
-case 120 be37a77de4961d1
-case 121 e6293d4dbb90fcec
-case 122 b9e6d59eecc9130c
-case 123 57215ba8ed8e83c4
-case 124 1008a861dd1939c
-case 125 22745953d506b7b5
-case 126 797004c1f6daee09
-case 127 d73b2442c58b19e8
-case 128 ebe656bcc7cad41e
-case 129 db2e1c9cf8aa937a
-case 130 9afc2b1aa9ab6d1a
-case 131 30a1562d04a61275
-case 132 ae372ce3ff7fdc8f
-case 133 bfc658f6d01fa2dc
-case 134 452940155f78e0a0
-case 135 e146354eafdeb2d8
-case 136 f14de7eb70412108
-case 137 cf42f6ca1c666cbd
-case 138 f3e9139347a5db65
-case 139 55ee5bfb22891cc
-case 140 b9dab82103504885
-case 141 b9dab82103504885
-case 142 b9dab82103504885
-case 143 b9dab82103504885
-case 144 b9dab82103504885
-case 145 82091d67c4d2722e
-case 146 82091d67c4d2722e
-case 147 a18822609f5ac2de
-case 148 ff1d2b4032c35985
-case 149 ad044f437940336c
-case 150 f90a306d6667cff9
-case 151 282eb5af08d02c8f
-case 152 e6907cfd7abedeb3
-case 153 6fcbf7262411d689
-case 154 c472e19a25803921
-case 155 99f7d23d696469b9
-case 156 270b2a178663f7f1
-case 157 8b75a368ccac8f1a
-case 158 130ec294370808f6
-case 159 29fe4251bab0c280
-case 160 c0e0f6aaedd080bf
-case 161 bbeb415a5517bc8a
-case 162 81bb821956572ff5
-case 163 2edcf3af704f7ff6
-case 164 7fe0fe92aed9d335
-case 165 5c002c2f1c0c08b4
-case 166 939d25972647bf50
-case 167 c53c9120323b8385
-case 168 89030acb7ffaf62d
-case 169 97d083982aaad567
-case 170 e89737e31a51e3ee
-case 171 3ce0d0d8bac16eea
-case 172 99c43face840bb03
-case 173 d5e2a11e2a947d1a
-case 174 e883472bf80d8f62
-case 175 1db0f58d1c65416c
-case 176 1db0f58d1c65416c
-case 177 1db0f58d1c65416c
-case 178 1db0f58d1c65416c
-case 179 1db0f58d1c65416c
-case 180 a353b9cfa9f6c5a1
-case 181 a353b9cfa9f6c5a1
-case 182 9a3f4b584e82a6f1
-case 183 3fba7a8583323e30
-case 184 69b7444414db9824
-case 185 4cd807d1b6ba51b7
-case 186 388a3df76f32dbdc
-case 187 ae9fe3cf1bc08230
-case 188 94126904b6a1e874
-case 189 6a86dd63d3e4eb02
-case 190 e1f6852e011fb7fb
-case 191 46eb51fd34e23d7c
-case 192 cfa6ed67f476b131
-case 193 8268d30597713d68
-case 194 ce337031b032cf75
-case 195 ac7f00a8129a335a
-case 196 4dc92b827828475b
-case 197 8fd7e118291ad37
-case 198 c25fe628b36af97d
-case 199 af1555fcb947f6af
-case 200 9b09b9bdd2f07a4d
-case 201 9654b256a6d22bc3
-case 202 4532f6985877fbfd
-case 203 c0515343a4f392c0
-case 204 842663c5d4e8ecd3
-case 205 96ea45da31f1471
-case 206 a9aaf9cce1ff1184
-case 207 a125cb0920b3c519
-case 208 67d0748a723f0418
-case 209 91ecf53fe6f9d342
-case 210 f3ead0f9ebfb67f5
-case 211 f3ead0f9ebfb67f5
-case 212 f3ead0f9ebfb67f5
-case 213 f3ead0f9ebfb67f5
+case 0 80223553f786e9e
+case 1 80223553f786e9e
+case 2 80223553f786e9e
+case 3 80223553f786e9e
+case 4 80223553f786e9e
+case 5 e1fdc35bb1ebf1a3
+case 6 e1fdc35bb1ebf1a3
+case 7 5ce37dfee77c5809
+case 8 2ae01130f6608172
+case 9 ec5e35ade332881c
+case 10 6045212e72844f2a
+case 11 21f388c806867909
+case 12 1aa384bf6b6d688d
+case 13 61b636456c4c73b6
+case 14 23ff3b11e6dea5a0
+case 15 a9148a9534fb418
+case 16 a51ef47f6222cd48
+case 17 7165a377fb1dd013
+case 18 64529da10140f29f
+case 19 b8ab3bf43ff0c869
+case 20 de57dc91ad94a40e
+case 21 dc50f3848ce75da3
+case 22 84efa90c558f69c5
+case 23 fc43770f493a670d
+case 24 226281ca0891743c
+case 25 9148dad1413cab25
+case 26 7a1ff27ae040b194
+case 27 7cc8c8523e9ebfac
+case 28 bdced6ff5af0160b
+case 29 7875e2469240c851
+case 30 e82c77d6e4c7314
+case 31 5e6c6bab9a2fdabc
+case 32 644a391f31fdb6d
+case 33 37912375fe59baba
+case 34 5089e88f8843a66e
+case 35 77c21f507553cba3
+case 36 77c21f507553cba3
+case 37 77c21f507553cba3
+case 38 77c21f507553cba3
+case 39 77c21f507553cba3
+case 40 a868b5ca3e85fcce
+case 41 a868b5ca3e85fcce
+case 42 9a8465d6f02b2546
+case 43 246dbca2225cf5a2
+case 44 4e5e72fd74902e39
+case 45 89348fd4e4f7ff9e
+case 46 afefe6d214230920
+case 47 1375c5195d099f31
+case 48 fc065c898ec2f397
+case 49 6d4f9609e919f0df
+case 50 b7f5a0d344206e36
+case 51 e053c3fcfb87fa6e
+case 52 754e07cc45fcaae3
+case 53 3993a7320e142cb
+case 54 b7ee4d4777eda70b
+case 55 a561e848a68ea9ea
+case 56 9e7cf563c65e87f5
+case 57 9c5e0055946c73c1
+case 58 ca167c9aaffb8568
+case 59 e40561044c2ed070
+case 60 8ce8b0a455d52ce5
+case 61 38efaac9864dd1f6
+case 62 27f70758827d00e
+case 63 1ed19b75bae12464
+case 64 33fde2d8eac17abf
+case 65 d4482809d24f749e
+case 66 316bb09d8c9b96a4
+case 67 3416a9aea8e1ed45
+case 68 99caa7d4e5222407
+case 69 400ce9cfbb20ca59
+case 70 cc17896be108345c
+case 71 cc17896be108345c
+case 72 cc17896be108345c
+case 73 cc17896be108345c
+case 74 cc17896be108345c
+case 75 fa564d5741dd6b91
+case 76 fa564d5741dd6b91
+case 77 bddfa2d3fc29cfd3
+case 78 8c73e03c8e3964f5
+case 79 1bf864decbc39fc8
+case 80 85a18705802a67c0
+case 81 db7fb3749566a14d
+case 82 3d2a32325c9d18e5
+case 83 4086b0016a52f7a1
+case 84 f1546cf14be33bba
+case 85 fa5ef4be205cae14
+case 86 91748ee791cd0ce7
+case 87 3b72efaecfad42ea
+case 88 f05ff3dde7be4555
+case 89 23607e86c8895ac8
+case 90 6a3ef960edd06239
+case 91 176c358696305939
+case 92 a3794bb8c8fca929
+case 93 4f40db1a14c7e052
+case 94 6790685ff13545de
+case 95 d50fa37910da9c09
+case 96 bd8246fe0ecbb920
+case 97 9be71b3d043c6e30
+case 98 2a9f3698ffda7517
+case 99 8e970620db9873ca
+case 100 6d1fbe7cc4dcfc1f
+case 101 50d312fd1099690d
+case 102 8b4ae0d22620a415
+case 103 b46ca786c295b9d4
+case 104 e035ca581d1ec63
+case 105 e4aa28a7721c3df
+case 106 e4aa28a7721c3df
+case 107 e4aa28a7721c3df
+case 108 e4aa28a7721c3df
+case 109 e4aa28a7721c3df
+case 110 c858ef66c973be82
+case 111 c858ef66c973be82
+case 112 efcf5323570001a7
+case 113 5b7a25aa42468fdc
+case 114 c0a8b9bce3179de3
+case 115 27b25eda3d855537
+case 116 444705f0e5b9f432
+case 117 922e99421dd30f78
+case 118 5a08e35451d05c16
+case 119 3fb455bb23ad7ee8
+case 120 6c11f367b0f130e0
+case 121 3cb9fd8e1068c7fb
+case 122 86c6978c9c0ea51c
+case 123 f5c7836535d9def6
+case 124 f08c516dbd87e546
+case 125 8bd40bb8489712f4
+case 126 b1de4ccfd8db77b4
+case 127 6dc6f1d4c260edf0
+case 128 7cdc2a0699f05696
+case 129 464b67a3d248add
+case 130 581d87ba6194dfe4
+case 131 170cbd93e117b83d
+case 132 9c36f2722c774369
+case 133 4dd8d604007ec2b7
+case 134 20d19aca2cd5daa0
+case 135 e9a632d31e55d529
+case 136 212d9a2dcbcf62a6
+case 137 62979a4436fe2c72
+case 138 9b24520effb18986
+case 139 63666b9fd53534
+case 140 9a1d13cd01521aff
+case 141 9a1d13cd01521aff
+case 142 9a1d13cd01521aff
+case 143 9a1d13cd01521aff
+case 144 9a1d13cd01521aff
+case 145 4be3c06ba7d81e5c
+case 146 4be3c06ba7d81e5c
+case 147 365b36923f0227d4
+case 148 ab1d593e14517c7
+case 149 e27345141ed0b409
+case 150 36de9d8a54b62a07
+case 151 89c9fd46defca327
+case 152 75b4007888e2dcc2
+case 153 4e5db96172498d8a
+case 154 31f3333b6039f3fd
+case 155 b2efdd1cf865b327
+case 156 b15d8f488c848903
+case 157 3fc2a65450ed7e48
+case 158 d97e89ad73d7360d
+case 159 c6e81c65d3861a6a
+case 160 9ac1e516ccc93284
+case 161 d23c884badcbee3e
+case 162 fb4a706400eee64d
+case 163 f5b59177a78cb981
+case 164 3184aa43dd1f2422
+case 165 7419c7e115f19d20
+case 166 bfd8af3a20fba671
+case 167 2aab0a1320dafe3c
+case 168 8b8ed6243eadde2a
+case 169 74c33588ec61a3d5
+case 170 b2135396d6e3064e
+case 171 12a43ce2dc6f391f
+case 172 ea5dfe8a3d0901a7
+case 173 e779bcb71bf5cc4
+case 174 a1c6b8a5308948ae
+case 175 a419564afa18724c
+case 176 a419564afa18724c
+case 177 a419564afa18724c
+case 178 a419564afa18724c
+case 179 a419564afa18724c
+case 180 2be1d7fd7efbf2cf
+case 181 2be1d7fd7efbf2cf
+case 182 30cb4066daf418b
+case 183 9cc0ed8b036d834f
+case 184 c9cf52d0eb9fd464
+case 185 1d19ec1f8a7753f7
+case 186 7b57656e1b9ab829
+case 187 c688ed97f5a11ec8
+case 188 58dab0d483a8755e
+case 189 b4147e7959a3bd32
+case 190 a92e07ec4bd87082
+case 191 be8d1e8a3864ad7e
+case 192 266b3c989df7defa
+case 193 6a0c4e170a47827b
+case 194 4645e55aef40cb65
+case 195 4ab1b02fb4d2e798
+case 196 3a38db21011dbe42
+case 197 d524cef1ccad6890
+case 198 968deaeea7f5988b
+case 199 d1f4ea4afcc70871
+case 200 f82c693c0d3f3f3e
+case 201 2ce7a16844fc818d
+case 202 3c15fe49d318de2f
+case 203 b74ba9e2fe5d665c
+case 204 4e4eb93d4cd827a1
+case 205 a72109f58bdf2e5f
+case 206 cbfedbe40575a4c5
+case 207 2227ac36b137128a
+case 208 62997296ea9d03fa
+case 209 d7181ef2790365f9
+case 210 f0e2aa6800b1f9e3
+case 211 f0e2aa6800b1f9e3
+case 212 f0e2aa6800b1f9e3
+case 213 f0e2aa6800b1f9e3
 fieldhash BloomThreshold e4f139217fb60b16
 fieldhash BloomKnee 5ec94624b44dc3b1
 fieldhash BloomAntiFlicker ffad2bfdf1763809
@@ -256,40 +256,43 @@ fieldhash HalationTintR e0687db08479c962
 fieldhash HalationTintG b4e443912aedac19
 fieldhash HalationTintB 46146350d2787fb2
 fieldhash Look 43508d2bdcf1c5ad
-fieldhash IctcpChromaCompression c07022a35eab5d78
-fieldhash ChromaticAberrationIntensity 16d24bb59b349d15
-fieldhash ChromaticAberrationStartOffset 91b86fe6de4464d6
-fieldhash ChromaticAberrationSaturation 63caa4988521af63
-fieldhash FilmSimulationFrameRate 80fb7fe7f797f6f2
-fieldhash FilmSimulationGrainMode 4a0a61e35c4c1216
-fieldhash FilmSimulationGrainIntensity fb9db4778a1dc239
-fieldhash FilmSimulationGrainSize 53b345f4498b730
-fieldhash FilmSimulationGrainSmooth f1060d49ea528af1
-fieldhash FilmSimulationGrainDensity d09c174a0a922e06
-fieldhash FilmSimulationGrainShadowResponse 368d0c94ff43025c
-fieldhash FilmSimulationGrainMidtoneResponse 7080127269324c
-fieldhash FilmSimulationGrainHighlightResponse 23e55e600a2a3bb0
-fieldhash FilmSimulationGrainColored ee11ca917c47bf90
-fieldhash FilmSimulationHairEnabled 3883c12fd94bf46b
-fieldhash FilmSimulationHairAmount 43a7979418181754
-fieldhash FilmSimulationHairIntensity 979b40b0330bfcf
-fieldhash FilmSimulationHairWidth 50a5a805568c5e22
-fieldhash FilmSimulationHairLength c902d33b47dd6668
-fieldhash FilmSimulationHairRandomSize 75ea743d78e94af6
-fieldhash FilmSimulationHairCurl c78ef610fc2ab477
-fieldhash FilmSimulationHairCurlRandomness fa03acb708a0669e
-fieldhash FilmSimulationScratchesEnabled 1faf9093cba37f51
-fieldhash FilmSimulationScratchAmount eda895987a5b6629
-fieldhash FilmSimulationScratchIntensity 88fb83aea0966754
-fieldhash FilmSimulationScratchWidth 65af3c33d827d232
-fieldhash FilmSimulationScratchLength d621235bca023df6
-fieldhash ChromaticAberrationLongitudinal 2d6de40f8c016575
-fieldhash ChromaticAberrationComa 301dc2e41379d5c3
-fieldhash DofIntensity 681e95afeb9a44c8
-fieldhash DofMaxRadius 36a957ba6642d215
-fieldhash DofSamplingQuality a9af6e375f3759c9
-fieldhash DofDebugMode 53fd760aa25f657e
-fieldhash DofDebugAlpha 4a00435bb1202ef2
+fieldhash NightTintStrength 16d24bb59b349d15
+fieldhash NightTintR 91b86fe6de4464d6
+fieldhash NightTintG 63caa4988521af63
+fieldhash NightTintB 80fb7fe7f797f6f2
+fieldhash ChromaticAberrationIntensity bf7fe4a0ef947973
+fieldhash ChromaticAberrationStartOffset fb9db4778a1dc239
+fieldhash ChromaticAberrationSaturation 53b345f4498b730
+fieldhash FilmSimulationFrameRate 1aa461ad0b61f905
+fieldhash FilmSimulationGrainMode fcc80057d2d546aa
+fieldhash FilmSimulationGrainIntensity 368d0c94ff43025c
+fieldhash FilmSimulationGrainSize 7080127269324c
+fieldhash FilmSimulationGrainSmooth 1de289bddb6716c5
+fieldhash FilmSimulationGrainDensity 16d983dd2899e5e1
+fieldhash FilmSimulationGrainShadowResponse 869270a250749e91
+fieldhash FilmSimulationGrainMidtoneResponse 43a7979418181754
+fieldhash FilmSimulationGrainHighlightResponse 979b40b0330bfcf
+fieldhash FilmSimulationGrainColored 6740164e3c6f5369
+fieldhash FilmSimulationHairEnabled b25762b2cf34b4d6
+fieldhash FilmSimulationHairAmount 75ea743d78e94af6
+fieldhash FilmSimulationHairIntensity c78ef610fc2ab477
+fieldhash FilmSimulationHairWidth fa03acb708a0669e
+fieldhash FilmSimulationHairLength e4f6e4f20c687270
+fieldhash FilmSimulationHairRandomSize eda895987a5b6629
+fieldhash FilmSimulationHairCurl 88fb83aea0966754
+fieldhash FilmSimulationHairCurlRandomness 65af3c33d827d232
+fieldhash FilmSimulationScratchesEnabled ff7e14791976fdad
+fieldhash FilmSimulationScratchAmount 2d6de40f8c016575
+fieldhash FilmSimulationScratchIntensity 301dc2e41379d5c3
+fieldhash FilmSimulationScratchWidth 681e95afeb9a44c8
+fieldhash FilmSimulationScratchLength 36a957ba6642d215
+fieldhash ChromaticAberrationLongitudinal f9670b062435637d
+fieldhash ChromaticAberrationComa 491cb07b2a5f0d9d
+fieldhash DofIntensity 4a00435bb1202ef2
+fieldhash DofMaxRadius e05026fb491aa1c7
+fieldhash DofSamplingQuality 179464c40bf2faee
+fieldhash DofDebugMode 910645a3f08de005
+fieldhash DofDebugAlpha f0d2e1783253dc5b
 fieldhash DofFocusDistance 510a38f7a34f0013
 fieldhash DofFocalLengthMm 804420ea13c9f0bb
 fieldhash DofAperture 2f99e94194d7c313
@@ -298,347 +301,349 @@ fieldhash DofApertureBladeCount 910fe5de34b182d3
 fieldhash DofApertureRoundness bfeca752d9fc4d33
 fieldhash DofApertureRotation 9a7dc7b3a3f499a3
 fieldhash DofAnamorphicSqueeze bfeca752d9fc4d33
-fieldhash FilmSimulationDustEnabled 9006f1f488ceb12d
-fieldhash FilmSimulationDustAmount 2ff0e636bbd68457
-fieldhash FilmSimulationDustIntensity 5ab3bab5057cc0c2
-fieldhash FilmSimulationDustSize cb8ffc62aef5a0f0
-fieldhash FilmSimulationDustRandomSize 382373b3c9da109
-fieldhash FilmSimulationGateWeaveEnabled a38796e206c88b4a
-fieldhash FilmSimulationGateWeaveHorizontal 9e9c935b6601f1b0
-fieldhash FilmSimulationGateWeaveVertical 1bb315368dce1787
-fieldhash FilmSimulationGateWeaveRotation 32478534ded67127
-fieldhash FilmSimulationGateMask c258147bac7c80fd
-fieldhash FilmSimulationGateMaskFeather d636a9e85e772a46
-fieldhash FilmSimulationGateMaskRoundness 867b498f98f0cb8c
-fieldhash DebandThresholdLsb 7e7ab1f4afaecd23
-fieldhash ColorFilterR a5fda8cdfd72bbd8
-fieldhash ColorFilterG cb113a9cc33d93a5
-fieldhash ColorFilterB 700bf5311d088f42
-fieldhash ColorFilterIntensity d5b4669467984bd9
-fieldhash ColorFilterBlendMode 21341b1a56aa53fc
-fieldhash CasStrength 77dc3f49f3f8d64b
-fieldhash CasStackOrder bdca78f471281516
-fieldhash LutIntensity 121539558777a852
-fieldhash LutStackOrder 97575cd700592feb
-fieldhash LutInputEncoding 26255cf00d5e7af0
-fieldhash LutTextureFormat acafd5d613a20939
+fieldhash FilmSimulationDustEnabled 160ae0dc28834278
+fieldhash FilmSimulationDustAmount fde4527358bfc719
+fieldhash FilmSimulationDustIntensity 9e9c935b6601f1b0
+fieldhash FilmSimulationDustSize 1bb315368dce1787
+fieldhash FilmSimulationDustRandomSize 32478534ded67127
+fieldhash FilmSimulationGateWeaveEnabled c258147bac7c80fd
+fieldhash FilmSimulationGateWeaveHorizontal d636a9e85e772a46
+fieldhash FilmSimulationGateWeaveVertical 867b498f98f0cb8c
+fieldhash FilmSimulationGateWeaveRotation 7e7ab1f4afaecd23
+fieldhash FilmSimulationGateMask 4c43a7a482622d8d
+fieldhash FilmSimulationGateMaskFeather cb113a9cc33d93a5
+fieldhash FilmSimulationGateMaskRoundness 700bf5311d088f42
+fieldhash DebandThresholdLsb d5b4669467984bd9
+fieldhash ColorFilterR 97902dd93c80eff1
+fieldhash ColorFilterG 77dc3f49f3f8d64b
+fieldhash ColorFilterB f1e374dee9377187
+fieldhash ColorFilterIntensity 121539558777a852
+fieldhash ColorFilterBlendMode 97575cd700592feb
+fieldhash CasStrength bdca12c8649ac818
+fieldhash CasStackOrder acafd5d613a20939
+fieldhash LutIntensity 10988e8d369f5662
+fieldhash LutStage f8de4500d9317f47
 fieldhash LutAssetGuidWords f03c775d651c6403
-fieldhash VignetteIntensity d9c855af56b9ef57
-fieldhash VignetteSmoothness ae3218a6514b3352
-fieldhash VignetteRounded b12cadaa19339ad3
-fieldhash VignetteColorR 3313d45dada0391a
-fieldhash VignetteColorG f0d0656fba4fcb66
-fieldhash VignetteColorB ff333431de67613f
-fieldhash VignetteStackOrder bbe8114b21878b42
-fieldhash VhsIntensity b12a83dff53c69eb
-fieldhash VhsWobble 8cf03711098d4f4b
-fieldhash VhsTracking 4a8eb0970a43ad45
-fieldhash VhsSignalGlitches 86a2b2489b35f26c
-fieldhash VhsGlitchOffsets cd81fa691e1f7221
-fieldhash VhsInterference 6d341822b46ba146
-fieldhash VhsFrameFeedback ec87b43e3684a8cb
-fieldhash VhsFeedbackDecay 15a26e9437c1ba15
-fieldhash VhsFeedbackMotionThreshold 25f7e38dc3382a94
-fieldhash VhsFeedbackTrailLength 8d3e48c30180fea6
-fieldhash VhsCompositeSignalMode 89f4c03bee1404dd
-fieldhash VhsDotCrawl 35abdb6f120d4ff7
-fieldhash VhsColorBleed 297704042eebfa00
-fieldhash VhsColorBleedOffset b9cdcb1695abb520
-fieldhash VhsTapeNoise d6806612f87a1e50
-fieldhash VhsChromaStreaks 64a8be23761d0238
-fieldhash VhsPreFilterChromaStreaks ac7088fd902f8eb0
-fieldhash VhsDropouts f75204b903bd730e
-fieldhash VhsRfDropouts 492ae84f53ee0678
-fieldhash VhsScanlines 70724ebfd7a3f1bb
-fieldhash VhsSpeed 9f93b3c7ac846d5b
-fieldhash VhsOverlayEnabled 406b8a5516b9b167
-fieldhash VhsOverlayColorR f6e0944112db90e9
-fieldhash VhsOverlayColorG 3dd4a1064800ef72
-fieldhash VhsOverlayColorB 8df038d7c8f4d0c2
-fieldhash VhsOverlayOpacity d4e592527dc765a7
-fieldhash VhsOverlaySize 59fe94925dbe8bd9
-fieldhash VhsOverlayFont 3d0de4a22479b6ce
-fieldhash VhsOverlayPositionX 9964edabc97f2864
-fieldhash VhsOverlayPositionY 44d49375c52f71ee
-fieldhash VhsOverlayTextLength 3f451679872f3ea1
-fieldhash VhsOverlayText0 a9f3499c68c70d78
-fieldhash VhsOverlayText1 3e77a9caef58470e
-fieldhash VhsOverlayText2 2d0eafb33ed2a140
-fieldhash VhsOverlayText3 365bcc032426706b
-fieldhash VhsOverlayText4 ce239d2990dfb53b
-fieldhash VhsOverlayText5 eb96a5e9c775f9c
-fieldhash VhsOverlayText6 bf3abb8a970e5fcb
-fieldhash VhsOverlayText7 e85208e77fda438c
-fieldhash VhsDateBurnEnabled 9a53fd5ee5bede48
-fieldhash VhsDateBurnColorR 6d215140b9f6b683
-fieldhash VhsDateBurnColorG 59e3649c94590061
-fieldhash VhsDateBurnColorB 27d71a3b2845d2c9
-fieldhash VhsDateBurnSize f557c8104f19692c
-fieldhash VhsDateBurnPositionX 3d3678d69cf342b3
-fieldhash VhsDateBurnPositionY 3def5b83339e577a
-fieldhash VhsDateBurnYear 7e532fc1956d23f7
-fieldhash VhsDateBurnMonth 9fe3f20e88c0830
-fieldhash VhsDateBurnDay ef8af2e6afd8c51f
-fieldhash VhsDateBurnHour d751d7bd3dfb3f14
-fieldhash VhsDateBurnMinute 23b1aae021ca001f
-fieldhash VhsTransportMode 1c2de630f465156d
-fieldhash VhsTransportStrength e74648f091ee5003
-fieldhash CrtIntensity 51f82d42dfaf3a26
-fieldhash CrtCurvature dda29a4d23350f68
-fieldhash CrtScanlines 75be58ce087250de
-fieldhash CrtVignette 40850c04d43eaf5c
-fieldhash CrtAberration be2a2123e0ebdaaa
-fieldhash CrtSoftness e6376b9717bb18d4
-fieldhash CrtExposureCompensation d3b5ea0b090923c2
-fieldhash CrtEmulatedResolutionDiv 2ded3685994b7573
-fieldhash FastBlurIntensity 11f3bd7f587104d6
-fieldhash FastBlurFocusDistance 988e0c419da0fbc
-fieldhash FastBlurFocusRange 1c655b6b33a7f1eb
-fieldhash FastBlurMaxRadius d4e44455f58217a3
-fieldhash FastBlurNearBlur a5d6d8af3589de29
-fieldhash HeatDistortionStrength 379c221ed4c2d161
-fieldhash HeatDistortionSpeed b30006f6115e6920
-fieldhash HeatDistortionScale c4ffaf8a2699b2f8
-fieldhash HeatDistortionMaskStrength 9b4f8edc4dd9aac1
-fieldhash HeatDistortionDistanceStart e30ad99acbfea6e5
-fieldhash HeatDistortionDistanceEnd 23de02aa50d80ea4
-fieldhash HeatDistortionDirectionalFalloff 1e1700d0d161aeeb
-fieldhash HeatDistortionUseAbsoluteY 37ce1614b10344a2
-fieldhash HeatDistortionSoftness 8b57de990f3ae704
-fieldhash HeightFogIntensity a819fc5e0817962a
-fieldhash HeightFogDensity dbd58d4264febd7a
-fieldhash HeightFogMaxOpacity ee4740c11f4a1e42
-fieldhash HeightFogMinDistance 66716e9c6be6ed20
-fieldhash HeightFogSmoothLength 8b4681ef76f730d
-fieldhash HeightFogBaseHeight e49ba3de9c46d74a
-fieldhash HeightFogTransitionLength 2ecb911c0155fdea
-fieldhash HeightFogEmissiveR 801092d4c987a875
-fieldhash HeightFogEmissiveG 5598ccb8d43f51ff
-fieldhash HeightFogEmissiveB e73ff21eead52702
-fieldhash HeightFogSunDirX 274879bb8efbc214
-fieldhash HeightFogSunDirY 8d5c49abac10dcff
-fieldhash HeightFogSunDirZ 7719c398060bfdd5
-fieldhash HeightFogSunColorR d1401339e1413432
-fieldhash HeightFogSunColorG a027dabf4a6b4bc4
-fieldhash HeightFogSunColorB b22575459b357b57
-fieldhash HeightFogSunIntensity 1d5b61ec5672e0
-fieldhash HeightFogPhase eee0e124c9103180
-fieldhash HeightFogPhaseWeight0 df5dc03da7c21862
-fieldhash HeightFogPhaseWeight1 969ec7e698518091
-fieldhash HeightFogSkyEnabled 34c563c0dbccb694
-fieldhash HeightFogSkyPower 863a9dc2d0b11151
-fieldhash HeightFogSkyFillStart b2ab07b7ec7fb141
-fieldhash HeightFogSkyFillEnd 17f0a8a1891d3159
-fieldhash HeightFogDistanceFogEnabled e70c181cf1813c19
-fieldhash HeightFogHeightFogEnabled 5aa78b8ea395c4
-fieldhash HeightFogMaxDistance 59b4f571f230b04c
-fieldhash HeightFogLayerMode c8bf8de39781ae33
-fieldhash HeightFogHorizonHeightOffset 4b063cbf689918d5
-fieldhash HeightFogHorizonHeightBlendStart 821264541f37c585
-fieldhash HeightFogHorizonHeightBlendEnd 1ad1e42008d33f8f
-fieldhash HeightFogAxisMode 3eff6a5742ca4975
-fieldhash HeightFogAxisX 4f68ad9260041003
-fieldhash HeightFogAxisY 3a6636622525fad1
-fieldhash HeightFogAxisZ c7f7cb3b4b7833a4
-fieldhash HeightFogGradientMode 62838b02fd068357
-fieldhash HeightFogGradientStrength f4644cc1d7cb344c
-fieldhash HeightFogGradientLowR f19a172b3e6dc3a0
-fieldhash HeightFogGradientLowG 6b0fc951974fd64a
-fieldhash HeightFogGradientLowB 6b2912567f11b2a5
-fieldhash HeightFogGradientHighR d6a0bac368d8f601
-fieldhash HeightFogGradientHighG eb3e3b8c073c4939
-fieldhash HeightFogGradientHighB b3adbd1588868866
-fieldhash HeightFogTrackDirectionalLight b4f722333c0b3c97
-fieldhash HeightFogSunIntensityScale d34b6cb435b66bb2
-fieldhash HeightFogNoiseEnabled 7fdc7b278dd53b07
-fieldhash HeightFogNoiseScale 30d443f09a5cc194
-fieldhash HeightFogNoiseStrength be4a20cc883bb888
-fieldhash HeightFogNoiseContrast 6295a38e4c2a2364
-fieldhash HeightFogNoiseVelX a62a26c79571e5e3
-fieldhash HeightFogNoiseVelY 69ea45d2550a4d7b
-fieldhash HeightFogNoiseVelZ e36653340350edb6
-fieldhash HeightFogNoiseMin 9a6c063a6188417
-fieldhash HeightFogNoiseMax 82bd949999e18fc2
-fieldhash HeightFogNoiseFadeStart e6f1e6fffd9c45db
-fieldhash HeightFogNoiseFadeEnd c30b912809dee17d
-fieldhash HeightFogUseTimeOfDay a08c243a363d556a
-fieldhash HeightFogSkyHorizonOffset ab9483b904c3f106
-fieldhash HeightFogSkyBottomStrength 2372cee956fd8a30
-fieldhash HeightFogColorMode 838fb0a2930c835f
-fieldhash ColorGradeShadowsR b70e861f58bd3f47
-fieldhash ColorGradeShadowsG fe4c287db1754dc1
-fieldhash ColorGradeShadowsB bd7ef5bc17574d78
-fieldhash ColorGradeShadowsMaster a5d5d2d7d1040a05
-fieldhash ColorGradeMidtonesR ae6c8b8e5b1bbfaf
-fieldhash ColorGradeMidtonesG 228f7c0ac7345cf3
-fieldhash ColorGradeMidtonesB bd51af85530fc1c0
-fieldhash ColorGradeMidtonesMaster f586b4c28995fb1d
-fieldhash ColorGradeHighlightsR 7d89c1d3a42780b1
-fieldhash ColorGradeHighlightsG b254deff3670959
-fieldhash ColorGradeHighlightsB 52f688a5ebacb85e
-fieldhash ColorGradeHighlightsMaster 7ed7bc7d9accc3eb
-fieldhash ColorGradeContrast 8906ab12d78f7799
-fieldhash ColorGradeSaturation 38cf2b18dc73b3ef
-fieldhash ColorGradeHueShift 1706fadcd6499548
-fieldhash ColorGradeTemperature 9f8349826d7996ac
-fieldhash ColorGradeTint 5cd645db26d40eed
-fieldhash ColorGradeInLog 221f9e836624013b
-fieldhash ColorGradeShadowsStart e5ddf7ea9ddbfe48
-fieldhash ColorGradeShadowsEnd c99e508d2e657e8f
-fieldhash ColorGradeHighlightsStart 6b5e6bda102c3480
-fieldhash ColorGradeHighlightsEnd cd693ff5d955e532
-fieldhash VolumetricFogIntensity 472766bc971e69f2
-fieldhash VolumetricFogIsGlobal f0b8e0e8912e677d
-fieldhash VolumetricFogVolumeShape 25b48a190b15e4fb
-fieldhash VolumetricFogVolumeValid 670a97adf2ad0990
-fieldhash VolumetricFogVolumeBlendDistance acf00483678331ff
-fieldhash VolumetricFogVolumeCenterX 275e45ac5ae3d307
-fieldhash VolumetricFogVolumeCenterY f21223d2f912d138
-fieldhash VolumetricFogVolumeCenterZ 9e0d768b6f53551d
-fieldhash VolumetricFogVolumeAxisXX c336b3736b7513e1
-fieldhash VolumetricFogVolumeAxisXY e301cb315a360461
-fieldhash VolumetricFogVolumeAxisXZ 3c2140a24a9afd6c
-fieldhash VolumetricFogVolumeAxisYX 8bdcca07c2a93858
-fieldhash VolumetricFogVolumeAxisYY d6f956ebd1971baa
-fieldhash VolumetricFogVolumeAxisYZ ce16c1608b9f236c
-fieldhash VolumetricFogVolumeAxisZX 83875d5fdaf4639
-fieldhash VolumetricFogVolumeAxisZY 48a2fd0c22bada1e
-fieldhash VolumetricFogVolumeAxisZZ 9458d175473d7323
-fieldhash VolumetricFogVolumeHalfExtentX 9138e01eb37977bb
-fieldhash VolumetricFogVolumeHalfExtentY 34d287577d9c9bf0
-fieldhash VolumetricFogVolumeHalfExtentZ 4421608387825b9f
-fieldhash VolumetricFogMaxDistance 23b504134fcf5d4
-fieldhash VolumetricFogXYCellSizePixels 5b15d064d1946765
-fieldhash VolumetricFogZSliceCount aac2425973161c45
-fieldhash VolumetricFogDepthDistribution e13a2296104a7a8e
-fieldhash VolumetricFogDensity 1e7a475a3538515b
-fieldhash VolumetricFogBaseHeight 635e561890dca816
-fieldhash VolumetricFogHeightFalloff bcee382aa4a6982c
-fieldhash VolumetricFogSkyFade d6fd080fb5801054
-fieldhash VolumetricFogAlbedoR d0561319cc46a622
-fieldhash VolumetricFogAlbedoG b41adbe3b3d3ba93
-fieldhash VolumetricFogAlbedoB e68e2ec35618686f
-fieldhash VolumetricFogEmissionR e08578967a541763
-fieldhash VolumetricFogEmissionG ad5a9bef9fcc6ce9
-fieldhash VolumetricFogEmissionB 38b8b0aabcbfd130
-fieldhash VolumetricFogAnisotropy 82a9888a4ffd61ff
-fieldhash VolumetricFogTrackDirectionalLight f09fcfb88c056097
-fieldhash VolumetricFogSunIntensityScale ead563ce202808c
-fieldhash VolumetricFogSunTintR 5efad19bbff81293
-fieldhash VolumetricFogSunTintG 5d6d66c2c0db8a42
-fieldhash VolumetricFogSunTintB ad6fbe18cc274f00
-fieldhash VolumetricFogAmbientTintR 1c2837ea683ef748
-fieldhash VolumetricFogAmbientTintG a6c13d2dc7682984
-fieldhash VolumetricFogAmbientTintB 1d50d78a4f6c04bd
-fieldhash VolumetricFogNoiseEnabled c2c841e7206ffb6c
-fieldhash VolumetricFogNoiseScale 30a3a1eca2e75b92
-fieldhash VolumetricFogNoiseStrength cafcec01f32bf41f
-fieldhash VolumetricFogNoiseVelocityX d2f417f89f566b4f
-fieldhash VolumetricFogNoiseVelocityY e3c826ece33affe
-fieldhash VolumetricFogNoiseVelocityZ 3999f780fccbed15
-fieldhash VolumetricFogNoiseContrast a32b04737fd47c37
-fieldhash VolumetricFogNoiseChannelWeightR be406f7430530583
-fieldhash VolumetricFogNoiseChannelWeightG b94f341af12aa4d4
-fieldhash VolumetricFogNoiseChannelWeightB e2c800a6a29bc85c
-fieldhash VolumetricFogNoiseChannelWeightA 9e79bea89eca26b9
-fieldhash VolumetricFogDensityThreshold 1f2d2e287062bb4d
-fieldhash VolumetricFogDensityThresholdSoftness 455b38218c28b811
-fieldhash VolumetricFogTemporalEnabled 863bddc30fa931f7
-fieldhash VolumetricFogTemporalBlend 78ae50546c5a6f17
-fieldhash VolumetricFogJitterStrength fa9d0d8f5bd0b946
-fieldhash VolumetricFogJitterMotion 2fe9d4997c320903
-fieldhash VolumetricFogCompositeDepthBias 35920567e53c9c79
-fieldhash VolumetricFogShadowBias c1a2e5d047e3ae22
-fieldhash FogGlowEnabled c0c518a50375d60f
-fieldhash FogGlowQuality a56a44acfadd291c
-fieldhash FogGlowIntensity 6d415a303d6fc47d
-fieldhash FogGlowRadius a1fac1b5ceac4486
-fieldhash FogGlowOctaves f67a21260a7f38b4
-fieldhash FogGlowSampleScale 75f0d259512babe3
-fieldhash FogGlowScatter ac8e9ac2d0987a06
-fieldhash FogGlowThreshold 2d3b2902026bfde4
-fieldhash FogGlowKnee b5e52fdc6a5c97fc
-fieldhash FogGlowFadeStart d2c39621b759ed03
-fieldhash FogGlowFadeEnd ae56d1fdb1aaea4b
-fieldhash FogGlowTintR 733450d93497565f
-fieldhash FogGlowTintG d3659bebf8cd88b9
-fieldhash FogGlowTintB 7c1bd8b39be5d70f
-fieldhash FogGlowAntiFlicker 904f3c338fd0d800
-fieldhash AtmosphericCloudSkyFill 9aaa329027ea6d10
-fieldhash AtmosphericCloudVaporMass 2baefdd38c8be182
-fieldhash AtmosphericCloudColorR d328daa10f1893ea
-fieldhash AtmosphericCloudColorG 804042637adf50dc
-fieldhash AtmosphericCloudColorB 6fdddeaee477f868
-fieldhash AtmosphericCloudOpacity a9dc732732805870
-fieldhash AtmosphericCloudFloorHeight 9a3cc307bb1ac58a
-fieldhash AtmosphericCloudLayerDepth 5413bf0529f61ba1
-fieldhash AtmosphericCloudBodyFrequency 94444ea3c71f3e8e
-fieldhash AtmosphericCloudEdgeFrequency 47c8b80137cf0945
-fieldhash AtmosphericCloudEdgeBreakup e1797460665a8159
-fieldhash AtmosphericCloudDriftAngle 6d1dccd9c876caec
-fieldhash AtmosphericCloudDriftRate 70c0c45a824b6fc6
-fieldhash AtmosphericCloudSunFade 315b50380a7e189b
-fieldhash AtmosphericCloudSkyBounce 10bba3d3cf26eeef
-fieldhash AtmosphericCloudRimBoost 700440132558f14a
-fieldhash AtmosphericCloudOcclusion a356b7faa72cbea8
-fieldhash AtmosphericCloudHistoryWeight b0d2f310f1477ff9
-fieldhash AtmosphericCloudPixelScale 44f9657897e79e6c
-fieldhash CloudsRadius e85b691f868f7817
-fieldhash CloudsAltitude 83df0b66cdca25d2
-fieldhash CloudsThickness 8d2f4c23aef25593
-fieldhash CloudsNumStepsLight c85ac022135ce173
-fieldhash CloudsStepSize c2b4ab900d90d47a
-fieldhash CloudsRayOffsetStrength b5f59f1ae4235117
-fieldhash CloudsScale e39c91f1609986ed
-fieldhash CloudsDensityMultiplier ede90805e6541439
-fieldhash CloudsDensityOffset 5517037aaa9d82f0
-fieldhash CloudsShapeOffsetX 617b34fecb502d86
-fieldhash CloudsShapeOffsetY 7e20bc288b9128ee
-fieldhash CloudsShapeOffsetZ 84cbe23762305c99
-fieldhash CloudsShapeWeightR 6632266686d4737
-fieldhash CloudsShapeWeightG 6e12141685ef6055
-fieldhash CloudsShapeWeightB 4ebb641cd7513e00
-fieldhash CloudsShapeWeightA 284f9dc8d260816b
-fieldhash CloudsDetailScale f6ea7aaeeb510d91
-fieldhash CloudsDetailWeight 1a7e2fc8bfeb468d
-fieldhash CloudsDetailWeightR be15286a3975850e
-fieldhash CloudsDetailWeightG ad289259673fff0e
-fieldhash CloudsDetailWeightB abddbe3b922fa9b
-fieldhash CloudsDetailOffsetX edf66d217b5bdb25
-fieldhash CloudsDetailOffsetY 76a91bc40692ce0d
-fieldhash CloudsDetailOffsetZ c7908c71d4493ce5
-fieldhash CloudsAbsorptionThroughCloud 222453250ec15de4
-fieldhash CloudsAbsorptionTowardSun d3a07164fe382f35
-fieldhash CloudsDarknessThreshold fc2499b3ac6020e7
-fieldhash CloudsPhaseForward cb8d289c7e9c47f6
-fieldhash CloudsPhaseBack b9f5dbfc998afbd0
-fieldhash CloudsPhaseBase 20dcb2a3074a9014
-fieldhash CloudsPhaseFactor 23520297269b8496
-fieldhash CloudsTimeScale a89b521f555667d7
-fieldhash CloudsBaseSpeed cfbd1ee543463880
-fieldhash CloudsDetailSpeed 17c95c1e8c202260
-fieldhash CloudsHistoryWeight ee4ad08d3c06179a
-fieldhash AOIntensity 6ab898cea7060de9
-fieldhash AORadius cdb176e366f8cc0d
-fieldhash AOThickness 13d3451d4644b5cc
-fieldhash SSSRIntensity 605f8a584afe0866
-fieldhash SSSRMaxDistance 9cf9b956c2a6e235
-fieldhash SSSRThickness 37b9908a0ec13137
-fieldhash SSSREdgeFade 416a95cd004dfb60
-fieldhash SSSRMaxSteps 8d5973cc6f011297
-fieldhash SSSRSampleQuality 7430573d3ba8d5bd
-fieldhash SSSRMultiBounce 9a55449a8e14e31b
-fieldhash AutoExposureActive 23cccfb4aa0f47d2
-fieldhash AutoExposureMinEv d99b46932db51a7c
-fieldhash AutoExposureMaxEv 7a6c5d25becda675
-fieldhash AutoExposureSpeedUp 83960e0501fe9e6
-fieldhash AutoExposureSpeedDown 7c097bd345afe1a5
-fieldhash AutoExposureBiasEv 53d9922f10fa4bf9
-fieldhash ExposureCompensationEv b2fc63a607ef3682
-fieldhash ExposureClampMinEv 929cfbf32a891a87
-fieldhash ExposureClampMaxEv d7d019223a933acb
+fieldhash VignetteIntensity 48411053fb7a85d
+fieldhash VignetteSmoothness 3313d45dada0391a
+fieldhash VignetteRounded b9a3ed919767072d
+fieldhash VignetteColorR ff333431de67613f
+fieldhash VignetteColorG 8079319bdf0abb39
+fieldhash VignetteColorB b12a83dff53c69eb
+fieldhash VignetteStackOrder 3cf0dfd64f6932f5
+fieldhash VhsIntensity 4a8eb0970a43ad45
+fieldhash VhsWobble 86a2b2489b35f26c
+fieldhash VhsTracking cd81fa691e1f7221
+fieldhash VhsSignalGlitches 6d341822b46ba146
+fieldhash VhsGlitchOffsets ec87b43e3684a8cb
+fieldhash VhsInterference 15a26e9437c1ba15
+fieldhash VhsFrameFeedback 25f7e38dc3382a94
+fieldhash VhsFeedbackDecay 8d3e48c30180fea6
+fieldhash VhsFeedbackMotionThreshold d65ff8e3aff993f3
+fieldhash VhsFeedbackTrailLength 35abdb6f120d4ff7
+fieldhash VhsCompositeSignalMode b074d194174378b2
+fieldhash VhsDotCrawl b9cdcb1695abb520
+fieldhash VhsColorBleed d6806612f87a1e50
+fieldhash VhsColorBleedOffset 64a8be23761d0238
+fieldhash VhsTapeNoise ac7088fd902f8eb0
+fieldhash VhsChromaStreaks f75204b903bd730e
+fieldhash VhsPreFilterChromaStreaks 492ae84f53ee0678
+fieldhash VhsDropouts 70724ebfd7a3f1bb
+fieldhash VhsRfDropouts 9f93b3c7ac846d5b
+fieldhash VhsScanlines bc665b799d7c5654
+fieldhash VhsSpeed f6e0944112db90e9
+fieldhash VhsOverlayEnabled b505c085f31c67f1
+fieldhash VhsOverlayColorR 8df038d7c8f4d0c2
+fieldhash VhsOverlayColorG d4e592527dc765a7
+fieldhash VhsOverlayColorB 59fe94925dbe8bd9
+fieldhash VhsOverlayOpacity a1fd01d9b65bc116
+fieldhash VhsOverlaySize 9964edabc97f2864
+fieldhash VhsOverlayFont 40c33d2fd6ae5b8b
+fieldhash VhsOverlayPositionX 7acd5e4ea18a0d3
+fieldhash VhsOverlayPositionY 2d1da60e9cd84c76
+fieldhash VhsOverlayTextLength 3e77a9caef58470e
+fieldhash VhsOverlayText0 2d0eafb33ed2a140
+fieldhash VhsOverlayText1 365bcc032426706b
+fieldhash VhsOverlayText2 ce239d2990dfb53b
+fieldhash VhsOverlayText3 eb96a5e9c775f9c
+fieldhash VhsOverlayText4 bf3abb8a970e5fcb
+fieldhash VhsOverlayText5 e85208e77fda438c
+fieldhash VhsOverlayText6 9a53fd5ee5bede48
+fieldhash VhsOverlayText7 acaaa3253fa8cd8a
+fieldhash VhsDateBurnEnabled 809cdf4810ba95dd
+fieldhash VhsDateBurnColorR 27d71a3b2845d2c9
+fieldhash VhsDateBurnColorG f557c8104f19692c
+fieldhash VhsDateBurnColorB 3d3678d69cf342b3
+fieldhash VhsDateBurnSize 3def5b83339e577a
+fieldhash VhsDateBurnPositionX e5c89a7720f461b9
+fieldhash VhsDateBurnPositionY b19b02833df9475e
+fieldhash VhsDateBurnYear ef8af2e6afd8c51f
+fieldhash VhsDateBurnMonth d751d7bd3dfb3f14
+fieldhash VhsDateBurnDay 23b1aae021ca001f
+fieldhash VhsDateBurnHour 1c2de630f465156d
+fieldhash VhsDateBurnMinute 5862c9b8089cd1a3
+fieldhash VhsTransportMode c5224034a408c3ce
+fieldhash VhsTransportStrength dda29a4d23350f68
+fieldhash CrtIntensity 75be58ce087250de
+fieldhash CrtCurvature 40850c04d43eaf5c
+fieldhash CrtScanlines be2a2123e0ebdaaa
+fieldhash CrtVignette e6376b9717bb18d4
+fieldhash CrtAberration d3b5ea0b090923c2
+fieldhash CrtSoftness 2ded3685994b7573
+fieldhash CrtExposureCompensation 11f3bd7f587104d6
+fieldhash CrtEmulatedResolutionDiv 988e0c419da0fbc
+fieldhash FastBlurIntensity 1c655b6b33a7f1eb
+fieldhash FastBlurFocusDistance d4e44455f58217a3
+fieldhash FastBlurFocusRange b7b55fa3920bebdb
+fieldhash FastBlurMaxRadius 379c221ed4c2d161
+fieldhash FastBlurNearBlur 98742b7aae4427b8
+fieldhash HeatDistortionStrength c4ffaf8a2699b2f8
+fieldhash HeatDistortionSpeed 9b4f8edc4dd9aac1
+fieldhash HeatDistortionScale e30ad99acbfea6e5
+fieldhash HeatDistortionMaskStrength 23de02aa50d80ea4
+fieldhash HeatDistortionDistanceStart 1e1700d0d161aeeb
+fieldhash HeatDistortionDistanceEnd f2f313bf0acac340
+fieldhash HeatDistortionDirectionalFalloff 8b57de990f3ae704
+fieldhash HeatDistortionUseAbsoluteY 4082b91c40c008e0
+fieldhash HeatDistortionSoftness 103d1b16f47d14cf
+fieldhash HeightFogIntensity ee4740c11f4a1e42
+fieldhash HeightFogDensity 66716e9c6be6ed20
+fieldhash HeightFogMaxOpacity 8b4681ef76f730d
+fieldhash HeightFogMinDistance e49ba3de9c46d74a
+fieldhash HeightFogSmoothLength 2ecb911c0155fdea
+fieldhash HeightFogBaseHeight 801092d4c987a875
+fieldhash HeightFogTransitionLength 5598ccb8d43f51ff
+fieldhash HeightFogEmissiveR e73ff21eead52702
+fieldhash HeightFogEmissiveG 274879bb8efbc214
+fieldhash HeightFogEmissiveB 8d5c49abac10dcff
+fieldhash HeightFogSunDirX 7719c398060bfdd5
+fieldhash HeightFogSunDirY d1401339e1413432
+fieldhash HeightFogSunDirZ a027dabf4a6b4bc4
+fieldhash HeightFogSunColorR b22575459b357b57
+fieldhash HeightFogSunColorG 1d5b61ec5672e0
+fieldhash HeightFogSunColorB eee0e124c9103180
+fieldhash HeightFogSunIntensity df5dc03da7c21862
+fieldhash HeightFogPhase 969ec7e698518091
+fieldhash HeightFogPhaseWeight0 458235f832215364
+fieldhash HeightFogPhaseWeight1 863a9dc2d0b11151
+fieldhash HeightFogSkyEnabled 4be2828a8987a564
+fieldhash HeightFogSkyPower 17f0a8a1891d3159
+fieldhash HeightFogSkyFillStart 17e253732b3ff29f
+fieldhash HeightFogSkyFillEnd d17dcb2a235f6bb5
+fieldhash HeightFogDistanceFogEnabled 766b41a3de0f886d
+fieldhash HeightFogHeightFogEnabled c8bf8de39781ae33
+fieldhash HeightFogMaxDistance 4b063cbf689918d5
+fieldhash HeightFogLayerMode 319fe368f1a60431
+fieldhash HeightFogHorizonHeightOffset 1ad1e42008d33f8f
+fieldhash HeightFogHorizonHeightBlendStart 88aa35a747fe3ce1
+fieldhash HeightFogHorizonHeightBlendEnd 4f68ad9260041003
+fieldhash HeightFogAxisMode d62f400c0db0bac6
+fieldhash HeightFogAxisX c7f7cb3b4b7833a4
+fieldhash HeightFogAxisY 7b244ba866b43f50
+fieldhash HeightFogAxisZ f4644cc1d7cb344c
+fieldhash HeightFogGradientMode ebe746a1f4e140ab
+fieldhash HeightFogGradientStrength 6b0fc951974fd64a
+fieldhash HeightFogGradientLowR 6b2912567f11b2a5
+fieldhash HeightFogGradientLowG d6a0bac368d8f601
+fieldhash HeightFogGradientLowB eb3e3b8c073c4939
+fieldhash HeightFogGradientHighR b3adbd1588868866
+fieldhash HeightFogGradientHighG d7173de06c095ef9
+fieldhash HeightFogGradientHighB d34b6cb435b66bb2
+fieldhash HeightFogTrackDirectionalLight 7fdc7b278dd53b07
+fieldhash HeightFogSunIntensityScale 30d443f09a5cc194
+fieldhash HeightFogNoiseEnabled 196613f9ddd6f323
+fieldhash HeightFogNoiseScale 6295a38e4c2a2364
+fieldhash HeightFogNoiseStrength a62a26c79571e5e3
+fieldhash HeightFogNoiseContrast 69ea45d2550a4d7b
+fieldhash HeightFogNoiseVelX e36653340350edb6
+fieldhash HeightFogNoiseVelY 9a6c063a6188417
+fieldhash HeightFogNoiseVelZ 82bd949999e18fc2
+fieldhash HeightFogNoiseMin e6f1e6fffd9c45db
+fieldhash HeightFogNoiseMax c30b912809dee17d
+fieldhash HeightFogNoiseFadeStart 532493d59fe025f2
+fieldhash HeightFogNoiseFadeEnd ab9483b904c3f106
+fieldhash HeightFogUseTimeOfDay a62d253f3576606f
+fieldhash HeightFogSkyHorizonOffset 4d536056a855fc39
+fieldhash HeightFogSkyBottomStrength a8e3f0caaa651d06
+fieldhash HeightFogColorMode ab70ea45ccaf8a65
+fieldhash ColorGradeShadowsR bd7ef5bc17574d78
+fieldhash ColorGradeShadowsG a5d5d2d7d1040a05
+fieldhash ColorGradeShadowsB ae6c8b8e5b1bbfaf
+fieldhash ColorGradeShadowsMaster 228f7c0ac7345cf3
+fieldhash ColorGradeMidtonesR bd51af85530fc1c0
+fieldhash ColorGradeMidtonesG f586b4c28995fb1d
+fieldhash ColorGradeMidtonesB 7d89c1d3a42780b1
+fieldhash ColorGradeMidtonesMaster b254deff3670959
+fieldhash ColorGradeHighlightsR 52f688a5ebacb85e
+fieldhash ColorGradeHighlightsG 7ed7bc7d9accc3eb
+fieldhash ColorGradeHighlightsB 8906ab12d78f7799
+fieldhash ColorGradeHighlightsMaster 38cf2b18dc73b3ef
+fieldhash ColorGradeContrast 1706fadcd6499548
+fieldhash ColorGradeSaturation 9f8349826d7996ac
+fieldhash ColorGradeHueShift 5cd645db26d40eed
+fieldhash ColorGradeTemperature 24cccb5960480ef2
+fieldhash ColorGradeTint e5ddf7ea9ddbfe48
+fieldhash ColorGradeInLog 7e2eb92a406e380f
+fieldhash ColorGradeShadowsStart 6b5e6bda102c3480
+fieldhash ColorGradeShadowsEnd cd693ff5d955e532
+fieldhash ColorGradeHighlightsStart bfbcafe5d4223a5e
+fieldhash ColorGradeHighlightsEnd 920fb87eae1b0529
+fieldhash VolumetricFogIntensity a674a24abf5c1cc6
+fieldhash VolumetricFogIsGlobal 670a97adf2ad0990
+fieldhash VolumetricFogVolumeShape 20a18338716daf3a
+fieldhash VolumetricFogVolumeValid 974824a0e298406d
+fieldhash VolumetricFogVolumeBlendDistance f21223d2f912d138
+fieldhash VolumetricFogVolumeCenterX 9e0d768b6f53551d
+fieldhash VolumetricFogVolumeCenterY c336b3736b7513e1
+fieldhash VolumetricFogVolumeCenterZ e301cb315a360461
+fieldhash VolumetricFogVolumeAxisXX 3c2140a24a9afd6c
+fieldhash VolumetricFogVolumeAxisXY 8bdcca07c2a93858
+fieldhash VolumetricFogVolumeAxisXZ d6f956ebd1971baa
+fieldhash VolumetricFogVolumeAxisYX ce16c1608b9f236c
+fieldhash VolumetricFogVolumeAxisYY 83875d5fdaf4639
+fieldhash VolumetricFogVolumeAxisYZ 48a2fd0c22bada1e
+fieldhash VolumetricFogVolumeAxisZX 9458d175473d7323
+fieldhash VolumetricFogVolumeAxisZY 9138e01eb37977bb
+fieldhash VolumetricFogVolumeAxisZZ 34d287577d9c9bf0
+fieldhash VolumetricFogVolumeHalfExtentX 4421608387825b9f
+fieldhash VolumetricFogVolumeHalfExtentY 23b504134fcf5d4
+fieldhash VolumetricFogVolumeHalfExtentZ e6b6f987359f5032
+fieldhash VolumetricFogMaxDistance 89db2feae5bbafe5
+fieldhash VolumetricFogXYCellSizePixels b29784751c729293
+fieldhash VolumetricFogZSliceCount d168753d6ce36491
+fieldhash VolumetricFogDepthDistribution 635e561890dca816
+fieldhash VolumetricFogDensity bcee382aa4a6982c
+fieldhash VolumetricFogBaseHeight d6fd080fb5801054
+fieldhash VolumetricFogHeightFalloff d0561319cc46a622
+fieldhash VolumetricFogSkyFade b41adbe3b3d3ba93
+fieldhash VolumetricFogAlbedoR e68e2ec35618686f
+fieldhash VolumetricFogAlbedoG e08578967a541763
+fieldhash VolumetricFogAlbedoB ad5a9bef9fcc6ce9
+fieldhash VolumetricFogEmissionR 38b8b0aabcbfd130
+fieldhash VolumetricFogEmissionG 82a9888a4ffd61ff
+fieldhash VolumetricFogEmissionB ca867d7566d535c3
+fieldhash VolumetricFogAnisotropy ead563ce202808c
+fieldhash VolumetricFogTrackDirectionalLight e76893b63ad466e8
+fieldhash VolumetricFogSunIntensityScale 5d6d66c2c0db8a42
+fieldhash VolumetricFogSunTintR ad6fbe18cc274f00
+fieldhash VolumetricFogSunTintG 1c2837ea683ef748
+fieldhash VolumetricFogSunTintB a6c13d2dc7682984
+fieldhash VolumetricFogAmbientTintR 1d50d78a4f6c04bd
+fieldhash VolumetricFogAmbientTintG efae297fb2b1ee6b
+fieldhash VolumetricFogAmbientTintB 30a3a1eca2e75b92
+fieldhash VolumetricFogNoiseEnabled b6323b939efe1ca5
+fieldhash VolumetricFogNoiseScale d2f417f89f566b4f
+fieldhash VolumetricFogNoiseStrength e3c826ece33affe
+fieldhash VolumetricFogNoiseVelocityX 3999f780fccbed15
+fieldhash VolumetricFogNoiseVelocityY a32b04737fd47c37
+fieldhash VolumetricFogNoiseVelocityZ be406f7430530583
+fieldhash VolumetricFogNoiseContrast b94f341af12aa4d4
+fieldhash VolumetricFogNoiseChannelWeightR e2c800a6a29bc85c
+fieldhash VolumetricFogNoiseChannelWeightG 9e79bea89eca26b9
+fieldhash VolumetricFogNoiseChannelWeightB 1f2d2e287062bb4d
+fieldhash VolumetricFogNoiseChannelWeightA 455b38218c28b811
+fieldhash VolumetricFogDensityThreshold d219f0561c69dbd0
+fieldhash VolumetricFogDensityThresholdSoftness 78ae50546c5a6f17
+fieldhash VolumetricFogTemporalEnabled 4c96912fc27caff0
+fieldhash VolumetricFogTemporalBlend d1fc82901e2b2b1c
+fieldhash VolumetricFogJitterStrength 35920567e53c9c79
+fieldhash VolumetricFogJitterMotion b90ab9e3de5bc472
+fieldhash VolumetricFogCompositeDepthBias 28ea41bc118c65aa
+fieldhash VolumetricFogShadowBias 746def0801290322
+fieldhash FogGlowEnabled 4a1024e2c640147c
+fieldhash FogGlowQuality e4f239c9f79084c8
+fieldhash FogGlowIntensity 42cd082133b9942b
+fieldhash FogGlowRadius d2d58f3d3a5386c7
+fieldhash FogGlowOctaves 3fc0eaecc4620ce1
+fieldhash FogGlowSampleScale b8ca29f2bc477f93
+fieldhash FogGlowScatter b5e52fdc6a5c97fc
+fieldhash FogGlowThreshold d2c39621b759ed03
+fieldhash FogGlowKnee ae56d1fdb1aaea4b
+fieldhash FogGlowFadeStart 733450d93497565f
+fieldhash FogGlowFadeEnd d3659bebf8cd88b9
+fieldhash FogGlowTintR 7c1bd8b39be5d70f
+fieldhash FogGlowTintG 90387d59fb4c615
+fieldhash FogGlowTintB 433865b1def730
+fieldhash FogGlowAntiFlicker 77bf8725b8babdf3
+fieldhash AtmosphericCloudSkyFill d328daa10f1893ea
+fieldhash AtmosphericCloudVaporMass 804042637adf50dc
+fieldhash AtmosphericCloudColorR 6fdddeaee477f868
+fieldhash AtmosphericCloudColorG a9dc732732805870
+fieldhash AtmosphericCloudColorB 9a3cc307bb1ac58a
+fieldhash AtmosphericCloudOpacity 5413bf0529f61ba1
+fieldhash AtmosphericCloudFloorHeight 94444ea3c71f3e8e
+fieldhash AtmosphericCloudLayerDepth 47c8b80137cf0945
+fieldhash AtmosphericCloudBodyFrequency e1797460665a8159
+fieldhash AtmosphericCloudEdgeFrequency 6d1dccd9c876caec
+fieldhash AtmosphericCloudEdgeBreakup 70c0c45a824b6fc6
+fieldhash AtmosphericCloudDriftAngle 315b50380a7e189b
+fieldhash AtmosphericCloudDriftRate 10bba3d3cf26eeef
+fieldhash AtmosphericCloudSunFade 700440132558f14a
+fieldhash AtmosphericCloudSkyBounce a356b7faa72cbea8
+fieldhash AtmosphericCloudRimBoost b0d2f310f1477ff9
+fieldhash AtmosphericCloudOcclusion 44f9657897e79e6c
+fieldhash AtmosphericCloudHistoryWeight a00a5fdcb71cd6ef
+fieldhash AtmosphericCloudPixelScale 6f94317f57999066
+fieldhash CloudsRadius 8d2f4c23aef25593
+fieldhash CloudsAltitude ef22339e31408509
+fieldhash CloudsThickness c2b4ab900d90d47a
+fieldhash CloudsNumStepsLight 3b5e61e9c0ebb8d
+fieldhash CloudsStepSize e39c91f1609986ed
+fieldhash CloudsRayOffsetStrength ede90805e6541439
+fieldhash CloudsScale 5517037aaa9d82f0
+fieldhash CloudsDensityMultiplier 617b34fecb502d86
+fieldhash CloudsDensityOffset 7e20bc288b9128ee
+fieldhash CloudsShapeOffsetX 84cbe23762305c99
+fieldhash CloudsShapeOffsetY 6632266686d4737
+fieldhash CloudsShapeOffsetZ 6e12141685ef6055
+fieldhash CloudsShapeWeightR 4ebb641cd7513e00
+fieldhash CloudsShapeWeightG 284f9dc8d260816b
+fieldhash CloudsShapeWeightB f6ea7aaeeb510d91
+fieldhash CloudsShapeWeightA 1a7e2fc8bfeb468d
+fieldhash CloudsDetailScale be15286a3975850e
+fieldhash CloudsDetailWeight ad289259673fff0e
+fieldhash CloudsDetailWeightR abddbe3b922fa9b
+fieldhash CloudsDetailWeightG edf66d217b5bdb25
+fieldhash CloudsDetailWeightB 76a91bc40692ce0d
+fieldhash CloudsDetailOffsetX c7908c71d4493ce5
+fieldhash CloudsDetailOffsetY 222453250ec15de4
+fieldhash CloudsDetailOffsetZ d3a07164fe382f35
+fieldhash CloudsAbsorptionThroughCloud fc2499b3ac6020e7
+fieldhash CloudsAbsorptionTowardSun cb8d289c7e9c47f6
+fieldhash CloudsDarknessThreshold b9f5dbfc998afbd0
+fieldhash CloudsPhaseForward 20dcb2a3074a9014
+fieldhash CloudsPhaseBack 23520297269b8496
+fieldhash CloudsPhaseBase a89b521f555667d7
+fieldhash CloudsPhaseFactor cfbd1ee543463880
+fieldhash CloudsTimeScale 17c95c1e8c202260
+fieldhash CloudsBaseSpeed ee4ad08d3c06179a
+fieldhash CloudsDetailSpeed 6ab898cea7060de9
+fieldhash CloudsHistoryWeight cdb176e366f8cc0d
+fieldhash AOIntensity 13d3451d4644b5cc
+fieldhash AORadius 605f8a584afe0866
+fieldhash AOThickness 9cf9b956c2a6e235
+fieldhash SSSRIntensity 37b9908a0ec13137
+fieldhash SSSRMaxDistance 416a95cd004dfb60
+fieldhash SSSRThickness 7c5bbf49ca80d019
+fieldhash SSSREdgeFade 405f46f8fbfe7555
+fieldhash SSSRMaxSteps 9a55449a8e14e31b
+fieldhash SSSRSampleQuality 8fc756cc97f7e472
+fieldhash SSSRMultiBounce a3a437a7c33d65b1
+fieldhash AutoExposureActive 5e3221e0dd0b0977
+fieldhash AutoExposureMinEv 83960e0501fe9e6
+fieldhash AutoExposureMaxEv 7c097bd345afe1a5
+fieldhash AutoExposureSpeedUp 53d9922f10fa4bf9
+fieldhash AutoExposureSpeedDown b2fc63a607ef3682
+fieldhash AutoExposureBiasEv 929cfbf32a891a87
+fieldhash ExposureCompensationEv d7d019223a933acb
+fieldhash ExposureClampMinEv 8bd42fabe6d7cd5f
+fieldhash ExposureClampMaxEv 157c765af35cf437
 fieldhash BloomOctaveBlend bfeca752d9fc4d33
 fieldhash ViewOutput 9a7dc7b3a3f499a3
+fieldhash AutoExposureMeter edce972053e22df1
+fieldhash AutoExposureCompensation 9208db9dfd4ddc3
+fieldhash ExposureClampMinWeight 314910ff8c7f17e0
+fieldhash ExposureClampMaxWeight 55a9093776573990
 exposure 0 00400442
 exposure 1 00400442
 exposure 2 00400442
@@ -890,40 +895,43 @@ field 0 HalationTintR 00a01ac2
 field 0 HalationTintG 00c0a8c1
 field 0 HalationTintB 0000a540
 field 0 Look ffffffff
-field 0 IctcpChromaCompression 00802842
-field 0 ChromaticAberrationIntensity 00802441
-field 0 ChromaticAberrationStartOffset 00607142
-field 0 ChromaticAberrationSaturation 00803dc2
-field 0 FilmSimulationFrameRate 00407cc2
-field 0 FilmSimulationGrainMode feffffff
-field 0 FilmSimulationGrainIntensity 00a03c42
-field 0 FilmSimulationGrainSize 0080dec1
-field 0 FilmSimulationGrainSmooth 00000000
-field 0 FilmSimulationGrainDensity 00800741
-field 0 FilmSimulationGrainShadowResponse 0000a140
-field 0 FilmSimulationGrainMidtoneResponse 0000de41
-field 0 FilmSimulationGrainHighlightResponse 00604b42
-field 0 FilmSimulationGrainColored feffffff
+field 0 NightTintStrength 00802441
+field 0 NightTintR 00607142
+field 0 NightTintG 00803dc2
+field 0 NightTintB 00407cc2
+field 0 ChromaticAberrationIntensity 0000eb40
+field 0 ChromaticAberrationStartOffset 00a03c42
+field 0 ChromaticAberrationSaturation 0080dec1
+field 0 FilmSimulationFrameRate 0040af41
+field 0 FilmSimulationGrainMode 04000000
+field 0 FilmSimulationGrainIntensity 0000a140
+field 0 FilmSimulationGrainSize 0000de41
+field 0 FilmSimulationGrainSmooth ffffffff
+field 0 FilmSimulationGrainDensity 00c066c2
+field 0 FilmSimulationGrainShadowResponse 00009ec0
+field 0 FilmSimulationGrainMidtoneResponse 004038c2
+field 0 FilmSimulationGrainHighlightResponse 00c017c2
+field 0 FilmSimulationGrainColored fcffffff
 field 0 FilmSimulationHairEnabled 00000000
-field 0 FilmSimulationHairAmount 004038c2
-field 0 FilmSimulationHairIntensity 00c017c2
-field 0 FilmSimulationHairWidth 00e06542
-field 0 FilmSimulationHairLength 00c04642
-field 0 FilmSimulationHairRandomSize 00a03342
-field 0 FilmSimulationHairCurl 00c0fbc1
-field 0 FilmSimulationHairCurlRandomness 000020bf
-field 0 FilmSimulationScratchesEnabled feffffff
-field 0 FilmSimulationScratchAmount 00607142
-field 0 FilmSimulationScratchIntensity 00a02042
-field 0 FilmSimulationScratchWidth 00807542
-field 0 FilmSimulationScratchLength 00202e42
-field 0 ChromaticAberrationLongitudinal 0000f840
-field 0 ChromaticAberrationComa 00a02e42
-field 0 DofIntensity 00c05f42
-field 0 DofMaxRadius 00802ac2
-field 0 DofSamplingQuality feffffff
-field 0 DofDebugMode fdffffff
-field 0 DofDebugAlpha 00603f42
+field 0 FilmSimulationHairAmount 00a03342
+field 0 FilmSimulationHairIntensity 00c0fbc1
+field 0 FilmSimulationHairWidth 000020bf
+field 0 FilmSimulationHairLength 00805f41
+field 0 FilmSimulationHairRandomSize 00607142
+field 0 FilmSimulationHairCurl 00a02042
+field 0 FilmSimulationHairCurlRandomness 00807542
+field 0 FilmSimulationScratchesEnabled 01000000
+field 0 FilmSimulationScratchAmount 0000f840
+field 0 FilmSimulationScratchIntensity 00a02e42
+field 0 FilmSimulationScratchWidth 00c05f42
+field 0 FilmSimulationScratchLength 00802ac2
+field 0 ChromaticAberrationLongitudinal 00003ac1
+field 0 ChromaticAberrationComa 0000cc40
+field 0 DofIntensity 00603f42
+field 0 DofMaxRadius 00c09d41
+field 0 DofSamplingQuality 02000000
+field 0 DofDebugMode fcffffff
+field 0 DofDebugAlpha 00c0dbc1
 field 0 DofFocusDistance 00002041
 field 0 DofFocalLengthMm 713da641
 field 0 DofAperture 00008041
@@ -932,347 +940,349 @@ field 0 DofApertureBladeCount 07000000
 field 0 DofApertureRoundness 0000803f
 field 0 DofApertureRotation 00000000
 field 0 DofAnamorphicSqueeze 0000803f
-field 0 FilmSimulationDustEnabled 00000000
-field 0 FilmSimulationDustAmount 00803f42
-field 0 FilmSimulationDustIntensity 00203c42
-field 0 FilmSimulationDustSize 00408141
-field 0 FilmSimulationDustRandomSize 00808a41
-field 0 FilmSimulationGateWeaveEnabled fdffffff
-field 0 FilmSimulationGateWeaveHorizontal 000055c1
-field 0 FilmSimulationGateWeaveVertical 00200cc2
-field 0 FilmSimulationGateWeaveRotation 00006ec0
-field 0 FilmSimulationGateMask 04000000
-field 0 FilmSimulationGateMaskFeather 004030c2
-field 0 FilmSimulationGateMaskRoundness 00c09ac1
-field 0 DebandThresholdLsb 00c0aec1
-field 0 ColorFilterR 00c03ac2
-field 0 ColorFilterG 00801b41
-field 0 ColorFilterB 00803ec1
-field 0 ColorFilterIntensity 0000a840
-field 0 ColorFilterBlendMode fdffffff
-field 0 CasStrength 00407e42
-field 0 CasStackOrder 04000000
-field 0 LutIntensity 00c01dc2
-field 0 LutStackOrder 02000000
-field 0 LutInputEncoding 02000000
-field 0 LutTextureFormat 01000000
+field 0 FilmSimulationDustEnabled 03000000
+field 0 FilmSimulationDustAmount 00e07f42
+field 0 FilmSimulationDustIntensity 000055c1
+field 0 FilmSimulationDustSize 00200cc2
+field 0 FilmSimulationDustRandomSize 00006ec0
+field 0 FilmSimulationGateWeaveEnabled 04000000
+field 0 FilmSimulationGateWeaveHorizontal 004030c2
+field 0 FilmSimulationGateWeaveVertical 00c09ac1
+field 0 FilmSimulationGateWeaveRotation 00c0aec1
+field 0 FilmSimulationGateMask 02000000
+field 0 FilmSimulationGateMaskFeather 00801b41
+field 0 FilmSimulationGateMaskRoundness 00803ec1
+field 0 DebandThresholdLsb 0000a840
+field 0 ColorFilterR 000053c2
+field 0 ColorFilterG 00407e42
+field 0 ColorFilterB 00a06642
+field 0 ColorFilterIntensity 00c01dc2
+field 0 ColorFilterBlendMode 02000000
+field 0 CasStrength 0000a9c0
+field 0 CasStackOrder 01000000
+field 0 LutIntensity 00c07d42
+field 0 LutStage 03000000
 field 0 LutAssetGuidWords 00000000000000000000000000000000
-field 0 VignetteIntensity 0040df41
-field 0 VignetteSmoothness 008079c1
-field 0 VignetteRounded 03000000
-field 0 VignetteColorR 00409641
-field 0 VignetteColorG 00a07742
-field 0 VignetteColorB 00004841
-field 0 VignetteStackOrder 00000000
-field 0 VhsIntensity 00801542
-field 0 VhsWobble 0040da41
-field 0 VhsTracking 00603bc2
-field 0 VhsSignalGlitches 00402bc2
-field 0 VhsGlitchOffsets 0000a840
-field 0 VhsInterference 00205cc2
-field 0 VhsFrameFeedback 00201042
-field 0 VhsFeedbackDecay 00c07d42
-field 0 VhsFeedbackMotionThreshold 00406242
-field 0 VhsFeedbackTrailLength 006050c2
-field 0 VhsCompositeSignalMode 00c0eb41
-field 0 VhsDotCrawl 000087c1
-field 0 VhsColorBleed 00005bc1
-field 0 VhsColorBleedOffset 004047c2
-field 0 VhsTapeNoise 00003fc2
-field 0 VhsChromaStreaks 0000d740
-field 0 VhsPreFilterChromaStreaks 0040e841
-field 0 VhsDropouts 0040e0c1
-field 0 VhsRfDropouts 00603442
-field 0 VhsScanlines 0040bd41
-field 0 VhsSpeed 00e01242
-field 0 VhsOverlayEnabled 00800ac1
-field 0 VhsOverlayColorR 00000000
-field 0 VhsOverlayColorG 0080d241
-field 0 VhsOverlayColorB 0000903f
-field 0 VhsOverlayOpacity 00805c41
-field 0 VhsOverlaySize 00e05b42
-field 0 VhsOverlayFont 006005c2
-field 0 VhsOverlayPositionX 002002c2
-field 0 VhsOverlayPositionY 0080a541
-field 0 VhsOverlayTextLength 00800241
-field 0 VhsOverlayText0 00403ec2
-field 0 VhsOverlayText1 00c024c2
-field 0 VhsOverlayText2 00003a41
-field 0 VhsOverlayText3 0080ccc1
-field 0 VhsOverlayText4 00e02b42
-field 0 VhsOverlayText5 00a04ac2
-field 0 VhsOverlayText6 00201342
-field 0 VhsOverlayText7 00a07742
-field 0 VhsDateBurnEnabled 0080f9c1
-field 0 VhsDateBurnColorR 000058bf
-field 0 VhsDateBurnColorG 00408441
-field 0 VhsDateBurnColorB 0040b041
-field 0 VhsDateBurnSize 0080b041
-field 0 VhsDateBurnPositionX 00c08e41
-field 0 VhsDateBurnPositionY 00009ec0
-field 0 VhsDateBurnYear 00a01342
-field 0 VhsDateBurnMonth 008070c1
-field 0 VhsDateBurnDay 00801842
-field 0 VhsDateBurnHour 00008841
-field 0 VhsDateBurnMinute 000065c1
-field 0 VhsTransportMode 00200d42
-field 0 VhsTransportStrength 0040e141
-field 0 CrtIntensity 00a00b42
-field 0 CrtCurvature 00c02742
-field 0 CrtScanlines 000010bf
-field 0 CrtVignette 00c0d1c1
-field 0 CrtAberration 00202842
-field 0 CrtSoftness 002049c2
-field 0 CrtExposureCompensation 006067c2
-field 0 CrtEmulatedResolutionDiv 002068c2
-field 0 FastBlurIntensity 006024c2
-field 0 FastBlurFocusDistance 0040d241
-field 0 FastBlurFocusRange 004093c1
-field 0 FastBlurMaxRadius 00c09441
-field 0 FastBlurNearBlur 00000000
-field 0 HeatDistortionStrength 00804d42
-field 0 HeatDistortionSpeed 0000d240
-field 0 HeatDistortionScale 00001141
-field 0 HeatDistortionMaskStrength 00a07642
-field 0 HeatDistortionDistanceStart 0040c941
-field 0 HeatDistortionDistanceEnd 00000bc1
-field 0 HeatDistortionDirectionalFalloff 00c089c1
-field 0 HeatDistortionUseAbsoluteY 03000000
-field 0 HeatDistortionSoftness 00207942
-field 0 HeightFogIntensity 00c054c2
-field 0 HeightFogDensity 00c0a641
-field 0 HeightFogMaxOpacity 002057c2
-field 0 HeightFogMinDistance 00807cc1
-field 0 HeightFogSmoothLength 00a06d42
-field 0 HeightFogBaseHeight 00a07442
-field 0 HeightFogTransitionLength 00009540
-field 0 HeightFogEmissiveR 000051c1
-field 0 HeightFogEmissiveG 00e01642
-field 0 HeightFogEmissiveB 0000c440
-field 0 HeightFogSunDirX 000067c2
-field 0 HeightFogSunDirY 00a039c2
-field 0 HeightFogSunDirZ 00c0c541
-field 0 HeightFogSunColorR 00c0e241
-field 0 HeightFogSunColorG 00800dc1
-field 0 HeightFogSunColorB 00c0f2c1
-field 0 HeightFogSunIntensity 0000e8bf
-field 0 HeightFogPhase 000063c2
-field 0 HeightFogPhaseWeight0 002022c2
-field 0 HeightFogPhaseWeight1 00203d42
-field 0 HeightFogSkyEnabled ffffffff
-field 0 HeightFogSkyPower 00c014c2
-field 0 HeightFogSkyFillStart 0000c4c1
-field 0 HeightFogSkyFillEnd 000078c2
-field 0 HeightFogDistanceFogEnabled fcffffff
-field 0 HeightFogHeightFogEnabled fdffffff
-field 0 HeightFogMaxDistance 00801c42
-field 0 HeightFogLayerMode 00000000
-field 0 HeightFogHorizonHeightOffset 0080dec1
-field 0 HeightFogHorizonHeightBlendStart 0080a0c1
-field 0 HeightFogHorizonHeightBlendEnd 0000dfc1
-field 0 HeightFogAxisMode fdffffff
-field 0 HeightFogAxisX 006022c2
-field 0 HeightFogAxisY 0000b441
-field 0 HeightFogAxisZ 00806d42
-field 0 HeightFogGradientMode 03000000
-field 0 HeightFogGradientStrength 00c03dc2
-field 0 HeightFogGradientLowR 00803342
-field 0 HeightFogGradientLowG 00001c40
-field 0 HeightFogGradientLowB 00003c40
-field 0 HeightFogGradientHighR 00004241
-field 0 HeightFogGradientHighG 00800fc2
-field 0 HeightFogGradientHighB 00807fc1
-field 0 HeightFogTrackDirectionalLight 02000000
-field 0 HeightFogSunIntensityScale 0000cb40
-field 0 HeightFogNoiseEnabled 04000000
-field 0 HeightFogNoiseScale 006018c2
-field 0 HeightFogNoiseStrength 00a04d42
-field 0 HeightFogNoiseContrast 0000bd41
-field 0 HeightFogNoiseVelX 0000be40
-field 0 HeightFogNoiseVelY 0080e841
-field 0 HeightFogNoiseVelZ 00401ec2
-field 0 HeightFogNoiseMin 000056c1
-field 0 HeightFogNoiseMax 00807bc2
-field 0 HeightFogNoiseFadeStart 00005ac1
-field 0 HeightFogNoiseFadeEnd 00e06742
-field 0 HeightFogUseTimeOfDay 01000000
-field 0 HeightFogSkyHorizonOffset 008086c1
-field 0 HeightFogSkyBottomStrength 00e077c2
-field 0 HeightFogColorMode 04000000
-field 0 ColorGradeShadowsR 0080fbc1
-field 0 ColorGradeShadowsG 00a03cc2
-field 0 ColorGradeShadowsB 00a07fc2
-field 0 ColorGradeShadowsMaster 00602042
-field 0 ColorGradeMidtonesR 00603dc2
-field 0 ColorGradeMidtonesG 00008640
-field 0 ColorGradeMidtonesB 00a054c2
-field 0 ColorGradeMidtonesMaster 00402cc2
-field 0 ColorGradeHighlightsR 00e03c42
-field 0 ColorGradeHighlightsG 00e048c2
-field 0 ColorGradeHighlightsB 00805242
-field 0 ColorGradeHighlightsMaster 0000da41
-field 0 ColorGradeContrast 0000cb41
-field 0 ColorGradeSaturation 00a00ac2
-field 0 ColorGradeHueShift 00003042
-field 0 ColorGradeTemperature 0040e941
-field 0 ColorGradeTint 0080a3c1
-field 0 ColorGradeInLog fdffffff
-field 0 ColorGradeShadowsStart 0000a03e
-field 0 ColorGradeShadowsEnd 00007cc0
-field 0 ColorGradeHighlightsStart 00a017c2
-field 0 ColorGradeHighlightsEnd 00806c41
-field 0 VolumetricFogIntensity 008033c1
-field 0 VolumetricFogIsGlobal feffffff
-field 0 VolumetricFogVolumeShape 03000000
-field 0 VolumetricFogVolumeValid fcffffff
-field 0 VolumetricFogVolumeBlendDistance 00801bc1
-field 0 VolumetricFogVolumeCenterX 0000f341
-field 0 VolumetricFogVolumeCenterY 0080ffc1
-field 0 VolumetricFogVolumeCenterZ 0080efc1
-field 0 VolumetricFogVolumeAxisXX 00e07e42
-field 0 VolumetricFogVolumeAxisXY 000080bf
-field 0 VolumetricFogVolumeAxisXZ 00c05bc2
-field 0 VolumetricFogVolumeAxisYX 006016c2
-field 0 VolumetricFogVolumeAxisYY 0000cdc0
-field 0 VolumetricFogVolumeAxisYZ 000098bf
-field 0 VolumetricFogVolumeAxisZX 00e05dc2
-field 0 VolumetricFogVolumeAxisZY 0000fdc1
-field 0 VolumetricFogVolumeAxisZZ 0000be40
-field 0 VolumetricFogVolumeHalfExtentX 0080a9c1
-field 0 VolumetricFogVolumeHalfExtentY 0000a440
-field 0 VolumetricFogVolumeHalfExtentZ 00803fc2
-field 0 VolumetricFogMaxDistance 0000a540
-field 0 VolumetricFogXYCellSizePixels fcffffff
+field 0 VignetteIntensity 00800642
+field 0 VignetteSmoothness 00409641
+field 0 VignetteRounded 04000000
+field 0 VignetteColorR 00004841
+field 0 VignetteColorG 0080f441
+field 0 VignetteColorB 00801542
+field 0 VignetteStackOrder 01000000
+field 0 VhsIntensity 00603bc2
+field 0 VhsWobble 00402bc2
+field 0 VhsTracking 0000a840
+field 0 VhsSignalGlitches 00205cc2
+field 0 VhsGlitchOffsets 00201042
+field 0 VhsInterference 00c07d42
+field 0 VhsFrameFeedback 00406242
+field 0 VhsFeedbackDecay 006050c2
+field 0 VhsFeedbackMotionThreshold 00c0eb41
+field 0 VhsFeedbackTrailLength 000087c1
+field 0 VhsCompositeSignalMode 00005bc1
+field 0 VhsDotCrawl 004047c2
+field 0 VhsColorBleed 00003fc2
+field 0 VhsColorBleedOffset 0000d740
+field 0 VhsTapeNoise 0040e841
+field 0 VhsChromaStreaks 0040e0c1
+field 0 VhsPreFilterChromaStreaks 00603442
+field 0 VhsDropouts 0040bd41
+field 0 VhsRfDropouts 00e01242
+field 0 VhsScanlines 00800ac1
+field 0 VhsSpeed 00000000
+field 0 VhsOverlayEnabled 0080d241
+field 0 VhsOverlayColorR 0000903f
+field 0 VhsOverlayColorG 00805c41
+field 0 VhsOverlayColorB 00e05b42
+field 0 VhsOverlayOpacity 006005c2
+field 0 VhsOverlaySize 002002c2
+field 0 VhsOverlayFont 0080a541
+field 0 VhsOverlayPositionX 00800241
+field 0 VhsOverlayPositionY 00403ec2
+field 0 VhsOverlayTextLength 00c024c2
+field 0 VhsOverlayText0 00003a41
+field 0 VhsOverlayText1 0080ccc1
+field 0 VhsOverlayText2 00e02b42
+field 0 VhsOverlayText3 00a04ac2
+field 0 VhsOverlayText4 00201342
+field 0 VhsOverlayText5 00a07742
+field 0 VhsOverlayText6 0080f9c1
+field 0 VhsOverlayText7 000058bf
+field 0 VhsDateBurnEnabled 00408441
+field 0 VhsDateBurnColorR 0040b041
+field 0 VhsDateBurnColorG 0080b041
+field 0 VhsDateBurnColorB 00c08e41
+field 0 VhsDateBurnSize 00009ec0
+field 0 VhsDateBurnPositionX 00a01342
+field 0 VhsDateBurnPositionY 008070c1
+field 0 VhsDateBurnYear 00801842
+field 0 VhsDateBurnMonth 00008841
+field 0 VhsDateBurnDay 000065c1
+field 0 VhsDateBurnHour 00200d42
+field 0 VhsDateBurnMinute 0040e141
+field 0 VhsTransportMode 00a00b42
+field 0 VhsTransportStrength 00c02742
+field 0 CrtIntensity 000010bf
+field 0 CrtCurvature 00c0d1c1
+field 0 CrtScanlines 00202842
+field 0 CrtVignette 002049c2
+field 0 CrtAberration 006067c2
+field 0 CrtSoftness 002068c2
+field 0 CrtExposureCompensation 006024c2
+field 0 CrtEmulatedResolutionDiv 0040d241
+field 0 FastBlurIntensity 004093c1
+field 0 FastBlurFocusDistance 00c09441
+field 0 FastBlurFocusRange 00a03942
+field 0 FastBlurMaxRadius 00804d42
+field 0 FastBlurNearBlur 04000000
+field 0 HeatDistortionStrength 00001141
+field 0 HeatDistortionSpeed 00a07642
+field 0 HeatDistortionScale 0040c941
+field 0 HeatDistortionMaskStrength 00000bc1
+field 0 HeatDistortionDistanceStart 00c089c1
+field 0 HeatDistortionDistanceEnd 004059c2
+field 0 HeatDistortionDirectionalFalloff 00207942
+field 0 HeatDistortionUseAbsoluteY fcffffff
+field 0 HeatDistortionSoftness 00c0a641
+field 0 HeightFogIntensity 002057c2
+field 0 HeightFogDensity 00807cc1
+field 0 HeightFogMaxOpacity 00a06d42
+field 0 HeightFogMinDistance 00a07442
+field 0 HeightFogSmoothLength 00009540
+field 0 HeightFogBaseHeight 000051c1
+field 0 HeightFogTransitionLength 00e01642
+field 0 HeightFogEmissiveR 0000c440
+field 0 HeightFogEmissiveG 000067c2
+field 0 HeightFogEmissiveB 00a039c2
+field 0 HeightFogSunDirX 00c0c541
+field 0 HeightFogSunDirY 00c0e241
+field 0 HeightFogSunDirZ 00800dc1
+field 0 HeightFogSunColorR 00c0f2c1
+field 0 HeightFogSunColorG 0000e8bf
+field 0 HeightFogSunColorB 000063c2
+field 0 HeightFogSunIntensity 002022c2
+field 0 HeightFogPhase 00203d42
+field 0 HeightFogPhaseWeight0 00403042
+field 0 HeightFogPhaseWeight1 00c014c2
+field 0 HeightFogSkyEnabled 01000000
+field 0 HeightFogSkyPower 000078c2
+field 0 HeightFogSkyFillStart 0000e9c0
+field 0 HeightFogSkyFillEnd 00806341
+field 0 HeightFogDistanceFogEnabled 03000000
+field 0 HeightFogHeightFogEnabled 00000000
+field 0 HeightFogMaxDistance 0080dec1
+field 0 HeightFogLayerMode 01000000
+field 0 HeightFogHorizonHeightOffset 0000dfc1
+field 0 HeightFogHorizonHeightBlendStart 0040f8c1
+field 0 HeightFogHorizonHeightBlendEnd 006022c2
+field 0 HeightFogAxisMode 00000000
+field 0 HeightFogAxisX 00806d42
+field 0 HeightFogAxisY 0000ab41
+field 0 HeightFogAxisZ 00c03dc2
+field 0 HeightFogGradientMode 01000000
+field 0 HeightFogGradientStrength 00001c40
+field 0 HeightFogGradientLowR 00003c40
+field 0 HeightFogGradientLowG 00004241
+field 0 HeightFogGradientLowB 00800fc2
+field 0 HeightFogGradientHighR 00807fc1
+field 0 HeightFogGradientHighG 00007a41
+field 0 HeightFogGradientHighB 0000cb40
+field 0 HeightFogTrackDirectionalLight 04000000
+field 0 HeightFogSunIntensityScale 006018c2
+field 0 HeightFogNoiseEnabled feffffff
+field 0 HeightFogNoiseScale 0000bd41
+field 0 HeightFogNoiseStrength 0000be40
+field 0 HeightFogNoiseContrast 0080e841
+field 0 HeightFogNoiseVelX 00401ec2
+field 0 HeightFogNoiseVelY 000056c1
+field 0 HeightFogNoiseVelZ 00807bc2
+field 0 HeightFogNoiseMin 00005ac1
+field 0 HeightFogNoiseMax 00e06742
+field 0 HeightFogNoiseFadeStart 00406c42
+field 0 HeightFogNoiseFadeEnd 008086c1
+field 0 HeightFogUseTimeOfDay 02000000
+field 0 HeightFogSkyHorizonOffset 004001c2
+field 0 HeightFogSkyBottomStrength 0080fbc1
+field 0 HeightFogColorMode 02000000
+field 0 ColorGradeShadowsR 00a07fc2
+field 0 ColorGradeShadowsG 00602042
+field 0 ColorGradeShadowsB 00603dc2
+field 0 ColorGradeShadowsMaster 00008640
+field 0 ColorGradeMidtonesR 00a054c2
+field 0 ColorGradeMidtonesG 00402cc2
+field 0 ColorGradeMidtonesB 00e03c42
+field 0 ColorGradeMidtonesMaster 00e048c2
+field 0 ColorGradeHighlightsR 00805242
+field 0 ColorGradeHighlightsG 0000da41
+field 0 ColorGradeHighlightsB 0000cb41
+field 0 ColorGradeHighlightsMaster 00a00ac2
+field 0 ColorGradeContrast 00003042
+field 0 ColorGradeSaturation 0040e941
+field 0 ColorGradeHueShift 0080a3c1
+field 0 ColorGradeTemperature 00800dc1
+field 0 ColorGradeTint 0000a03e
+field 0 ColorGradeInLog 02000000
+field 0 ColorGradeShadowsStart 00a017c2
+field 0 ColorGradeShadowsEnd 00806c41
+field 0 ColorGradeHighlightsStart 008033c1
+field 0 ColorGradeHighlightsEnd 00805441
+field 0 VolumetricFogIntensity 0040c241
+field 0 VolumetricFogIsGlobal fcffffff
+field 0 VolumetricFogVolumeShape 01000000
+field 0 VolumetricFogVolumeValid ffffffff
+field 0 VolumetricFogVolumeBlendDistance 0080ffc1
+field 0 VolumetricFogVolumeCenterX 0080efc1
+field 0 VolumetricFogVolumeCenterY 00e07e42
+field 0 VolumetricFogVolumeCenterZ 000080bf
+field 0 VolumetricFogVolumeAxisXX 00c05bc2
+field 0 VolumetricFogVolumeAxisXY 006016c2
+field 0 VolumetricFogVolumeAxisXZ 0000cdc0
+field 0 VolumetricFogVolumeAxisYX 000098bf
+field 0 VolumetricFogVolumeAxisYY 00e05dc2
+field 0 VolumetricFogVolumeAxisYZ 0000fdc1
+field 0 VolumetricFogVolumeAxisZX 0000be40
+field 0 VolumetricFogVolumeAxisZY 0080a9c1
+field 0 VolumetricFogVolumeAxisZZ 0000a440
+field 0 VolumetricFogVolumeHalfExtentX 00803fc2
+field 0 VolumetricFogVolumeHalfExtentY 0000a540
+field 0 VolumetricFogVolumeHalfExtentZ 00202442
+field 0 VolumetricFogMaxDistance 00006041
+field 0 VolumetricFogXYCellSizePixels feffffff
 field 0 VolumetricFogZSliceCount 01000000
-field 0 VolumetricFogDepthDistribution 006079c2
-field 0 VolumetricFogDensity 008036c2
-field 0 VolumetricFogBaseHeight 002055c2
-field 0 VolumetricFogHeightFalloff 00405dc2
-field 0 VolumetricFogSkyFade 00603ec2
-field 0 VolumetricFogAlbedoR 00409fc1
-field 0 VolumetricFogAlbedoG 0000fc41
-field 0 VolumetricFogAlbedoB 00e032c2
-field 0 VolumetricFogEmissionR 0000cec1
-field 0 VolumetricFogEmissionG 00008641
-field 0 VolumetricFogEmissionB 008030c1
-field 0 VolumetricFogAnisotropy 0080f7c1
-field 0 VolumetricFogTrackDirectionalLight 03000000
-field 0 VolumetricFogSunIntensityScale 00c02b42
-field 0 VolumetricFogSunTintR 0000c940
-field 0 VolumetricFogSunTintG 00802ec2
-field 0 VolumetricFogSunTintB 00009141
-field 0 VolumetricFogAmbientTintR 00c04e42
-field 0 VolumetricFogAmbientTintG 000068c1
-field 0 VolumetricFogAmbientTintB 008034c2
-field 0 VolumetricFogNoiseEnabled feffffff
-field 0 VolumetricFogNoiseScale 00a070c2
-field 0 VolumetricFogNoiseStrength 00009bc1
-field 0 VolumetricFogNoiseVelocityX 0000c9c1
-field 0 VolumetricFogNoiseVelocityY 00000040
-field 0 VolumetricFogNoiseVelocityZ 00205c42
-field 0 VolumetricFogNoiseContrast 008016c1
-field 0 VolumetricFogNoiseChannelWeightR 000041c1
-field 0 VolumetricFogNoiseChannelWeightG 0000bcc0
-field 0 VolumetricFogNoiseChannelWeightB 006053c2
-field 0 VolumetricFogNoiseChannelWeightA 00403142
-field 0 VolumetricFogDensityThreshold 00a050c2
-field 0 VolumetricFogDensityThresholdSoftness 00003842
-field 0 VolumetricFogTemporalEnabled 03000000
-field 0 VolumetricFogTemporalBlend 0040b641
-field 0 VolumetricFogJitterStrength 00802041
-field 0 VolumetricFogJitterMotion 01000000
-field 0 VolumetricFogCompositeDepthBias 008064c1
-field 0 VolumetricFogShadowBias 0000ad40
-field 0 FogGlowEnabled 03000000
-field 0 FogGlowQuality 00000000
-field 0 FogGlowIntensity 00001f41
-field 0 FogGlowRadius 0000dec1
-field 0 FogGlowOctaves feffffff
+field 0 VolumetricFogDepthDistribution 002055c2
+field 0 VolumetricFogDensity 00405dc2
+field 0 VolumetricFogBaseHeight 00603ec2
+field 0 VolumetricFogHeightFalloff 00409fc1
+field 0 VolumetricFogSkyFade 0000fc41
+field 0 VolumetricFogAlbedoR 00e032c2
+field 0 VolumetricFogAlbedoG 0000cec1
+field 0 VolumetricFogAlbedoB 00008641
+field 0 VolumetricFogEmissionR 008030c1
+field 0 VolumetricFogEmissionG 0080f7c1
+field 0 VolumetricFogEmissionB 00606842
+field 0 VolumetricFogAnisotropy 00c02b42
+field 0 VolumetricFogTrackDirectionalLight 00000000
+field 0 VolumetricFogSunIntensityScale 00802ec2
+field 0 VolumetricFogSunTintR 00009141
+field 0 VolumetricFogSunTintG 00c04e42
+field 0 VolumetricFogSunTintB 000068c1
+field 0 VolumetricFogAmbientTintR 008034c2
+field 0 VolumetricFogAmbientTintG 00200742
+field 0 VolumetricFogAmbientTintB 00a070c2
+field 0 VolumetricFogNoiseEnabled ffffffff
+field 0 VolumetricFogNoiseScale 0000c9c1
+field 0 VolumetricFogNoiseStrength 00000040
+field 0 VolumetricFogNoiseVelocityX 00205c42
+field 0 VolumetricFogNoiseVelocityY 008016c1
+field 0 VolumetricFogNoiseVelocityZ 000041c1
+field 0 VolumetricFogNoiseContrast 0000bcc0
+field 0 VolumetricFogNoiseChannelWeightR 006053c2
+field 0 VolumetricFogNoiseChannelWeightG 00403142
+field 0 VolumetricFogNoiseChannelWeightB 00a050c2
+field 0 VolumetricFogNoiseChannelWeightA 00003842
+field 0 VolumetricFogDensityThreshold 000007c2
+field 0 VolumetricFogDensityThresholdSoftness 0040b641
+field 0 VolumetricFogTemporalEnabled 04000000
+field 0 VolumetricFogTemporalBlend 00808c41
+field 0 VolumetricFogJitterStrength 008064c1
+field 0 VolumetricFogJitterMotion 02000000
+field 0 VolumetricFogCompositeDepthBias 008045c2
+field 0 VolumetricFogShadowBias 0080d441
+field 0 FogGlowEnabled ffffffff
+field 0 FogGlowQuality 03000000
+field 0 FogGlowIntensity 00802741
+field 0 FogGlowRadius 00408e41
+field 0 FogGlowOctaves ffffffff
 field 0 FogGlowSampleScale 0000803f
-field 0 FogGlowScatter 00800ec2
-field 0 FogGlowThreshold 0080b941
-field 0 FogGlowKnee 00c040c2
-field 0 FogGlowFadeStart 00604dc2
-field 0 FogGlowFadeEnd 0000e0be
-field 0 FogGlowTintR 00c08e41
-field 0 FogGlowTintG 00c01842
-field 0 FogGlowTintB 00c0b2c1
-field 0 FogGlowAntiFlicker 03000000
-field 0 AtmosphericCloudSkyFill 00e045c2
-field 0 AtmosphericCloudVaporMass 00e011c2
-field 0 AtmosphericCloudColorR 002039c2
-field 0 AtmosphericCloudColorG 00e055c2
-field 0 AtmosphericCloudColorB 0000f641
-field 0 AtmosphericCloudOpacity 00405ec2
-field 0 AtmosphericCloudFloorHeight 00009a40
-field 0 AtmosphericCloudLayerDepth 0040d0c1
-field 0 AtmosphericCloudBodyFrequency 00205742
-field 0 AtmosphericCloudEdgeFrequency 00a064c2
-field 0 AtmosphericCloudEdgeBreakup 0000fbc1
-field 0 AtmosphericCloudDriftAngle 00a00fc2
-field 0 AtmosphericCloudDriftRate 00e02dc2
-field 0 AtmosphericCloudSunFade 0000adc1
-field 0 AtmosphericCloudSkyBounce 00802d42
-field 0 AtmosphericCloudRimBoost 008046c1
-field 0 AtmosphericCloudOcclusion 00c0fe41
-field 0 AtmosphericCloudHistoryWeight 0040eac1
-field 0 AtmosphericCloudPixelScale 008017c2
-field 0 CloudsRadius 00c0fc41
-field 0 CloudsAltitude 00007a41
-field 0 CloudsThickness 0000aec0
+field 0 FogGlowScatter 00c040c2
+field 0 FogGlowThreshold 00604dc2
+field 0 FogGlowKnee 0000e0be
+field 0 FogGlowFadeStart 00c08e41
+field 0 FogGlowFadeEnd 00c01842
+field 0 FogGlowTintR 00c0b2c1
+field 0 FogGlowTintG 00009fc0
+field 0 FogGlowTintB 00e045c2
+field 0 FogGlowAntiFlicker 01000000
+field 0 AtmosphericCloudSkyFill 002039c2
+field 0 AtmosphericCloudVaporMass 00e055c2
+field 0 AtmosphericCloudColorR 0000f641
+field 0 AtmosphericCloudColorG 00405ec2
+field 0 AtmosphericCloudColorB 00009a40
+field 0 AtmosphericCloudOpacity 0040d0c1
+field 0 AtmosphericCloudFloorHeight 00205742
+field 0 AtmosphericCloudLayerDepth 00a064c2
+field 0 AtmosphericCloudBodyFrequency 0000fbc1
+field 0 AtmosphericCloudEdgeFrequency 00a00fc2
+field 0 AtmosphericCloudEdgeBreakup 00e02dc2
+field 0 AtmosphericCloudDriftAngle 0000adc1
+field 0 AtmosphericCloudDriftRate 00802d42
+field 0 AtmosphericCloudSunFade 008046c1
+field 0 AtmosphericCloudSkyBounce 00c0fe41
+field 0 AtmosphericCloudRimBoost 0040eac1
+field 0 AtmosphericCloudOcclusion 008017c2
+field 0 AtmosphericCloudHistoryWeight 00c0fc41
+field 0 AtmosphericCloudPixelScale 00007a41
+field 0 CloudsRadius 0000aec0
+field 0 CloudsAltitude 002060c2
+field 0 CloudsThickness 00600d42
 field 0 CloudsNumStepsLight 03000000
-field 0 CloudsStepSize 00600d42
-field 0 CloudsRayOffsetStrength 00407dc2
-field 0 CloudsScale 00800ec2
-field 0 CloudsDensityMultiplier 004079c2
-field 0 CloudsDensityOffset 00a01542
-field 0 CloudsShapeOffsetX 00406d42
-field 0 CloudsShapeOffsetY 000003c2
-field 0 CloudsShapeOffsetZ 00e01c42
-field 0 CloudsShapeWeightR 00204342
-field 0 CloudsShapeWeightG 00e066c2
-field 0 CloudsShapeWeightB 0000bc40
-field 0 CloudsShapeWeightA 00003041
-field 0 CloudsDetailScale 00006ac1
-field 0 CloudsDetailWeight 00c09a41
-field 0 CloudsDetailWeightR 004024c2
-field 0 CloudsDetailWeightG 008049c2
-field 0 CloudsDetailWeightB 00c03942
-field 0 CloudsDetailOffsetX 00008340
-field 0 CloudsDetailOffsetY 0040a4c1
-field 0 CloudsDetailOffsetZ 0040aac1
-field 0 CloudsAbsorptionThroughCloud 00201ac2
-field 0 CloudsAbsorptionTowardSun 002010c2
-field 0 CloudsDarknessThreshold 00804d42
-field 0 CloudsPhaseForward 00202a42
-field 0 CloudsPhaseBack 00c012c2
-field 0 CloudsPhaseBase 0040b3c1
-field 0 CloudsPhaseFactor 00206dc2
-field 0 CloudsTimeScale 00c0a5c1
-field 0 CloudsBaseSpeed 0040a141
-field 0 CloudsDetailSpeed 000069c1
-field 0 CloudsHistoryWeight 00c07342
-field 0 AOIntensity 00606c42
-field 0 AORadius 0040cdc1
-field 0 AOThickness 008066c1
-field 0 SSSRIntensity 00007cc0
-field 0 SSSRMaxDistance 0000ce41
-field 0 SSSRThickness 00003240
-field 0 SSSREdgeFade 0000a1c0
-field 0 SSSRMaxSteps ffffffff
-field 0 SSSRSampleQuality 03000000
+field 0 CloudsStepSize 00800ec2
+field 0 CloudsRayOffsetStrength 004079c2
+field 0 CloudsScale 00a01542
+field 0 CloudsDensityMultiplier 00406d42
+field 0 CloudsDensityOffset 000003c2
+field 0 CloudsShapeOffsetX 00e01c42
+field 0 CloudsShapeOffsetY 00204342
+field 0 CloudsShapeOffsetZ 00e066c2
+field 0 CloudsShapeWeightR 0000bc40
+field 0 CloudsShapeWeightG 00003041
+field 0 CloudsShapeWeightB 00006ac1
+field 0 CloudsShapeWeightA 00c09a41
+field 0 CloudsDetailScale 004024c2
+field 0 CloudsDetailWeight 008049c2
+field 0 CloudsDetailWeightR 00c03942
+field 0 CloudsDetailWeightG 00008340
+field 0 CloudsDetailWeightB 0040a4c1
+field 0 CloudsDetailOffsetX 0040aac1
+field 0 CloudsDetailOffsetY 00201ac2
+field 0 CloudsDetailOffsetZ 002010c2
+field 0 CloudsAbsorptionThroughCloud 00804d42
+field 0 CloudsAbsorptionTowardSun 00202a42
+field 0 CloudsDarknessThreshold 00c012c2
+field 0 CloudsPhaseForward 0040b3c1
+field 0 CloudsPhaseBack 00206dc2
+field 0 CloudsPhaseBase 00c0a5c1
+field 0 CloudsPhaseFactor 0040a141
+field 0 CloudsTimeScale 000069c1
+field 0 CloudsBaseSpeed 00c07342
+field 0 CloudsDetailSpeed 00606c42
+field 0 CloudsHistoryWeight 0040cdc1
+field 0 AOIntensity 008066c1
+field 0 AORadius 00007cc0
+field 0 AOThickness 0000ce41
+field 0 SSSRIntensity 00003240
+field 0 SSSRMaxDistance 0000a1c0
+field 0 SSSRThickness 0080b541
+field 0 SSSREdgeFade 00606e42
+field 0 SSSRMaxSteps fcffffff
+field 0 SSSRSampleQuality fdffffff
 field 0 SSSRMultiBounce fcffffff
-field 0 AutoExposureActive 00
-field 0 AutoExposureMinEv 00606842
-field 0 AutoExposureMaxEv 00a07e42
-field 0 AutoExposureSpeedUp 00e042c2
-field 0 AutoExposureSpeedDown 00c0ce41
-field 0 AutoExposureBiasEv 00c05ac2
-field 0 ExposureCompensationEv 00404142
-field 0 ExposureClampMinEv 00a003c2
-field 0 ExposureClampMaxEv 000072c0
+field 0 AutoExposureActive 01
+field 0 AutoExposureMinEv 00e042c2
+field 0 AutoExposureMaxEv 00c0ce41
+field 0 AutoExposureSpeedUp 00c05ac2
+field 0 AutoExposureSpeedDown 00404142
+field 0 AutoExposureBiasEv 00a003c2
+field 0 ExposureCompensationEv 000072c0
+field 0 ExposureClampMinEv 00207ec2
+field 0 ExposureClampMaxEv 0000bb41
 field 0 BloomOctaveBlend 0000803f
 field 0 ViewOutput 00000000
+field 0 AutoExposureMeter 01000000
+field 0 AutoExposureCompensation 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+field 0 ExposureClampMinWeight 00002e41
+field 0 ExposureClampMaxWeight 00002dc2
 field 210 BloomThreshold 00105fc2
 field 210 BloomKnee 004049c2
 field 210 BloomAntiFlicker 00000000
@@ -1310,40 +1320,43 @@ field 210 HalationTintR 00103642
 field 210 HalationTintG 00a0ec41
 field 210 HalationTintB 0020cd41
 field 210 Look ffffffff
-field 210 IctcpChromaCompression 001061c2
-field 210 ChromaticAberrationIntensity 00006040
-field 210 ChromaticAberrationStartOffset 00c01441
-field 210 ChromaticAberrationSaturation 00003941
-field 210 FilmSimulationFrameRate 0000c840
-field 210 FilmSimulationGrainMode 00000000
-field 210 FilmSimulationGrainIntensity 0080d4c0
-field 210 FilmSimulationGrainSize 0080b441
-field 210 FilmSimulationGrainSmooth 01000000
-field 210 FilmSimulationGrainDensity 00809340
-field 210 FilmSimulationGrainShadowResponse 0000b840
-field 210 FilmSimulationGrainMidtoneResponse 00201442
-field 210 FilmSimulationGrainHighlightResponse 00409dc1
-field 210 FilmSimulationGrainColored 00000000
-field 210 FilmSimulationHairEnabled 03000000
-field 210 FilmSimulationHairAmount 00c092c1
-field 210 FilmSimulationHairIntensity 00a0bdc1
-field 210 FilmSimulationHairWidth 00404a42
-field 210 FilmSimulationHairLength 00c081c1
-field 210 FilmSimulationHairRandomSize 0000d7c1
-field 210 FilmSimulationHairCurl 0080cb40
-field 210 FilmSimulationHairCurlRandomness 003032c2
-field 210 FilmSimulationScratchesEnabled 04000000
-field 210 FilmSimulationScratchAmount 000040c0
-field 210 FilmSimulationScratchIntensity 00c04ac1
-field 210 FilmSimulationScratchWidth 000036c0
-field 210 FilmSimulationScratchLength 0000383f
-field 210 ChromaticAberrationLongitudinal 00c085c1
-field 210 ChromaticAberrationComa 0000b6c1
-field 210 DofIntensity 00002841
-field 210 DofMaxRadius 0000c340
-field 210 DofSamplingQuality ffffffff
-field 210 DofDebugMode feffffff
-field 210 DofDebugAlpha 00e08ac1
+field 210 NightTintStrength 00006040
+field 210 NightTintR 00c01441
+field 210 NightTintG 00003941
+field 210 NightTintB 0000c840
+field 210 ChromaticAberrationIntensity 00a01dc2
+field 210 ChromaticAberrationStartOffset 0080d4c0
+field 210 ChromaticAberrationSaturation 0080b441
+field 210 FilmSimulationFrameRate 00402641
+field 210 FilmSimulationGrainMode feffffff
+field 210 FilmSimulationGrainIntensity 0000b840
+field 210 FilmSimulationGrainSize 00201442
+field 210 FilmSimulationGrainSmooth ffffffff
+field 210 FilmSimulationGrainDensity 0080c341
+field 210 FilmSimulationGrainShadowResponse 00a0cec1
+field 210 FilmSimulationGrainMidtoneResponse 00c092c1
+field 210 FilmSimulationGrainHighlightResponse 00a0bdc1
+field 210 FilmSimulationGrainColored 02000000
+field 210 FilmSimulationHairEnabled fdffffff
+field 210 FilmSimulationHairAmount 0000d7c1
+field 210 FilmSimulationHairIntensity 0080cb40
+field 210 FilmSimulationHairWidth 003032c2
+field 210 FilmSimulationHairLength 0000b8c0
+field 210 FilmSimulationHairRandomSize 000040c0
+field 210 FilmSimulationHairCurl 00c04ac1
+field 210 FilmSimulationHairCurlRandomness 000036c0
+field 210 FilmSimulationScratchesEnabled 02000000
+field 210 FilmSimulationScratchAmount 00c085c1
+field 210 FilmSimulationScratchIntensity 0000b6c1
+field 210 FilmSimulationScratchWidth 00002841
+field 210 FilmSimulationScratchLength 0000c340
+field 210 ChromaticAberrationLongitudinal 0000e2bf
+field 210 ChromaticAberrationComa 0080dec0
+field 210 DofIntensity 00e08ac1
+field 210 DofMaxRadius 0080c640
+field 210 DofSamplingQuality 00000000
+field 210 DofDebugMode 00000000
+field 210 DofDebugAlpha 002095c1
 field 210 DofFocusDistance 00002041
 field 210 DofFocalLengthMm 713da641
 field 210 DofAperture 00008041
@@ -1352,344 +1365,346 @@ field 210 DofApertureBladeCount 07000000
 field 210 DofApertureRoundness 0000803f
 field 210 DofApertureRotation 00000000
 field 210 DofAnamorphicSqueeze 0000803f
-field 210 FilmSimulationDustEnabled feffffff
-field 210 FilmSimulationDustAmount 00808dc0
-field 210 FilmSimulationDustIntensity 00002fc1
-field 210 FilmSimulationDustSize 0080abc1
-field 210 FilmSimulationDustRandomSize 0000c83f
-field 210 FilmSimulationGateWeaveEnabled 00000000
-field 210 FilmSimulationGateWeaveHorizontal 00e0cbc1
-field 210 FilmSimulationGateWeaveVertical 00202342
-field 210 FilmSimulationGateWeaveRotation 00c06bc1
+field 210 FilmSimulationDustEnabled 02000000
+field 210 FilmSimulationDustAmount 0060f6c1
+field 210 FilmSimulationDustIntensity 00e0cbc1
+field 210 FilmSimulationDustSize 00202342
+field 210 FilmSimulationDustRandomSize 00c06bc1
+field 210 FilmSimulationGateWeaveEnabled fdffffff
+field 210 FilmSimulationGateWeaveHorizontal 00002e41
+field 210 FilmSimulationGateWeaveVertical 00e09441
+field 210 FilmSimulationGateWeaveRotation 0020b6c1
 field 210 FilmSimulationGateMask fdffffff
-field 210 FilmSimulationGateMaskFeather 00002e41
-field 210 FilmSimulationGateMaskRoundness 00e09441
-field 210 DebandThresholdLsb 0020b6c1
-field 210 ColorFilterR 00801dc1
-field 210 ColorFilterG 00b02042
-field 210 ColorFilterB 00b04942
-field 210 ColorFilterIntensity 00307bc2
-field 210 ColorFilterBlendMode 03000000
-field 210 CasStrength 00800e42
-field 210 CasStackOrder 01000000
-field 210 LutIntensity 000000bd
-field 210 LutStackOrder feffffff
-field 210 LutInputEncoding 03000000
-field 210 LutTextureFormat 02000000
+field 210 FilmSimulationGateMaskFeather 00b02042
+field 210 FilmSimulationGateMaskRoundness 00b04942
+field 210 DebandThresholdLsb 00307bc2
+field 210 ColorFilterR 0000c940
+field 210 ColorFilterG 00800e42
+field 210 ColorFilterB 00003341
+field 210 ColorFilterIntensity 000000bd
+field 210 ColorFilterBlendMode feffffff
+field 210 CasStrength 00008a41
+field 210 CasStackOrder 02000000
+field 210 LutIntensity 00400e41
+field 210 LutStage fcffffff
 field 210 LutAssetGuidWords 00000000000000000000000000000000
-field 210 VignetteIntensity 0080b540
-field 210 VignetteSmoothness 00404541
-field 210 VignetteRounded 03000000
-field 210 VignetteColorR 0000d9c1
-field 210 VignetteColorG 00000541
-field 210 VignetteColorB 00a09ac1
-field 210 VignetteStackOrder ffffffff
-field 210 VhsIntensity 00c0f3c1
-field 210 VhsWobble 0020cb41
-field 210 VhsTracking 00007941
-field 210 VhsSignalGlitches 006022c2
-field 210 VhsGlitchOffsets 0080adc0
-field 210 VhsInterference 00c0edc1
-field 210 VhsFrameFeedback 0080ef40
-field 210 VhsFeedbackDecay 00a0cb41
-field 210 VhsFeedbackMotionThreshold 00805fc1
-field 210 VhsFeedbackTrailLength 00a055c2
-field 210 VhsCompositeSignalMode 00e04d42
-field 210 VhsDotCrawl 00c01541
-field 210 VhsColorBleed 0080cbc0
-field 210 VhsColorBleedOffset 00a0c541
-field 210 VhsTapeNoise 0040a4c1
-field 210 VhsChromaStreaks 000017c2
-field 210 VhsPreFilterChromaStreaks 00702ec2
-field 210 VhsDropouts 00801142
-field 210 VhsRfDropouts 0060dec1
-field 210 VhsScanlines 00808440
-field 210 VhsSpeed 00a09741
-field 210 VhsOverlayEnabled 00805941
-field 210 VhsOverlayColorR 0000dac0
-field 210 VhsOverlayColorG 00e0edc1
-field 210 VhsOverlayColorB 00302042
-field 210 VhsOverlayOpacity 0040d3c1
-field 210 VhsOverlaySize 008085c1
-field 210 VhsOverlayFont 00407242
-field 210 VhsOverlayPositionX 00e0c941
-field 210 VhsOverlayPositionY 0080b5c0
-field 210 VhsOverlayTextLength 00004ac1
-field 210 VhsOverlayText0 00406b42
-field 210 VhsOverlayText1 00e078c2
-field 210 VhsOverlayText2 00803242
-field 210 VhsOverlayText3 00804b42
-field 210 VhsOverlayText4 00c068c2
-field 210 VhsOverlayText5 00001942
-field 210 VhsOverlayText6 0000a941
-field 210 VhsOverlayText7 0000ae40
-field 210 VhsDateBurnEnabled 00c0d541
-field 210 VhsDateBurnColorR 00502cc2
-field 210 VhsDateBurnColorG 00c02741
-field 210 VhsDateBurnColorB 00706ec2
-field 210 VhsDateBurnSize 0040b641
-field 210 VhsDateBurnPositionX 00e09341
-field 210 VhsDateBurnPositionY 004092c1
-field 210 VhsDateBurnYear 00007f42
-field 210 VhsDateBurnMonth 00405f42
-field 210 VhsDateBurnDay 006009c2
-field 210 VhsDateBurnHour 0080eec1
-field 210 VhsDateBurnMinute 00602742
-field 210 VhsTransportMode 0040b1c1
-field 210 VhsTransportStrength 00a0abc1
-field 210 CrtIntensity 00805fc1
-field 210 CrtCurvature 00c0ebc1
-field 210 CrtScanlines 0000b740
-field 210 CrtVignette 00009b40
-field 210 CrtAberration 00004c3f
-field 210 CrtSoftness 00807041
-field 210 CrtExposureCompensation 00101442
-field 210 CrtEmulatedResolutionDiv 0080abc0
-field 210 FastBlurIntensity 00808a40
-field 210 FastBlurFocusDistance 00606142
-field 210 FastBlurFocusRange 0020ebc1
-field 210 FastBlurMaxRadius 00e0ba41
+field 210 VignetteIntensity 0080a1c0
+field 210 VignetteSmoothness 0000d9c1
+field 210 VignetteRounded ffffffff
+field 210 VignetteColorR 00a09ac1
+field 210 VignetteColorG 00407e41
+field 210 VignetteColorB 00c0f3c1
+field 210 VignetteStackOrder fdffffff
+field 210 VhsIntensity 00007941
+field 210 VhsWobble 006022c2
+field 210 VhsTracking 0080adc0
+field 210 VhsSignalGlitches 00c0edc1
+field 210 VhsGlitchOffsets 0080ef40
+field 210 VhsInterference 00a0cb41
+field 210 VhsFrameFeedback 00805fc1
+field 210 VhsFeedbackDecay 00a055c2
+field 210 VhsFeedbackMotionThreshold 00005ec0
+field 210 VhsFeedbackTrailLength 00c01541
+field 210 VhsCompositeSignalMode 00004b41
+field 210 VhsDotCrawl 00a0c541
+field 210 VhsColorBleed 0040a4c1
+field 210 VhsColorBleedOffset 000017c2
+field 210 VhsTapeNoise 00702ec2
+field 210 VhsChromaStreaks 00801142
+field 210 VhsPreFilterChromaStreaks 0060dec1
+field 210 VhsDropouts 00808440
+field 210 VhsRfDropouts 00a09741
+field 210 VhsScanlines 000080be
+field 210 VhsSpeed 0000dac0
+field 210 VhsOverlayEnabled 00202dc2
+field 210 VhsOverlayColorR 00302042
+field 210 VhsOverlayColorG 0040d3c1
+field 210 VhsOverlayColorB 008085c1
+field 210 VhsOverlayOpacity 00002f41
+field 210 VhsOverlaySize 00e0c941
+field 210 VhsOverlayFont 008076c1
+field 210 VhsOverlayPositionX 0000a040
+field 210 VhsOverlayPositionY 00c0c841
+field 210 VhsOverlayTextLength 00e078c2
+field 210 VhsOverlayText0 00803242
+field 210 VhsOverlayText1 00804b42
+field 210 VhsOverlayText2 00c068c2
+field 210 VhsOverlayText3 00001942
+field 210 VhsOverlayText4 0000a941
+field 210 VhsOverlayText5 0000ae40
+field 210 VhsOverlayText6 00c0d541
+field 210 VhsOverlayText7 006031c2
+field 210 VhsDateBurnEnabled 00e04d42
+field 210 VhsDateBurnColorR 00706ec2
+field 210 VhsDateBurnColorG 0040b641
+field 210 VhsDateBurnColorB 00e09341
+field 210 VhsDateBurnSize 004092c1
+field 210 VhsDateBurnPositionX 0000f541
+field 210 VhsDateBurnPositionY 000000bf
+field 210 VhsDateBurnYear 006009c2
+field 210 VhsDateBurnMonth 0080eec1
+field 210 VhsDateBurnDay 00602742
+field 210 VhsDateBurnHour 0040b1c1
+field 210 VhsDateBurnMinute 002020c2
+field 210 VhsTransportMode 00c01ac2
+field 210 VhsTransportStrength 00c0ebc1
+field 210 CrtIntensity 0000b740
+field 210 CrtCurvature 00009b40
+field 210 CrtScanlines 00004c3f
+field 210 CrtVignette 00807041
+field 210 CrtAberration 00101442
+field 210 CrtSoftness 0080abc0
+field 210 CrtExposureCompensation 00808a40
+field 210 CrtEmulatedResolutionDiv 00606142
+field 210 FastBlurIntensity 0020ebc1
+field 210 FastBlurFocusDistance 00e0ba41
+field 210 FastBlurFocusRange 008031c2
+field 210 FastBlurMaxRadius 0020b441
 field 210 FastBlurNearBlur 04000000
-field 210 HeatDistortionStrength 0020b441
-field 210 HeatDistortionSpeed 00c01041
-field 210 HeatDistortionScale 00100fc2
-field 210 HeatDistortionMaskStrength 0080d3c1
-field 210 HeatDistortionDistanceStart 00b03342
-field 210 HeatDistortionDistanceEnd 00001bc1
-field 210 HeatDistortionDirectionalFalloff 000066c0
-field 210 HeatDistortionUseAbsoluteY 04000000
-field 210 HeatDistortionSoftness 00c04fc1
-field 210 HeightFogIntensity 007002c2
-field 210 HeightFogDensity 0080bcc0
-field 210 HeightFogMaxOpacity 0000e1c0
-field 210 HeightFogMinDistance 00300f42
-field 210 HeightFogSmoothLength 00f027c2
-field 210 HeightFogBaseHeight 00e0ce41
-field 210 HeightFogTransitionLength 00e0d141
-field 210 HeightFogEmissiveR 00609bc1
-field 210 HeightFogEmissiveG 00000e41
-field 210 HeightFogEmissiveB 0060acc1
-field 210 HeightFogSunDirX 000034bf
-field 210 HeightFogSunDirY 00c072c1
-field 210 HeightFogSunDirZ 00e000c2
-field 210 HeightFogSunColorR 000081c1
-field 210 HeightFogSunColorG 0020dd41
-field 210 HeightFogSunColorB 000090bf
-field 210 HeightFogSunIntensity 005048c2
-field 210 HeightFogPhase 000054c1
-field 210 HeightFogPhaseWeight0 004021c2
-field 210 HeightFogPhaseWeight1 0000d4c1
-field 210 HeightFogSkyEnabled fcffffff
-field 210 HeightFogSkyPower 00005241
-field 210 HeightFogSkyFillStart 00a092c1
-field 210 HeightFogSkyFillEnd 00000f40
-field 210 HeightFogDistanceFogEnabled 03000000
-field 210 HeightFogHeightFogEnabled ffffffff
-field 210 HeightFogMaxDistance 00c00bc1
-field 210 HeightFogLayerMode fdffffff
-field 210 HeightFogHorizonHeightOffset 00608b41
-field 210 HeightFogHorizonHeightBlendStart 00d02c42
-field 210 HeightFogHorizonHeightBlendEnd 00002dc0
-field 210 HeightFogAxisMode 00000000
-field 210 HeightFogAxisX 0000c041
-field 210 HeightFogAxisY 00101d42
-field 210 HeightFogAxisZ 000011c1
-field 210 HeightFogGradientMode 04000000
-field 210 HeightFogGradientStrength 000035c0
-field 210 HeightFogGradientLowR 0060bd41
-field 210 HeightFogGradientLowG 000054bf
-field 210 HeightFogGradientLowB 00101d42
-field 210 HeightFogGradientHighR 00f022c2
-field 210 HeightFogGradientHighG 008057c2
-field 210 HeightFogGradientHighB 0060c841
-field 210 HeightFogTrackDirectionalLight 00000000
-field 210 HeightFogSunIntensityScale 006083c1
-field 210 HeightFogNoiseEnabled fcffffff
-field 210 HeightFogNoiseScale 002013c2
-field 210 HeightFogNoiseStrength 0040c641
-field 210 HeightFogNoiseContrast 00e0dc41
-field 210 HeightFogNoiseVelX 00c0d941
-field 210 HeightFogNoiseVelY 00002942
-field 210 HeightFogNoiseVelZ 00404f41
-field 210 HeightFogNoiseMin 0000f6bf
-field 210 HeightFogNoiseMax 00e018c2
-field 210 HeightFogNoiseFadeStart 00804741
-field 210 HeightFogNoiseFadeEnd 00a026c2
-field 210 HeightFogUseTimeOfDay 04000000
-field 210 HeightFogSkyHorizonOffset 0000bf41
-field 210 HeightFogSkyBottomStrength 00801442
-field 210 HeightFogColorMode 02000000
-field 210 ColorGradeShadowsR 0080f4c1
-field 210 ColorGradeShadowsG 0080ac41
-field 210 ColorGradeShadowsB 00300b42
-field 210 ColorGradeShadowsMaster 00000f41
-field 210 ColorGradeMidtonesR 0060aac1
-field 210 ColorGradeMidtonesG 0000f2c0
-field 210 ColorGradeMidtonesB 00c00541
-field 210 ColorGradeMidtonesMaster 0000b241
-field 210 ColorGradeHighlightsR 00c03041
-field 210 ColorGradeHighlightsG 0000ae3f
-field 210 ColorGradeHighlightsB 00402d41
-field 210 ColorGradeHighlightsMaster 00701ac2
-field 210 ColorGradeContrast 00c0dbc1
-field 210 ColorGradeSaturation 00e09bc1
-field 210 ColorGradeHueShift 00604042
-field 210 ColorGradeTemperature 0080c3c1
-field 210 ColorGradeTint 008047c2
+field 210 HeatDistortionStrength 00100fc2
+field 210 HeatDistortionSpeed 0080d3c1
+field 210 HeatDistortionScale 00b03342
+field 210 HeatDistortionMaskStrength 00001bc1
+field 210 HeatDistortionDistanceStart 000066c0
+field 210 HeatDistortionDistanceEnd 00409cc1
+field 210 HeatDistortionDirectionalFalloff 00c04fc1
+field 210 HeatDistortionUseAbsoluteY fdffffff
+field 210 HeatDistortionSoftness 0080bcc0
+field 210 HeightFogIntensity 0000e1c0
+field 210 HeightFogDensity 00300f42
+field 210 HeightFogMaxOpacity 00f027c2
+field 210 HeightFogMinDistance 00e0ce41
+field 210 HeightFogSmoothLength 00e0d141
+field 210 HeightFogBaseHeight 00609bc1
+field 210 HeightFogTransitionLength 00000e41
+field 210 HeightFogEmissiveR 0060acc1
+field 210 HeightFogEmissiveG 000034bf
+field 210 HeightFogEmissiveB 00c072c1
+field 210 HeightFogSunDirX 00e000c2
+field 210 HeightFogSunDirY 000081c1
+field 210 HeightFogSunDirZ 0020dd41
+field 210 HeightFogSunColorR 000090bf
+field 210 HeightFogSunColorG 005048c2
+field 210 HeightFogSunColorB 000054c1
+field 210 HeightFogSunIntensity 004021c2
+field 210 HeightFogPhase 0000d4c1
+field 210 HeightFogPhaseWeight0 00008b40
+field 210 HeightFogPhaseWeight1 00005241
+field 210 HeightFogSkyEnabled feffffff
+field 210 HeightFogSkyPower 00000f40
+field 210 HeightFogSkyFillStart 00500b42
+field 210 HeightFogSkyFillEnd 00c096c1
+field 210 HeightFogDistanceFogEnabled fdffffff
+field 210 HeightFogHeightFogEnabled fdffffff
+field 210 HeightFogMaxDistance 00608b41
+field 210 HeightFogLayerMode 01000000
+field 210 HeightFogHorizonHeightOffset 00002dc0
+field 210 HeightFogHorizonHeightBlendStart 00402c42
+field 210 HeightFogHorizonHeightBlendEnd 0000c041
+field 210 HeightFogAxisMode 02000000
+field 210 HeightFogAxisX 000011c1
+field 210 HeightFogAxisY 008091c0
+field 210 HeightFogAxisZ 000035c0
+field 210 HeightFogGradientMode feffffff
+field 210 HeightFogGradientStrength 000054bf
+field 210 HeightFogGradientLowR 00101d42
+field 210 HeightFogGradientLowG 00f022c2
+field 210 HeightFogGradientLowB 008057c2
+field 210 HeightFogGradientHighR 0060c841
+field 210 HeightFogGradientHighG 00c07141
+field 210 HeightFogGradientHighB 006083c1
+field 210 HeightFogTrackDirectionalLight fcffffff
+field 210 HeightFogSunIntensityScale 002013c2
+field 210 HeightFogNoiseEnabled fdffffff
+field 210 HeightFogNoiseScale 00e0dc41
+field 210 HeightFogNoiseStrength 00c0d941
+field 210 HeightFogNoiseContrast 00002942
+field 210 HeightFogNoiseVelX 00404f41
+field 210 HeightFogNoiseVelY 0000f6bf
+field 210 HeightFogNoiseVelZ 00e018c2
+field 210 HeightFogNoiseMin 00804741
+field 210 HeightFogNoiseMax 00a026c2
+field 210 HeightFogNoiseFadeStart 00106642
+field 210 HeightFogNoiseFadeEnd 0000bf41
+field 210 HeightFogUseTimeOfDay 03000000
+field 210 HeightFogSkyHorizonOffset 00c07c41
+field 210 HeightFogSkyBottomStrength 0080f4c1
+field 210 HeightFogColorMode 00000000
+field 210 ColorGradeShadowsR 00300b42
+field 210 ColorGradeShadowsG 00000f41
+field 210 ColorGradeShadowsB 0060aac1
+field 210 ColorGradeShadowsMaster 0000f2c0
+field 210 ColorGradeMidtonesR 00c00541
+field 210 ColorGradeMidtonesG 0000b241
+field 210 ColorGradeMidtonesB 00c03041
+field 210 ColorGradeMidtonesMaster 0000ae3f
+field 210 ColorGradeHighlightsR 00402d41
+field 210 ColorGradeHighlightsG 00701ac2
+field 210 ColorGradeHighlightsB 00c0dbc1
+field 210 ColorGradeHighlightsMaster 00e09bc1
+field 210 ColorGradeContrast 00604042
+field 210 ColorGradeSaturation 0080c3c1
+field 210 ColorGradeHueShift 008047c2
+field 210 ColorGradeTemperature 00003fc1
+field 210 ColorGradeTint 00c045c1
 field 210 ColorGradeInLog 00000000
-field 210 ColorGradeShadowsStart 00c045c1
-field 210 ColorGradeShadowsEnd 00a0de41
-field 210 ColorGradeHighlightsStart 00c03c41
-field 210 ColorGradeHighlightsEnd 00304742
-field 210 VolumetricFogIntensity 0080c340
-field 210 VolumetricFogIsGlobal 03000000
-field 210 VolumetricFogVolumeShape 03000000
-field 210 VolumetricFogVolumeValid ffffffff
-field 210 VolumetricFogVolumeBlendDistance 0080dfc1
-field 210 VolumetricFogVolumeCenterX 00e00a42
-field 210 VolumetricFogVolumeCenterY 00a08f41
-field 210 VolumetricFogVolumeCenterZ 0000503e
-field 210 VolumetricFogVolumeAxisXX 00e02ac2
-field 210 VolumetricFogVolumeAxisXY 000046c0
-field 210 VolumetricFogVolumeAxisXZ 00409f41
-field 210 VolumetricFogVolumeAxisYX 0000d740
-field 210 VolumetricFogVolumeAxisYY 00809840
-field 210 VolumetricFogVolumeAxisYZ 0000ae3f
-field 210 VolumetricFogVolumeAxisZX 00103442
-field 210 VolumetricFogVolumeAxisZY 00003241
-field 210 VolumetricFogVolumeAxisZZ 00505b42
-field 210 VolumetricFogVolumeHalfExtentX 0000ecc1
-field 210 VolumetricFogVolumeHalfExtentY 0080d041
-field 210 VolumetricFogVolumeHalfExtentZ 0000fa41
-field 210 VolumetricFogMaxDistance 006024c2
-field 210 VolumetricFogXYCellSizePixels fcffffff
-field 210 VolumetricFogZSliceCount 00000000
-field 210 VolumetricFogDepthDistribution 000063c0
-field 210 VolumetricFogDensity 00c000c1
-field 210 VolumetricFogBaseHeight 00006140
-field 210 VolumetricFogHeightFalloff 00c01542
-field 210 VolumetricFogSkyFade 00008141
-field 210 VolumetricFogAlbedoR 00806041
-field 210 VolumetricFogAlbedoG 00504142
-field 210 VolumetricFogAlbedoB 00404f41
-field 210 VolumetricFogEmissionR 0000f9c0
-field 210 VolumetricFogEmissionG 00402141
-field 210 VolumetricFogEmissionB 0060c141
-field 210 VolumetricFogAnisotropy 0080b8c0
-field 210 VolumetricFogTrackDirectionalLight feffffff
-field 210 VolumetricFogSunIntensityScale 004064c1
-field 210 VolumetricFogSunTintR 00a09ec1
-field 210 VolumetricFogSunTintG 00a0eac1
-field 210 VolumetricFogSunTintB 00009540
-field 210 VolumetricFogAmbientTintR 007008c2
-field 210 VolumetricFogAmbientTintG 0000e3c1
-field 210 VolumetricFogAmbientTintB 00407fc1
+field 210 ColorGradeShadowsStart 00c03c41
+field 210 ColorGradeShadowsEnd 00304742
+field 210 ColorGradeHighlightsStart 0080c340
+field 210 ColorGradeHighlightsEnd 0000b0bf
+field 210 VolumetricFogIntensity 0000f841
+field 210 VolumetricFogIsGlobal ffffffff
+field 210 VolumetricFogVolumeShape fcffffff
+field 210 VolumetricFogVolumeValid 03000000
+field 210 VolumetricFogVolumeBlendDistance 00a08f41
+field 210 VolumetricFogVolumeCenterX 0000503e
+field 210 VolumetricFogVolumeCenterY 00e02ac2
+field 210 VolumetricFogVolumeCenterZ 000046c0
+field 210 VolumetricFogVolumeAxisXX 00409f41
+field 210 VolumetricFogVolumeAxisXY 0000d740
+field 210 VolumetricFogVolumeAxisXZ 00809840
+field 210 VolumetricFogVolumeAxisYX 0000ae3f
+field 210 VolumetricFogVolumeAxisYY 00103442
+field 210 VolumetricFogVolumeAxisYZ 00003241
+field 210 VolumetricFogVolumeAxisZX 00505b42
+field 210 VolumetricFogVolumeAxisZY 0000ecc1
+field 210 VolumetricFogVolumeAxisZZ 0080d041
+field 210 VolumetricFogVolumeHalfExtentX 0000fa41
+field 210 VolumetricFogVolumeHalfExtentY 006024c2
+field 210 VolumetricFogVolumeHalfExtentZ 00202ac2
+field 210 VolumetricFogMaxDistance 00d03ec2
+field 210 VolumetricFogXYCellSizePixels 04000000
+field 210 VolumetricFogZSliceCount 01000000
+field 210 VolumetricFogDepthDistribution 00006140
+field 210 VolumetricFogDensity 00c01542
+field 210 VolumetricFogBaseHeight 00008141
+field 210 VolumetricFogHeightFalloff 00806041
+field 210 VolumetricFogSkyFade 00504142
+field 210 VolumetricFogAlbedoR 00404f41
+field 210 VolumetricFogAlbedoG 0000f9c0
+field 210 VolumetricFogAlbedoB 00402141
+field 210 VolumetricFogEmissionR 0060c141
+field 210 VolumetricFogEmissionG 0080b8c0
+field 210 VolumetricFogEmissionB 00001840
+field 210 VolumetricFogAnisotropy 004064c1
+field 210 VolumetricFogTrackDirectionalLight fdffffff
+field 210 VolumetricFogSunIntensityScale 00a0eac1
+field 210 VolumetricFogSunTintR 00009540
+field 210 VolumetricFogSunTintG 007008c2
+field 210 VolumetricFogSunTintB 0000e3c1
+field 210 VolumetricFogAmbientTintR 00407fc1
+field 210 VolumetricFogAmbientTintG 0000c6c1
+field 210 VolumetricFogAmbientTintB 00501342
 field 210 VolumetricFogNoiseEnabled fcffffff
-field 210 VolumetricFogNoiseScale 00501342
-field 210 VolumetricFogNoiseStrength 0000bc41
-field 210 VolumetricFogNoiseVelocityX 004042c2
-field 210 VolumetricFogNoiseVelocityY 00401e41
-field 210 VolumetricFogNoiseVelocityZ 0000d5c1
-field 210 VolumetricFogNoiseContrast 00005ac1
-field 210 VolumetricFogNoiseChannelWeightR 0000f43f
-field 210 VolumetricFogNoiseChannelWeightG 0020fc41
-field 210 VolumetricFogNoiseChannelWeightB 0000a23f
-field 210 VolumetricFogNoiseChannelWeightA 0060cfc1
-field 210 VolumetricFogDensityThreshold 00a0e541
-field 210 VolumetricFogDensityThresholdSoftness 0000f1c0
-field 210 VolumetricFogTemporalEnabled 04000000
-field 210 VolumetricFogTemporalBlend 0000dabf
-field 210 VolumetricFogJitterStrength 00e032c2
-field 210 VolumetricFogJitterMotion fdffffff
-field 210 VolumetricFogCompositeDepthBias 0080de41
-field 210 VolumetricFogShadowBias 00002ac0
-field 210 FogGlowEnabled ffffffff
-field 210 FogGlowQuality feffffff
-field 210 FogGlowIntensity 0080c7c1
-field 210 FogGlowRadius 00a08841
-field 210 FogGlowOctaves 01000000
+field 210 VolumetricFogNoiseScale 004042c2
+field 210 VolumetricFogNoiseStrength 00401e41
+field 210 VolumetricFogNoiseVelocityX 0000d5c1
+field 210 VolumetricFogNoiseVelocityY 00005ac1
+field 210 VolumetricFogNoiseVelocityZ 0000f43f
+field 210 VolumetricFogNoiseContrast 0020fc41
+field 210 VolumetricFogNoiseChannelWeightR 0000a23f
+field 210 VolumetricFogNoiseChannelWeightG 0060cfc1
+field 210 VolumetricFogNoiseChannelWeightB 00a0e541
+field 210 VolumetricFogNoiseChannelWeightA 0000f1c0
+field 210 VolumetricFogDensityThreshold 00004042
+field 210 VolumetricFogDensityThresholdSoftness 0000dabf
+field 210 VolumetricFogTemporalEnabled fcffffff
+field 210 VolumetricFogTemporalBlend 00c04cc1
+field 210 VolumetricFogJitterStrength 0080de41
+field 210 VolumetricFogJitterMotion feffffff
+field 210 VolumetricFogCompositeDepthBias 00e0a9c1
+field 210 VolumetricFogShadowBias 0000c3c0
+field 210 FogGlowEnabled feffffff
+field 210 FogGlowQuality 04000000
+field 210 FogGlowIntensity 00400f42
+field 210 FogGlowRadius 00204742
+field 210 FogGlowOctaves feffffff
 field 210 FogGlowSampleScale 0000803f
-field 210 FogGlowScatter 000054c1
-field 210 FogGlowThreshold 00d058c2
-field 210 FogGlowKnee 00407bc1
-field 210 FogGlowFadeStart 00001a41
-field 210 FogGlowFadeEnd 00000cc1
-field 210 FogGlowTintR 00c067c1
-field 210 FogGlowTintG 00c02141
-field 210 FogGlowTintB 00608141
-field 210 FogGlowAntiFlicker feffffff
-field 210 AtmosphericCloudSkyFill 009016c2
-field 210 AtmosphericCloudVaporMass 00000342
-field 210 AtmosphericCloudColorR 0000a240
-field 210 AtmosphericCloudColorG 00100442
-field 210 AtmosphericCloudColorB 000002c2
-field 210 AtmosphericCloudOpacity 00005ec1
-field 210 AtmosphericCloudFloorHeight 0060f641
-field 210 AtmosphericCloudLayerDepth 008062c2
-field 210 AtmosphericCloudBodyFrequency 000099c0
-field 210 AtmosphericCloudEdgeFrequency 00d016c2
-field 210 AtmosphericCloudEdgeBreakup 00005a41
-field 210 AtmosphericCloudDriftAngle 0000683f
-field 210 AtmosphericCloudDriftRate 00402ac1
-field 210 AtmosphericCloudSunFade 0040c3c1
-field 210 AtmosphericCloudSkyBounce 0060fd41
-field 210 AtmosphericCloudRimBoost 00e0d141
-field 210 AtmosphericCloudOcclusion 00009741
-field 210 AtmosphericCloudHistoryWeight 005000c2
-field 210 AtmosphericCloudPixelScale 000048c1
-field 210 CloudsRadius 00a0b5c1
-field 210 CloudsAltitude 00a0df41
-field 210 CloudsThickness 0040b341
+field 210 FogGlowScatter 00407bc1
+field 210 FogGlowThreshold 00001a41
+field 210 FogGlowKnee 00000cc1
+field 210 FogGlowFadeStart 00c067c1
+field 210 FogGlowFadeEnd 00c02141
+field 210 FogGlowTintR 00608141
+field 210 FogGlowTintG 00b03f42
+field 210 FogGlowTintB 009016c2
+field 210 FogGlowAntiFlicker 03000000
+field 210 AtmosphericCloudSkyFill 0000a240
+field 210 AtmosphericCloudVaporMass 00100442
+field 210 AtmosphericCloudColorR 000002c2
+field 210 AtmosphericCloudColorG 00005ec1
+field 210 AtmosphericCloudColorB 0060f641
+field 210 AtmosphericCloudOpacity 008062c2
+field 210 AtmosphericCloudFloorHeight 000099c0
+field 210 AtmosphericCloudLayerDepth 00d016c2
+field 210 AtmosphericCloudBodyFrequency 00005a41
+field 210 AtmosphericCloudEdgeFrequency 0000683f
+field 210 AtmosphericCloudEdgeBreakup 00402ac1
+field 210 AtmosphericCloudDriftAngle 0040c3c1
+field 210 AtmosphericCloudDriftRate 0060fd41
+field 210 AtmosphericCloudSunFade 00e0d141
+field 210 AtmosphericCloudSkyBounce 00009741
+field 210 AtmosphericCloudRimBoost 005000c2
+field 210 AtmosphericCloudOcclusion 000048c1
+field 210 AtmosphericCloudHistoryWeight 00a0b5c1
+field 210 AtmosphericCloudPixelScale 00a0df41
+field 210 CloudsRadius 0040b341
+field 210 CloudsAltitude 00402141
+field 210 CloudsThickness 0080bb40
 field 210 CloudsNumStepsLight 04000000
-field 210 CloudsStepSize 0080bb40
-field 210 CloudsRayOffsetStrength 00e0a6c1
-field 210 CloudsScale 00800e42
-field 210 CloudsDensityMultiplier 00a02bc2
-field 210 CloudsDensityOffset 00005e40
-field 210 CloudsShapeOffsetX 0000f9c0
-field 210 CloudsShapeOffsetY 00304042
-field 210 CloudsShapeOffsetZ 003031c2
-field 210 CloudsShapeWeightR 0000f8be
-field 210 CloudsShapeWeightG 00c08dc1
-field 210 CloudsShapeWeightB 0000a341
-field 210 CloudsShapeWeightA 00503242
-field 210 CloudsDetailScale 00c0e0c1
-field 210 CloudsDetailWeight 008007c1
-field 210 CloudsDetailWeightR 0000d4c0
-field 210 CloudsDetailWeightG 000084c0
-field 210 CloudsDetailWeightB 0040a6c1
-field 210 CloudsDetailOffsetX 0080a8c0
-field 210 CloudsDetailOffsetY 0040b341
-field 210 CloudsDetailOffsetZ 0080a340
-field 210 CloudsAbsorptionThroughCloud 00c007c1
-field 210 CloudsAbsorptionTowardSun 00002040
-field 210 CloudsDarknessThreshold 00c00d41
-field 210 CloudsPhaseForward 00004ac1
-field 210 CloudsPhaseBack 00e0b641
-field 210 CloudsPhaseBase 0000a0bf
-field 210 CloudsPhaseFactor 00c09841
-field 210 CloudsTimeScale 00d015c2
-field 210 CloudsBaseSpeed 0000c83e
-field 210 CloudsDetailSpeed 0000883f
-field 210 CloudsHistoryWeight 004008c1
-field 210 AOIntensity 000054bf
-field 210 AORadius 00a0d141
-field 210 AOThickness 00400841
-field 210 SSSRIntensity 0080d4c1
-field 210 SSSRMaxDistance 00808841
-field 210 SSSRThickness 00e0d541
-field 210 SSSREdgeFade 00a0cec1
-field 210 SSSRMaxSteps 03000000
-field 210 SSSRSampleQuality 03000000
+field 210 CloudsStepSize 00800e42
+field 210 CloudsRayOffsetStrength 00a02bc2
+field 210 CloudsScale 00005e40
+field 210 CloudsDensityMultiplier 0000f9c0
+field 210 CloudsDensityOffset 00304042
+field 210 CloudsShapeOffsetX 003031c2
+field 210 CloudsShapeOffsetY 0000f8be
+field 210 CloudsShapeOffsetZ 00c08dc1
+field 210 CloudsShapeWeightR 0000a341
+field 210 CloudsShapeWeightG 00503242
+field 210 CloudsShapeWeightB 00c0e0c1
+field 210 CloudsShapeWeightA 008007c1
+field 210 CloudsDetailScale 0000d4c0
+field 210 CloudsDetailWeight 000084c0
+field 210 CloudsDetailWeightR 0040a6c1
+field 210 CloudsDetailWeightG 0080a8c0
+field 210 CloudsDetailWeightB 0040b341
+field 210 CloudsDetailOffsetX 0080a340
+field 210 CloudsDetailOffsetY 00c007c1
+field 210 CloudsDetailOffsetZ 00002040
+field 210 CloudsAbsorptionThroughCloud 00c00d41
+field 210 CloudsAbsorptionTowardSun 00004ac1
+field 210 CloudsDarknessThreshold 00e0b641
+field 210 CloudsPhaseForward 0000a0bf
+field 210 CloudsPhaseBack 00c09841
+field 210 CloudsPhaseBase 00d015c2
+field 210 CloudsPhaseFactor 0000c83e
+field 210 CloudsTimeScale 0000883f
+field 210 CloudsBaseSpeed 004008c1
+field 210 CloudsDetailSpeed 000054bf
+field 210 CloudsHistoryWeight 00a0d141
+field 210 AOIntensity 00400841
+field 210 AORadius 0080d4c1
+field 210 AOThickness 00808841
+field 210 SSSRIntensity 00e0d541
+field 210 SSSRMaxDistance 00a0cec1
+field 210 SSSRThickness 00004fc1
+field 210 SSSREdgeFade 00e0c441
+field 210 SSSRMaxSteps ffffffff
+field 210 SSSRSampleQuality 01000000
 field 210 SSSRMultiBounce ffffffff
 field 210 AutoExposureActive 00
-field 210 AutoExposureMinEv 0000eec0
-field 210 AutoExposureMaxEv 00e09dc1
-field 210 AutoExposureSpeedUp 001051c2
-field 210 AutoExposureSpeedDown 00001142
-field 210 AutoExposureBiasEv 00c051c1
-field 210 ExposureCompensationEv 00808040
-field 210 ExposureClampMinEv 00808741
-field 210 ExposureClampMaxEv 00901942
+field 210 AutoExposureMinEv 001051c2
+field 210 AutoExposureMaxEv 00001142
+field 210 AutoExposureSpeedUp 00c051c1
+field 210 AutoExposureSpeedDown 00808040
+field 210 AutoExposureBiasEv 00808741
+field 210 ExposureCompensationEv 00901942
+field 210 ExposureClampMinEv 009006c2
+field 210 ExposureClampMaxEv 0080ddc0
 field 210 BloomOctaveBlend 0000803f
 field 210 ViewOutput 00000000
+field 210 AutoExposureMeter fcffffff
+field 210 AutoExposureCompensation 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+field 210 ExposureClampMinWeight 0060e4c1
+field 210 ExposureClampMaxWeight 00008a40

@@ -702,14 +702,14 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
         input.viewMatrix = input.projMatrix = input.viewProjMatrix = Matrix4x4::Identity();
         GPUCullingUtils::ExtractFrustumPlanes(input.viewProjMatrix, input.frustumPlanes);
         input.instanceCount = m_Scene->GetInstanceCount();
-        input.renderLayerMask = mask;
+        input.renderLayerMask = GameEngine::Rendering::RenderLayerMask{mask};
         if (fused)
         {
             CascadeCullingGroup group{};
             group.viewId = input.viewId;
             group.cascadeCount = 4;
             group.instanceCount = input.instanceCount;
-            group.renderLayerMask = mask;
+            group.renderLayerMask = GameEngine::Rendering::RenderLayerMask{mask};
             group.shadowCasterDispatch = shadow;
             for (uint32_t c = 0; c < 4; ++c)
             {
@@ -725,7 +725,7 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
             context.Id = input.viewId;
             context.CascadeIndex = input.cascadeIndex;
             context.InstanceCount = input.instanceCount;
-            context.RenderLayerMask = mask;
+            context.Layers = GameEngine::Rendering::RenderLayerMask{mask};
             context.CullingPipeline = culling.get();
             context.Scene = m_Scene.get();
             for (uint32_t p = 0; p < 6; ++p)

@@ -36,10 +36,6 @@ if (qsize > workers * QueuePressureFactor || pending > workers * PendingPressure
 
 ## Notes
 
-- `WorldBuilder::SetQueryPolicy` sets the policy at world construction; after that, `World::SetQueryPolicy` replaces it whole. There is no per-field setter.
+- `WorldBuilder::SetQueryPolicy` sets the policy at world construction. After that, `World::SetQueryPolicy` replaces it whole. There is no per-field setter.
 - Backpressure only ever increases the batch size, so it cannot oscillate.
 - For the iteration modes these numbers apply to, see [ECS parallel queries](../scripting/ecs-parallel-queries.mdx).
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/ECS_QueryPolicy.md`; the fields became a table with their defaults (checked in `Engine/Modules/ECS/Include/ECS/QueryPolicy.h`), and the rule a titled block.

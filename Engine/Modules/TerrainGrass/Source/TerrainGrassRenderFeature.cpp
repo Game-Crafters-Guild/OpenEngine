@@ -1,7 +1,9 @@
 #include "TerrainGrass/TerrainGrassRenderFeature.h"
 
+#include "TerrainGrass/GrassBladeRows.h"
 #include "TerrainGrass/GrassComputePrograms.h"
 #include "TerrainGrass/GrassDrawMode.h"
+#include "TerrainGrass/GrassMaterialKeywords.h"
 #include "TerrainGrass/GrassPlacementElisionInputs.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "Engine/Rendering/CameraUtils.h"
@@ -81,8 +83,8 @@ struct GrassBladeInstanceGPU
     float BladeHeight = 0.0f;
     float BladeWidth = 0.0f;
     float Yaw = 0.0f;
-    float Rand = 0.0f;
-    float GrassWeight = 0.0f;
+    uint32 RandAndCoverage = 0; // grass_clump.glsl owns the layout (per-blade random, field coverage)
+    uint32 BladeShape = 0;      // grass_clump.glsl owns the bit layout (tilt, twist, tuft fan)
     uint32 TerrainIndex = 0;
     float NormalX = 0.0f; // baked terrain normal (atlas terrains only; 0 otherwise)
     float NormalZ = 0.0f;
@@ -304,12 +306,12 @@ public:
         if (md.Keyword)
             doc.keywords = {md.Keyword};
 
-        using Rendering::MaterialKeyword;
+        // Registered like every scene material: the base program resolves and its pipeline builds
+        // on a worker, so a cold first draw costs no main-thread frame. The view draws no grass
+        // until that pipeline publishes (EmitForwardCommands finds no base pipeline before then).
         material = m_RenderServices.Materials().RegisterMaterialFromDocument(
-            *md.Guid, doc,
-            MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows |
-                MaterialKeyword::Instanced | MaterialKeyword::IBL |
-                MaterialKeyword::ProceduralVertexOutput);
+            *md.Guid, doc, kGrassMaterialKeywords,
+            Engine::Renderer::MaterialSystem::BaseCompileMode::Async);
 
         if (!material)
         {
@@ -317,7 +319,7 @@ public:
             return false;
         }
 
-        Logger::Log::Info("TerrainGrass: material '{}' registered and compiled", md.Name);
+        Logger::Log::Info("TerrainGrass: material '{}' registered; its pipeline builds on a worker", md.Name);
         return true;
     }
 
@@ -465,6 +467,15 @@ public:
             pipelineId = device->InternGraphicsPipeline(std::move(gd));
             pipelineVersion = material->GetVersion();
         }
+        // The re-interned pipeline builds on a worker for the formats the view's world pass draws
+        // with, as the prepass head's does, and grass draws once the device holds it: a cold first
+        // draw never builds it on the recording thread. A view that has declared no world pass yet
+        // has no formats to request it for; its draw resolves the pipeline when it records.
+        const Rendering::PipelineFormatKey worldFormats =
+            m_RenderServices.Views().GetViewWorldColorFormatKey(ctx.ViewId);
+        if (worldFormats.ColorCount != 0 &&
+            !m_RenderServices.Materials().Variants().EnsureConcreteWarm(*material, pipelineId, worldFormats))
+            return;
 
         auto& scratch = m_Scratch[ctx.ViewId];
         scratch.Shared.clear();
@@ -1895,8 +1906,6 @@ void TerrainGrassRenderFeature::CreateBladeMesh(uint32 bladeSegments)
     // readable on that reduced geometry; the vertex modifier animates it from the same wind field
     // as LOD 0, so the far field gusts with the near one.
     constexpr uint32 kLod1Segments = 2u;
-    // Row parameter t = u^(2/3) for u evenly spaced over [0,1] — see the row loop below.
-    constexpr float kBladeRowDistributionExponent = 2.0f / 3.0f;
     const uint32 lodSegments[kGrassLodCount] = {
         bladeSegments,
         std::min(bladeSegments, kLod1Segments),
@@ -1912,17 +1921,10 @@ void TerrainGrassRenderFeature::CreateBladeMesh(uint32 bladeSegments)
         mesh.FirstIndex = static_cast<uint32>(indices.size());
         mesh.IndexCount = segments * 6u;
 
-        // Rows are spaced to equalise how far the straight segment between them strays from the
-        // spine the vertex stage actually evaluates. That spine puts row t at radius t*height and
-        // angle bend*t^2 (terrain_grass_vertex_modifier.glsl), which is the cubic y = bend*x^3 to
-        // leading order, so its second derivative grows LINEARLY in t. Chord error goes like
-        // t * dt^2, and holding that constant gives t = u^(2/3). Evenly spaced rows spend their
-        // budget where the blade is straight and kink at the tip; equal-lean-angle rows (t = u^0.5)
-        // overcorrect and move a bigger kink to the root. Mesh-build only — no runtime cost.
+        // Rows crowd toward the tip, where the droop bends the leaf (GrassBladeRowHeight).
         for (uint32 row = 0; row <= segments; ++row)
         {
-            const float u = static_cast<float>(row) / static_cast<float>(segments);
-            const float t = std::pow(u, kBladeRowDistributionExponent);
+            const float t = GrassBladeRowHeight(row, segments);
             vertices.push_back(BladeVertex{-1.0f, t});
             vertices.push_back(BladeVertex{ 1.0f, t});
         }

@@ -17,28 +17,21 @@ bool IsPayloadFilename(const std::string& filename)
 }
 }
 
-std::optional<std::filesystem::path> ResolvePackagedTexturePayload(
-    const AssetRegistry& registry, const GUID& guid, bool preferCompressed)
+std::optional<std::filesystem::path> ResolvePackagedTexturePayload(const AssetRegistry& registry, const GUID& guid)
 {
     AssetMetadata metadata;
     if (registry.GetDerivedArtifactPolicy(guid).CooksOnMiss ||
         !registry.TryGetAssetMetadata(guid, metadata))
         return std::nullopt;
-    std::string portable;
-    if (!registry.TryGetMetaValue(metadata.Path, kTexturePackagedPortableMetaKey, portable))
+    std::string payload;
+    if (!registry.TryGetMetaValue(metadata.Path, kTexturePackagedMetaKey, payload))
         return std::nullopt;
     const auto root = registry.TryGetCacheRoot(guid);
-    std::string compressed;
-    registry.TryGetMetaValue(metadata.Path, kTexturePackagedCompressedMetaKey, compressed);
-    if (!root || !IsPayloadFilename(portable) || (!compressed.empty() && !IsPayloadFilename(compressed)))
+    if (!root || !IsPayloadFilename(payload))
     {
         Logger::Log::Error("TextureAsset[{}]: invalid packaged payload; rebuild the package", metadata.Path.string());
         return std::filesystem::path{};
     }
-    const auto directory = *root / AssetDatabase::kTextureCacheDirectoryName;
-    std::error_code error;
-    if (preferCompressed && !compressed.empty() && std::filesystem::is_regular_file(directory / compressed, error))
-        return directory / compressed;
-    return directory / portable;
+    return *root / AssetDatabase::kTextureCacheDirectoryName / payload;
 }
 } // namespace GameEngine

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetCore/GUID.h"
+#include "PathfindingECS/Navigation.h"
 #include "TerrainECS/PlanarHeightQuery.h"
 #include "Types/Types.h"
 
@@ -46,17 +47,21 @@ struct NavigationTriangles
 
 // The static geometry a surface bakes besides the terrain, in world space: the collider shapes of
 // Static physics bodies (box, sphere, capsule, plane) and the meshes of MeshRenderer entities
-// (model submeshes and primitives). Entities with a Dynamic or Kinematic body and navigation agents
-// are left out: they move, so the surface does not bake them. Gathered on the main thread when a
-// bake starts and never changed afterwards, so tile jobs read it concurrently.
+// (model submeshes and primitives) that the entity's NavigationSource policy admits. Under Auto,
+// the default, a mesh is left out when it or any ancestor has a Dynamic or Kinematic body or a
+// navigation agent: they move, so the surface does not bake them. Under an inherited Include a
+// mesh is baked where it stands unless it moves on its own below the Include's entity. Gathered
+// on the main thread when a bake starts and never changed afterwards, so tile jobs read it
+// concurrently.
 struct NavigationStaticGeometry
 {
-    // One shape or mesh: a run of Triangles.Indices and its bounds.
+    // One shape or mesh: a run of Triangles.Indices, its bounds and the entity it came from.
     struct Item
     {
         uint32 FirstIndex = 0;
         uint32 IndexCount = 0;
         NavigationBounds Bounds;
+        Navigation::BakeSource Source;
     };
 
     NavigationTriangles Triangles;

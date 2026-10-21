@@ -3,6 +3,7 @@
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
+#include "Rendering/Materials/ShaderLayoutShape.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 #include <string>
@@ -68,13 +69,18 @@ bool LensFlareRenderFeature::Initialize(IDevice* device)
     m_AtlasBinding = resolveBinding("uAtlas", 0u);
     m_InstanceBinding = resolveBinding("Instances", 1u);
     m_DepthBinding = resolveBinding("uSceneDepth", 2u);
+    m_ExposureBinding = resolveBinding("uExposure", 3u);
 
     m_Layout.debugName = "LensFlare.Set0";
     m_Layout.bindings = {
         {m_AtlasBinding, DescriptorType::CombinedImageSampler, 1, kFragmentStage}, // atlas
         {m_InstanceBinding, DescriptorType::StorageBuffer, 1, kVertexStage},       // instances
         {m_DepthBinding, DescriptorType::CombinedImageSampler, 1, kFragmentStage}, // scene depth
+        {m_ExposureBinding, DescriptorType::StorageBuffer, 1, kFragmentStage},     // ExposureHistory
     };
+    // Storage access and image shapes from the shader's reflection: WebGPU bakes both into the
+    // layout (lens_flare.frag reads the exposure history through a `readonly buffer`).
+    ApplyMetaImageShapeToLayout(pkg.meta, m_Layout);
 
     m_Pipeline = {};
     m_Pipeline.type = PipelineType::Graphics;

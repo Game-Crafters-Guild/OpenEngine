@@ -2,6 +2,8 @@
 
 #include "Assets/AssetManager.h"
 #include "Assets/ModelAsset.h"
+#include "Components/Hierarchy.h"
+#include "Components/HierarchyQueries.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
@@ -11,6 +13,7 @@
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
+#include "PathfindingECS/Components/NavigationSource.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
 #include "PhysicsECS/Components/BoxColliderShape.h"
 #include "PhysicsECS/Components/CapsuleColliderShape.h"
@@ -22,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <unordered_map>
 
 namespace GameEngine::PathfindingECS
@@ -29,6 +33,10 @@ namespace GameEngine::PathfindingECS
 
 namespace
 {
+
+using Components::NavigationSourcePolicy;
+using Navigation::BakeSource;
+using Navigation::BakeSourceKind;
 
 constexpr float32 kPi = 3.14159265358979323846f;
 // Facets of the low-poly sphere and capsule a round collider is baked as: the voxelization is no
@@ -47,8 +55,8 @@ void TransformPoint(const float32 m[16], const float32 in[3], float32 out[3])
 class ItemWriter
 {
   public:
-    ItemWriter(NavigationStaticGeometry& geometry, const float32 world[16])
-        : m_Geometry(geometry), m_World(world), m_BaseVertex(geometry.Triangles.VertexCount()),
+    ItemWriter(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source)
+        : m_Geometry(geometry), m_World(world), m_Source(source), m_BaseVertex(geometry.Triangles.VertexCount()),
           m_FirstIndex(static_cast<uint32>(geometry.Triangles.Indices.size()))
     {
     }
@@ -59,6 +67,7 @@ class ItemWriter
         item.FirstIndex = m_FirstIndex;
         item.IndexCount = static_cast<uint32>(m_Geometry.Triangles.Indices.size()) - m_FirstIndex;
         item.Bounds = m_Bounds;
+        item.Source = m_Source;
         if (item.IndexCount == 0)
             return;
         m_Geometry.Items.push_back(item);
@@ -93,15 +102,17 @@ class ItemWriter
   private:
     NavigationStaticGeometry& m_Geometry;
     const float32* m_World;
+    BakeSource m_Source;
     uint32 m_BaseVertex;
     uint32 m_FirstIndex;
     uint32 m_VertexCount = 0;
     NavigationBounds m_Bounds;
 };
 
-void AppendBox(NavigationStaticGeometry& geometry, const float32 world[16], const Components::BoxColliderShape& box)
+void AppendBox(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source,
+               const Components::BoxColliderShape& box)
 {
-    ItemWriter writer(geometry, world);
+    ItemWriter writer(geometry, world, source);
     const float32 hx = box.halfExtentsX, hy = box.halfExtentsY, hz = box.halfExtentsZ;
     for (uint32 corner = 0; corner < 8; ++corner)
         writer.AddVertex((corner & 1) ? hx : -hx, (corner & 2) ? hy : -hy, (corner & 4) ? hz : -hz);
@@ -117,10 +128,10 @@ void AppendBox(NavigationStaticGeometry& geometry, const float32 world[16], cons
 
 // A capsule of `halfHeight` cylinder half length along local `axis` (0 = X, 1 = Y, 2 = Z); a sphere
 // is a capsule with no cylinder. Rings run from the bottom pole to the top pole.
-void AppendRound(NavigationStaticGeometry& geometry, const float32 world[16], float32 radius, float32 halfHeight,
-                 uint8 axis)
+void AppendRound(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source, float32 radius,
+                 float32 halfHeight, uint8 axis)
 {
-    ItemWriter writer(geometry, world);
+    ItemWriter writer(geometry, world, source);
     const uint32 rings = kRoundRings * 2;
     for (uint32 ring = 0; ring <= rings; ++ring)
     {
@@ -153,7 +164,8 @@ void AppendRound(NavigationStaticGeometry& geometry, const float32 world[16], fl
 
 // The plane's solid side lies below normal . x + d = 0; its walkable face is a square of
 // halfExtent about the point on the plane nearest the body origin.
-void AppendPlane(NavigationStaticGeometry& geometry, const float32 world[16], const Components::PlaneColliderShape& plane)
+void AppendPlane(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source,
+                 const Components::PlaneColliderShape& plane)
 {
     const float32 length = std::sqrt(plane.normalX * plane.normalX + plane.normalY * plane.normalY +
                                      plane.normalZ * plane.normalZ);
@@ -171,7 +183,7 @@ void AppendPlane(NavigationStaticGeometry& geometry, const float32 world[16], co
     t[0] /= tLength, t[1] /= tLength, t[2] /= tLength;
     const float32 b[3] = {n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0]};
 
-    ItemWriter writer(geometry, world);
+    ItemWriter writer(geometry, world, source);
     const float32 h = plane.halfExtent;
     for (const auto& [su, sv] : {std::pair{-1.0f, -1.0f}, std::pair{1.0f, -1.0f}, std::pair{1.0f, 1.0f},
                                  std::pair{-1.0f, 1.0f}})
@@ -184,11 +196,11 @@ void AppendPlane(NavigationStaticGeometry& geometry, const float32 world[16], co
     writer.AddQuad(0, 1, 2, 3);
 }
 
-void AppendMesh(NavigationStaticGeometry& geometry, const float32 world[16], const Mesh& mesh)
+void AppendMesh(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source, const Mesh& mesh)
 {
     if (mesh.Vertices.empty() || mesh.Indices.size() < 3)
         return;
-    ItemWriter writer(geometry, world);
+    ItemWriter writer(geometry, world, source);
     for (const auto& vertex : mesh.Vertices)
         writer.AddVertex(vertex.Position[0], vertex.Position[1], vertex.Position[2]);
     for (size_t i = 0; i + 2 < mesh.Indices.size(); i += 3)
@@ -207,11 +219,16 @@ bool IsStaticBody(const ECS::World& world, ECS::EntityHandle bodyEntity)
     return body && body->motionType == Physics::MotionType::Static;
 }
 
-// A collider the bake reads: solid, on a Static body.
+// A collider the bake reads: solid, on a Static body. NavigationSource does not apply to colliders.
 bool IsBakedCollider(const ECS::World& world, ECS::EntityHandle entity, const Components::PhysicsCollider& collider,
                      const Components::PhysicsColliderOwner* owner)
 {
     return !collider.isTrigger && IsStaticBody(world, BodyEntityOf(entity, owner));
+}
+
+BakeSource ColliderSource(ECS::EntityHandle entity)
+{
+    return {entity, BakeSourceKind::Collider, NavigationSourcePolicy::Auto};
 }
 
 void GatherColliders(ECS::World& world, NavigationStaticGeometry& geometry)
@@ -225,38 +242,71 @@ void GatherColliders(ECS::World& world, NavigationStaticGeometry& geometry)
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::BoxColliderShape& box, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendBox(geometry, wt.matrix, box);
+                AppendBox(geometry, wt.matrix, ColliderSource(e), box);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::SphereColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::SphereColliderShape& sphere, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendRound(geometry, wt.matrix, sphere.radius, 0.0f, 1);
+                AppendRound(geometry, wt.matrix, ColliderSource(e), sphere.radius, 0.0f, 1);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::CapsuleColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::CapsuleColliderShape& capsule, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendRound(geometry, wt.matrix, capsule.radius, capsule.halfHeight, capsule.axis);
+                AppendRound(geometry, wt.matrix, ColliderSource(e), capsule.radius, capsule.halfHeight, capsule.axis);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::PlaneColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::PlaneColliderShape& plane, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendPlane(geometry, wt.matrix, plane);
+                AppendPlane(geometry, wt.matrix, ColliderSource(e), plane);
         });
 }
 
-// A mesh renderer the bake reads: it shows a model or primitive and does not move.
-bool IsBakedMeshRenderer(ECS::World& world, ECS::EntityHandle e, const Components::MeshRenderer& renderer)
+// An entity that moves on its own: a navigation agent, or a physics body that is not Static.
+bool MovesOnItsOwn(const ECS::World& world, ECS::EntityHandle entity)
 {
-    if (renderer.modelAssetGuid.IsNull() || world.HasComponent<Components::NavigationAgent>(e))
-        return false;
-    const auto* body = world.GetComponent<Components::PhysicsBody>(e);
-    return !body || body->motionType == Physics::MotionType::Static;
+    if (world.HasComponent<Components::NavigationAgent>(entity))
+        return true;
+    const auto* body = world.GetComponent<Components::PhysicsBody>(entity);
+    return body && body->motionType != Physics::MotionType::Static;
+}
+
+// The policy that admits a mesh renderer into the bake (Auto or Include), or none when the bake
+// leaves it out. The one rule the gathered geometry, its fitted bounds and the models a bake waits
+// for all read. The policy is the NavigationSource on the mesh's entity, else on its nearest
+// ancestor that has one, else Auto: blueprint children and the submesh entities a model makes hang
+// under the entity that authored it. Exclude leaves the mesh out. Include admits it unless an
+// entity between the mesh and the Include's entity moves on its own. Auto admits it unless any
+// entity from the mesh to the root moves on its own.
+std::optional<NavigationSourcePolicy> MeshRendererAdmission(ECS::World& world, ECS::EntityHandle e,
+                                                            const Components::MeshRenderer& renderer)
+{
+    if (renderer.modelAssetGuid.IsNull())
+        return std::nullopt;
+    bool authored = false;
+    ECS::EntityHandle current = e;
+    for (size_t step = 0; step < Components::kMaxHierarchyDepth && current.IsValid(); ++step)
+    {
+        const auto* source = authored ? nullptr : world.GetComponent<Components::NavigationSource>(current);
+        if (source && source->Policy == NavigationSourcePolicy::Exclude)
+            return std::nullopt;
+        if (source && source->Policy == NavigationSourcePolicy::Include)
+            return NavigationSourcePolicy::Include;
+        authored = authored || source;
+        // Below an Include, or anywhere under Auto, an entity that moves takes the mesh with it.
+        if (MovesOnItsOwn(world, current))
+            return std::nullopt;
+        const auto* parent = world.GetComponent<Components::Parent>(current);
+        if (!parent)
+            break;
+        current = parent->parent;
+    }
+    return NavigationSourcePolicy::Auto;
 }
 
 // Each MeshRenderer entity contributes its own submesh once, at its WorldTransform, which already
@@ -269,8 +319,10 @@ void GatherMeshRenderers(ECS::World& world, NavigationStaticGeometry& geometry)
 
     world.Query<ECS::Read<Components::MeshRenderer>, ECS::Read<Components::WorldTransform>>().Each(
         [&](ECS::EntityHandle e, const Components::MeshRenderer& renderer, const Components::WorldTransform& wt) {
-            if (!IsBakedMeshRenderer(world, e, renderer))
+            const std::optional<NavigationSourcePolicy> admission = MeshRendererAdmission(world, e, renderer);
+            if (!admission)
                 return;
+            const BakeSource source{e, BakeSourceKind::Mesh, *admission};
 
             const GUID guid = renderer.modelAssetGuid.ToGuid();
             if (Engine::Renderer::PrimitiveGenerator::IsPrimitive(guid))
@@ -278,7 +330,7 @@ void GatherMeshRenderers(ECS::World& world, NavigationStaticGeometry& geometry)
                 auto [it, inserted] = primitives.try_emplace(guid);
                 if (inserted)
                     it->second = Engine::Renderer::PrimitiveGenerator::GenerateByGuid(guid);
-                AppendMesh(geometry, wt.matrix, it->second);
+                AppendMesh(geometry, wt.matrix, source, it->second);
                 return;
             }
             if (!assets)
@@ -291,7 +343,7 @@ void GatherMeshRenderers(ECS::World& world, NavigationStaticGeometry& geometry)
                 return;
             const uint32 submesh = Engine::Renderer::ResolveSubmeshIndex(guid, model, renderer);
             if (submesh < model.GetMeshCount())
-                AppendMesh(geometry, wt.matrix, model.GetMesh(submesh));
+                AppendMesh(geometry, wt.matrix, source, model.GetMesh(submesh));
         });
 }
 
@@ -365,7 +417,7 @@ std::vector<GUID> FindUnloadedNavigationModels(ECS::World& world)
         return models;
     world.Query<ECS::Read<Components::MeshRenderer>, ECS::Read<Components::WorldTransform>>().Each(
         [&](ECS::EntityHandle e, const Components::MeshRenderer& renderer, const Components::WorldTransform&) {
-            if (!IsBakedMeshRenderer(world, e, renderer))
+            if (!MeshRendererAdmission(world, e, renderer))
                 return;
             const GUID guid = renderer.modelAssetGuid.ToGuid();
             if (Engine::Renderer::PrimitiveGenerator::IsPrimitive(guid) || assets->IsAssetLoaded(guid))

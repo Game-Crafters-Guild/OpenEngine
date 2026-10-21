@@ -21,7 +21,6 @@
 #include "SceneView/MeasureSceneGizmo.h"
 #include "Markups/MarkupGizmo.h"
 #include "SceneView/SceneViewGridRenderer.h"
-#include "SceneView/SceneLightExposure.h"
 #include "SceneView/SplineSceneGizmo.h"
 #include "UI/UITextureSpace.h"
 #include <algorithm>
@@ -173,6 +172,9 @@ class SceneViewController
 
     // Exposing Render Service
     Engine::Renderer::RenderServices* GetRenderServices() const { return m_RenderServices; }
+    // This view's Auto exposure as its camera popover shows it (see m_MeteredExposureEv).
+    std::optional<float> GetMeteredExposureEv() const { return m_MeteredExposureEv; }
+    std::optional<float> GetLightsReadingEv() const { return m_LightsReadingEv; }
 
     // The projection the Scene View last submitted, with the viewport it was
     // built from. The pair is captured in one assignment, so a reader can never
@@ -641,8 +643,11 @@ class SceneViewController
     // RenderServices) so the feature is never created for views that never
     // use auto exposure.
     Engine::Renderer::ExposureReadbackFeature* m_ExposureReadback = nullptr;
-    // Scene Light exposure: derived from this view's world's directional lights and sky.
-    Editor::SceneLightExposure m_SceneLightExposure;
+    // This view's exposure readings for its camera popover: the EV100 its Auto exposure has settled
+    // on (after the clamp, before compensation) and the lights meter's reading; empty while the view
+    // is not in Auto, not on the Lights meter, or before the first readback.
+    std::optional<float> m_MeteredExposureEv;
+    std::optional<float> m_LightsReadingEv;
 
     // Logical camera & view registered with RenderServices (shared with ECS rendering).
     Rendering::CameraId m_CameraId{0};

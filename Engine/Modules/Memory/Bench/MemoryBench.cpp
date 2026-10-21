@@ -4,6 +4,7 @@
 //     MemoryBench ArenaBump [samples]
 //     MemoryBench ObjectPoolChurn <pool|heap> <small|large> [samples]
 //     MemoryBench Scratch AB|BA [samples]
+//     MemoryBench RangeChurn range <1k|10k> [samples]
 //
 // ArenaBump: one sample is a frame of 4096 bump allocations of 16, 64 and 256 bytes in a
 // fixed shuffled order, each written once, then a Memory::Arena Reset; it reports
@@ -25,17 +26,29 @@
 // vectors cleared and resized to the same sizes. One sample is 1000 calls; it reports
 // nanoseconds per call. Both arms run in one process, in the order given.
 //
+// RangeChurn: a mesh stream's ranges in a Memory::RangeAllocator, counted in 32-byte vertices:
+// a live set of 1,000 or 10,000 ranges with vertex counts log-uniform from 24 to 65,536, in a
+// space 1.25 times the live set's expected size. One sample is a frame: 256 pairs, each a range
+// of the live set queued with FreeAfter (retired four frames later) and a new range allocated in
+// its place, then ReclaimThrough the frame; it reports nanoseconds per pair. Sizes and live-set
+// indices come from one seeded generator that continues across samples. A request that does not
+// fit leaves its live-set entry empty and is counted. After the last sample everything queued is
+// reclaimed and it prints the fragmentation ((free - largest free) / free), used bytes over the
+// live set's requested bytes, the refused requests and the free ranges.
+//
 // Every case takes 100 warm-up samples first, then prints the median and p99 over the
 // remaining samples.
 
 #include "Memory/Arena.h"
 #include "Memory/ObjectPool.h"
+#include "Memory/RangeAllocator.h"
 #include "Memory/ScratchScope.h"
 #include "Memory/StatsSnapshot.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -294,11 +307,122 @@ void RunScratchArm(char arm, std::size_t samples)
     PrintCase("B", "nested", samples, MeasureCalls(samples, ScratchCall));
 }
 
+constexpr std::size_t kRangePairsPerSample = 256;
+constexpr std::uint64_t kRangeRetireFrames = 4;
+constexpr std::uint64_t kVertexBytes = 32;
+constexpr double kMinVertices = 24.0;
+constexpr double kMaxVertices = 65536.0;
+constexpr double kRangeSpaceHeadroom = 1.25;
+constexpr std::size_t kRangeSizeTableLength = 1 << 16;
+
+/// Vertex counts log-uniform over [kMinVertices, kMaxVertices], drawn once so the timed loop
+/// only indexes the table.
+std::vector<std::uint64_t> MakeVertexCounts()
+{
+    std::vector<std::uint64_t> counts(kRangeSizeTableLength);
+    std::uint32_t state = 0x6A09E667u;
+    for (std::uint64_t& count : counts)
+    {
+        state = state * 1664525u + 1013904223u;
+        const double unit = static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
+        count = static_cast<std::uint64_t>(kMinVertices * std::pow(kMaxVertices / kMinVertices, unit));
+    }
+    return counts;
+}
+
+/// The expected vertex count of one range: the mean of the log-uniform distribution.
+double ExpectedVertices()
+{
+    return (kMaxVertices - kMinVertices) / std::log(kMaxVertices / kMinVertices);
+}
+
+/// The RangeAllocator arm: one unit is one vertex.
+class RangeArm
+{
+  public:
+    using Handle = GameEngine::Memory::RangeAllocator::Allocation;
+
+    explicit RangeArm(std::uint64_t capacityBytes)
+        : m_Ranges("MemoryBench.RangeChurn", GameEngine::Memory::Residency::Gpu, kVertexBytes,
+                   capacityBytes / kVertexBytes, 1024)
+    {
+    }
+    Handle Allocate(std::uint64_t bytes) { return m_Ranges.Allocate((bytes + kVertexBytes - 1) / kVertexBytes); }
+    void FreeAfter(Handle handle, std::uint64_t stamp) { m_Ranges.FreeAfter(handle, stamp); }
+    void Reclaim(std::uint64_t stamp) { m_Ranges.ReclaimThrough(stamp); }
+    double Fragmentation() const { return m_Ranges.GetStats().Fragmentation; }
+    std::uint64_t UsedBytes() const { return m_Ranges.Used() * kVertexBytes; }
+    std::uint32_t FreeRanges() const { return m_Ranges.GetStats().FreeRanges; }
+    static const char* Name() { return "range"; }
+
+  private:
+    GameEngine::Memory::RangeAllocator m_Ranges;
+};
+
+/// Runs RangeChurn with `liveRanges` live ranges and prints its line.
+void RunRangeChurn(std::string_view caseName, std::size_t liveRanges, std::size_t samples)
+{
+    const std::vector<std::uint64_t> vertexCounts = MakeVertexCounts();
+    const auto capacityBytes = static_cast<std::uint64_t>(static_cast<double>(liveRanges) * ExpectedVertices() *
+                                                          kRangeSpaceHeadroom) *
+                               kVertexBytes;
+    RangeArm arm(capacityBytes);
+    std::vector<RangeArm::Handle> live(liveRanges);
+    std::vector<std::uint64_t> requested(liveRanges, 0);
+    std::uint64_t refused = 0;
+    std::uint32_t state = 0xBB67AE85u;
+    for (std::size_t index = 0; index < liveRanges; ++index)
+    {
+        state = state * 1664525u + 1013904223u;
+        const std::uint64_t bytes = vertexCounts[(state >> 8) % vertexCounts.size()] * kVertexBytes;
+        live[index] = arm.Allocate(bytes);
+        requested[index] = live[index].IsValid() ? bytes : 0;
+        refused += live[index].IsValid() ? 0 : 1;
+    }
+
+    std::vector<double> perPair;
+    perPair.reserve(samples);
+    for (std::size_t sample = 0; sample < kWarmupSamples + samples; ++sample)
+    {
+        const std::uint64_t frame = sample + 1;
+        const auto start = std::chrono::steady_clock::now();
+        for (std::size_t pair = 0; pair < kRangePairsPerSample; ++pair)
+        {
+            state = state * 1664525u + 1013904223u;
+            const std::size_t index = (state >> 8) % liveRanges;
+            state = state * 1664525u + 1013904223u;
+            const std::uint64_t bytes = vertexCounts[(state >> 8) % vertexCounts.size()] * kVertexBytes;
+            arm.FreeAfter(live[index], frame + kRangeRetireFrames);
+            live[index] = arm.Allocate(bytes);
+            requested[index] = live[index].IsValid() ? bytes : 0;
+            refused += live[index].IsValid() ? 0 : 1;
+        }
+        arm.Reclaim(frame);
+        const auto end = std::chrono::steady_clock::now();
+        if (sample >= kWarmupSamples)
+            perPair.push_back(std::chrono::duration<double, std::nano>(end - start).count() /
+                              static_cast<double>(kRangePairsPerSample));
+    }
+
+    arm.Reclaim(UINT64_MAX);
+    std::uint64_t requestedBytes = 0;
+    for (const std::uint64_t bytes : requested)
+        requestedBytes += bytes;
+    const Summary summary = Summarize(perPair);
+    std::printf("RangeChurn arm=%s case=%.*s live=%zu samples=%zu median_ns_per_pair=%.4f p99_ns_per_pair=%.4f "
+                "fragmentation=%.4f used_over_requested=%.6f refused=%llu free_ranges=%u\n",
+                RangeArm::Name(), static_cast<int>(caseName.size()), caseName.data(), liveRanges, samples,
+                summary.MedianNanoseconds, summary.P99Nanoseconds, arm.Fragmentation(),
+                static_cast<double>(arm.UsedBytes()) / static_cast<double>(requestedBytes),
+                static_cast<unsigned long long>(refused), arm.FreeRanges());
+}
+
 int Usage()
 {
     std::fprintf(stderr, "usage: MemoryBench ArenaBump [samples]\n"
                          "       MemoryBench ObjectPoolChurn <pool|heap> <small|large> [samples]\n"
-                         "       MemoryBench Scratch AB|BA [samples]\n");
+                         "       MemoryBench Scratch AB|BA [samples]\n"
+                         "       MemoryBench RangeChurn range <1k|10k> [samples]\n");
     return 2;
 }
 
@@ -343,6 +467,16 @@ int main(int argc, char** argv)
             return Usage();
         for (const char arm : order)
             RunScratchArm(arm, samples);
+        return 0;
+    }
+    if (benchName == "RangeChurn" && argc >= 4)
+    {
+        const std::string_view arm = argv[2];
+        const std::string_view caseName = argv[3];
+        const std::size_t samples = ParseSamples(argc, argv, 4);
+        if (arm != "range" || (caseName != "1k" && caseName != "10k") || samples == 0)
+            return Usage();
+        RunRangeChurn(caseName, caseName == "1k" ? 1000 : 10000, samples);
         return 0;
     }
     return Usage();

@@ -110,7 +110,7 @@ CascadeRenderInputs BuildCascadeCacheInputs(RenderServices& rs, ViewId viewId,
         in.WorldId = viewDesc->worldId;
         in.CasterEpoch = cache.TrackCasterChanges(viewId, cacheSlot, in.WorldId,
             rs.GetShadowCasterChanges(in.WorldId), in.LightVP, resolution);
-        in.RenderLayerMask = viewDesc->ActiveRenderLayerMask();
+        in.Layers = viewDesc->ActiveRenderLayerMask();
         if (!fitFreeze && viewDesc->cameraId != 0)
         {
             if (const auto* cam = rs.Views().FindCameraData(viewDesc->cameraId))

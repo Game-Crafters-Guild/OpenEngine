@@ -128,7 +128,7 @@ Components::MeshRenderer PrimitiveGenerator::MakePrimitiveMeshRenderer(
     // Store GUIDs for portable scene serialization.
     mr.modelAssetGuid.Set(meshGuid);
     mr.materialAssetGuid.Set(materialGuid);
-    mr.renderLayerMask = 1u;
+    mr.RenderLayers = Rendering::RenderLayerMask::Default();
     return mr;
 }
 

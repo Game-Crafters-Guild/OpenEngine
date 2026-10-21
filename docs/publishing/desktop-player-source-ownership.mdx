@@ -5,29 +5,24 @@ sidebar:
   order: 2
 ---
 
-One rule for the sources a desktop export compiles: the engine owns the default application and keeps it out of the project, and the project owns everything it wrote itself. Windows and macOS exports prepare the default application in `<project>/.Build/Player/Source`; nothing is created, refreshed or deleted inside project `Assets`.
+One rule for the sources a desktop export compiles: the engine owns the default application and keeps it out of the project, and the project owns everything it wrote itself. Windows and macOS exports prepare the default application in `<project>/.Build/Player/Source`. Nothing is created, refreshed, or deleted inside project `Assets`.
 
 ## Who owns which sources
 
 | Tree | Owner | What export does with it |
 |---|---|---|
 | `<project>/.Build/Player/Source` | Engine | Written and refreshed on every export from the SDK template set. Changed files are rewritten, newly listed companions are added, unchanged files are left alone. |
-| `<project>/Assets/Source` | Project | Read only. A `main.cpp` or `PlayerApplication.cpp` here selects the application and suppresses the generated default entirely; other files there join the source list as helpers. |
+| `<project>/Assets/Source` | Project | Read only. A `main.cpp` or `PlayerApplication.cpp` here selects the application and suppresses the generated default entirely. Other files there join the source list as helpers. |
 | `<project>/Assets` (everything else) | Project | Compiled into the native user module and shipped through native module staging. Never linked into the Player a second time. |
 
 ## One manifest, two consumers
 
-`Apps/Player/DesktopSources.txt` lists the desktop application’s translation units. The repository’s own `Player` target reads it through `ge_read_desktop_player_sources()` (`cmake/DesktopPlayerSources.cmake`), and SDK staging copies exactly those files plus the manifest into `SDK/templates/Player`. Export reads the staged manifest again in `PreparePlayerSources()`. Adding a companion file is therefore one edit, and the browser entry points — which belong to the Web Player target — can never reach a desktop export.
+`Apps/Player/DesktopSources.txt` lists the desktop application’s translation units. The repository’s own `Player` target reads it through `ge_read_desktop_player_sources()` (`cmake/DesktopPlayerSources.cmake`). SDK staging copies exactly those files plus the manifest into `SDK/templates/Player`. Export reads the staged manifest again in `PreparePlayerSources()`. Adding a companion file is therefore one edit, and the browser entry points, which belong to the Web Player target, can never reach a desktop export.
 
-A manifest entry is a relative path under the template root with a `.cpp` or `.h` extension. Absolute paths, drive letters, backslashes, semicolons and `.`/`..` components are refused, as is an entry naming a file that does not exist. The whole list is validated before anything is written, so a bad manifest fails the export with the offending path instead of leaving a half-written source project behind.
+A manifest entry is a relative path under the template root with a `.cpp` or `.h` extension. Absolute paths, drive letters, backslashes, semicolons, and `.`/`..` components are refused, as is an entry naming a file that does not exist. The whole list is validated before anything is written, so a bad manifest fails the export with the offending path instead of leaving a half-written source project behind.
 
 ## Files already in Assets/Source
 
 Files in `Assets/Source` that carry no ownership marker are project-owned, modified or not: export never overwrites or deletes them. To use the generated default application, delete them from the project.
 
 Use a matching Editor and SDK. A missing manifest, or a companion the manifest names but the SDK does not carry, fails source preparation with the failing path rather than producing a partial source project.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/desktop-player-source-ownership.html`; the owner pills became plain text (an owner is not a status); the history of earlier exports dropped, keeping the rule that unmarked files in `Assets/Source` are project-owned.
-- 2026-09-17: Initial version: generated default application under `.Build/Player/Source`, project `Assets` read-only for export, one desktop source manifest shared by the repository target and SDK staging.

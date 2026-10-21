@@ -379,7 +379,7 @@ TEST(DockLayoutController, CloneAndPruneDropsUnregisteredTabsAndEmptyBranches) {
     source->Second()->AddTab("MissingBranch");
 
     DockLayoutController controller(dm);
-    auto pruned = controller.CloneForRegisteredPanels(source.get());
+    auto pruned = controller.CloneForRegisteredPanels(source.get(), {});
 
     ASSERT_NE(pruned, nullptr);
     ASSERT_TRUE(pruned->IsLeaf());
@@ -408,7 +408,7 @@ TEST(DockLayoutController, CloneAndPrunePreservesSurvivingSplitGeometry) {
     ASSERT_TRUE(source->Second()->ActivateTab("B"));
 
     DockLayoutController controller(dm);
-    auto pruned = controller.CloneForRegisteredPanels(source.get());
+    auto pruned = controller.CloneForRegisteredPanels(source.get(), {});
 
     ASSERT_NE(pruned, nullptr);
     ASSERT_TRUE(pruned->IsSplit());
@@ -435,7 +435,7 @@ TEST(DockLayoutController, ApplyPrunedLayoutRejectsAnEntirelyUnavailablePreset) 
     unavailable->AddTab("Missing");
 
     DockLayoutController controller(dm);
-    EXPECT_FALSE(controller.ApplyForRegisteredPanels(unavailable.get()));
+    EXPECT_FALSE(controller.ApplyForRegisteredPanels(unavailable.get(), {}));
     ASSERT_NE(dm.GetRoot(), nullptr);
     EXPECT_EQ(dm.GetRoot()->GetActivePanelId(), "Current");
 }

@@ -276,15 +276,10 @@ if(BUILD_TESTING)
             GTest::gtest_main
         )
         # OBJECT->OBJECT object files are not spliced transitively on the VS
-        # generator: splice Logger and Memory in directly (the Rendering tests do the
-        # same) and provide the stb_image impl that SkyRenderer pulls into
-        # GameEngineRendering but does not export.
-        target_sources(CBTTerrainTests PRIVATE $<TARGET_OBJECTS:Logger> $<TARGET_OBJECTS:Memory>)
-        target_sources(CBTTerrainTests PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/stb_image_impl.cpp)
-        target_compile_definitions(CBTTerrainTests PRIVATE GE_HAVE_STB)
-        if(TARGET stb::stb)
-            target_link_libraries(CBTTerrainTests PRIVATE stb::stb)
-        endif()
+        # generator: splice Logger, Memory and Image (whose decode SkyRenderer calls)
+        # in directly, as the Rendering tests do.
+        target_sources(CBTTerrainTests PRIVATE $<TARGET_OBJECTS:Logger> $<TARGET_OBJECTS:Memory>
+            $<TARGET_OBJECTS:Image>)
         target_compile_definitions(CBTTerrainTests PRIVATE
             CBT_SHADER_OUTPUT_DIR="${CBT_SHADER_OUTPUT_DIR}"
             CBT_SHADER_SOURCE_DIR="${CBT_SHADER_DIR}"

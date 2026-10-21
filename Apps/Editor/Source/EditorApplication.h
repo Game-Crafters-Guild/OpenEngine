@@ -23,6 +23,7 @@
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Panels/PlayModeChangeReviewModal.h"
 #include "Editor/RenderGraphTickRegistry.h"
+#include "Editor/Registries/StatusBarItemRegistry.h"
 #include "EditorVideoPlayerController.h"
 #include "Startup/EditorSessionDescriptor.h"
 #include "JobSystem/TaskHandle.h"
@@ -84,7 +85,9 @@ class MovieRecorderController;
 class PlayModeManager;
 class GameViewPointerLock;
 class RecipeControllers;
+class ScriptStatusIndicator;
 class UniversalSearchController;
+class DiagnosticShortcuts;
 enum class PlayModeState : std::uint8_t;
 namespace Telemetry
 {
@@ -394,6 +397,8 @@ class EditorApplication : public Application
     // were wired to; Update() re-wires when the engine workspace root changes
     // (project open/switch).
     std::filesystem::path m_WiredProjectRoot;
+    // The bottom bar's scripts status (C# and C++); polled for the C# side in Update().
+    std::unique_ptr<Editor::ScriptStatusIndicator> m_ScriptStatus;
     uint32_t m_StartupFrameCount = 0;
     // The startup preloads (a compute job for the UI assets, an "Engine startup" channel
     // job for the shader packages); OnShutdown waits for both before teardown.
@@ -412,6 +417,9 @@ class EditorApplication : public Application
 
     // Global search/command palette (provider, dialog, registrations).
     std::unique_ptr<Editor::UniversalSearchController> m_UniversalSearch;
+
+    // F2 CPU profiler and F3 UI Demo, as Editor.Global actions a game in Play can take first.
+    std::unique_ptr<Editor::DiagnosticShortcuts> m_DiagnosticShortcuts;
 
     std::filesystem::path m_AssetsDirectory;
 
@@ -477,6 +485,10 @@ class EditorApplication : public Application
     // EditorContext. Drained once per window per frame; the application never
     // learns what is in it.
     Editor::RenderGraphTickRegistry m_RenderGraphTicks;
+
+    // The status bar's registered items, updated every frame; the application never learns
+    // what they are.
+    Editor::StatusBarItemRegistry m_StatusBarItems;
 
     // Generic "exit after N frames" (applies even without UI replay).
     std::optional<std::uint64_t> m_ExitAfterFrames;
@@ -549,10 +561,15 @@ class EditorApplication : public Application
     void TickPlayFullscreenFocus();
     void BindPlayFullscreenChangedHandler(Platform::Window& window);
 
-    // Persisted layout presets (Editor-global per-user settings).
+    // Layout presets, persisted in the project's shared settings.
     void LoadLayoutPresetsFromPreferences();
     void SaveLayoutPresetsToPreferences() const;
     void OnLayoutPresetRestoreFailed();
+    // The working layout, persisted per user and per project
+    // (Editor::WorkingLayoutPersistence). Restore runs after the active preset
+    // is applied and replaces it when a usable working layout is saved.
+    void RestoreWorkingLayout(bool rebuildDockspace);
+    void SaveWorkingLayout();
 
     // Generic deferred action runners used to move callback-triggered work to
     // stable points in the frame. Payload-specific handling stays in editor code.
@@ -626,6 +643,8 @@ class EditorApplication : public Application
 
     /// Unmount torn-off panels without restoring tabs. Layout apply places them.
     void DismissTornOffPanelsForLayoutRestore();
+    /// Panels shown outside the main dock: in-canvas frames and separate OS windows.
+    std::vector<std::string> SeparateWindowPanelIds() const;
 
     void QueueOpenInternalFile(std::filesystem::path path);
     void FlushPreUiDeferredActions();

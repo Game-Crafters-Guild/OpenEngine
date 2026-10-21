@@ -54,6 +54,8 @@ struct ParticleVariant
     bool Clustered = false;
     bool Emission = false;
     int Packing = 0;
+    // The fog pass keywords the late transparent pass adds (HeightFog, VolumetricFog), on a clustered variant.
+    MaterialKeyword Fog = MaterialKeyword::None;
 };
 
 std::vector<ParticleVariant> EveryParticleVariant()
@@ -100,7 +102,7 @@ MaterialBuildResult BuildParticleVariant(const ParticleVariant& variant)
     ctx.CacheRoot = std::filesystem::temp_directory_path() / ("ge_particle_shader_" + std::to_string(variant.Lighting) +
                                                               std::to_string(variant.Textured) + std::to_string(variant.Clustered));
     auto result = BuildMaterialToShaderPackage(doc, ctx.AdapterShaderDir / "Particle.material",
-        "ParticleTest", ctx, ShaderSourceKind::SpirV, variant.Clustered ? MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL
+        "ParticleTest", ctx, ShaderSourceKind::SpirV, variant.Clustered ? MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL | variant.Fog
                                                     : MaterialKeyword::Instanced,
         variant.Textured ? VertexAttributeFlags::StandardMeshWithTangent | VertexAttributeFlags::HasColor | VertexAttributeFlags::HasUV1 |
                            VertexAttributeFlags::HasUV2 | VertexAttributeFlags::HasUV3 | VertexAttributeFlags::HasUV4 | VertexAttributeFlags::HasUV5 |
@@ -246,6 +248,68 @@ TEST(ParticleShaderCompose, NoDerivativeReadFollowsADiscard)
     }
     EXPECT_EQ(unlitDiscarding, unlit) << "positive control: every unlit particle fragment variant discards";
     EXPECT_EQ(litDiscarding, 0u) << "a lit particle fragment variant discards";
+}
+
+namespace
+{
+// A standard surface material in `alphaMode`, compiled for the world pass with the fog keywords.
+MaterialBuildResult BuildFoggedStandardMaterial(MaterialAlphaMode alphaMode, MaterialKeyword fog)
+{
+    MaterialDocument doc;
+    doc.materialName = "Fogged standard";
+    doc.lightingModel = "StandardPBR";
+    doc.alphaMode = alphaMode;
+    MaterialBuildContext ctx;
+    ctx.AdapterShaderDir = Tests::GetAdapterShaderDir();
+    ctx.PackageShaderDirs = {ctx.AdapterShaderDir};
+    ctx.CacheRoot = std::filesystem::temp_directory_path() /
+                    ("ge_fogged_standard_" + std::to_string(static_cast<int>(alphaMode)));
+    auto result = BuildMaterialToShaderPackage(
+        doc, ctx.AdapterShaderDir / "FoggedStandard.material", "FoggedStandard", ctx, ShaderSourceKind::SpirV,
+        MaterialKeyword::Instanced | MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL | fog,
+        VertexAttributeFlags::StandardMeshWithTangent);
+    std::filesystem::remove_all(ctx.CacheRoot);
+    return result;
+}
+} // namespace
+
+// The fog is applied after a surface may have discarded (an alpha-tested opaque, a trail's zero end), so
+// it reads no derivative: the sky backdrop, the froxel volume and the irradiance cube are sampled at an
+// explicit level. Every colour variant that takes the fog is read, alpha-tested opaques included.
+TEST(ParticleShaderCompose, NoDerivativeReadFollowsADiscardInAFoggedVariant)
+{
+    RestoreProfile restoreProfile;
+    SetCompatShaderProfile(false);
+    constexpr MaterialKeyword kBothFogs = MaterialKeyword::HeightFog | MaterialKeyword::VolumetricFog;
+    size_t discarding = 0;
+    for (ParticleVariant variant : EveryParticleVariant())
+    {
+        if (variant.Compat || !variant.Clustered)
+            continue;
+        variant.Fog = kBothFogs;
+        SCOPED_TRACE(Describe(variant) + " with both fogs");
+        const auto result = BuildParticleVariant(variant);
+        for (const auto& error : result.errors) ADD_FAILURE() << error;
+        ASSERT_TRUE(result.success);
+        const DiscardOrder order = ReadDiscardOrder(result.package->stageBytes.at("fs"));
+        EXPECT_EQ(order.DerivativeReadsAfterFirstDiscard, 0)
+            << "a derivative, or a sample or level query that reads one, follows a discard";
+        discarding += order.Discards ? 1u : 0u;
+    }
+    for (MaterialAlphaMode alphaMode : {MaterialAlphaMode::Opaque, MaterialAlphaMode::Mask, MaterialAlphaMode::Blend})
+    {
+        SCOPED_TRACE("standard surface, alpha mode " + std::to_string(static_cast<int>(alphaMode)));
+        const auto result = BuildFoggedStandardMaterial(alphaMode, kBothFogs);
+        for (const auto& error : result.errors) ADD_FAILURE() << error;
+        ASSERT_TRUE(result.success);
+        const DiscardOrder order = ReadDiscardOrder(result.package->stageBytes.at("fs"));
+        EXPECT_EQ(order.DerivativeReadsAfterFirstDiscard, 0)
+            << "a derivative, or a sample or level query that reads one, follows a discard";
+        if (alphaMode == MaterialAlphaMode::Mask)
+            EXPECT_TRUE(order.Discards) << "positive control: the alpha-tested variant discards";
+        discarding += order.Discards ? 1u : 0u;
+    }
+    EXPECT_GT(discarding, 1u) << "positive control: the fogged variants read include discarding ones";
 }
 
 #include "Rendering/Core/Device.h"

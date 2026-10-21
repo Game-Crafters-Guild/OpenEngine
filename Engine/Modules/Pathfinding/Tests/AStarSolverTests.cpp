@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <random>
 #include <vector>
 
 using namespace GameEngine;
@@ -316,4 +317,64 @@ TEST_F(AStarSolverTest, SlopeBlocksPath)
     std::vector<uint32> path;
     bool found = SolveInWindow(solver, grid, 0, 2, 0, 0.0f, 0, path);
     EXPECT_FALSE(found) << "Path should be blocked by slope limit";
+}
+
+// One solver reused across many solves, on grids whose cells change between solves and whose
+// sizes alternate (the buffers shrink and grow), returns what a fresh solver returns every time.
+TEST_F(AStarSolverTest, ReusedSolverMatchesAFreshSolver)
+{
+    GridMap smallGrid(MakeAStarSettings(12, 12));
+    GridMap largeGrid(MakeAStarSettings(32, 32));
+    std::mt19937 random(7);
+
+    uint32 foundCount = 0;
+    for (uint32 query = 0; query < 400; ++query)
+    {
+        GridMap& grid = (query % 3 == 0) ? smallGrid : largeGrid;
+        const uint32 side = grid.GetSettings().Width;
+        grid.SetCellBlocked(static_cast<uint32>(random() % side), static_cast<uint32>(random() % side),
+                            random() % 4 == 0);
+
+        const uint32 cellCount = side * side;
+        const uint32 start = static_cast<uint32>(random() % cellCount);
+        const uint32 end = static_cast<uint32>(random() % cellCount);
+        const uint32 radius = (query % 4 == 0) ? 1u : 0u;
+
+        AStarSolver freshSolver;
+        std::vector<uint32> freshPath;
+        const bool freshFound = SolveInWindow(freshSolver, grid, start, end, 0, 0.0f, radius, freshPath);
+        std::vector<uint32> reusedPath;
+        const bool reusedFound = SolveInWindow(m_Solver, grid, start, end, 0, 0.0f, radius, reusedPath);
+
+        ASSERT_EQ(reusedFound, freshFound) << "query " << query;
+        ASSERT_EQ(reusedPath, freshPath) << "query " << query;
+        foundCount += freshFound ? 1u : 0u;
+    }
+    EXPECT_GT(foundCount, 100u) << "most queries find a path, so the comparison covers searches";
+}
+
+// The visit stamps wrap after 65,535 solves. A cell last visited 65,535 solves ago, and a cell
+// never visited, both read as unvisited in the solve after the wrap.
+TEST_F(AStarSolverTest, VisitStampWrapReadsEveryCellAsUnvisited)
+{
+    constexpr uint32 kSolvesPerStampWrap = 65536;
+    GridMap grid(MakeAStarSettings(16, 16));
+    // A two-cell pocket in the corner: a solve inside it visits only (0,0) and (1,0).
+    grid.SetCellBlocked(2, 0, true);
+    grid.SetCellBlocked(0, 1, true);
+    grid.SetCellBlocked(1, 1, true);
+    grid.SetCellBlocked(2, 1, true);
+
+    const uint32 start = grid.CellIndex(8, 8);
+    std::vector<uint32> path;
+    ASSERT_TRUE(SolveInWindow(m_Solver, grid, start, grid.CellIndex(9, 8), 0, 0.0f, 0, path));
+    for (uint32 solve = 2; solve < kSolvesPerStampWrap; ++solve)
+        ASSERT_TRUE(SolveInWindow(m_Solver, grid, grid.CellIndex(0, 0), grid.CellIndex(1, 0), 0, 0.0f, 0, path));
+
+    const uint32 farEnd = grid.CellIndex(15, 15);
+    AStarSolver freshSolver;
+    std::vector<uint32> freshPath;
+    ASSERT_TRUE(SolveInWindow(freshSolver, grid, start, farEnd, 0, 0.0f, 0, freshPath));
+    ASSERT_TRUE(SolveInWindow(m_Solver, grid, start, farEnd, 0, 0.0f, 0, path));
+    EXPECT_EQ(path, freshPath);
 }

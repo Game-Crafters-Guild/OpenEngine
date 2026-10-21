@@ -212,6 +212,16 @@ textarea {
 .bottom-toolbar-status.is-building { color: #C8C8C8; }
 .bottom-toolbar-status.is-ok       { color: #5FB85F; }
 .bottom-toolbar-status.is-fail     { color: #E0A030; }
+/* Registered status items (Editor::StatusBarItemRegistry): one label each, in registration order,
+   left of the fixed status labels; an item with no text is hidden and takes no space. */
+.bottom-toolbar-status-items {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+}
+.bottom-toolbar-status-item {
+	margin-right: 12px;
+}
 /* Build-configuration tag on the left side of the footer. Present in every configuration, so a
    missing tag reads as a stale or broken build rather than "this one must be Release". */
 .bottom-toolbar-build-config {
@@ -268,8 +278,10 @@ button.icon-button.dragging,
 
 /* Opens the live panel inventory from the top toolbar. */
 .menulist-icon {
-	background-image: url("editor:Icons/menulist.png");
-	background-size: contain;
+	background-image: url("editor:Icons/menulist.svg");
+	/* 4/3 of the 16-unit art: its 3-unit line spacing becomes 4 whole pixels, so the
+	   three lines land on the same sub-pixel offset and draw at the same width. */
+	background-size: 21.333px 21.333px;
 	background-repeat: no-repeat;
 	background-position: center;
 	opacity: 0.35;
@@ -298,7 +310,7 @@ button.drag-ghost,
 
 /* Add layout button (plus icon) - must come after icon-button to override */
 .plus-icon {
-	background-image: url("editor:Icons/plus.png");
+	background-image: url("editor:Icons/plus.svg");
 	/* Keep the 32px source artwork compact inside the 24px button hit target. */
 	background-size: 16px 16px !important;
 	background-repeat: no-repeat;
@@ -321,7 +333,7 @@ button.drag-ghost,
 }
 
 .settings-icon {
-	background-image: url("editor:Icons/settings.png");
+	background-image: url("editor:Icons/settings.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -344,7 +356,7 @@ button.settings-icon:hover,
 }
 
 .xclose-icon {
-	background-image: url("editor:Icons/xclose.png");
+	background-image: url("editor:Icons/xclose.svg");
 	background-size: 16px 16px;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -363,7 +375,7 @@ button.xclose-icon:hover,
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
 .fullscreen-icon {
-	background-image: url("editor:Icons/fullscreen.png");
+	background-image: url("editor:Icons/fullscreen.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -386,7 +398,7 @@ button.fullscreen-icon.pressed,
 }
 
 .stop-icon {
-	background-image: url("editor:Icons/stop.png");
+	background-image: url("editor:Icons/stop.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -401,7 +413,7 @@ button.stop-icon:hover,
 }
 
 .play-icon {
-	background-image: url("editor:Icons/play.png");
+	background-image: url("editor:Icons/play.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -409,7 +421,7 @@ button.stop-icon:hover,
 }
 
 .play-backward-icon {
-	background-image: url("editor:Icons/play-backward.png");
+	background-image: url("editor:Icons/play-backward.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -417,7 +429,7 @@ button.stop-icon:hover,
 }
 
 .pause-icon {
-	background-image: url("editor:Icons/pause.png");
+	background-image: url("editor:Icons/pause.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -434,7 +446,7 @@ button.play-icon:active,
 button.play-icon.pressed,
 .button.play-icon.pressed {
 	opacity: 1.0;
-	background-image: url("editor:Icons/playactive.png");
+	background-image: url("editor:Icons/playactive.svg");
 	background-color: transparent !important;
 }
 
@@ -448,7 +460,7 @@ button.play-backward-icon:active,
 button.play-backward-icon.pressed,
 .button.play-backward-icon.pressed {
 	opacity: 1.0;
-	background-image: url("editor:Icons/playbackwardactive.png");
+	background-image: url("editor:Icons/playbackwardactive.svg");
 	background-color: transparent !important;
 }
 
@@ -459,7 +471,7 @@ button.pause-icon:hover,
 button.pause-icon:active,
 .button.pause-icon:active {
 	opacity: 1.0;
-	background-image: url("editor:Icons/pause_on.png");
+	background-image: url("editor:Icons/pause_on.svg");
 	background-color: transparent !important;
 }
 
@@ -467,12 +479,12 @@ button.pause-icon:active,
 button.pause-icon.pressed,
 .button.pause-icon.pressed {
 	opacity: 1.0;
-	background-image: url("editor:Icons/pause_on.png");
+	background-image: url("editor:Icons/pause_on.svg");
 	background-color: transparent !important;
 }
 
 .node-icon {
-	background-image: url("editor:Icons/node.png");
+	background-image: url("editor:Icons/node.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -492,7 +504,7 @@ button.node-icon:hover,
 }
 
 .loop-icon {
-	background-image: url("editor:Icons/looptime.png");
+	background-image: url("editor:Icons/looptime.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -518,11 +530,11 @@ button.loop-icon.secondary.active,
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/looptime.png");
+	background-image: url("editor:Icons/looptime.svg");
 }
 
 .sync-playhead-icon {
-	background-image: url("editor:Icons/sync-playhead.png");
+	background-image: url("editor:Icons/sync-playhead.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -550,7 +562,7 @@ button.sync-playhead-icon.secondary.active,
 }
 
 .record-icon {
-	background-image: url("editor:Icons/record.png");
+	background-image: url("editor:Icons/record.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -572,7 +584,7 @@ button.record-icon.pressed,
 	border-color: transparent !important;
 }
 
-/* Recording state: use recording.png (red icon) */
+/* Recording state: use recording.svg (red icon) */
 .record-icon.active,
 button.record-icon.active,
 .button.record-icon.active,
@@ -581,7 +593,7 @@ button.record-icon.secondary.active,
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
-	background-image: url("editor:Icons/recording.png");
+	background-image: url("editor:Icons/recording.svg");
 }
 
 /* VHS transport uses the familiar red VCR record dot even while idle. */
@@ -590,7 +602,7 @@ button.toolbar-record-icon.vhs-record-red,
 .button.toolbar-record-icon.vhs-record-red {
 	opacity: 1.0;
 	background-color: transparent !important;
-	background-image: url("editor:Icons/recording_on_button.png");
+	background-image: url("editor:Icons/recording_on_button.svg");
 	background-position: center;
 	background-repeat: no-repeat;
 	background-size: contain;
@@ -612,12 +624,12 @@ button.toolbar-record-icon.vhs-record-red,
 }
 
 .vhs-rewind-icon {
-	background-image: url("editor:Icons/rewind.png");
+	background-image: url("editor:Icons/rewind.svg");
 	opacity: 0.35;
 }
 
 .vhs-fast-forward-icon {
-	background-image: url("editor:Icons/fastforward.png");
+	background-image: url("editor:Icons/fastforward.svg");
 	opacity: 0.35;
 }
 
@@ -636,7 +648,7 @@ button.toolbar-record-icon.vhs-record-red,
 }
 
 .save-icon {
-	background-image: url("editor:Icons/save.png");
+	background-image: url("editor:Icons/save.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -668,7 +680,7 @@ button.save-icon:hover,
    ====================================== */
 
 .copy-icon {
-	background-image: url("editor:Icons/copy.png");
+	background-image: url("editor:Icons/copy.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -676,7 +688,7 @@ button.save-icon:hover,
 }
 
 .paste-icon {
-	background-image: url("editor:Icons/paste.png");
+	background-image: url("editor:Icons/paste.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -684,7 +696,7 @@ button.save-icon:hover,
 }
 
 .eye-icon {
-	background-image: url("editor:Icons/eye.png");
+	background-image: url("editor:Icons/eye.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -692,7 +704,7 @@ button.save-icon:hover,
 }
 
 .fold-icon {
-	background-image: url("editor:Icons/fold.png");
+	background-image: url("editor:Icons/fold.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -700,7 +712,7 @@ button.save-icon:hover,
 }
 
 .expand-outline-icon {
-	background-image: url("editor:Icons/expand_outline.png");
+	background-image: url("editor:Icons/expand_outline.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -708,7 +720,7 @@ button.save-icon:hover,
 }
 
 .contract-outline-icon {
-	background-image: url("editor:Icons/contract_outline.png");
+	background-image: url("editor:Icons/contract_outline.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -716,7 +728,7 @@ button.save-icon:hover,
 }
 
 .folder-open-icon {
-	background-image: url("editor:Icons/folder_open.png");
+	background-image: url("editor:Icons/folder_open.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -724,7 +736,7 @@ button.save-icon:hover,
 }
 
 .frame-all-icon {
-	background-image: url("editor:Icons/frame_all.png");
+	background-image: url("editor:Icons/frame_all.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -732,7 +744,7 @@ button.save-icon:hover,
 }
 
 .frame-selected-curves-icon {
-	background-image: url("editor:Icons/frame selected curves.png");
+	background-image: url("editor:Icons/frame selected curves.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -740,7 +752,7 @@ button.save-icon:hover,
 }
 
 .fit-height-icon {
-	background-image: url("editor:Icons/fit_heigth.png");
+	background-image: url("editor:Icons/fit_heigth.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -748,7 +760,7 @@ button.save-icon:hover,
 }
 
 .snap-time-icon {
-	background-image: url("editor:Icons/snap value.png");
+	background-image: url("editor:Icons/snap value.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -756,7 +768,7 @@ button.save-icon:hover,
 }
 
 .snap-value-icon {
-	background-image: url("editor:Icons/snap time.png");
+	background-image: url("editor:Icons/snap time.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -764,7 +776,7 @@ button.save-icon:hover,
 }
 
 .linear-curve-icon {
-	background-image: url("editor:Icons/linear_curve.png");
+	background-image: url("editor:Icons/linear_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -772,7 +784,7 @@ button.save-icon:hover,
 }
 
 .stepped-curve-icon {
-	background-image: url("editor:Icons/stepped_curve.png");
+	background-image: url("editor:Icons/stepped_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -780,7 +792,7 @@ button.save-icon:hover,
 }
 
 .spline-curve-icon {
-	background-image: url("editor:Icons/spline_curve.png");
+	background-image: url("editor:Icons/spline_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -788,7 +800,7 @@ button.save-icon:hover,
 }
 
 .smooth-lowpass-icon {
-	background-image: url("editor:Icons/simplyfy_curve.png");
+	background-image: url("editor:Icons/simplyfy_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -796,7 +808,7 @@ button.save-icon:hover,
 }
 
 .smooth-peak-icon {
-	background-image: url("editor:Icons/smooth_peak.png");
+	background-image: url("editor:Icons/smooth_peak.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -804,7 +816,7 @@ button.save-icon:hover,
 }
 
 .simplify-curve-icon {
-	background-image: url("editor:Icons/smooth_curve.png");
+	background-image: url("editor:Icons/smooth_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -812,7 +824,7 @@ button.save-icon:hover,
 }
 
 .draw-curve-icon {
-	background-image: url("editor:Icons/draw_curve.png");
+	background-image: url("editor:Icons/draw_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -820,7 +832,7 @@ button.save-icon:hover,
 }
 
 .retime-icon {
-	background-image: url("editor:Icons/retime.png");
+	background-image: url("editor:Icons/retime.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -828,7 +840,7 @@ button.save-icon:hover,
 }
 
 .draw-curve-icon {
-	background-image: url("editor:Icons/draw_curve.png");
+	background-image: url("editor:Icons/draw_curve.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -843,7 +855,7 @@ button.draw-curve-icon:hover,
 }
 
 .ease-ease-icon {
-	background-image: url("editor:Icons/ease_ease.png");
+	background-image: url("editor:Icons/ease_ease.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -851,7 +863,7 @@ button.draw-curve-icon:hover,
 }
 
 .ease-out-icon {
-	background-image: url("editor:Icons/ease_out.png");
+	background-image: url("editor:Icons/ease_out.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -859,7 +871,7 @@ button.draw-curve-icon:hover,
 }
 
 .ease-in-icon {
-	background-image: url("editor:Icons/easy_in.png");
+	background-image: url("editor:Icons/easy_in.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -867,7 +879,7 @@ button.draw-curve-icon:hover,
 }
 
 .toggle-keytool-icon {
-	background-image: url("editor:Icons/toggle_keytool.png");
+	background-image: url("editor:Icons/toggle_keytool.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -875,7 +887,7 @@ button.draw-curve-icon:hover,
 }
 
 .add-key-marker-icon {
-	background-image: url("editor:Icons/add_key_marker.png");
+	background-image: url("editor:Icons/add_key_marker.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -883,7 +895,7 @@ button.draw-curve-icon:hover,
 }
 
 .add-noise-icon {
-	background-image: url("editor:Icons/add_noise.png");
+	background-image: url("editor:Icons/add_noise.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -891,7 +903,7 @@ button.draw-curve-icon:hover,
 }
 
 .euler-filter-icon {
-	background-image: url("editor:Icons/euler_filter.png");
+	background-image: url("editor:Icons/euler_filter.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -899,7 +911,7 @@ button.draw-curve-icon:hover,
 }
 
 .lattice-icon {
-	background-image: url("editor:Icons/lattice.png");
+	background-image: url("editor:Icons/lattice.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -907,7 +919,7 @@ button.draw-curve-icon:hover,
 }
 
 .bone-icon {
-	background-image: url("editor:Icons/bone_icon.png");
+	background-image: url("editor:Icons/bone_icon.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -915,7 +927,7 @@ button.draw-curve-icon:hover,
 }
 
 .break-tangents-icon {
-	background-image: url("editor:Icons/break_tangent.png");
+	background-image: url("editor:Icons/break_tangent.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -923,7 +935,7 @@ button.draw-curve-icon:hover,
 }
 
 .unify-tangents-icon {
-	background-image: url("editor:Icons/unify_tangent.png");
+	background-image: url("editor:Icons/unify_tangent.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -945,7 +957,7 @@ button.buffer-snapshot-icon,
 }
 
 .frame-playback-range-icon {
-	background-image: url("editor:Icons/FramePlaybackRange.png");
+	background-image: url("editor:Icons/FramePlaybackRange.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -953,7 +965,7 @@ button.buffer-snapshot-icon,
 }
 
 .star-icon {
-	background-image: url("editor:Icons/star.png");
+	background-image: url("editor:Icons/star.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1023,7 +1035,7 @@ button.star-icon:hover {
 }
 
 .box-icon {
-	background-image: url("editor:Icons/box.png");
+	background-image: url("editor:Icons/box.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1038,7 +1050,7 @@ button.box-icon:hover,
 }
 
 .computer-icon {
-	background-image: url("editor:Icons/computer.png");
+	background-image: url("editor:Icons/computer.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1053,7 +1065,7 @@ button.computer-icon:hover,
 }
 
 .link-icon {
-	background-image: url("editor:Icons/link.png");
+	background-image: url("editor:Icons/link.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1068,7 +1080,7 @@ button.link-icon:hover,
 }
 
 .pin-icon {
-	background-image: url("editor:Icons/pin.png");
+	background-image: url("editor:Icons/pin.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1083,7 +1095,7 @@ button.pin-icon:hover,
 }
 
 .info-icon {
-	background-image: url("editor:Icons/info.png");
+	background-image: url("editor:Icons/info.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1098,7 +1110,7 @@ button.info-icon:hover,
 }
 
 .game-controller-icon {
-	background-image: url("editor:Icons/game-controller.png");
+	background-image: url("editor:Icons/game-controller.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1113,7 +1125,7 @@ button.game-controller-icon:hover,
 }
 
 .mixer-icon {
-	background-image: url("editor:Icons/mixer.png");
+	background-image: url("editor:Icons/mixer.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1128,7 +1140,7 @@ button.mixer-icon:hover,
 }
 
 .brush-icon {
-	background-image: url("editor:Icons/brush.png");
+	background-image: url("editor:Icons/brush.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1143,7 +1155,7 @@ button.brush-icon:hover,
 }
 
 .eraser-icon {
-	background-image: url("editor:Icons/eraser.png");
+	background-image: url("editor:Icons/eraser.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1158,7 +1170,7 @@ button.eraser-icon:hover,
 }
 
 .gizmo-rotate-icon {
-	background-image: url("editor:Icons/GizmoRotate.png");
+	background-image: url("editor:Icons/GizmoRotate.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1173,7 +1185,7 @@ button.gizmo-rotate-icon:hover,
 }
 
 .eyedropper-icon {
-	background-image: url("editor:Icons/colorpicker.png");
+	background-image: url("editor:Icons/colorpicker.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1188,7 +1200,7 @@ button.eyedropper-icon:hover,
 }
 
 .arrow-up-icon {
-	background-image: url("editor:Icons/ArrowUp.png");
+	background-image: url("editor:Icons/ArrowUp.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1203,7 +1215,7 @@ button.arrow-up-icon:hover,
 }
 
 .arrow-down-icon {
-	background-image: url("editor:Icons/ArrowDown.png");
+	background-image: url("editor:Icons/ArrowDown.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1218,7 +1230,7 @@ button.arrow-down-icon:hover,
 }
 
 .trash-icon {
-	background-image: url("editor:Icons/trash.png");
+	background-image: url("editor:Icons/trash.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1233,7 +1245,7 @@ button.trash-icon:hover,
 }
 
 .stats-icon {
-	background-image: url("editor:Icons/stats.png");
+	background-image: url("editor:Icons/stats.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1248,7 +1260,7 @@ button.stats-icon:hover,
 }
 
 .pulse-icon {
-	background-image: url("editor:Icons/pulse.png");
+	background-image: url("editor:Icons/pulse.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1263,7 +1275,7 @@ button.pulse-icon:hover,
 }
 
 .pie-chart-icon {
-	background-image: url("editor:Icons/pie-chart.png");
+	background-image: url("editor:Icons/pie-chart.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1278,7 +1290,7 @@ button.pie-chart-icon:hover,
 }
 
 .film-icon {
-	background-image: url("editor:Icons/film.png");
+	background-image: url("editor:Icons/film.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1293,7 +1305,7 @@ button.film-icon:hover,
 }
 
 .alarm-icon {
-	background-image: url("editor:Icons/alarm.png");
+	background-image: url("editor:Icons/alarm.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1308,7 +1320,7 @@ button.alarm-icon:hover,
 }
 
 .alert-circle-icon {
-	background-image: url("editor:Icons/alert-circle.png");
+	background-image: url("editor:Icons/alert-circle.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1323,7 +1335,7 @@ button.alert-circle-icon:hover,
 }
 
 .hardware-chip-icon {
-	background-image: url("editor:Icons/hardware-chip.png");
+	background-image: url("editor:Icons/hardware-chip.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1338,7 +1350,7 @@ button.hardware-chip-icon:hover,
 }
 
 .timer-icon {
-	background-image: url("editor:Icons/timer.png");
+	background-image: url("editor:Icons/timer.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1353,7 +1365,7 @@ button.timer-icon:hover,
 }
 
 .checkmark-icon {
-	background-image: url("editor:Icons/todolist.png");
+	background-image: url("editor:Icons/todolist.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1374,7 +1386,7 @@ button.checkmark-icon:hover,
 }
 
 .checkmark-circle-icon {
-	background-image: url("editor:Icons/checkmark-circle.png");
+	background-image: url("editor:Icons/checkmark-circle.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1393,7 +1405,7 @@ button.checkmark-circle-icon:hover,
 }
 
 .script-icon {
-	background-image: url("editor:Icons/log.png");
+	background-image: url("editor:Icons/log.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1413,7 +1425,7 @@ button.script-icon:hover,
 }
 
 .book-icon {
-	background-image: url("editor:Icons/book.png");
+	background-image: url("editor:Icons/book.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1433,7 +1445,7 @@ button.book-icon:hover,
 }
 
 .undo-icon {
-	background-image: url("editor:Icons/undo.png");
+	background-image: url("editor:Icons/undo.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1454,7 +1466,7 @@ button.undo-icon:hover,
 
 /* Grid and List view toggle buttons - matching top toolbar button styling */
 .grid-view-icon {
-	background-image: url("editor:Icons/grid.png");
+	background-image: url("editor:Icons/grid.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1497,7 +1509,7 @@ button.grid-view-icon.active,
 }
 
 .list-view-icon {
-	background-image: url("editor:Icons/column-horizontal.png");
+	background-image: url("editor:Icons/column-horizontal.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1723,19 +1735,19 @@ button.layout-button,
 
 /* Layout icon images - scoped to layout buttons only */
 .layout-button.layout-left-icon { 
-	background-image: url("editor:Icons/layout-left.png"); 
+	background-image: url("editor:Icons/layout-left.svg"); 
 	opacity: 0.5;
 }
 .layout-button.layout-right-icon { 
-	background-image: url("editor:Icons/layout-right.png"); 
+	background-image: url("editor:Icons/layout-right.svg"); 
 	opacity: 0.5;
 }
 .layout-button.layout-3split-icon { 
-	background-image: url("editor:Icons/layout3split.png"); 
+	background-image: url("editor:Icons/layout3split.svg"); 
 	opacity: 0.5;
 }
 .layout-button.layout-top-icon { 
-	background-image: url("editor:Icons/layouttop.png"); 
+	background-image: url("editor:Icons/layouttop.svg"); 
 	opacity: 0.5;
 }
 
@@ -1931,13 +1943,13 @@ button.layout-button.active.pressed,
 	/* Overlap the shared edge so the controls form one continuous pill. */
 	right: 19px;
 	border-radius: var(--ui_radius_sm) 0 0 var(--ui_radius_sm);
-	background-image: url("editor:Icons/fold-left.png");
+	background-image: url("editor:Icons/fold-left.svg");
 }
 
 .dock-tab-scroll-right {
 	right: 0;
 	border-radius: 0 var(--ui_radius_sm) var(--ui_radius_sm) 0;
-	background-image: url("editor:Icons/fold-right.png");
+	background-image: url("editor:Icons/fold-right.svg");
 }
 
 .dock-tab-scroll:hover {

@@ -27,13 +27,6 @@ ge_set_output_tests(UserSystemOrderTests)
 ge_stage_runtime_dependencies(UserSystemOrderTests)
 add_test(NAME UserSystemOrderTests COMMAND $<TARGET_FILE:UserSystemOrderTests>)
 
-# dotnet + the ComponentScanner DLL feed the C10 scan-path test (a macro-free
-# fixture auto-detected by the scanner). DOTNET_EXECUTABLE is already cached by the
-# engine build (the scanner is mandatory there); re-find defensively in case this
-# subdir is configured standalone. The scanner DLL is built transitively when the
-# test links Engine (Engine's generated reflection TU depends on the scanner).
-find_program(DOTNET_EXECUTABLE dotnet)
-
 # ---------------------------------------------------------------------------
 # Probe DLL — stand-in for a Phase-2 user module.
 #
@@ -233,6 +226,13 @@ set_target_properties(NativeScriptManagerTests PROPERTIES UNITY_BUILD OFF)
 # source that can name this binary's configuration. Preprocessor state cannot:
 # DebugFast defines neither _DEBUG nor NDEBUG. Same definition the Editor gets.
 target_compile_definitions(NativeScriptManagerTests PRIVATE GE_BUILD_CONFIG="$<CONFIG>")
+# The component scanner CMakeInvoker runs, for the scan of a project under a non-ASCII path.
+if(TARGET ComponentScanner)
+    add_dependencies(NativeScriptManagerTests ComponentScanner)
+    target_compile_definitions(NativeScriptManagerTests PRIVATE GE_COMPONENT_SCANNER_EXE="$<TARGET_FILE:ComponentScanner>")
+else()
+    target_compile_definitions(NativeScriptManagerTests PRIVATE GE_COMPONENT_SCANNER_EXE="${GE_COMPONENT_SCANNER_EXECUTABLE}")
+endif()
 # Mathematics + Types are header-only INTERFACE libs Engine does not re-export; the reflection
 # test needs their headers (Vector3/Quaternion/ColorLinear field types via MathReflectionTraits).
 target_link_libraries(NativeScriptManagerTests PRIVATE
@@ -242,7 +242,9 @@ target_include_directories(NativeScriptManagerTests PRIVATE
     # GltfTestFiles.h: in-memory glTF clips for AnimatorEventsAbiTests.
     ${CMAKE_SOURCE_DIR}/Engine/Tests
     # TestTempDir.h.
-    ${CMAKE_SOURCE_DIR}/Tests)
+    ${CMAKE_SOURCE_DIR}/Tests
+    # ShippedScriptSources.h: the export's C# decision, private to the engine's build code.
+    ${CMAKE_SOURCE_DIR}/Engine/Source/Engine/Build)
 
 # D1: blob (C#) components registered with a field schema through the scripting ABI —
 # scene round-trip, hot-reload layout migration, snapshot round-trip. The ABI entry points
@@ -317,8 +319,7 @@ workdir=${CMAKE_BINARY_DIR}/Tests/NativeScripting/c10work
 includes=$<TARGET_PROPERTY:Engine,INTERFACE_INCLUDE_DIRECTORIES>
 defs=$<TARGET_PROPERTY:Engine,INTERFACE_COMPILE_DEFINITIONS>
 globaldefs=GLM_FORCE_DEPTH_ZERO_TO_ONE;NOMINMAX;WIN32_LEAN_AND_MEAN;GE_DEBUG_INSTRUMENTATION=${GE_DEBUG_INSTRUMENTATION_VALUE}
-dotnet=${DOTNET_EXECUTABLE}
-scannerdll=${CMAKE_SOURCE_DIR}/Managed/ComponentScanner/bin/$<CONFIG>/net10.0/ComponentScanner.dll
+scanner=$<TARGET_FILE:ComponentScanner>
 ")
 
 add_test(NAME UserModuleBuildLoadTest

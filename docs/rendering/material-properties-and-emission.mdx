@@ -7,7 +7,7 @@ How gameplay code reads and writes a runtime material's properties, and how a st
 
 ## Setting material properties from code
 
-A runtime `Material` (`Engine/Include/Engine/Rendering/Material.h`) is owned by the `MaterialRegistry`; hold a `Material*` or a handle and never delete it yourself. It offers three ways to write its properties, all into the same aligned CPU property cache.
+A runtime `Material` (`Engine/Include/Engine/Rendering/Material.h`) is owned by the `MaterialRegistry`. Hold a `Material*` or a handle and never delete it yourself. It offers three ways to write its properties, all into the same aligned CPU property cache.
 
 ### Direct typed access
 
@@ -26,7 +26,7 @@ params.roughness = 0.3f;
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector` and `Material::SetColor`.
+No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector`, and `Material::SetColor`.
 :::
 
 ::::
@@ -47,7 +47,7 @@ material->SetParams(MySurfaceParams{.baseColor = {1, 0, 0, 1}, .roughness = 0.5f
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector` and `Material::SetColor`.
+No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector`, and `Material::SetColor`.
 :::
 
 ::::
@@ -55,7 +55,7 @@ No managed call reads or writes a material's properties yet; tracked as [OpenEng
 
 ### Named setters
 
-For editor tools, scripting and generic code.
+For editor tools, scripting, and generic code.
 
 :::::tabs
 ::::tab[C++]
@@ -71,17 +71,17 @@ material->SetColor("baseColor"_sid, red);
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector` and `Material::SetColor`.
+No managed call reads or writes a material's properties yet; tracked as [OpenEngine issue #17](https://github.com/Game-Crafters-Guild/OpenEngine/issues/17). The native calls are `Material::As<T>()`, `Material::SetParams<T>()`, `Material::SetFloat`, `Material::SetVector`, and `Material::SetColor`.
 :::
 
 ::::
 :::::
 
-The named setters find each property's offset from the shader's reflection data. Every parameter lane is a float `vec4`, so there is no integer setter. Any write marks the material dirty, and the renderer repacks the shared material parameter buffer on the next frame; a material has no GPU buffer of its own.
+The named setters find each property's offset from the shader's reflection data. Every parameter lane is a float `vec4`, so there is no integer setter. Any write marks the material dirty, and the renderer repacks the shared material parameter buffer on the next frame. A material has no GPU buffer of its own.
 
 ## Emission
 
-A standard surface emits `emissiveMap x emissive x emissionLuminance`, in the shape of OpenPBR's `emission_color x emission_luminance`. `emissionLuminance` is in nits: 203 nits is reference white and reads as scene-linear 1.0, so an emitter at 203 nits shows as white on an SDR display, and SDR clips brighter emitters while HDR output keeps their headroom. An unassigned `emissiveMap` reads as white, so the color alone drives emission. The defaults are a white `emissive` color and an `emissionLuminance` of 0, so a material that sets neither emits nothing; assigning an emissive map in the material inspector sets a zero luminance to 203 nits and a black color to white in the same edit, so the map shows at once. DDGI shades emissive hits with the same rule. The importers map their files onto it:
+A standard surface emits `emissiveMap x emissive x emissionLuminance`, in the shape of OpenPBR's `emission_color x emission_luminance`. `emissionLuminance` is in nits: 203 nits is reference white and reads as scene-linear 1.0, so an emitter at 203 nits shows as white on an SDR display, and SDR clips brighter emitters while HDR output keeps their headroom. An unassigned `emissiveMap` reads as white, so the color alone drives emission. The defaults are a white `emissive` color and an `emissionLuminance` of 0, so a material that sets neither emits nothing. Assigning an emissive map in the material inspector sets a zero luminance to 203 nits and a black color to white in the same edit, so the map shows at once. DDGI shades emissive hits with the same rule. The importers map their files onto it:
 
 | Source | `emissiveMap` | `emissive` | `emissionLuminance` |
 |---|---|---|---|
@@ -94,16 +94,9 @@ A standard surface emits `emissiveMap x emissive x emissionLuminance`, in the sh
 A physical emitter in nits goes through the view's exposure like every other light, so auto exposure that adapts to a bright scene darkens it: a lamp at 203 nits reads as white at night and almost black at noon. `emissiveExposureWeight` (the inspector's Emissive Exposure Weight, 0 to 1) sets how far a standard surface's emission follows the exposure. The emission reaching the tone mapper is the emission times `exposureweight`:
 
 - **1**, the default, is physical: the emission brightens and darkens with exposure like every light.
-- **0** shows the emission at its authored brightness whatever the exposure: a 203-nit sign reads as reference white at noon and at night. Use it for signs, screens, glows and stylized lamps that must stay readable.
+- **0** shows the emission at its authored brightness whatever the exposure: a 203-nit sign reads as reference white at noon and at night. Use it for signs, screens, glows, and stylized lamps that must stay readable.
 - Values between follow the exposure part of the way, interpolating in log exposure: 0.5 moves the emission one stop for every two stops the exposure moves.
 
 The weight changes how the surface itself looks, not the light it casts: global illumination (DDGI) sees the emission at its nits at every weight, so a weight-0 sign lights its surroundings as a real emitter of that brightness. Reflection probes store it the same way: a weight-0 emitter's reflections and bounce stay physical, so wherever screen-space reflection misses, its reflection on a glossy floor follows the exposure like a physical emitter's: in daylight it all but disappears while the sign holds, and at night it brightens with the exposure. The surface reads the view's exposure from the previous frame's metering, one frame behind the tone mapper, so during fast adaptation a weight-0 emitter can lag the exposure by a frame. On the first frame a view meters, no metered value exists yet: the surface divides by the view's static exposure while the tone mapper already applies the metered one, so a weight-0 emitter can dip or flash for that one frame.
 
-Auto exposure meters what is on screen, and the meter today sees the displayed value: an emitter with a weight below 1 enters the histogram at its exposure-divided brightness, so its contribution moves against the exposure instead of with it. A small sign does not matter, but one that fills much of the view pulls the exposure for everything else further than a physical emitter of the same displayed brightness would: in a measured scene, a weight-0 card filling half the view at noon drove the exposure to the camera's darkest limit (EV 18) where the same card at weight 1 brightened it by 2.2 stops, and one filling 85 % of the view at night ran the exposure from its brightest limit (EV 4) to its darkest, leaving everything but the card black. The meter settles without oscillating, and it lets go: once the emitter stops filling the view the exposure returns to where it was. A close-up of a screen or a cockpit full of displays is that case. How the meter should treat them (leave them out, meter them at their physical value, or meter only the part the weight lets through) is planned for evaluation after the release. The weight is a material parameter, not a keyword, and compiles no extra shader variants. Every importer brings emission in at weight 1, `KHR_materials_emissive_strength` included: showing an emitter whatever the exposure is a choice made in the material.
-
-## Changelog
-
-- 2026-10-13: Each property API shows its C# side: no binding yet, tracked as OpenEngine issue #17.
-- 2026-10-13: Converted from `docs/rendering/material-properties-and-emission.html`.
-- 2026-10-08: Added the emissive exposure weight.
-- 2026-10-05: Split out of the render pipeline and material system design document, keeping its property access and emission sections; the property access text describes the shared material parameter buffer.
+Auto exposure meters what is on screen, and the meter today sees the displayed value: an emitter with a weight below 1 enters the histogram at its exposure-divided brightness, so its contribution moves against the exposure instead of with it. A small sign does not matter, but one that fills much of the view pulls the exposure for everything else further than a physical emitter of the same displayed brightness would: in a measured scene, a weight-0 card filling half the view at noon drove the exposure to the camera's darkest limit (EV 18) where the same card at weight 1 brightened it by 2.2 stops, and one filling 85 % of the view at night ran the exposure from its brightest limit (**Auto Min EV**) to its darkest, leaving everything but the card black. The meter settles without oscillating, and it lets go: once the emitter stops filling the view the exposure returns to where it was. A close-up of a screen or a cockpit full of displays is that case. How the meter should treat them (leave them out, meter them at their physical value, or meter only the part the weight lets through) is planned for evaluation after the release. The weight is a material parameter, not a keyword, and compiles no extra shader variants. Every importer brings emission in at weight 1, `KHR_materials_emissive_strength` included: showing an emitter whatever the exposure is a choice made in the material.

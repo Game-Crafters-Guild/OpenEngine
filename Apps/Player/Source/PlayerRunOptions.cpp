@@ -34,6 +34,21 @@ const char* ValueAfter(int argc, const char* const* argv, std::string_view flag,
     return nullptr;
 }
 
+// --silent-audio, else GE_AUDIO_OUTPUT, else the device.
+Audio::AudioOutput ResolveAudioOutput(int argc, const char* const* argv, const char* environment)
+{
+    if (HasFlag(argc, argv, "--silent-audio"))
+        return Audio::AudioOutput::Silent;
+    if (!environment || environment[0] == '\0')
+        return Audio::AudioOutput::Device;
+    if (const std::optional<Audio::AudioOutput> output = Audio::TryParseAudioOutput(environment))
+        return *output;
+    Logger::Log::Warning("Player: GE_AUDIO_OUTPUT='{}' is not an audio output; ignoring it and playing on the "
+                         "device. Recognized values: silent, device.",
+                         environment);
+    return Audio::AudioOutput::Device;
+}
+
 // A headless run has no render device, so these flags ask for output it cannot make.
 constexpr const char* kDeviceOnlyFlags[] = {"--write-movie",   "--screenshot",    "--hdr",
                                             "--hdr-mode",      "--hdr-bit-depth", "--hdr-swapchain-bit-depth",
@@ -64,10 +79,12 @@ bool TryParsePlayerUint64(const char* text, uint64_t& out)
     return true;
 }
 
-std::optional<PlayerRunOptions> ParsePlayerRunOptions(int argc, const char* const* argv)
+std::optional<PlayerRunOptions> ParsePlayerRunOptions(int argc, const char* const* argv,
+                                                      const char* audioOutputEnvironment)
 {
     PlayerRunOptions options;
     options.Headless = HasFlag(argc, argv, "--headless");
+    options.AudioOutput = ResolveAudioOutput(argc, argv, audioOutputEnvironment);
 
     bool present = false;
     const char* quitAfter = ValueAfter(argc, argv, "--quit-after", present);

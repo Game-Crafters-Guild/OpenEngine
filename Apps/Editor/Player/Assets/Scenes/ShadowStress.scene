@@ -17,6 +17,8 @@ Transform.scale = (1, 1, 1)
 [entity id="sky_environment"]
 HierarchyOrder.order = 20
 SkyEnvironment.enabled = true
+SkyEnvironment.TimeOfDayHours = 12
+SkyEnvironment.Latitude = 0
 Name.value = "Sky Environment"
 Transform.position = (0, 0, 0)
 Transform.rotation = (-0, -0, -0, 1)
@@ -29,8 +31,8 @@ Camera.perspective = true
 Camera.fovY = 60
 Camera.nearZ = 0.01
 Camera.farZ = 1000
-Camera.cullingMask = 4294967295
-Camera.postProcessMask = 4294967295
+Camera.visibleLayers = all
+Camera.volumeLayers = all
 Name.value = "Main Camera"
 Transform.position = (0, 40, -74)
 Transform.rotation = (0.25038, 0, 0, 0.96815)
@@ -41,7 +43,7 @@ HierarchyOrder.order = 110
 MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -55,7 +57,7 @@ HierarchyOrder.order = 120
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -69,7 +71,7 @@ HierarchyOrder.order = 130
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -83,7 +85,7 @@ HierarchyOrder.order = 140
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -97,7 +99,7 @@ HierarchyOrder.order = 150
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -111,7 +113,7 @@ HierarchyOrder.order = 160
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -125,7 +127,7 @@ HierarchyOrder.order = 170
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -139,7 +141,7 @@ HierarchyOrder.order = 180
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -153,7 +155,7 @@ HierarchyOrder.order = 190
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -167,7 +169,7 @@ HierarchyOrder.order = 200
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -181,7 +183,7 @@ HierarchyOrder.order = 210
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -195,7 +197,7 @@ HierarchyOrder.order = 220
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -209,7 +211,7 @@ HierarchyOrder.order = 230
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -223,7 +225,7 @@ HierarchyOrder.order = 240
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -237,7 +239,7 @@ HierarchyOrder.order = 250
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -251,7 +253,7 @@ HierarchyOrder.order = 260
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -265,7 +267,7 @@ HierarchyOrder.order = 270
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -279,7 +281,7 @@ HierarchyOrder.order = 280
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -293,7 +295,7 @@ HierarchyOrder.order = 290
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -307,7 +309,7 @@ HierarchyOrder.order = 300
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -321,7 +323,7 @@ HierarchyOrder.order = 310
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -335,7 +337,7 @@ HierarchyOrder.order = 320
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -349,7 +351,7 @@ HierarchyOrder.order = 330
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -363,7 +365,7 @@ HierarchyOrder.order = 340
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -377,7 +379,7 @@ HierarchyOrder.order = 350
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -391,7 +393,7 @@ HierarchyOrder.order = 360
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -405,7 +407,7 @@ HierarchyOrder.order = 370
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -419,7 +421,7 @@ HierarchyOrder.order = 380
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -433,7 +435,7 @@ HierarchyOrder.order = 390
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -447,7 +449,7 @@ HierarchyOrder.order = 400
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -461,7 +463,7 @@ HierarchyOrder.order = 410
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -475,7 +477,7 @@ HierarchyOrder.order = 420
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -489,7 +491,7 @@ HierarchyOrder.order = 430
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -503,7 +505,7 @@ HierarchyOrder.order = 440
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -517,7 +519,7 @@ HierarchyOrder.order = 450
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -531,7 +533,7 @@ HierarchyOrder.order = 460
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -545,7 +547,7 @@ HierarchyOrder.order = 470
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -559,7 +561,7 @@ HierarchyOrder.order = 480
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -573,7 +575,7 @@ HierarchyOrder.order = 490
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -587,7 +589,7 @@ HierarchyOrder.order = 500
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -601,7 +603,7 @@ HierarchyOrder.order = 510
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -615,7 +617,7 @@ HierarchyOrder.order = 520
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -629,7 +631,7 @@ HierarchyOrder.order = 530
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -643,7 +645,7 @@ HierarchyOrder.order = 540
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -657,7 +659,7 @@ HierarchyOrder.order = 550
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -671,7 +673,7 @@ HierarchyOrder.order = 560
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -685,7 +687,7 @@ HierarchyOrder.order = 570
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -699,7 +701,7 @@ HierarchyOrder.order = 580
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -713,7 +715,7 @@ HierarchyOrder.order = 590
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -727,7 +729,7 @@ HierarchyOrder.order = 600
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -741,7 +743,7 @@ HierarchyOrder.order = 610
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -755,7 +757,7 @@ HierarchyOrder.order = 620
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -769,7 +771,7 @@ HierarchyOrder.order = 630
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -783,7 +785,7 @@ HierarchyOrder.order = 640
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -797,7 +799,7 @@ HierarchyOrder.order = 650
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -811,7 +813,7 @@ HierarchyOrder.order = 660
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -825,7 +827,7 @@ HierarchyOrder.order = 670
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -839,7 +841,7 @@ HierarchyOrder.order = 680
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -853,7 +855,7 @@ HierarchyOrder.order = 690
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -867,7 +869,7 @@ HierarchyOrder.order = 700
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -881,7 +883,7 @@ HierarchyOrder.order = 710
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -895,7 +897,7 @@ HierarchyOrder.order = 720
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -909,7 +911,7 @@ HierarchyOrder.order = 730
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -923,7 +925,7 @@ HierarchyOrder.order = 740
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -937,7 +939,7 @@ HierarchyOrder.order = 750
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -951,7 +953,7 @@ HierarchyOrder.order = 760
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -965,7 +967,7 @@ HierarchyOrder.order = 770
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -979,7 +981,7 @@ HierarchyOrder.order = 780
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -993,7 +995,7 @@ HierarchyOrder.order = 790
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1007,7 +1009,7 @@ HierarchyOrder.order = 800
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1021,7 +1023,7 @@ HierarchyOrder.order = 810
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1035,7 +1037,7 @@ HierarchyOrder.order = 820
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1049,7 +1051,7 @@ HierarchyOrder.order = 830
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1063,7 +1065,7 @@ HierarchyOrder.order = 840
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1077,7 +1079,7 @@ HierarchyOrder.order = 850
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1091,7 +1093,7 @@ HierarchyOrder.order = 860
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1105,7 +1107,7 @@ HierarchyOrder.order = 870
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1119,7 +1121,7 @@ HierarchyOrder.order = 880
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1133,7 +1135,7 @@ HierarchyOrder.order = 890
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1147,7 +1149,7 @@ HierarchyOrder.order = 900
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1161,7 +1163,7 @@ HierarchyOrder.order = 910
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1175,7 +1177,7 @@ HierarchyOrder.order = 920
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1189,7 +1191,7 @@ HierarchyOrder.order = 930
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1203,7 +1205,7 @@ HierarchyOrder.order = 940
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1217,7 +1219,7 @@ HierarchyOrder.order = 950
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1231,7 +1233,7 @@ HierarchyOrder.order = 960
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1245,7 +1247,7 @@ HierarchyOrder.order = 970
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1259,7 +1261,7 @@ HierarchyOrder.order = 980
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1273,7 +1275,7 @@ HierarchyOrder.order = 990
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1287,7 +1289,7 @@ HierarchyOrder.order = 1000
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1301,7 +1303,7 @@ HierarchyOrder.order = 1010
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1315,7 +1317,7 @@ HierarchyOrder.order = 1020
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1329,7 +1331,7 @@ HierarchyOrder.order = 1030
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1343,7 +1345,7 @@ HierarchyOrder.order = 1040
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1357,7 +1359,7 @@ HierarchyOrder.order = 1050
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1371,7 +1373,7 @@ HierarchyOrder.order = 1060
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1385,7 +1387,7 @@ HierarchyOrder.order = 1070
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1399,7 +1401,7 @@ HierarchyOrder.order = 1080
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1413,7 +1415,7 @@ HierarchyOrder.order = 1090
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1427,7 +1429,7 @@ HierarchyOrder.order = 1100
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1441,7 +1443,7 @@ HierarchyOrder.order = 1110
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1455,7 +1457,7 @@ HierarchyOrder.order = 1120
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1469,7 +1471,7 @@ HierarchyOrder.order = 1130
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1483,7 +1485,7 @@ HierarchyOrder.order = 1140
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1497,7 +1499,7 @@ HierarchyOrder.order = 1150
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1511,7 +1513,7 @@ HierarchyOrder.order = 1160
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1525,7 +1527,7 @@ HierarchyOrder.order = 1170
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1539,7 +1541,7 @@ HierarchyOrder.order = 1180
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1553,7 +1555,7 @@ HierarchyOrder.order = 1190
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1567,7 +1569,7 @@ HierarchyOrder.order = 1200
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1581,7 +1583,7 @@ HierarchyOrder.order = 1210
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1595,7 +1597,7 @@ HierarchyOrder.order = 1220
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1609,7 +1611,7 @@ HierarchyOrder.order = 1230
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1623,7 +1625,7 @@ HierarchyOrder.order = 1240
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1637,7 +1639,7 @@ HierarchyOrder.order = 1250
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1651,7 +1653,7 @@ HierarchyOrder.order = 1260
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1665,7 +1667,7 @@ HierarchyOrder.order = 1270
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1679,7 +1681,7 @@ HierarchyOrder.order = 1280
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1693,7 +1695,7 @@ HierarchyOrder.order = 1290
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1707,7 +1709,7 @@ HierarchyOrder.order = 1300
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1721,7 +1723,7 @@ HierarchyOrder.order = 1310
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1735,7 +1737,7 @@ HierarchyOrder.order = 1320
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1749,7 +1751,7 @@ HierarchyOrder.order = 1330
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1763,7 +1765,7 @@ HierarchyOrder.order = 1340
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1777,7 +1779,7 @@ HierarchyOrder.order = 1350
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1791,7 +1793,7 @@ HierarchyOrder.order = 1360
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1805,7 +1807,7 @@ HierarchyOrder.order = 1370
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1819,7 +1821,7 @@ HierarchyOrder.order = 1380
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1833,7 +1835,7 @@ HierarchyOrder.order = 1390
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1847,7 +1849,7 @@ HierarchyOrder.order = 1400
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1861,7 +1863,7 @@ HierarchyOrder.order = 1410
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1875,7 +1877,7 @@ HierarchyOrder.order = 1420
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1889,7 +1891,7 @@ HierarchyOrder.order = 1430
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1903,7 +1905,7 @@ HierarchyOrder.order = 1440
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1917,7 +1919,7 @@ HierarchyOrder.order = 1450
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1931,7 +1933,7 @@ HierarchyOrder.order = 1460
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1945,7 +1947,7 @@ HierarchyOrder.order = 1470
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1959,7 +1961,7 @@ HierarchyOrder.order = 1480
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1973,7 +1975,7 @@ HierarchyOrder.order = 1490
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -1987,7 +1989,7 @@ HierarchyOrder.order = 1500
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2001,7 +2003,7 @@ HierarchyOrder.order = 1510
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2015,7 +2017,7 @@ HierarchyOrder.order = 1520
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2029,7 +2031,7 @@ HierarchyOrder.order = 1530
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2043,7 +2045,7 @@ HierarchyOrder.order = 1540
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2057,7 +2059,7 @@ HierarchyOrder.order = 1550
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2071,7 +2073,7 @@ HierarchyOrder.order = 1560
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2085,7 +2087,7 @@ HierarchyOrder.order = 1570
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2099,7 +2101,7 @@ HierarchyOrder.order = 1580
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2113,7 +2115,7 @@ HierarchyOrder.order = 1590
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2127,7 +2129,7 @@ HierarchyOrder.order = 1600
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2141,7 +2143,7 @@ HierarchyOrder.order = 1610
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2155,7 +2157,7 @@ HierarchyOrder.order = 1620
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2169,7 +2171,7 @@ HierarchyOrder.order = 1630
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2183,7 +2185,7 @@ HierarchyOrder.order = 1640
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2197,7 +2199,7 @@ HierarchyOrder.order = 1650
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2211,7 +2213,7 @@ HierarchyOrder.order = 1660
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2225,7 +2227,7 @@ HierarchyOrder.order = 1670
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2239,7 +2241,7 @@ HierarchyOrder.order = 1680
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2253,7 +2255,7 @@ HierarchyOrder.order = 1690
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2267,7 +2269,7 @@ HierarchyOrder.order = 1700
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2281,7 +2283,7 @@ HierarchyOrder.order = 1710
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2295,7 +2297,7 @@ HierarchyOrder.order = 1720
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2309,7 +2311,7 @@ HierarchyOrder.order = 1730
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2323,7 +2325,7 @@ HierarchyOrder.order = 1740
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2337,7 +2339,7 @@ HierarchyOrder.order = 1750
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2351,7 +2353,7 @@ HierarchyOrder.order = 1760
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2365,7 +2367,7 @@ HierarchyOrder.order = 1770
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2379,7 +2381,7 @@ HierarchyOrder.order = 1780
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2393,7 +2395,7 @@ HierarchyOrder.order = 1790
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2407,7 +2409,7 @@ HierarchyOrder.order = 1800
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2421,7 +2423,7 @@ HierarchyOrder.order = 1810
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2435,7 +2437,7 @@ HierarchyOrder.order = 1820
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2449,7 +2451,7 @@ HierarchyOrder.order = 1830
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2463,7 +2465,7 @@ HierarchyOrder.order = 1840
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2477,7 +2479,7 @@ HierarchyOrder.order = 1850
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2491,7 +2493,7 @@ HierarchyOrder.order = 1860
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2505,7 +2507,7 @@ HierarchyOrder.order = 1870
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2519,7 +2521,7 @@ HierarchyOrder.order = 1880
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2533,7 +2535,7 @@ HierarchyOrder.order = 1890
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2547,7 +2549,7 @@ HierarchyOrder.order = 1900
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2561,7 +2563,7 @@ HierarchyOrder.order = 1910
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2575,7 +2577,7 @@ HierarchyOrder.order = 1920
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2589,7 +2591,7 @@ HierarchyOrder.order = 1930
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2603,7 +2605,7 @@ HierarchyOrder.order = 1940
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2617,7 +2619,7 @@ HierarchyOrder.order = 1950
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2631,7 +2633,7 @@ HierarchyOrder.order = 1960
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2645,7 +2647,7 @@ HierarchyOrder.order = 1970
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2659,7 +2661,7 @@ HierarchyOrder.order = 1980
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2673,7 +2675,7 @@ HierarchyOrder.order = 1990
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2687,7 +2689,7 @@ HierarchyOrder.order = 2000
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2701,7 +2703,7 @@ HierarchyOrder.order = 2010
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2715,7 +2717,7 @@ HierarchyOrder.order = 2020
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2729,7 +2731,7 @@ HierarchyOrder.order = 2030
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2743,7 +2745,7 @@ HierarchyOrder.order = 2040
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2757,7 +2759,7 @@ HierarchyOrder.order = 2050
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2771,7 +2773,7 @@ HierarchyOrder.order = 2060
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2785,7 +2787,7 @@ HierarchyOrder.order = 2070
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2799,7 +2801,7 @@ HierarchyOrder.order = 2080
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2813,7 +2815,7 @@ HierarchyOrder.order = 2090
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2827,7 +2829,7 @@ HierarchyOrder.order = 2100
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2841,7 +2843,7 @@ HierarchyOrder.order = 2110
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2855,7 +2857,7 @@ HierarchyOrder.order = 2120
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2869,7 +2871,7 @@ HierarchyOrder.order = 2130
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2883,7 +2885,7 @@ HierarchyOrder.order = 2140
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2897,7 +2899,7 @@ HierarchyOrder.order = 2150
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2911,7 +2913,7 @@ HierarchyOrder.order = 2160
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2925,7 +2927,7 @@ HierarchyOrder.order = 2170
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2939,7 +2941,7 @@ HierarchyOrder.order = 2180
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2953,7 +2955,7 @@ HierarchyOrder.order = 2190
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2967,7 +2969,7 @@ HierarchyOrder.order = 2200
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2981,7 +2983,7 @@ HierarchyOrder.order = 2210
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -2995,7 +2997,7 @@ HierarchyOrder.order = 2220
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3009,7 +3011,7 @@ HierarchyOrder.order = 2230
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3023,7 +3025,7 @@ HierarchyOrder.order = 2240
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3037,7 +3039,7 @@ HierarchyOrder.order = 2250
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3051,7 +3053,7 @@ HierarchyOrder.order = 2260
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3065,7 +3067,7 @@ HierarchyOrder.order = 2270
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3079,7 +3081,7 @@ HierarchyOrder.order = 2280
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3093,7 +3095,7 @@ HierarchyOrder.order = 2290
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3107,7 +3109,7 @@ HierarchyOrder.order = 2300
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3121,7 +3123,7 @@ HierarchyOrder.order = 2310
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3135,7 +3137,7 @@ HierarchyOrder.order = 2320
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3149,7 +3151,7 @@ HierarchyOrder.order = 2330
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3163,7 +3165,7 @@ HierarchyOrder.order = 2340
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3177,7 +3179,7 @@ HierarchyOrder.order = 2350
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3191,7 +3193,7 @@ HierarchyOrder.order = 2360
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3205,7 +3207,7 @@ HierarchyOrder.order = 2370
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3219,7 +3221,7 @@ HierarchyOrder.order = 2380
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3233,7 +3235,7 @@ HierarchyOrder.order = 2390
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3247,7 +3249,7 @@ HierarchyOrder.order = 2400
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3261,7 +3263,7 @@ HierarchyOrder.order = 2410
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3275,7 +3277,7 @@ HierarchyOrder.order = 2420
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3289,7 +3291,7 @@ HierarchyOrder.order = 2430
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3303,7 +3305,7 @@ HierarchyOrder.order = 2440
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3317,7 +3319,7 @@ HierarchyOrder.order = 2450
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3331,7 +3333,7 @@ HierarchyOrder.order = 2460
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3345,7 +3347,7 @@ HierarchyOrder.order = 2470
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3359,7 +3361,7 @@ HierarchyOrder.order = 2480
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3373,7 +3375,7 @@ HierarchyOrder.order = 2490
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3387,7 +3389,7 @@ HierarchyOrder.order = 2500
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3401,7 +3403,7 @@ HierarchyOrder.order = 2510
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3415,7 +3417,7 @@ HierarchyOrder.order = 2520
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3429,7 +3431,7 @@ HierarchyOrder.order = 2530
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3443,7 +3445,7 @@ HierarchyOrder.order = 2540
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3457,7 +3459,7 @@ HierarchyOrder.order = 2550
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3471,7 +3473,7 @@ HierarchyOrder.order = 2560
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3485,7 +3487,7 @@ HierarchyOrder.order = 2570
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3499,7 +3501,7 @@ HierarchyOrder.order = 2580
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3513,7 +3515,7 @@ HierarchyOrder.order = 2590
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3527,7 +3529,7 @@ HierarchyOrder.order = 2600
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3541,7 +3543,7 @@ HierarchyOrder.order = 2610
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3555,7 +3557,7 @@ HierarchyOrder.order = 2620
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3569,7 +3571,7 @@ HierarchyOrder.order = 2630
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3583,7 +3585,7 @@ HierarchyOrder.order = 2640
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3597,7 +3599,7 @@ HierarchyOrder.order = 2650
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3611,7 +3613,7 @@ HierarchyOrder.order = 2660
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
@@ -3625,7 +3627,7 @@ HierarchyOrder.order = 2670
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
-MeshRenderer.renderLayerMask = 1
+MeshRenderer.renderLayers = [0]
 MeshRenderer.castShadows = true
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true

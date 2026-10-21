@@ -396,8 +396,8 @@ bool OceanRasterDepthCapture::DeclareForView(Engine::Renderer::Pipeline::ViewDec
     if (!EnsurePipeline(*device) || !EnsureOutput(*device, resolution))
         return false;
 
-    const uint32 captureMask = settings.RenderLayerMask & d.View.renderLayerMask;
-    if (captureMask == 0u)
+    const Rendering::RenderLayerMask captureMask{settings.CaptureLayers.Bits & d.View.renderLayerMask.Bits};
+    if (captureMask == Rendering::RenderLayerMask::None())
         return false;
 
     const float32 sizeX = std::max(settings.SizeX, 1.0f);

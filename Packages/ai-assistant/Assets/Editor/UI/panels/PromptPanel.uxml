@@ -34,6 +34,21 @@
             <Button id="PromptSessionButton" class="secondary hidden" text="Session…" focusable="false" />
             <Dropdown id="PromptProviderDropdown" class="prompt-panel-task prompt-panel-input-task" />
             <Button id="PromptModelButton" class="secondary hidden" text="Opus (latest) · High" focusable="false" />
+            <UIElement id="PromptSpeechLevelsLeft" class="prompt-panel-speech-levels hidden">
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+            </UIElement>
+            <PromptMicButton id="PromptMicButton" class="icon-button prompt-panel-mic-button hidden" focusable="false" />
+            <UIElement id="PromptSpeechLevelsRight" class="prompt-panel-speech-levels hidden">
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+              <UIElement class="prompt-panel-speech-bar" />
+            </UIElement>
             <Button id="PromptSendButton" class="icon-button prompt-panel-send-button" />
           </UIElement>
         </UIElement>
@@ -41,5 +56,9 @@
     </UIElement>
   </SplitView>
 
-  <Label id="PromptStatusLabel" class="prompt-panel-status" text="Ready" />
+  <UIElement class="prompt-panel-status-row">
+    <Label id="PromptStatusLabel" class="prompt-panel-status" text="Ready" />
+    <UIElement class="prompt-panel-text-size-glyph" />
+    <UIElement id="PromptTextSizeHost" class="prompt-panel-text-size-host" />
+  </UIElement>
 </UIElement>

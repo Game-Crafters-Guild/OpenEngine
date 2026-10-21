@@ -1,20 +1,20 @@
 ---
 title: Particles
-description: Particle emitters, the processor stacks they run and the renderer that draws them, with previewing, sub-emitters, gameplay events, budgets, packaging and limits.
+description: Particle emitters, the processor stacks they run, and the renderer that draws them, with previewing, sub-emitters, gameplay events, budgets, packaging, and limits.
 ---
 
-A particle effect is three things on an entity: a **Particle Emitter** that decides when and how fast its particles simulate, the **processor stack** asset the emitter runs, which says what the particles do, and an optional **Particle Renderer** that says how they draw. Stacks are assets: one stack can drive any number of emitters, and editing it changes every emitter that runs it. This guide covers the components and the editor; the stack itself, its processors and its file format are in [Particle processor stacks](particle-processor-stack.mdx).
+A particle effect is three things on an entity: a **Particle Emitter** that decides when and how fast its particles simulate, the **processor stack** asset the emitter runs, which says what the particles do, and an optional **Particle Renderer** that says how they draw. Stacks are assets: one stack can drive any number of emitters, and editing it changes every emitter that runs it. This guide covers the components and the editor. The stack itself, its processors, and its file format are in [Particle processor stacks](particle-processor-stack.mdx).
 
 ## Making an emitter
 
 - **Hierarchy, Create, Particle Emitter** makes an entity with an emitter. In a 2D Scene View the emitter is a 2D one: its particles stay on the entity's XY plane.
-- **Add Component, Rendering** offers **Particle Emitter 2D**, **Particle Emitter 3D** and **Particle Renderer** for an existing entity.
+- **Add Component, Rendering** offers **Particle Emitter 2D**, **Particle Emitter 3D**, and **Particle Renderer** for an existing entity.
 
 A new emitter runs the default stack: particles launched upward in a cone, at a rate of its **Amount** per second, falling under gravity. Press **New Stack** in its Processor Stack section to get a stack asset of your own: the editor writes `Particles/Particle Stack.particlestack` (numbered if the name is taken) into the project, starting from the default stack, and points the emitter at it. That step is one undo. To share a stack, drag the same asset onto several emitters' **Stack** field.
 
 :::note
 
-Without a Particle Renderer an emitter draws soft, procedural smoke puffs facing the camera, which is enough to see what a stack does. Add a Particle Renderer to choose the material, texture sheet, lighting, meshes and trails. Switching the renderer off hides the particles; they keep simulating. Hundreds of overlapping puffs add up: the web seed project's smoke reads as a translucent gray plume with a mid-gray color (0.55), an opacity that peaks at 0.35 and thins as the column rises, and a size that grows along an S-curve, where full white at full opacity would draw an opaque white mass.
+Without a Particle Renderer an emitter draws soft, procedural smoke puffs facing the camera, which is enough to see what a stack does. Add a Particle Renderer to choose the material, texture sheet, lighting, meshes, and trails. Switching the renderer off hides the particles. They keep simulating. Hundreds of overlapping puffs add up: the web seed project's smoke reads as a translucent gray plume with a mid-gray color (0.55), an opacity that peaks at 0.35 and thins as the column rises, and a size that grows along an S-curve, where full white at full opacity would draw an opaque white mass.
 
 :::
 
@@ -34,13 +34,13 @@ Without a Particle Renderer an emitter draws soft, procedural smoke puffs facing
 | Seed | 0 | The effect's random sequence. 0 derives one from the entity, so copies differ; any other value makes every emitter with it identical. |
 | Sub-emitters | none | Four slots naming the emitters the stack's spawn rules send particles to (see below). |
 
-A fixed tick rate makes an effect deterministic: the same seed, stack, transforms and tick sequence produce the same particles, whatever the frame rate. When a frame takes long the simulation runs at most eight ticks and drops the rest of the time, so a hitch slows the effect down rather than stalling the frame.
+A fixed tick rate makes an effect deterministic: the same seed, stack, transforms, and tick sequence produce the same particles, whatever the frame rate. When a frame takes long the simulation runs at most eight ticks and drops the rest of the time, so a hitch slows the effect down rather than stalling the frame.
 
-A moving emitter is where it was when each tick ended, between the transforms of the frames around it: it moves in a straight line, turns at a steady rate and scales evenly between them. The particles a tick emits spread along the stretch it covered during the tick, the newest at the emitter, so a fast emitter lays an even trail, the same at any frame rate, and a spinning one keeps its shape. A move of more than 50 times the emitter's own scale in one frame is a teleport: that frame's particles start at the new place and the emitter is at rest there. To jump a shorter distance without a trail, restart the emitter.
+A moving emitter is where it was when each tick ended, between the transforms of the frames around it: it moves in a straight line, turns at a steady rate, and scales evenly between them. The particles a tick emits spread along the stretch it covered during the tick, the newest at the emitter, so a fast emitter lays an even trail, the same at any frame rate, and a spinning one keeps its shape. A move of more than 50 times the emitter's own scale in one frame is a teleport: that frame's particles start at the new place and the emitter is at rest there. To jump a shorter distance without a trail, restart the emitter.
 
 ### Previewing
 
-The top of the emitter's inspector previews the effect in the Scene View: **Restart**, **Pause** (then **Play**), **Step** one tick, and **Preview Time**, which scrubs the effect to a time between 0 and 60 seconds and pauses it there. Scrubbing replays the effect at the emitter's current transform in small chunks over the next frames; it raises no collision events and sends nothing to sub-emitters. The card below the buttons shows the live particle count, the preview time, the simulation cost and dropped time. The first preview action adds a **ParticlePlayback** component to the entity to carry these commands; it is runtime state and is not saved with the scene.
+The top of the emitter's inspector previews the effect in the Scene View: **Restart**, **Pause** (then **Play**), **Step** one tick, and **Preview Time**, which scrubs the effect to a time between 0 and 60 seconds and pauses it there. Scrubbing replays the effect at the emitter's current transform in small chunks over the next frames. It raises no collision events and sends nothing to sub-emitters. The card below the buttons shows the live particle count, the preview time, the simulation cost, and dropped time. The first preview action adds a **ParticlePlayback** component to the entity to carry these commands. It is runtime state and is not saved with the scene.
 
 ### Sub-emitters
 
@@ -62,11 +62,11 @@ void Detonate(ECS::World& world, ECS::EntityHandle emitter)
 }
 ```
 
-Every live particle of the emitter runs its game-event rules for that name on the emitter's next update. Up to eight events wait per update; `SendEvent` returns false when the queue is full. The same component restarts (`++Restart`), pauses (`Paused = true`) and steps (`++SingleStep`) the effect from gameplay code.
+Every live particle of the emitter runs its game-event rules for that name on the emitter's next update. Up to eight events wait per update. `SendEvent` returns false when the queue is full. The same component restarts (`++Restart`), pauses (`Paused = true`), and steps (`++SingleStep`) the effect from gameplay code.
 
 ### Collision events
 
-The stack's Collision processor bounces particles off a plane or off the physics world. To read the collisions in gameplay code, add **Particle Collision Events** (Add Component, Rendering) to the emitter, or to any one entity for every emitter that has none: its `ParticleCollisionEventsBuffer` holds the frame's first 64 contacts, each with the emitter, the particle, the position, normal, velocity and whether the particle died.
+The stack's Collision processor bounces particles off a plane or off the physics world. To read the collisions in gameplay code, add **Particle Collision Events** (Add Component, Rendering) to the emitter, or to any one entity for every emitter that has none: its `ParticleCollisionEventsBuffer` holds the frame's first 64 contacts, each with the emitter, the particle, the position, normal, velocity, and whether the particle died.
 
 ## The renderer
 
@@ -74,7 +74,7 @@ The Particle Renderer's inspector groups its fields by what they change and show
 
 ### Material and texture sheet
 
-**Material** is optional: a material asset whose properties and textures the particles use. The particle shaders, blending and lighting mode always come from the renderer; the material's own surface shader or graph is not used. Without one, particles use a neutral material in which the particle color alone sets the color. **Texture** is an RGBA atlas whose cells count left to right, then top to bottom. Every sample stays half a texel inside its cell; leave gutters between cells if the atlas is viewed small enough to reach lower mip levels.
+**Material** is optional: a material asset whose properties and textures the particles use. The particle shaders, blending, and lighting mode always come from the renderer. The material's own surface shader or graph is not used. Without one, particles use a neutral material in which the particle color alone sets the color. **Texture** is an RGBA atlas whose cells count left to right, then top to bottom. Every sample stays half a texel inside its cell. Leave gutters between cells if the atlas is viewed small enough to reach lower mip levels.
 
 | Field | What it does |
 |---|---|
@@ -87,7 +87,7 @@ The Particle Renderer's inspector groups its fields by what they change and show
 
 ### Lighting
 
-**Unlit** draws the authored color relative to the camera's exposure: a color of 1 draws as the display's white at whatever exposure the view has, so unlit smoke authored gray reads gray in daylight and at night alike. **Lit** lights particles as a uniform volume from the scene's lights and environment: directional, point, spot and area lights, their shadows, and the ambient probe; there is no flat-surface cosine or specular highlight. **SixWay** lights them from six baked directional response maps, which gives smoke and fire volume under moving lights. Assign **Six Way Map A** and **Six Way Map B** and pick how they pack the six directions:
+**Unlit** draws the authored color relative to the camera's exposure: a color of 1 draws as the display's white at whatever exposure the view has, so unlit smoke authored gray reads gray in daylight and at night alike. **Lit** lights particles as a uniform volume from the scene's lights and environment: directional, point, spot, and area lights, their shadows, and the ambient probe. There is no flat-surface cosine or specular highlight. **SixWay** lights them from six baked directional response maps, which gives smoke and fire volume under moving lights. Assign **Six Way Map A** and **Six Way Map B** and pick how they pack the six directions:
 
 | Six Way Layout | Map A | Map B | Opacity | Emission mask |
 |---|---|---|---|---|
@@ -95,9 +95,9 @@ The Particle Renderer's inspector groups its fields by what they change and show
 | RightTopBackRgba | right, top, back, opacity | left, bottom, front, emission | Map A alpha | Map B alpha |
 | TopLeftRightBottomBackFront | top, left, right | bottom, back, front | Texture alpha | Emission Texture |
 
-Directions are in the sprite's own basis: right, up, and toward the camera as front. Import the maps as linear data unless the pack says otherwise; the renderer samples the color space the texture asset declares. The maps play on the same grid and frame as the texture sheet. **Six Way Contrast** raises the response to a power, which firms up maps baked with a soft response; 1 keeps them as baked. Until both maps are assigned the particles light as **Lit**, and the inspector says so.
+Directions are in the sprite's own basis: right, up, and toward the camera as front. Import the maps as linear data unless the pack says otherwise. The renderer samples the color space the texture asset declares. The maps play on the same grid and frame as the texture sheet. **Six Way Contrast** raises the response to a power, which firms up maps baked with a soft response; 1 keeps them as baked. Until both maps are assigned the particles light as **Lit**, and the inspector says so.
 
-**Emission Color** and **Emission Intensity** make the particles glow with their own light, which shows with scene lights off but does not light other objects; an intensity of 0 emits nothing. On **Unlit** particles the emission is relative to the exposure like the color: an intensity of 1 adds the display's white. On **Lit** and **SixWay** particles it is scene light, where 1 is the engine's reference white of 203 nits, so a glow meant to show in daylight needs an intensity in the hundreds. Without an emission texture the whole particle glows. **Emission Texture** says where it glows: an RGB emissive atlas played with the sheet (for fire inside smoke), which replaces map B's emission alpha when the RGBA layout is used. To light the scene, give the stack a Light processor.
+**Emission Color** and **Emission Intensity** make the particles glow with their own light, which shows with scene lights off but does not light other objects. An intensity of 0 emits nothing. On **Unlit** particles the emission is relative to the exposure like the color: an intensity of 1 adds the display's white. On **Lit** and **SixWay** particles it is scene light, where 1 is the engine's reference white of 203 nits, so a glow meant to show in daylight needs an intensity in the hundreds. Without an emission texture the whole particle glows. **Emission Texture** says where it glows: an RGB emissive atlas played with the sheet (for fire inside smoke), which replaces map B's emission alpha when the RGBA layout is used. To light the scene, give the stack a Light processor.
 
 ### Orientation and order
 
@@ -112,7 +112,7 @@ Directions are in the sprite's own basis: right, up, and toward the camera as fr
 | FaceCameraYAlongVelocity | Faces the camera with its up axis along the velocity as seen on screen: the stretched spark. |
 | ZAlongVelocity | A mesh's forward axis follows its actual motion, including motion from noise. |
 
-**Inherit Scale** makes the particles take the emitter's scale on top of their own size, in every billboard mode. **Velocity Stretch** lengthens particles along their motion by that much per unit of speed. **Draw Order** sorts particles back to front. **ViewDepth**, the default, sorts every particle by its own distance from the camera, across emitters, so a column of smoke reads right from above and from below. **Spawn** (the newest on top), **Lifetime** (the oldest on top) and **ReverseLifetime** (the youngest on top) keep an emitter's particles together in that order and place the emitter by the depth of its origin, which suits effects seen from one side. Particles draw after opaque geometry, blended, without writing depth; they receive shadows and do not cast them.
+**Inherit Scale** makes the particles take the emitter's scale on top of their own size, in every billboard mode. **Velocity Stretch** lengthens particles along their motion by that much per unit of speed. **Draw Order** sorts particles back to front. **ViewDepth**, the default, sorts every particle by its own distance from the camera, across emitters, so a column of smoke reads right from above and from below. **Spawn** (the newest on top), **Lifetime** (the oldest on top), and **ReverseLifetime** (the youngest on top) keep an emitter's particles together in that order and place the emitter by the depth of its origin, which suits effects seen from one side. Particles draw after opaque geometry, blended, without writing depth. They receive shadows and do not cast them.
 
 ### Meshes
 
@@ -120,36 +120,28 @@ Assign up to four models to **Meshes** to draw each particle as those meshes (th
 
 ### Trails
 
-When the stack has a Trail processor, the renderer draws each particle's recorded path as a ribbon facing the camera. **Trail Only** hides the particles and keeps the ribbons (tracers, streaks). **Trail Inherit Color** tints a trail with its particle's color instead of white; **Trail Size Affects Width** makes the width follow the particle's size; **Trail Fade Over Length** fades toward both ends rather than over the points' age. **Trail Width Min** and **Max** pick a width multiplier once per trail, **Trail Alpha Peak** is the opacity at its most opaque point, and **Trail Texture Tile** repeats the texture by distance traveled (**Trail Texture Scale U**, **V**) instead of stretching it over the trail.
+When the stack has a Trail processor, the renderer draws each particle's recorded path as a ribbon facing the camera. **Trail Only** hides the particles and keeps the ribbons (tracers, streaks). **Trail Inherit Color** tints a trail with its particle's color instead of white. **Trail Size Affects Width** makes the width follow the particle's size. **Trail Fade Over Length** fades toward both ends rather than over the points' age. **Trail Width Min** and **Max** pick a width multiplier once per trail, **Trail Alpha Peak** is the opacity at its most opaque point, and **Trail Texture Tile** repeats the texture by distance traveled (**Trail Texture Scale U**, **V**) instead of stretching it over the trail.
 
 ### Visibility
 
-**Render Layer Mask** chooses the views that draw the particles, as for meshes. **Thinning Start** and **Thinning End** hide a growing share of the particles between the two distances from the camera in meters, the same particles every frame, and all of them beyond the end; an end distance of 0 turns thinning off, and the inspector says so. Culling and thinning never pause the simulation.
+**Render Layers** chooses the views that draw the particles, as for meshes. A scene saves it as layer numbers in brackets, for example `ParticleRenderer.RenderLayers = [0, 2]`. **Thinning Start** and **Thinning End** hide a growing share of the particles between the two distances from the camera in meters, the same particles every frame, and all of them beyond the end. An end distance of 0 turns thinning off, and the inspector says so. Culling and thinning never pause the simulation.
 
-A sprite that faces the camera (**FaceCamera** or **FaceCameraPosition**, not stretched by **Velocity Stretch**) fades out before the camera's near plane can cut it. Its opacity falls from full to nothing while its distance from the camera comes from two of its half-diagonals to one half-diagonal past the near plane, and closer than that it is not drawn; both distances stop at 3 m and 1.5 m, so a large sprite seen from outside is drawn until the camera is close. The distance is measured to the camera, not along the view, so a cloud does not thin as the camera turns. With the camera inside a smoke column, the puffs around the camera are not drawn. Under an additive or other authored blend the color and emission fade too, as the square of the fade, so a bright glow dims across the whole distance rather than at its end. Ground-aligned and world-oriented sprites, sprites on an emitter with Velocity Stretch, meshes and trails do not fade.
+A sprite that faces the camera (**FaceCamera** or **FaceCameraPosition**, not stretched by **Velocity Stretch**) fades out before the camera's near plane can cut it. Its opacity falls from full to nothing while its distance from the camera comes from two of its half-diagonals to one half-diagonal past the near plane, and closer than that it is not drawn. Both distances stop at 3 m and 1.5 m, so a large sprite seen from outside is drawn until the camera is close. The distance is measured to the camera, not along the view, so a cloud does not thin as the camera turns. With the camera inside a smoke column, the puffs around the camera are not drawn. Under an additive or other authored blend the color and emission fade too, as the square of the fade, so a bright glow dims across the whole distance rather than at its end. Ground-aligned and world-oriented sprites, sprites on an emitter with Velocity Stretch, meshes, and trails do not fade.
 
 ## Budgets
 
-An emitter simulates at most its Amount, up to 4096 live particles. A world simulates at most 65,536 by default; add a **Particle World Settings** component to set a lower **Max Particles** (the lowest wins when there are several). Emitters take their share in entity order, so the same scene always spends its budget the same way. The simulation runs on the CPU, one emitter after another, in the frame's extraction phase; it needs a world transform but no camera or graphics device, so it runs in headless worlds and tests too.
+An emitter simulates at most its Amount, up to 4096 live particles. A world simulates at most 65,536 by default. Add a **Particle World Settings** component to set a lower **Max Particles** (the lowest wins when there are several). Emitters take their share in entity order, so the same scene always spends its budget the same way. The simulation runs on the CPU, one emitter after another, in the frame's extraction phase. It needs a world transform but no camera or graphics device, so it runs in headless worlds and tests too.
 
 ## Packaging
 
-Stacks are written as JSON in the project so they diff and merge. When a game is built, the build cooks every stack it packages into a compact binary form the Player reads without parsing JSON; a stack that fails to cook fails the build with its path and the reason. Nothing needs setting up.
+Stacks are written as JSON in the project so they diff and merge. When a game is built, the build cooks every stack it packages into a compact binary form the Player reads without parsing JSON. A stack that fails to cook fails the build with its path and the reason. Nothing needs setting up.
 
-A browser has no shader compiler, so a web export cooks the particle shader programs ahead of time: for each kind of particle material (lighting mode, six-way layout, texture sheet and emission texture), the programs the render pipeline draws particles with. Those are the keywords of the pipeline's **Transmissive** node that particles take (ForwardPlus and Shadows, with or without IBL), on a sprite or on a mesh with or without tangents. The engine's own pipelines are covered. A project pipeline whose Transmissive node has other keywords, or a mesh particle whose mesh brings vertex colors, extra UV sets or skinning, has no cooked program on the web. The emitter then does not draw, and the browser console reports "no cooked program" with the material's name and its defines. To fix it, give the Transmissive node ForwardPlus, Instanced and Shadows (IBL optional), and use meshes without those extra streams.
+A browser has no shader compiler, so a web export cooks the particle shader programs ahead of time: for each kind of particle material (lighting mode, six-way layout, texture sheet, and emission texture), the programs the render pipeline draws particles with. Those are the keywords of the pipeline's **Transmissive** node that particles take (ForwardPlus and Shadows, with or without IBL), on a sprite or on a mesh with or without tangents. The engine's own pipelines are covered. A project pipeline whose Transmissive node has other keywords, or a mesh particle whose mesh brings vertex colors, extra UV sets, or skinning, has no cooked program on the web. The emitter then does not draw, and the browser console reports "no cooked program" with the material's name and its defines. To fix it, give the Transmissive node ForwardPlus, Instanced, and Shadows (IBL optional), and use meshes without those extra streams.
 
 ## Limits
 
-- **CPU simulation.** Particles simulate on the CPU; there is no GPU simulation path.
+- **CPU simulation.** Particles simulate on the CPU. There is no GPU simulation path.
 - **Tick-aligned timing.** Processor intervals and age triggers take effect at simulation ticks, so at 30 ticks per second an interval starts within a thirtieth of a second of its time.
 - **Physics collisions** sweep a ray extended by the particle's radius rather than a sphere, and can miss glancing contacts. Without a physics world they find nothing.
 - **Particle lights** are capped at 64 per frame across the world.
 - **No self-shadowing.** Particles receive scene shadows but cast none.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/particles.html`; American spelling (meters, traveled).
-- 2026-10-08: Packaging: which particle programs a web export cooks, and what the browser reports for one it does not.
-- 2026-10-01: Camera-facing sprites close to the camera fade out, within 3 m of the near plane, and are not drawn once they would reach it; under authored blends their color and emission fade too.
-- 2026-09-30: Unlit color and emission are relative to the camera's exposure; lit emission is in scene units. A moving emitter spreads its particles along its path, turns rather than shrinks between frames, and a move beyond 50 times its scale in one frame is a teleport.
-- 2026-09-29: Rewritten for stack assets, the emitter and renderer components, sub-emitter slots, gameplay events and packaged stacks.

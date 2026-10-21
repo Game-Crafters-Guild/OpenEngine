@@ -112,7 +112,7 @@ void FillCullingDataFromView(const ViewCullingInput& view, uint32_t sliceInstanc
     cd.farPlane = view.farPlane;
     cd.firstInstance = view.firstInstance;
     cd.instanceCount = sliceInstanceCount;
-    cd.renderLayerMask = view.renderLayerMask;
+    cd.renderLayerMask = view.renderLayerMask.Bits;
     cd.frameIndex = view.frameIndex;
     cd.deltaTime = view.deltaTime;
     // Shadow dispatches (area light = kAreaShadowCullingIndex, or any per-view
@@ -794,7 +794,7 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
         appendVec3(v.cameraRelativeOrigin);
         blob.Append(v.firstInstance);
         blob.Append(v.instanceCount);
-        blob.Append(v.renderLayerMask);
+        blob.Append(v.renderLayerMask.Bits);
         blob.Append(v.reserveOcclusionSlice);
         if (i < m_ViewVisibilityLayout.size())
         {
@@ -835,7 +835,7 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
         appendVec3(g.cameraRelativeOrigin);
         blob.Append(g.firstInstance);
         blob.Append(g.instanceCount);
-        blob.Append(g.renderLayerMask);
+        blob.Append(g.renderLayerMask.Bits);
     }
 
     blob.Append(static_cast<uint32_t>(m_OcclusionReservations.size()));
@@ -1115,7 +1115,7 @@ void GPUCullingPipeline::EndFrameRG()
         cd.farPlane = g.farPlane;
         cd.firstInstance = g.firstInstance;
         cd.instanceCount = g.instanceCount;
-        cd.renderLayerMask = g.renderLayerMask;
+        cd.renderLayerMask = g.renderLayerMask.Bits;
         cd.frameIndex = g.frameIndex;
         cd.deltaTime = g.deltaTime;
         // Shadow groups drop non-casters; a color fan-out (probe faces) keeps

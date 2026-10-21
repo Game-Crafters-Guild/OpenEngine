@@ -7,13 +7,13 @@ A comprehensive reference for the engine's graphics subsystems. Covers both the 
 
 Companion docs:
 
-- [Render graph quick reference](render-graph.mdx) — the immediate-mode render graph: API quick reference and doc pointers
-- [Creating render pipelines](render-pipeline-authoring.mdx) — authoring a `.rendergraph` pipeline
-- [Your first surface shader](surface-shader-authoring.mdx) — writing a custom lit surface from a project directory
+- [Render graph quick reference](render-graph.mdx): the immediate-mode render graph: API quick reference and doc pointers
+- [Creating render pipelines](render-pipeline-authoring.mdx): authoring a `.rendergraph` pipeline
+- [Your first surface shader](surface-shader-authoring.mdx): writing a custom lit surface from a project directory
 
 ## Two-tier architecture
 
-The rendering code is split into two layers. **Where you add code depends on what you're adding.**
+The rendering code is split into two layers. **Where you add code depends on what you are adding.**
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ flowchart LR
     class RS,RLOOP,FEAT,NODES,REG,ECS src;
 ```
 
-*Two-tier architecture — what flows between layers*
+*Two-tier architecture: what flows between layers*
 
 | Layer | Location | What lives here | What does NOT live here |
 |---|---|---|---|
@@ -67,7 +67,7 @@ flowchart LR
 
 ## Rendering module
 
-`Engine/Modules/Rendering/` — pure GPU library. CMake target `GameEngineRendering`. Includes are namespaced as `Rendering/...`.
+`Engine/Modules/Rendering/`: pure GPU library. CMake target `GameEngineRendering`. Includes are namespaced as `Rendering/...`.
 
 ### Directory layout
 
@@ -151,9 +151,9 @@ Implementation. Most files here match a header one to one. The render graph itse
 
 ### Vulkan and DirectX12 backends
 
-`Source/Vulkan/` and `Source/DirectX12/` implement `IDevice`, `CommandList`, swapchain, memory, resources, descriptors, etc. **You almost never touch these directly** — extend through the abstract interfaces unless adding new GPU features (e.g. RT extensions).
+`Source/Vulkan/` and `Source/DirectX12/` implement `IDevice`, `CommandList`, swapchain, memory, resources, descriptors, etc. **You almost never touch these directly**: extend through the abstract interfaces unless adding new GPU features (e.g. RT extensions).
 
-Vulkan is the primary backend; DX12 is secondary and may lag in feature coverage.
+Vulkan is the primary backend. DX12 is secondary and may lag in feature coverage.
 
 ### Materials — `Include/Rendering/Materials/`
 
@@ -195,7 +195,7 @@ Generic, reusable pass *classes* (implement `IRenderGraphPass`). These are the l
 
 ### Sky — `Include/Rendering/Sky/`
 
-Atmospheric sky rendering — tier1 (analytic) and tier2 (LUT-driven physically-based). Used by `SkyRenderFeature` in the engine layer.
+Atmospheric sky rendering: tier1 (analytic) and tier2 (LUT-driven physically-based). Used by `SkyRenderFeature` in the engine layer.
 
 ### Utils — `Include/Rendering/Utils/`
 
@@ -210,7 +210,7 @@ Atmospheric sky rendering — tier1 (analytic) and tier2 (LUT-driven physically-
 
 All GLSL. Compiled at build time to `.spv` via `shaderc` (vcpkg dep). The build emits shader package archives (`.shaderpkg`) that bundle SPIR-V + reflection + metadata.
 
-**Naming convention:** `<name>.vert`, `<name>.frag`, `<name>.comp` for raw shaders. `<name>.glsl` for surfaces, adapters, and includes (no entry point — meant to be composed).
+**Naming convention:** `<name>.vert`, `<name>.frag`, `<name>.comp` for raw shaders. `<name>.glsl` for surfaces, adapters, and includes (no entry point: meant to be composed).
 
 | Subdirectory | Contents |
 |---|---|
@@ -294,7 +294,6 @@ All GLSL. Compiled at build time to `.spv` via `shaderc` (vcpkg dep). The build 
 
 | File | Purpose |
 |---|---|
-| `EmbeddedImageDecoder.h/.cpp` | Decodes embedded image data (from glTF, etc.) |
 | `PostProcessSettings.h/.cpp` | Post-process volume settings (bloom intensity, tonemap mode, color grading) |
 | `PrimitiveGenerator.h/.cpp` | Procedural primitives (sphere, box) at the engine level |
 | `ShaderCompilationCache.h/.cpp` | Cache for compiled shader variants |
@@ -321,7 +320,7 @@ The system that loads `.rendergraph` JSON and turns it into RG passes.
 
 ### ECS systems — `Engine/Source/Engine/Rendering/Systems/`
 
-Render-related ECS systems. These run during the world update; their outputs feed `RenderServices`.
+Render-related ECS systems. These run during the world update. Their outputs feed `RenderServices`.
 
 | File | Purpose |
 |---|---|
@@ -338,13 +337,13 @@ Render-related ECS systems. These run during the world update; their outputs fee
 
 ## The render graph
 
-The render graph is **immediate-mode**: the whole frame graph is declared fresh each frame into a bump arena (the graph's `Memory::Arena`), compiled in one sweep, executed, and reset. There is no retained pass state, no enable/disable/invalidate, no incremental compile — a pass that should not run this frame is not declared. Core: `Engine/Modules/Rendering/{Include/Rendering/Core,Source/Core}/RenderGraph/`.
+The render graph is **immediate-mode**: the whole frame graph is declared fresh each frame into a bump arena (the graph's `Memory::Arena`), compiled in one sweep, executed, and reset. There is no retained pass state, no enable/disable/invalidate, no incremental compile. A pass that should not run this frame is not declared. Core: `Engine/Modules/Rendering/{Include/Rendering/Core,Source/Core}/RenderGraph/`.
 
-- **Declaration** — `RGFrame` + `RGPassBuilder` (typed `RGTexture`/`RGBuffer` handles, dense per-frame ids; no hash maps or string keys in the hot path).
-- **Cull** — ref-count backward reachability from sinks; every culled pass records an `RGCullReason` surfaced over MCP.
-- **Schedule** — structural working-set scheduler: weakly-connected hazard components emit contiguously (the TBDR interleave fix, by construction), identical-attachment clusters group within a component, contraction stalls split-and-retry. Deterministic integer tiebreaks.
-- **Barriers** — whole-frame derivation over per-(mip,layer) subresource cells with per-physical-queue reader coverage; **per-pass batched** calls plus a submission-front hoist of first-touch (init/import-sync) barriers. Imports enter at their pool-tracked layout and final layouts write back to the pool.
-- **Submission** — passes partition by **physical** queue (the production default map collapses all logical queues onto one graphics submission; async compute is an explicit opt-in map) with monotonic timeline-semaphore sync.
+- **Declaration**: `RGFrame` + `RGPassBuilder` (typed `RGTexture`/`RGBuffer` handles, dense per-frame ids; no hash maps or string keys in the hot path).
+- **Cull**: ref-count backward reachability from sinks; every culled pass records an `RGCullReason` surfaced over MCP.
+- **Schedule**: structural working-set scheduler: weakly-connected hazard components emit contiguously (the TBDR interleave fix, by construction), identical-attachment clusters group within a component, contraction stalls split-and-retry. Deterministic integer tiebreaks.
+- **Barriers**: whole-frame derivation over per-(mip,layer) subresource cells with per-physical-queue reader coverage; **per-pass batched** calls plus a submission-front hoist of first-touch (init/import-sync) barriers. Imports enter at their pool-tracked layout and final layouts write back to the pool.
+- **Submission**: passes partition by **physical** queue (the production default map collapses all logical queues onto one graphics submission; async compute is an explicit opt-in map) with monotonic timeline-semaphore sync.
 
 Design rationale, comparison with other engines' render graphs, and measured claims live in the support repository as “Render Graph Redesign — Immediate-Mode, Arena-Backed, Queue-Aware”. Quick reference: [Render graph quick reference](render-graph.mdx).
 
@@ -474,7 +473,7 @@ The order of the `passes` array is the order of the frame: the pipeline declares
 
 ### The composition model
 
-A material doesn't *contain* shader source — it *references*:
+A material does not *contain* shader source. It *references*:
 
 1. A **surface shader** (e.g. `Surfaces/standard_pbr.glsl`)
 2. A **lighting model** (currently `StandardPBR`)
@@ -541,13 +540,13 @@ This metadata enables binding by name via `NamedDescriptorWriter` and `NamedPush
 
 `ShaderVariantKey` is a bitmask defined in `ShaderVariantKey.h`. Examples of common bits:
 
-- `SKINNED` — vertex shader receives bone indices/weights
-- `HAS_SHADOWS` — fragment samples shadow map
-- `HAS_NORMAL_MAP` — fragment uses normal map
-- `INSTANCED` — vertex shader reads instance data from SSBO
-- `ALPHA_TEST` — fragment discards on alpha threshold
+- `SKINNED`: vertex shader receives bone indices/weights
+- `HAS_SHADOWS`: fragment samples shadow map
+- `HAS_NORMAL_MAP`: fragment uses normal map
+- `INSTANCED`: vertex shader reads instance data from SSBO
+- `ALPHA_TEST`: fragment discards on alpha threshold
 
-A material can request multiple variants (e.g. one with shadows, one without) — they're compiled lazily as needed.
+A material can request multiple variants (e.g. one with shadows, one without). They are compiled lazily as needed.
 
 ## Vulkan conventions
 
@@ -578,17 +577,17 @@ The engine uses non-default Vulkan conventions for performance and correctness. 
 ### Negative viewport height
 
 - The Vulkan viewport uses negative height (via `VK_KHR_maintenance1`) so Y is up at the framebuffer level
-- This means shadow UV sampling needs `shadowUV.y = 1.0 - shadowUV.y` to compensate when sampling into a shadow map that wasn't rendered with the flip
+- This means shadow UV sampling needs `shadowUV.y = 1.0 - shadowUV.y` to compensate when sampling into a shadow map that was not rendered with the flip
 
 ### Camera-relative rendering (Earth-scale precision)
 
-- The render origin is expressed as an **integer sector + fp32 local** derived from the camera each frame (`RenderOrigin.h`). It is *not* a global re-shift: each instance stores its own sector (packed into the two reserved `GPUInstance` words) and the vertex stage differences it against the camera's sector, so a moving camera re-uploads only the CameraUBO — the persistent, change-tracked instance buffer is untouched (quiescence preserved)
+- The render origin is expressed as an **integer sector + fp32 local** derived from the camera each frame (`RenderOrigin.h`). It is *not* a global re-shift: each instance stores its own sector (packed into the two reserved `GPUInstance` words) and the vertex stage differences it against the camera's sector, so a moving camera re-uploads only the CameraUBO. The persistent, change-tracked instance buffer is untouched (quiescence preserved)
 - The `CameraUBO` carries rebased view / view-proj (built from the camera's sector-local position) plus the origin sector; the vertex stage projects a render-origin-relative position through them for a fp32-precise clip position, while `vPosWS` stays full world for the fragment stage (lighting / shadows / fog are world-space this slice)
 - Inactive (sector 0) inside the activation radius ⇒ the shader takes the full-world path, byte-identical to the pre-feature build. Kills far-from-origin vertex jitter / z-fighting for meshes out to planetary radius. Terrain (CBT), shadow-map precision, and clustered-light precision are the documented follow-up slices
 
 ## Writing a render pass (recipes)
 
-Passes are declared fresh every frame against `RGFrame` (immediate mode — a pass that should not run is simply not declared). The declaration lambda states every access; barriers, ordering, and culling are derived from those declarations. Execute lambdas capture **by value** and record through `RGContext`.
+Passes are declared fresh every frame against `RGFrame` (immediate mode: a pass that should not run is simply not declared). The declaration lambda states every access. Barriers, ordering, and culling are derived from those declarations. Execute lambdas capture **by value** and record through `RGContext`.
 
 ```cpp title="A raster pass and a compute pass"
 // Raster pass: attachments + declared reads. LoadOp::Load derives a READ edge
@@ -609,7 +608,7 @@ frame.AddPass("LightCull", PassPhase::kEarlySetup,
     [=](RenderGraph::RGContext& ctx) { ctx.Dispatch(gx, gy, 1); });
 ```
 
-Cross-frame resources are imported per frame: `ImportPersistentTexture/Buffer` (pool-owned, layout carried across frames), `ImportExternalTexture/Buffer` (engine-owned, no write-back), `RGRotatingTexture/Buffer` (the only N-buffer rotation — history and CPU readbacks). Per-frame CPU constants come from `AllocUpload<T>()` (one upload ring; there is no `perFrame` flag). A consume-only pass (queries, readback) uses `PreventCulling()`; everything else survives by feeding a sink (`MarkOutput`/present/export).
+Cross-frame resources are imported per frame: `ImportPersistentTexture/Buffer` (pool-owned, layout carried across frames), `ImportExternalTexture/Buffer` (engine-owned, no write-back), `RGRotatingTexture/Buffer` (the only N-buffer rotation: history and CPU readbacks). Per-frame CPU constants come from `AllocUpload<T>()` (one upload ring; there is no `perFrame` flag). A consume-only pass (queries, readback) uses `PreventCulling()`. Everything else survives by feeding a sink (`MarkOutput`/present/export).
 
 Living examples: the render graph tests under `Engine/Modules/Rendering/Tests/RenderGraph/` and the pipeline nodes under `Engine/Source/Engine/Rendering/Pipeline/Nodes/` (post-FX stages share `FullscreenShaderNode::DeclareForView`).
 
@@ -644,7 +643,7 @@ When you need to upload data the GPU will consume this frame and discard, this i
 - PCSS raw-depth registration (shadows already use this)
 - Future GBuffer texture pools, virtualized shadow maps, ray-traced texture sampling
 
-Each registered resource gets a stable index. Indices are *not* sequential — the allocator may recycle parked-free slots.
+Each registered resource gets a stable index. Indices are *not* sequential: the allocator may recycle parked-free slots.
 
 ### Frame-in-flight isolation
 
@@ -667,11 +666,11 @@ Source: `Engine/Modules/Rendering/Include/Rendering/Core/RenderingDebugFlags.h`,
 
 When the Editor is running:
 
-- **RenderGraph panel** — live pass list, resource list, barrier list, per-frame stats
-- **VRAM panel** — GPU memory usage by resource
-- **CPU Profiler panel** — per-frame CPU timings
-- **Visual Profiler panel** — per-pass GPU timings (from QueryPool)
-- **Monitors panel** — runtime counters
+- **RenderGraph panel**: live pass list, resource list, barrier list, per-frame stats
+- **VRAM panel**: GPU memory usage by resource
+- **CPU Profiler panel**: per-frame CPU timings
+- **Visual Profiler panel**: per-pass GPU timings (from QueryPool)
+- **Monitors panel**: runtime counters
 
 ### The golden rule for debugging GPU bugs
 
@@ -689,10 +688,10 @@ See [GPU debugging guide](gpu-debugging-guide.mdx) for the full playbook.
 
 :::danger[Easy-to-miss bugs]
 
-- **Forgetting `p.PreventCulling()` on a consume-only pass** — ref-count cull removes passes whose outputs reach no sink (readback/query/diagnostic passes need it)
-- **Capturing frame-local ids across frames** — `RGTexture`/`RGBuffer` ids are valid only for the `RGFrame` that created them; re-import/re-declare each frame and guard cached ids with frame identity
-- **Stale `.shaderdesc`** — after editing a shader's descriptor layout, rebuild to regenerate the sidecar (otherwise `NamedDescriptorWriter` resolves stale bindings)
-- **Wrong asset mount** — editor reads from `build/<preset>/bin/<config>/Apps/Editor/Assets/`, NOT from `Apps/Editor/Assets/` in the repo. Edit the staged copy for hot-reload.
+- **Forgetting `p.PreventCulling()` on a consume-only pass**: ref-count cull removes passes whose outputs reach no sink (readback/query/diagnostic passes need it)
+- **Capturing frame-local ids across frames**: `RGTexture`/`RGBuffer` ids are valid only for the `RGFrame` that created them. Re-import/re-declare each frame and guard cached ids with frame identity
+- **Stale `.shaderdesc`**: after editing a shader's descriptor layout, rebuild to regenerate the sidecar (otherwise `NamedDescriptorWriter` resolves stale bindings)
+- **Wrong asset mount**: editor reads from `build/<preset>/bin/<config>/Apps/Editor/Assets/`, NOT from `Apps/Editor/Assets/` in the repo. Edit the staged copy for hot-reload.
 
 :::
 
@@ -738,9 +737,3 @@ See [GPU debugging guide](gpu-debugging-guide.mdx) for the full playbook.
 | **Raytracing** | Recipe 3 (Render Feature) + pipeline node. Verify `IDevice` exposes RT extension (`kRayTracing`). There is no GPU TLAS yet: `SceneTlas` in `Engine/Modules/Scene` is a CPU BVH for editor picking, not an acceleration structure, so the feature builds its own. RT shaders may need a new compile path (current pipeline is Vulkan-GLSL via shaderc — verify if `.rgen/.rchit/.rmiss` GLSL is supported or if HLSL is required) |
 
 *This guide is meant to be living. When you add a major subsystem, add a row to the file catalogs and a recipe section if appropriate.*
-
-## Changelog
-
-- 2026-10-13: Transients are described as pooled across frames, not aliased within a frame, and the pool rotation line, which no code does, is gone.
-- 2026-10-13: Pass order is the array order (phase is a tiebreak; `tags` and `after` have no effect); the debug variables are the two the renderer reads; rows naming files that no longer exist are removed or name the current file; the Graphviz export, which does not exist, is gone.
-- 2026-10-12: Converted from `Engine/Modules/Rendering/docs/Rendering_Architecture_Guide.html`. Links to source, shader and asset files become code paths.

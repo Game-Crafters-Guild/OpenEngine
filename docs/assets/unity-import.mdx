@@ -3,16 +3,16 @@ title: Unity import
 description: Converting the scenes of a Unity package into engine scenes with Tools > Import Unity Package, and where the converter comes from.
 ---
 
-**Tools > Import Unity Package...** converts the scenes of a Unity package into engine scenes in the open project: static mesh placements, materials, directional and point lights and the scene environment (fog, ambient light, skybox), with the models and textures they reference. It runs inside the editor, from the built-in `unity-import` package; nothing has to be installed.
+**Tools > Import Unity Package...** converts the scenes of a Unity package into engine scenes in the open project: static mesh placements, materials, directional and point lights, and the scene environment (fog, ambient light, skybox), with the models and textures they reference. It runs inside the editor, from the built-in `unity-import` package. Nothing has to be installed.
 
 ## Importing a package
 
 1. Open the project the scenes should land in, then choose **Tools > Import Unity Package...**.
 2. Pick the source: a `.unitypackage` file with **Browse...**, or the path of an extracted package folder (the `<guid>/pathname` and `<guid>/asset` layout a `.unitypackage` unpacks to) typed into the field, followed by Enter.
-3. The dialog lists every scene in the package, all selected, and counts the shared models, textures and materials. Clear the scenes you do not want; shared assets are imported once for any selection.
+3. The dialog lists every scene in the package, all selected, and counts the shared models, textures, and materials. Clear the scenes you do not want. Shared assets are imported once for any selection.
 4. Choose the destination inside the project's assets folder (the assets folder itself by default) and press **Import**.
 5. If files with the same names already exist at the destination, the dialog lists them and asks before it overwrites anything.
-6. When the import completes, the dialog reports the scenes, entities and materials written, the models and textures brought in, and any reference that did not resolve. **Open `<scene>`** opens a converted scene.
+6. When the import completes, the dialog reports the scenes, entities, and materials written, the models and textures brought in, and any reference that did not resolve. **Open `<scene>`** opens a converted scene.
 
 ### What the import writes
 
@@ -25,7 +25,7 @@ description: Converting the scenes of a Unity package into engine scenes with To
 
 :::caution[Scope]
 
-The importer converts static meshes, materials, directional and point lights and the scene environment. Skinned meshes and characters, cameras, spot and area lights, particles, colliders, scripts and terrain are skipped; the converter README lists every limitation.
+The importer converts static meshes, materials, directional and point lights, and the scene environment. Skinned meshes and characters, cameras, spot and area lights, particles, colliders, scripts, and terrain are skipped. The converter README lists every limitation.
 
 :::
 
@@ -38,18 +38,12 @@ The conversion itself is done by the Unity scene converter, an open-source proje
 | `home`, `commit` | The converter repository and the commit the assembly was built from |
 | `sdk` | The exact .NET SDK version, which the converter repository pins in its `global.json` |
 | `build`, `output` | The build command and the file it writes |
-| `sha256` | The hash of the vendored file; a rebuild of that commit with that SDK reproduces it exactly |
+| `sha256` | The hash of the vendored file. A rebuild of that commit with that SDK reproduces it exactly |
 
 ## Updating the converter
 
 1. Land the change in the converter repository.
 2. In a clean checkout of the resulting commit, with the SDK its `global.json` names installed, run `npm run build:dll`.
-3. Copy `dist/UnityConverter.dll` over `Packages/unity-import/Tools/UnityConverter.dll`, update the commit, SDK and SHA-256 in `Packages/unity-import/Tools/UnityConverter.dll.source`, and land both in one change.
+3. Copy `dist/UnityConverter.dll` over `Packages/unity-import/Tools/UnityConverter.dll`, update the commit, SDK, and SHA-256 in `Packages/unity-import/Tools/UnityConverter.dll.source`, and land both in one change.
 
-The next editor build stages the new assembly with the package; no engine code changes.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/Assets/unity-import.html`; the vendored files named from the repository root.
-- 2026-10-05: first version. The converter is a vendored assembly built by its own repository.
-- 2026-10-05: the editor hosts .NET 10; the vendored `net9.0` assembly loads on it unchanged.
+The next editor build stages the new assembly with the package. No engine code changes.

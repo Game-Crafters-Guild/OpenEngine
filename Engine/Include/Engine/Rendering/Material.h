@@ -15,8 +15,9 @@
 //   3. SetFloat() etc -- StringId-keyed named access (Editor, scripting)
 //
 // Any content change bumps a process-wide content epoch (see MarkDirty /
-// GetGlobalContentEpoch); PackMaterialSSBO folds that epoch into its per-frame
-// skip stamp and repacks when it changes. There is no per-material GPU buffer:
+// GetGlobalContentEpoch) and the material's own revision (GetContentRevision);
+// PackMaterialSSBO skips a frame while the epoch is unchanged and otherwise
+// repacks the rows whose revision moved. There is no per-material GPU buffer:
 // material params live only in the shared SSBO, indexed per-instance.
 //
 // GPU state (pipeline id, shader meta) is private. Only MaterialRegistry has
@@ -422,9 +423,10 @@ class Material
     uint32_t GetContentRevision() const { return m_ContentRevision; }
 
     // Process-wide epoch bumped by every MarkDirty() on any material (the list
-    // above). PackMaterialSSBO folds it into its per-frame-slot stamp, making the
-    // idle-frame skip check O(1): any material content change anywhere
-    // invalidates the packed slots.
+    // above). PackMaterialSSBO keeps it per ring slot, making the idle-frame skip
+    // check O(1): an unchanged epoch skips the pack without scanning rows, and a
+    // moved one makes the pack compare each row's GetContentRevision to rewrite
+    // only the rows that changed.
     //
     // Out-of-line on purpose: every module that includes this header would
     // instantiate a header-inline static separately (the generated exports.def

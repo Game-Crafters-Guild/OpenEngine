@@ -9,7 +9,8 @@ struct SkySettings;
 
 namespace GameEngine::Engine::Renderer {
 
-// std140 layout shared by height_fog.frag and HeightFogParamsUploadNode.
+// std140 layout of the HeightFogParams UBO: filled by HeightFogParamsUploadNode, mirrored field for
+// field by height_fog_params_fields.glsl.
 struct HeightFogParamsUBO
 {
     float intensity = 0.0f;
@@ -87,7 +88,8 @@ struct HeightFogParamsUBO
 static_assert(sizeof(HeightFogParamsUBO) == 256, "HeightFogParamsUBO must be 256 bytes");
 
 // Values of HeightFogParamsUBO::colorSource. The sky values are sky_composite.glsl's
-// GE_SKY_HORIZON_SOURCE_* values, which height_fog.frag hands to GE_SkyHorizonColor.
+// GE_SKY_HORIZON_SOURCE_* values, which the fog term (height_fog_term.glsl) hands to
+// GE_SkyHorizonColor.
 enum class HeightFogColorSource : int32
 {
     // Emissive, the gradient and the sun in-scatter term.

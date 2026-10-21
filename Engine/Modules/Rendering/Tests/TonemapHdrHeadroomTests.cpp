@@ -88,6 +88,9 @@
 #include <Rendering/Materials/MaterialBuilder.h>
 #include <Rendering/Materials/ShaderReflection.h>
 
+#include <Rendering/Utils/CubeLutFileParser.h>
+#include <Rendering/Utils/CubeLutGpuUpload.h>
+
 #include "Source/Passes/TonemapAces2Tables.h"
 
 using namespace GameEngine::Rendering;
@@ -151,6 +154,35 @@ std::string Fmt(const Rgb& c)
     return buf;
 }
 
+// The Cube LUT the pass samples.
+enum class RigLut
+{
+    None,             // the identity tables at intensity 0: no LUT effect on the volume
+    Half,             // a 2x2x2 table mapping every colour to half of itself
+    Square,           // a 33^3 table mapping each channel x to x * x: a tone curve, not a scale
+    IdentityFallback, // what a LUT slot holds when its file is missing or fails to load, at intensity 1
+};
+
+// A 33^3 .cube mapping each channel x to x * x over [0, 1] (red fastest, as the format orders it).
+// Trilinear interpolation between its knots is within 1/4096 of x * x.
+constexpr uint32_t kSquareLutSize = 33;
+
+std::string SquareCubeLutText()
+{
+    std::string text = "LUT_3D_SIZE " + std::to_string(kSquareLutSize) + "\n";
+    const float step = 1.0f / static_cast<float>(kSquareLutSize - 1);
+    char line[96];
+    for (uint32_t b = 0; b < kSquareLutSize; ++b)
+        for (uint32_t g = 0; g < kSquareLutSize; ++g)
+            for (uint32_t r = 0; r < kSquareLutSize; ++r)
+            {
+                const float rv = r * step, gv = g * step, bv = b * step;
+                std::snprintf(line, sizeof(line), "%.7f %.7f %.7f\n", rv * rv, gv * gv, bv * bv);
+                text += line;
+            }
+    return text;
+}
+
 struct TonemapParams
 {
     float Exposure = 1.0f;
@@ -161,12 +193,14 @@ struct TonemapParams
     float MaxOutputNits = kPanelPeakNits;
     int PreserveAlpha = 0;
     int UseAutoExposure = 0;
+    RigLut Lut = RigLut::None;
 };
 
 // Writes the tonemap push-constant block BY NAME from the reflected layout.
 // Returns false if any field the suite drives is missing, so a rename fails the
 // test rather than leaving a zero the shader reads as a different mode.
 bool BuildPushConstants(const PushConstantRangeMeta& pcr, const TonemapParams& p,
+                        const CubeLutGpuBindingState& lut, float lutIntensity,
                         std::vector<uint8_t>& out, std::string& missing)
 {
     out.assign(pcr.Size, 0);
@@ -178,6 +212,11 @@ bool BuildPushConstants(const PushConstantRangeMeta& pcr, const TonemapParams& p
         {"exposure", p.Exposure, false},
         {"paperWhiteNits", p.PaperWhiteNits, false},
         {"maxOutputNits", p.MaxOutputNits, false},
+        {"lutIntensity", lutIntensity, false},
+        {"lut3dInMin", lut.In3DMin, false},
+        {"lut3dInMax", lut.In3DMax, false},
+        {"lut1dInMin", lut.In1DMin, false},
+        {"lut1dInMax", lut.In1DMax, false},
     };
     IntField ints[] = {
         {"look", static_cast<int32_t>(p.Look), false},
@@ -185,6 +224,10 @@ bool BuildPushConstants(const PushConstantRangeMeta& pcr, const TonemapParams& p
         {"outEncoding", p.OutEncoding, false},
         {"preserveAlpha", p.PreserveAlpha, false},
         {"useAutoExposure", p.UseAutoExposure, false},
+        {"lutInputEncoding", lut.InputEncoding, false},
+        {"lutSize3d", lut.Size3D, false},
+        {"lutSize1d", lut.Size1D, false},
+        {"lutFlags", lut.Flags, false},
     };
 
     for (const auto& m : pcr.Block.Members)
@@ -361,6 +404,31 @@ public:
             return false;
         }
 
+        SamplerDesc lsd{};
+        lsd.minFilter = lsd.magFilter = 1; // linear: the LUT is interpolated between its knots
+        lsd.addressModeU = lsd.addressModeV = lsd.addressModeW = 2; // clamp
+        m_LutSampler = m_Device->CreateSampler(lsd);
+        m_IdentityLut = CreateIdentityCubeLutTextures(m_Device.get());
+        CubeLutParseResult half{};
+        if (!ParseCubeLutFromText("LUT_3D_SIZE 2\n"
+                                  "0 0 0\n0.5 0 0\n0 0.5 0\n0.5 0.5 0\n"
+                                  "0 0 0.5\n0.5 0 0.5\n0 0.5 0.5\n0.5 0.5 0.5\n",
+                                  half) ||
+            !half.Ok ||
+            !CreateCubeLutGpuTextures(m_Device.get(), half, TextureFormat::R16G16B16A16_FLOAT, m_HalfLut, &why) ||
+            !m_IdentityLut.Lut3D.IsValid() || !m_IdentityLut.Lut1DStrip.IsValid())
+        {
+            why = "LUT tables failed: " + why;
+            return false;
+        }
+        CubeLutParseResult square{};
+        if (!ParseCubeLutFromText(SquareCubeLutText(), square) || !square.Ok ||
+            !CreateCubeLutGpuTextures(m_Device.get(), square, TextureFormat::R32G32B32A32_FLOAT, m_SquareLut, &why))
+        {
+            why = "square LUT failed: " + why + " " + square.Error;
+            return false;
+        }
+
         if (!BindDescriptors(pd, why))
             return false;
 
@@ -373,9 +441,11 @@ public:
         const float texel[4] = {scene.R, scene.G, scene.B, 1.0f};
         m_Device->UpdateBuffer(m_Upload, 0, sizeof(texel), texel);
 
+        float lutIntensity = 0.0f;
+        const CubeLutGpuBindingState lut = LutBinding(params.Lut, lutIntensity);
         std::vector<uint8_t> pc;
         std::string missing;
-        if (!BuildPushConstants(m_Pcr, params, pc, missing))
+        if (!BuildPushConstants(m_Pcr, params, lut, lutIntensity, pc, missing))
         {
             ADD_FAILURE() << "push-constant block missing reflected fields: " << missing;
             return {};
@@ -398,6 +468,8 @@ public:
         cl->BeginRenderPass(rp);
         cl->SetViewport(0, 0, 1, 1);
         cl->SetScissor(0, 0, 1, 1);
+        m_Device->UpdateCombinedImageSamplerBinding(m_DsTex, m_Lut3dBinding, lut.Lut3D, m_LutSampler);
+        m_Device->UpdateCombinedImageSamplerBinding(m_DsTex, m_Lut1dBinding, lut.Lut1DStrip, m_LutSampler);
         cl->SetPipeline(m_Pipeline);
         cl->BindDescriptorSet(m_TexSet, m_DsTex, m_Pipeline);
         if (m_SamplerSet != m_TexSet && m_DsSampler.IsValid())
@@ -441,10 +513,16 @@ private:
         bool hasSsbo = false;
         bool hasTables = false;
         uint32_t tablesSet = 0, tablesBinding = 0;
+        bool hasLut3d = false, hasLut1d = false;
+        uint32_t lutSet = 0;
         for (const auto& s : m_Meta.Sets)
             for (const auto& b : s.Bindings)
             {
-                if (!hasCombined && b.Type == ShaderMetaBindingType::kCombinedImageSampler)
+                if (b.Type == ShaderMetaBindingType::kCombinedImageSampler && b.Name == "uLut3d")
+                { hasLut3d = true; lutSet = s.Set; m_Lut3dBinding = b.Binding; }
+                else if (b.Type == ShaderMetaBindingType::kCombinedImageSampler && b.Name == "uLut1d")
+                { hasLut1d = true; m_Lut1dBinding = b.Binding; }
+                else if (!hasCombined && b.Type == ShaderMetaBindingType::kCombinedImageSampler)
                 { hasCombined = true; combinedSet = s.Set; combinedBinding = b.Binding; }
                 if (!hasImage && b.Type == ShaderMetaBindingType::kSampledImage)
                 { hasImage = true; imageSet = s.Set; imageBinding = b.Binding; }
@@ -495,6 +573,13 @@ private:
         else
         {
             why = "tonemap.frag exposes neither a combined nor a separate image+sampler binding";
+            return false;
+        }
+
+        // The Cube LUT tables: Run binds the identity or the half LUT per draw.
+        if (!hasLut3d || !hasLut1d || lutSet != m_TexSet)
+        {
+            why = "tonemap.frag's uLut3d / uLut1d are missing or outside the scene color's set";
             return false;
         }
 
@@ -575,8 +660,25 @@ private:
     PipelineHandle m_Pipeline = INVALID_HANDLE;
     TextureHandle m_Src{}, m_Dst{};
     BufferHandle m_Upload{}, m_Readback{}, m_Exposure{}, m_Aces2Tables{};
-    SamplerHandle m_Sampler{};
+    SamplerHandle m_Sampler{}, m_LutSampler{};
     DescriptorSetHandle m_DsTex{}, m_DsSampler{};
+    // The binding and intensity the pass is given for each rig LUT. Tables a LUT does not use are
+    // the identity tables, as in production.
+    CubeLutGpuBindingState LutBinding(RigLut which, float& intensity) const
+    {
+        intensity = which == RigLut::None ? 0.0f : 1.0f;
+        if (which == RigLut::None || which == RigLut::IdentityFallback)
+            return IdentityCubeLutBinding(m_IdentityLut);
+        CubeLutGpuBindingState lut{};
+        lut.Lut3D = which == RigLut::Half ? m_HalfLut.Lut3D : m_SquareLut.Lut3D;
+        lut.Lut1DStrip = m_IdentityLut.Lut1DStrip;
+        lut.Size3D = which == RigLut::Half ? 2 : static_cast<int32_t>(kSquareLutSize);
+        lut.Flags = 1;
+        return lut;
+    }
+
+    CubeLutGpuTextures m_IdentityLut{}, m_HalfLut{}, m_SquareLut{};
+    uint32_t m_Lut3dBinding = 0, m_Lut1dBinding = 0;
     uint32_t m_TexSet = 0, m_SamplerSet = 0, m_PcRangeId = 0;
     ResourceState m_SrcState = ResourceState::Undefined;
     ResourceState m_DstState = ResourceState::Undefined;
@@ -1020,6 +1122,113 @@ TEST_F(TonemapHdrHeadroom, Aces2PeakParameterisedContract)
     EXPECT_EQ(flat.R, sdrMidA.R) << "zero-headroom HDR ACES2 != SDR: " << Fmt(flat);
     EXPECT_EQ(flat.G, sdrMidA.G);
     EXPECT_EQ(flat.B, sdrMidA.B);
+}
+
+// --- 9. The Cube LUT grades the look's output, before the HDR extension -----
+//
+// A LUT is authored for the display range [0, 1]. The pass samples it on the
+// look's output and extends the result into the panel's headroom afterwards, so
+// the LUT sees the range it was authored for and the headroom survives. The
+// rig's half LUT maps every colour to half of itself: under HDR a scene-8.0
+// highlight that Neutral renders at 0.97 becomes 0.48, below the knee, so the
+// result equals the SDR answer; applying the LUT after the extension would give
+// half of the extended 3.47 instead. Filmic's grey highlight above 1.0 is looked
+// up divided by its own largest channel and scaled back: half of its HDR output.
+TEST_F(TonemapHdrHeadroom, CubeLutGradesTheLooksOutputBeforeTheHdrExtension)
+{
+    const Rgb scene{8.0f, 8.0f, 8.0f};
+    for (Mode m : {Mode::Neutral, Mode::Photographic})
+    {
+        TonemapParams sdr{}; sdr.Look = m; sdr.OutEncoding = kEncodingSdrLinear;
+        TonemapParams sdrLut = sdr; sdrLut.Lut = RigLut::Half;
+        TonemapParams hdrLut{}; hdrLut.Look = m; hdrLut.OutEncoding = kEncodingHdrLinear; hdrLut.Lut = RigLut::Half;
+        const Rgb plain = Rig().Run(scene, sdr);
+        const Rgb gradedSdr = Rig().Run(scene, sdrLut);
+        const Rgb gradedHdr = Rig().Run(scene, hdrLut);
+        EXPECT_NEAR(gradedSdr.Peak(), 0.5f * plain.Peak(), 2e-3f)
+            << ModeName(m) << ": SDR " << Fmt(gradedSdr) << " is not half of " << Fmt(plain);
+        EXPECT_NEAR(gradedHdr.Peak(), gradedSdr.Peak(), 2e-3f)
+            << ModeName(m) << ": the LUT ran after the HDR extension: " << Fmt(gradedHdr) << " against SDR "
+            << Fmt(gradedSdr);
+    }
+
+    TonemapParams filmic{}; filmic.Look = Mode::Filmic; filmic.OutEncoding = kEncodingHdrLinear;
+    TonemapParams filmicLut = filmic; filmicLut.Lut = RigLut::Half;
+    const Rgb hdr = Rig().Run(scene, filmic);
+    const Rgb gradedFilmic = Rig().Run(scene, filmicLut);
+    ASSERT_GT(hdr.Peak(), 1.5f) << "Filmic did not use the headroom: " << Fmt(hdr);
+    EXPECT_NEAR(gradedFilmic.Peak(), 0.5f * hdr.Peak(), 5e-3f)
+        << "Filmic's headroom did not survive the LUT: " << Fmt(gradedFilmic) << " against " << Fmt(hdr);
+
+    // The no-look view shows the image without any grade.
+    TonemapParams noLook{}; noLook.Look = Mode::NoLook; noLook.OutEncoding = kEncodingSdrLinear;
+    TonemapParams noLookLut = noLook; noLookLut.Lut = RigLut::Half;
+    const Rgb half = {0.5f, 0.5f, 0.5f};
+    EXPECT_NEAR(Rig().Run(half, noLookLut).Peak(), Rig().Run(half, noLook).Peak(), 1e-5f);
+}
+
+// A LUT effect whose slot holds no usable LUT (none picked yet, or a file that failed to load)
+// leaves the image exactly as no LUT effect would. The slot keeps the identity tables bound for
+// valid descriptors, and the pass must not sample them: a 2-texel table filtered at 8-bit
+// precision quantises dark values (0.0009 linear rendered as 0).
+TEST_F(TonemapHdrHeadroom, ALutSlotWithNoUsableLutLeavesTheImageUntouched)
+{
+    std::vector<float> levels = {0.0009086f, 0.0020875f, 0.0031641f};
+    for (int i = 0; i <= 96; ++i)
+        levels.push_back(std::exp2(-12.0f + 14.0f * static_cast<float>(i) / 96.0f));
+    for (Mode m : {Mode::Neutral, Mode::Filmic, Mode::Photographic})
+    {
+        TonemapParams plain{}; plain.Look = m; plain.OutEncoding = kEncodingSdrLinear;
+        TonemapParams slot = plain; slot.Lut = RigLut::IdentityFallback;
+        float worst = 0.0f;
+        std::string where;
+        for (float v : levels)
+        {
+            const Rgb scene{v, v, v};
+            const Rgb a = Rig().Run(scene, plain);
+            const Rgb b = Rig().Run(scene, slot);
+            const float d = std::max({std::fabs(a.R - b.R), std::fabs(a.G - b.G), std::fabs(a.B - b.B)});
+            if (d > worst)
+            {
+                worst = d;
+                where = std::to_string(v) + ": " + Fmt(b) + " against " + Fmt(a);
+            }
+        }
+        EXPECT_LE(worst, 1e-6f) << ModeName(m) << ": the empty LUT slot changed the image at scene " << where;
+    }
+}
+
+// A LUT is authored for display values in [0, 1], so it grades each pixel at the value it shows:
+// a pixel inside [0, 1] is looked up as it is, under SDR and under HDR alike, and a pixel above 1.0
+// (Filmic's HDR highlights) is divided by its own largest channel for the lookup and scaled back.
+// The square LUT therefore maps Filmic's mid-grey and 0.5 to the square of the look's output under
+// both encodings, at any panel peak, and leaves a grey highlight above 1.0 as it is: above 1.0 the
+// LUT grades a highlight's color, not its tone.
+TEST_F(TonemapHdrHeadroom, FilmicUnderHdrGradesMidtonesAsInSdr)
+{
+    for (const int encoding : {kEncodingSdrLinear, kEncodingHdrLinear})
+    {
+        for (const float v : {0.18f, 0.5f})
+        {
+            const Rgb scene{v, v, v};
+            TonemapParams filmic{}; filmic.Look = Mode::Filmic; filmic.OutEncoding = encoding;
+            TonemapParams graded = filmic; graded.Lut = RigLut::Square;
+            const Rgb out = Rig().Run(scene, filmic);
+            const Rgb g = Rig().Run(scene, graded);
+            ASSERT_LT(out.Peak(), 1.0f) << "scene " << v << " is not a midtone here: " << Fmt(out);
+            EXPECT_NEAR(g.Peak(), out.Peak() * out.Peak(), 2e-3f)
+                << (encoding == kEncodingHdrLinear ? "HDR" : "SDR") << " scene " << v << ": Filmic " << Fmt(out)
+                << " graded to " << Fmt(g) << ", expected its square";
+        }
+    }
+
+    const Rgb highlight{2.0f, 2.0f, 2.0f};
+    TonemapParams filmic{}; filmic.Look = Mode::Filmic; filmic.OutEncoding = kEncodingHdrLinear;
+    TonemapParams graded = filmic; graded.Lut = RigLut::Square;
+    const Rgb out = Rig().Run(highlight, filmic);
+    ASSERT_GT(out.Peak(), 1.0f) << "scene 2.0 does not reach the headroom: " << Fmt(out);
+    EXPECT_NEAR(Rig().Run(highlight, graded).Peak(), out.Peak(), 5e-3f)
+        << "a grey highlight above 1.0 keeps its tone: " << Fmt(out);
 }
 
 } // namespace

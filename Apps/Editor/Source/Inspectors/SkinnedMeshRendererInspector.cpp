@@ -16,7 +16,6 @@ namespace GameEngine
 
 using InspectorUI::AddLine;
 using InspectorUI::BoolToString;
-using InspectorUI::ToHex;
 
 namespace
 {
@@ -76,7 +75,6 @@ void RegisterSkinnedMeshRendererInspector()
         {
             AddLine(ctx.Parent, "Rig source: (no SkeletonRef)");
         }
-        AddLine(ctx.Parent, std::string("RenderLayerMask: ") + ToHex(smr->renderLayerMask));
         AddLine(ctx.Parent, std::string("CastShadows: ") + BoolToString(smr->castShadows));
         AddLine(ctx.Parent, std::string("ReceiveShadows: ") + BoolToString(smr->receiveShadows));
     };

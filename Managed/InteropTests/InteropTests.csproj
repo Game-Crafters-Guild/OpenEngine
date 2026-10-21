@@ -23,7 +23,7 @@
     </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ECS.ABI\GameEngine.ECS.ABI.csproj" />
-    <ProjectReference Include="..\Input.ABI\GameEngine.Input.ABI.csproj" />
+    <ProjectReference Include="..\Scripting.Bindings\GameEngine.Scripting.Bindings.csproj" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Scripting.ABI\GameEngine.Scripting.ABI.csproj" />

@@ -680,7 +680,7 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
         {
             ++Posts;
             PresentedX = world.GetComponent<Components::WorldTransform>(Actor)->matrix[12];
-            world.GetComponentForWrite<Components::MeshRenderer>(Actor)->renderLayerMask = 2;
+            world.GetComponentForWrite<Components::MeshRenderer>(Actor)->RenderLayers = GameEngine::Rendering::RenderLayerMask::FromLayer(1);
             CpuTextureSourceDesc desc{{world.GetWorldId(), world.GetLifecycleResetGeneration()},
                                       HashStringId("LateSight"),
                                       TextureFormat::R8G8_UNORM,
@@ -701,7 +701,7 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
     NativePostSimulationSystem bridge(&services);
     bridge.Update(world, .1f);
     EXPECT_GT(publisher.PresentedX, publisher.InputX);
-    EXPECT_EQ(actor.Get<Components::MeshRenderer>()->renderLayerMask, 2u);
+    EXPECT_EQ(actor.Get<Components::MeshRenderer>()->RenderLayers, GameEngine::Rendering::RenderLayerMask::FromLayer(1));
     const auto binding = services.Textures().GetCpuTextureForView(world.GetWorldId(), HashStringId("LateSight"));
     ASSERT_TRUE(binding.Texture.IsValid());
     EXPECT_EQ(Read(binding), (std::vector{std::byte{17}, std::byte{255}}));

@@ -48,9 +48,9 @@ bool ViewRegistry::ReleaseCamera(CameraId id)
         return false;
     m_Cameras.erase(it);
     // Drop the per-camera side tables so a recycled CameraId can't inherit a
-    // previous camera's exposure or post-process mask.
+    // previous camera's exposure or volume layers.
     m_CameraExposures.erase(id);
-    m_CameraPostProcessMasks.erase(id);
+    m_CameraVolumeLayers.erase(id);
     return true;
 }
 
@@ -78,22 +78,22 @@ const CameraData* ViewRegistry::FindCameraData(CameraId id) const
     return nullptr;
 }
 
-void ViewRegistry::SetCameraPostProcessMask(CameraId id, uint32 mask)
+void ViewRegistry::SetCameraVolumeLayers(CameraId id, RenderLayerMask volumeLayers)
 {
-    m_CameraPostProcessMasks[id] = mask;
+    m_CameraVolumeLayers[id] = volumeLayers;
 }
 
-uint32 ViewRegistry::GetCameraPostProcessMask(CameraId id) const
+RenderLayerMask ViewRegistry::GetCameraVolumeLayers(CameraId id) const
 {
-    const auto it = m_CameraPostProcessMasks.find(id);
-    if (it == m_CameraPostProcessMasks.end())
-        return 0xFFFFFFFFu;
+    const auto it = m_CameraVolumeLayers.find(id);
+    if (it == m_CameraVolumeLayers.end())
+        return RenderLayerMask::All();
     return it->second;
 }
 
-bool ViewRegistry::HasCameraPostProcessMask(CameraId id) const
+bool ViewRegistry::HasCameraVolumeLayers(CameraId id) const
 {
-    return m_CameraPostProcessMasks.find(id) != m_CameraPostProcessMasks.end();
+    return m_CameraVolumeLayers.find(id) != m_CameraVolumeLayers.end();
 }
 
 void ViewRegistry::SetCameraExposure(CameraId id, const CameraExposure& exposure)
@@ -359,13 +359,13 @@ void ViewRegistry::SetViewCamera(ViewId id, CameraId cameraId)
     }
 }
 
-void ViewRegistry::SetViewRenderLayerMask(ViewId id, uint32 mask)
+void ViewRegistry::SetViewRenderLayerMask(ViewId id, RenderLayerMask layers)
 {
     for (auto& view : m_Views)
     {
         if (view.id == id)
         {
-            view.renderLayerMask = mask;
+            view.renderLayerMask = layers;
             return;
         }
     }
@@ -469,6 +469,24 @@ Rendering::PipelineFormatKey ViewRegistry::GetViewPrepassFormatKey(ViewId id) co
 {
     const auto* pv = FindPerView(id);
     return pv ? pv->PrepassFormatKey : Rendering::PipelineFormatKey{};
+}
+
+Rendering::PipelineFormatKey ViewRegistry::GetViewWorldColorFormatKey(ViewId id) const
+{
+    const auto* pv = FindPerView(id);
+    return pv ? pv->WorldColorFormatKey : Rendering::PipelineFormatKey{};
+}
+
+ReliefDepthSource ViewRegistry::GetViewWorldReliefDepthSource(ViewId id) const
+{
+    const auto* pv = FindPerView(id);
+    return pv ? pv->WorldReliefDepthSource : ReliefDepthSource::NoPrepass;
+}
+
+std::optional<Rendering::MaterialKeyword> ViewRegistry::GetViewDeclaredWorldPassKeywords(ViewId id) const
+{
+    const auto* pv = FindPerView(id);
+    return pv ? pv->DeclaredWorldPassKeywords : std::nullopt;
 }
 
 uint32 ViewRegistry::GetViewWorldViewportHeight(ViewId id) const

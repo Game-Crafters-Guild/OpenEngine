@@ -1,0 +1,10 @@
+TITLE "URP ShadowsMidtonesHighlights bake, display linear (unity-scene-convert)"
+LUT_3D_SIZE 2
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.0 1.0 0.0
+1.0 1.0 0.0
+0.0 0.0 1.0
+1.0 0.0 1.0
+0.0 1.0 1.0
+1.0 1.0 1.0

@@ -123,6 +123,9 @@ target_compile_features(ECSCoreTests PUBLIC cxx_std_20)
 target_include_directories(ECSCoreTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/Engine/Include
+    # Rendering/RenderLayerMask.h (header-only, Types only): the component headers and the
+    # render layer field trait include it.
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Include
 )
 
 target_link_libraries(ECSCoreTests PRIVATE
@@ -159,6 +162,8 @@ endif()
 target_include_directories(ECSAdvancedTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/Engine/Include
+    # Rendering/RenderLayerMask.h (header-only, Types only), through the render layer field trait.
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Include
 )
 
 target_link_libraries(ECSAdvancedTests PRIVATE

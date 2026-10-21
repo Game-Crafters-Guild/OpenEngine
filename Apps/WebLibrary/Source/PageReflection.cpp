@@ -157,6 +157,7 @@ std::uint32_t ElementSize(ECS::FieldTypeId type)
     case FieldTypeId::UInt32:
     case FieldTypeId::Float:
     case FieldTypeId::EntityHandle:
+    case FieldTypeId::RenderLayerMask:
         return 4;
     case FieldTypeId::Int64:
     case FieldTypeId::UInt64:
@@ -203,6 +204,7 @@ std::string_view KindName(ECS::FieldTypeId type)
     case FieldTypeId::EntityHandle: return "EntityHandle";
     case FieldTypeId::String: return "String";
     case FieldTypeId::Bytes: return "Bytes";
+    case FieldTypeId::RenderLayerMask: return "RenderLayerMask";
     case FieldTypeId::Unknown: break;
     }
     return "Unknown";

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace GameEngine::Scene
 {
@@ -68,6 +69,13 @@ struct SceneLoadContext
     };
     mutable std::unordered_map<std::string, std::unordered_map<ECS::EntityId, RetiredFoldClaim>>
         RetiredFoldClaims;
+
+    // Where a schema puts an authored property name that its component has no field for
+    // (ReportUnknownField). The scene loader points it at a list for one component block, then records
+    // each name in the load report with its file and line; the editor's version-control revert points
+    // it at a list and logs each name. Null elsewhere, and the schema refuses the name. mutable so the
+    // caller can point it while schemas receive ctx by const reference.
+    mutable std::vector<std::string>* UnknownFields = nullptr;
 };
 
 // Per-scene-save state threaded through schema dispatch (Serialize) and

@@ -3,7 +3,7 @@ title: GTAO
 description: The ground-truth ambient occlusion node, its quality presets and temporal accumulation, its limits, and what it costs in memory and GPU time.
 ---
 
-The Forward+ ambient-occlusion node produces world-space bent normals in RGB and visibility in alpha. Material AO still combines with visibility using `min()`; IBL retains its multibounce and specular-occlusion responses.
+The Forward+ ambient-occlusion node produces world-space bent normals in RGB and visibility in alpha. Material AO still combines with visibility using `min()`. IBL retains its multibounce and specular-occlusion responses.
 
 ## Configuration
 
@@ -28,13 +28,13 @@ The `AmbientOcclusion` node accepts these render-graph settings:
 
 :::tip[A preset changes noise, never the amount of occlusion]
 
-Steps per side is the same for every preset and is not a field of the preset table. The sweep marks the sectors its taps land in, so its horizon is a maximum over samples: occlusion rises with the tap count and does not converge. Measured on the GPU over three synthetic fixtures, three / four / six / twelve / twenty-four taps gave 0.027 / 0.033 / 0.046 / 0.064 / 0.077 mean occlusion on the same frame — a preset that raised the tap count would darken every frame and silently retune every AmbientOcclusion volume. Resolution and slice count are neutral in amount (within 10 % and 1.5 % respectively) and are therefore what the presets buy: Medium to High is sharpness, High to Ultra is less slice banding. `GtaoComputeTest.PresetsAgreeOnOcclusionAmount` holds the three presets to 10 % of each other on the GPU, and the tap count lives in `kGtaoSweepSteps`.
+Steps per side is the same for every preset and is not a field of the preset table. The sweep marks the sectors its taps land in, so its horizon is a maximum over samples: occlusion rises with the tap count and does not converge. Measured on the GPU over three synthetic fixtures, three / four / six / twelve / twenty-four taps gave 0.027 / 0.033 / 0.046 / 0.064 / 0.077 mean occlusion on the same frame. A preset that raised the tap count would darken every frame and silently retune every AmbientOcclusion volume. Resolution and slice count are neutral in amount (within 10 % and 1.5 % respectively) and are therefore what the presets buy: Medium to High is sharpness, High to Ultra is less slice banding. `GtaoComputeTest.PresetsAgreeOnOcclusionAmount` holds the three presets to 10 % of each other on the GPU, and the tap count lives in `kGtaoSweepSteps`.
 
 :::
 
 :::caution[There is no `low` preset]
 
-A fixed per-frame cost — prepare, the depth mip chain, the denoiser and the temporal pass, about 0.105 ms of the Medium chain on an RTX 5080 at 3067×900 — dominates below Medium, so a 3-slice preset measured 13 % cheaper for 40 % fewer taps. A cheaper tier has to remove passes, not taps; until one does, Medium is the floor.
+A fixed per-frame cost (prepare, the depth mip chain, the denoiser, and the temporal pass, about 0.105 ms of the Medium chain on an RTX 5080 at 3067×900) dominates below Medium, so a 3-slice preset measured 13 % cheaper for 40 % fewer taps. A cheaper tier has to remove passes, not taps. Until one does, Medium is the floor.
 
 :::
 
@@ -50,7 +50,7 @@ The Inspector has no control for quality or temporal accumulation. Edit the `qua
 
 ## Limits
 
-GTAO runs before object motion vectors are available. Reprojection therefore handles camera motion; conservative rejection limits stale occlusion on moving objects but does not provide object-motion reprojection. The temporal toggle is useful when evaluating rapidly moving or deforming geometry. Letterboxed subrect views use the unoccluded fallback because their depth UV mapping differs.
+GTAO runs before object motion vectors are available. Reprojection therefore handles camera motion. Conservative rejection limits stale occlusion on moving objects but does not provide object-motion reprojection. The temporal toggle is useful when evaluating rapidly moving or deforming geometry. Letterboxed subrect views use the unoccluded fallback because their depth UV mapping differs.
 
 On the web (WebGPU), an adapter without the `float32-filterable` feature leaves the effect inactive, and the log says so once.
 
@@ -79,13 +79,4 @@ Release, RTX 5080, 3067×900 viewport, Biggles Lanscape.scene, whole GTAO chain 
 | High | 0.241 | 4.0× |
 | Ultra | 0.341 | 5.6× |
 
-Only Release timings are comparable; DebugFast numbers from this arc were not used. Metal/MoltenVK frame timings have not been measured in an application frame.
-
-## Changelog
-
-- 2026-10-13: Converted from `docs/rendering/gtao.html`.
-- 2026-10-05: split: this page keeps configuration, presets, cost and limits; the estimator, filtering and history design, validation, source layout and web cook constraints move out of the user documentation into the design record.
-- 2026-09-13: the radial tap count leaves the preset table and becomes `kGtaoSweepSteps`, so presets change noise and sharpness only; calibration measured and gated on the GPU; the upsampler drops rather than blends taps from another surface; the kernels, their includes and the two policy headers move into per-feature `AmbientOcclusion` folders.
-- 2026-09-13: record the source-asset configuration path; fill the RTX 5080 variance values and correct the scene name.
-- 2026-09-10: converted from two Markdown files (`docs/Rendering/gtao.md`, `docs/performance/gtao-2026-09-06/README.md`) into this canonical; the `low` preset is removed and the reason recorded; persistent VRAM per view and Release chain timings added; the variance-reduction figure is quoted per GPU rather than as one number; web cook constraints documented; the depth-plane denoiser test described.
-- 2026-09-06: created with the GTAO rework.
+Only Release timings are comparable. DebugFast numbers from this arc were not used. Metal/MoltenVK frame timings have not been measured in an application frame.

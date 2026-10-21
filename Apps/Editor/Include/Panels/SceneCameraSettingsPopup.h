@@ -1,10 +1,15 @@
 #pragma once
 
+#include "Components/Rendering/PostProcessVolume.h" // ExposureMeter
+#include "Panels/ExposureReadingFilter.h"
 #include "UI/Interaction/DismissablePopup.h"
 #include "UI/UIElement.h"
 
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace GameEngine
 {
@@ -48,6 +53,10 @@ public:
                          float parentWidth, float parentHeight);
     void Hide();
     bool IsVisible() const { return m_Visible; }
+    // Feeds the owning view's exposure readings (its Auto exposure's settled EV100 and its lights
+    // reading) to the Reading line while the popover is visible; the line changes only when the
+    // shown value moves by a display step (ExposureReadingFilter).
+    void RefreshReading(std::optional<float> meteredEv, std::optional<float> lightsReadingEv);
 
     // Re-reads SceneViewSettings into the controls. Runs on every ShowAt;
     // also called externally when settings change while the popup is open
@@ -85,7 +94,18 @@ private:
                             std::initializer_list<TickMark> ticks);
     // Muted caption line aligned to the slider column (e.g. the EV legend).
     UIElement* AddCaption(UIElement& parent, const char* id, const char* text);
-    // Auto shows the adaptation clamps, Scene Light its derived EV, Fixed the
+    // A labelled dropdown row; `onSelected` receives the chosen option's index. The
+    // tooltip sits on the label only: the open list drops inside the row, and a row
+    // tooltip would pop up over it.
+    struct DropdownRow
+    {
+        UIElement* row = nullptr;
+        Dropdown* dropdown = nullptr;
+    };
+    DropdownRow AddDropdownRow(UIElement& parent, const char* idPrefix, const char* labelText,
+                               const char* tooltip, const std::vector<std::string>& labels,
+                               std::function<void(int index)> onSelected);
+    // Auto shows the meter, its lights reading, the delay and the clamps; Fixed the
     // fixed EV pin with its tick anchors. Compensation is visible in every mode.
     void UpdateExposureRowVisibility();
 
@@ -109,9 +129,15 @@ private:
     SliderRow m_CompensationRow;
     UIElement* m_ExposureEvLegend = nullptr;
     UIElement* m_AdaptationDelayRow = nullptr;
-    UIElement* m_SceneLightEvRow = nullptr;
-    Label* m_SceneLightEvLabel = nullptr;
+    UIElement* m_ReadingRow = nullptr;
+    Label* m_ReadingLabel = nullptr;
+    Editor::ExposureReadingFilter m_ReadingFilter;
+    // The EV100 the view is exposed at (the clamps and the Compensation Curve applied), to the Reading
+    // line's precision; shown beside the Lights reading when they differ.
+    std::optional<float> m_ExposedEv;
+    Components::ExposureMeter m_ReadingMeter = Components::ExposureMeter::Picture;
     Dropdown* m_ExposureModeDropdown = nullptr;
+    DropdownRow m_ExposureMeterRow;
     Toggle* m_UseAdaptationDelayToggle = nullptr;
     uint64_t m_SettingsChangedListenerId = 0;
 };

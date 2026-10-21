@@ -3,5 +3,5 @@
    the EditorPanelRegistry stylesheet contribution, after the editor theme. */
 
 .settings-tree-pane .diversion-row .tree-title {
-    background-image: url("diversion-vcs:Icons/SettingsDiversion.png");
+    background-image: url("diversion-vcs:Icons/SettingsDiversion.svg");
 }

@@ -7,15 +7,15 @@
 namespace GameEngine {
 
 /**
- * @brief Gives back alpha 0 to the BC7 endpoints that the encoder's p-bit vote lifts to 1/255.
+ * @brief Gives back alpha 0 to the BC7 endpoints that the encoder's p-bit lifts to 1/255.
  *
  * BC7 modes 6 and 7 store each endpoint's channels without their lowest bit and add one
- * shared p-bit per endpoint as the lowest bit of all four channels. The cook's encoder
- * (DirectXTex) does not choose that p-bit by error: it sets it when three or four of the
- * endpoint's channel LSBs are 1. A transparent endpoint under odd RGB, white (255, 255, 255, 0)
- * for example, has three odd channels, so the vote sets p = 1 and the endpoint decodes to
- * alpha 1/255 in mode 6 and 4/255 in mode 7. Under an HDR particle colour that alpha floor
- * draws the whole quad.
+ * shared p-bit per endpoint as the lowest bit of all four channels. An encoder can give a
+ * transparent endpoint p = 1: DirectXTex sets the p-bit when three or four of the endpoint's
+ * channel LSBs are 1, and an encoder that picks it by error, as the cook's bc7e does, weighs one
+ * alpha step against three colour steps. A transparent endpoint under odd RGB, white
+ * (255, 255, 255, 0) for example, then decodes to alpha 1/255 in mode 6 and 4/255 in mode 7.
+ * Under an HDR particle colour that alpha floor draws the whole quad.
  *
  * For each 4x4 block whose source texels include alpha 0, this clears the p-bit of every
  * mode 6 or mode 7 endpoint whose stored alpha bits are all 0. The endpoint then decodes to

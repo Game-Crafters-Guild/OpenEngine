@@ -21,6 +21,11 @@ enum class StatsKind : std::uint8_t
     /// block only when every slot is live, so the two are equal); `ReservedBytes` its block
     /// bytes and `Blocks` its block count. `ObjectPool::LiveCount()` is exact at any time.
     ObjectPool,
+    /// A `RangeAllocator`, in bytes (its units times its unit size): `Bytes` the live ranges
+    /// (those waiting for `ReclaimThrough` included), `HighWaterBytes` the most ever live,
+    /// `ReservedBytes` the end of the highest range ever handed out (the span of the owner's
+    /// storage it has used) and `Blocks` the ranges handed out and not returned.
+    RangeAllocator,
 };
 
 } // namespace GameEngine::Memory

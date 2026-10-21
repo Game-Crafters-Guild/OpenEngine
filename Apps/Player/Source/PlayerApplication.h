@@ -58,6 +58,9 @@ private:
     // Once the startup scene's resolve batch completes: logs it and starts the
     // scene's autoplay animators. Each frame until then.
     void FinishStartupResolve(ECS::World& world);
+    // How many material variants the shipped shader cache's program index served and how many it
+    // did not hold (composed and hashed instead), when the cache carries one.
+    void LogProgramIndexCounts();
     // The host's composite hook: the movie frame and the screenshot read the
     // composited frame back through it.
     void OnFrameComposited(RuntimeFrameReadback& readback);

@@ -106,7 +106,7 @@ class PackageTests(unittest.TestCase):
         package.Build(self.tree.Args(), self.out)
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
-            self.assertEqual(package.Check(self.out, allowStub=True), [])
+            self.assertEqual(package.Check(self.out, allowStub=True, reportSizes=False), [])
         rows = {line[:32].strip(): [int(value.replace(",", "")) for value in line[32:].split()]
                 for line in report.getvalue().splitlines()[1:-1]}
         pack = rows["opengine-core.gepak"]
@@ -130,7 +130,7 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(all((self.out / name).stat().st_size <= 4096 for name in parts))
         self.assertEqual(package.JoinPack(self.out), whole)
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(package.Check(self.out, allowStub=True), [])
+            self.assertEqual(package.Check(self.out, allowStub=True, reportSizes=False), [])
         (self.out / parts[1]).write_bytes(b"x" + (self.out / parts[1]).read_bytes()[1:])
         with self.assertRaises(package.PackageError):
             package.JoinPack(self.out)

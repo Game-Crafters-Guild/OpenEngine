@@ -85,6 +85,7 @@ class PerFrameWritePool;
 class PipelineVariantCache;
 class ProjectMaterialPrewarmService;
 class RenderServices;
+class SceneDrawWarm;
 class TextureService;
 
 // Owns the material stack behind rs.Materials(). See file header.
@@ -253,6 +254,9 @@ class MaterialSystem
     // --- per-frame ---
     void FinalizeFrameBuffers();
     uint64_t GetMaterialSSBOPackCount() const { return m_MaterialSSBOPackCount; }
+    // Material rows written into MaterialParams ring slots: every row on a full
+    // pack, only the rows whose material changed on a delta pack.
+    uint64_t GetMaterialSSBORowWriteCount() const { return m_MaterialSSBORowWriteCount; }
     // Frames whose material rows did not fit the MaterialParams ring, each of
     // which shaded from the zero-filled fallback instead of real parameters.
     uint64_t GetMaterialParamsOverflowCount() const { return m_MaterialParamsOverflowCount; }
@@ -301,6 +305,14 @@ class MaterialSystem
     // Rebuilds the color-class map if the material set changed, then returns it.
     std::span<const uint32_t> MaterialColorClassSpan();
 
+    /// Moves whenever a draw the publish gate skipped can draw: a pipeline
+    /// variant publish lands, or a backend pipeline a draw found cold for its
+    /// pass turns warm (a failed build does not move it). A consumer that keeps
+    /// a rendered frame, such as a scene reflection probe's capture, compares it
+    /// across the frames it keeps: no content, light or material epoch moves
+    /// when a skipped draw becomes drawable. One per render services; any thread may read.
+    uint64_t PipelineReadinessEpoch() const { return m_PipelineReadinessEpoch.load(std::memory_order_relaxed); }
+
     // --- component access ---
     MaterialRegistry& Registry() { return m_RuntimeMaterialRegistry; }
     const MaterialRegistry& Registry() const { return m_RuntimeMaterialRegistry; }
@@ -308,6 +320,8 @@ class MaterialSystem
     MaterialBinder& Binder();
     const MaterialBinder& Binder() const;
     PipelineVariantCache& Variants() { return *m_PipelineVariants; }
+    // The scene warm every scene resolve notes its draws into; stepped at each BeginFrame.
+    SceneDrawWarm& SceneWarm() { return *m_SceneWarm; }
     const PipelineVariantCache& Variants() const { return *m_PipelineVariants; }
 
     // The declared-property table of the program this document composes:
@@ -342,6 +356,11 @@ class MaterialSystem
     // surfaces it still serves. False too when the build context is cold.
     bool IsSurfaceProjectOwned(const MaterialDocument& doc,
                                const std::filesystem::path& materialAssetPath);
+
+    // The program index of the shipped shader cache that material builds resolve through
+    // (MaterialBuildContext::ProgramIndex), with its hit and miss counts; null until the build
+    // context is derived, and when no read-only cache root carries a valid index.
+    const Rendering::ShaderProgramIndex* GetProgramIndex() const { return m_MaterialBuildContext.ProgramIndex.get(); }
 
     void SetMaterialBuildContext(const Rendering::MaterialBuildContext& ctx)
     {
@@ -535,6 +554,10 @@ class MaterialSystem
     Rendering::IDevice* GetDevice() const { return m_Device; }
     Rendering::CullModeFlags DebugCullMode() const;
     Rendering::FrontFace DebugFrontFace() const;
+    // PipelineReadinessEpoch's writer: the variant cache's publish drain and its
+    // concrete-build waits (record workers included).
+    void NotePipelineReady() { m_PipelineReadinessEpoch.fetch_add(1, std::memory_order_relaxed); }
+    std::atomic<uint64_t> m_PipelineReadinessEpoch{0};
 
     // Injected dependencies (design §0.4). Pointers, not references, because the
     // facade is default-constructed then Initialize()d.
@@ -549,6 +572,7 @@ class MaterialSystem
     ShaderCompileErrorLog m_ShaderErrors;
     std::unique_ptr<MaterialCompiler> m_MaterialCompiler;
     std::unique_ptr<PipelineVariantCache> m_PipelineVariants;
+    std::unique_ptr<SceneDrawWarm> m_SceneWarm;
     std::unique_ptr<MaterialBinder> m_MaterialBinder;
     // Idle-time warm-up of the open project's material shaders; pumped by
     // BeginFrame for the engine's primary RenderServices only.
@@ -671,13 +695,23 @@ class MaterialSystem
     {
         Rendering::BufferHandle Buffer{};
         size_t Offset = 0;
+        // Layout stamp: the slot mapping, the row count and the unassigned-row
+        // defaults. Equal stamp and placement means only rows can differ.
         uint64_t Stamp = 0;
+        // Material::GetGlobalContentEpoch at the last pack. Equal means no row
+        // can differ, so the pack is skipped without scanning rows.
+        uint64_t ContentEpoch = 0;
+        // Per row, Material::GetContentRevision at the last write (0 for an
+        // unassigned row). The material at a row cannot change under an equal
+        // stamp: every write to the slot mapping moves m_MaterialSSBOGeneration.
+        std::vector<uint32_t> RowRevisions;
     };
     // Indexed by PerFrameWritePool::GetCurrentSlot(MaterialParams), a RING slot —
     // deeper than the device's pacing, so this is sized by the deepest ring any
     // caller can ask for rather than by frames in flight.
     PackedMaterialSlot m_PackedMaterialSlots[Rendering::FrameBufferAllocator::kMaxRingSlots] = {};
     uint64_t m_MaterialSSBOPackCount = 0;
+    uint64_t m_MaterialSSBORowWriteCount = 0;
     uint64_t m_MaterialParamsOverflowCount = 0;
     bool m_FallbackRowSeeded = false;
     Rendering::BufferHandle m_MaterialParamsSSBOBuffer{};

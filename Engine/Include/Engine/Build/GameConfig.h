@@ -2,6 +2,7 @@
 
 #include "Engine/Rendering/AntiAliasingProjectSettings.h"
 #include "Engine/Rendering/LodProjectSettings.h"
+#include "Engine/Rendering/RenderLayerNames.h"
 #include "Rendering/Core/Device.h"
 #include "Types/Types.h"
 #include "UI/UIScaleSettings.h"
@@ -58,6 +59,10 @@ struct GameConfig
     // startup — a shipped game runs the same AA stack the editor previewed,
     // SSAA included. Per-camera Camera overrides still win per view.
     Rendering::AntiAliasingProjectSettings renderQuality;
+
+    // The project's render layer names (rendering.renderLayerNames), copied from the project at
+    // package time; the Player sets them at startup, so a game's FindRenderLayer answers with them.
+    Rendering::RenderLayerNames renderLayerNames;
 
     // Window: the size and mode the runtime creates its window with at startup.
     uint32_t windowWidth = 1920;

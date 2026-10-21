@@ -10,6 +10,7 @@
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/ResolvedShadowSettings.h"
 #include "Engine/Rendering/VolumetricFogTypes.h"
+#include "Rendering/RenderLayerMask.h"
 #include "Types/Types.h"
 
 namespace GameEngine {
@@ -26,7 +27,7 @@ struct PostProcessExtractedVolume
 {
     int32 Priority = 0;
     float32 BaseWeight = 0.0f;
-    uint32 LayerMask = 0;
+    Rendering::RenderLayerMask VolumeLayers = Rendering::RenderLayerMask::None();
     bool IsGlobal = false;
     int32 Shape = 0;
     float32 BlendDistance = 0.0f;

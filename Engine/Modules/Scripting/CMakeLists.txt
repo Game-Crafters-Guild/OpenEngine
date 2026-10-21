@@ -23,6 +23,9 @@ target_compile_features(Scripting PUBLIC cxx_std_20)
 # so that Engine's HotReloadNativeStubs can satisfy references when CLR is disabled
 # or GameEngine.Native is not linked.
 target_compile_definitions(Scripting PRIVATE GE_SCRIPTING_STATIC)
+# The scripting flag the Engine target publishes: this OBJECT module does not inherit it, and
+# ScriptManager reports a build without C# scripting as ScriptAssemblyState::Disabled.
+target_compile_definitions(Scripting PRIVATE GE_ENABLE_SCRIPTING=$<BOOL:${ENABLE_SCRIPTING}>)
 
 # Expose Engine/Include so includes like "Scripting/ScriptManager.h" continue to work
 # without duplicating headers. Also include the CMake-generated header directory so

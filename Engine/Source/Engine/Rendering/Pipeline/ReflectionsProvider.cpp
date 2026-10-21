@@ -105,6 +105,7 @@ Rendering::MaterialKeyword ReflectionsProvider::ContributeWorldPassTargets(
             gb.format = static_cast<uint32_t>(Rendering::TextureFormat::R16G16B16A16_FLOAT);
             gb.debugName = "SSSR.SpecularRadiance";
             specularRadiance = d.Frame.CreateTexture(d.PassName("SSSR.SpecularRadiance").c_str(), gb);
+            d.MarkPreExposed(specularRadiance); // the forward pass writes it at the frame's P
             d.PublishTexture(Names::View::SSRSpecularRadiance, specularRadiance);
         }
     }
@@ -155,6 +156,7 @@ Rendering::MaterialKeyword ReflectionsProvider::ContributeWorldPassTargets(
         specularWeight = d.Frame.CreateTexture(d.PassName("SSSR.SpecularWeight.MS").c_str(), ms);
         ms.debugName = "SSSR.SpecularRadiance.MS";
         specularRadiance = d.Frame.CreateTexture(d.PassName("SSSR.SpecularRadiance.MS").c_str(), ms);
+        d.MarkPreExposed(specularRadiance); // the forward pass writes it at the frame's P
         if (!normalRoughness.IsValid() || !specularWeight.IsValid() || !specularRadiance.IsValid())
             return Rendering::MaterialKeyword::None;
     }

@@ -62,6 +62,10 @@ struct SkySettings
     /// horizon. Drives the linked directional light and the fog sun; never a sky-shader input.
     float primarySunGroundColor[3] = { 1.0f, 1.0f, 1.0f };
     float primarySunIntensity = 10.0f;
+    /// The sun's own source, colour above the atmosphere and intensity on primarySunIntensity's
+    /// scale, without the handover to the moon: the sky-view LUT's sun term.
+    float sunSourceColor[3] = { 1.0f, 1.0f, 1.0f };
+    float sunSourceIntensity = 10.0f;
     bool showSunDisk = true;
     /// Stylistic multiplier on the DRAWN sun disk radius (CPU clamps from
     /// SkyEnvironment::SunSize; 1 = kSunAngularRadiusRad, the physical radius). Scales the disk
@@ -69,11 +73,11 @@ struct SkySettings
     /// are all independent of it.
     float sunSize = 1.0f;
 
-    // Moon disk presentation. Direction is the world-space vector from the
-    // viewer toward the moon; the disk is rendered when it sits above the
-    // horizon. Intensity is a multiplier in the same scale as primarySunIntensity.
+    // The moon: the world-space direction toward it, and its source on primarySunIntensity's scale
+    // (its illuminance for the phase, lifted to the top of the atmosphere as the sun's is). It
+    // lights the sky-view LUT as its second source and sets the disc's radiance; 0 = no moon.
     float moonDirWS[3] = { 0.0f, -1.0f, 0.0f };
-    float moonIntensity = 0.5f;
+    float moonIntensity = 0.0f;
 
     /// Apparent moon disk radius in radians (CPU sets from SkyEnvironment.MoonSize).
     float moonAngularRadius = 0.026f;
@@ -84,7 +88,6 @@ struct SkySettings
     float moonExposureEV = 1.29f;
 
     float moonArcPosition = 0.5f;
-    float moonPhase01 = 0.5f;
     bool fallingStarsEnabled = true;
     float fallingStarAmount = 0.35f;
     float fallingStarFrequency = 0.35f;
@@ -96,16 +99,25 @@ struct SkySettings
 
     float nightSkyBlend = 0.0f;
     float skyTimeSeconds = 0.0f;
-    float starDensity = 0.5f;
-    float starBrightness = 0.6f;
-
-    float starSize = 1.0f;
-    float starDiamondShape = 0.5f;
-    float starCoreSize = 0.15f;
-    float starGlowFalloff = 10.0f;
-
-    float twinkleSpeed = 0.5f;
-    float twinkleIntensity = 0.3f;
+    /// The faintest star drawn, as a visual magnitude against a natural moonless sky.
+    float starLimitingMagnitude = 7.25f;
+    /// Artistic: the exponent on a star's energy relative to a magnitude 6.5 star (1 = physical).
+    float starHighlightCompression = 0.775f;
+    /// The twinkle's amplitude at airmass 10 (about 6 degrees up); none at the zenith.
+    float starTwinkleAmount = 0.3f;
+    /// Artistic: the brightest stars' soft glow, as a multiple of their light added around them (0 = none).
+    float starGlow = 0.9f;
+    /// Artistic: the twinkle's rate, a multiple of a slow twinkle (real scintillation is tens of hertz).
+    float starTwinkleRate = 1.0f;
+    /// Artistic: the core's size (1 = physical), the spikes' share of the glow, their length in glow
+    /// radii, and the shape (0 = the round point, 1 = the sparkle).
+    float starCoreScale = 0.85f;
+    float starSpikes = 0.2f;
+    float starSpikeLength = 0.6f;
+    uint32_t starShape = 0;
+    /// The observer: 0 = a dark-adapted eye (the glare, faint stars fading to white), 1 = a camera
+    /// (the same stars without the glare, each in its catalog color).
+    uint32_t starObserver = 0;
     float hdriIntensity = 1.0f;
     float skyboxRotationRadians = 0.0f;
     /// Linear multiplier on the image-based-lighting ambient + reflections

@@ -5,6 +5,7 @@
 #include "Engine/Build/DotnetHost.h"
 #include "Logger/Logger.h"
 #include "Scripting/CoreCLRHost.h"
+#include "Scripting/PackageScriptCompile.h"
 #include "Scripting/PathResolver.h"
 #include "Scripting/ScriptManager.h"
 #include "Scripting/ScriptTargetFramework.h"
@@ -1637,6 +1638,7 @@ class CompileServerCompiler : public Jobs::ICompiler
         json << "\"Tfm\":\"" << kScriptTargetFramework << "\",";
         // AffectedFiles heuristic: default to ChangedFiles; trigger full rebuild on .csproj change
         json << "\"EngineBinDir\":\"" << ScriptingPaths::ResolveEngineManagedDirectory().generic_string() << "\",";
+        json << ScriptSurfaceRequestField();
 
         bool forceFull = false;
         for (const auto& cf : changedFiles)

@@ -925,6 +925,11 @@ struct RenderingDeviceCapabilities
     // maxPerStageDescriptorStorageBuffers, WebGPU maxStorageBuffersPerShaderStage).
     // 0 = the backend did not report it; callers treat 0 as unlimited.
     uint32_t maxPerStageStorageBuffers = 0;
+    // Most invocations one compute workgroup may hold (Vulkan maxComputeWorkGroupInvocations,
+    // WebGPU maxComputeInvocationsPerWorkgroup). Metal reports maxThreadsPerThreadgroup().width,
+    // the device's theoretical total (512 on the two oldest Apple GPU families, 1024 on the
+    // others); a pipeline's own maxTotalThreadsPerThreadgroup can be lower for a heavy kernel.
+    // 0 = the backend did not report it; callers treat 0 as unlimited.
     uint32_t maxComputeWorkGroupSize = 0;
     // Max shared/threadgroup memory per workgroup in bytes (Vulkan
     // maxComputeSharedMemorySize). 0 = the backend did not report it; callers
@@ -2679,8 +2684,8 @@ class IDevice
     // thread, or destroy it without running it (shutdown); a destroyed job
     // releases its request, so the pipeline reads as never requested. An empty
     // function removes the dispatcher; the owner removes it before it stops
-    // accepting jobs, and jobs it already holds must end before the device is
-    // destroyed.
+    // accepting jobs. A job still held when the device shuts down builds nothing
+    // when it runs, and may be run or destroyed after the device is destroyed.
     using PipelineBuildDispatcher = std::function<void(std::function<void()>)>;
     void SetPipelineBuildDispatcher(PipelineBuildDispatcher dispatcher);
 
@@ -3043,8 +3048,8 @@ class IDevice
     PipelineHandle TryGetWarmPipeline(const PipelineBuildRequest& request) const;
     // The single-flight join every synchronous miss goes through.
     PipelineHandle BuildPipelineOnCallingThread(const PipelineBuildRequest& request);
-    // The job a queued request dispatches; builds only if its ticket still owns the key.
-    void RunQueuedPipelineBuild(const PipelineBuildRequest& request);
+    // The build of a queued request whose job claimed its ticket in the table.
+    void RunClaimedPipelineBuild(const PipelineBuildRequest& request);
     // Builds through the backend and publishes into the concrete cache unless the
     // cache was invalidated since the request's epoch; `published` reports which.
     PipelineHandle CreateAndPublishPipeline(const PipelineBuildRequest& request, bool& published);
@@ -3054,7 +3059,10 @@ class IDevice
                                                    bool& published);
 
     // Queued, running and failed builds by cache key (Source/Core/PipelineBuildTable.h).
-    std::unique_ptr<PipelineBuildTable> m_PipelineBuilds;
+    // Shared with every dispatched job, which reaches the device only after
+    // claiming its row: Shutdown cancels the queued rows, so a job that outlives
+    // the device touches the table alone.
+    std::shared_ptr<PipelineBuildTable> m_PipelineBuilds;
     mutable std::mutex m_PipelineBuildDispatcherMutex;
     std::shared_ptr<const PipelineBuildDispatcher> m_PipelineBuildDispatcher;
 

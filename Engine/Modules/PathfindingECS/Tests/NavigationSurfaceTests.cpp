@@ -1,15 +1,17 @@
-// NavigationSurface: what one surface bakes from (terrain, static collider shapes, mesh renderers),
-// without a physics world, as mesh tiles or grid cells; how it reports its bake; how it is listed
-// and saved.
+// NavigationSurface: what one surface bakes from (terrain, static collider shapes, mesh renderers
+// as their NavigationSource policy admits them), without a physics world, as mesh tiles or grid
+// cells; how it reports its bake and its sources; how it is listed and saved.
 #include "NavigationTestSurfaces.h"
 
 #include "PathfindingECS/Components/NavigationAgent.h"
+#include "PathfindingECS/Components/NavigationSource.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
 
+#include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
@@ -34,7 +36,9 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <utility>
+#include <vector>
 
 using namespace GameEngine;
 using namespace GameEngine::PathfindingECS;
@@ -44,6 +48,7 @@ namespace
 
 namespace TE = GameEngine::TerrainECS;
 using Components::NavigationBakePhase;
+using Components::NavigationSourcePolicy;
 using Components::NavigationSurface;
 using Components::NavigationSurfaceMode;
 
@@ -61,6 +66,16 @@ Components::WorldTransform Placed(float32 x, float32 y, float32 z, float32 scale
     transform.matrix[14] = z;
     transform.Version = 1u; // resolved, as TransformHierarchySystem leaves it
     return transform;
+}
+
+// The policy ListBakeSources lists for `entity` as a source of `kind`, or none when it is not listed.
+std::optional<NavigationSourcePolicy> PolicyListedFor(const std::vector<Navigation::BakeSource>& sources,
+                                                      ECS::Entity& entity, Navigation::BakeSourceKind kind)
+{
+    for (const Navigation::BakeSource& source : sources)
+        if (source.Entity == entity.GetHandle() && source.Kind == kind)
+            return source.Policy;
+    return std::nullopt;
 }
 
 // Streams in one tile of a tiled terrain at full detail, as the terrain's streaming would.
@@ -126,6 +141,39 @@ protected:
         return entity;
     }
 
+    // A primitive mesh renderer with no collider: the unit cube (or the primitive `guid`) scaled to
+    // `scaleX` x `scaleY` x `scaleZ` metres about (x, y, z).
+    ECS::Entity CreateCubeMesh(float32 x, float32 y, float32 z, float32 scaleX, float32 scaleY, float32 scaleZ,
+                               GUID guid = Engine::Renderer::PrimitiveGenerator::CubeGuid())
+    {
+        auto entity = world->Create();
+        entity.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
+            nullptr, guid, Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid()));
+        entity.Set(Components::Transform{});
+        entity.Set(Placed(x, y, z, scaleX, scaleY, scaleZ));
+        world->ProcessCommands();
+        return entity;
+    }
+
+    void SetPolicy(ECS::Entity& entity, NavigationSourcePolicy policy)
+    {
+        entity.Set(Components::NavigationSource{policy});
+        world->ProcessCommands();
+    }
+
+    void SetParent(ECS::Entity& child, ECS::Entity& parent)
+    {
+        child.Set(Components::Parent{parent.GetHandle()});
+        world->ProcessCommands();
+    }
+
+    void Rebake(ECS::Entity& surface)
+    {
+        ASSERT_TRUE(Navigation::RequestBake(*world, surface.GetHandle()));
+        BakeAll();
+        ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    }
+
     // A flat terrain `size` metres square centred on the origin whose heights come from
     // `heightAt(x)` along X (world metres in, metres out), scaled by `heightScale`.
     template <typename HeightAt>
@@ -180,7 +228,8 @@ protected:
     }
 
     Pathfinding::PathStatus FindPath(ECS::Entity& surfaceEntity, float32 fromX, float32 fromY, float32 fromZ,
-                                     float32 toX, float32 toY, float32 toZ, float32* outEndY = nullptr)
+                                     float32 toX, float32 toY, float32 toZ, float32* outEndY = nullptr,
+                                     std::vector<Pathfinding::PathPoint>* outCorners = nullptr)
     {
         auto& navigation = NavigationService::Get();
         Pathfinding::PathRequest request;
@@ -200,12 +249,25 @@ protected:
             if (count > 0)
                 *outEndY = navigation.GetPathBuffer().GetPoint(path, count - 1).Y;
         }
+        if (outCorners && path.IsValid())
+            for (uint32 i = 0; i < navigation.GetPathBuffer().GetPointCount(path); ++i)
+                outCorners->push_back(navigation.GetPathBuffer().GetPoint(path, i));
         if (path.IsValid())
             navigation.GetPathBuffer().FreePath(path);
         return status;
     }
 
     const NavigationSurface& SurfaceOf(ECS::Entity& entity) { return *entity.Get<NavigationSurface>(); }
+
+    // Metres along the path's corners.
+    static float32 PathLength(const std::vector<Pathfinding::PathPoint>& corners)
+    {
+        float32 length = 0.0f;
+        for (size_t i = 1; i < corners.size(); ++i)
+            length += std::hypot(corners[i].X - corners[i - 1].X, corners[i].Y - corners[i - 1].Y,
+                                 corners[i].Z - corners[i - 1].Z);
+        return length;
+    }
 
     std::unique_ptr<ECS::World> world;
 };
@@ -402,6 +464,214 @@ TEST_F(NavigationSurfaceTest, PrimitiveMeshRendererIsBaked)
     EXPECT_NEAR(endY, 2.0f, 0.3f);
 }
 
+// A flower card with no collider standing across a walled corridor blocks it while the bake reads
+// its mesh. Excluded, it leaves the bake as it was without it: wherever it stands and whatever it
+// shows.
+TEST_F(NavigationSurfaceTest, ExcludedDecorationDoesNotChangeTheBake)
+{
+    Testing::CreateGroundPlane(*world);
+    // A 4 m wide corridor along X between two 3 m walls that run past the surface's ends.
+    CreateBoxCollider(Physics::MotionType::Static, 0.0f, 1.5f, -2.5f, 20.0f, 1.5f, 0.5f);
+    CreateBoxCollider(Physics::MotionType::Static, 0.0f, 1.5f, 2.5f, 20.0f, 1.5f, 0.5f);
+    auto surface = CreateMeshSurface(16.0f);
+    BakeAll();
+    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    const uint32 polygonsWithout = SurfaceOf(surface).BakedWalkable;
+    ASSERT_EQ(FindPath(surface, -10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f), Pathfinding::PathStatus::Complete);
+
+    // A card 1 m tall and 0.2 m thick across the corridor's whole width.
+    auto card = CreateCubeMesh(0.0f, 0.5f, 0.0f, 0.2f, 1.0f, 4.0f);
+    Rebake(surface);
+    ASSERT_NE(FindPath(surface, -10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f), Pathfinding::PathStatus::Complete)
+        << "the card must block the corridor while it is baked, or the exclusion below proves nothing";
+
+    SetPolicy(card, NavigationSourcePolicy::Exclude);
+    Rebake(surface);
+    EXPECT_EQ(SurfaceOf(surface).BakedWalkable, polygonsWithout);
+    EXPECT_EQ(FindPath(surface, -10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f), Pathfinding::PathStatus::Complete);
+
+    // Moved along the corridor and shown as a sphere instead.
+    card.Set(Placed(4.0f, 0.5f, 0.0f, 1.0f, 1.0f, 4.0f));
+    card.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
+        nullptr, Engine::Renderer::PrimitiveGenerator::SphereGuid(),
+        Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid()));
+    world->ProcessCommands();
+    Rebake(surface);
+    EXPECT_EQ(SurfaceOf(surface).BakedWalkable, polygonsWithout);
+    EXPECT_EQ(FindPath(surface, -10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f), Pathfinding::PathStatus::Complete);
+}
+
+// A tree excluded on its root: the crown child inherits the exclusion, so agents walk under it,
+// while the trunk's Static collider keeps its own rule and stays an obstacle.
+TEST_F(NavigationSurfaceTest, ExcludedTreeKeepsItsTrunkColliderAndFreesTheGroundUnderItsCrown)
+{
+    Testing::CreateGroundPlane(*world);
+    // The trunk: a 0.6 m square, 4 m tall Static box collider, and its excluded mesh.
+    auto tree = CreateBoxCollider(Physics::MotionType::Static, 0.0f, 2.0f, 0.0f, 0.3f, 2.0f, 0.3f);
+    tree.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
+        nullptr, Engine::Renderer::PrimitiveGenerator::CubeGuid(),
+        Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid()));
+    SetPolicy(tree, NavigationSourcePolicy::Exclude);
+    // The crown: 6 m across from 1.2 m to 2.2 m up, lower than Agent Height (1.8 m) above the ground.
+    auto crown = CreateCubeMesh(0.0f, 1.7f, 0.0f, 6.0f, 1.0f, 6.0f);
+    SetParent(crown, tree);
+    auto surface = CreateMeshSurface(16.0f);
+
+    BakeAll();
+
+    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    std::vector<Pathfinding::PathPoint> underCrown;
+    EXPECT_EQ(FindPath(surface, -10.0f, 0.0f, -10.0f, 2.0f, 0.0f, 2.0f, nullptr, &underCrown),
+              Pathfinding::PathStatus::Complete);
+    ASSERT_FALSE(underCrown.empty());
+    EXPECT_NEAR(underCrown.back().X, 2.0f, 0.3f);
+    EXPECT_NEAR(underCrown.back().Y, 0.0f, 0.3f);
+    EXPECT_NEAR(underCrown.back().Z, 2.0f, 0.3f);
+
+    // Straight past the trunk is 3 m; the path bends around it.
+    std::vector<Pathfinding::PathPoint> pastTrunk;
+    ASSERT_EQ(FindPath(surface, -1.5f, 0.0f, 0.0f, 1.5f, 0.0f, 0.0f, nullptr, &pastTrunk), Pathfinding::PathStatus::Complete);
+    EXPECT_GT(PathLength(pastTrunk), 3.2f);
+}
+
+// A platform a ruin's root excludes with the rest of its dressing: the platform authors Include, so
+// it is walkable ground, and the excluded rubble over it does not take the space under it away.
+TEST_F(NavigationSurfaceTest, IncludedPlatformUnderAnExcludedRootIsWalkable)
+{
+    auto ruin = world->Create();
+    ruin.Set(Components::Transform{});
+    ruin.Set(Placed(0.0f, 0.0f, 0.0f));
+    SetPolicy(ruin, NavigationSourcePolicy::Exclude);
+    // The platform is the only ground: a 40 x 1 x 40 m slab whose top is at y = 2.
+    auto platform = CreateCubeMesh(0.0f, 1.5f, 0.0f, 40.0f, 1.0f, 40.0f);
+    SetParent(platform, ruin);
+    SetPolicy(platform, NavigationSourcePolicy::Include);
+    // Rubble 0.5 m above the platform's top: it would leave no headroom under it.
+    auto rubble = CreateCubeMesh(0.0f, 3.0f, 0.0f, 4.0f, 1.0f, 4.0f);
+    SetParent(rubble, ruin);
+    auto surface = CreateMeshSurface(16.0f);
+
+    BakeAll();
+
+    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    std::vector<Pathfinding::PathPoint> corners;
+    EXPECT_EQ(FindPath(surface, -12.0f, 2.0f, -12.0f, 0.0f, 2.0f, 0.0f, nullptr, &corners),
+              Pathfinding::PathStatus::Complete);
+    ASSERT_FALSE(corners.empty());
+    EXPECT_NEAR(corners.back().X, 0.0f, 0.3f);
+    EXPECT_NEAR(corners.back().Y, 2.0f, 0.3f);
+    EXPECT_NEAR(corners.back().Z, 0.0f, 0.3f);
+}
+
+// The sources list names every entity the bake reads inside the bounds, its kind and the policy
+// that admitted it; an excluded mesh and a source outside the bounds are not listed.
+TEST_F(NavigationSurfaceTest, BakeSourcesNameEachSourceAndThePolicyThatAdmittedIt)
+{
+    auto ground = Testing::CreateGroundPlane(*world);
+    auto rock = CreateCubeMesh(2.0f, 0.5f, 2.0f, 1.0f, 1.0f, 1.0f);
+    // A moving platform Auto leaves out and Include brings in.
+    auto lift = CreateCubeMesh(-4.0f, 0.5f, 0.0f, 2.0f, 1.0f, 2.0f);
+    Components::PhysicsBody kinematic{};
+    kinematic.motionType = Physics::MotionType::Kinematic;
+    lift.Set(kinematic);
+    SetPolicy(lift, NavigationSourcePolicy::Include);
+    auto flowers = CreateCubeMesh(0.0f, 0.5f, -3.0f, 1.0f, 1.0f, 1.0f);
+    SetPolicy(flowers, NavigationSourcePolicy::Exclude);
+    // A wall with its own mesh: one collider source and one mesh source.
+    auto wall = CreateBoxCollider(Physics::MotionType::Static, 5.0f, 1.0f, 0.0f, 0.5f, 1.0f, 3.0f);
+    wall.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
+        nullptr, Engine::Renderer::PrimitiveGenerator::CubeGuid(),
+        Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid()));
+    world->ProcessCommands();
+    CreateCubeMesh(100.0f, 0.5f, 100.0f, 1.0f, 1.0f, 1.0f);
+    auto surface = CreateMeshSurface(16.0f);
+
+    std::vector<Navigation::BakeSource> sources;
+    ASSERT_TRUE(Navigation::ListBakeSources(*world, surface.GetHandle(), sources));
+
+    using Navigation::BakeSourceKind;
+    EXPECT_EQ(sources.size(), 5u);
+    EXPECT_EQ(PolicyListedFor(sources, ground, BakeSourceKind::Collider), NavigationSourcePolicy::Auto);
+    EXPECT_EQ(PolicyListedFor(sources, rock, BakeSourceKind::Mesh), NavigationSourcePolicy::Auto);
+    EXPECT_EQ(PolicyListedFor(sources, lift, BakeSourceKind::Mesh), NavigationSourcePolicy::Include);
+    EXPECT_EQ(PolicyListedFor(sources, flowers, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, wall, BakeSourceKind::Collider), NavigationSourcePolicy::Auto);
+    EXPECT_EQ(PolicyListedFor(sources, wall, BakeSourceKind::Mesh), NavigationSourcePolicy::Auto);
+    EXPECT_FALSE(Navigation::ListBakeSources(*world, rock.GetHandle(), sources));
+    EXPECT_TRUE(sources.empty());
+}
+
+// Under Auto a mesh moves with any parent that moves on its own, so it is not baked: the lid of a
+// crate on a Dynamic body and the arm of a character with a navigation agent stay out, while the
+// pebble under a rock that does not move is baked.
+TEST_F(NavigationSurfaceTest, AutoLeavesOutAMeshWhoseParentMoves)
+{
+    Testing::CreateGroundPlane(*world);
+    auto crate = CreateCubeMesh(3.0f, 0.5f, 0.0f, 1.0f, 1.0f, 1.0f);
+    Components::PhysicsBody dynamic{};
+    dynamic.motionType = Physics::MotionType::Dynamic;
+    crate.Set(dynamic);
+    auto lid = CreateCubeMesh(3.0f, 1.05f, 0.0f, 1.0f, 0.1f, 1.0f);
+    SetParent(lid, crate);
+    auto character = CreateCubeMesh(-3.0f, 0.9f, 0.0f, 0.5f, 1.8f, 0.5f);
+    character.Set(Components::NavigationAgent{});
+    auto arm = CreateCubeMesh(-2.6f, 1.2f, 0.0f, 0.6f, 0.15f, 0.15f);
+    SetParent(arm, character);
+    auto rock = CreateCubeMesh(0.0f, 0.5f, 3.0f, 1.0f, 1.0f, 1.0f);
+    auto pebble = CreateCubeMesh(0.0f, 1.1f, 3.0f, 0.2f, 0.2f, 0.2f);
+    SetParent(pebble, rock);
+    world->ProcessCommands();
+    auto surface = CreateMeshSurface(16.0f);
+
+    std::vector<Navigation::BakeSource> sources;
+    ASSERT_TRUE(Navigation::ListBakeSources(*world, surface.GetHandle(), sources));
+
+    using Navigation::BakeSourceKind;
+    EXPECT_EQ(PolicyListedFor(sources, crate, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, lid, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, character, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, arm, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, rock, BakeSourceKind::Mesh), NavigationSourcePolicy::Auto);
+    EXPECT_EQ(PolicyListedFor(sources, pebble, BakeSourceKind::Mesh), NavigationSourcePolicy::Auto);
+}
+
+// Include on a kinematic deck bakes the deck and the railing that inherits it where they stand. The
+// crew (navigation agents) and a loose barrel (a Dynamic body) under it move on their own and stay
+// out; a barrel that sets Include itself is baked.
+TEST_F(NavigationSurfaceTest, InheritedIncludeLeavesOutAChildThatMovesOnItsOwn)
+{
+    auto deck = CreateCubeMesh(0.0f, 0.5f, 0.0f, 8.0f, 1.0f, 4.0f);
+    Components::PhysicsBody kinematic{};
+    kinematic.motionType = Physics::MotionType::Kinematic;
+    deck.Set(kinematic);
+    SetPolicy(deck, NavigationSourcePolicy::Include);
+    auto railing = CreateCubeMesh(0.0f, 1.5f, 1.9f, 8.0f, 1.0f, 0.1f);
+    SetParent(railing, deck);
+    auto crew = CreateCubeMesh(-2.0f, 1.9f, 0.0f, 0.5f, 1.8f, 0.5f);
+    crew.Set(Components::NavigationAgent{});
+    SetParent(crew, deck);
+    Components::PhysicsBody dynamic{};
+    dynamic.motionType = Physics::MotionType::Dynamic;
+    auto looseBarrel = CreateCubeMesh(2.0f, 1.5f, 0.0f, 0.6f, 1.0f, 0.6f);
+    looseBarrel.Set(dynamic);
+    SetParent(looseBarrel, deck);
+    auto includedBarrel = CreateCubeMesh(3.0f, 1.5f, 0.0f, 0.6f, 1.0f, 0.6f);
+    includedBarrel.Set(dynamic);
+    SetParent(includedBarrel, deck);
+    SetPolicy(includedBarrel, NavigationSourcePolicy::Include);
+    auto surface = CreateMeshSurface(16.0f);
+
+    std::vector<Navigation::BakeSource> sources;
+    ASSERT_TRUE(Navigation::ListBakeSources(*world, surface.GetHandle(), sources));
+
+    using Navigation::BakeSourceKind;
+    EXPECT_EQ(PolicyListedFor(sources, deck, BakeSourceKind::Mesh), NavigationSourcePolicy::Include);
+    EXPECT_EQ(PolicyListedFor(sources, railing, BakeSourceKind::Mesh), NavigationSourcePolicy::Include);
+    EXPECT_EQ(PolicyListedFor(sources, crew, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, looseBarrel, BakeSourceKind::Mesh), std::nullopt);
+    EXPECT_EQ(PolicyListedFor(sources, includedBarrel, BakeSourceKind::Mesh), NavigationSourcePolicy::Include);
+}
+
 // 32 m tiles at the default 0.5 m cell: a 100 m surface is 4 x 4 tiles, and a corner-to-corner
 // path crosses six tile edges.
 TEST_F(NavigationSurfaceTest, PathAcrossTileBordersIsComplete)
@@ -470,6 +740,209 @@ TEST_F(NavigationSurfaceTest, StepHeightStillGovernsSteps)
     ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked);
     EXPECT_EQ(FindPath(surface, -12.0f, 0.0f, 0.0f, -8.0f, 0.0f, 0.0f), Pathfinding::PathStatus::Complete);
     EXPECT_NE(FindPath(surface, -12.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f), Pathfinding::PathStatus::Complete);
+}
+
+namespace
+{
+
+// A static box collider of half size (halfX, halfY, halfZ) about (x, y, z), turned `yawDegrees`
+// about +Y: its local X axis lies along (cos, 0, -sin) in the world.
+void CreateStaticBox(ECS::World& world, float32 x, float32 y, float32 z, float32 halfX, float32 halfY, float32 halfZ,
+                     float32 yawDegrees = 0.0f)
+{
+    auto entity = world.Create();
+    Components::PhysicsBody body{};
+    body.motionType = Physics::MotionType::Static;
+    entity.Set(body);
+    entity.Set(Components::PhysicsCollider{});
+    Components::BoxColliderShape shape{};
+    shape.halfExtentsX = halfX;
+    shape.halfExtentsY = halfY;
+    shape.halfExtentsZ = halfZ;
+    entity.Set(shape);
+    entity.Set(Components::Transform{});
+    Components::WorldTransform transform = Placed(x, y, z);
+    const float32 c = std::cos(yawDegrees * kDegreesToRadians), s = std::sin(yawDegrees * kDegreesToRadians);
+    transform.matrix[0] = c;
+    transform.matrix[2] = -s;
+    transform.matrix[8] = s;
+    transform.matrix[10] = c;
+    entity.Set(transform);
+}
+
+// #4045: the issue's scene. An 8 x 8 grid of 1 m cells over x, z in [-4, 4] on a floor box whose
+// top is y = 0, and a wall `height` tall and twice `halfThickness` thick across z in [-3, 3],
+// centred at `wallX` and turned `yawDegrees`. The issue's wall is 0.4 m thick and 4 m tall.
+ECS::Entity CreateWallScene(ECS::World& world, float32 wallX, float32 height = 4.0f, float32 halfThickness = 0.2f,
+                            float32 yawDegrees = 0.0f)
+{
+    CreateStaticBox(world, 0.0f, -0.5f, 0.0f, 4.0f, 0.5f, 4.0f);
+    CreateStaticBox(world, wallX, 0.5f * height, 0.0f, halfThickness, 0.5f * height, 3.0f, yawDegrees);
+    auto entity = world.Create();
+    NavigationSurface surface{};
+    surface.Mode = NavigationSurfaceMode::Grid;
+    surface.CellSize = 1.0f;
+    surface.FitBounds = false;
+    surface.Extent = {4.0f, 10.0f, 4.0f};
+    entity.Set(surface);
+    world.ProcessCommands();
+    return entity;
+}
+
+// The blocked cells of a baked grid surface, as (x, z) pairs.
+std::vector<std::pair<uint32, uint32>> BlockedCells(ECS::World& world, ECS::Entity& entity)
+{
+    std::vector<std::pair<uint32, uint32>> blocked;
+    const auto* grid = ResolveNavigationSurfaceGrid(world, *entity.Get<NavigationSurface>());
+    if (!grid)
+        return blocked;
+    for (uint32 z = 0; z < grid->GetSettings().Depth; ++z)
+        for (uint32 x = 0; x < grid->GetSettings().Width; ++x)
+            if (grid->IsCellBlocked(x, z))
+                blocked.emplace_back(x, z);
+    return blocked;
+}
+
+} // namespace
+
+// #4045: a wall between two columns of cell centres is solid. The bake used to sample the ground at
+// cell centres only, so a wall that covered no centre baked as open floor and a path ran through it.
+// Every cell the wall's footprint overlaps is blocked: x in [-1, 1] (columns 3 and 4), z in [-3, 3]
+// (rows 1 to 6).
+TEST_F(NavigationSurfaceTest, GridBlocksAWallBetweenCellCentres)
+{
+    auto surface = CreateWallScene(*world, 0.0f);
+
+    BakeAll();
+
+    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    std::vector<std::pair<uint32, uint32>> expected;
+    for (uint32 z = 1; z <= 6; ++z)
+        for (uint32 x = 3; x <= 4; ++x)
+            expected.emplace_back(x, z);
+    EXPECT_EQ(BlockedCells(*world, surface), expected);
+
+    const auto* grid = ResolveNavigationSurfaceGrid(*world, SurfaceOf(surface));
+    ASSERT_NE(grid, nullptr);
+    float32 hitX = 0.0f, hitY = 0.0f, hitZ = 0.0f;
+    EXPECT_TRUE(grid->Raycast(-2.5f, 0.0f, 0.5f, 2.5f, 0.0f, 0.5f, hitX, hitY, hitZ));
+
+    auto& navigation = NavigationService::Get();
+    Pathfinding::PathRequest request;
+    request.StartX = -2.5f;
+    request.StartZ = 0.5f;
+    request.EndX = 2.5f;
+    request.EndZ = 0.5f;
+    request.AgentRadius = 0.4f;
+    Pathfinding::PathHandle path;
+    ASSERT_EQ(navigation.FindPath(Testing::SurfaceMap(*world, surface), request, path), Pathfinding::PathStatus::Complete);
+    // The only way across is round an end of the wall, past z = -3 or z = 3.
+    float32 farthestZ = 0.0f;
+    for (uint32 i = 0; i < navigation.GetPathBuffer().GetPointCount(path); ++i)
+        farthestZ = std::max(farthestZ, std::abs(navigation.GetPathBuffer().GetPoint(path, i).Z));
+    navigation.GetPathBuffer().FreePath(path);
+    EXPECT_GT(farthestZ, 3.0f);
+}
+
+// #4045's control: a wall on a column of cell centres was already blocked, its top read as ground
+// 4 m above its neighbours, which the slope pass blocks with them: 3 columns x 8 rows.
+TEST_F(NavigationSurfaceTest, GridWallOnCellCentresBakesAsBefore)
+{
+    auto surface = CreateWallScene(*world, 0.5f);
+
+    BakeAll();
+
+    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
+    EXPECT_EQ(BlockedCells(*world, surface).size(), 24u);
+}
+
+// A wall an agent climbs on the grid (lower than the climb between neighbouring cells,
+// max(Step Height, cell size x tan(Max Slope)): 1 m at the defaults) is walkable wherever it
+// stands; moving it half a cell must not block it.
+TEST_F(NavigationSurfaceTest, GridLowWallBakesTheSameOnOrBetweenCellCentres)
+{
+    for (const float32 wallX : {0.0f, 0.5f})
+    {
+        world = std::make_unique<ECS::World>();
+        RegisterNavigationWorldHooks(*world);
+        auto surface = CreateWallScene(*world, wallX, 0.6f, 0.1f);
+
+        BakeAll();
+
+        ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << wallX;
+        EXPECT_TRUE(BlockedCells(*world, surface).empty()) << "0.6 m wall at x = " << wallX;
+    }
+}
+
+// Stairs within Max Slope stay walkable wherever the cell centres fall on the treads: ten 0.25 m
+// risers of static boxes at 33 and 40 degrees, from the floor to a landing at 2.5 m.
+TEST_F(NavigationSurfaceTest, GridStairsWithinMaxSlopeAreWalkable)
+{
+    for (const float32 degrees : {33.0f, 40.0f})
+    {
+        world = std::make_unique<ECS::World>();
+        RegisterNavigationWorldHooks(*world);
+        constexpr float32 kRiser = 0.25f;
+        constexpr uint32 kSteps = 10;
+        const float32 tread = kRiser / std::tan(degrees * kDegreesToRadians);
+        CreateStaticBox(*world, 0.0f, -0.5f, 0.0f, 4.0f, 0.5f, 4.0f);
+        for (uint32 step = 1; step <= kSteps; ++step)
+        {
+            const float32 front = -2.0f + static_cast<float32>(step - 1) * tread;
+            const float32 top = static_cast<float32>(step) * kRiser;
+            CreateStaticBox(*world, 0.5f * (front + 4.0f), 0.5f * top, 0.0f, 0.5f * (4.0f - front), 0.5f * top, 2.0f);
+        }
+        auto surface = world->Create();
+        NavigationSurface grid{};
+        grid.Mode = NavigationSurfaceMode::Grid;
+        grid.CellSize = 1.0f;
+        grid.FitBounds = false;
+        grid.Extent = {4.0f, 10.0f, 4.0f};
+        surface.Set(grid);
+        world->ProcessCommands();
+
+        BakeAll();
+
+        ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << degrees;
+        EXPECT_EQ(FindPath(surface, -3.5f, 0.0f, 0.5f, 3.5f, kSteps * kRiser, 0.5f), Pathfinding::PathStatus::Complete)
+            << degrees << " degree stairs";
+    }
+}
+
+// #4045: a narrow barrier at an angle to the grid blocks every cell its footprint overlaps, at two
+// offsets: the issue's wall turned 30 degrees.
+TEST_F(NavigationSurfaceTest, GridBlocksARotatedWall)
+{
+    constexpr float32 kYaw = 30.0f;
+    const float32 c = std::cos(kYaw * kDegreesToRadians), s = std::sin(kYaw * kDegreesToRadians);
+    for (const float32 wallX : {0.0f, 0.3f})
+    {
+        world = std::make_unique<ECS::World>();
+        RegisterNavigationWorldHooks(*world);
+        auto surface = CreateWallScene(*world, wallX, 4.0f, 0.2f, kYaw);
+
+        BakeAll();
+
+        ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << wallX;
+        const auto blocked = BlockedCells(*world, surface);
+        // The cells under the footprint, sampled every centimetre away from the cell borders.
+        std::vector<std::pair<uint32, uint32>> missing;
+        for (float32 lx = -0.195f; lx < 0.2f; lx += 0.01f)
+            for (float32 lz = -2.995f; lz < 3.0f; lz += 0.01f)
+            {
+                const float32 x = wallX + c * lx + s * lz + 4.0f, z = -s * lx + c * lz + 4.0f;
+                if (std::abs(x - std::round(x)) < 1.0e-3f || std::abs(z - std::round(z)) < 1.0e-3f)
+                    continue;
+                const std::pair<uint32, uint32> cell{static_cast<uint32>(x), static_cast<uint32>(z)};
+                if (std::find(blocked.begin(), blocked.end(), cell) == blocked.end() &&
+                    std::find(missing.begin(), missing.end(), cell) == missing.end())
+                    missing.push_back(cell);
+            }
+        EXPECT_TRUE(missing.empty()) << missing.size() << " cells under the wall at x = " << wallX << " are open";
+        const auto* grid = ResolveNavigationSurfaceGrid(*world, SurfaceOf(surface));
+        float32 hitX = 0.0f, hitY = 0.0f, hitZ = 0.0f;
+        EXPECT_TRUE(grid->Raycast(-2.5f, 0.0f, 0.5f, 2.5f, 0.0f, 0.5f, hitX, hitY, hitZ)) << wallX;
+    }
 }
 
 // The notice text the inspector shows, one line per phase.

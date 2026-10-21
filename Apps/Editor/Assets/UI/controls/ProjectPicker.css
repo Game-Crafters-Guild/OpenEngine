@@ -125,7 +125,7 @@
 	background-color: var(--ui_color_project_picker_button);
 	border-color: var(--ui_color_project_picker_button);
 	color: var(--ui_color_text_bright);
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .project-picker-modal .project-picker-button.project-picker-button-primary:hover {
@@ -169,7 +169,7 @@
 	color: var(--pp_color_text_muted);
 	cursor: pointer;
 	font-size: 14px;
-	font-weight: 600;
+	font-weight: 500;
 	height: 36px;
 	padding: 0px 14px;
 	transition: color 0.13s ease, border-color 0.13s ease;
@@ -213,7 +213,7 @@
 	color: var(--pp_color_text_muted);
 	cursor: pointer;
 	font-size: 13px;
-	font-weight: 600;
+	font-weight: 500;
 	flex-grow: 1;
 	flex-shrink: 1;
 	height: 100%;
@@ -248,7 +248,7 @@
 	cursor: pointer;
 	text-align: center;
 	font-size: 14px;
-	font-weight: 600;
+	font-weight: 500;
 	transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
@@ -322,7 +322,7 @@
 .project-picker-modal .project-import-option.selected .project-import-option-indicator {
 	background-color: var(--ui_color_picker_accent);
 	border-color: var(--ui_color_picker_accent);
-	background-image: url("editor:Icons/checked.png");
+	background-image: url("editor:Icons/checked.svg");
 	background-image-tint: rgba(255, 255, 255, 1.0);
 	background-repeat: no-repeat;
 	background-position: center;
@@ -486,7 +486,7 @@
 .project-picker-modal .project-card-title {
 	color: var(--pp_color_text);
 	font-size: 14px;
-	font-weight: 600;
+	font-weight: 500;
 	overflow: hidden;
 	white-space: nowrap;
 }

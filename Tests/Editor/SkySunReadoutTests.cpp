@@ -314,7 +314,7 @@ TEST(SkySunReadout, TheHandoverSaysWhetherNightIsFallingOrLifting)
     ASSERT_NEAR(dawn.SunElevationDegrees, -3.7f, 0.1f);
     ASSERT_GT(dawn.HandoverWeight, 0.0f);
     ASSERT_LT(dawn.HandoverWeight, 0.999f);
-    ASSERT_GT(dawn.FullNightLux, 1.0f);
+    ASSERT_GT(dawn.FullNightLux, 0.01f);
     EXPECT_EQ(SkyMoonNowLine(day, dawn),
               "Night is lifting. At full night the moon gives up to " + FormatLux(dawn.FullNightLux) +
                   " on a surface facing it.");

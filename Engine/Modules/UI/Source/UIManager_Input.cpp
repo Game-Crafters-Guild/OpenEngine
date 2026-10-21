@@ -46,6 +46,34 @@ bool ReceivesInput(const UIElement* el)
     return el && el->IsEnabledInHierarchy();
 }
 
+// True when a CSS transform applies anywhere on `el`'s DFS chain. Every bubble
+// step of a dispatch lies on that chain, so one walk tells the dispatch
+// whether the pointer needs re-expressing per target at all.
+bool TransformAppliesAlongChain(const UIElement* el)
+{
+    for (; el; el = el->GetDfsParent())
+    {
+        if (!el->GetResolvedStyle().Visual.Transform.IsNone())
+            return true;
+    }
+    return false;
+}
+
+// One bubble step: the event's pointer in `currentTarget`'s layout space, so a
+// control under a transform compares it with its own layout rect as it would
+// anywhere else. An unknown position stays unknown, and so does a point under
+// a singular transform, which draws nothing for the point to be on.
+void PlacePointerInTargetSpace(UIEvent& ev, const UIElement& currentTarget, const Mathematics::Vector2& window)
+{
+    if (window.x == UIManager::kMousePositionUnknown && window.y == UIManager::kMousePositionUnknown)
+        return;
+    Mathematics::Vector2 local;
+    if (!currentTarget.WindowToLayout(window, local))
+        local = Mathematics::Vector2(UIManager::kMousePositionUnknown, UIManager::kMousePositionUnknown);
+    ev.X = local.x;
+    ev.Y = local.y;
+}
+
 // Where input aimed at `el` is delivered: `el`, or when it is inside a disabled subtree the first
 // ancestor on the event's bubble path (GetParent) outside it. Null when there is none.
 UIElement* FirstInputReceiver(UIElement* el)
@@ -483,16 +511,24 @@ bool UIManager::BubbleEventFrom(UIElement* target, UIEvent& ev)
     }
 
     ev.Target = target;
+    const Mathematics::Vector2 window(ev.X, ev.Y);
+    const bool transformed = TransformAppliesAlongChain(target);
+    ev.WindowX = window.x;
+    ev.WindowY = window.y;
     for (const std::uint64_t iid : bubbleIds)
     {
         UIElement* p = FindElementByInstanceId(iid);
         if (!p)
             continue;
         ev.CurrentTarget = p;
+        if (transformed)
+            PlacePointerInTargetSpace(ev, *p, window);
         p->DispatchEvent(ev);
         if (ev.Handled)
             break;
     }
+    ev.X = window.x;
+    ev.Y = window.y;
     return ev.Handled;
 }
 
@@ -1040,12 +1076,18 @@ bool UIManager::OnScroll(float xoffset, float yoffset)
 
     {
         ScopedInputEventDispatchGuard dispatchGuard;
+        const Mathematics::Vector2 window(ev.X, ev.Y);
+        const bool transformed = TransformAppliesAlongChain(target);
+        ev.WindowX = window.x;
+        ev.WindowY = window.y;
         for (size_t di = 0; di < bubbleIds.size() && di < static_cast<size_t>(kMaxBubbleDepth); ++di)
         {
             UIElement* p = FindElementByInstanceId(bubbleIds[di]);
             if (!p)
                 continue;
             ev.CurrentTarget = p;
+            if (transformed)
+                PlacePointerInTargetSpace(ev, *p, window);
             p->DispatchEvent(ev);
             if (ev.Handled)
                 break;
@@ -1117,12 +1159,18 @@ bool UIManager::DispatchBubbleEvent(UIElement* target, EventId id, int button,
 
     {
         UIElement::SetInEventDispatch(true);
+        const Mathematics::Vector2 window(ev.X, ev.Y);
+        const bool transformed = TransformAppliesAlongChain(target);
+        ev.WindowX = window.x;
+        ev.WindowY = window.y;
         for (size_t di = 0; di < bubbleIds.size() && di < static_cast<size_t>(kMaxBubbleDepth); ++di)
         {
             UIElement* p = FindElementByInstanceId(bubbleIds[di]);
             if (!p)
                 continue;
             ev.CurrentTarget = p;
+            if (transformed)
+                PlacePointerInTargetSpace(ev, *p, window);
             p->DispatchEvent(ev);
             if (ev.Handled)
             {

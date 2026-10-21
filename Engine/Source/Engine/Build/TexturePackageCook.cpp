@@ -11,7 +11,6 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <fstream>
 #include <map>
@@ -49,7 +48,14 @@ bool ValidArtifact(const Vector<uint8>& bytes, TextureCookOutput output,
 bool PublishArtifact(const fs::path& destination, const Vector<uint8>& bytes, std::string& error)
 {
     static std::atomic<uint64> sequence{0};
-    fs::create_directories(destination.parent_path());
+    std::error_code directoryError;
+    fs::create_directories(destination.parent_path(), directoryError);
+    if (directoryError)
+    {
+        error = "Could not create the cooked texture folder " + destination.parent_path().string() + ": " +
+                directoryError.message();
+        return false;
+    }
     fs::path temporary = destination;
     temporary += ".tmp." + std::to_string(sequence.fetch_add(1));
     struct Cleanup
@@ -77,6 +83,18 @@ bool PublishArtifact(const fs::path& destination, const Vector<uint8>& bytes, st
         return false;
     }
     return true;
+}
+
+// Removes a texture's other artifacts from a derived cache once `kept` is published there: the
+// editor sweeps a texture's superseded keys only when it cooks, and one that adopts the
+// export's artifact never does.
+void RemoveSupersededArtifacts(const fs::path& kept, const GUID& guid)
+{
+    const std::string prefix = guid.ToString() + "-";
+    std::error_code error;
+    for (fs::directory_iterator it(kept.parent_path(), error), end; !error && it != end; it.increment(error))
+        if (it->path() != kept && it->path().filename().string().rfind(prefix, 0) == 0)
+            fs::remove(it->path(), error);
 }
 
 // One usage for every slot that binds a texture, one bit per usage. An unknown slot may read the
@@ -184,7 +202,6 @@ void StageTextureImportMetadata(const AssetRegistry& registry, const AssetManife
 bool StagePackagedTextureCooks(const fs::path& contentRoot,
                               const AssetManifest& manifest,
                               const AssetRegistry& sourceRegistry,
-                              TextureCookEncodeQuality targetBc7Quality,
                               TextureCookWorkers* encodeWorkers,
                               JobSystem::WorkStealingThreadPool* manifestParsePool,
                               const std::function<bool()>& cancelRequested,
@@ -264,10 +281,13 @@ bool StagePackagedTextureCooks(const fs::path& contentRoot,
                                      entry.outputPath.string());
             }
             const bool hdr = extension == ".hdr";
-            const std::array outputs = {
-                ResolveTextureCookOutput(inputs.Settings, hdr, true, IsTextureCookEncoderAvailable()),
-                ResolveTextureCookOutput(inputs.Settings, hdr, false, IsTextureCookEncoderAvailable())};
-            if (!NeedsTextureCook(inputs, outputs[0]) && !NeedsTextureCook(inputs, outputs[1]))
+            // One form per texture: every target this export serves samples BC (Windows,
+            // Linux, macOS, Steam Deck; the web target exports through WebExportRunner), so
+            // the texture's settings alone choose it, and uncompressed pixels ship only for
+            // Compression None, an unclassified texture, or a host without the encoder.
+            const auto output = ResolveTextureCookOutput(inputs.Settings, hdr, /*deviceSupportsBC=*/true,
+                                                         IsTextureCookEncoderAvailable());
+            if (!NeedsTextureCook(inputs, output))
                 continue;
             Vector<uint8> sourceBytes;
             if (!ReadFileBytesShared(source, sourceBytes) || sourceBytes.empty())
@@ -276,36 +296,37 @@ bool StagePackagedTextureCooks(const fs::path& contentRoot,
                 return false;
             }
             const uint64 sourceHash = ComputeTextureCookSourceHash(sourceBytes.data(), sourceBytes.size());
-            const auto cacheRoot = sourceRegistry.TryGetCacheRoot(entry.guid);
             ++stats.Textures;
-            for (const auto output : outputs)
+            if (cancelled()) { error = kTextureCookCancelledError; return false; }
+            const auto filename = TextureCookArtifactName(entry.guid, sourceHash, inputs, output);
+            record.kv[kTexturePackagedMetaKey] = filename;
+            // The artifact publishes into the staged mount's own Tex/, which is where the
+            // packaged game's read-only mount of that content looks (its cache root defaults
+            // to the content itself). The source mount's derived cache (TryGetCacheRoot: the
+            // project's .Cache, or the host's Packages/<alias> cache for a git or engine
+            // package) is where the editor's own cooks land under the same name: the bake
+            // reuses an artifact found there and publishes one it encoded there, so neither
+            // side encodes a texture the other already has. A mount the editor does not cook
+            // into (a mounted package) is only read. Creation permission must not choose a path.
+            const auto destination = mountRoot / AssetDatabase::kTextureCacheDirectoryName / filename;
+            if (staged.insert(destination.generic_string()).second)
             {
-                if (cancelled()) { error = kTextureCookCancelledError; return false; }
-                const auto filename = TextureCookArtifactName(entry.guid, sourceHash, inputs, output, targetBc7Quality);
-                record.kv[output == TextureCookOutput::Uncompressed ? kTexturePackagedPortableMetaKey :
-                    kTexturePackagedCompressedMetaKey] = filename;
-                // The artifact publishes into the staged mount's own Tex/, which is
-                // where the packaged game's read-only mount of that content looks
-                // (its cache root defaults to the content itself). The reuse probe
-                // below reads the SOURCE mount's derived cache instead
-                // (TryGetCacheRoot: the project's .Cache, or the host's
-                // Packages/<alias> cache for a git or engine package), where the
-                // editor's own cooks land. Creation permission must not choose a
-                // path.
-                const auto destination = mountRoot / AssetDatabase::kTextureCacheDirectoryName / filename;
-                if (!staged.insert(destination.generic_string()).second)
-                    continue;
+                const auto cacheRoot = sourceRegistry.TryGetCacheRoot(entry.guid);
+                const bool sourceCooks = cacheRoot && sourceRegistry.GetDerivedArtifactPolicy(entry.guid).CooksOnMiss;
+                const auto sourceCacheFile = cacheRoot
+                    ? *cacheRoot / AssetDatabase::kTextureCacheDirectoryName / filename : fs::path{};
                 Vector<uint8> cooked;
+                bool inSourceCache = false;
                 bool reused = ReadFileBytesShared(destination, cooked) && ValidArtifact(cooked, output, inputs, hdr);
                 if (!reused && cacheRoot)
-                    reused = ReadFileBytesShared(*cacheRoot / AssetDatabase::kTextureCacheDirectoryName / filename, cooked) &&
-                             ValidArtifact(cooked, output, inputs, hdr);
+                    reused = inSourceCache = ReadFileBytesShared(sourceCacheFile, cooked) &&
+                                             ValidArtifact(cooked, output, inputs, hdr);
                 if (!reused)
                 {
                     Logger::Log::Info("Build: Baking texture '{}' ({})", entry.outputPath.string(), filename);
                     std::vector<uint8> encoded;
-                    if (!CookTexture(sourceBytes.data(), sourceBytes.size(), extension,
-                                     inputs, output, encoded, error, cancelRequested, targetBc7Quality,
+                    if (!CookTexture(sourceBytes.data(), sourceBytes.size(), source.string(), extension,
+                                     inputs, output, encoded, error, cancelRequested,
                                      encodeWorkers))
                     {
                         if (error != kTextureCookCancelledError)
@@ -322,6 +343,15 @@ bool StagePackagedTextureCooks(const fs::path& contentRoot,
                 if (cancelled()) { error = kTextureCookCancelledError; return false; }
                 if (!PublishArtifact(destination, cooked, error))
                     return false;
+                std::string cacheError;
+                if (sourceCooks && !inSourceCache)
+                {
+                    if (PublishArtifact(sourceCacheFile, cooked, cacheError))
+                        RemoveSupersededArtifacts(sourceCacheFile, entry.guid);
+                    else
+                        Logger::Log::Warning("Build: {}; the editor cooks '{}' again on its next load",
+                                             cacheError, entry.outputPath.string());
+                }
                 ++stats.Artifacts;
                 stats.ReusedArtifacts += reused ? 1 : 0;
                 stats.Bytes += cooked.size();

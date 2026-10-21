@@ -25,6 +25,16 @@ inline constexpr Input::ActionId kEditorDiscardPlayReview =
     Input::HashInput("Editor.Global.DiscardPlayReview");
 inline constexpr Input::ActionId kEditorToggleWindowFullscreen =
     Input::HashInput("Editor.Global.ToggleWindowFullscreen");
+// Diagnostics (Editor::DiagnosticShortcuts). Bare function keys, not reserved:
+// a game in Play that binds or polls one takes it first.
+#if GE_ENABLE_CPU_PROFILING
+// F2: enable the CPU profiler, then dump the last frame on each press.
+inline constexpr Input::ActionId kEditorCpuProfiler = Input::HashInput("Editor.Global.CpuProfiler");
+// Shift+F2: disable the CPU profiler.
+inline constexpr Input::ActionId kEditorCpuProfilerOff = Input::HashInput("Editor.Global.CpuProfilerOff");
+#endif
+// F3: show the UI Demo panel.
+inline constexpr Input::ActionId kEditorShowUIDemo = Input::HashInput("Editor.Global.ShowUIDemo");
 
 #ifdef __APPLE__
 inline constexpr int kUniversalSearchDefaultMods = Input::kModSuper;
@@ -35,8 +45,8 @@ inline constexpr int kUniversalSearchDefaultMods = Input::kModControl;
 inline void RegisterUniversalSearchShortcut(Input::InputSystem& input)
 {
     Input::ActionBinding binding{Input::DeviceType::Keyboard, Input::kKeyCode_K, 1.0f};
-    binding.requiredMods = kUniversalSearchDefaultMods;
-    binding.forbiddenMods = Input::kModShortcutMask & ~binding.requiredMods;
+    binding.requiredMods = static_cast<Input::ModifierFlags>(kUniversalSearchDefaultMods);
+    binding.forbiddenMods = Input::kShortcutModifiers & ~binding.requiredMods;
     input.RegisterAction(kEditorGlobalContext,
                          {kEditorUniversalSearch, {binding}, false, /*hostReserved=*/true});
 }

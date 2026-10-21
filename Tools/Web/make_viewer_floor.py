@@ -23,7 +23,7 @@ kSegments = 96            # triangles around the disc
 kTextureSize = 128        # the fade texture's width and height in pixels
 kOpaqueRadius = 0.35      # of the disc's radius: fully opaque inside it
 kClearRadius = 0.95       # of the disc's radius: fully transparent outside it
-kAlbedo = 0.6             # linear base colour, a mid grey
+kAlbedo = 0.2             # linear base color: a dark gray that reads near middle gray under the viewer's metering
 kRoughness = 0.9
 
 

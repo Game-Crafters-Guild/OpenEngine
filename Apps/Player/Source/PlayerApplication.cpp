@@ -21,8 +21,7 @@
 #include "Engine/Rendering/RenderDeviceContext.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
-
-#include <stb_image_write.h>
+#include "Image/Encode.h"
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
@@ -35,6 +34,7 @@
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/Passes/TemporalDither.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scripting/ManagedSystemBridge.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
@@ -383,6 +383,9 @@ bool PlayerApplication::Initialize()
         SetLODImportSettings(lod);
     }
 
+    // The project's render layer names, before any game system starts and asks for a layer by name.
+    Rendering::SetRenderLayerNames(m_GameConfig.renderLayerNames);
+
     // Configure the Player's copy of the Rendering::Utils shader hooks (see
     // PlayerResolveEngineShaderPath above). Must run after the 'editor' asset
     // source is mounted so resolution can find staged engine shaders, and before
@@ -641,9 +644,24 @@ void PlayerApplication::FinishStartupResolve(ECS::World& world)
                       progress.Total, seconds, m_StartupResolveFrames, counts.ResolvedEntities,
                       counts.MissedEntities, counts.RegisteredModels, counts.RegisteredMaterials,
                       counts.MissedMaterials);
+    LogProgramIndexCounts();
     // The skeleton binder bound the batch's skinned entities on the frame each
     // completed, before this tick, so the autoplay starts find their skeletons.
     Engine::Renderer::BootstrapSceneAnimators(world);
+}
+
+void PlayerApplication::LogProgramIndexCounts()
+{
+    auto* renderCtx = m_Host->GetRenderDeviceContext();
+    auto* renderServices = renderCtx ? renderCtx->GetRenderServices() : nullptr;
+    const Rendering::ShaderProgramIndex* index =
+        renderServices ? renderServices->Materials().GetProgramIndex() : nullptr;
+    if (!index)
+        return;
+    const Rendering::ShaderProgramIndex::Counts counts = index->GetCounts();
+    Logger::Log::Info("Player: shader program index: {} variant(s) served without composing, {} composed and hashed "
+                      "(not in the index)",
+                      counts.Hits, counts.Misses);
 }
 
 void PlayerApplication::Update(float64 deltaTime)
@@ -766,9 +784,7 @@ void PlayerApplication::PollScreenshot()
             m_ScreenshotSpace ? Rendering::ReadbackToRgba8Srgb(shot, *m_ScreenshotSpace)
                               : std::vector<uint8_t>{};
         if (!rgba.empty() &&
-            stbi_write_png(m_ScreenshotPath.c_str(), static_cast<int>(shot.width),
-                           static_cast<int>(shot.height), 4, rgba.data(),
-                           static_cast<int>(shot.width * 4u)) != 0)
+            Image::WritePngFile(m_ScreenshotPath, rgba, shot.width, shot.height))
         {
             Logger::Log::Info("Player: wrote screenshot '{}' ({}x{})", m_ScreenshotPath, shot.width, shot.height);
         }

@@ -11,6 +11,12 @@ layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D uMomentsOut;
 
 layout(set = 0, binding = 8) uniform sampler2D uHitData;
 layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D uSurfaceOut;
+// The view's exposure state (ExposureHistory). Radiance is stored at the
+// frame's pre-exposure P; the floors below (the deviation, the clip radius, the history
+// luminance worth clipping) are absolute luminance, so they are scaled by P (P squared for
+// the variance).
+#define GE_EXPOSURE_HISTORY_BINDING 10
+#include "Includes/exposure_history.glsl"
 
 #include "ScreenSpaceReflections/sssr_common.glsl"
 #include "ScreenSpaceReflections/sssr_history_policy.glsl"
@@ -40,18 +46,19 @@ void main()
     }
     mean /= max(sampleWeight, 1.0);
     mean2 /= max(sampleWeight, 1.0);
-    float sigma = sqrt(max(mean2 - mean * mean, 1e-6));
+    float preExposure = GE_PreExposure();
+    float sigma = sqrt(max(mean2 - mean * mean, 1e-6 * preExposure * preExposure));
     float historyLum = GE_Luminance(history.rgb);
     // Confidence describes ray coverage, not whether old geometry is valid.
     // Only reproject's accepted history may accumulate, and a changed signal
     // must not gain extra persistence merely because the old hit was brighter
     // or more confident than a current miss.
-    float clipRadius = max(1.5 * sigma, mean * 0.08 + 0.002);
+    float clipRadius = max(1.5 * sigma, mean * 0.08 + 0.002 * preExposure);
     float clippedLum = clamp(historyLum, max(mean - clipRadius, 0.0), mean + clipRadius);
     // A neighborhood containing no current hits provides no useful bounds.
     // Keeping valid, depth-tested history in that case is what turns the
     // stochastic ray stream into a dense reflection instead of a checkerboard.
-    if (sampleWeight > 0.0 && historyLum > 1e-5)
+    if (sampleWeight > 0.0 && historyLum > 1e-5 * preExposure)
         history.rgb *= clippedLum / historyLum;
 
     float roughness = GE_Roughness(texelFetch(uNormalRoughness, pixel, 0));

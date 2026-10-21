@@ -4,6 +4,7 @@
 #include "AssetDatabase/IAssetDbCache.h"
 #include "Assets/AssetCreation.h"
 #include "Assets/AssetManager.h"
+#include "Assets/TextureCookActivity.h"
 #include "Assets/LensFlareImporter.h"
 #include "Assets/MeshLODGenerator.h"
 #include "Assets/ModelAsset.h"
@@ -16,10 +17,10 @@
 #include "Components/Rendering/MeshRenderer.h"
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/Particles.h"
-#include "Components/Rendering/RenderLayer.h"
 #include "Components/Rendering/WorldSectorCoord.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneIOContext.h"
+#include "Scene/RenderLayerMaskText.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainGrass.h"
@@ -34,6 +35,7 @@
 #include "DebugServer/CameraProjectionReport.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "DebugServer/ComponentValueReader.h"
+#include "DebugServer/RenderLayerMaskValue.h"
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/EditorDebugServer.h"
 #include "DebugServer/ElementPointerTarget.h"
@@ -95,6 +97,10 @@
 #include "Engine/Rendering/DrawStreamLookupKey.h"
 #include "Engine/Rendering/Exposure.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
+#include "Engine/Rendering/FrameOrchestrator.h"
+#include "Engine/Rendering/IEnvironmentSource.h"
+#include "Engine/Rendering/ImageBasedLightingFeature.h"
+#include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/AntiAliasing.h"
 #include "Engine/Rendering/GPUAnimationDataStore.h"
 #include "Engine/Rendering/ModelEntityFactory.h"
@@ -110,6 +116,7 @@
 #include "Rendering/Core/RenderGraph/RGBarrier.h"
 #include "Rendering/Core/RenderGraph/RGTypes.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Image/Encode.h"
 #include "Input/InputSystem.h"
 #include "Logger/LogLevel.h"
 #include "Logger/RingBufferSink.h"
@@ -172,7 +179,6 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include <nlohmann/json.hpp>
-#include <stb_image_write.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -224,9 +230,10 @@ static bool IEquals(std::string_view a, std::string_view b)
 // AssetGuid/enum string that did not resolve (unknown asset path / unknown enumerator),
 // an entity id naming no live entity, or a field type this writer has no representation
 // for (Mat4/Bytes/Unknown). Reporting success for a write that changed nothing is what
-// this contract exists to prevent. `world` supplies entity-handle liveness.
+// this contract exists to prevent. `world` supplies entity-handle liveness. A refusal with
+// a reason the caller can act on (the forms a render layer field takes) puts it in `outReason`.
 static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
-                               const ECS::FieldInfo& f, const json& v)
+                               const ECS::FieldInfo& f, const json& v, std::string& outReason)
 {
     // The integer/enum stores below memcpy a value's low bytes into the field; that assumes a
     // little-endian host (every shipping target). A big-endian port would byte-swap.
@@ -311,6 +318,15 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
     case FieldTypeId::UInt32:
         storeInt.operator()<std::uint32_t>();
         break;
+    case FieldTypeId::RenderLayerMask:
+    {
+        // A layer list ([0, 2] or the scene text "[0, 2]"), "all" or "none"; the read side reports the text.
+        Rendering::RenderLayerMask layers;
+        if (!fits(sizeof(layers)) || !Editor::ReadRenderLayerMaskValue(v, f.Name, layers, outReason))
+            return false;
+        std::memcpy(bytes.data() + off, &layers, sizeof(layers));
+        return true;
+    }
     case FieldTypeId::Int64:
         storeInt.operator()<std::int64_t>();
         break;
@@ -466,11 +482,12 @@ static bool SetReflectedComponentFields(ECS::World* world, ECS::EntityHandle ent
                         if (outUnapplied)
                             outUnapplied->push_back(it.key()); // read-only/hidden: not settable here
                     }
-                    else if (!WriteFieldFromJson(*world, bytes, f, it.value()) && outUnapplied)
+                    else if (std::string reason; !WriteFieldFromJson(*world, bytes, f, it.value(), reason) && outUnapplied)
                     {
                         // Bad asset path / enum name, an entity id naming no live entity,
-                        // or a field type with no JSON form (Mat4/Bytes).
-                        outUnapplied->push_back(it.key());
+                        // a field type with no JSON form (Mat4/Bytes), or a value of the wrong
+                        // form, which names the forms the field takes.
+                        outUnapplied->push_back(reason.empty() ? it.key() : it.key() + " (" + reason + ")");
                     }
                     break;
                 }
@@ -1652,22 +1669,6 @@ static std::vector<uint8_t> CropRGBA8(
     return out;
 }
 
-// Encode RGBA8 pixels as PNG in memory using stb_image_write.
-static std::vector<uint8_t> EncodePNG(const uint8_t* rgba, uint32_t width, uint32_t height)
-{
-    std::vector<uint8_t> pngData;
-    auto writeFunc = [](void* context, void* data, int size)
-    {
-        auto* out = static_cast<std::vector<uint8_t>*>(context);
-        auto* bytes = static_cast<const uint8_t*>(data);
-        out->insert(out->end(), bytes, bytes + size);
-    };
-    stbi_write_png_to_func(writeFunc, &pngData,
-                           static_cast<int>(width), static_cast<int>(height),
-                           4 /*RGBA*/, rgba, static_cast<int>(width * 4));
-    return pngData;
-}
-
 // Base64 encoder for binary data (used by take_screenshot to return pixel data).
 static std::string Base64Encode(const uint8_t* data, size_t length)
 {
@@ -1822,6 +1823,26 @@ static bool ResolveCaptureResource(const Rendering::RenderGraph::RGFrame& frame,
     return false;
 }
 
+// Scene colour is stored at the frame's pre-exposure P (pre_exposure_snapshot.comp). For a
+// texture holding it (the pipeline's PreExposedTextures: the view's colour target, the render
+// graph's "preExposed" textures, the ones nodes mark), declare a readback of its view's
+// ExposureHistory into the same frame, so the capture can report P and return scene-linear
+// values; null for any other resource.
+static std::shared_ptr<Rendering::RGBufferReadbackTicket> RequestPreExposureReadback(
+    Rendering::IDevice* device, Rendering::RenderGraph::RGFrame& frame, uint32_t textureResourceId)
+{
+    auto* rs = EngineCore::GetInstance().GetRenderServices();
+    const auto* pipeline = rs ? rs->Spine().PipelineInstanceForFrame(frame) : nullptr;
+    if (!pipeline)
+        return nullptr;
+    const Rendering::RenderGraph::RGBuffer source = pipeline->FindPreExposureSource(textureResourceId);
+    if (!source.IsValid())
+        return nullptr;
+    return Rendering::RequestBufferReadbackRG(device, frame, source, 0,
+                                              Engine::Renderer::ExposureReadbackFeature::kStateBytes,
+                                              "CaptureResource.PreExposure");
+}
+
 // ---------------------------------------------------------------------------
 // take_screenshot support
 // ---------------------------------------------------------------------------
@@ -1862,7 +1883,7 @@ static size_t PendingMaterialTextureBinds()
 static json EncodeCapturePng(const std::vector<uint8_t>& rgba8, uint32_t width, uint32_t height,
                              const std::string& fileStem)
 {
-    auto png = EncodePNG(rgba8.data(), width, height);
+    auto png = Image::EncodePng(rgba8, width, height);
     if (png.empty())
         return Editor::RefuseRequest("PNG encoding failed");
 
@@ -2037,7 +2058,19 @@ static json SerializeDynamicComponent(ECS::World* world, ECS::EntityHandle entit
         // ladder here. A discarded parse falls through to the hex blob below, so a decode gap
         // degrades to the old opaque answer instead of dropping the component silently.
         if (json parsed = json::parse(text, nullptr, false); !parsed.is_discarded())
+        {
+            // Render layers read back as the scene text, the one form this server reports and takes.
+            for (const ECS::FieldInfo& f : fields)
+            {
+                Rendering::RenderLayerMask layers;
+                if (f.Type != ECS::FieldTypeId::RenderLayerMask || f.Size != sizeof(layers) ||
+                    f.Offset + sizeof(layers) > bytes.size())
+                    continue;
+                std::memcpy(&layers, bytes.data() + f.Offset, sizeof(layers));
+                parsed[std::string(f.Name)] = Scene::FormatRenderLayerMask(layers);
+            }
             return parsed;
+        }
     }
 
     static constexpr char kHex[] = "0123456789abcdef";
@@ -2113,7 +2146,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
         auto* c = world->GetComponent<Components::MeshRenderer>(entity);
         components["MeshRenderer"] = {
             {"meshId", c->meshId},
-            {"renderLayerMask", c->renderLayerMask},
+            {"renderLayers", Scene::FormatRenderLayerMask(c->RenderLayers)},
             {"castShadows", c->castShadows},
             {"receiveShadows", c->receiveShadows}};
         serialized.insert(ECS::GetComponentTypeId<Components::MeshRenderer>());
@@ -2128,9 +2161,9 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
             {"orthographicSize", c->OrthographicSize},
             {"nearZ", c->NearZ},
             {"farZ", c->FarZ},
-            {"cullingMask", c->CullingMask},
+            {"visibleLayers", Scene::FormatRenderLayerMask(c->VisibleLayers)},
             {"postProcessProfileId", c->PostProcessProfileId},
-            {"postProcessMask", c->PostProcessMask}};
+            {"volumeLayers", Scene::FormatRenderLayerMask(c->VolumeLayers)}};
         serialized.insert(ECS::GetComponentTypeId<Components::Camera>());
     }
 
@@ -2228,7 +2261,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
             {"LayerHex1", (c->LayerHexTiling & 2u) != 0u},
             {"LayerHex2", (c->LayerHexTiling & 4u) != 0u},
             {"LayerHex3", (c->LayerHexTiling & 8u) != 0u},
-            {"RenderLayerMask", c->RenderLayerMask},
+            {"RenderLayers", Scene::FormatRenderLayerMask(c->RenderLayers)},
             {"CastShadows", c->CastShadows},
             {"ReceiveShadows", c->ReceiveShadows}};
         serialized.insert(ECS::GetComponentTypeId<Components::Terrain>());
@@ -2675,6 +2708,13 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         // texture, so anything measured from the viewport right now is a
         // transient state — poll to zero before drawing a visual conclusion.
         result["pendingMaterialTextureBinds"] = PendingMaterialTextureBinds();
+        // The two inputs to the status bar's "Preparing N textures" (N is the larger): the
+        // textures whose import cook runs now, and the distinct textures those pending
+        // bindings wait on.
+        if (AssetManager* assets = EngineCore::GetInstance().TryGetAssetManager())
+            result["textureCooksRunning"] = assets->GetTextureCookActivity().CookingCount();
+        if (auto* rs = EngineCore::GetInstance().GetRenderServices())
+            result["pendingMaterialTextures"] = rs->Textures().PendingMaterialTextureCount();
         // The same question for UI chrome, which the material counter cannot
         // answer: non-zero means that many background images (icons, panel art)
         // have a load or upload in flight and are drawing nothing where they
@@ -2682,7 +2722,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         UIManager* chromeUi =
             (!app.m_Windows.empty() && app.m_Windows[0]) ? app.m_Windows[0]->ui.get() : nullptr;
         result["pendingUiBackgroundImages"] =
-            chromeUi ? chromeUi->PendingBackgroundImageCount() : 0u;
+            chromeUi ? chromeUi->BackgroundImages().PendingCount() : 0u;
 
         // Selected entity — read from the InspectorPanel which displays the
         // currently selected entity across all selection sources.
@@ -5409,6 +5449,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             // Non-skipped MaterialParams repacks; flat while idle = the
             // PackMaterialSSBO skip gate is engaging.
             renderServices["materialSSBOPackCount"] = rs->Materials().GetMaterialSSBOPackCount();
+            // Material rows those packs wrote. Animating one material should add
+            // one row per ring slot, not the whole table.
+            renderServices["materialSSBORowWriteCount"] = rs->Materials().GetMaterialSSBORowWriteCount();
             // Frames whose material rows overflowed the MaterialParams ring and
             // shaded from the zero-filled fallback. Non-zero means the scene has
             // outgrown the ring's starting capacity; still climbing after a few
@@ -5445,11 +5488,11 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 };
             }
 
-            // Per-pool suballocator occupancy, one entry per pool buffer.
-            // `fragRatio` is (capacity - used - largestFreeRange) / capacity:
-            // 0.0 is perfectly packed, and a high value with plenty of free
-            // bytes means live ranges are splitting the free space rather than
-            // the pool being full. That matters because a best-fit failure does
+            // Per-pool suballocator occupancy in bytes, one entry per pool buffer.
+            // `fragRatio` is (free - largestFreeRange) / free: 0.0 when the free
+            // bytes are one range, and a high value with plenty of free bytes
+            // means live ranges are splitting the free space rather than the
+            // pool being full. That matters because a failed allocation does
             // not fail the upload — it appends a sibling pool at double the
             // capacity, which grows GPU memory and adds a pool group (and so an
             // indirect draw). `freeRangeCount` is the same story per frame:
@@ -5463,13 +5506,13 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                         {"bucketKey", static_cast<uint32_t>(pool.BucketKey)},
                         {"stream", pool.Stream},
                         {"poolIndex", pool.PoolIndex},
-                        {"capacity", pool.Allocator.capacity},
-                        {"used", pool.Allocator.used},
-                        {"peak", pool.Allocator.peak},
-                        {"largestFreeRange", pool.Allocator.largestFreeRange},
-                        {"freeRangeCount", pool.Allocator.freeRangeCount},
-                        {"deferredCount", pool.Allocator.deferredCount},
-                        {"fragRatio", pool.Allocator.fragRatio}
+                        {"capacity", pool.Allocator.CapacityUnits},
+                        {"used", pool.Allocator.UsedUnits},
+                        {"peak", pool.Allocator.PeakUnits},
+                        {"largestFreeRange", pool.Allocator.LargestFreeUnits},
+                        {"freeRangeCount", pool.Allocator.FreeRanges},
+                        {"deferredCount", pool.Allocator.PendingRanges},
+                        {"fragRatio", pool.Allocator.Fragmentation}
                     });
                 }
                 renderServices["meshPools"] = std::move(meshPools);
@@ -5722,6 +5765,16 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 renderServices["exposure"] = {
                     {"meteredViews", std::move(meteredViews)}
                 };
+            }
+
+            // Image-based lighting bakes (the sky's and the reflection probes'): a capture is settled
+            // once bakeCount stops rising. framesSinceBake is absent until the first bake.
+            if (const auto* ibl = rs->GetFeature<Engine::Renderer::ImageBasedLightingFeature>())
+            {
+                json iblStats = {{"bakeCount", ibl->GetBakeCount()}};
+                if (ibl->GetBakeCount() > 0)
+                    iblStats["framesSinceBake"] = ibl->GetFramesSinceBake();
+                renderServices["ibl"] = std::move(iblStats);
             }
 
             if (auto* csm = rs->GetFeature<Engine::Renderer::ShadowMapRenderFeature>())
@@ -8284,7 +8337,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             if (!camera)
                 return Editor::RefuseRequest("No declared game camera frame");
             auto result = Editor::DescribeGameViewCamera(camera->Data, camera->ExposureMode,
-                                                         camera->Width, camera->Height);
+                                                         camera->ExposureMeter, camera->Width, camera->Height);
             result["view"] = "game";
             result["viewId"] = static_cast<uint32_t>(game.GetViewId());
             result["source"] = "last_declared";
@@ -8594,6 +8647,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             bool writtenThisFrame = false;
             std::shared_ptr<Rendering::RGReadbackTicket> textureTicket;
             std::shared_ptr<Rendering::RGBufferReadbackTicket> bufferTicket;
+            // Set for a texture holding pre-exposed scene colour: its view's ExposureHistory.
+            std::shared_ptr<Rendering::RGBufferReadbackTicket> preExposureTicket;
+            bool preExposed = false;
             json error;       // set by the render callback; ends the poll
             bool resolved = false;
             uint32_t polls = 0;
@@ -8727,9 +8783,14 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     device, *frame, tex, state->mip, state->layer, state->srcX, state->srcY,
                     state->regionW, state->regionH, match.Name.c_str());
                 if (!state->textureTicket)
+                {
                     state->error = Editor::RefuseRequest("Failed to declare a readback of '" + match.Name +
                                                              "' (region out of bounds?)",
                                                          json{{"resourceName", match.Name}});
+                    return;
+                }
+                state->preExposureTicket = RequestPreExposureReadback(device, *frame, match.Id);
+                state->preExposed = state->preExposureTicket != nullptr;
                 return;
             }
 
@@ -8850,6 +8911,33 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     outResult = Editor::RefuseRequest("Declaring frame was abandoned before submit");
                     return true;
                 }
+                // Both copies were declared into the same frame; take the pre-exposure first so
+                // the texture's result is consumed exactly once.
+                float preExposure = 1.0f;
+                if (state->preExposureTicket)
+                {
+                    if (state->preExposureTicket->IsConsumed())
+                    {
+                        outResult = Editor::RefuseRequest("Declaring frame was abandoned before submit");
+                        return true;
+                    }
+                    Rendering::BufferReadbackResult exposureBytes;
+                    if (!state->preExposureTicket->TryGet(exposureBytes))
+                    {
+                        if (state->polls > kMaxPollsAwaitingGpu)
+                        {
+                            outResult = Editor::RefuseRequest("Pre-exposure readback never completed");
+                            return true;
+                        }
+                        return false;
+                    }
+                    Engine::Renderer::ExposureReadbackFeature::State exposureState{};
+                    if (exposureBytes.bytes.size() >= sizeof(exposureState))
+                        std::memcpy(&exposureState, exposureBytes.bytes.data(), sizeof(exposureState));
+                    preExposure = Engine::Renderer::ExposureReadbackFeature::ResolvePreExposure(exposureState);
+                    state->preExposureTicket.reset();
+                }
+
                 Rendering::ViewReadbackResult result;
                 if (!state->textureTicket->TryGet(result))
                 {
@@ -8860,6 +8948,10 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     }
                     return false;
                 }
+                // preExposed: the texels hold scene colour stored at preExposure. The PNG maps
+                // scene-linear values (the range is applied to texel / preExposure); raw texels
+                // are returned as they sit in memory, so a consumer divides them by preExposure.
+                const bool preExposed = state->preExposed;
 
                 if (state->raw)
                 {
@@ -8879,6 +8971,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                         {"layer", state->layer},
                         {"frameIndex", state->frameIndex},
                         {"writtenThisFrame", state->writtenThisFrame},
+                        {"preExposed", preExposed},
+                        {"preExposure", preExposure},
                         {"byteCount", result.pixels.size()},
                         {"rawBase64", Base64Encode(result.pixels.data(), result.pixels.size())}};
                     if (!state->writtenThisFrame)
@@ -8900,7 +8994,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     {"mip", state->mip},
                     {"layer", state->layer},
                     {"frameIndex", state->frameIndex},
-                    {"writtenThisFrame", state->writtenThisFrame}};
+                    {"writtenThisFrame", state->writtenThisFrame},
+                    {"preExposed", preExposed},
+                    {"preExposure", preExposure}};
                 if (!state->writtenThisFrame)
                     metadata["staleWarning"] =
                         "No pass wrote '" + state->resolvedName +
@@ -8908,8 +9004,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                         "did write it left in the pool, not a current image";
                 state->encodeJob = Editor::SubmitHandlerReplyJob(
                     EngineCore::GetInstance().GetJobSystem(), requestId,
-                    [readback = std::move(result), rangeMin = state->rangeMin,
-                     rangeMax = state->rangeMax, metadata = std::move(metadata)]() mutable
+                    [readback = std::move(result), rangeMin = state->rangeMin * preExposure,
+                     rangeMax = state->rangeMax * preExposure, metadata = std::move(metadata)]() mutable
                     {
                         return FinishResourceCaptureResult(std::move(readback), rangeMin, rangeMax,
                                                            std::move(metadata));

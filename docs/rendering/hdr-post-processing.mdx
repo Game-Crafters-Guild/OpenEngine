@@ -1,6 +1,6 @@
 ---
 title: HDR post-processing
-description: Setting up tonemapping and bloom with Post Process Volumes and the render pipeline inspector, blending volumes, the looks and the debug modes.
+description: Setting up tonemapping, color grading, and bloom with Post Process Volumes and the render pipeline inspector, blending volumes, the looks, and the debug modes.
 ---
 
 This guide covers how to use the HDR post-processing system in the Editor: setting up tonemapping and bloom through PostProcessVolume components and the render pipeline inspector. Exposure is set on the Camera, not on a volume.
@@ -10,8 +10,8 @@ This guide covers how to use the HDR post-processing system in the Editor: setti
 1. Select any entity in the Hierarchy (or create a new empty entity)
 2. In the Inspector, click **Add Component** and choose **Post Process Volume**
 3. Adjust the settings:
-   - **Bloom**: add a **Bloom Effect** component to the same entity; its **Threshold** and **Intensity** control glow on bright areas
-   - **Look**: choose Neutral (the default), Filmic or Photographic
+   - **Bloom**: add a **Bloom Effect** component to the same entity. Its **Threshold** and **Intensity** control glow on bright areas
+   - **Look**: choose Neutral (the default), Filmic, or Photographic
 
 Changes take effect immediately in the viewport.
 
@@ -36,7 +36,7 @@ You can have multiple PostProcessVolume entities in a scene. They are blended by
 - Volumes are sorted by **Priority** (lowest first, highest last)
 - Each volume blends into the accumulated result using its **Weight**
 - Float properties are linearly interpolated
-- The look uses the highest-priority volume's value; it never crossfades
+- The look uses the highest-priority volume's value. It never crossfades
 
 **Example**: A "base" volume at priority 0 with the Neutral look, and a "cinematic" volume at priority 10 with the Filmic look and an Exposure Adjustment effect at -1 stop. When the cinematic volume is enabled, it overrides the base.
 
@@ -44,11 +44,67 @@ You can have multiple PostProcessVolume entities in a scene. They are blended by
 
 | Look | What it does | Pick it for |
 |---|---|---|
-| **Neutral** (default) | Colors stay as authored; only the brightest highlights are compressed toward white. No added contrast. | product shots, stylized and painted art, converted content |
-| **Filmic** | Film contrast: upper mid-tones sit lower and bright, saturated colors roll off to white with little change in hue. Upper mid-tones sit lower than Neutral's; raise the exposure compensation if a scene reads dark. | cinematic and realistic scenes, cutscenes |
+| **Neutral** (default) | The Khronos PBR Neutral curve. It lowers every color by up to 4 percent of white, so shadows read slightly darker and dark colors slightly more saturated. Only the brightest highlights are compressed toward white. No added contrast. | product shots, stylized and painted art, converted content |
+| **Filmic** | Film contrast: upper mid-tones sit lower and bright, saturated colors roll off to white with little change in hue. Upper mid-tones sit lower than Neutral's. Raise the exposure compensation if a scene reads dark. | cinematic and realistic scenes, cutscenes |
 | **Photographic** | Gentle contrast; bright colors fade toward white the way film stock does, shifting slightly in hue. | natural, photographic daylight |
 
 A scene stores the look by name: `PostProcessVolume.look = Filmic`.
+
+## Color grading with a LUT
+
+A **LUT** effect on a Post Process Volume grades the image with a Resolve `.cube` file (a 3D table, a 1D shaper, or both).
+
+1. Import the `.cube` file into the project's `Assets` folder.
+2. On the volume's entity, click **Add Post FX** and choose **LUT**.
+3. Pick the file in the **LUT** field.
+
+| Field | Default | Description |
+|---|---|---|
+| **LUT** | none | The `.cube` asset. With none picked the effect changes nothing. |
+| **Stage** | Finish | Where the LUT runs: **Finish (after the look)** or **Grade (before the look)**. |
+| **Intensity** | 1.0 | 0 shows the image without the grade, 1 the LUT's full output. |
+
+### Where the LUT runs
+
+The order of the image stages is: the Color Grade effect, a LUT at **Grade**, the look, a LUT at **Finish**, then the effects that work on the displayed image (chromatic aberration, vignette, sharpening).
+
+- **Finish (after the look)** is for a display LUT, the kind most `.cube` files are. The LUT grades the look's output inside the Tonemap pass, before an HDR display's highlight headroom is added. A display LUT is authored for the range 0 to 1, so it sees the range it was made for, and the same LUT grades an SDR and an HDR display alike. A value above 1 (the Filmic look's headroom under HDR, or a saturated highlight of the Photographic look, whose output can exceed 1 per channel) keeps its brightness and the LUT grades its color only.
+- **Grade (before the look)** is for a colorist's scene LUT, often authored for a log encoding. The LUT is the last stage of the grade, on the scene's exposed colors, and the look then renders its output. On a volume with no Color Grade effect, a Grade LUT turns the grade pass on, which costs one more fullscreen pass. A display LUT at Grade receives scene colors, and every value above the top of its input range (1 for most display LUTs) clips to the same output. The inspector shows a notice under **Stage** when this occurs.
+
+### The LUT asset
+
+The `.cube` format has no field for the encoding its input is authored in, so the engine proposes one when the file is imported, and the asset's inspector shows it with the reason:
+
+| The file | Input Encoding |
+|---|---|
+| The title names LogC (LogC3), ACEScct, DaVinci Intermediate (or DWG), Cineon, Rec.709 (or 709), sRGB, or linear | that encoding |
+| The title names an encoding the engine does not support (S-Log3, ACEScc, LogC4, V-Log, Log3G10, F-Log) | Rec.709 / sRGB, and the reason says so |
+| Otherwise, the input range reaches above 1 | Linear |
+| Otherwise (a 0 to 1 range, nothing named) | Rec.709 / sRGB |
+
+The title is read as whole words, so a word that only contains a name ("Warrior", "Nonlinear") names nothing. A title of the form "X to Y" is a conversion from X, so only the words before "to" are read; where they name two encodings, the first one wins.
+
+Choose another encoding in the asset's inspector when the proposal is wrong; choosing the proposed one again lets the asset follow its file. The inspector also shows the file's title, its table sizes and its input range.
+
+### The preview
+
+Under the **LUT** field the inspector draws the LUT's effect on two sources, each as a pair of bands: the source through the volume's look (**Look**), then through the look and the LUT at its stage and intensity (**+ LUT**).
+
+- A neutral gray exposure ramp, four stops either side of mid-gray, shows what the LUT does to tone. A tick under it marks mid-gray.
+- Four probes (ember, sky, skin and foliage, each at -2, 0 and +1 stops) show what it does to color and to skin.
+
+Click the preview to enlarge it; click again or press Escape to close it. The enlarged view labels the ramp's stops and each probe's exposure. When the effect is turned off, only the look's bands are drawn.
+
+The asset's inspector and the asset browser's thumbnail show the LUT through the Neutral look at the stage the LUT is made for: **Finish** for a display LUT (Rec.709 / sRGB, or Linear over 0 to 1), **Grade** for a log or scene LUT.
+
+A scene stores the effect as lines on the volume's entity:
+
+```ini title="A LUT effect in a scene file"
+CubeLutEffect.enabled = true
+CubeLutEffect.intensity = 0.8
+CubeLutEffect.stage = Grade
+CubeLutEffect.lutAsset = [path="Luts/Grade.cube"]
+```
 
 ## Bloom controls
 
@@ -57,8 +113,8 @@ Bloom adds a glow effect around bright areas of the image.
 ### How to set up bloom
 
 1. Ensure a light source or emissive material creates HDR values > 1.0
-2. Add a **Bloom Effect** component to the PostProcessVolume entity and set **Threshold** to control what's "bright enough" to glow
-3. Adjust **Intensity** to control the glow brightness. **Diffusion** adds a separate threshold-free haze; [Bloom](bloom.mdx) describes every control
+2. Add a **Bloom Effect** component to the PostProcessVolume entity and set **Threshold** to control what is "bright enough" to glow
+3. Adjust **Intensity** to control the glow brightness. **Diffusion** adds a separate threshold-free haze. [Bloom](bloom.mdx) describes every control
 
 ### Tips
 
@@ -80,15 +136,15 @@ These defaults are the base values used when no PostProcessVolume exists in the 
 
 ### Disabling bloom
 
-Remove the **Bloom Effect** component, or set its **Intensity** and **Diffusion** to 0 with the depth veil off. The bloom passes are then skipped; no render graph edit is needed.
+Remove the **Bloom Effect** component, or set its **Intensity** and **Diffusion** to 0 with the depth veil off. The bloom passes are then skipped. No render graph edit is needed.
 
 ### Disabling tonemapping
 
-Set the Tonemap pass to `enabled: false`. The viewport will show raw HDR values clamped by the display, which will look washed out but can be useful for debugging.
+Set the Tonemap pass to `enabled: false`. The viewport shows raw HDR values clamped by the display, which look washed out but can be useful for debugging.
 
 ## Debug modes
 
-The tonemap shader has two debug modes, selected by the Tonemap pass's `ditherMode` push constant. Normal tonemapping emits linear color; the terminal output-encoding pass owns display encoding and dithering:
+The tonemap shader has two debug modes, selected by the Tonemap pass's `ditherMode` push constant. Normal tonemapping emits linear color. The terminal output-encoding pass owns display encoding and dithering:
 
 | ditherMode | Effect |
 |------------|--------|
@@ -97,9 +153,9 @@ The tonemap shader has two debug modes, selected by the Tonemap pass's `ditherMo
 | 98 | Show raw HDR values (no tonemapping, exposure only) |
 | 99 | Solid magenta (shader execution test) |
 
-To use a debug mode, set the `ditherMode` push constant in the Tonemap pass via the Render Pipeline Inspector. No volume setting overrides it. These modes change the tonemap output; the terminal pass still performs the configured display encoding.
+To use a debug mode, set the `ditherMode` push constant in the Tonemap pass via the Render Pipeline Inspector. No volume setting overrides it. These modes change the tonemap output. The terminal pass still performs the configured display encoding.
 
-The terminal pass sizes its dither to the presented output format; there is no dither setting to choose.
+The terminal pass sizes its dither to the presented output format. There is no dither setting to choose.
 
 ## Custom render pipelines
 
@@ -121,6 +177,8 @@ The post-processing system works with any `.rendergraph` pipeline, not just Forw
 
 4. Reference the shader packages by name (e.g., `"Shaders/tonemap.shaderpkg"`)
 
+5. List the LUT's tables on the Tonemap pass and on the HDRColorFx pass (which samples a LUT at the Grade stage): `"serviceTextures": ["uLut3d", "uLut1d"]`, with a `LinearClamp` sampler for each. A pass whose shader samples them without listing them does not run, and the log names the missing entries
+
 The system is fully modular. You can use just tonemapping without bloom, or add additional custom fullscreen passes.
 
 ## Troubleshooting
@@ -133,7 +191,3 @@ The system is fully modular. You can use just tonemapping without bloom, or add 
 | Bloom everywhere | Threshold too low | Increase Bloom Threshold |
 | Banding artifacts | Missing or incorrectly configured output finalization | Check that the host declares the terminal output-encoding pass for the presented format |
 | Colors look wrong | Wrong tonemap mode | Try Khronos PBR Neutral (default) |
-
-## Changelog
-
-- 2026-10-12: Converted from `docs/HDR_POST_PROCESSING_USER_GUIDE.md`.

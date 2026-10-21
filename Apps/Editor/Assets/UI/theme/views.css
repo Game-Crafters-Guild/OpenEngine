@@ -41,7 +41,7 @@
 
 /* If background-image is unsupported, this rule will be ignored; we'll switch to an Image control. */
 .grid-cell.folder .thumb {
-	background-image: url("editor:Icons/Folder@512px.png");
+	background-image: url("editor:Icons/Folder@512px.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -53,7 +53,7 @@
 
 /* Scene file icon in grid view */
 .grid-cell.scene .thumb {
-	background-image: url("editor:Icons/sceneicon.png");
+	background-image: url("editor:Icons/sceneicon.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -69,7 +69,7 @@
 
 /* Script file icon in grid view */
 .grid-cell.script .thumb {
-	background-image: url("editor:Icons/codeicon.png");
+	background-image: url("editor:Icons/codeicon.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -80,7 +80,7 @@
 
 /* Video file icon in grid view (no tint — extracted frame thumbnails must match preview) */
 .grid-cell.video .thumb {
-	background-image: url("editor:Icons/videocam.png");
+	background-image: url("editor:Icons/videocam.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -129,7 +129,6 @@
 	background-color: var(--ui_color_bg_item_hover);
 	border-color: var(--ui_color_accent);
 	box-shadow: 0 0 0 2px var(--ui_color_accent_highlight);
-	transform: scale(1.04);
 }
 
 /* Selection outline is a separate layer on top so it is never covered by thumb/title. */
@@ -329,7 +328,7 @@
 	opacity: 0.5;
 
 	/* Use icon images instead of text glyphs */
-	background-image: url("editor:Icons/arrow-right.png");
+	background-image: url("editor:Icons/arrow-right.svg");
 	background-size: var(--ui_tree_foldout_size, var(--ui_tree_icon_size, 12px)) var(--ui_tree_foldout_size, var(--ui_tree_icon_size, 12px));
 	background-repeat: no-repeat;
 	background-position: center;
@@ -342,7 +341,7 @@
 
 .tree .tree-foldout.expanded {
 	color: var(--ui_color_text_muted);
-	background-image: url("editor:Icons/arrow-down.png");
+	background-image: url("editor:Icons/arrow-down.svg");
 }
 
 .tree .tree-foldout.no-children {
@@ -372,7 +371,7 @@
 	white-space: nowrap;
 	word-break: normal;
 	order: 3;
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	background-size: var(--ui_tree_icon_size) var(--ui_tree_icon_size);
 	background-position: left center;
 	background-repeat: no-repeat;
@@ -390,7 +389,7 @@
    .tree .tree-item .hierarchy-preview-icon spelling was three and beat every
    kind rule, which is why those needed four-class selectors to win. */
 .hierarchy-preview-icon {
-	background-image: url("editor:Icons/EmptyEntity.png");
+	background-image: url("editor:Icons/EmptyEntity.svg");
 }
 
 .tree .tree-item .hierarchy-preview-icon {
@@ -475,12 +474,12 @@
 
 /* Scene hierarchy: Camera entities */
 .entity-icon.hierarchy-entity-camera {
-	background-image: url("editor:Icons/videocam.png");
+	background-image: url("editor:Icons/videocam.svg");
 }
 
 /* Scene hierarchy: Terrain entities */
 .entity-icon.hierarchy-entity-terrain {
-	background-image: url("editor:Icons/terrain.png");
+	background-image: url("editor:Icons/terrain.svg");
 }
 
 /* Scene hierarchy: Planet entities (Terrain component in spherical domain) */
@@ -493,86 +492,86 @@
 
 /* Scene hierarchy: Sky environment (SkyEnvironment component) */
 .entity-icon.hierarchy-entity-sky {
-	background-image: url("editor:Icons/skyenvironment.png");
+	background-image: url("editor:Icons/skyenvironment.svg");
 }
 
 /* Scene hierarchy: reflection probe */
 .entity-icon.hierarchy-entity-reflection-probe {
-	background-image: url("editor:Icons/probe.png");
+	background-image: url("editor:Icons/probe.svg");
 }
 
 /* Scene hierarchy: lights */
 .entity-icon.hierarchy-entity-light-directional {
-	background-image: url("editor:Icons/DirectionalLight.png");
+	background-image: url("editor:Icons/DirectionalLight.svg");
 }
 
 .entity-icon.hierarchy-entity-light-spot {
-	background-image: url("editor:Icons/SpotLight.png");
+	background-image: url("editor:Icons/SpotLight.svg");
 }
 
 .entity-icon.hierarchy-entity-light-point {
-	background-image: url("editor:Icons/PointLight.png");
+	background-image: url("editor:Icons/PointLight.svg");
 }
 
 .entity-icon.hierarchy-entity-light-area {
-	background-image: url("editor:Icons/arealight.png");
+	background-image: url("editor:Icons/arealight.svg");
 }
 
 .entity-icon.hierarchy-entity-light-volume {
-	background-image: url("editor:Icons/PointLight.png");
+	background-image: url("editor:Icons/PointLight.svg");
 }
 
 .entity-icon.hierarchy-entity-light-ambient {
-	background-image: url("editor:Icons/AmbientLight.png");
+	background-image: url("editor:Icons/AmbientLight.svg");
 }
 
 /* Scene hierarchy: primitive shapes (engine MeshRenderer GUID) */
 .entity-icon.hierarchy-entity-shape-cube {
-	background-image: url("editor:Icons/Cube.png");
+	background-image: url("editor:Icons/Cube.svg");
 }
 
 .entity-icon.hierarchy-entity-shape-sphere {
-	background-image: url("editor:Icons/Sphere.png");
+	background-image: url("editor:Icons/Sphere.svg");
 }
 
 .entity-icon.hierarchy-entity-shape-capsule {
-	background-image: url("editor:Icons/Capsule.png");
+	background-image: url("editor:Icons/Capsule.svg");
 }
 
 .entity-icon.hierarchy-entity-shape-plane {
-	background-image: url("editor:Icons/Plane.png");
+	background-image: url("editor:Icons/Plane.svg");
 }
 
 /* Scene hierarchy: sprite (plane primitive with a file-backed material,
    typically created by dropping a texture onto empty hierarchy/scene space). */
 .entity-icon.hierarchy-entity-sprite {
-	background-image: url("editor:Icons/2d.png");
+	background-image: url("editor:Icons/2d.svg");
 }
 
 /* Scene hierarchy: imported model fallback while async thumbnails resolve */
 .entity-icon.hierarchy-entity-model {
-	background-image: url("editor:Icons/3d.png");
+	background-image: url("editor:Icons/3d.svg");
 }
 
 /* Scene hierarchy: physics world settings singleton; physics-only body/collider (no mesh above) */
 .entity-icon.hierarchy-entity-physics-settings,
 .entity-icon.hierarchy-entity-physics {
-	background-image: url("editor:Icons/PhysicsSettings.png");
+	background-image: url("editor:Icons/PhysicsSettings.svg");
 }
 
 /* Scene hierarchy: spline (SplineComponent) */
 .entity-icon.hierarchy-entity-spline {
-	background-image: url("editor:Icons/GizmoSpline.png");
+	background-image: url("editor:Icons/GizmoSpline.svg");
 }
 
 /* Scene hierarchy: measure/ruler entities */
 .entity-icon.hierarchy-entity-measure {
-	background-image: url("editor:Icons/Ruler.png");
+	background-image: url("editor:Icons/Ruler.svg");
 }
 
 /* Scene hierarchy: measure start/end point entities */
 .entity-icon.hierarchy-entity-measure-point {
-	background-image: url("editor:Icons/pin.png");
+	background-image: url("editor:Icons/pin.svg");
 }
 
 /* Scene hierarchy: ocean (OceanSurface) */
@@ -609,17 +608,17 @@
 
 /* Scene hierarchy: particle emitter */
 .entity-icon.hierarchy-entity-particles {
-	background-image: url("editor:Icons/sparkles.png");
+	background-image: url("editor:Icons/sparkles.svg");
 }
 
 /* Scene hierarchy: video texture */
 .entity-icon.hierarchy-entity-video-texture {
-	background-image: url("editor:Icons/film.png");
+	background-image: url("editor:Icons/film.svg");
 }
 
 /* Scene hierarchy: lens flare source */
 .entity-icon.hierarchy-entity-lens-flare {
-	background-image: url("editor:Icons/flame.png");
+	background-image: url("editor:Icons/flame.svg");
 }
 
 /* Hierarchy icons default to fully desaturated (shader luma-collapses the
@@ -633,7 +632,7 @@
 
 /* Scene hierarchy: empty / generic entity */
 .entity-icon.hierarchy-entity-empty {
-	background-image: url("editor:Icons/EmptyEntity.png");
+	background-image: url("editor:Icons/EmptyEntity.svg");
 }
 
 /* Root items (Assets folder) - no folder icon */
@@ -685,7 +684,7 @@
     cursor: pointer;
     border-style: none;
     border-color: transparent;
-    background-image: url("editor:Icons/LockOpen.png");
+    background-image: url("editor:Icons/LockOpen.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: center;
@@ -718,7 +717,7 @@
 }
 
 .tree .tree-item .tree-row-lock.icon-button.active {
-    background-image: url("editor:Icons/LockClosed.png");
+    background-image: url("editor:Icons/LockClosed.svg");
     background-image-tint: #FFFFFF59;
     opacity: 1.0;
     background-color: transparent;
@@ -892,7 +891,7 @@ ListView {
 
 /* Folder icon in list view - same size as asset preview icons */
 .folder .list-item-icon {
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -903,7 +902,7 @@ ListView {
 
 /* Scene icon in list view */
 .scene .list-item-icon {
-	background-image: url("editor:Icons/sceneicon.png");
+	background-image: url("editor:Icons/sceneicon.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -919,7 +918,7 @@ ListView {
 
 /* Script icon in list view */
 .script .list-item-icon {
-	background-image: url("editor:Icons/codeicon.png");
+	background-image: url("editor:Icons/codeicon.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -930,7 +929,7 @@ ListView {
 
 /* Video icon in list view (no tint — extracted frame thumbnails must match preview) */
 .video .list-item-icon {
-	background-image: url("editor:Icons/videocam.png");
+	background-image: url("editor:Icons/videocam.svg");
 	background-size: contain;
 	background-position: center;
 	background-repeat: no-repeat;
@@ -1074,7 +1073,7 @@ ListView {
 	height: 16px;
 	min-width: 16px;
 	min-height: 16px;
-	background-image: url("editor:Icons/Folder@64px.png");
+	background-image: url("editor:Icons/Folder@64px.svg");
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
@@ -1088,7 +1087,7 @@ ListView {
 }
 
 .tree .tree-item.asset-tree-materials-folder .tree-folder-icon {
-	background-image: url("editor:Icons/material.png");
+	background-image: url("editor:Icons/material.svg");
 	background-image-tint: rgba(255, 255, 255, 0.92);
 }
 

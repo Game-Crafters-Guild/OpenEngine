@@ -63,6 +63,7 @@ HlodBakedScene BakeScene(std::span<const MemberInput> members,
             baked.BoundsMax[c] = cluster.BoundsMax[c];
         }
         baked.SphereRadius = cluster.SphereRadius;
+        baked.RenderLayers = cluster.RenderLayers;
 
         // Member records (cluster-relative transforms — the C3 key inputs) +
         // the parallel merge inputs.
@@ -80,6 +81,7 @@ HlodBakedScene BakeScene(std::span<const MemberInput> members,
             ClusterRelative(m.WorldMatrix, cluster.SphereCenter, ref.Transform);
             ref.ChosenLod = m.ChosenLod;
             ref.CastsShadow = m.CastsShadow ? 1u : 0u;
+            ref.RenderLayers = m.RenderLayers;
             baked.Members.push_back(ref);
 
             const Mesh* geometry = mi < memberGeometry.size() ? memberGeometry[mi] : nullptr;

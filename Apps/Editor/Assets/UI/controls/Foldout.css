@@ -40,17 +40,17 @@
 	background-repeat: no-repeat;
 	background-position: center;
 	opacity: 0.65;
-	background-image: url("editor:Icons/arrow-right.png");
+	background-image: url("editor:Icons/arrow-right.svg");
 	background-image-tint: rgba(200, 200, 200, 1.0);
 }
 
 .foldout-chevron.expanded {
-	background-image: url("editor:Icons/arrow-down.png");
+	background-image: url("editor:Icons/arrow-down.svg");
 	opacity: 0.85;
 }
 
 .foldout-chevron.collapsed {
-	background-image: url("editor:Icons/arrow-right.png");
+	background-image: url("editor:Icons/arrow-right.svg");
 }
 
 /* A header icon set by SetIconClass: the class supplies the image, the slot its box. */

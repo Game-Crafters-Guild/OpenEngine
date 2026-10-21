@@ -399,3 +399,24 @@ TEST(CurveFieldDeathTest, ALogarithmicGraphWithoutAFloorAsserts)
         "LogarithmicFloor");
 }
 #endif
+
+// A formatted time axis writes the host's label under every grid line: an EV100 axis from -14 to 18
+// reads -14, -6, 2, 10 and 18.
+TEST(CurveField, AFormattedTimeAxisWritesTheHostsLabels)
+{
+    auto font = UITesting::LoadRobotoAtlas();
+    ASSERT_NE(font, nullptr) << "Roboto-Regular.ttf must be staged beside the test executable";
+    UI::UITextureRegistry textures(nullptr);
+    CurveField field;
+    CurveField::Config config;
+    config.TimeMin = -14.0f;
+    config.TimeMax = 18.0f;
+    config.ReadOnly = true;
+    PlaceField(field, config, {Key(-14.0f, 0.0f), Key(18.0f, 1.0f)});
+    const size_t unlabelled = GlyphCount(field, font.get(), textures);
+
+    config.TimeAxisLabels = CurveField::TimeLabels::Formatted;
+    config.TimeLabel = [](float ev) { return std::to_string(static_cast<int>(ev)); };
+    field.SetConfig(config);
+    EXPECT_EQ(GlyphCount(field, font.get(), textures), unlabelled + 10) << "-14, -6, 2, 10, 18";
+}

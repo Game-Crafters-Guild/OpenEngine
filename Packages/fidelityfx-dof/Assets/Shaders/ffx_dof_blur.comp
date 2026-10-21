@@ -1,5 +1,6 @@
 #version 450
 
+
 // Ring gather adapted from FidelityFX DoF 1.1. Near and far fields are kept
 // separate; far rings are traversed outside-in and coverage-composited to
 // approximate occlusion. Custom aperture sampling preserves GameEngine bokeh.
@@ -9,6 +10,11 @@ layout(set = 0, binding = 0) uniform sampler2D uHalfColorCoc;
 layout(set = 0, binding = 1) uniform sampler2D uDilatedCoc;
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D uNearField;
 layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D uFarField;
+// The view's exposure state (ExposureHistory). The colour is stored at the frame's pre-exposure P;
+// the highlight softening thresholds are absolute scene-linear luminance, so luminance is divided
+// by P where it is compared with them.
+#define GE_EXPOSURE_HISTORY_BINDING 4
+#include "Includes/exposure_history.glsl"
 
 layout(push_constant) uniform DofPC
 {
@@ -79,7 +85,7 @@ float Luminance(vec3 color)
 vec4 SampleHighlightSoftened(vec2 uv, float kernelRadius)
 {
     vec4 center = textureLod(uHalfColorCoc, uv, 0.0);
-    float centerLuma = Luminance(center.rgb);
+    float centerLuma = Luminance(center.rgb) / GE_PreExposure();
     if (centerLuma <= 1.0)
         return center;
 
@@ -98,7 +104,8 @@ vec4 SampleHighlightSoftened(vec2 uv, float kernelRadius)
         textureLod(uHalfColorCoc, clamp(uv + dy, vec2(0.0), vec2(1.0)), 0.0).rgb;
     neighbours *= 0.25;
 
-    float relativeContrast = max(centerLuma - Luminance(neighbours), 0.0) /
+    float relativeContrast =
+        max(centerLuma - Luminance(neighbours) / GE_PreExposure(), 0.0) /
         max(centerLuma, 1e-4);
     float highlightMask = smoothstep(1.0, 4.0, centerLuma) *
         smoothstep(0.15, 0.65, relativeContrast);

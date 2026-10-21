@@ -9,6 +9,7 @@ add_library(PathfindingECS OBJECT
     Source/NavigationMeshBake.cpp
     Source/NavigationService.cpp
     Source/NavigationSourceCollector.cpp
+    Source/NavigationSourceReflection.cpp
     Source/NavigationSurfaceReflection.cpp
     Source/NavigationSurfaceRuntime.cpp
     Source/Systems/NavigationSurfaceSystem.cpp

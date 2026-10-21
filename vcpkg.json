@@ -10,6 +10,7 @@
       "$wasm-note": "nothreads is defined by cmake/triplets/wasm32-emscripten-nothreads.cmake (VCPKG_DEP_INFO_OVERRIDE_VARS): harfbuzz's meson build mixes -pthread across subtargets on that ABI and fails to link; Text falls back to GE_HAVE_HARFBUZZ=0 there."
     },
     "miniaudio",
+    "libvorbis",
     "nlohmann-json",
     "sqlite3",
     "concurrentqueue",
@@ -77,6 +78,10 @@
       "name": "directxtex",
       "default-features": false,
       "platform": "windows | linux | osx"
+    },
+    {
+      "name": "bc7e",
+      "platform": "(windows & (x64 | arm64) & !uwp) | (linux & (x64 | arm64)) | osx"
     },
     {
       "name": "webview2",

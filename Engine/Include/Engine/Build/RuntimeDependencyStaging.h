@@ -24,6 +24,12 @@ struct RuntimeDependency
     bool Required;          ///< missing from the source dir => package error
 };
 
+/// The engine's own runtime libraries, the first entries of EngineRuntimeDependencySet: Engine,
+/// and in a build with C# scripting the GameEngine.Native C ABI shim the scripts call into.
+/// BuildPipeline::ResolvePackagedEngineRuntime takes a directory as an engine runtime when it holds
+/// every one of them.
+std::span<const RuntimeDependency> EngineRuntimeLibrarySet();
+
 /// Engine.dll's import closure (engine + transitive vcpkg runtime deps, derived
 /// from the binaries' PE import tables) plus the platform loader set. Needed by
 /// BOTH script modes: Engine is a shared library, the game cannot launch without
@@ -52,7 +58,7 @@ bool StageCuratedDependencySet(const std::vector<std::filesystem::path>& sourceD
 /// sidecars (.deps.json / .runtimeconfig.json / .xml). The set is derived, not
 /// listed: the assemblies native code loads by name
 /// (ScriptingPaths::kHostLoadedEngineAssemblyFileNames), every engine ABI surface
-/// scripts compile against (GameEngine.*.ABI.dll, never GameEngine.Editor.*), and
+/// scripts compile against (ScriptingPaths::IsScriptSurfaceAssembly, never GameEngine.Editor.*), and
 /// the transitive runtime closure their deps.json files declare. False + an error
 /// naming each absent assembly and what asked for it, or a malformed deps.json.
 bool StageManagedRuntimeAssemblies(const std::filesystem::path& sourceDir,

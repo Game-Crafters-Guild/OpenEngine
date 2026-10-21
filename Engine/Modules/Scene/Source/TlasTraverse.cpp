@@ -82,10 +82,10 @@ inline bool FrustumAabb(std::span<const Mathematics::Plane> planes, const AABB& 
     return true;
 }
 
-inline bool LeafPassesFilter(const TlasLeaf& leaf, uint32 layerMask,
+inline bool LeafPassesFilter(const TlasLeaf& leaf, Rendering::RenderLayerMask layerMask,
                              std::span<const GameEngine::ECS::EntityHandle> ignore)
 {
-    if ((leaf.LayerMask & layerMask) == 0u) return false;
+    if (!leaf.LayerMask.Intersects(layerMask)) return false;
     for (const auto& e : ignore)
         if (e.id == leaf.Entity.id) return false;
     return true;
@@ -210,7 +210,7 @@ uint32 TraverseSphere(const SectorState& sector,
             {
                 const uint32 leafIdx = node.FirstLeaf + i;
                 const auto& leaf = sector.Leaves[leafIdx];
-                if ((leaf.LayerMask & options.LayerMask) == 0u) continue;
+                if (!leaf.LayerMask.Intersects(options.LayerMask)) continue;
                 if (!SphereAabb(center, radius, leaf.WorldBounds)) continue;
                 hits.push_back(leafIdx);
             }
@@ -258,7 +258,7 @@ uint32 TraverseFrustum(const SectorState& sector,
             {
                 const uint32 leafIdx = node.FirstLeaf + i;
                 const auto& leaf = sector.Leaves[leafIdx];
-                if ((leaf.LayerMask & options.LayerMask) == 0u) continue;
+                if (!leaf.LayerMask.Intersects(options.LayerMask)) continue;
                 if (!FrustumAabb(planes, leaf.WorldBounds)) continue;
                 hits.push_back(leafIdx);
             }

@@ -1679,6 +1679,12 @@ TerrainRenderFeature::ActiveHeightSource TerrainRenderFeature::GetActiveHeightSo
     return {true, terrain.HeightmapTexture, terrain.AtlasBacked, terrain.AtlasHeightTexture};
 }
 
+bool TerrainRenderFeature::ViewDrawsActiveTerrain(Rendering::RenderLayerMask viewLayers) const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    return !m_ActiveTerrains.empty() && m_ActiveTerrains.front().RenderLayers.Intersects(viewLayers);
+}
+
 void TerrainRenderFeature::EnsureMaterialTableBuffer(uint32 fi, uint32 capacity)
 {
     if (!m_Device || capacity <= m_TerrainMaterialCapacity[fi])

@@ -5,11 +5,13 @@ using System.Reflection;
 using System.Runtime.Loader;
 using NUnit.Framework;
 using GameEngine.HotReload;
+using GameEngine.Scripting;
 
 namespace GameEngine.ManagedInteropTests
 {
     /// <summary>
-    /// Explicit micro-benchmarks for HRM Query/Invoke fast paths. Skipped by default.
+    /// Explicit micro-benchmarks: the HRM Query/Invoke fast paths, and the per-call cost of a script API call.
+    /// Skipped by default.
     /// </summary>
     [TestFixture]
     internal class MicroBenchmarks
@@ -85,6 +87,39 @@ namespace GameEngine.ManagedInteropTests
             sw.Stop();
             TestContext.WriteLine($"Invoke warm: {iters} iters in {sw.Elapsed.TotalMilliseconds:F2} ms ({iters / Math.Max(1.0, sw.Elapsed.TotalSeconds):F0} ops/s), sum={sum}");
         }
+
+        private const int kKeyDownCalls = 1_000_000;
+        private const int kKeyDownRounds = 7;
+
+        private static double TimeIsKeyDown()
+        {
+            int held = 0;
+            var sw = Stopwatch.StartNew();
+            for (int i = 0; i < kKeyDownCalls; i++)
+                held += Input.IsKeyDown(Key.W) ? 1 : 0;
+            sw.Stop();
+            Assert.That(held, Is.Zero);
+            return sw.Elapsed.TotalMilliseconds * 1e6 / kKeyDownCalls;
+        }
+
+        /// <summary>
+        /// One million IsKeyDown calls through the generated binding against the real GameEngine.Native (the
+        /// standalone engine the first call starts): run it from a Release build with the real library staged in
+        /// place of the test shim. Prints nanoseconds per call for each round and the median.
+        /// </summary>
+        [Test, Explicit("Micro-benchmark: IsKeyDown through the generated binding")]
+        public void Bench_InputIsKeyDown()
+        {
+            Assert.That(Input.IsKeyDown(Key.W), Is.False, "the real GameEngine.Native is not loaded");
+            TimeIsKeyDown();
+            var rounds = new double[kKeyDownRounds];
+            for (int round = 0; round < kKeyDownRounds; round++)
+            {
+                rounds[round] = TimeIsKeyDown();
+                TestContext.WriteLine($"IsKeyDown round {round}: {rounds[round]:F2} ns/call");
+            }
+            Array.Sort(rounds);
+            TestContext.WriteLine($"IsKeyDown median of {kKeyDownRounds} x {kKeyDownCalls}: {rounds[kKeyDownRounds / 2]:F2} ns/call");
+        }
     }
 }
-

@@ -31,6 +31,7 @@
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "Inspectors/RenderLayersRow.h"
 
 #include "Editor/Entities/EditorInspectorPseudoComponents.h"
 
@@ -626,9 +627,10 @@ void RegisterMeshRendererInspector()
             [](Components::MeshRenderer& u, int v) { u.meshId = static_cast<uint32>(std::max(0, v)); },
             "Submesh index within the model asset", extras);
 
-        InspectorDrag::AddComponentIntRowWithDrag<Components::MeshRenderer>(ctx.Parent, "RenderLayerMask", static_cast<int>(mr->renderLayerMask), w, e, n,
-            [](Components::MeshRenderer& u, int v) { u.renderLayerMask = static_cast<uint32>(std::max(0, v)); },
-            "Bitmask controlling which render layers include this mesh", extras);
+        InspectorDrag::AddComponentRenderLayersRow<Components::MeshRenderer>(
+            ctx.Parent, "Render Layers", &Components::MeshRenderer::RenderLayers, w, e, n, undo,
+            "Change Render Layers", "The render layers this mesh is on. A view draws it when they share a layer.",
+            Editor::kRenderLayersNothingTooltip, extras);
 
         InspectorDrag::AddToggleRow(ctx.Parent, "CastShadows", mr->castShadows,
             [getWorld, e, n, extras](bool v) {

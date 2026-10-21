@@ -1,6 +1,6 @@
 home: https://github.com/Game-Crafters-Guild/OpenEngine-Unity-Scene-Converter
-commit: eb14acb935f08c300df61ca61e060141e81dd941
+commit: 87b2ba990607f50804cfe9e3c0b0e0f040e39044
 sdk: 9.0.318 (pinned by the commit's global.json, rollForward disable)
 build: npm run build:dll  (dotnet build dotnet/UnityConverter/UnityConverter.csproj -c Release -p:ContinuousIntegrationBuild=true -p:DebugType=none -o dist)
 output: dist/UnityConverter.dll
-sha256: 5a7fa4a8575c1b0fab40dd100d2c652c9994790522b344fed2ef38ac178830bc
+sha256: b77ef43b2d4e7e3fb67a8afbd34d3df872f7ae4e888de61f9a4b12abadddb4f6

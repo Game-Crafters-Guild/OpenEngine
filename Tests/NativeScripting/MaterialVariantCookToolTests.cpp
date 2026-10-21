@@ -116,3 +116,18 @@ TEST(MaterialVariantCookTool, StagingCopiesEachPackageUnderItsKeyAndNothingElse)
     EXPECT_FALSE(StageCookedShaderPackages({cache / "missing" / "program.shaderpkg"}, cache, bundle, error));
     EXPECT_NE(error.find("Could not copy"), std::string::npos) << error;
 }
+
+TEST(MaterialVariantCookTool, StagingShipsTheProgramIndexBesideThePackages)
+{
+    TempTree tree;
+    const fs::path cache = tree.Root / "Cook";
+    WriteFile(cache / "aa" / "program.shaderpkg", "first");
+    WriteFile(cache / "program-index.bin", "index");
+    const fs::path bundle = tree.Root / "Game" / ".Cache" / "Shaders";
+
+    std::string error;
+    ASSERT_TRUE(StageCookedShaderPackages({cache / "aa" / "program.shaderpkg"}, cache, bundle, error)) << error;
+    EXPECT_TRUE(fs::is_regular_file(bundle / "aa" / "program.shaderpkg"));
+    EXPECT_TRUE(fs::is_regular_file(bundle / "program-index.bin"))
+        << "the runtime finds its cooked variants through the index, so it ships with them";
+}

@@ -66,7 +66,7 @@ TEST(RenderServicesWorldDrawBuilderTests, SingleSubmission_ProducesExpectedBatch
     rec.meshHandle     = testMeshHandle;
     rec.material       = &testMaterial;
     rec.instanceIndex  = 7u;
-    rec.renderLayerMask = 0u;
+    rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::None();
     rec.flags           = 0u;
 
     std::span<const WorldSubmissionRecord> batch(&rec, 1u);
