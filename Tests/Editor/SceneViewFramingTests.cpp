@@ -201,28 +201,20 @@ TEST_F(SceneViewFramingTests, RotatedScaledChildSwapsExtents)
     EXPECT_NEAR(result.Box.max.z, 4.0f, kEpsilon);
 }
 
-} // namespace
-
-namespace
-{
-
 void ExpectBoundsInsideFrustum(const GameEngine::Mathematics::AABB& bounds,
-                              const GameEngine::SceneViewCameraPose& pose,
-                              float fieldOfViewDeg, float aspect, float nearClip, float farClip)
+                               const GameEngine::SceneViewCameraPose& pose,
+                               float fieldOfViewDeg, float aspect, float nearClip, float farClip)
 {
     using namespace GameEngine;
     Mathematics::Matrix4x4 view;
     Editor::CameraRig::BuildViewMatrixLH({pose.Pos[0], pose.Pos[1], pose.Pos[2]},
-                                        pose.YawDeg, pose.PitchDeg, view.Data());
+                                         pose.YawDeg, pose.PitchDeg, view.Data());
     const auto projection = Mathematics::MakePerspectiveLH_ZO_ReverseZ(
         fieldOfViewDeg * Mathematics::Pi / 180.0f, aspect, nearClip, farClip);
     const auto viewProjection = projection * view;
-    for (uint32_t corner = 0; corner < 8; ++corner)
+    for (const auto& corner : bounds.Corners())
     {
-        const Mathematics::Vector4 point((corner & 1) ? bounds.max.x : bounds.min.x,
-                                          (corner & 2) ? bounds.max.y : bounds.min.y,
-                                          (corner & 4) ? bounds.max.z : bounds.min.z, 1.0f);
-        const auto clip = viewProjection.Transform(point);
+        const auto clip = viewProjection.Transform(Mathematics::Vector4(corner, 1.0f));
         ASSERT_GT(clip.w, 0.0f);
         EXPECT_LT(std::abs(clip.x / clip.w), 1.0f);
         EXPECT_LT(std::abs(clip.y / clip.w), 1.0f);
@@ -245,7 +237,7 @@ TEST(SceneViewPerspectiveFraming, DefaultFloorIsVisibleFromLevelView)
     EXPECT_GT(pose.Pos[1], 0.0f);
     EXPECT_LE(pose.PitchDeg, -30.0f + kEpsilon);
     ExpectBoundsInsideFrustum(bounds, pose, 60.0f, kAspect, 0.1f,
-                             Editor::ExpandFarClipForFraming(3000.0f, pose.Distance));
+                              Editor::ExpandFarClipForFraming(3000.0f, pose.Distance));
 }
 
 TEST(SceneViewPerspectiveFraming, FitsEveryCornerAcrossFieldsOfViewAndAspectRatios)
@@ -295,7 +287,7 @@ TEST(SceneViewPerspectiveFraming, OffsetBoundsStayAtTheOrbitPivot)
     current.PitchDeg = -20.0f;
     const auto pose = Editor::ComputePerspectiveFramingPose(bounds, current, 60.0f, 1.0f, 0.1f);
     const auto pivot = Editor::CameraRig::OrbitPivotFromCamera({pose.Pos[0], pose.Pos[1], pose.Pos[2]},
-                                                             pose.YawDeg, pose.PitchDeg, pose.Distance);
+                                                               pose.YawDeg, pose.PitchDeg, pose.Distance);
     EXPECT_NEAR(pivot.X, 1000.0, kEpsilon);
     EXPECT_NEAR(pivot.Y, 60.0, kEpsilon);
     EXPECT_NEAR(pivot.Z, -400.0, kEpsilon);
@@ -323,7 +315,7 @@ TEST(SceneViewPerspectiveFraming, WideAngleFocusKeepsAnOrbitOutsideTheBounds)
     EXPECT_GT(pose.Distance, radius);
     EXPECT_GT(Editor::ExpandFarClipForFraming(3000.0f, pose.Distance), pose.Distance + radius);
     ExpectBoundsInsideFrustum(bounds, pose, 120.0f, 2.0f, 0.1f,
-                             Editor::ExpandFarClipForFraming(3000.0f, pose.Distance));
+                              Editor::ExpandFarClipForFraming(3000.0f, pose.Distance));
 }
 
 }

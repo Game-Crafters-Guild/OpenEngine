@@ -97,8 +97,8 @@ bool ComputeLookAtPose(const Mathematics::Vector3& target, const Mathematics::Ve
 }
 
 SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bounds,
-                                                const SceneViewCameraPose& currentPose,
-                                                float fieldOfViewDeg, float aspect, float nearClip)
+                                                  const SceneViewCameraPose& currentPose,
+                                                  float fieldOfViewDeg, float aspect, float nearClip)
 {
     using Mathematics::Vector3;
     const auto box = Mathematics::BoundingBox::FromMinMax(bounds.min, bounds.max);
@@ -136,11 +136,9 @@ SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bound
     const float tanHalfVertical = std::tan(fieldOfViewDeg * Mathematics::Pi / 360.0f);
     const float tanHalfHorizontal = tanHalfVertical * aspect;
     float distance = box.Radius() + nearClip;
-    for (uint32_t corner = 0; corner < 8; ++corner)
+    const Mathematics::AABB centeredBounds{halfExtents * -1.0f, halfExtents};
+    for (const Vector3& offset : centeredBounds.Corners())
     {
-        const Vector3 offset((corner & 1) ? halfExtents.x : -halfExtents.x,
-                             (corner & 2) ? halfExtents.y : -halfExtents.y,
-                             (corner & 4) ? halfExtents.z : -halfExtents.z);
         const float depth = Vector3::Dot(offset, look);
         distance = std::max({distance, nearClip - depth,
                              kFramingPadding * std::abs(Vector3::Dot(offset, right)) / tanHalfHorizontal - depth,
@@ -148,7 +146,7 @@ SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bound
     }
 
     const auto position = CameraRig::OrbitCameraPosition({center.x, center.y, center.z},
-                                                        result.YawDeg, result.PitchDeg, distance);
+                                                         result.YawDeg, result.PitchDeg, distance);
     result.Pos[0] = static_cast<float>(position.X);
     result.Pos[1] = static_cast<float>(position.Y);
     result.Pos[2] = static_cast<float>(position.Z);
@@ -158,7 +156,8 @@ SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bound
 
 float ExpandFarClipForFraming(float farClip, float distance)
 {
-    return std::max(farClip, distance * 2.0f);
+    constexpr float kFarClipDistanceScale = 2.0f;
+    return std::max(farClip, distance * kFarClipDistanceScale);
 }
 
 } // namespace GameEngine::Editor

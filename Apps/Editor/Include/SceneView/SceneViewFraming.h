@@ -57,8 +57,8 @@ bool ComputeLookAtPose(const Mathematics::Vector3& target, const Mathematics::Ve
                        SceneViewCameraPose& out);
 
 SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bounds,
-                                                const SceneViewCameraPose& currentPose,
-                                                float fieldOfViewDeg, float aspect, float nearClip);
+                                                  const SceneViewCameraPose& currentPose,
+                                                  float fieldOfViewDeg, float aspect, float nearClip);
 
 float ExpandFarClipForFraming(float farClip, float distance);
 

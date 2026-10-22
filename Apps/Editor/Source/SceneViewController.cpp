@@ -3411,9 +3411,10 @@ void SceneViewController::UpdateDolly(float deltaY)
 void SceneViewController::FramePerspectiveBounds(const Mathematics::AABB& bounds)
 {
     const float aspect = m_LastW > 0 && m_LastH > 0
-        ? static_cast<float>(m_LastW) / static_cast<float>(m_LastH) : 1.0f;
+                             ? static_cast<float>(m_LastW) / static_cast<float>(m_LastH)
+                             : 1.0f;
     const auto pose = Editor::ComputePerspectiveFramingPose(bounds, GetCameraPose(),
-        GetSceneViewFieldOfViewDeg(), aspect, GetSceneViewMinOrbitDistance(&GetWorld()));
+                                                            GetSceneViewFieldOfViewDeg(), aspect, GetSceneViewMinOrbitDistance(&GetWorld()));
     constexpr float kFramingDuration = 0.25f;
     ResetFlyVelocity();
     StartCameraTween(pose, kFramingDuration);

@@ -1935,7 +1935,7 @@ if(TARGET EditorTests)
 	  COMMAND "${CMAKE_COMMAND}"
 	    -DTEST_EXE=$<TARGET_FILE:EditorTests>
 	    -DTEST_WORKING_DIR=$<TARGET_FILE_DIR:EditorTests>
-	    -DTEST_ARGS=--gtest_filter=SceneViewFramingTests.*
+	    -DTEST_ARGS=--gtest_filter=SceneViewFramingTests.*:SceneViewPerspectiveFraming.*
 	    -P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 	)
 
