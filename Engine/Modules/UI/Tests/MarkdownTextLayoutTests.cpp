@@ -5,6 +5,7 @@
 #include "Assets/AssetManager.h"
 #include "Core/Application.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Rendering/Text/FontAtlas.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/ScrollView.h"
@@ -128,6 +129,10 @@ public:
     }
 
     MarkdownText& Text() { return *m_Text; }
+    Rendering::Text::FontAtlas* FontFor(const Label& label)
+    {
+        return m_Ui->ResolveFontForStyle(label.GetResolvedStyle());
+    }
 
     void Settle(int frames = 4)
     {
@@ -182,13 +187,20 @@ TEST(MarkdownTextLayoutTests, ShippedSheetDrawsTheLooksWrapsWordsAndScrollsCode)
 
     const std::string longLine(240, 'x');
     fx.Text().SetMarkdown("The lantern at the gate is **bright** and the torch by the well burns low, "
-                          "so the square reads warm at dusk.\n\n```\n" +
+                          "so the square reads warm at dusk. The last travelers cross the square "
+                          "and follow the lanterns toward the inn.\n\n```\n" +
                           longLine + "\n```");
     fx.Settle();
 
     const Label* strong = FindLabel(fx.Text(), "bright ");
     ASSERT_NE(strong, nullptr);
     EXPECT_EQ(strong->GetResolvedStyle().Visual.FontWeight, 700);
+    const auto* strongFont = fx.FontFor(*strong);
+    ASSERT_NE(strongFont, nullptr);
+    const auto strongFace = strongFont->GetFaceDebugInfo();
+    ASSERT_TRUE(strongFace.has_value());
+    EXPECT_EQ(strongFace->family, "Roboto");
+    EXPECT_EQ(strongFace->style, "Bold") << "the bold face must be staged, not a regular or system fallback";
     const Label* plain = FindLabel(fx.Text(), "lantern ");
     ASSERT_NE(plain, nullptr);
     EXPECT_EQ(plain->GetResolvedStyle().Visual.FontWeight, 400);
@@ -197,15 +209,25 @@ TEST(MarkdownTextLayoutTests, ShippedSheetDrawsTheLooksWrapsWordsAndScrollsCode)
     const float line = plain->GetLayoutHeight();
     ASSERT_GT(line, 0.0f);
     EXPECT_GT(paragraph.GetLayoutHeight(), 2.0f * line) << "the paragraph wraps to three lines or more";
+    float wordWidths = 0.0f;
     for (const auto& word : paragraph.GetChildren())
+    {
+        wordWidths += word->GetLayoutWidth();
         EXPECT_LE(word->GetLayoutX() + word->GetLayoutWidth(), paragraph.GetLayoutWidth() + 0.5f)
             << "a word overflows the line";
+    }
+    EXPECT_GT(wordWidths, 2.0f * paragraph.GetLayoutWidth()) << "the sample must require at least three lines";
 
     const Label* code = FindLabel(fx.Text(), longLine);
     ASSERT_NE(code, nullptr);
     const auto& family = code->GetResolvedStyle().Visual.FontFamily;
     ASSERT_TRUE(family && !family->empty());
     EXPECT_EQ(family->front(), "Roboto Mono");
+    const auto* codeFont = fx.FontFor(*code);
+    ASSERT_NE(codeFont, nullptr);
+    const auto codeFace = codeFont->GetFaceDebugInfo();
+    ASSERT_TRUE(codeFace.has_value());
+    EXPECT_EQ(codeFace->family, "Roboto Mono");
     const UIElement& codeBlock = *fx.Text().GetChildren().at(1);
     EXPECT_LE(codeBlock.GetLayoutWidth(), 360.0f + 0.5f) << "the block stays in the column";
     EXPECT_GT(codeBlock.GetLayoutHeight(), code->GetLayoutHeight() - 0.5f);

@@ -343,10 +343,9 @@ if(BUILD_TESTING)
     # directory through ge_stage_test_asset. Without them the resolver falls
     # through to a system face — Segoe UI on Windows — and every test that lays
     # out text would measure whatever font the host happens to have instead of the
-    # one its expected numbers were derived from. RobotoMono rides along because
-    # UIFontLoadingTests needs a SECOND, visibly different face to tell "the
-    # default atlas" from "an arbitrary loaded one"; unstaged, that test resolved
-    # nothing and skipped.
+    # one its expected numbers were derived from. Stage every shipped weight and
+    # style so bold and italic requests cannot silently measure the regular face.
+    # RobotoMono also provides a distinct face for font substitution tests.
     #
     # Engine ONLY — UI / AssetCore / AssetRuntime / GameEngineRendering are
     # OBJECT modules already spliced into Engine.dll; linking them here as
@@ -405,12 +404,14 @@ if(BUILD_TESTING)
             UNITY_BUILD OFF)
         ge_set_output_tests(${target_name})
         ge_stage_runtime_dependencies(${target_name})
-        ge_stage_test_asset(${target_name}
-            "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/Roboto-Regular.ttf"
-            "Assets/Fonts/Roboto-Regular.ttf")
-        ge_stage_test_asset(${target_name}
-            "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/RobotoMono-Regular.ttf"
-            "Assets/Fonts/RobotoMono-Regular.ttf")
+        foreach(face IN ITEMS
+                Roboto-Regular Roboto-Bold Roboto-Italic Roboto-BoldItalic
+                Roboto-Medium Roboto-MediumItalic
+                RobotoMono-Regular RobotoMono-Bold RobotoMono-Italic RobotoMono-BoldItalic)
+            ge_stage_test_asset(${target_name}
+                "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/${face}.ttf"
+                "Assets/Fonts/${face}.ttf")
+        endforeach()
         if(MSVC)
             target_compile_options(${target_name} PRIVATE /wd6326 /wd6011)
         endif()
