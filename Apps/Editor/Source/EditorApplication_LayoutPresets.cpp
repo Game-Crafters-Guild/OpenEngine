@@ -218,7 +218,6 @@ void EditorApplication::InitializeLayoutPresets()
 {
     m_LayoutPresets.clear();
 
-    // Prefer the editor-authored default docking tree (parsed from layout.uxml).
     if (m_DefaultDockLayout)
     {
         LayoutPreset preset;
@@ -229,7 +228,6 @@ void EditorApplication::InitializeLayoutPresets()
         return;
     }
 
-    // Fallback: capture current docking root if available.
     if (m_Docking && m_Docking->GetRoot())
     {
         LayoutPreset preset;
@@ -245,15 +243,15 @@ void EditorApplication::InitializeLayoutPresets()
 
 void EditorApplication::LoadLayoutPresetsFromPreferences()
 {
-    // Load persisted presets from the project folder so they travel with the
-    // project (checked into VCS alongside other project settings). Default
-    // preset (index 0) always comes from layout.uxml / captured default.
+    if (!m_Docking || m_LayoutPresets.empty())
+        return;
+
     const auto& workspaceRoot = EngineCore::GetInstance().GetWorkspaceRoot();
     if (workspaceRoot.empty())
         return;
     GameEngine::Editor::SettingsStore prefs = GameEngine::Editor::OpenProjectSettings(workspaceRoot);
     std::string err;
-    (void)prefs.Load(&err); // missing file is OK
+    (void)prefs.Load(&err);
 
     const auto& root = prefs.Json();
     const auto it = root.find("ui.layoutPresets");
@@ -262,7 +260,6 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
 
     const nlohmann::json& obj = *it;
 
-    // Append user presets (skip index 0).
     const auto itPresets = obj.find("presets");
     if (itPresets != obj.end() && itPresets->is_array())
     {
@@ -289,7 +286,6 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
         }
     }
 
-    // Restore active preset selection.
     int desired = -1;
     std::string activeName;
     const auto itActiveName = obj.find("activeName");
@@ -319,16 +315,9 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
     if (desired >= static_cast<int>(m_LayoutPresets.size()))
         desired = static_cast<int>(m_LayoutPresets.size()) - 1;
 
-    // Apply the stored layout without touching UI (dockspace bind/rebuild happens later in Initialize()).
     if (desired >= 0 && desired < static_cast<int>(m_LayoutPresets.size()))
     {
         const auto& preset = m_LayoutPresets[(size_t)desired];
-        if (!m_Docking)
-        {
-            OnLayoutPresetRestoreFailed();
-            return;
-        }
-
         UIManager* mainUi =
             (!m_Windows.empty() && m_Windows[0]) ? m_Windows[0]->ui.get() : nullptr;
         if (!Editor::LayoutPresetController::Apply(
@@ -342,7 +331,6 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
         return;
     }
 
-    // Preserve "no highlight" state if requested.
     if (desired == -1)
     {
         m_ActiveLayoutPresetIndex = -1;
@@ -361,14 +349,12 @@ void EditorApplication::OnLayoutPresetRestoreFailed()
 
 void EditorApplication::SaveLayoutPresetsToPreferences() const
 {
-    // Persist into the project folder so presets are shared with the project
-    // (e.g. committed to VCS), not per-user.
     const auto& workspaceRoot = EngineCore::GetInstance().GetWorkspaceRoot();
     if (workspaceRoot.empty())
         return;
     GameEngine::Editor::SettingsStore prefs = GameEngine::Editor::OpenProjectSettings(workspaceRoot);
     std::string err;
-    (void)prefs.Load(&err); // keep existing keys
+    (void)prefs.Load(&err);
 
     nlohmann::json obj = nlohmann::json::object();
     obj["schemaVersion"] = 1;
@@ -402,7 +388,6 @@ void EditorApplication::SaveLayoutPresetsToPreferences() const
 
 void EditorApplication::RestoreWorkingLayout(bool rebuildDockspace)
 {
-    // UI replay keeps the fixed layout its scripts target.
     if (!m_Docking || m_UiReplayScenarioPath.has_value())
         return;
     std::unique_ptr<DockNode> working = Editor::WorkingLayoutPersistence::Load(
@@ -410,8 +395,6 @@ void EditorApplication::RestoreWorkingLayout(bool rebuildDockspace)
     if (!working)
         return;
 
-    // Load already reduced the tree to the panels this dock can show, plus the
-    // placeholders package panels bind to when they register.
     if (rebuildDockspace)
         DismissTornOffPanelsForLayoutRestore();
     m_Docking->SetRoot(std::move(working));
@@ -424,8 +407,6 @@ void EditorApplication::SaveWorkingLayout()
     if (!m_Docking || m_UiReplayScenarioPath.has_value())
         return;
 
-    // Play fullscreen swaps in a Game-View-only tree; the working layout is
-    // the one it put aside.
     const DockNode* layout = m_PlayPrevDockLayout.get();
     if (!layout)
     {
@@ -454,7 +435,6 @@ void EditorApplication::SyncLayoutPresetToolbar()
     if (!toolbar)
         return;
 
-    // Bind callbacks (idempotent; toolbar rebuilds itself when callbacks change).
     toolbar->SetOnRecallPreset([this](int index)
                                { this->RequestSwitchLayoutPreset(index); });
     toolbar->SetOnRemovePreset([this](int index)
@@ -475,7 +455,6 @@ void EditorApplication::SyncLayoutPresetToolbar()
     toolbar->SetOnImportPresets([this]()
                                 { this->ImportLayoutPresetsInteractive(); });
 
-    // Push current preset names + active index.
     std::vector<std::string> names;
     names.reserve(m_LayoutPresets.size());
     for (const auto& p : m_LayoutPresets)
@@ -537,7 +516,6 @@ void EditorApplication::RequestSwitchLayoutPreset(int index)
     if (index < 0 || index >= static_cast<int>(m_LayoutPresets.size()))
         return;
 
-    // Allow re-clicking the active preset to reload it when the layout has been modified.
     if (index == m_ActiveLayoutPresetIndex && !IsActiveLayoutDirty())
         return;
 
@@ -547,7 +525,6 @@ void EditorApplication::RequestSwitchLayoutPreset(int index)
         return;
     }
 
-    // Lazy-create the modal on first use; reuse thereafter.
     if (!m_LayoutChangesModal)
     {
         if (m_Windows.empty() || !m_Windows[0] || !m_Windows[0]->ui)
@@ -610,7 +587,6 @@ void EditorApplication::SaveCurrentLayoutAsPreset(const std::string& name)
 
 void EditorApplication::RemoveLayoutPreset(int index)
 {
-    // Never remove the default preset.
     if (index <= 0 || index >= static_cast<int>(m_LayoutPresets.size()))
         return;
 
@@ -620,7 +596,6 @@ void EditorApplication::RemoveLayoutPreset(int index)
 
     if (removedWasActive)
     {
-        // Keep current layout; just clear the "active preset" highlight.
         m_ActiveLayoutPresetIndex = -1;
     }
     else if (m_ActiveLayoutPresetIndex > index)
@@ -639,7 +614,6 @@ void EditorApplication::RemoveLayoutPreset(int index)
 
 void EditorApplication::OverwriteLayoutPreset(int index)
 {
-    // Never overwrite the default preset.
     if (index <= 0 || index >= static_cast<int>(m_LayoutPresets.size()))
         return;
 
@@ -661,4 +635,4 @@ void EditorApplication::OverwriteLayoutPreset(int index)
 }
 
 
-} // namespace GameEngine
+}
