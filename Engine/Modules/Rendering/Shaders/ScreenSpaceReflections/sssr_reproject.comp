@@ -107,7 +107,7 @@ void main()
             vec3 hitNormalWS = normalize(mat3(ge_invView) * GE_DecodeNormalVS(
                 texelFetch(uNormalRoughness, ivec2(hit.xy * vec2(size)), 0)));
             hitProjectionValid = GE_SssrDepthHistoryValid(
-                GE_SssrDecodeHistoryDepth(oldHitSurface.a), GE_LinearZ(oldHitDepth)) &&
+                GE_SssrDecodeHistoryDepth(oldHitSurface.a), LinearizeReverseZ(oldHitDepth, ge_nearFar.xy)) &&
                 dot(GE_OctDecode(oldHitSurface.rg), hitNormalWS) > 0.9;
         }
         if (hitProjectionValid && (receiverMoved || hitMoved))
@@ -150,7 +150,7 @@ void main()
     if (valid)
     {
         vec4 surface = texelFetch(uSurfaceHistory, ivec2(receiverUv * vec2(size)), 0);
-        float expectedZ = GE_LinearZ(expectedPrevDepth);
+        float expectedZ = LinearizeReverseZ(expectedPrevDepth, ge_nearFar.xy);
         valid = GE_SssrDepthHistoryValid(GE_SssrDecodeHistoryDepth(surface.a), expectedZ) &&
                 dot(GE_OctDecode(surface.rg), normalWS) > 0.9 &&
                 abs(surface.b - roughness) < 0.1;

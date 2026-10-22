@@ -4,6 +4,7 @@
 #include "Ocean/ocean_material_profiles.glsl"
 
 #include "Includes/screen_position.glsl"
+#include "Includes/reverse_z.glsl"
 #include "Includes/shadow_cascade_blend.glsl"
 #include "Ocean/ocean_cascade_common.glsl"
 
@@ -976,7 +977,7 @@ void main()
         vec3 dryViewDir = normalize(WorldFromDepth(uv, 1.0e-4) - uCameraPos.xyz);
         float dryDepth = textureLod(uDepth, uv, 0.0).r;
         float drySceneDist = uFogDensity.w;
-        if (dryDepth > 1e-6)
+        if (!IsBackgroundDepth(dryDepth))
             drySceneDist = length(WorldFromDepth(uv, dryDepth) - uCameraPos.xyz);
         dryPortalHit = UnderwaterPortalHit(dryViewDir, drySceneDist);
     }
@@ -1074,7 +1075,7 @@ void main()
         scene = SceneAbsolute(sceneUV);
         rawDepth = textureLod(uDepth, sceneUV, 0.0).r;
         worldPos = uCameraPos.xyz + viewDir * uFogDensity.w;
-        if (rawDepth > 1e-6)
+        if (!IsBackgroundDepth(rawDepth))
         {
             worldPos = WorldFromDepth(sceneUV, rawDepth);
             // Extinction is measured through water, not through the air before a
@@ -1151,7 +1152,7 @@ void main()
         float footprintLod = 0.5 * log2(max(max(dot(footprintX, footprintX), dot(footprintY, footprintY)), 1.0));
         float focalLod = abs(depthBelow - uCaustics.w) / max(uCausticsFocus.x, 0.001);
         float causticLod = max(footprintLod, focalLod);
-        if (uShape.x > 0.5 && rawDepth > 1e-6 && belowMask > 0.01 && sunDir.y > 0.0)
+        if (uShape.x > 0.5 && !IsBackgroundDepth(rawDepth) && belowMask > 0.01 && sunDir.y > 0.0)
         {
             float a = textureLod(uOceanCaustics, causticUV + vec2(0.044 * t + 17.16, -0.169 * t), causticLod).b;
             float b = textureLod(uOceanCaustics, 1.37 * causticUV + vec2(0.248 * t, 0.117 * t), causticLod + 0.45).b;

@@ -111,7 +111,7 @@ void main()
             GE_DecodeNormalVS(texelFetch(uNormalRoughness, pixel, 0)));
         moments = texelFetch(uMoments, q, 0);
         validHistory = moments.a > 0.0 &&
-            GE_SssrDepthHistoryValid(GE_SssrDecodeHistoryDepth(surface.a), GE_LinearZ(previousDepth)) &&
+            GE_SssrDepthHistoryValid(GE_SssrDecodeHistoryDepth(surface.a), LinearizeReverseZ(previousDepth, ge_nearFar.xy)) &&
             dot(normalWS, GE_OctDecode(surface.rg)) > 0.9 && abs(roughness - surface.b) < 0.1 &&
             GE_SssrIsFinite(moments);
     }
