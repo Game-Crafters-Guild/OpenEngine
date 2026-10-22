@@ -2,6 +2,7 @@
 // Verifies that missing font families trigger a host callback once (deduped),
 // and that async completion installs a FontAtlas and becomes visible to style resolution.
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -15,6 +16,7 @@
 #include "RobotoTestFont.h"
 #include "UIRgTestHarness.h"
 
+#include "UI/Parsers/CSSParser.h"
 #include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIManager.h"
@@ -267,3 +269,125 @@ TEST(UIFontLoadingTests, PendingFamilyUsesExplicitDefaultInsteadOfArbitraryLoade
     EXPECT_EQ(ui.ResolveFontForStyle(style), defaultAtlas);
     EXPECT_TRUE((bool)pendingRoboto);
 }
+
+namespace
+{
+enum class FontUpdateMode
+{
+    Idle,
+    Pointer,
+    Passive,
+};
+
+class UIFontRemeasureTests : public ::testing::TestWithParam<FontUpdateMode>
+{
+protected:
+    void SetUp() override
+    {
+        auto* device = SharedHeadlessDevice();
+        if (!device)
+            GTEST_SKIP() << "Device init failed";
+        m_Render = std::make_unique<UiRgHarness>(device);
+        m_Ui = std::make_unique<UIManager>(device);
+        std::unique_ptr<UIElement> root;
+        ASSERT_TRUE(XMLParser::ParseLayoutFromString(
+            "<UIElement id='root'><Label id='text' text='inline code'/><Label id='suffix' text='.'/></UIElement>",
+            root));
+        m_Ui->SetRoot(std::move(root));
+        Stylesheet sheet{};
+        ASSERT_TRUE(CSSParser::ParseStylesFromString(
+            "#root { width: 500px; height: 100px; flex-direction: row; align-items: flex-start; }"
+            "Label { font-size: 18px; flex-shrink: 0; }", sheet));
+        m_Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
+        auto regular = LoadRobotoBytes();
+        ASSERT_FALSE(regular.empty()) << UITesting::StagedFontPath("Roboto-Regular.ttf");
+        ASSERT_TRUE(m_Ui->SetDefaultFontBytes(regular));
+        m_MonoBytes = LoadRobotoMonoBytes();
+        ASSERT_FALSE(m_MonoBytes.empty()) << UITesting::StagedFontPath("RobotoMono-Regular.ttf");
+        m_Mono = UITesting::LoadStagedFontAtlas("RobotoMono-Regular.ttf");
+        ASSERT_NE(m_Mono, nullptr);
+        m_Text = m_Ui->GetRootElement()->FindById("text"_sid);
+        m_Suffix = m_Ui->GetRootElement()->FindById("suffix"_sid);
+        ASSERT_NE(m_Text, nullptr);
+        ASSERT_NE(m_Suffix, nullptr);
+        m_Ui->SetUpdateProfilingEnabled(true);
+    }
+
+    void Update()
+    {
+        if (GetParam() == FontUpdateMode::Pointer)
+            m_Ui->OnMouseMove(++m_PointerX, 80.0f);
+        m_Ui->Update(0.016f, GetParam() != FontUpdateMode::Passive);
+        DriveUiRender(*m_Ui, *m_Render);
+    }
+
+    void Settle()
+    {
+        for (int frame = 0; frame < 4; ++frame)
+            Update();
+    }
+
+    void ExpectMonoLayout()
+    {
+        const float width = m_Mono->MeasureUtf8("inline code", 18.0f).width;
+        EXPECT_NEAR(m_Text->GetLayoutWidth(), width, 0.05f);
+        EXPECT_NEAR(m_Suffix->GetLayoutX(), m_Text->GetLayoutX() + width, 0.05f)
+            << "the following punctuation must move with the new font advance";
+    }
+
+    SharedDeviceReleaseRetirement m_Retirement;
+    std::unique_ptr<UiRgHarness> m_Render;
+    std::unique_ptr<UIManager> m_Ui;
+    std::unique_ptr<Text::FontAtlas> m_Mono;
+    std::vector<uint8_t> m_MonoBytes;
+    UIElement* m_Text = nullptr;
+    UIElement* m_Suffix = nullptr;
+    float m_PointerX = 0.0f;
+};
+} // namespace
+
+TEST_P(UIFontRemeasureTests, AsyncFamilyRemeasuresCleanTextWhileAnotherRequestIsPending)
+{
+    Stylesheet sheet{};
+    ASSERT_TRUE(CSSParser::ParseStylesFromString("#text { font-family: 'Delayed Mono'; }", sheet));
+    m_Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
+    UIManager::FontResolveCallback pending;
+    m_Ui->SetFontResolver([&pending](const std::string& family, int, FontStyle, FontVariant,
+                                   UIManager::FontResolveCallback ready)
+    {
+        if (family == "Delayed Mono")
+            pending = std::move(ready);
+    });
+    m_Ui->RequestFontFamily("Still Pending");
+    Settle();
+    ASSERT_TRUE(static_cast<bool>(pending));
+    const float fallbackWidth = m_Text->GetLayoutWidth();
+    ASSERT_GT(std::abs(fallbackWidth - m_Mono->MeasureUtf8("inline code", 18.0f).width), 1.0f);
+    UIManager::FontResolveResult resolved{};
+    resolved.Bytes = m_MonoBytes;
+    pending(std::move(resolved));
+    Update();
+    ExpectMonoLayout();
+
+    Settle();
+    ExpectMonoLayout();
+    if (GetParam() != FontUpdateMode::Pointer)
+    {
+        UIManager::UpdateProfileFrame profile{};
+        ASSERT_TRUE(m_Ui->GetLastUpdateProfileFrame(profile));
+        EXPECT_EQ(profile.IdleFrame, 1u) << "an unresolved request alone must not keep rebuilding layout";
+    }
+}
+
+TEST_P(UIFontRemeasureTests, ReplacingDefaultFontRemeasuresCleanText)
+{
+    Settle();
+    const float fallbackWidth = m_Text->GetLayoutWidth();
+    ASSERT_GT(std::abs(fallbackWidth - m_Mono->MeasureUtf8("inline code", 18.0f).width), 1.0f);
+    ASSERT_TRUE(m_Ui->SetDefaultFontBytes(m_MonoBytes));
+    Update();
+    ExpectMonoLayout();
+}
+
+INSTANTIATE_TEST_SUITE_P(UpdateModes, UIFontRemeasureTests,
+    ::testing::Values(FontUpdateMode::Idle, FontUpdateMode::Pointer, FontUpdateMode::Passive));

@@ -283,6 +283,7 @@ struct UpdateContext
     //     - viewport resized          (every layout rect can change)
     //     - content scale changed     (physical/logical conversion shifts)
     //     - global stylesheet set     (every selector chain can rematch)
+    //     - font atlas changed        (any text may use a newly resolved face)
     //   Do NOT add RequestRelayout() callers or per-element dirty flags here —
     //   see the Fix A invariant below (commit a3355481). Scoped mutations go
     //   through MarkDirty / SubtreeDirty propagation, which the subtree-skip
