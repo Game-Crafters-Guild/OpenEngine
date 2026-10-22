@@ -629,10 +629,9 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
         m_GameUI = GameUIHost::CreateForHost(
             &device, &EngineCore::GetInstance().GetAssetManager(),
             &EngineCore::GetInstance().GetJobSystem(),
-            // Default HUD font from the project asset root (Assets/Fonts/Roboto-Regular.ttf),
-            // staged beside a development runtime and shipped with every export. The host
-            // owns its FinalColor target.
-            EngineCore::GetInstance().GetResolvedAssetRoot(), /*neverClearTarget=*/false);
+            // The default HUD font ships with the runtime. A development project
+            // can have a separate asset root without duplicating bundled fonts.
+            PathUtils::GetInstallAssetsRoot(), /*neverClearTarget=*/false);
         m_GameUI->GetUIManager()->SetScaleSettings(m_Desc.UIScale);
     }
     GameUI::SetHost(m_GameUI.get());
