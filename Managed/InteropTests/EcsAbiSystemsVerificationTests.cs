@@ -643,5 +643,70 @@ namespace GameEngine.ManagedInteropTests
             world.DestroyEntity(entity);
             ChunkQueryNative.FlushDeferredCommands(w); // DestroyEntity queues; apply it here, not in the next test
         }
+
+        /// <summary>
+        /// A game system can reach the structural commands for its own world.
+        /// </summary>
+        /// <remarks>
+        /// THE HAND-OFF A SPAWNED VISUAL NEEDS. The engine could always create an entity - the generated
+        /// systems receive these commands as a parameter - but nothing a game writes could obtain them, so a
+        /// dropped item, a projectile or a summon had nowhere to come from. This is the public surface, not
+        /// the raw call: <c>GameSystem.Commands</c> and <c>EntityCommands.For</c>.
+        ///
+        /// <para>Two arms, because they answer different questions and only one of them needs the engine.
+        /// The mapping arms run everywhere - a wrong handle is a silent bug that no amount of native
+        /// coverage would catch, because the entity would simply appear in another world. The creation arm
+        /// runs where <c>GameEngine.Native</c> is staged beside this assembly; it is inconclusive otherwise,
+        /// which is this suite's existing contract.</para>
+        /// </remarks>
+        [Test]
+        public void EntityCommands_For_CarriesTheWorldHandle()
+        {
+            var world = new WorldHandle(0x5EED);
+
+            Assert.That(EntityCommands.For(world).WorldHandle, Is.EqualTo(world.Handle),
+                "For must hand the same world to the commands, not a default one");
+        }
+
+        /// <summary>A system's commands are bound to the world it runs in, not to a default.</summary>
+        [Test]
+        public void GameSystem_Commands_IsBoundToItsOwnWorld()
+        {
+            var world = new WorldHandle(0x5EED);
+            var system = new VerifyCommandsSystem { World = world };
+
+            Assert.That(system.Commands.WorldHandle, Is.EqualTo(world.Handle),
+                "a system's commands must be bound to the world it runs in");
+        }
+
+        /// <summary>
+        /// Creation through the public surface, where the engine is available: create, flush, and the entity
+        /// is addressable.
+        /// </summary>
+        [Test]
+        public void GameSystem_Commands_CreateAnEntity()
+        {
+            var world = RequireWorld();
+            var system = new VerifyCommandsSystem { World = world };
+
+            ChunkQueryNative.SetDeferStructuralChanges(world.Handle, true);
+            try
+            {
+                uint id = system.Commands.CreateEntity();
+                Assert.That(id, Is.Not.Zero, "CreateEntity returns a live id immediately");
+
+                ChunkQueryNative.FlushDeferredCommands(world.Handle);
+                Assert.That(world.IsEntityValid(id), Is.True,
+                    "the entity survives the flush and is addressable");
+            }
+            finally
+            {
+                ChunkQueryNative.SetDeferStructuralChanges(world.Handle, false);
+            }
+        }
+
+        private sealed class VerifyCommandsSystem : GameSystem
+        {
+        }
     }
 }

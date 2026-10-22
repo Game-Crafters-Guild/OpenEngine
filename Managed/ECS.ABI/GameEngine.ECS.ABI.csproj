@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GameEngine.Scripting.Runtime" />
+    <!-- The interop suite builds a WorldHandle directly so the hand-off can be tested without the native host. -->
+    <InternalsVisibleTo Include="InteropTests" />
   </ItemGroup>
 
   <ItemGroup>

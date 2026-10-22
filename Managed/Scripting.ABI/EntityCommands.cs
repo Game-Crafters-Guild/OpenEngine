@@ -13,6 +13,17 @@ namespace GameEngine.Scripting
     {
         internal ulong WorldHandle;
 
+        /// <summary>
+        /// Commands bound to one world, for callers that do not receive them as a parameter.
+        /// </summary>
+        /// <remarks>
+        /// A system owns a world and nothing else: this is the same struct the generated entity systems
+        /// receive, built from the handle the system already has. It adds no behaviour - the queue, the
+        /// deferred flush and the create call are the ones that already run.
+        /// </remarks>
+        public static EntityCommands For(GameEngine.ECS.WorldHandle world)
+            => new EntityCommands { WorldHandle = world.Handle };
+
         /// <summary>Creates a new empty entity (no components). Returns a valid entity ID immediately.</summary>
         public uint CreateEntity()
         {
