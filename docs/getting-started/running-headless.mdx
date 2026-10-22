@@ -28,7 +28,7 @@ Player.exe --headless --fixed-fps 60 --quit-after 600 --config C:\MyGame\game.co
 
 ## Ending the run from a script
 
-A native (C++) script ends the run the same way the Player does for `--quit-after`: the frame finishes, the scripts' `OnDestroy` runs, and the process exits with code 0.
+A script ends the run the same way the Player does for `--quit-after`: the frame finishes, the scripts' `OnDestroy` runs, and the process exits with code 0 unless the script supplies another exit code.
 
 :::::tabs
 ::::tab[C++]
@@ -42,9 +42,19 @@ GameEngine::Application::Get()->RequestExit();
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-No managed quit call yet: a C# script cannot end the run. The native call is `GameEngine::Application::Get()->RequestExit()` (`Engine/Include/Core/Application.h`); tracked as [OpenEngine issue #21](https://github.com/Game-Crafters-Guild/OpenEngine/issues/21).
-:::
+```csharp title="End the run from a C# script"
+using GameEngine.Scripting;
+
+Application.RequestExit();
+```
+
+Pass an exit code with `Application.RequestExit(23)`. Call it on the main thread, outside a system job. From a worker, a system job, or a callback on another thread, post the request:
+
+```csharp title="Request exit from another thread"
+MainThread.Post(() => Application.RequestExit(23));
+```
+
+A direct call from another thread or a system job throws `InvalidOperationException` without changing the exit state. With no application, the call does nothing and does not start an engine. Repeated requests keep the last exit code. In the editor, this requests exit of the editor application as well; it does not only leave play mode.
 
 ::::
 :::::
@@ -74,10 +84,12 @@ The Player writes its log to `%APPDATA%\<gameName>\Logs\game-<process id>.log`, 
 
 | Exit code | Meaning |
 |---|---|
-| `0` | The run ended normally: `--quit-after` reached, or a script asked to quit. |
+| `0` | The run ended normally: `--quit-after` reached, or a script asked to quit without another exit code. |
 | `1` | The command line or configuration was refused: `--config` names a missing file, a flag that needs a graphics device was given, `--fixed-fps` is not a positive number, or `--quit-after` is not a non-negative whole number. Restarting will not help. The log names the fix. |
 | `-1` (`4294967295`) | Startup failed, for example the startup scene could not be loaded. The log line before `Player: Failed to initialize` names the cause. |
 | `-2`, `-3` | An unhandled exception ended the run. The log holds its message. |
+
+A script can supply its own exit code. Choose codes outside the engine's reserved values above when the service manager needs to distinguish them.
 
 :::caution
 
@@ -104,7 +116,11 @@ Without a wrapper, a PowerShell loop does the same while a user stays logged on:
 ```powershell title="Restart the Player from PowerShell"
 do {
     $p = Start-Process C:\MyGame\Player.exe -ArgumentList '--headless','--fixed-fps','30' -PassThru -Wait
-    if ($p.ExitCode -eq 1) { break }   # refused arguments: fix the command line first
+    if ($p.ExitCode -eq 1) { break }
     Start-Sleep -Seconds 5
 } while ($p.ExitCode -ne 0)
 ```
+
+## Changelog
+
+- Added `Application.RequestExit` for C# scripts, with an optional exit code and a main-thread call requirement.

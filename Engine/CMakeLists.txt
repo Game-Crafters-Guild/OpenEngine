@@ -1418,11 +1418,10 @@ if(WIN32 AND MSVC)
 endif()
 
 
-# Native ABI DLL: GameEngine.Native
-# Only build the native scripting shim when scripting support is enabled.
 if(ENABLE_SCRIPTING)
   add_library(GameEngine.Native SHARED
       Source/Scripting/ScriptingABI.cpp
+      Source/Scripting/ApplicationABI.cpp
       Source/Scripting/TimelineABI.cpp
       Source/Scripting/AnimatorABI.cpp
       Source/Scripting/ModelABI.cpp
@@ -1685,7 +1684,6 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_stage_runtime_dependencies(EngineHotReloadBridgeSelectiveInvalidationTests)
     add_test(NAME EngineHotReloadBridgeSelectiveInvalidationTests COMMAND $<TARGET_FILE:EngineHotReloadBridgeSelectiveInvalidationTests>)
 endif()
-# Engine tests: Application Tick/RunPlatformLoop driver contract
 if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(EngineApplicationTickTests
         Tests/ApplicationTickTests.cpp
@@ -1699,6 +1697,19 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_set_output_tests(EngineApplicationTickTests)
     ge_stage_runtime_dependencies(EngineApplicationTickTests)
     add_test(NAME EngineApplicationTickTests COMMAND $<TARGET_FILE:EngineApplicationTickTests>)
+    if(TARGET GameEngine.Native)
+        add_executable(EngineApplicationExitTests Tests/ApplicationExitTests.cpp)
+        target_link_libraries(EngineApplicationExitTests PRIVATE Engine GameEngine.Native GTest::gtest GTest::gtest_main)
+        set_target_properties(EngineApplicationExitTests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON
+            FOLDER "Engine/Tests"
+        )
+        ge_set_output_tests(EngineApplicationExitTests)
+        ge_stage_runtime_dependencies(EngineApplicationExitTests)
+        add_test(NAME EngineApplicationExitTests COMMAND $<TARGET_FILE:EngineApplicationExitTests>)
+        set_tests_properties(EngineApplicationExitTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endif()
 endif()
 
 # Engine tests: shaderpkg WGSL chunk round-trip
