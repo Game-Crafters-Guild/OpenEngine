@@ -56,4 +56,10 @@ bool ComputeSubtreeWorldBounds(ECS::World& world, ECS::EntityHandle root, Subtre
 bool ComputeLookAtPose(const Mathematics::Vector3& target, const Mathematics::Vector3& direction, float distance,
                        SceneViewCameraPose& out);
 
+SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bounds,
+                                                const SceneViewCameraPose& currentPose,
+                                                float fieldOfViewDeg, float aspect, float nearClip);
+
+float ExpandFarClipForFraming(float farClip, float distance);
+
 } // namespace GameEngine::Editor

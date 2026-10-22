@@ -8,6 +8,7 @@
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "Mathematics/VectorOps.h"
+#include "SceneView/SceneViewCameraRig.h"
 #include "SceneViewController.h"
 
 #include <algorithm>
@@ -93,6 +94,71 @@ bool ComputeLookAtPose(const Mathematics::Vector3& target, const Mathematics::Ve
     out.PitchDeg = std::asin(look.y) * kDegreesPerRadian;
     out.Distance = distance;
     return true;
+}
+
+SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bounds,
+                                                const SceneViewCameraPose& currentPose,
+                                                float fieldOfViewDeg, float aspect, float nearClip)
+{
+    using Mathematics::Vector3;
+    const auto box = Mathematics::BoundingBox::FromMinMax(bounds.min, bounds.max);
+    const Vector3 center = box.center;
+    const Vector3 halfExtents = box.halfExtents;
+    const auto forward = CameraRig::LookDirection(currentPose.YawDeg, currentPose.PitchDeg);
+    Vector3 look(static_cast<float>(forward.X), static_cast<float>(forward.Y), static_cast<float>(forward.Z));
+
+    constexpr float kPlanarThicknessRatio = 0.001f;
+    constexpr float kMinimumPlaneViewSine = 0.5f;
+    const float planarThickness = std::max({halfExtents.x, halfExtents.y, halfExtents.z}) * kPlanarThicknessRatio;
+    for (size_t axis = 0; axis < 3; ++axis)
+    {
+        if (halfExtents[axis] > planarThickness ||
+            halfExtents[(axis + 1) % 3] <= planarThickness ||
+            halfExtents[(axis + 2) % 3] <= planarThickness ||
+            std::abs(look[axis]) >= kMinimumPlaneViewSine)
+            continue;
+
+        look[axis] = 0.0f;
+        look = look.NormalizeOrZero() * std::sqrt(1.0f - kMinimumPlaneViewSine * kMinimumPlaneViewSine);
+        look[axis] = currentPose.Pos[axis] < center[axis] ? kMinimumPlaneViewSine : -kMinimumPlaneViewSine;
+        break;
+    }
+
+    SceneViewCameraPose result = currentPose;
+    ComputeLookAtPose(center, look, nearClip, result);
+    float view[16];
+    CameraRig::BuildViewMatrixLH({}, result.YawDeg, result.PitchDeg, view);
+    const Vector3 right(view[0], view[4], view[8]);
+    const Vector3 up(view[1], view[5], view[9]);
+    look = Vector3(view[2], view[6], view[10]);
+
+    constexpr float kFramingPadding = 1.1f;
+    const float tanHalfVertical = std::tan(fieldOfViewDeg * Mathematics::Pi / 360.0f);
+    const float tanHalfHorizontal = tanHalfVertical * aspect;
+    float distance = box.Radius() + nearClip;
+    for (uint32_t corner = 0; corner < 8; ++corner)
+    {
+        const Vector3 offset((corner & 1) ? halfExtents.x : -halfExtents.x,
+                             (corner & 2) ? halfExtents.y : -halfExtents.y,
+                             (corner & 4) ? halfExtents.z : -halfExtents.z);
+        const float depth = Vector3::Dot(offset, look);
+        distance = std::max({distance, nearClip - depth,
+                             kFramingPadding * std::abs(Vector3::Dot(offset, right)) / tanHalfHorizontal - depth,
+                             kFramingPadding * std::abs(Vector3::Dot(offset, up)) / tanHalfVertical - depth});
+    }
+
+    const auto position = CameraRig::OrbitCameraPosition({center.x, center.y, center.z},
+                                                        result.YawDeg, result.PitchDeg, distance);
+    result.Pos[0] = static_cast<float>(position.X);
+    result.Pos[1] = static_cast<float>(position.Y);
+    result.Pos[2] = static_cast<float>(position.Z);
+    result.Distance = distance;
+    return result;
+}
+
+float ExpandFarClipForFraming(float farClip, float distance)
+{
+    return std::max(farClip, distance * 2.0f);
 }
 
 } // namespace GameEngine::Editor

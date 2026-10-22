@@ -41,6 +41,11 @@ description: The editor's keyboard and mouse shortcuts for the gizmo tools, the 
 | **F** | Frame Selection | Focus camera on selected object |
 | **Alt + F** | Frame All | Focus camera on all objects in scene |
 
+In perspective views, framing fits the object's bounds to the viewport and makes its center the
+orbit target. The camera moves into place with a short transition. A flat floor viewed edge-on
+gets an oblique angle so its surface stays visible. Large objects automatically extend the Scene
+View's visible range while framed; the camera settings are unchanged.
+
 ## Global editor shortcuts
 
 | Key | Action | Description |
@@ -111,3 +116,7 @@ Tabs have no close button: right-click a tab or use the shortcut to close it.
 - Press **Alt + F** to frame all objects in the scene
 - **Right-click on any tab** to access the context menu with close option
 - **Cmd/Ctrl + W** closes the active tab. If no tabs remain in a floating window, it closes the window
+
+## Changelog
+
+- Perspective framing fits the viewport and keeps large objects and edge-on floors visible.
