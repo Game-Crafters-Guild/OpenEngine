@@ -470,7 +470,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     rp.clearColorValue[0][3] = 1.0f;
     rp.colorStoreOp[0] = RenderPassDesc::StoreOp::Store;
     rp.clearDepth = true;
-    rp.clearDepthValue = 0.0f; // reverse-Z far
+    rp.clearDepthValue = ReverseZ::kClearFar;
     rp.depthStoreOp = RenderPassDesc::StoreOp::Store;
 
     cl->BeginRenderPass(rp);

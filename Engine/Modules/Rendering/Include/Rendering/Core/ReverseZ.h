@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 
 namespace GameEngine
@@ -10,8 +11,8 @@ namespace Rendering
 /// The engine's depth convention in pipeline terms. The engine renders reverse-Z only: NDC depth
 /// is [0, 1], the near plane maps to 1.0, the far plane to 0.0, and the nearer surface has the
 /// larger depth. Depth state, sampler compares, depth clears and caster bias name these values
-/// instead of a literal. The shader twin is `Shaders/Includes/reverse_z.glsl`; projection and
-/// linearization live in `Engine/Rendering/CameraUtils.h` and `Mathematics/MatrixOps.h`.
+/// instead of a literal. Projection and linearization live in `Engine/Rendering/CameraUtils.h`,
+/// `Mathematics/MatrixOps.h` and, for shaders, `Shaders/Includes/reverse_z.glsl`.
 namespace ReverseZ
 {
 
@@ -38,8 +39,13 @@ constexpr float CasterBiasAwayFromViewer(float magnitude)
 
 } // namespace ReverseZ
 
+// Defaults in headers that do not include this one.
 static_assert(DepthStencilState{}.depthCompareOp == ReverseZ::kNearerOrEqual,
               "DepthStencilState must default to the reverse-Z compare (ReverseZ::kNearerOrEqual)");
+static_assert(ViewTargets{}.clearDepthValue == ReverseZ::kClearFar,
+              "ViewTargets must default its depth clear to the far plane (ReverseZ::kClearFar)");
+static_assert(ViewClearConfig{}.clearDepthValue == ReverseZ::kClearFar,
+              "ViewClearConfig must default its depth clear to the far plane (ReverseZ::kClearFar)");
 
 } // namespace Rendering
 } // namespace GameEngine

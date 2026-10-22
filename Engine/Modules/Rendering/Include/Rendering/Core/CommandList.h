@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Device.h"
+#include "Rendering/Core/ReverseZ.h"
 #include <cstdint>
 
 namespace GameEngine
@@ -40,7 +41,7 @@ struct RenderPassDesc
         {0.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f}};
-    float clearDepthValue = 0.0f;  // reverse-Z: clear to far
+    float clearDepthValue = ReverseZ::kClearFar;
     uint32_t clearStencilValue = 0; // ✅ FIXED: Added stencil clear value
 
     // Resolve mode selection (engine-level; backends map to native resolve flags)
