@@ -36,7 +36,7 @@ A script ends the run the same way the Player does for `--quit-after`: the frame
 ```cpp title="End the run from a native script"
 #include "Core/Application.h"
 
-GameEngine::Application::Get()->RequestExit();
+GameEngine::Application::Get()->RequestGameExit(0);
 ```
 
 ::::
@@ -54,7 +54,9 @@ Pass an exit code with `Application.RequestExit(23)`. Call it on the main thread
 MainThread.Post(() => Application.RequestExit(23));
 ```
 
-A direct call from another thread or a system job throws `InvalidOperationException` without changing the exit state. With no application, the call does nothing and does not start an engine. Repeated requests keep the last exit code. In the editor, this requests exit of the editor application as well; it does not only leave play mode.
+A direct call from another thread or a system job throws `InvalidOperationException` without changing the exit state. With no application, the call does nothing and does not start an engine. Repeated requests in the Player keep the last exit code.
+
+In the editor, `Application.RequestExit()` stops play at the next safe editor update through the normal Stop Play flow, including change review. The editor stays open with its unsaved documents intact. The exit code is ignored, and a call outside play mode does nothing.
 
 ::::
 :::::
@@ -116,11 +118,11 @@ Without a wrapper, a PowerShell loop does the same while a user stays logged on:
 ```powershell title="Restart the Player from PowerShell"
 do {
     $p = Start-Process C:\MyGame\Player.exe -ArgumentList '--headless','--fixed-fps','30' -PassThru -Wait
-    if ($p.ExitCode -eq 1) { break }
+    if ($p.ExitCode -eq 1) { break }   # refused arguments: fix the command line first
     Start-Sleep -Seconds 5
 } while ($p.ExitCode -ne 0)
 ```
 
 ## Changelog
 
-- Added `Application.RequestExit` for C# scripts, with an optional exit code and a main-thread call requirement.
+- Added `Application.RequestExit` for C# scripts, with an optional Player exit code, Stop Play behavior in the editor, and a main-thread call requirement.

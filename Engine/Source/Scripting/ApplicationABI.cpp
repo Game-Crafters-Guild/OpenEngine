@@ -14,8 +14,7 @@ GE_API GE_Result GE_CDECL GE_Application_RequestExit(int32_t exitCode)
         if (!application)
             return GE_Result_NotInitialized;
 
-        application->SetExitCode(exitCode);
-        application->RequestExit();
+        application->RequestGameExit(exitCode);
         return GE_Result_Ok;
     }
     catch (...)

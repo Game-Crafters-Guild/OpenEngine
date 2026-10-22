@@ -155,6 +155,10 @@ class EditorApplication : public Application
     void Render() override;
     void OnShutdown() override;
 
+    /// Stop the current play session at the next safe UI boundary, keeping this editor open.
+    /// The Player's process exit code has no effect on an editor session.
+    void RequestGameExit(int exitCode) override;
+
     // Settings
     void SetDockEdgeFraction(float frac);
     void SyncHiDpiPlatformSettingsFromPreferences();

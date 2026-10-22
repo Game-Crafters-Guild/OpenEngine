@@ -148,6 +148,12 @@ int Application::Run() {
     return m_ExitCode;
 }
 
+void Application::RequestGameExit(int exitCode)
+{
+    SetExitCode(exitCode);
+    RequestExit();
+}
+
 void Application::RunPlatformLoop() {
     while (PollEventsAndTick()) {
     }

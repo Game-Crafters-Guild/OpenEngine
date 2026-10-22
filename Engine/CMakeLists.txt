@@ -1418,6 +1418,8 @@ if(WIN32 AND MSVC)
 endif()
 
 
+# Native ABI DLL: GameEngine.Native
+# Only build the native scripting shim when scripting support is enabled.
 if(ENABLE_SCRIPTING)
   add_library(GameEngine.Native SHARED
       Source/Scripting/ScriptingABI.cpp
@@ -1684,6 +1686,7 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_stage_runtime_dependencies(EngineHotReloadBridgeSelectiveInvalidationTests)
     add_test(NAME EngineHotReloadBridgeSelectiveInvalidationTests COMMAND $<TARGET_FILE:EngineHotReloadBridgeSelectiveInvalidationTests>)
 endif()
+# Engine tests: Application Tick/RunPlatformLoop driver and game-exit contracts
 if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(EngineApplicationTickTests
         Tests/ApplicationTickTests.cpp

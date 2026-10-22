@@ -33,6 +33,21 @@ protected:
     void OnShutdown() override { ++ShutdownCalls; }
 };
 
+class EmbeddedGameApplication : public ExitRequestApplication
+{
+public:
+    using ExitRequestApplication::ExitRequestApplication;
+
+    int GameExitCalls = 0;
+    int GameExitCode = 0;
+
+    void RequestGameExit(int exitCode) override
+    {
+        ++GameExitCalls;
+        GameExitCode = exitCode;
+    }
+};
+
 class ApplicationExit : public ::testing::Test
 {
 protected:
@@ -107,6 +122,22 @@ TEST_F(ApplicationExit, RepeatedRequestsKeepTheLastExitCode)
     EXPECT_EQ(GE_Application_RequestExit(0), GE_Result_Ok);
     EXPECT_TRUE(application.ShouldExit());
     EXPECT_EQ(application.Run(), 0);
+    application.Shutdown();
+}
+
+TEST_F(ApplicationExit, GameExitUsesTheHostPolicyWithoutClosingTheHost)
+{
+    EmbeddedGameApplication application(Config());
+    application.RequestedExitCode = 23;
+    ASSERT_TRUE(application.Initialize());
+
+    EXPECT_TRUE(application.Tick());
+    EXPECT_EQ(application.RequestResult, GE_Result_Ok);
+    EXPECT_EQ(application.GameExitCalls, 1);
+    EXPECT_EQ(application.GameExitCode, 23);
+    EXPECT_EQ(application.RenderCalls, 1);
+    EXPECT_FALSE(application.ShouldExit());
+    EXPECT_EQ(application.GetExitCode(), 0);
     application.Shutdown();
 }
 

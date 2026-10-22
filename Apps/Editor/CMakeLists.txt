@@ -163,6 +163,7 @@ set(EDITOR_SOURCES
     Source/PlayMode/PlayModeEntryGate.cpp
     Source/PlayMode/PlayModeEntryModal.cpp
     Source/PlayMode/PlayModeManager.cpp
+    Source/PlayMode/EditorGameExit.cpp
     Source/PlayMode/ModelAnimationPlayMode.cpp
     Source/PlayMode/AnimationPlayModeHelpers.cpp
     Source/PlayMode/RuntimeInputConnection.cpp
