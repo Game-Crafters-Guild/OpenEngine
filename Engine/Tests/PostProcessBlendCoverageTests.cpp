@@ -735,7 +735,7 @@ TEST(PostProcessChromaticAberration, UsesDepthAwareFocusAndPixelCorrectSeparatio
     const std::string shaderSource((std::istreambuf_iterator<char>(shaderStream)),
                                    std::istreambuf_iterator<char>());
     EXPECT_NE(shaderSource.find("float AxialDepthWeight()"), std::string::npos);
-    EXPECT_NE(shaderSource.find("LinearizeReverseZ(rawDepth)"), std::string::npos);
+    EXPECT_NE(shaderSource.find("LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy)"), std::string::npos);
     EXPECT_NE(shaderSource.find("pc.dofFocusDistance"), std::string::npos);
     EXPECT_NE(shaderSource.find("normalize(radial)"), std::string::npos);
     EXPECT_NE(shaderSource.find("0.5 * lateral"), std::string::npos);
@@ -1547,7 +1547,7 @@ TEST(PostProcessDofControls, ReverseZSkyUsesPhysicalInfinityCoc)
         const std::string source((std::istreambuf_iterator<char>(stream)),
                                  std::istreambuf_iterator<char>());
 
-        EXPECT_NE(source.find("if (rawDepth <= 0.0)"), std::string::npos) << shader;
+        EXPECT_NE(source.find("if (IsBackgroundDepth(rawDepth))"), std::string::npos) << shader;
         EXPECT_NE(source.find("return -apertureDiameter * focal / max(focus - focal, 1e-6)"),
                   std::string::npos) << shader;
         EXPECT_EQ(source.find("return -65504.0"), std::string::npos) << shader;
