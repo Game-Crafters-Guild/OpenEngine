@@ -7,6 +7,7 @@
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <algorithm>
 #include <cmath>
@@ -262,7 +263,7 @@ bool OceanPlanarReflection::DeclareForView(Engine::Renderer::Pipeline::ViewDecla
     clear.clearColorValue[2] = 0.0f;
     clear.clearColorValue[3] = 0.0f;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs.Views().SetViewClearConfig(m_ViewId, clear);
 
     // Targets: the feature-owned colour (imported external, so the contributor can

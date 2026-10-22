@@ -41,6 +41,7 @@
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/NoneCullingStrategy.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Thumbnails/ModelThumbnailHandlerShared.h"
 
@@ -746,7 +747,7 @@ void ModelThumbnailHandler::SubmitThumbnailRenderRG(WindowState& ws, RenderLane&
         clear.clearColorValue[2] = 0.0f;
         clear.clearColorValue[3] = 0.0f;
         clear.clearDepth = true;
-        clear.clearDepthValue = 0.0f;
+        clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
         m_RenderServices->Views().SetViewClearConfig(lane.viewId, clear);
     }
 

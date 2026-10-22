@@ -29,6 +29,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/HzbCullingStrategy.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/Passes/TemporalDither.h"
 #include "Scene/SceneAssetResolver.h"
@@ -611,7 +612,7 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
         clear.clearColorValue[3] = 1.0f;
     }
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs.Views().SetViewClearConfig(m_ViewId, clear);
 
     // Forward+ directional/ambient lighting reads the per-view LightUBO —

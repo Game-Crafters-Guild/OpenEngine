@@ -22,6 +22,7 @@
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/SpecializationConstants.h"
 
 #include <algorithm>
@@ -633,7 +634,7 @@ bool SceneReflectionProbeEnvironmentSource::DeclareFaceCapture(
     clear.clearColorValue[2] = 0.0f;
     clear.clearColorValue[3] = 1.0f;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     m_Services->Views().SetViewClearConfig(m_ViewId, clear);
 
     TextureDesc depthDesc{};

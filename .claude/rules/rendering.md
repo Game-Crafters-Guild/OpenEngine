@@ -32,7 +32,7 @@ paths:
 ## Vulkan conventions (they invert other engines' habits)
 
 - Left-handed coordinates, +Z forward, +Y up: `MakeLookAtLH`, `MakePerspectiveLH_ZO_ReverseZ`, `MakeOrthographicLH_ZO_ReverseZ`.
-- Reverse-Z: NDC depth is still `[0,1]`, but near maps to 1.0 and far to 0.0. The depth buffer is D32_SFLOAT (D24_UNORM is a precision regression under reverse-Z). Default depth clear is 0.0; default `depthCompareOp` and the shadow comparison sampler are `GreaterOrEqual`.
+- Reverse-Z: NDC depth is still `[0,1]`, but near maps to 1.0 and far to 0.0. The depth buffer is D32_SFLOAT (D24_UNORM is a precision regression under reverse-Z). Default depth clear is 0.0; default `depthCompareOp` and the shadow comparison sampler are `GreaterOrEqual`. Name these through `Rendering/Core/ReverseZ.h` (`kNearerOrEqual`, `kFarther`, `kClearFar`, `CasterBiasAwayFromViewer`), never a literal.
 - Shadow depth bias is negative (`kShadowDepthBias{Constant,Slope} < 0`) to push fragments toward 0.0; receiver bias is added to NDC depth where forward-Z subtracts.
 - Negative viewport height for Y-up rasterization (VK_KHR_maintenance1), independent of the Z direction; shadow sampling flips `shadowUV.y = 1.0 - shadowUV.y` to compensate.
 
