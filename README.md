@@ -10,7 +10,7 @@ It also builds for the web: the same engine runs in the browser on WebGPU, shipp
 
 **Platforms:** Windows x64 and ARM64 (primary), macOS on Apple Silicon and Intel (native Metal renderer), Linux, Steam Deck.
 
-![The Open Engine editor on a stylized village scene at evening: long shadows across the houses, a lake below, and the post-processing inspector open](docs/images/editor/editor-overview.webp)
+![Open Engine editor showing a moonlit fantasy landscape, hierarchy, inspector, and asset browser.](docs/images/editor/editor-overview.webp)
 
 ## Why Open Engine
 
@@ -38,6 +38,38 @@ Live examples, built from the engine and published with each release (WebGPU):
 - [Instancing](https://game-crafters-guild.github.io/opengine-web/package/examples/instancing/index.html): one model drawn up to 100,000 times, each copy an entity.
 
 The library behind them is [`@game-crafters-guild/openengine-web`](https://www.npmjs.com/package/@game-crafters-guild/openengine-web) (`npm install @game-crafters-guild/openengine-web@alpha`); its README is the guide. The examples' source and the built package live in [opengine-web](https://github.com/Game-Crafters-Guild/opengine-web).
+
+## Screenshots
+
+Screenshots from the [Open Engine features page](https://openengine.dev/features/).
+
+### Editor overview
+
+![Open Engine editor showing a moonlit fantasy landscape, hierarchy, inspector, and asset browser.](docs/images/editor/editor-overview.webp)
+
+### Scene, assets, and lens flare
+
+![Open Engine editor with a sunset scene, hierarchy, smart folders, assets, and a Sky Environment inspector.](docs/images/editor/editor-workspace-clean.webp)
+
+### Material library
+
+![Open Engine editor showing a material asset library and a textured sphere preview.](docs/images/editor/material-library-workspace-clean.webp)
+
+### Scene authoring
+
+![Open Engine editor showing a colorful stylized scene, hierarchy, asset browser, and material inspector.](docs/images/editor/scene-authoring-workspace-clean.webp)
+
+### Material inspection
+
+![Open Engine editor showing a jungle scene, material thumbnails, and a material preview in the Asset View.](docs/images/editor/material-inspector-workspace-clean.webp)
+
+### Version control
+
+![Open Engine editor showing Lore version-control settings, asset status, and context menu actions.](docs/images/editor/lore-version-control-clean.webp)
+
+### Ocean rendering and image-based lighting
+
+![Open Engine editor showing a ship at sea with an ocean shader, reflections, and a starry dusk sky.](docs/images/editor/ocean-ibl-workspace-clean.webp)
 
 ## Build
 

@@ -57,6 +57,7 @@ struct ScenePointerEvent
     // Orthographic: full vertical extent in world units, tanHalfFovY == 0.
     float tanHalfFovY = 0.0f;
     float orthoHeight = 0.0f;
+    bool IsEditor2D = false;
 };
 
 struct SceneKeyEvent

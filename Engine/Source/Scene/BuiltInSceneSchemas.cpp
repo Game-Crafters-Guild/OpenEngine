@@ -8304,6 +8304,7 @@ class SplineComponentSchema final : public ISceneComponentSchema
         if (!c)
             return;
         outLines.push_back(std::string("Spline.defaultRadius = ") + FormatFloat(c->DefaultRadius));
+        outLines.push_back(std::string("Spline.showWidthEnvelope = ") + (c->ShowWidthEnvelope ? "true" : "false"));
 
         auto* svc = SplineECS::SplineService::TryGet();
         if (!svc)
@@ -8368,6 +8369,11 @@ class SplineComponentSchema final : public ISceneComponentSchema
         if (property == "defaultradius")
         {
             if (!ParseF32(value, c.DefaultRadius, outError))
+                return false;
+        }
+        else if (property == "showwidthenvelope")
+        {
+            if (!ParseBool(value, c.ShowWidthEnvelope, outError))
                 return false;
         }
         else if (property == "type")

@@ -1,0 +1,9 @@
+{
+  "name": "smartshape2d",
+  "version": "1.0.0",
+  "displayName": "Smart Shape 2D",
+  "modules": [
+    { "name": "smartshape2d-runtime", "kind": "Runtime", "lang": "Cpp", "root": "Native/", "prebuilt": "Binaries/Runtime/" },
+    { "name": "smartshape2d-editor", "kind": "Editor", "lang": "Cpp", "root": "Editor/", "prebuilt": "Binaries/Editor/" }
+  ]
+}

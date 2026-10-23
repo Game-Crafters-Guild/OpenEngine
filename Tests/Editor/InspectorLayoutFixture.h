@@ -72,7 +72,7 @@ struct InspectorLayoutFixture
         Ui = std::make_unique<GameEngine::UIManager>(Device.get());
         Ui->SetLayoutSizeOverride(ViewportW, ViewportH);
 
-        std::vector<std::string> sheets{"Assets/UI/theme/tokens.css", "Assets/UI/theme/inspector.css"};
+        std::vector<std::string> sheets{"Assets/UI/theme/tokens.css", "Assets/UI/theme/core.css", "Assets/UI/theme/inspector.css"};
         sheets.insert(sheets.end(), ExtraSheets.begin(), ExtraSheets.end());
         for (const std::string& sheetPath : sheets)
         {
@@ -92,7 +92,12 @@ struct InspectorLayoutFixture
             Ui->AddStylesheet(std::make_shared<const GameEngine::Stylesheet>(std::move(sheet)));
         }
 
-        Ui->SetRoot(std::move(root));
+        // Editor controls inherit their font from the dock root. A bare fixture root
+        // otherwise uses the engine's initial font, changing intrinsic sizes and wrapping.
+        auto dockRoot = std::make_unique<GameEngine::UIElement>();
+        dockRoot->AddClass("dock-root");
+        dockRoot->AddChild(std::move(root));
+        Ui->SetRoot(std::move(dockRoot));
         // Update owns style resolution and the Yoga solve; nothing here reads a primitive, so the
         // frame is never rendered and no shader path has to resolve.
         for (int i = 0; i < kSettleFrames; ++i)

@@ -88,6 +88,17 @@ inline bool DecodeSplineConfig(const UndoRedoService::SnapshotTarget::Snapshot& 
     return true;
 }
 
+// Entity identity survives creation redo and scene snapshots; spline pool handles do not.
+inline SplineECS::SplineHandle ResolveSplineUndoHandle(ECS::World* world, ECS::EntityHandle entity,
+                                                      SplineECS::SplineHandle fallback)
+{
+    if (!world)
+        return fallback;
+    const auto* component = world->GetComponent<Components::SplineComponent>(entity);
+    return component ? SplineECS::SplineHandle{component->SplineDataIndex, component->SplineDataGeneration}
+                     : SplineECS::SplineHandle{};
+}
+
 inline UndoRedoService::SnapshotTarget MakeSplineEditableSnapshotTarget(
     SplineECS::SplineService* splineService,
     SplineECS::SplineHandle splineHandle,
@@ -99,25 +110,45 @@ inline UndoRedoService::SnapshotTarget MakeSplineEditableSnapshotTarget(
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
 
-    target.Capture = [splineService, splineHandle](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Capture = [splineService, splineHandle, world, entity](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
-        auto* d = splineService ? splineService->GetSplineData(splineHandle) : nullptr;
-        if (!d)
+        const auto currentHandle = ResolveSplineUndoHandle(world, entity, splineHandle);
+        auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+        if (!data)
             return false;
-        return EncodeSplineConfig(d, out);
+        if (!EncodeSplineConfig(data, out))
+            return false;
+        const auto* component = world ? world->GetComponent<Components::SplineComponent>(entity) : nullptr;
+        const float radius = component ? component->DefaultRadius : 5.0f;
+        const size_t offset = out.size();
+        out.resize(offset + sizeof(radius) + 1);
+        std::memcpy(out.data() + offset, &radius, sizeof(radius));
+        out.back() = component && component->ShowWidthEnvelope ? 1 : 0;
+        return true;
     };
 
-    target.Apply = [splineService, splineHandle](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
+    target.Apply = [splineService, splineHandle, world, entity](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
     {
+        constexpr size_t kSettingsBytes = sizeof(float) + 1;
+        if (snap.size() < kSettingsBytes)
+            return false;
+        UndoRedoService::SnapshotTarget::Snapshot points(snap.begin(), snap.end() - kSettingsBytes);
         GameEngine::Spline::SplineData restored{};
-        if (!DecodeSplineConfig(snap, restored))
+        if (!DecodeSplineConfig(points, restored))
             return false;
-        auto* d = splineService ? splineService->GetSplineData(splineHandle) : nullptr;
-        if (!d)
+        const auto currentHandle = ResolveSplineUndoHandle(world, entity, splineHandle);
+        auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+        if (!data)
             return false;
-        *d = std::move(restored);
-        d->MarkDirty();
-        splineService->RebuildCache(splineHandle);
+        *data = std::move(restored);
+        data->MarkDirty();
+        splineService->RebuildCache(currentHandle);
+        if (world)
+        {
+            auto* component = world->GetComponentForWrite<Components::SplineComponent>(entity);
+            std::memcpy(&component->DefaultRadius, snap.data() + snap.size() - kSettingsBytes, sizeof(float));
+            component->ShowWidthEnvelope = snap.back() != 0;
+        }
         return true;
     };
 

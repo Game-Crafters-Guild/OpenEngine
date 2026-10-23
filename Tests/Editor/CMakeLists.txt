@@ -5,6 +5,8 @@
 # the new UI module via AssetRuntime's ParserRegistry (UILayoutAsset/UIStyleAsset
 # registration).
 set(EDITOR_TEST_SOURCES
+	${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Tests/ShapeEditorUndoTests.cpp
+	${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor/CreateSmartShapeCommand.cpp
 	CssInspectorIdleTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/CssInspector/CssInspector.cpp
 	SceneViewTransformToolTests.cpp
@@ -24,6 +26,8 @@ set(EDITOR_TEST_SOURCES
 	DebugServerRequestGatesTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/EditorDebugServer.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/AssistantSessionHandlers.cpp
+	PickRootResolverTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Picking/PickRootResolver.cpp
 	SceneViewToolStripTests.cpp
 	# The tool strip's badge count, laid out over the real editor stylesheets: inside its strip at
 	# every count it can show, in both floating orientations and in the toolbar.
@@ -1046,6 +1050,10 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
 )
 # Always create EditorTests when BUILD_TESTING is enabled; no UISystem/UI gating.
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Tests/ShapeEditorUndoTests.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor/CreateSmartShapeCommand.cpp
+    PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Native;${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor")
 add_executable(EditorTests ${EDITOR_TEST_SOURCES})
 
 # Find Google Test
@@ -2035,6 +2043,13 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/Graph/graph-ported-node.uxml"
 	    "Assets/UI/Graph/graph-ported-node.uxml")
+
+	# Layout measurements must use the shipped faces, not platform fallback metrics.
+	foreach(_face IN ITEMS Roboto-Regular.ttf Roboto-Medium.ttf Roboto-Bold.ttf)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/${_face}"
+	        "Assets/Fonts/${_face}")
+	endforeach()
 
 	# InspectorNotice builds its plate, text and action from its layout, read
 	# from the same install-assets root.

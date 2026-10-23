@@ -871,7 +871,7 @@ static std::vector<ECS::ComponentTypeId> CollectVisibleComponentSignature(ECS::W
 
 static int SortKeyForComponent(ECS::ComponentTypeId typeId)
 {
-    // Stable, human-friendly ordering: core -> rendering -> everything else.
+    // Stable ordering: core, rendering, authoring components, then physics.
     static const ECS::ComponentTypeId transformId = ECS::GetComponentTypeId<Transform>();
     static const ECS::ComponentTypeId nameId = ECS::GetComponentTypeId<Name>();
     static const ECS::ComponentTypeId parentId = ECS::GetComponentTypeId<Parent>();
@@ -910,8 +910,7 @@ static int SortKeyForComponent(ECS::ComponentTypeId typeId)
 
     // Mesh/skinned renderer sit directly under Transform for primitive and
     // model entities. Terrain (mutually exclusive with MeshRenderer on the
-    // same entity) shares the same slot, with physics body/collider family
-    // immediately below.
+    // same entity) shares the same slot. Physics sections follow all authoring sections.
     if (typeId == meshRendererId)
         return 30;
     if (typeId == meshMaterialInspectorSectionId)
@@ -932,19 +931,19 @@ static int SortKeyForComponent(ECS::ComponentTypeId typeId)
         return 39;
 
     if (typeId == physicsBodyId)
-        return 40;
+        return 2000;
     if (typeId == physicsColliderId)
-        return 41;
+        return 2001;
     if (typeId == physicsColliderOwnerId)
-        return 42;
+        return 2002;
     if (typeId == boxColliderId)
-        return 43;
+        return 2003;
     if (typeId == sphereColliderId)
-        return 44;
+        return 2004;
     if (typeId == planeColliderId)
-        return 45;
+        return 2005;
     if (typeId == capsuleColliderId)
-        return 46;
+        return 2006;
 
     // A modifier volume sits above the effects that stack inside it, so the
     // section order the user drags is already the stack order. Effects take

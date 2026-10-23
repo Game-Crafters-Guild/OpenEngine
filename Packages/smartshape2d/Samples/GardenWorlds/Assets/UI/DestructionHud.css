@@ -1,0 +1,22 @@
+.destruction-hud {
+    position: absolute;
+    left: 24px;
+    top: 24px;
+    padding: 16px 20px;
+    background-color: rgba(18, 34, 31, 0.88);
+    border-radius: 12px;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.destruction-title {
+    color: #ffe39b;
+    font-size: 24px;
+    pointer-events: none;
+}
+.destruction-instructions {
+    color: #ffffff;
+    font-size: 16px;
+    pointer-events: none;
+}

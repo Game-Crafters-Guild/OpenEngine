@@ -3579,6 +3579,9 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         pluginCtx.Undo = m_Undo;
         pluginCtx.SelectEntity = [this](ECS::EntityHandle entity)
         {
+            // Selection belongs to the plugin command, including when it is replayed.
+            // Recording it separately would discard the remaining redo commands.
+            ScopedFlag suppress(m_SuppressSelectionUndo);
             if (m_OnSelectEntity)
                 m_OnSelectEntity(entity);
         };

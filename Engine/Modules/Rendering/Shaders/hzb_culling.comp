@@ -115,14 +115,13 @@ bool HzbTest(vec3 worldCenter, float radius) {
     float proj00 = cullingData.projMatrix[0][0];
     float proj11 = cullingData.projMatrix[1][1];
 
-    // Center NDC (proj only; viewCenter is already view space, clip.w == viewZ).
+    // Homogeneous projection: clip.w is viewZ for perspective and 1 for orthographic.
     vec4 clip = cullingData.projMatrix * vec4(viewCenter, 1.0);
     vec2 ndcCenter = clip.xy / clip.w;
 
-    // Projected NDC half-extents — the ge_SelectLOD coverage idiom
-    // (r * projScale / z), a conservative tangent approximation of the sphere.
-    float ndcRx = radius * proj00 / viewZ;
-    float ndcRy = radius * proj11 / viewZ;
+    // Orthographic bounds do not shrink with distance from the camera.
+    float ndcRx = radius * abs(proj00) / clip.w;
+    float ndcRy = radius * abs(proj11) / clip.w;
 
     vec2 ndcMin = clamp(ndcCenter - vec2(ndcRx, ndcRy), vec2(-1.0), vec2(1.0));
     vec2 ndcMax = clamp(ndcCenter + vec2(ndcRx, ndcRy), vec2(-1.0), vec2(1.0));
@@ -150,8 +149,8 @@ bool HzbTest(vec3 worldCenter, float radius) {
     hzbMin = min(hzbMin, textureLod(uHZB, vec2(uvMaxX, uvMaxY), lod).r);
 
     // Sphere's nearest point (smallest viewZ -> LARGEST reverse-Z NDC depth).
-    float nearestNdcZ = cullingData.projMatrix[2][2]
-                      + cullingData.projMatrix[3][2] / (viewZ - radius);
+    vec4 nearestClip = cullingData.projMatrix * vec4(viewCenter.xy, viewZ - radius, 1.0);
+    float nearestNdcZ = nearestClip.z / nearestClip.w;
 
     // Possibly visible iff the sphere can be in front of the farthest occluder.
     return nearestNdcZ >= hzbMin;

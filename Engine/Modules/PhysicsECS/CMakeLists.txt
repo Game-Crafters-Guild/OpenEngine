@@ -8,6 +8,7 @@ add_library(PhysicsECS OBJECT
     Source/PhysicsEntityEventCallbacks.cpp
     Source/PhysicsScriptApi.cpp
     Source/PhysicsWorldService.cpp
+    Source/MeshColliderData.cpp
     Source/HeightFieldDataProvider.cpp
     Source/HeightFieldCollisionReadiness.cpp
     Source/PhysicsWorldSettingsHelpers.cpp
@@ -33,6 +34,7 @@ target_include_directories(PhysicsECS
 target_link_libraries(PhysicsECS
     PUBLIC
         Physics
+        GenerationalVector
         ECS
         ECSComponents
         Types

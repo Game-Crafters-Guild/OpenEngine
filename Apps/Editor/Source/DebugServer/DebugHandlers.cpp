@@ -733,6 +733,7 @@ static ComponentApplyResult ApplyComponentFields(ECS::World* world, ECS::EntityH
         sc.SplineDataIndex = handle.Index();
         sc.SplineDataGeneration = handle.Generation();
         sc.DefaultRadius = defaultRadius;
+        sc.ShowWidthEnvelope = fields.Value("ShowWidthEnvelope", existing ? existing->ShowWidthEnvelope : true);
 
         if (!existing)
             world->AddComponentImmediate(entity, sc);
@@ -2309,7 +2310,8 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
         components["SplineComponent"] = {
             {"SplineDataIndex", c->SplineDataIndex},
             {"SplineDataGeneration", c->SplineDataGeneration},
-            {"DefaultRadius", c->DefaultRadius}};
+            {"DefaultRadius", c->DefaultRadius},
+            {"ShowWidthEnvelope", c->ShowWidthEnvelope}};
         serialized.insert(ECS::GetComponentTypeId<Components::SplineComponent>());
     }
 
