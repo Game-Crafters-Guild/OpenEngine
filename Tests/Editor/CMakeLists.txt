@@ -5,6 +5,8 @@
 # the new UI module via AssetRuntime's ParserRegistry (UILayoutAsset/UIStyleAsset
 # registration).
 set(EDITOR_TEST_SOURCES
+	${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Tests/ShapeEditorUndoTests.cpp
+	${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor/CreateSmartShapeCommand.cpp
 	CssInspectorIdleTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/CssInspector/CssInspector.cpp
 	SceneViewTransformToolTests.cpp
@@ -1048,6 +1050,10 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
 )
 # Always create EditorTests when BUILD_TESTING is enabled; no UISystem/UI gating.
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Tests/ShapeEditorUndoTests.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor/CreateSmartShapeCommand.cpp
+    PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Native;${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor")
 add_executable(EditorTests ${EDITOR_TEST_SOURCES})
 
 # Find Google Test

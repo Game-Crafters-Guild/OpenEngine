@@ -18,6 +18,7 @@
 #include "SceneView/SplineOwnerQuery.h"
 #include "SceneView/SplineSceneGizmo.h"
 #include "SceneView/SplineTool.h"
+#include "SceneView/TransformTool.h"
 #include "SceneView/SplineToolStripEntry.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Spline/SplineData.h"
@@ -1005,4 +1006,55 @@ TEST_F(SplineToolTests, PerSplineWidthEnvelopeCanBeHiddenWithoutHidingControlPoi
     GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
     settings.SetShowWidthEnvelope(previousEnvelope);
     settings.SetDrapeToSurface(previousDrape);
+}
+
+TEST_F(SplineToolTests, TransformingControlsOnTwoSplinesIsOneUndoStep)
+{
+    auto* world = GetWorld();
+    const auto first = MakeSplineEntity(world, 3);
+    const auto second = MakeSplineEntity(world, 3);
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    const auto firstReference = *world->GetComponent<SplineComponent>(first.SplineEntity);
+    const auto secondReference = *world->GetComponent<SplineComponent>(second.SplineEntity);
+    const GameEngine::SplineECS::SplineHandle firstHandle{firstReference.SplineDataIndex, firstReference.SplineDataGeneration};
+    const GameEngine::SplineECS::SplineHandle secondHandle{secondReference.SplineDataIndex, secondReference.SplineDataGeneration};
+    const auto before = service->GetSplineData(firstHandle)->Points[0].Position;
+    auto& selection = State->Selection();
+    selection.Entity = first.SplineEntity;
+    selection.PointIndex = 0;
+    selection.Kind = 1;
+    selection.Controls = {{first.SplineEntity, 0, 1}, {second.SplineEntity, 0, 1}};
+    GameEngine::Editor::UndoRedoService undo;
+    GameEngine::Editor::SceneTools::TransformTool transform(*world);
+    SplineTool spline(*world);
+    spline.SetUndoRedoService(&undo);
+    spline.SetTransformTool(&transform);
+    GameEngine::Editor::SceneTools::GizmoCollector collector;
+    spline.GatherGizmos(collector);
+    GameEngine::Editor::SceneTools::TransformTranslateGizmo* gizmo = nullptr;
+    for (auto* candidate : collector.GetGizmos())
+        if (auto* translation = dynamic_cast<GameEngine::Editor::SceneTools::TransformTranslateGizmo*>(candidate))
+            gizmo = translation;
+    ASSERT_NE(gizmo, nullptr);
+    GameEngine::Editor::SceneTools::GizmoHit hit{};
+    hit.kind = GameEngine::Editor::SceneTools::GizmoHitKind::Axis;
+    hit.handleId = 0;
+    auto down = MakePointer(PointerPhase::Down, 400, 300, before + Vector3{0, 0, 5}, {0, 0, -1});
+    ASSERT_TRUE(gizmo->HandlePointerEvent(down, hit));
+    auto move = down;
+    move.phase = PointerPhase::Move;
+    move.ray.origin.x += 2;
+    ASSERT_TRUE(gizmo->HandlePointerEvent(move, hit));
+    auto up = move;
+    up.phase = PointerPhase::Up;
+    ASSERT_TRUE(gizmo->HandlePointerEvent(up, hit));
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
+    undo.Undo();
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x);
+    undo.Redo();
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
 }

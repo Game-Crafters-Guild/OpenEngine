@@ -235,7 +235,13 @@ The collider uses the normal PhysicsECS lifecycle. Physics bodies are created du
 
 The scene stores the spline, shape settings, and authored edge-override, texture-entry, and anchor children. Generated mesh children and triangle collision data are runtime output and are not saved. The parent uses ordinary physics components for its collision settings. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
 
-Creation and reflected property edits use the editor's undo system. Use the parent shape's inspector to edit generated output. Changes made directly to a generated child are replaced on regeneration.
+### Undo and redo editor operations
+
+Use the editor's **Undo** and **Redo** commands for Smart Shape authoring. A completed spline-point or tangent drag is one step, including a transform of controls selected across multiple splines. Point insertion/deletion, inspector settings and material assignments, creation of shapes and their authored children, and whole-shape transforms use the same editor history.
+
+You can undo a point edit, undo creation of its shape, then redo both operations. Redo restores the edit on the recreated shape. Select the Smart Shape parent and use Translate outside Spline mode to move the whole shape; Undo restores its previous transform.
+
+Use the parent shape's inspector to edit generated output. Changes made directly to a generated mesh child are replaced on regeneration. The **Z/Y** controls in the destruction demo below apply only during Play and are separate from editor authoring history.
 
 The native package does not import external project or resource formats. Recreate the source outline and assign native materials.
 
