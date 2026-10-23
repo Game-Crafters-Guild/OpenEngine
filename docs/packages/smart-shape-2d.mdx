@@ -1,0 +1,74 @@
+---
+title: Smart Shape 2D
+description: Build textured planar terrain and paths from editable splines.
+---
+
+The `smartshape2d` package generates a textured fill, directional edges, and static collision from a spline. The shape lies in its entity's local XY plane. Move, rotate, or scale the entity to place it in the scene.
+
+## Create a shape
+
+1. Open the Hierarchy context menu.
+2. Choose **Create > 2D > Smart Shape** for a closed outline, or **Smart Path** for an open outline.
+3. Switch the Scene View to 2D.
+4. Select the shape and use the Spline tool to move points, insert or remove points, or edit Bézier handles. The Spline inspector controls the interpolation type and whether the curve is closed.
+5. Assign materials in the **Smart Shape 2D** inspector. Fill, top, right, bottom, and left surfaces can use different materials.
+
+Smart Shapes start with the spline width envelope hidden. To display it, enable **Show Width Envelope** in the Spline inspector and in the spline tool menu. This preference is saved with the scene.
+
+The package uses the normal material editor. Assign an albedo texture to a material and use a repeating texture sampler for tiled edges. A missing material uses the engine's default material so the shape remains visible.
+
+All spline points and tangent handles must have local Z equal to zero. A point's radius multiplies **Edge Width**. The creation commands set point radii to one. A closed curve with only two points behaves as an open path until a third point is added.
+
+## Fill and edge settings
+
+| Setting | Effect |
+| --- | --- |
+| Fill Enabled | Draw the interior of a closed outline. Open paths never have a fill. |
+| Fill Scale | World units per texture repetition on X and Y. Both values must be positive. |
+| Fill Offset | Offset the fill texture in UV coordinates. |
+| Fill Rotation | Rotate the fill texture in degrees. |
+| Edges Enabled | Draw the border ribbon. |
+| Edge Width | Border thickness, multiplied by point radius. |
+| Edge Offset | Offset the ribbon across its normal in multiples of its width. Zero centers it on the outline. |
+| Tile Length | World units per edge texture repetition. |
+| Stretch To Fit | Fit a whole number of repetitions around the outline. When off, retain the requested tile length and crop the last repeat. |
+| Flip Edges | Reverse the texture across the ribbon. |
+| Edge Depth | Local Z of the border. A small negative value places it in front of the fill when viewed from negative Z. |
+| Miter Limit | Limit the length of sharp corner joins in multiples of edge width. |
+| Curve Subdivisions | Samples per curved segment, from 1 to 64. Straight segments need no subdivision. |
+
+Optional inner-corner, outer-corner, start-cap, and end-cap materials add corner and endpoint sprites. Caps apply to open paths. The sprite's full UV square maps to its generated quad.
+
+## Override an edge
+
+Select the shape, then choose **Create > 2D > Shape Edge Override** from its Hierarchy context menu. Keep the override entity parented to the shape.
+
+Set **Point Index** to the zero-based index of the point that starts the segment. The override can select a material, multiply the width at that point, flip the ribbon texture, or hide the segment. Use at most one point override for each point. Point indices address the current spline order, so check overrides after inserting or removing points.
+
+Turn on **Use Normal Range** to select edges by their outward direction instead. **Normal Start** is measured counterclockwise from local +X. +Y is 90 degrees. **Normal Sweep** is the signed angular span. Zero or a full turn selects every direction. Negative spans run clockwise, and ranges can cross zero degrees.
+
+Rules with higher **Priority** are tested first. A point override takes precedence over a normal rule. Width Scale belongs to a point override. A normal rule changes the material, visibility, and texture flip.
+
+## Collision
+
+**Collision Enabled** generates a static triangle collider. **Collision Depth** extrudes the closed fill or open ribbon along local Z. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
+
+The collider uses the normal PhysicsECS lifecycle. Physics bodies are created during simulation and released when the generated entity is removed. These triangle colliders are static terrain. Use the engine's convex collider types for dynamic objects.
+
+## Saving and runtime
+
+The scene stores the spline, shape settings, and authored edge-override children. Generated mesh and collider children are runtime output and are not saved. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
+
+Creation and reflected property edits use the editor's undo system. Use the parent shape's inspector to edit generated output. Changes made directly to a generated child are replaced on regeneration.
+
+The native package does not import external project or resource formats. Recreate the source outline and assign native materials.
+
+## Invalid outlines
+
+A self-crossing outline, non-finite value, nonpositive width or texture scale, or out-of-plane point produces no geometry. The Console reports the entity and the correction. Fix the authored data to regenerate it.
+
+An outline can contain up to 4096 sampled points. Lower Curve Subdivisions or split the shape when that limit is exceeded. This bounds the polygon validation and triangulation work.
+
+## Changelog
+
+- Added the native Smart Shape 2D package, spline authoring, material rules, generated collision, and runtime regeneration.

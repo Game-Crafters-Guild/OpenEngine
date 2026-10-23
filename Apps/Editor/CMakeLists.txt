@@ -1630,6 +1630,23 @@ ge_add_engine_package_module(GePkgModule_EztreeEditor
 	# The editor half extends its runtime half: same peer-header rule the
 	# editor's package-module wiring applies to the source build.
 	EXTRA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/Packages/eztree/Native)
+ge_add_engine_package_module(GePkgModule_Smartshape2d
+    PACKAGE smartshape2d
+    MODULE_NAME Smartshape2d
+    SOURCE_ROOT ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Native
+    KIND runtime
+    PREBUILT_SUBDIR Binaries/Runtime)
+ge_add_engine_package_module(GePkgModule_Smartshape2dEditor
+    PACKAGE smartshape2d
+    MODULE_NAME Smartshape2d.Editor
+    SOURCE_ROOT ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Editor
+    KIND editor
+    PREBUILT_SUBDIR Binaries/Editor
+    EXTRA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Native)
+if(BUILD_TESTING)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/Packages/smartshape2d/Tests
+                     ${CMAKE_BINARY_DIR}/Packages/smartshape2d/Tests)
+endif()
 ge_add_engine_package_module(GePkgModule_AiAssistantEditor
 	PACKAGE ai-assistant
 	MODULE_NAME AiAssistant.Editor
