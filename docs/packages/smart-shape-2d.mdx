@@ -278,7 +278,7 @@ Keep **Stretch To Fit** off on these examples so short edges show a cropped tile
 
 ![A circular crater cut into the meadow](img/destruction-crater.png)
 
-4. Press **R** to restore the terrain. Stop and restart Play to reset the seeds. Stop restores the authored scene.
+4. Press **Z** to undo the last explosion and **Y** to redo it. Press **R** to restore all terrain; this reset can also be undone. Stop and restart Play to reset the seeds. Stop restores the authored scene.
 
 ![Restored bridge and meadow after pressing R](img/destruction-reset.png)
 
@@ -292,3 +292,9 @@ Native gameplay code can include `SmartShape2D/ShapeExplosion.h` and call
 The center and radius are in world units; the blast is a disk in the world XY plane, projected into each opted-in shape's local XY plane.
 `ResetShapeDestruction(world)` removes the blast footprints. Meshes and collision rebuild on the next Smart Shape update.
 The authored spline and material assignments stay intact. Blast footprints are runtime state and are not saved into the scene.
+
+![Undo restores the bridge while the seed stays at its simulated position](img/destruction-undo.png)
+
+The demo retains up to 128 terrain undo steps during Play. A new blast after Undo replaces the redo history. Undo restores terrain geometry and collision; it does not rewind falling seeds or other physics objects. Stop or scene replacement clears the history.
+
+Native gameplay code can own a `SmartShape2D::ShapeDestructionHistory` and call `Explode`, `Reset`, `Undo`, and `Redo` with exclusive world access. Use the history for every damage operation in that session. Direct damage changes invalidate its prior history.
