@@ -241,7 +241,7 @@ Use the editor's **Undo** and **Redo** commands for Smart Shape authoring. A com
 
 You can undo a point edit, undo creation of its shape, then redo both operations. Redo restores the edit on the recreated shape. Select the Smart Shape parent and use Translate outside Spline mode to move the whole shape; Undo restores its previous transform.
 
-Use the parent shape's inspector to edit generated output. Changes made directly to a generated mesh child are replaced on regeneration. The **Z/Y** controls in the destruction demo below apply only during Play and are separate from editor authoring history.
+Use the parent shape's inspector to edit generated output. Changes made directly to a generated mesh child are replaced on regeneration.
 
 The native package does not import external project or resource formats. Recreate the source outline and assign native materials.
 
@@ -284,7 +284,7 @@ Keep **Stretch To Fit** off on these examples so short edges show a cropped tile
 
 ![A circular crater cut into the meadow](img/destruction-crater.png)
 
-4. Press **Z** to undo the last explosion and **Y** to redo it. Press **R** to restore all terrain; this reset can also be undone. Stop and restart Play to reset the seeds. Stop restores the authored scene.
+4. Press **R** to restore all terrain. Stop and restart Play to reset the seeds. Stop restores the authored scene.
 
 ![Restored bridge and meadow after pressing R](img/destruction-reset.png)
 
@@ -299,8 +299,4 @@ The center and radius are in world units; the blast is a disk in the world XY pl
 `ResetShapeDestruction(world)` removes the blast footprints. Meshes and collision rebuild on the next Smart Shape update.
 The authored spline and material assignments stay intact. Blast footprints are runtime state and are not saved into the scene.
 
-![Undo restores the bridge while the seed stays at its simulated position](img/destruction-undo.png)
-
-The demo retains up to 128 terrain undo steps during Play. A new blast after Undo replaces the redo history. Undo restores terrain geometry and collision; it does not rewind falling seeds or other physics objects. Stop or scene replacement clears the history.
-
-Native gameplay code can own a `SmartShape2D::ShapeDestructionHistory` and call `Explode`, `Reset`, `Undo`, and `Redo` with exclusive world access. Use the history for every damage operation in that session. Direct damage changes invalidate its prior history.
+For games that implement their own runtime history, native gameplay code can own a `SmartShape2D::ShapeDestructionHistory` and call `Explode`, `Reset`, `Undo`, and `Redo` with exclusive world access. Use the history for every damage operation in that session. Direct damage changes invalidate its prior history.

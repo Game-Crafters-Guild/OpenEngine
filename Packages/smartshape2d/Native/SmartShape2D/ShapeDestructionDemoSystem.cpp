@@ -99,11 +99,7 @@ void ShapeDestructionDemoSystem::Update(ECS::World& world, float32 deltaTime)
     if (!input || !root)
         return;
     if (input->WasKeyPressed(Input::kKeyCode_R))
-        m_History.Reset(world);
-    if (input->WasKeyPressed(Input::kKeyCode_Z))
-        m_History.Undo(world);
-    if (input->WasKeyPressed(Input::kKeyCode_Y))
-        m_History.Redo(world);
+        ResetShapeDestruction(world);
     if (!input->WasMouseButtonPressed(Input::kMouseButton_Left))
         return;
     const float width = root->GetLayoutWidth();
@@ -131,7 +127,7 @@ void ShapeDestructionDemoSystem::Update(ECS::World& world, float32 deltaTime)
     auto position = cameraMatrix.TransformPoint({(pointer.x / width - 0.5f) * camera.OrthographicSize * width / height,
                                                (0.5f - pointer.y / height) * camera.OrthographicSize, 0.0f});
     position.z = 0.0f;
-    if (m_History.Explode(world, position, demo.Radius) > 0)
+    if (ExplodeShapes(world, position, demo.Radius) > 0)
         ShowExplosion(world, position, demo);
 }
 }
