@@ -3,6 +3,7 @@
 #include "SmartShape2D/ShapeGeometry.h"
 #include "SmartShape2D/ShapeAnchor.h"
 #include "SmartShape2D/ShapeCollision.h"
+#include "SmartShape2D/ShapeCollisionOwner.h"
 #include "PhysicsECS/MeshColliderData.h"
 #include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -59,7 +60,7 @@ void ShapeRuntime::Release(ECS::World* world, ShapeState& state)
         child = {};
     }
     if (world && world->IsValid(state.CollisionEntity))
-        world->DestroyEntityImmediate(state.CollisionEntity);
+        RemoveShapeCollision(*world, state.CollisionEntity);
     state.CollisionEntity = {};
     PhysicsECS::MeshColliderData::Release(state.CollisionData);
     state.CollisionData = {};
@@ -156,11 +157,6 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
         resources.Part = static_cast<uint32>(i);
         world.AddComponentImmediate(child, resources);
     }
-    if (world.IsValid(state.CollisionEntity))
-        world.DestroyEntityImmediate(state.CollisionEntity);
-    state.CollisionEntity = {};
-    PhysicsECS::MeshColliderData::Release(state.CollisionData);
-    state.CollisionData = {};
     if (settings.CollisionEnabled)
     {
         auto collisionSettings = settings;
@@ -168,31 +164,25 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
         collisionSettings.EdgesEnabled = true;
         auto collisionGeometry = BuildShape(source, collisionSettings, state.Overrides, state.Textures, state.WorldMatrix);
         auto collisionMesh = BuildCollision(collisionGeometry, source.IsEffectivelyClosed(), settings);
-        state.CollisionData = PhysicsECS::MeshColliderData::Register(std::move(collisionMesh));
-        if (state.CollisionData.IsValid())
+        const auto data = PhysicsECS::MeshColliderData::Register(std::move(collisionMesh));
+        if (SetShapeCollision(world, owner, data))
         {
-            state.CollisionEntity = world.CreateEntity();
-            Components::PhysicsBody body{};
-            body.motionType = Physics::MotionType::Static;
-            Components::PhysicsCollider collider{};
-            collider.layer = Physics::Layers::Static;
-            Components::MeshColliderShape shape{};
-            shape.DataIndex = state.CollisionData.Index();
-            shape.DataGeneration = state.CollisionData.Generation();
-            world.AddComponentImmediate(state.CollisionEntity, Components::Transform{});
-            world.AddComponentImmediate(state.CollisionEntity, Components::Parent{owner});
-            world.AddComponentImmediate(state.CollisionEntity, Components::RuntimeOnlyEntity{});
-            world.AddComponentImmediate(state.CollisionEntity, collider);
-            world.AddComponentImmediate(state.CollisionEntity, shape);
-            world.AddComponentImmediate(state.CollisionEntity, body);
-            Components::GeneratedShapeResources resources{};
-            resources.Owner = owner;
-            resources.CollisionData = state.CollisionData;
-            world.AddComponentImmediate(state.CollisionEntity, resources);
-            Components::Name name{};
-            std::strncpy(name.value, "Shape collision", sizeof(name.value) - 1);
-            world.AddComponentImmediate(state.CollisionEntity, name);
+            state.CollisionEntity = owner;
+            state.CollisionData = data;
         }
+        else
+        {
+            PhysicsECS::MeshColliderData::Release(data);
+            RemoveShapeCollision(world, owner);
+            state.CollisionEntity = {};
+            state.CollisionData = {};
+        }
+    }
+    else
+    {
+        RemoveShapeCollision(world, owner);
+        state.CollisionEntity = {};
+        state.CollisionData = {};
     }
     state.Built = true;
 }
@@ -290,7 +280,8 @@ void ShapeRuntime::Update(ECS::World& world)
         if (const auto* transform = world.GetComponent<Components::WorldTransform>(entity))
             matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
         const bool transformChanged = !std::equal(matrix.Data(), matrix.Data() + 16, state.WorldMatrix.Data());
-        const bool missing = (state.CollisionEntity.IsValid() && !world.IsValid(state.CollisionEntity)) || std::any_of(state.Children.begin(), state.Children.end(), [&world](ECS::EntityHandle child)
+        const bool missing = (state.CollisionEntity.IsValid() && (!world.IsValid(state.CollisionEntity) ||
+                              !world.HasComponent<Components::MeshColliderShape>(state.CollisionEntity))) || std::any_of(state.Children.begin(), state.Children.end(), [&world](ECS::EntityHandle child)
                                         { return child.IsValid() && !world.IsValid(child); });
         if (!state.Built || deviceChanged || missing || transformChanged || state.Textures != m_TextureSet || state.Overrides != m_Overrides || state.Settings != settings || state.SplineVersion != spline->Version ||
             state.SplineIndex != reference.SplineDataIndex || state.SplineGeneration != reference.SplineDataGeneration)

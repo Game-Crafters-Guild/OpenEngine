@@ -13,6 +13,8 @@ add_executable(SmartShape2DTests
     ../Native/clipper2/clipper.engine.cpp
     ../Native/clipper2/clipper.offset.cpp
     ../Native/clipper2/clipper.rectclip.cpp
+    ShapeCollisionOwnerTests.cpp
+    ../Native/SmartShape2D/ShapeCollisionOwner.cpp
     ShapeCollisionTests.cpp
     ../Native/SmartShape2D/ShapeCollision.cpp
     ../Native/SmartShape2D/ShapeGeometry.cpp)

@@ -6,12 +6,14 @@
 
 namespace GameEngine::Components
 {
-/// Resource ownership on generated children, never authored or serialized.
+/// Resource ownership on generated meshes and the shape collider, never serialized.
 struct GeneratedShapeResources
 {
     ECS::EntityHandle Owner;
     GUID MeshKey;
     uint32 Part = 0xFFFFFFFFu;
     GenerationalVector::Handle CollisionData;
+    bool AddedPhysicsBody = false;
+    bool AddedPhysicsCollider = false;
 };
 }

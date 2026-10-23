@@ -68,7 +68,7 @@ Choose **Create > 2D > Shape Point Anchor** on a shape. The anchor follows **Poi
 
 ## Collision
 
-**Collision Enabled** generates a static triangle collider. **Collision Depth** extrudes it along local Z. **Collision Mode** selects **Filled**, **Rendered edges**, or **Hollow**. Filled and hollow modes use **Collision Offset** independently of the visual fill. Hollow and open shapes use **Collision Width**; open collision ends are flat. These offsets use mitered polygon buffering with intersection resolution. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
+**Collision Enabled** generates a static triangle collider on the Smart Shape entity itself. Existing physics body and collider settings are preserved when the shape rebuilds. Disabling collision removes the generated mesh and only the physics components added by the package. **Collision Depth** extrudes it along local Z. **Collision Mode** selects **Filled**, **Rendered edges**, or **Hollow**. Filled and hollow modes use **Collision Offset** independently of the visual fill. Hollow and open shapes use **Collision Width**; open collision ends are flat. These offsets use mitered polygon buffering with intersection resolution. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
 
 The collider uses the normal PhysicsECS lifecycle. Physics bodies are created during simulation and released when the generated entity is removed. These triangle colliders are static terrain. Use the engine's convex collider types for dynamic objects.
 
