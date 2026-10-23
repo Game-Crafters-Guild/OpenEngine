@@ -47,30 +47,21 @@ void ExtrudeMesh(const Mesh& source, float depth, Physics::MeshShapeDef& destina
 }
 }
 
-Physics::MeshShapeDef BuildCollision(const ShapeGeometry& geometry, bool closed, float depth)
-{
-    Physics::MeshShapeDef result;
-    if (!geometry.Error.empty() || !std::isfinite(depth) || depth <= 0.0f)
-        return result;
-    if (closed)
-        ExtrudeMesh(geometry.Parts[static_cast<size_t>(ShapePart::Fill)], depth, result);
-    else
-    {
-        for (size_t i = static_cast<size_t>(ShapePart::Top); i < geometry.Parts.size(); ++i)
-        {
-            if (i < geometry.Kinds.size() && geometry.Kinds[i] != ShapePart::Fill)
-                ExtrudeMesh(geometry.Parts[i], depth, result);
-        }
-    }
-    return result;
-}
 Physics::MeshShapeDef BuildCollision(const ShapeGeometry& geometry, bool closed, const Components::SmartShape& settings)
 {
     if (!geometry.Error.empty() || !std::isfinite(settings.CollisionWidth) || settings.CollisionWidth <= 0.0f ||
         !std::isfinite(settings.CollisionOffset) || !std::isfinite(settings.CollisionDepth) || settings.CollisionDepth <= 0.0f)
         return {};
     if (settings.CollisionMode == Components::ShapeCollisionMode::RenderedEdges)
-        return BuildCollision(geometry, false, settings.CollisionDepth);
+    {
+        Physics::MeshShapeDef result;
+        for (size_t part = static_cast<size_t>(ShapePart::Top); part < geometry.Parts.size(); ++part)
+        {
+            if (part < geometry.Kinds.size() && geometry.Kinds[part] != ShapePart::Fill)
+                ExtrudeMesh(geometry.Parts[part], settings.CollisionDepth, result);
+        }
+        return result;
+    }
     std::vector<Mathematics::Vector2> outline;
     std::vector<Mathematics::Vector2> hole;
     if (!closed)

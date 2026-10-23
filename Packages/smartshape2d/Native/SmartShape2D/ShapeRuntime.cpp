@@ -31,6 +31,25 @@
 
 namespace GameEngine::SmartShape2D
 {
+namespace
+{
+void UpdateShapeAnchor(ECS::World& world, SplineECS::SplineService& splines,
+    const Components::SmartShapeAnchor& anchor, const Components::Parent& parent, Components::Transform& transform)
+{
+    if (!world.IsValid(parent.parent) || !world.HasComponent<Components::SmartShape>(parent.parent))
+        return;
+    const auto* reference = world.GetComponent<Components::SplineComponent>(parent.parent);
+    const auto* parentTransform = world.GetComponent<Components::WorldTransform>(parent.parent);
+    if (!reference || !parentTransform)
+        return;
+    const auto* spline = splines.GetSplineData({reference->SplineDataIndex, reference->SplineDataGeneration});
+    if (!spline)
+        return;
+    const auto matrix = EvaluateAnchor(*spline, anchor, Mathematics::Matrix4x4::FromColumnMajor(parentTransform->matrix));
+    std::copy(matrix.Data(), matrix.Data() + 16, transform.matrix);
+}
+}
+
 ShapeRuntime& ShapeRuntime::Get()
 {
     static ShapeRuntime runtime;
@@ -190,24 +209,30 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
     state.Built = true;
 }
 
+void ShapeRuntime::AdoptGeneratedResource(WorldState& cache, ECS::EntityHandle entity,
+    const Components::GeneratedShapeResources& resources)
+{
+    auto& state = cache.Shapes.GetOrInsert(resources.Owner.id);
+    if (resources.Part != 0xFFFFFFFFu)
+    {
+        state.MeshKey = resources.MeshKey;
+        if (state.Children.size() <= resources.Part)
+            state.Children.resize(static_cast<size_t>(resources.Part) + 1);
+        state.Children[resources.Part] = entity;
+    }
+    else
+    {
+        state.CollisionEntity = entity;
+        state.CollisionData = resources.CollisionData;
+    }
+}
+
 void ShapeRuntime::AdoptGeneratedResources(ECS::World& world, WorldState& cache)
 {
     world.Query<ECS::Read<Components::GeneratedShapeResources>>().IncludeDisabled()
         .Each([&cache](ECS::EntityHandle entity, const Components::GeneratedShapeResources& resources)
         {
-            auto& state = cache.Shapes.GetOrInsert(resources.Owner.id);
-            if (resources.Part != 0xFFFFFFFFu)
-            {
-                state.MeshKey = resources.MeshKey;
-                if (state.Children.size() <= resources.Part)
-                    state.Children.resize(static_cast<size_t>(resources.Part) + 1);
-                state.Children[resources.Part] = entity;
-            }
-            else
-            {
-                state.CollisionEntity = entity;
-                state.CollisionData = resources.CollisionData;
-            }
+            AdoptGeneratedResource(cache, entity, resources);
         });
 }
 
@@ -314,17 +339,7 @@ void ShapeRuntime::Update(ECS::World& world)
         .Each([&world, splines](const Components::SmartShapeAnchor& anchor, const Components::Parent& parent,
                               Components::Transform& transform)
         {
-            if (!world.IsValid(parent.parent) || !world.HasComponent<Components::SmartShape>(parent.parent))
-                return;
-            const auto* reference = world.GetComponent<Components::SplineComponent>(parent.parent);
-            const auto* parentTransform = world.GetComponent<Components::WorldTransform>(parent.parent);
-            if (!reference || !parentTransform)
-                return;
-            const auto* spline = splines->GetSplineData({reference->SplineDataIndex, reference->SplineDataGeneration});
-            if (!spline)
-                return;
-            const auto matrix = EvaluateAnchor(*spline, anchor, Mathematics::Matrix4x4::FromColumnMajor(parentTransform->matrix));
-            std::copy(matrix.Data(), matrix.Data() + 16, transform.matrix);
+            UpdateShapeAnchor(world, *splines, anchor, parent, transform);
         });
     m_Retired.clear();
     for (auto& [id, state] : cache.Shapes)

@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -35,6 +36,23 @@ namespace GameEngine::PhysicsECS
 {
 namespace
 {
+std::shared_ptr<const Physics::MeshShapeDef> ReadMeshForRebuild(Physics::PhysicsWorld& physics,
+    ECS::EntityHandle entity, const Components::MeshColliderShape& shape, const Components::PhysicsBody& body)
+{
+    const bool changed = shape.DataIndex != shape.BuiltDataIndex || shape.DataGeneration != shape.BuiltDataGeneration;
+    if (!changed && body.initialized && physics.IsBodyValid(body.body) && physics.IsShapeValid(body.shape))
+        return {};
+    const auto mesh = MeshColliderData::Read({shape.DataIndex, shape.DataGeneration});
+    if (!mesh)
+        return {};
+    if (body.motionType != Physics::MotionType::Static)
+    {
+        Logger::Log::Warning("Mesh collider entity {} requires a Static physics body", entity.id);
+        return {};
+    }
+    return mesh;
+}
+
 static GameEngine::Components::Transform TransformFromWorld(const GameEngine::Components::WorldTransform& wt)
 {
     GameEngine::Components::Transform t;
@@ -265,21 +283,14 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
     // Procedural triangle meshes participate in the same body creation and teardown as other shapes.
     world.Query<ECS::Read<Components::Transform>, ECS::Read<Components::PhysicsCollider>,
                 ECS::Write<Components::MeshColliderShape>, ECS::Read<Components::PhysicsBody>>()
-        .Each([&](ECS::EntityHandle entity, const Components::Transform& local,
+        .Each([pw, &addCollider, &rebuildBodies](ECS::EntityHandle entity, const Components::Transform& local,
                   const Components::PhysicsCollider& collider, Components::MeshColliderShape& shape,
                   const Components::PhysicsBody& body)
         {
-            const bool changed = shape.DataIndex != shape.BuiltDataIndex || shape.DataGeneration != shape.BuiltDataGeneration;
-            if (!changed && body.initialized && pw->IsBodyValid(body.body) && pw->IsShapeValid(body.shape))
-                return;
-            const auto mesh = MeshColliderData::Read({shape.DataIndex, shape.DataGeneration});
+            const auto mesh = ReadMeshForRebuild(*pw, entity, shape, body);
             if (!mesh)
                 return;
-            if (body.motionType != Physics::MotionType::Static)
-            {
-                Logger::Log::Warning("Mesh collider entity {} requires a Static physics body", entity.id);
-                return;
-            }
+            const bool changed = shape.DataIndex != shape.BuiltDataIndex || shape.DataGeneration != shape.BuiltDataGeneration;
             addCollider(entity, nullptr, local, collider, *mesh);
             if (changed)
                 rebuildBodies.insert(entity);

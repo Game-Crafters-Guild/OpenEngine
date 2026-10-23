@@ -26,7 +26,7 @@ GenerationalVector::Handle MakeCollision()
     spline.AddPoint({1, -1, 0}, 1);
     spline.AddPoint({1, 1, 0}, 1);
     spline.AddPoint({-1, 1, 0}, 1);
-    return PhysicsECS::MeshColliderData::Register(BuildCollision(BuildShape(spline, {}), true, 1));
+    return PhysicsECS::MeshColliderData::Register(BuildCollision(BuildShape(spline, {}), true, Components::SmartShape{}));
 }
 
 TEST(SmartShapeCollisionOwner, RebuildAndDisableKeepParentAlive)

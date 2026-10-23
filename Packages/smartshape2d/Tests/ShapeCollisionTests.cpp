@@ -28,7 +28,7 @@ Physics::MeshShapeDef BoxCollision(float width = 2.0f)
     spline.AddPoint({width, -1, 0}, 1.0f);
     spline.AddPoint({width, 1, 0}, 1.0f);
     spline.AddPoint({-width, 1, 0}, 1.0f);
-    return BuildCollision(BuildShape(spline, {}), true, 1.0f);
+    return BuildCollision(BuildShape(spline, {}), true, Components::SmartShape{});
 }
 
 TEST(SmartShapeCollision, ClosedFillExtrudesWithoutInternalWalls)
