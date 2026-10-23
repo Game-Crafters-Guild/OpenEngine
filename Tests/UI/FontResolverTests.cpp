@@ -109,7 +109,11 @@ TEST_F(FontResolverTests, ResolverReadsTheRegisteredFileForASpacedFamily)
     FontBytes bytes;
     int callbackCount = 0;
     resolver.ResolveAsync("Roboto Mono", 400, FontStyle::Normal, FontVariant::Normal,
-                          [&](FontBytes result) { bytes = std::move(result); ++callbackCount; });
+                          [&bytes, &callbackCount](FontBytes result)
+                          {
+                              bytes = std::move(result);
+                              ++callbackCount;
+                          });
 
     EXPECT_EQ(callbackCount, 1);
     EXPECT_EQ(std::string(bytes.bytes.begin(), bytes.bytes.end()), "font bytes");

@@ -209,12 +209,12 @@ void FontFamilyIndex::Rebuild()
 
     for (const GUID& guid : fonts)
     {
-        AssetMetadata md{};
-        if (!m_Registry.TryGetAssetMetadata(guid, md))
+        AssetMetadata metadata{};
+        if (!m_Registry.TryGetAssetMetadata(guid, metadata))
             continue;
 
-        const std::filesystem::path absPath = ToAbsolutePath(md.Path, assetRoot);
-        if (absPath.empty())
+        const std::filesystem::path absolutePath = ToAbsolutePath(metadata.Path, assetRoot);
+        if (absolutePath.empty())
             continue;
 
         // The registry can carry registrations whose backing file is gone
@@ -222,22 +222,22 @@ void FontFamilyIndex::Rebuild()
         // one poisons its family: the weight matcher happily picks it and the
         // byte read then fails every retry. Fonts are few and Rebuild is
         // rare, so an existence probe here is cheap insurance.
-        std::error_code existsEc;
-        if (!std::filesystem::exists(absPath, existsEc))
+        std::error_code existenceError;
+        if (!std::filesystem::exists(absolutePath, existenceError))
             continue;
 
         // Family names and traits come from the filename.
-        const std::filesystem::path filename = md.Name + md.Extension;
+        const std::filesystem::path filename = metadata.Name + metadata.Extension;
         std::vector<std::string> families;
-        int candWeight = 400;
-        FontStyle candStyle = FontStyle::Normal;
+        int candidateWeight = 400;
+        FontStyle candidateStyle = FontStyle::Normal;
         {
-            std::string fam = DeriveFamilyFromFilename(filename);
-            if (!fam.empty())
+            std::string family = DeriveFamilyFromFilename(filename);
+            if (!family.empty())
             {
-                families.push_back(fam);
-                const std::string spaced = InsertSpacesBeforeCaps(fam);
-                if (spaced != fam)
+                families.push_back(family);
+                const std::string spaced = InsertSpacesBeforeCaps(family);
+                if (spaced != family)
                     families.push_back(spaced);
             }
         }
@@ -253,24 +253,24 @@ void FontFamilyIndex::Rebuild()
         std::unordered_set<std::string> seenKeys;
         seenKeys.reserve(families.size());
 
-        DeriveCandidateTraitsFromFilename(filename, candWeight, candStyle);
+        DeriveCandidateTraitsFromFilename(filename, candidateWeight, candidateStyle);
 
-        for (const std::string& fam : families)
+        for (const std::string& family : families)
         {
-            const std::string key = NormalizeKey(fam);
+            const std::string key = NormalizeKey(family);
             if (key.empty())
                 continue;
             if (!seenKeys.insert(key).second)
                 continue;
 
-            Candidate c{};
-            c.guid = guid;
-            c.path = absPath;
-            c.weight = candWeight;
-            c.style = candStyle;
-            c.debugName = absPath.string();
+            Candidate candidate{};
+            candidate.guid = guid;
+            candidate.path = absolutePath;
+            candidate.weight = candidateWeight;
+            candidate.style = candidateStyle;
+            candidate.debugName = absolutePath.string();
 
-            m_CandidatesByKey[key].push_back(std::move(c));
+            m_CandidatesByKey[key].push_back(std::move(candidate));
         }
     }
 
