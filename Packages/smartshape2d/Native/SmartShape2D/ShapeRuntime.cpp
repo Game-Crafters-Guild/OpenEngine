@@ -101,61 +101,64 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
     }
     constexpr std::array<const char*, 11> kNames{
         "Fill", "Top edge", "Right edge", "Bottom edge", "Left edge", "Inner corners", "Outer corners", "Start taper", "End taper", "Sharp start taper", "Sharp end taper"};
-    auto& registry = m_Services->GetMeshGPURegistry();
-    Rendering::MeshGPURegistry::TableScope scope(registry);
-    for (size_t i = geometry.Parts.size(); i < state.Children.size(); ++i)
+    if (m_Services)
     {
-        if (world.IsValid(state.Children[i]))
-            world.DestroyEntityImmediate(state.Children[i]);
-        registry.UnregisterSubmesh({state.MeshKey, static_cast<uint32>(i)});
-    }
-    state.Children.resize(geometry.Parts.size());
-    for (size_t i = 0; i < geometry.Parts.size(); ++i)
-    {
-        const auto& mesh = geometry.Parts[i];
-        auto& child = state.Children[i];
-        if (mesh.Indices.empty())
+        auto& registry = m_Services->GetMeshGPURegistry();
+        Rendering::MeshGPURegistry::TableScope scope(registry);
+        for (size_t i = geometry.Parts.size(); i < state.Children.size(); ++i)
         {
-            if (world.IsValid(child))
-                world.DestroyEntityImmediate(child);
-            child = {};
+            if (world.IsValid(state.Children[i]))
+                world.DestroyEntityImmediate(state.Children[i]);
             registry.UnregisterSubmesh({state.MeshKey, static_cast<uint32>(i)});
-            continue;
         }
-        const auto handle = registry.RegisterSubmesh({state.MeshKey, static_cast<uint32>(i)}, mesh, true);
-        GUID material = geometry.Materials[i].ToGuid();
-        if (material.IsNull())
-            material = Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid();
-        else
-            Engine::Renderer::RegisterOneStandaloneMaterial(*m_Services, material);
-        Components::MeshRenderer renderer{};
-        renderer.meshGpuHandleId = static_cast<uint64>(handle);
-        renderer.materialAssetGuid.Set(material);
-        renderer.shadowCasting = Components::ShadowCasting::Off;
-        renderer.motionVectors = false;
-        Components::LocalBounds bounds{};
-        bounds.Box = Mathematics::BoundingBox::FromMinMax(
-            {mesh.MinBounds[0], mesh.MinBounds[1], mesh.MinBounds[2]},
-            {mesh.MaxBounds[0], mesh.MaxBounds[1], mesh.MaxBounds[2]});
-        bounds.CastShadows = false;
-        if (!world.IsValid(child))
+        state.Children.resize(geometry.Parts.size());
+        for (size_t i = 0; i < geometry.Parts.size(); ++i)
         {
-            child = world.CreateEntity();
-            Components::Name name{};
-            std::strncpy(name.value, i < kNames.size() ? kNames[i] : "Edge override", sizeof(name.value) - 1);
-            world.AddComponentImmediate(child, name);
-            world.AddComponentImmediate(child, Components::Transform{});
-            world.AddComponentImmediate(child, Components::Parent{owner});
-            world.AddComponentImmediate(child, Components::RuntimeOnlyEntity{});
-            world.AddComponentImmediate(child, Components::MeshGPUData{});
+            const auto& mesh = geometry.Parts[i];
+            auto& child = state.Children[i];
+            if (mesh.Indices.empty())
+            {
+                if (world.IsValid(child))
+                    world.DestroyEntityImmediate(child);
+                child = {};
+                registry.UnregisterSubmesh({state.MeshKey, static_cast<uint32>(i)});
+                continue;
+            }
+            const auto handle = registry.RegisterSubmesh({state.MeshKey, static_cast<uint32>(i)}, mesh, true);
+            GUID material = geometry.Materials[i].ToGuid();
+            if (material.IsNull())
+                material = Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid();
+            else
+                Engine::Renderer::RegisterOneStandaloneMaterial(*m_Services, material);
+            Components::MeshRenderer renderer{};
+            renderer.meshGpuHandleId = static_cast<uint64>(handle);
+            renderer.materialAssetGuid.Set(material);
+            renderer.shadowCasting = Components::ShadowCasting::Off;
+            renderer.motionVectors = false;
+            Components::LocalBounds bounds{};
+            bounds.Box = Mathematics::BoundingBox::FromMinMax(
+                {mesh.MinBounds[0], mesh.MinBounds[1], mesh.MinBounds[2]},
+                {mesh.MaxBounds[0], mesh.MaxBounds[1], mesh.MaxBounds[2]});
+            bounds.CastShadows = false;
+            if (!world.IsValid(child))
+            {
+                child = world.CreateEntity();
+                Components::Name name{};
+                std::strncpy(name.value, i < kNames.size() ? kNames[i] : "Edge override", sizeof(name.value) - 1);
+                world.AddComponentImmediate(child, name);
+                world.AddComponentImmediate(child, Components::Transform{});
+                world.AddComponentImmediate(child, Components::Parent{owner});
+                world.AddComponentImmediate(child, Components::RuntimeOnlyEntity{});
+                world.AddComponentImmediate(child, Components::MeshGPUData{});
+            }
+            world.AddComponentImmediate(child, renderer);
+            world.AddComponentImmediate(child, bounds);
+            Components::GeneratedShapeResources resources{};
+            resources.Owner = owner;
+            resources.MeshKey = state.MeshKey;
+            resources.Part = static_cast<uint32>(i);
+            world.AddComponentImmediate(child, resources);
         }
-        world.AddComponentImmediate(child, renderer);
-        world.AddComponentImmediate(child, bounds);
-        Components::GeneratedShapeResources resources{};
-        resources.Owner = owner;
-        resources.MeshKey = state.MeshKey;
-        resources.Part = static_cast<uint32>(i);
-        world.AddComponentImmediate(child, resources);
     }
     if (settings.CollisionEnabled)
     {
@@ -190,7 +193,7 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
 void ShapeRuntime::Update(ECS::World& world)
 {
     auto* splines = SplineECS::SplineService::TryGet();
-    if (!m_Services || !splines)
+    if (!splines)
         return;
     auto& cache = m_Worlds.GetOrInsert(world.GetWorldId());
     if (!cache.HooksRegistered)
@@ -219,7 +222,7 @@ void ShapeRuntime::Update(ECS::World& world)
         cache.ResetGeneration = world.GetLifecycleResetGeneration();
     }
     const uint64 reset = world.GetLifecycleResetGeneration();
-    const uint64 device = m_Services->GetDevice() ? m_Services->GetDevice()->GetDeviceRebuildGeneration() : 0;
+    const uint64 device = m_Services && m_Services->GetDevice() ? m_Services->GetDevice()->GetDeviceRebuildGeneration() : 0;
     if (cache.ResetGeneration != reset)
     {
         // Clear recycles entity generations. Never destroy old handles in the new world.
