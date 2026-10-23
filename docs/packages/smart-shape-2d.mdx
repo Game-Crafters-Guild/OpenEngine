@@ -42,7 +42,7 @@ All spline points and tangent handles must have local Z equal to zero. A point's
 | Taper Sharp Corners | Split sharp turns with their dedicated taper materials when no ordinary corner applies. |
 | Curve Subdivisions | Samples per curved segment, from 1 to 64. Straight segments need no subdivision. |
 
-Inner and outer corner materials apply to turns from 80 through 100 degrees. Their vertices follow the adjacent segment directions, and neighboring quads weld to their corner-specific attachment points. Start and end cap materials are tapers: they split **inside** an open edge. A taper larger than the segment retextures that segment instead. **Start Taper Size** and **End Taper Size** are the texture dimensions in shape units; both axes participate when the edge is diagonal. Corners use the full UV square. Tapers use their own texture dimensions and the source fit behavior, including short-segment retexturing.
+Inner and outer corner materials apply to turns from 80 through 100 degrees. Their vertices follow the adjacent segment directions, and neighboring quads weld to their corner-specific attachment points. Start and end cap materials are tapers: they split **inside** each contiguous edge run, including at edge-rule boundaries and hidden segments. A taper larger than the segment retextures that segment instead. **Start Taper Size** and **End Taper Size** are the texture dimensions in shape units; both axes participate when the edge is diagonal. Corners use the full UV square. Tapers use their own texture dimensions and the source fit behavior, including short-segment retexturing.
 
 Standard material normal maps use generated mesh tangents, including on rotated edges, corners, and flipped textures.
 
@@ -68,13 +68,13 @@ Choose **Create > 2D > Shape Point Anchor** on a shape. The anchor follows **Poi
 
 ## Collision
 
-**Collision Enabled** generates a static triangle collider on the Smart Shape entity itself. Existing physics body and collider settings are preserved when the shape rebuilds. Disabling collision removes the generated mesh and only the physics components added by the package. **Collision Depth** extrudes it along local Z. **Collision Mode** selects **Filled**, **Rendered edges**, or **Hollow**. Filled and hollow modes use **Collision Offset** independently of the visual fill. Hollow and open shapes use **Collision Width**; open collision ends are flat. These offsets use mitered polygon buffering with intersection resolution. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
+**Collision Enabled** generates a static triangle collider on the Smart Shape entity itself. Existing physics body and collider settings are preserved when the shape rebuilds. Disabling collision removes the generated mesh and only the physics components added by the package. **Collision Depth** extrudes it along local Z. **Collision Mode** selects **Filled**, **Rendered edges**, or **Hollow**. Filled and hollow modes use **Collision Offset** independently of the visual fill. Hollow and open shapes use **Collision Width**; open collision ends are flat. These offsets use mitered polygon buffering with intersection resolution. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled, and in a headless runtime. Switching off the Smart Shape component removes all generated output, including collision.
 
 The collider uses the normal PhysicsECS lifecycle. Physics bodies are created during simulation and released when the generated entity is removed. These triangle colliders are static terrain. Use the engine's convex collider types for dynamic objects.
 
 ## Saving and runtime
 
-The scene stores the spline, shape settings, and authored edge-override, texture-entry, and anchor children. Generated mesh and collider children are runtime output and are not saved. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
+The scene stores the spline, shape settings, and authored edge-override, texture-entry, and anchor children. Generated mesh children and triangle collision data are runtime output and are not saved. The parent uses ordinary physics components for its collision settings. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
 
 Creation and reflected property edits use the editor's undo system. Use the parent shape's inspector to edit generated output. Changes made directly to a generated child are replaced on regeneration.
 

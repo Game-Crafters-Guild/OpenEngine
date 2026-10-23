@@ -54,6 +54,7 @@ private:
         FlatMap<uint32, ShapeState> Shapes;
     };
 
+    void AdoptGeneratedResources(ECS::World& world, WorldState& cache);
     void Release(ECS::World* world, ShapeState& state);
     void Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spline::SplineData& spline,
                   const Components::SmartShape& settings, ShapeState& state);

@@ -71,4 +71,26 @@ TEST_F(SmartShapeRuntimeTest, HeadlessCollisionStaysOnParentAcrossReloadDisableA
     EXPECT_TRUE(world.IsValid(owner));
     EXPECT_FALSE(world.HasComponent<Components::MeshColliderShape>(owner));
 }
+TEST_F(SmartShapeRuntimeTest, RestoredGeneratedChildrenAreAdoptedAndRetiredWithTheirOwner)
+{
+    ECS::World world;
+    const auto owner = world.CreateEntity();
+    const auto child = world.CreateEntity();
+    Components::GeneratedShapeResources resources{};
+    resources.Owner = owner;
+    resources.Part = 0;
+    world.AddComponentImmediate(child, resources);
+    world.AddComponentImmediate(child, Components::Parent{owner});
+    const auto snapshot = world.SerializeWorld();
+    auto& runtime = ShapeRuntime::Get();
+    // No SmartShape remains: normal retirement must remove its generated child.
+    runtime.Update(world);
+    EXPECT_FALSE(world.IsValid(child));
+    world.DeserializeWorld(snapshot);
+    ASSERT_TRUE(world.IsValid(child));
+    runtime.Update(world);
+    EXPECT_FALSE(world.IsValid(child));
+    EXPECT_TRUE(world.IsValid(owner));
+}
+
 }

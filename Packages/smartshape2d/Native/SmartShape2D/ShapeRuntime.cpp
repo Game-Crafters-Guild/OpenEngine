@@ -190,6 +190,27 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
     state.Built = true;
 }
 
+void ShapeRuntime::AdoptGeneratedResources(ECS::World& world, WorldState& cache)
+{
+    world.Query<ECS::Read<Components::GeneratedShapeResources>>().IncludeDisabled()
+        .Each([&cache](ECS::EntityHandle entity, const Components::GeneratedShapeResources& resources)
+        {
+            auto& state = cache.Shapes.GetOrInsert(resources.Owner.id);
+            if (resources.Part != 0xFFFFFFFFu)
+            {
+                state.MeshKey = resources.MeshKey;
+                if (state.Children.size() <= resources.Part)
+                    state.Children.resize(static_cast<size_t>(resources.Part) + 1);
+                state.Children[resources.Part] = entity;
+            }
+            else
+            {
+                state.CollisionEntity = entity;
+                state.CollisionData = resources.CollisionData;
+            }
+        });
+}
+
 void ShapeRuntime::Update(ECS::World& world)
 {
     auto* splines = SplineECS::SplineService::TryGet();
@@ -201,23 +222,7 @@ void ShapeRuntime::Update(ECS::World& world)
         world.RegisterOnRemove<Components::GeneratedShapeResources>(&ReleaseGeneratedResources);
         // Reuse output left by a replaced package module. Resource keys and ownership are in
         // engine-owned ECS storage, so a module reload does not double-spawn geometry.
-        world.Query<ECS::Read<Components::GeneratedShapeResources>>().IncludeDisabled()
-            .Each([&cache](ECS::EntityHandle entity, const Components::GeneratedShapeResources& resources)
-            {
-                auto& state = cache.Shapes.GetOrInsert(resources.Owner.id);
-                if (resources.Part != 0xFFFFFFFFu)
-                {
-                    state.MeshKey = resources.MeshKey;
-                    if (state.Children.size() <= resources.Part)
-                        state.Children.resize(static_cast<size_t>(resources.Part) + 1);
-                    state.Children[resources.Part] = entity;
-                }
-                else
-                {
-                    state.CollisionEntity = entity;
-                    state.CollisionData = resources.CollisionData;
-                }
-            });
+        AdoptGeneratedResources(world, cache);
         cache.HooksRegistered = true;
         cache.ResetGeneration = world.GetLifecycleResetGeneration();
     }
@@ -233,6 +238,9 @@ void ShapeRuntime::Update(ECS::World& world)
         }
         cache.Shapes.Clear();
         cache.ResetGeneration = reset;
+        // Play-mode snapshots restore runtime children too. Reuse their ownership tags
+        // before rebuilding; otherwise the restored outputs become orphan duplicates.
+        AdoptGeneratedResources(world, cache);
     }
     const bool deviceChanged = cache.DeviceGeneration != device;
     cache.DeviceGeneration = device;
