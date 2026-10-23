@@ -2,6 +2,7 @@
 
 #include "SmartShape2D/SmartShape.h"
 #include "SmartShape2D/SmartShapeEdge.h"
+#include "SmartShape2D/SmartShapeTexture.h"
 #include "SmartShape2D/GeneratedShapeResources.h"
 #include "ECS/ECS.h"
 #include "GenerationalVector/GenerationalHandle.h"
@@ -38,6 +39,7 @@ private:
         GUID MeshKey;
         std::vector<ECS::EntityHandle> Children;
         std::vector<Components::SmartShapeEdge> Overrides;
+        std::vector<Components::SmartShapeTexture> Textures;
         ECS::EntityHandle CollisionEntity;
         GenerationalVector::Handle CollisionData;
         Mathematics::Matrix4x4 WorldMatrix;
@@ -62,5 +64,7 @@ private:
     std::vector<uint32> m_Retired;
     std::vector<std::pair<ECS::EntityHandle, Components::SmartShapeEdge>> m_Edges;
     std::vector<Components::SmartShapeEdge> m_Overrides;
+    std::vector<std::pair<ECS::EntityHandle, Components::SmartShapeTexture>> m_Textures;
+    std::vector<Components::SmartShapeTexture> m_TextureSet;
 };
 } // namespace GameEngine::SmartShape2D

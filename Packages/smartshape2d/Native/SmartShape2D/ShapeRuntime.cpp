@@ -1,6 +1,7 @@
 #include "SmartShape2D/ShapeRuntime.h"
 
 #include "SmartShape2D/ShapeGeometry.h"
+#include "SmartShape2D/ShapeAnchor.h"
 #include "SmartShape2D/ShapeCollision.h"
 #include "PhysicsECS/MeshColliderData.h"
 #include "PhysicsECS/Components/MeshColliderShape.h"
@@ -89,7 +90,7 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
     auto source = spline;
     if (source.Dirty)
         Spline::RebuildSplineCache(source);
-    auto geometry = BuildShape(source, settings, state.Overrides);
+    auto geometry = BuildShape(source, settings, state.Overrides, state.Textures, state.WorldMatrix);
     if (!geometry.Error.empty())
     {
         Release(&world, state);
@@ -97,8 +98,8 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
         state.Built = true; // Retry on the next authored edit, not on every frame.
         return;
     }
-    constexpr std::array<const char*, 9> kNames{
-        "Fill", "Top edge", "Right edge", "Bottom edge", "Left edge", "Inner corners", "Outer corners", "Start cap", "End cap"};
+    constexpr std::array<const char*, 11> kNames{
+        "Fill", "Top edge", "Right edge", "Bottom edge", "Left edge", "Inner corners", "Outer corners", "Start taper", "End taper", "Sharp start taper", "Sharp end taper"};
     auto& registry = m_Services->GetMeshGPURegistry();
     Rendering::MeshGPURegistry::TableScope scope(registry);
     for (size_t i = geometry.Parts.size(); i < state.Children.size(); ++i)
@@ -165,8 +166,8 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
         auto collisionSettings = settings;
         collisionSettings.FillEnabled = true;
         collisionSettings.EdgesEnabled = true;
-        auto collisionGeometry = BuildShape(source, collisionSettings, state.Overrides);
-        auto collisionMesh = BuildCollision(collisionGeometry, source.IsEffectivelyClosed(), settings.CollisionDepth);
+        auto collisionGeometry = BuildShape(source, collisionSettings, state.Overrides, state.Textures, state.WorldMatrix);
+        auto collisionMesh = BuildCollision(collisionGeometry, source.IsEffectivelyClosed(), settings);
         state.CollisionData = PhysicsECS::MeshColliderData::Register(std::move(collisionMesh));
         if (state.CollisionData.IsValid())
         {
@@ -255,6 +256,10 @@ void ShapeRuntime::Update(ECS::World& world)
     world.Query<ECS::Read<Components::SmartShapeEdge>, ECS::Read<Components::Parent>>()
         .Each([this](const Components::SmartShapeEdge& edge, const Components::Parent& parent)
               { m_Edges.emplace_back(parent.parent, edge); });
+    m_Textures.clear();
+    world.Query<ECS::Read<Components::SmartShapeTexture>, ECS::Read<Components::Parent>>()
+        .Each([this](const Components::SmartShapeTexture& texture, const Components::Parent& parent)
+              { m_Textures.emplace_back(parent.parent, texture); });
     // Structural writes happen after the query has released its archetype views.
     for (const auto entity : m_Candidates)
     {
@@ -273,19 +278,28 @@ void ShapeRuntime::Update(ECS::World& world)
         }
         std::sort(m_Overrides.begin(), m_Overrides.end(), [](const auto& left, const auto& right)
                   { return left.Priority != right.Priority ? left.Priority > right.Priority : left.PointIndex < right.PointIndex; });
+        m_TextureSet.clear();
+        for (const auto& [parent, texture] : m_Textures)
+        {
+            if (parent == entity)
+                m_TextureSet.push_back(texture);
+        }
+        std::stable_sort(m_TextureSet.begin(), m_TextureSet.end(), [](const auto& left, const auto& right)
+                        { return left.Index < right.Index; });
         Mathematics::Matrix4x4 matrix;
         if (const auto* transform = world.GetComponent<Components::WorldTransform>(entity))
             matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
-        const bool collisionMoved = settings.CollisionEnabled && !std::equal(matrix.Data(), matrix.Data() + 16, state.WorldMatrix.Data());
+        const bool transformChanged = !std::equal(matrix.Data(), matrix.Data() + 16, state.WorldMatrix.Data());
         const bool missing = (state.CollisionEntity.IsValid() && !world.IsValid(state.CollisionEntity)) || std::any_of(state.Children.begin(), state.Children.end(), [&world](ECS::EntityHandle child)
                                         { return child.IsValid() && !world.IsValid(child); });
-        if (!state.Built || deviceChanged || missing || collisionMoved || state.Overrides != m_Overrides || state.Settings != settings || state.SplineVersion != spline->Version ||
+        if (!state.Built || deviceChanged || missing || transformChanged || state.Textures != m_TextureSet || state.Overrides != m_Overrides || state.Settings != settings || state.SplineVersion != spline->Version ||
             state.SplineIndex != reference.SplineDataIndex || state.SplineGeneration != reference.SplineDataGeneration)
         {
             if (state.MeshKey.IsNull())
                 state.MeshKey = GUID::Derive(GUID::Null(), "smartshape2d/" + std::to_string(world.GetWorldId()) + "/" +
                                             std::to_string(reset) + "/" + std::to_string(entity.id));
             state.Overrides = m_Overrides;
+            state.Textures = m_TextureSet;
             state.WorldMatrix = matrix;
             state.Settings = settings;
             state.SplineVersion = spline->Version;
@@ -294,6 +308,22 @@ void ShapeRuntime::Update(ECS::World& world)
             Rebuild(world, entity, *spline, settings, state);
         }
     }
+    world.Query<ECS::Read<Components::SmartShapeAnchor>, ECS::Read<Components::Parent>, ECS::Write<Components::Transform>>()
+        .Each([&world, splines](const Components::SmartShapeAnchor& anchor, const Components::Parent& parent,
+                              Components::Transform& transform)
+        {
+            if (!world.IsValid(parent.parent) || !world.HasComponent<Components::SmartShape>(parent.parent))
+                return;
+            const auto* reference = world.GetComponent<Components::SplineComponent>(parent.parent);
+            const auto* parentTransform = world.GetComponent<Components::WorldTransform>(parent.parent);
+            if (!reference || !parentTransform)
+                return;
+            const auto* spline = splines->GetSplineData({reference->SplineDataIndex, reference->SplineDataGeneration});
+            if (!spline)
+                return;
+            const auto matrix = EvaluateAnchor(*spline, anchor, Mathematics::Matrix4x4::FromColumnMajor(parentTransform->matrix));
+            std::copy(matrix.Data(), matrix.Data() + 16, transform.matrix);
+        });
     m_Retired.clear();
     for (auto& [id, state] : cache.Shapes)
     {

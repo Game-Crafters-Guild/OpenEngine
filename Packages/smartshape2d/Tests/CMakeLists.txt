@@ -1,6 +1,18 @@
 find_package(GTest CONFIG REQUIRED)
 add_executable(SmartShape2DTests
     ShapeGeometryTests.cpp
+    ShapeAnchorTests.cpp
+    EdgeQuadTests.cpp
+    TextureSetTests.cpp
+    ShapeOffsetTests.cpp
+    ../Native/SmartShape2D/ShapeAnchor.cpp
+    ../Native/SmartShape2D/EdgeQuad.cpp
+    ../Native/SmartShape2D/ShapeOffset.cpp
+    ../Native/SmartShape2D/ShapeMesh.cpp
+    ../Native/SmartShape2D/ShapeEdges.cpp
+    ../Native/clipper2/clipper.engine.cpp
+    ../Native/clipper2/clipper.offset.cpp
+    ../Native/clipper2/clipper.rectclip.cpp
     ShapeCollisionTests.cpp
     ../Native/SmartShape2D/ShapeCollision.cpp
     ../Native/SmartShape2D/ShapeGeometry.cpp)

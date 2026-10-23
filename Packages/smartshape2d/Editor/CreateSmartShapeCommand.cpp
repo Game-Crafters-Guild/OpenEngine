@@ -2,6 +2,8 @@
 
 #include "SmartShape2D/SmartShape.h"
 #include "SmartShape2D/SmartShapeEdge.h"
+#include "SmartShape2D/SmartShapeAnchor.h"
+#include "SmartShape2D/SmartShapeTexture.h"
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/Spline/SplineComponent.h"
@@ -11,7 +13,9 @@
 #include "ECS/WorldTemplateImplementations.inl"
 #include "SplineECS/SplineService.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace GameEngine::SmartShape2D
 {
@@ -31,13 +35,28 @@ void CreateSmartShapeCommand::Do()
     else if (m_Undone && !world->ReviveEntityImmediatePreserveHandle(m_Entity))
         return;
     m_Undone = false;
-    if (m_Kind == ShapeCreationKind::EdgeOverride)
+    if (m_Kind == ShapeCreationKind::EdgeOverride || m_Kind == ShapeCreationKind::Anchor || m_Kind == ShapeCreationKind::Texture)
     {
         Components::Name name{};
-        std::strncpy(name.value, "Shape edge override", sizeof(name.value) - 1);
+        std::strncpy(name.value, m_Kind == ShapeCreationKind::Anchor ? "Shape point anchor" :
+            m_Kind == ShapeCreationKind::Texture ? "Shape texture entry" : "Shape edge override", sizeof(name.value) - 1);
         world->AddComponentImmediate(m_Entity, Components::Transform{});
         world->AddComponentImmediate(m_Entity, name);
-        world->AddComponentImmediate(m_Entity, Components::SmartShapeEdge{});
+        if (m_Kind == ShapeCreationKind::Anchor)
+            world->AddComponentImmediate(m_Entity, Components::SmartShapeAnchor{});
+        else if (m_Kind == ShapeCreationKind::Texture)
+        {
+            Components::SmartShapeTexture texture;
+            world->Query<ECS::Read<Components::SmartShapeTexture>, ECS::Read<Components::Parent>>()
+                .Each([this, &texture](const Components::SmartShapeTexture& entry, const Components::Parent& parent)
+                {
+                    if (parent.parent == m_Context.TargetEntity && entry.Index < std::numeric_limits<uint32>::max())
+                        texture.Index = std::max(texture.Index, entry.Index + 1);
+                });
+            world->AddComponentImmediate(m_Entity, texture);
+        }
+        else
+            world->AddComponentImmediate(m_Entity, Components::SmartShapeEdge{});
         NotifyCreated();
         return;
     }

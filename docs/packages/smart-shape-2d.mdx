@@ -25,19 +25,26 @@ All spline points and tangent handles must have local Z equal to zero. A point's
 | --- | --- |
 | Fill Enabled | Draw the interior of a closed outline. Open paths never have a fill. |
 | Fill Scale | World units per texture repetition on X and Y. Both values must be positive. |
-| Fill Offset | Offset the fill texture in UV coordinates. |
-| Fill Rotation | Rotate the fill texture in degrees. |
+| Fill Offset | Translate the texture in shape units before conversion to UV coordinates. |
+| Fill Rotation | Rotate the texture in degrees. |
+| Fill Absolute Position / Rotation | Keep the texture aligned to world position or rotation as the shape moves. |
+| Fill Mesh Offset | Inflate or inset the fill independently of the border, in shape units. |
+| Fill Depth | Local Z of the fill. |
 | Edges Enabled | Draw the border ribbon. |
 | Edge Width | Border thickness, multiplied by point radius. |
-| Edge Offset | Offset the ribbon across its normal in multiples of its width. Zero centers it on the outline. |
+| Edge Offset | Offset the ribbon across its normal in multiples of half its width. Zero centers it on the outline. |
 | Tile Length | World units per edge texture repetition. |
 | Stretch To Fit | Fit a whole number of repetitions around the outline. When off, retain the requested tile length and crop the last repeat. |
-| Flip Edges | Reverse the texture across the ribbon. |
+| Flip Edges | Reverse which side of the outline the edges face, including corner classification. |
 | Edge Depth | Local Z of the border. A small negative value places it in front of the fill when viewed from negative Z. |
-| Miter Limit | Limit the length of sharp corner joins in multiples of edge width. |
+| Weld Edges | Join neighboring quads while preserving their average height. |
+| Use Corner Textures / Use Taper Textures | Enable the assigned corner and taper materials. |
+| Taper Sharp Corners | Split sharp turns with their dedicated taper materials when no ordinary corner applies. |
 | Curve Subdivisions | Samples per curved segment, from 1 to 64. Straight segments need no subdivision. |
 
-Optional inner-corner, outer-corner, start-cap, and end-cap materials add corner and endpoint sprites. Caps apply to open paths. The sprite's full UV square maps to its generated quad.
+Inner and outer corner materials apply to turns from 80 through 100 degrees. Their vertices follow the adjacent segment directions, and neighboring quads weld to their corner-specific attachment points. Start and end cap materials are tapers: they split **inside** an open edge. A taper larger than the segment retextures that segment instead. **Start Taper Size** and **End Taper Size** are the texture dimensions in shape units; both axes participate when the edge is diagonal. Corners use the full UV square. Tapers use their own texture dimensions and the source fit behavior, including short-segment retexturing.
+
+Standard material normal maps use generated mesh tangents, including on rotated edges, corners, and flipped textures.
 
 ## Override an edge
 
@@ -47,17 +54,27 @@ Set **Point Index** to the zero-based index of the point that starts the segment
 
 Turn on **Use Normal Range** to select edges by their outward direction instead. **Normal Start** is measured counterclockwise from local +X. +Y is 90 degrees. **Normal Sweep** is the signed angular span. Zero or a full turn selects every direction. Negative spans run clockwise, and ranges can cross zero degrees.
 
-Rules with higher **Priority** are tested first. A point override takes precedence over a normal rule. Width Scale belongs to a point override. A normal rule changes the material, visibility, and texture flip.
+Rules with higher **Priority** are tested first. A point override takes precedence over a normal rule. Width Scale belongs to a point override. Normal rules can also scale width. **Offset** shifts the selected ribbon across its normal; **Depth Offset** changes its local Z relative to Edge Depth. **Weld** and **Taper Sharp Corners** control joins for the selected edges.
+
+## Texture sets
+
+Choose **Create > 2D > Shape Texture Entry** on the shape to add a material variant. Each entry can supply an edge material, matching inner and outer corners, ordinary start/end tapers, and sharp-corner start/end tapers. Add as many entries as needed. **Index** orders the set, **Tile Length** sets its horizontal texture dimension, and **Width Scale** changes its thickness.
+
+An entry with **Point Index = -1** belongs to the default set. Entries with a specific Point Index replace that set for the segment leaving that point. An edge override's **Texture Index** selects an entry, wrapping around the available count. Enable **Randomize Textures** to choose an entry for each sampled segment. **Texture Seed** makes the selection repeatable when a scene reloads.
+
+## Point anchors
+
+Choose **Create > 2D > Shape Point Anchor** on a shape. The anchor follows **Point Index** plus **Point Offset**, from zero to one along the outgoing segment. **Rotation** is measured in degrees from the forward curve tangent. **Use Shape Scale** controls whether its children inherit the shape's scale. Parent a sprite, mesh, light, or another entity to the anchor. Moving the spline updates the attachment automatically.
 
 ## Collision
 
-**Collision Enabled** generates a static triangle collider. **Collision Depth** extrudes the closed fill or open ribbon along local Z. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
+**Collision Enabled** generates a static triangle collider. **Collision Depth** extrudes it along local Z. **Collision Mode** selects **Filled**, **Rendered edges**, or **Hollow**. Filled and hollow modes use **Collision Offset** independently of the visual fill. Hollow and open shapes use **Collision Width**; open collision ends are flat. These offsets use mitered polygon buffering with intersection resolution. Collision is generated even when rendering is disabled with Fill Enabled or Edges Enabled. Switching off the Smart Shape component removes all generated output, including collision.
 
 The collider uses the normal PhysicsECS lifecycle. Physics bodies are created during simulation and released when the generated entity is removed. These triangle colliders are static terrain. Use the engine's convex collider types for dynamic objects.
 
 ## Saving and runtime
 
-The scene stores the spline, shape settings, and authored edge-override children. Generated mesh and collider children are runtime output and are not saved. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
+The scene stores the spline, shape settings, and authored edge-override, texture-entry, and anchor children. Generated mesh and collider children are runtime output and are not saved. They rebuild when the scene loads, including in the Player with the package's runtime module installed.
 
 Creation and reflected property edits use the editor's undo system. Use the parent shape's inspector to edit generated output. Changes made directly to a generated child are replaced on regeneration.
 

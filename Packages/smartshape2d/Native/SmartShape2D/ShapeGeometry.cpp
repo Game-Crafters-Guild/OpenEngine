@@ -1,6 +1,9 @@
 #include "SmartShape2D/ShapeGeometry.h"
 
 #include "SmartShape2D/SmartShape.h"
+#include "SmartShape2D/ShapeEdges.h"
+#include "SmartShape2D/ShapeMesh.h"
+#include "SmartShape2D/ShapeOffset.h"
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Interpolation.h"
 #include "Mathematics/Triangulation.h"
@@ -25,44 +28,6 @@ bool IsFinite(Vector2 value)
     return std::isfinite(value.x) && std::isfinite(value.y);
 }
 
-void AppendVertex(Mesh& mesh, Vector2 position, Vector2 uv, float depth)
-{
-    Vertex vertex{};
-    vertex.Position[0] = position.x;
-    vertex.Position[1] = position.y;
-    vertex.Position[2] = depth;
-    vertex.Normal[2] = -1.0f;
-    vertex.Tangent[0] = 1.0f;
-    vertex.Tangent[3] = -1.0f;
-    vertex.TexCoords[0] = uv.x;
-    vertex.TexCoords[1] = uv.y;
-    mesh.Vertices.push_back(vertex);
-}
-
-void AppendQuad(Mesh& mesh, Vector2 a, Vector2 b, Vector2 c, Vector2 d,
-                float startU, float endU, float depth, bool flip)
-{
-    const auto base = static_cast<uint32>(mesh.Vertices.size());
-    const float top = flip ? 1.0f : 0.0f;
-    const float bottom = 1.0f - top;
-    AppendVertex(mesh, a, {startU, top}, depth);
-    AppendVertex(mesh, b, {endU, top}, depth);
-    AppendVertex(mesh, c, {endU, bottom}, depth);
-    AppendVertex(mesh, d, {startU, bottom}, depth);
-    const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    if (cross < 0.0f)
-        mesh.Indices.insert(mesh.Indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
-    else
-        mesh.Indices.insert(mesh.Indices.end(), {base, base + 2, base + 1, base, base + 3, base + 2});
-}
-
-ShapePart PartForNormal(Vector2 normal)
-{
-    if (std::abs(normal.y) >= std::abs(normal.x))
-        return normal.y >= 0.0f ? ShapePart::Top : ShapePart::Bottom;
-    return normal.x >= 0.0f ? ShapePart::Right : ShapePart::Left;
-}
-
 bool HasCrossings(const std::vector<Vector2>& points, bool closed)
 {
     const size_t edges = closed ? points.size() : points.size() - 1;
@@ -80,180 +45,69 @@ bool HasCrossings(const std::vector<Vector2>& points, bool closed)
     return false;
 }
 
-void ComputeBounds(Mesh& mesh)
-{
-    if (mesh.Vertices.empty())
-        return;
-    for (size_t axis = 0; axis < 3; ++axis)
-    {
-        mesh.MinBounds[axis] = mesh.Vertices.front().Position[axis];
-        mesh.MaxBounds[axis] = mesh.MinBounds[axis];
-        for (const auto& vertex : mesh.Vertices)
-        {
-            mesh.MinBounds[axis] = std::min(mesh.MinBounds[axis], vertex.Position[axis]);
-            mesh.MaxBounds[axis] = std::max(mesh.MaxBounds[axis], vertex.Position[axis]);
-        }
-    }
-}
-
-void BuildFill(ShapeGeometry& result, const Components::SmartShape& settings, float area)
+void BuildFill(ShapeGeometry& result, const Components::SmartShape& settings, const Mathematics::Matrix4x4& world)
 {
     auto& mesh = result.Parts[static_cast<size_t>(ShapePart::Fill)];
-    const float angle = settings.FillRotation * std::numbers::pi_v<float> / 180.0f;
+    const float parentAngle = settings.FillAbsoluteRotation ? 0.0f : std::atan2(world.Data()[1], world.Data()[0]);
+    const float angle = -settings.FillRotation * std::numbers::pi_v<float> / 180.0f - parentAngle;
     const float cosine = std::cos(angle);
     const float sine = std::sin(angle);
-    for (const auto& point : result.Outline)
+    const auto fill = OffsetShapePolygon(result.Outline, settings.FillMeshOffset);
+    for (const auto& point : fill)
     {
-        const Vector2 rotated{cosine * point.x - sine * point.y, sine * point.x + cosine * point.y};
-        const Vector2 uv{rotated.x / settings.FillScale.x + settings.FillOffset.x,
-                         -rotated.y / settings.FillScale.y + settings.FillOffset.y};
-        AppendVertex(mesh, point, uv, 0.0f);
+        auto positioned = world.TransformPoint({point.x, point.y, 0.0f});
+        if (!settings.FillAbsolutePosition)
+            positioned = positioned - world.TransformPoint({});
+        const Vector2 rotated{cosine * positioned.x - sine * positioned.y, sine * positioned.x + cosine * positioned.y};
+        const Vector2 uv{(rotated.x - settings.FillOffset.x) / settings.FillScale.x,
+                         -(rotated.y - settings.FillOffset.y) / settings.FillScale.y};
+        AppendShapeVertex(mesh, point, uv, settings.FillDepth);
     }
-    std::vector<uint32> polygon(result.Outline.size());
+    std::vector<uint32> polygon(fill.size());
     std::iota(polygon.begin(), polygon.end(), 0u);
-    if (area < 0.0f)
+    if (Mathematics::PolygonDoubledSignedArea(fill) < 0.0f)
         std::reverse(polygon.begin(), polygon.end());
-    Mathematics::EarClip(result.Outline, std::move(polygon), mesh.Indices);
+    Mathematics::EarClip(fill, std::move(polygon), mesh.Indices);
     for (size_t i = 0; i < mesh.Indices.size(); i += 3)
         std::swap(mesh.Indices[i + 1], mesh.Indices[i + 2]);
 }
 
-bool MatchesNormal(Vector2 normal, const Components::SmartShapeEdge& rule)
-{
-    if (rule.NormalSweep == 0.0f || std::abs(rule.NormalSweep) >= 360.0f)
-        return true;
-    const float angle = std::atan2(normal.y, normal.x) * 180.0f / std::numbers::pi_v<float>;
-    const float start = rule.NormalSweep < 0.0f ? rule.NormalStart + rule.NormalSweep : rule.NormalStart;
-    float distance = std::fmod(angle - start, 360.0f);
-    if (distance < 0.0f)
-        distance += 360.0f;
-    return distance <= std::abs(rule.NormalSweep);
-}
-
-void BuildEdges(ShapeGeometry& result, const Components::SmartShape& settings,
-                const std::vector<float>& widths, const std::vector<uint32>& segments,
-                std::span<const Components::SmartShapeEdge> overrides, bool closed, float area)
-{
-    const auto& points = result.Outline;
-    const size_t count = points.size();
-    const size_t edges = closed ? count : count - 1;
-    const float side = closed && area > 0.0f ? -1.0f : 1.0f;
-    std::vector<Vector2> normals(edges);
-    std::vector<float> lengths(edges);
-    float totalLength = 0.0f;
-    for (size_t i = 0; i < edges; ++i)
-    {
-        const Vector2 delta = points[(i + 1) % count] - points[i];
-        lengths[i] = delta.Length();
-        normals[i] = Vector2{-delta.y, delta.x} * (side / lengths[i]);
-        totalLength += lengths[i];
-    }
-    const float tileCount = std::max(1.0f, std::round(totalLength / settings.TileLength));
-    const float tileLength = settings.StretchToFit ? totalLength / tileCount : settings.TileLength;
-    std::vector<Vector2> offsets(count);
-    for (size_t i = 0; i < count; ++i)
-    {
-        const Vector2 next = normals[std::min(i, edges - 1)];
-        const Vector2 previous = normals[i == 0 ? (closed ? edges - 1 : 0) : i - 1];
-        const Vector2 sum = previous + next;
-        const float length = sum.Length();
-        if (length <= kMinimumLength)
-            offsets[i] = next;
-        else
-        {
-            const Vector2 bisector = sum / length;
-            const float denominator = std::max(kMinimumLength, Vector2::Dot(bisector, next));
-            offsets[i] = bisector * std::min(settings.MiterLimit, 1.0f / denominator);
-        }
-        offsets[i] = offsets[i] * (settings.EdgeWidth * widths[i]);
-    }
-    float distance = 0.0f;
-    for (size_t i = 0; i < edges; ++i)
-    {
-        const size_t next = (i + 1) % count;
-        size_t part = static_cast<size_t>(PartForNormal(normals[i]));
-        bool flip = settings.FlipEdges;
-        bool visible = true;
-        for (const bool normalRule : {false, true})
-        {
-            bool matched = false;
-            for (size_t index = 0; index < overrides.size(); ++index)
-            {
-                const auto& edge = overrides[index];
-                if (edge.UseNormalRange != normalRule ||
-                    (normalRule ? !MatchesNormal(normals[i], edge) : edge.PointIndex != segments[i]))
-                    continue;
-                if (!edge.Material.IsNull())
-                    part = static_cast<size_t>(ShapePart::Count) + index;
-                flip = flip != edge.Flip;
-                visible = edge.Visible;
-                matched = true;
-                break;
-            }
-            if (matched)
-                break;
-        }
-        if (!visible)
-        {
-            distance += lengths[i];
-            continue;
-        }
-        auto& mesh = result.Parts[part];
-        const float outer = 0.5f + settings.EdgeOffset;
-        const float inner = -0.5f + settings.EdgeOffset;
-        AppendQuad(mesh, points[i] + offsets[i] * outer, points[next] + offsets[next] * outer,
-                   points[next] + offsets[next] * inner, points[i] + offsets[i] * inner,
-                   distance / tileLength, (distance + lengths[i]) / tileLength, settings.EdgeDepth, flip);
-        distance += lengths[i];
-    }
-    // Corner sprites are optional overlays, using the same unit square convention as caps.
-    for (size_t i = closed ? 0 : 1; i < (closed ? count : count - 1); ++i)
-    {
-        const auto previous = normals[(i + edges - 1) % edges];
-        const auto next = normals[i % edges];
-        const float turn = previous.x * next.y - previous.y * next.x;
-        if (std::abs(turn) < 0.01f)
-            continue;
-        const bool outer = turn * side < 0.0f;
-        const auto& material = outer ? settings.OuterCornerMaterial : settings.InnerCornerMaterial;
-        if (material.IsNull())
-            continue;
-        const float halfWidth = settings.EdgeWidth * widths[i] * 0.5f;
-        const Vector2 center = points[i] + offsets[i] * settings.EdgeOffset;
-        auto& mesh = result.Parts[static_cast<size_t>(outer ? ShapePart::OuterCorner : ShapePart::InnerCorner)];
-        AppendQuad(mesh, center + Vector2{-halfWidth, halfWidth}, center + Vector2{halfWidth, halfWidth},
-                   center + Vector2{halfWidth, -halfWidth}, center + Vector2{-halfWidth, -halfWidth},
-                   0.0f, 1.0f, settings.EdgeDepth * 2.0f, settings.FlipEdges);
-    }
-    if (closed)
-        return;
-    for (const bool start : {true, false})
-    {
-        if ((start ? settings.StartCapMaterial : settings.EndCapMaterial).IsNull())
-            continue;
-        const size_t point = start ? 0 : count - 1;
-        const Vector2 normal = normals[start ? 0 : edges - 1];
-        const Vector2 direction = (start ? points[0] - points[1] : points[count - 1] - points[count - 2]).Normalize();
-        const float width = settings.EdgeWidth * widths[point];
-        const Vector2 center = points[point] + normal * (settings.EdgeOffset * width);
-        auto& mesh = result.Parts[static_cast<size_t>(start ? ShapePart::StartCap : ShapePart::EndCap)];
-        AppendQuad(mesh, center + normal * (width * 0.5f), center + direction * width + normal * (width * 0.5f),
-                   center + direction * width - normal * (width * 0.5f), center - normal * (width * 0.5f),
-                   0.0f, 1.0f, settings.EdgeDepth, settings.FlipEdges);
-    }
-}
 } // namespace
 
 ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::SmartShape& settings,
-                         std::span<const Components::SmartShapeEdge> overrides)
+                         std::span<const Components::SmartShapeEdge> overrides,
+                         std::span<const Components::SmartShapeTexture> textures,
+                         const Mathematics::Matrix4x4& world)
 {
     ShapeGeometry result;
     result.Parts.resize(static_cast<size_t>(ShapePart::Count) + overrides.size());
     result.Materials = {settings.FillMaterial, settings.TopMaterial, settings.RightMaterial, settings.BottomMaterial,
                         settings.LeftMaterial, settings.InnerCornerMaterial, settings.OuterCornerMaterial,
-                        settings.StartCapMaterial, settings.EndCapMaterial};
+                        settings.StartCapMaterial, settings.EndCapMaterial, {}, {}};
+    for (size_t part = 0; part < static_cast<size_t>(ShapePart::Count); ++part)
+        result.Kinds.push_back(static_cast<ShapePart>(part));
     for (const auto& edge : overrides)
+    {
         result.Materials.push_back(edge.Material);
+        result.Kinds.push_back(ShapePart::Top);
+    }
+    for (const auto& texture : textures)
+    {
+        if (!std::isfinite(texture.TileLength) || texture.TileLength <= kMinimumLength ||
+            !std::isfinite(texture.WidthScale) || texture.WidthScale <= 0.0f ||
+            !IsFinite(texture.StartTaperSize) || texture.StartTaperSize.x <= 0.0f || texture.StartTaperSize.y <= 0.0f ||
+            !IsFinite(texture.EndTaperSize) || texture.EndTaperSize.x <= 0.0f || texture.EndTaperSize.y <= 0.0f)
+        {
+            result.Error = "Texture entries need positive finite width, tile length and taper lengths.";
+            return result;
+        }
+        result.Materials.insert(result.Materials.end(), {{}, texture.Material, texture.Material, texture.Material,
+            texture.Material, texture.InnerCornerMaterial, texture.OuterCornerMaterial, texture.StartTaperMaterial,
+            texture.EndTaperMaterial, texture.SharpStartTaperMaterial, texture.SharpEndTaperMaterial});
+        for (size_t part = 0; part < static_cast<size_t>(ShapePart::Count); ++part)
+            result.Kinds.push_back(static_cast<ShapePart>(part));
+    }
+    result.Parts.resize(result.Materials.size());
     if (!spline.IsValid())
     {
         result.Error = "Add at least two spline points.";
@@ -261,14 +115,15 @@ ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::Sma
     }
     if (!IsFinite(settings.FillScale) || !IsFinite(settings.FillOffset) ||
         settings.FillScale.x <= kMinimumLength || settings.FillScale.y <= kMinimumLength ||
-        !std::isfinite(settings.FillRotation) || !std::isfinite(settings.EdgeWidth) || settings.EdgeWidth <= 0.0f ||
+        !std::isfinite(settings.FillRotation) || !std::isfinite(settings.FillDepth) || !std::isfinite(settings.FillMeshOffset) || !std::isfinite(settings.EdgeWidth) || settings.EdgeWidth <= 0.0f ||
         !std::isfinite(settings.TileLength) || settings.TileLength <= kMinimumLength ||
         !std::isfinite(settings.EdgeOffset) || !std::isfinite(settings.EdgeDepth) ||
-        !std::isfinite(settings.MiterLimit) || settings.MiterLimit < 1.0f ||
+        !IsFinite(settings.StartTaperSize) || settings.StartTaperSize.x <= 0.0f || settings.StartTaperSize.y <= 0.0f ||
+        !IsFinite(settings.EndTaperSize) || settings.EndTaperSize.x <= 0.0f || settings.EndTaperSize.y <= 0.0f ||
         !std::isfinite(settings.CollisionDepth) || settings.CollisionDepth <= 0.0f ||
         settings.CurveSubdivisions < 1 || settings.CurveSubdivisions > 64)
     {
-        result.Error = "Use finite dimensions, positive fill scales, width and tile length, a miter limit of at least 1, and 1–64 curve subdivisions.";
+        result.Error = "Use finite dimensions, positive fill scales, width and tile length, 1–64 curve subdivisions.";
         return result;
     }
     for (const auto& point : spline.Points)
@@ -289,7 +144,8 @@ ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::Sma
     {
         if ((!edge.UseNormalRange && (edge.PointIndex >= spline.Points.size() || overridden[edge.PointIndex])) ||
             !std::isfinite(edge.NormalStart) || !std::isfinite(edge.NormalSweep) ||
-            !std::isfinite(edge.WidthScale) || edge.WidthScale <= 0.0f)
+            !std::isfinite(edge.WidthScale) || edge.WidthScale <= 0.0f ||
+            !std::isfinite(edge.Offset) || !std::isfinite(edge.DepthOffset))
         {
             result.Error = "Use one edge override per existing point, with a positive finite width scale.";
             return result;
@@ -350,11 +206,14 @@ ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::Sma
         return result;
     }
     if (closed && settings.FillEnabled)
-        BuildFill(result, settings, area);
+        BuildFill(result, settings, world);
     if (settings.EdgesEnabled)
-        BuildEdges(result, settings, widths, sampleSegments, overrides, closed, area);
+        BuildShapeEdges(result, settings, widths, sampleSegments, overrides, textures, closed, area);
     for (auto& mesh : result.Parts)
-        ComputeBounds(mesh);
+    {
+        ComputeShapeBounds(mesh);
+        GenerateMeshTangents(mesh, true);
+    }
     return result;
 }
 } // namespace GameEngine::SmartShape2D

@@ -112,7 +112,7 @@ TEST(SmartShape2D, OpenPathHasNoFillAndSupportsBothCaps)
     EXPECT_EQ(result.Parts[static_cast<size_t>(ShapePart::EndCap)].Indices.size(), 6u);
     const auto& edge = result.Parts[static_cast<size_t>(ShapePart::Top)];
     EXPECT_FLOAT_EQ(edge.Vertices[0].Position[1], 0.25f);
-    EXPECT_FLOAT_EQ(edge.Vertices[1].Position[1], 0.5f);
+    EXPECT_FLOAT_EQ(edge.Vertices[1].Position[1], 0.25f);
 }
 
 TEST(SmartShape2D, TwoPointClosedCurveBehavesAsOpenPath)
@@ -188,8 +188,8 @@ TEST(SmartShape2D, FillUvScaleOffsetAndRotationAreApplied)
     settings.FillRotation = 90.0f;
     const auto result = BuildShape(Rectangle(), settings);
     ASSERT_TRUE(result.Error.empty());
-    EXPECT_NEAR(result.Parts[0].Vertices[0].TexCoords[0], 1.5f, 0.0001f);
-    EXPECT_NEAR(result.Parts[0].Vertices[0].TexCoords[1], 2.5f, 0.0001f);
+    EXPECT_NEAR(result.Parts[0].Vertices[0].TexCoords[0], -1.0f, 0.0001f);
+    EXPECT_NEAR(result.Parts[0].Vertices[0].TexCoords[1], 0.0f, 0.0001f);
 }
 
 TEST(SmartShape2D, StretchFitsWholeTilesAndCropKeepsAuthoredLength)
@@ -238,15 +238,17 @@ TEST(SmartShape2D, PointOverridesReplaceMaterialHideEdgesAndScaleWidths)
     edge.PointIndex = 2;
     edge.Material.Set(GUID::Derive(GUID::Null(), "test/override"));
     edge.WidthScale = 2.0f;
-    auto result = BuildShape(Rectangle(), {}, std::span(&edge, 1));
+    Components::SmartShape settings;
+    settings.WeldEdges = false;
+    auto result = BuildShape(Rectangle(), settings, std::span(&edge, 1));
     ASSERT_TRUE(result.Error.empty()) << result.Error;
     EXPECT_TRUE(result.Parts[static_cast<size_t>(ShapePart::Top)].Indices.empty());
-    ASSERT_EQ(result.Parts[9].Indices.size(), 6u);
-    EXPECT_EQ(result.Materials[9], edge.Material);
-    EXPECT_FLOAT_EQ(result.Parts[9].Vertices[0].Position[1], 1.5f);
+    ASSERT_EQ(result.Parts[static_cast<size_t>(ShapePart::Count)].Indices.size(), 6u);
+    EXPECT_EQ(result.Materials[static_cast<size_t>(ShapePart::Count)], edge.Material);
+    EXPECT_FLOAT_EQ(result.Parts[static_cast<size_t>(ShapePart::Count)].Vertices[0].Position[1], 1.5f);
     edge.Visible = false;
     result = BuildShape(Rectangle(), {}, std::span(&edge, 1));
-    EXPECT_TRUE(result.Parts[9].Indices.empty());
+    EXPECT_TRUE(result.Parts[static_cast<size_t>(ShapePart::Count)].Indices.empty());
 }
 
 TEST(SmartShape2D, NormalRangesWrapAndPointOverridesTakePrecedence)
@@ -259,13 +261,13 @@ TEST(SmartShape2D, NormalRangesWrapAndPointOverridesTakePrecedence)
     const auto result = BuildShape(Rectangle(), {}, std::span(&range, 1));
     ASSERT_TRUE(result.Error.empty());
     EXPECT_TRUE(result.Parts[static_cast<size_t>(ShapePart::Right)].Indices.empty());
-    EXPECT_EQ(result.Parts[9].Indices.size(), 6u);
+    EXPECT_EQ(result.Parts[static_cast<size_t>(ShapePart::Count)].Indices.size(), 6u);
     Components::SmartShapeEdge point;
     point.PointIndex = 1;
     point.Visible = false;
     const std::array overrides{range, point};
     const auto hidden = BuildShape(Rectangle(), {}, overrides);
-    EXPECT_TRUE(hidden.Parts[9].Indices.empty());
+    EXPECT_TRUE(hidden.Parts[static_cast<size_t>(ShapePart::Count)].Indices.empty());
     EXPECT_TRUE(hidden.Parts[2].Indices.empty());
 }
 }

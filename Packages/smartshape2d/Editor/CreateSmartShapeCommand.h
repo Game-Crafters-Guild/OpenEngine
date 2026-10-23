@@ -5,7 +5,7 @@
 
 namespace GameEngine::SmartShape2D
 {
-enum class ShapeCreationKind { Closed, Open, EdgeOverride };
+enum class ShapeCreationKind { Closed, Open, EdgeOverride, Anchor, Texture };
 
 class CreateSmartShapeCommand final : public Editor::IEditorCommand
 {

@@ -1,6 +1,8 @@
 #include "CreateSmartShapeCommand.h"
 #include "SmartShape2D/SmartShape.h"
 #include "SmartShape2D/SmartShapeEdge.h"
+#include "SmartShape2D/SmartShapeAnchor.h"
+#include "SmartShape2D/SmartShapeTexture.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -14,6 +16,8 @@ namespace
 constexpr uint32 kCreateClosedShape = 0x6610u;
 constexpr uint32 kCreateOpenShape = 0x6611u;
 constexpr uint32 kCreateEdgeOverride = 0x6612u;
+constexpr uint32 kCreateAnchor = 0x6613u;
+constexpr uint32 kCreateTexture = 0x6614u;
 
 class SmartShapeEditorPlugin final : public Editor::IEditorPlugin
 {
@@ -33,6 +37,16 @@ public:
         edgeTraits.InspectorCategory = "2D";
         edgeTraits.InspectorTooltip = "Overrides the outgoing segment of a point on the parent Smart Shape.";
         Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::SmartShapeEdge>(), std::move(edgeTraits));
+        Editor::EditorComponentTraits anchorTraits;
+        anchorTraits.DisplayName = "Shape Point Anchor";
+        anchorTraits.InspectorCategory = "2D";
+        anchorTraits.InspectorTooltip = "Attach children to a point or an offset along the parent shape curve.";
+        Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::SmartShapeAnchor>(), std::move(anchorTraits));
+        Editor::EditorComponentTraits textureTraits;
+        textureTraits.DisplayName = "Shape Texture Entry";
+        textureTraits.InspectorCategory = "2D";
+        textureTraits.InspectorTooltip = "One material variant with matching corners and tapers in the parent shape texture set.";
+        Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::SmartShapeTexture>(), std::move(textureTraits));
         Editor::EditorPluginRegistry::Get().RegisterPlugin(*this);
     }
     const Plugins::PluginDescriptor& GetDescriptor() const override
@@ -45,17 +59,22 @@ public:
         builder.AddItem("Create/2D/Smart Shape", kCreateClosedShape, MenuItemFlag_None, 40);
         builder.AddItem("Create/2D/Smart Path", kCreateOpenShape, MenuItemFlag_None, 41);
         if (context.World && context.HasTargetEntity && context.World->HasComponent<Components::SmartShape>(context.TargetEntity))
+        {
             builder.AddItem("Create/2D/Shape Edge Override", kCreateEdgeOverride, MenuItemFlag_None, 42);
+            builder.AddItem("Create/2D/Shape Point Anchor", kCreateAnchor, MenuItemFlag_None, 43);
+            builder.AddItem("Create/2D/Shape Texture Entry", kCreateTexture, MenuItemFlag_None, 44);
+        }
     }
     bool HandleHierarchyCommand(uint32 command, const Editor::HierarchyCommandContext& context) override
     {
-        if (command != kCreateClosedShape && command != kCreateOpenShape && command != kCreateEdgeOverride)
+        if (command != kCreateClosedShape && command != kCreateOpenShape && command != kCreateEdgeOverride && command != kCreateAnchor && command != kCreateTexture)
             return false;
-        if (command == kCreateEdgeOverride && (!context.World || !context.HasTargetEntity ||
+        if ((command == kCreateEdgeOverride || command == kCreateAnchor || command == kCreateTexture) && (!context.World || !context.HasTargetEntity ||
             !context.World->HasComponent<Components::SmartShape>(context.TargetEntity)))
             return false;
         const auto kind = command == kCreateClosedShape ? ShapeCreationKind::Closed :
-                          command == kCreateOpenShape ? ShapeCreationKind::Open : ShapeCreationKind::EdgeOverride;
+                          command == kCreateOpenShape ? ShapeCreationKind::Open : command == kCreateAnchor ? ShapeCreationKind::Anchor :
+                          command == kCreateTexture ? ShapeCreationKind::Texture : ShapeCreationKind::EdgeOverride;
         auto create = std::make_unique<CreateSmartShapeCommand>(context, kind);
         if (context.Undo)
             context.Undo->Execute(std::move(create));

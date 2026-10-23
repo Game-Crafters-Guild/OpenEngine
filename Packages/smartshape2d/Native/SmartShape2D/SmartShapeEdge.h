@@ -16,6 +16,11 @@ struct SmartShapeEdge
     float WidthScale = 1.0f;
     bool Flip = false;
     bool Visible = true;
+    uint32 TextureIndex = 0;
+    float Offset = 0.0f;
+    float DepthOffset = 0.0f;
+    bool Weld = true;
+    bool TaperSharpCorners = false;
     bool operator==(const SmartShapeEdge&) const = default;
 };
 }
