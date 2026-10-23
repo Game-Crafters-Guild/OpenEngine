@@ -938,3 +938,71 @@ TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
     EXPECT_TRUE(weak.expired());
     EXPECT_EQ(AcquireSplineInteractionState(world)->Selection().PointIndex, -1);
 }
+
+TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
+{
+    ScopedSplineStickToMeshSetting stickToMesh(false);
+    SplineTool tool(*GetWorld());
+    for (const auto phase : {PointerPhase::Down, PointerPhase::Move, PointerPhase::Up})
+    {
+        const float x = phase == PointerPhase::Down ? -2.0f : phase == PointerPhase::Move ? 0.0f : 2.0f;
+        auto event = MakePointer(phase, 100.0f + x * 20.0f, 100.0f, {x, 3.0f, -10.0f}, {0, 0, 1});
+        event.IsEditor2D = true;
+        event.orthoHeight = 10.0f;
+        event.tanHalfFovY = 0.0f;
+        tool.OnPointerEvent(event);
+    }
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    ASSERT_NE(service, nullptr);
+    size_t count = 0;
+    GetWorld()->Query<GameEngine::ECS::Read<SplineComponent>, GameEngine::ECS::Read<Transform>>()
+        .Each([&](const SplineComponent& reference, const Transform& transform)
+        {
+            ++count;
+            const auto* spline = service->GetSplineData({reference.SplineDataIndex, reference.SplineDataGeneration});
+            ASSERT_NE(spline, nullptr);
+            ASSERT_GE(spline->Points.size(), 2u);
+            for (const auto& point : spline->Points)
+            {
+                EXPECT_NEAR(point.Position.y + transform.GetPosition().y, 3.0f, 0.001f);
+                EXPECT_NEAR(point.Position.z + transform.GetPosition().z, 0.0f, 0.001f);
+            }
+        });
+    EXPECT_EQ(count, 1u);
+}
+
+TEST_F(SplineToolTests, PerSplineWidthEnvelopeCanBeHiddenWithoutHidingControlPoints)
+{
+    auto* world = GetWorld();
+    auto& settings = GameEngine::Editor::SplineEditorSettings::Get();
+    const bool previousEnvelope = settings.GetShowWidthEnvelope();
+    const bool previousDrape = settings.GetDrapeToSurface();
+    settings.SetShowWidthEnvelope(true);
+    settings.SetDrapeToSurface(false);
+    const auto spline = MakeSplineEntity(world, 2);
+    world->AddComponentImmediate(spline.SplineEntity, WorldTransform{});
+    GameEngine::Editor::SceneTools::SplineSceneGizmo gizmo(*world);
+    gizmo.SetSelectionQuery([entity = spline.SplineEntity] { return entity; });
+    constexpr GameEngine::Rendering::ViewId kView = 9082;
+    const auto draw = [&](bool visible)
+    {
+        world->GetComponentForWrite<SplineComponent>(spline.SplineEntity)->ShowWidthEnvelope = visible;
+        GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
+        GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
+        const Vector3 camera(0.0f, 20.0f, -20.0f);
+        GizmoRenderContext context(kView, kView, &camera, nullptr, world);
+        gizmo.Render(context);
+        size_t count = 0;
+        if (const auto* groups = GameEngine::Editor::SceneTools::GetGizmoTriangleGroups(kView))
+            for (const auto& group : *groups)
+                count += group.vertices.size();
+        return count;
+    };
+    const auto hidden = draw(false);
+    EXPECT_GT(hidden, 0u);
+    EXPECT_GT(draw(true), hidden);
+    GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
+    GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
+    settings.SetShowWidthEnvelope(previousEnvelope);
+    settings.SetDrapeToSurface(previousDrape);
+}

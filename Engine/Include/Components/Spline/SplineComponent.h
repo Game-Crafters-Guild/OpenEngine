@@ -20,6 +20,9 @@ struct SplineComponent
 
     // Default radius for newly added control points.
     float32 DefaultRadius = 5.0f;
+
+    // Per-spline visibility, also gated by the editor-wide width envelope setting.
+    bool ShowWidthEnvelope = true;
 };
 
 static_assert(std::is_trivially_copyable_v<SplineComponent>,

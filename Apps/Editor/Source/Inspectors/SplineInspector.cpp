@@ -997,6 +997,14 @@ void RegisterSplineInspectors()
                 }
             }
 
+            AddToggleRow(ctx.Parent, "Show Width Envelope", comp->ShowWidthEnvelope,
+                [w, e, n, undo](bool visible)
+                {
+                    CommitComponentWithUndo<SplineComponent>(w, e, n, undo,
+                        "Change Spline Width Envelope", [visible](SplineComponent& updated)
+                        { updated.ShowWidthEnvelope = visible; });
+                }, "Show this spline's width guide when Show Width Envelope is enabled in the spline tool menu");
+
             AddComponentFloatRowWithDrag<SplineComponent>(
                 ctx.Parent,
                 "Default Radius",
