@@ -1,4 +1,6 @@
 #include "SmartShape2D/ShapeGeometry.h"
+#include "SmartShape2D/ShapeMesh.h"
+#include "Mathematics/Geometry.h"
 #include "SmartShape2D/SmartShape.h"
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
@@ -270,4 +272,55 @@ TEST(SmartShape2D, NormalRangesWrapAndPointOverridesTakePrecedence)
     EXPECT_TRUE(hidden.Parts[static_cast<size_t>(ShapePart::Count)].Indices.empty());
     EXPECT_TRUE(hidden.Parts[2].Indices.empty());
 }
+TEST(SmartShape2D, TightWeldedFlowerTrailFacesTheCameraAtEveryTriangle)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::CatmullRom;
+    spline.Closed = false;
+    for (const Mathematics::Vector3 point : {Mathematics::Vector3{-12, -1.4f, 0}, {-9, -0.2f, 0},
+        {-6, -0.6f, 0}, {-4.8788586f, 1.8793976f, 0}, {0, 1.2f, 0}, {3, 3.1f, 0},
+        {6, 2.7f, 0}, {9, 3.7f, 0}, {12, 3.2f, 0}})
+        spline.AddPoint(point, 1.0f);
+    Components::SmartShape settings;
+    settings.FillEnabled = false;
+    settings.EdgeWidth = 1.5f;
+    settings.TileLength = 4.5f;
+    settings.CurveSubdivisions = 16;
+    settings.WeldEdges = true;
+    const auto geometry = BuildShape(spline, settings);
+    ASSERT_TRUE(geometry.Error.empty());
+    size_t triangles = 0;
+    for (const auto& mesh : geometry.Parts)
+    {
+        for (size_t index = 0; index < mesh.Indices.size(); index += 3)
+        {
+            const auto& a = mesh.Vertices[mesh.Indices[index]];
+            const auto& b = mesh.Vertices[mesh.Indices[index + 1]];
+            const auto& c = mesh.Vertices[mesh.Indices[index + 2]];
+            const float area = (b.Position[0] - a.Position[0]) * (c.Position[1] - a.Position[1]) -
+                (b.Position[1] - a.Position[1]) * (c.Position[0] - a.Position[0]);
+            EXPECT_LE(area, 0.0f) << "Triangle " << triangles << " faces away from its -Z normal";
+            ++triangles;
+        }
+    }
+    EXPECT_GT(triangles, 0u);
+}
+
+TEST(SmartShape2D, ConcaveBorderQuadsCoverTheirInteriorWithoutOverlappingTriangles)
+{
+    std::array<Mathematics::Vector2, 4> points{{{0, 0}, {0.5f, 0.5f}, {2, 0}, {0, 2}}};
+    for (int winding = 0; winding < 2; ++winding)
+    {
+        for (size_t corner = 0; corner < points.size(); ++corner)
+        {
+            Mesh mesh;
+            AppendShapeQuad(mesh, points[0], points[1], points[2], points[3], 0, 1, 0, false);
+            EXPECT_NEAR(TriangleArea(mesh), std::abs(Mathematics::PolygonDoubledSignedArea(points)) * 0.5f, 0.00001f);
+            EXPECT_EQ(mesh.Indices.size(), 6u);
+            std::rotate(points.begin(), points.begin() + 1, points.end());
+        }
+        std::reverse(points.begin(), points.end());
+    }
+}
+
 }

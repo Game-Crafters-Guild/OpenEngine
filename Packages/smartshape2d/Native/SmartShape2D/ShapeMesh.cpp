@@ -1,6 +1,9 @@
 #include "SmartShape2D/ShapeMesh.h"
 
+#include "Mathematics/Geometry.h"
+
 #include <algorithm>
+#include <array>
 
 namespace GameEngine::SmartShape2D
 {
@@ -30,8 +33,19 @@ void AppendShapeQuad(Mesh& mesh, Vector2 a, Vector2 b, Vector2 c, Vector2 d,
     AppendShapeVertex(mesh, b, {endU, top}, depth);
     AppendShapeVertex(mesh, c, {endU, bottom}, depth);
     AppendShapeVertex(mesh, d, {startU, bottom}, depth);
-    const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    if (cross < 0.0f)
+    const float firstArea = Mathematics::PolygonDoubledSignedArea(std::array{a, b, c});
+    const float secondArea = Mathematics::PolygonDoubledSignedArea(std::array{a, c, d});
+    // Welding a tight bend can make a quad concave. Its interior diagonal is the one
+    // whose triangles have matching winding; the other diagonal overlaps outside the quad.
+    if ((firstArea < 0.0f && secondArea > 0.0f) || (firstArea > 0.0f && secondArea < 0.0f))
+    {
+        const float area = Mathematics::PolygonDoubledSignedArea(std::array{a, b, d});
+        if (area < 0.0f)
+            mesh.Indices.insert(mesh.Indices.end(), {base, base + 1, base + 3, base + 1, base + 2, base + 3});
+        else
+            mesh.Indices.insert(mesh.Indices.end(), {base, base + 3, base + 1, base + 1, base + 3, base + 2});
+    }
+    else if (firstArea < 0.0f || secondArea < 0.0f)
         mesh.Indices.insert(mesh.Indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
     else
         mesh.Indices.insert(mesh.Indices.end(), {base, base + 2, base + 1, base, base + 3, base + 2});
