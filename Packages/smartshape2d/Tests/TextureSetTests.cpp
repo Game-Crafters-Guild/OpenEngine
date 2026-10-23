@@ -116,3 +116,23 @@ TEST(SmartShapeTextureSet, EdgeRulesAndHiddenGapsStartIndependentTaperedRuns)
     }
 }
 }
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, ExplicitEdgeMaterialWinsOverTheDefaultTextureSet)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    spline.AddPoint({0, 0, 0}, 1);
+    spline.AddPoint({4, 0, 0}, 1);
+    Components::SmartShapeTexture texture;
+    texture.Material.Set(GUID::Derive(GUID::Null(), "default texture"));
+    Components::SmartShapeEdge edge;
+    edge.Material.Set(GUID::Derive(GUID::Null(), "explicit edge"));
+    const auto result = BuildShape(spline, {}, std::span(&edge, 1), std::span(&texture, 1));
+    const size_t overridePart = static_cast<size_t>(ShapePart::Count);
+    EXPECT_EQ(result.Parts[overridePart].Indices.size(), 6u);
+    EXPECT_EQ(result.Materials[overridePart], edge.Material);
+    EXPECT_TRUE(result.Parts[overridePart + 1 + static_cast<size_t>(ShapePart::Top)].Indices.empty());
+}
+}

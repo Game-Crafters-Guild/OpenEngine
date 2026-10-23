@@ -128,7 +128,8 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             const size_t chosen = choices[selection % choices.size()];
             texture = &textures[chosen];
             base = kParts + overrides.size() + chosen * kParts;
-            part = base + static_cast<size_t>(PartForNormal(normal));
+            if (!rule || rule->Material.IsNull())
+                part = base + static_cast<size_t>(PartForNormal(normal));
         }
         const float width = settings.EdgeWidth * (texture ? texture->WidthScale : 1.0f) *
                             (rule && rule->UseNormalRange ? rule->WidthScale : 1.0f);
