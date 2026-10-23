@@ -227,11 +227,12 @@ void FontFamilyIndex::Rebuild()
             continue;
 
         // Family names and traits come from the filename.
+        const std::filesystem::path filename = md.Name + md.Extension;
         std::vector<std::string> families;
         int candWeight = 400;
         FontStyle candStyle = FontStyle::Normal;
         {
-            std::string fam = DeriveFamilyFromFilename(absPath);
+            std::string fam = DeriveFamilyFromFilename(filename);
             if (!fam.empty())
             {
                 families.push_back(fam);
@@ -243,7 +244,7 @@ void FontFamilyIndex::Rebuild()
 
         // Always include the raw stem as a last-resort alias (e.g. "Roboto-Regular").
         {
-            const std::string stem = absPath.stem().string();
+            const std::string stem = filename.stem().string();
             if (!stem.empty())
                 families.push_back(stem);
         }
@@ -252,7 +253,7 @@ void FontFamilyIndex::Rebuild()
         std::unordered_set<std::string> seenKeys;
         seenKeys.reserve(families.size());
 
-        DeriveCandidateTraitsFromFilename(absPath, candWeight, candStyle);
+        DeriveCandidateTraitsFromFilename(filename, candWeight, candStyle);
 
         for (const std::string& fam : families)
         {
