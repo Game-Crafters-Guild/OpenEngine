@@ -2122,6 +2122,23 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     }
                     e.Stop();
                 });
+
+                // Escape or another button during the drag puts back the start values.
+                label->RegisterEventHandler(kEventMouseCancel,
+                    [label, fA, fB, startA, startB, didMove, idxA, idxB, commitComponent](UIEvent& e) {
+                    auto& state = InspectorDrag::GetDragState();
+                    if (state.draggingLabel != label)
+                        return;
+                    InspectorDrag::SetLabelDragHighlight(label, false);
+                    state.draggingLabel = nullptr;
+                    if (*didMove) {
+                        fA->SetValue(*startA);
+                        fB->SetValue(*startB);
+                        commitComponent(idxA, *startA);
+                        commitComponent(idxB, *startB);
+                    }
+                    e.Stop();
+                });
             };
 
             // Column headers: drag both axes of a single transform together.

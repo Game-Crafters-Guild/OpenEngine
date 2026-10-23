@@ -1100,6 +1100,20 @@ private:
             }
         });
 
+        // Escape or another button during the drag puts back the start values.
+        label->RegisterEventHandler(kEventMouseCancel, [this, field, onChanged, dragDidMove](UIEvent& e) {
+            if (!m_DraggingLabel || m_DraggingVec3Field != field)
+                return;
+            m_DraggingLabel = nullptr;
+            m_DraggingVec3Field = nullptr;
+            if (*dragDidMove)
+            {
+                field->SetValue(m_DragStartVec3);
+                if (onChanged) onChanged(m_DragStartVec3);
+            }
+            e.Stop();
+        });
+
         label->RegisterEventHandler(kEventMouseUp, [this, field, onChanging, onChanged](UIEvent& e) {
             if (e.Button == 1) {
                 ShowFieldContextMenu(field, onChanging, onChanged, e.X, e.Y);

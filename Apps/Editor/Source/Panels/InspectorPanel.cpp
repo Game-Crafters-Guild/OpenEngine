@@ -5708,6 +5708,19 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 e.Stop();
             } });
 
+        // Escape or another button during the drag puts back the start value.
+        nameLabelPtr->RegisterEventHandler(kEventMouseCancel, [this, varName, fieldPtr, nameLabelPtr](UIEvent& e)
+                                           {
+            if (!m_LeftMouseDragging || m_DraggingLabel != nameLabelPtr)
+                return;
+            m_LeftMouseDragging = false;
+            m_DraggingLabel = nullptr;
+            m_DraggingField = nullptr;
+            fieldPtr->SetValue(m_DragStartValue);
+            if (m_OnVariableEdited)
+                m_OnVariableEdited(varName, m_DragStartValue);
+            e.Stop(); });
+
         sectionContent->AddChild(std::move(row));
     }
 }

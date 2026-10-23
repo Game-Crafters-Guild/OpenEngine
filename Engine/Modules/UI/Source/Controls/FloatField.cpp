@@ -63,6 +63,13 @@ void FloatField::EnableDragToChange()
         EndDragToChange();
         e.Stop();
     });
+    editor->RegisterEventHandler(kEventMouseCancel, [this](UIEvent& e)
+    {
+        if (!m_DragPending && !m_DraggingValue)
+            return;
+        CancelDragToChange();
+        e.Stop();
+    });
 }
 
 void FloatField::BeginDragToChange(float mouseX)
@@ -128,6 +135,20 @@ void FloatField::EndDragToChange()
     m_SuppressTextFocus = false;
     FloatField::OnFocusChanged(true);
     SelectAll();
+}
+
+void FloatField::CancelDragToChange()
+{
+    const bool wasDragging = m_DraggingValue;
+    m_DragPending = false;
+    m_DraggingValue = false;
+    m_SuppressTextFocus = false;
+    SetFocusable(m_FocusableBeforeDrag);
+    if (!wasDragging)
+        return;
+    SetValue(m_DragStartValue);
+    FloatField::OnFocusChanged(false);
+    NotifyValueChanged();
 }
 
 bool FloatField::OnChar(unsigned int codepoint)

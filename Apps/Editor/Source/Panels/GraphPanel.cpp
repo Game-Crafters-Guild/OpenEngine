@@ -403,6 +403,13 @@ public:
                 EndScrub();
                 e.Stop();
             });
+            editor->RegisterEventHandler(kEventMouseCancel, [this](UIEvent& e)
+            {
+                if (!m_ScrubPending && !m_Scrubbing)
+                    return;
+                CancelScrub();
+                e.Stop();
+            });
         }
     }
 
@@ -477,6 +484,22 @@ private:
         }
     }
 
+    // Escape or another button during the scrub: the value goes back to where
+    // the scrub started, committed through the same value-changed path.
+    void CancelScrub()
+    {
+        const bool wasScrubbing = m_Scrubbing;
+        m_ScrubPending = false;
+        m_Scrubbing = false;
+        m_SuppressTextFocus = false;
+        SetFocusable(m_FocusableBeforeScrub);
+        if (!wasScrubbing)
+            return;
+        SetValue(m_ScrubStartValue);
+        FloatField::OnFocusChanged(false);
+        NotifyValueChanged();
+    }
+
     void OnFocusChanged(bool focused) override
     {
         if (focused && (m_ScrubPending || m_SuppressTextFocus))
@@ -538,6 +561,11 @@ private:
             EndScrub();
             e.Stop();
         }
+        else if (e.Id == kEventMouseCancel && (m_ScrubPending || m_Scrubbing))
+        {
+            CancelScrub();
+            e.Stop();
+        }
     }
 };
 
@@ -567,6 +595,13 @@ public:
                 if (e.Button != 0 || (!m_ScrubPending && !m_Scrubbing))
                     return;
                 EndScrub();
+                e.Stop();
+            });
+            editor->RegisterEventHandler(kEventMouseCancel, [this](UIEvent& e)
+            {
+                if (!m_ScrubPending && !m_Scrubbing)
+                    return;
+                CancelScrub();
                 e.Stop();
             });
         }
@@ -640,6 +675,22 @@ private:
         }
     }
 
+    // Escape or another button during the scrub: the value goes back to where
+    // the scrub started, committed through the same value-changed path.
+    void CancelScrub()
+    {
+        const bool wasScrubbing = m_Scrubbing;
+        m_ScrubPending = false;
+        m_Scrubbing = false;
+        m_SuppressTextFocus = false;
+        SetFocusable(m_FocusableBeforeScrub);
+        if (!wasScrubbing)
+            return;
+        SetValue(m_ScrubStartValue);
+        IntField::OnFocusChanged(false);
+        NotifyValueChanged();
+    }
+
     void OnFocusChanged(bool focused) override
     {
         if (focused && (m_ScrubPending || m_SuppressTextFocus))
@@ -699,6 +750,11 @@ private:
         if (e.Id == kEventMouseUp && (m_ScrubPending || m_Scrubbing))
         {
             EndScrub();
+            e.Stop();
+        }
+        else if (e.Id == kEventMouseCancel && (m_ScrubPending || m_Scrubbing))
+        {
+            CancelScrub();
             e.Stop();
         }
     }

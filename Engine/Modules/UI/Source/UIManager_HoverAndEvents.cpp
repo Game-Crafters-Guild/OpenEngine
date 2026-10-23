@@ -405,6 +405,12 @@ void UIManager::LockCapturedPointer()
         m_PointerLockCaptureInstanceId = m_CaptureInstanceId;
 }
 
+bool UIManager::IsCapturedPointerLocked() const
+{
+    return m_MouseCaptured && m_PointerLockCaptureInstanceId != 0 &&
+           m_PointerLockCaptureInstanceId == m_CaptureInstanceId;
+}
+
 void UIManager::SyncPointerLock()
 {
     if (!m_MouseCaptured || m_PointerLockCaptureInstanceId != m_CaptureInstanceId)

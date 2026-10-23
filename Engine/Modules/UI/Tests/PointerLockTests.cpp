@@ -3,11 +3,14 @@
 // A value drag asks UIManager to lock the pointer once the press has become a
 // drag; the host then hides the cursor and lets it travel past the screen edge.
 // These tests drive a FloatField's drag-to-change through a real UIManager and
-// pin what reaches the pointer lock callback, and that the drag keeps reading
-// moves once the pointer runs past the window's left edge. Hiding the platform
+// pin what reaches the pointer lock callback, that the drag keeps reading
+// moves once the pointer runs past the window's left edge, and that Escape or a
+// second button cancels the drag and puts back the start value. Hiding the platform
 // cursor and showing it again where the drag began is the window's job, checked
 // in the running editor.
 
+#include "Input/InputSystem.h"
+#include "Input/KeyCodes.h"
 #include "Rendering/Core/Device.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -207,4 +210,51 @@ TEST(PointerLockTests, LockingWithoutACaptureDoesNothing)
     fx.Ui->LockCapturedPointer();
     fx.Pump();
     EXPECT_TRUE(fx.LockEvents.empty());
+}
+
+// Escape cancels a locked drag: the value goes back to where the drag started,
+// the key goes no further, and the lock ends.
+TEST(PointerLockTests, EscapeCancelsALockedDragAndRestoresTheStartValue)
+{
+    PointerLockFixture fx;
+    const bool inited = fx.Init();
+    REQUIRE_POINTER_LOCK_FIXTURE(fx, inited);
+
+    fx.PressAtCentre();
+    fx.MoveTo(fx.CentreX() + 50.0f);
+    ASSERT_NE(fx.Field->GetValue(), 1.0f);
+
+    EXPECT_TRUE(fx.Ui->OnKey(Input::kKeyCode_Escape, Input::kKeyActionPress, 0));
+    fx.Pump();
+    EXPECT_FLOAT_EQ(fx.Field->GetValue(), 1.0f);
+    EXPECT_EQ(fx.LockEvents, (std::vector<bool>{true, false}));
+    EXPECT_FALSE(fx.Ui->IsMouseCaptured());
+
+    // The held button's release finds no press and changes nothing.
+    fx.MoveTo(fx.CentreX() + 80.0f);
+    fx.Release();
+    EXPECT_FLOAT_EQ(fx.Field->GetValue(), 1.0f);
+}
+
+// A press of another button cancels a locked drag the same way, and starts
+// nothing of its own.
+TEST(PointerLockTests, AnotherButtonCancelsALockedDragAndRestoresTheStartValue)
+{
+    PointerLockFixture fx;
+    const bool inited = fx.Init();
+    REQUIRE_POINTER_LOCK_FIXTURE(fx, inited);
+
+    fx.PressAtCentre();
+    fx.MoveTo(fx.CentreX() + 50.0f);
+    ASSERT_NE(fx.Field->GetValue(), 1.0f);
+
+    constexpr int kRightMouseButton = 1;
+    EXPECT_TRUE(fx.Ui->OnMouseButton(kRightMouseButton, true));
+    fx.Pump();
+    EXPECT_FLOAT_EQ(fx.Field->GetValue(), 1.0f);
+    EXPECT_EQ(fx.LockEvents, (std::vector<bool>{true, false}));
+
+    fx.Ui->OnMouseButton(kRightMouseButton, false);
+    fx.Release();
+    EXPECT_FLOAT_EQ(fx.Field->GetValue(), 1.0f);
 }

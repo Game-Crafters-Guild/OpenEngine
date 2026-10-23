@@ -383,8 +383,11 @@ class UIManager
     /// edges. Moves keep reaching the capture element, as positions that run on
     /// from where the lock began, so a value drag keeps going at the screen
     /// edge. The lock ends with the capture or at the next press, and the cursor
-    /// shows again where the lock began. Does nothing without a capture. Call it
-    /// once the press has become a drag, so a plain click never hides the cursor.
+    /// shows again where the lock began. Escape, or a press of another mouse
+    /// button, cancels a locked drag: the capture element receives
+    /// kEventMouseCancel and puts back the value the drag started from. Does
+    /// nothing without a capture. Call it once the press has become a drag, so a
+    /// plain click never hides the cursor.
     void LockCapturedPointer();
 
     const std::string& GetCaptureId() const { return m_CaptureId; }
@@ -2167,6 +2170,8 @@ public:
     // Tells the host when the pointer lock begins or ends: it holds while the
     // capture that asked for it does.
     void SyncPointerLock();
+    // True while the current capture holds the pointer lock it asked for.
+    bool IsCapturedPointerLocked() const;
     // Finalize + push the per-frame update profile (TotalMs, dirty-source
     // top-N, history cap). Shared by the heavy tail and the gate's early
     // return so pointer-only frames still appear in profiling history.

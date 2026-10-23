@@ -554,6 +554,20 @@ inline void SetupLabelDragFloat(Label* label, FloatField* field,
             e.Stop();
         }
     });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, field, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingFloatField != field)
+            return;
+        const float startValue = state.dragStartFloatValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            field->SetValue(startValue);
+            if (onChanged) onChanged();
+        }
+        e.Stop();
+    });
 }
 
 // Set up drag-to-adjust on a label for an IntField. Double-click on label resets to defaultValue.
@@ -644,6 +658,20 @@ inline void SetupLabelDragInt(Label* label, IntField* field,
             }
             e.Stop();
         }
+    });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, field, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingIntField != field)
+            return;
+        const int startValue = state.dragStartIntValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            field->SetValue(startValue);
+            if (onChanged) onChanged();
+        }
+        e.Stop();
     });
 }
 
@@ -808,6 +836,21 @@ inline void SetupLabelDragSlider(Label* label, Slider* slider,
                 if (onChanged) onChanged();
             }
         }
+    });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, slider, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingSlider != slider)
+            return;
+        const float startValue = state.dragStartFloatValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            slider->SetValueWithoutNotify(startValue);
+            slider->NotifyValueChanged();
+            if (onChanged) onChanged();
+        }
+        e.Stop();
     });
 }
 

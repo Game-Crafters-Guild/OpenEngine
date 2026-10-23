@@ -313,6 +313,19 @@ inline void Vector3Field::SetupLabelDrag(Label* label, FloatField* field)
             e.Stop();
         }
     });
+
+    // Cancel (Escape or another button during a locked drag): put the
+    // component back where the drag started and commit that.
+    label->RegisterEventHandler(kEventMouseCancel, [this, label, field](UIEvent& e) {
+        if (m_DraggingLabel != label || m_DraggingField != field)
+            return;
+        label->RemoveClass("dragging");
+        m_DraggingLabel = nullptr;
+        m_DraggingField = nullptr;
+        field->SetValue(m_DragStartValue);
+        OnComponentChanged(true);
+        e.Stop();
+    });
 }
 
 } // namespace GameEngine

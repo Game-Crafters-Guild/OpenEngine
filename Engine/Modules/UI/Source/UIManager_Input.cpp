@@ -232,6 +232,14 @@ bool UIManager::OnMouseButton(int button, bool down)
     // before the next Update tells the host.
     if (down && isEdge)
         m_PointerLockCaptureInstanceId = 0;
+    // Another button's press during a locked drag cancels the drag; it starts
+    // nothing of its own, and its release, like the held button's, finds no
+    // press to end.
+    if (down && !isEdge && IsCapturedPointerLocked())
+    {
+        CancelPress();
+        return true;
+    }
 
     UIElement* const activeBeforeEl = m_MouseDown ? ActiveTarget() : nullptr;
     const uint64_t activeBefore = activeBeforeEl ? activeBeforeEl->GetInstanceId() : 0;
@@ -615,6 +623,14 @@ bool UIManager::OnKey(int key, int action, int mods)
     static int s_KeyLogBudget = 128;
 
     m_Modifiers.ApplyKeyEvent(key, isRelease, mods);
+
+    // Escape cancels a locked drag before anything else hears the key, so it
+    // neither reaches a focused control nor the shortcuts behind the UI.
+    if (isPress && key == Input::kKeyCode_Escape && IsCapturedPointerLocked())
+    {
+        CancelPress();
+        return true;
+    }
 
     bool consumed = false;
 
