@@ -1,0 +1,18 @@
+---
+title: Procedural mesh colliders
+description: Supply immutable CPU triangle geometry to static PhysicsECS bodies.
+---
+
+Native procedural generators can register CPU triangle geometry with `PhysicsECS::MeshColliderData`. The geometry is independent of GPU mesh residency and remains available when the physics world restarts.
+
+`Register` takes a `Physics::MeshShapeDef` and returns a generational handle. It rejects empty meshes, incomplete index triples, out-of-range indices, and non-finite vertices. Check the returned handle before creating the collider.
+
+Attach `Components::MeshColliderShape` to a generated entity with a `Transform`, `PhysicsCollider`, and a static `PhysicsBody`. Set `DataIndex` and `DataGeneration` from the returned handle. The normal physics initialization system builds the backend shape. Replacing the data handle rebuilds the body. The `BuiltDataIndex` and `BuiltDataGeneration` fields belong to the physics system.
+
+The geometry owner must keep the handle alive until all colliders that reference it have been removed. Then call `MeshColliderData::Release`. A stale handle never resolves to replacement data. `Read` returns shared immutable data, so a reader can finish after the owner releases the handle. These operations are thread-safe.
+
+Generated entities should carry `RuntimeOnlyEntity`. Recreate their data and colliders from the generator's authored settings after loading a scene. The Smart Shape 2D package demonstrates this ownership model.
+
+## Changelog
+
+- Added immutable procedural triangle data and static MeshColliderShape integration.
