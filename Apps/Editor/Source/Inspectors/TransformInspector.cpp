@@ -1073,8 +1073,11 @@ private:
         label->RegisterEventHandler(kEventMouseMove, [this, field, onChanging, dragDidMove](UIEvent& e) {
             if (m_DraggingLabel && m_DraggingVec3Field == field) {
                 float deltaX = e.X - m_DragStartX;
-                if (std::fabs(deltaX) > kDragThresholdPx)
+                if (!*dragDidMove && std::fabs(deltaX) > kDragThresholdPx)
+                {
                     *dragDidMove = true;
+                    InspectorDrag::LockDragPointer(field);
+                }
                 Rendering::Vector3 newValue(
                     m_DragStartVec3.x + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,
                     m_DragStartVec3.y + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,

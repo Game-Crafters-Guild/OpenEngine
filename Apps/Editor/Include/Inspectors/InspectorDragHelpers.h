@@ -455,6 +455,14 @@ inline void DragPaintToggle::OnEvent(UIEvent& e)
 // Drag-to-adjust setup functions
 // ============================================================================
 
+// Once a press has become a value drag: the cursor hides and the drag runs on
+// past the window and screen edges until the release (UIManager::LockCapturedPointer).
+inline void LockDragPointer(UIElement* element)
+{
+    if (UIManager* owner = element ? element->GetOwnerManager() : nullptr)
+        owner->LockCapturedPointer();
+}
+
 // Set up drag-to-adjust on a label for a FloatField. Double-click on label resets to defaultValue.
 inline void SetupLabelDragFloat(Label* label, FloatField* field,
                                 std::function<void()> onChanging = nullptr,
@@ -525,6 +533,7 @@ inline void SetupLabelDragFloat(Label* label, FloatField* field,
             newValue = std::clamp(newValue, minValue, maxValue);
             field->SetValue(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             if (onChanging) onChanging();
             e.Stop();
@@ -615,6 +624,7 @@ inline void SetupLabelDragInt(Label* label, IntField* field,
                            static_cast<int>(std::round(deltaX * kInspectorDragIntSensitivity));
             field->SetValue(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             if (onChanging) onChanging();
             e.Stop();
@@ -778,6 +788,7 @@ inline void SetupLabelDragSlider(Label* label, Slider* slider,
             newValue = std::max(slider->GetMin(), std::min(slider->GetMax(), newValue));
             slider->SetValueWithoutNotify(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             slider->NotifyValueChanging();
             if (onChanging) onChanging();

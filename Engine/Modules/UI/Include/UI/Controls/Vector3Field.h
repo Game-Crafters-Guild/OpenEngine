@@ -287,8 +287,12 @@ inline void Vector3Field::SetupLabelDrag(Label* label, FloatField* field)
     label->RegisterEventHandler(kEventMouseMove, [this, field](UIEvent& e) {
         if (m_DraggingLabel && m_DraggingField == field) {
             float deltaX = e.X - m_DragStartX;
-            if (std::fabs(deltaX) > kDragThresholdPx)
+            if (!m_LabelDragDidMove && std::fabs(deltaX) > kDragThresholdPx)
+            {
                 m_LabelDragDidMove = true;
+                if (UIManager* owner = GetOwnerManager())
+                    owner->LockCapturedPointer();
+            }
             float sensitivity = 0.1f;
             float newValue = m_DragStartValue + deltaX * sensitivity;
             // The label scrub writes the component directly, so it has to apply

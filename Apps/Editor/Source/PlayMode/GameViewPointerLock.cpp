@@ -51,11 +51,11 @@ void GameViewPointerLock::Update(Input::InputSystem& runtimeInput, Platform::Win
     if (target != m_LockedWindow)
     {
         if (m_LockedWindow)
-            m_LockedWindow->SetCursorLocked(false);
+            m_LockedWindow->UnlockCursor();
         m_LockedWindow = nullptr;
         if (target)
         {
-            target->SetCursorLocked(true);
+            target->LockCursor(Platform::Window::LockedCursorMotion::Raw);
             if (target->IsCursorLocked())
                 m_LockedWindow = target;
         }

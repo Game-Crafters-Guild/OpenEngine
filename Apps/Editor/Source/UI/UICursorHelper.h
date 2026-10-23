@@ -6,8 +6,9 @@
 namespace GameEngine
 {
 
-/// Sets up a cursor callback on the UIManager that changes the OS cursor
-/// based on the hovered UI element's CSS cursor property.
+/// Sets up the UIManager's cursor callbacks for this window: the OS cursor
+/// follows the hovered UI element's CSS cursor property, and a captured
+/// pointer's lock (UIManager::LockCapturedPointer) hides and holds the cursor.
 void SetupUICursorCallback(UIManager* ui, Platform::Window* window);
 
 } // namespace GameEngine

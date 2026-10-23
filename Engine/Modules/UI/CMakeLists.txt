@@ -603,6 +603,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextFieldPointerTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FieldCaptionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FloatFieldDragToChangeTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PointerLockTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputSelectionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ReleaseFocusHandoffTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputCursorTests.cpp

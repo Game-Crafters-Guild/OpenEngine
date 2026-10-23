@@ -227,6 +227,11 @@ bool UIManager::OnMouseButton(int button, bool down)
     // button, and only its release ends the press and carries it. Another
     // button's press or release while the press is held raises nothing.
     const bool isEdge = down ? !m_MouseDown : (m_MouseDown && button == m_MouseButton);
+    // A press starts a gesture of its own, which never inherits the lock an
+    // earlier drag asked for, even when the same element captures again
+    // before the next Update tells the host.
+    if (down && isEdge)
+        m_PointerLockCaptureInstanceId = 0;
 
     UIElement* const activeBeforeEl = m_MouseDown ? ActiveTarget() : nullptr;
     const uint64_t activeBefore = activeBeforeEl ? activeBeforeEl->GetInstanceId() : 0;

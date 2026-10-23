@@ -2090,6 +2090,8 @@ void UIManager::UpdateTooltipAndCursor(bool interactive)
             m_CursorCallback(desiredCursor);
         }
     }
+
+    SyncPointerLock();
 }
 
 void UIManager::PublishUpdateProfile(UpdateProfileFrame& prof, bool profEnabled,

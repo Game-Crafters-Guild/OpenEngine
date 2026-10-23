@@ -439,7 +439,10 @@ private:
             return;
 
         if (!m_Scrubbing)
+        {
             m_SuppressTextFocus = true;
+            InspectorDrag::LockDragPointer(this);
+        }
         m_Scrubbing = true;
         const int mods = GetVariableFieldModifierKeys(this);
         const float adjustedDeltaX = ApplyVariableFieldDragPrecision(deltaX, mods);
@@ -602,7 +605,10 @@ private:
             return;
 
         if (!m_Scrubbing)
+        {
             m_SuppressTextFocus = true;
+            InspectorDrag::LockDragPointer(this);
+        }
         m_Scrubbing = true;
         const int mods = GetVariableFieldModifierKeys(this);
         const float adjustedDeltaX = ApplyVariableFieldDragPrecision(deltaX, mods);

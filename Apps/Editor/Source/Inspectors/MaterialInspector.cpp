@@ -2103,6 +2103,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     fA->SetValue(newA);
                     fB->SetValue(newB);
                     *didMove = true;
+                    InspectorDrag::LockDragPointer(label);
                     beginEditIfNeeded(editLabel);
                     previewComponentTwo(idxA, newA, idxB, newB);
                     e.Stop();

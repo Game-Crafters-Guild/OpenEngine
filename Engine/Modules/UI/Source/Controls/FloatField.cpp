@@ -89,7 +89,11 @@ void FloatField::UpdateDragToChange(float mouseX)
         return;
 
     if (!m_DraggingValue)
+    {
         m_SuppressTextFocus = true;
+        if (UIManager* owner = GetOwnerManager())
+            owner->LockCapturedPointer();
+    }
     m_DraggingValue = true;
 
     const int mods = DragModifierKeys(this);

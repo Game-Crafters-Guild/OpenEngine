@@ -5669,6 +5669,8 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                                            {
             if (m_LeftMouseDragging && m_DraggingLabel == nameLabelPtr && m_DraggingField == fieldPtr) {
                 float totalDeltaX = e.X - m_DragStartX;
+                if (totalDeltaX != 0.0f)
+                    InspectorDrag::LockDragPointer(nameLabelPtr);
                 AdjustValueByDrag(varName, fieldPtr, totalDeltaX);
                 HighlightVariableField(varName);
             } });
