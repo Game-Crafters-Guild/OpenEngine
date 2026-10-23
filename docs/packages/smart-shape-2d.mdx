@@ -8,7 +8,7 @@ The `smartshape2d` package generates a textured fill, directional edges, and sta
 ## Create a shape
 
 1. Open the Hierarchy context menu.
-2. Choose **Create > 2D > Smart Shape** for a closed outline, or **Smart Path** for an open outline.
+2. Choose **Create > Shape > Smart Shape** for a closed outline, or **Smart Path** for an open outline.
 3. Switch the Scene View to 2D.
 4. Select the shape and use the Spline tool to move points, insert or remove points, or edit Bézier handles. The Spline inspector controls the interpolation type and whether the curve is closed.
 5. Assign materials in the **Smart Shape 2D** inspector. Fill, top, right, bottom, and left surfaces can use different materials.
@@ -48,7 +48,7 @@ Standard material normal maps use generated mesh tangents, including on rotated 
 
 ## Override an edge
 
-Select the shape, then choose **Create > 2D > Shape Edge Override** from its Hierarchy context menu. Keep the override entity parented to the shape.
+Select the shape, then choose **Create > Shape > Shape Edge Override** from its Hierarchy context menu. Keep the override entity parented to the shape.
 
 Set **Point Index** to the zero-based index of the point that starts the segment. The override can select a material, multiply the width at that point, flip the ribbon texture, or hide the segment. Use at most one point override for each point. Point indices address the current spline order, so check overrides after inserting or removing points.
 
@@ -58,13 +58,13 @@ Every matching normal rule draws a separate material layer. **Priority** orders 
 
 ## Texture sets
 
-Choose **Create > 2D > Shape Texture Entry** on the shape to add a material variant. Each entry can supply an edge material, matching inner and outer corners, ordinary start/end tapers, and sharp-corner start/end tapers. Add as many entries as needed. **Texture Set** groups entries for edge rules (zero is the default). Give each entry a unique **Index** for its Texture Set and Point Index. **Index** orders the set, **Tile Length** sets its horizontal texture dimension, and **Width Scale** changes its thickness.
+Choose **Create > Shape > Shape Texture Entry** on the shape to add a material variant. Each entry can supply an edge material, matching inner and outer corners, ordinary start/end tapers, and sharp-corner start/end tapers. Add as many entries as needed. **Texture Set** groups entries for edge rules (zero is the default). Give each entry a unique **Index** for its Texture Set and Point Index. **Index** orders the set, **Tile Length** sets its horizontal texture dimension, and **Width Scale** changes its thickness.
 
 An entry with **Point Index = -1** belongs to the default set. Entries with a specific Point Index replace that set for the segment leaving that point. An edge override's **Texture Index** selects an entry, wrapping around the available count. Enable **Randomize Textures** to choose an entry for each sampled segment. **Texture Seed** makes the selection repeatable when a scene reloads.
 
 ## Point anchors
 
-Choose **Create > 2D > Shape Point Anchor** on a shape. The anchor follows **Point Index** plus **Point Offset**, from zero to one along the outgoing segment. **Rotation** is measured in degrees from the forward curve tangent. **Use Shape Scale** controls whether its children inherit the shape's scale. Parent a sprite, mesh, light, or another entity to the anchor. Moving the spline updates the attachment automatically.
+Choose **Create > Shape > Shape Point Anchor** on a shape. The anchor follows **Point Index** plus **Point Offset**, from zero to one along the outgoing segment. **Rotation** is measured in degrees from the forward curve tangent. **Use Shape Scale** controls whether its children inherit the shape's scale. Parent a sprite, mesh, light, or another entity to the anchor. Moving the spline updates the attachment automatically.
 
 ## Collision
 

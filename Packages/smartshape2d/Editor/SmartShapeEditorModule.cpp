@@ -9,6 +9,7 @@
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UI/EditorIcons.h"
 
 namespace GameEngine::SmartShape2D
 {
@@ -60,13 +61,13 @@ public:
     }
     void BuildHierarchyContextMenu(ContextMenuBuilder& builder, const Editor::HierarchyContextMenuContext& context) override
     {
-        builder.AddItem("Create/2D/Smart Shape", kCreateClosedShape, MenuItemFlag_None, 40);
-        builder.AddItem("Create/2D/Smart Path", kCreateOpenShape, MenuItemFlag_None, 41);
+        builder.AddItem("Create/Shape/Smart Shape", kCreateClosedShape, MenuItemFlag_None, 40, EditorIcons::kMarkupRegion);
+        builder.AddItem("Create/Shape/Smart Path", kCreateOpenShape, MenuItemFlag_None, 41, EditorIcons::kSpline);
         if (context.World && context.HasTargetEntity && context.World->HasComponent<Components::SmartShape>(context.TargetEntity))
         {
-            builder.AddItem("Create/2D/Shape Edge Override", kCreateEdgeOverride, MenuItemFlag_None, 42);
-            builder.AddItem("Create/2D/Shape Point Anchor", kCreateAnchor, MenuItemFlag_None, 43);
-            builder.AddItem("Create/2D/Shape Texture Entry", kCreateTexture, MenuItemFlag_None, 44);
+            builder.AddItem("Create/Shape/Shape Edge Override", kCreateEdgeOverride, MenuItemFlag_None, 42, EditorIcons::kLinearCurve);
+            builder.AddItem("Create/Shape/Shape Point Anchor", kCreateAnchor, MenuItemFlag_None, 43, EditorIcons::kNode);
+            builder.AddItem("Create/Shape/Shape Texture Entry", kCreateTexture, MenuItemFlag_None, 44, EditorIcons::kMaterial);
         }
     }
     bool HandleHierarchyCommand(uint32 command, const Editor::HierarchyCommandContext& context) override
