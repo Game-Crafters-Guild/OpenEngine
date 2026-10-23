@@ -268,8 +268,10 @@ void DrawTheCardOverTheFloor(IDevice* device, const MaterialDocument& cardDocume
     const uint32_t cardInstance = AddInstance(rs, *cardEntry, *card, cardMesh);
     const uint32_t floorInstance = AddInstance(rs, *floorEntry, *floor, floorMesh);
     std::array<WorldSubmissionRecord, 2> submissions{};
-    submissions[0] = {viewId, cardHandle, card, cardInstance, 1u, 0u};
-    submissions[1] = {viewId, floorHandle, floor, floorInstance, 1u, 0u};
+    submissions[0] = {.viewId = viewId, .meshHandle = cardHandle, .material = card, .instanceIndex = cardInstance,
+                      .renderLayerMask = RenderLayerMask::Default()};
+    submissions[1] = {.viewId = viewId, .meshHandle = floorHandle, .material = floor, .instanceIndex = floorInstance,
+                      .renderLayerMask = RenderLayerMask::Default()};
 
     FramePools pools(device);
     RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
