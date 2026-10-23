@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "materialName": "Wood",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      0.25,
+      0.12,
+      0.055,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0
+  }
+}

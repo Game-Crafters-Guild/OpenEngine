@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 3,
+  "materialName": "LeafLight",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      1,
+      1,
+      0.8,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0
+  },
+  "textures": {
+    "albedoMap": "8f1c5846-f8fc-5af9-b3ac-027a2da4f600"
+  }
+}

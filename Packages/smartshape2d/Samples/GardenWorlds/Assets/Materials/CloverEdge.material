@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 3,
+  "materialName": "CloverEdge",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Mask",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0,
+    "alphaCutoff": 0.25
+  },
+  "textures": {
+    "albedoMap": "293b5b28-83c9-596d-afe4-4587853cd66e"
+  }
+}

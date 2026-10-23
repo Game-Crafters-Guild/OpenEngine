@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "materialName": "FarHill",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      0.2,
+      0.45,
+      0.45,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "materialName": "Haze",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      0.39,
+      0.64,
+      0.64,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0
+  }
+}

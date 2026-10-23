@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 3,
+  "materialName": "PaintedEarth",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Opaque",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0
+  },
+  "textures": {
+    "albedoMap": "ab5aaacd-90a5-5226-8085-79461bf8851a"
+  }
+}

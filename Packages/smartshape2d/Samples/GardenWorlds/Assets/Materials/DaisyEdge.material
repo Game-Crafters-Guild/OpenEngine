@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 3,
+  "materialName": "DaisyEdge",
+  "lightingModel": "StandardPBR",
+  "alphaMode": "Mask",
+  "doubleSided": true,
+  "textureFilter": "Trilinear",
+  "surfaceShader": "Surfaces/standard_pbr.glsl",
+  "properties": {
+    "baseColor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "opacity": 1,
+    "roughness": 1,
+    "metallic": 0,
+    "alphaCutoff": 0.25
+  },
+  "textures": {
+    "albedoMap": "b0993c62-7793-50f1-8e71-d0abe132b5b6"
+  }
+}

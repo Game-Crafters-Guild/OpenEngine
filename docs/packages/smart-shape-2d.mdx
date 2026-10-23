@@ -89,3 +89,22 @@ An outline can contain up to 4096 sampled points. Lower Curve Subdivisions or sp
 ## Changelog
 
 - Added the native Smart Shape 2D package, spline authoring, material rules, generated collision, and runtime regeneration.
+
+
+## Garden Worlds examples
+
+The package includes a sample project at `Packages/smartshape2d/Samples/GardenWorlds`.
+Copy this folder to a writable project location, then open it with the Editor's `--project` option.
+Open one of these scenes from Assets:
+
+- **MeadowCrossing.scene**: grassy banks, a brook, stone platforms, and a hidden upper garden.
+- **FloatingGardens.scene**: layered floating islands, randomized flower edges, and a curved connecting path.
+- **WoodlandTrail.scene**: a smooth open flower trail with a checkpoint flag attached through a point anchor.
+
+These are editable environment examples. Coin shapes indicate possible routes. They do not include a player controller, collection logic, or win conditions.
+The terrain and paths include static collision on their parent entities. Backgrounds and decorations do not collide.
+
+The five painted PNG textures include earth, meadow fill, blue slate, daisies, and clover.
+The two edge strips have real alpha channels for grass blades, flowers, and hanging roots.
+Their materials use **Mask** transparency with an **Alpha Cutoff** of `0.25`.
+Keep **Stretch To Fit** off on these examples so short edges show a cropped tile instead of stretching a narrow sample across the edge.
