@@ -1,6 +1,9 @@
 find_package(GTest CONFIG REQUIRED)
 add_executable(SmartShape2DTests
     ShapeGeometryTests.cpp
+    ShapeDestructionTests.cpp
+    ../Native/SmartShape2D/ShapeDestruction.cpp
+    ../Native/SmartShape2D/ShapeExplosion.cpp
     ShapeAnchorTests.cpp
     EdgeQuadTests.cpp
     TextureSetTests.cpp

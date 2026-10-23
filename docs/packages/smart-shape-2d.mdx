@@ -253,12 +253,42 @@ Open one of these scenes from Assets:
 
 - **MeadowCrossing.scene**: grassy banks, a brook, stone platforms, and a hidden upper garden.
 - **FloatingGardens.scene**: layered floating islands, randomized flower edges, and a curved connecting path.
+- **DestructionGarden.scene**: click-to-explode terrain with falling physics seeds, crater collision, and reset controls.
 - **WoodlandTrail.scene**: a smooth open flower trail with a checkpoint flag attached through a point anchor.
 
-These are editable environment examples. Coin shapes indicate possible routes. They do not include a player controller, collection logic, or win conditions.
+The first three scenes are editable environment examples. Coin shapes indicate possible routes. They do not include a player controller, collection logic, or win conditions.
 The terrain and paths include static collision on their parent entities. Backgrounds and decorations do not collide.
 
 The five painted PNG textures include earth, meadow fill, blue slate, daisies, and clover.
 The two edge strips have real alpha channels for grass blades, flowers, and hanging roots.
 Their materials use **Mask** transparency with an **Alpha Cutoff** of `0.25`.
 Keep **Stretch To Fit** off on these examples so short edges show a cropped tile instead of stretching a narrow sample across the edge.
+
+## Destructible terrain
+
+1. Open **Garden Worlds → DestructionGarden.scene** and press **Play**. The gold seeds fall onto the flower bridge.
+
+![Destruction Garden running before an explosion](img/destruction-ready.png)
+
+2. Click the bridge in **Game View** to blast a circular hole. Both the visible mesh and collision rebuild. Sleeping seeds wake and fall through the opening.
+
+![A seed falls through the blasted bridge](img/destruction-bridge.png)
+
+3. Click the meadow below the seed to cut a crater. Click again to enlarge it or make another opening.
+
+![A circular crater cut into the meadow](img/destruction-crater.png)
+
+4. Press **R** to restore the terrain. Stop and restart Play to reset the seeds. Stop restores the authored scene.
+
+![Restored bridge and meadow after pressing R](img/destruction-reset.png)
+
+To enable destruction on your own terrain, select the parent Smart Shape and enable **Destructible**.
+Keep **Collision Enabled** on if objects must collide with the remaining terrain.
+For the click-to-explode example controller, add **Shape Destruction Demo** to an entity and set **Radius** and **Flash Material**.
+The controller uses the first orthographic camera and an XY game plane. Use Game View while playing; Scene View clicks continue to edit the scene.
+
+Native gameplay code can include `SmartShape2D/ShapeExplosion.h` and call
+`GameEngine::SmartShape2D::ExplodeShapes(world, center, radius)` from an exclusive world update.
+The center and radius are in world units; the blast is a disk in the world XY plane, projected into each opted-in shape's local XY plane.
+`ResetShapeDestruction(world)` removes the blast footprints. Meshes and collision rebuild on the next Smart Shape update.
+The authored spline and material assignments stay intact. Blast footprints are runtime state and are not saved into the scene.

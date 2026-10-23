@@ -4,6 +4,7 @@
 #include "SmartShape2D/ShapeAnchor.h"
 #include "SmartShape2D/ShapeCollision.h"
 #include "SmartShape2D/ShapeCollisionOwner.h"
+#include "SmartShape2D/ShapeDestruction.h"
 #include "PhysicsECS/MeshColliderData.h"
 #include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -120,6 +121,9 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
     }
     constexpr std::array<const char*, 11> kNames{
         "Fill", "Top edge", "Right edge", "Bottom edge", "Left edge", "Inner corners", "Outer corners", "Start taper", "End taper", "Sharp start taper", "Sharp end taper"};
+    const auto cuts = BuildShapeCuts(state.Cuts);
+    for (auto& mesh : geometry.Parts)
+        CutShapeMesh(mesh, cuts);
     if (m_Services)
     {
         auto& registry = m_Services->GetMeshGPURegistry();
@@ -185,7 +189,7 @@ void ShapeRuntime::Rebuild(ECS::World& world, ECS::EntityHandle owner, const Spl
         collisionSettings.FillEnabled = true;
         collisionSettings.EdgesEnabled = true;
         auto collisionGeometry = BuildShape(source, collisionSettings, state.Overrides, state.Textures, state.WorldMatrix);
-        auto collisionMesh = BuildCollision(collisionGeometry, source.IsEffectivelyClosed(), settings);
+        auto collisionMesh = BuildCollision(collisionGeometry, source.IsEffectivelyClosed(), settings, cuts);
         const auto data = PhysicsECS::MeshColliderData::Register(std::move(collisionMesh));
         if (SetShapeCollision(world, owner, data))
         {
@@ -286,6 +290,10 @@ void ShapeRuntime::Update(ECS::World& world)
     world.Query<ECS::Read<Components::SmartShapeTexture>, ECS::Read<Components::Parent>>()
         .Each([this](const Components::SmartShapeTexture& texture, const Components::Parent& parent)
               { m_Textures.emplace_back(parent.parent, texture); });
+    m_Cuts.clear();
+    world.Query<ECS::Read<Components::SmartShapeCut>, ECS::Read<Components::Parent>>()
+        .Each([this](const Components::SmartShapeCut& cut, const Components::Parent& parent)
+              { m_Cuts.emplace_back(parent.parent, cut); });
     // Structural writes happen after the query has released its archetype views.
     for (const auto entity : m_Candidates)
     {
@@ -316,10 +324,19 @@ void ShapeRuntime::Update(ECS::World& world)
         if (const auto* transform = world.GetComponent<Components::WorldTransform>(entity))
             matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
         const bool transformChanged = !std::equal(matrix.Data(), matrix.Data() + 16, state.WorldMatrix.Data());
+        m_ShapeCuts.clear();
+        if (settings.Destructible)
+        {
+            for (const auto& [parent, cut] : m_Cuts)
+            {
+                if (parent == entity)
+                    m_ShapeCuts.push_back(cut);
+            }
+        }
         const bool missing = (state.CollisionEntity.IsValid() && (!world.IsValid(state.CollisionEntity) ||
                               !world.HasComponent<Components::MeshColliderShape>(state.CollisionEntity))) || std::any_of(state.Children.begin(), state.Children.end(), [&world](ECS::EntityHandle child)
                                         { return child.IsValid() && !world.IsValid(child); });
-        if (!state.Built || deviceChanged || missing || transformChanged || state.Textures != m_TextureSet || state.Overrides != m_Overrides || state.Settings != settings || state.SplineVersion != spline->Version ||
+        if (!state.Built || deviceChanged || missing || transformChanged || state.Cuts != m_ShapeCuts || state.Textures != m_TextureSet || state.Overrides != m_Overrides || state.Settings != settings || state.SplineVersion != spline->Version ||
             state.SplineIndex != reference.SplineDataIndex || state.SplineGeneration != reference.SplineDataGeneration)
         {
             if (state.MeshKey.IsNull())
@@ -327,6 +344,7 @@ void ShapeRuntime::Update(ECS::World& world)
                                             std::to_string(reset) + "/" + std::to_string(entity.id));
             state.Overrides = m_Overrides;
             state.Textures = m_TextureSet;
+            state.Cuts = m_ShapeCuts;
             state.WorldMatrix = matrix;
             state.Settings = settings;
             state.SplineVersion = spline->Version;

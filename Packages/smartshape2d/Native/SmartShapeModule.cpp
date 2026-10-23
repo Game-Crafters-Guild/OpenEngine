@@ -2,12 +2,23 @@
 #include "SmartShape2D/SmartShapeEdge.h"
 #include "SmartShape2D/SmartShapeAnchor.h"
 #include "SmartShape2D/ShapeSystem.h"
+#include "SmartShape2D/SmartShapeCut.h"
+#include "SmartShape2D/ShapeDestructionDemo.h"
+#include "SmartShape2D/ShapeDestructionDemoSystem.h"
+#include "SmartShape2D/ShapeExplosionFlash.h"
 #include "Components/ComponentRegistrationLite.h"
 #include "ECS/SystemScheduling.h"
 #include "PluginAPI/EnginePlugin.h"
 
 GE_REGISTER_COMPONENT_NO_ADD(GameEngine::Components::GeneratedShapeResources, Owner, MeshKey, Part)
 GE_REFLECT_COMPONENT_DONOTSERIALIZE(GameEngine::Components::GeneratedShapeResources)
+
+GE_REGISTER_COMPONENT_NO_ADD(GameEngine::Components::SmartShapeCut, Center, AxisX, AxisY)
+GE_REGISTER_COMPONENT(GameEngine::Components::ShapeDestructionDemo, Radius, FlashMaterial)
+GE_REFLECT_FIELD_RANGE(GameEngine::Components::ShapeDestructionDemo, Radius, 0.05f, 100.0f)
+GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShape, Destructible, "Allow explosion cuts to remove visible terrain and collision during gameplay. The authored spline stays intact.")
+GE_REGISTER_COMPONENT_NO_ADD(GameEngine::Components::ShapeExplosionFlash, Remaining)
+GE_REFLECT_COMPONENT_DONOTSERIALIZE(GameEngine::Components::ShapeExplosionFlash)
 
 GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeEdge, PointIndex, UseNormalRange, NormalStart, NormalSweep,
     Priority, Material, WidthScale, Flip, Visible, TextureIndex, TextureSet, OverrideTextureSettings,
@@ -57,6 +68,7 @@ GE_REGISTER_COMPONENT_BEGIN(GameEngine::Components::SmartShape)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, CollisionOffset)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, CollisionMode)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, CollisionEnabled)
+    GE_REFLECT_FIELD(GameEngine::Components::SmartShape, Destructible)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, FillEnabled)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, EdgesEnabled)
     GE_REFLECT_FIELD(GameEngine::Components::SmartShape, StretchToFit)
@@ -102,6 +114,7 @@ public:
     void AddSystemsToSchedule(ECS::SystemScheduleBuilder& builder, Plugins::EnginePluginContext&) override
     {
         // Exclusive Early work creates children before the hierarchy composes their transforms.
+        builder.Add<ShapeDestructionDemoSystem>("SmartShapeDestructionDemo", ECS::SystemPhase::Early, -110, {});
         builder.Add<ShapeSystem>("SmartShape2D", ECS::SystemPhase::Early, -100, {});
     }
     void OnRuntimeInitialized(Plugins::EnginePluginContext& context) override

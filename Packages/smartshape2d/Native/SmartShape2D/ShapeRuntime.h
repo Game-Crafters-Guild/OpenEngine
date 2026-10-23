@@ -3,6 +3,7 @@
 #include "SmartShape2D/SmartShape.h"
 #include "SmartShape2D/SmartShapeEdge.h"
 #include "SmartShape2D/SmartShapeTexture.h"
+#include "SmartShape2D/SmartShapeCut.h"
 #include "SmartShape2D/GeneratedShapeResources.h"
 #include "ECS/ECS.h"
 #include "GenerationalVector/GenerationalHandle.h"
@@ -40,6 +41,7 @@ private:
         std::vector<ECS::EntityHandle> Children;
         std::vector<Components::SmartShapeEdge> Overrides;
         std::vector<Components::SmartShapeTexture> Textures;
+        std::vector<Components::SmartShapeCut> Cuts;
         ECS::EntityHandle CollisionEntity;
         GenerationalVector::Handle CollisionData;
         Mathematics::Matrix4x4 WorldMatrix;
@@ -69,5 +71,7 @@ private:
     std::vector<Components::SmartShapeEdge> m_Overrides;
     std::vector<std::pair<ECS::EntityHandle, Components::SmartShapeTexture>> m_Textures;
     std::vector<Components::SmartShapeTexture> m_TextureSet;
+    std::vector<std::pair<ECS::EntityHandle, Components::SmartShapeCut>> m_Cuts;
+    std::vector<Components::SmartShapeCut> m_ShapeCuts;
 };
 } // namespace GameEngine::SmartShape2D

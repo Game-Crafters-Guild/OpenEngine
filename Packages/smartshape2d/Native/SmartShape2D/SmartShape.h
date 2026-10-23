@@ -38,6 +38,7 @@ struct SmartShape
     float CollisionOffset = 0.0f;
     ShapeCollisionMode CollisionMode = ShapeCollisionMode::Filled;
     bool CollisionEnabled = true;
+    bool Destructible = false;
     bool FillEnabled = true;
     bool EdgesEnabled = true;
     bool StretchToFit = true;
