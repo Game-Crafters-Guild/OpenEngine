@@ -224,6 +224,13 @@ class UIManager
     using CursorCallback = std::function<void(CursorStyle)>;
     void SetCursorCallback(CursorCallback callback) { m_CursorCallback = std::move(callback); }
 
+    // Pointer lock callback: invoked with true when a captured pointer's lock
+    // begins and with false when it ends (see LockCapturedPointer). The host
+    // hides and holds the platform cursor while it is locked, and feeds the
+    // cursor's position back through OnMouseMove once it is unlocked.
+    using PointerLockCallback = std::function<void(bool locked)>;
+    void SetPointerLockCallback(PointerLockCallback callback) { m_PointerLockCallback = std::move(callback); }
+
     // Tooltip configuration supplied per-frame by the host application.
     struct TooltipConfig
     {
@@ -370,6 +377,18 @@ class UIManager
     /// release went to the menu instead of back to the capturing element, and
     /// every row then sat under a pointer whose hover was pinned elsewhere.
     void ReleaseMouseCapture();
+
+    /// Locks the captured pointer for the rest of the current capture: the host
+    /// hides the cursor and lets the pointer travel past the window and screen
+    /// edges. Moves keep reaching the capture element, as positions that run on
+    /// from where the lock began, so a value drag keeps going at the screen
+    /// edge. The lock ends with the capture or at the next press, and the cursor
+    /// shows again where the lock began. Escape, or a press of another mouse
+    /// button, cancels a locked drag: the capture element receives
+    /// kEventMouseCancel and puts back the value the drag started from. Does
+    /// nothing without a capture. Call it once the press has become a drag, so a
+    /// plain click never hides the cursor.
+    void LockCapturedPointer();
 
     const std::string& GetCaptureId() const { return m_CaptureId; }
 
@@ -1618,6 +1637,11 @@ public:
     // Cursor callback and tracking
     CursorCallback m_CursorCallback;
     CursorStyle m_LastCursorStyle = CursorStyle::Auto;
+    // Pointer lock: the capture instance that asked for it (0 = none), and
+    // whether the host was last told the pointer is locked.
+    PointerLockCallback m_PointerLockCallback;
+    uint64_t m_PointerLockCaptureInstanceId = 0;
+    bool m_PointerLocked = false;
     std::string m_FocusId;                            // persistent focus by element id
     std::string m_LastFocusIdNotified;                // to notify BaseField::OnFocusChanged
     // The element last told FocusIn, by instance id, so its FocusOut reaches it even after
@@ -2143,6 +2167,11 @@ public:
     // Tooltip overlay + cursor-style tail, shared by the heavy pass and the
     // pointer-only frame gate's early return.
     void UpdateTooltipAndCursor(bool interactive);
+    // Tells the host when the pointer lock begins or ends: it holds while the
+    // capture that asked for it does.
+    void SyncPointerLock();
+    // True while the current capture holds the pointer lock it asked for.
+    bool IsCapturedPointerLocked() const;
     // Finalize + push the per-frame update profile (TotalMs, dirty-source
     // top-N, history cap). Shared by the heavy tail and the gate's early
     // return so pointer-only frames still appear in profiling history.

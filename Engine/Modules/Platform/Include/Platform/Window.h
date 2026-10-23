@@ -215,15 +215,30 @@ class Window
     void SetCursor(CursorType type);
     void ResetCursor(); // restore default arrow
 
+    // What a locked cursor reports as it moves.
+    enum class LockedCursorMotion
+    {
+        // Raw, unaccelerated device counts where the platform offers them
+        // (Windows, X11), otherwise the cursor's own motion. For a game that
+        // steers a camera with the mouse.
+        Raw,
+        // The cursor's own accelerated motion in window coordinates, the same
+        // motion an unlocked drag sees. For a UI drag that must not change feel
+        // when the lock begins.
+        Cursor,
+    };
+
     // Pointer lock: hide the cursor and hold it in this window, so the mouse
-    // reports movement without bound (raw, unaccelerated motion where the
-    // platform offers it) instead of moving a cursor that stops at the screen
-    // edge. Cursor moves still arrive through the mouse-move handler, as
-    // positions that run on past the window. The platform releases the cursor
-    // while the window is unfocused and takes it back on refocus. SetCursor and
-    // ResetCursor change only the shape the cursor has once it is unlocked.
-    // Not available in the browser build, where it stays unlocked.
-    void SetCursorLocked(bool locked);
+    // reports movement without bound instead of moving a cursor that stops at
+    // the screen edge. Cursor moves still arrive through the mouse-move
+    // handler, as positions that run on past the window from where the lock
+    // began. UnlockCursor shows the cursor again where the lock began. Locking
+    // a locked window changes only its motion. The platform releases the
+    // cursor while the window is unfocused and takes it back on refocus.
+    // SetCursor and ResetCursor change only the shape the cursor has once it is
+    // unlocked. Not available in the browser build, where it stays unlocked.
+    void LockCursor(LockedCursorMotion motion);
+    void UnlockCursor();
     bool IsCursorLocked() const { return m_CursorLocked; }
 
     // True fullscreen toggle backed by glfwSetWindowMonitor.

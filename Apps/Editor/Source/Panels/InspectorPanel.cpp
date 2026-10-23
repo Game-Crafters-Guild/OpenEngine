@@ -5669,6 +5669,8 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                                            {
             if (m_LeftMouseDragging && m_DraggingLabel == nameLabelPtr && m_DraggingField == fieldPtr) {
                 float totalDeltaX = e.X - m_DragStartX;
+                if (totalDeltaX != 0.0f)
+                    InspectorDrag::LockDragPointer(nameLabelPtr);
                 AdjustValueByDrag(varName, fieldPtr, totalDeltaX);
                 HighlightVariableField(varName);
             } });
@@ -5705,6 +5707,22 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 }
                 e.Stop();
             } });
+
+        // Escape or another button during the drag puts back the start value.
+        nameLabelPtr->RegisterEventHandler(kEventMouseCancel, [this, varName, fieldPtr, nameLabelPtr](UIEvent& e)
+                                           {
+            if (!m_LeftMouseDragging || m_DraggingLabel != nameLabelPtr)
+                return;
+            m_LeftMouseDragging = false;
+            m_DraggingLabel = nullptr;
+            m_DraggingField = nullptr;
+            if (fieldPtr->GetValue() != m_DragStartValue)
+            {
+                fieldPtr->SetValue(m_DragStartValue);
+                if (m_OnVariableEdited)
+                    m_OnVariableEdited(varName, m_DragStartValue);
+            }
+            e.Stop(); });
 
         sectionContent->AddChild(std::move(row));
     }

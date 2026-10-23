@@ -455,6 +455,14 @@ inline void DragPaintToggle::OnEvent(UIEvent& e)
 // Drag-to-adjust setup functions
 // ============================================================================
 
+// Once a press has become a value drag: the cursor hides and the drag runs on
+// past the window and screen edges until the release (UIManager::LockCapturedPointer).
+inline void LockDragPointer(UIElement* element)
+{
+    if (UIManager* owner = element ? element->GetOwnerManager() : nullptr)
+        owner->LockCapturedPointer();
+}
+
 // Set up drag-to-adjust on a label for a FloatField. Double-click on label resets to defaultValue.
 inline void SetupLabelDragFloat(Label* label, FloatField* field,
                                 std::function<void()> onChanging = nullptr,
@@ -525,6 +533,7 @@ inline void SetupLabelDragFloat(Label* label, FloatField* field,
             newValue = std::clamp(newValue, minValue, maxValue);
             field->SetValue(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             if (onChanging) onChanging();
             e.Stop();
@@ -544,6 +553,20 @@ inline void SetupLabelDragFloat(Label* label, FloatField* field,
             }
             e.Stop();
         }
+    });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, field, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingFloatField != field)
+            return;
+        const float startValue = state.dragStartFloatValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            field->SetValue(startValue);
+            if (onChanged) onChanged();
+        }
+        e.Stop();
     });
 }
 
@@ -615,6 +638,7 @@ inline void SetupLabelDragInt(Label* label, IntField* field,
                            static_cast<int>(std::round(deltaX * kInspectorDragIntSensitivity));
             field->SetValue(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             if (onChanging) onChanging();
             e.Stop();
@@ -634,6 +658,20 @@ inline void SetupLabelDragInt(Label* label, IntField* field,
             }
             e.Stop();
         }
+    });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, field, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingIntField != field)
+            return;
+        const int startValue = state.dragStartIntValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            field->SetValue(startValue);
+            if (onChanged) onChanged();
+        }
+        e.Stop();
     });
 }
 
@@ -778,6 +816,7 @@ inline void SetupLabelDragSlider(Label* label, Slider* slider,
             newValue = std::max(slider->GetMin(), std::min(slider->GetMax(), newValue));
             slider->SetValueWithoutNotify(newValue);
             *dragDidMove = true;
+            LockDragPointer(label);
             state.dragDidMove = true;
             slider->NotifyValueChanging();
             if (onChanging) onChanging();
@@ -797,6 +836,21 @@ inline void SetupLabelDragSlider(Label* label, Slider* slider,
                 if (onChanged) onChanged();
             }
         }
+    });
+
+    // Escape or another button during the drag puts back the start value.
+    label->RegisterEventHandler(kEventMouseCancel, [label, slider, onChanged, dragDidMove](UIEvent& e) {
+        auto& state = GetDragState();
+        if (state.draggingLabel != label || state.draggingSlider != slider)
+            return;
+        const float startValue = state.dragStartFloatValue;
+        ClearLabelDragState();
+        if (*dragDidMove) {
+            slider->SetValueWithoutNotify(startValue);
+            slider->NotifyValueChanged();
+            if (onChanged) onChanged();
+        }
+        e.Stop();
     });
 }
 

@@ -566,7 +566,10 @@ void PlayerApplication::ApplyPointerLock()
     Input::InputSystem* input = GetInputSystem();
     if (!window || !input)
         return;
-    window->SetCursorLocked(input->GetPointerLockState() != Input::PointerLockState::Unlocked);
+    if (input->GetPointerLockState() == Input::PointerLockState::Unlocked)
+        window->UnlockCursor();
+    else
+        window->LockCursor(Platform::Window::LockedCursorMotion::Raw);
     Input::IRawInputSink& sink = *input;
     sink.OnPointerLock(window->IsCursorLocked() && window->IsFocused());
 }

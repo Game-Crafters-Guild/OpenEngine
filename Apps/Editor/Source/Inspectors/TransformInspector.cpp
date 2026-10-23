@@ -1073,8 +1073,11 @@ private:
         label->RegisterEventHandler(kEventMouseMove, [this, field, onChanging, dragDidMove](UIEvent& e) {
             if (m_DraggingLabel && m_DraggingVec3Field == field) {
                 float deltaX = e.X - m_DragStartX;
-                if (std::fabs(deltaX) > kDragThresholdPx)
+                if (!*dragDidMove && std::fabs(deltaX) > kDragThresholdPx)
+                {
                     *dragDidMove = true;
+                    InspectorDrag::LockDragPointer(field);
+                }
                 Rendering::Vector3 newValue(
                     m_DragStartVec3.x + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,
                     m_DragStartVec3.y + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,
@@ -1095,6 +1098,20 @@ private:
                 }
                 e.Stop();
             }
+        });
+
+        // Escape or another button during the drag puts back the start values.
+        label->RegisterEventHandler(kEventMouseCancel, [this, field, onChanged, dragDidMove](UIEvent& e) {
+            if (!m_DraggingLabel || m_DraggingVec3Field != field)
+                return;
+            m_DraggingLabel = nullptr;
+            m_DraggingVec3Field = nullptr;
+            if (*dragDidMove)
+            {
+                field->SetValue(m_DragStartVec3);
+                if (onChanged) onChanged(m_DragStartVec3);
+            }
+            e.Stop();
         });
 
         label->RegisterEventHandler(kEventMouseUp, [this, field, onChanging, onChanged](UIEvent& e) {

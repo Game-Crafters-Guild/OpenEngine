@@ -287,8 +287,12 @@ inline void Vector3Field::SetupLabelDrag(Label* label, FloatField* field)
     label->RegisterEventHandler(kEventMouseMove, [this, field](UIEvent& e) {
         if (m_DraggingLabel && m_DraggingField == field) {
             float deltaX = e.X - m_DragStartX;
-            if (std::fabs(deltaX) > kDragThresholdPx)
+            if (!m_LabelDragDidMove && std::fabs(deltaX) > kDragThresholdPx)
+            {
                 m_LabelDragDidMove = true;
+                if (UIManager* owner = GetOwnerManager())
+                    owner->LockCapturedPointer();
+            }
             float sensitivity = 0.1f;
             float newValue = m_DragStartValue + deltaX * sensitivity;
             // The label scrub writes the component directly, so it has to apply
@@ -308,6 +312,19 @@ inline void Vector3Field::SetupLabelDrag(Label* label, FloatField* field)
             OnComponentChanged(true);
             e.Stop();
         }
+    });
+
+    // Cancel (Escape or another button during a locked drag): put the
+    // component back where the drag started and commit that.
+    label->RegisterEventHandler(kEventMouseCancel, [this, label, field](UIEvent& e) {
+        if (m_DraggingLabel != label || m_DraggingField != field)
+            return;
+        label->RemoveClass("dragging");
+        m_DraggingLabel = nullptr;
+        m_DraggingField = nullptr;
+        field->SetValue(m_DragStartValue);
+        OnComponentChanged(true);
+        e.Stop();
     });
 }
 

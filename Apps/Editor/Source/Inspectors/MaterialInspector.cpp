@@ -2103,6 +2103,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     fA->SetValue(newA);
                     fB->SetValue(newB);
                     *didMove = true;
+                    InspectorDrag::LockDragPointer(label);
                     beginEditIfNeeded(editLabel);
                     previewComponentTwo(idxA, newA, idxB, newB);
                     e.Stop();
@@ -2118,6 +2119,23 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     if (*didMove) {
                         commitComponent(idxA, fA->GetValue());
                         commitComponent(idxB, fB->GetValue());
+                    }
+                    e.Stop();
+                });
+
+                // Escape or another button during the drag puts back the start values.
+                label->RegisterEventHandler(kEventMouseCancel,
+                    [label, fA, fB, startA, startB, didMove, idxA, idxB, commitComponent](UIEvent& e) {
+                    auto& state = InspectorDrag::GetDragState();
+                    if (state.draggingLabel != label)
+                        return;
+                    InspectorDrag::SetLabelDragHighlight(label, false);
+                    state.draggingLabel = nullptr;
+                    if (*didMove) {
+                        fA->SetValue(*startA);
+                        fB->SetValue(*startB);
+                        commitComponent(idxA, *startA);
+                        commitComponent(idxB, *startB);
                     }
                     e.Stop();
                 });

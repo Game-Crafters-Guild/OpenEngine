@@ -1,8 +1,31 @@
 #include "UI/UICursorHelper.h"
+
+#include "Core/WindowInputRouter.h"
 #include "UI/UIStyle.h"
 
 namespace GameEngine
 {
+namespace
+{
+
+// A UI value drag locks the cursor with the motion an unlocked drag sees, so
+// the drag does not change speed when the lock begins.
+void ApplyUIPointerLock(UIManager* ui, Platform::Window* window, bool locked)
+{
+    if (locked)
+    {
+        window->LockCursor(Platform::Window::LockedCursorMotion::Cursor);
+        return;
+    }
+    window->UnlockCursor();
+    // The cursor shows again where the lock began, which no move reports.
+    float clientX = 0.0f;
+    float clientY = 0.0f;
+    window->GetCursorClientPosition(clientX, clientY);
+    WindowInputRouter::SendUiMouseFromClientPixels(window, ui, clientX, clientY);
+}
+
+} // namespace
 
 void SetupUICursorCallback(UIManager* ui, Platform::Window* window)
 {
@@ -51,6 +74,8 @@ void SetupUICursorCallback(UIManager* ui, Platform::Window* window)
         }
         window->SetCursor(winCursor);
     });
+
+    ui->SetPointerLockCallback([ui, window](bool locked) { ApplyUIPointerLock(ui, window, locked); });
 }
 
 } // namespace GameEngine
