@@ -89,3 +89,30 @@ TEST(SmartShapeTextureSet, CornerSpritesOnlyCoverTheUpstreamRightAngleWindow)
     }
 }
 }
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, EdgeRulesAndHiddenGapsStartIndependentTaperedRuns)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    for (uint32 point = 0; point < 4; ++point)
+        spline.AddPoint({static_cast<float>(point) * 4, 0, 0}, 1);
+    Components::SmartShape settings;
+    settings.StartCapMaterial.Set(GUID::Derive(GUID::Null(), "start"));
+    settings.EndCapMaterial.Set(GUID::Derive(GUID::Null(), "end"));
+    settings.StartTaperSize = {0.25f, 0.25f};
+    settings.EndTaperSize = {0.25f, 0.25f};
+    Components::SmartShapeEdge rule;
+    rule.PointIndex = 1;
+    for (const bool visible : {true, false})
+    {
+        rule.Visible = visible;
+        const auto result = BuildShape(spline, settings, std::span(&rule, 1));
+        ASSERT_TRUE(result.Error.empty());
+        const size_t runs = visible ? 3 : 2;
+        EXPECT_EQ(result.Parts[static_cast<size_t>(ShapePart::StartCap)].Indices.size(), runs * 6);
+        EXPECT_EQ(result.Parts[static_cast<size_t>(ShapePart::EndCap)].Indices.size(), runs * 6);
+    }
+}
+}

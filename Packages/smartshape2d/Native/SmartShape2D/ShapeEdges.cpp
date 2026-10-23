@@ -54,13 +54,14 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
     std::vector<size_t> choices;
     size_t closingTaperPart = 0;
     Vector2 closingTaperSize{};
+    // Rules own contiguous runs. End tapers and UV fitting restart at a rule boundary
+    // or hidden gap, independently of the texture variant selected for each quad.
+    std::vector<const Components::SmartShapeEdge*> rules(edges);
     for (size_t index = 0; index < edges; ++index)
     {
-        const size_t next = (index + 1) % count;
-        const auto delta = points[next] - points[index];
+        const auto delta = points[(index + 1) % count] - points[index];
         const auto normal = Vector2{-delta.y, delta.x} * (side / delta.Length());
-        size_t part = static_cast<size_t>(PartForNormal(normal));
-        const Components::SmartShapeEdge* rule = nullptr;
+        auto& rule = rules[index];
         for (const bool normalRule : {false, true})
         {
             for (size_t candidate = 0; candidate < overrides.size(); ++candidate)
@@ -70,13 +71,38 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
                     (normalRule ? !MatchesNormal(normal, edge) : edge.PointIndex != segments[index]))
                     continue;
                 rule = &edge;
-                if (!edge.Material.IsNull())
-                    part = kParts + candidate;
                 break;
             }
             if (rule)
                 break;
         }
+    }
+    std::vector<uint32> groups(edges);
+    uint32 group = 0;
+    for (size_t index = 1; index < edges; ++index)
+    {
+        if (rules[index] != rules[index - 1])
+            ++group;
+        groups[index] = group;
+    }
+    if (closed && rules.front() == rules.back())
+    {
+        for (size_t index = edges; index > 0 && groups[index - 1] == group; --index)
+            groups[index - 1] = 0;
+    }
+    for (size_t index = 0; index < edges; ++index)
+    {
+        const size_t next = (index + 1) % count;
+        const auto delta = points[next] - points[index];
+        const auto normal = Vector2{-delta.y, delta.x} * (side / delta.Length());
+        size_t part = static_cast<size_t>(PartForNormal(normal));
+        const auto* rule = rules[index];
+        if (rule && !rule->Material.IsNull())
+            part = kParts + static_cast<size_t>(rule - overrides.data());
+        const bool runStart = (!closed && index == 0) || rules[index] != rules[(index + edges - 1) % edges];
+        const bool runEnd = (!closed && index + 1 == edges) || rules[index] != rules[(index + 1) % edges];
+        if (runStart && !quads.empty())
+            quads.back().IgnoreWeldNext = true;
         if (rule && !rule->Visible)
         {
             if (!quads.empty())
@@ -109,6 +135,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         const float offset = settings.EdgeOffset + (rule ? rule->Offset : 0.0f);
         EdgeQuad quad;
         quad.Part = part;
+        quad.Group = groups[index];
         quad.TileLength = texture ? texture->TileLength : settings.TileLength;
         quad.Flip = rule && rule->Flip;
         quad.Stretch = settings.StretchToFit;
@@ -122,7 +149,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         quad.D = points[next] + normal * (width * widths[index] * (0.5f + offset * 0.5f));
         bool hasCorner = false;
         bool sharp = false;
-        if (index != 0 || closed)
+        if (!runStart)
         {
             const size_t previous = (index + count - 1) % count;
             const auto incoming = (points[index] - points[previous]).Normalize();
@@ -139,6 +166,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
                     width * widths[index], width * widths[previous], width * offset, settings.FlipEdges,
                     inner ? QuadCorner::Inner : QuadCorner::Outer);
                 corner.Part = cornerPart;
+                corner.Group = quad.Group;
                 corner.Flip = quad.Flip;
                 corner.Depth = quad.Depth;
                 corner.IgnoreWeldNext = quad.IgnoreWeldNext;
@@ -163,7 +191,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             }
             quads.back().IgnoreWeldNext = true;
         }
-        if (settings.UseTaperTextures && ((!closed && index == 0) || sharpTaper))
+        if (settings.UseTaperTextures && (runStart || sharpTaper))
         {
             const size_t taperPart = base + static_cast<size_t>(sharpTaper ? ShapePart::SharpStartTaper : ShapePart::StartCap);
             if (!result.Materials[taperPart].IsNull())
@@ -174,7 +202,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             }
         }
         quads.push_back(quad);
-        if (settings.UseTaperTextures && !closed && index + 1 == edges)
+        if (settings.UseTaperTextures && runEnd)
         {
             const size_t taperPart = base + static_cast<size_t>(ShapePart::EndCap);
             if (!result.Materials[taperPart].IsNull())
@@ -184,6 +212,8 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
                     quads.push_back(taper);
             }
         }
+        if (runEnd && !quads.empty())
+            quads.back().IgnoreWeldNext = true;
     }
     if (closingTaperPart != 0 && !quads.empty())
     {
@@ -217,7 +247,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
     }
     // Join a material run crossing the closed outline's index seam before fitting its UVs.
     if (closed && quads.size() > 1 && quads.front().Part == quads.back().Part &&
-        quads.front().Flip == quads.back().Flip && !quads.front().Taper && !quads.back().Taper &&
+        quads.front().Flip == quads.back().Flip && quads.front().Group == quads.back().Group && !quads.front().Taper && !quads.back().Taper &&
         quads.front().Corner == QuadCorner::None && quads.back().Corner == QuadCorner::None)
     {
         const auto boundary = std::find_if(quads.begin(), quads.end(), [part = quads.front().Part, flip = quads.front().Flip](const EdgeQuad& quad)
@@ -233,7 +263,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         size_t end = begin + 1;
         const auto& first = quads[begin];
         while (end < quads.size() && result.Materials[quads[end].Part] == result.Materials[first.Part] &&
-               quads[end].Flip == first.Flip && quads[end].Stretch == first.Stretch &&
+               quads[end].Group == first.Group && quads[end].Flip == first.Flip && quads[end].Stretch == first.Stretch &&
                quads[end].TileLength == first.TileLength && quads[end].Depth == first.Depth)
             ++end;
         float length = 0.0f;

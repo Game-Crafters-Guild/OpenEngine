@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mathematics/Vector2.h"
+#include "Types/Types.h"
 
 #include <cstddef>
 
@@ -13,6 +14,7 @@ struct EdgeQuad
 {
     Mathematics::Vector2 A, B, C, D;
     size_t Part = 0;
+    uint32 Group = 0;
     float TileLength = 1.0f;
     float Depth = 0.0f;
     bool Flip = false;
