@@ -206,6 +206,7 @@
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Panels/DownloadInProgressModal.h"
 #include "EditorChangeNotifications.h"
+#include "DayCycle/DayCycleWindowRegistration.h"
 #include "Markups/MarkupEditorBridge.h"
 #include "Markups/MarkupEditorSurfaces.h"
 #include "SceneView/BuiltInSceneViewTools.h"
@@ -1454,6 +1455,13 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
     Editor::InstallSceneViewEntityLinks([this]() -> SceneViewController* {
         return !m_Windows.empty() ? m_Windows[0]->scene.get() : nullptr;
     });
+    Editor::RegisterDayCycleWindow(
+        m_UndoRedo.get(), *m_ChangeNotifications,
+        [this]() {
+            const SceneViewController* view = !m_Windows.empty() ? m_Windows[0]->scene.get() : nullptr;
+            return view ? view->GetSelectedEntities() : std::vector<ECS::EntityHandle>{};
+        },
+        [this]() { return m_PlayMode && m_PlayMode->IsPlayingOrPaused(); });
     m_SceneEditor = std::make_unique<GameEngine::Editor::SceneEditorController>();
     // Manual save reads the same write inhibit the autosave tick does
     // (IsPlayModeBlockingSceneWrites), because both protect the authored .scene file from the
@@ -3305,21 +3313,31 @@ bool EditorApplication::Initialize()
             // event. An off-surface end resolves no window — the panel may have
             // been undocked meanwhile — so it is the only handle on the controller
             // that still holds the gesture and has to be told the surface ended.
-            gameViewPanel->SetPointerCallback(
+            //
+            // A button edge goes to the host's OnMouseButton with its index, the path
+            // the Player uses. Only a primary press starts mouse-look.
+            gameViewPanel->SetPointerCallbacks(
                 [this, gameViewPanel, pointerWindowId = uint64_t{0}]
-                (bool over, float x, float y, bool down, int mods) mutable
+                (bool over, float x, float y, int mods) mutable
                 {
                     EditorWindowContext* destination = over ? FindWindowHostingGameView(gameViewPanel) : nullptr;
                     const uint64_t nextId = destination ? destination->windowId : 0;
                     if (pointerWindowId != nextId)
                         for (auto& win : m_Windows)
                             if (win && win->windowId == pointerWindowId && win->gameView)
-                                win->gameView->HandleGameUiPointer(false, 0.0f, 0.0f, false, 0);
+                                win->gameView->HandleGameUiPointerMove(false, 0.0f, 0.0f, 0);
                     pointerWindowId = nextId;
-                    if (destination && down)
-                        m_GameViewPointerLock->OnGameViewPressed();
                     if (destination)
-                        destination->gameView->HandleGameUiPointer(true, x, y, down, mods);
+                        destination->gameView->HandleGameUiPointerMove(true, x, y, mods);
+                },
+                [this, gameViewPanel](int button, bool pressed, int mods)
+                {
+                    EditorWindowContext* destination = FindWindowHostingGameView(gameViewPanel);
+                    if (!destination)
+                        return;
+                    if (button == Input::kMouseButton_Left && pressed)
+                        m_GameViewPointerLock->OnGameViewPressed();
+                    destination->gameView->HandleGameUiPointerButton(button, pressed, mods);
                 });
 
             gameViewPanel->SetActivationArmedCallback(
@@ -5374,6 +5392,8 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
 
     // The outgoing project keeps its working layout for its next session.
     SaveWorkingLayout();
+    // Per-project editor state the features hold (open documents, previews) belongs to the outgoing project.
+    m_ChangeNotifications->NotifyProjectSwitched();
     // Update Engine's workspace root so that GetCurrentEditorProjectPaths() returns correct paths
     engine.SetWorkspaceRoot(projectPath);
     if (m_MarkupBridge)
@@ -8254,7 +8274,7 @@ void EditorApplication::OnShutdown()
     // callbacks before their UI dispatchers and this application are destroyed.
     for (auto& win : m_Windows)
         if (win && win->gameView)
-            win->gameView->HandleGameUiPointer(false, 0.0f, 0.0f, false, 0);
+            win->gameView->HandleGameUiPointerMove(false, 0.0f, 0.0f, 0);
     if (auto* gameView = FindFirstPanelOfType<GameViewPanel>(m_PanelStorage))
         gameView->ClearPointerCallback();
 

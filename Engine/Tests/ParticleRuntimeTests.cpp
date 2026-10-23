@@ -5,6 +5,7 @@
 #include "Components/Rendering/Particles.h"
 #include "ECS/ModuleRegistration.h"
 #include "ECS/Reflection.h"
+#include "ParticleProcessorRevision.h"
 #include "Particles/CompiledParticleStack.h"
 #include "Particles/ParticleFlipbook.h"
 #include "Particles/ParticleProcessorRegistry.h"
@@ -2140,6 +2141,44 @@ TEST(ParticleProcessorRegistry, AModuleReloadSwapsItsProcessorCodeInPlace)
     EXPECT_EQ(ParticleProcessorRegistry::PurgeModuleProcessors(kReloadModule, 3), 2u);
     EXPECT_EQ(SpinAfterATick(runtime), 2.0f) << "the aborted load gives back the code it replaced";
     EXPECT_EQ(ParticleProcessorRegistry::Find("test.reload.added"), nullptr);
+}
+
+// The revision tells a stack that failed for an unknown id whether loading it again could succeed:
+// it grows when an id becomes findable that was not, and only then. The built-ins count, so a
+// revision of 0 means "never asked".
+TEST(ParticleProcessorRegistry, TheRevisionGrowsWhenAnIdIsRegisteredForTheFirstTime)
+{
+    const uint64 before = ParticleProcessorRevision();
+    EXPECT_GT(before, 0u) << "the built-ins are registered ids";
+    ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.spin", SpinAtGenerationOne)));
+    const uint64 added = ParticleProcessorRevision();
+    EXPECT_GT(added, before);
+    ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.spin", SpinAtGenerationTwo)));
+    EXPECT_EQ(ParticleProcessorRevision(), added) << "a registration in place adds no id";
+    ParticleProcessorDescriptor gusty = ReloadedSpin("test.revision.spin", SpinAtGenerationTwo);
+    BindParticleParameters<ParticleRuntimeTestTypes::GustySpinParameters>(gusty, kGustySpinFields);
+    EXPECT_FALSE(ParticleProcessorRegistry::Register(gusty));
+    EXPECT_EQ(ParticleProcessorRevision(), added) << "a refused registration adds no id";
+}
+
+// An id an aborted module load added is dropped; the next load registers it again, and it counts
+// as an id becoming findable.
+TEST(ParticleProcessorRegistry, TheRevisionGrowsWhenAnIdAnAbortedLoadDroppedIsRegisteredAgain)
+{
+    ASSERT_EQ(ParticleProcessorRegistry::Find("test.revision.purged"), nullptr) << "the built-ins register outside the load";
+    {
+        ModuleLoadScope aborted(20);
+        ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.purged", SpinAtGenerationOne)));
+    }
+    ASSERT_EQ(ParticleProcessorRegistry::PurgeModuleProcessors(kReloadModule, 20), 1u);
+    ASSERT_EQ(ParticleProcessorRegistry::Find("test.revision.purged"), nullptr);
+    const uint64 afterPurge = ParticleProcessorRevision();
+    {
+        ModuleLoadScope reload(21);
+        ASSERT_TRUE(ParticleProcessorRegistry::Register(ReloadedSpin("test.revision.purged", SpinAtGenerationTwo)));
+    }
+    ASSERT_NE(ParticleProcessorRegistry::Find("test.revision.purged"), nullptr);
+    EXPECT_GT(ParticleProcessorRevision(), afterPurge);
 }
 
 #if !defined(NDEBUG)

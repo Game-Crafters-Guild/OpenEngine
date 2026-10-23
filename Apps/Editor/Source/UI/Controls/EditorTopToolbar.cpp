@@ -11,7 +11,6 @@
 #include "Platform/ContextMenu.h"
 #include "UI/EditorIcons.h"
 #include "Platform/Window.h"
-#include "PlayMode/AudioToggleButton.h"
 #include "PlayMode/PlayButtonMenu.h"
 #include "PlayMode/PlayButtonState.h"
 #include "PlayMode/PlayModeManager.h"
@@ -60,7 +59,6 @@ constexpr ToolbarButtonInfo kToolbarButtons[] = {
     {"TopToolbarRecord",         "Record",              "editor:Icons/recording_off_button.svg"},
     {"TopToolbarCenter3",        "Pause",               "editor:Icons/pause.svg"},
     {"TopToolbarCenter4",        "Play",                "editor:Icons/play.svg"},
-    {"TopToolbarAudio",          "Audio",               "editor:Icons/audio-on-speaker.svg"},
     {"TopToolbarCenter1",        "Play Fullscreen",     "editor:Icons/fullscreen.svg"},
     {"TopToolbarUndoHistory",    "Undo History",        "editor:Icons/undo.svg"},
     {"TopToolbarRight1",         "Script Editor",       "editor:Icons/log.svg"},
@@ -337,15 +335,11 @@ void EditorTopToolbar::WireControls(UIElement* rootEl, Platform::Window* window,
         Audio::AudioSystem* audio = EngineCore::GetInstance().GetAudioSystem();
         SetAudioEnabled(Editor::AudioEnabledSettings::ApplySaved(audio));
         playBtn->AddManipulator(ContextMenuManipulator::Create(
-            Editor::PlayButtonMenuItems(audio, [this](bool enabled) { SetAudioEnabled(enabled); })));
-    }
-
-    // Audio toggle right of Play: the same state as the Play button menu's "Audio Enabled" row.
-    if (auto* audioBtn = dynamic_cast<Button*>(rootEl->FindById(HashStringId(EditorPanelIds::TopToolbarAudio))))
-    {
-        m_AudioToggleButton = audioBtn;
-        Editor::WireAudioToggleButton(*audioBtn, EngineCore::GetInstance().GetAudioSystem(),
-                                      [this](bool enabled) { SetAudioEnabled(enabled); });
+            [this, audio]
+            {
+                return Editor::PlayButtonMenuItems(audio,
+                    [this](bool enabled) { SetAudioEnabled(enabled); });
+            }));
     }
 
     // Save scene (same as Editor.Global.SaveScene: save to path, or Save As modal if untitled)
@@ -583,8 +577,6 @@ void EditorTopToolbar::SetAudioEnabled(bool enabled)
 {
     if (m_PlayButton)
         m_PlayButton->SetTooltip(enabled ? "Play. Right-click for options." : "Play (audio muted). Right-click for options.");
-    if (m_AudioToggleButton)
-        Editor::ApplyAudioToggleState(*m_AudioToggleButton, enabled);
 }
 
 void EditorTopToolbar::SetRecordActive(bool active)

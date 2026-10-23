@@ -98,6 +98,9 @@ export declare const LocalBounds: ComponentType<LocalBounds>;
 // ---------------------------------------------------------------------------------------
 // MeshRenderer (Components/Rendering/MeshRenderer.h).
 
+/** Which passes draw the mesh: color only, color and shadows, or shadows only. */
+export type ShadowCasting = 'Off' | 'On' | 'ShadowsOnly';
+
 export interface MeshRenderer {
     /** Submesh index within the source model. */
     meshId: number;
@@ -109,7 +112,7 @@ export interface MeshRenderer {
     modelAssetGuid: AssetRef;
     /** The render layers this mesh is on; bit i is layer i. */
     renderLayers: number;
-    castShadows: boolean;
+    shadowCasting: ShadowCasting;
     receiveShadows: boolean;
     motionVectors: boolean;
 }

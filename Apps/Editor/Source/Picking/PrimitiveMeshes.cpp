@@ -23,13 +23,9 @@ const Mesh* ResolvePrimitiveMesh(const GUID& guid)
     if (it != s_Cache.end())
         return &it->second;
 
-    Mesh mesh;
-    if (guid == PG::CubeGuid())          mesh = PG::GenerateCube();
-    else if (guid == PG::SphereGuid())   mesh = PG::GenerateSphere();
-    else if (guid == PG::CapsuleGuid())  mesh = PG::GenerateCapsule();
-    else if (guid == PG::PlaneGuid())        mesh = PG::GeneratePlane();
-    else if (guid == PG::PlaneSpriteUvGuid()) mesh = PG::GeneratePlaneSpriteUv();
-    else                                      return nullptr;
+    Mesh mesh = PG::GenerateByGuid(guid);
+    if (mesh.Vertices.empty())
+        return nullptr;
 
     auto ins = s_Cache.emplace(guid, std::move(mesh));
     return &ins.first->second;

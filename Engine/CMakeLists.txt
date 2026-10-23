@@ -16,6 +16,9 @@ set(ENGINE_SOURCES
     # ComponentReflection.gen.cpp by the ComponentScanner tool — wired in via
     # target_sources(Engine ...) in the codegen block near the bottom of this file.
     Source/Assets/NavGridAsset.cpp
+    Source/Assets/NavSurfaceAsset.cpp
+    Source/Assets/DayCycleProfile.cpp
+    Source/Assets/DayCycleTracks.cpp
     Source/Assets/SceneAsset.cpp
     Source/Assets/CubeLutAsset.cpp
     Source/Assets/CubeLutColorSettings.cpp
@@ -96,6 +99,9 @@ set(ENGINE_SOURCES
 
     # Derives the hierarchy half of entity enable state.
     Source/ECS/DisabledInHierarchySystem.cpp
+    Source/ECS/HierarchyTagDerivation.cpp
+    Source/ECS/SceneViewHiddenInHierarchySystem.cpp
+    Source/ECS/SceneViewHiddenInHierarchySystem.h
 
     # Job System files moved to JobSystem library
     Source/Jobs/FileChangeTracker.cpp
@@ -106,6 +112,7 @@ set(ENGINE_SOURCES
     Source/RenderingHotReloadBridge.cpp
 
     # Rendering ECS integration sources (engine-owned, ECS-dependent)
+	Source/Engine/Rendering/PostProcessVolumeExtract.cpp
 	Source/Engine/Rendering/Systems/RenderExtractionSystem.cpp
 	Source/Engine/Rendering/Systems/KeyedWorldSubmissions.cpp
 	Source/Engine/Rendering/Systems/HLODSelectSystem.cpp
@@ -206,6 +213,8 @@ set(ENGINE_HEADERS
     Include/Assets/CoreAssetRegistrations.h
     Include/Assets/SceneAsset.h
     Include/Assets/CubeLutAsset.h
+    Include/Assets/DayCycleProfile.h
+    Include/Assets/DayCycleTracks.h
     Include/Assets/CubeLutColorSettings.h
 
     Include/Assets/TextureAsset.h
@@ -274,6 +283,7 @@ set(ENGINE_HEADERS
 
     Include/ECS/SystemScheduling.h
     Include/ECS/DisabledInHierarchySystem.h
+    Include/ECS/HierarchyTagDerivation.h
 
     # Animation authoring components/assets
     Include/Assets/AnimationClip.h
@@ -373,6 +383,7 @@ add_library(RenderServices OBJECT
 	Source/Engine/Rendering/MeshGPUResidency.cpp
 	Source/Engine/Rendering/MeshPoolGroupPlan.cpp
 	Source/Engine/Rendering/Material.cpp
+	Source/Engine/Rendering/MaterialDeformationMargins.cpp
 	Source/Engine/Rendering/MaterialRegistry.cpp
 	Source/Engine/Rendering/SceneColorGrab.cpp
 	Source/Engine/Rendering/ModelMaterialBridge.cpp
@@ -407,6 +418,7 @@ add_library(RenderServices OBJECT
 	Source/Engine/Rendering/Pipeline/ViewExposureHistory.cpp
 	Source/Engine/Rendering/Pipeline/ForwardFogKeywords.cpp
 	Source/Engine/Rendering/Pipeline/DeformationMotionProducer.cpp
+	Source/Engine/Rendering/Pipeline/DeformationMotionViewClassifier.cpp
 	Source/Engine/Rendering/Pipeline/RenderPipeline.cpp
 	Source/Engine/Rendering/Pipeline/DepthUpsamplePass.cpp
 	Source/Engine/Rendering/Pipeline/PipelineEnumTables.cpp
@@ -559,6 +571,9 @@ else()
         target_link_options(Engine PRIVATE -Wl,--build-id=sha1)
     endif()
 endif()
+# Engine/Source holds the engine's private headers, included by their path under it
+# (ECS/SceneViewHiddenInHierarchySystem.h); no path there repeats one under Include.
+target_include_directories(Engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 # DO NOT enable WINDOWS_EXPORT_ALL_SYMBOLS — see the GenerateEngineExportsDef
 # block further down for why we generate Engine.dll's .def file ourselves.
 
@@ -1985,6 +2000,7 @@ endif()
                 Tests/MaterialVariantCookTests.cpp
                 Tests/MaterialBlendTests.cpp
                 Tests/MaterialRegistryTests.cpp
+                Tests/MaterialDeformationMarginsTests.cpp
                 Tests/ParallaxShadingCompositionTests.cpp
                 Tests/ProjectMaterialPrewarmServiceTests.cpp
                 Tests/ServedGenerationTableTests.cpp
@@ -2067,6 +2083,7 @@ endif()
                 Tests/RenderServicesWorldMaterialTests.cpp
                 Tests/MaskVertexAlphaDepthTests.cpp
                 Tests/DisabledInHierarchyTests.cpp
+                Tests/SceneViewHiddenInHierarchyTests.cpp
                 Tests/ExtractionFastPathTests.cpp
                 Tests/KeyedWorldSubmissionsTests.cpp
                 Tests/HlodEvictionStickTests.cpp
@@ -2090,9 +2107,9 @@ endif()
                 Tests/PropCoverageFloorTests.cpp
                 Tests/HzbBuildComputeTests.cpp
                 Tests/HzbSpdParityTests.cpp
-                Tests/HzbSpdMinMaxParityTests.cpp
                 Tests/ClusterDepthMinMaxParityTests.cpp
                 Tests/HzbCullingComputeTests.cpp
+                Tests/VertexModifierEnvelopeSampledTests.cpp
                 Tests/GPUDrawStreamBuilderTests.cpp
                 Tests/DrawStreamLookupKeyTests.cpp
                 Tests/PerFrameWritePoolTests.cpp
@@ -2116,6 +2133,8 @@ endif()
                 Tests/RenderOriginTests.cpp
                 Tests/RenderOriginDecodeComputeTests.cpp
                 Tests/LodCrossfadeShaderContractTests.cpp)
+            # Engine/Source: the private headers the world-draw tests reach (ECS/SceneViewHiddenInHierarchySystem.h).
+            target_include_directories(EngineWorldDrawTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 
             # Opt-in render checks no gate runs: the Slang lane's parity gate, which needs an
             # external slangc (GE_SLANGC), and the extraction fast path's manual
@@ -2231,12 +2250,15 @@ endif()
                 Tests/ReflectionProbeSystemTests.cpp
                 Tests/SceneReflectionProbeRecaptureTests.cpp
                 Tests/IblShaderContractTests.cpp
+                Tests/BrdfLutTableTests.cpp
                 Tests/GlassTransmissionShaderContractTests.cpp
                 Tests/SkyGroundBounceContractTests.cpp
                 Tests/SkySunColorTests.cpp
                 Tests/SkySunAnchorTests.cpp
                 Tests/SkySunIlluminanceTests.cpp
                 Tests/SkySunPathTests.cpp
+                Tests/SkySunStateTests.cpp
+                Tests/SkyPreviewHourTests.cpp
                 Tests/SkySunDriveTests.cpp
                 Tests/SkyMoonlightTests.cpp
                 Tests/SkyGroundFloorParityTests.cpp
@@ -2415,7 +2437,7 @@ endif()
 			    # GLFW directly as well: the focus-at-bind row runs GLFW's null
 			    # platform through the same glfw3 DLL Engine loads.
 			    find_package(glfw3 CONFIG REQUIRED)
-			    target_link_libraries(WindowInputRoutingTests PRIVATE Engine glfw GTest::gtest GTest::gtest_main)
+			    target_link_libraries(WindowInputRoutingTests PRIVATE Engine SharedHeadlessDeviceTestSupport glfw GTest::gtest GTest::gtest_main)
 			    target_include_directories(WindowInputRoutingTests PRIVATE
 			        ${CMAKE_SOURCE_DIR}/Engine/Modules/UI/Tests)
 			    set_target_properties(WindowInputRoutingTests PROPERTIES
@@ -2707,6 +2729,8 @@ endif()
 			        Tests/RenderPipelineDeclareTests.cpp
 			        # Which depth the auto-exposure meter reads, and the ocean step's post-ocean resolve.
 			        Tests/MeteringDepthDeclareTests.cpp
+			        # The water surface keeps writing the screen-space reflection slices.
+			        Tests/OceanReflectionSlicesDeclareTests.cpp
 			        # The height fog's sky colour: the fog pass reads the backdrop SkyRender publishes.
 			        Tests/HeightFogSkyBackdropDeclareTests.cpp
 			        # The view output reaches the Tonemap node: no look skips the blended look.
@@ -2724,7 +2748,7 @@ endif()
 			        # The compatibility profile's instance-list fetch, rendered from the
 			        # shipped instance_io.glsl: same staged-shader resolver.
 			        Tests/CompatInstanceListFetchTests.cpp
-			        # The producer's decisions: arm selection, the discontinuity
+			        # The producer's decisions: its view refusals, the discontinuity
 			        # policy, lane membership, and the segment keyword choice.
 			        Tests/DeformationMotionProducerTests.cpp
 			        Tests/ViewTemporalHistoryTests.cpp
@@ -2737,9 +2761,11 @@ endif()
 			        Tests/EngineTestShaderSetup.cpp
 			        ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
 			        )
-			    target_link_libraries(RenderPipelineDeclareTests PRIVATE Engine RenderGraphTestSupport GTest::gtest GTest::gtest_main)
+			    target_link_libraries(RenderPipelineDeclareTests PRIVATE Engine RenderGraphTestSupport SharedHeadlessDeviceTestSupport
+			        GTest::gtest GTest::gtest_main)
 			    target_include_directories(RenderPipelineDeclareTests PRIVATE
-			        ${CMAKE_SOURCE_DIR}/Engine/Source/Engine/Rendering) # SceneDrawWarm.h
+			        ${CMAKE_SOURCE_DIR}/Engine/Source/Engine/Rendering # SceneDrawWarm.h
+			        ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Source) # GrassBladeInstanceGPU.h
                 if(MSVC)
                     target_compile_options(RenderPipelineDeclareTests PRIVATE /bigobj)
                 endif()
@@ -2966,6 +2992,7 @@ endif()
         target_include_directories(TerrainRenderFeatureTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests
             ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Source
             ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering
             ${Vulkan_INCLUDE_DIRS})
         target_compile_definitions(TerrainRenderFeatureTests PRIVATE
@@ -3488,7 +3515,8 @@ endif()
         # so this executable's own copy of the allocation counter compiles empty, and an OBJECT
         # library's objects reach only the targets that link it directly.
         add_executable(ParticleRuntimeTests Tests/ParticleRuntimeTests.cpp Modules/ECS/Source/ModuleRegistration.cpp)
-        target_include_directories(ParticleRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Include)
+        target_include_directories(ParticleRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Include
+            ${CMAKE_CURRENT_SOURCE_DIR}/Modules/Particles/Source)
         target_link_libraries(ParticleRuntimeTests PRIVATE Particles ParticlesAuthoring AssetCore Logger Memory GTest::gtest GTest::gtest_main)
         ge_set_output_tests(ParticleRuntimeTests)
         ge_stage_runtime_dependencies(ParticleRuntimeTests)

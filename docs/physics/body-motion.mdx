@@ -1,0 +1,22 @@
+---
+title: How a body moves
+description: What moves a static, a dynamic and a kinematic physics body, and which of the body and the Transform holds the pose.
+---
+
+A `PhysicsBody` has a `motionType`. It decides which of the body and the entity's `Transform` holds the pose.
+
+| Motion type | What moves it | Which pose wins |
+|---|---|---|
+| `Static` | Nothing. Ground, walls and other fixed geometry. | The body's pose. |
+| `Dynamic` | The simulation: gravity, contacts, forces, impulses and velocity. | The body's pose. After each step the physics writeback copies it into the `Transform`, so a write to the `Transform` does not last. |
+| `Kinematic` | The game. It writes the `Transform`, directly or through a system such as the navigation movement system. | The `Transform`. The physics step moves the body to the entity's world pose with the velocity that reaches it over the frame's steps, so the body pushes and carries the dynamic bodies it touches. When the `Transform` stops, the body stops on its exact pose with no velocity. The writeback leaves the `Transform` alone. |
+
+Move a kinematic body by writing its `Transform`. A script velocity set on a kinematic body is ignored with a warning; move its `Transform` instead.
+
+The entity of a kinematic body carries the `KinematicBody` tag; a game system that needs the kinematic bodies queries `With<KinematicBody>`.
+
+The body takes the pose the `Transform` holds when the physics step starts. A system that moves the `Transform` after physics, such as the navigation movement system, reaches the body on the next frame, so the body collides one frame behind where the entity draws.
+
+A kinematic body crosses the distance its `Transform` moved in one frame at the speed that takes, so a large jump strikes the dynamic bodies at its end pose hard.
+
+A navigation agent steers its `Transform`, so an agent that has a physics body uses a kinematic body.

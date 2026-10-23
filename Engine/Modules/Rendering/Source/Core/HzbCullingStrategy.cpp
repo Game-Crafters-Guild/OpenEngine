@@ -33,6 +33,7 @@ void HzbCullingStrategy::ScheduleCulling(const ViewCullingContext& ctx)
     input.firstInstance = ctx.FirstInstance;
     input.instanceCount = ctx.InstanceCount;
     input.renderLayerMask = ctx.Layers;
+    input.dropEditorHidden = ctx.DropEditorHidden;
     input.frameIndex = ctx.FrameIndex;
     input.deltaTime = ctx.DeltaTime;
     // The strategy's whole difference from FrustumCullingStrategy today:

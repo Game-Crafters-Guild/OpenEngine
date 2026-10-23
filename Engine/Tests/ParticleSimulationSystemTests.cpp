@@ -6,10 +6,12 @@
 #include "Assets/BinaryAsset.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/ModuleRegistration.h"
 #include "ECS/SystemScheduling.h"
 #include "ECSModules/Rendering/Systems/RegisterRenderingSystems.h"
 #include "Particles/Assets/ParticleStackAsset.h"
 #include "Particles/ParticleStackAuthoring.h"
+#include "Particles/ParticleProcessorRegistry.h"
 #include "Particles/ParticleStackDocument.h"
 #include "Particles/Processors/ParticleDragProcessor.h"
 #include "Particles/Systems/ParticleSimulationSystem.h"
@@ -65,6 +67,53 @@ std::string SpawnInChild(uint32 count)
            std::to_string(count) + "}}";
 }
 
+// A stack processor of a type a module registers: a copy of drag under `id`.
+std::string LateProcessor(const std::string& id)
+{
+    return R"(,{"type":")" + id + R"(","id":3,"stage":"update"})";
+}
+
+void RegisterLateProcessor(const std::string& id)
+{
+    auto late = Particles::ParticleDragProcessor();
+    late.Id = id;
+    ASSERT_TRUE(Particles::ParticleProcessorRegistry::Register(late));
+}
+
+// One stack file in a folder of its own, loaded the way the editor and the player load it: through
+// an asset manager over that folder, with no job system, so a load completes inside the request.
+class StackFolder
+{
+  public:
+    StackFolder(const std::string& name, const std::string& json)
+        : m_Root(std::filesystem::temp_directory_path() / name)
+    {
+        std::filesystem::remove_all(m_Root);
+        std::filesystem::create_directories(m_Root);
+        m_File = std::filesystem::canonical(m_Root) / "Stack.particlestack";
+        WriteText(m_File, json);
+        EXPECT_TRUE(Assets.Initialize(m_Root));
+        Assets.WaitForStartupScan();
+        AssetMetadata metadata;
+        EXPECT_TRUE(Assets.GetRegistry().TryGetAssetMetadata(m_File, metadata));
+        Guid = metadata.Guid;
+    }
+    ~StackFolder()
+    {
+        Assets.Shutdown();
+        std::filesystem::remove_all(m_Root);
+    }
+
+    // Writes the file without telling the asset manager, which watches no files here.
+    void Rewrite(const std::string& json) const { WriteText(m_File, json); }
+
+    AssetManager Assets;
+    GUID Guid;
+
+  private:
+    std::filesystem::path m_Root, m_File;
+};
+
 const Particles::ParticleEmitterState& Emitter(const ParticleSimulationSystem& system, ECS::EntityHandle entity)
 {
     return system.State()->Emitters.at(entity.id);
@@ -95,6 +144,26 @@ class ParticleSimulationSystemTest : public testing::Test
     }
 
     GUID AddStack(const std::string& json) { return AddStackAsset(json)->GetGUID(); }
+
+    // Particle state that resolves stacks through `assets` rather than the test's asset manager.
+    static std::shared_ptr<Particles::ParticleWorldState> StateOver(AssetManager& assets)
+    {
+        auto state = std::make_shared<Particles::ParticleWorldState>();
+        state->Assets = &assets;
+        return state;
+    }
+
+    // An emitter running the stack asset `stack`.
+    static ECS::EntityHandle AddEmitterOf(ECS::World& world, const GUID& stack)
+    {
+        const auto entity = world.CreateEntity();
+        ParticleEmitter3D emitter;
+        emitter.Stack.Set(stack);
+        emitter.Amount = 64;
+        world.AddComponentImmediate(entity, emitter);
+        world.AddComponentImmediate(entity, WorldTransform{});
+        return entity;
+    }
 
     // An emitter bursting `count` particles once, with a fixed seed.
     ECS::EntityHandle AddEmitter(ECS::World& world, uint32 count = 12, float lifetime = 1.0f,
@@ -568,6 +637,98 @@ TEST_F(ParticleSimulationSystemTest, AReloadTheAssetRefusesKeepsTheLastValidStac
     EXPECT_EQ(system.State()->LiveParticles, 12u);
     EXPECT_EQ(Emitter(system, entity).Stack, running);
     std::filesystem::remove(file);
+}
+
+// A stack can load before the module that registers its processors, as when the editor opens a
+// scene while the game's module is still building: the load fails, and the asset manager refuses
+// the asset until its file changes. Once the module registers the processors, the emitters load
+// the stack and run it without waiting out their retry interval.
+TEST_F(ParticleSimulationSystemTest, AStackLoadedBeforeAModuleRegistersItsProcessorRunsOnceItDoes)
+{
+    const std::string lateId = "test.late.drag";
+    StackFolder folder("ge_particle_late_processor", StackJson(10.0f, Burst(12) + LateProcessor(lateId)));
+    ECS::World world;
+    const auto entity = AddEmitterOf(world, folder.Guid);
+    ParticleSimulationSystem system(StateOver(folder.Assets));
+    system.Update(world, kFrame);
+    EXPECT_EQ(system.State()->LiveParticles, 0u);
+    EXPECT_EQ(Emitter(system, entity).StackError, "its stack asset did not load");
+    ASSERT_TRUE(folder.Assets.IsLoadSuppressed(folder.Guid));
+
+    RegisterLateProcessor(lateId);
+    system.Update(world, kFrame); // asks for the stack again
+    system.Update(world, kFrame); // runs it
+    EXPECT_EQ(system.State()->LiveParticles, 12u);
+    EXPECT_TRUE(Emitter(system, entity).StackError.empty()) << Emitter(system, entity).StackError;
+}
+
+// The editor's worlds each ask for a stack themselves: one that first asks after the processors
+// registered runs the stack, though another world's request saw it fail and the asset manager still
+// refuses it.
+TEST_F(ParticleSimulationSystemTest, AWorldThatFirstAsksAfterTheProcessorsRegisterRunsTheStackAnotherWorldSawFail)
+{
+    const std::string lateId = "test.late.drag.other.world";
+    StackFolder folder("ge_particle_late_processor_worlds", StackJson(10.0f, Burst(12) + LateProcessor(lateId)));
+    ECS::World editWorld;
+    AddEmitterOf(editWorld, folder.Guid);
+    ParticleSimulationSystem editSystem(StateOver(folder.Assets));
+    editSystem.Update(editWorld, kFrame);
+    ASSERT_TRUE(folder.Assets.IsLoadSuppressed(folder.Guid));
+
+    RegisterLateProcessor(lateId);
+    ECS::World playWorld;
+    const auto entity = AddEmitterOf(playWorld, folder.Guid);
+    ParticleSimulationSystem playSystem(StateOver(folder.Assets));
+    playSystem.Update(playWorld, kFrame); // asks for the stack
+    playSystem.Update(playWorld, kFrame); // runs it
+    EXPECT_EQ(playSystem.State()->LiveParticles, 12u);
+    EXPECT_TRUE(Emitter(playSystem, entity).StackError.empty()) << Emitter(playSystem, entity).StackError;
+}
+
+// A module load that registers the processor and then aborts drops it again, and the stack fails
+// once more. The next good load of the module registers it again, and the emitters run the stack.
+TEST_F(ParticleSimulationSystemTest, AStackRunsOnceAModuleLoadsAfterAnAbortedLoadOfIt)
+{
+    const std::string lateId = "test.late.drag.aborted";
+    StackFolder folder("ge_particle_late_aborted", StackJson(10.0f, Burst(12) + LateProcessor(lateId)));
+    ECS::World world;
+    const auto entity = AddEmitterOf(world, folder.Guid);
+    ParticleSimulationSystem system(StateOver(folder.Assets));
+    system.Update(world, kFrame);
+    ECS::SetActiveRegistrationModule("particles.aborted-module", 1);
+    RegisterLateProcessor(lateId);
+    ECS::ClearActiveRegistrationModule();
+    ASSERT_EQ(Particles::ParticleProcessorRegistry::PurgeModuleProcessors("particles.aborted-module", 1), 1u);
+    system.Update(world, kFrame); // asks again; the id is dropped, so the load fails
+    ECS::SetActiveRegistrationModule("particles.aborted-module", 2);
+    RegisterLateProcessor(lateId);
+    ECS::ClearActiveRegistrationModule();
+    system.Update(world, kFrame); // asks for the stack again
+    system.Update(world, kFrame); // runs it
+    EXPECT_EQ(system.State()->LiveParticles, 12u);
+    EXPECT_TRUE(Emitter(system, entity).StackError.empty()) << Emitter(system, entity).StackError;
+}
+
+// A stack that fails again once processors have been registered is not asked for again until its
+// retry interval has passed, and the asset manager refuses it until then: registrations do not turn
+// a broken stack into a load every frame.
+TEST_F(ParticleSimulationSystemTest, AStackThatStillFailsAfterProcessorsRegisterWaitsOutItsRetryInterval)
+{
+    StackFolder folder("ge_particle_unknown_processor",
+                       StackJson(10.0f, Burst(12) + LateProcessor("test.never.registered")));
+    ECS::World world;
+    const auto entity = AddEmitterOf(world, folder.Guid);
+    ParticleSimulationSystem system(StateOver(folder.Assets));
+    system.Update(world, kFrame);
+    ASSERT_EQ(Emitter(system, entity).StackError, "its stack asset did not load");
+
+    RegisterLateProcessor("test.late.unrelated");
+    system.Update(world, kFrame); // asks again, and fails again
+    folder.Rewrite(StackJson(10.0f, Burst(12)));
+    for (int frame = 0; frame < 10; ++frame)
+        system.Update(world, kFrame);
+    EXPECT_EQ(system.State()->LiveParticles, 0u) << "the stack was loaded again before its retry interval";
+    EXPECT_TRUE(folder.Assets.IsLoadSuppressed(folder.Guid));
 }
 
 TEST_F(ParticleSimulationSystemTest, AGeneralStackMakesRisingSmokeThatGrowsFadesAndReplaysUnderSeek)

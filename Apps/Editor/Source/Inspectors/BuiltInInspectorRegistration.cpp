@@ -1,5 +1,6 @@
 #include "Inspectors/BuiltInInspectorRegistration.h"
 
+#include "DayCycle/DayCycleProfileInspector.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "Inspectors/AmbientLightInspector.h"
 #include "Inspectors/AmbientOcclusionEffectInspector.h"
@@ -29,6 +30,7 @@
 #include "Inspectors/LightInspector.h"
 #include "Inspectors/MaterialInspector.h"
 #include "Inspectors/MeasureInspector.h"
+#include "Inspectors/NavigationAgentInspector.h"
 #include "Inspectors/NavigationSourceComponentTraits.h"
 #include "Inspectors/NavigationSurfaceInspector.h"
 #include "Inspectors/MeshRendererInspector.h"
@@ -63,8 +65,10 @@
 #include "Inspectors/VignetteEffectInspector.h"
 #include "Inspectors/VolumetricFogEffectInspector.h"
 #include "Inspectors/WindVolumeInspector.h"
+#include "SceneView/SceneViewEye.h"
 #include "Terrain/TerrainHeightmapInspector.h"
 #include "Terrain/TerrainInspector.h"
+#include "Terrain/TerrainColorZoneInspector.h"
 #include "Terrain/TerrainModifierInspectors.h"
 
 namespace GameEngine
@@ -88,8 +92,10 @@ void RegisterBuiltInInspectors()
     RegisterOceanDepthCacheSourceInspector();
     RegisterOceanWaveSpectrumInspector();
     RegisterParticleInspector();
+    Editor::RegisterSceneViewEyeTraits();
     RegisterPostProcessVolumeInspector();
     RegisterWindVolumeInspector();
+    RegisterNavigationAgentInspector();
     RegisterNavigationSurfaceInspector();
     RegisterNavigationSourceComponentTraits();
     RegisterBloomEffectInspector();
@@ -119,6 +125,7 @@ void RegisterBuiltInInspectors()
     RegisterPhysicsColliderInspectors();
     RegisterTerrainInspector();
     RegisterTerrainModifierInspectors();
+    RegisterTerrainColorZoneInspector();
     RegisterSplineInspectors();
     RegisterSplinePlacementInspector();
     RegisterSplineFenceInspector();
@@ -129,6 +136,7 @@ void RegisterBuiltInInspectors()
     RegisterTextureInspector();
     RegisterAudioInspector();
     RegisterCubeLutAssetInspector();
+    Editor::RegisterDayCycleProfileInspector();
     RegisterScriptInspector();
     RegisterNativeSourceInspector();
     RegisterShaderInspector();

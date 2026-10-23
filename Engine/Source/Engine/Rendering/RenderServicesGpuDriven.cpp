@@ -639,11 +639,9 @@ uint32_t RenderServices::ScheduleWorldBucketerCommon()
                                         isShadowBucket ? 0.0f : m_LODHysteresisBand);
         // The deforming-motion producer reads this view's rendered level and
         // phase history for per-instance validity, so the camera slices of a
-        // view keep it while an arm is enabled. Shadow buckets never do: no
-        // producer draws into a cascade. With every arm off no view asks, the
-        // scatter allocates nothing and binds its stand-in, which is the state
-        // the history shipped in.
-        if (!isShadowBucket && m_DeformationMotionArm != DeformationMotionArm::None)
+        // view keep it. Shadow buckets never do: no producer draws into a
+        // cascade.
+        if (!isShadowBucket)
             s.lod.renderedLevelHistoryRequested = true;
         // Fit-freeze lane: a directional cascade slice selects LODs with the
         // FROZEN camera captured at that cascade's last refit (the value the
@@ -958,9 +956,8 @@ bool RenderServices::ScheduleWorldOcclusionRecoverScatterForView(
                               ComputeViewSseScales(viewId), m_LODCrossfadeDuration,
                               m_LODHysteresisBand);
     // Phase B shares this view's history buffer with phase A (the comment
-    // above), so it asks for it on the same condition.
-    if (m_DeformationMotionArm != DeformationMotionArm::None)
-        s.lod.renderedLevelHistoryRequested = true;
+    // above), so it asks for it too.
+    s.lod.renderedLevelHistoryRequested = true;
     m_DrawStreamBuilder->RegisterSlice(s);
 
     // LATE pass phase (after world render): PassPhase is a scheduling tiebreak,
@@ -1128,6 +1125,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
     UpdateIdleElisionFrameState();
 
     m_GpuCullingPipeline->BeginFrame(&frame, scene);
+    m_GpuCullingPipeline->SetMaterialDeformationMargins(m_MaterialSystem.MaterialDeformationMarginSpan());
 
     const std::vector<Rendering::CameraInfo>& cameras = m_ViewRegistry.GetCameras();
     auto findCamera = [&cameras](Rendering::CameraId id) -> const Rendering::CameraData*
@@ -1185,6 +1183,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         ctx.FirstInstance = 0;
         ctx.InstanceCount = instanceCount;
         ctx.Layers = view.ActiveRenderLayerMask();
+        ctx.DropEditorHidden = view.DropsEditorHidden();
         ctx.FrameIndex = thisFrame;
         ctx.DeltaTime = deltaTime;
         ctx.CullingPipeline = m_GpuCullingPipeline.get();
@@ -1212,49 +1211,17 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         const auto areaShadow = BuildAreaShadowFrameInfo(GetWorldLights(view.worldId));
         if (areaShadow.valid && view.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(view.id))
         {
-            Rendering::ViewCullingContext areaCtx{};
-            areaCtx.Id = view.id;
-            areaCtx.CascadeIndex = kAreaShadowCullingIndex;
-            areaCtx.ViewMatrix = areaShadow.lightView;
-            areaCtx.ProjMatrix = areaShadow.lightProj;
-            areaCtx.ViewProjMatrix = areaShadow.lightVP;
-            Rendering::ExtractFrustumPlanes(areaShadow.lightVP, areaCtx.FrustumPlanes);
-            areaCtx.CameraPosition = areaShadow.position;
-            areaCtx.CameraForward = areaShadow.direction;
-            areaCtx.NearPlane = areaShadow.nearPlane;
-            areaCtx.FarPlane = areaShadow.farPlane;
-            areaCtx.FirstInstance = 0;
-            areaCtx.InstanceCount = instanceCount;
-            areaCtx.Layers = view.ActiveRenderLayerMask();
-            areaCtx.FrameIndex = thisFrame;
-            areaCtx.DeltaTime = deltaTime;
-            areaCtx.CullingPipeline = m_GpuCullingPipeline.get();
-            areaCtx.Scene = scene;
-            s_DefaultFrustum.ScheduleCulling(areaCtx);
+            s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
+                ctx, {kAreaShadowCullingIndex, areaShadow.lightView, areaShadow.lightProj, areaShadow.lightVP,
+                      areaShadow.position, areaShadow.direction, areaShadow.nearPlane, areaShadow.farPlane}));
         }
 
         const auto spotShadow = BuildSpotShadowFrameInfo(GetWorldLights(view.worldId));
         if (spotShadow.valid && view.ActiveRenderLayerMask() != Rendering::RenderLayerMask::None() && HasShadowCasters(view.id))
         {
-            Rendering::ViewCullingContext spotCtx{};
-            spotCtx.Id = view.id;
-            spotCtx.CascadeIndex = kSpotShadowCullingIndex;
-            spotCtx.ViewMatrix = spotShadow.lightView;
-            spotCtx.ProjMatrix = spotShadow.lightProj;
-            spotCtx.ViewProjMatrix = spotShadow.lightVP;
-            Rendering::ExtractFrustumPlanes(spotShadow.lightVP, spotCtx.FrustumPlanes);
-            spotCtx.CameraPosition = spotShadow.position;
-            spotCtx.CameraForward = spotShadow.direction;
-            spotCtx.NearPlane = spotShadow.nearPlane;
-            spotCtx.FarPlane = spotShadow.farPlane;
-            spotCtx.FirstInstance = 0;
-            spotCtx.InstanceCount = instanceCount;
-            spotCtx.Layers = view.ActiveRenderLayerMask();
-            spotCtx.FrameIndex = thisFrame;
-            spotCtx.DeltaTime = deltaTime;
-            spotCtx.CullingPipeline = m_GpuCullingPipeline.get();
-            spotCtx.Scene = scene;
-            s_DefaultFrustum.ScheduleCulling(spotCtx);
+            s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
+                ctx, {kSpotShadowCullingIndex, spotShadow.lightView, spotShadow.lightProj, spotShadow.lightVP,
+                      spotShadow.position, spotShadow.direction, spotShadow.nearPlane, spotShadow.farPlane}));
         }
 
         // M1: schedule one cull context per (slot, face) of the SHARED atlas
@@ -1283,25 +1250,10 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
                 {
                     if ((fi.faceMask & (1u << face)) == 0u)
                         continue; // camera-culled face: no GPU cull context, no draws
-                    Rendering::ViewCullingContext pointCtx{};
-                    pointCtx.Id = view.id;
-                    pointCtx.CascadeIndex = PointShadowCullingIndex(PointShadowSlotFaceLayer(slot, face));
-                    pointCtx.ViewMatrix = fi.lightView[face];
-                    pointCtx.ProjMatrix = fi.lightProj;
-                    pointCtx.ViewProjMatrix = fi.lightVP[face];
-                    Rendering::ExtractFrustumPlanes(fi.lightVP[face], pointCtx.FrustumPlanes);
-                    pointCtx.CameraPosition = fi.position;
-                    pointCtx.CameraForward = fi.direction[face];
-                    pointCtx.NearPlane = fi.nearPlane;
-                    pointCtx.FarPlane = fi.farPlane;
-                    pointCtx.FirstInstance = 0;
-                    pointCtx.InstanceCount = instanceCount;
-                    pointCtx.Layers = view.ActiveRenderLayerMask();
-                    pointCtx.FrameIndex = thisFrame;
-                    pointCtx.DeltaTime = deltaTime;
-                    pointCtx.CullingPipeline = m_GpuCullingPipeline.get();
-                    pointCtx.Scene = scene;
-                    s_DefaultFrustum.ScheduleCulling(pointCtx);
+                    s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
+                        ctx, {PointShadowCullingIndex(PointShadowSlotFaceLayer(slot, face)), fi.lightView[face],
+                              fi.lightProj, fi.lightVP[face], fi.position, fi.direction[face], fi.nearPlane,
+                              fi.farPlane}));
                 }
             }
         }

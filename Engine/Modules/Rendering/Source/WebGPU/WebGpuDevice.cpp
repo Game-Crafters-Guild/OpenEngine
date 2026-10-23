@@ -568,6 +568,8 @@ void WebGpuDevice::PopulateCapabilities()
 #endif
     caps.supportsDualSourceBlending =
         wgpuDeviceHasFeature(m_Device, WGPUFeatureName_DualSourceBlending) != 0;
+    // Each colour target of a WebGPU pipeline carries its own blend and write mask.
+    caps.supportsIndependentBlend = true;
     caps.supportsTextureCompressionBC =
         wgpuDeviceHasFeature(m_Device, WGPUFeatureName_TextureCompressionBC) != 0;
 

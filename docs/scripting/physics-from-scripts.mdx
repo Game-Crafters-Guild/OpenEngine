@@ -1,13 +1,13 @@
 ---
 title: Physics from scripts
-description: Cast a ray, move a body, drive a character controller, and receive contact and trigger events from a C# script, with the thread and hot reload rules.
+description: Cast a ray, find every body along a ray or in a box, move a body, drive a character controller, and receive contact and trigger events from a C# script, with the thread and hot reload rules.
 sidebar:
   order: 12
 ---
 
 A script reaches the physics world through the `Physics` class in `GameEngine.Scripting`, and reaches one entity's body through that entity's view, `entity.Physics`. A native C++ script calls the same functions in `PhysicsECS/PhysicsScriptApi.h`. Distances are in meters, velocities in meters per second, and impulses in newton seconds. +Y is up.
 
-The physics world exists in play mode only. Outside play mode a ray cast returns false, a getter returns zero, and a setter does nothing. None of them throws.
+The physics world exists in play mode only. Outside play mode a ray cast returns false, a query for every body returns 0, a getter returns zero, and a setter does nothing. None of them throws.
 
 ## Entities
 
@@ -43,14 +43,61 @@ if (Physics.RayCast(cameraPosition, cameraForward, out RayHit hit, maxDistance: 
     ApplyDamage(hit.Entity, hit.Point, hit.Normal);
 ```
 
+## Find every body along a ray or in a box
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PhysicsECS/PhysicsScriptApi.h"
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
+                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+                        bool ignoreTriggers = false);
+std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::Vector3 center, Mathematics::Vector3 halfExtents,
+                        Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies,
+                        std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.Bindings"
+public static int RayCastAll(Vector3 origin, Vector3 direction, Span<RayHit> hits,
+                             float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
+public static int BoxOverlap(Vector3 center, Vector3 halfExtents, Quaternion rotation, Span<Entity> bodies,
+                             uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
+```
+
+::::
+:::::
+
+You give the buffer, and the call writes the results into it. `RayCastAll` writes a `RayHit` for every body along the ray within `maxDistance`, nearest first, each body once at its nearest hit. `BoxOverlap` writes the entity of every body inside the box. The box is centered at `center`, extends `halfExtents` from the center along each of its axes (each above 0), and is turned by `rotation`. Its bodies come in no fixed order. `layerMask` and `ignoreTriggers` work as for `RayCast`.
+
+Both calls return the number of results there are. When that number is more than the buffer holds, the buffer gets the first results that fit (for `RayCastAll`, the nearest ones), and the number tells you the size of the buffer that holds all of them. A call never cuts the results short without telling you. An empty buffer asks for the number only.
+
+```csharp title="Every enemy along a laser beam"
+Span<RayHit> hits = stackalloc RayHit[16];
+int count = Physics.RayCastAll(muzzle, forward, hits, maxDistance: 50f);
+for (int i = 0; i < Math.Min(count, hits.Length); i++)
+    ApplyDamage(hits[i].Entity, hits[i].Point);
+```
+
+```csharp title="Every body inside a trap"
+Span<Entity> bodies = stackalloc Entity[8];
+int count = Physics.BoxOverlap(trapCenter, new Vector3(2f, 1f, 2f), Quaternion.Identity, bodies);
+for (int i = 0; i < Math.Min(count, bodies.Length); i++)
+    Trap(bodies[i]);
+```
+
+A `stackalloc` buffer costs nothing to allocate. For a buffer that can grow, keep an array in a field and make it larger when `count` is more than its length.
+
 ## Move a body
 
 The view of an entity reads and changes the velocity of the entity's `PhysicsBody`. For an entity with no body, a getter returns zero and a setter does nothing.
 
 | Call | What it does |
 |---|---|
-| `GetLinearVelocity()`, `SetLinearVelocity(v)` | The body's velocity. A static body does not move. |
-| `GetAngularVelocity()`, `SetAngularVelocity(v)` | The body's spin, in radians per second about each axis. |
+| `GetLinearVelocity()`, `SetLinearVelocity(v)` | The body's velocity. A static body does not move. A kinematic body follows its `Transform`: the setter is ignored with a warning ([How a body moves](../physics/body-motion.mdx)). |
+| `GetAngularVelocity()`, `SetAngularVelocity(v)` | The body's spin, in radians per second about each axis. On a kinematic body the setter is ignored with a warning. |
 | `AddImpulse(impulse)` | Changes the velocity at once by `impulse / mass`, at the center of mass. |
 | `AddImpulseAtPosition(impulse, position)` | The same at a point in world space, which also spins the body. |
 
@@ -142,10 +189,10 @@ A subscription of an entity that is destroyed stays until play mode stops, and i
 
 | Call | Who may call |
 |---|---|
-| `RayCast`, every call of the view, and `+=` and `-=` on an event | the main thread, outside a job |
+| `RayCast`, `RayCastAll`, `BoxOverlap`, every call of the view, and `+=` and `-=` on an event | the main thread, outside a job |
 
 A call from another thread, such as `Task.Run`, a timer or a job, throws `EngineCallException`. [The main thread from a thread of your own](main-thread-post.mdx) tells how to reach the main thread from there.
 
 ## What scripts cannot do yet
 
-`RayCastAll`, `BoxOverlap` and shape casts have no script call. A native C++ script calls `PhysicsWorld::RayCastAll` and `PhysicsWorld::BoxOverlap` directly.
+Shape casts have no script call, because the physics world has no shape cast.

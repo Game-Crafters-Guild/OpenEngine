@@ -26,6 +26,7 @@
 #include "ECSModules/Rendering/Systems/ReflectionProbeSystem.h"
 
 #include "ECS/DisabledInHierarchySystem.h"
+#include "ECS/SceneViewHiddenInHierarchySystem.h"
 #include "Scripting/NativePostSimulationSystem.h"
 
 namespace GameEngine { namespace Engine::Renderer {
@@ -67,6 +68,9 @@ void AddRenderingSystemsToSchedule(ECS::SystemScheduleBuilder& schedule, RenderS
     // reason the TLAS and native post-simulation systems do, this being where
     // the engine assembles the default world's schedule.
     schedule.Add<DisabledInHierarchySystem>("DisabledInHierarchy", SystemPhase::Early, 0, {});
+    // The Scene View eye's inherited state, derived the same way before extraction reads it.
+    schedule.Add<SceneViewHiddenInHierarchySystem>("SceneViewHiddenInHierarchy", SystemPhase::Early, 0,
+                                                   {"DisabledInHierarchy"});
 
     schedule.Add<TimelinePlaybackSystem>(kTimelinePlayback, SystemPhase::Animation, 0, {}, EngineCore::GetInstance().GetAudioSystem());
     schedule.Add<CharacterGraphParamSystem>(kCharGraphParams, SystemPhase::Animation, 1, {kTimelinePlayback});

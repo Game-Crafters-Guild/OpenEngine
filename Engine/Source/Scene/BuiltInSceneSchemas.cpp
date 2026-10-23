@@ -653,7 +653,8 @@ void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle en
         }
     }
     outLines.push_back(std::string("MeshRenderer.renderLayers = ") + FormatRenderLayerMask(mr->RenderLayers));
-    outLines.push_back(std::string("MeshRenderer.castShadows = ") + (mr->castShadows ? "true" : "false"));
+    outLines.push_back(std::string("MeshRenderer.shadowCasting = ") +
+                       std::string(Components::ShadowCastingName(mr->shadowCasting)));
     outLines.push_back(std::string("MeshRenderer.receiveShadows = ") + (mr->receiveShadows ? "true" : "false"));
     outLines.push_back(std::string("MeshRenderer.motionVectors = ") + (mr->motionVectors ? "true" : "false"));
 }
@@ -827,6 +828,23 @@ static bool ParseU8(std::string_view value, uint8& out, std::string* outError)
     return true;
 }
 
+// A Shadow Casting value by its enumerator name: Off, On or ShadowsOnly.
+static bool ParseShadowCasting(std::string_view value, Components::ShadowCasting& out, std::string* outError)
+{
+    for (const Components::ShadowCasting casting :
+         {Components::ShadowCasting::Off, Components::ShadowCasting::On, Components::ShadowCasting::ShadowsOnly})
+    {
+        if (value == Components::ShadowCastingName(casting))
+        {
+            out = casting;
+            return true;
+        }
+    }
+    if (outError)
+        *outError = "MeshRenderer.shadowCasting is '" + std::string(value) + "': write Off, On or ShadowsOnly";
+    return false;
+}
+
 bool MeshRendererSchema::ApplyProperty(ECS::World& world,
                                        ECS::EntityHandle entity,
                                        const SceneLoadContext& ctx,
@@ -995,12 +1013,10 @@ bool MeshRendererSchema::ApplyProperty(ECS::World& world,
         if (!ParseRenderLayerMask(value, "renderLayers", mr.RenderLayers, outError))
             return false;
     }
-    else if (property == "castshadows")
+    else if (property == "shadowcasting")
     {
-        bool b = true;
-        if (!ParseBool(value, b, outError))
+        if (!ParseShadowCasting(value, mr.shadowCasting, outError))
             return false;
-        mr.castShadows = b;
     }
     else if (property == "receiveshadows")
     {
@@ -2233,78 +2249,6 @@ void WarnRetiredSkyProperty(const RetiredSkyProperty& retired, RetiredSkyOutcome
                              retired.Authored, kRetiredSunColorReason);
         break;
     }
-}
-
-// A Math::Curve as one scene property line, every field of every key: "t,v,inTan,outTan,interp,mode"
-// per key, keys separated by ';'. The one format for a curve whose keys may be Smooth, with tangents
-// (ValueCurve's shape, the sky's sun illuminance curve): the compact sky format above keeps only time
-// and value, and every key would come back Linear.
-static std::string FormatCurveKeys(const Math::Curve& curve)
-{
-    std::string out;
-    for (uint8 i = 0; i < curve.KeyCount; ++i)
-    {
-        const Math::CurveKey& k = curve.Keys[i];
-        if (i > 0)
-            out += ';';
-        out += FormatFloat(k.Time);
-        out += ',';
-        out += FormatFloat(k.Value);
-        out += ',';
-        out += FormatFloat(k.InTangent);
-        out += ',';
-        out += FormatFloat(k.OutTangent);
-        out += ',';
-        out += std::to_string(static_cast<int>(k.Interp));
-        out += ',';
-        out += std::to_string(static_cast<int>(k.TangentMode));
-    }
-    return out;
-}
-
-// Parse FormatCurveKeys' line back into a curve. Missing trailing fields of a key read 0 / Linear /
-// Auto, so the compact "time,value;..." form reads as Linear keys. An empty or garbage line gives an
-// empty curve; the caller picks its own default for that.
-static Math::Curve ParseCurveKeys(std::string_view value)
-{
-    Math::Curve curve{};
-    size_t segStart = 0;
-    while (segStart <= value.size() && curve.KeyCount < Math::Curve::Capacity)
-    {
-        const size_t segEnd = value.find(';', segStart);
-        const std::string_view seg = value.substr(
-            segStart, segEnd == std::string_view::npos ? value.size() - segStart : segEnd - segStart);
-        if (!seg.empty())
-        {
-            float32 fields[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-            size_t fieldStart = 0;
-            for (int f = 0; f < 6; ++f)
-            {
-                const size_t fieldEnd = seg.find(',', fieldStart);
-                const std::string_view tok = seg.substr(
-                    fieldStart,
-                    fieldEnd == std::string_view::npos ? seg.size() - fieldStart : fieldEnd - fieldStart);
-                float32 parsed = 0.0f;
-                if (ParseF32(tok, parsed, nullptr))
-                    fields[f] = parsed;
-                if (fieldEnd == std::string_view::npos)
-                    break;
-                fieldStart = fieldEnd + 1;
-            }
-            Math::CurveKey key;
-            key.Time = fields[0];
-            key.Value = fields[1];
-            key.InTangent = fields[2];
-            key.OutTangent = fields[3];
-            key.Interp = static_cast<Math::CurveInterp>(std::clamp(static_cast<int>(fields[4]), 0, 2));
-            key.TangentMode = static_cast<Math::CurveTangentMode>(std::clamp(static_cast<int>(fields[5]), 0, 4));
-            curve.TryInsert(key);
-        }
-        if (segEnd == std::string_view::npos)
-            break;
-        segStart = segEnd + 1;
-    }
-    return curve;
 }
 
 // A camera's exposure compensation curve as the resolve reads it: a key with a non-finite EV100 or

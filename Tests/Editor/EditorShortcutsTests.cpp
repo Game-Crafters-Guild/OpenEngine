@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "Core/WindowInputRouter.h"
+#include "Editor/Hierarchy/HierarchyEntityCommands.h"
+#include "EditorContextMenu/DirectoryMenuEditItems.h"
 #include "Editor/Shortcuts/EditorShortcuts.h"
 #include "EditorInputActions.h"
 #include "UI/Controls/ItemSizeSlider.h"
@@ -9,6 +11,9 @@
 
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
+#include "Platform/Capabilities.h"
+#include "Platform/ContextMenu.h"
+#include "RecordingContextMenu.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -300,6 +305,66 @@ TEST(EditorShortcutsBindings, AssetsRenameBindsReturnOnMacOsOnly)
     EXPECT_EQ(defaults[1].mods, 0) << "an unmodified Return, so it reads as the Finder gesture";
 #else
     EXPECT_EQ(defaults.size(), 1u) << "Return keeps its open behaviour off macOS";
+#endif
+}
+
+// A menu row shows the key its panel's key map binds now, so a rebinding shows in the menu too.
+TEST(EditorShortcutsBindings, EditMenuRowsShowTheKeysTheKeyMapBinds)
+{
+    ScopedCatalogDefaultBindings defaults;
+    const int primary = Platform::PrimaryShortcutModifierIsCommand() ? Input::kModSuper : Input::kModControl;
+    auto buildEntityMenu = []
+    {
+        ContextMenuBuilder builder;
+        Editor::AddHierarchyEntityEditItems(builder);
+        EditorTesting::RecordingContextMenu menu;
+        builder.Build(&menu);
+        return menu;
+    };
+
+    const EditorTesting::RecordingContextMenu entityMenu = buildEntityMenu();
+    EXPECT_EQ(entityMenu.ShortcutOf("Rename"), "F2");
+    EXPECT_EQ(entityMenu.ShortcutOf("Duplicate"), Editor::FormatShortcutBinding(Input::kKeyCode_D, primary));
+    EXPECT_EQ(entityMenu.ShortcutOf("Delete"), "Del") << "the desktop form of the key, not the row's own word again";
+
+    ContextMenuBuilder folderBuilder;
+    AddDirectoryEditItems(folderBuilder);
+    EditorTesting::RecordingContextMenu folderMenu;
+    folderBuilder.Build(&folderMenu);
+    EXPECT_EQ(folderMenu.ShortcutOf("Rename"), "F2");
+    EXPECT_EQ(folderMenu.ShortcutOf("Delete"), "") << "the Assets panel binds no key to Delete";
+
+    const ShortcutCatalogEntry* rename = nullptr;
+    for (const ShortcutCatalogEntry& entry : GetShortcutCatalog())
+    {
+        if (std::string_view(entry.groupLabel) == "Hierarchy" && std::string_view(entry.displayName) == "Rename")
+            rename = &entry;
+    }
+    ASSERT_NE(rename, nullptr);
+    auto store = Editor::OpenEditorPreferences();
+    SaveShortcutBindings(store, *rename, {{Input::kKeyCode_F3, 0}});
+    ASSERT_TRUE(store.Save());
+    EXPECT_EQ(buildEntityMenu().ShortcutOf("Rename"), "F3") << "the menu shows a key the key map no longer binds";
+}
+
+// The Hierarchy's key map, through the catalog's defaults: F2 renames the selected entity,
+// Delete deletes it and the primary modifier with D duplicates it, each as the command id its
+// context menu entry carries. macOS also renames on Return, as the Assets panel does.
+TEST(EditorShortcutsBindings, HierarchyKeysNameTheEntityEditCommands)
+{
+    ScopedCatalogDefaultBindings defaults;
+    const int primary = Platform::PrimaryShortcutModifierIsCommand() ? Input::kModSuper : Input::kModControl;
+
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_F2, 0), Editor::kHierarchyCmdRename)
+        << "F2 does not rename in the Hierarchy";
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_Delete, 0), Editor::kHierarchyCmdDelete);
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_D, primary), Editor::kHierarchyCmdDuplicate);
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_F2, Input::kModShift), 0u)
+        << "Shift+F2 belongs to the CPU profiler, not to rename";
+#ifdef __APPLE__
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_Enter, 0), Editor::kHierarchyCmdRename);
+#else
+    EXPECT_EQ(Editor::HierarchyEntityCommandForKey(Input::kKeyCode_Enter, 0), 0u);
 #endif
 }
 

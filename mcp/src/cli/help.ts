@@ -30,6 +30,14 @@ Environment:
   GE_CLI_NO_BUILD=1      skip the staleness check in mcp/ge.mjs`;
 }
 
+// The same guidance the tool descriptions carry, for a reader of the overview.
+const kReadingResults = `Reading results:
+  build_engine, run_tests, get_build_status and the capture tools answer with a short
+  summary. The summary is the record; the full log is in the file it names. Do not
+  call get_log after them: the errors are already in the summary.
+  get_log is for one specific line: pass --min-level and --pattern. Every reply
+  ends with the next call, --since included: paste the next line. Do not poll it.`;
+
 // "e.g." is not the end of a sentence — splitting there truncates a summary
 // mid-clause, which is what a naive `split(/(?<=\.)\s/)` does.
 const kAbbreviation = /\b(e\.g|i\.e|etc|vs|approx|cf)\.$/i;
@@ -124,6 +132,7 @@ export function overviewHelp(): string {
     for (const tool of tools) lines.push(`    ${tool.name.padEnd(width)}  ${summarize(tool.description)}`);
   }
 
+  lines.push("", kReadingResults);
   lines.push(
     "",
     "Methods with no tool (open_scene, physics_raycast, get_asset_list, …) are reachable",

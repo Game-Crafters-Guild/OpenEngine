@@ -332,16 +332,15 @@ float MoonlightLux(const SkyEnvironment& sky, float moonUpDot)
     const Rendering::SkySystemConfig config{};
     float moonGround[3];
     Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), config.moonColor, moonUpDot, moonGround);
-    return MoonlightLuxFromGround(sky, moonGround);
+    return MoonlightLuxFromGround(sky, Rendering::MoonPhaseIlluminanceFraction(sky.MoonArcPosition), moonGround);
 }
 
-float MoonlightLuxFromGround(const SkyEnvironment& sky, const float moonGround[3])
+float MoonlightLuxFromGround(const SkyEnvironment& sky, float moonPhaseFraction, const float moonGround[3])
 {
     if (!sky.ShowMoon)
         return 0.0f;
     const Rendering::SkySystemConfig config{};
-    return SanitisedMoonlightLux(sky.MoonlightIlluminance) *
-           Rendering::MoonPhaseIlluminanceFraction(sky.MoonArcPosition) *
+    return SanitisedMoonlightLux(sky.MoonlightIlluminance) * moonPhaseFraction *
            ColorUtils::LinearRec709Luminance(moonGround) / ColorUtils::LinearRec709Luminance(config.moonColor);
 }
 

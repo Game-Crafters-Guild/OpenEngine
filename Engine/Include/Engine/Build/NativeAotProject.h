@@ -16,7 +16,7 @@ struct NativeAotProjectDesc
     std::filesystem::path ScriptSources;               ///< authored scripts root, globbed recursively; empty for none
     std::vector<PackageCodeModule> PackageModules;     ///< only runtime C# modules are compiled in
     std::vector<std::string> PackageDefines;           ///< union of enabled-package defines
-    std::vector<std::filesystem::path> ReferenceDlls;  ///< staged SDK assemblies, referenced by HintPath
+    std::vector<std::filesystem::path> ReferenceDlls;  ///< staged SDK and NuGet package assemblies, referenced by HintPath
     std::filesystem::path GeneratorDll;                ///< source generator; empty when not staged
 };
 

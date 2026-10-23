@@ -105,6 +105,11 @@ bool IsSaneTransform(const Mathematics::Matrix4x4& transform, float boundingRadi
 
 }  // namespace
 
+bool DDGITracesInstance(const Rendering::GPUInstance& instance)
+{
+    return (instance.flags & Rendering::kInstanceFlagShadowsOnly) == 0u;
+}
+
 DDGISceneService::DDGISceneService(Rendering::IDevice* device,
                                    Rendering::MeshGPURegistry* meshRegistry,
                                    Rendering::GPUScene* gpuScene, MaterialSystem* materials,
@@ -300,6 +305,8 @@ DDGISceneService::PlanHashes DDGISceneService::SweepScene()
         // (ddgi_bvh_refit.comp) — the software twin of the hardware lane's
         // per-instance posed BLASes.
         if ((instance.sectorPacked[0] | instance.sectorPacked[1]) != 0u)
+            continue;
+        if (!DDGITracesInstance(instance))
             continue;
         const bool isSkinned = instance.skinPaletteOffset != 0u && instance.runtimeId != 0u;
         if (!IsSaneTransform(instance.transform, instance.boundingRadius))

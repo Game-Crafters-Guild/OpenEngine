@@ -17,6 +17,7 @@ void RingBufferSink::Write(const LogMessage& message)
     slot.Level = message.Level;
     slot.Message = message.Message;
     slot.Timestamp = message.Timestamp;
+    slot.Sequence = ++m_LastSequence;
 
     m_Head = (m_Head + 1) % m_Capacity;
     if (m_Count < m_Capacity)
@@ -25,50 +26,33 @@ void RingBufferSink::Write(const LogMessage& message)
     }
 }
 
-std::vector<RingBufferSink::StoredMessage> RingBufferSink::GetMessages(
-    LogLevel minLevel,
-    size_t maxCount,
-    const String& substring,
-    size_t offset) const
+RingBufferSink::MessageQueryResult RingBufferSink::GetMessages(const MessageQuery& query) const
 {
     std::lock_guard lock(m_Mutex);
 
-    std::vector<StoredMessage> result;
-    result.reserve(maxCount > 0 ? std::min(maxCount, m_Count) : m_Count);
+    MessageQueryResult result;
+    result.LastSequence = m_LastSequence;
+    if (m_Count == 0)
+        return result;
 
-    // Newest entry is at (m_Head - 1); walk backwards toward the oldest so that
-    // truncating to maxCount keeps the most recent matches (the tail of the log).
-    // offset skips that many of the newest matches before collecting.
-    for (size_t i = 0; i < m_Count; ++i)
+    const size_t oldest = (m_Head + m_Capacity - m_Count) % m_Capacity;
+    const uint64 oldestSequence = m_Buffer[oldest].Sequence;
+    if (oldestSequence > query.AfterSequence + 1)
+        result.Overwritten = oldestSequence - query.AfterSequence - 1;
+
+    // Sequence numbers rise from the oldest entry to the newest, so the entries
+    // after the cursor are one contiguous run at the newest end.
+    const uint64 newer = m_LastSequence > query.AfterSequence ? m_LastSequence - query.AfterSequence : 0;
+    const size_t first = m_Count - static_cast<size_t>(std::min<uint64>(newer, m_Count));
+    result.Messages.reserve(m_Count - first);
+    for (size_t i = first; i < m_Count; ++i)
     {
-        const auto& entry = m_Buffer[(m_Head + m_Capacity - 1 - i) % m_Capacity];
-
-        if (entry.Level < minLevel)
-        {
-            continue;
-        }
-
-        if (!substring.empty() && entry.Message.find(substring) == String::npos)
-        {
-            continue;
-        }
-
-        if (offset > 0)
-        {
-            --offset;
-            continue;
-        }
-
-        result.push_back(entry);
-
-        if (maxCount > 0 && result.size() >= maxCount)
-        {
-            break;
-        }
+        const auto& entry = m_Buffer[(oldest + i) % m_Capacity];
+        if (entry.Level >= query.MinLevel)
+            result.Messages.push_back(entry);
+        else
+            ++result.BelowLevel;
     }
-
-    // Collected newest-first; reverse so callers see oldest-first within the window.
-    std::reverse(result.begin(), result.end());
     return result;
 }
 

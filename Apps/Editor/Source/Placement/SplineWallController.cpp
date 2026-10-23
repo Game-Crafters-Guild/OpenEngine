@@ -334,7 +334,7 @@ bool SplineWallController::Commit(ECS::World& world, Engine::Renderer::RenderSer
 
     Components::MeshRenderer renderer{};
     renderer.materialAssetGuid = material;
-    renderer.castShadows = recipe.CastShadows;
+    renderer.shadowCasting = recipe.CastShadows ? Components::ShadowCasting::On : Components::ShadowCasting::Off;
     renderer.receiveShadows = recipe.ReceiveShadows;
     // Vertices replaced wholesale under a stable handle have no previous-frame
     // correspondence, so motion vectors would ghost for a frame after a rebuild.

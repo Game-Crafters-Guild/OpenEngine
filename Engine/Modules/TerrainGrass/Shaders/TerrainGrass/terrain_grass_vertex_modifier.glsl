@@ -7,8 +7,9 @@
 // Procedural grass has no tangent vertex attribute (VertexFlags::None), so reuse the
 // adapter's unused tangent location. Keep locations below 16 for WebGPU compatibility. The full
 // profile carries the blade's ROOT GROUND COLOUR in the same location, beside the wind gate: one
-// colour per blade, which the surface blends the blade's base into (#4206). The compat profile
-// still resolves that colour per fragment in the surface and carries the wind gate alone.
+// colour per blade, which the surface blends the blade's base into (#4206), resolved by the
+// placement compute and read from the blade instance. The compat profile resolves that colour per
+// fragment in the surface and carries the wind gate alone.
 #if defined(GE_COMPAT_PROFILE)
 layout(location = 3) flat out float vGrassWindStrength;
 #else
@@ -89,6 +90,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -112,14 +114,14 @@ struct GrassBladeInstance
     float NormalX;
     float NormalZ;
     uint Flags; // LOD index + clump colour code; grass_clump.glsl owns the bit layout
+    // The ground colour under the root, resolved once per blade by the placement compute on the
+    // full profile (grass_root_ground_color.glsl); grass_clump.glsl owns the packing. 0 on compat.
+    uint RootColor;
 };
 
-#if defined(GE_COMPAT_PROFILE)
 // TerrainGPUParams::Flags bit1 (mirror Terrain::kTerrainFlagAtlasBacked): height/normal come from
 // the atlas, not a unified bindless heightmap/normalmap (both bindless indices are 0 on this path).
-// The full profile takes the same constant from grass_atlas_splat.glsl.
 const uint kTerrainFlagAtlasBacked = 2u;
-#endif
 
 layout(std430, set = 2, binding = 3) readonly buffer TerrainGrassInstances
 {
@@ -149,19 +151,6 @@ layout(std140, set = 2, binding = 7) uniform GrassDrawParamsBuffer
 #include "TerrainGrass/grass_wind_volumes.glsl"
 // CBT_LatticeTextureUV: where the unified height and normal maps are read for a terrain UV.
 #include "CBT/cbt_atlas.glsl"
-
-#if !defined(GE_COMPAT_PROFILE)
-// The blade's root ground colour: the ground splat resolve (the file the placement mask and the
-// ground read) and the ground's own albedo resolve over a root footprint. Set-2 slots match the
-// surface's, which read the same atlas blocks before the resolve moved here.
-#define GRASS_ATLAS_SET 2
-#define GRASS_ATLAS_PARAMS_BINDING 5
-#define GRASS_ATLAS_ROWS_BINDING 6
-#include "TerrainGrass/grass_atlas_splat.glsl"
-#include "TerrainGrass/grass_root_ground_color.glsl"
-// GE_RenderOriginWorld, for the root's render-origin-relative position the projection UVs take.
-#include "Includes/camera_relative.glsl"
-#endif
 
 #if defined(GE_COMPAT_PROFILE)
 // WebGPU exposes no binding array; the two data maps this stage reads are named set-2 bindings.
@@ -385,7 +374,7 @@ const float kGrassBladeDroopRatio = 0.6f;
 // grass leaf is. Shading only: the strip stays two vertices wide and the hardware interpolates the
 // two edge normals across it, so the normal turns smoothly from one edge to the other and the leaf
 // shades as a rounded surface. A wider turn splits a blade into a sunlit half and a dark half.
-const float kGrassBladeFoldRadians = 0.26179939f; // 15 degrees
+const float kGrassBladeFoldRadians = 0.34906585f; // 20 degrees
 // Projected leaf width in pixels over which the fold fades in: none at 3 px, all of it from 8 px.
 const float kGrassFoldFadePixels0 = 3.0f;
 const float kGrassFoldFadePixels1 = 8.0f;
@@ -395,7 +384,6 @@ struct GrassBladeVertex
     vec3 Position;          // world position of this vertex
     vec3 Tangent;           // unit spine direction at this height
     vec3 Normal;            // unit folded shading normal at this vertex's edge (unflipped)
-    vec3 GroundSamplePoint; // where this vertex's ground colour is resolved
 };
 
 // The spine's angle from the terrain normal at height fraction t, in radians.
@@ -508,7 +496,6 @@ GrassBladeVertex GrassBuildBladeVertex(vec3 root, vec3 terrainNormal, vec3 bendD
     // The face normal rotated about the tangent by +fold at the edge side = -1 and by -fold at
     // side = +1: rotating `face` about the tangent by an angle f gives face cos f + twistedSide sin f.
     bv.Normal = normalize(face * cos(fold) - twistedSide * (side * sin(fold)));
-    bv.GroundSamplePoint = root;
     return bv;
 }
 // GE_SHARED_GRASS_BLADE_VERTEX_END
@@ -658,11 +645,9 @@ void ModifyVertex(inout VertexOutput v, InstanceData inst)
 #if defined(GE_COMPAT_PROFILE)
     vGrassWindStrength = windGate;
 #else
-    // Every vertex of the blade resolves the same root, so the flat varying carries one ground
-    // colour for the whole blade whichever vertex provokes a triangle.
-    vGrassBlade = vec4(windGate, GrassRootGroundColor(tp, bladeVertex.GroundSamplePoint,
-                                                      bladeVertex.GroundSamplePoint
-                                                          - GE_RenderOriginWorld()));
+    // Every vertex of the blade reads the same instance word, so the flat varying carries one
+    // ground colour for the whole blade whichever vertex provokes a triangle.
+    vGrassBlade = vec4(windGate, GrassUnpackRootColor(blade.RootColor));
 #endif
 
     // Distance LOD term the surface reads: 1 at the camera, 0 at the range placement actually

@@ -1,0 +1,54 @@
+/* ScriptPackagesList (Apps/Editor/Source/Editor/Settings/ScriptPackagesList.h).
+ *
+ * The list is the control's element; its rows, the add row and the status line come from
+ * ScriptPackagesList.uxml and ScriptPackageRow.uxml beside this sheet. The control requests this
+ * sheet for its own subtree. A package row and the add row share one row style, and an id label
+ * and the id field share one width, so the columns line up.
+ */
+
+.script-packages {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.script-packages-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.script-packages-row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.script-packages-id {
+	width: 220px;
+	flex-shrink: 0;
+}
+
+.script-packages-version {
+	width: 140px;
+	flex-shrink: 0;
+}
+
+/* Icon only, like the other remove buttons of the settings pages. */
+.script-packages-remove {
+	width: 22px;
+	height: 22px;
+	background-image: url("editor:Icons/trash.svg");
+	background-size: 16px 16px;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-color: transparent;
+	border-width: 0;
+	opacity: 0.35;
+}
+
+.script-packages-remove:hover {
+	opacity: 1.0;
+	background-color: transparent;
+}

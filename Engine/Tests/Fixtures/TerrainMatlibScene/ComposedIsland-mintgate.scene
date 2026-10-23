@@ -2044,7 +2044,7 @@ MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Island/Materials/water.material" guid="f668d1ba-3d54-475d-9708-6b8110e79d72"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = false
 Name.value = "Sea"

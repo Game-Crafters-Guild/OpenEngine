@@ -4,10 +4,12 @@ project(TerrainECS LANGUAGES CXX)
 
 add_library(TerrainECS OBJECT
     Source/TerrainService.cpp
+    Source/CoarseTileStandIn.cpp
     Source/TerrainBakeCache.cpp
     Source/BakeWarningLatch.cpp
     Source/TerrainCollisionReadiness.cpp
     Source/PlanarHeightQuery.cpp
+    Source/PlanarHeightfieldEditCursor.cpp
     Source/TerrainHandleHygiene.cpp
     Source/TerrainGpuBake.cpp
     Source/TerrainEntityProvisioning.cpp
@@ -20,6 +22,7 @@ add_library(TerrainECS OBJECT
     Source/TerrainUploadNode.cpp
     Source/PlanetFaceCollider.cpp
     Source/TerrainAtlas.cpp
+    Source/AtlasTileNormal.cpp
     Source/TerrainSizingPlan.cpp
     Source/RawHeightmap.cpp
     Source/AtlasResidencyController.cpp
@@ -38,8 +41,10 @@ add_library(TerrainECS OBJECT
     Source/Systems/TerrainModifierPageOverlay.cpp
     Source/TileStreamingManager.cpp
     Source/TerrainModifierComponents.cpp
+    Source/TerrainColorMap.cpp
+    Source/TerrainColorMapBaker.cpp
     Source/TerrainGrassField.cpp
-    Source/TerrainGrassFieldUploader.cpp
+    Source/TerrainFieldUploader.cpp
     Source/TerrainRoutePolyline.cpp
     Source/TerrainZonePayload.cpp
     Source/TerrainZoneAuthoring.cpp

@@ -272,6 +272,14 @@ uint32_t Material::ResolveTextureSlotOrdinal(StringId name) const
     return (slot == TextureSlot::kCount) ? kTextureSlotArraySize : static_cast<uint32_t>(slot);
 }
 
+void Material::SetDeformationEnvelope(const Rendering::DeformationEnvelopeDeclaration& envelope)
+{
+    if (m_DeformationEnvelope == envelope)
+        return;
+    m_DeformationEnvelope = envelope;
+    MarkDirty();
+}
+
 void Material::SetDeclaredProperties(std::shared_ptr<const Rendering::ShaderPropertyTable> table)
 {
     m_DeclaredProperties = std::move(table);

@@ -9,7 +9,10 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/Core/Device.h"
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
+#include <vector>
 
 using namespace GameEngine;
 using namespace GameEngine::Engine::Renderer;
@@ -34,6 +37,7 @@ TEST(PrimitiveGeneratorTest, GUIDs_AreUnique)
     GUID capsule = PrimitiveGenerator::CapsuleGuid();
     GUID plane = PrimitiveGenerator::PlaneGuid();
     GUID planeSprite = PrimitiveGenerator::PlaneSpriteUvGuid();
+    GUID ground = PrimitiveGenerator::GroundGuid();
 
     EXPECT_NE(cube, sphere);
     EXPECT_NE(cube, capsule);
@@ -45,6 +49,8 @@ TEST(PrimitiveGeneratorTest, GUIDs_AreUnique)
     EXPECT_NE(capsule, plane);
     EXPECT_NE(capsule, planeSprite);
     EXPECT_NE(plane, planeSprite);
+    for (const GUID& other : {cube, sphere, capsule, plane, planeSprite})
+        EXPECT_NE(ground, other);
 }
 
 // --- Mesh generation ---
@@ -98,6 +104,68 @@ TEST(PrimitiveGeneratorTest, PlaneSpriteUv_SameTopologyAsPlane_KeepsSpriteUvOrie
     }
 }
 
+namespace
+{
+// The y component of (b - a) x (c - a) for the triangle whose first index is `first`.
+float TriangleCrossY(const Mesh& mesh, size_t first)
+{
+    const float* a = mesh.Vertices[mesh.Indices[first]].Position;
+    const float* b = mesh.Vertices[mesh.Indices[first + 1]].Position;
+    const float* c = mesh.Vertices[mesh.Indices[first + 2]].Position;
+    return (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+}
+} // namespace
+
+// The Ground is the Plane's 1 m square, UV layout and winding, cut into 120 x 120
+// cells (GroundGuid's contract), and its triangles cover the square exactly once.
+TEST(PrimitiveGeneratorTest, Ground_IsThePlaneCutIntoCells)
+{
+    constexpr uint32_t kSegments = 120;
+    const Mesh plane = PrimitiveGenerator::GeneratePlane();
+    const Mesh ground = PrimitiveGenerator::GenerateByGuid(PrimitiveGenerator::GroundGuid());
+    EXPECT_EQ(ground.Name, "Ground");
+    ASSERT_EQ(ground.Vertices.size(), (kSegments + 1) * (kSegments + 1));
+    ASSERT_EQ(ground.Indices.size(), kSegments * kSegments * 6);
+
+    for (const Vertex& v : ground.Vertices)
+    {
+        EXPECT_FLOAT_EQ(v.Position[1], 0.0f);
+        // The Plane's UV is linear in position: u = 0.5 - x, v = z + 0.5.
+        EXPECT_NEAR(v.TexCoords[0], 0.5f - v.Position[0], 1e-6f);
+        EXPECT_NEAR(v.TexCoords[1], v.Position[2] + 0.5f, 1e-6f);
+    }
+    for (int axis : {0, 2})
+    {
+        EXPECT_FLOAT_EQ(ground.MinBounds[axis], plane.MinBounds[axis]);
+        EXPECT_FLOAT_EQ(ground.MaxBounds[axis], plane.MaxBounds[axis]);
+    }
+
+    // Winding: each triangle turns the same way as the Plane's. Coverage: the triangles'
+    // areas sum to the square's and every vertex is used, so no cell is missing or doubled.
+    const bool planeSign = TriangleCrossY(plane, 0) > 0.0f;
+    const double planeArea = static_cast<double>(plane.MaxBounds[0] - plane.MinBounds[0]) *
+                             static_cast<double>(plane.MaxBounds[2] - plane.MinBounds[2]);
+    const float cell = 1.0f / static_cast<float>(kSegments);
+    double area = 0.0;
+    std::vector<bool> used(ground.Vertices.size(), false);
+    for (size_t t = 0; t < ground.Indices.size(); t += 3)
+    {
+        const float crossY = TriangleCrossY(ground, t);
+        EXPECT_EQ(crossY > 0.0f, planeSign) << "triangle " << t / 3;
+        area += 0.5 * std::abs(static_cast<double>(crossY));
+        for (size_t k = 0; k < 3; ++k)
+        {
+            used[ground.Indices[t + k]] = true;
+            const float* a = ground.Vertices[ground.Indices[t + k]].Position;
+            const float* b = ground.Vertices[ground.Indices[t + (k + 1) % 3]].Position;
+            EXPECT_LE(std::abs(b[0] - a[0]), cell * 1.001f);
+            EXPECT_LE(std::abs(b[2] - a[2]), cell * 1.001f);
+        }
+    }
+    EXPECT_NEAR(area, planeArea, 1e-5 * planeArea);
+    EXPECT_EQ(std::count(used.begin(), used.end(), false), 0) << "unreferenced vertices";
+}
+
 TEST(PrimitiveGeneratorTest, GuidFromName_AcceptsSerializedPlaneSpriteUv)
 {
     EXPECT_EQ(PrimitiveGenerator::GuidFromName("PlaneSpriteUv"), PrimitiveGenerator::PlaneSpriteUvGuid());
@@ -114,6 +182,7 @@ TEST(PrimitiveGeneratorTest, SerializedPrimitiveNames_RoundTripThroughGuidLookup
         PrimitiveGenerator::CapsuleGuid(),
         PrimitiveGenerator::PlaneGuid(),
         PrimitiveGenerator::PlaneSpriteUvGuid(),
+        PrimitiveGenerator::GroundGuid(),
     };
 
     for (const GUID& guid : primitives)
@@ -252,7 +321,7 @@ TEST_F(PrimitiveRegistrationTest, ReprovisionRegeneratesPrimitivesInsteadOfTombs
 
     for (const GUID& guid : {PrimitiveGenerator::CubeGuid(), PrimitiveGenerator::SphereGuid(),
                              PrimitiveGenerator::CapsuleGuid(), PrimitiveGenerator::PlaneGuid(),
-                             PrimitiveGenerator::PlaneSpriteUvGuid()})
+                             PrimitiveGenerator::PlaneSpriteUvGuid(), PrimitiveGenerator::GroundGuid()})
     {
         const MeshGPUEntry* entry = reg.FindByKey({guid, 0});
         ASSERT_NE(entry, nullptr);
@@ -300,7 +369,7 @@ TEST(PrimitiveGeneratorTest, GenerateByGuid_CoversEveryRegisteredPrimitive)
 {
     for (const GUID& guid : {PrimitiveGenerator::CubeGuid(), PrimitiveGenerator::SphereGuid(),
                              PrimitiveGenerator::CapsuleGuid(), PrimitiveGenerator::PlaneGuid(),
-                             PrimitiveGenerator::PlaneSpriteUvGuid()})
+                             PrimitiveGenerator::PlaneSpriteUvGuid(), PrimitiveGenerator::GroundGuid()})
     {
         const Mesh mesh = PrimitiveGenerator::GenerateByGuid(guid);
         EXPECT_FALSE(mesh.Vertices.empty()) << PrimitiveGenerator::NameFromGuid(guid);
@@ -358,6 +427,7 @@ TEST(PrimitiveGeneratorTest, LocalBounds_DefaultPathFallbackPerType)
     LB capsule = PrimitiveGenerator::MakePrimitiveLocalBounds(nullptr, PrimitiveGenerator::CapsuleGuid());
     LB plane   = PrimitiveGenerator::MakePrimitiveLocalBounds(nullptr, PrimitiveGenerator::PlaneGuid());
     LB planeSp = PrimitiveGenerator::MakePrimitiveLocalBounds(nullptr, PrimitiveGenerator::PlaneSpriteUvGuid());
+    LB ground  = PrimitiveGenerator::MakePrimitiveLocalBounds(nullptr, PrimitiveGenerator::GroundGuid());
 
     // Cube + Sphere: unit cube halfExtents (0.5, 0.5, 0.5).
     EXPECT_FLOAT_EQ(cube.Box.halfExtents.x, 0.5f);
@@ -379,6 +449,9 @@ TEST(PrimitiveGeneratorTest, LocalBounds_DefaultPathFallbackPerType)
     EXPECT_FLOAT_EQ(planeSp.Box.halfExtents.x, plane.Box.halfExtents.x);
     EXPECT_FLOAT_EQ(planeSp.Box.halfExtents.y, plane.Box.halfExtents.y);
     EXPECT_FLOAT_EQ(planeSp.Box.halfExtents.z, plane.Box.halfExtents.z);
+    EXPECT_FLOAT_EQ(ground.Box.halfExtents.x, plane.Box.halfExtents.x);
+    EXPECT_FLOAT_EQ(ground.Box.halfExtents.y, plane.Box.halfExtents.y);
+    EXPECT_FLOAT_EQ(ground.Box.halfExtents.z, plane.Box.halfExtents.z);
 }
 
 TEST(PrimitiveGeneratorTest, LocalBounds_UnknownGuidFallsBackToUnitCube)

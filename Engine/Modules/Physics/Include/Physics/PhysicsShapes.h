@@ -3,6 +3,7 @@
 #include "Physics/PhysicsTypes.h"
 
 #include <algorithm>
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -106,6 +107,28 @@ struct HeightFieldShapeDef
     Vector3 Scale{1.0f, 1.0f, 1.0f};
 };
 
+/// A heightfield shape the backend built ahead of its registration
+/// (PhysicsWorld::GetHeightFieldShapeBuilder), on any thread. Opaque: only the backend that built
+/// it reads it.
+class PreparedHeightFieldShape
+{
+public:
+    virtual ~PreparedHeightFieldShape() = default;
+};
+
+/// A prepared heightfield shape, registered by CreateShape without building it again. The baked
+/// scale is ignored, as it is for a HeightFieldShapeDef.
+struct PreparedHeightFieldShapeDef
+{
+    std::shared_ptr<const PreparedHeightFieldShape> Shape;
+};
+
+/// Builds a heightfield shape without registering it, on any thread and concurrently with the
+/// simulation; returns null when the build fails. Holds no state of the world that handed it out,
+/// so a job may still run it after that world is gone. PhysicsWorld never hands out a null builder.
+using HeightFieldShapeBuilder =
+    std::shared_ptr<const PreparedHeightFieldShape> (*)(const HeightFieldShapeDef& definition);
+
 using ShapeDefinition = std::variant<
     SphereShapeDef,
     BoxShapeDef,
@@ -114,7 +137,8 @@ using ShapeDefinition = std::variant<
     ConvexHullShapeDef,
     MeshShapeDef,
     CompoundShapeDef,
-    HeightFieldShapeDef>;
+    HeightFieldShapeDef,
+    PreparedHeightFieldShapeDef>;
 
 } // namespace GameEngine::Physics
 

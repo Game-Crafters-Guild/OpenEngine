@@ -127,12 +127,13 @@ bool OceanSprayGPU::Initialize(IDevice *device)
         }
         return true;
     };
+    const std::vector<ShaderStageCompileSpec> simStages{{"cs", "ocean_spray_gpu_sim.comp", "main", {}}};
+    const std::vector<ShaderStageCompileSpec> cullStages{{"cs", "ocean_spray_gpu_cull.comp", "main", {}}};
+    const std::vector<ShaderStageCompileSpec> drawStages{{"vs", "ocean_spray_gpu.vert", "main", {}},
+                                                         {"fs", "ocean_spray_gpu.frag", "main", {}}};
     ShaderProgramCompileResult sim{}, cull{}, draw{};
-    if (!compile("ocean_spray_sim", {{"cs", "ocean_spray_gpu_sim.comp", "main", {}}}, sim) ||
-        !compile("ocean_spray_cull", {{"cs", "ocean_spray_gpu_cull.comp", "main", {}}}, cull) ||
-        !compile("ocean_spray_draw",
-                 {{"vs", "ocean_spray_gpu.vert", "main", {}}, {"fs", "ocean_spray_gpu.frag", "main", {}}},
-                 draw))
+    if (!compile("ocean_spray_sim", simStages, sim) || !compile("ocean_spray_cull", cullStages, cull) ||
+        !compile("ocean_spray_draw", drawStages, draw))
         return false;
     Rendering::ApplyMetaImageShapeToLayout(sim.meta, m_SimLayout);
     Rendering::ApplyMetaImageShapeToLayout(sim.meta, m_OceanLayout, 2);

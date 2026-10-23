@@ -438,6 +438,19 @@ schema migration. It is to be removed, tracked by issue #3940. Treat registratio
 not a general repair for an incompatible layout. Native built-in mirrors must
 continue to match their C++ definitions.
 
+## NuGet packages
+
+A project's scripts can use NuGet packages. The packages are the `PackageReference` items of `GameEngine.Scripts.csproj` at the project root, and there are two ways to add one:
+
+- In the IDE, add the package to `GameEngine.Scripts.csproj` the usual way, or write the item yourself: `<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />`.
+- In the editor, open **Settings > Project Settings > Script Packages**, write the package id and version, and choose **Add Package**. The page lists the same items and writes them into the same file. When `Directory.Packages.props` sets `ManagePackageVersionsCentrally`, the page writes each version as a `PackageVersion` item in that file, and the item in the csproj has no version.
+
+When the file changes, or a `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props` or `nuget.config` in its folder or a folder above it changes, the editor restores the packages with `dotnet restore`, copies their assemblies into `ScriptAssemblies/Dependencies/`, and compiles the scripts against them. Central package versions in `Directory.Packages.props` work as in any C# project. A package that does not restore stops the compile with an error that names it and says whether the package id and version or the package source is at fault. An exported game ships the packages with the scripts.
+
+A `<Reference>` item with a `HintPath` to an assembly is copied into `ScriptAssemblies/Dependencies/` and compiled against in the same way. The editor does not build a `<ProjectReference>`: the Log panel names it, and the fix is to build that project and add a `<Reference>` to its output assembly.
+
+The packages load once and keep their static state across a script reload. A new package version loads in place of the old one at the next reload. A package that the engine already uses, such as `System.Text.Json`, runs at the engine's version, and the Log panel names both versions when they differ. A package that needs native libraries or files of its own beside its assembly is not supported: the Log panel names the package and the file when it restores. A static field of a package that holds an object or a delegate from the scripts keeps the old scripts loaded after a reload: clear it in an `[OnScriptsUnload]` method.
+
 ## Build pipeline (NativeAOT)
 
 Use the supported [game publishing workflow](../publishing/game-publishing.mdx) for standalone

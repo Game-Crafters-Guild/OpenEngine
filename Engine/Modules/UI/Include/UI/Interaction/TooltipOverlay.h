@@ -1,12 +1,13 @@
 #pragma once
 
+#include "UI/UIElement.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace GameEngine
 {
-class UIElement;
 class Label;
 
 namespace UI
@@ -32,6 +33,23 @@ public:
     // mouseX/Y - current mouse position in root-space pixels
     // time     - current UIManager time in seconds (used for hover delay)
     void Update(UIElement* root, UIElement* hovered, float mouseX, float mouseY, float time);
+
+    // Pins `source`'s tooltip (UIManager::PinTooltip): it shows at once, anchored to
+    // `source`, with no hover and no delay, until Unpin(source) or until `source` is
+    // destroyed. One element holds the pin; pinning another moves it.
+    void Pin(UIElement& source);
+    // Ends the pin `source` holds and hides the bubble; does nothing when another
+    // element holds it.
+    void Unpin(const UIElement& source);
+
+    // Call once per frame before Update. Returns false when no element holds the pin;
+    // the caller then runs the hover path. While the pin is held, shows the pinned
+    // element's tooltip whenever the element is shown: not hidden (display: none on it
+    // or an ancestor, visibility: hidden on it) and reachable from `root` (a dock tab
+    // swapped out is not). Otherwise the bubble is parked, and comes back when the
+    // element shows again. Empty text shows nothing. A destroyed element ends the pin
+    // and parks the bubble.
+    bool UpdatePinned(UIElement* root);
 
     // Called when middle-mouse button is pressed — shows tooltip immediately if the
     // hovered element (or an ancestor) has tooltip text.
@@ -62,6 +80,10 @@ private:
     static const std::string* FindTooltipText(UIElement* element, UIElement** outSource = nullptr);
 
     void PlaceTooltip(UIElement* root, UIElement* source, float mouseX, float mouseY);
+
+    // The element whose tooltip is pinned; empty when none is.
+    UIElement::WeakRef<> m_Pinned;
+    bool m_HasPin = false;
 
     UIElement* m_Wrapper  = nullptr; // outer container (position/z-index, no clipping)
     UIElement* m_Tooltip  = nullptr; // visible box (background, border-radius, shadow)

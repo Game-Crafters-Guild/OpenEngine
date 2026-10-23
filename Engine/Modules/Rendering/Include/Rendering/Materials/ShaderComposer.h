@@ -126,6 +126,18 @@ class ShaderComposer
                                                           const std::filesystem::path& materialDir,
                                                           const MaterialBuildContext& context);
 
+    // The directory a material's build reads besides the shader roots: materialDir when its
+    // surface (or the default surface, when it authors none) or its vertex modifier resolves
+    // there first, or when it is a live graph preview directory (whose variant takes
+    // HAS_TANGENT); empty otherwise. Two materials with the same references and an empty
+    // result compose byte-identical source, so they share one compiled variant. A build
+    // hands this, never the raw materialDir, to BuildMaterialIncludeRoots and
+    // ShaderRootRelative; otherwise a material-local include root would make a shared
+    // build depend on whichever material asked for it first.
+    static std::filesystem::path ShaderLocalDirectory(const std::string& surfaceShader,
+                                                      const std::string& vertexModifier,
+                                                      const std::filesystem::path& materialDir);
+
     // The inverse spelling for a path ResolveShaderReference produced: relative
     // to the first shader root that contains it, in the same probe order, or the
     // file name alone when none does. What a derived artifact records about a

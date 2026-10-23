@@ -257,7 +257,7 @@ def build_in_editor(base, target, port=None, timeout=3600):
             print(last_message or "Building…", flush=True)
         if not status["running"]:
             if not status["succeeded"] or status["cancelled"]:
-                raise ReleaseError("Game build failed: " + "; ".join(status.get("errors") or [last_message or "see editor log"]))
+                raise ReleaseError("Game build failed: " + "; ".join(status.get("errorLines") or [last_message or "see editor log"]))
             if Path(status["outputDirectory"]).resolve() != source_path(base, target):
                 raise ReleaseError(f"Editor exported to {status['outputDirectory']}, which differs from this target's source. "
                                    "Update publishing.json to point to the completed export.")

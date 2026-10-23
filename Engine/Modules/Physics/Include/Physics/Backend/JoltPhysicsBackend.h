@@ -18,6 +18,7 @@ public:
     void OptimizeBroadphase() override;
 
     ShapeHandle CreateShape(const ShapeDefinition& definition, const Vector3& bakedScale) override;
+    HeightFieldShapeBuilder GetHeightFieldShapeBuilder() const override;
     void DestroyShape(ShapeHandle shape) override;
     bool IsShapeValid(ShapeHandle shape) const override;
 
@@ -33,6 +34,7 @@ public:
 
     Transform GetBodyTransform(BodyHandle body) const override;
     void SetBodyTransform(BodyHandle body, const Transform& transform, ActivationMode activation) override;
+    void MoveKinematic(BodyHandle body, const Transform& target, float32 deltaTime) override;
 
     Vector3 GetLinearVelocity(BodyHandle body) const override;
     void SetLinearVelocity(BodyHandle body, const Vector3& velocity) override;

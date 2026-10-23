@@ -32,6 +32,8 @@ using GameEngine::MaterialAlphaMode;
 
 // WorldSubmissionRecord::flags bits, mirroring GPUInstance::flags.
 inline constexpr uint32 kSubmissionFlagCastShadows = 1u << 0;
+// Rendering::kInstanceFlagShadowsOnly: no color pass draws the submission.
+inline constexpr uint32 kSubmissionFlagShadowsOnly = 1u << 7;
 
 // High-level per-entity submission record produced by extraction systems.
 // Lightweight and job-friendly. Mesh and material are resolved before

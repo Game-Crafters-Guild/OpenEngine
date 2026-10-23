@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Components/Transform.h"
+#include "Components/TransformDirtyFeed.h"
 #include "Components/Rendering/Light.h"
 #include "Components/Hierarchy.h"
 #include "ECS/World.h"
@@ -1246,4 +1247,62 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
         EXPECT_TRUE(contains(moved2, child.GetHandle()))
             << "a root move must signal the subtree it recomputed";
     }
+}
+
+TEST(TransformMathTests, Hierarchy_ChildrenFollowRootAfterDirectWorldWrite)
+{
+    for (bool forceSerial : {false, true})
+    {
+        for (bool publishWorld : {false, true})
+        {
+            SCOPED_TRACE(::testing::Message() << "forceSerial=" << forceSerial
+                                            << " publishWorld=" << publishWorld);
+            ECS::World world;
+            auto root = world.Create(Transform{});
+            Parent parent{};
+            parent.parent = root.GetHandle();
+            auto child = world.Create(Transform{}, parent);
+            Engine::Renderer::TransformHierarchySystem hierarchy(forceSerial);
+            hierarchy.Update(world, 0.0f);
+            ASSERT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 0.0f);
+
+            root.GetForWrite<Transform>()->matrix[13] = 8.0f;
+            if (publishWorld)
+            {
+                auto* composed = root.GetForWrite<WorldTransform>();
+                composed->matrix[13] = 8.0f;
+                BumpWorldTransform(world, root.GetHandle(), *composed);
+            }
+            hierarchy.Update(world, 0.0f);
+            EXPECT_FLOAT_EQ(root.Get<WorldTransform>()->matrix[13], 8.0f);
+            EXPECT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 8.0f);
+        }
+    }
+}
+
+TEST(TransformMathTests, Hierarchy_GrandchildFollowsRootAfterDirectWorldWrite)
+{
+    ECS::World world;
+    auto root = world.Create(Transform{});
+    Transform childLocal{};
+    childLocal.matrix[13] = 1.0f;
+    Parent childParent{};
+    childParent.parent = root.GetHandle();
+    auto child = world.Create(childLocal, childParent);
+    Transform grandchildLocal{};
+    grandchildLocal.matrix[13] = 2.0f;
+    Parent grandchildParent{};
+    grandchildParent.parent = child.GetHandle();
+    auto grandchild = world.Create(grandchildLocal, grandchildParent);
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    ASSERT_FLOAT_EQ(grandchild.Get<WorldTransform>()->matrix[13], 3.0f);
+
+    root.GetForWrite<Transform>()->matrix[13] = 8.0f;
+    auto* composed = root.GetForWrite<WorldTransform>();
+    composed->matrix[13] = 8.0f;
+    BumpWorldTransform(world, root.GetHandle(), *composed);
+    hierarchy.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 9.0f);
+    EXPECT_FLOAT_EQ(grandchild.Get<WorldTransform>()->matrix[13], 11.0f);
 }

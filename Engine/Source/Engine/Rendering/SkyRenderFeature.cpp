@@ -26,11 +26,10 @@ bool SkyRenderFeature::Initialize(Rendering::IDevice* device)
     return true;
 }
 
-void SkyRenderFeature::SetSettings(const Rendering::SkySettings& settings,
-                                   const Rendering::SkySystemState& state)
+void SkyRenderFeature::SetSettings(const Rendering::SkySettings& settings, const Rendering::SkySunState& sunState)
 {
     m_Settings = settings;
-    m_State = state;
+    m_SunState = sunState;
     m_HasSettings = true;
 }
 

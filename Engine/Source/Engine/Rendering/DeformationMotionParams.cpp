@@ -1,53 +1,11 @@
 #include "Engine/Rendering/DeformationMotionParams.h"
 
 #include "Engine/Rendering/ViewTemporalHistory.h"
-#include "Logger/Logger.h"
 
 #include <cstring>
 
 namespace GameEngine::Engine::Renderer
 {
-
-const char* DeformationMotionArmName(DeformationMotionArm arm)
-{
-    switch (arm)
-    {
-    case DeformationMotionArm::ColorPassTarget: return "colour-pass target";
-    case DeformationMotionArm::PrepassTarget:   return "prepass target";
-    case DeformationMotionArm::SeparatePass:    return "separate pass";
-    case DeformationMotionArm::None:            break;
-    }
-    return "none";
-}
-
-DeformationMotionArm ResolveDeformationMotionArm(bool colorPassTarget, bool prepassTarget,
-                                                 bool separatePass)
-{
-    const int enabled = (colorPassTarget ? 1 : 0) + (prepassTarget ? 1 : 0) + (separatePass ? 1 : 0);
-    if (enabled > 1)
-    {
-        static bool warnedOnce = false;
-        if (!warnedOnce)
-        {
-            warnedOnce = true;
-            Logger::Log::Error(
-                "Deformation motion: {} producer arms are enabled at once (colour-pass target {}, "
-                "prepass target {}, separate pass {}). They write one shared target, so two of "
-                "them would write every deforming pixel twice and the later write would win "
-                "non-deterministically. No deforming motion is produced this run — enable exactly "
-                "one arm.",
-                enabled, colorPassTarget, prepassTarget, separatePass);
-        }
-        return DeformationMotionArm::None;
-    }
-    if (colorPassTarget)
-        return DeformationMotionArm::ColorPassTarget;
-    if (prepassTarget)
-        return DeformationMotionArm::PrepassTarget;
-    if (separatePass)
-        return DeformationMotionArm::SeparatePass;
-    return DeformationMotionArm::None;
-}
 
 bool BuildDeformationMotionParams(const DeformationMotionEndpoint& endpoint,
                                   const DeformationMotionRaster& raster,

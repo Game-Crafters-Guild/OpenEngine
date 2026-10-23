@@ -25,6 +25,7 @@
 #include "Scripting/NativeAotScriptsLibrary.h"
 #include "Scripting/PathResolver.h"
 #include "Scripting/ScriptManager.h"
+#include "Scripting/ScriptPackageRestore.h"
 #include "NativeScripting/BuildCacheRecord.h" // ComputeEngineAbiDigest
 #include "NativeScripting/NativeBuildConfig.h"
 #include "NativeScripting/NativeScriptManager.h" // MsvcToolchain env for dotnet publish
@@ -1331,12 +1332,16 @@ bool BuildPipeline::CompileScripts(const BuildSettings& s, [[maybe_unused]] cons
     const ShippedScriptSources sources = CollectShippedScriptSources(ProjectScriptsRoot(s), m_PackageRuntimeModules);
     fs::path scriptsProj;
     fs::path dotnetExe;
+    std::vector<fs::path> packageAssemblies;
     bool nothingToCompile = false;
     bool ok = false;
     const bool ran = EngineCore::GetInstance().GetScriptManager().RunCompile([&]() {
         ok = PrepareScriptProject(s, sources, nativeAot, scriptsProj, dotnetExe, nothingToCompile);
         if (ok && !nothingToCompile && !nativeAot)
             ok = BuildManagedScripts(s, stagingDir, scriptsProj, dotnetExe);
+        // The restore writes the Dependencies folder a live compile also writes.
+        if (ok && !nothingToCompile && nativeAot)
+            ok = RestoreScriptPackagesForExport(scriptsProj, packageAssemblies);
     });
     if (!ran)
     {
@@ -1345,8 +1350,29 @@ bool BuildPipeline::CompileScripts(const BuildSettings& s, [[maybe_unused]] cons
     }
     if (!ok || nothingToCompile || !nativeAot)
         return ok;
-    return CompileScriptsNativeAOT(s, stagingDir, sources, dotnetExe);
+    return CompileScriptsNativeAOT(s, stagingDir, sources, packageAssemblies, dotnetExe);
 #endif
+}
+
+bool BuildPipeline::RestoreScriptPackagesForExport(const fs::path& scriptsProj,
+                                                   std::vector<fs::path>& outPackageAssemblies)
+{
+    std::string engineBinDir = ScriptingPaths::ResolveEngineManagedDirectory().generic_string();
+    if (!engineBinDir.empty() && engineBinDir.back() != '/')
+        engineBinDir += '/';
+    const fs::path dependencies = EngineCore::GetInstance().GetScriptManager().GetAssembliesDirectory() /
+                                  ScriptingPaths::kScriptDependenciesFolderName;
+    const ScriptPackageRestoreResult restore =
+        RestoreScriptPackages(scriptsProj, dependencies, engineBinDir, /*cancelRequested=*/nullptr);
+    m_Progress.warnings.insert(m_Progress.warnings.end(), restore.Warnings.begin(), restore.Warnings.end());
+    if (!restore.Success)
+    {
+        m_Progress.errors.push_back(restore.Error);
+        Logger::Log::Error("Build: {}", restore.Error);
+        return false;
+    }
+    outPackageAssemblies = restore.StagedAssemblies;
+    return true;
 }
 
 bool BuildPipeline::PrepareScriptProject(const BuildSettings& s, const ShippedScriptSources& sources, bool nativeAot,
@@ -1488,6 +1514,7 @@ bool BuildPipeline::BuildManagedScripts(const BuildSettings& s, const fs::path& 
 bool BuildPipeline::CompileScriptsNativeAOT(const BuildSettings& s,
                                              const fs::path& stagingDir,
                                              const ShippedScriptSources& sources,
+                                             const std::vector<fs::path>& packageAssemblies,
                                              const fs::path& dotnetExe)
 {
     // The managed side of an AOT publish is always -c Release: the player
@@ -1542,6 +1569,7 @@ bool BuildPipeline::CompileScriptsNativeAOT(const BuildSettings& s,
         project.PackageModules = sources.PackageModules;
         project.PackageDefines = CollectAllPackageDefines(m_PackageResolution);
         project.ReferenceDlls.assign(referenceDlls.begin(), referenceDlls.end());
+        project.ReferenceDlls.insert(project.ReferenceDlls.end(), packageAssemblies.begin(), packageAssemblies.end());
         if (fs::exists(generatorDll, ec))
             project.GeneratorDll = generatorDll;
         f << GenerateNativeAotCsprojXml(project);
@@ -2216,7 +2244,7 @@ bool BuildPipeline::WriteGameConfig(const fs::path& stagingDir, const BuildSetti
     // in the session would otherwise bake into the game.
     cfg.renderQuality = Rendering::AntiAliasingProjectSettings::Load(s.projectRoot);
 
-    // The render layer names a game's FindRenderLayer answers with.
+    // The render layer names a game's RenderLayers.Find answers with.
     cfg.renderLayerNames = Rendering::RenderLayerNames::Load(s.projectRoot);
 
     // The game UI scale policy authored in the project settings.

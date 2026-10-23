@@ -92,4 +92,15 @@ class DepthResolveNode final : public IRenderPipelineNode
 
     SamplerHandle m_Sampler{};
 };
+
+// Sets `resolve` up as the copy published as View.DepthResolvedPostOcean: the view depth after
+// every world depth writer (the phase-B recover, forward draws that write their own depth, the
+// water). The ocean surface step declares it after the water; the reflections and the fog declare it
+// through DeclarePostWorldDepth, so a view copies that depth at most once per frame.
+void InitializePostWorldDepthResolve(DepthResolveNode& resolve, std::string nodeId);
+
+// View.DepthResolvedPostOcean for this view: the copy an earlier node published this frame, else
+// the copy `resolve` (set up by InitializePostWorldDepthResolve) declares here. Invalid only when
+// the view has no depth to copy.
+Rendering::RenderGraph::RGTexture DeclarePostWorldDepth(ViewDeclare& d, DepthResolveNode& resolve);
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

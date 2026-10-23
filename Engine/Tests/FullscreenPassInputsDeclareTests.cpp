@@ -8,7 +8,7 @@
 #include "Rendering/Core/RenderGraph/RGResourcePool.h"
 #include "Rendering/Core/RenderGraph/RGTransientPool.h"
 #include "Rendering/Core/RenderGraph/RGUploadRing.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -26,7 +26,7 @@ constexpr uint32_t kUnderwaterShadowedBufferInputs = 5;
 
 struct FullscreenInputsFrame
 {
-    std::unique_ptr<IDevice> Device;
+    IDevice* Device = nullptr;
     std::unique_ptr<RenderGraph::RGResourcePool> Persistent;
     std::unique_ptr<RenderGraph::RGTransientPool> Transient;
     std::unique_ptr<RenderGraph::RGUploadRing> Ring;
@@ -34,13 +34,13 @@ struct FullscreenInputsFrame
 
     bool Up()
     {
-        Device = CreateVulkanDeviceFast();
+        Device = SharedHeadlessDevice();
         if (!Device)
             return false;
-        Persistent = std::make_unique<RenderGraph::RGResourcePool>(Device.get());
-        Transient = std::make_unique<RenderGraph::RGTransientPool>(Device.get());
-        Ring = std::make_unique<RenderGraph::RGUploadRing>(Device.get(), 2, 65536);
-        Frame = std::make_unique<RenderGraph::RGFrame>(Device.get(), Persistent.get(), Transient.get(), Ring.get());
+        Persistent = std::make_unique<RenderGraph::RGResourcePool>(Device);
+        Transient = std::make_unique<RenderGraph::RGTransientPool>(Device);
+        Ring = std::make_unique<RenderGraph::RGUploadRing>(Device, 2, 65536);
+        Frame = std::make_unique<RenderGraph::RGFrame>(Device, Persistent.get(), Transient.get(), Ring.get());
         Frame->BeginFrame(0);
         return true;
     }
@@ -94,7 +94,6 @@ struct FullscreenInputsFrame
     {
         Frame.reset();
         Device->WaitForIdle();
-        Device->Shutdown();
     }
 };
 } // namespace

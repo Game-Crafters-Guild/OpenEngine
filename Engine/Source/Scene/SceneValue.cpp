@@ -1,7 +1,9 @@
 #include "Scene/SceneValue.h"
 
+#include "Mathematics/Curve.h"
 #include "Types/FormatNumber.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -602,6 +604,76 @@ std::string_view AssetRefGuid(const SceneValue& v)
     if (v.Kind != SceneValueKind::AssetRef || v.Items.size() < 2)
         return {};
     return v.Items[1].StringValue;
+}
+
+std::string FormatCurveKeys(const Math::Curve& curve)
+{
+    std::string out;
+    for (uint8_t i = 0; i < curve.KeyCount; ++i)
+    {
+        const Math::CurveKey& k = curve.Keys[i];
+        if (i > 0)
+            out += ';';
+        out += FormatFloat(k.Time);
+        out += ',';
+        out += FormatFloat(k.Value);
+        out += ',';
+        out += FormatFloat(k.InTangent);
+        out += ',';
+        out += FormatFloat(k.OutTangent);
+        out += ',';
+        out += std::to_string(static_cast<int>(k.Interp));
+        out += ',';
+        out += std::to_string(static_cast<int>(k.TangentMode));
+    }
+    return out;
+}
+
+Math::Curve ParseCurveKeys(std::string_view value)
+{
+    Math::Curve curve{};
+    size_t segStart = 0;
+    while (segStart <= value.size() && curve.KeyCount < Math::Curve::Capacity)
+    {
+        const size_t segEnd = value.find(';', segStart);
+        const std::string_view seg = value.substr(
+            segStart, segEnd == std::string_view::npos ? value.size() - segStart : segEnd - segStart);
+        if (!seg.empty())
+        {
+            float fields[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+            size_t fieldStart = 0;
+            for (int f = 0; f < 6; ++f)
+            {
+                const size_t fieldEnd = seg.find(',', fieldStart);
+                const std::string_view tok = seg.substr(
+                    fieldStart,
+                    fieldEnd == std::string_view::npos ? seg.size() - fieldStart : fieldEnd - fieldStart);
+                SceneValue parsed{};
+                if (ParseValue(tok, parsed, nullptr))
+                {
+                    if (parsed.Kind == SceneValueKind::Float)
+                        fields[f] = static_cast<float>(parsed.FloatValue);
+                    else if (parsed.Kind == SceneValueKind::Int)
+                        fields[f] = static_cast<float>(parsed.IntValue);
+                }
+                if (fieldEnd == std::string_view::npos)
+                    break;
+                fieldStart = fieldEnd + 1;
+            }
+            Math::CurveKey key;
+            key.Time = fields[0];
+            key.Value = fields[1];
+            key.InTangent = fields[2];
+            key.OutTangent = fields[3];
+            key.Interp = static_cast<Math::CurveInterp>(std::clamp(static_cast<int>(fields[4]), 0, 2));
+            key.TangentMode = static_cast<Math::CurveTangentMode>(std::clamp(static_cast<int>(fields[5]), 0, 4));
+            curve.TryInsert(key);
+        }
+        if (segEnd == std::string_view::npos)
+            break;
+        segStart = segEnd + 1;
+    }
+    return curve;
 }
 
 std::string FormatAssetRef(std::string_view path, std::string_view guid)

@@ -183,7 +183,7 @@ bool ResolvePool(Engine::Renderer::RenderServices& renderServices,
         else
             piece.Bounds = Engine::Renderer::ComputeModelBounds(*resources->modelAsset);
         BindPieceMaterial(piece.Renderer, *resources, kSubmeshIndex, overrideMaterial);
-        piece.Renderer.castShadows = true;
+        piece.Renderer.shadowCasting = Components::ShadowCasting::On;
         piece.Renderer.receiveShadows = true;
         piece.Renderer.motionVectors = false; // pieces only move on re-place
     }

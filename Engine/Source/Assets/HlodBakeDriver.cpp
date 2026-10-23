@@ -67,7 +67,8 @@ BakeDriverResult BakeHlodForWorld(GameEngine::ECS::World& world,
     result.GatheredMembers = static_cast<uint32>(gathered.Members.size());
     result.SkippedMembers = gathered.SkippedSkinned + gathered.SkippedMorph +
                             gathered.SkippedNoModel + gathered.SkippedNoMaterial +
-                            gathered.SkippedNonTriangle + gathered.SkippedDisabled;
+                            gathered.SkippedNonTriangle + gathered.SkippedDisabled +
+                            gathered.SkippedShadowsOnly;
     if (gathered.Members.empty()) {
         result.Outcome = BakeOutcome::NoMembers;
         return result;

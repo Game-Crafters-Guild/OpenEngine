@@ -7,6 +7,7 @@
 #include "UI/Internal/LayoutAccess.h"
 
 #include "UI/UIPrimitive.h"
+#include "../UIManager_Internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -53,6 +54,21 @@ static UIElement::TooltipPlacement FitPlacement(UIElement::TooltipPlacement plac
     default:
         return placement;
     }
+}
+
+// True when `element` would draw: no element on its DFS-parent chain is display: none, its
+// own resolved visibility (which inherits) is visible, and the chain ends at `root`. A Mount
+// target swapped out of its dock tab ends its chain at itself.
+static bool IsShownUnder(const UIElement& element, const UIElement& root)
+{
+    if (!element.GetResolvedStyle().Visual.Visible)
+        return false;
+    for (const UIElement* e = &element; e; e = e->GetDfsParent())
+    {
+        if (e->GetResolvedStyle().Layout.DisplayMode == DisplayMode::None)
+            return false;
+    }
+    return UIElementReachesRoot(&element, &root);
 }
 
 static void ShiftLayoutSubtree(UIElement* el, float dx, float dy)
@@ -521,6 +537,63 @@ void TooltipOverlay::Update(UIElement* root, UIElement* hovered, float mouseX, f
     m_Visible   = true;
     m_HasShownTooltip = true;
     PlaceTooltip(root, tooltipSource, mouseX, mouseY);
+}
+
+void TooltipOverlay::Pin(UIElement& source)
+{
+    m_Pinned = UIElement::MakeWeakRef(&source);
+    m_HasPin = true;
+}
+
+void TooltipOverlay::Unpin(const UIElement& source)
+{
+    if (m_Pinned.Get() != &source)
+        return;
+    m_Pinned = {};
+    m_HasPin = false;
+    Hide();
+}
+
+bool TooltipOverlay::UpdatePinned(UIElement* root)
+{
+    if (!m_HasPin)
+        return false;
+    UIElement* source = m_Pinned.Get();
+    if (!source)
+    {
+        m_HasPin = false;
+        Hide();
+        return false;
+    }
+
+    ResetIfDetached();
+    if (!root)
+        return true;
+
+    const std::string& text = source->GetTooltip();
+    if (text.empty() || !IsShownUnder(*source, *root))
+    {
+        m_Visible = false;
+        ParkOffscreen();
+        return true;
+    }
+
+    m_HoveredId = source->GetInstanceId();
+    m_HoverStartTime = 0.0f;
+    m_MiddleMousePending = false;
+    EnsureElements(root);
+    // New text parks for one frame: the label re-measures before the bubble is placed.
+    if (UpdateText(text) || !m_Tooltip || m_Tooltip->GetLayoutWidth() <= 0.0f || m_Tooltip->GetLayoutHeight() <= 0.0f)
+    {
+        ParkOffscreen();
+        return true;
+    }
+
+    m_WarmingUp = false;
+    m_Visible = true;
+    m_HasShownTooltip = true;
+    PlaceTooltip(root, source, 0.0f, 0.0f);
+    return true;
 }
 
 void TooltipOverlay::OnMiddleMousePressed(UIElement* hovered)

@@ -7,8 +7,9 @@
 namespace GameEngine::ComponentScanner
 {
 
-// Writes the component model as JSON, the machine-readable twin of components.d.ts:
-//   { "components": [ { "name", "fields": [ { "name", "tsName", "kind", "enum"?, "count"?,
+// Writes the component model as JSON, the machine-readable twin of components.d.ts, which also
+// lists the engine-internal components, marked "engineInternal": true:
+//   { "components": [ { "name", "engineInternal"?, "fields": [ { "name", "tsName", "kind", "enum"?, "count"?,
 //                                              "readonly"?, "tooltip"?, "min"?, "max"? } ] } ],
 //     "enums": [ { "name", "values": [ { "name", "value" } ] } ],
 //     "omitted": [ { "component", "field", "type", "reason" } ] }

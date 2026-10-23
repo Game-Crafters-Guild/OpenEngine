@@ -153,6 +153,15 @@ float SolarHourFromDirection(const SolarFrame& frame, const float direction[3])
     return t * 24.0f;
 }
 
+float SolarBearingRadians(const SolarFrame& frame, const float direction[3])
+{
+    // The site's north is its east turned a quarter turn about +Y, against the engine's yaw.
+    const float north[3] = {-frame.East[2], 0.0f, frame.East[0]};
+    const float towardEast = direction[0] * frame.East[0] + direction[2] * frame.East[2];
+    const float towardNorth = direction[0] * north[0] + direction[2] * north[2];
+    return std::atan2(towardEast, towardNorth);
+}
+
 SolarPosition SolarPositionAtHour(const SolarFrame& frame, float hours)
 {
     constexpr float kPiFloat = 3.14159265f;
@@ -165,15 +174,10 @@ SolarPosition SolarPositionAtHour(const SolarFrame& frame, float hours)
     float direction[3];
     SolarDirection(frame, std::cos(theta), std::sin(theta), direction);
 
-    // The site's north is its east turned a quarter turn about +Y, against the engine's yaw.
-    const float north[3] = {-frame.East[2], 0.0f, frame.East[0]};
-    const float towardEast = direction[0] * frame.East[0] + direction[2] * frame.East[2];
-    const float towardNorth = direction[0] * north[0] + direction[2] * north[2];
-
     SolarPosition position;
     position.ElevationDegrees =
         static_cast<float>(std::asin(std::clamp(direction[1], -1.0f, 1.0f)) * kRadiansToDegrees);
-    float azimuth = static_cast<float>(std::atan2(towardEast, towardNorth) * kRadiansToDegrees);
+    float azimuth = static_cast<float>(SolarBearingRadians(frame, direction) * kRadiansToDegrees);
     if (azimuth < 0.0f)
         azimuth += kFullTurnDegrees;
     position.AzimuthDegrees = azimuth < kFullTurnDegrees ? azimuth : 0.0f;

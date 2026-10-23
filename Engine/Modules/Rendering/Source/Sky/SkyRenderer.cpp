@@ -614,8 +614,8 @@ bool SkyRenderer::CreateStarBillboardPipeline(const char* packagePath, bool heig
     out.Pipe.rasterizationSamples = 1;
     out.Pipe.EnableDepthTest(false);
     out.Pipe.SetCullingMode(CullModeFlagBits::None);
-    // Additive into scene colour (colour 0) and into the star light (colour 1), both blended alike:
-    // without Vulkan's independentBlend every attachment of a pipeline must blend the same way.
+    // Additive into scene colour (colour 0) and into the star light (colour 1): both attachments
+    // add, so they share one blend state.
     out.Pipe.EnableBlending(true, BlendFactor::One, BlendFactor::One);
     out.Pipe.colorBlendState.attachments.push_back(out.Pipe.colorBlendState.attachments[0]);
     out.Pipe.AddDynamicState(DynamicState::Viewport);

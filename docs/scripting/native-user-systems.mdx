@@ -23,6 +23,32 @@ struct VisibilitySystem : ECS::SystemBase
 
 Every hook is optional. The adapter detects each one with a `requires` expression and forwards only what the struct declares. `EntitySystem<Self>` supplies `OnUpdate` from a `ForEach`. The other hooks may be added to it as usual.
 
+## The order systems run in
+
+Each hook visits the user systems in ascending `Order`, a `static constexpr int` the struct may declare; a system without one has order 0. Systems of equal order run by qualified name in character order (capital letters before lowercase, so `Zeta` runs before `alpha`), then by module name, so the order does not depend on which module loads or reloads first. Any other member named `Order` is a compile error that names the declaration to write.
+
+`Order` orders the native user systems among themselves. It does not order them against C# systems or the engine's systems: [where each hook runs](#where-each-hook-runs) gives its place in the frame.
+
+```cpp title="Damage after movement, within the same frame"
+struct MovementSystem : ECS::SystemBase
+{
+    void OnUpdate(ECS::World& world, float dt);  // order 0
+};
+
+struct DamageSystem : ECS::SystemBase
+{
+    static constexpr int Order = 100;
+    void OnUpdate(ECS::World& world, float dt);  // sees this frame's movement
+};
+```
+
+| Rule | Detail |
+|---|---|
+| Every hook | `OnStart`, `OnUpdate`, `OnPostSimulation` and `OnDestroy` all visit the systems in the same order. |
+| Across modules | The order spans every loaded module: a package's system at order 15 runs between the project's at 10 and 20. Reloading a module puts its systems back in their places. |
+| Read once | The order is read when the module registers its systems; changing it takes a rebuild, as any edit does. |
+| A disabled system | A system disabled by a hard fault keeps its place; the others do not move. |
+
 ## Where each hook runs
 
 | Hook | Caller | Position in the frame | Thread |
@@ -79,8 +105,8 @@ Mesh extraction declares the movement writers as optional dependencies and the b
 
 ## ABI
 
-`IUserSystem` carries `OnPostSimulation` and `HasPostSimulation`, and `ECS::ISystem` carries `RequiresExclusiveUpdate`, so the native module ABI version is **2**. A module built against an earlier version is refused at load with `ABI version mismatch: module=1 host=2 — rebuild user scripts against this engine`, before any of its registrations replay. Engine, Editor, Player, the SDK, and every native module are rebuilt together.
+`IUserSystem` carries `OnPostSimulation`, `HasPostSimulation` and `Order`, and `ECS::ISystem` carries `RequiresExclusiveUpdate`, so the native module ABI version is **3**. A module built against an earlier version is refused at load with `ABI version mismatch: module=2 host=3 — rebuild user scripts against this engine`, before any of its registrations replay. Engine, Editor, Player, the SDK and every native module are rebuilt together.
 
 ## Verification
 
-`NativePostSimulationTests` covers adapter detection, once-per-tick delivery with the native delta, revocation on Stop, module replacement and reset, guarded faults, deferred-command semantics, exclusive execution in mixed and legacy parallel waves, and the assembled rendering, physics and navigation schedule placing the bridge after the writers and before extraction. `CpuTextureSourceTests` drives navigation movement followed by a hook that creates and publishes a lease and reads the pixels back in the same frame. `NativeModuleRejectionTests` loads an ABI-1 probe and checks it is refused before registration.
+`NativePostSimulationTests` covers adapter detection, once-per-tick delivery with the native delta, revocation on Stop, module replacement and reset, guarded faults, deferred-command semantics, exclusive execution in mixed and legacy parallel waves, and the assembled rendering, physics and navigation schedule placing the bridge after the writers and before extraction. `CpuTextureSourceTests` drives navigation movement followed by a hook that creates and publishes a lease and reads the pixels back in the same frame. `NativeModuleRejectionTests` loads an ABI-1 probe and checks it is refused before registration. `UserSystemOrderTests` covers the adapter reading `Order`, every hook visiting systems by order and then name, a module reload putting its systems back among another module's at distinct and at equal orders, and a disabled system keeping its place.

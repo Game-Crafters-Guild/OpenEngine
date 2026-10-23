@@ -1,6 +1,12 @@
 // EZ Tree wind vertex modifier.
 // Native C++/GLSL integration derived from EZ-Tree authored wind options.
 // EZ-Tree upstream: MIT License, Copyright (c) 2024 Daniel Greenheck.
+//
+// Culling envelope: with W = length(windStrength.xyz), each term below is bounded
+// by its largest weight, with no assumption about the directions it adds along:
+// trunk .32 W, branch .35 W, flutter .34 x 1.45 W along windDir + .45 lateralDir,
+// lift .12 x .34 W. The sum is 1.204 W.
+// @deformationEnvelope 1.21 scaledBy=windStrength
 
 float EZTreeWindHash(vec3 p)
 {

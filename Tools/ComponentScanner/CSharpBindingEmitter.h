@@ -18,6 +18,9 @@ namespace GameEngine::ComponentScanner
 namespace CSharpBindingEmitter
 {
 std::string Emit(const ApiModule& module, const BindingRules::Index& index);
+
+// The doc text as <summary> lines at `indent`, one line of the C++ comment per line.
+void EmitSummary(std::string& out, std::string_view doc, std::string_view indent);
 } // namespace CSharpBindingEmitter
 
 } // namespace GameEngine::ComponentScanner

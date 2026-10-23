@@ -5,6 +5,7 @@
 // discriminating test that fails when the mitigation is disabled — the disable
 // step is documented in each test's comment.
 #include "TerrainECS/AtlasSlotPool.h"
+#include "TerrainECS/AtlasTileNormal.h"
 #include "TerrainECS/TerrainAtlas.h"
 #include "TerrainECS/TerrainSizingPlan.h" // height-source engagement rule + author-facing sizing
 #include "TerrainECS/TerrainRenderPublication.h" // did the terrain reach the renderer at all
@@ -2603,6 +2604,72 @@ TEST(AtlasRegionPatch, RegionNormalBoundaryBitEqualAcrossSlotsWithNeighbors)
         EXPECT_NE(0, std::memcmp(edge0.data(), edge1.data(), edge0.size()))
             << "no-neighbour region regen should diverge at the seam (test not discriminating)";
     }
+}
+
+// A freshly streamed Full tile carries the streaming job's normal, and a whole slot patch
+// regenerates only its border ring. A height modifier that changes the tile before that patch
+// moves HeightfieldVersion past NormalmapVersion (MarkFullDirty, as the arrival compose does):
+// the job's normal is stale everywhere, so the patch regenerates the whole normal.
+TEST(AtlasRegionPatch, AFreshFullTileWhoseHeightsChangedRegeneratesItsWholeNormal)
+{
+    constexpr uint32 tileRes = 17;
+    const float32 tileWorld = 512.0f, heightScale = 100.0f;
+    TerrainTileData tile;
+    tile.Heightfield = MakeNoiseTile(tileRes, tileWorld, 0.0f, 0.0f, 4242);
+    GenerateNormalmapFromHeightfield(tile.Heightfield, tileWorld, tileWorld, heightScale, tile.Normalmap,
+                                     tile.NormalmapWidth, tile.NormalmapHeight);
+    tile.NormalmapVersion = tile.HeightfieldVersion;
+    const std::vector<uint8> jobNormal = tile.Normalmap;
+    const Terrain::HeightfieldData right = MakeNoiseTile(tileRes, tileWorld, tileWorld, 0.0f, 4242);
+
+    for (uint32 z = 4; z <= 12; ++z)
+        for (uint32 x = 4; x <= 12; ++x)
+            tile.Heightfield.SetSample(x, z, tile.Heightfield.GetSample(x, z) + 0.25f);
+    tile.MarkFullDirty();
+
+    AtlasNormalNeighbors neighbors;
+    neighbors.Right = &right;
+    RegenerateAtlasTileNormal(tile, tileWorld, heightScale, heightScale, neighbors);
+
+    std::vector<uint8> expected;
+    uint32 w = 0, h = 0;
+    GenerateNormalmapFromHeightfield(tile.Heightfield, tileWorld, tileWorld, heightScale, expected, w, h,
+                                     nullptr, &right, nullptr, nullptr);
+    ASSERT_NE(0, std::memcmp(expected.data(), jobNormal.data(), jobNormal.size()))
+        << "the height change left the normal as it was: nothing to regenerate";
+    ASSERT_EQ(tile.Normalmap.size(), expected.size());
+    EXPECT_EQ(0, std::memcmp(tile.Normalmap.data(), expected.data(), expected.size()))
+        << "the patch kept the job's stale interior normal";
+}
+
+// The streaming job computes a tile's normal at the tiled terrain's height scale. When the
+// terrain draws at another height scale, the job's normal is wrong everywhere although it is
+// current for the heights, so the patch regenerates the whole normal at the drawn scale.
+TEST(AtlasRegionPatch, AFreshFullTileStreamedAtAnotherHeightScaleRegeneratesItsWholeNormal)
+{
+    constexpr uint32 tileRes = 17;
+    const float32 tileWorld = 512.0f, streamedHeightScale = 100.0f, heightScale = 150.0f;
+    TerrainTileData tile;
+    tile.Heightfield = MakeNoiseTile(tileRes, tileWorld, 0.0f, 0.0f, 4242);
+    GenerateNormalmapFromHeightfield(tile.Heightfield, tileWorld, tileWorld, streamedHeightScale, tile.Normalmap,
+                                     tile.NormalmapWidth, tile.NormalmapHeight);
+    tile.NormalmapVersion = tile.HeightfieldVersion;
+    const std::vector<uint8> jobNormal = tile.Normalmap;
+    const Terrain::HeightfieldData right = MakeNoiseTile(tileRes, tileWorld, tileWorld, 0.0f, 4242);
+
+    AtlasNormalNeighbors neighbors;
+    neighbors.Right = &right;
+    RegenerateAtlasTileNormal(tile, tileWorld, heightScale, streamedHeightScale, neighbors);
+
+    std::vector<uint8> expected;
+    uint32 w = 0, h = 0;
+    GenerateNormalmapFromHeightfield(tile.Heightfield, tileWorld, tileWorld, heightScale, expected, w, h,
+                                     nullptr, &right, nullptr, nullptr);
+    ASSERT_NE(0, std::memcmp(expected.data(), jobNormal.data(), jobNormal.size()))
+        << "the two height scales give one normal: nothing to regenerate";
+    ASSERT_EQ(tile.Normalmap.size(), expected.size());
+    EXPECT_EQ(0, std::memcmp(tile.Normalmap.data(), expected.data(), expected.size()))
+        << "the patch kept the job's interior normal from the other height scale";
 }
 
 TEST(AtlasGrassParams, RowVersionCacheResetsOnIdentityChangeOrDisable)

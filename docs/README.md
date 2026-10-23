@@ -11,7 +11,7 @@ The engine's documentation, published on [openengine.dev/docs](https://openengin
 - [`physics/`](physics/): physics events
 - [`animation/`](animation/): retargeting, clip events, the glTF clip schema, and animation sources
 - [`assets/`](assets/): model extras, Unity import, texture compression, alpha coverage, and smart folders
-- [`navigation/`](navigation/): the navigation surface
+- [`navigation/`](navigation/): the navigation surface and the agents that walk it
 - [`audio/`](audio/): playing sounds, the audio formats a project can import, and the audio mute
 - [`ui/`](ui/): the UI API, game UI scaling, control defaults, text effects, and transforms
 - [`packages/`](packages/): the package data model

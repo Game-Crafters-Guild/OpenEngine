@@ -119,4 +119,26 @@ vec3 GE_ApplyForwardFog(vec3 color, float alpha, vec3 scatterWeight, GE_ForwardF
 #endif
 }
 
+/// The radiance an opaque surface at positionWS had before it took the fog in its own shader, from
+/// what the scene colour holds for it (its radiance * T + S, absolute scene-linear). A surface that
+/// shows the scene through itself and takes the fog by its own distance afterwards (the ocean over
+/// its seabed) uses it, so what it shows is fogged once, by the nearer surface's distance. It is the
+/// exact inverse only of the fog the forward adapter gives an opaque fragment (GE_ApplyForwardFog of
+/// GE_EvaluateForwardFog at the fragment, adapter_forward.glsl); a surface fogged any other way (per
+/// vertex, or by a pass) comes back wrong.
+/// The fog's transmittance never drops below 1 - Max Opacity, so the floor on it matters only with Max
+/// Opacity within a thousandth of 1. There the surface's own light is nearly gone: the floor keeps the
+/// rounding of the scene colour from coming back amplified by more than 1024, and the surface reads as
+/// the fog in front of it. Radiance below zero, from a scene colour darker than the fog's light, is
+/// clamped to zero.
+/// @param foggedColor the scene colour at the surface, absolute scene-linear.
+/// @param positionWS  the surface's position, world space.
+/// @param uv          the surface's screen position in [0, 1].
+vec3 GE_RemoveForwardFog(vec3 foggedColor, vec3 positionWS, vec2 uv)
+{
+    const float kMinTransmittance = 1.0 / 1024.0;
+    GE_ForwardFog fog = GE_EvaluateForwardFog(positionWS, uv);
+    return max((foggedColor - fog.Scattering) / max(fog.Transmittance, kMinTransmittance), vec3(0.0));
+}
+
 #endif // GE_FORWARD_FOG_GLSL

@@ -60,13 +60,13 @@ protected:
         agent.Acceleration = 100.0f;
         agent.StoppingDistance = 0.3f;
         agent.Radius = 0.25f;
-        agent.NavMapIndex = mapIndex;
-        agent.NavMapGeneration = mapGen;
         agent.AgentId = entity.GetHandle().id;
         agent.ReplanInterval = replanInterval;
         entity.Set(agent);
 
         Components::NavigationAgentState state{};
+        state.NavMapIndex = mapIndex;
+        state.NavMapGeneration = mapGen;
         state.DestinationX = destX;
         state.DestinationY = 0.0f;
         state.DestinationZ = destZ;
@@ -115,7 +115,7 @@ TEST_F(NavigationRepathingTest, ProximityCheckTriggersRepathWhenCellBlocked)
 
     auto* agentState = agentEntity.Get<Components::NavigationAgentState>();
     ASSERT_NE(agentState, nullptr);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(agentState->Status), Pathfinding::PathStatus::Complete);
+    EXPECT_EQ(agentState->Status, Pathfinding::PathStatus::Complete);
     EXPECT_FALSE(agentState->PathDirty);
 
     // Run a few movement frames so the agent starts moving
@@ -397,7 +397,7 @@ TEST_F(NavigationRepathingTest, TimerReplansShareTheSolveBudget)
         if (!s->ReplanRequested)
             continue;
         ++queuedCount;
-        EXPECT_EQ(static_cast<Pathfinding::PathStatus>(s->Status), Pathfinding::PathStatus::Complete);
+        EXPECT_EQ(s->Status, Pathfinding::PathStatus::Complete);
         EXPECT_NE(s->PathIndex, 0u);
     }
     EXPECT_EQ(queuedCount, kAgentCount - kBudget);

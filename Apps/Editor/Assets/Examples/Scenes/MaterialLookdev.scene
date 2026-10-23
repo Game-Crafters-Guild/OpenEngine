@@ -139,7 +139,7 @@ MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_ground.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (0, 0, 0)
@@ -153,7 +153,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_backdrop.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (0, 24, 22)
@@ -167,7 +167,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
 Transform.position = (-6.2, 3.4, -15)
@@ -181,7 +181,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
 Transform.position = (6.8, 2.6, -14.2)
@@ -195,7 +195,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_softbox.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = false
 MeshRenderer.motionVectors = true
 Transform.position = (0, 8.6, -6)
@@ -209,7 +209,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-6, 0.09, 0)
@@ -223,7 +223,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/car_paint_coated_metallic.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-6, 0.98, 0)
@@ -237,7 +237,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-3.6, 0.09, 0)
@@ -251,7 +251,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/anisotropy_brushed.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-3.6, 0.98, 0)
@@ -265,7 +265,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-1.2, 0.09, 0)
@@ -279,7 +279,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/sheen_velvet.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-1.2, 0.98, 0)
@@ -293,7 +293,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (1.2, 0.09, 0)
@@ -307,7 +307,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/glass_thick_absorbing.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (1.2, 0.98, 0)
@@ -321,7 +321,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.6, 0.09, 0)
@@ -335,7 +335,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/iridescent_metal_titanium.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.6, 0.98, 0)
@@ -349,7 +349,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (6, 0.09, 0)
@@ -363,7 +363,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/f82_gold.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (6, 0.98, 0)
@@ -377,7 +377,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-4.8, 0.5, 3.2)
@@ -391,7 +391,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/coated_lacquer_wood.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-4.8, 1.8, 3.2)
@@ -405,7 +405,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-2.4, 0.5, 3.2)
@@ -419,7 +419,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/diffuse_back_transmission.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-2.4, 1.8, 3.2)
@@ -433,7 +433,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (0, 0.5, 3.2)
@@ -447,7 +447,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/oren_nayar_clay.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (0, 1.8, 3.2)
@@ -461,7 +461,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (2.4, 0.5, 3.2)
@@ -475,7 +475,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/coat_color_candy.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (2.4, 1.8, 3.2)
@@ -489,7 +489,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/studio_pedestal.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.8, 0.5, 3.2)
@@ -503,7 +503,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/clear_glass.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.8, 1.8, 3.2)
@@ -517,7 +517,7 @@ MeshRenderer.meshPrimitive = Capsule
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/anisotropy_brushed.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (-3.6, 0.42, -3.4)
@@ -531,7 +531,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/OpenPBR/glass_thick_absorbing_short.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.6, 0.48, -3.4)
@@ -552,7 +552,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_light.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.6, 0.47, -2.2)
@@ -566,7 +566,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (2.85, 0.17, -2.225)
@@ -580,7 +580,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.45, 0.17, -2.225)
@@ -594,7 +594,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.05, 0.17, -2.225)
@@ -608,7 +608,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.65, 0.17, -2.225)
@@ -622,7 +622,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (2.55, 0.47, -2.225)
@@ -636,7 +636,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.15, 0.47, -2.225)
@@ -650,7 +650,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.75, 0.47, -2.225)
@@ -664,7 +664,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.35, 0.47, -2.225)
@@ -678,7 +678,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (2.85, 0.77, -2.225)
@@ -692,7 +692,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (3.45, 0.77, -2.225)
@@ -706,7 +706,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.05, 0.77, -2.225)
@@ -720,7 +720,7 @@ MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Examples/Materials/Lookdev/checker_dark.material"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Transform.position = (4.65, 0.77, -2.225)

@@ -143,9 +143,10 @@ inline constexpr const char* kTerrainLayerRoleNames[kTerrainLayerRoleCount] = {
 // variation amplitudes are footprint-faded in the fragment (CBT_ApplyMaterialVariation), so they
 // are enough break-up to kill the flat tint without reading as seams.
 inline constexpr TerrainMaterialRecord kDefaultTerrainMaterials[kTerrainLayerRoleCount] = {
-    // grass — the soil a meadow grows in, an olive brown darker than the lit canopy above it: the
-    // grass ground resolves onto it at every blade root (TerrainGrass's default Tip Color is the leaf)
-    {.AlbedoR = 0.14f, .AlbedoG = 0.13f, .AlbedoB = 0.065f, .Roughness = 0.85f,
+    // grass — a turf green, the ground of a meadow at every distance: under its blades (shaded by the
+    // canopy, Includes/terrain_grass_canopy.glsl), beyond the grass range, on a planet and on a
+    // terrain that places no grass. A darker ground under a field is authored in the material.
+    {.AlbedoR = 0.10f, .AlbedoG = 0.16f, .AlbedoB = 0.035f, .Roughness = 0.85f,
      .VariationStrength = 0.16f, .VariationHue = 0.10f, .VariationScale = 0.030f},
     // rock — the strongest break-up: a bare cliff face is the largest flat expanse
     {.AlbedoR = 0.55f, .AlbedoG = 0.50f, .AlbedoB = 0.42f, .Roughness = 0.65f,

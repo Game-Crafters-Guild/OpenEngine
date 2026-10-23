@@ -157,13 +157,13 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
     // --- Ground Plane ---
     if (rs)
     {
-        const GUID planeGuid = Engine::Renderer::PrimitiveGenerator::PlaneGuid();
+        const GUID groundGuid = Engine::Renderer::PrimitiveGenerator::GroundGuid();
         ECS::Entity e = world.Create();
-        // The plane primitive is 1 m wide: this scale puts its edge viewDistance from the origin.
+        // The ground primitive is 1 m wide: this scale puts its edge viewDistance from the origin.
         // The grid ground tiles its 1 m cell 6000 times across the plane, which is 2 x viewDistance wide.
         e.Set(Transform::FromTRS(Mathematics::Vector3{0.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, Mathematics::Vector3{2.0f * viewDistance, 1.0f, 2.0f * viewDistance}));
-        e.Set(MakeMeshRenderer(rs, planeGuid, GroundGridMaterialGuid()));
-        e.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveLocalBounds(rs, planeGuid));
+        e.Set(MakeMeshRenderer(rs, groundGuid, GroundGridMaterialGuid()));
+        e.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveLocalBounds(rs, groundGuid));
 
         PhysicsBody planeBody{};
         planeBody.motionType = Physics::MotionType::Static;
@@ -175,7 +175,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
         world.AddComponentImmediate(e.GetHandle(), planeCollider);
         world.AddComponentImmediate(e.GetHandle(), PlaneColliderShape{});
 
-        SetName(e, "Plane");
+        SetName(e, "Ground");
     }
 
     // --- Sphere ---

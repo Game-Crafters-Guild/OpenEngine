@@ -136,7 +136,7 @@ MeshRenderer.meshAsset = [path="Models/Planes/AircoDH2/scene.gltf" guid="78fd7c8
 MeshRenderer.material = [guid="42ae5d9d-24dc-4846-ba2d-824dbd0e2957"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh0"
@@ -156,7 +156,7 @@ MeshRenderer.meshId = 1
 MeshRenderer.material = [guid="dcaa5d9d-24da-4846-88be-b8b96f8afada"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh1"
@@ -176,7 +176,7 @@ MeshRenderer.meshId = 2
 MeshRenderer.material = [guid="dcaa5d9d-24da-4846-88be-b8b96f8afada"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh2"
@@ -196,7 +196,7 @@ MeshRenderer.meshId = 3
 MeshRenderer.material = [guid="dcaa5d9d-24da-4846-88be-b8b96f8afada"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh3"
@@ -216,7 +216,7 @@ MeshRenderer.meshId = 4
 MeshRenderer.material = [guid="dcaa5d9d-24da-4846-88be-b8b96f8afada"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh4"
@@ -236,7 +236,7 @@ MeshRenderer.meshId = 5
 MeshRenderer.material = [guid="8fac5d9d-24db-4846-a9ba-6e556a32b323"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh5"
@@ -256,7 +256,7 @@ MeshRenderer.meshId = 6
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh6"
@@ -276,7 +276,7 @@ MeshRenderer.meshId = 7
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh7"
@@ -296,7 +296,7 @@ MeshRenderer.meshId = 8
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh8"
@@ -316,7 +316,7 @@ MeshRenderer.meshId = 9
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh9"
@@ -336,7 +336,7 @@ MeshRenderer.meshId = 10
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh10"
@@ -356,7 +356,7 @@ MeshRenderer.meshId = 11
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh11"
@@ -376,7 +376,7 @@ MeshRenderer.meshId = 12
 MeshRenderer.material = [guid="f5af5d9d-24dd-4846-be66-5e454b0a7c31"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "scene_submesh12"

@@ -151,6 +151,9 @@ static constexpr uint32 kTerrainFlagHasHeightmap = 4u;
 static constexpr uint32 kTerrainFlagHasNormalmap = 8u;
 static constexpr uint32 kTerrainFlagHasSplatmap = 16u;
 static constexpr uint32 kTerrainFlagHasGrassControls = 32u;
+// The terrain's unified colour map is uploaded and readable (ColorMapBindless; TerrainColorMap.h).
+// Mirrored in cbt_surface.glsl and terrain_grass_surface.glsl.
+static constexpr uint32 kTerrainFlagHasColorMap = 64u;
 
 // TerrainGPUParams::GrassEnabled bits (shared with the grass shaders that read the params SSBO).
 // bit3 and bit4 are CPU-side only: the upload-time reduction composes the per-view grass draw mode
@@ -168,6 +171,10 @@ static constexpr uint32 kTerrainGrassBitBlendMode = 8u;
 // whose texture alpha probes uniformly opaque. Set from the PROBED texture, not from the authored
 // render mode — the mode says how soft alpha would resolve, this says whether any exists.
 static constexpr uint32 kTerrainGrassBitAlphaNeeded = 16u;
+// Root Color is Auto. With kTerrainGrassBitSplatRootColor the blade's canopy gradient starts from
+// the ground colour at its root (GrassBladeCanopyRoot in terrain_grass_surface.glsl); without it the
+// uploaded GrassRootColor, the tip in shade, is the root.
+static constexpr uint32 kTerrainGrassBitAutoRootColor = 32u;
 
 // Per-terrain GPU constants stored in an SSBO array (one entry per terrain).
 // 280 bytes (70 words). Lighting is in the View UBO, not here; the per-material shading inputs
@@ -197,7 +204,7 @@ struct TerrainGPUParams
     uint32 Flags = 0;                  // bit 0 = receive shadows
     uint32 NormalmapBindless = 0;      // bindless index for R16G16_FLOAT normal map (0 = none)
     uint32 HeightmapBindless = 0;      // bindless index for height map (0 = none)
-    uint32 GrassEnabled = 1;           // kTerrainGrassBit*: bit0 enabled, bit1 splat root, bit2 texture card, bit3 blend mode
+    uint32 GrassEnabled = 1;           // kTerrainGrassBit*: bit0 enabled, bit1 splat root, bit2 texture card, bit3 blend mode, bit4 alpha needed, bit5 auto root
     float32 GrassDensity = 21.0f;      // blades per square metre at the camera
     // [22][23] The authored blade size in metres.
     float32 GrassBladeHeight = 0.72f;
@@ -215,8 +222,8 @@ struct TerrainGPUParams
     float32 GrassGroundingStrength = 1.0f;
     float32 GrassRandomScale = 0.35f;  // random blade scale amount
     float32 GrassRandomBrightness = 0.42f;// per-blade value jitter: the field's tonal separation
-    float32 GrassTranslucency = 1.0f; // light through a blade tip over its sunlit face's, 0..1
-    uint32 GrassRootColor = 0xFF637A3Eu; // resolved root color, sRGB ARGB: the default tip at 0.65 of its linear luminance
+    float32 GrassTranslucency = 0.7f; // light through a blade tip over its sunlit face's, 0..1
+    uint32 GrassRootColor = 0xFF4E6130u; // resolved root color, sRGB ARGB: the default tip at 0.4 of its linear luminance
     uint32 GrassTipColor = 0xFF79954Du; // tip color, sRGB ARGB (the surface decodes it to linear)
     uint32 GrassBacklightColor = 0xFFBCCE61u;// the colour of the light through a blade, sRGB ARGB
     float32 GrassWindDirection = -2.5f; // radians
@@ -257,11 +264,12 @@ struct TerrainGPUParams
     // (TerrainGrassCanopyOcclusionDepth); 0 on a row that places no blade
     float32 GrassCanopyOcclusion = 0.0f;
     float32 GrassRootFadeStart = 0.0f;        // height fraction where the ground colour starts to leave
-    float32 GrassRootFadeEnd = 0.25f;         // height fraction where the tip colour has fully arrived
+    float32 GrassRootFadeEnd = 0.275f;        // where the tip colour has fully arrived
     uint32 GrassControlBindless = 0;         // optional RG8: height, density; absent means (1,1)
+    uint32 ColorMapBindless = 0;             // optional RGBA8 sRGB colour map; absent means identity
 };
 
-static_assert(sizeof(TerrainGPUParams) == 280, "TerrainGPUParams must be 280 bytes");
+static_assert(sizeof(TerrainGPUParams) == 284, "TerrainGPUParams must be 284 bytes");
 
 // Blades per square metre at the camera for this row, in the units the row's mode actually places:
 // cards for a texture-card terrain, blades otherwise. The placement kernels select the same way, so
@@ -289,11 +297,12 @@ inline bool TerrainGrassRowPlaces(const TerrainGPUParams& params)
 }
 
 // The canopy shade a row's field casts on its blade bases and on the ground under it, sun and sky
-// alike (Includes/terrain_grass_canopy.glsl): the field's one-sided coverage at the camera, blades per
-// square metre x leaf width x blade height (0.54 for the shipped meadow, 0.92 for a 64 /m2 lawn of
-// 0.4 m blades with 36 mm leaves), scaled by the authored Canopy Shade (1 is this physical amount)
-// and capped so the densest field still leaves its base lit.
-inline constexpr float32 kTerrainGrassCanopyOcclusionScale = 0.4f;
+// alike (Includes/terrain_grass_canopy.glsl): the field's one-sided coverage at its near density,
+// blades per square metre x leaf width x blade height (0.54 for the shipped meadow, 0.92 for a
+// 64 /m2 lawn of 0.4 m blades with 36 mm leaves), times the scale below and the authored Canopy Shade
+// (1 is the shipped amount), and capped so the densest field still leaves its base lit. The scale is
+// set on the rendered default meadow.
+inline constexpr float32 kTerrainGrassCanopyOcclusionScale = 0.2f;
 inline constexpr float32 kTerrainGrassCanopyOcclusionMax = 0.6f;
 
 // 0 for a row that places no blade, and for a texture-card row: a card is not a blade, and its

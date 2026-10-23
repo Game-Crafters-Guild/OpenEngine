@@ -4,6 +4,7 @@
 #include "Components/Terrain/TerrainModifierVolume.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "ECS/ECS.h"
+#include "TerrainECS/TerrainZonePayload.h"
 
 #include <cstddef>
 #include <span>
@@ -38,7 +39,57 @@ struct ComponentTypeList
 using ModifierRootComponents = ComponentTypeList<
     Components::TerrainModifierVolume,
     Components::TerrainSculptZone,
-    Components::TerrainPaintZone>;
+    Components::TerrainPaintZone,
+    Components::TerrainColorZone>;
+
+// The zone kinds: payload-backed modifier roots, one payload format each. The
+// payload saver, the zone gizmo and the gather fold over this list, so a zone kind
+// added here is saved, drawn and gathered.
+using ZoneComponents = ComponentTypeList<
+    Components::TerrainSculptZone,
+    Components::TerrainPaintZone,
+    Components::TerrainColorZone>;
+
+// The payload format a zone kind stores, and whether a spherical terrain's bake
+// applies it (only the sculpt zone; keep in step with IsSphereSupportedModifier).
+// Specialized per zone below — a zone added to ZoneComponents without one fails
+// to compile.
+template <typename TZone>
+struct TerrainZoneKind;
+
+template <>
+struct TerrainZoneKind<Components::TerrainSculptZone>
+{
+    static constexpr ZonePayloadFormat Format = ZonePayloadFormat::SculptOffsetR32F;
+    static constexpr bool SphereSupported = true;
+};
+
+template <>
+struct TerrainZoneKind<Components::TerrainPaintZone>
+{
+    static constexpr ZonePayloadFormat Format = ZonePayloadFormat::PaintMaskR8;
+    static constexpr bool SphereSupported = false;
+};
+
+template <>
+struct TerrainZoneKind<Components::TerrainColorZone>
+{
+    static constexpr ZonePayloadFormat Format = ZonePayloadFormat::ColorRGBA32F;
+    static constexpr bool SphereSupported = false;
+};
+
+// Calls fn.template operator()<TZone>() once per zone kind, in ZoneComponents order.
+template <typename Fn, typename... Ts>
+void ForEachZoneKindIn(ComponentTypeList<Ts...>, Fn&& fn)
+{
+    (fn.template operator()<Ts>(), ...);
+}
+
+template <typename Fn>
+void ForEachZoneKind(Fn&& fn)
+{
+    ForEachZoneKindIn(ZoneComponents{}, fn);
+}
 
 // Types the gather reads as passengers on a volume entity: the effect stack.
 // The region and the transform belong to the volume, so an effect's own column
@@ -51,7 +102,8 @@ using ModifierEffectComponents = ComponentTypeList<
     Components::TerrainPaintLayerEffect,
     Components::TerrainSurfaceRulesEffect,
     Components::TerrainGroundClaimEffect,
-    Components::TerrainGrassEffect>;
+    Components::TerrainGrassEffect,
+    Components::TerrainColorEffect>;
 
 // Subscribe a world to the Added/Removed events the modifier change gate
 // consumes. Removed<T> is the only detector for a component remove or an entity
@@ -144,6 +196,14 @@ struct TerrainEffectChrome<Components::TerrainGrassEffect>
     static constexpr std::string_view Title = "Grass";
     static constexpr std::string_view Description =
         "Shortens or thins planar grass relative to its global profile, with the region's falloff.";
+};
+
+template <>
+struct TerrainEffectChrome<Components::TerrainColorEffect>
+{
+    static constexpr std::string_view Title = "Color";
+    static constexpr std::string_view Description =
+        "Colors the ground and the base of its grass - worn paths, lush patches, dry yards.";
 };
 
 // One canonical effect type as runtime data.

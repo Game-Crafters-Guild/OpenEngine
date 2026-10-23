@@ -2032,11 +2032,18 @@ void UIManager::UpdateTooltipAndCursor(bool interactive)
         if (!m_TooltipOverlay)
             m_TooltipOverlay = std::make_unique<UI::Interaction::TooltipOverlay>();
 
-        // Pull runtime config from editor settings when available.
-        // The lambda avoids a hard dependency on the editor in the UI module —
-        // callers can set this via SetTooltipConfigProvider().
-        if (m_TooltipConfigProvider)
+        // A pinned tooltip is a message, not hover help: it shows whatever the
+        // pointer does and whether or not hover tooltips are on.
+        if (m_TooltipOverlay->UpdatePinned(GetRootElement()))
         {
+            if (m_TooltipConfigProvider)
+                m_TooltipOverlay->SetArrowColor(m_TooltipConfigProvider().ArrowColor);
+        }
+        else if (m_TooltipConfigProvider)
+        {
+            // Pull runtime config from editor settings when available.
+            // The lambda avoids a hard dependency on the editor in the UI module —
+            // callers can set this via SetTooltipConfigProvider().
             TooltipConfig cfg = m_TooltipConfigProvider();
             if (!cfg.Enabled)
             {
@@ -2147,4 +2154,17 @@ void UIManager::DismissActiveTooltip()
 {
     if (m_TooltipOverlay)
         m_TooltipOverlay->Hide();
+}
+
+void UIManager::PinTooltip(UIElement& source)
+{
+    if (!m_TooltipOverlay)
+        m_TooltipOverlay = std::make_unique<UI::Interaction::TooltipOverlay>();
+    m_TooltipOverlay->Pin(source);
+}
+
+void UIManager::UnpinTooltip(const UIElement& source)
+{
+    if (m_TooltipOverlay)
+        m_TooltipOverlay->Unpin(source);
 }

@@ -1,11 +1,13 @@
 #include "TerrainECS/Systems/TerrainExtractionSystem.h"
 #include "TerrainECS/TerrainHandleHygiene.h"
 #include "TerrainECS/TerrainService.h"
-#include "TerrainGrassFieldUploader.h"
+#include "TerrainFieldUploader.h"
 #include "TerrainECS/TerrainGrassAlpha.h"
+#include "TerrainECS/TerrainGrassAuthoredBits.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TileStreamingManager.h"
 #include "TerrainECS/AtlasResidencyController.h"
+#include "TerrainECS/AtlasTileNormal.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 #include "TerrainECS/PlanarHeightQuery.h"
 #include "TerrainECS/TerrainHeightPageDriver.h"
@@ -235,6 +237,52 @@ void ClearGrassEnabledIfNothingToPlace(Terrain::TerrainGPUParams& params)
         params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
 }
 
+// What the colour map publishes to the params row and the surface params this tick.
+struct TerrainColorMapBinding
+{
+    bool Unified = false;         // kTerrainFlagHasColorMap: the unified map is uploaded and sampleable
+    uint32 UnifiedBindless = 0;   // TerrainGPUParams::ColorMapBindless (0 on the compat profile)
+    uint32 AtlasBindless = 0;     // CBTSurfaceParams::AtlasColorBindless
+    uint32 AtlasCoarseBindless = 0;
+};
+
+// Uploads a terrain's unified colour map and says whether the surface may read it. Until the
+// texture is uploaded and published the terrain reads no map, which is identity.
+TerrainColorMapBinding PublishUnifiedColorMap(TerrainFieldUploader& uploader, TerrainRenderFeature& feature,
+                                              Engine::Renderer::RenderServices& rs, TerrainHandle handle,
+                                              TerrainColorMap& map)
+{
+    TerrainColorMapBinding binding;
+    const bool ready = uploader.UpdateUnified(feature, handle, map);
+    feature.RegisterFieldsBindless(handle, rs);
+    if (!ready || !feature.FieldCanBeSampled(TerrainField::Color, handle, TerrainFieldMap::Unified))
+        return binding;
+    binding.UnifiedBindless = feature.GetFieldBindlessIndex(TerrainField::Color, handle, TerrainFieldMap::Unified);
+    binding.Unified = rs.GetProfile().IsCompat() || binding.UnifiedBindless != 0;
+    if (!binding.Unified)
+        binding.UnifiedBindless = 0;
+    return binding;
+}
+
+// The atlas-backed terrain's colour map: the resident slots and the coarse map. A slot not yet
+// uploaded reads its zero clear, which is identity, so the pair publishes once both textures can
+// be sampled.
+TerrainColorMapBinding PublishAtlasColorMap(TerrainFieldUploader& uploader, TerrainRenderFeature& feature,
+                                            Engine::Renderer::RenderServices& rs, TerrainHandle handle,
+                                            TiledTerrainData& tiled, const AtlasGeometry& geometry,
+                                            std::span<const TileAtlasSlot> rows)
+{
+    TerrainColorMapBinding binding;
+    uploader.UpdateAtlas(feature, handle, tiled, geometry, rows);
+    feature.RegisterFieldsBindless(handle, rs);
+    if (!feature.FieldCanBeSampled(TerrainField::Color, handle, TerrainFieldMap::Atlas)
+        || !feature.FieldCanBeSampled(TerrainField::Color, handle, TerrainFieldMap::Coarse))
+        return binding;
+    binding.AtlasBindless = feature.GetFieldBindlessIndex(TerrainField::Color, handle, TerrainFieldMap::Atlas);
+    binding.AtlasCoarseBindless = feature.GetFieldBindlessIndex(TerrainField::Color, handle, TerrainFieldMap::Coarse);
+    return binding;
+}
+
 // The one writer of a terrain row's grass parameters, shared by the tiled and the untiled path:
 // the authored component clamped to its supported ranges, Root Color resolved (Auto derives it
 // from Tip Color, so the GPU never sees the sentinel), the texture-card bindings, and the enabled
@@ -244,11 +292,7 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
                       const Components::TerrainGrass* grass,
                       Engine::Renderer::RenderServices* renderServices)
 {
-    params.GrassEnabled = (grass ? Terrain::kTerrainGrassBitEnabled : 0u)
-        | (grass && grass->UseSplatRootColor ? Terrain::kTerrainGrassBitSplatRootColor : 0u)
-        | (grass && grass->TextureGrass ? Terrain::kTerrainGrassBitTextureCard : 0u)
-        | (grass && grass->RenderMode == Components::TerrainGrassRenderMode::Blend
-               ? Terrain::kTerrainGrassBitBlendMode : 0u);
+    params.GrassEnabled = TerrainGrassAuthoredBits(grass);
     params.GrassDensity = grass ? std::max(0.0f, grass->BladesPerSquareMeter) : 0.0f;
     params.GrassBladeHeight = grass ? std::max(0.0f, grass->BladeHeight) : 0.0f;
     params.GrassBladeWidth = grass ? std::max(0.0f, grass->BladeWidth) : 0.0f;
@@ -271,7 +315,7 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
     params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
     params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
-    params.GrassRootColor = grass ? Components::TerrainGrassResolvedRootColor(*grass) : 0xFF637A3Eu;
+    params.GrassRootColor = grass ? Components::TerrainGrassResolvedRootColor(*grass) : 0xFF4E6130u;
     params.GrassTipColor = grass ? grass->TipColor : 0xFF79954Du;
     params.GrassBacklightColor = grass ? grass->BacklightColor : 0xFFBCCE61u;
     params.GrassWindDirection = grass ? grass->WindDirection : -2.5f;
@@ -325,7 +369,8 @@ void DriveAtlasResidency(AtlasResidencyController& ctrl, const TiledTerrainData&
     uint32 slots = slotOverride != 0u
                        ? slotOverride
                        : DeriveAtlasSlotCount(tilesX, tilesZ, tileRes, kAtlasVramBudgetBytes,
-                                              kAtlasSlotBytesPerTexel + (tiled.GrassRegionsActive ? 2u : 0u));
+                                              kAtlasSlotBytesPerTexel + (tiled.GrassRegionsActive ? 2u : 0u)
+                                                  + (tiled.ColorMapActive ? kTerrainColorMapChannels : 0u));
     slots = std::clamp(slots, 1u, totalTiles);
     ctrl.Configure(tileRes, slots, framesInFlight, tilesX, tilesZ, /*logSignals*/ true, fadeSeconds);
 
@@ -361,7 +406,8 @@ void DriveAtlasResidency(AtlasResidencyController& ctrl, const TiledTerrainData&
 } // namespace
 
 TerrainExtractionSystem::TerrainExtractionSystem(Engine::Renderer::RenderServices* renderServices)
-    : m_RenderServices(renderServices), m_GrassFieldUploader(std::make_unique<TerrainGrassFieldUploader>())
+    : m_RenderServices(renderServices), m_GrassFieldUploader(std::make_unique<TerrainFieldUploader>(GrassFieldUploadDesc())),
+      m_ColorMapUploader(std::make_unique<TerrainFieldUploader>(ColorMapUploadDesc()))
 {
     // GE_TERRAIN_ATLAS_SLOTS overrides the derived resident-slot budget — the soak lever that
     // forces eviction churn by shrinking the window below the tile count.
@@ -413,6 +459,16 @@ void TerrainExtractionSystem::ForgetTiledTerrain(uint32 tiledIndex)
     m_AtlasOverCapWarnedTiled.erase(tiledIndex);
     m_ReprovisionDebounce.erase(tiledIndex);
     m_TiledSlotGeneration.erase(tiledIndex);
+}
+
+const CoarseTileStandIn& TerrainExtractionSystem::ResolveCoarseStandIn(const TerrainTileData& tile, uint32 tileRes,
+                                                                     float32 tileWorldSize, float32 heightScale)
+{
+    if (tile.CoarseStandIn &&
+        tile.CoarseStandIn->Matches(tileRes, tileWorldSize, heightScale, tile.HeightfieldVersion))
+        return *tile.CoarseStandIn;
+    BuildCoarseTileStandIn(tile.Heightfield, tileRes, tileWorldSize, heightScale, m_CoarseStandInScratch);
+    return m_CoarseStandInScratch;
 }
 
 void TerrainExtractionSystem::ForgetRetiredTiledTerrains(TerrainService& service)
@@ -530,7 +586,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     if (reuploadAll)
     {
         m_UploadedDeviceResourceEpoch = deviceResourceEpoch;
-        m_GrassFieldUploader = std::make_unique<TerrainGrassFieldUploader>();
+        m_GrassFieldUploader = std::make_unique<TerrainFieldUploader>(GrassFieldUploadDesc());
+        m_ColorMapUploader = std::make_unique<TerrainFieldUploader>(ColorMapUploadDesc());
         m_AtlasByTiled.clear();
         m_AtlasCoarseBuilt.clear();
     }
@@ -762,7 +819,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         if (tile)
                         {
                             tile->HeightfieldDirty = true;
-                            tile->SplatmapDirty = true;
+                            tile->MarkSplatChanged();
                         }
 
                 // ---- Async tile streaming via TileStreamingManager ----
@@ -1068,7 +1125,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                             if (!tilePtr || tilePtr->LodState == TileLodState::Empty)
                                 continue;
                             tilePtr->MarkFullDirty();
-                            tilePtr->SplatmapDirty = true;
+                            tilePtr->MarkSplatChanged();
                         }
                     }
 
@@ -1133,7 +1190,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         // the whole tile) fall through to the whole-tile path. Mirrors the
                         // atlas patchSlotRegion fast-path (#528).
                         if (m_UnifiedRegionPatch && !coarse && tile->HeightfieldDirty &&
-                            tile->HeightfieldVersion > tile->NormalmapVersion)
+                            tile->HeightfieldVersion > tile->NormalmapVersion && tile->ArrivalSplatStandIn.empty())
                         {
                             const uint32 res = tile->Heightfield.GetWidth();
                             const bool nativeSquare = res >= 2 && tile->Heightfield.GetHeight() == res;
@@ -1213,12 +1270,11 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                 nb.TopFull = neighborFull(coord.X, coord.Z - 1);
                                 nb.BottomFull = neighborFull(coord.X, coord.Z + 1);
                                 const CoarsePatchRect pr = ComputeCoarsePatchRect(tileRegionDim, nb);
-                                if (pr.Width > 0 && pr.Height > 0)
+                                const CoarseTileStandIn& standIn =
+                                    ResolveCoarseStandIn(*tile, tileRegionDim, tileSize, terrain.HeightScale);
+                                if (pr.Width > 0 && pr.Height > 0 && standIn.Heights.GetWidth() == tileRegionDim)
                                 {
-                                    UpsampleHeightfieldBilinear(tile->Heightfield.GetRawSamples(),
-                                                                tile->Heightfield.GetWidth(),
-                                                                m_CoarseHeightScratch, tileRegionDim);
-                                    ExtractSubBlock(m_CoarseHeightScratch.data(), tileRegionDim,
+                                    ExtractSubBlock(standIn.Heights.GetRawSamples(), tileRegionDim,
                                                     pr.X0, pr.Z0, pr.Width, pr.Height, m_CoarseHeightPatch);
                                     feature->UploadHeightmapRegion(globalGpuHandle,
                                                                    m_CoarseHeightPatch.data(),
@@ -1237,32 +1293,19 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                             reinterpret_cast<const uint8*>(m_CoarseSplatPatch.data()),
                                             pr.Width, pr.Height, dstX + pr.X0, dstY + pr.Z0);
                                     }
-                                    // Real normals from the upsampled coarse heights (was ZEROED, which
-                                    // shaded coarse tiles flat-lit — the tiled dark-shard gap). Generate
-                                    // over the full region then extract the same interior-clamped sub-block
-                                    // so it never stomps a resident-Full neighbour's edge. Full re-uploads
-                                    // its high-detail normal on upgrade.
-                                    if (m_CoarseNormalHf.GetWidth() != tileRegionDim ||
-                                        m_CoarseNormalHf.GetHeight() != tileRegionDim)
-                                        m_CoarseNormalHf.Resize(tileRegionDim, tileRegionDim, 0.0f);
-                                    std::memcpy(m_CoarseNormalHf.GetMutableSamples(),
-                                                m_CoarseHeightScratch.data(),
-                                                static_cast<size_t>(tileRegionDim) * tileRegionDim * sizeof(float32));
-                                    uint32 cnW = 0, cnH = 0;
-                                    GenerateNormalmapFromHeightfield(m_CoarseNormalHf, tileSize, tileSize,
-                                                                     terrain.HeightScale,
-                                                                     m_CoarseNormalScratch, cnW, cnH);
-                                    if (m_CoarseNormalScratch.size() ==
-                                        static_cast<size_t>(tileRegionDim) * tileRegionDim * 4u)
-                                    {
-                                        ExtractSubBlock(reinterpret_cast<const uint32*>(m_CoarseNormalScratch.data()),
-                                                        tileRegionDim, pr.X0, pr.Z0, pr.Width, pr.Height,
-                                                        m_CoarseNormalPatch);
-                                        feature->UploadNormalmapRegion(globalGpuHandle,
-                                            reinterpret_cast<const uint8*>(m_CoarseNormalPatch.data()),
-                                            pr.Width, pr.Height, dstX + pr.X0, dstY + pr.Z0);
-                                    }
+                                    // The stand-in's normal, from the upsampled heights, over the same
+                                    // interior-clamped sub-block so it never stomps a resident-Full
+                                    // neighbour's edge. Full re-uploads its high-detail normal on upgrade.
+                                    ExtractSubBlock(reinterpret_cast<const uint32*>(standIn.Normalmap.data()),
+                                                    tileRegionDim, pr.X0, pr.Z0, pr.Width, pr.Height,
+                                                    m_CoarseNormalPatch);
+                                    feature->UploadNormalmapRegion(globalGpuHandle,
+                                        reinterpret_cast<const uint8*>(m_CoarseNormalPatch.data()),
+                                        pr.Width, pr.Height, dstX + pr.X0, dstY + pr.Z0);
                                 }
+                                // A stand-in serves one patch: a later re-patch of a still-coarse tile
+                                // rebuilds it.
+                                tile->CoarseStandIn.reset();
                                 tile->ClearDirty();
                                 tile->SplatmapDirty = false;
                                 patched = true;
@@ -1278,7 +1321,10 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                 patched = true;
                             }
                         }
-                        if (!coarse && tile->SplatmapDirty && !tile->Splatmap.empty())
+                        // While the tile's arrival splat bake runs, the region keeps the coarse
+                        // splat and normal it shows; SplatmapDirty stays set for the bake's end.
+                        if (!coarse && tile->SplatmapDirty && !tile->Splatmap.empty() &&
+                            tile->ArrivalSplatStandIn.empty())
                         {
                             feature->UploadSplatmapRegion(globalGpuHandle,
                                                           tile->Splatmap.data(),
@@ -1417,7 +1463,14 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         // zero-clear — a Resident slot never samples uninitialised VRAM (R5).
                         auto uploadSplatSlot = [&](auto* tp, uint32 slot) {
                             const uint8* splatSrc = nullptr;
-                            if (!tp->Splatmap.empty())
+                            if (!tp->ArrivalSplatStandIn.empty())
+                            {
+                                // Its arrival splat bake runs: the coarse splat it showed before.
+                                UpsampleSplatmapBilinear(tp->ArrivalSplatStandIn.data(), tp->ArrivalSplatStandInDim,
+                                                         m_AtlasSplatTileScratch, geo.TileRes);
+                                splatSrc = m_AtlasSplatTileScratch.data();
+                            }
+                            else if (!tp->Splatmap.empty())
                             {
                                 if (tp->SplatmapWidth == geo.TileRes && tp->SplatmapHeight == geo.TileRes)
                                     splatSrc = tp->Splatmap.data();
@@ -1535,7 +1588,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                                          static_cast<size_t>(res) * res * 4u &&
                                                      tp->SplatmapWidth == res && tp->SplatmapHeight == res;
                             if (m_AtlasRegionPatch && !wholeSlot && fullNative && normalSeeded &&
-                                splatNative && tp->HeightfieldVersion > tp->NormalmapVersion)
+                                splatNative && tp->HeightfieldVersion > tp->NormalmapVersion &&
+                                tp->ArrivalSplatStandIn.empty())
                             {
                                 DirtyRegionLog::Region dirty;
                                 if (tp->HeightfieldDirtyLog.CollectSince(tp->NormalmapVersion, dirty) &&
@@ -1558,19 +1612,16 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                 }
                             }
 
-                            const float32* heights = nullptr;
-                            if (fullNative)
-                            {
-                                heights = tp->Heightfield.GetRawSamples();
-                            }
-                            else
-                            {
-                                // Coarse (or mismatched-res) tile: bilinear-upsample to tileRes^2.
-                                UpsampleHeightfieldBilinear(tp->Heightfield.GetRawSamples(),
-                                                            tp->Heightfield.GetWidth(),
-                                                            m_CoarseHeightScratch, geo.TileRes);
-                                heights = m_CoarseHeightScratch.data();
-                            }
+                            const float32 tileWorld = tiled->Config.TileWorldSize;
+                            // Coarse (or mismatched-res) tile: its stand-in, the heights upsampled to
+                            // tileRes^2 and their normal.
+                            const CoarseTileStandIn* standIn =
+                                fullNative ? nullptr
+                                           : &ResolveCoarseStandIn(*tp, geo.TileRes, tileWorld, terrain.HeightScale);
+                            if (standIn && standIn->Heights.GetWidth() != geo.TileRes)
+                                return;
+                            const float32* heights =
+                                fullNative ? tp->Heightfield.GetRawSamples() : standIn->Heights.GetRawSamples();
                             PackTileHeightIntoSlot(m_AtlasSlotScratch.data(), slotGeo, 0u, heights,
                                                    isFull, AtlasTileNeighbors{}, AtlasNeighborEdges{});
                             feature->UploadAtlasHeightSlot(globalGpuHandle, m_AtlasSlotScratch.data(),
@@ -1578,48 +1629,19 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                                            geo.SlotOriginTexelY(slot));
 
                             // Neighbour-aware normal (R2): a Full tile passes its 4 axis Full neighbours so
-                            // adjacent slots' shared boundary texel is bit-equal (no seam); a coarse tile
-                            // uses the upsampled heights single-tile (neighbours skipped — transient). A Full
-                            // tile's normal is regenerated into its PERSISTENT store (tp->Normalmap) so the
-                            // region fast-path above can update it in place next dab; a coarse tile's is
-                            // transient (upsample scratch), never persisted.
-                            const float32 tileWorld = tiled->Config.TileWorldSize;
-                            const Terrain::HeightfieldData* normalHf = nullptr;
-                            const Terrain::HeightfieldData* nL = nullptr;
-                            const Terrain::HeightfieldData* nR = nullptr;
-                            const Terrain::HeightfieldData* nU = nullptr;
-                            const Terrain::HeightfieldData* nD = nullptr;
+                            // adjacent slots' shared boundary texel is bit-equal (no seam), regenerated into
+                            // its PERSISTENT store (tp->Normalmap) so the region fast-path above can update it
+                            // in place next dab. A coarse tile uses its stand-in's normal (single-tile,
+                            // neighbours skipped — transient), never persisted.
                             if (fullNative)
                             {
-                                normalHf = &tp->Heightfield;
-                                nL = neighborHf(coord.X - 1, coord.Z);
-                                nR = neighborHf(coord.X + 1, coord.Z);
-                                nU = neighborHf(coord.X, coord.Z - 1);
-                                nD = neighborHf(coord.X, coord.Z + 1);
+                                const AtlasNormalNeighbors neighbors{
+                                    neighborHf(coord.X - 1, coord.Z), neighborHf(coord.X + 1, coord.Z),
+                                    neighborHf(coord.X, coord.Z - 1), neighborHf(coord.X, coord.Z + 1)};
+                                RegenerateAtlasTileNormal(*tp, tileWorld, terrain.HeightScale,
+                                                          tiled->Config.HeightScale, neighbors);
                             }
-                            else
-                            {
-                                if (m_AtlasNormalTileHf.GetWidth() != geo.TileRes ||
-                                    m_AtlasNormalTileHf.GetHeight() != geo.TileRes)
-                                    m_AtlasNormalTileHf.Resize(geo.TileRes, geo.TileRes, 0.0f);
-                                std::memcpy(m_AtlasNormalTileHf.GetMutableSamples(), heights,
-                                            static_cast<size_t>(geo.TileRes) * geo.TileRes * sizeof(float32));
-                                normalHf = &m_AtlasNormalTileHf;
-                            }
-                            uint32 nW = 0, nH = 0;
-                            std::vector<uint8>& normalOut =
-                                fullNative ? tp->Normalmap : m_AtlasNormalTileScratch;
-                            {
-                                GE_CPU_PROFILE_SCOPE("Terrain.NormalRegen.Whole");
-                                GenerateNormalmapFromHeightfield(*normalHf, tileWorld, tileWorld,
-                                                                 terrain.HeightScale, normalOut,
-                                                                 nW, nH, nL, nR, nU, nD);
-                            }
-                            if (fullNative)
-                            {
-                                tp->NormalmapWidth = nW;
-                                tp->NormalmapHeight = nH;
-                            }
+                            const std::vector<uint8>& normalOut = fullNative ? tp->Normalmap : standIn->Normalmap;
                             if (normalOut.size() ==
                                 static_cast<size_t>(geo.TileRes) * geo.TileRes * 4u)
                             {
@@ -1639,8 +1661,11 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
 
                             publishHeightSourceChanged(coord);
                             anySlotPatched = true;
+                            // A stand-in serves one pack: a later re-pack of a still-coarse tile rebuilds it.
+                            if (!fullNative)
+                                tp->CoarseStandIn.reset();
                             // Only a fullNative pack WROTE the persistent normal (tp->Normalmap); a coarse
-                            // pack generated a transient normal (m_AtlasNormalTileScratch) and left the
+                            // pack used its stand-in's transient normal and left the
                             // persistent store untouched. Advancing NormalmapVersion on the coarse branch
                             // would falsely mark that store current — so a later coarse->Full transition
                             // that reaches this tile via the height-dirty route (not the residency LOD-flip
@@ -1885,7 +1910,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                     tiled->SplatResplatIdleFrames = 0;
                                     ++tiled->Revision;
                                     tiled->QuadtreeDirty = true;
-                                    tiled->GlobalHeightRangeDirty = true;
                                     terrainService->MarkGpuReadbackSplatPending();
                                     static const bool kGpuBakeDebug =
                                         std::getenv("GE_TERRAIN_GPU_BAKE_DEBUG") != nullptr;
@@ -2067,16 +2091,16 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     grassControlsActive = atlasBacked
                         ? m_GrassFieldUploader->UpdateAtlas(*feature, globalGpuHandle, *tiled, atlasGeo, atlasRows)
                         : m_GrassFieldUploader->UpdateUnified(*feature, globalGpuHandle, tiled->GrassUnifiedField);
-                    feature->RegisterGrassFieldsBindless(globalGpuHandle, *m_RenderServices);
+                    feature->RegisterFieldsBindless(globalGpuHandle, *m_RenderServices);
                     const bool required = atlasBacked ? tiled->GrassRegionsActive : tiled->GrassUnifiedField.IsActive();
                     const bool namedMaps = m_RenderServices->GetProfile().IsCompat();
                     const bool sampleable = atlasBacked
-                        ? feature->GrassFieldCanBeSampled(globalGpuHandle, TerrainGrassMap::Atlas)
-                          && feature->GrassFieldCanBeSampled(globalGpuHandle, TerrainGrassMap::Coarse)
-                          && (namedMaps || (feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Atlas) != 0
-                                           && feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Coarse) != 0))
-                        : feature->GrassFieldCanBeSampled(globalGpuHandle, TerrainGrassMap::Unified)
-                          && (namedMaps || feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Unified) != 0);
+                        ? feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Atlas)
+                          && feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Coarse)
+                          && (namedMaps || (feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Atlas) != 0
+                                           && feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Coarse) != 0))
+                        : feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified)
+                          && (namedMaps || feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified) != 0);
                     // A defined white clear is not yet authored content. Keep
                     // pending fields out of placement until upload + publication.
                     if (required && (!grassControlsActive || !sampleable))
@@ -2087,11 +2111,21 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     }
                 }
                 else
-                    feature->ReleaseGrassFieldResources(globalGpuHandle);
+                    feature->ReleaseFieldResources(TerrainField::GrassControl, globalGpuHandle);
                 if (grassControlsActive && !atlasBacked)
                 {
                     params.Flags |= Terrain::kTerrainFlagHasGrassControls;
-                    params.GrassControlBindless = feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Unified);
+                    params.GrassControlBindless = feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified);
+                }
+                const TerrainColorMapBinding colorMap = atlasBacked
+                    ? PublishAtlasColorMap(*m_ColorMapUploader, *feature, *m_RenderServices, globalGpuHandle, *tiled,
+                                           atlasGeo, atlasRows)
+                    : PublishUnifiedColorMap(*m_ColorMapUploader, *feature, *m_RenderServices, globalGpuHandle,
+                                             tiled->ColorUnifiedMap);
+                if (colorMap.Unified)
+                {
+                    params.Flags |= Terrain::kTerrainFlagHasColorMap;
+                    params.ColorMapBindless = colorMap.UnifiedBindless;
                 }
                 paramsArray.push_back(params);
 
@@ -2155,10 +2189,13 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 info.AtlasHeightBindlessIndex = atlasHeightBindless;
                 info.AtlasCoarseBindlessIndex = atlasCoarseBindless;
                 info.GrassRegionsActive = grassControlsActive;
-                info.AtlasGrassBindlessIndex = feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Atlas);
-                info.AtlasGrassCoarseBindlessIndex = feature->GetGrassFieldBindlessIndex(globalGpuHandle, TerrainGrassMap::Coarse);
+                info.AtlasGrassBindlessIndex = feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Atlas);
+                info.AtlasGrassCoarseBindlessIndex = feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Coarse);
                 info.GrassControlBindlessIndex = params.GrassControlBindless;
                 info.GrassControlsSuppressedPlacement = grassControlsSuppressed;
+                info.ColorMapBindlessIndex = params.ColorMapBindless;
+                info.AtlasColorBindlessIndex = colorMap.AtlasBindless;
+                info.AtlasColorCoarseBindlessIndex = colorMap.AtlasCoarseBindless;
                 info.AtlasDim = atlasGeo.AtlasDim;
                 info.AtlasSlotStride = atlasGeo.SlotStride;
                 info.AtlasSlotsPerRow = atlasGeo.SlotsPerRow;
@@ -2343,6 +2380,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 hfRegion.MinX = hfRegion.MinZ = 0;
                 hfRegion.MaxX = static_cast<int32>(hfWidth);
                 hfRegion.MaxZ = static_cast<int32>(hfHeight);
+                // Only the GPU copies were lost: the splat re-uploads and the colour map, unchanged on
+                // the CPU, re-uploads through its rebuilt uploader without a recompose.
                 data->SplatmapDirty = true;
                 data->SplatmapFullDirty = true;
             }
@@ -2489,9 +2528,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 const bool ready = m_GrassFieldUploader->UpdateUnified(*feature, handle, data->GrassField);
                 if (ready) params.Flags |= Terrain::kTerrainFlagHasGrassControls;
-                feature->RegisterGrassFieldsBindless(handle, *m_RenderServices);
-                params.GrassControlBindless = feature->GetGrassFieldBindlessIndex(handle, TerrainGrassMap::Unified);
-                const bool sampleable = feature->GrassFieldCanBeSampled(handle, TerrainGrassMap::Unified)
+                feature->RegisterFieldsBindless(handle, *m_RenderServices);
+                params.GrassControlBindless = feature->GetFieldBindlessIndex(TerrainField::GrassControl, handle, TerrainFieldMap::Unified);
+                const bool sampleable = feature->FieldCanBeSampled(TerrainField::GrassControl, handle, TerrainFieldMap::Unified)
                     && (m_RenderServices->GetProfile().IsCompat() || params.GrassControlBindless != 0);
                 if (data->GrassField.IsActive() && (!ready || !sampleable))
                 {
@@ -2501,7 +2540,14 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 }
             }
             else
-                feature->ReleaseGrassFieldResources(handle);
+                feature->ReleaseFieldResources(TerrainField::GrassControl, handle);
+            const TerrainColorMapBinding colorMap = PublishUnifiedColorMap(
+                *m_ColorMapUploader, *feature, *m_RenderServices, handle, data->ColorMap);
+            if (colorMap.Unified)
+            {
+                params.Flags |= Terrain::kTerrainFlagHasColorMap;
+                params.ColorMapBindless = colorMap.UnifiedBindless;
+            }
             paramsArray.push_back(params);
 
             // Cache terrain instance info for render node.
@@ -2528,6 +2574,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             info.NormalmapBindlessIndex = normalmapBindless;
             info.GrassControlBindlessIndex = params.GrassControlBindless;
             info.GrassControlsSuppressedPlacement = grassControlsSuppressed;
+            info.ColorMapBindlessIndex = params.ColorMapBindless;
             info.GrassRegionsActive = (params.Flags & Terrain::kTerrainFlagHasGrassControls) != 0;
             info.Quadtree = data->Quadtree;
             info.PatchGridSize = data->Config.PatchGridSize;
@@ -2557,6 +2604,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                        windVolumes.data(), static_cast<uint32>(windVolumes.size()));
 
     m_GrassFieldUploader->ForgetRetired(*terrainService);
+    m_ColorMapUploader->ForgetRetired(*terrainService);
     {
         GE_CPU_PROFILE_SCOPE("Terrain.HeightPages");
         UpdateHeightPages(*terrainService, *feature, m_RenderServices->EnsureFeature<TerrainHeightPageFeature>(),

@@ -21,7 +21,6 @@
       <Button id="TopToolbarRecord" class="small secondary icon-button toolbar-record-icon" />
       <Button id="TopToolbarCenter3" class="small secondary icon-button pause-icon" />
       <Button id="TopToolbarCenter4" class="small secondary icon-button play-icon" />
-      <Button id="TopToolbarAudio" class="small secondary icon-button audio-on-speaker-icon" />
     </UIElement>
   </UIElement>
   <UIElement class="top-toolbar-right">

@@ -50,10 +50,11 @@ Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (1, 1, 1)
 
 ; The ground is the engine's grid ground, Materials/GroundGrid.material in the engine content: a 1 m
-; grid on this 6000 m plane, the same ground a new scene starts with.
+; grid on this 6000 m plane, the same ground a new scene starts with. The Ground mesh splits the
+; plane into 50 m cells, so the grid lines hold still as the camera moves.
 [entity id="plane"]
 HierarchyOrder.order = 50
-MeshRenderer.meshPrimitive = Plane
+MeshRenderer.meshPrimitive = Ground
 MeshRenderer.material = [guid="f9bf4ef2-0e5e-4632-87e2-dd600f27fde5"]
 Name.value = "Ground"
 PhysicsBody.motionType = 0

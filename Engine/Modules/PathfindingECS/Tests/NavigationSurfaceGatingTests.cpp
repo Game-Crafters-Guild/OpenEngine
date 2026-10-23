@@ -2,6 +2,7 @@
 #include "PathfindingECS/Components/NavigationObstacle.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
@@ -457,7 +458,7 @@ TEST_F(NavigationAssetWatchTest, EditingANavGridUnderTheAssetRootRebakesGridSurf
     NavigationSurfaceSystem system;
     system.Update(*world, kDeltaTime);
     world->ProcessCommands();
-    const uint32 firstVersion = entity.Get<Components::NavigationSurface>()->BakeVersion;
+    const uint64 firstVersion = entity.Get<Components::NavigationSurface>()->BakeVersion;
     ASSERT_GT(firstVersion, 0u);
 
     const std::filesystem::path probe = assetRoot / "WatchProbe.navgrid";

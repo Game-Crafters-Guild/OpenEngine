@@ -509,15 +509,10 @@ std::optional<ApiFunction> ApiResolver::ReadFunction(const ModuleDraft& module, 
         return std::nullopt;
     }
     DeclarationProblem problem;
-    std::optional<ApiType> returns = ApiKindResolver::ResolveValue(BareType(fn.ReturnType), LookupFrom(draft.Scope), problem);
+    std::optional<ApiType> returns = ApiKindResolver::ResolveReturn(BareType(fn.ReturnType), LookupFrom(draft.Scope), problem);
     if (!returns)
     {
         Refuse(header.File, draft.Line, "return type: " + problem.Problem, problem.Fix);
-        return std::nullopt;
-    }
-    if (returns->Kind == ApiKind::String || returns->Kind == ApiKind::Span)
-    {
-        Refuse(header.File, draft.Line, "text and spans are parameters only", "return a value kind");
         return std::nullopt;
     }
     result.Returns = *returns;
@@ -550,6 +545,14 @@ std::optional<ApiFunction> ApiResolver::ReadFunction(const ModuleDraft& module, 
     {
         Refuse(header.File, draft.Line, "the function has " + std::to_string(outCount) + " out parameters",
                "return a record that holds the results, or keep one out parameter");
+        ok = false;
+    }
+    const bool fillsSpan = std::any_of(result.Params.begin(), result.Params.end(), [](const ApiParam& param)
+                                       { return param.Out && param.Type.Kind == ApiKind::Span; });
+    if (fillsSpan && result.Returns.Kind != ApiKind::Int32)
+    {
+        Refuse(header.File, draft.Line, "a function that writes a span returns the number of results, as std::int32_t",
+               "return std::int32_t: the number of results there are, which is more than the span holds when it is too short");
         ok = false;
     }
     if (draft.Try && (result.Returns.Kind != ApiKind::Bool || outCount != 1))

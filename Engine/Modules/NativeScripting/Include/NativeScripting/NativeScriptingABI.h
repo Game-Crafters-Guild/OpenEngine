@@ -42,7 +42,8 @@ extern "C" {
 // refused at load with a precise diagnostic.
 // Version 2 adds optional post-simulation dispatch and the exclusive ECS
 // system execution contract to the hybrid C++ interface.
-#define GE_USERMODULE_ABI_VERSION 2u
+// Version 3 adds IUserSystem::Order, the order user systems run in.
+#define GE_USERMODULE_ABI_VERSION 3u
 
 // Export attribute for the four required user-DLL entry points. The host resolves
 // them with GetProcAddress / dlsym, so there is no import side.

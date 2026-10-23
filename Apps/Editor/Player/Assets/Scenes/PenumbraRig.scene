@@ -80,7 +80,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
 ; Top face sits exactly at y = 0, which is what makes depthDelta exactly 16 m.
@@ -91,7 +91,7 @@ Transform.scale = (200, 1, 200)
 [entity id="e_caster"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = false
 Name.value = "CasterSlab"
 ; Long in X, thin in Z: the shadow's two long edges run along X and are crossed

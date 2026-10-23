@@ -2485,6 +2485,34 @@ TEST(WindowInputRoutingTests, AClickTheHudTakesIsNotAlsoTheGames)
         << "the release is never consumed, and must leave no button held anywhere";
 }
 
+// A right press on the HUD, then the pointer leaves the window and the release
+// is not reported to it. The leave cancels the press whatever its button, so
+// the next left click on the HUD button is a click.
+TEST(WindowInputRoutingTests, ALeaveDuringARightPressDoesNotEatTheNextClick)
+{
+    RouterFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+
+    HudButtonSurface hud;
+    ASSERT_TRUE(MakeHudButton(hud, f.device.get(), "router_player_hud_right_leave.css"));
+    UsePlayerSurface(f, *hud.host, /*toSurfacePixels=*/1.0f);
+
+    WindowInputRouter::RouteMouseMove(f.config, /*window=*/nullptr, 150.0f, 120.0f);
+    SettleHud(*hud.host);
+    ASSERT_EQ(hud.Ui()->GetHoveredElement(), hud.button) << "the router's move never reached the HUD";
+    WindowInputRouter::RouteMouseButton(f.config, Input::kMouseButton_Right, /*pressed=*/true, 0);
+    WindowInputRouter::RouteCursorEnter(f.config, /*entered=*/false);
+
+    WindowInputRouter::RouteMouseMove(f.config, /*window=*/nullptr, 150.0f, 120.0f);
+    SettleHud(*hud.host);
+    WindowInputRouter::RouteMouseButton(f.config, Input::kMouseButton_Left, /*pressed=*/true, 0);
+    WindowInputRouter::RouteMouseButton(f.config, Input::kMouseButton_Left, /*pressed=*/false, 0);
+    EXPECT_EQ(hud.clicks, 1) << "the right press left the HUD's pressed latch set";
+}
+
 // A click's modifier mask is live platform state and the only report of a
 // modifier held since before the window took focus, so the HUD takes it from
 // the click as chrome does, not only from the key presses it saw.

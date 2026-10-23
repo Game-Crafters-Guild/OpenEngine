@@ -5,6 +5,7 @@
 #include "Logger/FileSink.h"
 #include "Logger/RingBufferSink.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -116,7 +117,7 @@ TEST_F(LoggerAsyncTest, MessageOrdering_SingleThread)
     Log::Info("charlie");
     Log::Flush();
 
-    auto msgs = m_Spy->GetMessages();
+    auto msgs = m_Spy->GetMessages({}).Messages;
     ASSERT_EQ(msgs.size(), 3u);
     EXPECT_NE(msgs[0].Message.find("alpha"), std::string::npos);
     EXPECT_NE(msgs[1].Message.find("bravo"), std::string::npos);
@@ -274,8 +275,8 @@ TEST_F(LoggerAsyncTest, ReinitAfterShutdown)
     Log::Flush();
 
     EXPECT_GE(spy2->GetCount(), 1u);
-    auto msgs = spy2->GetMessages(LogLevel::Trace, 0, "after re-init");
-    EXPECT_EQ(msgs.size(), 1u);
+    const auto msgs = spy2->GetMessages({}).Messages;
+    EXPECT_EQ(std::count_if(msgs.begin(), msgs.end(), [](const auto& m) { return m.Message.find("after re-init") != std::string::npos; }), 1);
 }
 
 TEST_F(LoggerAsyncTest, CriticalBypassesQueue)
@@ -284,8 +285,8 @@ TEST_F(LoggerAsyncTest, CriticalBypassesQueue)
     Log::Critical("immediate");
 
     EXPECT_GE(m_Spy->GetCount(), 1u);
-    auto msgs = m_Spy->GetMessages(LogLevel::Critical, 0, "immediate");
-    EXPECT_EQ(msgs.size(), 1u);
+    const auto msgs = m_Spy->GetMessages({.MinLevel = LogLevel::Critical}).Messages;
+    EXPECT_EQ(std::count_if(msgs.begin(), msgs.end(), [](const auto& m) { return m.Message.find("immediate") != std::string::npos; }), 1);
 }
 
 TEST_F(LoggerAsyncTest, LevelFiltering)
@@ -301,7 +302,7 @@ TEST_F(LoggerAsyncTest, LevelFiltering)
     Log::Flush();
 
     EXPECT_EQ(m_Spy->GetCount(), 3u);
-    auto msgs = m_Spy->GetMessages();
+    auto msgs = m_Spy->GetMessages({}).Messages;
     for (const auto& m : msgs)
     {
         EXPECT_GE(m.Level, LogLevel::Warning);
@@ -314,7 +315,7 @@ TEST_F(LoggerAsyncTest, FormatStringWithMultipleArgs)
     Log::Flush();
 
     ASSERT_EQ(m_Spy->GetCount(), 1u);
-    auto msgs = m_Spy->GetMessages();
+    auto msgs = m_Spy->GetMessages({}).Messages;
     EXPECT_NE(msgs[0].Message.find("values:"), std::string::npos);
     EXPECT_NE(msgs[0].Message.find("hello"), std::string::npos);
 }

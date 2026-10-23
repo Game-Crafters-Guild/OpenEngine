@@ -74,13 +74,14 @@ A parameter, a return value, or a record field must be of a kind in this table. 
 | `Mat4` | `Mathematics::Matrix4x4` | Column-major. |
 | `ColorLinear` | `ColorLinear` | Four floats, linear. |
 | `Entity` | `ECS::EntityHandle` | The packed 32-bit entity id. |
+| `RenderLayerMask` | `Rendering::RenderLayerMask` | The 32-bit word of layers. A parameter or a return value, never a record field. No default. |
 | `StringId` | `StringId` | The 64-bit hash of a name. |
-| `String` | `std::string_view` | In parameters only. UTF-8. |
-| `Span` | `std::span<const T>` | In parameters only. `T` is a value kind or a record. |
+| `String` | `std::string_view` in, `std::string` returned | UTF-8 text. Never an out parameter or a record field. |
+| `Span` | `std::span<const T>` in, `std::span<T>` out | Parameters only. `T` is a value kind or a record. A `std::span<T>` is an out parameter: the function writes its results into it and returns their number as `std::int32_t`. The generators emit a `std::span<T>` of records or entities. |
 | `Record`, `Enum`, `Handle` | a type marked in a script API header | |
 | `Void` | `void` | A return type only. |
 
-A parameter passes in by value or as `const T&`. A `T&` parameter is an out parameter, which the function writes. A pointer parameter (`T*` or `const T*`) is refused. A function has one out parameter at most, and the out parameter comes before every parameter with a default.
+A parameter passes in by value or as `const T&`. A `T&` parameter and a `std::span<T>` parameter are out parameters, which the function writes. A pointer parameter (`T*` or `const T*`) and a span by reference are refused. A function has one out parameter at most, and the out parameter comes before every parameter with a default.
 
 ### Defaults
 
@@ -119,6 +120,8 @@ The scan fails when a marked declaration breaks a rule. It prints each refusal a
 | A record field of a type that is not a kind | Use a kind, or mark the type. |
 | A standard container, such as a `std::vector` parameter | Take `std::span<const T>`, or `std::string_view` for text. |
 | A pointer parameter, a reference return, or a platform-sized integer | Take `T&` for the value the function writes and `const T&` or a span to read, return by value, or use a fixed-width integer. |
+| A returned `std::string_view` | Return `std::string`. A view can outlive the text it views. |
+| A function that takes a `std::span<T>` and returns anything other than `std::int32_t` | Return `std::int32_t`: the number of results there are, which is more than the span holds when it is too short. |
 | A handle alias that is not a generational handle | Alias `StrongHandle<NameTag>`. |
 | A marker in a module header that is not a `*ScriptApi.h`, or in `Engine/Include` or `Engine/ECSModules` | Move the declaration to a module's `Include/<Module>/<Module>ScriptApi.h`. |
 | A marker on a `///` line | Write the marker on its own `//` line. |

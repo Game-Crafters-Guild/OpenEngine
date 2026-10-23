@@ -102,6 +102,11 @@ const Refusal kRefusals[] = {
     {"MatrixInitializer", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 12,
      "the matrix field `matrix` has an initializer the description cannot read. Fix: leave the field without an "
      "initializer (the identity)"},
+    {"TextViewReturn", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,
+     "return type: a returned `std::string_view` can outlive the text it views. Fix: return std::string"},
+    {"SpanCountReturn", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,
+     "a function that writes a span returns the number of results, as std::int32_t. Fix: return std::int32_t: the number "
+     "of results there are, which is more than the span holds when it is too short"},
     {"PointerOut", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,
      "parameter `value`: `float*` is an address. Fix: take T& for the value the function writes"},
     {"FlagsOnStruct", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,
@@ -133,7 +138,7 @@ TEST(ScriptApi, DescribesEveryKindOfTheTableOneFilePerModule)
     EXPECT_EQ(0, exitCode) << err.str();
     EXPECT_EQ(JsonFiles(kFixture / "Expected"), JsonFiles(apiDir));
     EXPECT_NE(std::string::npos,
-              out.str().find("ComponentScanner.api modules=5 functions=11 records=5 enums=1 handles=2 events=1 refused=0"));
+              out.str().find("ComponentScanner.api modules=5 functions=15 records=6 enums=1 handles=2 events=1 refused=0"));
 }
 
 TEST_P(ScriptApiRefusal, NamesTheLineAndTheFixAndWritesNothing)

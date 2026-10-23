@@ -40,6 +40,8 @@ enum class NavigationBakeWait : uint8
     TerrainData = 1,
     // A model a baked mesh renderer shows is still loading; BlockingModel names it.
     Model = 2,
+    // The surface's baked data (BakedData) is still loading.
+    BakedData = 3,
 };
 
 // Why a bake failed, when BakePhase is Failed.
@@ -57,9 +59,12 @@ enum class NavigationBakeFailure : uint8
 };
 
 // A walkable surface for navigation agents, baked from the terrain, static collider shapes and
-// mesh renderers inside its bounds. It bakes when it first appears and again on RequestBake
-// (PathfindingECS/Navigation.h); no physics world is needed, so it bakes in edit mode, in Play and
-// in a game alike.
+// mesh renderers inside its bounds. When it first appears a mesh surface loads its tiles from
+// BakedData if that matches its settings and bounds, and bakes otherwise; it bakes again on
+// RequestBake (PathfindingECS/NavigationScriptApi.h). Once baked, a mesh surface rebakes only the
+// tiles a terrain edit, a carving obstacle or Navigation::MarkDirty touches, a few a frame, each
+// tile serving until its new one replaces it. No physics world is needed, so it bakes in edit mode,
+// in Play and in a game alike.
 struct NavigationSurface
 {
     NavigationSurfaceMode Mode = NavigationSurfaceMode::Mesh;
@@ -85,6 +90,9 @@ struct NavigationSurface
 
     // Grid mode only: the costs and blocked cells painted with the grid brush (.navgrid).
     AssetRef<AssetType::NavigationGrid> AuthoredCells;
+    // Mesh mode only: the baked tiles saved with the scene (.navsurface), written by the editor
+    // when the scene is saved.
+    AssetRef<AssetType::NavigationSurfaceData> BakedData;
 
     // Runtime state below, never saved and never edited. The binding to the NavigationWorld map
     // this component owns is written only through PathfindingECS/NavigationSurfaceRuntime.h;
@@ -103,6 +111,10 @@ struct NavigationSurface
     NavigationBakeWait BakeWait = NavigationBakeWait::TerrainTile;
     // The authored fields differ from the ones the current bake was made with.
     bool SettingsChanged = false;
+    // The map holds the tiles or cells of a completed bake. They serve agents while a rebake runs,
+    // waits or fails; a bake into an empty map (the first, or a new layout or Mode) clears it until
+    // the bake completes.
+    bool MapHoldsBake = false;
     // The mode the current bake was made in: the numbers below count its tiles or cells.
     NavigationSurfaceMode BakedMode = NavigationSurfaceMode::Mesh;
     // Mesh: tiles built and the layout's tile count. Grid: cells.
@@ -111,9 +123,20 @@ struct NavigationSurface
     // Mesh: polygons. Grid: walkable cells.
     uint32 BakedWalkable = 0;
     uint64 BakedBytes = 0;
-    // Counts completed bakes of this surface's map.
-    uint32 BakeVersion = 0;
+    // Mesh: counts the tiles put into the map (by a bake, a load from BakedData or a rebake), so it
+    // changes whenever a tile changes. Grid: counts completed bakes.
+    uint64 BakeVersion = 0;
+    // Mesh: tiles loaded from BakedData whose content (the terrain and the sources under them)
+    // changed since they were baked. They serve as they are until their rebake replaces them.
+    uint32 StaleTiles = 0;
+    // Mesh: tiles waiting to rebake, and tiles rebaking now.
+    uint32 TilesDirty = 0;
+    uint32 TilesBaking = 0;
+    // Mesh: tiles built with Recast since the surface appeared; a surface that loaded all its
+    // tiles from BakedData built none.
+    uint32 TilesBuilt = 0;
     // Waiting: the terrain tile that is not resident. Failed with TileBuild: the surface tile.
+    // Baked with StaleTiles: the first stale tile.
     int32 BlockingTileX = 0;
     int32 BlockingTileZ = 0;
     // Waiting for Model: the model still loading.

@@ -5,10 +5,14 @@
 #include "Probe.script.gen.h"
 
 #include "Core/Engine.h"
+#include "Mathematics/Curve.h"
+#include "Mathematics/Geometry.h"
+#include "Types/Color.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -212,6 +216,162 @@ TEST_F(ScriptBindings, EntityCrossesAsItsPackedId)
     ASSERT_EQ(table.TryNearest(&point, &nearest, &found), GE_Result_Ok);
     EXPECT_EQ(found, 1u);
     EXPECT_EQ(nearest, m_Probe.Nearest.id);
+}
+
+// Text crosses as UTF-8 with a length both ways: ASCII, a multi-byte name and the empty text arrive
+// whole; a short buffer gets what fits and the full length, so the caller asks again; and a call that
+// does not run answers the empty text.
+TEST_F(ScriptBindings, TextRoundTripsAsUtf8WithItsLength)
+{
+    const GE_Probe_Table_v1& table = Table();
+    const std::string_view grun = "Gr\xC3\xBCn \xE6\xA3\xAE"; // 9 bytes: a two-byte and a three-byte character
+    for (const std::string_view text : {std::string_view("Props"), grun, std::string_view()})
+    {
+        char buffer[32] = {};
+        std::int32_t length = -1;
+        ASSERT_EQ(table.Echo(text.data(), static_cast<std::int32_t>(text.size()), buffer, sizeof(buffer), &length), GE_Result_Ok);
+        EXPECT_EQ(m_Probe.LastText, text);
+        ASSERT_EQ(length, static_cast<std::int32_t>(text.size()));
+        EXPECT_EQ(std::string_view(buffer, static_cast<std::size_t>(length)), text);
+    }
+
+    char small[4] = {'x', 'x', 'x', 'x'};
+    std::int32_t length = 0;
+    ASSERT_EQ(table.Echo(grun.data(), static_cast<std::int32_t>(grun.size()), small, 3, &length), GE_Result_Ok);
+    EXPECT_EQ(length, 9) << "the full length, never a silent truncation";
+    EXPECT_EQ(std::string_view(small, 3), grun.substr(0, 3));
+    EXPECT_EQ(small[3], 'x') << "nothing past the capacity is written";
+    ASSERT_EQ(table.Echo(grun.data(), static_cast<std::int32_t>(grun.size()), nullptr, 0, &length), GE_Result_Ok);
+    EXPECT_EQ(length, 9) << "a buffer of 0 asks the length";
+
+    ProbeSystem::Current() = nullptr;
+    length = 5;
+    EXPECT_EQ(table.Echo("Props", 5, small, 4, &length), GE_Result_NotInitialized);
+    EXPECT_EQ(length, 0);
+}
+
+TEST_F(ScriptBindings, TextWithoutItsBytesIsRefusedBeforeTheCall)
+{
+    const GE_Probe_Table_v1& table = Table();
+    const std::uint32_t calls = ProbeSystem::Calls().load();
+    char buffer[8] = {};
+    std::int32_t length = 0;
+
+    EXPECT_EQ(table.Echo(nullptr, 4, buffer, 8, &length), GE_Result_InvalidArg);
+    EXPECT_NE(LastError().find("Probe.Echo: `text` is a null pointer"), std::string::npos) << LastError();
+    EXPECT_EQ(table.Echo("abc", -1, buffer, 8, &length), GE_Result_InvalidArg);
+    EXPECT_NE(LastError().find("Probe.Echo: `textLength` is negative"), std::string::npos) << LastError();
+    EXPECT_EQ(table.Echo("abc", 3, nullptr, 8, &length), GE_Result_InvalidArg);
+    EXPECT_EQ(table.Echo("abc", 3, buffer, -1, &length), GE_Result_InvalidArg);
+    EXPECT_EQ(table.Echo("abc", 3, buffer, 8, nullptr), GE_Result_InvalidArg);
+
+    EXPECT_EQ(ProbeSystem::Calls().load(), calls);
+}
+
+// A span of results gets the results that fit and always the full count: a buffer larger than, equal to
+// and shorter than the results, and a buffer of 0, which asks the count. Nothing past the capacity is
+// written, and a call that does not run answers 0.
+TEST_F(ScriptBindings, SpanOfResultsGetsWhatFitsAndTheFullCount)
+{
+    const GE_Probe_Table_v1& table = Table();
+    m_Probe.Hits = {Hit{{}, 1.0f, {}}, Hit{{}, 2.0f, {}}, Hit{{}, 3.0f, {}}};
+    const Mathematics::Vector3 origin{0.0f, 0.0f, 0.0f};
+    for (const std::int32_t capacity : {5, 3, 2})
+    {
+        Hit buffer[5];
+        for (Hit& hit : buffer)
+            hit.distance = -1.0f;
+        std::int32_t count = -1;
+        ASSERT_EQ(table.ListHits(&origin, buffer, capacity, &count), GE_Result_Ok) << capacity;
+        EXPECT_EQ(count, 3) << "the full count, never a silent truncation; capacity " << capacity;
+        for (std::int32_t i = 0; i < 5; ++i)
+            EXPECT_EQ(buffer[i].distance, i < std::min(capacity, 3) ? static_cast<float>(i + 1) : -1.0f)
+                << "capacity " << capacity << ", element " << i;
+    }
+
+    std::int32_t count = -1;
+    ASSERT_EQ(table.ListHits(&origin, nullptr, 0, &count), GE_Result_Ok);
+    EXPECT_EQ(count, 3) << "a buffer of 0 asks the count";
+
+    ProbeSystem::Current() = nullptr;
+    Hit buffer[1];
+    EXPECT_EQ(table.ListHits(&origin, buffer, 1, &count), GE_Result_NotInitialized);
+    EXPECT_EQ(count, 0);
+}
+
+TEST_F(ScriptBindings, SpanOfResultsWithoutItsBufferIsRefusedBeforeTheCall)
+{
+    const GE_Probe_Table_v1& table = Table();
+    m_Probe.Hits = {Hit{}};
+    const std::uint32_t calls = ProbeSystem::Calls().load();
+    const Mathematics::Vector3 origin{0.0f, 0.0f, 0.0f};
+    Hit buffer[2];
+    std::int32_t count = 0;
+
+    EXPECT_EQ(table.ListHits(&origin, nullptr, 2, &count), GE_Result_InvalidArg);
+    EXPECT_NE(LastError().find("Probe.ListHits: `hits` is a null pointer"), std::string::npos) << LastError();
+    EXPECT_EQ(table.ListHits(&origin, buffer, -1, &count), GE_Result_InvalidArg);
+    EXPECT_NE(LastError().find("Probe.ListHits: `hitsCapacity` is negative"), std::string::npos) << LastError();
+    EXPECT_EQ(table.ListHits(&origin, buffer, 2, nullptr), GE_Result_InvalidArg);
+    EXPECT_NE(LastError().find("Probe.ListHits: `outResult` is a null pointer"), std::string::npos) << LastError();
+
+    EXPECT_EQ(ProbeSystem::Calls().load(), calls);
+}
+
+// A mask crosses as its bits; a call that does not run answers no layer, never layer 0.
+TEST_F(ScriptBindings, RenderLayerMaskCrossesAsItsBits)
+{
+    m_Probe.Layers = Rendering::RenderLayerMask::FromLayer(4);
+    std::uint32_t previous = 7u;
+
+    ASSERT_EQ(Table().SwapLayers(0b1010u, &previous), GE_Result_Ok);
+    EXPECT_EQ(previous, 1u << 4);
+    EXPECT_EQ(m_Probe.Layers.Bits, 0b1010u);
+
+    ProbeSystem::Current() = nullptr;
+    previous = 7u;
+    EXPECT_EQ(Table().SwapLayers(1u, &previous), GE_Result_NotInitialized);
+    EXPECT_EQ(previous, 0u);
+}
+
+// The layouts of the hand-written kinds of Scripting.Bindings that component mirrors hold
+// (ColorLinear.cs, Curve.cs, CurveKey.cs, CurveInterp.cs, CurveTangentMode.cs, BoundingBox.cs).
+// ComponentKindTests (Managed/BindingTests) reads the C# side at the same offsets.
+static_assert(sizeof(GameEngine::ColorLinear) == 16 && offsetof(GameEngine::ColorLinear, r) == 0 &&
+              offsetof(GameEngine::ColorLinear, g) == 4 && offsetof(GameEngine::ColorLinear, b) == 8 &&
+              offsetof(GameEngine::ColorLinear, a) == 12);
+static_assert(sizeof(GameEngine::Math::CurveKey) == 20 && offsetof(GameEngine::Math::CurveKey, Time) == 0 &&
+              offsetof(GameEngine::Math::CurveKey, Value) == 4 && offsetof(GameEngine::Math::CurveKey, InTangent) == 8 &&
+              offsetof(GameEngine::Math::CurveKey, OutTangent) == 12 && offsetof(GameEngine::Math::CurveKey, Interp) == 16 &&
+              offsetof(GameEngine::Math::CurveKey, TangentMode) == 17);
+static_assert(sizeof(GameEngine::Math::Curve) == 644 && offsetof(GameEngine::Math::Curve, KeyCount) == 0 &&
+              offsetof(GameEngine::Math::Curve, Keys) == 4 && sizeof(GameEngine::Math::Curve::Keys) == 640);
+static_assert(static_cast<int>(GameEngine::Math::CurveInterp::Linear) == 0 && static_cast<int>(GameEngine::Math::CurveInterp::Smooth) == 1 &&
+              static_cast<int>(GameEngine::Math::CurveInterp::Step) == 2);
+static_assert(static_cast<int>(GameEngine::Math::CurveTangentMode::Auto) == 0 &&
+              static_cast<int>(GameEngine::Math::CurveTangentMode::Flat) == 1 &&
+              static_cast<int>(GameEngine::Math::CurveTangentMode::Broken) == 2 &&
+              static_cast<int>(GameEngine::Math::CurveTangentMode::Manual) == 3 &&
+              static_cast<int>(GameEngine::Math::CurveTangentMode::Mirrored) == 4);
+static_assert(sizeof(GameEngine::Mathematics::BoundingBox) == 24 && offsetof(GameEngine::Mathematics::BoundingBox, center) == 0 &&
+              offsetof(GameEngine::Mathematics::BoundingBox, halfExtents) == 12);
+
+// A linear color crosses by pointer as its four floats; a call that does not run answers the
+// default color, opaque black.
+TEST_F(ScriptBindings, ColorLinearCrossesAsFourFloats)
+{
+    m_Probe.Tint = ColorLinear(0.25f, 0.5f, 0.75f, 1.0f);
+    const ColorLinear tint(1.0f, 0.0f, 0.5f, 0.25f);
+    ColorLinear previous(9.0f, 9.0f, 9.0f, 9.0f);
+
+    ASSERT_EQ(Table().SwapTint(&tint, &previous), GE_Result_Ok);
+    EXPECT_EQ(previous, ColorLinear(0.25f, 0.5f, 0.75f, 1.0f));
+    EXPECT_EQ(m_Probe.Tint, tint);
+
+    ProbeSystem::Current() = nullptr;
+    previous = ColorLinear(9.0f, 9.0f, 9.0f, 9.0f);
+    EXPECT_EQ(Table().SwapTint(&tint, &previous), GE_Result_NotInitialized);
+    EXPECT_EQ(previous, ColorLinear{});
 }
 
 namespace

@@ -6,6 +6,7 @@
 // TUs reach:
 //   - SettingsPanel::NotifyActivePipelineChanged (RenderPipelineInspector)
 //   - Editor::MatchesCatalogShortcut (SceneViewTransformTool)
+//   - Editor::CatalogShortcutLabel (the Hierarchy's and the folder tree's menu rows)
 //   - Editor::ShouldSuppressEditorShortcutActions (SceneEditorController)
 //   - Editor::ItemResizeGestureBindings, ItemResizeGestureCatalogEntry,
 //     ShortcutBindingsSaved and FormatShortcutBinding (ItemSizeSlider's tooltip)
@@ -24,6 +25,12 @@ namespace GameEngine
         bool MatchesCatalogShortcut(const char*, const char*, int, int)
         {
             return false;
+        }
+
+        // No catalog: menu rows show no key.
+        std::string CatalogShortcutLabel(const char*, const char*)
+        {
+            return {};
         }
 
         bool ShouldSuppressEditorShortcutActions()

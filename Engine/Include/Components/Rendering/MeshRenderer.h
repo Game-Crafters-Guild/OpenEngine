@@ -15,6 +15,29 @@ namespace GameEngine
 namespace Components
 {
 
+/// Which passes draw a mesh. Off: the color passes only, no shadow. On: the color passes and
+/// the shadow passes. ShadowsOnly: the shadow passes only; the mesh is absent from every color
+/// pass (main view, reflections, picking) and still shadows the scene, the way a cheap proxy
+/// casts the shadow of a detailed object another renderer draws.
+enum class ShadowCasting : uint8
+{
+    Off = 0,
+    On = 1,
+    ShadowsOnly = 2,
+};
+
+/// The enumerator's name, which is also its scene value (`MeshRenderer.shadowCasting = ShadowsOnly`).
+constexpr std::string_view ShadowCastingName(ShadowCasting casting)
+{
+    switch (casting)
+    {
+    case ShadowCasting::Off: return "Off";
+    case ShadowCasting::On: return "On";
+    case ShadowCasting::ShadowsOnly: return "ShadowsOnly";
+    }
+    return "On";
+}
+
 struct MeshRenderer
 {
     uint32 meshId = 0;     // Submesh index within the source ModelAsset
@@ -41,7 +64,7 @@ struct MeshRenderer
     Components::ModelRef modelAssetGuid;
     // The views that draw this mesh: a view draws it when their layers intersect.
     Rendering::RenderLayerMask RenderLayers;
-    bool castShadows = true;
+    ShadowCasting shadowCasting = ShadowCasting::On;
     bool receiveShadows = true;
     bool motionVectors = true;
 };

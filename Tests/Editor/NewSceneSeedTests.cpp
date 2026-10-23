@@ -104,7 +104,7 @@ TEST_F(NewSceneSeedTests, HierarchyAndPickerSeedTheSameEntitiesAsStartup)
     const auto expected = SceneEntities(startup);
     const std::map<std::string, bool> authored{
         {"Directional Light", false}, {"Main Camera", false}, {"Mirror Sphere", true},
-        {"Plane", true}, {"Post Process Volume", false}, {"Sky Environment", false}, {"Sphere", true}};
+        {"Ground", true}, {"Post Process Volume", false}, {"Sky Environment", false}, {"Sphere", true}};
     ASSERT_EQ(expected, authored) << "positive control: startup has all three primitives";
 
     m_Controller.RequestNewScene();

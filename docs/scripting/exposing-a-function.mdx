@@ -55,13 +55,57 @@ The function table carries the module's hash. A C# binding built from another de
 | a marked `enum class` | the enum, with the same underlying type | the value |
 | `Mathematics::Vector2`, `Vector3`, `Vector4`, `Quaternion`, `Matrix4x4` | `System.Numerics` `Vector2`, `Vector3`, `Vector4`, `Quaternion`, `Matrix4x4` | a pointer to the bytes, unchanged |
 | `ECS::EntityHandle` | `GameEngine.Entity` | the packed 32-bit entity id |
+| `Rendering::RenderLayerMask` | `GameEngine.Scripting.RenderLayerMask` | the 32-bit word of layers; a call that does not run answers `RenderLayerMask.None` |
+| `std::string_view` in, `std::string` returned | `string` | UTF-8 bytes and their length; see [Text](#text) |
 | a marked `struct` (a record) | a struct with the same field offsets and the same field defaults | a pointer to the bytes |
+| `std::span<T>`, `T` a record or `ECS::EntityHandle` | `Span<T>`, `T` the record or `Entity` | the caller's buffer and its capacity; the function returns the count; see [Many results](#many-results) |
 
 A function's return value and its out parameter (`T&`) cross as a pointer the thunk writes. A parameter with a default becomes an optional C# parameter; a record parameter with the default `{}` becomes `T? name = null`, which takes the record's own defaults. A `bool` function marked `@ge-script-try` with one out parameter is `bool TryX(..., out T)` in C#.
 
 A function whose first parameter, after the context, is an entity is a method of the module's view of an entity in C#, not a static method: `SetLinearVelocity(ECS::World&, ECS::EntityHandle, Vector3)` is `ball.Physics.SetLinearVelocity(v)`. A `Get` and `Set` pair stays two methods, because C# refuses to assign a property of a view that an expression returns.
 
-The generators do not emit a `String`, `Span`, `ColorLinear` or handle kind, an event scoped to a handle, or an event with `@ge-context`. A marked declaration that uses one fails the build.
+The generators do not emit a `std::span<const T>` parameter, a span of results of any other element kind, a `ColorLinear` or handle kind, an event scoped to a handle, or an event with `@ge-context`. A marked declaration that uses one fails the build.
+
+## Text
+
+Text crosses as UTF-8 bytes and a length, never as a NUL-terminated string. Take text as `std::string_view` and return it as `std::string`. The scanner refuses a returned `std::string_view`, because a view can outlive the text it views. Text is never an out parameter or a record field.
+
+- **Text in.** The bytes belong to the caller and are valid for the call only. Copy them before you keep them. A null pointer with a length of 0 is the empty text. A null pointer with a length, or a negative length, is refused before your function runs.
+- **Text out.** The thunk copies your text into a buffer the caller owns. It copies what fits and always reports the full length, so a short buffer is a retry, never a silent truncation (the `CopyTextOut` contract of `Scripting/AbiTextOut.h`). The engine allocates nothing that the caller frees.
+
+In C#, a text parameter is a `string` and a text return value is a `string`. A `null` string throws `ArgumentNullException`. A call that does not run, such as a call before the engine starts, returns the empty string.
+
+What a C# call costs for its text:
+
+| | Cost per call |
+|---|---|
+| A `string` argument | encoded into a 256-byte stack buffer; no allocation. A longer text rents a pooled array. |
+| A `string` return value | one allocation, the string. A text longer than 256 bytes is asked a second time, with a pooled buffer of the length the engine reported. |
+
+## Many results
+
+A function that finds a variable number of results takes a `std::span<T>` and writes them into it. `T` is a marked record or `ECS::EntityHandle`. The function returns the number of results there are, as `std::int32_t`. The scanner refuses a function that takes a `std::span<T>` and returns anything else.
+
+- **The buffer.** The buffer and its capacity belong to the caller, for the call only. The thunk gives your function a span of the capacity, so it cannot write past it. Write the results that fit and return how many there are, also when that is more than the span holds.
+- **The count.** The count is always the full number of results, so a short buffer is a retry, never a silent truncation. A capacity of 0 asks for the count only. A null buffer with a capacity, a negative capacity, and a null count slot are refused before your function runs. A call that does not run returns 0.
+
+In C#, the parameter is a `Span<T>` that the caller sizes, and the method returns the count. The call allocates nothing on the script side: the span is pinned for the call, and a `stackalloc` buffer or an array the script keeps is used as it is. There is one method; a caller that needs every result calls again with a buffer of the count.
+
+```cpp title="PhysicsECS/PhysicsScriptApi.h"
+/// Casts a ray and writes every body it hits within maxDistance into hits, nearest first. Returns the number of
+/// bodies the ray hits.
+// @ge-script @ge-context
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
+                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+                        bool ignoreTriggers = false);
+```
+
+```csharp title="Call it from a script"
+Span<RayHit> hits = stackalloc RayHit[16];
+int count = Physics.RayCastAll(origin, forward, hits, maxDistance: 100f);
+for (int i = 0; i < Math.Min(count, hits.Length); i++)
+    Damage(hits[i].Entity, hits[i].Point);
+```
 
 ## A record
 
@@ -117,7 +161,7 @@ The body keeps the callback and calls its `Invoke` with the payload and its `Use
 |---|---|
 | Ok | returns the answer |
 | The engine or the function's system is not running (input before play) | returns the default of its type; a call that changes something does nothing |
-| An argument is refused (a null pointer, an id of 0) | throws `ArgumentException` |
+| An argument is refused (a null pointer, an id of 0, a negative text length) | throws `ArgumentException` |
 | Called off its thread, or your function threw | throws `EngineCallException` |
 
 The exception carries the engine's text for the failure, which names the function and the fix. Native code reads the same text with `GE_GetLastScriptError`.

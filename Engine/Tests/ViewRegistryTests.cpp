@@ -274,3 +274,79 @@ TEST(ViewRegistryTests, ACameraLessGameViewSleepsAndACameraGivesItsLayers)
     EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), RenderLayerMask::None())
         << "the camera went away: the view sleeps again once its last arm lapses";
 }
+
+namespace
+{
+// A view of `purpose` drawing world `worldId` through its own new camera; returns that camera.
+CameraId AddWorldView(RenderServices& rs, const char* name, ViewPurpose purpose, uint64 worldId)
+{
+    const CameraId camera = rs.Views().AllocateCamera(name);
+    rs.Views().SetViewWorldId(rs.Views().AllocateView(name, camera, purpose), worldId);
+    return camera;
+}
+} // namespace
+
+// The main camera is the first Game view's, else the first Scene view's, whichever was allocated
+// first; a world no view draws has none.
+TEST(ViewRegistryTests, TheMainCameraIsTheGameViewsElseTheSceneViews)
+{
+    RenderServices sceneFirst;
+    AddWorldView(sceneFirst, "scene", ViewPurpose::EditorScene, 7);
+    const CameraId sceneFirstGame = AddWorldView(sceneFirst, "game", ViewPurpose::Game, 7);
+    EXPECT_EQ(sceneFirst.Views().FindMainCameraData(7), sceneFirst.Views().FindCameraData(sceneFirstGame));
+
+    RenderServices gameFirst;
+    const CameraId gameFirstGame = AddWorldView(gameFirst, "game", ViewPurpose::Game, 7);
+    AddWorldView(gameFirst, "scene", ViewPurpose::EditorScene, 7);
+    EXPECT_EQ(gameFirst.Views().FindMainCameraData(7), gameFirst.Views().FindCameraData(gameFirstGame));
+
+    RenderServices gameOnly;
+    const CameraId onlyGame = AddWorldView(gameOnly, "game", ViewPurpose::Game, 7);
+    EXPECT_EQ(gameOnly.Views().FindMainCameraData(7), gameOnly.Views().FindCameraData(onlyGame));
+
+    RenderServices sceneOnly;
+    const CameraId onlyScene = AddWorldView(sceneOnly, "scene", ViewPurpose::EditorScene, 7);
+    EXPECT_EQ(sceneOnly.Views().FindMainCameraData(7), sceneOnly.Views().FindCameraData(onlyScene));
+
+    RenderServices otherWorld;
+    AddWorldView(otherWorld, "game", ViewPurpose::Game, 9);
+    EXPECT_EQ(otherWorld.Views().FindMainCameraData(7), nullptr);
+    RenderServices empty;
+    EXPECT_EQ(empty.Views().FindMainCameraData(7), nullptr);
+}
+
+// The main camera's view draws the world: a view with world id 0 draws every world, and world id 0
+// asks for every world.
+TEST(ViewRegistryTests, TheMainCameraComesFromAViewThatDrawsTheWorld)
+{
+    RenderServices rs;
+    const CameraId other = AddWorldView(rs, "other world", ViewPurpose::Game, 9);
+    const CameraId main = AddWorldView(rs, "world 7", ViewPurpose::Game, 7);
+    const CameraId shared = AddWorldView(rs, "every world", ViewPurpose::Game, 0);
+
+    EXPECT_EQ(rs.Views().FindMainCameraData(7), rs.Views().FindCameraData(main));
+    EXPECT_EQ(rs.Views().FindMainCameraData(9), rs.Views().FindCameraData(other));
+    EXPECT_EQ(rs.Views().FindMainCameraData(3), rs.Views().FindCameraData(shared));
+    EXPECT_EQ(rs.Views().FindMainCameraData(0), rs.Views().FindCameraData(other));
+}
+
+// Previews, utility captures, a view off the active pipeline and a sleeping view are never the main
+// camera, wherever they stand in allocation order; an armed view is.
+TEST(ViewRegistryTests, OnlyAViewTakingPartThroughThePipelineIsTheMainCamera)
+{
+    RenderServices rs;
+    AddWorldView(rs, "preview", ViewPurpose::EditorPreview, 7);
+    AddWorldView(rs, "capture", ViewPurpose::UtilityCapture, 7);
+    const CameraId offPipelineCamera = rs.Views().AllocateCamera("off pipeline");
+    const ViewId offPipeline = rs.Views().AllocateView("off pipeline", offPipelineCamera, ViewPurpose::Game);
+    rs.Views().SetViewActiveRenderPipeline(offPipeline, false);
+    const CameraId sleepingCamera = rs.Views().AllocateCamera("sleeping");
+    const ViewId sleeping =
+        rs.Views().AllocateView("sleeping", sleepingCamera, ViewPurpose::Game, ViewParticipation::OnDemand);
+    const CameraId scene = AddWorldView(rs, "scene", ViewPurpose::EditorScene, 7);
+    EXPECT_EQ(rs.Views().FindMainCameraData(7), rs.Views().FindCameraData(scene));
+
+    rs.Views().RequestViewFrame(sleeping);
+    EXPECT_EQ(rs.Views().FindMainCameraData(7), rs.Views().FindCameraData(sleepingCamera))
+        << "an armed Game view takes part this frame";
+}

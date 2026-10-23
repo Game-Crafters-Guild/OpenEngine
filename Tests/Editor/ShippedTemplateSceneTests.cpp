@@ -9,6 +9,7 @@
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/SceneEntityTag.h"
 #include "ECS/ECSTemplates.h"
+#include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Projects/ProjectCatalog.h"
 #include "Scene/SceneIO.h"
 #include "StagedTestPaths.h"
@@ -146,7 +147,7 @@ TEST_P(ShippedTemplateScene, LoadsTheAuthoredEntitySetWithoutDegradation)
     EXPECT_EQ(world.GetEntityCount(), expected.size());
     EXPECT_EQ(actual, expected);
 
-    // The Basic 3D ground is the engine's grid ground, the material a new scene's ground uses.
+    // The Basic 3D ground is the engine's grid ground, the mesh and material a new scene's ground uses.
     if (std::string_view(GetParam()) == "Basic3D")
     {
         const GUID gridGround =
@@ -159,6 +160,7 @@ TEST_P(ShippedTemplateScene, LoadsTheAuthoredEntitySetWithoutDegradation)
                     return;
                 ++grounds;
                 EXPECT_EQ(renderer.materialAssetGuid.ToGuid(), gridGround);
+                EXPECT_EQ(renderer.modelAssetGuid.ToGuid(), Engine::Renderer::PrimitiveGenerator::GroundGuid());
             });
         EXPECT_EQ(grounds, 1);
     }

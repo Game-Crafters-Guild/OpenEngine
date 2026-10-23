@@ -33,6 +33,7 @@ struct DispatchFixture
     Button* Btn = nullptr;
 
     std::vector<EventId> Events; // kEventMouseDown / kEventMouseUp in arrival order
+    std::vector<int> Buttons;    // the button each of those events carried
     int Clicks = 0;
     int Cancels = 0;
 
@@ -49,8 +50,14 @@ struct DispatchFixture
         auto btnOwned = std::make_unique<Button>();
         Btn = btnOwned.get();
         Btn->SetId("btn");
-        Btn->RegisterEventHandler(kEventMouseDown, [this](UIEvent&) { Events.push_back(kEventMouseDown); });
-        Btn->RegisterEventHandler(kEventMouseUp, [this](UIEvent&) { Events.push_back(kEventMouseUp); });
+        Btn->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e) {
+            Events.push_back(kEventMouseDown);
+            Buttons.push_back(e.Button);
+        });
+        Btn->RegisterEventHandler(kEventMouseUp, [this](UIEvent& e) {
+            Events.push_back(kEventMouseUp);
+            Buttons.push_back(e.Button);
+        });
         Btn->RegisterEventHandler(kEventMouseCancel, [this](UIEvent&) { ++Cancels; });
         Btn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { ++Clicks; });
         root->AddChild(std::move(btnOwned));
@@ -217,6 +224,26 @@ TEST(UIMouseButtonDispatchTests, RepeatedEdgeInTheSameDirectionCarriesNoTransiti
     ASSERT_EQ(f.Events.size(), 2u) << "a duplicate edge must not arm or activate a second time";
     EXPECT_EQ(f.Events[0], kEventMouseDown);
     EXPECT_EQ(f.Events[1], kEventMouseUp);
+    EXPECT_EQ(f.Clicks, 1);
+}
+
+// A press belongs to the button that began it: a second button pressed and
+// released while it is held raises nothing, and the release that ends the press
+// is the first button's and carries it.
+TEST(UIMouseButtonDispatchTests, ASecondButtonDuringAPressRaisesNothing)
+{
+    DispatchFixture f;
+    if (!f.Init())
+        GTEST_SKIP() << "Device init failed";
+
+    f.Ui->OnMouseButton(0, true);
+    f.Ui->OnMouseButton(1, true);
+    f.Ui->OnMouseButton(1, false);
+    EXPECT_TRUE(f.Ui->IsMouseDown()) << "the right release ended the left press";
+    f.Ui->OnMouseButton(0, false);
+
+    EXPECT_EQ(f.Events, (std::vector<EventId>{kEventMouseDown, kEventMouseUp}));
+    EXPECT_EQ(f.Buttons, (std::vector<int>{0, 0}));
     EXPECT_EQ(f.Clicks, 1);
 }
 

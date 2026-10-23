@@ -14,8 +14,10 @@
 #include "Types/StringUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -111,6 +113,13 @@ namespace LightingModel
     inline const StringId kStandardPBR = HashStringId("standardpbr");
     inline const StringId kClearCoat   = HashStringId("clearcoat");
     inline const StringId kShadowOnly  = HashStringId("shadowonly");
+
+    // The one spelling of each model a material names. The material parse gives a name that
+    // matches one of these in any case this spelling, and the LIGHTING_MODEL_* define comes from it.
+    inline constexpr std::string_view kStandardPBRName = "StandardPBR";
+    inline constexpr std::string_view kUnlitName       = "Unlit";
+    inline constexpr std::string_view kShadowOnlyName  = "ShadowOnly";
+    inline constexpr std::array<std::string_view, 3> kNames{kStandardPBRName, kUnlitName, kShadowOnlyName};
 }
 
 // Order-independent, non-cancelling combine of a material's enabled user-keyword

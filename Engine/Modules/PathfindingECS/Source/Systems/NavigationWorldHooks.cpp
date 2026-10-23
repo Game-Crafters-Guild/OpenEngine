@@ -13,18 +13,19 @@
 namespace GameEngine::PathfindingECS
 {
 
-void ClearNavigationAgentReservations(const Components::NavigationAgent& agent)
+void ClearNavigationAgentReservations(Components::NavigationAgentState& state)
 {
-    if (agent.AgentId == 0)
+    if (state.CellReservationOwner == 0)
         return;
 
     auto* navWorld = NavigationService::TryGet();
     if (!navWorld)
         return;
 
-    Pathfinding::NavMapHandle mapHandle{agent.NavMapIndex, agent.NavMapGeneration};
+    Pathfinding::NavMapHandle mapHandle{state.NavMapIndex, state.NavMapGeneration};
     if (auto* gridMap = navWorld->GetGridMap(mapHandle))
-        gridMap->ClearReservationsForAgent(agent.AgentId);
+        gridMap->ClearReservationsForAgent(state.CellReservationOwner);
+    state.CellReservationOwner = 0;
 }
 
 void StampNavigationAgentOccupancy(const Components::NavigationAgent& agent,
@@ -36,13 +37,13 @@ void StampNavigationAgentOccupancy(const Components::NavigationAgent& agent,
     auto* navWorld = NavigationService::TryGet();
     if (!navWorld)
         return;
-    Pathfinding::NavMapHandle mapHandle{agent.NavMapIndex, agent.NavMapGeneration};
+    Pathfinding::NavMapHandle mapHandle{state.NavMapIndex, state.NavMapGeneration};
     auto* gridMap = navWorld->GetGridMap(mapHandle);
     if (!gridMap)
         return;
 
     gridMap->ClearReservationsForAgent(agent.AgentId);
-    state.HasCellReservations = false;
+    state.CellReservationOwner = 0;
 
     uint32 hereX = 0;
     uint32 hereZ = 0;
@@ -63,7 +64,7 @@ void StampNavigationAgentOccupancy(const Components::NavigationAgent& agent,
                                      agent.AgentId, expirationTime, true);
         }
     }
-    state.HasCellReservations = true;
+    state.CellReservationOwner = agent.AgentId;
 }
 
 // The world a surface leaves releases its map only when that world owns it: a copy of the
@@ -74,15 +75,24 @@ void ReleaseNavigationSurfaceInWorld(const ECS::World& world, ECS::EntityHandle 
     ResetNavigationSurfaceMap(world, surface);
 }
 
-void ReleaseNavigationAgentReservations(Components::NavigationAgent& agent)
+// The state names the agent's map, the id its cells are stamped under and its crowd agent, which
+// an arrived agent keeps. A hook runs under the world's lock, so it reads only the component it is
+// given.
+void ReleaseNavigationAgentState(Components::NavigationAgentState& state)
 {
-    ClearNavigationAgentReservations(agent);
+    ClearNavigationAgentReservations(state);
+    // A handle from an earlier crowd names a slot another agent may now hold.
+    auto* navigation = NavigationService::TryGet();
+    if (navigation && state.CrowdAgentHandle >= 0 &&
+        state.CrowdGeneration == navigation->GetCrowdManager().GetGeneration())
+        navigation->GetCrowdManager().RemoveAgent(state.CrowdAgentHandle);
+    state.CrowdAgentHandle = -1;
 }
 
 void RegisterNavigationWorldHooks(ECS::World& world)
 {
     world.RegisterOnRemove<Components::NavigationSurface>(&ReleaseNavigationSurfaceInWorld);
-    world.RegisterOnRemove<Components::NavigationAgent>(&ReleaseNavigationAgentReservations);
+    world.RegisterOnRemove<Components::NavigationAgentState>(&ReleaseNavigationAgentState);
 }
 
 } // namespace GameEngine::PathfindingECS

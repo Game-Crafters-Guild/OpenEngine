@@ -174,11 +174,19 @@ static void ArgbToLightColor(uint32_t argb, float (&out)[3])
     out[2] = (argb & 0xFF) / 255.0f;
 }
 
-static std::string FormatRgb(const float (&c)[3])
+static void RefreshLightColorRow(ECS::World* world, ECS::EntityHandle entity,
+                                const UIElement::WeakRef<UIElement>& swatchRef,
+                                const UIElement::WeakRef<Label>& rgbLabelRef)
 {
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f)", c[0], c[1], c[2]);
-    return buf;
+    UIElement* swatch = swatchRef.Get();
+    Label* rgbLabel = rgbLabelRef.Get();
+    if (!swatch || !rgbLabel)
+        return;
+    const auto* light = world->GetComponent<Components::Light>(entity);
+    if (!light)
+        return;
+    InspectorUI::StyleColorSwatch(swatch, LightColorToArgb(light->Color));
+    rgbLabel->SetText(InspectorUI::FormatColorRgb(light->Color[0], light->Color[1], light->Color[2]));
 }
 
 // Linear RGB [0,1] -> sRGB-encoded ARGB bytes (0xFFRRGGBB).
@@ -751,11 +759,18 @@ void RegisterLightInspector()
 
             auto rgbLabel = std::make_unique<Label>();
             rgbLabel->AddClass("inspector-text");
-            rgbLabel->SetText(FormatRgb(light->Color));
+            rgbLabel->SetText(InspectorUI::FormatColorRgb(light->Color[0], light->Color[1], light->Color[2]));
             if (!colorDrivenBySky)
                 rgbLabel->Overrides().Set(Style::Cursor, CursorStyle::Pointer);
             Label* rgbLabelRaw = rgbLabel.get();
             fieldContainer->AddChild(std::move(rgbLabel));
+
+            // The picker's callbacks outlive an inspector rebuild: resolve the row through
+            // weak refs instead of holding the freed widgets.
+            auto updateUI = [w, e, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                             rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw)]() {
+                RefreshLightColorRow(w, e, swatchRef, rgbLabelRef);
+            };
 
             // Read-only while a sky drives the light: an edit here would be overwritten on the next
             // frame, so the row says who owns it instead of accepting one.
@@ -771,11 +786,7 @@ void RegisterLightInspector()
             else
             {
 
-            // The picker's callbacks outlive an inspector rebuild: resolve the row through
-            // weak refs instead of holding the freed widgets.
-            auto clickHandler = [w, e, n, undo, openPicker,
-                                 swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                                 rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw)](UIEvent& ev) {
+            auto clickHandler = [w, e, n, undo, openPicker, updateUI](UIEvent& ev) {
                 if (ev.Button != 0)
                     return;
                 ev.Stop();
@@ -797,15 +808,6 @@ void RegisterLightInspector()
                     auto target = MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color");
                     *edit = undo->BeginInteractiveEdit("Change Light Color", std::move(target));
                 }
-
-                auto updateUI = [swatchRef, rgbLabelRef, w, e]() {
-                    auto* c = w->GetComponent<Components::Light>(e);
-                    UIElement* swatch = swatchRef.Get();
-                    Label* rgbLabel = rgbLabelRef.Get();
-                    if (!c || !swatch || !rgbLabel) return;
-                    InspectorUI::StyleColorSwatch(swatch, LightColorToArgb(c->Color));
-                    rgbLabel->SetText(FormatRgb(c->Color));
-                };
 
                 ColorPickerCallbacks cbs;
                 cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
@@ -858,7 +860,7 @@ void RegisterLightInspector()
 
             // Double-click on the "Color" label resets to white
             auto lastColorClickTime = std::make_shared<std::chrono::steady_clock::time_point>();
-            colorLabel->RegisterEventHandler(kEventMouseDown, [w, e, n, undo, lastColorClickTime, colorDrivenBySky](UIEvent& ev) {
+            colorLabel->RegisterEventHandler(kEventMouseDown, [w, e, n, undo, updateUI, lastColorClickTime, colorDrivenBySky](UIEvent& ev) {
                 if (ev.Button != 0 || colorDrivenBySky)
                     return;
                 auto now = std::chrono::steady_clock::now();
@@ -866,9 +868,13 @@ void RegisterLightInspector()
                 if (elapsed > std::chrono::milliseconds::zero() && elapsed < GameEngine::Platform::GetDoubleClickInterval())
                 {
                     ev.Stop();
-                    constexpr float kDefaultColor[3] = {1.0f, 1.0f, 1.0f};
                     CommitComponentWithUndo<Components::Light>(w, e, n, undo, "Reset Light Color",
-                        [&](Components::Light& u) { u.Color[0] = kDefaultColor[0]; u.Color[1] = kDefaultColor[1]; u.Color[2] = kDefaultColor[2]; });
+                        [](Components::Light& u)
+                        {
+                            constexpr float kWhiteChannel = 1.0f;
+                            u.Color[0] = kWhiteChannel; u.Color[1] = kWhiteChannel; u.Color[2] = kWhiteChannel;
+                        });
+                    updateUI();
                     *lastColorClickTime = std::chrono::steady_clock::time_point{};
                     return;
                 }

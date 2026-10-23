@@ -135,6 +135,11 @@ struct ViewDesc
     ViewParticipation participation = ViewParticipation::Always;
     uint32 participationFrames = 0;
 
+    // Whether the view's passes, its own shadow passes included, leave out what the
+    // Scene View eye hides (kInstanceFlagEditorHidden): the editor Scene View only.
+    // Every other view keeps the instance.
+    bool DropsEditorHidden() const { return purpose == ViewPurpose::EditorScene; }
+
     // Whether the view takes part in this frame: always for an Always view, while armed for an
     // OnDemand one. A view that takes part runs its pipeline even when its layers are None.
     bool Participates() const

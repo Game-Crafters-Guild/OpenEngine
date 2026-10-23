@@ -268,7 +268,7 @@ void ModelThumbnailHandler::DisablePreviewShadowing(RenderLane& lane)
 
         if (auto* mesh = thumbWorld.GetComponentForWrite<Components::MeshRenderer>(entity))
         {
-            mesh->castShadows = false;
+            mesh->shadowCasting = Components::ShadowCasting::Off;
             mesh->receiveShadows = false;
         }
         if (auto* skinned = thumbWorld.GetComponentForWrite<Components::SkinnedMeshRenderer>(entity))
@@ -1187,7 +1187,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
             Engine::Renderer::PrimitiveGenerator::MakePrimitiveMeshRenderer(
                 m_RenderServices, shapeGuid, materialGuid);
         mr.RenderLayers = Rendering::RenderLayerMask::Default();
-        mr.castShadows = false;
+        mr.shadowCasting = Components::ShadowCasting::Off;
         mr.receiveShadows = false;
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, mr);
         auto localBounds = Engine::Renderer::PrimitiveGenerator::MakePrimitiveLocalBounds(m_RenderServices, shapeGuid);

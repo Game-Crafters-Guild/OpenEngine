@@ -89,10 +89,12 @@ public:
     // outSampledCascades (optional): the RG imports of every dynamic sim cascade
     // the command binds, for the consuming pass's declared sampled reads. Points
     // into contributor scratch — consume before the next build for this view.
+    // `passKeywords` are the keywords of the pass the surface draws in.
     bool BuildSurfaceCommandForView(Engine::Renderer::RenderServices& rs,
                                     Rendering::RenderGraph::RGFrame& frame,
                                     ::GameEngine::Rendering::ViewId viewId,
                                     uint32 frameIndex,
+                                    Rendering::MaterialKeyword passKeywords,
                                     Engine::Renderer::DrawCommand& outCommand,
                                     std::span<const Rendering::RenderGraph::RGTexture>*
                                         outSampledCascades = nullptr);

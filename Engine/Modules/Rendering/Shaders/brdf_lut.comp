@@ -1,11 +1,18 @@
 #version 450
 
-// Split-sum BRDF integration LUT generator (Unreal-style)
-// Outputs RG16F where:
-//   R = scale term (Fresnel/F90 term dependent)
-//   G = bias term
-// Coordinates: x = NdotV in [0,1], y = Roughness in [0,1]
-// Reference: Epic/Unreal implementation and common PBR literature
+// The split-sum BRDF table: the directional albedo of the GGX specular lobe for an
+// environment of unit radiance, split into a scale and a bias on F0 so that
+//   integral of f(V, L) * NdotL over the hemisphere = F0 * scale + bias.
+// Texel (x, y) holds that pair for NdotV = x / (size - 1) and perceptual roughness
+// y / (size - 1); R = scale, G = bias.
+//
+// The integral is estimated with GGX importance-sampled half vectors. A sample's
+// pdf over L is D * NdotH / (4 * VdotH), so each sample weighs
+//   G(NdotV, NdotL) * VdotH / (NdotH * NdotV),
+// split by the Schlick factor Fc = (1 - VdotH)^5 into scale (1 - Fc) and bias (Fc).
+// The normal is +Z and V lies in the XZ plane, so NdotV, the view's cosine, is what
+// the geometry term and the denominator read. G is Schlick-Smith with the
+// image-based constant k = a / 2, where a = roughness^2 is the GGX alpha.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -52,17 +59,23 @@ vec3 ImportanceSampleGGX(vec2 Xi, float roughness, vec3 N) {
     return normalize(T * H.x + B * H.y + N * H.z);
 }
 
-float GeometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0; // UE4: k = (alpha + 1)^2 / 8
-    float denom = NdotV * (1.0 - k) + k;
-    return NdotV / denom;
+// Schlick-Smith masking for one direction, image-based constant k = a / 2 with a = roughness^2.
+float GeometrySchlickGGX(float NdotX, float roughness) {
+    float a = roughness * roughness;
+    float k = a / 2.0;
+    float denom = NdotX * (1.0 - k) + k;
+    return NdotX / denom;
 }
 
-float GeometrySmith(float NdotV, float NdotL, float roughness) {
-    float ggx1 = GeometrySchlickGGX(NdotV, roughness);
-    float ggx2 = GeometrySchlickGGX(NdotL, roughness);
-    return ggx1 * ggx2;
+// The view's masking divided by the view's cosine, G1(NdotV) / NdotV = 1 / (NdotV * (1 - k) + k).
+// The quotient form reads 0 / 0 at NdotV = 0; this form is finite there, so the first column
+// of the table holds the grazing limit. The 1e-4 floor is for the corner at roughness 0 and
+// NdotV 0, where k is 0: float rounding leaves VdotH about 3e-4 instead of 0, and a smaller
+// floor multiplies it into a scale + bias far above 1.
+float ViewMaskingOverCosine(float NdotV, float roughness) {
+    float a = roughness * roughness;
+    float k = a / 2.0;
+    return 1.0 / max(NdotV * (1.0 - k) + k, 1e-4);
 }
 
 // ----------------------------------------------------------------------------
@@ -88,8 +101,9 @@ vec2 IntegrateBRDF(float NdotV, float roughness) {
         float VdotH = max(dot(V, H), 0.0);
 
         if (NdotL > 0.0) {
-            float G = GeometrySmith(N.z, NdotL, roughness);
-            float G_Vis = (G * VdotH) / max(NdotH * N.z, 1e-4);
+            // G(NdotV, NdotL) * VdotH / (NdotH * NdotV), with the view's cosine cancelled.
+            float G_Vis = GeometrySchlickGGX(NdotL, roughness) * ViewMaskingOverCosine(NdotV, roughness) *
+                          VdotH / max(NdotH, 1e-4);
             float Fc = pow(1.0 - VdotH, 5.0);
 
             A += (1.0 - Fc) * G_Vis;

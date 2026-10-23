@@ -70,6 +70,10 @@ struct NavigationStaticGeometry
 
     // Appends the triangles of every item whose bounds touch the XZ rectangle to `out`.
     void AppendOverlapping(float32 minX, float32 minZ, float32 maxX, float32 maxZ, NavigationTriangles& out) const;
+    // A hash of the triangles of every item whose bounds touch the XZ rectangle, the same whatever
+    // order the items were gathered in: each item's vertex positions are hashed in its own order,
+    // then the item hashes are sorted and hashed together.
+    uint64 HashOverlapping(float32 minX, float32 minZ, float32 maxX, float32 maxZ) const;
 };
 
 NavigationStaticGeometry GatherNavigationStaticGeometry(ECS::World& world);

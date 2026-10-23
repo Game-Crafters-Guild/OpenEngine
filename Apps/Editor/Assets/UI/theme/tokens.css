@@ -9,6 +9,8 @@
   --ui_color_bg_scrollbar_thumb: #383838;
 
   --ui_color_bg_hover: #2A2A2A;
+  /* The fill of an inspector value field, one line or several. */
+  --ui_color_bg_field: #202020;
   --ui_color_bg_hover_alt: #242424;
   --ui_color_bg_item_hover: #2E2E2E;
   --ui_color_bg_selected: #333333;
@@ -88,6 +90,9 @@
   /* Context menus only: their disabled rows read against the lighter menu
      surface at full opacity, so they take a step brighter than the global. */
   --ui_color_menu_text_disabled: #7A7A7A;
+  /* Context menus only: a row's key (F2, Ctrl+D), a step under the row's resting
+     text and still at least 4.5:1 over its glyph cores on the menu plate. */
+  --ui_color_menu_shortcut_text: #B0B0B0;
   /* Resting text of a .dropdown-item row — shared by dropdown popups and
      context menus, which both build rows from that class. Hover and selected
      rows use --ui_color_text_bright, disabled rows --ui_color_text_disabled. */
@@ -155,8 +160,9 @@
      inspector notice, controls/InspectorNotice/InspectorNotice.css). */
   --ui_color_warning_text: #e0b050;
   --ui_color_warning_background: rgba(215, 161, 59, 0.12);
-  /* Text that says something did not happen (an action refused or failed): the badge's red
-     lightened to read as 12 px text on a panel (5.4:1 on #272727). */
+  /* Text, or a field's edge, that says something did not happen (an action or a typed value
+     refused, or a failure): the badge's red lightened to read as 12 px text on a panel (5.4:1
+     on #272727). */
   --ui_color_error_text: #FF6B6B;
   /* The neutral edge of a control in its mixed state (the selected objects disagree). */
   --ui_color_mixed_indicator: #888888;

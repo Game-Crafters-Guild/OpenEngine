@@ -1,7 +1,8 @@
 #pragma once
 
 // AbiTextOut.h - The copy-what-fits text-out contract of the scripting ABI, shared by
-// GE_UIElement_GetValueText, GE_UIElement_GetDropdownSelectedLabel and GE_Model_GetExtras.
+// GE_UIElement_GetValueText, GE_UIElement_GetDropdownSelectedLabel, GE_Model_GetExtras and every
+// generated script API thunk that returns text (ScriptThunks.h).
 // Two older exports keep contracts of their own: GE_Platform_* (PlatformServicesABI.cpp) accepts a null
 // buffer with a positive size, and GE_ECSABI_GetName NUL-terminates what it copies.
 

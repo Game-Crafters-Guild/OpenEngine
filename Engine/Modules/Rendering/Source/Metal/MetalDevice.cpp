@@ -124,6 +124,8 @@ bool MetalDevice::Initialize(const DeviceDesc& desc)
     // MTLBuffer::gpuAddress + per-encoder useResource residency (see
     // DeclareDeviceAddressResidency) back the engine's BDA contract.
     m_Capabilities.supportsBufferDeviceAddress = true;
+    // Each colour attachment of a Metal pipeline carries its own blend and write mask.
+    m_Capabilities.supportsIndependentBlend = true;
     // Mesh shaders need Metal 3 + an Apple-family-7 GPU (M1/A14 and later);
     // both Apple7 and Metal3 capability imply the drawMeshThreadgroups API.
     m_Capabilities.supportsMeshShaders =

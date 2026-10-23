@@ -1,0 +1,23 @@
+<UIElement class="day-cycle-window-root">
+  <UIElement class="day-cycle-toolbar">
+    <UIElement class="day-cycle-toolbar-group">
+      <Label class="day-cycle-toolbar-label" text="Profile" />
+      <Label id="DayCycleProfileName" class="day-cycle-profile-name" />
+    </UIElement>
+    <Label id="DayCycleVolume" class="day-cycle-volume" />
+    <UIElement class="day-cycle-toolbar-group">
+      <Label class="day-cycle-toolbar-label" text="Axis" />
+      <UIElement id="DayCycleAxisHost" class="day-cycle-host" />
+    </UIElement>
+    <UIElement id="DayCycleSaveHost" class="day-cycle-host" />
+    <Button id="DayCyclePresetsButton" class="day-cycle-presets-button" text="Presets" />
+  </UIElement>
+  <UIElement id="DayCyclePresetsHost" class="day-cycle-host hidden" />
+  <UIElement class="day-cycle-scrub">
+    <Label id="DayCycleScrubLabel" class="day-cycle-toolbar-label" text="Scrub" />
+    <Label id="DayCycleScrubReadout" class="day-cycle-scrub-readout" />
+  </UIElement>
+  <Label id="DayCycleNotice" class="day-cycle-notice" />
+  <Label id="DayCycleDuskCaption" class="day-cycle-caption" text="The hours under the degrees are this scene's dusk; dawn mirrors them." />
+  <ScrollView id="DayCycleTracksScroll" class="day-cycle-scroll" />
+</UIElement>

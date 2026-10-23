@@ -84,18 +84,17 @@ vec3 OceanRefractionColor(vec2 uv, float referenceDepth)
 #endif
 }
 
-vec3 OceanApplyIblReflection(vec3 fallbackSky, vec3 reflectionDir, float roughness)
+// The share of the reflected sky that the environment supplies, 0..1. Env.iblIntensity fades it
+// toward the procedural sky, which stands in where no environment source has content (the engine
+// sets the intensity to 0 there). The forward adapter's environment term evaluates the
+// environment's radiance for this share (OceanSurface writes it as environmentReflectionWeight);
+// without the IBL keyword the procedural sky is the whole reflection.
+float OceanEnvironmentReflectionShare()
 {
 #ifdef GE_IBL_ENABLED
-    float iblBlend = clamp(Env.iblIntensity, 0.0, 1.0);
-    float lod = clamp(roughness, 0.0, 1.0) * Env.prefilterMaxMip;
-    // Deliberately sample the lossless environment directly. The ocean owns its
-    // horizon/self-occlusion response and must not inherit terrestrial IBL ground
-    // darkening from GE_SampleEnvironmentPrefilter.
-    vec3 iblSky = textureLod(ge_prefilterCube, normalize(reflectionDir), lod).rgb * Env.iblIntensity;
-    return mix(fallbackSky, iblSky, iblBlend);
+    return clamp(Env.iblIntensity, 0.0, 1.0);
 #else
-    return fallbackSky;
+    return 0.0;
 #endif
 }
 
@@ -448,7 +447,7 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     float viewUp = abs(V.y);
     vec3 scatter = mix(uDiffuseGrazing.rgb, uDiffuse.rgb, viewUp);
     // Directional cascaded-shadow term: terrain/objects between the sun and the
-    // water darken the diffuse scatter (and the sun glitter below), matching the
+    // water darken the diffuse scatter, matching the
     // reference which samples the sun's shadow map onto the surface. Guarded by
     // HAS_SHADOWS (the ocean material requests the Shadows keyword); the global
     // ge_ReceiveShadows honors the per-instance receiveShadows toggle. Use the
@@ -498,27 +497,30 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
              * uSubSurfaceColour.rgb * mix(vec3(1.0), sunTint, 0.5)
              * uSubsurfaceStrength * (1.0 - v * v) * fold;
 
-    // --- Procedural sky dome reflection (no IBL) ---
+    // --- Reflected environment: the environment, the procedural sky dome where it is faded out ---
     // Reflected sky steered relative to the sun: blend SkyBase toward AwayFromSun
     // by the away-from-sun weight, then toward TowardsSun by towards^Directionality.
     vec3 R = reflect(-V, Nreflect);
     float sunUp = max(dot(R, sunDir), 0.0);
     float away = clamp(1.0 - sunUp, 0.0, 1.0);
     float towards = pow(sunUp, max(uSkyDirectionality, 1e-3));
-    vec3 sky = mix(mix(uSkyBase.rgb, uSkyAwayFromSun.rgb, away), uSkyTowardsSun.rgb, towards);
-    sky = OceanApplyIblReflection(sky, R, max(uRoughness, 0.02));
+    vec3 proceduralSky = mix(mix(uSkyBase.rgb, uSkyAwayFromSun.rgb, away), uSkyTowardsSun.rgb, towards);
+    float environmentShare = OceanEnvironmentReflectionShare();
 
     // Planar reflection: when a mirror-camera capture was rendered + bound this
     // frame, sample it at the fragment's screen UV (the mirror shares the main
     // projection, so the capture aligns to screen space — the reference's
     // _ReflectionTex). Distort the lookup by the surface normal's horizontal
     // component so ripples bend the reflection. The capture holds re-rendered OPAQUE
-    // geometry only; its alpha is coverage, so blend it OVER the procedural sky dome
-    // (which fills the sky/background the inactive reflection view never drew).
-    // Inert (gate 0) until the planar capture pass runs, leaving the sky dome as the
-    // sole reflection. When viewed from below, the same planar mirror gives the
-    // underside something real to reflect instead of only the procedural sky dome.
-    vec3 planarMirrorScene = sky;
+    // geometry only; its alpha is coverage, so it covers the reflected environment
+    // (the environment term's share and the procedural sky dome where the environment
+    // is faded out) by that coverage, and the environment fills the sky the reflection
+    // view never drew. Inert (gate 0) until the planar capture pass runs: the reflection
+    // is then the environment term plus the procedural sky dome where the environment is
+    // faded out. When viewed from below, the same planar mirror gives the underside
+    // something real to reflect.
+    vec3 planarRadiance = vec3(0.0);
+    float planarWeight = 0.0;
 #if !defined(GE_COMPAT_PROFILE)
     if (uPlanarReflectionAvailable != 0u)
     {
@@ -529,15 +531,19 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         vec2 reflBase = vec2(sIn.screenUV.x, 1.0 - sIn.screenUV.y);
         vec2 reflUV = clamp(reflBase + Nmacro.xz * 0.05, vec2(0.0), vec2(1.0));
         vec4 planar = texture(uOceanReflection, reflUV);
-        // Strength <= 1 blends sky -> capture as before. Strength > 1 over-drives
-        // the blend so the planar capture can be pushed brighter than the sky
-        // (intensity up to 3); clamp >= 0 so the extrapolation never goes negative
-        // where the capture is darker than the procedural sky.
-        float planarWeight = clamp(planar.a * uPlanarReflectionStrength, 0.0, max(uPlanarReflectionStrength, 1.0));
-        planarMirrorScene = max(mix(sky, planar.rgb, planarWeight), vec3(0.0));
-        sky = planarMirrorScene;
+        // Strength <= 1 blends the reflected environment toward the capture by its coverage.
+        // Strength > 1 brightens the captured objects (up to 3 times), and the environment does
+        // not show through them.
+        planarRadiance = planar.rgb;
+        planarWeight = clamp(planar.a * uPlanarReflectionStrength, 0.0, max(uPlanarReflectionStrength, 1.0));
     }
 #endif // GE_COMPAT_PROFILE
+    // Per unit of reflection weight: the share the environment term evaluates, and the reflected
+    // radiance this surface emits itself (the planar capture and the procedural sky).
+    float skyShare = max(1.0 - planarWeight, 0.0);
+    float environmentReflection = skyShare * environmentShare;
+    vec3 emittedSky = skyShare * (1.0 - environmentShare) * proceduralSky + planarWeight * planarRadiance;
+    float emittedSkyWeight = skyShare * (1.0 - environmentShare) + planarWeight;
 
     // IOR-driven Schlick Fresnel: base reflectance from the air/water boundary.
     float iorRatio = (uIorAir - uIorWater) / (uIorAir + uIorWater);
@@ -608,6 +614,15 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         vec3 sceneColour = (uRefractionFlags.y != 0u ? OceanRefractionColor(grabUV, sceneRaw)
                                                      : texture(uOceanSceneColor, grabUV).rgb) /
                            GE_PreExposure();
+#ifdef GE_FORWARD_FOG
+        // What the water shows from above is fogged once, by this surface's distance: the grab
+        // holds the seabed with the fog of its own distance, which comes off here, and the forward
+        // adapter fogs the whole water colour. The sky (raw depth 0) carries the sky pass's fill and
+        // reads as deep water.
+        if (underBelow == 0.0 && sceneRaw > 0.0)
+            sceneColour = GE_RemoveForwardFog(sceneColour, GE_WorldPositionFromRaw(sceneRaw, grabUV),
+                                              grabUV);
+#endif
         // Underwater caustics: refracted-sunlight focusing modulates whatever the
         // water refracts, before the depth fog blends it toward the water body.
         // Driven by the path length to the seabed (waterDist) for the focal blur.
@@ -640,7 +655,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 
     // Sky reflection blended in by Fresnel (Specular caps it so the water reads
     // through on near-normal faces; ReflectionStrength dials the whole reflection).
-    body = mix(body, sky, reflectionWeight);
+    // The body keeps the reflection this surface emits; the environment's share is
+    // published below for the environment term.
+    body = body * (1.0 - reflectionWeight) + emittedSky * reflectionWeight;
 
     // --- Foam (reference whitecaps) ---
     // Coverage comes from the persistent foam simulation when it is active (foam
@@ -819,39 +836,6 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         // occluded underneath it.
         albedoCoverage = clamp(max(foam, max(albedoPaint.a, bubbleLayer * 0.35)), 0.0, 1.0);
     }
-    // --- Directional-light glitter: crisp specular spike toward the sun ---
-    // FallOff sets the lobe tightness (sharper on calm/glassy faces, broader on
-    // foam); Boost scales the spike. Roughness widens the lobe like a microfacet
-    // surface would.
-    // Filter the sharp lobe by the normal variation within this pixel. Preserve
-    // its approximate integrated energy while widening it, rather than turning
-    // unresolved ripple normals into bright single-pixel flashes.
-    // The analytic surface keeps an unfiltered lobe; its world-locked
-    // normal/detail path handles stability.
-    // Sun glitter is direct sunlight off the surface, so shadowed water shows none.
-    vec3 glitter;
-    if (detailedSurface)
-    {
-        vec3 normalDx = dFdx(N), normalDy = dFdy(N);
-        float normalVariance = 0.5 * (dot(normalDx, normalDx) + dot(normalDy, normalDy));
-        float glintFall = max(mix(uDirectionalLightFallOff, 60.0,
-                                 clamp(foam + uRoughness, 0.0, 1.0)), 1.0);
-        float filteredFall = max(glintFall / (1.0 + 2.0 * glintFall * normalVariance), 1.0);
-        float glint = pow(max(dot(R, sunDir), 0.0), filteredFall) *
-                      (filteredFall + 1.0) / (glintFall + 1.0);
-        glitter = sunCol * uDirectionalLightColor.rgb * glint * uDirectionalLightBoost * (1.0 - foam) *
-                  accumulatedShadow.x;
-    }
-    else
-    {
-        float glintAA = 1.0;
-        float glintFall = mix(uDirectionalLightFallOff, 60.0, foam + uRoughness);
-        glintFall = mix(40.0, glintFall, glintAA);
-        float glint = pow(max(dot(R, sunDir), 0.0), max(glintFall, 1.0));
-        glitter = sunCol * uDirectionalLightColor.rgb * glint * uDirectionalLightBoost
-                * (1.0 - foam) * glintAA * accumulatedShadow.x;
-    }
-
     o.baseColor = baseColor;
     // Output the topside normal; the forward adapter flips it for back faces
     // (two-sided underwater) so PBR lighting faces the viewer. N above is the
@@ -864,12 +848,26 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     o.roughness = clamp(mix(uRoughness, texturedFoam ? uFoamRoughness : 0.5, foam), 0.0, 1.0);
     o.opacity   = 1.0;
     o.ao        = 1.0;
+    // The water's reflection is its own Fresnel weight, not the standard lobe: the forward
+    // adapter's standard environment lobe covers only the foam and paint on top. The open water
+    // publishes its reflection instead: the weight of its environment share, which the environment
+    // term evaluates with the scene's reflection sources, and the reflection it emits itself, so
+    // screen-space reflections replace all of it.
+    o.environmentSpecularCoverage = albedoCoverage;
+    float openWater = 1.0 - albedoCoverage;
+    o.environmentReflectionWeight = vec3(reflectionWeight * environmentReflection * openWater);
+    o.emittedReflection = vec4(emittedSky, emittedSkyWeight) * (reflectionWeight * openWater);
+    // The water reflects the sun and every other light through the forward adapter's standard
+    // lobe: GGX at the roughness above, with the air/water F0 (0.02 at the default indices) that
+    // the environment reflection's Fresnel uses. Foam is water, and paint rides on it. The
+    // reflectance of a boundary is the same from either side, so the ratio takes the larger index
+    // over the smaller: an IorAir above IorWater keeps the F0 of the Fresnel term.
+    o.specularIor = max(uIorWater, uIorAir) / max(min(uIorWater, uIorAir), 1.0);
 
     // The complete radiometric water body (ambient-lit scatter + subsurface +
-    // refraction + Fresnel sky/planar reflection) plus the sun glitter, occluded
-    // where foam/paint reflectance covers the surface. The glitter stays raw
-    // sun radiance: it is a mirror spike, and real sun glints ARE display-white.
-    o.emissive = (body + glitter) * (1.0 - albedoCoverage);
+    // refraction + Fresnel sky/planar reflection), occluded where foam/paint
+    // reflectance covers the surface. The sun is not in it: the standard lobe reflects it.
+    o.emissive = body * (1.0 - albedoCoverage);
 
     // Subsurface from below: looking up at the underside, sunlight filters down
     // through the water and lights the surface from the air side, so the wetted

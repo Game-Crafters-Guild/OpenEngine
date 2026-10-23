@@ -3,7 +3,7 @@
 
 #include "Engine/Build/GameConfig.h"
 #include "Engine/Rendering/RenderLayerNames.h"
-#include "Engine/Rendering/RenderLayers.h"
+#include "Rendering/RenderLayersScriptApi.h"
 
 #include <gtest/gtest.h>
 
@@ -145,20 +145,23 @@ TEST_F(RenderLayerNamesTest, TheReadsAnswerFromTheTableAndReturnCopies)
     ASSERT_EQ(names.Set(3, "Props"), "");
     gr::SetRenderLayerNames(names);
 
-    EXPECT_EQ(gr::FindRenderLayer("Props"), 3u);
-    EXPECT_EQ(gr::FindRenderLayer("Default"), 0u);
-    EXPECT_EQ(gr::FindRenderLayer("Layer 9"), 9u);
-    EXPECT_FALSE(gr::FindRenderLayer("props").has_value()) << "the match is case-sensitive";
-    EXPECT_FALSE(gr::FindRenderLayer("Missing").has_value()) << "an unknown name is no layer, never layer 0";
+    EXPECT_EQ(gr::Script::Find("Props"), gr::RenderLayerMask::FromLayer(3));
+    EXPECT_EQ(gr::Script::Find("Default"), gr::RenderLayerMask::FromLayer(0));
+    EXPECT_EQ(gr::Script::Find("Layer 9"), gr::RenderLayerMask::FromLayer(9));
+    EXPECT_EQ(gr::Script::Find("props"), gr::RenderLayerMask::None()) << "the match is case-sensitive";
+    EXPECT_EQ(gr::Script::Find("Missing"), gr::RenderLayerMask::None()) << "an unknown name is no layer, never layer 0";
+    EXPECT_EQ(gr::Script::NameOf(gr::RenderLayerMask::None()), "") << "no layer has no name";
+    EXPECT_EQ(gr::Script::NameOf(gr::RenderLayerMask::FromLayer(3) | gr::RenderLayerMask::FromLayer(9)), "")
+        << "several layers have no one name";
 
-    const std::string name = gr::RenderLayerName(3);
-    const std::optional<GameEngine::uint32> found = gr::FindRenderLayer("Props");
+    const std::string name = gr::Script::NameOf(gr::RenderLayerMask::FromLayer(3));
+    const gr::RenderLayerMask found = gr::Script::Find("Props");
     ASSERT_EQ(names.Set(3, "Crates"), "");
     gr::SetRenderLayerNames(names);
     EXPECT_EQ(name, "Props") << "a name read before a rename keeps its text";
-    EXPECT_EQ(found, 3u);
-    EXPECT_EQ(gr::RenderLayerName(3), "Crates");
-    EXPECT_FALSE(gr::FindRenderLayer("Props").has_value());
+    EXPECT_EQ(found, gr::RenderLayerMask::FromLayer(3));
+    EXPECT_EQ(gr::Script::NameOf(gr::RenderLayerMask::FromLayer(3)), "Crates");
+    EXPECT_EQ(gr::Script::Find("Props"), gr::RenderLayerMask::None());
 }
 
 } // namespace

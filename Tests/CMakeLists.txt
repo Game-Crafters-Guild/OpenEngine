@@ -599,11 +599,25 @@ if(TARGET EngineScriptBindings)
     DEPENDS "${_ge_probe_fixture}/Probe/Include/Probe/ProbeScriptApi.h" ComponentScanner
     COMMENT "Generating the native binding of the binding fixture"
     VERBATIM)
+  # The layout pins of the component mirror fixture (Tools/ComponentScanner/Tests/Fixtures/Components):
+  # compiling them proves every size, offset and enum value its C# mirrors take, which
+  # Managed/BindingTests compiles and reads.
+  set(_ge_mirror_fixture "${CMAKE_SOURCE_DIR}/Tools/ComponentScanner/Tests/Fixtures/Components/Good")
+  set(_ge_mirror_pins "${_ge_probe_binding_dir}/mirrors/Components.layout.gen.cpp")
+  file(GLOB_RECURSE _ge_mirror_fixture_headers CONFIGURE_DEPENDS "${_ge_mirror_fixture}/*.h")
+  add_custom_command(
+    OUTPUT "${_ge_mirror_pins}"
+    COMMAND ComponentScanner --api-modules "${_ge_mirror_fixture}/Modules" --api-components "${_ge_mirror_fixture}/Components"
+            --emit-api "${_ge_probe_binding_dir}/mirrors/api" --emit-native "${_ge_probe_binding_dir}/mirrors"
+    DEPENDS ${_ge_mirror_fixture_headers} ComponentScanner
+    COMMENT "Generating the layout pins of the component mirror fixture"
+    VERBATIM)
   add_executable(ScriptBindingTests
     ScriptBindings/ScriptBindingTests.cpp
     ScriptBindings/ProbeScriptApi.cpp
     ScriptBindings/ProbeBinding.cpp
     "${_ge_probe_binding_dir}/Probe.script.gen.h"
+    "${_ge_mirror_pins}"
     ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
   set_source_files_properties("${_ge_probe_binding_dir}/Probe.script.gen.h" PROPERTIES GENERATED TRUE)
   # ProbeBinding.cpp includes the generated unit, which is compiled there and nowhere else.
@@ -611,6 +625,8 @@ if(TARGET EngineScriptBindings)
     OBJECT_DEPENDS "${_ge_probe_binding_dir}/Probe.script.gen.cpp")
   target_include_directories(ScriptBindingTests PRIVATE
     "${_ge_probe_fixture}/Probe/Include"
+    "${_ge_mirror_fixture}"
+    "${_ge_mirror_fixture}/Modules/FixtureShapes/Include"
     "${_ge_probe_binding_dir}"
     "${CMAKE_SOURCE_DIR}/Engine/Source")
   # The probe's GE_Probe_GetInterface is defined here, as the generated units of the engine are in
@@ -1021,6 +1037,7 @@ target_link_libraries(PhysicsSmokeTests PRIVATE Engine GTest::gtest GTest::gtest
 target_include_directories(PhysicsSmokeTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/Engine/Include
+  ${CMAKE_SOURCE_DIR}/Engine/Tests
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Include
 )
@@ -1109,6 +1126,8 @@ add_executable(TerrainRegionBakeTests
   TerrainRegionBakeTests.cpp
   # The single terrain's baked-terrain cache: hit identity, key classes, pins.
   TerrainBakeCacheTests.cpp
+  # The terrain colour map: the compose of its writers, the grass's ground write, the colour zones.
+  TerrainColorMapTests.cpp
   # Raw .r16/.r32 heightmaps: the grid their import settings declare, and the refusal that
   # names the fix when the file cannot be read on any grid.
   RawHeightmapTests.cpp
@@ -1156,6 +1175,8 @@ target_include_directories(TerrainRegionBakeTests PRIVATE
   # GlslShim.h, and the generated headers the extraction above writes.
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Tests
   ${CMAKE_CURRENT_BINARY_DIR}/generated
+  # TerrainColorMapCompose.h: the colour map's texel arithmetic the colour map tests hold texels to.
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
 )
 ge_set_output_tests(TerrainRegionBakeTests)
 ge_stage_runtime_dependencies(TerrainRegionBakeTests)

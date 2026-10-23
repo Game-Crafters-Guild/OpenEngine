@@ -21,6 +21,7 @@
 #include "TerrainGrass/GrassPlacementModel.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace GameEngine::TerrainGrass
 {
@@ -81,6 +82,7 @@ inline void ClampFields(Components::TerrainGrass& grass)
                                    grass.RootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f);
     grass.GroundingStrength = std::clamp(grass.GroundingStrength, 0.0f, 1.0f);
     grass.CanopyShade = std::clamp(grass.CanopyShade, 0.0f, kMaxGrassCanopyShade);
+    grass.GroundDarkening = std::isfinite(grass.GroundDarkening) ? std::clamp(grass.GroundDarkening, 0.0f, 1.0f) : 0.0f;
     grass.Translucency = std::clamp(grass.Translucency, 0.0f, Components::kMaxTerrainGrassTranslucency);
     grass.TextureCardsPerSquareMeter =
         std::clamp(grass.TextureCardsPerSquareMeter, 0.0f, kGrassMaxBladesPerSquareMeter);

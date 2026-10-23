@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TerrainECS/TerrainColorMapBaker.h"
 #include "TerrainECS/BakeWarningLatch.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainRoutePolyline.h"
@@ -264,6 +265,12 @@ struct ModifierPaintZoneParams
     uint32 LayerIndex; float32 Strength;
 };
 
+// Straight linear colour and weight, kZonePayloadColorChannels floats per texel.
+struct ModifierColorZoneParams
+{
+    const float32* Color; uint32 Width; uint32 Height;
+};
+
 // One entry of a modifier volume's effect stack: what to do, and where in the
 // stack to do it. Deliberately carries no shape — the volume owns that, and the
 // bake hands the effect a scalar weight (plus, for Flatten, a reference height).
@@ -274,7 +281,7 @@ struct ResolvedEffect
     // static_asserts on: a new kind whose parameters are not folded into the
     // geometry hash edits silently and never re-bakes. Keep it last.
     enum class Kind : uint8 { Flatten, HeightOffset, Noise, Stamp, PaintLayer, Rules,
-                              GroundClaim, Grass, Count };
+                              GroundClaim, Grass, Color, Count };
 
     // Effects that only touch the splatmap, never the height. Both bake arms read this: the
     // HEIGHT pack skips these kinds rather than refusing on them (they contribute no height at
@@ -285,6 +292,14 @@ struct ResolvedEffect
     {
         float32 HeightScale;
         float32 DensityScale;
+        float32 GroundDarkeningScale;
+    };
+
+    // Linear colour and strength, each [0,1]: composed into the colour map only.
+    struct ColorParams
+    {
+        float32 Linear[3];
+        float32 Strength;
     };
 
     Kind EffectKind = Kind::Flatten;
@@ -300,6 +315,7 @@ struct ResolvedEffect
         ModifierSurfaceRulesParams Rules;
         ModifierGroundClaimParams GroundClaim;
         GrassParams Grass;
+        ColorParams Color;
     };
 
     ResolvedEffect() : Flatten{} {}
@@ -321,9 +337,11 @@ struct StampSampleBasis
 // combined with its world-space transform. Built once per frame from ECS queries.
 struct ResolvedModifier
 {
-    enum class Type : uint8 { SculptZone, PaintZone, Volume };
+    // A ColorZone never enters the height and splat bake's stack: it composes into the
+    // colour map only (TerrainColorMap.h), as a volume's Color effect does.
+    enum class Type : uint8 { SculptZone, PaintZone, Volume, ColorZone };
 
-    static bool IsZone(Type t) { return t == Type::SculptZone || t == Type::PaintZone; }
+    static bool IsZone(Type t) { return t == Type::SculptZone || t == Type::PaintZone || t == Type::ColorZone; }
     // Zones that only touch the splatmap, never the height.
     static bool IsSplatOnly(Type t) { return t == Type::PaintZone; }
 
@@ -385,6 +403,7 @@ struct ResolvedModifier
     {
         ModifierSculptZoneParams SculptZone;
         ModifierPaintZoneParams PaintZone;
+        ModifierColorZoneParams ColorZone;
     };
 
     // Type::Volume only: the entity's effect components in stack order. Empty
@@ -625,6 +644,12 @@ public:
     // the sample's world position, so partitioning a region's rows is byte-identical to one
     // whole-region call (the region-vs-full oracles lock it) while keeping every worker busy.
     static constexpr int32 kBakeBandRows = 32;
+
+    // Splat rows one terrain's streamed-in tiles composite a frame at most, across its arrivals. An eighth
+    // of a 1025-row tile: on a single-thread build the whole-tile surface-rules splat measured
+    // 72 ms (#3408), so a frame pays about 9 ms of it; a threaded build spreads the rows over the
+    // pool. A tile shows its coarse splat until its last row is in (ArrivalSplatStandIn).
+    static constexpr uint32 kArrivalSplatRowsPerFrame = 128;
 
 private:
     // Decoded stamp mask: R channel normalized to [0,1], row-major.
@@ -999,6 +1024,14 @@ private:
     // Same gather/arena lifetime as m_AppliedModifiers, containing only grass
     // effects. Kept separate so grass-only changes cannot dirty physics/materials.
     std::vector<ResolvedModifier> m_GrassModifiers;
+
+    // The colour writers of the last gather, in priority order: the colour zones, and
+    // the volumes that carry a Color effect (with that effect alone). Same lifetime as
+    // m_AppliedModifiers; never part of the height and splat stack.
+    std::vector<ResolvedModifier> m_ColorZones;
+    // Every colour zone's state folded, for the colour maps' input stamps.
+    uint64 m_ColorZonesStamp = 0;
+    TerrainColorMapBaker m_ColorMapBaker;
     void BakeGrassFields(ECS::World& world, TerrainService& terrainService);
     struct GrassBakeSnapshot
     {

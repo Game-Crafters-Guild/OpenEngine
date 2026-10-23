@@ -47,6 +47,7 @@ GPUScene::CullingShaderLoaderFunc g_CullingShaderLoader = nullptr;
 //   set = 0, binding 0: GPUInstance buffer (SSBO)
 //   set = 0, binding 1: GPUCullingData buffer (SSBO)
 //   set = 0, binding 2: frustumResults / visibility buffer (SSBO)
+//   set = 0, binding 3: per-material deformation margins (SSBO)
 DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
 {
     DescriptorSetLayoutDesc layout;
@@ -75,6 +76,14 @@ DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
     visibilityBinding.shaderStages = kShaderStageCompute;
     visibilityBinding.debugName = "VisibilityResultsBuffer";
     layout.bindings.push_back(visibilityBinding);
+
+    DescriptorBinding marginBinding;
+    marginBinding.binding = 3;
+    marginBinding.type = DescriptorType::StorageBuffer;
+    marginBinding.count = 1;
+    marginBinding.shaderStages = kShaderStageCompute;
+    marginBinding.debugName = "DeformationMarginBuffer";
+    layout.bindings.push_back(marginBinding);
 
     return layout;
 }
@@ -819,7 +828,8 @@ void GPUScene::ScheduleCullingPassForRange(RenderGraph::RGFrame& frame, const GP
                                            RenderGraph::RGBuffer visibility, uint32_t visibilityTotalBytes,
                                            uint32_t visibilityOffsetElements,
                                            uint32_t firstInstance, uint32_t instanceCount,
-                                           const GPUCullingData& cullingData, uint64_t sliceStableKey)
+                                           const GPUCullingData& cullingData,
+                                           const CullDeformationMargins& margins, uint64_t sliceStableKey)
 {
     if (!m_CullingPipeline.IsValid())
     {
@@ -830,14 +840,15 @@ void GPUScene::ScheduleCullingPassForRange(RenderGraph::RGFrame& frame, const GP
     const uint32_t sliceOffsets[1] = {visibilityOffsetElements};
     ScheduleCullingPassImpl(frame, sceneRG, visibility, visibilityTotalBytes, m_CullingPipeline,
                             sliceOffsets, /*viewCount=*/1u, firstInstance, instanceCount,
-                            cullingData, sliceStableKey);
+                            cullingData, margins, sliceStableKey);
 }
 
 void GPUScene::ScheduleCullingPassForCascadeGroup(RenderGraph::RGFrame& frame, const GPUSceneFrameRG& sceneRG,
                                                   RenderGraph::RGBuffer visibility, uint32_t visibilityTotalBytes,
                                                   const uint32_t* sliceOffsetsElements, uint32_t viewCount,
                                                   uint32_t firstInstance, uint32_t instanceCount,
-                                                  const GPUCullingData& cullingData, uint64_t groupStableKey)
+                                                  const GPUCullingData& cullingData,
+                                                  const CullDeformationMargins& margins, uint64_t groupStableKey)
 {
     if (instanceCount == 0u || viewCount == 0u)
         return;
@@ -865,7 +876,7 @@ void GPUScene::ScheduleCullingPassForCascadeGroup(RenderGraph::RGFrame& frame, c
     }
     ScheduleCullingPassImpl(frame, sceneRG, visibility, visibilityTotalBytes, pso,
                             sliceOffsetsElements, viewCount, firstInstance, instanceCount,
-                            cullingData, groupStableKey);
+                            cullingData, margins, groupStableKey);
 }
 
 void GPUScene::ScheduleCullingPassImpl(RenderGraph::RGFrame& frame, const GPUSceneFrameRG& sceneRG,
@@ -873,9 +884,11 @@ void GPUScene::ScheduleCullingPassImpl(RenderGraph::RGFrame& frame, const GPUSce
                                        PipelineHandle pipeline,
                                        const uint32_t* sliceOffsetsElements, uint32_t viewCount,
                                        uint32_t firstInstance, uint32_t instanceCount,
-                                       const GPUCullingData& cullingData, uint64_t sliceStableKey)
+                                       const GPUCullingData& cullingData,
+                                       const CullDeformationMargins& margins, uint64_t sliceStableKey)
 {
-    if (!visibility.IsValid() || !pipeline.IsValid() || instanceCount == 0u || viewCount == 0u)
+    if (!visibility.IsValid() || !pipeline.IsValid() || !margins.Valid() || instanceCount == 0u ||
+        viewCount == 0u)
         return;
 
     // Per-dispatch params written NOW, at declaration, into the frame's upload
@@ -916,7 +929,7 @@ void GPUScene::ScheduleCullingPassImpl(RenderGraph::RGFrame& frame, const GPUSce
                       p.Write(visibility);
                   },
                   [pipeline, cdBuf = cd.Buffer, cdOff = cd.Offset, instances = sceneRG.Instances,
-                   visibility, pc, instBytes, visibilityTotalBytes, instanceCount](RenderGraph::RGContext& ctx)
+                   visibility, margins, pc, instBytes, visibilityTotalBytes, instanceCount](RenderGraph::RGContext& ctx)
                   {
                       DescriptorSetLayoutDesc layout = MakeCullingDescriptorSetLayout();
                       DescriptorSetDesc setDesc{};
@@ -934,6 +947,8 @@ void GPUScene::ScheduleCullingPassImpl(RenderGraph::RGFrame& frame, const GPUSce
                                                                   sizeof(GPUCullingData));
                       ctx.GetDevice()->UpdateStorageBufferBinding(set, 2, ctx.GetBuffer(visibility), 0,
                                                                   visibilityTotalBytes);
+                      ctx.GetDevice()->UpdateStorageBufferBinding(set, 3, margins.Buffer, margins.Offset,
+                                                                  margins.Bytes);
                       ctx.Cmd->SetPipeline(pipeline);
                       ctx.Cmd->BindDescriptorSet(0, set, pipeline);
                       ctx.Cmd->SetPushConstants(pc);

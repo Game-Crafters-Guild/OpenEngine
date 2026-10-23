@@ -1,0 +1,120 @@
+---
+title: Navigation agent
+description: An entity that walks a navigation surface to the destination a game or a script gives it, how to order it, and how to read why a request does not move it.
+---
+
+A **Navigation Agent** walks a [Navigation Surface](navigation-surface.mdx) to a destination. A game or a script gives the destination; the agent finds its path on the surface, steers along it and stops when it arrives.
+
+## Make an agent
+
+:::steps
+
+1. Select the entity that walks and choose **Add Component > Navigation > Navigation Agent**.
+2. Leave **Surface** empty when the scene has one Navigation Surface: the agent walks it. With several surfaces, pick the one the agent walks.
+3. Set **Speed**, **Acceleration**, **Stopping Distance**, **Radius**, and **Height** for the character.
+
+:::
+
+The agent moves its entity's Transform. A physics body on the entity must be kinematic, so the body follows the Transform ([How a body moves](../physics/body-motion.mdx)). An agent on a dynamic body does not move, and its status says why.
+
+## Order it from C++ and C#
+
+`SetDestination` orders the agent to a world point, in place of any order it has. The order is always kept: when something holds the agent back, such as a surface that is not baked yet, the order waits and goes on once that clears. `SetDestination` returns false only when the entity has no Navigation Agent. `GetStatus` follows the order, and `ClearDestination` stops the agent where it stands.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PathfindingECS/NavigationScriptApi.h"
+bool SetDestination(ECS::World& world, ECS::EntityHandle agent, Mathematics::Vector3 worldPoint);
+void ClearDestination(ECS::World& world, ECS::EntityHandle agent);
+AgentStatus GetStatus(ECS::World& world, ECS::EntityHandle agent);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.Bindings"
+public bool SetDestination(Vector3 worldPoint); // unit.Navigation.SetDestination(target)
+public void ClearDestination();                 // unit.Navigation.ClearDestination()
+public AgentStatus GetStatus();                 // unit.Navigation.GetStatus()
+```
+
+::::
+:::::
+
+The path is solved on a later frame than the order, so read the status in the per-frame update, not on the frame of the order.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Send a unit to the point a player clicked, then to the next waypoint"
+#include "PathfindingECS/NavigationScriptApi.h"
+
+using namespace GameEngine::Navigation;
+
+void OnClick(ECS::World& world, ECS::EntityHandle unit, Mathematics::Vector3 target)
+{
+    SetDestination(world, unit, target);
+}
+
+void Update(ECS::World& world, ECS::EntityHandle unit)
+{
+    const AgentStatus status = GetStatus(world, unit);
+    if (status.State == AgentState::Arrived)
+        NextWaypoint();
+    else if (status.State == AgentState::Failed)
+        ShowCannotGoThere(status.Reason);
+}
+```
+
+::::
+::::tab[C#]
+
+```csharp title="Send a unit to the point a player clicked, then to the next waypoint"
+void OnClick(Vector3 target)
+{
+    unit.Navigation.SetDestination(target);
+}
+
+void Update()
+{
+    AgentStatus status = unit.Navigation.GetStatus();
+    if (status.State == AgentState.Arrived)
+        NextWaypoint();
+    else if (status.State == AgentState.Failed)
+        ShowCannotGoThere(status.Reason);
+}
+```
+
+::::
+:::::
+
+The destination moves onto the walkable ground under or beside it, within 5 m above or below and twice the agent's **Radius** across. A point farther from the ground is refused: the order fails with `DestinationOffSurface`, and the log line gives the distance to the nearest walkable ground.
+
+## Read the status
+
+`GetStatus` returns `State`, `Reason`, `PartialPath` and `PendingTiles`. The inspector shows the same status as one line under the agent's rows, and it follows the agent in Play.
+
+| State | Meaning |
+|---|---|
+| `Idle` | No order. |
+| `Waiting` | The order waits: for its path, which comes on a later frame, or for the reason it names. |
+| `Walking` | The agent walks its path. With `PartialPath`, the path ends at the reachable point nearest the destination. |
+| `Arrived` | The agent reached its destination, within its Stopping Distance. With `PartialPath`, it reached the reachable point nearest the destination. |
+| `Failed` | The agent cannot reach its destination. The reason says why. |
+
+| Reason | What to change |
+|---|---|
+| `None` | Nothing: the agent walks, has arrived, has no order, or waits only for its path. |
+| `NoSurface` | Set the agent's Surface, or keep one Navigation Surface in the scene. The order waits and goes on once the agent has a surface. |
+| `SurfaceNotBaked` | Nothing: the order waits until its surface has baked tiles, and `PendingTiles` counts the tiles left. An agent that walks keeps walking while its surface bakes again. |
+| `DestinationOffSurface` | Pick a destination on or next to the walkable ground. |
+| `StartOffSurface` | Move the agent onto the surface. |
+| `NoRoute` | Nothing walkable connects the agent and the destination: open a way, or pick a reachable point. The agent tries again a few times a second. |
+| `DynamicBody` | Make the entity's physics body kinematic, or remove it. The order goes on once the body is kinematic. |
+
+Each reason is logged once per order, with the agent's entity and what to change, not on every retry.
+
+## From the debug port
+
+`node mcp/ge.mjs raw set_destination '{"entityId":12,"point":[40,0,25]}'` calls `SetDestination` on the agent of entity 12 and replies with the order's status line.

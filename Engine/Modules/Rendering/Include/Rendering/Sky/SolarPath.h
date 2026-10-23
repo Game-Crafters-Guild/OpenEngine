@@ -127,6 +127,11 @@ inline void SolarDirection(const SolarFrame& frame, float cosTheta, float sinThe
 /// projection onto the celestial equator. Exact for a direction on the day's circle.
 float SolarHourFromDirection(const SolarFrame& frame, const float direction[3]);
 
+/// The compass bearing of `direction` on `frame`'s site, in radians in (-pi, pi]: 0 = the site's
+/// north, pi / 2 = its east, negative toward its west. Measured in the site's own frame, so the North
+/// yaw turns the scene under it without changing it.
+float SolarBearingRadians(const SolarFrame& frame, const float direction[3]);
+
 /// Where the sun stands at one hour, as an observer on the ground reads it.
 struct SolarPosition
 {

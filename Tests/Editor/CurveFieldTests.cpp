@@ -420,3 +420,101 @@ TEST(CurveField, AFormattedTimeAxisWritesTheHostsLabels)
     field.SetConfig(config);
     EXPECT_EQ(GlyphCount(field, font.get(), textures), unlabelled + 10) << "-14, -6, 2, 10, 18";
 }
+
+// An axis read two ways writes a second line under every label (the hour under each elevation of
+// the sun), and the label strip grows by that line.
+TEST(CurveField, ASecondaryTimeLabelWritesASecondLineUnderEveryLabel)
+{
+    auto font = UITesting::LoadRobotoAtlas();
+    ASSERT_NE(font, nullptr) << "Roboto-Regular.ttf must be staged beside the test executable";
+    UI::UITextureRegistry textures(nullptr);
+    CurveField field;
+    CurveField::Config config;
+    config.TimeMin = -14.0f;
+    config.TimeMax = 18.0f;
+    config.ReadOnly = true;
+    config.TimeAxisLabels = CurveField::TimeLabels::Formatted;
+    config.TimeLabel = [](float ev) { return std::to_string(static_cast<int>(ev)); };
+    PlaceField(field, config, {Key(-14.0f, 0.0f), Key(18.0f, 1.0f)});
+    const size_t oneLine = GlyphCount(field, font.get(), textures);
+    field.OnPostLayout();
+    const float oneLineHeight = field.Overrides().Get(Style::Height).value_or(StyleLength::Px(0.0f)).Value;
+
+    config.SecondaryTimeLabel = [](float) { return std::string("ab"); };
+    field.SetConfig(config);
+    EXPECT_EQ(GlyphCount(field, font.get(), textures), oneLine + 10) << "two letters under each of five labels";
+    field.OnPostLayout();
+    const float lineHeight = std::max(field.GetResolvedStyle().Visual.FontSize, 12.0f) * 1.3f;
+    EXPECT_NEAR(field.Overrides().Get(Style::Height).value_or(StyleLength::Px(0.0f)).Value - oneLineHeight,
+                lineHeight, 1e-3f);
+}
+
+// Ticks a host names replace the four equal spans: a label at each, and with the playback time's pill
+// turned off none is hidden under the playhead.
+TEST(CurveField, TimeTicksPlaceTheLabelsAndThePillCanBeTurnedOff)
+{
+    auto font = UITesting::LoadRobotoAtlas();
+    ASSERT_NE(font, nullptr) << "Roboto-Regular.ttf must be staged beside the test executable";
+    UI::UITextureRegistry textures(nullptr);
+    CurveField field;
+    CurveField::Config config;
+    config.TimeMin = -24.0f;
+    config.TimeMax = 50.0f;
+    config.ReadOnly = true;
+    PlaceField(field, config, {Key(-24.0f, 0.0f), Key(50.0f, 1.0f)});
+    const size_t unlabelled = GlyphCount(field, font.get(), textures);
+
+    config.TimeAxisLabels = CurveField::TimeLabels::Formatted;
+    config.TimeLabel = [](float degrees) { return std::to_string(static_cast<int>(degrees)); };
+    config.TimeTicks = {-18.0f, 0.0f, 30.0f};
+    config.ShowPlaybackIndicator = true;
+    config.ShowPlaybackTimeLabel = false;
+    field.SetConfig(config);
+    field.SetPlaybackIndicator(0.0f, 0.5f);
+    EXPECT_EQ(GlyphCount(field, font.get(), textures), unlabelled + 6) << "-18, 0 and 30, the 0 not under a pill";
+}
+
+// Ticks close enough that their first lines fit but their second lines would overlap: the second
+// line counts, so the later tick gives way.
+TEST(CurveField, ATickWhoseSecondLineWouldOverlapGivesWay)
+{
+    auto font = UITesting::LoadRobotoAtlas();
+    ASSERT_NE(font, nullptr) << "Roboto-Regular.ttf must be staged beside the test executable";
+    UI::UITextureRegistry textures(nullptr);
+    CurveField field;
+    CurveField::Config config;
+    config.TimeMin = -24.0f;
+    config.TimeMax = 50.0f;
+    config.ReadOnly = true;
+    PlaceField(field, config, {Key(-24.0f, 0.0f), Key(50.0f, 1.0f)});
+    const size_t unlabelled = GlyphCount(field, font.get(), textures);
+
+    config.TimeAxisLabels = CurveField::TimeLabels::Formatted;
+    config.TimeLabel = [](float degrees) { return std::to_string(static_cast<int>(degrees)); };
+    config.SecondaryTimeLabel = [](float degrees) { return degrees < 0.0f ? std::string("18:31") : std::string("18:00"); };
+    config.TimeTicks = {-6.0f, 0.0f};
+    field.SetConfig(config);
+    EXPECT_EQ(GlyphCount(field, font.get(), textures), unlabelled + 7) << "-6 over 18:31; the 0 and its 18:00 give way";
+}
+
+// A drag that moves the pointer only up or down changes the key's value and leaves its time exactly as
+// it was: no float noise from mapping the time to the screen and back.
+TEST(CurveField, AVerticalDragKeepsTheKeysTimeExact)
+{
+    for (const float time : {-6.0f, -5.3f, 17.7f, 31.9f})
+    {
+        CurveField field;
+        CurveField::Config config;
+        config.TimeMin = -24.0f;
+        config.TimeMax = 50.0f;
+        config.AllowAddRemove = false;
+        PlaceField(field, config, {Key(-24.0f, 0.0f), Key(time, 0.4f), Key(50.0f, 1.0f)});
+        const std::optional<Point> centre = HandleCentre(field, 1);
+        ASSERT_TRUE(centre) << time;
+        SendMouse(field, kEventMouseDown, *centre);
+        SendMouse(field, kEventMouseMove, {centre->X, centre->Y + 20.0f});
+        SendMouse(field, kEventMouseUp, {centre->X, centre->Y + 20.0f});
+        EXPECT_EQ(field.GetKeys()[1].Time, time);
+        EXPECT_LT(field.GetKeys()[1].Value, 0.4f) << "the drag moved the value down";
+    }
+}

@@ -5,6 +5,8 @@
 
 #include "Logger/Logger.h"
 
+#include <optional>
+
 namespace GameEngine::Engine::Renderer::Pipeline
 {
 
@@ -17,6 +19,44 @@ constexpr uint32_t kSpecularRadianceAttachment = 3;
 // The slices below are created single-sample, so this is the only world-colour
 // sample count they can attach alongside.
 constexpr uint32_t kSliceSampleCount = 1;
+
+// The three slices the world pass attached and wrote this frame.
+struct WrittenSlices
+{
+    Rendering::RenderGraph::RGTexture NormalRoughness;
+    Rendering::RenderGraph::RGTexture SpecularWeight;
+    Rendering::RenderGraph::RGTexture SpecularRadiance;
+};
+
+// The slices a later forward pass can keep writing: present when screen-space reflections are
+// active, the pass has a depth attachment, and the world pass wrote the slices this frame
+// (ContributeWorldPassTargets publishes the *Written names only then).
+std::optional<WrittenSlices> ResolveWrittenSlices(ViewDeclare& d,
+                                                  const RenderServices::WorldPassTargetsRG& targets)
+{
+    if (!d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsSSSRActive())
+        return std::nullopt;
+    if (!targets.Depth.IsValid())
+        return std::nullopt;
+    WrittenSlices slices{d.ResolveTexture(Names::View::NormalRoughnessWritten),
+                         d.ResolveTexture(Names::View::SSRSpecularWeightWritten),
+                         d.ResolveTexture(Names::View::SSRSpecularRadianceWritten)};
+    if (!slices.NormalRoughness.IsValid() || !slices.SpecularWeight.IsValid() ||
+        !slices.SpecularRadiance.IsValid())
+        return std::nullopt;
+    return slices;
+}
+
+// Attaches the slices at their MRT locations, loaded and stored.
+void AttachWrittenSlices(const WrittenSlices& slices, RenderServices::WorldPassTargetsRG& targets)
+{
+    Rendering::RenderGraph::RGAttachmentOps keep{};
+    keep.Load = Rendering::RenderGraph::RGLoadOp::Load;
+    keep.Store = Rendering::RenderGraph::RGStoreOp::Store;
+    targets.AddExtraColor(kNormalRoughnessAttachment, slices.NormalRoughness, keep);
+    targets.AddExtraColor(kSpecularWeightAttachment, slices.SpecularWeight, keep);
+    targets.AddExtraColor(kSpecularRadianceAttachment, slices.SpecularRadiance, keep);
+}
 } // namespace
 
 Rendering::MaterialKeyword ReflectionsProvider::WorldPassKeyword(ViewDeclare& d)
@@ -197,6 +237,62 @@ Rendering::MaterialKeyword ReflectionsProvider::ContributeWorldPassTargets(
         d.PublishTexture(Names::View::SSRSpecularRadianceWritten, specularRadiance);
     }
     return Rendering::MaterialKeyword::SSSRNormalRoughness;
+}
+
+Rendering::MaterialKeyword ReflectionsProvider::ContributeLateForwardPassTargets(
+    ViewDeclare& d, RenderServices::WorldPassTargetsRG& targets)
+{
+    const std::optional<WrittenSlices> slices = ResolveWrittenSlices(d, targets);
+    if (!slices)
+        return Rendering::MaterialKeyword::None;
+    AttachWrittenSlices(*slices, targets);
+    return Rendering::MaterialKeyword::SSSRNormalRoughness;
+}
+
+Rendering::MaterialKeyword ReflectionsProvider::ContributeTransmissivePassTargets(
+    ViewDeclare& d, RenderServices::WorldPassTargetsRG& targets)
+{
+    // Glass is not in the depth buffer: without the depth attachment it hides behind occluders in
+    // the shader, after it has written the weight, which would clear the weight of the opaque
+    // surface in front. ResolveWrittenSlices declines then.
+    const std::optional<WrittenSlices> slices = ResolveWrittenSlices(d, targets);
+    if (!slices)
+        return Rendering::MaterialKeyword::None;
+    // The glass masks two of the three slices, so its pipeline needs per-attachment write masks.
+    const auto* device = d.Services.GetDevice();
+    if (!device || !device->GetCapabilities().supportsIndependentBlend)
+    {
+        static bool warnedOnce = false;
+        if (!warnedOnce)
+        {
+            warnedOnce = true;
+            LOG_WARNING("SSSR: the device has no independent blend, so glass cannot keep screen-space "
+                        "reflections off its pixels: thick glass shows black shapes inside it while "
+                        "screen-space reflections are on. Disable screen-space reflections in views "
+                        "that show glass to avoid it.");
+        }
+        return Rendering::MaterialKeyword::None;
+    }
+    AttachWrittenSlices(*slices, targets);
+    return Rendering::MaterialKeyword::SSSRNormalRoughness;
+}
+
+void ReflectionsProvider::ApplyTransmissivePassWriteMasks(Rendering::MaterialKeyword passKeywords,
+                                                          Rendering::ColorBlendState& blend)
+{
+    if (!Rendering::HasKeyword(passKeywords, Rendering::MaterialKeyword::SSSRNormalRoughness) ||
+        !Rendering::HasKeyword(passKeywords, Rendering::MaterialKeyword::SceneColorGrab))
+        return;
+    // A variant whose program lacks the slices has a shorter blend array; the
+    // variant cache warns about it before this runs.
+    if (blend.attachments.size() <= kSpecularRadianceAttachment)
+        return;
+    // colorWriteMask bits are R, G, B, A from bit 0. The weight's alpha holds
+    // half of the opaque surface's reflection direction, so it is kept.
+    constexpr uint32_t kWriteRgb = 0x7;
+    blend.attachments[kNormalRoughnessAttachment].colorWriteMask = 0;
+    blend.attachments[kSpecularWeightAttachment].colorWriteMask = kWriteRgb;
+    blend.attachments[kSpecularRadianceAttachment].colorWriteMask = 0;
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline

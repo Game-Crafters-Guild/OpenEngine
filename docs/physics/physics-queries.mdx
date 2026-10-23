@@ -5,11 +5,7 @@ description: Ray casts and box overlaps against the physics world, and the filte
 
 Gameplay code asks the physics world what lies along a ray or inside a box through `PhysicsWorld`: ground under a unit, line of sight to a target, what a click lands on, what a building footprint overlaps.
 
-A C# script casts a ray with `Physics.RayCast`, which takes the same filter. [Physics from scripts](../scripting/physics-from-scripts.mdx#cast-a-ray) shows the call.
-
-:::caution[C# binding pending]
-`RayCastAll` and `BoxOverlap` have no managed call yet; tracked as [OpenEngine issue #27](https://github.com/Game-Crafters-Guild/OpenEngine/issues/27).
-:::
+A C# script casts a ray with `Physics.RayCast`, and finds every body along a ray or inside a box with `Physics.RayCastAll` and `Physics.BoxOverlap`, which take the same filter. [Physics from scripts](../scripting/physics-from-scripts.mdx#find-every-body-along-a-ray-or-in-a-box) shows the calls.
 
 ```cpp title="Physics/PhysicsWorld.h"
 bool RayCast(const RayCastQuery& query, RayCastResult& outResult) const;

@@ -7,6 +7,7 @@
 #include "PathfindingECS/Components/NavigationSource.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
@@ -981,21 +982,38 @@ TEST_F(NavigationSurfaceTest, BakeStatusReadsAsTheInspectorShowsIt)
               "renderers");
 }
 
-// A baked surface that is asked to bake again builds from the current geometry and counts the bake.
+// A mesh surface is one chart: 64 x 64 tiles, 2,048 m on a side at a 0.5 m cell. A wider one is
+// refused before any tile is built, and the notice names the limit and the fix.
+TEST_F(NavigationSurfaceTest, AMeshSurfaceWiderThanOneChartIsRefused)
+{
+    CreateBoxCollider(Physics::MotionType::Static, 0.0f, -0.5f, 0.0f, 1100.0f, 0.5f, 20.0f);
+    auto surface = CreateMeshSurface(1100.0f);
+
+    BakeAll();
+
+    EXPECT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Failed);
+    EXPECT_EQ(SurfaceOf(surface).BakeFailure, Components::NavigationBakeFailure::TooLarge);
+    EXPECT_EQ(Navigation::FormatBakeStatus(SurfaceOf(surface)),
+              "Failed: the bounds need 4,761 tiles and a mesh surface spans at most 64 x 64 tiles (2,048 m on a side "
+              "at this Cell Size): shrink the bounds or raise Cell Size");
+}
+
+// A baked surface that is asked to bake again builds from the current geometry; the version counts
+// every tile the bake put into the map.
 TEST_F(NavigationSurfaceTest, RequestBakeBakesAgainAndCountsTheVersion)
 {
     Testing::CreateGroundPlane(*world);
     auto surface = CreateMeshSurface(16.0f);
     BakeAll();
     ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked);
-    const uint32 firstVersion = SurfaceOf(surface).BakeVersion;
+    const uint64 firstVersion = SurfaceOf(surface).BakeVersion;
     const auto firstMap = Testing::SurfaceMap(*world, surface);
 
     ASSERT_TRUE(Navigation::RequestBake(*world, surface.GetHandle()));
     BakeAll();
 
     EXPECT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked);
-    EXPECT_EQ(SurfaceOf(surface).BakeVersion, firstVersion + 1);
+    EXPECT_EQ(SurfaceOf(surface).BakeVersion, firstVersion + SurfaceOf(surface).BakeTotal);
     EXPECT_EQ(Testing::SurfaceMap(*world, surface), firstMap) << "a re-bake must keep the handle agents are bound to";
 }
 

@@ -64,15 +64,6 @@ class GameUIHost
         JobSystem::WorkStealingThreadPool* jobSystem,
         const std::filesystem::path& fontsDir, bool neverClearTarget);
 
-    struct PointerState
-    {
-        float X = 0.0f;
-        float Y = 0.0f;
-        bool PrimaryDown = false;
-        // Snapshot for this pointer event, using Input::kMod* bits.
-        int Modifiers = 0;
-    };
-
     // Per-frame phase 1: reconcile subtrees from the world's UIDocument set.
     // Returns whether any documents exist this frame, BEFORE any pass is
     // declared — a host whose frame topology depends on the HUD existing
@@ -81,23 +72,20 @@ class GameUIHost
     // current subtree set.
     bool SyncDocuments(ECS::World* world);
 
-    // Input-phase delivery for a source that samples the pointer rather than
-    // receiving its edges, in composite-target pixels: the host differences the
-    // sample against the last one and calls the event entries below. Forward
-    // every sample; nullptr says no pointer is over the surface and cancels the
-    // gesture from the host's own button state. Rebinding while pressed requires
-    // a release before another press can arm replacement controls.
-    void UpdatePointer(const PointerState* pointer);
+    // No pointer is over the surface any more: cancel the gesture from the host's
+    // own button state and leave hover. A held primary press then waits for its
+    // release, so call this when that release still reaches the host (the
+    // window keeps reporting it); otherwise call CancelPointer(Released).
+    void OnPointerLeave();
 
-    // Pointer delivery for a source that has the events themselves — a router
-    // whose window is the surface. Same composite-target pixels, same
-    // synchronous dispatch, and no render or layout tick needed.
+    // Pointer delivery, in composite-target pixels, with synchronous dispatch
+    // and no render or layout tick needed.
     //
     // A move is never consumed: hover is not a claim. A button transition and a
     // wheel tick answer whether a HUD control acted, and that answer is what
     // keeps a click the HUD took from reaching the game as well. Every button
-    // arrives, not just the primary; only the primary carries the gesture state
-    // a cancel has to unwind.
+    // arrives, not just the primary. A cancel ends a press of any button; only the
+    // primary carries the wait-for-release state below.
     void OnMouseMove(Mathematics::Vector2 position);
     bool OnMouseButton(int button, bool pressed, int mods);
     bool OnScroll(Mathematics::Vector2 delta);
@@ -117,7 +105,7 @@ class GameUIHost
     void CancelPointer(PrimaryButtonState primary);
 
     // Keystroke delivery for a live play surface, in the same synchronous shape
-    // as UpdatePointer: the host dispatches into its UIManager and answers
+    // as OnMouseButton: the host dispatches into its UIManager and answers
     // whether a HUD control acted on the event. That answer is what stops the
     // keystroke before gameplay, so a focused chat box takes the typing that
     // would otherwise walk the character.
@@ -165,8 +153,8 @@ class GameUIHost
     // hosts composite onto carries its pipeline's output space, and an SDR
     // Player frame declares EncodedSrgb against the pre-encoded composite.
     //
-    // The pointer arrives in the input phase, through UpdatePointer or the event
-    // entries above; rendering neither resamples it nor synthesizes button edges.
+    // The pointer arrives in the input phase, through the event entries above;
+    // rendering neither resamples it nor synthesizes button edges.
     void UpdateAndRender(Rendering::RenderGraph::RGFrame& frame,
                          Rendering::RenderGraph::RGTexture target, UI::UITargetSpace targetSpace,
                          uint32_t extentW, uint32_t extentH);
@@ -216,9 +204,9 @@ class GameUIHost
     // is not a miss a caller can poll its way out of, and the two share one return code.
     bool HasAnyDocuments() const { return !m_Subtrees.empty(); }
 
-    // Test-only seam onto the private layout/sync steps and SetPointer, so an
+    // Test-only seam onto the private layout/sync and button-dispatch steps, so an
     // interactivity test can drive a headless host with no world and no RG render.
-    // Input-phase integrations use UpdatePointer.
+    // Input-phase integrations use the event entries.
     friend struct GameUIHostTestAccess;
 
   private:
@@ -246,10 +234,6 @@ class GameUIHost
     // SyncFromWorld, once the frame's subtree set is final.
     void ApplyFullscreenOverlaySuppression();
 
-    // Feed a pointer sample, in composite-target (UI-space) pixels: the move
-    // plus the primary button's edge, if the sample carries one. Calling this
-    // opts the host into interactive Update (hover/press/click).
-    void SetPointer(float x, float y, bool primaryDown);
     // A button edge against the modifier state this host already holds.
     bool DispatchMouseButton(int button, bool pressed);
 
@@ -262,7 +246,7 @@ class GameUIHost
     // The pointer stream ended for this surface (Game View viewport exit). Unlike a
     // window leave in the editor chrome — where the OS keeps delivering moves and the
     // real release to a captured element — no further pointer sample will ever reach
-    // this UIManager, so an in-flight press has to be terminated here.
+    // this UIManager, so an in-flight press of any button has to be terminated here.
     void PointerLeftSurface();
 
     // Per-frame UI tick. extentW/H size the layout to the composite target.
@@ -331,7 +315,7 @@ class GameUIHost
     uint64_t m_FrameCounter = 0;
     uint64_t m_BindGeneration = 0;
     float m_PointerX=0.0f, m_PointerY=0.0f;
-    bool m_Interactive = false;   // true while a pointer is over the host (set by SetPointer, cleared on leave); drives Update's interactive flag
+    bool m_Interactive = false;   // true while a pointer is over the host (set by a move or a button, cleared on leave); drives Update's interactive flag
     bool m_PrimaryDown = false;   // last primary-button state, to emit edge events
     bool m_PointerWasOver = false; // last frame had a pointer; clears hover on the over→off edge
     bool m_WaitForPrimaryRelease = false;
