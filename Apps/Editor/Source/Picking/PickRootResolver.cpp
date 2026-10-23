@@ -6,6 +6,7 @@
 
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/RuntimeOnlyEntity.h"
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -75,10 +76,28 @@ bool SubtreeRendersSingleModel(ECS::World& world,
 
 } // namespace
 
+ECS::EntityHandle ResolveGeneratedPickOwner(ECS::World& world, ECS::EntityHandle entity)
+{
+    if (!world.IsValid(entity) || !world.HasComponent<Components::RuntimeOnlyEntity>(entity))
+        return entity;
+    const auto* parent = world.GetComponent<Components::Parent>(entity);
+    if (!parent || !world.IsValid(parent->parent))
+        return entity;
+    for (const auto& [type, traits] : EditorComponentTraitsRegistry::Get().Snapshot())
+    {
+        if (traits.IsPickInstanceRoot && world.HasComponent(parent->parent, type))
+            return parent->parent;
+    }
+    return entity;
+}
+
 ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
 {
     if (!entity.IsValid() || !world.IsValid(entity))
         return entity;
+    const auto owner = ResolveGeneratedPickOwner(world, entity);
+    if (owner != entity)
+        return owner;
 
     const auto* mr = world.GetComponent<Components::MeshRenderer>(entity);
     if (!mr)
@@ -145,8 +164,9 @@ void BuildPickCandidates(ECS::World& world,
     }
     for (const PickHit& hit : sortedHits)
     {
-        if (std::find(outCandidates.begin(), outCandidates.end(), hit.Entity) == outCandidates.end())
-            outCandidates.push_back(hit.Entity);
+        const auto entity = exactPick ? hit.Entity : ResolveGeneratedPickOwner(world, hit.Entity);
+        if (std::find(outCandidates.begin(), outCandidates.end(), entity) == outCandidates.end())
+            outCandidates.push_back(entity);
     }
 }
 

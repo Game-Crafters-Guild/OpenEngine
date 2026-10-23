@@ -58,6 +58,8 @@ struct EditorComponentTraits
     // The entity is its own pick target: the instance-root upward walk stops
     // here instead of grouping it under a model root.
     bool IsPickInstanceRoot = false;
+    // Selection retains the current scene tool; editing this feature uses an explicit toolbar choice.
+    bool PreserveSceneToolOnSelection = false;
     // The transform gizmo pivots at the entity origin (the local pivot
     // transformed to world), not at rendered-content anchors.
     bool GizmoPivotAtEntityOrigin = false;

@@ -34,6 +34,7 @@ public:
         traits.InspectorCategory = "2D";
         traits.InspectorTooltip = "Textured fill and edges generated from a spline in local XY.";
         traits.IsPickInstanceRoot = true;
+        traits.PreserveSceneToolOnSelection = true;
         traits.GizmoPivotAtEntityOrigin = true;
         traits.EnableToggleTooltip = "Switch the shape on or off. Off removes generated rendering and collision.";
         Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::SmartShape>(), std::move(traits));
