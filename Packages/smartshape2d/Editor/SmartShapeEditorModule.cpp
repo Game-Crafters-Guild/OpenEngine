@@ -3,6 +3,7 @@
 #include "SmartShape2D/SmartShapeEdge.h"
 #include "SmartShape2D/SmartShapeAnchor.h"
 #include "SmartShape2D/SmartShapeTexture.h"
+#include "SmartShape2D/GeneratedShapeResources.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -24,13 +25,16 @@ class SmartShapeEditorPlugin final : public Editor::IEditorPlugin
 public:
     SmartShapeEditorPlugin()
     {
+        Editor::EditorComponentTraits generatedTraits;
+        generatedTraits.HideInInspector = true;
+        Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::GeneratedShapeResources>(), std::move(generatedTraits));
         Editor::EditorComponentTraits traits;
         traits.DisplayName = "Smart Shape 2D";
         traits.InspectorCategory = "2D";
         traits.InspectorTooltip = "Textured fill and edges generated from a spline in local XY.";
         traits.IsPickInstanceRoot = true;
         traits.GizmoPivotAtEntityOrigin = true;
-        traits.EnableToggleTooltip = "Switch shape rendering on or off. Off removes the generated fill and edges.";
+        traits.EnableToggleTooltip = "Switch the shape on or off. Off removes generated rendering and collision.";
         Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::SmartShape>(), std::move(traits));
         Editor::EditorComponentTraits edgeTraits;
         edgeTraits.DisplayName = "Shape Edge Override";
