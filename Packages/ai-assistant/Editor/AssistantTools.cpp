@@ -18,7 +18,7 @@ constexpr std::string_view kToolPrefix = "mcp__editor_assistant__";
 constexpr AssistantTool kTools[] = {
     {"get_build_status", "get_build_status", Class::Read, "Read the build status", {"", "", ""}},
     {"get_editor_state", "get_editor_state", Class::Read, "Read the editor state", {"", "", ""}},
-    {"get_log", "get_log", Class::Read, "Read the log", {"filter", "minLevel", ""}},
+    {"get_log", "get_log", Class::Read, "Read the log", {"pattern", "minLevel", "since"}},
     {"get_scene_hierarchy", "get_scene_hierarchy", Class::Read, "Read the scene hierarchy", {"", "", ""}},
     {"trigger_build", "trigger_build", Class::Gated, "Build the game", {"platform", "", ""}},
     {"get_build_settings", "get_build_settings", Class::Read, "Read the build settings", {"", "", ""}},

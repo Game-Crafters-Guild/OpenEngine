@@ -4,6 +4,10 @@
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
 
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+
 namespace GameEngine::Ocean
 {
 
@@ -13,13 +17,24 @@ namespace GameEngine::Ocean
 /// the surface. Both must agree byte-for-byte on the document and keywords —
 /// the shader cache is keyed on the composed source and the variant key.
 
-/// Stable derived GUID for the ocean material (not a real asset GUID).
-const GUID& OceanSurfaceMaterialGuid();
+/// The keywords of its pass that the surface compiles in; the other pass keywords leave its program
+/// unchanged. HeightFog: the surface takes the view's height fog by its own distance.
+/// SSSRNormalRoughness: the pass keeps writing the screen-space reflection slices, so the
+/// reflections replace the water's own reflection.
+inline constexpr Rendering::MaterialKeyword kOceanSurfacePassKeywords =
+    Rendering::MaterialKeyword::HeightFog | Rendering::MaterialKeyword::SSSRNormalRoughness;
 
-/// Stable derived GUID for the same material registered with the HeightFog pass keyword, which a
-/// view whose height fog is active draws the surface with: the surface takes the fog by its own
-/// distance in its own shader.
-const GUID& OceanSurfaceFogMaterialGuid();
+/// The number of subsets of kOceanSurfacePassKeywords: the surface registers once per subset.
+inline constexpr std::size_t kOceanSurfacePassKeywordSetCount =
+    std::size_t{1} << std::popcount(static_cast<std::uint64_t>(kOceanSurfacePassKeywords));
+
+/// The subset of kOceanSurfacePassKeywords at `index` (below kOceanSurfacePassKeywordSetCount). Bit i
+/// of `index` stands for the i-th lowest keyword of kOceanSurfacePassKeywords.
+Rendering::MaterialKeyword OceanSurfacePassKeywordSet(std::size_t index);
+
+/// Stable derived GUID for the surface registered with `passKeywords & kOceanSurfacePassKeywords`
+/// (not a real asset GUID).
+const GUID& OceanSurfaceMaterialGuid(Rendering::MaterialKeyword passKeywords);
 
 /// The material document the surface registers: StandardPBR lighting with the
 /// ocean surface shader and clipmap vertex modifier.

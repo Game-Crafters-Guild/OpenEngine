@@ -39,12 +39,28 @@ TEST(SssrCompositeWeight, ForwardExportsTheActualIncidentRadianceAndLayeredWeigh
     const auto adapter = GE::Tests::ReadSssrShaderSource("Adapters/adapter_forward.glsl");
     ASSERT_FALSE(ibl.empty());
     ASSERT_FALSE(adapter.empty());
-    EXPECT_NE(ibl.find("vec3 specular = pref * specularWeight;"), std::string::npos);
-    EXPECT_NE(ibl.find("ge_sssrIncidentRadiance = pref;"), std::string::npos);
-    EXPECT_NE(ibl.find("ge_sssrSpecularWeight = specularWeight * specAO;"), std::string::npos);
+    // The replaced weight holds the standard lobe, the surface's own reflection of the environment
+    // and the reflection it emitted itself; the incident radiance is their weighted mean (exactly
+    // pref when the surface emitted none).
+    EXPECT_NE(ibl.find("vec3 specular = pref * (specularWeight + so.environmentReflectionWeight);"),
+              std::string::npos);
+    EXPECT_NE(ibl.find("vec3 replaceableWeight = (specularWeight + so.environmentReflectionWeight) * specAO;"),
+              std::string::npos);
+    EXPECT_NE(ibl.find("ge_sssrSpecularWeight = replaceableWeight + vec3(so.emittedReflection.a);"),
+              std::string::npos);
+    EXPECT_NE(ibl.find("ge_sssrIncidentRadiance = pref + (so.emittedReflection.rgb - pref * so.emittedReflection.a) /"),
+              std::string::npos);
     EXPECT_NE(ibl.find("ge_sssrSpecularWeight *= coatDarken * so.coatColor * (1.0 - ccFc);"), std::string::npos);
     EXPECT_NE(ibl.find("ge_sssrSpecularWeight *= 1.0 - fuzzReflectance;"), std::string::npos);
     EXPECT_NE(adapter.find("ge_sssrSpecularWeight * ambientMultiplier"), std::string::npos);
+    // The transmissive pass's glass zeroes the weight: the slices under it describe the opaque
+    // surface behind the glass, whose probe lobe the pixel shows only through the glass.
+    const size_t grab = adapter.find("#ifdef GE_SCENECOLOR_GRAB",
+                                     adapter.find("ge_sssrSpecularWeight * ambientMultiplier"));
+    ASSERT_NE(grab, std::string::npos);
+    const size_t zero = adapter.find("oSpecularWeight.rgb = vec3(0.0);", grab);
+    ASSERT_NE(zero, std::string::npos);
+    EXPECT_LT(zero, adapter.find("#endif", grab)) << "the zero weight belongs to the grab branch";
     // Stored at the pre-exposure, like the scene colour SSR composites it against.
     EXPECT_NE(adapter.find("vec4(ge_sssrIncidentRadiance * GE_PreExposure(), reflectionOct.y)"), std::string::npos);
 }

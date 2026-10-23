@@ -171,6 +171,8 @@ public:
     // the visible listing by the missing-assets workflow; they should render
     // ghosted, suppress drag, and offer a context menu of recovery actions.
     bool IsPhantom(GridId id) const;
+    // True for the ".." row that leads to the parent folder: navigation, not an item with a name.
+    static bool IsUpEntry(GridId id) { return id == kUpEntryId; }
     // Return the GUID the phantom row represents (Null for non-phantom rows).
     GUID GetPhantomGuid(GridId id) const;
 
@@ -323,6 +325,8 @@ public:
     // Helper methods to access underlying grid provider data
     std::filesystem::path GetPath(ListId id) const;
     bool IsDirectory(ListId id) const;
+    // The list shows the grid's rows under the grid's ids, the ".." row included.
+    static bool IsUpEntry(ListId id) { return AssetsGridDataProvider::IsUpEntry(static_cast<GridId>(id)); }
     const char* GetLabel(ListId id) const;
     const char* GetTypeKey(ListId id) const;
 

@@ -19,7 +19,7 @@ std::vector<ContextMenuManipulator::Item> PlayButtonMenuItems(
 {
     std::vector<ContextMenuManipulator::Item> items;
     items.push_back({.Path = kPlayButtonAudioEnabledItem,
-                     .IconPath = EditorIcons::kMusicNote,
+                     .IconPath = AudioEnabledSettings::IsEnabled(audio) ? EditorIcons::kAudioEnabled : EditorIcons::kAudioMuted,
                      .OnActivate =
                          [audio, onChanged = std::move(onAudioEnabledChanged)]
                          {

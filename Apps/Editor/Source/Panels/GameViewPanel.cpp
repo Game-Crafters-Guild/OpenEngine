@@ -57,10 +57,12 @@ void GameViewPanel::ClearViewportPointerHandlers()
     m_PointerViewport = {};
 }
 
-void GameViewPanel::SetPointerCallback(PointerCallback callback)
+void GameViewPanel::SetPointerCallbacks(PointerCallback position, PointerButtonCallback button)
 {
     CancelViewportPointer();
-    m_PointerSink = callback ? std::make_shared<PointerSink>(PointerSink{std::move(callback)}) : nullptr;
+    m_PointerSink = position
+        ? std::make_shared<PointerSink>(PointerSink{std::move(position), std::move(button), 0})
+        : nullptr;
 }
 
 void GameViewPanel::ClearPointerCallback()
@@ -75,26 +77,28 @@ void GameViewPanel::ClearPointerCallback()
 
 void GameViewPanel::CancelViewportPointer()
 {
-    m_PointerDown = false;
     if (m_PointerSink)
     {
         ++m_PointerSink->Generation;
-        ForwardViewportPointer(false, 0.0f, 0.0f, false, 0);
+        ForwardViewportPointer(false, 0.0f, 0.0f, 0);
     }
 }
 
-void GameViewPanel::ForwardViewportPointer(bool over, float x, float y, bool down, int mods)
+UI::IUiDispatcher* GameViewPanel::PointerDispatcher()
 {
-    if (!m_PointerSink)
-        return;
     if (auto* owner = GetOwnerManager())
         m_PointerDispatchOwner = UIManagerRef(owner);
     // A detached source can still terminate its delivered gesture on its last
     // live manager.
     UIManager* dispatchOwner = m_PointerDispatchOwner.Get();
-    if (!dispatchOwner)
+    return dispatchOwner ? dispatchOwner->GetDispatcher() : nullptr;
+}
+
+void GameViewPanel::ForwardViewportPointer(bool over, float x, float y, int mods)
+{
+    if (!m_PointerSink)
         return;
-    auto* dispatcher = dispatchOwner->GetDispatcher();
+    auto* dispatcher = PointerDispatcher();
     if (!dispatcher)
         return;
     const auto sink = m_PointerSink;
@@ -103,9 +107,26 @@ void GameViewPanel::ForwardViewportPointer(bool over, float x, float y, bool dow
     // its scratch chain is shared. The existing dispatcher drains after that
     // bubble, before OnMouseButton returns; no render boundary samples the edges.
     // Capture values and the owned sink only, never the panel/viewport/controller.
-    dispatcher->Post([sink, generation, over, x, y, down, mods] {
+    dispatcher->Post([sink, generation, over, x, y, mods] {
         if (sink->Generation == generation && sink->Callback)
-            sink->Callback(over, x, y, down, mods);
+            sink->Callback(over, x, y, mods);
+    });
+}
+
+void GameViewPanel::ForwardViewportButton(int button, bool pressed, int mods)
+{
+    if (!m_PointerSink)
+        return;
+    auto* dispatcher = PointerDispatcher();
+    if (!dispatcher)
+        return;
+    // Posted like a position, for the same reason, on the same sink and generation:
+    // a revoke drops a queued button edge with it.
+    const auto sink = m_PointerSink;
+    const uint64_t generation = sink->Generation;
+    dispatcher->Post([sink, generation, button, pressed, mods] {
+        if (sink->Generation == generation && sink->ButtonCallback)
+            sink->ButtonCallback(button, pressed, mods);
     });
 }
 
@@ -348,25 +369,22 @@ void GameViewPanel::RegisterViewportPointerHandlers(UIElement& viewport)
         if (!(x >= 0.0f && x < 1.0f && y >= 0.0f && y < 1.0f))
             CancelViewportPointer();
         else
-            ForwardViewportPointer(true, x, y, m_PointerDown, e.Mods);
+            ForwardViewportPointer(true, x, y, e.Mods);
     };
     try
     {
         m_PointerTokens[0] = element->RegisterEventHandler(kEventMouseMove, [forward](UIEvent& e) { forward(e); });
         m_PointerTokens[1] = element->RegisterEventHandler(kEventMouseEnter, [forward](UIEvent& e) { forward(e); });
+        // Every button edge is forwarded with its index. The edge's own position goes first,
+        // so the host hit-tests the press or release where it happened, not where the last
+        // move left the pointer.
         m_PointerTokens[2] = element->RegisterEventHandler(kEventMouseDown, [this, forward](UIEvent& e) {
-            if (e.Button == 0)
-            {
-                m_PointerDown = true;
-                forward(e);
-            }
+            forward(e);
+            ForwardViewportButton(e.Button, true, e.Mods);
         });
         m_PointerTokens[3] = element->RegisterEventHandler(kEventMouseUp, [this, forward](UIEvent& e) {
-            if (e.Button == 0)
-            {
-                m_PointerDown = false;
-                forward(e);
-            }
+            forward(e);
+            ForwardViewportButton(e.Button, false, e.Mods);
         });
         m_PointerTokens[4] = element->RegisterEventHandler(kEventMouseLeave, [this](UIEvent&) {
             CancelViewportPointer();

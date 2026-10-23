@@ -13,6 +13,14 @@ constexpr float kBandsPerOctave = 4.0f;
 
 } // namespace
 
+float AltitudeAbovePlanetMeters(const float position[3], float planetRadius)
+{
+    const double y = static_cast<double>(position[1]) + planetRadius;
+    const double r = std::sqrt(static_cast<double>(position[0]) * position[0] + y * y +
+                               static_cast<double>(position[2]) * position[2]);
+    return static_cast<float>(r - planetRadius);
+}
+
 uint32_t SkyViewLutAltitudeBand(float altitudeMeters)
 {
     if (!(altitudeMeters > 0.0f))

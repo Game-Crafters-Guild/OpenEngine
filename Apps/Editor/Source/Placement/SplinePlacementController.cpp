@@ -246,7 +246,7 @@ bool SplinePlacementController::Rebuild(ECS::World& world,
         else
             piece.Bounds = Engine::Renderer::ComputeModelBounds(*resources->modelAsset);
         BindPieceMaterial(piece.Renderer, *resources, submeshIndex, boundOverride);
-        piece.Renderer.castShadows = true;
+        piece.Renderer.shadowCasting = Components::ShadowCasting::On;
         piece.Renderer.receiveShadows = true;
         piece.Renderer.motionVectors = false; // tiles only move on re-place
     }

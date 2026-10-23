@@ -37,6 +37,7 @@
 #include "Rendering/Materials/MaterialBuilder.h"
 #include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/Materials/ShaderReflection.h"
+#include "SharedHeadlessDevice.h"
 
 #include <array>
 #include <cmath>
@@ -241,11 +242,8 @@ ProbeResult RenderProbe(const DeformationMotionParamsGPU& params, const float pr
         return out;
     }
 
-    DeviceDesc dd{};
-    dd.preferredAPI = GraphicsAPI::Vulkan;
-    dd.enableDynamicRendering = true;
-    auto dev = DeviceFactory::CreateDevice(dd);
-    if (!dev || !dev->Initialize(dd))
+    IDevice* dev = SharedHeadlessDevice();
+    if (!dev)
     {
         out.SkipReason = "no graphics device";
         return out;

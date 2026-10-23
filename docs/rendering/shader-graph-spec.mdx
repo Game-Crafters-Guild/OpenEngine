@@ -386,6 +386,8 @@ This runs in **local space**, before the world transform: an offset written here
 
 Leaving the pin unwired emits no `ModifyVertex()`, no `HAS_VERTEX_MODIFIER` define, no extra cost. The material falls through to the standard adapter path.
 
+Motion vectors follow the moving vertices only for a hand-written `ModifyVertex` that returns a `vec3` position: TAA and screen-space reflections then track the sway exactly. A graph's vertex sink, the extended modifier form, grass, a letterboxed or multisampled view and the web profile get camera motion only, so a fast sway there can blur under TAA.
+
 :::note[v1 has only PositionOffset, explicitly]
 
 NormalOffset / TangentOffset are intentionally absent from v1. Modifying the normal in the vertex stage requires post-transform recomputation and is rare in practice for the modifier contract we expose. Procedural-geometry workflows (terrain, water) use the extended modifier contract (`HAS_VERTEX_OUTPUT_MODIFIER`) which is out of scope for v1 graphs. See §11. If a designer hits the wall on PositionOffset-only displacement, we add the missing sink pins rather than reaching for the extended modifier.

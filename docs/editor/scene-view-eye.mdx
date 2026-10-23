@@ -1,0 +1,31 @@
+---
+title: Hide in the Scene View
+description: The Hierarchy's eye hides an entity in the editor's Scene View only, to get it out of the way while you edit.
+---
+
+The eye on a Hierarchy row hides the entity in the **Scene View** and nowhere else. Use it to get a mesh out of the way while you edit what is behind or inside it: a roof over an interior, a wall in front of a room.
+
+Point at a row to see its eye, to the left of the lock. Click it to hide the entity; click the closed eye to show it again. On a selected row the click hides or shows every selected entity. The eye is not an edit of the scene: it is not on the undo stack.
+
+## What the eye hides
+
+A hidden entity is not drawn in the Scene View and casts no shadow there, and a click in the Scene View goes through it. When it is selected, its transform gizmo still shows and it has no selection outline.
+
+A child follows its parent: hiding an entity hides its children too. A child hidden by its parent shows a dimmed closed eye, and its tooltip names the parent that hides it. A child keeps its own eye: when you show the parent again, a child you hid yourself stays hidden.
+
+The eye hides meshes and skinned meshes: the entity's own and its children's. A row with no mesh and no children, such as a light, the sky or a camera, has no eye. Terrain, grass, particles, water and UI are not hidden by it.
+
+## What the eye never changes
+
+The eye is a view of the scene, not a change to it:
+
+| | Hidden in the Scene View |
+|---|---|
+| The Game View and the built game | the entity is drawn |
+| Shadows in the Game View and the built game | the entity casts its shadow |
+| Physics, scripts, audio, animation | unchanged: the entity runs as before |
+| The entity's enable state and render layers | unchanged |
+| The saved scene | the eye is not saved: the scene is not marked modified, and a reloaded scene shows everything |
+| Play mode | the eye stays as it was when you enter and leave play mode |
+
+To take an entity out of the game, switch it off with the entity toggle instead. To keep a mesh's shadow without drawing the mesh in the game, use [Shadows Only](../rendering/shadow-casting.mdx#shadows-only).

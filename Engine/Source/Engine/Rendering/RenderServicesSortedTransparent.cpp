@@ -40,6 +40,7 @@
 #include "Engine/Rendering/WorldDrawTypes.h"
 #include "Rendering/CameraDerivation.h"
 #include "Rendering/Common/Frustum.h"
+#include "Rendering/Core/GPUInstanceDepthClass.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/PipelineTypes.h"
@@ -126,6 +127,8 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         return;
     const std::vector<Rendering::GPUInstance>& instances = scene->GetInstances();
     const auto& meshRegistry = GetMeshGPURegistry();
+    const Rendering::ViewDesc* view = m_ViewRegistry.FindViewDesc(viewId);
+    const bool dropEditorHidden = view != nullptr && view->DropsEditorHidden();
 
     // The per-call working sets below live in this scope; the holder keeps only what the drain
     // reads.
@@ -153,6 +156,8 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
     {
         if (!sub.material || !IsOrderDependentBlendMaterial(*sub.material))
             continue;
+        if (!Rendering::InstanceInColorPass(sub.flags, dropEditorHidden))
+            continue; // a color pass: no shadows-only mesh, and in the Scene View nothing its eye hides
         if (sub.instanceIndex >= instances.size())
             continue; // not resident in GPUScene yet (first frame)
         // Mesh entry must be resident to stage draw args; a not-yet-uploaded

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -11,6 +12,7 @@
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Common/Frustum.h"
 #include "Rendering/Common/Math.h"
+#include "Rendering/Core/CullDeformationMargins.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Core/PrevVisibleResetTracker.h"
@@ -96,6 +98,9 @@ struct ViewCullingInput
     uint32_t firstInstance = 0;
     uint32_t instanceCount = 0;
     RenderLayerMask renderLayerMask = RenderLayerMask::All();
+    // A dispatch of the editor Scene View, color or shadow: drop instances its
+    // eye hides (kInstanceFlagEditorHidden).
+    bool dropEditorHidden = false;
     uint32_t frameIndex = 0;
     float deltaTime = 0.0f;
     // Two-phase HZB occlusion (R2.1): reserve a SECOND visibility slice for
@@ -131,6 +136,9 @@ struct CascadeCullingGroup
     // stays visible and every slice keeps the conservative margin, exactly
     // as the single-view (cascadeIndexNone) dispatch does.
     bool shadowCasterDispatch = true;
+    // The group belongs to the editor Scene View: its slices drop instances the
+    // eye hides (kInstanceFlagEditorHidden), as ViewCullingInput does.
+    bool dropEditorHidden = false;
     // Per-cascade light view-projection matrices. Currently unused by the
     // culling shader (cluster_cull tests against frustum planes only) but
     // kept here so downstream consumers can mirror what the bucketer expects.
@@ -305,6 +313,15 @@ class GPUCullingPipeline
     // epilogue passes skip with the same decision. Pending prevVisible resets
     // force a recompute (the reset fill must be declared before any skip).
     void SetElisionFrameContext(const ElisionFrameContext& ctx) { m_ElisionCtx = ctx; }
+    // The per-material deformation margins (local meters, indexed by
+    // GPUInstance::materialIndex) both culling kernels bind this frame, set
+    // before EndFrame. Uploaded once per frame and keyed into the elision record,
+    // so a margin edit on an otherwise idle frame re-culls. An empty span culls
+    // every instance on its own radius.
+    void SetMaterialDeformationMargins(std::span<const float> margins)
+    {
+        m_MaterialDeformationMargins.assign(margins.begin(), margins.end());
+    }
     // Advances whenever a pass that writes the visibility buffer is DECLARED
     // (EndFrameRG dispatches, deferred phase-B occlusion). The scatter gates
     // key on it: an unchanged epoch proves the visibility content the scatter
@@ -401,6 +418,11 @@ class GPUCullingPipeline
     static constexpr uint32_t kElisionSettleFrames = 3;
     RecomputeElisionGate m_ElisionGate;
     ElisionFrameContext m_ElisionCtx{};
+    std::vector<float> m_MaterialDeformationMargins;
+    // This frame's upload of m_MaterialDeformationMargins; invalid until the
+    // first dispatch of the frame asks for it.
+    CullDeformationMargins m_FrameDeformationMargins{};
+    const CullDeformationMargins& FrameDeformationMargins(RenderGraph::RGFrame& frame);
     uint64_t m_ElisionFrameStamp = 0;     // ticks per BeginFrame (the gate's stamp)
     uint64_t m_VisibilityWriteEpoch = 0;
     bool m_ElidedThisFrame = false;
@@ -504,9 +526,9 @@ class GPUCullingPipeline
                              uint32_t instanceBytes, RenderGraph::RGBuffer visibility,
                              RenderGraph::RGBuffer prevVisible, uint32_t prevVisibleBytes,
                              RenderGraph::RGBuffer stats, RenderGraph::RGTexture hzb,
-                             const GPUCullingData& cullingData, uint32_t sliceOffsetElements,
-                             uint32_t firstInstance, uint32_t sliceInstanceCount,
-                             uint64_t sliceStableKey);
+                             const GPUCullingData& cullingData, const CullDeformationMargins& margins,
+                             uint32_t sliceOffsetElements, uint32_t firstInstance,
+                             uint32_t sliceInstanceCount, uint64_t sliceStableKey);
 };
 
 class GPUCullingFactory

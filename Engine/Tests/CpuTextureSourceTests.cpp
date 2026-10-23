@@ -644,9 +644,9 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
     agent.StoppingDistance = .3f;
     agent.Radius = .25f;
     agent.AgentId = actor.GetHandle().id;
-    agent.NavMapIndex = sourceMap.Index;
-    agent.NavMapGeneration = sourceMap.Generation;
     Components::NavigationAgentState nav;
+    nav.NavMapIndex = sourceMap.Index;
+    nav.NavMapGeneration = sourceMap.Generation;
     nav.HasDestination = true;
     nav.PathDirty = true;
     nav.DestinationX = 10.5f;

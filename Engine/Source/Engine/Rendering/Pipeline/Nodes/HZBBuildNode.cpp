@@ -93,6 +93,18 @@ uint32_t MipChainLength(uint32_t w, uint32_t h)
     }
     return levels;
 }
+// True when the culler reserved a phase-B slice for the view: the view culls
+// against the occlusion pyramid.
+bool ViewHasPhaseB(ViewDeclare& d)
+{
+    GPUCullingPipeline* cull = d.Services.GetGPUCullingPipeline();
+    if (!cull)
+        return false;
+    for (const auto& r : cull->GetViewVisibilityRanges())
+        if (r.viewId == d.View.id && r.cascadeIndex == kCullingCascadeIndexNone && r.slicePhase == 1u)
+            return true;
+    return false;
+}
 } // namespace
 
 bool HZBBuildNode::Initialize(std::string nodeId, std::string nodeJson, std::string* /*outError*/)
@@ -103,6 +115,15 @@ bool HZBBuildNode::Initialize(std::string nodeId, std::string nodeJson, std::str
         auto j = nlohmann::json::parse(nodeJson);
         if (j.is_object())
         {
+            // "reduce": "nearest" builds the reflection traversal pyramid (MAX)
+            // under its own defaults; the keys below still override them.
+            if (j.contains("reduce") && j["reduce"].is_string() && j["reduce"].get<std::string>() == "nearest")
+            {
+                m_Nearest = true;
+                m_OutputKey = Names::View::SSRHiZ;
+                m_PoolPrefix = "Pipeline.SSRHiZ.View";
+                m_PassStem = "SSRHiZ";
+            }
             if (j.contains("input") && j["input"].is_string())
                 m_InputKey = j["input"].get<std::string>();
             if (j.contains("output") && j["output"].is_string())
@@ -129,38 +150,24 @@ void HZBBuildNode::DeclareForView(ViewDeclare& d)
     if (!m_PipelineId.IsValid())
         return;
 
-    // Reservation guard: each pyramid is built (and published) only for a view
-    // that actually consumes it. The occlusion HZB needs a phase-B slice — i.e.
-    // an HZB view (HzbCullingStrategy opted it in). Scene panes and the Game
-    // View both opt in, so an editor frame routinely carries SEVERAL HZB views
+    // Reservation guard: the pyramid is built (and published) only for a view
+    // that consumes it. The occlusion pyramid needs a phase-B slice, i.e. an
+    // HZB view (HzbCullingStrategy opted it in). Scene panes and the Game View
+    // both opt in, so an editor frame routinely carries SEVERAL HZB views
     // through this one node object; probes, thumbnails and any view before its
     // strategy is set have no slicePhase==1 range. Mirrors the no-op paths in
-    // OcclusionCullP2Node + ScheduleWorldOcclusionRecoverScatter. The SSR Hi-Z
-    // needs an active SSSR volume. A view with neither pays zero cost with the
-    // node still enabled in the blueprint.
-    GPUCullingPipeline* cull = d.Services.GetGPUCullingPipeline();
-    bool hasPhaseB = false;
-    if (cull)
-    {
-        for (const auto& r : cull->GetViewVisibilityRanges())
-        {
-            if (r.viewId == d.View.id && r.cascadeIndex == kCullingCascadeIndexNone &&
-                r.slicePhase == 1u)
-            {
-                hasPhaseB = true;
-                break;
-            }
-        }
-    }
-    const bool ssrActive =
-        d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsSSSRActive();
-    if (!hasPhaseB && !ssrActive)
+    // OcclusionCullP2Node + ScheduleWorldOcclusionRecoverScatter. The
+    // reflection traversal pyramid needs an active SSSR volume. A view that
+    // needs neither pays zero cost with the node still enabled in the blueprint.
+    if (m_Nearest ? !d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsSSSRActive()
+                  : !ViewHasPhaseB(d))
         return;
 
-    // Source depth: the resolved single-sample R32F (View.DepthResolved) — it
-    // carries UnorderedAccess so it can be read as a storage image, matching
-    // the pyramid's storage-only binding layout. Falls back to the effective
-    // resolved depth value on the ViewDeclare when the key is unpublished.
+    // Source depth: a single-sample R32F resolved depth (View.DepthResolved by
+    // default) — it carries UnorderedAccess so it can be read as a storage
+    // image, matching the pyramid's storage-only binding layout. Falls back to
+    // the effective resolved depth value on the ViewDeclare when the key is
+    // unpublished.
     RenderGraph::RGTexture depth = d.ResolveTexture(m_InputKey);
     if (!depth.IsValid())
         depth = d.ViewDepthResolved;
@@ -176,7 +183,9 @@ void HZBBuildNode::DeclareForView(ViewDeclare& d)
     const uint32_t levels = MipChainLength(w, h);
 
     // POOL import (design's "hi-Z" persistence case): full mip chain at the
-    // EXACT depth extent, R32F, storage read+write.
+    // EXACT depth extent, R32F, storage read+write, named per view — which is
+    // also what scopes its pool-owned mip views.
+    const std::string poolName = m_PoolPrefix + std::to_string(static_cast<uint32_t>(d.View.id));
     Rendering::TextureDesc td{};
     td.width = w;
     td.height = h;
@@ -186,56 +195,19 @@ void HZBBuildNode::DeclareForView(ViewDeclare& d)
     td.sampleCount = 1u;
     td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
     td.usage = static_cast<uint32_t>(TextureUsage::UnorderedAccess | TextureUsage::ShaderResource);
-    // Import and publish whichever pyramids this view consumes, then pick the
-    // cheapest build that covers them. SSR needs the OPPOSITE bound to
-    // occlusion: a MAX-reduced (nearest-surface) pyramid, so the ray march
-    // registers a crossing as soon as it could hit near geometry (the MIN
-    // occlusion pyramid over-steps it). Each pyramid keeps its own pool entry,
-    // named per view — which is also what scopes its pool-owned mip views.
-    const std::string poolName = m_PoolPrefix + std::to_string(static_cast<uint32_t>(d.View.id));
-    const std::string ssrPool =
-        m_SsrPoolPrefix + std::to_string(static_cast<uint32_t>(d.View.id));
-
-    RenderGraph::RGTexture hzbMin{};
-    RenderGraph::RGTexture hzbMax{};
-    if (hasPhaseB)
-    {
-        td.debugName = poolName.c_str();
-        hzbMin = d.Frame.ImportPersistentTexture(poolName.c_str(), td);
-        if (hzbMin.IsValid())
-            d.PublishTexture(m_OutputKey, hzbMin);
-    }
-    if (ssrActive)
-    {
-        td.debugName = ssrPool.c_str();
-        hzbMax = d.Frame.ImportPersistentTexture(ssrPool.c_str(), td);
-        if (hzbMax.IsValid())
-            d.PublishTexture(m_SsrOutputKey, hzbMax);
-    }
+    td.debugName = poolName.c_str();
+    const RenderGraph::RGTexture hzb = d.Frame.ImportPersistentTexture(poolName.c_str(), td);
+    if (!hzb.IsValid())
+        return;
+    d.PublishTexture(m_OutputKey, hzb);
 
     // Two-dispatch SPD build unless killed, over-large, or unloadable — the
-    // chain fallback keeps every pyramid on screen in all of those cases.
+    // chain fallback keeps the pyramid on screen in all of those cases.
     const bool spdCapable = (w >> 7u) <= kSpdMaxMip7Extent && (h >> 7u) <= kSpdMaxMip7Extent;
-    const bool spdUsable = SpdEnabled() && spdCapable;
-
-    // Both pyramids wanted: one fused pair of dispatches reads depth once and
-    // emits both reductions, replacing the MAX pyramid's entire per-mip chain.
-    if (hzbMin.IsValid() && hzbMax.IsValid() && spdUsable && m_SpdMinMaxPipelineId.IsValid() &&
-        m_SpdMinMaxFinalizePipelineId.IsValid())
-    {
-        DeclareSpdMinMaxBuild(d, depth, hzbMin, hzbMax, w, h, levels);
-        return;
-    }
-
-    if (hzbMin.IsValid())
-    {
-        if (spdUsable && m_SpdPipelineId.IsValid() && m_SpdFinalizePipelineId.IsValid())
-            DeclareSpdBuild(d, depth, hzbMin, w, h, levels);
-        else
-            DeclareChainBuild(d, depth, hzbMin, w, h, levels, kReduceMin);
-    }
-    if (hzbMax.IsValid())
-        DeclareChainBuild(d, depth, hzbMax, w, h, levels, kReduceMax);
+    if (SpdEnabled() && spdCapable && m_SpdPipelineId.IsValid() && m_SpdFinalizePipelineId.IsValid())
+        DeclareSpdBuild(d, depth, hzb, w, h, levels);
+    else
+        DeclareChainBuild(d, depth, hzb, w, h, levels, m_Nearest ? kReduceMax : kReduceMin);
 }
 
 void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
@@ -244,7 +216,7 @@ void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture dept
 {
     // Mip 0: copy the phase-A depth into the pyramid base (full res).
     d.Frame.AddComputePass(
-        d.PassName("HZBBuild.Mip0").c_str(), Rendering::PassPhase::kDefault,
+        d.PassName((m_PassStem + ".Mip0").c_str()).c_str(), Rendering::PassPhase::kDefault,
         [&](RenderGraph::RGPassBuilder& p)
         {
             p.Read(depth, RenderGraph::RGTextureRead::Storage);
@@ -296,7 +268,7 @@ void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture dept
         const uint32_t dstH = std::max(1u, h >> m);
 
         d.Frame.AddComputePass(
-            d.PassName(("HZBBuild.Mip" + std::to_string(m)).c_str()).c_str(),
+            d.PassName((m_PassStem + ".Mip" + std::to_string(m)).c_str()).c_str(),
             Rendering::PassPhase::kDefault,
             [&, m](RenderGraph::RGPassBuilder& p)
             {
@@ -348,7 +320,7 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
 
     // Tile pass: mips 0..6 per 64x64 tile (LDS-internal, no image re-reads).
     d.Frame.AddComputePass(
-        d.PassName("HZBBuild.SPD").c_str(), Rendering::PassPhase::kDefault,
+        d.PassName((m_PassStem + ".SPD").c_str()).c_str(), Rendering::PassPhase::kDefault,
         [&](RenderGraph::RGPassBuilder& p)
         {
             p.Read(depth, RenderGraph::RGTextureRead::Storage);
@@ -388,13 +360,15 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
             if (!pipe.IsValid())
             {
                 // Fail visible: a dead tile pipeline leaves the whole pyramid
-                // stale, and a stale pyramid under camera motion can cull
-                // instances the fresh depth would have kept.
+                // stale; under camera motion a stale occlusion pyramid can cull
+                // instances the fresh depth would have kept, and a stale
+                // reflection pyramid steps rays over surfaces.
                 if (!m_WarnedSpdTilePipeline)
                 {
                     m_WarnedSpdTilePipeline = true;
-                    LOG_WARNING("HZBBuildNode: SPD tile pipeline creation failed — HZB pyramid "
-                                "is not being rebuilt (stale occlusion source)");
+                    LOG_WARNING("HZBBuildNode: {} SPD tile pipeline creation failed — the pyramid "
+                                "is not being rebuilt (stale source)",
+                                m_PassStem);
                 }
                 return;
             }
@@ -412,7 +386,7 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
         return;
 
     d.Frame.AddComputePass(
-        d.PassName("HZBBuild.SPDFinalize").c_str(), Rendering::PassPhase::kDefault,
+        d.PassName((m_PassStem + ".SPDFinalize").c_str()).c_str(), Rendering::PassPhase::kDefault,
         [&](RenderGraph::RGPassBuilder& p)
         {
             // Reads mips 1..6 interior (tile-pass output), writes mips 2..
@@ -453,15 +427,17 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
             if (!pipe.IsValid())
             {
                 // Fail visible: skipping the finalize ships unrepaired fold
-                // edges and stale mips 7+ — NON-conservative (a too-near HZB
-                // texel culls visible instances), unlike the benign-stale
-                // chain fallback.
+                // edges and stale mips 7+ — NON-conservative (a too-near
+                // occlusion texel culls visible instances, a too-far reflection
+                // texel steps a ray over a hit), unlike the benign-stale chain
+                // fallback.
                 if (!m_WarnedSpdFinalizePipeline)
                 {
                     m_WarnedSpdFinalizePipeline = true;
-                    LOG_WARNING("HZBBuildNode: SPD finalize pipeline creation failed — pyramid "
-                                "fold edges are unrepaired (occlusion may over-cull); set "
-                                "GE_HZB_SPD=0 to restore the per-mip chain");
+                    LOG_WARNING("HZBBuildNode: {} SPD finalize pipeline creation failed — pyramid "
+                                "fold edges are unrepaired; set GE_HZB_SPD=0 to restore the "
+                                "per-mip chain",
+                                m_PassStem);
                 }
                 return;
             }
@@ -658,8 +634,9 @@ void HZBBuildNode::LoadSpdShader(IDevice* device)
 
     ShaderPackage tilePkg{};
     ShaderPackage finalizePkg{};
-    if (!loadCs("Shaders/hzb_spd.shaderpkg", tilePkg) ||
-        !loadCs("Shaders/hzb_spd_finalize.shaderpkg", finalizePkg))
+    if (!loadCs(m_Nearest ? "Shaders/hzb_spd_nearest.shaderpkg" : "Shaders/hzb_spd.shaderpkg", tilePkg) ||
+        !loadCs(m_Nearest ? "Shaders/hzb_spd_nearest_finalize.shaderpkg" : "Shaders/hzb_spd_finalize.shaderpkg",
+                finalizePkg))
         return;
 
     m_SpdDepthBinding = resolveBinding(tilePkg, "uDepth", 0u);
@@ -694,248 +671,6 @@ void HZBBuildNode::LoadSpdShader(IDevice* device)
     fd.DebugName = "HZBBuildSPDFinalize";
     m_SpdFinalizePipelineId = device->InternComputePipeline(std::move(fd));
 
-    LoadSpdMinMaxShader(device);
-}
-
-void HZBBuildNode::LoadSpdMinMaxShader(IDevice* device)
-{
-    // Fused MIN+MAX variant. Reached only from LoadSpdShader's tail, so the
-    // maxComputeSharedMemorySize gate has already passed — the fused shaders
-    // reuse one set of LDS tiles across two sequential phases and so need
-    // exactly the MIN-only path's shared memory. A load failure leaves the
-    // pipeline ids invalid and each pyramid on its own build.
-    const auto loadCs = [&](const char* path, ShaderPackage& pkg) -> bool {
-        std::string loadErr;
-        if (!LoadShaderPkg(path, device->PreferredShaderSource(), pkg, &loadErr))
-        {
-            LOG_WARNING("HZBBuildNode: failed to load {} ({}); building the SSR Hi-Z separately",
-                        path, loadErr);
-            return false;
-        }
-        auto it = pkg.stageBytes.find("cs");
-        if (it == pkg.stageBytes.end() || it->second.empty())
-        {
-            LOG_WARNING("HZBBuildNode: {} missing cs stage; building the SSR Hi-Z separately",
-                        path);
-            return false;
-        }
-        return true;
-    };
-    const auto resolveBinding = [](const ShaderPackage& pkg, const char* name,
-                                   uint32_t fallback) -> uint32_t {
-        uint32_t binding = fallback;
-        DescriptorType reflectedType{};
-        if (!Detail::TryGetSet0BindingByName(pkg.meta, name, binding, reflectedType))
-        {
-            LOG_WARNING("HZBBuildNode: failed to resolve set0 binding '{}' from fused SPD "
-                        "reflection; falling back to literal {}",
-                        name, fallback);
-            return fallback;
-        }
-        return binding;
-    };
-    const auto addBinding = [](DescriptorSetLayoutDesc& layout, uint32_t binding,
-                               uint32_t count) {
-        DescriptorBinding b{};
-        b.binding = binding;
-        b.type = DescriptorType::StorageImage;
-        b.count = count;
-        b.shaderStages = kShaderStageCompute;
-        layout.bindings.push_back(b);
-    };
-
-    ShaderPackage tilePkg{};
-    ShaderPackage finalizePkg{};
-    if (!loadCs("Shaders/hzb_spd_minmax.shaderpkg", tilePkg) ||
-        !loadCs("Shaders/hzb_spd_minmax_finalize.shaderpkg", finalizePkg))
-        return;
-
-    m_SpdMinMaxDepthBinding = resolveBinding(tilePkg, "uDepth", 0u);
-    m_SpdMinMaxMip0MinBinding = resolveBinding(tilePkg, "uMip0Min", 1u);
-    m_SpdMinMaxMipsMinBinding = resolveBinding(tilePkg, "uMipsMin", 2u);
-    m_SpdMinMaxMip0MaxBinding = resolveBinding(tilePkg, "uMip0Max", 3u);
-    m_SpdMinMaxMipsMaxBinding = resolveBinding(tilePkg, "uMipsMax", 4u);
-    m_SpdMinMaxSet0Layout = DescriptorSetLayoutDesc{};
-    m_SpdMinMaxSet0Layout.debugName = "HZBBuildSPDMinMax_SetLayout";
-    addBinding(m_SpdMinMaxSet0Layout, m_SpdMinMaxDepthBinding, 1u);
-    addBinding(m_SpdMinMaxSet0Layout, m_SpdMinMaxMip0MinBinding, 1u);
-    addBinding(m_SpdMinMaxSet0Layout, m_SpdMinMaxMipsMinBinding, kSpdTileMipArrayCount);
-    addBinding(m_SpdMinMaxSet0Layout, m_SpdMinMaxMip0MaxBinding, 1u);
-    addBinding(m_SpdMinMaxSet0Layout, m_SpdMinMaxMipsMaxBinding, kSpdTileMipArrayCount);
-
-    m_SpdMinMaxFinalizeMipsMinBinding = resolveBinding(finalizePkg, "uMipsMin", 0u);
-    m_SpdMinMaxFinalizeMipsMaxBinding = resolveBinding(finalizePkg, "uMipsMax", 1u);
-    m_SpdMinMaxFinalizeSet0Layout = DescriptorSetLayoutDesc{};
-    m_SpdMinMaxFinalizeSet0Layout.debugName = "HZBBuildSPDMinMaxFinalize_SetLayout";
-    addBinding(m_SpdMinMaxFinalizeSet0Layout, m_SpdMinMaxFinalizeMipsMinBinding,
-               kSpdFinalizeMipArrayCount);
-    addBinding(m_SpdMinMaxFinalizeSet0Layout, m_SpdMinMaxFinalizeMipsMaxBinding,
-               kSpdFinalizeMipArrayCount);
-
-    auto tileCs = tilePkg.stageBytes.find("cs");
-    ComputePipelineDesc cd{};
-    cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(tileCs->second));
-    cd.DescriptorSetLayouts.push_back(device->InternDescriptorSetLayout(m_SpdMinMaxSet0Layout));
-    cd.PushConstants.Size = sizeof(HzbSpdPC);
-    cd.PushConstants.StageMask = kShaderStageCompute;
-    cd.DebugName = "HZBBuildSPDMinMax";
-    m_SpdMinMaxPipelineId = device->InternComputePipeline(std::move(cd));
-
-    auto finCs = finalizePkg.stageBytes.find("cs");
-    ComputePipelineDesc fd{};
-    fd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(finCs->second));
-    fd.DescriptorSetLayouts.push_back(
-        device->InternDescriptorSetLayout(m_SpdMinMaxFinalizeSet0Layout));
-    fd.PushConstants.Size = sizeof(HzbSpdPC);
-    fd.PushConstants.StageMask = kShaderStageCompute;
-    fd.DebugName = "HZBBuildSPDMinMaxFinalize";
-    m_SpdMinMaxFinalizePipelineId = device->InternComputePipeline(std::move(fd));
-}
-
-void HZBBuildNode::DeclareSpdMinMaxBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
-                                         RenderGraph::RGTexture hzbMin,
-                                         RenderGraph::RGTexture hzbMax, uint32_t w, uint32_t h,
-                                         uint32_t levels)
-{
-    const uint32_t wgX = (w + kSpdTileSize - 1u) / kSpdTileSize;
-    const uint32_t wgY = (h + kSpdTileSize - 1u) / kSpdTileSize;
-    const uint32_t tileMips = std::min(levels, 7u);
-
-    // Tile pass: mips 0..6 of BOTH pyramids per 64x64 tile. The depth block
-    // each thread loads is consumed by both reductions, which is the read this
-    // fusion saves; LDS is reused across the two phases, not doubled.
-    d.Frame.AddComputePass(
-        d.PassName("HZBBuild.SPDMinMax").c_str(), Rendering::PassPhase::kDefault,
-        [&](RenderGraph::RGPassBuilder& p)
-        {
-            p.Read(depth, RenderGraph::RGTextureRead::Storage);
-            p.Write(hzbMin, RenderGraph::RGTextureWrite::Storage,
-                    RenderGraph::RGRange{.BaseMip = 0u, .MipCount = tileMips});
-            p.Write(hzbMax, RenderGraph::RGTextureWrite::Storage,
-                    RenderGraph::RGRange{.BaseMip = 0u, .MipCount = tileMips});
-        },
-        [this, depth, hzbMin, hzbMax, w, h, levels, wgX, wgY](RenderGraph::RGContext& ctx)
-        {
-            auto* dev = ctx.GetDevice();
-            auto* cl = ctx.Cmd;
-            if (!dev || !cl)
-                return;
-            const TextureHandle depthTex = ctx.GetTexture(depth);
-            const TextureViewHandle minMip0 = ctx.GetOrCreatePooledMipView(hzbMin, 0u);
-            const TextureViewHandle maxMip0 = ctx.GetOrCreatePooledMipView(hzbMax, 0u);
-            if (!depthTex.IsValid() || !minMip0.IsValid() || !maxMip0.IsValid())
-                return;
-
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_SpdMinMaxSet0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "HZBBuild.SPDMinMax.Set0";
-            DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
-            if (!ds.IsValid())
-                return;
-            dev->UpdateStorageImageBinding(ds, m_SpdMinMaxDepthBinding, depthTex);
-            dev->UpdateStorageImageBinding(ds, m_SpdMinMaxMip0MinBinding, minMip0);
-            dev->UpdateStorageImageBinding(ds, m_SpdMinMaxMip0MaxBinding, maxMip0);
-            for (uint32_t i = 0; i < kSpdTileMipArrayCount; ++i)
-            {
-                // Slots past the real chain re-bind the deepest mip: a valid
-                // descriptor the shader never addresses (mipCount clamps).
-                const uint32_t mip = std::min(i + 1u, levels - 1u);
-                dev->UpdateStorageImageBinding(ds, m_SpdMinMaxMipsMinBinding,
-                                               ctx.GetOrCreatePooledMipView(hzbMin, mip), i);
-                dev->UpdateStorageImageBinding(ds, m_SpdMinMaxMipsMaxBinding,
-                                               ctx.GetOrCreatePooledMipView(hzbMax, mip), i);
-            }
-
-            PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_SpdMinMaxPipelineId);
-            if (!pipe.IsValid())
-            {
-                // Fail visible: a dead tile pipeline leaves both pyramids
-                // stale, and a stale occlusion pyramid under camera motion can
-                // cull instances the fresh depth would have kept.
-                if (!m_WarnedSpdMinMaxTilePipeline)
-                {
-                    m_WarnedSpdMinMaxTilePipeline = true;
-                    LOG_WARNING("HZBBuildNode: fused SPD tile pipeline creation failed — HZB and "
-                                "SSR Hi-Z pyramids are not being rebuilt (stale sources)");
-                }
-                return;
-            }
-            cl->SetPipeline(pipe);
-            cl->BindDescriptorSet(0, ds, pipe);
-            HzbSpdPC pc{w, h, levels};
-            cl->SetPushConstants(pc);
-            cl->Dispatch(wgX, wgY, 1u);
-        });
-
-    // Finalize pass: one workgroup repairs the deferred odd-extent folds and
-    // builds mips 7+ for both pyramids. Chains of 1-2 levels have nothing to
-    // repair (mip 1 is exact from the tile pass).
-    if (levels < 3u)
-        return;
-
-    d.Frame.AddComputePass(
-        d.PassName("HZBBuild.SPDMinMaxFinalize").c_str(), Rendering::PassPhase::kDefault,
-        [&](RenderGraph::RGPassBuilder& p)
-        {
-            // Reads mips 1..6 interior (tile-pass output), writes mips 2..
-            // edges + mips 7.. whole. Declared as one identical-range
-            // Read+Write pair per pyramid so the graph merges each into a
-            // single storage access (General, ShaderRead|ShaderWrite) —
-            // overlapping but DIFFERENT ranges with a write would self-hazard.
-            const RenderGraph::RGRange range{.BaseMip = 1u, .MipCount = levels - 1u};
-            p.Read(hzbMin, RenderGraph::RGTextureRead::Storage, range);
-            p.Write(hzbMin, RenderGraph::RGTextureWrite::Storage, range);
-            p.Read(hzbMax, RenderGraph::RGTextureRead::Storage, range);
-            p.Write(hzbMax, RenderGraph::RGTextureWrite::Storage, range);
-        },
-        [this, hzbMin, hzbMax, w, h, levels](RenderGraph::RGContext& ctx)
-        {
-            auto* dev = ctx.GetDevice();
-            auto* cl = ctx.Cmd;
-            if (!dev || !cl)
-                return;
-            // Mip 1 is the shallowest level this pass addresses (levels >= 3
-            // here), so an invalid view for it means a pyramid is gone.
-            if (!ctx.GetOrCreatePooledMipView(hzbMin, 1u).IsValid() ||
-                !ctx.GetOrCreatePooledMipView(hzbMax, 1u).IsValid())
-                return;
-
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_SpdMinMaxFinalizeSet0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "HZBBuild.SPDMinMaxFinalize.Set0";
-            DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
-            if (!ds.IsValid())
-                return;
-            for (uint32_t i = 0; i < kSpdFinalizeMipArrayCount; ++i)
-            {
-                const uint32_t mip = std::min(i + 1u, levels - 1u);
-                dev->UpdateStorageImageBinding(ds, m_SpdMinMaxFinalizeMipsMinBinding,
-                                               ctx.GetOrCreatePooledMipView(hzbMin, mip), i);
-                dev->UpdateStorageImageBinding(ds, m_SpdMinMaxFinalizeMipsMaxBinding,
-                                               ctx.GetOrCreatePooledMipView(hzbMax, mip), i);
-            }
-
-            PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_SpdMinMaxFinalizePipelineId);
-            if (!pipe.IsValid())
-            {
-                // A skipped finalize leaves the deferred folds unrepaired,
-                // which over-culls (the MIN pyramid reads too near).
-                if (!m_WarnedSpdMinMaxFinalizePipeline)
-                {
-                    m_WarnedSpdMinMaxFinalizePipeline = true;
-                    LOG_WARNING("HZBBuildNode: fused SPD finalize pipeline creation failed — "
-                                "pyramid folds are unrepaired (over-culling)");
-                }
-                return;
-            }
-            cl->SetPipeline(pipe);
-            cl->BindDescriptorSet(0, ds, pipe);
-            HzbSpdPC pc{w, h, levels};
-            cl->SetPushConstants(pc);
-            cl->Dispatch(1u, 1u, 1u);
-        });
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

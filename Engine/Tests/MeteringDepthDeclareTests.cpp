@@ -20,7 +20,7 @@
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -91,7 +91,9 @@ namespace
 // resolves, else View.DepthResolved.
 struct MeteringDepthFixture
 {
-    std::unique_ptr<IDevice> Device;
+    // The shared device, or the fixture's own when a test asks for the validation layer.
+    IDevice* Device = nullptr;
+    std::unique_ptr<IDevice> m_OwnedDevice;
     std::unique_ptr<RenderServices> Rs;
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
@@ -109,16 +111,17 @@ struct MeteringDepthFixture
             desc.enableDebugLayer = true;
             desc.enableDynamicRendering = true;
             desc.descriptorBuffers = DescriptorBufferMode::Disabled;
-            Device = DeviceFactory::CreateDevice(desc);
-            if (Device && !Device->Initialize(desc))
-                Device.reset();
+            m_OwnedDevice = DeviceFactory::CreateDevice(desc);
+            if (m_OwnedDevice && !m_OwnedDevice->Initialize(desc))
+                m_OwnedDevice.reset();
+            Device = m_OwnedDevice.get();
         }
         else
-            Device = CreateVulkanDeviceFast();
+            Device = SharedHeadlessDevice();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
-        EXPECT_TRUE(Rs->Initialize(Device.get()));
+        EXPECT_TRUE(Rs->Initialize(Device));
         // The ocean surface material compiles through the real composer from the staged shader
         // mirror (the host normally provides this context); without it the surface never draws.
         Rendering::MaterialBuildContext mbc{};
@@ -161,7 +164,7 @@ struct MeteringDepthFixture
         if (waterCenterZ != 0.0f)
         {
             auto& ocean = Rs->EnsureFeature<GameEngine::Ocean::OceanRenderFeature>();
-            EXPECT_TRUE(ocean.Initialize(Device.get()));
+            EXPECT_TRUE(ocean.Initialize(Device));
             ocean.SetHasOcean(true);
             GameEngine::Ocean::OceanRenderFeature::WaterBodyBox water{};
             water.CenterZ = waterCenterZ;
@@ -219,7 +222,8 @@ struct MeteringDepthFixture
     {
         Device->WaitForIdle();
         Rs->Shutdown();
-        Device->Shutdown();
+        if (m_OwnedDevice)
+            m_OwnedDevice->Shutdown();
     }
 };
 
@@ -238,8 +242,8 @@ struct MeteringDepthFrame
 MeteringDepthFrame DeclareOneFrame(MeteringDepthFixture& f, RenderPipelineInstance& instance, uint32_t index)
 {
     MeteringDepthFrame out;
-    FramePools pools(f.Device.get());
-    RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    FramePools pools(f.Device);
+    RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
     frame.BeginFrame(index);
     RenderGraph::RGTexture color = frame.ImportPersistentTexture("MD.Color", ColorTargetDesc());
     RenderGraph::RGTexture depth = frame.ImportPersistentTexture("MD.Depth", DepthTargetDesc());

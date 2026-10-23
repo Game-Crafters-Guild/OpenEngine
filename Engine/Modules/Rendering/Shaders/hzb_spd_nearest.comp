@@ -1,0 +1,6 @@
+#version 450
+
+// HZB downsample, tile pass (1 of 2), of the reflection traversal pyramid: MAX
+// keeps the nearest depth (Includes/hzb_reduce.glsl).
+#define HZB_REDUCE_NEAREST
+#include "Includes/hzb_spd_tile.glsl"

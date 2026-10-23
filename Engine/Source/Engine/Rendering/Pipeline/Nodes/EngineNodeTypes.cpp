@@ -98,7 +98,10 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
         []() -> std::unique_ptr<IRenderPipelineNode>
         { return std::make_unique<ScreenSpaceReflectionsNode>(); },
         /*perView*/ true,
-        RenderPipelineNodeResourceFields{.RefKeys = {"input", "output"}, .PublishKeys = {{"output", "HDRSSSR"}}});
+        RenderPipelineNodeResourceFields{.RefKeys = {"input", "output"},
+                                         .PublishKeys = {{"output", "HDRSSSR"}},
+                                         .StaticPublishNames = {Names::View::DepthResolvedPostOcean,
+                                                                Names::View::SSRHiZ}});
 
     (void)registry.Register(
         "FidelityFXDepthOfField",
@@ -278,9 +281,9 @@ void RegisterEngineNodeTypes(RenderPipelineNodeRegistry& registry)
 
     // Two-phase HZB occlusion (R2.1) nodes, wired into the ForwardPlus
     // blueprints after WorldRender. HZBBuild builds the MIN/occlusion
-    // pyramid for a view that opted in via HzbCullingStrategy, and the
-    // MAX/nearest SSR pyramid for a view with SSSR active — each
-    // independently, neither when a view needs neither. The phase-B
+    // pyramid for a view that opted in via HzbCullingStrategy, nothing for
+    // any other view. (The MAX/nearest reflection pyramid is built by the
+    // reflections node from the final depth, with its own instance.) The phase-B
     // cull/scatter nodes stay inert without a slicePhase==1 reservation, so
     // probes and thumbnails still pay zero cost; scene panes and the Game
     // View DO opt in, so one frame commonly carries several HZB views

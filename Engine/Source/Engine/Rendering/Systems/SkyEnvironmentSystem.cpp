@@ -22,7 +22,9 @@
 #include "Mathematics/Vector3.h"
 #include "Rendering/Sky/AtmosphereTransmittance.h"
 #include "Rendering/Sky/SkySettings.h"
+#include "Rendering/Sky/SkySunState.h"
 #include "Rendering/Sky/SkySystem.h"
+#include "Rendering/Sky/SkyViewLutAltitude.h"
 #include "Rendering/Sky/SolarPath.h"
 #include "Types/ColorUtils.h"
 
@@ -373,16 +375,14 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         {
             if (fallbackSkySettings)
             {
-                Rendering::SkySystemState state{};
-                sky.SetSettings(*fallbackSkySettings, state);
+                sky.SetSettings(*fallbackSkySettings, sky.GetSunState());
             }
             return;
         }
 
         settings.environmentTexture = envTex;
 
-        Rendering::SkySystemState state{};
-        sky.SetSettings(settings, state);
+        sky.SetSettings(settings, Rendering::SkySunState{});
         if (!replacedHdri.IsNull())
             rs->Textures().Evict(replacedHdri);
         return;
@@ -393,6 +393,9 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     Components::SkyEnvironment comp{};
     bool foundEnvironment = false;
     int environmentCount = 0;
+    // The editor's preview hour stands in for the component's hour in this frame's copy only, and
+    // holds an animated clock where it is while it is set.
+    const std::optional<float32> previewHour = GetPreviewHour(world.GetWorldId());
 
     {
         world.Query<ECS::Write<Components::SkyEnvironment>>()
@@ -400,12 +403,14 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
                 ++environmentCount;
                 if (foundEnvironment)
                     return;
-                if (env.AnimateTimeOfDay)
+                if (env.AnimateTimeOfDay && !previewHour)
                     TickAnimatedTimeOfDay(env, deltaTime);
                 comp = env;
                 foundEnvironment = true;
             });
     }
+    if (previewHour)
+        comp.TimeOfDayHours = *previewHour;
 
     if (environmentCount > 1)
     {
@@ -562,6 +567,15 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     settings.fallingStarDotSize2D = std::clamp(comp.FallingStarDotSize2D, 0.1f, 4.0f);
     Rendering::SkySystemConfig config{};
     Rendering::SkySystemState state{};
+    Rendering::SkySunState sunState{};
+    // The sun state's horizon is the one the world's main camera sees: the camera the volume blend
+    // and the sky-view LUT's band take. The position is the one the view's owner last wrote: the
+    // Scene view writes it before this system runs, the editor Game view and the Player write it when
+    // they declare, after the update, so theirs is last frame's.
+    const Rendering::CameraData* mainCamera = rs->Views().FindMainCameraData(world.GetWorldId());
+    const float planetRadius = ScatteringAtmosphere().planetRadius;
+    const float cameraAltitude =
+        mainCamera ? Rendering::AltitudeAbovePlanetMeters(mainCamera->cameraPos, planetRadius) : 0.0f;
 
     // Physically anchor the sky's solar irradiance to the scene's directional sun. Set BEFORE the
     // sun/moon blend, which reads primarySunIntensity as its daytime input
@@ -625,6 +639,8 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.moonAngularRadius =
             kDefaultMoonAngularRadiusRad * std::clamp(comp.MoonSize, 0.1f, 6.0f);
         Rendering::ComputeSimpleSunMoon(settings, config, solarFrame, state);
+        sunState = Rendering::ComputeSkySunState(solarFrame, state.sunDirWS, state.moonDirWS, settings.moonArcPosition,
+                                                 cameraAltitude, planetRadius);
         // The moon's own source on the day's scale: its full-moon illuminance (Moonlight) times the
         // phase, lifted to the top of the atmosphere as the sun's is. It lights the sky-view LUT
         // beside the sun and sets the disc, and it follows Moonlight rather than the sun, so the
@@ -633,7 +649,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
             comp.ShowMoon
                 ? Components::LightIntensityToUnitless(
                       Components::SkySunDrive::SanitisedMoonlightLux(comp.MoonlightIlluminance) *
-                          Rendering::MoonPhaseIlluminanceFraction(settings.moonArcPosition),
+                          sunState.MoonPhaseFraction,
                       Components::LightUnit::Lux) *
                       SkyIrradianceScale()
                 : 0.0f;
@@ -672,6 +688,9 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.moonDirWS[1] = -dir[1];
         settings.moonDirWS[2] = -dir[2];
         settings.moonIntensity = 0.0f;
+        sunState = Rendering::ComputeSkySunState(solarFrame, state.sunDirWS, settings.moonDirWS,
+                                                 std::clamp(comp.MoonArcPosition, 0.0f, 1.0f), cameraAltitude,
+                                                 planetRadius);
 
         // This branch never runs the sun/moon blend, so the source is the sun's alone and the tint
         // is the whole of it.
@@ -713,7 +732,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
             const float moonBlend = bodies.MoonBlend;
             const float curveLux =
                 Components::SkySunDrive::CurveIlluminanceLux(comp.SunIlluminanceCurve, comp.TimeOfDayHours);
-            const float moonLux = Components::SkySunDrive::MoonlightLuxFromGround(comp, bodies.Moon);
+            const float moonLux = Components::SkySunDrive::MoonlightLuxFromGround(comp, sunState.MoonPhaseFraction, bodies.Moon);
             const float deliveredLux = (1.0f - moonBlend) * curveLux + moonBlend * moonLux;
             WriteLinkedSunIntensity(world, drivenLight,
                                     Components::SkySunIlluminance::LightIntensityFromLux(deliveredLux, light->IntensityUnit),
@@ -723,7 +742,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
                 // The sun's hue with its elevation held at the horizon once it sets, so a set sun keeps
                 // the deepest horizon red rather than a near-zero colour over a near-zero luminance.
                 float sunHueSource[3] = {bodies.Sun[0], bodies.Sun[1], bodies.Sun[2]};
-                if (state.sunDirWS[1] < 0.0f)
+                if (sunState.SunElevation < 0.0f)
                     Rendering::EvaluateGroundLevelSunColor(ScatteringAtmosphere(), sunTint, 0.0f, sunHueSource);
                 float sunHue[3];
                 float moonHue[3];
@@ -753,7 +772,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
                     : 0.0f;
             const float moonScale = Rendering::LinkedLightMoonScale(config, comp.ShowMoon) *
                                     Components::SkySunDrive::MoonlightRatio(comp) *
-                                    Rendering::MoonPhaseIlluminanceFraction(comp.MoonArcPosition) * clearSunOverLight;
+                                    sunState.MoonPhaseFraction * clearSunOverLight;
             if (drivenFields & Components::SkySunIlluminance::kDrivesColor)
             {
                 float linkedLightColor[3];
@@ -793,7 +812,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     m_AccumulatedSkyTime += deltaTime;
     settings.skyTimeSeconds = m_AccumulatedSkyTime;
 
-    sky.SetSettings(settings, state);
+    sky.SetSettings(settings, sunState);
 }
 
 void SkyEnvironmentSystem::TrackDrive(ECS::World& world, ECS::EntityHandle candidate,
@@ -850,6 +869,41 @@ void SkyEnvironmentSystem::ReleaseEndedFields(ECS::World& world, ECS::EntityHand
     }
     if (releasesIntensity && m_AuthoredIntensityLight == light)
         m_AuthoredIntensityLight = {};
+}
+
+void SkyEnvironmentSystem::SetPreviewHour(uint64 worldId, float32 hours)
+{
+    std::lock_guard lock(m_PreviewMutex);
+    for (PreviewHour& preview : m_PreviewHours)
+    {
+        if (preview.WorldId == worldId)
+        {
+            preview.Hours = hours;
+            return;
+        }
+    }
+    m_PreviewHours.push_back({worldId, hours});
+    m_PreviewCount.store(static_cast<uint32>(m_PreviewHours.size()), std::memory_order_release);
+}
+
+void SkyEnvironmentSystem::ClearPreviewHour(uint64 worldId)
+{
+    std::lock_guard lock(m_PreviewMutex);
+    std::erase_if(m_PreviewHours, [worldId](const PreviewHour& preview) { return preview.WorldId == worldId; });
+    m_PreviewCount.store(static_cast<uint32>(m_PreviewHours.size()), std::memory_order_release);
+}
+
+std::optional<float32> SkyEnvironmentSystem::GetPreviewHour(uint64 worldId) const
+{
+    if (m_PreviewCount.load(std::memory_order_acquire) == 0)
+        return std::nullopt;
+    std::lock_guard lock(m_PreviewMutex);
+    for (const PreviewHour& preview : m_PreviewHours)
+    {
+        if (preview.WorldId == worldId)
+            return preview.Hours;
+    }
+    return std::nullopt;
 }
 
 void SkyEnvironmentSystem::SyncSunLight(ECS::World& world, Components::SkyEnvironment& comp,

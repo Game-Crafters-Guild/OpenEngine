@@ -241,4 +241,21 @@ void DepthResolveNode::LoadShaders(IDevice* device)
     }
 }
 
+void InitializePostWorldDepthResolve(DepthResolveNode& resolve, std::string nodeId)
+{
+    resolve.Initialize(std::move(nodeId),
+                       std::string(R"({"output":")") + Names::View::DepthResolvedPostOcean +
+                           R"(","poolName":"Pipeline.DepthResolvedPostOcean.View"})",
+                       nullptr);
+}
+
+RenderGraph::RGTexture DeclarePostWorldDepth(ViewDeclare& d, DepthResolveNode& resolve)
+{
+    RenderGraph::RGTexture depth = d.ResolveTexture(Names::View::DepthResolvedPostOcean);
+    if (depth.IsValid())
+        return depth;
+    resolve.DeclareForView(d);
+    return d.ResolveTexture(Names::View::DepthResolvedPostOcean);
+}
+
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

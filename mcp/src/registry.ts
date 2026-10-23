@@ -56,8 +56,18 @@ export interface ToolOutput {
    * it instead of `data` unless --json is set.
    */
   summary?: string;
-  /** A PNG the tool produced. MCP emits an image block; the CLI writes a file. */
-  image?: { base64: string; mimeType: "image/png"; filePath?: string };
+  /**
+   * A PNG the tool produced. The CLI writes it to a file; MCP emits it as an
+   * image block only when `inline` is set, and otherwise leaves the picture to
+   * the file the summary names.
+   */
+  image?: { base64: string; mimeType: "image/png"; filePath?: string; inline: boolean };
+  /**
+   * The arguments of the call to make next, when the reply has one. MCP adds it
+   * to the JSON as a `next` string beside the data; the CLI prints it as the
+   * last line of stdout, a command ready to paste (src/next-call.ts).
+   */
+  next?: Record<string, unknown>;
 }
 
 export type ToolErrorCode =

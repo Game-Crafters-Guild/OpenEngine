@@ -21,6 +21,7 @@ add_executable(LoggerAsyncTests
     FileSinkRotationTests.cpp
     FileSinkOpenFailureTests.cpp
     LoggerCrashFlushTests.cpp
+    RingBufferSinkQueryTests.cpp
     SourceCStringTests.cpp
 )
 

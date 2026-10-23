@@ -4,6 +4,9 @@
 #include "ECS/Systems.h"
 #include "Types/Types.h"
 
+#include <memory>
+#include <unordered_map>
+
 namespace GameEngine::PhysicsECS
 {
 // Creates physics bodies/shapes for entities that have PhysicsBody + PhysicsCollider.
@@ -27,7 +30,13 @@ private:
     // a window was missed.
     void ReleaseDisabledBodies(ECS::World& world);
 
+    // A new heightfield body's shape, building on the job pool: a 1025^2 build is about 28 ms,
+    // too long for the frame thread at each terrain tile arrival (#3409). The body is created
+    // the first update after the build lands, from the data it was started for.
+    struct PendingHeightFieldBuild;
+
     float32 m_RebuildQuiescenceSeconds = kDefaultRebuildQuiescenceSeconds;
+    std::unordered_map<uint32, std::shared_ptr<PendingHeightFieldBuild>> m_PendingHeightFields; // by EntityHandle::id
     ECS::SwapGenerationGuard m_SwapGuard;
 };
 

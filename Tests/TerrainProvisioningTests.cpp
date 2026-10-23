@@ -704,15 +704,11 @@ TEST(TerrainDebugView, DefaultsOffAndValuesAreLockstep)
     EXPECT_EQ(static_cast<uint32_t>(TerrainDebugView::AtlasSlots), 2u);
 }
 
-TEST(TerrainDebugView, SurfaceParamsLayoutLockstep)
+TEST(TerrainDebugView, SurfaceParamsDefaultsTakeNoOptionalBranch)
 {
-    // The std430 mirror is 864 bytes — 88 (22 scalars) plus the appended analytic sphere-modifier
-    // tail (count + pad + 16 x 3 vec4) — enforced by the static_assert in CBTLayout.h and pinned
-    // field-by-field in CBTLayoutTests. Lockstep with cbt_surface.glsl CBTSurfaceParamsData. Every
-    // new field defaults to 0, so a non-atlas / non-debug / analytic-free terrain takes none of
-    // those branches — golden-image safe. Materials are not in here: both terrain domains read the
-    // terrain material table (TerrainRenderFeature).
-    EXPECT_EQ(sizeof(CBTSurfaceParams), 864u);
+    // A terrain that sets nothing takes no analytic, debug or atlas branch in cbt_surface.glsl,
+    // because every optional CBTSurfaceParams field defaults to 0. The struct size and field
+    // offsets are pinned by the static_assert in CBTLayout.h and by CBTLayoutTests.
     EXPECT_EQ(CBTSurfaceParams{}.SphereAnalyticCount, 0u);
     EXPECT_EQ(CBTSurfaceParams{}.DebugMode, 0u);
     EXPECT_EQ(CBTSurfaceParams{}.AtlasBacked, 0u);

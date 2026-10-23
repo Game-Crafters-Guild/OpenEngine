@@ -60,6 +60,8 @@ constexpr TerrainAreaPreset kTerrainAreaPresets[] = {
      ECS::GetComponentTypeId<Components::TerrainGroundClaimEffect>()},
     {Preset::TerrainGrassArea, "Terrain: Grass Area",
      ECS::GetComponentTypeId<Components::TerrainGrassEffect>()},
+    {Preset::TerrainColorArea, "Terrain: Color Area",
+     ECS::GetComponentTypeId<Components::TerrainColorEffect>()},
 };
 
 static_assert(std::size(kTerrainAreaPresets) == TerrainECS::kTerrainEffectTypeCount,
@@ -163,6 +165,7 @@ const char* PresetUndoDisplayName(ComponentPreset p)
     case Preset::TerrainRulesArea:
     case Preset::TerrainGroundClaimArea:
     case Preset::TerrainGrassArea:
+    case Preset::TerrainColorArea:
         break; // Handled by FindTerrainAreaPreset above.
     case Preset::Count:
         break; // Sentinel, not a preset.
@@ -232,6 +235,7 @@ std::vector<ECS::ComponentTypeId> ComponentTypeIdsForPreset(ComponentPreset p)
     case Preset::TerrainRulesArea:
     case Preset::TerrainGroundClaimArea:
     case Preset::TerrainGrassArea:
+    case Preset::TerrainColorArea:
         break; // Handled by FindTerrainAreaPreset above.
     case Preset::Count:
         break; // Sentinel, not a preset.

@@ -49,7 +49,7 @@ Transform.scale = (1, 1, 1)
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.material = [path="Materials/Background.material"]
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 Name.value = "CheckerWall"
 Transform.position = (0, 2, 4.5)
@@ -70,7 +70,7 @@ Transform.scale = (40, 1, 40)
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Glass_Thin.material"]
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 Name.value = "GlassThin"
 Transform.position = (-1.8, 2, 0.5)
 Transform.rotation = (0, 0, 0, 1)
@@ -80,7 +80,7 @@ Transform.scale = (1.3, 1.3, 1.3)
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/Glass_Thick.material"]
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 Name.value = "GlassThick"
 Transform.position = (1.8, 2, 0.5)
 Transform.rotation = (0, 0, 0, 1)

@@ -23,6 +23,8 @@
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/SkySunDrive.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "PathfindingECS/Components/NavigationAgent.h"
+#include "PathfindingECS/Components/NavigationSurface.h"
 #include "Engine/Rendering/MeshNameRegistry.h"
 #include "Components/Rendering/ParticleRenderer.h"
 #include "Components/Rendering/Particles.h"
@@ -56,6 +58,7 @@
 #include "Components/Rendering/WorldSectorCoord.h"
 #include "Components/RuntimeOnlyEntity.h"
 #include "Components/SceneEntityTag.h"
+#include "Components/SceneViewHidden.h"
 #include "Components/Spline/SplineExtrude.h"
 #include "Components/Spline/SplineFence.h"
 #include "Components/Spline/SplineWall.h"
@@ -1080,6 +1083,37 @@ TEST(SceneIO, SaveThenLoad_RoundTripCoreComponents)
     auto* p2 = w2.GetComponent<Components::Parent>(c2);
     ASSERT_NE(p2, nullptr);
     EXPECT_EQ(p2->parent.id, r2.id);
+}
+
+// A navigation agent saves the surface it walks as the surface entity's scene id and loads it back as
+// that entity in the loaded world.
+TEST(SceneIO, SaveThenLoad_NavigationAgentSurfaceIsAnEntityReference)
+{
+    const auto scenePath = MakeTempPath("navigation-agent.scene");
+
+    ECS::World w1;
+    const ECS::EntityHandle surface = w1.CreateEntity();
+    const ECS::EntityHandle agent = w1.CreateEntity();
+    w1.AddComponentImmediate(surface, Components::SceneEntityTag{{'g', 'r', 'o', 'u', 'n', 'd', '\0'}});
+    w1.AddComponentImmediate(agent, Components::SceneEntityTag{{'u', 'n', 'i', 't', '\0'}});
+    w1.AddComponentImmediate(surface, Components::NavigationSurface{});
+    Components::NavigationAgent authored{};
+    authored.Surface = surface;
+    authored.Speed = 5.0f;
+    w1.AddComponentImmediate(agent, authored);
+
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const ECS::EntityHandle loadedSurface = FindByTag(w2, "ground");
+    const ECS::EntityHandle loadedAgent = FindByTag(w2, "unit");
+    ASSERT_TRUE(loadedSurface.IsValid());
+    ASSERT_TRUE(loadedAgent.IsValid());
+    const auto* loaded = w2.GetComponent<Components::NavigationAgent>(loadedAgent);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->Surface.id, loadedSurface.id);
+    EXPECT_FLOAT_EQ(loaded->Speed, 5.0f);
 }
 
 // Earth-scale authoring: a WorldSectorCoord-tagged entity must round-trip through
@@ -5615,7 +5649,7 @@ TEST(SceneIO, OldRenderLayerMaskKeysAreReportedAsUnknownFields)
                           "\n"
                           "[entity id=\"old\"]\n"
                           "MeshRenderer.renderLayerMask = 2\n"
-                          "MeshRenderer.castShadows = false\n"
+                          "MeshRenderer.shadowCasting = Off\n"
                           "ParticleRenderer.RenderLayerMask = 2\n"
                           "ReflectionProbe.CullMask = 2\n"));
 
@@ -5652,7 +5686,7 @@ TEST(SceneIO, OldRenderLayerMaskKeysAreReportedAsUnknownFields)
     ASSERT_NE(mesh, nullptr);
     ASSERT_NE(particles, nullptr);
     ASSERT_NE(probe, nullptr);
-    EXPECT_FALSE(mesh->castShadows) << "the block's other lines still apply";
+    EXPECT_EQ(mesh->shadowCasting, Components::ShadowCasting::Off) << "the block's other lines still apply";
     EXPECT_EQ(mesh->RenderLayers, Rendering::RenderLayerMask::Default());
     EXPECT_EQ(particles->RenderLayers, Rendering::RenderLayerMask::Default());
     EXPECT_EQ(probe->CapturedLayers, Rendering::RenderLayerMask::All());
@@ -6083,6 +6117,8 @@ TEST(SceneIO, SaveThenLoad_RoundTripAllTerrainGrassSettings)
     grass.RandomBrightness = 0.22f;
     grass.GroundingStrength = 0.25f;
     grass.CanopyShade = 1.5f;
+    grass.GroundDarkening = 0.55f;
+    grass.SoilColor = 0xFF112244u;
     grass.Translucency = 0.65f;
     grass.TextureGrass = true;
     grass.TextureCardsPerSquareMeter = 0.73f;
@@ -6146,6 +6182,8 @@ TEST(SceneIO, SaveThenLoad_RoundTripAllTerrainGrassSettings)
     EXPECT_NE(saved.find("TerrainGrass.randomBrightness = 0.22"), std::string::npos);
     EXPECT_NE(saved.find("TerrainGrass.groundingStrength = 0.25"), std::string::npos);
     EXPECT_NE(saved.find("TerrainGrass.canopyShade = 1.5"), std::string::npos);
+    EXPECT_NE(saved.find("TerrainGrass.groundDarkening = 0.55"), std::string::npos);
+    EXPECT_NE(saved.find("TerrainGrass.soilColor = 4279312964"), std::string::npos);
     EXPECT_NE(saved.find("TerrainGrass.translucency = 0.65"), std::string::npos);
     EXPECT_NE(saved.find("TerrainGrass.textureGrass = true"), std::string::npos);
     EXPECT_NE(saved.find("TerrainGrass.textureCardsPerSquareMeter = 0.73"), std::string::npos);
@@ -6214,6 +6252,8 @@ TEST(SceneIO, SaveThenLoad_RoundTripAllTerrainGrassSettings)
     EXPECT_FLOAT_EQ(loadedGrass->RandomBrightness, 0.22f);
     EXPECT_FLOAT_EQ(loadedGrass->GroundingStrength, 0.25f);
     EXPECT_FLOAT_EQ(loadedGrass->CanopyShade, 1.5f);
+    EXPECT_FLOAT_EQ(loadedGrass->GroundDarkening, 0.55f);
+    EXPECT_EQ(loadedGrass->SoilColor, 0xFF112244u);
     EXPECT_FLOAT_EQ(loadedGrass->Translucency, 0.65f);
     EXPECT_TRUE(loadedGrass->TextureGrass);
     EXPECT_FLOAT_EQ(loadedGrass->TextureCardsPerSquareMeter, 0.73f);
@@ -6473,7 +6513,7 @@ TEST(SceneIO, Load_DeletedTerrainGrassFieldsAreUnknownFieldRows)
         EXPECT_EQ(resaved.find(std::string("TerrainGrass.") + key), std::string::npos) << key;
 }
 
-// Root Color is Auto unless a scene authors it: an Auto root is Tip Color in shade (0.65 of its
+// Root Color is Auto unless a scene authors it: an Auto root is Tip Color in shade (0.4 of its
 // luminance in linear light, after the surface's sRGB decode), so a blade darkens toward the ground
 // whatever tip a scene sets. An authored root is kept as authored, and Auto survives a save and a load.
 TEST(SceneIO, TerrainGrassRootColorIsAutoUnlessAuthoredAndRoundTrips)
@@ -6505,8 +6545,8 @@ TEST(SceneIO, TerrainGrassRootColorIsAutoUnlessAuthoredAndRoundTrips)
     ASSERT_NE(authoredGrass, nullptr);
 
     EXPECT_EQ(autoGrass->RootColor, Components::kTerrainGrassAutoRootColor);
-    // (52, 78, 25) decoded, x 0.65 in linear light, encoded and rounded: (41, 63, 19).
-    EXPECT_EQ(Components::TerrainGrassResolvedRootColor(*autoGrass), 0xFF293F13u);
+    // (52, 78, 25) decoded, x 0.4 in linear light, encoded and rounded: (31, 49, 13).
+    EXPECT_EQ(Components::TerrainGrassResolvedRootColor(*autoGrass), 0xFF1F310Du);
     EXPECT_EQ(Components::TerrainGrassResolvedRootColor(*authoredGrass), 0xFF233712u);
     // The default component is Auto too, and its root is darker than its tip on every channel.
     const Components::TerrainGrass defaults{};
@@ -6799,6 +6839,55 @@ TEST(SceneIO, Load_PaintLayerIndexLeavesInRangeValuesAlone)
     const auto* pz = w.GetComponent<Components::TerrainPaintZone>(FindByTag(w, "paintzone"));
     ASSERT_NE(pz, nullptr);
     EXPECT_EQ(pz->LayerIndex, 2u);
+}
+
+// A colour zone's lines load into the component, save back as the same lines, and reload equal:
+// the zone framing and its payload reference are all the scene holds of it.
+TEST(SceneIO, SaveThenLoad_TerrainColorZoneRoundTrips)
+{
+    const auto scenePath = MakeTempPath("terrain_color_zone.scene");
+    Scene::EnsureTerrainSceneSchemasRegistered();
+
+    const std::string src =
+        "[scene name=\"ColorZone\" version=1]\n"
+        "\n"
+        "[entity id=\"yard\"]\n"
+        "TerrainColorZone.extentX = 24\n"
+        "TerrainColorZone.extentZ = 12.5\n"
+        "TerrainColorZone.falloff = 4\n"
+        "TerrainColorZone.priority = 1200\n"
+        "TerrainColorZone.payload = \"0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9\"\n";
+    ASSERT_TRUE(WriteFile(scenePath, src));
+
+    ECS::World w;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}))
+        << Scene::GetLastSceneIOError().message;
+    const auto* zone = w.GetComponent<Components::TerrainColorZone>(FindByTag(w, "yard"));
+    ASSERT_NE(zone, nullptr);
+    EXPECT_FLOAT_EQ(zone->ExtentX, 24.0f);
+    EXPECT_FLOAT_EQ(zone->ExtentZ, 12.5f);
+    EXPECT_FLOAT_EQ(zone->Falloff, 4.0f);
+    EXPECT_FLOAT_EQ(zone->Priority, 1200.0f);
+    EXPECT_EQ(zone->PayloadRef.ToGuid(), GUID("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"));
+
+    const auto savedPath = MakeTempPath("terrain_color_zone_saved.scene");
+    ASSERT_TRUE(Scene::SaveSceneToFile(w, savedPath, Scene::SaveOptions{}));
+    std::string saved;
+    ASSERT_TRUE(ReadFile(savedPath, saved));
+    EXPECT_NE(saved.find("TerrainColorZone.extentX = 24"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("TerrainColorZone.extentZ = 12.5"), std::string::npos);
+    EXPECT_NE(saved.find("TerrainColorZone.falloff = 4"), std::string::npos);
+    EXPECT_NE(saved.find("TerrainColorZone.priority = 1200"), std::string::npos);
+    EXPECT_NE(saved.find("TerrainColorZone.payload = \"0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9\""),
+              std::string::npos);
+
+    ECS::World reloaded;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, savedPath, Scene::LoadOptions{Scene::LoadMode::Replace}))
+        << Scene::GetLastSceneIOError().message;
+    const auto* again = reloaded.GetComponent<Components::TerrainColorZone>(FindByTag(reloaded, "yard"));
+    ASSERT_NE(again, nullptr);
+    EXPECT_FLOAT_EQ(again->ExtentZ, 12.5f);
+    EXPECT_EQ(again->PayloadRef.ToGuid(), zone->PayloadRef.ToGuid());
 }
 
 // The tests above cover the PARSE side only. The layer authoring UI writes these fields, and the
@@ -10152,7 +10241,7 @@ TEST(SceneIO, Load_MeshRendererLodGroupIdIsAnUnknownFieldRow)
         "[scene name=\"LodGroupId\" version=1]\n"
         "\n"
         "[entity id=\"lod\"]\n"
-        "MeshRenderer.castShadows = false\n"
+        "MeshRenderer.shadowCasting = Off\n"
         "MeshRenderer.lodGroupId = 7\n";
 
     ECS::World w;
@@ -10160,7 +10249,89 @@ TEST(SceneIO, Load_MeshRendererLodGroupIdIsAnUnknownFieldRow)
     ExpectOnlyUnknownFieldRows(report, scenePath, "lod", "MeshRenderer", {{"lodGroupId", 5}});
     const auto* mr = w.GetComponent<Components::MeshRenderer>(FindByTag(w, "lod"));
     ASSERT_NE(mr, nullptr);
-    EXPECT_FALSE(mr->castShadows);
+    EXPECT_EQ(mr->shadowCasting, Components::ShadowCasting::Off);
+}
+
+// MeshRenderer has no castShadows field: the line is an unknown-field row, the renderer keeps the
+// default On, and the block's other lines apply.
+TEST(SceneIO, Load_MeshRendererCastShadowsIsAnUnknownFieldRow)
+{
+    const auto scenePath = MakeTempPath("meshrenderer_castshadows.scene");
+    const std::string src =
+        "[scene name=\"CastShadows\" version=1]\n"
+        "\n"
+        "[entity id=\"old\"]\n"
+        "MeshRenderer.castShadows = false\n"
+        "MeshRenderer.receiveShadows = false\n";
+
+    ECS::World w;
+    const Scene::SceneLoadDegradation report = LoadSceneTextWithReport(w, scenePath, src);
+    ExpectOnlyUnknownFieldRows(report, scenePath, "old", "MeshRenderer", {{"castShadows", 4}});
+    const auto* mr = w.GetComponent<Components::MeshRenderer>(FindByTag(w, "old"));
+    ASSERT_NE(mr, nullptr);
+    EXPECT_EQ(mr->shadowCasting, Components::ShadowCasting::On);
+    EXPECT_FALSE(mr->receiveShadows);
+}
+
+// The Scene View eye is editor view state: an entity hidden by it, itself or through a parent,
+// saves without any trace of the eye, and the reloaded scene shows it again.
+TEST(SceneIO, TheSceneViewEyeIsNeverSaved)
+{
+    const auto scenePath = MakeTempPath("sceneview_eye.scene");
+    ECS::World w1;
+    const ECS::EntityHandle e = w1.CreateEntity();
+    w1.AddComponentImmediate(e, Components::SceneEntityTag{{'e', '\0'}});
+    w1.AddComponentImmediate(e, Components::MeshRenderer{});
+    w1.AddComponentImmediate(e, Components::SceneViewHidden{});
+    w1.AddComponentImmediate(e, Components::SceneViewHiddenInHierarchy{});
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{})) << Scene::GetLastSceneIOError().message;
+
+    std::string saved;
+    ASSERT_TRUE(ReadFile(scenePath, saved));
+    EXPECT_NE(saved.find("[entity id=\"e\"]"), std::string::npos) << saved;
+    EXPECT_EQ(saved.find("SceneViewHidden"), std::string::npos) << saved;
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}))
+        << Scene::GetLastSceneIOError().message;
+    const ECS::EntityHandle loaded = FindByTag(w2, "e");
+    ASSERT_TRUE(w2.IsValid(loaded));
+    EXPECT_FALSE(w2.HasComponent<Components::SceneViewHidden>(loaded));
+    EXPECT_FALSE(w2.HasComponent<Components::SceneViewHiddenInHierarchy>(loaded));
+}
+
+// Each Shadow Casting mode saves as its name and loads back.
+TEST(SceneIO, MeshRendererShadowCastingRoundTripsByName)
+{
+    const auto scenePath = MakeTempPath("meshrenderer_shadowcasting.scene");
+    const Components::ShadowCasting modes[] = {Components::ShadowCasting::Off, Components::ShadowCasting::On,
+                                               Components::ShadowCasting::ShadowsOnly};
+    ECS::World w1;
+    for (const Components::ShadowCasting mode : modes)
+    {
+        const ECS::EntityHandle e = w1.CreateEntity();
+        w1.AddComponentImmediate(e, Components::SceneEntityTag{{'m', static_cast<char>('0' + static_cast<int>(mode)), '\0'}});
+        Components::MeshRenderer mr{};
+        mr.shadowCasting = mode;
+        w1.AddComponentImmediate(e, mr);
+    }
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{})) << Scene::GetLastSceneIOError().message;
+
+    std::string saved;
+    ASSERT_TRUE(ReadFile(scenePath, saved));
+    EXPECT_NE(saved.find("MeshRenderer.shadowCasting = ShadowsOnly\n"), std::string::npos) << saved;
+    EXPECT_EQ(saved.find("castShadows"), std::string::npos) << saved;
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}))
+        << Scene::GetLastSceneIOError().message;
+    for (const Components::ShadowCasting mode : modes)
+    {
+        const std::string tag{'m', static_cast<char>('0' + static_cast<int>(mode))};
+        const auto* mr = w2.GetComponent<Components::MeshRenderer>(FindByTag(w2, tag));
+        ASSERT_NE(mr, nullptr) << tag;
+        EXPECT_EQ(mr->shadowCasting, mode) << tag;
+    }
 }
 
 // LODGroup has no lodCount or threshold fields: each line is a load-report row, and bias applies.
@@ -10471,7 +10642,7 @@ TEST(SceneIO, MeshRenderer_MeshNameAuthoredCaseFolded)
     for (std::string line; std::getline(iss, line);)
     {
         oss << line << "\n";
-        if (line.find("MeshRenderer.castShadows") != std::string::npos)
+        if (line.find("MeshRenderer.shadowCasting") != std::string::npos)
             oss << "MeshRenderer.meshName = \"SEAT\"\n";
     }
     ASSERT_TRUE(WriteFile(scenePath, oss.str()));

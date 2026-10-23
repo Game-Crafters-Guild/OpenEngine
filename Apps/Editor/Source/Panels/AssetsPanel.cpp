@@ -216,6 +216,15 @@ AssetsPanel::AssetsPanel()
             if (std::fabs(resized - m_LastTreeIconSizePx) > 0.1f)
                 m_OnTreeIconSizeWheelCommit(resized);
         });
+        // The folder tree renames its selected folder with the same key as the item views.
+        m_TreeView->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
+        {
+            if (!Editor::MatchesCatalogShortcut("Assets", "Rename", e.Key, e.Mods))
+                return;
+            if (m_Controller)
+                m_Controller->BeginRenameOfTreeSelection();
+            e.Stop();
+        });
         leftPane->AddChild(std::move(tree));
 
         // Search bar placement and visibility are controlled via Settings.

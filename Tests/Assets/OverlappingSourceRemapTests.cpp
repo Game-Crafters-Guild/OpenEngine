@@ -336,7 +336,7 @@ TEST(OverlappingSourceRemap, RecreatingARenamedAwayPathLoadsItsOwnInstance)
     SharedPtr<Asset> renamed = manager.LoadAssetAsync(oldGuid, AssetLoadPriority::High).get();
     ASSERT_TRUE(renamed);
 
-    // Inline rename (RenameAssetFileCommand) then the watcher leg's aliased
+    // Inline rename (RenameAssetCommand) then the watcher leg's aliased
     // re-registration of the new path.
     std::error_code ec;
     fs::rename(oldPath, newPath, ec);

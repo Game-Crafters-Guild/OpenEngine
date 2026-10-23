@@ -28,6 +28,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -789,6 +790,13 @@ class GPUDrawStreamBuilder
     };
     RenderedHistoryRead GetRenderedHistoryForRead(uint32_t viewId) const;
 
+    /// Free every per-view buffer this builder keeps for `viewId`: the rendered
+    /// history pair, the LOD dwell-band history and the LOD crossfade state.
+    /// Call when the view is released; view ids are never reused, so nothing
+    /// else frees them before the device goes away. The buffers are retired,
+    /// not destroyed, so a frame still in flight keeps valid handles.
+    void ReleaseView(uint32_t viewId);
+
     /// True when this app frame published at least one range for the given
     /// (view, cascade, phase). A consumer that declares a pass per culling
     /// generation asks this at DECLARATION time, where it cannot yet resolve
@@ -1216,6 +1224,11 @@ class GPUDrawStreamBuilder
     std::vector<SliceRegistration> m_FrameSlices;
     // Keyed by MakeStreamKey(viewId, cascadeIndex, materialIndex, meshIndex, phase).
     std::unordered_map<uint64_t, BatchDrawRange> m_RangeMap;
+    // The (view, cascade, phase) part of every m_RangeMap key that holds a valid
+    // range this frame: MakeStreamKey with zero material and mesh fields.
+    // Filled and cleared with m_RangeMap, so HasPublishedRangesForPhase is one
+    // lookup instead of a scan of every published batch.
+    std::unordered_set<uint64_t> m_PublishedSliceKeys;
 
     // ── Idle recompute elision state ──
     // Settle mirrors GPUCullingPipeline::kElisionSettleFrames: two are the

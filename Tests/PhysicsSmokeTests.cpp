@@ -1,10 +1,15 @@
 #include <gtest/gtest.h>
 
+#include "EngineLogCapture.h"
+#include "JobSystem/WorkStealingThreadPool.h"
+#include "Logger/Logger.h"
 #include "Physics/PhysicsWorld.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
 #include "PhysicsECS/PhysicsEntityEventCallbacks.h"
+#include "PhysicsECS/PhysicsScriptApi.h"
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
+#include "PhysicsECS/Components/KinematicBody.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
@@ -39,10 +44,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -1052,9 +1061,12 @@ TEST(Physics, WritebackLeavesARestingScaledRotatedBodyUnwritten)
 }
 
 // A body the writeback tests hold still: no physics step runs, so its backend pose changes only when a
-// test moves it. Kinematic, so nothing else would move it. Scaled and yawed so the Transform is not a
-// plain translation. The caller checks the body handle.
-static GameEngine::ECS::EntityHandle AddStillBody(GameEngine::ECS::World& world, GameEngine::Physics::PhysicsWorld& pw)
+// test moves it. Dynamic, because the writeback skips kinematic bodies. Scaled and yawed so the Transform
+// is not a plain translation. The caller checks the body handle.
+static GameEngine::ECS::EntityHandle AddStillBody(GameEngine::ECS::World& world,
+                                                  GameEngine::Physics::PhysicsWorld& pw,
+                                                  GameEngine::Physics::MotionType motionType =
+                                                      GameEngine::Physics::MotionType::Dynamic)
 {
     using namespace GameEngine::Physics;
     using GameEngine::Components::PhysicsBody;
@@ -1065,11 +1077,13 @@ static GameEngine::ECS::EntityHandle AddStillBody(GameEngine::ECS::World& world,
     sphereDef.radius = 0.5f;
     BodySettings bs{};
     bs.shape = pw.CreateShape(sphereDef);
-    bs.motionType = MotionType::Kinematic;
-    bs.layer = Layers::Kinematic;
+    bs.motionType = motionType;
+    bs.layer = motionType == MotionType::Kinematic ? Layers::Kinematic : Layers::Dynamic;
+    bs.mass = 1.0f;
     bs.position = Vector3(1.0f, 5.0f, -2.0f);
     bs.rotation = Quaternion(0.687741101f, 0.0f, 0.725956082f, 0.0f);
     PhysicsBody pb{};
+    pb.motionType = motionType;
     pb.body = pw.CreateBody(bs);
     pb.initialized = true;
 
@@ -1078,6 +1092,8 @@ static GameEngine::ECS::EntityHandle AddStillBody(GameEngine::ECS::World& world,
         e, Transform::FromTRS(bs.position, bs.rotation, GameEngine::Mathematics::Vector3(1.5f, 2.5f, 0.75f)));
     world.AddComponentImmediate<WorldTransform>(e, WorldTransform{});
     world.AddComponentImmediate<PhysicsBody>(e, pb);
+    if (motionType == MotionType::Kinematic)
+        world.AddComponentImmediate(e, GameEngine::Components::KinematicBody{});
     return e;
 }
 
@@ -1202,6 +1218,395 @@ TEST(Physics, InterpolatedWritebackSkipsOnlyWhenBothPosesEqualTheLastApplied)
     EXPECT_EQ(world.GetComponent<Transform>(e)->GetPosition().x, rest.position.x);
     writeback.Update(world, 1.0f / 60.0f);
     EXPECT_EQ(PhysicsWorldService::GetLastBodiesComposed(), 0u);
+}
+
+// A kinematic body follows its entity: the step moves the body to the WorldTransform and the writeback
+// leaves the Transform where the game put it. A dynamic body keeps the body's pose.
+TEST(Physics, KinematicBodyFollowsItsTransformAndADynamicBodyKeepsTheBodyPose)
+{
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    const auto kinematic = AddStillBody(world, pw, MotionType::Kinematic);
+    const auto dynamic = AddStillBody(world, pw, MotionType::Dynamic);
+    ASSERT_TRUE(pw.IsBodyValid(world.GetComponent<PhysicsBody>(kinematic)->body));
+    ASSERT_TRUE(pw.IsBodyValid(world.GetComponent<PhysicsBody>(dynamic)->body));
+    // The kinematic body moves through the start pose they share, so the dynamic body starts away from it.
+    GameEngine::Physics::Transform dynamicStart = pw.GetBodyTransform(world.GetComponent<PhysicsBody>(dynamic)->body);
+    dynamicStart.position.x -= 10.0f;
+    pw.SetBodyTransform(world.GetComponent<PhysicsBody>(dynamic)->body, dynamicStart);
+
+    const GameEngine::Mathematics::Vector3 moved{4.0f, 2.0f, 7.0f};
+    for (const auto e : {kinematic, dynamic})
+    {
+        auto* transform = world.GetComponentForWrite<Transform>(e);
+        transform->matrix[12] = moved.x;
+        transform->matrix[13] = moved.y;
+        transform->matrix[14] = moved.z;
+        std::memcpy(world.GetComponentForWrite<WorldTransform>(e)->matrix, transform->matrix,
+                    sizeof(transform->matrix));
+    }
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::PhysicsWritebackSystem writeback;
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        step.Update(world, 1.0f / 60.0f);
+        writeback.Update(world, 1.0f / 60.0f);
+    }
+
+    const GameEngine::Physics::Transform kinematicPose =
+        pw.GetBodyTransform(world.GetComponent<PhysicsBody>(kinematic)->body);
+    EXPECT_FLOAT_EQ(kinematicPose.position.x, moved.x) << "the kinematic body did not follow its Transform";
+    EXPECT_FLOAT_EQ(kinematicPose.position.y, moved.y);
+    EXPECT_FLOAT_EQ(kinematicPose.position.z, moved.z);
+    const auto kinematicPosition = world.GetComponent<Transform>(kinematic)->GetPosition();
+    EXPECT_FLOAT_EQ(kinematicPosition.x, moved.x) << "the writeback snapped the kinematic Transform back";
+    EXPECT_FLOAT_EQ(kinematicPosition.y, moved.y);
+    EXPECT_FLOAT_EQ(kinematicPosition.z, moved.z);
+
+    const GameEngine::Physics::Transform dynamicPose =
+        pw.GetBodyTransform(world.GetComponent<PhysicsBody>(dynamic)->body);
+    const auto dynamicPosition = world.GetComponent<Transform>(dynamic)->GetPosition();
+    // The writeback blends the last two steps, so the Transform is near the body pose, not on it.
+    constexpr GameEngine::float32 kInterpolationTolerance = 0.25f;
+    EXPECT_NEAR(dynamicPosition.x, dynamicPose.position.x, kInterpolationTolerance)
+        << "the dynamic Transform left its body";
+    EXPECT_NEAR(dynamicPosition.y, dynamicPose.position.y, kInterpolationTolerance);
+    EXPECT_NEAR(dynamicPosition.z, dynamicPose.position.z, kInterpolationTolerance);
+    EXPECT_GT(std::abs(dynamicPose.position.z - moved.z), 1.0f) << "the dynamic body followed its Transform";
+}
+
+// A box body with its Transform and WorldTransform at `position`, for the kinematic tests below.
+static GameEngine::ECS::EntityHandle AddBoxBody(GameEngine::ECS::World& world,
+                                                GameEngine::Physics::PhysicsWorld& pw,
+                                                GameEngine::Physics::MotionType motionType,
+                                                const GameEngine::Physics::Vector3& halfExtents,
+                                                const GameEngine::Physics::Vector3& position)
+{
+    using namespace GameEngine::Physics;
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+
+    BoxShapeDef boxDef{};
+    boxDef.halfExtents = halfExtents;
+    BodySettings bs{};
+    bs.shape = pw.CreateShape(boxDef);
+    bs.motionType = motionType;
+    bs.layer = motionType == MotionType::Kinematic ? Layers::Kinematic : Layers::Dynamic;
+    bs.mass = 1.0f;
+    bs.position = position;
+    PhysicsBody pb{};
+    pb.motionType = motionType;
+    pb.body = pw.CreateBody(bs);
+    pb.initialized = true;
+
+    const auto e = world.CreateEntity();
+    world.AddComponentImmediate<Transform>(e, Transform::FromTRS(position, Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f)));
+    WorldTransform wt{};
+    std::memcpy(wt.matrix, world.GetComponent<Transform>(e)->matrix, sizeof(wt.matrix));
+    world.AddComponentImmediate<WorldTransform>(e, wt);
+    world.AddComponentImmediate<PhysicsBody>(e, pb);
+    if (motionType == MotionType::Kinematic)
+        world.AddComponentImmediate(e, GameEngine::Components::KinematicBody{});
+    return e;
+}
+
+static void SetTransformHeight(GameEngine::ECS::World& world, GameEngine::ECS::EntityHandle e, GameEngine::float32 y)
+{
+    auto* transform = world.GetComponentForWrite<GameEngine::Components::Transform>(e);
+    transform->matrix[13] = y;
+    std::memcpy(world.GetComponentForWrite<GameEngine::Components::WorldTransform>(e)->matrix, transform->matrix,
+                sizeof(transform->matrix));
+}
+
+// A kinematic platform that the game raises through its Transform moves with a velocity, so a dynamic box
+// resting on it is carried at the platform's speed and stays on top. When the Transform stops, the platform
+// stops on it.
+TEST(Physics, KinematicPlatformMovedThroughItsTransformCarriesADynamicBoxAndStops)
+{
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    constexpr GameEngine::float32 kPlatformHalfHeight = 0.1f;
+    constexpr GameEngine::float32 kBoxHalfSize = 0.25f;
+    const auto platform =
+        AddBoxBody(world, pw, MotionType::Kinematic, Vector3(1.0f, kPlatformHalfHeight, 1.0f), Vector3(0.0f, 0.0f, 0.0f));
+    const auto box = AddBoxBody(world, pw, MotionType::Dynamic, Vector3(kBoxHalfSize, kBoxHalfSize, kBoxHalfSize),
+                                Vector3(0.0f, kPlatformHalfHeight + kBoxHalfSize, 0.0f));
+    const auto platformBody = world.GetComponent<PhysicsBody>(platform)->body;
+    const auto boxBody = world.GetComponent<PhysicsBody>(box)->body;
+    ASSERT_TRUE(pw.IsBodyValid(platformBody));
+    ASSERT_TRUE(pw.IsBodyValid(boxBody));
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::PhysicsWritebackSystem writeback;
+    constexpr GameEngine::float32 kFrame = 1.0f / 60.0f;
+    for (int frame = 0; frame < 60; ++frame)
+    {
+        step.Update(world, kFrame);
+        writeback.Update(world, kFrame);
+    }
+
+    constexpr GameEngine::float32 kSpeed = 6.0f;
+    GameEngine::float32 height = 0.0f;
+    for (int frame = 0; frame < 60; ++frame)
+    {
+        height += kSpeed * kFrame;
+        SetTransformHeight(world, platform, height);
+        step.Update(world, kFrame);
+        writeback.Update(world, kFrame);
+    }
+
+    const GameEngine::float32 platformTop = pw.GetBodyTransform(platformBody).position.y + kPlatformHalfHeight;
+    const GameEngine::float32 boxBottom = pw.GetBodyTransform(boxBody).position.y - kBoxHalfSize;
+    constexpr GameEngine::float32 kContactSlop = 0.02f;
+    EXPECT_NEAR(boxBottom, platformTop, kContactSlop) << "the box left the top of the platform";
+    EXPECT_NEAR(pw.GetLinearVelocity(boxBody).y, kSpeed, 0.1f * kSpeed) << "the platform did not carry the box";
+
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        step.Update(world, kFrame);
+        writeback.Update(world, kFrame);
+    }
+    EXPECT_FLOAT_EQ(pw.GetBodyTransform(platformBody).position.y, height) << "the platform drifted off its Transform";
+    EXPECT_EQ(pw.GetLinearVelocity(platformBody).y, 0.0f) << "the platform kept moving";
+}
+
+// A frame shorter than the fixed step runs no step, and the writeback still blends the last two steps.
+// A kinematic Transform the game moved on that frame stays where the game put it.
+TEST(Physics, KinematicTransformHoldsOnAFrameWithNoStep)
+{
+    using GameEngine::Components::Transform;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    const auto e = AddBoxBody(world, pw, MotionType::Kinematic, Vector3(0.5f, 0.5f, 0.5f), Vector3(1.0f, 5.0f, -2.0f));
+    ASSERT_TRUE(pw.IsBodyValid(world.GetComponent<GameEngine::Components::PhysicsBody>(e)->body));
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::PhysicsWritebackSystem writeback;
+    step.Update(world, 1.0f / 60.0f);
+    writeback.Update(world, 1.0f / 60.0f);
+    SetTransformHeight(world, e, 9.0f);
+    step.Update(world, 1.0f / 120.0f);
+    writeback.Update(world, 1.0f / 120.0f);
+
+    EXPECT_FLOAT_EQ(world.GetComponent<Transform>(e)->GetPosition().y, 9.0f)
+        << "the writeback moved the kinematic Transform";
+}
+
+// A kinematic body that stops is placed on its exact pose with no velocity. On the frames after that the
+// step does not move it and the writeback does not stamp its chunk, so a resting body costs nothing.
+TEST(Physics, KinematicBodyThatStopsIsPlacedOnItsPoseAndLeftAlone)
+{
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Quaternion;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    const Vector3 start(1.0f, 5.0f, -2.0f);
+    const auto e = AddBoxBody(world, pw, MotionType::Kinematic, Vector3(0.5f, 0.5f, 0.5f), start);
+    const auto body = world.GetComponent<PhysicsBody>(e)->body;
+    ASSERT_TRUE(pw.IsBodyValid(body));
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::PhysicsWritebackSystem writeback;
+    constexpr GameEngine::float32 kFrame = 1.0f / 60.0f;
+    const auto runFrame = [&]
+    {
+        step.Update(world, kFrame);
+        writeback.Update(world, kFrame);
+    };
+    for (int frame = 1; frame <= 10; ++frame)
+    {
+        auto* transform = world.GetComponentForWrite<Transform>(e);
+        *transform = Transform::FromTRS(start + Vector3(0.1f * frame, 0.0f, 0.0f),
+                                        Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), 0.05f * frame),
+                                        Vector3(1.0f, 1.0f, 1.0f));
+        std::memcpy(world.GetComponentForWrite<WorldTransform>(e)->matrix, transform->matrix, sizeof(transform->matrix));
+        runFrame();
+    }
+    EXPECT_EQ(PhysicsWorldService::GetLastKinematicBodiesMoving(), 1u);
+    runFrame();
+
+    const Transform* transform = world.GetComponent<Transform>(e);
+    const auto position = transform->GetPosition();
+    const auto rotation = transform->GetRotation().GetGLM();
+    const GameEngine::Physics::Transform pose = pw.GetBodyTransform(body);
+    EXPECT_EQ(pose.position.x, position.x) << "the stopped body is not on its pose";
+    EXPECT_EQ(pose.position.y, position.y);
+    EXPECT_EQ(pose.position.z, position.z);
+    EXPECT_EQ(pose.rotation.GetGLM().w, rotation.w) << "the stopped body is not on its rotation";
+    EXPECT_EQ(pose.rotation.GetGLM().x, rotation.x);
+    EXPECT_EQ(pose.rotation.GetGLM().y, rotation.y);
+    EXPECT_EQ(pose.rotation.GetGLM().z, rotation.z);
+    const Vector3 linear = pw.GetLinearVelocity(body);
+    const Vector3 angular = pw.GetAngularVelocity(body);
+    EXPECT_EQ(linear.x, 0.0f) << "the stopped body kept a velocity";
+    EXPECT_EQ(linear.y, 0.0f);
+    EXPECT_EQ(linear.z, 0.0f);
+    EXPECT_EQ(angular.x, 0.0f) << "the stopped body kept a spin";
+    EXPECT_EQ(angular.y, 0.0f);
+    EXPECT_EQ(angular.z, 0.0f);
+    EXPECT_EQ(PhysicsWorldService::GetLastKinematicBodiesMoving(), 0u) << "the stopped body is still moving";
+
+    GameEngine::ECS::ChangeGate gate{};
+    gate.LastRunVersion = world.GetGlobalSystemVersion();
+    runFrame();
+    int stampedChunks = 0;
+    auto stamped = world.Query<GameEngine::ECS::Read<WorldTransform>>();
+    stamped.Changed<WorldTransform>(gate);
+    stamped.Each([&](const WorldTransform&) { ++stampedChunks; });
+    EXPECT_EQ(stampedChunks, 0) << "an idle frame stamped the resting kinematic body's WorldTransform";
+    EXPECT_EQ(PhysicsWorldService::GetLastKinematicBodiesMoving(), 0u);
+}
+
+// The step keeps the kinematic bodies it moved on the last step frame. A new physics world reuses body
+// handles, so that list is dropped when the world changes: a dynamic body in the new world that takes an
+// old moving body's handle is not placed on the old body's target.
+TEST(Physics, KinematicMovedListIsDroppedWhenThePhysicsWorldChanges)
+{
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    constexpr GameEngine::float32 kFrame = 1.0f / 60.0f;
+    const Vector3 halfExtents(0.5f, 0.5f, 0.5f);
+    GameEngine::Physics::BodyHandle oldBody;
+    {
+        ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+        auto& pw = PhysicsWorldService::Get();
+        GameEngine::ECS::World world;
+        const auto e = AddBoxBody(world, pw, MotionType::Kinematic, halfExtents, Vector3(0.0f, 0.0f, 0.0f));
+        oldBody = world.GetComponent<PhysicsBody>(e)->body;
+        step.Update(world, kFrame);
+        for (int frame = 1; frame <= 3; ++frame)
+        {
+            SetTransformHeight(world, e, 5.0f * static_cast<GameEngine::float32>(frame));
+            step.Update(world, kFrame);
+        }
+        ASSERT_EQ(PhysicsWorldService::GetLastKinematicBodiesMoving(), 1u);
+    }
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    const Vector3 start(0.0f, 50.0f, 0.0f);
+    const auto e = AddBoxBody(world, pw, MotionType::Dynamic, halfExtents, start);
+    const auto body = world.GetComponent<PhysicsBody>(e)->body;
+    ASSERT_EQ(body.Value(), oldBody.Value()) << "the new world did not reuse the handle, so the test proves nothing";
+    step.Update(world, kFrame);
+    step.Update(world, kFrame);
+
+    EXPECT_NEAR(pw.GetBodyTransform(body).position.y, start.y, 0.1f) << "the old world's target moved a body in the new world";
+}
+
+// The lines that warn a script velocity on a kinematic body was ignored.
+static std::ptrdiff_t CountKinematicVelocityWarnings(const std::vector<std::string>& lines)
+{
+    return std::count_if(lines.begin(), lines.end(), [](const std::string& line)
+                         { return line.find("has a kinematic body, which follows its Transform") != std::string::npos; });
+}
+
+// A kinematic body follows its Transform, so the script velocity setters leave it alone and warn once with
+// the fix. The body stays on its Transform.
+TEST(Physics, ScriptVelocityOnAKinematicBodyIsIgnoredWithOneWarning)
+{
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+    namespace Script = GameEngine::PhysicsECS::Script;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    GameEngine::ECS::World world;
+    const Vector3 start(0.0f, 2.0f, 0.0f);
+    const auto e = AddBoxBody(world, pw, MotionType::Kinematic, Vector3(0.5f, 0.5f, 0.5f), start);
+    const auto body = world.GetComponent<PhysicsBody>(e)->body;
+    ASSERT_TRUE(pw.IsBodyValid(body));
+
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::PhysicsWritebackSystem writeback;
+    constexpr GameEngine::float32 kFrame = 1.0f / 60.0f;
+    const auto runFrame = [&]
+    {
+        step.Update(world, kFrame);
+        writeback.Update(world, kFrame);
+    };
+    for (int frame = 0; frame < 5; ++frame)
+        runFrame();
+
+    std::vector<std::string> lines;
+    {
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&lines);
+        Script::SetLinearVelocity(world, e, Vector3(1.0f, 0.0f, 0.0f));
+        Script::SetAngularVelocity(world, e, Vector3(0.0f, 2.0f, 0.0f));
+        Script::SetLinearVelocity(world, e, Vector3(1.0f, 0.0f, 0.0f));
+        Logger::Log::Flush();
+    }
+    for (int frame = 0; frame < 30; ++frame)
+        runFrame();
+
+    const GameEngine::Physics::Transform pose = pw.GetBodyTransform(body);
+    EXPECT_EQ(pose.position.x, start.x) << "a script velocity moved the kinematic body off its Transform";
+    EXPECT_EQ(pose.position.y, start.y);
+    EXPECT_EQ(pose.position.z, start.z);
+    EXPECT_EQ(pose.rotation.GetGLM().w, 1.0f) << "a script spin turned the kinematic body";
+    EXPECT_EQ(CountKinematicVelocityWarnings(lines), 1) << "the warning is logged once per entity";
+}
+
+// The once-per-entity warning starts over in a new physics world, so a second play session warns again for an
+// entity that reuses the same id.
+TEST(Physics, ScriptVelocityWarningOnAKinematicBodyRepeatsInANewPhysicsWorld)
+{
+    using GameEngine::Physics::MotionType;
+    using GameEngine::Physics::Vector3;
+    using GameEngine::PhysicsECS::PhysicsWorldService;
+
+    std::uint32_t entityIds[2] = {};
+    for (int session = 0; session < 2; ++session)
+    {
+        ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+        GameEngine::ECS::World world;
+        const auto e = AddBoxBody(world, PhysicsWorldService::Get(), MotionType::Kinematic, Vector3(0.5f, 0.5f, 0.5f),
+                                  Vector3(0.0f, 2.0f, 0.0f));
+        entityIds[session] = e.id;
+        std::vector<std::string> lines;
+        {
+            GameEngine::TestLog::ScopedEngineLogCapture capture(&lines);
+            GameEngine::PhysicsECS::Script::SetLinearVelocity(world, e, Vector3(1.0f, 0.0f, 0.0f));
+            GameEngine::PhysicsECS::Script::SetLinearVelocity(world, e, Vector3(1.0f, 0.0f, 0.0f));
+            Logger::Log::Flush();
+        }
+        EXPECT_EQ(CountKinematicVelocityWarnings(lines), 1) << "physics world " << session;
+    }
+    ASSERT_EQ(entityIds[0], entityIds[1]) << "the entity ids differ, so the test proves nothing";
 }
 
 // ---- Heightfield collider version gate (terrain live-edit propagation) ----
@@ -1356,6 +1761,149 @@ TEST(Physics, HeightFieldColliderRebuildsOnProviderVersionBump)
     EXPECT_TRUE(pb->body == rebuiltBody);
 }
 
+// A new heightfield body builds its shape on the job pool, not in the update that finds it: a
+// 1025^2 tile collider is about 28 ms, too long for the frame thread at each terrain tile
+// arrival (#3409). The body is created on a later update from that build. The pool's only
+// worker is held busy until the first update returns, so the build cannot land inside it.
+TEST(Physics, NewHeightFieldBodyBuildsItsShapeOnTheJobPool)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::Physics;
+    using namespace GameEngine::PhysicsECS;
+    using GameEngine::Components::PhysicsBody;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+
+    constexpr uint32 kSampleCount = 8;
+    constexpr float32 kHeight = 12.0f;
+    s_HeightFieldTestSamples.assign(kSampleCount * kSampleCount, kHeight);
+    s_HeightFieldTestSampleCount = kSampleCount;
+    s_HeightFieldTestVersion = 1;
+    ScopedHeightFieldProvider providerGuard(&HeightFieldTestProvider);
+
+    JobSystem::WorkStealingThreadPool pool(1);
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
+    std::promise<void> busy;
+    pool.Submit([released, &busy]() {
+        busy.set_value();
+        released.wait();
+    });
+    busy.get_future().wait();
+
+    ECS::World world;
+    world.SetJobSystem(&pool);
+    auto e = CreateHeightFieldTerrainEntity(world, 100.0f, 100.0f);
+    PhysicsInitSystem init;
+    init.Update(world, 1.0f / 60.0f);
+    EXPECT_FALSE(world.GetComponent<PhysicsBody>(e)->initialized)
+        << "the update that found the collider built its shape on the frame thread";
+
+    release.set_value();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!world.GetComponent<PhysicsBody>(e)->initialized && std::chrono::steady_clock::now() < deadline)
+    {
+        init.Update(world, 1.0f / 60.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(world.GetComponent<PhysicsBody>(e)->initialized) << "the pool's build never became a body";
+
+    pw.OptimizeBroadphase();
+    RayCastQuery q{};
+    q.ray = Ray3D(Vector3(0.0f, 100.0f, 0.0f), Vector3(0.0f, -1.0f, 0.0f));
+    q.maxDistance = 500.0f;
+    RayCastResult hit{};
+    ASSERT_TRUE(pw.RayCast(q, hit));
+    EXPECT_NEAR(hit.hitPoint.y, kHeight, 0.5f);
+}
+
+namespace
+{
+// Two heightfield sources at the same version: source 1 is flat at 12 m, source 2 at 30 m.
+GameEngine::PhysicsECS::HeightFieldData TwoSourceHeightFieldProvider(GameEngine::uint32 handle,
+                                                                     GameEngine::uint32 /*generation*/,
+                                                                     GameEngine::uint64 /*sinceVersion*/)
+{
+    static std::vector<GameEngine::float32> s_Low(8u * 8u, 12.0f);
+    static std::vector<GameEngine::float32> s_High(8u * 8u, 30.0f);
+    GameEngine::PhysicsECS::HeightFieldData data;
+    data.samples = handle == 2u ? s_High.data() : s_Low.data();
+    data.sampleCount = 8u;
+    data.version = 1u;
+    return data;
+}
+} // namespace
+
+// A collider pointed at other heightfield data while its first shape still builds on the pool gets
+// a body from the new data: the build started for the old data is dropped, even when both report
+// the same version.
+TEST(Physics, APendingHeightFieldBuildRestartsWhenItsColliderChangesData)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::Physics;
+    using namespace GameEngine::PhysicsECS;
+    using GameEngine::Components::HeightFieldColliderShape;
+    using GameEngine::Components::PhysicsBody;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = PhysicsWorldService::Get();
+    ScopedHeightFieldProvider providerGuard(&TwoSourceHeightFieldProvider);
+
+    JobSystem::WorkStealingThreadPool pool(1);
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
+    std::promise<void> busy;
+    pool.Submit([released, &busy]() {
+        busy.set_value();
+        released.wait();
+    });
+    busy.get_future().wait();
+
+    ECS::World world;
+    world.SetJobSystem(&pool);
+    auto e = CreateHeightFieldTerrainEntity(world, 100.0f, 100.0f);
+    world.GetComponentForWrite<HeightFieldColliderShape>(e)->dataHandle = 1u;
+    PhysicsInitSystem init;
+    init.Update(world, 1.0f / 60.0f);
+    ASSERT_FALSE(world.GetComponent<PhysicsBody>(e)->initialized) << "the first build did not wait on the pool";
+
+    world.GetComponentForWrite<HeightFieldColliderShape>(e)->dataHandle = 2u;
+    init.Update(world, 1.0f / 60.0f);
+    release.set_value();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!world.GetComponent<PhysicsBody>(e)->initialized && std::chrono::steady_clock::now() < deadline)
+    {
+        init.Update(world, 1.0f / 60.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(world.GetComponent<PhysicsBody>(e)->initialized) << "no build became a body";
+
+    pw.OptimizeBroadphase();
+    RayCastQuery q{};
+    q.ray = Ray3D(Vector3(0.0f, 100.0f, 0.0f), Vector3(0.0f, -1.0f, 0.0f));
+    q.maxDistance = 500.0f;
+    RayCastResult hit{};
+    ASSERT_TRUE(pw.RayCast(q, hit));
+    EXPECT_NEAR(hit.hitPoint.y, 30.0f, 0.5f) << "the body was built from the data the collider left";
+}
+
+// A world hands out a heightfield builder a job can call without a check, even a moved-from world,
+// which has no backend: its builder fails every build (returns null) instead of being null itself.
+TEST(Physics, AWorldWithoutABackendHandsOutABuilderThatFailsEveryBuild)
+{
+    using namespace GameEngine::Physics;
+    PhysicsWorld source;
+    const PhysicsWorld moved(std::move(source));
+    const HeightFieldShapeBuilder builder = source.GetHeightFieldShapeBuilder(); // NOLINT(bugprone-use-after-move)
+    ASSERT_NE(builder, nullptr) << "a moved-from world handed out a null builder";
+    HeightFieldShapeDef def;
+    def.SampleCount = 2;
+    def.Samples = {0.0f, 0.0f, 0.0f, 0.0f};
+    EXPECT_EQ(builder(def), nullptr);
+    EXPECT_NE(moved.GetHeightFieldShapeBuilder(), nullptr);
+}
+
 // A terrain edit that lands while the collider is disabled must still reach
 // the collider once it is re-enabled. Regression test for the gather
 // advancing lastBuiltVersion for a collider that addCollider then drops —
@@ -1417,6 +1965,46 @@ TEST(Physics, SwitchedOffBodyReleasesItsBackendBodyAndIsRebuiltWhenBackOn)
     RunPhysicsInitFrame(world, init);
     EXPECT_FALSE(world.GetComponent<PhysicsBody>(e)->initialized);
     EXPECT_FALSE(pw.IsBodyValid(rebuilt)) << "an inactive entity's body must leave the simulation";
+}
+
+// PhysicsInit tags a body it builds as kinematic with KinematicBody, and takes the tag off when it rebuilds
+// the body with another motion type.
+TEST(Physics, PhysicsInitTagsAKinematicBodyAndUntagsItWhenItsMotionTypeChanges)
+{
+    using namespace GameEngine;
+    using namespace GameEngine::PhysicsECS;
+    using GameEngine::Components::KinematicBody;
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Components::PhysicsCollider;
+    using GameEngine::Components::SphereColliderShape;
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ECS::World world;
+    RegisterPhysicsWorldHooks(world);
+    const ECS::EntityHandle e = world.CreateEntity();
+    world.AddComponentImmediate(e, Transform{});
+    world.AddComponentImmediate(e, WorldTransform{});
+    PhysicsBody authored{};
+    authored.motionType = Physics::MotionType::Kinematic;
+    world.AddComponentImmediate(e, authored);
+    world.AddComponentImmediate(e, PhysicsCollider{});
+    world.AddComponentImmediate(e, SphereColliderShape{});
+
+    PhysicsInitSystem init;
+    RunPhysicsInitFrame(world, init);
+    world.ProcessCommands();
+    ASSERT_TRUE(world.GetComponent<PhysicsBody>(e)->initialized);
+    EXPECT_TRUE(world.HasComponent<KinematicBody>(e)) << "a kinematic body was built without the tag";
+
+    auto* body = world.GetComponentForWrite<PhysicsBody>(e);
+    body->motionType = Physics::MotionType::Dynamic;
+    body->initialized = false;
+    RunPhysicsInitFrame(world, init);
+    world.ProcessCommands();
+    ASSERT_TRUE(world.GetComponent<PhysicsBody>(e)->initialized);
+    EXPECT_FALSE(world.HasComponent<KinematicBody>(e)) << "a dynamic body kept the kinematic tag";
 }
 
 // An inspector or debug-server edit asks for a rebuild by clearing initialized and leaves the old

@@ -6,9 +6,7 @@
 // (adapter_forward.glsl under GE_MOTION_VECTORS) — and both consumers, the
 // temporal resolve and the screen-space reflection reprojection, decode one
 // encoding from it. A second spelling of the encode is a second meaning for the
-// same texels. The mover fragment still carries its own copy inline; it moves
-// onto this definition with the producer slice, which reshapes that pass's
-// target ownership anyway.
+// same texels, so both producers encode through GE_MotionVectorPayloadFromUv.
 //
 // Payload: rg = viewport-UV delta from the previous position to this one,
 // b = previous NDC depth, a = 1 meaning "an exact motion vector exists here".
@@ -38,14 +36,25 @@ const vec4 GE_MOTION_VECTOR_SENTINEL = vec4(100.0, 100.0, 0.0, 0.0);
 // surface, so the fragment retains the sentinel rather than exporting a delta
 // built from a mirrored projection. The current endpoint needs no such guard —
 // a fragment exists only where the clip volume already admitted it.
-vec4 GE_MotionVectorPayload(GE_ScreenRect viewport, vec2 jitterUv, vec4 prevClip)
+//
+// The encode itself, from the current endpoint already in viewport UV. The
+// mover pass takes its current endpoint from an unjittered clip position it
+// interpolates, because it binds no per-view jitter or viewport block; at the
+// pixel centre that is the same point GE_MotionVectorPayload reads off
+// gl_FragCoord.
+vec4 GE_MotionVectorPayloadFromUv(vec2 currUv, vec4 prevClip)
 {
     if (prevClip.w <= 1e-6)
         return GE_MOTION_VECTOR_SENTINEL;
 
-    vec2 currUv = GE_PixelPositionToViewportUV(gl_FragCoord.xy, viewport) - jitterUv;
     vec2 prevUv = GE_YUpNdcToViewportUV(prevClip.xy / prevClip.w);
     return vec4(currUv - prevUv, prevClip.z / prevClip.w, 1.0);
+}
+
+vec4 GE_MotionVectorPayload(GE_ScreenRect viewport, vec2 jitterUv, vec4 prevClip)
+{
+    vec2 currUv = GE_PixelPositionToViewportUV(gl_FragCoord.xy, viewport) - jitterUv;
+    return GE_MotionVectorPayloadFromUv(currUv, prevClip);
 }
 
 #endif // GE_MOTION_VECTOR_PAYLOAD_GLSL

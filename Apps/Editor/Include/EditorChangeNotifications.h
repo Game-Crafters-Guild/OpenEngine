@@ -51,6 +51,9 @@ public:
     };
 
     using WorldStructureChangedCallback = std::function<void(const WorldStructureChangedEvent&)>;
+    // The editor switched to another project: per-project editor state (open documents, previews)
+    // belongs to the project that is gone.
+    using ProjectSwitchedCallback = std::function<void()>;
 
     struct SubscriptionToken
     {
@@ -78,6 +81,15 @@ public:
         return SubscriptionToken{id};
     }
 
+    SubscriptionToken SubscribeProjectSwitched(ProjectSwitchedCallback cb)
+    {
+        if (!cb)
+            return {};
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        const std::uint64_t id = m_NextId++;
+        m_ProjectSwitched.emplace(id, std::make_shared<ProjectSwitchedSlot>(std::move(cb)));
+        return SubscriptionToken{id};
+    }
     // Unsubscribe marks the slot dead before erasing so any in-flight dispatch
     // snapshot that still holds a shared_ptr to the slot will skip the callback
     // rather than call it on a destroyed subscriber.
@@ -97,6 +109,12 @@ public:
             if (it->second)
                 it->second->Alive.store(false, std::memory_order_release);
             m_WorldStructureChanged.erase(it);
+        }
+        if (auto it = m_ProjectSwitched.find(token.id); it != m_ProjectSwitched.end())
+        {
+            if (it->second)
+                it->second->Alive.store(false, std::memory_order_release);
+            m_ProjectSwitched.erase(it);
         }
     }
 
@@ -159,6 +177,26 @@ public:
         }
     }
 
+    void NotifyProjectSwitched()
+    {
+        std::vector<std::shared_ptr<ProjectSwitchedSlot>> snap;
+        {
+            std::lock_guard<std::mutex> lock(m_Mutex);
+            snap.reserve(m_ProjectSwitched.size());
+            for (auto& kv : m_ProjectSwitched)
+            {
+                if (kv.second)
+                    snap.push_back(kv.second);
+            }
+        }
+
+        for (auto& slot : snap)
+        {
+            if (slot && slot->Alive.load(std::memory_order_acquire) && slot->Cb)
+                slot->Cb();
+        }
+    }
+
 private:
     struct ComponentSlot
     {
@@ -172,11 +210,18 @@ private:
         WorldStructureChangedCallback Cb;
         explicit WorldStructureSlot(WorldStructureChangedCallback c) : Cb(std::move(c)) {}
     };
+    struct ProjectSwitchedSlot
+    {
+        std::atomic<bool> Alive{true};
+        ProjectSwitchedCallback Cb;
+        explicit ProjectSwitchedSlot(ProjectSwitchedCallback c) : Cb(std::move(c)) {}
+    };
 
     std::mutex m_Mutex;
     std::uint64_t m_NextId = 1;
     std::unordered_map<std::uint64_t, std::shared_ptr<ComponentSlot>> m_ComponentChanged;
     std::unordered_map<std::uint64_t, std::shared_ptr<WorldStructureSlot>> m_WorldStructureChanged;
+    std::unordered_map<std::uint64_t, std::shared_ptr<ProjectSwitchedSlot>> m_ProjectSwitched;
 };
 
 /** Publish a committed structure change of `world`. A null `notifications` is a no-op. */

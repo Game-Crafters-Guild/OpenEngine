@@ -66,8 +66,6 @@ void RegisterOceanFieldRanges()
     GE_OCEAN_RANGE(OceanSurface, IorWater, 1.0f, 2.0f);
     GE_OCEAN_RANGE(OceanSurface, PlanarReflectionStrength, 0.0f, 3.0f);
     GE_OCEAN_RANGE(OceanSurface, SkyDirectionality, 0.0f, 0.99f);
-    GE_OCEAN_RANGE(OceanSurface, DirectionalLightBoost, 0.0f, 512.0f);
-    GE_OCEAN_RANGE(OceanSurface, DirectionalLightFallOff, 1.0f, 4096.0f);
     GE_OCEAN_RANGE(OceanSurface, DepthFogStartDistance, 0.0f, 250.0f);
     GE_OCEAN_RANGE(OceanSurface, DepthFogEndDistance, 0.0f, 1000.0f);
     GE_OCEAN_RANGE(OceanSurface, DepthFogFalloffPower, 0.1f, 8.0f);

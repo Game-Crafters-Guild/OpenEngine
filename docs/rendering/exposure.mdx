@@ -65,6 +65,8 @@ To make a game's nights brighter, raise the -2.5 key toward 0; to darken them, l
 
 The curve is set in the Camera inspector and in the scene file. It cannot be set from C#, the debug port or the web library yet.
 
+The meter cannot tell a dusk from a lamp-lit room, because both read about the same. A [Day Cycle profile](day-cycle-profiles.mdx) keys an exposure offset over the sun's elevation, which tells them apart: the shipped Default profile dips the dusk through civil twilight.
+
 ## How the picture meter works
 
 The Picture meter looks at the pixels of the frame before bloom and tone mapping and sets the exposure so their average lands at 18 % gray, the middle gray of a photograph. Two rules keep it from being fooled:

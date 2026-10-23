@@ -423,7 +423,7 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(hits, Is.EqualTo(1));
             Assert.That(seen.X, Is.EqualTo(12.5f));
             Assert.That(seen.Y, Is.EqualTo(34.25f));
-            Assert.That(seen.Mods, Is.EqualTo(3));
+            Assert.That(seen.Mods, Is.EqualTo(ModifierFlags.Shift | ModifierFlags.Control));
 
             el.MouseMoved -= onMove;
         }

@@ -53,7 +53,9 @@ Any folder can be opened as a project: the editor creates `Assets/` if it is mis
 
 ## The C# project for your IDE
 
-Each time it opens a project, the editor writes `GameEngine.Scripts.csproj` at the project root, beside `Assets/`. Open that file in your IDE to edit the project's C# scripts: it compiles every `.cs` file under `Assets/` against the engine. A new file the IDE creates at the project's top level lands at the project root, outside `Assets/`, where nothing compiles it, so create script files inside `Assets/`. The file is regenerated on every open and holds paths specific to your machine: do not edit it and do not commit it. A copy left inside `Assets/` by an older editor is deleted when the project opens, and the Log panel says so.
+The editor creates `GameEngine.Scripts.csproj` at the project root, beside `Assets/`, when the project has none. Open that file in your IDE to edit the project's C# scripts: it compiles every `.cs` file under `Assets/` against the engine. A new file the IDE creates at the project's top level lands at the project root, outside `Assets/`, where nothing compiles it, so create script files inside `Assets/`.
+
+The file is yours: add NuGet packages to it as in any C# project ([NuGet packages](../scripting/csharp-ecs-systems-architecture.mdx#nuget-packages)), and commit it. It imports `GameEngine.Scripts.Engine.props` and `GameEngine.Scripts.Engine.targets`, which hold the engine's settings and paths specific to your machine. The editor rewrites those two files each time it opens the project: do not edit them and do not commit them, and do not commit the `obj/` folder the package restore writes beside them. When an import line is missing, the editor puts it back and the Log panel says so. A deleted `GameEngine.Scripts.csproj` is created again, without its packages. A generated copy of the file inside `Assets/` is deleted when the project opens, and the Log panel says so.
 
 ## Save a scene
 

@@ -1,0 +1,230 @@
+{
+  "format": 1,
+  "name": "Navigation",
+  "hash": "0xbb709207a2b9729e",
+  "constants": [],
+  "enums": [
+    {
+      "id": "Navigation.AgentState",
+      "name": "AgentState",
+      "cpp": "GameEngine::Navigation::AgentState",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 22,
+      "doc": "Where an agent's order stands.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "Idle",
+          "value": 0
+        },
+        {
+          "name": "Waiting",
+          "value": 1
+        },
+        {
+          "name": "Walking",
+          "value": 2
+        },
+        {
+          "name": "Arrived",
+          "value": 3
+        },
+        {
+          "name": "Failed",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "id": "Navigation.StatusReason",
+      "name": "StatusReason",
+      "cpp": "GameEngine::Navigation::StatusReason",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 42,
+      "doc": "Why an agent waits or failed. None while it walks, has arrived or has no order, and while its order waits only for its path.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "None",
+          "value": 0
+        },
+        {
+          "name": "NoSurface",
+          "value": 1
+        },
+        {
+          "name": "SurfaceNotBaked",
+          "value": 2
+        },
+        {
+          "name": "DestinationOffSurface",
+          "value": 3
+        },
+        {
+          "name": "StartOffSurface",
+          "value": 4
+        },
+        {
+          "name": "NoRoute",
+          "value": 5
+        },
+        {
+          "name": "DynamicBody",
+          "value": 6
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "functions": [
+    {
+      "id": "Navigation.ClearDestination",
+      "name": "ClearDestination",
+      "cpp": "GameEngine::Navigation::ClearDestination",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 90,
+      "doc": "Stops the entity's NavigationAgent where it stands and drops its order: the agent is Idle.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "agent",
+          "kind": "Entity"
+        }
+      ]
+    },
+    {
+      "id": "Navigation.GetStatus",
+      "name": "GetStatus",
+      "cpp": "GameEngine::Navigation::GetStatus",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 96,
+      "doc": "The order of the entity's NavigationAgent. Idle, with Reason None, when it has no order or the entity has no agent. Read it each frame: an order is solved on a later frame than the one that gave it.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Record",
+        "type": "Navigation.AgentStatus"
+      },
+      "params": [
+        {
+          "name": "agent",
+          "kind": "Entity"
+        }
+      ]
+    },
+    {
+      "id": "Navigation.MarkDirty",
+      "name": "MarkDirty",
+      "cpp": "GameEngine::Navigation::MarkDirty",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 113,
+      "doc": "Rebakes the tiles of the entity's mesh NavigationSurface under the box from `min` to `max` (X and Z; a tile spans every height, so Y is not read), for a change the surface does not watch: geometry a game placed or moved that is not a carving obstacle. The surface watches the terrain and its carving obstacles itself. The tiles join the surface's dirty queue, also while it bakes or loads; a few a frame, each whose content changed is rebuilt and replaces the old one, which serves until then, and agents whose path crosses a replaced tile replan. Returns false when the entity has no NavigationSurface in Mesh mode: a grid surface rebakes through RequestBake only.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "surface",
+          "kind": "Entity"
+        },
+        {
+          "name": "min",
+          "kind": "Vec3"
+        },
+        {
+          "name": "max",
+          "kind": "Vec3"
+        }
+      ]
+    },
+    {
+      "id": "Navigation.RequestBake",
+      "name": "RequestBake",
+      "cpp": "GameEngine::Navigation::RequestBake",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 103,
+      "doc": "Asks the entity's NavigationSurface to bake again from the current terrain, static collider shapes and mesh renderers. The bake starts on the next frame; a mesh keeps its current tiles until each new one is built. Returns false when the entity has no NavigationSurface.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "surface",
+          "kind": "Entity"
+        }
+      ]
+    },
+    {
+      "id": "Navigation.SetDestination",
+      "name": "SetDestination",
+      "cpp": "GameEngine::Navigation::SetDestination",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 86,
+      "doc": "Orders the entity's NavigationAgent to walk to `worldPoint`, in place of any order it has. The agent walks on the surface its Surface names, or on the only surface in the scene when Surface is empty. The order is always stored: GetStatus says, on this frame and later ones, whether it waits, walks, arrived or failed, and why. The destination moves onto the walkable ground under or beside it; when there is none within 5 m above or below and twice the agent's Radius across, the order fails with DestinationOffSurface. Returns false only when the entity has no NavigationAgent.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "agent",
+          "kind": "Entity"
+        },
+        {
+          "name": "worldPoint",
+          "kind": "Vec3"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "Navigation.AgentStatus",
+      "name": "AgentStatus",
+      "cpp": "GameEngine::Navigation::AgentStatus",
+      "header": "PathfindingECS/NavigationScriptApi.h",
+      "line": 67,
+      "doc": "An agent's order: where it stands, why it waits or failed, whether its path ends short of the destination, and how many surface tiles it waits for.",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {
+          "name": "State",
+          "kind": "Enum",
+          "type": "Navigation.AgentState",
+          "offset": 0,
+          "default": "Idle"
+        },
+        {
+          "name": "Reason",
+          "kind": "Enum",
+          "type": "Navigation.StatusReason",
+          "offset": 1,
+          "default": "None"
+        },
+        {
+          "name": "PartialPath",
+          "kind": "Bool",
+          "offset": 2,
+          "default": "false"
+        },
+        {
+          "name": "PendingTiles",
+          "kind": "UInt32",
+          "offset": 4,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

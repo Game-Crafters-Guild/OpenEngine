@@ -9,6 +9,7 @@ add_library(Pathfinding OBJECT
     Source/AStarSolverPool.cpp
     Source/HexGridHelpers.cpp
     Source/DetourNavMap.cpp
+    Source/NavSurfaceFile.cpp
     Source/ObstacleAvoidance.cpp
     Source/NavigationWorld.cpp
     Source/PathSmoother.cpp
@@ -71,6 +72,8 @@ if(BUILD_TESTING)
         Tests/HexGridHelpersTests.cpp
         Tests/NavigationWorldTests.cpp
         Tests/DetourNavMapTests.cpp
+        Tests/DetourNavMapChartTests.cpp
+        Tests/NavSurfaceFileTests.cpp
         Tests/PathSmootherTests.cpp
     )
     # CMake contributes an OBJECT library's .obj files only for DIRECT link
@@ -86,6 +89,12 @@ if(BUILD_TESTING)
         GTest::gtest_main
     )
     target_include_directories(PathfindingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    # The chart tests hold raw Detour polygon references.
+    if(GE_PATHFINDING_BACKEND_DETOUR)
+        target_link_libraries(PathfindingTests PRIVATE RecastNavigation::Detour)
+    else()
+        set_source_files_properties(Tests/DetourNavMapChartTests.cpp PROPERTIES HEADER_FILE_ONLY ON)
+    endif()
     ge_set_output_tests(PathfindingTests)
     ge_stage_runtime_dependencies(PathfindingTests)
     add_test(NAME PathfindingTests COMMAND PathfindingTests)

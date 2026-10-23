@@ -1,17 +1,17 @@
 ---
 title: Audio mute
-description: Turn the editor's audio off with the speaker button beside Play or from the Play button's right-click menu, or mute the speakers with one call on the audio system, without stopping anything the engine plays.
+description: Turn the editor's audio off from the Play button's right-click menu, or mute the speakers with one call on the audio system, without stopping anything the engine plays.
 sidebar:
   order: 2
 ---
 
-Silence the speakers without stopping anything the engine plays. In the editor, the speaker button to the right of Play turns audio on and off. In code, the mute is one call on the audio system.
+Silence the speakers without stopping anything the engine plays. In the editor, use the **Audio Enabled** item in the Play button's right-click menu. In code, the mute is one call on the audio system.
 
 ## In the editor
 
-Click the speaker button to the right of the **Play** button in the top toolbar. While the editor plays audio, which is the default, the button shows a speaker with sound waves. Click it to mute the audio. The button then shows a speaker with an X, and its tooltip and the Play button's tooltip say that audio is muted. Click it again to turn audio back on.
+Right-click the **Play** button in the top toolbar and choose **Audio Enabled**. Audio is enabled by default. The menu item shows a speaker with sound waves and a check mark while audio is enabled.
 
-The **Audio Enabled** item in the Play button's right-click menu is a second control for the same setting. The item has a check mark while the editor plays audio. When you choose the item, the speaker button changes too, and when you click the speaker button, the check mark changes.
+Choose the item to mute audio. When you reopen the menu, it shows a speaker with an X and no check mark. The item remains available: choose it again to enable audio. The Play button's tooltip also says when audio is muted.
 
 - The setting covers all engine audio sent to the speakers while the editor runs: the game in play mode, sound previews in the inspector, and any other sound the editor plays.
 - The setting works in edit mode and while the game plays or is paused; entering or leaving play mode keeps it.

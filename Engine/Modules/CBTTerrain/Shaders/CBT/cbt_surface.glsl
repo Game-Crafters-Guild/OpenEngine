@@ -86,6 +86,9 @@ layout(set = 2, binding = 29) uniform texture2D cbt_Layer1Albedo;
 layout(set = 2, binding = 30) uniform texture2D cbt_Layer1Normal;
 layout(set = 2, binding = 31) uniform texture2D cbt_Layer1Orm;
 layout(set = 2, binding = 32) uniform sampler cbt_MapSampler;
+// The unified colour map (TerrainColorMap.h). The atlas colour map and its coarse map are not bound
+// on this profile: an atlas-backed terrain reads no colour map here.
+layout(set = 2, binding = 33) uniform texture2D cbt_Colormap;
 
 // A data-map lookup: explicit LOD, UV clamped in place of the clamp sampler this profile cannot
 // afford.
@@ -133,6 +136,7 @@ vec3 CBT_CompatLayerSample(uint slot, vec2 uv, vec2 ddx, vec2 ddy)
 // full profile gives before an index is published.
 const uint kCBTTerrainFlagHasNormalmap = 8u;
 const uint kCBTTerrainFlagHasSplatmap = 16u;
+const uint kCBTTerrainFlagHasColorMap = 64u;
 #define CBT_HAS_NORMALMAP(tp, idx) ((tp.Flags & kCBTTerrainFlagHasNormalmap) != 0u)
 #define CBT_HAS_SPLATMAP(tp) ((tp.Flags & kCBTTerrainFlagHasSplatmap) != 0u)
 #define CBT_HAS_ATLAS_MAP(idx) true
@@ -241,6 +245,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -368,11 +373,12 @@ struct CBTSurfaceParamsData
     uint AtlasNormalBindless;
     uint AtlasSplatCoarseBindless;
     uint AtlasNormalCoarseBindless;
-    // The atlas grass control field and its coarse field (mirror CBTSurfaceParams in CBTLayout.h).
+    // The atlas grass control field and its coarse field, then the atlas colour map and its coarse
+    // map (mirror CBTSurfaceParams in CBTLayout.h).
     uint AtlasGrassBindless;
     uint AtlasGrassCoarseBindless;
-    uint _PadAtlasGrass0;
-    uint _PadAtlasGrass1;
+    uint AtlasColorBindless;
+    uint AtlasColorCoarseBindless;
     // Analytic sphere modifiers (sculpt shape-accuracy S2/S3 — mirror CBTSurfaceParams tail in
     // CBTLayout.h; math in cbt_analytic.glsl). DabCount keeps the vec4-struct array 16-aligned
     // (std430: 104 + 4 + 4 = 112); transient brush dabs occupy slots [Count, Count+DabCount). Both
@@ -888,6 +894,46 @@ vec3 CBT_MaterialOrm(uint layerOrd, TerrainMaterialRecordData mat, CBTTriplanarC
 #include "Includes/terrain_blend_resolve.glsl"
 // The grass canopy's coverage and occlusion, shared with the placement and the blade surface.
 #include "Includes/terrain_grass_canopy.glsl"
+// The colour map's apply, shared with the blade root.
+#include "Includes/terrain_color_map.glsl"
+
+// The terrain's colour map at a terrain UV (TerrainColorMap.h): the ground's final colour times its
+// weight (rgb, decoded from sRGB by the sampler) and the weight (a). The ground becomes
+// ground x (1 - a) + rgb; vec4(0) is identity. Read where the splat is read: the unified map on a
+// planar terrain, the resident atlas slot (crossfading in from the coarse map on an upgrade, as the
+// splat does) or the coarse map out of the window on an atlas-backed one. The compat profile binds
+// the unified map only (cbt_Colormap above).
+vec4 CBT_ColorMapTap(TerrainParamsEntry tp, vec2 uv)
+{
+#if defined(GE_COMPAT_PROFILE)
+    if (gCbtSurf.Params.AtlasBacked != 0u || (tp.Flags & kCBTTerrainFlagHasColorMap) == 0u)
+        return vec4(0.0);
+    return CBT_COMPAT_LATTICE_TAP(cbt_Colormap, uv);
+#else
+    if (gCbtSurf.Params.AtlasBacked != 0u)
+    {
+        CBTSurfaceParamsData sp = gCbtSurf.Params;
+        if (sp.AtlasColorBindless == 0u && sp.AtlasColorCoarseBindless == 0u)
+            return vec4(0.0);
+        AtlasResolve r = CBT_SurfResolve(uv, sp);
+        const bool haveSlot = r.Resident && sp.AtlasColorBindless != 0u;
+        const bool haveCoarse = sp.AtlasColorCoarseBindless != 0u;
+        vec4 coarse = haveCoarse ? textureLod(GE_BTEX(sp.AtlasColorCoarseBindless, GE_TS_CLAMP),
+                                              CBT_SurfCoarseUV(uv, sp.AtlasCoarseDim), 0.0)
+                                 : vec4(0.0);
+        if (!haveSlot)
+            return coarse;
+        vec4 slot = textureLod(GE_BTEX(sp.AtlasColorBindless, GE_TS_CLAMP), r.SlotUV, 0.0);
+        return (haveCoarse && r.Fade < 1.0) ? mix(coarse, slot, r.Fade) : slot;
+    }
+    if (tp.ColorMapBindless == 0u)
+        return vec4(0.0);
+    // One level: the map carries no mip chain, so the tap is the bilinear texel at any distance.
+    return textureLod(GE_BTEX(tp.ColorMapBindless, GE_TS_CLAMP),
+                      CBT_LatticeTextureUV(uv, vec2(textureSize(GE_BTEX(tp.ColorMapBindless, GE_TS_CLAMP), 0))),
+                      0.0);
+#endif
+}
 
 // The grass control field (RG8: height, density) at a terrain UV, read where the placement reads it:
 // the unified map on a planar terrain, the resident atlas slot or its coarse field on an
@@ -1249,6 +1295,14 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
             w * (CBT_MAT_HAS_NORMAL(mat) ? CBT_MaterialNormal(layerOrd, mat, tpc, uv, normalWS)
                                          : normalWS);
         anyNormalMap = anyNormalMap || CBT_MAT_HAS_NORMAL(mat);
+    }
+
+    // The colour map over the blended ground: its premultiplied colour mixes the ground toward the
+    // painted colour by its weight, the same expression the blade root applies
+    // (grass_root_ground_color.glsl). A planet carries no map.
+    if (!isSphere)
+    {
+        baseColor = TerrainApplyColorMap(baseColor, CBT_ColorMapTap(tp, sIn.uv0));
     }
 
     // The canopy shade of the grass standing here, the same depth its blade roots take

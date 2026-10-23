@@ -389,7 +389,7 @@ TEST(FenceMitreVariants, AVariantPieceKeepsItsModelAndSwapsItsMeshAndBounds)
     Editor::FencePoolPiece pool;
     pool.Renderer.modelAssetGuid = Components::ModelRef(GUID::Derive(GUID::Null(), "castle-wall"));
     pool.Renderer.meshGpuHandleId = 7u;
-    pool.Renderer.castShadows = true;
+    pool.Renderer.shadowCasting = Components::ShadowCasting::On;
     pool.Bounds.Box = Mathematics::BoundingBox::FromMinMax(V3(-5, 0, -0.25f), V3(0, 5, 0.25f));
     const Mesh wall = WallMesh();
     pool.SourceMesh = &wall;
@@ -400,7 +400,7 @@ TEST(FenceMitreVariants, AVariantPieceKeepsItsModelAndSwapsItsMeshAndBounds)
     EXPECT_EQ(piece.Renderer.modelAssetGuid, pool.Renderer.modelAssetGuid);
     EXPECT_EQ(piece.Renderer.meshGpuHandleId, static_cast<uint64>(variant.Handle));
     EXPECT_NE(piece.Renderer.meshGpuHandleId, pool.Renderer.meshGpuHandleId);
-    EXPECT_TRUE(piece.Renderer.castShadows);
+    EXPECT_EQ(piece.Renderer.shadowCasting, Components::ShadowCasting::On);
     EXPECT_EQ(piece.Bounds.Box.center.x, variant.Bounds.center.x);
     EXPECT_EQ(piece.Bounds.Box.halfExtents.x, variant.Bounds.halfExtents.x);
     EXPECT_EQ(piece.SourceMesh, &wall);

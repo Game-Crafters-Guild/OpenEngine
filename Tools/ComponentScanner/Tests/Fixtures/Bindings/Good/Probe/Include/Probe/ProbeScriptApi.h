@@ -8,10 +8,15 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
+#include "Rendering/RenderLayerMask.h"
+#include "Types/Color.h"
 #include "Types/ScriptCallback.h"
 #include "Types/StringId.h"
 
 #include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
 
 namespace GameEngine::Probe
 {
@@ -120,6 +125,22 @@ void SetSpeed(ProbeSystem& probe, ECS::EntityHandle entity, float speed);
 /// Finds the entity nearest to a point.
 // @ge-script @ge-script-try @ge-context
 bool TryNearest(ProbeSystem& probe, Mathematics::Vector3 point, ECS::EntityHandle& outEntity);
+
+/// Keeps `text` as the probe's label, and answers it.
+// @ge-script @ge-context
+std::string Echo(ProbeSystem& probe, std::string_view text);
+
+/// Makes `layers` the probe's layers, and answers the layers it had.
+// @ge-script @ge-context
+Rendering::RenderLayerMask SwapLayers(ProbeSystem& probe, Rendering::RenderLayerMask layers);
+
+/// Writes the probe's hits into `hits`, nearest first, and answers how many there are.
+// @ge-script @ge-context
+std::int32_t ListHits(ProbeSystem& probe, Mathematics::Vector3 origin, std::span<Hit> hits);
+
+/// Makes `tint` the probe's tint, and answers the tint it had.
+// @ge-script @ge-context
+ColorLinear SwapTint(ProbeSystem& probe, ColorLinear tint);
 
 /// Calls the handler when the entity touches another.
 // @ge-script-event PhysicsStep

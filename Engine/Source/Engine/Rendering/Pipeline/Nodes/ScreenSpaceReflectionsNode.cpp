@@ -112,14 +112,21 @@ bool ScreenSpaceReflectionsNode::Initialize(std::string nodeId, std::string node
             *outError = std::string("JSON parse failed: ") + e.what();
         return false;
     }
+    InitializePostWorldDepthResolve(m_TraceDepthResolve, m_Id + ".TraceDepthResolve");
+    m_TracePyramid.Initialize(m_Id + ".TracePyramid",
+                              std::string(R"({"reduce":"nearest","input":")") + Names::View::DepthResolvedPostOcean +
+                                  R"("})",
+                              nullptr);
     return true;
 }
 
 void ScreenSpaceReflectionsNode::Declare(RenderPipelineInstance& instance,
-                                         const PipelineDeclareContext& /*ctx*/)
+                                         const PipelineDeclareContext& ctx)
 {
     if (auto* device = instance.GetRenderServices().GetDevice())
         LoadShaders(device);
+    m_TraceDepthResolve.Declare(instance, ctx);
+    m_TracePyramid.Declare(instance, ctx);
 }
 
 DescriptorSetHandle ScreenSpaceReflectionsNode::NewSet(IDevice* device, Program program,
@@ -222,10 +229,6 @@ bool ScreenSpaceReflectionsNode::DeclareChain(ViewDeclare& d)
         return false;
     }
 
-    const RenderGraph::RGTexture depth = d.ViewDepthResolved;
-    // Nearest-surface (MAX) pyramid: the intersect's crossing test needs the tile
-    // NEAREST depth, not the occlusion HZB's farthest bound (which over-steps).
-    const RenderGraph::RGTexture hzb = d.ResolveTexture(Names::View::SSRHiZ);
     // The G-buffer comes only through the *.Written names ReflectionsProvider
     // publishes on frames it attaches the SSR MRT. Resolving the raw names
     // would succeed even on frames nothing writes them (blueprint-declared
@@ -248,6 +251,16 @@ bool ScreenSpaceReflectionsNode::DeclareChain(ViewDeclare& d)
         }
         return false;
     }
+    // The depth after its last writer: the ocean step's resolve after the water, which follows the
+    // phase-B recover, else the same copy taken here, which the fog and the exposure meter then
+    // reuse. View.DepthResolved is taken before both, so a trace from it would start at the seabed
+    // or the sky under a water pixel and miss what phase B drew. The ray origin, the march, the hit
+    // test and the composite's sky test all read this one depth.
+    const RenderGraph::RGTexture depth = DeclarePostWorldDepth(d, m_TraceDepthResolve);
+    // Nearest-surface (MAX) pyramid of that depth: the intersect's crossing test needs the tile
+    // NEAREST depth, not the occlusion HZB's farthest bound (which over-steps).
+    m_TracePyramid.DeclareForView(d);
+    const RenderGraph::RGTexture hzb = d.ResolveTexture(Names::View::SSRHiZ);
     const PipelineBufferBindingRG viewParams = d.ResolveBuffer(Names::Res::ViewParams);
     // Scene colour and the specular radiance are stored at the frame's pre-exposure P and the
     // histories at the previous frame's: the trace, the reprojection and the temporal resolve read
@@ -259,8 +272,8 @@ bool ScreenSpaceReflectionsNode::DeclareChain(ViewDeclare& d)
         {
             m_LoggedSkipReason = true;
             LOG_WARNING("ScreenSpaceReflectionsNode: view {} skipping SSSR — "
-                        "depth={} hzb={} viewParams={} (HZBBuild publishes View.SSRHiZ only "
-                        "while SSSR is active)",
+                        "depth={} hzb={} viewParams={} (the trace depth or its pyramid did not "
+                        "build: the depth_copy or hzb_build shaders are missing)",
                         static_cast<uint32_t>(d.View.id), depth.IsValid(), hzb.IsValid(),
                         viewParams.IsValid());
         }

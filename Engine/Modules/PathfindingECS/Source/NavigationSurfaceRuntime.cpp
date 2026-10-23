@@ -56,6 +56,7 @@ Pathfinding::NavMapHandle CreateNavigationSurfaceMap(const ECS::World& world,
     surface.NavMapIndex = handle.Index;
     surface.NavMapGeneration = handle.Generation;
     surface.OwnerWorldId = world.GetWorldId();
+    surface.MapHoldsBake = false;
     return handle;
 }
 
@@ -64,6 +65,7 @@ void ForgetNavigationSurfaceMap(Components::NavigationSurface& surface)
     surface.NavMapIndex = 0;
     surface.NavMapGeneration = 0;
     surface.OwnerWorldId = 0;
+    surface.MapHoldsBake = false;
 }
 
 void ReleaseNavigationMap(Pathfinding::NavMapHandle handle)

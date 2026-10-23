@@ -231,9 +231,14 @@ private:
     // The Debug package's managed build of `scriptsProj` into <staging>/Managed.
     bool BuildManagedScripts(const BuildSettings& s, const std::filesystem::path& stagingDir,
                              const std::filesystem::path& scriptsProj, const std::filesystem::path& dotnetExe);
+    // Restores the NuGet packages of `scriptsProj` into the scripts' Dependencies folder
+    // for the AOT publish, which compiles them in by reference.
+    bool RestoreScriptPackagesForExport(const std::filesystem::path& scriptsProj,
+                                        std::vector<std::filesystem::path>& outPackageAssemblies);
     bool CompileScriptsNativeAOT(const BuildSettings& s,
                                   const std::filesystem::path& stagingDir,
                                   const ShippedScriptSources& sources,
+                                  const std::vector<std::filesystem::path>& packageAssemblies,
                                   const std::filesystem::path& dotnetExe);
     bool CopyAssets(const std::filesystem::path& stagingDir, const AssetManifest& manifest);
     bool CopyEngineShaders(const std::filesystem::path& stagingDir);

@@ -7,6 +7,7 @@
 #include "UI/Interaction/Types.h"
 #include "ECS/ChangeFilter.h"
 #include "ECS/ECS.h"
+#include "Editor/Hierarchy/HierarchyEntityRename.h"
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
 #include "EditorChangeNotifications.h"
 #include "Scene/SceneIO.h"
@@ -30,7 +31,7 @@ class INativeContextMenu;
 class TextField;
 class UIElement;
 namespace Platform { class Window; }
-namespace Editor { class HierarchyNavigationBar; class HierarchyVcsController; class UndoRedoService; }
+namespace Editor { class HierarchyNavigationBar; class HierarchyRowEye; class HierarchyVcsController; class UndoRedoService; }
 
 enum class HierarchySortMode : uint8_t {
     Custom = 0,       // HierarchyOrder component (scene-authored order)
@@ -322,6 +323,10 @@ private:
 
     // The rows' enable state: shown at bind, re-shown through the provider when it moves.
     Editor::HierarchyRowActivity m_RowActivity;
+    // The rows' Scene View eye.
+    std::unique_ptr<Editor::HierarchyRowEye> m_RowEye;
+    // The inline rename on a row, while one is open.
+    Editor::HierarchyEntityRename m_EntityRename;
 
     std::string m_CurrentSearchText;
     std::unordered_set<TreeId> m_SearchMatchIds;
@@ -334,6 +339,11 @@ private:
 
     // Duplicate the currently selected entities (with subtrees) and select the copies.
     void DuplicateSelectedEntities();
+    // Delete the selected entities with their subtrees as one undo step; the Delete key and the
+    // context menu's Delete both run it.
+    void DeleteSelectedEntities();
+    // Inline rename of the single selected entity on its row; F2 and the context menu's Rename.
+    void BeginRenameOfSelectedEntity();
 
     /** Entity IDs currently locked in the hierarchy (editor-only, not serialized). */
     std::unordered_set<std::uint32_t> m_LockedEntityIds;
@@ -358,6 +368,8 @@ private:
     std::optional<PlayModeSelectionStash> m_PlayModeSelectionStash;
 
     std::vector<ECS::EntityHandle> ResolveRowActionTargets(ECS::EntityHandle clicked) const;
+    // The entity a bound row shows now, or an invalid handle.
+    ECS::EntityHandle EntityShownBy(const UIElement& row) const;
 
     HierarchySortMode m_SortMode = HierarchySortMode::Custom;
     HierarchySortDirection m_SortDirection = HierarchySortDirection::Ascending;

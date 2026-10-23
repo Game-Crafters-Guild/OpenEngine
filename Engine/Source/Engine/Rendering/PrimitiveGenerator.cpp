@@ -67,6 +67,7 @@ GUID PrimitiveGenerator::SphereGuid()          { return GUID::Derive(GUID::Null(
 GUID PrimitiveGenerator::CapsuleGuid()         { return GUID::Derive(GUID::Null(), "engine/primitive/capsule"); }
 GUID PrimitiveGenerator::PlaneGuid()           { return GUID::Derive(GUID::Null(), "engine/primitive/plane"); }
 GUID PrimitiveGenerator::PlaneSpriteUvGuid()   { return GUID::Derive(GUID::Null(), "engine/primitive/plane_sprite_uv"); }
+GUID PrimitiveGenerator::GroundGuid()          { return GUID::Derive(GUID::Null(), "engine/primitive/ground"); }
 GUID PrimitiveGenerator::DefaultMaterialGuid() { return GUID::Derive(GUID::Null(), "engine/material/default_unlit"); }
 GUID PrimitiveGenerator::ReflectionProbeTestMaterialGuid()
 {
@@ -90,6 +91,7 @@ GUID PrimitiveGenerator::GuidFromName(std::string_view name)
     if (eq(name, "planespriteuv"))   return PlaneSpriteUvGuid();
     if (eq(name, "plane_sprite"))    return PlaneSpriteUvGuid();
     if (eq(name, "plane_sprite_uv")) return PlaneSpriteUvGuid();
+    if (eq(name, "ground"))          return GroundGuid();
     return GUID::Null();
 }
 
@@ -100,6 +102,7 @@ std::string_view PrimitiveGenerator::NameFromGuid(const GUID& guid)
     if (guid == CapsuleGuid()) return "Capsule";
     if (guid == PlaneGuid())        return "Plane";
     if (guid == PlaneSpriteUvGuid()) return "PlaneSpriteUv";
+    if (guid == GroundGuid())        return "Ground";
     return {};
 }
 
@@ -168,7 +171,7 @@ Components::LocalBounds PrimitiveGenerator::MakePrimitiveLocalBounds(
         // (cylinder length 1.0 + 2 hemisphere caps of radius 0.5).
         lb.Box.halfExtents = {0.5f, 1.0f, 0.5f};
     }
-    else if (meshGuid == PlaneGuid() || meshGuid == PlaneSpriteUvGuid())
+    else if (meshGuid == PlaneGuid() || meshGuid == PlaneSpriteUvGuid() || meshGuid == GroundGuid())
     {
         // Plane is flat in XZ; zero Y extent. The slab test handles the
         // degenerate axis correctly (tMin == tMax on Y when origin.y is
@@ -451,12 +454,69 @@ struct PrimitiveDef
     Mesh (*Generate)();
 };
 
+// Cells per side of the Ground primitive. The default ground is scaled to 6000 m, so a
+// cell is 50 m. A texture coordinate or a position interpolated across a kilometer-sized
+// triangle drifts by whole pixels near the camera on some GPUs, and the drift changes with
+// the pose: the ground's grid lines and shadow edges jump.
+constexpr uint32_t kGroundSegments = 120;
+
+// The XZ square of GeneratePlane, with its normal, UV layout and winding, cut into
+// segments x segments cells: (segments + 1)^2 vertices and 2 * segments^2 triangles.
+// Each cell splits on the same diagonal as the Plane.
+Mesh GenerateSubdividedPlane(float h, uint32_t segments)
+{
+    Mesh mesh{};
+    mesh.Name = "SubdividedPlane";
+    mesh.MaterialIndex = 0;
+
+    const uint32_t stride = segments + 1;
+    mesh.Vertices.reserve(static_cast<size_t>(stride) * stride);
+    mesh.Indices.reserve(static_cast<size_t>(segments) * segments * 6);
+
+    // Row j runs along +Z, column i along +X. The UV matches GeneratePlane:
+    // u runs from 1 at -X to 0 at +X, v from 0 at -Z to 1 at +Z.
+    for (uint32_t j = 0; j <= segments; ++j)
+    {
+        const float v = static_cast<float>(j) / static_cast<float>(segments);
+        for (uint32_t i = 0; i <= segments; ++i)
+        {
+            const float s = static_cast<float>(i) / static_cast<float>(segments);
+            mesh.Vertices.push_back(MakeVertex(-h + 2.0f * h * s, 0, -h + 2.0f * h * v, 0, 1, 0, 1.0f - s, v));
+        }
+    }
+
+    // The Plane's winding: (-X-Z, +X+Z, +X-Z) and (-X-Z, -X+Z, +X+Z).
+    for (uint32_t j = 0; j < segments; ++j)
+    {
+        for (uint32_t i = 0; i < segments; ++i)
+        {
+            const uint32_t a = j * stride + i;
+            const uint32_t b = a + 1;
+            const uint32_t c = a + stride + 1;
+            const uint32_t d = a + stride;
+            mesh.Indices.push_back(a); mesh.Indices.push_back(c); mesh.Indices.push_back(b);
+            mesh.Indices.push_back(a); mesh.Indices.push_back(d); mesh.Indices.push_back(c);
+        }
+    }
+
+    FinalizePrimitiveMesh(mesh);
+    return mesh;
+}
+
+Mesh GenerateGround()
+{
+    Mesh mesh = GenerateSubdividedPlane(0.5f, kGroundSegments);
+    mesh.Name = "Ground";
+    return mesh;
+}
+
 const PrimitiveDef kPrimitiveDefs[] = {
     {&PrimitiveGenerator::CubeGuid,          [] { return PrimitiveGenerator::GenerateCube(); }},
     {&PrimitiveGenerator::SphereGuid,        [] { return PrimitiveGenerator::GenerateSphere(); }},
     {&PrimitiveGenerator::CapsuleGuid,       [] { return PrimitiveGenerator::GenerateCapsule(); }},
     {&PrimitiveGenerator::PlaneGuid,         [] { return PrimitiveGenerator::GeneratePlane(); }},
     {&PrimitiveGenerator::PlaneSpriteUvGuid, [] { return PrimitiveGenerator::GeneratePlaneSpriteUv(); }},
+    {&PrimitiveGenerator::GroundGuid,        &GenerateGround},
 };
 } // namespace
 
@@ -495,7 +555,7 @@ void PrimitiveGenerator::RegisterAll(RenderServices& rs)
         // DDGI software lane builds a BVH containing no primitives at all —
         // a scene built from cubes and planes then produces zero GI, silently,
         // because that lane omits meshes it cannot resolve rather than failing.
-        // Five small meshes, a few KB total.
+        // A few KB for the small meshes, about 1 MB for the Ground.
         meshReg.RegisterSubmesh(key, mesh, /*retainCpuMesh=*/true);
     }
 

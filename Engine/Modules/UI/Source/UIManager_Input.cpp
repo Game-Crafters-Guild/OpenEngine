@@ -223,20 +223,19 @@ bool UIManager::OnMouseButton(int button, bool down)
     // of a click that completes inside one frame interval are delivered in
     // platform order — there is no sampling boundary left for a transition to
     // be lost at.
-    // One pressed-state latch across all buttons, so a second button pressed
-    // while the first is held carries no transition of its own — an edge is a
-    // change of that latch. Reporting the newest button either way keeps the
-    // release edge naming whichever button most recently spoke.
-    const bool isEdge = (down != m_MouseDown);
+    // A press belongs to the button that began it. The latch records that
+    // button, and only its release ends the press and carries it. Another
+    // button's press or release while the press is held raises nothing.
+    const bool isEdge = down ? !m_MouseDown : (m_MouseDown && button == m_MouseButton);
 
     UIElement* const activeBeforeEl = m_MouseDown ? ActiveTarget() : nullptr;
     const uint64_t activeBefore = activeBeforeEl ? activeBeforeEl->GetInstanceId() : 0;
     m_FocusIdBeforeButtonDispatch = m_FocusId;
 
-    m_MouseButton = button;
-    m_MouseDown = down;
     if (!isEdge)
         return false;
+    m_MouseButton = button;
+    m_MouseDown = down;
     m_ButtonEdgeSinceLastUpdate = true;
 
     // Handlers post work (inspector rebuilds, popup dismissals) instead of

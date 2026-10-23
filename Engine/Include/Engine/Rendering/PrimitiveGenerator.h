@@ -1,7 +1,7 @@
 #pragma once
 
 // PrimitiveGenerator: generates standard 3D primitive meshes (cube, sphere,
-// capsule, plane) as GameEngine::Mesh structs suitable for MeshGPURegistry.
+// capsule, plane, ground) as GameEngine::Mesh structs suitable for MeshGPURegistry.
 //
 // Also provides well-known GUIDs for each primitive type so they can be
 // looked up by identity (e.g., "give me the sphere") without file I/O.
@@ -44,6 +44,9 @@ class PrimitiveGenerator
     /// "screen up" after rotating the quad for 2D cameras (fixes upside-down
     /// sprites without double-sided materials).
     static GUID PlaneSpriteUvGuid();
+    /// The default ground: the Plane's 1 m XZ square, normal, UV layout and winding,
+    /// cut into 120 x 120 cells, so a ground scaled to 6000 m has 50 m cells.
+    static GUID GroundGuid();
     static GUID DefaultMaterialGuid();
     static GUID ReflectionProbeTestMaterialGuid();
 
@@ -71,7 +74,7 @@ class PrimitiveGenerator
     //   MeshGPURegistry::FindByKey({PrimitiveGenerator::CubeGuid(), 0})
     static void RegisterAll(RenderServices& rs);
 
-    // Resolve a primitive name ("Cube", "Sphere", "Capsule", "Plane") to its GUID.
+    // Resolve a primitive name ("Cube", "Sphere", "Capsule", "Plane", "Ground") to its GUID.
     // Returns null GUID if the name is not a known primitive.
     static GUID GuidFromName(std::string_view name);
 
@@ -108,7 +111,7 @@ class PrimitiveGenerator
     //   Cube/Sphere: unit cube (halfExtents 0.5,0.5,0.5)
     //   Capsule:     1×2×1 box (halfExtents 0.5,1.0,0.5) — cylinder portion +
     //                hemisphere caps along Y at radius=0.5, halfHeight=0.5.
-    //   Plane:       1×0×1 box (halfExtents 0.5,0,0.5) — flat in XZ.
+    //   Plane, Ground: 1×0×1 box (halfExtents 0.5,0,0.5) — flat in XZ.
     //   Unknown:     unit cube as a defensive fallback.
     //
     // Use this everywhere primitives are spawned so they carry real

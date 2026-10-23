@@ -31,7 +31,9 @@ namespace GameEngine { namespace Engine::Renderer {
 // them — also live in a cached parent->child CSR, rebuilt only after a Parent
 // edit or a structural change. Each frame the dirty members are the
 // Parent-holders whose local matrix changed (narrowed to exact entities by
-// cached local matrices) and the hierarchy roots the flat pass just moved.
+// cached local matrices) and the hierarchy roots whose WorldTransform Version
+// moved since their children last composed against it (the flat pass's own
+// write, or a direct writer's BumpWorldTransform).
 // Only the topmost of them are walked (a dirty node under a dirty ancestor is
 // covered by the ancestor's walk), and those disjoint subtrees propagate in
 // parallel when there are enough of them. A root without a Parent component
@@ -70,6 +72,10 @@ private:
         // A root without a Parent component: the flat pass writes its
         // WorldTransform, so propagation only reads it (world is null).
         bool flatOwned = false;
+        // For a flat-owned root: the WorldTransform Version its children last
+        // composed against. The flat pass records the root as dirty when the
+        // component's Version differs.
+        uint32 composedWorldVersion = 0u;
     };
 
     // Which entities the flat pass resolves: every entity (no hierarchy
@@ -85,7 +91,7 @@ private:
     void ResolveChangedSubtrees(ECS::World& world);
     // Flat pass: WorldTransform = Transform for the scope's changed chunks,
     // fanned out over the job system (serial when the world has no pool).
-    // Records the cached hierarchy roots whose world matrix it changed.
+    // Records the cached hierarchy roots whose WorldTransform Version moved.
     void ResolveFlatParallel(ECS::World& world, FlatScope scope);
     bool HasParentColumnChange(ECS::World& world, uint64 entryVersion);
     // After a structural change that edited no Parent column: true when the
@@ -180,8 +186,8 @@ private:
     // batched write-grant stamp. Filled and drained inside a single Update.
     std::vector<ECS::EntityHandle> m_StampScratch;
     std::vector<uint8_t> m_TopologyState;
-    // Hierarchy roots the flat pass moved this frame (node indices), appended
-    // under the mutex once per chunk that moved any.
+    // Hierarchy roots whose WorldTransform Version moved this frame (node indices), appended
+    // under the mutex once per chunk that recorded any.
     std::vector<size_t> m_ChangedFlatRoots;
     std::mutex m_ChangedFlatRootsMutex;
     // Topmost-dirty filter: the pass that last marked each node dirty, and

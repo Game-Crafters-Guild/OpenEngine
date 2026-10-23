@@ -238,7 +238,7 @@ TEST_F(ModuleOwnedHandlers, RevocationReleasesTheCallableAndStopsDispatch)
 }
 
 // ---------------------------------------------------------------------------
-// Member callback slots (Button's SetOnMouseDown, TreeView's fifteen).
+// Member callback slots (Button's SetOnMouseDown, TreeView's sixteen).
 //
 // These hold a module's callable outside m_EventHandlers, so they need the same
 // three properties the table has: the stamp is taken from the callable, the
@@ -343,10 +343,10 @@ TEST_F(ModuleOwnedHandlers, AnExecutingMemberSlotKeepsItsCallableAcrossRevocatio
 }
 
 // ---------------------------------------------------------------------------
-// TreeView's fifteen slots.
+// TreeView's sixteen slots.
 //
 // Button proves the slot protocol on two members; TreeView is where it has to
-// scale, and where the failure mode changes shape: with fifteen slots the risk
+// scale, and where the failure mode changes shape: with sixteen slots the risk
 // is no longer "does stamping work" but "is every slot reached by all four
 // revocation virtuals". A slot listed in Count but forgotten in Release reads as
 // a pin that revocation can never clear, which refuses the unmap forever; the
@@ -354,7 +354,7 @@ TEST_F(ModuleOwnedHandlers, AnExecutingMemberSlotKeepsItsCallableAcrossRevocatio
 // arm below is what makes a forgotten slot fail rather than pass quietly.
 // ---------------------------------------------------------------------------
 
-// Sets all fifteen. The counts are the assertion: anything less than 15 means a
+// Sets all sixteen. The counts are the assertion: anything less than 16 means a
 // slot is missing from ForEachOwnedSlot, or from one of the virtuals that walks it.
 TEST_F(ModuleOwnedHandlers, EveryTreeViewMemberSlotIsPinnedAndRevokedTogether)
 {
@@ -378,11 +378,12 @@ TEST_F(ModuleOwnedHandlers, EveryTreeViewMemberSlotIsPinnedAndRevokedTogether)
         return UI::Interaction::DropFeedback{true, ""};
     });
     tv.SetOnPerformDrop([](const UI::Interaction::DropRequest&) {});
+    tv.SetOnItemRenameRequested([](TreeId) {});
 
-    EXPECT_EQ(image.Pins(), 15u) << "a slot is missing from CountMemberSlotsOwnedByImage";
+    EXPECT_EQ(image.Pins(), 16u) << "a slot is missing from CountMemberSlotsOwnedByImage";
     EXPECT_EQ(UI::IndexedElementCount(), 1u);
 
-    EXPECT_EQ(image.Revoke(), 15u)
+    EXPECT_EQ(image.Revoke(), 16u)
         << "a slot is missing from CollectMemberSlotsOwnedByImage or ReleaseCollectedMemberSlots";
 
     // Pins() alone CANNOT catch a forgotten slot, and it is important to know why:
@@ -496,8 +497,8 @@ TEST_F(ModuleOwnedHandlers, RebindingATreeViewSlotDoesNotLeakTheStampCount)
 
 // The per-slot memory cost, measured rather than inferred: the estimate the slot
 // protocol was designed against was 8 bytes of owner tag plus 8 bytes of
-// back-pointer per slot. TreeView carries fifteen slots, so whatever this is, a
-// tree view pays it fifteen times.
+// back-pointer per slot. TreeView carries sixteen slots, so whatever this is, a
+// tree view pays it sixteen times.
 TEST_F(ModuleOwnedHandlers, SlotOverheadOverARawStdFunctionIsBounded)
 {
     using Slot = UI::ModuleOwnedCallback<void(TreeId)>;
@@ -506,10 +507,10 @@ TEST_F(ModuleOwnedHandlers, SlotOverheadOverARawStdFunctionIsBounded)
 
     std::cout << "[ MEASURED ] ModuleOwnedCallback " << sizeof(Slot) << " B, std::function "
               << sizeof(Raw) << " B, overhead " << overhead << " B/slot ("
-              << (overhead * 15) << " B per TreeView)\n";
+              << (overhead * 16) << " B per TreeView)\n";
 
     // Owner tag (8) + element back-pointer (8) + slot bit (4) + padding. Anything
-    // larger means a field was added without accounting for it fifteen times over.
+    // larger means a field was added without accounting for it sixteen times over.
     EXPECT_LE(overhead, 24u);
 }
 

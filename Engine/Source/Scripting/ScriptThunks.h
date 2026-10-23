@@ -5,14 +5,17 @@
 // thunk per function of the module's script API; the thunk looks the engine up once
 // (EngineCore::GetInstance, a call into Engine), hands it to the bootstrap, the thread rule and
 // ScriptContext, reports every refusal through the functions below, which set the calling
-// thread's last error, and serves its table through ServeTable.
+// thread's last error, and serves its table through ServeTable. A thunk with text reads it with
+// TextIn and writes it with CopyTextOut (AbiTextOut.h).
 
 #include "AbiMainThread.h"
+#include "AbiTextOut.h"
 #include "DllEngineBootstrap.h"
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "Scripting/ScriptingABI.h"
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace GameEngine::ScriptingAbi
@@ -67,6 +70,16 @@ enum class ThreadRule : std::uint8_t
 
 /// Refuses a null pointer argument (`parameter` is its name, or "outResult" for the return value).
 GE_Result RefuseNull(const char* function, const char* parameter);
+
+/// Refuses a negative text length or buffer capacity (`parameter` is its name).
+GE_Result RefuseNegativeLength(const char* function, const char* parameter);
+
+/// The text of a (pointer, length) UTF-8 argument that the thunk has checked: a null pointer with length 0 is the
+/// empty text. The view is the caller's, valid for the call only.
+inline std::string_view TextIn(const char* text, std::int32_t length)
+{
+    return length == 0 ? std::string_view() : std::string_view(text, static_cast<std::size_t>(length));
+}
 
 /// Refuses a StringId argument of 0, which names no id.
 GE_Result RefuseZeroId(const char* function, const char* parameter);

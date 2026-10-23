@@ -236,6 +236,40 @@ std::vector<LineMarkers> MarkersByLine(const std::vector<std::string>& lines, co
     return markers;
 }
 
+std::string JoinDoc(const std::vector<std::string>& lines)
+{
+    std::string doc;
+    bool paragraphBreak = false;
+    for (const std::string& line : lines)
+    {
+        if (TrimView(line).empty())
+        {
+            paragraphBreak = !doc.empty();
+            continue;
+        }
+        if (!doc.empty())
+            doc += paragraphBreak ? "\n" : " ";
+        doc += Trim(line);
+        paragraphBreak = false;
+    }
+    return doc;
+}
+
+std::string DocAbove(const std::vector<std::string>& lines, int declLine)
+{
+    std::vector<std::string> docLines;
+    for (int line = declLine - 1; line >= 1 && static_cast<std::size_t>(line) <= lines.size(); --line)
+    {
+        const LineMarkers markers = ReadLine(lines[static_cast<std::size_t>(line) - 1]);
+        if (!markers.CommentOnly)
+            break;
+        if (markers.Doc)
+            docLines.push_back(*markers.Doc);
+    }
+    std::reverse(docLines.begin(), docLines.end());
+    return JoinDoc(docLines);
+}
+
 } // namespace ApiMarkerLines
 
 } // namespace GameEngine::ComponentScanner

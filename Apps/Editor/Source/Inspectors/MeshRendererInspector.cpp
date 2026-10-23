@@ -32,6 +32,7 @@
 #include "UI/Controls/Label.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "Inspectors/RenderLayersRow.h"
+#include "Inspectors/ShadowCastingRow.h"
 
 #include "Editor/Entities/EditorInspectorPseudoComponents.h"
 
@@ -632,26 +633,9 @@ void RegisterMeshRendererInspector()
             "Change Render Layers", "The render layers this mesh is on. A view draws it when they share a layer.",
             Editor::kRenderLayersNothingTooltip, extras);
 
-        InspectorDrag::AddToggleRow(ctx.Parent, "CastShadows", mr->castShadows,
-            [getWorld, e, n, extras](bool v) {
-                auto* w = getWorld ? getWorld() : nullptr;
-                if (!w) return;
-                auto* comp = w->GetComponent<Components::MeshRenderer>(e);
-                if (!comp) return;
-                Components::MeshRenderer updated = *comp;
-                updated.castShadows = v;
-                Editor::CommitComponentUpdate(w, e, n, updated);
-                for (auto& ex : extras)
-                {
-                    auto* c = w->GetComponent<Components::MeshRenderer>(ex);
-                    if (!c) continue;
-                    Components::MeshRenderer u = *c;
-                    u.castShadows = v;
-                    Editor::CommitComponentUpdate(w, ex, n, u);
-                }
-            }, "Include this mesh in shadow depth passes");
+        InspectorDrag::AddShadowCastingRow(ctx.Parent, w, e, n, undo, extras);
 
-        InspectorDrag::AddToggleRow(ctx.Parent, "ReceiveShadows", mr->receiveShadows,
+        InspectorDrag::AddToggleRow(ctx.Parent, "Receive Shadows", mr->receiveShadows,
             [getWorld, e, n, extras](bool v) {
                 auto* w = getWorld ? getWorld() : nullptr;
                 if (!w) return;
@@ -670,7 +654,7 @@ void RegisterMeshRendererInspector()
                 }
             }, "Sample shadow maps when shading this mesh");
 
-        InspectorDrag::AddToggleRow(ctx.Parent, "MotionVectors", mr->motionVectors,
+        InspectorDrag::AddToggleRow(ctx.Parent, "Motion Vectors", mr->motionVectors,
             [getWorld, e, n, extras](bool v) {
                 auto* w = getWorld ? getWorld() : nullptr;
                 if (!w) return;

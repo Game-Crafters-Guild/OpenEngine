@@ -41,7 +41,7 @@ void AddPhysicsSystemsToSchedule(ECS::SystemScheduleBuilder& schedule)
     schedule.Add<CharacterControllerSystem>(kCharacterController, SystemPhase::Extraction, 4,
                                      {kHierarchy, kPhysicsInit, kPhysicsBootstrap});
     schedule.Add<PhysicsStepSystem>(kPhysicsStep, SystemPhase::Extraction, 5,
-                             {kPhysicsInit, kPhysicsEvents, kCharacterController});
+                             {kHierarchy, kPhysicsInit, kPhysicsEvents, kCharacterController});
     schedule.Add<CharacterControllerWritebackSystem>(kCharacterWriteback, SystemPhase::Extraction, 6, {kPhysicsStep});
     schedule.Add<PhysicsWritebackSystem>(kPhysicsWriteback, SystemPhase::Extraction, 7, {kPhysicsStep});
 }

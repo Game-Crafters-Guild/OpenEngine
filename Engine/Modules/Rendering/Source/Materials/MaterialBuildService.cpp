@@ -234,6 +234,8 @@ MaterialBuildResult BuildMaterialToShaderPackage(const GameEngine::MaterialDocum
             out.errors.push_back("Material build failed: MaterialBuildContext has empty AdapterShaderDir.");
             return out;
         }
+        const std::filesystem::path shaderLocalDir = ShaderComposer::ShaderLocalDirectory(
+            doc.surfaceShader, doc.vertexModifier, materialPath.parent_path());
 
         std::vector<std::string> composeErrors;
         auto composed = ShaderComposer::Compose(
@@ -268,7 +270,8 @@ MaterialBuildResult BuildMaterialToShaderPackage(const GameEngine::MaterialDocum
         // The same roots ShaderComposer spelled its substituted #include
         // literals against (BuildMaterialIncludeRoots is the single authority),
         // so every literal it emitted resolves here.
-        creq.includeDirs = BuildMaterialIncludeRoots(context, materialPath.parent_path());
+        creq.includeDirs = BuildMaterialIncludeRoots(context, shaderLocalDir);
+        out.composedIncludeRoots = creq.includeDirs;
 
         // Compile the composed source in-memory. The path is the logical name only
         // (diagnostics + #include search base); it is intentionally NOT written. Writing
@@ -368,7 +371,7 @@ MaterialBuildResult BuildMaterialToShaderPackage(const GameEngine::MaterialDocum
             // its shader root, never by this machine's path to it.
             for (ShaderProperty& p : pkg->meta.DeclaredProperties)
                 p.SourceFile =
-                    ShaderComposer::ShaderRootRelative(p.SourceFile, materialPath.parent_path(), context);
+                    ShaderComposer::ShaderRootRelative(p.SourceFile, shaderLocalDir, context);
         }
         pkg->stageBytes = std::move(cres.stageBytes);
         pkg->cacheInfoJson = std::move(cres.cacheInfoJson);

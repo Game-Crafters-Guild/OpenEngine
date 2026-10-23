@@ -29,8 +29,8 @@ struct ApiLookup
     std::string_view Scope;
 };
 
-// How a parameter is passed: by value or `const T&` (in), or `T&` (out, written by the
-// function). A pointer is refused.
+// How a parameter is passed: by value or `const T&` (in), or `T&` and `std::span<T>` (out, written
+// by the function). A pointer and a span by reference are refused.
 struct ApiParamShape
 {
     ApiType Type;
@@ -49,6 +49,12 @@ namespace ApiKindResolver
 // "std::span<const float>", "ActionState").
 std::optional<ApiType> ResolveValue(std::string_view typeText, const ApiLookup& lookup,
                                     DeclarationProblem& outProblem);
+
+// A return type with no cv-qualifier, reference or pointer. `std::string` is the String kind here:
+// the generated binding copies the returned text into the caller's buffer. A returned
+// `std::string_view` and a span are refused.
+std::optional<ApiType> ResolveReturn(std::string_view typeText, const ApiLookup& lookup,
+                                     DeclarationProblem& outProblem);
 
 // A parameter's whole type text ("const PlayOptions&", "Mathematics::Vector2&").
 std::optional<ApiParamShape> ResolveParameter(std::string_view typeText, const ApiLookup& lookup,

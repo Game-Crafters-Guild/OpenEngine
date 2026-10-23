@@ -177,10 +177,6 @@ ge_add_managed_assembly(CoreBridgeAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/CoreBridge/GameEngine.CoreBridge.csproj
   COMMENT "Building CoreBridge assembly (GameEngine.CoreBridge.dll)")
 
-ge_add_managed_assembly(ScriptingBindingsAssembly ALL
-  CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/GameEngine.Scripting.Bindings.csproj
-  COMMENT "Building the generated script API bindings (GameEngine.Scripting.Bindings.dll)")
-
 # Editor Scripting ABI: not part of ALL — Editor.Managed builds it transitively
 # via ProjectReference, so adding it to the default build would race.
 if(BUILD_EDITOR)
@@ -205,10 +201,15 @@ ge_add_managed_assembly(EntitySystemGeneratorAssembly ALL
 # The edges are load-bearing: each wrapper's `dotnet build` compiles its
 # whole ProjectReference closure, so two unserialized wrappers that share a
 # project race on its obj/ output under parallel MSBuild (CS2012).
+ge_add_managed_assembly(ScriptingBindingsAssembly ALL
+  CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Scripting.Bindings/GameEngine.Scripting.Bindings.csproj
+  COMMENT "Building the generated script API bindings (GameEngine.Scripting.Bindings.dll)"
+  DEPENDS_ON EcsAbiAssembly)
+
 ge_add_managed_assembly(ScriptingAbiAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Scripting.ABI/GameEngine.Scripting.ABI.csproj
   COMMENT "Building Scripting.ABI assembly (GameEngine.Scripting.ABI.dll)"
-  DEPENDS_ON EcsAbiAssembly)
+  DEPENDS_ON EcsAbiAssembly ScriptingBindingsAssembly)
 
 ge_add_managed_assembly(ScriptingRuntimeAssembly ALL
   CSPROJ  ${CMAKE_SOURCE_DIR}/Managed/Scripting.Runtime/GameEngine.Scripting.Runtime.csproj

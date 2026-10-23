@@ -11,18 +11,22 @@
 #include "PhysicsECS/Components/PlaneColliderShape.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
+#include "PhysicsECS/Components/KinematicBody.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
 
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "Physics/PhysicsShapes.h"
 
+#include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace GameEngine::PhysicsECS
@@ -104,6 +108,28 @@ bool HoldsBackendObjects(const GameEngine::Components::PhysicsBody& body)
     return body.body.IsValid() || body.shape.IsValid() || body.childShapeCount > 0;
 }
 
+// A body built this update and whether its backend body is kinematic.
+struct BuiltBody
+{
+    ECS::EntityHandle entity{};
+    bool kinematic = false;
+};
+
+// The KinematicBody tag follows the motion type of the backend body that was just built. The change is
+// deferred, because other systems may run in the same wave; the world applies it at its next
+// ProcessCommands.
+void MarkKinematicBodies(ECS::World& world, const std::vector<BuiltBody>& builtBodies)
+{
+    for (const BuiltBody& built : builtBodies)
+    {
+        const bool tagged = world.HasComponent<GameEngine::Components::KinematicBody>(built.entity);
+        if (built.kinematic && !tagged)
+            world.AddComponent(built.entity, GameEngine::Components::KinematicBody{});
+        else if (!built.kinematic && tagged)
+            world.RemoveComponent<GameEngine::Components::KinematicBody>(built.entity);
+    }
+}
+
 } // namespace
 
 void PhysicsInitSystem::ReleaseDisabledBodies(ECS::World& world)
@@ -133,6 +159,59 @@ void PhysicsInitSystem::ReleaseDisabledBodies(ECS::World& world)
             ReleasePhysicsBody(*body);
     }
 }
+
+namespace
+{
+// The shape a heightfield collider's provider samples make: centered on the body, NxN samples over
+// the collider's extent.
+Physics::HeightFieldShapeDef MakeHeightFieldShapeDef(const HeightFieldData& data,
+                                                     const GameEngine::Components::HeightFieldColliderShape& shape)
+{
+    const uint32 n = data.sampleCount;
+    Physics::HeightFieldShapeDef def;
+    def.Samples.assign(data.samples, data.samples + static_cast<size_t>(n) * n);
+    def.SampleCount = n;
+    def.Offset = Physics::Vector3(-shape.sizeX * 0.5f, 0.0f, -shape.sizeZ * 0.5f);
+    def.Scale = Physics::Vector3(shape.sizeX / static_cast<float32>(n - 1), shape.heightScale,
+                                 shape.sizeZ / static_cast<float32>(n - 1));
+    return def;
+}
+} // namespace
+
+struct PhysicsInitSystem::PendingHeightFieldBuild
+{
+    // What the build was started for: a change to any of these restarts it.
+    uint32 DataHandle = 0;
+    uint32 DataGeneration = 0;
+    uint64 Version = 0;
+    uint32 SampleCount = 0;
+    float32 SizeX = 0.0f;
+    float32 SizeZ = 0.0f;
+    float32 HeightScale = 0.0f;
+    bool Visited = false;
+
+    // Written by the job before Done is released.
+    std::shared_ptr<const Physics::PreparedHeightFieldShape> Shape;
+    float32 MinHeight = 0.0f;
+    float32 MaxHeight = 0.0f;
+    std::atomic<bool> Done{false};
+
+    // The job body: builds the shape and the sample range the wake boxes use.
+    void Run(Physics::HeightFieldShapeBuilder builder, const Physics::HeightFieldShapeDef& def)
+    {
+        float32 minHeight = std::numeric_limits<float32>::max();
+        float32 maxHeight = std::numeric_limits<float32>::lowest();
+        for (const float32 s : def.Samples)
+        {
+            minHeight = std::min(minHeight, s);
+            maxHeight = std::max(maxHeight, s);
+        }
+        Shape = builder(def);
+        MinHeight = minHeight;
+        MaxHeight = maxHeight;
+        Done.store(true, std::memory_order_release);
+    }
+};
 
 void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
 {
@@ -389,24 +468,57 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
                         return;
                 }
 
-                const float32 scaleX = shape.sizeX / static_cast<float32>(N - 1);
-                const float32 scaleZ = shape.sizeZ / static_cast<float32>(N - 1);
-
-                Physics::HeightFieldShapeDef hfDef;
-                hfDef.Samples.assign(hfData.samples, hfData.samples + static_cast<size_t>(N) * N);
-                hfDef.SampleCount = N;
-                hfDef.Offset = Physics::Vector3(-shape.sizeX * 0.5f, 0.0f, -shape.sizeZ * 0.5f);
-                hfDef.Scale = Physics::Vector3(scaleX, shape.heightScale, scaleZ);
-
                 float32 fullMin = std::numeric_limits<float32>::max();
                 float32 fullMax = std::numeric_limits<float32>::lowest();
-                for (const float32 s : hfDef.Samples)
+                if (bodyBuilt)
                 {
-                    fullMin = std::min(fullMin, s);
-                    fullMax = std::max(fullMax, s);
+                    Physics::HeightFieldShapeDef hfDef = MakeHeightFieldShapeDef(hfData, shape);
+                    for (const float32 s : hfDef.Samples)
+                    {
+                        fullMin = std::min(fullMin, s);
+                        fullMax = std::max(fullMax, s);
+                    }
+                    addCollider(e, owner, local, collider, std::move(hfDef));
                 }
-
-                addCollider(e, owner, local, collider, std::move(hfDef));
+                else
+                {
+                    // A new body builds its shape on the job pool and is created the update the
+                    // build lands. Without a pool the build runs here, in this update.
+                    std::shared_ptr<PendingHeightFieldBuild>& build = m_PendingHeightFields[e.id];
+                    if (!build || build->DataHandle != shape.dataHandle ||
+                        build->DataGeneration != shape.dataGeneration || build->Version != hfData.version ||
+                        build->SampleCount != N ||
+                        build->SizeX != shape.sizeX || build->SizeZ != shape.sizeZ ||
+                        build->HeightScale != shape.heightScale)
+                    {
+                        build = std::make_shared<PendingHeightFieldBuild>();
+                        build->DataHandle = shape.dataHandle;
+                        build->DataGeneration = shape.dataGeneration;
+                        build->Version = hfData.version;
+                        build->SampleCount = N;
+                        build->SizeX = shape.sizeX;
+                        build->SizeZ = shape.sizeZ;
+                        build->HeightScale = shape.heightScale;
+                        // Never null (PhysicsWorld::GetHeightFieldShapeBuilder); a failed build
+                        // returns a null shape, handled where the build lands.
+                        const Physics::HeightFieldShapeBuilder builder = pw->GetHeightFieldShapeBuilder();
+                        Physics::HeightFieldShapeDef hfDef = MakeHeightFieldShapeDef(hfData, shape);
+                        if (JobSystem::WorkStealingThreadPool* pool = world.GetJobSystem())
+                            pool->Submit([build, builder, def = std::move(hfDef)]() { build->Run(builder, def); });
+                        else
+                            build->Run(builder, hfDef);
+                    }
+                    build->Visited = true;
+                    if (!build->Done.load(std::memory_order_acquire))
+                        return;
+                    const std::shared_ptr<const Physics::PreparedHeightFieldShape> prepared = build->Shape;
+                    fullMin = build->MinHeight;
+                    fullMax = build->MaxHeight;
+                    m_PendingHeightFields.erase(e.id);
+                    if (!prepared)
+                        return; // the build failed and logged why; the next update retries
+                    addCollider(e, owner, local, collider, Physics::PreparedHeightFieldShapeDef{prepared});
+                }
                 shape.lastBuiltVersion = hfData.version;
                 shape.lastSeenVersion = hfData.version;
                 shape.rebuildWaitSeconds = 0.0f;
@@ -436,10 +548,15 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
         }
     }
 
+    // A pending build whose body was not gathered this update lost its entity, its collider
+    // or its need for a new body: its job's result is dropped when the job ends.
+    std::erase_if(m_PendingHeightFields, [](auto& entry) { return !std::exchange(entry.second->Visited, false); });
+
     // Build bodies from gathered colliders.
     {
         // A disabled body is not visited: ReleaseDisabledBodies tore its backend
         // body down, and re-enabling it brings it back here like any new one.
+        std::vector<BuiltBody> builtBodies;
         auto q = world.Query<ECS::Read<GameEngine::Components::WorldTransform>, ECS::Write<GameEngine::Components::PhysicsBody>>();
         q.Each([&](ECS::EntityHandle e,
                    const GameEngine::Components::WorldTransform& wt,
@@ -616,7 +733,10 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
 
             body.body = pw->CreateBody(bs);
             body.initialized = body.body.IsValid();
+            if (body.initialized)
+                builtBodies.push_back({e, body.motionType == Physics::MotionType::Kinematic});
         });
+        MarkKinematicBodies(world, builtBodies);
     }
 
     // Wake sleeping dynamics over every heightfield footprint that was

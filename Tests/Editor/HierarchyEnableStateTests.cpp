@@ -2,7 +2,9 @@
 
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
+#include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/Light.h"
+#include "Components/SceneViewHidden.h"
 #include "Components/Transform.h"
 #include "ECS/DisabledInHierarchySystem.h"
 #include "ECS/ECSTemplates.h"
@@ -11,7 +13,9 @@
 #include "Editor/Hierarchy/HierarchyEnableState.h"
 #include "Editor/Hierarchy/HierarchyLightIconTint.h"
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
+#include "Editor/Hierarchy/HierarchyRowEye.h"
 #include "Inspectors/InspectorEntityActivity.h"
+#include "SceneView/SceneViewEye.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Toggle.h"
 #include "UI/Controls/TreeView.h"
@@ -266,6 +270,85 @@ TEST(HierarchyEnableStateTests, AMultiSelectionIsOneUndoStepThatRestoresEachEnti
     undo.Undo();
     EXPECT_TRUE(Entity(&world, wasOn).IsEnabled());
     EXPECT_FALSE(Entity(&world, wasOff).IsEnabled()) << "undo restores the state each entity had";
+}
+
+// The Scene View eye over a mixed selection hides every entity and leaves the enable state alone;
+// showing it again shows them all. It takes no undo service: the eye is view state (D12).
+TEST(HierarchyEnableStateTests, TheEyeOverAMixedSelectionSetsEachEntityAndLeavesTheEnableStateAlone)
+{
+    World world;
+    const EntityHandle wasShown = MakeNode(world, "WasShown");
+    const EntityHandle wasHidden = MakeNode(world, "WasHidden");
+    world.AddComponentImmediate<GameEngine::Components::SceneViewHidden>(wasHidden, {});
+
+    const EntityHandle selection[] = {wasShown, wasHidden};
+    GameEngine::Editor::SetHiddenInSceneView(world, selection, true);
+    EXPECT_TRUE(GameEngine::Editor::IsHiddenInSceneView(world, wasShown));
+    EXPECT_TRUE(GameEngine::Editor::IsHiddenInSceneView(world, wasHidden));
+    EXPECT_TRUE(Entity(&world, wasShown).IsEnabled()) << "the eye is not the enable state";
+
+    GameEngine::Editor::SetHiddenInSceneView(world, selection, false);
+    EXPECT_FALSE(GameEngine::Editor::IsHiddenInSceneView(world, wasShown));
+    EXPECT_FALSE(GameEngine::Editor::IsHiddenInSceneView(world, wasHidden));
+}
+
+// A row's eye shows the entity's own closed eye, and on a child the ancestor that hides it, with the
+// tooltip naming that ancestor.
+TEST(HierarchyEnableStateTests, AnEyeRowShowsItsOwnStateAndTheAncestorThatHidesIt)
+{
+    World world;
+    const EntityHandle root = MakeNode(world, "Root");
+    const EntityHandle child = MakeNode(world, "Child", root);
+    const EntityHandle selection[] = {root};
+    GameEngine::Editor::SetHiddenInSceneView(world, selection, true);
+    // The derived state SceneViewHiddenInHierarchySystem gives the child.
+    world.AddComponentImmediate<GameEngine::Components::SceneViewHiddenInHierarchy>(child, {});
+
+    GameEngine::Editor::HierarchyRowActivity activity;
+    const auto makeRow = []
+    {
+        auto row = std::make_unique<GameEngine::UIElement>();
+        auto eye = std::make_unique<GameEngine::UIElement>();
+        eye->AddClass("hierarchy-eye");
+        row->AddChild(std::move(eye));
+        return row;
+    };
+    const auto rootRow = makeRow();
+    const auto childRow = makeRow();
+    activity.Present(world, root, 1, *rootRow);
+    activity.Present(world, child, 2, *childRow);
+
+    const GameEngine::UIElement& rootEye = *rootRow->GetChildren().front();
+    const GameEngine::UIElement& childEye = *childRow->GetChildren().front();
+    EXPECT_TRUE(rootEye.HasClass("eye-closed"));
+    EXPECT_FALSE(rootEye.HasClass("eye-closed-by-parent"));
+    EXPECT_EQ(rootEye.GetTooltip(), "The meshes under it are hidden in the Scene View. Click to show");
+    EXPECT_FALSE(childEye.HasClass("eye-closed"));
+    EXPECT_TRUE(childEye.HasClass("eye-closed-by-parent"));
+    EXPECT_EQ(childEye.GetTooltip(), "Hidden with Root. Click to keep it hidden when Root is shown");
+}
+
+// A row shows the eye only where it has something to hide: an entity with a mesh, or one with
+// children. A leaf with no mesh, such as a light, shows none.
+TEST(HierarchyEnableStateTests, ALeafWithNoMeshShowsNoEye)
+{
+    World world;
+    const EntityHandle light = MakeNode(world, "Light");
+    const EntityHandle mesh = MakeNode(world, "Mesh");
+    world.AddComponentImmediate<GameEngine::Components::MeshRenderer>(mesh, {});
+    const EntityHandle group = MakeNode(world, "Group");
+    GameEngine::Editor::HierarchyRowEye eye({[&world] { return &world; }, {}, {}, {}});
+    const auto eyeShown = [&](EntityHandle entity, bool hasChildren)
+    {
+        GameEngine::UIElement row;
+        eye.AddTo(row);
+        eye.Present(row, entity, hasChildren);
+        const auto display = row.GetChildren().front()->Overrides().Get(GameEngine::Style::Display);
+        return !(display.has_value() && *display == GameEngine::DisplayMode::None);
+    };
+    EXPECT_FALSE(eyeShown(light, false)) << "nothing to hide on a light";
+    EXPECT_TRUE(eyeShown(mesh, false));
+    EXPECT_TRUE(eyeShown(group, true)) << "its children may have meshes";
 }
 
 // A click that switches nothing records no undo step: an empty selection, or one whose entities

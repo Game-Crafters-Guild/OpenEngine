@@ -12,6 +12,8 @@
     <PackageReference Include="NUnit" Version="4.1.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="4.5.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.0" />
+    <!-- Compiles the package and script assemblies ScriptDependencyContextTests stages. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.10.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\CoreBridge\GameEngine.CoreBridge.csproj" />

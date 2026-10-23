@@ -8,9 +8,12 @@
 #include "TerrainGrass/TerrainGrassRenderFeature.h"
 #include "TerrainGrass/TerrainGrassPlacementStats.h"
 #include "TerrainGrass/GrassPlacementModel.h"
+#include "GrassBladeInstanceGPU.h"
 #include "Terrain/Heightfield.h"
 #include "Terrain/TerrainTypes.h"
-#include "TerrainGrassFieldUploader.h"
+#include "TerrainColorMapCompose.h"
+#include "TerrainFieldUploader.h"
+#include "TerrainECS/TerrainColorMap.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/Materials/MaterialBuilder.h"
@@ -23,6 +26,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -51,7 +55,7 @@ class TerrainGrassRegionGpu : public testing::Test
 protected:
     std::unique_ptr<GrassUploadDevice> Device;
     std::unique_ptr<TerrainRenderFeature> Feature;
-    TerrainGrassFieldUploader Uploader;
+    TerrainFieldUploader Uploader{GrassFieldUploadDesc()};
     TerrainHandle Handle{0,1};
     std::vector<BufferHandle> Buffers;
     std::vector<TextureHandle> Textures;
@@ -103,12 +107,12 @@ protected:
         if (data) Device->UpdateBuffer(buffer, 0, size, data);
         return buffer;
     }
-    std::vector<uint8> ReadMap(TerrainGrassMap kind, uint32 width, uint32 height)
+    std::vector<uint8> ReadMap(TerrainFieldMap kind, uint32 width, uint32 height)
     {
         std::vector<uint8> result(static_cast<size_t>(width) * height * 2);
         auto readback = Device->CreateReadbackBuffer(result.size());
         Buffers.push_back(readback);
-        auto texture = Feature->GetGrassFieldTexture(Handle, kind);
+        auto texture = Feature->GetFieldTexture(TerrainField::GrassControl, Handle, kind);
         EXPECT_TRUE(texture.IsValid());
         auto command = Device->CreateCommandList(IDevice::QueueType::Graphics);
         command->Begin();
@@ -180,8 +184,9 @@ protected:
         uint32 Terrain;
         float32 NormalX, NormalZ;
         uint32 Flags;
+        uint32 RootColor; // 0 on the compat profile these kernels compile for
     };
-    static_assert(sizeof(Blade) == 48);
+    static_assert(sizeof(Blade) == kGrassBladeInstanceBytes);
     struct Placement { std::vector<Blade> Blades; uint32 Accepted = 0; };
 
     // The height field as the R32 unified height texture the terrain uploads: one texel per sample.
@@ -219,11 +224,11 @@ protected:
         constexpr uint32 slots = 1024;
         auto field = Field(height, density);
         EXPECT_TRUE(Uploader.UpdateUnified(*Feature, Handle, field));
-        const auto texture = Feature->GetGrassFieldTexture(Handle, TerrainGrassMap::Unified);
+        const auto texture = Feature->GetFieldTexture(TerrainField::GrassControl, Handle, TerrainFieldMap::Unified);
         auto ground = Field(64, 0);
         const TerrainHandle groundHandle{1, 1};
         EXPECT_TRUE(Uploader.UpdateUnified(*Feature, groundHandle, ground));
-        const auto groundTexture = Feature->GetGrassFieldTexture(groundHandle, TerrainGrassMap::Unified);
+        const auto groundTexture = Feature->GetFieldTexture(TerrainField::GrassControl, groundHandle, TerrainFieldMap::Unified);
         Terrain::TerrainGPUParams terrain{};
         terrain.WorldOriginX = terrain.WorldOriginZ = -8;
         terrain.WorldOriginY = 7;
@@ -308,11 +313,11 @@ TEST_F(TerrainGrassRegionGpu, RecreatedUnifiedFieldRetriesWholeUploadAfterStagin
 {
     auto field = Field(40, 90);
     ASSERT_TRUE(Uploader.UpdateUnified(*Feature, Handle, field));
-    EXPECT_EQ(ReadMap(TerrainGrassMap::Unified,5,5), field.Pixels);
+    EXPECT_EQ(ReadMap(TerrainFieldMap::Unified,5,5), field.Pixels);
     const auto uploaded = Feature->GetGrassPlacementContentEpoch();
     ASSERT_TRUE(Uploader.UpdateUnified(*Feature, Handle, field));
     EXPECT_EQ(Feature->GetGrassPlacementContentEpoch(), uploaded);
-    Feature->ReleaseGrassFieldResources(Handle);
+    Feature->ReleaseFieldResources(TerrainField::GrassControl, Handle);
     EXPECT_GT(Feature->GetGrassPlacementContentEpoch(), uploaded);
     ASSERT_FALSE(field.Dirty);
     Device->RefuseGrassStaging = true;
@@ -322,7 +327,7 @@ TEST_F(TerrainGrassRegionGpu, RecreatedUnifiedFieldRetriesWholeUploadAfterStagin
     EXPECT_EQ(field.DirtyMaxX, field.Width);
     Device->RefuseGrassStaging = false;
     ASSERT_TRUE(Uploader.UpdateUnified(*Feature, Handle, field));
-    EXPECT_EQ(ReadMap(TerrainGrassMap::Unified,5,5), field.Pixels);
+    EXPECT_EQ(ReadMap(TerrainFieldMap::Unified,5,5), field.Pixels);
 }
 
 TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot)
@@ -340,7 +345,7 @@ TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot
     EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
     Device->RefuseGrassStaging = false;
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    const auto first = ReadMap(TerrainGrassMap::Atlas,7,7);
+    const auto first = ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(first.front(),20);
     const auto version = Feature->GetGrassPlacementContentEpoch();
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
@@ -354,7 +359,7 @@ TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot
     EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
     Device->RefuseGrassStaging=false;
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    const auto replacement=ReadMap(TerrainGrassMap::Atlas,7,7);
+    const auto replacement=ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(replacement.front(),150);
     EXPECT_EQ(replacement.back(),170);
     // Service replacement between extraction ticks can retain the same atlas
@@ -362,7 +367,7 @@ TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot
     // extent must win over the old slot's coincident cached version.
     tiled.Tiles.at(TileCoord{1,0})->GrassField=Field(70,90);
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    const auto sameRowReplacement=ReadMap(TerrainGrassMap::Atlas,7,7);
+    const auto sameRowReplacement=ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(sameRowReplacement.front(),70);
     EXPECT_EQ(sameRowReplacement.back(),90);
 }
@@ -378,7 +383,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     modifier.BoundsMinZ = -1; modifier.BoundsMaxZ = 5;
     ResolvedEffect effect;
     effect.EffectKind = ResolvedEffect::Kind::Grass;
-    effect.Grass = {0.2f,0.4f}; modifier.Effects.push_back(effect);
+    effect.Grass = {0.2f,0.4f,1.0f}; modifier.Effects.push_back(effect);
     const std::array<ResolvedModifier,1> modifiers{modifier};
     TiledTerrainData tiled{};
     tiled.GrassRegionsActive = true;
@@ -396,7 +401,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     std::array<TileAtlasSlot,2> rows{};
     rows[0].Slot=0; rows[1].Slot=1;
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    auto read = ReadMap(TerrainGrassMap::Atlas,14,14);
+    auto read = ReadMap(TerrainFieldMap::Atlas,14,14);
     auto checkEdges = [&](const auto& pixels) {
         for (uint32 z=0;z<5;++z)
             for (uint32 channel=0;channel<2;++channel)
@@ -408,7 +413,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     arrived.LodState=TileLodState::Full;
     ComposeTerrainGrassField(arrived.GrassField,5,5,4,4,4,0,modifiers);
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    read=ReadMap(TerrainGrassMap::Atlas,14,14);
+    read=ReadMap(TerrainFieldMap::Atlas,14,14);
     checkEdges(read);
     // One interior texel edit must leave every other atlas byte intact.
     arrived.GrassField.Pixels[(2*5+2)*2]=3;
@@ -417,7 +422,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     arrived.GrassField.DirtyMinX=arrived.GrassField.DirtyMinZ=2;
     arrived.GrassField.DirtyMaxX=arrived.GrassField.DirtyMaxZ=3;
     ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
-    const auto changed=ReadMap(TerrainGrassMap::Atlas,14,14);
+    const auto changed=ReadMap(TerrainFieldMap::Atlas,14,14);
     read[(3*14+10)*2]=3;
     EXPECT_EQ(changed,read);
 }
@@ -513,4 +518,215 @@ TEST_F(TerrainGrassRegionGpu, PlacedRootsStandOnTheCpuHeightfield)
     EXPECT_EQ(checked, placement.Accepted);
     EXPECT_LT(worst, 1e-2f) << "a placed blade root is off the CPU height field";
 }
+// ---- The colour map on the device ------------------------------------------------------------------
+
+// A colour-map texel the production texture holds, and what the sampler returns for it: the GPU
+// decodes the sRGB rgb before it filters, so a written texel beside an unwritten one filters, in
+// linear light, to half its premultiplied colour at half its weight, and the ground then reads the
+// half mix. An unwritten texel reads exactly 0, which the apply leaves as the ground.
+class TerrainColorMapGpu : public TerrainGrassRegionGpu
+{
+protected:
+    // Samples `texture` at each UV with a linear clamp sampler in a compute stage and returns the
+    // filtered RGBA, decoded as the surface reads it.
+    std::vector<std::array<float32, 4>> Sample(TextureHandle texture, const std::vector<std::array<float32, 2>>& uvs)
+    {
+        std::filesystem::create_directories(Cache);
+        const auto source = Cache / "color_map_sample.comp";
+        std::ofstream(source)
+            << "#version 460\n"
+               "layout(local_size_x = 1) in;\n"
+               "layout(set = 0, binding = 0) uniform texture2D gMap;\n"
+               "layout(set = 0, binding = 1) uniform sampler gMapSampler;\n"
+               "layout(std430, set = 0, binding = 2) buffer Samples { vec4 values[]; } gSamples;\n"
+               "void main() { vec2 uv = gSamples.values[gl_GlobalInvocationID.x].xy;\n"
+               "  gSamples.values[gl_GlobalInvocationID.x] = textureLod(sampler2D(gMap, gMapSampler), uv, 0.0); }\n";
+        ShaderProgramCompileRequest request{};
+        request.baseDirectory = Cache;
+        request.cacheRoot = Cache / "cache";
+        ShaderStageCompileSpec stage{};
+        stage.stage = "cs"; stage.sourcePath = "color_map_sample.comp";
+        request.stages.push_back(stage);
+        ShaderProgramCompileResult result{};
+        std::string error;
+        EXPECT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, result, &error)) << error;
+        PipelineDesc desc{};
+        desc.type = PipelineType::Compute;
+        desc.computeShader = result.stageBytes.at("cs");
+        MaterialBuilder::BuildPipelineDescFromMeta(result.meta, desc);
+        Pipeline = Device->CreatePipeline(desc);
+        EXPECT_TRUE(Pipeline.IsValid());
+        DescriptorSetDesc set{};
+        set.layout = desc.descriptorSetLayouts.at(0);
+        DescriptorSet = Device->CreateDescriptorSet(set);
+        SamplerDesc sampler{};
+        sampler.minFilter = sampler.magFilter = 1;
+        sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = 2;
+        Sampler = Device->CreateSampler(sampler);
+        std::vector<std::array<float32, 4>> values(uvs.size());
+        for (size_t i = 0; i < uvs.size(); ++i)
+            values[i] = {uvs[i][0], uvs[i][1], 0.0f, 0.0f};
+        const size_t bytes = values.size() * sizeof(values[0]);
+        const auto buffer = Buffer(values.data(), bytes, BufferUsage::Storage);
+        Device->UpdateImageBinding(DescriptorSet, 0, texture);
+        Device->UpdateSamplerBinding(DescriptorSet, 1, Sampler);
+        Device->UpdateStorageBufferBinding(DescriptorSet, 2, buffer, 0, bytes);
+        auto command = Device->CreateCommandList(IDevice::QueueType::Graphics);
+        command->Begin();
+        Feature->FlushPendingUploads(command.get());
+        command->SetPipeline(Pipeline);
+        command->BindDescriptorSet(0, DescriptorSet, Pipeline);
+        command->Dispatch(static_cast<uint32>(values.size()), 1, 1);
+        command->End();
+        Device->ExecuteCommandLists({command.get()});
+        Device->WaitForIdle();
+        if (const void* mapped = Device->MapBuffer(buffer)) std::memcpy(values.data(), mapped, bytes);
+        else ADD_FAILURE() << "sample readback unavailable";
+        Device->UnmapBuffer(buffer);
+        return values;
+    }
+
+    std::vector<uint8> ReadColorAtlas(uint32 dim)
+    {
+        std::vector<uint8> atlas(static_cast<size_t>(dim) * dim * kTerrainColorMapChannels);
+        auto readback = Device->CreateReadbackBuffer(atlas.size());
+        Buffers.push_back(readback);
+        const auto texture = Feature->GetFieldTexture(TerrainField::Color, Handle, TerrainFieldMap::Atlas);
+        EXPECT_TRUE(texture.IsValid());
+        auto command = Device->CreateCommandList(IDevice::QueueType::Graphics);
+        command->Begin();
+        Feature->FlushPendingUploads(command.get());
+        command->CopyTextureSubresourceToBuffer(texture, 0, 0, readback, dim, dim, 0, 0, 0, 0);
+        command->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::CopySource, ResourceState::ShaderResource));
+        command->End();
+        Device->ExecuteCommandLists({command.get()});
+        Device->WaitForIdle();
+        if (const void* mapped = Device->MapBuffer(readback)) std::memcpy(atlas.data(), mapped, atlas.size());
+        else ADD_FAILURE() << "atlas readback unavailable";
+        Device->UnmapBuffer(readback);
+        return atlas;
+    }
+
+    static TerrainColorMap UniformMap(uint8 r, uint8 a, uint32 size)
+    {
+        TerrainColorMap map;
+        map.Width = map.Height = size;
+        map.Initialized = map.Dirty = true;
+        map.Version = 1;
+        map.DirtyMaxX = map.DirtyMaxZ = size;
+        map.Pixels.resize(static_cast<size_t>(size) * size * kTerrainColorMapChannels, 0);
+        for (size_t i = 0; i < map.Pixels.size(); i += kTerrainColorMapChannels)
+        {
+            map.Pixels[i] = r;
+            map.Pixels[i + 3] = a;
+        }
+        return map;
+    }
+};
+
+TEST_F(TerrainColorMapGpu, TheMidpointOfAWrittenAndAnUnwrittenTexelIsTheHalfMix)
+{
+    // 2 x 1: the left texel holds colour (0.6, 0.3, 0.1) at weight 0.8, the right one nothing.
+    const float32 color[3] = {0.6f, 0.3f, 0.1f};
+    const float32 weight = 0.8f;
+    TerrainColorMap map;
+    map.Width = 2;
+    map.Height = 1;
+    map.Pixels = {EncodeLinearToSrgbByte(color[0] * weight), EncodeLinearToSrgbByte(color[1] * weight),
+                  EncodeLinearToSrgbByte(color[2] * weight), static_cast<uint8>(std::lround(weight * 255.0f)),
+                  0, 0, 0, 0};
+    map.Initialized = map.Dirty = true;
+    map.Version = 1;
+    map.DirtyMaxX = 2;
+    map.DirtyMaxZ = 1;
+    TerrainFieldUploader uploader{ColorMapUploadDesc()};
+    ASSERT_TRUE(uploader.UpdateUnified(*Feature, Handle, map));
+    const auto texture = Feature->GetFieldTexture(TerrainField::Color, Handle, TerrainFieldMap::Unified);
+    ASSERT_TRUE(texture.IsValid());
+    const auto samples = Sample(texture, {{0.25f, 0.5f}, {0.5f, 0.5f}, {0.75f, 0.5f}});
+    const float32 storedWeight = static_cast<float32>(std::lround(weight * 255.0f)) / 255.0f;
+    // The written texel decodes to the premultiplied colour within its byte's step.
+    for (uint32 c = 0; c < 3; ++c)
+        EXPECT_NEAR(samples[0][c], color[c] * weight, 4e-3f) << c;
+    EXPECT_NEAR(samples[0][3], storedWeight, 1e-4f);
+    // The midpoint is half of the written texel in every channel.
+    for (uint32 c = 0; c < 4; ++c)
+        EXPECT_NEAR(samples[1][c], samples[0][c] * 0.5f, 2e-3f) << c;
+    // So the ground reads the half mix: ground x (1 - a/2) + c a/2 = mix(ground, c, a/2).
+    const float32 ground[3] = {0.10f, 0.16f, 0.035f};
+    for (uint32 c = 0; c < 3; ++c)
+    {
+        const float32 applied = ground[c] * (1.0f - samples[1][3]) + samples[1][c];
+        EXPECT_NEAR(applied, ground[c] + (color[c] - ground[c]) * storedWeight * 0.5f, 3e-3f) << c;
+    }
+    // The unwritten texel is exactly identity, and finite.
+    for (uint32 c = 0; c < 4; ++c)
+    {
+        EXPECT_TRUE(std::isfinite(samples[2][c]));
+        EXPECT_EQ(samples[2][c], 0.0f) << c;
+    }
+}
+
+// A tile's colour map lands in its atlas slot as the splat does: the tile texels at the slot's
+// interior with the apron duplicating its edge, and a tile that has not composed reads the coarse map.
+TEST_F(TerrainColorMapGpu, TheAtlasSlotHoldsTheTileMapAndAnUncomposedTileReadsTheCoarseMap)
+{
+    TiledTerrainData tiled{};
+    tiled.ColorMapActive = true;
+    tiled.ColorCoarseMap = UniformMap(40, 90, 5);
+    auto composed = std::make_unique<TerrainTileData>();
+    composed->LodState = TileLodState::Full;
+    composed->ColorMap = UniformMap(200, 255, 5);
+    auto pending = std::make_unique<TerrainTileData>();
+    pending->LodState = TileLodState::Full;
+    tiled.Tiles.emplace(TileCoord{0, 0}, std::move(composed));
+    tiled.Tiles.emplace(TileCoord{1, 0}, std::move(pending));
+    const auto geometry = MakeAtlasGeometry(5, 2, 2, 1);
+    std::array<TileAtlasSlot, 2> rows{};
+    rows[0].Slot = 0;
+    rows[1].Slot = 1;
+    TerrainFieldUploader uploader{ColorMapUploadDesc()};
+    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows));
+    const auto atlas = ReadColorAtlas(geometry.AtlasDim);
+    const auto at = [&](uint32 x, uint32 y)
+    { return &atlas[(static_cast<size_t>(y) * geometry.AtlasDim + x) * kTerrainColorMapChannels]; };
+    // Slot 0: the composed tile, apron included.
+    EXPECT_EQ(at(0, 0)[0], 200);
+    EXPECT_EQ(at(3, 3)[0], 200);
+    EXPECT_EQ(at(3, 3)[3], 255);
+    // Slot 1, the next along the row: the coarse map under a tile that has not composed.
+    EXPECT_EQ(at(geometry.SlotStride + 3, 3)[0], 40);
+    EXPECT_EQ(at(geometry.SlotStride + 3, 3)[3], 90);
+}
+
+// A tile map on another lattice than the slot's is resampled into the slot in linear light, as the
+// sampler filters it: between a full texel and an unwritten one the colour is the encoded half, not
+// the half of the encoded bytes, which would be darker.
+TEST_F(TerrainColorMapGpu, AResampledTileMapBlendsItsColorInLinearLight)
+{
+    TiledTerrainData tiled{};
+    tiled.ColorMapActive = true;
+    tiled.ColorCoarseMap = UniformMap(0, 0, 5);
+    auto tile = std::make_unique<TerrainTileData>();
+    tile->LodState = TileLodState::Full;
+    tile->ColorMap = UniformMap(0, 0, 2);
+    for (uint32 z = 0; z < 2; ++z)
+    {
+        uint8* left = tile->ColorMap.Pixels.data() + static_cast<size_t>(z) * 2 * kTerrainColorMapChannels;
+        left[0] = left[1] = left[2] = left[3] = 255;
+    }
+    tiled.Tiles.emplace(TileCoord{0, 0}, std::move(tile));
+    const auto geometry = MakeAtlasGeometry(5, 2, 2, 1);
+    std::array<TileAtlasSlot, 2> rows{};
+    rows[0].Slot = 0;
+    rows[1].Slot = 1;
+    TerrainFieldUploader uploader{ColorMapUploadDesc()};
+    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows));
+    const auto atlas = ReadColorAtlas(geometry.AtlasDim);
+    // Tile texel (2, 2) of 5 sits half way between the 2 x 2 map's columns.
+    const uint8* mid = &atlas[(static_cast<size_t>(3) * geometry.AtlasDim + 3) * kTerrainColorMapChannels];
+    EXPECT_EQ(mid[0], EncodeLinearToSrgbByte(0.5f));
+    EXPECT_EQ(mid[3], 128) << "the weight is linear and filters as bytes";
+}
+
 } // namespace

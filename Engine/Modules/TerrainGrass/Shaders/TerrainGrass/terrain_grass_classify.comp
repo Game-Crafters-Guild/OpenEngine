@@ -81,6 +81,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer TerrainParamsBuffer
@@ -107,6 +108,7 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     vec4 ViewRotCol1;
     vec4 ViewRotCol2;
     vec4 Summary;
+    ivec4 RenderOriginSector; // read only by the emit kernel (terrain_grass_place.comp)
 } Place;
 
 bool cellOutsideFrustum(vec2 cellMin, vec2 cellMax)

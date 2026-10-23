@@ -2,6 +2,7 @@
 
 #include "ECS/ECS.h"
 #include "Editor/Hierarchy/HierarchyEnableState.h"
+#include "SceneView/SceneViewEye.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,9 +24,10 @@ class World;
 namespace GameEngine::Editor
 {
 
-/// Keeps the Hierarchy's rows showing their entities' enable state (DescribeEntityActivity). A row
-/// shows its entity's state when the tree binds it (Present). The derived state lands with the
-/// hierarchy pass a frame after the switch that caused it, so when the world's structure has changed
+/// Keeps the Hierarchy's rows showing their entities' enable state (DescribeEntityActivity) and Scene
+/// View eye (DescribeSceneViewEye, on the row's `hierarchy-eye` child). A row shows its entity's state
+/// when the tree binds it (Present). The derived states land with the hierarchy passes a frame after
+/// the switch that caused them, so when the world's structure has changed
 /// Refresh marks, on the tree's provider, every id of a row the tree holds whose entity's state moved
 /// since the row was given it; the tree rebinds those rows. It remembers tree ids, never rows (the
 /// tree destroys pooled rows when its viewport shrinks), and forgets the ids of rows the tree no
@@ -46,6 +48,7 @@ class HierarchyRowActivity
     {
         ECS::EntityHandle Entity{};
         EntityActivity Activity{};
+        SceneViewEyeState Eye{};
         std::uint64_t HeldAtRefresh = 0; // the last refresh that found the id's row held
     };
 

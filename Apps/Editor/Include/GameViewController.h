@@ -151,7 +151,10 @@ class GameViewController
 
     // Input-phase viewport events, normalized to the displayed rect. Use the
     // last UI extent even when scene extraction/compositing skips this frame.
-    void HandleGameUiPointer(bool over, float x, float y, bool down, int mods);
+    // A move never presses; the button path below is the only thing that presses.
+    void HandleGameUiPointerMove(bool over, float x, float y, int mods);
+    // A button edge from the viewport element, forwarded to the host as-is, index included.
+    void HandleGameUiPointerButton(int button, bool pressed, int mods);
 
     // The HUD host this view composites, for the input chain's play-surface
     // stage. Null until the view has been rendered once (the host is created

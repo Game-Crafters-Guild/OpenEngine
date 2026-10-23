@@ -165,6 +165,24 @@ TEST_F(PhysicsRayCastTests, RayCastAllKeepsTheNearestMaxResults)
     EXPECT_TRUE(hits.empty());
 }
 
+// A world with no backend (moved from) finds nothing and leaves the caller's lists empty, as a query that
+// hits nothing does: a list the caller reuses never keeps the results of an earlier query.
+TEST_F(PhysicsRayCastTests, WorldWithoutABackendEmptiesTheLists)
+{
+    Box(3, 1);
+    ASSERT_TRUE(world->RayCastAll(Forward(), hits));
+    std::vector<OverlapResult> overlaps;
+    BoxOverlapQuery box;
+    box.center = {0, 0, 3};
+    ASSERT_TRUE(world->BoxOverlap(box, overlaps));
+
+    const PhysicsWorld moved = std::move(*world);
+    EXPECT_FALSE(world->RayCastAll(Forward(), hits));
+    EXPECT_TRUE(hits.empty());
+    EXPECT_FALSE(world->BoxOverlap(box, overlaps));
+    EXPECT_TRUE(overlaps.empty());
+}
+
 TEST_F(PhysicsRayCastTests, RayCastAllReportsAMeshBodyOnceAtItsNearestSurface)
 {
     // Two facing quads, both windings so either side is a front face.

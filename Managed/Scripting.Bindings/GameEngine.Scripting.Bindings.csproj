@@ -27,7 +27,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\Common\NativeEngineLibrary.cs" Link="NativeEngineLibrary.cs" />
+    <!-- IComponent, BuiltInComponentAttribute and ComponentType<T>, which the component mirrors use,
+         and NativeEngineLibrary, which ECS.ABI shows this assembly (InternalsVisibleTo). -->
+    <ProjectReference Include="..\ECS.ABI\GameEngine.ECS.ABI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="..\Common\StringIds.cs" Link="StringIds.cs" />
   </ItemGroup>
 </Project>

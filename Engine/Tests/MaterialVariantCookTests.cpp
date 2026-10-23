@@ -39,7 +39,6 @@
 #include "Rendering/Materials/MaterialBuildContext.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialDocument.h"
-#include "Rendering/Materials/MaterialShaderIncludeRoots.h"
 #include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
@@ -543,7 +542,7 @@ TEST_F(WebMaterialVariantCook, CompatVariantsTranslateToWgslAndServeWithoutAComp
         request.VertexSource = built.composedVertexSource;
         request.FragmentSource = built.composedFragmentSource;
         request.Defines = built.composedDefines;
-        request.IncludeRoots = BuildMaterialIncludeRoots(project.Context, project.MaterialPath.parent_path());
+        request.IncludeRoots = built.composedIncludeRoots;
         request.DebugName = "probe_" + std::to_string(static_cast<uint64_t>(variant));
 
         // tint runs inside this call and a rejection fails it, so a pass here IS
@@ -616,7 +615,7 @@ TEST_F(WebMaterialVariantCook, ABatchReportsEachFailureAtItsOwnIndexAndKeepsOnly
         request.VertexSource = sources[i]->composedVertexSource;
         request.FragmentSource = sources[i]->composedFragmentSource;
         request.Defines = sources[i]->composedDefines;
-        request.IncludeRoots = BuildMaterialIncludeRoots(project.Context, project.MaterialPath.parent_path());
+        request.IncludeRoots = sources[i]->composedIncludeRoots;
         request.DebugName = "batch_" + std::to_string(i);
     }
     requests[0].PackagePath = color.generatedShaderPkgPath;

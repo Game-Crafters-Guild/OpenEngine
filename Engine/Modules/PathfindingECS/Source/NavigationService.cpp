@@ -40,6 +40,18 @@ std::unique_ptr<NavigationServiceInstance> NavigationService::s_Instance;
 uint64 NavigationService::s_Generation = 0;
 std::mutex NavigationService::s_Mutex;
 
+namespace
+{
+struct QueuedDirtyBox
+{
+    uint64 WorldId = 0;
+    ECS::EntityHandle Surface;
+    Mathematics::Rect Box;
+};
+// Lives with the service: Shutdown clears it.
+std::vector<QueuedDirtyBox> s_DirtyBoxes;
+} // namespace
+
 void NavigationService::Initialize()
 {
     std::lock_guard<std::mutex> lock(s_Mutex);
@@ -62,6 +74,7 @@ void NavigationService::Shutdown()
         return;
     }
     s_Instance.reset();
+    s_DirtyBoxes.clear();
     ++s_Generation;
     Logger::Log::Info("[PathfindingECS] NavigationService shut down (generation={})", s_Generation);
 }
@@ -85,6 +98,22 @@ bool NavigationService::IsInitialized()
 uint64 NavigationService::GetGeneration()
 {
     return s_Generation;
+}
+
+void NavigationService::QueueDirtyBox(uint64 worldId, ECS::EntityHandle surface, const Mathematics::Rect& box)
+{
+    if (s_Instance)
+        s_DirtyBoxes.push_back({worldId, surface, box});
+}
+
+void NavigationService::TakeDirtyBoxes(uint64 worldId, std::vector<std::pair<ECS::EntityHandle, Mathematics::Rect>>& out)
+{
+    std::erase_if(s_DirtyBoxes, [&](const QueuedDirtyBox& queued) {
+        if (queued.WorldId != worldId)
+            return false;
+        out.emplace_back(queued.Surface, queued.Box);
+        return true;
+    });
 }
 
 NavDebugData& NavigationService::GetDebugData()

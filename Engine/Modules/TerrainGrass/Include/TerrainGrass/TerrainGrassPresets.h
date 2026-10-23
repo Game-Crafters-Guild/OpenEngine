@@ -35,9 +35,9 @@ inline constexpr TerrainGrassPresetValues kTerrainGrassPresets[] = {
     // camera within the instance budget's 369 m.
     {Components::TerrainGrassPreset::Meadow, 0xFF79954Du, Components::kTerrainGrassAutoRootColor,
      0xFFBCCE61u, 21.0f, 0.72f, 0.036f, 0.25f},
-    // Lawn: short, upright and dense, a deeper green (0.13, 0.27, 0.045). 64 per square metre fit
+    // Lawn: short, upright and dense, a deeper green (0.15, 0.27, 0.07). 64 per square metre fit
     // the budget to about 211 m.
-    {Components::TerrainGrassPreset::Lawn, 0xFF658E3Cu, Components::kTerrainGrassAutoRootColor,
+    {Components::TerrainGrassPreset::Lawn, 0xFF6C8E4Bu, Components::kTerrainGrassAutoRootColor,
      0xFFAAC859u, 64.0f, 0.4f, 0.024f, 0.1f},
     // Steppe: sparse, tall, wiry and dry, a straw green (0.36, 0.33, 0.12) that leans loosely.
     {Components::TerrainGrassPreset::Steppe, 0xFFA29B61u, Components::kTerrainGrassAutoRootColor,

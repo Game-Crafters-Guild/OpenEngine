@@ -2,6 +2,7 @@
 #include "Ocean/OceanRenderFeature.h"
 #include "Ocean/OceanSurfaceMaterial.h"
 #include "Ocean/OceanTypes.h"
+#include "OceanSurfaceMaterialInternal.h"
 
 #include "Engine/Rendering/DrawBindings.h"
 #include "Engine/Rendering/IEnvironmentSource.h"
@@ -80,40 +81,45 @@ bool OceanForwardContributor::EnsureFallbackCascade(::GameEngine::Rendering::IDe
     return m_FallbackCascade.IsValid() && m_FallbackCascadeSampler.IsValid();
 }
 
-Engine::Renderer::Material* OceanForwardContributor::EnsureMaterial(bool heightFog)
+Engine::Renderer::Material* OceanForwardContributor::EnsureMaterial(Rendering::MaterialKeyword passKeywords)
 {
-    const size_t index = heightFog ? 1u : 0u;
+    const size_t index = OceanSurfacePassKeywordSetIndex(passKeywords);
     if (m_Materials[index])
         return m_Materials[index];
     if (m_MaterialInitAttempted[index])
         return nullptr;
     m_MaterialInitAttempted[index] = true;
 
-    const GUID& guid = heightFog ? OceanSurfaceFogMaterialGuid() : OceanSurfaceMaterialGuid();
+    const GUID& guid = OceanSurfaceMaterialGuid(passKeywords);
     auto& registry = m_RenderServices.Materials().Registry();
     m_Materials[index] = registry.Find(guid);
     if (m_Materials[index])
         return m_Materials[index];
 
-    Rendering::MaterialKeyword keywords = OceanSurfaceMaterialKeywords(Rendering::IsCompatShaderProfile());
-    if (heightFog)
-        keywords |= Rendering::MaterialKeyword::HeightFog;
+    const Rendering::MaterialKeyword surfacePassKeywords = passKeywords & kOceanSurfacePassKeywords;
+    const Rendering::MaterialKeyword keywords =
+        OceanSurfaceMaterialKeywords(Rendering::IsCompatShaderProfile()) | surfacePassKeywords;
     m_Materials[index] =
         m_RenderServices.Materials().RegisterMaterialFromDocument(guid, BuildOceanSurfaceMaterialDocument(), keywords);
 
+    const bool heightFog = Rendering::HasKeyword(surfacePassKeywords, Rendering::MaterialKeyword::HeightFog);
+    const bool reflectionSlices =
+        Rendering::HasKeyword(surfacePassKeywords, Rendering::MaterialKeyword::SSSRNormalRoughness);
     if (!m_Materials[index])
     {
-        Logger::Log::Error("OceanForwardContributor: failed to register the {}material",
-                           heightFog ? "height fog " : "");
+        Logger::Log::Error("OceanForwardContributor: failed to register the {}{}material",
+                           heightFog ? "height fog " : "", reflectionSlices ? "reflection slices " : "");
         return nullptr;
     }
 
-    Logger::Log::Info("OceanForwardContributor: {}material registered and compiled", heightFog ? "height fog " : "");
+    Logger::Log::Info("OceanForwardContributor: {}{}material registered and compiled",
+                      heightFog ? "height fog " : "", reflectionSlices ? "reflection slices " : "");
     return m_Materials[index];
 }
 
 bool OceanForwardContributor::BuildForwardCommand(
-    Engine::Renderer::ForwardEmitContext& ctx, Engine::Renderer::DrawCommand& outCommand,
+    Engine::Renderer::ForwardEmitContext& ctx, Rendering::MaterialKeyword passKeywords,
+    Engine::Renderer::DrawCommand& outCommand,
     std::span<const ::GameEngine::Rendering::RenderGraph::RGTexture>* outSampledCascades)
 {
     if (!m_Feature.IsInitialized() || !m_Feature.HasOcean())
@@ -123,13 +129,9 @@ bool OceanForwardContributor::BuildForwardCommand(
     if (IsAssetPreviewView(m_RenderServices.Views().FindViewDesc(viewId)))
         return false;
 
-    // The world pass's keywords for this view: the surface draws into that pass's targets and takes
-    // the height fog when that pass draws it.
-    Rendering::MaterialKeyword passKeywords = Rendering::MaterialKeyword::None;
-    if (auto kw = m_RenderServices.GetWorldPassKeywords(viewId))
-        passKeywords = *kw;
-    const bool heightFog = Rendering::HasKeyword(passKeywords, Rendering::MaterialKeyword::HeightFog);
-    Engine::Renderer::Material* material = EnsureMaterial(heightFog);
+    // The surface takes the height fog when its pass draws it, and writes the reflection slices
+    // when its pass has them attached.
+    Engine::Renderer::Material* material = EnsureMaterial(passKeywords);
     if (!material)
         return false;
 
@@ -253,16 +255,16 @@ bool OceanForwardContributor::BuildForwardCommand(
     // standard mesh layout; ocean vertices carry local XZ, LOD and skirt scale).
     // Rebuild both cached
     // variants on a material recompile so the cull mode can be selected per view.
-    const size_t fogIndex = heightFog ? 1u : 0u;
+    const size_t materialIndex = OceanSurfacePassKeywordSetIndex(passKeywords);
     const uint32_t materialVersion = material->GetVersion();
-    if (m_PipelineMaterialVersions[fogIndex] != materialVersion)
+    if (m_PipelineMaterialVersions[materialIndex] != materialVersion)
     {
-        m_OceanPipelineIds[fogIndex][0] = {};
-        m_OceanPipelineIds[fogIndex][1] = {};
-        m_PipelineMaterialVersions[fogIndex] = materialVersion;
+        m_OceanPipelineIds[materialIndex][0] = {};
+        m_OceanPipelineIds[materialIndex][1] = {};
+        m_PipelineMaterialVersions[materialIndex] = materialVersion;
     }
 
-    auto& oceanPipelineId = m_OceanPipelineIds[fogIndex][twoSided ? 1 : 0];
+    auto& oceanPipelineId = m_OceanPipelineIds[materialIndex][twoSided ? 1 : 0];
     if (!oceanPipelineId.IsValid())
     {
         const auto* base = device->LookupGraphicsPipeline(material->GetGraphicsPipelineId());

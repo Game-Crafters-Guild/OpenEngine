@@ -1924,6 +1924,7 @@ bool OceanRenderFeature::BuildSurfaceCommandForView(
     Rendering::RenderGraph::RGFrame& frame,
     ::GameEngine::Rendering::ViewId viewId,
     uint32 frameIndex,
+    Rendering::MaterialKeyword passKeywords,
     Engine::Renderer::DrawCommand& outCommand,
     std::span<const Rendering::RenderGraph::RGTexture>* outSampledCascades)
 {
@@ -1937,7 +1938,7 @@ bool OceanRenderFeature::BuildSurfaceCommandForView(
     ctx.Frame = &frame;
     ctx.FrameIndex = frameIndex;
     ctx.ViewId = viewId;
-    return m_ForwardContributor->BuildForwardCommand(ctx, outCommand, outSampledCascades);
+    return m_ForwardContributor->BuildForwardCommand(ctx, passKeywords, outCommand, outSampledCascades);
 }
 
 } // namespace GameEngine::Ocean

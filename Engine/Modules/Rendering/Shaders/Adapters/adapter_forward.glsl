@@ -1034,6 +1034,13 @@ void main()
     oSpecularWeight = vec4(ge_sssrSpecularWeight * ambientMultiplier, reflectionOct.x);
     // Scene colour units: SSR composites this against the stored scene colour.
     oSpecularRadiance = vec4(ge_sssrIncidentRadiance * GE_PreExposure(), reflectionOct.y);
+      #ifdef GE_SCENECOLOR_GRAB
+    // The transmissive pass: the slices hold the opaque surface behind this glass, which is
+    // not in the depth buffer. A zero weight keeps the reflections off the pixel, so they do
+    // not replace that surface's probe lobe where it shows only through the glass. Only this
+    // slice's RGB is written here (ReflectionsProvider::ApplyTransmissivePassWriteMasks).
+    oSpecularWeight.rgb = vec3(0.0);
+      #endif
     #endif
   #else
     finalColor += so.baseColor * so.ao * Light.uAmbient.xyz * Light.uAmbient.w * ambientMultiplier;

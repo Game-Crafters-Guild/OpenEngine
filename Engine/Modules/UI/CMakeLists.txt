@@ -373,10 +373,10 @@ if(BUILD_TESTING)
             # its own process, so every member carries it.
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests/HeapDiagnosticsPreconditionTests.cpp
             ${ARGN}
-            ${CMAKE_CURRENT_SOURCE_DIR}/Tests/SharedHeadlessDevice.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UITestShaderSetup.cpp)
         target_link_libraries(${target_name} PRIVATE
-            Engine GameEngine.Native RenderGraphTestSupport GTest::gtest GTest::gtest_main)
+            Engine GameEngine.Native RenderGraphTestSupport SharedHeadlessDeviceTestSupport
+            GTest::gtest GTest::gtest_main)
         # Layout, parser and cascade tests drive the YG* C API directly (LayoutYogaTests,
         # SubtreeDirtyTests, CSSKeywordParsingTests among them). yogacore is a
         # third-party static lib linked PRIVATE into Engine.dll, and the generated
@@ -708,7 +708,7 @@ if(BUILD_TESTING)
     add_executable(UIMouseDispatchAllocationTests
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIMouseDispatchAllocationTests.cpp
     )
-    target_link_libraries(UIMouseDispatchAllocationTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+    target_link_libraries(UIMouseDispatchAllocationTests PRIVATE Engine SharedHeadlessDeviceTestSupport GTest::gtest GTest::gtest_main)
     target_include_directories(UIMouseDispatchAllocationTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests
         ${CMAKE_CURRENT_SOURCE_DIR}/../Rendering/Tests)

@@ -1692,11 +1692,33 @@ public:
     }
 };
 
-// TerrainSculptZone / TerrainPaintZone are payload-backed transformable zones
-// (edit-pipeline §3.2). They share no fields with the stamp/flatten family
-// (extents + payload GUID, not Shape/Radius), so they carry their own schemas.
-// The payload's texels live in the .tzone asset (dependency-enumerated below);
-// only the reference + zone framing serialize into the scene.
+// TerrainSculptZone / TerrainPaintZone / TerrainColorZone are payload-backed
+// transformable zones (edit-pipeline §3.2). They share no fields with the
+// stamp/flatten family (extents + payload GUID, not Shape/Radius), so they carry
+// their own schemas. The payload's texels live in the .tzone asset
+// (dependency-enumerated below); only the reference + zone framing serialize into
+// the scene.
+
+// A zone's payload line: a GUID string, or 0 for no payload.
+bool ParseZonePayloadRef(std::string_view value, Components::AssetRef<AssetType::TerrainZoneData>& ref,
+                         std::string* outError)
+{
+    SceneValue sv{};
+    if (!ParseValue(value, sv, outError)) return false;
+    if (sv.Kind == SceneValueKind::Int && sv.IntValue == 0)
+    {
+        ref.Clear();
+        return true;
+    }
+    if (sv.Kind == SceneValueKind::String)
+    {
+        try { ref.Set(GUID(sv.StringValue)); return true; }
+        catch (...) {}
+    }
+    if (outError) *outError = "payload must be a GUID string";
+    return false;
+}
+
 class TerrainSculptZoneSchema final : public ISceneComponentSchema
 {
 public:
@@ -1735,16 +1757,7 @@ public:
         }
         else if (property == "payload")
         {
-            SceneValue sv{};
-            if (!ParseValue(value, sv, outError)) return false;
-            if (sv.Kind == SceneValueKind::Int && sv.IntValue == 0)
-                c.PayloadRef.Clear();
-            else if (sv.Kind == SceneValueKind::String)
-            {
-                try { c.PayloadRef.Set(GUID(sv.StringValue)); }
-                catch (...) { if (outError) *outError = "payload must be a GUID string"; return false; }
-            }
-            else { if (outError) *outError = "payload must be a GUID string"; return false; }
+            if (!ParseZonePayloadRef(value, c.PayloadRef, outError)) return false;
         }
         else { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
 
@@ -1813,16 +1826,7 @@ public:
         else if (property == "strength")   { if (!ParseF32(value, c.Strength, outError)) return false; }
         else if (property == "payload")
         {
-            SceneValue sv{};
-            if (!ParseValue(value, sv, outError)) return false;
-            if (sv.Kind == SceneValueKind::Int && sv.IntValue == 0)
-                c.PayloadRef.Clear();
-            else if (sv.Kind == SceneValueKind::String)
-            {
-                try { c.PayloadRef.Set(GUID(sv.StringValue)); }
-                catch (...) { if (outError) *outError = "payload must be a GUID string"; return false; }
-            }
-            else { if (outError) *outError = "payload must be a GUID string"; return false; }
+            if (!ParseZonePayloadRef(value, c.PayloadRef, outError)) return false;
         }
         else { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
 
@@ -1850,6 +1854,71 @@ public:
     bool Remove(ECS::World& world, ECS::EntityHandle entity) const override
     {
         world.RemoveComponentImmediate<Components::TerrainPaintZone>(entity);
+        return true;
+    }
+};
+
+class TerrainColorZoneSchema final : public ISceneComponentSchema
+{
+public:
+    std::string_view GetComponentName() const override { return "TerrainColorZone"; }
+
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity,
+                   [[maybe_unused]] const SceneSaveContext& ctx,
+                   std::vector<std::string>& outLines) const override
+    {
+        const auto* c = world.GetComponent<Components::TerrainColorZone>(entity);
+        if (!c) return;
+        outLines.push_back(std::string("TerrainColorZone.extentX = ") + FormatFloat(c->ExtentX));
+        outLines.push_back(std::string("TerrainColorZone.extentZ = ") + FormatFloat(c->ExtentZ));
+        outLines.push_back(std::string("TerrainColorZone.falloff = ") + FormatFloat(c->Falloff));
+        outLines.push_back(std::string("TerrainColorZone.priority = ") + FormatFloat(c->Priority));
+        if (!c->PayloadRef.IsNull())
+            outLines.push_back(std::string("TerrainColorZone.payload = \"") + c->PayloadRef.ToGuid().ToString() + "\"");
+    }
+
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+                       std::string_view property, std::string_view value,
+                       std::string* outError) const override
+    {
+        Components::TerrainColorZone c{};
+        if (const auto* existing = world.GetComponent<Components::TerrainColorZone>(entity))
+            c = *existing;
+
+        if (property == "extentx")       { if (!ParseF32(value, c.ExtentX, outError)) return false; }
+        else if (property == "extentz")  { if (!ParseF32(value, c.ExtentZ, outError)) return false; }
+        else if (property == "falloff")  { if (!ParseF32(value, c.Falloff, outError)) return false; }
+        else if (property == "priority") { if (!ParseF32(value, c.Priority, outError)) return false; }
+        else if (property == "payload")
+        {
+            if (!ParseZonePayloadRef(value, c.PayloadRef, outError)) return false;
+        }
+        else { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
+
+        world.AddComponentImmediate(entity, c);
+        return true;
+    }
+
+    void EnumerateAssetReferences(const ECS::World& world, ECS::EntityHandle entity,
+                                  const AssetRefVisitor& visitor) const override
+    {
+        const auto* c = world.GetComponent<Components::TerrainColorZone>(entity);
+        if (!c || !visitor) return;
+        const GUID g = c->PayloadRef.ToGuid();
+        if (g.IsNull()) return;
+        visitor(g, AssetType::TerrainZoneData, std::string_view{}, "payload");
+    }
+
+    bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* /*outError*/) const override
+    {
+        if (world.GetComponent<Components::TerrainColorZone>(entity)) return true;
+        world.AddComponentImmediate(entity, Components::TerrainColorZone{});
+        return true;
+    }
+
+    bool Remove(ECS::World& world, ECS::EntityHandle entity) const override
+    {
+        world.RemoveComponentImmediate<Components::TerrainColorZone>(entity);
         return true;
     }
 };
@@ -2299,6 +2368,8 @@ public:
         SerializeEffectBase(*c, "TerrainGrassEffect", outLines);
         outLines.push_back(std::string("TerrainGrassEffect.heightScale = ") + FormatFloat(c->HeightScale));
         outLines.push_back(std::string("TerrainGrassEffect.densityScale = ") + FormatFloat(c->DensityScale));
+        outLines.push_back(std::string("TerrainGrassEffect.groundDarkeningScale = ")
+                           + FormatFloat(c->GroundDarkeningScale));
     }
 
     bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity,
@@ -2312,7 +2383,8 @@ public:
         if (!handled)
         {
             float32* field = property == "heightscale" ? &c.HeightScale :
-                             property == "densityscale" ? &c.DensityScale : nullptr;
+                             property == "densityscale" ? &c.DensityScale :
+                             property == "grounddarkeningscale" ? &c.GroundDarkeningScale : nullptr;
             if (!field) { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
             if (!ParseF32(value, *field, outError)) return false;
             if (!std::isfinite(*field)) { if (outError) *outError = "Grass scale must be finite"; return false; }
@@ -2334,6 +2406,63 @@ public:
     bool Remove(ECS::World& world, ECS::EntityHandle entity) const override
     {
         world.RemoveComponentImmediate<Components::TerrainGrassEffect>(entity);
+        return true;
+    }
+};
+
+// The colour is three keys, linear, so the scene reads as the inspector's value text.
+class TerrainColorEffectSchema final : public ISceneComponentSchema
+{
+public:
+    std::string_view GetComponentName() const override { return "TerrainColorEffect"; }
+
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity,
+                   const SceneSaveContext&, std::vector<std::string>& outLines) const override
+    {
+        const auto* c = world.GetComponent<Components::TerrainColorEffect>(entity);
+        if (!c) return;
+        SerializeEffectBase(*c, "TerrainColorEffect", outLines);
+        outLines.push_back(std::string("TerrainColorEffect.colorR = ") + FormatFloat(c->Color[0]));
+        outLines.push_back(std::string("TerrainColorEffect.colorG = ") + FormatFloat(c->Color[1]));
+        outLines.push_back(std::string("TerrainColorEffect.colorB = ") + FormatFloat(c->Color[2]));
+        outLines.push_back(std::string("TerrainColorEffect.strength = ") + FormatFloat(c->Strength));
+    }
+
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity,
+                       const SceneLoadContext& ctx, std::string_view property,
+                       std::string_view value, std::string* outError) const override
+    {
+        Components::TerrainColorEffect c{};
+        if (const auto* existing = world.GetComponent<Components::TerrainColorEffect>(entity)) c = *existing;
+        bool handled = false;
+        if (!ApplyEffectBaseProperty(c, property, value, outError, handled)) return false;
+        if (!handled)
+        {
+            float32* field = property == "colorr" ? &c.Color[0] :
+                             property == "colorg" ? &c.Color[1] :
+                             property == "colorb" ? &c.Color[2] :
+                             property == "strength" ? &c.Strength : nullptr;
+            if (!field) { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
+            if (!ParseF32(value, *field, outError)) return false;
+            if (!std::isfinite(*field)) { if (outError) *outError = "Color effect values must be finite"; return false; }
+            *field = Components::ClampTerrainColorEffectValue(*field);
+        }
+        world.AddComponentImmediate(entity, c);
+        return true;
+    }
+
+    bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string*) const override
+    {
+        if (world.GetComponent<Components::TerrainColorEffect>(entity)) return true;
+        Components::TerrainColorEffect fx{};
+        fx.StackOrder = NextEffectStackOrder(world, entity);
+        world.AddComponentImmediate(entity, fx);
+        return true;
+    }
+
+    bool Remove(ECS::World& world, ECS::EntityHandle entity) const override
+    {
+        world.RemoveComponentImmediate<Components::TerrainColorEffect>(entity);
         return true;
     }
 };
@@ -2886,6 +3015,7 @@ GE_REGISTER_SCENE_SCHEMA(TerrainSurfaceRulesEffectSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainCorridorEffectSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainGroundClaimEffectSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainGrassEffectSchema)
+GE_REGISTER_SCENE_SCHEMA(TerrainColorEffectSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainFlattenModifierSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainNoiseModifierSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainStampModifierSchema)
@@ -2893,6 +3023,7 @@ GE_REGISTER_SCENE_SCHEMA(TerrainPaintLayerModifierSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainSplineModifierSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainSculptZoneSchema)
 GE_REGISTER_SCENE_SCHEMA(TerrainPaintZoneSchema)
+GE_REGISTER_SCENE_SCHEMA(TerrainColorZoneSchema)
 
 } // namespace
 
@@ -2922,6 +3053,7 @@ void EnsureTerrainSceneSchemasRegistered()
         RegisterIfMissing(std::make_unique<TerrainCorridorEffectSchema>());
         RegisterIfMissing(std::make_unique<TerrainGroundClaimEffectSchema>());
         RegisterIfMissing(std::make_unique<TerrainGrassEffectSchema>());
+        RegisterIfMissing(std::make_unique<TerrainColorEffectSchema>());
         RegisterIfMissing(std::make_unique<TerrainFlattenModifierSchema>());
         RegisterIfMissing(std::make_unique<TerrainNoiseModifierSchema>());
         RegisterIfMissing(std::make_unique<TerrainStampModifierSchema>());
@@ -2929,6 +3061,7 @@ void EnsureTerrainSceneSchemasRegistered()
         RegisterIfMissing(std::make_unique<TerrainSplineModifierSchema>());
         RegisterIfMissing(std::make_unique<TerrainSculptZoneSchema>());
         RegisterIfMissing(std::make_unique<TerrainPaintZoneSchema>());
+        RegisterIfMissing(std::make_unique<TerrainColorZoneSchema>());
     });
 }
 

@@ -392,3 +392,68 @@ TEST(ShaderPropertyUnion, SameNameDifferentTypeIsAnErrorAtTheSecondDeclaration)
     EXPECT_EQ(t.Errors[0].Line, 2u);
     EXPECT_NE(t.Errors[0].Message.find("adapter_forward.glsl:1"), std::string::npos);
 }
+
+TEST(ShaderDeformationEnvelope, ReadsMetersAndTheScaleProperty)
+{
+    const ShaderPropertyTable t = BuildShaderPropertyTable(
+        {Surface("// @property float roughness default=0.5\n"),
+         Modifier("// @property float treeWindScale default=0 range=0,0.25\n"
+                  "// @deformationEnvelope 1.9 scaledBy=treeWindScale\n")});
+    ASSERT_FALSE(t.Rejected()) << Errors(t);
+    EXPECT_TRUE(t.DeformationEnvelope.Usable()) << t.DeformationEnvelope.Refusal;
+    EXPECT_FLOAT_EQ(t.DeformationEnvelope.Meters, 1.9f);
+    EXPECT_EQ(t.DeformationEnvelope.ScaledBy, "treeWindScale");
+    EXPECT_EQ(t.DeformationEnvelope.SourceLine, 2u);
+    EXPECT_EQ(t.DeformationEnvelope.ModifierFile, "modifier.glsl");
+
+    const ShaderPropertyTable silent = BuildShaderPropertyTable({Surface(""), Modifier("vec3 ModifyVertex();\n")});
+    EXPECT_FALSE(silent.DeformationEnvelope.Declared);
+    EXPECT_EQ(silent.DeformationEnvelope.ModifierFile, "modifier.glsl");
+}
+
+// A declaration culling cannot trust is refused with the fix in the message and a
+// zero margin; the shader itself still builds.
+TEST(ShaderDeformationEnvelope, RefusesWhatCullingCannotTrustWithoutRejectingTheShader)
+{
+    struct Case
+    {
+        const char* Declaration;
+        const char* Fix;
+    };
+    const Case cases[] = {
+        {"// @deformationEnvelope -0.3\n", "is not a distance in meters"},
+        {"// @deformationEnvelope inf\n", "is not a distance in meters"},
+        {"// @deformationEnvelope nan\n", "is not a distance in meters"},
+        {"// @deformationEnvelope\n", "is not a distance in meters"},
+        {"// @deformationEnvelope 0.3 0.4\n", "is not a distance in meters"},
+        {"// @deformationEnvelope 0.3 scaledBy=\n", "is not a distance in meters"},
+        {"// @deformationEnvelope 0.3 scaledBy=gust\n", "Add '// @property float gust'"},
+        {"// @deformationEnvelope 0.3 scaledBy=windOn\n", "scaledBy takes a float or vector property"},
+        {"// @deformationEnvelope 0.3\n// @deformationEnvelope 0.4\n", "on lines 2 and 3; keep one"},
+    };
+    for (const Case& c : cases)
+    {
+        SCOPED_TRACE(c.Declaration);
+        const ShaderPropertyTable t = BuildShaderPropertyTable(
+            {Surface("// @property float roughness default=0.5\n"),
+             Modifier(std::string("// @property bool windOn default=true\n") + c.Declaration)});
+        EXPECT_FALSE(t.Rejected()) << Errors(t);
+        EXPECT_TRUE(t.DeformationEnvelope.Declared);
+        EXPECT_FALSE(t.DeformationEnvelope.Usable());
+        EXPECT_NE(t.DeformationEnvelope.Refusal.find(c.Fix), std::string::npos) << t.DeformationEnvelope.Refusal;
+        EXPECT_NE(t.DeformationEnvelope.Refusal.find("modifier.glsl"), std::string::npos);
+    }
+}
+
+// A surface that declares nothing is read by lane name, so scaledBy may name a
+// lane; once the surface declares its properties, the lanes are gone.
+TEST(ShaderDeformationEnvelope, ScaledByReachesLaneNamesOnlyOnAnUndeclaredSurface)
+{
+    const char* modifier = "// @deformationEnvelope 1.21 scaledBy=windStrength\n";
+    const ShaderPropertyTable lanes = BuildShaderPropertyTable({Surface(""), Modifier(modifier)});
+    EXPECT_TRUE(lanes.DeformationEnvelope.Usable()) << lanes.DeformationEnvelope.Refusal;
+
+    const ShaderPropertyTable declared = BuildShaderPropertyTable(
+        {Surface("// @property float roughness default=0.5\n"), Modifier(modifier)});
+    EXPECT_FALSE(declared.DeformationEnvelope.Usable());
+}

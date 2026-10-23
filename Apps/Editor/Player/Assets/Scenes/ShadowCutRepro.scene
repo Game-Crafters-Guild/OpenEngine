@@ -54,7 +54,7 @@ Transform.scale = (1, 1, 1)
 [entity id="e_ground"]
 MeshRenderer.meshPrimitive = Cube
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = false
+MeshRenderer.shadowCasting = Off
 MeshRenderer.receiveShadows = true
 Name.value = "Ground"
 Transform.position = (0, -0.5, 0)
@@ -64,7 +64,7 @@ Transform.scale = (400, 1, 400)
 [entity id="e_caster"]
 MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = false
 Name.value = "HighSphere"
 ; 26.6 up, as reported. Its shadow lands ~14 units along +Z from directly

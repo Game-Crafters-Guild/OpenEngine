@@ -7,6 +7,8 @@
 #include "Scripting/ScriptThunks.h"
 
 #include <atomic>
+#include <string>
+#include <vector>
 
 namespace GameEngine::Probe
 {
@@ -42,6 +44,10 @@ class ProbeSystem
     Mathematics::Vector3 LastForce{};
     float Speed = 0.0f;
     ECS::EntityHandle Nearest{};
+    std::string LastText;
+    Rendering::RenderLayerMask Layers{};
+    ColorLinear Tint{};
+    std::vector<Hit> Hits;
 
     // The one Touched subscription the probe holds; its id, or 0 for none.
     struct TouchSubscription

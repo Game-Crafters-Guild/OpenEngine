@@ -17,7 +17,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -180,7 +180,7 @@ RenderPipelineBlueprint SkylessBlueprint()
 
 struct PreExposureFixture
 {
-    std::unique_ptr<IDevice> Device;
+    IDevice* Device = nullptr;
     std::unique_ptr<RenderServices> Rs;
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
@@ -189,11 +189,11 @@ struct PreExposureFixture
     // `staticExposure` is the view's manual exposure scale (post-process Exposure, auto exposure off).
     bool Up(float staticExposure = 1.0f)
     {
-        Device = CreateVulkanDeviceFast();
+        Device = SharedHeadlessDevice();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
-        EXPECT_TRUE(Rs->Initialize(Device.get()));
+        EXPECT_TRUE(Rs->Initialize(Device));
         const CameraId cam = Rs->Views().AllocateCamera("PreExposureCam");
         Rs->Views().SetCameraData(cam, CameraData{});
         View = Rs->Views().AllocateView("PreExposureView", cam);
@@ -216,10 +216,10 @@ struct PreExposureFixture
         RenderPipelineInstance instance(*Rs, Registry);
         instance.SetBlueprint(SnapshotBlueprint());
 
-        RenderGraph::RGResourcePool persistent(Device.get());
-        RenderGraph::RGTransientPool transient(Device.get());
-        RenderGraph::RGUploadRing ring(Device.get(), 2, 262144);
-        RenderGraph::RGFrame frame(Device.get(), &persistent, &transient, &ring);
+        RenderGraph::RGResourcePool persistent(Device);
+        RenderGraph::RGTransientPool transient(Device);
+        RenderGraph::RGUploadRing ring(Device, 2, 262144);
+        RenderGraph::RGFrame frame(Device, &persistent, &transient, &ring);
         frame.BeginFrame(0);
         const RenderGraph::RGTexture color = frame.ImportPersistentTexture(
             "PE.Color", TargetDesc(TextureFormat::R16G16B16A16_FLOAT,
@@ -274,10 +274,10 @@ struct PreExposureFixture
         RenderPipelineInstance instance(*Rs, Registry);
         instance.SetBlueprint(SkylessBlueprint());
 
-        RenderGraph::RGResourcePool persistent(Device.get());
-        RenderGraph::RGTransientPool transient(Device.get());
-        RenderGraph::RGUploadRing ring(Device.get(), 2, 262144);
-        RenderGraph::RGFrame frame(Device.get(), &persistent, &transient, &ring);
+        RenderGraph::RGResourcePool persistent(Device);
+        RenderGraph::RGTransientPool transient(Device);
+        RenderGraph::RGUploadRing ring(Device, 2, 262144);
+        RenderGraph::RGFrame frame(Device, &persistent, &transient, &ring);
         frame.BeginFrame(0);
         const RenderGraph::RGTexture color = frame.ImportPersistentTexture(
             "PE.Color", TargetDesc(TextureFormat::R16G16B16A16_FLOAT,
@@ -341,7 +341,6 @@ struct PreExposureFixture
     {
         Device->WaitForIdle();
         Rs->Shutdown();
-        Device->Shutdown();
     }
 };
 } // namespace

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "name": "Kinds",
-  "hash": "0x9462e590934ac983",
+  "hash": "0x3b085f06c5c54e05",
   "constants": [
     {
       "id": "Kinds.kAllLayers",
@@ -50,6 +50,80 @@
   "events": [],
   "functions": [
     {
+      "id": "Kinds.FindHits",
+      "name": "FindHits",
+      "cpp": "GameEngine::Kinds::Script::FindHits",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 118,
+      "doc": "Every hit along a ray, nearest first; the number of hits there are.",
+      "thread": "main",
+      "returns": {
+        "kind": "Int32"
+      },
+      "params": [
+        {
+          "name": "origin",
+          "kind": "Vec3"
+        },
+        {
+          "name": "found",
+          "kind": "Span",
+          "element": {
+            "kind": "Record",
+            "type": "Kinds.Hit"
+          },
+          "out": true
+        },
+        {
+          "name": "maxDistance",
+          "kind": "Float",
+          "default": "1000"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.GetLayers",
+      "name": "GetLayers",
+      "cpp": "GameEngine::Kinds::Script::GetLayers",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 114,
+      "doc": "The render layers a voice is heard on, or `fallback` for a voice with none.",
+      "thread": "main",
+      "returns": {
+        "kind": "RenderLayerMask"
+      },
+      "params": [
+        {
+          "name": "voice",
+          "kind": "Handle",
+          "type": "Kinds.Voice"
+        },
+        {
+          "name": "fallback",
+          "kind": "RenderLayerMask"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.GetName",
+      "name": "GetName",
+      "cpp": "GameEngine::Kinds::Script::GetName",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 110,
+      "doc": "The name of a voice.",
+      "thread": "main",
+      "returns": {
+        "kind": "String"
+      },
+      "params": [
+        {
+          "name": "voice",
+          "kind": "Handle",
+          "type": "Kinds.Voice"
+        }
+      ]
+    },
+    {
       "id": "Kinds.GetPitch",
       "name": "GetPitch",
       "cpp": "GameEngine::Kinds::Script::GetPitch",
@@ -65,6 +139,33 @@
           "name": "voice",
           "kind": "Handle",
           "type": "Kinds.Voice"
+        }
+      ]
+    },
+    {
+      "id": "Kinds.GetWeights",
+      "name": "GetWeights",
+      "cpp": "GameEngine::Kinds::Script::GetWeights",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 122,
+      "doc": "The weights of a voice; the number of weights it has.",
+      "thread": "main",
+      "returns": {
+        "kind": "Int32"
+      },
+      "params": [
+        {
+          "name": "voice",
+          "kind": "Handle",
+          "type": "Kinds.Voice"
+        },
+        {
+          "name": "weights",
+          "kind": "Span",
+          "element": {
+            "kind": "Float"
+          },
+          "out": true
         }
       ]
     },
@@ -443,6 +544,23 @@
             "0",
             "0"
           ]
+        }
+      ]
+    },
+    {
+      "id": "Kinds.Listener",
+      "name": "Listener",
+      "cpp": "GameEngine::Kinds::Listener",
+      "header": "Kinds/KindsScriptApi.h",
+      "line": 131,
+      "doc": "Who hears a voice.",
+      "size": 4,
+      "align": 4,
+      "fields": [
+        {
+          "name": "layers",
+          "kind": "RenderLayerMask",
+          "offset": 0
         }
       ]
     },

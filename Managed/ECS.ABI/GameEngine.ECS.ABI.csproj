@@ -12,6 +12,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GameEngine.Scripting.Runtime" />
+    <!-- The generated component mirrors read ComponentType<T>.Default in their constructors;
+         BindingTests compiles the scanner's fixture mirrors. -->
+    <InternalsVisibleTo Include="GameEngine.Scripting.Bindings" />
+    <InternalsVisibleTo Include="BindingTests" />
   </ItemGroup>
 
   <ItemGroup>

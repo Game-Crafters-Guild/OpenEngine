@@ -114,20 +114,24 @@ namespace GameEngine.Scripting
     {
         public const uint AllLayers = 4294967295u;
 
-        private static readonly BindingTable s_Table = BindingTable.Acquire("Probe", 0xEC98DC6909D46F03UL, 13);
+        private static readonly BindingTable s_Table = BindingTable.Acquire("Probe", 0x3CE903C383382CFBUL, 17);
         private static readonly delegate* unmanaged[Cdecl]<uint*, int> s_CallCount = (delegate* unmanaged[Cdecl]<uint*, int>)s_Table[0];
-        private static readonly delegate* unmanaged[Cdecl]<SoundOptions*, int> s_GetLastOptions = (delegate* unmanaged[Cdecl]<SoundOptions*, int>)s_Table[1];
-        private static readonly delegate* unmanaged[Cdecl]<Matrix4x4*, int> s_GetPose = (delegate* unmanaged[Cdecl]<Matrix4x4*, int>)s_Table[2];
-        private static readonly delegate* unmanaged[Cdecl]<uint, float*, int> s_GetSpeed = (delegate* unmanaged[Cdecl]<uint, float*, int>)s_Table[3];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, SoundOptions*, float, Loudness, uint, byte*, int> s_Play = (delegate* unmanaged[Cdecl]<ulong, SoundOptions*, float, Loudness, uint, byte*, int>)s_Table[4];
-        private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_Push = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[5];
-        private static readonly delegate* unmanaged[Cdecl]<byte, sbyte, double, int> s_SetFlag = (delegate* unmanaged[Cdecl]<byte, sbyte, double, int>)s_Table[6];
-        private static readonly delegate* unmanaged[Cdecl]<uint, float, int> s_SetSpeed = (delegate* unmanaged[Cdecl]<uint, float, int>)s_Table[7];
-        private static readonly delegate* unmanaged[Cdecl]<int> s_Throw = (delegate* unmanaged[Cdecl]<int>)s_Table[8];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int> s_TryCast = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int>)s_Table[9];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int> s_TryNearest = (delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int>)s_Table[10];
-        private static readonly delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int> s_SubscribeTouched = (delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int>)s_Table[11];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_UnsubscribeTouched = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[12];
+        private static readonly delegate* unmanaged[Cdecl]<byte*, int, byte*, int, int*, int> s_Echo = (delegate* unmanaged[Cdecl]<byte*, int, byte*, int, int*, int>)s_Table[1];
+        private static readonly delegate* unmanaged[Cdecl]<SoundOptions*, int> s_GetLastOptions = (delegate* unmanaged[Cdecl]<SoundOptions*, int>)s_Table[2];
+        private static readonly delegate* unmanaged[Cdecl]<Matrix4x4*, int> s_GetPose = (delegate* unmanaged[Cdecl]<Matrix4x4*, int>)s_Table[3];
+        private static readonly delegate* unmanaged[Cdecl]<uint, float*, int> s_GetSpeed = (delegate* unmanaged[Cdecl]<uint, float*, int>)s_Table[4];
+        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Hit*, int, int*, int> s_ListHits = (delegate* unmanaged[Cdecl]<Vector3*, Hit*, int, int*, int>)s_Table[5];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, SoundOptions*, float, Loudness, uint, byte*, int> s_Play = (delegate* unmanaged[Cdecl]<ulong, SoundOptions*, float, Loudness, uint, byte*, int>)s_Table[6];
+        private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_Push = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[7];
+        private static readonly delegate* unmanaged[Cdecl]<byte, sbyte, double, int> s_SetFlag = (delegate* unmanaged[Cdecl]<byte, sbyte, double, int>)s_Table[8];
+        private static readonly delegate* unmanaged[Cdecl]<uint, float, int> s_SetSpeed = (delegate* unmanaged[Cdecl]<uint, float, int>)s_Table[9];
+        private static readonly delegate* unmanaged[Cdecl]<uint, uint*, int> s_SwapLayers = (delegate* unmanaged[Cdecl]<uint, uint*, int>)s_Table[10];
+        private static readonly delegate* unmanaged[Cdecl]<ColorLinear*, ColorLinear*, int> s_SwapTint = (delegate* unmanaged[Cdecl]<ColorLinear*, ColorLinear*, int>)s_Table[11];
+        private static readonly delegate* unmanaged[Cdecl]<int> s_Throw = (delegate* unmanaged[Cdecl]<int>)s_Table[12];
+        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int> s_TryCast = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int>)s_Table[13];
+        private static readonly delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int> s_TryNearest = (delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int>)s_Table[14];
+        private static readonly delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int> s_SubscribeTouched = (delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int>)s_Table[15];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_UnsubscribeTouched = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[16];
 
         /// <summary>
         /// Counts the calls that reached the probe; on any thread.
@@ -140,6 +144,38 @@ namespace GameEngine.Scripting
             if (code != 0 && code != BindingErrors.NotInitialized)
                 BindingErrors.Throw(code, "Probe.CallCount");
             return result;
+        }
+
+        /// <summary>
+        /// Keeps `text` as the probe's label, and answers it.
+        /// </summary>
+        /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
+        public static string Echo(string text)
+        {
+            ArgumentNullException.ThrowIfNull(text);
+            ScriptText.In textUtf8 = new ScriptText.In(text, stackalloc byte[ScriptText.StackBytes]);
+            ScriptText.Out resultUtf8 = new ScriptText.Out(stackalloc byte[ScriptText.StackBytes]);
+            try
+            {
+                while (true)
+                {
+                    int resultLength = 0;
+                    int code;
+                    fixed (byte* textPointer = textUtf8.Bytes)
+                    fixed (byte* resultPointer = resultUtf8.Bytes)
+                        code = s_Echo(textPointer, textUtf8.Bytes.Length, resultPointer, resultUtf8.Bytes.Length, &resultLength);
+                    if (code != 0 && code != BindingErrors.NotInitialized)
+                        BindingErrors.Throw(code, "Probe.Echo");
+                    if (!resultUtf8.TryRead(resultLength, out string result))
+                        continue;
+                    return result;
+                }
+            }
+            finally
+            {
+                textUtf8.Dispose();
+                resultUtf8.Dispose();
+            }
         }
 
         /// <summary>
@@ -169,6 +205,21 @@ namespace GameEngine.Scripting
         }
 
         /// <summary>
+        /// Writes the probe's hits into `hits`, nearest first, and answers how many there are.
+        /// </summary>
+        /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
+        public static int ListHits(Vector3 origin, Span<Hit> hits)
+        {
+            int result = default;
+            int code;
+            fixed (Hit* hitsPointer = hits)
+                code = s_ListHits(&origin, hitsPointer, hits.Length, &result);
+            if (code != 0 && code != BindingErrors.NotInitialized)
+                BindingErrors.Throw(code, "Probe.ListHits");
+            return result;
+        }
+
+        /// <summary>
         /// Plays a sound by id, and answers whether it plays.
         /// </summary>
         /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
@@ -191,6 +242,32 @@ namespace GameEngine.Scripting
             int code = s_SetFlag(on ? (byte)1 : (byte)0, level, weight);
             if (code != 0 && code != BindingErrors.NotInitialized)
                 BindingErrors.Throw(code, "Probe.SetFlag");
+        }
+
+        /// <summary>
+        /// Makes `layers` the probe's layers, and answers the layers it had.
+        /// </summary>
+        /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
+        public static RenderLayerMask SwapLayers(RenderLayerMask layers)
+        {
+            uint result = default;
+            int code = s_SwapLayers(layers.Bits, &result);
+            if (code != 0 && code != BindingErrors.NotInitialized)
+                BindingErrors.Throw(code, "Probe.SwapLayers");
+            return new RenderLayerMask(result);
+        }
+
+        /// <summary>
+        /// Makes `tint` the probe's tint, and answers the tint it had.
+        /// </summary>
+        /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
+        public static ColorLinear SwapTint(ColorLinear tint)
+        {
+            ColorLinear result = default;
+            int code = s_SwapTint(&tint, &result);
+            if (code != 0 && code != BindingErrors.NotInitialized)
+                BindingErrors.Throw(code, "Probe.SwapTint");
+            return result;
         }
 
         /// <summary>

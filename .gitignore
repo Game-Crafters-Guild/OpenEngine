@@ -463,6 +463,7 @@ cmake-build-debug/*
 .claude/skills/*
 !.claude/skills/trace-the-chain/
 !.claude/skills/adversarial-review/
+!.claude/skills/change-scrutiny/
 !.claude/skills/root-cause-debugging/
 !.claude/skills/empirical-validation/
 !.claude/skills/html-doc-format/

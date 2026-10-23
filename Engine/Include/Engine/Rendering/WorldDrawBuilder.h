@@ -95,8 +95,8 @@ class WorldDrawBuilder
     // lane (MaterialDeformationClassify.h). Derived in the same pass as the
     // keys, so it costs one predicate per surviving key and carries identical
     // staleness; empty for a view with no deforming material, which is what
-    // makes a frame with none pay one branch and no work. The producer arms
-    // record from this span and the mover lane excludes exactly its members.
+    // makes a frame with none pay one branch and no work. The deforming-motion
+    // producer records from this span and the mover lane excludes exactly its members.
     std::span<const BatchKey> GetDeformingBatchKeys(Rendering::ViewId viewId) const;
 
     // True when this view has at least one submission with the cast-shadows
@@ -107,7 +107,7 @@ class WorldDrawBuilder
     // True when this view has at least one drawable submission that is BOTH
     // transmissive and a shadow caster — the only way the glass-tint shadow
     // cascade can receive content, because the shadow cull drops non-casters
-    // (frustum_culling.comp:110, hzb_culling.comp:173) before the tint pass's
+    // (InstanceInPass in frustum_culling.comp and hzb_culling.comp) before the tint pass's
     // indirect draw ever reads a stream. Derived alongside the batch keys, so it
     // costs one branch in a loop the frame already walks; a submissions scan of
     // its own would cost more than the cascade it gates.

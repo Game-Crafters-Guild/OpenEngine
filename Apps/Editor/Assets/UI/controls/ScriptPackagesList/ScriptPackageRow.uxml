@@ -1,0 +1,8 @@
+<!-- One package of the Script Packages page (ScriptPackagesList.uxml): its id, its version, and the
+     button that removes it from the scripts csproj. The classes are the contract with
+     ScriptPackagesList.cpp. -->
+<UIElement class="script-packages-row">
+  <Label class="script-packages-id" />
+  <TextField class="settings-row-field script-packages-version" />
+  <Button class="script-packages-remove" />
+</UIElement>

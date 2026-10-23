@@ -93,6 +93,9 @@ void BuildContextMenuFromPaths(
                     if (!desc.IconPath.empty()) {
                         menu->SetItemIcon(desc.CommandId, desc.IconPath);
                     }
+                    if (!desc.Shortcut.empty()) {
+                        menu->SetItemShortcut(desc.CommandId, desc.Shortcut);
+                    }
                 } else {
                     // Ensure the submenu exists, ignore flags for now.
                     uint32_t menuId = 0;

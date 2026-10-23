@@ -3,7 +3,7 @@
 //
 //   node mcp/ge.mjs get_editor_state
 //   node mcp/ge.mjs take_screenshot --target viewport
-//   node mcp/ge.mjs get_log --count 50 --min-level warning
+//   node mcp/ge.mjs get_log --min-level warning --pattern "Shader|Pipeline"
 //   node mcp/ge.mjs raw open_scene '{"path":"scenes/main.scene"}'
 //   node mcp/ge.mjs --help
 //

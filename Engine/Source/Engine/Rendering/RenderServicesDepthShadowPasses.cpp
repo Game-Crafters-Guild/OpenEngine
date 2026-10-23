@@ -712,26 +712,11 @@ Rendering::RenderGraph::RGPass RenderServices::AddDeformationMotionPassForView(
 
     if (!motionTarget.IsValid() || !depth.IsValid())
         return {};
-    // Single-sample only, by design. Attachments of one pass must agree on
-    // sample count, and a hardware average of this payload would mix two
-    // surfaces' motion — or a sentinel with a real vector — into a value
-    // describing neither. Multisampling and temporal anti-aliasing are
-    // mutually exclusive here and the reflection consumer withholds itself
-    // under multisampling, so no consumer of this target exists on such a
-    // view; the guard is what keeps that a refusal rather than a mismatch.
-    if (frame.Graph().ResourceDesc(depth.Id).SampleCount != 1)
-    {
-        static bool warnedOnce = false;
-        if (!warnedOnce)
-        {
-            warnedOnce = true;
-            Logger::Log::Warning(
-                "Deformation motion: view {} renders multisampled depth, and the motion payload "
-                "has no correct multisample resolve — no deforming motion is produced for it.",
-                static_cast<uint32_t>(viewId));
-        }
-        return {};
-    }
+    // Single-sample and full-viewport only: the producer refuses a
+    // multisampled or letterboxed view before it asks for this pass
+    // (ClassifyDeformationMotionView), so this pass sets neither.
+    assert(frame.Graph().ResourceDesc(depth.Id).SampleCount == 1u);
+    assert(!m_ViewRegistry.GetViewLetterbox(viewId).active);
 
     std::string passName = "DeformationMotion[View#";
     passName += std::to_string(static_cast<uint32_t>(viewId));
@@ -745,20 +730,9 @@ Rendering::RenderGraph::RGPass RenderServices::AddDeformationMotionPassForView(
     params.Phase = phase;
     params.DepthBiasEnable = false;
     params.RasterizationSamples = 1;
-    const ViewLetterbox letterbox = m_ViewRegistry.GetViewLetterbox(viewId);
-    if (letterbox.active)
-    {
-        params.ViewportX = letterbox.x;
-        params.ViewportY = letterbox.y;
-        params.ViewportWidth = letterbox.width;
-        params.ViewportHeight = letterbox.height;
-    }
-    else
-    {
-        const auto& d = frame.Graph().ResourceDesc(motionTarget.Id);
-        params.ViewportWidth = d.Width;
-        params.ViewportHeight = d.Height;
-    }
+    const auto& targetDesc = frame.Graph().ResourceDesc(motionTarget.Id);
+    params.ViewportWidth = targetDesc.Width;
+    params.ViewportHeight = targetDesc.Height;
 
     // The raster domain is the prepass's, jitter included: this pass tests
     // GreaterOrEqual against the depth that prepass wrote, so a clip position

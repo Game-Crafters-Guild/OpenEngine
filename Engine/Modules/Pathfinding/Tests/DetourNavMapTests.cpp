@@ -3,8 +3,12 @@
 #include "Pathfinding/ObstacleAvoidance.h"
 #include "Pathfinding/PathBuffer.h"
 
+#include <DetourCommon.h>
+#include <DetourNavMesh.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -85,37 +89,24 @@ NavMeshSettings MakeDetourSettings()
     return s;
 }
 
-// Two tiles a side whose shared edge runs through the plane's centre: 64 cells of 0.3 m is 19.2 m,
-// so each tile holds a 10 m half of the 20 m plane and every path across it crosses a tile edge.
-NavMeshTileLayout MakePlaneLayout(const NavMeshSettings& settings)
+// A chart whose tiles (0, 0) to (1, 1) meet at the plane's centre: 64 cells of 0.3 m is 19.2 m, so
+// each tile holds a 10 m half of the 20 m plane and every path across it crosses a tile edge.
+NavMeshChart MakePlaneChart(const NavMeshSettings& settings)
 {
-    const float32 tileSize = static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
-    NavMeshTileLayout layout;
-    layout.OriginX = -tileSize;
-    layout.OriginY = -1.0f;
-    layout.OriginZ = -tileSize;
-    layout.TilesX = 2;
-    layout.TilesZ = 2;
-    return layout;
+    const float32 tileSize = DetourNavMap::GetTileSize(settings);
+    NavMeshChart chart;
+    chart.Origin = ChartOrigin::AtWorld(-tileSize, -1.0f, -tileSize);
+    chart.Span = 2.0f * tileSize;
+    return chart;
 }
 
-// Initializes `navMap` with the plane's layout and builds and adds every tile from `geometry`.
-bool BuildAllTiles(DetourNavMap& navMap, const NavMeshSettings& settings, const DetourNavMap::InputGeometry& geometry)
+// The plane's vertices moved into `chart`'s frame, the input BuildTile reads.
+PlaneGeometry InChart(const PlaneGeometry& plane, const NavMeshChart& chart)
 {
-    const NavMeshTileLayout layout = MakePlaneLayout(settings);
-    if (!navMap.Initialize(settings, layout))
-        return false;
-    for (uint32 tz = 0; tz < layout.TilesZ; ++tz)
-    {
-        for (uint32 tx = 0; tx < layout.TilesX; ++tx)
-        {
-            NavMeshTileData tile;
-            std::string error;
-            if (!DetourNavMap::BuildTile(settings, layout, tx, tz, geometry, tile, error) || !navMap.AddTile(tile))
-                return false;
-        }
-    }
-    return navMap.GetTileCount() > 0;
+    PlaneGeometry local = plane;
+    for (size_t i = 0; i < local.Vertices.size(); i += 3)
+        chart.ToChart(plane.Vertices[i], plane.Vertices[i + 1], plane.Vertices[i + 2], &local.Vertices[i]);
+    return local;
 }
 
 DetourNavMap::InputGeometry MakePlaneInput(const PlaneGeometry& plane)
@@ -126,6 +117,27 @@ DetourNavMap::InputGeometry MakePlaneInput(const PlaneGeometry& plane)
     geo.Indices = plane.Indices.data();
     geo.TriangleCount = plane.TriangleCount;
     return geo;
+}
+
+// Initializes `navMap` with the plane's chart and builds and adds its four tiles from `plane`.
+bool BuildAllTiles(DetourNavMap& navMap, const NavMeshSettings& settings, const PlaneGeometry& plane)
+{
+    const NavMeshChart chart = MakePlaneChart(settings);
+    if (!navMap.Initialize(settings, chart))
+        return false;
+    const PlaneGeometry local = InChart(plane, chart);
+    for (int32 tz = 0; tz < 2; ++tz)
+    {
+        for (int32 tx = 0; tx < 2; ++tx)
+        {
+            NavMeshTileData tile;
+            std::string error;
+            if (!DetourNavMap::BuildTile(settings, {chart.Id, tx, tz}, MakePlaneInput(local), tile, error) ||
+                !navMap.AddTile(tile))
+                return false;
+        }
+    }
+    return navMap.GetTileCount() > 0;
 }
 
 } // anonymous namespace
@@ -141,8 +153,7 @@ protected:
     {
         m_Plane = DetourTestHelpers::BuildPlane();
         auto settings = DetourTestHelpers::MakeDetourSettings();
-        auto geometry = DetourTestHelpers::MakePlaneInput(m_Plane);
-        ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(m_NavMap, settings, geometry))
+        ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(m_NavMap, settings, m_Plane))
             << "Failed to build navmesh from test plane geometry ("
             << m_Plane.VertexCount << " verts, " << m_Plane.TriangleCount << " tris)";
     }
@@ -218,8 +229,7 @@ TEST(DetourNavMapTests, BuildWithValidGeometrySucceeds)
     DetourNavMap navMap;
     auto plane = DetourTestHelpers::BuildPlane();
     auto settings = DetourTestHelpers::MakeDetourSettings();
-    auto geometry = DetourTestHelpers::MakePlaneInput(plane);
-    EXPECT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, geometry));
+    EXPECT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, plane));
     EXPECT_TRUE(navMap.IsBuilt());
     EXPECT_EQ(navMap.GetTileCount(), 4u);
 }
@@ -227,13 +237,11 @@ TEST(DetourNavMapTests, BuildWithValidGeometrySucceeds)
 TEST(DetourNavMapTests, TileWithoutGeometryBuildsEmpty)
 {
     const auto settings = DetourTestHelpers::MakeDetourSettings();
-    const auto layout = DetourTestHelpers::MakePlaneLayout(settings);
     NavMeshTileData tile;
     std::string error;
-    EXPECT_TRUE(DetourNavMap::BuildTile(settings, layout, 1, 0, DetourNavMap::InputGeometry{}, tile, error)) << error;
+    EXPECT_TRUE(DetourNavMap::BuildTile(settings, {0, 1, 0}, DetourNavMap::InputGeometry{}, tile, error)) << error;
     EXPECT_TRUE(tile.Data.empty());
-    EXPECT_EQ(tile.TileX, 1u);
-    EXPECT_EQ(tile.TileZ, 0u);
+    EXPECT_EQ(tile.Key, (NavTileKey{0, 1, 0}));
 }
 
 TEST(DetourNavMapTests, BuildProducesDebugMesh)
@@ -241,8 +249,7 @@ TEST(DetourNavMapTests, BuildProducesDebugMesh)
     DetourNavMap navMap;
     auto plane = DetourTestHelpers::BuildPlane();
     auto settings = DetourTestHelpers::MakeDetourSettings();
-    auto geometry = DetourTestHelpers::MakePlaneInput(plane);
-    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, geometry));
+    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, plane));
 
     EXPECT_GT(navMap.GetDebugVertexCount(), 0u);
     EXPECT_GT(navMap.GetDebugTriangleCount(), 0u);
@@ -255,14 +262,13 @@ TEST(DetourNavMapTests, RebuildReplacesNavMesh)
     DetourNavMap navMap;
     auto plane = DetourTestHelpers::BuildPlane();
     auto settings = DetourTestHelpers::MakeDetourSettings();
-    auto geometry = DetourTestHelpers::MakePlaneInput(plane);
 
-    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, geometry));
+    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, plane));
     EXPECT_GT(navMap.GetDebugVertexCount(), 0u);
 
     // A coarser cell builds the same four tiles over a larger area.
     settings.CellSize = 0.5f;
-    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, geometry));
+    ASSERT_TRUE(DetourTestHelpers::BuildAllTiles(navMap, settings, plane));
     EXPECT_TRUE(navMap.IsBuilt());
     EXPECT_EQ(navMap.GetTileCount(), 4u);
     EXPECT_GT(navMap.GetDebugVertexCount(), 0u);
@@ -270,16 +276,17 @@ TEST(DetourNavMapTests, RebuildReplacesNavMesh)
 
 TEST(DetourNavMapTests, BuildTileAddTileRemoveTileRoundTrip)
 {
-    auto plane = DetourTestHelpers::BuildPlane();
     const auto settings = DetourTestHelpers::MakeDetourSettings();
-    const auto layout = DetourTestHelpers::MakePlaneLayout(settings);
+    const auto chart = DetourTestHelpers::MakePlaneChart(settings);
+    const auto plane = DetourTestHelpers::InChart(DetourTestHelpers::BuildPlane(), chart);
     DetourNavMap navMap;
-    ASSERT_TRUE(navMap.Initialize(settings, layout));
+    ASSERT_TRUE(navMap.Initialize(settings, chart));
     EXPECT_EQ(navMap.GetTileCount(), 0u);
 
     NavMeshTileData tile;
     std::string error;
-    ASSERT_TRUE(DetourNavMap::BuildTile(settings, layout, 1, 1, DetourTestHelpers::MakePlaneInput(plane), tile, error))
+    ASSERT_TRUE(DetourNavMap::BuildTile(settings, {chart.Id, 1, 1}, DetourTestHelpers::MakePlaneInput(plane), tile,
+                                        error))
         << error;
     ASSERT_FALSE(tile.Data.empty());
     EXPECT_GT(tile.PolygonCount, 0u);
@@ -293,19 +300,121 @@ TEST(DetourNavMapTests, BuildTileAddTileRemoveTileRoundTrip)
     ASSERT_TRUE(navMap.AddTile(tile));
     EXPECT_EQ(navMap.GetTileCount(), 1u);
 
-    EXPECT_TRUE(navMap.RemoveTile(1, 1));
+    EXPECT_TRUE(navMap.RemoveTile({chart.Id, 1, 1}));
     EXPECT_EQ(navMap.GetTileCount(), 0u);
-    EXPECT_FALSE(navMap.RemoveTile(1, 1));
+    EXPECT_FALSE(navMap.RemoveTile({chart.Id, 1, 1}));
 }
 
-TEST(DetourNavMapTests, InitializeRefusesMoreTilesThanDetourAddresses)
+namespace
+{
+
+// Where a built tile's sections start, as Detour lays them out.
+struct TileLayout
+{
+    dtMeshHeader Header;
+    size_t Polys = 0;
+    size_t DetailMeshes = 0;
+    size_t DetailTris = 0;
+    size_t BvTree = 0;
+};
+
+TileLayout LayoutOf(const std::vector<uint8>& data)
+{
+    TileLayout layout;
+    std::memcpy(&layout.Header, data.data(), sizeof(dtMeshHeader));
+    const dtMeshHeader& h = layout.Header;
+    layout.Polys = dtAlign4(sizeof(dtMeshHeader)) + dtAlign4(sizeof(float) * 3 * h.vertCount);
+    layout.DetailMeshes = layout.Polys + dtAlign4(sizeof(dtPoly) * h.polyCount) + dtAlign4(sizeof(dtLink) * h.maxLinkCount);
+    layout.DetailTris = layout.DetailMeshes + dtAlign4(sizeof(dtPolyDetail) * h.detailMeshCount) +
+                        dtAlign4(sizeof(float) * 3 * h.detailVertCount);
+    layout.BvTree = layout.DetailTris + dtAlign4(4 * h.detailTriCount);
+    return layout;
+}
+
+template <typename T, typename Change>
+NavMeshTileData Patched(const NavMeshTileData& tile, size_t at, Change change)
+{
+    NavMeshTileData patched = tile;
+    T value;
+    std::memcpy(&value, patched.Data.data() + at, sizeof(T));
+    change(value);
+    std::memcpy(patched.Data.data() + at, &value, sizeof(T));
+    return patched;
+}
+
+} // namespace
+
+// Detour reads a tile's bytes as its header describes them, without bounds checks: AddTile refuses
+// bytes whose header does not match them or the key, or whose indices leave their arrays, and keeps
+// the tile it holds.
+TEST(DetourNavMapTests, AddTileRefusesBytesDetourCannotHold)
 {
     const auto settings = DetourTestHelpers::MakeDetourSettings();
-    NavMeshTileLayout layout;
-    layout.TilesX = 129;
-    layout.TilesZ = 128;
+    const auto chart = DetourTestHelpers::MakePlaneChart(settings);
+    const auto plane = DetourTestHelpers::InChart(DetourTestHelpers::BuildPlane(), chart);
+    NavMeshTileData tile;
+    std::string error;
+    ASSERT_TRUE(DetourNavMap::BuildTile(settings, {chart.Id, 1, 1}, DetourTestHelpers::MakePlaneInput(plane), tile,
+                                        error))
+        << error;
+    const TileLayout layout = LayoutOf(tile.Data);
+    ASSERT_GT(layout.Header.bvNodeCount, 0);
+    ASSERT_GT(layout.Header.detailTriCount, 0);
+
+    // The bytes of tile (1, 1) under the key of tile (0, 1), into an empty map.
+    {
+        DetourNavMap empty;
+        ASSERT_TRUE(empty.Initialize(settings, chart));
+        NavMeshTileData wrongKey = tile;
+        wrongKey.Key = {chart.Id, 0, 1};
+        std::string refusal;
+        EXPECT_FALSE(empty.AddTile(wrongKey, &refusal));
+        EXPECT_EQ(refusal, "the tile's coordinates are not its key's");
+        EXPECT_EQ(empty.GetTileCount(), 0u);
+    }
+
     DetourNavMap navMap;
-    EXPECT_FALSE(navMap.Initialize(settings, layout));
+    ASSERT_TRUE(navMap.Initialize(settings, chart));
+    ASSERT_TRUE(navMap.AddTile(tile));
+    const uint32 polygons = navMap.GetPolygonCount();
+    const int32 polyCount = layout.Header.polyCount;
+    const int32 vertCount = layout.Header.vertCount;
+    const int32 detailVertCount = layout.Header.detailVertCount;
+    const auto expectRefused = [&](const NavMeshTileData& bad, const char* reason) {
+        std::string refusal;
+        EXPECT_FALSE(navMap.AddTile(bad, &refusal)) << reason;
+        EXPECT_EQ(refusal, reason);
+    };
+
+    NavMeshTileData headerOnly = tile;
+    headerOnly.Data.resize(sizeof(dtMeshHeader));
+    expectRefused(headerOnly, "the tile's sections do not add up to its size");
+    expectRefused(Patched<dtMeshHeader>(tile, 0,
+                                        [](dtMeshHeader& h) { h.polyCount = int(DetourNavMap::kMaxPolygonsPerTile) + 1; }),
+                  "the tile's header does not describe a tile this engine builds");
+    expectRefused(Patched<dtPoly>(tile, layout.Polys, [&](dtPoly& p) { p.verts[0] = uint16(vertCount); }),
+                  "a polygon of the tile names a vertex it does not have");
+    expectRefused(Patched<dtPoly>(tile, layout.Polys, [&](dtPoly& p) { p.neis[0] = uint16(polyCount + 1); }),
+                  "a polygon of the tile names a neighbour it does not have");
+    expectRefused(Patched<dtPolyDetail>(tile, layout.DetailMeshes,
+                                        [&](dtPolyDetail& d) { d.vertBase = uint32(detailVertCount); d.vertCount = 1; }),
+                  "a detail mesh of the tile lies outside its arrays");
+    expectRefused(Patched<uint8>(tile, layout.DetailTris, [](uint8& corner) { corner = 255; }),
+                  "a detail triangle of the tile names a vertex it does not have");
+    expectRefused(Patched<dtBVNode>(tile, layout.BvTree, [&](dtBVNode& n) { n.i = polyCount; }),
+                  "a bounding-volume node of the tile names a polygon it does not have");
+
+    EXPECT_EQ(navMap.GetTileCount(), 1u);
+    EXPECT_EQ(navMap.GetPolygonCount(), polygons);
+}
+
+TEST(DetourNavMapTests, InitializeRefusesARotatedChart)
+{
+    const auto settings = DetourTestHelpers::MakeDetourSettings();
+    NavMeshChart chart = DetourTestHelpers::MakePlaneChart(settings);
+    chart.Rotation = Mathematics::Quaternion(0.70710678f, 0.0f, 0.70710678f, 0.0f);
+    DetourNavMap navMap;
+    EXPECT_FALSE(navMap.Initialize(settings, chart));
     EXPECT_FALSE(navMap.IsBuilt());
 }
 
@@ -373,7 +482,7 @@ TEST_F(DetourNavMapBuiltTest, PathCrossesTileBordersComplete)
 
 TEST_F(DetourNavMapBuiltTest, RemovedTileLeavesItsNeighboursPathable)
 {
-    ASSERT_TRUE(m_NavMap.RemoveTile(1, 1));
+    ASSERT_TRUE(m_NavMap.RemoveTile({0, 1, 1}));
 
     PathHandle outPath;
     PathRequest request;
@@ -477,10 +586,6 @@ TEST_F(DetourNavMapBuiltTest, RaycastToEdgeOfMeshHits)
     EXPECT_GT(hitZ, 5.0f);
     EXPECT_LT(hitZ, 11.0f);
 }
-
-// ===========================================================================
-// Serialization round-trip
-// ===========================================================================
 
 // ===========================================================================
 // CrowdManager tests

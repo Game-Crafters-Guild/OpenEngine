@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ECS/Systems.h"
+#include "TerrainECS/CoarseTileStandIn.h" // the coarse-patch scratch
 #include "Engine/Rendering/SunGlareRenderFeature.h" // ViewSkyline (per-frame scratch)
 #include "TerrainECS/GrassWindVolumeExtractor.h"
 #include "Terrain/Heightfield.h" // HeightfieldData scratch for atlas normal regen
@@ -24,7 +25,8 @@ namespace GameEngine::TerrainECS
 class TileStreamingManager;
 class AtlasResidencyController;
 class TerrainService;
-class TerrainGrassFieldUploader;
+class TerrainFieldUploader;
+struct TerrainTileData;
 
 // ECS system that handles terrain data lifecycle and heightmap/splat/normal GPU upload.
 // The CBT renderer consumes the extracted params + bindless textures; the upload flush
@@ -103,9 +105,16 @@ private:
     // would otherwise hand a reused index the previous terrain's state.
     void ForgetRetiredTiledTerrains(TerrainService& service);
 
+    // The stand-in a coarse patch of `tile` uploads: the tile's own when it matches this
+    // resolution, extent, height scale and heightfield version, else one built into
+    // m_CoarseStandInScratch from the tile's heightfield (byte-identical to the job's).
+    const CoarseTileStandIn& ResolveCoarseStandIn(const TerrainTileData& tile, uint32 tileRes, float32 tileWorldSize,
+                                                  float32 heightScale);
+
     Engine::Renderer::RenderServices* m_RenderServices = nullptr;
     std::unique_ptr<TileStreamingManager> m_StreamingManager;
-    std::unique_ptr<TerrainGrassFieldUploader> m_GrassFieldUploader;
+    std::unique_ptr<TerrainFieldUploader> m_GrassFieldUploader;
+    std::unique_ptr<TerrainFieldUploader> m_ColorMapUploader;
 
     // This system's cursor into each terrain's HeightfieldDirtyLog: the
     // HeightfieldVersion whose data was last uploaded to the GPU. Keyed by
@@ -120,23 +129,18 @@ private:
     // The TerrainRenderFeature::GetDeviceResourceEpoch every terrain was last uploaded for.
     uint64 m_UploadedDeviceResourceEpoch = 0;
 
-    // Reusable scratch for upsampling a Coarse (not-yet-Full) streamed tile's
-    // heightfield/splatmap to the unified tile-region resolution so it renders a
-    // smooth low-frequency approximation of its Full bake instead of a flat/black
-    // hole. Re-derived only when a coarse tile is dirty (once per stream-in), so
-    // a parked camera pays nothing. The *Patch buffers hold the interior-clamped
-    // sub-block actually uploaded (boundary texels shared with a resident-Full
+    // A Coarse (not-yet-Full) streamed tile renders a smooth low-frequency approximation of its
+    // Full bake instead of a flat/black hole: its stand-in (CoarseTileStandIn, the heights
+    // upsampled to the tile resolution and their normal), which the coarse streaming job builds.
+    // m_CoarseStandInScratch holds one built here when the tile's own no longer matches. The
+    // splat is upsampled here (it is baked after the tile arrives). The *Patch buffers hold the
+    // interior-clamped sub-block actually uploaded (boundary texels shared with a resident-Full
     // neighbor are excluded so a coarse write never stomps the Full edge).
-    std::vector<float32> m_CoarseHeightScratch;
+    CoarseTileStandIn m_CoarseStandInScratch;
     std::vector<uint8> m_CoarseSplatScratch;
     std::vector<float32> m_CoarseHeightPatch;
     std::vector<uint32> m_CoarseSplatPatch;
-    // Normals for a coarse (not-yet-Full) tile region are regenerated from its upsampled heights
-    // (was ZEROED — the tiled coarse dark-shard gap): the full region normal + the interior-clamped
-    // sub-block actually uploaded, plus a HeightfieldData wrap of the upsampled scratch.
-    std::vector<uint8> m_CoarseNormalScratch;
     std::vector<uint32> m_CoarseNormalPatch;
-    Terrain::HeightfieldData m_CoarseNormalHf;
 
     // Phase E: single-slot pack scratch (slotStride^2 floats) reused across the atlas slot
     // patches so each tile upload does not reallocate. Resized on a tileRes change.
@@ -161,15 +165,12 @@ private:
     // Quality-sweep slice 1: atlas SPLAT (RGBA8) + NORMAL (R16G16F) slot sources ride the same
     // slot geometry as height. Reused per-patch scratch so streaming does not reallocate. The
     // *SlotScratch hold the packed slotStride^2 block (apron included) uploaded to the atlas; the
-    // *TileScratch hold the per-tile source at tileRes (upsampled splat / freshly regenerated
-    // normal). The normal is regenerated from the tile's POST-modifier heights every patch (fixing
-    // the tiled base-noise-normal gap on atlas terrains too), via GenerateNormalmapFromHeightfield
-    // over m_AtlasNormalTileHf (a coarse tile's upsampled heights; a Full tile uses its own field).
+    // *TileScratch holds the upsampled splat of a coarse tile at tileRes. A Full tile's normal
+    // follows its post-modifier heights, with its border ring read against the neighbours; a
+    // coarse tile's comes from its stand-in.
     std::vector<uint8> m_AtlasSplatSlotScratch;
     std::vector<uint8> m_AtlasNormalSlotScratch;
     std::vector<uint8> m_AtlasSplatTileScratch;
-    std::vector<uint8> m_AtlasNormalTileScratch;
-    Terrain::HeightfieldData m_AtlasNormalTileHf;
     // Out-of-window coarse splat (RGBA8, downsampled tile splats) + coarse normal (R16G16F, derived
     // from the coarse HEIGHT field so distant shading matches the coarse geometry — no lit bumps on
     // smooth terrain). Rebuilt with the coarse height field (same gate), so a parked camera pays nothing.

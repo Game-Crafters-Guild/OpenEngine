@@ -7,6 +7,7 @@ namespace
 using GameEngine::UI::Layout::ClampPopupToViewport;
 using GameEngine::UI::Layout::PlaceSubmenuInViewport;
 using GameEngine::UI::Layout::PopupRect;
+using GameEngine::UI::Layout::SubmenuAnchor;
 
 TEST(PopupPlacementTests, ClampsRootPopupInsideRightAndBottomEdges)
 {
@@ -28,36 +29,67 @@ TEST(PopupPlacementTests, ClampsRootPopupInsideLeftAndTopEdges)
     EXPECT_FLOAT_EQ(position.Y, 34.0f);
 }
 
-TEST(PopupPlacementTests, KeepsSubmenuOnRightWhenItFits)
-{
-    const PopupRect viewport{0.0f, 0.0f, 1280.0f, 800.0f};
-    const PopupRect anchor{300.0f, 200.0f, 180.0f, 24.0f};
-    const auto position =
-        PlaceSubmenuInViewport(viewport, anchor, 220.0f, 260.0f, 4.0f);
+// A parent panel 180 px wide at x 300, its parent row's top at y 200; the submenu panel's first
+// row sits 5 px below its top edge.
+constexpr PopupRect kParentPanel{300.0f, 150.0f, 180.0f, 200.0f};
+constexpr float kRowTop = 200.0f;
+constexpr float kGap = 2.0f;
+constexpr float kFirstRowInset = 5.0f;
 
-    EXPECT_FLOAT_EQ(position.X, 480.0f);
-    EXPECT_FLOAT_EQ(position.Y, 200.0f);
+bool Overlaps(const PopupRect& a, float x, float y, float width, float height)
+{
+    return a.X < x + width && x < a.X + a.Width && a.Y < y + height && y < a.Y + a.Height;
 }
 
-TEST(PopupPlacementTests, FlipsSubmenuLeftAtRightEdge)
+TEST(PopupPlacementTests, SubmenuOpensPastTheParentPanelsRightEdgeByTheGap)
 {
     const PopupRect viewport{0.0f, 0.0f, 1280.0f, 800.0f};
-    const PopupRect anchor{1080.0f, 200.0f, 180.0f, 24.0f};
-    const auto position =
-        PlaceSubmenuInViewport(viewport, anchor, 220.0f, 260.0f, 4.0f);
+    const auto position = PlaceSubmenuInViewport(
+        viewport, SubmenuAnchor{kParentPanel, kRowTop}, 220.0f, 260.0f, 4.0f, kGap, kFirstRowInset);
 
-    EXPECT_FLOAT_EQ(position.X, 860.0f);
-    EXPECT_FLOAT_EQ(position.Y, 200.0f);
+    EXPECT_FLOAT_EQ(position.X, kParentPanel.X + kParentPanel.Width + kGap);
+    EXPECT_FALSE(Overlaps(kParentPanel, position.X, position.Y, 220.0f, 260.0f));
+}
+
+TEST(PopupPlacementTests, SubmenuFirstRowIsLevelWithTheParentRow)
+{
+    const PopupRect viewport{0.0f, 0.0f, 1280.0f, 800.0f};
+    const auto position = PlaceSubmenuInViewport(
+        viewport, SubmenuAnchor{kParentPanel, kRowTop}, 220.0f, 260.0f, 4.0f, kGap, kFirstRowInset);
+
+    EXPECT_FLOAT_EQ(position.Y + kFirstRowInset, kRowTop);
+}
+
+TEST(PopupPlacementTests, SubmenuFlipsLeftOfTheParentPanelAtTheRightEdge)
+{
+    const PopupRect viewport{0.0f, 0.0f, 600.0f, 800.0f};
+    const auto position = PlaceSubmenuInViewport(
+        viewport, SubmenuAnchor{kParentPanel, kRowTop}, 220.0f, 260.0f, 4.0f, kGap, kFirstRowInset);
+
+    EXPECT_FLOAT_EQ(position.X + 220.0f, kParentPanel.X - kGap);
+    EXPECT_FALSE(Overlaps(kParentPanel, position.X, position.Y, 220.0f, 260.0f));
+}
+
+TEST(PopupPlacementTests, SubmenuTakesTheRoomierSideWhenNeitherFitsAndStaysInTheWindow)
+{
+    // 260 px of room on the left, 100 on the right, a 300 px submenu: left wins and the clamp
+    // keeps it inside the margin.
+    const PopupRect viewport{0.0f, 0.0f, 586.0f, 800.0f};
+    const PopupRect parent{266.0f, 150.0f, 216.0f, 200.0f};
+    const auto position = PlaceSubmenuInViewport(
+        viewport, SubmenuAnchor{parent, kRowTop}, 300.0f, 260.0f, 4.0f, kGap, kFirstRowInset);
+
+    EXPECT_LT(position.X, parent.X);
+    EXPECT_FLOAT_EQ(position.X, 4.0f);
 }
 
 TEST(PopupPlacementTests, ClampsSubmenuAboveBottomEdge)
 {
     const PopupRect viewport{0.0f, 0.0f, 1280.0f, 800.0f};
-    const PopupRect anchor{300.0f, 760.0f, 180.0f, 24.0f};
-    const auto position =
-        PlaceSubmenuInViewport(viewport, anchor, 220.0f, 260.0f, 4.0f);
+    const auto position = PlaceSubmenuInViewport(
+        viewport, SubmenuAnchor{kParentPanel, 760.0f}, 220.0f, 260.0f, 4.0f, kGap, kFirstRowInset);
 
-    EXPECT_FLOAT_EQ(position.X, 480.0f);
+    EXPECT_FLOAT_EQ(position.X, kParentPanel.X + kParentPanel.Width + kGap);
     EXPECT_FLOAT_EQ(position.Y, 536.0f);
 }
 

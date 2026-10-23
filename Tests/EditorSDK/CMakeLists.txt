@@ -47,6 +47,10 @@ add_executable(EditorSdkRegistryTests
     RenderLayersSettingsPageTests.cpp
     ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/RenderLayersSettingsPage.cpp
     ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/RenderLayerField.cpp
+    # The Script Packages page: its registration, and its list reading and writing a scripts csproj.
+    ScriptPackagesSettingsPageTests.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/ScriptPackagesSettingsPage.cpp
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/ScriptPackagesList.cpp
     # Game UI scale policy: the editor-side write and the Game UI Scaling page,
     # which SettingsPageOpenIsNotAnEditTests also seeds. Same arrangement.
     UIScaleProjectSettingsWriterTests.cpp
@@ -107,6 +111,14 @@ ge_stage_runtime_dependencies(EditorSdkRegistryTests)
 # Compiles the editor's MaterialGraphNodeTypes.cpp, whose material palette comes
 # from reflecting the engine node library off disk.
 ge_stage_shader_graph_nodes(EditorSdkRegistryTests)
+# The Script Packages list builds its rows from its layouts, read from the editor install-assets
+# root, which for a test executable is <exe>/Assets.
+ge_stage_test_asset(EditorSdkRegistryTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/ScriptPackagesList/ScriptPackagesList.uxml"
+    "Assets/UI/controls/ScriptPackagesList/ScriptPackagesList.uxml")
+ge_stage_test_asset(EditorSdkRegistryTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/ScriptPackagesList/ScriptPackageRow.uxml"
+    "Assets/UI/controls/ScriptPackagesList/ScriptPackageRow.uxml")
 
 add_test(NAME EditorSdkRegistryTests COMMAND $<TARGET_FILE:EditorSdkRegistryTests>)
 set_tests_properties(EditorSdkRegistryTests PROPERTIES

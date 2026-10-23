@@ -130,18 +130,18 @@ inline void ExpandParallaxDepthVariants(std::vector<VariantRequest>& rows, bool 
     }
 }
 
-// The per-view keywords an AO, reflection, GI volume or contact-shadow pass adds to the world pass.
-// The transmissive pass draws with its graph node's own keywords (TransmissivePassNode), which carry
-// none of them (the contact-shadow pass skips the transmissive pass, ScreenSpaceShadowWorldPass), so
-// no scene-colour-grab variant carries one.
-inline constexpr Rendering::MaterialKeyword kPerViewWorldPassKeywords =
-    Rendering::MaterialKeyword::SSSRNormalRoughness | Rendering::MaterialKeyword::GTAO |
-    Rendering::MaterialKeyword::DDGI | Rendering::MaterialKeyword::ScreenSpaceShadows;
+// The per-view keywords an AO, GI volume or contact-shadow pass adds to the world pass and the
+// transmissive pass draws without. The transmissive pass draws with its node's keywords, plus the
+// reflection keyword when reflections run (ReflectionsProvider::ContributeTransmissivePassTargets).
+// The contact-shadow pass skips it (ScreenSpaceShadowWorldPass).
+inline constexpr Rendering::MaterialKeyword kPerViewKeywordsWithoutSceneColorGrab =
+    Rendering::MaterialKeyword::GTAO | Rendering::MaterialKeyword::DDGI |
+    Rendering::MaterialKeyword::ScreenSpaceShadows;
 
 // The transmissive pass's rows of a transmissive material: every forward colour row the pass can
-// draw again with the scene-colour grab bound (SceneColorGrab). Rows carrying a per-view keyword
-// (kPerViewWorldPassKeywords) get no grab row. The rows without the grab stay: the pass drops the
-// keyword when the grab declines (a multisampled source).
+// draw again with the scene-colour grab bound (SceneColorGrab). Rows carrying a per-view keyword the
+// pass draws without (kPerViewKeywordsWithoutSceneColorGrab) get no grab row. The rows without the
+// grab stay: the pass drops the keyword when the grab declines (a multisampled source).
 inline void ExpandSceneColorGrabVariants(std::vector<VariantRequest>& rows, bool transmission)
 {
     using Rendering::MaterialKeyword;
@@ -152,7 +152,7 @@ inline void ExpandSceneColorGrabVariants(std::vector<VariantRequest>& rows, bool
     {
         const auto row = rows[i];
         if (!Rendering::HasKeyword(row.PassKeywords, MaterialKeyword::ForwardPlus) ||
-            (row.PassKeywords & kPerViewWorldPassKeywords) != MaterialKeyword::None)
+            (row.PassKeywords & kPerViewKeywordsWithoutSceneColorGrab) != MaterialKeyword::None)
             continue;
         rows.push_back({row.Name + "-scene-grab", row.PassKeywords | MaterialKeyword::SceneColorGrab, row.VertexFlags});
     }

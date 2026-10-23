@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace GameEngine::ComponentScanner::NativeBindingEmitter
@@ -49,29 +50,50 @@ bool HasResult(const ApiFunction& function)
     return function.Returns.Kind != ApiKind::Void;
 }
 
+// Every parameter of the thunk, in order: the parameters' crossings, then the return value's.
+std::vector<BindingRules::NativeParameter> ThunkParameters(const ApiFunction& function, const BindingRules::Index& index)
+{
+    std::vector<BindingRules::NativeParameter> parameters;
+    for (const ApiParam& param : function.Params)
+        for (BindingRules::NativeParameter& parameter : BindingRules::NativeParameters(param, index))
+            parameters.push_back(std::move(parameter));
+    for (BindingRules::NativeParameter& parameter : BindingRules::NativeResultParameters(function.Returns, index))
+        parameters.push_back(std::move(parameter));
+    return parameters;
+}
+
 // The thunk's parameter list, as declared ("Key key, std::uint8_t* outResult").
 std::string ParameterList(const ApiFunction& function, const BindingRules::Index& index, bool names)
 {
     std::string text;
-    auto add = [&](const std::string& type, const std::string& name) {
-        text += (text.empty() ? "" : ", ") + type + (names ? " " + name : "");
-    };
-    for (const ApiParam& param : function.Params)
-        add(param.Out ? BindingRules::NativeOutType(param.Type, index) : BindingRules::NativeInType(param.Type, index),
-            param.Name);
-    if (HasResult(function))
-        add(BindingRules::NativeOutType(function.Returns, index), "outResult");
+    for (const BindingRules::NativeParameter& parameter : ThunkParameters(function, index))
+        text += (text.empty() ? "" : ", ") + parameter.Type + (names ? " " + parameter.Name : "");
     return text;
 }
 
-std::string ArgumentNames(const ApiFunction& function)
+std::string ArgumentNames(const ApiFunction& function, const BindingRules::Index& index)
 {
     std::string text;
-    for (const ApiParam& param : function.Params)
-        text += (text.empty() ? "" : ", ") + param.Name;
-    if (HasResult(function))
-        text += std::string(text.empty() ? "" : ", ") + "outResult";
+    for (const BindingRules::NativeParameter& parameter : ThunkParameters(function, index))
+        text += (text.empty() ? "" : ", ") + parameter.Name;
     return text;
+}
+
+bool HasText(const ApiModule& module)
+{
+    for (const ApiFunction& function : module.Functions)
+        if (BindingRules::HasText(function))
+            return true;
+    return false;
+}
+
+bool HasSpanOut(const ApiModule& module)
+{
+    for (const ApiFunction& function : module.Functions)
+        for (const ApiParam& param : function.Params)
+            if (BindingRules::IsSpanOut(param))
+                return true;
+    return false;
 }
 
 // A C++ literal of a canonical integer default, with the suffix that keeps it in range.
@@ -158,14 +180,21 @@ void EmitLayoutAsserts(std::string& out, const ApiModule& module, const BindingR
 }
 
 // The expression that passes a thunk parameter on to the facade function.
-std::string Argument(const ApiParam& param)
+std::string Argument(const ApiParam& param, const BindingRules::Index& index)
 {
+    if (BindingRules::IsSpanOut(param))
+        return "std::span<" + BindingRules::NativeValueType(param.Type.Element.front(), index) + ">(" + param.Name +
+               ", static_cast<std::size_t>(" + BindingRules::Capacity(param.Name) + "))";
     if (param.Out)
         return BindingRules::OutConverts(param.Type) ? param.Name + "Value" : "*" + param.Name;
     if (param.Type.Kind == ApiKind::Bool)
         return param.Name + " != 0";
     if (param.Type.Kind == ApiKind::Entity)
         return "::GameEngine::ECS::EntityHandle(" + param.Name + ")";
+    if (param.Type.Kind == ApiKind::RenderLayerMask)
+        return "::GameEngine::Rendering::RenderLayerMask{" + param.Name + "}";
+    if (param.Type.Kind == ApiKind::String)
+        return "::GameEngine::ScriptingAbi::TextIn(" + param.Name + ", " + BindingRules::TextLength(param.Name) + ")";
     if (BindingRules::CrossesByPointer(param.Type))
         return "*" + param.Name;
     return param.Name;
@@ -191,25 +220,67 @@ void EmitCatch(std::string& out)
     out += "    catch (...)\n    {\n        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, \"an exception that is not a std::exception\");\n    }\n";
 }
 
+// The refusals of a String parameter `name`: a null pointer with a length, and a negative length.
+void EmitTextInChecks(std::string& out, const std::string& name)
+{
+    const std::string length = BindingRules::TextLength(name);
+    out += "    if (" + name + " == nullptr && " + length + " != 0)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"" + name +
+           "\");\n";
+    out += "    if (" + length + " < 0)\n        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, \"" + length + "\");\n";
+}
+
+// The refusals of a span of results `name`: a negative capacity, and a null buffer with a capacity. Its
+// count slot is the return value's, refused when null like every result slot.
+void EmitSpanOutChecks(std::string& out, const std::string& name)
+{
+    const std::string capacity = BindingRules::Capacity(name);
+    out += "    if (" + capacity + " < 0)\n        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, \"" + capacity +
+           "\");\n";
+    out += "    if (" + name + " == nullptr && " + capacity + " != 0)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"" + name +
+           "\");\n";
+}
+
+// The refusals of a String return value's buffer `name`: no length slot, a negative capacity, and a null
+// buffer with a capacity.
+void EmitTextOutChecks(std::string& out, const std::string& name)
+{
+    const std::string capacity = BindingRules::Capacity(name);
+    const std::string length = BindingRules::TextLength(name);
+    out += "    if (" + length + " == nullptr)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"" + length + "\");\n";
+    out += "    if (" + capacity + " < 0)\n        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, \"" + capacity +
+           "\");\n";
+    out += "    if (" + name + " == nullptr && " + capacity + " != 0)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"" + name +
+           "\");\n";
+}
+
 void EmitThunk(std::string& out, const ApiModule& module, const ApiFunction& function, const BindingRules::Index& index)
 {
     out += "GE_Result GE_CDECL " + BindingRules::NativeThunk(function) + "(" + ParameterList(function, index, true) + ")\n{\n";
     out += "    constexpr const char* kFunction = \"" + BindingRules::FunctionLabel(module, function.Name) + "\";\n";
     for (const ApiParam& param : function.Params)
     {
-        if (param.Out || BindingRules::CrossesByPointer(param.Type))
+        if (BindingRules::IsSpanOut(param))
+            EmitSpanOutChecks(out, param.Name);
+        else if (param.Out || BindingRules::CrossesByPointer(param.Type))
             out += "    if (" + param.Name + " == nullptr)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"" + param.Name +
                    "\");\n";
         else if (param.Type.Kind == ApiKind::StringId)
             out += "    if (" + param.Name + " == 0)\n        return ::GameEngine::ScriptingAbi::RefuseZeroId(kFunction, \"" + param.Name +
                    "\");\n";
+        else if (param.Type.Kind == ApiKind::String)
+            EmitTextInChecks(out, param.Name);
     }
-    if (HasResult(function))
+    const bool textResult = function.Returns.Kind == ApiKind::String;
+    if (textResult)
+        EmitTextOutChecks(out, "outResult");
+    else if (HasResult(function))
         out += "    if (outResult == nullptr)\n        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, \"outResult\");\n";
     for (const ApiParam& param : function.Params)
-        if (param.Out)
+        if (param.Out && !BindingRules::IsSpanOut(param))
             out += "    *" + param.Name + " = " + BindingRules::NativeOutDefault(param.Type) + ";\n";
-    if (HasResult(function))
+    if (textResult)
+        out += "    *" + BindingRules::TextLength("outResult") + " = 0;\n";
+    else if (HasResult(function))
         out += "    *outResult = " + BindingRules::NativeOutDefault(function.Returns) + ";\n";
     out += "    try\n    {\n";
     EmitEngineEntry(out, function.Thread);
@@ -225,17 +296,23 @@ void EmitThunk(std::string& out, const ApiModule& module, const ApiFunction& fun
     {
         if (param.Out && BindingRules::OutConverts(param.Type))
             out += "        " + BindingRules::NativeValueType(param.Type, index) + " " + param.Name + "Value{};\n";
-        arguments += (arguments.empty() ? "" : ", ") + Argument(param);
+        arguments += (arguments.empty() ? "" : ", ") + Argument(param, index);
     }
     const std::string call = "::" + function.CppName + "(" + arguments + ")";
     if (function.Returns.Kind == ApiKind::Void)
         out += "        " + call + ";\n";
+    else if (textResult)
+        out += "        const std::string resultText = " + call + ";\n";
     else
         out += "        *outResult = " + BindingRules::NativeToCrossing(function.Returns, call) + ";\n";
     for (const ApiParam& param : function.Params)
         if (param.Out && BindingRules::OutConverts(param.Type))
             out += "        *" + param.Name + " = " + BindingRules::NativeToCrossing(param.Type, param.Name + "Value") + ";\n";
-    out += "        return GE_Result_Ok;\n    }\n";
+    if (textResult)
+        out += "        return ::GameEngine::ScriptingAbi::CopyTextOut(resultText, outResult, " + BindingRules::Capacity("outResult") +
+               ", " + BindingRules::TextLength("outResult") + ");\n    }\n";
+    else
+        out += "        return GE_Result_Ok;\n    }\n";
     EmitCatch(out);
     out += "}\n";
 }
@@ -297,7 +374,7 @@ std::vector<TableEntry> TableEntries(const ApiModule& module, const BindingRules
     std::vector<TableEntry> entries;
     for (const ApiFunction& function : module.Functions)
         entries.push_back({function.Name, Namespace(function.CppName), ParameterList(function, index, true),
-                           ParameterList(function, index, false), ArgumentNames(function)});
+                           ParameterList(function, index, false), ArgumentNames(function, index)});
     for (const ApiEvent& event : module.Events)
     {
         entries.push_back({BindingRules::SubscribeName(event), Namespace(event.SubscribeCpp), SubscribeParameters(event, index, true),
@@ -324,6 +401,10 @@ std::string EmitHeader(const ApiModule& module, const BindingRules::Index& index
     for (const TableEntry& entry : TableEntries(module, index))
         out += "    GE_Result(GE_CDECL* " + entry.Name + ")(" + entry.ParameterTypes + ");\n";
     out += "};\n\n";
+    if (HasText(module))
+        out += std::string(BindingRules::kTextOwnership) + "\n";
+    if (HasSpanOut(module))
+        out += std::string(BindingRules::kSpanOwnership) + "\n";
     out += "// The FNV-1a 64 of the " + module.Name + " description's canonical form: the one version of the table.\n";
     out += "inline constexpr uint64_t " + BindingRules::NativeHashConstant(module) + " = " +
            HexHash(ApiJsonEmitter::ModuleHash(module)) + ";\n\n";

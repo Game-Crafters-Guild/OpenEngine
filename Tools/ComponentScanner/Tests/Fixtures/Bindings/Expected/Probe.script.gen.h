@@ -15,13 +15,17 @@ struct GE_Probe_Table_v1
     uint32_t format;
     uint64_t hash;
     GE_Result(GE_CDECL* CallCount)(std::uint32_t*);
+    GE_Result(GE_CDECL* Echo)(const char*, std::int32_t, char*, std::int32_t, std::int32_t*);
     GE_Result(GE_CDECL* GetLastOptions)(GameEngine::Probe::SoundOptions*);
     GE_Result(GE_CDECL* GetPose)(GameEngine::Mathematics::Matrix4x4*);
     GE_Result(GE_CDECL* GetSpeed)(std::uint32_t, float*);
+    GE_Result(GE_CDECL* ListHits)(const GameEngine::Mathematics::Vector3*, GameEngine::Probe::Hit*, std::int32_t, std::int32_t*);
     GE_Result(GE_CDECL* Play)(std::uint64_t, const GameEngine::Probe::SoundOptions*, float, GameEngine::Probe::Loudness, std::uint32_t, std::uint8_t*);
     GE_Result(GE_CDECL* Push)(std::uint32_t, const GameEngine::Mathematics::Vector3*);
     GE_Result(GE_CDECL* SetFlag)(std::uint8_t, std::int8_t, double);
     GE_Result(GE_CDECL* SetSpeed)(std::uint32_t, float);
+    GE_Result(GE_CDECL* SwapLayers)(std::uint32_t, std::uint32_t*);
+    GE_Result(GE_CDECL* SwapTint)(const GameEngine::ColorLinear*, GameEngine::ColorLinear*);
     GE_Result(GE_CDECL* Throw)();
     GE_Result(GE_CDECL* TryCast)(const GameEngine::Mathematics::Vector3*, const GameEngine::Mathematics::Vector3*, GameEngine::Probe::Hit*, float, std::uint8_t*);
     GE_Result(GE_CDECL* TryNearest)(const GameEngine::Mathematics::Vector3*, std::uint32_t*, std::uint8_t*);
@@ -29,8 +33,18 @@ struct GE_Probe_Table_v1
     GE_Result(GE_CDECL* UnsubscribeTouched)(std::uint64_t);
 };
 
+// Text crosses as UTF-8 with a length, never NUL-terminated. Text in is a (pointer, length) pair the caller
+// owns for the call; the function copies it before it keeps it. Text out goes into the caller's buffer: the
+// thunk copies what fits and always writes the full length, so a short buffer is a visible retry, never a
+// silent truncation (Scripting/AbiTextOut.h). The engine allocates nothing the caller frees.
+
+// A span of results is the caller's buffer and its capacity in elements, owned by the caller for the call.
+// The function copies the results that fit and always reports how many there are, so a short buffer is a
+// visible retry, never a silent truncation; a capacity of 0 asks the count. The engine allocates nothing the
+// caller frees.
+
 // The FNV-1a 64 of the Probe description's canonical form: the one version of the table.
-inline constexpr uint64_t GE_Probe_Hash = 0xec98dc6909d46f03ull;
+inline constexpr uint64_t GE_Probe_Hash = 0x3ce903c383382cfbull;
 
 // Serves the table to a caller whose hash is GE_Probe_Hash. Any other hash is refused with
 // GE_Result_InvalidArg and a last error that names both hashes; the table is never served to a caller built

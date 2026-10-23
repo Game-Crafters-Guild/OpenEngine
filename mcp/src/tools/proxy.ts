@@ -6,7 +6,7 @@ import { defineTool, type ToolCategory, type ToolDef } from "../registry.js";
  * Drop keys the caller omitted, so the debug server sees only what was asked
  * for and applies its own defaults to the rest.
  */
-function definedOnly(args: Record<string, unknown>): Record<string, unknown> {
+export function definedOnly(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) if (v !== undefined) out[k] = v;
   return out;

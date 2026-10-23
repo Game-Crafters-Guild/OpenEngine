@@ -835,7 +835,9 @@ TEST(MaterialAssetParsingTest, EmptyInput_Fails)
 
 // ---- Lighting model casing ----
 
-TEST(MaterialAssetParsingTest, LightingModel_PreservesCasing)
+// The variant key folds the lighting model's case and the LIGHTING_MODEL_* define
+// does not, so a known model read in any case takes its one spelling.
+TEST(MaterialAssetParsingTest, LightingModel_KnownNameTakesItsOneSpelling)
 {
     const std::string json = R"JSON({
         "schemaVersion": 3,
@@ -846,7 +848,7 @@ TEST(MaterialAssetParsingTest, LightingModel_PreservesCasing)
 
     MaterialAsset asset(GUID::Generate(), "test.material");
     ASSERT_TRUE(ParseMaterialJson(json, asset));
-    EXPECT_EQ(asset.GetDocument().lightingModel, "unlit");
+    EXPECT_EQ(asset.GetDocument().lightingModel, "Unlit");
 }
 
 // ---- V3 dual serialization: both GUID and path fields ----
@@ -930,7 +932,7 @@ TEST(MaterialAssetParsingTest, V2_UnlitWhite_Pattern)
 
     const auto& doc = asset.GetDocument();
     EXPECT_EQ(doc.schemaVersion, 2);
-    EXPECT_EQ(doc.lightingModel, "unlit");
+    EXPECT_EQ(doc.lightingModel, "Unlit");
     EXPECT_EQ(doc.surfaceShader, "Surfaces/unlit_solid.glsl");
     EXPECT_TRUE(doc.surfaceShaderGuid.empty());
 }

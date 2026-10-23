@@ -15,7 +15,7 @@
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -78,7 +78,9 @@ RenderPipelineBlueprint::Pass Step(const nlohmann::json& pass)
 
 struct SkyBackdropFixture
 {
-    std::unique_ptr<IDevice> Device;
+    // The shared device, or the fixture's own when a test asks for the validation layer.
+    IDevice* Device = nullptr;
+    std::unique_ptr<IDevice> m_OwnedDevice;
     std::unique_ptr<RenderServices> Rs;
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
@@ -94,16 +96,17 @@ struct SkyBackdropFixture
             desc.enableDebugLayer = true;
             desc.enableDynamicRendering = true;
             desc.descriptorBuffers = DescriptorBufferMode::Disabled;
-            Device = DeviceFactory::CreateDevice(desc);
-            if (Device && !Device->Initialize(desc))
-                Device.reset();
+            m_OwnedDevice = DeviceFactory::CreateDevice(desc);
+            if (m_OwnedDevice && !m_OwnedDevice->Initialize(desc))
+                m_OwnedDevice.reset();
+            Device = m_OwnedDevice.get();
         }
         else
-            Device = CreateVulkanDeviceFast();
+            Device = SharedHeadlessDevice();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
-        EXPECT_TRUE(Rs->Initialize(Device.get()));
+        EXPECT_TRUE(Rs->Initialize(Device));
 
         const Mathematics::Matrix4x4 view = Mathematics::Matrix4x4::LookAt(
             Mathematics::Vector3(0.0f, 3.0f, 0.0f), Mathematics::Vector3(0.0f, 3.0f, 1.0f),
@@ -133,10 +136,10 @@ struct SkyBackdropFixture
 
         // The physical sky, active: what a scene with a Sky Environment hands the renderer.
         auto& sky = Rs->EnsureFeature<SkyRenderFeature>();
-        EXPECT_TRUE(sky.Initialize(Device.get()));
+        EXPECT_TRUE(sky.Initialize(Device));
         Rendering::SkySettings settings{};
         settings.nightSkyBlend = night ? 1.0f : 0.0f;
-        sky.SetSettings(settings, Rendering::SkySystemState{});
+        sky.SetSettings(settings, Rendering::SkySunState{});
 
         Nodes::RegisterEngineNodeTypes(Registry);
         return true;
@@ -166,7 +169,8 @@ struct SkyBackdropFixture
     {
         Device->WaitForIdle();
         Rs->Shutdown();
-        Device->Shutdown();
+        if (m_OwnedDevice)
+            m_OwnedDevice->Shutdown();
     }
 };
 
@@ -187,10 +191,10 @@ DeclaredFrame DeclareFrame(SkyBackdropFixture& f)
     RenderPipelineInstance instance(*f.Rs, f.Registry);
     instance.SetBlueprint(f.Blueprint());
 
-    RenderGraph::RGResourcePool persistent(f.Device.get());
-    RenderGraph::RGTransientPool transient(f.Device.get());
-    RenderGraph::RGUploadRing ring(f.Device.get(), 2, 262144);
-    RenderGraph::RGFrame frame(f.Device.get(), &persistent, &transient, &ring);
+    RenderGraph::RGResourcePool persistent(f.Device);
+    RenderGraph::RGTransientPool transient(f.Device);
+    RenderGraph::RGUploadRing ring(f.Device, 2, 262144);
+    RenderGraph::RGFrame frame(f.Device, &persistent, &transient, &ring);
     frame.BeginFrame(0);
     const RenderGraph::RGTexture color = frame.ImportPersistentTexture(
         "SB.Color", ViewTargetDesc(TextureFormat::RGBA8_UNORM,
@@ -385,7 +389,7 @@ TEST(RenderPipelineDeclareTests, MovingTheMoonRebakesTheSkyViewLutAndAHiddenMoon
     };
     for (const Step& step : steps)
     {
-        sky.SetSettings(step.Settings, Rendering::SkySystemState{});
+        sky.SetSettings(step.Settings, Rendering::SkySunState{});
         EXPECT_EQ(DeclareFrame(f).SkyViewLutBaked, step.Rebakes) << step.What;
     }
     f.Down();

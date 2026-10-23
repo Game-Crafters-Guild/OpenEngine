@@ -48,6 +48,10 @@ struct ViewCullingContext
     uint32_t FirstInstance = 0;
     uint32_t InstanceCount = 0;
     Rendering::RenderLayerMask Layers = Rendering::RenderLayerMask::All();
+    // Copied verbatim into ViewCullingInput::dropEditorHidden: set for the
+    // editor Scene View's culls, its shadow culls included
+    // (ViewDesc::DropsEditorHidden).
+    bool DropEditorHidden = false;
 
     uint32_t FrameIndex = 0;
     float DeltaTime = 0.0f;

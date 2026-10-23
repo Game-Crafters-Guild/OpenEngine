@@ -92,6 +92,10 @@ inline vec3 operator+(const vec3& a, const vec3& b) { return {a.x + b.x, a.y + b
 inline vec3 operator-(const vec3& a, const vec3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 inline vec3 operator*(const vec3& a, float s) { return {a.x * s, a.y * s, a.z * s}; }
 inline vec3 operator*(float s, const vec3& a) { return a * s; }
+// GLSL broadcasts the scalar: the Fresnel term's `1.0f - F0` subtracts each component from 1.
+inline vec3 operator-(float s, const vec3& a) { return {s - a.x, s - a.y, s - a.z}; }
+// GLSL's vec3 * vec3 is component-wise.
+inline vec3 operator*(const vec3& a, const vec3& b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
 inline vec3 normalize(const vec3& v)
 {
     const float len = std::sqrt(dot(v, v));
@@ -102,6 +106,7 @@ inline vec3 normalize(const vec3& v)
     return {v.x / len, v.y / len, v.z / len};
 }
 inline vec3 mix(const vec3& a, const vec3& b, float t) { return a * (1.0f - t) + b * t; }
+inline float mix(float a, float b, float t) { return a * (1.0f - t) + b * t; }
 inline float length(const vec3& v) { return std::sqrt(dot(v, v)); }
 inline vec3 cross(const vec3& a, const vec3& b)
 {
@@ -160,6 +165,8 @@ inline vec2 fract(vec2 v) { return {fract(v.x), fract(v.y)}; }
 inline float step(float edge, float v) { return v < edge ? 0.0f : 1.0f; }
 // GLSL max(a, b) is `a < b ? b : a` — it returns a when either operand is NaN, unlike std::fmax.
 inline float max(float a, float b) { return a < b ? b : a; }
+// GLSL max(vec3, float) takes each component against the scalar.
+inline vec3 max(const vec3& v, float s) { return {max(v.x, s), max(v.y, s), max(v.z, s)}; }
 // GLSL min(a, b) is `b < a ? b : a`, the mirror of max, and likewise returns a on a NaN operand.
 inline float min(float a, float b) { return b < a ? b : a; }
 inline uint min(uint a, uint b) { return b < a ? b : a; }

@@ -24,9 +24,11 @@ namespace GameEngine::ECS
     GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainSurfaceRulesEffect);
     GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainGroundClaimEffect);
     GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainGrassEffect);
+    GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainColorEffect);
 
     GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainSculptZone);
     GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainPaintZone);
+    GE_INSTANTIATE_ENGINE_COMPONENT(Components::TerrainColorZone);
 } // namespace GameEngine::ECS
 
 namespace GameEngine::TerrainECS

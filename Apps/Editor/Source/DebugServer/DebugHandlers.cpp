@@ -32,6 +32,7 @@
 #include "Core/Engine.h"
 #include "DebugServer/AssistantSessionHandlers.h"
 #include "DebugServer/BenchSceneHandlers.h"
+#include "DebugServer/BuildStatusReport.h"
 #include "DebugServer/CameraProjectionReport.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "DebugServer/ComponentValueReader.h"
@@ -42,6 +43,7 @@
 #include "DebugServer/GpuToolingHandlers.h"
 #include "DebugServer/GroundQueryDebugHandlers.h"
 #include "DebugServer/JobSystemDebugHandlers.h"
+#include "DebugServer/LogQueryReport.h"
 #include "DebugServer/NavigationDebugHandlers.h"
 #include "DebugServer/MarkupDebugHandlers.h"
 #include "DebugServer/MemoryDebugHandlers.h"
@@ -1878,6 +1880,30 @@ static size_t PendingMaterialTextureBinds()
     return 0u;
 }
 
+// What a capture's record line states beside the file: the scene view camera and the
+// graphics validation counts when the frame was taken. Each is null when there is
+// nothing to report (no scene view; validation off).
+static json CaptureRecordContext(EditorApplication& app)
+{
+    json pose = nullptr;
+    if (!app.m_Windows.empty() && app.m_Windows[0]->scene)
+    {
+        const auto camera = app.m_Windows[0]->scene->GetCameraPose();
+        pose = json{{"position", {camera.Pos[0], camera.Pos[1], camera.Pos[2]}},
+                    {"yawDeg", camera.YawDeg},
+                    {"pitchDeg", camera.PitchDeg}};
+    }
+    json validation = nullptr;
+    auto* rs = EngineCore::GetInstance().GetRenderServices();
+    if (auto* device = rs ? rs->GetDevice() : nullptr)
+    {
+        const auto stats = device->GetValidationStats();
+        if (stats.Enabled)
+            validation = json{{"errors", stats.ErrorCount}, {"warnings", stats.WarningCount}};
+    }
+    return json{{"pose", std::move(pose)}, {"validation", std::move(validation)}};
+}
+
 // Encode and publish one owned capture. Each request gets its own file because
 // completed readbacks can encode concurrently on different workers.
 static json EncodeCapturePng(const std::vector<uint8_t>& rgba8, uint32_t width, uint32_t height,
@@ -2147,7 +2173,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
         components["MeshRenderer"] = {
             {"meshId", c->meshId},
             {"renderLayers", Scene::FormatRenderLayerMask(c->RenderLayers)},
-            {"castShadows", c->castShadows},
+            {"shadowCasting", std::string(Components::ShadowCastingName(c->shadowCasting))},
             {"receiveShadows", c->receiveShadows}};
         serialized.insert(ECS::GetComponentTypeId<Components::MeshRenderer>());
     }
@@ -2858,30 +2884,13 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     {"height", outH}}; });
 
     // 2. get_log
-    server.RegisterHandler("get_log", [ringBufferSink](const EditorDebugServer::RequestContext& ctx) -> json
+    server.RegisterHandler("get_log", [ringBufferSink, tracker = std::make_shared<Editor::LogPollTracker>()](
+                                          const EditorDebugServer::RequestContext& ctx) -> json
                            {
         if (!ringBufferSink)
             return Editor::RefuseRequest("Log ring buffer sink not available");
-
-        size_t count = ctx.params.value("count", 100);
-        size_t offset = ctx.params.value("offset", 0);
-        std::string minLevelStr = ctx.params.value("minLevel", "info");
-        std::string substring = ctx.params.value("filter", "");
-        Logger::LogLevel minLevel = Logger::StringToLogLevel(Logger::String(minLevelStr));
-
-        // Returns the most recent `count` matches (the tail of the log),
-        // oldest-first within that window. `offset` pages further back.
-        auto messages = ringBufferSink->GetMessages(minLevel, count, Logger::String(substring), offset);
-
-        json result = json::array();
-        for (auto& msg : messages)
-        {
-            result.push_back({
-                {"level", Logger::LogLevelToString(msg.Level)},
-                {"message", msg.Message},
-            });
-        }
-        return result; });
+        return Editor::DescribeLogQuery(*ringBufferSink, ctx.params, ctx.clientId, *tracker,
+                                        std::chrono::system_clock::now()); });
 
     // 3. get_scene_hierarchy
     server.RegisterHandler("get_scene_hierarchy", [](const EditorDebugServer::RequestContext& /*ctx*/) -> json
@@ -6938,6 +6947,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     FinishScreenshotResult(outResult, std::move(rgba8), srcW, srcH, crop, target,
                                            "printwindow", PendingMaterialTextureBinds());
                     outResult["fallbackReason"] = reason;
+                    if (!Editor::IsRefusal(outResult))
+                        outResult.update(CaptureRecordContext(app));
                     return true;
                 };
 
@@ -7013,7 +7024,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                          Rendering::Passes::GetBackbufferOutputDebandThresholdLsb()}),
                      crop = *cropHolder, target,
                      frameIndex = *frameIndexHolder, previewPath = *assetPreviewPathHolder,
-                     pendingBinds = PendingMaterialTextureBinds()]() -> json
+                     pendingBinds = PendingMaterialTextureBinds(),
+                     recordContext = CaptureRecordContext(app)]() -> json
                     {
                         auto rgba8 = ConvertToRGBA8(readback.pixels.data(), readback.width, readback.height,
                                                     readback.format, 0.0f, 1.0f, srgbEncode, dither, deband,
@@ -7024,6 +7036,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                         if (!Editor::IsRefusal(reply))
                         {
                             reply["frameIndex"] = frameIndex;
+                            reply.update(recordContext);
                             if (target == "asset_preview" && !previewPath.empty())
                                 reply["previewPath"] = previewPath;
                         }
@@ -9063,6 +9076,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     {"captureIndex", current - 1},
                     {"filePath", path}
                 };
+                outResult.update(CaptureRecordContext(app));
                 return true;
             },
             kCapturePollBudgetFrames);
@@ -9700,17 +9714,12 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         return json{{"ok", true}, {"platformName", platformName},
                     {"generation", buildPanel->GetBuildStatus().generation}, {"message", "Build requested"}}; });
 
-    server.RegisterHandler("get_build_status", [&app](const EditorDebugServer::RequestContext&) -> json
+    server.RegisterHandler("get_build_status", [&app](const EditorDebugServer::RequestContext& ctx) -> json
                            {
         auto* panel = app.m_PanelManager ? app.m_PanelManager->FindFirstPanelOfType<BuildPanel>() : nullptr;
         if (!panel)
             return Editor::RefuseRequest("BuildPanel not found. Open it via the toolbar first.");
-        const auto status = panel->GetBuildStatus();
-        return json{{"running", status.running}, {"succeeded", status.succeeded},
-                    {"outputDirectory", status.outputDirectory.string()},
-                    {"generation", status.generation}, {"cancelled", status.progress.cancelled},
-                    {"progress", status.progress.progress}, {"message", status.progress.statusMessage},
-                    {"errors", status.progress.errors}, {"warnings", status.progress.warnings}}; });
+        return Editor::DescribeBuildStatus(panel->GetBuildStatus(), ctx.params.value("includeWarnings", false)); });
 
     server.RegisterHandler("get_build_settings", [](const EditorDebugServer::RequestContext& /*ctx*/) -> json
                            {

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "Assets/AssetDecodeCancellation.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetTasks.h"
 #include "Assets/BinaryAsset.h"
@@ -1052,4 +1053,90 @@ TEST_F(AssetLoadPipelineTest, CancellingTheHandleWithholdsTheCompletionCallback)
 
     EXPECT_FALSE(probe->Fired.load(std::memory_order_acquire))
         << "a cancelled request must not deliver its callback";
+}
+
+namespace {
+
+constexpr const char* kProbeMetaKey = "shutdownProbe";
+constexpr const char* kProbeMetaValue = "registry alive";
+// How long the probe waits for the decode to start and for Shutdown to cancel it.
+constexpr auto kProbeTimeout = std::chrono::seconds(20);
+
+// Holds the decode of a file named hold_* until Shutdown cancels it, then reads
+// the file's own meta value from the registry: the read ModelAsset::PostLoad
+// makes for its LOD slots. Everything else parses normally.
+class ShutdownProbeParser : public AssetParser {
+public:
+    AssetType GetAssetType() const override { return AssetType::Unknown; }
+    std::vector<std::string> GetSupportedExtensions() const override { return {".bin"}; }
+    int GetPriority() const override { return 1000; }
+    std::string GetName() const override { return "ShutdownProbeParser"; }
+
+    AssetParseResult Parse(const AssetMetadata& metadata, AssetManager& assetManager) override {
+        if (metadata.Path.filename().string().rfind("hold", 0) == 0) {
+            Entered.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + kProbeTimeout;
+            while (!IsAssetDecodeCancelled() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            SawCancel.store(IsAssetDecodeCancelled(), std::memory_order_release);
+            std::string value;
+            const bool found = assetManager.GetRegistry().TryGetMetaValue(metadata.Path, kProbeMetaKey, value);
+            ReadMetaValue.store(found && value == kProbeMetaValue, std::memory_order_release);
+        }
+        return m_Inner.Parse(metadata, assetManager);
+    }
+
+    std::atomic<bool> Entered{false};
+    std::atomic<bool> SawCancel{false};
+    std::atomic<bool> ReadMetaValue{false};
+
+private:
+    BinaryAssetParser m_Inner;
+};
+
+} // namespace
+
+TEST(AssetManagerShutdown, KeepsTheRegistryUntilRunningDecodesFinish) {
+    // A decode still running when Shutdown starts reads the registry. Shutdown
+    // cancels the decode and waits for it before it shuts the registry down, so
+    // the read finds the asset's value instead of a released store. The asset
+    // database file gives the registry the project store that holds meta values.
+    const auto root = TestUtils::MakeUniqueTempDirectory("asset_manager_shutdown_registry");
+    std::filesystem::create_directories(root / "Assets");
+    const std::string payload = "held payload";
+    const auto path = root / "Assets" / "hold_shutdown.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file << payload;
+    }
+
+    JobSystem::WorkStealingThreadPool pool(2);
+    AssetManager assets;
+    ASSERT_TRUE(assets.Initialize(root / "Assets", &pool, root / "AssetDatabase.assetdb",
+                                  root / ".Cache" / "AssetDatabase"));
+    assets.WaitForStartupScan();
+    auto probe = std::make_shared<ShutdownProbeParser>();
+    ASSERT_TRUE(assets.GetParserRegistry().RegisterParser(probe, probe->GetPriority()));
+    const GUID guid = assets.ResolveAssetGuid("hold_shutdown.bin");
+    ASSERT_FALSE(guid.IsNull());
+    ASSERT_TRUE(assets.GetRegistry().SetMetaValue(path, kProbeMetaKey, kProbeMetaValue));
+
+    AssetFuture future = assets.LoadAssetAsync(guid, AssetLoadPriority::High);
+    const auto deadline = std::chrono::steady_clock::now() + kProbeTimeout;
+    while (!probe->Entered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_TRUE(probe->Entered.load(std::memory_order_acquire)) << "the load never reached its decode";
+
+    assets.Shutdown();
+
+    EXPECT_TRUE(probe->SawCancel.load(std::memory_order_acquire))
+        << "Shutdown returned without cancelling the running decode";
+    EXPECT_TRUE(probe->ReadMetaValue.load(std::memory_order_acquire))
+        << "the running decode read the registry after Shutdown had shut it down";
+    EXPECT_EQ(future.wait_for(std::chrono::milliseconds(0)), std::future_status::ready)
+        << "the load was not resolved when Shutdown returned";
+    EXPECT_EQ(assets.GetInFlightLoadCount(), 0u) << "the in-flight entry survived Shutdown";
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }

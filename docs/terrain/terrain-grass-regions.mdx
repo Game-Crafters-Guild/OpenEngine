@@ -38,6 +38,17 @@ Each terrain sample starts neutral at `(1,1)` and walks the volume stack in prio
 
 The `ease` is a smoothstep over the volume's own falloff weight, applied to grass only. The shared weight ramps linearly from 0 at the outer edge of the falloff to 1 at the inner boundary, which is right for a height offset: the ground it produces *is* that ramp. Grass is not that ramp. Measured on a region with a 60 m inner radius and a 25 m falloff, the coverage an eye picks up is an **S-curve under either blend**, steepest in the middle of the band (r ≈ 75 m) and far shallower at both boundaries than mid-band. The linear blend still arrives at the outer edge at roughly 40% of its peak slope, which is the corner the ease softens. That shape is consistent with visible coverage saturating in a dense field: it holds near full until height × density has fallen well below 1. What the smoothstep changes is the *corners*. It has zero slope at both ends of the weight, so the slope jump where the region meets the untouched field is 1.5–2.3× smaller (0.0156 → 0.0107 per meter at the outer edge, 0.0100 → 0.0044 at the inner one, on a 50%/50% region), and the change it removes from the corners reappears in the middle, which is about 1.4× steeper. A corner is what reads as a seam, so that is the trade: gentler corners, a busier middle, and two looks that are hard to tell apart at a glance. Every other effect still ramps with the shared weight, untouched.
 
+## Coloring the ground inside a volume
+
+`TerrainColorEffect` colors the ground inside a modifier volume, and the base of the grass that grows there. Add **Color** to the effect stack of a Grass Area, so one entity shortens or thins the grass and colors the ground under it, or add **Terrain: Color Area** for a volume with color alone.
+
+| Inspector | Stored field | Meaning |
+|---|---|---|
+| **Color**, default dark brown | `Color`, linear RGB, each `[0,1]`, default (0.10, 0.075, 0.045) | The color the ground moves toward. The scene stores it as `colorR`, `colorG` and `colorB`. |
+| **Strength**, 0-100%, default 50% | `Strength`, `[0,1]`, default 0.5 | How far the ground moves toward the color, times the volume's falloff and **Weight**. At 100% the ground is the color alone and loses its material's pattern. |
+
+The effect writes the terrain's color map, which the ground and the blade roots read as `ground × (1 − weight) + color × weight`. It composes over the grass's **Darken Ground** soil and over color zones and Color effects of lower priority. It writes no height and no material, so a color edit does not bake the ground again. A drag on **Strength** updates the map when you release it. Planar terrains only.
+
 ## Ownership and invalidation
 
 `TerrainModifierSystem` gathers volume geometry once, then splits the grass effects out of the stack before the height/material composition hash. Editing a grass target, its enable flag, or its stack order therefore cannot move heightfield versions, splat maps, normal maps, CBT height sources, or physics recook inputs.

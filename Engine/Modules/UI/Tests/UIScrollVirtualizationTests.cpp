@@ -571,8 +571,9 @@ TEST(UIScrollVirtualizationTests, TreeView_CollectBoundIdsReportsTheRowsItHolds)
     EXPECT_EQ(shrunk, rowIds());
 }
 
-// FindBoundRow and BoundIdOf answer for the rows the view holds bound only: once its viewport has shrunk,
-// the pooled rows it no longer binds answer no id, and an item it no longer shows finds no row.
+// FindBoundRow, FindBoundRowTitle and BoundIdOf answer for the rows the view holds bound only: once its
+// viewport has shrunk, the pooled rows it no longer binds answer no id, and an item it no longer shows
+// finds no row and no title.
 TEST(UIScrollVirtualizationTests, TreeView_FindsOnlyTheRowsItHoldsBound)
 {
     auto* dev = SharedHeadlessDevice();
@@ -623,6 +624,10 @@ TEST(UIScrollVirtualizationTests, TreeView_FindsOnlyTheRowsItHoldsBound)
         const UIElement* row = tree->FindBoundRow(id);
         ASSERT_NE(row, nullptr) << "held item " << id << " found no row";
         EXPECT_EQ(tree->BoundIdOf(row), id);
+        const Label* title = tree->FindBoundRowTitle(id);
+        ASSERT_NE(title, nullptr) << "held item " << id << " found no title";
+        EXPECT_EQ(title->GetParent(), row) << "the title is not on the item's row";
+        EXPECT_TRUE(title->HasClass("tree-title"));
     }
     std::size_t letGo = 0;
     for (const TreeId id : tall)
@@ -631,6 +636,7 @@ TEST(UIScrollVirtualizationTests, TreeView_FindsOnlyTheRowsItHoldsBound)
             continue;
         ++letGo;
         EXPECT_EQ(tree->FindBoundRow(id), nullptr) << "item " << id << " the view no longer shows found a row";
+        EXPECT_EQ(tree->FindBoundRowTitle(id), nullptr);
     }
     EXPECT_GT(letGo, 0u) << "the view still shows every item, so this test is vacuous";
 }

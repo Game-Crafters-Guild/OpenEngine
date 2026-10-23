@@ -13,6 +13,7 @@
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
+#include "Navigation/NavigationBakedDataSave.h"
 #include "Types/StringUtils.h"
 #include "Scene/SceneBackupRecovery.h"
 #include "Scene/SceneIO.h"
@@ -897,6 +898,8 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     // mint-and-swap contract as the payloads above; a terrain that already binds one is untouched.
     Editor::MintMissingTerrainMaterialLibraries(*m_World, *m_ScenePath,
                                                 EngineCore::GetInstance().GetAssetManager());
+    // Baked navigation tiles go beside the scene, and their reference into it.
+    Editor::WriteNavigationBakedDataForSave(*m_World, *m_ScenePath, EngineCore::GetInstance().GetAssetManager());
     // Announced before the file is touched: a file watcher can report the save landing
     // before this thread gets to, and the announcement is what marks that report as this
     // write arriving rather than as a second change.
@@ -991,6 +994,7 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
     }
     Editor::MintMissingTerrainMaterialLibraries(*m_World, scenePath,
                                                 EngineCore::GetInstance().GetAssetManager());
+    Editor::WriteNavigationBakedDataForSave(*m_World, scenePath, EngineCore::GetInstance().GetAssetManager());
     const bool ok = Scene::SaveSceneToFile(*m_World, scenePath, opts);
     if (!ok)
         return false;

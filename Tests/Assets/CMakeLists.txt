@@ -40,6 +40,8 @@ set(ASSET_TEST_SOURCES
     AssetDbIgnoresMetaSidecarsTests.cpp
     AssetDbTypeInferencePersistenceTests.cpp
     TerrainMaterialLibraryAssetTests.cpp
+    NavSurfaceAssetTests.cpp
+    DayCycleProfileAssetTests.cpp
     AssetDbHardeningTests.cpp
     AssetDbDerivedReconcileTests.cpp
     AssetDbDerivedRedirectTests.cpp

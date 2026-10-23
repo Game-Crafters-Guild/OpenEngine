@@ -7,7 +7,8 @@ namespace GameEngine.Interop
 {
     /// <summary>
     /// Resolves and loads the GameEngine.Native shim. Every managed assembly that binds the
-    /// native ABI links this one file (see the csproj Compile Links), so they all probe the
+    /// native ABI links this one file (see the csproj Compile Links) or uses the copy of one that
+    /// does (Scripting.Bindings uses ECS.ABI's), so they all probe the
     /// same locations in the same order and load the same module. On macOS the shim is
     /// libGameEngine.Native.dylib in Contents/Frameworks, never GameEngine.Native.dll. A miss
     /// on every candidate throws with the probed locations, so a hosting failure is

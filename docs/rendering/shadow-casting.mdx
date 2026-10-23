@@ -1,0 +1,66 @@
+---
+title: Shadow casting
+description: Choose whether a mesh casts a shadow, and draw only the shadow of a mesh with Shadows Only.
+---
+
+The Mesh Renderer's **Shadow Casting** row chooses whether the mesh is drawn and whether it casts a shadow. It has three modes:
+
+| Mode | The mesh is drawn | The mesh casts a shadow |
+|---|---|---|
+| **Off** | yes | no |
+| **On** | yes | yes |
+| **Shadows Only** | no | yes |
+
+**On** is the default. **Receive Shadows** is a separate row: it chooses whether shadows fall on the mesh.
+
+## Shadows Only
+
+A Shadows Only mesh casts shadows and is drawn nowhere else: the camera does not draw it, reflections do not show it, and a click in the Scene View goes through it. It casts the sun's shadow and the shadows of point, spot and area lights.
+
+Use Shadows Only for a proxy: a simple mesh that casts the shadow of a detailed object that another renderer draws without a shadow. For example, set a detailed building's **Shadow Casting** to **Off**, and put a box of the building's shape in the same place, set to **Shadows Only**. The box casts the building's shadow at the cost of a box.
+
+Keep the box inside the building. A part of the building that is behind the box's surface, as seen from the light, is in the box's shadow: a box a little larger than the building darkens the building's own lit faces.
+
+Global illumination ignores a Shadows Only mesh: it neither blocks nor bounces indirect light, because the detailed object it stands in for already does. A Shadows Only mesh with a GI Emitter adds no light.
+
+To select a Shadows Only mesh, click it in the Hierarchy. While it is selected, the Scene View draws its selection outline.
+
+A Shadows Only mesh is never merged into an HLOD proxy, because a proxy is drawn. The mesh stays itself at every distance and keeps its shadow.
+
+:::caution
+At HLOD distance the building's HLOD proxy casts a shadow whatever its members' modes are, so a building set to **Off** casts again at distance, beside its Shadows Only box.
+:::
+
+## Shadow casting in a scene file
+
+A scene writes the mode by name:
+
+```text title="Shadow Casting lines in a .scene file"
+MeshRenderer.shadowCasting = Off
+MeshRenderer.shadowCasting = On
+MeshRenderer.shadowCasting = ShadowsOnly
+```
+
+## Shadow casting from code
+
+Set the mode on the entity's Mesh Renderer. It takes effect at the next frame.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Make a box cast a building's shadow without being drawn"
+#include "Components/Rendering/MeshRenderer.h"
+
+world.GetComponentForWrite<Components::MeshRenderer>(proxy)->shadowCasting = Components::ShadowCasting::ShadowsOnly;
+world.GetComponentForWrite<Components::MeshRenderer>(building)->shadowCasting = Components::ShadowCasting::Off;
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet; the native field is `Components::MeshRenderer::shadowCasting`.
+:::
+
+::::
+:::::

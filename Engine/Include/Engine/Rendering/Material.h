@@ -284,6 +284,13 @@ class Material
     void SetDeclaredProperties(std::shared_ptr<const Rendering::ShaderPropertyTable> table);
     const Rendering::ShaderPropertyTable* GetDeclaredProperties() const { return m_DeclaredProperties.get(); }
 
+    // The @deformationEnvelope of the vertex modifier this material composes
+    // (ShaderDeformationEnvelope.h), installed with the program whether or not
+    // its surface declares properties. A different declaration moves the content
+    // revision, so the culling margin follows the shader in the frame it binds.
+    void SetDeformationEnvelope(const Rendering::DeformationEnvelopeDeclaration& envelope);
+    const Rendering::DeformationEnvelopeDeclaration& GetDeformationEnvelope() const { return m_DeformationEnvelope; }
+
     // Store one document value by its declared type: int/enum land as int bits,
     // bool as 0/1, vectors clamped to the declared width (missing components keep
     // the declared default). False when no declared property carries the name.
@@ -602,6 +609,7 @@ class Material
     // document values last applied — the inputs SetDeclaredProperties replays.
     std::shared_ptr<const Rendering::ShaderPropertyTable> m_DeclaredProperties;
     std::unordered_map<std::string, MaterialValue> m_AuthoredProperties;
+    Rendering::DeformationEnvelopeDeclaration m_DeformationEnvelope;
 
     void WriteDeclaredComponents(const Rendering::ShaderProperty& property, const float* components,
                                  uint32_t componentCount);

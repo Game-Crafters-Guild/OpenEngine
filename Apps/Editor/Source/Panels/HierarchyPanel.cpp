@@ -14,6 +14,9 @@
 #include "EditorContextMenu/UIContextMenu.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "Editor/Hierarchy/HierarchyEmptyParent.h"
+#include "Editor/Hierarchy/HierarchyEntityCommands.h"
+#include "Editor/Hierarchy/HierarchyEntityDelete.h"
+#include "Editor/Hierarchy/HierarchyEntityRename.h"
 #include "Editor/Hierarchy/HierarchyOrdering.h"
 #include "Editor/Hierarchy/HierarchyReparent.h"
 #include "Editor/Hierarchy/HierarchyReparentRules.h"
@@ -55,6 +58,7 @@
 #include "Editor/Entities/EntityMaterialTextureAssign.h"
 #include "Editor/Hierarchy/HierarchyEnableState.h"
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
+#include "Editor/Hierarchy/HierarchyRowEye.h"
 #include "Editor/Hierarchy/HierarchyLightIconTint.h"
 #include "Editor/Hierarchy/HierarchyRenderLayerEdit.h"
 #include "Inspectors/RenderLayerField.h"
@@ -243,7 +247,6 @@ constexpr uint32_t kCmdCreateReflectionProbe = 0x4145;
 constexpr uint32_t kCmdCreateSkyEnvironment = 0x4146;
 constexpr uint32_t kCmdCreateDDGIVolume = 0x414A;
 constexpr uint32_t kCmdNewScene = 0x4150;
-constexpr uint32_t kCmdDuplicate = 0x4160;
 constexpr uint32_t kCmdSortCustom = 0x4170;
 constexpr uint32_t kCmdSortAlphabetical = 0x4171;
 constexpr uint32_t kCmdSortType = 0x4172;
@@ -1529,12 +1532,26 @@ HierarchyPanel::HierarchyPanel()
         if (!m_OnHierarchyItemActivated || id == 0 || id == kRootId)
             return;
         m_OnHierarchyItemActivated(HierarchyDataProvider::Decode(id)); });
+    // A slow second click on the selected entity renames it, as F2 does.
+    m_Tree->SetOnItemRenameRequested([this](TreeId) { BeginRenameOfSelectedEntity(); });
 
+    m_RowEye = std::make_unique<Editor::HierarchyRowEye>(Editor::HierarchyRowEyeHost{
+        [this] { return m_World; },
+        [this](const UIElement& row) { return EntityShownBy(row); },
+        [this](ECS::EntityHandle clicked) { return ResolveRowActionTargets(clicked); },
+        [this](UIElement& row, ECS::EntityHandle entity)
+        {
+            if (m_World && m_Tree)
+                m_RowActivity.Present(*m_World, entity, m_Tree->BoundIdOf(&row), row);
+        }});
     // Per-row styling: add/remove a class when the underlying entity is disabled.
     m_Tree->SetOnRowBound([this](TreeId id, UIElement* row)
                           {
 	        if (!row)
 	            return;
+	        // A rename field on a row that now shows another entity would rename the wrong one.
+	        const bool showsEntity = id != 0 && id != kRootId && !Editor::IsGhostTreeId(id);
+	        m_EntityRename.OnRowBound(*row, showsEntity ? HierarchyDataProvider::Decode(id) : ECS::EntityHandle{});
 	        if (!m_World)
 	            return;
 	        if (id == 0 || id == kRootId)
@@ -1606,7 +1623,6 @@ HierarchyPanel::HierarchyPanel()
                 previewIconEl = previewIcon.get();
                 row->AddChild(std::move(previewIcon));
             }
-            m_RowActivity.Present(*m_World, handle, id, *row);
             if (!renderLayerField)
             {
                 // A pooled row's first bind: the layer field is created once per row, so the
@@ -1650,7 +1666,12 @@ HierarchyPanel::HierarchyPanel()
                                                  m_Undo, m_ChangeNotifications);
                 });
                 row->AddChild(std::move(layers));
+
+                m_RowEye->AddTo(*row);
             }
+            // After the row's own children exist, so a first bind presents the eye too.
+            m_RowActivity.Present(*m_World, handle, id, *row);
+            m_RowEye->Present(*row, handle, m_Provider->IsExpandable(id));
 
             const auto* layerRenderer = m_World->GetComponent<Components::MeshRenderer>(handle);
             const bool showRenderLayerDropdown = m_ShowRenderLayer && layerRenderer;
@@ -2190,7 +2211,7 @@ HierarchyPanel::HierarchyPanel()
         if (mask == static_cast<uint32_t>(Editor::EditorContextMenuTarget::HierarchyItem))
         {
             builder.AddItem("Create/As Empty Parent", kCmdCreateAsEmptyParent, MenuItemFlag_None, -99, kIconEmptyEntity);
-            builder.AddItem("Duplicate", kCmdDuplicate, MenuItemFlag_None, -50, EditorIcons::kCopy);
+            Editor::AddHierarchyEntityEditItems(builder);
 
             if (m_OnAddEntitiesToBookmarks)
                 builder.AddItem("Add to Bookmarks", kCmdAddToBookmarks, MenuItemFlag_None, -48, EditorIcons::kBookmark);
@@ -2331,97 +2352,15 @@ HierarchyPanel::HierarchyPanel()
         m_ContextMenu->Show(m_Window, (int)x, (int)y); };
     m_Tree->SetOnContextMenu(m_ShowContextMenu);
 
-    // Cmd/Ctrl+D: duplicate selected entities.
+    // The panel's key map: the same commands its context menu runs. Keys typed into an open
+    // rename field belong to the field, even the ones it leaves unhandled.
     m_Tree->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
                                  {
-                                     if (!Editor::MatchesCatalogShortcut("Hierarchy", "Duplicate", e.Key, e.Mods))
+                                     if (m_EntityRename.GetTitle())
                                          return;
-                                     DuplicateSelectedEntities();
-                                     e.Stop(); });
-
-    // Delete key: delete selected entity (and its subtree) as a single undo step.
-    m_Tree->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
-                                 {
-                                     if (!Editor::MatchesCatalogShortcut("Hierarchy", "Delete", e.Key, e.Mods))
-                                         return;
-                                     if (!m_World || !m_Selection)
-                                         return;
-                                     const auto selectedIds = m_Selection->GetSelection();
-                                     if (selectedIds.empty())
-                                         return;
-
-                                     // Collect union of selected subtrees (avoid duplicates).
-                                     std::unordered_set<std::uint64_t> seen;
-                                     seen.reserve(selectedIds.size() * 8);
-                                     std::vector<ECS::EntityHandle> ents;
-                                     ents.reserve(selectedIds.size() * 8);
-
-                                     for (auto sid : selectedIds)
-                                     {
-                                         const TreeId tid = static_cast<TreeId>(sid);
-                                         if (tid == 0 || tid == kRootId)
-                                             continue;
-                                         ECS::EntityHandle h = HierarchyDataProvider::Decode(tid);
-                                         if (!h.IsValid() || !m_World->IsValid(h))
-                                             continue;
-                                         auto subtree = Editor::DeleteEntitiesCommand::CollectSubtree(*m_World, h);
-                                         for (auto& se : subtree)
-                                         {
-                                             if (!se.IsValid() || !m_World->IsValid(se))
-                                                 continue;
-                                             if (seen.insert((std::uint64_t)se.id).second)
-                                                 ents.push_back(se);
-                                         }
-                                     }
-
-                                     if (ents.empty())
-                                         return;
-
-                                     std::sort(ents.begin(), ents.end(), [](const ECS::EntityHandle& a, const ECS::EntityHandle& b) { return a.id < b.id; });
-
-                                     const std::string undoName = (ents.size() > 1) ? "Delete Entities" : "Delete Entity";
-                                     if (m_Undo)
-                                     {
-                                         // Delete + deselect + (on undo) re-select as ONE undo step. The wrapper
-                                         // reselects the deleted entities on Undo, so a single Ctrl+Z brings them
-                                         // back AND restores selection (redo re-deletes + deselects). The
-                                         // applySelection callback (ApplySelectionProgrammatic) suppresses its own
-                                         // selection-undo and drives the inspector/gizmo; the deferred Refresh() is
-                                         // likewise guarded — so no stray HierarchySelectionCommand lands on top.
-                                         std::vector<UI::Interaction::ItemId> selectionBefore =
-                                             m_Selection ? m_Selection->GetSelection() : std::vector<UI::Interaction::ItemId>{};
-                                         UI::Interaction::ItemId anchorBefore = m_Selection ? m_Selection->GetAnchor() : 0;
-                                         auto applySelection = [this](const std::vector<UI::Interaction::ItemId>& ids,
-                                                                      UI::Interaction::ItemId anchor)
-                                         {
-                                             ApplySelectionProgrammatic(ids, anchor);
-                                             if (m_OnSelectEntity)
-                                             {
-                                                 ScopedFlag suppress(m_SuppressSelectionUndo);
-                                                 if (ids.empty())
-                                                     m_OnSelectEntity({});
-                                                 else
-                                                     m_OnSelectEntity(HierarchyDataProvider::Decode(static_cast<TreeId>(anchor)));
-                                             }
-                                         };
-                                         auto onDeleted = [applySelection]() { applySelection({}, 0); };
-                                         auto onRevived = [applySelection, selectionBefore, anchorBefore]()
-                                         { applySelection(selectionBefore, anchorBefore); };
-                                         m_Undo->Execute(std::make_unique<Editor::DeleteEntitiesSelectionCommand>(
-                                             undoName, m_World, m_ChangeNotifications, std::move(ents),
-                                             std::move(onDeleted), std::move(onRevived)));
-                                     }
-                                     else
-                                     {
-                                         Editor::DeleteEntitiesCommand cmdObj(
-                                             undoName, m_World, m_ChangeNotifications, std::move(ents));
-                                         cmdObj.Redo();
-                                         if (m_Selection)
-                                             m_Selection->Clear();
-                                         if (m_OnSelectEntity)
-                                             m_OnSelectEntity({});
-                                     }
-                                     e.Stop(); });
+                                     const std::uint32_t command = Editor::HierarchyEntityCommandForKey(e.Key, e.Mods);
+                                     if (command != 0 && HandleCommand(command))
+                                         e.Stop(); });
 
     if (m_Tree)
     {
@@ -3154,6 +3093,59 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
         m_Tree->SyncSelectionVisuals();
     }
     // compoundScope's dtor calls EndCompound here, when the handler scope exits.
+}
+
+void HierarchyPanel::BeginRenameOfSelectedEntity()
+{
+    if (!m_World || !m_Selection || !m_Tree)
+        return;
+    const std::vector<UI::Interaction::ItemId> selected = m_Selection->GetSelection();
+    if (selected.size() != 1)
+        return;
+    const TreeId id = static_cast<TreeId>(selected.front());
+    if (id == 0 || id == kRootId || Editor::IsGhostTreeId(id))
+        return;
+    const ECS::EntityHandle entity = HierarchyDataProvider::Decode(id);
+    if (!entity.IsValid() || !m_World->IsValid(entity))
+        return;
+
+    m_Tree->ScrollToItem(id);
+    if (Label* title = m_Tree->FindBoundRowTitle(id))
+        m_EntityRename.Begin(title, m_Tree, *m_World, entity, m_Undo, m_ChangeNotifications);
+}
+
+void HierarchyPanel::DeleteSelectedEntities()
+{
+    if (!m_World || !m_Selection)
+        return;
+
+    std::vector<ECS::EntityHandle> selected;
+    for (const UI::Interaction::ItemId id : m_Selection->GetSelection())
+    {
+        const TreeId tid = static_cast<TreeId>(id);
+        if (tid != 0 && tid != kRootId)
+            selected.push_back(HierarchyDataProvider::Decode(tid));
+    }
+    // Delete, deselect and (on undo) reselect as one undo step: a single Ctrl+Z brings the
+    // entities back and restores the selection, and redo deletes and deselects again.
+    // ApplySelectionProgrammatic records no selection undo of its own, and the deferred Refresh
+    // the delete's structure notification posts is guarded the same way, so no stray
+    // HierarchySelectionCommand lands on top.
+    const std::vector<UI::Interaction::ItemId> selectionBefore = m_Selection->GetSelection();
+    const UI::Interaction::ItemId anchorBefore = m_Selection->GetAnchor();
+    auto applySelection = [this](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
+    {
+        ApplySelectionProgrammatic(ids, anchor);
+        if (m_OnSelectEntity)
+        {
+            ScopedFlag suppress(m_SuppressSelectionUndo);
+            m_OnSelectEntity(ids.empty() ? ECS::EntityHandle{} : HierarchyDataProvider::Decode(static_cast<TreeId>(anchor)));
+        }
+    };
+    auto onDeleted = [applySelection]() { applySelection({}, 0); };
+    auto onRevived = [applySelection, selectionBefore, anchorBefore]() { applySelection(selectionBefore, anchorBefore); };
+    Editor::DeleteHierarchySelection(*m_World, m_Undo, m_ChangeNotifications, selected, std::move(onDeleted),
+                                     std::move(onRevived));
 }
 
 void HierarchyPanel::DuplicateSelectedEntities()
@@ -3976,8 +3968,14 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         if (m_OnNewScene)
             m_OnNewScene();
         return true;
-    case kCmdDuplicate:
+    case Editor::kHierarchyCmdDuplicate:
         DuplicateSelectedEntities();
+        return true;
+    case Editor::kHierarchyCmdDelete:
+        DeleteSelectedEntities();
+        return true;
+    case Editor::kHierarchyCmdRename:
+        BeginRenameOfSelectedEntity();
         return true;
     case kCmdSortCustom:
         m_SortMode = HierarchySortMode::Custom;
@@ -4323,6 +4321,16 @@ void HierarchyPanel::RePresentHeldRows()
     m_Tree->CollectBoundIds(held);
     m_Provider->MarkChangedBatch(held);
     m_Tree->RefreshFromProvider();
+}
+
+ECS::EntityHandle HierarchyPanel::EntityShownBy(const UIElement& row) const
+{
+    if (!m_Tree)
+        return {};
+    const TreeId tid = m_Tree->BoundIdOf(&row);
+    if (tid == 0 || tid == kRootId)
+        return {};
+    return HierarchyDataProvider::Decode(tid);
 }
 
 std::vector<ECS::EntityHandle> HierarchyPanel::ResolveRowActionTargets(
@@ -4769,6 +4777,8 @@ void HierarchyPanel::Refresh(bool restoreHierarchyUiFromSceneAfterCommit)
 {
     if (!m_Tree || !m_Provider)
         return;
+    // The rebuild rebinds every row.
+    m_EntityRename.Cancel();
     // A world-change-driven refresh may drop the selected row (e.g. after a delete) or
     // otherwise re-sync selection. That selection change is a consequence of the world
     // edit, not a user selection action, so it must not record its own selection-undo

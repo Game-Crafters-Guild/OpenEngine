@@ -15,6 +15,11 @@ namespace Rendering {
 /// moving about one LUT row from one band to the next. Altitudes are metres above the planet
 /// surface; at or below the surface the band is 0.
 
+/// The height above the planet surface, in meters, of the point at world `position`: the planet's
+/// center sits `planetRadius` below the world origin, as in the sky shaders. Negative below the
+/// surface.
+float AltitudeAbovePlanetMeters(const float position[3], float planetRadius);
+
 /// The band a camera at `altitudeMeters` above the planet surface is in.
 uint32_t SkyViewLutAltitudeBand(float altitudeMeters);
 

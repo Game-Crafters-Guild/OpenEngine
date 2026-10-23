@@ -92,6 +92,36 @@ Prefer these PascalCase entry points. Older camelCase names may still exist inte
 - Use fixed-width integer types where layout matters (uint32_t, int16_t, etc.)
 - Prefer std::chrono for time and std::filesystem for paths
 
+## Mathematics Types
+
+- A position, direction, scale, color, quaternion, matrix or bounding box is the engine's type from `Engine/Modules/Mathematics` (`Vector2`, `Vector3`, `Vector4`, `Quaternion`, `Matrix4x4`, `BoundingBox`, and `Color` and `ColorLinear` from `Types`), never `float x[3]`, `float m[16]`, `std::array<float, N>` or a tuple of floats; a run of them is a `std::span` or a container of the engine type.
+- The raw form is allowed only at a boundary the engine does not own: a third-party API's signature, a GPU upload struct that pins its layout, the managed ABI. It lives one line from the conversion, and a comment names the boundary.
+- A function that takes or returns one of these takes or returns the engine type; free functions over raw arrays are the sign that the owner type is missing or bypassed. Migrate on contact: a change that touches a raw-array site converts it.
+
+## Existing First
+
+The engine has one implementation of each of these; use it, extend it in its own file when it lacks what you need, and never write a second one beside it.
+
+- **Strings, numbers and paths:** the string, number and path utilities in `Types` (`StringUtils.h`: the trim, case-fold, prefix and format functions; `FormatNumber`, `ParseNumber`, `PathUtils`, `NearestName`) for splitting, trimming, joining, case folding, formatting, parsing and path joining. A local `Split` or `Trim` is a defect.
+- **Containers and ids:** `FlatMap` over `std::map` and `std::unordered_map`; `GenerationalVector` for handles; `std::span` for a view over a run; `Fnv1a` and the engine's id types for hashing and lookup, never a string compared where an id exists.
+- **Files and organization:** one class per file, named for the class. A free function lives in its module's utility header beside its kin, never in a header of its own; a file that holds one function and sits beside a hub is a defect, and so is a header created to avoid finding the owner. A file that outgrows its responsibility is split in the change that grows it.
+- **UI controls:** a control is a class on the UI control base, its layout in XML and its styling in CSS, placed in the module that owns its use under that module's UI folder (`Controls`, `Inspectors`, `Panels` as the module needs), registered through the registries. No imperative layout inside a panel, no control assembled from raw elements in place, no control filed under a hub.
+- **Threading:** parallel and deferred work goes through the job system (a job, a batch, a continuation). `std::thread`, `std::async`, `std::jthread`, a custom pool or a sleeping poll thread belong only inside `JobSystem` and `Platform` (a process host, a file watcher).
+- **Logging, memory, time:** `Logger` for every message (no stream or printf output); the `Memory` module's allocators for pools and arenas, no raw `new` and `delete` outside an owner; `std::chrono` for time.
+- **Rendering:** every pass goes through the render graph with its resources declared; no ad-hoc command list, no resource created outside the graph, no barrier placed by hand where the graph owns the state.
+- **Math helpers:** `Lerp`, `Clamp01`, `SmoothStep` and the rest of `Mathematics/Interpolation.h`, the geometry helpers and the noise functions from `Mathematics` and `Noise`; never a local copy, never a bare `std::clamp(x, 0.0f, 1.0f)` where `Clamp01` exists.
+- **Settings and registration:** settings categories, inspectors, post effects, dockables and search items by registration from the owning module; never a hand-built page or an edit to a hub.
+
+## Public Surface
+
+A public symbol is a promise the engine keeps for every future caller, so the smallest promise that serves a named caller is the right one.
+
+- Private by default: a `.cpp`-local function or an internal header before a public include; a public include only for a consumer outside the module that exists in the same change. A symbol with no caller, or only a test caller, is deleted, not kept for a future that may not come.
+- Before a new symbol: can an existing API carry it? Then that API changes, with its callers, and no twin (an immediate, fast, asynchronous or overloaded sibling) is added. Does the need come from a wrong shape (a flag threaded through, a special case, a pass-through)? Then the shape is fixed and the symbol is not needed.
+- A game-facing API (one a game or a script calls) is judged by what a game developer needs: it ships with its user documentation and a test, and "nothing subscribes yet" is not a reason to delete it.
+- The name is the caller's word for it: the verb for a function, the noun for a type, the engine's own term where it has one, in full words.
+- Every pull request carries a "Reuse and surface" table (the `change-scrutiny` skill under `.claude/skills/`): each added symbol, the engine piece it reuses or why not, whether it is public and who outside the module calls it, and a last line stating that the style pass (this whole guide read against the diff) left nothing. A reviewer reads that table first.
+
 ## Nulls, Returns, and Control Flow
 
 - Use nullptr, not 0 or NULL

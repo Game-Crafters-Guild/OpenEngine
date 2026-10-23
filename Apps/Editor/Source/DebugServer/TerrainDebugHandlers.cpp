@@ -170,8 +170,35 @@ json SplatmapStats(const std::vector<uint8>& splatmap, uint32 width, uint32 heig
     return out;
 }
 
+// The colour map's CPU state: whether a writer reaches the terrain, its lattice, and how many texels
+// carry a weight with the largest and the mean weight among them (0 to 1), so a caller can prove the
+// soil was written without a screenshot.
+json ColorMapStats(const TerrainECS::TerrainColorMap& map)
+{
+    uint64 weighted = 0;
+    uint32 maxWeight = 0;
+    double weightSum = 0.0;
+    for (size_t i = TerrainECS::kTerrainColorMapChannels - 1; i < map.Pixels.size();
+         i += TerrainECS::kTerrainColorMapChannels)
+    {
+        const uint32 weight = map.Pixels[i];
+        if (weight == 0)
+            continue;
+        ++weighted;
+        maxWeight = std::max(maxWeight, weight);
+        weightSum += weight;
+    }
+    return json{{"active", map.IsActive()},
+                {"width", map.Width},
+                {"height", map.Height},
+                {"version", map.Version},
+                {"weightedTexels", weighted},
+                {"maxWeight", maxWeight / 255.0},
+                {"meanWeight", weighted ? weightSum / (255.0 * static_cast<double>(weighted)) : 0.0}};
+}
+
 // Summed magnitude of a zone's written texels — |offset| for a sculpt payload, weight for
-// a paint mask. An effect-side scalar that is 0 for an untouched zone and moves with every
+// a paint mask, the weight channel for a colour payload. An effect-side scalar that is 0 for an untouched zone and moves with every
 // dab, so a caller can prove texels were written rather than trusting a success code.
 double ZoneWrittenMagnitude(const TerrainECS::TerrainZonePayload& payload)
 {
@@ -180,7 +207,21 @@ double ZoneWrittenMagnitude(const TerrainECS::TerrainZonePayload& payload)
         sum += std::abs(static_cast<double>(v));
     for (const uint8 v : payload.Mask)
         sum += static_cast<double>(v);
+    for (std::size_t i = TerrainECS::kZonePayloadColorChannels - 1; i < payload.Color.size();
+         i += TerrainECS::kZonePayloadColorChannels)
+        sum += static_cast<double>(payload.Color[i]);
     return sum;
+}
+
+const char* ZonePayloadFormatName(TerrainECS::ZonePayloadFormat format)
+{
+    switch (format)
+    {
+    case TerrainECS::ZonePayloadFormat::SculptOffsetR32F: return "sculptOffsetR32F";
+    case TerrainECS::ZonePayloadFormat::PaintMaskR8: return "paintMaskR8";
+    case TerrainECS::ZonePayloadFormat::ColorRGBA32F: return "colorRGBA32F";
+    }
+    return "unknown";
 }
 
 // Effect-side proof for a planar stroke: which zone the brush wrote and how its payload
@@ -202,7 +243,7 @@ json PlanarZoneReport(const Editor::SceneTools::TerrainBrushTool& brush, Terrain
         {"entityId", brush.GetActiveZone().id},
         {"payload", payloadGuid.ToString()},
         {"createdThisStroke", !sameZone},
-        {"format", payload->IsSculpt() ? "sculptOffsetR32F" : "paintMaskR8"},
+        {"format", ZonePayloadFormatName(payload->Format)},
         {"width", payload->Width},
         {"height", payload->Height},
         {"dataVersion", {{"before", sameZone ? versionBefore : 0ull},
@@ -437,6 +478,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                         {"splatmapWidth", data->SplatmapWidth},
                         {"splatmapHeight", data->SplatmapHeight},
                         {"splatmap", SplatmapStats(data->Splatmap, data->SplatmapWidth, data->SplatmapHeight)},
+                        {"colorMap", ColorMapStats(data->ColorMap)},
                         {"quadtreeBuilt", data->Quadtree.IsBuilt()},
                         {"heightfield", HeightStats(data->Heightfield)}
                     };
@@ -554,6 +596,11 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                     {"atlasGrassBindlessIndex", info.AtlasGrassBindlessIndex},
                     {"atlasGrassCoarseBindlessIndex", info.AtlasGrassCoarseBindlessIndex},
                     {"grassControlsSuppressedPlacement", info.GrassControlsSuppressedPlacement},
+                    // The colour map the ground and the blade roots read: the unified map's bindless
+                    // slot, or the atlas map and its coarse map's. 0 = no map bound (identity).
+                    {"colorMapBindlessIndex", info.ColorMapBindlessIndex},
+                    {"atlasColorBindlessIndex", info.AtlasColorBindlessIndex},
+                    {"atlasColorCoarseBindlessIndex", info.AtlasColorCoarseBindlessIndex},
                     {"quadtreeBuilt", info.Quadtree.IsBuilt()},
                     {"lodLevels", info.LODLevels},
                     {"morphRangesComputed", info.MorphRangesComputed}

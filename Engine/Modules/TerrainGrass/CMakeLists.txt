@@ -144,6 +144,23 @@ if(BUILD_TESTING)
             COMMENT "Extracting the grass canopy from terrain_grass_canopy.glsl"
             VERBATIM)
 
+        # And for the terrain colour map's apply, which the ground and the blade root share.
+        set(TERRAIN_COLOR_MAP_GLSL
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes/terrain_color_map.glsl)
+        set(TERRAIN_COLOR_MAP_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/TerrainColorMapExtracted.h)
+        add_custom_command(
+            OUTPUT ${TERRAIN_COLOR_MAP_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${TERRAIN_COLOR_MAP_GLSL}
+                                     -DOUT=${TERRAIN_COLOR_MAP_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_TERRAIN_COLOR_MAP_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_TERRAIN_COLOR_MAP_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${TERRAIN_COLOR_MAP_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the colour map apply from terrain_color_map.glsl"
+            VERBATIM)
+
         # And for the instance's packed blade shape and per-blade random, so the round trip runs on
         # the shipped GLSL pack and unpack.
         set(GRASS_CLUMP_GLSL ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass/grass_clump.glsl)
@@ -212,6 +229,21 @@ if(BUILD_TESTING)
                     ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
             COMMENT "Extracting the diffuse transmission lobe from standard_pbr.glsl"
             VERBATIM)
+        # And for the lighting model's dielectric reflectance, so the blade's specular weight is checked
+        # through the F0 and the Fresnel terms: GE_FresnelF82 (the sun's lobe), GE_SchlickFresnel.
+        set(GRASS_DIELECTRIC_FRESNEL_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassDielectricFresnelExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_DIELECTRIC_FRESNEL_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_STANDARD_PBR_GLSL}
+                                     -DOUT=${GRASS_DIELECTRIC_FRESNEL_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_DIELECTRIC_FRESNEL_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_DIELECTRIC_FRESNEL_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_STANDARD_PBR_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the dielectric F0 and Fresnel from standard_pbr.glsl"
+            VERBATIM)
         set(GRASS_TRANSLUCENCY_HEADER
             ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassTranslucencyExtracted.h)
         add_custom_command(
@@ -226,18 +258,37 @@ if(BUILD_TESTING)
             COMMENT "Extracting the grass translucency from terrain_grass_surface.glsl"
             VERBATIM)
 
+        # And for the blade's specular weight and the settle ranges it is read against.
+        set(GRASS_BLADE_LOBE_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassBladeLobeExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_BLADE_LOBE_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_SURFACE_GLSL}
+                                     -DOUT=${GRASS_BLADE_LOBE_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_BLADE_LOBE_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_BLADE_LOBE_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_SURFACE_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the blade specular weight from terrain_grass_surface.glsl"
+            VERBATIM)
+
         add_executable(TerrainGrassStatsTests
             ${GRASS_DIFFUSE_TRANSMISSION_HEADER}
+            ${GRASS_DIELECTRIC_FRESNEL_HEADER}
+            ${GRASS_BLADE_LOBE_HEADER}
             ${GRASS_TRANSLUCENCY_HEADER}
             ${GRASS_SRGB_TRANSFER_HEADER}
             ${GRASS_COLOR_DECODE_HEADER}
             ${GRASS_BLADE_SHAPE_HEADER}
             ${GRASS_SPLAT_SOURCE_HEADER}
             ${GRASS_CANOPY_HEADER}
+            ${TERRAIN_COLOR_MAP_HEADER}
             ${GRASS_BLADE_VERTEX_HEADER}
             ${GRASS_WIND_SEED_HEADER}
             Tests/TerrainGrassPlacementStatsTests.cpp
             Tests/GrassPlacementModelTests.cpp
+            Tests/TerrainColorMapApplyTests.cpp
             Tests/GrassPlacementElisionTests.cpp
             Source/GrassPlacementElisionInputs.cpp
             Tests/GrassAtlasSplatResolveTests.cpp

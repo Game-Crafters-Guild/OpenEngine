@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Quaternion.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -87,15 +88,105 @@ inline float32 WalkableClimb(float32 stepHeight, float32 maxSlopeDegrees, float3
 // Cells on a navigation mesh tile's side: a tile is kNavMeshTileCells x CellSize metres square.
 inline constexpr uint32 kNavMeshTileCells = 64;
 
-// How a navigation mesh is cut into Detour tiles: tile (0, 0)'s minimum corner in world metres and
-// the tile count along X and Z. OriginY is the lowest height any tile is built at.
-struct NavMeshTileLayout
+// Tiles on a navigation chart's side: a chart is kNavChartTilesPerSide x kNavMeshTileCells cells
+// square (2,048 m at a 0.5 m cell), so its kNavChartTilePool tiles fill Detour's tile pool exactly.
+inline constexpr uint32 kNavChartTilesPerSide = 64;
+inline constexpr uint32 kNavChartTilePool = kNavChartTilesPerSide * kNavChartTilesPerSide;
+
+// Metres in one world sector: the size of Components::WorldSectorCoord, which this module cannot
+// include (PathfindingECS checks that the two agree).
+inline constexpr float32 kNavChartSectorSize = 1024.0f;
+
+// Where a chart's frame sits in the world, exactly: an integer world sector plus a float offset
+// inside it, the representation the render origin uses. A world point converts to the chart by
+// subtracting the sector in integers and the offset in float, so a chart 100 km out keeps the
+// precision of one at the origin.
+struct ChartOrigin
 {
-    float32 OriginX = 0.0f;
-    float32 OriginY = 0.0f;
-    float32 OriginZ = 0.0f;
-    uint32 TilesX = 0;
-    uint32 TilesZ = 0;
+    int32 SectorX = 0;
+    int32 SectorY = 0;
+    int32 SectorZ = 0;
+    float32 LocalX = 0.0f;
+    float32 LocalY = 0.0f;
+    float32 LocalZ = 0.0f;
+
+    // The origin at world point (x, y, z): the sector that holds it and the offset inside it.
+    static ChartOrigin AtWorld(float64 x, float64 y, float64 z)
+    {
+        ChartOrigin origin;
+        origin.SectorX = static_cast<int32>(std::floor(x / kNavChartSectorSize));
+        origin.SectorY = static_cast<int32>(std::floor(y / kNavChartSectorSize));
+        origin.SectorZ = static_cast<int32>(std::floor(z / kNavChartSectorSize));
+        origin.LocalX = static_cast<float32>(x - static_cast<float64>(origin.SectorX) * kNavChartSectorSize);
+        origin.LocalY = static_cast<float32>(y - static_cast<float64>(origin.SectorY) * kNavChartSectorSize);
+        origin.LocalZ = static_cast<float32>(z - static_cast<float64>(origin.SectorZ) * kNavChartSectorSize);
+        return origin;
+    }
+
+    float64 WorldX() const { return static_cast<float64>(SectorX) * kNavChartSectorSize + LocalX; }
+    float64 WorldY() const { return static_cast<float64>(SectorY) * kNavChartSectorSize + LocalY; }
+    float64 WorldZ() const { return static_cast<float64>(SectorZ) * kNavChartSectorSize + LocalZ; }
+
+    bool operator==(const ChartOrigin&) const = default;
+};
+
+// The unit that owns one Detour mesh: a frame (origin and rotation) and a span. Detour runs in the
+// chart's own coordinates with its origin at zero, so every tile's vertices are floats within a
+// span of zero wherever the chart sits. Rotation is the frame's orientation; a chart is
+// built only with the identity rotation, the frame of a flat world (DetourNavMap::Initialize
+// refuses another).
+struct NavMeshChart
+{
+    uint32 Id = 0;
+    ChartOrigin Origin;
+    Mathematics::Quaternion Rotation;
+    // Metres along each side.
+    float32 Span = 0.0f;
+
+    // World point to chart-local, and back.
+    void ToChart(float64 x, float64 y, float64 z, float32 out[3]) const
+    {
+        out[0] = static_cast<float32>(x - Origin.WorldX());
+        out[1] = static_cast<float32>(y - Origin.WorldY());
+        out[2] = static_cast<float32>(z - Origin.WorldZ());
+    }
+    void ToWorld(const float32 local[3], float64 out[3]) const
+    {
+        out[0] = Origin.WorldX() + local[0];
+        out[1] = Origin.WorldY() + local[1];
+        out[2] = Origin.WorldZ() + local[2];
+    }
+    bool HasIdentityRotation() const
+    {
+        const auto& q = Rotation.GetGLM();
+        return q.x == 0.0f && q.y == 0.0f && q.z == 0.0f && q.w == 1.0f;
+    }
+    bool operator==(const NavMeshChart& other) const
+    {
+        return Id == other.Id && Origin == other.Origin && Span == other.Span &&
+               Rotation.GetGLM() == other.Rotation.GetGLM();
+    }
+};
+
+// A navigation mesh tile: its chart and its signed chart-local tile coordinates. Tile (x, z)
+// covers chart-local [x, x + 1) x [z, z + 1) tile widths on X and Z. The one key the dirty queue,
+// the swap list, the file and the counters speak.
+struct NavTileKey
+{
+    uint32 Chart = 0;
+    int32 X = 0;
+    int32 Z = 0;
+
+    bool operator==(const NavTileKey&) const = default;
+};
+
+struct NavTileKeyHash
+{
+    std::size_t operator()(const NavTileKey& key) const
+    {
+        const uint64 xz = (static_cast<uint64>(static_cast<uint32>(key.X)) << 32) | static_cast<uint32>(key.Z);
+        return std::hash<uint64>{}(xz ^ (static_cast<uint64>(key.Chart) * 0x9E3779B97F4A7C15ull));
+    }
 };
 
 struct NavMapHandle

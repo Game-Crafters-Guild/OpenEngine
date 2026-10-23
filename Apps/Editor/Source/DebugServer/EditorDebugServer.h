@@ -52,6 +52,7 @@ class EditorDebugServer
     {
         std::string id;                // Unique request ID (for deferred responses)
         nlohmann::json params;         // Client-provided parameters
+        uint32_t clientId = 0;         // The connection it came on; never reused while the server runs
     };
 
     using Handler = std::function<nlohmann::json(const RequestContext& ctx)>;

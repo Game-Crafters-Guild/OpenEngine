@@ -553,6 +553,8 @@ option(BUILD_TESTING "Enable building tests" OFF)
 include(CTest)
 if(BUILD_TESTING)
   enable_testing()
+  # The environment every test ctest runs inherits (cmake/CTestEnvironment.cmake).
+  set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${CMAKE_SOURCE_DIR}/cmake/CTestEnvironment.cmake")
 endif()
 
 # The allocation counter's hook: every test executable, and the engine's images under
@@ -1426,6 +1428,23 @@ if(BUILD_TESTING)
         set_tests_properties(McpAssistantAttachment PROPERTIES TIMEOUT 600 LABELS "Editor")
     else()
         message(STATUS "node not found - McpAssistantAttachment test not registered")
+    endif()
+endif()
+
+# The agent-facing instruments answer with summaries: take_screenshot's record line
+# with no inline image unless asked, get_log forwarding its cursor and pattern, the
+# gtest and build-log summaries, and the guidance in the tool descriptions and the CLI
+# overview. Fake editor, no editor binary; the first run may build mcp/dist, hence the
+# McpEditorEndpointReport budget.
+if(BUILD_TESTING)
+    find_program(GE_NODE_EXECUTABLE NAMES node node.exe)
+    if(GE_NODE_EXECUTABLE)
+        add_test(NAME McpInstrumentSummaries
+            COMMAND ${GE_NODE_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Tests/Mcp/instrument-summaries-check.mjs)
+        set_tests_properties(McpInstrumentSummaries PROPERTIES TIMEOUT 600 LABELS "Editor")
+    else()
+        message(STATUS "node not found - McpInstrumentSummaries test not registered")
     endif()
 endif()
 

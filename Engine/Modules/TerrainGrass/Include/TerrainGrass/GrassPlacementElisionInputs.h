@@ -34,9 +34,14 @@ struct GrassPlacementElisionInputs
     /// than by version so an authored edit that lands on the same version still recomputes.
     std::span<const uint8> TerrainParams;
 
-    /// Monotonic counter over every terrain heightmap/splatmap/normalmap/atlas upload and every
-    /// texture retirement. Height and splat content decide where blades stand and whether they
-    /// are placed at all, and neither is readable from the CPU cheaply enough to compare.
+    /// The terrain material table the root colour resolves through, exactly as uploaded: a record's
+    /// tint, tiling or texture index decides the colour every blade carries.
+    std::span<const uint8> TerrainMaterials;
+
+    /// Monotonic counter over every terrain map upload (height, splat, normal, colour, atlas) and
+    /// every texture retirement. Height and splat content decide where blades stand and whether
+    /// they are placed at all, colour content what they carry, and none of it is readable from the
+    /// CPU cheaply enough to compare.
     uint64 TerrainContentEpoch = 0;
 
     /// The resident-window atlas the placement resolves terrain UVs through. Identity survives a
@@ -44,9 +49,9 @@ struct GrassPlacementElisionInputs
     uint64 AtlasIdentity = 0;
     uint64 AtlasTableVersion = 0;
     std::span<const uint8> AtlasRows;
-    /// The eight atlas map indices the kernels tap (height, height-coarse, normal, normal-coarse,
-    /// splat, splat-coarse, grass, grass-coarse). A re-registered bindless slot changes which texture is sampled
-    /// without changing anything else here.
+    /// The ten atlas map indices the kernels tap (height, height-coarse, normal, normal-coarse,
+    /// splat, splat-coarse, grass, grass-coarse, colour, colour-coarse). A re-registered bindless
+    /// slot changes which texture is sampled without changing anything else here.
     std::span<const uint32> AtlasBindlessIndices;
 
     /// The words the CPU seeds into the indirect args block once per slot: each LOD's sub-mesh

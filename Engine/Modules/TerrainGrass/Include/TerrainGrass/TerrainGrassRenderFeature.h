@@ -166,8 +166,11 @@ public:
         // per-terrain value, which is what makes its per-ring total a bound the per-cell scan
         // cannot exceed — and so removes any need for a runtime clamp when slots are handed out.
         float Summary[4] = {};
+        // This view's render origin: xyz = sector, [3] = sector size in metres. The placement
+        // compute anchors the root colour's projection UVs to it, as the draw's stages do.
+        int32 RenderOriginSector[4] = {};
     };
-    static_assert(sizeof(GrassPlaceParamsGPU) == 208);
+    static_assert(sizeof(GrassPlaceParamsGPU) == 224);
 
     // std140 mirror of GrassDrawParamsBuffer in terrain_grass_vertex_modifier.glsl.
     //
@@ -207,8 +210,9 @@ public:
         uint32 GrassEnabled = 0;
         uint32 GrassBindless = 0;
         uint32 GrassCoarseBindless = 0;
-        uint32 _Pad0 = 0;
-        uint32 _Pad1 = 0;
+        // The atlas colour map and its coarse map, read at the blade root (TerrainColorMap.h).
+        uint32 ColorBindless = 0;
+        uint32 ColorCoarseBindless = 0;
     };
     static_assert(sizeof(GrassAtlasParamsGPU) == 80);
 
@@ -327,8 +331,9 @@ private:
     Rendering::PipelineHandle m_PlanPipeline{};
     bool m_ComputePipelineAttempted = false;
 
-    // Atlas maps the placement taps: height, normal and splat, each with its coarse fallback.
-    static constexpr uint32 kGrassAtlasMapCount = 8u;
+    // Atlas maps the placement taps: height, normal, splat, grass control and colour, each with its
+    // coarse fallback.
+    static constexpr uint32 kGrassAtlasMapCount = 10u;
     // What EnsureIndirectConstants writes into the args block: index count, first index and vertex
     // offset for each LOD, then the shared pool size.
     static constexpr uint32 kSeededIndirectWordsPerLod = 3u;
@@ -375,6 +380,7 @@ private:
         bool GateLogState = false;
         // Hoisted so the per-frame blob build does not allocate.
         std::vector<uint8> TerrainParamsScratch;
+        std::vector<uint8> TerrainMaterialScratch;
         // The atlas map indices, as a span source for the same reason.
         std::array<uint32, kGrassAtlasMapCount> AtlasBindlessScratch{};
         // The words EnsureIndirectConstants seeds into the args block, as a span source for the

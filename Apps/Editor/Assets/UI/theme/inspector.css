@@ -1520,9 +1520,20 @@ button.flare-element-header-menu:focus,
 .inspector-field TextInput {
 	padding: 6px 12px;
 	border-radius: 6px;
-	background-color: #202020;
+	background-color: var(--ui_color_bg_field);
 	border: 1px solid transparent;
 	height: var(--value_box_height, 26px);
+}
+
+/* A value field of several lines: the one-line field's look, the value box's height its minimum, the
+   text wrapped to the field's width. */
+.inspector-text-area {
+	padding: 6px 12px;
+	border-radius: 6px;
+	background-color: var(--ui_color_bg_field);
+	border: 1px solid transparent;
+	min-height: var(--value_box_height, 26px);
+	white-space: pre-wrap;
 }
 
 /* Script variables: one row per field (name | value | type), same as early script inspector */

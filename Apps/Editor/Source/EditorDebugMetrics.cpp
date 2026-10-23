@@ -120,6 +120,8 @@ void CollectEditorDebugMetrics(Rendering::IDevice* device,
                            static_cast<float>(PhysicsECS::PhysicsWorldService::GetLastBodiesComposed()));
         metrics.PushSample("Physics/CharactersComposed",
                            static_cast<float>(PhysicsECS::PhysicsWorldService::GetLastCharactersComposed()));
+        metrics.PushSample("Physics/KinematicBodiesMoving",
+                           static_cast<float>(PhysicsECS::PhysicsWorldService::GetLastKinematicBodiesMoving()));
     }
 
     if (auto* audio = EngineCore::GetInstance().GetAudioSystem())

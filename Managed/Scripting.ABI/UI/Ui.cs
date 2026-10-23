@@ -200,6 +200,9 @@ namespace GameEngine.Scripting
             internal const string ButtonClick = "UI.ButtonClick";
             internal const string MouseEnter = "UI.MouseEnter";
             internal const string MouseMove = "UI.MouseMove";
+            internal const string MouseDown = "UI.MouseDown";
+            internal const string MouseUp = "UI.MouseUp";
+            internal const string MouseCancel = "UI.MouseCancel";
             internal const string FocusIn = "UI.FocusIn";
             internal const string ValueChanging = "UI.ValueChanging";
             internal const string ValueChanged = "UI.ValueChanged";
@@ -250,7 +253,7 @@ namespace GameEngine.Scripting
         /// </summary>
         public readonly struct PointerArgs
         {
-            internal PointerArgs(float x, float y, int mods)
+            internal PointerArgs(float x, float y, ModifierFlags mods)
             {
                 X = x;
                 Y = y;
@@ -263,8 +266,46 @@ namespace GameEngine.Scripting
             /// <summary>Pointer Y in the element's layout space.</summary>
             public readonly float Y;
 
-            /// <summary>Modifier-key bitmask as the engine reports it.</summary>
-            public readonly int Mods;
+            /// <summary>The modifier keys held.</summary>
+            public readonly ModifierFlags Mods;
+        }
+
+        /// <summary>
+        /// What a pointer button press, release or cancel carries: which button, where, and the
+        /// modifier keys.
+        /// </summary>
+        /// <remarks>
+        /// A press is not a click. <see cref="ClickArgs"/> comes from a Button's own activation:
+        /// the left button or Space/Enter, on release, on that control only. A press, a release
+        /// and a cancel arrive for any button on whatever element the pointer is over, and bubble
+        /// to its ancestors.
+        ///
+        /// <c>X</c> and <c>Y</c> are in the same space as <see cref="PointerArgs"/>: the
+        /// subscribed element's layout space. A cancel has no position: both read -1.
+        /// </remarks>
+        public readonly struct PointerButtonArgs
+        {
+            internal PointerButtonArgs(float x, float y, MouseButton button, ModifierFlags mods)
+            {
+                X = x;
+                Y = y;
+                Button = button;
+                Mods = mods;
+            }
+
+            /// <summary>Pointer X in the element's layout space; -1 for a cancel.</summary>
+            public readonly float X;
+
+            /// <summary>Pointer Y in the element's layout space; -1 for a cancel.</summary>
+            public readonly float Y;
+
+            /// <summary>
+            /// The button that began the press, as <see cref="Input.IsMouseButtonDown"/> names it.
+            /// </summary>
+            public readonly MouseButton Button;
+
+            /// <summary>The modifier keys held.</summary>
+            public readonly ModifierFlags Mods;
         }
 
         /// <summary>
@@ -274,10 +315,10 @@ namespace GameEngine.Scripting
         /// </summary>
         public readonly struct ClickArgs
         {
-            internal ClickArgs(int mods) => Mods = mods;
+            internal ClickArgs(ModifierFlags mods) => Mods = mods;
 
-            /// <summary>Modifier-key bitmask as the engine reports it.</summary>
-            public readonly int Mods;
+            /// <summary>The modifier keys held.</summary>
+            public readonly ModifierFlags Mods;
         }
 
         /// <summary>

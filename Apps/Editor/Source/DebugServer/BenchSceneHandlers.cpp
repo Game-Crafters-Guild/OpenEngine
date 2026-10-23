@@ -372,7 +372,8 @@ void RegisterBenchSceneHandlers(EditorDebugServer& server)
                     const float z = (static_cast<float>(i / glassSide) - glassHalf) * kGlassSpacing;
                     Components::MeshRenderer mr = meshProto[1]; // sphere
                     mr.materialAssetGuid.Set(transmissiveMaterial);
-                    mr.castShadows = transmissiveCastShadows;
+                    mr.shadowCasting = transmissiveCastShadows ? Components::ShadowCasting::On
+                                                              : Components::ShadowCasting::Off;
                     Components::LocalBounds lb = boundsProto[1];
                     lb.DynamicObject = false;
                     world->Create(

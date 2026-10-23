@@ -13,10 +13,10 @@
 namespace GameEngine::Rendering
 {
 
-/// The project's render layer names: the table behind FindRenderLayer and RenderLayerName
-/// (Engine/Rendering/RenderLayers.h), and the sole owner of its serialized shape. For the hosts only
+/// The project's render layer names: the table behind Rendering::Script::Find and NameOf
+/// (Rendering/RenderLayersScriptApi.h), and the sole owner of its serialized shape. For the hosts only
 /// (the editor's settings page, the Player's startup, BuildPipeline); a game reads the names through
-/// RenderLayers.h. Two transports carry the same key:
+/// RenderLayersScriptApi.h. Two transports carry the same key:
 ///
 ///   authored  <ProjectRoot>/.Editor/ProjectSettings.json -> "rendering": { "renderLayerNames": [...] }
 ///   shipped   <exe dir>/game.config                      -> "rendering": { "renderLayerNames": [...] }
@@ -63,7 +63,7 @@ struct RenderLayerNames
     static RenderLayerNames Load(const std::filesystem::path& workspaceRoot);
 };
 
-/// Makes `names` the table FindRenderLayer and RenderLayerName answer from. Main thread, between frames:
+/// Makes `names` the table Script::Find and Script::NameOf answer from. Main thread, between frames:
 /// the editor's project open and settings page, and the Player's startup.
 void SetRenderLayerNames(const RenderLayerNames& names);
 

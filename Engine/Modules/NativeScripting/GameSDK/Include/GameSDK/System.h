@@ -18,6 +18,17 @@
 //
 // The build-time scanner detects `: ECS::SystemBase` and generates the registration (no macro).
 //
+// Systems run in ascending `static constexpr int Order` (0 when a system declares none), and
+// systems of equal order by qualified name in character order (capital letters before lowercase),
+// then by module name, in every module. Any other member named Order is a compile error. Give a
+// system an Order when it must
+// run after another within the frame:
+//
+//     struct DamageSystem : ECS::SystemBase {
+//         static constexpr int Order = 100;  // after the movement systems at 0
+//         void OnUpdate(ECS::World& w, float dt);
+//     };
+//
 // For a per-entity system, inherit ECS::EntitySystem<Self> and write a ForEach(Comp&..., float dt)
 // instead of OnUpdate — the engine builds the Query from ForEach's parameters and runs it for every
 // matching entity. See EntitySystem below.
@@ -75,6 +86,27 @@ struct EntitySystemForEach<Derived, R (Derived::*)(Args...)>
             { self.ForEach(components..., dt); });
     }
 };
+
+// An Order lookup on a class that derives from T and from a class with its own member named Order
+// is ambiguous exactly when T has a member named Order of any kind: a data member, a function, an
+// overload set, a template, an enumerator or a nested type. A final T cannot be derived from, so
+// for it the check falls back to taking the member's address, which misses overloads, templates,
+// enumerators and nested types.
+struct OrderNameProbe
+{
+    int Order;
+};
+template <class T>
+struct OrderLookup : T, OrderNameProbe
+{
+};
+template <class T>
+concept OrderLookupIsAmbiguous = !requires { &OrderLookup<T>::Order; };
+template <class T>
+concept DeclaresOrder = (!std::is_final_v<T> && OrderLookupIsAmbiguous<T>) ||
+                        (std::is_final_v<T> && requires { &T::Order; });
+template <class T>
+concept DeclaresIntOrder = requires { requires std::is_same_v<decltype(T::Order), const int>; };
 } // namespace Detail
 
 // Per-entity user system. Inherit EntitySystem<Self> and write a single
@@ -133,6 +165,17 @@ public:
     bool HasPostSimulation() const override
     {
         return requires(T& s, World& w, float d) { s.OnPostSimulation(w, d); };
+    }
+    int Order() const override
+    {
+        if constexpr (Detail::DeclaresIntOrder<T>)
+            return T::Order;
+        else
+        {
+            static_assert(!Detail::DeclaresOrder<T>,
+                          "a user system declares its order as `static constexpr int Order = N;`");
+            return 0;
+        }
     }
 
 private:

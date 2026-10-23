@@ -20,7 +20,7 @@ std::filesystem::path NormalizeRoot(const std::filesystem::path& p)
 } // namespace
 
 std::vector<std::filesystem::path> BuildMaterialIncludeRoots(
-    const MaterialBuildContext& context, const std::filesystem::path& materialDir)
+    const MaterialBuildContext& context, const std::filesystem::path& shaderLocalDir)
 {
     std::vector<std::filesystem::path> roots = context.IncludeDirs;
     // ResolveShaderReference consults ProjectRoots immediately after materialDir.
@@ -46,10 +46,10 @@ std::vector<std::filesystem::path> BuildMaterialIncludeRoots(
     const auto includesDir = context.AdapterShaderDir / "Includes";
     if (std::filesystem::exists(includesDir, ec))
         roots.push_back(includesDir);
-    // Last, so a material-local file can be NAMED without shadowing any engine
-    // or package include that resolves under the same relative spelling.
-    if (!materialDir.empty())
-        roots.push_back(materialDir);
+    // Last, so a material-local surface or modifier can be NAMED without
+    // shadowing any engine or package include under the same relative spelling.
+    if (!shaderLocalDir.empty())
+        roots.push_back(shaderLocalDir);
     return roots;
 }
 

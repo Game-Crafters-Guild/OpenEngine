@@ -1,14 +1,134 @@
 import { execFile } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
 import { promisify } from "util";
 import { z } from "zod";
 import { freeDebugPort } from "../build/debug-port.js";
 import { defaultCaptureDir, launchEditorProcess, type RenderDocLaunch, resolveRenderdoccmd, waitForEditorReady } from "../build/editor-process.js";
-import { buildArgs, ctestArgs, detectArch, detectPreset, editorExePath, isCustomBuild, normalizePreset } from "../build/preset.js";
+import { resolveSuiteRun, suiteArguments, type SuiteRun } from "../build/ctest-registry.js";
+import { binaryDirectory, buildArgs, buildDirectory, detectPreset, editorExePath, normalizePreset } from "../build/preset.js";
+import { runStamp, runToLog } from "../build/process.js";
+import { type BuildRecord, formatBuildRecord, formatSuiteRecord, isPassingSuite, outputTail, type SuiteRecord, summarizeBuildOutput, summarizeGtestXml } from "../build/summaries.js";
 import { repoRoot } from "../paths.js";
 import { defineTool, type ToolDef, ToolError } from "../registry.js";
 
 const execFileAsync = promisify(execFile);
+
+const kDefaultBuildJobs = 12;
+const kBuildTimeoutMs = 300_000;
+const kSuiteTimeoutMs = 1_800_000;
+const kCtestListTimeoutMs = 60_000;
+// Bytes read from the end of a suite log for the last lines of a run that is not a gtest suite.
+const kLogTailReadBytes = 16_384;
+// The ctest listing of every registration runs to a few megabytes on a full tree.
+const kCtestListMaxBytes = 64 * 1024 * 1024;
+// Under the build directory: the full build logs and suite records the summaries point at.
+const kToolLogDirectory = "ToolLogs";
+// Runs whose log (and suite XML) each tool keeps in kToolLogDirectory; older runs are deleted.
+const kToolLogRunsKept = 20;
+// How deep under bin/<config> a built executable or library sits (Apps/Editor, Tests).
+const kBinaryScanDepth = 3;
+// Binaries a build summary names; the count covers all of them.
+const kMaxListedBinaries = 10;
+const kBinaryExtensions = new Set([".exe", ".dll", ".dylib", ".so"]);
+
+/** Executables and libraries under `dir` modified at or after `sinceMs`, relative to `root`. */
+function binariesWrittenSince(dir: string, root: string, sinceMs: number, depth = 0): string[] {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const found: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (depth < kBinaryScanDepth) found.push(...binariesWrittenSince(full, root, sinceMs, depth + 1));
+    } else if (kBinaryExtensions.has(path.extname(entry.name).toLowerCase())) {
+      try { if (fs.statSync(full).mtimeMs >= sinceMs) found.push(path.relative(root, full)); } catch { /* removed mid-scan */ }
+    }
+  }
+  return found;
+}
+
+/** Deletes all but the newest kToolLogRunsKept runs whose files in `dir` start with `prefix`. */
+function pruneToolLogs(dir: string, prefix: string): void {
+  let names: string[];
+  try { names = fs.readdirSync(dir).filter((name) => name.startsWith(prefix)); } catch { return; }
+  const byRun = new Map<string, string[]>();
+  for (const name of names) {
+    const run = path.parse(name).name;
+    byRun.set(run, [...(byRun.get(run) ?? []), name]);
+  }
+  const modified = (run: string) => fs.statSync(path.join(dir, byRun.get(run)![0])).mtimeMs;
+  const newestFirst = [...byRun.keys()].sort((a, b) => modified(b) - modified(a));
+  for (const run of newestFirst.slice(kToolLogRunsKept)) {
+    for (const name of byRun.get(run)!) fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
+/** The program, arguments, working directory and environment CTest registered for `suite`. */
+async function registeredSuiteRun(buildDir: string, config: string, suite: string): Promise<SuiteRun> {
+  let listing: string;
+  try {
+    ({ stdout: listing } = await execFileAsync("ctest", ["--test-dir", buildDir, "-C", config, "--show-only=json-v1"],
+      { cwd: repoRoot(), timeout: kCtestListTimeoutMs, maxBuffer: kCtestListMaxBytes }));
+  } catch (err: any) {
+    const reason = String(err?.message ?? err).split(/\r?\n/)[0];
+    throw new ToolError(`ctest could not list the tests in ${buildDir} (${reason}). Configure the build with BUILD_TESTING=ON.`);
+  }
+  const resolution = resolveSuiteRun(JSON.parse(listing), suite);
+  if (resolution.kind === "notBuilt") {
+    const build = resolution.target ? `build_engine target=${resolution.target}` : "build_engine and the test target that produces it";
+    throw new ToolError(`${suite} is registered but not built for ${config}. Build it first with ${build}.`);
+  }
+  if (resolution.kind === "unknown") {
+    const close = resolution.closeMatches.length ? ` Close names: ${resolution.closeMatches.join(", ")}.` : "";
+    throw new ToolError(`No test suite named ${suite} is registered in ${buildDir}.${close}`);
+  }
+  const { program, gtest } = resolution.run;
+  if (!fs.existsSync(program)) {
+    throw new ToolError(gtest
+      ? `No test executable at ${program}. Build it first with build_engine target=${path.parse(program).name}.`
+      : `${suite} runs ${program}, which does not exist. Reconfigure the build so its registration names a program on this machine.`);
+  }
+  return resolution.run;
+}
+
+/** The last lines of the log at `logPath`, read from its last kLogTailReadBytes. */
+function logTail(logPath: string): string[] {
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, kLogTailReadBytes);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    return outputTail(buffer.toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Builds one target with the output in a log file, and reads the log into a build record. */
+async function buildTarget(preset: string, config: string, target: string, jobs: string, includeWarnings: boolean): Promise<BuildRecord> {
+  const root = repoRoot();
+  const logPath = path.join(root, buildDirectory(preset), kToolLogDirectory, `build-${target}-${runStamp()}.log`);
+  // Whole seconds: some file systems store modification times at that resolution.
+  const startMs = Math.floor(Date.now() / 1000) * 1000;
+  const run = await runToLog("cmake", buildArgs(preset, config, target, jobs), { cwd: root, logPath, timeoutMs: kBuildTimeoutMs });
+  pruneToolLogs(path.dirname(logPath), `build-${target}-`);
+  const binDir = binaryDirectory(preset, config);
+  const binaries = binariesWrittenSince(binDir, binDir, startMs);
+  return {
+    exitCode: run.exitCode,
+    timedOut: run.timedOut,
+    durationSec: run.durationMs / 1000,
+    targets: [target],
+    preset,
+    config,
+    ...summarizeBuildOutput(fs.readFileSync(logPath, "utf8"), includeWarnings),
+    binaries: binaries.slice(0, kMaxListedBinaries),
+    binaryCount: binaries.length,
+    logPath,
+  };
+}
 
 // Building and launching happen on this host, not in the editor — these are the
 // only tools in the registry with no debug-server method behind them.
@@ -18,41 +138,22 @@ export const tools: ToolDef[] = [
     name: "build_engine",
     category: "lifecycle",
     actsOnHost: true,
-    description: "Build an engine target using CMake. Auto-detects platform (Windows/macOS/Linux), architecture (x64/ARM64), and Visual Studio version. IMPORTANT: Shut down the editor (shutdown_editor) before building to avoid PDB lock errors.",
+    description: "Build one CMake target and return the build summary: the exit code, the duration, errors N with the first ten unique error lines, warnings N (the lines only with includeWarnings=true), the binaries the build wrote, and the path of the full log. The summary is the record of the build: read it instead of the log, and do not call get_log after a build, because the errors are already here. To look for one line in the full log, search the log file. Auto-detects platform (Windows/macOS/Linux), architecture (x64/ARM64), and Visual Studio version. IMPORTANT: Shut down the editor (shutdown_editor) before building to avoid PDB lock errors.",
     schema: {
       target: z.string().optional().describe("CMake target (default: Editor)"),
       config: z.string().optional().describe("Build config: DebugFast, Debug or Release (default: DebugFast)"),
       jobs: z.coerce.number().optional().describe("Parallel jobs (default: 12)"),
       preset: z.string().optional().describe("CMake preset (auto-detected from platform/arch/VS version if omitted)"),
+      includeWarnings: z.boolean().optional().describe("List the first unique warning lines as well as their count (default false: the count only)"),
     },
-    run: async ({ target, config, jobs, preset }) => {
+    run: async ({ target, config, jobs, preset, includeWarnings }) => {
       const t = target ?? "Editor";
       const c = config ?? "DebugFast";
-      const j = String(jobs ?? 12);
       const p = normalizePreset(preset ?? detectPreset(c));
-      const args = buildArgs(p, c, t, j);
-      const label = isCustomBuild(p) ? p.replace(/__/g, "") : `preset ${p}`;
-      try {
-        const { stdout, stderr } = await execFileAsync(
-          "cmake", args,
-          { cwd: repoRoot(), timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
-        );
-        // cmake exit 0 = success. Only show the tail of the output.
-        const output = (stdout + "\n" + stderr).trim();
-        return {
-          data: { ok: true, preset: p, config: c, target: t, arch: detectArch() },
-          summary: `BUILD OK (${label}, ${detectArch()}):\n${output.slice(-2000)}`,
-        };
-      } catch (err: any) {
-        // cmake exit non-zero = real failure. Show full output for diagnosis.
-        const output = ((err.stdout ?? "") + "\n" + (err.stderr ?? "")).trim();
-        // Extract actual compiler errors (MSVC "error C", clang/gcc "error:", linker "error LNK").
-        const errorLines = output.split("\n").filter((l: string) => /\berror\s+(C\d|LNK\d|:)/i.test(l));
-        const summary = errorLines.length > 0
-          ? `${errorLines.length} error(s):\n${errorLines.slice(0, 20).join("\n")}\n\n--- Full output ---\n${output.slice(-3000)}`
-          : output;
-        throw new ToolError(`BUILD FAILED (${label}, exit ${err.code}):\n${summary}`);
-      }
+      const record = await buildTarget(p, c, t, String(jobs ?? kDefaultBuildJobs), includeWarnings ?? false);
+      const summary = formatBuildRecord(record);
+      if (record.exitCode !== 0) throw new ToolError(summary);
+      return { data: record, summary };
     },
   }),
 
@@ -60,29 +161,43 @@ export const tools: ToolDef[] = [
     name: "run_tests",
     category: "lifecycle",
     actsOnHost: true,
-    description: "Build and run a test target via CTest. Auto-detects platform and preset.",
+    description: "Run a registered test (a gtest suite gets the test summary; another registration its exit code) with the arguments, working directory and environment its CTest registration gives it, and return its summary. A gtest suite runs in one process: declared = ran + disabled, failed N with each failing test and its first message line, skipped N with each skip and its reason, the path of the gtest XML and the path of the full console log. A run in which no test ran (a filter that matches nothing) is void and fails. Any other registration (dotnet test, a node, python or cmake script) runs its registered command and reports its exit code, the last lines of its output and the log path; it takes no filter. The summary and the XML are the record of the run: never read the console log to find a result, and do not call get_log after a suite. Build the suite first with build_engine target=<suite>.",
     schema: {
-      testFilter: z.string().optional().describe("CTest regex filter (-R), e.g. 'AnimationSystem'"),
+      suite: z.string().describe("A registered test suite such as EditorTests or ManagedCoreBridgeTests"),
+      filter: z.string().optional().describe("gtest filter (--gtest_filter), gtest suites only, for a red-first run of one test or a repeat of one failing test only; a gate runs the suite whole"),
       config: z.string().optional().describe("Build config (default: DebugFast)"),
       preset: z.string().optional().describe("CMake preset (auto-detected if omitted)"),
     },
-    run: async ({ testFilter, config, preset }) => {
+    run: async ({ suite, filter, config, preset }) => {
       const c = config ?? "DebugFast";
       const p = normalizePreset(preset ?? detectPreset(c));
-      const args = ctestArgs(p, c, testFilter);
-      try {
-        const { stdout, stderr } = await execFileAsync(
-          "ctest", args,
-          { cwd: repoRoot(), timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
-        );
-        return {
-          data: { ok: true, preset: p, config: c, testFilter: testFilter ?? null },
-          summary: `TESTS PASSED:\n${(stdout + "\n" + stderr).trim()}`,
-        };
-      } catch (err: any) {
-        const output = ((err.stdout ?? "") + "\n" + (err.stderr ?? "")).trim();
-        throw new ToolError(`TESTS FAILED (exit ${err.code}):\n${output}`);
-      }
+      const buildDir = path.join(repoRoot(), buildDirectory(p));
+      const run = await registeredSuiteRun(buildDir, c, suite);
+      const logDir = path.join(buildDir, kToolLogDirectory);
+      const stem = path.join(logDir, `${suite}-${runStamp()}`);
+      const xmlPath = `${stem}.xml`;
+      const logPath = `${stem}.log`;
+      const invocation = suiteArguments(run, suite, xmlPath, filter);
+      if ("refusal" in invocation) throw new ToolError(invocation.refusal);
+      const result = await runToLog(run.program, invocation.args, { cwd: run.cwd, env: run.env, logPath, timeoutMs: kSuiteTimeoutMs });
+      pruneToolLogs(logDir, `${suite}-`);
+      const record: SuiteRecord = {
+        suite,
+        gtest: run.gtest,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        durationSec: result.durationMs / 1000,
+        failures: [],
+        skips: [],
+        ...(run.gtest
+          ? { ...(fs.existsSync(xmlPath) ? summarizeGtestXml(fs.readFileSync(xmlPath, "utf8")) : {}), xmlPath }
+          : { outputTail: logTail(logPath) }),
+        ...(filter ? { filter } : {}),
+        logPath,
+      };
+      const summary = formatSuiteRecord(record);
+      if (!isPassingSuite(record)) throw new ToolError(summary);
+      return { data: record, summary };
     },
   }),
 
@@ -185,7 +300,7 @@ export const tools: ToolDef[] = [
     run: async ({ config, target, jobs }) => {
       const c = config ?? "DebugFast";
       const t = target ?? "Editor";
-      const j = String(jobs ?? 12);
+      const j = String(jobs ?? kDefaultBuildJobs);
       const p = detectPreset(c);
       const steps: string[] = [];
 
@@ -199,17 +314,9 @@ export const tools: ToolDef[] = [
 
       // Step 2: Build.
       steps.push(`Building ${t} (${c})...`);
-      try {
-        await execFileAsync(
-          "cmake",
-          buildArgs(p, c, t, j),
-          { cwd: repoRoot(), timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
-        );
-        steps.push("Build succeeded.");
-      } catch (err: any) {
-        const output = ((err.stdout ?? "") + "\n" + (err.stderr ?? "")).trim();
-        throw new ToolError(`BUILD FAILED (exit ${err.code}):\n${output}`);
-      }
+      const build = await buildTarget(p, c, t, j, false);
+      if (build.exitCode !== 0) throw new ToolError(formatBuildRecord(build));
+      steps.push(`Build succeeded in ${build.durationSec.toFixed(1)} s.`);
 
       // Step 3: Launch editor.
       const exe = editorExePath(p, c);

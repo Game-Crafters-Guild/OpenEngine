@@ -4,7 +4,7 @@
 
 // Two-phase HZB occlusion cull (R2.1 P2, design §1 + §5-A2/A5).
 //
-// Companion to frustum_culling.comp. That shader stays a lean 3-binding
+// Companion to frustum_culling.comp. That shader stays a lean
 // frustum-only dispatch for every frustum-only view (cascades, probes,
 // thumbnails, non-HZB main views); this one adds the persistent prevVisible
 // history buffer and the HZB pyramid needed for the UE-model two-phase
@@ -36,6 +36,11 @@ struct GPUInstance {
 struct GPUCullingData {
 #include "Includes/gpu_culling_data_fields.glsl"
 };
+
+#include "Includes/cull_pass_membership.glsl"
+
+#define GE_CULL_DEFORMATION_MARGIN_BINDING 6
+#include "Includes/cull_deformation_margin.glsl"
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer InstanceBuffer {
     GPUInstance instances[];
@@ -162,13 +167,13 @@ void main() {
     uint instanceIndex = cullingData.firstInstance + localIndex;
     GPUInstance instance = instances[instanceIndex];
 
-    float radius = instance.boundingRadius * cullingData.cullMargins[0];
+    float radius = DeformedCullRadius(instance) * cullingData.cullMargins[0];
     bool f = TestSphereFrustum(instance.boundingCenter, radius, cullingData.frustumPlanes[0], cullingData.cameraPosition);
     f = f && (instance.renderLayerMask & cullingData.renderLayerMask) != 0u;
-    // Mirror frustum_culling.comp's shadow-caster drop (a no-op for HZB main
-    // views, whose cullShadowCasters is 0).
-    if (cullingData.cullShadowCasters != 0u && (instance.flags & 1u) == 0u)
-        f = false;
+    // The pass membership frustum_culling.comp applies: an HZB main view is a
+    // color dispatch, so it drops shadows-only instances, and in the Scene View
+    // the ones its eye hides.
+    f = f && InstanceInPass(instance.flags, cullingData.passFlags);
 
     uint outVis;
     if (cullingData.hzbMode == 2u) {

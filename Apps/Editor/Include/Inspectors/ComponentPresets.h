@@ -58,6 +58,7 @@ enum class ComponentPreset : uint8_t
     TerrainRulesArea,
     TerrainGroundClaimArea,
     TerrainGrassArea,
+    TerrainColorArea,
     TerrainSplineFlatten,
     SplineComponent,
     ValueCurve,

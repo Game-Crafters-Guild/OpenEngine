@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace GameEngine::TerrainECS
 {
@@ -94,12 +95,10 @@ TerrainZonePayload RegrowPayload(const TerrainZonePayload& old,
             if (nx < 0 || nz < 0 || nx >= static_cast<int32>(newWidth) || nz >= static_cast<int32>(newHeight))
                 continue;
 
-            const std::size_t src = static_cast<std::size_t>(oz) * old.Width + ox;
-            const std::size_t dst = static_cast<std::size_t>(nz) * newWidth + nx;
-            if (old.IsSculpt())
-                grown.Offsets[dst] = old.Offsets[src];
-            else
-                grown.Mask[dst] = old.Mask[src];
+            const std::size_t texelBytes = ZonePayloadBytesPerTexel(old.Format);
+            const std::size_t src = (static_cast<std::size_t>(oz) * old.Width + ox) * texelBytes;
+            const std::size_t dst = (static_cast<std::size_t>(nz) * newWidth + nx) * texelBytes;
+            std::memcpy(grown.MutableTexelBytes() + dst, old.TexelBytes() + src, texelBytes);
         }
     }
     return grown;

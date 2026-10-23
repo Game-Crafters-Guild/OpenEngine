@@ -14,6 +14,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewFinalize.h"
 #include "Logger/Logger.h"
+#include "UI/UIManager.h"
 
 #include "Components/Rendering/Camera.h"
 #include "Components/Transform.h"
@@ -135,25 +136,44 @@ void GameViewController::EnsureGameUI()
     GameUI::SetHost(m_GameUI.get());
 }
 
-void GameViewController::HandleGameUiPointer(bool over, float x, float y, bool down, int mods)
+void GameViewController::HandleGameUiPointerMove(bool over, float x, float y, int mods)
 {
     if (!m_GameUI)
         return;
     // Input may precede this window's next composite. Script callbacks must
     // resolve gameplay UI against the receiving host, not the last rendered one.
     GameUI::SetHost(m_GameUI.get());
-    ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld();
-    if (!over || !world || !m_GameUiWidth || !m_GameUiHeight ||
-        world->GetWorldId() != m_GameUiWorldId ||
-        world->GetLifecycleResetGeneration() != m_GameUiWorldGeneration)
+    if (!over)
     {
-        m_GameUI->CancelPointer(down ? GameUIHost::PrimaryButtonState::Held
-                                     : GameUIHost::PrimaryButtonState::Released);
+        // The pointer left the view. Its release lands outside the view and never
+        // reaches this host, so nothing waits for it.
+        m_GameUI->CancelPointer(GameUIHost::PrimaryButtonState::Released);
         return;
     }
-    GameUIHost::PointerState pointer{x * static_cast<float>(m_GameUiWidth),
-                                     y * static_cast<float>(m_GameUiHeight), down, mods};
-    m_GameUI->UpdatePointer(&pointer);
+    ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld();
+    if (!world || !m_GameUiWidth || !m_GameUiHeight || world->GetWorldId() != m_GameUiWorldId ||
+        world->GetLifecycleResetGeneration() != m_GameUiWorldGeneration)
+    {
+        // Over the view, but the UI it would reach is gone or not laid out yet: cancel
+        // from the host's own button state; a held press waits for its release here.
+        m_GameUI->OnPointerLeave();
+        return;
+    }
+    // The host's UIManager receives no key events in the editor: each move replaces
+    // its modifier snapshot, so a later plain click cannot inherit a released key.
+    m_GameUI->GetUIManager()->ReconcileModifierKeys(mods);
+    // A move never presses: buttons arrive through HandleGameUiPointerButton.
+    m_GameUI->OnMouseMove({x * static_cast<float>(m_GameUiWidth), y * static_cast<float>(m_GameUiHeight)});
+}
+
+void GameViewController::HandleGameUiPointerButton(int button, bool pressed, int mods)
+{
+    if (!m_GameUI)
+        return;
+    // Input may precede this window's next composite. Script callbacks must
+    // resolve gameplay UI against the receiving host, not the last rendered one.
+    GameUI::SetHost(m_GameUI.get());
+    m_GameUI->OnMouseButton(button, pressed, mods);
 }
 
 std::optional<Engine::Renderer::Camera> GameViewController::PrepareView(
@@ -436,7 +456,7 @@ bool GameViewController::DeclareGameUICompositeRG(Rendering::RenderGraph::RGFram
     const uint64_t worldId = world ? world->GetWorldId() : 0;
     const uint64_t generation = world ? world->GetLifecycleResetGeneration() : 0;
     if (worldId != m_GameUiWorldId || generation != m_GameUiWorldGeneration)
-        m_GameUI->UpdatePointer(nullptr);
+        m_GameUI->OnPointerLeave();
     m_GameUI->SyncDocuments(world);
     m_GameUiWorldId = worldId;
     m_GameUiWorldGeneration = generation;

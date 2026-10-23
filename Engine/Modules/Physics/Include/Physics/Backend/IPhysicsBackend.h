@@ -24,6 +24,9 @@ public:
 
     // Shapes
     virtual ShapeHandle CreateShape(const ShapeDefinition& definition, const Vector3& bakedScale) = 0;
+    // The heightfield build a job runs off the frame thread (a 1025^2 build is tens of
+    // milliseconds); CreateShape(PreparedHeightFieldShapeDef) registers its result. Never null.
+    virtual HeightFieldShapeBuilder GetHeightFieldShapeBuilder() const = 0;
     virtual void DestroyShape(ShapeHandle shape) = 0;
     virtual bool IsShapeValid(ShapeHandle shape) const = 0;
 
@@ -53,6 +56,7 @@ public:
 
     virtual Transform GetBodyTransform(BodyHandle body) const = 0;
     virtual void SetBodyTransform(BodyHandle body, const Transform& transform, ActivationMode activation) = 0;
+    virtual void MoveKinematic(BodyHandle body, const Transform& target, float32 deltaTime) = 0;
 
     virtual Vector3 GetLinearVelocity(BodyHandle body) const = 0;
     virtual void SetLinearVelocity(BodyHandle body, const Vector3& velocity) = 0;

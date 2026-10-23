@@ -1,6 +1,6 @@
 #include "Inspectors/RenderLayerField.h"
 
-#include "Engine/Rendering/RenderLayers.h"
+#include "Rendering/RenderLayersScriptApi.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/Controls/MaskField.h"
 
@@ -32,7 +32,7 @@ void GiveNames(MaskField& field)
 {
     std::array<MaskOption, Rendering::RenderLayerMask::kCount> options;
     for (uint32 layer = 0; layer < Rendering::RenderLayerMask::kCount; ++layer)
-        options[layer] = {Rendering::RenderLayerMask::FromLayer(layer).Bits, Rendering::RenderLayerName(layer)};
+        options[layer] = {Rendering::RenderLayerMask::FromLayer(layer).Bits, Rendering::Script::NameOf(Rendering::RenderLayerMask::FromLayer(layer))};
     field.SetOptions(options);
 }
 } // namespace

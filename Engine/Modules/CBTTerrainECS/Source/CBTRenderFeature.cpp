@@ -799,7 +799,7 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
         // the heightmap's clamp sampler would collapse every tap onto one edge texel.
         const auto sampler = terrainFeature->GetLayerSampler();
         m_DrawTextures.clear();
-        m_DrawTextures.reserve(13u);
+        m_DrawTextures.reserve(14u);
         const auto bind = [&](const char* name, Rendering::TextureHandle tex) {
             Engine::Renderer::DrawBindings::TextureEntry e{};
             e.Name = HashStringId(name);
@@ -819,6 +819,9 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
         bind("cbt_Layer1Albedo", layers.Albedo[1]);
         bind("cbt_Layer1Normal", layers.Normal[1]);
         bind("cbt_Layer1Orm", layers.Orm[1]);
+        // The unified colour map; the params row's kTerrainFlagHasColorMap says whether to read it.
+        bind("cbt_Colormap", terrainFeature->GetFieldTexture(TerrainECS::TerrainField::Color, primary,
+                                                             TerrainECS::TerrainFieldMap::Unified));
         {
             // The shared sampler is its own binding (32), so it needs its own entry; a texture
             // entry's Sampler only pairs with that texture.
@@ -1138,6 +1141,8 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         surfaceParams.AtlasGrassBindless = t.GrassRegionsActive ? t.AtlasGrassBindlessIndex : 0u;
         surfaceParams.AtlasGrassCoarseBindless =
             t.GrassRegionsActive ? t.AtlasGrassCoarseBindlessIndex : 0u;
+        surfaceParams.AtlasColorBindless = t.AtlasColorBindlessIndex;
+        surfaceParams.AtlasColorCoarseBindless = t.AtlasColorCoarseBindlessIndex;
     }
     if (spherical)
     {
