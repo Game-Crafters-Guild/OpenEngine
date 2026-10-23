@@ -2,6 +2,7 @@
 #include "SmartShape2D/SmartShape.h"
 #include "Spline/SplineData.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <gtest/gtest.h>
@@ -53,6 +54,7 @@ TEST(SmartShapeTextureSet, PointSelectionOverridesTheDefaultSet)
     std::vector<Components::SmartShapeTexture> textures(3);
     textures[1].PointIndex = 1;
     textures[2].PointIndex = 1;
+    textures[2].Index = 1;
     Components::SmartShapeEdge edge;
     edge.PointIndex = 1;
     edge.TextureIndex = 1;
@@ -134,5 +136,175 @@ TEST(SmartShapeTextureSet, ExplicitEdgeMaterialWinsOverTheDefaultTextureSet)
     EXPECT_EQ(result.Parts[overridePart].Indices.size(), 6u);
     EXPECT_EQ(result.Materials[overridePart], edge.Material);
     EXPECT_TRUE(result.Parts[overridePart + 1 + static_cast<size_t>(ShapePart::Top)].Indices.empty());
+}
+}
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, OverlappingNormalRulesEachRenderAndPointOverridesReplaceAllLayers)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    for (uint32 point = 0; point < 4; ++point)
+        spline.AddPoint({static_cast<float>(point) * 4, 0, 0}, 1);
+    std::vector<Components::SmartShapeEdge> rules(3);
+    for (size_t index = 0; index < 2; ++index)
+    {
+        rules[index].UseNormalRange = true;
+        rules[index].NormalSweep = 360;
+        rules[index].Material.Set(GUID::Derive(GUID::Null(), "layer/" + std::to_string(index)));
+        rules[index].DepthOffset = -static_cast<float>(index);
+    }
+    rules[2].PointIndex = 1;
+    rules[2].Material.Set(GUID::Derive(GUID::Null(), "point override"));
+    const auto result = BuildShape(spline, {}, rules);
+    ASSERT_TRUE(result.Error.empty());
+    const size_t base = static_cast<size_t>(ShapePart::Count);
+    EXPECT_EQ(result.Parts[base].Indices.size(), 12u);
+    EXPECT_EQ(result.Parts[base + 1].Indices.size(), 12u);
+    EXPECT_EQ(result.Parts[base + 2].Indices.size(), 6u);
+    for (const auto& vertex : result.Parts[base + 1].Vertices)
+        EXPECT_FLOAT_EQ(vertex.Position[2], -1.001f);
+}
+
+TEST(SmartShapeTextureSet, FlippedCornerWeldingPreservesEveryEdgeForBothWindings)
+{
+    for (const bool clockwise : {false, true})
+    {
+        for (const bool flip : {false, true})
+        {
+            Spline::SplineData spline;
+            spline.Type = Spline::SplineType::Linear;
+            spline.Closed = true;
+            spline.AddPoint({-2, -2, 0}, 1);
+            spline.AddPoint({2, -2, 0}, 1);
+            spline.AddPoint({2, 2, 0}, 1);
+            spline.AddPoint({-2, 2, 0}, 1);
+            if (clockwise)
+                std::reverse(spline.Points.begin(), spline.Points.end());
+            Components::SmartShape settings;
+            settings.FlipEdges = flip;
+            settings.InnerCornerMaterial.Set(GUID::Derive(GUID::Null(), "inner"));
+            settings.OuterCornerMaterial.Set(GUID::Derive(GUID::Null(), "outer"));
+            const auto result = BuildShape(spline, settings);
+            ASSERT_TRUE(result.Error.empty());
+            for (size_t part = static_cast<size_t>(ShapePart::Top); part <= static_cast<size_t>(ShapePart::Left); ++part)
+                EXPECT_EQ(result.Parts[part].Indices.size(), 6u) << clockwise << ' ' << flip;
+        }
+    }
+}
+}
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, LayersSelectIndependentSetsAndTextureOptions)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    spline.AddPoint({0, 0, 0}, 1);
+    spline.AddPoint({3.3f, 0, 0}, 1);
+    std::vector<Components::SmartShapeEdge> rules(2);
+    std::vector<Components::SmartShapeTexture> textures(2);
+    for (uint32 index = 0; index < 2; ++index)
+    {
+        rules[index].UseNormalRange = true;
+        rules[index].NormalSweep = 360;
+        rules[index].TextureSet = index;
+        rules[index].OverrideTextureSettings = true;
+        rules[index].StretchToFit = index == 0;
+        rules[index].UseTaperTextures = index == 0;
+        textures[index].TextureSet = index;
+        textures[index].Material.Set(GUID::Derive(GUID::Null(), "texture/" + std::to_string(index)));
+        textures[index].StartTaperMaterial.Set(GUID::Derive(GUID::Null(), "taper"));
+        textures[index].StartTaperSize = {0.2f, 0.2f};
+    }
+    const auto result = BuildShape(spline, {}, rules, textures);
+    ASSERT_TRUE(result.Error.empty());
+    const size_t parts = static_cast<size_t>(ShapePart::Count);
+    const size_t first = parts + rules.size();
+    const size_t second = first + parts;
+    ASSERT_EQ(result.Parts[first + static_cast<size_t>(ShapePart::Top)].Vertices.size(), 4u);
+    EXPECT_FLOAT_EQ(result.Parts[first + static_cast<size_t>(ShapePart::Top)].Vertices[1].TexCoords[0], 3.0f);
+    ASSERT_EQ(result.Parts[second + static_cast<size_t>(ShapePart::Top)].Vertices.size(), 4u);
+    EXPECT_FLOAT_EQ(result.Parts[second + static_cast<size_t>(ShapePart::Top)].Vertices[1].TexCoords[0], 3.3f);
+    EXPECT_EQ(result.Parts[first + static_cast<size_t>(ShapePart::StartCap)].Indices.size(), 6u);
+    EXPECT_TRUE(result.Parts[second + static_cast<size_t>(ShapePart::StartCap)].Indices.empty());
+}
+
+TEST(SmartShapeTextureSet, NormalRangesUseTheAuthoredSegmentAcrossCurvedSamples)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::CubicBezier;
+    spline.AddPoint({0, 0, 0}, 1);
+    spline.AddPoint({4, 0, 0}, 1);
+    spline.Points[0].TangentOut = {0, 4, 0};
+    spline.Points[1].TangentIn = {0, 4, 0};
+    Components::SmartShape settings;
+    settings.WeldEdges = false;
+    Components::SmartShapeEdge rule;
+    rule.UseNormalRange = true;
+    rule.NormalStart = 89;
+    rule.NormalSweep = 2;
+    rule.Material.Set(GUID::Derive(GUID::Null(), "curve material"));
+    const auto result = BuildShape(spline, settings, std::span(&rule, 1));
+    ASSERT_TRUE(result.Error.empty());
+    EXPECT_EQ(result.Parts[static_cast<size_t>(ShapePart::Count)].Indices.size(), settings.CurveSubdivisions * 6);
+    for (size_t part = 1; part <= 4; ++part)
+        EXPECT_TRUE(result.Parts[part].Indices.empty());
+}
+}
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, ClosedRuleRunFitsAcrossThePointIndexSeam)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    spline.Closed = true;
+    spline.AddPoint({-2, -1, 0}, 1);
+    spline.AddPoint({2, -1, 0}, 1);
+    spline.AddPoint({2, 1, 0}, 1);
+    spline.AddPoint({-2, 1, 0}, 1);
+    Components::SmartShape settings;
+    settings.WeldEdges = false;
+    settings.StretchToFit = false;
+    settings.TopMaterial.Set(GUID::Derive(GUID::Null(), "edge"));
+    settings.RightMaterial = settings.BottomMaterial = settings.LeftMaterial = settings.TopMaterial;
+    Components::SmartShapeEdge rule;
+    rule.PointIndex = 2;
+    rule.Visible = false;
+    const auto result = BuildShape(spline, settings, std::span(&rule, 1));
+    ASSERT_TRUE(result.Error.empty());
+    const auto& left = result.Parts[static_cast<size_t>(ShapePart::Left)];
+    const auto& bottom = result.Parts[static_cast<size_t>(ShapePart::Bottom)];
+    const auto& right = result.Parts[static_cast<size_t>(ShapePart::Right)];
+    ASSERT_EQ(left.Vertices.size(), 4u);
+    ASSERT_EQ(bottom.Vertices.size(), 4u);
+    ASSERT_EQ(right.Vertices.size(), 4u);
+    EXPECT_FLOAT_EQ(left.Vertices[0].TexCoords[0], 0);
+    EXPECT_FLOAT_EQ(left.Vertices[1].TexCoords[0], bottom.Vertices[0].TexCoords[0]);
+    EXPECT_FLOAT_EQ(bottom.Vertices[1].TexCoords[0], right.Vertices[0].TexCoords[0]);
+    EXPECT_FLOAT_EQ(right.Vertices[1].TexCoords[0], 8);
+}
+}
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeTextureSet, AuthoredIndicesDetermineSelectionAndDuplicatesAreRejected)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    spline.AddPoint({0, 0, 0}, 1);
+    spline.AddPoint({4, 0, 0}, 1);
+    std::vector<Components::SmartShapeTexture> textures(2);
+    textures[0].Index = 5;
+    textures[1].Index = 2;
+    const auto result = BuildShape(spline, {}, {}, textures);
+    ASSERT_TRUE(result.Error.empty());
+    const size_t parts = static_cast<size_t>(ShapePart::Count);
+    EXPECT_TRUE(result.Parts[parts + static_cast<size_t>(ShapePart::Top)].Indices.empty());
+    EXPECT_EQ(result.Parts[parts * 2 + static_cast<size_t>(ShapePart::Top)].Indices.size(), 6u);
+    textures[0].Index = 2;
+    EXPECT_FALSE(BuildShape(spline, {}, {}, textures).Error.empty());
 }
 }

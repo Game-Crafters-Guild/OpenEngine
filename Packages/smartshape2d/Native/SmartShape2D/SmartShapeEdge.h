@@ -17,6 +17,12 @@ struct SmartShapeEdge
     bool Flip = false;
     bool Visible = true;
     uint32 TextureIndex = 0;
+    uint32 TextureSet = 0;
+    bool OverrideTextureSettings = false;
+    bool RandomizeTextures = false;
+    bool StretchToFit = true;
+    bool UseCornerTextures = true;
+    bool UseTaperTextures = true;
     float Offset = 0.0f;
     float DepthOffset = 0.0f;
     bool Weld = true;

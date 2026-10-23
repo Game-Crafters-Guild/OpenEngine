@@ -4,6 +4,7 @@
 #include "SmartShape2D/ShapeMesh.h"
 #include "SmartShape2D/SmartShape.h"
 #include "Mathematics/Geometry.h"
+#include "Spline/SplineData.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,12 +37,11 @@ bool MatchesNormal(Vector2 normal, const Components::SmartShapeEdge& rule)
     return distance <= std::abs(rule.NormalSweep);
 }
 
-} // namespace
-
-void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settings,
+void BuildEdgeLayer(ShapeGeometry& result, const Components::SmartShape& settings,
                 const std::vector<float>& widths, const std::vector<uint32>& segments,
                 std::span<const Components::SmartShapeEdge> overrides,
-                std::span<const Components::SmartShapeTexture> textures, bool closed, float area)
+                std::span<const Components::SmartShapeTexture> textures, bool closed, float area,
+                const std::vector<const Components::SmartShapeEdge*>& rules, const std::vector<bool>& active)
 {
     const auto& points = result.Outline;
     const size_t count = points.size();
@@ -56,42 +56,35 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
     Vector2 closingTaperSize{};
     // Rules own contiguous runs. End tapers and UV fitting restart at a rule boundary
     // or hidden gap, independently of the texture variant selected for each quad.
-    std::vector<const Components::SmartShapeEdge*> rules(edges);
-    for (size_t index = 0; index < edges; ++index)
-    {
-        const auto delta = points[(index + 1) % count] - points[index];
-        const auto normal = Vector2{-delta.y, delta.x} * (side / delta.Length());
-        auto& rule = rules[index];
-        for (const bool normalRule : {false, true})
-        {
-            for (size_t candidate = 0; candidate < overrides.size(); ++candidate)
-            {
-                const auto& edge = overrides[candidate];
-                if (edge.UseNormalRange != normalRule ||
-                    (normalRule ? !MatchesNormal(normal, edge) : edge.PointIndex != segments[index]))
-                    continue;
-                rule = &edge;
-                break;
-            }
-            if (rule)
-                break;
-        }
-    }
     std::vector<uint32> groups(edges);
     uint32 group = 0;
     for (size_t index = 1; index < edges; ++index)
     {
-        if (rules[index] != rules[index - 1])
+        if (rules[index] != rules[index - 1] || active[index] != active[index - 1])
             ++group;
         groups[index] = group;
     }
-    if (closed && rules.front() == rules.back())
+    if (closed && rules.front() == rules.back() && active.front() == active.back())
     {
         for (size_t index = edges; index > 0 && groups[index - 1] == group; --index)
             groups[index - 1] = 0;
     }
-    for (size_t index = 0; index < edges; ++index)
+    size_t firstEdge = 0;
+    if (closed)
     {
+        for (size_t index = 0; index < edges; ++index)
+        {
+            const size_t previous = (index + edges - 1) % edges;
+            if (active[index] && (!active[previous] || rules[index] != rules[previous]))
+            {
+                firstEdge = index;
+                break;
+            }
+        }
+    }
+    for (size_t step = 0; step < edges; ++step)
+    {
+        const size_t index = (firstEdge + step) % edges;
         const size_t next = (index + 1) % count;
         const auto delta = points[next] - points[index];
         const auto normal = Vector2{-delta.y, delta.x} * (side / delta.Length());
@@ -99,32 +92,39 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         const auto* rule = rules[index];
         if (rule && !rule->Material.IsNull())
             part = kParts + static_cast<size_t>(rule - overrides.data());
-        const bool runStart = (!closed && index == 0) || rules[index] != rules[(index + edges - 1) % edges];
-        const bool runEnd = (!closed && index + 1 == edges) || rules[index] != rules[(index + 1) % edges];
+        const bool runStart = (!closed && index == 0) || rules[index] != rules[(index + edges - 1) % edges] || !active[(index + edges - 1) % edges];
+        const bool runEnd = (!closed && index + 1 == edges) || rules[index] != rules[(index + 1) % edges] || !active[(index + 1) % edges];
         if (runStart && !quads.empty())
             quads.back().IgnoreWeldNext = true;
-        if (rule && !rule->Visible)
+        if (!active[index] || (rule && !rule->Visible))
         {
             if (!quads.empty())
                 quads.back().IgnoreWeldNext = true;
             continue;
         }
+        const bool ownTextureSettings = rule && rule->OverrideTextureSettings;
+        const bool randomize = ownTextureSettings ? rule->RandomizeTextures : settings.RandomizeTextures;
+        const bool useCorners = ownTextureSettings ? rule->UseCornerTextures : settings.UseCornerTextures;
+        const bool useTapers = ownTextureSettings ? rule->UseTaperTextures : settings.UseTaperTextures;
         choices.clear();
         for (const bool specific : {true, false})
         {
             for (size_t candidate = 0; candidate < textures.size(); ++candidate)
             {
-                if (textures[candidate].PointIndex == (specific ? static_cast<int32>(segments[index]) : -1))
+                if (textures[candidate].TextureSet == (rule ? rule->TextureSet : 0) &&
+                    textures[candidate].PointIndex == (specific ? static_cast<int32>(segments[index]) : -1))
                     choices.push_back(candidate);
             }
             if (!choices.empty())
                 break;
         }
+        std::sort(choices.begin(), choices.end(), [&textures](size_t left, size_t right)
+                  { return textures[left].Index < textures[right].Index; });
         const Components::SmartShapeTexture* texture = nullptr;
         size_t base = 0;
         if (!choices.empty())
         {
-            const size_t selection = settings.RandomizeTextures ? random() : (rule ? rule->TextureIndex : 0);
+            const size_t selection = randomize ? random() : (rule ? rule->TextureIndex : 0);
             const size_t chosen = choices[selection % choices.size()];
             texture = &textures[chosen];
             base = kParts + overrides.size() + chosen * kParts;
@@ -139,7 +139,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         quad.Group = groups[index];
         quad.TileLength = texture ? texture->TileLength : settings.TileLength;
         quad.Flip = rule && rule->Flip;
-        quad.Stretch = settings.StretchToFit;
+        quad.Stretch = ownTextureSettings ? rule->StretchToFit : settings.StretchToFit;
         quad.Depth = settings.EdgeDepth + (rule ? rule->DepthOffset : 0.0f);
         quad.IgnoreWeldNext = rule && !rule->Weld;
         if (rule && !rule->Weld && !quads.empty())
@@ -161,7 +161,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             const bool inner = (turn < 0.0f) != reverse;
             const auto cornerKind = inner ? ShapePart::InnerCorner : ShapePart::OuterCorner;
             const size_t cornerPart = base + static_cast<size_t>(cornerKind);
-            if (settings.UseCornerTextures && std::abs(turn) >= 80.0f && std::abs(turn) <= 100.0f && !result.Materials[cornerPart].IsNull())
+            if (useCorners && std::abs(turn) >= 80.0f && std::abs(turn) <= 100.0f && !result.Materials[cornerPart].IsNull())
             {
                 auto corner = MakeEdgeCorner(points[previous], points[index], points[next],
                     width * widths[index], width * widths[previous], width * offset, settings.FlipEdges,
@@ -175,8 +175,8 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
                 hasCorner = true;
             }
         }
-        const bool sharpTaper = settings.UseTaperTextures && (settings.TaperSharpCorners || (rule && rule->TaperSharpCorners)) && sharp && !hasCorner;
-        if (sharpTaper && closed && index == 0)
+        const bool sharpTaper = useTapers && (settings.TaperSharpCorners || (rule && rule->TaperSharpCorners)) && sharp && !hasCorner;
+        if (sharpTaper && closed && step == 0)
         {
             closingTaperPart = base + static_cast<size_t>(ShapePart::SharpEndTaper);
             closingTaperSize = texture ? texture->EndTaperSize : settings.EndTaperSize;
@@ -192,7 +192,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             }
             quads.back().IgnoreWeldNext = true;
         }
-        if (settings.UseTaperTextures && (runStart || sharpTaper))
+        if (useTapers && (runStart || sharpTaper))
         {
             const size_t taperPart = base + static_cast<size_t>(sharpTaper ? ShapePart::SharpStartTaper : ShapePart::StartCap);
             if (!result.Materials[taperPart].IsNull())
@@ -203,7 +203,7 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             }
         }
         quads.push_back(quad);
-        if (settings.UseTaperTextures && runEnd)
+        if (useTapers && runEnd)
         {
             const size_t taperPart = base + static_cast<size_t>(ShapePart::EndCap);
             if (!result.Materials[taperPart].IsNull())
@@ -247,13 +247,15 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
             WeldEdgeQuads(quads.back(), quads.front());
     }
     // Join a material run crossing the closed outline's index seam before fitting its UVs.
-    if (closed && quads.size() > 1 && quads.front().Part == quads.back().Part &&
+    if (closed && quads.size() > 1 && result.Materials[quads.front().Part] == result.Materials[quads.back().Part] &&
         quads.front().Flip == quads.back().Flip && quads.front().Group == quads.back().Group && !quads.front().Taper && !quads.back().Taper &&
         quads.front().Corner == QuadCorner::None && quads.back().Corner == QuadCorner::None)
     {
-        const auto boundary = std::find_if(quads.begin(), quads.end(), [part = quads.front().Part, flip = quads.front().Flip](const EdgeQuad& quad)
+        const auto boundary = std::find_if(quads.begin(), quads.end(), [&first = quads.front(), &result](const EdgeQuad& quad)
         {
-            return quad.Part != part || quad.Flip != flip || quad.Taper || quad.Corner != QuadCorner::None;
+            return result.Materials[quad.Part] != result.Materials[first.Part] || quad.Group != first.Group ||
+                   quad.Flip != first.Flip || quad.Stretch != first.Stretch || quad.TileLength != first.TileLength ||
+                   quad.Depth != first.Depth || quad.Taper || quad.Corner != QuadCorner::None;
         });
         if (boundary != quads.end())
             std::rotate(quads.begin(), boundary, quads.end());
@@ -284,5 +286,60 @@ void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settin
         }
         begin = end;
     }
+}
+
+} // namespace
+
+void BuildShapeEdges(ShapeGeometry& result, const Components::SmartShape& settings,
+                const std::vector<float>& widths, const std::vector<uint32>& segments,
+                std::span<const Components::SmartShapeEdge> overrides,
+                std::span<const Components::SmartShapeTexture> textures, const Spline::SplineData& spline, float area)
+{
+    const bool closed = spline.IsEffectivelyClosed();
+    const size_t count = result.Outline.size();
+    const size_t edges = closed ? count : count - 1;
+    const float side = ((closed ? area < 0.0f : true) != settings.FlipEdges) ? 1.0f : -1.0f;
+    std::vector<Vector2> normals(edges);
+    std::vector<const Components::SmartShapeEdge*> pointRules(edges);
+    std::vector<bool> defaultEdges(edges, true);
+    for (size_t index = 0; index < edges; ++index)
+    {
+        // Material ranges select the authored edge, not each tessellated tangent.
+        const auto& start = spline.Points[segments[index]].Position;
+        const auto& end = spline.Points[(segments[index] + 1) % spline.Points.size()].Position;
+        const Vector2 delta{end.x - start.x, end.y - start.y};
+        normals[index] = Vector2{-delta.y, delta.x} * side;
+        for (const auto& rule : overrides)
+        {
+            if (!rule.UseNormalRange && rule.PointIndex == segments[index])
+            {
+                pointRules[index] = &rule;
+                break;
+            }
+        }
+    }
+    // Every matching normal material owns a separate layer. Point overrides replace
+    // every layer on their segment; invisible normal materials only hide their own layer.
+    std::vector<const Components::SmartShapeEdge*> layerRules(edges);
+    std::vector<bool> active(edges);
+    for (const auto& rule : overrides)
+    {
+        if (!rule.UseNormalRange)
+            continue;
+        std::fill(layerRules.begin(), layerRules.end(), &rule);
+        bool any = false;
+        for (size_t index = 0; index < edges; ++index)
+        {
+            const bool matches = MatchesNormal(normals[index], rule);
+            defaultEdges[index] = defaultEdges[index] && !matches;
+            active[index] = matches && !pointRules[index];
+            any |= active[index];
+        }
+        if (any)
+            BuildEdgeLayer(result, settings, widths, segments, overrides, textures, closed, area, layerRules, active);
+    }
+    for (size_t index = 0; index < edges; ++index)
+        active[index] = defaultEdges[index] || pointRules[index];
+    BuildEdgeLayer(result, settings, widths, segments, overrides, textures, closed, area, pointRules, active);
 }
 }

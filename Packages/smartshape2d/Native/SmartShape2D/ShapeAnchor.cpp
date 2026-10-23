@@ -22,20 +22,32 @@ Mathematics::Matrix4x4 EvaluateAnchor(const Spline::SplineData& spline,
     const auto position = parent.TransformPoint(Spline::EvaluatePosition(spline, (segment + offset) / count));
     const auto before = parent.TransformPoint(Spline::EvaluatePosition(spline, (segment + std::max(0.0f, offset - 0.1f)) / count));
     const auto after = parent.TransformPoint(Spline::EvaluatePosition(spline, (segment + std::min(1.0f, offset + 0.1f)) / count));
-    const auto direction = after - before;
-    const float angle = std::atan2(direction.y, direction.x) + anchor.Rotation * std::numbers::pi_v<float> / 180.0f;
+    auto direction = (after - before).Normalize();
+    const auto origin = parent.TransformPoint({});
+    const auto parentX = parent.TransformPoint({1.0f, 0.0f, 0.0f}) - origin;
+    if (direction.LengthSquared() <= 0.00000001f)
+        direction = parentX.Normalize();
+    const auto parentY = parent.TransformPoint({0.0f, 1.0f, 0.0f}) - origin;
+    auto normal = Mathematics::Vector3::Cross(parentX, parentY).Normalize();
+    const auto parentZ = parent.TransformPoint({0.0f, 0.0f, 1.0f}) - origin;
+    if (Mathematics::Vector3::Dot(normal, parentZ) < 0.0f)
+        normal = normal * -1.0f;
+    const auto perpendicular = Mathematics::Vector3::Cross(normal, direction).Normalize();
+    const float angle = anchor.Rotation * std::numbers::pi_v<float> / 180.0f;
+    const auto right = direction * std::cos(angle) + perpendicular * std::sin(angle);
+    const auto up = perpendicular * std::cos(angle) - direction * std::sin(angle);
+    const float basis[16] = {right.x, right.y, right.z, 0.0f,
+                             up.x, up.y, up.z, 0.0f,
+                             normal.x, normal.y, normal.z, 0.0f,
+                             position.x, position.y, position.z, 1.0f};
     Mathematics::Vector3 scale{1.0f, 1.0f, 1.0f};
     if (anchor.UseShapeScale)
     {
-        const auto origin = parent.TransformPoint({});
-        scale = {(parent.TransformPoint({1.0f, 0.0f, 0.0f}) - origin).Length(),
-                 (parent.TransformPoint({0.0f, 1.0f, 0.0f}) - origin).Length(),
-                 (parent.TransformPoint({0.0f, 0.0f, 1.0f}) - origin).Length()};
+        scale = {parentX.Length(), parentY.Length(), parentZ.Length()};
     }
     const auto inverse = Mathematics::Inverse(parent);
     if (!std::all_of(inverse.Data(), inverse.Data() + 16, [](float value) { return std::isfinite(value); }))
         return {};
-    return inverse * Mathematics::Matrix4x4::Translation(position) *
-        Mathematics::MakeRotationZ(angle) * Mathematics::MakeScale(scale);
+    return inverse * Mathematics::Matrix4x4::FromColumnMajor(basis) * Mathematics::MakeScale(scale);
 }
 }

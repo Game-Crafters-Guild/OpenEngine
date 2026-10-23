@@ -61,3 +61,27 @@ TEST(SmartShapeAnchor, CompensatesParentScaleUnlessEnabled)
     EXPECT_FLOAT_EQ(result.Data()[5], 3.0f);
 }
 }
+
+namespace GameEngine::SmartShape2D
+{
+TEST(SmartShapeAnchor, FollowsTheShapePlaneWhenTheParentRotatesInThreeDimensions)
+{
+    Spline::SplineData spline;
+    spline.Type = Spline::SplineType::Linear;
+    spline.AddPoint({0, 0, 0}, 1);
+    spline.AddPoint({4, 0, 0}, 1);
+    Components::SmartShapeAnchor anchor;
+    anchor.PointOffset = 0.5f;
+    const auto parent = Mathematics::MakeRotationY(1.0f);
+    const auto world = parent * EvaluateAnchor(spline, anchor, parent);
+    const auto expectedForward = parent.TransformPoint({1, 0, 0}) - parent.TransformPoint({});
+    const auto forward = world.TransformPoint({1, 0, 0}) - world.TransformPoint({});
+    EXPECT_NEAR(forward.x, expectedForward.x, 0.00001f);
+    EXPECT_NEAR(forward.y, expectedForward.y, 0.00001f);
+    EXPECT_NEAR(forward.z, expectedForward.z, 0.00001f);
+    const auto position = world.TransformPoint({});
+    const auto expectedPosition = parent.TransformPoint({2, 0, 0});
+    EXPECT_NEAR(position.x, expectedPosition.x, 0.00001f);
+    EXPECT_NEAR(position.z, expectedPosition.z, 0.00001f);
+}
+}

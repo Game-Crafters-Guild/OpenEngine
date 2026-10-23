@@ -9,10 +9,14 @@
 GE_REGISTER_COMPONENT_NO_ADD(GameEngine::Components::GeneratedShapeResources, Owner, MeshKey, Part)
 GE_REFLECT_COMPONENT_DONOTSERIALIZE(GameEngine::Components::GeneratedShapeResources)
 
-GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeEdge, PointIndex, UseNormalRange, NormalStart, NormalSweep, Priority, Material, WidthScale, Flip, Visible, TextureIndex, Offset, DepthOffset, Weld, TaperSharpCorners)
+GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeEdge, PointIndex, UseNormalRange, NormalStart, NormalSweep,
+    Priority, Material, WidthScale, Flip, Visible, TextureIndex, TextureSet, OverrideTextureSettings,
+    RandomizeTextures, StretchToFit, UseCornerTextures, UseTaperTextures, Offset, DepthOffset, Weld, TaperSharpCorners)
 GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, UseNormalRange, "Apply to outward normals within an angular range instead of one point. Point overrides take precedence.")
 GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, NormalStart, "Start angle in degrees, counterclockwise from local +X. +Y is 90 degrees.")
-GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, NormalSweep, "Signed angular span. Zero or 360 selects all directions. Higher priority rules are tested first.")
+GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, NormalSweep, "Signed angular span. Zero or 360 selects all directions. Every matching normal rule renders its own layer.")
+GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, TextureSet, "Select texture entries with this set number. Point-specific entries replace the default entries within that set.")
+GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, OverrideTextureSettings, "Use this edge rule's randomization, fit, corner and taper settings instead of the shape settings.")
 GE_REFLECT_FIELD_RANGE(GameEngine::Components::SmartShapeEdge, WidthScale, 0.001f, 1000.0f)
 GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeEdge, PointIndex, "Zero-based spline point whose outgoing segment is overridden. Parent this entity to a Smart Shape.")
 
@@ -20,7 +24,7 @@ GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeAnchor, PointIndex, Poin
 GE_REFLECT_FIELD_RANGE(GameEngine::Components::SmartShapeAnchor, PointOffset, 0.0f, 1.0f)
 GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeAnchor, Rotation, "Rotation in degrees relative to the forward curve tangent. Parent this entity to a Smart Shape.")
 
-GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeTexture, PointIndex, Index, Material, InnerCornerMaterial,
+GE_REGISTER_COMPONENT(GameEngine::Components::SmartShapeTexture, PointIndex, Index, TextureSet, Material, InnerCornerMaterial,
     OuterCornerMaterial, StartTaperMaterial, EndTaperMaterial, SharpStartTaperMaterial, SharpEndTaperMaterial,
     TileLength, WidthScale, StartTaperSize, EndTaperSize)
 GE_REFLECT_FIELD_TOOLTIP(GameEngine::Components::SmartShapeTexture, PointIndex, "Segment receiving this texture set entry. -1 supplies the shape default set. Parent this entry to a Smart Shape.")

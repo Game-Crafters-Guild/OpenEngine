@@ -11,6 +11,7 @@ struct SmartShapeTexture
 {
     int32 PointIndex = -1;
     uint32 Index = 0;
+    uint32 TextureSet = 0;
     MaterialRef Material;
     MaterialRef InnerCornerMaterial;
     MaterialRef OuterCornerMaterial;

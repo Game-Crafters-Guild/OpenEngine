@@ -14,6 +14,7 @@
 #include <cmath>
 #include <numeric>
 #include <numbers>
+#include <tuple>
 
 namespace GameEngine::SmartShape2D
 {
@@ -90,6 +91,16 @@ ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::Sma
     {
         result.Materials.push_back(edge.Material);
         result.Kinds.push_back(ShapePart::Top);
+    }
+    std::vector<std::tuple<uint32, int32, uint32>> textureKeys;
+    textureKeys.reserve(textures.size());
+    for (const auto& texture : textures)
+        textureKeys.emplace_back(texture.TextureSet, texture.PointIndex, texture.Index);
+    std::sort(textureKeys.begin(), textureKeys.end());
+    if (std::adjacent_find(textureKeys.begin(), textureKeys.end()) != textureKeys.end())
+    {
+        result.Error = "Give each texture entry a unique Index within its Texture Set and Point Index.";
+        return result;
     }
     for (const auto& texture : textures)
     {
@@ -208,7 +219,7 @@ ShapeGeometry BuildShape(const Spline::SplineData& spline, const Components::Sma
     if (closed && settings.FillEnabled)
         BuildFill(result, settings, world);
     if (settings.EdgesEnabled)
-        BuildShapeEdges(result, settings, widths, sampleSegments, overrides, textures, closed, area);
+        BuildShapeEdges(result, settings, widths, sampleSegments, overrides, textures, spline, area);
     for (auto& mesh : result.Parts)
     {
         ComputeShapeBounds(mesh);
