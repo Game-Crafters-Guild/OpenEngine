@@ -1906,6 +1906,7 @@ void UIManager::Update(float deltaTime, bool interactive)
     if (forceGlobalStyle)            MarkPrimitivesNeedRegen(0x4u);
     if (viewportChanged)             MarkPrimitivesNeedRegen(0x8u);
     if (relayoutRequestedPre)        MarkPrimitivesNeedRegen(0x10u);
+    if (fontsChanged)                MarkPrimitivesNeedRegen(0x200u);
     // Scroll translation is drain-only: ApplyScrollTransforms queues the
     // translated subtree and the drain re-emits it at the patched rects.
     if (m_TransitionEngine && m_TransitionEngine->HasActiveTransitions())

@@ -20,6 +20,7 @@
 #include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIManager.h"
+#include "UI/UIPrimitive.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
@@ -335,6 +336,26 @@ protected:
             << "the following punctuation must move with the new font advance";
     }
 
+    void ExpectFontRepaint(const UI::UIPrimitive& fallback)
+    {
+        const auto* painted = m_Ui->PeekPrimitiveForTesting(*m_Text, 0);
+        ASSERT_NE(painted, nullptr);
+        const UI::UIPrimitive actual = *painted;
+        m_Text->MarkDirty(UIElement::VisualDirty);
+        Update();
+        const auto* refreshed = m_Ui->PeekPrimitiveForTesting(*m_Text, 0);
+        ASSERT_NE(refreshed, nullptr);
+        EXPECT_NE(fallback.TextureIndex, refreshed->TextureIndex);
+        EXPECT_EQ(actual.TextureIndex, refreshed->TextureIndex)
+            << "font completion must repaint even when the label rectangle does not change";
+        EXPECT_FLOAT_EQ(actual.X, refreshed->X);
+        EXPECT_FLOAT_EQ(actual.Y, refreshed->Y);
+        EXPECT_FLOAT_EQ(actual.W, refreshed->W);
+        EXPECT_FLOAT_EQ(actual.H, refreshed->H);
+        EXPECT_FLOAT_EQ(m_Text->GetLayoutWidth(), 200.0f);
+        EXPECT_FLOAT_EQ(m_Text->GetLayoutHeight(), 40.0f);
+    }
+
     SharedDeviceReleaseRetirement m_Retirement;
     std::unique_ptr<UiRgHarness> m_Render;
     std::unique_ptr<UIManager> m_Ui;
@@ -387,6 +408,45 @@ TEST_P(UIFontRemeasureTests, ReplacingDefaultFontRemeasuresCleanText)
     ASSERT_TRUE(m_Ui->SetDefaultFontBytes(m_MonoBytes));
     Update();
     ExpectMonoLayout();
+}
+
+TEST_P(UIFontRemeasureTests, AsyncFamilyRepaintsFixedSizeText)
+{
+    Stylesheet sheet{};
+    ASSERT_TRUE(CSSParser::ParseStylesFromString(
+        "#text { width: 200px; height: 40px; font-family: 'Delayed Mono'; }", sheet));
+    m_Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
+    UIManager::FontResolveCallback pending;
+    m_Ui->SetFontResolver([&pending](const std::string& family, int, FontStyle, FontVariant,
+                                   UIManager::FontResolveCallback ready)
+    {
+        if (family == "Delayed Mono")
+            pending = std::move(ready);
+    });
+    Settle();
+    ASSERT_TRUE(static_cast<bool>(pending));
+    const auto* painted = m_Ui->PeekPrimitiveForTesting(*m_Text, 0);
+    ASSERT_NE(painted, nullptr);
+    const UI::UIPrimitive fallback = *painted;
+    UIManager::FontResolveResult resolved{};
+    resolved.Bytes = m_MonoBytes;
+    pending(std::move(resolved));
+    Update();
+    ExpectFontRepaint(fallback);
+}
+
+TEST_P(UIFontRemeasureTests, ReplacingDefaultFontRepaintsFixedSizeText)
+{
+    Stylesheet sheet{};
+    ASSERT_TRUE(CSSParser::ParseStylesFromString("#text { width: 200px; height: 40px; }", sheet));
+    m_Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
+    Settle();
+    const auto* painted = m_Ui->PeekPrimitiveForTesting(*m_Text, 0);
+    ASSERT_NE(painted, nullptr);
+    const UI::UIPrimitive fallback = *painted;
+    ASSERT_TRUE(m_Ui->SetDefaultFontBytes(m_MonoBytes));
+    Update();
+    ExpectFontRepaint(fallback);
 }
 
 INSTANTIATE_TEST_SUITE_P(UpdateModes, UIFontRemeasureTests,
