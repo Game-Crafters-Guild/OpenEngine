@@ -1,5 +1,6 @@
 #include "TerrainGrass/TerrainGrassRenderFeature.h"
 
+#include "GrassBladeInstanceGPU.h"
 #include "TerrainGrass/GrassBladeRows.h"
 #include "TerrainGrass/GrassComputePrograms.h"
 #include "TerrainGrass/GrassDrawMode.h"
@@ -15,6 +16,7 @@
 #include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/MaterialSystem.h"
 #include "Engine/Rendering/PipelineVariantCache.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Rendering/Core/Device.h"
@@ -37,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -75,23 +78,6 @@ struct BladeVertex
 // from set 2.
 constexpr Rendering::VertexAttributeFlags kBladeColourVertexFlags = Rendering::VertexAttributeFlags::None;
 
-struct GrassBladeInstanceGPU
-{
-    float WorldX = 0.0f;
-    float WorldZ = 0.0f;
-    float RootY = 0.0f;
-    float BladeHeight = 0.0f;
-    float BladeWidth = 0.0f;
-    float Yaw = 0.0f;
-    uint32 RandAndCoverage = 0; // grass_clump.glsl owns the layout (per-blade random, field coverage)
-    uint32 BladeShape = 0;      // grass_clump.glsl owns the bit layout (tilt, twist, tuft fan)
-    uint32 TerrainIndex = 0;
-    float NormalX = 0.0f; // baked terrain normal (atlas terrains only; 0 otherwise)
-    float NormalZ = 0.0f;
-    uint32 Flags = 0;     // GrassClumpModel.h owns the bit layout (LOD, clump code, min width)
-};
-static_assert(sizeof(GrassBladeInstanceGPU) == 48);
-
 Rendering::BufferHandle CreateUniformBuffer(Rendering::IDevice& device, uint64 size, const char* name)
 {
     Rendering::BufferDesc desc{};
@@ -120,6 +106,8 @@ Rendering::BufferHandle CreateUniformBuffer(Rendering::IDevice& device, uint64 s
 constexpr uint32 kGrassCompatMapBinding0 = 7u;
 constexpr uint32 kGrassCompatMapCount = 12u;
 constexpr uint32 kGrassCompatMapSamplerBinding = 19u;
+// The terrain material table the full profile's root colour resolve reads, past the compat block.
+constexpr uint32 kGrassMaterialTableBinding = 20u;
 
 // `namedMaps` is the compat profile: it has no binding arrays, so the maps the placement
 // shader samples are named bindings in this set instead of bindless indices.
@@ -145,7 +133,12 @@ Rendering::DescriptorSetLayoutDesc MakeGrassPlaceDescriptorSetLayout(bool namedM
         {6, Rendering::DescriptorType::UniformBuffer, 1, Rendering::kShaderStageCompute, "GrassPlaceParamsBuffer"},
     };
     if (!namedMaps)
+    {
+        layout.bindings.push_back({kGrassMaterialTableBinding, Rendering::DescriptorType::StorageBuffer, 1,
+                                   Rendering::kShaderStageCompute, "TerrainMaterialTableBuffer",
+                                   Rendering::kDescriptorBindingReadOnlyStorage});
         return layout;
+    }
     // Order and binding numbers mirror the compat declarations in terrain_grass_place.comp;
     // one sampler serves all twelve, because every tap is a clamped explicit-LOD lookup.
     static constexpr const char* kMapBindingNames[] = {
@@ -439,13 +432,14 @@ public:
         }
         Engine::Renderer::Material* material = m_Materials[static_cast<uint32>(mode)];
 
+        const bool compatProfile = m_RenderServices.GetProfile().IsCompat();
         const auto paramsSSBO = m_TerrainFeature.GetTerrainParamsSSBO(paramsSlot);
         // The material table, from the SAME published slot: a params entry names its materials by
-        // absolute table index, so a slot mismatch would resolve a real but wrong material.
+        // absolute table index, so a slot mismatch would resolve a real but wrong material. Only the
+        // compat surface reads it; the full profile's blade carries its ground colour from placement.
         const auto materialsSSBO = m_TerrainFeature.GetTerrainMaterialTableSSBO(paramsSlot);
         const uint32 terrainMaterialCount = m_TerrainFeature.GetTerrainMaterialCount(paramsSlot);
-        if (!paramsSSBO.IsValid() || !materialsSSBO.IsValid() ||
-            terrainMaterialCount == 0 ||
+        if (!paramsSSBO.IsValid() || (compatProfile && (!materialsSSBO.IsValid() || terrainMaterialCount == 0)) ||
             !m_Feature.GetBladeVB().IsValid() || !m_Feature.GetBladeIB().IsValid())
             return;
 
@@ -487,8 +481,10 @@ public:
                 * sizeof(Rendering::WindVolumeGPU)});
         scratch.Shared.push_back({HashStringId("TerrainParamsBuffer"), paramsSSBO,
             0u, static_cast<uint64>(terrainParamsCount) * sizeof(Terrain::TerrainGPUParams)});
-        // The terrain material table the blade's base colour resolves through — the same buffer the
-        // terrain surface reads, which is what keeps a blade and its ground one decision.
+        // The terrain material table the compat surface resolves the blade's base colour through —
+        // the same buffer the terrain surface reads, which is what keeps a blade and its ground one
+        // decision. The full profile resolves that colour in the placement compute, and no stage of
+        // its draw declares the table.
         //
         // Every set-2 buffer is keyed by the name REFLECTION reports, which is the block's instance
         // name where it has one and the block name where it does not. The three the shaders declare
@@ -497,15 +493,16 @@ public:
         // those. Getting it the wrong way round leaves the binding unresolvable, and MaterialBinder
         // then drops the draw with a throttled Error log — the symptom is invisible grass, not a
         // device loss.
-        scratch.Shared.push_back({HashStringId("TerrainMaterialTableBuffer"), materialsSSBO,
-            0u, static_cast<uint64>(terrainMaterialCount) * sizeof(Terrain::TerrainMaterialRecord)});
-        // The eight maps the grass surface and vertex modifier declare by name under the compat
-        // profile (set 2, b20-27). That profile has no binding array, so nothing else fills them —
+        if (compatProfile)
+            scratch.Shared.push_back({HashStringId("TerrainMaterialTableBuffer"), materialsSSBO,
+                0u, static_cast<uint64>(terrainMaterialCount) * sizeof(Terrain::TerrainMaterialRecord)});
+        // The nine maps the grass surface and vertex modifier declare by name under the compat
+        // profile (set 2, b20-27 and b29). That profile has no binding array, so nothing else fills them —
         // a declared-but-unbound texture draws black with no error at all, which is exactly how
         // the terrain surface failed before its own bindings landed.
         //
         // Terrain 0, matching the single-terrain limit both CBT and the grass atlas already carry.
-        if (m_RenderServices.GetProfile().IsCompat())
+        if (compatProfile)
         {
             auto* terrainFeature = &m_TerrainFeature;
             const auto terrains = terrainFeature->GetActiveTerrains();
@@ -529,6 +526,10 @@ public:
                 bindTex("gGrassBladeNormal", compat.GrassNormal);
                 bindTex("gGrassVtxHeightmap", terrainFeature->GetHeightmapTexture(primary));
                 bindTex("gGrassVtxNormalmap", terrainFeature->GetNormalmapTexture(primary));
+                // The unified colour map the blade's ground colour mixes toward; the params row's
+                // kTerrainFlagHasColorMap says whether the surface reads it.
+                bindTex("gGrassColormap", terrainFeature->GetFieldTexture(TerrainECS::TerrainField::Color, primary,
+                                                                          TerrainECS::TerrainFieldMap::Unified));
                 {
                     // Shared sampler at its own binding (28), read by both stages.
                     Engine::Renderer::DrawBindings::TextureEntry e{};
@@ -539,24 +540,27 @@ public:
             }
         }
 
-        // The resident-window atlas params + indirection rows, so the blade's ground colour
+        // The resident-window atlas params + indirection rows, so the compat surface's ground colour
         // resolves the splat through grass_atlas_splat.glsl exactly as its placement mask did.
-        // Bound UNCONDITIONALLY: the surface declares both blocks always, and an unbound set-2
-        // buffer makes the binder drop the draw. A non-atlas terrain reads Enabled == 0 and never
-        // touches the rows.
-        const auto atlas = m_Feature.GetAtlasBindingForDraw(ctx.FrameIndex);
-        if (!atlas.ParamsUBO.IsValid() || !atlas.Rows.IsValid())
+        // Bound on every compat draw: the compat surface declares both blocks always, and an unbound
+        // set-2 buffer makes the binder drop the draw. A non-atlas terrain reads Enabled == 0 and never
+        // touches the rows. The full profile's draw declares neither block.
+        if (compatProfile)
         {
-            static bool logged = false;
-            if (kDbg && once(logged))
-                Logger::Log::Info("TerrainGrass.Forward stop=atlasbindings params={} rows={}",
-                                  atlas.ParamsUBO.IsValid(), atlas.Rows.IsValid());
-            return;
+            const auto atlas = m_Feature.GetAtlasBindingForDraw(ctx.FrameIndex);
+            if (!atlas.ParamsUBO.IsValid() || !atlas.Rows.IsValid())
+            {
+                static bool logged = false;
+                if (kDbg && once(logged))
+                    Logger::Log::Info("TerrainGrass.Forward stop=atlasbindings params={} rows={}",
+                                      atlas.ParamsUBO.IsValid(), atlas.Rows.IsValid());
+                return;
+            }
+            scratch.Shared.push_back({HashStringId("Atlas"), atlas.ParamsUBO,
+                0u, sizeof(TerrainGrassRenderFeature::GrassAtlasParamsGPU)});
+            scratch.Shared.push_back({HashStringId("gAtlasRows"), atlas.Rows,
+                0u, atlas.RowsRangeBytes});
         }
-        scratch.Shared.push_back({HashStringId("Atlas"), atlas.ParamsUBO,
-            0u, sizeof(TerrainGrassRenderFeature::GrassAtlasParamsGPU)});
-        scratch.Shared.push_back({HashStringId("gAtlasRows"), atlas.Rows,
-            0u, atlas.RowsRangeBytes});
         // The budget fit's range scale, so the vertex stage's far-LOD band ends where placement
         // actually stopped spawning. Keyed by the block's INSTANCE name, like Atlas/gAtlasRows
         // above and unlike the three nameless blocks.
@@ -1315,6 +1319,15 @@ bool TerrainGrassRenderFeature::ResolvePlaceParams(
     out.CellWindow[2] = static_cast<int32>(plan.CellSpan);
     out.CellWindow[3] = static_cast<int32>(terrainParamsCount);
 
+    // The origin ResolveCameraData derives for the draw; the stored camera FindCameraData returns
+    // carries none.
+    const Components::WorldSectorCoord origin = Engine::Renderer::ComputeRenderOriginSector(
+        camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2]);
+    out.RenderOriginSector[0] = origin.x;
+    out.RenderOriginSector[1] = origin.y;
+    out.RenderOriginSector[2] = origin.z;
+    out.RenderOriginSector[3] = static_cast<int32>(Engine::Renderer::kSectorSize);
+
     // A conservative vertical extent for the cell AABB: no blade can root outside the terrain's
     // own height range, and none can reach higher than the tallest authored blade.
     out.Bounds[0] = summary.WorldMinY;
@@ -1355,8 +1368,10 @@ bool TerrainGrassRenderFeature::ShouldSkipPlacement(
     inputs.PlaceParams = std::span<const uint8>(reinterpret_cast<const uint8*>(&buffers.Place),
                                                 sizeof(buffers.Place));
     inputs.Plan = buffers.Plan;
-    terrainFeature.CopyLastTerrainParamsBytes(buffers.TerrainParamsScratch);
+    terrainFeature.CopyLastTerrainParamsAndMaterialBytes(buffers.TerrainParamsScratch,
+                                                         buffers.TerrainMaterialScratch);
     inputs.TerrainParams = buffers.TerrainParamsScratch;
+    inputs.TerrainMaterials = buffers.TerrainMaterialScratch;
     inputs.TerrainContentEpoch = terrainFeature.GetGrassPlacementContentEpoch();
 
     TerrainECS::AtlasGrassSource atlasSource{};
@@ -1368,7 +1383,8 @@ bool TerrainGrassRenderFeature::ShouldSkipPlacement(
         buffers.AtlasBindlessScratch = {atlasSource.HeightBindless, atlasSource.HeightCoarseBindless,
                                         atlasSource.NormalBindless, atlasSource.NormalCoarseBindless,
                                         atlasSource.SplatBindless, atlasSource.SplatCoarseBindless,
-                                        atlasSource.GrassBindless, atlasSource.GrassCoarseBindless};
+                                        atlasSource.GrassBindless, atlasSource.GrassCoarseBindless,
+                                        atlasSource.ColorBindless, atlasSource.ColorCoarseBindless};
         inputs.AtlasBindlessIndices = buffers.AtlasBindlessScratch;
     }
     else
@@ -1593,6 +1609,16 @@ void TerrainGrassRenderFeature::DispatchPlacementBody(
     if (atlas.Rows.IsValid())
         device->UpdateStorageBufferBinding(ds, 5, atlas.Rows, 0, atlas.RowsRangeBytes);
     device->UpdateBufferBinding(ds, 6, buffers->PlaceParamsUBO, 0, sizeof(GrassPlaceParamsGPU));
+    if (!compat)
+    {
+        // From the params' own slot: a params entry names its materials by absolute table index. The
+        // table is created with room for every layer role and zero-filled, so an empty one still
+        // binds a record.
+        const uint32 materialCount = std::max(1u, terrainFeature.GetTerrainMaterialCount(paramsSlot));
+        device->UpdateStorageBufferBinding(ds, kGrassMaterialTableBinding,
+                                           terrainFeature.GetTerrainMaterialTableSSBO(paramsSlot), 0,
+                                           static_cast<size_t>(materialCount) * sizeof(Terrain::TerrainMaterialRecord));
+    }
 
     if (compat)
     {
@@ -1702,6 +1728,8 @@ TerrainGrassRenderFeature::BuildAtlasParams(const TerrainECS::AtlasGrassSource& 
     p.GrassEnabled = src.GrassRegionsActive ? 1u : 0u;
     p.GrassBindless = src.GrassBindless;
     p.GrassCoarseBindless = src.GrassCoarseBindless;
+    p.ColorBindless = src.ColorBindless;
+    p.ColorCoarseBindless = src.ColorCoarseBindless;
     // The shader guards its row read with tileIndex < RowCount, so clamp to what the ring slot holds.
     p.RowCount = rowCapacity == 0 ? 0u : std::min(src.RowCount, rowCapacity);
     return p;

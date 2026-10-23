@@ -382,6 +382,31 @@ TEST_F(WebEmitterTest, EditorOnlyComponentIsAbsentFromBothOutputsAndStillRegiste
     EXPECT_NE(std::string::npos, ReadFile(CppPath()).find("GE_REFLECT_COMPONENT_EDITORONLY(GameEngine::Components::EditorNote);"));
 }
 
+TEST_F(WebEmitterTest, EngineInternalComponentIsAbsentFromTheTypesAndMarkedInJson)
+{
+    const char* header = R"(namespace GameEngine::Components {
+enum class SlotState : uint8 { Free = 0, Taken = 1 };
+// @ge-engine-internal
+struct GpuSlot
+{
+    uint32 Slot = 0;
+    SlotState State = SlotState::Free;
+};
+struct Probe
+{
+    float Size = 1.0f;
+};
+}
+)";
+    ASSERT_EQ(0, Scan(header)) << m_Err.str();
+    const std::string dts = ReadFile(DtsPath());
+    EXPECT_EQ(std::string::npos, dts.find("GpuSlot"));
+    EXPECT_EQ(std::string::npos, dts.find("SlotState"));
+    EXPECT_NE(std::string::npos, dts.find("export interface Probe {"));
+    EXPECT_NE(std::string::npos, ReadFile(JsonPath()).find("\"name\": \"GpuSlot\",\n      \"engineInternal\": true,\n      \"fields\": ["));
+    EXPECT_NE(std::string::npos, ReadFile(CppPath()).find("GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::GpuSlot, Slot)"));
+}
+
 TEST_F(WebEmitterTest, FieldWithoutAKindIsOmittedAndListedWithWhyTheScannerCannotTypeIt)
 {
     const char* header = R"(namespace GameEngine::Rendering {

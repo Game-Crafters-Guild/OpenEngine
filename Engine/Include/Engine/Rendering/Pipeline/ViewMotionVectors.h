@@ -9,6 +9,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace GameEngine::Rendering
+{
+struct GPUInstance;
+}
+
 namespace GameEngine::Engine::Renderer::Pipeline
 {
 // The unwritten value of the motion target: a viewport-UV delta far outside
@@ -46,6 +51,14 @@ class ViewMotionVectors
     static MoverMotionPath ClassifyMoverMotionPath(Rendering::VertexAttributeFlags vertexFlags,
                                                    bool paletteActive, bool hasSkinStreams,
                                                    bool skinnedShaderAvailable);
+
+    // Whether a view's motion vectors include the frame mover `instance`. An instance the
+    // view's color passes leave out (shadows-only; in the Scene View, hidden by its eye:
+    // `dropEditorHidden`, ViewDesc::DropsEditorHidden) has no pixels to move; an instance of
+    // another world is not in the view. `viewWorldKey` 0 accepts every world. The movers pass
+    // and TAA's mover census both ask this, so they agree on what moves in a view.
+    static bool DrawsMover(const Rendering::GPUInstance& instance, uint32_t viewWorldKey,
+                           bool dropEditorHidden);
 
   private:
     bool EnsureLoaded(IDevice* device);

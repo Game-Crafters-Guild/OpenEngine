@@ -3,6 +3,8 @@
 #include "Rendering/Materials/MaterialParamsLayout.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
 
+#include "ShaderDeformationEnvelopeParse.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -635,6 +637,8 @@ ShaderPropertyTable BuildShaderPropertyTable(const std::vector<ShaderPropertySou
 
     for (const ShaderPropertySource& source : sources)
     {
+        if (source.Origin == ShaderPropertyOrigin::VertexModifier)
+            table.DeformationEnvelope = ParseDeformationEnvelope(source);
         ShaderPropertyTable parsed = ParseDeclaredProperties(source);
         table.Errors.insert(table.Errors.end(), parsed.Errors.begin(), parsed.Errors.end());
         const bool fromSurface = source.Origin != ShaderPropertyOrigin::Adapter;
@@ -670,6 +674,7 @@ ShaderPropertyTable BuildShaderPropertyTable(const std::vector<ShaderPropertySou
 
     if (table.Rejected())
         return table;
+    ValidateDeformationEnvelopeScale(table.DeformationEnvelope, table);
 
     std::array<std::array<bool, kComponentsPerLane>, kMaterialParamLaneCount> used{};
     uint32_t floatsRequested = 0;

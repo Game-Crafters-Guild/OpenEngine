@@ -101,6 +101,10 @@ GatheredMembers GatherHlodMembers(GameEngine::ECS::World& world, const ModelReso
                 ++out.SkippedMorph;
                 return;
             }
+            if (mr.shadowCasting == GameEngine::Components::ShadowCasting::ShadowsOnly) {
+                ++out.SkippedShadowsOnly;
+                return;
+            }
 
             const GUID materialGuid = mr.materialAssetGuid.ToGuid();
             if (materialGuid.IsNull()) {
@@ -170,7 +174,8 @@ GatheredMembers GatherHlodMembers(GameEngine::ECS::World& world, const ModelReso
                 chosenOwnsVerts ? mesh.ExtraLODVertices[member.ChosenLod - 1u].size()
                                 : mesh.Vertices.size());
             member.CastsShadow =
-                mr.castShadows && (localBounds == nullptr || localBounds->CastShadows);
+                mr.shadowCasting == GameEngine::Components::ShadowCasting::On &&
+                (localBounds == nullptr || localBounds->CastShadows);
             member.RenderLayers = mr.RenderLayers;
 
             out.Members.push_back(member);

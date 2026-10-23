@@ -62,13 +62,24 @@ async function call(method, params = {}) {
 
 // The editor's log is the only place a scene-open failure shows up: a failed open leaves
 // the previous world rendering and still reports an entity count, so a return value alone
-// cannot tell a reload apart from a no-op. get_log answers with a bare array of
-// {level, message}; anything else means the ring-buffer sink is missing and the caller
-// must not read an empty result as "no errors".
-async function logLines(minLevel = 'warning', count = 400) {
-    const r = await ipc('get_log', { count, minLevel });
-    if (!Array.isArray(r)) throw new Error(`get_log unavailable: ${JSON.stringify(r)}`);
-    return r.map(e => `${e.level}: ${e.message}`);
+// cannot tell a reload apart from a no-op. get_log answers with `lines`, each
+// "<seq> <LEVEL> <message>"; anything else means the ring-buffer sink is missing and the
+// caller must not read an empty result as "no errors". One answer holds at most about
+// 1.5 KB of lines, newest first to go in, so a burst of matching lines leaves older ones
+// out and says how many in omitted.overCap: the loop pages back with offset until none
+// is left out. since=0 asks for the whole ring on every call, where a repeated tail call
+// would be answered "unchanged".
+async function logLines(pattern) {
+    const lines = [];
+    for (let offset = 0; ; ) {
+        const r = await ipc('get_log', { minLevel: 'warning', pattern, since: 0, offset });
+        if (!Array.isArray(r?.lines)) throw new Error(`get_log unavailable: ${JSON.stringify(r)}`);
+        if (r.lines.length === 0) break;
+        lines.unshift(...r.lines);
+        if (!(r.omitted?.overCap > 0)) break;
+        offset += r.lines.length;
+    }
+    return lines;
 }
 
 async function terrainState() {
@@ -272,7 +283,7 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
     // say nothing about whether the terrain loaded, so those are reported, not failed on.
     let loadErrors = [], degraded = [];
     try {
-        const lines = await logLines();
+        const lines = await logLines('scene|degraded reference');
         loadErrors = lines.filter(l => /scene/i.test(l)
             && /(failed to load|parse error|unknown component|could not open|load failed)/i.test(l));
         degraded = lines.filter(l => /degraded reference/i.test(l));

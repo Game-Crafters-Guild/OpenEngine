@@ -37,9 +37,10 @@ bool Emitted(ApiKind kind)
     case ApiKind::Record:
     case ApiKind::Enum:
     case ApiKind::Entity:
-        return true;
-    case ApiKind::ColorLinear:
+    case ApiKind::RenderLayerMask:
     case ApiKind::String:
+    case ApiKind::ColorLinear:
+        return true;
     case ApiKind::Span:
     case ApiKind::Handle:
         return false;
@@ -55,6 +56,24 @@ void RefuseKind(std::vector<ApiRefusal>& refusals, const ApiSource& source, cons
                         "the binding generators do not emit the " + std::string(ApiKindName(type.Kind)) + " kind (" +
                             std::string(what) + ")",
                         std::string(kUnsupportedFix)});
+}
+
+// A span parameter: emitted when the function writes it (a span of results) and its element is a
+// record or an entity, whose bytes the C# element type lays out the same.
+void RefuseSpan(std::vector<ApiRefusal>& refusals, const ApiSource& source, const ApiParam& param)
+{
+    if (!param.Out)
+    {
+        RefuseKind(refusals, source, param.Type, "parameter `" + param.Name + "`");
+        return;
+    }
+    const ApiKind element = param.Type.Element.front().Kind;
+    if (element == ApiKind::Record || element == ApiKind::Entity)
+        return;
+    refusals.push_back({source.File, source.Line,
+                        "the binding generators emit a span of results of records or entities only (parameter `" + param.Name +
+                            "` holds " + std::string(ApiKindName(element)) + ")",
+                        "write the results as a marked record, or as entities"});
 }
 
 std::string IntegerType(ApiKind kind)
@@ -89,6 +108,8 @@ std::string CSharpInteger(ApiKind kind)
     }
 }
 
+// The float-component value kinds (the Mathematics types and the linear color), which cross by
+// pointer and take their defaults one component each.
 std::string_view CSharpMath(ApiKind kind)
 {
     switch (kind)
@@ -98,6 +119,7 @@ std::string_view CSharpMath(ApiKind kind)
     case ApiKind::Vec4: return "Vector4";
     case ApiKind::Quat: return "Quaternion";
     case ApiKind::Mat4: return "Matrix4x4";
+    case ApiKind::ColorLinear: return "ColorLinear";
     default: return {};
     }
 }
@@ -111,6 +133,7 @@ std::string_view NativeMath(ApiKind kind)
     case ApiKind::Vec4: return "GameEngine::Mathematics::Vector4";
     case ApiKind::Quat: return "GameEngine::Mathematics::Quaternion";
     case ApiKind::Mat4: return "GameEngine::Mathematics::Matrix4x4";
+    case ApiKind::ColorLinear: return "GameEngine::ColorLinear";
     default: return {};
     }
 }
@@ -178,11 +201,23 @@ std::vector<ApiRefusal> Unsupported(const ApiDescription& description)
         {
             RefuseKind(refusals, function.Source, function.Returns, "the return type of `" + function.Name + "`");
             for (const ApiParam& param : function.Params)
-                RefuseKind(refusals, function.Source, param.Type, "parameter `" + param.Name + "`");
+            {
+                if (param.Type.Kind == ApiKind::Span)
+                    RefuseSpan(refusals, function.Source, param);
+                else
+                    RefuseKind(refusals, function.Source, param.Type, "parameter `" + param.Name + "`");
+            }
         }
         for (const ApiRecord& record : module.Records)
             for (const ApiField& field : record.Fields)
+            {
                 RefuseKind(refusals, record.Source, field.Type, "field `" + field.Name + "` of `" + record.Name + "`");
+                if (field.Type.Kind == ApiKind::RenderLayerMask)
+                    refusals.push_back({record.Source.File, record.Source.Line,
+                                        "the binding generators emit a RenderLayerMask as a parameter or a return value only "
+                                        "(field `" + field.Name + "` of `" + record.Name + "`)",
+                                        "hold the mask's bits as a std::uint32_t field"});
+            }
         for (const ApiEvent& event : module.Events)
         {
             if (event.Scope.Kind != ApiKind::Entity)
@@ -249,6 +284,49 @@ std::string FunctionLabel(const ApiModule& module, std::string_view name)
     return module.Name + "." + std::string(name);
 }
 
+std::vector<NativeParameter> NativeParameters(const ApiParam& param, const Index& index)
+{
+    if (param.Type.Kind == ApiKind::String)
+        return {{"const char*", param.Name}, {"std::int32_t", TextLength(param.Name)}};
+    if (param.Type.Kind == ApiKind::Span)
+        return {{NativeValueType(param.Type.Element.front(), index) + "*", param.Name}, {"std::int32_t", Capacity(param.Name)}};
+    return {{param.Out ? NativeOutType(param.Type, index) : NativeInType(param.Type, index), param.Name}};
+}
+
+std::vector<NativeParameter> NativeResultParameters(const ApiType& returns, const Index& index)
+{
+    if (returns.Kind == ApiKind::Void)
+        return {};
+    if (returns.Kind == ApiKind::String)
+        return {{"char*", "outResult"}, {"std::int32_t", Capacity("outResult")}, {"std::int32_t*", TextLength("outResult")}};
+    return {{NativeOutType(returns, index), "outResult"}};
+}
+
+std::string TextLength(std::string_view name)
+{
+    return std::string(name) + "Length";
+}
+
+std::string Capacity(std::string_view name)
+{
+    return std::string(name) + "Capacity";
+}
+
+bool IsSpanOut(const ApiParam& param)
+{
+    return param.Out && param.Type.Kind == ApiKind::Span;
+}
+
+bool HasText(const ApiFunction& function)
+{
+    if (function.Returns.Kind == ApiKind::String)
+        return true;
+    for (const ApiParam& param : function.Params)
+        if (param.Type.Kind == ApiKind::String)
+            return true;
+    return false;
+}
+
 std::string NativeValueType(const ApiType& type, const Index& index)
 {
     switch (type.Kind)
@@ -260,6 +338,7 @@ std::string NativeValueType(const ApiType& type, const Index& index)
     case ApiKind::Double: return "double";
     case ApiKind::StringId: return "std::uint64_t";
     case ApiKind::Entity: return "GameEngine::ECS::EntityHandle";
+    case ApiKind::RenderLayerMask: return "GameEngine::Rendering::RenderLayerMask";
     case ApiKind::Record: return index.Records.at(type.TypeId)->CppName;
     case ApiKind::Enum: return index.Enums.at(type.TypeId)->CppName;
     default: break;
@@ -278,7 +357,7 @@ std::string NativeInType(const ApiType& type, const Index& index)
 {
     if (type.Kind == ApiKind::Bool)
         return "std::uint8_t";
-    if (type.Kind == ApiKind::Entity)
+    if (type.Kind == ApiKind::Entity || type.Kind == ApiKind::RenderLayerMask)
         return "std::uint32_t";
     if (CrossesByPointer(type))
         return "const " + NativeValueType(type, index) + "*";
@@ -289,7 +368,7 @@ std::string NativeOutType(const ApiType& type, const Index& index)
 {
     if (type.Kind == ApiKind::Bool)
         return "std::uint8_t*";
-    if (type.Kind == ApiKind::Entity)
+    if (type.Kind == ApiKind::Entity || type.Kind == ApiKind::RenderLayerMask)
         return "std::uint32_t*";
     return NativeValueType(type, index) + "*";
 }
@@ -301,7 +380,7 @@ std::string NativeOutDefault(const ApiType& type)
 
 bool OutConverts(const ApiType& type)
 {
-    return type.Kind == ApiKind::Bool || type.Kind == ApiKind::Entity;
+    return type.Kind == ApiKind::Bool || type.Kind == ApiKind::Entity || type.Kind == ApiKind::RenderLayerMask;
 }
 
 std::string NativeToCrossing(const ApiType& type, const std::string& value)
@@ -310,6 +389,8 @@ std::string NativeToCrossing(const ApiType& type, const std::string& value)
         return value + " ? 1u : 0u";
     if (type.Kind == ApiKind::Entity)
         return value + ".id";
+    if (type.Kind == ApiKind::RenderLayerMask)
+        return value + ".Bits";
     return value;
 }
 
@@ -377,6 +458,9 @@ std::string CSharpPublicType(const ApiType& type, const Index& index)
     case ApiKind::Double: return "double";
     case ApiKind::StringId: return "StringId";
     case ApiKind::Entity: return "Entity";
+    case ApiKind::RenderLayerMask: return "RenderLayerMask";
+    case ApiKind::String: return "string";
+    case ApiKind::Span: return "Span<" + CSharpPublicType(type.Element.front(), index) + ">";
     case ApiKind::Record: return index.Records.at(type.TypeId)->Name;
     case ApiKind::Enum: return index.Enums.at(type.TypeId)->Name;
     default: break;
@@ -392,11 +476,25 @@ std::string CSharpInType(const ApiType& type, const Index& index)
         return "byte";
     if (type.Kind == ApiKind::StringId)
         return "ulong";
-    if (type.Kind == ApiKind::Entity)
+    if (type.Kind == ApiKind::Entity || type.Kind == ApiKind::RenderLayerMask)
         return "uint";
+    if (type.Kind == ApiKind::String)
+        return "byte*, int";
+    if (type.Kind == ApiKind::Span)
+        return CSharpPublicType(type.Element.front(), index) + "*, int";
     if (CrossesByPointer(type))
         return CSharpPublicType(type, index) + "*";
     return CSharpPublicType(type, index);
+}
+
+std::string_view CSharpTextResultTypes()
+{
+    return "byte*, int, int*";
+}
+
+std::string_view CSharpTextHelper()
+{
+    return "ScriptText";
 }
 
 std::string CSharpSlotDefault(const ApiType& type)
@@ -410,7 +508,7 @@ std::string CSharpSlotType(const ApiType& type, const Index& index)
         return "byte";
     if (type.Kind == ApiKind::StringId)
         return "ulong";
-    if (type.Kind == ApiKind::Entity)
+    if (type.Kind == ApiKind::Entity || type.Kind == ApiKind::RenderLayerMask)
         return "uint";
     return CSharpPublicType(type, index);
 }

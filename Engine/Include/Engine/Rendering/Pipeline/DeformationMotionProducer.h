@@ -1,15 +1,14 @@
 // The deforming-motion producer's declaration policy.
 //
-// Three arms are possible and exactly one may run: an extra colour target on
-// the opaque world pass, the same on the depth prepass, or a pass of its own
-// that re-rasterizes the deforming ranges. They write one shared target, so
-// the decision of WHICH runs belongs to one place and the decision of WHO
-// CLEARS follows from it — the arm that runs owns the clear and the target
-// owner's own writes load.
+// The producer is a pass of its own that re-rasterizes the view's deforming
+// ranges into the shared motion target under read-only camera depth. It and
+// the mover lane write one target, so the decision of WHO CLEARS belongs to
+// one place: the producer, when it runs, owns the clear and the mover writes
+// that follow load.
 //
-// This is the policy half: which arm, whether this view can produce anything
-// at all this frame, and which culling generations to record. The passes
-// themselves are declared by the arms.
+// This is the policy half: whether this view can produce anything at all this
+// frame, and which culling generations to record. The pass itself is declared
+// by RenderServices::AddDeformationMotionPassForView.
 #pragma once
 
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
@@ -24,11 +23,12 @@ namespace GameEngine::Engine::Renderer::Pipeline
 
 /// Declare the deforming-motion production for `view` into `target`.
 ///
-/// Returns true when a producer arm recorded into the target and therefore
+/// Returns true when the producer recorded into the target and therefore
 /// owns its clear; false when nothing was recorded, in which case the caller's
 /// own writes keep the clear and the frame is unchanged from the no-producer
-/// one. False is the answer for: no arm enabled, no deforming material in the
-/// view, and no differenceable previous endpoint (a view's first frame, a
+/// one. False is the answer for: a refused view (DeformationMotionRefusal,
+/// which includes no deforming material in the view), and no differenceable
+/// previous endpoint (a view's first frame, a
 /// device rebuild, an origin re-anchor) — the last of which is the
 /// discontinuity policy, and it leaves the sentinel rather than a zero vector.
 ///

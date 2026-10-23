@@ -1,7 +1,9 @@
 #pragma once
 
+#include "TerrainECS/CoarseTileStandIn.h"
 #include "TerrainECS/DirtyRegionLog.h"
 #include "TerrainECS/TerrainBakeCache.h"
+#include "TerrainECS/TerrainColorMap.h"
 #include "TerrainECS/TerrainZonePayload.h"
 #include "TerrainECS/TerrainGpuBake.h"
 #include "TerrainECS/TerrainGrassField.h"
@@ -77,6 +79,27 @@ struct TerrainData
     uint32 SplatmapWidth = 0;
     uint32 SplatmapHeight = 0;
     bool SplatmapDirty = false;
+
+    // The texels whose splat changed since the colour map last composed over them
+    // (TerrainColorMapBaker consumes and clears it). Exclusive max.
+    DirtyRegionLog::Region SplatColorDirty;
+    bool SplatColorDirtyFull = false;
+
+    // Record a splat write for the GPU upload and the colour map: the whole splat,
+    // or one rect of it.
+    void MarkSplatChanged()
+    {
+        SplatmapDirty = true;
+        SplatColorDirtyFull = true;
+    }
+    void MarkSplatChanged(const DirtyRegionLog::Region& region)
+    {
+        SplatmapDirty = true;
+        SplatColorDirty.Union(region);
+    }
+
+    // The colour map composed from the splat and its writers (TerrainColorMap.h).
+    TerrainColorMap ColorMap;
 
     // Set by a full splat re-bake (ResetSplatmapAndCommitRange): every texel was
     // reset against the global height range, so the GPU upload must be
@@ -199,6 +222,17 @@ struct TerrainTileData
     uint32 SplatmapHeight = 0;
     bool SplatmapDirty = false;
 
+    // Splat writes the colour map has not composed over yet; see TerrainData.
+    bool SplatColorDirtyFull = false;
+    void MarkSplatChanged()
+    {
+        SplatmapDirty = true;
+        SplatColorDirtyFull = true;
+    }
+
+    // This tile's colour map, on the tile's own lattice (TerrainColorMap.h).
+    TerrainColorMap ColorMap;
+
     std::vector<uint8> Normalmap;
     uint32 NormalmapWidth = 0;
     uint32 NormalmapHeight = 0;
@@ -241,6 +275,11 @@ struct TerrainTileData
     std::vector<NodeMinMax> PrecomputedQuadtreeNodes;
     uint32 PrecomputedQuadtreeNodesPerAxis = 0;
 
+    // A Coarse tile's full-resolution heights and normal, built by the coarse streaming job.
+    // The extraction consumes it on the tile's first coarse patch and releases it; a new
+    // heightfield (SetTileHeightfield) releases it too.
+    std::shared_ptr<const CoarseTileStandIn> CoarseStandIn;
+
     // Async streaming LOD state. Only Full tiles patch the unified GPU source.
     TileLodState LodState = TileLodState::Empty;
 
@@ -260,6 +299,39 @@ struct TerrainTileData
     // ModifiersApplied because that flag gates the FULL bake, which must still run on
     // upgrade. Reset with ModifiersApplied whenever streaming (re)sets this tile's content.
     bool CoarseSplatBaked = false;
+
+    // While a Full arrival's splat bake runs over several frames (the per-frame row budget,
+    // TerrainModifierSystem::kArrivalSplatRowsPerFrame), the tile shows the splat it showed
+    // while Coarse: SetTileHeightfield keeps it here (ArrivalSplatStandInDim square), and the
+    // uploaders draw it instead of the partly baked Splatmap, and the colour map waits for the
+    // bake's end. Empty when no arrival bake runs.
+    std::vector<uint8> ArrivalSplatStandIn;
+    uint32 ArrivalSplatStandInDim = 0;
+    // The first Splatmap row the arrival bake has not composited yet.
+    uint32 ArrivalSplatNextRow = 0;
+    // The height range every row of the arrival bake normalizes against: the resident range on
+    // the bake's first frame (ArrivalSplatNextRow == 0), held for its later frames so a tile
+    // departing mid-bake does not split the arrival's rows across two ranges. A renormalize that
+    // rewrites the tile mid-bake sets it to the renormalize's range.
+    float32 ArrivalSplatMinH = 0.0f;
+    float32 ArrivalSplatMaxH = 0.0f;
+    // The arrival bake has composed this tile's heights, on its first bake frame; a tile waiting
+    // for the row budget is not composed again.
+    bool ArrivalHeightsComposed = false;
+
+    // The authored modifiers are baked into this tile. Ends a pending arrival bake: the
+    // stand-in goes, and the splat is marked changed so the uploaders send the baked one.
+    void MarkModifiersApplied()
+    {
+        ModifiersApplied = true;
+        ArrivalSplatNextRow = 0;
+        ArrivalHeightsComposed = false;
+        if (ArrivalSplatStandIn.empty())
+            return;
+        ArrivalSplatStandIn = {};
+        ArrivalSplatStandInDim = 0;
+        MarkSplatChanged();
+    }
 
     void MarkFullDirty()
     {
@@ -335,6 +407,12 @@ struct TiledTerrainData
     TerrainGrassField GrassCoarseField;
     TerrainGrassField GrassUnifiedField;
     bool GrassRegionsActive = false;
+    // The colour map of a terrain whose unified textures fit (TiledRenderExtent's unified lattice),
+    // assembled from the tiles' maps; and the coarse map an atlas-backed terrain reads out of the
+    // resident window. ColorMapActive: a texel of either, or of a tile's map, holds a weight.
+    TerrainColorMap ColorUnifiedMap;
+    TerrainColorMap ColorCoarseMap;
+    bool ColorMapActive = false;
     TiledTerrainConfig Config;
     float32 WorldOriginX = 0.0f;     // world-space corner of tile (0,0)
     float32 WorldOriginZ = 0.0f;
@@ -349,17 +427,23 @@ struct TiledTerrainData
 
     // Single global CDLOD quadtree spanning the entire terrain.
     // Built from per-tile min/max data (no stitched heightfield needed);
-    // rebuilt when tiles load/unload.
+    // patched per tile when a tile streams in (PatchTileInGlobalQuadtree) or out
+    // (DirtyQuadtreeTiles).
     Terrain::CDLODQuadtree GlobalQuadtree;
 
-    // Tracks whether the global quadtree needs a full rebuild (structural change:
-    // tile loaded/unloaded, first bake, terrain-set change).
+    // Whether the global quadtree needs a full rebuild, which rescans every resident
+    // tile's heightfield (O(resident samples)). Set by: first allocation, a synchronous
+    // tile load, a full bake, a GPU bake readback, a terrain-set change, and every
+    // height edit while the incremental patch is switched off.
     bool QuadtreeDirty = true;
 
-    // Tiles whose heightfields were edited since the last quadtree sync. Their
-    // finest-level node min/max are patched into the global quadtree incrementally
-    // (FinalizeGlobalQuadtreeUpdates), avoiding the O(all-samples) full rebuild a
-    // brush stroke would otherwise force every dab. Cleared once consumed.
+    // Tiles whose finest-level nodes are stale since the last quadtree sync: a tile
+    // whose heights were edited, a streamed arrival whose heights a height modifier
+    // composed, or a tile that left the resident set. The sync
+    // (FinalizeGlobalQuadtreeUpdates) patches only these tiles, then rebuilds the
+    // coarser levels. Invariant: after the sync, every finest-level node of a listed
+    // tile equals what a full rebuild writes, which is the heightfield scan when the
+    // tile is resident and not Empty, and {0,0} otherwise. Cleared once consumed.
     std::vector<TileCoord> DirtyQuadtreeTiles;
 
     // Global GPU terrain handle (holds the global quadtree, accessed by render node).
@@ -388,7 +472,6 @@ struct TiledTerrainData
     // instead made the first-streamed tile fall back to a per-tile local range and
     // every later tile widen the aggregate, so the SAME tile's splat drifted across
     // stream-out/in cycles (bytes depended on stream order).
-    bool GlobalHeightRangeDirty = true;
     float32 CachedGlobalMinH = 0.0f;
     float32 CachedGlobalMaxH = kTileNoiseAmplitude;
 
@@ -580,7 +663,8 @@ public:
     // The tile is filled from the terrain's base (FillTiledBaseRegion).
     TerrainTileData* LoadTile(TiledTerrainHandle handle, TileCoord coord);
 
-    // Unload a tile. Frees CPU data. Caller is responsible for GPU cleanup.
+    // Unload a tile. Frees CPU data and lists the tile in DirtyQuadtreeTiles, so the
+    // next quadtree sync clears only its nodes. Caller is responsible for GPU cleanup.
     void UnloadTile(TiledTerrainHandle handle, TileCoord coord);
 
     // Check if a tile is loaded.

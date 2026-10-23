@@ -298,10 +298,7 @@ namespace
 
         // A move keeps the asset's identity, and the code that performed the move is what
         // says so — the watcher's report of the same rename is this operation arriving and
-        // is consumed. A directory is not a registered asset, so nothing moves for it: the
-        // files under it are reported below and register at their new paths, and their old
-        // registrations go when a rescan or their deletions are seen. Same outcome as the
-        // watcher's own report of a directory rename, which never moved them either.
+        // is consumed. A moved folder keeps the identity of every asset under it.
         if (assets)
             (void)assets->RenameAssetPath(src, dst);
         if (write)
@@ -1272,6 +1269,8 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                 // and worked. Same-dir skip + per-frame coalescing live inside.
                 NavigateToDirectory(path);
             } });
+        // A slow second click on the selected folder renames it, as F2 does.
+        m_Tree->SetOnItemRenameRequested([this](TreeId id) { BeginRenameOfTreeFolder(id); });
         // Double-click in tree: navigate grid to that folder
         m_Tree->SetOnItemActivated([this](TreeId id)
                                    {
@@ -1342,13 +1341,14 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                 [this](const std::filesystem::path& directory,
                        EditorContextMenu::DirectoryAction action)
                 { HandleDirectoryAction(directory, action); },
-                /*includeDelete=*/id != 0);
+                /*includeEdits=*/id != 0);
         });
         
         // Custom row binding to add VCS status dot to folder names
         m_Tree->SetOnRowBound([this](TreeId id, UIElement* row) {
             if (!row || !m_TreeProvider)
                 return;
+            m_Rename.OnRowBound(*row, m_TreeProvider->GetPath(id));
 
             // Smart folder row styling
             if (m_TreeProvider->IsSmartFolder(id))
@@ -1780,6 +1780,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
             
             // Check for scene/script files to apply CSS icon
             auto filePath = m_GridProvider->GetPath(id);
+            m_Rename.OnRowBound(*cell, filePath);
             StartPendingRenameIfBound(filePath);
             bool isScene = false;
             bool isScript = false;
@@ -2127,7 +2128,8 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
         // Double-click to activate (enter folder or open asset)
         m_Grid->SetOnItemRenameRequested([this](GridId id)
                                          {
-            if (m_GridProvider)
+            // The ".." row stands for the parent folder; it is navigation, not a name.
+            if (m_GridProvider && !AssetsGridDataProvider::IsUpEntry(id))
                 BeginRename(m_GridProvider->GetPath(id));
         });
         m_Grid->SetOnItemActivated([this](GridId id)
@@ -2357,9 +2359,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
 	                {
 	                    DeleteAssetPaths(paths);
 	                },
-	                isDir ? std::function<void(const std::filesystem::path&)>{}
-	                      : std::function<void(const std::filesystem::path&)>(
-	                            [this](const std::filesystem::path& path) { BeginRename(path); }));
+	                [this](const std::filesystem::path& path) { BeginRename(path); });
 	        });
 
         SortDescriptor sort;
@@ -2593,7 +2593,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
         // Double-click to activate
         m_List->SetOnItemRenameRequested([this](ListId id)
                                          {
-            if (m_ListProvider)
+            if (m_ListProvider && !AssetsListDataProvider::IsUpEntry(id))
                 BeginRename(m_ListProvider->GetPath(id));
         });
         m_List->SetOnItemActivated([this](ListId id)
@@ -2736,9 +2736,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
                 {
                     DeleteAssetPaths(paths);
                 },
-                isDir ? std::function<void(const std::filesystem::path&)>{}
-                      : std::function<void(const std::filesystem::path&)>(
-                            [this](const std::filesystem::path& path) { BeginRename(path); }));
+                [this](const std::filesystem::path& path) { BeginRename(path); });
         });
 
         // The item resize gesture adjusts row height.
@@ -2990,7 +2988,9 @@ void AssetsBrowserController::BindListRow(UIElement* row, ListId id, int /*rowIn
 {
     if (!row || !m_ListProvider || !m_GridProvider)
         return;
-    StartPendingRenameIfBound(m_ListProvider->GetPath(id));
+    const std::filesystem::path path = m_ListProvider->GetPath(id);
+    m_Rename.OnRowBound(*row, path);
+    StartPendingRenameIfBound(path);
 
     // Inherit the legacy list-item / assets-list-row styling (colours, hover, selected, icons).
     // The TableView's own .table-view-row class drives layout; the override CSS reconciles the two.
@@ -4626,6 +4626,10 @@ void AssetsBrowserController::HandleDirectoryAction(const std::filesystem::path&
     case EditorContextMenu::DirectoryAction::Import:
         ImportFilesIntoDirectory(directory);
         break;
+    case EditorContextMenu::DirectoryAction::Rename:
+        if (m_TreeProvider)
+            BeginRenameOfTreeFolder(m_TreeProvider->FindIdForPath(directory));
+        break;
     case EditorContextMenu::DirectoryAction::Delete:
         DeleteAssetPaths({directory});
         break;
@@ -4852,24 +4856,67 @@ void AssetsBrowserController::RevealCreatedAsset(const std::filesystem::path& cr
 
 void AssetsBrowserController::BeginRenameOfSelection()
 {
-    BeginRename(GetPrimarySelectedAssetPath());
+    if (!m_ItemSelection || !m_GridProvider)
+        return;
+    const std::vector<UI::Interaction::ItemId> ids = m_ItemSelection->GetSelection();
+    if (ids.size() != 1 || AssetsGridDataProvider::IsUpEntry(static_cast<GridId>(ids.front())))
+        return;
+    BeginRename(m_GridProvider->GetPath(static_cast<GridId>(ids.front())));
+}
+
+void AssetsBrowserController::BeginRenameOfTreeSelection()
+{
+    if (!m_TreeSelection)
+        return;
+    const std::vector<UI::Interaction::ItemId> ids = m_TreeSelection->GetSelection();
+    if (ids.size() == 1)
+        BeginRenameOfTreeFolder(static_cast<TreeId>(ids.front()));
+}
+
+void AssetsBrowserController::BeginRenameOfTreeFolder(TreeId id)
+{
+    if (!m_Context || !m_Tree || !m_TreeProvider || id == 0)
+        return;
+    if (m_TreeProvider->IsSmartFolder(id) || m_TreeProvider->IsSmartFoldersSection(id) ||
+        m_TreeProvider->IsOnlineAssetsSection(id) || m_TreeProvider->IsPolyhaven(id) ||
+        m_TreeProvider->IsPolyhavenCategory(id) || m_TreeProvider->IsPolyhavenCategoryChild(id))
+        return;
+    const std::filesystem::path folder = m_TreeProvider->GetPath(id);
+    if (!IsRenameableAssetPath(folder))
+        return;
+    Label* title = m_Tree->FindBoundRowTitle(id);
+    if (!title)
+        return;
+    // A tree row orders its children: the modifier gives the field the title's place.
+    m_Rename.Begin(title, m_Tree, folder, "tree-rename-field", m_Context->UndoRedo,
+                   m_Context->Assets, [this](const std::filesystem::path& renamedTo) { OnAssetRenamed(renamedTo); });
+}
+
+bool AssetsBrowserController::IsRenameableAssetPath(const std::filesystem::path& path) const
+{
+    if (path.empty() || IsAssetBrowserVirtualPath(path))
+        return false;
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+        return false;
+    // The Assets root is the project's asset mount, not an item in it.
+    return m_AssetsRoot.empty() || !std::filesystem::equivalent(path, m_AssetsRoot, ec);
 }
 
 void AssetsBrowserController::BeginRename(const std::filesystem::path& assetPath)
 {
-    if (!m_Context || assetPath.empty() || IsAssetBrowserVirtualPath(assetPath))
-        return;
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(assetPath, ec))
+    if (!m_Context || !IsRenameableAssetPath(assetPath))
         return;
 
     Label* nameLabel = FindNameLabelForPath(assetPath);
     if (nameLabel)
     {
         m_PendingRenamePath.clear();
-        UIElement* view = IsGridViewShowing() ? static_cast<UIElement*>(m_Grid) : static_cast<UIElement*>(m_List);
-        m_Rename.Begin(nameLabel, view, assetPath, m_Context->UndoRedo, m_Context->Assets,
-                       [this](const std::filesystem::path& renamedTo) { OnAssetRenamed(renamedTo); });
+        const bool grid = IsGridViewShowing();
+        UIElement* view = grid ? static_cast<UIElement*>(m_Grid) : static_cast<UIElement*>(m_List);
+        // A grid cell is a column; the modifier sizes the field under the thumbnail.
+        m_Rename.Begin(nameLabel, view, assetPath, grid ? "grid-rename-field" : nullptr, m_Context->UndoRedo,
+                       m_Context->Assets, [this](const std::filesystem::path& renamedTo) { OnAssetRenamed(renamedTo); });
         return;
     }
     // Not bound yet: the view binds it on its next virtualization pass.

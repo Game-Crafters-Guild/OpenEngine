@@ -22,14 +22,13 @@ namespace GameEngine::Mathematics
 struct Vector3;
 } // namespace GameEngine::Mathematics
 
+// The editor's and the tools' view of a NavigationSurface: what a bake reads, its state as text, its
+// box, and its baked tiles as a file; and an agent's order as text. What a game calls is in
+// PathfindingECS/NavigationScriptApi.h.
 namespace GameEngine::Navigation
 {
 
-/// Asks the NavigationSurface on `surface` to bake again from the current terrain, static collider
-/// shapes and mesh renderers. The bake starts on the next update of NavigationSurfaceSystem; a mesh
-/// keeps its current tiles until each new one is built. Returns false when the entity has no
-/// NavigationSurface.
-bool RequestBake(ECS::World& world, ECS::EntityHandle surface);
+struct AgentStatus;
 
 /// What a bake reads from an entity besides the terrain.
 enum class BakeSourceKind : uint8
@@ -55,6 +54,11 @@ struct BakeSource
 /// every frame. False, with `out` empty, when the entity has no NavigationSurface.
 bool ListBakeSources(ECS::World& world, ECS::EntityHandle surface, std::vector<BakeSource>& out);
 
+/// An agent's order (GetStatus) as one line of text, for example "Walking", "Waiting: the surface is
+/// baking, 212 tiles left" or "Failed: no walkable route to the destination". A reason names what to
+/// change.
+std::string FormatAgentStatus(const AgentStatus& status);
+
 /// The surface's bake state as one line of text, for example "Baking: 212 of 1,024 tiles" or
 /// "Baked: 1,024 tiles, 1,948 polygons, 0.5 MiB, version 12". A failure names what to change.
 std::string FormatBakeStatus(const Components::NavigationSurface& surface);
@@ -69,5 +73,10 @@ bool SurfaceBounds(ECS::World& world, ECS::EntityHandle surface, Mathematics::Ve
 /// tiles in Mesh mode, grid cells in Grid mode.
 uint64 BakeUnitCount(const Components::NavigationSurface& surface, const Mathematics::Vector3& min,
                      const Mathematics::Vector3& max);
+
+/// The baked tiles of the mesh surface on `surface`, with their content hashes, as the bytes of a
+/// .navsurface file: what the editor writes beside the scene for the surface's BakedData. False,
+/// with `out` empty, when the entity has no mesh surface whose bake is complete.
+bool WriteBakedSurface(ECS::World& world, ECS::EntityHandle surface, std::vector<uint8>& out);
 
 } // namespace GameEngine::Navigation

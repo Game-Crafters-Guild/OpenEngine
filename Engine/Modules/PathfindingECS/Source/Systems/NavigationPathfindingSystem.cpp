@@ -1,4 +1,5 @@
 #include "PathfindingECS/Systems/NavigationPathfindingSystem.h"
+#include "NavigationAgentRequests.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
@@ -7,6 +8,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Query.h"
 #include "Pathfinding/GridMap.h"
+#include "Pathfinding/INavigationMap.h"
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/PathBuffer.h"
 #include "Pathfinding/PathfindingTypes.h"
@@ -137,6 +139,7 @@ void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
 
     m_AccumulatedTime += deltaTime;
     ++m_Statistics.Frames;
+    BindNavigationAgents(world);
     // Re-evaluation - periodically mark agents for re-pathing. The
     // marks are not limited here: every request, whatever marked it, shares
     // the solve budget below. Timers are staggered on first init so agents
@@ -151,7 +154,7 @@ void NavigationPathfindingSystem::Update(ECS::World& world, float32 deltaTime)
             if (!state.HasDestination)
                 return;
 
-            auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+            const Pathfinding::PathStatus status = state.Status;
             // Retry Failed even when ReplanInterval is 0 (a game may set it) so the
             // agent moves once a blocked dest or missing map clears. Occupancy
             // is a path tax, not a Failed.
@@ -233,14 +236,18 @@ bool NavigationPathfindingSystem::CollectRequests(ECS::World& world)
                 return;
             }
 
-            const Pathfinding::NavMapHandle map{agent.NavMapIndex, agent.NavMapGeneration};
+            // A request BindNavigationAgents holds back waits, Pending, unqueued.
+            if (HoldsRequestBack(state.Reason))
+                return;
+
+            const Pathfinding::NavMapHandle map{state.NavMapIndex, state.NavMapGeneration};
             if (!hasGridRequest)
                 hasGridRequest = navWorld.GetGridMap(map) != nullptr;
 
-            if (state.PathDirty && state.Status != static_cast<uint8>(Pathfinding::PathStatus::Pending))
+            if (state.PathDirty && state.Status != Pathfinding::PathStatus::Pending)
             {
                 ReleasePath(state, pathBuffer);
-                state.Status = static_cast<uint8>(Pathfinding::PathStatus::Pending);
+                state.Status = Pathfinding::PathStatus::Pending;
             }
 
             // With no map to solve on, a request waits unqueued as a Pending
@@ -251,7 +258,7 @@ bool NavigationPathfindingSystem::CollectRequests(ECS::World& world)
                 ReleasePath(state, pathBuffer);
                 state.PathDirty = true;
                 state.ReplanRequested = false;
-                state.Status = static_cast<uint8>(Pathfinding::PathStatus::Pending);
+                state.Status = Pathfinding::PathStatus::Pending;
                 state.PathRequestSequence = 0;
                 return;
             }
@@ -283,12 +290,12 @@ void NavigationPathfindingSystem::PrepareBodies(ECS::World& world)
         {
             if (agent.AgentId == 0)
                 return;
-            auto* grid = navWorld.GetGridMap({agent.NavMapIndex, agent.NavMapGeneration});
+            auto* grid = navWorld.GetGridMap({state.NavMapIndex, state.NavMapGeneration});
             if (!grid)
                 return;
 
             const bool requesting = state.HasDestination && state.PathDirty;
-            const auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+            const Pathfinding::PathStatus status = state.Status;
             if (state.HasDestination && !state.PathDirty &&
                 (status == Pathfinding::PathStatus::Complete || status == Pathfinding::PathStatus::Partial) &&
                 state.CurrentPathPointIndex < pathBuffer.GetPointCount({state.PathIndex, state.PathGeneration}))
@@ -297,7 +304,7 @@ void NavigationPathfindingSystem::PrepareBodies(ECS::World& world)
             // A dirty replanner deliberately drops its old corridor once.
             // Idle/direct peers need rebuilding only if actual body cells
             // are missing, expired or at their previous position. The
-            // HasCellReservations hint can outlive its expired cells.
+            // CellReservationOwner hint can outlive its expired cells.
             if (!requesting && HasCurrentBody(*grid, agent, wt.matrix[12], wt.matrix[14], m_AccumulatedTime))
                 return;
             StampNavigationAgentOccupancy(agent, state, wt.matrix[12], wt.matrix[14], m_AccumulatedTime);
@@ -373,11 +380,18 @@ void NavigationPathfindingSystem::SolveOldestRequests(ECS::World& world)
         state->ReplanRequested = false;
         state->PathIndex = outPath.Index;
         state->PathGeneration = outPath.Generation;
-        state->Status = static_cast<uint8>(status);
+        state->Status = status;
         state->CurrentPathPointIndex = 0;
         state->PathDirty = false;
         if (status == Pathfinding::PathStatus::Complete || status == Pathfinding::PathStatus::Partial)
+        {
             CacheWaypointsFromPath(*state, pathBuffer);
+            ReportRequestReason(queued.Entity, *state, Navigation::StatusReason::None);
+        }
+        else if (const auto* map = navWorld.GetMap(queued.Map))
+        {
+            ReportRequestReason(queued.Entity, *state, ClassifyFailedSolve(*map, queued.Request));
+        }
     }
     m_Statistics.TotalSolved += m_Statistics.Solved;
 

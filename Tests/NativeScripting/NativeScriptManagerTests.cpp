@@ -959,6 +959,7 @@ struct FaultingUserSystem : ns::IUserSystem
     }
     void OnDestroy(GameEngine::ECS::World&) override {}
     const char* Name() const override { return "FaultingUserSystem"; }
+    int Order() const override { return -1; } // runs before the healthy system
 };
 #endif
 } // namespace
@@ -1031,9 +1032,10 @@ TEST(UserSystemRegistry, PerModuleClearDropsOnlyThatModulesSystems)
     ns::RegisterUserSystem(&packageSystem);
     ns::SetActiveRegistrationModule({});
 
+    // Equal order and name: the module id decides.
     ASSERT_EQ(ns::GetUserSystems().size(), 2u);
-    EXPECT_EQ(ns::GetUserSystems()[0].ModuleId, "UserScripts");
-    EXPECT_EQ(ns::GetUserSystems()[1].ModuleId, "OceanPack");
+    EXPECT_EQ(ns::GetUserSystems()[0].ModuleId, "OceanPack");
+    EXPECT_EQ(ns::GetUserSystems()[1].ModuleId, "UserScripts");
 
     // Package reload: clear + re-register the package module only.
     ns::ClearUserSystems("OceanPack");

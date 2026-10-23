@@ -78,6 +78,28 @@ const CameraData* ViewRegistry::FindCameraData(CameraId id) const
     return nullptr;
 }
 
+const CameraData* ViewRegistry::FindMainCameraData(uint64 worldId) const
+{
+    const CameraData* sceneCamera = nullptr;
+    for (const auto& view : m_Views)
+    {
+        if (worldId != 0 && view.worldId != 0 && view.worldId != worldId)
+            continue;
+        if (!view.activeRenderPipeline || !view.Participates())
+            continue;
+        if (view.purpose != ViewPurpose::Game && view.purpose != ViewPurpose::EditorScene)
+            continue;
+        const CameraData* cam = FindCameraData(view.cameraId);
+        if (!cam)
+            continue;
+        if (view.purpose == ViewPurpose::Game)
+            return cam;
+        if (!sceneCamera)
+            sceneCamera = cam;
+    }
+    return sceneCamera;
+}
+
 void ViewRegistry::SetCameraVolumeLayers(CameraId id, RenderLayerMask volumeLayers)
 {
     m_CameraVolumeLayers[id] = volumeLayers;

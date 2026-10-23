@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TerrainECS/TerrainFieldData.h"
 #include "Types/Types.h"
 #include <vector>
 #include <span>
@@ -16,21 +17,18 @@ inline constexpr uint32 kTerrainGrassFieldChannels = 2u;
 
 // Derived grass control data. RG8 stores height/density targets, with 255/255
 // exactly neutral. Empty Pixels means a neutral field and needs no GPU texture.
+// IsActive answers for the uploaded RG8 only; GroundDarkening is never uploaded.
 // The terrain compositor owns these bytes; neither height nor splat versions
 // change when they change. Dimensions also record a neutral tile's bake lattice.
-struct TerrainGrassField
+struct TerrainGrassField : TerrainFieldData
 {
-    std::vector<uint8> Pixels;
-    uint32 Width = 0;
-    uint32 Height = 0;
-    uint64 Version = 0;
+    // The composed Darken Ground scale of the regions (TerrainGrassEffect::GroundDarkeningScale),
+    // R8, 255 is 1. CPU only: the colour map's ground write reads it at bake and nothing uploads
+    // it. Empty means 1 everywhere. On the same lattice as Pixels, and its changes move Version.
+    std::vector<uint8> GroundDarkening;
     uint64 AppliedHash = 0;
     uint64 NonNeutralTexels = 0;
-    bool Initialized = false;
-    bool Dirty = false;
-    uint32 DirtyMinX = 0, DirtyMinZ = 0, DirtyMaxX = 0, DirtyMaxZ = 0; // exclusive max
-
-    bool IsActive() const { return !Pixels.empty(); }
+    uint64 NonNeutralDarkeningTexels = 0;
 };
 
 struct ResolvedModifier;

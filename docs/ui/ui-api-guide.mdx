@@ -197,6 +197,41 @@ if (Ui.FindElement("StartButton") is Ui.Button start)
 ::::
 :::::
 
+### Pointer button events
+
+Every element raises three events for the mouse buttons. They arrive for every button, on the element under the pointer, and bubble to its ancestors, so a panel hears a press that began on one of its children.
+
+| Event | When it fires |
+|---|---|
+| `PointerPressed` | A button goes down. |
+| `PointerReleased` | The button that began the press comes up over the element. |
+| `PointerCancelled` | The press ends without a release: the pointer left the game's surface, for example the editor's Game View, while the button was held. No release follows. |
+
+Each event passes a `Ui.PointerButtonArgs`:
+
+- `Button`: the button that began the press, a `MouseButton` (`Left`, `Right`, `Middle`, `Back`, `Forward`, ...), the same type `Input.IsMouseButtonDown` takes.
+- `X` and `Y`: the pointer in the element's layout space, the same space as `PointerEntered` and `MouseMoved`. A cancel has no position, and both read -1.
+- `Mods`: the modifier keys held, a `ModifierFlags`.
+
+A press is not a click. A button's `Clicked` fires on release, for the left button or Space and Enter, and only on that button. Use `PointerPressed` to act as soon as a button goes down, or to tell the right button from the left. A control that arms itself on `PointerPressed` acts on `PointerReleased`, and disarms on `PointerCancelled` without acting. A press belongs to the button that began it: until that button comes up, other buttons raise no events.
+
+```csharp title="Act on a right click"
+using GameEngine.Scripting;
+
+if (Ui.FindElement("InventoryGrid") is Ui.Element grid)
+{
+    bool armed = false;
+    grid.PointerPressed += press => armed = press.Button == MouseButton.Right;
+    grid.PointerReleased += release =>
+    {
+        if (armed)
+            ApplyModifier(release.X, release.Y);
+        armed = false;
+    };
+    grid.PointerCancelled += _ => armed = false;
+}
+```
+
 ## Finding an element and setting its text
 
 :::::tabs

@@ -1,0 +1,4 @@
+# The fixture mirrors compile into Managed/BindingTests, which refuses an undocumented public member;
+# like the engine's generated mirrors, the fixture's fields carry no documentation of their own.
+[*.g.cs]
+dotnet_diagnostic.CS1591.severity = none

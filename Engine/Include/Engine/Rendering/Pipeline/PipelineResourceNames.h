@@ -37,8 +37,9 @@ inline constexpr const char* HZB = "View.HZB";
 // Recorded by ViewMotionVectors for whichever of SSR and TAA declares first.
 inline constexpr const char* MotionVectors = "View.MotionVectors";
 // Nearest-surface (MAX-reduced) Hi-Z pyramid for SSR ray traversal — the
-// opposite bound from the MIN/farthest occlusion HZB above. Built by
-// HZBBuildNode only when SSSR is active for the view.
+// opposite bound from the MIN/farthest occlusion HZB above. Built by the
+// reflections node only when SSSR is active for the view, from
+// View.DepthResolvedPostOcean.
 inline constexpr const char* SSRHiZ = "View.SSRHiZ";
 // Forward-pass MRT slice: .rg = octahedral VIEW-space normal, .b = perceptual
 // roughness, .a = metallic. Written only under MaterialKeyword::SSSRNormalRoughness.

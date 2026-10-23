@@ -362,7 +362,7 @@ target_include_directories(AiAssistantPanelTests PRIVATE
     # UIRgTestHarness.h: a headless device for a real UIManager.
     ${CMAKE_SOURCE_DIR}/Engine/Modules/UI/Tests)
 target_link_libraries(AiAssistantPanelTests PRIVATE
-    Engine EditorSDK nlohmann_json::nlohmann_json GTest::gtest_main)
+    Engine EditorSDK SharedHeadlessDeviceTestSupport nlohmann_json::nlohmann_json GTest::gtest_main)
 target_compile_features(AiAssistantPanelTests PRIVATE cxx_std_20)
 ge_set_output_tests(AiAssistantPanelTests)
 ge_stage_runtime_dependencies(AiAssistantPanelTests)

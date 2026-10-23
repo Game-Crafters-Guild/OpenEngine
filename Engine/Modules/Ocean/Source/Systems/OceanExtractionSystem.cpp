@@ -949,7 +949,6 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             copyColor(params.SkyBase, ocean.SkyBase);
             copyColor(params.SkyTowardsSun, ocean.SkyTowardsSun);
             copyColor(params.SkyAwayFromSun, ocean.SkyAwayFromSun);
-            copyColor(params.DirectionalLightColor, ocean.DirectionalLightColor);
             params.NormalsStrength = ocean.NormalsStrength;
             params.NormalsScale = std::max(ocean.NormalsScale, 0.001f);
             params.FoamNormalStrength = std::clamp(ocean.FoamNormalStrength, 0.0f, 2.0f);
@@ -969,8 +968,6 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             params.PlanarReflectionStrength = std::clamp(ocean.PlanarReflectionStrength, 0.0f, 3.0f);
             feature.SetPlanarReflectionScale(ocean.PlanarReflectionScale);
             params.SkyDirectionality = ocean.SkyDirectionality;
-            params.DirectionalLightBoost = ocean.DirectionalLightBoost;
-            params.DirectionalLightFallOff = ocean.DirectionalLightFallOff;
 
             // Refraction / depth-fog transparency. The density swatch carries the
             // three per-channel extinctions; alpha is unused.
@@ -1401,7 +1398,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     }
 
     // Main directional light → sun direction (toward the sun) + colour, so the
-    // surface shader can do sun-driven subsurface scattering and glitter.
+    // surface shader can do sun-driven subsurface scattering.
     {
         bool foundSun = false;
         world.Query<ECS::Read<Components::Light>, ECS::Read<Components::WorldTransform>>()

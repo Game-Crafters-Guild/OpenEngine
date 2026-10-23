@@ -93,6 +93,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 struct DrawIndexedIndirectCommand
@@ -149,6 +150,7 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     // Worst case across every active grass terrain: x = densest blades per square metre at the
     // camera, y = flattest falloff. The fit below is a BOUND, and these are what make it one.
     vec4 Summary;
+    ivec4 RenderOriginSector; // read only by the emit kernel (terrain_grass_place.comp)
 } Place;
 
 shared uint sRingCells[kGrassMaxRings];

@@ -1015,7 +1015,7 @@ class RenderServices
     Rendering::RenderGraph::RGPass AddWorldNonOccludingDepthPrepassForView(
         Rendering::RenderGraph::RGFrame& frame, Rendering::ViewId viewId,
         Rendering::RenderGraph::RGTexture depth);
-    // The deforming-motion producer's separate-pass arm: the deforming subset
+    // The deforming-motion producer's pass: the deforming subset
     // of the view's batch keys re-rasterized into the shared motion target
     // under READ-ONLY camera depth, so a closer surface simply wins the test
     // and the deformer's fragment never reaches the attachment. Declared by
@@ -1300,15 +1300,6 @@ class RenderServices
     // The scale the pipeline actually applies to `viewId`: its ViewRegistry
     // override when set, else the engine default.
     float ResolveViewRenderScale(Rendering::ViewId viewId) const;
-
-    // Which producer arm writes the deforming surfaces into the shared motion
-    // target this run. Resolved at initialization from the three switches; the
-    // setter is what resolution calls, and what lets a test fixture render one
-    // arm without mutating the process environment. None means the deformer
-    // lane records nothing at all, which is the default and the state in which
-    // this frame is the frame it was before the producer existed.
-    DeformationMotionArm GetDeformationMotionArm() const { return m_DeformationMotionArm; }
-    void SetDeformationMotionArm(DeformationMotionArm arm) { m_DeformationMotionArm = arm; }
 
     // Dynamic resolution scaling. Off pins the scale to 1.0 (Native) — even
     // when the mode is already Off, so a startup-applied persisted scale
@@ -2129,8 +2120,6 @@ class RenderServices
     // override; 1.0 = native (GE_TAA_RENDER_SCALE, the project's
     // rendering.taaRenderScale, and dynamic resolution drive it below 1.0).
     float m_DefaultRenderScale = 1.0f;
-    // Off until a switch or a test fixture selects an arm.
-    DeformationMotionArm m_DeformationMotionArm = DeformationMotionArm::None;
 
     // Dynamic resolution. The controller is inert unless m_DrsMode is Dynamic;
     // m_DrsFixedScale remembers the user's static slider value so leaving
@@ -2220,7 +2209,7 @@ class RenderServices
         // The SAME upload alloc the world pass's resolved table reads —
         // written at the area arm's declaration, bound by name "AreaShadowData".
         Rendering::RenderGraph::RGFrame::TypedUpload<AreaShadowDataGPU> AreaShadowData{};
-        // The motion variant's per-view block, written at the producer arm's
+        // The motion variant's per-view block, written at the producer's
         // declaration and bound by the block's INSTANCE name "MotionParams" —
         // reflection names a block by its instance, as it does for Cam and
         // Light. Absent on a view whose producer did not run this frame; the

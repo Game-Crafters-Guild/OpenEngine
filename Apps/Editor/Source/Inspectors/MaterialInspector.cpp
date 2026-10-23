@@ -18,6 +18,8 @@
 #include "Core/Engine.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialCompiler.h"
+#include "Engine/Rendering/MaterialDeformationMargins.h"
+#include "Engine/Rendering/MaterialVertexAnimation.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Platform/Shell.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -31,6 +33,7 @@
 #include "Rendering/Materials/ShaderCapabilityDetector.h"
 #include "Rendering/Materials/ShaderPropertyTable.h"
 #include "Rendering/Materials/ShaderMetaValidation.h"
+#include "Rendering/Materials/ShaderVariantKey.h"
 #include "Rendering/ShaderGraph/SgPropertyBinding.h"
 
 #include "Editor/EditorPaths.h"
@@ -67,6 +70,7 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -203,10 +207,48 @@ static void UpdateMaterialIconTint(UIElement* root, MaterialAsset* mat)
     }
 }
 
-// Canonical lighting model names
-static constexpr const char* kLightingModelStandardPBR = "StandardPBR";
-static constexpr const char* kLightingModelUnlit = "Unlit";
-static constexpr const char* kLightingModelShadowOnly = "ShadowOnly";
+// The two read-only rows under Vertex Modifier: what the material's modifier
+// changes, and the culling envelope it declares with the margin the GPU culling
+// widens its instances by now. Neither is editable: both follow from the shader.
+// A margin of zero for a deforming material carries its reason as the tooltip,
+// the message that states the fix. A modifier that writes the whole vertex
+// output belongs to a draw path that culls its own geometry, so a missing
+// envelope is not a problem there and its row is not shown.
+static void AddDeformationRows(UIElement* content, const Engine::Renderer::Material& runtime)
+{
+    namespace R = Rendering;
+    if (!Engine::Renderer::MaterialDeformsVertices(runtime))
+        return;
+    const bool fullOutput =
+        R::HasKeyword(runtime.GetVariantKey().materialKeywords, R::MaterialKeyword::HasVertexOutputMod);
+    UIElement* formRow = InspectorUI::AddRow(content);
+    InspectorUI::AddLabel(formRow, "Deformation");
+    if (fullOutput)
+        InspectorUI::AddLabel(formRow, "Writes the vertex output",
+                              "The vertex modifier writes the whole vertex output. The draw path it belongs "
+                              "to culls its own geometry, so the deformation envelope is optional.");
+    else
+        InspectorUI::AddLabel(formRow, "Moves vertex positions",
+                              "The vertex modifier moves each vertex position. Culling widens the bounds of "
+                              "its instances by the deformation envelope the modifier declares.");
+
+    const R::DeformationEnvelopeDeclaration& envelope = runtime.GetDeformationEnvelope();
+    if (!envelope.Declared && fullOutput)
+        return;
+    const Engine::Renderer::DeformationMargin margin = Engine::Renderer::ResolveDeformationMargin(runtime);
+    std::string text;
+    if (!envelope.Declared)
+        text = "Not declared: culling bounds are not widened for this deformation";
+    else if (!margin.Problem.empty())
+        text = "Not usable: culling margin 0 m";
+    else if (envelope.ScaledBy.empty())
+        text = std::format("{:g} m", envelope.Meters);
+    else
+        text = std::format("{:g} m × {} = {:g} m", envelope.Meters, envelope.ScaledBy, margin.Meters);
+    UIElement* envelopeRow = InspectorUI::AddRow(content);
+    InspectorUI::AddLabel(envelopeRow, "Deformation Envelope");
+    InspectorUI::AddLabel(envelopeRow, text, margin.Problem.empty() ? nullptr : margin.Problem.c_str());
+}
 
 // ============================================================================
 // Lighting model
@@ -1240,9 +1282,9 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
         const int lightingIdx = LightingModelDropdownIndex(doc.lightingModel);
 
         Dropdown* lightingDD = InspectorUI::AddDropdownRow(content, "Lighting Model",
-            {{kLightingModelStandardPBR, kLightingModelStandardPBR},
-             {kLightingModelUnlit, kLightingModelUnlit},
-             {kLightingModelShadowOnly, "Shadow Only"}}, lightingIdx);
+            {{std::string(Rendering::LightingModel::kStandardPBRName), "StandardPBR"},
+             {std::string(Rendering::LightingModel::kUnlitName), "Unlit"},
+             {std::string(Rendering::LightingModel::kShadowOnlyName), "Shadow Only"}}, lightingIdx);
 
         lightingDD->SetOnValueChanged([root, mat, openPicker, undo, inlineEmbed, openAsset](const std::string& value) {
             MaterialDocument d = mat->GetDocument();
@@ -2403,6 +2445,9 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
 
                 SaveReloadRebuild(root, mat, d, openPicker, {}, nullptr, inlineEmbed, openAsset);
             });
+        if (auto* rs = EngineCore::GetInstance().GetRenderServices())
+            if (const Engine::Renderer::Material* runtime = rs->Materials().Registry().Find(mat->GetGUID()))
+                AddDeformationRows(content, *runtime);
 
         root->AddChild(std::move(section));
     }

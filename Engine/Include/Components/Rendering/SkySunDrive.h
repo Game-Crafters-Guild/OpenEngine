@@ -80,10 +80,11 @@ float SkySourceLux(const SkyEnvironment& sky, float hours);
 // hidden.
 float MoonlightLux(const SkyEnvironment& sky, float moonUpDot);
 
-// The same from the moon's ground colour already evaluated for the frame (Rendering::SkyBodyGroundColors::Moon,
-// SkySystemConfig::moonColor extinguished at the moon's elevation), so the frame runs the moon's
-// extinction once.
-float MoonlightLuxFromGround(const SkyEnvironment& sky, const float moonGround[3]);
+// The same from the moon's phase fraction and ground colour already evaluated for the frame
+// (Rendering::SkySunState::MoonPhaseFraction; Rendering::SkyBodyGroundColors::Moon,
+// SkySystemConfig::moonColor extinguished at the moon's elevation), so the frame runs the phase law
+// and the moon's extinction once.
+float MoonlightLuxFromGround(const SkyEnvironment& sky, float moonPhaseFraction, const float moonGround[3]);
 
 // The sky's Moonlight as a multiple of the default moonlight: exactly 1 at the default.
 float MoonlightRatio(const SkyEnvironment& sky);

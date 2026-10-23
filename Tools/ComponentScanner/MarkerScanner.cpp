@@ -14,6 +14,7 @@ using namespace Lexical;
 
 constexpr std::string_view kNoAdd = "@ge-no-add";
 constexpr std::string_view kEditorOnly = "@ge-editor-only";
+constexpr std::string_view kEngineInternal = "@ge-engine-internal";
 constexpr std::string_view kReadOnly = "@ge-readonly";
 constexpr std::string_view kHidden = "@ge-hidden";
 constexpr std::string_view kTooltip = "@ge-tooltip";
@@ -117,6 +118,8 @@ MarkerLines Scan(const std::vector<std::string>& lines, std::ostream& warnings)
             result.NoAdd.insert(lineNumber);
         if (comment.find(kEditorOnly) != std::string_view::npos)
             result.EditorOnly.insert(lineNumber);
+        if (comment.find(kEngineInternal) != std::string_view::npos)
+            result.EngineInternal.insert(lineNumber);
         if (comment.find(kReadOnly) != std::string_view::npos)
             result.ReadOnly.insert(lineNumber);
         if (comment.find(kHidden) != std::string_view::npos)

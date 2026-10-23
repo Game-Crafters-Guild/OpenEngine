@@ -19,16 +19,19 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUCulling.h"
+#include "Rendering/Core/GPUInstanceDepthClass.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 #include "Mathematics/MatrixOps.h"
+#include "Mathematics/VectorOps.h"
 #include "Assets/MeshLODGeometry.h"
 #include "Assets/ModelAsset.h"
 
 #include "TestDeviceHelper.h"
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -139,6 +142,7 @@ class HzbCullingComputeTest : public ::testing::Test
         hzb.shaderStages = kShaderStageCompute;
         layout.bindings.push_back(hzb);
         addStorage(5);
+        addStorage(6);
         return layout;
     }
 
@@ -253,7 +257,7 @@ class HzbCullingComputeTest : public ::testing::Test
         cd.farPlane = kFar;
         cd.firstInstance = 0u;
         cd.instanceCount = instanceCount;
-        cd.cullShadowCasters = 0u;
+        cd.passFlags = 0u;
         cd.cullMargins[0] = margin0;
         for (uint32_t m = 1; m < 4u; ++m)
             cd.cullMargins[m] = 1.0f;
@@ -264,7 +268,8 @@ class HzbCullingComputeTest : public ::testing::Test
 
     CullResult RunCull(uint32_t mode, const std::vector<GPUInstance>& instances,
                        const std::vector<uint32_t>& prevVisibleSeed, TextureHandle hzb,
-                       float margin0 = 1.0f, uint32_t layerMask = 0xFFFFFFFFu)
+                       float margin0 = 1.0f, uint32_t layerMask = 0xFFFFFFFFu,
+                       uint32_t passFlags = 0u, const std::vector<float>& deformationMargins = {0.0f})
     {
         const uint32_t n = static_cast<uint32_t>(instances.size());
 
@@ -273,6 +278,7 @@ class HzbCullingComputeTest : public ::testing::Test
 
         GPUCullingData cd = MakeCullingData(n, mode, margin0);
         cd.renderLayerMask = layerMask;
+        cd.passFlags = passFlags;
         BufferHandle cullingBuf = MakeHostBuffer(sizeof(GPUCullingData), "HzbCull.CullingData");
         WriteOne(cullingBuf, cd);
 
@@ -285,6 +291,10 @@ class HzbCullingComputeTest : public ::testing::Test
         BufferHandle statsBuf = MakeHostBuffer(sizeof(OcclusionStats), "HzbCull.Stats");
         Write(statsBuf, std::vector<uint32_t>{0u, 0u, 0u, 0u});
 
+        const size_t marginBytes = deformationMargins.size() * sizeof(float);
+        BufferHandle marginBuf = MakeHostBuffer(marginBytes, "HzbCull.DeformationMargins");
+        Write(marginBuf, deformationMargins);
+
         DescriptorSetDesc setDesc{};
         setDesc.layout = m_Layout;
         setDesc.transient = true;
@@ -296,6 +306,7 @@ class HzbCullingComputeTest : public ::testing::Test
         m_Device->UpdateStorageBufferBinding(ds, 3, prevBuf, 0, n * sizeof(uint32_t));
         m_Device->UpdateCombinedImageSamplerBinding(ds, 4, hzb, m_Sampler);
         m_Device->UpdateStorageBufferBinding(ds, 5, statsBuf, 0, sizeof(OcclusionStats));
+        m_Device->UpdateStorageBufferBinding(ds, 6, marginBuf, 0, marginBytes);
 
         HzbCullPC pc{};
         pc.instanceCount = n;
@@ -396,6 +407,71 @@ TEST_F(HzbCullingComputeTest, PhaseBOcclusionTestUsesMarginedRadius)
     EXPECT_EQ(r.stats.prevVisibleNew, 1u);
 }
 
+// The deformation margin reaches both phases the way it reaches the frustum
+// cull: material 0 deforms, material 1 does not. Four spheres sit 0.75 past the
+// right plane at viewZ 3 with radius 0.1 and a view cull margin of 1.5; only the
+// deforming ones whose largest axis scale carries 1.5 x (R + envelope x scale)
+// across the plane come back. One of those is yawed 45 degrees with the scale
+// (3, 0.5, 1): its columns are 3, 0.5 and 1 long, its rows at most 2.24, so it
+// comes back only when the axis scale is read from the columns. Phase A would
+// otherwise drop them before the HZB is built and phase B would never recover
+// them; phase B also tests occlusion with the widened sphere.
+TEST_F(HzbCullingComputeTest, DeformationMarginWidensTheSphereInBothPhases)
+{
+    constexpr float kViewZ = 3.0f;
+    constexpr float kOutside = 0.75f;
+    constexpr float kViewMargin = 1.5f;
+    const float halfFov = 1.0472f * 0.5f;
+    const float x = kViewZ * std::tan(halfFov) + kOutside / std::cos(halfFov);
+    struct Placement
+    {
+        uint32_t material;
+        Vector3 scale;
+        float yawRadians;
+    };
+    const Placement placements[] = {{0u, Vector3(3.0f, 1.0f, 1.5f), 0.0f},
+                                    {0u, Vector3(1.0f, 1.0f, 0.5f), 0.0f},
+                                    {1u, Vector3(3.0f, 1.0f, 1.5f), 0.0f},
+                                    {0u, Vector3(3.0f, 0.5f, 1.0f), 0.25f * Mathematics::Pi}};
+    std::vector<GPUInstance> instances;
+    for (const Placement& p : placements)
+    {
+        GPUInstance inst = MakeInstance(kViewZ, 0.1f);
+        inst.boundingCenter.x = x;
+        inst.materialIndex = p.material;
+        // Columns: the yawed basis vectors scaled per axis.
+        const float c = std::cos(p.yawRadians);
+        const float s = std::sin(p.yawRadians);
+        inst.transform = Mathematics::Matrix4x4::Identity();
+        inst.transform.Data()[0] = p.scale.x * c;
+        inst.transform.Data()[2] = -p.scale.x * s;
+        inst.transform.Data()[5] = p.scale.y;
+        inst.transform.Data()[8] = p.scale.z * s;
+        inst.transform.Data()[10] = p.scale.z * c;
+        instances.push_back(inst);
+    }
+    // 1.5 x (0.1 + 0.15 x 3) = 0.825 reaches the plane. 1.5 x (0.1 + 0.15) =
+    // 0.375 and the undeclared 0.15 do not; neither do 1.5 x 0.1 + 0.15 x 3 = 0.60
+    // (the margin added after the view's multiplier) and 1.5 x (0.1 + 0.15 x 2.24)
+    // = 0.65 (the axis scale read from the rows).
+    const std::vector<float> margins = {0.15f, 0.0f};
+    const TextureHandle hzb = MakeUniformHzb(kOccluderDepth);
+    const std::vector<uint32_t> allVisible(instances.size(), 1u);
+    const std::vector<uint32_t> noneVisible(instances.size(), 0u);
+
+    const CullResult aBefore =
+        RunCull(kHzbModePhaseA, instances, allVisible, MakeUniformHzb(0.0f), kViewMargin);
+    const CullResult a = RunCull(kHzbModePhaseA, instances, allVisible, MakeUniformHzb(0.0f), kViewMargin,
+                                 0xFFFFFFFFu, 0u, margins);
+    const CullResult b =
+        RunCull(kHzbModePhaseB, instances, noneVisible, hzb, kViewMargin, 0xFFFFFFFFu, 0u, margins);
+
+    EXPECT_EQ(aBefore.visibility, (std::vector<uint32_t>{0u, 0u, 0u, 0u}));
+    EXPECT_EQ(a.visibility, (std::vector<uint32_t>{1u, 0u, 0u, 1u}));
+    EXPECT_EQ(b.visibility, (std::vector<uint32_t>{1u, 0u, 0u, 1u}));
+    EXPECT_EQ(b.prevVisible, (std::vector<uint32_t>{1u, 0u, 0u, 1u}));
+}
+
 // Phase A (mode 1): visibility = frustum ∧ prevVisible, prevVisible untouched.
 TEST_F(HzbCullingComputeTest, LowerGeometryRemainsVisibleAcrossFormerFrustumBoundary)
 {
@@ -475,6 +551,40 @@ TEST_F(HzbCullingComputeTest, RenderLayersGateBothPhasesAndDropHiddenHistory)
         EXPECT_EQ(b.visibility, (std::vector<uint32_t>{0, 0, 0, 0}));
         EXPECT_EQ(b.prevVisible, expected);
         auto reveal = RunCull(kHzbModePhaseB, instances, {0, 0, 0, 0}, hzb, 1.0f, mask);
+        EXPECT_EQ(reveal.visibility, expected);
+        EXPECT_EQ(reveal.prevVisible, expected);
+    }
+}
+
+// The HZB cull serves color views only, so a shadows-only instance draws in neither phase and
+// leaves no history; the caster beside it is the control.
+TEST_F(HzbCullingComputeTest, ShadowsOnlyInstancesDropFromBothPhases)
+{
+    const auto hzb = MakeUniformHzb(0.0f);
+    std::vector<GPUInstance> instances(2, MakeInstance(3.0f, .1f));
+    instances[0].flags = 1u;
+    instances[1].flags = 1u | kInstanceFlagShadowsOnly;
+    const std::vector<uint32_t> expected = {1u, 0u};
+    EXPECT_EQ(RunCull(kHzbModePhaseA, instances, {1, 1}, hzb).visibility, expected);
+    const auto reveal = RunCull(kHzbModePhaseB, instances, {0, 0}, hzb);
+    EXPECT_EQ(reveal.visibility, expected);
+    EXPECT_EQ(reveal.prevVisible, expected);
+}
+
+// The HZB cull of the Scene View (kCullPassDropEditorHidden) leaves out what its eye hides in both
+// phases and keeps no history for it; the same cull without the bit, as the Game View runs it, keeps it.
+TEST_F(HzbCullingComputeTest, EditorHiddenInstancesDropFromBothPhasesOfTheSceneViewOnly)
+{
+    const auto hzb = MakeUniformHzb(0.0f);
+    std::vector<GPUInstance> instances(2, MakeInstance(3.0f, .1f));
+    instances[0].flags = 1u;
+    instances[1].flags = 1u | kInstanceFlagEditorHidden;
+    for (uint32_t drop : {0u, kCullPassDropEditorHidden})
+    {
+        SCOPED_TRACE(::testing::Message() << "passFlags=" << drop);
+        const std::vector<uint32_t> expected = {1u, drop != 0u ? 0u : 1u};
+        EXPECT_EQ(RunCull(kHzbModePhaseA, instances, {1, 1}, hzb, 1.0f, 0xFFFFFFFFu, drop).visibility, expected);
+        const auto reveal = RunCull(kHzbModePhaseB, instances, {0, 0}, hzb, 1.0f, 0xFFFFFFFFu, drop);
         EXPECT_EQ(reveal.visibility, expected);
         EXPECT_EQ(reveal.prevVisible, expected);
     }

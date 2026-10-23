@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { ipcConfig } from "../config.js";
 import { formatEndpoint } from "../ipc-client.js";
+import { cliNextCall } from "../next-call.js";
 import { ToolError, type ToolErrorCode, type ToolOutput } from "../registry.js";
 
 // Rendering and exit codes for the CLI. Everything an operator or a script
@@ -59,20 +60,23 @@ export function stripPngFromResult(result: any): any {
  * `editor` is the `host:port` that answered, or null when the tool reached no
  * editor. Reported on success, not only on failure: a call answered by another
  * session's editor succeeds and reads as correct, and the endpoint is the only
- * part of the response that separates the two. Plain mode puts it on stderr so
- * a scripted caller's stdout is byte-for-byte what it was.
+ * part of the response that separates the two. Plain mode puts it on stderr, so
+ * stdout holds only the answer and, when the tool names one, the next call as
+ * its last line (`next: <command>`).
  */
 export function renderOutput(tool: string, out: ToolOutput, opts: RenderOptions, editor: string | null = null): void {
   let savedTo: string | undefined;
   if (out.image) savedTo = savePng(out.image.base64, out.image.filePath);
 
+  const next = out.next ? cliNextCall(tool, out.next) : undefined;
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, tool, data: out.data, summary: out.summary, savedTo, editor }));
+    console.log(JSON.stringify({ ok: true, tool, data: out.data, summary: out.summary, savedTo, editor, next }));
     return;
   }
 
   if (out.summary) console.log(out.summary);
   else console.log(JSON.stringify(out.data, null, 2));
+  if (next) console.log(`next: ${next}`);
 
   if (savedTo && !out.summary?.includes(savedTo) && !opts.quiet) console.error(`Saved ${savedTo}`);
   if (editor && !opts.quiet) console.error(`[editor ${editor}]`);

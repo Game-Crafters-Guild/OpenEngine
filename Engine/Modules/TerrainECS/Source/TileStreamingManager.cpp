@@ -305,6 +305,8 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
     const float32 terrainOriginZ = tiled.WorldOriginZ;
     const float32 tileWorld = tiled.Config.TileWorldSize;
     const uint32 coarseRes = m_Config.CoarseResolution;
+    const uint32 tileRes = tiled.Config.TileConfig.HeightmapWidth;
+    const float32 heightScale = tiled.Config.HeightScale;
     const uint32 tileLODLevels = tiled.Config.TileConfig.LODLevels;
     // By value: the copy shares the base heightmap, so the job reads it safely even
     // if the terrain is re-provisioned or the decode cache evicts it meanwhile.
@@ -316,7 +318,7 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
 
     tracker.ActiveJob = m_JobSystem->Submit([result, worldOriginX, worldOriginZ,
                                              terrainOriginX, terrainOriginZ, config,
-                                             tileWorld, coarseRes, coord,
+                                             tileWorld, coarseRes, tileRes, heightScale, coord,
                                              tileLODLevels, completedQueue]()
     {
         result->Coord = coord;
@@ -338,12 +340,15 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
         result->MinHeight = minH;
         result->MaxHeight = maxH;
 
+        // The full-resolution heights and normal the tile renders while Coarse, built here so
+        // the frame that integrates the tile only copies them.
+        auto standIn = std::make_shared<CoarseTileStandIn>();
+        BuildCoarseTileStandIn(result->CoarseHeightfield, tileRes, tileWorld, heightScale, *standIn);
+        result->CoarseStandIn = std::move(standIn);
+
         // Size the coarse splatmap so the streaming tile has one to upload. It stays
         // unbaked (reads as channel 0) until the modifier bake composites the surface
-        // rules on arrival. Extraction bilinear-upsamples this (and the coarse
-        // heightfield) into the unified tile region; the coarse NORMAL is
-        // intentionally not generated — the tile is distant (streaming edge) where
-        // flat-up lighting is imperceptible, and Full uploads the real normal on upgrade.
+        // rules on arrival; the extraction bilinear-upsamples it into the tile's region.
         ResetSplatmap(
             result->CoarseHeightfield,
             result->Splatmap, result->SplatmapWidth, result->SplatmapHeight);
@@ -541,10 +546,9 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
                                        std::move(result->CoarseHeightfield),
                                        result->MinHeight, result->MaxHeight);
 
-            // Move the coarse splatmap only — the coarse job generates no normalmap
-            // (extraction uploads a flat-up normal for the coarse region), so pass an
-            // empty normal rather than shipping/wiping one. Extraction bilinear-
-            // upsamples this splat into the unified tile region.
+            // Move the coarse splatmap with an empty normal: a coarse tile shows its
+            // stand-in's normal (CoarseStandIn below). The extraction bilinear-upsamples
+            // this splat into the tile's region.
             if (!result->Splatmap.empty())
             {
                 service.SetTileMaps(tiledHandle, result->Coord,
@@ -561,19 +565,21 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
                     auto& t = *tileIt->second;
                     t.PrecomputedQuadtreeNodes = std::move(result->QuadtreeNodes);
                     t.PrecomputedQuadtreeNodesPerAxis = result->QuadtreeNodesPerAxis;
+                    if (result->CoarseStandIn)
+                    {
+                        // The stand-in belongs to the heightfield just set, whose version
+                        // SetTileHeightfield bumped.
+                        result->CoarseStandIn->HeightfieldVersion = t.HeightfieldVersion;
+                        t.CoarseStandIn = std::move(result->CoarseStandIn);
+                    }
                 }
             }
 
             stream.IntegratedThisFrame.push_back(result->Coord);
 
-            // Update global height range incrementally.
-            if (result->MinHeight < tiled.CachedGlobalMinH ||
-                result->MaxHeight > tiled.CachedGlobalMaxH)
-            {
-                tiled.CachedGlobalMinH = std::min(tiled.CachedGlobalMinH, result->MinHeight);
-                tiled.CachedGlobalMaxH = std::max(tiled.CachedGlobalMaxH, result->MaxHeight);
-                tiled.GlobalHeightRangeDirty = false; // We just updated it.
-            }
+            // Widen the global height range by the arriving tile's range.
+            tiled.CachedGlobalMinH = std::min(tiled.CachedGlobalMinH, result->MinHeight);
+            tiled.CachedGlobalMaxH = std::max(tiled.CachedGlobalMaxH, result->MaxHeight);
 
             // Dispatch full upgrade immediately if job slots are available,
             // but reserve 2 slots for new coarse tile loading to prevent
@@ -628,7 +634,6 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
             // Update global height range.
             tiled.CachedGlobalMinH = std::min(tiled.CachedGlobalMinH, result->MinHeight);
             tiled.CachedGlobalMaxH = std::max(tiled.CachedGlobalMaxH, result->MaxHeight);
-            tiled.GlobalHeightRangeDirty = false;
 
             tracker.State = TileState::Active;
             tracker.Result.reset();

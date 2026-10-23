@@ -190,6 +190,49 @@ namespace GameEngine.Scripting
                 remove => EventSubscription.Remove(InstanceId, EventNames.MouseMove, value);
             }
 
+            /// <summary>
+            /// A pointer button went down on this element or on a descendant of it.
+            /// </summary>
+            /// <remarks>
+            /// Arrives for every button and bubbles, so a container hears a press that began on a
+            /// child. A press is not a click: a Button's <c>Clicked</c> fires on release. A press
+            /// belongs to the button that began it: until that button comes up, other buttons raise
+            /// no events.
+            /// </remarks>
+            public event Action<PointerButtonArgs> PointerPressed
+            {
+                add => EventSubscription.Add(InstanceId, EventNames.MouseDown, value);
+                remove => EventSubscription.Remove(InstanceId, EventNames.MouseDown, value);
+            }
+
+            /// <summary>
+            /// A pointer button came up over this element or over a descendant of it.
+            /// </summary>
+            /// <remarks>
+            /// Arrives when the button that began the press comes up, carries that button, and
+            /// bubbles. The release reaches the element under the pointer, which need not be the
+            /// element that heard the press.
+            /// </remarks>
+            public event Action<PointerButtonArgs> PointerReleased
+            {
+                add => EventSubscription.Add(InstanceId, EventNames.MouseUp, value);
+                remove => EventSubscription.Remove(InstanceId, EventNames.MouseUp, value);
+            }
+
+            /// <summary>
+            /// The press in progress ended without a release: the pointer left the surface the game
+            /// UI reads it from while the button was held.
+            /// </summary>
+            /// <remarks>
+            /// Ends a press of any button, and bubbles like a release. No release follows it. A
+            /// control that armed on <see cref="PointerPressed"/> disarms here and does not act.
+            /// </remarks>
+            public event Action<PointerButtonArgs> PointerCancelled
+            {
+                add => EventSubscription.Add(InstanceId, EventNames.MouseCancel, value);
+                remove => EventSubscription.Remove(InstanceId, EventNames.MouseCancel, value);
+            }
+
             /// <summary>This element gained keyboard focus.</summary>
             public event Action FocusGained
             {

@@ -48,11 +48,13 @@ struct GatheredMembers {
     uint32 SkippedNoMaterial = 0;  // null material GUID
     uint32 SkippedNonTriangle = 0; // non-triangle topology submesh
     uint32 SkippedDisabled = 0;    // inactive entity or switched-off renderer
+    uint32 SkippedShadowsOnly = 0; // Shadow Casting is Shadows Only: the member casts its own shadow
 };
 
 // Gather eligible static members from `world`. Excludes skinned/morph members,
-// members with no resolvable model or material, non-triangle topology, and
-// disabled entities or renderers. Members are emitted in world iteration order; a fixed world
+// members with no resolvable model or material, non-triangle topology,
+// disabled entities or renderers, and shadows-only renderers: a proxy draws in
+// color, so a shadows-only member stays itself and keeps casting its own shadow. Members are emitted in world iteration order; a fixed world
 // yields a deterministic gather. The non-default-custom0 exclusion (design §3.2)
 // is satisfied by construction — no MeshRenderer static writes GPUInstance.custom0
 // today (only the particle path does, and it is not gathered here).

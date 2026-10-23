@@ -434,6 +434,18 @@ TEST(DDGIDynamicsTest, MovingAnInstanceLeavesEveryBlasArrayByteIdentical)
     EXPECT_TRUE(anyInstanceFloatMoved);
 }
 
+// Both DDGI lanes trace through DDGITracesInstance: a shadows-only proxy stays out of the traced
+// scene, and the caster beside it is the control.
+TEST(DDGIParticipation, AShadowsOnlyInstanceIsNotTraced)
+{
+    Rendering::GPUInstance caster{};
+    caster.flags = 1u;
+    Rendering::GPUInstance proxy{};
+    proxy.flags = 1u | Rendering::kInstanceFlagShadowsOnly;
+    EXPECT_TRUE(DDGITracesInstance(caster));
+    EXPECT_FALSE(DDGITracesInstance(proxy));
+}
+
 TEST(ThreadedBvhPoolTest, MismatchedMaterialSlotCountPoolsNothing)
 {
     const std::vector<TestMesh> meshes{MakeGridMesh(4u, 1u, Vector3(0.0f, 0.0f, 0.0f))};

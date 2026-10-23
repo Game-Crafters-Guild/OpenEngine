@@ -256,9 +256,14 @@ void TransformHierarchySystem::ResolveFlatParallel(ECS::World& world, FlatScope 
     // thread-local scratch and appended once per chunk — the feed lock is
     // taken only for chunks containing actual movers, never per entity. The
     // scratch has no cross-frame or cross-world state (filled and drained
-    // within one callback), so world churn can't dangle it. A changed entity
-    // that is a cached hierarchy root is recorded the same way, so its
-    // subtree propagates this frame.
+    // within one callback), so world churn can't dangle it.
+    //
+    // A cached hierarchy root is recorded when its WorldTransform Version
+    // differs from the one its children last composed against: this pass's
+    // write bumps it, and so does a direct writer's BumpWorldTransform that
+    // left the bytes already equal to the local matrix. Its subtree then
+    // propagates this frame. Each root lives in one chunk, so a task writes
+    // only its own roots' composedWorldVersion.
     const bool feedOn = world.IsComponentDirtyFeedEnabledFor(
         ECS::GetComponentTypeId<WorldTransform>());
     const bool recordRoots = scope == FlatScope::Unparented;
@@ -272,15 +277,15 @@ void TransformHierarchySystem::ResolveFlatParallel(ECS::World& world, FlatScope 
         tl_ChangedScratch.clear();
         tl_ChangedRoots.clear();
         for (std::size_t i = 0; i < chunkCount; ++i) {
-            if (!WriteRootWorldTransform(locals[i].matrix, worlds[i]))
-                continue;
-            if (feedOn)
+            if (WriteRootWorldTransform(locals[i].matrix, worlds[i]) && feedOn)
                 tl_ChangedScratch.push_back(entities[i]);
-            if (recordRoots) {
-                const size_t node = FindNodeIndex(entities[i]);
-                if (node != SIZE_MAX)
-                    tl_ChangedRoots.push_back(node);
-            }
+            if (!recordRoots)
+                continue;
+            const size_t node = FindNodeIndex(entities[i]);
+            if (node == SIZE_MAX || m_Nodes[node].composedWorldVersion == worlds[i].Version)
+                continue;
+            m_Nodes[node].composedWorldVersion = worlds[i].Version;
+            tl_ChangedRoots.push_back(node);
         }
         if (!tl_ChangedScratch.empty())
             world.EmitComponentDirtyBatch(ECS::GetComponentTypeId<WorldTransform>(),
@@ -408,6 +413,7 @@ void TransformHierarchySystem::AddFlatOwnedRoots(ECS::World& world) {
         node.local = local;
         node.worldRead = worldTransform;
         node.flatOwned = true;
+        node.composedWorldVersion = worldTransform->Version;
         std::memcpy(node.localSnapshot.data(), local->matrix, sizeof(local->matrix));
         if (parent.index >= m_NodeIndexByEntityIndex.size())
             m_NodeIndexByEntityIndex.resize(static_cast<size_t>(parent.index) + 1,

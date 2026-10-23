@@ -1644,6 +1644,7 @@ class AddPresetComponentsCommand final : public Editor::IEditorCommand
         case ComponentPreset::TerrainRulesArea:
         case ComponentPreset::TerrainGroundClaimArea:
         case ComponentPreset::TerrainGrassArea:
+        case ComponentPreset::TerrainColorArea:
             break; // Handled by FindTerrainAreaPreset above.
         case ComponentPreset::Count:
             break; // Sentinel, not a preset.
@@ -3540,9 +3541,9 @@ void InspectorPanel::ShowSelectedAssets(const std::vector<std::filesystem::path>
         m_PendingAssetType = assetManager.GetRegistry().TryGetAssetMetadata(guid, pendingMeta) ? pendingMeta.Type
                                                                                               : AssetType::Unknown;
         m_SelectedAsset = nullptr;
-        BuildSimpleTopHeader(selectedPath.stem().string(), ClassifyAssetHeaderKind(selectedPath));
+        BuildSimpleTopHeader(GetAssetNameFromPath(selectedPath.string()), ClassifyAssetHeaderKind(selectedPath));
         ApplyAssetIconToHeader(m_HeaderIconHost, selectedPath);
-        ShowPendingAssetHeaderTitle(selectedPath.stem().string());
+        ShowPendingAssetHeaderTitle(GetAssetNameFromPath(selectedPath.string()));
         auto label = std::make_unique<Label>();
         label->AddClass("inspector-text");
         label->SetId(kPendingAssetLoadLabelId);
@@ -3569,7 +3570,7 @@ void InspectorPanel::ShowSelectedAssets(const std::vector<std::filesystem::path>
     // on-disk spelling, the same string the browser row shows, and the two branches above already
     // header from it. (Asset::GetPath() is the registry's case-folded key; Asset::GetName() keeps
     // the spelling too.)
-    BuildSimpleTopHeader(selectedPath.stem().string(), ClassifyAssetHeaderKind(selectedPath));
+    BuildSimpleTopHeader(GetAssetNameFromPath(selectedPath.string()), ClassifyAssetHeaderKind(selectedPath));
     ApplyAssetIconToHeader(m_HeaderIconHost, selectedPath);
 
     auto assetContentRoot = std::make_unique<UIElement>();

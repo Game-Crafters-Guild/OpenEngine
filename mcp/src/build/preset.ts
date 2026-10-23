@@ -110,11 +110,6 @@ export function detectPreset(config: string = "DebugFast"): string {
   return candidates[0];
 }
 
-// Check if a preset is a non-preset (macOS/Linux custom build dir).
-export function isCustomBuild(preset: string): boolean {
-  return preset.startsWith("__");
-}
-
 // Get the cmake build arguments for a given preset or custom build.
 export function buildArgs(preset: string, config: string, target: string, jobs: string): string[] {
   if (preset === "__macos_ninja__") {
@@ -129,26 +124,19 @@ export function buildArgs(preset: string, config: string, target: string, jobs: 
   return ["--build", `build/${preset}`, "--config", config, "--target", target, "-j", jobs];
 }
 
-// Get the CTest arguments for a given preset or custom build.
-export function ctestArgs(preset: string, config: string, testFilter?: string): string[] {
-  if (preset === "__macos_ninja__") {
-    const args = ["--test-dir", "build-macos", "--output-on-failure"];
-    if (testFilter) args.push("-R", testFilter);
-    return args;
-  }
-  if (preset === "__macos_xcode__") {
-    const args = ["--test-dir", "build-xcode", "--output-on-failure", "-C", config];
-    if (testFilter) args.push("-R", testFilter);
-    return args;
-  }
-  if (preset === "__linux_ninja__") {
-    const args = ["--test-dir", "build-linux", "--output-on-failure"];
-    if (testFilter) args.push("-R", testFilter);
-    return args;
-  }
-  const args = ["--test-dir", `build/${preset}`, "--output-on-failure", "-C", config];
-  if (testFilter) args.push("-R", testFilter);
-  return args;
+// The directory a preset or custom build configures into, relative to the repository root.
+export function buildDirectory(preset: string): string {
+  if (preset === "__macos_ninja__") return "build-macos";
+  if (preset === "__macos_xcode__") return "build-xcode";
+  if (preset === "__linux_ninja__") return "build-linux";
+  return path.join("build", preset);
+}
+
+// Where a build's executables land: bin/<config> (cmake/OutputLayout.cmake), or bin
+// for a single-config build configured without a build type.
+export function binaryDirectory(preset: string, config: string): string {
+  const bin = path.join(repoRoot(), buildDirectory(preset), "bin");
+  return fs.existsSync(path.join(bin, config)) ? path.join(bin, config) : bin;
 }
 
 // Detect the editor executable path for a given preset/config.

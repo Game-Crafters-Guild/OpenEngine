@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace GameEngine::ComponentScanner::CSharpBindingEmitter
 {
@@ -37,7 +38,8 @@ std::string XmlEscaped(std::string_view text)
     return escaped;
 }
 
-// The doc text as <summary> lines at `indent`, one line of the C++ comment per line.
+} // namespace
+
 void EmitSummary(std::string& out, std::string_view doc, std::string_view indent)
 {
     out += std::string(indent) + "/// <summary>\n";
@@ -53,6 +55,9 @@ void EmitSummary(std::string& out, std::string_view doc, std::string_view indent
     }
     out += std::string(indent) + "/// </summary>\n";
 }
+
+namespace
+{
 
 std::string CSharpEnumUnderlying(ApiKind kind, const Index& index)
 {
@@ -104,8 +109,10 @@ std::string PointerType(const ApiFunction& function, const Index& index)
 {
     std::string text = "delegate* unmanaged[Cdecl]<";
     for (const ApiParam& param : function.Params)
-        text += (param.Out ? CSharpSlotType(param.Type, index) + "*" : CSharpInType(param.Type, index)) + ", ";
-    if (function.Returns.Kind != ApiKind::Void)
+        text += (param.Out && !IsSpanOut(param) ? CSharpSlotType(param.Type, index) + "*" : CSharpInType(param.Type, index)) + ", ";
+    if (function.Returns.Kind == ApiKind::String)
+        text += std::string(CSharpTextResultTypes()) + ", ";
+    else if (function.Returns.Kind != ApiKind::Void)
         text += CSharpSlotType(function.Returns, index) + "*, ";
     return text + "int>";
 }
@@ -130,7 +137,7 @@ std::string Signature(const ApiFunction& function, const Index& index, bool memb
     {
         if (!text.empty())
             text += ", ";
-        if (param->Out)
+        if (param->Out && !IsSpanOut(*param))
             text += "out ";
         if (IsRecordDefault(*param))
         {
@@ -155,9 +162,24 @@ std::string NameOf(const ApiParam& param, const Names& names)
     return it != names.end() ? it->second : CSharpParameter(param.Name);
 }
 
+// The pointer a span of results passes for the call ("hitsPointer").
+std::string SpanPointer(const std::string& name)
+{
+    return name + "Pointer";
+}
+
+// The fixed statement that pins a span of results for the call.
+std::string SpanFixed(const ApiParam& param, const Index& index, const Names& names)
+{
+    return "fixed (" + CSharpPublicType(param.Type.Element.front(), index) + "* " + SpanPointer(param.Name) + " = " +
+           NameOf(param, names) + ")";
+}
+
 std::string ArgumentFor(const ApiParam& param, const Names& names)
 {
     const std::string name = NameOf(param, names);
+    if (IsSpanOut(param))
+        return SpanPointer(param.Name) + ", " + name + ".Length";
     if (param.Out || IsRecordDefault(param))
         return "&" + Local(param);
     switch (param.Type.Kind)
@@ -165,6 +187,7 @@ std::string ArgumentFor(const ApiParam& param, const Names& names)
     case ApiKind::Bool: return name + " ? (byte)1 : (byte)0";
     case ApiKind::StringId: return name + ".Value";
     case ApiKind::Entity: return name + ".Id";
+    case ApiKind::RenderLayerMask: return name + ".Bits";
     default: break;
     }
     if (CrossesByPointer(param.Type))
@@ -180,15 +203,113 @@ std::string FromSlot(const ApiType& type, const std::string& slot)
     case ApiKind::Bool: return slot + " != 0";
     case ApiKind::StringId: return "new StringId(" + slot + ")";
     case ApiKind::Entity: return "new Entity(" + slot + ")";
+    case ApiKind::RenderLayerMask: return "new RenderLayerMask(" + slot + ")";
     default: return slot;
     }
 }
 
-// The statements of a call: the locals, the call through the table, the error mapping, the out
-// values and the return.
+// The local that holds a text's bytes for the call ("nameUtf8"), and the pointer the call passes ("namePointer").
+std::string TextLocal(const std::string& name)
+{
+    return name + "Utf8";
+}
+
+std::string TextPointer(const std::string& name)
+{
+    return name + "Pointer";
+}
+
+// The statements of a call that takes or returns text: each text argument encoded as UTF-8 for the
+// call, the call inside the fixed statements that pin the bytes, and for a text return a second call
+// with a buffer of the length the engine reported when the text did not fit. The pooled buffers go
+// back in the finally block.
+void EmitTextBody(std::string& out, const ApiModule& module, const ApiFunction& function, const Index& index,
+                  std::string_view indent, const Names& names)
+{
+    const std::string pad(indent);
+    const std::string helper(CSharpTextHelper());
+    const bool textResult = function.Returns.Kind == ApiKind::String;
+    std::vector<std::string> texts;
+    for (const ApiParam& param : function.Params)
+    {
+        if (IsRecordDefault(param))
+            out += pad + CSharpPublicType(param.Type, index) + " " + Local(param) + " = " + NameOf(param, names) + " ?? new " +
+                   CSharpPublicType(param.Type, index) + "();\n";
+        if (param.Type.Kind != ApiKind::String)
+            continue;
+        out += pad + "ArgumentNullException.ThrowIfNull(" + NameOf(param, names) + ");\n";
+        out += pad + helper + ".In " + TextLocal(param.Name) + " = new " + helper + ".In(" + NameOf(param, names) +
+               ", stackalloc byte[" + helper + ".StackBytes]);\n";
+        texts.push_back(param.Name);
+    }
+    if (textResult)
+    {
+        out += pad + helper + ".Out " + TextLocal("result") + " = new " + helper + ".Out(stackalloc byte[" + helper +
+               ".StackBytes]);\n";
+        texts.push_back("result");
+    }
+    out += pad + "try\n" + pad + "{\n";
+    std::string inner = pad + "    ";
+    if (textResult)
+    {
+        out += inner + "while (true)\n" + inner + "{\n";
+        inner += "    ";
+    }
+    std::string arguments;
+    for (const ApiParam& param : function.Params)
+    {
+        if (param.Out && !IsSpanOut(param))
+            out += inner + CSharpSlotType(param.Type, index) + " " + Local(param) + " = " + CSharpSlotDefault(param.Type) + ";\n";
+        const std::string argument = param.Type.Kind == ApiKind::String
+                                         ? TextPointer(param.Name) + ", " + TextLocal(param.Name) + ".Bytes.Length"
+                                         : ArgumentFor(param, names);
+        arguments += (arguments.empty() ? "" : ", ") + argument;
+    }
+    if (textResult)
+    {
+        out += inner + "int resultLength = 0;\n";
+        arguments += std::string(arguments.empty() ? "" : ", ") + TextPointer("result") + ", " + TextLocal("result") +
+                     ".Bytes.Length, &resultLength";
+    }
+    else if (function.Returns.Kind != ApiKind::Void)
+    {
+        out += inner + CSharpSlotType(function.Returns, index) + " result = " + CSharpSlotDefault(function.Returns) + ";\n";
+        arguments += std::string(arguments.empty() ? "" : ", ") + "&result";
+    }
+    out += inner + "int code;\n";
+    for (const std::string& text : texts)
+        out += inner + "fixed (byte* " + TextPointer(text) + " = " + TextLocal(text) + ".Bytes)\n";
+    for (const ApiParam& param : function.Params)
+        if (IsSpanOut(param))
+            out += inner + SpanFixed(param, index, names) + "\n";
+    out += inner + "    code = " + CSharpPointerField(function.Name) + "(" + arguments + ");\n";
+    out += inner + "if (code != 0 && code != BindingErrors.NotInitialized)\n" + inner + "    BindingErrors.Throw(code, \"" +
+           FunctionLabel(module, function.Name) + "\");\n";
+    if (textResult)
+        out += inner + "if (!" + TextLocal("result") + ".TryRead(resultLength, out string result))\n" + inner + "    continue;\n";
+    for (const ApiParam& param : function.Params)
+        if (param.Out && !IsSpanOut(param))
+            out += inner + NameOf(param, names) + " = " + FromSlot(param.Type, Local(param)) + ";\n";
+    if (function.Returns.Kind != ApiKind::Void)
+        out += inner + "return " + FromSlot(function.Returns, "result") + ";\n";
+    if (textResult)
+        out += pad + "    }\n";
+    out += pad + "}\n" + pad + "finally\n" + pad + "{\n";
+    for (const std::string& text : texts)
+        out += pad + "    " + TextLocal(text) + ".Dispose();\n";
+    out += pad + "}\n";
+}
+
+// The statements of a call: the locals, the call through the table (inside the fixed statements that pin
+// each span of results), the error mapping, the out values and the return.
 void EmitBody(std::string& out, const ApiModule& module, const ApiFunction& function, const Index& index, std::string_view indent,
               const Names& names)
 {
+    if (HasText(function))
+    {
+        EmitTextBody(out, module, function, index, indent, names);
+        return;
+    }
     const std::string pad(indent);
     std::string arguments;
     for (const ApiParam& param : function.Params)
@@ -196,7 +317,7 @@ void EmitBody(std::string& out, const ApiModule& module, const ApiFunction& func
         if (IsRecordDefault(param))
             out += pad + CSharpPublicType(param.Type, index) + " " + Local(param) + " = " + NameOf(param, names) + " ?? new " +
                    CSharpPublicType(param.Type, index) + "();\n";
-        else if (param.Out)
+        else if (param.Out && !IsSpanOut(param))
             out += pad + CSharpSlotType(param.Type, index) + " " + Local(param) + " = " + CSharpSlotDefault(param.Type) + ";\n";
         arguments += (arguments.empty() ? "" : ", ") + ArgumentFor(param, names);
     }
@@ -206,11 +327,18 @@ void EmitBody(std::string& out, const ApiModule& module, const ApiFunction& func
         out += pad + CSharpSlotType(function.Returns, index) + " result = " + CSharpSlotDefault(function.Returns) + ";\n";
         arguments += std::string(arguments.empty() ? "" : ", ") + "&result";
     }
-    out += pad + "int code = " + CSharpPointerField(function.Name) + "(" + arguments + ");\n";
+    std::string pins;
+    for (const ApiParam& param : function.Params)
+        if (IsSpanOut(param))
+            pins += pad + SpanFixed(param, index, names) + "\n";
+    if (pins.empty())
+        out += pad + "int code = " + CSharpPointerField(function.Name) + "(" + arguments + ");\n";
+    else
+        out += pad + "int code;\n" + pins + pad + "    code = " + CSharpPointerField(function.Name) + "(" + arguments + ");\n";
     out += pad + "if (code != 0 && code != BindingErrors.NotInitialized)\n" + pad + "    BindingErrors.Throw(code, \"" +
            FunctionLabel(module, function.Name) + "\");\n";
     for (const ApiParam& param : function.Params)
-        if (param.Out)
+        if (param.Out && !IsSpanOut(param))
             out += pad + NameOf(param, names) + " = " + FromSlot(param.Type, Local(param)) + ";\n";
     if (hasResult)
         out += pad + "return " + FromSlot(function.Returns, "result") + ";\n";

@@ -86,6 +86,10 @@ bool AssetPreviewScrollMatchesCycleAnimation(int mods);
 bool MatchesCatalogShortcut(const char* groupLabel, const char* displayName,
                             int key, int mods);
 
+// The first binding of a catalog entry as a menu row shows it ("F2", "Ctrl+D"), the user's
+// override when there is one; empty when the entry is unbound or not in the catalog.
+std::string CatalogShortcutLabel(const char* groupLabel, const char* displayName);
+
 // The Resize Items catalog binding: the item resize gesture's matcher, which
 // ApplyShortcutOverridesFromPreferences installs in the UI module. A bare wheel
 // never matches: the loader refuses a stored Resize Items binding without a modifier.

@@ -5,6 +5,7 @@
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
+#include "Engine/Rendering/Pipeline/ViewMotionVectors.h"
 #include "Engine/Rendering/RenderServices.h"
 
 #include "Logger/Logger.h"
@@ -176,18 +177,17 @@ bool TemporalAANode::ViewHasMovers(const RenderServices& rs, Rendering::ViewId v
     const auto movers = rs.GetFrameMovers();
     if (movers.empty())
         return false;
-    if (worldId == 0u)
-        return true;
     const auto* scene = rs.GetGPUScene();
     if (scene == nullptr)
         return true;
-    const uint32_t viewWorldKey = Rendering::PackWorldKey16(worldId);
+    const uint32_t viewWorldKey = worldId != 0u ? Rendering::PackWorldKey16(worldId) : 0u;
+    const auto* view = rs.Views().FindViewDesc(viewId);
+    const bool dropEditorHidden = view != nullptr && view->DropsEditorHidden();
     const auto& instances = scene->GetInstances();
     for (const auto& mover : movers)
     {
-        if (mover.InstanceIndex >= instances.size())
-            continue;
-        if (((instances[mover.InstanceIndex].flags >> 16u) & 0xFFFFu) == viewWorldKey)
+        if (mover.InstanceIndex < instances.size() &&
+            ViewMotionVectors::DrawsMover(instances[mover.InstanceIndex], viewWorldKey, dropEditorHidden))
             return true;
     }
     return false;

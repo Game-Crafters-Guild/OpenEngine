@@ -26,6 +26,7 @@
 #pragma once
 
 #include "AssetCore/AssetReloadInvalidator.h"
+#include "Engine/Rendering/MaterialDeformationMargins.h"
 #include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/MaterialRegistryStamp.h"
 #include "Engine/Rendering/ShaderCompilationCache.h"
@@ -304,6 +305,12 @@ class MaterialSystem
     }
     // Rebuilds the color-class map if the material set changed, then returns it.
     std::span<const uint32_t> MaterialColorClassSpan();
+    // The culling margin per materialIndex, in local meters
+    // (MaterialDeformationMargins.h); rebuilt when the registry stamp moves.
+    std::span<const float> MaterialDeformationMarginSpan()
+    {
+        return m_DeformationMargins.Refresh(m_MaterialsBySSBOIndex, GetRegistryStamp());
+    }
 
     /// Moves whenever a draw the publish gate skipped can draw: a pipeline
     /// variant publish lands, or a backend pipeline a draw found cold for its
@@ -401,11 +408,17 @@ class MaterialSystem
     // clip once per save burst instead of once per frame.
     size_t SpendShaderEditRecompileBudget();
     // One material's shader-edit recompile: inspector-lane clear, document
-    // re-synthesis from the live compile spec, then the public async recompile.
+    // re-synthesis from the live compile spec, then the resubmit. The shared
+    // cache entry is not invalidated again: the edit's file sweep already did.
     // No eviction: the submit's version bump retires the pass-variant PSO rows,
     // and PipelineVariantCache stale-serves them while workers rebuild. A
     // registry miss (material freed since the scan) is a no-op.
     void RecompileMaterialForShaderEdit(const GUID& guid);
+    // The part of RecompileMaterialPipeline after the cache invalidation: drops
+    // the material's own variant memos, refreshes its texture slots, retires its
+    // pipeline id and submits the base compile. `resolved` has its shader
+    // references reconciled. Main-thread only; `mat` is registered under `guid`.
+    void ResubmitMaterialPipeline(const GUID& guid, Material* mat, const MaterialDocument& resolved);
     // Demotes an authored Mask that provably cannot discard to Opaque on the
     // registration-local document copy. Runtime-only by design: the authored
     // asset/document is never mutated, so editor saves re-emit the authored
@@ -685,6 +698,7 @@ class MaterialSystem
     std::vector<uint8_t> m_MaterialDepthClass;
     std::vector<uint8_t> m_MaterialDeformationMotion;
     std::vector<uint32_t> m_MaterialColorClass;
+    MaterialDeformationMargins m_DeformationMargins;
     // Sentinel meaning "no valid build": m_MaterialSSBOGeneration counts up from
     // 0, so it can never compare equal to this.
     static constexpr uint64_t kInvalidColorClassGeneration = ~0ull;

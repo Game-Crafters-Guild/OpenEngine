@@ -89,4 +89,22 @@ struct TerrainPaintZone
 static_assert(std::is_trivially_copyable_v<TerrainPaintZone>);
 static_assert(std::is_standard_layout_v<TerrainPaintZone>);
 
+// Colour zone: a colour and its weight per texel, composed into the terrain's colour map at the
+// zone's priority, over the grass ground write and under any later zone. The ground under the
+// zone becomes ground x (1 - weight) + colour x weight. The payload comes from the zone's .tzone file.
+struct TerrainColorZone
+{
+    // Payload asset (straight linear colour and weight, four floats per texel). Null until the
+    // first stroke.
+    Components::AssetRef<AssetType::TerrainZoneData> PayloadRef;
+
+    float32 ExtentX = 32.0f;
+    float32 ExtentZ = 32.0f;
+    float32 Falloff = 4.0f;
+    float32 Priority = 1000.0f;
+};
+
+static_assert(std::is_trivially_copyable_v<TerrainColorZone>);
+static_assert(std::is_standard_layout_v<TerrainColorZone>);
+
 } // namespace GameEngine::Components

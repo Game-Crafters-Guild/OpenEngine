@@ -863,8 +863,10 @@ struct CBTSurfaceParams
     // terrain authors no grass region; the ground then reads the field as (1, 1), as placement does.
     uint32_t AtlasGrassBindless = 0u;
     uint32_t AtlasGrassCoarseBindless = 0u;
-    uint32_t _PadAtlasGrass0 = 0u;
-    uint32_t _PadAtlasGrass1 = 0u;
+    // The atlas-resident colour map and its coarse map (TerrainColorMap.h). 0 when the terrain has
+    // none; the ground then reads identity.
+    uint32_t AtlasColorBindless = 0u;
+    uint32_t AtlasColorCoarseBindless = 0u;
     // Analytic sphere modifiers (sculpt shape-accuracy S2 — mirror the tail of CBTSurfaceParamsData
     // in cbt_surface.glsl). The same placement set CBTFrameParams carries, here for the fragment's
     // per-pixel composed sculpt (centre height + gradient taps + tap gate). DabCount keeps the

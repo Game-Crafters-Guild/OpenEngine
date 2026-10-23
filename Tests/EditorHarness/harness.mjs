@@ -546,10 +546,10 @@ async function scenarioSceneMaterialTexture() {
         await ipc('select_asset', { path: 'IntegrationTests/IT_TexB.material' }, { timeoutMs: 10000 });
         await sleep(2500);
 
-        // Point the Plane at material A and frame an empty stretch of it.
+        // Point the Ground at material A and frame an empty stretch of it.
         const hier = await ipc('get_scene_hierarchy', {}, { timeoutMs: 5000 });
-        const plane = hier.entities.find(e => e.name === 'Plane');
-        if (!plane) { cleanup(); return record(name, 'skip', 'no Plane entity in scene'); }
+        const plane = hier.entities.find(e => e.name === 'Ground');
+        if (!plane) { cleanup(); return record(name, 'skip', 'no Ground entity in scene'); }
         await ipc('set_component', {
             entityId: plane.id, component: 'MeshRenderer', values: { materialAssetGuid: matA },
         }, { timeoutMs: 5000 });

@@ -39,6 +39,9 @@ public:
     // Shapes
     // ---------------------------------------------------------------------
     ShapeHandle CreateShape(const ShapeDefinition& definition, const Vector3& bakedScale = Vector3(1, 1, 1));
+    // The heightfield build a job runs for CreateShape(PreparedHeightFieldShapeDef); see IPhysicsBackend.
+    // Never null: a world without a backend (moved from) hands out a builder that fails every build.
+    HeightFieldShapeBuilder GetHeightFieldShapeBuilder() const;
     void DestroyShape(ShapeHandle shape);
     bool IsShapeValid(ShapeHandle shape) const;
 
@@ -64,6 +67,10 @@ public:
 
     Transform GetBodyTransform(BodyHandle body) const;
     void SetBodyTransform(BodyHandle body, const Transform& transform, ActivationMode activation = ActivationMode::Activate);
+    /// Moves a kinematic body to `target` over `deltaTime` seconds of steps by giving it the velocity that
+    /// reaches the pose, so the dynamic bodies it touches are pushed and carried. SetBodyTransform teleports.
+    /// The velocity stays until the next call: a move to the pose the body is at stops it.
+    void MoveKinematic(BodyHandle body, const Transform& target, float32 deltaTime);
 
     Vector3 GetLinearVelocity(BodyHandle body) const;
     void SetLinearVelocity(BodyHandle body, const Vector3& velocity);

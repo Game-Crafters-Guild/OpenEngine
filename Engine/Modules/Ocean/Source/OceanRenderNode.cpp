@@ -4,11 +4,13 @@
 #include "Ocean/OceanShapeSampleInputs.h"
 
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
+#include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Materials/ShaderProfileDefines.h"
 
 #include <algorithm>
 #include <array>
@@ -128,12 +130,8 @@ bool OceanRenderNode::Initialize(std::string nodeId, std::string nodeJson, std::
     }
     if (m_UnderwaterMode)
     {
-        namespace Names = Engine::Renderer::Pipeline::Names;
-        m_PostOceanDepthResolve.Initialize(
-            m_Id + ".PostOceanDepthResolve",
-            std::string(R"({"output":")") + Names::View::DepthResolvedPostOcean +
-                R"(","poolName":"Pipeline.DepthResolvedPostOcean.View"})",
-            nullptr);
+        Engine::Renderer::Pipeline::Nodes::InitializePostWorldDepthResolve(m_PostOceanDepthResolve,
+                                                                           m_Id + ".PostOceanDepthResolve");
     }
     // Migration tripwire, not a fallback: project .rendergraph copies predating
     // the explicit mode field would silently lose the ocean surface + underwater
@@ -192,26 +190,34 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
                 feature.GetSceneGrab().DeclareForView(d, frameIndex);
             }
 
+            // The surface draws into the view's targets with the world pass's keywords this frame,
+            // the height fog among them: the surface takes the fog by its own distance. The water
+            // keeps writing the screen-space reflection slices the world pass started, so the
+            // reflections replace the water's own reflection; it takes that keyword only with the
+            // slices attached to this pass. The compatibility profile's surface has no environment
+            // term and no cooked reflection variant, so it keeps the world pass's slices as they are.
+            Engine::Renderer::RenderServices::WorldPassTargetsRG targets{};
+            targets.Color = d.ViewColor;
+            targets.Depth = d.ViewDepth;
+            targets.Resolve = d.ViewResolve;
+            targets.DepthResolved = d.ViewDepthResolved;
+            targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
+            targets.ResolveFromPipeline = d.ResolveFromPipeline;
+            auto passKeywords = ::GameEngine::Rendering::MaterialKeyword::None;
+            if (auto kw = rs.GetWorldPassKeywords(d.View.id))
+                passKeywords = *kw;
+            passKeywords = passKeywords & ~::GameEngine::Rendering::MaterialKeyword::SSSRNormalRoughness;
+
             Engine::Renderer::DrawCommand surfaceCommand{};
             std::span<const RenderGraph::RGTexture> sampledCascades{};
+            if (waterInView && !::GameEngine::Rendering::IsCompatShaderProfile())
+                passKeywords = passKeywords |
+                               Engine::Renderer::Pipeline::ReflectionsProvider::ContributeLateForwardPassTargets(
+                                   d, targets);
             if (waterInView &&
-                feature.BuildSurfaceCommandForView(rs, d.Frame, d.View.id, frameIndex,
+                feature.BuildSurfaceCommandForView(rs, d.Frame, d.View.id, frameIndex, passKeywords,
                                                    surfaceCommand, &sampledCascades))
             {
-                Engine::Renderer::RenderServices::WorldPassTargetsRG targets{};
-                targets.Color = d.ViewColor;
-                targets.Depth = d.ViewDepth;
-                targets.Resolve = d.ViewResolve;
-                targets.DepthResolved = d.ViewDepthResolved;
-                targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
-                targets.ResolveFromPipeline = d.ResolveFromPipeline;
-
-                // The world pass's keywords this frame, the height fog among them: the surface takes
-                // the fog by its own distance.
-                auto passKeywords = ::GameEngine::Rendering::MaterialKeyword::None;
-                if (auto kw = rs.GetWorldPassKeywords(d.View.id))
-                    passKeywords = *kw;
-
                 // Declared sampled reads for every dynamic texture the surface
                 // draw binds descriptor-direct (grab, planar reflection, and all
                 // sim cascades — collected by BuildForwardCommand at the bind

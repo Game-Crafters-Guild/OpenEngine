@@ -12,6 +12,10 @@ namespace ScriptingPaths
 /// in a packaged build's Managed/ directory.
 inline constexpr std::string_view kScriptsAssemblyFileName = "GameEngine.Scripts.dll";
 
+/// The folder beside the scripts assembly that holds the runtime assemblies of the project's
+/// NuGet packages. The scripts' dependency context loads it; the export ships it.
+inline constexpr std::string_view kScriptDependenciesFolderName = "Dependencies";
+
 /// Engine assemblies native code loads by file name from the engine managed directory:
 /// CoreBridge (the CLR entry point, ResolveCoreBridgeDll), HotReload (its runtimeconfig.json
 /// boots the CLR, ResolveHotReloadDll) and Scripting.Runtime (the GameSystem runner

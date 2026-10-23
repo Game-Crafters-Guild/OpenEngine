@@ -105,4 +105,32 @@ void SetGain(float gain = 1.0f);
 // @ge-script
 void SetTrim(float trim = 1.f, std::uint8_t mask = 0xFFu, double scale = 2.50);
 
+/// The name of a voice.
+// @ge-script
+::std::string GetName(Voice voice);
+
+/// The render layers a voice is heard on, or `fallback` for a voice with none.
+// @ge-script
+Rendering::RenderLayerMask GetLayers(Voice voice, Rendering::RenderLayerMask fallback);
+
+/// Every hit along a ray, nearest first; the number of hits there are.
+// @ge-script
+std::int32_t FindHits(Mathematics::Vector3 origin, std::span<Hit> found, float maxDistance = 1000.0f);
+
+/// The weights of a voice; the number of weights it has.
+// @ge-script
+std::int32_t GetWeights(Voice voice, std::span<float> weights);
+
 } // namespace GameEngine::Kinds::Script
+
+namespace GameEngine::Kinds
+{
+
+/// Who hears a voice.
+// @ge-script
+struct Listener
+{
+    Rendering::RenderLayerMask layers;
+};
+
+} // namespace GameEngine::Kinds

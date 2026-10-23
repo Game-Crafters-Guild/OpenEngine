@@ -49,6 +49,10 @@ struct MaterialBuildResult
     std::string composedVertexSource;
     std::string composedFragmentSource;
     std::vector<std::string> composedDefines;
+    // The include roots the composed source's #include literals are spelled
+    // against (BuildMaterialIncludeRoots): whatever re-runs that text hands
+    // these to its includer. Populated alongside the composed source.
+    std::vector<std::filesystem::path> composedIncludeRoots;
 
     // Every file the build read beyond the composed source itself: the adapter
     // template files (inlined into the composed source, so they never appear as

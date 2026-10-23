@@ -1,6 +1,7 @@
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "Pathfinding/GridMap.h"
+#include "NavigationTestSurfaces.h"
 #include "Pathfinding/PathBuffer.h"
 #include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
@@ -40,6 +41,7 @@ protected:
         grid.Width = grid.Depth = 32;
         grid.CellSize = 1.0f;
         Map = NavigationService::Get().AddGridMap(grid);
+        Testing::AdoptGridMap(World, Map);
     }
     void TearDown() override
     {
@@ -66,9 +68,9 @@ protected:
         agent.StoppingDistance = 0.3f;
         agent.SmoothPaths = false;
         agent.ReplanInterval = 0.0f;
-        agent.NavMapIndex = Map.Index;
-        agent.NavMapGeneration = Map.Generation;
         NavigationAgentState state{};
+        state.NavMapIndex = Map.Index;
+        state.NavMapGeneration = Map.Generation;
         state.DestinationX = endX;
         state.DestinationZ = endZ;
         state.HasDestination = state.PathDirty = true;
@@ -80,7 +82,7 @@ protected:
         Actor = World.Create(agent, state, xf, wt).GetHandle();
         World.ProcessCommands();
         Paths.Update(World, kDt);
-        ASSERT_EQ(static_cast<Pathfinding::PathStatus>(State().Status), Pathfinding::PathStatus::Complete);
+        ASSERT_EQ(State().Status, Pathfinding::PathStatus::Complete);
     }
     void Occupy(uint32 x, uint32 z)
     {

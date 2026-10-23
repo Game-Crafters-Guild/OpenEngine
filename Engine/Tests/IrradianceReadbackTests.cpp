@@ -227,7 +227,7 @@ TEST_F(IrradianceReadbackTest, TheSkyDeclaresTheCopyOnlyWithItsBake)
     auto& sky = m_Services->EnsureFeature<SkyRenderFeature>();
     ASSERT_TRUE(sky.Initialize(m_Device.get()));
     SkySettings settings{};
-    sky.SetSettings(settings, SkySystemState{});
+    sky.SetSettings(settings, SkySunState{});
 
     SkyEnvironmentSource source(*m_Services);
     // Declares this frame's sky bake and returns the graph. A bake's exec latches its digest;
@@ -286,7 +286,7 @@ TEST_F(IrradianceReadbackTest, TheSkyDeclaresTheCopyOnlyWithItsBake)
 
     // The sky changes: the bake reruns and the copy follows its convolve.
     settings.primarySunIntensity *= 0.5f;
-    sky.SetSettings(settings, SkySystemState{});
+    sky.SetSettings(settings, SkySunState{});
     const Declared changed = declareFrame(2 + ImageBasedLightingFeature::kIblRebakeIntervalFrames);
     ASSERT_TRUE(changed.Bakes) << "a changed sky must bake again; the check is void";
     EXPECT_TRUE(changed.Copies);
@@ -301,7 +301,7 @@ TEST_F(IrradianceReadbackTest, AnExecutedSkyBakeCountsOnceAndRestartsTheFramesSi
 {
     auto& sky = m_Services->EnsureFeature<SkyRenderFeature>();
     ASSERT_TRUE(sky.Initialize(m_Device.get()));
-    sky.SetSettings(SkySettings{}, SkySystemState{});
+    sky.SetSettings(SkySettings{}, SkySunState{});
     SkyEnvironmentSource source(*m_Services);
     EXPECT_EQ(Ibl().GetBakeCount(), 0u);
 

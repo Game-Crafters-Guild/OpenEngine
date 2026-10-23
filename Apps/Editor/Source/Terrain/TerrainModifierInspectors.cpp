@@ -1,5 +1,7 @@
 #include "Terrain/TerrainModifierInspectors.h"
 
+#include "Terrain/TerrainGrassRegionRows.h"
+
 #include "InspectorRegistry.h"
 
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -21,11 +23,13 @@
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainRoutePolyline.h"
 
+#include "Inspectors/InspectorComponentColorRow.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/TerrainVolumeNotices.h"
 #include "SceneView/TerrainBrushTool.h"
+#include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainLayers.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "Terrain/TerrainRuleRows.h"
@@ -58,51 +62,6 @@ namespace
 
 using namespace Components;
 using namespace InspectorDrag;
-
-// What a regional grass multiplier is a percentage OF: the grass settings on the terrain the
-// region sits on. Zero means there is no single answer - with no enabled terrain carrying grass,
-// or with several that disagree, the absolute value a multiplier produces is ambiguous, so the
-// resolver publishes nothing and the inspector shows the percentage alone.
-struct TerrainGrassBase
-{
-    float32 BladeHeight = 0.0f;
-    float32 BladesPerSquareMeter = 0.0f;
-};
-
-// Pure read, like AnyActiveSphericalTerrain: no component column is write-stamped, so building
-// the inspector cannot trip the modifier bake's change gate.
-TerrainGrassBase ResolveTerrainGrassBase(const ECS::World& world)
-{
-    TerrainGrassBase base;
-    uint32 count = 0;
-    const_cast<ECS::World&>(world)
-        .Query<ECS::Read<Components::Terrain>, ECS::Read<Components::TerrainGrass>>()
-        .Each([&](const Components::Terrain&, const Components::TerrainGrass& grass)
-        {
-            ++count;
-            base.BladeHeight = grass.TextureGrass ? grass.TextureSize : grass.BladeHeight;
-            base.BladesPerSquareMeter =
-                grass.TextureGrass ? grass.TextureCardsPerSquareMeter : grass.BladesPerSquareMeter;
-        });
-    if (count != 1)
-        return {}; // Ambiguous: publish nothing rather than whichever terrain the query saw last.
-    return base;
-}
-
-// A multiplier row's label, carrying the absolute value that multiplier lands on when the base is
-// known ("Height (0.36 m)"). The absolute rides the label rather than the field's unit because a
-// unit long enough to hold it does not fit beside the number, and it is bracketed rather than
-// dash-separated because a spaced hyphen beside a number reads as a minus sign - the same stack
-// holds a Height Offset effect whose value really is signed. Recomputed on every change.
-std::string GrassMultiplierLabel(const char* name, float32 multiplier, float32 base, const char* unit)
-{
-    if (base <= 0.0f)
-        return name;
-    char text[64];
-    std::snprintf(text, sizeof(text), "%s (%.2f %s)", name,
-                  static_cast<double>(multiplier * base), unit);
-    return text;
-}
 
 // The Height row's tooltip, built once from kTerrainGrassHeightReadableFloor so the number an
 // author reads is the number the header documents. The threshold is a readability crossing and
@@ -959,6 +918,43 @@ void RegisterTerrainModifierInspectors()
             "0% clears the region. Blades keep their positions and randomness, so lowering this "
             "thins the field rather than reshuffling it, and it can never place more grass than "
             "the terrain already pays for.");
+
+        AddGrassRegionDarkenGroundRow(ctx, *comp, base);
+    });
+
+    // ---- Color effect ----
+    InspectorRegistry::Get().RegisterComponentInspector<TerrainColorEffect>(
+        [](const InspectorContext& ctx)
+    {
+        auto* comp = ctx.World->GetComponent<TerrainColorEffect>(ctx.Entity);
+        if (!comp) return;
+        AddEffectHeader(ctx, comp);
+        AddSphereUnsupportedNotice(ctx);
+
+        InspectorUI::ComponentColorBinding<TerrainColorEffect> color;
+        color.World = ctx.World;
+        color.Entity = ctx.Entity;
+        color.Notifications = ctx.ChangeNotifications;
+        color.Undo = ctx.Undo;
+        color.OpenPicker = ctx.OpenColorPickerWindow;
+        color.Color = &TerrainColorEffect::Color;
+        color.ChangeLabel = "Change Terrain Color";
+        InspectorUI::AddComponentColorRow<TerrainColorEffect>(
+            ctx.Parent, "Color",
+            "The color the ground inside the volume moves toward. The base of the grass that grows "
+            "there takes the same color. Applies at the next bake.",
+            std::move(color));
+
+        // The colour map recomposes the whole terrain when the value changes, so a drag holds the
+        // terrain's interactive-edit signal and the map follows once, at the release.
+        auto arm = std::make_shared<Editor::TerrainInteractiveModifierEditArm>();
+        AddComponentMultiplierPercentRow<TerrainColorEffect>(
+            ctx.Parent, comp->Strength, ctx.World, ctx.Entity, ctx.ChangeNotifications,
+            [](TerrainColorEffect& u, float v) { u.Strength = ClampTerrainColorEffectValue(v); },
+            [](float) { return std::string("Strength"); },
+            "How far the ground moves toward the color, scaled by the volume's falloff. At 100% the "
+            "ground is the color alone and loses its material's pattern; 0% leaves it alone.",
+            {}, [arm](bool previewing) { previewing ? arm->Arm() : arm->Release(); });
     });
 
     // ---- Height Offset effect ----

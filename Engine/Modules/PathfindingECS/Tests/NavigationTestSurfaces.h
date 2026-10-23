@@ -11,6 +11,7 @@
 #include "PhysicsECS/Components/PlaneColliderShape.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/Query.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 
@@ -65,11 +66,42 @@ inline ECS::Entity CreateFlatGridSurface(ECS::World& world, uint32 width, uint32
     return entity;
 }
 
-// The map handle the surface on `entity` owns, for binding agents to it.
+// The map handle the surface on `entity` owns.
 inline Pathfinding::NavMapHandle SurfaceMap(ECS::World& world, ECS::Entity& entity)
 {
     const auto* surface = entity.Get<Components::NavigationSurface>();
     return surface ? ResolveNavigationSurfaceMap(world, *surface) : Pathfinding::NavMapHandle{};
+}
+
+// The entity whose NavigationSurface owns `map`, for an agent's Surface in a scene with several.
+inline ECS::EntityHandle SurfaceOwning(ECS::World& world, Pathfinding::NavMapHandle map)
+{
+    ECS::EntityHandle owner{};
+    world.Query<ECS::Read<Components::NavigationSurface>>().Each(
+        [&](ECS::EntityHandle entity, const Components::NavigationSurface& surface) {
+            if (ResolveNavigationSurfaceMap(world, surface) == map)
+                owner = entity;
+        });
+    return owner;
+}
+
+// A baked grid NavigationSurface on a new entity that owns `map`, a grid the test fills in cell by
+// cell, so agents walk it as they walk a baked surface. The suites that own such a map never run
+// NavigationSurfaceSystem, which would bake over it.
+inline ECS::Entity AdoptGridMap(ECS::World& world, Pathfinding::NavMapHandle map)
+{
+    Components::NavigationSurface surface{};
+    surface.Mode = Components::NavigationSurfaceMode::Grid;
+    surface.BakedMode = Components::NavigationSurfaceMode::Grid;
+    surface.BakePhase = Components::NavigationBakePhase::Baked;
+    surface.MapHoldsBake = true;
+    surface.NavMapIndex = map.Index;
+    surface.NavMapGeneration = map.Generation;
+    surface.OwnerWorldId = world.GetWorldId();
+    auto entity = world.Create();
+    entity.Set(surface);
+    world.ProcessCommands();
+    return entity;
 }
 
 } // namespace GameEngine::PathfindingECS::Testing

@@ -302,7 +302,7 @@ void TerrainData::ResetSplatmapAndCommitRange()
     SplatBakeMinH = minH;
     SplatBakeMaxH = maxH;
     SplatBakeRangeValid = true;
-    SplatmapDirty = true;
+    MarkSplatChanged();
     // Every texel was reset against the (possibly new) global range — the GPU
     // upload must be full-texture, never a height-rect band.
     SplatmapFullDirty = true;
@@ -2143,15 +2143,14 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     // tile reads as channel 0 rather than as a guess about its own materials.
     ResetSplatmap(tile->Heightfield, tile->Splatmap,
                   tile->SplatmapWidth, tile->SplatmapHeight);
-    tile->SplatmapDirty = true;
+    tile->MarkSplatChanged();
 
     auto* ptr = tile.get();
     tiled.Tiles[coord] = std::move(tile);
 
-    // Mark global quadtree and height range for rebuild.
+    // Mark the global quadtree for rebuild.
     ++tiled.Revision;
     tiled.QuadtreeDirty = true;
-    tiled.GlobalHeightRangeDirty = true;
 
     return ptr;
 }
@@ -2169,8 +2168,9 @@ void TerrainService::UnloadTile(TiledTerrainHandle handle, TileCoord coord)
     if (slot.Data->Tiles.erase(coord) > 0)
     {
         ++slot.Data->Revision;
-        slot.Data->QuadtreeDirty = true;
-        slot.Data->GlobalHeightRangeDirty = true;
+        // Only the departed tile's nodes change: the next sync clears them instead
+        // of rescanning every resident tile (FinalizeGlobalQuadtreeUpdates).
+        slot.Data->DirtyQuadtreeTiles.push_back(coord);
     }
 }
 
@@ -2309,6 +2309,20 @@ void TerrainService::SetTileHeightfield(TiledTerrainHandle handle, TileCoord coo
     const bool isFullRes = (heightfield.GetWidth() == tile.Config.HeightmapWidth &&
                             heightfield.GetHeight() == tile.Config.HeightmapHeight);
 
+    // A Coarse tile turning Full keeps showing its coarse splat until its arrival bake ends.
+    if (isFullRes && tile.LodState == TileLodState::Coarse && tile.SplatmapWidth >= 2 &&
+        tile.SplatmapHeight == tile.SplatmapWidth)
+    {
+        tile.ArrivalSplatStandIn = std::move(tile.Splatmap);
+        tile.ArrivalSplatStandInDim = tile.SplatmapWidth;
+    }
+    else
+    {
+        tile.ArrivalSplatStandIn = {};
+        tile.ArrivalSplatStandInDim = 0;
+    }
+    tile.ArrivalSplatNextRow = 0;
+    tile.ArrivalHeightsComposed = false;
     tile.Heightfield = std::move(heightfield);
     tile.CachedMinH = minH;
     tile.CachedMaxH = maxH;
@@ -2317,6 +2331,7 @@ void TerrainService::SetTileHeightfield(TiledTerrainHandle handle, TileCoord coo
     // stale. Invalidate it so the next region range refresh rebuilds it from these
     // heights instead of patching a stale grid.
     tile.HeightBlockDim = 0;
+    tile.CoarseStandIn.reset();
     tile.LodState = isFullRes ? TileLodState::Full : TileLodState::Coarse;
     // Fresh streamed content carries the terrain's base only — the authored modifiers
     // must be (re)applied to it by the next modifier bake, scoped to this tile.
@@ -2346,7 +2361,7 @@ void TerrainService::SetTileMaps(TiledTerrainHandle handle, TileCoord coord,
     tile.Splatmap = std::move(splatmap);
     tile.SplatmapWidth = splatW;
     tile.SplatmapHeight = splatH;
-    tile.SplatmapDirty = true;
+    tile.MarkSplatChanged();
 
     tile.Normalmap = std::move(normalmap);
     tile.NormalmapWidth = normW;
@@ -2526,10 +2541,11 @@ void TerrainService::FinalizeGlobalQuadtreeUpdates(TiledTerrainHandle handle)
     }
     else if (!tiled.DirtyQuadtreeTiles.empty())
     {
-        // Incremental patch: only the tiles whose heights changed since the last
-        // sync are rescanned. The per-tile node min/max computed here is identical
-        // to the full-rebuild loop above, so untouched tiles' nodes stay exactly
-        // as a full rebuild would leave them — no O(all-samples) rescan per dab.
+        // Incremental patch: only the listed tiles' finest-level nodes are written,
+        // each to the value the full-rebuild loop above writes: the heightfield scan
+        // for a resident, non-Empty tile, {0,0} (the AllocateLevels value) for a
+        // tile that left or holds no data. Untouched tiles' nodes stay as they are,
+        // so neither an edit dab nor a tile departure rescans every resident tile.
         const auto& cfg = tiled.Config;
         const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
         const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
@@ -2539,21 +2555,24 @@ void TerrainService::FinalizeGlobalQuadtreeUpdates(TiledTerrainHandle handle)
         for (const TileCoord& coord : tiled.DirtyQuadtreeTiles)
         {
             auto tileIt = tiled.Tiles.find(coord);
-            if (tileIt == tiled.Tiles.end() || !tileIt->second ||
-                tileIt->second->LodState == TileLodState::Empty)
-                continue;
+            const Terrain::HeightfieldData* hf =
+                (tileIt != tiled.Tiles.end() && tileIt->second &&
+                 tileIt->second->LodState != TileLodState::Empty)
+                    ? &tileIt->second->Heightfield
+                    : nullptr;
 
-            const auto& hf = tileIt->second->Heightfield;
             for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
             {
                 for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
                 {
-                    float32 nodeMinH, nodeMaxH;
-                    hf.GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                                 static_cast<int32>(nz * samplesPerNodeZ),
-                                 static_cast<int32>(samplesPerNodeX + 1),
-                                 static_cast<int32>(samplesPerNodeZ + 1),
-                                 nodeMinH, nodeMaxH);
+                    float32 nodeMinH = 0.0f;
+                    float32 nodeMaxH = 0.0f;
+                    if (hf)
+                        hf->GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
+                                      static_cast<int32>(nz * samplesPerNodeZ),
+                                      static_cast<int32>(samplesPerNodeX + 1),
+                                      static_cast<int32>(samplesPerNodeZ + 1),
+                                      nodeMinH, nodeMaxH);
 
                     const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
                     const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;

@@ -444,7 +444,7 @@ UIElement* GameUIHost::FindElementById(StringId id, uint64_t* outOwnerEntityId)
 
 void GameUIHost::ResetBoundDocuments()
 {
-    UpdatePointer(nullptr);
+    OnPointerLeave();
     if (m_Subtrees.empty())
         return;
     std::vector<uint64_t> ids;
@@ -464,36 +464,10 @@ bool GameUIHost::PointerTreeReplacedUnderPress() const
     return m_PointerBindGeneration != GetBindGeneration() || m_PointerRootInstanceId != rootId;
 }
 
-void GameUIHost::UpdatePointer(const PointerState* pointer)
+void GameUIHost::OnPointerLeave()
 {
-    if (!m_UI)
-        return;
-    UIElement* root = m_UI->GetRootElement();
-    if (!pointer || !root || !std::isfinite(pointer->X) || !std::isfinite(pointer->Y) ||
-        PointerTreeReplacedUnderPress())
-    {
-        const bool sourceHoldsPrimary =
-            pointer ? pointer->PrimaryDown : (m_PrimaryDown || m_WaitForPrimaryRelease);
-        CancelPointer(sourceHoldsPrimary ? PrimaryButtonState::Held : PrimaryButtonState::Released);
-        if (!pointer || !root)
-            return;
-    }
-    if (!std::isfinite(pointer->X) || !std::isfinite(pointer->Y))
-        return;
-    // This host has its own UIManager; it may never receive platform key events.
-    // Replace the previous snapshot so a later plain click cannot inherit modifiers.
-    m_UI->ReconcileModifierKeys(pointer->Modifiers);
-    if (m_WaitForPrimaryRelease)
-    {
-        // A move carrying the old held state cannot arm a new document. Consume
-        // its release too: raw MouseUp handlers must not see an orphan release.
-        m_WaitForPrimaryRelease = pointer->PrimaryDown;
-        OnMouseMove({pointer->X, pointer->Y});
-        m_Interactive = true;
-        m_PointerWasOver = true;
-        return;
-    }
-    SetPointer(pointer->X, pointer->Y, pointer->PrimaryDown);
+    CancelPointer(m_PrimaryDown || m_WaitForPrimaryRelease ? PrimaryButtonState::Held
+                                                           : PrimaryButtonState::Released);
 }
 
 void GameUIHost::OnMouseMove(Mathematics::Vector2 position)
@@ -598,26 +572,18 @@ void GameUIHost::ResetKeyboardState()
     m_UI->ResetModifierKeys();
 }
 
-void GameUIHost::SetPointer(float x, float y, bool primaryDown)
-{
-    OnMouseMove({x, y});
-    if (primaryDown != m_PrimaryDown)
-        DispatchMouseButton(Input::kMouseButton_Left, primaryDown);
-}
-
 void GameUIHost::PointerLeftSurface()
 {
     if (!m_UI)
         return;
-    if (m_PrimaryDown)
-    {
-        // Cancel, not release: the user is still holding the button, just not over this
-        // surface, and the release they eventually make will never reach this UIManager.
-        // Reporting it as a release would resolve at the last known position — still
-        // inside the armed control — and activate it.
-        m_PrimaryDown = false;
-        m_UI->CancelPress();
-    }
+    // Cancel, not release: the user is still holding the button, just not over this
+    // surface, and the release they eventually make will never reach this UIManager.
+    // Reporting it as a release would resolve at the last known position — still
+    // inside the armed control — and activate it. The press is cancelled whatever
+    // button began it: if the manager's pressed latch stayed set, it would swallow the
+    // next press of any button. CancelPress does nothing when no press is in flight.
+    m_PrimaryDown = false;
+    m_UI->CancelPress();
     m_UI->OnCursorEnter(false);
     m_PointerWasOver = false;
     // Drop back to the cheaper passive Update path: with the cursor gone there's

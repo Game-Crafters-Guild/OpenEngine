@@ -54,8 +54,8 @@ uniform GrassAtlasParamsBuffer
     uint GrassEnabled;
     uint GrassBindless;
     uint GrassCoarseBindless;
-    uint _Pad0;
-    uint _Pad1;
+    uint ColorBindless;       // the atlas colour map and its coarse map (TerrainColorMap.h)
+    uint ColorCoarseBindless;
 } Atlas;
 
 layout(std430, set = GRASS_ATLAS_SET, binding = GRASS_ATLAS_ROWS_BINDING)
@@ -236,12 +236,13 @@ bool grassHasSplat(uint terrainFlags, uint splatmapBindless)
 #define GRASS_SPLAT_TAP_ATLAS_COARSE(idx, uv) textureLod(GE_BTEX(idx, GE_TS_CLAMP), uv, 0.0)
 #endif
 
-vec4 GrassAtlas_ResolveSplat(uint terrainFlags, uint splatmapBindless, vec2 uv, bool showUpgradeFade)
+// The weights on an atlas resolve `r` the caller made at `uv` (grassAtlasResolve). The resolve
+// comes first because the selection needs residency, and the resolve is the only thing that knows
+// it; a caller that reads other atlas maps at the same point resolves once for all of them. On a
+// non-atlas terrain Atlas.RowCount is 0, so the guarded row fetch inside the resolve never executes.
+vec4 GrassAtlas_ResolveSplatAt(AtlasResolve r, uint terrainFlags, uint splatmapBindless, vec2 uv,
+                               bool showUpgradeFade)
 {
-    // Resolved before the selection because the selection needs residency, and the resolve is the
-    // only thing that knows it. On a non-atlas terrain Atlas.RowCount is 0, so the guarded row
-    // fetch inside grassAtlasResolve never executes.
-    AtlasResolve r = grassAtlasResolve(uv);
     uint source = GrassAtlas_SelectSplatSource(terrainFlags, Atlas.Enabled, splatmapBindless,
                                                r.Resident, Atlas.SplatBindless,
                                                Atlas.SplatCoarseBindless);
@@ -271,6 +272,12 @@ vec4 GrassAtlas_ResolveSplat(uint terrainFlags, uint splatmapBindless, vec2 uv, 
             GRASS_SPLAT_TAP_UNIFIED(splatmapBindless, uv));
 
     return grassNormalizeLayerWeights(vec4(0.0));
+}
+
+// The weights at `uv`, resolving the atlas there.
+vec4 GrassAtlas_ResolveSplat(uint terrainFlags, uint splatmapBindless, vec2 uv, bool showUpgradeFade)
+{
+    return GrassAtlas_ResolveSplatAt(grassAtlasResolve(uv), terrainFlags, splatmapBindless, uv, showUpgradeFade);
 }
 
 #endif // GRASS_ATLAS_SPLAT_GLSL

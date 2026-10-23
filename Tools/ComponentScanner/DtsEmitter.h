@@ -7,7 +7,8 @@
 namespace GameEngine::ComponentScanner
 {
 
-// Writes the web library's components.d.ts: per reflected component an exported interface
+// Writes the web library's components.d.ts: per reflected component that is not engine-internal
+// (// @ge-engine-internal: engine runtime state, no game API) an exported interface
 // (camelCase field names) and a value token `export declare const Name: ComponentType<Name>`
 // that entity.get/set/add/remove/has take, intersected with NoAdd for a @ge-no-add component
 // (a page reads it but cannot add or remove it); one string union per enum a field uses.

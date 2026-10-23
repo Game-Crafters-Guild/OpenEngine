@@ -5,6 +5,11 @@
 #include "ECS/Systems.h"
 #include "Types/Types.h"
 
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <vector>
+
 namespace GameEngine { namespace Components { struct SkyEnvironment; } }
 namespace GameEngine { namespace Rendering { struct SolarFrame; } }
 
@@ -21,6 +26,16 @@ public:
 
     const char* GetName() const override { return "SkyEnvironmentSystem"; }
     void Update(ECS::World& world, float32 deltaTime) override;
+
+    /// The editor's preview hour for the world `worldId`: while one is set, the sky renders that
+    /// world at `hours` of local solar time in place of its Sky Environment's TimeOfDayHours, and
+    /// AnimateTimeOfDay does not advance the hour. The component is never written, so a save, undo
+    /// and the scene's unsaved mark do not see it. Safe from any thread; the frame reads it once.
+    void SetPreviewHour(uint64 worldId, float32 hours);
+    /// Ends the preview for `worldId`: the world renders its component's hour again.
+    void ClearPreviewHour(uint64 worldId);
+    /// The preview hour set for `worldId`, if any.
+    std::optional<float32> GetPreviewHour(uint64 worldId) const;
 
 private:
     // When TimeOfDayDrivesSunLight is false, the linked directional light is the
@@ -84,6 +99,17 @@ private:
     // scene's brightest directional — has no intensity for the physical sky to take its brightness
     // from; cleared again as soon as one does.
     bool m_WarnedNoSceneSun = false;
+
+    // The editor's preview hours, one per world at most. m_PreviewCount mirrors the list's size so
+    // a frame with no preview anywhere reads one atomic and takes no lock.
+    struct PreviewHour
+    {
+        uint64 WorldId = 0;
+        float32 Hours = 0.0f;
+    };
+    mutable std::mutex m_PreviewMutex;
+    std::vector<PreviewHour> m_PreviewHours;
+    std::atomic<uint32> m_PreviewCount{0};
 };
 
 } } // namespace GameEngine::Engine::Renderer

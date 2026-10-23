@@ -25,12 +25,9 @@ FileLogLevel ResolveFileLogLevel()
 		std::transform(spelling.begin(), spelling.end(), spelling.begin(),
 					   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-		// StringToLogLevel answers Info for a spelling it does not know, so "info"
-		// is the one value that has to be excluded to tell a request from a typo.
-		const LogLevel named = StringToLogLevel(spelling);
-		if (named != LogLevel::Info || spelling == "info")
+		if (const std::optional<LogLevel> named = ParseLogLevel(spelling))
 		{
-			resolved.level = named;
+			resolved.level = *named;
 		}
 		else
 		{

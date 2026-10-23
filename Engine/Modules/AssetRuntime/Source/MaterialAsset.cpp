@@ -2,6 +2,7 @@
 #include "Assets/MaterialXImport.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
+#include "Rendering/Materials/ShaderVariantKey.h"
 #include "Rendering/Materials/UserKeyword.h"
 #include "Types/ParseNumber.h"
 #include "Types/StringUtils.h"
@@ -285,6 +286,19 @@ static void ParseKeywords(const nlohmann::json& j, MaterialDocument& outDoc,
     }
 }
 
+// The lighting model in the one spelling the variant key and the LIGHTING_MODEL_* define
+// both derive from. The key folds case, so a name that matches a known model without
+// regard to case takes that model's spelling; any other name is kept as written.
+static std::string CanonicalLightingModel(const std::string& authored)
+{
+    for (const std::string_view name : Rendering::LightingModel::kNames)
+    {
+        if (EqualsIgnoreCase(authored, name))
+            return std::string(name);
+    }
+    return authored;
+}
+
 // A .material's JSON. A file that is not JSON, or a field of a type it cannot hold, is refused
 // with the reason in `outErrors`; the parse never throws (the web build has no exception catching).
 static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc, std::vector<std::string>& outErrors)
@@ -319,6 +333,7 @@ static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc,
     reader.Read(j, "materialName", outDoc.materialName);
     outDoc.lightingModel.clear();
     reader.Read(j, "lightingModel", outDoc.lightingModel);
+    outDoc.lightingModel = CanonicalLightingModel(outDoc.lightingModel);
 
     if (outDoc.schemaVersion >= 3)
     {
@@ -373,7 +388,7 @@ static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc,
     // instead of the factory colour. A foreign lighting model is left untouched
     // entirely — the fill's own unlit/shadow-only skips serve the inspector, which
     // seeds a document whose lighting model the user is in the act of changing.
-    if (outDoc.lightingModel == "StandardPBR")
+    if (outDoc.lightingModel == Rendering::LightingModel::kStandardPBRName)
         outDoc.FillMissingStandardPBRDefaults();
 
     ParseTextures(j, outDoc, reader);

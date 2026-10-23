@@ -1,6 +1,6 @@
 ---
 title: Navigation surface
-description: Where navigation agents can walk, baked from the scene's terrain, static colliders, and meshes, with its settings, the bake notice, and the C++ calls.
+description: Where navigation agents can walk, baked from the scene's terrain, static colliders, and meshes, saved with the scene, rebaked tile by tile where the scene changes, with its settings, the bake notice, and the C++ and C# calls.
 ---
 
 A **Navigation Surface** is where navigation agents can walk. It is baked from what is already in the scene: the terrain, the collider shapes of static physics bodies, and the meshes of mesh renderers inside its bounds. The bake needs no physics world, so a surface bakes in the editor as soon as you add it, and again in Play and in a game.
@@ -25,9 +25,10 @@ A **Navigation Surface** is where navigation agents can walk. It is baked from w
 | Agent Height | 1.8 m | Space under an overhang lower than this is not walkable. |
 | Max Slope | 45° | Ground steeper than this is not walkable. |
 | Step Height | 0.4 m | The least rise between neighboring cells an agent climbs. Max Slope can allow more (see [Slopes and steps](#settings)). |
-| Cell Size | 0.5 m | The resolution. A mesh is cut into tiles of 64 cells (32 m at 0.5 m). A grid has one cell of this size. The caption under the value gives the tile or cell count the current settings make, before a bake. Smaller follows the ground more closely and takes longer to bake. |
+| Cell Size | 0.5 m | The resolution. A mesh is cut into tiles of 64 cells (32 m at 0.5 m) and spans at most 64 x 64 tiles (2,048 m on a side at 0.5 m). A grid has one cell of this size. The caption under the value gives the tile or cell count the current settings make, before a bake. Smaller follows the ground more closely and takes longer to bake. |
 | Fit Bounds | on | On: Center and Extent show the fitted box, read only. Off: the surface covers the box of half size **Extent** around **Center**, measured from the entity's position. |
 | Authored Cells | none | Grid only: the costs and blocked cells painted with the navigation grid brush (a `.navgrid` asset). Applied when its size matches the grid. |
+| Baked Data | none | Mesh only: the baked tiles saved with the scene (a `.navsurface` asset). Saving the scene writes it and fills this field; see [Saved tiles](#saved-tiles). |
 
 :::note[Slopes and steps]
 
@@ -65,29 +66,73 @@ Put a Navigation Source with **Exclude** on the tree's root and keep the trunk's
 
 To see what a bake reads, ask the editor's debug port: `node mcp/ge.mjs get_navigation_sources` lists every collider and mesh inside the surface's bounds, with its kind and, for a mesh, the policy that admitted it. From C++, `GameEngine::Navigation::ListBakeSources(world, surfaceEntity, sources)` in `PathfindingECS/Navigation.h` fills the same list. Both gather the scene: call them when it changes, not every frame.
 
+## Saved tiles
+
+Saving the scene writes each baked mesh surface's tiles to a `.navsurface` file beside the scene and points the surface's **Baked Data** at it. When the scene opens again, in the editor or in a game, the surface loads its tiles from the file instead of baking them, as long as the file was made for the surface's Cell Size, agent, and bounds. A file made for other settings or bounds is not used: the surface bakes, and the next save writes the file again. Saving a scene whose surface has not changed leaves its file as it is.
+
+Each tile in the file carries a hash of what it was built from: the terrain heights under it and the shapes of the colliders, meshes, and carving obstacles that overlap it. Counters, entity handles, and load order never feed the hash, so an unchanged scene reopens with every tile current. A tile whose ground changed since the save (a mesh moved, a terrain edited) loads all the same and is **stale**: agents use it until the surface rebakes it, which it does on its own. The notice counts the stale tiles and names one.
+
+The file holds one format version. A `.navsurface` of another version does not load, with an error in the log, and the surface bakes instead.
+
+## Rebaking what changed
+
+Once a mesh surface is baked, it rebakes only the tiles that change, a few each frame:
+
+- **A terrain edit**: a sculpt, a modifier, or a script that changes the heightfield rebakes the tiles over the changed samples.
+- **A carving obstacle**: a `NavigationObstacle` component with `Carve` set, from code or in the scene file (`NavigationObstacle.carve = true`), cuts a vertical cylinder of its Radius out of the surface, covering the ground within its Height above and below its position. Adding, moving, removing, or disabling it rebakes the tiles under it. Agents keep their radius from the cut, as from a wall. Without Carve, a mesh surface ignores the obstacle.
+- **MarkDirty**: geometry a game places or moves that the surface does not watch, such as a built wall made of meshes, is rebaked when the game calls `MarkDirty` over its box (see [From C++ and C#](#from-c-and-c)).
+- **Stale tiles** loaded from Baked Data.
+
+A dirty tile is rebuilt only when its content changed: its hash (see [Saved tiles](#saved-tiles)) is computed again, and a tile whose hash matches stays as it is. Each frame takes at most 8 dirty tiles, oldest first; the rest wait their turn, so a large change spreads over several frames. A `MarkDirty` box also makes the surface read the scene's colliders and meshes again, once, on the frame it takes the box; a carving obstacle is read again only on the frame it is added, changed, moved, or removed. Between reads, a baked mesh surface keeps in memory the collider and mesh triangles it last read, about as much as the scene's static geometry, so a rebake reads nothing from the scene. Every tile keeps working until its rebuilt version replaces it. An agent whose path crosses a replaced tile solves its path again and keeps walking the old one until the new path is ready. **Bake** rebuilds the whole surface at once.
+
 ## Reading the notice
 
 | The notice says | Meaning |
 |---|---|
 | `Baking: 212 of 1,024 tiles` | The mesh is being built tile by tile in the background. Tiles already built are in use. |
-| `Baked: 1,024 tiles, 1,948 polygons, 0.5 MiB, version 12` | Done. The version counts bakes. |
+| `Baked: 1,024 tiles, 1,948 polygons, 0.5 MiB, version 1036` | Done. On a mesh, the version counts the tiles put into the surface by bakes, loads, and rebakes, so it changes whenever a tile does. On a grid it counts bakes. |
+| `Baked: … version 1036. Rebaking: 12 tiles` | Tiles a terrain edit, a carving obstacle, or MarkDirty touched are waiting or being rebuilt. The old tiles are in use until then. |
+| `Baked: … version 1036. Stale: 3 tiles, (2, 5) among them, whose ground changed since the bake: rebaking` | Tiles loaded from Baked Data were built from other ground. They are in use and rebake on their own. |
+| `Waiting for: the baked data (.navsurface) to load` | The saved tiles are loading. The surface uses them once they have. |
 | `Out of date: the settings changed since the last bake (1,024 tiles). Bake to apply.` | A setting changed after the last bake. The surface still holds that bake until Bake is pressed. After a Mode change the text names the mode of the bake it holds. |
 | `Waiting for: terrain tile (3, 7) is not resident` | Part of the bounds lies on a terrain tile that has not streamed in. The bake continues once it has. |
 | `Waiting for: model Rock is still loading` | A mesh renderer shows a model that has not loaded yet. The bake starts once it has. |
 | `Failed: no geometry inside the bounds; …` | Nothing the surface bakes from is inside its bounds. Move the bounds, or add a terrain, a static collider, or a mesh. |
-| `Failed: the bounds need 40,000 tiles: …` | The bounds are too large for the cell size. Raise Cell Size or shrink the bounds. |
+| `Failed: the bounds need 4,761 tiles and a mesh surface spans at most 64 x 64 tiles (2,048 m on a side at this Cell Size): …` | A mesh surface wider than 64 tiles on a side is refused. Shrink the bounds to 2,048 m or less, or raise Cell Size. |
+| `Failed: the bounds need 5,000,000 cells: …` | The bounds are too large for a grid at this cell size. Raise Cell Size or shrink the bounds. |
 
-## From C++
+## From C++ and C#
 
-### Bake again
+### Bake again, or rebake a box
 
-After moving or adding geometry from code, ask for a bake:
+After moving or adding geometry from code, ask for a whole bake, or rebake only the tiles under the box the change covers. `MarkDirty` reads X and Z only: a tile spans every height. Both calls take the surface's entity. `RequestBake` returns false when the entity has no Navigation Surface; `MarkDirty` returns false when it has none in Mesh mode, since a grid rebakes through `RequestBake` only.
 
-```cpp title="Request a bake"
-#include "PathfindingECS/Navigation.h"
+:::::tabs
+::::tab[C++]
 
-GameEngine::Navigation::RequestBake(world, surfaceEntity);
+```cpp title="PathfindingECS/NavigationScriptApi.h"
+bool RequestBake(ECS::World& world, ECS::EntityHandle surface);
+bool MarkDirty(ECS::World& world, ECS::EntityHandle surface, Mathematics::Vector3 min, Mathematics::Vector3 max);
 ```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.Bindings"
+public bool RequestBake();                      // surface.Navigation.RequestBake()
+public bool MarkDirty(Vector3 min, Vector3 max); // surface.Navigation.MarkDirty(min, max)
+```
+
+::::
+:::::
+
+```cpp title="Rebake the ground under a wall a player built"
+#include "PathfindingECS/NavigationScriptApi.h"
+
+GameEngine::Navigation::MarkDirty(world, surfaceEntity, wallMin, wallMax);
+```
+
+The tiles join the surface's queue on the next frame, also while the surface is still baking or loading its saved tiles, and rebake as [Rebaking what changed](#rebaking-what-changed) describes. Terrain edits and carving obstacles need no call.
 
 ### Size a bake before it runs
 
@@ -141,8 +186,8 @@ if (path.IsValid())
     navigation.GetPathBuffer().FreePath(path);
 ```
 
-`Partial` ends at the reachable point nearest the destination. `Failed` means the start or the destination has no walkable ground near it, or nothing connects them. The map handle stays the same across bakes in one Mode, so an agent's `NavigationAgent.NavMapIndex` and `NavMapGeneration` set from it stay valid. Changing Mode bakes into a new map with a new handle: read it again after the bake.
+`Partial` ends at the reachable point nearest the destination. `Failed` means the start or the destination has no walkable ground near it, or nothing connects them. The map handle stays the same across bakes in one Mode; changing Mode bakes into a new map with a new handle, so read it again after the bake. A [Navigation Agent](navigation-agent.mdx) needs no handle: it names its surface entity, and follows the surface across bakes and Mode changes.
 
 ### From the debug port
 
-The editor's `find_path` tool answers the same query: `node mcp/ge.mjs find_path --from "[-400,20,-400]" --to "[400,33,400]"`.
+The editor's `find_path` tool answers the same query: `node mcp/ge.mjs find_path --from "[-400,20,-400]" --to "[400,33,400]"`. `get_navigation_stats` lists each surface's tiles: declared, resident, dirty, baking, stale, and built. `node mcp/ge.mjs raw mark_navigation_dirty '{"min":[0,0,0],"max":[30,0,30]}'` calls `MarkDirty`.

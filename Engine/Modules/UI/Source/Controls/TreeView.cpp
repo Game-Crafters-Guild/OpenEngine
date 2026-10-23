@@ -758,6 +758,7 @@ void TreeView::EnsureRowPoolSize(int desired)
         // Selection + activation
         row->RegisterEventHandler(kEventMouseDown, [this, slotIndex, beginIconInteraction](UIEvent& e)
                                   {
+	        m_PendingRenameRequest = false;
 	        // Callers that render an icon as a separate element mark that element as
 	        // the hit target. Its MouseDown bubbles directly to the row (the title is
 	        // a sibling), so handle it before the normal row-selection gesture.
@@ -774,6 +775,12 @@ void TreeView::EnsureRowPoolSize(int desired)
             const bool isLmb = (e.Button == 0);
             const bool isRmb = (e.Button == 1);
             bool deferSelect = false; // set when a plain LMB click is deferred to mouse-up
+
+            // Read before the press edits the selection: a rename request needs "the row was
+            // already the sole selection". Modified clicks are selection edits and never rename.
+            m_PendingRenameRequest = isLmb && m_Selection && m_Selection->IsSelected(id) &&
+                                     m_Selection->GetSelection().size() == 1 &&
+                                     (e.Mods & Input::kModShortcutMask) == 0;
 
             // Selection gestures (LMB) + "select on right-click" (RMB).
             if (m_Selection)
@@ -963,11 +970,14 @@ void TreeView::EnsureRowPoolSize(int desired)
 
             using clock = std::chrono::steady_clock;
             auto now = clock::now();
-            bool isDouble =
-                (m_LastClickedId == id) &&
-                ((now - m_LastClickTime) < Platform::GetDoubleClickInterval());
+            const bool isRepeat = (m_LastClickedId == id);
+            bool isDouble = isRepeat && ((now - m_LastClickTime) < Platform::GetDoubleClickInterval());
             m_LastClickedId = id;
             m_LastClickTime = now;
+            const bool renameRequested = m_PendingRenameRequest && isRepeat && !isDouble;
+            m_PendingRenameRequest = false;
+            if (renameRequested && m_OnItemRenameRequested)
+                m_OnItemRenameRequested(id);
             if (isDouble) {
                 // Toggle expand/collapse on double-click
                 if (m_Provider && m_Provider->IsExpandable(id))
@@ -1352,6 +1362,18 @@ UIElement* TreeView::FindBoundRow(TreeId id) const
     {
         if (slot.row && slot.boundId == id)
             return slot.row;
+    }
+    return nullptr;
+}
+
+Label* TreeView::FindBoundRowTitle(TreeId id) const
+{
+    if (id == 0)
+        return nullptr;
+    for (const RowSlot& slot : m_RowPool)
+    {
+        if (slot.row && slot.boundId == id)
+            return slot.title;
     }
     return nullptr;
 }
@@ -2150,6 +2172,7 @@ void TreeView::OnEvent(UIEvent& e)
                 m_DragCandidateId = 0;
                 m_PendingCollapseToSingleId = 0;
                 m_PendingSelectId = 0; // it's a drag, not a click — don't change selection
+                m_PendingRenameRequest = false;
             }
             e.Stop();
             return;
@@ -2157,6 +2180,16 @@ void TreeView::OnEvent(UIEvent& e)
 
         if (e.Id == kEventMouseUp)
         {
+            using clock = std::chrono::steady_clock;
+            const auto now = clock::now();
+            const bool clicked = e.Button == 0 && m_DragCandidateId != 0;
+            const bool isRepeat = clicked && m_LastClickedId == m_DragCandidateId;
+            const bool isDouble = isRepeat && ((now - m_LastClickTime) < Platform::GetDoubleClickInterval());
+            // A slow second click on the sole selection asks for a rename. Its select-on-up commit
+            // below still sends the selection first, so a host showing another item returns to this
+            // one; the rename request comes after it.
+            const bool renameRequested = m_PendingRenameRequest && isRepeat && !isDouble;
+
             // Deferred select-on-up: a plain press recorded a pending selection and we reached
             // mouse-up without a drag starting (drag-start clears m_PendingSelectId), so this was a
             // click — commit the selection now.
@@ -2190,15 +2223,12 @@ void TreeView::OnEvent(UIEvent& e)
 
             // Double-click detection for captured mouse-up: the row's own kEventMouseUp handler
             // is bypassed while capture is active, so we run the same check here.
-            if (e.Button == 0 && m_DragCandidateId != 0)
+            if (clicked)
             {
-                using clock = std::chrono::steady_clock;
-                const auto now = clock::now();
-                const bool isDouble =
-                    (m_LastClickedId == m_DragCandidateId) &&
-                    ((now - m_LastClickTime) < Platform::GetDoubleClickInterval());
                 m_LastClickedId = m_DragCandidateId;
                 m_LastClickTime = now;
+                if (renameRequested && m_OnItemRenameRequested)
+                    m_OnItemRenameRequested(m_DragCandidateId);
                 if (isDouble)
                 {
                     if (m_Provider && m_Provider->IsExpandable(m_DragCandidateId))
@@ -2217,6 +2247,7 @@ void TreeView::OnEvent(UIEvent& e)
             m_DragCandidateId = 0;
             m_PendingCollapseToSingleId = 0;
             m_PendingSelectId = 0;
+            m_PendingRenameRequest = false;
             // Safety: a non-drag release that didn't commit must not leave a press-highlight stuck.
             ClearDragHighlight();
             e.Stop();
@@ -2645,6 +2676,7 @@ void TreeView::ForEachOwnedSlot(Fn&& fn)
     fn(m_OnLockStateSet);
     fn(m_OnCanDrop);
     fn(m_OnPerformDrop);
+    fn(m_OnItemRenameRequested);
 }
 
 template <typename Fn>
@@ -2665,6 +2697,7 @@ void TreeView::ForEachOwnedSlot(Fn&& fn) const
     fn(m_OnLockStateSet);
     fn(m_OnCanDrop);
     fn(m_OnPerformDrop);
+    fn(m_OnItemRenameRequested);
 }
 
 std::size_t TreeView::CountMemberSlotsOwnedByImage(std::uint64_t base, std::uint64_t size) const
@@ -2679,7 +2712,8 @@ std::size_t TreeView::CountMemberSlotsOwnedByImage(std::uint64_t base, std::uint
             kOnSelectionChangedSlot, kOnItemActivatedSlot,    kOnContextMenuSlot,
             kOnRowBoundSlot,         kOnIconClickedSlot,      kOnIconStateCheckSlot,
             kOnIconStateSetSlot,     kOnLockClickedSlot,      kOnLockStateCheckSlot,
-            kOnLockStateSetSlot,     kOnCanDropSlot,          kOnPerformDropSlot};
+            kOnLockStateSetSlot,     kOnCanDropSlot,          kOnPerformDropSlot,
+            kOnItemRenameRequestedSlot};
         std::uint32_t seen = 0;
         for (const std::uint32_t bit : kSlotBits)
         {

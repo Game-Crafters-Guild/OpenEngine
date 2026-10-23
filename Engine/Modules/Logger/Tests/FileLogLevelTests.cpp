@@ -119,7 +119,7 @@ TEST_F(FileLogLevelTest, DefaultLeavesTheRingAtTheGlobalLevel)
 
     // The file sink's level is its own; the ring keeps every record the global
     // level admits, which is what live log queries read.
-    EXPECT_EQ(m_Ring->GetMessages(LogLevel::Debug).size(), 2u);
+    EXPECT_EQ(m_Ring->GetMessages({.MinLevel = LogLevel::Debug}).Messages.size(), 2u);
     EXPECT_EQ(Log::GetLogLevel(), LogLevel::Debug);
 }
 

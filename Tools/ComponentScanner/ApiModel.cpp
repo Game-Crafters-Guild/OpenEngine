@@ -27,6 +27,7 @@ std::string_view ApiKindName(ApiKind kind)
     case ApiKind::Mat4: return "Mat4";
     case ApiKind::ColorLinear: return "ColorLinear";
     case ApiKind::Entity: return "Entity";
+    case ApiKind::RenderLayerMask: return "RenderLayerMask";
     case ApiKind::StringId: return "StringId";
     case ApiKind::String: return "String";
     case ApiKind::Span: return "Span";

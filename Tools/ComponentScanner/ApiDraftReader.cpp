@@ -31,25 +31,6 @@ bool AnyFile(const std::string&)
     return true;
 }
 
-std::string JoinDoc(const std::vector<std::string>& lines)
-{
-    std::string doc;
-    bool paragraphBreak = false;
-    for (const std::string& line : lines)
-    {
-        if (TrimView(line).empty())
-        {
-            paragraphBreak = !doc.empty();
-            continue;
-        }
-        if (!doc.empty())
-            doc += paragraphBreak ? "\n" : " ";
-        doc += Trim(line);
-        paragraphBreak = false;
-    }
-    return doc;
-}
-
 } // namespace
 
 void ApiDraftReader::ReadModules(const fs::path& modulesDir, const std::vector<fs::path>& searchDirs)
@@ -272,7 +253,7 @@ void ApiDraftReader::ReadDeclaration(ModuleDraft& module, std::size_t headerInde
     draft.HeaderIndex = headerIndex;
     draft.Scope = ScopeName(FunctionParser::ScopeAt(text, offset));
     draft.Line = declLine;
-    draft.Doc = JoinDoc(docLines);
+    draft.Doc = ApiMarkerLines::JoinDoc(docLines);
     const bool functionModifiers = has(Marker::Try) || has(Marker::Context) || has(Marker::EngineThread) || has(Marker::AnyThread);
     const std::string word = FunctionParser::FirstWord(text, offset);
     DeclarationProblem problem;

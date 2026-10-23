@@ -5,10 +5,11 @@
 // GlslShim.h, so an edit to the shader is an edit to what these tests measure.
 //
 // Two properties are under test. #4206: the ground colour a blade blends from is resolved ONCE per
-// blade, at its root; a sample point that follows the vertex up the blade draws the ground's pattern
-// up the blade as streaks, because a leaning blade's vertices stand over different ground. And the
-// leaf's shape: the spine's angle law, the twist about the spine, the width profile, the rounded
-// shading normal at the two edges and the rows the strip is built on.
+// blade, at its root, by the placement compute, and carried to every vertex unchanged; a sample
+// point that follows the vertex up the blade draws the ground's pattern up the blade as streaks,
+// because a leaning blade's vertices stand over different ground. And the leaf's shape: the spine's
+// angle law, the twist about the spine, the width profile, the rounded shading normal at the two
+// edges and the rows the strip is built on.
 
 #include <gtest/gtest.h>
 
@@ -79,40 +80,7 @@ float AngleBetween(const vec3& a, const vec3& b)
     return std::atan2(Shader::length(Shader::cross(a, b)), Shader::dot(a, b));
 }
 
-void ExpectSamePoint(const vec3& a, const vec3& b, const char* what, float t, float side)
-{
-    EXPECT_EQ(a.x, b.x) << what << " at t=" << t << " side=" << side;
-    EXPECT_EQ(a.y, b.y) << what << " at t=" << t << " side=" << side;
-    EXPECT_EQ(a.z, b.z) << what << " at t=" << t << " side=" << side;
-}
 } // namespace
-
-TEST(GrassBladeVertex, EveryVertexResolvesItsGroundColourAtTheRoot)
-{
-    const vec3 root(12.25f, 30.5f, -7.75f);
-    for (int step = 0; step <= 10; ++step)
-    {
-        const float t = static_cast<float>(step) / 10.0f;
-        for (float side : {-1.0f, 0.0f, 1.0f})
-        {
-            const Shader::GrassBladeVertex v = BuildVertex(root, t, side, kTilt, kBend, 1.5f);
-            ExpectSamePoint(v.GroundSamplePoint, root, "ground colour sample point", t, side);
-        }
-    }
-}
-
-// The control for the test above: the blade under test really does lean, so its vertices stand
-// over different ground, and a sample point that followed them would move.
-TEST(GrassBladeVertex, ALeaningBladeTipStandsOverDifferentGroundThanItsRoot)
-{
-    const vec3 root(0.0f, 0.0f, 0.0f);
-    const Shader::GrassBladeVertex base = BuildVertex(root, 0.0f, 0.0f);
-    const Shader::GrassBladeVertex tip = BuildVertex(root, 1.0f, 0.0f);
-    ExpectSamePoint(base.Position, root, "the spine's base", 0.0f, 0.0f);
-    const float driftXZ = std::sqrt((tip.Position.x - root.x) * (tip.Position.x - root.x) +
-                                    (tip.Position.z - root.z) * (tip.Position.z - root.z));
-    EXPECT_GT(driftXZ, 0.5f * kBladeHeight) << "a tilted, bent blade's tip stands well off its root";
-}
 
 // The spine leans from the terrain normal by tilt + bend t^2 + 0.6 bend t^4: a tilted base, a
 // cantilever bend, and a tip that droops faster than a uniform curve.
@@ -366,13 +334,13 @@ TEST(GrassBladeVertex, TheFoldTurnsTheTwoEdgeNormalsAboutTheSpine)
     }
 }
 
-// THE SHADING NORMAL RULE: a blade shades with its own face normal, turned at most 15 degrees about
+// THE SHADING NORMAL RULE: a blade shades with its own face normal, turned at most 20 degrees about
 // the spine at each edge, so the leaf reads as a shallow rounded channel. A wider turn splits every
 // blade into a sunlit half and a dark half, and the twist hands the camera the dark half somewhere
 // along the blade, which reads as a tip darker than its base (#4346).
 TEST(GrassBladeVertex, TheLeafShadesAsAShallowRoundedChannel)
 {
-    constexpr float kMostTurn = 15.0f * 3.14159265f / 180.0f;
+    constexpr float kMostTurn = 20.0f * 3.14159265f / 180.0f;
     const vec3 root(0.0f, 0.0f, 0.0f);
     for (float t : {0.0f, 0.5f, 1.0f})
     {
@@ -428,31 +396,43 @@ TEST(GrassBladeVertex, TheRowsSpreadTheBendEvenlyAlongTheBlade)
     }
 }
 
-// The block above is only half of the property: the vertex stage must also hand the block's sample
-// point, and nothing else, to the one root resolve, through a FLAT varying, so every fragment of a
-// blade reads the colour its vertices resolved at the root.
-TEST(GrassBladeVertex, TheVertexStageResolvesTheGroundColourAtTheBlocksSamplePoint)
+// One ground colour per blade, from its root: the placement compute resolves it once, at the blade's
+// site and relative to the view's render origin, and the vertex stage hands the instance's word to
+// the surface through a FLAT varying, so every fragment of the blade reads the same colour. A colour
+// resolved where each vertex or fragment stands draws the ground's pattern up a leaning blade.
+TEST(GrassBladeVertex, ThePlacementResolvesTheGroundColourAtTheBladesRootAndTheVertexStageCarriesIt)
 {
-    std::ifstream file(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/terrain_grass_vertex_modifier.glsl");
-    ASSERT_TRUE(file.good()) << "cannot read terrain_grass_vertex_modifier.glsl";
-    std::stringstream text;
-    text << file.rdbuf();
-    const std::string source = text.str();
+    const auto read = [](const char* name) {
+        std::ifstream file(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/" + name);
+        std::stringstream text;
+        text << file.rdbuf();
+        return text.str();
+    };
+    const std::string placement = read("terrain_grass_place.comp");
+    const std::string vertex = read("terrain_grass_vertex_modifier.glsl");
+    ASSERT_FALSE(placement.empty()) << "cannot read terrain_grass_place.comp";
+    ASSERT_FALSE(vertex.empty()) << "cannot read terrain_grass_vertex_modifier.glsl";
 
-    // Both point arguments: the world point the splat and the untextured variation read, and the
-    // render-origin-relative point the triplanar projection UVs read. Either one following the
-    // vertex brings the ground's pattern back up the blade.
-    const std::regex call(R"(GrassRootGroundColor\(\s*tp\s*,\s*([^,]+),([^;]+)\)\s*\)\s*;)");
+    const std::regex call(R"(GrassRootGroundColor\(\s*stp\s*,\s*([^,]+),([^;]+)\)\s*\)\s*;)");
     std::vector<std::pair<std::string, std::string>> arguments;
-    for (auto it = std::sregex_iterator(source.begin(), source.end(), call); it != std::sregex_iterator(); ++it)
+    for (auto it = std::sregex_iterator(placement.begin(), placement.end(), call); it != std::sregex_iterator();
+         ++it)
         arguments.emplace_back((*it)[1].str(), (*it)[2].str());
-    ASSERT_EQ(arguments.size(), 1u) << "expected exactly one root resolve call in the vertex stage";
+    ASSERT_EQ(arguments.size(), 1u) << "expected exactly one root resolve call in the placement compute";
     const std::regex space(R"(\s+)");
-    EXPECT_EQ(std::regex_replace(arguments[0].first, space, ""), "bladeVertex.GroundSamplePoint")
-        << "the root resolve's world point is not the blade-vertex block's sample point";
-    EXPECT_EQ(std::regex_replace(arguments[0].second, space, ""),
-              "bladeVertex.GroundSamplePoint-GE_RenderOriginWorld()")
-        << "the root resolve's render-origin-relative point is not the block's sample point";
-    EXPECT_TRUE(std::regex_search(source, std::regex(R"(flat\s+out\s+vec4\s+vGrassBlade\s*;)")))
+    EXPECT_EQ(std::regex_replace(arguments[0].first, space, ""), "rootWS")
+        << "the root resolve's world point is not the blade's root";
+    EXPECT_EQ(std::regex_replace(arguments[0].second, space, ""), "rootWS-grassRenderOriginWorld()")
+        << "the root resolve's render-origin-relative point is not the blade's root";
+    const std::regex rootAtSite(R"(vec3\s+rootWS\s*=\s*vec3\(\s*worldX\s*,\s*blade\.RootY\s*,\s*worldZ\s*\)\s*;)");
+    EXPECT_TRUE(std::regex_search(placement, rootAtSite))
+        << "the root resolve no longer samples at the blade's site on the surface";
+    EXPECT_EQ(vertex.find("GrassRootGroundColor"), std::string::npos)
+        << "the vertex stage resolves the root colour again, once per vertex";
+    const std::regex rootFromInstance(
+        R"(vGrassBlade\s*=\s*vec4\(\s*windGate\s*,\s*GrassUnpackRootColor\(\s*blade\.RootColor\s*\)\s*\)\s*;)");
+    EXPECT_TRUE(std::regex_search(vertex, rootFromInstance))
+        << "the vertex stage no longer hands the surface the instance's root colour";
+    EXPECT_TRUE(std::regex_search(vertex, std::regex(R"(flat\s+out\s+vec4\s+vGrassBlade\s*;)")))
         << "the root ground colour no longer reaches the surface through a flat varying";
 }

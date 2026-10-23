@@ -123,7 +123,7 @@ MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Plane"
@@ -164,7 +164,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sphere"
@@ -204,7 +204,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="61feaec8-7114-499d-93b7-7ac6603b7165"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Reflection Probe Test Sphere"

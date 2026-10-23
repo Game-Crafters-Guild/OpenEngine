@@ -25,6 +25,11 @@
 //     [--emit-csharp <dir>]     with it, the C# binding of each module (<Module>.g.cs,
 //                               CSharpBindingEmitter.h); with either, a declaration the
 //                               generators cannot emit is refused (BindingRules.h)
+//     [--api-components <dir>]  (repeatable) with it, the C# mirrors of the components of
+//                               these roots (ComponentMirror.h): component-classes.txt in the
+//                               --emit-api dir, Components/<header>.g.cs under --emit-csharp,
+//                               Components.layout.gen.cpp in --emit-native; a component the
+//                               mirror rules refuse fails the scan
 // Options: --in <dir> (repeatable; include paths are computed relative to each root's
 // "Include" dir, and structs already seen from an earlier root are de-duplicated by
 // fully-qualified name), --out <file>, --emit-dts <file>, --emit-json <file>, --dry-run.

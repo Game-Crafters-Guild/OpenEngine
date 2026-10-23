@@ -443,10 +443,12 @@ TEST_F(TerrainGrassRegions, SchemaRoundtripKeepsBoundedTargetsAndRefusesNonfinit
     std::string error;
     ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "heightscale", "0.25", &error)) << error;
     ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "densityscale", "2", &error)) << error;
+    ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "grounddarkeningscale", "0.4", &error)) << error;
     EXPECT_FLOAT_EQ(World.GetComponent<Components::TerrainGrassEffect>(entity)->HeightScale, .25f);
     EXPECT_FLOAT_EQ(World.GetComponent<Components::TerrainGrassEffect>(entity)->DensityScale, 1);
     EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "heightscale", "nan", &error));
     EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "densityscale", "inf", &error));
+    EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "grounddarkeningscale", "nan", &error));
     EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "unknown", "1", &error));
     EXPECT_FLOAT_EQ(Components::ClampTerrainGrassEffectScale(std::numeric_limits<float32>::quiet_NaN()), 1);
     EXPECT_FLOAT_EQ(Components::ClampTerrainGrassEffectScale(-1), 0);
@@ -471,6 +473,49 @@ TEST_F(TerrainGrassRegions, SchemaRoundtripKeepsBoundedTargetsAndRefusesNonfinit
             ++found;
             EXPECT_FLOAT_EQ(effect.HeightScale, .25f);
             EXPECT_FLOAT_EQ(effect.DensityScale, 1);
+            EXPECT_FLOAT_EQ(effect.GroundDarkeningScale, .4f);
+        });
+    EXPECT_EQ(found, 1u);
+}
+
+TEST_F(TerrainGrassRegions, ColorEffectSchemaRoundtripClampsAndRefusesNonfinite)
+{
+    Scene::EnsureTerrainSceneSchemasRegistered();
+    const auto* schema = Scene::SceneSchemaRegistry::Find("TerrainColorEffect");
+    ASSERT_NE(schema, nullptr);
+    const auto entity = World.CreateEntity();
+    Scene::SceneLoadContext context{};
+    std::string error;
+    ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "colorr", "0.3", &error)) << error;
+    ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "colorg", "2", &error)) << error;
+    ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "colorb", "-1", &error)) << error;
+    ASSERT_TRUE(schema->ApplyProperty(World, entity, context, "strength", "0.6", &error)) << error;
+    EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "strength", "nan", &error));
+    EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "colorr", "inf", &error));
+    EXPECT_FALSE(schema->ApplyProperty(World, entity, context, "unknown", "1", &error));
+    ECS::World authored;
+    const auto source = authored.CreateEntity();
+    authored.AddComponentImmediate<Components::TerrainColorEffect>(source,
+        *World.GetComponent<Components::TerrainColorEffect>(entity));
+    authored.AddComponentImmediate<Components::TerrainModifierVolume>(source, {});
+    const auto file = std::filesystem::temp_directory_path() / ("ColorRegionScene-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + ".scene");
+    ASSERT_TRUE(Scene::SaveSceneToFile(authored, file)) << Scene::GetLastSceneIOError().message;
+    ECS::World loaded;
+    Scene::SceneLoadDegradation degradation;
+    Scene::LoadOptions options; options.outDegradation = &degradation;
+    const bool success = Scene::LoadSceneFromFile(loaded, file, options);
+    std::error_code ignored; std::filesystem::remove(file, ignored);
+    ASSERT_TRUE(success) << Scene::GetLastSceneIOError().message;
+    EXPECT_FALSE(degradation.IsDegraded());
+    uint32 found = 0;
+    loaded.Query<ECS::Read<Components::TerrainColorEffect>>()
+        .Each([&](const Components::TerrainColorEffect& effect) {
+            ++found;
+            EXPECT_FLOAT_EQ(effect.Color[0], .3f);
+            EXPECT_FLOAT_EQ(effect.Color[1], 1);
+            EXPECT_FLOAT_EQ(effect.Color[2], 0);
+            EXPECT_FLOAT_EQ(effect.Strength, .6f);
         });
     EXPECT_EQ(found, 1u);
 }

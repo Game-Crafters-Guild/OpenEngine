@@ -86,6 +86,12 @@ constexpr SubscribableEvent kSubscribableEvents[] = {
     {"UI.ButtonClick", GameEngine::kEventButtonClick}, // Ui.Button.Clicked
     {"UI.MouseEnter", GameEngine::kEventMouseEnter},   // Ui.Element.PointerEntered
     {"UI.MouseMove", GameEngine::kEventMouseMove},     // Ui.Element.MouseMoved
+    // The press lifecycle, for every button (UIEvent::Button is Input::MouseButton). The
+    // manager routes these onto whatever element the pointer is over, like the other pointer
+    // events, so every element can subscribe and no ElementDispatchesEvent row belongs here.
+    {"UI.MouseDown", GameEngine::kEventMouseDown},     // Ui.Element.PointerPressed
+    {"UI.MouseUp", GameEngine::kEventMouseUp},         // Ui.Element.PointerReleased
+    {"UI.MouseCancel", GameEngine::kEventMouseCancel}, // Ui.Element.PointerCancelled
     {"UI.FocusIn", GameEngine::kEventFocusIn},         // Ui.Element.FocusGained
     {"UI.ValueChanging", GameEngine::kEventValueChanging},
     {"UI.ValueChanged", GameEngine::kEventValueChanged},

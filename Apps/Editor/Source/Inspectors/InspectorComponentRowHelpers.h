@@ -651,17 +651,23 @@ inline SliderWithFloatValueRow AddComponentSliderWithValueRow(
 /// percentage lands on ("Height (0.36 m)"); it is re-evaluated on every change. The field always
 /// reads a bare percentage with a "%" suffix, because a unit long enough to hold an absolute does
 /// not fit beside the number.
+/// `onEditPhase`, when set, hears the gesture: true before each drag step is previewed, false once
+/// the value is committed (the end of a drag, or a typed value). A caller whose edit is expensive
+/// downstream holds a signal across the drag with it.
 template<typename TComponent, typename ApplyFn, typename LabelFn>
 inline SliderWithFloatValueRow AddComponentMultiplierPercentRow(
     UIElement* parent, float initial,
     ECS::World* w, ECS::EntityHandle e,
     Editor::EditorChangeNotifications* n, ApplyFn&& apply, LabelFn&& labelFor,
     const char* tooltip,
-    const std::vector<ECS::EntityHandle>& additionalEntities = {})
+    const std::vector<ECS::EntityHandle>& additionalEntities = {},
+    std::function<void(bool previewing)> onEditPhase = {})
 {
     auto extras = std::make_shared<std::vector<ECS::EntityHandle>>(additionalEntities);
-    auto run = [w, e, n, apply, extras](float value, bool commit)
+    auto run = [w, e, n, apply, extras, onEditPhase](float value, bool commit)
     {
+        if (onEditPhase && !commit)
+            onEditPhase(true);
         auto applyTo = [&](ECS::EntityHandle target)
         {
             auto* comp = w->GetComponent<TComponent>(target);
@@ -677,6 +683,8 @@ inline SliderWithFloatValueRow AddComponentMultiplierPercentRow(
         applyTo(e);
         for (auto& ex : *extras)
             applyTo(ex);
+        if (onEditPhase && commit)
+            onEditPhase(false);
     };
 
     auto row = AddSliderWithFloatValueRow(parent, labelFor(initial), initial * 100.0f,

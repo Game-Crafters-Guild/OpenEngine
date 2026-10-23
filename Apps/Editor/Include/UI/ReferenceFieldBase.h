@@ -38,6 +38,10 @@ public:
     /// clear would be an edit that something else silently undoes.
     void SetClearable(bool clearable);
 
+    /// The text the field shows while it holds no reference: "(None)" unless set, for a field
+    /// whose empty value means something else, such as a default it falls back to.
+    void SetEmptyText(std::string text);
+
 protected:
     // Create the name label + clear button and wire their handlers (clear button
     // -> OnClearRequested; field click -> OpenReferenceDialog). Call from the
@@ -65,6 +69,7 @@ protected:
     Label* m_NameLabel = nullptr;
     UIElement* m_ClearBtn = nullptr;
     bool m_Clearable = true;
+    std::string m_EmptyText = "(None)";
 
 private:
     std::unique_ptr<ISearchProvider> m_SearchProvider; // kept alive while the dialog is open

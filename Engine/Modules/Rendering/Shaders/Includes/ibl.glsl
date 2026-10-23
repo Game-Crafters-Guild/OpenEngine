@@ -506,7 +506,10 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
     // the geometric horizon and pull in env radiance the surface physically occludes — fade it.
     float horizon = clamp(1.0 + dot(R, N), 0.0, 1.0);
     specularWeight *= horizon * horizon;
-    vec3 specular = pref * specularWeight;
+    specularWeight *= so.environmentSpecularCoverage;
+    // The surface's own reflection of the environment reflects the same radiance; the surface
+    // owns its weight, so the horizon occlusion and the coverage above do not scale it.
+    vec3 specular = pref * (specularWeight + so.environmentReflectionWeight);
 
     // --- Optional ambient sheen: the Charlie lobe is broad/retroreflective with no GGX
     //     peak, so the diffuse-convolved IRRADIANCE cube is the right env proxy (NOT the
@@ -516,8 +519,14 @@ vec3 GE_EvaluateIBL(SurfaceOutput so, vec3 V, vec3 positionWS)
     // darkens the reflections (Lagarde) so cavities stop showing mirror-bright env radiance.
     float specAO = GE_ComputeSpecularAO(NdotV, so.ao, so.roughness);
 #ifdef GE_SSSR_NORMAL_ROUGHNESS
-    ge_sssrIncidentRadiance = pref;
-    ge_sssrSpecularWeight = specularWeight * specAO;
+    // Screen-space reflections replace every reflection this pixel added: the standard lobe, the
+    // surface's own reflection of the environment, and the reflection it emitted itself. The weight
+    // is their sum and the incident radiance their weighted mean, so weight x incident is exactly
+    // what was added. Without an emitted reflection the incident radiance is exactly pref.
+    vec3 replaceableWeight = (specularWeight + so.environmentReflectionWeight) * specAO;
+    ge_sssrSpecularWeight = replaceableWeight + vec3(so.emittedReflection.a);
+    ge_sssrIncidentRadiance = pref + (so.emittedReflection.rgb - pref * so.emittedReflection.a) /
+                                     max(ge_sssrSpecularWeight, vec3(1e-6));
     ge_sssrReflectionDirection = R;
   #ifdef GE_FUZZ_ENABLED
     float fuzzAlbedo = GE_CharlieDirectionalAlbedo(NdotV, so.fuzzRoughness);

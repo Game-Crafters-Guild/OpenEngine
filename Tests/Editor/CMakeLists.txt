@@ -265,9 +265,13 @@ set(EDITOR_TEST_SOURCES
 	# which never runs that path. Same leaf-TU shape as the notice above.
 	PreservedFieldNoticeTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PreservedFieldNotice.cpp
+	# The Navigation Agent inspector: the Surface row and the status of the agent's request.
+	NavigationAgentInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/NavigationAgentInspector.cpp
 	# The Navigation Surface inspector: its reflected rows per mode, the bake status notice and the
 	# Bake action, over the reflection-driven row builder it composes.
 	NavigationSurfaceInspectorTests.cpp
+	NavigationBakedDataSaveTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/NavigationSurfaceInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/DefaultComponentInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/RenderLayerField.cpp
@@ -447,8 +451,6 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/PlayMode/PlayButtonState.cpp
 	# The audio toggle right of Play: its icon and tooltip follow the same state as the
 	# menu row, in both directions, and audio is enabled by default.
-	AudioToggleButtonTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/PlayMode/AudioToggleButton.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Settings/AudioEnabledSettings.cpp
 	# set_component's key-consumption contract: a values key that names no field must be
 	# reported, never answered `ok`. The reader is a leaf TU (nlohmann only), so it
@@ -602,6 +604,14 @@ set(EDITOR_TEST_SOURCES
 	# get_scene_hierarchy's report, compiled in on the same terms as the projection report.
 	SceneHierarchyReportTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/SceneHierarchyReport.cpp
+	# get_log's reply: the defaults, the since cursor, the size cap and the unchanged answer
+	# over a hand-filled ring. Leaf TU (the Logger ring + nlohmann).
+	LogQueryReportTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/LogQueryReport.cpp
+	# get_build_status's summary: unique error lines capped, warnings counted unless asked
+	# for. Leaf TU (the Build panel's status snapshot + nlohmann).
+	BuildStatusReportTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/BuildStatusReport.cpp
 	# Panel tab-icon defaults. The two panels compiled in are the light,
 	# self-contained end of the panel set (Engine-only dependencies) and are enough
 	# to exercise a real editor panel built the way the fallback docking path
@@ -687,6 +697,7 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/TerrainPresence.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewAutoExposure.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewPostProcessSwitches.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewEye.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SelectionOutlineContributors.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewGizmos.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewGizmoThickLines.cpp
@@ -715,12 +726,15 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Scene/SceneBackupRecovery.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/SphereSculptSaver.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainZonePayloadSaver.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Navigation/NavigationBakedDataSave.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainBakeCacheSave.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/SaveSceneAsModal.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/SaveSceneChangesModal.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/RestoreSceneBackupModal.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/ConfirmActionModal.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Scene/DefaultSceneEntities.cpp
+	# The Hierarchy row icon a seeded entity gets (DefaultSceneEntitiesTests: the ground's plane icon).
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityIcon.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/PlayMode/ModelAnimationPlayMode.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/PlayMode/AnimationPlayModeHelpers.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/AnimatorInspector.cpp
@@ -741,6 +755,19 @@ set(EDITOR_TEST_SOURCES
 	# The drawn menu reads an icon path as alias:path or as a file; a Windows
 	# drive is a file.
 	ContextMenuItemIconSourceTests.cpp
+	# A press on a submenu parent keeps the menu open; a submenu opens beside
+	# its parent panel, flipped left at the window edge.
+	UIContextMenuSubmenuTests.cpp
+	# The Hierarchy's entity edits: menu entries and keys share command ids; a
+	# delete takes each selected subtree once, undoably.
+	HierarchyEntityEditTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityCommands.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityDelete.cpp
+	# Inline rename: the session the Assets browser and the Hierarchy share, and
+	# the Hierarchy's entity rename on it.
+	InlineRenameTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/InlineRenameSession.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityRename.cpp
 	# The wire router: a route that crosses no body, and the short one among those.
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphRouteSolver.cpp
 	GraphRouteSolverTests.cpp
@@ -767,10 +794,13 @@ set(EDITOR_TEST_SOURCES
 	AssetDeletePathGuardTests.cpp
 	# Inline rename: stem validation, the shader+material pair lookup/rewrite, and the
 	# undoable command over a temp directory (no AssetManager — registry updates are the
-	# command's other half and need a live editor).
+	# command's other half and need a live editor), and the controller's rename field ending
+	# when a view binds its pooled row to another entry.
 	AssetRenameTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetRename.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UndoRedo/RenameAssetFileCommand.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetRenameController.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/DirectoryMenuEditItems.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UndoRedo/RenameAssetCommand.cpp
 	# The undoable import-setting write, over a live registry: the command keys on the
 	# asset's GUID, so a rename between the edit and the undo still undoes the edit.
 	AssetMetaValueCommandTests.cpp
@@ -879,6 +909,9 @@ set(EDITOR_TEST_SOURCES
 	# The inspector's render layer rows: one layer per selected entity, for a reflected row and the
 	# Terrain row (DefaultComponentInspector.cpp and TerrainInspector.cpp compile in above).
 	RenderLayersRowTests.cpp
+	# The Mesh Renderer's Shadow Casting row: one choice sets the mode on each selected entity.
+	ShadowCastingRowTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/ShadowCastingRow.cpp
 	# The Hierarchy's render layer row: the project's names in its text, and the per-layer edit of
 	# a selection.
 	HierarchyRenderLayerEditTests.cpp
@@ -900,8 +933,14 @@ set(EDITOR_TEST_SOURCES
 	# The grass inspector's Root Color row (Auto or authored), built in process over a live
 	# World with a stub colour picker. The terrain panel's inspectors register from one TU.
 	TerrainGrassRootColorRowTests.cpp
+	# The grass inspector's soil rows (Darken Ground, Soil Color), built the same way.
+	TerrainGrassSoilRowsTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainBaseSourceSection.cpp
+	# The Grass Area region's Darken Ground row: the absolute it lands on, its zero-amount notice and
+	# the drag holding the terrain's interactive-edit signal.
+	TerrainGrassRegionRowsTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainGrassRegionRows.cpp
 	# Source-level guard on the Asset View preview: it fits a raw texture only while it both asks
 	# for contain sizing and overrides the texture's intrinsic 9-slice with a zero slice. The panel
 	# drives a video player and GPU texture uploads, so it is scanned rather than compiled in.
@@ -1061,6 +1100,8 @@ add_executable(HierarchyEnableStateTests
 	HierarchyEnableStateTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEnableState.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyRowActivity.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyRowEye.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewEye.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyLightIconTint.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Entities/EntityDisplayName.cpp
 	# EntityDisplayName reads a component's UntitledName from the traits registry.
@@ -1074,6 +1115,7 @@ target_include_directories(HierarchyEnableStateTests PRIVATE
 )
 target_link_libraries(HierarchyEnableStateTests PRIVATE
 	Engine
+	SharedHeadlessDeviceTestSupport
 	GTest::gtest
 	GTest::gtest_main
 )
@@ -1156,6 +1198,32 @@ add_test(NAME CurveFieldTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
+# The light inspector's color reset over its real label events and undo service.
+add_executable(LightInspectorTests
+	LightInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LightInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LuxText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/InspectorNotice.cpp
+)
+target_include_directories(LightInspectorTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+)
+target_link_libraries(LightInspectorTests PRIVATE Engine EditorSDK GTest::gtest GTest::gtest_main)
+set_target_properties(LightInspectorTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(LightInspectorTests)
+ge_stage_runtime_dependencies(LightInspectorTests)
+add_test(NAME LightInspectorTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:LightInspectorTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:LightInspectorTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # The sky inspector's sun path rows, typed into and dragged over the real undo
 # service. Its own target for the reason above: the rows draw the day on the
 # shared curve editor, whose sources stay out of EditorTests' unity batches.
@@ -1192,6 +1260,74 @@ add_test(NAME SkySunPathRowsTests
 	COMMAND "${CMAKE_COMMAND}"
 		-DTEST_EXE=$<TARGET_FILE:SkySunPathRowsTests>
 		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:SkySunPathRowsTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
+# The Day Cycle editor surfaces (the profile inspector, the Day Cycle window, the working copy they
+# share, the save rule and the scrub of the scene's time of day) over a real asset manager, the real
+# undo service and the production sky system. Its own target for the reason above: the track rows
+# draw on the shared curve editor.
+add_executable(DayCycleEditorTests
+	DayCycleProfileSaveTests.cpp
+	DayCycleProfileInspectorTests.cpp
+	DayCycleWindowTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleAxis.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleDescriptionField.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleEditorServices.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleProfileControls.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleProfileInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleProfileSave.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleRowsHost.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleScrub.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleShippedProfiles.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleSunNow.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleTrackRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleWindow.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleWindowRegistration.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DayCycle/DayCycleWorkingCopy.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetCreation.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/EntityMaterialTextureAssign.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LuxText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunPathCaptions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunReadoutText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunDayKind.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkyEnvironmentEdit.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunLinkUndo.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveField.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveTangents.cpp
+	${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
+)
+target_include_directories(DayCycleEditorTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+	${CMAKE_SOURCE_DIR}/Engine/Tests
+	${CMAKE_SOURCE_DIR}/Tests
+)
+target_link_libraries(DayCycleEditorTests PRIVATE
+	Engine
+	EditorSDK
+	GTest::gtest
+	GTest::gtest_main
+)
+set_target_properties(DayCycleEditorTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(DayCycleEditorTests)
+ge_stage_runtime_dependencies(DayCycleEditorTests)
+ge_stage_test_asset(DayCycleEditorTests
+	"${CMAKE_SOURCE_DIR}/Engine/Assets/DayCycles/Default.daycycle.json"
+	"Assets/DayCycles/Default.daycycle.json"
+)
+ge_stage_test_asset(DayCycleEditorTests
+	"${CMAKE_SOURCE_DIR}/Engine/Assets/DayCycles/ClearDay.daycycle.json"
+	"Assets/DayCycles/ClearDay.daycycle.json"
+)
+add_test(NAME DayCycleEditorTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:DayCycleEditorTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:DayCycleEditorTests>
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
@@ -1364,6 +1500,10 @@ add_test(NAME ShippedSceneExposureTests
 add_executable(EditorShortcutsTests
 	EditorShortcutsTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Shortcuts/EditorShortcuts.cpp
+	# The Hierarchy's key map reads the catalog's Hierarchy bindings, and its menu rows and the
+	# folder tree's show the keys bound to them.
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityCommands.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/DirectoryMenuEditItems.cpp
 	# The editor's action registration, whose reserved shortcuts the routing rows read.
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/EditorInputActions.cpp
 	# The size slider's tooltip follows the real catalog's Resize Items binding.
@@ -1372,6 +1512,7 @@ add_executable(EditorShortcutsTests
 target_include_directories(EditorShortcutsTests PRIVATE
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules
 )
 target_link_libraries(EditorShortcutsTests PRIVATE
 	Engine
@@ -1819,6 +1960,7 @@ target_link_libraries(EditorTests
 	    Engine
 	    EditorSDK
 	    MeshPicking
+	    SharedHeadlessDeviceTestSupport
     GTest::gtest
     GTest::gtest_main
 )

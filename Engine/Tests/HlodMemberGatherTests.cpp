@@ -114,7 +114,6 @@ TEST(HlodMemberGather, GathersEligibleStaticMember) {
     MeshRenderer mr{};
     mr.materialAssetGuid.Set(materialGuid);
     mr.modelAssetGuid.Set(modelGuid);
-    mr.castShadows = true;
     e.Set(mr);
     world.ProcessCommands();
 
@@ -199,6 +198,16 @@ TEST(HlodMemberGather, ExcludesSkinnedMorphDisabledAndUnresolved) {
         mr.modelAssetGuid.Set(GUID::Derive(GUID::Null(), "model/missing"));
         e.Set(mr);
     }
+    // Shadows-only member: a proxy draws in color, so the member stays itself.
+    {
+        ECS::Entity e = world.Create();
+        e.Set(WorldAt(5, 0, 0));
+        MeshRenderer mr{};
+        mr.materialAssetGuid.Set(materialGuid);
+        mr.modelAssetGuid.Set(modelGuid);
+        mr.shadowCasting = ShadowCasting::ShadowsOnly;
+        e.Set(mr);
+    }
     world.ProcessCommands();
 
     GatheredMembers gathered = GatherHlodMembers(world, bank.Resolver());
@@ -208,6 +217,7 @@ TEST(HlodMemberGather, ExcludesSkinnedMorphDisabledAndUnresolved) {
     EXPECT_EQ(gathered.SkippedMorph, 1u);
     EXPECT_EQ(gathered.SkippedNoMaterial, 1u);
     EXPECT_EQ(gathered.SkippedNoModel, 1u);
+    EXPECT_EQ(gathered.SkippedShadowsOnly, 1u);
 }
 
 TEST(HlodMemberGather, StableIdAndKeysAreDeterministic) {

@@ -3,11 +3,12 @@
 // Test-only seam onto GameUIHost's otherwise-private per-frame steps.
 //
 // Production hosts drive the host exclusively through SyncDocuments/UpdateAndRender (or the
-// SyncAndRender composition); the headless suites pump SetPointer/Update/SyncFromWorld
+// SyncAndRender composition); the headless suites pump pointer input/Update/SyncFromWorld
 // directly (no world tick or RG render), so this one friend grants the seam instead of
 // widening the public API. Friended by GameUIHost.
 
 #include "Engine/GameUI/GameUIHost.h"
+#include "Input/KeyCodes.h"
 
 #include <cstdint>
 
@@ -20,7 +21,14 @@ class World;
 
 struct GameUIHostTestAccess
 {
-    static void SetPointer(GameUIHost& host, float x, float y, bool down) { host.SetPointer(x, y, down); }
+    // A pointer at (x, y) with the primary button held or not: the move, then the
+    // primary edge when the held state changes.
+    static void SetPointer(GameUIHost& host, float x, float y, bool down)
+    {
+        host.OnMouseMove({x, y});
+        if (down != host.m_PrimaryDown)
+            host.DispatchMouseButton(Input::kMouseButton_Left, down);
+    }
     // The production leave transition, which CancelPointer runs when the pointer stops
     // being over the surface. Driven directly here: the input-path tests hold no pointer
     // source to take away.

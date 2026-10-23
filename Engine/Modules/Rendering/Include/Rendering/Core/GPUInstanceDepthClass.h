@@ -42,6 +42,9 @@ enum class MaterialDepthClass : uint8_t
 //   bit  3     depth double-sided        (this feature; meaningful only when bit 2 clear)
 //   bit  4     mirrored winding           (odd-determinant world transform)
 //   bit  5     sorted transparent         (order-dependent Blend; peeled to the sorted pass)
+//   bit  6     DDGI GI emitter
+//   bit  7     shadows only               (no color pass draws it; bit 0 is set too)
+//   bit  8     editor hidden              (the Scene View eye; the Scene View's color culls drop it)
 //   bits 16..31  16-bit world tag
 inline constexpr uint32_t kInstanceFlagDepthMaterialDependent = 1u << 2;
 inline constexpr uint32_t kInstanceFlagDepthDoubleSided       = 1u << 3;
@@ -70,6 +73,41 @@ inline constexpr uint32_t kInstanceFlagSortedTransparent = 1u << 5;
 // the probe trace must NOT also add its emissive on a ray hit. Per INSTANCE,
 // not per material: two instances can share a material and disagree.
 inline constexpr uint32_t kInstanceFlagGIEmitter = 1u << 6;
+
+/// Set when the mesh renderer's Shadow Casting is Shadows Only. Every color cull
+/// dispatch (no kCullPassShadowDispatch in frustum_culling.comp and hzb_culling.comp)
+/// drops the instance, and so do the CPU color paths (CpuDrawStreamBuilder's camera
+/// set, the sorted transparent collect). The cast bit (bit 0) is set beside it, so
+/// every shadow dispatch keeps the instance.
+inline constexpr uint32_t kInstanceFlagShadowsOnly = 1u << 7;
+
+/// Set when the entity is hidden by the Scene View eye (Components::SceneViewHidden or
+/// SceneViewHiddenInHierarchy). A cull dispatch whose GPUCullingData.passFlags carries
+/// kCullPassDropEditorHidden drops the instance, color and shadow alike; only the editor Scene
+/// View's dispatches set it (ViewDesc::DropsEditorHidden), so the Game View and the Player draw
+/// the instance and its shadow. The CPU paths of a Scene View drop it the same way
+/// (CpuDrawStreamBuilder's camera and caster sets, the sorted transparent collect, the
+/// motion-vector movers).
+inline constexpr uint32_t kInstanceFlagEditorHidden = 1u << 8;
+
+/// Whether a color pass draws an instance with these flags: never a shadows-only one, and in a view
+/// that drops what the Scene View eye hides, never an editor-hidden one. The CPU twin of the color
+/// branch of cull_pass_membership.glsl, for the paths that select instances on the CPU.
+inline constexpr bool InstanceInColorPass(uint32_t instanceFlags, bool dropEditorHidden)
+{
+    const uint32_t dropped = kInstanceFlagShadowsOnly | (dropEditorHidden ? kInstanceFlagEditorHidden : 0u);
+    return (instanceFlags & dropped) == 0u;
+}
+
+/// Whether a shadow pass draws an instance with these flags: a caster (bit 0), and in a view that
+/// drops what the Scene View eye hides, not an editor-hidden one. The CPU twin of the shadow branch
+/// of cull_pass_membership.glsl.
+inline constexpr bool InstanceInShadowPass(uint32_t instanceFlags, bool dropEditorHidden)
+{
+    if (dropEditorHidden && (instanceFlags & kInstanceFlagEditorHidden) != 0u)
+        return false;
+    return (instanceFlags & 1u) != 0u;
+}
 
 /// Kill switch: GE_MIRRORED_WINDING=0 disables the parity stamp at extraction,
 /// reverting to pre-feature behavior (mirrored geometry renders inside-out;

@@ -86,6 +86,9 @@ struct TileGenerationResult
     // Stage 1 output: coarse heightfield
     Terrain::HeightfieldData CoarseHeightfield;
 
+    // Stage 1 output: the coarse heightfield at the tile's full resolution, and its normal
+    std::shared_ptr<CoarseTileStandIn> CoarseStandIn;
+
     // Stage 2 output: full heightfield
     Terrain::HeightfieldData FullHeightfield;
 

@@ -7,8 +7,8 @@
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- An undocumented public member is an error (.editorconfig), except in the fixture mirrors. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <WarningsAsErrors>CS1591</WarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NUnit" Version="4.1.0" />
@@ -17,5 +17,12 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Scripting.Bindings\GameEngine.Scripting.Bindings.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The component mirrors the scanner generates from its fixture, compiled against the types the
+         engine's mirrors use (ComponentMirrorFixtureTests). Their fields carry no documentation, which
+         the .editorconfig beside them allows. -->
+    <Compile Include="..\..\Tools\ComponentScanner\Tests\Fixtures\Components\Expected\CSharp\**\*.g.cs"
+             LinkBase="ComponentMirrorFixture" />
   </ItemGroup>
 </Project>

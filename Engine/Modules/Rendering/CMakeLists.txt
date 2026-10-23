@@ -795,6 +795,7 @@ set(RENDERING_CORE_SOURCES
     # Sky
     Source/Sky/AtmosphereTransmittance.cpp
     Source/Sky/SkyRenderer.cpp
+    Source/Sky/SkySunState.cpp
     Source/Sky/SkyViewLutAltitude.cpp
     Source/Sky/SolarPath.cpp
     Source/Sky/StarCatalog.cpp
@@ -959,6 +960,7 @@ find_package(nlohmann_json CONFIG QUIET)
             Source/Materials/ShaderMetaJson.cpp
             Source/Materials/ShaderMetaValidation.cpp
             Source/Materials/ShaderComposer.cpp
+            Source/Materials/ShaderDeformationEnvelope.cpp
             Source/Materials/ShaderPropertyTable.cpp
             Source/Materials/ShaderPropertyTableCache.cpp
             Source/Materials/ShaderCapabilityDetector.cpp
@@ -1491,10 +1493,10 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_compute(hzb_build hzb_build.comp)
     _ge_add_shaderpkg_compute(hzb_spd hzb_spd.comp)
     _ge_add_shaderpkg_compute(hzb_spd_finalize hzb_spd_finalize.comp)
-    # Fused MIN+MAX variant: one depth read builds both the occlusion pyramid
-    # and the SSR traversal pyramid (used when a view needs both).
-    _ge_add_shaderpkg_compute(hzb_spd_minmax hzb_spd_minmax.comp)
-    _ge_add_shaderpkg_compute(hzb_spd_minmax_finalize hzb_spd_minmax_finalize.comp)
+    # The reflection traversal pyramid (MAX, nearest): the same SPD pair built
+    # with HZB_REDUCE_NEAREST from the final depth the reflections trace.
+    _ge_add_shaderpkg_compute(hzb_spd_nearest hzb_spd_nearest.comp)
+    _ge_add_shaderpkg_compute(hzb_spd_nearest_finalize hzb_spd_nearest_finalize.comp)
     _ge_add_shaderpkg_compute(hzb_culling hzb_culling.comp)
     # Sorted transparent GPU path (transparency-scale S1/S2): the reusable GPU
     # sort primitive plus the fused runtime drain (gather + key + sort +
@@ -1794,6 +1796,15 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     # double-define its symbols inside Engine-linked test exes.
     add_library(RenderGraphTestSupport INTERFACE)
     target_include_directories(RenderGraphTestSupport INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/TestSupport)
+
+    # The headless device a test executable's tests share (TestSupport/SharedHeadlessDevice.h).
+    # The source is compiled into every consumer: it registers the gtest environment that
+    # shuts the device down after the last test and the listener that retires its releases
+    # after every test. Consumers link Engine for the device.
+    add_library(SharedHeadlessDeviceTestSupport INTERFACE)
+    target_include_directories(SharedHeadlessDeviceTestSupport INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/TestSupport)
+    target_sources(SharedHeadlessDeviceTestSupport INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/TestSupport/SharedHeadlessDevice.cpp)
 
     # The new immediate-mode core is compiled directly into the test exe (not yet
     # into GameEngineRendering — that is Stage 2b). Device-touching RenderGraph code binds

@@ -296,10 +296,13 @@ namespace GameEngine.Scripting
                 switch (listener)
                 {
                     case Action<PointerArgs> pointer:
-                        pointer(new PointerArgs(data.X, data.Y, data.Mods));
+                        pointer(new PointerArgs(data.X, data.Y, (ModifierFlags)data.Mods));
                         break;
                     case Action<ClickArgs> click:
-                        click(new ClickArgs(data.Mods));
+                        click(new ClickArgs((ModifierFlags)data.Mods));
+                        break;
+                    case Action<PointerButtonArgs> button:
+                        button(new PointerButtonArgs(data.X, data.Y, (MouseButton)data.Button, (ModifierFlags)data.Mods));
                         break;
                     case Action<ValueArgs> value:
                         value(new ValueArgs(data.Value));

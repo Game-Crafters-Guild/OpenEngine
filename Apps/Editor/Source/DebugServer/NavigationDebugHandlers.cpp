@@ -12,9 +12,12 @@
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/PathBuffer.h"
 #include "Pathfinding/SolverScratchStatistics.h"
+#include "PathfindingECS/Components/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationSource.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
+#include "Pathfinding/DetourNavMap.h"
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Systems/NavigationPathfindingStatistics.h"
@@ -35,6 +38,30 @@ using json = nlohmann::json;
 
 namespace
 {
+
+// Every NavigationSurface of the primary world with its bake state and its mesh tile counts.
+json SurfaceTileCounts()
+{
+    json surfaces = json::array();
+    auto* world = EngineCore::GetInstance().GetPrimaryWorld();
+    if (!world)
+        return surfaces;
+    world->Query<ECS::Read<Components::NavigationSurface>>().Each(
+        [&](ECS::EntityHandle entity, const Components::NavigationSurface& surface) {
+            const auto* mesh = PathfindingECS::ResolveNavigationSurfaceMesh(*world, surface);
+            surfaces.push_back({{"entityId", entity.id},
+                                {"bakeStatus", Navigation::FormatBakeStatus(surface)},
+                                {"version", surface.BakeVersion},
+                                {"tiles",
+                                 {{"declared", surface.Mode == Components::NavigationSurfaceMode::Mesh ? surface.BakeTotal : 0u},
+                                  {"resident", mesh ? mesh->GetTileCount() : 0u},
+                                  {"dirty", surface.TilesDirty},
+                                  {"baking", surface.TilesBaking},
+                                  {"stale", surface.StaleTiles},
+                                  {"built", surface.TilesBuilt}}}});
+        });
+    return surfaces;
+}
 
 json HandleNavigationStats(const EditorDebugServer::RequestContext&)
 {
@@ -68,6 +95,7 @@ json HandleNavigationStats(const EditorDebugServer::RequestContext&)
           {"solversHoldingScratch", scratch.SolversHoldingScratch},
           {"heldBytes", scratch.HeldBytes},
           {"solverHighWaterBytes", scratch.SolverHighWaterBytes}}},
+        {"surfaces", SurfaceTileCounts()},
     };
 }
 
@@ -232,6 +260,41 @@ json HandleNavigationSources(const EditorDebugServer::RequestContext& ctx)
     return json{{"surfaceEntityId", surface->id}, {"count", list.size()}, {"sources", std::move(list)}};
 }
 
+json HandleMarkNavigationDirty(const EditorDebugServer::RequestContext& ctx)
+{
+    const auto min = ReadPoint(ctx.params, "min");
+    const auto max = ReadPoint(ctx.params, "max");
+    if (!min || !max)
+        return Editor::RefuseRequest("Missing min or max: expected [x, y, z] world points");
+    auto* world = EngineCore::GetInstance().GetPrimaryWorld();
+    if (!world)
+        return Editor::RefuseRequest("No world is running");
+    json refusal;
+    const std::optional<ECS::EntityHandle> surface = ResolveSurfaceEntity(*world, ctx.params, refusal);
+    if (!surface)
+        return refusal;
+    if (!Navigation::MarkDirty(*world, *surface, {(*min)[0], (*min)[1], (*min)[2]}, {(*max)[0], (*max)[1], (*max)[2]}))
+        return Editor::RefuseRequest("The surface on entity " + std::to_string(surface->id) +
+                                     " is a grid: a grid rebakes through RequestBake only");
+    return json{{"surfaceEntityId", surface->id}};
+}
+
+json HandleSetDestination(const EditorDebugServer::RequestContext& ctx)
+{
+    const auto point = ReadPoint(ctx.params, "point");
+    if (!point || !ctx.params.contains("entityId") || !ctx.params["entityId"].is_number_unsigned())
+        return Editor::RefuseRequest("Missing entityId or point: expected the agent's entity id and an [x, y, z] world point");
+    auto* world = EngineCore::GetInstance().GetPrimaryWorld();
+    if (!world)
+        return Editor::RefuseRequest("No world is running");
+    const ECS::EntityHandle agent(ctx.params["entityId"].get<uint32_t>());
+    if (!world->IsValid(agent) || !world->HasComponent<Components::NavigationAgent>(agent))
+        return Editor::RefuseRequest("Entity " + std::to_string(agent.id) + " has no NavigationAgent");
+    Navigation::SetDestination(*world, agent, {(*point)[0], (*point)[1], (*point)[2]});
+    return json{{"agentEntityId", agent.id},
+                {"status", Navigation::FormatAgentStatus(Navigation::GetStatus(*world, agent))}};
+}
+
 } // namespace
 
 void RegisterNavigationDebugHandlers(EditorDebugServer& server)
@@ -246,7 +309,16 @@ void RegisterNavigationDebugHandlers(EditorDebugServer& server)
     //     queued; 0 when none is) and longestSolvedWaitFrames / longestSolvedWaitSeconds (the longest
     //     wait among the requests it solved). A request solved in the frame it joined waited 0.
     //   totals: newRequests and solved since the system was created; read twice and subtract for a rate.
+    //   surfaces: every NavigationSurface of the primary world: entityId, bakeStatus (the inspector's
+    //     line), version (BakeVersion) and tiles: declared (the mesh's tiles), resident (in the map),
+    //     dirty (waiting to rebake), baking (rebaking now), stale (loaded tiles whose ground changed)
+    //     and built (built with Recast since the surface appeared).
     server.RegisterHandler("get_navigation_stats", HandleNavigationStats);
+
+    // mark_navigation_dirty — Navigation::MarkDirty from the debug port. Params: min and max as
+    // [x, y, z] world points; entityId names the surface (optional when the scene has one). Reply:
+    // surfaceEntityId. The tiles join the surface's dirty queue on its next update.
+    server.RegisterHandler("mark_navigation_dirty", HandleMarkNavigationDirty);
 
     // find_path — one path on a baked NavigationSurface, solved on the main thread between frames
     // with the surface's agent. Params: from and to as [x, y, z] world points; entityId names the
@@ -262,6 +334,12 @@ void RegisterNavigationDebugHandlers(EditorDebugServer& server)
     // mesh, policy (the NavigationSource policy that admitted it: Auto or Include); colliders carry
     // no policy. Refused, with the reason, when the surface is missing or ambiguous.
     server.RegisterHandler("get_navigation_sources", HandleNavigationSources);
+
+    // set_destination — Navigation::SetDestination from the debug port. Params: entityId names the
+    // agent; point is the [x, y, z] world destination. Reply: agentEntityId and status (the
+    // inspector's line for the order, Waiting until a later frame's solve). Refused when the entity
+    // has no NavigationAgent.
+    server.RegisterHandler("set_destination", HandleSetDestination);
 }
 
 } // namespace GameEngine

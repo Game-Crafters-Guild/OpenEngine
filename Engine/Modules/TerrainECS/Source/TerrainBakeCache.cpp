@@ -18,8 +18,9 @@ namespace
 
 // "GETB" read as a little-endian uint32.
 constexpr uint32 kTerrainBakeMagic = 0x42544547u;
-// magic, version, key, width, height, splat min, splat max.
-constexpr std::size_t kHeaderBytes = sizeof(uint32) * 2 + sizeof(uint64) + sizeof(uint32) * 2 + sizeof(float32) * 2;
+// magic, version, key, width, height, splat min, splat max, colour key, colour texels present.
+constexpr std::size_t kHeaderBytes = sizeof(uint32) * 2 + sizeof(uint64) + sizeof(uint32) * 2 + sizeof(float32) * 2
+                                     + sizeof(uint64) + sizeof(uint32);
 
 static_assert(std::endian::native == std::endian::little,
               "the .getbake layout is little-endian and written with raw copies");
@@ -76,8 +77,10 @@ std::filesystem::path TerrainBakeFile(const std::filesystem::path& directory, co
 bool WriteTerrainBake(const std::filesystem::path& file, uint64 key, const TerrainBakeArtifact& artifact)
 {
     const std::size_t samples = static_cast<std::size_t>(artifact.Width) * artifact.Height;
-    if (file.empty() || samples == 0 || artifact.Heights.size() != samples || artifact.Splat.size() != samples * 4u)
+    if (file.empty() || samples == 0 || artifact.Heights.size() != samples || artifact.Splat.size() != samples * 4u
+        || (!artifact.Color.empty() && artifact.Color.size() != samples * 4u))
         return false;
+    const uint32 colorTexels = artifact.Color.empty() ? 0u : 1u;
 
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
@@ -94,9 +97,13 @@ bool WriteTerrainBake(const std::filesystem::path& file, uint64 key, const Terra
         WriteScalar(os, artifact.Height);
         WriteScalar(os, artifact.SplatMinH);
         WriteScalar(os, artifact.SplatMaxH);
+        WriteScalar(os, artifact.ColorKey);
+        WriteScalar(os, colorTexels);
         os.write(reinterpret_cast<const char*>(artifact.Heights.data()),
                  static_cast<std::streamsize>(samples * sizeof(float32)));
         os.write(reinterpret_cast<const char*>(artifact.Splat.data()), static_cast<std::streamsize>(samples * 4u));
+        if (colorTexels)
+            os.write(reinterpret_cast<const char*>(artifact.Color.data()), static_cast<std::streamsize>(samples * 4u));
         os.flush();
         if (!os.good())
         {
@@ -134,6 +141,9 @@ TerrainBakeCacheStatus ReadTerrainBake(const std::filesystem::path& file, uint64
     ReadScalar(data, cursor, artifact.Height);
     ReadScalar(data, cursor, artifact.SplatMinH);
     ReadScalar(data, cursor, artifact.SplatMaxH);
+    uint32 colorTexels = 0;
+    ReadScalar(data, cursor, artifact.ColorKey);
+    ReadScalar(data, cursor, colorTexels);
     if (storedKey != key)
         return TerrainBakeCacheStatus::KeyMismatch;
     // The header's sizes are trusted only once they equal the terrain's own grid,
@@ -141,13 +151,16 @@ TerrainBakeCacheStatus ReadTerrainBake(const std::filesystem::path& file, uint64
     if (width == 0 || height == 0 || artifact.Width != width || artifact.Height != height)
         return TerrainBakeCacheStatus::Corrupt;
     const std::size_t samples = static_cast<std::size_t>(width) * height;
-    if (size - cursor != samples * (sizeof(float32) + 4u))
+    if (colorTexels > 1u || size - cursor != samples * (sizeof(float32) + 4u + (colorTexels ? 4u : 0u)))
         return TerrainBakeCacheStatus::Corrupt;
 
     artifact.Heights.resize(samples);
     std::memcpy(artifact.Heights.data(), data + cursor, samples * sizeof(float32));
     cursor += samples * sizeof(float32);
     artifact.Splat.assign(data + cursor, data + cursor + samples * 4u);
+    cursor += samples * 4u;
+    if (colorTexels)
+        artifact.Color.assign(data + cursor, data + cursor + samples * 4u);
     out = std::move(artifact);
     return TerrainBakeCacheStatus::Hit;
 }

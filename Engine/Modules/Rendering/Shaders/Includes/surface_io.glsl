@@ -169,6 +169,23 @@ struct SurfaceOutput
     // occlusion. Ordinary materials use 1; surfaces that provide their own
     // horizon/self-occlusion model (the unbounded ocean) use 0.
     float iblGroundDarkening;
+
+    // Share of the pixel the standard environment reflection covers, 0..1, default 1. It scales
+    // the whole base specular lobe of the environment term (F0 * scale + bias) and the part of it
+    // that screen-space reflections replace. specularWeight scales F0 only and keeps the grazing
+    // bias. A surface that adds its own reflection of the environment to its emission (the
+    // ocean) sets the share its own reflection does not cover.
+    float environmentSpecularCoverage;
+
+    // The weight of the environment reflection the surface adds beside the standard lobe (water:
+    // its own Fresnel and dials), on the radiance the standard lobe reflects; screen-space
+    // reflections replace it. Default 0.
+    vec3 environmentReflectionWeight;
+
+    // The reflected radiance the surface put in its emission (a planar capture, a procedural sky),
+    // premultiplied by its weight (rgb), and that weight (a); screen-space reflections replace it
+    // together with the standard lobe and environmentReflectionWeight. Default 0.
+    vec4 emittedReflection;
 #ifdef GE_USER_PARTICLE_LIT
     vec3 particlePositive;
     vec3 particleNegative;
@@ -249,6 +266,9 @@ SurfaceOutput DefaultSurfaceOutput()
     o.thinFilmIor = 1.3;
     o.thinFilmWeight = 0.0;
     o.iblGroundDarkening = 1.0;
+    o.environmentSpecularCoverage = 1.0;
+    o.environmentReflectionWeight = vec3(0.0);
+    o.emittedReflection = vec4(0.0);
 #ifdef GE_USER_PARTICLE_LIT
     o.particlePositive = vec3(1.0);
     o.particleNegative = vec3(1.0);

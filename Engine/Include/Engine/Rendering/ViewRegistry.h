@@ -201,6 +201,12 @@ public:
         // (readers treat that as single-sample).
         uint32_t WorldColorSampleCount = 0;
 
+        // The deforming-motion state this view last logged, as the value of the
+        // producer's refusal enum (0 = producing); kDeformationMotionNotLogged
+        // before the first line. The producer logs only when it changes.
+        static constexpr uint8_t kDeformationMotionNotLogged = 0xFFu;
+        uint8_t DeformationMotionLogged = kDeformationMotionNotLogged;
+
         // Attachment formats of the view's camera prepass (its depth target's format and sample
         // count), snapshotted when the prepass is declared and one frame stale the same way. A
         // forward producer pins its prepass head's pipeline at the earlier emit point and emits the
@@ -237,6 +243,13 @@ public:
     bool ReleaseCamera(Rendering::CameraId id); // refuses while a view references it
     void SetCameraData(Rendering::CameraId id, const Rendering::CameraData& data);
     const Rendering::CameraData* FindCameraData(Rendering::CameraId id) const;
+    /// The main camera of world `worldId`: the one camera the sky's sun state, the sky-view LUT's
+    /// altitude band and the world-level volume blend read. Among the views that draw the world (a view
+    /// with world id 0 draws every world; `worldId` 0 asks for every world), take part this frame, draw
+    /// through the active render pipeline and look through a registered camera, it is the camera of the first Game view
+    /// in allocation order, else of the first EditorScene view. Previews and utility captures never count.
+    /// Null when no such view exists.
+    const Rendering::CameraData* FindMainCameraData(uint64 worldId) const;
     const std::vector<Rendering::CameraInfo>& GetCameras() const { return m_Cameras; }
 
     void SetViewpointCamera(Rendering::CameraId id) { m_ViewpointCamera = id; }

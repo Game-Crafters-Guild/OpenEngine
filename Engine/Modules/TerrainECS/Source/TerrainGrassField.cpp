@@ -45,8 +45,11 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
     bool changed = resized && field.IsActive();
     if (resized)
     {
+        changed = changed || !field.GroundDarkening.empty();
         field.Pixels.clear();
+        field.GroundDarkening.clear();
         field.NonNeutralTexels = 0;
+        field.NonNeutralDarkeningTexels = 0;
         field.Width = width; field.Height = height;
         minX = minZ = 0; maxX = maxZ = -1;
     }
@@ -57,7 +60,7 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
     // A fresh field is implicit white. Only targets below one can make it
     // nonneutral, so avoid scanning an entire large terrain for a small region.
     // Neutral restorers are still evaluated inside this union in stack order.
-    if (field.Pixels.empty() && !modifiers.empty())
+    if (field.Pixels.empty() && field.GroundDarkening.empty() && !modifiers.empty())
     {
         int32 loX = width, loZ = height, hiX = -1, hiZ = -1;
         for (const auto& mod : modifiers)
@@ -70,7 +73,8 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
             const bool lowers = std::any_of(mod.Effects.begin(), mod.Effects.end(), [](const auto& fx) {
                 return fx.EffectKind == ResolvedEffect::Kind::Grass
                     && (Components::ClampTerrainGrassEffectScale(fx.Grass.HeightScale) < 1
-                        || Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) < 1);
+                        || Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) < 1
+                        || Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale) < 1);
             });
             if (!lowers) continue;
             auto index = [](float32 value, float32 origin, float32 size, uint32 count, bool upper) {
@@ -95,9 +99,11 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
     }
     if (modifiers.empty())
     {
-        changed |= field.IsActive();
+        changed |= field.IsActive() || !field.GroundDarkening.empty();
         std::vector<uint8>{}.swap(field.Pixels);
+        std::vector<uint8>{}.swap(field.GroundDarkening);
         field.NonNeutralTexels = 0;
+        field.NonNeutralDarkeningTexels = 0;
         minX = minZ = 0; maxX = width - 1; maxZ = height - 1;
     }
     else for (int32 z = minZ; z <= maxZ; ++z)
@@ -106,7 +112,7 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
         for (int32 x = minX; x <= maxX; ++x)
         {
             const float32 worldX = originX + sizeX * (static_cast<float32>(x) / (width - 1));
-            float32 heightScale = 1.0f, densityScale = 1.0f;
+            float32 heightScale = 1.0f, densityScale = 1.0f, darkeningScale = 1.0f;
             for (const auto& mod : modifiers)
             {
                 if (!mod.Enabled || worldX < mod.BoundsMinX || worldX > mod.BoundsMaxX
@@ -120,10 +126,26 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
                     if (fx.EffectKind != ResolvedEffect::Kind::Grass) continue;
                     heightScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.HeightScale) - heightScale) * weight;
                     densityScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) - densityScale) * weight;
+                    darkeningScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale)
+                                       - darkeningScale) * weight;
                 }
             }
             const uint8 h = static_cast<uint8>(std::lround(std::clamp(heightScale, 0.0f, 1.0f) * 255.0f));
             const uint8 d = static_cast<uint8>(std::lround(std::clamp(densityScale, 0.0f, 1.0f) * 255.0f));
+            const uint8 g = static_cast<uint8>(std::lround(std::clamp(darkeningScale, 0.0f, 1.0f) * 255.0f));
+            if (!field.GroundDarkening.empty() || g != 255)
+            {
+                if (field.GroundDarkening.empty())
+                    field.GroundDarkening.assign(static_cast<size_t>(width) * height, 255);
+                uint8& stored = field.GroundDarkening[static_cast<size_t>(z) * width + x];
+                if (stored != g)
+                {
+                    if (stored != 255) --field.NonNeutralDarkeningTexels;
+                    if (g != 255) ++field.NonNeutralDarkeningTexels;
+                    stored = g;
+                    changed = true;
+                }
+            }
             if (field.Pixels.empty() && h == 255 && d == 255) continue;
             if (field.Pixels.empty())
                 field.Pixels.assign(static_cast<size_t>(width) * height * kTerrainGrassFieldChannels, 255);
@@ -136,6 +158,7 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
         }
     }
     if (!field.NonNeutralTexels) std::vector<uint8>{}.swap(field.Pixels);
+    if (!field.NonNeutralDarkeningTexels) std::vector<uint8>{}.swap(field.GroundDarkening);
     field.Initialized = true;
     if (changed)
     {

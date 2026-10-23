@@ -4,6 +4,9 @@ project(PathfindingECS LANGUAGES CXX)
 
 add_library(PathfindingECS OBJECT
     Source/Navigation.cpp
+    Source/NavigationAgentReflection.cpp
+    Source/NavigationAgentRequests.cpp
+    Source/NavigationBakedData.cpp
     Source/NavigationComponentInstantiations.cpp
     Source/NavigationGridBake.cpp
     Source/NavigationMeshBake.cpp
@@ -58,6 +61,7 @@ target_link_libraries(PathfindingECS
 if(BUILD_TESTING)
     find_package(GTest REQUIRED)
     add_executable(PathfindingECSTests
+        Tests/NavigationAgentTests.cpp
         Tests/NavigationServiceTests.cpp
         Tests/NavSystemIntegrationTests.cpp
         Tests/NavigationComprehensiveTests.cpp
@@ -71,6 +75,8 @@ if(BUILD_TESTING)
         Tests/NavigationSurfaceGatingTests.cpp
         Tests/NavigationSurfaceOwnershipTests.cpp
         Tests/NavigationSurfaceTests.cpp
+        Tests/NavigationSurfaceBakedDataTests.cpp
+        Tests/NavigationSurfaceDirtyTileTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
     )
     # Test files each declare anonymous-namespace constants (kDeltaTime,
@@ -83,7 +89,9 @@ if(BUILD_TESTING)
     # exports the GE_* hot-reload dispatcher, so no local stub compile is
     # needed either.
     target_link_libraries(PathfindingECSTests PRIVATE Engine GTest::gtest GTest::gtest_main)
-    target_include_directories(PathfindingECSTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests) # TestTempDir.h
+    target_include_directories(PathfindingECSTests PRIVATE
+        ${CMAKE_SOURCE_DIR}/Tests          # TestTempDir.h
+        ${CMAKE_SOURCE_DIR}/Engine/Tests)  # EngineLogCapture.h
     ge_set_output_tests(PathfindingECSTests)
     ge_stage_runtime_dependencies(PathfindingECSTests)
     add_test(NAME PathfindingECSTests COMMAND PathfindingECSTests)

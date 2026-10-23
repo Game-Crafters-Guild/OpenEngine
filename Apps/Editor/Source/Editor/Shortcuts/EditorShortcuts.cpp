@@ -35,7 +35,7 @@ std::string KeyCodeDisplayName(int keyCode)
         case kKeyCode_Escape:     return "Esc";
         case kKeyCode_Tab:        return "Tab";
         case kKeyCode_Backspace:  return "Backspace";
-        case kKeyCode_Delete:     return "Delete";
+        case kKeyCode_Delete:     return "Del";
         case kKeyCode_Insert:     return "Insert";
         case kKeyCode_Home:       return "Home";
         case kKeyCode_End:        return "End";
@@ -208,10 +208,10 @@ const std::vector<ShortcutCatalogEntry>& GetShortcutCatalog()
     const bool isApple = Platform::PrimaryShortcutModifierIsCommand();
     const int kDefaultPrimaryShortcutModifier = isApple ? kModSuper : kModControl;
     const int kAlternatePrimaryShortcutModifier = isApple ? kModControl : kModSuper;
-    // Finder renames on Return, so the Assets panel does too. F2 stays the
-    // cross-platform binding; elsewhere Return keeps its open behaviour, which
-    // is what Explorer and the Linux file managers do.
-    const int kAssetsRenameAlternateKey = isApple ? kKeyCode_Enter : 0;
+    // Finder renames on Return, so the Assets panel and the Hierarchy do too.
+    // F2 stays the cross-platform binding; elsewhere Return keeps its open
+    // behavior, which is what Explorer and the Linux file managers do.
+    const int kRenameAlternateKey = isApple ? kKeyCode_Enter : 0;
     static const std::vector<ShortcutCatalogEntry> kCatalog = {
         // --- Global (editable; consumed via MatchesCatalogShortcut / InputSystem) ---
         {"Global", "Save Scene",         kEditorGlobalContext, kEditorSaveScene,      kKeyCode_S,      kDefaultPrimaryShortcutModifier, false,
@@ -268,11 +268,13 @@ const std::vector<ShortcutCatalogEntry>& GetShortcutCatalog()
         {"Hierarchy", "Duplicate", 0, 0, kKeyCode_D,      kDefaultPrimaryShortcutModifier, false,
                                          kKeyCode_D,      kAlternatePrimaryShortcutModifier},
         {"Hierarchy", "Delete",    0, 0, kKeyCode_Delete, 0, false},
+        {"Hierarchy", "Rename",    0, 0, kKeyCode_F2,     0, false,
+                                   kRenameAlternateKey, 0},
 
         // --- Assets Panel (hardcoded) -------------------------------------
         {"Assets", "Toggle Preview", 0, 0, kKeyCode_F, kModShift, false},
         {"Assets", "Rename",         0, 0, kKeyCode_F2, 0, false,
-                                     kAssetsRenameAlternateKey, 0},
+                                     kRenameAlternateKey, 0},
 
         // --- Asset Preview (editable wheel bindings; consumed by AssetViewPanel)
         {"Asset Preview", "Dolly In/Out",      0, 0, kShortcutKeyMouseScroll, 0,           false},
@@ -523,6 +525,24 @@ bool MatchesCatalogShortcut(const char* groupLabel, const char* displayName,
         return false;
     }
     return false;
+}
+
+std::string CatalogShortcutLabel(const char* groupLabel, const char* displayName)
+{
+    if (!groupLabel || !displayName)
+        return {};
+    const auto& catalog = GetShortcutCatalog();
+    const auto& cached = CachedCatalogBindings();
+    for (size_t i = 0; i < catalog.size(); ++i)
+    {
+        if (std::strcmp(catalog[i].groupLabel, groupLabel) != 0 ||
+            std::strcmp(catalog[i].displayName, displayName) != 0)
+            continue;
+        if (cached[i].empty())
+            return {};
+        return FormatShortcutBinding(cached[i].front().key, cached[i].front().mods);
+    }
+    return {};
 }
 
 bool MatchesItemResizeGesture(int mods)

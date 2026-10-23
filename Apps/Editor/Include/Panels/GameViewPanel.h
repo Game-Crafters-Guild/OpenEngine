@@ -15,6 +15,10 @@ struct AssetLoadHandle;
 class UIElement;
 class UIManager;
 class Label;
+namespace UI
+{
+class IUiDispatcher;
+}
 
 // Game View panel:
 // - displays engine("game_main") (provided by GameViewController)
@@ -33,10 +37,17 @@ class GameViewPanel : public DockPanel
     void SetNoCameraOverlayVisible(bool visible);
 
     // Forward each viewport input transition immediately, normalized to its rect.
-    // The callback resolves the current window/controller, rather than retaining
-    // a controller across tear-off/redock. false ends the surface's gesture.
-    using PointerCallback = std::function<void(bool over, float x, float y, bool down, int mods)>;
-    void SetPointerCallback(PointerCallback callback);
+    // The callbacks resolve the current window/controller, rather than retaining
+    // a controller across tear-off/redock.
+    //
+    // The position callback carries hover and hit-testing; over == false ends the
+    // surface's gesture. The button callback carries each button edge with its
+    // index (Input::kMouseButton_*), after the position of that same edge.
+    // Every call cancels the current gesture and drops anything queued for the old
+    // pair. A null position callback removes the sink, buttons included.
+    using PointerCallback = std::function<void(bool over, float x, float y, int mods)>;
+    using PointerButtonCallback = std::function<void(int button, bool pressed, int mods)>;
+    void SetPointerCallbacks(PointerCallback position, PointerButtonCallback button);
     // Final owner teardown: revoke queued callbacks without invoking the sink.
     // The owner cancels surviving hosts before calling this.
     void ClearPointerCallback();
@@ -60,7 +71,9 @@ class GameViewPanel : public DockPanel
     void RegisterViewportPointerHandlers(UIElement& viewport);
     void CancelViewportPointer();
     void ClearViewportPointerHandlers();
-    void ForwardViewportPointer(bool over, float x, float y, bool down, int mods);
+    void ForwardViewportPointer(bool over, float x, float y, int mods);
+    void ForwardViewportButton(int button, bool pressed, int mods);
+    UI::IUiDispatcher* PointerDispatcher();
 
   private:
     // Deferred layout bind. Three entry points reach it — the pre-mount warmup, the dock
@@ -80,11 +93,10 @@ class GameViewPanel : public DockPanel
     // Desired overlay visibility even before the UXML has been bound (when m_NoCameraLabel is null).
     bool m_NoCameraOverlayVisible = true;
 
-    // Moves preserve the delivered primary state; leaving the surface cancels it.
-    bool m_PointerDown = false;
     struct PointerSink
     {
         PointerCallback Callback;
+        PointerButtonCallback ButtonCallback;
         uint64_t Generation = 0;
     };
     std::shared_ptr<PointerSink> m_PointerSink;

@@ -25,6 +25,7 @@
 #include "Core/CpuProfiler.h"
 #include "MeshPicking/MeshBvh.h"
 #include "MeshPicking/PickTypes.h"
+#include "SceneView/SceneViewEye.h"
 #include "Scene/SceneTlas.h"
 
 #include "Picking/EditorPickProviders.h"
@@ -207,6 +208,10 @@ bool TestEntityHit(const Mathematics::Ray3D& ray,
 {
     if (!mr.RenderLayers.Intersects(options.LayerMask))
         return false;
+    // A shadows-only mesh draws in no color pass: a ray passes through it, and the user selects it
+    // in the Hierarchy.
+    if (mr.shadowCasting == Components::ShadowCasting::ShadowsOnly)
+        return false;
 
     const Mathematics::BoundingBox kDefault{};
     const auto box = (bounds ? bounds->Box : kDefault).TransformToAABB(worldXf.matrix);
@@ -313,7 +318,8 @@ bool RaycastSingleEntity(const Mathematics::Ray3D& ray,
     const auto* mr      = world.GetComponent<Components::MeshRenderer>(entity);
     const auto* bounds  = world.GetComponent<Components::LocalBounds>(entity);
     const auto* sector  = world.GetComponent<Components::WorldSectorCoord>(entity);
-    if (!worldXf || !mr)
+    // A mesh the Scene View eye hides is not drawn there, so a ray passes through it.
+    if (!worldXf || !mr || IsHiddenInSceneView(world, entity))
         return false;
     const float32 sectorSize = Scene::GetSceneTlas(world).GetSectorSize();
     const Components::WorldTransform effectiveXf =
@@ -497,7 +503,7 @@ PickResult RaycastScene(const Mathematics::Ray3D& ray,
 
             const auto* worldXf = world.GetComponent<Components::WorldTransform>(inst.Entity);
             const auto* mr      = world.GetComponent<Components::MeshRenderer>(inst.Entity);
-            if (!worldXf || !mr)
+            if (!worldXf || !mr || IsHiddenInSceneView(world, inst.Entity))
                 return true;
             const auto* bounds  = world.GetComponent<Components::LocalBounds>(inst.Entity);
             const auto* sector  = world.GetComponent<Components::WorldSectorCoord>(inst.Entity);
@@ -580,7 +586,7 @@ void RaycastSceneAll(const Mathematics::Ray3D& ray,
         auto cb = [&](const Scene::TlasInstance& inst, float32 /*tEnter*/, float32 /*tExit*/) -> bool {
             const auto* worldXf = world.GetComponent<Components::WorldTransform>(inst.Entity);
             const auto* mr      = world.GetComponent<Components::MeshRenderer>(inst.Entity);
-            if (!worldXf || !mr)
+            if (!worldXf || !mr || IsHiddenInSceneView(world, inst.Entity))
                 return true;
             const auto* bounds  = world.GetComponent<Components::LocalBounds>(inst.Entity);
             const auto* sector  = world.GetComponent<Components::WorldSectorCoord>(inst.Entity);

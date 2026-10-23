@@ -201,6 +201,12 @@ uint GrassClumpCodeFromFlags(uint flags)
 // GrassBladeInstance::RandAndCoverage: bits 0-15 the per-blade random (unorm16), bits 16-23 the
 // field coverage at the blade's site (unorm8, terrain_grass_canopy.glsl), bits 24-31 unused.
 //
+// GrassBladeInstance::RootColor: the ground colour under the blade's root, linear RGB clamped to
+// [0, 1], each channel stored as its square root in 10 bits (red in bits 0-9, green 10-19, blue
+// 20-29; bits 30-31 unused). The square root spends the code values where the eye tells colours
+// apart: a decoded channel is within 0.1% of full scale of the value written, and within 1% of
+// the value itself down to 0.01.
+//
 // Lifted verbatim into the host suite (GrassPlacementModelTests runs the shipped pack and unpack),
 // so its literals carry the `f` suffix.
 // GE_SHARED_GRASS_BLADE_SHAPE_BEGIN
@@ -282,6 +288,36 @@ float GrassUnpackRand(uint packed)
 float GrassUnpackCoverage(uint packed)
 {
     return float((packed >> kGrassCoverageShift) & kGrassBladeShapeFieldMask) * (1.0f / 255.0f);
+}
+
+const uint kGrassRootColorChannelMask = 1023u;
+const float kGrassRootColorLevels = 1023.0f;
+const uint kGrassRootColorGreenShift = 10u;
+const uint kGrassRootColorBlueShift = 20u;
+
+uint GrassRootColorChannelBits(float linear)
+{
+    return uint(floor(sqrt(clamp(linear, 0.0f, 1.0f)) * kGrassRootColorLevels + 0.5f))
+        & kGrassRootColorChannelMask;
+}
+
+float GrassRootColorChannel(uint packed, uint shift)
+{
+    float encoded = float((packed >> shift) & kGrassRootColorChannelMask) * (1.0f / kGrassRootColorLevels);
+    return encoded * encoded;
+}
+
+uint GrassPackRootColor(vec3 color)
+{
+    return GrassRootColorChannelBits(color.x)
+        | (GrassRootColorChannelBits(color.y) << kGrassRootColorGreenShift)
+        | (GrassRootColorChannelBits(color.z) << kGrassRootColorBlueShift);
+}
+
+vec3 GrassUnpackRootColor(uint packed)
+{
+    return vec3(GrassRootColorChannel(packed, 0u), GrassRootColorChannel(packed, kGrassRootColorGreenShift),
+                GrassRootColorChannel(packed, kGrassRootColorBlueShift));
 }
 // GE_SHARED_GRASS_BLADE_SHAPE_END
 

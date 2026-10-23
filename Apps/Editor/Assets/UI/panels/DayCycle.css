@@ -1,0 +1,243 @@
+/* The Day Cycle window (DayCycle/DayCycleWindow.cpp) and the Day Cycle profile's inspector
+   (DayCycle/DayCycleProfileInspector.cpp): the toolbar, the scrub and the track rows both build
+   (DayCycle/DayCycleTrackRows.cpp, DayCycle/DayCycleProfileControls.cpp). */
+
+.day-cycle-window {
+	flex-direction: column;
+	flex-grow: 1;
+	min-height: 0;
+}
+
+.day-cycle-window-root {
+	flex-direction: column;
+	flex-grow: 1;
+	min-height: 0;
+	gap: 6px;
+	padding: 8px;
+}
+
+.day-cycle-scroll {
+	flex-grow: 1;
+	min-height: 0;
+}
+
+.day-cycle-content {
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px;
+}
+
+.day-cycle-toolbar {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding-bottom: 6px;
+	border-bottom-width: 1px;
+	border-color: var(--ui_color_border);
+}
+
+.day-cycle-toolbar-label {
+	color: var(--ui_color_text_secondary);
+}
+
+.day-cycle-profile-name {
+	color: var(--ui_color_text_bright);
+}
+
+.day-cycle-volume {
+	color: var(--ui_color_text_dim);
+}
+
+.day-cycle-axis-toggle {
+	flex-direction: row;
+	gap: 2px;
+}
+
+/* The axis choices are shared Buttons, whose own sheet styles them; these rules name .button to
+   outrank it, and only change what marks a choice and the leading one. */
+.button.day-cycle-axis-choice {
+	padding-left: 8px;
+	padding-right: 8px;
+	opacity: 0.7;
+}
+
+.button.day-cycle-axis-choice-active {
+	background-color: var(--ui_color_accent_blue);
+	border-color: var(--ui_color_accent_blue);
+	color: var(--ui_color_text_bright);
+	opacity: 1.0;
+}
+
+/* The chosen view stays blue under the pointer, darker, so its white text keeps its contrast. */
+.button.day-cycle-axis-choice-active:hover {
+	background-color: var(--ui_color_accent_blue_pressed);
+	border-color: var(--ui_color_accent_blue_pressed);
+}
+
+.day-cycle-save {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.day-cycle-save-caption {
+	color: var(--ui_color_text_dim);
+}
+
+.day-cycle-presets {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+}
+
+.day-cycle-presets-title {
+	color: var(--ui_color_text_secondary);
+}
+
+.day-cycle-scrub {
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+}
+
+.day-cycle-scrub-readout {
+	color: var(--ui_color_text_bright);
+}
+
+.day-cycle-notice {
+	color: var(--ui_color_warning_text);
+}
+
+.day-cycle-caption {
+	color: var(--ui_color_text_dim);
+}
+
+.day-cycle-tracks {
+	flex-direction: column;
+	gap: 8px;
+}
+
+.day-cycle-track {
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px;
+	border-width: 1px;
+	border-color: var(--ui_color_border);
+	border-radius: 4px;
+}
+
+.day-cycle-track-header {
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.day-cycle-track-title {
+	color: var(--ui_color_text_bright);
+}
+
+.day-cycle-track-readout {
+	color: var(--ui_color_accent_green);
+}
+
+.day-cycle-track-body {
+	flex-direction: row;
+	gap: 8px;
+}
+
+.day-cycle-track-graph {
+	flex-grow: 1;
+	min-width: 160px;
+}
+
+.day-cycle-track-side {
+	flex-direction: column;
+	flex-shrink: 0;
+	width: 150px;
+	gap: 4px;
+}
+
+.day-cycle-track-side-caption {
+	color: var(--ui_color_text_dim);
+}
+
+.day-cycle-track-now {
+	color: var(--ui_color_text_bright);
+}
+
+.day-cycle-track-source {
+	color: var(--ui_color_text_secondary);
+}
+
+.day-cycle-track-split {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.day-cycle-track-empty {
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px;
+}
+
+.day-cycle-track-empty-text {
+	color: var(--ui_color_text_dim);
+}
+
+/* A label and the control it names, kept on one line when the toolbar wraps. */
+.day-cycle-toolbar-group {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+/* The profile inspector's header row: the window button at the left, Save and its mark at the right.
+   In a narrow inspector Save and its mark wrap under the button, still at the right. */
+.day-cycle-header-actions {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	flex-grow: 1;
+	row-gap: 4px;
+}
+
+/* Save and its mark at the right of the inspector's header row, on whichever line they land. */
+.day-cycle-save-trailing {
+	margin-left: auto;
+}
+
+/* A split track: the half the playhead is not on, drawn in the dawn color. The control class in the
+   selector outranks CurveField.css, which the control requests for its own subtree. */
+.curve-field.day-cycle-track-graph-split {
+	--curve-field-reference-line-color: rgba(250, 200, 90, 0.95);
+}
+
+/* Every key white, the ends' color: amber would read as the dawn half's yellow. */
+.curve-field.day-cycle-track-graph {
+	--curve-field-interior-key-color: rgb(199, 235, 255);
+}
+
+/* The time-of-day view: the profile's own curve drawn through the day. */
+.curve-field.day-cycle-track-graph-day {
+	--curve-field-reference-line-color: rgba(130, 190, 255, 0.95);
+}
+
+.day-cycle-track-legend {
+	color: var(--ui_color_text_secondary);
+}
+
+/* The scrub strip: the tracks' axis with a thin grab band. */
+.day-cycle-scrub-graph {
+	--curve-field-plot-height: 28px;
+}
+
+.day-cycle-scrub-off {
+	opacity: 0.45;
+}

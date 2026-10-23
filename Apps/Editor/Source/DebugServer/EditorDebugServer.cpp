@@ -419,7 +419,7 @@ bool EditorDebugServer::Dispatch(PendingRequest& req)
         else
         {
             // A copy: the gates' context still reads the held request's parameters.
-            const RequestContext ctx{req.id, req.params};
+            const RequestContext ctx{req.id, req.params, req.clientId};
             result = handler->second(ctx);
         }
     }

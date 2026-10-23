@@ -12,6 +12,7 @@
 #include "Assets/ModelAsset.h"
 #include "AssetCore/GUID.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/GPUInstanceDepthClass.h"
 #include "Rendering/Core/GPUScene.h"
 
 using namespace GameEngine;
@@ -414,7 +415,8 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_ListsOneBatchAsOneDrawWh
 
 // The frustum cull removes instances from the CAMERA set only. A caster
 // outside the camera frustum still casts into it, so the shadow set keeps it —
-// and a non-caster never reaches the shadow set at all.
+// and a non-caster never reaches the shadow set at all. A shadows-only caster
+// is in the shadow set and never in the camera set.
 TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_CullsCameraSetButKeepsOffscreenCasters)
 {
     auto device = CreateVulkanDeviceFast();
@@ -437,6 +439,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_CullsCameraSetButKeepsOf
     const uint32_t inFrustumCaster = AddPointInstance(*scene, 0.0f, 0.0f, 0.5f);
     const uint32_t offscreenCaster = AddPointInstance(*scene, 100.0f, 0.0f, 0.5f);
     const uint32_t inFrustumNonCaster = AddPointInstance(*scene, 0.5f, 0.5f, 0.5f);
+    const uint32_t inFrustumShadowsOnly = AddPointInstance(*scene, -0.5f, 0.0f, 0.5f);
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
     rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
@@ -446,32 +449,100 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_CullsCameraSetButKeepsOf
         MakeRecord(viewId, mesh, mat, inFrustumCaster, kSubmissionFlagCastShadows),
         MakeRecord(viewId, mesh, mat, offscreenCaster, kSubmissionFlagCastShadows),
         MakeRecord(viewId, mesh, mat, inFrustumNonCaster, 0u),
+        MakeRecord(viewId, mesh, mat, inFrustumShadowsOnly,
+                   kSubmissionFlagCastShadows | kSubmissionFlagShadowsOnly),
     };
 
     WorldDrawBuilder wdb;
     wdb.BeginFrame();
-    wdb.Submit(std::span<const WorldSubmissionRecord>(recs, 3u));
+    wdb.Submit(std::span<const WorldSubmissionRecord>(recs, 4u));
     wdb.BuildBatchKeys(rs.GetMeshGPURegistry());
 
     CpuDrawStreamBuilder cds;
     cds.Build(wdb, rs.GetMeshGPURegistry(), *scene, rs.Views(), nullptr);
 
-    // Camera set: the two in-frustum instances.
+    // Camera set: the in-frustum caster and non-caster; the offscreen caster is
+    // culled and the shadows-only caster draws in no color pass.
     const CpuDrawStreamBuilder::InstanceList camera = cds.GetInstances(
         viewId, 7u, entry->gpuMeshIndex, CpuDrawStreamBuilder::InstanceSet::Camera);
-    EXPECT_EQ(camera.Count, 2u) << "the offscreen instance must be culled";
+    ASSERT_EQ(camera.Count, 2u) << "the offscreen and the shadows-only instances must be culled";
     EXPECT_EQ(cds.GetStats().CameraVisible, 2u);
+    const std::span<const uint32_t> list = cds.GetIndexList(viewId);
+    ASSERT_GE(list.size(), camera.First + camera.Count);
+    EXPECT_EQ(list[camera.First], inFrustumCaster);
+    EXPECT_EQ(list[camera.First + 1u], inFrustumNonCaster);
 
-    // Shadow set: both casters, including the offscreen one; the non-caster is
-    // absent.
+    // Shadow set: the three casters, including the offscreen one; the
+    // non-caster is absent.
     const CpuDrawStreamBuilder::InstanceList shadow = cds.GetInstances(
         viewId, 7u, entry->gpuMeshIndex, CpuDrawStreamBuilder::InstanceSet::ShadowCasters);
-    ASSERT_EQ(shadow.Count, 2u) << "both casters draw, camera-culled or not";
-    const std::span<const uint32_t> list = cds.GetIndexList(viewId);
+    ASSERT_EQ(shadow.Count, 3u) << "every caster draws, camera-culled or not";
     ASSERT_GE(list.size(), shadow.First + shadow.Count);
     EXPECT_EQ(list[shadow.First], inFrustumCaster);
     EXPECT_EQ(list[shadow.First + 1u], offscreenCaster);
-    EXPECT_EQ(cds.GetStats().ShadowCasters, 2u);
+    EXPECT_EQ(list[shadow.First + 2u], inFrustumShadowsOnly);
+    EXPECT_EQ(cds.GetStats().ShadowCasters, 3u);
+
+    rs.Shutdown();
+    device->Shutdown();
+}
+
+// The compatibility draw stream of the editor Scene View leaves out what its eye hides, from the
+// camera set and the shadow set alike; a Game view over the same camera keeps the hidden caster in
+// both.
+TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_TheSceneViewLeavesOutWhatItsEyeHides)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    RenderServices rs;
+    ASSERT_TRUE(rs.Initialize(device.get()));
+    Rendering::GPUScene* scene = rs.GetGPUScene();
+    ASSERT_NE(scene, nullptr);
+
+    Rendering::MeshGPUHandle mesh = RegisterTestMesh(rs);
+    const auto* entry = rs.GetMeshGPURegistry().Find(mesh);
+    ASSERT_NE(entry, nullptr);
+
+    Material mat = Material::TestFactory::Create(GUID::Generate(), "Mat", 32u);
+    Material::TestFactory::SetGraphicsPipelineId(mat, Rendering::GraphicsPipelineId{1u});
+    Material::TestFactory::SetGpuSceneMaterialIndex(mat, 7u);
+
+    const uint32_t shown = AddPointInstance(*scene, 0.0f, 0.0f, 0.5f);
+    const uint32_t hidden = AddPointInstance(*scene, 0.5f, 0.0f, 0.5f);
+
+    const CameraId camId = rs.Views().AllocateCamera("cam");
+    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    const ViewId sceneView = rs.Views().AllocateView("scene", camId, Rendering::ViewPurpose::EditorScene);
+    const ViewId gameView = rs.Views().AllocateView("game", camId, Rendering::ViewPurpose::Game);
+
+    constexpr uint32_t kHiddenCaster = kSubmissionFlagCastShadows | Rendering::kInstanceFlagEditorHidden;
+    const WorldSubmissionRecord recs[] = {
+        MakeRecord(sceneView, mesh, mat, shown, kSubmissionFlagCastShadows),
+        MakeRecord(sceneView, mesh, mat, hidden, kHiddenCaster),
+        MakeRecord(gameView, mesh, mat, shown, kSubmissionFlagCastShadows),
+        MakeRecord(gameView, mesh, mat, hidden, kHiddenCaster),
+    };
+
+    WorldDrawBuilder wdb;
+    wdb.BeginFrame();
+    wdb.Submit(std::span<const WorldSubmissionRecord>(recs, 4u));
+    wdb.BuildBatchKeys(rs.GetMeshGPURegistry());
+
+    CpuDrawStreamBuilder cds;
+    cds.Build(wdb, rs.GetMeshGPURegistry(), *scene, rs.Views(), nullptr);
+
+    using Set = CpuDrawStreamBuilder::InstanceSet;
+    for (const Set set : {Set::Camera, Set::ShadowCasters})
+    {
+        SCOPED_TRACE(set == Set::Camera ? "camera set" : "shadow set");
+        const auto sceneList = cds.GetInstances(sceneView, 7u, entry->gpuMeshIndex, set);
+        ASSERT_EQ(sceneList.Count, 1u) << "the Scene View leaves the hidden instance out";
+        EXPECT_EQ(cds.GetIndexList(sceneView)[sceneList.First], shown);
+        EXPECT_EQ(cds.GetInstances(gameView, 7u, entry->gpuMeshIndex, set).Count, 2u)
+            << "the Game View keeps it";
+    }
 
     rs.Shutdown();
     device->Shutdown();

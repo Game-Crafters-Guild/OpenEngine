@@ -23,9 +23,9 @@ class VolumetricFogNode final : public IRenderPipelineNode
     std::string m_OutputRef = Names::View::Resolve;
     // The view depth after every world depth writer (the phase-B recover, forward draws that write
     // their own depth, the water), published as View.DepthResolvedPostOcean. The ocean surface step
-    // publishes it on frames the water draws; on other fog frames this resolve takes it, so the fog
-    // never reads the copy taken right after the prepass, and the auto-exposure meter after the fog
-    // reads the same depth.
+    // publishes it on frames the water draws and the reflections on frames they trace; on other fog
+    // frames this resolve takes it, so the fog never reads the copy taken right after the prepass,
+    // and the auto-exposure meter after the fog reads the same depth.
     DepthResolveNode m_PostWorldDepthResolve;
 };
 

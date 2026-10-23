@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "name": "RenderLayers",
+  "hash": "0x97c258c50d4dbbc8",
+  "constants": [],
+  "enums": [],
+  "events": [],
+  "functions": [
+    {
+      "id": "RenderLayers.Find",
+      "name": "Find",
+      "cpp": "GameEngine::Rendering::Script::Find",
+      "header": "Rendering/RenderLayersScriptApi.h",
+      "line": 22,
+      "doc": "The layer called `name`, as a mask of that one layer, or no layer (RenderLayerMask.None) when no layer has that name. The match is exact and case-sensitive, against the names the editor shows: an unnamed layer answers to \"Default\" (layer 0) or \"Layer N\". Look a name up once, at a system's start, and keep the mask.",
+      "thread": "engine",
+      "returns": {
+        "kind": "RenderLayerMask"
+      },
+      "params": [
+        {
+          "name": "name",
+          "kind": "String"
+        }
+      ]
+    },
+    {
+      "id": "RenderLayers.NameOf",
+      "name": "NameOf",
+      "cpp": "GameEngine::Rendering::Script::NameOf",
+      "header": "Rendering/RenderLayersScriptApi.h",
+      "line": 27,
+      "doc": "The name of the one layer in `layer`: its project name, else \"Default\" for layer 0 and \"Layer N\" for the others. A mask of no layer or of several layers has no name: the text is empty.",
+      "thread": "engine",
+      "returns": {
+        "kind": "String"
+      },
+      "params": [
+        {
+          "name": "layer",
+          "kind": "RenderLayerMask"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": []
+}

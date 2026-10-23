@@ -20,6 +20,7 @@
 #include <functional>
 #include <atomic>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -534,6 +535,7 @@ class PipelineVariantCache
         // would tear under an off-thread GetOrCompile mid-copy during source-set churn.
         MaterialBuildContext BuildContext;
         std::string Name;
+        std::filesystem::path MaterialAssetPath;
         uint32_t MaterialVersion = 0;
         GraphicsPipelineId BaseGraphicsPipelineId{}; // color only (base template copy)
         bool IsDepth = false;

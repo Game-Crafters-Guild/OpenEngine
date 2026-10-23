@@ -201,20 +201,23 @@ struct OceanSurface
     float32 SubSurfaceSunFallOff = 5.0f;
 
     // --- Reflection (IOR-driven Schlick Fresnel) ---
-    // Reflection intensity (caps the sky blend), microfacet roughness, and the
-    // two indices of refraction that set the base reflectance R0.
-    float32 Specular = 0.7f;
-    float32 Roughness = 0.0f;
+    // Scale on the Fresnel reflection of the surroundings (1 = the full reflection;
+    // lower values let the water body show through), microfacet roughness (it sets
+    // the width of every light's highlight; 0.12 is the value the example scenes
+    // author), and the two indices of refraction that set the base reflectance R0.
+    float32 Specular = 1.0f;
+    float32 Roughness = 0.12f;
     float32 IorAir = 1.0f;
     float32 IorWater = 1.333f;
 
-    // Use a planar reflection capture instead of only the procedural sky. The
-    // procedural sky remains the fallback when the capture declines for a frame.
+    // Draw a planar reflection capture over the reflected environment. On a frame
+    // the capture does not run, the water shows the reflected environment alone.
     bool PlanarReflections = true;
 
-    // Blends the planar reflection capture over the procedural reflected sky.
-    // 0 keeps the capture running but shows only sky; 1 uses the captured scene;
-    // up to 3 over-drives it brighter than the sky for a stronger mirror.
+    // How strongly the planar capture covers the reflected environment. 0 keeps the
+    // capture running but shows only the environment; 1 shows the captured objects
+    // over it where the capture drew them; above 1 (up to 3) brightens the captured
+    // objects.
     float32 PlanarReflectionStrength = 1.0f;
 
     // Resolution scale of the planar reflection capture relative to the main
@@ -228,14 +231,6 @@ struct OceanSurface
     ColorLinear SkyTowardsSun{0.27f, 0.39f, 0.49f, 1.0f};
     ColorLinear SkyAwayFromSun{0.06f, 0.13f, 0.26f, 1.0f};
     float32 SkyDirectionality = 1.0f;
-
-    // --- Directional-light glitter ---
-    // Tint, boost and falloff of the direct sun glitter spike on the water.
-    // White preserves the scene light colour; tint this to colour the bright
-    // reflected glints without changing the actual Directional Light.
-    ColorLinear DirectionalLightColor{1.0f, 1.0f, 1.0f, 1.0f};
-    float32 DirectionalLightBoost = 7.0f;
-    float32 DirectionalLightFallOff = 275.0f;
 
     // --- Refraction / depth-fog transparency ---
     // Per-channel extinction of the scene seen through the water. The surface

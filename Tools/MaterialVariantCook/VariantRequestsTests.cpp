@@ -149,12 +149,16 @@ TEST(MaterialCookVariants, TransmissionAddsAGrabRowForEveryColourRowTheTransmiss
 
     auto glass = table;
     ExpandSceneColorGrabVariants(glass, true);
-    ASSERT_EQ(glass.size(), table.size() + 2u);
+    ASSERT_EQ(glass.size(), table.size() + 3u);
     EXPECT_EQ(glass[8].Name, "forward-color-scene-grab");
     EXPECT_EQ(glass[8].PassKeywords, colour | MaterialKeyword::SceneColorGrab);
     EXPECT_EQ(glass[9].Name, "forward-color-ibl-scene-grab");
     EXPECT_EQ(glass[9].PassKeywords, colour | MaterialKeyword::IBL | MaterialKeyword::SceneColorGrab);
     EXPECT_EQ(glass[9].VertexFlags, VertexAttributeFlags::SkinnedMesh);
+    // The transmissive pass of a view with screen-space reflections draws with their keyword.
+    EXPECT_EQ(glass[10].Name, "forward-color-sssr-scene-grab");
+    EXPECT_EQ(glass[10].PassKeywords,
+              colour | MaterialKeyword::SSSRNormalRoughness | MaterialKeyword::SceneColorGrab);
 }
 
 // Every alpha mode an imported mesh material can carry has a standard-PBR target, so a cooked-only

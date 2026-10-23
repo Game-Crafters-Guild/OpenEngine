@@ -3,6 +3,7 @@
 #include "Engine/Rendering/IRenderFeature.h"
 #include "Rendering/Sky/SkyRenderer.h"
 #include "Rendering/Sky/SkySettings.h"
+#include "Rendering/Sky/SkySunState.h"
 #include "Rendering/Sky/SkySystem.h"
 
 // Explicit imports from the Rendering module (CodingStyle: no namespace-scope using-directives in headers).
@@ -11,7 +12,6 @@ namespace GameEngine::Engine::Renderer
 using ::GameEngine::Rendering::IDevice;
 using ::GameEngine::Rendering::SkyRenderer;
 using ::GameEngine::Rendering::SkySettings;
-using ::GameEngine::Rendering::SkySystemState;
 } // namespace GameEngine::Engine::Renderer
 
 namespace GameEngine
@@ -24,11 +24,11 @@ class SkyRenderFeature : public IRenderFeature
     bool Initialize(Rendering::IDevice* device);
     bool IsInitialized() const { return m_Initialized; }
 
-    void SetSettings(const Rendering::SkySettings& settings,
-                     const Rendering::SkySystemState& state);
+    void SetSettings(const Rendering::SkySettings& settings, const Rendering::SkySunState& sunState);
     void ClearActiveSettings();
     const Rendering::SkySettings& GetSettings() const { return m_Settings; }
-    const Rendering::SkySystemState& GetSystemState() const { return m_State; }
+    /// The sun state the sky published with its settings this frame (SkySunState).
+    const Rendering::SkySunState& GetSunState() const { return m_SunState; }
     bool HasActiveSettings() const { return m_HasSettings; }
 
     Rendering::SkyRenderer& GetRenderer() { return m_Renderer; }
@@ -45,7 +45,7 @@ class SkyRenderFeature : public IRenderFeature
   private:
     Rendering::SkyRenderer m_Renderer;
     Rendering::SkySettings m_Settings;
-    Rendering::SkySystemState m_State;
+    Rendering::SkySunState m_SunState;
     bool m_HasSettings = false;
     bool m_Initialized = false;
 };

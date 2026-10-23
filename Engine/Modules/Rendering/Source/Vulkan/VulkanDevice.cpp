@@ -2561,6 +2561,9 @@ bool VulkanDevice::CreateLogicalDevice()
     // supported so capability reporting can assume support == enabled; gates
     // pipelines whose blend factors reference SRC1 (subpixel RGB text AA).
     deviceFeatures.dualSrcBlend = supportedFeatures.dualSrcBlend;
+    // Per-attachment blend state and write masks (near-universal). Enabled whenever
+    // supported so capability reporting can assume support == enabled.
+    deviceFeatures.independentBlend = supportedFeatures.independentBlend;
     // Depth clamp (core VK 1.0, universal on desktop). Backs
     // RasterizationState::depthClampEnable, which the directional shadow cascades
     // use for pancaking: a caster nearer the light than the cascade's near plane
@@ -3056,6 +3059,7 @@ bool VulkanDevice::CreateLogicalDevice()
         minimalFeatures.textureCompressionBC = supportedFeatures.textureCompressionBC;
         // Same contract for dual-source blending.
         minimalFeatures.dualSrcBlend = supportedFeatures.dualSrcBlend;
+        minimalFeatures.independentBlend = supportedFeatures.independentBlend;
         // Keep depth clamp in the fallback path too — the cascade depth PSOs are
         // built with depthClampEnable regardless of which device path created the
         // device, and a PSO requesting it without the feature is invalid usage.
@@ -3564,6 +3568,8 @@ void VulkanDevice::QueryDeviceCapabilities()
         m_Capabilities.supportsDualSourceBlending =
             (baseFeatures.dualSrcBlend == VK_TRUE) &&
             m_DeviceProperties.limits.maxFragmentDualSrcAttachments >= 1;
+        // Same contract for independentBlend.
+        m_Capabilities.supportsIndependentBlend = (baseFeatures.independentBlend == VK_TRUE);
         // Same contract for samplerAnisotropy: all three vkCreateDevice paths enable
         // it whenever supported (the main features, and minimalFeatures, which both
         // fallbacks pass). Without the feature a sampler must not enable anisotropy

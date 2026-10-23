@@ -6,6 +6,7 @@
 
 #include "Assets/AssetManager.h"
 #include "Rendering/Core/Device.h"
+#include "SharedHeadlessDevice.h"
 #include "UIRgTestHarness.h"
 #include "UI/Assets/UILayoutAsset.h"
 #include "UI/Parsers/XMLParser.h"
@@ -99,7 +100,7 @@ class ScopedEnvVar
 
 TEST(UIManagerFocusTests, AFocusedTextFieldConsumesOnlyTheChordsItImplements)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
@@ -110,7 +111,7 @@ TEST(UIManagerFocusTests, AFocusedTextFieldConsumesOnlyTheChordsItImplements)
     field->SetId("field");
     root->AddChild(std::move(field));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
     ui.SetFocusById("field");
 
@@ -169,7 +170,7 @@ class SavingPanel : public UIElement
 
 TEST(UIManagerFocusTests, AChordIsConsumedExactlyWhenAHandlerActsOnIt)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
@@ -180,7 +181,7 @@ TEST(UIManagerFocusTests, AChordIsConsumedExactlyWhenAHandlerActsOnIt)
     panel->SetId("panel");
     root->AddChild(std::move(panelOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
     ui.SetFocusById("panel");
 
@@ -205,11 +206,11 @@ TEST(UIManagerFocusTests, AChordIsConsumedExactlyWhenAHandlerActsOnIt)
 // binding for that keystroke away.
 TEST(UIManagerFocusTests, AHoveredPanelWithoutFocusDoesNotClaimTheSaveChord)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     auto root = std::make_unique<UIElement>();
     root->SetId("root");
@@ -222,7 +223,7 @@ TEST(UIManagerFocusTests, AHoveredPanelWithoutFocusDoesNotClaimTheSaveChord)
     field->SetId("field");
     root->AddChild(std::move(fieldOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto css = std::filesystem::temp_directory_path() / "ui_hovered_panel_save.css";
@@ -268,7 +269,7 @@ TEST(UIManagerFocusTests, AHoveredPanelWithoutFocusDoesNotClaimTheSaveChord)
 
 TEST(UIManagerFocusTests, ConsumptionFollowsWhatTheControlDoesWithTheKey)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
@@ -296,7 +297,7 @@ TEST(UIManagerFocusTests, ConsumptionFollowsWhatTheControlDoesWithTheKey)
     viewport->SetId("viewport");
     root->AddChild(std::move(viewport));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     EXPECT_FALSE(ui.OnKey(Input::kKeyCode_W, GLFW_PRESS, 0)) << "nothing focused";
@@ -328,11 +329,11 @@ TEST(UIManagerFocusTests, ConsumptionFollowsWhatTheControlDoesWithTheKey)
 
 TEST(UIManagerFocusTests, AHoveredFieldWithoutFocusLeavesTheKeyToWhateverIsBehindIt)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     auto root = std::make_unique<UIElement>();
     root->SetId("root");
@@ -342,7 +343,7 @@ TEST(UIManagerFocusTests, AHoveredFieldWithoutFocusLeavesTheKeyToWhateverIsBehin
     field->SetValue("ab");
     root->AddChild(std::move(fieldOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto css = std::filesystem::temp_directory_path() / "ui_hovered_field_keys.css";
@@ -384,7 +385,7 @@ TEST(UIManagerFocusTests, AHoveredFieldWithoutFocusLeavesTheKeyToWhateverIsBehin
 
 TEST(UIManagerFocusTests, ATextAreaThatCannotMoveItsCaretDoesNotClaimTheNavigationKey)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
@@ -394,7 +395,7 @@ TEST(UIManagerFocusTests, ATextAreaThatCannotMoveItsCaretDoesNotClaimTheNavigati
     area->SetId("area");
     root->AddChild(std::move(area));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
     ui.SetFocusById("area");
 
@@ -417,7 +418,7 @@ TEST(UIManagerFocusTests, ATextAreaThatCannotMoveItsCaretDoesNotClaimTheNavigati
 
 TEST(UIManagerInputTests, DebugHotkeysStayOutOfTheWayUntilTheEnvironmentAsksForThem)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
 
@@ -425,7 +426,7 @@ TEST(UIManagerInputTests, DebugHotkeysStayOutOfTheWayUntilTheEnvironmentAsksForT
     // its own UIManager and the value must be in place before it is built.
     {
         ScopedEnvVar off("GE_UI_DEBUG_KEYS", nullptr);
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         ui.SetRoot(std::make_unique<UIElement>());
 
         // Nothing focused, nothing hovered: a bare function key is nobody's
@@ -438,7 +439,7 @@ TEST(UIManagerInputTests, DebugHotkeysStayOutOfTheWayUntilTheEnvironmentAsksForT
 
     {
         ScopedEnvVar on("GE_UI_DEBUG_KEYS", "1");
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         ui.SetRoot(std::make_unique<UIElement>());
 
         EXPECT_TRUE(ui.OnKey(Input::kKeyCode_F4, GLFW_PRESS, 0));
@@ -450,12 +451,12 @@ TEST(UIManagerInputTests, DebugHotkeysStayOutOfTheWayUntilTheEnvironmentAsksForT
 
 TEST(UIManagerInputTests, ModifierReleaseIgnoresStalePlatformMask)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     ui.OnKey(Input::kKeyCode_LeftControl, GLFW_PRESS, Input::kModControl);
     EXPECT_NE(ui.GetModifierKeys() & Input::kModControl, 0);
@@ -467,12 +468,12 @@ TEST(UIManagerInputTests, ModifierReleaseIgnoresStalePlatformMask)
 
 TEST(UIManagerInputTests, ModifierReleasePreservesOtherPhysicalSide)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     ui.OnKey(Input::kKeyCode_LeftControl, GLFW_PRESS, Input::kModControl);
     ui.OnKey(Input::kKeyCode_RightControl, GLFW_PRESS, Input::kModControl);
@@ -485,12 +486,12 @@ TEST(UIManagerInputTests, ModifierReleasePreservesOtherPhysicalSide)
 
 TEST(UIManagerInputTests, FocusLossResetClearsHeldModifiers)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     ui.OnKey(Input::kKeyCode_LeftShift, Input::kKeyActionPress, Input::kModShift);
     ui.OnKey(Input::kKeyCode_LeftSuper, Input::kKeyActionPress, Input::kModShift | Input::kModSuper);
@@ -503,12 +504,12 @@ TEST(UIManagerInputTests, FocusLossResetClearsHeldModifiers)
 
 TEST(UIManagerInputTests, FocusLossResetClearsMaskDerivedModifier)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     // Shift was already down when this window took focus, so the manager only
     // learns it from the event mask - there is no physical Shift key event.
@@ -526,12 +527,12 @@ TEST(UIManagerInputTests, FocusLossResetClearsMaskDerivedModifier)
 
 TEST(UIManagerInputTests, PointerMaskAdoptsModifierHeldBeforeFocus)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     // Shift went down before this window took focus, so no key event reports it
     // and the platform sends no synthetic press. The click's mask is the only
@@ -547,12 +548,12 @@ TEST(UIManagerInputTests, PointerMaskAdoptsModifierHeldBeforeFocus)
 
 TEST(UIManagerInputTests, PointerMaskDoesNotClearPhysicallyHeldModifier)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     // A key press this manager saw stays authoritative until its release: a
     // pointer mask that omits it must not drop it.
@@ -566,12 +567,12 @@ TEST(UIManagerInputTests, PointerMaskDoesNotClearPhysicallyHeldModifier)
 
 TEST(UIManagerInputTests, LiveMaskReleasesPhysicallyHeldModifierAndKeepsReportedOnes)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     // A live platform query outranks the tracked key state: the Super release
     // was lost to the host, and the query says only Shift is down now.
@@ -595,12 +596,12 @@ TEST(UIManagerInputTests, LiveMaskReleasesPhysicallyHeldModifierAndKeepsReported
 TEST(UIManagerOrderTests, OrderPropertyReordersAndUnsettingRestoresOriginal)
 {
     // Build device + render graph (headless)
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     // Ensure controls are registered so <uielement> is recognized
     UIRegistration::RegisterBuiltInControls();
@@ -615,7 +616,7 @@ TEST(UIManagerOrderTests, OrderPropertyReordersAndUnsettingRestoresOriginal)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     // Create temp dir + CSS files
@@ -699,12 +700,12 @@ TEST(UIManagerOrderTests, OrderPropertyReordersAndUnsettingRestoresOriginal)
 
 TEST(UIManagerOrderTests, OrderRespectedUnderRTLWithMirroredPositions)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -717,7 +718,7 @@ TEST(UIManagerOrderTests, OrderRespectedUnderRTLWithMirroredPositions)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -796,12 +797,12 @@ TEST(UIManagerOrderTests, OrderRespectedUnderRTLWithMirroredPositions)
 
 TEST(UIManagerOrderTests, OrderWithWrapReordersAcrossLines)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -815,7 +816,7 @@ TEST(UIManagerOrderTests, OrderWithWrapReordersAcrossLines)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -857,12 +858,12 @@ TEST(UIManagerOrderTests, OrderWithWrapReordersAcrossLines)
 
 TEST(UIManagerOrderTests, ColumnDirectionOrderAffectsVerticalPositions)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -875,7 +876,7 @@ TEST(UIManagerOrderTests, ColumnDirectionOrderAffectsVerticalPositions)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -908,12 +909,12 @@ TEST(UIManagerOrderTests, ColumnDirectionOrderAffectsVerticalPositions)
 
 TEST(UIManagerOrderTests, NestedContainersOrderAppliedIndependently)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -931,7 +932,7 @@ TEST(UIManagerOrderTests, NestedContainersOrderAppliedIndependently)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -992,7 +993,7 @@ static TextField* FindTextFieldById(UIElement* root, const std::string& id)
 // place its caret using the same fontSize and caret map that layout/rendering used.
 TEST(UIManagerOrderTests, TextFieldPointerEndToEndUsesResolvedStyle)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
@@ -1007,7 +1008,7 @@ TEST(UIManagerOrderTests, TextFieldPointerEndToEndUsesResolvedStyle)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1079,12 +1080,12 @@ TEST(UIManagerOrderTests, TextFieldPointerEndToEndUsesResolvedStyle)
 
 TEST(UIManagerMountTests, MountedElementStyledAndRendered)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -1102,7 +1103,7 @@ TEST(UIManagerMountTests, MountedElementStyledAndRendered)
 
     root->AddChild(std::move(mountOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1127,12 +1128,12 @@ TEST(UIManagerMountTests, MountedElementStyledAndRendered)
 
 TEST(UIManagerMountTests, EventsBubbleToMountedTarget)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
 
     UIRegistration::RegisterBuiltInControls();
 
@@ -1152,7 +1153,7 @@ TEST(UIManagerMountTests, EventsBubbleToMountedTarget)
 
     root->AddChild(std::move(mountOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1187,12 +1188,12 @@ TEST(UIManagerMountTests, EventsBubbleToMountedTarget)
 
 TEST(UIManagerMountTests, KeyboardFocusTraversesAcrossMountPortal)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     // Build: root -> mount + inline TextField; mount targets another TextField
@@ -1216,7 +1217,7 @@ TEST(UIManagerMountTests, KeyboardFocusTraversesAcrossMountPortal)
     root->AddChild(std::move(mount));
     root->AddChild(std::move(tfAOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1269,12 +1270,12 @@ TEST(UIManagerMountTests, KeyboardFocusTraversesAcrossMountPortal)
 
 TEST(UIManagerMountTests, KeyboardActivationOnMountedButton)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -1293,7 +1294,7 @@ TEST(UIManagerMountTests, KeyboardActivationOnMountedButton)
 
     root->AddChild(std::move(mount));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1337,12 +1338,12 @@ TEST(UIManagerMountTests, KeyboardActivationOnMountedButton)
 
 TEST(UIManagerScrollTests, ScrollEventRoutesToScrollViewAndTextField)
 {
-	    auto dev = MakeHeadlessDevice();
+	    auto* dev = SharedHeadlessDevice();
 	    if (!dev)
 	    {
 	        GTEST_SKIP() << "Device init failed";
 	    }
-	    UiRgHarness rg(dev.get());
+	    UiRgHarness rg(dev);
 	    UIRegistration::RegisterBuiltInControls();
 
 	    auto root = std::make_unique<UIElement>();
@@ -1359,7 +1360,7 @@ TEST(UIManagerScrollTests, ScrollEventRoutesToScrollViewAndTextField)
 	    scrollView->AddContent(std::move(textField));
 	    root->AddChild(std::move(scrollView));
 
-	    UIManager ui(dev.get());
+	    UIManager ui(dev);
 	    ui.SetRoot(std::move(root));
 
 	    const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1410,12 +1411,12 @@ TEST(UIManagerScrollTests, ScrollEventRoutesToScrollViewAndTextField)
 // ancestors and one with range takes it.
 TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -1432,7 +1433,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
     ancestor->AddChild(std::move(scrollOwned));
     root->AddChild(std::move(ancestorOwned));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     int ancestorTicks = 0;
@@ -1480,12 +1481,12 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		
 		TEST(UIManagerBackgroundTests, BackgroundImageTintAliasResolvesInResolvedStyle)
 		{
-		    auto dev = MakeHeadlessDevice();
+		    auto* dev = SharedHeadlessDevice();
 		    if (!dev)
 		    {
 		        GTEST_SKIP() << "Device init failed";
 		    }
-		    UiRgHarness rg(dev.get());
+		    UiRgHarness rg(dev);
 		    UIRegistration::RegisterBuiltInControls();
 		
 		    const std::string xml = R"(<uielement id='root'>
@@ -1495,7 +1496,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		    std::unique_ptr<UIElement> root;
 		    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 		
-		    UIManager ui(dev.get());
+		    UIManager ui(dev);
 		    ui.SetRoot(std::move(root));
 		
 		    const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1530,12 +1531,12 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		
 		TEST(UIManagerBackgroundTests, BackgroundImageWithoutTintLeavesFlagFalse)
 		{
-		    auto dev = MakeHeadlessDevice();
+		    auto* dev = SharedHeadlessDevice();
 		    if (!dev)
 		    {
 		        GTEST_SKIP() << "Device init failed";
 		    }
-		    UiRgHarness rg(dev.get());
+		    UiRgHarness rg(dev);
 		    UIRegistration::RegisterBuiltInControls();
 		
 		    const std::string xml = R"(<uielement id='root'>
@@ -1545,7 +1546,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		    std::unique_ptr<UIElement> root;
 		    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 		
-		    UIManager ui(dev.get());
+		    UIManager ui(dev);
 		    ui.SetRoot(std::move(root));
 		
 		    const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1578,12 +1579,12 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 		
 		TEST(UIManagerMountTests, HoverEventsRouteToMountedTarget)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -1600,7 +1601,7 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 
     root->AddChild(std::move(mount));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1634,12 +1635,12 @@ TEST(UIManagerScrollTests, AScrollViewConsumesAWheelExactlyWhenItMoved)
 
 TEST(UIManagerDockingIntegrationTests, DockedPanelsReceiveOwnerManager)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     // Build a docking model with a single leaf tab that hosts an Inspector
@@ -1662,7 +1663,7 @@ TEST(UIManagerDockingIntegrationTests, DockedPanelsReceiveOwnerManager)
     // Wire DockspaceElement into a UIManager tree. The dockspace does not own
     // the panel; it mounts it via Mount portals. RebuildFromModel must assign
     // the UIManager as owner to the panel tree so pointer routing works.
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     auto root = std::make_unique<UIElement>();
     root->SetId("root");
 
@@ -1684,12 +1685,12 @@ TEST(UIManagerDockingIntegrationTests, DockedPanelsReceiveOwnerManager)
 
 TEST(UIManagerFocusTests, TabIndexOrdersAndFocusableFlag)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -1713,7 +1714,7 @@ TEST(UIManagerFocusTests, TabIndexOrdersAndFocusableFlag)
     root->AddChild(std::move(box));
     root->AddChild(std::move(tf3));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     // Minimal CSS for layout sizes (not strictly required for focus order)
@@ -1749,12 +1750,12 @@ TEST(UIManagerFocusTests, TabIndexOrdersAndFocusableFlag)
 
 TEST(UIManagerFocusTests, DisabledAndHiddenSkippedInTabOrder)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -1775,7 +1776,7 @@ TEST(UIManagerFocusTests, DisabledAndHiddenSkippedInTabOrder)
     root->AddChild(std::move(tf3));
     root->AddChild(std::move(tf4));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1806,12 +1807,12 @@ TEST(UIManagerFocusTests, DisabledAndHiddenSkippedInTabOrder)
 
 TEST(UIManagerFocusTests, TabIndexAndFocusableFromXml)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     const char* xml = R"(
@@ -1825,7 +1826,7 @@ TEST(UIManagerFocusTests, TabIndexAndFocusableFromXml)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1858,12 +1859,12 @@ TEST(UIManagerFocusTests, TabIndexAndFocusableFromXml)
 
 TEST(UIManagerFocusTests, EnabledFromXmlAffectsFocusOrder)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     const char* xml = R"(
@@ -1876,7 +1877,7 @@ TEST(UIManagerFocusTests, EnabledFromXmlAffectsFocusOrder)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1901,12 +1902,12 @@ TEST(UIManagerFocusTests, EnabledFromXmlAffectsFocusOrder)
 
 	TEST(UIManagerFocusTests, MouseClickOnTextFieldUsesFocusProxy)
 	{
-	    auto dev = MakeHeadlessDevice();
+	    auto* dev = SharedHeadlessDevice();
 	    if (!dev)
 	    {
 	        GTEST_SKIP() << "Device init failed";
 	    }
-	    UiRgHarness rg(dev.get());
+	    UiRgHarness rg(dev);
 	    UIRegistration::RegisterBuiltInControls();
 
 	    // Root with a single TextField. The field owns an internal TextInput editor
@@ -1920,7 +1921,7 @@ TEST(UIManagerFocusTests, EnabledFromXmlAffectsFocusOrder)
 	    tf->AddClass("text");
 	    root->AddChild(std::move(tfOwned));
 
-	    UIManager ui(dev.get());
+	    UIManager ui(dev);
 	    ui.SetRoot(std::move(root));
 
 	    const auto tmpDir = std::filesystem::temp_directory_path();
@@ -1964,12 +1965,12 @@ TEST(UIManagerFocusTests, EnabledFromXmlAffectsFocusOrder)
 
 TEST(UIManagerFocusTests, DragSelectingOutsideTextFieldRetainsFocus)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 	UIRegistration::RegisterBuiltInControls();
 
 	// Root with a single TextField. We'll start a drag selection inside and
@@ -1984,7 +1985,7 @@ TEST(UIManagerFocusTests, DragSelectingOutsideTextFieldRetainsFocus)
 	tf->SetValue(std::string("Drag selection test"));
 	root->AddChild(std::move(tfOwned));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 
 	const auto tmpDir = std::filesystem::temp_directory_path();
@@ -2034,12 +2035,12 @@ TEST(UIManagerFocusTests, DragSelectingOutsideTextFieldRetainsFocus)
 // per session depending on add order.
 TEST(UIManagerStylesheetTests, GlobalReattachingStylesheetPreservesPrecedence)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 	UIRegistration::RegisterBuiltInControls();
 
 	const std::string xml = R"(<uielement id='root'>
@@ -2049,7 +2050,7 @@ TEST(UIManagerStylesheetTests, GlobalReattachingStylesheetPreservesPrecedence)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 	// The UI module's default stylesheet is already in place.
 	const size_t initialSheets = ui.GetStylesheets().size();
@@ -2090,12 +2091,12 @@ TEST(UIManagerStylesheetTests, GlobalReattachingStylesheetPreservesPrecedence)
 
 TEST(UIManagerStylesheetTests, LocalStylesheetReattachReordersForSubtree)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 	UIRegistration::RegisterBuiltInControls();
 
 	const std::string xml = R"(<uielement id='root'>
@@ -2107,7 +2108,7 @@ TEST(UIManagerStylesheetTests, LocalStylesheetReattachReordersForSubtree)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 	// The UI module's default stylesheet is already in place.
 	const size_t initialSheets = ui.GetStylesheets().size();
@@ -2149,12 +2150,12 @@ TEST(UIManagerStylesheetTests, LocalStylesheetReattachReordersForSubtree)
 
 TEST(UIManagerStylesheetTests, HotReloadRemovingPropertyRevertsToDefault)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 	UIRegistration::RegisterBuiltInControls();
 
 	const std::string xml = R"(<uielement id='root'>
@@ -2164,7 +2165,7 @@ TEST(UIManagerStylesheetTests, HotReloadRemovingPropertyRevertsToDefault)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 	// The UI module's default stylesheet is already in place.
 	const size_t initialSheets = ui.GetStylesheets().size();
@@ -2208,7 +2209,7 @@ TEST(UIManagerStylesheetTests, HotReloadRemovingPropertyRevertsToDefault)
 
 TEST(UIManagerStylesheetTests, RootPaddingFromClassAndPseudoAffectsChildLayout)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
@@ -2225,7 +2226,7 @@ TEST(UIManagerStylesheetTests, RootPaddingFromClassAndPseudoAffectsChildLayout)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 
 	const auto tmpDir = std::filesystem::temp_directory_path();
@@ -2266,12 +2267,12 @@ TEST(UIManagerStylesheetTests, RootPaddingFromClassAndPseudoAffectsChildLayout)
 
 TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 	    GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 	UIRegistration::RegisterBuiltInControls();
 
 	// Single checkbox; UIManager should populate ElementState.checked from control state.
@@ -2282,7 +2283,7 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 
 	const auto tmpDir = std::filesystem::temp_directory_path();
@@ -2324,12 +2325,12 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 
 	TEST(UIManagerOrderTests, ZIndexControlsMouseDownTargetForOverlappingSiblings)
 	{
-		auto dev = MakeHeadlessDevice();
+		auto* dev = SharedHeadlessDevice();
 		if (!dev)
 		{
 			GTEST_SKIP() << "Device init failed";
 		}
-		UiRgHarness rg(dev.get());
+		UiRgHarness rg(dev);
 		UIRegistration::RegisterBuiltInControls();
 
 		// Two absolutely positioned children that fully overlap at the same rect.
@@ -2344,7 +2345,7 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 		std::unique_ptr<UIElement> root;
 		ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-		UIManager ui(dev.get());
+		UIManager ui(dev);
 		ui.SetRoot(std::move(root));
 
 		const auto tmpDir = std::filesystem::temp_directory_path();
@@ -2448,12 +2449,12 @@ TEST(UIManagerStylesheetTests, CheckedPseudoClassTracksCheckedState)
 // element that occupies the same screen space.
 TEST(UIManagerOrderTests, DropdownLikePopupRespectsZIndexOverBackground)
 	{
-		auto dev = MakeHeadlessDevice();
+		auto* dev = SharedHeadlessDevice();
 		if (!dev)
 		{
 			GTEST_SKIP() << "Device init failed";
 		}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 
 	// Simple tree with a dropdown-like container and an underlying background.
 	// We model the structure the Dropdown would create, but using plain
@@ -2473,7 +2474,7 @@ TEST(UIManagerOrderTests, DropdownLikePopupRespectsZIndexOverBackground)
 		std::unique_ptr<UIElement> root;
 		ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-		UIManager ui(dev.get());
+		UIManager ui(dev);
 		ui.SetRoot(std::move(root));
 
 	// Attach a stylesheet that mirrors the Editor's dropdown styling in a
@@ -2595,12 +2596,12 @@ TEST(UIManagerOrderTests, DropdownLikePopupRespectsZIndexOverBackground)
 
 TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 {
-	auto dev = MakeHeadlessDevice();
+	auto* dev = SharedHeadlessDevice();
 	if (!dev)
 	{
 		GTEST_SKIP() << "Device init failed";
 	}
-	UiRgHarness rg(dev.get());
+	UiRgHarness rg(dev);
 
 	UIRegistration::RegisterBuiltInControls();
 
@@ -2614,7 +2615,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 	std::unique_ptr<UIElement> root;
 	ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-	UIManager ui(dev.get());
+	UIManager ui(dev);
 	ui.SetRoot(std::move(root));
 
 	Stylesheet sheet{};
@@ -2726,12 +2727,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 		// instead of wrapping its menu items.
 		TEST(UIManagerOrderTests, DropdownUiPopupAutoSizesToItemsContent)
 		{
-		    auto dev = MakeHeadlessDevice();
+		    auto* dev = SharedHeadlessDevice();
 		    if (!dev)
 		    {
 		        GTEST_SKIP() << "Device init failed";
 		    }
-		    UiRgHarness rg(dev.get());
+		    UiRgHarness rg(dev);
 		
 		    UIRegistration::RegisterBuiltInControls();
 		
@@ -2742,7 +2743,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 		    std::unique_ptr<UIElement> root;
 		    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 		
-		    UIManager ui(dev.get());
+		    UIManager ui(dev);
 		    ui.SetRoot(std::move(root));
 		
 		    Stylesheet sheet{};
@@ -2858,12 +2859,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			// auto-sized absolute popup.
 			TEST(UIManagerOrderTests, DropdownUiPopupAutoSizesToItemsContent_FromHeaderClick)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
-			    UiRgHarness rg(dev.get());
+			    UiRgHarness rg(dev);
 		
 			    UIRegistration::RegisterBuiltInControls();
 		
@@ -2874,7 +2875,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    std::unique_ptr<UIElement> root;
 			    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 		
-			    UIManager ui(dev.get());
+			    UIManager ui(dev);
 			    ui.SetRoot(std::move(root));
 		
 			    Stylesheet sheet{};
@@ -2979,12 +2980,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			// for a frame due to draw-style cache reuse.
 			TEST(UIManagerOrderTests, DropdownCloseHidesPopupInSameFrame_NoGhost)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
-			    UiRgHarness rg(dev.get());
+			    UiRgHarness rg(dev);
 			
 			    UIRegistration::RegisterBuiltInControls();
 			
@@ -2995,7 +2996,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    std::unique_ptr<UIElement> root;
 			    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 			
-			    UIManager ui(dev.get());
+			    UIManager ui(dev);
 			    ui.SetRoot(std::move(root));
 			
 			    Stylesheet sheet{};
@@ -3094,12 +3095,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			// duplicate control-internal children (dropdown headers/items, toggle knobs, etc.).
 			TEST(UIManagerOrderTests, ControlsFromUILayoutAssetTemplateDoNotDuplicateInternalChildren)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
-			    UiRgHarness rg(dev.get());
+			    UiRgHarness rg(dev);
 			
 			    UIRegistration::RegisterBuiltInControls();
 			
@@ -3117,7 +3118,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    for (char c : xml) data.push_back((uint8)c);
 			    ASSERT_TRUE(asset->LoadFromData(data));
 			
-			    UIManager ui(dev.get());
+			    UIManager ui(dev);
 			    ASSERT_TRUE(ui.LoadLayoutFromAsset(*asset));
 			    ui.Update(0.0f, /*interactive=*/false);
 			    DriveUiRender(ui, rg);
@@ -3168,12 +3169,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			// Dropdown instance should be preserved and internal children must not multiply.
 			TEST(UIManagerOrderTests, HotReload_ReconcilesTemplateAndPreservesDropdownInstance)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
-			    UiRgHarness rg(dev.get());
+			    UiRgHarness rg(dev);
 			
 			    UIRegistration::RegisterBuiltInControls();
 			
@@ -3190,7 +3191,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    ASSERT_TRUE(asset->LoadFromData(data1));
 			    assets.RegisterLoadedAsset(guid, asset);
 			
-			    UIManager ui(dev.get(), &assets);
+			    UIManager ui(dev, &assets);
 			    ASSERT_TRUE(ui.LoadLayoutFromAsset(*asset));
 			    ui.Update(0.0f, /*interactive=*/false);
 			    DriveUiRender(ui, rg);
@@ -3245,12 +3246,12 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			// TreeView stack all items at (0,0).
 			TEST(UIManagerOrderTests, AbsoluteOverrideRectHonorsLeftTop)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
-			    UiRgHarness rg(dev.get());
+			    UiRgHarness rg(dev);
 			
 			    UIRegistration::RegisterBuiltInControls();
 			
@@ -3269,7 +3270,7 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 			    root->AddChild(std::move(c1));
 			    root->AddChild(std::move(c2));
 			
-			    UIManager ui(dev.get());
+			    UIManager ui(dev);
 			    ui.SetRoot(std::move(root));
 			
 			    // Give root a stable size.
@@ -3298,14 +3299,14 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 
 			TEST(UIManagerOrderTests, CssImport_OrderingAndManualInvalidation)
 			{
-			    auto dev = MakeHeadlessDevice();
+			    auto* dev = SharedHeadlessDevice();
 			    if (!dev)
 			    {
 			        GTEST_SKIP() << "Device init failed";
 			    }
 
 			    // File-based style attach path exercises @import preprocessing without requiring Engine init.
-			    UIManager ui(dev.get());
+			    UIManager ui(dev);
 
 			    namespace fs = std::filesystem;
 			    std::error_code ec;
@@ -3372,10 +3373,10 @@ TEST(UIManagerOrderTests, DropdownPopupClickDoesNotMoveUnderlyingSlider)
 
 TEST(UIManagerOrderTests, CSSCursorPropertySurvivesInheritance)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     const std::string xml = R"(<uielement id='root'>
@@ -3388,7 +3389,7 @@ TEST(UIManagerOrderTests, CSSCursorPropertySurvivesInheritance)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto css = std::filesystem::temp_directory_path() / "ui_cursor_inherit.css";
@@ -3429,10 +3430,10 @@ TEST(UIManagerOrderTests, CSSCursorPropertySurvivesInheritance)
 
 TEST(UIManagerOrderTests, SplitterHitTestBoundsAreExpandedBeyondLayout)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     const std::string xml = R"(<uielement id='root'>
@@ -3444,7 +3445,7 @@ TEST(UIManagerOrderTests, SplitterHitTestBoundsAreExpandedBeyondLayout)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto css = std::filesystem::temp_directory_path() / "ui_splitter_hit.css";
@@ -3490,10 +3491,10 @@ TEST(UIManagerOrderTests, SplitterHitTestBoundsAreExpandedBeyondLayout)
 
 TEST(UIManagerOrderTests, SplitterHoverSetsCursorViaCallback)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "Device init failed";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     const std::string xml = R"(<uielement id='root'>
@@ -3505,7 +3506,7 @@ TEST(UIManagerOrderTests, SplitterHoverSetsCursorViaCallback)
     std::unique_ptr<UIElement> root;
     ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     CursorStyle lastCursor = CursorStyle::Auto;
@@ -3569,12 +3570,12 @@ TEST(UIManagerOrderTests, SplitterHoverSetsCursorViaCallback)
 // same-element fan-out and the ancestor boundary are observed in one run.
 TEST(UIManagerMountTests, SameElementFanoutDoesNotLeakIntoBubbling)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
     {
         GTEST_SKIP() << "Device init failed";
     }
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto root = std::make_unique<UIElement>();
@@ -3593,7 +3594,7 @@ TEST(UIManagerMountTests, SameElementFanoutDoesNotLeakIntoBubbling)
     btn->RegisterEventHandler(kEventMouseDown, [&](UIEvent&) { ++firstDown; });
     btn->RegisterEventHandler(kEventMouseDown, [&](UIEvent&) { ++secondDown; });
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(std::move(root));
 
     const auto tmpDir = std::filesystem::temp_directory_path();

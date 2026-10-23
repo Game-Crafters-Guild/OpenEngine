@@ -33,7 +33,9 @@ No `#version`, no `layout(...)` declarations, no descriptor bindings: the adapte
 
 ### Where the file can live
 
-The material's `surfaceShader` reference resolves in this order: **the material's own directory** → project root(s) → package shader dirs → the engine shader tree. Dropping `my_surface.glsl` next to the .material and writing `"surfaceShader": "my_surface.glsl"` is all it takes. An authored reference that resolves nowhere is a *hard compile failure* that lists every searched root, never a silent fallback.
+The material's `surfaceShader` reference resolves in this order: **the material's own directory** → project root(s) → package shader directories → the engine shader tree. Dropping `my_surface.glsl` next to the .material and writing `"surfaceShader": "my_surface.glsl"` is all it takes. An authored reference that resolves nowhere is a *hard compile failure* that lists every searched root, never a silent fallback.
+
+A surface's own `#include`s resolve against the including file's directory, then the project root(s), the package shader directories and the engine shader tree. The material's directory joins that list only when the material's surface or vertex modifier lives there, so a surface found through a root reads the same files whichever material uses it, and every material that uses it shares its compiled shaders. Keep a helper next to the surface that includes it, or include it by its path from a shader root; an include that resolves nowhere is logged as `NOT FOUND` with every directory searched.
 
 ## 3 · Textures
 
@@ -111,6 +113,20 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 `default=` is the single source of truth: the `.material` stores only what a material overrides, so a new material's file can have no `"properties"` at all. `group=` collects rows into a collapsible section (sections appear where their first member is declared). `visibleIf=name`, `visibleIf=name=value`, and `visibleIf=name!=value` hide a row against another property, `alphaMode`, or `lightingModel`. `hidden` stores a value without a row. The engine packs the storage (greedy first-fit into the 30-lane material block: 120 floats per surface; a following scalar takes a vec3's spare `.w`). Appending a declaration never moves an earlier property. Inserting or reordering repacks the surface, which the edit's recompile already covers.
 
 Every declaration error (unknown type, malformed `range=`, the same name declared with two types, more than 120 floats, `Mat.<name>` where `Props.<name>` was meant) fails the compile with `your_file.glsl:<line>` in the Shader Errors panel and the material inspector. The material keeps its last good shader. A declared property the file never reads is a warning. Textures are still declared with `@texture` (§3), and `keyword=` on a bool is not wired yet: use `"keywords"` (§5).
+
+### The deformation envelope of a vertex modifier
+
+A vertex modifier that moves vertices declares the largest distance it can move one, so GPU culling keeps the mesh while its moved vertices are still on screen:
+
+```glsl title="A wind modifier declares its envelope"
+// @property float swayAmount "Sway" default=0.1 range=0,0.25
+// @deformationEnvelope 1.9 scaledBy=swayAmount
+```
+
+- The first value is a distance in meters in the mesh's local space, at any time, on any instance. Culling widens each instance's bounding sphere by this distance times the instance's largest axis scale.
+- `scaledBy=` names a property the displacement grows with. The distance is multiplied by the absolute value of a `float` property, or by the length of the first three components of a vector property.
+- A modifier with no declaration culls on its mesh bounds alone. For a modifier that moves positions, `vec3 ModifyVertex(vec3 position, InstanceData inst)`, the log and the material inspector's **Deformation Envelope** row say so. A modifier that writes the whole vertex output belongs to a draw path that culls its own geometry, so neither reports it. A declaration that is negative, not a number, declared twice, or scaled by a `bool`, `int` or `enum` property or by a property the shader does not declare is refused with the fix in the message, and culling uses the mesh bounds alone. The shader still compiles.
+- The envelope changes culling only. Level-of-detail selection keeps using the mesh bounds.
 
 ## 5 · Keywords (static variants)
 

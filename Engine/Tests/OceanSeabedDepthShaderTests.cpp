@@ -13,6 +13,8 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <string>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -141,6 +143,27 @@ TEST(OceanSeabedDepthShaderLayout, ReflectedTypesAndOffsetsMatchUploadedParamete
     EXPECT_EQ(waves->Offset, offsetof(OceanParamsGPU, Waves));
     ASSERT_TRUE(waves->ArrayStride.has_value());
     EXPECT_EQ(*waves->ArrayStride, sizeof(OceanParamsGPU{}.Waves[0]));
+
+    // The surface's scalar lanes 3 and 4 (the roughness and indices the water's light lobe reads,
+    // the sky and planar strengths and their padding) sit at the CPU field of the same name. Two
+    // members of one size swapped on one side keep the walk above whole; this catches the swap.
+    const std::vector<std::pair<std::string, size_t>> namedOffsets = {
+        {"uRoughness", offsetof(OceanParamsGPU, Roughness)},
+        {"uIorAir", offsetof(OceanParamsGPU, IorAir)},
+        {"uIorWater", offsetof(OceanParamsGPU, IorWater)},
+        {"uPlanarReflections", offsetof(OceanParamsGPU, PlanarReflections)},
+        {"uSkyDirectionality", offsetof(OceanParamsGPU, SkyDirectionality)},
+        {"uPlanarReflectionStrength", offsetof(OceanParamsGPU, PlanarReflectionStrength)},
+        {"uSurfacePad0", offsetof(OceanParamsGPU, _SurfacePad0)},
+        {"uSurfacePad1", offsetof(OceanParamsGPU, _SurfacePad1)},
+    };
+    for (const auto& [name, offset] : namedOffsets)
+    {
+        const auto member = std::find_if(block->Members.begin(), block->Members.end(),
+                                         [&name](const Member& candidate) { return candidate.Name == name; });
+        ASSERT_NE(member, block->Members.end()) << name;
+        EXPECT_EQ(member->Offset, offset) << name;
+    }
 
     // Every field the CPU uploads as uint32 is declared unsigned in the block.
     // Read through a float lane an uploaded 1 arrives as a denormal, so the flag

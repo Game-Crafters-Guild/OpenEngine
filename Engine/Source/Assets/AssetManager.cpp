@@ -472,9 +472,6 @@ void AssetManager::Shutdown()
     InvalidateResolveMemo();
     m_Registry.SetGuidRemapCallback(nullptr);
 
-    // Shutdown registry
-    m_Registry.Shutdown();
-
     // Withdraw async reload pipelines before stopping the IO service: flags
     // first (claimed reads and queued/running decodes defuse themselves),
     // then queued reads. CancelRequest may fire a request's OnFailure inline
@@ -559,9 +556,9 @@ void AssetManager::Shutdown()
     }
 
     // Drop the pending ejects without finishing them and without running their
-    // continuations. Everything an eject would still do is already done above —
-    // the sources are gone, the loaded assets are released, the registry is
-    // shut down — and a continuation here would run editor code (remounting
+    // continuations. Everything an eject would still do, this Shutdown does —
+    // the sources are gone, the loaded assets are released, the registry shuts
+    // down below — and a continuation here would run editor code (remounting
     // packages, touching a window that no longer exists) into a torn-down
     // application: the editor destroys its UI before the engine shuts down.
     m_PendingEjects.clear();
@@ -588,6 +585,12 @@ void AssetManager::Shutdown()
         std::lock_guard<std::mutex> lk(m_InFlightMutex);
         m_ReloadsRequestedDuringLoad.clear();
     }
+
+    // The registry shuts down after the IO service stops and every decode and
+    // reload job is done: a decode reads it (a model's LOD slots, its meta
+    // values) until its last instruction, and the registry releases the stores
+    // those reads use.
+    m_Registry.Shutdown();
 
     // Shutdown parser registry
     m_ParserRegistry.Shutdown();
@@ -2833,6 +2836,20 @@ AssetFuture AssetManager::CreateEnhancedFuture(std::shared_future<SharedPtr<Asse
 
 bool AssetManager::RenameAssetPath(const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
+    // A folder is not a registered asset; the files under it are. Each one keeps its GUID at its
+    // new path, so references to it stay valid and a loaded instance reports where it now lives.
+    std::error_code ec;
+    if (std::filesystem::is_directory(newPath, ec))
+    {
+        bool movedAny = false;
+        for (std::filesystem::recursive_directory_iterator it(newPath, ec), end; !ec && it != end; it.increment(ec))
+        {
+            if (it->is_regular_file(ec))
+                movedAny |= RenameAssetPath(oldPath / it->path().lexically_relative(newPath), it->path());
+        }
+        return movedAny;
+    }
+
     const GUID guid = m_Registry.GetAssetGUID(oldPath);
     if (!m_Registry.TryRenameAssetPath(oldPath, newPath))
         return false;

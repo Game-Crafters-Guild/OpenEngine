@@ -210,9 +210,9 @@ void WindowInputRouter::RouteCursorEnter(const WindowInputRouterConfig& config, 
     // nothing will reach it until the cursor comes back, so a press in flight
     // has to be cancelled rather than left armed on a control the user has
     // walked away from. The host answers for the button state itself, having
-    // been told every edge — which is what handing it no pointer means.
+    // been told every edge, and the window still reports the release.
     if (GameUIHost* surfaceUi = SurfaceUiPointedByThisRouter(play))
-        surfaceUi->UpdatePointer(nullptr);
+        surfaceUi->OnPointerLeave();
 }
 
 void WindowInputRouter::RouteKey(const WindowInputRouterConfig& config, int key, int action, int mods)

@@ -289,8 +289,6 @@ std::string FieldDisplayName(std::string_view name)
         return "Foam Debug";
     if (name == "ShallowRefractionReflectionSuppression")
         return "Shallow Reflection Suppression";
-    if (name == "DirectionalLightColor")
-        return "Glitter Color";
     if (name == "SkyIntensity")
         return "Sky Light";
     if (name == "ReflectionIntensity")
@@ -398,20 +396,17 @@ const char* OceanSurfaceFieldTooltip(std::string_view fieldName)
         {"SubSurfaceBase", "Baseline subsurface scatter present across the surface."},
         {"SubSurfaceSun", "Forward-scatter lobe intensity toward the sun."},
         {"SubSurfaceSunFallOff", "Falloff of the sun-facing subsurface scatter lobe."},
-        {"Specular", "Specular reflection intensity cap."},
-        {"Roughness", "Microfacet roughness for water highlights and reflections."},
+        {"Specular", "Scales the reflection of the sky and surroundings. 1 is the full reflection; lower values let the water body show through. The highlights of lights are not scaled."},
+        {"Roughness", "Roughness of the water surface. Higher blurs its highlights and reflections."},
         {"IorAir", "Index of refraction for air, used with IOR water for Fresnel/refraction."},
         {"IorWater", "Index of refraction for water, used for Fresnel and underwater bending."},
-        {"PlanarReflections", "Uses a planar reflection capture when available, with sky as fallback."},
-        {"PlanarReflectionStrength", "Blends the planar reflection capture over the procedural reflected sky."},
+        {"PlanarReflections", "Draws the objects a planar capture sees over the environment reflection. Where the capture drew nothing, the water shows the environment reflection."},
+        {"PlanarReflectionStrength", "How strongly the planar capture covers the reflected environment; above 1 it brightens the captured objects."},
         {"PlanarReflectionScale", "Resolution scale of the planar reflection capture relative to the main view."},
         {"SkyBase", "Base/zenith colour of the procedural reflected sky."},
         {"SkyTowardsSun", "Reflected sky tint in the sun direction."},
         {"SkyAwayFromSun", "Reflected sky tint away from the sun."},
         {"SkyDirectionality", "Sharpness of the reflected sky blend around the sun direction."},
-        {"DirectionalLightColor", "Ocean-only tint for the bright direct sun glitter on the water. White keeps the scene light colour."},
-        {"DirectionalLightBoost", "Boost for the sun glitter spike on reflected sky."},
-        {"DirectionalLightFallOff", "Falloff/sharpness of the sun glitter spike."},
         {"DepthFogDensity", "Per-channel water extinction for refracted and underwater geometry. Higher values fog faster."},
         {"DepthFogFalloff", "Distance curve used by surface refraction fog and the underwater pass."},
         {"DepthFogStartDistance", "Meters of clear water before depth fog starts to build."},

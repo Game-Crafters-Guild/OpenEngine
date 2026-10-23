@@ -436,6 +436,7 @@ void MaterialRegistry::ApplyPropertyTable(Material& mat, std::shared_ptr<const R
 {
     if (!table || table->Rejected())
         return;
+    mat.SetDeformationEnvelope(table->DeformationEnvelope);
     if (table->HasSurfaceDeclarations)
     {
         if (mat.GetDeclaredProperties() != table.get())

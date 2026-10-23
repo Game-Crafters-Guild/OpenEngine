@@ -362,7 +362,7 @@ static_assert(std::is_standard_layout_v<TerrainGroundClaimEffect>);
 // Regional grass targets relative to the terrain's global grass profile. Author
 // that profile as the wild maximum; regions can shorten or thin it without
 // increasing the placement budget. The volume owns shape, falloff and priority.
-// Targets compose as lerp(current, target, weight), starting at (1,1), so a later
+// Targets compose as lerp(current, target, weight), starting at (1,1,1), so a later
 // region with scale 1 can restore the global profile over an earlier reduction.
 // This affects planar grass only; it writes neither terrain height nor materials.
 struct TerrainGrassEffect
@@ -371,6 +371,10 @@ struct TerrainGrassEffect
 
     float32 HeightScale = 1.0f;   // [0,1], applied to final ribbon/card height
     float32 DensityScale = 1.0f;  // [0,1], stable thinning of existing candidates
+    // [0,1], scales the terrain's TerrainGrass::GroundDarkening inside the region: 0 keeps the
+    // field's soil out of the colour map there (a path). Composed on the CPU for the bake's
+    // ground write; never uploaded.
+    float32 GroundDarkeningScale = 1.0f;
 };
 
 // Script writes also pass through this finite, bounded admission at gather.
@@ -391,6 +395,33 @@ inline float32 ClampTerrainGrassEffectScale(float32 value)
 inline constexpr float32 kTerrainGrassHeightReadableFloor = 0.5f;
 static_assert(std::is_trivially_copyable_v<TerrainGrassEffect>);
 static_assert(std::is_standard_layout_v<TerrainGrassEffect>);
+
+// Colors the ground inside the volume, and the base of the grass that grows there: the effect
+// writes Color into the terrain's color map at Strength times the volume's own weight, over the
+// grass's Darken Ground soil and under any later color writer. The ground and the blade root read
+// the map as ground x (1 - weight) + Color x weight.
+// Common use: a worn path, a lush patch or a dry yard, on the same entity as a Grass effect.
+// Planar terrains only; it writes neither height nor materials.
+struct TerrainColorEffect
+{
+    GE_TERRAIN_EFFECT_COMMON_FIELDS
+
+    // Linear, each channel [0,1]. The default is the grass's default Soil Color.
+    float32 Color[3] = {0.10f, 0.075f, 0.045f};
+    // [0,1]: how far the ground moves toward Color. At 1 the ground is Color alone and loses its
+    // material's pattern, so the default keeps half of it.
+    float32 Strength = 0.5f;
+};
+
+// The admission every write of a colour channel or the strength passes, at load, in the inspector
+// and at gather: clamped to [0,1], and 0 when nonfinite, so a bad value writes nothing.
+inline float32 ClampTerrainColorEffectValue(float32 value)
+{
+    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+}
+
+static_assert(std::is_trivially_copyable_v<TerrainColorEffect>);
+static_assert(std::is_standard_layout_v<TerrainColorEffect>);
 
 #undef GE_TERRAIN_EFFECT_COMMON_FIELDS
 #undef GE_TERRAIN_EFFECT_POOL_FIELDS

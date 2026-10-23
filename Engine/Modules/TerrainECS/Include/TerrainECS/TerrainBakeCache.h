@@ -22,7 +22,9 @@ namespace GameEngine::TerrainECS
 ///
 /// v2: one artifact per terrain identity (scene GUID + entity tag), the key in the
 /// header.
-inline constexpr uint32 kTerrainBakeFormatVersion = 2u;
+/// v3: a colour section with its own key, so an edit that moves only the colour map
+/// (Darken Ground, Soil Color, a colour zone) misses the colour and hits the heights.
+inline constexpr uint32 kTerrainBakeFormatVersion = 3u;
 
 /// Accumulates a terrain bake's inputs into its content key: FNV-1a 64 over the
 /// bytes fed in, in order, seeded with kTerrainBakeFormatVersion. Feed only
@@ -61,6 +63,12 @@ struct TerrainBakeArtifact
     std::vector<uint8> Splat;     // Width * Height RGBA8 texels, row-major
     float32 SplatMinH = 0.0f;     // the height range the splat was normalized against
     float32 SplatMaxH = 0.0f;
+    // The colour section: the key of the colour inputs it was composed from (0: no colour
+    // section, the colour is composed at load), and the colour map's texels (Width * Height
+    // RGBA8, TerrainColorMap.h; empty for a map no writer reaches). Read only on a height hit:
+    // the splat it was composed over is the artifact's own.
+    uint64 ColorKey = 0;
+    std::vector<uint8> Color;
 };
 
 enum class TerrainBakeCacheStatus : uint8

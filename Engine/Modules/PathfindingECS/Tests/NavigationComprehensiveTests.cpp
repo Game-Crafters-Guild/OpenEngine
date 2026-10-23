@@ -64,13 +64,13 @@ protected:
         agent.Acceleration = 100.0f;
         agent.StoppingDistance = 0.3f;
         agent.Radius = radius;
-        agent.NavMapIndex = mapIndex;
-        agent.NavMapGeneration = mapGeneration;
         agent.ReplanInterval = 0.0f; // disable replan by default in tests
         agent.AgentId = entity.GetHandle().id;
         entity.Set(agent);
 
         Components::NavigationAgentState state{};
+        state.NavMapIndex = mapIndex;
+        state.NavMapGeneration = mapGeneration;
         state.DestinationX = destX;
         state.DestinationY = 0.0f;
         state.DestinationZ = destZ;
@@ -215,7 +215,7 @@ TEST_F(NavigationComprehensiveTest, PathFoundOnOpenGrid)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Complete);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Complete);
     EXPECT_FALSE(state.PathDirty);
 }
 
@@ -237,7 +237,7 @@ TEST_F(NavigationComprehensiveTest, PathNotFoundWhenFullyBlocked)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Failed);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Failed);
 }
 
 TEST_F(NavigationComprehensiveTest, PathGoesAroundBlockedCells)
@@ -258,7 +258,7 @@ TEST_F(NavigationComprehensiveTest, PathGoesAroundBlockedCells)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+    auto status = state.Status;
     EXPECT_EQ(status, Pathfinding::PathStatus::Complete);
 
     // Verify path does not pass through any blocked cell
@@ -302,7 +302,7 @@ TEST_F(NavigationComprehensiveTest, SmallAgentFitsThroughNarrowGap)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Complete);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Complete);
 }
 
 TEST_F(NavigationComprehensiveTest, LargeAgentCannotFitThroughNarrowGap)
@@ -325,7 +325,7 @@ TEST_F(NavigationComprehensiveTest, LargeAgentCannotFitThroughNarrowGap)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+    auto status = state.Status;
     EXPECT_EQ(status, Pathfinding::PathStatus::Failed);
 }
 
@@ -354,7 +354,7 @@ TEST_F(NavigationComprehensiveTest, LargeAgentFindsWiderPath)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+    auto status = state.Status;
     // The agent should find a path (through the wider gap)
     EXPECT_TRUE(status == Pathfinding::PathStatus::Complete ||
                 status == Pathfinding::PathStatus::Partial);
@@ -383,7 +383,7 @@ TEST_F(NavigationComprehensiveTest, AgentNavigatesUphillWithinSlopeLimit)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Complete);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Complete);
 }
 
 TEST_F(NavigationComprehensiveTest, SteepSlopeBlocksPath)
@@ -404,7 +404,7 @@ TEST_F(NavigationComprehensiveTest, SteepSlopeBlocksPath)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Failed);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Failed);
 }
 
 TEST_F(NavigationComprehensiveTest, StepHeightBlocksCliff)
@@ -423,7 +423,7 @@ TEST_F(NavigationComprehensiveTest, StepHeightBlocksCliff)
     RunPathfinding();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Failed);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Failed);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +556,7 @@ TEST_F(NavigationComprehensiveTest, IdleAgentKeepsBodyStampAfterCancel)
     auto* statePtr = agentEntity.GetForWrite<Components::NavigationAgentState>();
     ASSERT_NE(statePtr, nullptr);
     statePtr->HasDestination = false;
-    statePtr->Status = static_cast<uint8>(Pathfinding::PathStatus::Invalid);
+    statePtr->Status = Pathfinding::PathStatus::Invalid;
 
     // Cancel must drop the corridor on the next movement tick. The cell
     // the agent stands in stays occupied.
@@ -613,7 +613,7 @@ TEST_F(NavigationComprehensiveTest, SecondAgentAvoidsReservedCells)
     m_World->ProcessCommands();
 
     auto state2 = GetAgentState(agent2Entity);
-    auto status = static_cast<Pathfinding::PathStatus>(state2.Status);
+    auto status = state2.Status;
     // Lookahead tax is not a hard block. Occupied body cells are, but this
     // 16x16 open grid still has a path around the first agent.
     EXPECT_TRUE(status == Pathfinding::PathStatus::Complete ||
@@ -647,7 +647,7 @@ TEST_F(NavigationComprehensiveTest, PathRecomputedAfterReplanInterval)
     m_World->ProcessCommands();
 
     auto state = GetAgentState(agentEntity);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(state.Status), Pathfinding::PathStatus::Complete);
+    EXPECT_EQ(state.Status, Pathfinding::PathStatus::Complete);
     EXPECT_FALSE(state.PathDirty);
 
     // Run pathfinding system for enough cumulative time to trigger replan (> 0.5s)
@@ -662,7 +662,7 @@ TEST_F(NavigationComprehensiveTest, PathRecomputedAfterReplanInterval)
     // and the system should have recomputed the path
     state = GetAgentState(agentEntity);
     // The path should still be valid (it was recomputed, not cleared)
-    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+    auto status = state.Status;
     EXPECT_TRUE(status == Pathfinding::PathStatus::Complete ||
                 status == Pathfinding::PathStatus::Pending);
 }
@@ -721,11 +721,11 @@ TEST_F(NavigationComprehensiveTest, MultipleAgentsNavigateSimultaneously)
 
     RunPathfinding();
 
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(GetAgentState(agent1).Status),
+    EXPECT_EQ(GetAgentState(agent1).Status,
               Pathfinding::PathStatus::Complete);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(GetAgentState(agent2).Status),
+    EXPECT_EQ(GetAgentState(agent2).Status,
               Pathfinding::PathStatus::Complete);
-    EXPECT_EQ(static_cast<Pathfinding::PathStatus>(GetAgentState(agent3).Status),
+    EXPECT_EQ(GetAgentState(agent3).Status,
               Pathfinding::PathStatus::Complete);
 
     // Run movement and verify all agents make progress
@@ -765,8 +765,8 @@ TEST_F(NavigationComprehensiveTest, AgentsWithDifferentRadiiCoexist)
 
     RunPathfinding();
 
-    auto smallStatus = static_cast<Pathfinding::PathStatus>(GetAgentState(smallAgent).Status);
-    auto largeStatus = static_cast<Pathfinding::PathStatus>(GetAgentState(largeAgent).Status);
+    auto smallStatus = GetAgentState(smallAgent).Status;
+    auto largeStatus = GetAgentState(largeAgent).Status;
 
     EXPECT_EQ(smallStatus, Pathfinding::PathStatus::Complete)
         << "Small agent should find path on open grid";

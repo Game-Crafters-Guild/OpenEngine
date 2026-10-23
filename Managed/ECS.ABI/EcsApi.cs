@@ -164,20 +164,22 @@ namespace GameEngine.ECS
             }
         }
 
+        /// <summary>
+        /// The engine's default value of a built-in component or of an element struct a component holds:
+        /// the bytes of the default-constructed C++ struct, which the parameterless constructor of a
+        /// generated mirror copies. The engine hands this process no default table, so the read throws
+        /// with the fix; <c>default(T)</c> is all zeros, as for any C# struct.
+        /// </summary>
+        internal static T Default => throw new InvalidOperationException(
+            $"{typeof(T).Name} takes its defaults from the engine, which is not running in this process. Create " +
+            "it in a system or after the engine starts, or start from `default` and set every field.");
+
         private static ulong ResolveTypeId()
         {
-            // Check if T has [BuiltInComponent("nativeName")] — resolve via native name.
-            // Uses reflection by attribute name to avoid a circular reference to Scripting.ABI.
-            foreach (var attr in typeof(T).GetCustomAttributes(false))
-            {
-                var attrType = attr.GetType();
-                if (attrType.FullName == "GameEngine.Scripting.BuiltInComponentAttribute")
-                {
-                    var prop = attrType.GetProperty("NativeName");
-                    if (prop?.GetValue(attr) is string nativeName)
-                        return Ecs.GetComponentTypeIdByName(nativeName);
-                }
-            }
+            // A mirror of an engine component ([BuiltInComponent]) resolves through its native name.
+            if (Attribute.GetCustomAttribute(typeof(T), typeof(GameEngine.Scripting.BuiltInComponentAttribute), false)
+                is GameEngine.Scripting.BuiltInComponentAttribute builtIn)
+                return Ecs.GetComponentTypeIdByName(builtIn.NativeName);
 
             return Ecs.RegisterBlobComponent(RegistrationName(), (uint)Unsafe.SizeOf<T>());
         }

@@ -6,6 +6,8 @@ project(Scripting LANGUAGES CXX)
 set(SCRIPTING_SOURCES
     Source/CoreCLRHost.cpp
     Source/ScriptManager.cpp
+    Source/ScriptPackageRestore.cpp
+    Source/ScriptsProjectFile.cpp
     Source/PackageScriptCompile.cpp
     Source/PathResolver.cpp
     Source/CompileServerClient.cpp
@@ -43,6 +45,7 @@ target_include_directories(Scripting
 target_include_directories(Scripting PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Modules/Platform/Include)
 
 # Dependencies
+find_package(nlohmann_json CONFIG REQUIRED)
 # Note: Keep deps target-based; no global include paths.
 target_link_libraries(Scripting
     PUBLIC
@@ -52,6 +55,7 @@ target_link_libraries(Scripting
         Types
     PRIVATE
         FileWatcher
+        nlohmann_json::nlohmann_json
 )
 
 # .NET hosting headers availability for CoreCLRHost (cross-platform)

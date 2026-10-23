@@ -34,6 +34,7 @@ void BuildGrassPlacementElisionBlob(const GrassPlacementElisionInputs& inputs,
     blob.Append(static_cast<uint8>(inputs.Plan.RangeReduced ? 1u : 0u));
 
     AppendSpan(blob, inputs.TerrainParams);
+    AppendSpan(blob, inputs.TerrainMaterials);
     blob.Append(inputs.TerrainContentEpoch);
 
     blob.Append(inputs.AtlasIdentity);

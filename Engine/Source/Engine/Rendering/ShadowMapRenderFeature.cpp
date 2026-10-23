@@ -2398,6 +2398,7 @@ void ShadowMapRenderFeature::OnScheduleCulling(const FeatureCullingContext& ctx)
         group.firstInstance   = 0;
         group.instanceCount   = ctx.InstanceCount;
         group.renderLayerMask = view.ActiveRenderLayerMask();
+        group.dropEditorHidden = view.DropsEditorHidden();
         group.frameIndex      = ctx.FrameIndex;
         group.deltaTime       = ctx.DeltaTime;
 

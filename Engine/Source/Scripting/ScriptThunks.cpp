@@ -50,6 +50,11 @@ GE_Result RefuseNull(const char* function, const char* parameter)
     return Report(GE_Result_InvalidArg, std::string(function) + ": `" + parameter + "` is a null pointer");
 }
 
+GE_Result RefuseNegativeLength(const char* function, const char* parameter)
+{
+    return Report(GE_Result_InvalidArg, std::string(function) + ": `" + parameter + "` is negative. Pass a byte count of 0 or more");
+}
+
 GE_Result RefuseZeroId(const char* function, const char* parameter)
 {
     return Report(GE_Result_InvalidArg,

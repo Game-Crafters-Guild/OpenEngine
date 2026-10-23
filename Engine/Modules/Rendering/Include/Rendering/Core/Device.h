@@ -909,6 +909,12 @@ struct RenderingDeviceCapabilities
     // subpixel RGB text AA. Callers must fall back to single-source blending
     // when false.
     bool supportsDualSourceBlending = false;
+    // True when the colour attachments of one pipeline may differ in blend
+    // state and write mask (Vulkan independentBlend, enabled at device creation
+    // when available; same support == enabled contract as shaderInt64). The
+    // transmissive pass's glass writes one of the screen-space reflection
+    // slices and masks the other two, which needs it.
+    bool supportsIndependentBlend = false;
     // True when sampleRateShading is enabled on the logical device (same
     // support == enabled contract as shaderInt64). It is what makes the SPIR-V
     // InterpolationFunction capability (interpolateAtOffset) legal; enabling it

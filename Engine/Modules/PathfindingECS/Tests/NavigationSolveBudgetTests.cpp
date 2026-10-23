@@ -36,7 +36,7 @@ constexpr float32 kDt = 1.0f / 60.0f;
 
 Pathfinding::PathStatus StatusOf(const Components::NavigationAgentState& state)
 {
-    return static_cast<Pathfinding::PathStatus>(state.Status);
+    return state.Status;
 }
 
 bool HasPath(const Components::NavigationAgentState& state)
@@ -78,13 +78,13 @@ protected:
         agent.Acceleration = 100.0f;
         agent.StoppingDistance = 0.3f;
         agent.Radius = 0.25f;
-        agent.NavMapIndex = map.Index;
-        agent.NavMapGeneration = map.Generation;
         agent.AgentId = entity.GetHandle().id;
         agent.ReplanInterval = replanInterval;
         entity.Set(agent);
 
         Components::NavigationAgentState state{};
+        state.NavMapIndex = map.Index;
+        state.NavMapGeneration = map.Generation;
         state.DestinationX = destX;
         state.DestinationZ = destZ;
         state.HasDestination = true;
@@ -594,9 +594,9 @@ TEST_F(NavigationSolveBudgetTest, TimerRefreshOnAnInvalidMapWaitsAsAPendingReque
     ASSERT_TRUE(HasPath(*state));
     const Pathfinding::PathHandle oldPath{state->PathIndex, state->PathGeneration};
 
-    // The timer fires the Update the agent's map handle goes invalid.
+    // The timer fires the Update the agent loses its surface: its Surface names an entity with none.
     agent.GetForWrite<Components::NavigationAgentState>()->ReplanTimer = 0.0f;
-    agent.GetForWrite<Components::NavigationAgent>()->NavMapGeneration = 0;
+    agent.GetForWrite<Components::NavigationAgent>()->Surface = m_World->Create().GetHandle();
     m_World->ProcessCommands();
     Step(pathSystem);
     state = agent.Get<Components::NavigationAgentState>();
@@ -606,8 +606,8 @@ TEST_F(NavigationSolveBudgetTest, TimerRefreshOnAnInvalidMapWaitsAsAPendingReque
     EXPECT_EQ(state->PathIndex, 0u);
     EXPECT_EQ(pathBuffer.GetPointCount(oldPath), 0u);
 
-    // The request is solved once the agent has a map again.
-    agent.GetForWrite<Components::NavigationAgent>()->NavMapGeneration = map.Generation;
+    // The request is solved once the agent has a surface again.
+    agent.GetForWrite<Components::NavigationAgent>()->Surface = {};
     m_World->ProcessCommands();
     Step(pathSystem);
     EXPECT_TRUE(HasPath(*agent.Get<Components::NavigationAgentState>()));

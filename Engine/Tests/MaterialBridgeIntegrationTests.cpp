@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialRegistry.h"
@@ -485,8 +486,7 @@ TEST_F(MaterialPipelineCompilationTest, AsyncPublish_DoesNotClobberValidPipeline
 
     ShaderCacheKey key{};
     key.VariantKey = mat->GetVariantKey();
-    key.Source.SurfaceShaderPath = doc.surfaceShader;
-    key.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+    key.Source = MakeShaderSourceKey(doc.surfaceShader, "", mat->GetMaterialAssetPath());
     // A different, bogus-but-valid pipeline id: the valid-pipeline guard must skip it.
     m_rs->Materials().EnqueueBasePipelinePublishForTesting(
         guid, Rendering::GraphicsPipelineId{realPid.Value + 100000u}, nullptr, key);
@@ -523,8 +523,8 @@ TEST_F(MaterialPipelineCompilationTest, AsyncPublish_StaleKeyDiscardedAndRedrive
     // still resolves to standard_pbr, so the keys mismatch.
     ShaderCacheKey staleKey{};
     staleKey.VariantKey = mat->GetVariantKey();
-    staleKey.Source.SurfaceShaderPath = "Surfaces/unlit_solid.glsl"; // != live standard_pbr
-    staleKey.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+    // != live standard_pbr
+    staleKey.Source = MakeShaderSourceKey("Surfaces/unlit_solid.glsl", "", mat->GetMaterialAssetPath());
     const Rendering::GraphicsPipelineId bogus{777777u};
     m_rs->Materials().EnqueueBasePipelinePublishForTesting(guid, bogus, nullptr, staleKey);
 
@@ -558,9 +558,8 @@ TEST_F(MaterialPipelineCompilationTest, AsyncPublish_FailedCompileDoesNotClobber
 
     ShaderCacheKey liveKey{};
     liveKey.VariantKey = mat->GetVariantKey();
-    liveKey.Source.SurfaceShaderPath = mat->GetCompileSpec().surfaceShaderPath;
-    liveKey.Source.VertexModifierPath = mat->GetCompileSpec().vertexModifierPath;
-    liveKey.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+    liveKey.Source = MakeShaderSourceKey(mat->GetCompileSpec().surfaceShaderPath, mat->GetCompileSpec().vertexModifierPath,
+                                         mat->GetMaterialAssetPath());
     // A failed publish (invalid result id) carrying a STALE last-good — an id
     // retired by an older submit, superseded by the pipeline published above.
     const Rendering::GraphicsPipelineId staleLastGood{freshPid.Value + 100000u};
@@ -615,9 +614,8 @@ ShaderCacheKey LiveKeyOf(const Material& mat)
 {
     ShaderCacheKey key{};
     key.VariantKey = mat.GetVariantKey();
-    key.Source.SurfaceShaderPath = mat.GetCompileSpec().surfaceShaderPath;
-    key.Source.VertexModifierPath = mat.GetCompileSpec().vertexModifierPath;
-    key.Source.MaterialAssetPath = mat.GetMaterialAssetPath();
+    key.Source = MakeShaderSourceKey(mat.GetCompileSpec().surfaceShaderPath, mat.GetCompileSpec().vertexModifierPath,
+                                     mat.GetMaterialAssetPath());
     return key;
 }
 } // namespace
@@ -789,9 +787,8 @@ TEST_F(MaterialPipelineCompilationTest, RecompileAsync_SupersededInFlightResultR
     // pre-edit compile.
     ShaderCacheKey liveKey{};
     liveKey.VariantKey = mat->GetVariantKey();
-    liveKey.Source.SurfaceShaderPath = mat->GetCompileSpec().surfaceShaderPath;
-    liveKey.Source.VertexModifierPath = mat->GetCompileSpec().vertexModifierPath;
-    liveKey.Source.MaterialAssetPath = mat->GetMaterialAssetPath();
+    liveKey.Source = MakeShaderSourceKey(mat->GetCompileSpec().surfaceShaderPath, mat->GetCompileSpec().vertexModifierPath,
+                                         mat->GetMaterialAssetPath());
     const Rendering::GraphicsPipelineId bogus{888888u};
     m_rs->Materials().EnqueueBasePipelinePublishForTesting(guid, bogus, nullptr, liveKey);
 
@@ -996,7 +993,7 @@ TEST_F(MaterialPipelineCompilationTest, CacheDrivenCompilesOfAParallaxMaterialMa
     key.VariantKey.materialKeywords |= kWorldColourPass;
     key.VariantKey.vertexFlags = VertexAttributeFlags::StandardMeshWithTangent;
     key.Source.SurfaceShaderPath = mat->GetCompileSpec().surfaceShaderPath;
-    const auto compiled = cache.GetOrCompile(key, mat->GetCompileSpec(), ctx, "CacheRelief", ShaderSourceKind::SpirV);
+    const auto compiled = cache.GetOrCompile(key, mat->GetCompileSpec(), ctx, "CacheRelief", {}, ShaderSourceKind::SpirV);
     ASSERT_TRUE(compiled) << "compile failed";
     EXPECT_TRUE(FragmentMarches(compiled->fragmentBytes)) << "GetOrCompile compiled the flat program";
 
@@ -1807,16 +1804,17 @@ TEST_F(MaterialPipelineCompilationTest, ProjectSwitchDropsRetainedShaderCache)
 
 // Two materials in DIFFERENT directories can author the SAME surface filename and
 // resolve to two different files, so an edit to one's private helper must recompile
-// that one and leave the co-rider alone. The requeue probe folds the material asset
-// path into the source identity it looks up; a probe that dropped the path would
-// collapse both materials onto one identity and the co-rider would ride along.
+// that one and leave the co-rider alone. Each surface resolves in its material's own
+// directory, so the requeue probe folds that directory into the source identity it
+// looks up; a probe that dropped it would collapse both materials onto one identity
+// and the co-rider would ride along.
 //
 // Registration cannot supply the asset path headlessly: MaterialSystem derives it
 // from the asset database (needs an initialized EngineCore) or from the material
 // compiler's record (needs a live engine), and this fixture has neither. Without
-// the TestFactory seam every material here carries an EMPTY path, and a probe built
-// from an empty path matches every row whatever it probes with — which is exactly
-// why a mutation blanking the probe's asset path left the whole suite green.
+// the TestFactory seam every material here carries an EMPTY path, so its identity has
+// no directory either and a probe could never tell the two files apart — which is
+// exactly why a mutation blanking the probe's asset path left the whole suite green.
 TEST_F(MaterialPipelineCompilationTest, SameNamedSurfaceInTwoDirs_RequeueOnlyTheEditedRider)
 {
     namespace fs = std::filesystem;
@@ -1854,8 +1852,8 @@ TEST_F(MaterialPipelineCompilationTest, SameNamedSurfaceInTwoDirs_RequeueOnlyThe
     // Neither surface sits at a project ROOT: shader resolution is
     // directory-local, so the only way to reach one is through the owning
     // material's own directory. That is also why the path-less first registration
-    // below cannot compose — and why no row keyed on the empty asset path is ever
-    // recorded, leaving the per-material rows as the only ones in play.
+    // below cannot compose — and why no row keyed on the empty directory is ever
+    // recorded, leaving the per-directory rows as the only ones in play.
     MaterialBuildContext ctx{};
     ctx.AdapterShaderDir = m_shaderDir;
     ctx.CacheRoot = projectRoot / ".Cache" / "Shaders";
@@ -1925,6 +1923,198 @@ TEST_F(MaterialPipelineCompilationTest, SameNamedSurfaceInTwoDirs_RequeueOnlyThe
         << "B's own helper edit must reach B";
     EXPECT_EQ(matA->GetGraphicsPipelineId().Value, idA2)
         << "A must not ride along on B's helper edit either";
+
+    std::error_code ec;
+    fs::remove_all(projectRoot, ec);
+}
+
+// The common case the directory stays out of: one surface at a project root, used by
+// materials in two directories. Both carry one source identity, so the one closure row
+// that identity records holds the surface's helper, and an edit to the helper must
+// reach every material on the surface. The requeue probe builds each material's
+// identity with MakeShaderSourceKey, as the compile does; a probe that keyed it any
+// other way would name no row and neither material would recompile. The materials
+// share one cache entry, so the edit composes the surface once, not once per material.
+TEST_F(MaterialPipelineCompilationTest, RootResolvedSurfaceHelperEdit_RequeuesEveryMaterialOnIt)
+{
+    namespace fs = std::filesystem;
+    const fs::path projectRoot =
+        fs::temp_directory_path() /
+        ("ge_shader_shared_root_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    const fs::path dirA = projectRoot / "Data" / "planes";
+    const fs::path dirB = projectRoot / "Data" / "ground";
+    fs::create_directories(dirA);
+    fs::create_directories(dirB);
+
+    auto write = [](const fs::path& path, const std::string& text)
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good()) << "could not open " << path.string();
+        out << text;
+    };
+    write(projectRoot / "shared_helper.glsl", "vec3 SharedColor() { return vec3(0.0, 1.0, 0.0); }\n");
+    write(projectRoot / "shared_surface.glsl", "#include \"shared_helper.glsl\"\n"
+                                               "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
+                                               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
+                                               "    o.baseColor = SharedColor();\n"
+                                               "    return o;\n"
+                                               "}\n");
+
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = m_shaderDir;
+    ctx.CacheRoot = projectRoot / ".Cache" / "Shaders";
+    ctx.IncludeDirs = {m_shaderDir};
+    ctx.ProjectRoots = {projectRoot};
+    m_rs->Materials().SetMaterialBuildContext(ctx);
+
+    MaterialDocument doc{};
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "shared_surface.glsl";
+
+    // The asset path goes on through the TestFactory seam before the recompile that
+    // records the closure row, as in SameNamedSurfaceInTwoDirs_RequeueOnlyTheEditedRider.
+    auto registerIn = [&](const char* name, const fs::path& materialAssetPath) -> Material*
+    {
+        MaterialDocument d = doc;
+        d.materialName = name;
+        const GUID guid = GUID::Generate();
+        Material* mat = m_rs->Materials().RegisterMaterialFromDocument(guid, d);
+        if (!mat)
+            return nullptr;
+        Material::TestFactory::SetMaterialAssetPath(*mat, materialAssetPath);
+        m_rs->Materials().RecompileMaterialPipeline(guid, d);
+        return mat;
+    };
+    Material* matA = registerIn("SharedA", dirA / "a.material");
+    Material* matB = registerIn("SharedB", dirB / "b.material");
+    ASSERT_TRUE(matA != nullptr && matB != nullptr);
+    ASSERT_TRUE(matA->GetGraphicsPipelineId().IsValid());
+    ASSERT_TRUE(matB->GetGraphicsPipelineId().IsValid());
+    const uint32_t idA1 = matA->GetGraphicsPipelineId().Value;
+    const uint32_t idB1 = matB->GetGraphicsPipelineId().Value;
+
+    write(projectRoot / "shared_helper.glsl", "vec3 SharedColor() { return vec3(1.0, 0.0, 0.0) * 0.25; }\n");
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Debug);
+        m_rs->Materials().NotifyShaderSourceEdited(projectRoot / "shared_helper.glsl");
+        for (size_t drains = 0; drains < 32; ++drains)
+        {
+            m_rs->Materials().DrainPendingShaderSourceEdits();
+            if (matA->GetGraphicsPipelineId().Value != idA1 && matB->GetGraphicsPipelineId().Value != idB1)
+                break;
+        }
+    }
+    EXPECT_NE(matA->GetGraphicsPipelineId().Value, idA1) << "a material on the edited helper's surface must recompile";
+    EXPECT_NE(matB->GetGraphicsPipelineId().Value, idB1)
+        << "the second material shares the surface's identity, so the same edit must reach it";
+    const auto composes = std::count_if(lines.begin(), lines.end(), [](const std::string& line)
+                                        { return line.find("ShaderComposer: surface 'shared_surface.glsl' ->") != std::string::npos; });
+    EXPECT_EQ(composes, 1) << "both materials share one cache entry, so the edit composes the surface once";
+
+    std::error_code ec;
+    fs::remove_all(projectRoot, ec);
+}
+
+// Materials in different directories on one root-resolved surface share a source
+// identity, so the variant key is all that keeps their programs apart. A user keyword
+// the surface reads changes the program, and must reach only the material that sets it.
+TEST_F(MaterialPipelineCompilationTest, RootResolvedSurface_UserKeywordKeepsItsOwnProgram)
+{
+    namespace fs = std::filesystem;
+    const fs::path projectRoot =
+        fs::temp_directory_path() /
+        ("ge_shader_shared_keyword_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::create_directories(projectRoot / "Data" / "tinted");
+    fs::create_directories(projectRoot / "Data" / "plain");
+    {
+        std::ofstream out(projectRoot / "keyword_surface.glsl", std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
+               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
+               "#ifdef GE_USER_TINT\n"
+               "    o.baseColor = vec3(1.0, 0.0, 0.0);\n"
+               "#endif\n"
+               "    return o;\n"
+               "}\n";
+    }
+
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = m_shaderDir;
+    ctx.CacheRoot = projectRoot / ".Cache" / "Shaders";
+    ctx.IncludeDirs = {m_shaderDir};
+    ctx.ProjectRoots = {projectRoot};
+    m_rs->Materials().SetMaterialBuildContext(ctx);
+
+    ASSERT_EQ(MakeShaderSourceKey("keyword_surface.glsl", "", projectRoot / "Data" / "tinted" / "a.material"),
+              MakeShaderSourceKey("keyword_surface.glsl", "", projectRoot / "Data" / "plain" / "b.material"))
+        << "the surface resolves through the project root, so both materials name one source";
+
+    // Registration compiles through the shared cache: the second material finds the
+    // first one's entries, and only its variant key can send it to a program of its own.
+    MaterialDocument doc{};
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "keyword_surface.glsl";
+    doc.materialName = "Tinted";
+    doc.keywords = {"TINT"};
+    Material* tinted = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    doc.materialName = "Plain";
+    doc.keywords.clear();
+    Material* plain = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    ASSERT_TRUE(tinted != nullptr && plain != nullptr);
+    ASSERT_TRUE(tinted->GetGraphicsPipelineId().IsValid());
+    ASSERT_TRUE(plain->GetGraphicsPipelineId().IsValid());
+    EXPECT_NE(tinted->GetGraphicsPipelineId().Value, plain->GetGraphicsPipelineId().Value)
+        << "the keyword changes the compiled program, so the two materials must not share one";
+
+    std::error_code ec;
+    fs::remove_all(projectRoot, ec);
+}
+
+// The variant key folds the lighting model's case, so two materials on one
+// root-resolved surface that spell the model differently share a key and so a
+// program. The program must then be the one both spellings mean: the parse gives
+// the model one spelling, and the LIGHTING_MODEL_* define comes from it.
+TEST_F(MaterialPipelineCompilationTest, RootResolvedSurface_LightingModelSpellingComposesOneProgram)
+{
+    namespace fs = std::filesystem;
+    const fs::path projectRoot =
+        fs::temp_directory_path() /
+        ("ge_shader_shared_lighting_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::create_directories(projectRoot / "A");
+    fs::create_directories(projectRoot / "B");
+    std::ofstream(projectRoot / "lm_surface.glsl")
+        << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) { return DefaultSurfaceOutput(); }\n";
+
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = m_shaderDir;
+    ctx.CacheRoot = projectRoot / ".Cache" / "Shaders";
+    ctx.IncludeDirs = {m_shaderDir};
+    ctx.ProjectRoots = {projectRoot};
+    m_rs->Materials().SetMaterialBuildContext(ctx);
+
+    auto parse = [](const fs::path& path, const std::string& lightingModel)
+    {
+        const std::string json = R"({"schemaVersion": 2, "lightingModel": ")" + lightingModel
+                               + R"(", "surfaceShader": "lm_surface.glsl"})";
+        MaterialAsset asset(GUID::Generate(), path);
+        EXPECT_TRUE(asset.LoadFromData(std::vector<uint8_t>(json.begin(), json.end())));
+        return asset.GetDocument();
+    };
+    const fs::path pathA = projectRoot / "A" / "a.material";
+    const fs::path pathB = projectRoot / "B" / "b.material";
+    const MaterialDocument a = parse(pathA, "StandardPBR");
+    const MaterialDocument b = parse(pathB, "standardpbr");
+    Material* matA = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), a);
+    Material* matB = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), b);
+    ASSERT_TRUE(matA != nullptr && matB != nullptr);
+    ASSERT_EQ(matA->GetVariantKey(), matB->GetVariantKey());
+    ASSERT_EQ(MakeShaderSourceKey(a.surfaceShader, "", pathA), MakeShaderSourceKey(b.surfaceShader, "", pathB));
+
+    const auto builtA = BuildMaterialToShaderPackage(a, pathA, "LmA", ctx, ShaderSourceKind::SpirV, MaterialKeyword::None);
+    const auto builtB = BuildMaterialToShaderPackage(b, pathB, "LmB", ctx, ShaderSourceKind::SpirV, MaterialKeyword::None);
+    EXPECT_EQ(builtA.composedDefines, builtB.composedDefines)
+        << "one in-memory cache key serves both materials, so both spellings must compose one program";
 
     std::error_code ec;
     fs::remove_all(projectRoot, ec);

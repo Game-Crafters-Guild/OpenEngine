@@ -6,6 +6,7 @@
 #include "Editor/Settings/SettingsStore.h"
 #include "EditorDockNodeJson.h"
 #include "EditorPanelManager.h"
+#include "Logger/Logger.h"
 #include "Panels/RenameLayoutModal.h"
 #include "Panels/SaveSceneChangesModal.h"
 #include "Platform/Shell.h"
@@ -248,6 +249,12 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
     // Load persisted presets from the project folder so they travel with the
     // project (checked into VCS alongside other project settings). Default
     // preset (index 0) always comes from layout.uxml / captured default.
+    // Reopening the last project at startup switches to it before the dock and
+    // the default preset exist; a load then would put the first saved preset at
+    // index 0, which the save skips. The load after the dock is built restores them.
+    if (!m_Docking || m_LayoutPresets.empty())
+        return;
+
     const auto& workspaceRoot = EngineCore::GetInstance().GetWorkspaceRoot();
     if (workspaceRoot.empty())
         return;
@@ -323,12 +330,6 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
     if (desired >= 0 && desired < static_cast<int>(m_LayoutPresets.size()))
     {
         const auto& preset = m_LayoutPresets[(size_t)desired];
-        if (!m_Docking)
-        {
-            OnLayoutPresetRestoreFailed();
-            return;
-        }
-
         UIManager* mainUi =
             (!m_Windows.empty() && m_Windows[0]) ? m_Windows[0]->ui.get() : nullptr;
         if (!Editor::LayoutPresetController::Apply(
@@ -339,6 +340,9 @@ void EditorApplication::LoadLayoutPresetsFromPreferences()
         }
 
         m_ActiveLayoutPresetIndex = desired;
+        // Named from the active index, so the line reports the preset the toolbar shows.
+        Logger::Log::Info("Editor: restored layout preset '{}'",
+                          m_LayoutPresets[static_cast<size_t>(m_ActiveLayoutPresetIndex)].name);
         return;
     }
 

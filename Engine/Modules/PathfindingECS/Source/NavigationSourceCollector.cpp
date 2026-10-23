@@ -22,6 +22,7 @@
 #include "PhysicsECS/Components/PhysicsColliderOwner.h"
 #include "PhysicsECS/Components/PlaneColliderShape.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <cmath>
@@ -399,6 +400,25 @@ void NavigationStaticGeometry::AppendOverlapping(float32 minX, float32 minZ, flo
             out.Indices.push_back(it->second);
         }
     }
+}
+
+uint64 NavigationStaticGeometry::HashOverlapping(float32 minX, float32 minZ, float32 maxX, float32 maxZ) const
+{
+    std::vector<uint64> itemHashes;
+    for (const Item& item : Items)
+    {
+        if (!item.Bounds.OverlapsXZ(minX, minZ, maxX, maxZ))
+            continue;
+        uint64 hash = Hashing::kFnv1a64OffsetBasis;
+        for (uint32 i = 0; i < item.IndexCount; ++i)
+        {
+            const uint32 source = Triangles.Indices[item.FirstIndex + i];
+            hash = Hashing::Fnv1a64(&Triangles.Vertices[static_cast<size_t>(source) * 3], 3 * sizeof(float32), hash);
+        }
+        itemHashes.push_back(hash);
+    }
+    std::sort(itemHashes.begin(), itemHashes.end());
+    return Hashing::Fnv1a64(itemHashes.data(), itemHashes.size() * sizeof(uint64));
 }
 
 NavigationStaticGeometry GatherNavigationStaticGeometry(ECS::World& world)

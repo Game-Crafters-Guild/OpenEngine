@@ -29,6 +29,8 @@ set(EDITOR_SOURCES
     Source/Editor/Settings/GraphSettingsPage.cpp
     Source/Editor/Settings/LodSettingsPage.cpp
     Source/Editor/Settings/RenderLayersSettingsPage.cpp
+    Source/Editor/Settings/ScriptPackagesSettingsPage.cpp
+    Source/Editor/Settings/ScriptPackagesList.cpp
     Source/Editor/Settings/SettingsTextFieldRow.cpp
     Source/Editor/Settings/PhysicsProjectSettings.cpp
     Source/Editor/Settings/ProjectUIScaleBinding.cpp
@@ -39,6 +41,7 @@ set(EDITOR_SOURCES
 	Source/Editor/Hierarchy/HierarchySearch.cpp
 	Source/Editor/Hierarchy/HierarchyEnableState.cpp
 	Source/Editor/Hierarchy/HierarchyRowActivity.cpp
+	Source/Editor/Hierarchy/HierarchyRowEye.cpp
 	Source/Editor/Hierarchy/HierarchyLightIconTint.cpp
 	Source/Editor/Hierarchy/HierarchyNavigationBar.cpp
 	Source/Editor/Hierarchy/HierarchyRenderLayerEdit.cpp
@@ -57,7 +60,7 @@ set(EDITOR_SOURCES
     Source/Assets/AssetRenameController.cpp
     Source/UndoRedo/GenericEditUndo.cpp
     Source/UndoRedo/EntityComponentsEdit.cpp
-    Source/UndoRedo/RenameAssetFileCommand.cpp
+    Source/UndoRedo/RenameAssetCommand.cpp
     Source/UndoRedo/SetAssetMetaValueCommand.cpp
     Source/UndoRedo/SplinePointEdits.cpp
     Source/Assets/AsyncAssetHelpers.cpp
@@ -75,6 +78,7 @@ set(EDITOR_SOURCES
     Source/Assets/PolyhavenDownloadManager.cpp
     Source/Assets/PolyhavenPlaceholderFactory.cpp
     Source/Assets/PolyhavenService.cpp
+    Source/UI/InlineRenameSession.cpp
     Source/UI/SmartFolder/SmartFolder.cpp
     Source/UI/SmartFolder/SmartFolderController.cpp
     Source/UI/SmartFolder/SmartFolderManager.cpp
@@ -93,6 +97,9 @@ set(EDITOR_SOURCES
     Source/Editor/Hierarchy/HierarchyEntityIcon.cpp
     Source/Editor/Hierarchy/HierarchyOrdering.cpp
     Source/Editor/Hierarchy/HierarchyEmptyParent.cpp
+    Source/Editor/Hierarchy/HierarchyEntityCommands.cpp
+    Source/Editor/Hierarchy/HierarchyEntityDelete.cpp
+    Source/Editor/Hierarchy/HierarchyEntityRename.cpp
     Source/Editor/Hierarchy/HierarchyReparent.cpp
     Source/Panels/InspectorPanel.cpp
     Source/Panels/AssetViewPanel.cpp
@@ -166,7 +173,6 @@ set(EDITOR_SOURCES
     Source/PlayMode/ModelAnimationPlayMode.cpp
     Source/PlayMode/AnimationPlayModeHelpers.cpp
     Source/PlayMode/RuntimeInputConnection.cpp
-    Source/PlayMode/AudioToggleButton.cpp
     Source/PlayMode/PlayButtonMenu.cpp
     Source/PlayMode/PlayButtonState.cpp
     Source/PlayMode/GameViewPointerLock.cpp
@@ -258,7 +264,9 @@ set(EDITOR_SOURCES
 	Source/Inspectors/TerrainRuleNotices.cpp
 	Source/Inspectors/TerrainSizingNotice.cpp
 	Source/Inspectors/MeshRendererInspector.cpp
+	Source/Inspectors/ShadowCastingRow.cpp
 	Source/Inspectors/RenderLayerField.cpp
+	Source/Inspectors/NavigationAgentInspector.cpp
 	Source/Inspectors/NavigationSourceComponentTraits.cpp
 	Source/Inspectors/NavigationSurfaceInspector.cpp
 	Source/Inspectors/SkinnedMeshRendererInspector.cpp
@@ -354,7 +362,10 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainInspector.cpp
 	Source/Terrain/TerrainPageCookOverlay.cpp
 	Source/Terrain/TerrainModifierInspectors.cpp
+	Source/Terrain/TerrainGrassRegionRows.cpp
+	Source/Terrain/TerrainColorZoneInspector.cpp
 	Source/Terrain/TerrainMaterialLibraryMint.cpp
+	Source/Navigation/NavigationBakedDataSave.cpp
 	Source/Terrain/TerrainBakeCacheSave.cpp
 	Source/Terrain/TerrainGrassVocabulary.cpp
 	Source/Terrain/TerrainRoleMaterials.cpp
@@ -386,6 +397,7 @@ set(EDITOR_SOURCES
 
 	Modules/EditorToolbar/EditorToolbar.cpp
 	Modules/EditorContextMenu/ContextMenuBackendPolicy.cpp
+	Modules/EditorContextMenu/DirectoryMenuEditItems.cpp
 	Modules/EditorContextMenu/EditorContextMenu.cpp
 	Modules/EditorContextMenu/MenuIconPreload.cpp
 	Modules/EditorContextMenu/InterceptableContextMenu.cpp
@@ -501,6 +513,20 @@ set(EDITOR_SOURCES
 	Source/Markups/MarkupRequests.cpp
 	Source/Markups/MarkupTool.cpp
 	Source/Markups/MarkupsPanel.cpp
+	Source/DayCycle/DayCycleAxis.cpp
+	Source/DayCycle/DayCycleDescriptionField.cpp
+	Source/DayCycle/DayCycleEditorServices.cpp
+	Source/DayCycle/DayCycleProfileControls.cpp
+	Source/DayCycle/DayCycleProfileInspector.cpp
+	Source/DayCycle/DayCycleProfileSave.cpp
+	Source/DayCycle/DayCycleRowsHost.cpp
+	Source/DayCycle/DayCycleScrub.cpp
+	Source/DayCycle/DayCycleShippedProfiles.cpp
+	Source/DayCycle/DayCycleSunNow.cpp
+	Source/DayCycle/DayCycleTrackRows.cpp
+	Source/DayCycle/DayCycleWindow.cpp
+	Source/DayCycle/DayCycleWindowRegistration.cpp
+	Source/DayCycle/DayCycleWorkingCopy.cpp
 	Source/Markups/MarkupsPanelRows.cpp
 	Source/Markups/MarkupActionMenuItems.h
 	Source/SceneView/SceneViewToolStrip.cpp
@@ -520,6 +546,7 @@ set(EDITOR_SOURCES
 	Source/SceneView/SceneViewEvents.cpp
 	Source/SceneView/SceneViewOverlayShared.cpp
 	Source/SceneView/SceneViewOverlaysRG.cpp
+	Source/SceneView/SceneViewEye.cpp
 	Source/SceneView/SelectionOutlineContributors.cpp
 	Source/SceneView/SceneViewRenderCoordinator.cpp
 	Source/SceneView/MountedViewPanels.cpp
@@ -571,6 +598,8 @@ set(EDITOR_SOURCES
 	Source/DebugServer/CameraProjectionReport.cpp
 	Source/DebugServer/TerrainSplitThresholdReport.cpp
 	Source/DebugServer/SceneHierarchyReport.cpp
+	Source/DebugServer/LogQueryReport.cpp
+	Source/DebugServer/BuildStatusReport.cpp
 	Source/DebugServer/ComponentValueReader.cpp
 	Source/DebugServer/RenderLayerMaskValue.cpp
 	Source/DebugServer/SchemaComponentApply.cpp
@@ -619,6 +648,8 @@ set(EDITOR_HEADERS
 	Source/DebugServer/CameraProjectionReport.h
 	Source/DebugServer/TerrainSplitThresholdReport.h
 	Source/DebugServer/SceneHierarchyReport.h
+	Source/DebugServer/LogQueryReport.h
+	Source/DebugServer/BuildStatusReport.h
 	Source/DebugServer/ComponentValueReader.h
 	Source/DebugServer/SchemaComponentApply.h
 	Source/DebugServer/DebugHandlers.h
@@ -670,12 +701,11 @@ set(EDITOR_HEADERS
     Include/EditorInputActions.h
     Include/UndoRedo/CreateTextFileCommand.h
     Include/UndoRedo/GenericEditUndo.h
-    Include/UndoRedo/RenameAssetFileCommand.h
+    Include/UndoRedo/RenameAssetCommand.h
     Include/UndoRedo/SetAssetMetaValueCommand.h
     Include/UndoRedo/DeleteAssetPathsCommand.h
     Include/PlayMode/PlayModeManager.h
     Include/PlayMode/RuntimeInputConnection.h
-    Include/PlayMode/AudioToggleButton.h
     Include/PlayMode/PlayButtonMenu.h
     Include/PlayMode/PlayButtonState.h
     Include/PlayMode/GameViewPointerLock.h
@@ -685,6 +715,7 @@ set(EDITOR_HEADERS
     Include/UndoRedo/MultiEntityComponentSnapshot.h
     Include/Inspectors/TransformInspector.h
 	Include/Inspectors/MeshRendererInspector.h
+	Include/Inspectors/NavigationAgentInspector.h
 	Include/Inspectors/NavigationSourceComponentTraits.h
 	Include/Inspectors/NavigationSurfaceInspector.h
 	Include/Inspectors/SkinnedMeshRendererInspector.h
@@ -741,6 +772,7 @@ set(EDITOR_HEADERS
 	Include/UI/ActivateOnRelease.h
 	Include/UI/InspectorSection.h
 	Include/UI/EditorSearchBars.h
+	Include/UI/InlineRenameSession.h
 	Include/UI/UniversalSearchProvider.h
 	Include/Search/UniversalSearchController.h
 	Include/Packages/PackageManagerController.h
@@ -896,6 +928,8 @@ set(EDITOR_HEADERS
 	Include/SceneView/SceneViewEntityLinks.h
 	Modules/EditorToolbar/EditorToolbar.h
 	Modules/EditorContextMenu/ContextMenuBackendPolicy.h
+	Modules/EditorContextMenu/DirectoryMenuEditItems.h
+	Modules/EditorContextMenu/EditMenuGroup.h
 	Modules/EditorContextMenu/EditorContextMenu.h
 	Modules/EditorContextMenu/InterceptableContextMenu.h
 	Modules/EditorContextMenu/MenuIconPreload.h
@@ -2196,6 +2230,7 @@ file(GLOB_RECURSE _GE_STAGE_INPUTS CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/Assets/*"
 	"${CMAKE_CURRENT_SOURCE_DIR}/ProjectTemplates/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/SkeletonProfiles/*"
+	"${CMAKE_SOURCE_DIR}/Engine/Assets/DayCycles/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/Materials/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/RenderPipelines/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/Textures/*"
@@ -2273,6 +2308,10 @@ _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
 # Runtime humanoid profiles are shared by Editor and Player.
 _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/SkeletonProfiles" "${_GE_EDITOR_ASSETS_DEST}/SkeletonProfiles")
+# The shipped Day Cycle profiles (Default, Clear day): read-only in the editor source; a save
+# goes into the project as a copy.
+_ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
+	"${CMAKE_SOURCE_DIR}/Engine/Assets/DayCycles" "${_GE_EDITOR_ASSETS_DEST}/DayCycles")
 # Engine-level Materials (Material v2 surfaces, templates, etc.) so `.material`
 # assets can reference surface shaders that live under Engine/Assets.
 _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS

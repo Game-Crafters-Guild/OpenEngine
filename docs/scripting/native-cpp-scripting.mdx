@@ -119,6 +119,8 @@ struct DamageSystem : ECS::SystemBase
 
 `OnStart`, `OnUpdate`, `OnPostSimulation`, and `OnDestroy` are optional hooks. Their ordering and permitted world access are defined in [Native User Systems](./native-user-systems.mdx). Use that contract when choosing between gameplay before simulation and presentation after simulation.
 
+User systems run in ascending order of a `static constexpr int Order` member, 0 when a system declares none; give a system an `Order` when it must run after another in the same frame. See [the order systems run in](./native-user-systems.mdx#the-order-systems-run-in).
+
 ## Input
 
 A system reads the game's input from `EngineCore::GetInstance().GetRuntimeInput()` (`Core/Engine.h`), an `Input::InputSystem`: keys, mouse buttons, the mouse position and delta, and pointer lock for mouse look.

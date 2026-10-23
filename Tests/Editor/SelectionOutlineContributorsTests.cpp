@@ -3,6 +3,7 @@
 #include "SceneView/SelectionOutlineContributors.h"
 
 #include "Components/Hierarchy.h"
+#include "Components/SceneViewHidden.h"
 #include "Components/Transform.h"
 #include "ECS/DisabledInHierarchySystem.h"
 #include "ECS/ECSTemplates.h"
@@ -53,6 +54,26 @@ TEST(SelectionOutlineContributorsTests, EntitiesInactiveInTheHierarchyDrawNoOutl
     pass.Update(world, 0.0f);
     CollectSelectionOutlineContributors(world, {selection, descendants, {}, {}, true}, contributors);
     EXPECT_TRUE(contributors.empty()) << "a switched-off parent and its children draw no outline";
+
+    CollectSelectionOutlineContributors(world, {{}, {}, parent, descendants, true}, contributors);
+    EXPECT_TRUE(contributors.empty()) << "hovering it outlines nothing either";
+}
+
+// The Scene View eye takes a mesh out of the way whatever the selection: a hidden selected or hovered
+// entity draws no outline, and neither do the children hidden with it.
+TEST(SelectionOutlineContributorsTests, EntitiesTheSceneViewEyeHidesDrawNoOutline)
+{
+    World world;
+    const EntityHandle parent = MakeOutlinedNode(world);
+    const EntityHandle child = MakeOutlinedNode(world, parent);
+    const EntityHandle selection[] = {parent};
+    const EntityHandle descendants[] = {child};
+    std::vector<EntityHandle> contributors;
+
+    world.AddComponentImmediate<GameEngine::Components::SceneViewHidden>(parent, {});
+    world.AddComponentImmediate<GameEngine::Components::SceneViewHiddenInHierarchy>(child, {});
+    CollectSelectionOutlineContributors(world, {selection, descendants, {}, {}, true}, contributors);
+    EXPECT_TRUE(contributors.empty()) << "a hidden parent and its hidden children draw no outline";
 
     CollectSelectionOutlineContributors(world, {{}, {}, parent, descendants, true}, contributors);
     EXPECT_TRUE(contributors.empty()) << "hovering it outlines nothing either";

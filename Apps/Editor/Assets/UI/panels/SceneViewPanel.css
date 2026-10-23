@@ -71,6 +71,7 @@
 
 /* The Scene View's layer filter: wide enough for "All but <name>" before it cuts. */
 .sceneview-layers-field {
+	color: var(--ui_color_text_dim);
 	min-width: 120px;
 	max-width: 200px;
 }

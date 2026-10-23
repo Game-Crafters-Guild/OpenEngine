@@ -651,6 +651,23 @@ class FogForwardParity : public ::testing::Test
         return Draw(probe, bytes);
     }
 
+    // An opaque surface whose scene colour is `behindColor`, `behindDistance` along the pose's ray,
+    // seen through a nearer surface at the pose's distance that takes the fog afterwards
+    // (forward_fog_probe_seen_through).
+    Pixel SeenThrough(const Pose& pose, const Pixel& behindColor, float behindDistance)
+    {
+        SetView(pose);
+        const Vec3 at = Target(pose);
+        Pose behindPose = pose;
+        behindPose.Distance = behindDistance;
+        const Vec3 behind = Target(behindPose);
+        const float pc[12] = {behindColor[0], behindColor[1], behindColor[2], 1.0f, at[0],     at[1],
+                              at[2],          1.0f,           behind[0],      behind[1], behind[2], 1.0f};
+        std::vector<uint8_t> bytes(sizeof(pc));
+        std::memcpy(bytes.data(), pc, sizeof(pc));
+        return Draw("forward_fog_probe_seen_through", bytes);
+    }
+
     // The VolumetricFog composite over an opaque surface of `color` at the pose's distance, blended
     // as its pipeline blends (scene * transmittance + in-scatter).
     Pixel Composite(const Pose& pose, const Pixel& color, const VolumetricFogParams& fog)
@@ -830,6 +847,80 @@ TEST_F(FogForwardParity, HeightFogNoisyFogAgreesWithTheResolvedScenesFog)
     fog.noiseTime = 3.25f;
     fog.noiseVelX = 4.0f;
     CheckParity(fog, "noise");
+}
+
+// The ocean shows its seabed through the scene colour, where the seabed already took the fog of its own
+// distance, and then takes the fog of its own: the bed comes out fogged once, as a surface of the
+// bed's colour at the water's distance is.
+TEST_F(FogForwardParity, HeightFogSurfaceSeenThroughANearerSurfaceIsFoggedOnceByTheNearerDistance)
+{
+    SetFog(BaseFog());
+    const Pixel color{0.9f, 0.35f, 0.1f, 1.0f};
+    float strongestDoubleFog = 0;
+    for (Pose pose : Poses())
+    {
+        const float behindDistance = pose.Distance * 1.25f + 8.0f;
+        Pose behindPose = pose;
+        behindPose.Distance = behindDistance;
+        const Pixel grab = Forward(behindPose, color, 1.0f, "forward_fog_probe");
+        const Pixel once = Forward(pose, color, 1.0f, "forward_fog_probe");
+        ExpectNear(once, SeenThrough(pose, grab, behindDistance), Describe(pose));
+        // The fog taken twice, which the probe must not give: the instrument can tell them apart.
+        const Pixel twice = Forward(pose, grab, 1.0f, "forward_fog_probe");
+        for (int c = 0; c < 3; ++c)
+            strongestDoubleFog = std::max(strongestDoubleFog, std::abs(twice[c] - once[c]));
+        if (HasFatalFailure() || HasNonfatalFailure())
+            return;
+    }
+    EXPECT_GT(strongestDoubleFog, 0.1f) << "the fog taken twice barely differs from once in any pose";
+}
+
+// A seabed the fog leaves almost nothing of (Max Opacity 1, the distance and the height layers summed,
+// the seabed past the fog's reach and below its base): its transmittance is under the floor, so the
+// rounding of its scene colour comes back amplified by at most the floor's 1024, not by 1 / T.
+TEST_F(FogForwardParity, HeightFogSurfaceTheFogAlmostHidesSeenThroughANearerSurfaceBoundsItsRecoveredLight)
+{
+    HeightFogParamsUBO fog = BaseFog();
+    fog.maxOpacity = 1.0f;
+    fog.density = 1.0f;
+    fog.minDistance = 0.0f;
+    fog.smoothLength = 1.0f;
+    fog.baseHeight = 200.0f;
+    fog.layerMode = 1;
+    SetFog(fog);
+    const Pixel color{0.9f, 0.35f, 0.1f, 1.0f};
+    const Pixel black{0, 0, 0, 1};
+    Pose pose{{40.0f, 15.0f, -25.0f}, 0.0f, -8.0f, 20.0f};
+    const float behindDistance = 3500.0f;
+    Pose behindPose = pose;
+    behindPose.Distance = behindDistance;
+    const Pixel behindFog = Forward(behindPose, black, 1.0f, "forward_fog_probe");
+    const float behindTransmittance = (Forward(behindPose, color, 1.0f, "forward_fog_probe")[0] - behindFog[0]) / color[0];
+    ASSERT_LT(behindTransmittance, 1.0f / 1024.0f) << "the seabed must be under the floor, or the case proves nothing";
+    const Pixel nearFog = Forward(pose, black, 1.0f, "forward_fog_probe");
+    const float nearTransmittance = (Forward(pose, color, 1.0f, "forward_fog_probe")[0] - nearFog[0]) / color[0];
+    // One rounding step of a half-float scene colour near 1, above the fog's light.
+    const float rounding = 1.0f / 512.0f;
+    const Pixel grab{behindFog[0] + rounding, behindFog[1] + rounding, behindFog[2] + rounding, 1};
+    const Pixel seen = SeenThrough(pose, grab, behindDistance);
+    for (int c = 0; c < 3; ++c)
+    {
+        EXPECT_GE(seen[c], nearFog[c] - 1e-5f) << "channel " << c;
+        EXPECT_LE(seen[c], nearFog[c] + rounding * 1024.0f * nearTransmittance * 1.001f) << "channel " << c;
+    }
+}
+
+// A scene colour darker than the fog's light at the seabed (a texel the filtered grab mixes across a
+// depth edge, or plain black): no radiance below zero comes back, so the water shows its own fog's light.
+TEST_F(FogForwardParity, HeightFogSceneColourDarkerThanTheFogSeenThroughANearerSurfaceIsTheNearerFogsLight)
+{
+    SetFog(BaseFog());
+    const Pixel black{0, 0, 0, 1};
+    Pose pose{{40.0f, 15.0f, -25.0f}, 0.0f, -8.0f, 150.0f};
+    const float behindDistance = 600.0f;
+    const Pixel nearFog = Forward(pose, black, 1.0f, "forward_fog_probe");
+    EXPECT_GT(nearFog[0], 0.01f) << "the water's fog must give light, or the case proves nothing";
+    ExpectNear(nearFog, SeenThrough(pose, black, behindDistance), Describe(pose));
 }
 
 TEST_F(FogForwardParity, VolumetricFogAgreesWithTheCompositeInsideAndPastTheVolume)

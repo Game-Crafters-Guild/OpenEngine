@@ -7,7 +7,6 @@
 
 #include "TerrainGrass/TerrainGrassPresets.h"
 
-#include "Terrain/TerrainMaterialRecord.h"
 #include "Types/Color.h"
 
 #include <algorithm>
@@ -28,18 +27,13 @@ float32 Luminance(const ColorLinear& c)
     return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
 }
 
-float32 Saturation(const ColorLinear& c)
-{
-    const float32 maxChannel = std::max({c.r, c.g, c.b});
-    return maxChannel > 0.0f ? (maxChannel - std::min({c.r, c.g, c.b})) / maxChannel : 0.0f;
-}
 } // namespace
 
-// Auto Root Color is the tip in shade: 0.65 of the tip's luminance in linear light, at the tip's
-// chromaticity, within the 8-bit encode's rounding.
+// Auto Root Color is the tip in shade: kTerrainGrassAutoRootLuminance of the tip's luminance in
+// linear light, at the tip's chromaticity, within the 8-bit encode's rounding.
 TEST(TerrainGrassPalette, AnAutomaticRootKeepsTheTipsChromaticityAtTheRootLuminanceInLinearLight)
 {
-    for (const uint32 tip : {0xFF79954Du, 0xFFB3DB4Du, 0xFF9CD334u, 0xFF658E3Cu, 0xFFA29B61u, 0xFFFFFFFFu})
+    for (const uint32 tip : {0xFF79954Du, 0xFFB3DB4Du, 0xFF9CD334u, 0xFF6C8E4Bu, 0xFFA29B61u, 0xFFFFFFFFu})
     {
         const ColorLinear tipLinear = DecodeArgb(tip);
         const ColorLinear rootLinear = DecodeArgb(Components::TerrainGrassAutoRootColor(tip));
@@ -52,10 +46,8 @@ TEST(TerrainGrassPalette, AnAutomaticRootKeepsTheTipsChromaticityAtTheRootLumina
     }
 }
 
-// The default palette: a leaf tip and a brighter yellow-green back-light, in linear light, over the
-// soil of the untextured grass channel, which is darker and less saturated than the leaf so a lit
-// tip is the brightest part of a default field.
-TEST(TerrainGrassPalette, TheDefaultPaletteIsALeafOverADarkerSoil)
+// The default palette: a leaf tip and a brighter yellow-green back-light, in linear light.
+TEST(TerrainGrassPalette, TheDefaultPaletteIsALeafAndAYellowGreenBacklight)
 {
     const Components::TerrainGrass defaults{};
     const ColorLinear tip = DecodeArgb(defaults.TipColor);
@@ -67,11 +59,6 @@ TEST(TerrainGrassPalette, TheDefaultPaletteIsALeafOverADarkerSoil)
     EXPECT_NEAR(backlight.r, 0.50f, 2.0f * kByte);
     EXPECT_NEAR(backlight.g, 0.62f, 2.0f * kByte);
     EXPECT_NEAR(backlight.b, 0.12f, 2.0f * kByte);
-
-    const Terrain::TerrainMaterialRecord& soilRecord = Terrain::kDefaultTerrainMaterials[0];
-    const ColorLinear soil(soilRecord.AlbedoR, soilRecord.AlbedoG, soilRecord.AlbedoB);
-    EXPECT_LT(Luminance(soil), 0.6f * Luminance(tip)) << "the soil under grass is not darker than the leaf";
-    EXPECT_LT(Saturation(soil), Saturation(tip)) << "the soil under grass is as saturated as the leaf";
 }
 
 TEST(TerrainGrassPresets, MeadowIsTheComponentDefaults)

@@ -34,6 +34,8 @@ Code lives where its concept lives, as a named, reusable piece with one job: dra
 
 ## Pull requests
 
+Before opening a pull request, run the `change-scrutiny` skill (`.claude/skills/change-scrutiny/SKILL.md`; a contributor without an agent walks its list by hand) over the diff and put its "Reuse and surface" table in the body: every added symbol, the engine piece it reuses or why none fit, whether it is public and who outside the module needs it. A change that adds nothing public and reuses what exists says so in one line. The same pass reads the diff against the whole of `CodingStyle.md` (names, headers, lambdas, enums, control flow, concurrency, comments) and fixes what it finds before the pull request opens.
+
 - Direction and behaviour come before correctness. Say whether the change is the right thing for the engine at all: the subsystem that owns the concept, the shape the design agreed, and what a user sees at the end. A change that follows its instructions to a bad end result is wrong, and the review says so; decline or defer is the owner's call.
 - Every user-facing change is judged as a user meets it: the workflow, the number of steps, what the defaults do, what an error tells them, how the editor looks and feels. Editor UX that fights the user fails review even when the code is clean. Anything visible passes the visual critic (recorded-pose screenshots, before and after, the authoring workflow used); its rejection is binding.
 - The reviewer states the end-state judgement separately from the findings: "right change, right shape", or "works, wrong direction", with the reason.

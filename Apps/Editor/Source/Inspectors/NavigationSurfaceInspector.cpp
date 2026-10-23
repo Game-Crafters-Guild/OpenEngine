@@ -20,6 +20,7 @@
 #include "Pathfinding/PathfindingTypes.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 #include "Types/StringUtils.h"
 
 #include <array>
@@ -43,6 +44,7 @@ using InspectorDrag::CommitComponentWithUndo;
 constexpr std::array<std::string_view, 1> kGridTypeField = {"GridType"};
 constexpr std::array<std::string_view, 1> kFitBoundsField = {"FitBounds"};
 constexpr std::array<std::string_view, 1> kAuthoredCellsField = {"AuthoredCells"};
+constexpr std::array<std::string_view, 1> kBakedDataField = {"BakedData"};
 
 // The agent and resolution rows, hand-built so each label carries its unit; tooltip and range come
 // from the reflection.
@@ -314,6 +316,8 @@ void BuildNavigationSurfaceInspector(const InspectorContext& ctx)
     AddBoundsRows(ctx, typeId, surface, box);
     if (surface.Mode == NavigationSurfaceMode::Grid)
         RenderReflectedFieldRows(ctx, typeId, kAuthoredCellsField);
+    else
+        RenderReflectedFieldRows(ctx, typeId, kBakedDataField);
     AddBakeNotice(ctx, surface, cellSizeCaption, box);
 }
 

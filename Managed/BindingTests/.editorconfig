@@ -1,0 +1,3 @@
+# An undocumented public member of a test is an error.
+[*.cs]
+dotnet_diagnostic.CS1591.severity = error

@@ -83,7 +83,6 @@
 #include "Rendering/Materials/MaterialAlphaMode.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
-#include "Rendering/Materials/MaterialShaderIncludeRoots.h"
 #include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
@@ -131,7 +130,7 @@ using GameEngine::Tools::MaterialCook::kImportedMeshMaterialTargets;
 using GameEngine::Tools::MaterialCook::kForwardColor;
 using GameEngine::Tools::MaterialCook::kForwardColorIbl;
 using GameEngine::Tools::MaterialCook::kMeshVariants;
-using GameEngine::Tools::MaterialCook::kPerViewWorldPassKeywords;
+using GameEngine::Tools::MaterialCook::kPerViewKeywordsWithoutSceneColorGrab;
 
 // A --scan root, the --scan-alias given for it, and the alias its generated
 // surfaces are named under once ResolveScanAlias has settled it.
@@ -240,8 +239,8 @@ ShaderVariantKey PrewarmBaseKey(const CookTarget& target, const MaterialBuildCon
 // of `worldPasses` (PrewarmedWorldPasses) that `rows` lacks: the LOD-crossfade tails of the colour,
 // asset preview and camera-prepass draws, the depth heads, and the registration's own layout. The
 // rule stays in MaterialPrewarmVariantKeys; the table declares the per-view world passes it is applied
-// under. A world pass with a per-view keyword gets no scene-colour-grab key: the transmissive pass
-// never draws with one (kPerViewWorldPassKeywords).
+// under. A world pass with a per-view keyword the transmissive pass draws without gets no
+// scene-colour-grab key (kPerViewKeywordsWithoutSceneColorGrab).
 void AddPrewarmVariants(std::vector<VariantRequest>& rows, const CookTarget& target,
                         const MaterialBuildContext& context, const std::vector<MaterialKeyword>& worldPasses)
 {
@@ -249,12 +248,13 @@ void AddPrewarmVariants(std::vector<VariantRequest>& rows, const CookTarget& tar
     const ShaderVariantKey base = PrewarmBaseKey(target, context);
     for (const MaterialKeyword worldPass : worldPasses)
     {
-        const bool perView = (worldPass & kPerViewWorldPassKeywords) != MaterialKeyword::None;
+        const bool drawnWithoutTheGrab =
+            (worldPass & kPerViewKeywordsWithoutSceneColorGrab) != MaterialKeyword::None;
         for (const ShaderVariantKey& key : Engine::Renderer::MaterialPrewarmVariantKeys(
                  base, worldPass, document.customVertexShader, Engine::Renderer::DeriveRenderedAlphaMode(document),
                  document.ignoreVertexColor))
         {
-            if (perView && HasKeyword(key.materialKeywords, MaterialKeyword::SceneColorGrab))
+            if (drawnWithoutTheGrab && HasKeyword(key.materialKeywords, MaterialKeyword::SceneColorGrab))
                 continue;
             if (std::any_of(rows.begin(), rows.end(), [&](const VariantRequest& row)
                             { return row.PassKeywords == key.materialKeywords && row.VertexFlags == key.vertexFlags; }))
@@ -552,6 +552,21 @@ std::vector<fs::path> MaterialsToCook(const Options& options)
     return materialPaths;
 }
 
+// The cook row label of the ocean surface registered with `passKeywords`, one of the subsets of
+// Ocean::kOceanSurfacePassKeywords: "ocean-forward" plus a suffix per keyword it carries.
+std::string OceanForwardVariantLabel(MaterialKeyword passKeywords)
+{
+    static_assert(Ocean::kOceanSurfacePassKeywords ==
+                      (MaterialKeyword::HeightFog | MaterialKeyword::SSSRNormalRoughness),
+                  "name every ocean surface pass keyword in its cook label");
+    std::string label = "ocean-forward";
+    if (HasKeyword(passKeywords, MaterialKeyword::HeightFog))
+        label += "-fog";
+    if (HasKeyword(passKeywords, MaterialKeyword::SSSRNormalRoughness))
+        label += "-reflections";
+    return label;
+}
+
 // Every material the project can draw with: `materialPaths`, plus the engine's
 // built-in default PBR document, whose stand-in path is anchored under the
 // cache root exactly as the runtime anchors it — a directory holding no
@@ -620,20 +635,24 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
     }
 
     // The ocean surface registers at runtime from a synthetic document (no
-    // .material asset) with exactly one keyword set, so it cooks its own row:
-    // the registration pipeline is the only variant the renderer requests.
-    // The document and keywords come from the Ocean module so the cook and the
-    // runtime cannot drift.
+    // .material asset), once per subset of the pass keywords it compiles in
+    // (Ocean::kOceanSurfacePassKeywords, the runtime counterpart being
+    // Ocean::OceanSurfaceMaterialGuid), so it cooks one row per subset: the
+    // registration pipelines are the only variants the renderer requests.
+    // The document, the keywords and the subsets come from the Ocean module so
+    // the cook and the runtime cannot drift. The compatibility profile draws the
+    // surface without any of them.
     {
         CookSource ocean{"ocean-surface", cacheRoot / "Synthetic" / "ocean_surface.material",
                          Ocean::BuildOceanSurfaceMaterialDocument(), {}};
-        ocean.Variants.push_back({"ocean-forward", Ocean::OceanSurfaceMaterialKeywords(web),
-                                  VertexAttributeFlags::None});
-        // The fogged surface (OceanSurfaceFogMaterialGuid), drawn by a view whose height fog is active.
-        if (!web)
-            ocean.Variants.push_back({"ocean-forward-fog",
-                                      Ocean::OceanSurfaceMaterialKeywords(web) | MaterialKeyword::HeightFog,
-                                      VertexAttributeFlags::None});
+        const MaterialKeyword base = Ocean::OceanSurfaceMaterialKeywords(web);
+        const std::size_t setCount = web ? 1u : Ocean::kOceanSurfacePassKeywordSetCount;
+        for (std::size_t index = 0u; index < setCount; ++index)
+        {
+            const MaterialKeyword passKeywords = Ocean::OceanSurfacePassKeywordSet(index);
+            ocean.Variants.push_back(
+                {OceanForwardVariantLabel(passKeywords), base | passKeywords, VertexAttributeFlags::None});
+        }
         targets.push_back(std::move(ocean));
     }
 
@@ -920,6 +939,7 @@ struct RowBuild
     std::string VertexSource;
     std::string FragmentSource;
     std::vector<std::string> Defines;
+    std::vector<fs::path> IncludeRoots;
 };
 
 std::vector<CookRow> CookRows(const std::vector<CookTarget>& targets, const MaterialBuildContext& context,
@@ -943,6 +963,7 @@ RowBuild BuildRow(const CookRow& row, bool web)
         build.VertexSource = std::move(result.composedVertexSource);
         build.FragmentSource = std::move(result.composedFragmentSource);
         build.Defines = std::move(result.composedDefines);
+        build.IncludeRoots = std::move(result.composedIncludeRoots);
     }
     return build;
 }
@@ -1180,7 +1201,7 @@ int main(int argc, char** argv)
         wgsl.VertexSource = result.VertexSource;
         wgsl.FragmentSource = result.FragmentSource;
         wgsl.Defines = result.Defines;
-        wgsl.IncludeRoots = BuildMaterialIncludeRoots(context, target.MaterialPath.parent_path());
+        wgsl.IncludeRoots = result.IncludeRoots;
         wgsl.DebugName = target.Name + "_" + variant.Name;
         wgslRequestByPackage.emplace(outcome.PackagePath, outcome.WgslRequest);
     }

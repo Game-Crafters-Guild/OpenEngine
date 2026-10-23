@@ -66,19 +66,32 @@ bool ReadFile(const std::filesystem::path& path, std::string& out)
     return true;
 }
 
+// What a rename keeps after the edited name: a file's extension; nothing for a folder, whose
+// whole name is edited.
+std::string KeptSuffix(const std::filesystem::path& path)
+{
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec) ? std::string{} : path.extension().string();
+}
+
 } // namespace
 
-AssetRenameValidation ValidateAssetRenameStem(const std::string& newStem,
-                                              const std::filesystem::path& currentPath)
+std::string AssetRenameEditableName(const std::filesystem::path& path)
 {
-    if (newStem.empty())
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec) ? path.filename().string() : path.stem().string();
+}
+
+AssetRenameValidation ValidateAssetRename(const std::string& newName, const std::filesystem::path& currentPath)
+{
+    if (newName.empty())
         return {false, "Name can't be empty"};
 
-    const bool allSpace = std::all_of(newStem.begin(), newStem.end(), [](unsigned char c) { return std::isspace(c); });
+    const bool allSpace = std::all_of(newName.begin(), newName.end(), [](unsigned char c) { return std::isspace(c); });
     if (allSpace)
         return {false, "Name can't be only spaces"};
 
-    for (unsigned char c : newStem)
+    for (unsigned char c : newName)
     {
         if (std::iscntrl(c))
             return {false, "Name can't contain control characters"};
@@ -86,28 +99,28 @@ AssetRenameValidation ValidateAssetRenameStem(const std::string& newStem,
             return {false, "Name can't contain any of / \\ : * ? \" < > |"};
     }
 
-    if (newStem.front() == '.')
+    if (newName.front() == '.')
         return {false, "Name can't start with a dot"};
-    if (std::isspace(static_cast<unsigned char>(newStem.front())))
+    if (std::isspace(static_cast<unsigned char>(newName.front())))
         return {false, "Name can't start with a space"};
-    if (newStem.back() == '.' || std::isspace(static_cast<unsigned char>(newStem.back())))
+    if (newName.back() == '.' || std::isspace(static_cast<unsigned char>(newName.back())))
         return {false, "Name can't end with a space or a dot"};
 
-    const std::string upper = ToUpperAscii(newStem);
+    const std::string upper = ToUpperAscii(newName);
     for (std::string_view reserved : kWindowsReservedNames)
     {
         if (upper == reserved)
-            return {false, "'" + newStem + "' is a reserved name on Windows"};
+            return {false, "'" + newName + "' is a reserved name on Windows"};
     }
 
-    const std::string extension = currentPath.extension().string();
-    if (newStem.size() + extension.size() > kMaxFileNameBytes)
+    const std::string extension = KeptSuffix(currentPath);
+    if (newName.size() + extension.size() > kMaxFileNameBytes)
         return {false, "Name is too long"};
 
-    const std::filesystem::path target = currentPath.parent_path() / (newStem + extension);
+    const std::filesystem::path target = currentPath.parent_path() / (newName + extension);
     std::error_code ec;
     if (std::filesystem::exists(target, ec) && !std::filesystem::equivalent(target, currentPath, ec))
-        return {false, "'" + target.filename().string() + "' already exists here"};
+        return {false, "'" + target.filename().string() + "' already exists here. Choose another name."};
 
     if (IsShaderPath(currentPath))
     {
@@ -115,10 +128,10 @@ AssetRenameValidation ValidateAssetRenameStem(const std::string& newStem,
         if (!companion.empty())
         {
             const std::filesystem::path companionTarget =
-                companion.parent_path() / (newStem + companion.extension().string());
+                companion.parent_path() / (newName + companion.extension().string());
             if (std::filesystem::exists(companionTarget, ec) &&
                 !std::filesystem::equivalent(companionTarget, companion, ec))
-                return {false, "'" + companionTarget.filename().string() + "' already exists here"};
+                return {false, "'" + companionTarget.filename().string() + "' already exists here. Choose another name."};
         }
     }
 
@@ -226,17 +239,17 @@ bool RewriteMaterialName(const std::filesystem::path& materialPath,
     });
 }
 
-AssetRenamePlan PlanAssetRename(const std::filesystem::path& currentPath, const std::string& newStem)
+AssetRenamePlan PlanAssetRename(const std::filesystem::path& currentPath, const std::string& newName)
 {
     AssetRenamePlan plan;
     plan.From = currentPath;
-    plan.To = currentPath.parent_path() / (newStem + currentPath.extension().string());
+    plan.To = currentPath.parent_path() / (newName + KeptSuffix(currentPath));
 
     const std::filesystem::path companion = FindPairedSurfaceShaderMaterial(currentPath);
     if (!companion.empty())
     {
         plan.CompanionFrom = companion;
-        plan.CompanionTo = companion.parent_path() / (newStem + companion.extension().string());
+        plan.CompanionTo = companion.parent_path() / (newName + companion.extension().string());
     }
     return plan;
 }
