@@ -5716,9 +5716,12 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
             m_LeftMouseDragging = false;
             m_DraggingLabel = nullptr;
             m_DraggingField = nullptr;
-            fieldPtr->SetValue(m_DragStartValue);
-            if (m_OnVariableEdited)
-                m_OnVariableEdited(varName, m_DragStartValue);
+            if (fieldPtr->GetValue() != m_DragStartValue)
+            {
+                fieldPtr->SetValue(m_DragStartValue);
+                if (m_OnVariableEdited)
+                    m_OnVariableEdited(varName, m_DragStartValue);
+            }
             e.Stop(); });
 
         sectionContent->AddChild(std::move(row));
