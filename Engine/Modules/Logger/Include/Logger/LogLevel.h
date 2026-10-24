@@ -1,8 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string_view>
+
+#if defined(_WIN32) || defined(_WIN64)
+// Windows: no unistd.h, we avoid isatty/fileno
+#else
+#include <unistd.h>
+#endif
 
 namespace Logger {
 
@@ -105,6 +112,21 @@ inline const char* LogLevelToColorCode(LogLevel level) {
  */
 inline const char* GetColorReset() {
     return "\033[0m";
+}
+
+/**
+ * @brief Check if colored output is supported/enabled
+ * @return True if colored output should be used
+ */
+inline bool IsColorOutputSupported() {
+#if defined(_WIN32) || defined(_WIN64)
+    // Windows 10 version 1607 and later support ANSI escape sequences
+    // For simplicity, we'll assume it's supported on Windows
+    return true;
+#else
+    // On Unix-like systems, check if we're outputting to a terminal
+    return isatty(fileno(stdout));
+#endif
 }
 
 } // namespace Logger
