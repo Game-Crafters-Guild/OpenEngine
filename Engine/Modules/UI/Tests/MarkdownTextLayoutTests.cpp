@@ -1,5 +1,3 @@
-#include <gtest/gtest.h>
-
 #include "UIRgTestHarness.h"
 
 #include "Assets/AssetManager.h"
@@ -22,6 +20,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 using namespace GameEngine;
 

@@ -2,25 +2,26 @@
 // Verifies that missing font families trigger a host callback once (deduped),
 // and that async completion installs a FontAtlas and becomes visible to style resolution.
 
-#include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <gtest/gtest.h>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
-#include <string>
-#include <vector>
-
-#include "Rendering/Core/Device.h"
 #include "RobotoTestFont.h"
 #include "UIRgTestHarness.h"
 
+#include "Rendering/Core/Device.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIManager.h"
 #include "UI/UIPrimitive.h"
+
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <gtest/gtest.h>
 
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
