@@ -139,8 +139,7 @@ void EmitStruct(std::string& out, const MirrorStruct& mirror, const Names& names
     if (!mirror.Doc.empty())
         CSharpBindingEmitter::EmitSummary(out, mirror.Doc, "    ");
     out += "    [StructLayout(LayoutKind.Explicit, Size = " + std::to_string(mirror.Size) + ")]\n";
-    if (component)
-        out += "    [BuiltInComponent(\"" + mirror.CppName + "\")]\n";
+    out += "    [BuiltInComponent(\"" + mirror.CppName + "\")]\n";
     out += std::string("    public ") + (mirror.Class == ComponentClass::EngineOwned ? "readonly " : "") + "partial struct " +
            mirror.Name + (component ? " : IComponent" : "") + "\n    {\n";
     out += std::string("        /// <summary>\n        /// Creates the ") + (component ? "component" : "value") +

@@ -25,6 +25,7 @@
 #include "ECS/World.h"
 #include "ECS/Entity.h"
 #include "ECS/Components.h"
+#include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ECSTemplates.h"
 
 #include "Components/SceneViewHidden.h"
@@ -662,6 +663,34 @@ TEST_F(ExtractionFastPathTest, MeshRendererValueEditEscalatesViaProbe)
         << "the full pass must fold the Shadow Casting edit into instance flags";
     EXPECT_NE(flagsAfter & 1u, 0u) << "a shadows-only mesh still casts";
     ASSERT_TRUE(h.PrimeToFastPath());
+}
+
+// A script switches a proxy to Shadows Only with ComponentType<MeshRenderer>.Set: a byte write of the
+// whole component, with a GPU handle the script read earlier. The probe sees the stamped column, and
+// the engine's GPU handle stays as the engine has it.
+TEST_F(ExtractionFastPathTest, MeshRendererScriptWriteEscalatesViaProbeAndKeepsTheGpuHandle)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), true));
+    ECS::Entity e = h.SpawnRenderable(0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(h.PrimeToFastPath());
+    const MeshRenderer* bound = h.world->GetComponent<MeshRenderer>(e.GetHandle());
+    ASSERT_NE(bound, nullptr);
+    const uint64 engineHandle = bound->meshGpuHandleId;
+
+    MeshRenderer script = *bound;
+    script.meshGpuHandleId = engineHandle + 1;
+    script.shadowCasting = Components::ShadowCasting::ShadowsOnly;
+    ASSERT_TRUE(h.world->SetComponentBytesFromScriptImmediate(
+        e.GetHandle(), ECS::GetComponentTypeId<MeshRenderer>(), &script, sizeof(script),
+        ECS::ComponentFieldRegistry::GetScriptWriteRule(ECS::GetComponentTypeId<MeshRenderer>()).Ranges));
+    h.StepFrame();
+
+    EXPECT_NE(h.Stats().EscalationReasonBits & RenderExtractionSystem::kEscalationProbeMeshRenderer, 0u);
+    EXPECT_EQ(h.world->GetComponent<MeshRenderer>(e.GetHandle())->meshGpuHandleId, engineHandle);
+    auto* mg = h.world->GetComponent<MeshGPUData>(e.GetHandle());
+    ASSERT_NE(mg, nullptr);
+    EXPECT_NE(h.rs.GetGPUScene()->GetInstances()[mg->instanceIndex].flags & Rendering::kInstanceFlagShadowsOnly, 0u);
 }
 
 // A GI emitter publishes a DDGI light only while it is drawn: set to Shadows Only, its instance

@@ -938,11 +938,17 @@ TEST(SplineStripBuilder, WithoutADatumVRunsAroundThePerimeter)
         const bool top = std::abs(vertex.Normal.y - 1.0f) < 1.0e-5f;
         const bool rightFace = std::abs(vertex.Normal.x - 1.0f) < 1.0e-5f;
         if (leftFace)
+        {
             EXPECT_NEAR(vertex.UV.y, y, 1.0e-5f);
+        }
         else if (top)
+        {
             EXPECT_NEAR(vertex.UV.y, 3.0f + (x + 0.5f), 1.0e-5f);
+        }
         else if (rightFace)
+        {
             EXPECT_NEAR(vertex.UV.y, 4.0f + (3.0f - y), 1.0e-5f);
+        }
         EXPECT_EQ(vertex.Tangent.w, 1.0f);
     }
 }

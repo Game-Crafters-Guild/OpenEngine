@@ -80,7 +80,7 @@ TEST(ModelEntityFactoryPlacements, EveryPlacementSpawnsAnEntityAtItsTransform)
         EXPECT_NE(entity, result.rootEntity);
         const auto* parent = world.GetComponent<GameEngine::Components::Parent>(entity);
         ASSERT_NE(parent, nullptr);
-        EXPECT_EQ(parent->parent, result.rootEntity);
+        EXPECT_EQ(parent->Entity, result.rootEntity);
         const auto* xf = world.GetComponent<GameEngine::Components::Transform>(entity);
         ASSERT_NE(xf, nullptr);
         EXPECT_FLOAT_EQ(xf->matrix[12], expectedX[index]);
@@ -139,7 +139,7 @@ TEST(ModelEntityFactoryPlacements, APlacementBelowAnImportedNodeTakesItsLocalTra
         const auto entity = result.submeshEntities[index];
         const auto* parent = world.GetComponent<GameEngine::Components::Parent>(entity);
         ASSERT_NE(parent, nullptr);
-        EXPECT_EQ(parent->parent, expectedParent[index]);
+        EXPECT_EQ(parent->Entity, expectedParent[index]);
         const auto* xf = world.GetComponent<GameEngine::Components::Transform>(entity);
         ASSERT_NE(xf, nullptr);
         EXPECT_FLOAT_EQ(xf->matrix[12], expectedLocalX[index]);

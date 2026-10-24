@@ -790,7 +790,7 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // near RootColor there, so the step from the ground is small; a whole-blade span instead
     // carries the ground colour halfway up the blade.
     //
-    // The canopy shade on the contact is the ground's too: o.baseColor at the end of this function
+    // The canopy shade on the contact is the ground's too: the canopy shade at the end of this function
     // carries why.
     //
     // GroundingStrength still turns the whole grounding read off: at 0 the weight is 1 everywhere and
@@ -850,14 +850,15 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // No brightness is handed back for the blade normal's departure from the terrain normal: the
     // fold and the arched upper blade face the sky, and a noon field measured at 1.00x its ground
     // with nothing handed back (P1, sun overhead, grass over the same frame at density 0).
-    // The canopy shade: the light the field keeps off its own lower blades, sun and sky alike, so
-    // it scales the reflectance and not only the indirect term. TWO-SIDED by construction: the ground
-    // under the field takes the same depth (cbt_surface.glsl, through the same include), so at the
-    // root the blade and its ground are shaded alike and the base stays the ground's colour. A
-    // blade-side shade alone dims the base while nothing dims the ground beside it, which lands as a
-    // step at the contact line rather than as shadow. The light through the blade takes it too: its
-    // albedo is the shaded one.
-    o.baseColor = col * canopyOcclusion;
+    // The canopy shade: the light the field keeps off its own lower blades, sun and sky alike. It is
+    // the share of the light that reaches the blade (lightVisibility), so it dims the diffuse, the
+    // specular and the light through the blade alike. TWO-SIDED by construction: the ground under the
+    // field takes the same depth (cbt_surface.glsl, through the same include), so at the root the
+    // blade and its ground are shaded alike and the base stays the ground's colour. A blade-side
+    // shade alone dims the base while nothing dims the ground beside it, which lands as a step at the
+    // contact line rather than as shadow.
+    o.baseColor = col;
+    o.lightVisibility = canopyOcclusion;
 #if defined(GE_DIFFUSE_TRANSMISSION_ENABLED)
     GrassLeafLight leaf = GrassBladeLeafLight(o.baseColor, backlightColor, tp.GrassTranslucency, t);
     o.baseColor = leaf.Albedo;

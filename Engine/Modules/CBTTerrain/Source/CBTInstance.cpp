@@ -6,8 +6,11 @@
 
 #include "Rendering/Core/CommandList.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -28,6 +31,35 @@ constexpr uint64_t kReadbackValidationOffset = kReadbackDrawBytes;
 constexpr uint64_t kReadbackValidationBytes = static_cast<uint64_t>(kValidationWords) * 4u;
 // Depth-target passes RefineUniform runs past one per level.
 constexpr uint32_t kRefineUniformExtraPasses = 2u;
+
+// The level-0 samples a UV rect reaches along an axis of `samples`, one sample past each side: the
+// rect comes from a texel rect padded one texel (TerrainRenderFeature::AccumulateUnifiedHeightDirty),
+// and the extra sample keeps a rounding at either end inside it.
+uint32_t DirtySampleLow(float t, uint32_t samples)
+{
+    const float c = std::floor(Math::Clamp01(t) * static_cast<float>(samples - 1u));
+    return c >= 1.0f ? static_cast<uint32_t>(c) - 1u : 0u;
+}
+
+uint32_t DirtySampleHigh(float t, uint32_t samples)
+{
+    const float c = std::ceil(Math::Clamp01(t) * static_cast<float>(samples - 1u));
+    return std::min(static_cast<uint32_t>(c) + 1u, samples - 1u);
+}
+
+// The texels of a normal-chain mip of `texels` along an axis whose normals read level-L samples
+// [low, high] of an axis of `level0Samples`: a texel's normal reads the level one sample each side of its
+// center, bilinearly, so the reach is two level-L samples, plus one texel for the rounding.
+void NormalTexelRange(uint32_t low, uint32_t high, uint32_t level, uint32_t level0Samples, uint32_t texels,
+                      uint32_t& outLow, uint32_t& outHigh)
+{
+    const float toTexel = static_cast<float>(texels) * static_cast<float>(1u << level) /
+                          static_cast<float>(level0Samples - 1u);
+    const float a = (static_cast<float>(low) - 2.0f) * toTexel - 1.5f;
+    const float b = (static_cast<float>(high) + 2.0f) * toTexel + 0.5f;
+    outLow = a > 0.0f ? static_cast<uint32_t>(a) : 0u;
+    outHigh = std::min(b > 0.0f ? static_cast<uint32_t>(b) : 0u, texels - 1u);
+}
 } // namespace
 
 bool CBTInstance::Initialize(IDevice& device, const CBTKernelSet& kernelSet, uint32_t poolSize)
@@ -504,6 +536,7 @@ void CBTInstance::RecordUpdate(CommandList& cl, const CBTClassifyDesc& classify,
     pc.NearFieldGate = classify.NearFieldGate;
     pc.DeepDecode = classify.DeepDecode;
     pc.PoolPressure = classify.PoolPressure;
+    pc.Settle = classify.Settle;
 
     // Indexation and Validate still scan the whole pool (Indexation IS the pointer-cache
     // that rebuilds the live compact stream every frame; Validate's zombie check must see the
@@ -557,9 +590,11 @@ void CBTInstance::RecordUpdate(CommandList& cl, const CBTClassifyDesc& classify,
         RecordDataBarrier(cl);
     }
 
-    // 1.6 Content-aware split: Classify reads the height-range pyramid of this frame's heights.
+    // 1.6 The planar split: Classify reads the height-range pyramid of this frame's heights and of the
+    // chain the draw shows, so the chain is built first.
     const bool editRect = classify.DirtyMaxU > classify.DirtyMinU && classify.DirtyMaxV > classify.DirtyMinV;
-    RecordHeightRangeBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify || editRect);
+    const bool chainRebuilt = RecordHeightChainBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify, editRect);
+    RecordHeightRangeBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify || editRect || chainRebuilt);
 
     // 2. Classify drives the deterministic depth-target metric. It reads the
     //    CurrentVertexBuffer written by the PREVIOUS frame's vertex-eval (step
@@ -676,17 +711,24 @@ void CBTInstance::RecordHeightRangeBuild(CommandList& cl, const CBTClassifyDesc&
 {
     const BufferHandle range = m_Resources.GetHeightRangeBuffer();
     if (!range.IsValid() || classify.Mode != kClassifyScreenSpace || m_DomainMode != kDomainPlanar ||
-        !(params.WaterPlane[3] > 0.0f) || params.AtlasParams1[2] == 1.0f)
+        params.AtlasParams1[2] == 1.0f)
         return; // the atlas arm binds no unified height texture; the unified and paged arms bind the
                 // terrain's when it has one (an atlas-backed terrain on its pages binds the 1x1
                 // default, and the size check below declines it)
     const TextureHandle source = m_Resources.GetBoundHeightSource(frameCounter);
-    if (!heightsChanged && source == m_HeightRangeSource)
-        return;
-    m_HeightRangeSource = source;
     uint32_t width = 0;
     uint32_t height = 0;
     cl.GetTextureSize(source, width, height);
+    // The chain's ranges, when the chain holds this texture's lattice (RecordHeightChainBuild).
+    const uint32_t lattice = width | (height << 16u);
+    const uint32_t chainLevels = params.HeightChain[0] > 0.0f && m_HeightChainSource == source &&
+                                         m_HeightChainLattice == lattice
+                                     ? CBTHeightChainRangeLevels(width, height)
+                                     : 0u;
+    if (!heightsChanged && source == m_HeightRangeSource && chainLevels == m_HeightRangeChainLevels)
+        return;
+    m_HeightRangeSource = source;
+    m_HeightRangeChainLevels = chainLevels;
     if (width < 2u || height < 2u)
         return;
     const uint32_t cellsX = width - 1u;
@@ -701,11 +743,104 @@ void CBTInstance::RecordHeightRangeBuild(CommandList& cl, const CBTClassifyDesc&
     cl.SetMarker("CBT.HeightRangeBuild");
     for (uint32_t level = first; level <= top; ++level)
     {
-        pc.PassIndex = level;
+        // The level-0 blocks, then one set per chain level whose pyramid has this level.
+        uint32_t sets = 1u;
+        for (uint32_t j = 1u; j <= chainLevels; ++j)
+            sets += CBTHeightChainRangeBase(first, top, j) <= level ? 1u : 0u;
+        pc.PassIndex = level | (chainLevels << 8u);
         const uint32_t entries = CBTHeightRangeDim(cellsX, level) * CBTHeightRangeDim(cellsY, level);
-        DispatchDirect(cl, CBTKernel::HeightRangeBuild, pc, CeilDiv(entries, kComputeWorkgroupSize));
+        DispatchDirect(cl, CBTKernel::HeightRangeBuild, pc, CeilDiv(entries * sets, kComputeWorkgroupSize));
         cl.Barrier(written);
     }
+}
+
+bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc& classify,
+                                         const CBTFrameParams& params, CBTPushConstants pc, uint32_t frameCounter,
+                                         bool forced, bool edited)
+{
+    const BufferHandle chain = m_Resources.GetHeightChainBuffer();
+    if (!chain.IsValid() || !m_Resources.GetHeightRangeBuffer().IsValid() || !(params.HeightChain[0] > 0.0f) ||
+        classify.Mode != kClassifyScreenSpace || m_DomainMode != kDomainPlanar || params.AtlasParams1[2] != 0.0f)
+        return false;
+    const TextureHandle source = m_Resources.GetBoundHeightSource(frameCounter);
+    uint32_t samplesX = 0;
+    uint32_t samplesZ = 0;
+    cl.GetTextureSize(source, samplesX, samplesZ);
+    if (samplesX < 2u || samplesZ < 2u)
+        return false;
+    const uint32_t top = CBTHeightChainTopLevel(samplesX, samplesZ);
+    if (top == 0u || CBTHeightChainWords(samplesX, samplesZ) > m_Resources.GetHeightChainWords())
+        return false; // not provisioned for this lattice: its header names no lattice, so the draw keeps level 0
+    const uint32_t lattice = samplesX | (samplesZ << 16u);
+    const bool whole = forced || source != m_HeightChainSource || lattice != m_HeightChainLattice ||
+                       chain != m_HeightChainBuffer;
+    if (!whole && !edited)
+        return false;
+    m_HeightChainSource = source;
+    m_HeightChainLattice = lattice;
+    m_HeightChainBuffer = chain;
+
+    CBTHeightChainRegion region;
+    if (whole)
+    {
+        region.MaxX = samplesX - 1u;
+        region.MaxZ = samplesZ - 1u;
+    }
+    else
+    {
+        region.MinX = DirtySampleLow(classify.DirtyMinU, samplesX);
+        region.MinZ = DirtySampleLow(classify.DirtyMinV, samplesZ);
+        region.MaxX = DirtySampleHigh(classify.DirtyMaxU, samplesX);
+        region.MaxZ = DirtySampleHigh(classify.DirtyMaxV, samplesZ);
+    }
+    const ResourceBarrier written =
+        ResourceBarrier::CreateBufferBarrier(chain, ResourceState::UnorderedAccess, ResourceState::UnorderedAccess);
+    const uint32_t normalMips = m_Resources.GetNormalChainMips();
+    const bool normals = normalMips == CBTNormalChainMips(samplesX, samplesZ) && normalMips > 0u;
+    std::array<CBTHeightChainRegion, kCBTNormalChainMaxMips> levelRegions{};
+    cl.SetMarker("CBT.HeightChainBuild");
+    for (uint32_t level = 1u; level <= top; ++level)
+    {
+        region = CBTHeightChainCoarserRegion(region, CBTHeightChainSamples(samplesX, level - 1u),
+                                             CBTHeightChainSamples(samplesZ, level - 1u));
+        if (level - 1u < kCBTNormalChainMaxMips)
+            levelRegions[level - 1u] = region;
+        const uint32_t width = region.MaxX - region.MinX + 1u;
+        const uint32_t height = region.MaxZ - region.MinZ + 1u;
+        pc.PassIndex = level;
+        pc.HeightChainRegionMin = region.MinX | (region.MinZ << 16u);
+        pc.HeightChainRegionExtent = width | (height << 16u);
+        DispatchDirect(cl, CBTKernel::HeightChainBuild, pc, CeilDiv(width * height, kComputeWorkgroupSize));
+        cl.Barrier(written);
+    }
+    if (!normals)
+        return true; // not provisioned for this lattice: the surface keeps the level-0 normal map
+    // The normal chain reads the finished height chain; its mips are independent of each other. It rests
+    // in ShaderResource for the surface, so the build takes it to storage and back.
+    const TextureHandle normalChain = m_Resources.GetNormalChainTexture();
+    cl.SetMarker("CBT.NormalChainBuild");
+    cl.Barrier(ResourceBarrier::CreateTextureBarrier(normalChain, ResourceState::ShaderResource,
+                                                     ResourceState::UnorderedAccess, 0u, normalMips));
+    for (uint32_t mip = 0u; mip < normalMips; ++mip)
+    {
+        const uint32_t level = mip + 1u;
+        const uint32_t texelsX = CBTNormalChainTexels(samplesX, mip);
+        const uint32_t texelsZ = CBTNormalChainTexels(samplesZ, mip);
+        CBTHeightChainRegion texelRegion;
+        NormalTexelRange(levelRegions[mip].MinX, levelRegions[mip].MaxX, level, samplesX, texelsX,
+                         texelRegion.MinX, texelRegion.MaxX);
+        NormalTexelRange(levelRegions[mip].MinZ, levelRegions[mip].MaxZ, level, samplesZ, texelsZ,
+                         texelRegion.MinZ, texelRegion.MaxZ);
+        const uint32_t width = texelRegion.MaxX - texelRegion.MinX + 1u;
+        const uint32_t height = texelRegion.MaxZ - texelRegion.MinZ + 1u;
+        pc.PassIndex = mip;
+        pc.HeightChainRegionMin = texelRegion.MinX | (texelRegion.MinZ << 16u);
+        pc.HeightChainRegionExtent = width | (height << 16u);
+        DispatchDirect(cl, CBTKernel::NormalChainBuild, pc, CeilDiv(width * height, kComputeWorkgroupSize));
+    }
+    cl.Barrier(ResourceBarrier::CreateTextureBarrier(normalChain, ResourceState::UnorderedAccess,
+                                                     ResourceState::ShaderResource, 0u, normalMips));
+    return true;
 }
 
 void CBTInstance::RecordReadback(CommandList& cl)

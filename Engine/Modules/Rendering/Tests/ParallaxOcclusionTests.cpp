@@ -1180,7 +1180,9 @@ TEST(ParallaxDepth, TheColourPassRebuildsThePrepassHitFromItsDepth)
                                                                         projection.Perspective, written, eyeDistance) /
                                     marched.Ray.depthMetres;
         if (projection.Perspective)
+        {
             ASSERT_LT(rayDepthError, 2.0e-4f) << "the bound is tight enough to mean something at this distance";
+        }
         EXPECT_NEAR(rebuilt.rayDepth, marched.Hit.rayDepth, rayDepthError);
         const float rewritten = ReliefDepth::GE_ParallaxExactDepth(
             projection.Depth, projection.DepthScale, projection.Perspective,

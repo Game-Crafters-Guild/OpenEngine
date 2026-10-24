@@ -30,6 +30,7 @@
 namespace GameEngine::Rendering
 {
 class IDevice;
+struct CameraData;
 using ViewId = uint32_t;
 } // namespace GameEngine::Rendering
 
@@ -43,6 +44,7 @@ struct DrawCommand;
 namespace GameEngine::TerrainECS
 {
 class TerrainRenderFeature;
+struct TerrainInstanceInfo;
 } // namespace GameEngine::TerrainECS
 
 namespace GameEngine::CBTTerrainECS
@@ -155,6 +157,10 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // changed left the tree at rest (CBTUpdateRestGate), and neither an edited region nor a full
     // vertex re-evaluation is pending. The draw then reads the buffers the last update wrote.
     bool IsUpdateAtRest(const CBTTerrain::CBTFrameParams& params);
+    // True when the inputs IsUpdateAtRest last compared equal the update before them: the camera
+    // holds still, so the update about to be recorded applies the rest rule
+    // (CBTTerrain::CBTClassifyDesc::Settle) and the tree settles to the one tree the pose asks for.
+    bool InputsHeld() const { return m_RestGate.InputsHeld(); }
     // For the update about to be declared into `frame`: its readback slot (invalid = unread).
     // `forced` = the update re-evaluates every vertex (GateVertexEval 0).
     CBTTerrain::CBTActivitySlot BeginUpdateActivityReadback(const Rendering::RenderGraph::RGFrame& frame,
@@ -314,6 +320,13 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // unified heightmap (invalid until uploaded).
     static Rendering::TextureHandle BoundHeightSource(bool atlasBacked, Rendering::TextureHandle atlas,
                                                       Rendering::TextureHandle heightmap);
+    // The draw's prefiltered height chain for this frame: the level rule of TerrainECS PageLevelRule
+    // for the CBT camera, written into `out.HeightChain` (Classify's cull) and this frame's draw-level
+    // ring slot (the vertex modifier), with the chain grown for the terrain's lattice. Off (scale 0,
+    // the cached corners at every distance) on the sphere, the narrow heap, an atlas-backed or paged
+    // terrain, a heightmap not yet uploaded, or a lattice without a height-range pyramid.
+    void ApplyHeightChain(const TerrainECS::TerrainInstanceInfo& terrain, const Rendering::CameraData& camera,
+                          uint32_t frameIndex, CBTTerrain::CBTFrameParams& out);
     // The height page cache the update samples for terrain `terrainIndex` when its height is paged
     // (TerrainHeightPageFeature latched its page table and created the cache) and these kernels
     // read pages (the wide arm); invalid otherwise. Its page-table words go to `words`.

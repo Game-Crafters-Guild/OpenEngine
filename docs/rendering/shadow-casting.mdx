@@ -58,9 +58,24 @@ world.GetComponentForWrite<Components::MeshRenderer>(building)->shadowCasting = 
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-No managed call yet; the native field is `Components::MeshRenderer::shadowCasting`.
-:::
+```csharp title="Make every proxy cast a building's shadow without being drawn"
+using GameEngine.Scripting;
+
+// In an entity system: every entity with a ShadowProxy draws only its shadow.
+public partial struct ShadowProxySystem : IEntitySystem
+{
+    public void Execute(ref MeshRenderer renderer, in ShadowProxy proxy)
+        => renderer.ShadowCasting = ShadowCasting.ShadowsOnly;
+}
+```
+
+```csharp title="Switch one entity from anywhere"
+MeshRenderer renderer = ComponentType<MeshRenderer>.Get(in world, proxyId);
+renderer.ShadowCasting = ShadowCasting.ShadowsOnly;
+ComponentType<MeshRenderer>.Set(in world, proxyId, in renderer);
+```
+
+`ShadowProxy` is a component of the game's own. A value outside the three modes, such as `(ShadowCasting)7`, throws `ArgumentOutOfRangeException`.
 
 ::::
 :::::

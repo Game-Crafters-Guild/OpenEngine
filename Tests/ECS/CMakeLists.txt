@@ -75,6 +75,7 @@ set(ECS_CORE_TEST_SOURCES
     QueryBenchmarks.cpp
     ComponentTypeNameTest.cpp
     ComponentReflectionTests.cpp
+    FieldAccessTests.cpp
     ComponentMigrationTest.cpp
     ComponentLayoutReloadMigratorTests.cpp
     WorldClearStateTest.cpp
@@ -139,6 +140,8 @@ target_link_libraries(ECSCoreTests PRIVATE
     # (Components/MathReflectionTraits.h). Mathematics is INTERFACE/header-only, so
     # this propagates its include dirs to the TEST only — ECS stays Mathematics-free.
     Mathematics
+    # FieldAccessTests round-trips a GUID element; ECS itself names GUID by declaration only.
+    AssetCore
 )
 
 ge_set_output_tests(ECSCoreTests)

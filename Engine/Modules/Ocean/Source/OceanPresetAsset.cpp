@@ -3,12 +3,16 @@
 #include "Components/Rendering/Ocean.h"
 #include "AssetCore/SharedFileRead.h"
 #include "AssetCore/GUID.h"
+#include "Components/RenderLayerMaskReflectionTraits.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/FieldAccess.h"
 #include <cctype>
 
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <span>
+#include <type_traits>
 #include <nlohmann/json.hpp>
 
 namespace GameEngine::Ocean
@@ -37,15 +41,26 @@ std::span<const StringId> CollectOverriddenFields(
     return storage.first(count);
 }
 
-template <typename T>
-bool ReadScalar(const OceanPresetValue& value, T& out)
+// A preset number as the element type of its field kind: the render layer word takes the
+// number as its bits; every other kind is the number itself.
+template <typename TElement, typename TNumber>
+TElement ToElement(TNumber number)
+{
+    if constexpr (std::is_same_v<TElement, Rendering::RenderLayerMask>)
+        return Rendering::RenderLayerMask{static_cast<uint32>(number)};
+    else
+        return static_cast<TElement>(number);
+}
+
+template <typename TElement>
+bool ReadScalar(const OceanPresetValue& value, TElement& out)
 {
     return std::visit([&](const auto& stored) -> bool {
         using U = std::decay_t<decltype(stored)>;
         if constexpr (std::is_same_v<U, bool> || std::is_integral_v<U> ||
                       std::is_floating_point_v<U>)
         {
-            out = static_cast<T>(stored);
+            out = ToElement<TElement>(stored);
             return true;
         }
         else
@@ -55,42 +70,58 @@ bool ReadScalar(const OceanPresetValue& value, T& out)
     }, value);
 }
 
-size_t ElementSize(ECS::FieldTypeId type)
+// One element: an integer at the width of the field's own kind, every other kind as TElement.
+template <typename TElement>
+bool WriteElement(const ECS::FieldInfo& field, std::span<std::byte> component, uint32 element,
+                  const TElement& number)
 {
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-    case FieldTypeId::Bool: return sizeof(bool);
-    case FieldTypeId::Int8: case FieldTypeId::UInt8: return 1u;
-    case FieldTypeId::Int16: case FieldTypeId::UInt16: return 2u;
-    case FieldTypeId::Int32: case FieldTypeId::UInt32: case FieldTypeId::Float:
-    case FieldTypeId::RenderLayerMask: return 4u;
-    case FieldTypeId::Int64: case FieldTypeId::UInt64: case FieldTypeId::Double: return 8u;
-    case FieldTypeId::Color: return sizeof(float32);
-    default: return 0u;
-    }
+    if constexpr (std::is_same_v<TElement, int64>)
+        return ECS::WriteFieldInteger(field, component, element, number);
+    else
+        return ECS::WriteFieldElement(field, component, element, number);
 }
 
-template <typename T>
-bool WriteNumbers(const OceanPresetValue& value, std::byte* destination, size_t count)
+// Every element of the field from a number array of at least its count, or its one element from
+// a scalar.
+template <typename TElement>
+bool WriteNumbers(const ECS::FieldInfo& field, const OceanPresetValue& value, std::span<std::byte> component)
 {
+    const uint32 count = field.Size / ECS::FieldElementSize(field.Type);
     if (const auto* array = std::get_if<OceanPresetNumberArray>(&value))
     {
         if (array->size() < count)
             return false;
-        for (size_t i = 0u; i < count; ++i)
+        for (uint32 i = 0u; i < count; ++i)
         {
-            const T converted = static_cast<T>((*array)[i]);
-            std::memcpy(destination + i * sizeof(T), &converted, sizeof(T));
+            if (!WriteElement(field, component, i, ToElement<TElement>((*array)[i])))
+                return false;
         }
         return true;
     }
     if (count != 1u)
         return false;
-    T scalar{};
+    TElement scalar{};
     if (!ReadScalar(value, scalar))
         return false;
-    std::memcpy(destination, &scalar, sizeof(T));
+    return WriteElement(field, component, 0u, scalar);
+}
+
+// Every element of a Color field from a number array of four channels (r, g, b, a) per element.
+bool WriteColors(const ECS::FieldInfo& field, const OceanPresetValue& value, std::span<std::byte> component)
+{
+    constexpr size_t kChannels = 4u;
+    const auto* array = std::get_if<OceanPresetNumberArray>(&value);
+    const uint32 count = field.Size / ECS::FieldElementSize(field.Type);
+    if (!array || array->size() < count * kChannels)
+        return false;
+    for (uint32 element = 0u; element < count; ++element)
+    {
+        const double* channels = array->data() + element * kChannels;
+        const ColorLinear color(static_cast<float32>(channels[0]), static_cast<float32>(channels[1]),
+                                static_cast<float32>(channels[2]), static_cast<float32>(channels[3]));
+        if (!ECS::WriteFieldElement(field, component, element, color))
+            return false;
+    }
     return true;
 }
 
@@ -99,35 +130,34 @@ bool WriteFieldValue(const ECS::FieldInfo& field, const OceanPresetValue& value,
 {
     if (static_cast<size_t>(field.Offset) + field.Size > componentBytes)
         return false;
+    const std::span<std::byte> bytes(component, componentBytes);
     std::byte* destination = component + field.Offset;
-    const size_t elementSize = ElementSize(field.Type);
-    const size_t count = elementSize > 0u ? field.Size / elementSize : 0u;
     using ECS::FieldTypeId;
     switch (field.Type)
     {
-    case FieldTypeId::Bool: return WriteNumbers<bool>(value, destination, count);
-    case FieldTypeId::Int8: return WriteNumbers<int8>(value, destination, count);
-    case FieldTypeId::Int16: return WriteNumbers<int16>(value, destination, count);
-    case FieldTypeId::Int32: return WriteNumbers<int32>(value, destination, count);
-    case FieldTypeId::Int64: return WriteNumbers<int64>(value, destination, count);
-    case FieldTypeId::UInt8: return WriteNumbers<uint8>(value, destination, count);
-    case FieldTypeId::UInt16: return WriteNumbers<uint16>(value, destination, count);
+    case FieldTypeId::Bool: return WriteNumbers<bool>(field, value, bytes);
+    case FieldTypeId::Int8:
+    case FieldTypeId::Int16:
+    case FieldTypeId::Int32:
+    case FieldTypeId::Int64:
+    case FieldTypeId::UInt8:
+    case FieldTypeId::UInt16:
     case FieldTypeId::UInt32:
-    case FieldTypeId::RenderLayerMask: return WriteNumbers<uint32>(value, destination, count);
-    case FieldTypeId::UInt64: return WriteNumbers<uint64>(value, destination, count);
-    case FieldTypeId::Float: return WriteNumbers<float32>(value, destination, count);
-    case FieldTypeId::Double: return WriteNumbers<double>(value, destination, count);
-    case FieldTypeId::Color: return WriteNumbers<float32>(value, destination, field.Size / sizeof(float32));
+    case FieldTypeId::UInt64: return WriteNumbers<int64>(field, value, bytes);
+    case FieldTypeId::RenderLayerMask: return WriteNumbers<Rendering::RenderLayerMask>(field, value, bytes);
+    case FieldTypeId::Float: return WriteNumbers<float32>(field, value, bytes);
+    case FieldTypeId::Double: return WriteNumbers<double>(field, value, bytes);
+    case FieldTypeId::Color: return WriteColors(field, value, bytes);
     case FieldTypeId::AssetGuid:
         if (const auto* text = std::get_if<std::string>(&value); text && field.Size == sizeof(GUID))
         {
+            constexpr size_t kGuidHexDigits = GUID::kSize * 2u;
             std::string digits = *text;
             digits.erase(std::remove(digits.begin(), digits.end(), '-'), digits.end());
-            if (!digits.empty() && (digits.size() != 32 || !std::all_of(digits.begin(), digits.end(),
-                [](unsigned char c) { return std::isxdigit(c) != 0; }))) return false;
+            if (!digits.empty() && (digits.size() != kGuidHexDigits || !std::all_of(digits.begin(), digits.end(),
+                [](unsigned char character) { return std::isxdigit(character) != 0; }))) return false;
             const GUID guid = digits.empty() ? GUID::Null() : GUID(digits);
-            std::memcpy(destination, guid.GetData().data(), sizeof(GUID));
-            return true;
+            return ECS::WriteFieldElement(field, bytes, 0u, guid);
         }
         return false;
     case FieldTypeId::String:

@@ -25,6 +25,7 @@ struct WebField
     std::optional<std::string> ArrayExtent;
     bool ReadOnly = false;
     std::optional<std::string> Tooltip;
+    std::optional<std::string> Label;
     std::optional<FieldRange> Range;
 };
 
@@ -44,11 +45,13 @@ struct WebComponent
 // UnresolvedType: its type is not declared in the scanned headers, so the scanner cannot tell
 // what the registry reports: an enum declared outside the scanned roots or a platform-sized
 // integer (long, size_t) has an integer kind there, a struct is Unknown. Omitted therefore
-// means "absent from the web types", never "Unknown in the registry".
+// means "absent from the web types", never "Unknown in the registry". AmbiguousEnum: two
+// different enums the scan found share the type's simple name, so the field has no name table.
 enum class WebOmissionReason
 {
     NoReflectedKind,
     UnresolvedType,
+    AmbiguousEnum,
 };
 
 // A field left out of the web types, listed so the gap is counted rather than hidden behind

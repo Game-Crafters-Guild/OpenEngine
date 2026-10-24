@@ -34,4 +34,15 @@ struct FixtureClock
     std::uint32_t Cookie = 0;
 };
 
+/// Marks a probe the player has picked up.
+// @ge-tag
+struct FixturePickedUp
+{
+};
+
+/// A struct with no fields and no tag marker: a parameter, not a component, so it has no mirror.
+struct FixtureQueryParameter
+{
+};
+
 } // namespace GameEngine::Components

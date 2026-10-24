@@ -1,13 +1,16 @@
 #include "ECS/World.h"
+#include "ECS/ComponentFactory.h"
 #include "ECS/ComponentRegistry.h"
 #include "ECS/ComponentMigration.h"
 #include "ECS/Components.h"
 #include "ECS/Entity.h"
 #include "ECS/Query.h"
+#include "ECS/ComponentFieldRegistry.h"
 #include "ECS/UnresolvedComponentStore.h"
 #include "Logger/Logger.h"
 #include "Types/GeometricReserve.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstring>
@@ -1400,6 +1403,12 @@ void World::ProcessCommands()
             case Command::SET_ENTITY_ENABLED:
                 SetEntityEnabledImmediate(cmd.entity, cmd.entityEnabled);
                 break;
+
+            case Command::SET_COMPONENT_FROM_SCRIPT:
+                SetComponentBytesFromScriptImmediate(cmd.entity, cmd.componentType, cmd.componentData.Data(),
+                                                     cmd.componentData.Size(),
+                                                     ComponentFieldRegistry::GetScriptWriteRule(cmd.componentType).Ranges);
+                break;
             }
         }
     }
@@ -1679,6 +1688,66 @@ bool World::SetComponentBytesImmediate(EntityHandle entity,
     CheckRemovalReentry();
     std::unique_lock lock(worldMutex);
     return AddOrSetComponentBytesInternal(entity, typeId, data, sizeBytes);
+}
+
+bool World::SetComponentBytesFromScriptImmediate(EntityHandle entity,
+                                                 ComponentTypeId typeId,
+                                                 const void* data,
+                                                 std::size_t sizeBytes,
+                                                 std::span<const ScriptWritableRange> writable)
+{
+    if (!data && sizeBytes != 0)
+        return false;
+
+    auto* handler = ComponentRegistry::GetHandler(typeId);
+    if (!handler || handler->GetComponentSize() != sizeBytes)
+        return false;
+
+    CheckRemovalReentry();
+    std::unique_lock lock(worldMutex);
+    if (!IsValid(entity))
+        return false;
+
+    // Every byte writable (one run over the whole component, as Transform's): the script's bytes are the value.
+    if (writable.size() == 1 && writable.front().Begin == 0 && writable.front().End == sizeBytes)
+        return AddOrSetComponentBytesInternal(entity, typeId, data, sizeBytes);
+
+    // The merge target: the current value, or the defaults on an add. A component up to
+    // kStackMergeBytes merges on the stack; a larger one allocates.
+    constexpr std::size_t kStackMergeBytes = 512;
+    std::array<std::uint8_t, kStackMergeBytes> stackTarget;
+    std::vector<std::uint8_t> heapTarget;
+    std::uint8_t* merged = stackTarget.data();
+    if (sizeBytes > kStackMergeBytes)
+    {
+        heapTarget.resize(sizeBytes);
+        merged = heapTarget.data();
+    }
+    const EntityMetadata& metadata = entityMetadata[entity.index];
+    const Archetype* archetype = metadata.archetype;
+    const void* current = archetype && archetype->GetSignature().Contains(typeId)
+                              ? archetype->GetComponentRawAt(metadata.chunkIndex, metadata.indexInChunk, typeId)
+                              : nullptr;
+    if (current)
+    {
+        std::memcpy(merged, current, sizeBytes);
+    }
+    else
+    {
+        std::vector<std::uint8_t> defaults;
+        if (!ComponentFactory::GetDefaultBytes(typeId, defaults) || defaults.size() != sizeBytes)
+            return false; // an add with no registered defaults has no engine bytes to keep: refused, not filled from the script
+        std::memcpy(merged, defaults.data(), sizeBytes);
+    }
+
+    const auto* script = static_cast<const std::uint8_t*>(data);
+    for (const ScriptWritableRange& range : writable)
+    {
+        if (range.End > sizeBytes)
+            break;
+        std::memcpy(merged + range.Begin, script + range.Begin, range.End - range.Begin);
+    }
+    return AddOrSetComponentBytesInternal(entity, typeId, merged, sizeBytes);
 }
 
 World::RemoveComponentResult World::RemoveComponentInternal(EntityHandle entity, ComponentTypeId typeId)

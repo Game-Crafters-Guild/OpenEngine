@@ -38,7 +38,7 @@ A fixed per-frame cost (prepare, the depth mip chain, the denoiser, and the temp
 
 :::
 
-Radius, thickness, and intensity remain Post Process Volume properties. Invalid quality names fail node initialization. With `temporal: false`, the noise phase is fixed and no history pass or resources are allocated. AO intensity zero disables the node and invalidates its history.
+Radius, thickness, and intensity remain Post Process Volume properties. Invalid quality names fail node initialization. With `temporal: true`, the occlusion pass rotates its noise through eight phases (a different sampling pattern each frame) and the history keeps a running mean of up to 64 frames, so at a still camera the occlusion settles to the average of the phases instead of cycling through them. Camera motion shortens the mean. So does a history that differs from the current frame by more than its noise, or that stays on one side of it for four frames in a row: occlusion that a moving object leaves behind or brings with it fades out or in within about a quarter of a second. With `temporal: false`, the noise phase is fixed and no history pass or resources are allocated. AO intensity zero disables the node and invalidates its history.
 
 :::caution[Existing volumes may need their Intensity re-tuned]
 

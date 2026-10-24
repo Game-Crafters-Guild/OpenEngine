@@ -218,18 +218,6 @@ static std::unique_ptr<Label> MakeDraggableRefLabel(const std::string& text, con
     return lbl;
 }
 
-static std::string Join(const std::vector<std::string>& items, const char* sep)
-{
-    std::string out;
-    for (size_t i = 0; i < items.size(); ++i)
-    {
-        if (i && sep)
-            out += sep;
-        out += items[i];
-    }
-    return out;
-}
-
 static std::string FormatShaderPkgValidation(const std::string& shaderPkgPathOrName,
                                               const std::vector<std::string>& inputBindingNames)
 {

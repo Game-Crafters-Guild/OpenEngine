@@ -4,6 +4,7 @@
 #include "Editor/Settings/SettingsStore.h"
 #include "EditorDockNodeJson.h"
 #include "Logger/Logger.h"
+#include "Types/StringUtils.h"
 #include "UI/Layout/DockLayoutController.h"
 #include "UI/Layout/Docking.h"
 
@@ -45,18 +46,6 @@ std::vector<std::string> ReadStringArray(const nlohmann::json& record, const cha
     {
         if (entry.is_string())
             out.push_back(entry.get<std::string>());
-    }
-    return out;
-}
-
-std::string JoinIds(const std::vector<std::string>& ids)
-{
-    std::string out;
-    for (const std::string& id : ids)
-    {
-        if (!out.empty())
-            out += ", ";
-        out += id;
     }
     return out;
 }
@@ -166,7 +155,7 @@ std::unique_ptr<DockNode> WorkingLayoutPersistence::Load(const std::filesystem::
     if (!unknownPanels.empty())
     {
         Logger::Log::Warning("Editor: the saved panel layout names panels this editor does not have ({}); using the active layout preset",
-                             JoinIds(unknownPanels));
+                             Join(unknownPanels, ", "));
         return nullptr;
     }
 
@@ -181,13 +170,13 @@ std::unique_ptr<DockNode> WorkingLayoutPersistence::Load(const std::filesystem::
     if (!pendingPackagePanels.empty())
     {
         Logger::Log::Info("Editor: the saved panel layout keeps the place of package panels that register later ({})",
-                          JoinIds(pendingPackagePanels));
+                          Join(pendingPackagePanels, ", "));
     }
     const std::vector<std::string> separateWindowPanels = ReadStringArray(*itRecord, kSeparateWindowPanelsField);
     if (!separateWindowPanels.empty())
     {
         Logger::Log::Info("Editor: panels that were in separate windows start closed ({})",
-                          JoinIds(separateWindowPanels));
+                          Join(separateWindowPanels, ", "));
     }
     Logger::Log::Info("Editor: restored the saved panel layout from '{}'", store.GetFilePath().string());
     return restored;

@@ -1,11 +1,11 @@
 ---
 name: change-scrutiny
-description: The pass every change runs on itself before its pull request opens — reuse (the engine's types, containers, utilities, controls, the job system), placement (the owner file and module), names, the public surface (whether a symbol should exist, be public, or be an existing API changed instead), and the style pass (the whole of CodingStyle.md read against the diff). Produces the "Reuse and surface" table the pull request body carries. Use after the code compiles and the suites are green, before `gh pr create`; use again at every fold that adds a symbol or a file.
+description: The pass every change runs on itself before its pull request opens — reuse (the engine's types, containers, utilities, controls, the job system), placement (the owner file and module), names, the public surface (whether a symbol should exist, be public, or be an existing API changed instead), the style pass (the whole of CodingStyle.md read against the diff), and the UI/UX pass (whether a user understands and can operate every surface the change adds or alters). Produces the "Reuse and surface" table the pull request body carries. Use after the code compiles and the suites are green, before `gh pr create`; use again at every fold that adds a symbol, a file or a user-facing surface.
 ---
 
 # Change scrutiny
 
-A change is reviewed twice: once by its author with this pass, once by the reviewer with the review rules. The author's pass is the cheaper one, so it runs first and its table goes into the pull request body under "Reuse and surface". The rules it enforces are `CodingStyle.md` (all of it: the Mathematics Types, Existing First and Public Surface sections carry the reuse and surface questions, section 5 below walks the rest) and `CLAUDE.md`'s engineering values; this skill is the method, not a second rule set.
+A change is reviewed twice: once by its author with this pass, once by the reviewer with the review rules. The author's pass is the cheaper one, so it runs first and its table goes into the pull request body under "Reuse and surface". The rules it enforces are `CodingStyle.md` (all of it: the Mathematics Types, Existing First and Public Surface sections carry the reuse and surface questions, section 5 below walks the rest) and `CLAUDE.md`'s engineering values, with section 6 asking whether a user understands what the change shows them; this skill is the method, not a second rule set.
 
 ## 1. Inventory the change
 
@@ -13,7 +13,8 @@ From `git diff --stat origin/main...HEAD` and the diff itself, list:
 
 - every file added, with its owner (the module and the class it holds);
 - every type, function, constant and setting added or made public (a symbol in a public include folder, a `public:` member, a `*ScriptApi.h` declaration, a setting registered, a component field reflected);
-- every piece of behavior written from scratch (a loop over strings, a container, a math expression, a thread, a drawing routine, a UI assembly, a hash).
+- every piece of behavior written from scratch (a loop over strings, a container, a math expression, a thread, a drawing routine, a UI assembly, a hash);
+- every surface a user sees or operates that the change adds or alters, in the editor or the Player: a panel, an inspector section, a setting, a dialog, a menu, a notice, a control, a line of user-facing text.
 
 ## 2. Reuse: for each piece written from scratch, find the engine's piece
 
@@ -70,14 +71,40 @@ Read the diff against every section of the style guide, not from memory. The one
 - **Tests.** A test name states the behavior; the file sized like its neighbors; scratch checks not committed.
 - **Migrate on contact.** Old-style code in a function the change edits is brought to these rules in the same change; an untouched neighbor is left alone (that is a sweep, asked for separately).
 
-Fix what the pass finds before the pull request opens. A reviewer walks the same list, and a style item it finds is a should-fix, not taste. The "Reuse and surface" section of the body ends with one line: `Style pass: nothing left`, or the items left with their reason (a layout a boundary pins, a third-party signature).
+Before the line is written, run these over the diff's touched files and paste the result into the pass (the line is a claim; three pull requests in one day carried a false one):
 
-## 6. Duplicates and the gate
+```
+git diff --name-only origin/main...HEAD -- '*.cpp' '*.h' '*.py' '*.cs' > /tmp/touched.txt
+grep -n -E '\b(ln|rel|m|n|rx|idx|tmp|cnt|mgr|ptr|buf|str|val|res|ctx|obj|elem|i|j|k)\b\s*[=;,)]' $(cat /tmp/touched.txt)     # short names (locals in a loop body of three lines are the only allowed exception: say which)
+grep -n -E '\bfloat\s+\w+\[(3|4|9|16)\]|std::array<float,\s*(3|4|9|16)>' $(cat /tmp/touched.txt)              # raw arrays where Vector3, Vector4, Matrix4x4, ColorLinear fit
+grep -n -E '^#include' $(cat /tmp/touched.txt)                                                                     # the order: own header, module headers, standard library, third-party
+grep -n -E '\b(std::thread|std::async|std::jthread|CreateThread|_beginthread)\b' $(cat /tmp/touched.txt)            # a thread of the change's own
+grep -n -E '\[&\]' $(cat /tmp/touched.txt)                                                                        # a lambda capturing everything: a named function instead
+grep -n -E '\bTODO\b|\bFIXME\b|^\s*//\s*(was|previously|used to)' $(cat /tmp/touched.txt)                        # vague TODOs and history in comments
+```
+
+Fix what the pass and the greps find before the pull request opens. A reviewer walks the same list and runs the same greps, and a style item it finds is a should-fix, not taste. The "Reuse and surface" section of the body ends with one line that names what was checked: `Style pass: names, raw arrays, include order, threads, lambdas, comments checked over N files; nothing left`, or the items left with their reason (a layout a boundary pins, a third-party signature). A line that claims nothing left over a diff with a miss is the finding at the top of the review.
+
+## 6. The UI/UX pass: every surface a user sees or operates
+
+Run it on every change whose inventory lists a user-facing surface. Answer each line for each surface, in writing, against the change as built; a line answered from memory of the design is not answered. Open the surface in an isolated editor or Player, or read its capture, while you answer.
+
+- **Understood at first sight.** A user with no explanation knows what the control does and what each option means. The label is a name a user would say, not an engine-internal noun (not "observer" where the meaning is "seen by the eye or a camera"). The unit and the range show where they matter.
+- **The control fits the choice.** A choice among presets is a dropdown, with a thumbnail per preset when they look different; a mode with two values is a toggle or two radio choices; a number with a useful range is a slider with a number box; a list of many is searchable. Four buttons are not a preset picker.
+- **Defaults that work.** The default is what most users want on day one. A dial whose non-default values are all worse is deleted. A setting nobody would reach for in a week does not ship.
+- **Does what a user expects.** Copy gives feedback. Right-click on an item opens a menu with the actions a user expects there. Double-click does the obvious thing, and the tooltip says what it does. Escape cancels. A long item has a detail view. Undo covers every edit.
+- **Consistent with the editor.** The same words, icons, row heights, fonts and spacing as the neighboring panels: the editor's text styles and palette, no new font or color for one panel. A new control is a class in the UI module (or the owning module's UI folder) with XML layout and CSS, never a one-off.
+- **Shown, not described.** A capture of each changed surface at rest and in use (the menu open, the notice visible, the long item selected), with the pose or state on the record line, taken against the editor UI checklist in `GameEngine-Workbench/agent/evidence-checklists.md`. The visual critics judge the captures for intuitiveness and look, not only for pixels. A surface the owner asked for is shown to her before it merges.
+- **Text.** American spelling, plain words, no other engine's names, and the thing as it is now.
+
+Fix what the pass finds before the pull request opens. The "Reuse and surface" section ends with a second line after the style pass line: `UI/UX pass: first sight, control fit, defaults, expected behavior, consistency, captures, text checked over N surfaces; nothing left`, or the items left with their reason. A change with no user-facing surface writes `UI/UX pass: no user-facing surface`. A reviewer answers the same lines for a UI change; a line that claims nothing left over a surface with a miss is the finding at the top of the review.
+
+## 7. Duplicates and the gate
 
 - A second implementation of anything the engine has is a defect, in this change or found beside it: the change uses the one piece, or extends it, or says in the table why it could not (the piece is wrong) and files the issue.
 - Where the cleanup gate test exists (`CleanupGateTests`, `Tools/CleanupGate/`), run it; a count above the baseline is this change's to fix before the pull request opens.
 
-## 7. The table in the pull request body
+## 8. The table in the pull request body
 
 ```
 ## Reuse and surface
@@ -88,4 +115,4 @@ Fix what the pass finds before the pull request opens. A reviewer walks the same
 | float heights[16] | field | boundary: the GPU upload struct pins its layout (comment names it) | no | kept, allowlisted |
 ```
 
-A change with nothing public and nothing written from scratch says so in one line, followed by the style pass line. A reviewer reads this table first; a table that lies is a finding at the top of the review.
+A change with nothing public and nothing written from scratch says so in one line, followed by the style pass line and the UI/UX pass line. A reviewer reads this table first; a table that lies is a finding at the top of the review.

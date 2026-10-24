@@ -64,7 +64,7 @@ class ReparentReorderEntitiesCommand final : public IEditorCommand
             if (!s.entity.IsValid() || !m_World->IsValid(s.entity))
                 continue;
 
-            if (s.hadParent && s.parent.parent.IsValid())
+            if (s.hadParent && s.parent.Entity.IsValid())
             {
                 m_World->AddComponentImmediate(s.entity, s.parent);
             }

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AssetCore/Types.h"
 #include "AssetCore/GUID.h"
 #include "AssetCore/AssetTypes.h"
+#include "Types/Types.h"
 #include <functional>
 #include <mutex>
 #include <unordered_map>

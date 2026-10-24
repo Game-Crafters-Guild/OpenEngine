@@ -312,6 +312,68 @@ inline float PolygonDoubledSignedArea(std::span<const Vector2> polygon)
 	return sum;
 }
 
+// The point of segment ab nearest to `point`; `a` when the segment has no length.
+inline Vector3 ClosestPointOnSegment(const Vector3& point, const Vector3& a, const Vector3& b)
+{
+	const Vector3 segment = b - a;
+	const float lengthSquared = segment.LengthSquared();
+	if (lengthSquared <= 0.0f)
+	    return a;
+	return a + segment * std::clamp(Vector3::Dot(point - a, segment) / lengthSquared, 0.0f, 1.0f);
+}
+
+// The point of triangle abc nearest to `point` (on its face, an edge or a corner). A degenerate
+// triangle (coincident or collinear corners, or a corner angle at `a` under about 0.001 radians)
+// resolves to the nearest point of its three edges.
+inline Vector3 ClosestPointOnTriangle(const Vector3& point, const Vector3& a, const Vector3& b,
+                                      const Vector3& c)
+{
+	// Squared sine of the corner angle at `a` below which the triangle is a segment.
+	constexpr float kDegenerateSineSquared = 1e-6f;
+	const Vector3 ab = b - a;
+	const Vector3 ac = c - a;
+	if (Vector3::Cross(ab, ac).LengthSquared() <=
+	    kDegenerateSineSquared * ab.LengthSquared() * ac.LengthSquared())
+	{
+	    const Vector3 onAb = ClosestPointOnSegment(point, a, b);
+	    const Vector3 onBc = ClosestPointOnSegment(point, b, c);
+	    const Vector3 onCa = ClosestPointOnSegment(point, c, a);
+	    const float dAb = (point - onAb).LengthSquared();
+	    const float dBc = (point - onBc).LengthSquared();
+	    const float dCa = (point - onCa).LengthSquared();
+	    return dAb <= dBc && dAb <= dCa ? onAb : (dBc <= dCa ? onBc : onCa);
+	}
+	const Vector3 ap = point - a;
+	const float d1 = Vector3::Dot(ab, ap);
+	const float d2 = Vector3::Dot(ac, ap);
+	if (d1 <= 0.0f && d2 <= 0.0f)
+	    return a;
+	const Vector3 bp = point - b;
+	const float d3 = Vector3::Dot(ab, bp);
+	const float d4 = Vector3::Dot(ac, bp);
+	if (d3 >= 0.0f && d4 <= d3)
+	    return b;
+	const float vc = d1 * d4 - d3 * d2;
+	if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f)
+	    return a + ab * (d1 / (d1 - d3));
+	const Vector3 cp = point - c;
+	const float d5 = Vector3::Dot(ab, cp);
+	const float d6 = Vector3::Dot(ac, cp);
+	if (d6 >= 0.0f && d5 <= d6)
+	    return c;
+	const float vb = d5 * d2 - d1 * d6;
+	if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f)
+	    return a + ac * (d2 / (d2 - d6));
+	const float va = d3 * d6 - d5 * d4;
+	if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
+	    return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+	// va + vb + vc is |ab x ac|^2 up to round-off, which the degenerate test keeps above zero.
+	const float denominator = va + vb + vc;
+	const float v = vb / denominator;
+	const float w = vc / denominator;
+	return a + ab * v + ac * w;
+}
+
 // Whether segments ab and cd share a point, ends and collinear overlaps included.
 inline bool SegmentsIntersect(const Vector2& a, const Vector2& b, const Vector2& c, const Vector2& d)
 {

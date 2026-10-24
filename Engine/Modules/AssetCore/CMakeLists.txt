@@ -35,7 +35,6 @@ set(ASSETCORE_HEADERS
     Include/AssetCore/NineSlice.h
     Include/AssetCore/SharedFileRead.h
     Include/AssetCore/SnapshotFingerprint.h
-    Include/AssetCore/Types.h
 )
 
 # Create static library

@@ -59,7 +59,8 @@ if(GLSLC_EXECUTABLE)
     set(CBT_KERNELS_INCLUDES ${CBT_SHADER_DIR}/cbt_layout.glsl ${CBT_SHADER_DIR}/cbt_domain.glsl
         ${CBT_SHADER_DIR}/cbt_atlas.glsl ${CBT_SHADER_DIR}/cbt_sculpt.glsl
         ${CBT_SHADER_DIR}/cbt_analytic.glsl ${CBT_SHADER_DIR}/cbt_deep_decode.glsl
-        ${CBT_SHADER_DIR}/cbt_page.glsl)
+        ${CBT_SHADER_DIR}/cbt_page.glsl ${CBT_SHADER_DIR}/cbt_height_chain.glsl
+        ${CBT_SHADER_DIR}/cbt_planar_demand.glsl)
 
     set(_CBT_COMPILE_COMMANDS
         COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6
@@ -211,7 +212,39 @@ if(BUILD_TESTING)
             COMMENT "Extracting the terrain shadow block from terrain_shadow.glsl"
             VERBATIM)
 
+        # The draw's prefiltered height chain: its addressing, the level rule and the drawn height of a
+        # vertex (cbt_height_chain.glsl), the block the vertex modifier and the chain build both run.
+        set(CBT_HEIGHT_CHAIN_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/CBTHeightChainExtracted.h)
+        add_custom_command(
+            OUTPUT ${CBT_HEIGHT_CHAIN_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${CBT_SHADER_DIR}/cbt_height_chain.glsl
+                                     -DOUT=${CBT_HEIGHT_CHAIN_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_HEIGHT_CHAIN_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_HEIGHT_CHAIN_END"
+                                     -P ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            DEPENDS ${CBT_SHADER_DIR}/cbt_height_chain.glsl
+                    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            COMMENT "Extracting the height chain block from cbt_height_chain.glsl"
+            VERBATIM)
+
+        # The planar split demand (cbt_planar_demand.glsl): the box's depth bound, the demand and the flat
+        # veto Kernel_Classify asks of a facet, its parent and its parent's twin.
+        set(CBT_PLANAR_DEMAND_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/CBTPlanarDemandExtracted.h)
+        add_custom_command(
+            OUTPUT ${CBT_PLANAR_DEMAND_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${CBT_SHADER_DIR}/cbt_planar_demand.glsl
+                                     -DOUT=${CBT_PLANAR_DEMAND_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_PLANAR_DEMAND_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_PLANAR_DEMAND_END"
+                                     -P ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            DEPENDS ${CBT_SHADER_DIR}/cbt_planar_demand.glsl
+                    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            COMMENT "Extracting the planar split demand block from cbt_planar_demand.glsl"
+            VERBATIM)
+
         add_executable(CBTTerrainTests
+            ${CBT_PLANAR_DEMAND_HEADER}
+            ${CBT_HEIGHT_CHAIN_HEADER}
             ${CBT_TERRAIN_SHADOW_HEADER}
             ${CBT_HEX_LATTICE_HEADER}
             ${CBT_BLEND_SELECTION_HEADER}
@@ -228,6 +261,7 @@ if(BUILD_TESTING)
             Tests/CBTInstanceTests.cpp
             Tests/CBTUpdateNodeTests.cpp
             Tests/CBTUpdateRestGateTests.cpp
+            Tests/CBTRestSettleTests.cpp
             Tests/CBTScreenSpaceTests.cpp
             Tests/CBTHexTilingTests.cpp
             Tests/CBTDecodeGoldenTests.cpp
@@ -256,6 +290,8 @@ if(BUILD_TESTING)
             Tests/CBTParentMergeMetricTests.cpp
             Tests/CBTWatertightnessTests.cpp
             Tests/CBTContentAwareSplitTests.cpp
+            Tests/CBTHeightChainTests.cpp
+            Tests/CBTPlanarDemandTests.cpp
             Tests/TerrainShadowMapTests.cpp
         )
         set_target_properties(CBTTerrainTests PROPERTIES FOLDER "CBTTerrain/Tests")

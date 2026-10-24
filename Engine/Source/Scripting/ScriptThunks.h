@@ -109,6 +109,10 @@ inline GE_Result ContextMissing()
 /// Answers a call whose facade function threw: GE_Result_Fail.
 GE_Result CallFailed(const char* function, const char* what);
 
+/// Refuses a script's write of a component the engine owns with GE_Result_InvalidArg; `text` names the component,
+/// the system that writes it and the fix.
+GE_Result RefuseScriptWrite(std::string text);
+
 /**
  * @brief Serves a module table to a caller built from the same description: `expectedHash` is the table's,
  * `requestedHash` the caller's. A mismatch is refused with GE_Result_InvalidArg, a null table and a last

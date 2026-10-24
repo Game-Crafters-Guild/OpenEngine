@@ -142,7 +142,7 @@ TEST(SceneExportStrip, ExportKeepsAPropAndItsChildWithoutTheMeasureOnIt)
     EXPECT_EQ(world.GetComponent<Components::Name>(crate)->View(), "Crate");
     const auto* parent = world.GetComponent<Components::Parent>(lid);
     ASSERT_NE(parent, nullptr);
-    EXPECT_EQ(parent->parent.id, crate.id);
+    EXPECT_EQ(parent->Entity.id, crate.id);
     const ECS::EntityHandle lake = FindByTag(world, "lake");
     ASSERT_TRUE(lake.IsValid());
     EXPECT_FALSE(world.HasComponent<Components::Markup>(lake));

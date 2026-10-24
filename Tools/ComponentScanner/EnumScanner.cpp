@@ -1,5 +1,7 @@
 #include "EnumScanner.h"
 
+#include "ApiDraft.h"
+#include "FunctionParser.h"
 #include "Lexical.h"
 
 #include <algorithm>
@@ -95,9 +97,10 @@ std::vector<std::string_view> SplitTopLevel(std::string_view body)
     return parts;
 }
 
-// Parse the comma-separated body. Returns nullopt if any enumerator value can't be resolved
-// to an integer literal (the enum is then skipped for name-serialization).
-std::optional<std::vector<EnumMember>> ParseMembers(std::string_view body)
+// Parse the comma-separated body, whose first character sits on `bodyLine`. Returns nullopt if
+// any enumerator value can't be resolved to an integer literal (the enum is then skipped for
+// name-serialization).
+std::optional<std::vector<EnumMember>> ParseMembers(std::string_view body, int bodyLine)
 {
     std::vector<EnumMember> members;
     // The implicit value of the next enumerator; nullopt after the int64 maximum, where C++
@@ -125,7 +128,8 @@ std::optional<std::vector<EnumMember>> ParseMembers(std::string_view body)
             value = *parsed;
         }
 
-        members.push_back(EnumMember{std::string(namePart), value});
+        const int line = bodyLine + static_cast<int>(std::count(body.data(), namePart.data(), '\n'));
+        members.push_back(EnumMember{std::string(namePart), value, line, std::nullopt});
         if (value == std::numeric_limits<std::int64_t>::max())
             next = std::nullopt;
         else
@@ -232,21 +236,42 @@ std::vector<EnumDecl> Scan(std::string_view strippedSource)
             continue;
         }
 
-        if (std::optional<std::vector<EnumMember>> members = ParseMembers(body); members && !members->empty())
+        line += static_cast<int>(std::count(strippedSource.begin() + static_cast<std::ptrdiff_t>(countedTo),
+                                            strippedSource.begin() + static_cast<std::ptrdiff_t>(pos), '\n'));
+        countedTo = pos;
+        // The body ends at the '}' just before `end`.
+        const std::size_t bodyStart = end - 1 - body.size();
+        const int bodyLine = line + static_cast<int>(std::count(strippedSource.begin() + static_cast<std::ptrdiff_t>(pos),
+                                                                strippedSource.begin() + static_cast<std::ptrdiff_t>(bodyStart), '\n'));
+        if (std::optional<std::vector<EnumMember>> members = ParseMembers(body, bodyLine); members && !members->empty())
         {
             EnumDecl decl;
             decl.Name = std::move(name);
             decl.Members = std::move(*members);
             decl.Scoped = scoped;
-            line += static_cast<int>(std::count(strippedSource.begin() + static_cast<std::ptrdiff_t>(countedTo),
-                                                strippedSource.begin() + static_cast<std::ptrdiff_t>(pos), '\n'));
-            countedTo = pos;
             decl.DeclLine = line;
             if (underlying)
                 decl.Underlying = Trim(*underlying);
             result.push_back(std::move(decl));
         }
         pos = strippedSource.find("enum", end);
+    }
+    return result;
+}
+
+std::vector<ScopedEnumDecl> ScanScoped(std::string_view strippedSource)
+{
+    std::vector<ScopedEnumDecl> result;
+    for (EnumDecl& decl : Scan(strippedSource))
+    {
+        const std::size_t lineStart = FunctionParser::LineOffset(strippedSource, decl.DeclLine);
+        const std::size_t keyword = strippedSource.find("enum", lineStart);
+        const DeclarationScope scope =
+            FunctionParser::ScopeAt(strippedSource, keyword == std::string_view::npos ? lineStart : keyword);
+        if (scope.InOtherBlock)
+            continue;
+        std::string cppName = Qualify(scope, decl.Name);
+        result.push_back(ScopedEnumDecl{std::move(decl), std::move(cppName), ScopeName(scope)});
     }
     return result;
 }

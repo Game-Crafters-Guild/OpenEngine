@@ -28,26 +28,36 @@ Player.exe --headless --fixed-fps 60 --quit-after 600 --config C:\MyGame\game.co
 
 ## Ending the run from a script
 
-A native (C++) script ends the run the same way the Player does for `--quit-after`: the frame finishes, the scripts' `OnDestroy` runs, and the process exits with code 0.
+A script ends the run the same way the Player does for `--quit-after`: the frame finishes, the scripts' `OnDestroy` runs, and the process exits with code 0, or with the code the script passes. A later request replaces the code.
 
 :::::tabs
 ::::tab[C++]
 
 ```cpp title="End the run from a native script"
-#include "Core/Application.h"
+#include "Platform/ApplicationScriptApi.h"
 
-GameEngine::Application::Get()->RequestExit();
+GameEngine::Platform::Script::RequestExit(23);
 ```
 
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-No managed quit call yet: a C# script cannot end the run. The native call is `GameEngine::Application::Get()->RequestExit()` (`Engine/Include/Core/Application.h`); tracked as [OpenEngine issue #21](https://github.com/Game-Crafters-Guild/OpenEngine/issues/21).
-:::
+```csharp title="End the run from a C# script"
+using GameEngine.Scripting;
+
+Application.RequestExit(23);
+```
 
 ::::
 :::::
+
+Call it on the main thread, from a system's update. In C#, a call from another thread or from a job is refused: it throws `EngineCallException` and the run goes on. A C++ call is not checked, so call it only on the main thread. From another thread, post the request to the main thread:
+
+```csharp title="Request exit from another thread"
+MainThread.Post(() => Application.RequestExit(23));
+```
+
+In the editor, the same call stops play after the current frame, as the Stop button does, change review included. The editor stays open with its unsaved work, and the exit code is not used. Outside play, the call does nothing.
 
 ## What does not run
 
@@ -74,10 +84,12 @@ The Player writes its log to `%APPDATA%\<gameName>\Logs\game-<process id>.log`, 
 
 | Exit code | Meaning |
 |---|---|
-| `0` | The run ended normally: `--quit-after` reached, or a script asked to quit. |
+| `0` | The run ended normally: `--quit-after` reached, or a script asked to quit without another exit code. |
 | `1` | The command line or configuration was refused: `--config` names a missing file, a flag that needs a graphics device was given, `--fixed-fps` is not a positive number, or `--quit-after` is not a non-negative whole number. Restarting will not help. The log names the fix. |
 | `-1` (`4294967295`) | Startup failed, for example the startup scene could not be loaded. The log line before `Player: Failed to initialize` names the cause. |
 | `-2`, `-3` | An unhandled exception ended the run. The log holds its message. |
+
+A script can supply its own exit code. Choose codes outside the engine's reserved values above when the service manager needs to distinguish them.
 
 :::caution
 

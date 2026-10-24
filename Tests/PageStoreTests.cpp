@@ -324,7 +324,9 @@ TEST_F(PageStoreTest, AbsentPagesResolveToTheirNearestPresentAncestor)
         for (uint32 pz = 0; pz < layout.Levels[level].PagesZ; ++pz)
             for (uint32 px = 0; px < layout.Levels[level].PagesX; ++px)
                 if (layout.FindPresent(PageAddress{0, level, px, pz}))
+                {
                     ASSERT_TRUE(writer.WritePage(PageAddress{0, level, px, pz}, page));
+                }
     ASSERT_EQ(writer.Finish(), "");
 
     PageStoreReader reader;
@@ -1198,7 +1200,9 @@ TEST(PageResidencyTest, WantedPagesLoadAssignAndThenAParkedCameraDoesNoWork)
             const std::vector<float32>* samples = residency.Samples(7, upload.Page.Address);
             EXPECT_NE(samples, nullptr);
             if (samples != nullptr)
+            {
                 EXPECT_EQ(*samples, expected);
+            }
             ++uploaded;
         }
         return residency.FieldCache(7).ResidentCount() == wanted.size();

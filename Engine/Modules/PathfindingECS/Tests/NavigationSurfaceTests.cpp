@@ -3,9 +3,9 @@
 // cells; how it reports its bake and its sources; how it is listed and saved.
 #include "NavigationTestSurfaces.h"
 
-#include "PathfindingECS/Components/NavigationAgent.h"
-#include "PathfindingECS/Components/NavigationSource.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationAgent.h"
+#include "Components/Navigation/NavigationSource.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"
@@ -37,7 +37,10 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -428,7 +431,7 @@ TEST_F(NavigationSurfaceTest, BakeUnitCountIsWhatTheBakeMakes)
     entity.Set(authored);
     world->ProcessCommands();
 
-    for (const auto [mode, cellSize] : {std::pair{NavigationSurfaceMode::Mesh, 0.5f}, std::pair{NavigationSurfaceMode::Grid, 1.0f}})
+    for (const auto& [mode, cellSize] : {std::pair{NavigationSurfaceMode::Mesh, 0.5f}, std::pair{NavigationSurfaceMode::Grid, 1.0f}})
     {
         auto* surface = world->GetComponentForWrite<NavigationSurface>(entity.GetHandle());
         surface->Mode = mode;
@@ -1055,6 +1058,11 @@ TEST_F(NavigationSurfaceTest, SceneRoundTripKeepsTheAuthoredFields)
         }
     } cleanup{path};
     ASSERT_TRUE(Scene::SaveSceneToFile(*world, path));
+    // The grid type is written by its name, though Pathfinding::GridType is declared outside the
+    // component headers.
+    std::ostringstream saved;
+    saved << std::ifstream(path).rdbuf();
+    EXPECT_NE(saved.str().find("Hex"), std::string::npos) << saved.str();
     world->Clear();
     ASSERT_TRUE(Scene::LoadSceneFromFile(*world, path));
 

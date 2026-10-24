@@ -1210,3 +1210,157 @@ TEST(GameUIElementHandleTests, FindElementWithAnEntitySearchesOnlyThatDocument)
     EXPECT_EQ(GE_GameUI_FindElement(second + hud.Entity + 1, "take-damage", &instanceId), GE_Result_NotFound)
         << "an entity with no bound document has nothing to search";
 }
+
+// Two buttons on the same box: the later sibling is in front until a script raises the first.
+TEST(GameUIElementHandleTests, ARaisedElementIsTheOneThePointerFinds)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    constexpr const char* kStackedHud =
+        "<uielement class='hud-root'><button id='below' class='btn' /><button id='above' class='btn' /></uielement>\n";
+    HudFixture hud(dev.get(), "gameui_handle_zindex", kStackedHud);
+    ASSERT_TRUE(hud.Ok);
+    UIElement* below = hud.Find("below"_sid);
+    ASSERT_NE(below, nullptr);
+
+    hud.Pointer(HudFixture::kInsideX, HudFixture::kInsideY, false);
+    ASSERT_EQ(hud.Host->GetUIManager()->GetHoveredElement(), hud.Find("above"_sid));
+
+    EXPECT_EQ(GE_UIElement_SetZIndex(below->GetInstanceId(), 10), GE_Result_Ok);
+    hud.Pump();
+    hud.Pointer(HudFixture::kInsideX + 1.0f, HudFixture::kInsideY, false);
+    EXPECT_EQ(hud.Host->GetUIManager()->GetHoveredElement(), below);
+}
+
+// A script's write wins over the element's own style attribute, as a script's inline style does in a
+// browser: the width percent, the z-index and the offset of a button whose style attribute sets all three.
+TEST(GameUIElementHandleTests, AScriptsWriteWinsOverTheElementsStyleAttribute)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    constexpr const char* kStyledHud =
+        "<uielement class='hud-root'>"
+        "<button id='styled' class='btn' style='width: 30px; z-index: 0; left: 5px; top: 6px' />"
+        "<button id='plain' class='btn' /></uielement>\n";
+    HudFixture hud(dev.get(), "gameui_handle_style_precedence", kStyledHud);
+    ASSERT_TRUE(hud.Ok);
+    UIElement* styled = hud.Find("styled"_sid);
+    ASSERT_NE(styled, nullptr);
+
+    EXPECT_EQ(GE_UIElement_SetWidthPercent(styled->GetInstanceId(), 50.0f), GE_Result_Ok);
+    EXPECT_EQ(GE_UIElement_SetZIndex(styled->GetInstanceId(), 10), GE_Result_Ok);
+    EXPECT_EQ(GE_UIElement_SetOffset(styled->GetInstanceId(), 30.0f, 30.0f), GE_Result_Ok);
+    hud.Pump();
+    hud.Pointer(HudFixture::kInsideX - 30.0f, HudFixture::kInsideY, false);
+
+    const auto rootRect = styled->GetParent()->GetWindowRect();
+    EXPECT_FLOAT_EQ(styled->GetWindowRect().Width, 100.0f) << "50 percent of the 200 px HUD";
+    EXPECT_FLOAT_EQ(styled->GetWindowRect().X, rootRect.X + 30.0f);
+    EXPECT_FLOAT_EQ(styled->GetWindowRect().Y, rootRect.Y + 30.0f);
+    EXPECT_EQ(hud.Host->GetUIManager()->GetHoveredElement(), styled);
+}
+
+// An absolutely positioned element is placed from the inside of its parent's border, the parent's
+// padding ignored; any other element moves from where layout places it.
+TEST(GameUIElementHandleTests, AnOffsetPlacesAnAbsoluteElementInItsParentAndMovesAnotherFromItsPlace)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    constexpr const char* kTwoBoxHud =
+        "<uielement class='hud-root'><button id='placed' class='btn' /><button id='flowing' /></uielement>\n";
+    HudFixture hud(dev.get(), "gameui_handle_offset", kTwoBoxHud);
+    ASSERT_TRUE(hud.Ok);
+    UIElement* placed = hud.Find("placed"_sid);
+    UIElement* flowing = hud.Find("flowing"_sid);
+    ASSERT_NE(placed, nullptr);
+    ASSERT_NE(flowing, nullptr);
+    UIElement* parent = placed->GetParent();
+    ASSERT_NE(parent, nullptr);
+    parent->Overrides().Set(Style::PaddingLeft, StyleLength::Px(8.0f)).Set(Style::PaddingTop, StyleLength::Px(8.0f));
+    hud.Pump();
+    const auto flowingBefore = flowing->GetWindowRect();
+
+    EXPECT_EQ(GE_UIElement_SetOffset(placed->GetInstanceId(), 10.0f, 20.0f), GE_Result_Ok);
+    EXPECT_EQ(GE_UIElement_SetOffset(flowing->GetInstanceId(), 10.0f, 20.0f), GE_Result_Ok);
+    hud.Pump();
+
+    const auto parentRect = parent->GetWindowRect();
+    EXPECT_FLOAT_EQ(placed->GetWindowRect().X, parentRect.X + 10.0f);
+    EXPECT_FLOAT_EQ(placed->GetWindowRect().Y, parentRect.Y + 20.0f);
+    EXPECT_FLOAT_EQ(flowing->GetWindowRect().X, flowingBefore.X + 10.0f);
+    EXPECT_FLOAT_EQ(flowing->GetWindowRect().Y, flowingBefore.Y + 20.0f);
+}
+
+// The rect a script reads is the button's drawn box, in window space. The parent is moved off the window origin by a
+// transform, so a rect relative to the parent, or one that skips the transform, reads wrong. A pointer event over the
+// button reports its X and Y in the button's layout space, which the transform separates from window space.
+TEST(GameUIElementHandleTests, TheRectIsTheDrawnBoxInWindowSpace)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    HudFixture hud(dev.get(), "gameui_handle_rect", kOneButtonHud);
+    ASSERT_TRUE(hud.Ok);
+    UIElement* button = hud.Find("take-damage"_sid);
+    ASSERT_NE(button, nullptr);
+    UIElement* parent = button->GetParent();
+    parent->Overrides().Set(Style::Transform,
+                            TransformValue{}.Translate(StyleLength::Px(15.0f), StyleLength::Px(25.0f)));
+    hud.Pump();
+    const auto parentRect = parent->GetWindowRect();
+    ASSERT_FLOAT_EQ(parentRect.X, 15.0f);
+    ASSERT_FLOAT_EQ(parentRect.Y, 25.0f);
+
+    float x = 0.0f, y = 0.0f, width = 0.0f, height = 0.0f;
+    ASSERT_EQ(GE_UIElement_GetRect(button->GetInstanceId(), &x, &y, &width, &height), GE_Result_Ok);
+    EXPECT_FLOAT_EQ(x, parentRect.X + 40.0f);
+    EXPECT_FLOAT_EQ(y, parentRect.Y + 40.0f);
+    EXPECT_FLOAT_EQ(width, 80.0f);
+    EXPECT_FLOAT_EQ(height, 40.0f);
+
+    UIEvent lastMove{};
+    ASSERT_NE(GameUI::Detail::RegisterSessionEvent(button->GetInstanceId(), kEventMouseMove,
+                                                  [&](const UIEvent& e) { lastMove = e; }),
+              0u);
+    hud.Pointer(x + 1.0f, y + 1.0f, false);
+    EXPECT_FLOAT_EQ(lastMove.X, x + 1.0f - parentRect.X) << "a pointer event's X is in the layout space";
+    EXPECT_FLOAT_EQ(lastMove.Y, y + 1.0f - parentRect.Y) << "a pointer event's Y is in the layout space";
+}
+
+// A release from an element that does not hold the pointer must not end another element's drag.
+TEST(GameUIElementHandleTests, OnlyTheElementHoldingThePointerCanReleaseIt)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    constexpr const char* kTwoButtonHud =
+        "<uielement class='hud-root'><button id='holder' class='btn' /><button id='other' /></uielement>\n";
+    HudFixture hud(dev.get(), "gameui_handle_capture", kTwoButtonHud);
+    ASSERT_TRUE(hud.Ok);
+    UIElement* holder = hud.Find("holder"_sid);
+    UIElement* other = hud.Find("other"_sid);
+    ASSERT_NE(holder, nullptr);
+    ASSERT_NE(other, nullptr);
+    UIManager* ui = hud.Host->GetUIManager();
+
+    ASSERT_EQ(GE_UIElement_CapturePointer(holder->GetInstanceId()), GE_Result_Ok);
+    EXPECT_EQ(GE_UIElement_ReleasePointer(other->GetInstanceId()), GE_Result_NotFound);
+    EXPECT_TRUE(ui->IsMouseCaptured());
+    EXPECT_EQ(ui->GetCaptureId(), "holder");
+
+    EXPECT_EQ(GE_UIElement_ReleasePointer(holder->GetInstanceId()), GE_Result_Ok);
+    EXPECT_FALSE(ui->IsMouseCaptured());
+}

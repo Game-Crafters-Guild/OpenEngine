@@ -17,10 +17,13 @@
 #include "Components/Spline/SplineFenceSpanPiece.h"
 #include "Components/Spline/SplinePoolSelection.h"
 #include "Core/Engine.h"
+#include "Types/ParseNumber.h"
 #include "UI/Controls/Dropdown.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -131,7 +134,7 @@ std::vector<std::pair<uint32, uint32>> StandingSpans(ECS::World& world, ECS::Ent
     world.Query<ECS::Read<Components::SplineFenceSpanPiece>, ECS::Read<Components::Parent>>().Each(
         [&spans, fence](const Components::SplineFenceSpanPiece& piece, const Components::Parent& parent)
         {
-            if (parent.parent == fence)
+            if (parent.Entity == fence)
                 spans.emplace_back(piece.Run, piece.OrdinalInRun);
         });
     return spans;
@@ -250,12 +253,12 @@ void AddEnumDropdownRow(const InspectorContext& ctx, const std::string& label,
     dd->SetOnValueChanged(
         [w, e, n, undo, undoName, field](const std::string& value)
         {
-            int v = 0;
-            try { v = std::stoi(value); }
-            catch (...) { return; }
+            const std::optional<int64_t> v = ParseInt(value);
+            if (!v || !std::in_range<std::underlying_type_t<TEnum>>(*v))
+                return;
             InspectorDrag::CommitComponentWithUndo<SplineFence>(
                 w, e, n, undo, undoName,
-                [field, v](SplineFence& u) { u.*field = static_cast<TEnum>(v); });
+                [field, picked = *v](SplineFence& u) { u.*field = static_cast<TEnum>(picked); });
         });
 }
 

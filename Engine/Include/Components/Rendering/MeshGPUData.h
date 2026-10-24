@@ -8,6 +8,7 @@ namespace GameEngine { namespace Components {
 // This avoids repeated lookups/insertions into GPUScene during extraction
 // once meshes and materials are registered with GPUScene.
 // [DoNotSerialize] — runtime GPUScene index bridge, rebuilt during extraction.
+// @ge-engine-internal render extraction
 struct MeshGPUData {
     // Runtime bridge derived by extraction: it has no off state of its own.
     static constexpr bool NotToggleable = true;

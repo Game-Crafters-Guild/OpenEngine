@@ -190,8 +190,8 @@ TEST(HierarchyQueries, IsDescendantOf_DepthCapReturnsFalseBeyondLimit) {
     EntityHandle probe = cur;
     for (int i = 0; i < 100; ++i) {
         auto* p = w.GetComponent<Parent>(probe);
-        if (!p || !p->parent.IsValid()) break;
-        probe = p->parent;
+        if (!p || !p->Entity.IsValid()) break;
+        probe = p->Entity;
     }
     EXPECT_TRUE(IsDescendantOf(w, cur, probe));
 

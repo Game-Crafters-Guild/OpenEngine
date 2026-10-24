@@ -369,7 +369,6 @@ static int PlayerMainImpl(int argc, char** argv)
     if (configFromArgs && !std::filesystem::exists(configPath))
     {
         Logger::Log::Error("Player: --config '{}' not found", configPath.string());
-        Logger::Log::Flush();
         return 1;
     }
     ApplyWindowModeOverrides(argc, argv, gameConfig);
@@ -389,10 +388,7 @@ static int PlayerMainImpl(int argc, char** argv)
     const std::optional<GameEngine::PlayerRunOptions> runOptions =
         GameEngine::ParsePlayerRunOptions(argc, argv, std::getenv("GE_AUDIO_OUTPUT"));
     if (!runOptions)
-    {
-        Logger::Log::Flush();
         return 1;
-    }
 
     // The standalone Player is a runtime, not a dev tool: it should never spawn
     // the resident CompileServerHost (a hot-reload/incremental-compile helper that
@@ -604,14 +600,24 @@ static int PlayerMainImpl(int argc, char** argv)
     }
 }
 
+// The logger writes from its own thread, and process exit does not wait for it. Every way the
+// Player ends returns through here, after the application is destroyed, so the flush keeps the
+// last lines of a run.
+static int RunPlayer(int argc, char** argv)
+{
+    const int exitCode = PlayerMainImpl(argc, argv);
+    Logger::Log::Flush();
+    return exitCode;
+}
+
 #ifdef _WIN32
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 {
-    return PlayerMainImpl(__argc, __argv);
+    return RunPlayer(__argc, __argv);
 }
 #endif
 
 int main(int argc, char** argv)
 {
-    return PlayerMainImpl(argc, argv);
+    return RunPlayer(argc, argv);
 }

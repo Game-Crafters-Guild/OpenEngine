@@ -355,6 +355,80 @@ TEST(RGRecord, CrossQueueLayoutTransitionRecordsAtTheProducerTailAndValidatesCle
     EXPECT_EQ(stats.ErrorCount, 0u) << VuidSummary(stats);
 }
 
+// A transition the plan places on another submission still leaves its layout on the
+// consuming pass's list: compute clears a texture, graphics copies it to a buffer, and the
+// CopyDst -> CopySrc transition records at the compute tail. The copy reads the layout from
+// its own list's record, so it is not refused, the texels come back, and the frame validates.
+TEST(RGRecord, CrossQueueTransitionLeavesItsLayoutOnTheConsumerList)
+{
+    DisarmValidationAssert();
+    auto dev = MakeDevice(/*debugLayer=*/true);
+    if (!dev)
+        GTEST_SKIP() << "no validation-layer device available";
+    if (dev->GetComputeQueueFamilyIndex() == dev->GetGraphicsQueueFamilyIndex())
+        GTEST_SKIP() << "no separate compute queue family: every transition records on one list";
+    const bool validationActive = dev->GetValidationStats().Enabled;
+    FramePools pools(dev.get());
+    RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+    dev->ResetValidationStats();
+
+    constexpr uint32_t kSize = 8;
+    constexpr size_t kBytes = static_cast<size_t>(kSize) * kSize * 4;
+    const BufferHandle readback = dev->CreateReadbackBuffer(kBytes, "Xq.CopyReadback");
+    ASSERT_TRUE(readback.IsValid());
+
+    frame.BeginFrame(0);
+    TextureDesc desc = ColorDesc(kSize, kSize);
+    desc.usage = static_cast<uint32_t>(TextureUsage::ShaderResource | TextureUsage::TransferSrc |
+                                       TextureUsage::TransferDst);
+    RGTexture tex = frame.CreateTexture("Xq.Cleared", desc);
+    frame.AddComputePass("Xq.Clear", 0, [&](RGPassBuilder& p) { p.Write(tex, RGTextureWrite::CopyDst); },
+                         [tex](RGContext& ctx)
+                         {
+                             const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                             ctx.Cmd->ClearColorImageSubresource(ctx.GetTexture(tex), 0, 0, white);
+                         });
+    frame.AddPass("Xq.Copy", 1,
+                  [&](RGPassBuilder& p)
+                  {
+                      p.Read(tex, RGTextureRead::CopySrc);
+                      p.PreventCulling();
+                  },
+                  [tex, readback](RGContext& ctx)
+                  {
+                      ctx.Cmd->CopyTextureSubresourceToBuffer(ctx.GetTexture(tex), 0, 0, readback, kSize,
+                                                              kSize);
+                  });
+    frame.Execute();
+    dev->WaitForIdle();
+
+    const auto& barriers = frame.Graph().Barriers();
+    const auto& placement = frame.Graph().BarrierSubmissions();
+    ASSERT_EQ(placement.size(), barriers.size());
+    bool relocated = false;
+    for (uint32_t i = 0; i < barriers.size(); ++i)
+    {
+        const RGBarrier& b = barriers[i];
+        relocated |= b.Resource == tex.Id && b.NewLayout == RGImageLayout::TransferSrc && placement[i] != kInvalidId;
+    }
+    ASSERT_TRUE(relocated) << "the transition into the copy source must record on the compute tail; the check is void";
+
+    const auto* bytes = static_cast<const uint8_t*>(dev->MapBuffer(readback));
+    ASSERT_NE(bytes, nullptr);
+    size_t whiteBytes = 0;
+    for (size_t i = 0; i < kBytes; ++i)
+        whiteBytes += bytes[i] == 255 ? 1u : 0u;
+    dev->UnmapBuffer(readback);
+    dev->DestroyBuffer(readback);
+    EXPECT_EQ(whiteBytes, kBytes) << "the copy was refused or read a discarded image";
+
+    if (!validationActive)
+        GTEST_SKIP() << "validation layer not present: the texels are asserted, the layout verdict is unavailable";
+    const ValidationStats stats = dev->GetValidationStats();
+    EXPECT_EQ(stats.ErrorCount, 0u) << VuidSummary(stats);
+}
+
 // The export-hole gate: a compute pass writes a persistent texture whose
 // export contract restores ShaderReadOnly, under the identity (true-async)
 // map on a real device. The restore must record at the COMPUTE tail — the

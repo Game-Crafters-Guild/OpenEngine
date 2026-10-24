@@ -18,7 +18,7 @@
 #include "Components/Transform.h"
 #include "Mathematics/Vector3.h"
 #include "Pathfinding/PathfindingTypes.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 #include "Types/StringUtils.h"

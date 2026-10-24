@@ -280,6 +280,7 @@ struct Transform
 // it holds is the entity's pose. Wrap is not handled in v1 — if it ever
 // matters, switch to uint64 or rebuild detection logic.
 // [DoNotSerialize] — derived world matrix, recomputed from Transform each frame; never authored.
+// @ge-readonly TransformHierarchySystem
 struct WorldTransform
 {
     // Derived from Transform and the Parent chain: it has no off state of its own.
@@ -291,6 +292,9 @@ struct WorldTransform
         0.0f, 0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f};
     uint32 Version = 0u;
+
+    /// The world position: the matrix's translation column.
+    Vector3 GetPosition() const { return Vector3{matrix[12], matrix[13], matrix[14]}; }
 };
 
 // Helper utilities for quaternion  Euler angle conversions (degrees, XYZ = roll, pitch, yaw).

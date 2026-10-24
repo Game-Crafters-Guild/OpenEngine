@@ -19,6 +19,7 @@
 #include "Logger/Logger.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "Rendering/Text/TextLayout.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <cassert>
@@ -728,7 +729,7 @@ uint32_t UIManager::SheetSetInterner::Intern(
     // deduplicated by pointer identity, not by content.
     uint64_t h = 0;
     for (const StylesheetHandle& sh : handles)
-        HashCombine(h, HashPtr64(sh.get()));
+        h = Hashing::HashCombine(h, Hashing::HashPointer(sh.get()));
 
     auto it = m_HashBuckets.find(h);
     if (it != m_HashBuckets.end())
@@ -1027,7 +1028,7 @@ void UIManager::AddSheetForAnalysis(const Stylesheet* s, UpdateContext& ctx)
     if (!s)
         return;
     if (ctx.analysisSheets.insert(s).second)
-        ctx.analysisSheetHash ^= HashPtr64(s);
+        ctx.analysisSheetHash ^= Hashing::HashPointer(s);
 }
 
 void UIManager::ApplyElementStyleOverrides(UIElement* el, ResolvedStyle& cs, bool allowLiveTextureRegistration)
@@ -1048,9 +1049,6 @@ void UIManager::ApplyElementStyleOverrides(UIElement* el, ResolvedStyle& cs, boo
         // generation, so no name-keyed registry entry is needed here.
         (void)allowLiveTextureRegistration;
     }
-
-    if (!el->InlineOverrides().IsEmpty())
-        ApplyOverridesToResolvedStyle(cs, el->InlineOverrides());
 }
 
 // Thread-local buffers for BuildYogaRecursive (capacity retained across frames).
@@ -1318,7 +1316,9 @@ bool UIManager::ResolveCascadeForElement(UIElement* el,
 }
 
 // The last thing that touches an element's ResolvedStyle before the Yoga push
-// reads it: overrides land on top of the cascade, then the used values that no
+// reads it: the element's own style attribute lands on top of the cascade, then
+// the override bag a script or a control writes (a script's write wins over the
+// style attribute, as a script's inline style does in a browser), then the used values that no
 // single declaration can decide are resolved (border-style and border-width
 // arrive in declaration order, so neither property's applier can settle the
 // pair on its own).
@@ -1340,6 +1340,8 @@ void UIManager::FinalizeElementStyle(UIElement* el)
         el->HasBackgroundImageTextureOverride() ||
         !el->InlineOverrides().IsEmpty())
     {
+        if (!el->InlineOverrides().IsEmpty())
+            ApplyOverridesToResolvedStyle(el->GetMutableResolvedStyle(), el->InlineOverrides());
         ApplyOverridesToResolvedStyle(el->GetMutableResolvedStyle(), el->Overrides());
         ApplyElementStyleOverrides(el, el->GetMutableResolvedStyle(), /*allowLiveTextureRegistration=*/false);
     }
@@ -1949,7 +1951,7 @@ BuiltNode UIManager::ApplyElementBuild(UIElement* el, const ResolvedStyle* paren
                             RemoveAllYogaChildren(n);
                         }
 
-                        measureTextHash = HashString64(tm.Text);
+                        measureTextHash = Hashing::Fnv1a64(tm.Text);
                         const bool tmHasNewlines = (tm.Text.find('\n') != std::string::npos);
                         allowWrapForMeasure = textMeasurable->AllowWrapForMeasure();
                         if (cs.Visual.WhiteSpace == WhiteSpace::NoWrap ||

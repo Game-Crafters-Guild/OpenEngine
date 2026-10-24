@@ -381,7 +381,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 
 	    parent.Set(parentLocal);
 	    Parent parentComponent{};
-	    parentComponent.parent = parent.GetHandle();
+	    parentComponent.Entity = parent.GetHandle();
 	    child.Set(childLocal);
 	    child.Set(parentComponent);
 
@@ -435,7 +435,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 
 		    parent.Set(parentLocal);
 		    Parent parentComponent{};
-		    parentComponent.parent = parent.GetHandle();
+		    parentComponent.Entity = parent.GetHandle();
 		    child.Set(childLocal);
 		    child.Set(parentComponent);
 
@@ -484,9 +484,9 @@ TEST(TransformMathTests, Hierarchy_CachedTopologyPropagatesCollapsedDirtySubtree
     ECS::Entity leafB = world.Create(Transform::FromTRS(
         {0.0f, 0.0f, -3.0f}, Quaternion{}, {1, 1, 1}));
 
-    Parent toRoot{}; toRoot.parent = root.GetHandle();
-    Parent toA{}; toA.parent = branchA.GetHandle();
-    Parent toB{}; toB.parent = branchB.GetHandle();
+    Parent toRoot{}; toRoot.Entity = root.GetHandle();
+    Parent toA{}; toA.Entity = branchA.GetHandle();
+    Parent toB{}; toB.Entity = branchB.GetHandle();
     branchA.Set(toRoot);
     branchB.Set(toRoot);
     leafA.Set(toA);
@@ -535,7 +535,7 @@ TEST(TransformMathTests, Hierarchy_CachedTopologyPropagatesCollapsedDirtySubtree
 
     // Parent data edits and unrelated structural moves both invalidate cached
     // pointers/topology and force exactly one rebuild.
-    world.GetComponentForWrite<Parent>(leafA.GetHandle())->parent = branchB.GetHandle();
+    world.GetComponentForWrite<Parent>(leafA.GetHandle())->Entity = branchB.GetHandle();
     hierarchy.Update(world, 0.0f);
     EXPECT_EQ(hierarchy.GetTopologyBuildCount(), 2u);
     const WorldTransform* reparented =
@@ -960,8 +960,8 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathOnRandomForests)
             {
                 if (spec.parentOf[i] >= 0)
                 {
-                    splitWorld.GetComponentForWrite<Parent>(splitHandles[i])->parent = splitHandles[0];
-                    serialWorld.GetComponentForWrite<Parent>(serialHandles[i])->parent = serialHandles[0];
+                    splitWorld.GetComponentForWrite<Parent>(splitHandles[i])->Entity = splitHandles[0];
+                    serialWorld.GetComponentForWrite<Parent>(serialHandles[i])->Entity = serialHandles[0];
                     break;
                 }
             }
@@ -1118,7 +1118,7 @@ TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
     }, 11);
     bool toggle = false;
     const double rebuildMs = median([&] {
-        world.GetComponentForWrite<Parent>(leaves.front())->parent =
+        world.GetComponentForWrite<Parent>(leaves.front())->Entity =
             roots[toggle ? 0 : 1];
         toggle = !toggle;
         hierarchy.Update(world, 0.0f);
@@ -1169,7 +1169,7 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
         {0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
     ECS::Entity child = world.Create(Transform::FromTRS(
         {1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
-    Parent toRoot{}; toRoot.parent = root.GetHandle();
+    Parent toRoot{}; toRoot.Entity = root.GetHandle();
     child.Set(toRoot);
     world.ProcessCommands();
 
@@ -1260,7 +1260,7 @@ TEST(TransformMathTests, Hierarchy_ChildrenFollowRootAfterDirectWorldWrite)
             ECS::World world;
             auto root = world.Create(Transform{});
             Parent parent{};
-            parent.parent = root.GetHandle();
+            parent.Entity = root.GetHandle();
             auto child = world.Create(Transform{}, parent);
             Engine::Renderer::TransformHierarchySystem hierarchy(forceSerial);
             hierarchy.Update(world, 0.0f);
@@ -1287,12 +1287,12 @@ TEST(TransformMathTests, Hierarchy_GrandchildFollowsRootAfterDirectWorldWrite)
     Transform childLocal{};
     childLocal.matrix[13] = 1.0f;
     Parent childParent{};
-    childParent.parent = root.GetHandle();
+    childParent.Entity = root.GetHandle();
     auto child = world.Create(childLocal, childParent);
     Transform grandchildLocal{};
     grandchildLocal.matrix[13] = 2.0f;
     Parent grandchildParent{};
-    grandchildParent.parent = child.GetHandle();
+    grandchildParent.Entity = child.GetHandle();
     auto grandchild = world.Create(grandchildLocal, grandchildParent);
     Engine::Renderer::TransformHierarchySystem hierarchy;
     hierarchy.Update(world, 0.0f);

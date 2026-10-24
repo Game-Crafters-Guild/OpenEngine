@@ -329,15 +329,16 @@ TEST(CBTLayout, StructSizesMatchStd430)
     EXPECT_EQ(offsetof(CBTVertexData, Sector0), 64u);
     EXPECT_EQ(offsetof(CBTVertexData, DeepTag), 88u);
     // The scalar vec4 block (mat4 + 13 vec4 = 256B, the water plane last) is followed by the
-    // analytic sphere-modifier set (1 count vec4 + 16 x 3 vec4 placements) and then the per-cell
-    // placement-cull mask tail (48 uvec4 = 768B). Every field before the water plane keeps its
-    // offset (the flag-off GLSL reads are byte-stable) — locked below.
-    EXPECT_EQ(sizeof(CBTFrameParams), 1808u); // mat4 + 13 vec4 + analytic set + cell masks
+    // analytic sphere-modifier set (1 count vec4 + 16 x 3 vec4 placements), the draw's height-chain
+    // vec4 and then the per-cell placement-cull mask tail (48 uvec4 = 768B). Every field before the
+    // water plane keeps its offset (the flag-off GLSL reads are byte-stable) — locked below.
+    EXPECT_EQ(sizeof(CBTFrameParams), 1824u); // mat4 + 13 vec4 + analytic set + height chain + cell masks
     EXPECT_EQ(offsetof(CBTFrameParams, PriorityParams), 224u); // last field before the water plane
     EXPECT_EQ(offsetof(CBTFrameParams, WaterPlane), 240u);
     EXPECT_EQ(offsetof(CBTFrameParams, AnalyticParams), 256u); // appended after the scalar block
     EXPECT_EQ(offsetof(CBTFrameParams, SphereAnalytic), 272u); // vec4-aligned array (std140 stride 48)
-    EXPECT_EQ(offsetof(CBTFrameParams, AnalyticCellMask), 1040u); // S3 mask tail (uvec4[48] twin)
+    EXPECT_EQ(offsetof(CBTFrameParams, HeightChain), 1040u);       // the draw's level rule, for the cull
+    EXPECT_EQ(offsetof(CBTFrameParams, AnalyticCellMask), 1056u); // S3 mask tail (uvec4[48] twin)
     EXPECT_EQ(offsetof(CBTBisectorData, Indices), 20u);
 }
 
@@ -1406,7 +1407,9 @@ TEST(CBTLayout, PoolAndBaseDepth)
     EXPECT_EQ(kCBTSphereSculptPageTableBinding, 20u); // planet editing v2: sphere sculpt page TABLE SSBO
     EXPECT_EQ(kCBTPageTableBinding, 22u);        // paged height resolve: page table SSBO ring
     EXPECT_EQ(kCBTPageCacheBinding, 23u);        // paged height resolve: page cache texture ring
-    EXPECT_EQ(kCBTDescriptorBindingCount, 24u);
+    EXPECT_EQ(kCBTHeightChainBinding, 24u);      // the draw's prefiltered height chain
+    EXPECT_EQ(kCBTNormalChainBinding, 25u);      // the far-field normal chain's mips (storage views)
+    EXPECT_EQ(kCBTDescriptorBindingCount, 26u);
 }
 
 // The height-range pyramid's three constants are hand-mirrored between CBTLayout.h and cbt_layout.glsl
@@ -1432,6 +1435,74 @@ TEST(CBTLayout, GlslHeightRangeConstantsMatchCpp)
     const std::regex header(R"(#define\s+CBT_HEIGHT_RANGE_HEADER\s+([0-9]+)u)");
     ASSERT_TRUE(std::regex_search(src, m, header)) << "CBT_HEIGHT_RANGE_HEADER not found";
     EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTHeightRangeHeaderWords);
+#else
+    GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
+#endif
+}
+
+// The planar split reads every unified terrain's box from the height-range pyramid and its drawn range
+// from the chain levels' ranges, so every lattice size a unified terrain can bind (up to 8193 samples a
+// side; larger terrains page) has a pyramid, and its chain levels' ranges fit kCBTHeightChainRangeEntries.
+TEST(CBTLayout, EveryUnifiedLatticeHasAPyramidAndChainRanges)
+{
+    uint32_t missing = 0;
+    uint32_t chainless = 0;
+    for (uint32_t cells = 1u; cells <= 8192u; ++cells)
+        for (const uint32_t cellsY : {cells, (cells + 1u) / 2u, (cells + 3u) / 4u})
+        {
+            const uint32_t first = CBTHeightRangeFirstLevel(cells, cellsY);
+            missing += first == 0u ? 1u : 0u;
+            if (first == 0u)
+                continue;
+            const uint32_t top = std::max(CBTHeightRangeTopLevel(cells, cellsY), first);
+            const uint32_t chainTop = CBTHeightChainTopLevel(cells + 1u, cellsY + 1u);
+            chainless += CBTHeightChainRangeLevels(cells + 1u, cellsY + 1u) != std::min(chainTop, top) ? 1u : 0u;
+        }
+    EXPECT_EQ(missing, 0u) << "a unified lattice without a pyramid splits by the screen-space edge rule";
+    EXPECT_EQ(chainless, 0u) << "a unified lattice whose chain ranges do not fit vetoes on the level-0 range";
+}
+
+// The draw's prefiltered height chain is addressed on both sides: the CPU sizes the buffer and the
+// build regions (CBTLayout.h), the kernels and the vertex modifier read it (cbt_height_chain.glsl), and
+// the vertex modifier reads the level rule from a uniform the CPU writes (CBTDrawLevelParams). Lock
+// the two constants, the addressing at a lattice that exercises every rounding, and the uniform's
+// layout. A drift here is a far field drawn from the wrong samples, not a crash.
+TEST(CBTLayout, GlslHeightChainMirrorsCpp)
+{
+#if defined(CBT_SHADER_SOURCE_DIR)
+    const std::string chainSrc = StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_height_chain.glsl"));
+    ASSERT_FALSE(chainSrc.empty()) << "cannot read cbt_height_chain.glsl";
+    std::smatch m;
+    ASSERT_TRUE(std::regex_search(chainSrc, m, std::regex(R"(const\s+uint\s+CBT_CHAIN_HEADER_WORDS\s*=\s*([0-9]+)u\s*;)")));
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTHeightChainHeaderWords);
+    ASSERT_TRUE(std::regex_search(chainSrc, m, std::regex(R"(const\s+uint\s+CBT_CHAIN_MAX_LEVEL\s*=\s*([0-9]+)u\s*;)")));
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTHeightChainMaxLevel);
+
+    // 577 x 1025 (T576 by R3): odd axes of different depth, so the two axes reach the top apart.
+    EXPECT_EQ(CBTHeightChainSamples(577u, 1u), 289u);
+    EXPECT_EQ(CBTHeightChainSamples(1024u, 1u), 513u); // an even axis keeps its last sample clamped
+    EXPECT_EQ(CBTHeightChainTopLevel(577u, 1025u), 10u);
+    EXPECT_EQ(CBTHeightChainLevelWord(577u, 1025u, 1u), kCBTHeightChainHeaderWords);
+    EXPECT_EQ(CBTHeightChainLevelWord(577u, 1025u, 2u), kCBTHeightChainHeaderWords + 289u * 513u);
+
+    const std::string layoutSrc = StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_draw_level.glsl"));
+    ASSERT_FALSE(layoutSrc.empty()) << "cannot read cbt_draw_level.glsl";
+    const std::string computeSrc = StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_layout.glsl"));
+    ASSERT_TRUE(std::regex_search(computeSrc, m, std::regex(R"(#define\s+CBT_NORMAL_CHAIN_MAX_MIPS\s+([0-9]+))")));
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTNormalChainMaxMips);
+    std::vector<GlslField> fields;
+    std::string err;
+    ASSERT_TRUE(ParseGlslStructFields(layoutSrc, "CBTDrawLevelParamsData", {}, fields, err)) << err;
+    Std430Layout layout;
+    ASSERT_TRUE(ComputeStd430(fields, {}, layout, err)) << err;
+    ASSERT_EQ(fields.size(), 3u);
+    EXPECT_EQ(fields[0].Type, "vec4");
+    EXPECT_EQ(fields[1].Type, "vec4");
+    EXPECT_EQ(fields[2].Type, "uvec4");
+    EXPECT_EQ(static_cast<size_t>(layout.Offsets[0]), offsetof(CBTDrawLevelParams, Eye));
+    EXPECT_EQ(static_cast<size_t>(layout.Offsets[1]), offsetof(CBTDrawLevelParams, Height));
+    EXPECT_EQ(static_cast<size_t>(layout.Offsets[2]), offsetof(CBTDrawLevelParams, Lattice));
+    EXPECT_EQ(static_cast<size_t>(layout.Size), sizeof(CBTDrawLevelParams));
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
@@ -1715,6 +1786,13 @@ TEST(CBTLayout, GlslPressureConstantsMirrorCpp)
     EXPECT_LT(kWQOffFrustumKeepStep, kWQCounterSlots)
         << "the keep step slot sits outside the counter block the readback copies";
     EXPECT_NE(kWQOffFrustumKeepStep, kWQPressureStep) << "the two controllers would share one word";
+
+    // The rest rule's latched live count, and the counter block's end both sides size by.
+    lockUint("CBT_WQ_REST_LIVE_COUNT", kWQRestLiveCount);
+    lockUint("CBT_REST_LATCH_DEADBAND_DIVISOR", kRestLatchDeadbandDivisor);
+    lockUint("CBT_WQ_COUNTER_SLOTS", kWQCounterSlots);
+    EXPECT_LT(kWQRestLiveCount, kWQCounterSlots)
+        << "the latched rest live count sits outside the counter block";
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
@@ -2077,8 +2155,10 @@ TEST(CBTLayout, PushConstantsWithinPolicy)
     // force-split occupancy gate A/B toggle, round-8e saturation-deadlock fix) + 1 u32 (RegionFreeMask
     // — the far-field-drain region-reseed root bitmask, round-9) + 1 u32 (DeepDecode — the
     // Earth-scale (sector, local) storage A/B, arc S2a; GLSL mirror pc.deepDecode) + 1 u32
-    // (PoolPressure — the planar pool-pressure scale's A/B arm; GLSL mirror pc.poolPressure).
-    EXPECT_EQ(sizeof(CBTPushConstants), 88u);
+    // (PoolPressure — the planar pool-pressure scale's A/B arm; GLSL mirror pc.poolPressure) + 2 u32
+    // (the height chain build's region; GLSL mirror pc.heightChainRegionMin / Extent) + 1 u32
+    // (Settle — the rest rule; GLSL mirror pc.settle).
+    EXPECT_EQ(sizeof(CBTPushConstants), 100u);
 }
 
 // The far-field region-reseed link kernel re-derives base root adjacency from a compile-time

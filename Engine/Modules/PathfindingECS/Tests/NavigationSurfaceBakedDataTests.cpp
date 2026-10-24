@@ -3,7 +3,7 @@
 // their rebake.
 #include "NavigationTestSurfaces.h"
 
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"

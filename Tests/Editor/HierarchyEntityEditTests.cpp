@@ -143,7 +143,7 @@ TEST_F(HierarchyEntityDeleteTest, TheHierarchyDeleteIsOneUndoStepThatRestoresThe
     EXPECT_TRUE(m_World.IsValid(child));
     const Components::Parent* restoredParent = m_World.GetComponent<Components::Parent>(child);
     ASSERT_NE(restoredParent, nullptr) << "undo brought the child back without its parent";
-    EXPECT_EQ(restoredParent->parent, parent) << "undo brought the child back under another parent";
+    EXPECT_EQ(restoredParent->Entity, parent) << "undo brought the child back under another parent";
     EXPECT_EQ(reselects, 1) << "undo did not restore the selection";
 }
 

@@ -332,7 +332,6 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
         check(`${label}: renders — active render info published`, !!info);
         if (info) {
             check(`${label}: renders — heightmap texture valid`, info.heightmapTextureValid === true);
-            check(`${label}: renders — quadtree built`, info.quadtreeBuilt === true);
         }
         // ...and the editor is still presenting frames rather than frozen on a bad reload,
         // which is what would make every "it renders" field above stale-but-plausible.

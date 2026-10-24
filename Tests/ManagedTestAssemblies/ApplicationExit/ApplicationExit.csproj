@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>GameEngine.Scripts</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="GameEngine.Scripting.ABI">
+      <HintPath>../../../Managed/Scripting.ABI/bin/$(EngineConfiguration)/GameEngine.Scripting.ABI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GameEngine.Scripting.Bindings">
+      <HintPath>../../../Managed/Scripting.Bindings/bin/$(EngineConfiguration)/GameEngine.Scripting.Bindings.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GameEngine.ECS.ABI">
+      <HintPath>../../../Managed/ECS.ABI/bin/$(EngineConfiguration)/GameEngine.ECS.ABI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

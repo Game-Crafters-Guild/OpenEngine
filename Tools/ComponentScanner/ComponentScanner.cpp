@@ -1,6 +1,7 @@
 #include "ComponentScanner.h"
 
 #include "ApiJsonEmitter.h"
+#include "ApiKindResolver.h"
 #include "ApiScanner.h"
 #include "BindingRules.h"
 #include "CSharpBindingEmitter.h"
@@ -11,6 +12,8 @@
 #include "ComponentMirrorResolver.h"
 #include "DtsEmitter.h"
 #include "EnumScanner.h"
+#include "FieldKindResolver.h"
+#include "IncludeGraph.h"
 #include "JsonEmitter.h"
 #include "Lexical.h"
 #include "MarkerAttachment.h"
@@ -18,6 +21,7 @@
 #include "NativeBindingEmitter.h"
 #include "ReflectedModel.h"
 #include "ReflectionEmitter.h"
+#include "ScopeLookup.h"
 #include "SourceFiles.h"
 #include "StructParser.h"
 #include "TypeAliasScanner.h"
@@ -154,9 +158,21 @@ bool IsAscii(std::string_view text)
     return std::all_of(text.begin(), text.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
 }
 
+// True for "AssetRef<AssetType::X>", qualified or not: the one templated field type the
+// registry classifies (FieldTypeTraits in Components/AssetRef.h). Its argument holds no
+// template of its own.
+bool IsAssetRefType(std::string_view type)
+{
+    const std::size_t open = type.find('<');
+    if (open == std::string_view::npos || type.back() != '>' || type.find('<', open + 1) != std::string_view::npos)
+        return false;
+    return ApiKindResolver::NamesQualified(Lexical::TrimView(type.substr(0, open)), "GameEngine::Components::AssetRef");
+}
+
 // Decide whether a struct should be skipped: nullopt to reflect it, or the reason to skip it.
-// No field-count cap: the emitted cap-free BEGIN/FIELD/END form has no argument limit.
-std::optional<std::string> EvaluateSkip(const ParsedStruct& s)
+// No field-count cap: the emitted cap-free BEGIN/FIELD/END form has no argument limit. A struct
+// with no fields is reflected only as a tag (`tag`, the struct carries // @ge-tag).
+std::optional<std::string> EvaluateSkip(const ParsedStruct& s, bool tag)
 {
     // Only ASCII names are reflected: the generated registration code (which MSVC reads in the
     // system code page unless built with /utf-8), the scene files' type keys and the web types
@@ -168,7 +184,7 @@ std::optional<std::string> EvaluateSkip(const ParsedStruct& s)
     if (s.UnexpandedMacro)
         return "body uses unexpanded field-injection macro '" + *s.UnexpandedMacro +
                "' (fields not visible without the preprocessor)";
-    if (s.Fields.empty())
+    if (s.Fields.empty() && !tag)
         return "0 extractable fields";
 
     for (const FieldDecl& f : s.Fields)
@@ -179,7 +195,7 @@ std::optional<std::string> EvaluateSkip(const ParsedStruct& s)
             return "field '" + f.Name + "' type '" + trimmed + "' contains a pointer (*)";
         if (t.find('&') != std::string::npos)
             return "field '" + f.Name + "' type '" + trimmed + "' contains a reference (&)";
-        if (t.find('<') != std::string::npos)
+        if (t.find('<') != std::string::npos && !IsAssetRefType(trimmed))
             return "field '" + f.Name + "' type '" + trimmed + "' is templated (<...>)";
         // std:: is conservative against non-POD containers (std::vector, std::string,
         // std::unique_ptr, ...). Plain fixed-width integer/byte aliases (std::int32_t,
@@ -190,10 +206,28 @@ std::optional<std::string> EvaluateSkip(const ParsedStruct& s)
     return std::nullopt;
 }
 
+// The text of a value marker, or nullopt when the marker is absent or its text is blank.
+std::optional<std::string> NonBlank(std::optional<std::string> text)
+{
+    if (text && Lexical::TrimView(*text).empty())
+        return std::nullopt;
+    return text;
+}
+
+// Attach each enumerator's "// @ge-label Text": on the enumerator's own line or in the comment
+// run above it, the rules a field's markers follow.
+void ReadEnumLabels(EnumDecl& decl, const std::vector<std::string>& lines, const std::map<int, std::string>& labels)
+{
+    for (EnumMember& member : decl.Members)
+        member.Label = NonBlank(MarkerAttachment::FieldValueMarkerAttached(lines, member.Line, member.Line, labels));
+}
+
 // Read one field's markers: "// @ge-hidden", "// @ge-readonly", a field-level
-// "// [DoNotSerialize]" (FieldFlags::Transient), "// @ge-tooltip Text" and
-// "// @ge-range Min [Max]". MarkerAttachment decides which line belongs to which field.
-ReflectedField ReadField(const std::vector<std::string>& lines, const FieldDecl& field, const MarkerLines& markers)
+// "// [DoNotSerialize]" (FieldFlags::Transient), "// @ge-tooltip Text", "// @ge-label Text" and
+// "// @ge-range Min [Max]". MarkerAttachment decides which line belongs to which field. A hidden
+// field has no inspector row, so its label is ignored with a warning.
+ReflectedField ReadField(const fs::path& header, const std::vector<std::string>& lines, const FieldDecl& field,
+                         const MarkerLines& markers, std::ostream& err)
 {
     ReflectedField result;
     result.Name = field.Name;
@@ -202,10 +236,14 @@ ReflectedField ReadField(const std::vector<std::string>& lines, const FieldDecl&
     result.Hidden = MarkerAttachment::FieldMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Hidden);
     result.ReadOnly = MarkerAttachment::FieldMarkerAttached(lines, field.DeclLine, field.EndLine, markers.ReadOnly);
     result.Transient = MarkerAttachment::FieldMarkerAttached(lines, field.DeclLine, field.EndLine, markers.DoNotSerialize);
-    std::optional<std::string> tooltip =
-        MarkerAttachment::FieldValueMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Tooltips);
-    if (tooltip && !Lexical::TrimView(*tooltip).empty())
-        result.Tooltip = std::move(tooltip);
+    result.Tooltip = NonBlank(MarkerAttachment::FieldValueMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Tooltips));
+    result.Label = NonBlank(MarkerAttachment::FieldValueMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Labels));
+    if (result.Label && result.Hidden)
+    {
+        err << "warning: " << Utf8(header) << ":" << field.DeclLine << ": field '" << field.Name
+            << "' is @ge-hidden and has no inspector row, so its @ge-label is ignored. Fix: remove one of the two markers.\n";
+        result.Label.reset();
+    }
     result.Range = MarkerAttachment::FieldValueMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Ranges);
     result.Line = field.DeclLine;
     return result;
@@ -243,9 +281,13 @@ const char* OmissionAdvice(WebOmissionReason reason)
     case WebOmissionReason::NoReflectedKind:
         return "a struct with no reflected kind. Give it a FieldTypeTraits specialization the scanner knows, or mark "
                "the field // @ge-hidden if a page never reads it.";
+    case WebOmissionReason::AmbiguousEnum:
+        return "two different enums share this name, so the scanner cannot give the field a name table (the warning "
+               "above names their headers). Rename one of the enums.";
     default:
         return "the type is not declared in the scanned component headers, so the scanner cannot resolve its kind. "
-               "An enum must be declared under a scanned Components root (#3082); a platform-sized integer (long, "
+               "An enum must be declared in a scanned header or in a header one includes from an include root "
+               "(--enum-include-root); a platform-sized integer (long, "
                "size_t) should be a fixed-width type; a struct needs a FieldTypeTraits specialization.";
     }
 }
@@ -386,6 +428,12 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
             for (const ParsedStruct& parsed : structs)
                 result.KnownStructs.insert(parsed.Name);
 
+            // Marker comments ("// @ge-no-add", "// @ge-editor-only", "// @ge-readonly",
+            // "// @ge-hidden", "// @ge-tooltip ...", "// @ge-label ...") are captured from the RAW
+            // text because the comment stripper has already removed them from `cleaned`.
+            std::vector<std::string> lines = SplitLines(raw);
+            const MarkerLines markers = MarkerScanner::Scan(lines, err);
+
             // Collect enum declarations for name-based serialization of enum fields (component
             // modes only — a system isn't reflected). Last unique definition wins; a conflicting
             // redefinition of the same simple name is flagged ambiguous.
@@ -393,6 +441,7 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
             {
                 for (EnumDecl& ed : EnumScanner::Scan(cleaned))
                 {
+                    ReadEnumLabels(ed, lines, markers.Labels);
                     const auto existing = result.Enums.ByName.find(ed.Name);
                     if (existing != result.Enums.ByName.end())
                     {
@@ -413,12 +462,6 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
                     result.Aliases[name] = target;
                 }
             }
-
-            // Marker comments ("// @ge-no-add", "// @ge-editor-only", "// @ge-readonly",
-            // "// @ge-hidden", "// @ge-tooltip ...") are captured from the RAW text because the
-            // comment stripper has already removed them from `cleaned`.
-            std::vector<std::string> lines = SplitLines(raw);
-            const MarkerLines markers = MarkerScanner::Scan(lines, err);
 
             const std::string includePath = ToIncludePath(header, includeRoot);
             bool fileHadReflected = false;
@@ -449,7 +492,8 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
                 if (!isComponent)
                     continue;
 
-                if (std::optional<std::string> skipReason = EvaluateSkip(s))
+                if (std::optional<std::string> skipReason =
+                        EvaluateSkip(s, MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.Tag)))
                 {
                     result.Skipped.push_back(SkippedStruct{s.Name, includePath, std::move(*skipReason)});
                     continue;
@@ -465,12 +509,16 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
                 r.NoAdd = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.NoAdd);
                 r.DoNotSerialize = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.DoNotSerialize);
                 r.EditorOnly = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.EditorOnly);
-                r.EngineInternal = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.EngineInternal);
-                r.ReadOnly = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.ReadOnly);
+                const std::optional<int> internalLine = MarkerAttachment::StructMarkerLine(lines, s.DeclLine, markers.EngineInternal);
+                const std::optional<int> readOnlyLine = MarkerAttachment::StructMarkerLine(lines, s.DeclLine, markers.ReadOnly);
+                r.EngineInternal = internalLine.has_value();
+                r.ReadOnly = readOnlyLine.has_value();
+                if (const std::optional<int> writerLine = internalLine ? internalLine : readOnlyLine)
+                    r.Writer = markers.Writers.at(*writerLine);
                 r.Source = result.Headers.size();
                 r.Line = s.DeclLine;
                 for (const FieldDecl& f : s.Fields)
-                    r.Fields.push_back(ReadField(lines, f, markers));
+                    r.Fields.push_back(ReadField(header, lines, f, markers, err));
                 result.Reflected.push_back(std::move(r));
                 fileHadReflected = true;
             }
@@ -482,6 +530,148 @@ bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<
         }
     }
     return true;
+}
+
+// True when the scan resolved no kind for `field` and no scanned struct or ambiguous enum
+// explains it: an enum it names may be declared in a header the component header includes.
+bool NeedsIncludedEnum(const ComponentCollection& collection, const ReflectedField& field)
+{
+    const ResolvedKind resolved = FieldKindResolver::Resolve(field, collection.Aliases, collection.Enums);
+    return resolved.Kind == FieldKind::Unknown && collection.KnownStructs.count(resolved.TypeName) == 0 &&
+           collection.Enums.Ambiguous.count(resolved.TypeName) == 0;
+}
+
+// An enum a field names, found in a header a component header includes.
+struct IncludedEnum
+{
+    ScopedEnumDecl Scoped;
+    const IncludedHeader* Header = nullptr;
+};
+
+// "Power/Modes.h:2 (GameEngine::Power::Mode)".
+std::string DescribeIncludedEnum(const IncludedEnum& found)
+{
+    return found.Header->IncludePath + ":" + std::to_string(found.Scoped.Decl.DeclLine) + " (" + found.Scoped.CppName + ")";
+}
+
+// Adds to the enum table each enum a reflected field names that no scanned header declares: the
+// name is looked up from the component's scope (ScopeLookup), among the enums of the headers its
+// header includes (IncludeGraph: beside the including header, then under the scan's include roots
+// and `enumIncludeRoots`). Only those enums are taken. The generated table holds one enum per
+// simple name, so two different enums the fields name under one simple name are left out, with a
+// warning naming both headers. Returns the headers that declared a taken enum.
+std::vector<fs::path> ResolveIncludedEnums(ComponentCollection& collection, const std::vector<fs::path>& enumIncludeRoots,
+                                           std::ostream& err)
+{
+    std::vector<fs::path> includeRoots = collection.IncludeRoots;
+    includeRoots.insert(includeRoots.end(), enumIncludeRoots.begin(), enumIncludeRoots.end());
+    IncludeGraph graph(std::move(includeRoots));
+    std::set<fs::path> componentFiles;
+    for (const ComponentHeader& header : collection.Headers)
+        componentFiles.insert(FullPath(PathFromUtf8(header.File)));
+
+    std::map<const IncludedHeader*, std::vector<ScopedEnumDecl>> enumsByHeader;
+    std::map<std::string, std::vector<IncludedEnum>> taken;
+    for (const ReflectedStruct& r : collection.Reflected)
+    {
+        std::vector<const ReflectedField*> needing;
+        for (const ReflectedField& f : r.Fields)
+            if (NeedsIncludedEnum(collection, f))
+                needing.push_back(&f);
+        if (needing.empty())
+            continue;
+
+        const ComponentHeader& header = collection.Headers[r.Source];
+        std::vector<IncludedEnum> candidates;
+        std::vector<std::string> names;
+        for (const IncludedHeader* included : graph.Closure(PathFromUtf8(header.File), header.Lines))
+        {
+            if (componentFiles.count(included->File) != 0)
+                continue;
+            auto [it, inserted] = enumsByHeader.try_emplace(included);
+            if (inserted)
+            {
+                it->second = EnumScanner::ScanScoped(included->Stripped);
+                const MarkerLines markers = MarkerScanner::Scan(included->Lines, err);
+                for (ScopedEnumDecl& scoped : it->second)
+                    ReadEnumLabels(scoped.Decl, included->Lines, markers.Labels);
+            }
+            for (const ScopedEnumDecl& scoped : it->second)
+            {
+                candidates.push_back(IncludedEnum{scoped, included});
+                names.push_back(scoped.CppName);
+            }
+        }
+
+        const std::string scope = QualifiedName(r.Namespace, r.Name);
+        for (const ReflectedField* f : needing)
+        {
+            const std::string written = ScopeLookup::BareType(f->Type);
+            const std::size_t index = ScopeLookup::LookUp(written, scope, names);
+            if (index == ScopeLookup::kAmbiguous)
+            {
+                std::string headers;
+                for (std::size_t i = 0; i < names.size(); ++i)
+                    if (ApiKindResolver::NamesQualified(written, names[i]))
+                        headers += (headers.empty() ? "" : " and ") + DescribeIncludedEnum(candidates[i]);
+                err << "warning: " << r.Name << "." << f->Name << " names the enum `" << written
+                    << "`, which more than one included header declares: " << headers
+                    << ". Fix: qualify the name as C++ finds it from the component.\n";
+                continue;
+            }
+            if (index >= candidates.size())
+                continue;
+            const IncludedEnum& chosen = candidates[index];
+            std::vector<IncludedEnum>& sameName = taken[chosen.Scoped.Decl.Name];
+            const bool known = std::any_of(sameName.begin(), sameName.end(),
+                                           [&chosen](const IncludedEnum& e) { return e.Scoped.CppName == chosen.Scoped.CppName; });
+            if (!known)
+                sameName.push_back(chosen);
+        }
+    }
+
+    std::vector<fs::path> sources;
+    for (auto& [name, found] : taken)
+    {
+        if (found.size() > 1)
+        {
+            std::string headers;
+            for (const IncludedEnum& e : found)
+                headers += (headers.empty() ? "" : " and ") + DescribeIncludedEnum(e);
+            err << "warning: the enum name `" << name << "` stands for two enums the components' fields name: " << headers
+                << ". The generated name table holds one enum per name, so their fields save numbers. Fix: rename one "
+                   "of the enums.\n";
+            collection.Enums.Ambiguous.insert(name);
+            continue;
+        }
+        sources.push_back(found.front().Header->File);
+        collection.Enums.ByName.emplace(name, std::move(found.front().Scoped.Decl));
+    }
+    return sources;
+}
+
+// A path as a make-style dependency file writes it: absolute, forward slashes, a space escaped.
+std::string DependencyPath(const fs::path& file)
+{
+    std::string text;
+    for (char c : Utf8(FullPath(file)))
+    {
+        if (c == ' ')
+            text += '\\';
+        text += c;
+    }
+    return text;
+}
+
+// A make-style dependency file for the build: `output` depends on every header in `headers`, so
+// an edit to a header that declares a reflected field's enum re-runs the scan.
+bool WriteDependencyFile(const fs::path& path, const fs::path& output, const std::vector<fs::path>& headers,
+                         std::ostream& out, std::ostream& err)
+{
+    std::string text = DependencyPath(output) + ":";
+    for (const fs::path& header : headers)
+        text += " " + DependencyPath(header);
+    return WriteOutput(path, text + "\n", out, err);
 }
 
 // Where an --emit-api run writes the bindings generated from the description: the native
@@ -653,6 +843,8 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
     std::optional<fs::path> jsonFile;
     std::optional<fs::path> apiModulesDir;
     std::vector<fs::path> apiSearchDirs;
+    std::vector<fs::path> enumIncludeRoots;
+    std::optional<fs::path> depFile;
     std::vector<fs::path> apiComponentDirs;
     std::optional<fs::path> apiDir;
     BindingOutputs bindingOutputs;
@@ -673,7 +865,8 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
         const bool takesValue = arg == "--in" || arg == "--out" || arg == "--emit-dts" || arg == "--emit-json" ||
                                 arg == "--detect-base" || arg == "--detect-system-base" || arg == "--api-modules" ||
                                 arg == "--api-search" || arg == "--api-components" || arg == "--emit-api" ||
-                                arg == "--emit-native" || arg == "--emit-csharp";
+                                arg == "--emit-native" || arg == "--emit-csharp" || arg == "--enum-include-root" ||
+                                arg == "--depfile";
         if (takesValue)
         {
             if (i + 1 >= args.size())
@@ -696,6 +889,10 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
                 apiModulesDir = PathFromUtf8(value);
             else if (arg == "--api-search")
                 apiSearchDirs.push_back(PathFromUtf8(value));
+            else if (arg == "--enum-include-root")
+                enumIncludeRoots.push_back(PathFromUtf8(value));
+            else if (arg == "--depfile")
+                depFile = PathFromUtf8(value);
             else if (arg == "--api-components")
                 apiComponentDirs.push_back(PathFromUtf8(value));
             else if (arg == "--emit-api")
@@ -739,9 +936,17 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
         return 2;
     }
 
+    if (depFile && !outFile)
+    {
+        err << "--depfile names the dependencies of --out; pass --out with it.\n";
+        return 2;
+    }
+
     ComponentCollection collection;
     if (!CollectComponents(inDirs, detectBase, systemBase, collection, err))
         return 2;
+    const std::vector<fs::path> enumSources =
+        systemBase ? std::vector<fs::path>{} : ResolveIncludedEnums(collection, enumIncludeRoots, err);
     std::vector<ReflectedStruct>& reflected = collection.Reflected;
     std::vector<ReflectedSystem>& systems = collection.Systems;
     std::vector<SkippedStruct>& skipped = collection.Skipped;
@@ -905,6 +1110,8 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
     if (dtsFile && !WriteOutput(*dtsFile, dts, out, err))
         return 1;
     if (jsonFile && !WriteOutput(*jsonFile, json, out, err))
+        return 1;
+    if (depFile && !WriteDependencyFile(*depFile, *outFile, enumSources, out, err))
         return 1;
     return 0;
 }

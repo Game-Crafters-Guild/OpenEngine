@@ -319,6 +319,14 @@ public:
     void RequestExit() { m_ShouldExit = true; }
 
     /**
+     * @brief Request the running game to end, on the main thread outside a job.
+     *
+     * A standalone application finishes its current frame and exits with exitCode.
+     * A host can override this to end its game session without closing the host.
+     */
+    virtual void RequestGameExit(int exitCode);
+
+    /**
      * @brief Set process exit code returned by Run()
      */
     void SetExitCode(int code) { m_ExitCode = code; }

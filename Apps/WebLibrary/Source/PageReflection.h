@@ -31,9 +31,6 @@ const PageComponent* FindPageComponent(std::uint64_t typeId);
 /// Every page component, sorted by name.
 std::vector<PageComponent> ListPageComponents();
 
-/// The bytes one element of a field of `type` takes; 1 for the byte-run kinds (String, Bytes).
-std::uint32_t ElementSize(ECS::FieldTypeId type);
-
 /// The FieldTypeId name (ECS/Reflection.h), as abi.ts's FieldKind spells it.
 std::string_view KindName(ECS::FieldTypeId type);
 

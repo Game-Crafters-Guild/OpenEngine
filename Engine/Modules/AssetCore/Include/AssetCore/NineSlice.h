@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AssetCore/Types.h" // uint8 / uint16
+#include "Types/Types.h" // uint8 / uint16
 
 namespace GameEngine {
 

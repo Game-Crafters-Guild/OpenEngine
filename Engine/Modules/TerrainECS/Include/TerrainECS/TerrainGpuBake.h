@@ -21,7 +21,7 @@ namespace GameEngine::TerrainECS
 {
 
 // Kill switch: GE_TERRAIN_GPU_BAKE arms the planar GPU height bake, default ON (=0 disables),
-// mirroring the DeferSplatResplatEnabled / IncrementalQuadtreeEnabled convention. Defined
+// mirroring the DeferSplatResplatEnabled convention. Defined
 // in TerrainGpuBake.cpp (not header-inline) so the test override below is one instance across the
 // Engine-dll / test-exe boundary — a DATA symbol does not export reliably under the auto-export.
 bool IsGpuHeightBakeEnabled();

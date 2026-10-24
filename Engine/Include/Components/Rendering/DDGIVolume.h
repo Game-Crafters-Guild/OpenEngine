@@ -23,8 +23,8 @@ enum class DDGIProbePlacement : int32 {
 /// alone; Cascaded2 adds the finer C1 sub-volume. Matches the reference
 /// demo's cascades control (`single grid` / `cascaded (2)`).
 enum class DDGICascadeMode : int32 {
-    SingleGrid = 0,
-    Cascaded2 = 1,
+    SingleGrid = 0, // @ge-label single grid
+    Cascaded2 = 1, // @ge-label cascaded (2)
 };
 
 /// Where the probe grid's CENTRE comes from. Manual is the authored
@@ -50,10 +50,10 @@ enum class DDGIVolumeFit : int32 {
 /// skips the resolve pass entirely and keeps the inline per-fragment gather
 /// — byte-identical to the pre-resolve path.
 enum class DDGIGlossyResolveScale : int32 {
-    Quarter = 0,
-    Half = 1,
-    ThreeQuarter = 2,
-    Full = 3,
+    Quarter = 0, // @ge-label 25%
+    Half = 1, // @ge-label 50%
+    ThreeQuarter = 2, // @ge-label 75%
+    Full = 3, // @ge-label 100%
 };
 
 /// What the DDGI consumer draws instead of lit shading. Diagnostic only: the
@@ -64,25 +64,25 @@ enum class DDGIDebugView : int32 {
     None = 0,
     /// Fraction of the trilinear cell backed by ACTIVE probes, white = 1.
     /// Anything not white is a point the field only partly answers for.
-    Coverage = 1,
+    Coverage = 1, // @ge-label probe coverage
     /// Green where the nearest probe is active, red where it is classified
     /// buried, brightness = how far relocation has pushed it from its cell.
-    ProbeState = 2,
+    ProbeState = 2, // @ge-label probe state
     /// Cascade ownership: red = coarse only, green = fine, yellow = crossfade.
-    CascadeWeight = 3,
+    CascadeWeight = 3, // @ge-label cascade weight
     /// The NEAREST coarse probe's stored irradiance toward the surface normal,
     /// with no trilinear blend, visibility or classify weighting: what one
     /// probe actually holds, shown at scene exposure like lit shading.
-    NearestProbeIrradiance = 4,
+    NearestProbeIrradiance = 4, // @ge-label nearest probe irradiance
     /// The same two views against the FINE cascade's own grid and atlas.
-    ProbeStateFine = 5,
-    NearestProbeIrradianceFine = 6,
+    ProbeStateFine = 5, // @ge-label probe state (fine)
+    NearestProbeIrradianceFine = 6, // @ge-label nearest probe irradiance (fine)
     /// Grid coordinate and storage slot of the nearest FINE probe, as
     /// xyz / resolution. Storage is toroidal (Includes/ddgi_common.glsl), so a
     /// defect tied to a slot shows here as a plane fixed in the world while
     /// the coordinate view stays continuous.
-    FineProbeCoord = 7,
-    FineProbeSlot = 8,
+    FineProbeCoord = 7, // @ge-label fine probe coord
+    FineProbeSlot = 8, // @ge-label fine probe slot
 };
 
 /// Resolution of the depth-moment tile each probe stores for the Chebyshev
@@ -205,6 +205,7 @@ struct DDGIVolume {
     // so adopting 0 would silently switch that feature off; 1 is the value
     // that preserves it, and Grid remains the explicit way to turn it off.
     // @ge-tooltip How much authority probe classification has, from 0 (off - probes are never relocated or deactivated, exactly like Grid placement, and the classify pass is skipped) to 1 (full). Lower it if thin or two-sided walls are being misread as solid and probes are wrongly deactivated. Does nothing while Probe Placement is Grid. Applied live, no grid rebuild.
+    // @ge-range 0 1
     float32 ClassifyStrength = 1.0f;
 
     // Probes along the grid's longest axis; other axes scale by aspect
@@ -217,6 +218,7 @@ struct DDGIVolume {
     // Their knob is also a spacing divisor rather than a probe count, so 16
     // there is ~17 probes here; the number was never directly transferable.
     // @ge-tooltip Probe count along the grid's longest axis; the other two axes scale by aspect ratio. Higher = finer indirect detail at a roughly cubic cost in trace/blend/upload work. Clamped 2-32; a resolution change rebuilds the probe grid after a short idle delay, not every frame while dragging.
+    // @ge-label Divisions
     int32 ProbesLongAxis = 12;
 
     // Rays traced per probe per tick. Clamped 32..256 by the feature. The
@@ -225,10 +227,12 @@ struct DDGIVolume {
     // rays, so raising this visits fewer probes per tick rather than costing
     // more per tick. 64 is the port's measured default; RTXGI ships 256.
     // @ge-tooltip Rays traced per probe per tick — more rays reduce noise per solve at a linear trace cost. Clamped 32-256. The per-tick budget is counted in rays, so a higher value visits fewer probes each tick and the whole grid takes longer to sweep; 256 is what RTXGI ships, 64 is this port's measured default.
+    // @ge-label Rays / Probe
     int32 RaysPerProbe = 64;
 
     // Multiplier on the final blended irradiance before it reaches the
-    // forward pass's ambient term.
+    // forward pass's ambient term. No inspector range: open above (a lit
+    // Sponza runs at 20).
     // @ge-tooltip Multiplier on the final blended irradiance before it reaches the forward pass's ambient term. Applied live, no grid rebuild.
     float32 Intensity = 1.0f;
 
@@ -250,6 +254,7 @@ struct DDGIVolume {
     // by clipping the dominant channel and collapsing saturated bounce toward
     // grey, which was a defect, not the feature the knob advertised.)
     // @ge-tooltip How much multi-bounce light the field carries, scaling the recursive bounce term rather than the final output. Useful mainly between 0 (single bounce only) and about 1 (full multi-bounce); above that the convergence bound and the radiance clamp renormalize it away and it stops doing anything. To change how strongly colour moves between surfaces, use Radiance Clamp - not this. Applied live, no grid rebuild.
+    // @ge-range 0 4
     float32 BounceIntensity = 1.0f;
 
     // Scale on the sky radiance a probe ray picks up when it hits nothing.
@@ -259,12 +264,17 @@ struct DDGIVolume {
     // it, so the global sky slider and this per-volume trim compose the way
     // the raster path's ambient already composes them.
     // @ge-tooltip How much sky light the probes pick up on rays that hit nothing. 0 ignores the sky completely (indoor-only GI, miss rays are black), 1 is the environment's own brightness. Multiplies with the scene's global sky IBL intensity rather than replacing it. Applied live, no grid rebuild.
+    // @ge-range 0 2
+    // @ge-label Sky Light
     float32 SkyIntensity = 1.0f;
 
     // Luminance ceiling on the recursive bounce term. A ceiling, not an
     // on/off: 0 admits no bounce at all. Applied as a uniform scale by
     // clamp/luminance once luminance exceeds it, so an outlier is dimmed
     // without its hue being clipped. 8 is the upstream library's own default.
+    // No inspector range: the value is in the field's radiance units, so a
+    // photometric scene (a 400 kLux sun) needs about 3e5 where a unitless one
+    // sits near 8. DDGIProbeFeature::SetActiveVolume floors it at 0.
     // @ge-tooltip Ceiling on how bright a single bounce sample may be, which is what stops one over-bright surface from smearing a firefly through the probe field. Dims an outlier without changing its colour. This is a ceiling, not a switch - 0 means no bounce light at all. Applied live, no grid rebuild.
     float32 RadianceClamp = 8.0f;
 
@@ -290,6 +300,7 @@ struct DDGIVolume {
     // ChangeThreshold / SnapAmount) rather than treating every change as
     // signal.
     // @ge-tooltip Temporal blend retention in [0,1), which is how much of the old estimate each texel keeps every solve. In frames: a value h takes about ln(0.05)/ln(h) solves to forget an old reading, so 0.9 is roughly 28 frames and 0.6 is roughly 6. Higher is smoother but slower to react to a light or geometry change; lower reacts faster but stays noisier. Pairs with Jitter Mode: 0.6 with Gated (the default pairing, matching the reference library) and 0.9 with Monte Carlo - a held-basis value under a rotating basis reads as large blobs drifting over surfaces. Applied live, no grid rebuild.
+    // @ge-range 0 0.99
     float32 Hysteresis = 0.6f;
 
     // Firefly rejection band, in multiples of a texel's own measured
@@ -297,16 +308,19 @@ struct DDGIVolume {
     // is pulled back toward the band instead of accepted. Lower = steadier
     // but laggier.
     // @ge-tooltip How far a probe texel may jump in one update, measured in multiples of its own noise level. A bigger jump is treated as a firefly and pulled back rather than accepted. Lower is steadier but slower to react; raise it if real lighting changes arrive late.
+    // @ge-range 1 20
     float32 FireflyClamp = 6.0f;
 
     // How many standard deviations of change count as a REAL lighting change
     // rather than this tick's Monte-Carlo noise. Lower = snappier.
     // @ge-tooltip How large a change must be, in multiples of a probe texel's own noise level, before it is treated as a real lighting change instead of sampling noise. Lower reacts sooner to real changes at the cost of also reacting to noise.
+    // @ge-range 0.5 8
     float32 ChangeThreshold = 2.5f;
 
     // How much retention is dropped on a texel that saw a real change —
     // higher = harder snap toward the fresh estimate.
     // @ge-tooltip How hard the field snaps to new values where a real lighting change was detected. Higher converges faster after a light moves or a door opens; too high reintroduces noise on those texels.
+    // @ge-range 0 0.9
     float32 SnapAmount = 0.30f;
 
     // Scale on the surface-normal sample bias (Includes/ddgi_common.glsl's
@@ -316,6 +330,7 @@ struct DDGIVolume {
     // canonical tuning, in identical units (both scale the same 3%-of-a-cell
     // offset).
     // @ge-tooltip Scale on the surface sample bias used when reading indirect irradiance. Increase if thin geometry shows self-shadowing in the indirect term; decrease if indirect light visibly detaches from a surface. Applied live, no grid rebuild.
+    // @ge-range 0 8
     float32 NormalBiasScale = 1.75f;
 
     // How strongly the Chebyshev visibility test is allowed to reject a probe
@@ -325,6 +340,7 @@ struct DDGIVolume {
     // upstream library's canonical tuning admits a little leak back at 0.8
     // rather than raising probe density.
     // @ge-tooltip How aggressively light is stopped from leaking through walls. 1 is the full visibility test, 0 disables it (light bleeds through thin geometry). Backing off from 1 trades a little leak for less over-darkening on thin or two-sided geometry, which is why the default is not 1.
+    // @ge-range 0 1
     float32 ChebyshevStrength = 0.8f;
 
     // Resolution of the per-probe depth-moment tile (see DDGIDepthResolution).
@@ -352,6 +368,7 @@ struct DDGIVolume {
     // its own setter at the same value for the neighbouring reason (its
     // pow(0, 0) is indeterminate and poisons the depth history with NaN).
     // @ge-tooltip How sharply each probe direction's stored occluder distance tracks that exact direction. 1 is a plain cosine-weighted average; lower blurs the distance over the whole hemisphere, which leaks more light through walls; higher tracks the nearest occluder in that direction crisply at the cost of more noise. Does nothing while Chebyshev Strength is 0. Applied live, no grid rebuild.
+    // @ge-range 0.01 200
     float32 DepthSharpness = 1.0f;
 
     // How much of the spatial denoise filter reaches the atlas. The filter is
@@ -362,12 +379,14 @@ struct DDGIVolume {
     // as blended. Intra-tile only: no tap ever leaves a probe, so it cannot
     // move light between probes. 1 is the upstream library's default.
     // @ge-tooltip How strongly each probe's octahedral tile is denoised on its way into the atlas. 0 is off (the raw blended field, grainier at a given ray count), 1 is the full filter and matches the upstream library. It smooths only within one probe, never between probes, so it cannot bleed light through a wall. Applied live, no grid rebuild.
+    // @ge-range 0 1
     float32 FilterStrength = 1.0f;
 
     // Width of that filter's edge-stop band: 0 keeps the baseline bandwidth
     // (directional detail preserved, least smoothing), 1 widens it about 7x
     // (more neighbouring directions trusted, strongest smoothing).
     // @ge-tooltip How large a difference between neighbouring probe directions the denoise filter still treats as noise rather than a real edge. Higher trusts more neighbours and smooths harder, at the cost of directional detail within a probe; lower keeps that detail and removes less grain. Does nothing while Filter Strength is 0.
+    // @ge-range 0 1
     float32 FilterSmoothness = 0.5f;
 
     // Specular probe reflections: two Phong lobes (broad and sharp) baked
@@ -377,6 +396,8 @@ struct DDGIVolume {
     // @ge-tooltip Adds specular reflections baked from the probes, giving metals and smooth surfaces local reflections without a screen-space pass. Costs two extra blend/upload dispatches and one high-resolution atlas per volume; reuses the rays the diffuse field already traces, so it adds no ray cost.
     bool EnableGlossy = false;
     // @ge-tooltip How strongly probe reflections displace the environment reflection. At 0 the environment cube is used unchanged; at 1 the probes take full authority wherever they actually saw geometry.
+    // @ge-range 0 1
+    // @ge-label Local Reflections
     float32 ReflectionIntensity = 1.0f;
 
     // Screen-space resolution of the glossy-reflection resolve (see
@@ -423,6 +444,7 @@ struct DDGIVolume {
     // @ge-tooltip How many probe grids to run. Single Grid is the coarse lattice alone. Cascaded (2) adds a second, finer grid covering a smaller region centered on this volume, for closer-range indirect detail — roughly double the trace/blend/upload cost. Cascaded is the default, matching the reference library.
     DDGICascadeMode Cascades = DDGICascadeMode::Cascaded2;
     // @ge-tooltip Fraction of this volume's extents the fine cascade covers (e.g. 0.35 = a sub-box 35% the size, centered the same). Clamped 0.05-0.9. Smaller = denser probes in a smaller region.
+    // @ge-range 0.05 0.9
     float32 FineCascadeExtentFraction = 0.35f;
 };
 

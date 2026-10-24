@@ -63,6 +63,8 @@ static_assert(offsetof(GameEngine::Components::FixtureClock, Ticks) == 20, "Fixt
 static_assert(sizeof(GameEngine::Components::FixtureClock::Ticks) == 8, "FixtureClock.Ticks: the size differs from the mirror");
 static_assert(offsetof(GameEngine::Components::FixtureClock, Cookie) == 28, "FixtureClock.Cookie: the offset differs from the mirror");
 static_assert(sizeof(GameEngine::Components::FixtureClock::Cookie) == 4, "FixtureClock.Cookie: the size differs from the mirror");
+static_assert(sizeof(GameEngine::Components::FixturePickedUp) == 1, "FixturePickedUp: the size differs from the mirror");
+static_assert(alignof(GameEngine::Components::FixturePickedUp) == 1, "FixturePickedUp: the alignment differs from the mirror");
 static_assert(sizeof(GameEngine::Components::FixtureKinds) == 928, "FixtureKinds: the size differs from the mirror");
 static_assert(alignof(GameEngine::Components::FixtureKinds) == 8, "FixtureKinds: the alignment differs from the mirror");
 static_assert(offsetof(GameEngine::Components::FixtureKinds, Enabled) == 0, "FixtureKinds.Enabled: the offset differs from the mirror");

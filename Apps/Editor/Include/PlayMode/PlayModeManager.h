@@ -82,6 +82,10 @@ class PlayModeManager
     void EnterPlayMode();
     // In edit mode, drops an entry the gate holds for the script build.
     void ExitPlayMode();
+    // Stops play at the start of the next Tick, after the running script callbacks return. Any
+    // number of requests before then, and a stop made by other means, stop play once. Does
+    // nothing outside play.
+    void RequestExitPlayMode();
 
     // Change review (valid when state == ChangeReview)
     bool HasPendingChanges() const;
@@ -137,6 +141,7 @@ class PlayModeManager
 
   private:
     PlayModeState m_State = PlayModeState::Edit;
+    bool m_ExitRequested = false;
     ECS::World* m_World = nullptr; // not owned
     SceneEditorController* m_SceneEditor = nullptr; // not owned
     UndoRedoService* m_UndoRedo = nullptr; // not owned

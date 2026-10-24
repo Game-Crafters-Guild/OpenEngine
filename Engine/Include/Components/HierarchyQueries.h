@@ -35,7 +35,7 @@ namespace Components {
 // hold one of these as a long-lived member and pass it to the indexed
 // helpers below.
 struct ParentOfTag {};
-using ParentRelationIndex = ECS::RelationIndex<ParentOfTag, Parent, &Parent::parent>;
+using ParentRelationIndex = ECS::RelationIndex<ParentOfTag, Parent, &Parent::Entity>;
 
 inline void ChildrenOf(ECS::World& world, ECS::EntityHandle parent,
                        std::vector<ECS::EntityHandle>& out) {
@@ -45,7 +45,7 @@ inline void ChildrenOf(ECS::World& world, ECS::EntityHandle parent,
     // the editor lists them and scene IO writes them.
     world.Query<ECS::Read<Parent>>().IncludeDisabled().Each(
         [&](ECS::EntityHandle e, const Parent& p) {
-            if (p.parent == parent) out.push_back(e);
+            if (p.Entity == parent) out.push_back(e);
         });
 }
 
@@ -83,7 +83,7 @@ inline void DescendantsOf(ECS::World& world, ECS::EntityHandle ancestor,
         childrenByParent;
     world.Query<ECS::Read<Parent>>().IncludeDisabled().Each(
         [&](ECS::EntityHandle e, const Parent& p) {
-            if (p.parent.IsValid()) childrenByParent[p.parent].push_back(e);
+            if (p.Entity.IsValid()) childrenByParent[p.Entity].push_back(e);
         });
 
     std::unordered_set<ECS::EntityHandle, ECS::EntityHandleHash> visited;
@@ -161,9 +161,9 @@ inline bool IsDescendantOf(ECS::World& world, ECS::EntityHandle entity,
     ECS::EntityHandle current = entity;
     for (std::size_t step = 0; step < kMaxHierarchyDepth; ++step) {
         const Parent* p = world.GetComponent<Parent>(current);
-        if (!p || !p->parent.IsValid()) return false;
-        if (p->parent == ancestor) return true;
-        current = p->parent;
+        if (!p || !p->Entity.IsValid()) return false;
+        if (p->Entity == ancestor) return true;
+        current = p->Entity;
     }
     return false;
 }

@@ -30,8 +30,8 @@ void BuildChildrenMap(ECS::World& world, ChildrenByParent& out)
     world.Query<ECS::Read<Components::Parent>>().IncludeDisabled().Each(
         [&out](ECS::EntityHandle e, const Components::Parent& p)
         {
-            if (p.parent.IsValid())
-                out[p.parent].push_back(e);
+            if (p.Entity.IsValid())
+                out[p.Entity].push_back(e);
         });
 }
 
@@ -100,10 +100,10 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
     for (;;)
     {
         const auto* parentComp = world.GetComponent<Components::Parent>(entity);
-        if (!parentComp || !parentComp->parent.IsValid() || !world.IsValid(parentComp->parent))
+        if (!parentComp || !parentComp->Entity.IsValid() || !world.IsValid(parentComp->Entity))
             break;
 
-        const ECS::EntityHandle parent = parentComp->parent;
+        const ECS::EntityHandle parent = parentComp->Entity;
         const auto* parentMr = world.GetComponent<Components::MeshRenderer>(parent);
         bool sameInstance = false;
         if (parentMr)

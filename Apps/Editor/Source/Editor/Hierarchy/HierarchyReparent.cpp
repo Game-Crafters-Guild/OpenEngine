@@ -39,7 +39,7 @@ void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity, ECS::
     if (destParent.IsValid())
     {
         Components::Parent p{};
-        p.parent = destParent;
+        p.Entity = destParent;
         world.AddComponentImmediate(entity, p);
 
         // Read after the add: adding Parent can move the entity to another archetype.
@@ -73,8 +73,8 @@ ECS::EntityHandle GetEffectiveParent(ECS::World& world, ECS::EntityHandle entity
         return {};
     if (const auto* p = world.GetComponent<Components::Parent>(entity))
     {
-        if (p->parent.IsValid() && world.IsValid(p->parent))
-            return p->parent;
+        if (p->Entity.IsValid() && world.IsValid(p->Entity))
+            return p->Entity;
     }
     return {};
 }
@@ -102,7 +102,7 @@ HierarchyEntityState CaptureReparentState(ECS::World& world, ECS::EntityHandle e
     s.entity = entity;
     if (const auto* p = world.GetComponent<Components::Parent>(entity))
     {
-        s.hadParent = p->parent.IsValid() && world.IsValid(p->parent);
+        s.hadParent = p->Entity.IsValid() && world.IsValid(p->Entity);
         s.parent = *p;
     }
     if (const auto* o = world.GetComponent<Components::HierarchyOrder>(entity))

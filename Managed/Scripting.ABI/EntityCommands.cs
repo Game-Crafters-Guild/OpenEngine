@@ -22,23 +22,23 @@ namespace GameEngine.Scripting
         /// <summary>Queues entity destruction. Executes after all systems complete.</summary>
         public void DestroyEntity(uint entityId)
         {
-            ChunkQueryNative.DeferCommand(WorldHandle, 1, entityId, 0, null, 0);
+            ChunkQueryNative.DeferCommand(WorldHandle, kDeferDestroyEntity, entityId, 0, null, 0);
         }
 
-        /// <summary>Queues adding a component. Executes after all systems complete.</summary>
+        /// <summary>
+        /// Queues adding a component. Executes after all systems complete. For an engine component, the engine keeps
+        /// its own value of every field the mirror does not let a script write, and a component the engine owns
+        /// throws <see cref="InvalidOperationException"/> here, as <c>ComponentType&lt;T&gt;.Set</c> does.
+        /// </summary>
         public void AddComponent<T>(uint entityId, in T component) where T : unmanaged, IComponent
         {
-            fixed (T* ptr = &component)
-            {
-                ChunkQueryNative.DeferCommand(WorldHandle, 2, entityId,
-                    ComponentType<T>.CachedId, ptr, (uint)Unsafe.SizeOf<T>());
-            }
+            QueueWrite(kDeferAddComponent, entityId, in component);
         }
 
         /// <summary>Queues removing a component. Executes after all systems complete.</summary>
         public void RemoveComponent<T>(uint entityId) where T : unmanaged, IComponent
         {
-            ChunkQueryNative.DeferCommand(WorldHandle, 3, entityId,
+            ChunkQueryNative.DeferCommand(WorldHandle, kDeferRemoveComponent, entityId,
                 ComponentType<T>.CachedId, null, 0);
         }
 
@@ -74,21 +74,37 @@ namespace GameEngine.Scripting
             if (present)
             {
                 byte tag = 0;
-                ChunkQueryNative.DeferCommand(WorldHandle, 2, entityId, tagTypeId, &tag, 1);
+                ChunkQueryNative.DeferCommand(WorldHandle, kDeferAddComponent, entityId, tagTypeId, &tag, 1);
             }
             else
             {
-                ChunkQueryNative.DeferCommand(WorldHandle, 3, entityId, tagTypeId, null, 0);
+                ChunkQueryNative.DeferCommand(WorldHandle, kDeferRemoveComponent, entityId, tagTypeId, null, 0);
             }
         }
 
-        /// <summary>Queues setting/overwriting a component value. Executes after all systems complete.</summary>
+        /// <summary>
+        /// Queues setting/overwriting a component value. Executes after all systems complete. For an engine component,
+        /// the engine keeps its own value of every field the mirror does not let a script write, merged against the
+        /// value at the flush, and a component the engine owns throws <see cref="InvalidOperationException"/> here.
+        /// </summary>
         public void SetComponent<T>(uint entityId, in T component) where T : unmanaged, IComponent
         {
+            QueueWrite(kDeferSetComponent, entityId, in component);
+        }
+
+        private const uint kDeferDestroyEntity = 1;
+        private const uint kDeferAddComponent = 2;
+        private const uint kDeferRemoveComponent = 3;
+        private const uint kDeferSetComponent = 4;
+
+        // A C# component queues its bytes as they are (kind 2 or 4); a mirror of an engine component queues a script
+        // write, which adds or sets it, keeps the engine's fields and is refused at once for an engine-owned component.
+        private void QueueWrite<T>(uint commandType, uint entityId, in T component) where T : unmanaged, IComponent
+        {
+            uint kind = ComponentType<T>.IsEngineComponent ? ChunkQueryNative.kDeferScriptWrite : commandType;
             fixed (T* ptr = &component)
             {
-                ChunkQueryNative.DeferCommand(WorldHandle, 4, entityId,
-                    ComponentType<T>.CachedId, ptr, (uint)Unsafe.SizeOf<T>());
+                ChunkQueryNative.DeferCommand(WorldHandle, kind, entityId, ComponentType<T>.CachedId, ptr, (uint)Unsafe.SizeOf<T>());
             }
         }
     }

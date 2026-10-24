@@ -333,6 +333,7 @@ void PlayModeManager::ExitPlayMode()
     if (m_State == PlayModeState::ChangeReview)
         return;
 
+    m_ExitRequested = false;
     SetState(PlayModeState::ExitingPlay);
 
     // Best-effort managed play-mode exit hook (called before tearing down runtime systems).
@@ -514,9 +515,22 @@ void PlayModeManager::DiscardPendingChanges()
         SetState(PlayModeState::Edit);
 }
 
+void PlayModeManager::RequestExitPlayMode()
+{
+    // A script's OnCreate runs while play is entered, before the state becomes Play.
+    if (IsPlayingOrPaused() || m_State == PlayModeState::EnteringPlay)
+        m_ExitRequested = true;
+}
+
 void PlayModeManager::Tick(float deltaSeconds)
 {
     m_EntryGate.Update();
+    // ExitPlayMode clears the request, so a request never outlives the play session it was made in.
+    if (m_ExitRequested && IsPlayingOrPaused())
+    {
+        ExitPlayMode();
+        return;
+    }
     if (m_State != PlayModeState::Play)
         return;
 

@@ -50,7 +50,9 @@
 // lit only where both see the sun; beyond the max shadow distance, where no ray
 // is traced, the map alone decides, as the raster path does. The terrain's
 // penumbra comes from the map's analytic term with the same tangent as the cone
-// (uRayParams.w) and, like the cone, no bound on its width.
+// (uRayParams.w) and, like the cone, no bound on its width. A pixel near the
+// ground that covers more than one of the map's samples reads the lit field over
+// its footprint, through the raster path's function (GE_TerrainShadowFootprintLit).
 
 #include "Includes/shadow_distance_fade.glsl"
 
@@ -70,18 +72,23 @@ layout(set = 0, binding = 2, std140) uniform RTShadowMaskParams
                         // resolves the jitter, else 0), y = rays per pixel,
                         // z = authored distance fade fraction, w reserved
     // The terrain's clearance map (terrain_shadow.glsl) in the full world frame, ShadowData's
-    // terrainShadowGrid* layout; uTerrainSource x = 1 when present, y = map side (texels).
+    // terrainShadowGrid* layout; uTerrainSource x = 1 when present, y = map side (texels), z = the lit
+    // field's levels (0: none); uTerrainView x = the terrain draw's level scale (0: no level rule, and
+    // no pixel reads the field).
     vec4 uTerrainGrid0;
     vec4 uTerrainGrid1;
     vec4 uTerrainGrid2;
     vec4 uTerrainGrid3;
     uvec4 uTerrainSource;
+    vec4 uTerrainView;
 };
 
 layout(set = 0, binding = 3) uniform accelerationStructureEXT uTlas;
 // The terrain's clearance map and height texture; stand-ins when uTerrainSource.x is 0.
 layout(set = 0, binding = 4) uniform sampler2D uTerrainClearance;
 layout(set = 0, binding = 5) uniform sampler2D uTerrainHeight;
+// The terrain shadow's lit field (TerrainShadowFieldLit); a stand-in when uTerrainSource.z is 0.
+layout(set = 0, binding = 6) uniform sampler2D uTerrainField;
 
 vec2 GE_TerrainShadowReadClearance(vec2 gridCoord)
 {
@@ -93,12 +100,35 @@ float GE_TerrainShadowReadGround(float x, float z)
     vec2 terrainUV = clamp((vec2(x, z) - uTerrainGrid0.zw) / uTerrainGrid1.xy, 0.0, 1.0);
     return textureLod(uTerrainHeight, (terrainUV * (dim - 1.0) + 0.5) / dim, 0.0).r * uTerrainGrid3.w;
 }
+#define GE_TERRAIN_SHADOW_READS_FIELD 1
+vec2 GE_TerrainShadowReadField(vec2 gridCoord, float level)
+{
+    return textureLod(uTerrainField, (gridCoord + 0.5) / float(uTerrainSource.y), level).rg;
+}
+float GE_TerrainShadowFieldLevels()
+{
+    return float(uTerrainSource.z);
+}
 #include "Includes/terrain_shadow.glsl"
 
-// The share of the sun the terrain lets reach the world position p (1 lit, 0 shadowed). The mask
-// cannot tell the terrain's pixels from the rest, so every receiver keeps its height, a base sunk
-// into the terrain counting as on the ground.
-float TerrainLit(vec3 p)
+// View-space position from a raw reverse-Z depth at uv (gtao.comp convention).
+vec3 ViewPosFromRaw(vec2 uv, float raw)
+{
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y);
+    vec4 vp  = uInvProj * vec4(ndc, raw, 1.0);
+    return vp.xyz / vp.w;
+}
+
+// The share of the sun the terrain lets reach the pixel at uv, whose view-space position is posVS
+// (1 lit, 0 shadowed). The mask cannot tell the terrain's pixels from the rest, so every receiver
+// keeps its height, a base sunk into the terrain counting as on the ground; a receiver within its
+// pixel's footprint of the ground reads the lit field over that footprint as the terrain's surface
+// does in the raster path. The mask passes what it measures: the head-on footprint (the distance
+// times the view ray's angle per pixel), the view's cosine against the mean surface, which is level
+// here (the mask has no prefiltered surface), and the draw level (the log2 of the distance times the
+// draw's level scale). The shared rule (GE_TerrainShadowFootprint) widens the footprint as the
+// raster path's does.
+float TerrainLit(vec2 uv, vec3 posVS)
 {
     if (uTerrainSource.x == 0u)
         return 1.0;
@@ -117,8 +147,24 @@ float TerrainLit(vec3 p)
     g.VMin = uTerrainGrid2.w;
     g.SamplesU = uTerrainGrid3.x;
     g.SamplesV = uTerrainGrid3.y;
-    return GE_TerrainShadowLit(g, p.x, p.y - uTerrainGrid3.z, p.z, 0.0, uRayParams.w,
-                               kGE_TerrainShadowUncappedPenumbra);
+    vec3 p = (uInvView * vec4(posVS, 1.0)).xyz;
+    float y = p.y - uTerrainGrid3.z;
+
+    vec2 texel = 1.0 / vec2(imageSize(uMask));
+    vec3 ray = normalize(ViewPosFromRaw(uv, 1.0));
+    vec3 rayX = normalize(ViewPosFromRaw(uv + vec2(texel.x, 0.0), 1.0)) - ray;
+    vec3 rayY = normalize(ViewPosFromRaw(uv + vec2(0.0, texel.y), 1.0)) - ray;
+    float pixelAngle = length(abs(rayX) + abs(rayY));
+    vec3 toEye = normalize(mat3(uInvView) * -posVS);
+    float cosView = abs(toEye.y);
+    float eyeDistance = length(posVS);
+    float headOn = uTerrainView.x > 0.0 ? eyeDistance * pixelAngle : 0.0;
+    float drawLevel = log2(max(eyeDistance * uTerrainView.x, 1.0e-30));
+    float footprint = GE_TerrainShadowFootprint(headOn, cosView, drawLevel);
+    float above = abs(y - GE_TerrainShadowReadGround(p.x, p.z));
+    float nearGround = footprint > 0.0 ? 1.0 - smoothstep(footprint, 2.0 * footprint, above) : 0.0;
+    return GE_TerrainShadowFootprintLit(g, p.x, y, p.z, 0.0, uRayParams.w, kGE_TerrainShadowUncappedPenumbra,
+                                        nearGround * headOn, toEye, cosView, drawLevel);
 }
 
 const float kPi = 3.14159265358979;
@@ -127,13 +173,6 @@ const float kPi = 3.14159265358979;
 // of clumping the way independent hashes would.
 const vec2 kR2 = vec2(0.7548776662, 0.5698402910);
 
-// View-space position from a raw reverse-Z depth at uv (gtao.comp convention).
-vec3 ViewPosFromRaw(vec2 uv, float raw)
-{
-    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y);
-    vec4 vp  = uInvProj * vec4(ndc, raw, 1.0);
-    return vp.xyz / vp.w;
-}
 
 // Two decorrelated [0,1) hashes for one pixel (Dave Hoskins hash22). The seed is
 // offset by the jitter phase so the field advances each frame ONLY when the
@@ -197,7 +236,7 @@ void main()
     // terrain's term, which has no range, does not.
     if (posVS.z > uLightDirWS.w)
     {
-        imageStore(uMask, pix, vec4(TerrainLit((uInvView * vec4(posVS, 1.0)).xyz)));
+        imageStore(uMask, pix, vec4(TerrainLit(uv, posVS)));
         return;
     }
 
@@ -277,5 +316,5 @@ void main()
     // unfaded, as in the raster path (GE_JoinTerrainAfterFade).
     float visibility = litSum / float(rayCount);
     imageStore(uMask, pix,
-               vec4(GE_JoinTerrainAfterFade(visibility, TerrainLit(posWS), posVS.z, uLightDirWS.w, uTemporal.z)));
+               vec4(GE_JoinTerrainAfterFade(visibility, TerrainLit(uv, posVS), posVS.z, uLightDirWS.w, uTemporal.z)));
 }

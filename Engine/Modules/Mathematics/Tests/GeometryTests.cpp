@@ -196,3 +196,56 @@ TEST(GeometryTests, ConvexHullKeepsTheCornersCounterClockwiseAndDropsInnerAndCol
     }
     EXPECT_GT(GameEngine::Mathematics::PolygonDoubledSignedArea(hull), 0.0f);
 }
+
+TEST(GeometryTests, ClosestPointOnTriangleResolvesFaceEdgeAndCornerRegions)
+{
+    using GameEngine::Mathematics::ClosestPointOnTriangle;
+    const Vector3 a(0.0f, 0.0f, 0.0f);
+    const Vector3 b(2.0f, 0.0f, 0.0f);
+    const Vector3 c(0.0f, 0.0f, 2.0f);
+    const auto expectNear = [](const Vector3& got, const Vector3& want) {
+        EXPECT_NEAR(got.x, want.x, 1e-6f);
+        EXPECT_NEAR(got.y, want.y, 1e-6f);
+        EXPECT_NEAR(got.z, want.z, 1e-6f);
+    };
+    expectNear(ClosestPointOnTriangle(Vector3(0.5f, 3.0f, 0.5f), a, b, c), Vector3(0.5f, 0.0f, 0.5f));
+    expectNear(ClosestPointOnTriangle(Vector3(1.0f, 1.0f, -4.0f), a, b, c), Vector3(1.0f, 0.0f, 0.0f));
+    expectNear(ClosestPointOnTriangle(Vector3(2.0f, 0.0f, 2.0f), a, b, c), Vector3(1.0f, 0.0f, 1.0f));
+    expectNear(ClosestPointOnTriangle(Vector3(-1.0f, -1.0f, -1.0f), a, b, c), a);
+    expectNear(ClosestPointOnTriangle(Vector3(5.0f, 0.0f, -1.0f), a, b, c), b);
+    expectNear(ClosestPointOnTriangle(Vector3(-1.0f, 0.0f, 5.0f), a, b, c), c);
+}
+
+TEST(GeometryTests, ClosestPointOnCollinearTriangleLiesOnItsSpan)
+{
+    using GameEngine::Mathematics::ClosestPointOnTriangle;
+    const Vector3 a(0.0f, 0.0f, 0.0f);
+    const Vector3 b(1.0f, 0.0f, 0.0f);
+    const Vector3 c(3.0f, 0.0f, 0.0f);
+    const Vector3 nearest = ClosestPointOnTriangle(Vector3(2.0f, 1.0f, 0.0f), a, b, c);
+    EXPECT_NEAR(nearest.x, 2.0f, 1e-6f);
+    EXPECT_NEAR(nearest.y, 0.0f, 1e-6f);
+    EXPECT_NEAR(nearest.z, 0.0f, 1e-6f);
+}
+
+TEST(GeometryTests, ClosestPointOnTriangleWithCoincidentCornersLiesOnItsEdge)
+{
+    using GameEngine::Mathematics::ClosestPointOnTriangle;
+    const Vector3 a(0.0f, 0.0f, 0.0f);
+    const Vector3 c(2.0f, 0.0f, 0.0f);
+    const Vector3 nearest = ClosestPointOnTriangle(Vector3(1.0f, 1.0f, 0.0f), a, a, c);
+    EXPECT_NEAR(nearest.x, 1.0f, 1e-6f);
+    EXPECT_NEAR(nearest.y, 0.0f, 1e-6f);
+    EXPECT_NEAR(nearest.z, 0.0f, 1e-6f);
+}
+
+TEST(GeometryTests, ClosestPointOnSegmentClampsToTheEnds)
+{
+    using GameEngine::Mathematics::ClosestPointOnSegment;
+    const Vector3 a(0.0f, 0.0f, 0.0f);
+    const Vector3 b(0.0f, 4.0f, 0.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, 2.0f, 0.0f), a, b).y, 2.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, -3.0f, 0.0f), a, b).y, 0.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, 9.0f, 0.0f), a, b).y, 4.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, 9.0f, 0.0f), a, a).y, 0.0f);
+}

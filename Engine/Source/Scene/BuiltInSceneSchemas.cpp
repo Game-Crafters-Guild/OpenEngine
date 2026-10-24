@@ -5184,6 +5184,10 @@ class GameLogicGraphRefSchema final : public ISceneComponentSchema
 {
   public:
     std::string_view GetComponentName() const override { return "GameLogicGraph"; }
+    ECS::ComponentTypeId GetOwnedComponentType() const override
+    {
+        return ECS::GetComponentTypeId<Components::GameLogicGraphRef>();
+    }
 
     void Serialize(const ECS::World& world,
                    ECS::EntityHandle entity,

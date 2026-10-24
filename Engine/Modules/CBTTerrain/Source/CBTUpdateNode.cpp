@@ -10,6 +10,8 @@
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 
+#include <algorithm>
+
 namespace GameEngine::CBTTerrain
 {
 
@@ -44,6 +46,15 @@ CBTUpdateOutputs CBTUpdateNode::ImportOutputs(RGFrame& frame, CBTInstance& insta
     out.IndicesAll = importSized("CBT.IndicesAll", CBTBinding::IndicesAll);
     out.IndicesVisible = importSized("CBT.IndicesVisible", CBTBinding::IndicesVisible);
     out.CurrentVertex = importSized("CBT.CurrentVertex", CBTBinding::CurrentVertex);
+    out.HeightChain = frame.ImportExternalBuffer(
+        "CBT.HeightChain", res.GetHeightChainBuffer(),
+        static_cast<uint64_t>(res.GetHeightChainWords()) * sizeof(uint32_t));
+    // It rests in ShaderResource between frames: CBTResources creates it there, and the update's normal
+    // build barriers it to storage and back inside the pass (CBTInstance::RecordHeightChainBuild), so the
+    // graph sees only the draw's read.
+    out.NormalChain = frame.ImportExternalTexture("CBT.NormalChain", res.GetNormalChainTexture(),
+                                                  ResourceState::ShaderResource, TextureFormat::R16G16_FLOAT,
+                                                  std::max(res.GetNormalChainMips(), 1u));
     return out;
 }
 
@@ -72,8 +83,8 @@ CBTUpdateOutputs CBTUpdateNode::DeclareUpdatePass(RGFrame& frame, CBTInstance& i
                                                ResourceState::ShaderResource);
 
     // Declare the draw ARGS (indirect count) plus the DATA the draw reads (the
-    // all/visible index streams and the per-bisector vertex buffer) as Storage
-    // writes + MarkOutput. The forward pass re-imports these (idempotent) and
+    // all/visible index streams, the per-bisector vertex buffer and the prefiltered
+    // height chain) as Storage writes + MarkOutput. The forward pass re-imports these (idempotent) and
     // declares its reads against them, forming the cross-pass barriers for both
     // the args and the data. Every other CBT buffer stays graph-invisible and is
     // manually barriered inside the pass (the Ocean single-pass-owns-its-barriers
@@ -89,6 +100,7 @@ CBTUpdateOutputs CBTUpdateNode::DeclareUpdatePass(RGFrame& frame, CBTInstance& i
             p.Write(out.IndicesAll, RGBufferWrite::Storage);
             p.Write(out.IndicesVisible, RGBufferWrite::Storage);
             p.Write(out.CurrentVertex, RGBufferWrite::Storage);
+            p.Write(out.HeightChain, RGBufferWrite::Storage);
             if (haveHeight)
                 p.Read(heightRG, RGTextureRead::SampledCompute);
         },
@@ -107,6 +119,7 @@ CBTUpdateOutputs CBTUpdateNode::DeclareUpdatePass(RGFrame& frame, CBTInstance& i
     frame.MarkOutput(out.IndicesAll);
     frame.MarkOutput(out.IndicesVisible);
     frame.MarkOutput(out.CurrentVertex);
+    frame.MarkOutput(out.HeightChain);
     return out;
 }
 

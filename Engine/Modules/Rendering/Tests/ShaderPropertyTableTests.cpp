@@ -205,6 +205,13 @@ TEST(ShaderPropertyGrammar, MalformedRangeUnknownAttributeAndBadTokenAreErrors)
     EXPECT_TRUE(ParseDeclaredProperties(Surface("// @property float a hdr\n")).Rejected());
 }
 
+TEST(ShaderPropertyGrammar, AnEmptyDefaultIsOneComponentThatIsNotANumber)
+{
+    const auto t = ParseDeclaredProperties(Surface("// @property float a default=\"\"\n"));
+    ASSERT_TRUE(t.Rejected());
+    EXPECT_NE(Errors(t).find("default component '' is not a number"), std::string::npos) << Errors(t);
+}
+
 TEST(ShaderPropertyGrammar, NonFiniteNumbersAreErrors)
 {
     EXPECT_TRUE(ParseDeclaredProperties(Surface("// @property float a range=nan,inf\n")).Rejected());

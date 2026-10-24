@@ -37,6 +37,7 @@ enum class TerrainModifierShape : uint8
 
 // Sculpt zone: R32F height-offset field. height += offset(zoneUV) * falloff at
 // the zone's stack priority. Written by the Raise / Lower sculpt brushes.
+// @ge-no-add  created by the terrain brushes with its payload file
 struct TerrainSculptZone
 {
     // Payload asset (R32F height offsets, world units). Null until the first
@@ -69,6 +70,7 @@ static_assert(std::is_standard_layout_v<TerrainSculptZone>);
 
 // Paint zone: R8 weight mask + target splat layer index. Splat weight blend at
 // the zone's priority (PaintLayer math, mask-scaled). Written by the Paint brush.
+// @ge-no-add  created by the terrain brushes with its payload file
 struct TerrainPaintZone
 {
     // Payload asset (R8 weight mask, 0-255). Null until the first stroke.
@@ -92,6 +94,7 @@ static_assert(std::is_standard_layout_v<TerrainPaintZone>);
 // Colour zone: a colour and its weight per texel, composed into the terrain's colour map at the
 // zone's priority, over the grass ground write and under any later zone. The ground under the
 // zone becomes ground x (1 - weight) + colour x weight. The payload comes from the zone's .tzone file.
+// @ge-no-add  created by the terrain brushes with its payload file
 struct TerrainColorZone
 {
     // Payload asset (straight linear colour and weight, four floats per texel). Null until the

@@ -115,27 +115,46 @@ std::string EscapeCommentClose(const std::string& text)
     }
 }
 
-// The tooltip, then the range, as the field's JSDoc; no comment for an unmarked field.
+// A JSDoc comment of `lines` at `indent`: one line when there is one, none when there are none.
+void AppendJsDoc(std::string& out, const std::string& indent, const std::vector<std::string>& lines)
+{
+    if (lines.empty())
+        return;
+    if (lines.size() == 1)
+    {
+        out += indent + "/** " + lines[0] + " */\n";
+        return;
+    }
+    out += indent + "/**\n";
+    for (const std::string& line : lines)
+        out += indent + " * " + line + "\n";
+    out += indent + " */\n";
+}
+
+// The tooltip, the label, then the range, as the field's JSDoc; no comment for an unmarked field.
 void AppendDoc(std::string& out, const WebField& f)
 {
     std::vector<std::string> lines;
     if (f.Tooltip)
         lines.push_back(EscapeCommentClose(*f.Tooltip));
+    if (f.Label)
+        lines.push_back("Label: " + EscapeCommentClose(*f.Label));
     if (f.Range)
         lines.push_back(f.Range->Max ? "Range: " + NumberFormat::ShortestRoundTrip(f.Range->Min) + " to " +
                                            NumberFormat::ShortestRoundTrip(*f.Range->Max) + "."
                                      : "Minimum: " + NumberFormat::ShortestRoundTrip(f.Range->Min) + ".");
-    if (lines.empty())
-        return;
-    if (lines.size() == 1)
-    {
-        out += "    /** " + lines[0] + " */\n";
-        return;
-    }
-    out += "    /**\n";
-    for (const std::string& line : lines)
-        out += "     * " + line + "\n";
-    out += "     */\n";
+    AppendJsDoc(out, "    ", lines);
+}
+
+// The enumerators' labels as the enum type's JSDoc, one "'Name': label" line each; no comment
+// for an enum with no label.
+void AppendEnumDoc(std::string& out, const EnumDecl& e)
+{
+    std::vector<std::string> lines;
+    for (const EnumMember& member : e.Members)
+        if (member.Label)
+            lines.push_back("'" + member.Name + "': " + EscapeCommentClose(*member.Label));
+    AppendJsDoc(out, "", lines);
 }
 
 } // namespace
@@ -185,7 +204,9 @@ std::string Emit(const WebComponentModel& model)
     {
         if (enums.count(e) == 0)
             continue;
-        out += "\nexport type " + e->Name + " = ";
+        out += "\n";
+        AppendEnumDoc(out, *e);
+        out += "export type " + e->Name + " = ";
         for (std::size_t i = 0; i < e->Members.size(); ++i)
         {
             if (i > 0)

@@ -30,6 +30,33 @@ namespace ECS {
 // is well-formed when both are visible.
 using ComponentTypeId = std::uint64_t;
 
+// Whether a script may write a component (ComponentType<T>.Set from C#).
+enum class ScriptWrite : std::uint8_t
+{
+    Allowed,
+    EngineOwned,    // "// @ge-readonly" on the struct: the engine writes it; a script reads it
+    EngineInternal, // "// @ge-engine-internal": engine runtime state, no game API
+};
+
+// One run of bytes [Begin, End) of a component that a script's write takes from the script.
+struct ScriptWritableRange
+{
+    std::uint32_t Begin = 0;
+    std::uint32_t End = 0;
+};
+
+// What a script's write of a component may do, resolved when the type registers and kept with its
+// field table: whether a script may write it, who writes it when it may not, and the byte runs a
+// write takes from the script (every field with no Hidden, ReadOnly or Transient flag, in offset
+// order, adjacent fields joined; every other byte, the padding included, keeps the engine's value).
+// The views are the registry's; they follow a re-registration and every flag change.
+struct ScriptWriteRule
+{
+    ScriptWrite Access = ScriptWrite::Allowed;
+    std::string_view Writer;
+    std::span<const ScriptWritableRange> Ranges;
+};
+
 class ComponentFieldRegistry
 {
 public:
@@ -45,7 +72,7 @@ public:
     // field's Name, and the canonical name are copied into registry-owned storage, so
     // the caller's buffers may be temporaries (the scripting ABI marshals them from
     // managed memory that dies when the call returns). Only Name is deep-copied —
-    // Tooltip/EnumNames views must be empty or point at static storage. Idempotent
+    // Tooltip/Label/EnumNames views must be empty or point at static storage. Idempotent
     // (last write wins): re-registration on a hot-reload replaces the owned table.
     static void RegisterOwned(ComponentTypeId typeId, std::span<const FieldInfo> fields,
                               std::string_view canonicalName);
@@ -69,6 +96,11 @@ public:
     // literals or static storage. No-op if the type or field isn't registered.
     static void SetFieldTooltip(ComponentTypeId typeId, std::string_view fieldName,
                                 std::string_view tooltip);
+
+    // Bind the editor's row label to a single reflected field, found by name. Non-owning,
+    // like the tooltip. No-op if the type or field isn't registered.
+    static void SetFieldLabel(ComponentTypeId typeId, std::string_view fieldName,
+                              std::string_view label);
 
     // Bind a reflected enum field's value<->name table (found by name). The table is a non-owning
     // view over scanner-emitted constexpr storage that must outlive the registry. No-op if the type
@@ -128,6 +160,16 @@ public:
 
     // True if the component was marked editor-only (default false).
     static bool IsComponentEditorOnly(ComponentTypeId typeId);
+
+    // Mark a reflected component as one a script may not write: engine-owned (a struct-level
+    // "// @ge-readonly") or engine-internal ("// @ge-engine-internal"). `writer` names the system that
+    // writes it, for the refusal; it must outlive the registry (the scanner passes a string literal).
+    // Must run AFTER the type's Register. No-op if the type isn't registered.
+    static void SetComponentScriptWrite(ComponentTypeId typeId, ScriptWrite access, std::string_view writer);
+
+    // The script-write rule of a component in one lookup (World::SetComponentBytesFromScriptImmediate,
+    // the scripting ABI). An unregistered type is Allowed with no ranges; a tag has no ranges.
+    static ScriptWriteRule GetScriptWriteRule(ComponentTypeId typeId);
 };
 
 } // namespace ECS

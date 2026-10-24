@@ -25,13 +25,15 @@ The terrain's height data is a grid of samples. Its spacing follows **Size** and
 
 ## Farther away: Target Pixel Error
 
-**Target Pixel Error** (Terrain component, Advanced) is the longest edge a triangle may have on screen, measured in pixels of a 1080-row view. A triangle whose edge projects longer than the target is split. A split pair is merged back once the edge it was split from projects shorter than half of the target.
+**Target Pixel Error** (Terrain component, Advanced) is the largest size a triangle may have on screen, measured in pixels of a 1080-row view. A triangle's size counts its edge and the height range of the ground it draws, projected from the triangle's nearest depth in the view. A triangle whose size projects larger than the target is split, and a triangle never asks for more detail than the triangle it was split from. A split pair is merged back once neither the triangle it came from nor that triangle's neighbor across its long edge measures above about 0.7 of the target.
+
+While the camera holds still, splits and merges use that one threshold, so a still camera settles to the same mesh for its pose whichever way it arrived. This holds while the mesh fills less than half of its capacity. Above that, distant ground is coarsened by how full the mesh is, and the mesh can depend on the path.
 
 ### It follows the view's height
 
-The target is relative to resolution. In a view *H* rows tall, the edge limit is `target × H / 1080` pixels. A 2160-row view uses 22-pixel edges at the default, so it draws the same triangles as a 1080-row view of the same aspect ratio, and the terrain's memory does not grow with the display. The same holds for a reduced render scale: the triangle count follows the camera and the ground, not the pixel count.
+The target is relative to resolution. In a view *H* rows tall, the size limit is `target × H / 1080` pixels. A 2160-row view uses a 22-pixel limit at the default, so it draws the same triangles as a 1080-row view of the same aspect ratio, and the terrain's memory does not grow with the display. The same holds for a reduced render scale: the triangle count follows the camera and the ground, not the pixel count.
 
-| Target | Edge at 1080 rows | Edge at 2160 rows | Distant triangles, relative to 11 |
+| Target | Limit at 1080 rows | Limit at 2160 rows | Distant triangles, relative to 11 |
 |---|---|---|---|
 | 8 | 8 px | 16 px | about 1.9× |
 | **11 (default)** | 11 px | 22 px | 1× |
@@ -39,7 +41,7 @@ The target is relative to resolution. In a view *H* rows tall, the edge limit is
 
 ### Flat ground stays coarse
 
-On a heightfield terrain a triangle also splits only while the heights under it vary by more than about one pixel on screen, measured at the triangle's nearest point to the camera. Flat ground therefore stays as a few large triangles at any distance, even right under the camera, and relief keeps every triangle the target and the data allow. Shading comes from the per-pixel normal map. A coarse triangle can sit up to that pixel's worth of height off the data, so under grazing light a long shadow's edge on it can move by a pixel or two. The rule does not apply to planets or to terrains streamed through the tile atlas (the largest tiled terrains). They refine on the edge length alone.
+On a heightfield terrain a triangle also splits only while the heights it draws vary by more than about one pixel on screen, measured at the triangle's nearest point to the camera. Far away, where the ground is drawn smoothed (below), that is the range of the smoothed ground, so relief finer than the distance can show adds no triangles there. Flat ground therefore stays as a few large triangles at any distance, even right under the camera, and relief keeps every triangle the target and the data allow. Shading comes from the per-pixel normal map. A coarse triangle can sit up to that pixel's worth of height off the data, so under grazing light a long shadow's edge on it can move by a pixel or two. The rule does not apply to planets, to terrains streamed through the tile atlas (the largest tiled terrains), or to targets without 64-bit shader integers (the web build). They refine on the projected edge length alone.
 
 The distant triangle count goes as about `1 / target²`. Near the camera the count does not change with the target on a heightfield terrain, because the triangles there already sit at the data's spacing.
 
@@ -48,3 +50,11 @@ The distant triangle count goes as about `1 / target²`. Near the camera the cou
 A lower target refines all distant ground with relief, including gentle slopes where the extra triangles change little that is visible. On a large terrain at a low target the mesh can reach its capacity. It then coarsens the largest triangles first, so distant ground ends up coarser than the target asks.
 
 :::
+
+### Distant ground shows the detail of its distance
+
+A distant triangle spans many height samples, so its corners alone would pick out single samples of relief finer than the triangle, and fine ridges would break up into a fan of facets along the horizon. A heightfield terrain draws each distant vertex from the height data smoothed to the detail its distance can show instead: the farther the vertex, the coarser the smoothing, and the change is gradual as the camera moves. Near the camera the vertices sit exactly on the height samples, as above. The lighting follows the same rule: near the camera it comes from the full-resolution normal map, and farther away from normals of the smoothed surface at the detail of the distance.
+
+Physics, placement, height queries and the terrain's shadow read the full-resolution heights at every distance; the water's shoreline follows the drawn ground. Where the relief is finer than the distance can show, a distant object can sit up to half that relief above or below the drawn ground.
+
+The smoothing does not apply to planets, to terrains streamed through the tile atlas or through height pages, or to targets without 64-bit shader integers (the web build).

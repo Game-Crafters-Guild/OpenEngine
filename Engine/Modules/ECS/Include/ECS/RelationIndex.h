@@ -30,7 +30,7 @@ namespace GameEngine::ECS {
 //
 // Usage:
 //   struct ParentOf {};                  // relation tag (empty struct)
-//   using ParentIndex = RelationIndex<ParentOf, Components::Parent, &Components::Parent::parent>;
+//   using ParentIndex = RelationIndex<ParentOf, Components::Parent, &Components::Parent::Entity>;
 //
 //   ParentIndex idx;
 //   const auto* children = idx.GetSources(world, targetEntity);

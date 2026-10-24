@@ -3764,7 +3764,9 @@ TEST(PostProcessExtractHooks, EveryDescriptorRegistersExtractAndFogOrderHolds)
                 EXPECT_NE(d.NeutralizeSettings, nullptr);
             }
             if (d.ComponentName == "AtmosphericCloudLayer")
+            {
                 EXPECT_NE(d.NeutralizeSettings, nullptr);
+            }
             if (d.ComponentName == "HeightFogEffect")
                 heightIndex = index;
             ++index;

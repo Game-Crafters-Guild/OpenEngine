@@ -6506,14 +6506,11 @@ static bool FixupTextFileReplaceGuid(const std::filesystem::path& path,
                 }
             }
 
-            std::string repl = hadDash ? to.ToString() : to.ToCompactString();
+            const std::string repl = hadDash ? to.ToString() : to.ToCompactString();
             if (anyUpper)
-            {
-                std::transform(repl.begin(), repl.end(), repl.begin(), [](unsigned char c)
-                               { return static_cast<char>(std::toupper(c)); });
-            }
-
-            out.append(repl);
+                out.append(ToUpperAscii(repl));
+            else
+                out.append(repl);
             outChanged = true;
         }
         else

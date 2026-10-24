@@ -14,9 +14,9 @@ struct SkeletonRef {
     // A handle to the entity's skeleton, not a feature: it has no off state.
     static constexpr bool NotToggleable = true;
 
-    uint32 skeletonId = 0; // [DoNotSerialize] process-local shared hierarchy/bind-pose cache; 0 = invalid
-    uint32 runtimeId = 0;  // [DoNotSerialize] per-session SkeletonStore handle (pose, atlas offset), rebuilt per spawn; 0 = invalid
-    uint64 runtimeGeneration = 0; // [DoNotSerialize] allocation identity; a recycled numeric slot owns no reference
+    uint32 skeletonId = 0; // [DoNotSerialize] @ge-readonly process-local shared hierarchy/bind-pose cache; 0 = invalid
+    uint32 runtimeId = 0;  // [DoNotSerialize] @ge-readonly per-session SkeletonStore handle (pose, atlas offset), rebuilt per spawn; 0 = invalid
+    uint64 runtimeGeneration = 0; // [DoNotSerialize] @ge-readonly allocation identity; a recycled numeric slot owns no reference
 
     // Durable reconstruction source. Empty permits explicit, in-memory procedural
     // skeleton assignment; numeric store IDs are never scene-file identities.
