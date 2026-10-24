@@ -881,7 +881,7 @@ UIManager::PointerFrameResult UIManager::TryPointerOnlyFrame(unsigned dirtyNow, 
     // Async font installs raise no dirty mark — the heavy pass's BuildYoga
     // measure-input diff is the reflow detector. Gating past a pending
     // install would hold fallback-font layout for as long as the pointer
-    // keeps moving. Cleared by the heavy pass once the batch completes.
+    // keeps moving. The heavy pass consumes the signal after its frame gates.
     m_PointerGateDecline = PointerGateDecline::FontResolve;
     if (m_FontResolvedDirty)
         return PointerFrameResult::NotApplicable;
