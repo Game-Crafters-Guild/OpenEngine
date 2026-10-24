@@ -14,6 +14,7 @@ namespace GameEngine::Components
 // with the full model hierarchy created by ModelEntityFactory.
 // @ge-no-add  data helper, not user-addable in the editor
 // [DoNotSerialize] — transient download placeholder; destroyed and replaced by the real model when the download completes.
+// @ge-editor-only the editor's download placeholder, no game data
 struct PolyhavenPlaceholder
 {
     char slug[64] = {0};       // Polyhaven asset slug (e.g. "rock_wall_04")

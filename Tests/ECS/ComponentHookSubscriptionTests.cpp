@@ -78,7 +78,10 @@ TEST_F(ComponentHookSubscription, SameCallbackReplacementInvalidatesOldTokenForA
             released = 0;
             const auto entity = CreateAndDestroy(world, 3);
             EXPECT_EQ(released, 3);
-            if (entityAware) EXPECT_EQ(observed.id, entity.id);
+            if (entityAware)
+            {
+                EXPECT_EQ(observed.id, entity.id);
+            }
             EXPECT_TRUE(world.UnregisterComponentHook(current));
             CreateAndDestroy(world, 7);
             EXPECT_EQ(released, 3);
@@ -97,7 +100,10 @@ TEST_F(ComponentHookSubscription, ScopesDetachAllSixOverloads)
                 EXPECT_TRUE(scope);
                 const auto entity = CreateAndDestroy(world, 3);
                 EXPECT_EQ(released, 3);
-                if (entityAware) EXPECT_EQ(observed.id, entity.id);
+                if (entityAware)
+                {
+                    EXPECT_EQ(observed.id, entity.id);
+                }
             }
             CreateAndDestroy(world, 7);
             EXPECT_EQ(released, 3);

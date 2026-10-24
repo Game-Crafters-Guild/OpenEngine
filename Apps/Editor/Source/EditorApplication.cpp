@@ -1308,6 +1308,50 @@ static T* FindFirstPanelOfType(const std::vector<std::unique_ptr<UIElement>>& pa
     return nullptr;
 }
 
+void EditorApplication::OnPlayModeStateChanged(Editor::PlayModeState state)
+{
+    UpdatePlayModeToolbar(state);
+
+    if (auto* hierarchyPanel = FindFirstPanelOfType<HierarchyPanel>(m_PanelStorage))
+    {
+        if (state == Editor::PlayModeState::EnteringPlay || state == Editor::PlayModeState::ExitingPlay)
+        {
+            hierarchyPanel->StashSelectionForPlayModeTransition();
+        }
+        else if (state == Editor::PlayModeState::Play || state == Editor::PlayModeState::Edit ||
+                 state == Editor::PlayModeState::ChangeReview)
+        {
+            // Defer until after WorldStructureChanged refresh PostActions.
+            hierarchyPanel->PostAction([hierarchyPanel]()
+                                       { hierarchyPanel->RestoreStashedSelectionAfterPlayModeTransition(); });
+        }
+    }
+
+    if (state != Editor::PlayModeState::Edit && state != Editor::PlayModeState::ChangeReview)
+        return;
+
+    // Every way play stops reaches this point, so play fullscreen ends here, and the toolbar's
+    // toggle shows the setting for the next play.
+    ExitPlayFullscreen();
+    if (m_TopToolbar)
+        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
+
+    // The snapshot restore writes directly to ECS without emitting per-component notifications.
+    // Force the inspector to rebuild so it picks up the restored values.
+    if (auto* inspectorPanel = FindFirstPanelOfType<InspectorPanel>(m_PanelStorage))
+    {
+        auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
+        inspectorPanel->ShowEntity(world, inspectorPanel->GetInspectedEntity(), /*force=*/true);
+    }
+}
+
+void EditorApplication::RequestGameExit(int)
+{
+    // A script asks from inside OnCreate or OnUpdate; play stops after those callbacks return.
+    if (m_PlayMode)
+        m_PlayMode->RequestExitPlayMode();
+}
+
 static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServices* rs)
 {
     using namespace Components;
@@ -1621,42 +1665,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
             this);
 #endif
 
-        m_PlayMode->SetOnStateChanged([this](GameEngine::Editor::PlayModeState s)
-                                      {
-                                          this->UpdatePlayModeToolbar(s);
-
-                                          if (auto* hierarchyPanel = FindFirstPanelOfType<HierarchyPanel>(m_PanelStorage))
-                                          {
-                                              if (s == GameEngine::Editor::PlayModeState::EnteringPlay ||
-                                                  s == GameEngine::Editor::PlayModeState::ExitingPlay)
-                                              {
-                                                  hierarchyPanel->StashSelectionForPlayModeTransition();
-                                              }
-                                              else if (s == GameEngine::Editor::PlayModeState::Play ||
-                                                       s == GameEngine::Editor::PlayModeState::Edit ||
-                                                       s == GameEngine::Editor::PlayModeState::ChangeReview)
-                                              {
-                                                  // Defer until after WorldStructureChanged refresh PostActions.
-                                                  hierarchyPanel->PostAction([hierarchyPanel]()
-                                                                             {
-                                                                                 hierarchyPanel->RestoreStashedSelectionAfterPlayModeTransition();
-                                                                             });
-                                              }
-                                          }
-
-                                          // When leaving play mode, the snapshot restore writes directly to ECS
-                                          // without emitting per-component notifications. Force the inspector to
-                                          // rebuild so it picks up the restored values.
-                                          if (s == GameEngine::Editor::PlayModeState::Edit ||
-                                              s == GameEngine::Editor::PlayModeState::ChangeReview)
-                                          {
-                                              if (auto* ip = FindFirstPanelOfType<InspectorPanel>(m_PanelStorage))
-                                              {
-                                                  auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
-                                                  ip->ShowEntity(world, ip->GetInspectedEntity(), /*force=*/true);
-                                              }
-                                          }
-                                      });
+        m_PlayMode->SetOnStateChanged([this](Editor::PlayModeState state) { OnPlayModeStateChanged(state); });
     }
 
     // Allow disabling the native toolbar to bisect shutdown issues
@@ -2265,9 +2274,6 @@ bool EditorApplication::Initialize()
             if (m_PlayFullscreenActive && state != GameEngine::Editor::PlayModeState::Edit)
             {
                 m_PlayMode->ExitPlayMode();
-                ExitPlayFullscreen();
-                if (m_TopToolbar)
-                    m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                 return true;
             }
         }
@@ -2291,9 +2297,6 @@ bool EditorApplication::Initialize()
                 if (state != GameEngine::Editor::PlayModeState::Edit)
                 {
                     m_PlayMode->ExitPlayMode();
-                    ExitPlayFullscreen();
-                    if (m_TopToolbar)
-                        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                     return true;
                 }
             }
@@ -4731,9 +4734,6 @@ bool EditorApplication::Initialize()
                             if (m_PlayMode->GetState() != GameEngine::Editor::PlayModeState::Edit)
                             {
                                 m_PlayMode->ExitPlayMode();
-                                ExitPlayFullscreen();
-                                if (m_TopToolbar)
-                                    m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                             }
                         };
                         Logger::Log::Info("[Startup]   Panel wiring (pre-toolbar): {:.1f}ms", MsSince(tDockSub));
@@ -7187,9 +7187,6 @@ void EditorApplication::Update(float64 deltaTime)
                 else if (state != GameEngine::Editor::PlayModeState::Edit)
                 {
                     m_PlayMode->ExitPlayMode();
-                    ExitPlayFullscreen();
-                    if (m_TopToolbar)
-                        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                 }
             }
 
@@ -7511,9 +7508,6 @@ bool EditorApplication::InvokeUiReplayCommand(std::uint32_t commandId, std::stri
             return true;
 
         m_PlayMode->ExitPlayMode();
-        ExitPlayFullscreen();
-        if (m_TopToolbar)
-            m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
         return true;
     }
 

@@ -93,18 +93,21 @@ void PageAndStride(float32 c, uint32 pages, uint32& page, float32& stride)
 
 } // namespace
 
-float32 PagedHeightSampler::SampleResidentPage(float32 u, float32 v, uint32 level, uint32 slot) const
+PageTexel LocatePageTexel(std::span<const PageStreaming::PageStoreLevel> levels, uint32 level, float32 u, float32 v)
 {
-    const PageStreaming::PageStoreLevel& shape = Table->Levels[level];
-    uint32 pageX = 0;
-    uint32 pageZ = 0;
-    float32 strideX = 0.0f;
-    float32 strideZ = 0.0f;
-    PageAndStride(LatticeCoordinate(u, Table->Levels.front().SamplesX, level), shape.PagesX, pageX, strideX);
-    PageAndStride(LatticeCoordinate(v, Table->Levels.front().SamplesZ, level), shape.PagesZ, pageZ, strideZ);
+    const PageStreaming::PageStoreLevel& shape = levels[level];
+    PageTexel texel;
+    PageAndStride(LatticeCoordinate(u, levels.front().SamplesX, level), shape.PagesX, texel.PageX, texel.StrideX);
+    PageAndStride(LatticeCoordinate(v, levels.front().SamplesZ, level), shape.PagesZ, texel.PageZ, texel.StrideZ);
+    return texel;
+}
+
+float32 PagedHeightSampler::SampleResidentPage(const PageTexel& texel, uint32 slot) const
+{
     const float32 originX = static_cast<float32>(Geometry.TexelX(slot, 0));
     const float32 originZ = static_cast<float32>(Geometry.TexelZ(slot, 0));
-    return SampleGridBilinearTexel(Cache, Geometry.CacheDim, Geometry.CacheDim, originX + strideX, originZ + strideZ);
+    return SampleGridBilinearTexel(Cache, Geometry.CacheDim, Geometry.CacheDim, originX + texel.StrideX,
+                                   originZ + texel.StrideZ);
 }
 
 float32 PagedHeightSampler::SampleLevel(float32 u, float32 v, uint32 level, uint32& outLevel) const
@@ -118,17 +121,12 @@ float32 PagedHeightSampler::SampleLevel(float32 u, float32 v, uint32 level, uint
     outLevel = levels;
     for (uint32 walk = level; walk < levels; ++walk)
     {
-        const PageStreaming::PageStoreLevel& shape = Table->Levels[walk];
-        uint32 pageX = 0;
-        uint32 pageZ = 0;
-        float32 unused = 0.0f;
-        PageAndStride(LatticeCoordinate(u, Table->Levels.front().SamplesX, walk), shape.PagesX, pageX, unused);
-        PageAndStride(LatticeCoordinate(v, Table->Levels.front().SamplesZ, walk), shape.PagesZ, pageZ, unused);
-        const uint32 entry = Table->Entry(walk, pageX, pageZ);
+        const PageTexel texel = LocatePageTexel(Table->Levels, walk, u, v);
+        const uint32 entry = Table->Entry(walk, texel.PageX, texel.PageZ);
         if (entry == kNoPage)
             continue; // the fallback walk: the first resident ancestor answers
         const uint32 slot = PageStreaming::PageEntrySlot(entry);
-        const float32 own = SampleResidentPage(u, v, walk, slot);
+        const float32 own = SampleResidentPage(texel, slot);
         const float32 fade = Table->SlotFade[slot];
         if (outLevel == levels)
             outLevel = walk;

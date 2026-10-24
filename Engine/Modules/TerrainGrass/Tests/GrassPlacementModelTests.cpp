@@ -1173,8 +1173,10 @@ TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscal
         }
         EXPECT_LT(C::GrassGroundCanopyOcclusion(depth, 0.5f), 1.0f + 1e-6f);
         if (depth > 0.0f)
+        {
             EXPECT_GT(C::GrassGroundCanopyOcclusion(depth, 0.5f), C::GrassGroundCanopyOcclusion(depth, 1.0f))
                 << "a half-covered ground is less occluded than a full field";
+        }
     }
     // The field coverage is the placement's spawn probability: the splat coverage times the region's
     // density, and nothing where a region removes the grass. There the ground takes no occlusion.
@@ -1192,8 +1194,8 @@ TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscal
     const std::string vertex = ReadShaderSource("terrain_grass_vertex_modifier.glsl");
     EXPECT_NE(vertex.find("GrassUnpackCoverage(blade.RandAndCoverage)"), std::string::npos)
         << "the vertex stage no longer hands the surface the coverage its site was placed with";
-    EXPECT_NE(stripped.find("o.baseColor=col*canopyOcclusion;"), std::string::npos)
-        << "the blade's canopy shade no longer scales its reflectance (sun and sky alike)";
+    EXPECT_NE(stripped.find("o.baseColor=col;o.lightVisibility=canopyOcclusion;"), std::string::npos)
+        << "the blade no longer hands its canopy shade to the lighting as the light that reaches it";
     std::ifstream groundFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl");
     ASSERT_TRUE(groundFile.good()) << "cannot read cbt_surface.glsl";
     std::string ground = StripComments(std::string((std::istreambuf_iterator<char>(groundFile)),
@@ -1206,8 +1208,8 @@ TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscal
         << "the ground no longer occludes by the row's canopy depth over the placement's field coverage";
     EXPECT_NE(ground.find("CBT_GrassRegionControls(tp,sIn.uv0)));"), std::string::npos)
         << "the ground's field coverage no longer reads the grass region controls";
-    EXPECT_NE(ground.find("o.baseColor=baseColor*grassCanopy;"), std::string::npos)
-        << "the ground's canopy shade no longer scales its reflectance (sun and sky alike)";
+    EXPECT_NE(ground.find("o.baseColor=baseColor;o.lightVisibility=grassCanopy;"), std::string::npos)
+        << "the ground no longer hands its canopy shade to the lighting as the light that reaches it";
     EXPECT_NE(ground.find("floatgrassCanopy=1.0;if(tp.GrassCanopyOcclusion>0.0){grassCanopy=GrassGroundCanopyOcclusion("),
               std::string::npos)
         << "a terrain with no grass depth now pays for the ground's coverage reads";
@@ -1265,9 +1267,9 @@ TEST(GrassContactIdentity, TheGroundUnderAFieldIsTheTerrainsMaterialAtEveryDista
         std::string((std::istreambuf_iterator<char>(groundFile)), std::istreambuf_iterator<char>())));
     const std::string surface = StripWhitespace(ReadShaderSource("terrain_grass_surface.glsl"));
 
-    // The ground's colour is its resolved material times the canopy shade, and nothing else.
-    EXPECT_NE(ground.find("o.baseColor=baseColor*grassCanopy;"), std::string::npos)
-        << "the ground under a field is no longer its own material times the canopy shade";
+    // The ground's colour is its resolved material, and the canopy shades the light that reaches it.
+    EXPECT_NE(ground.find("o.baseColor=baseColor;o.lightVisibility=grassCanopy;"), std::string::npos)
+        << "the ground under a field is no longer its own material under the canopy shade";
     // The blade's ground colour is the terrain's resolved albedo at its root, never reassigned.
     EXPECT_NE(surface.find("vec3terrainColor=vGrassBlade.yzw;"), std::string::npos)
         << "the blade no longer takes the ground's colour from its root";

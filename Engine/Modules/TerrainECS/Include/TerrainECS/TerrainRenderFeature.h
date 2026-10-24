@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Engine/Rendering/IRenderFeature.h"
-#include "Terrain/CDLODQuadtree.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainECS/GrassWindVolumeRing.h"
 #include "TerrainECS/TerrainService.h"
@@ -49,9 +48,7 @@ inline Mathematics::Vector3 ExtractCameraPosition(const Rendering::CameraData& c
 
 // Cached terrain instance data extracted by TerrainExtractionSystem and consumed by
 // the CBT renderer (via GetActiveTerrains): world bounds, height scale, and the
-// heightmap/splatmap/normalmap bindless indices CBT + grass sample. The quadtree
-// snapshot remains for the service-side CDLOD LOD-range machinery (TerrainService
-// builds it; nav/debug read it).
+// heightmap/splatmap/normalmap bindless indices CBT + grass sample.
 struct TerrainInstanceInfo
 {
     float32 WorldOriginX;
@@ -126,7 +123,6 @@ struct TerrainInstanceInfo
     std::vector<uint8_t> AtlasRowBytes;
     uint32 AtlasRowCount = 0;
 
-    Terrain::CDLODQuadtree Quadtree;
     uint32 PatchGridSize = 32;
     bool MorphRangesComputed = false;
     float32 VisRanges[Terrain::kMaxLODLevels] = {};
@@ -146,8 +142,8 @@ enum class TerrainFieldMap : uint8 { Unified, Atlas, Coarse };
 
 // The single atlas-backed terrain's resolve inputs the grass placement compute needs:
 // the atlas geometry, the bindless height/normal/splat indices (resident + coarse), and a
-// copy of the indirection rows for THIS frame. Only the atlas fields + rows are copied (never
-// the heavy CDLODQuadtree on TerrainInstanceInfo), so a grass dispatch can pull it cheaply.
+// copy of the indirection rows for THIS frame. Only the atlas fields + rows are copied, so a
+// grass dispatch can pull it cheaply.
 // The engine is single-atlas-terrain (CBT is single-terrain), so the FIRST atlas-backed
 // terrain is THE one; a second would be an impossible config (guarded, not silently wrong).
 
@@ -456,7 +452,7 @@ public:
 
     // Copy the first atlas-backed terrain's grass resolve inputs (geometry + bindless indices +
     // this frame's indirection rows) into `out`, returning true when one exists. Copies only the
-    // atlas fields + rows (never the Quadtree), so it is cheap enough for the per-frame grass path.
+    // atlas fields + rows, so it is cheap enough for the per-frame grass path.
     bool TryGetAtlasGrassSource(AtlasGrassSource& out) const;
 
     // The optional field textures (TerrainField): created on first use, patched through

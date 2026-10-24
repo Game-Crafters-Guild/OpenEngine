@@ -5,6 +5,34 @@
 # directly: no Player executable, no window, no device.
 
 if(BUILD_TESTING)
+    if(ENABLE_SCRIPTING AND TARGET Player)
+        find_package(nlohmann_json CONFIG REQUIRED)
+        add_executable(PlayerManagedExitTests PlayerManagedExitTests.cpp)
+        target_include_directories(PlayerManagedExitTests PRIVATE
+            ${CMAKE_SOURCE_DIR}/Engine/Tests ${CMAKE_SOURCE_DIR}/Tests)
+        target_compile_features(PlayerManagedExitTests PRIVATE cxx_std_20)
+        target_compile_definitions(PlayerManagedExitTests PRIVATE GE_TEST_PLAYER_EXECUTABLE="$<TARGET_FILE:Player>")
+        target_link_libraries(PlayerManagedExitTests PRIVATE Engine GTest::gtest_main nlohmann_json::nlohmann_json)
+        ge_set_output_tests(PlayerManagedExitTests)
+        ge_stage_runtime_dependencies(PlayerManagedExitTests)
+
+        # Compile the game fixture against the engine configuration the Player stages.
+        # Reference its built assemblies directly so this target does not rebuild shared csprojs.
+        set(_exit_fixture_source "${CMAKE_SOURCE_DIR}/Tests/ManagedTestAssemblies/ApplicationExit")
+        set(_exit_fixture_output "$<TARGET_FILE_DIR:PlayerManagedExitTests>/PlayerExitFixture")
+        add_custom_target(BuildPlayerExitFixture
+            COMMAND ${DOTNET_EXECUTABLE} build "${_exit_fixture_source}/ApplicationExit.csproj"
+                -c ${GE_MANAGED_FIXTURE_CONFIG} -p:EngineConfiguration=$<CONFIG>
+                -o "${_exit_fixture_output}/ScriptAssemblies"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${_exit_fixture_source}/Assets" "${_exit_fixture_output}/Assets"
+            COMMENT "Building and staging the managed Player exit fixture")
+        add_dependencies(BuildPlayerExitFixture ScriptingAbiAssembly)
+        add_dependencies(PlayerManagedExitTests Player BuildPlayerExitFixture)
+        add_test(NAME PlayerManagedExitTests COMMAND $<TARGET_FILE:PlayerManagedExitTests>)
+        set_tests_properties(PlayerManagedExitTests PROPERTIES TIMEOUT 600 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endif()
+
     # PrepareBundle invokes /usr/bin/ditto and preserves bundle symlinks, and
     # Codesign runs codesign; these integration tests require the macOS tools,
     # not just filesystem APIs. MacPackageCodeExportTests runs a whole macOS export

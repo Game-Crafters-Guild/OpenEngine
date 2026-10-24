@@ -41,7 +41,16 @@ namespace GameEngine.Scripting
 
         // Element layer — instance id and nothing else.
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int GE_UIElement_SetWidthPercent(ulong instanceId, float pct);
+        private static extern int GE_UIElement_SetWidthPercent(ulong instanceId, float percent);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_SetOffset(ulong instanceId, float x, float y);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_CapturePointer(ulong instanceId);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_ReleasePointer(ulong instanceId);
 
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_UIElement_SetLabelText(ulong instanceId,
@@ -96,6 +105,13 @@ namespace GameEngine.Scripting
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_UIElement_SetValueText(ulong instanceId,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string text, int notify);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_SetZIndex(ulong instanceId, int zIndex);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_GetRect(ulong instanceId, out float x, out float y,
+            out float width, out float height);
 
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_UIElement_GetScrollOffset(ulong instanceId, out float outX,

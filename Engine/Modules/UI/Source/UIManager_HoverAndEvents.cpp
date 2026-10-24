@@ -386,6 +386,25 @@ UIElement* UIManager::HitTestTree(float mx, float my, bool requirePointerEvents)
     return GatePointerTargetToOpenPopups(m_DismissablePopupRegistry, m_Root.get(), best.el);
 }
 
+void UIManager::CaptureMouse(UIElement* element)
+{
+    if (!element)
+    {
+        ReleaseMouseCapture();
+        return;
+    }
+
+    m_MouseCaptured = true;
+    m_CaptureElement = element;
+    m_CaptureInstanceId = element->GetInstanceId();
+    // The id lets the capture be restored across rebuilds (a splitter drag, virtualization).
+    m_CaptureId = EnsureElementId(element);
+
+    // Retarget hover now rather than on the next motion: a capture that is not reflected in hover is a
+    // capture the element does not see until the pointer happens to move again.
+    m_MouseMoved = true;
+}
+
 void UIManager::ReleaseMouseCapture()
 {
     if (!m_MouseCaptured && m_CaptureId.empty() && !m_CaptureElement)
@@ -397,6 +416,14 @@ void UIManager::ReleaseMouseCapture()
     // Retarget hover to whatever is under the pointer now, even if the pointer
     // does not move again — the same reason the mouse-up path sets this.
     m_MouseMoved = true;
+}
+
+bool UIManager::ReleaseMouseCaptureHeldBy(uint64_t instanceId)
+{
+    if (!m_MouseCaptured || instanceId == 0 || m_CaptureInstanceId != instanceId)
+        return false;
+    ReleaseMouseCapture();
+    return true;
 }
 
 namespace

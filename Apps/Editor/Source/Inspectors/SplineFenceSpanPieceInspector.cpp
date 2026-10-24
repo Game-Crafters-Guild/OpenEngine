@@ -95,7 +95,7 @@ void BuildSpanPieceSection(const InspectorContext& ctx)
     if (!piece)
         return;
     const auto* parent = w->GetComponent<Components::Parent>(pieceEntity);
-    const ECS::EntityHandle fenceEntity = parent ? parent->parent : ECS::EntityHandle{};
+    const ECS::EntityHandle fenceEntity = parent ? parent->Entity : ECS::EntityHandle{};
     const SplineFence* fence =
         fenceEntity.IsValid() ? w->GetComponent<SplineFence>(fenceEntity) : nullptr;
     if (!fence)

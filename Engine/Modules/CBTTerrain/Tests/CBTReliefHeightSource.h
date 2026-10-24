@@ -41,9 +41,22 @@ inline float ReliefSmoothNoiseAt(float u, float v, uint32_t period)
     return (n00 * (1.0f - wx) + n10 * wx) * (1.0f - wy) + (n01 * (1.0f - wx) + n11 * wx) * wy;
 }
 
-// Six octaves, so the height is non-linear along edges at every subdivision depth rather than only
-// the coarse ones. A single smooth octave leaves the deep facets locally planar, which would
-// understate exactly the residual these arms exist to measure.
+// The relief's normalized height at a UV in [0, 1], the function MakeReliefHeightTexture samples at
+// texel centers. Six octaves of value noise, so the height is non-linear along edges at every
+// subdivision depth rather than only the coarse ones. A single smooth octave leaves the deep facets
+// locally planar, which would understate exactly the residual these arms exist to measure.
+inline float ReliefHeightAt(float u, float v)
+{
+    float amp = 0.5f, sum = 0.0f, norm = 0.0f;
+    for (uint32_t octave = 0; octave < 6u; ++octave)
+    {
+        sum += amp * ReliefSmoothNoiseAt(u, v, 4u << octave);
+        norm += amp;
+        amp *= 0.5f;
+    }
+    return sum / norm;
+}
+
 inline Rendering::TextureHandle MakeReliefHeightTexture(Rendering::IDevice& device, uint32_t dim)
 {
     using namespace Rendering;
@@ -65,14 +78,7 @@ inline Rendering::TextureHandle MakeReliefHeightTexture(Rendering::IDevice& devi
         {
             const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(dim);
             const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(dim);
-            float amp = 0.5f, sum = 0.0f, norm = 0.0f;
-            for (uint32_t octave = 0; octave < 6u; ++octave)
-            {
-                sum += amp * ReliefSmoothNoiseAt(u, v, 4u << octave);
-                norm += amp;
-                amp *= 0.5f;
-            }
-            data[static_cast<size_t>(y) * dim + x] = sum / norm;
+            data[static_cast<size_t>(y) * dim + x] = ReliefHeightAt(u, v);
         }
 
     const size_t bytes = data.size() * sizeof(float);

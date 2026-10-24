@@ -30,8 +30,8 @@ namespace
 // so the 14 bands span ~6 cm ripples (i=0) to ~512 m swell (i=13).
 constexpr float kSpectrumBaseWavelengthMeters = 0.0625f;
 
-// Per-octave power slider domain. Matches the SpectrumPower field range in
-// OceanFieldRanges.cpp (the default inspector would draw 0..2 sliders for the raw
+// Per-octave power slider domain. Matches the SpectrumPower field's @ge-range in
+// Components/Rendering/Ocean.h (the default inspector would draw 0..2 sliders for the raw
 // array; this custom view reproduces that range as a labelled per-band row).
 constexpr float kSpectrumPowerMin = 0.0f;
 constexpr float kSpectrumPowerMax = 2.0f;

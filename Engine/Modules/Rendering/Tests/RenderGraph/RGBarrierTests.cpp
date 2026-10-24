@@ -826,7 +826,9 @@ TEST(RGBarrier, SampledInGeneralTextureStaysGeneralAcrossQueues)
         EXPECT_EQ(b.NewLayout, RGImageLayout::General)
             << "sampled reads must observe the claimed GENERAL layout";
         if (b.OldLayout != RGImageLayout::Undefined) // first write discards
+        {
             EXPECT_EQ(b.OldLayout, RGImageLayout::General) << "no layout ping-pong";
+        }
     }
 }
 

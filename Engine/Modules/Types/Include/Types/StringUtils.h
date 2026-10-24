@@ -2,14 +2,25 @@
 
 #include <algorithm>
 #include <cctype>
+#include <concepts>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <vector>
 
 namespace GameEngine
 {
+
+/// A std::string about to be destroyed: a view into it dangles once the full expression ends. Every
+/// helper here that returns a view into its argument deletes the overload for this argument, so
+/// `Split(ReadFile(path), '\n')` does not compile; name the string first. A std::string_view made
+/// from a temporary still compiles and dangles the same way.
+template <class Text>
+concept TemporaryString = std::same_as<std::remove_cvref_t<Text>, std::string> && !std::is_lvalue_reference_v<Text>;
 
 // The text in a fixed char buffer up to its first null byte, or the whole buffer
 // when it holds none. Component string fields are such buffers, and a raw component
@@ -65,6 +76,65 @@ inline std::string ToLowerAscii(std::string_view sv)
     std::transform(s.begin(), s.end(), s.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
+}
+
+/// `sv` with the ASCII letters a to z raised to A to Z; every other byte is kept.
+inline std::string ToUpperAscii(std::string_view sv)
+{
+    std::string s(sv);
+    std::transform(s.begin(), s.end(), s.begin(),
+        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return s;
+}
+
+/// The fields of `text` between each `delimiter`, as views into `text`: "a,,b" gives "a", "" and
+/// "b", and "a," gives "a" and "". Empty fields are kept; an empty `text` gives no fields. The views
+/// live as long as the text they point into.
+inline std::vector<std::string_view> Split(std::string_view text, char delimiter)
+{
+    std::vector<std::string_view> fields;
+    if (text.empty())
+        return fields;
+    std::size_t start = 0;
+    for (std::size_t at = text.find(delimiter); at != std::string_view::npos; at = text.find(delimiter, start))
+    {
+        fields.push_back(text.substr(start, at - start));
+        start = at + 1;
+    }
+    fields.push_back(text.substr(start));
+    return fields;
+}
+
+template <TemporaryString Text>
+std::vector<std::string_view> Split(Text&& text, char delimiter) = delete;
+
+/// The elements of `parts` (anything that converts to std::string_view) with `separator` between
+/// each pair: Join({"a", "b"}, ", ") is "a, b". An empty range gives an empty string.
+template <std::ranges::input_range Range>
+    requires std::convertible_to<std::ranges::range_reference_t<const Range&>, std::string_view>
+std::string Join(const Range& parts, std::string_view separator)
+{
+    std::string text;
+    bool first = true;
+    for (const auto& part : parts)
+    {
+        if (!first)
+            text += separator;
+        text += std::string_view(part);
+        first = false;
+    }
+    return text;
+}
+
+/// `text` with every occurrence of `from` replaced by `to`, scanning left to right; a replacement
+/// is not scanned again, so ReplaceAll("aa", "a", "aa") is "aaaa". An empty `from` changes nothing.
+inline std::string ReplaceAll(std::string text, std::string_view from, std::string_view to)
+{
+    if (from.empty())
+        return text;
+    for (std::size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size()))
+        text.replace(at, from.size(), to);
+    return text;
 }
 
 // Case-insensitive substring check. Avoids allocating lowered copies.
@@ -150,6 +220,9 @@ inline std::string_view TrimWhitespaceView(std::string_view s)
         s.remove_suffix(1);
     return s;
 }
+
+template <TemporaryString Text>
+std::string_view TrimWhitespaceView(Text&& s) = delete;
 
 inline std::string ToUpperSnakeCase(const std::string& name)
 {

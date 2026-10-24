@@ -113,10 +113,10 @@ TRS ComputeWorldTRSForEntity(ECS::World* world, ECS::EntityHandle handle)
 
     if (auto* parentComp = e.Get<Parent>())
     {
-        ECS::Entity parentEntity(world, parentComp->parent);
+        ECS::Entity parentEntity(world, parentComp->Entity);
         if (parentEntity.IsValid())
         {
-            TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+            TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
             return CombineTRS(parentWorld, local);
         }
     }
@@ -150,7 +150,7 @@ void GetParentWorldTRS(ECS::World* world, ECS::EntityHandle handle,
         return; // identity parent
     }
 
-    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
     outPos = parentWorld.position;
     outRot = parentWorld.rotation;
     outScale = parentWorld.scale;

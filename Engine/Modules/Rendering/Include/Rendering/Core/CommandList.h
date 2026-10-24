@@ -426,7 +426,15 @@ class CommandList
     // to copy. `dstSlicePitchBytes` is bytes between Z slices in the destination
     // buffer (0 = tightly packed slices of height × row pitch). The same Vulkan
     // accepts gapped / D3D12 requires tight asymmetry applies as for the upload
-    // helper above.
+    // helper below.
+    //
+    // The copy transitions the subresource to a transfer source and leaves it there. It
+    // transitions from the layout this command list's layout record holds: the state the
+    // last barrier or copy on this list left it in, or the state RecordStateAfterBarriers
+    // noted. Inside a render-graph pass the graph keeps that record true. A caller outside
+    // the graph barriers the subresource on this list first. With no record, the copy is
+    // refused and reported, because a transition from an unknown layout may discard the
+    // contents it was asked to read.
     virtual void CopyTextureSubresourceToBuffer(TextureHandle srcTexture, uint32_t mip, uint32_t layer,
                                                 BufferHandle dstBuffer,
                                                 uint32_t width, uint32_t height,
@@ -466,15 +474,13 @@ class CommandList
     // `dstX`/`dstY` are the destination texel origin of the copy (default 0,0 = top-left).
     // The copied rect must satisfy dstX+width <= mipWidth and dstY+height <= mipHeight.
     //
-    // `currentState` is the subresource's layout/state at the moment of the copy, as known
-    // by the caller. It exists for PARTIAL copies to a persistent texture whose contents
-    // outside the copied rect must survive: when a real state is supplied, the internal
-    // pre-copy transition moves FROM that layout (content-preserving) with the matching
-    // source stage/access, so it also serializes against in-flight readers on the queue.
-    // When left Undefined (the default, and correct for whole-subresource rewrites), the
-    // old layout is resolved from command-list-local tracking, which for a fresh list means
-    // UNDEFINED — a legal content DISCARD. A sub-region copy that leaves this Undefined will
-    // therefore corrupt the untouched texels; region callers MUST supply the resting state.
+    // The pre-copy transition moves from the layout this command list's layout record holds
+    // (see CopyTextureSubresourceToBuffer). When this list has no record for the
+    // subresource, it moves from `currentState`, the caller's knowledge of the state of a
+    // persistent texture last touched on another list. Left Undefined, a subresource with
+    // no record transitions from UNDEFINED, a legal content discard: correct for a
+    // whole-subresource rewrite, wrong for a PARTIAL copy, whose texels outside the rect
+    // must survive. Region callers on a fresh list supply the resting state.
     virtual void CopyBufferToTextureSubresource(BufferHandle srcBuffer, TextureHandle dstTexture,
                                                 uint32_t mip, uint32_t layer,
                                                 uint32_t width, uint32_t height,
@@ -530,6 +536,14 @@ class CommandList
 
     // Batch multiple barriers in one call (default implementations should emit a single backend barrier call)
     virtual void BarrierBatch(const std::vector<ResourceBarrier>& barriers) = 0;
+
+    // Notes, without recording any GPU work, that `barriers` run on another command list
+    // whose submission this list's submission waits on: each texture subresource they cover
+    // is in its stateAfter when this list's following commands run. The layout record then
+    // holds that state for the copies that read it (CopyTextureSubresourceToBuffer). The
+    // render graph calls this on the consuming pass's list for a transition it places on
+    // another queue's submission. Backends without image layouts keep no record.
+    virtual void RecordStateAfterBarriers(const std::vector<ResourceBarrier>& barriers) { (void)barriers; }
 
     // Debug and profiling
     virtual void BeginEvent(const char* name) = 0;

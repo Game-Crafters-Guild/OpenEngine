@@ -1013,7 +1013,7 @@ TEST(TextureCookBc, Bc7PartialBlocksEncodeAsEdgeReplicatedBlocks)
     if (!IsTextureCookEncoderAvailable())
         GTEST_SKIP() << "no BC encoder compiled in";
 
-    for (const auto [width, height] : {std::pair<uint32, uint32>{6, 5}, {2, 2}, {1, 1}})
+    for (const auto& [width, height] : {std::pair<uint32, uint32>{6, 5}, {2, 2}, {1, 1}})
     {
         const std::string where = std::to_string(width) + "x" + std::to_string(height);
         TextureCookMipLevel level;
@@ -1350,7 +1350,9 @@ TEST(TextureCookCancel, PreemptsEncodeInProgress)
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                 .count();
         if (!okOut)
+        {
             EXPECT_TRUE(cooked.empty());
+        }
         return ms;
     };
 

@@ -221,42 +221,6 @@ TEST_F(TiledTerrainFixture, LoadTile_DuplicateLoad_ReturnsSamePointer)
     TerrainService::Get().DestroyTiledTerrain(handle);
 }
 
-// ---------------------------------------------------------------------------
-// Global quadtree build from tiles
-// ---------------------------------------------------------------------------
-
-TEST_F(TiledTerrainFixture, RebuildGlobalQuadtree_ProducesValidQuadtree)
-{
-    TiledTerrainConfig config{};
-    config.WorldSizeX = 4096.0f;
-    config.WorldSizeZ = 4096.0f;
-    config.HeightScale = 128.0f;
-    config.SamplesPerMeter = 1.0f;
-    config.PatchGridSize = 32;
-
-    auto handle = TerrainService::Get().CreateTiledTerrain(config);
-    auto* data = TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(data, nullptr);
-
-    // Load all tiles (4x4 grid).
-    for (uint32 z = 0; z < data->Config.TilesPerAxisZ; ++z)
-        for (uint32 x = 0; x < data->Config.TilesPerAxisX; ++x)
-            ASSERT_NE(TerrainService::Get().LoadTile(handle, {static_cast<int32>(x), static_cast<int32>(z)}), nullptr);
-
-    TerrainService::Get().RebuildGlobalQuadtree(handle);
-    EXPECT_TRUE(data->GlobalQuadtree.IsBuilt());
-
-    // Global LOD levels should be more than per-tile levels.
-    EXPECT_GT(data->GlobalQuadtree.GetNumLevels(), data->Config.TileConfig.LODLevels);
-
-    // Root node should span the entire terrain's height range.
-    const uint32 rootLevel = data->GlobalQuadtree.GetNumLevels() - 1;
-    const auto& root = data->GlobalQuadtree.GetNode(rootLevel, 0, 0);
-    EXPECT_LE(root.MinHeight, root.MaxHeight);
-
-    TerrainService::Get().DestroyTiledTerrain(handle);
-}
-
 // Verify that adjacent tiles produce identical heightfield values at their
 // shared boundary. World-space noise is deterministic per world position,
 // so the last column of tile (0,0) must match the first column of tile (1,0).
@@ -465,9 +429,9 @@ TEST_F(TiledTerrainFixture, SampleTiledHeight_ContinuousAcrossTileBoundary)
 }
 
 // C8 render-extent oracle: the CBT render size (params/info WorldSize) must be the REAL
-// per-axis extent (tilesPerAxis * tileWorldSize), NOT the power-of-2 square the global
-// quadtree rounds up to. A non-square / non-pow2-tile-count terrain rendered with the
-// square would stretch (CBT maps world = origin + uv*size over the unified heightmap).
+// per-axis extent (tilesPerAxis * tileWorldSize), NOT a power-of-2 square. A non-square /
+// non-pow2-tile-count terrain rendered with a square would stretch (CBT maps
+// world = origin + uv*size over the unified heightmap).
 TEST_F(TiledTerrainFixture, RenderExtent_NonSquareUsesRealPerAxisExtent)
 {
     // 4096 x 2048 @ 1 sample/m -> 1024m tiles -> 4 x 2 tiles (a non-square grid).
@@ -499,8 +463,8 @@ TEST_F(TiledTerrainFixture, RenderExtent_NonSquareUsesRealPerAxisExtent)
 
 TEST_F(TiledTerrainFixture, RenderExtent_NonPow2TileCountIsNotRoundedUp)
 {
-    // 3072 x 3072 @ 1 sample/m -> 1024m tiles -> 3 x 3 tiles. The global quadtree rounds
-    // 3 up to 4 finest-node blocks; the render extent must stay 3*tileWorldSize, not 4.
+    // 3072 x 3072 @ 1 sample/m -> 1024m tiles -> 3 x 3 tiles. The render extent must stay
+    // 3*tileWorldSize, not the 4 a power-of-2 square would round up to.
     TiledTerrainConfig config{};
     config.WorldSizeX = 3072.0f;
     config.WorldSizeZ = 3072.0f;
@@ -516,7 +480,7 @@ TEST_F(TiledTerrainFixture, RenderExtent_NonPow2TileCountIsNotRoundedUp)
     const TiledRenderExtent e = ComputeTiledRenderExtent(data->Config);
     const float32 realX = 3.0f * data->Config.TileWorldSize; // 3072
     EXPECT_FLOAT_EQ(e.WorldSizeX, realX);
-    // The pow2-rounded quadtree square (4 tiles wide) would be 4/3 too large — reject it.
+    // A pow2-rounded square (4 tiles wide) would be 4/3 too large — reject it.
     EXPECT_LT(e.WorldSizeX, 4.0f * data->Config.TileWorldSize);
 
     TerrainService::Get().DestroyTiledTerrain(handle);

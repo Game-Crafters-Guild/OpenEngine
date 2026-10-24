@@ -57,7 +57,7 @@ size_t ChildCount(ECS::World& world, ECS::EntityHandle owner)
     world.Query<ECS::Read<Components::Parent>>().Each(
         [&](ECS::EntityHandle, const Components::Parent& parent)
         {
-            if (parent.parent == owner)
+            if (parent.Entity == owner)
                 ++count;
         });
     return count;

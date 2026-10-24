@@ -320,7 +320,9 @@ TEST(MeshPlaneCut, UnitCubeCutKeepsThreeQuartersAndSixClosedFaces)
         // it is there to keep the outline's edges shared.
         const V3 geometric = V3::Cross(Corner(cut.Mesh, t, 1) - a, Corner(cut.Mesh, t, 2) - a);
         if (geometric.Length() > 1e-9f)
+        {
             EXPECT_LT(geometric.x, 0.0f) << "cap wound inward";
+        }
         const SplineVertex& v = cut.Mesh.Vertices[cut.Mesh.Indices[t * 3u]];
         EXPECT_NEAR(v.Normal.x, -1.0f, 1e-6f);
         EXPECT_NEAR(std::abs(v.Tangent.x), 0.0f, 1e-6f) << "cap tangent must lie in the plane";

@@ -117,12 +117,12 @@ EntityActivity DescribeEntityActivity(ECS::World& world, ECS::EntityHandle entit
     activity.ActiveInHierarchy = handle.IsEnabledInHierarchy();
     if (!activity.SwitchedOn || activity.ActiveInHierarchy)
         return activity;
-    for (const auto* link = world.GetComponent<Components::Parent>(entity); link && world.IsValid(link->parent);
-         link = world.GetComponent<Components::Parent>(link->parent))
+    for (const auto* link = world.GetComponent<Components::Parent>(entity); link && world.IsValid(link->Entity);
+         link = world.GetComponent<Components::Parent>(link->Entity))
     {
-        if (ECS::Entity(&world, link->parent).IsEnabled())
+        if (ECS::Entity(&world, link->Entity).IsEnabled())
             continue;
-        activity.OffAncestor = link->parent;
+        activity.OffAncestor = link->Entity;
         break;
     }
     return activity;

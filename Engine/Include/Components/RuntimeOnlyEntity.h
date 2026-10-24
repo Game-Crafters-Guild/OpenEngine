@@ -16,6 +16,7 @@ namespace GameEngine::Components
 //
 // @ge-no-add        applied by engine subsystems, never added by hand in the editor
 // [DoNotSerialize]  the tag is runtime state; it must not appear in a saved scene
+// @ge-engine-internal the engine subsystem that spawns the entity
 struct RuntimeOnlyEntity
 {
     // A marker of generator output, not a feature: it has no off state.

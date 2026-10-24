@@ -957,6 +957,10 @@ void main()
         }
     }
   #endif
+    // The share of the light that reaches the surface scales its whole response: the direct light
+    // here, the ambient light and the reflections that replace part of it through ambientMultiplier.
+    finalColor *= so.lightVisibility;
+    ambientMultiplier = so.lightVisibility;
 
 #elif defined(LIGHTING_MODEL_SHADOW_ONLY)
     // Shadow catcher: transparent where lit, tinted only where the directional

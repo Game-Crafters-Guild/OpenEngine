@@ -131,7 +131,8 @@ propagates automatically.
 
 ## Style overrides (code)
 
-Use `StyleOverrides` for programmatic overrides. Typed property keys provide
+Use `StyleOverrides` for programmatic overrides. An override wins over the
+stylesheet and over the element's own `style` attribute. Typed property keys provide
 compile-time safety. Dirty flags are tracked automatically via the
 `StyleProp<T, StyleImpact>` template.
 
@@ -263,6 +264,57 @@ if (Ui.FindElement("Score") is Ui.Label score)
 `GameUI::FindElementById` searches every mounted UI document. In C++ an element id is a `StringId`: write an id you know in code as a `"Score"_sid` literal, which is hashed at compile time, and hash an id built at runtime with `HashStringId(name)`. When two documents use the same id, the document owned by the lowest entity id wins, so the result is stable. To look in one document only, call `FindById` on its root, `GameUI::FindDocumentRoot(entity)`. The optional second argument of `FindElementById` receives the entity whose document matched.
 
 `Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag (`Ui.Button`, `Ui.Label`, or `Ui.Element`). Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
+
+### Element calls from a script
+
+Each call returns `false` when the element no longer exists. The calls that set a style (`SetWidthPercent`, `SetZIndex` and `SetOffset`) write the element's style overrides, so a value a script sets wins over the stylesheet and over the element's own `style` attribute, and stays until the script sets it again.
+
+| Call | What it does |
+|---|---|
+| `SetWidthPercent(float percent)` | Sets the element's width as a percentage of its parent's. |
+| `SetZIndex(int zIndex)` | Orders the element among its siblings: a higher value is drawn in front and is the one the pointer finds. It does not lift the element above its parent's siblings. |
+| `SetOffset(Vector2 offset)` | Sets the element's CSS `left` and `top` in UI pixels. An element with `position: absolute` is placed from the inside of its parent's border; any other element moves by the offset from where layout places it. The value stays through a .uxml reload. |
+| `TryGetRect(out Rect rect)` | Reports the element's box from the last layout, in window space and UI pixels. A parent that clips does not shrink it, and for a transformed element it is the bounds of the transformed box. `Rect` has `Position`, `Size` (both `Vector2`), `Right`, `Bottom` and `Contains(Vector2)`, which counts the edges as inside. |
+| `CapturePointer()` | The element holds the pointer: every move, release and cancel goes to it, wherever the pointer is, until `ReleasePointer` or the button's release, whichever comes first. A drag keeps going when a fast pointer leaves a small element. |
+| `ReleasePointer()` | Ends the element's own capture. From an element that does not hold the pointer it does nothing and returns `false`, so it never ends another element's drag. |
+
+```csharp title="Bring a window to the front when it is clicked"
+private int m_TopZIndex;
+
+void OnWindowPressed(Ui.Element window) => window.SetZIndex(++m_TopZIndex);
+```
+
+```csharp title="Move a window by the pointer's motion while it is dragged"
+private Vector2 m_WindowPosition;
+private Vector2 m_LastPointer;
+private bool m_Dragging;
+
+void MakeDraggable(Ui.Element window)
+{
+    window.PointerPressed += press =>
+    {
+        window.CapturePointer();
+        m_Dragging = true;
+        m_LastPointer = new Vector2(press.X, press.Y);
+    };
+    window.PointerReleased += _ => m_Dragging = false;
+    window.PointerCancelled += _ => m_Dragging = false;
+    window.MouseMoved += move =>
+    {
+        if (!m_Dragging)
+            return;
+        var pointer = new Vector2(move.X, move.Y);
+        m_WindowPosition += pointer - m_LastPointer;
+        m_LastPointer = pointer;
+        window.SetOffset(m_WindowPosition);
+    };
+}
+```
+
+```csharp title="Place a tooltip under a button"
+if (button.TryGetRect(out Rect rect))
+    m_TooltipPosition = new Vector2(rect.X, rect.Bottom + 4f);
+```
 
 ## Creating new controls
 

@@ -12,9 +12,9 @@
 #include "ECS/World.h"
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
-#include "PathfindingECS/Components/NavigationSource.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationAgent.h"
+#include "Components/Navigation/NavigationSource.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PhysicsECS/Components/BoxColliderShape.h"
 #include "PhysicsECS/Components/CapsuleColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -305,7 +305,7 @@ std::optional<NavigationSourcePolicy> MeshRendererAdmission(ECS::World& world, E
         const auto* parent = world.GetComponent<Components::Parent>(current);
         if (!parent)
             break;
-        current = parent->parent;
+        current = parent->Entity;
     }
     return NavigationSourcePolicy::Auto;
 }

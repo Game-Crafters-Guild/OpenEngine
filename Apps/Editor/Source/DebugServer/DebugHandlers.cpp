@@ -26,6 +26,8 @@
 #include "Components/Terrain/TerrainGrass.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "Components/Terrain/TerrainPlanetRelief.h"
+#include "Components/MathReflectionTraits.h"
+#include "Components/RenderLayerMaskReflectionTraits.h"
 #include "Components/Transform.h"
 #include "Core/CpuProfiler.h"
 #include "Core/DebugMetrics.h"
@@ -74,6 +76,7 @@
 #include "ECSModules/Rendering/RenderingLoop.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ComponentRegistry.h"
+#include "ECS/FieldAccess.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/ReflectionJson.h"
 #include "ECSModules/Rendering/ClipStore.h"
@@ -199,6 +202,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -224,6 +228,49 @@ static bool IEquals(std::string_view a, std::string_view b)
     return true;
 }
 
+// The number a JSON array holds at `index`, or `stored` when the array is short there or the
+// entry is not a number, so a partial array keeps the components it does not name.
+static float JsonComponentOr(const json& array, std::size_t index, float stored)
+{
+    return index < array.size() && array[index].is_number() ? array[index].get<float>() : stored;
+}
+
+// Element 0 of a Vec2/Vec3/Vec4 field, its components replaced by those a JSON array gives.
+template <class TVector>
+static void WriteVectorFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    TVector composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    for (std::size_t i = 0; i < sizeof(TVector) / sizeof(float); ++i)
+        composite[i] = JsonComponentOr(value, i, composite[i]);
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
+// Element 0 of a Quat field from a JSON array in the quaternion's storage order, the order the
+// read side emits.
+static void WriteQuaternionFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    Mathematics::Quaternion composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    glm::quat& stored = composite.GetGLM();
+    for (glm::length_t i = 0; i < stored.length(); ++i)
+        stored[i] = JsonComponentOr(value, static_cast<std::size_t>(i), stored[i]);
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
+// Element 0 of a Color field from a JSON array [r, g, b, a].
+static void WriteColorFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    ColorLinear composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    composite = ColorLinear(JsonComponentOr(value, 0, composite.r), JsonComponentOr(value, 1, composite.g),
+                            JsonComponentOr(value, 2, composite.b), JsonComponentOr(value, 3, composite.a));
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
 // Write one JSON value into a component's raw bytes for a single reflected field,
 // dispatching on its FieldTypeId. Type-guarded so a mismatched JSON value is
 // ignored rather than throwing. Float/Vec/Color accept a JSON array for the
@@ -235,35 +282,11 @@ static bool IEquals(std::string_view a, std::string_view b)
 // this contract exists to prevent. `world` supplies entity-handle liveness. A refusal with
 // a reason the caller can act on (the forms a render layer field takes) puts it in `outReason`.
 static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
-                               const ECS::FieldInfo& f, const json& v, std::string& outReason)
+                               const ECS::FieldInfo& field, const json& value, std::string& outReason)
 {
-    // The integer/enum stores below memcpy a value's low bytes into the field; that assumes a
-    // little-endian host (every shipping target). A big-endian port would byte-swap.
-    static_assert(std::endian::native == std::endian::little, "WriteFieldFromJson assumes little-endian");
     using ECS::FieldTypeId;
-    const std::size_t off = f.Offset;
-    const auto fits = [&](std::size_t n)
-    { return off + n <= bytes.size(); };
-    const auto writeFloats = [&](std::uint32_t count)
-    {
-        if (!v.is_array())
-            return;
-        for (std::uint32_t i = 0; i < count && i < v.size(); ++i)
-        {
-            if (!v[i].is_number() || !fits(i * 4 + 4))
-                continue;
-            float x = v[i].get<float>();
-            std::memcpy(bytes.data() + off + i * 4, &x, 4);
-        }
-    };
-    const auto storeInt = [&]<class T>()
-    {
-        if (v.is_number() && fits(sizeof(T)))
-        {
-            auto x = static_cast<T>(v.get<long long>());
-            std::memcpy(bytes.data() + off, &x, sizeof(T));
-        }
-    };
+    const std::span<std::byte> component = std::as_writable_bytes(std::span(bytes));
+    const std::size_t offset = field.Offset;
     // Enum-by-name: a reflected enum field collapses to its underlying integer Type but
     // carries an EnumNames table. Accept the enumerator NAME the scene format + inspector
     // use (e.g. RenderMode="Fullscreen"), resolving it to the integer value. A numeric
@@ -274,101 +297,90 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
     // failing over IPC is the get/set disagreement this surface exists to remove.
     // ReflectedEnumNameDrift pins the precondition: no reflected enum has two enumerators
     // differing only by case.
-    if (!f.EnumNames.empty() && v.is_string() && f.Size <= sizeof(std::int64_t) && fits(f.Size))
+    if (!field.EnumNames.empty() && value.is_string())
     {
-        const std::string name = v.get<std::string>();
-        for (const auto& e : f.EnumNames)
+        const std::string name = value.get<std::string>();
+        for (const auto& enumerator : field.EnumNames)
         {
-            if (IEquals(e.Name, name))
-            {
-                std::memcpy(bytes.data() + off, &e.Value, f.Size); // low bytes (LE, asserted above)
-                return true;
-            }
+            if (IEquals(enumerator.Name, name))
+                return ECS::WriteFieldInteger(field, component, 0, enumerator.Value);
         }
         // Accept a numeric STRING (e.g. "1") as the underlying integer too, matching the lenient
         // JSON-number path — callers/scripts sometimes quote enum values.
-        long long num = 0;
-        if (auto [ptr, ec] = std::from_chars(name.data(), name.data() + name.size(), num);
-            ec == std::errc{} && ptr == name.data() + name.size())
+        long long number = 0;
+        if (auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);
+            error == std::errc{} && end == name.data() + name.size())
         {
-            std::memcpy(bytes.data() + off, &num, f.Size);
-            return true;
+            return ECS::WriteFieldInteger(field, component, 0, number);
         }
         return false; // not a known enumerator name or integer → report rather than silently no-op
     }
-    switch (f.Type)
+    switch (field.Type)
     {
     case FieldTypeId::Bool:
-        if (fits(1))
-            bytes[off] = (v.is_boolean() ? v.get<bool>() : (v.is_number() && v.get<double>() != 0.0)) ? 1 : 0;
+        ECS::WriteFieldElement(field, component, 0,
+                               value.is_boolean() ? value.get<bool>() : (value.is_number() && value.get<double>() != 0.0));
         break;
     case FieldTypeId::Int8:
-        storeInt.operator()<std::int8_t>();
-        break;
     case FieldTypeId::UInt8:
-        storeInt.operator()<std::uint8_t>();
-        break;
     case FieldTypeId::Int16:
-        storeInt.operator()<std::int16_t>();
-        break;
     case FieldTypeId::UInt16:
-        storeInt.operator()<std::uint16_t>();
-        break;
     case FieldTypeId::Int32:
-        storeInt.operator()<std::int32_t>();
-        break;
     case FieldTypeId::UInt32:
-        storeInt.operator()<std::uint32_t>();
+    case FieldTypeId::Int64:
+    case FieldTypeId::UInt64:
+        if (value.is_number())
+            ECS::WriteFieldInteger(field, component, 0, value.get<long long>());
         break;
     case FieldTypeId::RenderLayerMask:
     {
         // A layer list ([0, 2] or the scene text "[0, 2]"), "all" or "none"; the read side reports the text.
         Rendering::RenderLayerMask layers;
-        if (!fits(sizeof(layers)) || !Editor::ReadRenderLayerMaskValue(v, f.Name, layers, outReason))
+        if (!Editor::ReadRenderLayerMaskValue(value, field.Name, layers, outReason))
             return false;
-        std::memcpy(bytes.data() + off, &layers, sizeof(layers));
-        return true;
+        return ECS::WriteFieldElement(field, component, 0, layers);
     }
-    case FieldTypeId::Int64:
-        storeInt.operator()<std::int64_t>();
-        break;
-    case FieldTypeId::UInt64:
-        storeInt.operator()<std::uint64_t>();
-        break;
     case FieldTypeId::Double:
-        if (v.is_number() && fits(8))
-        {
-            double x = v.get<double>();
-            std::memcpy(bytes.data() + off, &x, 8);
-        }
+        if (value.is_number())
+            ECS::WriteFieldElement(field, component, 0, value.get<double>());
         break;
     case FieldTypeId::Float:
-        if (v.is_array())
-            writeFloats(f.Size / 4); // float[N] (e.g. Color[3])
-        else if (v.is_number() && fits(4))
+        if (value.is_array())
         {
-            float x = v.get<float>();
-            std::memcpy(bytes.data() + off, &x, 4);
+            // float[N] (e.g. Color[3]): one array entry per element; a non-number keeps its element.
+            for (std::uint32_t element = 0; element < value.size(); ++element)
+            {
+                if (value[element].is_number())
+                    ECS::WriteFieldElement(field, component, element, value[element].get<float>());
+            }
+        }
+        else if (value.is_number())
+        {
+            ECS::WriteFieldElement(field, component, 0, value.get<float>());
         }
         break;
     case FieldTypeId::Vec2:
-        writeFloats(2);
+        WriteVectorFromJson<Mathematics::Vector2>(field, component, value);
         break;
     case FieldTypeId::Vec3:
-        writeFloats(3);
+        WriteVectorFromJson<Mathematics::Vector3>(field, component, value);
         break;
     case FieldTypeId::Vec4:
+        WriteVectorFromJson<Mathematics::Vector4>(field, component, value);
+        break;
     case FieldTypeId::Quat:
+        WriteQuaternionFromJson(field, component, value);
+        break;
     case FieldTypeId::Color:
-        writeFloats(4);
+        WriteColorFromJson(field, component, value);
         break;
     case FieldTypeId::String:
-        if (v.is_string() && f.Size > 0 && fits(f.Size))
+        if (value.is_string() && field.Size > 0 && offset + field.Size <= bytes.size())
         {
-            const std::string s = v.get<std::string>();
-            const std::size_t n = std::min<std::size_t>(s.size(), f.Size - 1);
-            std::memcpy(bytes.data() + off, s.data(), n);
-            bytes[off + n] = 0;
+            const std::string text = value.get<std::string>();
+            const std::size_t length = std::min<std::size_t>(text.size(), field.Size - 1);
+            std::memcpy(bytes.data() + offset, text.data(), length);
+            bytes[offset + length] = 0;
         }
         break;
     case FieldTypeId::AssetGuid:
@@ -376,35 +388,29 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
         // An AssetRef<T> (MaterialRef/ModelRef/TextureRef) is a 16-byte GUID. Accept a GUID
         // string or {"guid":"..."}; the component write-back re-resolves it during extraction
         // (e.g. the renderer's MaterialRegistry::Find), so set_component can assign a material.
-        const json* g = v.is_string()                           ? &v
-                        : (v.is_object() && v.contains("guid"))  ? &v.at("guid")
+        const json* guidValue = value.is_string()                           ? &value
+                        : (value.is_object() && value.contains("guid"))  ? &value.at("guid")
                                                                  : nullptr;
-        if (!g || !g->is_string())
-            return v.is_null(); // null = leave the ref as-is (ok); any other non-string is malformed -> report
-        if (!fits(GUID::kSize))
-            break;
-        const std::string s = g->get<std::string>();
-        if (s.empty())
+        if (!guidValue || !guidValue->is_string())
+            return value.is_null(); // null = leave the ref as-is (ok); any other non-string is malformed -> report
+        const std::string text = guidValue->get<std::string>();
+        if (text.empty())
         {
             // "" CLEARS the reference. It is what a read emits for an unset ref, so this is the
             // half that makes get_entity_components output writable back: a payload carrying an
             // unset ref has to land as unset, not silently keep whatever the target already held.
             // (JSON null, above, means "no value supplied" and still leaves the ref alone; the
             // read shape never emits it.)
-            std::memset(bytes.data() + off, 0, GUID::kSize);
-            return true;
+            return ECS::WriteFieldElement(field, component, 0, GUID::Null());
         }
         // The GUID string ctor fills zeros (not throw) on a malformed string. If it isn't a
         // raw GUID, treat the string as an asset PATH and resolve it (so MCP can assign any
         // AssetRef<> by path, e.g. "UI/Hud.uxml", matching the scene format).
-        GUID guid{s};
+        GUID guid{text};
         if (guid.IsNull())
-            guid = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(std::filesystem::path(s));
+            guid = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(std::filesystem::path(text));
         if (!guid.IsNull())
-        {
-            std::memcpy(bytes.data() + off, guid.GetData().data(), GUID::kSize);
-            return true;
-        }
+            return ECS::WriteFieldElement(field, component, 0, guid);
         // Non-empty string that's neither a raw GUID nor a resolvable asset path: leave the
         // existing ref untouched and report it (restores the diagnostic the deleted UIDocument
         // special-case had) instead of a silent no-op masquerading as success.
@@ -412,29 +418,22 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
     }
     case FieldTypeId::EntityHandle:
     {
-        if (!fits(sizeof(std::uint32_t)))
-            return false;
         // JSON null clears the link. That IS a write, unlike the zero below.
-        if (v.is_null())
-        {
-            const ECS::EntityHandle cleared{};
-            std::memcpy(bytes.data() + off, &cleared.id, sizeof cleared.id);
-            return true;
-        }
-        if (!v.is_number())
+        if (value.is_null())
+            return ECS::WriteFieldElement(field, component, 0, ECS::EntityHandle{});
+        if (!value.is_number())
             return false;
-        const auto raw = v.get<std::int64_t>();
-        if (raw < 0 || raw > std::numeric_limits<std::uint32_t>::max())
+        const auto rawId = value.get<std::int64_t>();
+        if (rawId < 0 || rawId > std::numeric_limits<std::uint32_t>::max())
             return false;
         // EntityHandle::IsValid only tests the kInvalidEntity sentinel, so a ZEROED id
         // passes it while naming no entity — versions are minted from 1, so (0,0) never
         // exists. Liveness lives in the World; ask it, or a raw byte round-trip would
         // store a handle that every reader then silently ignores.
-        const ECS::EntityHandle handle{static_cast<std::uint32_t>(raw)};
+        const ECS::EntityHandle handle{static_cast<std::uint32_t>(rawId)};
         if (!world.IsValid(handle))
             return false;
-        std::memcpy(bytes.data() + off, &handle.id, sizeof handle.id);
-        return true;
+        return ECS::WriteFieldElement(field, component, 0, handle);
     }
     case FieldTypeId::Mat4:
     case FieldTypeId::Bytes:
@@ -2163,7 +2162,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
     if (world->HasComponent<Components::Parent>(entity))
     {
         auto* c = world->GetComponent<Components::Parent>(entity);
-        components["Parent"] = {{"parentId", c->parent.id}};
+        components["Parent"] = {{"parentId", c->Entity.id}};
         serialized.insert(ECS::GetComponentTypeId<Components::Parent>());
     }
 

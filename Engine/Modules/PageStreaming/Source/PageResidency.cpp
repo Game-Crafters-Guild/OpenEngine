@@ -6,7 +6,6 @@
 #include "PageStreaming/PageLoader.h"
 #include "PageStreaming/PageStoreReader.h"
 
-#include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -18,8 +17,6 @@ namespace
 {
 
 constexpr uint64 kPageSampleBytes = static_cast<uint64>(kPageSampleCount) * sizeof(float32);
-// The longest wait before a failed page is tried again, in frames; the wait doubles up to it.
-constexpr uint32 kMaxRetryFrames = 64;
 
 uint32 TopLevelOf(const PageSource& source)
 {
@@ -146,24 +143,25 @@ void PageResidencyManager::DrainCompletions(uint64 frameIndex)
         if (it == m_Streams.end() || it->second.Epoch != done.Epoch)
             continue; // a load of a stream since forgotten or restarted
         Stream& stream = it->second;
-        stream.InFlight.erase(done.Address);
-        if (done.Samples)
+        PageFetchOutcome& outcome = done.Outcome;
+        stream.InFlight.erase(outcome.Address);
+        if (outcome.Samples)
         {
-            stream.Loaded[done.Address] = LoadedPage{std::move(done.Samples), frameIndex};
-            stream.Failures.erase(done.Address);
+            stream.Loaded[outcome.Address] = LoadedPage{std::move(outcome.Samples), frameIndex};
+            stream.Failures.erase(outcome.Address);
             m_CpuBytes += kPageSampleBytes;
             continue;
         }
-        if (done.Absent)
+        if (outcome.Absent)
         {
-            stream.Absent.insert(done.Address);
+            stream.Absent.insert(outcome.Address);
             continue;
         }
-        LoadFailure& failure = stream.Failures[done.Address];
+        LoadFailure& failure = stream.Failures[outcome.Address];
         if (failure.Attempts == 0)
             Logger::Log::Warning("Terrain page (level {}, {}, {}) did not load: {}. It is retried.",
-                                 done.Address.Level, done.Address.X, done.Address.Z, done.Error);
-        failure.RetryAtFrame = frameIndex + std::min(kMaxRetryFrames, 1u << std::min(failure.Attempts, 6u));
+                                 outcome.Address.Level, outcome.Address.X, outcome.Address.Z, outcome.Error);
+        failure.RetryAtFrame = NextPageFetchRetryFrame(frameIndex, failure.Attempts);
         ++failure.Attempts;
     }
 }
@@ -215,56 +213,11 @@ void PageResidencyManager::StartLoad(uint32 streamId, Stream& stream, const Page
     stream.InFlight.insert(address);
     ++m_InFlightCount;
     ++m_LoadsStarted;
-    if (stream.Source.Store && m_Io)
-    {
-        PageLoadRequest request;
-        request.Store = stream.Source.Store;
-        request.Address = address;
-        request.Priority = AssetLoadPriority::High;
-        request.Cancel = stream.Cancel;
-        request.OnLoaded = [queue, streamId, epoch](const PageAddress& page, std::vector<float32> samples) {
-            std::lock_guard lock(queue->Mutex);
-            queue->Completions.push_back(
-                {streamId, epoch, page, std::make_shared<const std::vector<float32>>(std::move(samples)), {}, false});
-        };
-        request.OnFailed = [queue, streamId, epoch, store = stream.Source.Store](const PageAddress& page,
-                                                                                 const std::string& error) {
-            std::lock_guard lock(queue->Mutex);
-            queue->Completions.push_back({streamId, epoch, page, nullptr, error, !store->Layout().FindPresent(page)});
-        };
-        SubmitHeightPageLoad(*m_Io, std::move(request));
-        return;
-    }
-    // A generated page (or a store with no reader threads): evaluated or read on a Background job.
-    const auto fill = [queue, streamId, epoch, address, source = stream.Source, cancel = stream.Cancel]() {
-        Completion done{streamId, epoch, address, nullptr, {}, false};
-        if (cancel->load())
-        {
-            done.Error = "the stream was restarted";
-        }
-        else if (source.Store && !source.Store->Layout().FindPresent(address))
-        {
-            done.Absent = true;
-        }
-        else
-        {
-            auto samples = std::make_shared<std::vector<float32>>(kPageSampleCount);
-            const bool filled = source.Generated ? source.Generated->FillPage(address, *samples)
-                                                 : source.Store->ReadHeightPage(address, *samples);
-            if (filled)
-                done.Samples = std::move(samples);
-            else if (source.Generated)
-                done.Absent = true; // outside the generated pyramid
-            else
-                done.Error = "the page store could not be read";
-        }
-        std::lock_guard lock(queue->Mutex);
-        queue->Completions.push_back(std::move(done));
-    };
-    if (m_Pool)
-        m_Pool->Submit(fill, JobSystem::JobPriority::Background);
-    else
-        fill();
+    SubmitPageFetch(m_Pool, m_Io, stream.Source, address, stream.Cancel,
+                    [queue, streamId, epoch](PageFetchOutcome outcome) {
+                        std::lock_guard lock(queue->Mutex);
+                        queue->Completions.push_back(Completion{streamId, epoch, std::move(outcome)});
+                    });
 }
 
 void PageResidencyManager::Refresh(uint32 streamId, const PageSampleRect& level0Rect)

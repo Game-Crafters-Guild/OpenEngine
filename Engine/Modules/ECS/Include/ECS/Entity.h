@@ -26,6 +26,7 @@ namespace ECS {
 // Forward declarations
 class World;
 class UnresolvedComponentStore; // ECS/UnresolvedComponentStore.h
+struct ScriptWritableRange;     // ECS/ComponentFieldRegistry.h
 struct ComponentLayoutChange;   // ECS/ComponentMigration.h
 struct FieldByteMove;           // ECS/ComponentMigration.h
 struct ComponentHookSubscriptionState;
@@ -906,6 +907,18 @@ public:
                                             ComponentTypeId typeId,
                                             const void* data,
                                             std::size_t sizeBytes);
+            // A script's write of an engine component: the script's bytes over `writable` (the
+            // type's ScriptWriteRule::Ranges, which the caller has looked up with the rule), and for
+            // every other byte the current value, or the registered defaults when the write adds
+            // the component; then the same body as SetComponentBytesImmediate. A component whose
+            // one run covers every byte takes the script's bytes as they are. False on an add that
+            // keeps some bytes of a component with no registered defaults, a size mismatch, an
+            // unknown type or an invalid entity.
+            bool SetComponentBytesFromScriptImmediate(EntityHandle entity,
+                                                      ComponentTypeId typeId,
+                                                      const void* data,
+                                                      std::size_t sizeBytes,
+                                                      std::span<const ScriptWritableRange> writable);
             bool RemoveComponentByTypeIdImmediate(EntityHandle entity, ComponentTypeId typeId);
 
             // Migrate a component whose byte layout changed across a hot-reload: resize the

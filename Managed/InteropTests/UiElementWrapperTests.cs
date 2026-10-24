@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -452,6 +453,21 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(el.SetWidthPercent(50f), Is.False);
             Assert.That(el.AddClass("low-health"), Is.False);
             Assert.That(fired, Is.EqualTo(0));
+        }
+
+        /// <summary>A rect is a closed box: its right and bottom edges are inside, as in the UI's hit test.</summary>
+        [Test]
+        public void ARectContainsItsEdgesAndNothingPastThem()
+        {
+            var rect = new Rect(10f, 20f, 80f, 40f);
+            Assert.That(rect.Right, Is.EqualTo(90f));
+            Assert.That(rect.Bottom, Is.EqualTo(60f));
+            Assert.That(rect.Position, Is.EqualTo(new Vector2(10f, 20f)));
+            Assert.That(rect.Size, Is.EqualTo(new Vector2(80f, 40f)));
+            Assert.That(rect.Contains(new Vector2(10f, 20f)), Is.True);
+            Assert.That(rect.Contains(new Vector2(90f, 60f)), Is.True);
+            Assert.That(rect.Contains(new Vector2(90.01f, 40f)), Is.False);
+            Assert.That(rect.Contains(new Vector2(50f, 60.01f)), Is.False);
         }
     }
 }

@@ -542,8 +542,6 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                         {"tilesPerAxisX", tiled->Config.TilesPerAxisX},
                         {"tilesPerAxisZ", tiled->Config.TilesPerAxisZ},
                         {"tileWorldSize", tiled->Config.TileWorldSize},
-                        {"quadtreeBuilt", tiled->GlobalQuadtree.IsBuilt()},
-                        {"quadtreeDirty", tiled->QuadtreeDirty},
                         // Tiles WALKED, which is not tiles that contributed: a Full tile with an
                         // unallocated splat buffer adds nothing, and splat.empty says so.
                         {"splatTilesWalked", summarizedTiles},
@@ -601,7 +599,6 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                     {"colorMapBindlessIndex", info.ColorMapBindlessIndex},
                     {"atlasColorBindlessIndex", info.AtlasColorBindlessIndex},
                     {"atlasColorCoarseBindlessIndex", info.AtlasColorCoarseBindlessIndex},
-                    {"quadtreeBuilt", info.Quadtree.IsBuilt()},
                     {"lodLevels", info.LODLevels},
                     {"morphRangesComputed", info.MorphRangesComputed}
                 });

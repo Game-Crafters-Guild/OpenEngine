@@ -141,8 +141,8 @@ ECS::EntityHandle EffectiveParent(ECS::World& world, ECS::EntityHandle entity)
     if (!entity.IsValid() || !world.IsValid(entity))
         return {};
     if (auto* parent = world.GetComponent<Components::Parent>(entity);
-        parent && parent->parent.IsValid() && world.IsValid(parent->parent))
-        return parent->parent;
+        parent && parent->Entity.IsValid() && world.IsValid(parent->Entity))
+        return parent->Entity;
     return {};
 }
 
@@ -741,7 +741,7 @@ void HierarchyVcsController::RevertEntityToBaseline(
         else if (auto* parent =
                      world.GetComponentForWrite<Components::Parent>(entity))
         {
-            parent->parent = baselineParent;
+            parent->Entity = baselineParent;
         }
         else
         {

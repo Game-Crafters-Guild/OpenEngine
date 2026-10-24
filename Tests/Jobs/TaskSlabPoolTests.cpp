@@ -137,8 +137,9 @@ TEST(TaskSlabPoolTest, PoolReuseChurn)
     // High-water ≤ in-flight window + workers-in-flight + slack (the window
     // check is racy by one task per submitter). Global monotonic counter, so
     // compare against the pre-test mark too.
-    const long long highWaterBound =
-        static_cast<long long>(kInFlightWindow + kSubmitters + pool.GetWorkerCount() + 64);
+    constexpr size_t kHighWaterSlack = 64;
+    const GameEngine::int64 highWaterBound =
+        static_cast<GameEngine::int64>(kInFlightWindow + kSubmitters + pool.GetWorkerCount() + kHighWaterSlack);
     EXPECT_LE(after.LiveHighWater,
               std::max(before.LiveHighWater, before.Live + highWaterBound));
 

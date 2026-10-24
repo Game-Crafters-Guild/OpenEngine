@@ -274,7 +274,9 @@ void ExpectTraversalMatchesBruteForce(const ThreadedBvh& bvh, const Vector3& ori
     // Two triangles sharing an edge can both be exactly at the closest t; the
     // index is only well defined when the winner is unique.
     if (tiedCount == 1)
+    {
         EXPECT_EQ(reference.Triangle, traversed.Triangle);
+    }
 }
 
 // ── Node-array inspection ──────────────────────────────────────────────────

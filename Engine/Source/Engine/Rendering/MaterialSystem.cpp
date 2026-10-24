@@ -38,7 +38,6 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
-#include "Rendering/Core/HashUtils.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBlendDerive.h"
@@ -51,6 +50,8 @@
 #include "Rendering/Materials/ShaderComposer.h"
 #include "Rendering/Materials/ShaderPropertyTableCache.h"
 #include "Rendering/ShaderCache/ShaderProgramIndex.h"
+#include "Types/FlatSet.h"
+#include "Types/Fnv1a.h"
 #include "Types/StringId.h"
 #include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
@@ -1002,12 +1003,12 @@ void MaterialSystem::PackMaterialSSBO()
     // (bumped by every MarkDirty — properties, bindless indices, UV transforms,
     // sampler preset) is kept beside it: it says whether any row can differ, and
     // each row's material revision says which.
-    // Seeded with the FNV-1a offset basis, the chain HashUtils::HashValue continues.
-    uint64_t stamp = Rendering::HashUtils::HashValue(Hashing::kFnv1a64OffsetBasis, m_MaterialSSBOGeneration);
-    stamp = Rendering::HashUtils::HashValue(stamp, materialCount);
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultWhiteBindlessIndex());
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultFlatNormalBindlessIndex());
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultBlackBindlessIndex());
+    // Seeded with the FNV-1a offset basis, the chain Hashing::Fnv1a64Value continues.
+    uint64_t stamp = Hashing::Fnv1a64Value(Hashing::kFnv1a64OffsetBasis, m_MaterialSSBOGeneration);
+    stamp = Hashing::Fnv1a64Value(stamp, materialCount);
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultWhiteBindlessIndex());
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultFlatNormalBindlessIndex());
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultBlackBindlessIndex());
     const uint64_t contentEpoch = Material::GetGlobalContentEpoch();
 
     // Publish the SSBO binding every frame — buffer/offset differ per slot.
@@ -1369,8 +1370,8 @@ Material* MaterialSystem::RegisterMaterialFromDocument(
         // A texGuidStr of "" or one that fails to parse counts as "removed"
         // — same handling as UpdateMaterialTextures (line ~3777).
         {
-            std::unordered_set<StringId> liveSlots;
-            liveSlots.reserve(resolved.textures.size());
+            FlatSet<StringId> liveSlots;
+            liveSlots.Reserve(resolved.textures.size());
             for (const auto& [texName, texGuidStr] : resolved.textures)
             {
                 if (texGuidStr.empty())
@@ -1385,13 +1386,13 @@ Material* MaterialSystem::RegisterMaterialFromDocument(
                 // Treat embedded refs (non-empty texGuidStr that doesn't
                 // parse as a GUID) as live — ResolveEmbeddedTextures binds
                 // them after this function returns.
-                liveSlots.insert(nameId);
+                liveSlots.Insert(nameId);
             }
 
             std::vector<StringId> slotsToClear;
             for (const auto& [slotName, _] : mat->GetTextureBindings())
             {
-                if (liveSlots.find(slotName) == liveSlots.end())
+                if (!liveSlots.Contains(slotName))
                     slotsToClear.push_back(slotName);
             }
 

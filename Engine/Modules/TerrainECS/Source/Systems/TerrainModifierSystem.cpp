@@ -1164,23 +1164,6 @@ bool DeferSplatResplatEnabled()
     return enabled;
 }
 
-// GE_TERRAIN_INCREMENTAL_QUADTREE=0 restores the pre-fix behavior: a height edit
-// marks the whole global quadtree dirty (QuadtreeDirty), forcing a full rebuild
-// that rescans EVERY resident tile's heightfield min/max per dab — O(all samples)
-// per stroke frame, the dominant sculpt-stroke hitch on large tiled terrains. The
-// default patches only the tiles the edit actually touched into the global
-// quadtree, which is byte-identical to a full rebuild (untouched tiles' nodes are
-// unchanged). Kept as a kill switch to A/B the two paths.
-bool IncrementalQuadtreeEnabled()
-{
-    static const bool enabled = []
-    {
-        const char* v = std::getenv("GE_TERRAIN_INCREMENTAL_QUADTREE");
-        return !(v && v[0] == '0');
-    }();
-    return enabled;
-}
-
 // GE_TERRAIN_SPREAD_SETTLE=0 restores the pre-fix one-shot settle flush: the deferred
 // whole-terrain splat renormalize runs for EVERY resident tile in the single settle
 // frame — the ~1.4s stroke-release spike on large tiled terrains (a 16-tile 2 km
@@ -4272,7 +4255,7 @@ void TerrainModifierSystem::BakeTiledFull(TiledTerrainData& tiled, float32 heigh
 
     // GPU eval-skip (slice-1c): the GPU produces every tile's height into the atlas; the CPU
     // heightfield stays stale until the settle readback refreshes it, so skip ALL CPU height
-    // work (fill / modifiers / range / splat / quadtree) and only record the tiles to dispatch.
+    // work (fill / modifiers / range / splat) and only record the tiles to dispatch.
     if (gpuEvalSkip)
     {
         for (auto& [coord, tilePtr] : tiled.Tiles)
@@ -4361,7 +4344,6 @@ void TerrainModifierSystem::BakeTiledFull(TiledTerrainData& tiled, float32 heigh
     tiled.CachedGlobalMaxH = globalMaxH;
 
     ++tiled.Revision;
-    tiled.QuadtreeDirty = true;
 }
 
 // Re-bake EVERY resident Full tile's splatmap against (globalMinH, globalMaxH) and commit
@@ -4593,8 +4575,8 @@ void TerrainModifierSystem::BakeTiledRegion(TiledTerrainData& tiled, float32 hei
             });
 
         // Per-tile range refresh + dirty bookkeeping: cheap, and they touch shared
-        // state (the quadtree dirty list, the baked-tiles signal), so keep them
-        // serial after the parallel height pass has produced the final samples.
+        // state (the baked-tiles signal), so keep them serial after the parallel
+        // height pass has produced the final samples.
         for (const auto& r : heightRegions)
         {
             // A region height edit can move this tile's min/max in either direction,
@@ -4604,17 +4586,13 @@ void TerrainModifierSystem::BakeTiledRegion(TiledTerrainData& tiled, float32 hei
             RefreshTileHeightRangeRegion(*r.Tile, r.MinX, r.MinZ, r.MaxX, r.MaxZ);
             r.Tile->MarkRegionDirty(r.MinX, r.MinZ, r.MaxX + 1, r.MaxZ + 1);
             outBakedTiles.push_back(r.Coord);
-            // The tile's heights moved, so its global-quadtree node min/max are
-            // stale. Record it for an incremental patch instead of forcing a full
-            // rebuild of every resident tile (FinalizeGlobalQuadtreeUpdates).
-            tiled.DirtyQuadtreeTiles.push_back(r.Coord);
         }
         heightPassMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - tHeight0).count();
     }
 
     // GPU eval-skip: heights are stale on the CPU until the settle readback, so the splat
-    // (height-range + slope) and the quadtree/global-range bookkeeping cannot run yet — the
+    // (height-range + slope) and the global-range bookkeeping cannot run yet — the
     // readback-adopt reschedules them exactly like a CPU bake would (via MarkRegionDirty +
     // SplatResplatPending). Skip the rest of the CPU bake here.
     if (gpuEvalSkip)
@@ -4718,21 +4696,13 @@ void TerrainModifierSystem::BakeTiledRegion(TiledTerrainData& tiled, float32 hei
         RenormalizeAllTileSplats(tiled, tileSize, modifiers, globalMinH, globalMaxH, outBakedTiles);
     }
 
-    // Only a height edit moves the global range, the quadtree node min/max, or
-    // the collider heights — a paint-only edit touches none of these, so it must
-    // not bump Revision / QuadtreeDirty (which would force a needless global
-    // quadtree rebuild each paint-drag frame). Mirrors
-    // the single-terrain path, which rebuilds the quadtree only for heights.
+    // Only a height edit moves the global range or the collider heights — a
+    // paint-only edit touches neither, so it must not bump Revision.
     if (heightDirty.Any)
     {
         tiled.CachedGlobalMinH = globalMinH;
         tiled.CachedGlobalMaxH = globalMaxH;
         ++tiled.Revision;
-        // Default: patch only the edited tiles (recorded above) into the global
-        // quadtree. The full O(all-samples) rebuild is reserved for structural
-        // changes (a synchronous tile load, first bake) and the kill-switch path.
-        if (!IncrementalQuadtreeEnabled())
-            tiled.QuadtreeDirty = true;
     }
 
     // De-duplicate tiles that were both height- and splat-baked (one line per
@@ -4860,9 +4830,7 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
     // splat writers reach (the scene's global surface rules reach every tile) still holds exactly
     // that base, as the streaming job filled it with the same FillTiledBaseRegion, so its heights,
     // their cached range and their dirty state are left alone: a re-fill would rewrite the same
-    // samples and re-trigger the height upload, the normal regen and the quadtree sync for nothing.
-    // A composed arrival lists itself for the incremental quadtree patch, as a region bake lists
-    // its edited tiles: only its own nodes are rescanned, not every resident tile.
+    // samples and re-trigger the height upload and the normal regen for nothing.
     for (const TileCoord coord : bakeTiles)
     {
         auto* t = tiled.Tiles[coord].get();
@@ -4876,7 +4844,6 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
                            0, 0, kRegionUnbounded, kRegionUnbounded);
         RefreshTileHeightRange(*t);
         t->MarkFullDirty();
-        tiled.DirtyQuadtreeTiles.push_back(coord);
     }
 
     // Splat over the CURRENT global range across all resident tiles (O(tiles)

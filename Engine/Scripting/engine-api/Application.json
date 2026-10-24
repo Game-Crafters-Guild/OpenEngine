@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "name": "Application",
+  "hash": "0xb282003f3e9b92c2",
+  "constants": [],
+  "enums": [],
+  "events": [],
+  "functions": [
+    {
+      "id": "Application.RequestExit",
+      "name": "RequestExit",
+      "cpp": "GameEngine::Platform::Script::RequestExit",
+      "header": "Platform/ApplicationScriptApi.h",
+      "line": 19,
+      "doc": "Ends the game after the current frame. A standalone game runs its normal shutdown, scripts' OnDestroy included, and the process exits with exitCode; a later request replaces the code. In the editor, play stops the way the Stop button stops it, change review included; the editor stays open and the code is unused. With no application, or in the editor outside play, the call does nothing.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "exitCode",
+          "kind": "Int32",
+          "default": "0"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": []
+}

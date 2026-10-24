@@ -181,7 +181,7 @@ static GroundEntities CreateGround(GameEngine::ECS::World& world)
         auto c = world.CreateEntity();
         out.post = c;
         GameEngine::Components::Parent parent{};
-        parent.parent = e;
+        parent.Entity = e;
         world.AddComponentImmediate(c, parent);
 
         // IMPORTANT:

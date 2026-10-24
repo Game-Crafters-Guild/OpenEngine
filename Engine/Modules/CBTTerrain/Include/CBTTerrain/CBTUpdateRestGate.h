@@ -37,6 +37,10 @@ class CBTUpdateRestGate
     // previous call's restart the count; their first update is the first one counted.
     bool CanSkip(std::span<const uint8_t> inputs);
 
+    // True when the last CanSkip saw the same inputs as the call before it: the camera and every
+    // other input hold still, so the update may apply the rest rule (CBTClassifyDesc::Settle).
+    bool InputsHeld() const { return m_InputsHeld; }
+
     // An update was declared; returns the sequence number its reading carries. A forced update (a
     // full vertex re-evaluation after a re-seed, a retired heightmap or a planet change) moves
     // corners without a split or merge, so it restarts the count.
@@ -53,6 +57,7 @@ class CBTUpdateRestGate
 
     std::vector<uint8_t> m_Inputs;
     bool m_HasInputs = false;
+    bool m_InputsHeld = false;
     uint64_t m_NextSequence = 0;
     uint64_t m_FirstCountedSequence = 0;
     uint32_t m_QuietReadings = 0;

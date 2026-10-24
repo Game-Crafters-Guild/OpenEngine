@@ -349,13 +349,15 @@ struct alignas(16) ShadowDataGPU
     //                       w = metres per normalized height
     //   terrainShadowSource: x = map bindless index; y = height texture bindless index;
     //                        z = 1 when present; w = map side (texels)
+    //   terrainShadowField: x = the lit field's bindless index (0: none); y = its levels; zw = 0
     float terrainShadowGrid0[4];
     float terrainShadowGrid1[4];
     float terrainShadowGrid2[4];
     float terrainShadowGrid3[4];
     uint32_t terrainShadowSource[4];
+    uint32_t terrainShadowField[4];
 };
-static_assert(sizeof(ShadowDataGPU) == 544, "ShadowDataGPU must be 544 bytes");
+static_assert(sizeof(ShadowDataGPU) == 560, "ShadowDataGPU must be 560 bytes");
 
 class ShadowMapRenderFeature : public IRenderFeature
 {

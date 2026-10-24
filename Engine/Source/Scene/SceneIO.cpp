@@ -1849,9 +1849,9 @@ static void NormalizeHierarchySiblingOrderForSave(ECS::World& world, const std::
             continue;
         if (const auto* par = world.GetComponent<Components::Parent>(h))
         {
-            if (par->parent.IsValid() && world.IsValid(par->parent) && alive.count(par->parent.index) != 0)
+            if (par->Entity.IsValid() && world.IsValid(par->Entity) && alive.count(par->Entity.index) != 0)
             {
-                childrenByParent[par->parent.index].push_back(h);
+                childrenByParent[par->Entity.index].push_back(h);
                 continue;
             }
         }
@@ -1925,9 +1925,9 @@ static void SortEntitiesDepthFirstForSave(ECS::World& world, std::vector<ECS::En
     {
         if (const auto* par = world.GetComponent<Components::Parent>(h))
         {
-            if (par->parent.IsValid() && world.IsValid(par->parent) && alive.count(par->parent.index) != 0)
+            if (par->Entity.IsValid() && world.IsValid(par->Entity) && alive.count(par->Entity.index) != 0)
             {
-                childrenByParent[par->parent.index].push_back(h);
+                childrenByParent[par->Entity.index].push_back(h);
                 continue;
             }
         }
@@ -2583,7 +2583,7 @@ static bool InstantiateEntities(ECS::World& world,
             return false;
         }
         Components::Parent p{};
-        p.parent = it->second;
+        p.Entity = it->second;
         world.AddComponentImmediate(out.created[i], p);
     }
     return true;
@@ -2599,7 +2599,7 @@ static void ApplyOffsetToRoots(ECS::World& world, const Instantiated& inst, floa
     for (auto h : inst.created)
     {
         auto* parent = world.GetComponent<Components::Parent>(h);
-        const bool hasLocalParent = parent && parent->parent.IsValid() && createdIds.count(parent->parent.id) > 0;
+        const bool hasLocalParent = parent && parent->Entity.IsValid() && createdIds.count(parent->Entity.id) > 0;
         if (hasLocalParent)
             continue;
         auto* t = world.GetComponentForWrite<Components::Transform>(h);
@@ -2619,12 +2619,12 @@ static void ParentRootsTo(ECS::World& world, const Instantiated& inst, ECS::Enti
     for (auto h : inst.created)
     {
         auto* parent = world.GetComponent<Components::Parent>(h);
-        const bool hasLocalParent = parent && parent->parent.IsValid() && createdIds.count(parent->parent.id) > 0;
+        const bool hasLocalParent = parent && parent->Entity.IsValid() && createdIds.count(parent->Entity.id) > 0;
         if (hasLocalParent)
             continue;
 
         Components::Parent p{};
-        p.parent = parentEntity;
+        p.Entity = parentEntity;
         world.AddComponentImmediate(h, p);
     }
 }
@@ -2851,11 +2851,11 @@ static bool LoadParsedIntoWorld(ECS::World& world,
                 if (!world.IsValid(h) || h.id == rootEntity.id)
                     continue;
                 auto* parent = world.GetComponent<Components::Parent>(h);
-                const bool hasAnyParent = parent && parent->parent.IsValid();
+                const bool hasAnyParent = parent && parent->Entity.IsValid();
                 if (!hasAnyParent)
                 {
                     Components::Parent p{};
-                    p.parent = rootEntity;
+                    p.Entity = rootEntity;
                     world.AddComponentImmediate(h, p);
                 }
             }
@@ -2874,7 +2874,7 @@ static bool LoadParsedIntoWorld(ECS::World& world,
                     return false;
                 }
                 Components::Parent p{};
-                p.parent = it->second;
+                p.Entity = it->second;
                 world.AddComponentImmediate(rootEntity, p);
             }
 
@@ -3620,10 +3620,10 @@ bool SaveSceneToFile(ECS::World& world,
     const auto RuntimeOnlyParentOf = [&world](ECS::EntityHandle h) -> ECS::EntityHandle
     {
         const auto* p = world.GetComponent<Components::Parent>(h);
-        if (p && p->parent.IsValid() && world.IsValid(p->parent) &&
-            world.HasComponent<Components::RuntimeOnlyEntity>(p->parent))
+        if (p && p->Entity.IsValid() && world.IsValid(p->Entity) &&
+            world.HasComponent<Components::RuntimeOnlyEntity>(p->Entity))
         {
-            return p->parent;
+            return p->Entity;
         }
         return {};
     };
@@ -3652,8 +3652,8 @@ bool SaveSceneToFile(ECS::World& world,
                 r.sourceGuid = std::string(bp->SourceGuid());
                 if (auto* p = world.GetComponent<Components::Parent>(h))
                 {
-                    auto it = tagByEntity.find(p->parent.id);
-                    if (p->parent.IsValid() && it != tagByEntity.end())
+                    auto it = tagByEntity.find(p->Entity.id);
+                    if (p->Entity.IsValid() && it != tagByEntity.end())
                         r.parentId = it->second;
                 }
                 blueprintRoots.push_back(std::move(r));
@@ -3951,8 +3951,8 @@ bool SaveSceneToFile(ECS::World& world,
             std::string parentStr;
             if (auto* p = world.GetComponent<Components::Parent>(h))
             {
-                auto it = tagByEntity.find(p->parent.id);
-                if (p->parent.IsValid() && it != tagByEntity.end())
+                auto it = tagByEntity.find(p->Entity.id);
+                if (p->Entity.IsValid() && it != tagByEntity.end())
                     parentStr = it->second;
             }
 
@@ -4199,8 +4199,8 @@ bool SaveSceneToFile(ECS::World& world,
             std::string parentStr;
             if (auto* p = world.GetComponent<Components::Parent>(h))
             {
-                auto it = tagByEntity.find(p->parent.id);
-                if (p->parent.IsValid() && it != tagByEntity.end())
+                auto it = tagByEntity.find(p->Entity.id);
+                if (p->Entity.IsValid() && it != tagByEntity.end())
                     parentStr = it->second;
             }
 

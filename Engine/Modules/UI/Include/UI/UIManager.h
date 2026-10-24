@@ -371,6 +371,18 @@ class UIManager
     /// every row then sat under a pointer whose hover was pinned elsewhere.
     void ReleaseMouseCapture();
 
+    /// Takes the pointer for `element` until ReleaseMouseCapture() or the button's release.
+    ///
+    /// Moves, releases and cancels are routed to the element whether or not the pointer is over it, and
+    /// hover moves to it on the next update. The press path calls this for a control that claims a
+    /// press. A null element releases the capture.
+    void CaptureMouse(UIElement* element);
+
+    /// Releases the pointer only when the element with `instanceId` holds it, so one element cannot end
+    /// another's drag. The id is compared, not resolved, so a holder removed this frame can still
+    /// release; on the next update a removed holder's capture ends by itself. Returns whether it released.
+    bool ReleaseMouseCaptureHeldBy(uint64_t instanceId);
+
     const std::string& GetCaptureId() const { return m_CaptureId; }
 
     // Style/text resources for controls that need to recompute styles or

@@ -40,7 +40,11 @@ extern "C" {
 // through World::SetEntityEnabledImmediate, so both activity tags move together
 // and an entity switched back on under a parent that is on returns to queries
 // at once; queued while structural changes are deferred.
-static const uint32_t GE_ECS_ABI_VERSION_CURRENT = GE_ECS_ABI_VERSION_ENCODE(2u, 3u);
+// v2.4 (minor, appended): SetComponentBytesFromScript — a script's write of an
+// engine component, which keeps the engine's bytes of the fields a script may
+// not write and refuses a component the engine owns; GetComponentDefaults — the
+// engine's default bytes of every component, which the C# mirrors' constructors copy.
+static const uint32_t GE_ECS_ABI_VERSION_CURRENT = GE_ECS_ABI_VERSION_ENCODE(2u, 4u);
 
 // Opaque entity identifier (packed index+version in engine ECS).
 // 0 is reserved to mean "none/invalid" at the ABI boundary.
@@ -87,6 +91,8 @@ typedef GE_Result (GE_CDECL *GE_ECSABI_SetTransform_Fn)(GE_Handle world, GE_ECS_
 
 typedef GE_Result (GE_CDECL *GE_ECSABI_RegisterBlobComponent_Fn)(const char* nameUtf8, uint32_t nameLen, uint32_t sizeBytes, GE_ECS_ComponentTypeId* outTypeId);
 typedef GE_Result (GE_CDECL *GE_ECSABI_GetComponentTypeIdByName_Fn)(const char* nameUtf8, uint32_t nameLen, GE_ECS_ComponentTypeId* outTypeId);
+// The raw byte write. A component the engine owns is refused as SetComponentBytesFromScript refuses
+// it (GE_Result_InvalidArg, the same last error); every GE_Result_InvalidArg sets the last error.
 typedef GE_Result (GE_CDECL *GE_ECSABI_SetComponentBytes_Fn)(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, const uint8_t* data, uint32_t dataLen);
 typedef GE_Result (GE_CDECL *GE_ECSABI_GetComponentBytes_Fn)(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, uint8_t* outData, uint32_t outCap, uint32_t* outLen);
 typedef GE_Result (GE_CDECL *GE_ECSABI_RemoveComponent_Fn)(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId);
@@ -135,7 +141,10 @@ typedef GE_Result (GE_CDECL *GE_ECSABI_CachedQueryArchetypeHasComponent_Fn)(
     GE_ECS_ComponentTypeId componentTypeId,
     int32_t* outHas);
 
-// v1.5: Entity command buffer — raw entity creation and explicit deferred commands
+// v1.5: Entity command buffer — raw entity creation and explicit deferred commands. commandType: 1 destroy
+// the entity, 2 add a component, 3 remove a component, 4 set a component, and (v2.4) 5 a script's add or set
+// of an engine component, applied at the flush as SetComponentBytesFromScript is (the engine keeps its fields).
+// Commands 2, 4 and 5 are refused at once, with the last error, for a component the engine owns.
 typedef GE_Result (GE_CDECL *GE_ECSABI_CreateEntityRaw_Fn)(
     GE_Handle world, GE_ECS_Entity* outEntity);
 typedef GE_Result (GE_CDECL *GE_ECSABI_DeferCommand_Fn)(
@@ -187,6 +196,26 @@ typedef GE_Result (GE_CDECL *GE_ECSABI_GetComponentDisabledTypeId_Fn)(
 // Queued while structural changes are deferred and applied at the flush;
 // immediate otherwise.
 typedef GE_Result (GE_CDECL *GE_ECSABI_SetEntityEnabled_Fn)(GE_Handle world, GE_ECS_Entity entity, int32_t enabled);
+
+// v2.4: A script's write of an engine component (ComponentType<T>.Set of a C# mirror). The
+// script's bytes replace the fields a script may write; every Hidden, ReadOnly and Transient field
+// and the padding keep the engine's bytes (World::SetComponentBytesFromScriptImmediate). A
+// component the engine owns (a struct-level @ge-readonly) or engine runtime state
+// (@ge-engine-internal) is refused with GE_Result_InvalidArg, and the last error
+// (GE_GetLastScriptError) names the component and the system that writes it. An absent component
+// is added with its required components. Queued while structural changes are deferred; the merge
+// then runs at the flush, against the value at that point.
+typedef GE_Result (GE_CDECL *GE_ECSABI_SetComponentBytesFromScript_Fn)(GE_Handle world, GE_ECS_Entity entity,
+                                                                       GE_ECS_ComponentTypeId componentTypeId,
+                                                                       const uint8_t* data, uint32_t dataLen);
+
+// v2.4: The engine's default value of every component that has one: the bytes of the
+// default-constructed C++ struct (ComponentFactory::GetDefaultBytes). Writes one record per
+// component back to back, {uint64_t typeId, uint32_t size, size bytes}, unaligned, and the total
+// in outLen. With outData null or outCap below the total it writes no record, sets outLen, and
+// returns GE_Result_BufferFull for a non-null outData. Main thread only: a user-script reload
+// rewrites the defaults.
+typedef GE_Result (GE_CDECL *GE_ECSABI_GetComponentDefaults_Fn)(uint8_t* outData, uint32_t outCap, uint32_t* outLen);
 
 // v1.7: Change-signaling chunk enumeration (design M11/Q7).
 // outChunkVersion (nullable) receives the requested component column's
@@ -296,6 +325,10 @@ typedef struct GE_ECS_Interface_v2
 
     // v2.3: the entity switch (World::SetEntityEnabledImmediate)
     GE_ECSABI_SetEntityEnabled_Fn SetEntityEnabled;
+
+    // v2.4: a script's component write, and the component defaults
+    GE_ECSABI_SetComponentBytesFromScript_Fn SetComponentBytesFromScript;
+    GE_ECSABI_GetComponentDefaults_Fn        GetComponentDefaults;
 } GE_ECS_Interface_v2;
 
 // Bootstrap entry: returns a pointer to the requested ECS interface version.
@@ -352,6 +385,10 @@ GE_API GE_Result GE_CDECL GE_ECSABI_RegisterBlobComponentWithSchema(
 GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentTypeIdByName(const char* nameUtf8, uint32_t nameLen, GE_ECS_ComponentTypeId* outTypeId);
 GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentDisabledTypeId(GE_ECS_ComponentTypeId componentTypeId, GE_ECS_ComponentTypeId* outDisabledTypeId);
 GE_API GE_Result GE_CDECL GE_ECSABI_SetEntityEnabled(GE_Handle world, GE_ECS_Entity entity, int32_t enabled);
+GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytesFromScript(GE_Handle world, GE_ECS_Entity entity,
+                                                                GE_ECS_ComponentTypeId componentTypeId,
+                                                                const uint8_t* data, uint32_t dataLen);
+GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentDefaults(uint8_t* outData, uint32_t outCap, uint32_t* outLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytes(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, const uint8_t* data, uint32_t dataLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentBytes(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, uint8_t* outData, uint32_t outCap, uint32_t* outLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_RemoveComponent(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId);

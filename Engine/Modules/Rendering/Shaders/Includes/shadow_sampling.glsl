@@ -39,6 +39,20 @@ float ge_ReceiveShadows = 1.0;
 // GE_TERRAIN_SHADOW_RECEIVER_DECLARED announces it, as GE_RECEIVE_SHADOWS_DECLARED does above.
 #define GE_TERRAIN_SHADOW_RECEIVER_DECLARED 1
 float ge_ShadowReceiverOnTerrain = 0.0;
+// The terrain surface's head-on pixel footprint in meters: the distance times the view ray's angle
+// per pixel. The terrain surface sets it per fragment, inside its far-field branch (cbt_surface.glsl);
+// it stays 0 elsewhere. The terrain shadow widens it for the grazing view (terrain_shadow.glsl
+// GE_TerrainShadowFootprint), and a terrain pixel whose footprint covers more than one sample of the
+// clearance map reads the lit field at the level of its footprint (GE_TerrainShadow). 0: one read of
+// the map.
+float ge_ShadowReceiverFootprint = 0.0;
+// The cosine between the view and the terrain's mean surface at the fragment, the unit direction toward
+// the eye and the terrain's continuous draw level there, set beside the footprint; 1, 0 and 0
+// elsewhere. The lit field counts them toward what the view sees (terrain_shadow.glsl
+// GE_TerrainShadowFootprintLit).
+float ge_ShadowReceiverViewCos = 1.0;
+vec3 ge_ShadowReceiverToEye = vec3(0.0);
+float ge_ShadowReceiverDrawLevel = 0.0;
 
 #ifdef HAS_SHADOWS
 
@@ -89,6 +103,7 @@ layout(set = 0, binding = 8, std140) uniform ShadowData
     //          relative); w = metres per normalized height
     //   source: x = map bindless index; y = height texture bindless index; z = 1 when a map is
     //           published for this view this frame; w = map side (texels)
+    //   field: x = the lit field's bindless index (0: none, TerrainShadowMap FieldLit); y = its levels
     // Order matters more than naming: std140 lays this block out by position, matching
     // ShadowDataGPU member for member. A mismatch here is silent garbage, not a compile error.
     vec4 ge_terrainShadowGrid0;
@@ -96,6 +111,7 @@ layout(set = 0, binding = 8, std140) uniform ShadowData
     vec4 ge_terrainShadowGrid2;
     vec4 ge_terrainShadowGrid3;
     uvec4 ge_terrainShadowSource;
+    uvec4 ge_terrainShadowField;
 };
 
 layout(set = 0, binding = 9) uniform sampler2DArrayShadow ge_shadowMapArray;
@@ -157,6 +173,16 @@ float GE_TerrainShadowReadGround(float x, float z)
     return textureLod(GE_BTEX(ge_terrainShadowSource.y, GE_TS_CLAMP), (terrainUV * (dim - 1.0) + 0.5) / dim,
                       0.0).r * ge_terrainShadowGrid3.w;
 }
+#define GE_TERRAIN_SHADOW_READS_FIELD 1
+vec2 GE_TerrainShadowReadField(vec2 gridCoord, float level)
+{
+    return textureLod(GE_BTEX(ge_terrainShadowField.x, GE_TS_CLAMP), (gridCoord + 0.5) / float(ge_terrainShadowSource.w),
+                      level).rg;
+}
+float GE_TerrainShadowFieldLevels()
+{
+    return ge_terrainShadowField.x != 0u ? float(ge_terrainShadowField.y) : 0.0;
+}
 #include "terrain_shadow.glsl"
 
 // The share of the sun the terrain lets reach the receiver at posRel (render-origin relative): 1 lit,
@@ -184,8 +210,11 @@ float GE_TerrainShadow(vec3 posRel, float maxPenumbraRadius)
     g.VMin = ge_terrainShadowGrid2.w;
     g.SamplesU = ge_terrainShadowGrid3.x;
     g.SamplesV = ge_terrainShadowGrid3.y;
-    return GE_TerrainShadowLit(g, posRel.x, posRel.y - ge_terrainShadowGrid3.z, posRel.z,
-                               ge_ShadowReceiverOnTerrain, tanHalfAngle, maxPenumbraRadius);
+    // The terrain's own surface reads the lit field over its pixel's footprint; other receivers read the map.
+    return GE_TerrainShadowFootprintLit(g, posRel.x, posRel.y - ge_terrainShadowGrid3.z, posRel.z,
+                                        ge_ShadowReceiverOnTerrain, tanHalfAngle, maxPenumbraRadius,
+                                        ge_ShadowReceiverOnTerrain * ge_ShadowReceiverFootprint, ge_ShadowReceiverToEye,
+                                        ge_ShadowReceiverViewCos, ge_ShadowReceiverDrawLevel);
 }
 #else
 float GE_TerrainShadow(vec3 posRel, float maxPenumbraRadius)

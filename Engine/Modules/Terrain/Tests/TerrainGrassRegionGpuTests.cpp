@@ -117,6 +117,7 @@ protected:
         auto command = Device->CreateCommandList(IDevice::QueueType::Graphics);
         command->Begin();
         Feature->FlushPendingUploads(command.get());
+        command->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::ShaderResource, ResourceState::CopySource));
         command->CopyTextureSubresourceToBuffer(texture, 0, 0, readback, width, height, 0, 0, 0, 0);
         command->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::CopySource, ResourceState::ShaderResource));
         command->End();
@@ -596,6 +597,7 @@ protected:
         auto command = Device->CreateCommandList(IDevice::QueueType::Graphics);
         command->Begin();
         Feature->FlushPendingUploads(command.get());
+        command->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::ShaderResource, ResourceState::CopySource));
         command->CopyTextureSubresourceToBuffer(texture, 0, 0, readback, dim, dim, 0, 0, 0, 0);
         command->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::CopySource, ResourceState::ShaderResource));
         command->End();

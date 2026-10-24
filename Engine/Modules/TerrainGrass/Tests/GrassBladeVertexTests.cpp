@@ -304,7 +304,9 @@ TEST(GrassBladeVertex, TheWidthIsParallelToTheTaperStartThenTapersToAPoint)
         const float t = static_cast<float>(step) / 100.0f;
         const float w = Shader::GrassBladeWidthProfile(kTaperStart, t);
         if (t <= kTaperStart)
+        {
             EXPECT_EQ(w, 1.0f) << "t=" << t;
+        }
         EXPECT_LE(w, previous) << "the width grows again at t=" << t;
         previous = w;
     }

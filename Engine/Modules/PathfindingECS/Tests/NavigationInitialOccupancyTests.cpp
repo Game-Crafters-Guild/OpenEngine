@@ -6,7 +6,7 @@
 #include "Pathfinding/NavigationWorld.h"
 #include "NavigationTestSurfaces.h"
 #include "Pathfinding/PathBuffer.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"

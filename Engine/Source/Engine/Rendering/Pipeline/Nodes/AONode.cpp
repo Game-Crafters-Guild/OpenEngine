@@ -39,9 +39,9 @@ struct Binding
     Access Usage;
     uint32_t Mip = ~0u;
 };
-// The temporal pass binds the most: current, guide, depth, history, history
-// surface and the two outputs.
-constexpr size_t kMaxBindings = 7;
+// The temporal pass binds the most: current, raw sweep, guide, depth, history,
+// history surface and the two outputs.
+constexpr size_t kMaxBindings = 8;
 struct PassBindings
 {
     std::array<Binding, kMaxBindings> Items{};
@@ -296,6 +296,7 @@ void AONode::DeclareForView(ViewDeclare& d)
                         else if (member.Name == "steps") pcw.Add(member.Name, kGtaoSweepSteps);
                         else if (member.Name == "noiseFrame") pcw.Add(member.Name, m_Temporal ? static_cast<uint32_t>(frame & 7u) : 0u);
                         else if (member.Name == "historyValid") pcw.Add(member.Name, historyValid ? 1u : 0u);
+                        else if (member.Name == "frameIndex") pcw.Add(member.Name, static_cast<uint32_t>(frame));
                         else if (!settings.TryWriteField(member.Name, pcw)) return;
                     }
                     pcw.Flush(cl);
@@ -318,7 +319,7 @@ void AONode::DeclareForView(ViewDeclare& d)
     addPass(Blur, "GTAOBlur", {{"uAOIn", rawAO, Access::Sampled}, {"uDepth", depth, Access::Sampled}, {"uGuide", guide, Access::Sampled}, {"uAOOut", denoised, Access::StorageWrite}}, aoW, aoH);
     if (m_Temporal)
     {
-        addPass(Temporal, "GTAOTemporal", {{"uCurrent", denoised, Access::Sampled}, {"uGuide", guide, Access::Sampled}, {"uDepth", depth, Access::Sampled}, {"uHistory", historyRead, Access::Sampled}, {"uHistorySurface", surfaceRead, Access::Sampled}, {"uAOOut", historyWrite, Access::StorageWrite}, {"uSurfaceOut", surfaceWrite, Access::StorageWrite}}, aoW, aoH,
+        addPass(Temporal, "GTAOTemporal", {{"uCurrent", denoised, Access::Sampled}, {"uSweep", rawAO, Access::Sampled}, {"uGuide", guide, Access::Sampled}, {"uDepth", depth, Access::Sampled}, {"uHistory", historyRead, Access::Sampled}, {"uHistorySurface", surfaceRead, Access::Sampled}, {"uAOOut", historyWrite, Access::StorageWrite}, {"uSurfaceOut", surfaceWrite, Access::StorageWrite}}, aoW, aoH,
                 /*commitsHistory=*/true);
         d.Frame.MarkPersistentTextureInitialized(historyWrite);
         d.Frame.MarkPersistentTextureInitialized(surfaceWrite);

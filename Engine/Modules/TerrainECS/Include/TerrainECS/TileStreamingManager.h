@@ -102,11 +102,6 @@ struct TileGenerationResult
 
     float32 MinHeight = 0.0f;
     float32 MaxHeight = 0.0f;
-
-    // Pre-computed per-node min/max for the global quadtree finest level.
-    // Row-major: QuadtreeNodes[nz * tileFinestNodes + nx].
-    std::vector<NodeMinMax> QuadtreeNodes;
-    uint32 QuadtreeNodesPerAxis = 0;
 };
 
 // Manages async tile lifecycle for every tiled terrain. All CPU-intensive work
@@ -132,8 +127,8 @@ public:
     // (budget-limited), detects teleportation, and unloads distant tiles.
     // viewDirection is the primary camera's forward vector (XZ only, for
     // frustum-aware priority — tiles in front of the camera load first).
-    // Returns the tiles this call integrated (for the incremental quadtree update); the
-    // reference stays valid until the next Update or Forget for the same terrain.
+    // Returns the tiles this call integrated; the reference stays valid until the next
+    // Update or Forget for the same terrain.
     const std::vector<TileCoord>& Update(TiledTerrainHandle tiledHandle,
                                          TiledTerrainData& tiled,
                                          TerrainService& service,
@@ -189,7 +184,7 @@ private:
         std::unordered_map<TileCoord, TileTracker, TileCoordHash> Trackers;
         std::shared_ptr<CompletedQueue> Completed = std::make_shared<CompletedQueue>();
 
-        // Tiles integrated by the latest Update (for incremental quadtree updates).
+        // Tiles integrated by the latest Update.
         std::vector<TileCoord> IntegratedThisFrame;
 
         // Teleportation state.

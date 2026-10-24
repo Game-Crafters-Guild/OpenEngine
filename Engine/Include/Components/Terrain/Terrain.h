@@ -62,6 +62,7 @@ inline constexpr float32 kDefaultTerrainTargetPixelError = 11.0f;
 // data (heightfield, quadtree, GPU textures, the CBT bisector pool) is owned by
 // TerrainService / the CBT render feature; this component stores only
 // lightweight configuration and runtime handles into those services.
+// @ge-no-add  created by the terrain tools, which build its data with it
 struct Terrain
 {
     // ---- Base source ----

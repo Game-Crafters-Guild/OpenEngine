@@ -10,8 +10,8 @@ namespace GameEngine::ComponentScanner
 // Writes the component model as JSON, the machine-readable twin of components.d.ts, which also
 // lists the engine-internal components, marked "engineInternal": true:
 //   { "components": [ { "name", "engineInternal"?, "fields": [ { "name", "tsName", "kind", "enum"?, "count"?,
-//                                              "readonly"?, "tooltip"?, "min"?, "max"? } ] } ],
-//     "enums": [ { "name", "values": [ { "name", "value" } ] } ],
+//                                              "readonly"?, "tooltip"?, "label"?, "min"?, "max"? } ] } ],
+//     "enums": [ { "name", "values": [ { "name", "value", "label"? } ] } ],
 //     "omitted": [ { "component", "field", "type", "reason" } ] }
 // "name" is the reflected field name, "tsName" the components.d.ts one. "kind" is the
 // FieldTypeId name the registration gets (an enum field reports its underlying integer kind

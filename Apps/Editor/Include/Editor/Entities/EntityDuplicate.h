@@ -100,14 +100,14 @@ inline EntityDuplicateResult DuplicateEntitySubtreeRoots(ECS::World& world,
         for (;;)
         {
             const auto* p = world.GetComponent<Components::Parent>(walk);
-            if (!p || !p->parent.IsValid() || !world.IsValid(p->parent))
+            if (!p || !p->Entity.IsValid() || !world.IsValid(p->Entity))
                 break;
-            if (selectedSet.count(p->parent.index))
+            if (selectedSet.count(p->Entity.index))
             {
                 ancestorSelected = true;
                 break;
             }
-            walk = p->parent;
+            walk = p->Entity;
         }
         if (!ancestorSelected)
             topRoots.push_back(root);
@@ -123,9 +123,9 @@ inline EntityDuplicateResult DuplicateEntitySubtreeRoots(ECS::World& world,
     world.Query<ECS::Read<Components::Parent>>().IncludeDisabled().Each(
         [&](ECS::EntityHandle e, const Components::Parent& p)
         {
-            if (e.IsValid() && world.IsValid(e) && p.parent.IsValid() && world.IsValid(p.parent) &&
+            if (e.IsValid() && world.IsValid(e) && p.Entity.IsValid() && world.IsValid(p.Entity) &&
                 !world.HasComponent<Components::RuntimeOnlyEntity>(e))
-                childMap[p.parent.index].push_back(e);
+                childMap[p.Entity.index].push_back(e);
         });
 
     std::unordered_set<std::string> usedNames;
@@ -181,7 +181,7 @@ inline EntityDuplicateResult DuplicateEntitySubtreeRoots(ECS::World& world,
             if (newParent.IsValid())
             {
                 Components::Parent parentComp{};
-                parentComp.parent = newParent;
+                parentComp.Entity = newParent;
                 world.AddComponentImmediate(clonedH, parentComp);
             }
 

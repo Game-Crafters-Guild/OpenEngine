@@ -67,6 +67,15 @@ std::string StripLineComments(const std::string& source)
     return out;
 }
 
+// The number of times `token` appears in `source`.
+std::size_t CountOccurrences(const std::string& source, const std::string& token)
+{
+    std::size_t count = 0;
+    for (std::size_t pos = source.find(token); pos != std::string::npos; pos = source.find(token, pos + token.size()))
+        ++count;
+    return count;
+}
+
 std::string RepoShaderSource(const char* relativePath)
 {
 #ifndef GE_RENDERER_REPO_ROOT
@@ -145,7 +154,7 @@ TEST(RTShadowMaskShaderContract, MaskFadesOverTheCascadeBand)
     const std::string src = RTShadowMaskSource();
     ASSERT_FALSE(src.empty()) << "rt_shadow_mask.comp not found via GE_RENDERER_REPO_ROOT";
     EXPECT_NE(src.find("#include \"Includes/shadow_distance_fade.glsl\""), std::string::npos);
-    const auto fade = src.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(posWS), posVS.z, uLightDirWS.w, uTemporal.z)");
+    const auto fade = src.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(uv, posVS), posVS.z, uLightDirWS.w, uTemporal.z)");
     EXPECT_NE(fade, std::string::npos) << "the traced visibility must fade before MaxShadowDistance";
     // Applied to the stored result, after every ray has been counted.
     const auto lastRay = src.rfind("litSum +=");
@@ -153,27 +162,77 @@ TEST(RTShadowMaskShaderContract, MaskFadesOverTheCascadeBand)
     EXPECT_LT(lastRay, fade);
 }
 
-// The terrain is not in the TLAS, so both directional-shadow modes take its shadow from one map
-// through one lookup (terrain_shadow.glsl GE_TerrainShadowLit): the raster term (GE_SampleShadow,
-// inside and beyond the cascades' range) and the ray-traced mask (every pixel, and beyond the range
-// where no ray is traced). A caller that marched or sampled on its own would let the modes disagree.
+// The terrain is not in the TLAS, so both directional-shadow modes take its shadow from one map and
+// one lit field through one function (terrain_shadow.glsl GE_TerrainShadowFootprintLit): the raster
+// term (GE_SampleShadow, inside and beyond the cascades' range) and the ray-traced mask (every pixel,
+// and beyond the range where no ray is traced). The function reads the field over a pixel's footprint,
+// counted toward what the view sees, and the map's own lookup (GE_TerrainShadowLit) where the field
+// does not answer alone. A caller that marched or sampled on its own would let the modes disagree.
 TEST(RTShadowMaskShaderContract, BothShadowModesReadTheTerrainsClearanceMap)
 {
     const std::string mask = RTShadowMaskSource();
     const std::string raster = RepoShaderSource("Engine/Modules/Rendering/Shaders/Includes/shadow_sampling.glsl");
+    const std::string shared = RepoShaderSource("Engine/Modules/Rendering/Shaders/Includes/terrain_shadow.glsl");
     ASSERT_FALSE(mask.empty());
     ASSERT_FALSE(raster.empty()) << "shadow_sampling.glsl not found via GE_RENDERER_REPO_ROOT";
+    ASSERT_FALSE(shared.empty()) << "terrain_shadow.glsl not found via GE_RENDERER_REPO_ROOT";
 
+    EXPECT_NE(mask.find("#define GE_TERRAIN_SHADOW_READS_FIELD 1\n"), std::string::npos);
     EXPECT_NE(mask.find("#include \"Includes/terrain_shadow.glsl\""), std::string::npos);
-    EXPECT_NE(mask.find("GE_TerrainShadowLit(g, p.x, p.y - uTerrainGrid3.z, p.z, 0.0,"), std::string::npos)
-        << "the mask reads the shared lookup, every receiver at its own height";
-    EXPECT_NE(mask.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(posWS),"), std::string::npos)
+    EXPECT_NE(mask.find("textureLod(uTerrainField, (gridCoord + 0.5) / float(uTerrainSource.y), level).rg;"),
+              std::string::npos)
+        << "the mask reads the lit field the raster path reads";
+    EXPECT_NE(mask.find("return GE_TerrainShadowFootprintLit(g, p.x, y, p.z, 0.0,"), std::string::npos)
+        << "the mask reads the shared function, every receiver at its own height";
+    EXPECT_NE(mask.find("float drawLevel = log2(max(eyeDistance * uTerrainView.x, 1.0e-30));"), std::string::npos)
+        << "the mask takes the draw level from the terrain's level rule, as the raster path does";
+    EXPECT_NE(mask.find("float headOn = uTerrainView.x > 0.0 ? eyeDistance * pixelAngle : 0.0;"), std::string::npos)
+        << "the mask measures the head-on footprint, as the terrain surface does";
+    EXPECT_NE(mask.find("float footprint = GE_TerrainShadowFootprint(headOn, cosView, drawLevel);"), std::string::npos)
+        << "the mask's test for a receiver near the ground widens by the shared rule";
+    EXPECT_NE(mask.find("nearGround * headOn, toEye, cosView, drawLevel);"), std::string::npos)
+        << "the mask hands the shared function the head-on footprint, which it widens by the shared rule";
+    EXPECT_EQ(mask.find("kGE_TerrainShadowMinView"), std::string::npos) << "the mask widens no footprint of its own";
+    EXPECT_EQ(CountOccurrences(mask, "headOn"), 3u)
+        << "the mask sets the head-on footprint once and hands it on unchanged";
+    EXPECT_EQ(CountOccurrences(mask, "cosView"), 3u) << "the mask's view cosine reaches only the shared rule";
+    EXPECT_NE(mask.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(uv, posVS),"), std::string::npos)
         << "a traced pixel is lit only where the meshes and the terrain both let the sun through";
-    EXPECT_NE(mask.find("vec4(TerrainLit((uInvView * vec4(posVS, 1.0)).xyz))"), std::string::npos)
+    EXPECT_NE(mask.find("vec4(TerrainLit(uv, posVS))"), std::string::npos)
         << "beyond the max shadow distance the terrain alone decides, as in the raster path";
+    EXPECT_EQ(mask.find("GE_TerrainShadowLit("), std::string::npos) << "the mask reads the map only through the function";
 
+    EXPECT_NE(raster.find("#define GE_TERRAIN_SHADOW_READS_FIELD 1\n"), std::string::npos);
     EXPECT_NE(raster.find("#include \"terrain_shadow.glsl\""), std::string::npos);
-    EXPECT_NE(raster.find("return GE_TerrainShadowLit(g,"), std::string::npos);
+    EXPECT_NE(raster.find("return GE_TerrainShadowFootprintLit(g, posRel.x, posRel.y - ge_terrainShadowGrid3.z, posRel.z,"),
+              std::string::npos);
+    EXPECT_NE(raster.find("ge_ShadowReceiverOnTerrain * ge_ShadowReceiverFootprint, ge_ShadowReceiverToEye,"),
+              std::string::npos)
+        << "the terrain's own surface reads the field over its footprint";
+    EXPECT_NE(raster.find("ge_ShadowReceiverViewCos, ge_ShadowReceiverDrawLevel);"), std::string::npos);
+    EXPECT_EQ(raster.find("GE_TerrainShadowLit("), std::string::npos)
+        << "the raster term reads the map only through the function";
+
+    EXPECT_NE(shared.find("fieldWeight = smoothstep(1.0, 2.0, samplesPerPixel);"), std::string::npos)
+        << "a pixel that covers more than one map sample reads the lit field";
+    EXPECT_NE(shared.find("float samplesPerPixel = GE_TerrainShadowFootprint(headOn, viewCos, drawLevel) / g.Texel;"),
+              std::string::npos)
+        << "both modes' footprints widen by one rule";
+    EXPECT_NE(shared.find("field = GE_TerrainShadowFieldShown(g, GE_TerrainShadowReadField(c, level), samplesPerPixel, "
+                          "toEye.xz,\n"),
+              std::string::npos)
+        << "the lit field is shown through the arithmetic the shim tests";
+    EXPECT_NE(shared.find("    float seen = GE_TerrainShadowSeenShare(read.x, local, tanView, g.TanElevation, sunSide);\n"
+                          "    return seen >= read.x ? seen : mix(read.x, seen, GE_TerrainShadowUndrawnRelief(drawLevel));"),
+              std::string::npos)
+        << "the lit field shows what the view sees of the ground it covers; lit ground is taken away only for the relief "
+           "the draw no longer shows";
+    EXPECT_NE(shared.find("if (fieldWeight >= 1.0)\n        return field;"), std::string::npos)
+        << "only a pixel the field answers alone skips the map's read";
+    EXPECT_NE(shared.find("float lit = GE_TerrainShadowLit(g, x, y, z, onGround, tanHalfAngle, maxPenumbraRadius);"),
+              std::string::npos);
+    EXPECT_NE(shared.find("return fieldWeight > 0.0 ? mix(lit, field, fieldWeight) : lit;"), std::string::npos)
+        << "the lit field fades in over the map's own read";
     EXPECT_NE(raster.find("float farTerrain = GE_TerrainShadow(posWS, maxPenumbraWorld);"), std::string::npos)
         << "beyond the cascades the terrain's term still reaches";
     EXPECT_NE(raster.find("GE_JoinTerrainAfterFade(shadow, GE_TerrainShadow(posWS, maxPenumbraWorld),"), std::string::npos)
@@ -197,9 +256,9 @@ TEST(RTShadowMaskShaderContract, BothModesFadeTheRangedTermAndNotTheTerrainTerm)
 
     // The ray-traced mask: the rays' visibility is the ranged term, TerrainLit the terrain term.
     const auto maskJoin =
-        mask.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(posWS), posVS.z, uLightDirWS.w, uTemporal.z)");
+        mask.find("GE_JoinTerrainAfterFade(visibility, TerrainLit(uv, posVS), posVS.z, uLightDirWS.w, uTemporal.z)");
     EXPECT_NE(maskJoin, std::string::npos) << "the mask joins the terrain term after the fade";
-    EXPECT_NE(mask.find("vec4(TerrainLit((uInvView * vec4(posVS, 1.0)).xyz))"), std::string::npos)
+    EXPECT_NE(mask.find("vec4(TerrainLit(uv, posVS))"), std::string::npos)
         << "past the distance the mask stores the terrain term alone, unfaded";
     EXPECT_EQ(mask.find("GE_ShadowDistanceFade("), std::string::npos)
         << "the mask fades only through the join, so no term is faded on its own";
@@ -235,15 +294,14 @@ TEST(RTShadowMaskShaderContract, BothShadowModesSoftenTheTerrainsEdgeAsTheirMesh
 
     EXPECT_NE(mask.find("(gridCoord + 0.5) / float(uTerrainSource.y), 0.0).rg;"), std::string::npos)
         << "the mask reads the clearance and the occluder distance in one tap";
-    EXPECT_NE(mask.find("p.z, 0.0, uRayParams.w,\n                               kGE_TerrainShadowUncappedPenumbra);"),
-              std::string::npos)
+    EXPECT_NE(mask.find("p.z, 0.0, uRayParams.w, kGE_TerrainShadowUncappedPenumbra,"), std::string::npos)
         << "the mask softens the terrain's edge with the cone's tangent, unbounded like the cone";
 
     EXPECT_NE(raster.find("(gridCoord + 0.5) / side, 0.0).rg;"), std::string::npos)
         << "the raster term reads the clearance and the occluder distance in one tap";
     EXPECT_NE(raster.find("(quality == 3 || quality == 5) ? ge_shadowPcssCascades[0].w : 0.0;"), std::string::npos)
         << "the raster term takes the light's tangent under PCSS and DPCF";
-    EXPECT_NE(raster.find("ge_ShadowReceiverOnTerrain, tanHalfAngle, maxPenumbraRadius);"), std::string::npos);
+    EXPECT_NE(raster.find("ge_ShadowReceiverOnTerrain, tanHalfAngle, maxPenumbraRadius,"), std::string::npos);
     EXPECT_NE(raster.find("float maxPenumbraWorld = ge_shadowPcss.z > 0.0 ? ge_shadowPcss.z : kPcssMaxPenumbraWorldAuto;"),
               std::string::npos)
         << "the terrain's radius bound is the PCSS kernel's (Max Penumbra, 0 = auto)";

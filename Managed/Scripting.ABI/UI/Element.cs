@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 
 namespace GameEngine.Scripting
 {
@@ -145,8 +146,65 @@ namespace GameEngine.Scripting
                 => GE_UIElement_SetClass(InstanceId, className ?? string.Empty, 0) == 0;
 
             /// <summary>Set a bar/fill element's width as a percentage (0..100).</summary>
-            public bool SetWidthPercent(float pct)
-                => GE_UIElement_SetWidthPercent(InstanceId, pct) == 0;
+            public bool SetWidthPercent(float percent)
+                => GE_UIElement_SetWidthPercent(InstanceId, percent) == 0;
+
+            /// <summary>Order this element among its siblings: a higher value is drawn in front.</summary>
+            /// <remarks>
+            /// The element in front is also the one the pointer finds. Siblings with equal values keep their order
+            /// in the document. The value replaces the stylesheet's <c>z-index</c> for this element and shows from
+            /// the next frame. False if the element no longer exists.
+            /// </remarks>
+            public bool SetZIndex(int zIndex)
+                => GE_UIElement_SetZIndex(InstanceId, zIndex) == 0;
+
+            /// <summary>Move this element by an offset in pixels (its CSS <c>left</c> and <c>top</c>).</summary>
+            /// <remarks>
+            /// An element with <c>position: absolute</c> is placed with its top-left corner <paramref name="offset"/>
+            /// pixels from the inside of its parent's border; the parent's padding does not move it. Any other
+            /// element moves by <paramref name="offset"/> from where layout places it. The pixels are the parent's:
+            /// under a parent scaled to twice its size the element moves twice as far on screen. The value
+            /// survives a .uxml reload, and wins over a <c>left</c> or <c>top</c> in the element's own <c>style</c>
+            /// attribute. False if the element no longer exists.
+            /// </remarks>
+            public bool SetOffset(Vector2 offset)
+                => GE_UIElement_SetOffset(InstanceId, offset.X, offset.Y) == 0;
+
+            /// <summary>The element's box in window space, in UI pixels.</summary>
+            /// <remarks>
+            /// The box from the last layout: an element created or restyled this frame reports the box it had
+            /// before. A parent that clips its children (<c>overflow: hidden</c>) does not shrink it. A pointer
+            /// event's X and Y are in the element's layout space, which is window space only when no transform
+            /// applies to the element or its ancestors. False if the element no longer exists.
+            /// </remarks>
+            public bool TryGetRect(out Rect rect)
+            {
+                if (GE_UIElement_GetRect(InstanceId, out var x, out var y, out var width, out var height) != 0)
+                {
+                    rect = default;
+                    return false;
+                }
+
+                rect = new Rect(x, y, width, height);
+                return true;
+            }
+
+            /// <summary>
+            /// Take the pointer for this element until <see cref="ReleasePointer"/> or the button's release.
+            /// </summary>
+            /// <remarks>
+            /// While it is held, every move, release and cancel comes to this element, whether or not the pointer
+            /// is over it, so a drag goes on when the pointer moves faster than the element. A capture by another
+            /// element replaces this one. False if the element no longer exists.
+            /// </remarks>
+            public bool CapturePointer()
+                => GE_UIElement_CapturePointer(InstanceId) == 0;
+
+            /// <summary>Let the pointer go, ending the capture begun by <see cref="CapturePointer"/>.</summary>
+            /// <remarks>Only the element that holds the pointer can release it; from any other element this
+            /// does nothing and returns false, so it never ends another element's drag.</remarks>
+            public bool ReleasePointer()
+                => GE_UIElement_ReleasePointer(InstanceId) == 0;
 
             /// <summary>
             /// The pointer entered this element (the hover transition, not every move).

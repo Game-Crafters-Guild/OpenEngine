@@ -21,7 +21,8 @@ struct FieldRange
 // RAW (un-stripped) source. The comment stripper removes comments before the structural
 // parse, so these markers — which live inside "//" line comments — would otherwise be
 // invisible. They are harvested up front and associated with structs (NoAdd, EditorOnly)
-// or individual fields (ReadOnly / Hidden / Tooltip / Range) afterwards, by line number.
+// or individual fields (ReadOnly / Hidden / Tooltip / Label / Range) and enumerators (Label)
+// afterwards, by line number.
 struct MarkerLines
 {
     // Struct-level: "// @ge-no-add" -> register the component but keep it out of the
@@ -36,6 +37,14 @@ struct MarkerLines
     // component has no C# mirror (ComponentMirror.h).
     std::set<int> EngineInternal;
 
+    // Struct-level: "// @ge-tag" -> a struct with no fields is a component (a tag) and is
+    // registered; a struct with no fields and no marker is not a component.
+    std::set<int> Tag;
+
+    // The text after "@ge-readonly" or "@ge-engine-internal" on its line: on a struct, the system
+    // that writes the component, which a refused script write names.
+    std::map<int, std::string> Writers;
+
     // Field-level: "// @ge-readonly" / "// @ge-hidden" -> FieldFlags::ReadOnly / Hidden. On a
     // struct, "// @ge-readonly" makes the component engine-owned: its C# mirror is read-only.
     std::set<int> ReadOnly;
@@ -43,6 +52,10 @@ struct MarkerLines
 
     // Field-level: "// @ge-tooltip Text" or "// @ge-tooltip \"Text\"" -> FieldInfo::Tooltip.
     std::map<int, std::string> Tooltips;
+
+    // Field- or enumerator-level: "// @ge-label Text" or "// @ge-label \"Text\"" -> the words the
+    // editor shows for the field's row (FieldInfo::Label) or for the enumerator (EnumNameValue::Label).
+    std::map<int, std::string> Labels;
 
     // Field-level: "// @ge-range Min Max" or "// @ge-range Min" (open maximum) -> inspector
     // bounds via GE_REFLECT_FIELD_RANGE. Only the float row consumes them.

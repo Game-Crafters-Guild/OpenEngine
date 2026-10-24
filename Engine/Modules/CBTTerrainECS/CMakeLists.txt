@@ -13,6 +13,7 @@ add_library(CBTTerrainECS OBJECT
     Source/CBTTerrainMaterial.cpp
     Source/CBTRenderNode.cpp
     Source/TerrainShadowBake.cpp
+    Source/TerrainShadowFieldLit.cpp
     Source/CBTTreeSeed.cpp
     Source/CBTValidationReadback.cpp
     Source/TerrainProvisioning.cpp

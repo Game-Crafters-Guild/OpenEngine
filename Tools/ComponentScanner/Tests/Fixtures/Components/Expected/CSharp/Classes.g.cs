@@ -55,4 +55,20 @@ namespace GameEngine.Scripting
         [FieldOffset(28)]
         private readonly uint m_Cookie;
     }
+
+    /// <summary>
+    /// Marks a probe the player has picked up.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = 1)]
+    [BuiltInComponent("GameEngine::Components::FixturePickedUp")]
+    public partial struct FixturePickedUp : IComponent
+    {
+        /// <summary>
+        /// Creates the component with the engine's defaults.
+        /// </summary>
+        public FixturePickedUp()
+        {
+            this = global::GameEngine.ECS.ComponentType<FixturePickedUp>.Default;
+        }
+    }
 }

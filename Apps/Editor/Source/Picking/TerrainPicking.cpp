@@ -14,6 +14,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainService.h"
 
 namespace GameEngine::Editor::Picking
@@ -73,6 +74,157 @@ void ResolveBakedHeightRange(const TerrainECS::TerrainData* data,
                                 outMinNorm, outMaxNorm);
 }
 
+// One planar terrain's height as the pick reads it: its CPU height pages when it pages, its resident
+// tiles when it is tiled, its single heightfield otherwise. World meters.
+struct PlanarPickSurface
+{
+    const TerrainECS::TerrainData* Single = nullptr;
+    const TerrainECS::TiledTerrainData* Tiled = nullptr;
+    TerrainECS::SurfaceHeightQuery Pages;
+    float32 OriginX = 0.0f;
+    float32 OriginZ = 0.0f;
+    float32 OriginY = 0.0f;
+    float32 SizeX = 0.0f;
+    float32 SizeZ = 0.0f;
+    float32 HeightScale = 0.0f;
+};
+
+// The nearest planar terrain hit so far.
+struct PlanarPickBest
+{
+    float32 Distance = 0.0f;
+    Vector3 Position{};
+    Vector3 Normal{0.0f, 1.0f, 0.0f};
+    ECS::EntityHandle Entity{};
+    bool Hit = false;
+};
+
+// World height of `surface` at (worldX, worldZ). A paged terrain answers from its finest CPU page, then
+// from its resident tile (exact where no CPU window reaches), then from a coarser pinned page, so a pick
+// is never coarser than the data the editor holds there and still lands where no tile is resident.
+// False outside the footprint, and on a tiled terrain that does not page where its tile is not resident.
+bool SamplePickHeight(const PlanarPickSurface& surface, float32 worldX, float32 worldZ, float32& outY)
+{
+    const Vector3 point(worldX, 0.0f, worldZ);
+    TerrainECS::SurfaceHeightSample sample;
+    if (surface.Pages.IsValid() &&
+        surface.Pages.SampleHeight(point, TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
+    {
+        outY = sample.Height;
+        return true;
+    }
+    if (surface.Tiled)
+    {
+        float32 normalized = 0.0f;
+        if (TerrainECS::SampleTiledHeightNormalized(*surface.Tiled, worldX, worldZ, normalized))
+        {
+            outY = surface.OriginY + normalized * surface.HeightScale;
+            return true;
+        }
+        if (!surface.Pages.IsValid() ||
+            !surface.Pages.SampleHeight(point, TerrainECS::SurfaceHeightPolicy::AcceptCoarse, sample))
+            return false;
+        outY = sample.Height;
+        return true;
+    }
+    const float32 u = (worldX - surface.OriginX) / surface.SizeX;
+    const float32 v = (worldZ - surface.OriginZ) / surface.SizeZ;
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+        return false;
+    outY = surface.OriginY + surface.Single->Heightfield.SampleBilinear(u, v) * surface.HeightScale;
+    return true;
+}
+
+// Central-difference normal of `surface` at (worldX, worldZ), stepped at the terrain's own sample spacing
+// (`samplesPerMeter`). +Y wherever a tap has no height.
+Vector3 PickSurfaceNormal(const PlanarPickSurface& surface, float32 samplesPerMeter, float32 worldX, float32 worldZ)
+{
+    const float32 step = 1.0f / std::clamp(samplesPerMeter, 0.05f, 20.0f);
+    float32 heightPlusX = 0.0f, heightMinusX = 0.0f, heightPlusZ = 0.0f, heightMinusZ = 0.0f;
+    if (!SamplePickHeight(surface, worldX + step, worldZ, heightPlusX) ||
+        !SamplePickHeight(surface, worldX - step, worldZ, heightMinusX) ||
+        !SamplePickHeight(surface, worldX, worldZ + step, heightPlusZ) ||
+        !SamplePickHeight(surface, worldX, worldZ - step, heightMinusZ))
+        return Vector3(0.0f, 1.0f, 0.0f);
+    // Heightfield y = h(x, z) has normal along (-dh/dx, 1, -dh/dz).
+    const float32 inverseSpan = 1.0f / (2.0f * step);
+    const Vector3 normal((heightMinusX - heightPlusX) * inverseSpan, 1.0f, (heightMinusZ - heightPlusZ) * inverseSpan);
+    return normal * (1.0f / std::sqrt(Vector3::Dot(normal, normal)));
+}
+
+// Marches `ray` against one planar terrain and keeps the hit in `best` when it is nearer.
+void PickPlanarTerrain(TerrainECS::TerrainService& service, const Mathematics::Ray3D& ray, ECS::EntityHandle entity,
+                       const Components::Terrain& terrain, const Components::WorldTransform& worldTransform,
+                       PlanarPickBest& best)
+{
+    if (terrain.Domain != Components::TerrainDomain::Planar)
+        return;
+
+    // A tiled terrain has no single TerrainData (extraction zeroes its handle): it is read through
+    // its pages and its resident tiles.
+    PlanarPickSurface surface;
+    surface.Single =
+        service.GetTerrainData(TerrainECS::TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration});
+    surface.Tiled = service.GetTiledTerrainData(
+        TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    if (surface.Single && surface.Single->Heightfield.IsEmpty())
+        surface.Single = nullptr;
+    // Neither store resolved: the terrain has no height data yet (extraction has not run for it), so
+    // there is no surface to hit and nothing drawn to click.
+    if (!surface.Single && !surface.Tiled)
+        return;
+    if (surface.Tiled)
+        surface.Pages = service.SurfaceQuery(terrain);
+
+    const Vector3 center = worldTransform.GetPosition();
+    surface.OriginX = center.x - terrain.SizeX * 0.5f;
+    surface.OriginZ = center.z - terrain.SizeZ * 0.5f;
+    surface.OriginY = center.y;
+    surface.SizeX = terrain.SizeX;
+    surface.SizeZ = terrain.SizeZ;
+    surface.HeightScale = terrain.HeightScale;
+
+    // Terrain world AABB: XZ is the footprint; Y spans the range the baked field actually holds, NOT the
+    // nominal [0,1] band: modifier volumes drive samples outside that band and the renderer draws them
+    // there (see ResolveBakedHeightRange); a paged terrain states its range with its pages. A small Y
+    // margin keeps a ray grazing the exact peak or trough from being clipped out by rounding. The
+    // marcher reach is this box regardless of size, so far-side hits on large terrains land.
+    constexpr float32 kHeightMargin = 1.0f;
+    float32 lowY = 0.0f;
+    float32 highY = 0.0f;
+    if (surface.Pages.IsValid())
+    {
+        lowY = surface.Pages.MinHeight();
+        highY = surface.Pages.MaxHeight();
+    }
+    else
+    {
+        float32 minNorm = 0.0f;
+        float32 maxNorm = 1.0f;
+        ResolveBakedHeightRange(surface.Single, surface.Tiled, minNorm, maxNorm);
+        // HeightScale orders the two products; take the extremes so a negative scale cannot invert the slab.
+        const float32 heightA = surface.OriginY + minNorm * terrain.HeightScale;
+        const float32 heightB = surface.OriginY + maxNorm * terrain.HeightScale;
+        lowY = std::min(heightA, heightB);
+        highY = std::max(heightA, heightB);
+    }
+    const Vector3 aabbMin(surface.OriginX, lowY - kHeightMargin, surface.OriginZ);
+    const Vector3 aabbMax(surface.OriginX + terrain.SizeX, highY + kHeightMargin, surface.OriginZ + terrain.SizeZ);
+
+    float32 hitT = 0.0f;
+    Vector3 hitPos{};
+    const auto sampleHeight = [&surface](float32 worldX, float32 worldZ, float32& outY) {
+        return SamplePickHeight(surface, worldX, worldZ, outY);
+    };
+    if (!MarchTerrainSurface(ray, aabbMin, aabbMax, best.Distance, sampleHeight, hitT, hitPos) || hitT >= best.Distance)
+        return;
+    best.Distance = hitT;
+    best.Position = hitPos;
+    best.Normal = PickSurfaceNormal(surface, terrain.SamplesPerMeter, hitPos.x, hitPos.z);
+    best.Entity = entity;
+    best.Hit = true;
+}
+
 // Ray -> every planar terrain's heightfield footprint, nearest hit. The march walks geometry
 // only the planar domain draws: a spherical terrain retains its heightfield but renders a
 // displaced sphere instead, so marching it would offer a phantom flat target at the entity
@@ -87,116 +239,20 @@ bool RaycastPlanarTerrains(const Mathematics::Ray3D& ray,
     if (!terrainService)
         return false;
 
-    bool    anyHit = false;
-    float32 bestT  = maxDistance;
-    Vector3 bestPos{};
-    Vector3 bestNormal(0.0f, 1.0f, 0.0f);
-    ECS::EntityHandle bestEntity{};
-
-    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>()
-        .Each([&](ECS::EntityHandle entity,
-                  const Components::Terrain& terrain,
-                  const Components::WorldTransform& worldXf)
-        {
-            if (terrain.Domain != Components::TerrainDomain::Planar)
-                return;
-
-            // Resolve either the single-terrain heightfield or the tiled terrain.
-            // A tiled terrain has no single TerrainData (extraction zeroes its handle),
-            // so the query must select the resident tile that contains each sample —
-            // otherwise brush/zone strokes never hit a tiled terrain.
-            const TerrainECS::TerrainData* data = terrainService->GetTerrainData(
-                TerrainECS::TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration});
-            const TerrainECS::TiledTerrainData* tiled = terrainService->GetTiledTerrainData(
-                TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
-
-            // Neither store resolved: the terrain has no height data yet (extraction has not
-            // run for it), so there is no surface to hit and nothing drawn to click.
-            const bool singleValid = data && !data->Heightfield.IsEmpty();
-            if (!singleValid && !tiled)
-                return;
-
-            const float32 centerX = worldXf.matrix[12];
-            const float32 centerZ = worldXf.matrix[14];
-            const float32 originX = centerX - terrain.SizeX * 0.5f;
-            const float32 originZ = centerZ - terrain.SizeZ * 0.5f;
-            const float32 originY = worldXf.matrix[13];
-
-            // World-space terrain height at (wx,wz). Returns false outside the terrain
-            // footprint (single) or when the containing tile is not resident (tiled).
-            auto sampleHeight = [&](float32 wx, float32 wz, float32& outY) -> bool
-            {
-                if (tiled)
-                {
-                    float32 h;
-                    if (!TerrainECS::SampleTiledHeightNormalized(*tiled, wx, wz, h))
-                        return false;
-                    outY = originY + h * terrain.HeightScale;
-                    return true;
-                }
-                const float32 u = (wx - originX) / terrain.SizeX;
-                const float32 v = (wz - originZ) / terrain.SizeZ;
-                if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
-                    return false;
-                outY = originY + data->Heightfield.SampleBilinear(u, v) * terrain.HeightScale;
-                return true;
-            };
-
-            // Terrain world AABB: XZ is the footprint; Y spans the range the baked field
-            // actually holds, NOT the nominal [0,1] band — modifier volumes drive samples
-            // outside that band and the renderer draws them there (see ResolveBakedHeightRange).
-            // A small Y margin keeps a ray grazing the exact peak/trough from being clipped out
-            // by fp rounding. The marcher reach is this box regardless of size, so far-side hits
-            // on large terrains land.
-            constexpr float32 kHeightMargin = 1.0f;
-            float32 minNorm = 0.0f;
-            float32 maxNorm = 1.0f;
-            ResolveBakedHeightRange(singleValid ? data : nullptr, tiled, minNorm, maxNorm);
-            // HeightScale orders the two products; take the extremes so a negative scale
-            // cannot invert the slab.
-            const float32 yA = originY + minNorm * terrain.HeightScale;
-            const float32 yB = originY + maxNorm * terrain.HeightScale;
-            const Vector3 aabbMin(originX, std::min(yA, yB) - kHeightMargin, originZ);
-            const Vector3 aabbMax(originX + terrain.SizeX, std::max(yA, yB) + kHeightMargin,
-                                  originZ + terrain.SizeZ);
-
-            // Central-difference heightfield normal at (wx, wz), stepped at the
-            // heightfield's own sample spacing. Falls back to +Y wherever a tap
-            // leaves the footprint (or the containing tile is not resident).
-            auto surfaceNormal = [&](float32 wx, float32 wz) -> Vector3
-            {
-                const float32 step =
-                    1.0f / std::clamp(terrain.SamplesPerMeter, 0.05f, 20.0f);
-                float32 hxp, hxn, hzp, hzn;
-                if (!sampleHeight(wx + step, wz, hxp) || !sampleHeight(wx - step, wz, hxn) ||
-                    !sampleHeight(wx, wz + step, hzp) || !sampleHeight(wx, wz - step, hzn))
-                    return Vector3(0.0f, 1.0f, 0.0f);
-                // Heightfield y = h(x, z) has normal along (-dh/dx, 1, -dh/dz).
-                const float32 inv = 1.0f / (2.0f * step);
-                const Vector3 n((hxn - hxp) * inv, 1.0f, (hzn - hzp) * inv);
-                return n * (1.0f / std::sqrt(Vector3::Dot(n, n)));
-            };
-
-            float32 hitT = 0.0f;
-            Vector3 hitPos{};
-            if (MarchTerrainSurface(ray, aabbMin, aabbMax, bestT, sampleHeight, hitT, hitPos)
-                && hitT < bestT)
-            {
-                bestT = hitT;
-                bestPos = hitPos;
-                bestNormal = surfaceNormal(hitPos.x, hitPos.z);
-                bestEntity = entity;
-                anyHit = true;
-            }
+    PlanarPickBest best;
+    best.Distance = maxDistance;
+    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
+        [terrainService, &ray, &best](ECS::EntityHandle entity, const Components::Terrain& terrain,
+                                      const Components::WorldTransform& worldTransform) {
+            PickPlanarTerrain(*terrainService, ray, entity, terrain, worldTransform, best);
         });
-
-    if (!anyHit)
+    if (!best.Hit)
         return false;
 
-    outHit.Entity        = bestEntity;
-    outHit.WorldPosition = bestPos;
-    outHit.WorldNormal   = bestNormal;
-    outHit.Distance      = bestT;
+    outHit.Entity        = best.Entity;
+    outHit.WorldPosition = best.Position;
+    outHit.WorldNormal   = best.Normal;
+    outHit.Distance      = best.Distance;
     return true;
 }
 

@@ -212,7 +212,7 @@ PolyhavenPlaceholderFactory::PlaceholderResult PolyhavenPlaceholderFactory::Crea
     if (parent.IsValid())
     {
         Components::Parent p{};
-        p.parent = parent;
+        p.Entity = parent;
         world.AddComponentImmediate(e, p);
     }
 

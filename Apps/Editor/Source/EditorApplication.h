@@ -155,6 +155,10 @@ class EditorApplication : public Application
     void Render() override;
     void OnShutdown() override;
 
+    /// Stop the current play session at the start of the next play tick, keeping this editor open.
+    /// The editor does not use the exit code.
+    void RequestGameExit(int exitCode) override;
+
     // Settings
     void SetDockEdgeFraction(float frac);
     void SyncHiDpiPlatformSettingsFromPreferences();
@@ -541,6 +545,9 @@ class EditorApplication : public Application
 
     // Sync Play/Pause/Stop button visuals with Play Mode state.
     void UpdatePlayModeToolbar(Editor::PlayModeState s);
+    // PlayModeManager reports every state change here: the toolbar, the hierarchy's selection,
+    // and, when play has stopped, play fullscreen and the inspector.
+    void OnPlayModeStateChanged(Editor::PlayModeState state);
 
     // Play mode presentation flags (Game View fullscreen play).
     bool m_PlayFullscreenOnEnter = false; // controlled by top toolbar fullscreen toggle

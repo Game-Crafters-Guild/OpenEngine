@@ -3230,6 +3230,20 @@ void VulkanCommandList::Barrier(const ResourceBarrier& barrier)
     BarrierBatch({barrier});
 }
 
+void VulkanCommandList::RecordStateAfterBarriers(const std::vector<ResourceBarrier>& barriers)
+{
+    for (const ResourceBarrier& barrier : barriers)
+    {
+        if (barrier.type != ResourceBarrier::Texture)
+            continue;
+        const VkImageLayout layout = VulkanMappings::TranslateResourceStateToLayout(barrier.stateAfter);
+        const ResourceBarrier::Subresource& range = barrier.subresource;
+        for (uint32_t mip = range.baseMip; mip < range.baseMip + range.levelCount; ++mip)
+            for (uint32_t layer = range.baseLayer; layer < range.baseLayer + range.layerCount; ++layer)
+                m_SubresourceLayouts[MakeSubKey(barrier.textureHandle, mip, layer)] = layout;
+    }
+}
+
 void VulkanCommandList::BarrierBatch(const std::vector<ResourceBarrier>& barriers)
 {
     if (m_CommandBuffer == VK_NULL_HANDLE || !m_IsRecording)
@@ -4011,25 +4025,26 @@ void VulkanCommandList::CopyTextureSubresourceToBuffer(TextureHandle srcTexture,
     // Two-step barrier collapsed to single: oldLayout -> TRANSFER_SRC_OPTIMAL
     // Be conservatively correct for visibility: assume any prior producer and make writes visible
     VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    // The old layout is this list's layout record. It starts empty at every Begin and
+    // holds what barriers and copies on this list left, plus what the render graph
+    // noted through RecordStateAfterBarriers for transitions it placed on another list.
     VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (auto it = m_SubresourceLayouts.find(MakeSubKey(srcTexture, mip, rangeCopy.baseArrayLayer));
+        it != m_SubresourceLayouts.end())
     {
-        uint64_t key = MakeSubKey(srcTexture, mip, rangeCopy.baseArrayLayer);
-        auto it = m_SubresourceLayouts.find(key);
-        oldLayout = (it != m_SubresourceLayouts.end()) ? it->second : VK_IMAGE_LAYOUT_UNDEFINED;
+        oldLayout = it->second;
     }
     if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED)
     {
-        // An UNDEFINED source layout lets the driver satisfy this transition by
-        // DISCARDING the subresource, so the readback can legally return blank
-        // data — intermittently, which reads as a flaky test rather than a bug.
-        // Render-graph passes journal a layout via their Read/Write edges; a
-        // caller recording straight onto a CommandList must barrier the
-        // subresource into its real state before reading it back.
-        Logger::Log::Warning(
+        // A transition from UNDEFINED lets the driver discard the subresource, so the
+        // copy would read back whatever the driver left. Refuse it and report.
+        Logger::Log::Error(
             "CopyTextureSubresourceToBuffer: mip {} layer {} has no recorded layout on this "
-            "command list; the UNDEFINED -> TRANSFER_SRC transition may discard its contents. "
-            "Barrier the subresource into its actual state before the copy.",
+            "command list; the copy is refused, because a transition from UNDEFINED may discard "
+            "its contents. Barrier the subresource into its current state on this command list "
+            "before the copy (in a render-graph pass, declare the read and the graph records it).",
             mip, rangeCopy.baseArrayLayer);
+        return;
     }
     VkImageMemoryBarrier toSrc{};
     toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -4592,17 +4607,18 @@ void VulkanCommandList::CopyBufferToTextureSubresource(BufferHandle srcBuffer, T
     const VkImageAspectFlags copyAspect =
         (range.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
+    // The same rule as the readback: this list's layout record first, because it holds
+    // what this list did after the caller last knew the state; the caller's stated
+    // state only for a subresource this list has not touched.
     VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (currentState != ResourceState::Undefined)
+    if (auto it = m_SubresourceLayouts.find(MakeSubKey(dstTexture, mip, range.baseArrayLayer));
+        it != m_SubresourceLayouts.end())
+    {
+        oldLayout = it->second;
+    }
+    else if (currentState != ResourceState::Undefined)
     {
         oldLayout = VulkanMappings::TranslateResourceStateToLayout(currentState);
-    }
-    else
-    {
-        uint64_t key = MakeSubKey(dstTexture, mip, range.baseArrayLayer);
-        auto it = m_SubresourceLayouts.find(key);
-        if (it != m_SubresourceLayouts.end())
-            oldLayout = it->second;
     }
 
     if (isSubRegion && oldLayout == VK_IMAGE_LAYOUT_UNDEFINED)

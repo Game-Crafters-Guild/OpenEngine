@@ -10,13 +10,14 @@ namespace GameEngine::Components
 // Stable per-entity identifier for persistence in human-readable .scene/.blueprint files.
 // Stored as a fixed-size buffer to satisfy ECS component constraints.
 // [DoNotSerialize] — SceneIO manages the tag via the entity `id=` header attribute, not as a reflected field.
+// @ge-engine-internal scene loading
 struct SceneEntityTag
 {
     // The entity's scene identity, not a feature: it has no off state.
     static constexpr bool NotToggleable = true;
 
     // Not guaranteed to be null-terminated: a raw component write
-    // (GE_ECSABI_SetComponentBytes) can fill all 64 bytes. Read it through View().
+    // (World::SetComponentBytesImmediate) can fill all 64 bytes. Read it through View().
     char value[64];
 
     // The tag up to its first null byte, or all of value when there is none.

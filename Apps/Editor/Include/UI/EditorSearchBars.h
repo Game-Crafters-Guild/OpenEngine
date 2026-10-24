@@ -45,9 +45,14 @@ private:
     static void PruneNulls();
     static void SaveToPreferences();
 
-    static inline bool s_Visible = false;
-    static inline bool s_AtTop = false;
-    static inline bool s_AccentFocusOutline = true;
+    // What a profile that never saved a value reads.
+    static constexpr bool kDefaultVisible = false;
+    static constexpr bool kDefaultAtTop = true;
+    static constexpr bool kDefaultAccentFocusOutline = true;
+
+    static inline bool s_Visible = kDefaultVisible;
+    static inline bool s_AtTop = kDefaultAtTop;
+    static inline bool s_AccentFocusOutline = kDefaultAccentFocusOutline;
     static inline bool s_Loaded = false;
     static inline std::vector<RegisteredBar> s_Bars;
     static inline std::vector<UIElement*> s_FocusTargets;

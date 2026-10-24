@@ -15,6 +15,7 @@ namespace GameEngine::Components
 // can fill every byte with no terminator, so read them through the accessors.
 // @ge-no-add  data helper, not user-addable in the editor
 // [DoNotSerialize] — SceneIO reconstructs the [blueprint] section from this metadata; reflection would emit invalid property lines.
+// @ge-engine-internal scene loading
 struct SceneBlueprintInstance
 {
     // Blueprint asset path as authored in the scene's [resource] section (usually relative to asset root).

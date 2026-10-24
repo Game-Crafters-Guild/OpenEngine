@@ -9,13 +9,13 @@
 // that form emits enumerator names. Header-only and side-effect-free so it is trivially
 // unit-testable.
 
+#include "ECS/FieldAccess.h"
 #include "ECS/Reflection.h"
 
 #include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <span>
 #include <string>
 
@@ -23,14 +23,6 @@ namespace GameEngine {
 namespace ECS {
 
 namespace Detail {
-
-template <class T>
-T ReadUnaligned(const std::byte* bytes)
-{
-    T value{};
-    std::memcpy(&value, bytes, sizeof(T));
-    return value;
-}
 
 // Locale-independent, round-trip-exact number formatting. std::to_string is
 // avoided: it honours the global C locale (a comma decimal separator would emit
@@ -95,42 +87,77 @@ inline void AppendFloats(std::string& out, const std::byte* bytes, std::uint32_t
     out += ']';
 }
 
-// Append a single value of `type` read from `bytes`. Composite types (vectors,
-// quaternion, color, mat4) are emitted as JSON float arrays; a set AssetGuid as a hex string
-// and an UNSET one as "", which is the form a writer reads back as "no reference".
-inline void AppendScalar(std::string& out, FieldTypeId type, const std::byte* bytes)
+// Append element `element` of `field`, read from the component bytes `bytes`; the caller has
+// checked that the element lies inside both. Composite types (vectors, quaternion, color, mat4)
+// are emitted as JSON float arrays; a set AssetGuid as a hex string and an UNSET one as "", which
+// is the form a writer reads back as "no reference". The kinds whose C++ type the ECS cannot name
+// (the Mathematics types, GUID, RenderLayerMask, and EntityHandle, declared but not defined here)
+// are read as their raw floats or words.
+inline void AppendScalar(std::string& out, const FieldInfo& field, std::span<const std::byte> bytes,
+                         std::uint32_t element)
 {
-    switch (type)
+    const std::byte* raw = bytes.data() + field.Offset + element * FieldElementSize(field.Type);
+    switch (field.Type)
     {
-        case FieldTypeId::Bool:   out += (ReadUnaligned<bool>(bytes) ? "true" : "false"); break;
-        case FieldTypeId::Int8:   AppendNumber(out, static_cast<std::int32_t>(ReadUnaligned<std::int8_t>(bytes))); break;
-        case FieldTypeId::Int16:  AppendNumber(out, ReadUnaligned<std::int16_t>(bytes)); break;
-        case FieldTypeId::Int32:  AppendNumber(out, ReadUnaligned<std::int32_t>(bytes)); break;
-        case FieldTypeId::Int64:  AppendNumber(out, ReadUnaligned<std::int64_t>(bytes)); break;
-        case FieldTypeId::UInt8:  AppendNumber(out, static_cast<std::uint32_t>(ReadUnaligned<std::uint8_t>(bytes))); break;
-        case FieldTypeId::UInt16: AppendNumber(out, ReadUnaligned<std::uint16_t>(bytes)); break;
-        case FieldTypeId::UInt32: AppendNumber(out, ReadUnaligned<std::uint32_t>(bytes)); break;
-        case FieldTypeId::UInt64: AppendNumber(out, ReadUnaligned<std::uint64_t>(bytes)); break;
-        case FieldTypeId::Float:  AppendNumber(out, ReadUnaligned<float>(bytes)); break;
-        case FieldTypeId::Double: AppendNumber(out, ReadUnaligned<double>(bytes)); break;
-        case FieldTypeId::EntityHandle: AppendNumber(out, ReadUnaligned<std::uint32_t>(bytes)); break;
+        case FieldTypeId::Bool:
+        {
+            bool value = false;
+            ReadFieldElement(field, bytes, element, value);
+            out += value ? "true" : "false";
+            break;
+        }
+        case FieldTypeId::Int8:
+        case FieldTypeId::Int16:
+        case FieldTypeId::Int32:
+        case FieldTypeId::Int64:
+        {
+            std::int64_t value = 0;
+            ReadFieldInteger(field, bytes, element, value);
+            AppendNumber(out, value);
+            break;
+        }
+        case FieldTypeId::UInt8:
+        case FieldTypeId::UInt16:
+        case FieldTypeId::UInt32:
+        case FieldTypeId::UInt64:
+        {
+            std::int64_t value = 0;
+            ReadFieldInteger(field, bytes, element, value);
+            AppendNumber(out, static_cast<std::uint64_t>(value));
+            break;
+        }
+        case FieldTypeId::Float:
+        {
+            float value = 0.0f;
+            ReadFieldElement(field, bytes, element, value);
+            AppendNumber(out, value);
+            break;
+        }
+        case FieldTypeId::Double:
+        {
+            double value = 0.0;
+            ReadFieldElement(field, bytes, element, value);
+            AppendNumber(out, value);
+            break;
+        }
+        case FieldTypeId::EntityHandle: AppendNumber(out, ReadUnaligned<std::uint32_t>(raw)); break;
         // The layer word as one number (bit i = layer i); the scene text is the bracketed layer list.
-        case FieldTypeId::RenderLayerMask: AppendNumber(out, ReadUnaligned<std::uint32_t>(bytes)); break;
-        case FieldTypeId::Vec2:   AppendFloats(out, bytes, 2); break;
-        case FieldTypeId::Vec3:   AppendFloats(out, bytes, 3); break;
+        case FieldTypeId::RenderLayerMask: AppendNumber(out, ReadUnaligned<std::uint32_t>(raw)); break;
+        case FieldTypeId::Vec2:   AppendFloats(out, raw, 2); break;
+        case FieldTypeId::Vec3:   AppendFloats(out, raw, 3); break;
         case FieldTypeId::Vec4:
         case FieldTypeId::Quat:
-        case FieldTypeId::Color:  AppendFloats(out, bytes, 4); break;
-        case FieldTypeId::Mat4:   AppendFloats(out, bytes, 16); break;
+        case FieldTypeId::Color:  AppendFloats(out, raw, 4); break;
+        case FieldTypeId::Mat4:   AppendFloats(out, raw, 16); break;
         // An all-zero GUID is an UNSET reference, and its hex form is not a value any writer
         // accepts back (it parses as neither a GUID nor an asset path), so a default component
         // could not be read and written back. "" is what the hand-written asset-ref serializers
         // already emit for unset, and it round-trips.
         case FieldTypeId::AssetGuid:
-            if (IsAllZero(bytes, 16))
+            if (IsAllZero(raw, 16))
                 out += "\"\"";
             else
-                AppendHexBytes(out, bytes, 16);
+                AppendHexBytes(out, raw, 16);
             break;
         case FieldTypeId::String:
         case FieldTypeId::Unknown:
@@ -173,38 +200,21 @@ inline void AppendString(std::string& out, const std::byte* bytes, std::uint32_t
     out += '"';
 }
 
-// The integer a scanner-bound enum field holds, widened to the EnumNameValue table's type.
-// An enum reflects as its UNDERLYING integer Type, so signedness comes from Type and width
-// from Size.
-inline std::int64_t ReadEnumValue(const FieldInfo& field, const std::byte* bytes)
+// Append the value of `field`, read from the component bytes `bytes`, which hold at least
+// field.Offset + field.Size bytes.
+inline void AppendFieldValue(std::string& out, const FieldInfo& field, std::span<const std::byte> bytes)
 {
-    const bool isSigned = field.Type == FieldTypeId::Int8 || field.Type == FieldTypeId::Int16 ||
-                          field.Type == FieldTypeId::Int32 || field.Type == FieldTypeId::Int64;
-    switch (field.Size)
-    {
-        case 1: return isSigned ? ReadUnaligned<std::int8_t>(bytes)
-                                : static_cast<std::int64_t>(ReadUnaligned<std::uint8_t>(bytes));
-        case 2: return isSigned ? ReadUnaligned<std::int16_t>(bytes)
-                                : static_cast<std::int64_t>(ReadUnaligned<std::uint16_t>(bytes));
-        case 4: return isSigned ? ReadUnaligned<std::int32_t>(bytes)
-                                : static_cast<std::int64_t>(ReadUnaligned<std::uint32_t>(bytes));
-        case 8: return ReadUnaligned<std::int64_t>(bytes);
-        default: return 0;
-    }
-}
-
-inline void AppendFieldValue(std::string& out, const FieldInfo& field, const std::byte* bytes)
-{
+    const std::byte* fieldBytes = bytes.data() + field.Offset;
     if (field.Type == FieldTypeId::String)
     {
-        AppendString(out, bytes, field.Size);
+        AppendString(out, fieldBytes, field.Size);
         return;
     }
 
     const std::uint32_t elementSize = FieldElementSize(field.Type);
     if (elementSize == 0)
     {
-        AppendOpaqueBytes(out, bytes, field.Size);
+        AppendOpaqueBytes(out, fieldBytes, field.Size);
         return;
     }
 
@@ -225,19 +235,20 @@ inline void AppendFieldValue(std::string& out, const FieldInfo& field, const std
         // branch is live exactly for callers driving ComponentFieldRegistry field tables.
         if (!field.EnumNames.empty())
         {
-            const std::int64_t value = ReadEnumValue(field, bytes);
-            for (const EnumNameValue& e : field.EnumNames)
-                if (e.Value == value)
+            std::int64_t value = 0;
+            ReadFieldInteger(field, bytes, 0, value);
+            for (const EnumNameValue& enumerator : field.EnumNames)
+                if (enumerator.Value == value)
                 {
                     out += '"';
-                    out.append(e.Name);
+                    out.append(enumerator.Name);
                     out += '"';
                     return;
                 }
             AppendNumber(out, value);
             return;
         }
-        AppendScalar(out, field.Type, bytes);
+        AppendScalar(out, field, bytes, 0);
         return;
     }
 
@@ -245,7 +256,7 @@ inline void AppendFieldValue(std::string& out, const FieldInfo& field, const std
     for (std::uint32_t i = 0; i < count; ++i)
     {
         if (i) out += ',';
-        AppendScalar(out, field.Type, bytes + i * elementSize);
+        AppendScalar(out, field, bytes, i);
     }
     out += ']';
 }
@@ -265,7 +276,7 @@ void AppendComponentJson(std::string& out, const T& value)
         out += '"';
         out.append(fields[i].Name);
         out += "\":";
-        Detail::AppendFieldValue(out, fields[i], base + fields[i].Offset);
+        Detail::AppendFieldValue(out, fields[i], std::span<const std::byte>(base, sizeof(T)));
     }
     out += '}';
 }
@@ -285,7 +296,8 @@ inline void AppendComponentJson(std::string& out, std::span<const FieldInfo> fie
         out += '"';
         out.append(fields[i].Name);
         out += "\":";
-        Detail::AppendFieldValue(out, fields[i], bytes + fields[i].Offset);
+        Detail::AppendFieldValue(out, fields[i],
+                                 std::span<const std::byte>(bytes, fields[i].Offset + fields[i].Size));
     }
     out += '}';
 }

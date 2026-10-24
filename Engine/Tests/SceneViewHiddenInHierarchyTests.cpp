@@ -66,7 +66,7 @@ TEST(SceneViewHiddenInHierarchyTests, AChildFollowsItsParentsEyeAndKeepsItsOwn)
     // Reparenting under a hidden entity hides the moved subtree.
     world.AddComponentImmediate<SceneViewHidden>(sibling, {});
     system.Update(world, 0.0f);
-    world.GetComponentForWrite<Parent>(child)->parent = sibling;
+    world.GetComponentForWrite<Parent>(child)->Entity = sibling;
     system.Update(world, 0.0f);
     EXPECT_TRUE(HiddenInHierarchy(world, child));
     EXPECT_FALSE(HiddenInHierarchy(world, root));

@@ -44,11 +44,11 @@ bool HasDisabledInAncestryOrSelf(ECS::World& world, ECS::EntityHandle entity)
         return true;
     int safety = 64;
     const Parent* p = world.GetComponent<Parent>(entity);
-    while (p && p->parent.IsValid() && safety-- > 0)
+    while (p && p->Entity.IsValid() && safety-- > 0)
     {
-        if (world.GetComponent<ECS::Disabled>(p->parent) != nullptr)
+        if (world.GetComponent<ECS::Disabled>(p->Entity) != nullptr)
             return true;
-        p = world.GetComponent<Parent>(p->parent);
+        p = world.GetComponent<Parent>(p->Entity);
     }
     return false;
 }

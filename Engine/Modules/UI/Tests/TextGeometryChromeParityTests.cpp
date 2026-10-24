@@ -525,9 +525,11 @@ TEST_F(RobotoGeometry, HalfLeadingIsFlooredAndLiftsTheInkWhenTheLineBoxIsTighter
         // ...and the exact split is genuinely a different number here, so a
         // pass cannot be satisfied by both rules at once.
         if (c.LineBox != 21.0f)
+        {
             EXPECT_GT(std::abs(c.ChromeBaseline - (metrics.ascender + (c.LineBox - fontBox) * 0.5f)),
                       0.3f)
                 << "lineBox=" << c.LineBox << " does not discriminate floor from an exact split";
+        }
         if (c.LineBox == 21.0f)
             baselineAtUnitSpacing = baseline;
     }

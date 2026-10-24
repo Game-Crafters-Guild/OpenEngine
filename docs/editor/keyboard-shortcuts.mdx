@@ -41,6 +41,15 @@ description: The editor's keyboard and mouse shortcuts for the gizmo tools, the 
 | **F** | Frame Selection | Focus camera on selected object |
 | **Alt + F** | Frame All | Focus camera on all objects in scene |
 
+In perspective views, framing fits the object's bounds in the view with a small margin, and the
+camera then orbits around the object's center. The camera moves into place with a short
+transition. An object whose thinnest side is less than a tenth of its largest is flat, such as a
+floor with everything that stands on it. A flat object seen at less than 30 degrees from its plane
+is viewed from 30 degrees above or below it: from below only when the camera is below it, and from
+above otherwise. The Scene View draws at least
+twice as far as the camera is from its orbit center, so a large object stays visible from the
+distance that frames it. The Far Clip setting keeps its value.
+
 ## Global editor shortcuts
 
 | Key | Action | Description |

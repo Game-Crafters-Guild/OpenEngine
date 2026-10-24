@@ -1,0 +1,4 @@
+[scene name="ApplicationExit" version=1]
+
+[entity id="probe"]
+Name.value = "Exit Probe"

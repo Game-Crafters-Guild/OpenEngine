@@ -5,11 +5,13 @@
 // the search, has to move when search bars sit at the top; and the row has to ride above the tree's
 // horizontal scrollbar while one is on screen. This file lays the REAL row out over the REAL editor
 // stylesheets and measures all three, and checks that the search-bar setting puts its placement
-// classes on the row rather than on the search inside it.
+// classes on the row rather than on the search inside it, that a fresh profile places the row at
+// the top, and that a saved bottom placement keeps it at the bottom.
 
 #include <gtest/gtest.h>
 
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
+#include "Editor/Settings/SettingsStore.h"
 #include "UI/Controls/Scrollbar.h"
 #include "UI/EditorSearchBars.h"
 #include "UI/Parsers/CSSParser.h"
@@ -171,8 +173,8 @@ void SetUserDataRoot(const std::string& root)
 }
 
 // Points the editor preferences at a scratch directory of this process for one test, puts the
-// previous root back afterwards so the rest of the process reads the preferences it read before,
-// and removes the directory.
+// previous root back afterwards and reloads the search-bar settings from it, so the rest of the
+// process reads the preferences and the placement it read before, and removes the directory.
 struct ScopedUserDataRoot
 {
     std::string Previous;
@@ -185,7 +187,11 @@ struct ScopedUserDataRoot
             Previous = previous;
         SetUserDataRoot(Directory.Path().string());
     }
-    ~ScopedUserDataRoot() { SetUserDataRoot(Previous); }
+    ~ScopedUserDataRoot()
+    {
+        SetUserDataRoot(Previous);
+        EditorSearchBars::LoadFromPreferences();
+    }
 };
 
 } // namespace
@@ -238,11 +244,7 @@ TEST(HierarchyNavigationBarLayout, SearchBarsAtTheTopMoveTheWholeRow)
     struct UnregisterOnExit
     {
         UIElement* Search;
-        ~UnregisterOnExit()
-        {
-            EditorSearchBars::SetAtTop(false);
-            EditorSearchBars::Unregister(Search);
-        }
+        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
     } unregister{parts.Search};
     EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
     EditorSearchBars::SetAtTop(true);
@@ -261,4 +263,62 @@ TEST(HierarchyNavigationBarLayout, SearchBarsAtTheTopMoveTheWholeRow)
     parts.Row->SetAboveHorizontalScrollbar(true);
     fixture.Settle();
     EXPECT_NEAR(parts.Row->GetLayoutY() - parts.Panel->GetLayoutY(), kRowInsetPx, kLayoutTolerancePx);
+}
+
+// A profile that never saved the setting reads search bars at the top: the row and the panel
+// take the placement classes and the row lays out at the top inset.
+TEST(HierarchyNavigationBarLayout, SearchBarsSitAtTheTopOnAFreshProfile)
+{
+    const ScopedUserDataRoot userData;
+    EditorSearchBars::LoadFromPreferences();
+
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const RowParts& parts = fixture.Parts;
+
+    struct UnregisterOnExit
+    {
+        UIElement* Search;
+        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
+    } unregister{parts.Search};
+    EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
+    fixture.Settle();
+
+    EXPECT_TRUE(EditorSearchBars::GetAtTop());
+    EXPECT_TRUE(parts.Row->HasClass("search-bar-at-top"));
+    EXPECT_TRUE(parts.Panel->HasClass("search-bars-at-top"));
+    EXPECT_NEAR(parts.Row->GetLayoutY() - parts.Panel->GetLayoutY(), kRowInsetPx, kLayoutTolerancePx);
+}
+
+// A profile that saved search bars at the bottom keeps them there: the saved value wins over the
+// default.
+TEST(HierarchyNavigationBarLayout, ASavedBottomPlacementWinsOverTheDefault)
+{
+    const ScopedUserDataRoot userData;
+    {
+        GameEngine::Editor::SettingsStore prefs = GameEngine::Editor::OpenEditorPreferences();
+        prefs.SetBool("ui.searchBarsAtTop", false);
+        std::string error;
+        ASSERT_TRUE(prefs.Save(&error)) << error;
+    }
+    EditorSearchBars::LoadFromPreferences();
+
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const RowParts& parts = fixture.Parts;
+
+    struct UnregisterOnExit
+    {
+        UIElement* Search;
+        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
+    } unregister{parts.Search};
+    EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
+    fixture.Settle();
+
+    EXPECT_FALSE(EditorSearchBars::GetAtTop());
+    EXPECT_FALSE(parts.Row->HasClass("search-bar-at-top"));
+    EXPECT_FALSE(parts.Panel->HasClass("search-bars-at-top"));
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Row), kRowInsetPx, kLayoutTolerancePx);
 }

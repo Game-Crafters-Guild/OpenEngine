@@ -230,10 +230,10 @@ void ModelThumbnailHandler::SpawnOrUpdateModel(RenderLane& lane, Slot& slot, con
 
         // Parent model root to orbit root.
         Components::Parent parentComp{};
-        parentComp.parent = lane.orbitRootEntity;
+        parentComp.Entity = lane.orbitRootEntity;
         auto* existingParent = thumbWorld.GetComponentForWrite<Components::Parent>(lane.spawnedResult.rootEntity);
         if (existingParent)
-            existingParent->parent = lane.orbitRootEntity;
+            existingParent->Entity = lane.orbitRootEntity;
         else
             thumbWorld.AddComponentImmediate(lane.spawnedResult.rootEntity, parentComp);
 
@@ -1200,7 +1200,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, localXf);
 
         Components::Parent parentComp{};
-        parentComp.parent = lane.orbitRootEntity;
+        parentComp.Entity = lane.orbitRootEntity;
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, parentComp);
 
         lane.isSpawnedMaterial = true;

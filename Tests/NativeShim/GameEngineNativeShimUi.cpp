@@ -239,6 +239,30 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetWidthPercent(uint64_t instanceId, floa
     return Resolve(instanceId) ? GE_Result_Ok : GE_Result_NotFound;
 }
 
+GE_API GE_Result GE_CDECL GE_UIElement_SetOffset(uint64_t instanceId, float /*x*/, float /*y*/)
+{
+    return Resolve(instanceId) ? GE_Result_Ok : GE_Result_NotFound;
+}
+
+// The element holding the pointer, as the real export's manager records it; 0 when none does.
+static uint64_t s_PointerHolderInstanceId = 0;
+
+GE_API GE_Result GE_CDECL GE_UIElement_CapturePointer(uint64_t instanceId)
+{
+    if (!Resolve(instanceId))
+        return GE_Result_NotFound;
+    s_PointerHolderInstanceId = instanceId;
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_ReleasePointer(uint64_t instanceId)
+{
+    if (instanceId == 0 || instanceId != s_PointerHolderInstanceId)
+        return GE_Result_NotFound;
+    s_PointerHolderInstanceId = 0;
+    return GE_Result_Ok;
+}
+
 GE_API GE_Result GE_CDECL GE_UIElement_SetLabelText(uint64_t instanceId, const char* /*text*/)
 {
     ShimElement* el = Resolve(instanceId);
@@ -874,6 +898,26 @@ GE_API GE_Result GE_CDECL GE_TestUI_ResetTypeLifecycle()
     g_WindowRequests = 0;
     // g_PerformRegistrations is deliberately kept: the managed side installs it once per process
     // (installation is first-wins), so clearing it would make every test after the first blind.
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetZIndex(uint64_t instanceId, int32_t /*zIndex*/)
+{
+    return Resolve(instanceId) ? GE_Result_Ok : GE_Result_NotFound;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_GetRect(uint64_t instanceId, float* x, float* y, float* width, float* height)
+{
+    if (!x || !y || !width || !height)
+        return GE_Result_InvalidArg;
+
+    if (!Resolve(instanceId))
+        return GE_Result_NotFound;
+
+    *x = 0.0f;
+    *y = 0.0f;
+    *width = 0.0f;
+    *height = 0.0f;
     return GE_Result_Ok;
 }
 

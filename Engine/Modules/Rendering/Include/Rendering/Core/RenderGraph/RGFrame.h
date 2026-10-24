@@ -843,6 +843,7 @@ class RGFrame
     // Recording scratch (capacity retained across frames).
     std::vector<ResourceBarrier> m_ScratchHoist;
     std::vector<ResourceBarrier> m_ScratchPassBarriers;
+    std::vector<ResourceBarrier> m_ScratchRelocatedBarriers; // this pass's, placed on another submission
     std::vector<std::pair<uint32_t, uint32_t>> m_ScratchAttRange; // per pass (first,count)
     std::vector<const RGBarrierBatch*> m_ScratchBatchOfSched;
     std::vector<CommandList*> m_ScratchSubmitLists;

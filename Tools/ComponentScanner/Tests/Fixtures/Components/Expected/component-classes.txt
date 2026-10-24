@@ -5,4 +5,5 @@ FixtureClock: engine-owned, a readonly mirror (@ge-readonly)
 FixtureEditorNote: editor-only, no mirror (@ge-editor-only)
 FixtureGpuSlot: engine-internal, no mirror (@ge-engine-internal)
 FixtureKinds: game data, a full mirror
+FixturePickedUp: game data, a full mirror
 FixtureRule: element struct, mirrored inside its owner
