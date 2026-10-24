@@ -31,7 +31,7 @@ There is no way to say "Debug for terrain, Warning for everything else", and no 
 | Term | Meaning |
 |---|---|
 | Channel name | A dotted path of segments: `[A-Za-z][A-Za-z0-9_-]*` joined by `.`. The dash is there for package names. Case-sensitive. This is the channel's identity. |
-| Channel id | `enum class LogChannelId : uint16`, an index assigned the first time a name is registered in a process. An `enum class` and not a plain integer, so an id cannot be mixed up with a count or another index. It is a handle for the hot path and for in-memory records only. |
+| Channel id | `using LogChannelId = uint16;`, an index assigned the first time a name is registered in a process. A typedef, like the engine's other plain ids (`AudioBusId`, `EntityId`): its values are assigned at runtime, not listed in code, and C++ call sites never handle one, because the macros and `GE_LOG_CHANNEL` hide it. It is a handle for the hot path and for in-memory records only. |
 | Level rule | A pair (name prefix, level). The empty prefix is the root rule, which is the global level. |
 | Effective level | The lowest severity a channel passes: the level of the longest matching rule. |
 
