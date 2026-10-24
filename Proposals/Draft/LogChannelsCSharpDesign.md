@@ -6,7 +6,7 @@ This design extends [Log Channels](LogChannelsDesign.md) to managed scripts. The
 
 ## Problem
 
-Today scripts have no logging API. `Console.WriteLine` reaches the native logger through `EngineLogWriter`, which `Console.SetOut` and `Console.SetError` install, and every message arrives at Info. That includes `Console.Error` output, because the writer hard-codes the level (`EngineLogWriter.cs:206`). This document adds a script logging API with channels resolved the same way as on the native side.
+Today scripts have no logging API. `Console.WriteLine` reaches the native logger through `EngineLogWriter`, which `Console.SetOut` and `Console.SetError` install, and every message arrives at Info. That includes `Console.Error` output, because the writer hard-codes the level (`EngineLogWriter.cs:209`). This document adds a script logging API with channels resolved the same way as on the native side.
 
 ## The call site
 
@@ -93,7 +93,7 @@ An interceptor generator would replace each `GameEngine.Log.Info(...)` call with
 
 ## The managed hot path
 
-- **Level checks without leaving managed code.** The effective-level array is fixed and never moves (see "The hot path" in [Log Channels](LogChannelsDesign.md)). C# reads it in place: `GE_GetLogLevelTable` returns its address and capacity once. A level check is a `Volatile.Read` of one byte with no P/Invoke call. `Logger.cpp` asserts that `std::atomic<LogLevel>` is always lock-free and one byte wide, which this layout depends on.
+- **Level checks without leaving managed code.** The effective-level array is fixed and never moves (see "The hot path" in [Log Channels](LogChannelsDesign.md)). C# reads it in place: `GE_GetLogLevelTable` returns its address and capacity once. A level check is a `Volatile.Read` of one byte with no P/Invoke call. `Logger.cpp` gains a `static_assert` that `std::atomic<LogLevel>` is always lock-free and one byte wide, which this layout depends on.
 - **One way to register.** Generated scopes and explicit handles both register through the `LogChannel` constructor. No separate registration function exists.
 - **Static ids.** Each `LogScope.Channel` is a static read-only value. Tiered compilation treats it as a constant once the type is initialized.
 - **Formatting and dispatch.** A message that passes the check is formatted into a pooled buffer, converted to UTF-8 and sent with one `GE_Log` call.
@@ -106,7 +106,14 @@ An interceptor generator would replace each `GameEngine.Log.Info(...)` call with
 | `GE_GetLogLevelTable(outLevels, outCapacity)` | The effective-level array for in-place reads |
 | `GE_Log(level, channel, msg, msgLen)` | Replaces `GE_Log(level, msg, msgLen)` (`ScriptingABI.h:557`) |
 
-The definition (`ScriptingABI.cpp:463`), the binding `InteropGenerator` emits (`Generator.cs:73`) and the native fallback in `EngineLogWriter` all change in the same commit; no old signature is kept.
+Everything that carries the old three-argument shape changes in the same commit, so no old signature is kept:
+
+- `GE_Log` and its definition (`ScriptingABI.h:557`, `ScriptingABI.cpp:463`);
+- the `GE_Log_Fn` typedef and the interface table's `Log` field (`ScriptingABI.h:207`, `:242`; set at `ScriptingABI.cpp:752`);
+- the managed mirror of that table, `EngineNativeBinding.GE_Log_Delegate` and its `Log` field (`Managed/Common/EngineNativeBinding.cs`);
+- the binding `InteropGenerator` emits (`Generator.cs:73`);
+- `EngineLogWriter`, both its main path through `binding.Log` and its `NativeFallback`;
+- the caller in `Managed/HostRuntime/Program.cs`.
 
 ## Hot reload
 

@@ -7,7 +7,7 @@ Status: proposal, not implemented. Facts about the current code were read at `58
 All log output today goes into one stream. The only filters are severity and a text search. On a busy frame, a person who wants to see what terrain streaming is doing has two options:
 
 - Lower the global level to Debug and get every module's Debug output.
-- Use a text search that depends on each call site writing its own prefix. About 1,900 calls do, for example `HZBBuildNode:` and `EditorDebugServer:`, each with its own spelling.
+- Use a text search that depends on each call site writing its own prefix. About 2,460 calls do, for example `HZBBuildNode:` and `EditorDebugServer:`, each with its own spelling.
 
 There is no way to say "Debug for terrain, Warning for everything else", and no way to show only one subsystem in the Log panel or in `get_log`.
 
@@ -18,7 +18,7 @@ There is no way to say "Debug for terrain, Warning for everything else", and no 
 - Channels form a hierarchy through dotted names (`Rendering`, `Rendering.Shadows`). A level set on a parent applies to every channel below it that has no rule of its own.
 - The Log panel, the console, the log file and `get_log` show the channel and can filter by it.
 - A call site does not have to name its channel. The channel comes from the code's area: its module by default, or a namespace or class that declares one.
-- The level check on the hot path stays one relaxed atomic load, as it is today.
+- The level check on the hot path stays as cheap as today's: today it is a call to `Log::GetState()` (a pointer test and a function-local static guard, `Logger.cpp:72`) and one relaxed atomic load. The channel adds one indexed load and the channel's own static guard.
 
 ## Non-goals
 
@@ -137,7 +137,7 @@ Every module in `GE_ENGINE_MODULES` (`Engine/CMakeLists.txt`) is an `OBJECT` lib
 | `Engine` (its own sources) | `Engine` |
 | `Editor`, `Player` | `Editor`, `Player` |
 
-Modules outside the list (MeshPicking, test executables) call the same helper. Test executables can keep the `Default` fallback. Package modules and game modules get their default in a different way; see the next section.
+Modules outside the list (MeshPicking, VCSIntegration in `EditorSDK.dll`, test executables) call the same helper. Test executables can keep the `Default` fallback. Package modules and game modules get their default in a different way; see the next section.
 
 ### Packages and game modules
 
@@ -151,11 +151,11 @@ The resolution order is the same as for engine modules. Only the source of the d
 | A project's native game modules | `Game.<module name>` | `Game.Gameplay` |
 | C# scripts | `Scripts.<namespace>` | See [Log Channels for C# Scripts](LogChannelsCSharpDesign.md) |
 
-- **Names with dashes.** Package names use dashes (`fidelityfx-dof`), so channel-name segments allow `-` after the first character: `[A-Za-z][A-Za-z0-9_-]*`.
+- **Names with dashes.** Package names use dashes (`git-vcs`, `unity-import`), so channel-name segments allow `-` after the first character: `[A-Za-z][A-Za-z0-9_-]*`.
 - **One root for packages.** All packages sit under `Packages`, so their names cannot collide with engine channels (`rendering` against `Rendering`), and a single rule turns all package output up or down.
-- **Packages that belong to an engine area.** A package that extends an engine area declares its own channel in its namespace or classes. For example, `fidelityfx-dof` declares `GE_LOG_CHANNEL("Rendering.DoF")`. No manifest field is added for this; the scope declarations already cover it.
+- **Packages that belong to an engine area.** A package that extends an engine area declares its own channel in its namespace or classes. For example, `unity-import` could declare `GE_LOG_CHANNEL("AssetDatabase.UnityImport")` so its messages sit under the asset database. No manifest field is added for this; the scope declarations already cover it.
 - **Both build paths must agree.** A package module is compiled in two places: `ge_add_engine_package_module` in the engine build, which produces the shipped prebuilt, and the editor's source build through the generated project, which is the fallback when the prebuilt's `engine_abi` marker does not match. Both must emit the same `GE_LOG_DEFAULT_CHANNEL`, derived from the manifest's `name`.
-- **Kept out of the ABI digest.** The define does not change the ABI, so it stays out of the package defines that feed the `engine_abi` digest. Otherwise renaming a channel would invalidate every shipped prebuilt. In CMake it is a separate `target_compile_definitions` call, not part of `_gepkg_defines`. In the generator it is a separate field, not part of `CompileDefinitions`, if that list feeds the digest; this needs checking (open question 3).
+- **Kept out of the ABI digest.** The define does not change the ABI, so it stays out of the inputs to the `engine_abi` digest. Otherwise renaming a channel would invalidate every shipped prebuilt. On the CMake side it is a separate `target_compile_definitions` call, not part of `_gepkg_defines`, which the marker pass records. On the editor side `HashEngineAbiInputs` folds every entry of `NativeBuildConfig::CompileDefinitions` into the digest (`BuildCacheRecord.cpp:100`), so the channel goes in a separate `NativeBuildConfig` field that `UserProjectGenerator` emits and the hash does not read.
 - **Unload and hot reload.** Package and game modules unload and reload. `RegisterChannel` copies the name into the registry's own storage, so an unloaded DLL leaves no dangling name, which is the same rule the logger already follows for source-file names. The reloaded DLL registers the same name again and gets the same id, so level rules and the Log panel's filters carry over across a reload.
 
 ## Levels
@@ -194,13 +194,13 @@ The Log panel keeps the two apart:
 - The array never moves, so a read needs no lock: `ShouldLog(channel, level)` is `level >= levels[channel].load(relaxed)`.
 - `ShouldLog(channel, level)` replaces today's `ShouldLog(level)`, which has no callers outside the Logger module. No channel-less version is kept. It stays public only because the macros call it.
 - The capacity is `kMaxLogChannels`, 1,024 channels, which is 1 KB of levels. A registration past the capacity returns the `Default` channel and logs one warning naming the channel that was refused.
-- The other new cost per call is the guard check on the function-local static in `GeLogChannel`. That is one acquire load and a branch once the static is set. "Performance" below says how to measure it.
+- The new cost per call is the guard check on the function-local static in `GeLogChannel` (one acquire load and a branch once the static is set) and the indexed load. Today's path already pays one such guard inside `GetState()`. "Performance" below says how to measure the difference.
 
 ### Sink levels
 
-- Today `Log::Initialize` copies `Config::GlobalMinLevel` into the default `ConsoleSink`'s `MinLevel` (`Logger.cpp:108`). With channels, that cap would drop a channel set to Debug while the global level is Info. The console sink created by `Initialize` therefore defaults to `Trace` and relies on the channel gate.
-- `RingBufferSink` and `CallbackSink` already default to `Trace`.
-- `FileSink::Config::minLevel` (default Debug) is set by the editor from `GE_LOG_FILE_LEVEL` through `ResolveFileLogLevel` (`FileSink.h`). It stays: it is an explicit host-chosen cap on what the file records, not a per-channel level. A channel turned up to Trace still reaches the console and the Log panel; the file records it only if `GE_LOG_FILE_LEVEL` allows Trace. The Logging settings page shows this cap next to the rules, so a missing line in the file is not mistaken for a level rule that did not apply.
+- Today `Log::Initialize` copies `Config::GlobalMinLevel` into the default `ConsoleSink`'s `MinLevel` when no sink is registered yet (`Logger.cpp:109`), and `SetLogLevel` never updates it afterwards. With channels, that cap would drop a channel set to Debug while the global level is Info. The console sink created by `Initialize` therefore defaults to `Trace` and relies on the channel gate.
+- `RingBufferSink` has no level of its own (its `ShouldLog` accepts everything), and `CallbackSink` defaults to `Trace`.
+- The file sink's level comes from `ResolveFileLogLevel` (`FileSink.cpp`): `GE_LOG_FILE_LEVEL`, default Info, then raised to the global level in force when the sink is attached (`std::max(resolved.level, globalLevel)`). That raise exists because today nothing below the global level can reach a sink. With channels that is no longer true, so the raise is removed: a channel turned up to Debug would otherwise never reach the file. `GE_LOG_FILE_LEVEL` itself stays, as an explicit host-chosen cap on what the file records. A channel turned up to Trace still reaches the console and the Log panel; the file records it only if `GE_LOG_FILE_LEVEL` allows Trace. The Logging settings page shows this cap next to the rules, so a missing line in the file is not mistaken for a level rule that did not apply.
 - A sink keeps its own `MinLevel` only as an explicit cap that a host chooses.
 
 ### `LOG_TRACE` and `LOG_DEBUG` in Release
@@ -225,7 +225,7 @@ Everything that leaves the process today is formatted text, so persisting names 
 
 ### Names and threads
 
-- Channel names are stored in a fixed array of `String`, one entry per id, in `LoggerState`. An entry is written once, before its id is published with a release store of the channel count, and never changes after that. `Log::GetChannelName(id)` therefore returns a `std::string_view` without a lock, so the drain thread and sinks can read names freely. `Memory/Arena.h` is not used: it is a per-thread scratch arena, and these names live for the whole process and are read from every thread.
+- Channel names are stored in a fixed array of `String`, one entry per id, in `LoggerState`. An entry is written once, before its id is published with a release store of the channel count, and never changes after that. `Log::GetChannelName(id)` therefore returns a `std::string_view` without a lock, so the drain thread and sinks can read names freely. `Memory::Arena` is not used for the names: Logger is in the Foundation layer and links no other module, and Memory sits above it, so Logger cannot depend on it.
 - Registration takes a registry mutex: it looks the name up in a `FlatMap<String, LogChannelId>`, appends it if it is new, and computes its effective level.
 
 ### Thread affinity of the public API
@@ -247,13 +247,13 @@ Channels live in `LoggerState`, so the host and `Engine.dll` share one registry 
 ### Message record and sinks
 
 - `LogMessage` gets a `LogChannelId Channel` field, set before the record is queued.
-- `LogSink::FormatMessage` gets an `includeChannel` flag, on by default. The line format becomes `<time> [<LEVEL>] [<channel>] <message>`.
+- `LogSink::FormatMessage` always writes the channel. Its only two callers, `ConsoleSink` and `FileSink`, both want it, so no `includeChannel` flag is added beside its three existing flags. The line format becomes `<time> [<LEVEL>] [T:<thread>] [<channel>] <message>`.
 - `RingBufferSink::StoredMessage` stores the channel id. `GetMessages` takes an optional set of channel prefixes, resolved to ids before it walks the ring.
 - `CallbackSink` passes the full `LogMessage` through, so it already carries the id.
 
 ### Editor Log panel (`LogView`)
 
-- A channel filter next to the severity toggles and the search box: a tree of channel names built from the registry, with tri-state checkboxes for parents. It uses `UI/Controls/TreeView.h` and `UI/Controls/Checkbox.h`. `Checkbox` has no partly-checked state today, so it is extended with one in its own commit first. Unchecking `Rendering` hides all of `Rendering.*`.
+- A channel filter next to the severity toggles and the search box: a tree of channel names built from the registry, with tri-state checkboxes for parents. It uses `UI/Controls/TreeView.h` and `UI/Controls/Checkbox.h`. A parent whose children disagree shows the mixed state `Checkbox` already has through `ToggleBase::SetMixed` (`UI/Controls/Toggle.h`). Unchecking `Rendering` hides all of `Rendering.*`.
 - The channel column shows the name, with a stable color derived from an FNV-1a hash (`Types/Fnv1a.h`) of the top-level segment, so related channels share a hue.
 - Changing a channel's level from the panel's context menu (`UI/Interaction/ContextMenuManipulator.h`) writes the same rule the settings page writes.
 
@@ -267,11 +267,11 @@ Channels live in `LoggerState`, so the host and `Engine.dll` share one registry 
 
 - `get_log` gets a `channel` parameter that takes a comma-separated list of prefixes, for example `--channel Terrain,Rendering.Shadows`.
 - The debug-server handler and the MCP tool change together, so `EditorIpcMethodDrift` stays green.
-- A `set_log_level` tool (channel prefix, level) lets an agent turn one area up while it investigates, then clear the rule again.
+- A `set_log_level` tool (channel prefix, level) lets an agent turn one area up while it investigates. `--clear` removes the rule again. It is a debug-server handler plus its MCP tool, added together. A rule set this way is an ordinary rule: it shows on the Logging settings page and is not saved unless the user saves it there.
 
 ### Player and tests
 
-`GE_LOG_LEVELS` holds rules as `prefix=level` pairs separated by commas: `GE_LOG_LEVELS=Terrain=debug,Rendering=warning`. The empty prefix is written `*`. The Player reads it at startup and also accepts the same value through a command-line flag. A malformed pair is refused with a message that quotes the pair and the expected form. Parsing uses `ParseLogLevel` (`LogLevel.h`) and `TrimWhitespaceView` (`Types/StringUtils.h`). `Types` has no split function, so `Split` is added to `StringUtils.h` in its own commit first.
+`GE_LOG_LEVELS` holds rules as `prefix=level` pairs separated by commas: `GE_LOG_LEVELS=Terrain=debug,Rendering=warning`. The root rule is written `*` and goes to `SetLogLevel`. The Editor and the Player read the variable at startup and accept the same value through `--log-levels`, which follows the Player's `--kebab-case` flag style. The flag wins over the variable. A malformed pair is refused with a message that quotes the pair and the expected form. Parsing uses `ParseLogLevel` (`LogLevel.h`) and `TrimWhitespaceView` (`Types/StringUtils.h`). `Types` has no split function, so `Split` is added to `StringUtils.h` in its own commit first.
 
 `GE_LOG_FILE_LEVEL` stays separate and keeps its meaning: it caps the file sink, while `GE_LOG_LEVELS` sets channel rules (see "Sink levels").
 
@@ -289,9 +289,9 @@ Managed scripts get their own `Log` API with channels resolved from class attrib
 
 | What | Count at `58357141` | Change |
 |---|---|---|
-| `LOG_*` macro calls | 156 | None. They get their area's channel. |
+| `LOG_*` macro calls outside the Logger module | 140 | None. They get their area's channel. |
 | Direct `Logger::Log::<Level>(...)` and `Log::<Level>(...)` calls | about 4,855 (Trace 36, Debug 359, Info 1,569, Warning 1,610, Error 1,274, Critical 7) | One mechanical commit rewrites them to the matching `LOG_*` macro. |
-| Calls with a hand-written `Name:` prefix | about 1,900 | Unchanged by the migration. When someone next touches one, they declare a class-scope channel and drop the prefix. |
+| Calls with a hand-written `Name:` prefix | about 2,460 | Unchanged by the migration. When someone next touches one, they declare a class-scope channel and drop the prefix. |
 | `LogWithSource` callers outside Logger | 0 | It becomes private. |
 
 The mechanical rewrite changes behavior in exactly one way: the 395 direct Trace and Debug calls compile out in Release once they are macros, while today they are kept and filtered at runtime.
@@ -342,4 +342,3 @@ The editor suites cover the `get_log` channel filter. A live check covers the Lo
 
 1. Should Trace and Debug stay compiled out in Release now that a channel can be turned up at runtime? Keeping them costs code size and one gate per call. Removing them lets a shipped game's log be turned up for one subsystem.
 2. Are the channel names in the CMake table right, especially `Rendering.Services` and `Platform.Provider`?
-3. Which define lists feed the `engine_abi` digest? On the CMake side it is `_gepkg_defines` (`cmake/Packages.cmake`); on the editor side it is not yet traced whether `NativeBuildConfig::CompileDefinitions` is the digest input. `GE_LOG_DEFAULT_CHANNEL` has to stay out of the digest on both paths.
