@@ -61,7 +61,7 @@ struct MaterialBuildContext
     std::vector<std::filesystem::path> PackageShaderDirs;
 
     // Shader caches probed in order before CacheRoot and never written: a packaged game's cooked
-    // cache (PathUtils::GetBundledShaderCacheRoot), or the editor cache an offline cook reuses
+    // cache (ApplicationPaths::GetBundledShaderCacheRoot), or the editor cache an offline cook reuses
     // (--reuse-cache). Empty unless that folder exists.
     std::vector<std::filesystem::path> ReadOnlyCacheRoots;
     // The program index of a read-only root (the cook writes one beside its programs): a build

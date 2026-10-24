@@ -283,11 +283,14 @@ button.primary.pressed,
 }
 
 /* Secondary variant */
+/* A toggle's owner colors it through these variables, set on the button by one class of its own:
+   --ui_button_secondary_text (the label), and for the on state ("active")
+   --ui_button_toggle_on_border and --ui_button_toggle_on_background. Unset, they read as below. */
 button.secondary,
 .button.secondary {
 	background-color: transparent;
 	border-color: var(--ui_color_border_subtle);
-	color: var(--ui_color_text);
+	color: var(--ui_button_secondary_text, var(--ui_color_text));
 }
 
 button.secondary:hover,
@@ -302,8 +305,8 @@ button.secondary.pressed,
 .button.secondary:active,
 .button.secondary.active,
 .button.secondary.pressed {
-	background-color: rgba(255, 255, 255, 0.31);
-	border-color: var(--ui_color_border_subtle);
+	background-color: var(--ui_button_toggle_on_background, rgba(255, 255, 255, 0.31));
+	border-color: var(--ui_button_toggle_on_border, var(--ui_color_border_subtle));
 }
 
 /* A disabled button looks disabled under the pointer and in the primary and secondary

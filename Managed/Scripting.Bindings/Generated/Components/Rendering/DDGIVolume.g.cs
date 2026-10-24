@@ -21,7 +21,7 @@ namespace GameEngine.Scripting
     }
 
     /// <summary>
-    /// How many probe grids the volume runs. SingleGrid is the coarse lattice alone; Cascaded2 adds the finer C1 sub-volume. Matches the reference demo's cascades control (`single grid` / `cascaded (2)`).
+    /// How many probe grids the volume runs. SingleGrid is the coarse lattice alone; Cascaded2 adds the finer C1 sub-volume. These are the reference demo's two cascade choices.
     /// </summary>
     public enum DDGICascadeMode : int
     {

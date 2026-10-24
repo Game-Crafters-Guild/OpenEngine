@@ -223,7 +223,7 @@ class CapturingSink final : public Logger::LogSink
     }
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "PipelineCacheTestLogCapture"; }
+    std::string GetName() const override { return "PipelineCacheTestLogCapture"; }
 
   private:
     std::mutex m_Mutex;
@@ -241,7 +241,7 @@ class ScopedLogCapture
         config.GlobalMinLevel = Logger::LogLevel::Warning;
         Logger::Log::Initialize(config);
         Logger::Log::ClearSinks();
-        Logger::Log::AddSink(Logger::MakeUnique<CapturingSink>(m_Lines));
+        Logger::Log::AddSink(std::make_unique<CapturingSink>(m_Lines));
     }
     ~ScopedLogCapture()
     {

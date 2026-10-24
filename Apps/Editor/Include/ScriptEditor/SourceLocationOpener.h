@@ -4,7 +4,6 @@
 
 #include <filesystem>
 #include <string>
-#include <string_view>
 
 namespace GameEngine
 {
@@ -37,10 +36,6 @@ class SourceLocationOpener
 
     /// The Script Editor panel, whatever the preference. False when there is no panel.
     bool OpenInScriptEditor(const SourceLocation& location) const;
-
-    /// The C# location a log line names (FindSourceLocationInLogLine); a line
-    /// that names none opens nothing.
-    void OpenLogLine(std::string_view lineText) const;
 
     /// A log entry's source file at a 1-based line (0 = unknown). Only C# files
     /// follow the preference; native sources always open externally.

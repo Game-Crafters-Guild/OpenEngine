@@ -1,27 +1,38 @@
 #pragma once
 
+#include "Logger/CallbackSink.h"
+#include "Panels/LogModel.h"
+#include "UI/Controls/DockPanel.h"
+
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
-#include "Logger/CallbackSink.h"
-#include "UI/Controls/DockPanel.h"
 
 namespace GameEngine {
 
-class LogView;
-class Label;
-class TextField;
-class UIElement;
 class Button;
+class INativeContextMenu;
+class Label;
+class LogView;
 class Splitter;
+class TextArea;
+class UIElement;
 class WeightedPane;
 
+namespace EditorUI {
+class TransientNotice;
+}
+
 /**
- * @brief Editor panel that displays engine log messages.
- * 
- * LogPanel provides a dockable panel that shows log output with color coding
- * based on log severity. It automatically captures log messages via a
- * CallbackSink and displays them in real-time.
+ * @brief The Log panel: the engine's log as a filterable list with a detail pane for the selected entry.
+ *
+ * The layout is UI/panels/LogPanel/LogPanel.uxml and the style LogPanel.css beside it. A click
+ * selects a row and shows its whole message, source, time and stack trace in the detail pane; a
+ * double-click opens the source, Ctrl+C copies, the right-click menu copies, opens the source or
+ * clears, and every copy is confirmed by a notice over the list. Main thread only.
  */
 class LogPanel : public DockPanel {
 public:
@@ -30,95 +41,68 @@ public:
     LogPanel();
     ~LogPanel() override;
 
-    /**
-     * @brief Update the panel (flush pending log messages).
-     * Should be called each frame from the main thread.
-     */
+    /// Flushes queued messages and runs the notice's clock. Called each frame from the main thread.
     void Update();
 
-    /**
-     * @brief Clear all log messages from the panel.
-     */
-    void ClearLog();
-
-    /**
-     * @brief Get the log view component.
-     * @return Pointer to the LogView (owned by UI tree).
-     */
-    LogView* GetLogView() const { return m_LogView; }
-
-    /**
-     * @brief Set callback for opening log entries in IDE.
-     * @param callback Function receiving the log message text.
-     */
-    void SetOnOpenInIDE(std::function<void(const std::string&)> callback) { m_OnOpenInIDE = std::move(callback); }
-
-    /**
-     * @brief Set callback for opening a specific source file at a line (for stack frames).
-     * @param callback Function receiving the file path and 1-based line.
-     */
+    /// Opens a source file at a 1-based line (0 opens the file): the menu's Open Source, the detail
+    /// pane's source button and a click on a stack frame.
     void SetOnOpenSourceFile(std::function<void(const std::string&, int)> callback)
     {
         m_OnOpenSourceFile = std::move(callback);
     }
 
 private:
-    void SetupLogCapture();
-    void TeardownLogCapture();
+    void BuildFromLayout();
+    void BuildSearchBar(UIElement& host);
+    void WireFilterToggle(UIElement& root, LogModel::Severity severity, const char* id);
+    void ToggleSeverity(LogModel::Severity severity);
+    void SyncFilterToggles();
+    void TogglePause();
+    void ClearLog();
+
     void OnLogMessage(const Logger::LogMessage& message);
-    void OnSearchTextChanged(const std::string& searchText);
-    void CopyToClipboard();
-    void BuildDetailPane(UIElement* parent);
-    void PopulateDetailPaneForIndex(size_t messageIndex);
-    void HideDetailPane();
-    void OpenSourceLocation(const std::string& file, int line);
-    /** Stack detail below the log in tall docks and beside it in wide docks. */
-    void SyncLogDetailLayoutMode();
-    /** Like SettingsPanel aspect checks: react to width with hysteresis; move Clear/Pause/Copy + search to a second row when narrow. */
-    void SyncLogToolbarLayoutMode();
-    /** If center/search were reparented out of sync with m_LogToolbarCompact (e.g. deferred work), restore a valid tree. */
-    void RepairLogToolbarChromeIfNeeded();
+    void OnSelectionChanged(const LogModel::Entry* entry);
+    void ShowDetail(const LogModel::Entry& entry);
+    void HideDetail();
+    void SyncDetailLayoutMode();
+
+    void CopySelected();
+    void CopyAllVisible();
+    /// Copies `text` and confirms it: on the selected row's right end when `besideSelection` and the
+    /// row is in view, else at the bottom of the list.
+    void CopyText(const std::string& text, const std::string& confirmation, bool besideSelection);
+    std::optional<float> FindNoticeTopBesideSelection() const;
+    void OpenSelectedSource();
+    void OpenSource(const std::string& file, int line);
+    void ShowContextMenu(float x, float y);
+    void OnContextMenuCommand(uint32_t commandId);
 
     LogView* m_LogView = nullptr;
+    EditorUI::TransientNotice* m_Notice = nullptr;
     UIElement* m_SplitBody = nullptr;
-    WeightedPane* m_LogPane = nullptr;
+    WeightedPane* m_ListPane = nullptr;
     Splitter* m_DetailSplitter = nullptr;
-    WeightedPane* m_DetailWeightedPane = nullptr;
-    UIElement* m_DetailPane = nullptr;
-    Label* m_DetailSourceLabel = nullptr;
-    UIElement* m_DetailFrameList = nullptr;
-    UIElement* m_LogToolbarStack = nullptr;
-    UIElement* m_LogToolbarPrimary = nullptr;
-    UIElement* m_LogToolbarSecondary = nullptr;
-    UIElement* m_LogCenterSlot = nullptr;
+    WeightedPane* m_DetailPane = nullptr;
+    UIElement* m_DetailGlyph = nullptr;
+    Label* m_DetailSeverity = nullptr;
+    Label* m_DetailTime = nullptr;
+    Button* m_DetailSource = nullptr;
+    TextArea* m_DetailMessage = nullptr;
+    UIElement* m_DetailTraceTitle = nullptr;
+    UIElement* m_DetailFrames = nullptr;
     UIElement* m_SearchBar = nullptr;
-    TextField* m_SearchField = nullptr;
-    Button* m_ClearButton = nullptr;
     Button* m_PauseButton = nullptr;
-    Button* m_CopyButton = nullptr;
-    
-    // Callback registration ID for unregistering on destruction
-    Logger::uint64 m_CallbackId = 0;
-    
-    // Buffer messages that arrive before UI is ready
-    std::vector<Logger::LogMessage> m_EarlyMessages;
-    bool m_Initialized = false;
+    std::array<Button*, LogModel::kSeverityCount> m_FilterToggles{};
 
-    // Callback for opening log entries in IDE
-    std::function<void(const std::string&)> m_OnOpenInIDE;
-    // Callback for opening a source file at a specific line (for stack frames)
+    std::unique_ptr<INativeContextMenu> m_ContextMenu;
     std::function<void(const std::string&, int)> m_OnOpenSourceFile;
 
-    bool m_LogToolbarCompact = false;
-    int m_LogToolbarCompactStreak = 0;
-    int m_LogToolbarWideStreak = 0;
-    bool m_LogDetailLayoutInitialized = false;
-    bool m_LogDetailSideBySide = false;
-    float m_VisibleLogPaneWeight = 0.7f;
-    float m_VisibleDetailPaneWeight = 0.3f;
+    std::uint64_t m_CallbackId = 0;
 
-    static constexpr size_t kNoSelection = static_cast<size_t>(-1);
-    size_t m_SelectedMessageIndex = kNoSelection;
+    bool m_DetailLayoutInitialized = false;
+    bool m_DetailSideBySide = false;
+    float m_VisibleListWeight = 0.65f;
+    float m_VisibleDetailWeight = 0.35f;
 };
 
 } // namespace GameEngine

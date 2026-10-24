@@ -12,6 +12,9 @@
 #include <string_view>
 #include <vector>
 
+#include "AssetCore/SharedFileRead.h"
+#include "Editor/EditorPaths.h"
+#include "Logger/Logger.h"
 #include "UI/AssetField.h"
 #include "UI/Controls/CollapsibleInfoCard.h"
 #include "UI/Controls/Dropdown.h"
@@ -189,6 +192,21 @@ inline TextField* AddTextRow(UIElement* parent, const std::string& labelText,
     return result;
 }
 
+// A row with the label cell and `field` in its field cell, for a field the caller builds. Returns the
+// field, or null when `parent` is null.
+template <typename T>
+T* AddFieldRow(UIElement* parent, const std::string& labelText, std::unique_ptr<T> field,
+               const char* tooltip = nullptr)
+{
+    UIElement* row = AddRow(parent);
+    if (!row)
+        return nullptr;
+    AddLabel(row, labelText, tooltip);
+    T* raw = field.get();
+    AddFieldContainer(row)->AddChild(std::move(field));
+    return raw;
+}
+
 inline Dropdown* AddDropdownRow(UIElement* parent, const std::string& labelText,
                                 const std::vector<Dropdown::Option>& options, int selectedIndex,
                                 const char* tooltip = nullptr)
@@ -289,6 +307,20 @@ inline EntityField* AddEntityFieldRow(UIElement* parent, const std::string& labe
     EntityField* raw = field.get();
     fieldContainer->AddChild(std::move(field));
     return raw;
+}
+
+/// The text of an editor control's layout file, a path under the editor's install assets
+/// ("UI/controls/<Control>/<Control>.uxml"), for the control to parse. Empty, with an error that
+/// names the file, when it does not read.
+inline std::string ReadEditorLayoutText(const char* layoutAssetPath)
+{
+    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / layoutAssetPath;
+    std::string text;
+    if (!ReadFileTextShared(path, text))
+        Logger::Log::Error("{} did not read, so the control it lays out is empty. Check that it is staged under "
+                           "the editor asset mount.",
+                           path.generic_string());
+    return text;
 }
 
 inline std::string AssetPathExtensionText(std::string_view text)

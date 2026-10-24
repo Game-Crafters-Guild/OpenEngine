@@ -66,6 +66,10 @@ inline constexpr float kInspectorDragSliderPixelsPerFullRange = 480.0f;
 // 60px with the field's side padding fits seven glyphs ("12.558"); at 50px a
 // typical value overflowed and edit mode's caret scroll made the text jump.
 inline constexpr float kInspectorSliderValueFieldWidthPx = 60.0f;
+// A percent field holds its widest value, "100 %": the digits, the suffix and the box's padding.
+// InspectorPercentRowLayoutTests measures them in its fixture's font, which is wider than the
+// editor's value font.
+inline constexpr float kInspectorPercentValueFieldWidthPx = 76.0f;
 inline constexpr float kInspectorSliderValueRightInsetPx = 0.0f;
 // A slider that shares its row with a value field may shrink further than a
 // lone slider: inside a group foldout's indent the pair otherwise overflows

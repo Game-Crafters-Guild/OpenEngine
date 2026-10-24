@@ -2,7 +2,6 @@
 
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/PageResidency.h"
-#include "TerrainECS/CpuHeightPageCache.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/PagedHeightSampler.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
@@ -33,8 +32,9 @@ class World;
 // The height pages of every paged terrain of the process, on the main thread: the one residency
 // manager (design D-c: one per process, owned by TerrainService), each terrain's stream, level rule
 // and page table, and what the GPU side takes each frame (the slots to upload, the page-table words,
-// the terrain-UV rects whose height changed source); and the CPU height pages the CPU readers sample
-// (design D3), fed from each terrain's same source and overlay.
+// the terrain-UV rects whose height changed source); and the CPU windows the CPU readers keep
+// (design D3) in the same residency, so a page is fetched once for both, read through
+// SurfaceHeightQuery with the terrain's overlay.
 namespace GameEngine::TerrainECS
 {
 
@@ -43,7 +43,8 @@ struct TerrainHandle;
 /// What a platform spends on height pages (design D5): the height cache's slots, the largest
 /// page table one GPU page-table ring slot may hold, the largest modifier overlay
 /// (PageStreaming::HeightPageOverlay, in system memory) a terrain may hold, and the CPU height
-/// pages' bytes and synchronous window fetches a frame (design D3, CpuHeightPageBudget). The CBT sizes its ring
+/// pages' bytes (the residency's one CPU budget, design D5) and synchronous window fetches a frame
+/// (design D3, PageResidencyBudget). The CBT sizes its ring
 /// slots to the bound terrain's table, up to the table cap (CBTResources::ProvisionPageTableWords),
 /// so the cap costs memory only where a terrain needs it; the overlay is built only for a terrain
 /// that pages, over the rect its height modifiers reach. GE_TERRAIN_PAGE_SLOTS overrides the slots
@@ -60,8 +61,12 @@ struct HeightPageProfile
 /// Desktop: 512 slots (33 MiB); tables up to 2^21 words (8 MiB a ring slot), so the 60 x 15 km
 /// terrain at 0.25 m (1,174,877 words) pages; an overlay up to 512 MiB, about 6 km^2 of
 /// modifiers on a 0.25 m terrain (about 5.3 B per level-0 sample), a few percent of a 16 GiB
-/// machine's memory: a 1 km^2 stamp at 0.25 m holds about 82 MiB. CPU height pages: 64 MiB (about
-/// 990 pages) and 4 synchronous window fetches a frame (an SSD's page read is 0.1 to 0.3 ms).
+/// machine's memory: a 1 km^2 stamp at 0.25 m holds about 82 MiB. Decoded pages on the CPU: 64 MiB
+/// (about 990 pages, the uploads waiting and the CPU readers' pages together; the 512 drawn pages
+/// fit with room for the windows) and up to 4 synchronous window fetches a frame inside the 0.5 ms
+/// deadline: a store page from the file cache takes about 8 us, so 4; a generated page about
+/// 0.36 ms, so 1 (Release, measured in slice 1c-iii); an SSD read that misses the file cache is not
+/// measured (0.1 to 0.3 ms assumed).
 inline constexpr HeightPageProfile kDesktopHeightPages{512u, 1u << 21, 512ull << 20, 64ull << 20, 4u};
 /// Steam Deck: half the desktop slots (256, 16.5 MiB) and a quarter of its table cap (2^19 words,
 /// 2 MiB a ring slot): about 24 x 6 km at 0.5 m, or 60 x 15 km at 1 m; a quarter of the desktop
@@ -92,11 +97,11 @@ std::string OverlayRefusal(std::string_view name, uint64 overlayBytes, const Hei
 /// each frame (TerrainHeightPageDriver).
 struct HeightPageOverlayAllowance
 {
-    uint64 ByteCap = 0;  ///< the profile's overlay cap when the terrain would page but for its modifiers, else 0
+    uint64 ByteCap = 0;  ///< the profile's overlay cap when the terrain has CPU pages, else 0
     bool OffGrid = false; ///< its pages are not on the tile lattice the overlay is baked on
 };
 
-/// The overlay rule: a terrain that would page were no modifier pending (`wouldPage`) may hold an
+/// The overlay rule: a terrain with height pages (`wouldPage`: TerrainHeightHasCpuPages) may hold an
 /// overlay up to the profile's cap. The overlay lies on the tile lattice (latticeX x latticeZ:
 /// tiles x (resolution - 1) + 1 per axis); a cooked store on another grid (sourceX x sourceZ, every
 /// power-of-two raw heightmap) cannot take it, so it is OffGrid: it pages while no height modifier
@@ -139,6 +144,10 @@ struct PagedTerrainRequest
     uint32 TerrainGeneration = 0;
     uint64 SourceIdentity = 0;  ///< changes when the source or the pyramid changes (restarts the stream)
     std::string_view Name;      ///< the terrain entity's name, for the log lines (empty: its render index)
+    /// The GPU draws the terrain's pages (TerrainHeightIsPaged, with a view). False streams its CPU
+    /// pages only (the narrow CBT arm, pending modifiers, a page table over the GPU cap, no view): no
+    /// GPU page, page table or dirty rect.
+    bool GpuPages = true;
     PageStreaming::PageSource Source;
     PageRequestTerrain Shape;   ///< its pyramid in world meters; CacheSlots is set by TerrainHeightPages
     float32 OriginY = 0.0f;     ///< world height of a normalized sample of 0
@@ -168,14 +177,30 @@ public:
     /// finest pages). Called before the frame's Requests.
     void GatherBodyWindows(ECS::World& world);
 
+    /// Keeps a CPU window of finest pages around `center` at the next Update, as a camera's window
+    /// does, for every paged terrain: a reader that needs the finest height away from every camera
+    /// and body (a navigation bake waiting on a page) asks on each frame it waits.
+    void RequestReaderWindow(const Mathematics::Vector3& center);
+
+    /// Fetches the level-0 page under `worldPoint` of the paged terrain drawn with render handle
+    /// `terrain` now, on the main thread (PageResidencyManager::FetchCpuPage): a pick reads the
+    /// finest height wherever it lands. Returns whether that page is then on the CPU.
+    bool FetchFinestPage(const TerrainHandle& terrain, const Mathematics::Vector3& worldPoint);
+
     /// The CPU height of the paged terrain drawn with render handle `terrain`, valid until the next
     /// Update; an invalid query when that terrain is not paged (TerrainService::SurfaceQuery resolves
     /// it from the terrain's component).
     SurfaceHeightQuery SurfaceQuery(const TerrainHandle& terrain) const;
 
+    /// The level-0 pages of every CPU window of the paged terrain drawn with render handle `terrain`,
+    /// each once: the cameras' windows, the readers', then the dynamic bodies' nearest a camera
+    /// first, as the last Update kept them. Empty when that terrain is not paged. Valid until the
+    /// next Update.
+    std::span<const PageStreaming::PageAddress> CpuWindowPages(const TerrainHandle& terrain) const;
+
     /// One frame: forgets the terrains not requested since the last Update, runs the residency,
-    /// brings each terrain's page table up to date, gathers the uploads and the dirty rects, then
-    /// runs the CPU height pages (the deadline-bounded window fetch).
+    /// with the CPU windows' deadline-bounded fetch, brings each terrain's page table up to date and
+    /// gathers the uploads and the dirty rects.
     void Update(uint64 frameIndex, float32 deltaSeconds, bool teleport, uint32 framesInFlight);
 
     /// True when `terrain` is not paged yet or its source identity differs: its next Request must
@@ -200,9 +225,10 @@ public:
     /// caller): page assigns, releases, rewrites and arrival-fade steps, and whole terrains switching
     /// between their pages and their texture.
     std::vector<HeightPageDirtyRect>& DirtyRects() { return m_DirtyRects; }
-    /// The page-table words of a paged terrain and their version (bumped on every change), or null.
+    /// The page-table words of a terrain the GPU draws from its pages and their version (bumped on
+    /// every change), or null.
     const std::vector<uint32>* TableWords(uint32 terrain, uint64& version) const;
-    /// Every paged terrain (render handle indices), in no order.
+    /// Every terrain the GPU draws from its pages (render handle indices), in no order.
     void PagedTerrains(std::vector<uint32>& out) const;
     const PageStreaming::PageResidencyManager& Residency() const { return m_Residency; }
 
@@ -212,7 +238,7 @@ private:
         uint32 Stream = 0;
         uint32 Generation = 0;
         uint64 Identity = 0;
-        uint64 CpuIdentity = 0; ///< the source its CPU pages hold: a GPU cache restart keeps them
+        uint64 SourceIdentity = 0; ///< the source its stream holds: a GPU cache restart keeps its pages
         float32 OriginY = 0.0f;
         float32 HeightScale = 0.0f;
         std::string Label;        ///< how the log lines name it: the entity's name, or its render index
@@ -221,15 +247,17 @@ private:
         PageTable Table;
         std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
         uint64 OverlayVersion = 0;
+        PageStreaming::PageSampleRect OverlayChanged; ///< what OverlayVersion changed from OverlayChangedSince
+        uint64 OverlayChangedSince = 0;
         std::vector<uint32> Words;
         uint64 Version = 0;
         bool Requested = false;
+        bool GpuPages = false;
         std::vector<uint32> WantedEntries; ///< GE_CBT_VALIDATE: this frame's wanted pages, as table entry indices
         std::string LoggedResidency;       ///< GE_CBT_VALIDATE: the residency line last logged
     };
 
     void Configure(PagedTerrain& terrain, const PagedTerrainRequest& request);
-    void ConfigureCpuPages(PagedTerrain& terrain, const PagedTerrainRequest& request);
     void RequestCpuWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
     void AppendBodyWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
     void CollectStreamChanges(uint32 terrainKey, PagedTerrain& terrain);
@@ -239,7 +267,6 @@ private:
                       HeightPageDirtyRect& rect, bool& any) const;
 
     PageStreaming::PageResidencyManager m_Residency;
-    CpuHeightPageCache m_CpuPages;
     HeightPageProfile m_Profile;
     uint32 m_SlotCount = 0;
     PageCacheGeometry m_Geometry;
@@ -252,6 +279,7 @@ private:
     FlatMap<uint32, PagedTerrain> m_Terrains; // by render index: a few terrains
     std::vector<PageStreaming::PageWant> m_Wants; // reused per request
     std::vector<Mathematics::Vector3> m_BodyWindowCenters;
+    std::vector<Mathematics::Vector3> m_ReaderWindowCenters; // RequestReaderWindow's, until the next Update
     std::vector<PageStreaming::PageAddress> m_WindowPages; // reused per request
     std::vector<std::pair<float32, uint32>> m_BodyOrder;   // reused per request: (squared distance, body)
     bool m_BodiesOverBound = false;                       // the bound was logged and still holds

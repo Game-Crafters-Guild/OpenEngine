@@ -188,6 +188,7 @@ struct TerrainParamsEntry
     float GrassRootFadeEnd;
     uint GrassControlBindless;
     uint ColorMapBindless;
+    float GrassGroundTintHeight;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -429,6 +430,20 @@ float grassCanopyRise(float t)
 vec3 GrassBladeCanopyRoot(vec3 rootColor, vec3 groundColor, bool rootFromGround, float groundingStrength)
 {
     return rootFromGround ? mix(rootColor, groundColor, groundingStrength) : rootColor;
+}
+
+// THE CANOPY GRADIENT AT HEIGHT t, from its root end (GrassBladeCanopyRoot) to the tip. Under
+// `rootFromGround` the whole root end, the ground's share and the tip in shade alike, gives way to the
+// tip by groundTintHeight: the gradient is one ramp from the root end to the tip, so it never goes
+// below the darker of the two, on any ground and at any Grounding Strength. At groundTintHeight 1 the
+// rise is the canopy rise itself, so the gradient is the plain mix, bit for bit. groundTintHeight
+// stays in [kMinTerrainGrassGroundTintHeight, 1] (TerrainGrass.h): above 1 the root end would still
+// show at the tip.
+vec3 GrassBladeCanopy(vec3 rootColor, vec3 groundColor, vec3 tip, bool rootFromGround, float groundingStrength,
+                      float groundTintHeight, float t)
+{
+    float rise = rootFromGround ? smoothstep(0.0f, groundTintHeight, t) : grassCanopyRise(t);
+    return mix(GrassBladeCanopyRoot(rootColor, groundColor, rootFromGround, groundingStrength), tip, rise);
 }
 
 const float kGrassNormalSettleRange = 0.55f;
@@ -676,8 +691,8 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 
     // Bit 1 is Splat Root Color, bit 5 an automatic Root Color (kTerrainGrassBit* in TerrainTypes.h).
     bool rootFromGround = (tp.GrassEnabled & 34u) == 34u;
-    vec3 col = mix(GrassBladeCanopyRoot(rootColor, groundedEnd, rootFromGround, groundingStrength), tip,
-                   grassCanopyRise(t));
+    vec3 col = GrassBladeCanopy(rootColor, groundedEnd, tip, rootFromGround, groundingStrength,
+                                tp.GrassGroundTintHeight, t);
     uint atlasTile = grassAtlasTile(tp, tint);
     vec2 textureUv = grassAtlasUV(tp, atlasTile, side, t, tint);
     // Hoisted here, the last uniform-flow point before the blade-texture branches below: WGSL

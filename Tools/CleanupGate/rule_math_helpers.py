@@ -25,17 +25,17 @@ kExcludedModules = {"Mathematics", "Noise"}
 def _piece_for(function_name):
     name = function_name.lower()
     if name.startswith(("lerp", "mix")):
-        return "Mathematics::Lerp (Mathematics/Interpolation.h)"
+        return "Math::Lerp (Mathematics/Interpolation.h)"
     if "inverselerp" in name:
-        return "Mathematics::InverseLerp (Mathematics/Interpolation.h)"
+        return "Math::InverseLerp (Mathematics/Interpolation.h)"
     if name.startswith(("clamp01", "saturate")):
-        return "Mathematics::Clamp01 (Mathematics/Interpolation.h)"
+        return "Math::Clamp01 (Mathematics/Interpolation.h)"
     if name.startswith("clamp"):
         return "std::clamp"
     if name.startswith(("remap", "maprange")):
-        return "Mathematics::Remap (Mathematics/Interpolation.h)"
+        return "Math::Remap (Mathematics/Interpolation.h)"
     if "smooth" in name:
-        return "Mathematics::SmoothStep (Mathematics/Interpolation.h)"
+        return "Math::SmoothStep (Mathematics/Interpolation.h)"
     if name.startswith("ease"):
         return "Mathematics/Easing.h"
     if name.startswith("hash"):
@@ -45,7 +45,7 @@ def _piece_for(function_name):
     if name in ("radians", "degrees", "toradians", "todegrees", "degtorad", "radtodeg"):
         return "Mathematics/Angle.h"
     if name.startswith(("fract", "frac", "wrap", "step", "sign")):
-        return "a Fract or Wrap in Mathematics/Interpolation.h (to add), or std::fmod and std::copysign"
+        return "Math::Fract or Math::Wrap (Mathematics/Interpolation.h), or std::fmod and std::copysign"
     if name in ("approximately", "nearlyequal", "almostequal"):
         return "Mathematics"
     if name in ("pow2", "nextpow2", "ispow2", "roundup", "alignup"):
@@ -71,15 +71,15 @@ class Rule:
                 sites.append(Site(path, line_number, "local_definition", _piece_for(definition.group(1))))
                 continue
             if kInlineSmoothStep.search(code):
-                sites.append(Site(path, line_number, "inline_smoothstep", "Mathematics::SmoothStep (Mathematics/Interpolation.h)"))
+                sites.append(Site(path, line_number, "inline_smoothstep", "Math::SmoothStep (Mathematics/Interpolation.h)"))
             elif kInlineSaturate.search(code):
-                sites.append(Site(path, line_number, "inline_saturate_ternary", "Mathematics::Clamp01 (Mathematics/Interpolation.h)"))
+                sites.append(Site(path, line_number, "inline_saturate_ternary", "Math::Clamp01 (Mathematics/Interpolation.h)"))
             elif kSaturateStdClamp.search(code):
-                sites.append(Site(path, line_number, "saturate_std_clamp01", "Mathematics::Clamp01 (Mathematics/Interpolation.h)"))
+                sites.append(Site(path, line_number, "saturate_std_clamp01", "Math::Clamp01 (Mathematics/Interpolation.h)"))
             elif kInlineClamp.search(code):
                 sites.append(Site(path, line_number, "inline_clamp_minmax", "std::clamp"))
             if kInlineLerp.search(code) and "Lerp" not in code and "lerp" not in code:
-                sites.append(Site(path, line_number, "inline_lerp", "Mathematics::Lerp (Mathematics/Interpolation.h)"))
+                sites.append(Site(path, line_number, "inline_lerp", "Math::Lerp (Mathematics/Interpolation.h)"))
             if kFloatHash.search(code):
                 sites.append(Site(path, line_number, "float_hash_constant", "Fnv1a64, Fnv1a64Value or HashCombine (Types/Fnv1a.h), or the Noise module's hash"))
         return sites

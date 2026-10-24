@@ -498,12 +498,12 @@ struct SkyEnvironment {
     /// At 1 its fastest swing is about 2 Hz; the top keeps the fastest swing under 30 times a second (real
     /// scintillation is faster still).
     float32 StarTwinkleRate = 1.0f;
-    /// Observer: Eye draws the stars as a dark-adapted eye sees them (glare, faint stars fading to
-    /// white); Camera draws the same stars without the glare, each in its catalog color.
-    StarObserverKind StarObserver = StarObserverKind::Eye;
+    /// Observer: Camera, the default, draws every star in its catalog color with no glare; Eye draws the
+    /// stars as a dark-adapted eye sees them (glare, faint stars fading to white).
+    StarObserverKind StarObserver = StarObserverKind::Camera;
     /// Artistic: the star's core size, 0.5 to 3. 1 is physical (a 0.7 px sigma point); smaller is a
     /// tighter, brighter point.
-    float32 StarCoreScale = 0.85f;
+    float32 StarCoreScale = 0.75f;
     /// Artistic: four diffraction spikes on the stars that carry the glow, as the share of the glow's
     /// light they take (0 to 1), so the star's total light does not change. 0 is none.
     float32 StarSpikes = 0.2f;

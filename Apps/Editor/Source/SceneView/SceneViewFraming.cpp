@@ -7,6 +7,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/VectorOps.h"
 #include "Rendering/Common/Math.h"
 #include "SceneView/SceneViewCameraRig.h"
@@ -147,7 +148,7 @@ SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bound
     look = ToVector3(CameraRig::LookDirection(result.YawDeg, result.PitchDeg));
 
     constexpr float kFramingPadding = 1.1f;
-    const float tanHalfVertical = std::tan(Rendering::Math::ToRadians(fieldOfViewDeg) * 0.5f);
+    const float tanHalfVertical = std::tan(Mathematics::ToRadians(fieldOfViewDeg) * 0.5f);
     const float tanHalfHorizontal = tanHalfVertical * aspect;
     float distance = box.Radius() + nearClip;
     const Mathematics::AABB centeredBounds{halfExtents * -1.0f, halfExtents};

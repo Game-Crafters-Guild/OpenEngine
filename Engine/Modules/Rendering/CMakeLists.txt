@@ -453,7 +453,7 @@ if(GLSLC_EXECUTABLE)
         ge_compile_shader(
             OUTPUT ${SHADER_OUTPUT} SOURCE ${SHADER_SOURCE}
             DEFINES ${_defineList}
-            DEPENDS ${UI_SDF_INCLUDES}
+            DEPENDS ${UI_SDF_INCLUDES} ${SHADER_SOURCE_DIR}/Includes/error_function.glsl
             COMMENT "Compiling UI shader: ${_stem}.${_stage}")
         set(GE_ALL_SHADER_SPV_OUTPUTS ${GE_ALL_SHADER_SPV_OUTPUTS} PARENT_SCOPE)
     endfunction()
@@ -770,7 +770,6 @@ set(RENDERING_CORE_SOURCES
 
 	    # Common utilities
 	    Source/Common/Utils.cpp
-		    Source/Common/Math.cpp
 		    Source/Common/Frustum.cpp
 		    Source/Common/CubeLutColorDomain.cpp
 		    Source/Common/CubeLutFileParser.cpp

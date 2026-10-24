@@ -1,19 +1,18 @@
-// The Hierarchy's bottom row: the item size slider beside the panel search. The row is laid out by
-// its own stylesheet over the editor theme, and three things about it are easy to lose without any
-// structural check noticing: the search has to stay a flexible item beside the slider rather than
-// snap back to the panel-anchored placement every other panel search uses; the whole row, not only
-// the search, has to move when search bars sit at the top; and the row has to ride above the tree's
-// horizontal scrollbar while one is on screen. This file lays the REAL row out over the REAL editor
-// stylesheets and measures all three, and checks that the search-bar setting puts its placement
-// classes on the row rather than on the search inside it, that a fresh profile places the row at
-// the top, and that a saved bottom placement keeps it at the bottom.
-
+// The Hierarchy's two bars: the panel search and the item size bar below the tree. They are laid
+// out by the editor theme and the bar's own stylesheet, and four things about them are easy to
+// lose without any structural check noticing: the size bar stays at the bottom wherever the search
+// sits; a bottom search sits above the size bar; both ride above the tree's
+// horizontal scrollbar while one is on screen; and the search reads as a field at rest. This file
+// lays the REAL bar and the REAL panel search it places out over the REAL editor stylesheets and
+// measures them, and checks that a fresh profile places the search at the top and that a saved
+// bottom placement keeps it at the bottom.
 #include <gtest/gtest.h>
 
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "UI/Controls/Scrollbar.h"
 #include "UI/EditorSearchBars.h"
+#include "UI/PanelSearchBar.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/UIElement.h"
 #include "UI/UIManager.h"
@@ -44,24 +43,28 @@ constexpr int kSettleFrames = 3;
 constexpr float kFrameSeconds = 1.0f / 60.0f;
 constexpr float kLayoutTolerancePx = 0.01f;
 
-// The row's resting inset from the panel edge and the gap between the two items, as
-// HierarchyNavigationBar.css states them, and the width every item size slider shares
+// The size bar's resting inset from the panel edge, its left edge on the tree's first icon
+// column (HierarchyNavigationBar.css), and the width every item size slider shares
 // (ItemSizeSlider.css).
-constexpr float kRowInsetPx = 8.0f;
+constexpr float kBarInsetPx = 8.0f;
+constexpr float kBarLeftPx = 23.0f;
 constexpr float kSliderWidthPx = 102.0f;
-constexpr float kItemGapPx = 8.0f;
+// The panel search: 24px tall, 6px from the panel edge at the top, and 6px above the 22px size
+// bar at the bottom (theme/views.css).
+constexpr float kSearchHeightPx = 24.0f;
+constexpr float kSearchTopInsetPx = 6.0f;
+constexpr float kBarHeightPx = 22.0f;
+constexpr float kSearchAboveBarPx = 6.0f;
 // The lift above the tree's horizontal scrollbar: the bar sits 4px above the panel edge and is
-// Scrollbar::kDefaultThicknessPx tall, and the row clears it by 3px. Derived from the bar's real
-// thickness, so a thickness change the stylesheet's literal misses turns this test red.
+// Scrollbar::kDefaultThicknessPx tall, and the size bar clears it by 3px. Derived from the bar's
+// real thickness, so a thickness change the stylesheet's literal misses turns this test red.
 constexpr float kScrollbarInsetPx = 4.0f;
-constexpr float kRowClearanceAboveScrollbarPx = 3.0f;
-constexpr float kRowAboveScrollbarPx =
-    kScrollbarInsetPx + GameEngine::Scrollbar::kDefaultThicknessPx + kRowClearanceAboveScrollbarPx;
-// Anything narrower than this is a search squeezed out of the row, not one filling it.
-constexpr float kMinSearchWidthPx = 100.0f;
+constexpr float kBarClearanceAboveScrollbarPx = 3.0f;
+constexpr float kBarAboveScrollbarPx =
+    kScrollbarInsetPx + GameEngine::Scrollbar::kDefaultThicknessPx + kBarClearanceAboveScrollbarPx;
 
-// The theme sheets the row sits on, in theme.css import order, then the two control sheets the
-// row and its slider request for their own subtrees, which cascade after the theme.
+// The theme sheets the bars sit on, in theme.css import order, then the two control sheets the
+// size bar and its slider request for their own subtrees, which cascade after the theme.
 constexpr const char* kSheets[] = {
     "Assets/UI/theme/tokens.css",
     "Assets/UI/theme/core.css",
@@ -83,41 +86,41 @@ std::string ReadEditorFile(const std::string& relativePath)
     return ss.str();
 }
 
-struct RowParts
+struct HierarchyParts
 {
     UIElement* Panel = nullptr;
-    HierarchyNavigationBar* Row = nullptr;
+    HierarchyNavigationBar* Bar = nullptr;
     UIElement* Slider = nullptr;
     UIElement* Search = nullptr;
 };
 
 // A real UIManager over the editor's own stylesheets holding a Hierarchy-shaped panel with the
-// real row in it, so a measurement here is the editor's layout and not the test's own CSS.
+// real panel search (BuildPanelSearchBar) and the real size bar in it, as HierarchyPanel builds
+// them, so a measurement here is the editor's layout and look and not the test's own CSS.
 struct NavigationBarFixture
 {
     std::unique_ptr<GameEngine::Rendering::IDevice> Device;
     std::unique_ptr<UIManager> Ui;
     std::string Diagnostic;
-    RowParts Parts;
+    HierarchyParts Parts;
 
     bool Build()
     {
         auto panel = std::make_unique<UIElement>();
         panel->AddClass("hierarchy-panel");
-        auto row = std::make_unique<HierarchyNavigationBar>();
-        auto search = std::make_unique<UIElement>();
-        search->AddClass("panel-search-bar");
-        Parts.Search = search.get();
-        row->SetSearchBar(std::move(search));
-        Parts.Row = row.get();
-        for (const auto& child : row->GetChildren())
+        GameEngine::PanelSearchBarBuilt search = GameEngine::BuildPanelSearchBar("hierarchy-search-field");
+        Parts.Search = search.Root.get();
+        auto bar = std::make_unique<HierarchyNavigationBar>();
+        Parts.Bar = bar.get();
+        bar->PlaceSearchAbove(Parts.Search);
+        panel->AddChild(std::move(search.Root));
+        for (const auto& child : bar->GetChildren())
         {
             if (child->HasClass("hierarchy-size-slider"))
                 Parts.Slider = child.get();
         }
-        panel->AddChild(std::move(row));
+        panel->AddChild(std::move(bar));
         Parts.Panel = panel.get();
-
         Device = MakeHeadlessDevice();
         if (!Device)
         {
@@ -194,106 +197,36 @@ struct ScopedUserDataRoot
     }
 };
 
+// Registers the panel search with the search-bar settings, as HierarchyPanel does, for one test.
+struct ScopedSearchBarRegistration
+{
+    UIElement* Search;
+    explicit ScopedSearchBarRegistration(UIElement* search)
+        : Search(search)
+    {
+        EditorSearchBars::Register(Search);
+    }
+    ~ScopedSearchBarRegistration() { EditorSearchBars::Unregister(Search); }
+};
+
 } // namespace
 
-TEST(HierarchyNavigationBarLayout, TheSearchFillsTheRowBesideTheSlider)
+TEST(HierarchyNavigationBarLayout, TheSizeBarSitsAtTheBottomOnTheIconColumn)
 {
     NavigationBarFixture fixture;
     if (!fixture.Build())
         GTEST_SKIP() << fixture.Diagnostic;
-    const RowParts& parts = fixture.Parts;
+    const HierarchyParts& parts = fixture.Parts;
 
     ASSERT_GT(parts.Panel->GetLayoutHeight(), 0.0f) << "the panel did not lay out; this test is vacuous";
+    ASSERT_NE(parts.Slider, nullptr);
     EXPECT_NEAR(parts.Slider->GetLayoutWidth(), kSliderWidthPx, kLayoutTolerancePx);
-    EXPECT_NEAR(parts.Search->GetLayoutX() - Right(*parts.Slider), kItemGapPx, kLayoutTolerancePx)
-        << "the search left the row: it is placed like a panel-anchored search, not beside the slider";
-    EXPECT_GT(parts.Search->GetLayoutWidth(), kMinSearchWidthPx) << "the search does not fill the row";
-    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Row), kRowInsetPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Bar->GetLayoutX() - parts.Panel->GetLayoutX(), kBarLeftPx, kLayoutTolerancePx);
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarInsetPx, kLayoutTolerancePx);
 }
 
-TEST(HierarchyNavigationBarLayout, TheRowRidesAboveTheHorizontalScrollbar)
-{
-    NavigationBarFixture fixture;
-    if (!fixture.Build())
-        GTEST_SKIP() << fixture.Diagnostic;
-    const RowParts& parts = fixture.Parts;
-
-    parts.Row->SetAboveHorizontalScrollbar(true);
-    fixture.Settle();
-    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Row), kRowAboveScrollbarPx, kLayoutTolerancePx);
-    EXPECT_NEAR(Bottom(*parts.Search), Bottom(*parts.Row), kLayoutTolerancePx)
-        << "the search was lifted inside the row as well as with it";
-
-    parts.Row->SetAboveHorizontalScrollbar(false);
-    fixture.Settle();
-    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Row), kRowInsetPx, kLayoutTolerancePx);
-}
-
-// The search-bar setting moves the whole row: its placement classes land on the row and on the
-// panel, and the search inside keeps its place in the row.
-TEST(HierarchyNavigationBarLayout, SearchBarsAtTheTopMoveTheWholeRow)
-{
-    // EditorSearchBars persists the setting, so point the preferences at a scratch directory.
-    const ScopedUserDataRoot userData;
-
-    NavigationBarFixture fixture;
-    if (!fixture.Build())
-        GTEST_SKIP() << fixture.Diagnostic;
-    const RowParts& parts = fixture.Parts;
-
-    struct UnregisterOnExit
-    {
-        UIElement* Search;
-        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
-    } unregister{parts.Search};
-    EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
-    EditorSearchBars::SetAtTop(true);
-    fixture.Settle();
-
-    EXPECT_TRUE(parts.Row->HasClass("search-bar-at-top"));
-    EXPECT_TRUE(parts.Panel->HasClass("search-bars-at-top"));
-    EXPECT_FALSE(parts.Search->HasClass("search-bar-at-top"))
-        << "the search took the placement class, so it is placed inside the row as if it were the row";
-    EXPECT_NEAR(parts.Row->GetLayoutY() - parts.Panel->GetLayoutY(), kRowInsetPx, kLayoutTolerancePx);
-    EXPECT_NEAR(parts.Search->GetLayoutY(), parts.Row->GetLayoutY(), kLayoutTolerancePx)
-        << "the search moved inside the row instead of with it";
-    EXPECT_NEAR(parts.Search->GetLayoutX() - Right(*parts.Slider), kItemGapPx, kLayoutTolerancePx);
-
-    // A horizontal scrollbar at the bottom does not pull a top row down.
-    parts.Row->SetAboveHorizontalScrollbar(true);
-    fixture.Settle();
-    EXPECT_NEAR(parts.Row->GetLayoutY() - parts.Panel->GetLayoutY(), kRowInsetPx, kLayoutTolerancePx);
-}
-
-// A profile that never saved the setting reads search bars at the top: the row and the panel
-// take the placement classes and the row lays out at the top inset.
-TEST(HierarchyNavigationBarLayout, SearchBarsSitAtTheTopOnAFreshProfile)
-{
-    const ScopedUserDataRoot userData;
-    EditorSearchBars::LoadFromPreferences();
-
-    NavigationBarFixture fixture;
-    if (!fixture.Build())
-        GTEST_SKIP() << fixture.Diagnostic;
-    const RowParts& parts = fixture.Parts;
-
-    struct UnregisterOnExit
-    {
-        UIElement* Search;
-        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
-    } unregister{parts.Search};
-    EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
-    fixture.Settle();
-
-    EXPECT_TRUE(EditorSearchBars::GetAtTop());
-    EXPECT_TRUE(parts.Row->HasClass("search-bar-at-top"));
-    EXPECT_TRUE(parts.Panel->HasClass("search-bars-at-top"));
-    EXPECT_NEAR(parts.Row->GetLayoutY() - parts.Panel->GetLayoutY(), kRowInsetPx, kLayoutTolerancePx);
-}
-
-// A profile that saved search bars at the bottom keeps them there: the saved value wins over the
-// default.
-TEST(HierarchyNavigationBarLayout, ASavedBottomPlacementWinsOverTheDefault)
+// The size bar and a bottom search ride above the tree's horizontal scrollbar together.
+TEST(HierarchyNavigationBarLayout, TheBarsRideAboveTheHorizontalScrollbar)
 {
     const ScopedUserDataRoot userData;
     {
@@ -307,18 +240,82 @@ TEST(HierarchyNavigationBarLayout, ASavedBottomPlacementWinsOverTheDefault)
     NavigationBarFixture fixture;
     if (!fixture.Build())
         GTEST_SKIP() << fixture.Diagnostic;
-    const RowParts& parts = fixture.Parts;
+    const HierarchyParts& parts = fixture.Parts;
+    const ScopedSearchBarRegistration registration{parts.Search};
 
-    struct UnregisterOnExit
+    parts.Bar->SetAboveHorizontalScrollbar(true);
+    fixture.Settle();
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarAboveScrollbarPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Bar->GetLayoutY() - Bottom(*parts.Search), kSearchAboveBarPx, kLayoutTolerancePx)
+        << "the bottom search does not follow the size bar up";
+
+    parts.Bar->SetAboveHorizontalScrollbar(false);
+    fixture.Settle();
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarInsetPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Bar->GetLayoutY() - Bottom(*parts.Search), kSearchAboveBarPx, kLayoutTolerancePx)
+        << "the bottom search does not follow the size bar down";
+}
+
+// On a fresh profile the search sits at the top and the size bar stays at the bottom.
+TEST(HierarchyNavigationBarLayout, ATopSearchLeavesTheSizeBarAtTheBottom)
+{
+    const ScopedUserDataRoot userData;
+    EditorSearchBars::LoadFromPreferences();
+
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const HierarchyParts& parts = fixture.Parts;
+    const ScopedSearchBarRegistration registration{parts.Search};
+    fixture.Settle();
+
+    EXPECT_TRUE(EditorSearchBars::GetAtTop());
+    EXPECT_TRUE(parts.Search->HasClass("search-bar-at-top"));
+    EXPECT_TRUE(parts.Panel->HasClass("search-bars-at-top"));
+    EXPECT_FALSE(parts.Bar->HasClass("search-bar-at-top")) << "the size bar must not move with the search";
+    EXPECT_NEAR(parts.Search->GetLayoutY() - parts.Panel->GetLayoutY(), kSearchTopInsetPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Search->GetLayoutHeight(), kSearchHeightPx, kLayoutTolerancePx);
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarInsetPx, kLayoutTolerancePx);
+}
+
+// A profile that saved search bars at the bottom keeps them there, above the size bar rather than
+// over it: the saved value wins over the default.
+TEST(HierarchyNavigationBarLayout, ASavedBottomSearchSitsAboveTheSizeBar)
+{
+    const ScopedUserDataRoot userData;
     {
-        UIElement* Search;
-        ~UnregisterOnExit() { EditorSearchBars::Unregister(Search); }
-    } unregister{parts.Search};
-    EditorSearchBars::RegisterHosted(parts.Search, parts.Row);
+        GameEngine::Editor::SettingsStore prefs = GameEngine::Editor::OpenEditorPreferences();
+        prefs.SetBool("ui.searchBarsAtTop", false);
+        std::string error;
+        ASSERT_TRUE(prefs.Save(&error)) << error;
+    }
+    EditorSearchBars::LoadFromPreferences();
+
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const HierarchyParts& parts = fixture.Parts;
+    const ScopedSearchBarRegistration registration{parts.Search};
     fixture.Settle();
 
     EXPECT_FALSE(EditorSearchBars::GetAtTop());
-    EXPECT_FALSE(parts.Row->HasClass("search-bar-at-top"));
+    EXPECT_FALSE(parts.Search->HasClass("search-bar-at-top"));
     EXPECT_FALSE(parts.Panel->HasClass("search-bars-at-top"));
-    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Row), kRowInsetPx, kLayoutTolerancePx);
+    EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarInsetPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Bar->GetLayoutY() - Bottom(*parts.Search), kSearchAboveBarPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Bar->GetLayoutHeight(), kBarHeightPx, kLayoutTolerancePx);
+}
+
+// At rest, with no focus and no query, the search reads as a field: a fill and a border that
+// differs from it.
+TEST(HierarchyNavigationBarLayout, TheSearchReadsAsAFieldAtRest)
+{
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const auto& visual = fixture.Parts.Search->GetResolvedStyle().Visual;
+
+    EXPECT_NE(visual.BackgroundColor, 0u) << "the search has no fill at rest";
+    EXPECT_NE(visual.BorderColor.Top, 0u) << "the search has no border at rest";
+    EXPECT_NE(visual.BorderColor.Top, visual.BackgroundColor) << "the border does not stand out from the fill";
 }

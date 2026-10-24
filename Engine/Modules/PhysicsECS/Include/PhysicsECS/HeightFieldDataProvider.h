@@ -13,7 +13,7 @@ namespace GameEngine::PhysicsECS
 // region of an already-built shape in place.
 struct HeightFieldData
 {
-    const float32* samples = nullptr; // Non-owning pointer; must remain valid until shape is created.
+    const float32* samples = nullptr; // Non-owning; valid until the shape is created. Physics::kHeightFieldNoCollision marks a hole.
     uint32 sampleCount = 0;          // Width/height of the square sample grid.
     uint64 version = 0;              // Data version for change detection.
 

@@ -3594,7 +3594,6 @@ void GraphPanel::SetupUI()
 
     auto searchBuilt = BuildPanelSearchBar(
         "nodegraph-search-field",
-        []() { return SettingsPanel::GetSearchBarsVisible(); },
         {},
         [this](const std::string& value) {
             if (m_Canvas)

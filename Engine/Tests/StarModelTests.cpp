@@ -11,6 +11,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineTypes.h"
 
+#include "Mathematics/Vector2.h"
 #include "Platform/Shell.h"
 
 #include "TestDeviceHelper.h"
@@ -529,4 +530,20 @@ TEST_F(StarModelTest, EveryStarsCoreIsTheSamePoint)
         for (const float magnitude : {-1.46f, 0.5f, 3.0f, 6.5f})
             EXPECT_NEAR(Shade(magnitude, 1.0f, 0.0f, 8.0f, compression, 0.8f).Out0[1], 1.0f, 1e-4f)
                 << "magnitude " << magnitude << ", compression " << compression;
+}
+
+// A core narrower than a pixel keeps its light wherever the star sits on the pixel grid: each pixel
+// shows the core's mean over its square, so the pixels' sum is the core's energy at every sub-pixel
+// position, and a slow pan does not change the star's scene-linear light. The quad's round cut, at
+// three core radii and at least 1.8 px, keeps 99.5 % of it or more over the whole Star core dial.
+TEST_F(StarModelTest, ACoresLightOnThePixelsIsTheSameWhereverTheStarSits)
+{
+    const Mathematics::Vector2 positions[] = {{0.0f, 0.0f}, {0.25f, 0.0f}, {0.5f, 0.0f}, {0.5f, 0.5f}, {0.3f, 0.15f}};
+    for (const float core : {0.5f, 0.6f, 0.85f, 3.0f})
+        for (const Mathematics::Vector2 at : positions)
+        {
+            const Answer a =
+                Run({{{14.0f, 2.0f, at.x, at.y}, {8.0f, 1.0f, 0.0f, kPixelSolidAngle1080}, Vec4{core, 0.0f, 2.0f, 0.0f}}})[0];
+            EXPECT_NEAR(a.Out0[0], 1.0f, 5e-3f) << "Star core " << core << ", star at (" << at.x << ", " << at.y << ")";
+        }
 }

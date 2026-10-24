@@ -33,7 +33,7 @@
 
 #include "Placement/CenterlineSampling.h"
 #include "Placement/SplineFillRebuild.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 
 #include "Components/Name.h"
 #include "Components/Spline/SplineComponent.h"
@@ -70,8 +70,8 @@ using GameEngine::Mathematics::Vector3;
 using GameEngine::TerrainECS::TerrainService;
 
 using GameEngine::Editor::CenterlineSampleCount;
-using GameEngine::TerrainECS::PlanarHeightQuery;
-using GameEngine::TerrainECS::ResolvePlanarHeightQuery;
+using GameEngine::TerrainECS::SurfaceHeightQuery;
+using GameEngine::TerrainECS::ResolveSurfaceHeightQuery;
 using GameEngine::Editor::WorldCenterlineLength;
 
 namespace Components = GameEngine::Components;
@@ -81,6 +81,18 @@ namespace SplineECS = GameEngine::SplineECS;
 
 namespace
 {
+
+// The finest ground height at world (x, z): a water fill floods the ground as drawn up close.
+bool SampleGround(const GameEngine::TerrainECS::SurfaceHeightQuery& query, GameEngine::float32 worldX,
+                  GameEngine::float32 worldZ, GameEngine::float32& outY)
+{
+    GameEngine::TerrainECS::SurfaceHeightSample sample;
+    if (!query.SampleHeight(GameEngine::Mathematics::Vector3{worldX, 0.0f, worldZ},
+                            GameEngine::TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
+        return false;
+    outY = sample.Height;
+    return true;
+}
 
 // Her repro, to the float: the y she typed into Longwater Water's transform.
 constexpr float32 kLiftMetres = 2.8104186058044434f;
@@ -168,7 +180,7 @@ struct ReproField
 bool BuildReproField(World& world, const std::vector<SG::SplineStripStation>& stations,
                      const Components::SplineExtrude& recipe, ReproField& out)
 {
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(world);
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(world);
     const float32 spacingX = terrain.LatticeSpacingX();
     const float32 spacingZ = terrain.LatticeSpacingZ();
     if (!terrain.IsValid() || !(spacingX > 0.0f) || !(spacingZ > 0.0f))
@@ -187,8 +199,8 @@ bool BuildReproField(World& world, const std::vector<SG::SplineStripStation>& st
         maxZ = std::max(maxZ, s.Position.z);
     }
     const float32 margin = reach + std::max(spacingX, spacingZ) * 2.0f;
-    const float32 originX = terrain.LatticeOriginX();
-    const float32 originZ = terrain.LatticeOriginZ();
+    const float32 originX = terrain.FootprintOriginX();
+    const float32 originZ = terrain.FootprintOriginZ();
     const int32 firstX = static_cast<int32>(std::floor((minX - margin - originX) / spacingX));
     const int32 lastX = static_cast<int32>(std::ceil((maxX + margin - originX) / spacingX));
     const int32 firstZ = static_cast<int32>(std::floor((minZ - margin - originZ) / spacingZ));
@@ -212,7 +224,7 @@ bool BuildReproField(World& world, const std::vector<SG::SplineStripStation>& st
             const float32 worldX = out.Grid.WorldX(cx);
             const uint32 index = out.Grid.Index(cx, cz);
             if (!terrain.ContainsXZ(worldX, worldZ) ||
-                !terrain.SampleHeight(worldX, worldZ, out.Heights[index]))
+                !SampleGround(terrain, worldX, worldZ, out.Heights[index]))
                 out.Heights[index] = 1.0e9f;
         }
     }

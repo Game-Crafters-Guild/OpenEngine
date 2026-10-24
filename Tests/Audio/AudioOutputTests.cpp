@@ -41,15 +41,15 @@ constexpr std::chrono::seconds kTimeout{5};
 struct LogLines
 {
     std::mutex Mutex;
-    std::vector<Logger::String> Lines;
+    std::vector<std::string> Lines;
 
-    bool Contains(const Logger::String& needle)
+    bool Contains(const std::string& needle)
     {
         Logger::Log::Flush();
         std::lock_guard lock(Mutex);
-        for (const Logger::String& line : Lines)
+        for (const std::string& line : Lines)
         {
-            if (line.find(needle) != Logger::String::npos)
+            if (line.find(needle) != std::string::npos)
                 return true;
         }
         return false;
@@ -64,7 +64,7 @@ std::shared_ptr<LogLines> ProcessLog()
         Logger::Log::RedirectToSharedState(GameEngine::GetEngineLoggerState());
         Logger::Log::Initialize({});
         auto lines = std::make_shared<LogLines>();
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         sink->RegisterCallback([lines](const Logger::LogMessage& message)
                                {
                                    std::lock_guard lock(lines->Mutex);

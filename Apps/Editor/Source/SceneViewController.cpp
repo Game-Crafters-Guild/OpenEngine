@@ -14,7 +14,9 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
 #include "Scene/SceneTlas.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/VectorOps.h"
 #include "Rendering/CameraTypes.h"
@@ -71,7 +73,6 @@
 #include "Picking/MeshPickingService.h"
 #include "Picking/PickRootResolver.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
 #include "Editor/Settings/SceneViewSettings.h"
 #include "SceneView/SceneViewFraming.h"
 #include "SceneView/SceneViewOverlayShared.h"
@@ -402,7 +403,7 @@ bool SceneViewController::IsEntityPickable(ECS::EntityHandle entity) const
 }
 using namespace Rendering;
 using Rendering::Matrix4x4;
-using Rendering::Math::ToRadians;
+using Mathematics::ToRadians;
 
 namespace Editor
 {
@@ -2298,7 +2299,7 @@ void SceneViewController::TweenUpdate(float deltaSeconds, bool cameraMoved)
         m_CameraTween.Elapsed += deltaSeconds;
 
         // Calculate Progress
-        float rawT = std::clamp(m_CameraTween.Elapsed / m_CameraTween.Duration, 0.0f, 1.0f);
+        float rawT = Math::Clamp01(m_CameraTween.Elapsed / m_CameraTween.Duration);
         float t = 1.0f - powf(1.0f - rawT, 3.0f); // ease-out -> Starting fast, slowing down near the end
 
         // Lerp position using t
@@ -4206,11 +4207,11 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
             lens.ApertureBladeCount,
             static_cast<int32>(Components::Camera::kApertureBladeCountMin),
             static_cast<int32>(Components::Camera::kApertureBladeCountMax));
-        pp.DofApertureRoundness = std::clamp(lens.ApertureRoundness, 0.0f, 1.0f);
+        pp.DofApertureRoundness = Math::Clamp01(lens.ApertureRoundness);
         pp.DofApertureRotation = std::clamp(lens.ApertureRotation, 0.0f, 360.0f);
         pp.DofAnamorphicSqueeze = std::clamp(lens.AnamorphicSqueeze, 1.0f, 4.0f);
         pp.DofDebugMode = lens.FocusDebugMode != 0 ? 1 : 0;
-        pp.DofDebugAlpha = std::clamp(lens.FocusDebugAlpha, 0.0f, 1.0f);
+        pp.DofDebugAlpha = Math::Clamp01(lens.FocusDebugAlpha);
 
         if (needsToolbarOverride || pp2dAlignCrt || autoExposureOn)
         {

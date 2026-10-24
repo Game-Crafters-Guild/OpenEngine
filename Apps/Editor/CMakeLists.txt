@@ -103,6 +103,7 @@ set(EDITOR_SOURCES
     Source/Editor/Hierarchy/HierarchyReparent.cpp
     Source/Panels/InspectorPanel.cpp
     Source/Panels/AssetViewPanel.cpp
+    Source/Panels/LogModel.cpp
     Source/Panels/LogPanel.cpp
     Source/Panels/LogView.cpp
     Source/Panels/ScriptDiagnosticsByAssembly.cpp
@@ -241,6 +242,8 @@ set(EDITOR_SOURCES
 	Source/UI/Controls/DraggableModal.cpp
 	Source/UI/Controls/EditorTopToolbar.cpp
 	Source/UI/Controls/InspectorNotice.cpp
+	Source/UI/Controls/PictureChoiceField.cpp
+	Source/UI/Controls/TransientNotice.cpp
 	Source/UI/Controls/SkyDayKeyGradientBar.cpp
 	Source/UI/Controls/CurveField.cpp
 	Source/UI/Controls/NineSliceField.cpp
@@ -305,6 +308,7 @@ set(EDITOR_SOURCES
 	Source/Inspectors/SkySunDriveRows.cpp
 	Source/Inspectors/SkySunIlluminanceRow.cpp
 	Source/Inspectors/SkyStarLookRow.cpp
+	Source/Inspectors/SkyStarSeenByRow.cpp
 	Source/Inspectors/SkySunPathRows.cpp
 	Source/Inspectors/SkySunPathCaptions.cpp
 	Source/Inspectors/SkySunReadoutCard.cpp
@@ -739,6 +743,7 @@ set(EDITOR_HEADERS
 	Include/Inspectors/SkySunDriveRows.h
 	Include/Inspectors/SkySunIlluminanceRow.h
 	Include/Inspectors/SkyStarLookRow.h
+	Include/Inspectors/SkyStarSeenByRow.h
 	Include/Inspectors/SkySunPathRows.h
 	Include/Inspectors/SkySunPathCaptions.h
 	Include/Inspectors/SkySunReadoutCard.h

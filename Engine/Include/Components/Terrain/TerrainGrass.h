@@ -28,6 +28,11 @@ inline constexpr float32 kMinTerrainGrassRootFadeSpan = 0.01f;
 // The gradient may start below the root: a negative start puts part of the tip colour on the
 // root itself. -1 is one blade height below it.
 inline constexpr float32 kMinTerrainGrassRootFadeStart = -1.0f;
+// The lowest height fraction the ground's share of an automatic root's gradient may end at
+// (TerrainGrass::GroundTintHeight). The gradient is one ramp from its root end to the tip, so no
+// height down to the root shows a band darker than both, on any ground and at any GroundingStrength;
+// the floor only keeps smoothstep's span from being empty, as kMinTerrainGrassRootFadeSpan does.
+inline constexpr float32 kMinTerrainGrassGroundTintHeight = 0.01f;
 
 // How blades resolve their soft alpha, which is the card texture's alpha and nothing else — a
 // blade BODY is opaque. Geometric grass binds no texture, so it has no soft alpha for either mode
@@ -243,13 +248,21 @@ struct TerrainGrass
     // root is therefore the ground's local average colour, not the exact texel beside it.
     float32 RootFadeStart = 0.0f;
     float32 RootFadeEnd = 0.275f;
-    // The master gate over the whole GROUNDING read, and nothing to do with cast shadows: it scales
-    // the wind-gust shading and the blade's blend into the ground colour it
-    // grows out of (the root colour above, over the RootFade span). At 0 a blade never adopts its
-    // terrain's colour at all, which destroys the contact identity the rest of this component is
-    // built around, so it is an escape hatch for a deliberately stylised field rather than a look
-    // dial.
+    // How much a blade reads as growing out of its ground, and nothing to do with cast shadows: it
+    // scales the light and dark waves gusts send across the field and the blade's blend into the
+    // ground color it grows out of (over the RootFade span, and under an automatic RootColor with
+    // UseSplatRootColor the start of the blade's own gradient too, which ends at GroundTintHeight).
+    // At 0 a blade takes none of its ground's color, for a stylized field.
     float32 GroundingStrength = 1.0f;
+    // The height fraction where the ground's share of the blade's own gradient ends, under an
+    // automatic RootColor with UseSplatRootColor, where that gradient starts from the ground
+    // (GrassBladeCanopy in terrain_grass_surface.glsl). At 1 the share falls as the gradient rises
+    // and is gone at the tip; lower, the gradient's whole root end is gone by this height, so the
+    // blade above is the tip color at any GroundingStrength. Held in [kMinTerrainGrassGroundTintHeight, 1]. An
+    // authored RootColor, or UseSplatRootColor off, gives a gradient with no ground in it, and this
+    // does nothing.
+    // @ge-tooltip The height along the blade, from 0 at the root to 1 at the tip, up to which the ground's color tints the blade. At 0.5 the root starts at the ground's color, the ground's color reaches mid-blade, and the upper half keeps the leaf color. At 1 the tint fades out toward the tip. Applies while Root Color is Auto and Splat Root Color is on.
+    float32 GroundTintHeight = 0.5f;
     // How much light the field keeps from its own lower blades and from the soil under it, sun and
     // sky alike. 1 is the physical amount for the authored density, width and height: under a
     // field the ground is darker than open ground and the blade base stays the ground's colour, so

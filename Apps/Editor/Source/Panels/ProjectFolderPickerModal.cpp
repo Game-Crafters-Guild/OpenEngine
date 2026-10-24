@@ -700,7 +700,6 @@ void ProjectFolderPickerModal::BuildTree()
         };
     auto search = BuildPanelSearchBar(
         "project-picker-search-field",
-        []() { return true; },
         onProjectSearchChanged,
         onProjectSearchChanged);
     search.Root->SetId("project-search");

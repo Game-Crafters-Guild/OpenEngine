@@ -25,7 +25,7 @@ namespace GameEngine.Scripting
         Steppe = 3,
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 248)]
+    [StructLayout(LayoutKind.Explicit, Size = 252)]
     [BuiltInComponent("GameEngine::Components::TerrainGrass")]
     public partial struct TerrainGrass : IComponent
     {
@@ -157,60 +157,63 @@ namespace GameEngine.Scripting
         public float GroundingStrength;
 
         [FieldOffset(136)]
-        public float CanopyShade;
+        public float GroundTintHeight;
 
         [FieldOffset(140)]
-        public float GroundDarkening;
+        public float CanopyShade;
 
         [FieldOffset(144)]
-        public float Translucency;
+        public float GroundDarkening;
 
         [FieldOffset(148)]
-        public bool TextureGrass;
+        public float Translucency;
 
         [FieldOffset(152)]
-        public float TextureCardsPerSquareMeter;
+        public bool TextureGrass;
 
         [FieldOffset(156)]
-        public float TextureSize;
+        public float TextureCardsPerSquareMeter;
 
         [FieldOffset(160)]
-        public bool UseSplatRootColor;
+        public float TextureSize;
 
         [FieldOffset(164)]
-        public uint RootColor;
+        public bool UseSplatRootColor;
 
         [FieldOffset(168)]
-        public uint TipColor;
+        public uint RootColor;
 
         [FieldOffset(172)]
-        public uint BacklightColor;
+        public uint TipColor;
 
         [FieldOffset(176)]
-        public uint SoilColor;
+        public uint BacklightColor;
 
         [FieldOffset(180)]
+        public uint SoilColor;
+
+        [FieldOffset(184)]
         public AssetGuid AlbedoTextureAssetGuid;
 
-        [FieldOffset(196)]
+        [FieldOffset(200)]
         public AssetGuid AlphaTextureAssetGuid;
 
-        [FieldOffset(212)]
+        [FieldOffset(216)]
         public AssetGuid NormalTextureAssetGuid;
 
-        [FieldOffset(228)]
+        [FieldOffset(232)]
         public uint AtlasColumns;
 
-        [FieldOffset(232)]
+        [FieldOffset(236)]
         public uint AtlasRows;
 
-        [FieldOffset(236)]
+        [FieldOffset(240)]
         public uint AtlasTileCount;
 
-        [FieldOffset(240)]
+        [FieldOffset(244)]
         public float AlphaCutoff;
 
-        [FieldOffset(244)]
+        [FieldOffset(248)]
         public float NormalStrength;
     }
 }

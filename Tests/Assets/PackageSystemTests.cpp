@@ -13,7 +13,7 @@
 #include "Assets/Packages/PackagesIndex.h"
 #include "Assets/Packages/PackageVersion.h"
 #include "Assets/Packages/ProjectPackagesManifest.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Engine/Build/AssetCollector.h"
 #include "Engine/Build/PackageBuildStaging.h"
@@ -793,7 +793,7 @@ class CapturingLogSink final : public Logger::LogSink
 
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "CapturingLogSink"; }
+    std::string GetName() const override { return "CapturingLogSink"; }
 
   private:
     std::vector<std::string>* m_Out;
@@ -2445,7 +2445,7 @@ TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInABlueprintShipsItsRuntimeAss
 TEST(PackageMountE2E, EZTreeEnginePackageStagesForPackagedGameWithShaders)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "eztree"))
         << enginePackagesRoot << " missing — Packages not staged";
 
@@ -2549,7 +2549,7 @@ TEST(PackageMountE2E, EZTreeEnginePackageStagesForPackagedGameWithShaders)
 TEST(PackageMountE2E, EZTreePanelUiAssetsResolveFromPackageMountAndStayEditorOnly)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "eztree"))
         << enginePackagesRoot << " missing — Packages not staged";
 
@@ -2610,7 +2610,7 @@ TEST(PackageMountE2E, EZTreePanelUiAssetsResolveFromPackageMountAndStayEditorOnl
 TEST(PackageMountE2E, SvnVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "svn-vcs"))
         << enginePackagesRoot << " missing svn-vcs — Packages not staged";
 
@@ -2664,7 +2664,7 @@ TEST(PackageMountE2E, SvnVcsModuleStaysEditorOnlyAndChromeCssResolves)
 TEST(PackageMountE2E, DiversionVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "diversion-vcs"))
         << enginePackagesRoot << " missing diversion-vcs — Packages not staged";
 
@@ -2721,7 +2721,7 @@ TEST(PackageMountE2E, DiversionVcsModuleStaysEditorOnlyAndChromeCssResolves)
 TEST(PackageMountE2E, LoreVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "lore-vcs"))
         << enginePackagesRoot << " missing lore-vcs — Packages not staged";
 

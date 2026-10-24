@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ECS/ComponentFieldRegistry.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "InspectorRegistry.h"  // InspectorContext, used by GetAdditionalEntities below
 #include "Inspectors/InspectorDragHelpers.h"
@@ -13,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,14 @@ namespace GameEngine
 {
 namespace InspectorDrag
 {
+
+/// The tooltip a component's header gives `fieldName` with a `// @ge-tooltip` marker, or null when
+/// it gives none, for a hand-built row of a reflected component.
+inline const char* ReflectedTooltip(ECS::ComponentTypeId typeId, std::string_view fieldName)
+{
+    const ECS::FieldInfo* field = ECS::ComponentFieldRegistry::FindField(typeId, fieldName);
+    return field && !field->Tooltip.empty() ? field->Tooltip.data() : nullptr;
+}
 
 /// Extract additional entities from an InspectorContext (all except the primary entity).
 inline std::vector<ECS::EntityHandle> GetAdditionalEntities(const InspectorContext& ctx)
@@ -697,6 +707,8 @@ inline SliderWithFloatValueRow AddComponentMultiplierPercentRow(
     slider->SetValueWithoutNotify(initial);
     field->SetValue(initial * 100.0f);
     field->SetSuffix("%");
+    field->SetSuffixAlignment(SuffixAlignment::AfterText);
+    ApplySliderFloatValueFieldStyle(field, kInspectorPercentValueFieldWidthPx);
 
     auto show = [field, rowLabel, labelFor](float value)
     {

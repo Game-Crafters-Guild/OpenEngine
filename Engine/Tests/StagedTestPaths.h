@@ -33,7 +33,7 @@
 //   empty everywhere else.
 //
 // Header-only and dependency-free on purpose: module test exes (e.g. the Graph
-// module's) do not link Engine, so this cannot use PathUtils.
+// module's) do not link Engine, so this cannot use ApplicationPaths.
 
 #include <filesystem>
 #include <iterator>

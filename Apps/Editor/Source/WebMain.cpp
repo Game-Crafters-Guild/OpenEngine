@@ -284,7 +284,7 @@ int main()
     // Before a project can be resolved, the projects tree has to be durable.
     //
     // This is the only OPFS mount, and everything that has to survive a reload
-    // lives inside it: PathUtils::GetUserData/CacheDirectory() resolve to
+    // lives inside it: ApplicationPaths::GetUserData/CacheDirectory() resolve to
     // /project/.user-data and /project/.cache, hidden subtrees of this mount,
     // because a second OPFS mount would alias this one instead of sitting
     // beside it. Those roots are created on first use and only once the mount

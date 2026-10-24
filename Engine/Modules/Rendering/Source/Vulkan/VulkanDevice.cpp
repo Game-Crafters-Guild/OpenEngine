@@ -1711,7 +1711,7 @@ bool VulkanDevice::CreateInstance(const DeviceDesc& desc)
             return true;
         };
 
-        // Resolve executable directory via _NSGetExecutablePath (avoid Engine::PathUtils dependency).
+        // Resolve executable directory via _NSGetExecutablePath (avoid Engine::ApplicationPaths dependency).
         std::filesystem::path exeDir;
         {
             uint32_t size = 0;

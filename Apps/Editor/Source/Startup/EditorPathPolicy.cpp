@@ -2,7 +2,6 @@
 
 #include "Startup/BuiltinAssetSync.h"
 
-#include "Core/Application.h" // PathUtils
 #include "Editor/EditorPaths.h"
 
 #include <vector>

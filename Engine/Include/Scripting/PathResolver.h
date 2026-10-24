@@ -88,7 +88,7 @@ std::filesystem::path ResolveScriptsRuntimeConfig();
 /**
  * @brief Directory where script assemblies (e.g. GameEngine.Scripts.dll) are emitted.
  *
- * <exe>/ScriptAssemblies — PathUtils::GetScriptsAssemblyDirectory(), which creates it on demand.
+ * <exe>/ScriptAssemblies — ApplicationPaths::GetScriptsAssemblyDirectory(), which creates it on demand.
  */
 std::filesystem::path ResolveScriptsAssemblyDirectory();
 

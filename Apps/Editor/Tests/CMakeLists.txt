@@ -31,30 +31,6 @@ ge_stage_runtime_dependencies(EditorDeviceLossTests)
 
 add_test(NAME EditorDeviceLossTests COMMAND EditorDeviceLossTests)
 
-add_executable(EditorLogViewTests
-    LogViewTests.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Panels/LogView.cpp
-)
-
-target_include_directories(EditorLogViewTests
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../Include
-)
-
-target_link_libraries(EditorLogViewTests
-    PRIVATE
-        Engine
-        GTest::gtest
-        GTest::gtest_main
-)
-
-target_compile_features(EditorLogViewTests PRIVATE cxx_std_20)
-
-ge_set_output_tests(EditorLogViewTests)
-ge_stage_runtime_dependencies(EditorLogViewTests)
-
-add_test(NAME EditorLogViewTests COMMAND EditorLogViewTests)
-
 add_executable(EditorCaptureOutputDirectoryTests
     CaptureOutputDirectoryTests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Editor/CaptureOutputDirectory.cpp

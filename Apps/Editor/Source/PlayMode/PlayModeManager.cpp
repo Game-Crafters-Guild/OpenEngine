@@ -374,13 +374,13 @@ void PlayModeManager::ExitPlayMode()
         GameEngine::PhysicsECS::PhysicsWorldService::Shutdown();
     }
 
-    // Release per-tile and per-face terrain-collider slots. The collider entities
-    // are runtime-only and vanish with the snapshot restore below, but that path
-    // never runs the TerrainPhysicsSystem teardown sweep, so their tile-physics /
-    // planet-face slots would otherwise leak across Play sessions.
+    // Release per-page and per-face terrain-collider slots. The collider entities are
+    // runtime-only and vanish with the snapshot restore below, but that path never runs
+    // the TerrainPhysicsSystem teardown sweep, so their page and planet-face slots would
+    // otherwise leak across Play sessions.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
     {
-        terrain->ReleaseAllTilePhysicsHandles();
+        terrain->ReleaseAllPagePhysicsHandles();
         terrain->ReleaseAllPlanetFacePhysicsHandles();
     }
 

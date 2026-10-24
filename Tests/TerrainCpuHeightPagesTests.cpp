@@ -2,21 +2,25 @@
 // item 1 amends it) and the query the CPU readers sample them through (SurfaceHeightQuery): the
 // windows keep the finest level, outside every window the answer is coarse and never unsampled, a
 // RequireFinest caller treats a coarse answer as unsampled, the synchronous fetch holds its deadline,
-// the CPU pages hold the bytes the GPU uploads, overlay included, and a dynamic body far from every
-// camera keeps its finest pages; a fetch of a restarted stream never lands in it, and a failed fetch
-// leaves a coarser page answering until a retry lands.
+// the CPU reads the bytes the GPU uploads, overlay included, and the pages the GPU fetched; a dynamic
+// body far from every camera keeps its finest pages; a fetch of a restarted stream never lands in it,
+// and a failed fetch leaves a coarser page answering until a retry lands; a skyline kept across
+// frames (TerrainSkyline) samples again only where its eye, the sun or the pages moved.
 
-#include "TerrainECS/CpuHeightPageCache.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
+#include "TerrainECS/PlanarHeightfieldEditCursor.h"
+#include "TerrainSkyline.h"
 #include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainService.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/HeightStoreCache.h"
+#include "PageStreaming/PageResidency.h"
 #include "PageStreaming/PageStoreFormat.h"
 #include "PageStreaming/PageStoreReader.h"
 #include "Components/Transform.h"
+#include "Mathematics/Rect.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -24,13 +28,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <span>
 #include <vector>
 
 using namespace GameEngine;
@@ -88,21 +96,67 @@ constexpr uint32 kStream = 1;
 // Level 2 and every coarser level are pinned.
 constexpr uint32 kFirstPinned = 2;
 
-struct CacheAndQuery
+constexpr uint32 kField = 0;
+
+// A residency's budget: `bytes` of decoded pages, `syncPages` synchronous CPU window fetches a
+// frame, `loadsInFlight` loads outstanding (the CPU's share is a quarter).
+PageStreaming::PageResidencyBudget CpuBudget(uint64 bytes, uint32 syncPages, uint32 loadsInFlight = 64)
 {
-    explicit CacheAndQuery(const CpuHeightPageBudget& budget, CpuHeightPageClock clock = &std::chrono::steady_clock::now)
-        : Cache(nullptr, nullptr, budget, std::move(clock))
+    PageStreaming::PageResidencyBudget budget;
+    budget.CpuBytes = bytes;
+    budget.CpuSyncFetchPages = syncPages;
+    budget.LoadsInFlight = loadsInFlight;
+    return budget;
+}
+
+// The CPU half of stream kStream of a residency with no GPU wants: its CPU windows, its pinned
+// levels, and the query over them.
+class CpuPages
+{
+public:
+    explicit CpuPages(const PageStreaming::PageResidencyBudget& budget,
+                      PageStreaming::PageFetchClock clock = &std::chrono::steady_clock::now)
+        : Residency(nullptr, nullptr, budget, std::move(clock))
     {
-        Cache.Configure(kStream, NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned,
-                        nullptr);
-        Query = SurfaceHeightQuery(Cache, kStream, NoiseShape(), 0.0f, 1.0f);
+        Residency.ConfigureField(kField, 64, 2, 0.0f);
     }
 
-    CpuHeightPageCache Cache;
+    void Configure(PageStreaming::PageSource source, std::vector<PageStreaming::PageStoreLevel> levels,
+                   uint32 firstPinned)
+    {
+        Residency.Configure(kStream, kField, std::move(source));
+        Levels = std::move(levels);
+        FirstPinned = firstPinned;
+        Residency.RequestCpu(kStream, FirstPinned, {});
+    }
+
+    void Want(std::span<const PageAddress> window) { Residency.RequestCpu(kStream, FirstPinned, window); }
+    void Update(uint64 frame) { Residency.Update(frame, 1.0f / 60.0f, false); }
+    SurfaceHeightQuery Query(const PageRequestTerrain& shape) const
+    {
+        return SurfaceHeightQuery(Residency.CpuPages(kStream), Levels, shape, 0.0f, 1.0f, nullptr, SurfaceHeightEdits{});
+    }
+
+    PageStreaming::PageResidencyManager Residency;
+    std::vector<PageStreaming::PageStoreLevel> Levels;
+    uint32 FirstPinned = 0;
+};
+
+struct CacheAndQuery
+{
+    explicit CacheAndQuery(const PageStreaming::PageResidencyBudget& budget,
+                           PageStreaming::PageFetchClock clock = &std::chrono::steady_clock::now)
+        : Cache(budget, std::move(clock))
+    {
+        Cache.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+        Query = Cache.Query(NoiseShape());
+    }
+
+    CpuPages Cache;
     SurfaceHeightQuery Query;
 };
 
-constexpr CpuHeightPageBudget kRoomyBudget{64ull << 20, 4u};
+const PageStreaming::PageResidencyBudget kRoomyBudget = CpuBudget(64ull << 20, 4u);
 
 // How many of `windows` answer at their center at level 0 (a RequireFinest answer).
 uint32 CountFinestPages(const SurfaceHeightQuery& query, const std::vector<PageAddress>& windows)
@@ -118,17 +172,47 @@ uint32 CountFinestPages(const SurfaceHeightQuery& query, const std::vector<PageA
     return finest;
 }
 
+// The query of `cpu`'s stream over NoiseShape whose heights stand at page source `source` and overlay
+// version `version`, which changed level-0 samples 10..30 x 20..40 from version `since`.
+SurfaceHeightQuery EditedQuery(const CpuPages& cpu, uint64 source, uint64 version, uint64 since)
+{
+    const SurfaceHeightEdits edits{source, version, PageStreaming::PageSampleRect{10, 20, 30, 40}, since};
+    return SurfaceHeightQuery(cpu.Residency.CpuPages(kStream), cpu.Levels, NoiseShape(), 0.0f, 1.0f, nullptr, edits);
+}
+
+// Every page of `levels`: the state stream kStream's CPU page directory gives it against the
+// residency's own samples of it.
+void ExpectDirectoryMatchesResidency(const CpuPages& cpu, std::span<const PageStreaming::PageStoreLevel> levels,
+                                     const char* when)
+{
+    const PageStreaming::CpuPageDirectory directory = cpu.Residency.CpuPages(kStream);
+    ASSERT_EQ(directory.Entries.size(), levels.back().FirstEntry + 1u) << when;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 z = 0; z < levels[level].PagesZ; ++z)
+            for (uint32 x = 0; x < levels[level].PagesX; ++x)
+            {
+                const PageAddress address{0, static_cast<uint8>(level), x, z};
+                std::span<const float32> samples;
+                const PageStreaming::CpuPageState state = directory.Page(address, samples);
+                const std::vector<float32>* held = cpu.Residency.Samples(kStream, address);
+                ASSERT_EQ(state == PageStreaming::CpuPageState::Resident, held != nullptr)
+                    << when << ": level " << level << " page " << x << ", " << z;
+                if (held)
+                    EXPECT_EQ(samples.data(), held->data()) << when;
+            }
+}
+
 } // namespace
 
 TEST(CpuHeightPages, AWindowKeepsTheFinestLevelWhileThePagesItLeftAreDroppedOverTheBudget)
 {
     // A budget of one page: only the pinned pages and the window's are kept past it.
-    CacheAndQuery cpu(CpuHeightPageBudget{static_cast<uint64>(PageStreaming::kPageSampleCount) * sizeof(float32), 4u});
+    CacheAndQuery cpu(CpuBudget(static_cast<uint64>(PageStreaming::kPageSampleCount) * sizeof(float32), 4u));
     const std::vector<PageAddress> first = WindowAround(200.0f, 200.0f);
     uint64 frame = 1;
     for (; frame < 4; ++frame)
     {
-        cpu.Cache.Want(kStream, first);
+        cpu.Cache.Want(first);
         cpu.Cache.Update(frame);
     }
     SurfaceHeightSample sample;
@@ -139,7 +223,7 @@ TEST(CpuHeightPages, AWindowKeepsTheFinestLevelWhileThePagesItLeftAreDroppedOver
     const std::vector<PageAddress> second = WindowAround(700.0f, 700.0f);
     for (; frame < 8; ++frame)
     {
-        cpu.Cache.Want(kStream, second);
+        cpu.Cache.Want(second);
         cpu.Cache.Update(frame);
         ASSERT_TRUE(cpu.Query.SampleHeight({700.0f, 0.0f, 700.0f}, SurfaceHeightPolicy::AcceptCoarse, sample));
         EXPECT_EQ(sample.Level, 0u) << "the moved window's pages are fetched within the frame";
@@ -149,10 +233,33 @@ TEST(CpuHeightPages, AWindowKeepsTheFinestLevelWhileThePagesItLeftAreDroppedOver
     EXPECT_EQ(sample.Level, kFirstPinned);
 }
 
+TEST(CpuHeightPages, TheCpuPageDirectoryHoldsEveryPageTheResidencyHoldsAfterLandingsAndTrims)
+{
+    // A budget of one page, so the second window's landings trim the first window's pages.
+    CacheAndQuery cpu(CpuBudget(static_cast<uint64>(PageStreaming::kPageSampleCount) * sizeof(float32), 4u));
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(kSamples, kSamples);
+    const PageAddress firstPage = WindowAround(200.0f, 200.0f).front();
+    uint64 frame = 1;
+    for (; frame < 4; ++frame)
+    {
+        cpu.Cache.Want(WindowAround(200.0f, 200.0f));
+        cpu.Cache.Update(frame);
+    }
+    ExpectDirectoryMatchesResidency(cpu.Cache, levels, "after the first window landed");
+    ASSERT_NE(cpu.Cache.Residency.Samples(kStream, firstPage), nullptr);
+    for (; frame < 8; ++frame)
+    {
+        cpu.Cache.Want(WindowAround(700.0f, 700.0f));
+        cpu.Cache.Update(frame);
+    }
+    ExpectDirectoryMatchesResidency(cpu.Cache, levels, "after the trim");
+    ASSERT_EQ(cpu.Cache.Residency.Samples(kStream, firstPage), nullptr) << "the trim did not drop the first window";
+}
+
 TEST(CpuHeightPages, OutsideEveryWindowTheAnswerIsCoarseAndNeverUnsampledInsideTheFootprint)
 {
     CacheAndQuery cpu(kRoomyBudget);
-    cpu.Cache.Want(kStream, WindowAround(200.0f, 200.0f));
+    cpu.Cache.Want(WindowAround(200.0f, 200.0f));
     cpu.Cache.Update(1);
 
     // The first Update holds the top page: every point of the footprint answers.
@@ -184,7 +291,7 @@ TEST(CpuHeightPages, OutsideEveryWindowTheAnswerIsCoarseAndNeverUnsampledInsideT
 TEST(CpuHeightPages, ARequireFinestCallerTreatsACoarseAnswerAsUnsampled)
 {
     CacheAndQuery cpu(kRoomyBudget);
-    cpu.Cache.Want(kStream, WindowAround(200.0f, 200.0f));
+    cpu.Cache.Want(WindowAround(200.0f, 200.0f));
     cpu.Cache.Update(1);
     cpu.Cache.Update(2);
 
@@ -198,33 +305,50 @@ TEST(CpuHeightPages, ARequireFinestCallerTreatsACoarseAnswerAsUnsampled)
 
 TEST(CpuHeightPages, TheSynchronousFetchStopsAtTheDeadlineAndTheRestLandAtTheNextUpdate)
 {
-    // Every clock read is 200 us after the last: the reads at 200 and 400 us start a fetch, the one
-    // at 600 us is past the 500 us deadline.
+    // Every clock read is 200 us after the last: the read at 200 us starts a fetch; at 400 us the
+    // second would end at 600 us (the first cost 200 us), past the 500 us deadline.
     auto now = std::make_shared<std::chrono::steady_clock::time_point>();
-    const CpuHeightPageClock clock = [now]() {
+    const PageStreaming::PageFetchClock clock = [now]() {
         *now += std::chrono::microseconds(200);
         return *now;
     };
-    CacheAndQuery cpu(CpuHeightPageBudget{64ull << 20, 8u}, clock);
+    CacheAndQuery cpu(CpuBudget(64ull << 20, 8u), clock);
     std::vector<PageAddress> windows = WindowAround(200.0f, 200.0f);
     const std::vector<PageAddress> other = WindowAround(700.0f, 700.0f);
     windows.insert(windows.end(), other.begin(), other.end());
-    cpu.Cache.Want(kStream, windows);
+    cpu.Cache.Want(windows);
     cpu.Cache.Update(1);
 
-    EXPECT_EQ(CountFinestPages(cpu.Query, windows), 2u) << "two window pages fit before the deadline";
+    EXPECT_EQ(CountFinestPages(cpu.Query, windows), 1u) << "one window page fits before the deadline";
 
-    cpu.Cache.Want(kStream, windows);
+    cpu.Cache.Want(windows);
     cpu.Cache.Update(2);
     EXPECT_EQ(CountFinestPages(cpu.Query, windows), 8u) << "the rest were fetched on jobs and land at the next Update";
+}
+
+TEST(CpuHeightPages, AFetchThatCostsMoreThanTheDeadlineLeftStartsNoOtherInTheFrame)
+{
+    // The Update starts at 0; the first fetch starts at 10 us and costs 360 us (a generated page).
+    // At 370 us a second fetch of the same cost would end at 730 us, past the 500 us deadline.
+    auto reads = std::make_shared<uint32>(0u);
+    const auto origin = std::chrono::steady_clock::now();
+    const PageStreaming::PageFetchClock clock = [reads, origin]() {
+        const uint32 read = (*reads)++;
+        return origin + std::chrono::microseconds(read == 0u ? 0 : 10 + 360 * (read - 1u));
+    };
+    CacheAndQuery cpu(CpuBudget(64ull << 20, 4u), clock);
+    const std::vector<PageAddress> windows = WindowAround(200.0f, 200.0f);
+    cpu.Cache.Want(windows);
+    cpu.Cache.Update(1);
+    EXPECT_EQ(CountFinestPages(cpu.Query, windows), 1u) << "the second fetch would end past the deadline";
 }
 
 TEST(CpuHeightPages, TheSynchronousFetchStopsAtThePageCapWhenTheClockAllows)
 {
     const auto still = std::chrono::steady_clock::now();
-    CacheAndQuery cpu(CpuHeightPageBudget{64ull << 20, 3u}, [still]() { return still; });
+    CacheAndQuery cpu(CpuBudget(64ull << 20, 3u), [still]() { return still; });
     const std::vector<PageAddress> windows = WindowAround(200.0f, 200.0f);
-    cpu.Cache.Want(kStream, windows);
+    cpu.Cache.Want(windows);
     cpu.Cache.Update(1);
     EXPECT_EQ(CountFinestPages(cpu.Query, windows), 3u);
 }
@@ -382,6 +506,73 @@ TEST(CpuHeightPages, ADynamicBodyFarFromEveryCameraKeepsItsFinestPages)
         << "a stale handle reads nothing";
 }
 
+// The narrow CBT arm, pending modifiers and a page table over the GPU cap keep the GPU on the
+// terrain's texture (GpuPages false), and the CPU still reads the terrain's pages; no view at all
+// (no camera) streams the CPU pages too.
+TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublishesNoTable)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    request.GpuPages = false;
+    const Mathematics::Vector3 camera{300.0f, 10.0f, 300.0f};
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    for (uint64 frame = 2; frame < 6; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, PageLevelView{});
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    const SurfaceHeightQuery query = pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration});
+    SurfaceHeightSample sample;
+    ASSERT_TRUE(query.SampleHeight({300.0f, 0.0f, 300.0f}, SurfaceHeightPolicy::RequireFinest, sample))
+        << "the camera's window is on the CPU";
+    EXPECT_EQ(sample.Level, 0u);
+    ASSERT_TRUE(query.SampleHeight({900.0f, 0.0f, 100.0f}, SurfaceHeightPolicy::AcceptCoarse, sample))
+        << "the pinned levels answer everywhere in the footprint";
+    std::vector<uint32> drawn;
+    pages.PagedTerrains(drawn);
+    EXPECT_TRUE(drawn.empty()) << "the GPU draws its texture: no page table is published";
+    uint64 version = 0;
+    EXPECT_EQ(pages.TableWords(kTerrain, version), nullptr);
+    EXPECT_TRUE(pages.DirtyRects().empty()) << "the drawn height never changed source";
+    EXPECT_TRUE(pages.Uploads().empty());
+
+    // The GPU starts drawing its pages: the whole terrain changes source, the CPU pages stay.
+    request.GpuPages = true;
+    pages.Request(request, {&camera, 1}, MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f));
+    pages.Update(6, 1.0f / 60.0f, false, 2);
+    pages.PagedTerrains(drawn);
+    EXPECT_EQ(drawn.size(), 1u);
+    EXPECT_FALSE(pages.DirtyRects().empty());
+    ASSERT_TRUE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                    .SampleHeight({300.0f, 0.0f, 300.0f}, SurfaceHeightPolicy::RequireFinest, sample));
+}
+
+// The CPU reads what the GPU fetched: a page the GPU wants beyond every CPU window answers finest.
+TEST(CpuHeightPages, APageTheGpuFetchedAnswersFinestOutsideEveryCpuWindow)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{512, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    for (uint64 frame = 2; frame < 40; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    // Level-0 page (3, 0) is two pages past the camera's window (pages 0 and 1): the GPU draws it at
+    // level 0, so the CPU answers from the same fetch.
+    const PageStreaming::PageCache& cache = pages.Residency().FieldCache(kHeightPageField);
+    bool drawnFinest = false;
+    for (const PageStreaming::CachedPage& page : cache.Resident())
+        drawnFinest = drawnFinest || (page.Address == PageAddress{0, 0, 3, 0});
+    ASSERT_TRUE(drawnFinest) << "the GPU wants level 0 at 3 pages from the camera";
+    SurfaceHeightSample sample;
+    ASSERT_TRUE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                    .SampleHeight({450.0f, 0.0f, 60.0f}, SurfaceHeightPolicy::RequireFinest, sample));
+    EXPECT_EQ(sample.Level, 0u);
+}
+
 TEST(CpuHeightPages, AFetchOfARestartedStreamsOldSourceNeverLands)
 {
     PageStreaming::GeneratedHeightLattice flatLattice = NoiseLattice();
@@ -394,18 +585,18 @@ TEST(CpuHeightPages, AFetchOfARestartedStreamsOldSourceNeverLands)
     // No synchronous window fetch, and room for the window's four fetches only: the old source's
     // fetches hold every slot until they are counted out. With no pool a fetch finishes inline, so
     // the flat pages wait in the completion queue when the stream restarts.
-    CpuHeightPageCache cache(nullptr, nullptr, CpuHeightPageBudget{64ull << 20, 0u, 4u});
-    cache.Configure(kStream, flat, levels, kFirstPinned, nullptr);
-    cache.Want(kStream, window);
+    CpuPages cache(CpuBudget(64ull << 20, 0u, 16u));
+    cache.Configure(flat, levels, kFirstPinned);
+    cache.Want(window);
     cache.Update(1);
-    cache.Configure(kStream, NoiseSource(), levels, kFirstPinned, nullptr); // a re-cook restarts the stream
+    cache.Configure(NoiseSource(), levels, kFirstPinned); // a re-cook restarts the stream
 
-    const SurfaceHeightQuery query(cache, kStream, NoiseShape(), 0.0f, 1.0f);
+    const SurfaceHeightQuery query = cache.Query(NoiseShape());
     const Mathematics::Vector3 point{200.0f, 0.0f, 200.0f};
     SurfaceHeightSample sample;
     for (uint64 frame = 2; frame < 5 && !query.SampleHeight(point, SurfaceHeightPolicy::RequireFinest, sample); ++frame)
     {
-        cache.Want(kStream, window);
+        cache.Want(window);
         cache.Update(frame);
     }
     ASSERT_TRUE(query.SampleHeight(point, SurfaceHeightPolicy::RequireFinest, sample))
@@ -414,7 +605,7 @@ TEST(CpuHeightPages, AFetchOfARestartedStreamsOldSourceNeverLands)
     CacheAndQuery reference(kRoomyBudget);
     for (uint64 frame = 1; frame < 3; ++frame)
     {
-        reference.Cache.Want(kStream, window);
+        reference.Cache.Want(window);
         reference.Cache.Update(frame);
     }
     SurfaceHeightSample expected;
@@ -449,8 +640,8 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
 
     const std::vector<PageStreaming::PageStoreLevel>& levels = reader->Layout().Levels;
     const uint32 top = static_cast<uint32>(levels.size()) - 1u;
-    CpuHeightPageCache cache(nullptr, nullptr, kRoomyBudget);
-    cache.Configure(kStream, PageStreaming::PageSource{reader, nullptr}, levels, top, nullptr);
+    CpuPages cache(kRoomyBudget);
+    cache.Configure(PageStreaming::PageSource{reader, nullptr}, levels, top);
     cache.Update(1); // the top page
 
     PageRequestTerrain shape;
@@ -458,14 +649,14 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
     shape.Level0TexelZ = 1.0f;
     shape.SamplesX = kWidth;
     shape.SamplesZ = kHeight;
-    const SurfaceHeightQuery query(cache, kStream, shape, 0.0f, 1.0f);
+    const SurfaceHeightQuery query = cache.Query(shape);
     const Mathematics::Vector3 point{100.0f, 0.0f, 100.0f};
     const std::vector<PageAddress> window = WindowAround(point.x, point.z);
 
     std::error_code error;
     std::filesystem::resize_file(store.Store, 64, error); // the reads fail (a store being rewritten)
     ASSERT_FALSE(error) << error.message();
-    cache.Want(kStream, window);
+    cache.Want(window);
     cache.Update(2);
     SurfaceHeightSample sample;
     ASSERT_TRUE(query.SampleHeight(point, SurfaceHeightPolicy::AcceptCoarse, sample));
@@ -479,7 +670,7 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
     }
     for (uint64 frame = 3; frame < 200; ++frame)
     {
-        cache.Want(kStream, window);
+        cache.Want(window);
         cache.Update(frame);
     }
     ASSERT_TRUE(query.SampleHeight(point, SurfaceHeightPolicy::RequireFinest, sample))
@@ -490,7 +681,9 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
 TEST(CpuHeightPages, AWindowIsTwoPagesWideWithTheNeighborOnTheNearerSide)
 {
     TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
-    const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    // The CPU pages alone: the GPU's level-0 pages around the camera would be on the CPU too.
+    PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    request.GpuPages = false;
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     // The camera stands 12 m into level-0 page (6, 6), which starts at 768 m: its window holds that
     // page and page 5 on each axis, the nearer neighbors, so 4 m back across the edge is finest.
@@ -563,4 +756,329 @@ TEST(CpuHeightPages, BodyWindowsAreBoundedToTheBodiesNearestACamera)
         << "the body nearer the camera keeps its window";
     ASSERT_TRUE(query.SampleHeight({900.0f, 0.0f, 900.0f}, SurfaceHeightPolicy::AcceptCoarse, sample));
     EXPECT_EQ(sample.Detail, SurfaceHeightDetail::Coarse) << "the farther body is past the bound";
+}
+
+TEST(CpuHeightPages, AReaderWindowBringsTheFinestPagesAwayFromEveryCamera)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    request.GpuPages = false; // only the CPU windows want level 0
+    const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
+    const Mathematics::Vector3 reader{900.0f, 0.0f, 900.0f};
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    for (uint64 frame = 2; frame < 6; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, PageLevelView{});
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    SurfaceHeightSample sample;
+    ASSERT_TRUE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                    .SampleHeight(reader, SurfaceHeightPolicy::AcceptCoarse, sample));
+    ASSERT_EQ(sample.Detail, SurfaceHeightDetail::Coarse) << "the reader's point is outside every window";
+
+    for (uint64 frame = 6; frame < 10; ++frame)
+    {
+        pages.RequestReaderWindow(reader);
+        pages.Request(request, {&camera, 1}, PageLevelView{});
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    ASSERT_TRUE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                    .SampleHeight(reader, SurfaceHeightPolicy::RequireFinest, sample))
+        << "the reader's window is on the CPU";
+    EXPECT_EQ(sample.Level, 0u);
+}
+
+TEST(CpuHeightPages, AFetchOfTheFinestPageAnswersFinestBeforeTheNextUpdate)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
+    request.GpuPages = false;
+    const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
+    const Mathematics::Vector3 pick{900.0f, 0.0f, 600.0f};
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    for (uint64 frame = 2; frame < 6; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, PageLevelView{});
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    SurfaceHeightSample sample;
+    ASSERT_FALSE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                     .SampleHeight(pick, SurfaceHeightPolicy::RequireFinest, sample));
+
+    ASSERT_TRUE(pages.FetchFinestPage(TerrainHandle{kTerrain, kGeneration}, pick));
+    ASSERT_TRUE(pages.SurfaceQuery(TerrainHandle{kTerrain, kGeneration})
+                    .SampleHeight(pick, SurfaceHeightPolicy::RequireFinest, sample))
+        << "the fetched page answers at once";
+    EXPECT_EQ(sample.Level, 0u);
+    EXPECT_FALSE(pages.FetchFinestPage(TerrainHandle{kTerrain, kGeneration + 1}, pick)) << "another terrain";
+}
+
+TEST(CpuHeightPages, AnEditCursorReportsTheOverlayRectAndTheWholeFootprintForAMissedStepOrANewSource)
+{
+    CpuPages cpu(CpuBudget(64ull << 20, 4u));
+    const Mathematics::Rect whole = Mathematics::Rect::FromEdges(0.0f, 0.0f, 1024.0f, 1024.0f);
+    PlanarHeightfieldEditCursor cursor;
+    std::vector<Mathematics::Rect> edits;
+
+    cursor.Reset(EditedQuery(cpu, 0, 0, 0));
+    cursor.CollectEdits(EditedQuery(cpu, 7, 3, 0), edits);
+    EXPECT_TRUE(edits.empty()) << "a first source is the pages arriving, not an edit";
+    cursor.CollectEdits(EditedQuery(cpu, 7, 3, 0), edits);
+    EXPECT_TRUE(edits.empty());
+
+    cursor.CollectEdits(EditedQuery(cpu, 7, 4, 3), edits);
+    ASSERT_EQ(edits.size(), 1u);
+    EXPECT_EQ(edits[0], Mathematics::Rect::FromEdges(9.0f, 19.0f, 31.0f, 41.0f))
+        << "every lattice quad touching samples 10..30 x 20..40";
+
+    edits.clear();
+    cursor.CollectEdits(EditedQuery(cpu, 7, 6, 5), edits);
+    ASSERT_EQ(edits.size(), 1u);
+    EXPECT_EQ(edits[0], whole) << "the cursor missed version 5";
+
+    edits.clear();
+    cursor.CollectEdits(EditedQuery(cpu, 9, 6, 5), edits);
+    ASSERT_EQ(edits.size(), 1u);
+    EXPECT_EQ(edits[0], whole) << "a new source changes every height";
+}
+
+namespace
+{
+
+// A skyline over NoiseShape: 1,000 stations 1 m apart, kept within 5 mrad of the march's line.
+constexpr float32 kSkylineDistance = 1000.0f;
+constexpr float32 kSkylineStep = 1.0f;
+constexpr float32 kSkylineTolerance = 0.005f;
+constexpr uint32 kSkylineStations = 1000;
+
+// Updates `cpu`'s stream, `window` wanted, from `frame` on until an Update changes no CPU page;
+// returns the next frame.
+uint64 SettlePages(CpuPages& cpu, std::span<const PageAddress> window, uint64 frame)
+{
+    for (uint32 attempt = 0; attempt < 16; ++attempt, ++frame)
+    {
+        const uint64 before = cpu.Residency.CpuPages(kStream).ChangesEnd();
+        cpu.Want(window);
+        cpu.Update(frame);
+        if (cpu.Residency.CpuPages(kStream).ChangesEnd() == before)
+            return frame + 1;
+    }
+    ADD_FAILURE() << "the CPU pages never settled";
+    return frame;
+}
+
+float32 SkylineFrom(TerrainSkyline& skyline, const SurfaceHeightQuery& query, const Mathematics::Vector3& eye,
+                    float32 dirX = 1.0f, float32 dirZ = 1.0f)
+{
+    return skyline.Tangent(query, eye, dirX, dirZ, kSkylineDistance, kSkylineStep, kSkylineTolerance);
+}
+
+// A skyline that keeps nothing: the march from scratch.
+float32 FreshSkylineFrom(const SurfaceHeightQuery& query, const Mathematics::Vector3& eye)
+{
+    TerrainSkyline fresh;
+    return SkylineFrom(fresh, query, eye);
+}
+
+} // namespace
+
+TEST(CpuHeightPages, AnEditCursorOverANewWholeMapAtTheSameAddressStartsThere)
+{
+    TerrainData map;
+    map.Heightfield = Terrain::HeightfieldData(kSamples, kSamples, 0.25f);
+    PlanarHeightfieldEditCursor cursor;
+    cursor.Reset(SurfaceHeightQuery(map, TerrainHandle{3, 1}, NoiseShape(), 0.0f, 1.0f));
+
+    // The terrain is freed and a new one takes its slot and its address, and is edited.
+    map.Heightfield = Terrain::HeightfieldData(kSamples, kSamples, 0.75f);
+    map.MarkRegionDirty(4, 4, 8, 8);
+    std::vector<Mathematics::Rect> edits;
+    cursor.CollectEdits(SurfaceHeightQuery(map, TerrainHandle{3, 2}, NoiseShape(), 0.0f, 1.0f), edits);
+    EXPECT_TRUE(edits.empty()) << "a new terrain at the same address read as an edit of the cursor's terrain";
+}
+
+TEST(CpuHeightPages, ASkylineSamplesNothingWhileItsEyeTheSunAndThePagesStayPut)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    const std::vector<PageAddress> window = WindowAround(100.0f, 100.0f);
+    uint64 frame = SettlePages(cpu, window, 1);
+
+    TerrainSkyline skyline;
+    const Mathematics::Vector3 eye{100.0f, 0.5f, 100.0f};
+    const float32 first = SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations) << "the first answer marches every station";
+    ASSERT_NE(first, TerrainSkyline::kNoSkyline);
+
+    cpu.Want(window);
+    cpu.Update(frame++);
+    EXPECT_EQ(SkylineFrom(skyline, cpu.Query(NoiseShape()), eye), first);
+    EXPECT_EQ(skyline.LastSampleCount(), 0u) << "nothing moved and no page changed";
+
+    const Mathematics::Vector3 raised{100.0f, 1.5f, 100.0f};
+    const float32 fromRaised = SkylineFrom(skyline, cpu.Query(NoiseShape()), raised);
+    EXPECT_EQ(skyline.LastSampleCount(), 0u) << "a height change of the eye costs no sample";
+    EXPECT_LT(fromRaised, first);
+    EXPECT_EQ(fromRaised, FreshSkylineFrom(cpu.Query(NoiseShape()), raised));
+}
+
+TEST(CpuHeightPages, APageThatLandsUnderASkylineResamplesOnlyTheStationsOverIt)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    uint64 frame = SettlePages(cpu, WindowAround(100.0f, 100.0f), 1);
+
+    TerrainSkyline skyline;
+    const Mathematics::Vector3 eye{100.0f, 0.5f, 100.0f};
+    SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+
+    // The finest pages around (500, 500), on the march's line, land.
+    SettlePages(cpu, WindowAround(500.0f, 500.0f), frame);
+    const float32 tangent = SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+    EXPECT_GT(skyline.LastSampleCount(), 0u) << "the landed pages' stations kept their coarse heights";
+    EXPECT_LT(skyline.LastSampleCount(), kSkylineStations / 2u) << "stations away from the landed pages resampled";
+    EXPECT_EQ(tangent, FreshSkylineFrom(cpu.Query(NoiseShape()), eye));
+}
+
+TEST(CpuHeightPages, ASkylineResamplesTheRingsItsEyeLeftAndEveryStationWhenTheSunTurns)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    SettlePages(cpu, WindowAround(100.0f, 100.0f), 1);
+    const SurfaceHeightQuery query = cpu.Query(NoiseShape());
+
+    TerrainSkyline skyline;
+    SkylineFrom(skyline, query, {100.0f, 0.5f, 100.0f});
+
+    // 0.5 m is past the tolerance of rings 0 to 6 (nearest stations 1 to 64 m: 5 to 320 mm) and
+    // inside it for rings 7 to 9 (nearest 128 m and farther: 640 mm and more).
+    SkylineFrom(skyline, query, {100.5f, 0.5f, 100.0f});
+    EXPECT_EQ(skyline.LastSampleCount(), 127u) << "the stations nearer than 128 m";
+    SkylineFrom(skyline, query, {100.5f, 0.5f, 100.0f});
+    EXPECT_EQ(skyline.LastSampleCount(), 0u);
+
+    // The sun's azimuth turns from the diagonal by twice the tolerance.
+    const float32 azimuth = std::atan2(1.0f, 1.0f) + 2.0f * kSkylineTolerance;
+    SkylineFrom(skyline, query, {100.5f, 0.5f, 100.0f}, std::cos(azimuth), std::sin(azimuth));
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations);
+
+    SkylineFrom(skyline, query, {120.0f, 0.5f, 100.0f}, std::cos(azimuth), std::sin(azimuth));
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations) << "20 m is past every ring's tolerance";
+}
+
+TEST(CpuHeightPages, ASkylineOverARestartedStreamResamplesEveryStation)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    uint64 frame = SettlePages(cpu, WindowAround(100.0f, 100.0f), 1);
+    TerrainSkyline skyline;
+    const Mathematics::Vector3 eye{100.0f, 0.5f, 100.0f};
+    SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+
+    std::vector<Mathematics::Rect> changed;
+    const SurfaceHeightPageStamp before = cpu.Query(NoiseShape()).PageStamp();
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    SettlePages(cpu, WindowAround(100.0f, 100.0f), frame);
+    EXPECT_FALSE(cpu.Query(NoiseShape()).CollectPageChanges(before, changed)) << "the record restarted with the stream";
+    SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations);
+}
+
+TEST(CpuHeightPages, ASkylineOverANewWholeMapAtTheSameAddressResamplesEveryStation)
+{
+    TerrainData map;
+    map.Heightfield = Terrain::HeightfieldData(kSamples, kSamples, 0.25f);
+    TerrainSkyline skyline;
+    const Mathematics::Vector3 eye{100.0f, 0.5f, 100.0f};
+    SkylineFrom(skyline, SurfaceHeightQuery(map, TerrainHandle{3, 1}, NoiseShape(), 0.0f, 1.0f), eye);
+
+    // The terrain is freed and a new one takes its slot and its address, with other heights.
+    map.Heightfield = Terrain::HeightfieldData(kSamples, kSamples, 0.75f);
+    const SurfaceHeightQuery rebuilt(map, TerrainHandle{3, 2}, NoiseShape(), 0.0f, 1.0f);
+    EXPECT_EQ(SkylineFrom(skyline, rebuilt, eye), FreshSkylineFrom(rebuilt, eye));
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations) << "another terrain at the same address";
+}
+
+TEST(CpuHeightPages, AQueryHeldAcrossAFetchReportsTheFetchedPageAmongItsChanges)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    SettlePages(cpu, WindowAround(100.0f, 100.0f), 1);
+    const SurfaceHeightQuery query = cpu.Query(NoiseShape());
+    const SurfaceHeightPageStamp before = query.PageStamp();
+
+    // A pick far from every window fetches its finest page between two Updates.
+    ASSERT_TRUE(cpu.Residency.FetchCpuPage(kStream, WindowAround(900.0f, 600.0f).front()));
+    std::vector<Mathematics::Rect> changed;
+    ASSERT_TRUE(query.CollectPageChanges(before, changed));
+    EXPECT_GT(query.PageStamp().Change, before.Change) << "the held query's place did not move with the fetch";
+    const bool covered = std::any_of(changed.begin(), changed.end(), [](const Mathematics::Rect& rect) {
+        return rect.X <= 900.0f && rect.Right() >= 900.0f && rect.Y <= 600.0f && rect.Bottom() >= 600.0f;
+    });
+    EXPECT_TRUE(covered) << "the held query does not report the page the fetch landed";
+}
+
+TEST(CpuHeightPages, ASkylineWhosePageRecordNoLongerReachesBackResamplesEveryStation)
+{
+    // A budget of one page: each frame the window moves, its pages land and the pages it left are dropped.
+    CpuPages cpu(CpuBudget(static_cast<uint64>(PageStreaming::kPageSampleCount) * sizeof(float32), 4u));
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    const std::vector<PageAddress> nearWindow = WindowAround(200.0f, 200.0f);
+    const std::vector<PageAddress> farWindow = WindowAround(700.0f, 700.0f);
+    uint64 frame = SettlePages(cpu, nearWindow, 1);
+    TerrainSkyline skyline;
+    const Mathematics::Vector3 eye{100.0f, 0.5f, 100.0f};
+    SkylineFrom(skyline, cpu.Query(NoiseShape()), eye);
+    const SurfaceHeightPageStamp stamp = cpu.Query(NoiseShape()).PageStamp();
+
+    // The record keeps the latest changes only: move the window until it has dropped the skyline's place.
+    const std::size_t record = cpu.Residency.CpuPages(kStream).Changes.size();
+    ASSERT_GT(record, 0u);
+    bool far = true;
+    for (; cpu.Query(NoiseShape()).PageStamp().Change - stamp.Change <= record && frame < 4u * record; far = !far)
+    {
+        cpu.Want(far ? farWindow : nearWindow);
+        cpu.Update(frame++);
+    }
+    std::vector<Mathematics::Rect> changed;
+    EXPECT_FALSE(cpu.Query(NoiseShape()).CollectPageChanges(stamp, changed));
+    EXPECT_EQ(SkylineFrom(skyline, cpu.Query(NoiseShape()), eye), FreshSkylineFrom(cpu.Query(NoiseShape()), eye));
+    EXPECT_EQ(skyline.LastSampleCount(), kSkylineStations) << "a change it can no longer read may be under any station";
+
+    // Past the wrap the record still names the latest changes: a move to a third window reports its
+    // pages, and resamples only their stations and those of the window it left.
+    const SurfaceHeightPageStamp beforeMove = cpu.Query(NoiseShape()).PageStamp();
+    cpu.Want(WindowAround(500.0f, 500.0f));
+    cpu.Update(frame++);
+    changed.clear();
+    ASSERT_TRUE(cpu.Query(NoiseShape()).CollectPageChanges(beforeMove, changed));
+    EXPECT_TRUE(std::any_of(changed.begin(), changed.end(), [](const Mathematics::Rect& rect) {
+        return rect.X <= 500.0f && rect.Right() >= 500.0f && rect.Y <= 500.0f && rect.Bottom() >= 500.0f;
+    })) << "the record read past its wrap does not name the pages that landed";
+    EXPECT_EQ(SkylineFrom(skyline, cpu.Query(NoiseShape()), eye), FreshSkylineFrom(cpu.Query(NoiseShape()), eye));
+    EXPECT_GT(skyline.LastSampleCount(), 0u) << "the moved window's stations kept their old heights";
+    EXPECT_LT(skyline.LastSampleCount(), kSkylineStations);
+}
+
+TEST(CpuHeightPages, ARecordExactlyFullReportsEveryChangeItHoldsAndNoReaderOneChangeOlder)
+{
+    CpuPages cpu(kRoomyBudget);
+    cpu.Configure(NoiseSource(), PageStreaming::BuildPageStoreLevels(kSamples, kSamples), kFirstPinned);
+    SettlePages(cpu, WindowAround(100.0f, 100.0f), 1);
+    // A ring of four changes that has wrapped: changes 6 to 9 are in it, change 5 is overwritten.
+    PageStreaming::CpuPageDirectory directory = cpu.Residency.CpuPages(kStream);
+    const PageAddress page = WindowAround(700.0f, 700.0f).front();
+    const std::array<PageAddress, 4> ring{page, page, page, page};
+    const uint64 changeCount = 10u;
+    directory.Changes = ring;
+    directory.ChangeCount = &changeCount;
+    const SurfaceHeightQuery query(directory, cpu.Levels, NoiseShape(), 0.0f, 1.0f, nullptr, SurfaceHeightEdits{});
+
+    std::vector<Mathematics::Rect> changed;
+    ASSERT_TRUE(query.CollectPageChanges({directory.Epoch, changeCount - ring.size()}, changed))
+        << "a reader as far behind as the ring holds reads every change";
+    EXPECT_EQ(changed.size(), ring.size());
+    changed.clear();
+    EXPECT_FALSE(query.CollectPageChanges({directory.Epoch, changeCount - ring.size() - 1u}, changed))
+        << "a reader one change further behind would miss the overwritten change";
 }

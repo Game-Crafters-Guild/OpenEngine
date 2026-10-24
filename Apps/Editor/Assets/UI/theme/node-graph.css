@@ -496,7 +496,8 @@
 	position: relative;
 }
 
-/* Search bar in toolbar: same size and layout as Log panel (320px × 22px) */
+/* The panel search in the toolbar: 320px wide, centered in the row, at the 24px every panel
+   search shares (theme/views.css, .panel-search-bar). */
 .node-graph-toolbar .panel-search-bar {
 	position: relative;
 	left: unset;
@@ -506,7 +507,7 @@
 	flex-grow: 0;
 	flex-shrink: 1;
 	align-self: center;
-	height: 22px;
+	height: 24px;
 	width: 320px;
 	min-width: 120px;
 	max-width: 320px;

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "Core/Engine.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Scripting/ScriptManager.h"
 #include "ECSModules/Rendering/Systems/AnimationSystem.h"
 #include "ECSModules/Rendering/Systems/AnimationGraphSystem.h"
@@ -3154,7 +3155,7 @@ TEST(AnimationGraphCompileFromModel, SerializerNestedRootNodeUnchanged)
 // followed the working directory, and a repo path is absent once the build output moves.
 TEST(AnimationGraphCompileFromModel, LocomotionSampleAnimGraphCompiles)
 {
-    const auto path = GameEngine::PathUtils::GetInstallAssetsRoot() / "Graphs" / "LocomotionSample.animgraph";
+    const auto path = GameEngine::ApplicationPaths::GetInstallAssetsRoot() / "Graphs" / "LocomotionSample.animgraph";
     ASSERT_TRUE(std::filesystem::exists(path)) << path.string();
     std::ifstream in(path);
     ASSERT_TRUE(in) << path.string();

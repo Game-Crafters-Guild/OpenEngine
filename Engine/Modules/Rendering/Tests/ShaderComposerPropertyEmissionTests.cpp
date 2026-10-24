@@ -212,7 +212,7 @@ TEST(ComposeDeclaredProperties, VertexModifierDeclarationsReachBothStages)
 TEST(ComposeDeclaredProperties, ANameTheAdapterReadsIsNotWarnedAsUnread)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     struct Captured
     {
@@ -220,10 +220,10 @@ TEST(ComposeDeclaredProperties, ANameTheAdapterReadsIsNotWarnedAsUnread)
         std::vector<std::string> Lines;
     };
     auto captured = std::make_shared<Captured>();
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [captured](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("is never read") != Logger::String::npos)
+            if (msg.Message.find("is never read") != std::string::npos)
             {
                 std::lock_guard lock(captured->Mutex);
                 captured->Lines.emplace_back(msg.Message.c_str());

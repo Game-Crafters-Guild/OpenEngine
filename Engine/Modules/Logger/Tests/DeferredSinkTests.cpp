@@ -34,7 +34,7 @@ class RecordingSink final : public LogSink
     void Write(const LogMessage& message) override { m_Received->push_back({message.Level, message.Message}); }
     void Flush() override {}
     bool ShouldLog(LogLevel level) const override { return level >= m_MinLevel; }
-    String GetName() const override { return "Recording"; }
+    std::string GetName() const override { return "Recording"; }
 
   private:
     std::vector<ReceivedRecord>* m_Received;

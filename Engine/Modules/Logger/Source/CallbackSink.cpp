@@ -44,15 +44,15 @@ bool CallbackSink::ShouldLog(LogLevel level) const
     return level >= m_Config.MinLevel && m_Config.MinLevel != LogLevel::Off;
 }
 
-uint64 CallbackSink::RegisterCallback(LogCallback callback)
+std::uint64_t CallbackSink::RegisterCallback(LogCallback callback)
 {
     std::lock_guard<std::mutex> lock(m_CallbackMutex);
-    uint64 id = m_NextCallbackId++;
+    std::uint64_t id = m_NextCallbackId++;
     m_Callbacks.push_back({id, std::move(callback)});
     return id;
 }
 
-void CallbackSink::UnregisterCallback(uint64 id)
+void CallbackSink::UnregisterCallback(std::uint64_t id)
 {
     std::lock_guard<std::mutex> lock(m_CallbackMutex);
     for (auto it = m_Callbacks.begin(); it != m_Callbacks.end(); ++it)

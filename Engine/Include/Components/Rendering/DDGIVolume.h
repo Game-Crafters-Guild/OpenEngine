@@ -20,11 +20,11 @@ enum class DDGIProbePlacement : int32 {
 };
 
 /// How many probe grids the volume runs. SingleGrid is the coarse lattice
-/// alone; Cascaded2 adds the finer C1 sub-volume. Matches the reference
-/// demo's cascades control (`single grid` / `cascaded (2)`).
+/// alone; Cascaded2 adds the finer C1 sub-volume. These are the reference
+/// demo's two cascade choices.
 enum class DDGICascadeMode : int32 {
-    SingleGrid = 0, // @ge-label single grid
-    Cascaded2 = 1, // @ge-label cascaded (2)
+    SingleGrid = 0,
+    Cascaded2 = 1, // @ge-label Cascaded (2)
 };
 
 /// Where the probe grid's CENTRE comes from. Manual is the authored
@@ -64,25 +64,25 @@ enum class DDGIDebugView : int32 {
     None = 0,
     /// Fraction of the trilinear cell backed by ACTIVE probes, white = 1.
     /// Anything not white is a point the field only partly answers for.
-    Coverage = 1, // @ge-label probe coverage
+    Coverage = 1, // @ge-label Probe Coverage
     /// Green where the nearest probe is active, red where it is classified
     /// buried, brightness = how far relocation has pushed it from its cell.
-    ProbeState = 2, // @ge-label probe state
+    ProbeState = 2,
     /// Cascade ownership: red = coarse only, green = fine, yellow = crossfade.
-    CascadeWeight = 3, // @ge-label cascade weight
+    CascadeWeight = 3,
     /// The NEAREST coarse probe's stored irradiance toward the surface normal,
     /// with no trilinear blend, visibility or classify weighting: what one
     /// probe actually holds, shown at scene exposure like lit shading.
-    NearestProbeIrradiance = 4, // @ge-label nearest probe irradiance
+    NearestProbeIrradiance = 4,
     /// The same two views against the FINE cascade's own grid and atlas.
-    ProbeStateFine = 5, // @ge-label probe state (fine)
-    NearestProbeIrradianceFine = 6, // @ge-label nearest probe irradiance (fine)
+    ProbeStateFine = 5, // @ge-label Probe State (Fine)
+    NearestProbeIrradianceFine = 6, // @ge-label Nearest Probe Irradiance (Fine)
     /// Grid coordinate and storage slot of the nearest FINE probe, as
     /// xyz / resolution. Storage is toroidal (Includes/ddgi_common.glsl), so a
     /// defect tied to a slot shows here as a plane fixed in the world while
     /// the coordinate view stays continuous.
-    FineProbeCoord = 7, // @ge-label fine probe coord
-    FineProbeSlot = 8, // @ge-label fine probe slot
+    FineProbeCoord = 7, // @ge-label Fine Probe Coordinate
+    FineProbeSlot = 8,
 };
 
 /// Resolution of the depth-moment tile each probe stores for the Chebyshev
@@ -144,7 +144,7 @@ struct DDGIVolume {
     // Diagnostic overlay (see DDGIDebugView). Costs nothing when None: the
     // debug evaluation lives in the resolve compute pass, never in the forward
     // shader, so switching it on cannot perturb the frame it is measuring.
-    // @ge-tooltip Draws what the probe field resolved instead of lit shading. Coverage shows where the probes only partly answer for a surface, Probe State shows which probes were classified buried and how far they relocated, Cascade Weight shows which grid owns each pixel. Diagnostic only — costs nothing when off.
+    // @ge-tooltip Draws what the probe field resolved instead of lit shading. Probe Coverage shows where the probes only partly answer for a surface, Probe State shows which probes were classified buried and how far they relocated, Cascade Weight shows which grid owns each pixel. Diagnostic only — costs nothing when off.
     DDGIDebugView DebugView = DDGIDebugView::None;
 
     // @ge-tooltip Draws the probe lattice in the Scene View, matching the reference demo's show-probes checkbox. Selecting the volume draws its bounds, not its probes, so this stays authoritative while you edit it.
@@ -153,7 +153,7 @@ struct DDGIVolume {
     // Manual keeps the authored transform's translation. FollowCamera
     // overrides it with the active camera's position, snapped to probe
     // spacing so sub-cell motion moves nothing.
-    // @ge-tooltip Where the grid's centre comes from. Manual keeps it where you placed it. Follow Camera re-centres it on the camera every frame so the scene has GI everywhere the camera goes, snapped to whole probe cells so small movements cost nothing. In Manual the entity's scale sizes the grid; in Follow Camera, Follow Range and Follow Height Fraction size it.
+    // @ge-tooltip Where the grid's center comes from. Manual keeps it where you placed it. Follow Camera re-centers it on the camera every frame so the scene has GI everywhere the camera goes, snapped to whole probe cells so small movements cost nothing. In Manual the entity's scale sizes the grid; in Follow Camera, Follow Range and Follow Height Fraction size it.
     DDGIVolumeFit Fit = DDGIVolumeFit::Manual;
 
     // Horizontal reach of a FollowCamera volume, in world units: GI extends
@@ -186,7 +186,7 @@ struct DDGIVolume {
     // what Adaptive changed: in Grid mode no classify pass is dispatched at
     // all and every probe keeps its clear-time state (zero relocation offset,
     // active).
-    // @ge-tooltip How probes are positioned. Adaptive (default) keeps the uniform lattice but nudges each probe out of any geometry it is embedded in, and deactivates one that stays buried so it stops leaking light it cannot see. Grid is the plain lattice — every probe sits at its cell centre and contributes, no classify pass — cheaper and fully predictable, and the A/B control for judging what Adaptive changed.
+    // @ge-tooltip How probes are positioned. Adaptive (default) keeps the uniform lattice but nudges each probe out of any geometry it is embedded in, and deactivates one that stays buried so it stops leaking light it cannot see. Grid is the plain lattice — every probe sits at its cell center and contributes, no classify pass — cheaper and fully predictable, and the A/B control for judging what Adaptive changed.
     DDGIProbePlacement ProbePlacement = DDGIProbePlacement::Adaptive;
 
     // How much authority the classify pass has over the field, in [0,1]. It
@@ -253,7 +253,7 @@ struct DDGIVolume {
     // undoes. (The earlier per-channel clamp did change hue as this rose —
     // by clipping the dominant channel and collapsing saturated bounce toward
     // grey, which was a defect, not the feature the knob advertised.)
-    // @ge-tooltip How much multi-bounce light the field carries, scaling the recursive bounce term rather than the final output. Useful mainly between 0 (single bounce only) and about 1 (full multi-bounce); above that the convergence bound and the radiance clamp renormalize it away and it stops doing anything. To change how strongly colour moves between surfaces, use Radiance Clamp - not this. Applied live, no grid rebuild.
+    // @ge-tooltip How much multi-bounce light the field carries, scaling the recursive bounce term rather than the final output. Useful mainly between 0 (single bounce only) and about 1 (full multi-bounce); above that the convergence bound and the radiance clamp renormalize it away and it stops doing anything. To change how strongly color moves between surfaces, use Radiance Clamp - not this. Applied live, no grid rebuild.
     // @ge-range 0 4
     float32 BounceIntensity = 1.0f;
 
@@ -275,7 +275,7 @@ struct DDGIVolume {
     // No inspector range: the value is in the field's radiance units, so a
     // photometric scene (a 400 kLux sun) needs about 3e5 where a unitless one
     // sits near 8. DDGIProbeFeature::SetActiveVolume floors it at 0.
-    // @ge-tooltip Ceiling on how bright a single bounce sample may be, which is what stops one over-bright surface from smearing a firefly through the probe field. Dims an outlier without changing its colour. This is a ceiling, not a switch - 0 means no bounce light at all. Applied live, no grid rebuild.
+    // @ge-tooltip Ceiling on how bright a single bounce sample may be, which is what stops one over-bright surface from smearing a firefly through the probe field. Dims an outlier without changing its color. This is a ceiling, not a switch - 0 means no bounce light at all. Applied live, no grid rebuild.
     float32 RadianceClamp = 8.0f;
 
     // The ray-basis regime. Gated (the reference library's default) holds
@@ -385,7 +385,7 @@ struct DDGIVolume {
     // Width of that filter's edge-stop band: 0 keeps the baseline bandwidth
     // (directional detail preserved, least smoothing), 1 widens it about 7x
     // (more neighbouring directions trusted, strongest smoothing).
-    // @ge-tooltip How large a difference between neighbouring probe directions the denoise filter still treats as noise rather than a real edge. Higher trusts more neighbours and smooths harder, at the cost of directional detail within a probe; lower keeps that detail and removes less grain. Does nothing while Filter Strength is 0.
+    // @ge-tooltip How large a difference between neighboring probe directions the denoise filter still treats as noise rather than a real edge. Higher trusts more neighbors and smooths harder, at the cost of directional detail within a probe; lower keeps that detail and removes less grain. Does nothing while Filter Strength is 0.
     // @ge-range 0 1
     float32 FilterSmoothness = 0.5f;
 

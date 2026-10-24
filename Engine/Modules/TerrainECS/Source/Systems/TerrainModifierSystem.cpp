@@ -1,4 +1,6 @@
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainGrassCompose.h"
+#include "TerrainRowBands.h"
 #include "TerrainECS/TerrainBakeCache.h"
 #include "TerrainECS/TerrainColorMapBaker.h"
 #include "Components/SceneEntityTag.h"
@@ -827,7 +829,7 @@ bool AnyTiledTileNeedsModifierBake(ECS::World& world, TerrainService& terrainSer
     return needs;
 }
 
-// True when an enabled tiled terrain would page but its height page overlay is not built yet
+// True when an enabled tiled terrain has height pages but its height page overlay is not built yet
 // (TiledTerrainData::AwaitsPageOverlay): wakes the gather so the overlay is baked. O(terrains).
 bool AnyTiledTerrainAwaitsPageOverlay(ECS::World& world, TerrainService& terrainService)
 {
@@ -959,11 +961,6 @@ bool BakeTimingEnabled()
     }();
     return enabled;
 }
-
-// Minimum total touched-texel count to justify the parallel dispatch. Below it the
-// serial path runs (a brush dab is ~2k texels/tile — the fan-out would cost more
-// than the work); a large-radius modifier edit is ~10^5+ texels and fans out.
-static constexpr uint64 kParallelBakeMinTexels = 96u * 1024u;
 
 // Blocks-per-axis of the coarse per-tile height min/max grid (TerrainTileData::
 // HeightBlock*). 8x8 = 64 blocks per tile: a 48x48 sculpt dab on a 1025^2 tile
@@ -1731,7 +1728,7 @@ bool TerrainModifierSystem::ShouldGather(ECS::World& world, TerrainService& terr
     // demands a gather.
     if (!anyChanged && AnyTiledTileNeedsModifierBake(world, terrainService))
         anyChanged = true;
-    // A terrain that would page waits for its height page overlay (TiledTerrainData::AwaitsPageOverlay).
+    // A terrain with height pages waits for its height page overlay (TiledTerrainData::AwaitsPageOverlay).
     if (!anyChanged && AnyTiledTerrainAwaitsPageOverlay(world, terrainService))
         anyChanged = true;
 
@@ -2213,6 +2210,24 @@ void StoreTerrainBake(const TerrainData& data, const std::filesystem::path& file
     const TerrainBakeArtifact artifact = CopyTerrainBake(data, colorKey);
     if (!WriteTerrainBake(file, key, artifact))
         Logger::Log::Warning("Terrain bake cache: could not write '{}'; the next open bakes again", file.string());
+}
+
+// True when an enabled region of the grass stack, weighted above zero, reaches the XZ rectangle
+// [minX, maxX] x [minZ, maxZ] with a height or density scale other than one.
+bool AnyGrassRegionReaches(std::span<const ResolvedModifier> modifiers, float32 minX, float32 minZ, float32 maxX,
+                           float32 maxZ)
+{
+    for (const ResolvedModifier& mod : modifiers)
+    {
+        const bool reaches = mod.Enabled && mod.Weight > 0 && mod.BoundsMaxX >= minX && mod.BoundsMinX <= maxX &&
+                             mod.BoundsMaxZ >= minZ && mod.BoundsMinZ <= maxZ;
+        if (!reaches)
+            continue;
+        for (const ResolvedEffect& fx : mod.Effects)
+            if (fx.Grass.HeightScale != 1.0f || fx.Grass.DensityScale != 1.0f)
+                return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -2738,9 +2753,30 @@ void TerrainModifierSystem::GatherModifiers(ECS::World& world,
     WarnOnClaimedGroundWithNoPaint(outModifiers);
 }
 
+bool TerrainModifierSystem::GrassStackMatches(const std::vector<GrassBakeSnapshot>& snapshot) const
+{
+    if (m_GrassModifiers.size() != snapshot.size()) return false;
+    for (size_t i = 0; i < m_GrassModifiers.size(); ++i)
+        if (m_GrassModifiers[i].Entity != snapshot[i].Entity || HashModifierState(m_GrassModifiers[i]) != snapshot[i].Hash)
+            return false;
+    return true;
+}
+
 void TerrainModifierSystem::BakeGrassFields(ECS::World& world, TerrainService& service)
 {
     const uint64 terrainHash = ComputeTerrainStateHash(world, service);
+    if (m_GrassCompose)
+    {
+        // A compose is in flight. Its result is out of date when the stack or a terrain changed
+        // since it was requested: it is dropped when it lands. Either way one request follows it,
+        // which also reaches a field that appeared meanwhile (a tile streamed in) and composes
+        // nothing when nothing changed. However many gathers land meanwhile, one request is owed.
+        if (terrainHash != m_RequestedGrassBaseline.TerrainHash || !GrassStackMatches(m_RequestedGrassBaseline.Snapshot))
+            ++m_GrassGeneration;
+        m_GrassComposeOwed = true;
+        return;
+    }
+    m_GrassComposeOwed = false;
     // Re-entering/created terrain must reconcile even an empty current stack:
     // a disabled owner may still hold pixels from a region removed meanwhile.
     if (m_GrassModifiers.empty() && m_LastGrassSnapshot.empty()
@@ -2749,10 +2785,9 @@ void TerrainModifierSystem::BakeGrassFields(ECS::World& world, TerrainService& s
     // once before allocating a diff or searching for changed/removed owners.
     // Continue through fields below: streaming may replace/introduce tile data
     // without changing either the authored terrain or modifier stack.
-    bool unchanged = m_HasGrassBaseline && m_GrassModifiers.size() == m_LastGrassSnapshot.size();
-    for (size_t i = 0; unchanged && i < m_GrassModifiers.size(); ++i)
-        unchanged = m_GrassModifiers[i].Entity == m_LastGrassSnapshot[i].Entity
-                 && HashModifierState(m_GrassModifiers[i]) == m_LastGrassSnapshot[i].Hash;
+    // The diff is against the APPLIED stack, so a request whose result was dropped is covered by the
+    // next one.
+    const bool unchanged = m_HasGrassBaseline && GrassStackMatches(m_LastGrassSnapshot);
     std::vector<GrassBakeSnapshot> next;
     uint64 hash = m_LastGrassHash;
     DirtyUnion dirty;
@@ -2789,33 +2824,8 @@ void TerrainModifierSystem::BakeGrassFields(ECS::World& world, TerrainService& s
         // removed footprint does not describe the changed overlap elsewhere.
         full = full || oldOrder != newOrder;
     }
-    auto update = [&](TerrainGrassField& field, uint32 w, uint32 h,
-                      float32 sizeX, float32 sizeZ, float32 originX, float32 originZ)
-    {
-        if (w < 2 || h < 2 || sizeX <= 0 || sizeZ <= 0) return;
-        const bool entire = full || !field.Initialized || field.Width != w || field.Height != h
-                            || field.AppliedHash != m_LastGrassHash;
-        if (entire)
-            ComposeTerrainGrassField(field, w, h, sizeX, sizeZ, originX, originZ, m_GrassModifiers);
-        else if (dirty.Any && dirty.MaxX >= originX && dirty.MinX <= originX + sizeX
-                 && dirty.MaxZ >= originZ && dirty.MinZ <= originZ + sizeZ)
-        {
-            // Clamp world bounds before converting: a global region carries
-            // infinities, which must never be converted directly to an integer.
-            auto lo = [](float32 value, float32 origin, float32 size, uint32 samples) {
-                return std::max(0, static_cast<int32>(std::floor(std::clamp((value-origin)/size, 0.0f, 1.0f)
-                                                                * (samples-1))) - 1);
-            };
-            auto hi = [](float32 value, float32 origin, float32 size, uint32 samples) {
-                return std::min(static_cast<int32>(samples-1), static_cast<int32>(std::ceil(
-                    std::clamp((value-origin)/size, 0.0f, 1.0f) * (samples-1))) + 1);
-            };
-            ComposeTerrainGrassField(field, w, h, sizeX, sizeZ, originX, originZ, m_GrassModifiers,
-                                     lo(dirty.MinX, originX, sizeX, w), lo(dirty.MinZ, originZ, sizeZ, h),
-                                     hi(dirty.MaxX, originX, sizeX, w), hi(dirty.MaxZ, originZ, sizeZ, h));
-        }
-        field.AppliedHash = hash;
-    };
+    const auto requestStart = std::chrono::steady_clock::now();
+    auto request = std::make_shared<TerrainGrassComposeRequest>();
     world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>()
         .Each([&](const Components::Terrain& terrain, const Components::WorldTransform& xf)
         {
@@ -2823,7 +2833,8 @@ void TerrainModifierSystem::BakeGrassFields(ECS::World& world, TerrainService& s
             if (terrain.Domain != Components::TerrainDomain::Planar) return;
             if (terrain.TiledTerrainHandle != 0 || terrain.TiledTerrainGeneration != 0)
             {
-                auto* tiled = service.GetTiledTerrainData({terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+                const TiledTerrainHandle tiledHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration};
+                auto* tiled = service.GetTiledTerrainData(tiledHandle);
                 if (!tiled) return;
                 // Extraction publishes the service origin later in the tick.
                 // Use the current authored transform, never last frame's cache.
@@ -2833,42 +2844,176 @@ void TerrainModifierSystem::BakeGrassFields(ECS::World& world, TerrainService& s
                 // edge tile. Its UVs use that extent, not the requested size.
                 const auto extent = ComputeTiledRenderExtent(tiled->Config);
                 const float32 sizeX = extent.WorldSizeX, sizeZ = extent.WorldSizeZ;
-                tiled->GrassRegionsActive = std::any_of(m_GrassModifiers.begin(), m_GrassModifiers.end(), [&](const auto& mod) {
-                    return mod.Enabled && mod.Weight > 0 && mod.BoundsMaxX >= ox && mod.BoundsMinX <= ox + sizeX
-                        && mod.BoundsMaxZ >= oz && mod.BoundsMinZ <= oz + sizeZ
-                        && std::any_of(mod.Effects.begin(), mod.Effects.end(), [](const auto& fx) {
-                            return fx.Grass.HeightScale != 1.0f || fx.Grass.DensityScale != 1.0f;
-                        });
-                });
+                TerrainGrassComposeTarget target;
+                target.Tiled = tiledHandle;
+                target.RegionsActive = AnyGrassRegionReaches(m_GrassModifiers, ox, oz, ox + sizeX, oz + sizeZ);
                 if (extent.UnifiedWidth <= kMaxUnifiedTiledResolution && extent.UnifiedHeight <= kMaxUnifiedTiledResolution)
                 {
                     // This route already owns full-size unified terrain textures.
                     // Compose controls on the same global lattice, independently of
                     // which height tiles have streamed in.
-                    update(tiled->GrassUnifiedField, extent.UnifiedWidth, extent.UnifiedHeight,
-                           sizeX, sizeZ, ox, oz);
+                    target.Owner = TerrainGrassFieldOwner::TiledUnified;
+                    AddGrassComposeTarget(*request, target, tiled->GrassUnifiedField, extent.UnifiedWidth,
+                                          extent.UnifiedHeight, sizeX, sizeZ, ox, oz, full, dirty);
                     return;
                 }
                 // Evaluate on global world coordinates, including tiles that have
                 // never streamed. Residency cannot erase a suppression region.
-                update(tiled->GrassCoarseField, kAtlasCoarseFieldDim, kAtlasCoarseFieldDim, sizeX, sizeZ, ox, oz);
+                target.Owner = TerrainGrassFieldOwner::TiledCoarse;
+                AddGrassComposeTarget(*request, target, tiled->GrassCoarseField, kAtlasCoarseFieldDim,
+                                      kAtlasCoarseFieldDim, sizeX, sizeZ, ox, oz, full, dirty);
+                target.Owner = TerrainGrassFieldOwner::TiledTile;
                 for (auto& [coord, tile] : tiled->Tiles)
                 {
                     if (!tile || tile->LodState == TileLodState::Empty) continue;
                     const float32 size = tiled->Config.TileWorldSize;
-                    update(tile->GrassField, tiled->Config.TileConfig.HeightmapWidth, tiled->Config.TileConfig.HeightmapHeight,
-                           size, size, ox + coord.X * size, oz + coord.Z * size);
+                    target.Tile = coord;
+                    AddGrassComposeTarget(*request, target, tile->GrassField, tiled->Config.TileConfig.HeightmapWidth,
+                                          tiled->Config.TileConfig.HeightmapHeight, size, size, ox + coord.X * size,
+                                          oz + coord.Z * size, full, dirty);
                 }
             }
             else if (auto* data = service.GetTerrainData({terrain.TerrainDataHandle, terrain.TerrainDataGeneration}))
-                update(data->GrassField, data->Heightfield.GetWidth(), data->Heightfield.GetHeight(),
-                       data->Config.WorldSizeX, data->Config.WorldSizeZ,
-                       xf.matrix[12] - terrain.SizeX * 0.5f, xf.matrix[14] - terrain.SizeZ * 0.5f);
+            {
+                TerrainGrassComposeTarget target;
+                target.Owner = TerrainGrassFieldOwner::Single;
+                target.Terrain = {terrain.TerrainDataHandle, terrain.TerrainDataGeneration};
+                AddGrassComposeTarget(*request, target, data->GrassField, data->Heightfield.GetWidth(),
+                                      data->Heightfield.GetHeight(), data->Config.WorldSizeX, data->Config.WorldSizeZ,
+                                      xf.matrix[12] - terrain.SizeX * 0.5f, xf.matrix[14] - terrain.SizeZ * 0.5f,
+                                      full, dirty);
+            }
         });
-    if (!unchanged) m_LastGrassSnapshot = std::move(next);
-    m_LastGrassHash = hash;
-    m_LastGrassTerrainHash = terrainHash;
+    m_RequestedGrassBaseline.Snapshot = unchanged ? m_LastGrassSnapshot : std::move(next);
+    m_RequestedGrassBaseline.Hash = hash;
+    m_RequestedGrassBaseline.TerrainHash = terrainHash;
+    request->Generation = m_GrassGeneration;
+    const bool composes = std::any_of(request->Targets.begin(), request->Targets.end(),
+                                      [](const TerrainGrassComposeTarget& target) { return target.Compose; });
+    m_GrassCompose = request;
+    m_GrassComposeRequestedAt = requestStart;
+    // The compose's row bands go to the pool like the ground bake's (RunRowBands), under the same switch.
+    JobSystem::WorkStealingThreadPool* const composeJobs = ModifierParallelBakeEnabled() ? m_JobPool : nullptr;
+    // An empty stack composes nothing but a clear (O(1)), so it stays in place: a terrain with no
+    // grass regions never waits for a job before its grass draws.
+    if (composes && m_JobPool && !m_GrassModifiers.empty())
+    {
+        // Off the frame: the job owns its request, and the result swaps in at the start of the first
+        // update after it finishes (ApplyGrassCompose).
+        SnapshotTerrainGrassModifiers(m_GrassModifiers, *request);
+        m_GrassComposeTask = std::make_unique<JobSystem::TaskHandle>(m_JobPool->Submit(
+            [request, composeJobs] { ComposeTerrainGrassRequest(*request, request->Modifiers, composeJobs); }));
+        if (BakeTimingEnabled())
+            Logger::Log::Info("Terrain.BakeTiming grass request ms={} targets={} generation={}",
+                              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                        requestStart).count(),
+                              request->Targets.size(), request->Generation);
+        return;
+    }
+    // No pool (headless), an empty stack or nothing to compose: in place, this update, from the
+    // gather's stack.
+    ComposeTerrainGrassRequest(*request, m_GrassModifiers, composeJobs);
+    ApplyGrassCompose(service);
+}
+
+void TerrainModifierSystem::AddGrassComposeTarget(TerrainGrassComposeRequest& request, TerrainGrassComposeTarget target,
+                                                  const TerrainGrassField& field, uint32 w, uint32 h, float32 sizeX,
+                                                  float32 sizeZ, float32 originX, float32 originZ, bool full,
+                                                  const DirtyUnion& dirty) const
+{
+    if (w < 2 || h < 2 || sizeX <= 0 || sizeZ <= 0) return;
+    target.SourceVersion = field.Version;
+    target.SourceInitialized = field.Initialized;
+    target.Width = w; target.Height = h;
+    target.SizeX = sizeX; target.SizeZ = sizeZ; target.OriginX = originX; target.OriginZ = originZ;
+    target.Entire = full || !field.Initialized || field.Width != w || field.Height != h
+                    || field.AppliedHash != m_LastGrassHash;
+    target.Compose = target.Entire || (dirty.Any && dirty.MaxX >= originX && dirty.MinX <= originX + sizeX
+                                       && dirty.MaxZ >= originZ && dirty.MinZ <= originZ + sizeZ);
+    if (target.Compose && !target.Entire)
+    {
+        // The dirty bounds' samples, one more on each side, inside the field.
+        target.MinX = std::max(0, AxisSample(dirty.MinX, originX, sizeX, w, false) - 1);
+        target.MinZ = std::max(0, AxisSample(dirty.MinZ, originZ, sizeZ, h, false) - 1);
+        target.MaxX = std::min(static_cast<int32>(w - 1), AxisSample(dirty.MaxX, originX, sizeX, w, true) + 1);
+        target.MaxZ = std::min(static_cast<int32>(h - 1), AxisSample(dirty.MaxZ, originZ, sizeZ, h, true) + 1);
+    }
+    if (target.Compose)
+    {
+        // The job composes a copy; the live field keeps drawing until the result swaps in.
+        target.Field = field;
+        target.Field.Dirty = false;
+    }
+    request.Targets.push_back(std::move(target));
+}
+
+void TerrainModifierSystem::WaitForGrassComposeForTests()
+{
+    if (m_GrassComposeTask && m_GrassComposeTask->IsValid())
+        m_GrassComposeTask->Wait();
+}
+
+void TerrainModifierSystem::ApplyGrassCompose(TerrainService& service)
+{
+    if (!m_GrassCompose) return;
+    // Done before Composed: the job sets Composed before its handle completes, so a finished
+    // handle with Composed still false is a job that never ran.
+    if (m_GrassComposeTask && m_GrassComposeTask->IsValid() && !m_GrassComposeTask->IsDone()) return;
+    if (!m_GrassCompose->Composed.load(std::memory_order_acquire))
+    {
+        // The pool refused or cancelled the job (shutdown): nothing was composed.
+        m_GrassCompose.reset();
+        m_GrassComposeTask.reset();
+        m_GrassComposeOwed = true;
+        return;
+    }
+    const std::shared_ptr<TerrainGrassComposeRequest> request = std::move(m_GrassCompose);
+    m_GrassComposeTask.reset();
+    if (request->Generation != m_GrassGeneration)
+    {
+        m_GrassComposeOwed = true;
+        if (BakeTimingEnabled())
+            Logger::Log::Info("Terrain.BakeTiming grass dropped generation={} current={}", request->Generation,
+                              m_GrassGeneration);
+        return;
+    }
+    bool composed = false;
+    for (TerrainGrassComposeTarget& target : request->Targets)
+    {
+        TerrainGrassField* live = FindTerrainGrassField(service, target);
+        if (!live) continue; // its terrain or tile is gone
+        if (live->Version != target.SourceVersion || live->Initialized != target.SourceInitialized)
+        {
+            // Replaced meanwhile; the owed compose covers it whole. The replacement reachable today
+            // (a tile streamed out and back in) is a fresh field of the same lattice and stack, so
+            // the result would be content-equivalent; this guards a field replaced under the same
+            // handle with different content.
+            m_GrassComposeOwed = true;
+            continue;
+        }
+        // The terrain's flag describes the fields it shows, so it changes with them.
+        if (target.Owner == TerrainGrassFieldOwner::TiledUnified || target.Owner == TerrainGrassFieldOwner::TiledCoarse)
+            service.GetTiledTerrainData(target.Tiled)->GrassRegionsActive = target.RegionsActive;
+        if (target.Compose)
+        {
+            const uint64 versionBefore = live->Version;
+            ApplyTerrainGrassComposeTarget(target, *live);
+            composed = true;
+            if (BakeTimingEnabled())
+                Logger::Log::Info("Terrain.BakeTiming grass ms={} samples={}x{} entire={} modifiers={} changed={}",
+                                  target.ComposeTime.count(), target.Width, target.Height, target.Entire ? 1 : 0,
+                                  m_RequestedGrassBaseline.Snapshot.size(), live->Version != versionBefore ? 1 : 0);
+        }
+        live->AppliedHash = m_RequestedGrassBaseline.Hash;
+    }
+    m_LastGrassSnapshot = std::move(m_RequestedGrassBaseline.Snapshot);
+    m_LastGrassHash = m_RequestedGrassBaseline.Hash;
+    m_LastGrassTerrainHash = m_RequestedGrassBaseline.TerrainHash;
     m_HasGrassBaseline = true;
+    if (composed && BakeTimingEnabled())
+        Logger::Log::Info("Terrain.BakeTiming grass applied generation={} request-to-apply ms={}", request->Generation,
+                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                    m_GrassComposeRequestedAt).count());
 }
 
 // A claim-respecting effect reads the claim buffer at the slot it APPLIES in —
@@ -3045,9 +3190,16 @@ float32 ComputeWeight(const ResolvedModifier& mod, float32 worldX, float32 world
             return 0.0f;
         // SplineFillInterior chooses "inside this loop" (SplineArea) over "along
         // this loop" (SplinePath); on an open spline the two agree.
+        //
+        // The ramp is exactly zero once the signed distance reaches the outer
+        // falloff (ShapeFalloffWeight), so a sample whose segment bounds are all
+        // that far away skips the curve search: most of a winding route's box is
+        // far from its band, and every one of those samples would otherwise
+        // refine the route. A NaN falloff leaves the cutoff NaN, which never cuts.
+        const float32 cutoff = std::max(mod.Falloff, 0.0f);
         const float32 sd = mod.SplineFillInterior
-            ? Spline::SignedDistanceToSplineXZ(*mod.ResolvedSpline, worldX, worldZ)
-            : Spline::SignedDistanceToSplineBandXZ(*mod.ResolvedSpline, worldX, worldZ);
+            ? Spline::SignedDistanceToSplineXZ(*mod.ResolvedSpline, worldX, worldZ, cutoff)
+            : Spline::SignedDistanceToSplineBandXZ(*mod.ResolvedSpline, worldX, worldZ, cutoff);
         distFromEdge = -sd;
     }
     else if (mod.Shape == Components::TerrainModifierShape::Circle)
@@ -4425,38 +4577,8 @@ bool TerrainModifierSystem::RunBakeRowBands(
     std::span<const BakeBandRegion> regions,
     const std::function<void(std::size_t, int32, int32, int32, int32)>& rowFn)
 {
-    uint64 totalTexels = 0;
-    for (const BakeBandRegion& r : regions)
-        totalTexels += static_cast<uint64>(r.MaxX - r.MinX + 1) * static_cast<uint64>(r.MaxZ - r.MinZ + 1);
-    const bool parallel =
-        ModifierParallelBakeEnabled() && m_JobPool != nullptr && totalTexels >= kParallelBakeMinTexels;
-    if (!parallel)
-    {
-        for (std::size_t i = 0; i < regions.size(); ++i)
-            rowFn(i, regions[i].MinX, regions[i].MaxX, regions[i].MinZ, regions[i].MaxZ);
-        m_LastBakeBandCount = 0;
-        return false;
-    }
-    // Flatten every region into fixed-height row bands so the pool stays busy even
-    // when there are few regions. The per-sample noise, modifier and splat evaluators
-    // are pure functions of world position, so a band split is byte-identical to one
-    // whole-region call. One ParallelFor unit per band: the wave scheduler runs a
-    // multi-system wave's members on pool workers, and this bake is one of them, so the
-    // fork must be legal on a worker, which ParallelFor is.
-    struct Band { std::size_t Region; int32 MinX, MaxX, Z0, Z1; };
-    std::vector<Band> bands;
-    for (std::size_t i = 0; i < regions.size(); ++i)
-        for (int32 z = regions[i].MinZ; z <= regions[i].MaxZ; z += kBakeBandRows)
-            bands.push_back(Band{i, regions[i].MinX, regions[i].MaxX, z,
-                                 std::min(z + kBakeBandRows - 1, regions[i].MaxZ)});
-    const auto bakeBand = [&rowFn, &bands](std::size_t i)
-    {
-        const Band& band = bands[i];
-        rowFn(band.Region, band.MinX, band.MaxX, band.Z0, band.Z1);
-    };
-    JobSystem::ParallelFor(m_JobPool, bands.size(), bakeBand);
-    m_LastBakeBandCount = static_cast<uint32>(bands.size());
-    return true;
+    m_LastBakeBandCount = RunRowBands(ModifierParallelBakeEnabled() ? m_JobPool : nullptr, regions, rowFn);
+    return m_LastBakeBandCount != 0;
 }
 
 bool TerrainModifierSystem::BakeSingleTerrainHeights(TerrainData& data, Components::TerrainBaseSource baseSource,
@@ -5372,6 +5494,11 @@ TerrainModifierSystem::TerrainModifierSystem() = default;
 
 TerrainModifierSystem::~TerrainModifierSystem()
 {
+    // The grass job owns everything it reads, so it never needs waiting for (the system may be
+    // destroyed on a pool worker, where waiting is illegal); a queued one is cancelled rather than
+    // run for a system that will never apply it.
+    if (m_GrassComposeTask && m_GrassComposeTask->IsValid())
+        m_GrassComposeTask->Cancel();
     if (m_BakeStoreWrites && m_BakeStoreWrites->IsValid())
         m_BakeStoreWrites->Wait();
 }
@@ -5578,6 +5705,10 @@ void TerrainModifierSystem::UpdateBakes(ECS::World& world)
 
     terrainService->BeginModifierAccess();
 
+    // A grass compose that finished since the last update swaps in first, before this update's
+    // gather can ask for another.
+    ApplyGrassCompose(*terrainService);
+
     // A GPU-bake settle readback (slice-1c) refreshed a heightfield last frame and set the
     // terrain's SplatResplatPending — arm the deferred renormalize so it runs the SAME #526
     // path as a CPU bake (regenerate splat from the readback-refreshed heights).
@@ -5625,6 +5756,10 @@ void TerrainModifierSystem::UpdateBakes(ECS::World& world)
     // bake actually runs; the gate only decides whether it is worth looking.
     if (!ShouldGather(world, *terrainService) && !forceSettleBake)
     {
+        // A grass compose owed by an edit that landed while another ran: the last gather's stack is
+        // still the newest.
+        if (m_GrassComposeOwed && !m_GrassCompose)
+            BakeGrassFields(world, *terrainService);
         terrainService->EndModifierAccess();
         return;
     }

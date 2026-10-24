@@ -109,6 +109,25 @@ TEST(TerrainHeightSource, AnOpenStoreOrAGeneratedBasePages)
     EXPECT_TRUE(TerrainHeightIsPaged(inputs));
 }
 
+TEST(TerrainHeightSource, EveryTerrainWithAPageSourceOnTheLatticeHasCpuPages)
+{
+    TerrainHeightSourceInputs inputs = BakedPageable();
+    inputs.PagesOnLattice = true;
+    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs));
+    inputs.GpuReadsPages = false;
+    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "the narrow arm draws the texture; the CPU reads the pages";
+    inputs.ModifiersPending = true;
+    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "pending modifiers: the CPU pages wait for the overlay";
+    inputs.PageTableFits = false;
+    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "the GPU page table's cap is not the CPU's";
+    inputs.CookedStoreOpen = false;
+    EXPECT_FALSE(TerrainHeightHasCpuPages(inputs)) << "no page source";
+    inputs.GeneratedBase = true;
+    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs));
+    inputs.PagesOnLattice = false;
+    EXPECT_FALSE(TerrainHeightHasCpuPages(inputs)) << "a generated pyramid off the lattice";
+}
+
 TEST(TerrainHeightPages, PackedWordsCarryTheShapeFadesAndEntriesWhereTheResolveReadsThem)
 {
     PageTable table;

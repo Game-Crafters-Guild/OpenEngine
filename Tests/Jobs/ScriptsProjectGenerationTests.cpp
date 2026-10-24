@@ -98,7 +98,7 @@ class LogCapture
     explicit LogCapture(Logger::LogLevel level) : m_Level(level)
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         m_Sink = sink.get();
         Logger::Log::AddSink(std::move(sink));
         m_CallbackId = m_Sink->RegisterCallback(

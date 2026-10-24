@@ -134,12 +134,12 @@ class RescaleLogProbe
     RescaleLogProbe() : m_State(std::make_shared<ReportLogState>())
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         auto state = m_State;
         sink->RegisterCallback(
             [state](const Logger::LogMessage& msg)
             {
-                if (msg.Message.find(kRescaleMarker) == Logger::String::npos)
+                if (msg.Message.find(kRescaleMarker) == std::string::npos)
                     return;
                 state->Last = msg.Message;
                 state->Count.fetch_add(1);

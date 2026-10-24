@@ -6,6 +6,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector2.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Utils/BufferHelpers.h"
@@ -33,8 +34,6 @@ using ::GameEngine::Rendering::TextureUsage;
 namespace
 {
 
-float32 Lerp(float32 a, float32 b, float32 t);
-
 float32 AuthoredInputWeight(const OceanInputDrawPacket& input, float32 worldX, float32 worldZ)
 {
     const float32 dx = std::abs(worldX - input.CenterX);
@@ -47,8 +46,7 @@ float32 AuthoredInputWeight(const OceanInputDrawPacket& input, float32 worldX, f
     if (input.Feather <= 1e-4f)
         return 1.0f;
     const float32 inside = std::min(input.ExtentX - dx, input.ExtentZ - dz);
-    const float32 t = std::clamp(inside / input.Feather, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
+    return Math::SmoothStep(0.0f, input.Feather, inside);
 }
 
 void ApplyTypedShapeInputs(const std::vector<OceanInputDrawPacket>& inputs,
@@ -181,7 +179,7 @@ void ApplyBakedHeightFieldSample(const OceanHeightField& heightField, OceanSurfa
 void BlendBakedHeightFieldSample(const OceanHeightField& heightField, OceanSurfaceSample& sample,
                                  float32 worldX, float32 worldZ, float32 blend)
 {
-    blend = std::clamp(blend, 0.0f, 1.0f);
+    blend = Math::Clamp01(blend);
     if (blend <= 1e-5f)
         return;
 
@@ -193,13 +191,13 @@ void BlendBakedHeightFieldSample(const OceanHeightField& heightField, OceanSurfa
         return;
 
     sample.Source = OceanQuerySource::BakedHeightField;
-    sample.Height = Lerp(sample.Height, h, blend);
+    sample.Height = Math::Lerp(sample.Height, h, blend);
     sample.PositionWS[0] = worldX;
     sample.PositionWS[1] = sample.Height;
     sample.PositionWS[2] = worldZ;
-    sample.DisplacementWS[0] = Lerp(sample.DisplacementWS[0], dx, blend);
-    sample.DisplacementWS[1] = Lerp(sample.DisplacementWS[1], dy, blend);
-    sample.DisplacementWS[2] = Lerp(sample.DisplacementWS[2], dz, blend);
+    sample.DisplacementWS[0] = Math::Lerp(sample.DisplacementWS[0], dx, blend);
+    sample.DisplacementWS[1] = Math::Lerp(sample.DisplacementWS[1], dy, blend);
+    sample.DisplacementWS[2] = Math::Lerp(sample.DisplacementWS[2], dz, blend);
 
     constexpr float32 e = 0.5f;
     float hL = 0.0f;
@@ -223,8 +221,8 @@ void BlendBakedHeightFieldSample(const OceanHeightField& heightField, OceanSurfa
     }
     const float32 localSlopeX = (hR - hL) / (2.0f * e);
     const float32 localSlopeZ = (hU - hD) / (2.0f * e);
-    slopeX = Lerp(slopeX, localSlopeX, blend);
-    slopeZ = Lerp(slopeZ, localSlopeZ, blend);
+    slopeX = Math::Lerp(slopeX, localSlopeX, blend);
+    slopeZ = Math::Lerp(slopeZ, localSlopeZ, blend);
 
     const float32 nx = -slopeX;
     const float32 ny = 1.0f;
@@ -247,33 +245,19 @@ OceanSurfaceSample MakeInvalidSurfaceSample(const OceanParamsGPU& params, float3
     return sample;
 }
 
-float32 SmoothStep(float32 edge0, float32 edge1, float32 x)
-{
-    const float32 denom = edge1 - edge0;
-    if (std::abs(denom) < 1e-6f)
-        return 0.0f;
-    const float32 t = std::clamp((x - edge0) / denom, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
-float32 Lerp(float32 a, float32 b, float32 t)
-{
-    return a + (b - a) * t;
-}
-
 void ApplyWaterDepthValue(OceanSurfaceSample& sample, const OceanParamsGPU& params, float32 depth)
 {
     sample.HasWaterDepth = true;
     sample.WaterDepth = depth;
 
     const float32 shallowBase =
-        1.0f - std::clamp(depth / std::max(params.SubSurfaceDepthMax, 1e-3f), 0.0f, 1.0f);
+        1.0f - Math::Clamp01(depth / std::max(params.SubSurfaceDepthMax, 1e-3f));
     sample.ShallowWaterFactor =
         std::pow(shallowBase, std::max(params.SubSurfaceDepthPower, 0.0f));
 
     const float32 shoreMaxDepth = std::max(params.ShorelineFoamMaxDepth, 0.0f);
     const float32 contact =
-        (shoreMaxDepth > 1e-5f) ? SmoothStep(shoreMaxDepth, 0.0f, depth) : 0.0f;
+        (shoreMaxDepth > 1e-5f) ? Math::SmoothStep(shoreMaxDepth, 0.0f, depth) : 0.0f;
     sample.ShorelineContactFactor = contact;
     sample.ShorelineFoamFactor =
         contact * std::max(params.ShorelineFoamStrength, 0.0f) * std::max(params.FoamAmount, 0.0f);
@@ -504,7 +488,7 @@ float32 SegmentDistanceXZ(float32 x, float32 z, float32 ax, float32 az, float32 
     const float32 abx = bx - ax;
     const float32 abz = bz - az;
     const float32 denom = std::max(abx * abx + abz * abz, 1e-12f);
-    const float32 t = std::clamp(((x - ax) * abx + (z - az) * abz) / denom, 0.0f, 1.0f);
+    const float32 t = Math::Clamp01(((x - ax) * abx + (z - az) * abz) / denom);
     const float32 px = ax + abx * t;
     const float32 pz = az + abz * t;
     const float32 dx = x - px;
@@ -526,7 +510,7 @@ float32 PolygonInteriorWeightXZ(float32 x, float32 z, uint32 pointCount, const f
     float32 minEdgeDist = 1e20f;
     for (std::size_t i = 0, j = points.size() - 1; i < points.size(); j = i++)
         minEdgeDist = std::min(minEdgeDist, SegmentDistanceXZ(x, z, points[i].x, points[i].y, points[j].x, points[j].y));
-    return SmoothStep(0.0f, feather, minEdgeDist);
+    return Math::SmoothStep(0.0f, feather, minEdgeDist);
 }
 
 float32 RectInteriorWeight(float32 x, float32 z,
@@ -543,11 +527,11 @@ float32 RectInteriorWeight(float32 x, float32 z,
     if (feather > 1e-3f)
     {
         const float32 insideDist = std::min(halfX - dx, halfZ - dz);
-        return SmoothStep(0.0f, feather, insideDist);
+        return Math::SmoothStep(0.0f, feather, insideDist);
     }
 
-    const float32 edgeX = 1.0f - SmoothStep(0.7f, 1.0f, dx / std::max(halfX, 1e-3f));
-    const float32 edgeZ = 1.0f - SmoothStep(0.7f, 1.0f, dz / std::max(halfZ, 1e-3f));
+    const float32 edgeX = 1.0f - Math::SmoothStep(0.7f, 1.0f, dx / std::max(halfX, 1e-3f));
+    const float32 edgeZ = 1.0f - Math::SmoothStep(0.7f, 1.0f, dz / std::max(halfZ, 1e-3f));
     return std::min(edgeX, edgeZ);
 }
 
@@ -564,7 +548,7 @@ float32 RectInteriorWeight(float32 x, float32 z,
     const float32 feather = std::max(box.Feather, 0.0f);
     if (feather <= 1e-3f)
         return 1.0f;
-    return SmoothStep(0.0f, feather, std::min(halfX - dx, halfZ - dz));
+    return Math::SmoothStep(0.0f, feather, std::min(halfX - dx, halfZ - dz));
 }
 
 } // anonymous namespace
@@ -912,7 +896,7 @@ void OceanRenderFeature::CreateGridMesh(::GameEngine::Rendering::IDevice* device
 
         for (uint32 z = 0; z < vertsZ; ++z)
         {
-            float32 localZ = Lerp(startZ, endZ,
+            float32 localZ = Math::Lerp(startZ, endZ,
                                   static_cast<float32>(z) /
                                       static_cast<float32>(vertsZ - 1u));
             const bool horizonZ = placement.Type == PatchType::FatXZOuter &&
@@ -922,7 +906,7 @@ void OceanRenderFeature::CreateGridMesh(::GameEngine::Rendering::IDevice* device
 
             for (uint32 x = 0; x < vertsX; ++x)
             {
-                float32 localX = Lerp(startX, endX,
+                float32 localX = Math::Lerp(startX, endX,
                                       static_cast<float32>(x) /
                                           static_cast<float32>(vertsX - 1u));
                 const bool horizonX =
@@ -1833,15 +1817,15 @@ OceanRenderFeature::WaterBodyWaveOverrideSample OceanRenderFeature::SampleWaterB
         const float32 localHeight = EvaluateLocalWaterBodyWavePacket(
             phaseX, phaseZ, time, b.LocalWaveCount, b.LocalAmplitude, b.LocalWavelength,
             b.LocalDirX, b.LocalDirZ, b.LocalWaveExtra, localSlopeX, localSlopeZ);
-        sample.Weight = Lerp(sample.Weight, std::max(b.Weight, 0.0f), blend);
-        sample.Chop = Lerp(sample.Chop, std::max(b.Chop, 0.0f), blend);
-        const float32 sourceLocalFFTBlend = std::clamp(b.LocalFFTBlend, 0.0f, 1.0f);
-        sample.LocalFFTBlend = Lerp(sample.LocalFFTBlend, sourceLocalFFTBlend, blend);
+        sample.Weight = Math::Lerp(sample.Weight, std::max(b.Weight, 0.0f), blend);
+        sample.Chop = Math::Lerp(sample.Chop, std::max(b.Chop, 0.0f), blend);
+        const float32 sourceLocalFFTBlend = Math::Clamp01(b.LocalFFTBlend);
+        sample.LocalFFTBlend = Math::Lerp(sample.LocalFFTBlend, sourceLocalFFTBlend, blend);
         if (sourceLocalFFTBlend > 1e-5f && blend > 1e-5f)
             sample.LocalFFTStream = std::min<uint32>(b.LocalFFTStream, kMaxOceanLocalFFTStreams - 1u);
-        sample.LocalHeight = Lerp(sample.LocalHeight, localHeight, blend);
-        sample.LocalSlopeX = Lerp(sample.LocalSlopeX, localSlopeX, blend);
-        sample.LocalSlopeZ = Lerp(sample.LocalSlopeZ, localSlopeZ, blend);
+        sample.LocalHeight = Math::Lerp(sample.LocalHeight, localHeight, blend);
+        sample.LocalSlopeX = Math::Lerp(sample.LocalSlopeX, localSlopeX, blend);
+        sample.LocalSlopeZ = Math::Lerp(sample.LocalSlopeZ, localSlopeZ, blend);
     }
     for (const WaterBodyWavePolygon& p : m_WaterBodyWavePolygons)
     {
@@ -1853,22 +1837,22 @@ OceanRenderFeature::WaterBodyWaveOverrideSample OceanRenderFeature::SampleWaterB
         const float32 localHeight = EvaluateLocalWaterBodyWavePacket(
             phaseX, phaseZ, time, p.LocalWaveCount, p.LocalAmplitude, p.LocalWavelength,
             p.LocalDirX, p.LocalDirZ, p.LocalWaveExtra, localSlopeX, localSlopeZ);
-        sample.Weight = Lerp(sample.Weight, std::max(p.Weight, 0.0f), blend);
-        sample.Chop = Lerp(sample.Chop, std::max(p.Chop, 0.0f), blend);
-        const float32 sourceLocalFFTBlend = std::clamp(p.LocalFFTBlend, 0.0f, 1.0f);
-        sample.LocalFFTBlend = Lerp(sample.LocalFFTBlend, sourceLocalFFTBlend, blend);
+        sample.Weight = Math::Lerp(sample.Weight, std::max(p.Weight, 0.0f), blend);
+        sample.Chop = Math::Lerp(sample.Chop, std::max(p.Chop, 0.0f), blend);
+        const float32 sourceLocalFFTBlend = Math::Clamp01(p.LocalFFTBlend);
+        sample.LocalFFTBlend = Math::Lerp(sample.LocalFFTBlend, sourceLocalFFTBlend, blend);
         if (sourceLocalFFTBlend > 1e-5f && blend > 1e-5f)
             sample.LocalFFTStream = std::min<uint32>(p.LocalFFTStream, kMaxOceanLocalFFTStreams - 1u);
-        sample.LocalHeight = Lerp(sample.LocalHeight, localHeight, blend);
-        sample.LocalSlopeX = Lerp(sample.LocalSlopeX, localSlopeX, blend);
-        sample.LocalSlopeZ = Lerp(sample.LocalSlopeZ, localSlopeZ, blend);
+        sample.LocalHeight = Math::Lerp(sample.LocalHeight, localHeight, blend);
+        sample.LocalSlopeX = Math::Lerp(sample.LocalSlopeX, localSlopeX, blend);
+        sample.LocalSlopeZ = Math::Lerp(sample.LocalSlopeZ, localSlopeZ, blend);
     }
     for (const WaterBodyWaveTextureBox& t : m_WaterBodyWaveTextureBoxes)
     {
         float32 blend = RectInteriorWeight(x, z, t);
         if (blend <= 0.0f)
             continue;
-        blend *= std::clamp(t.Coverage, 0.0f, 1.0f);
+        blend *= Math::Clamp01(t.Coverage);
         if (blend <= 0.0f)
             continue;
 
@@ -1881,8 +1865,8 @@ OceanRenderFeature::WaterBodyWaveOverrideSample OceanRenderFeature::SampleWaterB
         t.Texture.SampleLinear(u, v, rgX, rgY);
         const float32 targetWeight = std::max(rgX * t.WeightScale + t.WeightBias, 0.0f);
         const float32 targetChop = std::max(rgY * t.ChopScale + t.ChopBias, 0.0f);
-        sample.Weight = Lerp(sample.Weight, targetWeight, blend);
-        sample.Chop = Lerp(sample.Chop, targetChop, blend);
+        sample.Weight = Math::Lerp(sample.Weight, targetWeight, blend);
+        sample.Chop = Math::Lerp(sample.Chop, targetChop, blend);
         sample.TextureWaveMaskContributes = true;
         ++sample.TextureWaveMaskCount;
     }

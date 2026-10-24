@@ -35,7 +35,7 @@ class ReportCapture
         // The logger's effective level is Off until it is configured, and an
         // unconfigured logger would make every assertion below vacuous.
         Logger::Log::Initialize({Logger::LogLevel::Debug, false});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         m_Sink = sink.get();
         Logger::Log::AddSink(std::move(sink));
         m_CallbackId = m_Sink->RegisterCallback(
@@ -63,7 +63,7 @@ class ReportCapture
 
   private:
     Logger::CallbackSink* m_Sink = nullptr;
-    Logger::uint64 m_CallbackId = 0;
+    std::uint64_t m_CallbackId = 0;
     mutable std::mutex m_Mutex;
     std::vector<std::string> m_Lines;
 };

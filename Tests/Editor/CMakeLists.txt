@@ -14,6 +14,7 @@ set(EDITOR_TEST_SOURCES
 	SceneViewFramingTests.cpp
 	SceneViewProjectionTests.cpp
 	MarkupEditorBridgeTests.cpp
+	EntityDisplayNameTests.cpp
 	MarkupRequestsTests.cpp
 	MarkupRegionInspectorTests.cpp
 	MarkupRegionSceneViewTests.cpp
@@ -231,6 +232,10 @@ set(EDITOR_TEST_SOURCES
 	# over the real editor stylesheets. Its layout file is staged below.
 	InspectorNoticeTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/InspectorNotice.cpp
+	# The transient notice that confirms an action the user cannot see (a copy): shown on Show,
+	# hidden once its duration passes. Its layout file is staged below.
+	TransientNoticeTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/TransientNotice.cpp
 	# A row disabled through its control: every element inside the control takes the state, so an
 	# enum field's dropdown draws its disabled look. Leaf TU over the editor stylesheets.
 	InspectorDisabledRowTests.cpp
@@ -409,7 +414,7 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphAnimationRuntimeDebug.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/NodeColorSettings.cpp
 	# Source-level guard: staged engine assets are resolved through
-	# PathUtils::GetInstallAssetsRoot() (EditorPaths' installAssetsRoot in editor
+	# ApplicationPaths::GetInstallAssetsRoot() (EditorPaths' installAssetsRoot in editor
 	# code), never by joining the executable directory to "Assets" or spelling the
 	# bundle's Resources/Assets sibling by hand — the first offset does not exist
 	# inside a macOS app bundle, the second exists only in one, and the loaders
@@ -822,6 +827,13 @@ set(EDITOR_TEST_SOURCES
 	# Pure over the line text; the opener that acts on it needs a live editor.
 	SourceLocationTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/ScriptEditor/SourceLocation.cpp
+	# The Log panel's entries, filters, counts per severity, copy text and
+	# double-click decision. No UI; the panel binds a list to it.
+	LogModelTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/LogModel.cpp
+	# The Log list keeps its selection only on the lines it shows. Its row layout is staged below.
+	LogViewTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/LogView.cpp
 	# The C# project a script opens with in the external editor: the path the
 	# scripts project is generated at. Opening the editor itself needs a desktop.
 	ExternalScriptEditorLauncherTests.cpp
@@ -867,9 +879,20 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkyPathGizmo.cpp
 	# What the sun does over the day, read once for the overlay and the readout.
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunDayKind.cpp
-	# The night stars' looks: their values, one undo step, the rest of the sky left alone.
+	# The night stars' looks: their values, one undo step, the rest of the sky left alone, Custom when
+	# a dial or the night tint differs, Seen by independent of the look, and the pictures' values.
 	StarLookPresetTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/StarLookPresets.cpp
+	# The sky's star rows: the Preset list with pictures, a pick, Custom, and the Seen by tiles.
+	SkyStarRowsTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkyStarLookRow.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkyStarSeenByRow.cpp
+	# The picture choice field (the sky's Seen by tiles): its tiles from its layout, a left click and
+	# the arrows select. Its layout file is staged below.
+	PictureChoiceFieldTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/PictureChoiceField.cpp
+	# Option pictures: every declared class has a rule naming an existing file, and back.
+	OptionPicturesTests.cpp
 	# The sky inspector's sun readout: its wording and the info card it is shown in.
 	SkySunReadoutTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunReadoutCard.cpp
@@ -956,6 +979,8 @@ set(EDITOR_TEST_SOURCES
 	# The material inspector's row rhythm, measured the same way: every section bar, row and line
 	# one row gap below the last, open or closed, in the entity inspector and the asset view.
 	MaterialInspectorLayoutTests.cpp
+	# The percent row's value box holds "100 %" at the inspector's default width.
+	InspectorPercentRowLayoutTests.cpp
 	# A pending asset's header: the name ellipsises first and "preparing" stays right after it.
 	PendingAssetHeaderLayoutTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PendingAssetHeader.cpp
@@ -2043,6 +2068,21 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/InspectorNotice/InspectorNotice.uxml"
 	    "Assets/UI/controls/InspectorNotice/InspectorNotice.uxml")
+
+	# PictureChoiceField builds its tiles from its layout, read from the same install-assets root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml"
+	    "Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml")
+
+	# TransientNotice builds its plate and text from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/TransientNotice/TransientNotice.uxml"
+	    "Assets/UI/controls/TransientNotice/TransientNotice.uxml")
+
+	# The Log list builds each row from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/LogPanel/LogRow.uxml"
+	    "Assets/UI/panels/LogPanel/LogRow.uxml")
 
 	# The shipped animation-graph sample, read from the same exe-anchored asset
 	# root the editor loads it from.

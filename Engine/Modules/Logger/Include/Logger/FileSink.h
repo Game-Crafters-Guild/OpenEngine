@@ -21,7 +21,7 @@ struct FileLogLevel
 	// The GE_LOG_FILE_LEVEL value that named no level, empty otherwise. A host
 	// names it when it reports the level, so a typo does not read as "the
 	// variable did nothing".
-	String unrecognizedValue;
+	std::string unrecognizedValue;
 };
 
 /**
@@ -51,7 +51,7 @@ class FileSink : public LogSink
 public:
 	struct Config
 	{
-		String filename;                       // Output filename
+		std::string filename;                  // Output filename
 		bool append = true;                    // Append to existing file if true
 		LogLevel minLevel = LogLevel::Debug;   // Minimum level to output
 		bool includeTimestamp = true;          // Include timestamps in output
@@ -67,12 +67,12 @@ public:
 	void Write(const LogMessage& message) override;
 	void Flush() override;
 	bool ShouldLog(LogLevel level) const override;
-	String GetName() const override;
+	std::string GetName() const override;
 	bool IsAvailable() const override;
 
 private:
 	Config m_Config;
-	String m_CurrentFilename;
+	std::string m_CurrentFilename;
 	std::ofstream m_File;
 	size_t m_CurrentSize;
 	mutable std::mutex m_Mutex;

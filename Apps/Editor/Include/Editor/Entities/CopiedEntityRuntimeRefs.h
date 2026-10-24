@@ -18,8 +18,8 @@
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "SplineECS/SplineService.h"
+#include "TerrainECS/Components/TerrainPageCollider.h"
 #include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
-#include "TerrainECS/Components/TerrainTileCollider.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -437,21 +437,21 @@ class CopiedEntityRuntimeRefs
         world.AddComponentImmediate(copy, updated);
     }
 
-    // Both collider tags name a heightfield physics handle the terrain service
-    // allocated for the source tile/face, so the copy is stripped of its claim:
-    // zero has the service's handle bit clear, and both release paths return on
-    // that bit before touching a slot (TerrainService::ReleaseTilePhysicsHandle).
+    // The collider tags name a heightfield physics handle the terrain service
+    // allocated for the source page/face, so the copy is stripped of its claim:
+    // zero has the service's handle bit clear, and every release path returns on
+    // that bit before touching a slot (TerrainService::ReleasePagePhysicsHandle).
     //
     // Nothing re-links the zeroed tag — a handle is only ever assigned when
-    // TerrainPhysicsSystem creates a collider entity. The copy is simply
-    // redundant, and its remaining tile/face keys are byte-identical to the
-    // source's, so the system's sweep classifies both the same way and destroys
-    // them together the moment that tile stops being resident.
+    // TerrainPhysicsSystem creates a collider entity. The copy is redundant.
+    // A page copy names no slot, so the system's next sweep tears it down. A
+    // face copy keeps the source's face keys, so the sweep destroys it together
+    // with the source's face collider.
     static void RepairTerrainColliders(ECS::World& world, ECS::EntityHandle copy)
     {
-        if (const auto* tile = world.GetComponent<Components::TerrainTileCollider>(copy))
+        if (const auto* page = world.GetComponent<Components::TerrainPageCollider>(copy))
         {
-            Components::TerrainTileCollider updated = *tile;
+            Components::TerrainPageCollider updated = *page;
             updated.PhysicsHandleIndex = 0;
             updated.PhysicsHandleGeneration = 0;
             world.AddComponentImmediate(copy, updated);

@@ -8,7 +8,7 @@
 #include "Rendering/Text/FontAtlas.h"
 #include "UI/UiDispatcher.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -347,13 +347,13 @@ FontAtlas* UIManager::GetOrRequestFontFamilyInternal(const std::string& family,
         const char* shippedFace = GameEngine::UI::PickShippedFontFile(famLower, weight, wantItalic);
         if (shippedFace)
         {
-            const std::string stagedFace = (PathUtils::GetInstallAssetsRoot() / "Fonts" / shippedFace).string();
+            const std::string stagedFace = (ApplicationPaths::GetInstallAssetsRoot() / "Fonts" / shippedFace).string();
             tryLoad(stagedFace.c_str());
         }
         if (fontBytes.empty())
         {
             const std::string stagedFamily =
-                (PathUtils::GetInstallAssetsRoot() / "Fonts" / (family + ".ttf")).string();
+                (ApplicationPaths::GetInstallAssetsRoot() / "Fonts" / (family + ".ttf")).string();
             tryLoad(stagedFamily.c_str());
         }
 #if !defined(__APPLE__)

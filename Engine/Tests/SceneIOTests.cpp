@@ -6174,6 +6174,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripAllTerrainGrassSettings)
     grass.Brightness = 1.35f;
     grass.RandomBrightness = 0.22f;
     grass.GroundingStrength = 0.25f;
+    grass.GroundTintHeight = 0.7f;
     grass.CanopyShade = 1.5f;
     grass.GroundDarkening = 0.55f;
     grass.SoilColor = 0xFF112244u;
@@ -6309,6 +6310,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripAllTerrainGrassSettings)
     EXPECT_FLOAT_EQ(loadedGrass->Brightness, 1.35f);
     EXPECT_FLOAT_EQ(loadedGrass->RandomBrightness, 0.22f);
     EXPECT_FLOAT_EQ(loadedGrass->GroundingStrength, 0.25f);
+    EXPECT_FLOAT_EQ(loadedGrass->GroundTintHeight, 0.7f);
     EXPECT_FLOAT_EQ(loadedGrass->CanopyShade, 1.5f);
     EXPECT_FLOAT_EQ(loadedGrass->GroundDarkening, 0.55f);
     EXPECT_EQ(loadedGrass->SoilColor, 0xFF112244u);

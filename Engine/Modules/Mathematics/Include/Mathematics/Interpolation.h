@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace GameEngine::Math
@@ -14,6 +15,31 @@ constexpr float SmoothStep(float edge0, float edge1, float x)
 {
     float t = Clamp01((x - edge0) / (edge1 - edge0));
     return t * t * (3.0f - 2.0f * t);
+}
+
+// The quintic step: like SmoothStep, with zero first and second derivatives at
+// both edges.
+constexpr float SmootherStep(float edge0, float edge1, float x)
+{
+    float t = Clamp01((x - edge0) / (edge1 - edge0));
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+// The fractional part, in [0, 1): x - floor(x). Negative inputs wrap upward
+// (Fract(-0.25) is 0.75), as in shading languages.
+inline float Fract(float x) { return x - std::floor(x); }
+
+// value wrapped into [0, period): fmod, then a negative remainder moves up by
+// one period (a remainder within rounding of zero can land on period itself).
+// A period of zero or less returns value unchanged.
+inline float Wrap(float value, float period)
+{
+    if (period <= 0.0f)
+        return value;
+    float wrapped = std::fmod(value, period);
+    if (wrapped < 0.0f)
+        wrapped += period;
+    return wrapped;
 }
 
 constexpr float Remap(float inMin, float inMax, float outMin, float outMax, float v)

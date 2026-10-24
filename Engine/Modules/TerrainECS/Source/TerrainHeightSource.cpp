@@ -10,4 +10,9 @@ bool TerrainHeightIsPaged(const TerrainHeightSourceInputs& inputs)
     return inputs.GeneratedBase || inputs.CookedStoreOpen;
 }
 
+bool TerrainHeightHasCpuPages(const TerrainHeightSourceInputs& inputs)
+{
+    return inputs.PagesOnLattice && (inputs.GeneratedBase || inputs.CookedStoreOpen);
+}
+
 } // namespace GameEngine::TerrainECS

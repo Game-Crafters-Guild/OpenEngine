@@ -1,5 +1,5 @@
 #include "Scripting/PathResolver.h"
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include <vector>
 
 namespace GameEngine
@@ -49,7 +49,7 @@ bool DirectoryHasNativeLibrary(const std::filesystem::path& dir)
 
 std::filesystem::path ResolveEngineManagedDirectoryFrom(const std::filesystem::path& exeDir)
 {
-    const std::filesystem::path bundleResources = PathUtils::GetBundleResourcesDirectory(exeDir);
+    const std::filesystem::path bundleResources = ApplicationPaths::GetBundleResourcesDirectory(exeDir);
     if (!bundleResources.empty())
     {
         std::error_code ec;
@@ -62,7 +62,7 @@ std::filesystem::path ResolveEngineManagedDirectoryFrom(const std::filesystem::p
 
 std::filesystem::path ResolveEngineManagedDirectory()
 {
-    return ResolveEngineManagedDirectoryFrom(PathUtils::GetExecutableDirectory());
+    return ResolveEngineManagedDirectoryFrom(ApplicationPaths::GetExecutableDirectory());
 }
 
 std::filesystem::path ResolveCoreBridgeDll(const std::filesystem::path& preferred)
@@ -84,7 +84,7 @@ std::filesystem::path ResolveHotReloadDll()
 std::filesystem::path ResolveScriptsAssemblyDirectory()
 {
     // Scripts assembly OUTPUT directory: <exe>/ScriptAssemblies
-    return PathUtils::GetScriptsAssemblyDirectory();
+    return ApplicationPaths::GetScriptsAssemblyDirectory();
 }
 
 std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::path& exeDir,
@@ -130,12 +130,12 @@ std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::p
 
 std::filesystem::path ResolveNativeLibraryDirectory()
 {
-    return ResolveNativeLibraryDirectoryFrom(PathUtils::GetExecutableDirectory(), std::filesystem::current_path());
+    return ResolveNativeLibraryDirectoryFrom(ApplicationPaths::GetExecutableDirectory(), std::filesystem::current_path());
 }
 
 std::filesystem::path ResolveNativeLibraryPath()
 {
-    return ResolveNativeLibraryPathFrom(PathUtils::GetExecutableDirectory(), std::filesystem::current_path());
+    return ResolveNativeLibraryPathFrom(ApplicationPaths::GetExecutableDirectory(), std::filesystem::current_path());
 }
 
 std::filesystem::path ResolveNativeLibraryPathFrom(const std::filesystem::path& exeDir,
@@ -175,7 +175,7 @@ std::filesystem::path ResolveScriptsRuntimeConfig()
     const std::vector<std::filesystem::path> cands = {
         managedDir / "GameEngine.CoreBridge.runtimeconfig.json",
         managedDir / "GameEngine.HotReload.runtimeconfig.json",
-        PathUtils::GetExecutableDirectory() / "ScriptAssemblies" / "GameEngine.Scripts.runtimeconfig.json"};
+        ApplicationPaths::GetExecutableDirectory() / "ScriptAssemblies" / "GameEngine.Scripts.runtimeconfig.json"};
     return FirstExisting(cands);
 }
 

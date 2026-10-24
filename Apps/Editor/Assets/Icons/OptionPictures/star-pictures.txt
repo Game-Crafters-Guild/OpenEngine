@@ -1,0 +1,31 @@
+The star pictures in this folder, 144 x 96 PNG each (shown at 72 x 48 logical pixels), are crops of
+the editor's Scene View, taken through its render-graph readback (take_screenshot --target viewport,
+a 3067 x 900 frame).
+
+Scene: Main.scene of the Basic3D project template. Sky Environment: TimeOfDayHours 23, MoonArcPosition 0
+(no moon), AutoMoonArc false, AnimateTimeOfDay false; the Post Process Volume as the template ships it.
+Scene View camera: position (0, 2, 0), yaw 90, pitch 50, vertical field of view 60 degrees, the view's
+default auto exposure.
+
+The look pictures, star-look-<look>.png, are one window of the frame: a 48 x 32 crop with its top-left
+corner at (1606, 270), a bright blue-white star with an orange and a blue star beside it, scaled 3x
+(Lanczos) with no gain, so the bright star's glow, spikes or sparkle show at the picture's size. Each is
+the look picked from the Preset list, Seen by Camera so the stars keep their colors.
+
+The Seen by pictures, star-seen-by-<eye|camera>.png, are their own window: a 72 x 48 crop with its
+top-left corner at (1660, 92), sixteen stars, most of them orange or blue and fainter than magnitude
+3.5, where Eye fades color to white, scaled 2x (Lanczos) with no gain. Each is the Vivid look with Seen
+by picked on the tile. With Eye the faint stars turn white; with Camera they keep their colors. The
+window is denser than the look window and zoomed less, so many stars change color at the picture's size.
+
+Build: 99f2273701. Retake a picture when its look's values change.
+
+The values each picture was taken with, one line per picture: the look picked, Seen by, the gain, then the
+look's star dials and night tint. StarLookPresetTests compares these lines to the preset table, so a
+look whose values change fails the test until its picture is retaken and its line updated.
+star-look-vivid.png: look=Vivid seen-by=Camera gain=1 limit=7.25 twinkle=0.3 highlights=0.775 glow=0.9 twinkle-rate=1 core=0.75 spikes=0.2 spike-length=0.6 shape=Point tint=1 tint-color=0.155,0.249,1
+star-look-restrained.png: look=Restrained seen-by=Camera gain=1 limit=7.25 twinkle=0.3 highlights=0.775 glow=0.8 twinkle-rate=1 core=1 spikes=0 spike-length=2 shape=Point tint=0.5 tint-color=0.155,0.249,1
+star-look-classic.png: look=Classic seen-by=Camera gain=1 limit=7.25 twinkle=0.3 highlights=0.775 glow=0.8 twinkle-rate=1 core=1 spikes=0 spike-length=2 shape=Sparkle tint=0.5 tint-color=0.155,0.249,1
+star-look-physical.png: look=Physical seen-by=Camera gain=1 limit=6.5 twinkle=0.3 highlights=1 glow=0 twinkle-rate=12 core=1 spikes=0 spike-length=2 shape=Point tint=0 tint-color=0.155,0.249,1
+star-seen-by-eye.png: look=Vivid seen-by=Eye gain=1 limit=7.25 twinkle=0.3 highlights=0.775 glow=0.9 twinkle-rate=1 core=0.75 spikes=0.2 spike-length=0.6 shape=Point tint=1 tint-color=0.155,0.249,1
+star-seen-by-camera.png: look=Vivid seen-by=Camera gain=1 limit=7.25 twinkle=0.3 highlights=0.775 glow=0.9 twinkle-rate=1 core=0.75 spikes=0.2 spike-length=0.6 shape=Point tint=1 tint-color=0.155,0.249,1

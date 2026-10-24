@@ -1,5 +1,7 @@
 #include "Animation/AnimationPlayer.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -8,21 +10,6 @@ namespace GameEngine
 {
 namespace Animation
 {
-
-namespace
-{
-
-float32 Wrap(float32 value, float32 duration)
-{
-    if (duration <= 0.0f)
-        return value;
-    float32 wrapped = std::fmod(value, duration);
-    if (wrapped < 0.0f)
-        wrapped += duration;
-    return wrapped;
-}
-
-} // namespace
 
 bool AnimationPlayer::Play(const std::string& animationName)
 {
@@ -130,7 +117,7 @@ void AnimationPlayer::Update(float32 deltaSeconds, float32 currentDurationSecond
 
     if (m_Current.Loop)
     {
-        m_Current.TimeSeconds = start + Wrap(m_Current.TimeSeconds - start, duration);
+        m_Current.TimeSeconds = start + Math::Wrap(m_Current.TimeSeconds - start, duration);
     }
     else
     {
@@ -143,7 +130,7 @@ float32 AnimationPlayer::GetBlendWeight() const
 {
     if (m_BlendDurationSeconds <= 0.0f)
         return 1.0f;
-    return std::max(0.0f, std::min(1.0f, m_BlendElapsedSeconds / m_BlendDurationSeconds));
+    return Math::Clamp01(m_BlendElapsedSeconds / m_BlendDurationSeconds);
 }
 
 bool AnimationPlayer::Resolve(const std::string& animationName, AnimationPlayerActive& outActive) const

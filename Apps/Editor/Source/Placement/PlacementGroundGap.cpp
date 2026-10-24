@@ -4,7 +4,7 @@
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Transform.h"
 #include "ECS/World.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 
 #include <algorithm>
 #include <limits>
@@ -40,7 +40,7 @@ Vector3 TransformPoint(const float32 m[16], const Vector3& p)
 
 } // namespace
 
-void MeasurePieceGroundGap(const TerrainECS::PlanarHeightQuery& ground,
+void MeasurePieceGroundGap(const TerrainECS::SurfaceHeightQuery& ground,
                            const Mathematics::BoundingBox& localBox,
                            const float32 worldMatrix[16], PieceGroundGap& out)
 {
@@ -104,12 +104,15 @@ void MeasurePieceGroundGap(const TerrainECS::PlanarHeightQuery& ground,
         probe.Z = probePoints[i].z;
         probe.UndersideY = probePoints[i].y;
 
-        float32 groundY = 0.0f;
-        if (!ground.SampleHeight(probe.X, probe.Z, groundY))
+        // A gap is a precision reading: a coarse level's height would report a gap the drawn ground
+        // does not have, so a probe without the finest height there is left unsampled.
+        TerrainECS::SurfaceHeightSample sample;
+        if (!ground.SampleHeight(Mathematics::Vector3(probe.X, 0.0f, probe.Z),
+                                 TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
             continue;
 
-        probe.GroundY = groundY;
-        probe.Gap = probe.UndersideY - groundY;
+        probe.GroundY = sample.Height;
+        probe.Gap = probe.UndersideY - sample.Height;
         probe.Sampled = true;
         minGap = std::min(minGap, probe.Gap);
         maxGap = std::max(maxGap, probe.Gap);
@@ -127,7 +130,7 @@ void MeasurePieceGroundGap(const TerrainECS::PlanarHeightQuery& ground,
 }
 
 void MeasureRouteGroundGaps(ECS::World& world, ECS::EntityHandle route,
-                            const TerrainECS::PlanarHeightQuery& ground,
+                            const TerrainECS::SurfaceHeightQuery& ground,
                             std::vector<PieceGroundGap>& out)
 {
     out.clear();

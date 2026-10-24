@@ -1,17 +1,14 @@
 #include "UI/Controls/InspectorNotice.h"
 
-#include "Editor/EditorPaths.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Inspectors/InspectorUIHelpers.h"
 #include "Logger/Logger.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 
-#include <filesystem>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <utility>
 
 namespace GameEngine::EditorUI
@@ -51,30 +48,6 @@ void AddKindClass(UIElement* part, const char* partClass, const char* kindSuffix
         part->AddClass(std::string(partClass) + "-" + kindSuffix);
 }
 
-std::string ReadLayoutText()
-{
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-    {
-        Logger::Log::Error("InspectorNotice: {} did not read, so every notice is an empty plate. Check that "
-                           "it is staged under the editor asset mount.",
-                           path.generic_string());
-        return {};
-    }
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
-
-// Read once per process: a notice is built on every inspector rebuild that shows one, and parsing
-// the few nodes of the layout is cheap where a disk read each time is not.
-const std::string& LayoutText()
-{
-    static const std::string s_LayoutText = ReadLayoutText();
-    return s_LayoutText;
-}
-
 } // namespace
 
 InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
@@ -84,7 +57,10 @@ InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
     AddClass(std::string("inspector-notice-") + kindSuffix);
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    const std::string& layoutText = LayoutText();
+    // Read once per process: a notice is built on every inspector rebuild that shows one, and parsing
+    // the few nodes of the layout is cheap where a disk read each time is not.
+    static const std::string s_LayoutText = InspectorUI::ReadEditorLayoutText(kLayoutAssetPath);
+    const std::string& layoutText = s_LayoutText;
     if (layoutText.empty())
         return;
 

@@ -56,6 +56,7 @@
 #include <chrono>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -2268,7 +2269,7 @@ TEST(TerrainRouteCurvature, DISABLED_CurveVsPolylineAtLaneGeometry)
                 if (dPoly > kClaimRadius + kClaimFalloff + 1.0f)
                     continue; // outside the shape ramp on both evaluators
                 const float32 dCurve =
-                    Spline::SignedDistanceToSplineBandXZ(*spline, x, z) + kClaimRadius;
+                    Spline::SignedDistanceToSplineBandXZ(*spline, x, z, std::numeric_limits<float32>::infinity()) + kClaimRadius;
                 const float32 weightPoly =
                     ShapeFalloffWeight(kClaimRadius - dPoly, kClaimFalloff, 0.0f);
                 const float32 weightCurve =

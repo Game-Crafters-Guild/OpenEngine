@@ -91,7 +91,7 @@ TerrainProvisioningResult ProvisionTerrainEntity(ECS::World& world, ECS::EntityH
         }
     }
     // A terrain wider than the per-tile cap auto-tiles: extraction owns its provisioning (unified
-    // maps + per-tile colliders), so eager single-heightfield creation here would just be
+    // maps + per-page colliders), so eager single-heightfield creation here would just be
     // destroyed at the tiling flip and its collider stranded.
     const bool willTile = Terrain::TerrainNeedsTiling(config.SizeX, config.SizeZ, config.SamplesPerMeter);
 
@@ -128,7 +128,7 @@ TerrainProvisioningResult ProvisionTerrainEntity(ECS::World& world, ECS::EntityH
     }
 
     // Heightfield collision is planar, single-tile only. A planet's collider is a queued slice; a
-    // tiled terrain uses per-tile colliders.
+    // tiled terrain uses per-page colliders.
     if (!spherical && !willTile)
     {
         const auto* terrain = world.GetComponent<Components::Terrain>(entity);

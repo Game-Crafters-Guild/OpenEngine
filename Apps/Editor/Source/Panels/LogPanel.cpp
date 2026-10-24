@@ -1,74 +1,127 @@
 #include "Panels/LogPanel.h"
 
+#include "Editor/EditorPaths.h"
+#include "EditorContextMenu/UIContextMenu.h"
 #include "Logger/Logger.h"
 #include "Panels/BacktraceFrameView.h"
-#include "Panels/SettingsPanel.h"
 #include "Panels/LogView.h"
-#include "UI/PanelSearchBar.h"
+#include "Platform/Clipboard.h"
+#include "Platform/ContextMenu.h"
+#include "ScriptEditor/SourceLocation.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
-#include "UI/Controls/SplitView.h"
 #include "UI/Controls/Splitter.h"
+#include "UI/Controls/TextArea.h"
+#include "UI/Controls/TransientNotice.h"
 #include "UI/Controls/WeightedPane.h"
+#include "UI/EditorIcons.h"
+#include "UI/EditorSearchBars.h"
+#include "UI/PanelSearchBar.h"
+#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
-#include "UI/Layout/ElementOverrideHelpers.h"
-#include "UI/StyleProperties.h"
 #include "UI/UIManager.h"
+#include "UI/UIPlatform.h"
 
-#include <cstdio>
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <string>
+#include <utility>
 
 namespace GameEngine {
 
 namespace {
 
-void SyncLogFilterToggleLabels(Button& button, const std::string& levelText)
+constexpr const char* kLayoutAssetPath = "UI/panels/LogPanel/LogPanel.uxml";
+constexpr const char* kStyleAssetPath = "UI/panels/LogPanel/LogPanel.css";
+constexpr const char* kHiddenClass = "hidden";
+constexpr const char* kFilterOnClass = "active";
+constexpr const char* kFilterOffClass = "log-filter-off";
+constexpr const char* kFilterEmptyClass = "log-filter-empty";
+constexpr const char* kSideBySideClass = "log-split--side-by-side";
+constexpr const char* kSearchBarClass = "log-search-bar";
+
+constexpr uint32_t kCopyCommandId = 1;
+constexpr uint32_t kOpenSourceCommandId = 3;
+constexpr uint32_t kClearCommandId = 4;
+
+/// The detail pane sits beside the list when the panel is wider than tall by this aspect, and goes
+/// back below it under the lower one: the gap keeps a resize at the boundary from flipping each frame.
+constexpr float kSideBySideEnterAspect = 1.1f;
+constexpr float kSideBySideExitAspect = 0.9f;
+
+/// Indexed by LogModel::Severity: the toggle's name, the lines its tooltip names and its glyph class
+/// in the detail header.
+constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityNames{"Debug", "Info", "Warnings", "Errors"};
+constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityLineNames{"debug", "info", "warning", "error"};
+constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityTitles{"Debug", "Info", "Warning", "Error"};
+constexpr std::array<const char*, LogModel::kSeverityCount> kDetailGlyphClasses{
+    "log-row-glyph-debug", "log-row-glyph-info", "log-row-glyph-warning", "log-row-glyph-error"};
+
+// One sink shared by every Log panel; the logger has no way to remove a sink, so it stays added and
+// a closed panel only unregisters its callback.
+Logger::CallbackSink* s_CallbackSink = nullptr;
+
+Logger::CallbackSink& GetOrCreateCallbackSink()
 {
-    if (button.GetChildren().size() < 2)
-        return;
-    UIElement* checkIcon = button.GetChildren()[0].get();
-    auto* textLbl = dynamic_cast<Label*>(button.GetChildren()[1].get());
-    if (!checkIcon || !textLbl)
-        return;
-    textLbl->SetText(levelText);
-    // Keep icon in layout; hide when off via opacity (not display:none).
-    checkIcon->Overrides().Set(Style::Opacity, button.HasClass("checked") ? 1.0f : 0.0f);
-    checkIcon->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-}
-
-} // namespace
-
-// Static reference to the shared CallbackSink instance
-// We use a static sink that gets added to the Logger once
-static Logger::CallbackSink* s_LogCallbackSink = nullptr;
-static int s_SinkRefCount = 0;
-
-namespace {
-
-Logger::CallbackSink* GetOrCreateCallbackSink()
-{
-    if (!s_LogCallbackSink)
+    if (!s_CallbackSink)
     {
         Logger::CallbackSink::Config config;
         config.MinLevel = Logger::LogLevel::Trace;
-        
         auto sink = std::make_unique<Logger::CallbackSink>(config);
-        s_LogCallbackSink = sink.get();
+        s_CallbackSink = sink.get();
         Logger::Log::AddSink(std::move(sink));
     }
-    s_SinkRefCount++;
-    return s_LogCallbackSink;
+    return *s_CallbackSink;
 }
 
-void ReleaseCallbackSink()
+template <typename T>
+T* FindIn(UIElement& root, const char* id)
 {
-    if (s_SinkRefCount > 0)
-    {
-        s_SinkRefCount--;
-    }
-    // Note: We don't remove the sink from Logger because there's no
-    // RemoveSink API. The sink will remain but with no callbacks.
+    return dynamic_cast<T*>(root.FindById(HashStringId(id)));
+}
+
+LogModel::SearchField SearchFieldFromKey(const std::string& key)
+{
+    if (key == "message")
+        return LogModel::SearchField::Message;
+    if (key == "level")
+        return LogModel::SearchField::Level;
+    if (key == "source")
+        return LogModel::SearchField::Source;
+    if (key == "function")
+        return LogModel::SearchField::Function;
+    return LogModel::SearchField::All;
+}
+
+std::string LinesCopied(size_t count)
+{
+    return count == 1 ? std::string("Copied 1 line") : "Copied " + std::to_string(count) + " lines";
+}
+
+/// An entry is the line with its source and stack trace, which is what Copy puts on the clipboard.
+std::string EntriesCopied(size_t count)
+{
+    return count == 1 ? std::string("Copied 1 entry") : "Copied " + std::to_string(count) + " entries";
+}
+
+/// The detail header's button text: the file name and line the button opens.
+std::string SourceButtonLabel(const LogModel::SourceToOpen& source)
+{
+    std::string label = std::filesystem::path(source.File).filename().string();
+    if (source.Line > 0)
+        label += ":" + std::to_string(source.Line);
+    return label;
+}
+
+/// What a click on the source does: a C# file opens in the script editor at the line; any other file
+/// opens in the external editor, which receives no line.
+std::string SourceButtonTooltip(const LogModel::SourceToOpen& source)
+{
+    if (Editor::IsCSharpSource(source.File))
+        return "Open " + source.File + " at line " + std::to_string(source.Line) + " in the script editor.";
+    return "Open " + source.File + " in the external editor. It opens at the top of the file, not at the line.";
 }
 
 } // namespace
@@ -76,750 +129,425 @@ void ReleaseCallbackSink()
 LogPanel::LogPanel()
     : DockPanel("Log")
 {
-    // Toolbar: two rows when narrow (same idea as SettingsPanel width/aspect checks + layout change).
-    {
-        auto stack = std::make_unique<UIElement>();
-        stack->AddClass("log-toolbar-stack");
-        m_LogToolbarStack = stack.get();
-
-        auto primary = std::make_unique<UIElement>();
-        primary->AddClass("log-toolbar");
-        primary->AddClass("log-toolbar-primary");
-        m_LogToolbarPrimary = primary.get();
-
-        auto filtersRow = std::make_unique<UIElement>();
-        filtersRow->AddClass("log-toolbar-filters");
-        UIElement* filters = filtersRow.get();
-
-        auto addSeverityToggle = [this, filters](const char* label, const char* logLineColorClass,
-                                                   const char* levelChromeClass, bool initialOn,
-                                                   void (LogView::*setter)(bool)) {
-            const std::string levelText(label);
-
-            auto btn = std::make_unique<Button>();
-            btn->AddClass("small");
-            btn->AddClass("secondary");
-            btn->AddClass("log-filter-toggle");
-            btn->AddClass(levelChromeClass);
-            if (initialOn)
-                btn->AddClass("checked");
-
-            // Replace default label: [checked icon] [level name] (Assets/Icons/checked.svg).
-            if (!btn->GetChildren().empty())
-                btn->RemoveChild(btn->GetChildren()[0].get());
-
-            auto checkIcon = std::make_unique<UIElement>();
-            checkIcon->AddClass("log-filter-toggle-check");
-            UI::Layout::SetBackgroundPath(*checkIcon, "Icons/checked.svg");
-
-            auto textLbl = std::make_unique<Label>();
-            textLbl->AddClass(logLineColorClass);
-            textLbl->AddClass("button-text");
-            textLbl->AddClass("log-filter-toggle-label");
-            textLbl->SetText(levelText);
-
-            btn->AddChild(std::move(checkIcon));
-            btn->AddChild(std::move(textLbl));
-            SyncLogFilterToggleLabels(*btn, levelText);
-
-            btn->RegisterEventHandler(kEventButtonClick, [this, setter, levelText](UIEvent& e) {
-                Button& b = static_cast<Button&>(*e.CurrentTarget);
-                if (!m_LogView)
-                    return;
-                const bool nowOn = !b.HasClass("checked");
-                if (nowOn)
-                    b.AddClass("checked");
-                else
-                    b.RemoveClass("checked");
-                (m_LogView->*setter)(nowOn);
-                SyncLogFilterToggleLabels(b, levelText);
-            });
-            filters->AddChild(std::move(btn));
-        };
-
-        addSeverityToggle("DEBUG", "log-debug", "log-filter-level-debug", true, &LogView::SetDebugFilterEnabled);
-        addSeverityToggle("INFO", "log-info", "log-filter-level-info", true, &LogView::SetInfoFilterEnabled);
-        addSeverityToggle("WARNING", "log-warning", "log-filter-level-warning", true, &LogView::SetWarningFilterEnabled);
-        addSeverityToggle("ERROR", "log-error", "log-filter-level-error", true, &LogView::SetErrorFilterEnabled);
-
-        primary->AddChild(std::move(filtersRow));
-
-        auto copyFiltersGap = std::make_unique<UIElement>();
-        copyFiltersGap->AddClass("log-toolbar-copy-filters-gap");
-        primary->AddChild(std::move(copyFiltersGap));
-
-        auto mainActionsRow = std::make_unique<UIElement>();
-        mainActionsRow->AddClass("log-toolbar-main-actions");
-        auto clearBtn = std::make_unique<Button>();
-        m_ClearButton = clearBtn.get();
-        clearBtn->AddClass("small");
-        clearBtn->AddClass("secondary");
-        clearBtn->AddClass("log-clear-button");
-        clearBtn->SetText("Clear");
-        clearBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { this->ClearLog(); });
-        mainActionsRow->AddChild(std::move(clearBtn));
-
-        auto pauseBtn = std::make_unique<Button>();
-        m_PauseButton = pauseBtn.get();
-        pauseBtn->AddClass("small");
-        pauseBtn->AddClass("secondary");
-        pauseBtn->AddClass("log-pause-button");
-        pauseBtn->SetText("Pause");
-        pauseBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent& e) {
-            Button& btn = static_cast<Button&>(*e.CurrentTarget);
-            if (!m_LogView)
-                return;
-            const bool nowPaused = !m_LogView->IsPaused();
-            m_LogView->SetPaused(nowPaused);
-            btn.SetText(nowPaused ? "Resume" : "Pause");
-        });
-        mainActionsRow->AddChild(std::move(pauseBtn));
-
-        auto copyBtn = std::make_unique<Button>();
-        m_CopyButton = copyBtn.get();
-        copyBtn->AddClass("small");
-        copyBtn->AddClass("secondary");
-        copyBtn->AddClass("log-copy-button");
-        copyBtn->SetText("Copy");
-        copyBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { this->CopyToClipboard(); });
-        mainActionsRow->AddChild(std::move(copyBtn));
-
-        auto centerSlot = std::make_unique<UIElement>();
-        centerSlot->AddClass("log-toolbar-center-slot");
-        centerSlot->AddChild(std::move(mainActionsRow));
-        m_LogCenterSlot = centerSlot.get();
-        primary->AddChild(std::move(centerSlot));
-
-        auto built = BuildPanelSearchBar(
-            "log-search-field",
-            []() { return SettingsPanel::GetSearchBarsVisible(); },
-            [this](const std::string& value) { this->OnSearchTextChanged(value); },
-            {},
-            {{"all", "All fields"}, {"message", "Message"}, {"level", "Severity"},
-             {"source", "Source"}, {"function", "Function"}},
-            [this](const std::string& field) {
-                if (m_LogView)
-                    m_LogView->SetSearchField(field);
-            });
-        m_SearchBar = built.RootPtr;
-        m_SearchField = built.FieldPtr;
-        primary->AddChild(std::move(built.Root));
-        SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
-
-        auto secondary = std::make_unique<UIElement>();
-        secondary->AddClass("log-toolbar");
-        secondary->AddClass("log-toolbar-secondary");
-        secondary->AddClass("log-toolbar-secondary-hidden");
-        m_LogToolbarSecondary = secondary.get();
-
-        stack->AddChild(std::move(primary));
-        stack->AddChild(std::move(secondary));
-        AddChild(std::move(stack));
-    }
-
-    auto splitBody = std::make_unique<SplitView>();
-    splitBody->AddClass("log-split-body");
-    m_SplitBody = splitBody.get();
-
-    auto logPane = std::make_unique<WeightedPane>(1.0f);
-    logPane->AddClass("pane");
-    m_LogPane = logPane.get();
-
-    auto logView = std::make_unique<LogView>();
-    m_LogView = logView.get();
-
-    m_LogView->SetOnLineClicked([this](const std::string& lineText) {
-        UIManager* ui = GetOwnerManager();
-        if (!ui)
-            return;
-        if (auto* platform = ui->GetPlatform())
-            platform->SetClipboardText(lineText.c_str());
-    });
-
-    m_LogView->SetOnLineDoubleClicked([this](const std::string& lineText) {
-        if (m_OnOpenInIDE)
-            m_OnOpenInIDE(lineText);
-    });
-
-    m_LogView->SetOnMessageSelected([this](size_t idx, const LogView::StoredMessage* stored) {
-        const bool hasStored = stored != nullptr;
-        m_SelectedMessageIndex = hasStored ? idx : kNoSelection;
-        PostSafeAction([this, idx, hasStored]() {
-            if (!hasStored)
-                HideDetailPane();
-            else
-                PopulateDetailPaneForIndex(idx);
-        });
-    });
-
-    logPane->AddChild(std::move(logView));
-    splitBody->AddChild(std::move(logPane));
-
-    auto splitter = std::make_unique<Splitter>();
-    splitter->AddClass("splitter");
-    splitter->AddClass("col");
-    splitter->AddClass("log-detail-splitter");
-    splitter->AddClass("log-detail-pane--hidden");
-    m_DetailSplitter = splitter.get();
-    splitBody->AddChild(std::move(splitter));
-
-    auto detailPane = std::make_unique<WeightedPane>(0.0f);
-    detailPane->AddClass("pane");
-    detailPane->AddClass("log-detail-pane--hidden");
-    m_DetailWeightedPane = detailPane.get();
-    BuildDetailPane(detailPane.get());
-    splitBody->AddChild(std::move(detailPane));
-
-    AddChild(std::move(splitBody));
-    
-    SetupLogCapture();
-    m_Initialized = true;
-    
-    // Flush any early messages that were buffered before initialization
-    for (const auto& msg : m_EarlyMessages)
-    {
-        if (m_LogView)
-        {
-            m_LogView->AddMessage(msg);
-        }
-    }
-    m_EarlyMessages.clear();
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
+    BuildFromLayout();
+    m_CallbackId =
+        GetOrCreateCallbackSink().RegisterCallback([this](const Logger::LogMessage& message) { OnLogMessage(message); });
 }
 
 LogPanel::~LogPanel()
 {
     if (m_SearchBar)
-        SettingsPanel::UnregisterSearchBar(m_SearchBar);
-    TeardownLogCapture();
+        EditorSearchBars::Unregister(m_SearchBar);
+    if (s_CallbackSink && m_CallbackId != 0)
+        s_CallbackSink->UnregisterCallback(m_CallbackId);
+}
+
+void LogPanel::BuildFromLayout()
+{
+    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
+    std::unique_ptr<UIElement> root;
+    if (!UIParsing::XMLParser::ParseLayoutFromFile(path.string(), root) || !root)
+    {
+        Logger::Log::Error("Log panel: {} did not load, so the panel is empty. Check that it is staged under the "
+                           "editor asset mount.",
+                           path.generic_string());
+        return;
+    }
+
+    m_LogView = FindIn<LogView>(*root, "LogView");
+    m_Notice = FindIn<EditorUI::TransientNotice>(*root, "LogCopyNotice");
+    m_SplitBody = FindIn<UIElement>(*root, "LogSplit");
+    m_ListPane = FindIn<WeightedPane>(*root, "LogListPane");
+    m_DetailSplitter = FindIn<Splitter>(*root, "LogDetailSplitter");
+    m_DetailPane = FindIn<WeightedPane>(*root, "LogDetailPane");
+    m_DetailGlyph = FindIn<UIElement>(*root, "LogDetailGlyph");
+    m_DetailSeverity = FindIn<Label>(*root, "LogDetailSeverity");
+    m_DetailTime = FindIn<Label>(*root, "LogDetailTime");
+    m_DetailSource = FindIn<Button>(*root, "LogDetailSource");
+    m_DetailMessage = FindIn<TextArea>(*root, "LogDetailMessage");
+    m_DetailTraceTitle = FindIn<UIElement>(*root, "LogDetailTraceTitle");
+    m_DetailFrames = FindIn<UIElement>(*root, "LogDetailFrames");
+    m_PauseButton = FindIn<Button>(*root, "LogPause");
+    auto* detailScroll = FindIn<ScrollView>(*root, "LogDetailScroll");
+    UIElement* detailBody = FindIn<UIElement>(*root, "LogDetailBody");
+    UIElement* searchHost = FindIn<UIElement>(*root, "LogSearchHost");
+    if (!m_LogView || !m_Notice || !m_SplitBody || !m_ListPane || !m_DetailSplitter || !m_DetailPane ||
+        !m_DetailMessage || !m_DetailFrames || !m_PauseButton || !detailScroll || !detailBody || !searchHost)
+    {
+        Logger::Log::Error("Log panel: {} is missing an element the panel needs; check its ids against LogPanel.cpp.",
+                           kLayoutAssetPath);
+        m_LogView = nullptr;
+        return;
+    }
+
+    // A scroll view takes its content through its viewport, which a layout file cannot name.
+    if (UIElement* bodyParent = detailBody->GetParent())
+        detailScroll->GetViewport()->AddChild(bodyParent->TakeChild(detailBody));
+    m_DetailMessage->SetReadOnly(true);
+
+    WireFilterToggle(*root, LogModel::Severity::Error, "LogFilterError");
+    WireFilterToggle(*root, LogModel::Severity::Warning, "LogFilterWarning");
+    WireFilterToggle(*root, LogModel::Severity::Info, "LogFilterInfo");
+    WireFilterToggle(*root, LogModel::Severity::Debug, "LogFilterDebug");
+    if (auto* clear = FindIn<Button>(*root, "LogClear"))
+    {
+        clear->SetTooltip("Remove every line from the log.");
+        clear->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { ClearLog(); });
+    }
+    m_PauseButton->SetTooltip("Stop the list from moving while you read; new lines wait until you resume.");
+    m_PauseButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { TogglePause(); });
+    if (auto* copyAll = FindIn<Button>(*root, "LogCopyAll"))
+    {
+        copyAll->SetTooltip("Copy every line the filters show.");
+        copyAll->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { CopyAllVisible(); });
+    }
+    if (m_DetailSource)
+        m_DetailSource->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OpenSelectedSource(); });
+    BuildSearchBar(*searchHost);
+
+    m_LogView->SetOnSelectionChanged([this](const LogModel::Entry* entry) { OnSelectionChanged(entry); });
+    m_LogView->SetOnEntryActivated([this](const LogModel::Entry&) { OpenSelectedSource(); });
+    m_LogView->SetOnContextMenu([this](float x, float y) { ShowContextMenu(x, y); });
+    m_LogView->SetOnCopyShortcut([this]() { CopySelected(); });
+    m_LogView->SetOnEntriesChanged([this]() { SyncFilterToggles(); });
+
+    AddChild(std::move(root));
+    SyncFilterToggles();
+}
+
+void LogPanel::BuildSearchBar(UIElement& host)
+{
+    PanelSearchBarBuilt built = BuildPanelSearchBar(
+        "log-search-field",
+        [this](const std::string& text)
+        {
+            if (m_LogView)
+                m_LogView->SetSearch(text);
+        },
+        {},
+        {{"all", "All fields"}, {"message", "Message"}, {"level", "Severity"}, {"source", "Source"},
+         {"function", "Function"}},
+        [this](const std::string& key)
+        {
+            if (m_LogView)
+                m_LogView->SetSearchField(SearchFieldFromKey(key));
+        });
+    m_SearchBar = built.RootPtr;
+    m_SearchBar->AddClass(kSearchBarClass);
+    host.AddChild(std::move(built.Root));
+    // The search stays in the toolbar wherever panel searches sit; it takes only the focus outline.
+    EditorSearchBars::RegisterFocusTarget(m_SearchBar);
+}
+
+void LogPanel::WireFilterToggle(UIElement& root, LogModel::Severity severity, const char* id)
+{
+    auto* toggle = FindIn<Button>(root, id);
+    if (!toggle)
+        return;
+    m_FilterToggles[static_cast<size_t>(severity)] = toggle;
+    toggle->SetTooltip(std::string("Show or hide ") + kSeverityLineNames[static_cast<size_t>(severity)] +
+                       " lines. The number counts the lines that match the search.");
+    toggle->RegisterEventHandler(kEventButtonClick, [this, severity](UIEvent&) { ToggleSeverity(severity); });
+}
+
+void LogPanel::ToggleSeverity(LogModel::Severity severity)
+{
+    if (!m_LogView)
+        return;
+    m_LogView->SetSeverityShown(severity, !m_LogView->GetModel().IsSeverityShown(severity));
+}
+
+void LogPanel::SyncFilterToggles()
+{
+    if (!m_LogView)
+        return;
+    const LogModel& model = m_LogView->GetModel();
+    for (size_t index = 0; index < LogModel::kSeverityCount; ++index)
+    {
+        Button* toggle = m_FilterToggles[index];
+        if (!toggle)
+            continue;
+        const auto severity = static_cast<LogModel::Severity>(index);
+        std::string text = kSeverityNames[index];
+        text += "  ";
+        const size_t count = model.CountMatchingSearch(severity);
+        text += std::to_string(count);
+        if (toggle->GetText() != text)
+            toggle->SetText(text);
+        if ((count == 0) != toggle->HasClass(kFilterEmptyClass))
+        {
+            if (count == 0)
+                toggle->AddClass(kFilterEmptyClass);
+            else
+                toggle->RemoveClass(kFilterEmptyClass);
+        }
+        const bool shown = model.IsSeverityShown(severity);
+        if (shown == toggle->HasClass(kFilterOnClass))
+            continue;
+        toggle->RemoveClass(shown ? kFilterOffClass : kFilterOnClass);
+        toggle->AddClass(shown ? kFilterOnClass : kFilterOffClass);
+    }
+}
+
+void LogPanel::TogglePause()
+{
+    if (!m_LogView)
+        return;
+    const bool paused = !m_LogView->IsPaused();
+    m_LogView->SetPaused(paused);
+    m_PauseButton->SetText(paused ? "Resume" : "Pause");
 }
 
 void LogPanel::Update()
 {
-    SyncLogToolbarLayoutMode();
-    SyncLogDetailLayoutMode();
+    SyncDetailLayoutMode();
     if (m_LogView)
-    {
         m_LogView->FlushPendingMessages();
-    }
+    if (m_Notice)
+        m_Notice->Tick(std::chrono::steady_clock::now());
 }
 
-void LogPanel::SyncLogDetailLayoutMode()
+void LogPanel::ClearLog()
+{
+    if (m_LogView)
+        m_LogView->Clear();
+}
+
+void LogPanel::OnLogMessage(const Logger::LogMessage& message)
+{
+    if (m_LogView)
+        m_LogView->AddMessage(message);
+}
+
+void LogPanel::OnSelectionChanged(const LogModel::Entry* entry)
+{
+    // Selection changes inside the list's pointer dispatch, where the frame rows cannot be replaced:
+    // the pane is rebuilt after it, from the entry's sequence, which outlives a dropped entry.
+    const uint64_t sequence = entry ? entry->Sequence : 0;
+    PostSafeAction(
+        [this, sequence]()
+        {
+            const LogModel::Entry* selected = m_LogView ? m_LogView->GetModel().FindEntry(sequence) : nullptr;
+            if (selected)
+                ShowDetail(*selected);
+            else
+                HideDetail();
+        });
+}
+
+void LogPanel::ShowDetail(const LogModel::Entry& entry)
+{
+    const size_t severity = static_cast<size_t>(LogModel::SeverityOf(entry.Level));
+    if (m_DetailGlyph)
+    {
+        for (const char* name : kDetailGlyphClasses)
+            m_DetailGlyph->RemoveClass(name);
+        m_DetailGlyph->AddClass(kDetailGlyphClasses[severity]);
+    }
+    if (m_DetailSeverity)
+        m_DetailSeverity->SetText(kSeverityTitles[severity]);
+    if (m_DetailTime)
+        m_DetailTime->SetText(LogModel::FormatTime(entry));
+    if (m_DetailSource)
+    {
+        if (const std::optional<LogModel::SourceToOpen> source = LogModel::FindSourceToOpen(entry))
+        {
+            m_DetailSource->SetText(SourceButtonLabel(*source));
+            m_DetailSource->SetTooltip(SourceButtonTooltip(*source));
+            m_DetailSource->RemoveClass(kHiddenClass);
+        }
+        else
+        {
+            m_DetailSource->AddClass(kHiddenClass);
+        }
+    }
+    m_DetailMessage->SetValue(entry.Text);
+
+    m_DetailFrames->RemoveAllChildren();
+    const bool hasTrace = entry.Backtrace && !entry.Backtrace->empty();
+    if (m_DetailTraceTitle)
+    {
+        if (hasTrace)
+            m_DetailTraceTitle->RemoveClass(kHiddenClass);
+        else
+            m_DetailTraceTitle->AddClass(kHiddenClass);
+    }
+    if (hasTrace)
+    {
+        const std::vector<Logger::BacktraceFrame>& frames = *entry.Backtrace;
+        for (size_t index = 0; index < frames.size(); ++index)
+            m_DetailFrames->AddChild(BuildBacktraceFrameRow(
+                index, frames[index], [this](const std::string& file, int line) { OpenSource(file, line); }));
+    }
+
+    if (m_DetailPane->HasClass(kHiddenClass))
+    {
+        m_ListPane->SetFlexWeight(m_VisibleListWeight);
+        m_DetailPane->SetFlexWeight(m_VisibleDetailWeight);
+        m_DetailPane->RemoveClass(kHiddenClass);
+        m_DetailSplitter->RemoveClass(kHiddenClass);
+        // The list shrinks as the pane opens, which can cover a row selected near its bottom.
+        m_LogView->RevealSelectionAfterLayout();
+    }
+    m_SplitBody->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
+}
+
+void LogPanel::HideDetail()
+{
+    if (!m_DetailPane || m_DetailPane->HasClass(kHiddenClass))
+        return;
+    m_VisibleListWeight = m_ListPane->GetFlexWeight();
+    m_VisibleDetailWeight = m_DetailPane->GetFlexWeight();
+    m_DetailPane->AddClass(kHiddenClass);
+    m_DetailSplitter->AddClass(kHiddenClass);
+    m_DetailPane->SetFlexWeight(0.0f);
+    m_ListPane->SetFlexWeight(1.0f);
+    m_DetailFrames->RemoveAllChildren();
+    m_SplitBody->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
+}
+
+void LogPanel::SyncDetailLayoutMode()
 {
     if (!m_SplitBody || !m_DetailSplitter)
         return;
-
     const float width = GetLayoutWidth();
     const float height = GetLayoutHeight();
     if (width <= 1.0f || height <= 1.0f)
         return;
 
     const float aspect = width / height;
-    bool sideBySide = m_LogDetailSideBySide;
-    if (!m_LogDetailLayoutInitialized)
-        sideBySide = aspect > 1.0f;
-    else if (m_LogDetailSideBySide)
-        sideBySide = aspect >= 0.9f;
-    else
-        sideBySide = aspect > 1.1f;
-
-    if (m_LogDetailLayoutInitialized && sideBySide == m_LogDetailSideBySide)
+    bool sideBySide = aspect > 1.0f;
+    if (m_DetailLayoutInitialized)
+        sideBySide = m_DetailSideBySide ? aspect >= kSideBySideExitAspect : aspect > kSideBySideEnterAspect;
+    if (m_DetailLayoutInitialized && sideBySide == m_DetailSideBySide)
         return;
 
-    m_LogDetailLayoutInitialized = true;
-    m_LogDetailSideBySide = sideBySide;
+    m_DetailLayoutInitialized = true;
+    m_DetailSideBySide = sideBySide;
     if (sideBySide)
     {
-        m_SplitBody->AddClass("log-split-body--side-by-side");
+        m_SplitBody->AddClass(kSideBySideClass);
         m_DetailSplitter->RemoveClass("col");
         m_DetailSplitter->AddClass("row");
     }
     else
     {
-        m_SplitBody->RemoveClass("log-split-body--side-by-side");
+        m_SplitBody->RemoveClass(kSideBySideClass);
         m_DetailSplitter->RemoveClass("row");
         m_DetailSplitter->AddClass("col");
     }
-
     m_SplitBody->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
     m_SplitBody->RequestRelayout();
 }
 
-void LogPanel::RepairLogToolbarChromeIfNeeded()
-{
-    if (!m_LogToolbarStack || !m_LogToolbarPrimary || !m_LogToolbarSecondary || !m_LogCenterSlot || !m_SearchBar)
-        return;
-
-    UIElement* centerParent = m_LogCenterSlot->GetParent();
-    UIElement* searchParent = m_SearchBar->GetParent();
-    if (!centerParent || !searchParent)
-        return;
-
-    auto syncChromeVisibilityClasses = [this]() {
-        if (m_LogToolbarCompact)
-        {
-            m_LogToolbarSecondary->RemoveClass("log-toolbar-secondary-hidden");
-            m_LogToolbarStack->AddClass("log-toolbar-stack--compact");
-        }
-        else
-        {
-            m_LogToolbarSecondary->AddClass("log-toolbar-secondary-hidden");
-            m_LogToolbarStack->RemoveClass("log-toolbar-stack--compact");
-        }
-        m_LogToolbarStack->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-    };
-
-    auto takeIfChild = [](UIElement* parent, UIElement* node) -> std::unique_ptr<UIElement> {
-        if (!parent || !node || node->GetParent() != parent)
-            return nullptr;
-        return parent->TakeChild(node);
-    };
-
-    // Center and search must live on the same row; split parents means a half-applied transition.
-    if (centerParent != searchParent)
-    {
-        std::unique_ptr<UIElement> center = takeIfChild(centerParent, m_LogCenterSlot);
-        std::unique_ptr<UIElement> search = takeIfChild(searchParent, m_SearchBar);
-        if (center)
-            m_LogToolbarPrimary->AddChild(std::move(center));
-        if (search)
-            m_LogToolbarPrimary->AddChild(std::move(search));
-        m_LogToolbarCompact = false;
-        m_LogToolbarCompactStreak = 0;
-        m_LogToolbarWideStreak = 0;
-        syncChromeVisibilityClasses();
-        return;
-    }
-
-    if (centerParent == m_LogToolbarPrimary && m_LogToolbarCompact)
-    {
-        m_LogToolbarCompact = false;
-        syncChromeVisibilityClasses();
-        return;
-    }
-    if (centerParent == m_LogToolbarSecondary && !m_LogToolbarCompact)
-    {
-        m_LogToolbarCompact = true;
-        syncChromeVisibilityClasses();
-        return;
-    }
-
-    // DOM matches the flag — fix visibility classes if they drifted (e.g. stale deferred work).
-    if (centerParent == m_LogToolbarSecondary)
-    {
-        if (m_LogToolbarSecondary->HasClass("log-toolbar-secondary-hidden"))
-        {
-            m_LogToolbarSecondary->RemoveClass("log-toolbar-secondary-hidden");
-            m_LogToolbarStack->AddClass("log-toolbar-stack--compact");
-            m_LogToolbarStack->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-        }
-    }
-    else if (centerParent == m_LogToolbarPrimary)
-    {
-        if (!m_LogToolbarSecondary->HasClass("log-toolbar-secondary-hidden"))
-        {
-            m_LogToolbarSecondary->AddClass("log-toolbar-secondary-hidden");
-            m_LogToolbarStack->RemoveClass("log-toolbar-stack--compact");
-            m_LogToolbarStack->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-        }
-    }
-}
-
-void LogPanel::SyncLogToolbarLayoutMode()
-{
-    if (!m_LogToolbarStack || !m_LogToolbarPrimary || !m_LogToolbarSecondary || !m_LogCenterSlot || !m_SearchBar)
-        return;
-
-    RepairLogToolbarChromeIfNeeded();
-
-    const float width = GetLayoutWidth();
-    if (width <= 1.0f)
-        return;
-
-    static constexpr float kCompactEnterWidthPx = 760.0f;
-    static constexpr float kCompactExitWidthPx = 840.0f;
-    static constexpr int kLayoutStableFrames = 2;
-
-    bool wantCompact = m_LogToolbarCompact;
-
-    if (!m_LogToolbarCompact)
-    {
-        m_LogToolbarWideStreak = 0;
-        if (width < kCompactEnterWidthPx)
-        {
-            if (++m_LogToolbarCompactStreak >= kLayoutStableFrames)
-            {
-                wantCompact = true;
-                m_LogToolbarCompactStreak = 0;
-            }
-        }
-        else
-            m_LogToolbarCompactStreak = 0;
-    }
-    else
-    {
-        m_LogToolbarCompactStreak = 0;
-        if (width > kCompactExitWidthPx)
-        {
-            if (++m_LogToolbarWideStreak >= kLayoutStableFrames)
-            {
-                wantCompact = false;
-                m_LogToolbarWideStreak = 0;
-            }
-        }
-        else
-            m_LogToolbarWideStreak = 0;
-    }
-
-    if (wantCompact == m_LogToolbarCompact)
-        return;
-
-    if (wantCompact)
-    {
-        auto center = m_LogToolbarPrimary->TakeChild(m_LogCenterSlot);
-        auto search = m_LogToolbarPrimary->TakeChild(m_SearchBar);
-        if (!center || !search)
-        {
-            if (center)
-                m_LogToolbarPrimary->AddChild(std::move(center));
-            if (search)
-                m_LogToolbarPrimary->AddChild(std::move(search));
-            return;
-        }
-        m_LogToolbarSecondary->AddChild(std::move(center));
-        m_LogToolbarSecondary->AddChild(std::move(search));
-        m_LogToolbarSecondary->RemoveClass("log-toolbar-secondary-hidden");
-        m_LogToolbarStack->AddClass("log-toolbar-stack--compact");
-        m_LogToolbarCompact = true;
-    }
-    else
-    {
-        auto center = m_LogToolbarSecondary->TakeChild(m_LogCenterSlot);
-        auto search = m_LogToolbarSecondary->TakeChild(m_SearchBar);
-        if (!center || !search)
-        {
-            if (center)
-                m_LogToolbarSecondary->AddChild(std::move(center));
-            if (search)
-                m_LogToolbarSecondary->AddChild(std::move(search));
-            return;
-        }
-        m_LogToolbarPrimary->AddChild(std::move(center));
-        m_LogToolbarPrimary->AddChild(std::move(search));
-        m_LogToolbarSecondary->AddClass("log-toolbar-secondary-hidden");
-        m_LogToolbarStack->RemoveClass("log-toolbar-stack--compact");
-        m_LogToolbarCompact = false;
-    }
-
-    m_LogToolbarStack->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-}
-
-void LogPanel::ClearLog()
-{
-    if (m_LogView)
-    {
-        m_LogView->Clear();
-    }
-}
-
-void LogPanel::SetupLogCapture()
-{
-    Logger::CallbackSink* sink = GetOrCreateCallbackSink();
-    if (sink)
-    {
-        m_CallbackId = sink->RegisterCallback(
-            [this](const Logger::LogMessage& msg) { OnLogMessage(msg); });
-    }
-}
-
-void LogPanel::TeardownLogCapture()
-{
-    if (s_LogCallbackSink && m_CallbackId != 0)
-    {
-        s_LogCallbackSink->UnregisterCallback(m_CallbackId);
-        m_CallbackId = 0;
-    }
-    ReleaseCallbackSink();
-}
-
-void LogPanel::OnLogMessage(const Logger::LogMessage& message)
-{
-    if (!m_Initialized)
-    {
-        // Buffer early messages
-        m_EarlyMessages.push_back(message);
-        return;
-    }
-    
-    if (m_LogView)
-    {
-        m_LogView->AddMessage(message);
-    }
-}
-
-void LogPanel::OnSearchTextChanged(const std::string& searchText)
-{
-    if (m_LogView)
-        m_LogView->SetSearchFilter(searchText);
-}
-
-void LogPanel::BuildDetailPane(UIElement* parent)
-{
-    auto pane = std::make_unique<UIElement>();
-    pane->AddClass("log-detail-pane");
-    m_DetailPane = pane.get();
-
-    auto header = std::make_unique<UIElement>();
-    header->AddClass("log-detail-header");
-
-    auto title = std::make_unique<Label>();
-    title->AddClass("log-detail-title");
-    title->SetText("Stack Trace");
-    header->AddChild(std::move(title));
-
-    auto sourceLbl = std::make_unique<Label>();
-    sourceLbl->AddClass("log-detail-source");
-    sourceLbl->SetText("");
-    m_DetailSourceLabel = sourceLbl.get();
-    header->AddChild(std::move(sourceLbl));
-
-    pane->AddChild(std::move(header));
-
-    auto scroll = std::make_unique<ScrollView>();
-    scroll->AddClass("log-detail-scroll");
-    m_DetailFrameList = scroll->GetViewport();
-    if (m_DetailFrameList)
-        m_DetailFrameList->AddClass("log-detail-frames");
-
-    pane->AddChild(std::move(scroll));
-    parent->AddChild(std::move(pane));
-}
-
-void LogPanel::HideDetailPane()
-{
-    if (!m_DetailPane)
-        return;
-    const bool wasVisible = m_DetailWeightedPane &&
-                            !m_DetailWeightedPane->HasClass("log-detail-pane--hidden");
-    if (wasVisible && m_LogPane)
-    {
-        m_VisibleLogPaneWeight = m_LogPane->GetFlexWeight();
-        m_VisibleDetailPaneWeight = m_DetailWeightedPane->GetFlexWeight();
-    }
-    if (m_DetailSplitter)
-        m_DetailSplitter->AddClass("log-detail-pane--hidden");
-    if (m_DetailWeightedPane)
-    {
-        m_DetailWeightedPane->AddClass("log-detail-pane--hidden");
-        m_DetailWeightedPane->SetFlexWeight(0.0f);
-    }
-    if (m_LogPane)
-        m_LogPane->SetFlexWeight(1.0f);
-    if (m_DetailFrameList)
-    {
-        m_DetailFrameList->RemoveAllChildren();
-    }
-    if (m_DetailSourceLabel)
-        m_DetailSourceLabel->SetText("");
-    if (m_SplitBody)
-        m_SplitBody->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-}
-
-void LogPanel::OpenSourceLocation(const std::string& file, int line)
-{
-    if (file.empty())
-        return;
-
-    if (m_OnOpenSourceFile)
-    {
-        m_OnOpenSourceFile(file, line);
-        return;
-    }
-
-    // Fallback: format as "file:line" and route through the legacy IDE open hook.
-    if (m_OnOpenInIDE)
-    {
-        std::string formatted = file;
-        if (line > 0)
-        {
-            formatted += ":";
-            formatted += std::to_string(line);
-        }
-        m_OnOpenInIDE(formatted);
-    }
-}
-
-void LogPanel::PopulateDetailPaneForIndex(size_t messageIndex)
-{
-    if (!m_DetailPane || !m_DetailFrameList || !m_DetailSourceLabel || !m_LogView)
-        return;
-
-    const auto* stored = m_LogView->GetMessage(messageIndex);
-    if (!stored)
-    {
-        HideDetailPane();
-        return;
-    }
-
-    const bool hasBacktrace = stored->Backtrace && !stored->Backtrace->empty();
-    if (!hasBacktrace)
-    {
-        HideDetailPane();
-        return;
-    }
-
-    const bool hasSource = !stored->SourceFile.empty();
-
-    if (m_LogPane)
-        m_LogPane->SetFlexWeight(m_VisibleLogPaneWeight);
-    if (m_DetailWeightedPane)
-        m_DetailWeightedPane->SetFlexWeight(m_VisibleDetailPaneWeight);
-    if (m_DetailSplitter)
-        m_DetailSplitter->RemoveClass("log-detail-pane--hidden");
-    if (m_DetailWeightedPane)
-        m_DetailWeightedPane->RemoveClass("log-detail-pane--hidden");
-
-    std::string sourceText;
-    if (hasSource)
-    {
-        sourceText = stored->SourceFile;
-        if (stored->SourceLine > 0)
-        {
-            sourceText += ":";
-            sourceText += std::to_string(stored->SourceLine);
-        }
-        if (!stored->Function.empty())
-        {
-            sourceText += "  ";
-            sourceText += stored->Function;
-        }
-    }
-    else
-    {
-        sourceText = "(no source location)";
-    }
-    m_DetailSourceLabel->SetText(sourceText);
-
-    m_DetailFrameList->RemoveAllChildren();
-
-    if (hasSource)
-    {
-        auto srcRow = std::make_unique<Label>();
-        srcRow->AddClass("log-detail-frame");
-        srcRow->AddClass("log-detail-frame--source");
-        std::string rowText = "source  ";
-        rowText += stored->SourceFile;
-        if (stored->SourceLine > 0)
-        {
-            rowText += ":";
-            rowText += std::to_string(stored->SourceLine);
-        }
-        srcRow->SetText(rowText);
-
-        std::string capturedFile = stored->SourceFile;
-        int capturedLine = stored->SourceLine;
-        srcRow->RegisterEventHandler(kEventMouseUp, [this, capturedFile, capturedLine](UIEvent&) {
-            OpenSourceLocation(capturedFile, capturedLine);
-        });
-        m_DetailFrameList->AddChild(std::move(srcRow));
-    }
-
-    if (hasBacktrace)
-    {
-        const auto& frames = *stored->Backtrace;
-        for (std::size_t i = 0; i < frames.size(); ++i)
-        {
-            m_DetailFrameList->AddChild(BuildBacktraceFrameRow(
-                i, frames[i],
-                [this](const std::string& file, int line) { OpenSourceLocation(file, line); }));
-        }
-    }
-
-    m_DetailPane->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-}
-
-void LogPanel::CopyToClipboard()
+void LogPanel::CopySelected()
 {
     if (!m_LogView)
         return;
-
-    std::string logText = m_LogView->GetSelectedLinesAsText();
-    if (logText.empty())
+    const std::vector<const LogModel::Entry*> entries = m_LogView->GetSelectedEntries();
+    std::string text;
+    for (const LogModel::Entry* entry : entries)
     {
-        const bool useFiltered =
-            (m_SearchField && !m_SearchField->GetValue().empty()) ||
-            m_LogView->IsSeverityFilterActive();
-        logText = m_LogView->GetAllMessagesAsText(useFiltered);
+        // A blank line between entries.
+        if (!text.empty())
+            text += '\n';
+        text += LogModel::FormatDetails(*entry);
     }
+    CopyText(text, EntriesCopied(entries.size()), /*besideSelection=*/true);
+}
 
-    const bool detailVisible = m_DetailWeightedPane && !m_DetailWeightedPane->HasClass("log-detail-pane--hidden");
-    if (detailVisible && m_SelectedMessageIndex != kNoSelection)
-    {
-        if (const auto* stored = m_LogView->GetMessage(m_SelectedMessageIndex))
-        {
-            const bool hasSource = !stored->SourceFile.empty();
-            const bool hasBacktrace = stored->Backtrace && !stored->Backtrace->empty();
-            if (hasSource || hasBacktrace)
-            {
-                if (!logText.empty() && logText.back() != '\n')
-                    logText += '\n';
-                logText += "\nStack Trace\n";
-                if (hasSource)
-                {
-                    logText += "source  ";
-                    logText += stored->SourceFile;
-                    if (stored->SourceLine > 0)
-                    {
-                        logText += ':';
-                        logText += std::to_string(stored->SourceLine);
-                    }
-                    if (!stored->Function.empty())
-                    {
-                        logText += "  ";
-                        logText += stored->Function;
-                    }
-                    logText += '\n';
-                }
-                if (hasBacktrace)
-                {
-                    const auto& frames = *stored->Backtrace;
-                    for (std::size_t i = 0; i < frames.size(); ++i)
-                    {
-                        const auto& f = frames[i];
-                        char idxBuf[24];
-                        std::snprintf(idxBuf, sizeof(idxBuf), "[%zu] ", i);
-                        logText += idxBuf;
-                        if (!f.Module.empty())
-                        {
-                            logText += f.Module;
-                            logText += '!';
-                        }
-                        logText += f.Symbol.empty() ? std::string("<unknown>") : f.Symbol;
-                        if (!f.File.empty())
-                        {
-                            logText += "  ";
-                            logText += f.File;
-                            if (f.Line > 0)
-                            {
-                                logText += ':';
-                                logText += std::to_string(f.Line);
-                            }
-                        }
-                        logText += '\n';
-                    }
-                }
-            }
-        }
-    }
+void LogPanel::CopyAllVisible()
+{
+    if (!m_LogView)
+        return;
+    CopyText(m_LogView->GetModel().FormatVisibleLines(), LinesCopied(m_LogView->GetModel().GetVisibleCount()),
+             /*besideSelection=*/false);
+}
 
-    if (logText.empty())
+void LogPanel::CopyText(const std::string& text, const std::string& confirmation, bool besideSelection)
+{
+    if (text.empty())
+        return;
+    Platform::SetClipboardText(text.c_str());
+    if (m_Notice)
+        m_Notice->Show(confirmation, std::chrono::steady_clock::now(),
+                       besideSelection ? FindNoticeTopBesideSelection() : std::nullopt);
+}
+
+std::optional<float> LogPanel::FindNoticeTopBesideSelection() const
+{
+    const UIElement* host = m_Notice ? m_Notice->GetParent() : nullptr;
+    const std::optional<Mathematics::Rect> row = m_LogView ? m_LogView->GetSelectedRowWindowRect() : std::nullopt;
+    if (!host || !row)
+        return std::nullopt;
+    // Centered on the row's height, kept inside the list; the sheet puts it at the row's right end.
+    const Mathematics::Rect bounds = host->GetWindowRect();
+    const float noticeHeight = m_Notice->GetLayoutHeight();
+    const float centered = row->Y + (row->Height - noticeHeight) * 0.5f - bounds.Y;
+    return std::clamp(centered, 0.0f, std::max(0.0f, bounds.Height - noticeHeight));
+}
+
+void LogPanel::OpenSelectedSource()
+{
+    const LogModel::Entry* entry = m_LogView ? m_LogView->GetSelectedEntry() : nullptr;
+    if (!entry)
+        return;
+    if (const std::optional<LogModel::SourceToOpen> source = LogModel::FindSourceToOpen(*entry))
+        OpenSource(source->File, source->Line);
+}
+
+void LogPanel::OpenSource(const std::string& file, int line)
+{
+    if (!file.empty() && m_OnOpenSourceFile)
+        m_OnOpenSourceFile(file, line);
+}
+
+void LogPanel::ShowContextMenu(float x, float y)
+{
+    const LogModel::Entry* entry = m_LogView ? m_LogView->GetSelectedEntry() : nullptr;
+    if (!entry)
+        return;
+    // The window that hosts this panel, which is not the main window when the panel floats.
+    UIManager* manager = GetOwnerManager();
+    UI::IPlatformApi* platform = manager ? manager->GetPlatform() : nullptr;
+    Platform::Window* window = platform ? platform->GetNativeWindow() : nullptr;
+    if (!window)
+        return;
+    if (!m_ContextMenu)
+        m_ContextMenu = CreateContextMenu();
+    if (!m_ContextMenu)
         return;
 
-    UIManager* ui = GetOwnerManager();
-    if (!ui)
-        return;
+    m_ContextMenu->Clear();
+    m_ContextMenu->SetCommandHandler([this](uint32_t commandId) { OnContextMenuCommand(commandId); });
+    const bool canOpen = LogModel::FindSourceToOpen(*entry).has_value();
+    ContextMenuBuilder builder;
+    builder.AddItem("Copy", kCopyCommandId, MenuItemFlag_None, 0, EditorIcons::kCopy, "Ctrl+C");
+    if (canOpen)
+        builder.AddItem("Open Source", kOpenSourceCommandId, MenuItemFlag_None, 0, EditorIcons::kFolderOpen);
+    builder.AddItem("-", 0);
+    builder.AddItem("Clear Log", kClearCommandId, MenuItemFlag_None, 0, EditorIcons::kTrash);
+    builder.Build(m_ContextMenu.get(), /*SortByPriorityThenPath=*/false);
+    m_ContextMenu->Show(window, static_cast<int>(x), static_cast<int>(y));
+}
 
-    if (auto* platform = ui->GetPlatform())
-        platform->SetClipboardText(logText.c_str());
+void LogPanel::OnContextMenuCommand(uint32_t commandId)
+{
+    switch (commandId)
+    {
+    case kCopyCommandId:
+        CopySelected();
+        break;
+    case kOpenSourceCommandId:
+        OpenSelectedSource();
+        break;
+    case kClearCommandId:
+        ClearLog();
+        break;
+    default:
+        break;
+    }
 }
 
 } // namespace GameEngine

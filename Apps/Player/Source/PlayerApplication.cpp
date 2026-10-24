@@ -8,6 +8,7 @@
 #include "Assets/Packages/PackageResolver.h"
 #include "Assets/Packages/PackagesIndex.h"
 #include "Audio/AudioSystem.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "ECSModules/Rendering/RenderingLoop.h"
 #include "Engine/Build/PackagedGameLayout.h"
@@ -239,7 +240,7 @@ bool PlayerApplication::Initialize()
     {
         auto& am = EngineCore::GetInstance().GetAssetManager();
         const auto projectAssetsRoot = EngineCore::GetInstance().GetResolvedAssetRoot();
-        const auto stagedAssetsRoot = PathUtils::GetInstallAssetsRoot();
+        const auto stagedAssetsRoot = ApplicationPaths::GetInstallAssetsRoot();
         if (const auto editorSource = BuildPlayerEditorSourceDesc(projectAssetsRoot, stagedAssetsRoot))
         {
             am.RegisterSource(*editorSource);

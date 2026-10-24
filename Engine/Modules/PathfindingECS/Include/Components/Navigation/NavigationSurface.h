@@ -34,8 +34,9 @@ enum class NavigationBakePhase : uint8
 // What a bake waits for, when BakePhase is Waiting.
 enum class NavigationBakeWait : uint8
 {
-    // A terrain tile inside the bounds has not streamed in; BlockingTileX/Z name it.
-    TerrainTile = 0,
+    // The finest terrain height at a point inside the bounds is not loaded yet; BlockingPoint names
+    // the point.
+    TerrainPage = 0,
     // The terrain exists but its heightfield has not been built yet.
     TerrainData = 1,
     // A model a baked mesh renderer shows is still loading; BlockingModel names it.
@@ -139,7 +140,7 @@ struct NavigationSurface
     NavigationBakeFailure BakeFailure = NavigationBakeFailure::None;
     // @ge-hidden
     // [DoNotSerialize]
-    NavigationBakeWait BakeWait = NavigationBakeWait::TerrainTile;
+    NavigationBakeWait BakeWait = NavigationBakeWait::TerrainPage;
     // The authored fields differ from the ones the current bake was made with.
     // @ge-hidden
     // [DoNotSerialize]
@@ -190,14 +191,17 @@ struct NavigationSurface
     // @ge-hidden
     // [DoNotSerialize]
     uint32 TilesBuilt = 0;
-    // Waiting: the terrain tile that is not resident. Failed with TileBuild: the surface tile.
-    // Baked with StaleTiles: the first stale tile.
+    // Failed with TileBuild: the surface tile. Baked with StaleTiles: the first stale tile.
     // @ge-hidden
     // [DoNotSerialize]
     int32 BlockingTileX = 0;
     // @ge-hidden
     // [DoNotSerialize]
     int32 BlockingTileZ = 0;
+    // Waiting on TerrainPage: the world point (meters) whose finest terrain height is not loaded yet.
+    // @ge-hidden
+    // [DoNotSerialize]
+    Mathematics::Vector3 BlockingPoint{0.0f, 0.0f, 0.0f};
     // Waiting for Model: the model still loading.
     // @ge-hidden
     // [DoNotSerialize]

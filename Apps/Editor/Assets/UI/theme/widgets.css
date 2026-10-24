@@ -543,6 +543,18 @@
 	overflow: visible;
 }
 
+/* A panel search (BuildPanelSearchBar) reads as a field at rest: the inspector value field's
+   fill and a subtle border, after the control's base rule so it wins over it. Hover lifts the
+   border; the focus rule after these has the same specificity, so focus wins over hover. */
+.panel-search-bar {
+	background-color: var(--ui_color_bg_field);
+	border-color: var(--ui_color_border_subtle);
+}
+
+.panel-search-bar:hover {
+	border-color: var(--ui_color_dropdown_outline_hover);
+}
+
 .search-field-with-filter:focus-within {
 	border-color: var(--ui_color_accent);
 }
@@ -561,13 +573,16 @@
 	padding-right: 52px;
 }
 
-.search-field-with-filter-input TextInput,
-.panel-search-field TextInput {
+/* A line box centered in the 24px field leaves the capitals half a pixel and the lowercase two
+   pixels below the field's center (measured on the rendered panels). One pixel more padding
+   below than above lifts the text to within half a pixel of the center; the placeholder takes
+   the same lift. */
+.search-field-with-filter-input TextInput {
 	background-color: transparent;
 	border: none;
 	color: var(--ui_color_text);
 	font-size: var(--ui_font_size_base);
-	padding: 4px 24px 4px 8px;
+	padding: 3px 24px 5px 8px;
 	height: 100%;
 	width: 100%;
 }
@@ -588,9 +603,11 @@
 	min-width: 0;
 	display: flex;
 	align-items: center;
-	/* A hint, not a value: a step down from the typed text and italic, so an empty field
-	   never reads as one holding text. */
-	color: var(--ui_color_text_dim);
+	/* A hint, not a value: quieter than the typed text and italic, so an empty field reads at
+	   rest and never as one holding text. */
+	color: var(--ui_color_text_placeholder);
+	/* The same one-pixel lift as the typed text (.search-field-with-filter-input TextInput). */
+	padding-bottom: 2px;
 	font-style: italic;
 	white-space: nowrap;
 	overflow: hidden;
@@ -607,8 +624,7 @@
 	right: 52px;
 }
 
-.search-field-with-filter-icon,
-.panel-search-icon {
+.search-field-with-filter-icon {
 	position: absolute;
 	right: 6px;
 	top: 50%;
@@ -619,7 +635,8 @@
 	background-size: 12px 12px;
 	background-repeat: no-repeat;
 	background-position: center;
-	opacity: 0.5;
+	/* Quiet at rest and still 3.5:1 against the field fill; hover and focus raise it to full. */
+	opacity: 0.6;
 	pointer-events: none !important;
 	z-index: 1;
 }
@@ -728,6 +745,13 @@ button.panel-search-clear,
 	background-position: center;
 	opacity: 0.7;
 	z-index: 20;
+}
+
+/* The clear glyph at rest takes the icon color: about 4:1 against the field fill, where the
+   shared close icon's dimmer tint (theme/core.css, .xclose-icon) falls under the 3:1 a state
+   glyph needs. Hover still brightens it (.xclose-icon:hover). */
+.search-field-with-filter-clear {
+	background-image-tint: var(--ui_color_icon);
 }
 
 .search-field-with-filter-clear:hover,
@@ -952,470 +976,6 @@ checkbox:checked:hover .checkbox-box,
 /* Pressed feedback slightly darkens the box */
 .checkbox.pressed .checkbox-box {
 	background-color: var(--ui_color_bg_hover);
-}
-
-/* ======================================
-   Log Panel Styles
-   ====================================== */
-
-.log-panel-container {
-	display: flex;
-	flex-direction: column;
-	flex-grow: 1;
-	min-width: 0;
-	min-height: 0;
-}
-
-/* LogPanel: primary row (filters ± inline actions) + optional secondary row (narrow width). */
-.log-toolbar-stack {
-	display: flex;
-	flex-direction: column;
-	flex-shrink: 0;
-	width: 100%;
-	min-width: 0;
-}
-
-.log-toolbar-stack.log-toolbar-stack--compact .log-toolbar-primary {
-}
-
-.log-toolbar-secondary:not(.log-toolbar-secondary-hidden) {
-}
-
-.log-toolbar.log-toolbar-secondary.log-toolbar-secondary-hidden {
-	display: none;
-}
-
-.log-toolbar {
-	display: flex;
-	flex-direction: row;
-	flex-wrap: nowrap;
-	align-items: center;
-	justify-content: flex-start;
-	gap: 8px;
-	width: 100%;
-	min-width: 0;
-	padding: 4px 8px;
-	background-color: #222222;
-	flex-shrink: 0;
-	min-height: 32px;
-}
-
-/* Fixed gap between severity filters and the centered Clear / Pause / Copy block */
-.log-toolbar-copy-filters-gap {
-	flex-shrink: 0;
-	width: 12px;
-	min-width: 12px;
-	height: 1px;
-}
-
-/* DEBUG / INFO / WARNING / ERROR on the left — always one row (no wrapping) */
-.log-toolbar-filters {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	justify-content: flex-start;
-	flex-wrap: nowrap;
-	gap: 8px;
-	flex: 0 0 auto;
-	flex-shrink: 0;
-	box-sizing: border-box;
-}
-
-/* Fills space between filters and search; centers Clear / Pause / Copy on the wide single-row layout.
-   Below the compact width threshold, LogPanel moves this slot (and search) to the secondary toolbar row instead. */
-.log-toolbar-center-slot {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	justify-content: center;
-	flex: 1 0 auto;
-	flex-shrink: 0;
-	/* Approx. Clear + Pause + Copy + gaps at small button size */
-	min-width: 220px;
-	box-sizing: border-box;
-}
-
-/* Clear / Pause / Copy */
-.log-toolbar-main-actions {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	gap: 8px;
-	flex-shrink: 0;
-}
-
-/* Severity filter chips (text-only; active = same fill + border as .secondary:hover) */
-.log-toolbar .log-filter-toggle {
-	/* Explicit 110px basis: `fit-content` isn't recognized by YogaLayout and falls through
-	   to width:auto, which with max-width:none lets the chips (and their filter row) grow
-	   past the toolbar and push Clear/Pause/Copy + search off-screen. */
-	flex: 0 0 110px;
-	width: 110px;
-	min-width: 110px;
-	max-width: 110px;
-	padding-left: 10px;
-	padding-right: 10px;
-	box-sizing: border-box;
-	position: relative;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-
-/* Icon out of flow so the level label can stay truly centered in the chip */
-.log-toolbar .log-filter-toggle-check {
-	position: absolute;
-	left: 10px;
-	top: 50%;
-	margin-top: -5px;
-	width: 10px;
-	height: 10px;
-	flex-shrink: 0;
-}
-
-.log-toolbar .log-filter-toggle-label {
-	flex: 0 0 auto;
-	width: auto;
-	min-width: 0;
-	text-align: center;
-}
-
-/* Tint checked.png to match each level’s label text (same hex as .log-debug / border) */
-.log-toolbar .log-filter-toggle.log-filter-level-debug .log-filter-toggle-check {
-	background-image-tint: rgba(156, 220, 254, 1);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-info .log-filter-toggle-check {
-	background-image-tint: rgba(212, 212, 212, 1);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-warning .log-filter-toggle-check {
-	background-image-tint: rgba(220, 220, 170, 1);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-error .log-filter-toggle-check {
-	background-image-tint: rgba(244, 135, 113, 1);
-}
-
-/* Level filter off (unchecked): dim colored border and label together */
-.log-toolbar .log-filter-toggle:not(.checked) {
-	opacity: 0.42;
-}
-
-.log-toolbar .log-filter-toggle:not(.checked):hover {
-	opacity: 0.56;
-}
-
-.log-toolbar .log-filter-toggle.checked,
-.log-toolbar .log-filter-toggle.checked:hover,
-.log-toolbar .log-filter-toggle.checked:active,
-.log-toolbar .log-filter-toggle.checked.pressed {
-	opacity: 1;
-}
-
-/* Enabled (checked): 10% fill; border at 70% opacity (same hue as label) */
-.log-toolbar .log-filter-toggle.log-filter-level-debug.checked,
-.log-toolbar .log-filter-toggle.log-filter-level-debug.checked:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-debug.checked:active,
-.log-toolbar .log-filter-toggle.log-filter-level-debug.checked.pressed {
-	background-color: rgba(156, 220, 254, 0.1);
-	border-color: rgba(156, 220, 254, 0.7);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-info.checked,
-.log-toolbar .log-filter-toggle.log-filter-level-info.checked:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-info.checked:active,
-.log-toolbar .log-filter-toggle.log-filter-level-info.checked.pressed {
-	background-color: rgba(212, 212, 212, 0.1);
-	border-color: rgba(245, 245, 245, 0.7);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-warning.checked,
-.log-toolbar .log-filter-toggle.log-filter-level-warning.checked:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-warning.checked:active,
-.log-toolbar .log-filter-toggle.log-filter-level-warning.checked.pressed {
-	background-color: rgba(220, 220, 170, 0.1);
-	border-color: rgba(255, 255, 194, 0.7);
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-error.checked,
-.log-toolbar .log-filter-toggle.log-filter-level-error.checked:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-error.checked:active,
-.log-toolbar .log-filter-toggle.log-filter-level-error.checked.pressed {
-	background-color: rgba(244, 135, 113, 0.1);
-	border-color: rgba(244, 135, 113, 0.7);
-}
-
-/* Border matches log text color per chip (override .secondary hover/active border) */
-.log-toolbar .log-filter-toggle.log-filter-level-debug,
-.log-toolbar .log-filter-toggle.log-filter-level-debug:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-debug:active,
-.log-toolbar .log-filter-toggle.log-filter-level-debug.pressed {
-	border-color: #9cdcfe;
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-info,
-.log-toolbar .log-filter-toggle.log-filter-level-info:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-info:active,
-.log-toolbar .log-filter-toggle.log-filter-level-info.pressed {
-	border-color: #d4d4d4;
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-warning,
-.log-toolbar .log-filter-toggle.log-filter-level-warning:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-warning:active,
-.log-toolbar .log-filter-toggle.log-filter-level-warning.pressed {
-	border-color: #dcdcaa;
-}
-
-.log-toolbar .log-filter-toggle.log-filter-level-error,
-.log-toolbar .log-filter-toggle.log-filter-level-error:hover,
-.log-toolbar .log-filter-toggle.log-filter-level-error:active,
-.log-toolbar .log-filter-toggle.log-filter-level-error.pressed {
-	border-color: #f48771;
-}
-
-/* Match log line colors; scoped above .button-text { color: inherit } from Button.css */
-.log-toolbar .log-filter-toggle .log-debug {
-	color: #9cdcfe;
-}
-
-.log-toolbar .log-filter-toggle .log-info {
-	color: #d4d4d4;
-}
-
-.log-toolbar .log-filter-toggle .log-warning {
-	color: #dcdcaa;
-}
-
-.log-toolbar .log-filter-toggle .log-error {
-	color: #f48771;
-}
-
-.log-toolbar .panel-search-bar {
-	/* Shared panel search uses absolute in side panes; log toolbar keeps it in flex flow */
-	position: relative;
-	left: unset;
-	right: unset;
-	bottom: unset;
-	top: unset;
-	flex-grow: 0;
-	flex-shrink: 1;
-	align-self: center;
-	height: 22px;
-	min-width: 160px;
-	max-width: 320px;
-	width: 320px;
-	margin-left: auto;
-}
-
-.log-toolbar .panel-search-field {
-	width: 100%;
-	height: 100%;
-}
-
-.log-search-field {
-	flex-grow: 1;
-	min-height: 32px;
-	padding: 6px 8px;
-	background-color: #2a2a2a;
-	border: 1px solid #444444;
-	border-radius: 4px;
-	color: var(--ui_color_text);
-	font-size: var(--ui_font_size_base);
-}
-
-.log-search-field:focus {
-	border-color: var(--ui_color_accent_blue);
-	outline: none;
-}
-
-.log-clear-button,
-.log-pause-button,
-.log-copy-button {
-	width: 70px;
-	height: 24px;
-	flex-shrink: 0;
-	box-sizing: border-box;
-}
-
-.log-clear-button {
-	order: -3;
-	margin-right: 8px;
-}
-
-.log-pause-button {
-	order: -2;
-	margin-right: 8px;
-}
-
-.log-copy-button {
-	order: -1;
-}
-
-.log-view {
-	display: flex;
-	flex-direction: column;
-	flex-grow: 1;
-	min-width: 0;
-	min-height: 0;
-	background-color: var(--ui_color_bg_panel);
-}
-
-.log-view .scrollbar {
-	background-color: var(--ui_color_bg_panel);
-}
-
-.log-view .list-virtual-content {
-	background-color: var(--ui_color_bg_panel);
-}
-
-.log-scroll {
-	display: flex;
-	flex-direction: column;
-	flex-grow: 1;
-	min-height: 0;
-}
-
-.log-line {
-	font-family: var(--ui_font_mono);
-	font-size: var(--ui_font_size_base);
-	color: var(--ui_color_text_primary);
-	padding: 2px 6px;
-	white-space: nowrap;
-	cursor: pointer;
-}
-
-.log-line:hover {
-	background-color: var(--ui_color_bg_hover_alt);
-}
-
-.log-line.selected {
-	background-color: var(--ui_color_bg_selected);
-}
-
-/* Log level color coding */
-.log-trace {
-	color: #808080;
-}
-
-.log-debug {
-	color: #9cdcfe;
-}
-
-.log-info {
-	color: var(--ui_color_text_primary);
-}
-
-.log-warning {
-	color: #dcdcaa;
-}
-
-.log-error {
-	color: #f48771;
-}
-
-.log-critical {
-	color: #ff5555;
-	font-weight: bold;
-}
-
-/* ======================================
-   Log Detail Pane (Stack Trace)
-   ====================================== */
-
-.log-split-body {
-	display: flex;
-	flex-direction: column;
-	flex-grow: 1;
-	min-width: 0;
-	min-height: 0;
-}
-
-.log-split-body--side-by-side {
-	flex-direction: row;
-}
-
-.log-detail-splitter {
-	flex-shrink: 0;
-}
-
-.log-detail-pane {
-	display: flex;
-	flex-direction: column;
-	flex-grow: 1;
-	min-height: 200px;
-	background-color: var(--ui_color_bg_dockspace);
-}
-
-.log-split-body--side-by-side .log-detail-pane {
-	min-width: 240px;
-	min-height: 0;
-	border-top: none;
-	border-left: 1px solid var(--ui_color_border_panel);
-}
-
-.log-detail-pane--hidden {
-	display: none;
-}
-
-.log-detail-header {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	padding: 4px 8px;
-	background-color: var(--ui_color_bg_tabbar);
-	flex-shrink: 0;
-}
-
-.log-detail-title {
-	font-weight: 500;
-	font-size: var(--ui_font_size_base);
-	color: var(--ui_color_text_bright);
-	margin-right: 12px;
-}
-
-.log-detail-source {
-	font-family: var(--ui_font_mono);
-	font-size: 14px;
-	color: var(--ui_color_text_dim);
-	flex-grow: 1;
-	min-width: 0;
-}
-
-.log-detail-scroll {
-	flex-grow: 1;
-	min-height: 0;
-}
-
-.log-detail-frames {
-	display: flex;
-	flex-direction: column;
-	padding: 4px 8px;
-	min-width: 0;
-}
-
-.log-detail-frame {
-	font-family: var(--ui_font_mono);
-	font-size: 14px;
-	color: var(--ui_color_text_dim);
-	padding: 2px 8px;
-	white-space: normal;
-	word-break: break-all;
-}
-
-.log-detail-frame--source {
-	color: var(--ui_color_text_bright);
-	font-weight: bold;
-}
-
-.log-detail-frame--clickable {
-	cursor: pointer;
-	color: #9cdcfe;
-}
-
-.log-detail-frame--clickable:hover {
-	background-color: var(--ui_color_bg_hover_alt);
 }
 
 /* Backtrace frame row (used by LogPanel's detail pane).

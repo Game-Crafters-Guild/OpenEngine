@@ -131,10 +131,10 @@ struct ParticleRenderer
     ModelRef Meshes[ParticleMaxMeshes]{};
     // @ge-tooltip The render layers the particles are on
     Rendering::RenderLayerMask RenderLayers;
-    // @ge-tooltip Distance from the camera in metres at which particles begin to thin out
+    // @ge-tooltip Distance from the camera in meters at which particles begin to thin out
     // @ge-range 0
     float32 ThinningStart = 0.0f;
-    // @ge-tooltip Distance from the camera in metres at which every particle is hidden; 0 turns thinning off
+    // @ge-tooltip Distance from the camera in meters at which every particle is hidden; 0 turns thinning off
     // @ge-range 0
     float32 ThinningEnd = 0.0f;
 

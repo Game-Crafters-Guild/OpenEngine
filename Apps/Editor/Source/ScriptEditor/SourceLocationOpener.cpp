@@ -7,23 +7,10 @@
 #include "ScriptEditor/SourceLocation.h"
 
 #include <algorithm>
-#include <cctype>
 #include <optional>
 
 namespace GameEngine::Editor
 {
-namespace
-{
-
-bool HasCSharpExtension(const std::filesystem::path& path)
-{
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext == ".cs";
-}
-
-} // namespace
 
 SourceLocationOpener::SourceLocationOpener(EditorPanelManager& panelManager, EditorWindowContext* window,
                                            ScriptEditorPanel* scriptEditor)
@@ -52,12 +39,6 @@ bool SourceLocationOpener::OpenInScriptEditor(const SourceLocation& location) co
     return true;
 }
 
-void SourceLocationOpener::OpenLogLine(std::string_view lineText) const
-{
-    if (const std::optional<SourceLocation> location = FindSourceLocationInLogLine(lineText))
-        Open(*location);
-}
-
 void SourceLocationOpener::OpenLogSourceFile(const std::string& file, int line) const
 {
     if (file.empty())
@@ -67,7 +48,7 @@ void SourceLocationOpener::OpenLogSourceFile(const std::string& file, int line) 
     location.Path = std::filesystem::path(file);
     location.Line = static_cast<size_t>(std::max(line, 0));
 
-    if (HasCSharpExtension(location.Path))
+    if (IsCSharpSource(location.Path))
         Open(location);
     else
         OpenExternally(location.Path);

@@ -1,0 +1,55 @@
+/* TransientNotice (Apps/Editor/Include/UI/Controls/TransientNotice.h).
+ *
+ * The notice is the control's element; the plate, its glyph and its text come from
+ * TransientNotice.uxml beside this sheet. The control requests this sheet for its own subtree.
+ * The notice floats over its parent's content and never takes input: a click lands on what is
+ * under it. It sits at the bottom of its parent, or at the top the host passes to Show. On that
+ * line it is centered; a host moves it to the right end with
+ * --ui_transient_notice_align: flex-end, kept --ui_transient_notice_inset from that edge.
+ */
+
+.transient-notice {
+	position: absolute;
+	left: var(--ui_transient_notice_inset, 0);
+	right: var(--ui_transient_notice_inset, 0);
+	bottom: 12px;
+	display: flex;
+	flex-direction: row;
+	justify-content: var(--ui_transient_notice_align, center);
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+
+.transient-notice--shown {
+	opacity: 1;
+}
+
+.transient-notice-plate {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: 6px;
+	padding: 5px 12px;
+	border-radius: var(--ui_radius_md);
+	border-width: 1px;
+	border-color: var(--ui_color_border);
+	background-color: var(--ui_color_bg_plate);
+	box-shadow: var(--ui_shadow_floating_plate);
+}
+
+.transient-notice-glyph {
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
+	background-image: url("editor:Icons/checked.svg");
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-image-tint: var(--ui_color_accent_green);
+}
+
+.transient-notice-text {
+	color: var(--ui_color_text_bright);
+	font-size: var(--ui_font_size_base);
+}

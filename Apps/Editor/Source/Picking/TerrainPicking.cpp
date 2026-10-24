@@ -25,70 +25,6 @@ namespace
 
 using Mathematics::Vector3;
 
-// The normalized height range a terrain's baked field ACTUALLY spans.
-//
-// Modifier bakes accumulate straight into raw heightfield samples and never clamp
-// (TerrainModifierSystem::ApplyHeightEffectSample), and TerrainRenderFeature uploads the field
-// verbatim as R32_FLOAT — so a lowering volume draws ground below normalized 0, and a raise
-// draws it above 1. Treating [0,1] as the bound is what silently clipped that ground out of
-// the march: below the floor every coarse sample reads as "above the surface" and the cast
-// misses outright; above the lid the first sample is already under the surface and the cast
-// reports the lid instead of the ground.
-//
-// O(1) for a single terrain (the CDLOD root node's min/max, re-derived by every bake) and
-// O(resident tiles) for a tiled one. The single-terrain scan is the documented fallback for a
-// field whose quadtree is not built yet — a transient before the first extraction, when the
-// field is still the zero fill.
-void ResolveBakedHeightRange(const TerrainECS::TerrainData* data,
-                             const TerrainECS::TiledTerrainData* tiled,
-                             float32& outMinNorm, float32& outMaxNorm)
-{
-    // Nothing resolvable: keep the nominal band rather than collapsing the slab to nothing.
-    outMinNorm = 0.0f;
-    outMaxNorm = 1.0f;
-
-    if (tiled)
-    {
-        bool any = false;
-        for (const auto& entry : tiled->Tiles)
-        {
-            const auto& tile = entry.second;
-            if (!tile || tile->LodState == TerrainECS::TileLodState::Empty ||
-                tile->Heightfield.IsEmpty())
-                continue;
-            outMinNorm = any ? std::min(outMinNorm, tile->CachedMinH) : tile->CachedMinH;
-            outMaxNorm = any ? std::max(outMaxNorm, tile->CachedMaxH) : tile->CachedMaxH;
-            any = true;
-        }
-        return;
-    }
-
-    if (!data || data->Heightfield.IsEmpty())
-        return;
-
-    const uint32 w = data->Heightfield.GetWidth();
-    const uint32 h = data->Heightfield.GetHeight();
-    if (data->Quadtree.TryGetGlobalHeightRange(w, h, outMinNorm, outMaxNorm))
-        return;
-    data->Heightfield.GetMinMax(0, 0, static_cast<int32>(w), static_cast<int32>(h),
-                                outMinNorm, outMaxNorm);
-}
-
-// One planar terrain's height as the pick reads it: its CPU height pages when it pages, its resident
-// tiles when it is tiled, its single heightfield otherwise. World meters.
-struct PlanarPickSurface
-{
-    const TerrainECS::TerrainData* Single = nullptr;
-    const TerrainECS::TiledTerrainData* Tiled = nullptr;
-    TerrainECS::SurfaceHeightQuery Pages;
-    float32 OriginX = 0.0f;
-    float32 OriginZ = 0.0f;
-    float32 OriginY = 0.0f;
-    float32 SizeX = 0.0f;
-    float32 SizeZ = 0.0f;
-    float32 HeightScale = 0.0f;
-};
-
 // The nearest planar terrain hit so far.
 struct PlanarPickBest
 {
@@ -99,45 +35,34 @@ struct PlanarPickBest
     bool Hit = false;
 };
 
-// World height of `surface` at (worldX, worldZ). A paged terrain answers from its finest CPU page, then
-// from its resident tile (exact where no CPU window reaches), then from a coarser pinned page, so a pick
-// is never coarser than the data the editor holds there and still lands where no tile is resident.
-// False outside the footprint, and on a tiled terrain that does not page where its tile is not resident.
-bool SamplePickHeight(const PlanarPickSurface& surface, float32 worldX, float32 worldZ, float32& outY)
+// Marches a pick past its first hit at most this many more times: each march after the first reads
+// the finest page fetched under the previous hit, which can move the hit onto a neighboring page.
+constexpr uint32 kPickRefinements = 2;
+
+// World height of `surface` at (worldX, worldZ) as a pick reads it (AcceptCoarse: the finest page on
+// the CPU there, else a coarser one, so a pick lands wherever the terrain is drawn). False outside
+// the footprint and where no page is on the CPU yet (a height store still cooking).
+bool SamplePickHeight(const TerrainECS::SurfaceHeightQuery& surface, float32 worldX, float32 worldZ, float32& outY)
 {
-    const Vector3 point(worldX, 0.0f, worldZ);
     TerrainECS::SurfaceHeightSample sample;
-    if (surface.Pages.IsValid() &&
-        surface.Pages.SampleHeight(point, TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
-    {
-        outY = sample.Height;
-        return true;
-    }
-    if (surface.Tiled)
-    {
-        float32 normalized = 0.0f;
-        if (TerrainECS::SampleTiledHeightNormalized(*surface.Tiled, worldX, worldZ, normalized))
-        {
-            outY = surface.OriginY + normalized * surface.HeightScale;
-            return true;
-        }
-        if (!surface.Pages.IsValid() ||
-            !surface.Pages.SampleHeight(point, TerrainECS::SurfaceHeightPolicy::AcceptCoarse, sample))
-            return false;
-        outY = sample.Height;
-        return true;
-    }
-    const float32 u = (worldX - surface.OriginX) / surface.SizeX;
-    const float32 v = (worldZ - surface.OriginZ) / surface.SizeZ;
-    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+    if (!surface.SampleHeight(Vector3(worldX, 0.0f, worldZ), TerrainECS::SurfaceHeightPolicy::AcceptCoarse, sample))
         return false;
-    outY = surface.OriginY + surface.Single->Heightfield.SampleBilinear(u, v) * surface.HeightScale;
+    outY = sample.Height;
     return true;
+}
+
+// Whether `surface`'s answer at `point` comes from a coarser level than the terrain's finest there.
+bool ReadsCoarse(const TerrainECS::SurfaceHeightQuery& surface, const Vector3& point)
+{
+    TerrainECS::SurfaceHeightSample sample;
+    return surface.SampleHeight(point, TerrainECS::SurfaceHeightPolicy::AcceptCoarse, sample) &&
+           sample.Detail == TerrainECS::SurfaceHeightDetail::Coarse;
 }
 
 // Central-difference normal of `surface` at (worldX, worldZ), stepped at the terrain's own sample spacing
 // (`samplesPerMeter`). +Y wherever a tap has no height.
-Vector3 PickSurfaceNormal(const PlanarPickSurface& surface, float32 samplesPerMeter, float32 worldX, float32 worldZ)
+Vector3 PickSurfaceNormal(const TerrainECS::SurfaceHeightQuery& surface, float32 samplesPerMeter, float32 worldX,
+                          float32 worldZ)
 {
     const float32 step = 1.0f / std::clamp(samplesPerMeter, 0.05f, 20.0f);
     float32 heightPlusX = 0.0f, heightMinusX = 0.0f, heightPlusZ = 0.0f, heightMinusZ = 0.0f;
@@ -153,70 +78,50 @@ Vector3 PickSurfaceNormal(const PlanarPickSurface& surface, float32 samplesPerMe
 }
 
 // Marches `ray` against one planar terrain and keeps the hit in `best` when it is nearer.
+//
+// A paged terrain is marched on its CPU pages. Where the hit read a coarse page (no CPU window
+// reaches it), the finest page under the hit is fetched now (TerrainService::FetchFinestHeightPage:
+// one page's read and decode for the click) and the ray marched again, so a pick lands on the finest
+// height the terrain has, as far from the camera as it is.
 void PickPlanarTerrain(TerrainECS::TerrainService& service, const Mathematics::Ray3D& ray, ECS::EntityHandle entity,
                        const Components::Terrain& terrain, const Components::WorldTransform& worldTransform,
                        PlanarPickBest& best)
 {
     if (terrain.Domain != Components::TerrainDomain::Planar)
         return;
-
-    // A tiled terrain has no single TerrainData (extraction zeroes its handle): it is read through
-    // its pages and its resident tiles.
-    PlanarPickSurface surface;
-    surface.Single =
-        service.GetTerrainData(TerrainECS::TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration});
-    surface.Tiled = service.GetTiledTerrainData(
-        TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
-    if (surface.Single && surface.Single->Heightfield.IsEmpty())
-        surface.Single = nullptr;
-    // Neither store resolved: the terrain has no height data yet (extraction has not run for it), so
-    // there is no surface to hit and nothing drawn to click.
-    if (!surface.Single && !surface.Tiled)
+    // No query: the terrain has no height data yet (extraction has not run for it), so there is no
+    // surface to hit and nothing drawn to click.
+    TerrainECS::SurfaceHeightQuery surface = service.SurfaceQuery(terrain, worldTransform);
+    if (!surface.IsValid())
         return;
-    if (surface.Tiled)
-        surface.Pages = service.SurfaceQuery(terrain);
 
-    const Vector3 center = worldTransform.GetPosition();
-    surface.OriginX = center.x - terrain.SizeX * 0.5f;
-    surface.OriginZ = center.z - terrain.SizeZ * 0.5f;
-    surface.OriginY = center.y;
-    surface.SizeX = terrain.SizeX;
-    surface.SizeZ = terrain.SizeZ;
-    surface.HeightScale = terrain.HeightScale;
-
-    // Terrain world AABB: XZ is the footprint; Y spans the range the baked field actually holds, NOT the
-    // nominal [0,1] band: modifier volumes drive samples outside that band and the renderer draws them
-    // there (see ResolveBakedHeightRange); a paged terrain states its range with its pages. A small Y
-    // margin keeps a ray grazing the exact peak or trough from being clipped out by rounding. The
-    // marcher reach is this box regardless of size, so far-side hits on large terrains land.
+    // Terrain world AABB: XZ is the footprint; Y spans the range the field holds (HeightRange: a
+    // modifier volume drives samples outside the nominal band and the renderer draws them there). A
+    // small Y margin keeps a ray grazing the exact peak or trough from being clipped out by rounding.
+    // The marcher reach is this box regardless of size, so far-side hits on large terrains land.
     constexpr float32 kHeightMargin = 1.0f;
     float32 lowY = 0.0f;
     float32 highY = 0.0f;
-    if (surface.Pages.IsValid())
-    {
-        lowY = surface.Pages.MinHeight();
-        highY = surface.Pages.MaxHeight();
-    }
-    else
-    {
-        float32 minNorm = 0.0f;
-        float32 maxNorm = 1.0f;
-        ResolveBakedHeightRange(surface.Single, surface.Tiled, minNorm, maxNorm);
-        // HeightScale orders the two products; take the extremes so a negative scale cannot invert the slab.
-        const float32 heightA = surface.OriginY + minNorm * terrain.HeightScale;
-        const float32 heightB = surface.OriginY + maxNorm * terrain.HeightScale;
-        lowY = std::min(heightA, heightB);
-        highY = std::max(heightA, heightB);
-    }
-    const Vector3 aabbMin(surface.OriginX, lowY - kHeightMargin, surface.OriginZ);
-    const Vector3 aabbMax(surface.OriginX + terrain.SizeX, highY + kHeightMargin, surface.OriginZ + terrain.SizeZ);
+    surface.HeightRange(lowY, highY);
+    const Vector3 aabbMin(surface.FootprintOriginX(), lowY - kHeightMargin, surface.FootprintOriginZ());
+    const Vector3 aabbMax(surface.FootprintOriginX() + surface.FootprintSizeX(), highY + kHeightMargin,
+                          surface.FootprintOriginZ() + surface.FootprintSizeZ());
 
     float32 hitT = 0.0f;
     Vector3 hitPos{};
-    const auto sampleHeight = [&surface](float32 worldX, float32 worldZ, float32& outY) {
-        return SamplePickHeight(surface, worldX, worldZ, outY);
-    };
-    if (!MarchTerrainSurface(ray, aabbMin, aabbMax, best.Distance, sampleHeight, hitT, hitPos) || hitT >= best.Distance)
+    for (uint32 march = 0; march <= kPickRefinements; ++march)
+    {
+        const auto sampleHeight = [&surface](float32 worldX, float32 worldZ, float32& outY) {
+            return SamplePickHeight(surface, worldX, worldZ, outY);
+        };
+        if (!MarchTerrainSurface(ray, aabbMin, aabbMax, best.Distance, sampleHeight, hitT, hitPos))
+            return;
+        if (march == kPickRefinements || !ReadsCoarse(surface, hitPos) ||
+            !service.FetchFinestHeightPage(terrain, hitPos))
+            break;
+        surface = service.SurfaceQuery(terrain, worldTransform);
+    }
+    if (hitT >= best.Distance)
         return;
     best.Distance = hitT;
     best.Position = hitPos;

@@ -77,7 +77,7 @@
 #include "UI/Assets/UIStyleAsset.h"
 #include "UI/StyleOverrides.h"
 
-#include "Core/Application.h" // PathUtils::GetInstallAssetsRoot
+#include "Core/ApplicationPaths.h"
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
 #include <yoga/Yoga.h>
@@ -274,7 +274,7 @@ void UIManager::Update(float deltaTime, bool interactive)
 
         {
             const std::string stagedFont =
-                (PathUtils::GetInstallAssetsRoot() / "Fonts" / "Roboto-Regular.ttf").string();
+                (ApplicationPaths::GetInstallAssetsRoot() / "Fonts" / "Roboto-Regular.ttf").string();
             tryLoad(stagedFont.c_str());
         }
 #if !defined(__APPLE__)

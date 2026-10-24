@@ -5,7 +5,7 @@
 #include <thread>
 #include <vector>
 #include <string>
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Engine/Build/DotnetHost.h"
 #include "Jobs/CompileServerUtil.h"
 #include "Jobs/CompileServerClient.h"
@@ -101,7 +101,7 @@ static std::wstring Widen(const std::string& s) {
 // Managed/ works on a dev machine and breaks the moment the build is relocated.
 static std::filesystem::path StagedCompileServerHostDll()
 {
-    return PathUtils::GetExecutableDirectory() / "Managed" / "CompileServerHost" / "bin" /
+    return ApplicationPaths::GetExecutableDirectory() / "Managed" / "CompileServerHost" / "bin" /
            GE_TEST_CONFIG_NAME / "net10.0" / "GameEngine.CompileServerHost.dll";
 }
 
@@ -394,7 +394,7 @@ static std::filesystem::path CopyHost(const std::filesystem::path& ownHost, cons
 TEST(CompileServerUtilTests, HostBuildStopsOnlyTheHostRunningFromItsOutput)
 {
     const std::filesystem::path ownHost = StagedCompileServerHostDll();
-    const std::filesystem::path script = PathUtils::GetExecutableDirectory() / "StopHostRunningFromOutput.ps1";
+    const std::filesystem::path script = ApplicationPaths::GetExecutableDirectory() / "StopHostRunningFromOutput.ps1";
     ASSERT_TRUE(std::filesystem::exists(ownHost)) << ownHost.string();
     ASSERT_TRUE(std::filesystem::exists(script)) << script.string();
 

@@ -1425,7 +1425,7 @@ class CapturingLogSink final : public Logger::LogSink
 
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "CapturingLogSink"; }
+    std::string GetName() const override { return "CapturingLogSink"; }
 
   private:
     std::vector<std::string>* m_Out;

@@ -8,7 +8,7 @@
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "ScopedPipelineFrame.h"
 #include "TestDeviceHelper.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <memory>
 #include <vector>
@@ -68,7 +68,7 @@ void CheckCallbackRetirement(bool dynamicModule, bool shutdown = false)
     if (dynamicModule)
     {
         // The probe is staged beside this executable, like every runtime dependency.
-        module = NativeScripting::UserModuleHandle(PathUtils::GetExecutableDirectory() / CALLBACK_PROBE_MODULE_NAME);
+        module = NativeScripting::UserModuleHandle(ApplicationPaths::GetExecutableDirectory() / CALLBACK_PROBE_MODULE_NAME);
         ASSERT_TRUE(module.IsValid()) << module.LastError();
         registerCallback = module.GetFunction<RegisterCallback>("RegisterCallbackProbe");
         ASSERT_NE(registerCallback, nullptr);

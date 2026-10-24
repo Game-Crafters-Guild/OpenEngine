@@ -1475,8 +1475,9 @@ void RegisterTerrainInspector()
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             grassSection, "Wind Strength", grass->WindStrength, w, e, n,
             [](Components::TerrainGrass& u, float v) { u.WindStrength = std::max(0.0f, v); },
-            "How hard the wind pushes: the gust lean amplitude, and the gate on the flutter and "
-            "the gust shading with it. 0 is a bit-still meadow", {}, 0.0f, 5.0f);
+            "How hard the wind pushes the blades: how far gusts lean them, how much they flutter, "
+            "and the light and dark waves gusts send across the field. 0 is a still meadow",
+            {}, 0.0f, 5.0f);
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             grassSection, "Gust Speed", grass->WindGustSpeed, w, e, n,
@@ -1678,9 +1679,24 @@ void RegisterTerrainInspector()
             [](Components::TerrainGrass& u, float v) { u.GroundingStrength = std::clamp(v, 0.0f, 1.0f); },
             "How much the blade reads as growing out of its ground: the blend of its base into the "
             "ground color, and the light and dark waves that gusts send across the field. It does "
-            "not change cast shadows. At 0 a blade takes none of its ground's color; use 0 for a "
-            "stylized field",
+            "not change cast shadows. Below 1, with Root Color on Auto, the lower blade shows less "
+            "of the ground's color and more of a darker shade of the leaf; both end at Ground Tint "
+            "Height, and above it the blade is the leaf color at any strength. At 0 a blade takes none of its "
+            "ground's color; use 0 for a stylized field",
             {}, 0.0f, 1.0f);
+
+        AddComponentFloatRowWithDrag<Components::TerrainGrass>(
+            advanced, "Ground Tint Height", grass->GroundTintHeight, w, e, n,
+            [](Components::TerrainGrass& u, float v)
+            { u.GroundTintHeight = std::clamp(v, Components::kMinTerrainGrassGroundTintHeight, 1.0f); },
+            ReflectedTooltip(ECS::GetComponentTypeId<Components::TerrainGrass>(), "GroundTintHeight"), {},
+            Components::kMinTerrainGrassGroundTintHeight, 1.0f);
+        // The Root Color row and the Splat Root Color toggle rebuild the inspector, so the note
+        // follows them.
+        if (const std::string inactive = Editor::TerrainGrassVocabulary::GroundTintHeightInactiveNote(
+                grass->RootColor == Components::kTerrainGrassAutoRootColor, grass->UseSplatRootColor);
+            !inactive.empty())
+            InspectorUI::AddInfoCard(advanced, inactive);
 
         // The Root Color row names where an automatic root comes from, so the inspector rebuilds.
         AddToggleRow(advanced, "Splat Root Color", grass->UseSplatRootColor,

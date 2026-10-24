@@ -41,7 +41,7 @@
 #include "IsolatedUIFixture.h"
 #include "UIPixelReadback.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/UITargetSpace.h"
 
@@ -462,7 +462,7 @@ TEST(UnknownPropertyDiagnostic, SilentForRegisteredNamesAndCustomProperties)
 // test exe, the same bytes the editor loads.
 TEST(UnknownPropertyDiagnostic, NoShippedStylesheetDeclaresABorderSideShorthandAsUnknown)
 {
-    const std::filesystem::path root = PathUtils::GetExecutableDirectory() / "Assets" / "UI";
+    const std::filesystem::path root = ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI";
     ASSERT_TRUE(std::filesystem::exists(root))
         << "shipped stylesheets are not staged next to the test exe: " << root.string();
 
@@ -516,7 +516,7 @@ TEST(UnknownPropertyDiagnostic, NoShippedStylesheetDeclaresABorderSideShorthandA
 // someone assumed worked — fails here instead of scrolling past in a log.
 TEST(UnknownPropertyDiagnostic, ShippedStylesheetsWarnAboutNothing)
 {
-    const std::filesystem::path root = PathUtils::GetExecutableDirectory() / "Assets" / "UI";
+    const std::filesystem::path root = ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI";
     ASSERT_TRUE(std::filesystem::exists(root))
         << "shipped stylesheets are not staged next to the test exe: " << root.string();
 

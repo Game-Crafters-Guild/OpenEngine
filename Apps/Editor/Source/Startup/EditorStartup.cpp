@@ -1,6 +1,6 @@
 #include "Startup/EditorStartup.h"
 
-#include "Core/Application.h" // PathUtils
+#include "Core/Application.h"
 #include "Editor/EditorPaths.h"
 
 namespace GameEngine::Editor::Startup

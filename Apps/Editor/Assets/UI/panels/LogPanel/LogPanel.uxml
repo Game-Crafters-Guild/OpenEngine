@@ -1,0 +1,44 @@
+<!-- The Log panel (Apps/Editor/Include/Panels/LogPanel.h). The ids are the contract with
+     LogPanel.cpp. The detail pane and its splitter start hidden and show when a row is selected;
+     LogDetailBody moves into LogDetailScroll's viewport when the panel is built. -->
+<UIElement class="log-panel">
+  <UIElement class="log-toolbar">
+    <UIElement class="log-filters">
+      <Button id="LogFilterError" class="small secondary log-filter log-filter-error active" text="Errors" />
+      <Button id="LogFilterWarning" class="small secondary log-filter log-filter-warning active" text="Warnings" />
+      <Button id="LogFilterInfo" class="small secondary log-filter log-filter-info active" text="Info" />
+      <Button id="LogFilterDebug" class="small secondary log-filter log-filter-debug active" text="Debug" />
+    </UIElement>
+    <UIElement class="log-toolbar-end">
+      <UIElement class="log-actions">
+        <Button id="LogClear" class="small secondary" text="Clear" />
+        <Button id="LogPause" class="small secondary" text="Pause" />
+        <Button id="LogCopyAll" class="small secondary" text="Copy All" />
+      </UIElement>
+      <UIElement id="LogSearchHost" class="log-search-host" />
+    </UIElement>
+  </UIElement>
+  <SplitView id="LogSplit" class="log-split">
+    <Pane id="LogListPane" class="pane log-list-pane" weight="1">
+      <LogView />
+      <TransientNotice id="LogCopyNotice" class="log-copy-notice" />
+    </Pane>
+    <Splitter id="LogDetailSplitter" class="splitter col hidden" />
+    <Pane id="LogDetailPane" class="pane log-detail-pane hidden" weight="0">
+      <UIElement class="log-detail-header">
+        <UIElement id="LogDetailGlyph" class="log-row-glyph" />
+        <Label id="LogDetailSeverity" class="log-detail-severity" />
+        <Label id="LogDetailTime" class="log-detail-time" />
+        <Button id="LogDetailSource" class="small secondary log-detail-source hidden">
+          <UIElement class="log-detail-source-glyph" />
+        </Button>
+      </UIElement>
+      <ScrollView id="LogDetailScroll" class="log-detail-scroll" />
+      <UIElement id="LogDetailBody" class="log-detail-body">
+        <TextArea id="LogDetailMessage" class="log-detail-message" />
+        <Label id="LogDetailTraceTitle" class="log-detail-section-title hidden" text="Stack trace" />
+        <UIElement id="LogDetailFrames" class="log-detail-frames" />
+      </UIElement>
+    </Pane>
+  </SplitView>
+</UIElement>

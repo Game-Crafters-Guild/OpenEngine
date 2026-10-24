@@ -897,140 +897,6 @@ button.settings-vcs-refresh-button,
     /* Note: Don't use font-family: monospace - causes font corruption if font not loaded */
 }
 
-/* Search Bar: anchored at the bottom here, and at the top under .search-bar-at-top, which
-   EditorSearchBars sets while the preference places search bars at the top (its default). */
-.settings-search-bar {
-    position: absolute;
-    bottom: 8px;
-    left: 8px;
-    right: 8px;
-    height: 22px;
-    background-color: var(--settings-value-box-bg, #171717);
-    border: 1px solid transparent;
-    border-radius: 4px;
-}
-
-.settings-search-bar.search-bar-at-top {
-    top: 8px;
-    bottom: unset;
-}
-
-.settings-search-bar.hidden {
-    /* Override generic .hidden { display: none } - we still want the search bar visible */
-    display: flex;
-    background-color: transparent;
-    border-color: transparent;
-}
-
-.settings-search-bar.hidden.settings-search-bar-active {
-    background-color: var(--settings-value-box-bg, #171717) !important;
-    border: 1px solid var(--ui_color_accent_pressed) !important;
-}
-
-.settings-search-bar-active {
-    background-color: var(--settings-value-box-bg, #171717) !important;
-    border: 1px solid var(--ui_color_accent_pressed) !important;
-}
-
-.settings-search-bar:focus-within {
-    border: 1px solid #666;
-}
-
-.settings-search-bar.active {
-    border: 1px solid var(--ui_color_accent_pressed);
-}
-
-.settings-search-bar.search-accent-focus:focus-within {
-    border-color: var(--ui_color_accent);
-}
-
-.settings-search-field {
-    width: 100%;
-    height: 100%;
-    padding-right: 32px;
-    position: relative;
-    z-index: 10;
-}
-
-.settings-search-field TextInput {
-    background-color: transparent;
-    border: none;
-    color: var(--ui_color_text);
-    font-size: 12px;
-    padding: 4px 24px 4px 8px;
-    height: 100%;
-    width: 100%;
-}
-
-.settings-search-field TextInput:focus {
-    outline: none;
-    border: none;
-    background-color: transparent;
-}
-
-.settings-search-icon {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    margin-top: -6px;
-    width: 12px;
-    height: 12px;
-    background-image: url("editor:Icons/search.svg");
-    background-size: 12px 12px;
-    background-repeat: no-repeat;
-    background-position: center;
-    opacity: 0.5;
-    pointer-events: none !important;
-    z-index: 1;
-}
-
-.settings-search-icon.icon-active {
-    opacity: 1 !important;
-}
-
-.settings-search-clear,
-button.settings-search-clear,
-.button.settings-search-clear,
-.button.icon-button.settings-search-clear {
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    margin-top: -8px;
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    min-height: 16px;
-    padding: 0;
-    background-color: transparent;
-    border-width: 0;
-    border-style: none;
-    background-size: 12px 12px;
-    background-position: center;
-    opacity: 0.7;
-    z-index: 20;
-}
-
-.settings-search-clear:hover,
-button.settings-search-clear:hover,
-.button.settings-search-clear:hover,
-.button.icon-button.settings-search-clear:hover {
-    background-color: transparent;
-    opacity: 1.0;
-}
-
-.settings-search-bar.has-query .settings-search-icon {
-    display: none;
-}
-
-.settings-search-bar:hover .settings-search-icon {
-    opacity: 1 !important;
-}
-
-.settings-search-bar:focus-within .settings-search-icon,
-.settings-search-bar.active .settings-search-icon {
-    opacity: 1 !important;
-}
-
 /* Horizontal Layout Styles */
 .settings-tree-pane.settings-tree-pane-horizontal {
     flex-grow: 1;
@@ -1067,9 +933,11 @@ button.settings-search-clear:hover,
     margin-bottom: 38px; /* Make room for search bar */
 }
 
-.settings-panel.search-bars-at-top,
-.settings-right-container.search-bars-at-top {
-    padding-top: 38px;
+/* A top search row, as in the other panels (theme/views.css): the field (6px inset + 24px)
+   and 6px below it. The search's container carries .settings-search-host: the panel itself in
+   the stacked layout, the right-hand container in the side-by-side one. */
+.settings-search-host.search-bars-at-top {
+    padding-top: 36px;
 }
 
 /* In the stacked layout the top search sits directly above the Settings tree;
@@ -1078,8 +946,7 @@ button.settings-search-clear:hover,
     background-color: #222222;
 }
 
-.settings-panel.search-bars-at-top > .settings-content-pane,
-.settings-right-container.search-bars-at-top > .settings-content-pane {
+.settings-search-host.search-bars-at-top > .settings-content-pane {
     margin-bottom: 0;
 }
 

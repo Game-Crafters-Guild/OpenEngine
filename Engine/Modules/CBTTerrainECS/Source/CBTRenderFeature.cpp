@@ -34,7 +34,7 @@
 #include "Rendering/Materials/MaterialDocument.h"
 
 #include "AssetCore/GUID.h"
-#include "Core/Application.h" // PathUtils::GetInstallAssetsRoot
+#include "Core/ApplicationPaths.h"
 #include "Core/CpuProfiler.h"
 #include "Logger/Logger.h"
 #include "Types/Types.h" // HashStringId
@@ -199,7 +199,7 @@ ResolvedWaterPlane ResolveWaterPlane(RenderServices& rs, float terrainSeaLevel)
 // program shape is on disk.
 std::filesystem::path FindCBTShaderDir(const std::string& probeName)
 {
-    const std::filesystem::path shaderDir = PathUtils::GetInstallAssetsRoot() / "Shaders" / "CBT";
+    const std::filesystem::path shaderDir = ApplicationPaths::GetInstallAssetsRoot() / "Shaders" / "CBT";
     std::error_code ec;
     if (!std::filesystem::exists(shaderDir / probeName, ec))
         return {};

@@ -3,6 +3,7 @@
 #include "ECS/ECS.h"
 
 #include <string>
+#include <string_view>
 
 namespace GameEngine::ECS
 {
@@ -19,5 +20,11 @@ std::string EntityDisplayName(const ECS::World& world, ECS::EntityHandle entity)
 
 /// The entity's id as editor text shows it: "Entity <id>".
 std::string EntityIdLabel(ECS::EntityHandle entity);
+
+/// A registered component type name as editor text shows it when no label names the type: the
+/// name after its last "::" or "." qualifier, read as words by IdentifierToWords.
+/// "GameEngine::Components::AnimatedSprite2D" reads "Animated Sprite 2D" and a script
+/// component's "MyGame.Combat.HealthPool" reads "Health Pool".
+std::string ComponentTypeNameAsWords(std::string_view registeredTypeName);
 
 } // namespace GameEngine::Editor

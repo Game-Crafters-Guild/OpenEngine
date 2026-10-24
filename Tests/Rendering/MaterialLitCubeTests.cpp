@@ -16,6 +16,8 @@
 #include "Assets/MaterialAsset.h"
 #include "Engine/Rendering/MaterialSsboLayout.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Angle.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Common/Math.h"
@@ -255,7 +257,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     constexpr float kNear = 0.1f;
     constexpr float kFar = 10.0f;
     constexpr float kVerticalFieldOfViewDeg = 60.0f;
-    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Rendering::Math::ToRadians(kVerticalFieldOfViewDeg), aspect, kNear, kFar).ToVulkan();
+    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Mathematics::ToRadians(kVerticalFieldOfViewDeg), aspect, kNear, kFar).ToVulkan();
     const Matrix4x4 VP = P * V;
 
     CameraData cam{};
@@ -509,7 +511,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     const uint8_t* px = static_cast<const uint8_t*>(dev->MapBuffer(rb));
     ASSERT_NE(px, nullptr);
 
-    auto toByte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    auto toByte = [](float v) { return static_cast<uint8_t>(std::lround(Math::Clamp01(v) * 255.0f)); };
     const uint8_t clearR = toByte(rp.clearColorValue[0][0]);
     const uint8_t clearG = toByte(rp.clearColorValue[0][1]);
     const uint8_t clearB = toByte(rp.clearColorValue[0][2]);

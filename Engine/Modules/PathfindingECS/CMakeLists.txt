@@ -49,7 +49,7 @@ target_link_libraries(PathfindingECS
         # symbols get resolved when Engine.dll links PathfindingECS.lib. The
         # Engine/Include headers the sources use arrive through ECSComponents.
         PhysicsECS
-        # The surface bake reads the terrain's heightfield (PlanarHeightQuery).
+        # The surface bake reads the terrain's height (SurfaceHeightQuery).
         TerrainECS
         JobSystem
 )
@@ -72,6 +72,7 @@ if(BUILD_TESTING)
         Tests/NavigationSurfaceGatingTests.cpp
         Tests/NavigationSurfaceOwnershipTests.cpp
         Tests/NavigationSurfaceTests.cpp
+        Tests/NavigationSurfacePagedTerrainTests.cpp
         Tests/NavigationSurfaceBakedDataTests.cpp
         Tests/NavigationSurfaceDirtyTileTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp

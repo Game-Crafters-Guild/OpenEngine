@@ -814,13 +814,13 @@ TEST_F(MeshGPURegistryTest, PoolStatsReportOneEntryPerLivePoolWithItsOccupancy)
 TEST_F(MeshGPURegistryTest, PoolResidencyIsLoggedAgainAfterADeviceRebuild)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto residencyLines = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [residencyLines](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("MeshGPURegistry pool") != Logger::String::npos)
+            if (msg.Message.find("MeshGPURegistry pool") != std::string::npos)
                 residencyLines->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));

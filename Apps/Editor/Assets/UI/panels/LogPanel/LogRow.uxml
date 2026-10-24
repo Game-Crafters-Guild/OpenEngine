@@ -1,0 +1,8 @@
+<!-- One row of the Log panel's list (Apps/Editor/Include/Panels/LogView.h): the severity glyph, the
+     time and the message's first line. The ids are the contract with LogView.cpp, which finds the parts
+     once per pooled row and adds one severity class to the glyph and the message on every bind. -->
+<UIElement class="log-row">
+  <UIElement id="LogRowGlyph" class="log-row-glyph" />
+  <Label id="LogRowTime" class="log-row-time" />
+  <Label id="LogRowMessage" class="log-row-message" />
+</UIElement>

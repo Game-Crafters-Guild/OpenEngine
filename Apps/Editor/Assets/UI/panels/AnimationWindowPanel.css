@@ -415,7 +415,7 @@ button.toolbar-gap.dragging {
     position: relative;
     flex-shrink: 0;
     width: auto;
-    height: 22px;
+    height: 24px;
     bottom: unset;
     left: unset;
     right: unset;

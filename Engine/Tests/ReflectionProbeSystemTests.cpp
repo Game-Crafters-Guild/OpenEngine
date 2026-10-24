@@ -40,14 +40,14 @@ class ProbeWarningCapture
     ProbeWarningCapture()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         m_Sink = sink.get();
         m_CallbackId = m_Sink->RegisterCallback(
             [this](const Logger::LogMessage& msg)
             {
                 if (msg.Level != Logger::LogLevel::Warning)
                     return;
-                if (msg.Message.find("ReflectionProbe") == Logger::String::npos)
+                if (msg.Message.find("ReflectionProbe") == std::string::npos)
                     return;
                 std::lock_guard<std::mutex> lock(m_Mutex);
                 m_Messages.emplace_back(msg.Message.begin(), msg.Message.end());
@@ -73,7 +73,7 @@ class ProbeWarningCapture
 
   private:
     Logger::CallbackSink* m_Sink = nullptr;
-    Logger::uint64 m_CallbackId = 0;
+    std::uint64_t m_CallbackId = 0;
     std::mutex m_Mutex;
     std::vector<std::string> m_Messages;
 };

@@ -23,7 +23,7 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
@@ -1402,7 +1402,7 @@ bool PipelineVariantCache::EnsureSharedDepthShaderLoaded(bool isSkinned)
     if (!resolved.empty())
         spv = Rendering::Utils::ReadFile(resolved);
     if (spv.empty())
-        spv = Rendering::Utils::ReadFile((PathUtils::GetInstallAssetsRoot() / assetPath).string());
+        spv = Rendering::Utils::ReadFile((ApplicationPaths::GetInstallAssetsRoot() / assetPath).string());
     if (spv.empty())
     {
         Logger::Log::Warning(

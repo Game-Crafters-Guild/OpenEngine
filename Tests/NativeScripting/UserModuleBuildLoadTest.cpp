@@ -11,7 +11,7 @@
 // import lib, include dirs, compile defs, SDK paths, config) is supplied by CMake
 // via a generated `c10_config.txt` placed next to this test exe — see CMakeLists.
 
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "ECS/ComponentFactory.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "JobSystem/WorkStealingThreadPool.h" // drives the async build path (B9 deferral test)
@@ -99,7 +99,7 @@ ns::NativeBuildConfig MakeBaseConfig(const std::map<std::string, std::string>& k
 
 std::map<std::string, std::string> LoadConfigOrFail()
 {
-    const fs::path exeDir = GameEngine::PathUtils::GetExecutableDirectory();
+    const fs::path exeDir = GameEngine::ApplicationPaths::GetExecutableDirectory();
     std::string cfgErr;
     auto kv = ReadConfigFile(exeDir / "c10_config.txt", cfgErr);
     EXPECT_TRUE(cfgErr.empty()) << cfgErr;

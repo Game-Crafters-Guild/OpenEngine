@@ -81,8 +81,9 @@ if(GLSLC_EXECUTABLE)
         VERBATIM
     )
     # The narrow-heap arm (GE_CBT_HEAP32) as a desktop Vulkan blob, spec-constant kernel
-    # select intact. Nothing ships it: it exists so the golden decode oracles can run the
-    # SAME arm the web cook compiles to WGSL — before this, that arm never met any test.
+    # select intact. CBTKernelSet loads it on a device without 64-bit integers (the Editor
+    # and the Player stage it beside cbt_kernels.comp.spv), and the golden decode oracles
+    # run it as the SAME arm the web cook compiles to WGSL.
     set(CBT_KERNELS_HEAP32_SPV ${CBT_SHADER_OUTPUT_DIR}/cbt_kernels_heap32.comp.spv)
     set(_CBT_COMPILE_HEAP32_COMMANDS
         COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 --target-spv=spv1.6

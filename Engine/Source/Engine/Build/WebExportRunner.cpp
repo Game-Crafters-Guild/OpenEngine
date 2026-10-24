@@ -2,7 +2,7 @@
 
 #include "WebExportContent.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/GameConfig.h"
@@ -43,11 +43,11 @@ std::filesystem::path FindExportScript(const std::filesystem::path& projectRoot)
 
     if (!projectRoot.empty())
     {
-        const auto inProject = PathUtils::FindFileUpward(projectRoot, relative);
+        const auto inProject = ApplicationPaths::FindFileUpward(projectRoot, relative);
         if (!inProject.empty())
             return inProject;
     }
-    return PathUtils::FindFileUpward(PathUtils::GetExecutableDirectory(), relative);
+    return ApplicationPaths::FindFileUpward(ApplicationPaths::GetExecutableDirectory(), relative);
 }
 
 std::filesystem::path FindPythonExecutable()

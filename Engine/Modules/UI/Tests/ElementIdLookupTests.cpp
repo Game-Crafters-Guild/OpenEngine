@@ -205,7 +205,7 @@ TEST(ElementIdLookup, AStringIdCollisionIsReportedAtRegistrationNamingBothIds)
     EXPECT_DEATH(
         {
             Logger::Log::Initialize({});
-            auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+            auto sink = std::make_unique<Logger::CallbackSink>();
             sink->RegisterCallback([](const Logger::LogMessage& message)
                                    { std::fprintf(stderr, "%s\n", message.Message.c_str()); });
             Logger::Log::AddSink(std::move(sink));
@@ -218,14 +218,14 @@ TEST(ElementIdLookup, AStringIdCollisionIsReportedAtRegistrationNamingBothIds)
 #endif
 #else
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPointer = sink.get();
     auto reports = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPointer->RegisterCallback(
+    const std::uint64_t callbackId = sinkPointer->RegisterCallback(
         [reports](const Logger::LogMessage& message)
         {
-            if (message.Message.find(kCollidingId) != Logger::String::npos &&
-                message.Message.find(kCollidingOtherId) != Logger::String::npos)
+            if (message.Message.find(kCollidingId) != std::string::npos &&
+                message.Message.find(kCollidingOtherId) != std::string::npos)
                 reports->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));

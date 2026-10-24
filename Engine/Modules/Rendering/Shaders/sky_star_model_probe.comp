@@ -29,6 +29,9 @@
 //       -> out0 = (LUT direction, sine of the altitude), out1.x = pixel solid angle
 //   7 the lowest channel of GE_StarRadianceAt over 0 to the cut radius for op 4's star, and the radiance
 //     just inside the cut                                              -> out0 = (lowest, at the cut edge, 0, 0)
+//  14 op 13's star (the camera observer) centred at the sub-pixel position (in0.z, in0.w) of a pixel grid:
+//     GE_StarRadianceAt summed over the centres of the pixels its quad draws, as a share of the core's
+//     energy, and the brightest pixel's share                         -> out0 = (sum, brightest, 0, 0)
 
 #include "Includes/sky_star_model.glsl"
 
@@ -112,6 +115,26 @@ void main()
         out0 = vec4(star.TotalEnergy, sum * step * step * kStarSceneLinearNits, star.SpikeFraction, star.CutRadius);
         out1 = vec4(star.SpikePeak.g * kStarSceneLinearNits, star.SpikeLength, star.CoreRadius, star.Shape);
         out2 = vec4(star.GlowFraction, 0.0, 0.0, 0.0);
+    }
+    else if (op == 14)
+    {
+        GE_StarDrawn star = GE_StarShade(in0.y, vec3(1.0), vec3(1.0), 0.0, in1.x, in1.y, in1.z, ShapeFrom(in2, 0.0), 1.0, in1.w);
+        float coreEnergy = star.CorePeak.g * 3.14159265 * star.CoreRadius * star.CoreRadius;
+        float sum = 0.0;
+        float brightest = 0.0;
+        int n = int(ceil(star.CutRadius)) + 1;
+        for (int y = -n; y <= n; ++y)
+            for (int x = -n; x <= n; ++x)
+            {
+                vec2 o = vec2(x, y) - in0.zw;
+                if (length(o) < star.CutRadius)
+                {
+                    float radiance = GE_StarRadianceAt(o, star).g;
+                    sum += radiance;
+                    brightest = max(brightest, radiance);
+                }
+            }
+        out0 = vec4(sum / coreEnergy, brightest / coreEnergy, 0.0, 0.0);
     }
     else if (op == 12)
     {

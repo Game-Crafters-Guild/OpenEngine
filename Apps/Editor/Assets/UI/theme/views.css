@@ -1289,23 +1289,31 @@ ListView {
    Panel Search Bar (shared styles)
    ====================================== */
 
-/* Bottom-anchored panel searches reserve space below their content. */
-.hierarchy-panel,
-.assets-left-pane,
-.inspector-panel,
-.bookmarks-panel,
-.todo-panel {
+/* The Hierarchy's bottom strip holds its item size bar (22px at 8px) and, while search bars sit
+   at the bottom, the search above it. */
+.hierarchy-panel {
+	position: relative;
+	padding-bottom: 66px;
+}
+
+/* A panel whose search is pinned to its edge (the class is set where the panel adds its
+   search) reserves the search row: below its content while searches sit at the bottom. */
+.panel-search-host {
 	position: relative;
 	padding-bottom: 38px;
 }
 
-.hierarchy-panel.search-bars-at-top,
-.assets-left-pane.search-bars-at-top,
-.inspector-panel.search-bars-at-top,
-.bookmarks-panel.search-bars-at-top,
-.todo-panel.search-bars-at-top {
-	padding-top: 32px;
+/* A top search row: the field (6px inset + 24px) and 6px below it. */
+.panel-search-host.search-bars-at-top {
+	padding-top: 36px;
 	padding-bottom: 0;
+}
+
+/* A top search row as above; the Hierarchy keeps the strip of its item size bar, which stays at
+   the bottom (panels/HierarchyNavigationBar/HierarchyNavigationBar.css). */
+.hierarchy-panel.search-bars-at-top {
+	padding-top: 36px;
+	padding-bottom: 38px;
 }
 
 /* Without a top search, give the Assets tree the same small breathing gap used
@@ -1318,7 +1326,7 @@ ListView {
 /* Inspector's fixed header already has its own inset, so reserve less space
    beneath a top-anchored search and tighten that inset only in top mode. */
 .inspector-panel.search-bars-at-top {
-	padding-top: 26px;
+	padding-top: 28px;
 }
 
 .inspector-panel.search-bars-at-top > .inspector-top {
@@ -1341,16 +1349,28 @@ ListView {
 	margin-bottom: 1px;
 }
 
+/* Where a panel search sits: one height in every panel, 24px. Its look at rest is the search
+   control's (theme/widgets.css, .panel-search-bar). */
 .panel-search-bar {
 	position: absolute;
-	bottom: 8px;
+	bottom: 6px;
 	left: 8px;
 	right: 8px;
-	height: 22px;
+	height: 24px;
+}
+
+/* The Hierarchy's bottom search sits 6px above its item size bar (22px at 8px). */
+.hierarchy-panel-search {
+	bottom: 36px;
+}
+
+/* The size bar rides above the tree's horizontal scrollbar (19px); the search follows it. */
+.hierarchy-panel-search-above-scrollbar {
+	bottom: 47px;
 }
 
 .panel-search-bar.search-bar-at-top {
-	top: 8px;
+	top: 6px;
 	bottom: unset;
 }
 
@@ -1379,23 +1399,6 @@ ListView {
 	display: none;
 }
 
-.panel-search-bar.hidden {
-	/* Override generic .hidden { display: none } - we still want the search bar visible */
-	display: flex;
-	background-color: transparent;
-	border-color: transparent;
-}
-
-.panel-search-bar.hidden.panel-search-bar-active {
-	background-color: #222222 !important;
-	border: 1px solid var(--ui_color_accent_pressed) !important;
-}
-
-.panel-search-bar-active {
-	background-color: #222222 !important;
-	border: 1px solid var(--ui_color_accent_pressed) !important;
-}
-
 .panel-search-bar.active {
 	border: 1px solid var(--ui_color_accent_pressed);
 }
@@ -1404,7 +1407,3 @@ ListView {
 	border-color: var(--ui_color_accent);
 }
 
-/* Keep icon visible when search bar is hidden so users know where to click */
-.panel-search-bar.hidden .panel-search-icon {
-	opacity: 0.6;
-}

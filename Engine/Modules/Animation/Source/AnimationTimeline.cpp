@@ -1,5 +1,6 @@
 #include "Animation/AnimationTimeline.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Quaternion.h"
 
 #include <algorithm>
@@ -16,11 +17,6 @@ namespace
 using json = nlohmann::json;
 
 constexpr uint8 kQuaternionComponentCount = 4;
-
-float32 Clamp01(float32 value)
-{
-    return std::max(0.0f, std::min(1.0f, value));
-}
 
 bool TrackSlerpsAsQuaternion(const TimelineTrack& track, uint8 componentCount)
 {
@@ -406,13 +402,13 @@ void SampleValueTrack(const TimelineTrack& track, uint32 trackIndex, float32 tim
     const TimelineValueKey& right = *upper;
     const TimelineValueKey& left = *(upper - 1);
     const float32 denom = std::max(0.00001f, right.Time - left.Time);
-    float32 t = Clamp01((time - left.Time) / denom);
+    float32 t = Math::Clamp01((time - left.Time) / denom);
     if (track.UpdateMode == TimelineTrackUpdateMode::Discrete)
         t = 0.0f;
     else if (track.Interpolation == TimelineTrackInterpolation::Nearest)
         t = (t < 0.5f) ? 0.0f : 1.0f;
     else if (track.Interpolation == TimelineTrackInterpolation::Cubic)
-        t = t * t * (3.0f - 2.0f * t);
+        t = Math::SmoothStep(0.0f, 1.0f, t);
     sample.ComponentCount = std::max<uint8>(1, std::min<uint8>(4, std::max(left.ComponentCount, right.ComponentCount)));
     if (TrackSlerpsAsQuaternion(track, sample.ComponentCount))
     {
@@ -489,7 +485,7 @@ void SampleClipTrack(const TimelineTrack& track, uint32 trackIndex, float32 time
         sample.ClipAssetType = clip.ClipAssetType;
         sample.Name = clip.Name;
         sample.LocalTime = clip.InTime + elapsed;
-        sample.Weight = Clamp01(weight);
+        sample.Weight = Math::Clamp01(weight);
         result.ActiveClips.push_back(std::move(sample));
     }
 }

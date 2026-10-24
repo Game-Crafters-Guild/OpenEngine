@@ -712,6 +712,22 @@ TEST_F(TiledFillProbe, T4_AnOffCameraBedEditMovesTheSurfaceRevision)
         << "the deepened channel produced identical water — the edit never reached the fill";
 }
 
+// The fill composes the ground of the terrain the height query answers for, the first one placed
+// in the world. An entity that holds a Terrain and no placement comes first in the world and is
+// not that terrain.
+TEST_F(TiledFillProbe, T5_TheFillComposesTheTerrainTheHeightQueryAnswersFor)
+{
+    Components::Terrain unplaced{};
+    unplaced.Domain = Components::TerrainDomain::Planar;
+    m_World.AddComponentImmediate(m_World.CreateEntity(), unplaced);
+    CreateTiledChannel(/*tilesToLoad*/ 2);
+
+    const WaterFillRun run = BuildAtBorder();
+    ASSERT_EQ(run.Outcome, WaterFillOutcome::Built);
+    EXPECT_GT(run.Diagnostics.WetCorners, 0u);
+    EXPECT_EQ(run.Diagnostics.DrySeeds, 0u);
+}
+
 // The chunk AABB the controller hands the culler is derived from the SAME
 // vertices it hands the GPU, in the SAME space. The two are computed at
 // different moments — the mesher's bounds are world space, the entity's must be

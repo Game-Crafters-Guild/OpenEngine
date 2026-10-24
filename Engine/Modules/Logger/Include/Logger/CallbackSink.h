@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Logger/LogSink.h"
-#include "Logger/Types.h"
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -32,7 +31,7 @@ class CallbackSink : public LogSink
     void Write(const LogMessage& message) override;
     void Flush() override {}
     bool ShouldLog(LogLevel level) const override;
-    String GetName() const override { return "Callback"; }
+    std::string GetName() const override { return "Callback"; }
     bool IsAvailable() const override { return true; }
 
     /**
@@ -40,13 +39,13 @@ class CallbackSink : public LogSink
      * @param callback Function to call when a log message is received.
      * @return A unique ID that can be used to unregister the callback.
      */
-    uint64 RegisterCallback(LogCallback callback);
+    std::uint64_t RegisterCallback(LogCallback callback);
 
     /**
      * @brief Unregister a callback by its ID.
      * @param id The ID returned by RegisterCallback.
      */
-    void UnregisterCallback(uint64 id);
+    void UnregisterCallback(std::uint64_t id);
 
     /**
      * @brief Set the minimum log level for this sink.
@@ -65,13 +64,13 @@ class CallbackSink : public LogSink
 
     struct CallbackEntry
     {
-        uint64 id;
+        std::uint64_t id;
         LogCallback callback;
     };
 
     std::vector<CallbackEntry> m_Callbacks;
     mutable std::mutex m_CallbackMutex;
-    uint64 m_NextCallbackId = 1;
+    std::uint64_t m_NextCallbackId = 1;
 };
 
 } // namespace Logger

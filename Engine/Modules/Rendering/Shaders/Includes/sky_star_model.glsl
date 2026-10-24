@@ -1,6 +1,8 @@
 #ifndef GE_SKY_STAR_MODEL_GLSL
 #define GE_SKY_STAR_MODEL_GLSL
 
+#include "error_function.glsl"
+
 // The night sky's star model: what one star of a given magnitude puts on screen. Shared by the star
 // billboard (sky_stars_billboard.vert/.frag) and the test probe (sky_star_model_probe.comp), so the
 // model a camera sees and the model the tests measure cannot drift apart.
@@ -10,10 +12,11 @@
 // degrees.
 //
 // The model: a star's light from its magnitude (Pogson), dimmed and reddened by the air along it; a
-// pixel-sized Gaussian core; for the eye observer, the eye's glare around it (CIE 146), taken from the
-// core, and faint stars fading to white; visibility by the eye's threshold against the sky behind it
-// (Schaefer); and the artistic dials on top: highlight compression, a glow that adds light,
-// diffraction spikes that take theirs from the glow, the core's scale and the sparkle shape.
+// pixel-sized Gaussian core, integrated over each pixel; for the eye observer, the eye's glare around
+// it (CIE 146), taken from the core, and faint stars fading to white; visibility by the eye's threshold
+// against the sky behind it (Schaefer); and the artistic dials on top: highlight compression, a glow
+// that adds light, diffraction spikes that take theirs from the glow, the core's scale and the sparkle
+// shape.
 
 // Illuminance of a magnitude 0 star above the atmosphere (Allen's Astrophysical Quantities).
 const float kStarZeroMagnitudeLux = 2.54e-6;
@@ -22,11 +25,18 @@ const float kStarSceneLinearNits = 203.0;
 // The magnitude the highlight compression pivots on: it changes the light of brighter stars only.
 const float kStarReferenceMagnitude = 6.5;
 // Every star's physical core radius in pixels (the Star core dial scales it, 1 = physical). The core
-// is exp(-d^2 / r^2), a Gaussian of sigma r / sqrt(2): 1 px keeps the sigma at 0.7 px, the display's
-// smallest soft point, so a star at a sub-pixel position covers 2x2 to 3x3 pixels and does not crawl as
-// the camera turns. It is the same for every star: a bright star is a brighter point and carries its
+// is exp(-d^2 / r^2), a Gaussian of sigma r / sqrt(2): 1 px gives a sigma of 0.7 px, the display's
+// smallest soft point. Each pixel shows the core's mean over its square (GE_StarCorePixelMean), so the
+// core's scene-linear light summed over the pixels is the same wherever the star sits on the pixel
+// grid, at any core width. On screen, after the tone curve, a core narrower than a pixel still changes
+// its light as the camera turns (about 6 % at Core 0.6, 2.5 % at 0.75, 1.5 % at 0.85), and the value of
+// its brightest pixel. It is the same for every star: a bright star is a brighter point and carries its
 // glare and glow, not a wider disk.
 const float kStarCoreRadiusPixels = 1.0;
+// The quad's round cut is at least three core radii and at least this many pixels. It keeps 99.5 % of
+// the core's light or more at any sub-pixel position over the whole Star core dial (0.5 to 3), and a
+// faint star always rasterises.
+const float kStarMinCutRadiusPixels = 1.8;
 // The eye's threshold illuminance for a point source against a background of luminance B (Schaefer
 // 1993, after Hecht and Blackwell): I = c (1 + sqrt(k B))^2 foot-candles with B in nanolamberts,
 // c = 10^-9.8, k = 10^-1.9 below 1,500 nL (night vision) and c = 10^-8.35, k = 10^-5.9 above (day
@@ -268,8 +278,9 @@ GE_StarDrawn GE_StarShade(float magnitude, vec3 color, vec3 transmittance, float
     // floor. A camera draws none.
     float pixelDegrees = sqrt(pixelSolidAngle) * kStarDegreesPerRadian;
     float glareScale = eye ? kStarGlareK * lux / (pixelDegrees * pixelDegrees) : 0.0;
-    float cutRadius = clamp(sqrt(glareScale / kStarGlareFloorNits), 3.0 * coreRadius,
-                            max(kStarMaxGlareRadiusPixels, 3.0 * coreRadius));
+    float minCutRadius = max(3.0 * coreRadius, kStarMinCutRadiusPixels);
+    float cutRadius = clamp(sqrt(glareScale / kStarGlareFloorNits), minCutRadius,
+                            max(kStarMaxGlareRadiusPixels, minCutRadius));
     float glareEnergy = GE_StarGlareEnergy(glareScale, coreRadius, cutRadius);
 
     // Energy is conserved for the glare: its share comes out of the core.
@@ -336,20 +347,33 @@ GE_StarDrawn GE_StarShade(float magnitude, vec3 color, vec3 transmittance, float
     return star;
 }
 
+// The mean of the core exp(-d^2 / r^2) over the pixel centred at o pixels from the star: the Gaussian's
+// integral over the pixel's square, (PI r^2 / 4) (erf((x + 1/2) / r) - erf((x - 1/2) / r)) times the
+// same along y. Summed over the pixel grid it is PI r^2, the core's integral, wherever the star sits.
+float GE_StarCorePixelMean(vec2 o, float r)
+{
+    vec2 high = (o + 0.5) / r;
+    vec2 low = (o - 0.5) / r;
+    float alongX = max(GE_Erf(high.x) - GE_Erf(low.x), 0.0);
+    float alongY = max(GE_Erf(high.y) - GE_Erf(low.y), 0.0);
+    return 0.25 * 3.14159265 * r * r * alongX * alongY;
+}
+
 // Four taps of a rotated grid over one pixel, in pixels from its centre (they sum to zero), for the
 // sparkle's sub-pixel points.
 const vec2 kStarPixelTaps[4] = vec2[4](vec2(0.125, 0.375), vec2(0.375, -0.125), vec2(-0.125, -0.375),
                                        vec2(-0.375, 0.125));
 
-// The radiance a drawn star puts at offset o pixels from its centre (scene-linear), before visibility.
-// Every term is non-negative: a star only adds light.
+// The radiance a drawn star puts on the pixel centred at offset o pixels from its centre (scene-linear),
+// before visibility: the round core is the pixel's mean (GE_StarCorePixelMean); the sparkle, the glare,
+// the glow and the spikes are taken at o. Every term is non-negative: a star only adds light.
 vec3 GE_StarRadianceAt(vec2 o, GE_StarDrawn star)
 {
     float d2 = dot(o, o);
     float d = sqrt(d2);
     float innerRadius = star.Shape >= 0.5 ? kStarCoreRadiusPixels : star.CoreRadius;
     vec3 body = star.Shape >= 0.5 ? star.CorePeak * GE_StarSparkle(o / star.CoreRadius)
-                                  : star.CorePeak * exp(-d2 / (star.CoreRadius * star.CoreRadius));
+                                  : star.CorePeak * GE_StarCorePixelMean(o, star.CoreRadius);
     vec3 halo = star.GlareScale / max(d2, innerRadius * innerRadius) * (1.0 - smoothstep(0.5, 1.0, d / star.CutRadius));
     float x = d2 / max(star.GlowRadius * star.GlowRadius, 1e-6);
     vec3 glow = d <= kStarGlowCutRadii * star.GlowRadius ? star.GlowPeak / ((1.0 + x) * (1.0 + x)) : vec3(0.0);

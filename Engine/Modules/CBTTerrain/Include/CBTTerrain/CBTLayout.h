@@ -795,16 +795,34 @@ inline constexpr uint32_t kCBTHeightChainRangeEntries = 1u << 19;
 // tables here instead of recomputing them for every facet. Entry e sits at words
 // kCBTHeightRangeHeaderWords + 2e (low) and + 2e + 1 (high).
 inline constexpr uint32_t kCBTHeightRangeHeaderWords = 64u;
-// The steepest step of each block of the first stored level, after the chain ranges: one word per block
-// (row-major, as that level's ranges), the largest difference between two neighboring lattice samples
-// along X or Z among the samples the block covers, normalized, as a raw float. The first stored level
-// never holds more blocks than kCBTHeightRangeEntries. The planar split bounds the range of a box
-// smaller than its blocks by that step times the box's extent in cells (cbt_planar_demand.glsl
-// CBT_PlanarStepBoundRange), so the range keeps shrinking with the box below the block size.
-inline constexpr uint32_t kCBTHeightStepEntries = kCBTHeightRangeEntries;
-inline constexpr uint32_t kCBTHeightStepFirstWord =
+// The first and second differences of each block of the first stored level, after the chain ranges:
+// four words per block (row-major, as that level's ranges), normalized, as raw floats. [0] the steepest
+// step between two neighboring lattice samples along X or Z among the samples the block covers; [1] the
+// largest |h(i - 1, j) - 2 h(i, j) + h(i + 1, j)| over the block's samples (i, j) with a neighbor on
+// both sides along X, the samples one past the block read as neighbors; [2] the same along Z; [3] the
+// largest |h(i + 1, j + 1) - h(i + 1, j) - h(i, j + 1) + h(i, j)| over the block's cells. The first
+// stored level never holds more blocks than kCBTHeightRangeEntries. The planar split bounds the surface
+// over a box smaller than its blocks by the step times the box's extent (cbt_planar_demand.glsl
+// CBT_PlanarStepBoundRange) and by the second differences times its extent squared
+// (CBT_PlanarCurvatureBound), so r keeps shrinking with the box below the block size. 16 MiB.
+inline constexpr uint32_t kCBTHeightDifferencesEntries = kCBTHeightRangeEntries;
+inline constexpr uint32_t kCBTHeightDifferencesWordsPerEntry = 4u;
+inline constexpr uint32_t kCBTHeightDifferencesFirstWord =
     kCBTHeightRangeHeaderWords + 2u * (kCBTHeightRangeEntries + kCBTHeightChainRangeEntries);
-inline constexpr uint32_t kCBTHeightRangeBufferWords = kCBTHeightStepFirstWord + kCBTHeightStepEntries;
+// The plane of each block of the level-0 pyramid, after the differences: four words per entry, indexed as the
+// level-0 entries, as raw floats in normalized height: the plane's slopes along X and Z per lattice cell
+// about the block's center, then the low end and the width of the surface's height minus that plane
+// over the block. The first stored level fits the plane to the block's samples by least squares; a
+// coarser block takes the mean of its children's slopes and bounds its interval from theirs, and its
+// width is never below a child's. The planar split reads the width of the smallest block that holds a
+// node's box as the surface's distance from a plane there (cbt_planar_demand.glsl). 16 MiB at 2^20
+// entries; a 4097^2 lattice fills 349,525 of them.
+inline constexpr uint32_t kCBTHeightPlaneEntries = kCBTHeightRangeEntries;
+inline constexpr uint32_t kCBTHeightPlaneWordsPerEntry = 4u;
+inline constexpr uint32_t kCBTHeightPlaneFirstWord =
+    kCBTHeightDifferencesFirstWord + kCBTHeightDifferencesWordsPerEntry * kCBTHeightDifferencesEntries;
+inline constexpr uint32_t kCBTHeightRangeBufferWords =
+    kCBTHeightPlaneFirstWord + kCBTHeightPlaneWordsPerEntry * kCBTHeightPlaneEntries;
 
 // Blocks per axis at pyramid level `level` over an axis of `cells` lattice cells. Mirror
 // cbt_kernels.comp CBT_HeightRangeDim (and the three below): the CPU sizes the build dispatches

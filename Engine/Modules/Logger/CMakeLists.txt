@@ -22,7 +22,6 @@ set(LOGGER_HEADERS
     Include/Logger/DeferredSink.h
     Include/Logger/RingBufferSink.h
     Include/Logger/Backtrace.h
-    Include/Logger/Types.h
 )
 
 # Optional features (can be excluded for minimal builds)

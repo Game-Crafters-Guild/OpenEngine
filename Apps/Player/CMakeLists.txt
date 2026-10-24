@@ -164,32 +164,30 @@ add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Ocean"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/Ocean"
-    # CBT terrain shader sources + the compiled compute kernel, mirroring the
-    # Editor's staging (Apps/Editor/CMakeLists.txt). Three runtime consumers
+    # CBT terrain shader sources + both compiled compute kernel arms, the same
+    # set the Editor stages (Apps/Editor/CMakeLists.txt). The sources #include
+    # their siblings, so the whole directory ships. Three runtime consumers
     # resolve this exact directory from the exe:
-    #   - CBTRenderFeature::FindCBTShaderDir loads cbt_kernels.comp.spv from it.
+    #   - CBTRenderFeature::FindCBTShaderDir loads cbt_kernels.comp.spv from it,
+    #     or cbt_kernels_heap32.comp.spv on a device without 64-bit integers.
     #   - TerrainRenderFeature::EnsureGpuBakePipeline loads terrain_height_bake.comp
-    #     from it, which includes cbt_atlas.glsl and terrain_surface_rules.glsl as
-    #     siblings.
+    #     from it.
     #   - The terrain-grass shaders #include cbt_atlas.glsl out of it under both
     #     spellings in use — "CBT/cbt_atlas.glsl" against the Assets/Shaders include
     #     root (terrain_grass_surface.glsl) and the bare "cbt_atlas.glsl" against
     #     the CBT dir itself (terrain_grass_place.comp).
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/CBT"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT"
+            "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/CBT"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_vertex_modifier.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_surface.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_layout.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_domain.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_atlas.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_sculpt.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_analytic.glsl"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/terrain_height_bake.comp"
-            "${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/terrain_surface_rules.glsl"
             "${CMAKE_BINARY_DIR}/Shaders/cbt_kernels.comp.spv"
+            "${CMAKE_BINARY_DIR}/Shaders/cbt_kernels_heap32.comp.spv"
             "${_GE_PLAYER_CONTENT_DIR}/Assets/Shaders/CBT"
     COMMAND ${CMAKE_COMMAND} "-DPLAYER_CONTENT_DIR=${_GE_PLAYER_CONTENT_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/Tests/VerifyParticleShaderStaging.cmake"
+    COMMAND ${CMAKE_COMMAND} "-DPLAYER_CONTENT_DIR=${_GE_PLAYER_CONTENT_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/Tests/VerifyShaderIncludeStaging.cmake"
     COMMENT "Staging engine shaders (Adapters/Includes/Surfaces/Particles/GPUFogParticles/TerrainGrass/Ocean/CBT) for Player"
     VERBATIM
 )
@@ -198,6 +196,9 @@ if(BUILD_TESTING)
     add_test(NAME PlayerParticleShaderStaging
         COMMAND ${CMAKE_COMMAND} "-DPLAYER_CONTENT_DIR=${_GE_PLAYER_CONTENT_DIR}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/Tests/VerifyParticleShaderStaging.cmake")
+    add_test(NAME PlayerShaderIncludeStaging
+        COMMAND ${CMAKE_COMMAND} "-DPLAYER_CONTENT_DIR=${_GE_PLAYER_CONTENT_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/Tests/VerifyShaderIncludeStaging.cmake")
 endif()
 
 # Shader-graph node helpers. ShaderGraphMaterial lives in the shared Engine

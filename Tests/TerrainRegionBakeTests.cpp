@@ -29,6 +29,7 @@
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainSplatComposite.h" // CompositeSplatTexel (zero-base rationale)
 #include "TerrainECS/TileStreamingManager.h"
+#include "TerrainRowBands.h" // TerrainECS/Source: RunRowBands, kBakeBandRows
 
 #include <algorithm>
 #include <array>
@@ -2562,6 +2563,35 @@ TEST(TerrainRegionBake, ParallelSingleTerrainModifierBakeMatchesSerial)
     }
 }
 
+// The min-texel gate both callers share: below kParallelBakeMinTexels the rectangle runs whole on
+// the calling thread (a small grass edit never fans out); above it, it is cut into row bands.
+TEST(TerrainRowBands, ASmallRectangleRunsWholeAndALargeOneIsSplitIntoBands)
+{
+    JobSystem::WorkStealingThreadPool pool(4);
+    std::atomic<uint32> calls{0};
+    std::atomic<uint32> rows{0};
+
+    const BakeBandRegion small{0, 0, 32, 32};
+    std::vector<std::array<int32, 4>> whole;
+    const uint32 smallBands =
+        RunRowBands(&pool, {&small, 1}, [&whole](std::size_t, int32 minX, int32 maxX, int32 z0, int32 z1) {
+            whole.push_back({minX, maxX, z0, z1});
+        });
+    EXPECT_EQ(smallBands, 0u);
+    ASSERT_EQ(whole.size(), 1u);
+    EXPECT_EQ(whole[0], (std::array<int32, 4>{0, 32, 0, 32}));
+
+    const BakeBandRegion large{0, 0, 320, 320};
+    const uint32 largeBands =
+        RunRowBands(&pool, {&large, 1}, [&calls, &rows](std::size_t, int32, int32, int32 z0, int32 z1) {
+            calls.fetch_add(1);
+            rows.fetch_add(static_cast<uint32>(z1 - z0 + 1));
+        });
+    EXPECT_EQ(largeBands, static_cast<uint32>((321 + kBakeBandRows - 1) / kBakeBandRows));
+    EXPECT_EQ(calls.load(), static_cast<uint32>((321 + kBakeBandRows - 1) / kBakeBandRows));
+    EXPECT_EQ(rows.load(), 321u);
+}
+
 // INCREMENTAL MIN/MAX BYTE-IDENTITY: after each region edit, the per-tile
 // CachedMin/MaxH the incremental block grid produces must equal an exhaustive
 // full-tile min/max scan — the invariant that lets the O(region) refresh replace
@@ -4614,8 +4644,8 @@ void StreamInCoarseTile(TerrainService& svc, TiledTerrainHandle handle, TileCoor
 
 // STREAM-CHURN CONTRACT (E6-review#3): streaming a tile in with a modifier
 // present must bake ONLY the new tile — zero HeightfieldVersion bumps on the
-// already-resident tiles (each version bump is a collider re-cook trigger, so
-// zero other bumps == zero other re-cooks / quiescence timers preserved).
+// already-resident tiles (each version bump is a re-upload and normal regen
+// trigger, so zero other bumps == zero other regens / quiescence timers preserved).
 // Pre-fix this routed through a full re-bake of every resident tile (tile
 // residency was folded into the terrain-state hash), so the untouched-tile
 // assertions fail on old code.
@@ -4792,7 +4822,7 @@ TEST(TerrainRegionBake, TiledStreamInWithModifierBakesOnlyThatTile)
     ASSERT_TRUE(Tile(tiled, 1, 0)->ModifiersApplied);
 
     // Stream in tile 2 (real service path). SetTileHeightfield bumps its version
-    // once (for the collider) and clears ModifiersApplied.
+    // once (for the upload) and clears ModifiersApplied.
     StreamInFullTile(svc, handle, TileCoord{2, 0});
     auto* t2 = Tile(tiled, 2, 0);
     ASSERT_EQ(t2->LodState, TileLodState::Full);
@@ -4865,7 +4895,7 @@ TEST(TerrainRegionBake, AnArrivalOnlySurfaceRulesReachKeepsItsStreamedHeights)
     EXPECT_EQ(arrived->Heightfield.GetSample(5, 5), marker)
         << "the arrival's base was re-filled though only the surface rules reach it";
     EXPECT_EQ(arrived->HeightfieldVersion, versionBefore)
-        << "a splat-only bake re-dirtied the arrival's heights (re-upload, normal regen, collider)";
+        << "a splat-only bake re-dirtied the arrival's heights (re-upload, normal regen)";
     EXPECT_TRUE(arrived->SplatmapDirty) << "the baked splat must still upload";
 }
 
@@ -4925,7 +4955,7 @@ TEST(TerrainRegionBake, AnArrivalsSplatRunsInRowBandsAndMatchesTheSerialBake)
 
     EXPECT_EQ(serialBands, 0u);
     // A frame's row budget in kBakeBandRows bands.
-    const auto bandRows = static_cast<uint32>(TerrainModifierSystem::kBakeBandRows);
+    const auto bandRows = static_cast<uint32>(kBakeBandRows);
     EXPECT_EQ(parallelBands, (TerrainModifierSystem::kArrivalSplatRowsPerFrame + bandRows - 1u) / bandRows)
         << "the arrival's splat did not fan out across the pool";
     ASSERT_GT(WeightedTexelCount(serial), 0u) << "the rules row placed nothing: zeros would match zeros";
@@ -5043,8 +5073,8 @@ TEST(TerrainRegionBake, ATileTurningFullShowsItsCoarseSplatUntilItsArrivalBakeEn
 
 // Two tiles a height modifier reaches arrive together; the second waits frames for the row budget.
 // Each one's heights are composed once, on its first bake frame: composing a tile again on every
-// frame it waits re-uploads its heights, regenerates its normal, syncs the quadtree and restarts
-// its collider build each time, for the same samples.
+// frame it waits re-uploads its heights, regenerates its normal and syncs the quadtree each time,
+// for the same samples.
 TEST(TerrainRegionBake, AnArrivalWaitingForTheRowBudgetComposesItsHeightsOnce)
 {
     ScopedTerrainService scoped;
@@ -6271,113 +6301,10 @@ TEST(TerrainRegionBake, CoarsePatchDoesNotStompFullNeighborSharedEdge)
         << "the coarse value at the shared column differs from Full — proving the stomp is real";
 }
 
-// Per-tile physics addressing: a tile-physics handle resolves to the live tile,
-// tracks its version, and fails (null) once released or on a stale generation.
-// Single-terrain slot handles (no discriminator bit) never resolve as tiles.
-TEST(TerrainRegionBake, TilePhysicsHandleResolvesLiveTile)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    const auto handle = CreateResidentTiledTerrain(svc, /*tilesX*/ 2);
-    auto* tiled = svc.GetTiledTerrainData(handle);
-    ASSERT_NE(tiled, nullptr);
-
-    const TileCoord coord{1, 0};
-    auto* liveTile = Tile(tiled, 1, 0);
-    liveTile->MarkFullDirty(); // give it a non-zero version
-
-    const auto ph = svc.AcquireTilePhysicsHandle(handle, coord);
-    EXPECT_NE(ph.Index & TerrainService::kTilePhysicsHandleBit, 0u)
-        << "tile-physics handles must carry the discriminator bit";
-
-    TerrainTileData* resolved = svc.ResolveTilePhysicsTile(ph.Index, ph.Generation);
-    EXPECT_EQ(resolved, liveTile);
-
-    // Version tracks the live tile.
-    const uint64 before = liveTile->HeightfieldVersion;
-    liveTile->MarkRegionDirty(0, 0, 4, 4);
-    EXPECT_GT(svc.ResolveTilePhysicsTile(ph.Index, ph.Generation)->HeightfieldVersion, before);
-
-    // Stale generation fails.
-    EXPECT_EQ(svc.ResolveTilePhysicsTile(ph.Index, ph.Generation + 1), nullptr);
-    // A plain (non-tile) handle never resolves as a tile.
-    EXPECT_EQ(svc.ResolveTilePhysicsTile(handle.Index, handle.Generation), nullptr);
-
-    // Release invalidates the handle.
-    svc.ReleaseTilePhysicsHandle(ph.Index, ph.Generation);
-    EXPECT_EQ(svc.ResolveTilePhysicsTile(ph.Index, ph.Generation), nullptr);
-}
-
-// Generation-checked release (review Fix 5): releasing on a stale (index, gen)
-// pair must NOT free whichever tile now owns that slot. Acquire A, release it,
-// acquire B into the same slot, then a stale release of A's handle must be a
-// no-op — B stays resolvable.
-TEST(TerrainRegionBake, TilePhysicsStaleReleaseDoesNotFreeCurrentOwner)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    const auto handle = CreateResidentTiledTerrain(svc, /*tilesX*/ 2);
-    auto* tiled = svc.GetTiledTerrainData(handle);
-    ASSERT_NE(tiled, nullptr);
-    Tile(tiled, 0, 0)->MarkFullDirty();
-    Tile(tiled, 1, 0)->MarkFullDirty();
-
-    const auto a = svc.AcquireTilePhysicsHandle(handle, TileCoord{0, 0});
-    svc.ReleaseTilePhysicsHandle(a.Index, a.Generation); // frees the slot
-
-    // B reuses the same slot index with a bumped generation.
-    const auto b = svc.AcquireTilePhysicsHandle(handle, TileCoord{1, 0});
-    EXPECT_EQ(a.Index, b.Index) << "expected slot reuse for this test to be meaningful";
-    EXPECT_NE(a.Generation, b.Generation);
-    ASSERT_NE(svc.ResolveTilePhysicsTile(b.Index, b.Generation), nullptr);
-
-    // Stale release of A (correct index, old generation) must be refused.
-    svc.ReleaseTilePhysicsHandle(a.Index, a.Generation);
-    EXPECT_NE(svc.ResolveTilePhysicsTile(b.Index, b.Generation), nullptr)
-        << "a stale-generation release silently freed the current slot owner";
-}
-
-// World-transition slot hygiene (review Fix 4): DestroyTiledTerrain must release
-// the tile-physics slots addressing it, and ReleaseAllTilePhysicsHandles must
-// drop them all — so re-provisioning after a destroy/Play-exit reuses slots
-// instead of growing the pool every session.
-TEST(TerrainRegionBake, TilePhysicsSlotsReleasedOnDestroyAndReleaseAll)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    auto handle = CreateResidentTiledTerrain(svc, /*tilesX*/ 2);
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{0, 0});
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{1, 0});
-    EXPECT_EQ(svc.GetTilePhysicsSlotCountForTests(), 2u);
-
-    // Destroying the terrain releases its slots (pre-fix: leaked).
-    svc.DestroyTiledTerrain(handle);
-
-    // Re-create + re-provision: the freed slots are reused, so the pool stays
-    // flat at 2 rather than growing to 4.
-    handle = CreateResidentTiledTerrain(svc, /*tilesX*/ 2);
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{0, 0});
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{1, 0});
-    EXPECT_EQ(svc.GetTilePhysicsSlotCountForTests(), 2u)
-        << "tile-physics slots leaked across a destroy/re-provision cycle";
-
-    // ReleaseAll drops every slot (the Play-exit sweep).
-    svc.ReleaseAllTilePhysicsHandles();
-    EXPECT_EQ(svc.GetTilePhysicsSlotCountForTests(), 0u);
-
-    // And re-provisioning after the sweep is bounded to the tile count again.
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{0, 0});
-    (void)svc.AcquireTilePhysicsHandle(handle, TileCoord{1, 0});
-    EXPECT_EQ(svc.GetTilePhysicsSlotCountForTests(), 2u);
-}
-
 // Paint-only region bake proportionality (review Fix 2): a paint-only (splat)
 // edit on a tiled terrain must NOT bump any tile's HeightfieldVersion, must NOT
-// bump tiled.Revision — heights are untouched, so a collider re-cook would be pure
-// waste. Pre-fix (unconditional rescan + version bumps) fails this.
+// bump tiled.Revision — heights are untouched, so a re-upload and normal regen would
+// be pure waste. Pre-fix (unconditional rescan + version bumps) fails this.
 TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrRevision)
 {
     ScopedTerrainService scoped;

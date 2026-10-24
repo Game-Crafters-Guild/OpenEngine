@@ -11,7 +11,7 @@
 // end-to-end test asking for `font-family: Roboto` and a direct FontAtlas load
 // agree on which bytes they measured.
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Text/FontAtlas.h"
 
@@ -30,7 +30,7 @@ inline constexpr unsigned kUiAtlasPixelSize = 20u;
 
 inline std::string StagedFontPath(const char* fileName)
 {
-    return (PathUtils::GetExecutableDirectory() / "Assets" / "Fonts" / fileName).string();
+    return (ApplicationPaths::GetExecutableDirectory() / "Assets" / "Fonts" / fileName).string();
 }
 
 // Empty when the file is not staged.

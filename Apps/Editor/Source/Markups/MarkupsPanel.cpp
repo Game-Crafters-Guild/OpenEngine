@@ -140,7 +140,7 @@ void MarkupsPanel::BindFrame()
     if (UIElement* host = FindById("MarkupsSearchHost"_sid); host && host != m_SearchHost.Get())
     {
         PanelSearchBarBuilt search =
-            BuildPanelSearchBar("markups-search-field", {}, [this](const std::string&) { RequestRebuild(); });
+            BuildPanelSearchBar("markups-search-field", [this](const std::string&) { RequestRebuild(); });
         search.RootPtr->SetPlaceholder("Search mark-ups");
         search.RootPtr->AddClass("markups-search");
         m_Search = MakeWeakRef(search.FieldPtr);

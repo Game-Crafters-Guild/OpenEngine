@@ -28,10 +28,6 @@
 #include <sstream>
 #include <type_traits>
 
-#if defined(__GNUG__)
-#include <cxxabi.h>
-#endif
-
 #include "Editor/EditorTreeTitleIconVars.h"
 #include "Editor/Hierarchy/HierarchyEntityIcon.h"
 #include "Editor/Settings/SettingsStore.h"
@@ -620,63 +616,8 @@ std::string GetDefaultValueForType(const std::string& typeName)
     return "0";
 }
 
-static void StripLeading(std::string& s, const char* prefix)
-{
-    if (!prefix)
-        return;
-    const size_t n = std::strlen(prefix);
-    if (s.size() >= n && s.compare(0, n, prefix) == 0)
-    {
-        s.erase(0, n);
-    }
-}
-
-static std::string PrettifyTypeName(const char* typeName)
-{
-    std::string s = typeName ? std::string(typeName) : std::string();
-
-#if defined(__GNUG__)
-    int status = 0;
-    if (char* demangled = abi::__cxa_demangle(s.c_str(), nullptr, nullptr, &status))
-    {
-        if (status == 0)
-            s = demangled;
-        std::free(demangled);
-    }
-#endif
-
-    // MSVC often prefixes with "struct " / "class ".
-    StripLeading(s, "struct ");
-    StripLeading(s, "class ");
-
-    // Strip common namespaces for UI display.
-    StripLeading(s, "GameEngine::Components::");
-    StripLeading(s, "GameEngine::ECS::");
-    StripLeading(s, "GameEngine::");
-    StripLeading(s, "Components::");
-    StripLeading(s, "ECS::");
-
-    std::string pretty;
-    pretty.reserve(s.size() + 8);
-    for (size_t i = 0; i < s.size(); ++i)
-    {
-        const unsigned char ch = static_cast<unsigned char>(s[i]);
-        if (i > 0 && std::isupper(ch))
-        {
-            const unsigned char prev = static_cast<unsigned char>(s[i - 1]);
-            const bool prevIsLowerOrDigit = std::islower(prev) || std::isdigit(prev);
-            const bool nextIsLower = (i + 1 < s.size()) &&
-                                     std::islower(static_cast<unsigned char>(s[i + 1]));
-            if (prevIsLowerOrDigit || nextIsLower)
-                pretty.push_back(' ');
-        }
-        pretty.push_back(s[i]);
-    }
-
-    return pretty.empty() ? std::string("Component") : pretty;
-}
-
-// Human-readable display names for known components (avoids showing mangled typeid names like N10GameEngine10components12MeshRendererE).
+// Titles of built-in components. TryFindComponentTypeIdByName reads a title back to its type for the
+// component clipboard and the saved component settings, so a title here is also that type's key.
 static const std::unordered_map<ECS::ComponentTypeId, std::string>& GetComponentDisplayNames()
 {
     static std::unordered_map<ECS::ComponentTypeId, std::string> s_Names;
@@ -1152,8 +1093,8 @@ static std::string ComponentTitle(ECS::ComponentTypeId typeId)
     //     section header and the Add Effect picker cannot drift apart.
     if (const auto* terrainEffect = TerrainECS::FindTerrainEffectType(typeId))
         return std::string(terrainEffect->Title);
-    // 1. Explicit override for names that don't derive cleanly (acronyms like
-    //    "CRT"/"LUT", or renamed labels like LocalBounds -> "World Bounds").
+    // 1. The built-in titles (LocalBounds reads "World Bounds"). An entry that equals the
+    //    derived title stays: it is the type's clipboard and saved-settings key.
     const auto& displayNames = GetComponentDisplayNames();
     auto it = displayNames.find(typeId);
     if (it != displayNames.end())
@@ -1161,12 +1102,12 @@ static std::string ComponentTitle(ECS::ComponentTypeId typeId)
     // 2. Reflected components carry a normalized, cross-compiler-stable name;
     //    derive the title from it so no per-component map entry is needed.
     if (const std::string_view canonical = ECS::ComponentFieldRegistry::GetCanonicalName(typeId); !canonical.empty())
-        return PrettifyTypeName(std::string(canonical).c_str());
+        return Editor::ComponentTypeNameAsWords(canonical);
     // 3. Fallback for a component with no reflected field table: the handler's
     //    canonical type name, which is the same normalized spelling on every
     //    compiler.
     if (ECS::IComponentHandler* handler = ECS::ComponentRegistry::GetHandler(typeId))
-        return PrettifyTypeName(handler->GetTypeName());
+        return Editor::ComponentTypeNameAsWords(handler->GetTypeName());
     return "Component " + std::to_string(static_cast<std::size_t>(typeId));
 }
 
@@ -2025,11 +1966,9 @@ InspectorPanel::InspectorPanel()
     m_BottomRoot = bottom.get();
     AddChild(std::move(bottom));
 
-    // Search bar placement and visibility are controlled via Settings.
+    // Search bar placement is controlled via Settings.
     auto built = BuildPanelSearchBar(
         "inspector-search-field",
-        []()
-        { return SettingsPanel::GetSearchBarsVisible(); },
         {}, // onTextChanged (on Enter)
         [this](const std::string& text)
         { ApplySearchFilter(text); }, // onTextChanging (real-time)
@@ -2042,6 +1981,7 @@ InspectorPanel::InspectorPanel()
     );
     m_SearchBar = built.RootPtr;
     m_SearchField = built.FieldPtr;
+    AddClass("panel-search-host");
     AddChild(std::move(built.Root));
     SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
 

@@ -111,7 +111,7 @@ struct SkySettings
     float starTwinkleRate = 1.0f;
     /// Artistic: the core's size (1 = physical), the spikes' share of the glow, their length in glow
     /// radii, and the shape (0 = the round point, 1 = the sparkle).
-    float starCoreScale = 0.85f;
+    float starCoreScale = 0.75f;
     float starSpikes = 0.2f;
     float starSpikeLength = 0.6f;
     uint32_t starShape = 0;

@@ -120,6 +120,7 @@
 // EngineCore-backed hot-reload fixture (A1.4 S3 L7).
 #include "Core/Engine.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Assets/AssetManager.h"
 #include "AssetCore/AssetEvents.h"
@@ -6394,13 +6395,13 @@ struct DeformationMotionLogLines
     DeformationMotionLogLines()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         Sink = sink.get();
         auto lines = Lines;
         CallbackId = Sink->RegisterCallback(
             [lines](const Logger::LogMessage& msg)
             {
-                if (msg.Message.find("Deformation motion:") != Logger::String::npos)
+                if (msg.Message.find("Deformation motion:") != std::string::npos)
                     lines->emplace_back(msg.Message.c_str());
             });
         Logger::Log::AddSink(std::move(sink));
@@ -9404,14 +9405,14 @@ struct MissingUploadPassReports
     MissingUploadPassReports()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         Sink = sink.get();
         auto count = Count;
         CallbackId = Sink->RegisterCallback(
             [count](const Logger::LogMessage& msg)
             {
                 if (msg.Level == Logger::LogLevel::Error &&
-                    msg.Message.find("declares no \"TerrainUpload\" pass") != Logger::String::npos)
+                    msg.Message.find("declares no \"TerrainUpload\" pass") != std::string::npos)
                     count->fetch_add(1);
             });
         Logger::Log::AddSink(std::move(sink));
@@ -13957,6 +13958,8 @@ constexpr GrassFloatTwin kGrassFloatTwins[] = {
     {"GroundingStrength", "GrassGroundingStrength",
      &Components::TerrainGrass::GroundingStrength,
      &Terrain::TerrainGPUParams::GrassGroundingStrength},
+    {"GroundTintHeight", "GrassGroundTintHeight",
+     &Components::TerrainGrass::GroundTintHeight, &Terrain::TerrainGPUParams::GrassGroundTintHeight},
     {"Translucency", "GrassTranslucency",
      &Components::TerrainGrass::Translucency, &Terrain::TerrainGPUParams::GrassTranslucency},
     {"TextureCardsPerSquareMeter", "GrassTextureCardsPerSquareMeter",
@@ -15213,7 +15216,7 @@ struct HeightBakeHarness
     {
         Device = device;
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         if (!fs::exists(shaderDir / "terrain_height_bake.comp"))
         {
@@ -15270,7 +15273,7 @@ struct HeightBakeHarness
     bool InitNormal(std::string& skipReason)
     {
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         ShaderProgramCompileRequest req{};
         req.debugName = "terrain_normal_bake_oracle";
@@ -15320,7 +15323,7 @@ struct HeightBakeHarness
     bool InitSplat(std::string& skipReason)
     {
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         ShaderProgramCompileRequest req{};
         req.debugName = "terrain_splat_bake_oracle";
@@ -20224,6 +20227,8 @@ TEST(RenderPipelineDeclareTests, DefaultSizeTiledTerrainExtractionUploadsTheReso
 
 // The five blade-shape dials reach the terrain's GPU row through the extraction, clamped to their
 // ranges, and the row's canopy depth is the one its own density, width, height and Canopy Shade give.
+// The terrain's grass field is composed first, as the modifier system does on the update after the
+// extraction provisions the terrain, so the row's grass places.
 TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToTheirRanges)
 {
     TerrainFixture f;
@@ -20250,7 +20255,12 @@ TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToThe
         entity.Set(grass);
         world.ProcessCommands();
         TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+        extraction.Update(world, 1.0f / 60.0f); // provisions the terrain
+        TerrainECS::TerrainModifierSystem modifiers;
+        modifiers.Update(world, 1.0f / 60.0f); // composes its grass field: no regions, so in place
         const Terrain::TerrainGPUParams row = ExtractFirstTerrainParams(f, terrain, extraction, world);
+        ASSERT_NE(row.GrassEnabled & Terrain::kTerrainGrassBitEnabled, 0u)
+            << "the row's grass still waits for its field";
         EXPECT_FLOAT_EQ(row.GrassBladeTilt, 0.4f);
         EXPECT_FLOAT_EQ(row.GrassBladeBend, Components::kMaxTerrainGrassBladeBend);
         EXPECT_FLOAT_EQ(row.GrassBladeTwist, 0.75f);
@@ -20268,6 +20278,56 @@ TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToThe
             << "Canopy Shade 0 still shades the ground under the grass";
     }
     f.Down();
+}
+
+namespace
+{
+// Extracts `authored` with a default TerrainGrass and no modifier system, so its grass field is never
+// composed, as on the frames before a terrain's first field lands: the row's grass waits for the field
+// and does not place, and a row whose grass does not draw shades no ground (the terrain surface shades
+// the ground under any row with a canopy depth).
+void ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(const Components::Terrain& authored)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        EXPECT_TRUE(terrain.Initialize(f.Device));
+        ECS::World world(nullptr);
+        auto entity = world.Create();
+        entity.Set(Components::WorldTransform{});
+        entity.Set(authored);
+        entity.Set(Components::TerrainGrass{});
+        world.ProcessCommands();
+        TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+        const Terrain::TerrainGPUParams row = ExtractFirstTerrainParams(f, terrain, extraction, world);
+        ASSERT_EQ(row.GrassEnabled & Terrain::kTerrainGrassBitEnabled, 0u)
+            << "grass placed before its terrain's first field landed";
+        EXPECT_EQ(row.GrassCanopyOcclusion, 0.0f) << "a row whose grass does not draw shades the ground under it";
+    }
+    f.Down();
+}
+} // namespace
+
+// One case per path: a small terrain extracts untiled, and the component's default size tiles.
+TEST(RenderPipelineDeclareTests, UntiledTerrainGrassWaitingForItsFieldCastsNoCanopyShade)
+{
+    Components::Terrain authored{};
+    authored.SizeX = 64.0f;
+    authored.SizeZ = 64.0f;
+    authored.HeightScale = 8.0f;
+    authored.SamplesPerMeter = 1.0f;
+    ASSERT_FALSE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter));
+    ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(authored);
+}
+
+TEST(RenderPipelineDeclareTests, DefaultSizeTiledTerrainGrassWaitingForItsFieldCastsNoCanopyShade)
+{
+    const Components::Terrain authored{};
+    ASSERT_TRUE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter))
+        << "the default terrain no longer tiles: this case no longer drives the tiled path";
+    ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(authored);
 }
 
 // The CBT renderer binds the terrain's height textures (the unified heightmap, or the resident atlas

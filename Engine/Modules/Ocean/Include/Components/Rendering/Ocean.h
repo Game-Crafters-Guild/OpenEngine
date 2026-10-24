@@ -823,7 +823,7 @@ struct OceanWaterBody
     // @ge-range -360 360
     float32 LocalWaveExtraDirectionDegrees[OceanWaterBodyExtraLocalWaveCapacity] = {};
     // Surface material preset: color, optical response, foam and detail textures.
-    // @ge-tooltip Ocean preset whose surface values (colour, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
+    // @ge-tooltip Ocean preset whose surface values (color, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
     OceanPresetRef MaterialOverride;
     // @ge-tooltip Where water-body materials overlap, higher priorities apply over lower ones.
     int32 MaterialPriority = 0;
@@ -890,7 +890,7 @@ struct OceanPolygonWaterBody
     // @ge-range -360 360
     float32 LocalWaveExtraDirectionDegrees[OceanWaterBodyExtraLocalWaveCapacity] = {};
     // Surface material preset: color, optical response, foam and detail textures.
-    // @ge-tooltip Ocean preset whose surface values (colour, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
+    // @ge-tooltip Ocean preset whose surface values (color, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
     OceanPresetRef MaterialOverride;
     // @ge-tooltip Where water-body materials overlap, higher priorities apply over lower ones.
     int32 MaterialPriority = 0;

@@ -6,8 +6,7 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
-#include <thread>
+#include <cmath>
 #include <vector>
 
 #include "Picking/MeshPickingService.h"
@@ -18,10 +17,10 @@
 #include "Core/Engine.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
-#include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "Scene/SceneTlas.h"
 #include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainService.h"
+#include "PagedTiledTerrain.h"
 
 using GameEngine::EngineCore;
 using GameEngine::ApplicationConfig;
@@ -29,6 +28,9 @@ using GameEngine::ECS::World;
 using GameEngine::Mathematics::Ray3D;
 using GameEngine::Mathematics::Vector3;
 using GameEngine::TerrainECS::TerrainService;
+using GameEngine::TerrainECS::Test::CreatePagedTiledTerrain;
+using GameEngine::TerrainECS::Test::PagedTiledTerrain;
+using GameEngine::TerrainECS::Test::StreamPagesUntilTheCameraPageLands;
 using GameEngine::Editor::Picking::PickableKind;
 using GameEngine::Editor::Picking::PickHit;
 using GameEngine::Editor::Picking::PickOptions;
@@ -183,9 +185,9 @@ TEST_F(ScenePickTerrainInclusionTests, RaycastSceneAllMissesOutsideTheFootprint)
     EXPECT_TRUE(hits.empty());
 }
 
-// A tiled terrain is picked at its resident tile's surface: the pick samples the tile and bounds
-// the ray by the tiles' cached height ranges, with no whole-terrain structure involved.
-TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsATiledTerrainAtItsTileSurface)
+// A tiled terrain whose heights have no page source yet (a height store still cooking) is not
+// picked: it answers unsampled, never with the height of a tile that happens to be resident.
+TEST_F(ScenePickTerrainInclusionTests, RaycastSceneMissesATiledTerrainWhoseHeightsHaveNoSourceYet)
 {
     GameEngine::TerrainECS::TiledTerrainConfig config{};
     config.WorldSizeX = 2048.0f;
@@ -221,116 +223,34 @@ TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsATiledTerrainAtItsTileSur
 
     constexpr float kProbeX = 700.0f;
     constexpr float kProbeZ = 300.0f;
-    float expectedNormalized = 0.0f;
-    ASSERT_TRUE(GameEngine::TerrainECS::SampleTiledHeightNormalized(*tiled, kProbeX, kProbeZ, expectedNormalized));
+    ASSERT_TRUE(TerrainService::Get().SurfaceQuery(terrain, transform).ContainsXZ(kProbeX, kProbeZ))
+        << "the probe is on the footprint, over the resident tile";
 
     Ray3D ray;
     ray.origin = Vector3(kProbeX, 1000.0f, kProbeZ);
     ray.direction = Vector3(0.0f, -1.0f, 0.0f);
     const auto result = RaycastScene(ray, m_World, PickOptions{});
-    ASSERT_TRUE(result.Hit);
-    EXPECT_EQ(result.Best.Entity.id, entity.id);
-    EXPECT_NEAR(result.Best.WorldPosition.y, expectedNormalized * kHeightScale, 0.1f);
+    EXPECT_FALSE(result.Hit) << "the pick read the resident tile of a terrain with no page source";
 }
 
 namespace
 {
 
-// A 2 x 1 km tiled noise terrain (two tiles of 1,025 samples at 1 m) whose height pages stream as
-// the extraction requests them: the generated provider over its tile lattice.
-struct PagedTiledTerrain
+// The terrain's transform: centered on its footprint.
+Components::WorldTransform TerrainTransform(const Components::Terrain& terrain)
 {
-    GameEngine::TerrainECS::TiledTerrainHandle Tiled;
-    Components::Terrain Component;
-    GameEngine::TerrainECS::PagedTerrainRequest Request;
-};
-
-PagedTiledTerrain CreatePagedTiledTerrain(TerrainService& service)
-{
-    using namespace GameEngine::TerrainECS;
-    PagedTiledTerrain paged;
-    TiledTerrainConfig config{};
-    config.WorldSizeX = 2048.0f;
-    config.WorldSizeZ = 1024.0f;
-    config.HeightScale = kHeightScale;
-    config.SamplesPerMeter = 1.0f;
-    paged.Tiled = service.CreateTiledTerrain(config);
-    TiledTerrainData* tiled = service.GetTiledTerrainData(paged.Tiled);
-
-    GameEngine::Terrain::TerrainConfig renderConfig{};
-    renderConfig.HeightmapWidth = 3;
-    renderConfig.HeightmapHeight = 3;
-    renderConfig.WorldSizeX = config.WorldSizeX;
-    renderConfig.WorldSizeZ = config.WorldSizeZ;
-    const TerrainHandle render = service.CreateTerrain(renderConfig);
-    tiled->GlobalGpuHandleIndex = render.Index;
-    tiled->GlobalGpuHandleGeneration = render.Generation;
-
-    GameEngine::PageStreaming::GeneratedHeightLattice lattice;
-    lattice.Source = GameEngine::PageStreaming::GeneratedHeightSource::Noise;
-    lattice.TerrainOriginX = tiled->WorldOriginX;
-    lattice.TerrainOriginZ = tiled->WorldOriginZ;
-    lattice.TileWorldSize = tiled->Config.TileWorldSize;
-    lattice.TileSamples = tiled->Config.TileConfig.HeightmapWidth;
-    lattice.TilesX = tiled->Config.TilesPerAxisX;
-    lattice.TilesZ = tiled->Config.TilesPerAxisZ;
-    lattice.Noise = {kTileNoiseFrequency, kTileNoiseAmplitude, kTileNoiseOctaves, kTileNoiseSeed};
-    PagedTerrainRequest& request = paged.Request;
-    request.Terrain = render.Index;
-    request.TerrainGeneration = render.Generation;
-    request.SourceIdentity = 1;
-    request.Source.Generated = std::make_shared<const GameEngine::PageStreaming::GeneratedHeightPageProvider>(lattice);
-    request.Shape.OriginX = tiled->WorldOriginX;
-    request.Shape.OriginZ = tiled->WorldOriginZ;
-    request.Shape.Level0TexelX = 1.0f;
-    request.Shape.Level0TexelZ = 1.0f;
-    request.Shape.SamplesX = 2049;
-    request.Shape.SamplesZ = 1025;
-    request.Shape.MinHeight = -2.0f * kHeightScale;
-    request.Shape.MaxHeight = 2.0f * kHeightScale;
-    request.OriginY = 0.0f;
-    request.HeightScale = kHeightScale;
-
-    Components::Terrain& terrain = paged.Component;
-    terrain.SizeX = config.WorldSizeX;
-    terrain.SizeZ = config.WorldSizeZ;
-    terrain.HeightScale = kHeightScale;
-    terrain.Domain = Components::TerrainDomain::Planar;
-    terrain.TiledTerrainHandle = paged.Tiled.Index;
-    terrain.TiledTerrainGeneration = paged.Tiled.Generation;
-    return paged;
-}
-
-// Frames of the terrain's height pages with one camera at `camera`, until the level-0 page under the
-// camera is on the CPU (it may land on a job a few frames later). False when it never does.
-bool StreamPagesUntilTheCameraPageLands(TerrainService& service, const PagedTiledTerrain& paged, const Vector3& camera)
-{
-    using namespace GameEngine::TerrainECS;
-    constexpr GameEngine::uint64 kFramesToSettle = 2000;
-    TerrainHeightPages& pages = service.GetHeightPages();
-    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
-    pages.Update(1, 1.0f / 60.0f, false, 2);
-    for (GameEngine::uint64 frame = 2; frame < kFramesToSettle; ++frame)
-    {
-        pages.Request(paged.Request, {&camera, 1}, view);
-        pages.Update(frame, 1.0f / 60.0f, false, 2);
-        SurfaceHeightSample sample;
-        if (service.SurfaceQuery(paged.Component).SampleHeight(camera, SurfaceHeightPolicy::RequireFinest, sample))
-            return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    Components::WorldTransform transform{};
+    transform.matrix[12] = terrain.SizeX * 0.5f;
+    transform.matrix[14] = terrain.SizeZ * 0.5f;
+    return transform;
 }
 
 // The terrain's entity, centered on its footprint.
 GameEngine::ECS::EntityHandle AddTerrainEntity(World& world, const Components::Terrain& terrain)
 {
-    Components::WorldTransform transform{};
-    transform.matrix[12] = terrain.SizeX * 0.5f;
-    transform.matrix[14] = terrain.SizeZ * 0.5f;
     const auto entity = world.CreateEntity();
     world.AddComponentImmediate(entity, terrain);
-    world.AddComponentImmediate(entity, transform);
+    world.AddComponentImmediate(entity, TerrainTransform(terrain));
     return entity;
 }
 
@@ -341,9 +261,11 @@ float SampleLoadedTile(TerrainService& service, const PagedTiledTerrain& paged, 
     TerrainTileData* tile = service.LoadTile(paged.Tiled, {tileX, 0});
     EXPECT_NE(tile, nullptr);
     tile->LodState = TileLodState::Full;
-    float normalized = 0.0f;
-    EXPECT_TRUE(SampleTiledHeightNormalized(*service.GetTiledTerrainData(paged.Tiled), x, z, normalized));
-    return normalized * kHeightScale;
+    const TiledTerrainData& tiled = *service.GetTiledTerrainData(paged.Tiled);
+    const float tileSize = tiled.Config.TileWorldSize;
+    const float tileOriginX = tiled.WorldOriginX + static_cast<float>(tileX) * tileSize;
+    return tile->Heightfield.SampleBilinear((x - tileOriginX) / tileSize, (z - tiled.WorldOriginZ) / tileSize) *
+           kHeightScale;
 }
 
 Ray3D DownAt(float x, float z)
@@ -362,13 +284,11 @@ TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainWhereIt
 {
     using namespace GameEngine::TerrainECS;
     TerrainService& service = TerrainService::Get();
-    const PagedTiledTerrain paged = CreatePagedTiledTerrain(service);
+    const PagedTiledTerrain paged = CreatePagedTiledTerrain(service, 2048.0f, 1024.0f, kHeightScale);
     constexpr float kProbeX = 1500.0f;
     constexpr float kProbeZ = 300.0f;
     const float expected = SampleLoadedTile(service, paged, 1, kProbeX, kProbeZ);
     service.UnloadTile(paged.Tiled, {1, 0});
-    float unresident = 0.0f;
-    ASSERT_FALSE(SampleTiledHeightNormalized(*service.GetTiledTerrainData(paged.Tiled), kProbeX, kProbeZ, unresident));
     ASSERT_TRUE(StreamPagesUntilTheCameraPageLands(service, paged, Vector3(kProbeX, 50.0f, kProbeZ)));
 
     const auto entity = AddTerrainEntity(m_World, paged.Component);
@@ -378,26 +298,34 @@ TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainWhereIt
     EXPECT_NEAR(result.Best.WorldPosition.y, expected, 0.1f);
 }
 
-// Past the CPU window, a paged terrain is picked on its resident tile, not on the coarser pinned
-// page: 400 m from the camera the pinned level is off by more than the tile's own height error.
-TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainOnItsResidentTileOutsideTheCpuWindow)
+// Past the CPU window, a paged terrain is picked at its finest height, not on the coarser pinned
+// page: a hit on a coarse page fetches the finest page under it and marches again. 400 m from the
+// camera the pinned level is off by more than the tile's own height error.
+TEST_F(ScenePickTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainAtItsFinestHeightOutsideTheCpuWindow)
 {
     using namespace GameEngine::TerrainECS;
     TerrainService& service = TerrainService::Get();
-    const PagedTiledTerrain paged = CreatePagedTiledTerrain(service);
-    constexpr float kProbeX = 1500.0f;
-    constexpr float kProbeZ = 300.0f;
+    PagedTiledTerrain paged = CreatePagedTiledTerrain(service, 2048.0f, 1024.0f, kHeightScale);
+    paged.Request.GpuPages = false; // only the CPU windows want level 0: the GPU fetches none there
+    // Between the level-0 samples: on a coarse lattice point a coarser level holds the same sample.
+    constexpr float kProbeX = 1501.5f;
+    constexpr float kProbeZ = 301.5f;
     const float expected = SampleLoadedTile(service, paged, 1, kProbeX, kProbeZ);
     const Vector3 camera(kProbeX - 400.0f, 50.0f, kProbeZ);
     ASSERT_TRUE(StreamPagesUntilTheCameraPageLands(service, paged, camera));
     SurfaceHeightSample coarse;
-    ASSERT_TRUE(service.SurfaceQuery(paged.Component)
+    ASSERT_TRUE(service.SurfaceQuery(paged.Component, TerrainTransform(paged.Component))
                     .SampleHeight(Vector3(kProbeX, 0.0f, kProbeZ), SurfaceHeightPolicy::AcceptCoarse, coarse));
     ASSERT_EQ(coarse.Detail, SurfaceHeightDetail::Coarse) << "the probe is outside every CPU window";
+    ASSERT_GT(std::abs(coarse.Height - expected), 0.1f) << "the coarse page must miss by more than the tolerance";
 
     const auto entity = AddTerrainEntity(m_World, paged.Component);
     const auto result = RaycastScene(DownAt(kProbeX, kProbeZ), m_World, PickOptions{});
     ASSERT_TRUE(result.Hit);
     EXPECT_EQ(result.Best.Entity.id, entity.id);
-    EXPECT_NEAR(result.Best.WorldPosition.y, expected, 0.1f) << "the pinned level answered: " << coarse.Height;
+    EXPECT_NEAR(result.Best.WorldPosition.y, expected, 0.1f) << "the coarse page answered: " << coarse.Height;
+    SurfaceHeightSample finest;
+    EXPECT_TRUE(service.SurfaceQuery(paged.Component, TerrainTransform(paged.Component))
+                    .SampleHeight(Vector3(kProbeX, 0.0f, kProbeZ), SurfaceHeightPolicy::RequireFinest, finest))
+        << "the pick fetched the finest page under its hit";
 }

@@ -17,6 +17,7 @@
 
 #include <cctype>
 #include <string>
+#include <utility>
 
 #include "Terrain/TerrainGrassVocabulary.h"
 
@@ -69,6 +70,20 @@ TEST(TerrainGrassVocabulary, TheInactiveNoteScopesItselfToEveryActiveTerrain)
         "One draw serves every active terrain, so this row still counts while any other "
         "terrain needs the alpha path."))
         << note;
+}
+
+// Ground Tint Height acts only on a gradient that starts from the ground: the note shows in the three
+// other states and names both switches.
+TEST(TerrainGrassVocabulary, GroundTintHeightIsReportedInactiveWithoutTheGroundInTheGradient)
+{
+    EXPECT_TRUE(GrassVocab::GroundTintHeightInactiveNote(/*automaticRootColor=*/true, /*splatRootColor=*/true).empty());
+    for (const auto& [automatic, splat] : {std::pair{false, true}, std::pair{true, false}, std::pair{false, false}})
+    {
+        const std::string note = GrassLower(GrassVocab::GroundTintHeightInactiveNote(automatic, splat));
+        EXPECT_TRUE(GrassHas(note, "changes nothing")) << note;
+        EXPECT_TRUE(GrassHas(note, "root color to auto")) << note;
+        EXPECT_TRUE(GrassHas(note, "splat root color on")) << note;
+    }
 }
 
 // ---- The dropdown tooltip -------------------------------------------------

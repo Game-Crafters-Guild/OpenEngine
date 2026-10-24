@@ -227,10 +227,9 @@ AssetsPanel::AssetsPanel()
         });
         leftPane->AddChild(std::move(tree));
 
-        // Search bar placement and visibility are controlled via Settings.
+        // Search bar placement is controlled via Settings.
         auto built = BuildPanelSearchBar(
             "assets-search-field",
-            []() { return SettingsPanel::GetSearchBarsVisible(); },
             [this](const std::string& value)
             {
                 if (m_ToolbarSearchField)
@@ -253,6 +252,7 @@ AssetsPanel::AssetsPanel()
         m_SearchBar = built.RootPtr;
         m_SearchField = built.FieldPtr;
         m_SearchFilter = built.FilterPtr;
+        leftPane->AddClass("panel-search-host");
         leftPane->AddChild(std::move(built.Root));
 
         SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
@@ -549,7 +549,6 @@ AssetsPanel::AssetsPanel()
         {
             auto built = BuildPanelSearchBar(
                 "assets-toolbar-search-field",
-                []() { return SettingsPanel::GetSearchBarsVisible(); },
                 [this](const std::string& value)
                 {
                     if (m_SearchField)

@@ -1,6 +1,6 @@
 #include "Scripting/ManagedSystemBridge.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/NativeAotScriptsLibrary.h"
@@ -30,7 +30,7 @@ static const char* kExportsTypeName =
 
 bool ManagedSystemBridge::TryLoadNativeAOT()
 {
-    auto exeDir = PathUtils::GetExecutableDirectory();
+    auto exeDir = ApplicationPaths::GetExecutableDirectory();
     auto nativeLibPath = exeDir / kNativeAotScriptsLibraryName;
 
     if (!std::filesystem::exists(nativeLibPath))

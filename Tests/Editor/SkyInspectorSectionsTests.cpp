@@ -169,7 +169,7 @@ TEST(SkyInspectorSections, EachSectionContainsTheRowsItTook)
         // The star rows end where the Sun Dir override rows begin. Those go to `physical`, so a
         // span that runs past them reads three of its rows as stars that landed elsewhere.
         {"stars", "AddSkyStarLookRow(stars", "if (!sky->AutoSunMoon)",
-         {"\"Observer\"", "\"Limit\"", "\"Twinkle\"", "\"Artistic\"", "\"Highlights\"", "\"Glow\"",
+         {"AddSkyStarSeenByRow(stars", "\"Visibility\"", "\"Limit\"", "\"Twinkle\"", "\"Artistic\"", "\"Highlights\"", "\"Glow\"",
           "\"Twinkle rate\"", "\"Shape\"", "\"Core\"", "\"Spikes\"", "\"Spike length\""}},
         // Sun size 2D leads the group: it belongs with the other 2D-only knobs rather than beside
         // the sun's real size, because it is a screen fraction and not an angle.

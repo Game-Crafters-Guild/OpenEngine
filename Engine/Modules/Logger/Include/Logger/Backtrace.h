@@ -1,8 +1,9 @@
 #pragma once
 
-#include "Logger/Types.h"
 #include <cstdint>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace Logger
 {
@@ -17,9 +18,9 @@ std::mutex& DbgHelpMutex();
 struct BacktraceFrame
 {
     std::uintptr_t Address = 0;
-    String Module;
-    String Symbol;  // demangled when possible
-    String File;    // empty if resolution is unavailable on this platform
+    std::string Module;
+    std::string Symbol;  // demangled when possible
+    std::string File;    // empty if resolution is unavailable on this platform
     int Line = 0;
 };
 
@@ -27,6 +28,6 @@ struct BacktraceFrame
 // maxFrames: upper bound on number of returned frames.
 // skipFrames: number of top frames to drop (use to hide the logger/plumbing frames).
 // Thread-safe. Returns empty on unsupported platforms.
-Vector<BacktraceFrame> CaptureBacktrace(int maxFrames = 32, int skipFrames = 0);
+std::vector<BacktraceFrame> CaptureBacktrace(int maxFrames = 32, int skipFrames = 0);
 
 } // namespace Logger

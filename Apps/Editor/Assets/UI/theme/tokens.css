@@ -68,6 +68,8 @@
   /* Component icon glyphs (inspector headers, pickers) at rest. */
   --ui_color_icon: rgba(200, 200, 200, 1.0);
   --ui_color_text_disabled: #666666;
+  /* The hint in an empty search field: quiet at rest, still 4.8:1 against the field fill. */
+  --ui_color_text_placeholder: #8C8C8C;
   /* Status banners drawn over a view's 3D content (ViewOverlayLayer.css): a translucent
      dark pill and its text. */
   --ui_color_view_banner_background: rgba(0, 0, 0, 0.55);
@@ -134,7 +136,7 @@
 
   /* Neutral sliders: a grey track and thumb for sliders that size chrome instead of editing a
      value (the item size sliders) and for the "Gray sliders" preference. */
-  --ui_color_slider_neutral_track: #3A3A3A;
+  --ui_color_slider_neutral_track: #4D4D4D;
   --ui_color_slider_neutral_track_fill: #6E6E6E;
   --ui_color_slider_neutral_thumb: #AEAEAE;
   --ui_color_slider_neutral_thumb_hover: #BCBCBC;
@@ -171,6 +173,8 @@
   /* A layer that sits over scrolled content casts this along its top edge (the AI
      Assistant's input pane over its conversation). */
   --ui_shadow_layer_above: 0 -4px 10px rgba(0, 0, 0, 0.15);
+  /* A small plate that floats over content (the transient notice). */
+  --ui_shadow_floating_plate: 0 2px 8px rgba(0, 0, 0, 0.35);
 
   /* A count badge over a button (the Scene View tool strip's Activity badge); white text
      on it is 4.9:1. */

@@ -185,7 +185,6 @@ void BookmarksPanel::BuildUI()
     // Search bar at the top
     auto built = BuildPanelSearchBar(
         "bookmarks-search-field",
-        []() { return SettingsPanel::GetSearchBarsVisible(); },
         [this](const std::string& value)
         {
             m_SearchQuery = value;
@@ -204,6 +203,7 @@ void BookmarksPanel::BuildUI()
         });
     m_SearchBar = built.RootPtr;
     m_SearchField = built.FieldPtr;
+    container->AddClass("panel-search-host");
     container->AddChild(std::move(built.Root));
     SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
     

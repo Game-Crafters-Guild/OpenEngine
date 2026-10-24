@@ -78,7 +78,7 @@ class CaptureSink : public LogSink
     void Write(const LogMessage& message) override { Messages.push_back(message); }
     void Flush() override {}
     bool ShouldLog(LogLevel) const override { return true; }
-    String GetName() const override { return "ModuleCapture"; }
+    std::string GetName() const override { return "ModuleCapture"; }
 };
 
 void ExerciseUnloadedQueue(QueueUse use)

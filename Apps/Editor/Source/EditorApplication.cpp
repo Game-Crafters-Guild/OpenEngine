@@ -58,6 +58,7 @@
 #include "Assets/Packages/PackageCodeModules.h"
 #include "Assets/Packages/PackageNativeCache.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/CpuProfiler.h"
 #include "Editor/Shortcuts/DiagnosticShortcuts.h"
 #include "Core/Engine.h"
@@ -1769,7 +1770,7 @@ void EditorApplication::ConfigureFromCommandLine(const GameEngine::Editor::Start
     // Stamp session provenance here, before Initialize(), so the branch recorded is the
     // one this binary was built from. The worktree comes from the executable directory,
     // which cannot drift; the branch is read once and deliberately never refreshed.
-    m_SessionDescriptor = Editor::Startup::DeriveEditorSessionDescriptor(PathUtils::GetExecutableDirectory(),
+    m_SessionDescriptor = Editor::Startup::DeriveEditorSessionDescriptor(ApplicationPaths::GetExecutableDirectory(),
                                                                         args.sessionLabel);
 }
 
@@ -2204,7 +2205,7 @@ bool EditorApplication::Initialize()
     // embedded resources or bundle icons.
 #if !defined(_WIN32) && !defined(__APPLE__)
     {
-        const auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
+        const auto iconPath = ApplicationPaths::GetExecutableDirectory() / "AppIcon.png";
         Vector<uint8> iconBytes;
         if (ReadFileBytesShared(iconPath, iconBytes))
         {
@@ -3886,14 +3887,10 @@ bool EditorApplication::Initialize()
             {m_ThumbnailProvider.get(), m_EditorContext->ThumbnailHostWindowId, openAsset, m_PanelManager.get(), main,
              assetViewPanel});
 
-        // Log double-click and stack-frame clicks open the named source location.
+        // The Log panel's Open Source and stack-frame clicks open the named source location.
         if (logPanel)
-        {
-            logPanel->SetOnOpenInIDE([sourceOpener](const std::string& lineText)
-                                     { sourceOpener.OpenLogLine(lineText); });
             logPanel->SetOnOpenSourceFile([sourceOpener](const std::string& file, int line)
                                           { sourceOpener.OpenLogSourceFile(file, line); });
-        }
 
         // Context-menu "Edit (Internal)" for text-ish assets:
         // Defer to Update() so we never rebuild dockspace during native/menu callbacks.
@@ -5631,7 +5628,7 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
     if (!nativeScripts || projectRoot.empty())
         return;
 
-    const std::filesystem::path sdkRoot = PathUtils::GetExecutableDirectory() / "SDK";
+    const std::filesystem::path sdkRoot = ApplicationPaths::GetExecutableDirectory() / "SDK";
     GameEngine::NativeScripting::NativeBuildConfig cfg;
     std::string manifestErr;
     if (!GameEngine::NativeScripting::LoadSdkManifest(sdkRoot, cfg, manifestErr))

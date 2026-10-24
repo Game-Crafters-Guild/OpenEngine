@@ -22,12 +22,12 @@ struct NavigationTerrainSource;
 // over the distance between them, and one in which a static face steeper than MaxSlope, anywhere
 // in the cell, rises above the climb between neighbouring cells (WalkableClimb of `stepHeight` and
 // MaxSlope over CellSize) and starts below `agentHeight`, both above the cell's ground.
-// Null when a cell lies on a terrain tile that is not resident: `outTerrainTileX` and
-// `outTerrainTileZ` name it.
+// The terrain's height under a cell is its finest (RequireFinest, as AppendTerrainLattice). Null
+// when a cell's terrain height is not on the CPU yet: `outWaitPoint` is that cell's center.
 std::unique_ptr<Pathfinding::GridMap> BakeNavigationGrid(const Pathfinding::GridSettings& settings,
                                                          const NavigationTerrainSource& terrain,
                                                          const NavigationStaticGeometry& geometry,
                                                          float32 stepHeight, float32 agentHeight,
-                                                         int32& outTerrainTileX, int32& outTerrainTileZ);
+                                                         Mathematics::Vector3& outWaitPoint);
 
 } // namespace GameEngine::PathfindingECS

@@ -18,6 +18,7 @@
    rules there, and a native menu host resolves these classes out of the loaded
    cascade, where later wins. */
 @import "theme/dropdown-option-icons.css";
+@import "theme/option-pictures.css";
 @import "theme/version-control.css";
 @import "theme/toggle.css";
 @import "theme/slider.css";

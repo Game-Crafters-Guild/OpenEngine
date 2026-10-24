@@ -134,10 +134,10 @@ std::filesystem::path GetExecutableDirectoryForGraphNodes()
 #endif
 }
 
-// The install-assets layout rule, as PathUtils::InstallAssetsRootFor states it: inside a macOS
+// The install-assets layout rule, as ApplicationPaths::InstallAssetsRootFor states it: inside a macOS
 // app bundle (<App>.app/Contents/MacOS) the root is Contents/Resources/Assets, and <exe>/Assets
 // everywhere else. This is a copy, not the owner: GameEngineRendering is linked standalone by its
-// own test executables and cannot call PathUtils. A host that can registers the owner's answer
+// own test executables and cannot call ApplicationPaths. A host that can registers the owner's answer
 // through SetEngineGraphNodesRoot, and this copy is then never asked. ShaderGraphNodesRootTests
 // pins it to the owner's answer.
 std::filesystem::path InstallAssetsRootForGraphNodes(const std::filesystem::path& exeDir)

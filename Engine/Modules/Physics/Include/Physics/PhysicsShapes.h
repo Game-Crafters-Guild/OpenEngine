@@ -3,6 +3,7 @@
 #include "Physics/PhysicsTypes.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -99,9 +100,12 @@ struct CompoundShapeDef
     std::vector<CompoundShapeChild> children;
 };
 
+/// A HeightFieldShapeDef sample of this value has no collision: every cell that touches it is a hole.
+inline constexpr float32 kHeightFieldNoCollision = std::numeric_limits<float32>::max();
+
 struct HeightFieldShapeDef
 {
-    std::vector<float32> Samples;    // row-major height values (NxN)
+    std::vector<float32> Samples;    // row-major height values (NxN); kHeightFieldNoCollision marks a hole
     uint32 SampleCount = 0;         // N for NxN grid
     Vector3 Offset{0.0f, 0.0f, 0.0f};
     Vector3 Scale{1.0f, 1.0f, 1.0f};

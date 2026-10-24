@@ -39,7 +39,7 @@
 #include "TerrainECS/TerrainBakeCache.h"
 #include "Assets/MeshLODGenerator.h"
 #include "Assets/ModelAsset.h"
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Logger/Logger.h"
 #include "AssetDatabase/AssetStore_TextJsonl.h"
@@ -667,14 +667,14 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
     // and engine ABIs all come from the SDK template, and the project's content is
     // injected into a copy of it (no per-game recompile). For that target, assets
     // and game.config are written straight into the bundle's Contents/Resources,
-    // the content root the Player resolves from its Contents/MacOS (PathUtils::
+    // the content root the Player resolves from its Contents/MacOS (ApplicationPaths::
     // InstallContentRootFor); otherwise they go flat into the staging dir.
     const bool macBundle = IsMacBundleTarget(settings);
     // Filesystem-safe .app folder name: the display name (CFBundleName, game.config)
     // keeps the raw value, but the bundle directory + the fs::rename/remove_all of the
     // output must never contain path separators or leading dots (a malicious/typo'd game
     // name like "../x" or "a/b" must not escape the output dir).
-    std::string gameName = PathUtils::SanitizeForFolderName(settings.playerConfig.gameName);
+    std::string gameName = ApplicationPaths::SanitizeForFolderName(settings.playerConfig.gameName);
     // SanitizeForFolderName scrubs separators/illegal chars but keeps dots; strip any
     // leading dots so the name can't begin a path escape ("../x") of the output dir.
     while (!gameName.empty() && gameName.front() == '.')
@@ -683,7 +683,7 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
         gameName = "Game";
     const fs::path bundlePath = stagingDir / (gameName + ".app");
     const fs::path contentRoot =
-        macBundle ? PathUtils::InstallContentRootFor(bundlePath / "Contents" / "MacOS") : stagingDir;
+        macBundle ? ApplicationPaths::InstallContentRootFor(bundlePath / "Contents" / "MacOS") : stagingDir;
 
     // Helper: check for cancellation between phases.
     auto checkCancel = [this]() -> bool {
@@ -1907,7 +1907,7 @@ bool BuildPipeline::CopyEngineShaders(const fs::path& stagingDir)
 {
     // Engine shaders are not GUID-tracked. Copy the entire Shaders directory the build staged
     // with the Editor executable that is running this build.
-    const fs::path shaderSrc = PathUtils::GetInstallAssetsRoot() / "Shaders";
+    const fs::path shaderSrc = ApplicationPaths::GetInstallAssetsRoot() / "Shaders";
     if (!fs::is_directory(shaderSrc))
     {
         Logger::Log::Warning("Build: Engine shaders not found, skipping");

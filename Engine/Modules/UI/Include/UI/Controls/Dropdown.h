@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -37,6 +38,17 @@ public:
         // declares the option. The stylesheet owns which image that is; nothing
         // here names an image file. Empty leaves the option text-only.
         std::string iconClass;
+        // Optional CSS class carrying a picture of what this option does (a look, a
+        // preset), declared like iconClass: the stylesheet owns which image it is. The
+        // picture draws untinted. When any option declares one, every popup row is a
+        // picture row (the picture, the label and the description beside it, at the row
+        // height the control's stylesheet sets) and the header shows the selected
+        // option's picture small; the icon slot is then not drawn. Native mode shows
+        // labels only.
+        std::string pictureClass;
+        // Optional line under the label in a picture row: what the option does, in a few
+        // words. A row without pictures does not show it.
+        std::string description;
     };
 
     using NativeMenuInvoker = std::function<void(
@@ -75,6 +87,11 @@ public:
     // IsMenuOpen() itself rather than baking that policy into this primitive.
     void SetSelectedIndexWithoutNotify(int index);
 
+    // The header text while no option is selected (index -1). A preset list whose
+    // values match no preset sets "Custom" here and selects -1, so the state reads in
+    // the field without being an entry the user can pick. Empty by default.
+    void SetNoSelectionText(std::string text);
+
     const std::string& GetSelectedValue() const;
     void SetSelectedValue(const std::string& value);
     // The selected option's LABEL — what the header shows. The option's VALUE is the
@@ -90,7 +107,7 @@ public:
 
     // When true, the popup list grows wider than the header to fit its
     // content. When false (default), the popup matches the header width
-    // and clips overflow — unless the options declare icons, whose column
+    // and clips overflow — unless the options declare icons or pictures, whose column
     // would otherwise come out of the option labels.
     void SetAutoWidthPopup(bool enabled);
     bool GetAutoWidthPopup() const { return m_AutoWidthPopup; }
@@ -121,14 +138,28 @@ private:
     const Option* SelectedOption() const;
 
     void EnsureHeader();
-    // The header's icon slot, present only while the options declare icons so
-    // every other dropdown keeps its two-element header and its spacing.
-    void EnsureHeaderIcon();
-    void RemoveHeaderIcon();
+    // What the options draw beside their labels. Pictures take the place of icons
+    // when both are declared: a row has one leading slot.
+    enum class OptionArt : uint8_t
+    {
+        None,
+        Icon,
+        Picture
+    };
+
+    // The class this option puts on the leading slot for the control's art kind.
+    const std::string& ArtClass(const Option& option) const;
+    // The header's leading slot, present only while the options declare art and an
+    // option is selected, so every other header keeps its label and chevron alone. Its
+    // class names the slot kind (an icon or a picture), so a change of kind replaces it.
+    void EnsureHeaderArt();
+    void RemoveHeaderArt();
+    void BuildIconRow(Label& row, const Option& option);
+    void BuildPictureRow(Label& row, const Option& option);
     void EnsureItemsContainer();
     void RebuildUiItems();
     void UpdateHeaderLabel();
-    void UpdateHeaderIcon();
+    void UpdateHeaderArt();
     void UpdatePopupWidthClass();
     void SyncItemSelectionClasses();
     void UpdatePopupPlacement();
@@ -138,17 +169,18 @@ private:
     int                     m_SelectedIndex{-1};
     UIElement*              m_HeaderContainer{nullptr};
     Label*                  m_HeaderLabel{nullptr};
-    UIElement*              m_HeaderIcon{nullptr};
-    // The icon class currently on m_HeaderIcon, removed before the next one is
+    UIElement*              m_HeaderArt{nullptr};
+    // The art class currently on m_HeaderArt, removed before the next one is
     // applied: the classes come from option data, so there is no prefix to scan for.
-    std::string             m_HeaderIconClass;
+    std::string             m_HeaderArtClass;
     UIElement*              m_Chevron{nullptr};
+    std::string             m_NoSelectionText;
     UIElement*              m_ItemsContainer{nullptr};
     NativeMenuInvoker       m_NativeMenuInvoker;
     bool                    m_AutoWidthPopup{false};
-    // Any option declares an icon class: the whole control then reserves the
-    // icon column so annotated and unannotated rows align.
-    bool                    m_HasOptionIcons{false};
+    // The art any option declares: the whole control then reserves the leading
+    // column so annotated and unannotated rows align.
+    OptionArt               m_OptionArt{OptionArt::None};
 };
 
 } // namespace GameEngine

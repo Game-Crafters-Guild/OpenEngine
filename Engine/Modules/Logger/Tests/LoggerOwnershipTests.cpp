@@ -48,7 +48,7 @@ class CaptureSink : public LogSink
     void Write(const LogMessage& message) override { Messages.push_back(message); }
     void Flush() override {}
     bool ShouldLog(LogLevel) const override { return true; }
-    String GetName() const override { return "Capture"; }
+    std::string GetName() const override { return "Capture"; }
     // Tests read only after Flush has acknowledged all writes.
     const std::vector<LogMessage>& GetMessages() const { return Messages; }
     size_t GetCount() const { return Messages.size(); }

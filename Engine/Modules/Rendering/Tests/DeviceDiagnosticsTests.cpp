@@ -424,13 +424,13 @@ TEST(DeviceDiagnostics, ReadbackWithNoKnownLayoutIsRefused)
     ASSERT_TRUE(dev->BeginFrame());
 
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto refusals = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [refusals](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("the copy is refused") != Logger::String::npos)
+            if (msg.Message.find("the copy is refused") != std::string::npos)
                 refusals->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));

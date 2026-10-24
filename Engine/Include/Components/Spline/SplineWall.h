@@ -53,10 +53,10 @@ inline constexpr float32 kSplineWallMaxExtentMetres = 100.0f;
 // and a fresh spline's 5 m radius would make it 10 m thick.
 struct SplineWall
 {
-    // @ge-tooltip Metres across the wall. The spline's width does not change it.
+    // @ge-tooltip Meters across the wall. The spline's width does not change it.
     // @ge-range 0.05 100
     float32 Thickness = 0.6f;
-    // @ge-tooltip Metres from the ground to the top of the wall. On a slope with Grade set to Stepped, each stretch between two points stands at least this tall everywhere.
+    // @ge-tooltip Meters from the ground to the top of the wall. On a slope with Grade set to Stepped, each stretch between two points stands at least this tall everywhere.
     // @ge-range 0.05 100
     float32 Height = 3.0f;
     // @ge-tooltip How the wall meets a slope. Racked keeps the top parallel to the ground, as a hedge or a palisade does. Stepped keeps the top of each stretch between two points level, at Height above its highest ground, and steps up or down where two stretches meet, as coursed masonry does.
@@ -69,7 +69,7 @@ struct SplineWall
     SplineWallCorner Corner = SplineWallCorner::Mitre;
     // Null keeps the built-in flat grey material so the wall renders on the
     // first try.
-    // @ge-tooltip The wall's surface. Empty keeps a flat grey. Texture coordinates are in metres, along each face and up from the wall's lowest point, so the stone size is the material's own tiling.
+    // @ge-tooltip The wall's surface. Empty keeps a flat gray. Texture coordinates are in meters, along each face and up from the wall's lowest point, so the stone size is the material's own tiling.
     MaterialRef Material;
     // @ge-tooltip How the wall follows the ground under its spline. None keeps the spline's own heights; Height and Height And Slope both set the wall on the surface below the spline, since the wall takes its lean from the spline, not from the surface. The base always sinks into a cross slope so it never floats.
     SplinePlacementConform ConformMode = SplinePlacementConform::Height;
