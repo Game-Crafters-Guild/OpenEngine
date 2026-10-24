@@ -1,0 +1,443 @@
+GameEngine::Components::CubeLutEffect addable=1 doNotSerialize=0
+  Enabled type=1 offset=0 size=1 category=0 flags=0
+  Intensity type=10 offset=4 size=4 category=0 flags=0
+  Stage type=8 offset=8 size=4 category=0 flags=0 enum=Finish:0,Grade:1,
+  LutAssetGuid type=18 offset=12 size=16 category=2 flags=0
+GameEngine::Components::DDGIVolume addable=1 doNotSerialize=0
+  DebugView type=4 offset=0 size=4 category=0 flags=0 enum=None:0,Coverage:1:probe coverage,ProbeState:2:probe state,CascadeWeight:3:cascade weight,NearestProbeIrradiance:4:nearest probe irradiance,ProbeStateFine:5:probe state (fine),NearestProbeIrradianceFine:6:nearest probe irradiance (fine),FineProbeCoord:7:fine probe coord,FineProbeSlot:8:fine probe slot, tooltip=Draws what the probe field resolved instead of lit shading. Coverage shows where the probes only partly answer for a surface, Probe State shows which probes were classified buried and how far they relocated, Cascade Weight shows which grid owns each pixel. Diagnostic only — costs nothing when off.
+  ShowProbes type=1 offset=4 size=1 category=0 flags=0 tooltip=Draws the probe lattice in the Scene View, matching the reference demo's show-probes checkbox. Selecting the volume draws its bounds, not its probes, so this stays authoritative while you edit it.
+  Fit type=4 offset=8 size=4 category=0 flags=0 enum=Manual:0,FollowCamera:1, tooltip=Where the grid's centre comes from. Manual keeps it where you placed it. Follow Camera re-centres it on the camera every frame so the scene has GI everywhere the camera goes, snapped to whole probe cells so small movements cost nothing. In Manual the entity's scale sizes the grid; in Follow Camera, Follow Range and Follow Height Fraction size it.
+  FollowRange type=10 offset=12 size=4 category=0 flags=0 tooltip=How far GI reaches from the camera, in world units, when Fit is Follow Camera. Larger covers more of the level but spreads the same probe count thinner - probe spacing is range * 2 / (Divisions - 1). Ignored when Fit is Manual, where the entity's scale sizes the volume instead.
+  FollowHeightFraction type=10 offset=16 size=4 category=0 flags=0 tooltip=Vertical reach of a Follow Camera volume, as a fraction of Range. Below 1 spends fewer probes on empty headroom, which is usually what a level wants. Ignored when Fit is Manual.
+  ProbePlacement type=4 offset=20 size=4 category=0 flags=0 enum=Grid:0,Adaptive:1, tooltip=How probes are positioned. Adaptive (default) keeps the uniform lattice but nudges each probe out of any geometry it is embedded in, and deactivates one that stays buried so it stops leaking light it cannot see. Grid is the plain lattice — every probe sits at its cell centre and contributes, no classify pass — cheaper and fully predictable, and the A/B control for judging what Adaptive changed.
+  ClassifyStrength type=10 offset=24 size=4 category=0 flags=0 range=0..1 tooltip=How much authority probe classification has, from 0 (off - probes are never relocated or deactivated, exactly like Grid placement, and the classify pass is skipped) to 1 (full). Lower it if thin or two-sided walls are being misread as solid and probes are wrongly deactivated. Does nothing while Probe Placement is Grid. Applied live, no grid rebuild.
+  ProbesLongAxis type=4 offset=28 size=4 category=0 flags=0 label=Divisions tooltip=Probe count along the grid's longest axis; the other two axes scale by aspect ratio. Higher = finer indirect detail at a roughly cubic cost in trace/blend/upload work. Clamped 2-32; a resolution change rebuilds the probe grid after a short idle delay, not every frame while dragging.
+  RaysPerProbe type=4 offset=32 size=4 category=0 flags=0 label=Rays / Probe tooltip=Rays traced per probe per tick — more rays reduce noise per solve at a linear trace cost. Clamped 32-256. The per-tick budget is counted in rays, so a higher value visits fewer probes each tick and the whole grid takes longer to sweep; 256 is what RTXGI ships, 64 is this port's measured default.
+  Intensity type=10 offset=36 size=4 category=0 flags=0 tooltip=Multiplier on the final blended irradiance before it reaches the forward pass's ambient term. Applied live, no grid rebuild.
+  BounceIntensity type=10 offset=40 size=4 category=0 flags=0 range=0..4 tooltip=How much multi-bounce light the field carries, scaling the recursive bounce term rather than the final output. Useful mainly between 0 (single bounce only) and about 1 (full multi-bounce); above that the convergence bound and the radiance clamp renormalize it away and it stops doing anything. To change how strongly colour moves between surfaces, use Radiance Clamp - not this. Applied live, no grid rebuild.
+  SkyIntensity type=10 offset=44 size=4 category=0 flags=0 range=0..2 label=Sky Light tooltip=How much sky light the probes pick up on rays that hit nothing. 0 ignores the sky completely (indoor-only GI, miss rays are black), 1 is the environment's own brightness. Multiplies with the scene's global sky IBL intensity rather than replacing it. Applied live, no grid rebuild.
+  RadianceClamp type=10 offset=48 size=4 category=0 flags=0 tooltip=Ceiling on how bright a single bounce sample may be, which is what stops one over-bright surface from smearing a firefly through the probe field. Dims an outlier without changing its colour. This is a ceiling, not a switch - 0 means no bounce light at all. Applied live, no grid rebuild.
+  JitterMode type=4 offset=52 size=4 category=0 flags=0 enum=Gated:0,MonteCarlo:1, tooltip=Sampling regime for the probe solve. Gated (default, matching the reference library) traces the same ray directions every solve, so once the field converges it is perfectly stable - no shimmer, even while the camera moves. Monte Carlo rotates the ray set every solve for better long-run coverage of the sphere at the cost of permanent low-level temporal noise. Pair Gated with Hysteresis around 0.6 and Monte Carlo with around 0.9. Applied live, no grid rebuild.
+  Hysteresis type=10 offset=56 size=4 category=0 flags=0 range=0..0.99 tooltip=Temporal blend retention in [0,1), which is how much of the old estimate each texel keeps every solve. In frames: a value h takes about ln(0.05)/ln(h) solves to forget an old reading, so 0.9 is roughly 28 frames and 0.6 is roughly 6. Higher is smoother but slower to react to a light or geometry change; lower reacts faster but stays noisier. Pairs with Jitter Mode: 0.6 with Gated (the default pairing, matching the reference library) and 0.9 with Monte Carlo - a held-basis value under a rotating basis reads as large blobs drifting over surfaces. Applied live, no grid rebuild.
+  FireflyClamp type=10 offset=60 size=4 category=0 flags=0 range=1..20 tooltip=How far a probe texel may jump in one update, measured in multiples of its own noise level. A bigger jump is treated as a firefly and pulled back rather than accepted. Lower is steadier but slower to react; raise it if real lighting changes arrive late.
+  ChangeThreshold type=10 offset=64 size=4 category=0 flags=0 range=0.5..8 tooltip=How large a change must be, in multiples of a probe texel's own noise level, before it is treated as a real lighting change instead of sampling noise. Lower reacts sooner to real changes at the cost of also reacting to noise.
+  SnapAmount type=10 offset=68 size=4 category=0 flags=0 range=0..0.9 tooltip=How hard the field snaps to new values where a real lighting change was detected. Higher converges faster after a light moves or a door opens; too high reintroduces noise on those texels.
+  NormalBiasScale type=10 offset=72 size=4 category=0 flags=0 range=0..8 tooltip=Scale on the surface sample bias used when reading indirect irradiance. Increase if thin geometry shows self-shadowing in the indirect term; decrease if indirect light visibly detaches from a surface. Applied live, no grid rebuild.
+  ChebyshevStrength type=10 offset=76 size=4 category=0 flags=0 range=0..1 tooltip=How aggressively light is stopped from leaking through walls. 1 is the full visibility test, 0 disables it (light bleeds through thin geometry). Backing off from 1 trades a little leak for less over-darkening on thin or two-sided geometry, which is why the default is not 1.
+  DepthResolution type=4 offset=80 size=4 category=0 flags=0 enum=Shared:0,Fine:1, tooltip=Resolution of the occluder-distance data each probe stores for the leak test. Shared keeps it in the 6x6 irradiance tile (the default, cheapest). Fine gives it its own 14x14 tile, the ratio RTXGI uses, which stops noticeably more light leaking through thin walls; costs one extra depth blend and upload dispatch per cascade per tick and four times the depth atlas memory. Rebuilds the grid after a short idle delay.
+  DepthSharpness type=10 offset=84 size=4 category=0 flags=0 range=0.01..200 tooltip=How sharply each probe direction's stored occluder distance tracks that exact direction. 1 is a plain cosine-weighted average; lower blurs the distance over the whole hemisphere, which leaks more light through walls; higher tracks the nearest occluder in that direction crisply at the cost of more noise. Does nothing while Chebyshev Strength is 0. Applied live, no grid rebuild.
+  FilterStrength type=10 offset=88 size=4 category=0 flags=0 range=0..1 tooltip=How strongly each probe's octahedral tile is denoised on its way into the atlas. 0 is off (the raw blended field, grainier at a given ray count), 1 is the full filter and matches the upstream library. It smooths only within one probe, never between probes, so it cannot bleed light through a wall. Applied live, no grid rebuild.
+  FilterSmoothness type=10 offset=92 size=4 category=0 flags=0 range=0..1 tooltip=How large a difference between neighbouring probe directions the denoise filter still treats as noise rather than a real edge. Higher trusts more neighbours and smooths harder, at the cost of directional detail within a probe; lower keeps that detail and removes less grain. Does nothing while Filter Strength is 0.
+  EnableGlossy type=1 offset=96 size=1 category=0 flags=0 tooltip=Adds specular reflections baked from the probes, giving metals and smooth surfaces local reflections without a screen-space pass. Costs two extra blend/upload dispatches and one high-resolution atlas per volume; reuses the rays the diffuse field already traces, so it adds no ray cost.
+  ReflectionIntensity type=10 offset=100 size=4 category=0 flags=0 range=0..1 label=Local Reflections tooltip=How strongly probe reflections displace the environment reflection. At 0 the environment cube is used unchanged; at 1 the probes take full authority wherever they actually saw geometry.
+  GlossyResolveScale type=4 offset=104 size=4 category=0 flags=0 enum=Quarter:0:25%,Half:1:50%,ThreeQuarter:2:75%,Full:3:100%, tooltip=Resolution the probe reflections are computed at, as a fraction of the view. 50% (default) recovers most of the cost and its blur hides the probe lobes' coarse texels on large reflectors; 100% computes them per pixel and shows those texels on a close-up mirror. Applied live, no grid rebuild.
+  ContinuousSolve type=1 offset=108 size=1 category=0 flags=0 tooltip=Keeps the probe solve running while the camera moves. On (default, matching the reference library) the field keeps converging during a fly-through. Off pauses the whole solve during camera motion and resumes shortly after the view comes to rest - the field is world-space, so it stays correct while paused, it just stops reacting to lighting or geometry changes until you stop moving. Costs nothing visually when the view is still; gives the GPU time back while it is not.
+  ConvergedSolve type=4 offset=112 size=4 category=0 flags=0 enum=Continuous:0,Throttle:1, tooltip=What the solve does once the probe field has settled. Continuous (default, matching the reference library) keeps spending the full per-tick ray budget. Throttle drops to a small patrol budget once nearly every probe texel has been steady for its full history, and restores the full budget within a few ticks of a lighting or geometry change. Costs one tiny reduction dispatch and readback per tick while on; gives most of the solve's GPU time back on a static scene.
+  Cascades type=4 offset=116 size=4 category=0 flags=0 enum=SingleGrid:0:single grid,Cascaded2:1:cascaded (2), tooltip=How many probe grids to run. Single Grid is the coarse lattice alone. Cascaded (2) adds a second, finer grid covering a smaller region centered on this volume, for closer-range indirect detail — roughly double the trace/blend/upload cost. Cascaded is the default, matching the reference library.
+  FineCascadeExtentFraction type=10 offset=120 size=4 category=0 flags=0 range=0.05..0.9 tooltip=Fraction of this volume's extents the fine cascade covers (e.g. 0.35 = a sub-box 35% the size, centered the same). Clamped 0.05-0.9. Smaller = denser probes in a smaller region.
+GameEngine::Components::LensFlareSource addable=1 doNotSerialize=0
+  Flare type=18 offset=0 size=16 category=33 flags=0
+  SunMode type=1 offset=16 size=1 category=0 flags=0 tooltip=For a directional light, project the flare from the light direction as an infinite sun source. Positional distance and source-angle falloff are ignored.
+  Intensity type=10 offset=20 size=4 category=0 flags=0 range=0..10 tooltip=Brightness multiplier on top of the flare definition's global brightness.
+  Scale type=10 offset=24 size=4 category=0 flags=0 range=0..10 tooltip=Size multiplier on top of the flare definition's global scale.
+  Tint type=17 offset=28 size=16 category=0 flags=0 tooltip=Per-source tint multiplied into every flare element's color.
+  Occlude type=1 offset=44 size=1 category=0 flags=0 tooltip=Fade the flare when scene geometry covers the source (depth probe).
+  MaxDistanceOverride type=10 offset=48 size=4 category=0 flags=0 range=0..1000 tooltip=When above zero, replaces the definition's max distance for this source (distance fade, size falloff, and cull range).
+GameEngine::Components::NavigationAgent addable=1 doNotSerialize=0
+  Surface type=19 offset=0 size=4 category=0 flags=0 tooltip=The entity whose Navigation Surface the agent walks. Empty: the only surface in the scene.
+  Speed type=10 offset=4 size=4 category=0 flags=0 range=0..inf tooltip=Meters per second at full speed.
+  Acceleration type=10 offset=8 size=4 category=0 flags=0 range=0..inf tooltip=Meters per second squared: how fast the agent reaches its speed and turns.
+  StoppingDistance type=10 offset=12 size=4 category=0 flags=0 range=0..inf tooltip=Meters. The agent counts a corner of its path as reached this close to it.
+  Radius type=10 offset=16 size=4 category=0 flags=0 range=0.01..inf tooltip=Meters. The agent's size for avoidance and for the cells it holds on a grid.
+  Height type=10 offset=20 size=4 category=0 flags=0 range=0.01..inf tooltip=Meters. How far above and below the agent a path looks for the surface.
+  SmoothPaths type=1 offset=24 size=1 category=0 flags=0 tooltip=Cut the corners of a grid path where the way between them is clear.
+  AvoidanceQuality type=6 offset=25 size=1 category=0 flags=0 range=0..3 tooltip=0 to 3. Higher looks at more ways around other agents and costs more.
+  SeparationWeight type=10 offset=28 size=4 category=0 flags=0 range=0..inf tooltip=How strongly the agent keeps apart from agents near it.
+  ReplanInterval type=10 offset=32 size=4 category=0 flags=0 range=0..inf tooltip=Seconds between solves of a path the agent walks, so it follows changes on the way. 0: solve once.
+  AgentId type=8 offset=36 size=4 category=0 flags=5
+GameEngine::Components::NavigationSource addable=1 doNotSerialize=0
+  Policy type=6 offset=0 size=1 category=0 flags=0 enum=Auto:0,Include:1,Exclude:2, tooltip=Whether the navigation bake reads this entity's mesh and the meshes of its children that set no policy of their own. Auto: when neither it nor a parent moves. Include: always, where it stands when the bake runs; a child that moves on its own needs its own Include. Exclude: never; colliders still bake.
+GameEngine::Components::NavigationSurface addable=1 doNotSerialize=0
+  Mode type=6 offset=0 size=1 category=0 flags=0 enum=Mesh:0,Grid:1, tooltip=Mesh: a navigation mesh agents walk anywhere their size fits. Grid: one height and one walkable flag per cell, for per-cell costs, reservations and hex cells.
+  GridType type=6 offset=1 size=1 category=0 flags=0 enum=Square:0,Hex:1, tooltip=Square or hex cells.
+  AgentRadius type=10 offset=4 size=4 category=0 flags=0 range=0.01..inf tooltip=Meters. The surface keeps this far from walls and drops gaps narrower than twice it.
+  AgentHeight type=10 offset=8 size=4 category=0 flags=0 range=0.01..inf tooltip=Meters. Space under an overhang lower than this is not walkable.
+  MaxSlope type=10 offset=12 size=4 category=0 flags=0 range=0..89 tooltip=Degrees. Ground steeper than this is not walkable.
+  StepHeight type=10 offset=16 size=4 category=0 flags=0 range=0..inf tooltip=Meters. The tallest step an agent climbs without a slope.
+  CellSize type=10 offset=20 size=4 category=0 flags=0 range=0.05..inf tooltip=Meters. The surface's resolution: a mesh is voxelized at this size and cut into tiles of 64 cells; a grid has one cell of this size. Smaller follows the ground more closely and bakes longer.
+  FitBounds type=1 offset=24 size=1 category=0 flags=0 tooltip=Bake over the terrain's footprint, or over everything the bake reads when there is no terrain. Off: bake inside Center and Extent.
+  Center type=13 offset=28 size=12 category=0 flags=0 tooltip=Meters from the entity's position to the middle of the baked box.
+  Extent type=13 offset=40 size=12 category=0 flags=0 tooltip=Meters: half the baked box's size.
+  AuthoredCells type=18 offset=52 size=16 category=22 flags=0 tooltip=Grid only: the cell costs and blocked cells painted with the navigation grid brush (.navgrid).
+  BakedData type=18 offset=68 size=16 category=40 flags=0 tooltip=Mesh only: the baked tiles saved with the scene (.navsurface). The surface loads them instead of baking when they match its settings and bounds. Written when the scene is saved.
+  NavMapIndex type=8 offset=84 size=4 category=0 flags=5
+  NavMapGeneration type=8 offset=88 size=4 category=0 flags=5
+  OwnerWorldId type=9 offset=96 size=8 category=0 flags=5
+  BakeRequested type=1 offset=104 size=1 category=0 flags=5
+  BakePhase type=6 offset=105 size=1 category=0 flags=5 enum=NotBaked:0,Waiting:1,Baking:2,Baked:3,Failed:4,
+  BakeFailure type=6 offset=106 size=1 category=0 flags=5 enum=None:0,NoGeometry:1,SphericalTerrain:2,TooLarge:3,TileBuild:4,
+  BakeWait type=6 offset=107 size=1 category=0 flags=5 enum=TerrainTile:0,TerrainData:1,Model:2,BakedData:3,
+  SettingsChanged type=1 offset=108 size=1 category=0 flags=5
+  MapHoldsBake type=1 offset=109 size=1 category=0 flags=5
+  BakedMode type=6 offset=110 size=1 category=0 flags=5 enum=Mesh:0,Grid:1,
+  BakeDone type=8 offset=112 size=4 category=0 flags=5
+  BakeTotal type=8 offset=116 size=4 category=0 flags=5
+  BakedWalkable type=8 offset=120 size=4 category=0 flags=5
+  BakedBytes type=9 offset=128 size=8 category=0 flags=5
+  BakeVersion type=9 offset=136 size=8 category=0 flags=5
+  StaleTiles type=8 offset=144 size=4 category=0 flags=5
+  TilesDirty type=8 offset=148 size=4 category=0 flags=5
+  TilesBaking type=8 offset=152 size=4 category=0 flags=5
+  TilesBuilt type=8 offset=156 size=4 category=0 flags=5
+  BlockingTileX type=4 offset=160 size=4 category=0 flags=5
+  BlockingTileZ type=4 offset=164 size=4 category=0 flags=5
+  BlockingModel type=18 offset=168 size=16 category=3 flags=5
+GameEngine::Components::OceanAlbedoSource addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  Color type=17 offset=8 size=16 category=0 flags=0
+  Coverage type=10 offset=24 size=4 category=0 flags=0 range=0..1
+GameEngine::Components::OceanBuoyancy addable=1 doNotSerialize=0
+  BuoyancyStrength type=10 offset=0 size=4 category=0 flags=0 range=0..100
+  ProbeRadius type=10 offset=4 size=4 category=0 flags=0 range=0.05..10
+  Draft type=10 offset=8 size=4 category=0 flags=0 range=0..5
+  WaterLineOffset type=10 offset=12 size=4 category=0 flags=0 range=-5..5
+  LinearDrag type=10 offset=16 size=4 category=0 flags=0 range=0..10
+  AngularDrag type=10 offset=20 size=4 category=0 flags=0 range=0..10
+GameEngine::Components::OceanClipSource addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  ClipState type=10 offset=8 size=4 category=0 flags=0 range=0..1
+  Feather type=10 offset=12 size=4 category=0 flags=0 range=0..200
+GameEngine::Components::OceanDepthCacheSource addable=1 doNotSerialize=0
+  UseWhenStale type=1 offset=0 size=1 category=0 flags=0
+  Path type=20 offset=1 size=260 category=0 flags=0
+  CacheAsset type=18 offset=261 size=16 category=23 flags=0
+  SourceRevision type=8 offset=280 size=4 category=0 flags=0
+  BakedRevision type=8 offset=284 size=4 category=0 flags=0
+  CacheRevision type=8 offset=288 size=4 category=0 flags=0
+  BakeWidth type=8 offset=292 size=4 category=0 flags=0
+  BakeHeight type=8 offset=296 size=4 category=0 flags=0
+  SourceLayers type=22 offset=300 size=4 category=0 flags=0
+  BakeOnlyMeshDepthContributors type=1 offset=304 size=1 category=0 flags=0
+  BakeLoadMissingAssets type=1 offset=305 size=1 category=0 flags=0
+  BakeIncludeDisabledRenderers type=1 offset=306 size=1 category=0 flags=0
+  BakeIncludeSkinnedMeshes type=1 offset=307 size=1 category=0 flags=0
+  BakeIncludeTerrainHeightfields type=1 offset=308 size=1 category=0 flags=0
+  BakeOriginX type=10 offset=312 size=4 category=0 flags=0 range=-1e+05..1e+05
+  BakeOriginZ type=10 offset=316 size=4 category=0 flags=0 range=-1e+05..1e+05
+  BakeSizeX type=10 offset=320 size=4 category=0 flags=0 range=1..1e+05
+  BakeSizeZ type=10 offset=324 size=4 category=0 flags=0 range=1..1e+05
+  BakeSeaLevel type=10 offset=328 size=4 category=0 flags=0 range=-10000..10000
+  BakeDeepWaterDepth type=10 offset=332 size=4 category=0 flags=0 range=1..1e+05
+  StreamRadius type=10 offset=336 size=4 category=0 flags=0 range=0..1e+05
+  StreamPriority type=8 offset=340 size=4 category=0 flags=0
+GameEngine::Components::OceanDepthContributor addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  Depth type=10 offset=8 size=4 category=0 flags=0 range=0..100
+  Feather type=10 offset=12 size=4 category=0 flags=0 range=0..50
+  Roundness type=10 offset=16 size=4 category=0 flags=0 range=0..1
+GameEngine::Components::OceanFlowMapSource addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  FlowMap type=18 offset=8 size=16 category=1 flags=0
+  Strength type=10 offset=24 size=4 category=0 flags=0 range=0..50
+  Feather type=10 offset=28 size=4 category=0 flags=0 range=0..200
+  BiasX type=10 offset=32 size=4 category=0 flags=0 range=-20..20
+  BiasZ type=10 offset=36 size=4 category=0 flags=0 range=-20..20
+GameEngine::Components::OceanFlowSource addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  FlowX type=10 offset=8 size=4 category=0 flags=0 range=-20..20
+  FlowZ type=10 offset=12 size=4 category=0 flags=0 range=-20..20
+GameEngine::Components::OceanMeshDepthContributor addable=1 doNotSerialize=0
+  ContributorLayers type=22 offset=0 size=4 category=0 flags=0
+  ExtentPadding type=10 offset=4 size=4 category=0 flags=0 range=0..50
+  DepthBias type=10 offset=8 size=4 category=0 flags=0 range=-10..10
+  MinDepth type=10 offset=12 size=4 category=0 flags=0 range=0..100
+  MaxDepth type=10 offset=16 size=4 category=0 flags=0 range=0..500
+  Feather type=10 offset=20 size=4 category=0 flags=0 range=0..50
+  Roundness type=10 offset=24 size=4 category=0 flags=0 range=0..1
+GameEngine::Components::OceanPolygonWaterBody addable=1 doNotSerialize=0
+  PointCount type=8 offset=0 size=4 category=0 flags=0
+  PointX type=10 offset=4 size=32 category=0 flags=0 range=-2000..2000
+  PointZ type=10 offset=36 size=32 category=0 flags=0 range=-2000..2000
+  ConfineSurface type=1 offset=68 size=1 category=0 flags=0
+  ClipFeather type=10 offset=72 size=4 category=0 flags=0 range=0..200
+  UnderwaterVolume type=1 offset=76 size=1 category=0 flags=0
+  UnderwaterDepth type=10 offset=80 size=4 category=0 flags=0 range=0..500
+  Flow type=1 offset=84 size=1 category=0 flags=0
+  FlowX type=10 offset=88 size=4 category=0 flags=0 range=-20..20
+  FlowZ type=10 offset=92 size=4 category=0 flags=0 range=-20..20
+  WaveOverride type=1 offset=96 size=1 category=0 flags=0
+  WaveWeight type=10 offset=100 size=4 category=0 flags=0 range=0..2
+  WaveChop type=10 offset=104 size=4 category=0 flags=0 range=0..2
+  WaveFeather type=10 offset=108 size=4 category=0 flags=0 range=0..500
+  UseLocalSpectrum type=1 offset=112 size=1 category=0 flags=0
+  LocalSpectrumAsset type=18 offset=113 size=16 category=24 flags=0
+  LocalWaveCount type=8 offset=132 size=4 category=0 flags=0
+  LocalWaveAmplitude type=10 offset=136 size=4 category=0 flags=0 range=0..10
+  LocalWaveWavelength type=10 offset=140 size=4 category=0 flags=0 range=0.1..200
+  LocalWaveDirectionDegrees type=10 offset=144 size=4 category=0 flags=0 range=-360..360
+  LocalWaveExtraAmplitude type=10 offset=148 size=12 category=0 flags=0 range=0..10
+  LocalWaveExtraWavelength type=10 offset=160 size=12 category=0 flags=0 range=0.1..200
+  LocalWaveExtraDirectionDegrees type=10 offset=172 size=12 category=0 flags=0 range=-360..360
+  MaterialOverride type=18 offset=184 size=16 category=27 flags=0 tooltip=Ocean preset whose surface values (colour, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
+  MaterialPriority type=4 offset=200 size=4 category=0 flags=0 tooltip=Where water-body materials overlap, higher priorities apply over lower ones.
+GameEngine::Components::OceanRenderer addable=1 doNotSerialize=0
+  QualityOverride type=8 offset=0 size=4 category=0 flags=0 tooltip=Ocean quality tier. 0 = Low, 1 = Medium, 2 = High.
+  LodCount type=8 offset=4 size=4 category=0 flags=0 tooltip=Number of camera-snapped ocean LOD cascade layers.
+  LodDataResolution type=8 offset=8 size=4 category=0 flags=0 label=LOD Data Resolution tooltip=Texel resolution per axis for ocean simulation cascades.
+  MinScale type=10 offset=12 size=4 category=0 flags=0 range=1..256 tooltip=World size of the finest ocean cascade. Smaller values concentrate detail near the camera.
+  MaxScale type=10 offset=16 size=4 category=0 flags=0 range=1..4096 tooltip=Maximum world size of the coarsest ocean cascade.
+  GeometryUpSampleFactor type=8 offset=20 size=4 category=0 flags=0 tooltip=Multiplier for the camera-centered ocean grid density.
+  GeometryDownSampleFactor type=8 offset=24 size=4 category=0 flags=0 tooltip=Divider for ocean grid density and triangle count.
+  GravityMultiplier type=10 offset=28 size=4 category=0 flags=0 range=0..10 tooltip=Scales wave dispersion gravity for FFT and dynamic waves.
+  TimeScale type=10 offset=32 size=4 category=0 flags=0 range=0..4 tooltip=Multiplies ocean animation time. 0 freezes wave and simulation motion.
+  TimeOffset type=10 offset=36 size=4 category=0 flags=0 range=-1e+05..1e+05 tooltip=Offsets ocean animation phase without changing speed.
+  TimeProvider type=8 offset=40 size=4 category=0 flags=0 enum=Default:0,Custom:1,Paused:2,NetworkOffset:3,Timeline:4,
+  NetworkTimeOffset type=10 offset=44 size=4 category=0 flags=0
+  NetworkTimeRate type=10 offset=48 size=4 category=0 flags=0
+  TimelineTime type=10 offset=52 size=4 category=0 flags=0
+  TimelinePlaybackRate type=10 offset=56 size=4 category=0 flags=0
+  TimelinePlaying type=1 offset=60 size=1 category=0 flags=0
+  PausedTime type=10 offset=64 size=4 category=0 flags=0
+  UseFixedTime type=1 offset=68 size=1 category=0 flags=0 tooltip=Uses Fixed Time as the absolute ocean time for deterministic preview or capture.
+  FixedTime type=10 offset=72 size=4 category=0 flags=0 range=-1e+05..1e+05 tooltip=Absolute ocean time used when Use Fixed Time is enabled.
+  MaxActiveDepthCaches type=8 offset=76 size=4 category=0 flags=0 tooltip=Runtime budget for active Ocean Depth Cache Source components. 0 keeps all eligible caches.
+  RasterDepthCapture type=1 offset=80 size=1 category=0 flags=0 tooltip=Captures dynamic mesh geometry into the seabed-depth texture from a top-down pass.
+  RasterDepthCaptureResolution type=8 offset=84 size=4 category=0 flags=0 label=Raster Depth Resolution tooltip=Resolution of the dynamic raster seabed-depth capture.
+  RasterDepthCaptureLayers type=22 offset=88 size=4 category=0 flags=0 tooltip=The render layers the raster seabed-depth capture draws.
+  RasterDepthCaptureSizeX type=10 offset=92 size=4 category=0 flags=0 range=1..10000 tooltip=World X size of the top-down raster seabed-depth capture.
+  RasterDepthCaptureSizeZ type=10 offset=96 size=4 category=0 flags=0 range=1..10000 tooltip=World Z size of the top-down raster seabed-depth capture.
+  RasterDepthCaptureTopPadding type=10 offset=100 size=4 category=0 flags=0 range=0.01..1000 tooltip=Extra height above captured geometry for the raster depth camera.
+  RasterDepthCaptureDeepWaterDepth type=10 offset=104 size=4 category=0 flags=0 range=1..1e+05 tooltip=Fallback water depth used where raster capture finds no seabed.
+  GlobalWindSpeed type=10 offset=108 size=4 category=0 flags=0 range=0..40 tooltip=Global wind speed in meters per second for FFT and Gerstner waves.
+  GlobalWindDirection type=10 offset=112 size=4 category=0 flags=0 range=-180..180 tooltip=Global wind direction in degrees. 0 points along world +X.
+  GlobalWindTurbulence type=10 offset=116 size=4 category=0 flags=0 range=0..1 tooltip=Directional spread of global wind waves. Higher values make a more chaotic sea.
+  SpectrumAsset type=18 offset=120 size=16 category=24 flags=0 tooltip=Optional asset-backed global wave spectrum.
+  CollisionProvider type=8 offset=136 size=4 category=0 flags=0
+  FFTCollisionAsset type=18 offset=140 size=16 category=25 flags=0
+  MaxCollisionQueryCount type=8 offset=156 size=4 category=0 flags=0
+  AnimatedWavesCollisionSettings type=18 offset=160 size=16 category=26 flags=0
+  DynamicWaveSettings type=18 offset=176 size=16 category=26 flags=0
+  FoamSettings type=18 offset=192 size=16 category=26 flags=0
+  ShadowSettings type=18 offset=208 size=16 category=26 flags=0
+  CombineDisplacementCascade type=1 offset=224 size=1 category=0 flags=0 label=Combine Cascade tooltip=Experimental path that combines FFT displacement cascades once per frame.
+GameEngine::Components::OceanSeabed addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..2000
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..2000
+  BaseHeight type=10 offset=8 size=4 category=0 flags=0 range=-100..10
+  SlopeX type=10 offset=12 size=4 category=0 flags=0 range=-1..1
+  SlopeZ type=10 offset=16 size=4 category=0 flags=0 range=-1..1
+GameEngine::Components::OceanSplineInput addable=1 doNotSerialize=0
+  Width type=10 offset=0 size=4 category=0 flags=0 range=0.1..500
+  ConfineSurface type=1 offset=4 size=1 category=0 flags=0 tooltip=Draw ocean water only inside this spline band. The coarsest clip level covers all authored water; nearer levels refine the shoreline.
+  ClipFeather type=10 offset=8 size=4 category=0 flags=0 range=0..200
+  UnderwaterVolume type=1 offset=12 size=1 category=0 flags=0
+  UnderwaterDepth type=10 offset=16 size=4 category=0 flags=0 range=0..500
+  Flow type=1 offset=20 size=1 category=0 flags=0
+  FlowSpeed type=10 offset=24 size=4 category=0 flags=0 range=-50..50
+  ReverseFlow type=1 offset=28 size=1 category=0 flags=0
+  Clip type=1 offset=29 size=1 category=0 flags=0
+  Albedo type=1 offset=30 size=1 category=0 flags=0
+  Color type=17 offset=32 size=16 category=0 flags=0
+  AlbedoCoverage type=10 offset=48 size=4 category=0 flags=0 range=0..1
+  Depth type=1 offset=52 size=1 category=0 flags=0
+  DepthMeters type=10 offset=56 size=4 category=0 flags=0 range=0..100
+  DepthFeather type=10 offset=60 size=4 category=0 flags=0 range=0..50
+  MaxSegmentLength type=10 offset=64 size=4 category=0 flags=0 range=0.1..100 tooltip=Longest ribbon segment in meters. Smaller follows tight curves more closely at the cost of more triangles.
+GameEngine::Components::OceanSurface addable=1 doNotSerialize=0
+  SeaLevel type=10 offset=0 size=4 category=0 flags=1
+  WaveMode type=8 offset=4 size=4 category=0 flags=1 enum=Gerstner:0,FFT:1,
+  DeepColor type=17 offset=8 size=16 category=0 flags=0 tooltip=Base deep-water color used when depth fog fully hides the refracted scene.
+  FoamColor type=17 offset=24 size=16 category=0 flags=0 tooltip=Tint of whitecaps, shoreline foam, and intersection foam.
+  ChoppyScale type=10 offset=40 size=4 category=0 flags=0 range=0..2 tooltip=Scales horizontal wave displacement. Higher values sharpen crests and wind chop.
+  FresnelPower type=10 offset=44 size=4 category=0 flags=0 range=1..20 tooltip=Controls how strongly reflection concentrates near grazing viewing angles.
+  ReflectionStrength type=10 offset=48 size=4 category=0 flags=0 range=0..1 tooltip=Scales sky and planar reflection contribution on the water surface.
+  SubsurfaceStrength type=10 offset=52 size=4 category=0 flags=0 range=0..4 tooltip=Overall intensity of the teal subsurface glow through wave crests.
+  FoamAmount type=10 offset=56 size=4 category=0 flags=0 range=0..5 tooltip=Coverage multiplier for wave-generated whitecaps.
+  FoamFadeRate type=10 offset=60 size=4 category=0 flags=0 range=0..4 tooltip=How quickly simulated foam decays over time. Lower values leave longer trails.
+  WaveFoamStrength type=10 offset=64 size=4 category=0 flags=0 range=0..5 tooltip=Amount of foam deposited by breaking or pinching wave crests.
+  WaveFoamCoverage type=10 offset=68 size=4 category=0 flags=0 range=0..2 tooltip=Breaking threshold for wave foam. Higher values create foam more readily.
+  FoamScale type=10 offset=72 size=4 category=0 flags=0 range=0.01..50 tooltip=World tiling scale for the bubble and foam texture pattern.
+  FoamFeather type=10 offset=76 size=4 category=0 flags=0 range=0.001..1 tooltip=Softness of foam edges and threshold transitions.
+  Spray type=1 offset=80 size=1 category=0 flags=0
+  SprayMaxParticles type=8 offset=84 size=4 category=0 flags=0 range=256..262144 tooltip=Most spray droplet clusters alive at once in each view.
+  SprayWindThreshold type=10 offset=88 size=4 category=0 flags=0 range=0..40 tooltip=Minimum wind speed in meters per second before open-water crest spray begins.
+  SpraySpawnRate type=10 offset=92 size=4 category=0 flags=0 range=0..1000 tooltip=Crest points tested for spray each second, per square meter of the spawn disk.
+  SpraySpawnRadius type=10 offset=96 size=4 category=0 flags=0 range=1..500 tooltip=Radius in meters around the camera within which spray can be born.
+  SprayEmissionThreshold type=10 offset=100 size=4 category=0 flags=0 range=0..1 tooltip=Minimum sampled crest strength required to emit wind spray. Higher values restrict spray to stronger crests.
+  SprayLifetime type=10 offset=104 size=4 category=0 flags=0 range=0.05..5
+  SprayStartSize type=10 offset=108 size=4 category=0 flags=0 range=0.01..5
+  SprayEndSize type=10 offset=112 size=4 category=0 flags=0 range=0.01..8
+  SprayUpVelocity type=10 offset=116 size=4 category=0 flags=0 range=0..10
+  SprayWindVelocityScale type=10 offset=120 size=4 category=0 flags=0 range=0..2
+  SprayOpacity type=10 offset=124 size=4 category=0 flags=0 range=0..1
+  SprayRenderLayers type=22 offset=128 size=4 category=0 flags=0
+  SprayGeometryIntersections type=1 offset=132 size=1 category=0 flags=0
+  SprayIntersectionSpawnRate type=10 offset=136 size=4 category=0 flags=0 range=0..100
+  SprayIntersectionBand type=10 offset=140 size=4 category=0 flags=0 range=0.05..10
+  FoamTexture type=18 offset=144 size=16 category=1 flags=0 tooltip=Optional texture sampled for foam bubbles. Empty uses procedural foam.
+  FoamDebugMode type=8 offset=160 size=4 category=0 flags=0 label=Foam Debug tooltip=Debug overlay mode for inspecting foam, shoreline, and depth data.
+  ShorelineFoamMaxDepth type=10 offset=164 size=4 category=0 flags=0 range=0.01..5 tooltip=Seabed depth range where shoreline foam appears and fades out.
+  ShorelineFoamStrength type=10 offset=168 size=4 category=0 flags=0 range=0..5 tooltip=Intensity multiplier for foam along shallow shorelines.
+  NormalsStrength type=10 offset=172 size=4 category=0 flags=0 range=0..2 tooltip=Strength of high-frequency normal detail on the water surface.
+  NormalsScale type=10 offset=176 size=4 category=0 flags=0 range=0.01..200 tooltip=World tiling scale of high-frequency water normal detail.
+  Diffuse type=17 offset=180 size=16 category=0 flags=0 tooltip=Main diffuse and scatter color of lit water.
+  DiffuseGrazing type=17 offset=196 size=16 category=0 flags=0 tooltip=Diffuse color used when viewing across the water at grazing angles.
+  DiffuseShadow type=17 offset=212 size=16 category=0 flags=0 tooltip=Diffuse tint for water faces with less direct sun.
+  SubSurfaceShallowCol type=17 offset=228 size=16 category=0 flags=0 tooltip=Shallow-water tint blended in where the seabed is near the surface.
+  SubSurfaceDepthMax type=10 offset=244 size=4 category=0 flags=0 range=0.01..50 tooltip=Depth at which shallow-water tint fully fades to deep water.
+  SubSurfaceDepthPower type=10 offset=248 size=4 category=0 flags=0 range=0.01..10 tooltip=Exponent shaping the shallow-to-deep color fade.
+  SubSurfaceColour type=17 offset=252 size=16 category=0 flags=0 tooltip=Ambient subsurface scatter color pushed through the water.
+  SubSurfaceBase type=10 offset=268 size=4 category=0 flags=0 range=0..4 tooltip=Baseline subsurface scatter present across the surface.
+  SubSurfaceSun type=10 offset=272 size=4 category=0 flags=0 range=0..10 tooltip=Forward-scatter lobe intensity toward the sun.
+  SubSurfaceSunFallOff type=10 offset=276 size=4 category=0 flags=0 range=1..16 tooltip=Falloff of the sun-facing subsurface scatter lobe.
+  Specular type=10 offset=280 size=4 category=0 flags=0 range=0..1 tooltip=Scales the reflection of the sky and surroundings. 1 is the full reflection; lower values let the water body show through. The highlights of lights are not scaled.
+  Roughness type=10 offset=284 size=4 category=0 flags=0 range=0..1 tooltip=Roughness of the water surface. Higher blurs its highlights and reflections.
+  IorAir type=10 offset=288 size=4 category=0 flags=0 range=1..2 tooltip=Index of refraction of air. With the water's index of refraction, it sets the Fresnel reflection and the refraction.
+  IorWater type=10 offset=292 size=4 category=0 flags=0 range=1..2 tooltip=Index of refraction for water, used for Fresnel and underwater bending.
+  PlanarReflections type=1 offset=296 size=1 category=0 flags=0 tooltip=Draws the objects a planar capture sees over the environment reflection. Where the capture drew nothing, the water shows the environment reflection.
+  PlanarReflectionStrength type=10 offset=300 size=4 category=0 flags=0 range=0..3 label=Planar Strength tooltip=How strongly the planar capture covers the reflected environment; above 1 it brightens the captured objects.
+  PlanarReflectionScale type=10 offset=304 size=4 category=0 flags=0 label=Planar Scale tooltip=Resolution scale of the planar reflection capture relative to the main view.
+  SkyBase type=17 offset=308 size=16 category=0 flags=0 tooltip=Color of the procedural reflected sky at the zenith.
+  SkyTowardsSun type=17 offset=324 size=16 category=0 flags=0 tooltip=Reflected sky tint in the sun direction.
+  SkyAwayFromSun type=17 offset=340 size=16 category=0 flags=0 tooltip=Reflected sky tint away from the sun.
+  SkyDirectionality type=10 offset=356 size=4 category=0 flags=0 range=0..0.99 tooltip=Sharpness of the reflected sky blend around the sun direction.
+  DepthFogDensity type=17 offset=360 size=16 category=0 flags=0 tooltip=Per-channel water extinction for refracted and underwater geometry. Higher values fog faster.
+  DepthFogFalloff type=8 offset=376 size=4 category=0 flags=0 enum=Exponential:0,Linear:1,Smooth:2, tooltip=Distance curve used by surface refraction fog and the underwater pass.
+  DepthFogStartDistance type=10 offset=380 size=4 category=0 flags=0 range=0..250 tooltip=Meters of clear water before depth fog starts to build.
+  DepthFogEndDistance type=10 offset=384 size=4 category=0 flags=0 range=0..1000 tooltip=Distance where Linear/Smooth depth fog reaches its authored range. 0 uses an automatic range from density.
+  DepthFogFalloffPower type=10 offset=388 size=4 category=0 flags=0 range=0.1..8 tooltip=Curve shaping for depth fog distance. 1 is neutral; higher values delay fog near the camera.
+  RefractionStrength type=10 offset=392 size=4 category=0 flags=0 range=0..2 tooltip=Strength of screen-space refraction distortion from surface normals.
+  ShallowRefractionReflectionSuppression type=10 offset=396 size=4 category=0 flags=0 range=0..1 label=Shallow Reflection Suppression tooltip=Reduces sky and planar reflection only where shallow refraction is clear, keeping seabed caustics visible. 0 leaves reflection unchanged.
+  ShallowClarityDistance type=10 offset=400 size=4 category=0 flags=0 range=0.01..50 tooltip=Meters of view path through the water over which the depth fog ramps up to full strength, keeping the seabed readable in the shallows. Shorter brings the deep color in sooner.
+  ShallowClarityFloor type=10 offset=404 size=4 category=0 flags=0 range=0..1 tooltip=The fraction of depth fog at the surface (1 = no window), ramping up to full over the clarity distance.
+  CausticsScale type=10 offset=408 size=4 category=0 flags=0 range=0..25 tooltip=World tiling size of the caustics pattern. Smaller values make tighter caustics.
+  CausticsAverage type=10 offset=412 size=4 category=0 flags=0 range=0..1 tooltip=Neutral average subtracted from caustics so they can darken as well as brighten.
+  CausticsStrength type=10 offset=416 size=4 category=0 flags=0 range=0..10 tooltip=Contrast and intensity of the caustics pattern.
+  CausticsFocalDepth type=10 offset=420 size=4 category=0 flags=0 range=0..250 tooltip=Water depth where caustics appear sharpest.
+  CausticsDepthOfField type=10 offset=424 size=4 category=0 flags=0 range=0.01..1000 tooltip=Depth range over which caustics stay sharp around the focal depth.
+  CausticsDistortionStrength type=10 offset=428 size=4 category=0 flags=0 range=0..0.25 tooltip=Amount of ripple distortion applied to procedural caustics UVs.
+  CausticsDistortionScale type=10 offset=432 size=4 category=0 flags=0 range=0.01..50 tooltip=World tiling scale of the caustics distortion sample.
+  CausticsTexture type=18 offset=436 size=16 category=1 flags=0 tooltip=Optional user caustics texture. Empty uses the procedural caustics web.
+  Underwater type=1 offset=452 size=1 category=0 flags=0 tooltip=Enables the fullscreen underwater pass when the camera is below the water surface.
+  MeniscusWidth type=10 offset=456 size=4 category=0 flags=0 range=0..1 tooltip=Width of the bright waterline band when the camera crosses the surface.
+  WaterlineFadeDistance type=10 offset=460 size=4 category=0 flags=0 range=0.005..0.5
+  UnderwaterInscattering type=1 offset=464 size=1 category=0 flags=0 tooltip=Enables sun light scattering through the underwater view.
+  InscatterStrength type=10 offset=468 size=4 category=0 flags=0 tooltip=Intensity of underwater in-scattered light.
+  InscatterPhaseG type=10 offset=472 size=4 category=0 flags=0 tooltip=Anisotropy of underwater scattering. Higher values push light forward toward the sun direction.
+  UnderwaterDistortion type=1 offset=476 size=1 category=0 flags=0 tooltip=Enables underwater lens and waterline distortion.
+  DistortionStrength type=10 offset=480 size=4 category=0 flags=0 tooltip=Strength of the underwater screen distortion.
+  UnderwaterGodRays type=1 offset=484 size=1 category=0 flags=0 tooltip=Enables procedural underwater god rays.
+  GodRayStrength type=10 offset=488 size=4 category=0 flags=0 tooltip=Brightness of underwater god rays.
+  GodRayDensity type=10 offset=492 size=4 category=0 flags=0 tooltip=Angular density of the underwater light shafts.
+  CausticsOnGeometry type=1 offset=496 size=1 category=0 flags=0 tooltip=Projects caustics onto submerged scene geometry in the underwater pass.
+  ReflectedCausticsStrength type=10 offset=500 size=4 category=0 flags=0 range=0..4 tooltip=Brightness of the caustics the water reflects onto geometry above it. 0 turns them off (the default).
+  ReflectedCausticsHeight type=10 offset=504 size=4 category=0 flags=0 range=0..25
+  ReflectedCausticsFalloff type=10 offset=508 size=4 category=0 flags=0 range=0.01..8
+  Flow type=1 offset=512 size=1 category=0 flags=0 tooltip=Enables the ocean flow cascade to advect foam and surface detail.
+  DynamicWaves type=1 offset=513 size=1 category=0 flags=0 tooltip=Enables interactive dynamic waves from Ocean Wave Impulse components and water interactions.
+  ClipSurface type=1 offset=514 size=1 category=0 flags=0 tooltip=Enables clip sources that cut holes or restore regions in the ocean surface.
+  DefaultClippingState type=10 offset=516 size=4 category=0 flags=0 range=0..1 tooltip=Default clip value outside clip sources. 0 keeps water solid; 1 clips it away.
+  Albedo type=1 offset=520 size=1 category=0 flags=0 tooltip=Enables albedo sources that paint color onto the water surface.
+  IntersectionFoamDepth type=10 offset=524 size=4 category=0 flags=0 range=0.01..10 tooltip=Screen-space depth range used to form foam where water meets opaque geometry.
+  IntersectionFoamStrength type=10 offset=528 size=4 category=0 flags=0 range=0..5 tooltip=Intensity multiplier for the foam where water meets geometry.
+  FoamNormalStrength type=10 offset=532 size=4 category=0 flags=0 range=0..2 tooltip=Relief of textured foam. Zero keeps foam flat. Only used with a foam texture.
+  FoamBubbleCoverage type=10 offset=536 size=4 category=0 flags=0 range=0..1 tooltip=Amount of submerged bubbles drawn under textured foam. Only used with a foam texture.
+  FoamBubbleParallax type=10 offset=540 size=4 category=0 flags=0 range=0..0.5 tooltip=Apparent depth of the submerged bubble layer as the view angle changes.
+  FoamRoughness type=10 offset=544 size=4 category=0 flags=0 range=0.04..1 tooltip=Surface roughness where textured foam covers the water.
+  NormalTexture type=18 offset=548 size=16 category=1 flags=0 tooltip=Optional detail normal map for small ripples. Assigning it turns on the detailed surface shading. Empty keeps the analytic ripples.
+GameEngine::Components::OceanUnderwaterExclusionVolume addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentY type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=8 size=4 category=0 flags=0 range=0..500
+GameEngine::Components::OceanUnderwaterPortalOccluder addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentY type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=8 size=4 category=0 flags=0 range=0..500
+GameEngine::Components::OceanUnderwaterVolume addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentY type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=8 size=4 category=0 flags=0 range=0..500
+GameEngine::Components::OceanWaterBody addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..2000 tooltip=Half the body's width in meters along world X, measured from the entity origin; the water spans twice this.
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..2000 tooltip=Half the body's length in meters along world Z, measured from the entity origin; the water spans twice this.
+  ConfineSurface type=1 offset=8 size=1 category=0 flags=0 tooltip=Draw ocean water only inside this body. The coarsest clip level covers all authored water; nearer levels refine the shoreline.
+  ClipFeather type=10 offset=12 size=4 category=0 flags=0 range=0..200
+  UnderwaterVolume type=1 offset=16 size=1 category=0 flags=0
+  UnderwaterDepth type=10 offset=20 size=4 category=0 flags=0 range=0..500
+  Flow type=1 offset=24 size=1 category=0 flags=0
+  FlowX type=10 offset=28 size=4 category=0 flags=0 range=-20..20
+  FlowZ type=10 offset=32 size=4 category=0 flags=0 range=-20..20
+  WaveOverride type=1 offset=36 size=1 category=0 flags=0
+  WaveWeight type=10 offset=40 size=4 category=0 flags=0 range=0..2
+  WaveChop type=10 offset=44 size=4 category=0 flags=0 range=0..2
+  WaveFeather type=10 offset=48 size=4 category=0 flags=0 range=0..500
+  UseLocalSpectrum type=1 offset=52 size=1 category=0 flags=0
+  LocalSpectrumAsset type=18 offset=53 size=16 category=24 flags=0
+  LocalWaveCount type=8 offset=72 size=4 category=0 flags=0
+  LocalWaveAmplitude type=10 offset=76 size=4 category=0 flags=0 range=0..10
+  LocalWaveWavelength type=10 offset=80 size=4 category=0 flags=0 range=0.1..200
+  LocalWaveDirectionDegrees type=10 offset=84 size=4 category=0 flags=0 range=-360..360
+  LocalWaveExtraAmplitude type=10 offset=88 size=12 category=0 flags=0 range=0..10
+  LocalWaveExtraWavelength type=10 offset=100 size=12 category=0 flags=0 range=0.1..200
+  LocalWaveExtraDirectionDegrees type=10 offset=112 size=12 category=0 flags=0 range=-360..360
+  MaterialOverride type=18 offset=124 size=16 category=27 flags=0 tooltip=Ocean preset whose surface values (colour, optics, foam, detail textures) apply inside this water body. Empty keeps the ocean's own surface.
+  MaterialPriority type=4 offset=140 size=4 category=0 flags=0 tooltip=Where water-body materials overlap, higher priorities apply over lower ones.
+GameEngine::Components::OceanWaterInteraction addable=1 doNotSerialize=0
+  Radius type=10 offset=0 size=4 category=0 flags=0 range=0.1..50
+  Strength type=10 offset=4 size=4 category=0 flags=0 range=0..5
+  MinSpeed type=10 offset=8 size=4 category=0 flags=0 range=0..50
+  VerticalStrength type=10 offset=12 size=4 category=0 flags=0 range=0..5
+  MinVerticalSpeed type=10 offset=16 size=4 category=0 flags=0 range=0..50
+  MaxAmplitude type=10 offset=20 size=4 category=0 flags=0 range=0..10
+  NestedSphereCount type=8 offset=24 size=4 category=0 flags=0
+  NestedRadiusScale type=10 offset=28 size=4 category=0 flags=0
+  NestedWeight type=10 offset=32 size=4 category=0 flags=0
+  FlowRelativeVelocity type=1 offset=36 size=1 category=0 flags=0
+  VelocityLead type=10 offset=40 size=4 category=0 flags=0
+  WaveMotionCompensation type=10 offset=44 size=4 category=0 flags=0
+  SpeedClamp type=10 offset=48 size=4 category=0 flags=0
+  TeleportDistance type=10 offset=52 size=4 category=0 flags=0
+  LargeWaveBoost type=10 offset=56 size=4 category=0 flags=0
+  DebugSubsteps type=8 offset=60 size=4 category=0 flags=0
+GameEngine::Components::OceanWaveImpulse addable=1 doNotSerialize=0
+  Radius type=10 offset=0 size=4 category=0 flags=0 range=0.1..50
+  Amplitude type=10 offset=4 size=4 category=0 flags=0 range=-5..5
+GameEngine::Components::OceanWaveMaskTextureSource addable=1 doNotSerialize=0
+  ExtentX type=10 offset=0 size=4 category=0 flags=0 range=0..500
+  ExtentZ type=10 offset=4 size=4 category=0 flags=0 range=0..500
+  WaveMaskMap type=18 offset=8 size=16 category=1 flags=0
+  WeightScale type=10 offset=24 size=4 category=0 flags=0 range=0..4
+  ChopScale type=10 offset=28 size=4 category=0 flags=0 range=0..4
+  WeightBias type=10 offset=32 size=4 category=0 flags=0 range=-2..2
+  ChopBias type=10 offset=36 size=4 category=0 flags=0 range=-2..2
+  Coverage type=10 offset=40 size=4 category=0 flags=0 range=0..1
+  Feather type=10 offset=44 size=4 category=0 flags=0 range=0..200
+GameEngine::Components::OceanWaveSpectrum addable=1 doNotSerialize=0
+  WindSpeed type=10 offset=0 size=4 category=0 flags=0 range=0..40
+  WindDirectionDegrees type=10 offset=4 size=4 category=0 flags=0 range=-180..180
+  Turbulence type=10 offset=8 size=4 category=0 flags=0 range=0..1
+  Multiplier type=10 offset=12 size=4 category=0 flags=0 range=0..10
+  Chop type=10 offset=16 size=4 category=0 flags=0 range=0..2
+  GravityScale type=10 offset=20 size=4 category=0 flags=0 range=0..25
+  LoopPeriod type=10 offset=24 size=4 category=0 flags=0 range=0..128
+  SpectrumPower type=10 offset=28 size=56 category=0 flags=0 range=0..2
+  ChopScales type=10 offset=84 size=56 category=0 flags=0 range=0..4
+  GravityScales type=10 offset=140 size=56 category=0 flags=0 range=0..4
+  OctaveDisabled type=1 offset=196 size=14 category=0 flags=0
+  DirectionalSpread type=10 offset=212 size=4 category=0 flags=0 range=0..1
+  AmplitudeScale type=10 offset=216 size=4 category=0 flags=0 range=0..4
+  MaxWavelength type=10 offset=220 size=4 category=0 flags=0 range=1..1000
+  Weight type=10 offset=224 size=4 category=0 flags=0 range=0..1
+  MaxHorizontalDisplacement type=10 offset=228 size=4 category=0 flags=0 range=0..50
+  MaxVerticalDisplacement type=10 offset=232 size=4 category=0 flags=0 range=0..30
+  RespectShallowWaterAttenuation type=10 offset=236 size=4 category=0 flags=0 range=0..1
+GameEngine::Components::UIDocument addable=1 doNotSerialize=0
+  Layout type=18 offset=0 size=16 category=17 flags=0
+  Style type=18 offset=16 size=16 category=18 flags=0
+  SortOrder type=4 offset=32 size=4 category=0 flags=0
+  RenderMode type=6 offset=36 size=1 category=0 flags=0 enum=Overlay:0,Fullscreen:1,

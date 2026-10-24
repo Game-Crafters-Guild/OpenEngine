@@ -39,26 +39,6 @@ using namespace Rendering::Geometry;
 static bool kTextInputPointerDebug = false;
 #endif
 
-namespace
-{
-static inline std::uint64_t Fnv1a64TextField(const void* data, size_t size, std::uint64_t seed = 14695981039346656037ull)
-{
-    const std::uint8_t* p = reinterpret_cast<const std::uint8_t*>(data);
-    std::uint64_t h = seed;
-    for (size_t i = 0; i < size; ++i)
-    {
-        h ^= (std::uint64_t)p[i];
-        h *= 1099511628211ull;
-    }
-    return h;
-}
-
-static inline std::uint64_t HashString64TextField(const std::string& s, std::uint64_t seed)
-{
-    return s.empty() ? seed : Fnv1a64TextField(s.data(), s.size(), seed);
-}
-} // namespace
-
 // Find the caret index for a given logical screen X by snapping to the
 // *nearest* caret position. The map is the measure cache's physical-px caret
 // array (see TextInput::PointerGeometry); each entry's logical screen X is

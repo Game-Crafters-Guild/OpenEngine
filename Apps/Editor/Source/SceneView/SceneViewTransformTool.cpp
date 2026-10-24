@@ -254,7 +254,7 @@ inline TRS ComputeWorldTRSForEntity(World* world, EntityHandle handle)
 
     if (auto* parentComp = e.Get<Parent>())
     {
-        TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+        TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
         return CombineTRS(parentWorld, local);
     }
 
@@ -290,7 +290,7 @@ inline void GetParentWorldTRS(World* world,
         return; // identity parent
     }
 
-    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
     outPos = parentWorld.position;
     outRot = parentWorld.rotation;
     outScale = parentWorld.scale;
@@ -326,13 +326,13 @@ inline bool HasAncestorInSet(World* world,
     while (e.IsValid())
     {
         const auto* parent = e.Get<Parent>();
-        if (!parent || !parent->parent.IsValid())
+        if (!parent || !parent->Entity.IsValid())
             return false;
 
-        if (std::find(candidates.begin(), candidates.end(), parent->parent) != candidates.end())
+        if (std::find(candidates.begin(), candidates.end(), parent->Entity) != candidates.end())
             return true;
 
-        e = Entity(world, parent->parent);
+        e = Entity(world, parent->Entity);
     }
 
     return false;

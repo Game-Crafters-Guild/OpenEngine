@@ -13,7 +13,7 @@ struct AnimatorRef {
     // The playback state the Animator drives, not a feature: it has no off state of its own.
     static constexpr bool NotToggleable = true;
 
-    uint32 ClipIndex = 0;   // [DoNotSerialize] ClipStore handle resolved from Animator.clipGuid at load; 0 = invalid
+    uint32 ClipIndex = 0;   // [DoNotSerialize] @ge-readonly ClipStore handle resolved from Animator.clipGuid at load; 0 = invalid
     float32 Time = 0.0f;    // seconds
     float32 Speed = 1.0f;   // playback speed (>=0)
     float32 BlendTime = 0.0f;
@@ -21,7 +21,7 @@ struct AnimatorRef {
     float32 SectionStart = 0.0f;
     float32 SectionEnd = 0.0f;
     uint32 Flags = 0;       // bit0: loop, bit1: paused
-    uint32 PrevClipIndex = 0; // [DoNotSerialize] outgoing clip while BlendTime < BlendDuration
+    uint32 PrevClipIndex = 0; // [DoNotSerialize] @ge-readonly outgoing clip while BlendTime < BlendDuration
     float32 PrevTime = 0.0f;
 
     static constexpr uint32 kFlag_Loop = 1u << 0;

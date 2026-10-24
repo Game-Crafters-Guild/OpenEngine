@@ -3,6 +3,7 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/GUID.h"
 #include "ECS/ComponentFactory.h"
+#include "ECS/FieldAccess.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 #include "Scene/FieldSerializerRegistry.h"
 #include "Scene/SceneIOContext.h"
@@ -197,86 +198,36 @@ double EffectSceneValueAsNumber(const SceneValue& v)
     return 0.0;
 }
 
-// Read/write a field's underlying integer honoring width + signedness (reflection collapses
-// enums to their underlying integer type, so this also serves every reflected enum field).
-std::int64_t ReadFieldInt(const std::uint8_t* fieldBytes, const ECS::FieldInfo& f)
-{
-    const bool isSigned = f.Type == ECS::FieldTypeId::Int8 || f.Type == ECS::FieldTypeId::Int16 ||
-                          f.Type == ECS::FieldTypeId::Int32 || f.Type == ECS::FieldTypeId::Int64;
-    auto read = [&]<class T>(T) {
-        T v{};
-        std::memcpy(&v, fieldBytes, sizeof(T));
-        return static_cast<std::int64_t>(v);
-    };
-    switch (f.Size)
-    {
-    case 1: return isSigned ? read(std::int8_t{}) : read(std::uint8_t{});
-    case 2: return isSigned ? read(std::int16_t{}) : read(std::uint16_t{});
-    case 4: return isSigned ? read(std::int32_t{}) : read(std::uint32_t{});
-    case 8: return read(std::int64_t{});
-    default: return 0;
-    }
-}
-
-void WriteFieldInt(std::uint8_t* fieldBytes, const ECS::FieldInfo& f, std::int64_t v)
-{
-    switch (f.Size)
-    {
-    case 1: { const auto x = static_cast<std::uint8_t>(v); std::memcpy(fieldBytes, &x, 1); break; }
-    case 2: { const auto x = static_cast<std::uint16_t>(v); std::memcpy(fieldBytes, &x, 2); break; }
-    case 4: { const auto x = static_cast<std::uint32_t>(v); std::memcpy(fieldBytes, &x, 4); break; }
-    case 8: std::memcpy(fieldBytes, &v, 8); break;
-    default: break;
-    }
-}
-
-bool IsIntegerField(const ECS::FieldInfo& f)
-{
-    switch (f.Type)
-    {
-    case ECS::FieldTypeId::Int8:
-    case ECS::FieldTypeId::Int16:
-    case ECS::FieldTypeId::Int32:
-    case ECS::FieldTypeId::Int64:
-    case ECS::FieldTypeId::UInt8:
-    case ECS::FieldTypeId::UInt16:
-    case ECS::FieldTypeId::UInt32:
-    case ECS::FieldTypeId::UInt64:
-        return true;
-    default:
-        return false;
-    }
-}
-
 // Apply the descriptor's load clamp to a just-parsed field. Integer/enum fields honor the
 // enum fallback: an out-of-range value snaps to it (a future enum mode) instead of clamping.
-void ApplyLoadClamp(std::uint8_t* fieldBytes, const ECS::FieldInfo& f, const EffectFieldIO& io)
+void ApplyLoadClamp(std::span<std::byte> component, const ECS::FieldInfo& field, const EffectFieldIO& fieldIO)
 {
-    if (!io.HasClamp)
+    if (!fieldIO.HasClamp)
         return;
-    if (f.Type == ECS::FieldTypeId::Float && f.Size == sizeof(float))
+    if (field.Type == ECS::FieldTypeId::Float && field.Size == sizeof(float))
     {
-        float v{};
-        std::memcpy(&v, fieldBytes, sizeof(float));
-        v = std::clamp(v, io.ClampMin, io.ClampMax);
-        std::memcpy(fieldBytes, &v, sizeof(float));
+        float value{};
+        ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, value);
+        ECS::WriteFieldElement(field, component, 0, std::clamp(value, fieldIO.ClampMin, fieldIO.ClampMax));
         return;
     }
-    if (IsIntegerField(f) && f.Size <= 8)
-    {
-        // Beyond this the float bound is a sentinel (FLT_MAX = unbounded), never a real limit.
-        constexpr float kIntBoundLimit = 9.0e18f;
-        const std::int64_t lo = io.ClampMin <= -kIntBoundLimit ? std::numeric_limits<std::int64_t>::min()
-                                                               : static_cast<std::int64_t>(std::llround(io.ClampMin));
-        const std::int64_t hi = io.ClampMax >= kIntBoundLimit ? std::numeric_limits<std::int64_t>::max()
-                                                              : static_cast<std::int64_t>(std::llround(io.ClampMax));
-        std::int64_t v = ReadFieldInt(fieldBytes, f);
-        if (io.HasEnumFallback && (v < lo || v > hi))
-            v = io.EnumFallbackValue;
-        else
-            v = std::clamp(v, lo, hi);
-        WriteFieldInt(fieldBytes, f, v);
-    }
+    // An integer or enum field; any other kind has no clamp to apply.
+    std::int64_t value = 0;
+    if (!ECS::ReadFieldInteger(field, std::span<const std::byte>(component), 0, value))
+        return;
+    // Beyond this the float bound is a sentinel (FLT_MAX = unbounded), never a real limit.
+    constexpr float kIntBoundLimit = 9.0e18f;
+    const std::int64_t lowest = fieldIO.ClampMin <= -kIntBoundLimit
+                                    ? std::numeric_limits<std::int64_t>::min()
+                                    : static_cast<std::int64_t>(std::llround(fieldIO.ClampMin));
+    const std::int64_t highest = fieldIO.ClampMax >= kIntBoundLimit
+                                     ? std::numeric_limits<std::int64_t>::max()
+                                     : static_cast<std::int64_t>(std::llround(fieldIO.ClampMax));
+    if (fieldIO.HasEnumFallback && (value < lowest || value > highest))
+        value = fieldIO.EnumFallbackValue;
+    else
+        value = std::clamp(value, lowest, highest);
+    ECS::WriteFieldInteger(field, component, 0, value);
 }
 
 // One property key resolved against the reflected field table + descriptor metadata.
@@ -566,7 +517,7 @@ PropertyApply ApplyPropertyToBytes(ECS::ComponentTypeId typeId, const std::strin
         return PropertyApply::Failed;
     }
     if (target.IO)
-        ApplyLoadClamp(fieldBytes, field, *target.IO);
+        ApplyLoadClamp(std::as_writable_bytes(std::span(bytes)), field, *target.IO);
     return PropertyApply::Applied;
 }
 } // namespace
@@ -674,7 +625,9 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
 
         if (io && io->EnumAsInt)
         {
-            emitLine(key, {}, std::to_string(ReadFieldInt(bytes.data() + f.Offset, f)));
+            std::int64_t value = 0;
+            ECS::ReadFieldInteger(f, std::as_bytes(std::span(bytes)), 0, value);
+            emitLine(key, {}, std::to_string(value));
             continue;
         }
 

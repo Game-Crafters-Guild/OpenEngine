@@ -141,9 +141,11 @@ TEST(PageLevelRule, ASmallPyramidIsPinnedWholeWithinAQuarterOfTheCache)
         // Not whole: the texel rule's levels, or the coarsest when no level reaches 16 m texels.
         const uint32 top = uint32(PageStreaming::BuildPageStoreLevels(c.Samples, c.Samples).size()) - 1u;
         if (!c.Whole)
+        {
             for (const PageStreaming::PageWant& want : wants)
                 EXPECT_TRUE(c.Texel * float32(1u << want.Address.Level) >= kPinnedPageTexelMeters ||
                             want.Address.Level == top);
+        }
     }
 }
 
@@ -169,8 +171,10 @@ TEST(PageLevelRule, RequestsAreClosedUnderParentsAndFineOnlyNearTheCamera)
     for (const PageStreaming::PageWant& request : requests)
     {
         if (request.Address.Level < top)
+        {
             EXPECT_TRUE(seen.count(Key(request.Address.Parent())))
                 << "level " << int(request.Address.Level) << " page without its parent";
+        }
         if (request.Address.Level == 0)
         {
             ++level0;
@@ -347,10 +351,14 @@ TEST(PageCacheResidency, PagesArriveParentFirstAndAFullCacheDegradesByLevel)
     EXPECT_EQ(field.Cache.ResidentCount(), 5u);
     for (const PageStreaming::CachedPage& page : field.Cache.Resident())
         if (page.Address.Level < field.TopLevel())
+        {
             EXPECT_NE(field.Cache.SlotOf(page.Parent()), PageStreaming::kNoResidentSlot) << "a page without its parent";
+        }
     for (const PageAddress& page : all)
         if (page.Level >= 2)
+        {
             EXPECT_NE(field.Cache.SlotOf(PagedField::Page(page)), PageStreaming::kNoResidentSlot) << "a coarse page left out";
+        }
     EXPECT_GT(field.Cache.DeferredThisFrame(), 0u);
 }
 
@@ -477,9 +485,11 @@ TEST(PageCacheResidency, PressureNeverEvictsAPageWithAResidentChild)
         cache.Update(++frame, 1.0f / 60.0f, wants, 64);
         for (const PageStreaming::CachedPage& page : cache.Resident())
             if (page.Address.Level < kTop)
+            {
                 EXPECT_NE(cache.SlotOf(page.Parent()), PageStreaming::kNoResidentSlot)
                     << "level " << int(page.Address.Level) << " (" << page.Address.X << "," << page.Address.Z
                     << ") without its parent";
+            }
     }
 }
 

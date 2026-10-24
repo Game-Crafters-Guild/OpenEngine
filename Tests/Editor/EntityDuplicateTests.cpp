@@ -36,7 +36,7 @@
 #include "Engine/Rendering/RenderWorldHooks.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
@@ -443,7 +443,7 @@ TEST_F(EntityDuplicateTests, DuplicateUndoRemovesClonesAndKeepsOriginalsIntact)
     EXPECT_EQ(CaptureTransformBytes(*world, dup.OriginalChild), childBytesBefore);
     const auto* childParent = world->GetComponent<Parent>(dup.OriginalChild);
     ASSERT_NE(childParent, nullptr);
-    EXPECT_EQ(childParent->parent.id, dup.OriginalRoot.id);
+    EXPECT_EQ(childParent->Entity.id, dup.OriginalRoot.id);
 }
 
 TEST_F(EntityDuplicateTests, DuplicateUndoRedoRevivesSameHandlesWithSameBytes)
@@ -494,7 +494,7 @@ TEST_F(EntityDuplicateTests, ParentedSubtreeCloneParentLinksSurviveUndoRedo)
     {
         const auto* p = world->GetComponent<Parent>(cloneChild);
         ASSERT_NE(p, nullptr);
-        EXPECT_EQ(p->parent.id, dup.CloneRoot.id);
+        EXPECT_EQ(p->Entity.id, dup.CloneRoot.id);
     }
 
     UndoRedoService svc;
@@ -509,8 +509,8 @@ TEST_F(EntityDuplicateTests, ParentedSubtreeCloneParentLinksSurviveUndoRedo)
     ASSERT_TRUE(world->IsValid(dup.CloneRoot));
     const auto* p = world->GetComponent<Parent>(cloneChild);
     ASSERT_NE(p, nullptr);
-    EXPECT_EQ(p->parent.id, dup.CloneRoot.id);
-    EXPECT_NE(p->parent.id, dup.OriginalRoot.id);
+    EXPECT_EQ(p->Entity.id, dup.CloneRoot.id);
+    EXPECT_NE(p->Entity.id, dup.OriginalRoot.id);
 }
 
 namespace
@@ -582,7 +582,7 @@ TEST_F(EntityDuplicateTests, DuplicateSkipsGeneratedChildren)
     world->Query<GameEngine::ECS::Read<Parent>>().Each(
         [&](EntityHandle, const Parent& p)
         {
-            if (p.parent.id == clone.id)
+            if (p.Entity.id == clone.id)
                 ++clonedChildren;
         });
     EXPECT_EQ(clonedChildren, 0);

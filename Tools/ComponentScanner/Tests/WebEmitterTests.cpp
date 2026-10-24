@@ -507,6 +507,177 @@ struct Layered
     EXPECT_EQ(std::string::npos, m_Err.str().find("warning")) << m_Err.str();
 }
 
+// AssetRef<...> is the one templated field type the registry classifies (Components/AssetRef.h):
+// a component holding one reflects, with the field as an asset GUID.
+TEST_F(WebEmitterTest, AssetRefFieldReflectsAsAnAssetGuid)
+{
+    ASSERT_EQ(0, Scan(R"(#pragma once
+namespace GameEngine::Components {
+struct Linked
+{
+    AssetRef<AssetType::Model> Mesh;
+    float Scale = 1.0f;
+};
+}
+)")) << m_Err.str();
+    EXPECT_NE(std::string::npos, m_Out.str().find("ComponentScanner.summary reflected=1 skipped=0")) << m_Out.str();
+    EXPECT_NE(std::string::npos, ReadFile(CppPath()).find("GE_REGISTER_COMPONENT_FIELD(GameEngine::Components::Linked, Mesh)"));
+    const std::string json = ReadFile(JsonPath());
+    EXPECT_NE(std::string::npos, json.find(R"("name": "Mesh",
+          "tsName": "mesh",
+          "kind": "AssetGuid")")) << json;
+}
+
+// An enum declared in a module header the component header includes, outside every scanned root,
+// gets its name table from that header; the depfile names the header so an edit re-runs the scan.
+TEST_F(WebEmitterTest, EnumDeclaredInAnIncludedModuleHeaderGetsItsNameTable)
+{
+    const fs::path moduleInclude = m_Root.Path() / "Modules" / "Grid" / "Include";
+    fs::create_directories(moduleInclude / "Grid");
+    std::ofstream(moduleInclude / "Grid" / "GridTypes.h", std::ios::binary)
+        << "#pragma once\nnamespace GameEngine::Grid {\nenum class GridType : uint8 { Square = 0, Hex = 1 };\n"
+           "enum class Unused : uint8 { A = 0 };\n}\n";
+    fs::create_directories(ComponentsDir());
+    std::ofstream(ComponentsDir() / "Fixture.h", std::ios::binary)
+        << "#pragma once\n#include \"Grid/GridTypes.h\"\nnamespace GameEngine::Components {\n"
+           "struct Surface { Grid::GridType Cells = Grid::GridType::Square; float Size = 1.0f; };\n}\n";
+    const fs::path depFile = m_Root.Path() / "out" / "Reflection.d";
+
+    ASSERT_EQ(0, GameEngine::ComponentScanner::Run({"--in", ComponentsDir().string(), "--enum-include-root",
+                                                    moduleInclude.string(), "--out", CppPath().string(), "--emit-json",
+                                                    JsonPath().string(), "--depfile", depFile.string()},
+                                                   m_Out, m_Err))
+        << m_Err.str();
+    const std::string cpp = ReadFile(CppPath());
+    EXPECT_NE(std::string::npos, cpp.find("GE_REFLECT_ENUM_TABLE_BEGIN(GridType)\n"
+                                          "    GE_REFLECT_ENUM_TABLE_VALUE(\"Square\", 0)\n"
+                                          "    GE_REFLECT_ENUM_TABLE_VALUE(\"Hex\", 1)\n"))
+        << cpp;
+    EXPECT_NE(std::string::npos, cpp.find("GE_REFLECT_ENUM_FIELD(GameEngine::Components::Surface, Cells, GridType)"));
+    EXPECT_EQ(std::string::npos, cpp.find("Unused"));
+    EXPECT_NE(std::string::npos, ReadFile(JsonPath()).find(R"("enum": "GridType")"));
+    EXPECT_NE(std::string::npos, ReadFile(depFile).find("Grid/GridTypes.h")) << ReadFile(depFile);
+}
+
+// "// @ge-label" on a field and on an enumerator, in the component header and in a header it
+// includes, reaches the registration, the JSON and the types; an unmarked field or enumerator
+// gets no label.
+TEST_F(WebEmitterTest, LabelMarkersReachTheRegistrationTheJsonAndTheTypes)
+{
+    const fs::path moduleInclude = m_Root.Path() / "Modules" / "Grid" / "Include";
+    fs::create_directories(moduleInclude / "Grid");
+    std::ofstream(moduleInclude / "Grid" / "GridTypes.h", std::ios::binary)
+        << "#pragma once\nnamespace GameEngine::Grid {\nenum class GridType : uint8 {\n    Square = 0,\n"
+           "    // @ge-label six-sided\n    Hex = 1,\n};\n}\n";
+    fs::create_directories(ComponentsDir());
+    std::ofstream(ComponentsDir() / "Fixture.h", std::ios::binary) << R"(#pragma once
+#include "Grid/GridTypes.h"
+namespace GameEngine::Components {
+enum class Rate : uint32 {
+    Once = 0,
+    Realtime = 1, // @ge-label Realtime (on change)
+};
+struct Probe
+{
+    // @ge-label Rays / Probe
+    int32 RaysPerProbe = 64;
+    float BlendDistance = 1.0f;
+    Rate Mode = Rate::Once;
+    Grid::GridType Cells = Grid::GridType::Square;
+};
+}
+)";
+    ASSERT_EQ(0, GameEngine::ComponentScanner::Run({"--in", ComponentsDir().string(), "--enum-include-root",
+                                                    moduleInclude.string(), "--out", CppPath().string(), "--emit-dts",
+                                                    DtsPath().string(), "--emit-json", JsonPath().string()},
+                                                   m_Out, m_Err))
+        << m_Err.str();
+
+    const std::string cpp = ReadFile(CppPath());
+    EXPECT_NE(std::string::npos,
+              cpp.find("GE_REFLECT_FIELD_LABEL(GameEngine::Components::Probe, RaysPerProbe, \"Rays / Probe\");\n"))
+        << cpp;
+    EXPECT_EQ(cpp.find("GE_REFLECT_FIELD_LABEL("), cpp.rfind("GE_REFLECT_FIELD_LABEL(")) << "one labeled field";
+    EXPECT_NE(std::string::npos, cpp.find("    GE_REFLECT_ENUM_TABLE_VALUE(\"Once\", 0)\n"
+                                          "    GE_REFLECT_ENUM_TABLE_LABELED_VALUE(\"Realtime\", 1, \"Realtime (on change)\")\n"))
+        << cpp;
+    EXPECT_NE(std::string::npos, cpp.find("    GE_REFLECT_ENUM_TABLE_VALUE(\"Square\", 0)\n"
+                                          "    GE_REFLECT_ENUM_TABLE_LABELED_VALUE(\"Hex\", 1, \"six-sided\")\n"))
+        << cpp;
+
+    const std::string json = ReadFile(JsonPath());
+    EXPECT_NE(std::string::npos, json.find(R"("kind": "Int32",
+          "label": "Rays / Probe")")) << json;
+    EXPECT_NE(std::string::npos, json.find(R"j("name": "Realtime",
+          "value": 1,
+          "label": "Realtime (on change)")j")) << json;
+
+    const std::string dts = ReadFile(DtsPath());
+    EXPECT_NE(std::string::npos, dts.find("    /** Label: Rays / Probe */\n    raysPerProbe: number;\n    blendDistance: number;\n"))
+        << dts;
+    EXPECT_NE(std::string::npos, dts.find("/** 'Realtime': Realtime (on change) */\nexport type Rate = 'Once' | 'Realtime';\n"))
+        << dts;
+}
+
+// A hidden field has no inspector row: its label is left out of every output, with a warning
+// that names the field and the fix.
+TEST_F(WebEmitterTest, LabelOnAHiddenFieldIsIgnoredWithAWarning)
+{
+    ASSERT_EQ(0, Scan(R"(#pragma once
+namespace GameEngine::Components {
+struct Probe
+{
+    float BlendDistance = 1.0f;
+    // @ge-hidden
+    // @ge-label Cache Slot
+    uint32 CacheSlot = 0;
+};
+}
+)")) << m_Err.str();
+    EXPECT_NE(std::string::npos, m_Err.str().find("Fixture.h:8: field 'CacheSlot' is @ge-hidden and has no inspector row, "
+                                                  "so its @ge-label is ignored. Fix: remove one of the two markers."))
+        << m_Err.str();
+    EXPECT_EQ(std::string::npos, ReadFile(CppPath()).find("GE_REFLECT_FIELD_LABEL("));
+    EXPECT_EQ(std::string::npos, ReadFile(JsonPath()).find("\"label\""));
+}
+
+// Two included enums share the simple name `Mode`. A field names one of them by its scope, as C++
+// finds it from the component, and gets that enum's names; fields naming both leave the name
+// ambiguous, and the warning names both headers.
+TEST_F(WebEmitterTest, IncludedEnumIsMatchedByScopeAndATieNamesBothHeaders)
+{
+    const fs::path moduleInclude = m_Root.Path() / "Modules";
+    fs::create_directories(moduleInclude / "Power");
+    fs::create_directories(moduleInclude / "Speed");
+    std::ofstream(moduleInclude / "Power" / "Modes.h", std::ios::binary)
+        << "#pragma once\nnamespace GameEngine::Power { enum class Mode : uint8 { Off = 0, On = 1 }; }\n";
+    std::ofstream(moduleInclude / "Speed" / "Modes.h", std::ios::binary)
+        << "#pragma once\nnamespace GameEngine::Speed { enum class Mode : uint8 { Slow = 0, Fast = 1 }; }\n";
+    fs::create_directories(ComponentsDir());
+    std::ofstream(ComponentsDir() / "Switch.h", std::ios::binary)
+        << "#pragma once\n#include \"Power/Modes.h\"\n#include \"Speed/Modes.h\"\nnamespace GameEngine::Components {\n"
+           "struct Switch { Power::Mode State = Power::Mode::Off; };\n}\n";
+    const std::vector<std::string> args{"--in", ComponentsDir().string(), "--enum-include-root", moduleInclude.string(),
+                                        "--out", CppPath().string()};
+
+    ASSERT_EQ(0, GameEngine::ComponentScanner::Run(args, m_Out, m_Err)) << m_Err.str();
+    const std::string scoped = ReadFile(CppPath());
+    EXPECT_NE(std::string::npos, scoped.find("GE_REFLECT_ENUM_TABLE_VALUE(\"On\", 1)")) << scoped;
+    EXPECT_EQ(std::string::npos, scoped.find("Fast")) << scoped;
+    EXPECT_NE(std::string::npos, scoped.find("GE_REFLECT_ENUM_FIELD(GameEngine::Components::Switch, State, Mode)"));
+
+    std::ofstream(ComponentsDir() / "Gearbox.h", std::ios::binary)
+        << "#pragma once\n#include \"Power/Modes.h\"\n#include \"Speed/Modes.h\"\nnamespace GameEngine::Components {\n"
+           "struct Gearbox { Speed::Mode Gear = Speed::Mode::Slow; };\n}\n";
+    m_Err.str("");
+    ASSERT_EQ(0, GameEngine::ComponentScanner::Run(args, m_Out, m_Err)) << m_Err.str();
+    EXPECT_EQ(std::string::npos, ReadFile(CppPath()).find("GE_REFLECT_ENUM_FIELD("));
+    const std::string warning = m_Err.str();
+    EXPECT_NE(std::string::npos, warning.find("warning: the enum name `Mode` stands for two enums")) << warning;
+    EXPECT_NE(std::string::npos, warning.find("Power/Modes.h:2 (GameEngine::Power::Mode)")) << warning;
+    EXPECT_NE(std::string::npos, warning.find("Speed/Modes.h:2 (GameEngine::Speed::Mode)")) << warning;
+}
+
 TEST(FieldKind, MatchesTheEnginesFieldTypeId)
 {
     const std::string source = CommentStripper::Strip(ReadFile(GE_ECS_REFLECTION_HEADER)).Text;

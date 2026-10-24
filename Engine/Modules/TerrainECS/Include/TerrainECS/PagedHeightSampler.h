@@ -3,6 +3,7 @@
 #include "PageStreaming/PageStoreFormat.h"
 #include "Types/Types.h"
 
+#include <span>
 #include <vector>
 
 namespace GameEngine::PageStreaming
@@ -36,6 +37,21 @@ struct PageCacheGeometry
 
 /// The geometry of a cache of `slotCount` slots.
 PageCacheGeometry MakePageCacheGeometry(uint32 slotCount);
+
+/// Where a terrain UV falls at one pyramid level: the page that owns it and its continuous position in
+/// that page's stride texels (the apron included), the texel the resolve reads.
+struct PageTexel
+{
+    uint32 PageX = 0;
+    uint32 PageZ = 0;
+    float32 StrideX = 0.0f;
+    float32 StrideZ = 0.0f;
+};
+
+/// Where terrain UV (u, v), clamped to [0, 1]^2, falls at level `level` of the pyramid `levels`
+/// (BuildPageStoreLevels): level-0 sample i sits at i / (samples - 1), level-L sample j at
+/// level-0 sample j * 2^L.
+PageTexel LocatePageTexel(std::span<const PageStreaming::PageStoreLevel> levels, uint32 level, float32 u, float32 v);
 
 /// The page table of one field: one entry per page of every level (PackPageEntry(slot, level) when
 /// resident, kNoPage when not) and the arrival fade of each slot. The GPU holds the entries as a
@@ -74,7 +90,7 @@ struct PagedHeightSampler
     float32 SampleLevel(float32 u, float32 v, uint32 level, uint32& outLevel) const;
 
 private:
-    float32 SampleResidentPage(float32 u, float32 v, uint32 level, uint32 slot) const;
+    float32 SampleResidentPage(const PageTexel& texel, uint32 slot) const;
 };
 
 } // namespace GameEngine::TerrainECS

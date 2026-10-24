@@ -6,13 +6,16 @@
 #include "CommentStripper.h"
 #include "EnumScanner.h"
 #include "FunctionParser.h"
+#include "IncludeGraph.h"
 #include "Lexical.h"
+#include "ScopeLookup.h"
 #include "SourceFiles.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -22,6 +25,7 @@ namespace
 {
 
 using namespace Lexical;
+using namespace ScopeLookup;
 namespace fs = std::filesystem;
 
 constexpr int kMaxAliasDepth = 8;
@@ -30,8 +34,6 @@ constexpr int kMaxConstantDepth = 32;
 constexpr std::int64_t kMaxFieldBytes = std::numeric_limits<std::int32_t>::max();
 // The value of an extent sum that leaves the int64 range.
 constexpr std::int64_t kSaturated = std::numeric_limits<std::int64_t>::max();
-constexpr std::size_t kNotFound = std::numeric_limits<std::size_t>::max();
-constexpr std::size_t kAmbiguous = kNotFound - 1;
 
 // The layouts of the hand-written kinds of Scripting.Bindings: a GUID is 16 bytes, Math::Curve is
 // CurveBase<32> (a key count, 3 bytes of padding and 32 keys of 20 bytes), a BoundingBox is two
@@ -110,118 +112,6 @@ struct FieldType
     std::uint32_t Align = 1;
 };
 
-std::vector<std::string_view> Segments(std::string_view name)
-{
-    std::vector<std::string_view> segments;
-    if (StartsWith(name, "::"))
-        name.remove_prefix(2);
-    std::size_t start = 0;
-    while (true)
-    {
-        const std::size_t separator = name.find("::", start);
-        segments.push_back(name.substr(start, separator == std::string_view::npos ? std::string_view::npos : separator - start));
-        if (separator == std::string_view::npos)
-            break;
-        start = separator + 2;
-    }
-    return segments;
-}
-
-// True when `written`, looked up from `scope` as C++ looks a name up, names the type `qualified`:
-// its segments end the qualified name and the namespaces it leaves out enclose the scope. A name
-// written from the root (`::GameEngine::GUID`) is the whole qualified name.
-bool NamesFromScope(std::string_view written, std::string_view qualified, std::string_view scope)
-{
-    if (!ApiKindResolver::NamesQualified(written, qualified))
-        return false;
-    const std::vector<std::string_view> full = Segments(qualified);
-    const std::size_t depth = full.size() - Segments(written).size();
-    if (StartsWith(written, "::"))
-        return depth == 0;
-    const std::vector<std::string_view> scopeSegments = Segments(scope);
-    return depth <= scopeSegments.size() &&
-           std::equal(full.begin(), full.begin() + static_cast<std::ptrdiff_t>(depth), scopeSegments.begin());
-}
-
-// The index in `names` of the qualified name `written` names when C++ looks it up from `scope`: of
-// the names whose segments end in the written ones, the one in the innermost namespace or class
-// around the scope wins; a single match anywhere else is taken. kNotFound, or kAmbiguous when two
-// tie.
-std::size_t LookUp(std::string_view written, std::string_view scope, const std::vector<std::string>& names)
-{
-    std::vector<std::size_t> matches;
-    for (std::size_t i = 0; i < names.size(); ++i)
-        if (ApiKindResolver::NamesQualified(written, names[i]))
-            matches.push_back(i);
-    if (matches.empty())
-        return kNotFound;
-    const std::vector<std::string_view> scopeSegments = Segments(scope);
-    const std::size_t writtenCount = Segments(written).size();
-    std::size_t best = kNotFound;
-    std::size_t bestDepth = 0;
-    bool tie = false;
-    for (const std::size_t match : matches)
-    {
-        const std::vector<std::string_view> full = Segments(names[match]);
-        const std::size_t depth = full.size() - writtenCount;
-        const bool encloses = depth <= scopeSegments.size() &&
-                              std::equal(full.begin(), full.begin() + static_cast<std::ptrdiff_t>(depth), scopeSegments.begin());
-        if (!encloses)
-            continue;
-        if (best == kNotFound || depth > bestDepth)
-        {
-            best = match;
-            bestDepth = depth;
-            tie = false;
-        }
-        else if (depth == bestDepth)
-            tie = true;
-    }
-    if (best != kNotFound)
-        return tie ? kAmbiguous : best;
-    return matches.size() == 1 ? matches.front() : kAmbiguous;
-}
-
-// The type text without cv words, its spaces collapsed: "const Mathematics::Vector3" is
-// "Mathematics::Vector3".
-std::string BareType(std::string_view text)
-{
-    std::string result;
-    for (const std::string& word : SplitWhitespace(text))
-    {
-        if (word == "const" || word == "volatile" || word == "mutable")
-            continue;
-        result += (result.empty() ? "" : " ") + word;
-    }
-    return result;
-}
-
-bool IsHeaderFile(const std::string& extension)
-{
-    return extension == ".h" || extension == ".hpp";
-}
-
-// The modules a header includes by a quoted path: "Rendering" for #include "Rendering/RenderLayerMask.h".
-void IncludedModules(const std::vector<std::string>& lines, std::set<std::string>& outModules)
-{
-    for (const std::string& line : lines)
-    {
-        std::string_view text = TrimView(line);
-        if (!StartsWith(text, "#"))
-            continue;
-        text = TrimView(text.substr(1));
-        if (!StartsWith(text, "include"))
-            continue;
-        text = TrimView(text.substr(7));
-        if (text.size() < 2 || text[0] != '"')
-            continue;
-        const std::size_t slash = text.find('/');
-        const std::size_t quote = text.find('"', 1);
-        if (slash != std::string_view::npos && quote != std::string_view::npos && slash < quote)
-            outModules.insert(std::string(text.substr(1, slash - 1)));
-    }
-}
-
 // True when a + b leaves the int64 range.
 bool AddOverflows(std::int64_t a, std::int64_t b)
 {
@@ -261,7 +151,7 @@ class Resolver
     ComponentMirrors Run(const fs::path& modulesDir, const ApiDescription& description)
     {
         ReadComponentHeaders();
-        ReadModuleEnums(modulesDir);
+        ReadIncludedEnums(modulesDir);
         Classify();
         for (std::size_t i = 0; i < m_Reflected.size(); ++i)
             if (m_Mirrors.Structs[i].Class == ComponentClass::GameData || m_Mirrors.Structs[i].Class == ComponentClass::EngineOwned)
@@ -315,20 +205,15 @@ class Resolver
     void AddEnums(const std::string& stripped, const std::vector<std::string>& lines, const std::string& header,
                   const std::string& file)
     {
-        for (EnumDecl& decl : EnumScanner::Scan(stripped))
+        for (ScopedEnumDecl& scoped : EnumScanner::ScanScoped(stripped))
         {
-            const std::size_t lineStart = FunctionParser::LineOffset(stripped, decl.DeclLine);
-            const std::size_t keyword = stripped.find("enum", lineStart);
-            const DeclarationScope scope = FunctionParser::ScopeAt(stripped, keyword == std::string::npos ? lineStart : keyword);
-            if (scope.InOtherBlock)
-                continue;
             EnumEntry entry;
-            entry.CppName = Qualify(scope, decl.Name);
-            entry.Scope = ScopeName(scope);
+            entry.CppName = std::move(scoped.CppName);
+            entry.Scope = std::move(scoped.Scope);
             entry.Header = header;
             entry.File = file;
-            entry.Doc = ApiMarkerLines::DocAbove(lines, decl.DeclLine);
-            entry.Decl = std::move(decl);
+            entry.Doc = ApiMarkerLines::DocAbove(lines, scoped.Decl.DeclLine);
+            entry.Decl = std::move(scoped.Decl);
             m_EnumNames.push_back(entry.CppName);
             m_EnumSimpleNames.insert(entry.Decl.Name);
             m_Enums.push_back(std::move(entry));
@@ -347,34 +232,30 @@ class Resolver
         }
     }
 
-    // The enums of the Include trees of the modules the component headers include. A component
-    // header inside such a tree is read once, as a component header.
-    void ReadModuleEnums(const fs::path& modulesDir)
+    // The enums of the headers the component headers include, followed through the Include trees
+    // of the modules (IncludeGraph). A component header reached that way is read once, as a
+    // component header. The headers are read in include-path order, so the table does not
+    // depend on which component header reached a header first.
+    void ReadIncludedEnums(const fs::path& modulesDir)
     {
-        std::set<std::string> modules;
+        std::vector<fs::path> includeRoots;
+        std::error_code ec;
+        for (fs::directory_iterator it(modulesDir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+            if (const fs::path include = it->path() / "Include"; fs::is_directory(include, ec))
+                includeRoots.push_back(include);
+        std::sort(includeRoots.begin(), includeRoots.end());
+
         std::set<std::string> componentFiles;
         for (const ComponentHeader& header : m_Headers)
-        {
-            IncludedModules(header.Lines, modules);
             componentFiles.insert(Utf8(FullPath(PathFromUtf8(header.File))));
-        }
-        for (const std::string& module : modules)
-        {
-            const fs::path includeDir = modulesDir / PathFromUtf8(module) / "Include";
-            std::error_code ec;
-            if (!fs::is_directory(includeDir, ec))
-                continue;
-            for (const fs::path& file : ListFiles(includeDir, IsHeaderFile))
-            {
-                if (componentFiles.count(Utf8(FullPath(file))) != 0)
-                    continue;
-                std::string raw;
-                if (!ReadText(file, raw))
-                    continue;
-                AddEnums(CommentStripper::Strip(raw).Text, SplitLines(raw),
-                         Utf8(FullPath(file).lexically_relative(FullPath(includeDir))), Utf8(file));
-            }
-        }
+        IncludeGraph graph(std::move(includeRoots));
+        std::map<std::string, const IncludedHeader*> included;
+        for (const ComponentHeader& header : m_Headers)
+            for (const IncludedHeader* reached : graph.Closure(PathFromUtf8(header.File), header.Lines))
+                if (componentFiles.count(Utf8(reached->File)) == 0)
+                    included.emplace(reached->IncludePath, reached);
+        for (const auto& [includePath, reached] : included)
+            AddEnums(reached->Stripped, reached->Lines, includePath, Utf8(reached->File));
     }
 
     void Classify()
@@ -587,7 +468,7 @@ class Resolver
             Refuse(owner.File, field.Line,
                    "the field `" + field.Name + "` of `" + owner.Name + "` names the enum `" + base +
                        "`, which the mirror's enum table does not hold under that name",
-                   "declare the enum in a component header or in the Include tree of a module the header includes, and "
+                   "declare the enum in a component header or in a module header the component header includes, and "
                    "write its name as C++ finds it from the component");
             refused = true;
         }
@@ -725,7 +606,8 @@ class Resolver
         }
         mirror.Fields = std::move(fields);
         mirror.Align = align;
-        mirror.Size = (offset + align - 1) / align * align;
+        // C++ gives a struct with no fields (a tag) one byte, and so does C#.
+        mirror.Size = std::max<std::uint32_t>(1, (offset + align - 1) / align * align);
         m_States[index] = State::Resolved;
         return true;
     }

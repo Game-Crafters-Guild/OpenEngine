@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GameEngine.Scripting.Runtime" />
+    <!-- EntityCommands queues a mirror's write as a script write (ComponentType<T>.IsEngineComponent). -->
+    <InternalsVisibleTo Include="GameEngine.Scripting.ABI" />
     <!-- The generated component mirrors read ComponentType<T>.Default in their constructors;
          BindingTests compiles the scanner's fixture mirrors. -->
     <InternalsVisibleTo Include="GameEngine.Scripting.Bindings" />

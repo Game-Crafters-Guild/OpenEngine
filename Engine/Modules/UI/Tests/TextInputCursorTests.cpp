@@ -166,7 +166,9 @@ TEST(TextInputCursorTests, WithoutARuleTheFieldReportsTheDefaultCursor)
 
     fx.HoverCentreOfField();
     if (fx.LastCursor.has_value())
+    {
         EXPECT_EQ(*fx.LastCursor, CursorStyle::Auto);
+    }
 }
 
 // Moving off the text restores the default cursor rather than leaving the

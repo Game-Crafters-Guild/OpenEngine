@@ -45,11 +45,6 @@ layout(push_constant) uniform PC {
     uint noiseFrame; // zero with temporal off; eight phases when accumulating
 } pc;
 
-float interleaved_gradient_noise(vec2 p)
-{
-    return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
-}
-
 vec2 get_front_back_horizons(float side, vec3 delta, vec3 v, float n)
 {
     vec3 back = delta - v * max(pc.aoThickness, 0.0);
@@ -82,7 +77,7 @@ void main()
     vec2 pixelSize = vec2(length(GE_GtaoPosition(uv + vec2(texel.x, 0.0), raw) - position),
                           length(GE_GtaoPosition(uv + vec2(0.0, texel.y), raw) - position));
     vec2 radiusPixels = pc.aoRadius / max(pixelSize, vec2(1e-5));
-    float rotation = interleaved_gradient_noise(vec2(pix) + float(pc.noiseFrame) * vec2(5.588238));
+    float rotation = GE_GtaoInterleavedGradientNoise(vec2(pix) + float(pc.noiseFrame) * vec2(5.588238));
     float jitter = fract(rotation * 1.6180339887);
     float visibleIntegral = 0.0;
     float totalIntegral = 0.0;

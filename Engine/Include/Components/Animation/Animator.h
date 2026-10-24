@@ -114,15 +114,16 @@ struct Animator
     AnimatorCallbackMethod callbackMethod = AnimatorCallbackMethod::Deferred;
     AnimatorDiscreteCallbackMode discreteCallbackMode = AnimatorDiscreteCallbackMode::Recessive;
 
-    // [DoNotSerialize] GraphStore handle. 0 = none.
+    // [DoNotSerialize] @ge-readonly GraphStore handle. 0 = none.
     uint64 graphRuntimeId = 0;
-    // [DoNotSerialize] AnimationEventCollectorStore handle: the events this
+    // [DoNotSerialize] @ge-readonly AnimationEventCollectorStore handle: the events this
     // animator's playback fired in the last animation wave. 0 = none yet;
     // AnimationEventCollectorSystem gives one at the start of the next wave.
     uint64 eventCollectorId = 0;
-    // [DoNotSerialize] GUID the current graphRuntimeId was instantiated from.
+    // [DoNotSerialize] @ge-readonly GUID the current graphRuntimeId was instantiated from.
     GUID graphInstanceGuid{};
-    // [DoNotSerialize] Pause freezes graph DeltaTime without destroying the player.
+    // [DoNotSerialize] @ge-readonly Pause freezes graph DeltaTime without destroying the player;
+    // AnimationGraphSystem writes it.
     bool graphPaused = false;
     uint8 pendingGraphParamCount = 0;
     AnimatorGraphParamWrite pendingGraphParams[kPendingGraphParamCapacity] = {};

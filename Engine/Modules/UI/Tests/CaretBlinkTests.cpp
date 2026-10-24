@@ -94,7 +94,9 @@ TEST(CaretBlinkTests, TheCaretRateFollowsTheOperatingSystemRatherThanABakedConst
     // configured to that, a rate of 1.2 means the push constant is carrying a
     // baked constant rather than the OS setting.
     if (halfPeriod->count() != 833)
+    {
         EXPECT_GT(std::fabs(rate - 1.2f), 1e-3f) << "caret rate is not tracking the OS setting";
+    }
 }
 
 TEST(CaretBlinkTests, TheForceVisibleWindowIsOneHalfPeriodSoItScalesWithTheUsersRate)
@@ -115,8 +117,10 @@ TEST(CaretBlinkTests, TheForceVisibleWindowIsOneHalfPeriodSoItScalesWithTheUsers
     // setting is not exactly 750 ms should now differ from it.
     const std::optional<Milliseconds> halfPeriod = Platform::GetCaretBlinkHalfPeriod();
     if (halfPeriod.has_value() && halfPeriod->count() > 0 && halfPeriod->count() != 750)
+    {
         EXPECT_GT(std::fabs(UI::CaretForceVisibleSeconds(halfPeriod) - 0.75f), 1e-3f)
             << "force-visible window is not tracking the OS setting";
+    }
 }
 
 TEST(CaretBlinkTests, TheForceVisibleWindowCoversExactlyTheOnPhaseTheCaretWouldHaveHad)

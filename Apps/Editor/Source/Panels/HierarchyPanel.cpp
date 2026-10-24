@@ -665,8 +665,8 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
                 anyParent = true;
 
                 // Key children by the same packed representation we expose via TreeId
-                TreeId parentKey = Encode(p->parent);
-                if (p->parent.IsValid() && alive.count(static_cast<uint32_t>(parentKey)))
+                TreeId parentKey = Encode(p->Entity);
+                if (p->Entity.IsValid() && alive.count(static_cast<uint32_t>(parentKey)))
                 {
                     m_Children[static_cast<uint32_t>(parentKey)].push_back(e);
                 }
@@ -1236,9 +1236,9 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
     // Rebuild's alive-check semantics.
     TreeId DesiredParentKey(const EntityHandle& e) const
     {
-        if (auto* p = m_World->GetComponent<Components::Parent>(e); p && p->parent.IsValid())
+        if (auto* p = m_World->GetComponent<Components::Parent>(e); p && p->Entity.IsValid())
         {
-            const uint32_t pk = static_cast<uint32_t>(Encode(p->parent));
+            const uint32_t pk = static_cast<uint32_t>(Encode(p->Entity));
             if (m_EntityParentKey.find(pk) != m_EntityParentKey.end())
                 return static_cast<TreeId>(pk);
         }
@@ -2619,7 +2619,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                         if (parent.IsValid())
                         {
                             Parent p{};
-                            p.parent = parent;
+                            p.Entity = parent;
                             m_World->AddComponentImmediate(flareEntity, p);
                         }
 
@@ -2670,7 +2670,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                             if (parent.IsValid() && world->IsValid(parent))
                             {
                                 Parent p{};
-                                p.parent = parent;
+                                p.Entity = parent;
                                 world->AddComponentImmediate(result.rootEntity, p);
                                 if (auto* lt = world->GetComponentForWrite<Components::Transform>(result.rootEntity))
                                 {
@@ -2721,7 +2721,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             if (parent.IsValid())
             {
                 Parent p{};
-                p.parent = parent;
+                p.Entity = parent;
                 m_World->AddComponentImmediate(e, p);
             }
         }
@@ -2852,7 +2852,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                 if (dropParent.IsValid())
                                 {
                                     Parent p{};
-                                    p.parent = dropParent;
+                                    p.Entity = dropParent;
                                     m_World->AddComponentImmediate(createdEntity, p);
                                     if (auto* lt = m_World->GetComponentForWrite<Components::Transform>(createdEntity))
                                     {
@@ -3336,7 +3336,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -3649,7 +3649,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -3701,7 +3701,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -5361,7 +5361,7 @@ bool HierarchyPanel::FinishTreeTextureDrop(const std::filesystem::path& textureP
     if (parent.IsValid() && m_World->IsValid(parent))
     {
         Parent p{};
-        p.parent = parent;
+        p.Entity = parent;
         m_World->AddComponentImmediate(sprite, p);
     }
     NotifyWorldStructure(m_ChangeNotifications, m_World);
@@ -5845,12 +5845,12 @@ void HierarchyPanel::ExpandAncestors(ECS::EntityHandle entity)
     while (cur.IsValid() && m_World->IsValid(cur))
     {
         auto* p = m_World->GetComponent<Parent>(cur);
-        if (!p || !p->parent.IsValid() || !m_World->IsValid(p->parent))
+        if (!p || !p->Entity.IsValid() || !m_World->IsValid(p->Entity))
             break;
-        const TreeId parentTid = HierarchyDataProvider::Encode(p->parent);
+        const TreeId parentTid = HierarchyDataProvider::Encode(p->Entity);
         if (parentTid != 0 && parentTid != kRootId)
             m_Tree->SetExpanded(parentTid, true);
-        cur = p->parent;
+        cur = p->Entity;
     }
 }
 

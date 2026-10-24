@@ -3,13 +3,9 @@
 
 #include "Logger/Logger.h"
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <cstdarg>
 #include <fstream>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string_view>
 
@@ -48,43 +44,6 @@ void SetShaderPathResolver(ShaderPathResolverFunc resolver)
 bool HasShaderPathResolver()
 {
     return g_shaderPathResolver != nullptr;
-}
-
-std::string FormatString(const char* format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    int n = vsnprintf(nullptr, 0, format, args);
-    va_end(args);
-    if (n <= 0)
-        return {};
-    std::vector<char> buf(static_cast<size_t>(n) + 1);
-    va_start(args, format);
-    vsnprintf(buf.data(), buf.size(), format, args);
-    va_end(args);
-    return std::string(buf.data(), static_cast<size_t>(n));
-}
-
-std::vector<std::string> SplitString(const std::string& str, char delimiter)
-{
-    std::vector<std::string> tokens;
-    std::stringstream ss(str);
-    std::string token;
-
-    while (std::getline(ss, token, delimiter))
-    {
-        tokens.push_back(token);
-    }
-
-    return tokens;
-}
-
-std::string ToUpper(const std::string& str)
-{
-    std::string result = str;
-    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c)
-                   { return static_cast<char>(::toupper(c)); });
-    return result;
 }
 
 bool FileExists(const std::string& path) noexcept

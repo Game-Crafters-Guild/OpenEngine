@@ -177,7 +177,7 @@ TEST_F(GameViewControllerInputTests, CarriesReleaseModifiersIntoTheReceivingHost
 
 TEST_F(GameViewControllerInputTests, UnsetExtentDoesNotDeliverPointerEdges)
 {
-    for (const auto extent : {std::pair{0u, 400u}, std::pair{800u, 0u}, std::pair{0u, 0u}})
+    for (const auto& extent : {std::pair{0u, 400u}, std::pair{800u, 0u}, std::pair{0u, 0u}})
     {
         GameViewControllerTestAccess::SetUiFrame(Controller, *World, extent.first, extent.second);
         Press();

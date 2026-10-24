@@ -4,7 +4,6 @@ project(PathfindingECS LANGUAGES CXX)
 
 add_library(PathfindingECS OBJECT
     Source/Navigation.cpp
-    Source/NavigationAgentReflection.cpp
     Source/NavigationAgentRequests.cpp
     Source/NavigationBakedData.cpp
     Source/NavigationComponentInstantiations.cpp
@@ -12,8 +11,6 @@ add_library(PathfindingECS OBJECT
     Source/NavigationMeshBake.cpp
     Source/NavigationService.cpp
     Source/NavigationSourceCollector.cpp
-    Source/NavigationSourceReflection.cpp
-    Source/NavigationSurfaceReflection.cpp
     Source/NavigationSurfaceRuntime.cpp
     Source/Systems/NavigationSurfaceSystem.cpp
     Source/Systems/NavigationPathfindingSystem.cpp

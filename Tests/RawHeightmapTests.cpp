@@ -49,7 +49,7 @@ TEST(RawHeightmap, ANonSquareGridDecodesOnTheGridItsImportSettingsDeclare)
     ASSERT_TRUE(declaredError.empty()) << declaredError;
     ASSERT_EQ(declared.GetWidth(), kWidth);
     ASSERT_EQ(declared.GetHeight(), kHeight);
-    for (const auto [x, z] : {std::pair{0u, 0u}, std::pair{kWidth - 1, 1u}, std::pair{123u, 2047u},
+    for (const auto& [x, z] : {std::pair{0u, 0u}, std::pair{kWidth - 1, 1u}, std::pair{123u, 2047u},
                               std::pair{kWidth - 1, kHeight - 1}})
     {
         EXPECT_EQ(declared.GetSample(x, z), static_cast<float32>(static_cast<uint64>(z) * kWidth + x))

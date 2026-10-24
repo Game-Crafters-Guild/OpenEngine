@@ -286,11 +286,15 @@ assembly context are purged.
 
 ## Built-in C++ component access
 
-C# systems can directly iterate over registered C++ engine components through
-`[BuiltInComponent]`. Use the supplied `GameEngine.Scripting.Transform` mirror for
-`GameEngine::Components::Transform`. It stores the same 64-byte, column-major matrix.
-Do not redeclare that mirror. The `Position` struct in the earlier example is a
-user component, not a built-in native component.
+Engine components have a C# mirror of the same name in `GameEngine.Scripting`:
+`Transform`, `MeshRenderer`, `Light`, `Camera` and the rest. A component with a field
+declared as `AssetRef<...>` in C++ (`Animator`, `Terrain`, `UIDocument` and others) and
+the terrain modifier effects have no mirror. A
+mirror is made from the component's C++ header, so its fields, enums and layout are the
+engine's. A system takes a mirror as `ref` or `in` like any component, and
+`ComponentType<T>.Get` and `Set` read and write one entity's copy. Do not declare a
+component of your own with a mirror's name in `GameEngine.Scripting`. The `Position`
+struct in the earlier example is a user component, not an engine component.
 
 ```csharp title="Moving the native Transform"
 using GameEngine.Scripting;
@@ -325,17 +329,53 @@ entity handles, and alignment. Oversized rows can require larger chunks. Do not
 calculate capacity from `sizeof(T)` for one component alone or assume managed
 components occupy one flat chunk.
 
-### Available built-in mirrors
+### Engine component mirrors
 
-`Managed/Scripting.ABI/BuiltInComponents.cs` supplies these mirrors:
+A mirror's members follow the C++ fields:
 
-| C# Type | C++ Type | Size | Storage |
-|---|---|---|---|
-| `Transform` | `GameEngine::Components::Transform` | 64 bytes | 16 column-major floats |
-| `WorldTransform` | `GameEngine::Components::WorldTransform` | 68 bytes | 16 column-major floats and a 32-bit version |
+- A field a game sets is a public field: `renderer.ReceiveShadows = false`.
+- An enum field is a property whose setter refuses a value outside the enum with
+  `ArgumentOutOfRangeException`. A text field (`Name.Value`) is a `string` property whose
+  setter refuses text longer than the field holds.
+- A field the engine writes, such as the bounds of `LocalBounds` or the live count of
+  `ParticlePlayback`, is get-only. A field that is engine state, such as the GPU handle
+  of `MeshRenderer`, has no member.
+- A fixed array is a field of a nested `<Field>Array` type that you index:
+  `transform.Matrix[12]` is the X of the position.
 
-`Position`, `Velocity`, `Rotation`, and `Scale` are not supplied built-in mirrors.
-A user-defined component with one of those names remains a separate component.
+`new MeshRenderer()` has the engine's defaults, exactly as `MeshRenderer{}` in C++:
+drawn, casting and receiving shadows. `default(MeshRenderer)` is all zeros. The defaults
+come from the running engine, so `new T()` of a mirror throws in a process with no
+engine; there, start from `default` and set every field.
+
+Each engine component is in one of four classes:
+
+| Class | Example | In C# |
+|---|---|---|
+| Game data | `MeshRenderer`, `Light`, `Transform` | a mirror you read and write |
+| Engine-owned | `WorldTransform`, `Parent` | a read-only mirror: read it, and `Set` throws |
+| Engine-internal | `MeshGPUData` | no mirror |
+| Editor-only | `Markup` | no mirror; a game export strips it from scenes |
+
+`ComponentType<T>.Set`, and `EntityCommands.AddComponent` and `SetComponent`, of a mirror apply
+two rules:
+
+- The engine keeps its own value of every field the mirror does not let you write. A
+  `MeshRenderer` you read, keep for a frame and set back does not restore an old GPU
+  handle. A queued write keeps the engine's value at the moment the queue is applied.
+- A component the engine owns is refused with an `InvalidOperationException` that names
+  the system that writes it; a queued write is refused when it is queued.
+
+In a system, a `ref` parameter of an engine-owned mirror is the error `GE0027`: take it
+as `in`. Assigning a whole value to a `ref` parameter of a mirror with fields the engine
+keeps (`renderer = saved;`) is the error `GE0028`: set the fields you change. `GE0028` reads
+the body of `Execute` only: a method that takes the parameter by `ref` and assigns it is not
+caught, so pass the fields it changes instead.
+
+`Transform` adds builders and accessors to its matrix: `Transform.Identity`,
+`Transform.FromTRS`, `GetPosition`, `GetRotation`, `GetScale`, the axis properties
+(`Forward`, `Right`, `Up`) and the conversions to and from `System.Numerics.Matrix4x4`.
+`ParticlePlayback.SendEvent` queues a named event for the emitter's next update.
 
 ## Chunk query ABI (internal plumbing)
 
@@ -414,9 +454,10 @@ For each `partial struct` implementing `IEntitySystem` with an `Execute` method:
 | `GE0011` | Error | Execute must not be async |
 | `GE0012` | Error | Component parameter passed by value (must be `ref` or `in`) |
 | `GE0013` | Error | IEntitySystem must not be a nested type |
-| `GE0014` | Warning | Component struct contains `bool` field (use `byte` instead) |
 | `GE0015` | Error | Same component type appears multiple times in Execute parameters |
 | `GE0016` | Warning | IEntitySystem struct declares instance fields (zero-initialized each frame) |
+| `GE0027` | Error | A `ref` parameter of a component the engine owns (take it as `in`) |
+| `GE0028` | Error | A whole-value assignment, in the body of `Execute`, to a `ref` parameter of a mirror with fields the engine keeps (set the fields you change) |
 
 ## Hot-reload behavior
 

@@ -3,6 +3,7 @@
 #include "Assets/ModelAsset.h"
 
 #include "Logger/Logger.h"
+#include "Mathematics/Geometry.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -82,11 +84,9 @@ struct UvIslandMap {
     Vector<double> IslandArea;          // summed source-triangle 3D area per island
 };
 
-UvIslandMap BuildUvIslandMap(const Mesh& mesh) {
-    const size_t vertexCount = mesh.Vertices.size();
-    UvIslandMap map;
-    map.VertexIsland.assign(vertexCount, kNoIsland);
-
+// Per vertex, the representative vertex of its connected component in the
+// triangle list `indices` (a vertex no triangle references is its own root).
+Vector<uint32> ConnectedComponentRoots(const Vector<uint32>& indices, size_t vertexCount) {
     Vector<uint32> parent(vertexCount);
     for (size_t v = 0; v < vertexCount; ++v)
         parent[v] = static_cast<uint32>(v);
@@ -98,19 +98,28 @@ UvIslandMap BuildUvIslandMap(const Mesh& mesh) {
         }
         return v;
     };
-    const auto unite = [&](uint32 a, uint32 b) {
-        a = find(a); b = find(b);
-        if (a != b) parent[b] = a;
-    };
-
-    for (size_t i = 0; i + 2 < mesh.Indices.size(); i += 3) {
-        unite(mesh.Indices[i], mesh.Indices[i + 1]);
-        unite(mesh.Indices[i], mesh.Indices[i + 2]);
+    for (size_t first = 0; first + 2 < indices.size(); first += 3) {
+        const uint32 root = find(indices[first]);
+        for (size_t corner = 1; corner < 3; ++corner) {
+            const uint32 other = find(indices[first + corner]);
+            if (other != root)
+                parent[other] = root;
+        }
     }
+    for (size_t v = 0; v < vertexCount; ++v)
+        parent[v] = find(static_cast<uint32>(v));
+    return parent;
+}
+
+UvIslandMap BuildUvIslandMap(const Mesh& mesh) {
+    const size_t vertexCount = mesh.Vertices.size();
+    UvIslandMap map;
+    map.VertexIsland.assign(vertexCount, kNoIsland);
+    const Vector<uint32> roots = ConnectedComponentRoots(mesh.Indices, vertexCount);
 
     // Dense island ids for referenced vertices only.
     for (uint32 idx : mesh.Indices) {
-        const uint32 root = find(idx);
+        const uint32 root = roots[idx];
         if (map.VertexIsland[root] == kNoIsland) {
             map.VertexIsland[root] = static_cast<uint32>(map.IslandVerts.size());
             map.IslandVerts.emplace_back();
@@ -118,7 +127,7 @@ UvIslandMap BuildUvIslandMap(const Mesh& mesh) {
         }
     }
     for (size_t v = 0; v < vertexCount; ++v) {
-        const uint32 root = find(static_cast<uint32>(v));
+        const uint32 root = roots[v];
         const uint32 island = map.VertexIsland[root];
         map.VertexIsland[v] = island;
         if (island == kNoIsland)
@@ -415,13 +424,252 @@ constexpr float kChartProtectUvSpread = 0.05f;
 // per-slot anchor floors and is untouched.
 constexpr float kChartAmalgamationErrorScale = 5.0f;
 
+// Whether a vertex lies on one of the mesh AABB's face planes, within
+// kSeamPlaneRelativeEpsilon of THAT axis's extent (floored for a flat axis).
+constexpr float kMinSeamPlaneEpsilon = 1e-7f; // meters
+
+bool LiesOnSeamPlane(const Vertex& vertex, const MeshBoundsInfo& bounds) {
+    for (int axis = 0; axis < 3; ++axis) {
+        const float epsilon = std::max(
+            (bounds.Max[axis] - bounds.Min[axis]) * kSeamPlaneRelativeEpsilon, kMinSeamPlaneEpsilon);
+        if (vertex.Position[axis] - bounds.Min[axis] <= epsilon ||
+            bounds.Max[axis] - vertex.Position[axis] <= epsilon)
+            return true;
+    }
+    return false;
+}
+
+// --- Contact seams ------------------------------------------------------------
+//
+// The seam-plane rule keeps pieces of a kit closed against their NEIGHBORS.
+// One mesh holds the same seam inside itself where one of its disconnected
+// parts closes an opening in another: a barrel lid set in its rim, a hatch in
+// its frame. The weld only closes co-located vertices, so the two parts stay
+// separate components and the part's rim is an open border. Left free, that
+// border drifts like a silhouette edge under the level's error budget, and the
+// drift opens a hole into what the part closed: a lid whose octagon rim
+// collapses to a triangle leaves three dark crescents into the barrel at a
+// reported error of 0.06 of extent (measured), and the silhouette tripwire
+// sees nothing, because the barrel wall still covers the lid in every axis
+// view.
+//
+// A part's free border therefore locks, like a seam-plane vertex, when the
+// part is closed against other parts along ALL of that border: every free
+// border vertex, and points along every free border edge no farther apart
+// than the contact distance, lie within the part's contact distance of
+// another part's surface. A part that touches others only at points (a plank
+// resting across beams) or only lies near them (foliage cards in a bush, logs
+// in a palisade) keeps its border free: its drift opens no enclosed space, and
+// a lock there stops the whole mesh from simplifying.
+//
+// The contact distance is the smaller of two bounds. The first is relative to
+// the mesh extent like the error budgets: a quarter of the smallest error any
+// level engages at (kLodErrorFloor[0] = 0.04), so a part that close meets the
+// other at every level's resolution.
+constexpr float kContactSeamRelativeEpsilon = 0.01f;
+
+// The second bound is relative to the part's own size, the square root of its
+// area: a seam is a fit gap that is small next to the part, and a gap
+// comparable to the part is spacing between parts. Measured on a kit corpus of
+// 808 meshes: lid clearances reach 2.5% of the lid's size, and the gaps
+// between neighboring foliage cards and log pieces start at 5.6%. The bound is
+// their geometric midpoint, sqrt(0.025 x 0.056), a 1.5x margin to each side.
+constexpr float kContactGapPartFraction = 0.037f;
+
+// Grid cells per axis at most for the contact query; a cell is never smaller
+// than the contact distance.
+constexpr int32 kContactGridMaxCells = 64;
+
+Mathematics::Vector3 PositionOf(const Vertex& vertex) {
+    return {vertex.Position[0], vertex.Position[1], vertex.Position[2]};
+}
+
+// Triangles bucketed by the grid cells their bounds, grown by the contact
+// distance, overlap; a vertex then tests only the triangles of its own cell.
+// Cell coordinates are integer triples; Mathematics has no integer vector, so
+// they stay plain int32[3].
+struct ContactTriangleGrid {
+    Mathematics::Vector3 Origin;
+    float CellSize = 1.0f;
+    int32 Cells[3] = {1, 1, 1};
+    Vector<uint32> Offsets;   // cell -> [Offsets[c], Offsets[c + 1]) into Triangles
+    Vector<uint32> Triangles; // first index of each bucketed triangle
+};
+
+// Inclusive cell range on each axis.
+struct ContactCellRange {
+    int32 Low[3];
+    int32 High[3];
+};
+
+int32 ContactCellCoordinate(const ContactTriangleGrid& grid, float value, int32 axis) {
+    const int32 cell = static_cast<int32>(
+        std::floor((value - grid.Origin[static_cast<size_t>(axis)]) / grid.CellSize));
+    return std::clamp(cell, 0, grid.Cells[axis] - 1);
+}
+
+size_t ContactCellIndex(const ContactTriangleGrid& grid, int32 x, int32 y, int32 z) {
+    return (static_cast<size_t>(z) * static_cast<size_t>(grid.Cells[1]) + static_cast<size_t>(y)) *
+               static_cast<size_t>(grid.Cells[0]) +
+           static_cast<size_t>(x);
+}
+
+ContactCellRange TriangleContactCells(const Mesh& mesh, const ContactTriangleGrid& grid,
+                                      size_t firstIndex, float contactDistance) {
+    ContactCellRange range;
+    for (int32 axis = 0; axis < 3; ++axis) {
+        float minValue = std::numeric_limits<float>::max();
+        float maxValue = std::numeric_limits<float>::lowest();
+        for (size_t corner = 0; corner < 3; ++corner) {
+            const float value = mesh.Vertices[mesh.Indices[firstIndex + corner]].Position[axis];
+            minValue = std::min(minValue, value);
+            maxValue = std::max(maxValue, value);
+        }
+        range.Low[axis] = ContactCellCoordinate(grid, minValue - contactDistance, axis);
+        range.High[axis] = ContactCellCoordinate(grid, maxValue + contactDistance, axis);
+    }
+    return range;
+}
+
+ContactTriangleGrid BuildContactTriangleGrid(const Mesh& mesh, const MeshBoundsInfo& bounds,
+                                             float contactDistance) {
+    ContactTriangleGrid grid;
+    grid.Origin = Mathematics::Vector3(bounds.Min[0], bounds.Min[1], bounds.Min[2]);
+    grid.CellSize = std::max(contactDistance,
+                             bounds.Extent / static_cast<float>(kContactGridMaxCells));
+    for (int32 axis = 0; axis < 3; ++axis) {
+        grid.Cells[axis] = std::clamp(
+            static_cast<int32>(std::ceil((bounds.Max[axis] - bounds.Min[axis]) / grid.CellSize)), 1,
+            kContactGridMaxCells);
+    }
+    const size_t cellCount = static_cast<size_t>(grid.Cells[0]) * grid.Cells[1] * grid.Cells[2];
+    // CSR layout: count each cell's triangles, prefix-sum, then fill.
+    grid.Offsets.assign(cellCount + 1, 0u);
+    for (size_t first = 0; first + 2 < mesh.Indices.size(); first += 3) {
+        const ContactCellRange range = TriangleContactCells(mesh, grid, first, contactDistance);
+        for (int32 z = range.Low[2]; z <= range.High[2]; ++z)
+            for (int32 y = range.Low[1]; y <= range.High[1]; ++y)
+                for (int32 x = range.Low[0]; x <= range.High[0]; ++x)
+                    ++grid.Offsets[ContactCellIndex(grid, x, y, z) + 1];
+    }
+    for (size_t cell = 0; cell < cellCount; ++cell)
+        grid.Offsets[cell + 1] += grid.Offsets[cell];
+    grid.Triangles.resize(grid.Offsets[cellCount]);
+    Vector<uint32> cursor(grid.Offsets.begin(), grid.Offsets.end() - 1);
+    for (size_t first = 0; first + 2 < mesh.Indices.size(); first += 3) {
+        const ContactCellRange range = TriangleContactCells(mesh, grid, first, contactDistance);
+        for (int32 z = range.Low[2]; z <= range.High[2]; ++z)
+            for (int32 y = range.Low[1]; y <= range.High[1]; ++y)
+                for (int32 x = range.Low[0]; x <= range.High[0]; ++x)
+                    grid.Triangles[cursor[ContactCellIndex(grid, x, y, z)]++] = static_cast<uint32>(first);
+    }
+    return grid;
+}
+
+// Whether `point` lies within `contactDistance` (at most the distance the grid
+// was built for) of a triangle of a welded component other than `part`;
+// `component` maps each vertex to its welded component root.
+bool TouchesAnotherComponent(const Mesh& mesh, const ContactTriangleGrid& grid,
+                             const Vector<uint32>& component, const Mathematics::Vector3& point,
+                             uint32 part, float contactDistance) {
+    const size_t cell = ContactCellIndex(grid, ContactCellCoordinate(grid, point.x, 0),
+                                         ContactCellCoordinate(grid, point.y, 1),
+                                         ContactCellCoordinate(grid, point.z, 2));
+    const float limitSq = contactDistance * contactDistance;
+    for (uint32 slot = grid.Offsets[cell]; slot < grid.Offsets[cell + 1]; ++slot) {
+        const uint32 first = grid.Triangles[slot];
+        if (component[mesh.Indices[first]] == part)
+            continue;
+        const Mathematics::Vector3 nearest = Mathematics::ClosestPointOnTriangle(
+            point, PositionOf(mesh.Vertices[mesh.Indices[first]]),
+            PositionOf(mesh.Vertices[mesh.Indices[first + 1]]),
+            PositionOf(mesh.Vertices[mesh.Indices[first + 2]]));
+        if ((nearest - point).LengthSquared() <= limitSq)
+            return true;
+    }
+    return false;
+}
+
+// Locks the free border of every part closed against other parts along all of
+// it (see kContactSeamRelativeEpsilon and kContactGapPartFraction).
+// `canonical` maps each vertex to its welded representative; `freeBorder`
+// holds the canonical border vertices off every seam plane, `freeBorderEdges`
+// the packed canonical border edges with both endpoints there. Returns whether
+// any vertex locked.
+bool LockContactSeams(const Mesh& mesh, const Vector<uint32>& canonical,
+                      const Vector<uint32>& freeBorder, const Vector<uint64>& freeBorderEdges,
+                      const MeshBoundsInfo& bounds, Vector<uint8>& flaggedCanonical) {
+    const size_t vertexCount = mesh.Vertices.size();
+    Vector<uint32> weldedIndices(mesh.Indices.size());
+    for (size_t index = 0; index < mesh.Indices.size(); ++index)
+        weldedIndices[index] = canonical[mesh.Indices[index]];
+    const Vector<uint32> roots = ConnectedComponentRoots(weldedIndices, vertexCount);
+    Vector<uint32> component(vertexCount);
+    for (size_t v = 0; v < vertexCount; ++v)
+        component[v] = roots[canonical[v]];
+
+    // Per part, indexed by its root: its area, then its contact distance.
+    Vector<float> contactDistance(vertexCount, 0.0f);
+    for (size_t first = 0; first + 2 < mesh.Indices.size(); first += 3) {
+        const Mathematics::Vector3 a = PositionOf(mesh.Vertices[mesh.Indices[first]]);
+        const Mathematics::Vector3 b = PositionOf(mesh.Vertices[mesh.Indices[first + 1]]);
+        const Mathematics::Vector3 c = PositionOf(mesh.Vertices[mesh.Indices[first + 2]]);
+        contactDistance[component[mesh.Indices[first]]] +=
+            0.5f * Mathematics::Vector3::Cross(b - a, c - a).Length();
+    }
+    const float meshContactDistance = bounds.Extent * kContactSeamRelativeEpsilon;
+    for (float& distance : contactDistance)
+        distance = std::min(meshContactDistance, kContactGapPartFraction * std::sqrt(distance));
+
+    const ContactTriangleGrid grid = BuildContactTriangleGrid(mesh, bounds, meshContactDistance);
+    Vector<uint8> openToAir(vertexCount, 0u);
+    for (const uint32 vertex : freeBorder) {
+        const uint32 part = component[vertex];
+        if (openToAir[part] == 0u &&
+            !TouchesAnotherComponent(mesh, grid, component, PositionOf(mesh.Vertices[vertex]), part,
+                                     contactDistance[part]))
+            openToAir[part] = 1u;
+    }
+    for (const uint64 edge : freeBorderEdges) {
+        const uint32 a = static_cast<uint32>(edge >> 32);
+        const uint32 b = static_cast<uint32>(edge & 0xFFFFFFFFu);
+        const uint32 part = component[a];
+        if (openToAir[part] != 0u)
+            continue;
+        // Interior samples no farther apart than the contact distance, so every
+        // point of a closed edge lies within 1.5 contact distances of another part.
+        const Mathematics::Vector3 start = PositionOf(mesh.Vertices[a]);
+        const Mathematics::Vector3 span = PositionOf(mesh.Vertices[b]) - start;
+        const float distance = contactDistance[part];
+        const uint32 intervals =
+            distance > 0.0f ? static_cast<uint32>(std::ceil(span.Length() / distance)) : 1u;
+        for (uint32 sample = 1; sample < intervals && openToAir[part] == 0u; ++sample) {
+            const Mathematics::Vector3 point =
+                start + span * (static_cast<float>(sample) / static_cast<float>(intervals));
+            if (!TouchesAnotherComponent(mesh, grid, component, point, part, distance))
+                openToAir[part] = 1u;
+        }
+    }
+
+    bool any = false;
+    for (const uint32 vertex : freeBorder) {
+        if (openToAir[component[vertex]] == 0u) {
+            flaggedCanonical[vertex] |= meshopt_SimplifyVertex_Lock;
+            any = true;
+        }
+    }
+    return any;
+}
+
 // Per-vertex simplification flag array (meshopt_SimplifyVertex_* bits):
 //
 // - meshopt_SimplifyVertex_Lock on open-border vertices (an edge referenced by
 //   exactly one triangle in the position-welded topology) that lie on the mesh
 //   AABB's face planes, under MeshLODBorderRule::SeamPlanes. Cross-piece kit
-//   seams sit there by construction and must never move; all other borders
-//   drift under the error budget.
+//   seams sit there by construction and must never move. Under the same rule,
+//   the free border of a part closed against other parts along all of it
+//   locks too (contact seams: a lid in its rim, see LockContactSeams); all
+//   other borders drift under the error budget.
 // - meshopt_SimplifyVertex_Protect on every wedge of a co-located group whose
 //   UV spread exceeds kChartProtectUvSpread (chromatic chart boundaries; see
 //   above). Applied under EVERY border rule — chromatic protection is
@@ -455,11 +703,12 @@ Vector<uint8> BuildVertexSimplifyFlags(const Mesh& mesh, const Vector<float>& sn
         // packed-edge list (cook path — cache-friendly, no hashing).
         Vector<uint64> edges;
         edges.reserve(mesh.Indices.size());
-        for (size_t i = 0; i + 2 < mesh.Indices.size(); i += 3) {
-            const uint32 tri[3] = {canonical[mesh.Indices[i]], canonical[mesh.Indices[i + 1]],
-                                   canonical[mesh.Indices[i + 2]]};
-            for (int e = 0; e < 3; ++e) {
-                uint32 a = tri[e], b = tri[(e + 1) % 3];
+        for (size_t first = 0; first + 2 < mesh.Indices.size(); first += 3) {
+            const std::array<uint32, 3> corners = {canonical[mesh.Indices[first]],
+                                                   canonical[mesh.Indices[first + 1]],
+                                                   canonical[mesh.Indices[first + 2]]};
+            for (size_t corner = 0; corner < 3; ++corner) {
+                uint32 a = corners[corner], b = corners[(corner + 1) % 3];
                 if (a == b)
                     continue;
                 if (a > b)
@@ -468,31 +717,40 @@ Vector<uint8> BuildVertexSimplifyFlags(const Mesh& mesh, const Vector<float>& sn
             }
         }
         std::sort(edges.begin(), edges.end());
+        Vector<uint32> freeBorder;      // canonical border vertices off every seam plane
+        Vector<uint64> freeBorderEdges; // border edges with both endpoints there
 
-        float eps[3];
-        for (int c = 0; c < 3; ++c)
-            eps[c] = std::max((bounds.Max[c] - bounds.Min[c]) * kSeamPlaneRelativeEpsilon,
-                              1e-7f);
-        const auto onSeamPlane = [&](uint32 v) {
-            const float* p = mesh.Vertices[v].Position;
-            for (int c = 0; c < 3; ++c) {
-                if (p[c] - bounds.Min[c] <= eps[c] || bounds.Max[c] - p[c] <= eps[c])
-                    return true;
+        for (size_t runStart = 0; runStart < edges.size();) {
+            size_t runEnd = runStart + 1;
+            while (runEnd < edges.size() && edges[runEnd] == edges[runStart])
+                ++runEnd;
+            if (runEnd - runStart == 1) { // border edge: lock endpoints on a seam plane
+                const uint32 a = static_cast<uint32>(edges[runStart] >> 32);
+                const uint32 b = static_cast<uint32>(edges[runStart] & 0xFFFFFFFFu);
+                bool bothFree = true;
+                for (const uint32 endpoint : {a, b}) {
+                    if (LiesOnSeamPlane(mesh.Vertices[endpoint], bounds)) {
+                        flaggedCanonical[endpoint] |= meshopt_SimplifyVertex_Lock;
+                        any = true;
+                        bothFree = false;
+                    } else {
+                        freeBorder.push_back(endpoint);
+                    }
+                }
+                if (bothFree)
+                    freeBorderEdges.push_back(edges[runStart]);
             }
-            return false;
-        };
+            runStart = runEnd;
+        }
 
-        for (size_t i = 0; i < edges.size();) {
-            size_t j = i + 1;
-            while (j < edges.size() && edges[j] == edges[i])
-                ++j;
-            if (j - i == 1) { // border edge: lock endpoints on a seam plane
-                const uint32 a = static_cast<uint32>(edges[i] >> 32);
-                const uint32 b = static_cast<uint32>(edges[i] & 0xFFFFFFFFu);
-                if (onSeamPlane(a)) { flaggedCanonical[a] |= meshopt_SimplifyVertex_Lock; any = true; }
-                if (onSeamPlane(b)) { flaggedCanonical[b] |= meshopt_SimplifyVertex_Lock; any = true; }
-            }
-            i = j;
+        // Contact seams: the free border of a part closed against other parts
+        // locks too.
+        if (!freeBorder.empty() && bounds.Extent > 0.0f) {
+            std::sort(freeBorder.begin(), freeBorder.end());
+            freeBorder.erase(std::unique(freeBorder.begin(), freeBorder.end()), freeBorder.end());
+            if (LockContactSeams(mesh, canonical, freeBorder, freeBorderEdges, bounds,
+                                 flaggedCanonical))
+                any = true;
         }
     }
 

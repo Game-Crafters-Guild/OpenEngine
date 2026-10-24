@@ -17,17 +17,22 @@ struct Vertex;
  * seams WITHIN one mesh, never across two. If both neighbours collapse their
  * shared border independently, the seam pulls apart into a visible crack — so
  * cross-piece seams must never move. But kit pieces tile at their own bounding
- * extremes BY CONSTRUCTION, so those seams lie on the mesh AABB's face planes;
- * every other open border (window holes, trim edges, foliage-card rims) is
- * mesh-internal and free to drift within the level's error budget — drift
- * there is a self-contained silhouette morph, not a hole, and the achieved
- * error it costs delays the level's engagement proportionally (the error->
- * coverage threshold mapping in MeshLODThresholds.h).
+ * extremes BY CONSTRUCTION, so those seams lie on the mesh AABB's face planes.
+ * The same seam exists inside one mesh wherever one of its disconnected parts
+ * closes an opening in another (a lid set in its rim): drift there opens a
+ * hole into what the part closed, so the open border of a part that meets
+ * other parts' surfaces along all of that border is a seam too (a contact
+ * seam). Every other open border (window holes, free trim edges, foliage-card
+ * rims, planks resting on beams) is free to drift within the level's error
+ * budget — drift there is a self-contained silhouette morph, not a hole, and
+ * the achieved error it costs delays the level's engagement proportionally
+ * (the error->coverage threshold mapping in MeshLODThresholds.h).
  */
 enum class MeshLODBorderRule : uint8 {
     // Lock only open-border vertices lying on the mesh AABB's face planes (the
-    // kit-seam invariant above). The default: watertight cross-piece seams AND
-    // reducible mid levels on open-border kit content.
+    // kit-seam invariant above) or bounding a part closed against other parts
+    // of the mesh (contact seams). The default: watertight cross-piece seams,
+    // closed caps, AND reducible mid levels on open-border kit content.
     SeamPlanes = 0,
     // Lock every open-border vertex. Watertight everywhere, but mid levels
     // cannot emit on open-border-dominated content (the pre-2026-07 default,

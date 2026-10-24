@@ -2231,6 +2231,87 @@ class Outer
         Assert.Empty(compilationErrors);
     }
 
+    // A component the engine owns is a readonly mirror: a ref of it would write the chunk the engine
+    // writes, so it is an error with the fix "take it as in"; the same parameter as in is accepted.
+    [Fact]
+    public void DiagnosticGE0027_RefOfEngineOwnedComponent()
+    {
+        const string source = """
+            using System.Runtime.InteropServices;
+            using GameEngine.Scripting;
+
+            namespace TestGame
+            {
+                [StructLayout(LayoutKind.Explicit, Size = 4)]
+                [BuiltInComponent("GameEngine::Components::Clock")]
+                public readonly partial struct Clock : IComponent { [FieldOffset(0)] public readonly float Elapsed; }
+
+                public partial struct WritesSystem : IEntitySystem
+                {
+                    public void Execute(ref Clock clock, float deltaTime) { }
+                }
+
+                public partial struct ReadsSystem : IEntitySystem
+                {
+                    public void Execute(in Clock clock, float deltaTime) { }
+                }
+            }
+            """;
+
+        var (_, _, diagnostics) = RunGenerator(source);
+
+        var refused = Assert.Single(diagnostics, d => d.Id == "GE0027");
+        Assert.Equal(DiagnosticSeverity.Error, refused.Severity);
+        Assert.Contains("take it as 'in'", refused.GetMessage());
+        Assert.Contains("'clock'", refused.GetMessage());
+    }
+
+    // A ref of a mirror whose fields the engine keeps in part (a hidden GPU handle) may set fields, but a
+    // whole-value assignment would write the engine's bytes too: an error with the fix "set the fields you
+    // change". A mirror with no such field (Transform) takes a whole value.
+    [Fact]
+    public void DiagnosticGE0028_WholeValueWriteOfEngineFields()
+    {
+        const string source = """
+            using System.Runtime.InteropServices;
+            using GameEngine.Scripting;
+
+            namespace TestGame
+            {
+                [StructLayout(LayoutKind.Explicit, Size = 16)]
+                [BuiltInComponent("GameEngine::Components::Renderer")]
+                public partial struct Renderer : IComponent
+                {
+                    [FieldOffset(0)] public uint MeshId;
+                    [FieldOffset(8)] private ulong m_MeshGpuHandleId;
+                }
+
+                [StructLayout(LayoutKind.Explicit, Size = 4)]
+                [BuiltInComponent("GameEngine::Components::Pose")]
+                public partial struct Pose : IComponent { [FieldOffset(0)] public float Yaw; }
+
+                public partial struct RestoreSystem : IEntitySystem
+                {
+                    public void Execute(ref Renderer renderer, ref Pose pose, float deltaTime)
+                    {
+                        Renderer saved = renderer;
+                        renderer.MeshId = 3;
+                        renderer = saved;
+                        pose = default;
+                    }
+                }
+            }
+            """;
+
+        var (_, _, diagnostics) = RunGenerator(source);
+
+        var refused = Assert.Single(diagnostics, d => d.Id == "GE0028");
+        Assert.Equal(DiagnosticSeverity.Error, refused.Severity);
+        Assert.Contains("set the fields you change", refused.GetMessage());
+        Assert.Contains("renderer = saved", refused.Location.SourceTree!.ToString()
+            .Substring(refused.Location.SourceSpan.Start, refused.Location.SourceSpan.Length));
+    }
+
     [Fact]
     public void MixedBuiltInAndUserComponents_BothRegistrationPaths()
     {

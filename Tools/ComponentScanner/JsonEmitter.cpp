@@ -41,6 +41,8 @@ void WriteField(JsonWriter& w, const WebField& f)
         w.Boolean("readonly", true);
     if (f.Tooltip)
         w.String("tooltip", *f.Tooltip);
+    if (f.Label)
+        w.String("label", *f.Label);
     if (f.Range)
     {
         w.Number("min", f.Range->Min);
@@ -48,6 +50,18 @@ void WriteField(JsonWriter& w, const WebField& f)
             w.Number("max", *f.Range->Max);
     }
     w.EndObject();
+}
+
+// The `reason` value of an `omitted` entry.
+const char* OmissionReasonName(WebOmissionReason reason)
+{
+    switch (reason)
+    {
+    case WebOmissionReason::NoReflectedKind: return "noReflectedKind";
+    case WebOmissionReason::AmbiguousEnum: return "ambiguousEnum";
+    case WebOmissionReason::UnresolvedType: break;
+    }
+    return "unresolvedType";
 }
 
 } // namespace
@@ -77,11 +91,13 @@ std::string Emit(const WebComponentModel& model)
         w.StartObject();
         w.String("name", e->Name);
         w.StartArray("values");
-        for (const EnumMember& m : e->Members)
+        for (const EnumMember& member : e->Members)
         {
             w.StartObject();
-            w.String("name", m.Name);
-            w.Number("value", m.Value);
+            w.String("name", member.Name);
+            w.Number("value", member.Value);
+            if (member.Label)
+                w.String("label", *member.Label);
             w.EndObject();
         }
         w.EndArray();
@@ -96,7 +112,7 @@ std::string Emit(const WebComponentModel& model)
         w.String("component", o.Component);
         w.String("field", o.Field);
         w.String("type", o.Type);
-        w.String("reason", o.Reason == WebOmissionReason::NoReflectedKind ? "noReflectedKind" : "unresolvedType");
+        w.String("reason", OmissionReasonName(o.Reason));
         w.EndObject();
     }
     w.EndArray();

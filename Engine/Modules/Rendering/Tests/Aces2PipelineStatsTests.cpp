@@ -310,7 +310,7 @@ TEST(Aces2PipelineStats, TierTablesDoNotSpillToScratchMemory)
                 // word (measured here: const-array shader = 2^36 + 89,264;
                 // SSBO shader = 2^36 + 0). Take the low 32 bits — a no-op for
                 // drivers that report plain byte counts below 4 GB.
-                worstScratchBytes = std::max(worstScratchBytes, v & 0xFFFFFFFFull);
+                worstScratchBytes = std::max(worstScratchBytes, v & 0xFFFFFFFFu);
             }
         }
     }

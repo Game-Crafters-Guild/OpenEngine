@@ -260,8 +260,10 @@ TEST(ObjectPoolTests, AByteAlignedNineByteTypeGetsAlignedLinks)
     {
         EXPECT_TRUE(IsAligned(objects[index], alignof(void*)));
         if (index > 0)
+        {
             EXPECT_EQ(reinterpret_cast<std::byte*>(objects[index]) - reinterpret_cast<std::byte*>(objects[index - 1]),
                       16);
+        }
     }
     for (std::size_t index = 0; index < objects.size(); index += 2)
         pool.Delete(objects[index]);

@@ -12,38 +12,6 @@
 namespace GameEngine::TerrainECS
 {
 
-// Pre-compute per-node min/max for the global quadtree finest level.
-// Runs on job threads to avoid scanning heightfield on the main thread.
-static void ComputeQuadtreeNodesFromHeightfield(
-    const Terrain::HeightfieldData& hf,
-    uint32 tileFinestNodes,
-    std::vector<NodeMinMax>& outNodes,
-    uint32& outNodesPerAxis)
-{
-    outNodesPerAxis = tileFinestNodes;
-    outNodes.resize(static_cast<size_t>(tileFinestNodes) * tileFinestNodes);
-
-    const uint32 hfW = hf.GetWidth();
-    const uint32 hfH = hf.GetHeight();
-    const uint32 samplesPerNodeX = std::max(1u, (hfW - 1) / tileFinestNodes);
-    const uint32 samplesPerNodeZ = std::max(1u, (hfH - 1) / tileFinestNodes);
-
-    for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-    {
-        for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-        {
-            float32 nodeMinH, nodeMaxH;
-            hf.GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                         static_cast<int32>(nz * samplesPerNodeZ),
-                         static_cast<int32>(samplesPerNodeX + 1),
-                         static_cast<int32>(samplesPerNodeZ + 1),
-                         nodeMinH, nodeMaxH);
-
-            outNodes[nz * tileFinestNodes + nx] = {nodeMinH, nodeMaxH};
-        }
-    }
-}
-
 TileStreamingManager::TileStreamingManager(JobSystem::WorkStealingThreadPool* jobSystem,
                                            const StreamingConfig& config)
     : m_Config(config)
@@ -307,7 +275,6 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
     const uint32 coarseRes = m_Config.CoarseResolution;
     const uint32 tileRes = tiled.Config.TileConfig.HeightmapWidth;
     const float32 heightScale = tiled.Config.HeightScale;
-    const uint32 tileLODLevels = tiled.Config.TileConfig.LODLevels;
     // By value: the copy shares the base heightmap, so the job reads it safely even
     // if the terrain is re-provisioned or the decode cache evicts it meanwhile.
     const TiledTerrainConfig config = tiled.Config;
@@ -319,7 +286,7 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
     tracker.ActiveJob = m_JobSystem->Submit([result, worldOriginX, worldOriginZ,
                                              terrainOriginX, terrainOriginZ, config,
                                              tileWorld, coarseRes, tileRes, heightScale, coord,
-                                             tileLODLevels, completedQueue]()
+                                             completedQueue]()
     {
         result->Coord = coord;
         result->CoarseHeightfield.Resize(coarseRes, coarseRes, 0.0f);
@@ -353,12 +320,6 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
             result->CoarseHeightfield,
             result->Splatmap, result->SplatmapWidth, result->SplatmapHeight);
 
-        // Pre-compute quadtree node min/max for main-thread integration.
-        const uint32 tileFinestNodes = 1u << (tileLODLevels - 1);
-        ComputeQuadtreeNodesFromHeightfield(
-            result->CoarseHeightfield, tileFinestNodes,
-            result->QuadtreeNodes, result->QuadtreeNodesPerAxis);
-
         result->CompletedStage = TileState::CoarseReady;
 
         std::lock_guard<std::mutex> lock(completedQueue->Mutex);
@@ -390,13 +351,11 @@ void TileStreamingManager::DispatchFullJob(TerrainStream& stream,
 
     auto completedQueue = stream.Completed;
     const float32 heightScale = tiled.Config.HeightScale;
-    const uint32 tileLODLevels = tiled.Config.TileConfig.LODLevels;
 
     tracker.ActiveJob = m_JobSystem->Submit([result, worldOriginX, worldOriginZ,
                                              terrainOriginX, terrainOriginZ, config,
                                              tileWorld, fullW, fullH, coord,
-                                             heightScale,
-                                             tileLODLevels, completedQueue]()
+                                             heightScale, completedQueue]()
     {
         result->Coord = coord;
         result->FullHeightfield.Resize(fullW, fullH, 0.0f);
@@ -427,12 +386,6 @@ void TileStreamingManager::DispatchFullJob(TerrainStream& stream,
         GenerateNormalmapFromHeightfield(
             result->FullHeightfield, tileWorld, tileWorld, heightScale,
             result->Normalmap, result->NormalmapWidth, result->NormalmapHeight);
-
-        // Pre-compute quadtree node min/max for main-thread integration.
-        const uint32 tileFinestNodes = 1u << (tileLODLevels - 1);
-        ComputeQuadtreeNodesFromHeightfield(
-            result->FullHeightfield, tileFinestNodes,
-            result->QuadtreeNodes, result->QuadtreeNodesPerAxis);
 
         result->CompletedStage = TileState::FullReady;
 
@@ -557,14 +510,12 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
                                     std::vector<uint8>{}, 0, 0);
             }
 
-            // Store pre-computed data on the tile for the extraction system.
+            // Store the job's coarse stand-in on the tile for the extraction system.
             {
                 auto tileIt = tiled.Tiles.find(result->Coord);
                 if (tileIt != tiled.Tiles.end() && tileIt->second)
                 {
                     auto& t = *tileIt->second;
-                    t.PrecomputedQuadtreeNodes = std::move(result->QuadtreeNodes);
-                    t.PrecomputedQuadtreeNodesPerAxis = result->QuadtreeNodesPerAxis;
                     if (result->CoarseStandIn)
                     {
                         // The stand-in belongs to the heightfield just set, whose version
@@ -618,17 +569,6 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
                                     result->SplatmapWidth, result->SplatmapHeight,
                                     std::move(result->Normalmap),
                                     result->NormalmapWidth, result->NormalmapHeight);
-            }
-
-            // Store pre-computed data on the tile.
-            {
-                auto tileIt = tiled.Tiles.find(result->Coord);
-                if (tileIt != tiled.Tiles.end() && tileIt->second)
-                {
-                    auto& t = *tileIt->second;
-                    t.PrecomputedQuadtreeNodes = std::move(result->QuadtreeNodes);
-                    t.PrecomputedQuadtreeNodesPerAxis = result->QuadtreeNodesPerAxis;
-                }
             }
 
             // Update global height range.

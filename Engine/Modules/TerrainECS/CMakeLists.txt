@@ -28,6 +28,8 @@ add_library(TerrainECS OBJECT
     Source/AtlasResidencyController.cpp
     Source/PageLevelRule.cpp
     Source/PagedHeightSampler.cpp
+    Source/CpuHeightPageCache.cpp
+    Source/SurfaceHeightQuery.cpp
     Source/TerrainHeightSource.cpp
     Source/TerrainHeightPages.cpp
     Source/TerrainHeightPageFeature.cpp

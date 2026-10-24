@@ -367,7 +367,6 @@ add_library(RenderServices OBJECT
 	Source/Engine/Rendering/DDGIEmitterAreas.cpp
 	Source/Engine/Rendering/DDGIEmitterMaterials.cpp
 	Source/Engine/Rendering/DDGIUberMaterialBake.cpp
-	Source/Engine/Rendering/DDGIFieldRanges.cpp
 	Source/Engine/Rendering/DDGICameraIdleGate.cpp
 	Source/Engine/Rendering/DDGIEligibleView.cpp
 	Source/Engine/Rendering/DDGISolveBudget.cpp
@@ -651,6 +650,17 @@ set(_ge_scan_in_args "")
 foreach(_root ${_ge_component_scan_roots})
     list(APPEND _ge_scan_in_args --in "${_root}")
 endforeach()
+# A component field may name an enum a module declares outside its Components tree
+# (NavigationSurface::GridType is Pathfinding::GridType): the scanner reads it from the header
+# the component header includes, found under these module include roots, and lists that header
+# in the depfile so an edit to it re-runs the scan.
+file(GLOB _ge_module_include_roots LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/Modules/*/Include")
+foreach(_root ${_ge_module_include_roots})
+    if(IS_DIRECTORY "${_root}")
+        list(APPEND _ge_scan_in_args --enum-include-root "${_root}")
+    endif()
+endforeach()
+set(_GE_COMPONENT_GEN_DEPFILE "${_GE_COMPONENT_GEN_DIR}/ComponentReflection.gen.d")
 
 # Re-glob the scanned headers (core + module) at build time so adding either
 # re-triggers the scan without re-running configure.
@@ -667,7 +677,9 @@ add_custom_command(
             --out "${_GE_COMPONENT_GEN_CPP}"
             --emit-dts "${_GE_COMPONENT_GEN_DTS}"
             --emit-json "${_GE_COMPONENT_GEN_JSON}"
+            --depfile "${_GE_COMPONENT_GEN_DEPFILE}"
     DEPENDS ${_ge_component_headers} ${_ge_component_scanner_command}
+    DEPFILE "${_GE_COMPONENT_GEN_DEPFILE}"
     COMMENT "Generating ComponentReflection.gen.cpp from component headers"
     VERBATIM)
 
@@ -688,6 +700,12 @@ set(_ge_engine_api_scan_args
     --api-modules "${CMAKE_CURRENT_SOURCE_DIR}/Modules"
     --api-search "${CMAKE_CURRENT_SOURCE_DIR}/Include"
     --api-search "${CMAKE_CURRENT_SOURCE_DIR}/ECSModules")
+# The component roots: the same scan mirrors every engine component in C#
+# (Tools/ComponentScanner/ComponentMirror.h). Every run passes them, UpdateEngineApi included: the
+# C# writer cleans Generated/ recursively, so a run without them would delete Generated/Components.
+foreach(_root ${_ge_component_scan_roots})
+    list(APPEND _ge_engine_api_scan_args --api-components "${_root}")
+endforeach()
 file(GLOB_RECURSE _ge_api_scanned_files CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Modules/*/Include/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/Include/*"
@@ -708,6 +726,10 @@ foreach(_header ${_ge_script_api_headers})
 endforeach()
 list(REMOVE_DUPLICATES _ge_script_binding_sources)
 list(REMOVE_DUPLICATES _ge_script_binding_files)
+# The component mirrors' layout pins: the sizeof, alignof and offsetof of every mirrored component
+# and the values of their enums, so a C++ edit that moves a byte fails the engine build.
+list(APPEND _ge_script_binding_sources "${_GE_SCRIPT_BINDING_DIR}/Components.layout.gen.cpp")
+list(APPEND _ge_script_binding_files "${_GE_SCRIPT_BINDING_DIR}/Components.layout.gen.cpp")
 add_custom_command(
     OUTPUT "${_GE_ENGINE_API_SCAN_STAMP}"
     BYPRODUCTS ${_ge_script_binding_files}
@@ -720,8 +742,9 @@ add_custom_command(
 add_custom_target(EngineApiScan DEPENDS "${_GE_ENGINE_API_SCAN_STAMP}")
 set_target_properties(EngineApiScan PROPERTIES FOLDER "Tools")
 add_dependencies(Engine EngineApiScan)
-# The committed outputs of the scan: the description and the C# binding
-# (Managed/Scripting.Bindings/Generated), which ApiDescriptionDriftTests compares with a fresh scan.
+# The committed outputs of the scan: the description with component-classes.txt, and the C# binding
+# with the component mirrors (Managed/Scripting.Bindings/Generated/Components), which
+# ApiDescriptionDriftTests compares with a fresh scan.
 add_custom_target(UpdateEngineApi
     COMMAND ${_ge_component_scanner_command} ${_ge_engine_api_scan_args}
             --emit-api "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/engine-api"
@@ -749,23 +772,16 @@ target_compile_definitions(EngineScriptBindings PRIVATE
     GE_SCRIPTING_BUILD)
 target_link_libraries(EngineScriptBindings PRIVATE Input Scene)
 
-# The reflection TUs (generated + hand-written) contain nothing but file-scope
-# registrar statics — no symbol any other TU references. As members of a STATIC
-# Engine archive (the wasm build) the linker silently drops them and every
-# reflected component loses its field table at runtime; the SHARED desktop
-# Engine includes every member, which is what kept the defect latent. An OBJECT
-# library's objects reach every consumer's final link unconditionally, on both
-# link shapes. Each file is its own TU (UNITY_BUILD OFF) so GE_REFLECT explicit
-# specializations / per-line auto-register statics stay isolated.
-#
-# LensFlareSourceReflection / CubeLutEffectReflection / UIDocumentReflection:
-# hand-registered (AssetRef<> fields the scanner can't parse; UIDocument also
-# carries the hand-written UIRenderMode enum-name table).
+# The generated reflection TU contains nothing but file-scope registrar statics —
+# no symbol any other TU references. As a member of a STATIC Engine archive (the
+# wasm build) the linker silently drops it and every reflected component loses its
+# field table at runtime; the SHARED desktop Engine includes every member, which is
+# what kept the defect latent. An OBJECT library's objects reach every consumer's
+# final link unconditionally, on both link shapes. The TU is built alone
+# (UNITY_BUILD OFF) so GE_REFLECT explicit specializations / per-line auto-register
+# statics stay isolated.
 add_library(EngineComponentReflection OBJECT
-    "${_GE_COMPONENT_GEN_CPP}"
-    Source/Components/LensFlareSourceReflection.cpp
-    Source/Components/CubeLutEffectReflection.cpp
-    Source/Components/UIDocumentReflection.cpp)
+    "${_GE_COMPONENT_GEN_CPP}")
 set_target_properties(EngineComponentReflection PROPERTIES UNITY_BUILD OFF)
 target_include_directories(EngineComponentReflection PRIVATE
     $<TARGET_PROPERTY:Engine,INCLUDE_DIRECTORIES>)
@@ -1700,7 +1716,7 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_stage_runtime_dependencies(EngineHotReloadBridgeSelectiveInvalidationTests)
     add_test(NAME EngineHotReloadBridgeSelectiveInvalidationTests COMMAND $<TARGET_FILE:EngineHotReloadBridgeSelectiveInvalidationTests>)
 endif()
-# Engine tests: Application Tick/RunPlatformLoop driver contract
+# Engine tests: Application Tick/RunPlatformLoop driver and game-exit contracts
 if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(EngineApplicationTickTests
         Tests/ApplicationTickTests.cpp
@@ -1714,6 +1730,19 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_set_output_tests(EngineApplicationTickTests)
     ge_stage_runtime_dependencies(EngineApplicationTickTests)
     add_test(NAME EngineApplicationTickTests COMMAND $<TARGET_FILE:EngineApplicationTickTests>)
+    if(TARGET GameEngine.Native)
+        add_executable(EngineApplicationExitTests Tests/ApplicationExitTests.cpp)
+        target_link_libraries(EngineApplicationExitTests PRIVATE Engine GameEngine.Native GTest::gtest GTest::gtest_main)
+        set_target_properties(EngineApplicationExitTests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON
+            FOLDER "Engine/Tests"
+        )
+        ge_set_output_tests(EngineApplicationExitTests)
+        ge_stage_runtime_dependencies(EngineApplicationExitTests)
+        add_test(NAME EngineApplicationExitTests COMMAND $<TARGET_FILE:EngineApplicationExitTests>)
+        set_tests_properties(EngineApplicationExitTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endif()
 endif()
 
 # Engine tests: shaderpkg WGSL chunk round-trip
@@ -1765,6 +1794,7 @@ endif()
 if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(MeshLODGeneratorTests
         Tests/MeshLODGeneratorTests.cpp
+        Tests/MeshLODVisibleErrorTests.cpp
         Tests/MeshLODGeometryTests.cpp
         Tests/LodAssetSettingsTests.cpp
         Tests/MeshLODCacheTests.cpp
@@ -3541,13 +3571,14 @@ endif()
 	        Tests/SceneExportStripTests.cpp
 	        Tests/SplineSceneSerializationTests.cpp
 	        Tests/ReflectedComponentJsonTests.cpp
+	        Tests/ReflectedFieldMetadataTests.cpp
 	        Modules/TerrainGrass/Tests/TerrainGrassClampsTests.cpp
 	        Modules/TerrainGrass/Tests/TerrainGrassPresetsTests.cpp)
 	    target_link_libraries(EngineSceneIOTests PRIVATE Engine GTest::gtest GTest::gtest_main)
 	    # TerrainGrassClamps.SceneSchemaCarriesNoInlineClampCall reads the scene schema and fails on
 	    # any field bound written inline there instead of in the shared clamp pass.
 	    # SceneIO.CommittedScenesLoadWithNoSkippedFieldAndNoUnknownComponent loads the committed scenes
-	    # from the source tree.
+	    # from the source tree; ReflectedFieldMetadata reads its golden from Engine/Tests/Fixtures.
 	    target_compile_definitions(EngineSceneIOTests PRIVATE
 	        TERRAIN_GRASS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Modules/TerrainGrass/Source"
 	        GE_REPO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

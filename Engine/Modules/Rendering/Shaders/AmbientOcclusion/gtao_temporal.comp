@@ -2,10 +2,25 @@
 
 // Accumulate at sweep resolution, before the joint upsample.
 // Camera reprojection only: GTAO runs before the world pass and object motion
-// vectors. Conservative depth/normal rejection, bounded history weight and
-// current-neighbourhood clipping limit stale AO from moving occluders.
+// vectors. The history is a running mean over a sample count, so a still camera
+// averages the sweep's eight noise phases and the result stops changing. Stale
+// AO from moving occluders is bounded by the depth/normal rejection of each
+// history tap, by a count bound that falls with the history's distance from the
+// current 3x3 mean (in tolerances) and with reprojected motion, and by a clamp
+// kClampTolerances wide. A texel with too few neighbors on its surface for a
+// tolerance has a short fixed count bound instead.
+// One phase's 3x3 does not bound the mean of eight: on foliage a phase can move
+// the AO by more than 0.25 and its own neighborhood agrees with it, so a box
+// near the noise level would clip a converged history every few frames and the
+// leaves would shimmer. The tolerance is therefore wide, the deviation
+// is the raw sweep's (the blur narrows a phase's spread), and inside it the
+// history only shortens its memory instead of jumping. A real change inside the
+// tolerance (occlusion that arrives or leaves) puts the 3x3 mean on one side of
+// the history frame after frame, which the noise phases do not: after
+// kRunFrames such frames in a row the count is cut to kRunMaxSamples.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D uCurrent;
+layout(set = 0, binding = 8) uniform sampler2D uSweep;
 layout(set = 0, binding = 1) uniform sampler2D uDepth;
 layout(set = 0, binding = 2) uniform sampler2D uHistory;
 layout(set = 0, binding = 3) uniform sampler2D uHistorySurface;
@@ -13,26 +28,105 @@ layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uAOOut;
 layout(set = 0, binding = 6) uniform sampler2D uGuide;
 layout(set = 0, binding = 5, rg32f) uniform writeonly image2D uSurfaceOut;
 #include "AmbientOcclusion/gtao_geometry.glsl"
+#include "Includes/octahedral_normal.glsl"
 
-layout(push_constant) uniform PC { uint historyValid; } pc;
+layout(push_constant) uniform PC { uint historyValid; uint frameIndex; } pc;
 
-// R32G32F keeps depth at full precision and an exact 20-bit octahedral normal
-// integer in the second float. No raw depth is ever stored in half precision.
-vec2 signNotZero(vec2 v) { return mix(vec2(-1.0), vec2(1.0), greaterThanEqual(v, vec2(0.0))); }
-float packNormal(vec3 n)
+// The most samples the running mean holds: its weight floor is 1/kMaxSamples.
+// A running mean keeps a residue of the eight-phase cycle of about 1/kMaxSamples
+// of the phase spread; the tolerance test, not the cap, follows a changed surface.
+// The count lives in the 6 bits above the packed normal, so 64 is the ceiling.
+const float kMaxSamples = 64.0;
+// One tolerance, in deviations of the raw sweep's 3x3: a history one tolerance
+// from the current mean keeps at most half of kMaxSamples, two at most a fifth.
+const float kToleranceSigma = 3.0;
+// The deviation floor, so a flat 3x3 still tolerates one 8-bit step.
+const float kMinDeviation = 1.0 / 255.0;
+// The clamp's half-width, in tolerances.
+const float kClampTolerances = 2.0;
+// Texels on the center's surface that a 3x3 needs before its spread is used.
+const float kMinToleranceTaps = 3.0;
+// The count bound of a texel with fewer taps than that, which has no spread to
+// test its history against. At 12 a history 0.4 off clears to 2/255 in about 50
+// frames; a lower bound lets the eight-phase cycle show on thin foliage at rest.
+const float kUntestedMaxSamples = 12.0;
+// The disagreement run: the frames in a row that the 3x3 mean sat on one side
+// of the history by more than kRunDeadZone tolerances. A run of kRunFrames cuts
+// the count to kRunMaxSamples until the mean comes back within the dead zone.
+// Measured at a still camera above a lake shore looking into a tree (MSAA 4x):
+// with 4 frames the leaves change between frames as often as without the cut
+// (294 pixels a frame), with 2 slightly more (304); a boulder moved through the
+// crown leaves a darker trail for 2 frames in the final color instead of 45,
+// and the contact shadow of one set down on sand forms in 14 frames, not 90.
+const uint kRunFrames = 4u;
+const float kRunDeadZone = 0.125;
+const float kRunMaxSamples = 8.0;
+// The run lives in the lowest four mantissa bits of the stored depth, a relative
+// change under 2^-19 that the 0.002 depth test cannot see: bit 3 is the side,
+// bits 0 to 2 the frames, saturating at 7.
+const uint kRunBits = 0xFu;
+const uint kRunSideBit = 0x8u;
+const uint kRunFramesMask = 0x7u;
+// 2^-14, the smallest normal half-precision value.
+const float kSmallestNormalHalf = 6.103515625e-05;
+// The rounding noise repeats after this many frames; the offset keeps it apart
+// from the sweep's own rotation, which reads the same noise.
+const uint kRoundingFramePeriod = 256u;
+const vec2 kRoundingNoiseOffset = vec2(47.0, 17.0);
+// Reprojected motion, in full-resolution pixels per frame, that halves the
+// count bound; the bound is what keeps a fast pan from smearing old AO.
+const float kMotionHalfCountPixels = 4.6;
+
+// R32G32F keeps depth in the first float, its lowest four mantissa bits holding
+// the disagreement run (packDepth). The second holds an
+// exact 24-bit integer: an 18-bit octahedral normal (9 bits per axis, well inside
+// the 0.9 cosine the history test needs) and, above it, the history's sample
+// count minus one. No raw depth is ever stored in half precision.
+float packSurface(vec3 n, float samples)
 {
-    n /= abs(n.x) + abs(n.y) + abs(n.z);
-    vec2 p = n.z < 0.0 ? (1.0 - abs(n.yx)) * signNotZero(n.xy) : n.xy;
-    uvec2 q = uvec2(round(clamp(p * 0.5 + 0.5, 0.0, 1.0) * 1023.0));
-    return float(q.x | (q.y << 10u));
+    uvec2 q = uvec2(round(clamp(GE_OctEncode(n), 0.0, 1.0) * 511.0));
+    uint count = uint(clamp(round(samples), 1.0, kMaxSamples)) - 1u;
+    return float(q.x | (q.y << 9u) | (count << 18u));
+}
+float unpackSamples(float packed)
+{
+    return float(uint(packed) >> 18u) + 1.0;
 }
 vec3 unpackNormal(float packed)
 {
-    uint q = uint(packed);
-    vec2 p = vec2(q & 1023u, q >> 10u) / 1023.0 * 2.0 - 1.0;
-    vec3 n = vec3(p, 1.0 - abs(p.x) - abs(p.y));
-    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * signNotZero(n.xy);
-    return normalize(n);
+    uint q = uint(packed) & 0x3FFFFu;
+    return GE_OctDecode(vec2(q & 511u, q >> 9u) / 511.0);
+}
+float packDepth(float raw, uint run)
+{
+    return uintBitsToFloat((floatBitsToUint(raw) & ~kRunBits) | run);
+}
+uint unpackRun(float storedDepth)
+{
+    return floatBitsToUint(storedDepth) & kRunBits;
+}
+// The run after this frame, given the mean's offset from the history.
+uint nextRun(uint previous, float offset, float deadZone)
+{
+    if (abs(offset) <= deadZone) return 0u;
+    uint side = offset > 0.0 ? kRunSideBit : 0u;
+    uint frames = (previous & kRunSideBit) == side ? min((previous & kRunFramesMask) + 1u, kRunFramesMask) : 1u;
+    return side | frames;
+}
+
+// The history stores visibility in half precision: 11 significant bits, a step
+// of 1/2048 just below 1. A 1/kMaxSamples update is smaller than one step, and
+// the store's own rounding mode is the implementation's (NVIDIA truncates), so
+// a plain store stalls or drifts the mean by up to kMaxSamples steps. Rounding
+// here instead, up or down with the probability of the remainder and noise that
+// changes every frame, stores an exact half value: the mean is unbiased and a
+// texel at rest moves by at most one step.
+float roundToHalfPrecision(float visibility, float noise)
+{
+    float quantum = exp2(floor(log2(max(visibility, kSmallestNormalHalf))) - 10.0);
+    float below = floor(visibility / quantum) * quantum;
+    float rounded = below + (noise < (visibility - below) / quantum ? quantum : 0.0);
+    return clamp(rounded, 0.0, 1.0);
 }
 
 void main()
@@ -53,8 +147,9 @@ void main()
     }
     vec3 position = GE_GtaoPosition(uv, raw);
     vec3 normal = normalize(transpose(mat3(ge_view)) * GE_GtaoNormal(uDepth, uv, position));
-    imageStore(uSurfaceOut, pix, vec4(raw, packNormal(normal), 0.0, 0.0));
     vec4 result = current;
+    float samples = 1.0;
+    uint run = 0u;
     if (pc.historyValid != 0u)
     {
         vec4 world = ge_invView * vec4(position, 1.0);
@@ -69,11 +164,20 @@ void main()
                 float expectedDepth = GE_LinearizeDepth(ndc.z);
                 // History is this pass's own resolution, which an odd viewport
                 // makes NOT half the full extent; scale by the history extent.
-                vec2 f = prevUV * vec2(size) - 0.5;
+                // The guide's representative pixel is not the texel center, so
+                // move the texel center by the reprojected offset: at rest every
+                // texel reads exactly its own history instead of a bilinear mix
+                // that would diffuse the running mean into its neighbors.
+                vec2 historyUV = (vec2(pix) + 0.5) / vec2(size) + (prevUV - uv);
+                vec2 f = historyUV * vec2(size) - 0.5;
                 ivec2 base = ivec2(floor(f));
                 vec2 fraction = fract(f);
                 vec4 history = vec4(0.0);
+                float historySamples = 0.0;
                 float confidence = 0.0;
+                // The run comes from the heaviest tap: at rest, the texel's own.
+                uint historyRun = 0u;
+                float runWeight = 0.0;
                 // Reject each history tap before interpolation: interpolated
                 // depth/normal at an edge can accidentally validate another surface.
                 for (int y = 0; y < 2; ++y)
@@ -88,13 +192,24 @@ void main()
                             * (y == 0 ? 1.0 - fraction.y : fraction.y)
                             * (1.0 - smoothstep(0.002, 0.01, dz));
                     history += texelFetch(uHistory, tap, 0) * w;
+                    historySamples += unpackSamples(surface.y) * w;
                     confidence += w;
+                    if (w > runWeight)
+                    {
+                        runWeight = w;
+                        historyRun = unpackRun(surface.x);
+                    }
                 }
                 if (confidence > 0.25)
                 {
                     history /= confidence;
-                    float low = current.a;
-                    float high = current.a;
+                    historySamples /= confidence;
+                    // Over the 3x3 texels on this surface: the mean of the denoised
+                    // AO and the deviation of the raw sweep.
+                    float sum = 0.0;
+                    float sweepSum = 0.0;
+                    float sweepSquares = 0.0;
+                    float taps = 0.0;
                     float centerDepth = position.z;
                     for (int y = -1; y <= 1; ++y)
                     for (int x = -1; x <= 1; ++x)
@@ -102,23 +217,48 @@ void main()
                         ivec2 tap = clamp(pix + ivec2(x, y), ivec2(0), size - 1);
                         float d = GE_GtaoGuide(uGuide, tap, fullSize).z;
                         if (d <= 0.0 || abs(GE_LinearizeDepth(d) - centerDepth) > 0.01 * centerDepth) continue;
-                        float a = texelFetch(uCurrent, tap, 0).a;
-                        low = min(low, a);
-                        high = max(high, a);
+                        float sweep = texelFetch(uSweep, tap, 0).a;
+                        sum += texelFetch(uCurrent, tap, 0).a;
+                        sweepSum += sweep;
+                        sweepSquares += sweep * sweep;
+                        taps += 1.0;
                     }
-                    float disagreement = abs(history.a - current.a);
-                    history.a = clamp(history.a, low, high);
+                    float mean = sum / taps;
+                    float sweepMean = sweepSum / taps;
+                    float deviation = sqrt(max(sweepSquares / taps - sweepMean * sweepMean, 0.0));
+                    // Fewer than three texels on the surface give no spread to
+                    // test against, so the count alone bounds a stale history.
+                    if (taps >= kMinToleranceTaps)
+                    {
+                        float tolerance = kToleranceSigma * max(deviation, kMinDeviation);
+                        float distance = abs(history.a - mean) / tolerance;
+                        float countBound = kMaxSamples / (1.0 + distance * distance);
+                        run = nextRun(historyRun, mean - history.a, kRunDeadZone * tolerance);
+                        if ((run & kRunFramesMask) >= kRunFrames)
+                            countBound = min(countBound, kRunMaxSamples);
+                        historySamples = min(historySamples, countBound);
+                        history.a = clamp(history.a, mean - kClampTolerances * tolerance, mean + kClampTolerances * tolerance);
+                    }
+                    else
+                        historySamples = min(historySamples, kUntestedMaxSamples);
                     float motion = length((prevUV - uv) * vec2(fullSize));
-                    float weight = 0.85 * min(confidence, 1.0) * exp(-0.15 * motion)
-                                 * (1.0 - smoothstep(0.05, 0.25, disagreement));
+                    float bound = kMaxSamples * exp2(-motion / kMotionHalfCountPixels);
+                    historySamples = min(historySamples * min(confidence, 1.0), bound);
                     // A missing half-res surface is represented by the zero bent
                     // sentinel. Do not import another surface's bent normal there.
                     if (dot(current.rgb, current.rgb) > 1e-4 && dot(history.rgb, normal) > 0.0)
-                        result = mix(current, history, weight);
+                    {
+                        samples = min(historySamples + 1.0, kMaxSamples);
+                        result = mix(current, history, 1.0 - 1.0 / samples);
+                    }
                 }
             }
         }
     }
     result.rgb = dot(result.rgb, result.rgb) > 1e-8 ? normalize(result.rgb) : vec3(0.0);
+    float noise = GE_GtaoInterleavedGradientNoise(vec2(pix) + kRoundingNoiseOffset
+                                                  + float(pc.frameIndex % kRoundingFramePeriod) * vec2(5.588238));
+    result.a = roundToHalfPrecision(result.a, noise);
+    imageStore(uSurfaceOut, pix, vec4(packDepth(raw, run), packSurface(normal, samples), 0.0, 0.0));
     imageStore(uAOOut, pix, result);
 }

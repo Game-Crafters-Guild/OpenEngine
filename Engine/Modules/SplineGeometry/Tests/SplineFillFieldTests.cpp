@@ -192,9 +192,13 @@ TEST(SplineFillField, TheRegionBoundaryIsTheMinusEdgeDropIso)
     {
         const float32 x = ground.Grid.WorldX(cx);
         if (x > -6.0f && x < 0.2f)
+        {
             EXPECT_TRUE(At(field, ground.Grid, cx, 10u).Wet) << "x = " << x;
+        }
         if (x > 0.3f)
+        {
             EXPECT_FALSE(At(field, ground.Grid, cx, 10u).Wet) << "x = " << x;
+        }
     }
 }
 
@@ -219,9 +223,11 @@ TEST(SplineFillField, AWaterlineOverGroundThatKeepsFallingStopsShortOfTheCorrido
         {
             const SplineFillCorner& corner = At(field, ground.Grid, cx, cz);
             if (corner.Wet)
+            {
                 EXPECT_LT(corner.Distance, params.MaxHalfWidth - 1.0f)
                     << "water reached the corridor over open falling ground at x = "
                     << ground.Grid.WorldX(cx);
+            }
         }
     EXPECT_GT(field.Diagnostics.OverBankCorners, 0u)
         << "the ramp gave the water nothing to stand behind, yet nothing was refused";

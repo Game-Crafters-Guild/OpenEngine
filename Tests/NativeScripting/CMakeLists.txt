@@ -253,10 +253,12 @@ target_include_directories(NativeScriptManagerTests PRIVATE
 # EnableStateAbiTests drives the component switch the managed EntityCommands.SetEnabled uses,
 # through the same exports; AnimatorEventsAbiTests the event poll AnimatorApi.PollEvents uses;
 # UiElementTypeThreadRuleAbiTests the UI element-type registry's thread rules, in a binary that
-# starts no CLR, so the element-type callbacks it installs are the first and only ones.
+# starts no CLR, so the element-type callbacks it installs are the first and only ones;
+# ScriptComponentWriteAbiTests the component write and the defaults a C# mirror's Set and new use.
 if(TARGET GameEngine.Native)
     target_sources(NativeScriptManagerTests PRIVATE BlobComponentSchemaAbiTests.cpp EnableStateAbiTests.cpp
-        AnimatorEventsAbiTests.cpp AnimatorInputAbiTests.cpp UiElementTypeThreadRuleAbiTests.cpp)
+        AnimatorEventsAbiTests.cpp AnimatorInputAbiTests.cpp UiElementTypeThreadRuleAbiTests.cpp
+        ScriptComponentWriteAbiTests.cpp)
     target_link_libraries(NativeScriptManagerTests PRIVATE GameEngine.Native)
 endif()
 

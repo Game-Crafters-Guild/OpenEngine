@@ -3,10 +3,10 @@
 // keeping its bytes; agents whose path crosses a rebaked tile replan.
 #include "NavigationTestSurfaces.h"
 
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/Components/NavigationObstacle.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"

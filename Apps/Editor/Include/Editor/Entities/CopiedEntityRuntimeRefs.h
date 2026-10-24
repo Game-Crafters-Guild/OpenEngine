@@ -12,7 +12,7 @@
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PhysicsECS/Components/CharacterController.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"

@@ -107,7 +107,9 @@ TEST(TextureAlphaCoverage, MetadataIsStrictTransactionalAndDisabledCutoffIsInert
         ASSERT_TRUE(ParseTextureAlphaCoverageMeta("1", TextureAlphaCutoffMetaValue(cutoff), settings, error));
         EXPECT_EQ(settings.AlphaCoverageCutoff, cutoff);
         if (cutoff == 0.0f)
+        {
             EXPECT_FALSE(std::signbit(settings.AlphaCoverageCutoff));
+        }
     }
     ASSERT_TRUE(ParseTextureAlphaCoverageMeta("0", "nan", settings, error));
     EXPECT_FALSE(settings.PreserveAlphaCoverage);
@@ -177,13 +179,19 @@ TEST(TextureAlphaCoverage, EveryMipReachesNearestAttainableCoverageWithoutChangi
                     EXPECT_EQ(after.Height, before.Height);
                     for (size_t i = 0; i < after.Bytes.size(); ++i)
                         if (i % 4 != 3)
+                        {
                             EXPECT_EQ(after.Bytes[i], before.Bytes[i]);
+                        }
                     for (size_t i = 3; i < after.Bytes.size(); i += 4)
                         if (before.Bytes[i] == 0)
+                        {
                             EXPECT_EQ(after.Bytes[i], 0);
+                        }
                     if (level)
+                    {
                         EXPECT_EQ(CoverageError(PassingTexels(after, cutoff), after.Bytes.size() / 4, reference, referencePixels),
                                   MinimumAttainableError(before, cutoff, reference, referencePixels));
+                    }
                 }
             }
 }

@@ -11,7 +11,7 @@
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageStoreReader.h"
 #include "Rendering/Core/Device.h"
-#include "Rendering/Core/HashUtils.h"
+#include "Types/Fnv1a.h"
 
 #include <bit>
 #include <cmath>
@@ -22,7 +22,7 @@ namespace GameEngine::TerrainECS
 namespace
 {
 
-using Rendering::HashUtils::HashCombine;
+using Hashing::HashCombine;
 
 // The generated lattice of a noise or flat tiled terrain: its tile grid and the tile fill's noise.
 PageStreaming::GeneratedHeightLattice MakeGeneratedLattice(const TiledTerrainData& tiled)
@@ -150,6 +150,8 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     const float32 high = tiled.CachedGlobalMaxH * heightScale + originY;
     request.Shape.MinHeight = std::min(low, high);
     request.Shape.MaxHeight = std::max(low, high);
+    request.OriginY = originY;
+    request.HeightScale = heightScale;
     const PageLevelView view =
         MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale), targetPixelError);
     pages.Request(request, cameras, view);

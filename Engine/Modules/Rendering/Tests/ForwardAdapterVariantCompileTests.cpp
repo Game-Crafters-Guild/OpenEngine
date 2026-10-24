@@ -380,7 +380,9 @@ TEST(ForwardAdapterVariantCompile, TheReliefDepthDeclaresDepthLessOnlyUnderItsKe
         // discard whose condition is made always false keeps it, so only a deleted discard reads red.
         EXPECT_EQ(depth.Discards, fromPrepass);
         if (fromPrepass)
+        {
             EXPECT_FALSE(FragmentSpvNames(result, "GE_ParallaxMarch(")) << "the colour pass reads the hit, never marches";
+        }
     }
     for (const MaterialKeyword keywords : {kColour, kPrepass})
     {
@@ -768,8 +770,10 @@ void main()
                 }
             }
         if (mode == 2)
+        {
             EXPECT_GT(partial, size_t(kProbeWidth) * kProbeHeight / 4)
                 << "the coverage material lost its fractional sample masks";
+        }
     }
     EXPECT_EQ(device->GetValidationStats().ErrorCount, 0u);
     device->Shutdown();
@@ -876,4 +880,51 @@ void main()
     device->Shutdown();
     std::error_code ec;
     fs::remove_all(cache, ec);
+}
+
+// A surface's light visibility (SurfaceOutput.lightVisibility) scales everything the lit model sends
+// back and leaves the emission: the whole direct sum, after the last light is added, and the ambient
+// light and the reflection weight through ambientMultiplier. The lit block calls the whole BRDF and
+// the light lists, so it cannot run alone on the GPU as the emission and alpha blocks do; this reads
+// the staged adapter's structure instead.
+TEST(ForwardAdapterLightVisibility, ScalesTheDirectAndAmbientLightAndLeavesTheEmission)
+{
+    const fs::path path = GameEngine::Rendering::Tests::GetAdapterShaderDir() / "Adapters/adapter_forward.glsl";
+    std::ifstream input(path, std::ios::binary);
+    ASSERT_TRUE(input.good()) << path.string();
+    const std::string adapter{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+
+    const size_t litBegin = adapter.find("#ifdef LIGHTING_MODEL_STANDARD_PBR\n\n  #ifdef FORWARD_PLUS");
+    ASSERT_NE(litBegin, std::string::npos);
+    const size_t litEnd = adapter.find("#elif defined(LIGHTING_MODEL_SHADOW_ONLY)", litBegin);
+    ASSERT_NE(litEnd, std::string::npos);
+    const std::string lit = adapter.substr(litBegin, litEnd - litBegin);
+    const size_t afterLights = lit.rfind("  #endif");
+    ASSERT_NE(afterLights, std::string::npos);
+    const std::string tail = lit.substr(afterLights);
+    EXPECT_NE(tail.find("finalColor *= so.lightVisibility;"), std::string::npos)
+        << "the direct light is no longer scaled by the surface's light visibility after every light";
+    EXPECT_NE(tail.find("ambientMultiplier = so.lightVisibility;"), std::string::npos)
+        << "the ambient light no longer takes the surface's light visibility";
+    EXPECT_EQ(tail.find("finalColor +="), std::string::npos) << "a light is added after the visibility scale";
+
+    const size_t ambientBegin = adapter.find("    // Ambient / environment.", litEnd);
+    ASSERT_NE(ambientBegin, std::string::npos);
+    const size_t ambientEnd = adapter.find("    // Emissive contribution", ambientBegin);
+    ASSERT_NE(ambientEnd, std::string::npos);
+    int ambientAdds = 0;
+    for (size_t at = adapter.find("finalColor +=", ambientBegin); at < ambientEnd;
+         at = adapter.find("finalColor +=", at + 1))
+    {
+        const std::string statement = adapter.substr(at, adapter.find(';', at) - at);
+        EXPECT_NE(statement.find("ambientMultiplier"), std::string::npos) << statement;
+        ++ambientAdds;
+    }
+    EXPECT_GE(ambientAdds, 3) << "the ambient paths (particle, environment, flat ambient) moved";
+
+    int uses = 0;
+    for (size_t at = adapter.find("lightVisibility"); at != std::string::npos; at = adapter.find("lightVisibility", at + 1))
+        ++uses;
+    EXPECT_EQ(uses, 2) << "the light visibility reaches more than the direct sum and the ambient multiplier "
+                          "(the emission keeps its full value)";
 }

@@ -2,6 +2,7 @@
 
 #include "TerrainECS/CoarseTileStandIn.h"
 #include "TerrainECS/DirtyRegionLog.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainBakeCache.h"
 #include "TerrainECS/TerrainColorMap.h"
 #include "TerrainECS/TerrainZonePayload.h"
@@ -42,14 +43,6 @@ struct Terrain;
 
 namespace GameEngine::TerrainECS
 {
-
-// Pre-computed quadtree node min/max for a single finest-level node.
-// Computed on job threads to avoid scanning heightfield on the main thread.
-struct NodeMinMax
-{
-    float32 MinH = 0.0f;
-    float32 MaxH = 0.0f;
-};
 
 // Noise parameters of a tiled terrain's ProceduralNoise base: FillTiledBaseRegion's
 // noise branch and the GPU height bake's base (TerrainModifierSystem), which must agree.
@@ -205,8 +198,7 @@ enum class TileLodState : uint8
     Full     // Full-resolution heightfield + splatmap + normalmap loaded
 };
 
-// Per-tile data within a tiled terrain. Each tile has its own heightfield
-// and splatmap, but shares the single global CDLOD quadtree for selection.
+// Per-tile data within a tiled terrain. Each tile has its own heightfield and splatmap.
 struct TerrainTileData
 {
     TerrainGrassField GrassField;
@@ -270,10 +262,6 @@ struct TerrainTileData
     std::vector<float32> HeightBlockMinH;
     std::vector<float32> HeightBlockMaxH;
     uint32 HeightBlockDim = 0; // blocks per axis (0 = grid not built)
-
-    // Pre-computed quadtree node min/max (populated by job threads via streaming manager).
-    std::vector<NodeMinMax> PrecomputedQuadtreeNodes;
-    uint32 PrecomputedQuadtreeNodesPerAxis = 0;
 
     // A Coarse tile's full-resolution heights and normal, built by the coarse streaming job.
     // The extraction consumes it on the tile's first coarse patch and releases it; a new
@@ -399,8 +387,7 @@ struct TiledTerrainConfig
     uint32 TilesPerAxisZ = 0;
 };
 
-// All data for a tiled terrain. Owns the tile grid, the single global
-// CDLOD quadtree, and a stitched heightfield used to build it.
+// All data for a tiled terrain: the tile grid and the whole-terrain fields built over it.
 struct TiledTerrainData
 {
     // Analytic whole-terrain fallback includes regions on never-streamed tiles.
@@ -425,40 +412,11 @@ struct TiledTerrainData
     // full tile map each frame.
     uint64 Revision = 0;
 
-    // Single global CDLOD quadtree spanning the entire terrain.
-    // Built from per-tile min/max data (no stitched heightfield needed);
-    // patched per tile when a tile streams in (PatchTileInGlobalQuadtree) or out
-    // (DirtyQuadtreeTiles).
-    Terrain::CDLODQuadtree GlobalQuadtree;
-
-    // Whether the global quadtree needs a full rebuild, which rescans every resident
-    // tile's heightfield (O(resident samples)). Set by: first allocation, a synchronous
-    // tile load, a full bake, a GPU bake readback, a terrain-set change, and every
-    // height edit while the incremental patch is switched off.
-    bool QuadtreeDirty = true;
-
-    // Tiles whose finest-level nodes are stale since the last quadtree sync: a tile
-    // whose heights were edited, a streamed arrival whose heights a height modifier
-    // composed, or a tile that left the resident set. The sync
-    // (FinalizeGlobalQuadtreeUpdates) patches only these tiles, then rebuilds the
-    // coarser levels. Invariant: after the sync, every finest-level node of a listed
-    // tile equals what a full rebuild writes, which is the heightfield scan when the
-    // tile is resident and not Empty, and {0,0} otherwise. Cleared once consumed.
-    std::vector<TileCoord> DirtyQuadtreeTiles;
-
-    // Global GPU terrain handle (holds the global quadtree, accessed by render node).
-    // Created once by the extraction system; quadtree is synced when dirty.
+    // Whole-terrain GPU terrain handle: the TerrainData the render feature and the
+    // height pages address the tiled terrain by. Created by the extraction system on its
+    // first update of the terrain.
     uint32 GlobalGpuHandleIndex = 0;
     uint32 GlobalGpuHandleGeneration = 0;
-
-    // Morph ranges for the global quadtree. Within-tile levels use normal
-    // chained ranges. Tile-level and above use FLT_MAX to prevent multi-tile patches.
-    float32 VisRanges[Terrain::kMaxLODLevels] = {};
-    float32 MorphStart[Terrain::kMaxLODLevels] = {};
-    float32 MorphEnd[Terrain::kMaxLODLevels] = {};
-    bool MorphRangesComputed = false;
-    float32 CachedLODRangeScale = 0.0f;
-    float32 CachedFarClip = 0.0f;
 
     // Cached global height range that splat normalization is keyed on (the only
     // consumer). Seeded to the deterministic procedural-noise output range
@@ -659,20 +617,15 @@ public:
     // Access tiled terrain data. Returns nullptr if handle is invalid/stale.
     TiledTerrainData* GetTiledTerrainData(TiledTerrainHandle handle);
 
-    // Load a tile at the given coordinate. Creates heightfield, builds quadtree.
+    // Load a tile at the given coordinate. Creates its heightfield.
     // The tile is filled from the terrain's base (FillTiledBaseRegion).
     TerrainTileData* LoadTile(TiledTerrainHandle handle, TileCoord coord);
 
-    // Unload a tile. Frees CPU data and lists the tile in DirtyQuadtreeTiles, so the
-    // next quadtree sync clears only its nodes. Caller is responsible for GPU cleanup.
+    // Unload a tile. Frees CPU data. Caller is responsible for GPU cleanup.
     void UnloadTile(TiledTerrainHandle handle, TileCoord coord);
 
     // Check if a tile is loaded.
     bool IsTileLoaded(TiledTerrainHandle handle, TileCoord coord) const;
-
-    // Rebuild the single global CDLOD quadtree from all loaded tiles.
-    // Called after tiles are loaded or unloaded.
-    void RebuildGlobalQuadtree(TiledTerrainHandle handle);
 
     // ---- Per-tile physics collider addressing (E6) ----
     //
@@ -1054,18 +1007,6 @@ public:
                      std::vector<uint8>&& splatmap, uint32 splatW, uint32 splatH,
                      std::vector<uint8>&& normalmap, uint32 normW, uint32 normH);
 
-    // Patch finest-level quadtree nodes for a single tile (no coarse propagation).
-    // Call FinalizeGlobalQuadtreeUpdates() after patching all tiles in a batch.
-    void PatchTileInGlobalQuadtree(TiledTerrainHandle handle, TileCoord coord);
-
-    // Patch finest-level nodes from pre-computed min/max data (avoids heightfield scan).
-    // The nodes array has nodesPerAxis^2 entries in row-major order.
-    void PatchTileInGlobalQuadtreePrecomputed(TiledTerrainHandle handle, TileCoord coord,
-                                              const NodeMinMax* nodes, uint32 nodesPerAxis);
-
-    // Propagate coarse levels from children after a batch of PatchTileInGlobalQuadtree calls.
-    void FinalizeGlobalQuadtreeUpdates(TiledTerrainHandle handle);
-
     // ---- Base-source heightmap assets + asset-reload lane ----
 
     // Decoded base-source heightmap cache, keyed by asset GUID. Decodes once
@@ -1105,6 +1046,9 @@ public:
 
     // The process's one height-page residency, created on first use with the engine's job pool.
     TerrainHeightPages& GetHeightPages();
+    /// The CPU height of the terrain `terrain` describes (its component), valid until the next height-page
+    /// Update; an invalid query when that terrain does not page its height.
+    SurfaceHeightQuery SurfaceQuery(const Components::Terrain& terrain);
     // The cooked height stores of the heightmaps paged terrains read.
     HeightPageStoreLoader& GetHeightPageStores();
     // Where height stores are found or cooked; set at startup by the engine, like SetBakeCache.
@@ -1466,10 +1410,10 @@ private:
 };
 
 // Real render geometry for a tiled terrain's unified GPU source. WorldSizeX/Z is the
-// REAL per-axis extent (tilesPerAxis * tileWorldSize) the tile grid covers — NOT the
-// power-of-2 square the global CDLOD quadtree rounds up to. CBT maps
-// world = origin + uv*size and samples the unified heightmap at that uv 1:1, so the
-// squared/pow2 quadtree size would stretch a non-square or non-pow2-tile-count terrain
+// REAL per-axis extent (tilesPerAxis * tileWorldSize) the tile grid covers — NOT a
+// power-of-2 square. CBT maps
+// world = origin + uv*size and samples the unified heightmap at that uv 1:1, so a
+// squared/pow2 size would stretch a non-square or non-pow2-tile-count terrain
 // (a 3-tile axis would render 4/3 too wide with a phantom clamped-edge band). Unified
 // resolution = tilesPerAxis * (tileRes-1) + 1 — the grid an untiled terrain of equal
 // content uses. Pure function of the config so it is directly unit-testable.

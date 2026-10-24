@@ -4,6 +4,7 @@
 
 #include "CBTTerrain/CBTKernelSet.h"
 
+#include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Logger/Logger.h"
 
@@ -241,6 +242,49 @@ bool CBTResources::Initialize(IDevice& device, const CBTKernelSet& kernelSet, ui
             slot = m_DefaultAtlasHeight;
         for (auto& slot : m_BoundAtlasCoarse)
             slot = m_DefaultAtlasCoarse;
+    }
+
+    // The draw's level rule: a uniform ring the vertex modifier offset-binds per frame slot, zeroed
+    // so a slot never written keeps the cached corners (scale 0).
+    {
+        BufferDesc level{};
+        level.size = static_cast<size_t>(kCBTFrameParamsRing) * kCBTDrawLevelParamsSlotStride;
+        level.usage = static_cast<uint32_t>(BufferUsage::Uniform);
+        level.memoryUsage = BufferMemoryUsage::Upload;
+        level.persistent = true;
+        level.debugName = "CBT.DrawLevelParams";
+        m_DrawLevelParams = device.CreateBuffer(level);
+        if (!m_DrawLevelParams.IsValid())
+        {
+            Logger::Log::Error("CBTResources: failed to create the draw-level UBO");
+            Shutdown();
+            return false;
+        }
+        if (void* mapped = m_Device->MapBuffer(m_DrawLevelParams))
+        {
+            std::memset(mapped, 0, level.size);
+            m_Device->UnmapBuffer(m_DrawLevelParams);
+        }
+    }
+
+    // The draw's prefiltered height chain, header only until a terrain provisions it (both arms: the
+    // draw binds it whichever arm runs).
+    m_HeightChain = CreateHeightChain(kCBTHeightChainHeaderWords);
+    if (!m_HeightChain.IsValid())
+    {
+        Logger::Log::Error("CBTResources: failed to create the height chain buffer");
+        Shutdown();
+        return false;
+    }
+    m_HeightChainWords = kCBTHeightChainHeaderWords;
+    m_PersistentBytes += static_cast<uint64_t>(m_HeightChainWords) * sizeof(uint32_t);
+    // The far-field normal chain, a 1x1 placeholder until a lattice provisions it (both arms: the
+    // surface binds it whichever arm runs).
+    if (!CreateNormalChain(1u, 1u, 1u))
+    {
+        Logger::Log::Error("CBTResources: failed to create the normal chain placeholder");
+        Shutdown();
+        return false;
     }
 
     // Readback: indirect-draw records + validation counters, whichever is larger,
@@ -516,6 +560,13 @@ void CBTResources::WriteOneSet(Rendering::DescriptorSetHandle set,
     for (uint32_t slot = 0; slot < m_TextureRing && has(kCBTPageCacheBinding) && m_DefaultPageCache.IsValid(); ++slot)
         m_Device->UpdateCombinedImageSamplerBinding(set, kCBTPageCacheBinding, m_BoundPageCache[slot],
                                                     m_HeightSampler, slot);
+    // Binding 24: the prefiltered height chain (wide arm only, like 21).
+    if (has(kCBTHeightChainBinding) && m_HeightRange.IsValid() && m_HeightChain.IsValid())
+        m_Device->UpdateStorageBufferBinding(set, kCBTHeightChainBinding, m_HeightChain, 0, 0);
+    // Binding 25: the normal chain's mips, one storage view each (wide arm only).
+    if (has(kCBTNormalChainBinding) && m_HeightRange.IsValid() && m_NormalChain.IsValid())
+        m_Device->UpdateStorageImages(set, kCBTNormalChainBinding,
+                                      std::vector<TextureViewHandle>(m_NormalChainViews.begin(), m_NormalChainViews.end()));
 }
 
 void CBTResources::UploadFrameParams(uint32_t frameCounter, const CBTFrameParams& params)
@@ -569,6 +620,146 @@ void CBTResources::UploadSphereSculptPageTable(uint32_t frameCounter, const uint
     std::memcpy(static_cast<uint8_t*>(mapped) + slotByteBase, table,
                 static_cast<size_t>(count) * sizeof(uint32_t));
     m_Device->UnmapBuffer(m_SphereSculptTable);
+}
+
+BufferHandle CBTResources::CreateHeightChain(uint32_t words)
+{
+    const BufferHandle chain =
+        CreateStorageBuffer(static_cast<uint64_t>(words) * sizeof(uint32_t), 0u, "CBT.HeightChain");
+    if (!chain.IsValid())
+        return chain;
+    // A zeroed header names no lattice, so the draw keeps the cached corners until the chain is built.
+    const std::array<uint32_t, kCBTHeightChainHeaderWords> header{};
+    m_Device->UpdateBuffer(chain, 0, sizeof(header), header.data());
+    return chain;
+}
+
+bool CBTResources::ProvisionHeightChainWords(uint32_t words)
+{
+    if (!m_HeightChain.IsValid() || !m_HeightRange.IsValid())
+        return false; // the narrow arm builds no chain
+    if (words <= m_HeightChainWords)
+        return true;
+    // Create first: a refused allocation leaves the previous chain, and the sets that point at it.
+    const BufferHandle next = CreateHeightChain(words);
+    if (!next.IsValid())
+    {
+        Logger::Log::Error("CBTResources: failed to grow the height chain to {} KiB; the terrain draws its "
+                           "level-0 corners at every distance",
+                           static_cast<uint64_t>(words) * sizeof(uint32_t) / 1024u);
+        return false;
+    }
+    // The compute sets are shared by every frame slot and rewritten in place, and the draw binds the
+    // buffer by handle: wait for the previous graphics users before replacing it, without changing the
+    // device-wide idle state during render-graph declaration.
+    m_Device->WaitGpuSyncToken(m_Device->LastGraphicsSubmissionToken());
+    m_Device->DestroyBuffer(m_HeightChain);
+    m_PersistentBytes -= static_cast<uint64_t>(m_HeightChainWords) * sizeof(uint32_t);
+    m_HeightChain = next;
+    m_HeightChainWords = words;
+    m_PersistentBytes += static_cast<uint64_t>(words) * sizeof(uint32_t);
+    WriteDescriptorSet();
+    Logger::Log::Info("CBTResources: height chain grown to {} KiB", static_cast<uint64_t>(words) * sizeof(uint32_t) / 1024u);
+    return true;
+}
+
+bool CBTResources::CreateNormalChain(uint32_t width, uint32_t height, uint32_t mips)
+{
+    TextureDesc td{};
+    td.width = width;
+    td.height = height;
+    td.mipLevels = mips;
+    td.format = static_cast<uint32_t>(TextureFormat::R16G16_FLOAT);
+    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) | static_cast<uint32_t>(TextureUsage::UnorderedAccess) |
+               static_cast<uint32_t>(TextureUsage::TransferSrc); // TransferSrc: readback for the tests and the debug server
+    td.persistent = true;
+    td.debugName = "CBT.NormalChain";
+    const TextureHandle texture = m_Device->CreateTexture(td);
+    if (!texture.IsValid())
+        return false;
+    std::array<TextureViewHandle, kCBTNormalChainMaxMips> views{};
+    for (uint32_t m = 0; m < kCBTNormalChainMaxMips; ++m)
+    {
+        TextureViewDesc vd{};
+        vd.baseMip = std::min(m, mips - 1u); // every storage element valid; mips past the chain repeat the last
+        vd.levelCount = 1u;
+        views[m] = m_Device->CreateTextureView(texture, vd);
+        if (views[m] == INVALID_TEXTURE_VIEW_HANDLE)
+        {
+            for (uint32_t k = 0; k < m; ++k)
+                m_Device->DestroyTextureView(views[k]);
+            m_Device->DestroyTexture(texture);
+            return false;
+        }
+    }
+    // Rest it in ShaderResource, the state the render graph imports it in every frame.
+    auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
+    cl->Begin();
+    cl->Barrier(ResourceBarrier::CreateTextureBarrier(texture, ResourceState::Undefined, ResourceState::ShaderResource, 0u, mips));
+    cl->End();
+    std::vector<CommandList*> lists{cl.get()};
+    m_Device->ExecuteCommandLists(lists);
+    m_Device->WaitGpuSyncToken(m_Device->LastGraphicsSubmissionToken());
+    m_NormalChain = texture;
+    m_NormalChainViews = views;
+    m_NormalChainMips = mips;
+    return true;
+}
+
+void CBTResources::DestroyNormalChain()
+{
+    for (TextureViewHandle& view : m_NormalChainViews)
+    {
+        if (view != INVALID_TEXTURE_VIEW_HANDLE)
+            m_Device->DestroyTextureView(view);
+        view = INVALID_TEXTURE_VIEW_HANDLE;
+    }
+    if (m_NormalChain.IsValid())
+        m_Device->DestroyTexture(m_NormalChain);
+    m_NormalChain = {};
+    m_NormalChainMips = 0u;
+    m_NormalChainLattice = 0u;
+}
+
+bool CBTResources::ProvisionNormalChain(uint32_t samplesX, uint32_t samplesZ)
+{
+    if (!m_NormalChain.IsValid() || !m_HeightRange.IsValid())
+        return false; // the narrow arm builds no chain
+    const uint32_t lattice = samplesX | (samplesZ << 16u);
+    const uint32_t mips = CBTNormalChainMips(samplesX, samplesZ);
+    if (mips == 0u)
+        return false;
+    if (lattice == m_NormalChainLattice)
+        return true;
+    // The descriptor sets are shared by every frame slot and the surface binds the texture by handle:
+    // wait for the previous graphics users before replacing it (as ProvisionHeightChainWords).
+    m_Device->WaitGpuSyncToken(m_Device->LastGraphicsSubmissionToken());
+    DestroyNormalChain();
+    if (!CreateNormalChain(CBTNormalChainTexels(samplesX, 0u), CBTNormalChainTexels(samplesZ, 0u), mips))
+    {
+        Logger::Log::Error("CBTResources: failed to create the normal chain for a {} x {} lattice; the terrain "
+                           "shades its far field from the level-0 normal map",
+                           samplesX, samplesZ);
+        CreateNormalChain(1u, 1u, 1u);
+        WriteDescriptorSet();
+        return false;
+    }
+    m_NormalChainLattice = lattice;
+    WriteDescriptorSet();
+    return true;
+}
+
+void CBTResources::UploadDrawLevelParams(uint32_t frameCounter, const CBTDrawLevelParams& params)
+{
+    if (!m_DrawLevelParams.IsValid())
+        return;
+    const uint32_t slot = CBTFrameRingSlot(frameCounter);
+    void* mapped = m_Device->MapBuffer(m_DrawLevelParams);
+    if (!mapped)
+        return;
+    std::memcpy(static_cast<uint8_t*>(mapped) + static_cast<size_t>(slot) * kCBTDrawLevelParamsSlotStride, &params,
+                sizeof(CBTDrawLevelParams));
+    m_Device->UnmapBuffer(m_DrawLevelParams);
 }
 
 void CBTResources::UploadSurfaceParams(uint32_t frameCounter, const CBTSurfaceParams& params)
@@ -859,6 +1050,14 @@ void CBTResources::Shutdown()
         if (m_HeightRange.IsValid())
             m_Device->DestroyBuffer(m_HeightRange);
         m_HeightRange = {};
+        if (m_HeightChain.IsValid())
+            m_Device->DestroyBuffer(m_HeightChain);
+        m_HeightChain = {};
+        m_HeightChainWords = 0u;
+        if (m_DrawLevelParams.IsValid())
+            m_Device->DestroyBuffer(m_DrawLevelParams);
+        m_DrawLevelParams = {};
+        DestroyNormalChain();
         if (m_PageTable.IsValid())
             m_Device->DestroyBuffer(m_PageTable);
         m_PageTable = {};
@@ -908,6 +1107,13 @@ void CBTResources::ReprovisionAfterDeviceRebuild()
     m_DefaultAtlasCoarse = {};
     m_BoundAtlasCoarse = {};
     m_HeightRange = {};
+    m_HeightChain = {};
+    m_HeightChainWords = 0u;
+    m_DrawLevelParams = {};
+    m_NormalChain = {};
+    m_NormalChainViews = {};
+    m_NormalChainMips = 0u;
+    m_NormalChainLattice = 0u;
     m_PageTable = {};
     m_DefaultPageCache = {};
     m_BoundPageCache = {};

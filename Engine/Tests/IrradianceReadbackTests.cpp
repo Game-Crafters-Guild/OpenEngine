@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "Components/Rendering/LightPhotometry.h"
+#include "EngineLogCapture.h"
 #include "Engine/Rendering/IEnvironmentSource.h" // complete type for ImageBasedLightingFeature's unique_ptr
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -36,6 +37,7 @@
 #include <cstring>
 #include <memory>
 #include <numbers>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -312,6 +314,61 @@ TEST_F(IrradianceReadbackTest, AnExecutedSkyBakeCountsOnceAndRestartsTheFramesSi
     ASSERT_FALSE(RunSkyBakeFrame(source, 1)) << "a steady sky must not bake again";
     EXPECT_EQ(Ibl().GetBakeCount(), 1u);
     EXPECT_EQ(Ibl().GetFramesSinceBake(), 1u);
+}
+
+// With async compute on, the sky's convolve writes the cube on the compute queue and the copy
+// reads its up face on graphics, so the graph records the face's transition into the copy source
+// on the compute list. The copy must still read from that layout, never report it unknown.
+TEST_F(IrradianceReadbackTest, ACopyAfterAnAsyncComputeBakeReadsTheFaceInItsGraphState)
+{
+    if (m_Device->GetComputeQueueFamilyIndex() == m_Device->GetGraphicsQueueFamilyIndex())
+        GTEST_SKIP() << "No separate compute queue family: the graph records every transition on one list";
+    auto& sky = m_Services->EnsureFeature<SkyRenderFeature>();
+    ASSERT_TRUE(sky.Initialize(m_Device.get()));
+    sky.SetSettings(SkySettings{}, SkySunState{});
+    SkyEnvironmentSource source(*m_Services);
+    IrradianceReadbackFeature& readback = m_Services->EnsureFeature<IrradianceReadbackFeature>();
+
+    RenderGraph::RGFrame& frame = *m_Frame;
+    frame.SetPhysicalQueueMap(RenderGraph::RGFrame::kIdentityQueueMap);
+    std::vector<std::string> log;
+    {
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+        frame.BeginFrame(0);
+        Engine::Renderer::EnvironmentBakeContext ctx{};
+        ctx.Frame = &frame;
+        ctx.Device = m_Device.get();
+        ctx.Feature = &Ibl();
+        source.ScheduleBake(ctx);
+        ASSERT_NE(FindPass(frame.Graph(), kConvolvePass), RenderGraph::kInvalidId)
+            << "the first frame with a sky must bake; the check is void";
+        ASSERT_NE(FindPass(frame.Graph(), kCopyPass), RenderGraph::kInvalidId)
+            << "a bake with the readback present must declare the copy; the check is void";
+        frame.Execute();
+        readback.OnFrameSubmittedRG(frame, frame.SubmissionToken());
+        m_Device->WaitForIdle();
+        Logger::Log::Flush();
+    }
+
+    const RenderGraph::RGResourceId cube = FindResource(frame.Graph(), "IBL_Irradiance");
+    ASSERT_NE(cube, RenderGraph::kInvalidId);
+    const auto& barriers = frame.Graph().Barriers();
+    const auto& placement = frame.Graph().BarrierSubmissions();
+    ASSERT_EQ(placement.size(), barriers.size());
+    bool relocated = false;
+    for (size_t i = 0; i < barriers.size(); ++i)
+    {
+        const RenderGraph::RGBarrier& b = barriers[i];
+        relocated |= b.Resource == cube && b.NewLayout == RenderGraph::RGImageLayout::TransferSrc &&
+                     placement[i] != RenderGraph::kInvalidId;
+    }
+    ASSERT_TRUE(relocated)
+        << "the face's transition into the copy source must record on the compute tail; the check is void";
+
+    EXPECT_EQ(GameEngine::TestLog::CountLinesContaining(log, "no recorded layout"), 0u)
+        << GameEngine::TestLog::FirstLineContaining(log, "no recorded layout");
+    float lux = -1.0f;
+    EXPECT_TRUE(readback.TryGetUpIrradianceLux(lux)) << "the copy must land";
 }
 
 // A reflection probe the camera stands in replaces the sky as the scene's environment and bakes

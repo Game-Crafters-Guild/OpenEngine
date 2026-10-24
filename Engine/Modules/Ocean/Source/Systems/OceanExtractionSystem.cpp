@@ -574,7 +574,7 @@ void FillOctaveArray(const float32 src[kOceanSpectrumOctaves], float32 out[16], 
 
 void PackShallowClarityWindow(const Components::OceanSurface& surface, OceanParamsGPU& params)
 {
-    // The inspector's lower bound (OceanFieldRanges.cpp): the shortest window the
+    // The inspector's lower bound (the field's @ge-range): the shortest window the
     // shader's smoothstep evaluates.
     constexpr float32 kMinShallowClarityDistance = 0.01f;
     // A non-finite value (a hand-edited scene or preset) falls back to the field's

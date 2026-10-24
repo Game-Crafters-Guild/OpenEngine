@@ -1,7 +1,6 @@
 #include "AssetCore/AssetTypes.h"
 
 #include "Ocean/OceanDepthCacheAsset.h"
-#include "Ocean/OceanFieldRanges.h"
 #include "Ocean/OceanCollisionProvider.h"
 #include "Ocean/OceanFFTCollisionAsset.h"
 #include "Ocean/OceanGPUQuery.h"
@@ -303,7 +302,9 @@ TEST(OceanQueryTests, WaveDataStaysCurrentWhileAnyWindowDispatches)
         now += halfFrame;
         demand.Update(now);
         if (frame > 0)
+        {
             EXPECT_FALSE(demand.IsWaveDataStale(now)) << "window A, frame " << frame;
+        }
         demand.NoteWaveDispatch(now);
         // Window B: no water in view, no dispatch.
         now += halfFrame;
@@ -2377,7 +2378,6 @@ TEST(OceanQueryTests, ShallowClarityWindowPacksAuthoredValuesAndClampsUnusableOn
 // slider bounds that hold their defaults.
 TEST(OceanQueryTests, ShallowClarityWindowFieldsAreReflectedWithSliderRanges)
 {
-    RegisterOceanFieldRanges();
     const auto type = ECS::GetComponentTypeId<Components::OceanSurface>();
     struct Expected
     {
@@ -2407,6 +2407,21 @@ TEST(OceanQueryTests, ShallowClarityWindowFieldsAreReflectedWithSliderRanges)
     EXPECT_EQ(preset.Apply("Surface", type, &surface, sizeof(surface), {}), 2u);
     EXPECT_FLOAT_EQ(surface.ShallowClarityDistance, 2.5f);
     EXPECT_FLOAT_EQ(surface.ShallowClarityFloor, 0.1f);
+}
+
+// The inspector's tooltip is the field's "@ge-tooltip" marker in the component header,
+// carried into the field table by the generated reflection.
+TEST(OceanQueryTests, SurfaceAndRendererFieldsCarryTheirHeaderTooltips)
+{
+    const ECS::FieldInfo* deepColor =
+        ECS::ComponentFieldRegistry::FindField(ECS::GetComponentTypeId<Components::OceanSurface>(), "DeepColor");
+    ASSERT_NE(deepColor, nullptr);
+    EXPECT_EQ(deepColor->Tooltip, "Base deep-water color used when depth fog fully hides the refracted scene.");
+
+    const ECS::FieldInfo* lodCount =
+        ECS::ComponentFieldRegistry::FindField(ECS::GetComponentTypeId<Components::OceanRenderer>(), "LodCount");
+    ASSERT_NE(lodCount, nullptr);
+    EXPECT_EQ(lodCount->Tooltip, "Number of camera-snapped ocean LOD cascade layers.");
 }
 
 namespace

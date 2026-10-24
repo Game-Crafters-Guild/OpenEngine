@@ -33,6 +33,7 @@ add_library(ComponentScannerCore STATIC
     EnumScanner.cpp
     FieldKindResolver.cpp
     FunctionParser.cpp
+    IncludeGraph.cpp
     JsonEmitter.cpp
     Lexical.cpp
     MarkerScanner.cpp
@@ -40,6 +41,7 @@ add_library(ComponentScannerCore STATIC
     NumberFormat.cpp
     ReflectedModel.cpp
     ReflectionEmitter.cpp
+    ScopeLookup.cpp
     SourceFiles.cpp
     StructParser.cpp
     TypeAliasScanner.cpp
@@ -76,6 +78,7 @@ if(BUILD_TESTING)
         Tests/CommentStripperTests.cpp
         Tests/ComponentMirrorTests.cpp
         Tests/EnumScannerTests.cpp
+        Tests/HandMetadataDriftTests.cpp
         Tests/HostileHeaderTests.cpp
         Tests/MarkerAttachmentTests.cpp
         Tests/MarkerScannerTests.cpp
@@ -90,7 +93,7 @@ if(BUILD_TESTING)
     target_include_directories(ComponentScannerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../Tests)
     # Dev-only source anchoring: the fixture trees the scan-mode cases run over, the engine's
     # FieldTypeId declaration the kind table is checked against, and the engine's header trees
-    # and committed script API description and C# binding the drift test compares.
+    # and committed script API description and C# binding the drift tests compare.
     target_compile_definitions(ComponentScannerTests PRIVATE
         GE_COMPONENT_SCANNER_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures"
         GE_ECS_REFLECTION_HEADER="${CMAKE_CURRENT_SOURCE_DIR}/../../Engine/Modules/ECS/Include/ECS/Reflection.h"

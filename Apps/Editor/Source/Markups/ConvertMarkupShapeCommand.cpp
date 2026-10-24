@@ -27,9 +27,9 @@ Components::WorldTransform ParentPlacement(const ECS::World& world, ECS::EntityH
 {
     const auto* parent = world.GetComponent<Components::Parent>(entity);
     Components::WorldTransform placed{};
-    if (!parent || !world.IsValid(parent->parent))
+    if (!parent || !world.IsValid(parent->Entity))
         return placed;
-    const Mathematics::Matrix4x4 matrix = MarkupPlacement(world, parent->parent);
+    const Mathematics::Matrix4x4 matrix = MarkupPlacement(world, parent->Entity);
     std::copy_n(matrix.Data(), 16, placed.matrix);
     return placed;
 }

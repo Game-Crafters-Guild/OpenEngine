@@ -1285,7 +1285,9 @@ void ExpectFlex(const FlexExpectation& e)
     EXPECT_NEAR(DeclaredShrink(s), e.Shrink, 0.001f) << "flex: " << e.Declaration;
     EXPECT_EQ(s.Layout.FlexBasis.Unit, e.BasisUnit) << "flex: " << e.Declaration;
     if (e.BasisUnit != StyleLength::UnitType::Auto)
+    {
         EXPECT_NEAR(s.Layout.FlexBasis.Value, e.BasisValue, 0.001f) << "flex: " << e.Declaration;
+    }
 }
 
 constexpr auto kAuto = StyleLength::UnitType::Auto;

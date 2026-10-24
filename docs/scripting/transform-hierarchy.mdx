@@ -23,7 +23,7 @@ and when the derived value is valid.
 ### Transform (local)
 
 - Interpreted as a **local transform relative to the parent**:
-  - For root entities (no `Parent` or `Parent.parent == 0`): local == world.
+  - For root entities (no `Parent` or `Parent.Entity` is no entity): local == world.
   - For children: `WorldTransform = ParentWorldTransform * Transform`.
 - Stores a full 4x4 matrix (`float[16]`), the layout GPUScene reads.
 - Changes are detected through ECS component-column versions and an exact cached local-matrix snapshot. No per-component `isDirty` flag is required.
@@ -85,7 +85,7 @@ Concretely, the order relative to the rendering systems is:
 ## Edge cases and debugging
 
 - **Missing Parent**
-  - If `Parent.parent` references an entity that does not exist or lacks `Transform`, the topology rebuild treats the child as a root (`world = local`) and logs a warning naming both entities, in every build.
+  - If `Parent.Entity` references an entity that does not exist or lacks `Transform`, the topology rebuild treats the child as a root (`world = local`) and logs a warning naming both entities, in every build.
 
 - **Cycles in the hierarchy**
   - Cycles are invalid (e.g., A is parent of B and B is parent of A).

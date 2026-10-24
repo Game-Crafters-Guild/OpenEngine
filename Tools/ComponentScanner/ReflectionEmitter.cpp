@@ -75,16 +75,24 @@ std::string JoinNames(const std::vector<const ReflectedStruct*>& structs)
 
 // Emit one cap-free registration block: a BEGIN, one FIELD per member, an END (addable) or
 // END_NO_ADD (kept out of the Add Component menu), followed by the GE_REFLECT_* lines for
-// fields and structs carrying metadata markers.
+// fields and structs carrying metadata markers. A tag (no fields) registers with one
+// GE_REGISTER_TAG_COMPONENT line instead of the block.
 std::string FormatRegisterBlock(const std::string& qualified, const ReflectedStruct& r, const EnumTable& enums)
 {
     const char* endMacro = r.NoAdd ? "GE_REGISTER_COMPONENT_END_NO_ADD" : "GE_REGISTER_COMPONENT_END";
 
     std::string out;
-    out += "GE_REGISTER_COMPONENT_BEGIN(" + qualified + ")\n";
-    for (const ReflectedField& f : r.Fields)
-        out += "    GE_REGISTER_COMPONENT_FIELD(" + qualified + ", " + f.Name + ")\n";
-    out += std::string(endMacro) + "(" + qualified + ")\n";
+    if (r.Fields.empty())
+    {
+        out += std::string(r.NoAdd ? "GE_REGISTER_TAG_COMPONENT_NO_ADD" : "GE_REGISTER_TAG_COMPONENT") + "(" + qualified + ")\n";
+    }
+    else
+    {
+        out += "GE_REGISTER_COMPONENT_BEGIN(" + qualified + ")\n";
+        for (const ReflectedField& f : r.Fields)
+            out += "    GE_REGISTER_COMPONENT_FIELD(" + qualified + ", " + f.Name + ")\n";
+        out += std::string(endMacro) + "(" + qualified + ")\n";
+    }
 
     for (const ReflectedField& f : r.Fields)
         if (const std::optional<std::string> flagExpr = FieldFlagExpr(f))
@@ -95,6 +103,10 @@ std::string FormatRegisterBlock(const std::string& qualified, const ReflectedStr
             out += "GE_REFLECT_FIELD_TOOLTIP(" + qualified + ", " + f.Name + ", " + CppStringLiteral(*f.Tooltip) + ");\n";
 
     for (const ReflectedField& f : r.Fields)
+        if (f.Label)
+            out += "GE_REFLECT_FIELD_LABEL(" + qualified + ", " + f.Name + ", " + CppStringLiteral(*f.Label) + ");\n";
+
+    for (const ReflectedField& f : r.Fields)
         if (f.Range)
             out += "GE_REFLECT_FIELD_RANGE(" + qualified + ", " + f.Name + ", " + FieldRangeArgs(*f.Range) + ");\n";
 
@@ -103,6 +115,11 @@ std::string FormatRegisterBlock(const std::string& qualified, const ReflectedStr
 
     if (r.EditorOnly)
         out += "GE_REFLECT_COMPONENT_EDITORONLY(" + qualified + ");\n";
+
+    if (r.EngineInternal)
+        out += "GE_REFLECT_COMPONENT_ENGINE_INTERNAL(" + qualified + ", " + CppStringLiteral(r.Writer) + ");\n";
+    else if (r.ReadOnly)
+        out += "GE_REFLECT_COMPONENT_ENGINE_OWNED(" + qualified + ", " + CppStringLiteral(r.Writer) + ");\n";
 
     // Bind enum-typed fields to their value-name table (emitted above) for name serialization.
     for (const ReflectedField& f : r.Fields)
@@ -191,8 +208,14 @@ std::string EmitGeneratedCpp(const std::vector<ReflectedStruct>& reflected, cons
         for (const auto& [name, ed] : usedEnums)
         {
             out += "GE_REFLECT_ENUM_TABLE_BEGIN(" + ed->Name + ")\n";
-            for (const EnumMember& m : ed->Members)
-                out += "    GE_REFLECT_ENUM_TABLE_VALUE(\"" + m.Name + "\", " + std::to_string(m.Value) + ")\n";
+            for (const EnumMember& member : ed->Members)
+            {
+                if (member.Label)
+                    out += "    GE_REFLECT_ENUM_TABLE_LABELED_VALUE(\"" + member.Name + "\", " + std::to_string(member.Value) +
+                           ", " + CppStringLiteral(*member.Label) + ")\n";
+                else
+                    out += "    GE_REFLECT_ENUM_TABLE_VALUE(\"" + member.Name + "\", " + std::to_string(member.Value) + ")\n";
+            }
             out += "GE_REFLECT_ENUM_TABLE_END()\n";
         }
         out += "\n";

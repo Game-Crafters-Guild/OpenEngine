@@ -33,6 +33,10 @@ struct CBTUpdateOutputs
     Rendering::RenderGraph::RGBuffer IndicesAll{};
     Rendering::RenderGraph::RGBuffer IndicesVisible{};
     Rendering::RenderGraph::RGBuffer CurrentVertex{};
+    // The prefiltered height chain the draw's vertex modifier reads (CBTResources::GetHeightChainBuffer).
+    Rendering::RenderGraph::RGBuffer HeightChain{};
+    // The far-field normal chain the surface samples (CBTResources::GetNormalChainTexture).
+    Rendering::RenderGraph::RGTexture NormalChain{};
     // The declared update pass, so the caller can order it against producers this module has no
     // business knowing about (the terrain texture upload). Invalid when nothing was declared.
     Rendering::RenderGraph::RGPass Update{};

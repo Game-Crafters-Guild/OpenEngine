@@ -4319,7 +4319,9 @@ TEST(TerrainRegionBake, TiledDeferredResplatSettlesUnderStreamInChurn)
     fmA->TargetHeight = 300.0f;           // grows the global max -> range shift
     systemA.Update(worldA, 1.0f / 60.0f); // region height bake + range-shift re-splat
     if (std::getenv("GE_TERRAIN_DEFER_RESPLAT") == nullptr)
+    {
         ASSERT_TRUE(tiledA->SplatResplatPending) << "a range shift while editing must defer";
+    }
 
     // Sustained stream-in churn with NO further authored edit: each frame flip a
     // resident tile back to "needs bake" (what atlas re-residency does) so the
@@ -4467,8 +4469,10 @@ TEST(TerrainRegionBake, SpreadSettleBoundsPerFrameRenormalizeTexels)
         {
             ++spreadFrames;
             if (spread)
+            {
                 EXPECT_LE(delta, static_cast<uint64>(perFrameBound))
                     << "settle frame renormalized more than the per-frame budget";
+            }
         }
     }
     EXPECT_FALSE(tiled->SplatResplatPending) << "settle must complete";
@@ -4477,7 +4481,9 @@ TEST(TerrainRegionBake, SpreadSettleBoundsPerFrameRenormalizeTexels)
         EXPECT_EQ(prev - base, static_cast<uint64>(residentArea))
             << "spread must renormalize each resident splat texel exactly once";
         if (residentArea > budget)
+        {
             EXPECT_GE(spreadFrames, 2) << "a terrain larger than the budget must spread across frames";
+        }
     }
 }
 
@@ -5504,7 +5510,9 @@ TEST(TerrainRegionBake, TiledStreamInExtendingRangeRenormalizesResidentsToFullBa
     for (int32 i = 0; i < 512 && tiledA->SplatResplatPending; ++i)
         systemA.Update(worldA, 1.0f / 60.0f);
     if (std::getenv("GE_TERRAIN_DEFER_RESPLAT") == nullptr)
+    {
         EXPECT_FALSE(tiledA->SplatResplatPending) << "range-extending stream-in must settle";
+    }
 
     // Terrain B: all three tiles resident from the start -> one full bake.
     const auto handleB = makeThreeTile();
@@ -6082,7 +6090,9 @@ TEST(TerrainRegionBake, TiledStreamInDuringPendingStrokeSettlesToFullBake)
     fmA->TargetHeight = 300.0f;           // grows the global max -> range shift
     systemA.Update(worldA, 1.0f / 60.0f); // deferred re-splat
     if (std::getenv("GE_TERRAIN_DEFER_RESPLAT") == nullptr)
+    {
         ASSERT_TRUE(tiledA->SplatResplatPending);
+    }
 
     StreamInFullTile(svc, handleA, TileCoord{3, 0}); // arrives mid-pending
     // Bake the arrival, then settle. The spread flush (Fix 2) can span several frames; one
@@ -6366,10 +6376,9 @@ TEST(TerrainRegionBake, TilePhysicsSlotsReleasedOnDestroyAndReleaseAll)
 
 // Paint-only region bake proportionality (review Fix 2): a paint-only (splat)
 // edit on a tiled terrain must NOT bump any tile's HeightfieldVersion, must NOT
-// bump tiled.Revision, and must NOT re-flag QuadtreeDirty
-// — heights are untouched, so a global quadtree rebuild + collider re-cook would
-// be pure waste. Pre-fix (unconditional rescan + version bumps) fails this.
-TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
+// bump tiled.Revision — heights are untouched, so a collider re-cook would be pure
+// waste. Pre-fix (unconditional rescan + version bumps) fails this.
+TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrRevision)
 {
     ScopedTerrainService scoped;
     auto& svc = TerrainService::Get();
@@ -6409,10 +6418,6 @@ TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
     const uint64 revisionAfterFull = tiled->Revision;
     ASSERT_GT(v00, 0u);
 
-    // Simulate extraction consuming the full bake's structural dirt so the
-    // paint-only re-flag is observable.
-    tiled->QuadtreeDirty = false;
-
     // Paint drag (move the splat stamp, staying inside tile 0) → region bake,
     // splat-only.
     auto* xf = world.GetComponentForWrite<Components::WorldTransform>(paintEntity);
@@ -6426,8 +6431,6 @@ TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
     EXPECT_EQ(Tile(tiled, 1, 0)->HeightfieldVersion, v10);
     EXPECT_EQ(tiled->Revision, revisionAfterFull)
         << "paint-only edit must not bump tiled.Revision";
-    EXPECT_FALSE(tiled->QuadtreeDirty)
-        << "paint-only edit must not re-flag the global quadtree for rebuild";
     // The splat still updated (the paint actually ran).
     EXPECT_TRUE(Tile(tiled, 0, 0)->SplatmapDirty);
 }
@@ -6714,359 +6717,6 @@ TEST(TerrainRegionBake, PlanetRadiusChangeTriggersFullSphereRebake)
         << "the resize must not leave the bake gate churning";
 }
 
-// ---- SamplesPerMeter re-provision × live edits composition oracles ----
-//
-// #561 (bindless-invalidate + settle debounce) and #562 (incremental global-quadtree
-// patching of brush-dirty tiles) merged an hour apart and their composition — brushing a
-// tiled terrain, THEN changing SamplesPerMeter — was never asserted together. A brush stroke
-// records touched tiles in TiledTerrainData::DirtyQuadtreeTiles for an incremental patch; the
-// SamplesPerMeter change re-provisions the terrain onto a DIFFERENT tile grid (e.g. 2×2 → 4×4).
-// The safety property is that re-provision is a FULL destroy + recreate, so no old-grid dirty
-// coordinate can survive to be patched into the new, differently-sized quadtree (which would
-// index the wrong tile or an out-of-range node → garbage min/max).
-
-// A re-provision destroys the whole TiledTerrainData, so a brush's pending DirtyQuadtreeTiles
-// cannot bleed into the recreated terrain even when the slot index is recycled.
-TEST(TerrainRegionBake, ReprovisionFullDestroyClearsBrushDirtyQuadtreeTiles)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    // spm 1: 2048 m @ 1/m → 1024 m tiles → 2×2 grid.
-    TiledTerrainConfig cfg1{};
-    cfg1.WorldSizeX = 2048.0f;
-    cfg1.WorldSizeZ = 2048.0f;
-    cfg1.HeightScale = 64.0f;
-    cfg1.SamplesPerMeter = 1.0f;
-    const TiledTerrainHandle h1 = svc.CreateTiledTerrain(cfg1);
-    auto* t1 = svc.GetTiledTerrainData(h1);
-    ASSERT_NE(t1, nullptr);
-    ASSERT_EQ(t1->Config.TilesPerAxisX, 2u);
-    for (int32 z = 0; z < 2; ++z)
-        for (int32 x = 0; x < 2; ++x)
-        {
-            auto* tile = svc.LoadTile(h1, TileCoord{x, z});
-            ASSERT_NE(tile, nullptr);
-            tile->LodState = TileLodState::Full; // streaming marks Full; the sync LoadTile leaves Empty
-        }
-
-    // Brush-stroke bookkeeping (TerrainModifierSystem::BakeTiledRegion): the touched tiles are
-    // queued for the #562 incremental global-quadtree patch instead of a full rebuild.
-    t1->DirtyQuadtreeTiles.push_back(TileCoord{0, 0});
-    t1->DirtyQuadtreeTiles.push_back(TileCoord{1, 1});
-    ASSERT_FALSE(t1->DirtyQuadtreeTiles.empty());
-
-    // SamplesPerMeter re-provision: the extraction system tears the terrain down (DestroyTiledTerrain)
-    // then recreates it at the new density (2048 m @ 2/m → 512 m tiles → 4×4 grid).
-    svc.DestroyTiledTerrain(h1);
-
-    TiledTerrainConfig cfg2 = cfg1;
-    cfg2.SamplesPerMeter = 2.0f;
-    const TiledTerrainHandle h2 = svc.CreateTiledTerrain(cfg2);
-    auto* t2 = svc.GetTiledTerrainData(h2);
-    ASSERT_NE(t2, nullptr);
-
-    // The slot index is recycled from the free list, so the new terrain reuses the old storage —
-    // exactly the case where a shallow reset (rather than a full destroy) would leak the brush's
-    // dirty coords into a differently-sized grid.
-    EXPECT_EQ(h2.Index, h1.Index);
-    EXPECT_NE(h2.Generation, h1.Generation);
-    EXPECT_EQ(t2->Config.TilesPerAxisX, 4u);
-    EXPECT_EQ(t2->Config.TilesPerAxisZ, 4u);
-
-    // The recycled slot must start clean: no stale dirty coords, and QuadtreeDirty seeded true so
-    // the first quadtree sync takes the FULL rebuild (from resident tiles) — never an incremental
-    // patch of old-grid coordinates.
-    EXPECT_TRUE(t2->DirtyQuadtreeTiles.empty());
-    EXPECT_TRUE(t2->QuadtreeDirty);
-    EXPECT_FALSE(t2->GlobalQuadtree.IsBuilt());
-}
-
-// Even if a stale (old-grid) coordinate reached the incremental patch, FinalizeGlobalQuadtreeUpdates
-// must bounds-guard it: the nodes of a coord outside the grid fall outside the tree and are skipped,
-// so it neither crashes nor corrupts the resident tiles' quadtree nodes.
-TEST(TerrainRegionBake, StaleQuadtreeCoordIsBoundsGuardedNotPatched)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 2048.0f;
-    cfg.WorldSizeZ = 2048.0f;
-    cfg.HeightScale = 64.0f;
-    cfg.SamplesPerMeter = 1.0f; // 2×2 grid
-    const TiledTerrainHandle h = svc.CreateTiledTerrain(cfg);
-    auto* t = svc.GetTiledTerrainData(h);
-    ASSERT_NE(t, nullptr);
-    for (int32 z = 0; z < 2; ++z)
-        for (int32 x = 0; x < 2; ++x)
-        {
-            auto* tile = svc.LoadTile(h, TileCoord{x, z});
-            ASSERT_NE(tile, nullptr);
-            tile->LodState = TileLodState::Full;
-        }
-    svc.RebuildGlobalQuadtree(h); // build the base quadtree from resident tiles (clears QuadtreeDirty)
-    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    const uint32 nodesPerAxisBefore = t->GlobalQuadtree.GetNodesPerAxisAtLevel(0);
-    const float32 node00Before = t->GlobalQuadtree.GetNode(0, 0, 0).MinHeight;
-
-    // A coord no tile occupies (an old, larger-grid coord that a shallow reset might have left).
-    // The incremental branch runs (QuadtreeDirty is false, quadtree built, dirty set non-empty).
-    t->DirtyQuadtreeTiles.push_back(TileCoord{99, 99});
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty()); // consumed, not left to re-fire
-    EXPECT_EQ(t->GlobalQuadtree.GetNodesPerAxisAtLevel(0), nodesPerAxisBefore);
-    EXPECT_FLOAT_EQ(t->GlobalQuadtree.GetNode(0, 0, 0).MinHeight, node00Before); // resident nodes intact
-}
-
-// Counts the nodes, at every level, where the global quadtree differs from a full rebuild over
-// the same resident set. Leaves the tree fully rebuilt.
-static uint32 CountNodesDifferingFromAFullRebuild(TerrainService& svc, TiledTerrainHandle handle,
-                                                  TiledTerrainData& tiled)
-{
-    const Terrain::CDLODQuadtree patched = tiled.GlobalQuadtree;
-    tiled.QuadtreeDirty = true;
-    svc.FinalizeGlobalQuadtreeUpdates(handle);
-    const Terrain::CDLODQuadtree& rebuilt = tiled.GlobalQuadtree;
-    if (patched.GetNumLevels() != rebuilt.GetNumLevels())
-        return ~0u;
-    uint32 mismatches = 0;
-    for (uint32 level = 0; level < rebuilt.GetNumLevels(); ++level)
-    {
-        const uint32 nodesPerAxis = rebuilt.GetNodesPerAxisAtLevel(level);
-        for (uint32 z = 0; z < nodesPerAxis; ++z)
-            for (uint32 x = 0; x < nodesPerAxis; ++x)
-            {
-                const auto& a = patched.GetNode(level, x, z);
-                const auto& b = rebuilt.GetNode(level, x, z);
-                if (a.MinHeight != b.MinHeight || a.MaxHeight != b.MaxHeight)
-                    ++mismatches;
-            }
-    }
-    return mismatches;
-}
-
-// A tile leaving the resident set (#4695) is an incremental patch, not a full rebuild: the
-// sync writes {0,0} to the departed tile's finest-level nodes and rebuilds the coarser levels,
-// which leaves every node at every level equal to a full rebuild over the remaining tiles.
-TEST(TerrainRegionBake, ATileDepartureClearsOnlyItsNodesAndMatchesAFullRebuild)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
-    cfg.WorldSizeZ = 2.0f * kTiledTileWorld;
-    cfg.HeightScale = kTiledHeightScale;
-    cfg.SamplesPerMeter = 1.0f; // 3x2 grid
-    const TiledTerrainHandle h = svc.CreateTiledTerrain(cfg);
-    auto* t = svc.GetTiledTerrainData(h);
-    ASSERT_NE(t, nullptr);
-    for (int32 z = 0; z < 2; ++z)
-        for (int32 x = 0; x < 3; ++x)
-        {
-            auto* tile = svc.LoadTile(h, TileCoord{x, z});
-            ASSERT_NE(tile, nullptr);
-            tile->LodState = TileLodState::Full;
-        }
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    // The departing tile's nodes hold real heights, so clearing them is observable.
-    const TileCoord departed{1, 0};
-    const uint32 tileFinestNodes = 1u << (t->Config.TileConfig.LODLevels - 1);
-    const uint32 departedNodeX = static_cast<uint32>(departed.X) * tileFinestNodes + tileFinestNodes / 2;
-    ASSERT_GT(t->GlobalQuadtree.GetNode(0, departedNodeX, tileFinestNodes / 2).MaxHeight, 0.0f);
-
-    svc.UnloadTile(h, departed);
-    EXPECT_FALSE(t->QuadtreeDirty) << "a departure must not force a full rebuild of every resident tile";
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
-    EXPECT_EQ(t->GlobalQuadtree.GetNode(0, departedNodeX, tileFinestNodes / 2).MaxHeight, 0.0f);
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
-        << "the patched tree must equal a full rebuild over the same resident set";
-}
-
-// The departure invariant at a corner, in the middle, for two tiles in one sync, for a tile that
-// leaves and streams back in before the sync (with heights, or still Empty), and for a departure
-// in the frame of a full bake: every node at every level equals a full rebuild.
-TEST(TerrainRegionBake, TileDeparturesInEveryPositionAndOrderMatchAFullRebuild)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
-    cfg.WorldSizeZ = 3.0f * kTiledTileWorld;
-    cfg.HeightScale = kTiledHeightScale;
-    cfg.SamplesPerMeter = 1.0f; // 3x3 grid
-    const TiledTerrainHandle h = svc.CreateTiledTerrain(cfg);
-    auto* t = svc.GetTiledTerrainData(h);
-    ASSERT_NE(t, nullptr);
-    for (int32 z = 0; z < 3; ++z)
-        for (int32 x = 0; x < 3; ++x)
-        {
-            auto* tile = svc.LoadTile(h, TileCoord{x, z});
-            ASSERT_NE(tile, nullptr);
-            tile->LodState = TileLodState::Full;
-        }
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
-
-    // A corner tile.
-    svc.UnloadTile(h, TileCoord{2, 2});
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "corner";
-
-    // The middle tile.
-    svc.UnloadTile(h, TileCoord{1, 1});
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "middle";
-
-    // Two tiles in one sync.
-    svc.UnloadTile(h, TileCoord{0, 1});
-    svc.UnloadTile(h, TileCoord{1, 2});
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "two tiles";
-
-    // A tile that leaves and streams back in before the sync: its new heights, not {0,0}.
-    const TileCoord returned{2, 1};
-    svc.UnloadTile(h, returned);
-    auto* back = svc.CreateEmptyTile(h, returned);
-    ASSERT_NE(back, nullptr);
-    Terrain::HeightfieldData heights;
-    heights.Resize(back->Config.HeightmapWidth, back->Config.HeightmapHeight, 0.75f);
-    svc.SetTileHeightfield(h, returned, std::move(heights), 0.75f, 0.75f);
-    svc.PatchTileInGlobalQuadtree(h, returned);
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    const uint32 tileFinestNodes = 1u << (t->Config.TileConfig.LODLevels - 1);
-    EXPECT_EQ(t->GlobalQuadtree.GetNode(0, 2 * tileFinestNodes, tileFinestNodes).MaxHeight, 0.75f);
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "left and returned";
-
-    // A tile that leaves and comes back Empty (its content still in flight) before the sync.
-    svc.UnloadTile(h, TileCoord{0, 0});
-    ASSERT_NE(svc.CreateEmptyTile(h, TileCoord{0, 0}), nullptr);
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "returned Empty";
-
-    // A departure in the frame of a full bake (BakeTiledFull sets QuadtreeDirty).
-    svc.UnloadTile(h, TileCoord{2, 0});
-    t->QuadtreeDirty = true;
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "full-bake frame";
-}
-
-// A tile that streams in under a height modifier lists itself for the incremental patch once its
-// heights are composed, instead of forcing a full rebuild of every resident tile: the sync then
-// leaves every node equal to a full rebuild, the arrival's composed heights included.
-TEST(TerrainRegionBake, AnArrivalUnderAHeightModifierPatchesOnlyItsNodesAndMatchesAFullRebuild)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
-    cfg.WorldSizeZ = kTiledTileWorld;
-    cfg.HeightScale = kTiledHeightScale;
-    cfg.SamplesPerMeter = 1.0f; // 3x1 grid
-    const auto h = svc.CreateTiledTerrain(cfg);
-    auto* t = svc.GetTiledTerrainData(h);
-    ASSERT_NE(t, nullptr);
-    for (int32 x = 0; x < 2; ++x)
-    {
-        auto* tile = svc.LoadTile(h, TileCoord{x, 0});
-        ASSERT_NE(tile, nullptr);
-        tile->LodState = TileLodState::Full;
-    }
-
-    ECS::World world;
-    RegisterModifierLifecycleEvents(world);
-    CreateTiledTerrainEntity(world, h, 3);
-    // A flatten well above the base noise, inside tile 2 (x in [2048, 3072]).
-    CreateFlattenModifier(world, 2560.0f, 512.0f, 60.0f, 120.0f);
-
-    TerrainModifierSystem system;
-    system.Update(world, 1.0f / 60.0f); // full bake of tiles 0 and 1
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    // Tile 2 streams in with base heights and is patched into the tree, as the extraction's
-    // quadtree sync does on integration.
-    StreamInFullTile(svc, h, TileCoord{2, 0});
-    svc.PatchTileInGlobalQuadtree(h, TileCoord{2, 0});
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    UpdateUntilArrivalBaked(system, world, *Tile(t, 2, 0));
-    ASSERT_TRUE(Tile(t, 2, 0)->ModifiersApplied);
-    EXPECT_FALSE(t->QuadtreeDirty) << "an arrival under a height modifier must not force a full rebuild";
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
-        << "the arrival's composed heights must reach the tree";
-}
-
-// Two tiles that stream in under one height modifier in the same frame each list themselves for
-// the incremental patch: the sync leaves every node equal to a full rebuild, the resident
-// neighbor the modifier also reaches included.
-TEST(TerrainRegionBake, TwoArrivalsUnderOneHeightModifierInOneFrameMatchAFullRebuild)
-{
-    ScopedTerrainService scoped;
-    auto& svc = TerrainService::Get();
-
-    TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 4.0f * kTiledTileWorld;
-    cfg.WorldSizeZ = kTiledTileWorld;
-    cfg.HeightScale = kTiledHeightScale;
-    cfg.SamplesPerMeter = 1.0f; // 4x1 grid
-    const auto h = svc.CreateTiledTerrain(cfg);
-    auto* t = svc.GetTiledTerrainData(h);
-    ASSERT_NE(t, nullptr);
-    for (int32 x = 0; x < 2; ++x)
-    {
-        auto* tile = svc.LoadTile(h, TileCoord{x, 0});
-        ASSERT_NE(tile, nullptr);
-        tile->LodState = TileLodState::Full;
-    }
-
-    ECS::World world;
-    RegisterModifierLifecycleEvents(world);
-    CreateTiledTerrainEntity(world, h, 4);
-    // A flatten across tiles 1, 2 and 3 (x in [948, 3148]).
-    CreateFlattenModifier(world, 2048.0f, 512.0f, 60.0f, 1100.0f);
-
-    TerrainModifierSystem system;
-    system.Update(world, 1.0f / 60.0f); // full bake of tiles 0 and 1
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    for (int32 x = 2; x < 4; ++x)
-    {
-        StreamInFullTile(svc, h, TileCoord{x, 0});
-        svc.PatchTileInGlobalQuadtree(h, TileCoord{x, 0});
-    }
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    ASSERT_FALSE(t->QuadtreeDirty);
-
-    UpdateUntilArrivalBaked(system, world, *Tile(t, 2, 0));
-    UpdateUntilArrivalBaked(system, world, *Tile(t, 3, 0));
-    ASSERT_TRUE(Tile(t, 2, 0)->ModifiersApplied);
-    ASSERT_TRUE(Tile(t, 3, 0)->ModifiersApplied);
-    EXPECT_FALSE(t->QuadtreeDirty) << "arrivals under a height modifier must not force a full rebuild";
-    svc.FinalizeGlobalQuadtreeUpdates(h);
-    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
-    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
-        << "both arrivals' composed heights must reach the tree";
-}
-
 // ---- Flatten / Stamp on spherical (planet) terrain (round-6 P2, her #12) ------------------------
 //
 // A planet has no planar heightfield: modifiers bake WORLD-METRE offsets into the sphere sculpt
@@ -7308,7 +6958,7 @@ TEST(TerrainRegionBake, SphereNonHeightEffectsDoNotCreateFlattenPlacements)
     constexpr float32 kStampHeight = 40.0f;
     const auto modifier = CreateSphereStampModifier(
         world, position, 250.0f, 50.0f, kStampHeight, Components::TerrainModifierBlend::Add);
-    world.AddComponentImmediate<Components::TerrainSurfaceRulesEffect>(modifier, {});
+    world.AddComponentImmediate<Components::TerrainSurfaceRulesEffect>(modifier, Components::TerrainSurfaceRulesEffect{});
     world.AddComponentImmediate<Components::TerrainGroundClaimEffect>(modifier, {});
     world.AddComponentImmediate<Components::TerrainGrassEffect>(modifier, {});
     world.SwapLifecycleEvents();
@@ -7978,7 +7628,7 @@ TEST(TerrainRegionBake, ModifierMovedByLocalTransformEditRebakes)
                                        GameEngine::Mathematics::Quaternion{},
                                        GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f)));
     Components::Parent parent{};
-    parent.parent = root;
+    parent.Entity = root;
     world.AddComponentImmediate<Components::Parent>(mod, parent);
 
     GameEngine::Engine::Renderer::TransformHierarchySystem hierarchy;

@@ -640,8 +640,9 @@ void BuildLodSection(UIElement* root, ModelAsset* model, std::function<void()> r
             Dropdown* borderDropdown = InspectorUI::AddDropdownRow(
                 root, "Border rule", kBorderOptions,
                 static_cast<int>(settings.BorderRule),
-                "Open-border handling during simplification: Seam planes locks only "
-                "kit tiling seams (borders on the bounding-box faces), Lock all pins "
+                "Open-border handling during simplification: Seam planes locks kit "
+                "tiling seams (borders on the bounding-box faces) and the rims of parts "
+                "that close an opening in another part (a lid in its rim), Lock all pins "
                 "every open border, Free lets all borders drift within the error budget");
             borderDropdown->SetOnValueChanged([persist](const std::string& value) {
                 const uint32 rule = value == "1" ? 1u : (value == "2" ? 2u : 0u);

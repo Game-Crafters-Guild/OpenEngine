@@ -11,6 +11,7 @@ namespace GameEngine::Components
 // to re-serialize the instance back to a scene file.
 // @ge-no-add  data helper, not user-addable in the editor
 // [DoNotSerialize] — SceneIO reconstructs the [subscene] section from this metadata; reflection would emit invalid property lines.
+// @ge-engine-internal scene loading
 struct SceneSubsceneInstance
 {
     char sourcePath[260]{};

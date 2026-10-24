@@ -1,0 +1,95 @@
+# Boundaries that stay raw: one `path:pattern:count` per line, the boundary after `#`. The sites of the pattern in the file
+# are counted apart from the baseline; the gate fails when the file has more sites than the count, and asks to lower or
+# delete the entry when it has fewer.
+
+Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:atomic_spin:1                        # the debug server's socket thread
+Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:sleep_poll:1                         # the debug server's socket thread
+Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:std_thread:1                         # the debug server's socket thread
+Apps/Editor/Source/DebugServer/EditorDebugServer.h:condition_variable:1                   # the debug server's socket thread
+Apps/Editor/Source/DebugServer/EditorDebugServer.h:std_thread:1                           # the debug server's socket thread
+Apps/Editor/Source/DeviceLossSurfacer.cpp:std_thread:1                                    # a native modal that returns only when a person answers
+Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:atomic_spin:1                   # a watchdog (must not depend on the pool it watches)
+Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:sleep_poll:1                    # a watchdog (must not depend on the pool it watches)
+Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:std_thread:2                    # a watchdog (must not depend on the pool it watches)
+Apps/Editor/Source/Projects/SubprocessStream.cpp:std_thread:1                             # a process host (pipes block)
+Apps/Editor/Source/main.cpp:debug_output:1                                                # crash handler: writes to the debugger after the logger may be gone
+Apps/Editor/Source/main.cpp:printf_output:14                                              # crash handler: writes to stderr after the logger may be gone
+Engine/Include/Platform/Thread.h:sleep_poll:1                                             # Platform::SleepPrecise, the engine's one sleep
+Engine/Modules/CBTTerrain/Source/CBTInstance.cpp:manual_barrier:20                        # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_buffer:8                         # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_command_list:1                   # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_texture:6                        # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:destroy_resource:25                     # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:manual_barrier:1                        # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:queue_submit:1                          # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:create_texture:1            # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:destroy_resource:1          # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:manual_barrier:1            # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/FileWatcher/Include/FileWatcher/FileWatcher.h:condition_variable:1         # a file watcher (OS blocking wait)
+Engine/Modules/FileWatcher/Include/FileWatcher/FileWatcher.h:std_thread:1                 # a file watcher (OS blocking wait)
+Engine/Modules/FileWatcher/Source/FileWatcher.cpp:atomic_spin:3                           # a file watcher (OS blocking wait)
+Engine/Modules/FileWatcher/Source/FileWatcher.cpp:native_thread:1                         # a file watcher (OS blocking wait)
+Engine/Modules/FileWatcher/Source/FileWatcher.cpp:std_thread:1                            # a file watcher (OS blocking wait)
+Engine/Modules/JobSystem/Include/JobSystem/ConcurrentQueue.h:malloc_free:2                # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Include/JobSystem/ConcurrentQueue.h:raw_delete:1                 # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Include/JobSystem/JobCounter.h:raw_delete:1                      # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Include/JobSystem/TaskSlabPool.h:placement_new:2                 # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Include/JobSystem/TaskSlabPool.h:raw_delete:3                    # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Include/JobSystem/TaskSlabPool.h:raw_new:1                       # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Source/JobCounter.cpp:raw_delete:2                               # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Source/JobCounter.cpp:raw_new:1                                  # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Source/TaskSlabPool.cpp:raw_delete:2                             # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Source/TaskSlabPool.cpp:raw_new:1                                # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/JobSystem/Source/WorkStealingThreadPool.cpp:raw_new:2                      # the job system's own allocator (task slabs, queues, job records)
+Engine/Modules/Logger/Include/Logger/Logger.h:condition_variable:1                        # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Include/Logger/Logger.h:future_promise:1                            # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Include/Logger/Logger.h:std_thread:1                                # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Include/Logger/Logger.h:std_thread_id_info:1                        # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/Logger.cpp:future_promise:3                                  # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/Logger.cpp:sleep_poll:1                                      # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/Logger.cpp:std_thread:1                                      # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Ocean/Include/Ocean/OceanShadowSim.h:raw_array:1                           # GPU upload struct: the shader's layout
+Engine/Modules/Ocean/Source/OceanRasterDepthCapture.cpp:raw_array:1                       # GPU upload struct: the shader's layout
+Engine/Modules/Platform/Include/Platform/ApplicationScriptApi.h:one_free_function_file:1  # scanner contract: one C# class per *ScriptApi.h
+Engine/Modules/Rendering/Include/Rendering/Core/BufferManager.h:create_buffer:1           # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/BufferManager.h:destroy_resource:1        # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/BufferRing.h:create_buffer:1              # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/BufferRing.h:destroy_resource:2           # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/CommandList.h:manual_barrier:3            # the barrier type's own factory functions
+Engine/Modules/Rendering/Include/Rendering/Core/TextureManager.h:create_texture:1         # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/TextureManager.h:destroy_resource:1       # the resource manager that owns the resource
+Engine/Modules/Rendering/Include/Rendering/Core/ViewParamsLayout.h:raw_array:2            # GPU upload struct: the shader's layout
+Engine/Modules/Rendering/Source/Core/GPUScene.cpp:create_buffer:10                        # GPUScene owns the scene's persistent instance, mesh and visibility buffers
+Engine/Modules/Rendering/Source/Core/GPUScene.cpp:destroy_resource:10                     # GPUScene owns the scene's persistent instance, mesh and visibility buffers
+Engine/Modules/Rendering/Source/DirectX12/D3D12CommandList.cpp:raw_array:2                # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/DirectX12/D3D12CommandList.h:raw_array:1                  # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Metal/MetalClearTexel.h:raw_array:5                       # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Metal/MetalCommandList.cpp:raw_array:4                    # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Metal/MetalCommandList.h:raw_array:2                      # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Vulkan/VulkanCommandList.cpp:raw_array:1                  # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Vulkan/VulkanCommandList.h:raw_array:1                    # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Vulkan/VulkanDevice.cpp:raw_array:1                       # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Vulkan/VulkanPipelineCache.cpp:malloc_free:2              # frees the buffer the C runtime's _dupenv_s allocated
+Engine/Modules/Rendering/Source/Vulkan/VulkanSharedInstance.cpp:raw_new:1                 # a process-lifetime registry, never destroyed, so it outlives static destruction
+Engine/Modules/Rendering/Source/WebGPU/WebGpuCommandList.h:raw_array:1                    # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/WebGPU/WebGpuDevice.cpp:raw_delete:1                      # user data for a WebGPU C callback, freed by that callback
+Engine/Modules/Rendering/Source/WebGPU/WebGpuDevice.cpp:raw_new:1                         # user data for a WebGPU C callback, freed by that callback
+Engine/Source/Assets/ModelAssetLoadGltf.cpp:float_ptr:7                                   # importer: a pointer into the glTF file's own attribute arrays
+Engine/Source/Core/Application.cpp:sleep_poll:1                                           # the frame pacer's tail yield
+Engine/Source/Engine/Build/CancellableShellProcess.cpp:atomic_spin:1                      # a process host (pipes block)
+Engine/Source/Engine/Build/CancellableShellProcess.cpp:std_thread:2                       # a process host (pipes block)
+Engine/Source/Engine/Rendering/Pipeline/Nodes/RenderScaleUpscaleNode.cpp:raw_array:1      # GPU upload struct: the shader's layout
+Engine/Source/Engine/Rendering/Pipeline/Nodes/ScreenSpaceReflectionsNode.cpp:raw_array:1  # GPU upload struct: the shader's layout
+Engine/Source/Engine/Rendering/TextureService.cpp:create_command_list:1                   # TextureService owns texture creation and upload
+Engine/Source/Engine/Rendering/TextureService.cpp:create_texture:5                        # TextureService owns texture creation and upload
+Engine/Source/Engine/Rendering/TextureService.cpp:destroy_resource:24                     # TextureService owns texture creation and upload
+Engine/Source/Engine/Rendering/TextureService.cpp:manual_barrier:2                        # TextureService owns texture creation and upload
+Engine/Source/Engine/Video/AsyncVideoRecorder.cpp:condition_variable:1                    # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/AsyncVideoRecorder.cpp:std_thread:3                            # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/VideoPlayer.mm:condition_variable:1                            # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/VideoPlayer.mm:std_thread:2                                    # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/VideoPlayerFFmpeg.cpp:condition_variable:1                     # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/VideoPlayerFFmpeg.cpp:std_thread:2                             # a codec / capture thread (decoder blocks)
+Engine/Source/Engine/Video/VideoWriter.mm:sleep_poll:2                                    # polls AVFoundation's readyForMoreMediaData, the encoder's own flag
+Engine/Source/Jobs/CompileServerClient.cpp:sleep_poll:1                                   # a process host (pipes block)
+Engine/Source/Jobs/PipeTransport.cpp:sleep_poll:1                                         # a process host (pipes block)

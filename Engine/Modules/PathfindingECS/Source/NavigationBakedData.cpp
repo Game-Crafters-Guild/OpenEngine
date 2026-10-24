@@ -1,6 +1,6 @@
 #include "NavigationBakedData.h"
 
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 
 #include "Pathfinding/DetourNavMap.h"
 #include "Pathfinding/NavSurfaceFile.h"

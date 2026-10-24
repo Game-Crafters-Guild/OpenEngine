@@ -3,7 +3,7 @@
 // results are applied in do not depend on the pool, and nothing may write a
 // grid while the solves read it.
 #include "PathfindingECS/NavigationService.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "NavigationTestSurfaces.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"

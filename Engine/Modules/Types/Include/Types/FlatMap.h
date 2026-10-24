@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <utility>
@@ -12,6 +13,7 @@ namespace GameEngine
 // Sorted std::vector<std::pair<K,V>> with binary search. Optimal for <50 entries
 // where cache locality matters more than asymptotic complexity.
 template <typename K, typename V, typename Compare = std::less<K>>
+    requires std::strict_weak_order<Compare, const K&, const K&>
 class FlatMap
 {
   public:

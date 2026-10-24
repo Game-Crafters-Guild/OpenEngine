@@ -45,6 +45,7 @@
 #include "AssetDatabase/AssetStore_TextJsonl.h"
 #include "AssetDatabase/AssetRecord.h"
 #include "AssetCore/PathNormalization.h"
+#include "Types/StringUtils.h"
 
 #include <nlohmann/json.hpp>
 #include <cmath>
@@ -1116,26 +1117,17 @@ bool BuildPipeline::PreparePlayerProject(const BuildSettings& s, const fs::path&
         }
     }
 
-    // Substitute template variables.
-    auto replaceAll = [](std::string& str, const std::string& from, const std::string& to) {
-        size_t pos = 0;
-        while ((pos = str.find(from, pos)) != std::string::npos)
-        {
-            str.replace(pos, from.length(), to);
-            pos += to.length();
-        }
-    };
-
-    // Sanitize game name for cmake project() — remove characters that break cmake syntax.
+    // Substitute the template variables. The game name goes into cmake project(), so the characters
+    // that break cmake syntax become '_'.
     std::string safeName = s.playerConfig.gameName;
     for (char& c : safeName)
         if (c == '"' || c == '\\' || c == ';')
             c = '_';
-    replaceAll(templateContent, "@GE_GAME_NAME@", safeName);
-    replaceAll(templateContent, "@GE_SDK_CMAKE_DIR@",
-               (s.editorSDKPath / "cmake").generic_string());
-    replaceAll(templateContent, "@GE_DISCOVERED_SOURCES@", sourcesList);
-    replaceAll(templateContent, "@GE_USER_INCLUDE_DIRS@", includeDirsList);
+    templateContent = ReplaceAll(std::move(templateContent), "@GE_GAME_NAME@", safeName);
+    templateContent = ReplaceAll(std::move(templateContent), "@GE_SDK_CMAKE_DIR@",
+                                 (s.editorSDKPath / "cmake").generic_string());
+    templateContent = ReplaceAll(std::move(templateContent), "@GE_DISCOVERED_SOURCES@", sourcesList);
+    templateContent = ReplaceAll(std::move(templateContent), "@GE_USER_INCLUDE_DIRS@", includeDirsList);
 
     std::string iconCmakeSection = "# No application icon configured\n";
     const AppIconGenerationResult iconResult = GenerateApplicationIcons(s, buildDir);
@@ -1145,7 +1137,7 @@ bool BuildPipeline::PreparePlayerProject(const BuildSettings& s, const fs::path&
         iconCmakeSection = iconResult.cmakeIconSection;
     for (const std::string& warning : iconResult.warnings)
         m_Progress.warnings.push_back("Application icon: " + warning);
-    replaceAll(templateContent, "@GE_APP_ICON_SECTION@", iconCmakeSection);
+    templateContent = ReplaceAll(std::move(templateContent), "@GE_APP_ICON_SECTION@", iconCmakeSection);
 
     const fs::path outputCMake = buildDir / "CMakeLists.txt";
     std::ofstream out(outputCMake);

@@ -11,7 +11,7 @@
 #include "Rendering/Core/CommandList.h" // IndexType
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
-#include "Rendering/Core/HashUtils.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <array>
@@ -341,22 +341,24 @@ std::vector<MeshGPUHandle> MeshGPURegistry::RegisterModelMeshes(
 // there are no false negatives for the streams covered here.
 static uint64_t ComputeMeshContentHash(const Mesh& mesh)
 {
-    using namespace HashUtils;
+    using Hashing::Fnv1a64;
+    using Hashing::Fnv1a64Value;
+    using Hashing::Fnv1a64Values;
     uint64_t h = 1469598103934665603ull; // FNV-1a offset basis
-    h = HashValue(h, static_cast<uint32_t>(mesh.PrimitiveTopology));
-    h = HashValue(h, mesh.MinBounds);
-    h = HashValue(h, mesh.MaxBounds);
-    h = HashValue(h, static_cast<uint64_t>(mesh.Vertices.size()));
+    h = Fnv1a64Value(h, static_cast<uint32_t>(mesh.PrimitiveTopology));
+    h = Fnv1a64Value(h, mesh.MinBounds);
+    h = Fnv1a64Value(h, mesh.MaxBounds);
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.Vertices.size()));
     if (!mesh.Vertices.empty())
         h = Fnv1a64(mesh.Vertices.data(), mesh.Vertices.size() * sizeof(Vertex), h);
-    h = HashVecU32(h, mesh.Indices);
-    h = HashValue(h, static_cast<uint64_t>(mesh.ExtraLODs.size()));
+    h = Fnv1a64Values(h, mesh.Indices);
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODs.size()));
     for (const auto& lod : mesh.ExtraLODs)
-        h = HashVecU32(h, lod);
+        h = Fnv1a64Values(h, lod);
     // Cover the error carrier so an errors-only retune (same indices, different
     // achieved error after a generator change) re-seeds the derived thresholds
     // through the content-hash re-upload path.
-    h = HashValue(h, static_cast<uint64_t>(mesh.ExtraLODErrors.size()));
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODErrors.size()));
     if (!mesh.ExtraLODErrors.empty())
         h = Fnv1a64(mesh.ExtraLODErrors.data(),
                     mesh.ExtraLODErrors.size() * sizeof(float), h);
@@ -372,38 +374,38 @@ static uint64_t ComputeMeshContentHash(const Mesh& mesh)
     // unperturbed. The authored provenance flag folds too: it selects the
     // threshold table (authored default vs sloppy-capped derived), so identical
     // bytes with different provenance must not dedup into one row.
-    h = HashValue(h, mesh.AuthoredLODs);
-    h = HashValue(h, static_cast<uint64_t>(mesh.ExtraLODVertices.size()));
+    h = Fnv1a64Value(h, mesh.AuthoredLODs);
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODVertices.size()));
     for (const auto& block : mesh.ExtraLODVertices)
     {
-        h = HashValue(h, static_cast<uint64_t>(block.size()));
+        h = Fnv1a64Value(h, static_cast<uint64_t>(block.size()));
         if (!block.empty())
             h = Fnv1a64(block.data(), block.size() * sizeof(Vertex), h);
     }
-    h = HashValue(h, static_cast<uint64_t>(mesh.ExtraLODCoverage.size()));
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODCoverage.size()));
     if (!mesh.ExtraLODCoverage.empty())
         h = Fnv1a64(mesh.ExtraLODCoverage.data(),
                     mesh.ExtraLODCoverage.size() * sizeof(float), h);
     auto hashFloats = [&h](const Vector<float>& v) {
-        h = HashValue(h, static_cast<uint64_t>(v.size()));
+        h = Fnv1a64Value(h, static_cast<uint64_t>(v.size()));
         if (!v.empty()) h = Fnv1a64(v.data(), v.size() * sizeof(float), h);
     };
     auto hashU16 = [&h](const Vector<uint16>& v) {
-        h = HashValue(h, static_cast<uint64_t>(v.size()));
+        h = Fnv1a64Value(h, static_cast<uint64_t>(v.size()));
         if (!v.empty()) h = Fnv1a64(v.data(), v.size() * sizeof(uint16), h);
     };
     hashFloats(mesh.Color0);
     if (!mesh.ExtraLODColor0.empty()) {
-        h = HashValue(h, static_cast<uint64_t>(mesh.ExtraLODColor0.size()));
+        h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODColor0.size()));
         for (const auto& colours : mesh.ExtraLODColor0) hashFloats(colours);
     }
     hashFloats(mesh.TexCoords1);
-    h = HashValue(h, static_cast<uint64_t>(mesh.ExtraTexCoords.size()));
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraTexCoords.size()));
     for (const auto& uv : mesh.ExtraTexCoords) hashFloats(uv);
     hashU16(mesh.Joints0);  hashFloats(mesh.Weights0);
     hashU16(mesh.Joints1);  hashFloats(mesh.Weights1);
-    h = HashValue(h, mesh.Skinned);
-    h = HashValue(h, static_cast<uint64_t>(mesh.MorphTargets.size()));
+    h = Fnv1a64Value(h, mesh.Skinned);
+    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.MorphTargets.size()));
     return h;
 }
 

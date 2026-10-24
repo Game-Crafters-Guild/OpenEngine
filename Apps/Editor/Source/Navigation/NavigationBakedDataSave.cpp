@@ -10,7 +10,7 @@
 #include "ECS/Query.h"
 #include "ECS/World.h"
 #include "Logger/Logger.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "Types/Fnv1a.h"
 

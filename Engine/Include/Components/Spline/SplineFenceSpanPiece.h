@@ -16,6 +16,7 @@ namespace GameEngine::Components
 //
 // @ge-no-add  Written by the fence controller on the pieces it places.
 // [DoNotSerialize] — generated output, rebuilt with the piece.
+// @ge-engine-internal the fence controller
 struct SplineFenceSpanPiece
 {
     uint32 Run = 0;

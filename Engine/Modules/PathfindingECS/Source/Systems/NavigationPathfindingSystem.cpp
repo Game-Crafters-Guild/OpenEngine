@@ -1,7 +1,7 @@
 #include "PathfindingECS/Systems/NavigationPathfindingSystem.h"
 #include "NavigationAgentRequests.h"
 #include "PathfindingECS/NavigationService.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/Systems/NavigationWorldHooks.h"
 #include "Components/Transform.h"

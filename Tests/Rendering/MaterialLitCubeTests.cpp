@@ -254,7 +254,8 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     const Matrix4x4 V = Mathematics::MakeLookAtLH(eye, Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f)).ToVulkan();
     constexpr float kNear = 0.1f;
     constexpr float kFar = 10.0f;
-    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Math::ToRadians(60.0f), aspect, kNear, kFar).ToVulkan();
+    constexpr float kVerticalFieldOfViewDeg = 60.0f;
+    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Rendering::Math::ToRadians(kVerticalFieldOfViewDeg), aspect, kNear, kFar).ToVulkan();
     const Matrix4x4 VP = P * V;
 
     CameraData cam{};
@@ -417,7 +418,9 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
                 bytes = named->Bytes;
                 ++namedBound;
                 if (isUniform && b.Block)
+                {
                     EXPECT_EQ(b.Block->Size, bytes) << b.Name << " block size drifted from its C++ mirror";
+                }
                 if (b.Name == "MaterialParams")
                 {
                     // The runtime array's reflected std430 stride is the row stride the

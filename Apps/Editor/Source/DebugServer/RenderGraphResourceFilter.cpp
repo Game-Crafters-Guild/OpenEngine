@@ -1,6 +1,7 @@
 #include "DebugServer/RenderGraphResourceFilter.h"
 
-#include <cctype>
+#include "Types/StringUtils.h"
+
 #include <span>
 
 namespace GameEngine::Editor
@@ -14,35 +15,13 @@ namespace
 constexpr std::string_view kLifetimeNames[] = {"Transient", "Persistent", "Imported", "Swapchain"};
 constexpr std::string_view kKindNames[] = {"Texture", "Buffer", "AccelerationStructure"};
 
-bool IEquals(std::string_view a, std::string_view b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-            return false;
-    return true;
-}
-
 // Canonical spelling of a client value, or empty when it names none of them.
 std::string_view Canonical(const std::string& value, std::span<const std::string_view> accepted)
 {
     for (std::string_view a : accepted)
-        if (IEquals(value, a))
+        if (EqualsIgnoreCase(value, a))
             return a;
     return {};
-}
-
-std::string AcceptedList(std::span<const std::string_view> accepted)
-{
-    std::string list;
-    for (std::size_t i = 0; i < accepted.size(); ++i)
-    {
-        if (i != 0)
-            list += ", ";
-        list += accepted[i];
-    }
-    return list;
 }
 
 // Reads one canonical-name parameter. Omitted, null and empty all mean "no filter";
@@ -59,7 +38,7 @@ bool ReadNameParam(const nlohmann::json& params, const char* key,
     if (!it->is_string())
     {
         error = std::string("Parameter '") + key + "' must be a string naming one of: " +
-                AcceptedList(accepted) + " - or be omitted to list every resource.";
+                Join(accepted, ", ") + " - or be omitted to list every resource.";
         return false;
     }
 
@@ -71,7 +50,7 @@ bool ReadNameParam(const nlohmann::json& params, const char* key,
     if (out.empty())
     {
         error = std::string("Unknown '") + key + "' value '" + value + "'. Use one of: " +
-                AcceptedList(accepted) + " - or omit the parameter to list every resource.";
+                Join(accepted, ", ") + " - or omit the parameter to list every resource.";
         return false;
     }
     return true;

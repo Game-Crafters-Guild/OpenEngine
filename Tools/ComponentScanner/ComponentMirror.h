@@ -19,8 +19,11 @@ namespace GameEngine::ComponentScanner
 //   engine-internal   // @ge-engine-internal              no mirror: engine runtime state is no game API
 //   engine-owned      // @ge-readonly on the struct       a `readonly partial struct`: every member get-only
 //   game data         no marker                           a full mirror
+// The text after a struct's @ge-engine-internal or @ge-readonly names the system that writes the
+// component (// @ge-readonly the transform hierarchy); a refused script write names it.
 // A reflected struct that a mirrored component holds as a field is an element struct: a mirror with
-// no IComponent and no [BuiltInComponent].
+// no IComponent, whose [BuiltInComponent] names the registration its defaults come from. A component
+// with no fields (// @ge-tag) is a one-byte mirror, as C++ gives an empty struct one byte.
 //
 // Fields. Each field takes one kind; a field no kind covers refuses the component:
 //   a scalar, a Mathematics vector, quaternion or matrix, ColorLinear, ECS::EntityHandle, StringId,

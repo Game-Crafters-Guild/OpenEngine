@@ -1,7 +1,6 @@
 #include "Ocean/Systems/RegisterOceanSystems.h"
 #include "Ocean/Systems/OceanExtractionSystem.h"
 #include "Ocean/Systems/OceanBuoyancySystem.h"
-#include "Ocean/OceanFieldRanges.h"
 #include "Ocean/OceanRenderNode.h"
 
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
@@ -37,15 +36,6 @@ void AddOceanSystemsToSchedule(ECS::SystemScheduleBuilder& builder,
 
 void RegisterOceanPipelineNodes(Engine::Renderer::Pipeline::RenderPipelineNodeRegistry& registry)
 {
-    // Bind the ocean components' inspector slider ranges once (after the generated
-    // reflection has registered the component field tables at static init).
-    static const bool s_RangesRegistered = []
-    {
-        RegisterOceanFieldRanges();
-        return true;
-    }();
-    (void)s_RangesRegistered;
-
     registry.Register(
         "OceanRender",
         []() -> std::unique_ptr<Engine::Renderer::Pipeline::IRenderPipelineNode>

@@ -2087,9 +2087,9 @@ ECS::EntityHandle SceneViewPanel::CreateMeasureEntity(const std::array<float, 3>
         return entity;
 
     Components::Parent startParent{};
-    startParent.parent = entity;
+    startParent.Entity = entity;
     Components::Parent endParent{};
-    endParent.parent = entity;
+    endParent.Entity = entity;
 
     Components::HierarchyOrder startOrder{};
     startOrder.order = 0;

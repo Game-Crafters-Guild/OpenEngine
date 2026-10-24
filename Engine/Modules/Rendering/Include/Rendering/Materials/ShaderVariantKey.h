@@ -7,9 +7,9 @@
 // Adding a new lighting model (e.g. "Toon") requires no C++ code changes —
 // just a new GLSL include and a .material file referencing it.
 
-#include "Rendering/Core/HashUtils.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
 #include "Rendering/Materials/ShaderProfileDefines.h"
+#include "Types/Fnv1a.h"
 #include "Types/StringId.h"
 #include "Types/StringUtils.h"
 
@@ -164,9 +164,9 @@ struct ShaderVariantKey
         // Every field enters whole through the combine, so no field shifts
         // another's high bits out of the 64-bit result.
         uint64_t h = static_cast<uint64_t>(vertexFlags);
-        h = HashUtils::HashCombine(h, static_cast<uint64_t>(materialKeywords));
-        h = HashUtils::HashCombine(h, static_cast<uint64_t>(lightingModel));
-        h = HashUtils::HashCombine(h, userKeywordHash);
+        h = Hashing::HashCombine(h, static_cast<uint64_t>(materialKeywords));
+        h = Hashing::HashCombine(h, static_cast<uint64_t>(lightingModel));
+        h = Hashing::HashCombine(h, userKeywordHash);
         // The compat profile is process-wide. Its on-disk cache entries fork
         // through the GE_COMPAT_PROFILE define (GenerateDefines), not through
         // this hash; folding it here only keeps a compat key's hash and its

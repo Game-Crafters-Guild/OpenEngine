@@ -4,6 +4,7 @@
 #include "Core/Engine.h"
 #include "DllEngineBootstrap.h"
 #include "Logger/Logger.h"
+#include "ScriptThunks.h"
 
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
@@ -199,7 +200,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreateEmptyEntity(GE_Handle world,
         if (parentHandle.IsValid())
         {
             GameEngine::Components::Parent p{};
-            p.parent = parentHandle;
+            p.Entity = parentHandle;
             w->AddComponentImmediate(created, p);
         }
 
@@ -279,7 +280,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreatePrimitive(GE_Handle world,
         if (parentHandle.IsValid())
         {
             GameEngine::Components::Parent p{};
-            p.parent = parentHandle;
+            p.Entity = parentHandle;
             w->AddComponentImmediate(created, p);
         }
 
@@ -715,16 +716,42 @@ GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentTypeIdByName(const char* nameUtf
     GE_ECSABI_CATCH_ALL_FAIL
 }
 
+// The refusal of a script's write (ComponentType<T>.Set, EntityCommands, the raw byte write) of a component the
+// engine owns: its name, who writes it, the fix.
+static GE_Result RefuseEngineComponentWrite(GameEngine::ECS::ComponentTypeId typeId, GameEngine::ECS::ScriptWrite access,
+                                            std::string_view writer)
+{
+    std::string_view name = GameEngine::ECS::ComponentFieldRegistry::GetCanonicalName(typeId);
+    if (const std::size_t scope = name.rfind("::"); scope != std::string_view::npos)
+        name = name.substr(scope + 2);
+    const std::string component(name);
+    const std::string writtenBy = writer.empty() ? std::string("the engine") : std::string(writer);
+    if (access == GameEngine::ECS::ScriptWrite::EngineInternal)
+        return GameEngine::ScriptingAbi::RefuseScriptWrite(
+            "A script cannot write " + component + ": it is engine runtime state written by " + writtenBy +
+            ", and no game API. Leave it to the engine");
+    return GameEngine::ScriptingAbi::RefuseScriptWrite(
+        "A script cannot write " + component + ": it is owned by the engine and written by " + writtenBy +
+        ". Read it with ComponentType<" + component + ">.Get");
+}
+
 GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytes(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, const uint8_t* data, uint32_t dataLen)
 {
+    // Every GE_Result_InvalidArg sets the last error, which WorldHandle.SetComponentBytes reads.
+    constexpr const char* kFunction = "WorldHandle.SetComponentBytes";
     try
     {
-        if (world == 0)
-            return GE_Result_InvalidArg;
-        if (entity == 0)
-            return GE_Result_InvalidArg;
+        if (world == 0 || entity == 0)
+            return GameEngine::ScriptingAbi::RefuseScriptWrite(std::string(kFunction) + ": the world or the entity is 0");
         if ((data == nullptr) && dataLen != 0)
-            return GE_Result_InvalidArg;
+            return GameEngine::ScriptingAbi::RefuseNull(kFunction, "data");
+
+        // A script reaches this write too (WorldHandle.SetComponentBytes): a component the engine owns is refused
+        // here as ComponentType<T>.Set refuses it.
+        const auto typeId = static_cast<GameEngine::ECS::ComponentTypeId>(componentTypeId);
+        const GameEngine::ECS::ScriptWriteRule rule = GameEngine::ECS::ComponentFieldRegistry::GetScriptWriteRule(typeId);
+        if (rule.Access != GameEngine::ECS::ScriptWrite::Allowed)
+            return RefuseEngineComponentWrite(typeId, rule.Access, rule.Writer);
 
         auto* w = WorldFromHandle(world);
         if (!w)
@@ -732,14 +759,15 @@ GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytes(GE_Handle world, GE_ECS_En
 
         const GameEngine::ECS::EntityHandle h = EntityFromId(entity);
         if (!w->IsValid(h))
-            return GE_Result_InvalidArg;
+            return GameEngine::ScriptingAbi::RefuseScriptWrite(std::string(kFunction) +
+                                                               ": the entity is not alive. Check it with IsEntityValid first");
 
         if (w->GetDeferStructuralChanges())
         {
             GameEngine::ECS::Command cmd;
             cmd.type = GameEngine::ECS::Command::SET_COMPONENT;
             cmd.entity = h;
-            cmd.componentType = static_cast<GameEngine::ECS::ComponentTypeId>(componentTypeId);
+            cmd.componentType = typeId;
             if (data && dataLen > 0)
                 cmd.componentData.Assign(data, static_cast<size_t>(dataLen));
             if (!w->TryPushCommand(std::move(cmd)))
@@ -747,8 +775,99 @@ GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytes(GE_Handle world, GE_ECS_En
             return GE_Result_Ok;
         }
 
-        if (!w->SetComponentBytesImmediate(h, static_cast<GameEngine::ECS::ComponentTypeId>(componentTypeId), data, static_cast<std::size_t>(dataLen)))
+        if (!w->SetComponentBytesImmediate(h, typeId, data, static_cast<std::size_t>(dataLen)))
             return GE_Result_Fail;
+        return GE_Result_Ok;
+    }
+    GE_ECSABI_CATCH_ALL_FAIL
+}
+
+GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytesFromScript(GE_Handle world, GE_ECS_Entity entity,
+                                                                GE_ECS_ComponentTypeId componentTypeId,
+                                                                const uint8_t* data, uint32_t dataLen)
+{
+    constexpr const char* kFunction = "ComponentType<T>.Set";
+    try
+    {
+        if (world == 0 || entity == 0)
+            return GameEngine::ScriptingAbi::RefuseScriptWrite(std::string(kFunction) + ": the world or the entity is 0");
+        if ((data == nullptr) && dataLen != 0)
+            return GameEngine::ScriptingAbi::RefuseNull(kFunction, "data");
+
+        const auto typeId = static_cast<GameEngine::ECS::ComponentTypeId>(componentTypeId);
+        // One lookup: the refusal and the writable runs come from the same rule.
+        const GameEngine::ECS::ScriptWriteRule rule = GameEngine::ECS::ComponentFieldRegistry::GetScriptWriteRule(typeId);
+        if (rule.Access != GameEngine::ECS::ScriptWrite::Allowed)
+            return RefuseEngineComponentWrite(typeId, rule.Access, rule.Writer);
+
+        auto* w = WorldFromHandle(world);
+        if (!w)
+            return GameEngine::ScriptingAbi::CallFailed(kFunction, "the world handle names no world");
+
+        const GameEngine::ECS::EntityHandle h = EntityFromId(entity);
+        if (!w->IsValid(h))
+            return GameEngine::ScriptingAbi::RefuseScriptWrite(std::string(kFunction) +
+                                                               ": the entity is not alive. Check it with IsEntityValid first");
+
+        if (w->GetDeferStructuralChanges())
+        {
+            GameEngine::ECS::Command cmd;
+            cmd.type = GameEngine::ECS::Command::SET_COMPONENT_FROM_SCRIPT;
+            cmd.entity = h;
+            cmd.componentType = typeId;
+            if (data && dataLen > 0)
+                cmd.componentData.Assign(data, static_cast<size_t>(dataLen));
+            if (!w->TryPushCommand(std::move(cmd)))
+                return GameEngine::ScriptingAbi::CallFailed(kFunction, "the world's command buffer is full");
+            return GE_Result_Ok;
+        }
+
+        if (!w->SetComponentBytesFromScriptImmediate(h, typeId, data, static_cast<std::size_t>(dataLen), rule.Ranges))
+            return GameEngine::ScriptingAbi::CallFailed(kFunction, "the component is not registered with this size");
+        return GE_Result_Ok;
+    }
+    GE_ECSABI_CATCH_ALL_FAIL
+}
+
+GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentDefaults(uint8_t* outData, uint32_t outCap, uint32_t* outLen)
+{
+    try
+    {
+        if (!outLen)
+            return GE_Result_InvalidArg;
+        *outLen = 0;
+        if (outCap != 0 && outData == nullptr)
+            return GE_Result_InvalidArg;
+
+        const std::vector<GameEngine::ECS::ComponentTypeId> types = GameEngine::ECS::ComponentFactory::DefaultByteTypes();
+        std::vector<std::vector<uint8_t>> defaults(types.size());
+        std::size_t total = 0;
+        for (std::size_t i = 0; i < types.size(); ++i)
+        {
+            GameEngine::ECS::ComponentFactory::GetDefaultBytes(types[i], defaults[i]);
+            total += sizeof(uint64_t) + sizeof(uint32_t) + defaults[i].size();
+        }
+        if (total > UINT32_MAX)
+            return GE_Result_Fail;
+        *outLen = static_cast<uint32_t>(total);
+        if (outData == nullptr)
+            return GE_Result_Ok;
+        if (outCap < total)
+            return GE_Result_BufferFull;
+
+        uint8_t* cursor = outData;
+        for (std::size_t i = 0; i < types.size(); ++i)
+        {
+            const uint64_t typeId = types[i];
+            const uint32_t size = static_cast<uint32_t>(defaults[i].size());
+            std::memcpy(cursor, &typeId, sizeof(typeId));
+            cursor += sizeof(typeId);
+            std::memcpy(cursor, &size, sizeof(size));
+            cursor += sizeof(size);
+            if (size != 0)
+                std::memcpy(cursor, defaults[i].data(), size);
+            cursor += size;
+        }
         return GE_Result_Ok;
     }
     GE_ECSABI_CATCH_ALL_FAIL
@@ -1257,6 +1376,19 @@ GE_API GE_Result GE_CDECL GE_ECSABI_DeferCommand(GE_Handle world, uint32_t comma
         if (!w)
             return GE_Result_Fail;
 
+        // Every queued write (2 add, 4 set, 5 a mirror's add or set) refuses a component the engine owns when it is
+        // queued, as the immediate writes refuse it.
+        constexpr uint32_t kDeferAdd = 2;
+        constexpr uint32_t kDeferSet = 4;
+        constexpr uint32_t kDeferScriptWrite = 5;
+        const auto typeId = static_cast<GameEngine::ECS::ComponentTypeId>(componentTypeId);
+        if (commandType == kDeferAdd || commandType == kDeferSet || commandType == kDeferScriptWrite)
+        {
+            const GameEngine::ECS::ScriptWriteRule rule = GameEngine::ECS::ComponentFieldRegistry::GetScriptWriteRule(typeId);
+            if (rule.Access != GameEngine::ECS::ScriptWrite::Allowed)
+                return RefuseEngineComponentWrite(typeId, rule.Access, rule.Writer);
+        }
+
         GameEngine::ECS::Command cmd;
         const GameEngine::ECS::EntityHandle h = EntityFromId(entity);
 
@@ -1285,6 +1417,15 @@ GE_API GE_Result GE_CDECL GE_ECSABI_DeferCommand(GE_Handle world, uint32_t comma
             if (data && dataLen > 0)
                 cmd.componentData.Assign(data, static_cast<size_t>(dataLen));
             break;
+        case 5: // a script's add or set of an engine component (EntityCommands with a C# mirror)
+        {
+            cmd.type = GameEngine::ECS::Command::SET_COMPONENT_FROM_SCRIPT;
+            cmd.entity = h;
+            cmd.componentType = typeId;
+            if (data && dataLen > 0)
+                cmd.componentData.Assign(data, static_cast<size_t>(dataLen));
+            break;
+        }
         default:
             return GE_Result_InvalidArg;
         }
@@ -1462,6 +1603,10 @@ GE_API GE_Result GE_CDECL GE_ECS_GetInterface(uint32_t abiVersion, const void** 
         s_Iface.RegisterBlobComponentWithSchema = reinterpret_cast<GE_ECSABI_RegisterBlobComponentWithSchema_Fn>(&GE_ECSABI_RegisterBlobComponentWithSchema);
         s_Iface.GetComponentDisabledTypeId = reinterpret_cast<GE_ECSABI_GetComponentDisabledTypeId_Fn>(&GE_ECSABI_GetComponentDisabledTypeId);
         s_Iface.SetEntityEnabled = reinterpret_cast<GE_ECSABI_SetEntityEnabled_Fn>(&GE_ECSABI_SetEntityEnabled);
+
+        // v2.4: a script's component write, and the component defaults
+        s_Iface.SetComponentBytesFromScript = reinterpret_cast<GE_ECSABI_SetComponentBytesFromScript_Fn>(&GE_ECSABI_SetComponentBytesFromScript);
+        s_Iface.GetComponentDefaults = reinterpret_cast<GE_ECSABI_GetComponentDefaults_Fn>(&GE_ECSABI_GetComponentDefaults);
 
         *outTable = &s_Iface;
         *outSizeBytes = sizeof(GE_ECS_Interface_v2);

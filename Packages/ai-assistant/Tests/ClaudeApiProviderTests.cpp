@@ -206,7 +206,9 @@ TEST(ClaudeApiProviderTests, TheKeyTravelsInTheXApiKeyHeaderAndNoOther)
     for (const auto& [name, value] : headers)
     {
         if (name != "x-api-key")
+        {
             EXPECT_EQ(value.find(key), std::string::npos) << name;
+        }
     }
 }
 

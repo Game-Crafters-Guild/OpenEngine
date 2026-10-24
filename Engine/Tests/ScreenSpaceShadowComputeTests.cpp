@@ -265,15 +265,22 @@ class ScreenSpaceShadowComputeTest : public ::testing::Test
         std::memcpy(coverage.data(), mapped, coverage.size() * 4); device->UnmapBuffer(countReadback);
         uint32_t holes = 0, overlap = 0;
         for (uint32_t count : coverage) { holes += count == 0; overlap += count > 1; }
-        if (resolveInput.empty()) ASSERT_LE(holes, 1u);
+        if (resolveInput.empty())
+        {
+            ASSERT_LE(holes, 1u);
+        }
         if (resolveInput.empty() && width > 16 && height > 16 && std::abs(light[0]) < 1 && std::abs(light[1]) < 1)
+        {
             EXPECT_GT(overlap, 0u); // Exercise the atomic merge, not only disjoint rays.
+        }
         for (size_t i = 0; i < results.size(); ++i)
         {
             if (resolveInput.empty() && coverage[i] == 0u)
+            {
                 ASSERT_TRUE(int(i % width) == int(std::floor(plan.Light[0])) &&
                             int(i / width) == int(std::floor(plan.Light[1])))
                     << "uncovered pixel " << i % width << "," << i / width;
+            }
             ASSERT_TRUE(std::isfinite(results[i][0]));
             ASSERT_GE(results[i][0], 0.0f); ASSERT_LE(results[i][0], 1.0f);
             ASSERT_NEAR(results[i][1], depths[i], std::abs(depths[i]) * 3.1e-5f);

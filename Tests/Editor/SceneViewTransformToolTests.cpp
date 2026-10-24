@@ -461,7 +461,7 @@ TEST_F(SceneViewTransformToolTests, ChildUnderRotatedScaledParentPreservesWorldD
     Transform childLocal = Transform::FromTRS(childLocalPos, childRot, childScale);
 
     Parent parentComp{};
-    parentComp.parent = parent.GetHandle();
+    parentComp.Entity = parent.GetHandle();
 
     parent.Set(parentLocal);
     child.Set(childLocal);
@@ -544,7 +544,7 @@ TEST_F(SceneViewTransformToolTests, ChildUnderIdentityParentPreservesWorldDelta)
     Transform childLocal = Transform::FromTRS(childLocalPos, childRot, childScale);
 
     Parent parentComp{};
-    parentComp.parent = parent.GetHandle();
+    parentComp.Entity = parent.GetHandle();
 
     parent.Set(parentLocal);
     child.Set(childLocal);
