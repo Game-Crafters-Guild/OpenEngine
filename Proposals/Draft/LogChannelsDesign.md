@@ -31,7 +31,7 @@ There is no way to say "Debug for terrain, Warning for everything else", and no 
 | Term | Meaning |
 |---|---|
 | Channel name | A dotted path of segments: `[A-Za-z][A-Za-z0-9_-]*` joined by `.`. The dash is there for package names. Case-sensitive. This is the channel's identity. |
-| Channel id | A `uint16` index assigned the first time a name is registered in a process. It is a handle for the hot path and for in-memory records only. |
+| Channel id | `enum class LogChannelId : uint16`, an index assigned the first time a name is registered in a process. An `enum class` and not a plain integer, so an id cannot be mixed up with a count or another index. It is a handle for the hot path and for in-memory records only. |
 | Level rule | A pair (name prefix, level). The empty prefix is the root rule, which is the global level. |
 | Effective level | The lowest severity a channel passes: the level of the longest matching rule. |
 
@@ -120,6 +120,8 @@ Why the tag types matter:
 
 Known limits:
 
+- **A symbol at global scope.** The fallback `GeLogChannel` is declared at global scope in `Logger.h`. That breaks the style rule against global-scope symbols in headers, on purpose: engine code lives in several top-level namespaces (`GameEngine`, `Rendering`, `Animation`, `Logger` and others), and only a global declaration is reachable from all of them. It has internal linkage and a name no other code uses, and the comment beside it says so.
+
 - **Dependent base classes.** A class template does not see a declaration in a base class that depends on a template parameter. Such code falls back to its namespace or module channel.
 - **Naming rule.** Do not declare `GE_LOG_CHANNEL` in the broad `GameEngine` namespace, which about 250 module source files use. It would replace the module default for all of them. The compiler cannot catch this, so the rule is documented next to the macro and checked in review.
 
@@ -190,7 +192,7 @@ The Log panel keeps the two apart:
 
 - The effective levels live in a fixed-capacity array of `std::atomic<LogLevel>` in `LoggerState`, indexed by channel id.
 - The array never moves, so a read needs no lock: `ShouldLog(channel, level)` is `level >= levels[channel].load(relaxed)`.
-- The capacity is 1,024 channels, which is 1 KB. A registration past the capacity returns the `Default` channel and logs one warning naming the channel that was refused.
+- The capacity is `kMaxLogChannels`, 1,024 channels, which is 1 KB of levels. A registration past the capacity returns the `Default` channel and logs one warning naming the channel that was refused.
 - The other new cost per call is the guard check on the function-local static in `GeLogChannel`. That is one acquire load and a branch once the static is set. "Performance" below says how to measure it.
 
 ### Sink levels
@@ -224,6 +226,16 @@ Everything that leaves the process today is formatted text, so persisting names 
 
 - Channel names are stored in a fixed array of `String`, one entry per id, in `LoggerState`. An entry is written once, before its id is published with a release store of the channel count, and never changes after that. `Log::GetChannelName(id)` therefore returns a `std::string_view` without a lock, so the drain thread and sinks can read names freely. `Memory/Arena.h` is not used: it is a per-thread scratch arena, and these names live for the whole process and are read from every thread.
 - Registration takes a registry mutex: it looks the name up in a `FlatMap<String, LogChannelId>`, appends it if it is new, and computes its effective level.
+
+### Thread affinity of the public API
+
+Each public function's Doxygen comment states its thread rules. They are:
+
+| Function | Threads |
+|---|---|
+| `RegisterChannel`, `GetChannelName` | Any thread. `GetChannelName` takes only ids that `RegisterChannel` returned. |
+| `SetLogLevel`, `SetChannelLevel`, `ClearChannelLevel` | Any thread. They take the registry mutex and store effective levels with relaxed atomics. A log call racing a level change sees the old level or the new one, never a torn value. |
+| `ShouldLog`, the `LOG_*` macros | Any thread, lock-free |
 
 ### Logger state shared across modules
 
@@ -265,6 +277,12 @@ Channels live in `LoggerState`, so the host and `Engine.dll` share one registry 
 ## C# scripts
 
 Managed scripts get their own `Log` API with channels resolved from class attributes, namespace rules, assembly attributes and the namespace. It is designed in [Log Channels for C# Scripts](LogChannelsCSharpDesign.md). It depends on these parts of this design: the naming rule, the level rules, the fixed effective-level array, which C# reads in place, and registration by name. The scripting ABI changes, including the new `GE_Log` signature, are specified there.
+
+## Documentation
+
+- **A user page.** `LOG_*`, `LOG_*_TO` and `GE_LOG_CHANNEL` are called by package and game modules, so they get a user page beside `docs/scripting/native-cpp-scripting.mdx`. It covers the call forms, the resolution order, the naming rule, level rules and `GE_LOG_LEVELS`.
+- **The style guide.** The Logging section of `CodingStyle.md` gains the rule that new code logs through the macros and declares an area's channel with `GE_LOG_CHANNEL` rather than writing a prefix into the message. The guide asks to be updated when a new, widely used pattern lands.
+- **Doxygen.** Doxygen comments go on every new public function and macro in `Logger.h`.
 
 ## Migration
 
