@@ -1738,6 +1738,16 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     rendering_test_shader_paths(RenderingReverseZMathTests)
     add_test(NAME RenderingReverseZMathTests COMMAND RenderingReverseZMathTests)
 
+    # The reverse-Z convention at the pixel: default depth compare and clear, D32, the
+    # engine's projection, on the platform's device (Metal on macOS, Vulkan elsewhere).
+    add_executable(RenderingReverseZProbeTests Tests/ReverseZProbeTests.cpp)
+    target_link_libraries(RenderingReverseZProbeTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
+    rendering_test_shader_paths(RenderingReverseZProbeTests)
+    set_target_properties(RenderingReverseZProbeTests PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Rendering/Tests")
+    add_test(NAME RenderingReverseZProbeTests COMMAND $<TARGET_FILE:RenderingReverseZProbeTests>)
+    set_tests_properties(RenderingReverseZProbeTests PROPERTIES TIMEOUT 60 LABELS "Headless")
+
     # The sun's path from latitude and day of year (Rendering/Sky/SolarPath.h), and the sky's
     # sun and moon placement built on it: pure CPU maths, no device and no shaders.
     add_executable(RenderingSolarPathTests Tests/SolarPathTests.cpp)
