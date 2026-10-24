@@ -207,10 +207,9 @@ endif()
 ge_stage_shader_graph_nodes(Player)
 
 # Stage the default UI fonts into the Player's staged Assets. Two consumers
-# resolve this exact path in a dev run: GameUIHost's default HUD font load
-# (without --asset-root the asset root is the install assets root) and
-# UIManager's default-atlas resolver (<install assets root>/Fonts). A
-# project that ships its own Assets/Fonts overrides these via --asset-root.
+# resolve this install path: GameUIHost's default HUD font load and
+# UIManager's default-atlas resolver (<install assets root>/Fonts).
+# --asset-root selects project content independently of these bundled defaults.
 # The staged set mirrors the UI test font staging (ge_add_ui_test, Engine/Modules/UI).
 add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
