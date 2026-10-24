@@ -19,7 +19,7 @@
 #include "Assets/Packages/PackagePublish.h"
 #include "Assets/Packages/PackageResolver.h"
 #include "Assets/TextureCook.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "TestTempDir.h"
 
 #include <gtest/gtest.h>
@@ -991,7 +991,7 @@ fs::path StagedEZTreePackageDir()
 {
     // TestData/, not the exe-dir Packages/ the resolver implicitly
     // scans — the shared Tests output dir must stay out of the default scan.
-    return PathUtils::GetExecutableDirectory() / "TestData" / "Packages" / "eztree";
+    return ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages" / "eztree";
 }
 
 } // namespace

@@ -31,10 +31,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -45,8 +47,10 @@
 #include "CBTTerrain/CBTLayout.h"
 #include "CBTTerrain/CBTNearBias.h"
 #include "CBTTerrain/CBTPoolHealth.h" // kCBTSaturatedOccupancy — the controller's full mark
+#include "CBTTerrain/CBTTreeAudit.h"
 #include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
+#include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
@@ -54,6 +58,8 @@
 using namespace GameEngine::CBTTerrain;
 using namespace GameEngine::CBTTerrain::Test;
 using namespace GameEngine::Rendering;
+using GameEngine::Mathematics::Matrix4x4;
+using GameEngine::Mathematics::Vector3;
 
 namespace
 {
@@ -131,14 +137,14 @@ struct Proj
     float Px = 0.0f, Py = 0.0f;
     bool InFront = false;
 };
-Proj ProjectPix(const float* m, const std::array<float, 3>& p)
+Proj ProjectPix(const Matrix4x4& m, const Vector3& p)
 {
     Proj r;
-    const float w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    const float w = m[0][3] * p.x + m[1][3] * p.y + m[2][3] * p.z + m[3][3];
     if (w <= 1e-5f)
         return r;
-    const float cx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
-    const float cy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const float cx = m[0][0] * p.x + m[1][0] * p.y + m[2][0] * p.z + m[3][0];
+    const float cy = m[0][1] * p.x + m[1][1] * p.y + m[2][1] * p.z + m[3][1];
     r.Px = (cx / w * 0.5f + 0.5f) * kScreenW;
     r.Py = (cy / w * 0.5f + 0.5f) * kScreenH;
     r.InFront = true;
@@ -181,7 +187,7 @@ bool OffMarginFrustum(const Proj& p0, const Proj& p1, const Proj& p2, float& ndc
 constexpr float kLebParentEdgeScale = 1.41421356f;
 
 // CPU mirror of CBT_NearBiasCoarsen (cbt_kernels.comp).
-float NearBiasCoarsen(const CBTFrameParams& p, float contention, const std::array<float, 3>& point)
+float NearBiasCoarsen(const CBTFrameParams& p, float contention, const Vector3& point)
 {
     if (contention <= 0.0f)
         return 1.0f;
@@ -193,12 +199,12 @@ float NearBiasCoarsen(const CBTFrameParams& p, float contention, const std::arra
 
 // CPU mirror of CBT_ParentSplitEdgeFar (cbt_kernels.comp): the parent hypotenuse endpoint this
 // child does NOT hold, recovered by reflecting the one it does through the shared midpoint c1.
-std::array<float, 3> ParentSplitEdgeFar(uint64_t heapId, const std::array<float, 3>& c0,
-                                        const std::array<float, 3>& c1,
-                                        const std::array<float, 3>& c2)
+Vector3 ParentSplitEdgeFar(uint64_t heapId, const Vector3& c0,
+                                        const Vector3& c1,
+                                        const Vector3& c2)
 {
-    const std::array<float, 3>& held = (heapId & 1ull) == 0ull ? c0 : c2;
-    return {2.0f * c1[0] - held[0], 2.0f * c1[1] - held[1], 2.0f * c1[2] - held[2]};
+    const Vector3& held = (heapId & 1ull) == 0ull ? c0 : c2;
+    return 2.0f * c1 - held;
 }
 
 // CPU mirror of Kernel_Classify's planar screen-space branch (cbt_kernels.comp), reporting the
@@ -225,13 +231,14 @@ struct PlanarDecision
 
 PlanarDecision ClassifyPlanarFacet(const CBTFrameParams& p, float contention, float occ,
                                    uint32_t depth, uint32_t maxDepth, uint32_t baseDepth,
-                                   uint64_t heapId, const std::array<float, 3>& c0,
-                                   const std::array<float, 3>& c1, const std::array<float, 3>& c2)
+                                   uint64_t heapId, const Vector3& c0,
+                                   const Vector3& c1, const Vector3& c2)
 {
     PlanarDecision d;
-    d.P0 = ProjectPix(p.ViewProjRel, c0);
-    d.P1 = ProjectPix(p.ViewProjRel, c1);
-    d.P2 = ProjectPix(p.ViewProjRel, c2);
+    const Matrix4x4 viewProj = Matrix4x4::FromColumnMajor(p.ViewProjRel);
+    d.P0 = ProjectPix(viewProj, c0);
+    d.P1 = ProjectPix(viewProj, c1);
+    d.P2 = ProjectPix(viewProj, c2);
     d.BehindAll = !d.P0.InFront && !d.P1.InFront && !d.P2.InFront;
     d.EyePlane = !d.P0.InFront || !d.P2.InFront;
 
@@ -244,12 +251,10 @@ PlanarDecision ClassifyPlanarFacet(const CBTFrameParams& p, float contention, fl
         {
             // Behind the eye: the as-if-visible bound — the world edge at the perspective's pixels
             // per metre at the facet's distance, against the coarsened split threshold.
-            const std::array<float, 3> mid = {0.5f * (c0[0] + c2[0]), 0.5f * (c0[1] + c2[1]),
-                                              0.5f * (c0[2] + c2[2])};
+            const Vector3 mid = (c0 + c2) * 0.5f;
             const float coarsen = NearBiasCoarsen(p, contention, mid);
-            const float focalPx = std::sqrt(p.ViewProjRel[1] * p.ViewProjRel[1] +
-                                            p.ViewProjRel[5] * p.ViewProjRel[5] +
-                                            p.ViewProjRel[9] * p.ViewProjRel[9]) *
+            const float focalPx = std::sqrt(viewProj[0][1] * viewProj[0][1] + viewProj[1][1] * viewProj[1][1] +
+                                            viewProj[2][1] * viewProj[2][1]) *
                                   0.5f * p.Screen[1];
             const float dist = std::max(std::hypot(mid[0] - p.CameraPos[0], mid[1] - p.CameraPos[1],
                                                    mid[2] - p.CameraPos[2]),
@@ -260,8 +265,7 @@ PlanarDecision ClassifyPlanarFacet(const CBTFrameParams& p, float contention, fl
         return d; // WantMerge stays false: the branch never decides the merge direction
     }
 
-    const std::array<float, 3> mid = {0.5f * (c0[0] + c2[0]), 0.5f * (c0[1] + c2[1]),
-                                      0.5f * (c0[2] + c2[2])};
+    const Vector3 mid = (c0 + c2) * 0.5f;
     const float coarsen = NearBiasCoarsen(p, contention, mid);
     const float splitPx = p.Screen[2] * coarsen;
     const float mergePx = p.Screen[3] * coarsen;
@@ -274,8 +278,8 @@ PlanarDecision ClassifyPlanarFacet(const CBTFrameParams& p, float contention, fl
     // threshold taken at the parent's midpoint (c1, held bit-identically by both children) and
     // scaled by sqrt(2) to restate the child threshold on a parent-length edge. An unprojectable
     // parent endpoint falls back to the per-child answer, exactly as the shader does.
-    const std::array<float, 3> parentFar = ParentSplitEdgeFar(heapId, c0, c1, c2);
-    const Proj parentFarProj = ProjectPix(p.ViewProjRel, parentFar);
+    const Vector3 parentFar = ParentSplitEdgeFar(heapId, c0, c1, c2);
+    const Proj parentFarProj = ProjectPix(viewProj, parentFar);
     const Proj& parentHeld = (heapId & 1ull) == 0ull ? d.P0 : d.P2;
     if (parentFarProj.InFront)
     {
@@ -481,7 +485,7 @@ class CBTPlanarDemandGate : public ::testing::Test
         auto asFloat = [](uint32_t bits) { float f; std::memcpy(&f, &bits, sizeof(f)); return f; };
         auto corner = [&](uint32_t slot, uint32_t k) {
             const uint32_t base = slot * kVertexWordsPerSlot + k * 4u;
-            return std::array<float, 3>{asFloat(verts[base + 0u]), asFloat(verts[base + 1u]),
+            return Vector3{asFloat(verts[base + 0u]), asFloat(verts[base + 1u]),
                                         asFloat(verts[base + 2u])};
         };
 
@@ -988,10 +992,11 @@ TEST_F(CBTPlanarDemandGate, ConvergedPlanarTreeServesItsSplitDemand)
 // on a facet's own edge therefore had exactly one sibling asking and the other never doing so, and
 // the demand was unservable by construction.
 //
-// Classify now decides the planar merge on the PARENT's split edge, which both siblings measure
-// identically. This census stays because the parent metric RESTS on the three structural facts it
-// locks — a decode change that broke any of them would silently invalidate the metric — and because
-// the population statistics it prints are how the two rules were compared:
+// Both merge rules decide on the PARENT. Without a height pyramid (the flat arms) the edge rule
+// measures the parent's split edge, rebuilt from each child's corners. With one (the relief arm) the
+// planar criterion (CBT_PlanarClassify) asks whether the parent's UV box or its twin's would split;
+// both children rebuild those boxes bit for bit from their dyadic UVs. This census locks the
+// structural facts the two rules rest on, and its printed population statistics compare the rules:
 //   1. the corner convention — siblings share c1, and evenC2 == oddC0, so the parent's hypotenuse
 //      runs between the two UNSHARED corners with c1 as its midpoint;
 //   2. ON FLAT GROUND ONLY, sibling split edges are exactly congruent in world space, so the
@@ -999,12 +1004,15 @@ TEST_F(CBTPlanarDemandGate, ConvergedPlanarTreeServesItsSplitDemand)
 //      merge criterion is NOT diamond-consistent for free: the relief arm measures the same ratio
 //      at 0.249-3.917, which is why CBT_NearFieldWantMerge's world-space bound carries the very
 //      asymmetry the domain metric no longer does;
-//   3. ON FLAT GROUND ONLY, reconstructing that hypotenuse from either child agrees on the merge
-//      decision. With relief the height is extrapolated rather than recovered, and the relief arm
-//      measures 97 of 115,610 pairs reaching opposite decisions (0.084%) — the price of the
-//      parent-level test, against the ~40% sibling disagreement the per-child rule carried.
-// The blocked-population counts are PRINTED, not asserted — they characterize how the rules differ
-// and are near-empty now. CBTParentMergeMetric asserts the BEHAVIOR on the GPU's own state buffer.
+//   3. on the flat arms (the edge rule), the parent's hypotenuse rebuilt from either child reaches
+//      the same merge decision. This is exact only at heightScale 0, where no corner height is
+//      extrapolated;
+//   4. on the relief arm (the criterion), the GPU's own state for the two siblings never differs:
+//      a pair where neither child asks to split carries CBT_STATE_SIMPLIFY on both or on neither.
+//      The arm reads CBTBisectorData::BisectorState after convergence and expects 0 such pairs.
+//      The pool must stay below the keep ceiling, because the off-frustum gate decides each child
+//      on its own box.
+// The blocked-population counts are PRINTED, not asserted: they characterize how the rules differ.
 TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
 {
     struct Arm
@@ -1032,9 +1040,14 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
         CBTFrameParams p;
         BuildPlanarWalkParams(p, a.SizeM, kAltM, kLiveTpe, kLiveTpe * 0.5f, a.MaxDepth,
                               a.HeightScale);
+        const Matrix4x4 viewProj = Matrix4x4::FromColumnMajor(p.ViewProjRel);
         const Census r = ConvergeAndCensus(inst, c, p, a.MaxDepth, a.Frames, 20u, nullptr);
         ASSERT_EQ(ValidationErrors(inst), 0u)
             << a.Label << ": census must read a conforming tree, or its geometry proves nothing";
+        constexpr uint32_t kBisectorWords = sizeof(CBTBisectorData) / 4u;
+        constexpr uint32_t kStateWord = offsetof(CBTBisectorData, BisectorState) / 4u;
+        const std::vector<uint32_t> bisectors =
+            inst.DebugReadWords(CBTBinding::BisectorData, kDefaultBisectorPoolSize * kBisectorWords);
 
         const std::vector<uint64_t> heap = ReadHeap(inst);
         const std::vector<uint32_t> verts = inst.DebugReadWords(
@@ -1042,7 +1055,7 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
         auto asFloat = [](uint32_t bits) { float f; std::memcpy(&f, &bits, sizeof(f)); return f; };
         auto corner = [&](uint32_t slot, uint32_t k) {
             const uint32_t base = slot * kVertexWordsPerSlot + k * 4u;
-            return std::array<float, 3>{asFloat(verts[base + 0u]), asFloat(verts[base + 1u]),
+            return Vector3{asFloat(verts[base + 0u]), asFloat(verts[base + 1u]),
                                         asFloat(verts[base + 2u])};
         };
 
@@ -1061,7 +1074,7 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
 
         // Threshold pair at a world split-edge midpoint, carrying the same near-bias coarsening
         // Kernel_Classify applies (both thresholds scale by the SAME factor).
-        auto thresholdsAt = [&](const std::array<float, 3>& mid, float& splitPx, float& mergePx) {
+        auto thresholdsAt = [&](const Vector3& mid, float& splitPx, float& mergePx) {
             splitPx = p.Screen[2];
             mergePx = p.Screen[3];
             if (contention <= 0.0f)
@@ -1074,7 +1087,7 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
             splitPx *= coarsen;
             mergePx *= coarsen;
         };
-        auto worldLen = [](const std::array<float, 3>& u, const std::array<float, 3>& v) {
+        auto worldLen = [](const Vector3& u, const Vector3& v) {
             const float dx = u[0] - v[0], dy = u[1] - v[1], dz = u[2] - v[2];
             return std::sqrt(dx * dx + dy * dy + dz * dz);
         };
@@ -1089,6 +1102,7 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
         double blockerRatioSum = 0.0, spreadSum = 0.0, worldRatioSum = 0.0;
         uint64_t spreadN = 0, worldN = 0, parentRated = 0, parentWouldMerge = 0;
         uint64_t parentReconPairs = 0, parentReconDisagree = 0;
+        uint64_t statePairs = 0, stateSplitting = 0, stateBothSimplify = 0, stateDisagree = 0;
         float blockerRatioMax = 0.0f, worldRatioMin = 1e30f, worldRatioMax = 0.0f;
         // Which corner indices do two siblings share? Settles the LEB corner convention from data
         // rather than from the decode's documentation: [i][j] counts pairs whose even-child corner
@@ -1106,31 +1120,43 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
             const bool aIsEven = (hA & 1ull) == 0ull;
             const uint32_t evenSlot = aIsEven ? live[i].second : live[i + 1].second;
             const uint32_t oddSlot = aIsEven ? live[i + 1].second : live[i].second;
-            const std::array<float, 3> ec[3] = {corner(evenSlot, 0), corner(evenSlot, 1),
-                                                corner(evenSlot, 2)};
-            const std::array<float, 3> oc[3] = {corner(oddSlot, 0), corner(oddSlot, 1),
-                                                corner(oddSlot, 2)};
+            const std::array<Vector3, 3> ec = {corner(evenSlot, 0), corner(evenSlot, 1), corner(evenSlot, 2)};
+            const std::array<Vector3, 3> oc = {corner(oddSlot, 0), corner(oddSlot, 1), corner(oddSlot, 2)};
             for (uint32_t ci = 0; ci < 3u; ++ci)
                 for (uint32_t cj = 0; cj < 3u; ++cj)
-                    if (ec[ci] == oc[cj])
+                    if (ec[ci].x == oc[cj].x && ec[ci].y == oc[cj].y && ec[ci].z == oc[cj].z)
                         ++shareMatrix[ci][cj];
 
-            // Would a PARENT-level merge test agree between the two children? Each child can only
-            // reconstruct the parent's hypotenuse from its own corners — the even child from
-            // (c0, 2*c1 - c0), the odd from (2*c1 - c2, c2) — and those are different fp
-            // expressions for the same segment. This measures the residual disagreement the
-            // recommended fix would carry, over the whole live population.
+            // The GPU's own merge decision for the pair. A child that asks to split asks no merge,
+            // so such pairs are counted apart; every other pair answered the same parent question.
             {
-                const std::array<float, 3> evFar = {2.0f * ec[1][0] - ec[0][0],
-                                                    2.0f * ec[1][1] - ec[0][1],
-                                                    2.0f * ec[1][2] - ec[0][2]};
-                const std::array<float, 3> odFar = {2.0f * oc[1][0] - oc[2][0],
-                                                    2.0f * oc[1][1] - oc[2][1],
-                                                    2.0f * oc[1][2] - oc[2][2]};
-                const Proj a0 = ProjectPix(p.ViewProjRel, ec[0]);
-                const Proj a1 = ProjectPix(p.ViewProjRel, evFar);
-                const Proj b0 = ProjectPix(p.ViewProjRel, odFar);
-                const Proj b1 = ProjectPix(p.ViewProjRel, oc[2]);
+                const uint32_t evenState = bisectors[evenSlot * kBisectorWords + kStateWord];
+                const uint32_t oddState = bisectors[oddSlot * kBisectorWords + kStateWord];
+                if (evenState == kStateBisect || oddState == kStateBisect)
+                    ++stateSplitting;
+                else
+                {
+                    ++statePairs;
+                    const bool evenMerges = evenState == kStateSimplify;
+                    const bool oddMerges = oddState == kStateSimplify;
+                    if (evenMerges && oddMerges)
+                        ++stateBothSimplify;
+                    else if (evenMerges != oddMerges)
+                        ++stateDisagree;
+                }
+            }
+
+            // The edge rule's parent test, rebuilt from each child's corners: the even child from
+            // (c0, 2*c1 - c0), the odd from (2*c1 - c2, c2), two fp expressions for one segment.
+            // Measured on the flat arms only, the arms that run the edge rule.
+            if (a.HeightScale == 0.0f)
+            {
+                const Vector3 evFar = 2.0f * ec[1] - ec[0];
+                const Vector3 odFar = 2.0f * oc[1] - oc[2];
+                const Proj a0 = ProjectPix(viewProj, ec[0]);
+                const Proj a1 = ProjectPix(viewProj, evFar);
+                const Proj b0 = ProjectPix(viewProj, odFar);
+                const Proj b1 = ProjectPix(viewProj, oc[2]);
                 if (a0.InFront && a1.InFront && b0.InFront && b1.InFront)
                 {
                     float sPx = 0.0f, mPx = 0.0f;
@@ -1207,8 +1233,8 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
             // UNSHARED corners (even c0, odd c2) with the shared corner c1 as its midpoint — the
             // one piece of geometry every diamond member agrees on. Would a parent-level metric
             // have asked for this merge at all?
-            const Proj pp0 = ProjectPix(p.ViewProjRel, ec[0]);
-            const Proj pp2 = ProjectPix(p.ViewProjRel, oc[2]);
+            const Proj pp0 = ProjectPix(viewProj, ec[0]);
+            const Proj pp2 = ProjectPix(viewProj, oc[2]);
             if (pp0.InFront && pp2.InFront)
             {
                 float sPx = 0.0f, mPx = 0.0f;
@@ -1264,13 +1290,17 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
                     parentRated ? 100.0 * static_cast<double>(parentWouldMerge) /
                                       static_cast<double>(parentRated)
                                 : 0.0);
-        std::printf("[sib:%s] PARENT reconstruction agreement across the sibling pair: n=%llu "
-                    "disagree=%llu (%.4f%%) — the fp residual a parent-level merge test carries\n",
+        std::printf("[sib:%s] edge-rule parent reconstruction across the sibling pair: n=%llu "
+                    "disagree=%llu\n",
                     a.Label, static_cast<unsigned long long>(parentReconPairs),
-                    static_cast<unsigned long long>(parentReconDisagree),
-                    parentReconPairs ? 100.0 * static_cast<double>(parentReconDisagree) /
-                                           static_cast<double>(parentReconPairs)
-                                     : 0.0);
+                    static_cast<unsigned long long>(parentReconDisagree));
+        std::printf("[sib:%s] GPU state across the sibling pair: n=%llu bothSimplify=%llu "
+                    "DISAGREE=%llu | a child splitting=%llu | keepStep=%d\n",
+                    a.Label, static_cast<unsigned long long>(statePairs),
+                    static_cast<unsigned long long>(stateBothSimplify),
+                    static_cast<unsigned long long>(stateDisagree),
+                    static_cast<unsigned long long>(stateSplitting),
+                    inst.ReadWorkQueueCounter(kWQOffFrustumKeepStep));
         std::printf("[sib:%s] r = edgePx/mergePx histogram (merger | blocker | parent):\n", a.Label);
         for (uint32_t b = 0; b < kRatioBuckets; ++b)
             std::printf("[sib:%s]   %-9s %10llu | %10llu | %10llu\n", a.Label, kRatioLabels[b],
@@ -1302,18 +1332,14 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
                         << a.Label << ": unexpected shared corner c" << ci << "/c" << cj;
                 }
 
-        // 2 and 3 are REGIME-SPLIT, because both are exact only on flat ground.
-        //
-        // Sibling split edges are congruent in world space, and either child reconstructs the same
-        // parent hypotenuse, ONLY when heightScale is 0 and every corner shares one y. With relief
-        // each leg carries its own sampled heights, so the world lengths diverge, and each child
-        // EXTRAPOLATES the shared endpoint's height (2*h(mid) - h(held)) rather than recovering it.
-        // Asserting the exact form on a flat-only arm is how a green suite says nothing about a
-        // production terrain, which ships heightScale 60.
+        // 2, 3 and 4 are REGIME-SPLIT. Sibling split edges are congruent in world space only
+        // when heightScale is 0 and every corner shares one y; with relief each leg carries its
+        // own sampled heights, so the world lengths diverge. The flat arms run the edge rule and
+        // the relief arm runs the criterion, so each arm asserts the agreement of the rule it runs.
         ASSERT_GT(worldN, 1000u) << a.Label << ": congruence sample too small";
-        ASSERT_GT(parentReconPairs, 1000u) << a.Label << ": reconstruction sample too small";
         if (a.HeightScale == 0.0f)
         {
+            ASSERT_GT(parentReconPairs, 1000u) << a.Label << ": reconstruction sample too small";
             EXPECT_NEAR(worldRatioMin, 1.0f, 1e-4f)
                 << a.Label << ": sibling split edges are not congruent on flat ground";
             EXPECT_NEAR(worldRatioMax, 1.0f, 1e-4f)
@@ -1335,14 +1361,19 @@ TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
             EXPECT_GT(worldRatioMax, 1.05f)
                 << a.Label << ": relief arm reports congruent split edges, so the height source "
                               "never reached the corners";
-            // The reconstruction residual is the price of the parent metric, and it is only worth
-            // paying while it stays far below the sibling disagreement the per-child rule carried.
-            const double disagreeFraction =
-                static_cast<double>(parentReconDisagree) / static_cast<double>(parentReconPairs);
-            EXPECT_LT(disagreeFraction, 0.02)
-                << a.Label << ": " << parentReconDisagree << " of " << parentReconPairs << " ("
-                << 100.0 * disagreeFraction
-                << "%) sibling pairs reconstruct to opposite merge decisions on relief";
+            // The criterion asks both children the same two boxes, so the GPU's state agrees on
+            // every pair. A converged tree has served every merge both children ask for, so what
+            // stands is a one-sided SIMPLIFY that can never be served. The off-frustum gate decides
+            // each child on its own box, so the arm must converge below the keep ceiling for the
+            // census to read the criterion alone.
+            ASSERT_TRUE(relief.IsArmed()) << a.Label << ": the relief arm bound no height source";
+            ASSERT_EQ(inst.ReadWorkQueueCounter(kWQOffFrustumKeepStep), 0)
+                << a.Label << ": the off-frustum gate is live, so the census does not read the "
+                              "criterion alone";
+            ASSERT_GT(statePairs, 1000u) << a.Label << ": GPU state sample too small";
+            EXPECT_EQ(stateDisagree, 0u)
+                << a.Label << ": " << stateDisagree << " of " << statePairs
+                << " sibling pairs carry opposite merge states under the criterion";
         }
         inst.Shutdown();
     }
@@ -1377,6 +1408,8 @@ constexpr float kPresetScreenH = 900.0f;
 constexpr float kTileNoiseFrequency = 0.004f;
 constexpr uint32_t kTileNoiseOctaves = 5u;
 constexpr uint32_t kTileNoiseSeed = 42u;
+// CBTRenderFeature.cpp kContentAwareSplitPx: the flat veto the editor sends (WaterPlane[3]).
+constexpr float kEditorFlatPx = 1.0f;
 // The controller's marks are the engine's existing saturation and pressure constants, not numbers
 // of this test's own — cbt_layout.glsl's CBT_PRESSURE_FULL_OCC / CBT_PRESSURE_RECOVER_OCC are
 // locked to these two by CBTLayout.GlslPressureConstantsMirrorCpp.
@@ -1420,8 +1453,21 @@ float TilePresetHeight(float wx, float wz)
     return value / total;
 }
 
-TextureHandle MakeTiledPresetHeightTexture(IDevice& device, uint32_t dim, float originX,
-                                           float originZ, float sizeM)
+// A level plain at half the preset's height scale, and a plain tilted 10% along X and 5% along Z through
+// the same height at the origin: both have no relief at all.
+float LevelPlainHeight(float, float)
+{
+    return 0.5f;
+}
+
+float TiltedPlainHeight(float wx, float wz)
+{
+    return 0.5f + (0.1f * wx + 0.05f * wz) / kPresetHeightScale;
+}
+
+// A dim x dim height texture over the preset's square, `heightAt` the normalized height at world (x, z).
+TextureHandle MakePresetHeightTexture(IDevice& device, uint32_t dim, float originX, float originZ, float sizeM,
+                                      float (*heightAt)(float, float))
 {
     TextureDesc td{};
     td.width = dim;
@@ -1438,8 +1484,8 @@ TextureHandle MakeTiledPresetHeightTexture(IDevice& device, uint32_t dim, float 
     const float spacing = sizeM / static_cast<float>(dim - 1u);
     for (uint32_t y = 0; y < dim; ++y)
         for (uint32_t x = 0; x < dim; ++x)
-            data[static_cast<size_t>(y) * dim + x] = TilePresetHeight(originX + static_cast<float>(x) * spacing,
-                                                                       originZ + static_cast<float>(y) * spacing);
+            data[static_cast<size_t>(y) * dim + x] = heightAt(originX + static_cast<float>(x) * spacing,
+                                                              originZ + static_cast<float>(y) * spacing);
     const size_t bytes = data.size() * sizeof(float);
     const size_t rowPitch = static_cast<size_t>(dim) * sizeof(float);
     BufferHandle staging = device.CreateUploadBuffer(bytes, "CBT.Test.TiledPresetReliefStaging");
@@ -1501,6 +1547,7 @@ void BuildPresetParams(CBTFrameParams& p, const GameEngine::Mathematics::Vector3
     p.PriorityParams[1] = kPriorityRampStartOcc;
     p.PriorityParams[2] = kPriorityMaxAreaFloorPx2;
     p.PriorityParams[3] = kPriorityKeepLargeNdc;
+    p.WaterPlane[3] = kEditorFlatPx;
 }
 
 // A phase's verdict window: the trailing frames it is judged over, after the transient it opens
@@ -1520,8 +1567,8 @@ TEST_F(CBTPlanarDemandGate, OverDemandingPlanarPoseConvergesUnderThePoolPressure
 {
     using namespace GameEngine::Mathematics;
     // The rest and back phases are judged over a 100-frame window. From cold the planar criterion
-    // asks this pose for more than the pool holds (the scale lands at step 28 to 29, 3.4x to 3.5x),
-    // and the climb outlasts a 200-frame fill, so a 300-frame fill leaves the window entirely inside
+    // with the flat veto off asks this pose for more than the pool holds (the scale lands at step 3
+    // at rest), and the climb outlasts a 200-frame fill, so a 300-frame fill leaves the window entirely inside
     // the rest state; from a full drain the return settles well inside its 200 frames. A
     // limit cycle slower than the controller's own 1-step-per-frame rate would still show up as
     // live-count spread. The turn phase only has to drain the pool, so it keeps a short window and
@@ -1543,8 +1590,8 @@ TEST_F(CBTPlanarDemandGate, OverDemandingPlanarPoseConvergesUnderThePoolPressure
             phases.resize(3);
             return phases;
         }
-        const TextureHandle relief = MakeTiledPresetHeightTexture(
-            *m_Device, kPresetReliefDim, -0.5f * kPresetSizeM, -0.5f * kPresetSizeM, kPresetSizeM);
+        const TextureHandle relief = MakePresetHeightTexture(*m_Device, kPresetReliefDim, -0.5f * kPresetSizeM,
+                                                             -0.5f * kPresetSizeM, kPresetSizeM, TilePresetHeight);
         if (!relief.IsValid())
         {
             ADD_FAILURE() << label << ": relief texture failed";
@@ -1564,6 +1611,10 @@ TEST_F(CBTPlanarDemandGate, OverDemandingPlanarPoseConvergesUnderThePoolPressure
         BuildPresetParams(front, GameEngine::Mathematics::Vector3(0.0f, kPresetAltM, 0.0f), 0.0f, kPresetPitchDeg, kPresetTpe);
         BuildPresetParams(turned, GameEngine::Mathematics::Vector3(0.0f, kPresetAltM, 0.0f), 180.0f, kPresetPitchDeg,
                           kPresetTpe);
+        // The flat veto off: with it, facets whose relief projects under a pixel stop splitting and the
+        // tree at this pose fits the pool, so nothing would exercise the pressure scale.
+        front.WaterPlane[3] = 0.0f;
+        turned.WaterPlane[3] = 0.0f;
         const struct {
             const CBTFrameParams* Params;
             uint32_t Frames;
@@ -1647,74 +1698,199 @@ TEST_F(CBTPlanarDemandGate, OverDemandingPlanarPoseConvergesUnderThePoolPressure
         << "live count still moving across the rest window — the scale is oscillating";
     // 4. The same contract after an excursion, on a pool the turn drained and the return refilled.
     //    The STEP is not part of the contract: the controller climbs while the pool is still
-    //    filling, so it stops at the first step to read under the full mark for THAT refill and
-    //    lands within two notches of the cold-start step (27 cold and 29 after the return at this
-    //    pose). One notch is ~4.4% of threshold; the two landings hold fields a few percent apart
-    //    (4.1% measured), which is what sets the live-count band below.
+    //    filling and holds anywhere inside the band between the recover and full marks, so the
+    //    return keeps the step the turned view climbed to (3 cold, 9 after the return at this pose).
+    //    The two landings hold fields a few percent apart (5.0% measured), which is what sets the
+    //    live-count band below.
     EXPECT_GT(scaled[2].Final.PressureStep, 0) << "the scale did not re-engage after the return";
     EXPECT_LT(scaled[2].FinalOcc, kPressureFullOcc) << "the pool is back at the full mark after the return";
     EXPECT_GE(scaled[2].FinalOcc, kPressureRecoverOcc)
         << "the scale overshot after the return: the pool sits below the recover mark";
-    const int32_t stepDelta = scaled[2].Final.PressureStep - scaled[0].Final.PressureStep;
-    EXPECT_LE(stepDelta < 0 ? -stepDelta : stepDelta, 2)
-        << "the step after turn-and-back is more than two notches from the step at rest";
     EXPECT_NEAR(static_cast<double>(scaled[2].Final.LiveCount), scaled[0].Final.LiveCount,
                 0.06 * scaled[0].Final.LiveCount)
-        << "the field after turn-and-back differs from the field at rest by more than one step";
+        << "the field after turn-and-back differs from the field at rest by more than 6%";
     EXPECT_EQ(scaled[2].WindowSplitDemand, scaled[2].WindowSplitServed)
         << "splits go unserved after the return";
     EXPECT_EQ(scaled[2].WindowOverflowDelta, 0) << "splits still rolled back after the return";
     EXPECT_EQ(scaled[2].WindowLiveMax, scaled[2].WindowLiveMin) << "not a fixed point after the return";
 }
 
-// The budget clause of the monotone split design (cbt-monotone-split-test, section 5.4) asks that the
-// criterion alone never push the pool into coarsening at a gated pose. The pose is the A/B's 4 km cell: the
-// editor's 4 km preset seen from 50 m above the ground at the origin, yaw 30, pitch -8, at the editor's
-// default Target Pixel Error (11 px at 1080 rows). The camera arrives in motion, then rests (Settle). The
-// clause does not hold there yet: the size's relief term is the range of the cells a facet covers. At rest
-// this test reads pool-pressure step 26 (41 without the step bound on small boxes) and the editor reads 27 at
-// the same pose; the cause of the one-step difference is not established. The ceiling is the editor's 27, so
-// the step cannot grow past what the editor shows, with the pool under the full mark; the ceiling drops to 0
-// with the relief term that meets the clause.
-TEST_F(CBTPlanarDemandGate, LargePresetPressureFromWalkingHeightStaysUnderItsCeiling)
+
+// The 4 km preset at rest. The budget clause of the monotone split design (cbt-monotone-split-test,
+// section 5.4) asks that the criterion alone never push the pool into coarsening at a gated pose. The pose
+// is the A/B's 4 km cell: the editor's 4 km preset seen from 50 m above the ground at the origin, yaw 30,
+// pitch -8, at the editor's default Target Pixel Error (11 px at 1080 rows). The size's height term is the
+// surface's distance from a plane over the facet's box (cbt_planar_demand.glsl), so a slope with no
+// relief on it asks for no split.
+//
+//   LargePresetSettlesAtTheTargetFromWalkingHeight - the camera arrives in motion at the pose, then rests:
+//     the pool-pressure step is 0 and the pool is under the full mark.
+//   ArrivalsFromNearAndFarSettleToOneVisibleMeshAtTheLargePreset - one arrival from 2 m above the
+//     ground, one from the 650 m pose looking 55 degrees down; both rest at the 50 m pose and draw the
+//     same heap ids in the visible stream. Two history terms stay out of the claim until the budget
+//     index replaces them (section 6 of the design): the off-frustum keep step holds what an arrival
+//     refined outside the rest frustum (about 140,000 leaves differ off-screen), and the near-bias
+//     contention follows total occupancy, which that retention moves (with it on, a few hundred visible
+//     leaves differ). The arrivals run with the near bias off, so the visible mesh is the criterion's alone.
+//   ATiltedPlainSplitsNoMoreThanALevelPlain - a plain tilted 10% along X and 5% along Z holds no more
+//     facets at rest than a level plain at the same height under the same pose.
+namespace
 {
-    constexpr int32_t kPressureStepCeiling = 27;
-    constexpr uint32_t kArriveFrames = 200u;
-    constexpr uint32_t kRestFrames = 200u;
-    constexpr float kEditorTpe = 11.0f;
-    constexpr float kEditorRows = 1080.0f;
-    const float groundY = TilePresetHeight(0.0f, 0.0f) * kPresetHeightScale;
+constexpr uint32_t kPresetArriveFrames = 200u;
+constexpr uint32_t kPresetRestFrames = 300u;
+constexpr uint32_t kPresetQuietFrames = 8u;
+constexpr float kEditorTpe = 11.0f;
+constexpr float kEditorRows = 1080.0f;
 
-    CBTInstance inst;
-    ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet) && inst.InitializeRoots(kDomainPlanar));
-    const TextureHandle relief = MakeTiledPresetHeightTexture(*m_Device, kPresetReliefDim, -0.5f * kPresetSizeM,
-                                                              -0.5f * kPresetSizeM, kPresetSizeM);
-    ASSERT_TRUE(relief.IsValid());
-    for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)
-        inst.SetHeightSource(slot, relief);
+// A camera pose over the preset: the eye in world meters, the view yaw and pitch in degrees.
+struct PresetPose
+{
+    GameEngine::Mathematics::Vector3 Eye;
+    float YawDeg = 0.0f;
+    float PitchDeg = 0.0f;
+};
 
-    CBTClassifyDesc c{};
-    c.Mode = kClassifyScreenSpace;
-    c.TargetDepth = kPresetMaxDepth;
-    c.NearFieldGate = 1u;
-    c.PoolPressure = 1u;
-    CBTFrameParams p;
-    BuildPresetParams(p, GameEngine::Mathematics::Vector3(0.0f, groundY + 50.0f, 0.0f), 30.0f, -8.0f,
-                      kEditorTpe * kPresetScreenH / kEditorRows);
-    for (uint32_t frame = 0; frame < kArriveFrames + kRestFrames; ++frame)
+// What a rest leaves: the final stats, whether the last kPresetQuietFrames updates split and merged
+// nothing, and the heap ids of the live leaves and of the visible stream, each in ascending order.
+struct PresetRest
+{
+    CBTTessellationStats Stats{};
+    bool Quiet = false;
+    std::vector<uint64_t> HeapIds;
+    std::vector<uint64_t> VisibleHeapIds;
+};
+
+// Whether an arrival runs with the editor's near-bias coarsening (CBTFrameParams::NearBias[0]).
+enum class PresetNearBias
+{
+    On,
+    Off,
+};
+
+PresetPose PresetRestPose(float groundY)
+{
+    return {GameEngine::Mathematics::Vector3(0.0f, groundY + 50.0f, 0.0f), 30.0f, -8.0f};
+}
+} // namespace
+
+class CBTLargePresetRest : public CBTPlanarDemandGate
+{
+  protected:
+    // Holds the camera at `from` in motion for kPresetArriveFrames updates, then at `rest` for
+    // kPresetRestFrames updates as the render feature would (the first update after the move with Settle
+    // 0, every later one with Settle 1), on the heights `heightAt`.
+    PresetRest Arrive(float (*heightAt)(float, float), const PresetPose& from, const PresetPose& rest,
+                      PresetNearBias nearBias = PresetNearBias::On)
     {
-        c.GateVertexEval = (frame == 0u) ? 0u : 1u;
-        c.Settle = frame < kArriveFrames ? 0u : 1u;
-        RunFrame(inst, c, p, frame);
+        PresetRest out;
+        CBTInstance inst;
+        if (!inst.Initialize(*m_Device, m_KernelSet) || !inst.InitializeRoots(kDomainPlanar))
+        {
+            ADD_FAILURE() << "CBTInstance init failed";
+            return out;
+        }
+        const TextureHandle heights = MakePresetHeightTexture(*m_Device, kPresetReliefDim, -0.5f * kPresetSizeM,
+                                                              -0.5f * kPresetSizeM, kPresetSizeM, heightAt);
+        EXPECT_TRUE(heights.IsValid());
+        for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)
+            inst.SetHeightSource(slot, heights);
+        CBTClassifyDesc c{};
+        c.Mode = kClassifyScreenSpace;
+        c.TargetDepth = kPresetMaxDepth;
+        c.NearFieldGate = 1u;
+        c.PoolPressure = 1u;
+        const float splitPx = kEditorTpe * kPresetScreenH / kEditorRows;
+        CBTFrameParams p;
+        BuildPresetParams(p, from.Eye, from.YawDeg, from.PitchDeg, splitPx);
+        const float nearBiasOn = nearBias == PresetNearBias::On ? 1.0f : 0.0f;
+        p.NearBias[0] = nearBiasOn;
+        uint32_t frame = 0;
+        for (uint32_t i = 0; i < kPresetArriveFrames; ++i, ++frame)
+        {
+            c.GateVertexEval = frame == 0u ? 0u : 1u;
+            c.Settle = 0u;
+            RunFrame(inst, c, p, frame);
+        }
+        BuildPresetParams(p, rest.Eye, rest.YawDeg, rest.PitchDeg, splitPx);
+        p.NearBias[0] = nearBiasOn;
+        uint32_t quiet = 0;
+        for (uint32_t i = 0; i < kPresetRestFrames; ++i, ++frame)
+        {
+            c.Settle = i == 0u ? 0u : 1u;
+            RunFrame(inst, c, p, frame);
+            const CBTTessellationStats s = inst.ReadTessellationStats();
+            quiet = (s.SplitServed == 0 && s.MergeServed == 0) ? quiet + 1u : 0u;
+        }
+        out.Stats = inst.ReadTessellationStats();
+        out.Quiet = quiet >= kPresetQuietFrames;
+        const CBTTreeSnapshot tree = ReadTreeSnapshot(inst, false);
+        for (const uint64_t h : tree.HeapIds)
+            if (h != 0u)
+                out.HeapIds.push_back(h);
+        std::sort(out.HeapIds.begin(), out.HeapIds.end());
+        for (const uint32_t slot : tree.IndicesVisible)
+            if (slot < tree.HeapIds.size())
+                out.VisibleHeapIds.push_back(tree.HeapIds[slot]);
+        std::sort(out.VisibleHeapIds.begin(), out.VisibleHeapIds.end());
+        EXPECT_EQ(ValidationErrors(inst), 0u) << "the rest tree must be conforming";
+        inst.Shutdown();
+        m_Device->DestroyTexture(heights);
+        return out;
     }
-    const CBTTessellationStats s = inst.ReadTessellationStats();
-    const double occ = static_cast<double>(s.LiveCount) / s.PoolSize;
-    std::printf("[large preset 50 m] ground=%.2f live=%u occ=%.4f step=%d keepStep=%d split=%d/%d merge=%d\n", groundY,
-                s.LiveCount, occ, s.PressureStep, s.OffFrustumKeepStep, s.SplitDemand, s.SplitServed, s.MergeDemand);
-    EXPECT_LE(s.PressureStep, kPressureStepCeiling)
-        << "the split criterion pushes the pool further into coarsening at the 50 m pose";
+};
+
+TEST_F(CBTLargePresetRest, LargePresetSettlesAtTheTargetFromWalkingHeight)
+{
+    const PresetPose rest = PresetRestPose(TilePresetHeight(0.0f, 0.0f) * kPresetHeightScale);
+    const PresetRest r = Arrive(TilePresetHeight, rest, rest);
+    const double occ = static_cast<double>(r.Stats.LiveCount) / r.Stats.PoolSize;
+    std::printf("[large preset 50 m] live=%u occ=%.4f step=%d keepStep=%d split=%d/%d merge=%d quiet=%d\n",
+                r.Stats.LiveCount, occ, r.Stats.PressureStep, r.Stats.OffFrustumKeepStep, r.Stats.SplitDemand,
+                r.Stats.SplitServed, r.Stats.MergeDemand, r.Quiet ? 1 : 0);
+    EXPECT_EQ(r.Stats.PressureStep, 0) << "the split criterion pushes the pool into coarsening at the 50 m pose";
     EXPECT_LT(occ, kPressureFullOcc) << "the pool is at the full mark at the 50 m pose";
-    EXPECT_EQ(ValidationErrors(inst), 0u);
-    inst.Shutdown();
-    m_Device->DestroyTexture(relief);
+    EXPECT_TRUE(r.Quiet) << "the tree does not stop changing at rest";
+}
+
+TEST_F(CBTLargePresetRest, ArrivalsFromNearAndFarSettleToOneVisibleMeshAtTheLargePreset)
+{
+    const float groundY = TilePresetHeight(0.0f, 0.0f) * kPresetHeightScale;
+    const PresetPose rest = PresetRestPose(groundY);
+    const PresetPose nearStart{GameEngine::Mathematics::Vector3(0.0f, groundY + 2.0f, 0.0f), 30.0f, -8.0f};
+    const PresetPose farStart{GameEngine::Mathematics::Vector3(0.0f, kPresetAltM, 0.0f), 0.0f, kPresetPitchDeg};
+    const PresetRest fromNear = Arrive(TilePresetHeight, nearStart, rest, PresetNearBias::Off);
+    const PresetRest fromFar = Arrive(TilePresetHeight, farStart, rest, PresetNearBias::Off);
+    std::printf("[large preset arrivals] live from near %u, from far %u; step %d / %d; quiet %d / %d\n",
+                fromNear.Stats.LiveCount, fromFar.Stats.LiveCount, fromNear.Stats.PressureStep,
+                fromFar.Stats.PressureStep, fromNear.Quiet ? 1 : 0, fromFar.Quiet ? 1 : 0);
+    // The pool-pressure controller carries its state across a path once it engages, so the comparison
+    // holds only with the controller at rest on both arrivals.
+    EXPECT_EQ(fromNear.Stats.PressureStep, 0);
+    EXPECT_EQ(fromFar.Stats.PressureStep, 0);
+    EXPECT_TRUE(fromNear.Quiet);
+    EXPECT_TRUE(fromFar.Quiet);
+    ASSERT_GT(fromNear.VisibleHeapIds.size(), 10000u) << "the rest pose barely refined; the test would prove nothing";
+    std::vector<uint64_t> visibleOnlyOne;
+    std::set_symmetric_difference(fromNear.VisibleHeapIds.begin(), fromNear.VisibleHeapIds.end(),
+                                  fromFar.VisibleHeapIds.begin(), fromFar.VisibleHeapIds.end(),
+                                  std::back_inserter(visibleOnlyOne));
+    std::vector<uint64_t> liveOnlyOne;
+    std::set_symmetric_difference(fromNear.HeapIds.begin(), fromNear.HeapIds.end(), fromFar.HeapIds.begin(),
+                                  fromFar.HeapIds.end(), std::back_inserter(liveOnlyOne));
+    std::printf("[large preset arrivals] visible %zu / %zu, %zu in one only; live leaves in one only %zu (the "
+                "off-frustum keep)\n",
+                fromNear.VisibleHeapIds.size(), fromFar.VisibleHeapIds.size(), visibleOnlyOne.size(), liveOnlyOne.size());
+    EXPECT_EQ(visibleOnlyOne.size(), 0u) << "the two arrivals draw different meshes at the rest pose";
+}
+
+TEST_F(CBTLargePresetRest, ATiltedPlainSplitsNoMoreThanALevelPlain)
+{
+    const PresetPose rest = PresetRestPose(0.5f * kPresetHeightScale);
+    const PresetRest level = Arrive(LevelPlainHeight, rest, rest);
+    const PresetRest tilted = Arrive(TiltedPlainHeight, rest, rest);
+    std::printf("[plains 50 m] level live %u step %d; tilted live %u step %d\n", level.Stats.LiveCount,
+                level.Stats.PressureStep, tilted.Stats.LiveCount, tilted.Stats.PressureStep);
+    EXPECT_LE(tilted.Stats.LiveCount, level.Stats.LiveCount) << "the tilted plain splits for its slope";
+    EXPECT_EQ(tilted.Stats.PressureStep, 0);
+    EXPECT_TRUE(tilted.Quiet);
 }

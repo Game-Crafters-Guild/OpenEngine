@@ -13,7 +13,7 @@ namespace GameEngine::Components
 // own collider entity; this component records which planet + face it serves and the
 // planet-face physics handle to release when the terrain is destroyed, switches back to
 // Planar, or Play exits. Not authored, not serialized — a pure runtime provisioning link,
-// mirroring TerrainTileCollider.
+// mirroring TerrainPageCollider.
 struct TerrainPlanetFaceCollider
 {
     // The owning terrain entity's handle (index + version), stored as raw uint32s so the

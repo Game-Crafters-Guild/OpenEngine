@@ -7,7 +7,6 @@
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/Controls/InspectorNotice.h"
 
-#include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Components/Navigation/NavigationAgent.h"
@@ -45,8 +44,6 @@ EditorUI::InspectorNotice::Kind NoticeKindOf(const Navigation::AgentStatus& stat
 
 void AddSurfaceRow(const InspectorContext& ctx, const NavigationAgent& agent)
 {
-    const ECS::FieldInfo* field =
-        ECS::ComponentFieldRegistry::FindField(ECS::GetComponentTypeId<NavigationAgent>(), "Surface");
     EntityField* surface = InspectorUI::AddEntityFieldRow(
         ctx.Parent, "Surface", agent.Surface, ctx.World,
         [w = ctx.World, e = ctx.Entity, n = ctx.ChangeNotifications, undo = ctx.Undo](ECS::EntityHandle picked)
@@ -55,7 +52,7 @@ void AddSurfaceRow(const InspectorContext& ctx, const NavigationAgent& agent)
                                                      [picked](NavigationAgent& target) { target.Surface = picked; });
         },
         {ECS::GetComponentTypeId<Components::NavigationSurface>()},
-        field && !field->Tooltip.empty() ? field->Tooltip.data() : nullptr);
+        InspectorDrag::ReflectedTooltip(ECS::GetComponentTypeId<NavigationAgent>(), "Surface"));
     surface->SetEmptyText("The only surface in the scene");
 }
 

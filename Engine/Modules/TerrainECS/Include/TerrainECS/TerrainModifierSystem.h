@@ -33,7 +33,10 @@ namespace JobSystem { class WorkStealingThreadPool; class TaskHandle; }
 
 namespace GameEngine::TerrainECS
 {
+struct BakeBandRegion;
 struct BakeStoreSnapshot;
+struct TerrainGrassComposeRequest;
+struct TerrainGrassComposeTarget;
 
 // ---- Shape falloff ---------------------------------------------------------
 
@@ -531,8 +534,9 @@ struct ModifierBakeSnapshot
 // ECS system that discovers terrain modifier entities, resolves their parameters,
 // and applies them to the heightfield and splatmap of affected terrains.
 // Scheduled after TransformHierarchy and SplineExtraction (declared edges) and
-// BEFORE TerrainExtraction, which depends on it — so a modifier edit reaches the
-// GPU in the same frame it is made.
+// BEFORE TerrainExtraction, which depends on it — so a ground edit reaches the
+// GPU in the same frame it is made. A grass edit composes off the frame and
+// reaches it at the start of the first update after its job finishes.
 class TerrainModifierSystem : public ECS::ISystem
 {
 public:
@@ -571,8 +575,7 @@ public:
     // (WorldOriginX + (firstLatticeX + i) * spacing, ...) where spacing is
     // TileWorldSize / (HeightmapWidth - 1). Heights come back NORMALIZED — the
     // units the tile heightfield stores — so a caller scales by HeightScale and
-    // offsets by the terrain's world Y exactly as SampleTiledHeightNormalized's
-    // callers do.
+    // offsets by the terrain's world Y.
     //
     // Indices outside the tile grid are left untouched in `outNormalized`; the
     // caller owns "outside the footprint", which is a wall rather than a hole.
@@ -638,12 +641,10 @@ public:
     uint32 GetDragPreviewBakeCountForTests() const { return m_DragPreviewBakeCount; }
     // Row bands the last bake pass fanned out across the pool; 0 when it ran whole.
     uint32 GetLastBakeBandCountForTests() const { return m_LastBakeBandCount; }
+    // Blocks until the grass compose in flight, if any, has finished; its result swaps in at the
+    // start of the next update.
+    void WaitForGrassComposeForTests();
 
-    // Row-band height for splitting a large region bake across pool workers (RunBakeRowBands). A
-    // wide bake is dominated by per-texel noise + modifier + splat evaluation, all pure functions of
-    // the sample's world position, so partitioning a region's rows is byte-identical to one
-    // whole-region call (the region-vs-full oracles lock it) while keeping every worker busy.
-    static constexpr int32 kBakeBandRows = 32;
 
     // Splat rows one terrain's streamed-in tiles composite a frame at most, across its arrivals. An eighth
     // of a 1025-row tile: on a single-thread build the whole-tile surface-rules splat measured
@@ -808,18 +809,8 @@ private:
                          const DirtyUnion& heightDirty, const DirtyUnion& splatDirty,
                          std::vector<TileCoord>& outBakedTiles, bool gpuEvalSkip);
 
-    // One inclusive sample rectangle [MinX, MaxX] x [MinZ, MaxZ] of a bake pass.
-    struct BakeBandRegion
-    {
-        int32 MinX = 0;
-        int32 MinZ = 0;
-        int32 MaxX = 0;
-        int32 MaxZ = 0;
-    };
-    // Applies rowFn(regionIndex, minX, maxX, z0, z1) over every region. With a pool
-    // and enough texels the rows are split into kBakeBandRows bands fanned across
-    // m_JobPool and joined; otherwise each region runs whole on this thread. Each
-    // band writes a disjoint row range of its region. Returns true when it fanned out.
+    // RunRowBands over m_JobPool, under the GE_TERRAIN_MODIFIER_PARALLEL switch; records the band
+    // count in m_LastBakeBandCount. Returns true when it fanned out.
     bool RunBakeRowBands(std::span<const BakeBandRegion> regions,
                          const std::function<void(std::size_t, int32, int32, int32, int32)>& rowFn);
 
@@ -1033,6 +1024,11 @@ private:
     uint64 m_ColorZonesStamp = 0;
     TerrainColorMapBaker m_ColorMapBaker;
     void BakeGrassFields(ECS::World& world, TerrainService& terrainService);
+    // Adds one field's target to `request`: the whole field, the part of it `dirty` covers, or (when
+    // the edit misses it) a record that it shows the requested stack. A lattice under 2 x 2 adds none.
+    void AddGrassComposeTarget(TerrainGrassComposeRequest& request, TerrainGrassComposeTarget target,
+                               const TerrainGrassField& field, uint32 w, uint32 h, float32 sizeX, float32 sizeZ,
+                               float32 originX, float32 originZ, bool full, const DirtyUnion& dirty) const;
     struct GrassBakeSnapshot
     {
         ECS::EntityHandle Entity;
@@ -1043,6 +1039,31 @@ private:
     uint64 m_LastGrassHash = 0;
     uint64 m_LastGrassTerrainHash = 0;
     bool m_HasGrassBaseline = false;
+    // True when m_GrassModifiers is the stack `snapshot` records, in order.
+    bool GrassStackMatches(const std::vector<GrassBakeSnapshot>& snapshot) const;
+    // The grass compose runs as a job on m_JobPool, off the frame. m_LastGrass* above is the stack
+    // the fields show; m_RequestedGrassBaseline is the one the newest request composes, and becomes
+    // m_LastGrass* when its result swaps in. A field keeps showing its last result meanwhile, and
+    // one that never had a result holds its terrain's grass back (TerrainGrassField::GatesPlacement).
+    struct GrassBaseline
+    {
+        std::vector<GrassBakeSnapshot> Snapshot;
+        uint64 Hash = 0;
+        uint64 TerrainHash = 0;
+    };
+    GrassBaseline m_RequestedGrassBaseline;
+    // The request in flight and its job; null when none. The job holds the request too.
+    std::shared_ptr<TerrainGrassComposeRequest> m_GrassCompose;
+    std::unique_ptr<JobSystem::TaskHandle> m_GrassComposeTask;
+    std::chrono::steady_clock::time_point m_GrassComposeRequestedAt{};
+    // Bumped by an edit that lands while a compose is in flight: a result of an older generation
+    // is dropped when it lands.
+    uint64 m_GrassGeneration = 0;
+    // A gather landed while a compose ran, or a result was dropped or never ran: one request of the
+    // newest stack follows.
+    bool m_GrassComposeOwed = false;
+    // At the start of an update: swaps a finished compose's fields in, or drops a stale one.
+    void ApplyGrassCompose(TerrainService& terrainService);
 
     // See GetAppliedGroundRevision.
     uint64 m_AppliedGroundRevision = 0;

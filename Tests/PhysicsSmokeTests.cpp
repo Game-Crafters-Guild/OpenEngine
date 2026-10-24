@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "EngineLogCapture.h"
+#include "PagedTiledTerrain.h"
+#include "PageStreaming/HeightPageOverlay.h"
+#include "PageStreaming/PageStoreFormat.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 #include "Physics/PhysicsWorld.h"
@@ -25,7 +28,7 @@
 #include "TerrainECS/Systems/RegisterTerrainSystems.h"
 #include "TerrainECS/Systems/TerrainPhysicsSystem.h"
 #include "TerrainECS/Systems/TerrainWorldHooks.h"
-#include "TerrainECS/Components/TerrainTileCollider.h"
+#include "TerrainECS/Components/TerrainPageCollider.h"
 #include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
 #include "CBTTerrain/SphereSculptPaging.h"      // SphereSculptSampler (empty view = no sculpt)
 #include "CBTTerrain/SphereAnalyticModifiers.h" // SphereAnalyticModifierSet (empty = no modifiers)
@@ -2587,8 +2590,8 @@ TEST(Physics, HeightFieldThrottleCoalescesRebuildStorm)
 namespace
 {
 // Two independent "tiles" backed by file statics, addressed by dataHandle
-// (1 -> tile 0, 2 -> tile 1). Mirrors E6's per-tile physics handles: each tile
-// is one collider entity + one body, and an edit bumps only its own version +
+// (1 -> tile 0, 2 -> tile 1), as the terrain's page bodies are: each tile is
+// one collider entity + one body, and an edit bumps only its own version +
 // region so PhysicsInit updates only that tile's body.
 struct TileProbe
 {
@@ -2654,7 +2657,7 @@ GameEngine::ECS::EntityHandle CreateTileColliderEntity(GameEngine::ECS::World& w
 }
 } // namespace
 
-// Mutation-verified per-tile collider (E6): two tiles = two bodies. Lowering the
+// Mutation-verified per-body collider updates: two tiles = two bodies. Lowering the
 // ground under a sleeping body over tile 1 must wake that body and update ONLY
 // tile 1's collider in place — tile 0's body is untouched. heightScale != 1
 // (scale = 1 hides the offset.y + scale.y*raw mapping).
@@ -2757,424 +2760,6 @@ TEST(Physics, TiledColliderEditUpdatesAndWakesOnlyEditedTile)
     EXPECT_NEAR(finalY, kLoweredRaw * kScale + 0.5f, 1.5f);
 }
 
-// Real end-to-end (E6): TerrainPhysicsSystem provisions one collider entity per
-// resident Full tile of a tiled terrain, PhysicsInit builds one body per tile,
-// and an edit to a single tile — routed through the real TerrainService tile
-// provider — advances only that tile's collider version.
-TEST(Physics, TiledTerrainProvisionsPerTileCollidersAndRoutesEditsPerTile)
-{
-    using namespace GameEngine;
-    using namespace GameEngine::Physics;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::HeightFieldColliderShape;
-    using GameEngine::Components::PhysicsBody;
-    using GameEngine::Components::TerrainTileCollider;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
-
-    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-
-    if (TE::TerrainService::IsInitialized())
-        TE::TerrainService::Shutdown();
-    TE::TerrainService::Initialize(); // registers the real heightfield provider
-    struct TerrainGuard
-    {
-        ~TerrainGuard() { if (TE::TerrainService::IsInitialized()) TE::TerrainService::Shutdown(); }
-    } terrainGuard;
-    auto& terrain = TE::TerrainService::Get();
-
-    // 2-tile tiled terrain (WorldSizeX = 2 * 1024 at 1 sample/m).
-    TE::TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 2048.0f;
-    cfg.WorldSizeZ = 1024.0f;
-    cfg.HeightScale = 64.0f;
-    cfg.SamplesPerMeter = 1.0f;
-    const auto handle = terrain.CreateTiledTerrain(cfg);
-    auto* tiled = terrain.GetTiledTerrainData(handle);
-    ASSERT_NE(tiled, nullptr);
-    ASSERT_EQ(tiled->Config.TilesPerAxisX, 2u);
-    for (int32 x = 0; x < 2; ++x)
-    {
-        auto* tile = terrain.LoadTile(handle, TE::TileCoord{x, 0});
-        ASSERT_NE(tile, nullptr);
-        tile->LodState = TE::TileLodState::Full;
-        tile->MarkFullDirty();
-    }
-
-    ECS::World world;
-    auto terrainEntity = world.CreateEntity();
-    Components::Terrain tc{};
-    tc.SizeX = 2048.0f;
-    tc.SizeZ = 1024.0f;
-    tc.HeightScale = 64.0f;
-    tc.TiledTerrainHandle = handle.Index;
-    tc.TiledTerrainGeneration = handle.Generation;
-    world.AddComponentImmediate<Components::Terrain>(terrainEntity, tc);
-    world.AddComponentImmediate<Components::WorldTransform>(terrainEntity, Components::WorldTransform{});
-
-    // Provision per-tile colliders (deferred), flush, then build the bodies.
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
-    world.ProcessCommands();
-
-    PhysicsInitSystem init;
-    init.SetRebuildQuiescenceSeconds(0.0f);
-    init.Update(world, kDt);
-    world.ProcessCommands();
-
-    int colliderCount = 0;
-    ECS::EntityHandle colliderForTile[2] = {};
-    world.Query<ECS::Read<TerrainTileCollider>, ECS::Read<PhysicsBody>>()
-        .Each([&](ECS::EntityHandle e, const TerrainTileCollider& tag, const PhysicsBody& body)
-        {
-            ++colliderCount;
-            EXPECT_TRUE(body.initialized) << "tile collider body must be built";
-            if (tag.TileX >= 0 && tag.TileX < 2 && tag.TileZ == 0)
-                colliderForTile[tag.TileX] = e;
-        });
-    EXPECT_EQ(colliderCount, 2) << "one collider entity per resident Full tile";
-    ASSERT_TRUE(colliderForTile[0].IsValid());
-    ASSERT_TRUE(colliderForTile[1].IsValid());
-
-    const uint64 built0 = world.GetComponent<HeightFieldColliderShape>(colliderForTile[0])->lastBuiltVersion;
-    const uint64 built1 = world.GetComponent<HeightFieldColliderShape>(colliderForTile[1])->lastBuiltVersion;
-
-    // Edit tile (1,0) only: raise a region + log it.
-    auto* tile1 = tiled->Tiles.at(TE::TileCoord{1, 0}).get();
-    for (uint32 z = 10; z < 30; ++z)
-        for (uint32 x = 10; x < 30; ++x)
-            tile1->Heightfield.SetSample(x, z, tile1->Heightfield.GetSample(x, z) + 0.1f);
-    tile1->MarkRegionDirty(10, 10, 30, 30);
-    const uint64 tile1NewVersion = tile1->HeightfieldVersion;
-
-    init.Update(world, kDt);
-    world.ProcessCommands();
-
-    EXPECT_GT(tile1NewVersion, built1);
-    EXPECT_EQ(world.GetComponent<HeightFieldColliderShape>(colliderForTile[1])->lastBuiltVersion,
-              tile1NewVersion) << "the edited tile's collider must reach the new version";
-    EXPECT_EQ(world.GetComponent<HeightFieldColliderShape>(colliderForTile[0])->lastBuiltVersion,
-              built0) << "an edit to tile 1 must not touch tile 0's collider";
-}
-
-// When a tile unloads (streamed out), TerrainPhysicsSystem must tear down its
-// collider entity and release the tile-physics handle — one collider per
-// resident tile, no leaks.
-TEST(Physics, TiledTerrainTearsDownColliderWhenTileUnloads)
-{
-    using namespace GameEngine;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::TerrainTileCollider;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
-
-    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    if (TE::TerrainService::IsInitialized())
-        TE::TerrainService::Shutdown();
-    TE::TerrainService::Initialize();
-    struct TerrainGuard
-    {
-        ~TerrainGuard() { if (TE::TerrainService::IsInitialized()) TE::TerrainService::Shutdown(); }
-    } terrainGuard;
-    auto& terrain = TE::TerrainService::Get();
-
-    TE::TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 2048.0f;
-    cfg.WorldSizeZ = 1024.0f;
-    cfg.HeightScale = 64.0f;
-    cfg.SamplesPerMeter = 1.0f;
-    const auto handle = terrain.CreateTiledTerrain(cfg);
-    auto* tiled = terrain.GetTiledTerrainData(handle);
-    ASSERT_EQ(tiled->Config.TilesPerAxisX, 2u);
-    for (int32 x = 0; x < 2; ++x)
-    {
-        auto* tile = terrain.LoadTile(handle, TE::TileCoord{x, 0});
-        tile->LodState = TE::TileLodState::Full;
-        tile->MarkFullDirty();
-    }
-
-    ECS::World world;
-    auto terrainEntity = world.CreateEntity();
-    Components::Terrain tc{};
-    tc.SizeX = 2048.0f;
-    tc.SizeZ = 1024.0f;
-    tc.HeightScale = 64.0f;
-    tc.TiledTerrainHandle = handle.Index;
-    tc.TiledTerrainGeneration = handle.Generation;
-    world.AddComponentImmediate<Components::Terrain>(terrainEntity, tc);
-    world.AddComponentImmediate<Components::WorldTransform>(terrainEntity, Components::WorldTransform{});
-
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
-    world.ProcessCommands();
-
-    PhysicsInitSystem init;
-    init.SetRebuildQuiescenceSeconds(0.0f);
-    init.Update(world, kDt);
-    world.ProcessCommands();
-
-    auto countColliders = [&]() {
-        int n = 0;
-        world.Query<ECS::Read<TerrainTileCollider>>()
-            .Each([&](ECS::EntityHandle, const TerrainTileCollider&) { ++n; });
-        return n;
-    };
-    ASSERT_EQ(countColliders(), 2);
-
-    // Stream tile (1,0) out.
-    terrain.UnloadTile(handle, TE::TileCoord{1, 0});
-
-    terrainPhysics.Update(world, kDt); // detects the orphan → destroy + release
-    world.ProcessCommands();
-
-    EXPECT_EQ(countColliders(), 1) << "the unloaded tile's collider entity must be torn down";
-
-    // The surviving collider is tile (0,0).
-    world.Query<ECS::Read<TerrainTileCollider>>()
-        .Each([&](ECS::EntityHandle, const TerrainTileCollider& tag) {
-            EXPECT_EQ(tag.TileX, 0);
-        });
-}
-
-namespace
-{
-// A minimal 2-tile tiled terrain + terrain entity, ready for TerrainPhysicsSystem
-// provisioning. Returns the terrain entity; the tiled handle is written out.
-GameEngine::ECS::EntityHandle SetUpTiledTerrainForColliders(
-    GameEngine::ECS::World& world, GameEngine::TerrainECS::TiledTerrainHandle& outHandle)
-{
-    using namespace GameEngine;
-    namespace TE = GameEngine::TerrainECS;
-
-    TE::TiledTerrainConfig cfg{};
-    cfg.WorldSizeX = 2048.0f;
-    cfg.WorldSizeZ = 1024.0f;
-    cfg.HeightScale = 64.0f;
-    cfg.SamplesPerMeter = 1.0f;
-    auto& terrain = TE::TerrainService::Get();
-    outHandle = terrain.CreateTiledTerrain(cfg);
-    for (int32 x = 0; x < 2; ++x)
-    {
-        auto* tile = terrain.LoadTile(outHandle, TE::TileCoord{x, 0});
-        tile->LodState = TE::TileLodState::Full;
-        tile->MarkFullDirty();
-    }
-
-    auto terrainEntity = world.CreateEntity();
-    Components::Terrain tc{};
-    tc.SizeX = 2048.0f;
-    tc.SizeZ = 1024.0f;
-    tc.HeightScale = 64.0f;
-    tc.TiledTerrainHandle = outHandle.Index;
-    tc.TiledTerrainGeneration = outHandle.Generation;
-    world.AddComponentImmediate<Components::Terrain>(terrainEntity, tc);
-    world.AddComponentImmediate<Components::WorldTransform>(terrainEntity, Components::WorldTransform{});
-    return terrainEntity;
-}
-} // namespace
-
-// Per-tile collider entities are engine-created runtime state (review Fix 1):
-// they must carry RuntimeOnlyEntity so SaveSceneToFile excludes them. Without
-// the tag, a save-during-Play persists N ghost Transform-only entities per save.
-TEST(Physics, TiledColliderEntitiesAreRuntimeOnlyAndExcludedFromSave)
-{
-    using namespace GameEngine;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::RuntimeOnlyEntity;
-    using GameEngine::Components::TerrainTileCollider;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
-
-    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    if (TE::TerrainService::IsInitialized())
-        TE::TerrainService::Shutdown();
-    TE::TerrainService::Initialize();
-    struct TerrainGuard
-    {
-        ~TerrainGuard() { if (TE::TerrainService::IsInitialized()) TE::TerrainService::Shutdown(); }
-    } terrainGuard;
-
-    ECS::World world;
-    TE::TiledTerrainHandle handle{};
-    SetUpTiledTerrainForColliders(world, handle);
-
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
-    world.ProcessCommands();
-
-    int colliderCount = 0;
-    int taggedCount = 0;
-    world.Query<ECS::Read<TerrainTileCollider>>()
-        .Each([&](ECS::EntityHandle e, const TerrainTileCollider&)
-        {
-            ++colliderCount;
-            if (world.HasComponent<RuntimeOnlyEntity>(e))
-                ++taggedCount;
-        });
-    ASSERT_EQ(colliderCount, 2);
-    EXPECT_EQ(taggedCount, 2) << "every provisioned tile collider must be RuntimeOnlyEntity-tagged";
-
-    // Serialize the world: the runtime-only collider entities must be dropped,
-    // while the authored terrain entity round-trips.
-    const auto scenePath =
-        std::filesystem::temp_directory_path() / "ge_tiled_collider_runtime_only.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, Scene::SaveOptions{}));
-
-    ECS::World reloaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath,
-                                         Scene::LoadOptions{Scene::LoadMode::Replace}));
-
-    int reloadedColliders = 0;
-    int reloadedTotal = 0;
-    for (auto* arch : reloaded.GetAllArchetypes())
-    {
-        if (!arch)
-            continue;
-        for (const auto& h : arch->CollectEntities())
-        {
-            if (!h.IsValid() || !reloaded.IsValid(h))
-                continue;
-            ++reloadedTotal;
-            if (reloaded.HasComponent<TerrainTileCollider>(h))
-                ++reloadedColliders;
-        }
-    }
-    EXPECT_GE(reloadedTotal, 1) << "the authored terrain entity must survive the round-trip";
-    EXPECT_EQ(reloadedColliders, 0)
-        << "runtime-only tile collider entities must not be written to the scene";
-
-    std::error_code ec;
-    std::filesystem::remove(scenePath, ec);
-}
-
-namespace
-{
-// Every tile collider of a SetUpTiledTerrainForColliders terrain stands under its own tile: its
-// WorldTransform is the tile centre, and a downward ray at the centre of tile (1,0), away from the
-// origin, meets the ground the renderer draws there. A collider built at the origin leaves that
-// tile with no ground and stacks every tile's heightfield over the origin.
-void ExpectTileCollidersUnderTheirTiles(GameEngine::ECS::World& world,
-                                        GameEngine::TerrainECS::TiledTerrainHandle handle)
-{
-    using namespace GameEngine;
-    using namespace GameEngine::Physics;
-    using GameEngine::Components::TerrainTileCollider;
-    using GameEngine::Components::WorldTransform;
-    namespace TE = GameEngine::TerrainECS;
-
-    const TE::TiledTerrainData* tiled = TE::TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(tiled, nullptr);
-    const float32 tileSize = tiled->Config.TileWorldSize;
-
-    int colliderCount = 0;
-    world.Query<ECS::Read<TerrainTileCollider>, ECS::Read<WorldTransform>>()
-        .Each([&](ECS::EntityHandle, const TerrainTileCollider& tag, const WorldTransform& wt)
-        {
-            ++colliderCount;
-            const TE::TerrainTileData* tile = tiled->Tiles.at(TE::TileCoord{tag.TileX, tag.TileZ}).get();
-            EXPECT_FLOAT_EQ(wt.matrix[12], tile->WorldOriginX + tileSize * 0.5f) << "tile " << tag.TileX;
-            EXPECT_FLOAT_EQ(wt.matrix[14], tile->WorldOriginZ + tileSize * 0.5f) << "tile " << tag.TileX;
-        });
-    EXPECT_EQ(colliderCount, 2);
-
-    const TE::TerrainTileData* far = tiled->Tiles.at(TE::TileCoord{1, 0}).get();
-    const float32 centreX = far->WorldOriginX + tileSize * 0.5f;
-    const float32 centreZ = far->WorldOriginZ + tileSize * 0.5f;
-    const float32 drawn = far->Heightfield.SampleBilinear(0.5f, 0.5f) * tiled->Config.HeightScale;
-
-    RayCastQuery q{};
-    q.ray = Ray3D(Vector3(centreX, 10000.0f, centreZ), Vector3(0.0f, -1.0f, 0.0f));
-    q.maxDistance = 20000.0f;
-    RayCastResult hit{};
-    ASSERT_TRUE(PhysicsECS::PhysicsWorldService::Get().RayCast(q, hit) && hit.HasHit())
-        << "no collider under tile (1,0) at (" << centreX << ", " << centreZ << ")";
-    EXPECT_NEAR(hit.hitPoint.y, drawn, 0.5f) << "the collider under tile (1,0) is not that tile's ground";
-}
-} // namespace
-
-// Isolation guard: provisioning, the deferred flush and PhysicsInit called directly. The flush
-// must land each tile collider with the Transform, WorldTransform and collider layer the
-// provisioning queued, not with the defaults the collider components' requirements queue.
-TEST(Physics, TiledTerrainTileCollidersStandUnderTheirTiles)
-{
-    using namespace GameEngine;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::PhysicsCollider;
-    using GameEngine::Components::TerrainTileCollider;
-    using GameEngine::Components::Transform;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
-
-    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    ScopedTerrainService terrainService;
-
-    ECS::World world;
-    TE::TiledTerrainHandle handle{};
-    SetUpTiledTerrainForColliders(world, handle);
-
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
-    world.ProcessCommands();
-
-    const TE::TiledTerrainData* tiled = TE::TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(tiled, nullptr);
-    world.Query<ECS::Read<TerrainTileCollider>, ECS::Read<Transform>, ECS::Read<PhysicsCollider>>()
-        .Each([&](ECS::EntityHandle, const TerrainTileCollider& tag, const Transform& local,
-                  const PhysicsCollider& collider)
-        {
-            const TE::TerrainTileData* tile = tiled->Tiles.at(TE::TileCoord{tag.TileX, tag.TileZ}).get();
-            EXPECT_FLOAT_EQ(local.matrix[12], tile->WorldOriginX + tiled->Config.TileWorldSize * 0.5f)
-                << "tile " << tag.TileX << ": the provisioned Transform was replaced";
-            EXPECT_EQ(collider.layer, Physics::Layers::Static) << "tile " << tag.TileX;
-        });
-
-    PhysicsInitSystem init;
-    init.Update(world, kDt);
-    world.ProcessCommands();
-
-    ExpectTileCollidersUnderTheirTiles(world, handle);
-}
-
-// The editor and the Player run TerrainPhysics, TransformHierarchy and PhysicsInit in one
-// dependency-ordered schedule, with the deferred commands flushed before each frame's systems
-// (Engine.cpp). Driven through the modules' own schedule contributions, the tile colliders a
-// frame provisions are built under their tiles on the next.
-TEST(Physics, TiledTerrainTileCollidersStandUnderTheirTilesThroughTheFrameSchedule)
-{
-    using namespace GameEngine;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
-
-    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    ScopedTerrainService terrainService;
-
-    ECS::World world;
-    TE::TiledTerrainHandle handle{};
-    SetUpTiledTerrainForColliders(world, handle);
-
-    ECS::SystemScheduleBuilder builder;
-    builder.Add<Engine::Renderer::TransformHierarchySystem>("TransformHierarchy", ECS::SystemPhase::Extraction, 1);
-    PhysicsECS::AddPhysicsSystemsToSchedule(builder);
-    TE::AddTerrainSystemsToSchedule(builder, nullptr);
-    ECS::SystemManager manager;
-    // Partial: the rendering, spline and CBT systems the terrain systems also name are absent.
-    builder.BuildAndRegisterWithWaves(manager, ECS::ScheduleCompleteness::Partial);
-    ASSERT_TRUE(manager.GetExecutionPlan().IsValid());
-
-    for (int frame = 0; frame < 2; ++frame)
-    {
-        world.ProcessCommands();
-        manager.Update(world, kDt);
-    }
-
-    ExpectTileCollidersUnderTheirTiles(world, handle);
-}
-
 // A single (untiled) terrain's collider is queued with its shape in one flush; the shape's
 // required PhysicsCollider default must not replace the provisioned one.
 TEST(Physics, PlanarTerrainColliderKeepsTheStaticLayer)
@@ -3214,120 +2799,541 @@ TEST(Physics, PlanarTerrainColliderKeepsTheStaticLayer)
     EXPECT_EQ(collider->layer, Physics::Layers::Static);
 }
 
-// Safe orphan teardown (review Fix 3b): when a tile unloads, TerrainPhysicsSystem
-// frees the Jolt body immediately but the DestroyEntity is deferred. For the rest
-// of the frame the entity is still live, so its PhysicsBody must be reset (no
-// initialized=true over a freed handle) — nothing may dereference the freed body
-// before the deferred destroy lands.
-TEST(Physics, TiledColliderOrphanTeardownClearsBodyStateBeforeDeferredDestroy)
+// ---- Paged terrain colliders: one body per finest page inside a CPU window (design page-streaming D3) ----
+
+namespace
+{
+namespace PagedTE = GameEngine::TerrainECS;
+
+// A 2048 x 1024 m paged terrain (16 x 8 level-0 pages at 1 m) on an entity, its two tiles loaded at
+// Full as well: the oracle's heights, which the page bodies do not read. Frame drives the
+// terrain's height pages as the extraction does (the dynamic bodies' windows, the request, the
+// update), then TerrainPhysicsSystem and the flush.
+class PagedColliderTerrain
+{
+public:
+    explicit PagedColliderTerrain(GameEngine::ECS::World& world)
+        : Paged(PagedTE::Test::CreatePagedTiledTerrain(PagedTE::TerrainService::Get(), 2048.0f, 1024.0f, 64.0f))
+    {
+        using namespace GameEngine;
+        PagedTE::TerrainService& service = PagedTE::TerrainService::Get();
+        for (int32 x = 0; x < 2; ++x)
+        {
+            PagedTE::TerrainTileData* tile = service.LoadTile(Paged.Tiled, PagedTE::TileCoord{x, 0});
+            tile->LodState = PagedTE::TileLodState::Full;
+            tile->MarkFullDirty();
+        }
+        Entity = world.CreateEntity();
+        world.AddComponentImmediate<Components::Terrain>(Entity, Paged.Component);
+        world.AddComponentImmediate<Components::WorldTransform>(Entity, Components::WorldTransform{});
+    }
+
+    // The world point of terrain-local meters (x, z) from the footprint's minimum corner.
+    GameEngine::Mathematics::Vector3 At(GameEngine::float32 x, GameEngine::float32 z) const
+    {
+        return {Paged.Request.Shape.OriginX + x, 10.0f, Paged.Request.Shape.OriginZ + z};
+    }
+
+    // Frames with one camera at `camera` until `pages` page colliders exist (the window pages land
+    // on jobs). False when they never do.
+    bool ProvisionUntil(GameEngine::ECS::World& world, PagedTE::TerrainPhysicsSystem& system,
+                        const GameEngine::Mathematics::Vector3& camera, int pages)
+    {
+        for (int attempt = 0; attempt < 2000; ++attempt)
+        {
+            Frame(world, system, camera);
+            if (CountPageColliders(world) == pages)
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+    }
+
+    void Frame(GameEngine::ECS::World& world, PagedTE::TerrainPhysicsSystem& system,
+               const GameEngine::Mathematics::Vector3& camera)
+    {
+        StreamPages(world, camera);
+        system.Update(world, 1.0f / 60.0f);
+        world.ProcessCommands();
+    }
+
+    // One frame of the height pages alone: the windows the next TerrainPhysicsSystem update reads.
+    void StreamPages(GameEngine::ECS::World& world, const GameEngine::Mathematics::Vector3& camera)
+    {
+        PagedTE::TerrainHeightPages& pages = PagedTE::TerrainService::Get().GetHeightPages();
+        pages.GatherBodyWindows(world);
+        pages.Request(Paged.Request, {&camera, 1}, View());
+        pages.Update(m_Frame++, 1.0f / 60.0f, false, 2);
+    }
+
+    static PagedTE::PageLevelView View()
+    {
+        return PagedTE::MakePageLevelView(PagedTE::kPageLevelReferenceRows, 1.0f, 11.0f);
+    }
+
+    static int CountPageColliders(GameEngine::ECS::World& world)
+    {
+        int count = 0;
+        world.Query<GameEngine::ECS::Read<GameEngine::Components::TerrainPageCollider>>().Each(
+            [&count](const GameEngine::Components::TerrainPageCollider&) { ++count; });
+        return count;
+    }
+
+    static GameEngine::ECS::EntityHandle FindPageCollider(GameEngine::ECS::World& world, GameEngine::uint32 pageX,
+                                                         GameEngine::uint32 pageZ)
+    {
+        GameEngine::ECS::EntityHandle found{};
+        world.Query<GameEngine::ECS::Read<GameEngine::Components::TerrainPageCollider>>().Each(
+            [&](GameEngine::ECS::EntityHandle entity, const GameEngine::Components::TerrainPageCollider& tag) {
+                if (tag.PageX == pageX && tag.PageZ == pageZ)
+                    found = entity;
+            });
+        return found;
+    }
+
+    PagedTE::Test::PagedTiledTerrain Paged;
+    GameEngine::ECS::EntityHandle Entity{};
+
+private:
+    GameEngine::uint64 m_Frame = 1;
+};
+
+// A dynamic body entity at world (x, 0, z): it opens a CPU window (GatherBodyWindows).
+void AddDynamicBody(GameEngine::ECS::World& world, const GameEngine::Mathematics::Vector3& at)
 {
     using namespace GameEngine;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::PhysicsBody;
-    using GameEngine::Components::TerrainTileCollider;
-    namespace TE = GameEngine::TerrainECS;
+    Components::PhysicsBody body{};
+    body.motionType = Physics::MotionType::Dynamic;
+    Components::WorldTransform transform{};
+    transform.matrix[12] = at.x;
+    transform.matrix[14] = at.z;
+    const ECS::EntityHandle entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, body);
+    world.AddComponentImmediate(entity, transform);
+}
 
-    constexpr float32 kDt = 1.0f / 60.0f;
+// A downward ray at world (x, z): the height it meets, or false.
+bool GroundUnder(GameEngine::float32 x, GameEngine::float32 z, GameEngine::float32& outY)
+{
+    using namespace GameEngine::Physics;
+    RayCastQuery q{};
+    q.ray = Ray3D(Vector3(x, 10000.0f, z), Vector3(0.0f, -1.0f, 0.0f));
+    q.maxDistance = 20000.0f;
+    RayCastResult hit{};
+    if (!GameEngine::PhysicsECS::PhysicsWorldService::Get().RayCast(q, hit) || !hit.HasHit())
+        return false;
+    outY = hit.hitPoint.y;
+    return true;
+}
+
+// Every page collider stands at its page's centre, and a downward ray inside a window page meets the
+// height the terrain's query answers there (the ground the renderer draws from the same pages).
+void ExpectPageCollidersUnderTheirPages(GameEngine::ECS::World& world, const PagedColliderTerrain& terrain)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::TerrainPageCollider;
+    using GameEngine::Components::WorldTransform;
+
+    int colliders = 0;
+    world.Query<ECS::Read<TerrainPageCollider>, ECS::Read<WorldTransform>>().Each(
+        [&](const TerrainPageCollider& tag, const WorldTransform& transform) {
+            ++colliders;
+            const Mathematics::Vector3 centre = terrain.At((static_cast<float32>(tag.PageX) + 0.5f) * 128.0f,
+                                                           (static_cast<float32>(tag.PageZ) + 0.5f) * 128.0f);
+            EXPECT_FLOAT_EQ(transform.matrix[12], centre.x) << "page " << tag.PageX;
+            EXPECT_FLOAT_EQ(transform.matrix[14], centre.z) << "page " << tag.PageZ;
+        });
+    EXPECT_EQ(colliders, 4);
+
+    const Mathematics::Vector3 point = terrain.At(330.5f, 270.25f);
+    PagedTE::SurfaceHeightSample drawn;
+    ASSERT_TRUE(PagedTE::TerrainService::Get()
+                    .SurfaceQuery(terrain.Paged.Component, Components::WorldTransform{})
+                    .SampleHeight(point, PagedTE::SurfaceHeightPolicy::RequireFinest, drawn));
+    float32 y = 0.0f;
+    ASSERT_TRUE(GroundUnder(point.x, point.z, y)) << "no collider under (" << point.x << ", " << point.z << ")";
+    EXPECT_NEAR(y, drawn.Height, 0.5f) << "the collider there is not the page's ground";
+}
+} // namespace
+
+// The camera at local (300, 300) keeps pages 1..2 x 1..2 on the CPU (its window): each gets one
+// built body and no other page does.
+TEST(Physics, PagedTerrainGetsABodyPerWindowPageAndNoneOutside)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::PhysicsBody;
+    using GameEngine::Components::TerrainPageCollider;
 
     ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    if (TE::TerrainService::IsInitialized())
-        TE::TerrainService::Shutdown();
-    TE::TerrainService::Initialize();
-    struct TerrainGuard
-    {
-        ~TerrainGuard() { if (TE::TerrainService::IsInitialized()) TE::TerrainService::Shutdown(); }
-    } terrainGuard;
-    auto& terrain = TE::TerrainService::Get();
-
+    ScopedTerrainService terrainService;
     ECS::World world;
-    TE::TiledTerrainHandle handle{};
-    SetUpTiledTerrainForColliders(world, handle);
-
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+    PhysicsECS::PhysicsInitSystem init;
+    init.Update(world, 1.0f / 60.0f);
     world.ProcessCommands();
 
-    PhysicsInitSystem init;
-    init.SetRebuildQuiescenceSeconds(0.0f);
-    init.Update(world, kDt);
-    world.ProcessCommands();
-
-    // Grab the collider entity serving tile (1,0), which we will unload.
-    ECS::EntityHandle orphan{};
-    world.Query<ECS::Read<TerrainTileCollider>>()
-        .Each([&](ECS::EntityHandle e, const TerrainTileCollider& tag)
-        {
-            if (tag.TileX == 1 && tag.TileZ == 0)
-                orphan = e;
+    world.Query<ECS::Read<TerrainPageCollider>, ECS::Read<PhysicsBody>>().Each(
+        [](const TerrainPageCollider& tag, const PhysicsBody& body) {
+            EXPECT_TRUE(tag.PageX == 1u || tag.PageX == 2u) << tag.PageX;
+            EXPECT_TRUE(tag.PageZ == 1u || tag.PageZ == 2u) << tag.PageZ;
+            EXPECT_TRUE(body.initialized) << "page " << tag.PageX << ", " << tag.PageZ;
         });
+    EXPECT_EQ(PagedColliderTerrain::CountPageColliders(world), 4);
+
+    float32 y = 0.0f;
+    const Mathematics::Vector3 inside = terrain.At(300.0f, 300.0f);
+    EXPECT_TRUE(GroundUnder(inside.x, inside.z, y)) << "no ground under a window page";
+    const Mathematics::Vector3 outside = terrain.At(1500.0f, 700.0f);
+    EXPECT_FALSE(GroundUnder(outside.x, outside.z, y)) << "a page outside every window has a body";
+}
+
+// The oracle: a page body and the tile over the same ground, both filled from the same source in the
+// test, hold the same samples. Page (7, 3) spans lattice 896..1024 x 384..512 of tile (0, 0); its
+// far column, the page's apron, is the tile's last (the seam with tile (1, 0)).
+TEST(Physics, APageBodyHoldsTheTileSamplesInsideAndOnTheApron)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::HeightFieldColliderShape;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(1000.0f, 500.0f), 4));
+
+    const ECS::EntityHandle page = PagedColliderTerrain::FindPageCollider(world, 7, 3);
+    ASSERT_TRUE(page.IsValid());
+    const auto* shape = world.GetComponent<HeightFieldColliderShape>(page);
+    ASSERT_NE(shape, nullptr);
+    EXPECT_FLOAT_EQ(shape->sizeX, 128.0f);
+    EXPECT_FLOAT_EQ(shape->heightScale, 64.0f);
+    const PhysicsECS::HeightFieldData pageData =
+        PhysicsECS::GetHeightFieldDataProvider()(shape->dataHandle, shape->dataGeneration, 0);
+    ASSERT_EQ(pageData.sampleCount, PagedTE::kFinestPageGridSamples);
+
+    // What tile (0, 0) holds there: the same source, read through no page.
+    const PagedTE::TiledTerrainData* tiled = PagedTE::TerrainService::Get().GetTiledTerrainData(terrain.Paged.Tiled);
+    const Terrain::HeightfieldData& tile = tiled->Tiles.at(PagedTE::TileCoord{0, 0})->Heightfield;
+    constexpr uint32 kFirstX = 7u * 128u;
+    constexpr uint32 kFirstZ = 3u * 128u;
+    const auto pageSample = [&pageData](uint32 x, uint32 z) {
+        return pageData.samples[static_cast<std::size_t>(z) * PagedTE::kFinestPageGridSamples + x];
+    };
+    EXPECT_EQ(pageSample(64, 64), tile.GetSample(kFirstX + 64, kFirstZ + 64)) << "an interior sample";
+    EXPECT_EQ(pageSample(128, 64), tile.GetSample(kFirstX + 128, kFirstZ + 64)) << "an apron sample on the seam";
+    EXPECT_EQ(pageSample(128, 128), tile.GetSample(kFirstX + 128, kFirstZ + 128)) << "the apron corner";
+    uint32 different = 0;
+    for (uint32 z = 0; z < PagedTE::kFinestPageGridSamples; ++z)
+        for (uint32 x = 0; x < PagedTE::kFinestPageGridSamples; ++x)
+            different += pageSample(x, z) == tile.GetSample(kFirstX + x, kFirstZ + z) ? 0u : 1u;
+    EXPECT_EQ(different, 0u) << "samples differ of " << PagedTE::kFinestPageGridSamples * PagedTE::kFinestPageGridSamples;
+}
+
+// A modifier edit over four by four samples of page (1, 1) reaches its body as a region of a new
+// version: the body is updated in place (the same body, rebuilt from no whole grid) and a ray there
+// meets the raised ground the terrain's query answers.
+TEST(Physics, APageEditUpdatesItsBodyInPlace)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::HeightFieldColliderShape;
+    using GameEngine::Components::PhysicsBody;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    PhysicsECS::PhysicsInitSystem init;
+    const Mathematics::Vector3 camera = terrain.At(300.0f, 300.0f);
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, camera, 4));
+    init.Update(world, 1.0f / 60.0f);
+    world.ProcessCommands();
+    const ECS::EntityHandle page = PagedColliderTerrain::FindPageCollider(world, 1, 1);
+    ASSERT_TRUE(page.IsValid());
+    ASSERT_TRUE(world.GetComponent<PhysicsBody>(page)->initialized);
+    const Physics::BodyHandle bodyBefore = world.GetComponent<PhysicsBody>(page)->body;
+    const Mathematics::Vector3 point = terrain.At(201.0f, 201.0f);
+    float32 groundBefore = 0.0f;
+    ASSERT_TRUE(GroundUnder(point.x, point.z, groundBefore));
+
+    // Lattice samples 200..203 on both axes: page (1, 1)'s grid samples 72..75.
+    const PageStreaming::PageSampleRect rect{200, 200, 203, 203};
+    constexpr float32 kRaise = 0.25f; // normalized: 16 m at a height scale of 64
+    PagedTE::PagedTerrainRequest& request = terrain.Paged.Request;
+    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
+        PageStreaming::BuildPageStoreLevels(request.Shape.SamplesX, request.Shape.SamplesZ), rect,
+        std::vector<float32>(static_cast<std::size_t>(rect.Width()) * rect.Height(), kRaise));
+    request.OverlayVersion = 1;
+    request.OverlayChanged = rect;
+    request.OverlayChangedSince = 0;
+    terrain.Frame(world, terrainPhysics, camera);
+
+    const auto* shape = world.GetComponent<HeightFieldColliderShape>(page);
+    ASSERT_NE(shape, nullptr);
+    const PhysicsECS::HeightFieldData data =
+        PhysicsECS::GetHeightFieldDataProvider()(shape->dataHandle, shape->dataGeneration, shape->lastBuiltVersion);
+    EXPECT_EQ(data.version, shape->lastBuiltVersion + 1u) << "the edit made no new version of the body";
+    ASSERT_TRUE(data.hasRegion);
+    EXPECT_EQ(data.regionMinX, 72);
+    EXPECT_EQ(data.regionMinZ, 72);
+    EXPECT_EQ(data.regionMaxX, 76);
+    EXPECT_EQ(data.regionMaxZ, 76);
+
+    init.Update(world, 1.0f / 60.0f);
+    world.ProcessCommands();
+    EXPECT_EQ(world.GetComponent<HeightFieldColliderShape>(page)->lastBuiltVersion, data.version);
+    EXPECT_EQ(world.GetComponent<PhysicsBody>(page)->body, bodyBefore) << "the body was rebuilt, not updated";
+    PagedTE::SurfaceHeightSample drawn;
+    ASSERT_TRUE(PagedTE::TerrainService::Get()
+                    .SurfaceQuery(terrain.Paged.Component, Components::WorldTransform{})
+                    .SampleHeight(point, PagedTE::SurfaceHeightPolicy::RequireFinest, drawn));
+    float32 groundAfter = 0.0f;
+    ASSERT_TRUE(GroundUnder(point.x, point.z, groundAfter));
+    EXPECT_NEAR(groundAfter, drawn.Height, 0.5f) << "the body is not the edited ground";
+    EXPECT_NEAR(groundAfter - groundBefore, kRaise * 64.0f, 0.5f);
+}
+
+// A dynamic body far from the camera keeps the finest body under it (design D3: the body windows are
+// independent of the view; "physics might need some accuracy even if not in the field of view").
+TEST(Physics, ADynamicBodyFarFromTheCameraKeepsTheFinestPageBodyUnderIt)
+{
+    using namespace GameEngine;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    // Local (1800, 700): page (14, 5), its window 13..14 x 4..5.
+    AddDynamicBody(world, terrain.At(1800.0f, 700.0f));
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 8));
+    EXPECT_TRUE(PagedColliderTerrain::FindPageCollider(world, 14, 5).IsValid()) << "no body under the far body";
+    EXPECT_TRUE(PagedColliderTerrain::FindPageCollider(world, 13, 4).IsValid());
+    EXPECT_TRUE(PagedColliderTerrain::FindPageCollider(world, 2, 2).IsValid()) << "and the camera keeps its own";
+}
+
+// When the camera moves on, the pages it left lose their colliders and their page slots, and the
+// pages it reached get theirs.
+TEST(Physics, APageColliderIsTornDownWhenItsPageLeavesEveryWindow)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::TerrainPageCollider;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+    const ECS::EntityHandle left = PagedColliderTerrain::FindPageCollider(world, 2, 2);
+    ASSERT_TRUE(left.IsValid());
+    const TerrainPageCollider tag = *world.GetComponent<TerrainPageCollider>(left);
+
+    // Local (1500, 700): pages 11..12 x 5..6.
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(1500.0f, 700.0f), 4));
+    terrain.Frame(world, terrainPhysics, terrain.At(1500.0f, 700.0f));
+    EXPECT_EQ(PagedColliderTerrain::CountPageColliders(world), 4);
+    EXPECT_FALSE(world.IsValid(left)) << "the page the camera left kept its collider";
+    EXPECT_EQ(PagedTE::TerrainService::Get().ResolvePageCollider(tag.PhysicsHandleIndex, tag.PhysicsHandleGeneration),
+              nullptr)
+        << "the page slot was not released";
+    EXPECT_TRUE(PagedColliderTerrain::FindPageCollider(world, 11, 5).IsValid());
+}
+
+// A page slot release checks the generation: a handle kept past its release frees nothing, even
+// when a new slot took its index. ReleaseAllPagePhysicsHandles (Play exit) frees every slot.
+TEST(Physics, AStalePageSlotReleaseFreesNothingAndReleaseAllFreesEverySlot)
+{
+    using namespace GameEngine;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainService& service = PagedTE::TerrainService::Get();
+    // The camera at local (300, 300) brings pages 1..2 x 1..2 to the CPU.
+    PagedTE::TerrainService::PagePhysicsHandle stale{};
+    for (int attempt = 0; attempt < 2000 && stale.Index == 0; ++attempt)
+    {
+        terrain.StreamPages(world, terrain.At(300.0f, 300.0f));
+        stale = service.AcquirePagePhysicsHandle(
+            service.SurfaceQuery(terrain.Paged.Component, Components::WorldTransform{}), 1, 1);
+        if (stale.Index == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_NE(stale.Index, 0u) << "page (1, 1) never reached the CPU";
+    service.ReleasePagePhysicsHandle(stale.Index, stale.Generation);
+
+    const PagedTE::SurfaceHeightQuery query = service.SurfaceQuery(terrain.Paged.Component, Components::WorldTransform{});
+    const PagedTE::TerrainService::PagePhysicsHandle reused = service.AcquirePagePhysicsHandle(query, 1, 1);
+    const PagedTE::TerrainService::PagePhysicsHandle other = service.AcquirePagePhysicsHandle(query, 2, 2);
+    ASSERT_EQ(reused.Index, stale.Index) << "the new slot did not take the released index";
+    ASSERT_NE(reused.Generation, stale.Generation);
+    ASSERT_NE(other.Index, 0u);
+
+    service.ReleasePagePhysicsHandle(stale.Index, stale.Generation);
+    EXPECT_NE(service.ResolvePageCollider(reused.Index, reused.Generation), nullptr)
+        << "a stale release freed the slot that took its index";
+    EXPECT_NE(service.ResolvePageCollider(other.Index, other.Generation), nullptr);
+
+    service.ReleaseAllPagePhysicsHandles();
+    EXPECT_EQ(service.ResolvePageCollider(reused.Index, reused.Generation), nullptr);
+    EXPECT_EQ(service.ResolvePageCollider(other.Index, other.Generation), nullptr);
+}
+
+// Page collider entities are engine-created runtime state: they carry RuntimeOnlyEntity, and a saved
+// scene holds the terrain and none of them.
+TEST(Physics, PageColliderEntitiesAreRuntimeOnlyAndExcludedFromSave)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::RuntimeOnlyEntity;
+    using GameEngine::Components::TerrainPageCollider;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+
+    int tagged = 0;
+    world.Query<ECS::Read<TerrainPageCollider>>().Each([&](ECS::EntityHandle entity, const TerrainPageCollider&) {
+        tagged += world.HasComponent<RuntimeOnlyEntity>(entity) ? 1 : 0;
+    });
+    EXPECT_EQ(tagged, 4);
+
+    const auto scenePath = std::filesystem::temp_directory_path() / "ge_page_collider_runtime_only.scene";
+    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, Scene::SaveOptions{}));
+    ECS::World reloaded;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    int reloadedTotal = 0;
+    int reloadedColliders = 0;
+    for (auto* arch : reloaded.GetAllArchetypes())
+    {
+        if (!arch)
+            continue;
+        for (const auto& h : arch->CollectEntities())
+        {
+            if (!h.IsValid() || !reloaded.IsValid(h))
+                continue;
+            ++reloadedTotal;
+            reloadedColliders += reloaded.HasComponent<TerrainPageCollider>(h) ? 1 : 0;
+        }
+    }
+    EXPECT_GE(reloadedTotal, 1) << "the authored terrain entity must survive the round-trip";
+    EXPECT_EQ(reloadedColliders, 0);
+    std::error_code ec;
+    std::filesystem::remove(scenePath, ec);
+}
+
+// Provisioning, the deferred flush and PhysicsInit called directly: each page collider lands with
+// the transform and the static layer the provisioning queued, under its page.
+TEST(Physics, PageCollidersStandUnderTheirPages)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::PhysicsCollider;
+    using GameEngine::Components::TerrainPageCollider;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+    world.Query<ECS::Read<TerrainPageCollider>, ECS::Read<PhysicsCollider>>().Each(
+        [](const TerrainPageCollider& tag, const PhysicsCollider& collider) {
+            EXPECT_EQ(collider.layer, Physics::Layers::Static) << "page " << tag.PageX << ", " << tag.PageZ;
+        });
+    PhysicsECS::PhysicsInitSystem init;
+    init.Update(world, 1.0f / 60.0f);
+    world.ProcessCommands();
+    ExpectPageCollidersUnderTheirPages(world, terrain);
+}
+
+// Through the modules' own schedule (TerrainPhysics, TransformHierarchy, PhysicsInit, the flush
+// before each frame), with the height pages streamed first as the extraction streams them: the page
+// colliders a frame provisions are built under their pages on the next.
+TEST(Physics, PageCollidersStandUnderTheirPagesThroughTheFrameSchedule)
+{
+    using namespace GameEngine;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    ASSERT_TRUE(PagedTE::Test::StreamPagesUntilTheCameraPageLands(PagedTE::TerrainService::Get(), terrain.Paged,
+                                                                  terrain.At(300.0f, 300.0f)));
+
+    ECS::SystemScheduleBuilder builder;
+    builder.Add<Engine::Renderer::TransformHierarchySystem>("TransformHierarchy", ECS::SystemPhase::Extraction, 1);
+    PhysicsECS::AddPhysicsSystemsToSchedule(builder);
+    PagedTE::AddTerrainSystemsToSchedule(builder, nullptr);
+    ECS::SystemManager manager;
+    // Partial: the rendering, spline and CBT systems the terrain systems also name are absent.
+    builder.BuildAndRegisterWithWaves(manager, ECS::ScheduleCompleteness::Partial);
+    ASSERT_TRUE(manager.GetExecutionPlan().IsValid());
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        world.ProcessCommands();
+        manager.Update(world, 1.0f / 60.0f);
+    }
+    ExpectPageCollidersUnderTheirPages(world, terrain);
+}
+
+// When a page leaves every window its body is freed at once and its entity destroyed at the next
+// flush; until then the entity's body state is cleared, so nothing touches the freed Jolt handle.
+TEST(Physics, APageColliderLeftByItsWindowClearsItsBodyStateBeforeTheDeferredDestroy)
+{
+    using namespace GameEngine;
+    using GameEngine::Components::PhysicsBody;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    ScopedTerrainService terrainService;
+    ECS::World world;
+    PagedColliderTerrain terrain(world);
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+    PhysicsECS::PhysicsInitSystem init;
+    init.Update(world, 1.0f / 60.0f);
+    world.ProcessCommands();
+    const ECS::EntityHandle orphan = PagedColliderTerrain::FindPageCollider(world, 2, 2);
     ASSERT_TRUE(orphan.IsValid());
     ASSERT_TRUE(world.GetComponent<PhysicsBody>(orphan)->initialized);
 
-    // Stream tile (1,0) out, then run the teardown sweep — the DestroyEntity is
-    // deferred (NOT flushed here).
-    terrain.UnloadTile(handle, TE::TileCoord{1, 0});
-    terrainPhysics.Update(world, kDt);
+    // The window moves away; the sweep runs, the flush does not.
+    terrain.StreamPages(world, terrain.At(1500.0f, 700.0f));
+    terrainPhysics.Update(world, 1.0f / 60.0f);
 
-    // The entity is still live this frame; its body state must be cleared so a
-    // late consumer can't touch the freed Jolt handle.
     ASSERT_TRUE(world.IsValid(orphan)) << "DestroyEntity should still be pending (deferred)";
-    const auto* pb = world.GetComponent<PhysicsBody>(orphan);
-    ASSERT_NE(pb, nullptr);
-    EXPECT_FALSE(pb->initialized) << "freed orphan body must be marked uninitialized";
-    EXPECT_FALSE(pb->body.IsValid()) << "freed body handle must be nulled";
-    EXPECT_FALSE(pb->shape.IsValid()) << "freed shape handle must be nulled";
-    EXPECT_EQ(pb->childShapeCount, 0);
-
-    world.ProcessCommands(); // now the entity is actually destroyed
+    const auto* body = world.GetComponent<PhysicsBody>(orphan);
+    ASSERT_NE(body, nullptr);
+    EXPECT_FALSE(body->initialized);
+    EXPECT_FALSE(body->body.IsValid());
+    EXPECT_FALSE(body->shape.IsValid());
+    world.ProcessCommands();
+    EXPECT_FALSE(world.IsValid(orphan));
 }
 
-// Intra-frame provisioning dedup (review Fix 6): duplicating a terrain entity
-// copies the runtime TiledTerrainHandle. Both entities enumerate the same tiles,
-// so without dedup each tile gets two collider entities (double bodies forever).
-// First entity wins; the pool stays one collider per tile.
-TEST(Physics, DuplicatedTiledTerrainEntitiesProvisionCollidersOnce)
+// Two terrain entities sharing one tiled handle (an editor duplicate before re-provisioning) get one
+// collider per window page, not two.
+TEST(Physics, DuplicatedPagedTerrainEntitiesProvisionPageCollidersOnce)
 {
     using namespace GameEngine;
-    using namespace GameEngine::PhysicsECS;
-    using GameEngine::Components::TerrainTileCollider;
-    namespace TE = GameEngine::TerrainECS;
-
-    constexpr float32 kDt = 1.0f / 60.0f;
 
     ScopedPhysicsWorldService svc(SmallDeterministicSettings());
-    if (TE::TerrainService::IsInitialized())
-        TE::TerrainService::Shutdown();
-    TE::TerrainService::Initialize();
-    struct TerrainGuard
-    {
-        ~TerrainGuard() { if (TE::TerrainService::IsInitialized()) TE::TerrainService::Shutdown(); }
-    } terrainGuard;
-
+    ScopedTerrainService terrainService;
     ECS::World world;
-    TE::TiledTerrainHandle handle{};
-    SetUpTiledTerrainForColliders(world, handle);
-
-    // A duplicate terrain entity referencing the SAME tiled handle (what an
-    // editor "duplicate entity" produces before any re-provisioning).
-    auto dup = world.CreateEntity();
-    Components::Terrain tc{};
-    tc.SizeX = 2048.0f;
-    tc.SizeZ = 1024.0f;
-    tc.HeightScale = 64.0f;
-    tc.TiledTerrainHandle = handle.Index;
-    tc.TiledTerrainGeneration = handle.Generation;
-    world.AddComponentImmediate<Components::Terrain>(dup, tc);
-    world.AddComponentImmediate<Components::WorldTransform>(dup, Components::WorldTransform{});
-
-    TE::TerrainPhysicsSystem terrainPhysics;
-    terrainPhysics.Update(world, kDt);
-    world.ProcessCommands();
-
-    int colliderCount = 0;
-    world.Query<ECS::Read<TerrainTileCollider>>()
-        .Each([&](ECS::EntityHandle, const TerrainTileCollider&) { ++colliderCount; });
-    EXPECT_EQ(colliderCount, 2)
-        << "two entities sharing a tiled handle must provision one collider per tile, not double";
+    PagedColliderTerrain terrain(world);
+    const ECS::EntityHandle duplicate = world.CreateEntity();
+    world.AddComponentImmediate<Components::Terrain>(duplicate, terrain.Paged.Component);
+    world.AddComponentImmediate<Components::WorldTransform>(duplicate, Components::WorldTransform{});
+    PagedTE::TerrainPhysicsSystem terrainPhysics;
+    ASSERT_TRUE(terrain.ProvisionUntil(world, terrainPhysics, terrain.At(300.0f, 300.0f), 4));
+    terrain.Frame(world, terrainPhysics, terrain.At(300.0f, 300.0f));
+    EXPECT_EQ(PagedColliderTerrain::CountPageColliders(world), 4);
 }
 
 // ---- Planet (spherical terrain) per-face colliders ----
@@ -4721,7 +4727,7 @@ TEST(PhysicsWorldHooks, ColliderAndBodyHooksBothFireForOneEntity)
     TerrainECS::RegisterTerrainWorldHooks(world);
 
     const PhysicsBody body = MakeLiveBody(pw);
-    Components::TerrainTileCollider collider{};
+    Components::TerrainPageCollider collider{};
     collider.PhysicsHandleIndex = 7;
     collider.PhysicsHandleGeneration = 1;
 

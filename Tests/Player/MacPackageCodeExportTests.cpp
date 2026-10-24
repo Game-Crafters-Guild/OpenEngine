@@ -7,6 +7,7 @@
 #include "Assets/Packages/PackageResolver.h"
 #include "Assets/RuntimeHumanoidProfile.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Engine/Build/BuildPipeline.h"
 #include "NativeScripting/BuildCacheRecord.h"
@@ -222,7 +223,7 @@ TEST_F(MacPackageCodeExportTest, PackageRuntimeModuleShipsInFrameworksWhereThePl
     for (const std::string& warning : progress.warnings)
         EXPECT_EQ(warning.find("Package code modules"), std::string::npos) << warning;
 
-    const fs::path contentRoot = PathUtils::InstallContentRootFor(Bundle / "Contents/MacOS");
+    const fs::path contentRoot = ApplicationPaths::InstallContentRootFor(Bundle / "Contents/MacOS");
     const fs::path packageModule = Bundle / "Contents/Frameworks/Packages" / kPackageName / "libProbePack.dylib";
     ASSERT_TRUE(fs::exists(packageModule)) << "the package's runtime module is not in Contents/Frameworks";
     EXPECT_EQ(ModuleMapBegins(contentRoot / "Packages" / kPackageName, std::string(kRuntimeModule)), 1)

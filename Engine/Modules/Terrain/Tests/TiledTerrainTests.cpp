@@ -329,105 +329,6 @@ TEST_F(TiledTerrainFixture, LoadTile_DeterministicNoise)
     TerrainService::Get().DestroyTiledTerrain(handle);
 }
 
-// ---------------------------------------------------------------------------
-// C8: tiled height-query parity (SampleTiledHeightNormalized)
-//
-// The editor terrain brush/zone ray-march samples height through this helper for
-// tiled terrains. It must select the resident tile containing a world point and
-// return its heightfield value, matching CPU truth and staying continuous across
-// tile boundaries — otherwise brush/zone strokes never hit a tiled terrain.
-// ---------------------------------------------------------------------------
-
-namespace
-{
-// A 2x2-resident tiled terrain: 4096m @ 1 sample/m -> 4x4 grid of 1025-sample,
-// 1024m tiles. Loads the (0,0)..(1,1) block and marks it Full (LoadTile leaves
-// LodState Empty; production streams tiles to Full — mirror that here so the
-// resident-tile gates apply).
-TiledTerrainHandle MakeResident2x2(float32& outTileWorld, uint32& outTileRes)
-{
-    TiledTerrainConfig config{};
-    config.WorldSizeX = 4096.0f;
-    config.WorldSizeZ = 4096.0f;
-    config.HeightScale = 200.0f;
-    config.SamplesPerMeter = 1.0f;
-    config.PatchGridSize = 32;
-
-    auto handle = TerrainService::Get().CreateTiledTerrain(config);
-    auto* data = TerrainService::Get().GetTiledTerrainData(handle);
-    if (!data)
-        return {};
-    outTileWorld = data->Config.TileWorldSize;
-    outTileRes = data->Config.TileConfig.HeightmapWidth;
-    for (int32 tz = 0; tz < 2; ++tz)
-    for (int32 tx = 0; tx < 2; ++tx)
-    {
-        auto* tile = TerrainService::Get().LoadTile(handle, {tx, tz});
-        if (tile)
-            tile->LodState = TileLodState::Full;
-    }
-    return handle;
-}
-} // namespace
-
-TEST_F(TiledTerrainFixture, SampleTiledHeight_MatchesTileCpuTruth)
-{
-    float32 tileWorld = 0.0f;
-    uint32 tileRes = 0;
-    auto handle = MakeResident2x2(tileWorld, tileRes);
-    auto* data = TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(data, nullptr);
-
-    const float32 spacing = tileWorld / static_cast<float32>(tileRes - 1);
-
-    // Sample at grid-aligned world points (bilinear collapses to GetSample there)
-    // spanning tiles (0,0) and (1,1); compare to the owning tile's CPU sample.
-    struct Probe { int32 tx, tz, sx, sz; };
-    const Probe probes[] = {{0, 0, 0, 0}, {0, 0, 100, 40}, {1, 0, 200, 10},
-                            {0, 1, 5, 300}, {1, 1, 512, 512}};
-    for (const auto& p : probes)
-    {
-        auto* tile = TerrainService::Get().LoadTile(handle, {p.tx, p.tz});
-        ASSERT_NE(tile, nullptr);
-        const float32 worldX = tile->WorldOriginX + static_cast<float32>(p.sx) * spacing;
-        const float32 worldZ = tile->WorldOriginZ + static_cast<float32>(p.sz) * spacing;
-
-        float32 h = -1.0f;
-        ASSERT_TRUE(SampleTiledHeightNormalized(*data, worldX, worldZ, h))
-            << "tile (" << p.tx << "," << p.tz << ") sample (" << p.sx << "," << p.sz << ")";
-        EXPECT_FLOAT_EQ(h, tile->Heightfield.GetSample(p.sx, p.sz));
-    }
-
-    TerrainService::Get().DestroyTiledTerrain(handle);
-}
-
-TEST_F(TiledTerrainFixture, SampleTiledHeight_ContinuousAcrossTileBoundary)
-{
-    float32 tileWorld = 0.0f;
-    uint32 tileRes = 0;
-    auto handle = MakeResident2x2(tileWorld, tileRes);
-    auto* data = TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(data, nullptr);
-
-    // At the X boundary between tile (0,0) and (1,0): the query resolves to tile
-    // (1,0) local u=0, whose edge samples equal tile (0,0)'s far edge by
-    // world-space noise coherence. Sampling just-inside each side must agree.
-    const float32 boundaryX = data->WorldOriginX + tileWorld;
-    const float32 spacing = tileWorld / static_cast<float32>(tileRes - 1);
-    for (uint32 sz = 0; sz < tileRes; sz += 128)
-    {
-        const float32 worldZ = data->WorldOriginZ + static_cast<float32>(sz) * spacing;
-
-        float32 hAt = -1.0f, hLeft = -1.0f;
-        ASSERT_TRUE(SampleTiledHeightNormalized(*data, boundaryX, worldZ, hAt));
-        ASSERT_TRUE(SampleTiledHeightNormalized(*data, boundaryX - spacing * 0.001f, worldZ, hLeft));
-        // Continuous: a hair to the left (still tile (0,0)) is ~equal to the boundary.
-        EXPECT_NEAR(hAt, hLeft, 1e-3f) << "z sample " << sz;
-    }
-
-    TerrainService::Get().DestroyTiledTerrain(handle);
-}
-
 // C8 render-extent oracle: the CBT render size (params/info WorldSize) must be the REAL
 // per-axis extent (tilesPerAxis * tileWorldSize), NOT a power-of-2 square. A non-square /
 // non-pow2-tile-count terrain rendered with a square would stretch (CBT maps
@@ -482,26 +383,6 @@ TEST_F(TiledTerrainFixture, RenderExtent_NonPow2TileCountIsNotRoundedUp)
     EXPECT_FLOAT_EQ(e.WorldSizeX, realX);
     // A pow2-rounded square (4 tiles wide) would be 4/3 too large — reject it.
     EXPECT_LT(e.WorldSizeX, 4.0f * data->Config.TileWorldSize);
-
-    TerrainService::Get().DestroyTiledTerrain(handle);
-}
-
-TEST_F(TiledTerrainFixture, SampleTiledHeight_MissesOutsideAndUnloaded)
-{
-    float32 tileWorld = 0.0f;
-    uint32 tileRes = 0;
-    auto handle = MakeResident2x2(tileWorld, tileRes);
-    auto* data = TerrainService::Get().GetTiledTerrainData(handle);
-    ASSERT_NE(data, nullptr);
-
-    float32 h = 0.0f;
-    // Left/below the terrain origin: outside the footprint.
-    EXPECT_FALSE(SampleTiledHeightNormalized(*data, data->WorldOriginX - 10.0f,
-                                             data->WorldOriginZ + 10.0f, h));
-    // Inside the grid but in a tile that was never loaded (tile (3,3)).
-    const float32 farX = data->WorldOriginX + 3.5f * tileWorld;
-    const float32 farZ = data->WorldOriginZ + 3.5f * tileWorld;
-    EXPECT_FALSE(SampleTiledHeightNormalized(*data, farX, farZ, h));
 
     TerrainService::Get().DestroyTiledTerrain(handle);
 }

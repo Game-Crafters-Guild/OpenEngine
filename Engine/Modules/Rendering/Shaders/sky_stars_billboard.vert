@@ -191,11 +191,8 @@ void main()
     vCoreRadius = drawn.CoreRadius;
     vSpikePeakAndLength = vec4(drawn.SpikePeak * drawn.Visibility, drawn.SpikeLength);
     vShape = drawn.Shape;
+    // The quad covers the star's cut radius (GE_StarShade, kStarMinCutRadiusPixels).
     float cutRadius = drawn.CutRadius;
-
-    // The quad covers the glare's cut radius, at least three core radii (the Gaussian is 1e-4 of its
-    // peak there) and never less than a pixel and a half, so a faint star always rasterises.
-    cutRadius = max(cutRadius, 1.5);
     vec2 corner = QuadOffset(uint(gl_VertexIndex) % 6u);
     vPixelOffset = corner * cutRadius;
     vCutRadius = cutRadius;

@@ -28,7 +28,7 @@ namespace GameEngine.Scripting
 
     public enum NavigationBakeWait : byte
     {
-        TerrainTile = 0,
+        TerrainPage = 0,
         TerrainData = 1,
         Model = 2,
         BakedData = 3,
@@ -43,7 +43,7 @@ namespace GameEngine.Scripting
         TileBuild = 4,
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 184)]
+    [StructLayout(LayoutKind.Explicit, Size = 200)]
     [BuiltInComponent("GameEngine::Components::NavigationSurface")]
     public partial struct NavigationSurface : IComponent
     {
@@ -169,6 +169,9 @@ namespace GameEngine.Scripting
         private int m_BlockingTileZ;
 
         [FieldOffset(168)]
+        private Vector3 m_BlockingPoint;
+
+        [FieldOffset(180)]
         private AssetGuid m_BlockingModel;
     }
 }

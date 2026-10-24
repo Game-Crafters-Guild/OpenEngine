@@ -1,4 +1,5 @@
 #include "EngineShaderPath.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 
 #include "EngineShaderHookState.h"
@@ -167,7 +168,7 @@ void DiagnoseAssetRootBeforeCreation(const std::filesystem::path& workspaceRoot,
 // relative directory is interpreted against the executable directory.
 std::filesystem::path ResolveWorkspaceRoot(const std::filesystem::path& directory)
 {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     std::filesystem::path root = directory.empty() ? exeDir : directory;
     if (!root.is_absolute())
         root = exeDir / root;
@@ -217,7 +218,7 @@ static std::filesystem::path ResolveEngineShaderPath(const std::filesystem::path
 
 static std::string ShaderPackageRebuildAction(const std::string& packageName)
 {
-    return Detail::ShaderPackageRebuildAction(packageName, PathUtils::GetExecutableDirectory());
+    return Detail::ShaderPackageRebuildAction(packageName, ApplicationPaths::GetExecutableDirectory());
 }
 
 static std::vector<uint8_t> EngineShaderBytecodeLoaderFromAssets(const char* name)
@@ -505,7 +506,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     {
         // The shader-graph node library ships with the engine assets; the
         // Rendering module cannot locate the executable itself on every host.
-        const std::filesystem::path installAssets = PathUtils::GetInstallAssetsRoot();
+        const std::filesystem::path installAssets = ApplicationPaths::GetInstallAssetsRoot();
         if (!installAssets.empty())
             ShaderGraph::SetEngineGraphNodesRoot(installAssets / "Shaders" / "Graph" / "Nodes");
     }
@@ -528,7 +529,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
 
     // Ensure process working directory matches the resolved workspace root.
     // This keeps relative path usage project-centric and avoids accidental writes into app bundles.
-    GameEngine::PathUtils::EnsureWorkingDirectoryMatches(resolvedWorkspaceRoot);
+    GameEngine::ApplicationPaths::EnsureWorkingDirectoryMatches(resolvedWorkspaceRoot);
 
     // Resolve the configured asset directory and asset database locations against the
     // workspace root, and publish them for consumers (Editor, tools).
@@ -755,7 +756,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         // The cooked cache a runtime ships is probed before the workspace's own, so a persisted
         // workspace cache never shadows it; a program it lacks compiles into the workspace.
         ShaderCacheRoots shaderCacheRoots;
-        if (const auto bundleCache = PathUtils::GetBundledShaderCacheRoot(); !bundleCache.empty())
+        if (const auto bundleCache = ApplicationPaths::GetBundledShaderCacheRoot(); !bundleCache.empty())
             shaderCacheRoots.ReadOnly.push_back(bundleCache);
         shaderCacheRoots.Writable = resolvedWorkspaceRoot / ".Cache" / "Shaders";
         ShaderProgramAsset::SetShaderCacheRoots(std::move(shaderCacheRoots));
@@ -767,7 +768,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     ScriptsConfig scriptsConfig;
     std::filesystem::path scriptsNativeDllPath;
     {
-        using GameEngine::PathUtils;
+        using GameEngine::ApplicationPaths;
 
         const std::filesystem::path& workspaceRoot = resolvedWorkspaceRoot;
 
@@ -806,7 +807,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         if (scriptsNativeDllPath.empty())
         {
             // Fallback for unusual dev layouts; prefer the platform-specific resolver above.
-            scriptsNativeDllPath = PathUtils::GetExecutableDirectory() / "GameEngine.Native.dll";
+            scriptsNativeDllPath = ApplicationPaths::GetExecutableDirectory() / "GameEngine.Native.dll";
         }
     }
 

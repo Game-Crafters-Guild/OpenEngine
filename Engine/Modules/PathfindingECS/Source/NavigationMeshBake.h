@@ -84,10 +84,10 @@ class NavigationMeshBake
     void SkipUnchangedTiles(const Pathfinding::DetourNavMap& mesh);
 
     // Snapshots and submits up to `maxTiles` more tiles, in list order. With no pool the jobs run
-    // here. False when the next tile reads a terrain tile that is not resident: `outTerrainTileX`
-    // and `outTerrainTileZ` name it, and the same tile is tried again on the next call.
+    // here. False when the next tile reads terrain height not on the CPU yet (AppendTerrainLattice):
+    // `outWaitPoint` is where, and the same tile is tried again on the next call.
     bool SubmitTiles(const NavigationTerrainSource& terrain, JobSystem::WorkStealingThreadPool* pool, uint32 maxTiles,
-                     int32& outTerrainTileX, int32& outTerrainTileZ);
+                     Mathematics::Vector3& outWaitPoint);
 
     // Puts every finished tile into `map`, appending each tile's key to `outApplied`. False when a
     // tile failed to build or the mesh refused it: `outFailed` and `outError` name the first, and

@@ -3,6 +3,7 @@
 // terrain renders every modifier from its first paged frame.
 
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainRowBands.h"
 
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/PageStoreFormat.h"

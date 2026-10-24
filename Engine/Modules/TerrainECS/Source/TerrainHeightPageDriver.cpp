@@ -61,8 +61,6 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
                                     float32 targetPixelError, std::span<const Mathematics::Vector3> cameras,
                                     float32 focalScale)
 {
-    if (focalScale <= 0.0f)
-        return;
     const bool gpuReadsPages = !CBTTerrain::CBTDeviceRunsNarrowArm(
         device.PreferredShaderSource() == Rendering::ShaderSourceKind::Wgsl,
         device.GetCapabilities().supportsShaderInt64);
@@ -108,12 +106,13 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     const std::string_view label = name.empty() ? std::string_view("A terrain") : name;
     const bool fitsLattice = samplesX > 1u && samplesZ > 1u && (!generated || onLattice);
     std::string refusal = fitsLattice ? PageTableRefusal(label, samplesX, samplesZ, pages.Profile()) : std::string();
+    inputs.PagesOnLattice = fitsLattice;
     inputs.PageTableFits = fitsLattice && refusal.empty();
-    // The modifier system builds the overlay only for a terrain that would page but for its modifiers.
-    TerrainHeightSourceInputs unmodified = inputs;
-    unmodified.ModifiersPending = false;
+    // The modifier system builds the overlay for every terrain with CPU pages: the CPU readers take
+    // it on every GPU arm, and the GPU pages take it where they are drawn.
+    const bool cpuPages = TerrainHeightHasCpuPages(inputs);
     const HeightPageOverlayAllowance allowance = PageOverlayAllowance(
-        TerrainHeightIsPaged(unmodified), samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight, pages.Profile());
+        cpuPages, samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight, pages.Profile());
     tiled.PageOverlayByteCap = allowance.ByteCap;
     tiled.PageOverlayOffGrid = allowance.OffGrid;
     if (!allowance.OffGrid)
@@ -122,12 +121,12 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
         refusal = OverlayRefusal(label, tiled.PageOverlayRefusedBytes, pages.Profile());
     else if (allowance.ByteCap != 0 && tiled.PageOverlayRefusedOffGrid)
         refusal = OverlayGridRefusal(label, samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight);
-    if (!TerrainHeightIsPaged(inputs))
-    {
-        if (!refusal.empty() && gpuReadsPages)
-            pages.ReportRefusal(request.Terrain, refusal);
+    // The GPU draws the pages only with a view to choose their levels for.
+    request.GpuPages = TerrainHeightIsPaged(inputs) && focalScale > 0.0f;
+    if (!refusal.empty() && (gpuReadsPages || cpuPages))
+        pages.ReportRefusal(request.Terrain, refusal);
+    if (!cpuPages)
         return; // not requested this frame: its pages are forgotten at the next update
-    }
 
     if (pages.NeedsSource(request.Terrain, request.SourceIdentity))
     {
@@ -152,8 +151,10 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     request.Shape.MaxHeight = std::max(low, high);
     request.OriginY = originY;
     request.HeightScale = heightScale;
-    const PageLevelView view =
-        MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale), targetPixelError);
+    const PageLevelView view = request.GpuPages ? MakePageLevelView(kPageLevelReferenceRows,
+                                                                    2.0f * std::atan(1.0f / focalScale),
+                                                                    targetPixelError)
+                                                : PageLevelView{};
     pages.Request(request, cameras, view);
 }
 

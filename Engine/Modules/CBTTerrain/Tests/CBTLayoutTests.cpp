@@ -1220,6 +1220,7 @@ TEST(CBTLayout, TerrainParamsEntryMirrorsAgreeAcrossEveryShader)
         {"GrassLayerIndex", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, GrassLayerIndex)},
         {"GrassControlBindless", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, GrassControlBindless)},
         {"ColorMapBindless", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, ColorMapBindless)},
+        {"GrassGroundTintHeight", "float", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, GrassGroundTintHeight)},
     };
     for (const auto& anchor : kAnchors)
     {
@@ -1412,8 +1413,9 @@ TEST(CBTLayout, PoolAndBaseDepth)
     EXPECT_EQ(kCBTDescriptorBindingCount, 26u);
 }
 
-// The height-range pyramid's three constants are hand-mirrored between CBTLayout.h and cbt_layout.glsl
-// (the CPU sizes the buffer and the build dispatches, the kernels address it). Parse the GLSL defines
+// The height-range buffer's constants are hand-mirrored between CBTLayout.h and cbt_layout.glsl (the
+// CPU sizes the buffer and the build dispatches, the kernels address it): the pyramid's entries, first
+// level and header, and the first words of the differences and of the planes. Parse the GLSL defines
 // and lock them to the C++ constants.
 TEST(CBTLayout, GlslHeightRangeConstantsMatchCpp)
 {
@@ -1425,16 +1427,22 @@ TEST(CBTLayout, GlslHeightRangeConstantsMatchCpp)
     ss << file.rdbuf();
     const std::string src = ss.str();
 
-    std::smatch m;
+    std::smatch match;
     const std::regex entries(R"(#define\s+CBT_HEIGHT_RANGE_ENTRIES\s+\(1u\s*<<\s*([0-9]+)\))");
-    ASSERT_TRUE(std::regex_search(src, m, entries)) << "CBT_HEIGHT_RANGE_ENTRIES not found";
-    EXPECT_EQ(1u << std::stoul(m[1].str()), kCBTHeightRangeEntries);
+    ASSERT_TRUE(std::regex_search(src, match, entries)) << "CBT_HEIGHT_RANGE_ENTRIES not found";
+    EXPECT_EQ(1u << std::stoul(match[1].str()), kCBTHeightRangeEntries);
     const std::regex firstLevel(R"(#define\s+CBT_HEIGHT_RANGE_MAX_FIRST_LEVEL\s+([0-9]+)u)");
-    ASSERT_TRUE(std::regex_search(src, m, firstLevel)) << "CBT_HEIGHT_RANGE_MAX_FIRST_LEVEL not found";
-    EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTHeightRangeMaxFirstLevel);
+    ASSERT_TRUE(std::regex_search(src, match, firstLevel)) << "CBT_HEIGHT_RANGE_MAX_FIRST_LEVEL not found";
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(match[1].str())), kCBTHeightRangeMaxFirstLevel);
     const std::regex header(R"(#define\s+CBT_HEIGHT_RANGE_HEADER\s+([0-9]+)u)");
-    ASSERT_TRUE(std::regex_search(src, m, header)) << "CBT_HEIGHT_RANGE_HEADER not found";
-    EXPECT_EQ(static_cast<uint32_t>(std::stoul(m[1].str())), kCBTHeightRangeHeaderWords);
+    ASSERT_TRUE(std::regex_search(src, match, header)) << "CBT_HEIGHT_RANGE_HEADER not found";
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(match[1].str())), kCBTHeightRangeHeaderWords);
+    const std::regex differences(R"(#define\s+CBT_HEIGHT_DIFFERENCES_FIRST_WORD\s+([0-9]+)u)");
+    ASSERT_TRUE(std::regex_search(src, match, differences)) << "CBT_HEIGHT_DIFFERENCES_FIRST_WORD not found";
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(match[1].str())), kCBTHeightDifferencesFirstWord);
+    const std::regex planes(R"(#define\s+CBT_HEIGHT_PLANE_FIRST_WORD\s+([0-9]+)u)");
+    ASSERT_TRUE(std::regex_search(src, match, planes)) << "CBT_HEIGHT_PLANE_FIRST_WORD not found";
+    EXPECT_EQ(static_cast<uint32_t>(std::stoul(match[1].str())), kCBTHeightPlaneFirstWord);
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif

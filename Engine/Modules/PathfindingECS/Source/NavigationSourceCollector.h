@@ -2,7 +2,7 @@
 
 #include "AssetCore/GUID.h"
 #include "PathfindingECS/Navigation.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "Types/Types.h"
 
 #include <vector>
@@ -85,7 +85,7 @@ std::vector<GUID> FindUnloadedNavigationModels(ECS::World& world);
 // The terrain a surface bakes: the first enabled planar terrain, as TerrainECS resolves it.
 struct NavigationTerrainSource
 {
-    TerrainECS::PlanarHeightQuery Query;
+    TerrainECS::SurfaceHeightQuery Query;
     // The first terrain is a planet: there is no planar heightfield to read.
     bool Spherical = false;
     // The first terrain is planar but its heightfield has not been built yet.
@@ -97,10 +97,12 @@ struct NavigationTerrainSource
 NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world);
 
 // Appends the terrain's lattice quads touching the XZ rectangle to `out`, taking every
-// `stride`-th lattice corner. False when part of the rectangle lies on a terrain tile that is not
-// resident: `outTileX`/`outTileZ` name that terrain tile and `out` is left as it was.
+// `stride`-th lattice corner, each corner at the finest height the terrain has (RequireFinest:
+// navigation bakes the ground as drawn up close, design page-streaming-planets 3.8). False when a
+// corner has no finest answer on the CPU yet: `outWaitPoint` is that corner and `out` is left as it
+// was.
 bool AppendTerrainLattice(const NavigationTerrainSource& terrain, float32 minX, float32 minZ, float32 maxX,
-                          float32 maxZ, uint32 stride, NavigationTriangles& out, int32& outTileX, int32& outTileZ);
+                          float32 maxZ, uint32 stride, NavigationTriangles& out, Mathematics::Vector3& outWaitPoint);
 
 // The box a surface covers: its explicit bounds around the entity (`transform` may be null), or,
 // fitted, the planar terrain's footprint, else everything the bake reads.

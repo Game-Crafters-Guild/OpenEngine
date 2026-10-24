@@ -3,7 +3,6 @@
 #include "UI/UIElement.h"
 
 #include <functional>
-#include <memory>
 
 namespace GameEngine
 {
@@ -15,13 +14,12 @@ class ItemSizeSlider;
 namespace Editor
 {
 
-// The Hierarchy's row of item size slider and panel search, pinned to the panel's bottom edge,
-// or to its top edge when search bars sit at the top. The row, not the search inside it, is what
-// that setting moves, so the panel registers the search with this row as its placement host
-// (EditorSearchBars::RegisterHosted). The layout comes from
-// UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.css, requested for this row's subtree.
+// The Hierarchy's bottom bar: the item size slider, pinned to the panel's bottom edge wherever
+// the panel search sits (the search is the panel's own child and moves with the search bar
+// placement setting). The layout comes from
+// UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.css, requested for this bar's subtree.
 //
-// The slider sets the Hierarchy's tree icon size. The row reports sizes through two callbacks and
+// The slider sets the Hierarchy's tree icon size. The bar reports sizes through two callbacks and
 // is told the current size back; the panel owns the size.
 class HierarchyNavigationBar : public UIElement
 {
@@ -38,10 +36,13 @@ public:
     // A size to commit: the slider released, or the item resize gesture over the slider.
     void SetOnItemSizeChanged(std::function<void(float)> callback) { m_OnItemSizeChanged = std::move(callback); }
 
-    // Takes the panel search (BuildPanelSearchBar's root) as the row's flexible second item.
-    void SetSearchBar(std::unique_ptr<UIElement> searchBar);
+    // The panel's search, a sibling of this bar: while searches sit at the bottom it sits above
+    // this bar, and it lifts with the bar over the horizontal scrollbar. The panel owns both, so
+    // the search outlives every call on this bar.
+    void PlaceSearchAbove(UIElement* search);
 
-    // Lifts the row above the tree's horizontal scrollbar while one is on screen.
+    // Lifts the bar, and the search placed above it, over the tree's horizontal scrollbar while
+    // one is on screen.
     void SetAboveHorizontalScrollbar(bool above);
 
 private:
@@ -49,6 +50,7 @@ private:
     void ApplyResizeGesture(float scrollY);
 
     EditorUI::ItemSizeSlider* m_SizeSlider = nullptr;
+    UIElement* m_Search = nullptr;
     std::function<void(float)> m_OnItemSizeChanging;
     std::function<void(float)> m_OnItemSizeChanged;
     bool m_ReportingDrag = false;

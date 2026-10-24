@@ -24,16 +24,17 @@ struct TiledTerrainData;
 struct TiledRenderExtent;
 struct TerrainHandle;
 
-/// The height-source inputs of a tiled terrain and, when TerrainHeightIsPaged says so, its page
-/// requests for `cameras` this frame. `renderTerrain` is the handle the CBT draws it with; `name` is
-/// the entity's name for the log lines (empty: its render index);
+/// The height-source inputs of a tiled terrain and its page requests for `cameras` this frame: its
+/// CPU pages whenever TerrainHeightHasCpuPages says so, and its GPU pages too when
+/// TerrainHeightIsPaged does and there is a view. `renderTerrain` is the handle the CBT draws it
+/// with; `name` is the entity's name for the log lines (empty: its render index);
 /// `originY` and `heightScale` place its normalized heights in the world; `targetPixelError` is the
 /// terrain's CBT split target; `focalScale` is the largest 1 / tan(vfov / 2) of the views (0 when
-/// there is none: nothing is requested). `device` decides the CBT arm: the narrow arm
+/// there is none: the CPU pages only). `device` decides the CBT arm: the narrow arm
 /// (CBTDeviceRunsNarrowArm) binds no page table. A terrain this does not request in a frame stops
 /// being paged at that frame's UpdateHeightPages. Sets `tiled`'s PageOverlayByteCap (the
-/// platform's cap when the terrain would page but for its modifiers, else zero) and logs
-/// OverlayRefusal when its overlay is over the cap.
+/// platform's cap when the terrain has CPU pages, else zero) and logs OverlayRefusal when its
+/// overlay is over the cap.
 void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::IDevice& device,
                                     TiledTerrainData& tiled, const TiledRenderExtent& extent,
                                     const TerrainHandle& renderTerrain, std::string_view name, float32 originY,

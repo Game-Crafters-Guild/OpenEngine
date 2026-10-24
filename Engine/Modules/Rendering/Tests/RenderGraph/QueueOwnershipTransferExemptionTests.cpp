@@ -80,7 +80,7 @@ class CapturingSink final : public Logger::LogSink
     }
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "D0LogCapture"; }
+    std::string GetName() const override { return "D0LogCapture"; }
 
   private:
     std::mutex m_Mutex;
@@ -96,7 +96,7 @@ std::shared_ptr<LogLines> InstallLogCapture()
     cfg.GlobalMinLevel = Logger::LogLevel::Info;
     Logger::Log::Initialize(cfg);
     Logger::Log::ClearSinks(); // drop the console sink Initialize seeds: capture only
-    Logger::Log::AddSink(Logger::MakeUnique<CapturingSink>(lines));
+    Logger::Log::AddSink(std::make_unique<CapturingSink>(lines));
     return lines;
 }
 

@@ -3,7 +3,7 @@
 #include "UIRgTestHarness.h"
 
 #include "Assets/AssetManager.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/MarkdownText.h"
@@ -29,7 +29,7 @@ namespace
 
 std::string ReadStagedSheet(const char* relative)
 {
-    std::ifstream in(PathUtils::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
     if (!in)
         return {};
     std::ostringstream ss;
@@ -62,7 +62,7 @@ public:
         UIRegistration::RegisterBuiltInControls();
 
         namespace fs = std::filesystem;
-        const fs::path assetRoot = PathUtils::GetExecutableDirectory() / "Assets";
+        const fs::path assetRoot = ApplicationPaths::GetExecutableDirectory() / "Assets";
         const fs::path scratch = fs::temp_directory_path() / "ui_markdown_text_layout_tests";
         std::error_code ec;
         fs::remove_all(scratch, ec);

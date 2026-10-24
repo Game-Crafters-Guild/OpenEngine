@@ -14,7 +14,7 @@ class World;
 
 namespace GameEngine::TerrainECS
 {
-struct PlanarHeightQuery;
+class SurfaceHeightQuery;
 }
 
 namespace GameEngine::Editor
@@ -26,14 +26,14 @@ namespace GameEngine::Editor
 constexpr uint32 kGroundGapProbeCount = 5u;
 
 // Why a piece carries no gap numbers. Each value is a different cause with a
-// different fix, so they never collapse into one "false": an unstreamed tile is
-// waited out, a piece off the terrain edge is moved, and a wall-like piece has no
-// underside to measure at all.
+// different fix, so they never collapse into one "false": a height page not on
+// the CPU yet is waited out, a piece off the terrain edge is moved, and a
+// wall-like piece has no underside to measure at all.
 enum class GroundGapStatus : uint8
 {
     Measured,
     // Every probe was refused: the piece hangs off the terrain footprint, or the
-    // tile under it has not streamed in.
+    // finest height page under it is not on the CPU yet.
     NoGroundSampled,
     // The underside faces sideways rather than down, so it has no height above a
     // world XZ to compare against the ground.
@@ -89,8 +89,8 @@ struct PieceGroundGap
     float32 MaxGap = 0.0f;
     float32 CenterGap = 0.0f;
     // Probes that returned a trustworthy height, out of those attempted. A
-    // piece overhanging the terrain edge or a tile that has not streamed in
-    // leaves these short, and a partial reading is not a clean one.
+    // piece overhanging the terrain edge or a finest height page not on the CPU
+    // yet leaves these short, and a partial reading is not a clean one.
     uint32 ProbesSampled = 0u;
     uint32 ProbesRequested = 0u;
 
@@ -115,7 +115,7 @@ struct PieceGroundGap
 // `out.Status` says whether the reading is usable; on anything but Measured the
 // gaps are left at zero rather than filled with a number that reads like a
 // measurement.
-void MeasurePieceGroundGap(const TerrainECS::PlanarHeightQuery& ground,
+void MeasurePieceGroundGap(const TerrainECS::SurfaceHeightQuery& ground,
                            const Mathematics::BoundingBox& localBox,
                            const float32 worldMatrix[16], PieceGroundGap& out);
 
@@ -130,7 +130,7 @@ void MeasurePieceGroundGap(const TerrainECS::PlanarHeightQuery& ground,
 // controllers, so a piece created this frame is invisible here until that system
 // has run.
 void MeasureRouteGroundGaps(ECS::World& world, ECS::EntityHandle route,
-                            const TerrainECS::PlanarHeightQuery& ground,
+                            const TerrainECS::SurfaceHeightQuery& ground,
                             std::vector<PieceGroundGap>& out);
 
 } // namespace GameEngine::Editor

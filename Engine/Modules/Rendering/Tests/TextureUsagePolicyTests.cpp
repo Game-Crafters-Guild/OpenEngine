@@ -147,7 +147,7 @@ TEST(TextureUsagePolicy, HarvestDetailIsDebugAndTheSummaryDoesNotRepeat)
     ASSERT_TRUE(TextureUsagePolicy::IsAuditEnabled()) << "audit flag resolved before the test set it";
 
     Logger::Log::Initialize({Logger::LogLevel::Debug});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto counts = std::make_shared<HarvestLineCounts>();
     // Matches on the block markers, not on a phrasing, so the gate measures where the
     // harvest goes rather than the wording it uses.
@@ -155,9 +155,9 @@ TEST(TextureUsagePolicy, HarvestDetailIsDebugAndTheSummaryDoesNotRepeat)
         [counts](const Logger::LogMessage& msg)
         {
             counts->AnyLine.fetch_add(1);
-            if (msg.Message.find("[TextureUsagePolicy]") == Logger::String::npos)
+            if (msg.Message.find("[TextureUsagePolicy]") == std::string::npos)
                 return;
-            const bool isSummary = msg.Message.find("transfer-usage audit:") != Logger::String::npos;
+            const bool isSummary = msg.Message.find("transfer-usage audit:") != std::string::npos;
             if (isSummary)
             {
                 if (msg.Level == Logger::LogLevel::Info)
@@ -204,14 +204,14 @@ TEST(TextureUsagePolicy, SummaryCarriesTheTallyAtPrintTimeAndRepeatsOnlyOnGrowth
 
     Logger::Log::Initialize({Logger::LogLevel::Info});
     auto summaries = std::make_shared<SummaryLines>();
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     sink->RegisterCallback(
         [summaries](const Logger::LogMessage& msg)
         {
             std::lock_guard<std::mutex> lock(summaries->Mutex);
             ++summaries->AnyLine;
             if (msg.Level == Logger::LogLevel::Info &&
-                msg.Message.find("transfer-usage audit:") != Logger::String::npos)
+                msg.Message.find("transfer-usage audit:") != std::string::npos)
                 summaries->Lines.emplace_back(msg.Message);
         });
     Logger::Log::AddSink(std::move(sink));

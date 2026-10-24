@@ -27,6 +27,7 @@ class FloatField;
 class UIManager;
 class TreeView;
 class TextField;
+class SearchFieldWithFilter;
 class Toggle;
 class Checkbox;
 class UIElement;
@@ -312,10 +313,6 @@ public:
     void SetInspectorSoloSectionsValue(bool enabled);
     void SetInspectorSoloKeepTransformValue(bool enabled);
 
-    // Get global search bar visibility state
-    static bool GetSearchBarsVisible() { return EditorSearchBars::GetVisible(); }
-    static bool GetSearchBarsAtTop() { return EditorSearchBars::GetAtTop(); }
-
     /** Apply saved inspector component header height (compact 24px vs default 28px). */
     static void ApplySavedCompactComponentHeadersStyle(UIManager* ui);
 
@@ -461,10 +458,9 @@ private:
     UIElement* m_TreePane = nullptr;
     UIElement* m_ContentPane = nullptr;
     UIElement* m_VerticalSplitter = nullptr;
-    UIElement* m_SearchBar = nullptr;
+    SearchFieldWithFilter* m_SearchBar = nullptr;
     Label* m_ContentHeader = nullptr;
     ScrollView* m_ContentBody = nullptr;
-    TextField* m_SearchField = nullptr;
     std::shared_ptr<bool> m_LifetimeToken = std::make_shared<bool>(true);
 
     // Vertical-mode tree pane height: 0 = auto-size to content; >0 = user override.
@@ -498,7 +494,6 @@ private:
     FloatField* m_AssetsTreeIconSizeField = nullptr;
     Slider* m_GridIconSizeSlider = nullptr;
     FloatField* m_GridIconSizeField = nullptr;
-    Toggle* m_SearchBarsToggle = nullptr;
     Toggle* m_CheckmarkTogglesToggle = nullptr;
     Toggle* m_TabIconsToggle = nullptr;
     TextField* m_FontSmoothingField = nullptr;

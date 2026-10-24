@@ -7,10 +7,13 @@
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "JobSystem/WorkStealingThreadPool.h"
+#include "Mathematics/Interpolation.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Spline/SplineData.h"
+#include "Spline/SplineEvaluator.h"
 #include "SplineECS/SplineService.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
 #include "TerrainECS/TerrainAtlas.h"
@@ -18,12 +21,19 @@
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "TerrainECS/TerrainService.h"
+#include "TerrainRowBands.h" // TerrainECS/Source: kParallelBakeMinTexels
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 #include <filesystem>
+#include <future>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <thread>
 #include <chrono>
 #include <vector>
 
@@ -35,6 +45,9 @@ using namespace GameEngine::TerrainECS;
 class TerrainGrassRegions : public testing::Test
 {
 protected:
+    // Declared first so it outlives the system and the world that use it; null runs every compose
+    // in place.
+    std::unique_ptr<JobSystem::WorkStealingThreadPool> Pool;
     ECS::World World;
     TerrainModifierSystem System;
     TerrainHandle Handle{};
@@ -138,6 +151,278 @@ protected:
         return spline;
     }
 };
+
+// The compose runs as a job: a pool whose one worker the test holds keeps it queued for as long as
+// a test needs it in flight.
+class TerrainGrassAsyncCompose : public TerrainGrassRegions
+{
+protected:
+    std::optional<std::promise<void>> Gate;
+    JobSystem::TaskHandle Blocker;
+    // A neutral region under every other: an empty stack composes in place, so the fixture's first
+    // update needs a region to request its first field as a job. Being neutral, it changes no pixel.
+    ECS::EntityHandle StackRegion{};
+
+    void SetUp() override
+    {
+        Pool = std::make_unique<JobSystem::WorkStealingThreadPool>(1);
+        World.SetJobSystem(Pool.get());
+        StackRegion = Region(Components::TerrainVolumeShape::Global, 1, 1, 0, -1);
+        HoldPool(); // the fixture's first update requests the first field
+        TerrainGrassRegions::SetUp();
+    }
+
+    void TearDown() override
+    {
+        ReleasePool();
+        TerrainGrassRegions::TearDown();
+    }
+
+    void HoldPool()
+    {
+        Gate.emplace();
+        auto started = std::make_shared<std::promise<void>>();
+        auto running = started->get_future();
+        Blocker = Pool->Submit([started, gate = Gate->get_future().share()] { started->set_value(); gate.wait(); });
+        running.wait();
+    }
+
+    void ReleasePool()
+    {
+        if (!Gate) return;
+        Gate->set_value();
+        Gate.reset();
+        Blocker.Wait();
+    }
+
+    // Lets every requested compose finish and swap in, including one an edit left owed.
+    void Settle()
+    {
+        ReleasePool();
+        for (int i = 0; i < 3; ++i)
+        {
+            System.WaitForGrassComposeForTests();
+            Tick();
+        }
+    }
+};
+
+TEST_F(TerrainGrassAsyncCompose, TheUpdateReturnsBeforeTheComposeRuns)
+{
+    EXPECT_FALSE(Data->GrassField.Initialized) << "the update composed the first field itself";
+    Settle();
+    ASSERT_TRUE(Data->GrassField.Initialized);
+    HoldPool();
+    Region(Components::TerrainVolumeShape::Circle, 0.2f, 0.4f, -30);
+    Tick();
+    EXPECT_EQ(At(-30, 0), 255) << "the update waited for the compose";
+    Settle();
+    EXPECT_EQ(At(-30, 0), 51);
+}
+
+TEST_F(TerrainGrassAsyncCompose, AnEditDuringTheComposeDropsItsResultAndOnlyTheNewestLands)
+{
+    Settle();
+    const auto version = Data->GrassField.Version;
+    HoldPool();
+    const auto region = Region(Components::TerrainVolumeShape::Circle, 0.2f, 0.4f, -30);
+    Tick(); // requests the 0.4 density, held
+    World.GetComponentForWrite<Components::TerrainGrassEffect>(region)->DensityScale = 0.8f;
+    Tick();
+    World.GetComponentForWrite<Components::TerrainGrassEffect>(region)->DensityScale = 0.6f;
+    Tick();
+    ReleasePool();
+    System.WaitForGrassComposeForTests();
+    Tick(); // the 0.4 result lands stale: dropped, and the newest stack is requested
+    EXPECT_EQ(Data->GrassField.Version, version) << "a stale result was applied";
+    System.WaitForGrassComposeForTests();
+    Tick();
+    EXPECT_EQ(Data->GrassField.Version, version + 1) << "more than one compose landed";
+    EXPECT_EQ(At(-30, 0, 1), 153);
+    EXPECT_EQ(At(-30, 0), 51);
+}
+
+TEST_F(TerrainGrassAsyncCompose, GrassWaitsForTheFirstFieldAndAnEditKeepsThePreviousOneDrawn)
+{
+    EXPECT_FALSE(Data->GrassField.Initialized);
+    EXPECT_TRUE(Data->GrassField.GatesPlacement()) << "an uncomposed field would draw grass as if neutral";
+    Settle();
+    EXPECT_FALSE(Data->GrassField.GatesPlacement()) << "a composed neutral field holds grass back";
+    const auto region = Region(Components::TerrainVolumeShape::Circle, 0.2f, 0.4f, -30);
+    Settle();
+    const auto pixels = Data->GrassField.Pixels;
+    ASSERT_EQ(At(-30, 0), 51);
+    HoldPool();
+    World.GetComponentForWrite<Components::WorldTransform>(region)->matrix[12] = 30;
+    Tick();
+    EXPECT_EQ(Data->GrassField.Pixels, pixels) << "the previous field left before the new one was ready";
+    EXPECT_TRUE(Data->GrassField.GatesPlacement());
+    Settle();
+    EXPECT_EQ(At(-30, 0), 255);
+    EXPECT_EQ(At(30, 0), 51);
+}
+
+TEST_F(TerrainGrassAsyncCompose, ATerrainRemovedDuringTheComposeIsSkipped)
+{
+    ASSERT_FALSE(Data->GrassField.Initialized) << "no compose in flight to outlive the terrain";
+    World.DestroyEntity(TerrainEntity);
+    TerrainService::Get().DestroyTerrain(Handle);
+    Data = nullptr;
+    Settle(); // the result names a terrain that no longer exists
+    EXPECT_EQ(TerrainService::Get().GetTerrainData(Handle), nullptr);
+}
+
+TEST_F(TerrainGrassAsyncCompose, AnAtlasTerrainsFlagAndATileStreamedInMeanwhileFollowTheSwap)
+{
+    auto& service = TerrainService::Get();
+    TiledTerrainConfig config{};
+    config.WorldSizeX = 9216; config.WorldSizeZ = 1024;
+    config.HeightScale = 32; config.SamplesPerMeter = 1;
+    const auto handle = service.CreateTiledTerrain(config);
+    auto* tiled = service.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    const auto entity = World.CreateEntity();
+    Components::Terrain terrain{};
+    terrain.SizeX = 9216; terrain.SizeZ = 1024; terrain.HeightScale = 32;
+    terrain.TiledTerrainHandle = handle.Index; terrain.TiledTerrainGeneration = handle.Generation;
+    World.AddComponentImmediate<Components::Terrain>(entity, terrain);
+    World.AddComponentImmediate<Components::WorldTransform>(entity, {});
+    Settle();
+    ASSERT_TRUE(tiled->GrassCoarseField.Initialized);
+    ASSERT_FALSE(tiled->GrassRegionsActive);
+    HoldPool();
+    Region(Components::TerrainVolumeShape::Global, .2f, .4f);
+    Tick();
+    EXPECT_FALSE(tiled->GrassRegionsActive) << "the flag changed before the fields it describes";
+    auto* tile = service.LoadTile(handle, {3,0});
+    ASSERT_NE(tile, nullptr);
+    tile->LodState = TileLodState::Full;
+    Tick(); // the tile arrives while the compose is held
+    Settle();
+    EXPECT_TRUE(tiled->GrassRegionsActive);
+    ASSERT_TRUE(tile->GrassField.IsActive()) << "a tile that streamed in during the compose was never composed";
+    EXPECT_EQ(tile->GrassField.Pixels.front(), 51);
+    World.DestroyEntityImmediate(entity);
+}
+
+TEST_F(TerrainGrassAsyncCompose, ARegionlessTerrainHasItsFieldAfterItsFirstUpdate)
+{
+    World.DestroyEntityImmediate(StackRegion);
+    ASSERT_FALSE(Data->GrassField.Initialized);
+    TerrainModifierSystem system;
+    system.Update(World, 1.0f / 60.0f); // the pool's one worker is still held
+    EXPECT_TRUE(Data->GrassField.Initialized) << "a terrain with no grass regions waited for a job";
+    EXPECT_FALSE(Data->GrassField.GatesPlacement());
+}
+
+TEST_F(TerrainGrassAsyncCompose, ASystemDestroyedDuringTheComposeDoesNotWaitForIt)
+{
+    auto system = std::make_unique<TerrainModifierSystem>();
+    system->Update(World, 1.0f / 60.0f); // requests a field while the worker is held
+    system.reset();                      // cancels the queued compose instead of waiting on the held worker
+    ReleasePool();
+    EXPECT_FALSE(Data->GrassField.Initialized) << "the destroyed system's result was applied";
+}
+
+// The swap moves the job's bytes into the field unchanged: with a spline area, a spline path and a
+// circle edited while the compose is held, the settled field equals a serial compose of the same
+// stack on a pool-less system.
+TEST_F(TerrainGrassAsyncCompose, TheSettledFieldIsTheSerialComposeByteForByte)
+{
+    Settle();
+    HoldPool();
+    const auto area = Region(Components::TerrainVolumeShape::SplineArea, 0.5f, 0.3f);
+    AddClosedSpline(area);
+    const auto path = Region(Components::TerrainVolumeShape::SplinePath, 0.1f, 0.7f, 0, 5);
+    AddClosedSpline(path);
+    const auto circle = Region(Components::TerrainVolumeShape::Circle, 0.0f, 0.2f, 30, 10);
+    Tick();
+    World.GetComponentForWrite<Components::WorldTransform>(circle)->matrix[12] = -20;
+    Tick();
+    World.GetComponentForWrite<Components::TerrainGrassEffect>(area)->HeightScale = 0.25f;
+    Tick();
+    Settle();
+    const auto settled = Data->GrassField.Pixels;
+    ASSERT_FALSE(settled.empty());
+
+    World.SetJobSystem(nullptr);
+    TerrainModifierSystem serial;
+    Data->GrassField = {};
+    World.SwapLifecycleEvents();
+    serial.Update(World, 1.0f / 60.0f);
+    ASSERT_TRUE(Data->GrassField.Initialized);
+    EXPECT_EQ(Data->GrassField.Pixels, settled);
+}
+
+// The running job reads only its own copy of the stack. A system and a terrain with eight winding
+// spline routes are destroyed while their compose runs; the gather's spline arena goes with the
+// system. The red needs a use-after-free detector (the -asan preset, or MallocScribble on macOS):
+// freed spline memory the job still reads is otherwise left intact and reads as valid splines.
+TEST_F(TerrainGrassAsyncCompose, ASystemAndTerrainDestroyedWhileTheComposeRunsLeaveTheJobItsOwnStack)
+{
+    Settle();
+    constexpr uint32 kDim = 257;
+    constexpr float32 kSize = 256.0f, kX = 1000.0f;
+    constexpr int kRoutes = 8;
+    constexpr auto kSleep = std::chrono::milliseconds(30);
+    Terrain::TerrainConfig config{};
+    config.HeightmapWidth = config.HeightmapHeight = kDim;
+    config.WorldSizeX = config.WorldSizeZ = kSize;
+    config.HeightScale = 32;
+    config.LODLevels = 3;
+    const auto handle = TerrainService::Get().CreateTerrain(config);
+    const auto entity = World.CreateEntity();
+    Components::Terrain terrain{};
+    terrain.SizeX = terrain.SizeZ = kSize;
+    terrain.HeightScale = 32;
+    terrain.BaseSource = Components::TerrainBaseSource::Flat;
+    terrain.TerrainDataHandle = handle.Index;
+    terrain.TerrainDataGeneration = handle.Generation;
+    World.AddComponentImmediate<Components::Terrain>(entity, terrain);
+    Components::WorldTransform transform{};
+    transform.matrix[12] = kX;
+    World.AddComponentImmediate<Components::WorldTransform>(entity, transform);
+    auto& splines = SplineECS::SplineService::Get();
+    for (int route = 0; route < kRoutes; ++route)
+    {
+        const auto region = Region(Components::TerrainVolumeShape::SplinePath, 0.3f, 0.2f, 0);
+        World.GetComponentForWrite<Components::TerrainModifierVolume>(region)->Falloff = 40;
+        const auto spline = splines.CreateSpline(Spline::SplineType::CatmullRom, false);
+        for (int i = 0; i < 24; ++i)
+        {
+            const float32 t = static_cast<float32>(i) / 23.0f;
+            const float32 z = kSize * (-0.45f + 0.9f * (route + 0.5f) / kRoutes) + 20 * std::sin(t * 9 + route);
+            splines.GetSplineData(spline)->AddPoint({kX - kSize * 0.5f + kSize * t, 0, z}, 3);
+        }
+        splines.RebuildCache(spline);
+        Components::SplineComponent component{};
+        component.SplineDataIndex = spline.Index();
+        component.SplineDataGeneration = spline.Generation();
+        World.AddComponentImmediate<Components::SplineComponent>(region, component);
+    }
+
+    // The red needs the job still running when the system goes: time one compose of this scene.
+    {
+        TerrainModifierSystem timing;
+        timing.Update(World, 1.0f / 60.0f);
+        const auto start = std::chrono::steady_clock::now();
+        timing.WaitForGrassComposeForTests();
+        const auto composeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        RecordProperty("composeMs", std::to_string(composeMs));
+        if (composeMs < 10.0 * kSleep.count())
+            GTEST_SKIP() << "the compose took " << composeMs << " ms, too short to destroy the system while it runs";
+    }
+
+    auto system = std::make_unique<TerrainModifierSystem>();
+    system->Update(World, 1.0f / 60.0f);
+    std::this_thread::sleep_for(kSleep);
+    system.reset();
+    World.DestroyEntity(entity);
+    TerrainService::Get().DestroyTerrain(handle);
+    Settle();
+    EXPECT_EQ(TerrainService::Get().GetTerrainData(handle), nullptr);
+    EXPECT_TRUE(Data->GrassField.Initialized);
+}
 
 TEST_F(TerrainGrassRegions, DefaultAndRepeatedNeutralEffectsAllocateNothing)
 {
@@ -600,5 +885,144 @@ TEST(TerrainGrassField, TwoChannelAtlasPackingPreservesSharedEdgesAndApron)
     EXPECT_LE(grassSlots, plainSlots);
     const auto active = MakeAtlasGeometry(1025, grassSlots, 32, 32);
     EXPECT_LE(static_cast<uint64>(active.AtlasDim) * active.AtlasDim * 14, kAtlasVramBudgetBytes);
+}
+
+// A grass region volume as the gather resolves it, with the gather's world bounds.
+ResolvedModifier GrassVolume(Components::TerrainModifierShape shape, float32 height, float32 density,
+                             float32 falloff, const Spline::SplineData* spline = nullptr, bool fillInterior = false)
+{
+    ResolvedModifier mod{};
+    mod.ModType = ResolvedModifier::Type::Volume;
+    mod.Shape = shape;
+    mod.Enabled = true;
+    mod.Falloff = falloff;
+    mod.FalloffInward = 0.4f;
+    mod.ResolvedSpline = spline;
+    mod.SplineFillInterior = fillInterior;
+    ResolvedEffect effect;
+    effect.EffectKind = ResolvedEffect::Kind::Grass;
+    effect.Grass = {height, density};
+    mod.Effects.push_back(effect);
+    if (spline)
+    {
+        mod.BoundsMinX = mod.BoundsMinZ = std::numeric_limits<float32>::max();
+        mod.BoundsMaxX = mod.BoundsMaxZ = -std::numeric_limits<float32>::max();
+        for (const auto& box : spline->SegmentBounds)
+        {
+            mod.BoundsMinX = std::min(mod.BoundsMinX, box.min.x - falloff);
+            mod.BoundsMinZ = std::min(mod.BoundsMinZ, box.min.z - falloff);
+            mod.BoundsMaxX = std::max(mod.BoundsMaxX, box.max.x + falloff);
+            mod.BoundsMaxZ = std::max(mod.BoundsMaxZ, box.max.z + falloff);
+        }
+    }
+    return mod;
+}
+
+// A spline region's weight from its exact signed distance, never cut off.
+float32 ExactSplineWeight(const ResolvedModifier& mod, float32 worldX, float32 worldZ)
+{
+    constexpr float32 kExact = std::numeric_limits<float32>::infinity();
+    const float32 sd = mod.SplineFillInterior
+        ? Spline::SignedDistanceToSplineXZ(*mod.ResolvedSpline, worldX, worldZ, kExact)
+        : Spline::SignedDistanceToSplineBandXZ(*mod.ResolvedSpline, worldX, worldZ, kExact);
+    return VolumeShapeWeight(mod, -sd);
+}
+
+// The field a texel-by-texel walk of the whole ordered stack gives, every spline measured exactly
+// (no cutoff): what ComposeTerrainGrassField must equal byte for byte.
+std::vector<uint8> ReferenceGrassField(uint32 dim, float32 size, float32 origin,
+                                       std::span<const ResolvedModifier> modifiers)
+{
+    std::vector<uint8> pixels(static_cast<size_t>(dim) * dim * kTerrainGrassFieldChannels, 255);
+    for (uint32 z = 0; z < dim; ++z)
+        for (uint32 x = 0; x < dim; ++x)
+        {
+            const float32 worldX = origin + size * (static_cast<float32>(x) / (dim - 1));
+            const float32 worldZ = origin + size * (static_cast<float32>(z) / (dim - 1));
+            float32 heightScale = 1.0f, densityScale = 1.0f;
+            for (const auto& mod : modifiers)
+            {
+                if (!mod.Enabled || worldX < mod.BoundsMinX || worldX > mod.BoundsMaxX
+                    || worldZ < mod.BoundsMinZ || worldZ > mod.BoundsMaxZ) continue;
+                const float32 rawWeight = mod.ResolvedSpline ? ExactSplineWeight(mod, worldX, worldZ)
+                                                             : ComputeWeight(mod, worldX, worldZ);
+                const float32 linear = std::isfinite(rawWeight) ? Math::Clamp01(rawWeight) : 0.0f;
+                if (linear <= 0) continue;
+                const float32 weight = linear * linear * (3.0f - 2.0f * linear);
+                for (const auto& fx : mod.Effects)
+                {
+                    heightScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.HeightScale) - heightScale) * weight;
+                    densityScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) - densityScale) * weight;
+                }
+            }
+            const size_t offset = (static_cast<size_t>(z) * dim + x) * kTerrainGrassFieldChannels;
+            pixels[offset] = static_cast<uint8>(std::lround(Math::Clamp01(heightScale) * 255.0f));
+            pixels[offset + 1] = static_cast<uint8>(std::lround(Math::Clamp01(densityScale) * 255.0f));
+        }
+    return pixels;
+}
+
+// The compose skips work three ways: rows a region's Z extent misses, texels its X extent misses,
+// and spline samples whose segment bounds are all beyond the falloff. None may change a byte:
+// tolerance 0 against the exhaustive walk, over a stack that mixes a winding route at two widths
+// (a road and its verge), a closed loop as both a ring and an area, a circle, a rotated rectangle
+// and a disabled region, overlapping in stack order. Composing in row bands across a pool gives the
+// same bytes.
+TEST(TerrainGrassField, ComposeEqualsTheExhaustiveWalkOfEveryRegion)
+{
+    Spline::SplineData route;
+    route.Type = Spline::SplineType::CatmullRom;
+    for (uint32 i = 0; i < 24; ++i)
+    {
+        const float32 t = static_cast<float32>(i) / 23.0f;
+        route.AddPoint({-110.0f + 220.0f * t, 0.0f, 70.0f * std::sin(t * 9.0f)}, 2.45f + 0.4f * std::cos(t * 13.0f));
+    }
+    Spline::RebuildSplineCache(route);
+    Spline::SplineData verge = route;
+    for (auto& point : verge.Points) point.Radius += 0.2f;
+    Spline::RebuildSplineCache(verge);
+    Spline::SplineData loop;
+    loop.Type = Spline::SplineType::CatmullRom;
+    loop.Closed = true;
+    for (const auto& p : std::array<Mathematics::Vector3, 5>{{{-60,0,-60},{20,0,-80},{70,0,-10},{30,0,60},{-50,0,40}}})
+        loop.AddPoint(p, 3.0f);
+    Spline::RebuildSplineCache(loop);
+
+    std::vector<ResolvedModifier> modifiers;
+    modifiers.push_back(GrassVolume(Components::TerrainModifierShape::Spline, 0.2f, 0.6f, 2.2f, &verge));
+    modifiers.push_back(GrassVolume(Components::TerrainModifierShape::Spline, 0.0f, 0.1f, 0.9f, &route));
+    modifiers.push_back(GrassVolume(Components::TerrainModifierShape::Spline, 0.5f, 0.5f, 4.0f, &loop, true));
+    modifiers.push_back(GrassVolume(Components::TerrainModifierShape::Spline, 0.9f, 0.3f, 3.0f, &loop));
+    auto circle = GrassVolume(Components::TerrainModifierShape::Circle, 1.0f, 1.0f, 3.0f);
+    circle.Position = {10, 0, 5}; circle.Radius = 9;
+    circle.BoundsMinX = 10 - 12; circle.BoundsMaxX = 10 + 12;
+    circle.BoundsMinZ = 5 - 12; circle.BoundsMaxZ = 5 + 12;
+    modifiers.push_back(circle);
+    auto rectangle = GrassVolume(Components::TerrainModifierShape::Rectangle, 0.3f, 0.0f, 2.0f);
+    rectangle.Position = {-40, 0, 30}; rectangle.RectHalfX = 14; rectangle.RectHalfZ = 5;
+    rectangle.YawRadians = 0.6f;
+    rectangle.BoundsMinX = -40 - 20; rectangle.BoundsMaxX = -40 + 20;
+    rectangle.BoundsMinZ = 30 - 20; rectangle.BoundsMaxZ = 30 + 20;
+    modifiers.push_back(rectangle);
+    auto disabled = GrassVolume(Components::TerrainModifierShape::Circle, 0.0f, 0.0f, 1.0f);
+    disabled.Enabled = false;
+    disabled.Position = {60, 0, 60}; disabled.Radius = 20;
+    disabled.BoundsMinX = disabled.BoundsMinZ = 39; disabled.BoundsMaxX = disabled.BoundsMaxZ = 81;
+    modifiers.push_back(disabled);
+
+    // Past kParallelBakeMinTexels, so the pooled compose below really runs in row bands.
+    constexpr uint32 kDim = 321;
+    constexpr float32 kSize = 240.0f, kOrigin = -120.0f;
+    static_assert(static_cast<uint64>(kDim) * kDim >= kParallelBakeMinTexels);
+    TerrainGrassField field;
+    ComposeTerrainGrassField(field, kDim, kDim, kSize, kSize, kOrigin, kOrigin, modifiers);
+    ASSERT_TRUE(field.IsActive());
+    EXPECT_EQ(field.Pixels, ReferenceGrassField(kDim, kSize, kOrigin, modifiers));
+
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainGrassField banded;
+    ComposeTerrainGrassField(banded, kDim, kDim, kSize, kSize, kOrigin, kOrigin, modifiers, 0, 0, -1, -1, &pool);
+    EXPECT_EQ(banded.Pixels, field.Pixels) << "row bands across the pool changed a byte";
+    EXPECT_EQ(banded.NonNeutralTexels, field.NonNeutralTexels);
 }
 } // namespace

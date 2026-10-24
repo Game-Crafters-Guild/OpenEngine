@@ -101,7 +101,7 @@ bool Application::Initialize() {
 	            fileCfg.minLevel = logCfg.GlobalMinLevel;
 	            fileCfg.includeTimestamp = true;
 	            fileCfg.includeSource = logCfg.EnableSourceLocation;
-	            Logger::Log::AddSink(Logger::MakeUnique<Logger::FileSink>(fileCfg));
+	            Logger::Log::AddSink(std::make_unique<Logger::FileSink>(fileCfg));
 	            Logger::Log::Info("File logging enabled: {}", fileCfg.filename);
 	        }
 	    #endif // LOGGER_ENABLE_FILE_LOGGING

@@ -22,4 +22,12 @@ namespace GameEngine::Editor
 bool ReadPointerCoords(const nlohmann::json& params, const char* xKey, const char* yKey, float& x, float& y,
                        nlohmann::json& error);
 
+// Reads the optional "clickCount" of a click request: an integer from 1 to `maxCount`, 1 when
+// absent. A fraction, a bool, a string, null and an integer out of range are refused, never
+// narrowed: 2.5 or 4294967298 read as 2 would run a double-click the caller did not ask for.
+// On success writes clickCount and leaves `error` untouched; on rejection returns false and
+// fills `error` with the RefuseRequest refusal, which names the accepted values and echoes
+// the raw request value.
+bool ReadClickCount(const nlohmann::json& params, int maxCount, int& clickCount, nlohmann::json& error);
+
 } // namespace GameEngine::Editor

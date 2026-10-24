@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -41,7 +43,7 @@ inline float CubicBezierEval(float x1, float y1, float x2, float y2, float x)
                   + 3.0f * t2 * (1.0f - x2);
         if (std::abs(dxt) < 1e-6f) break;
         t -= (xt - x) / dxt;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Clamp01(t);
     }
 
     // Evaluate bezierY(t)
@@ -255,13 +257,13 @@ inline bool TryParseTweenEasingName(std::string_view name, TweenEasing& out)
 inline float EvalCubicBezierAnchored01(float anchorStartY, float anchorEndY,
                                        float c1x, float c1y, float c2x, float c2y, float t)
 {
-    const float x = std::clamp(t, 0.0f, 1.0f);
-    anchorStartY = std::clamp(anchorStartY, 0.0f, 1.0f);
-    anchorEndY = std::clamp(anchorEndY, 0.0f, 1.0f);
-    c1x = std::clamp(c1x, 0.0f, 1.0f);
-    c1y = std::clamp(c1y, 0.0f, 1.0f);
-    c2x = std::clamp(c2x, 0.0f, 1.0f);
-    c2y = std::clamp(c2y, 0.0f, 1.0f);
+    const float x = Clamp01(t);
+    anchorStartY = Clamp01(anchorStartY);
+    anchorEndY = Clamp01(anchorEndY);
+    c1x = Clamp01(c1x);
+    c1y = Clamp01(c1y);
+    c2x = Clamp01(c2x);
+    c2y = Clamp01(c2y);
 
     auto sampleX = [](float c1, float c2, float u) {
         const float inv = 1.0f - u;
@@ -291,7 +293,7 @@ inline float EvalCubicBezierAnchored01(float anchorStartY, float anchorEndY,
         else
             hi = u;
     }
-    return std::clamp(sampleY(u), 0.0f, 1.0f);
+    return Clamp01(sampleY(u));
 }
 
 inline float EvalCubicBezier01(float c1x, float c1y, float c2x, float c2y, float t)
@@ -301,7 +303,7 @@ inline float EvalCubicBezier01(float c1x, float c1y, float c2x, float c2y, float
 
 inline float EvalTweenEasing(TweenEasing easing, float t)
 {
-    const float x = std::clamp(t, 0.0f, 1.0f);
+    const float x = Clamp01(t);
     constexpr float kEasingPi = 3.14159265358979323846f;
 
     auto quadIn = [](float v) { return v * v; };
@@ -355,8 +357,8 @@ inline float EvalTweenEasing(TweenEasing easing, float t)
     switch (easing)
     {
     case TweenEasing::Linear: return x;
-    case TweenEasing::Smooth: return x * x * (3.0f - 2.0f * x);
-    case TweenEasing::Fade: return x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
+    case TweenEasing::Smooth: return SmoothStep(0.0f, 1.0f, x);
+    case TweenEasing::Fade: return SmootherStep(0.0f, 1.0f, x);
     case TweenEasing::Constant: return (x < 1.0f) ? 0.0f : 1.0f;
     case TweenEasing::QuadIn: return quadIn(x);
     case TweenEasing::QuadOut: return quadOut(x);

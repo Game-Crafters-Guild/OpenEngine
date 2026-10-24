@@ -221,6 +221,7 @@ public:
         outLines.push_back("TerrainGrass.rootFadeStart = " + FormatFloat(c->RootFadeStart));
         outLines.push_back("TerrainGrass.rootFadeEnd = " + FormatFloat(c->RootFadeEnd));
         outLines.push_back("TerrainGrass.groundingStrength = " + FormatFloat(c->GroundingStrength));
+        outLines.push_back("TerrainGrass.groundTintHeight = " + FormatFloat(c->GroundTintHeight));
         outLines.push_back("TerrainGrass.canopyShade = " + FormatFloat(c->CanopyShade));
         outLines.push_back("TerrainGrass.groundDarkening = " + FormatFloat(c->GroundDarkening));
         outLines.push_back("TerrainGrass.translucency = " + FormatFloat(c->Translucency));
@@ -288,6 +289,7 @@ public:
         else if (property == "rootfadestart") { if (!ParseF32(value, c.RootFadeStart, outError)) return false; }
         else if (property == "rootfadeend") { if (!ParseF32(value, c.RootFadeEnd, outError)) return false; }
         else if (property == "groundingstrength") { if (!ParseF32(value, c.GroundingStrength, outError)) return false; }
+        else if (property == "groundtintheight") { if (!ParseF32(value, c.GroundTintHeight, outError)) return false; }
         else if (property == "canopyshade") { if (!ParseF32(value, c.CanopyShade, outError)) return false; }
         else if (property == "grounddarkening") { if (!ParseF32(value, c.GroundDarkening, outError)) return false; }
         else if (property == "translucency") { if (!ParseF32(value, c.Translucency, outError)) return false; }

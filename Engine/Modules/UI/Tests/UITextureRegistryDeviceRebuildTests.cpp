@@ -14,7 +14,7 @@
 
 #include "UI/UITextureRegistry.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/CommandList.h"
@@ -191,18 +191,18 @@ TEST(UITextureRegistryDeviceRebuild, NoDroppedDescriptorWritesAfterRebuild)
         << "nothing was registered post-rebuild, so a zero drop count would be vacuous";
 
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto dropCount = std::make_shared<std::atomic<int>>(0);
     // Matches both backends: the descriptor-buffer path logs "dropped N of M
     // descriptor-buffer write(s)", the legacy pool path "dropping descriptor
     // write with unresolvable handle".
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [dropCount](const Logger::LogMessage& msg)
         {
-            const bool dropped = msg.Message.find("dropped") != Logger::String::npos
-                              || msg.Message.find("dropping") != Logger::String::npos;
-            if (dropped && msg.Message.find("descriptor") != Logger::String::npos)
+            const bool dropped = msg.Message.find("dropped") != std::string::npos
+                              || msg.Message.find("dropping") != std::string::npos;
+            if (dropped && msg.Message.find("descriptor") != std::string::npos)
                 dropCount->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));
@@ -240,7 +240,7 @@ namespace
 bool LoadShapedSlugAtlas(Rendering::Text::FontAtlas& atlas, unsigned pixelSize)
 {
     const std::filesystem::path fontPath =
-        PathUtils::GetExecutableDirectory() / "Assets" / "Fonts" / "Roboto-Regular.ttf";
+        ApplicationPaths::GetExecutableDirectory() / "Assets" / "Fonts" / "Roboto-Regular.ttf";
     std::error_code ec;
     if (!std::filesystem::exists(fontPath, ec))
         return false;
@@ -295,24 +295,24 @@ TEST(UITextureRegistryDeviceRebuild, BandDummyIsReprovisionedAfterRebuild)
     // Drain anything earlier tests enqueued before the sink below exists, so
     // the baseline asserts observe only this test's messages.
     Logger::Log::Flush();
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto dropCount = std::make_shared<std::atomic<int>>(0);
     auto healLineSeen = std::make_shared<std::atomic<bool>>(false);
     auto bandDummyLive = std::make_shared<std::atomic<bool>>(false);
     // Drop matching as in NoDroppedDescriptorWritesAfterRebuild; the heal line
     // additionally reports whether each re-provisioned resource came up valid.
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [dropCount, healLineSeen, bandDummyLive](const Logger::LogMessage& msg)
         {
-            const bool dropped = msg.Message.find("dropped") != Logger::String::npos
-                              || msg.Message.find("dropping") != Logger::String::npos;
-            if (dropped && msg.Message.find("descriptor") != Logger::String::npos)
+            const bool dropped = msg.Message.find("dropped") != std::string::npos
+                              || msg.Message.find("dropping") != std::string::npos;
+            if (dropped && msg.Message.find("descriptor") != std::string::npos)
                 dropCount->fetch_add(1);
-            if (msg.Message.find("UITextureRegistry: device rebuild") != Logger::String::npos)
+            if (msg.Message.find("UITextureRegistry: device rebuild") != std::string::npos)
             {
                 healLineSeen->store(true);
-                if (msg.Message.find("bandDummy=true") != Logger::String::npos)
+                if (msg.Message.find("bandDummy=true") != std::string::npos)
                     bandDummyLive->store(true);
             }
         });

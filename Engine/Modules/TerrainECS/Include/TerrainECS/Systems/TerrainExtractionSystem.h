@@ -7,6 +7,7 @@
 #include "Terrain/Heightfield.h" // HeightfieldData scratch for atlas normal regen
 #include "TerrainECS/TerrainAtlas.h" // kAtlasUpgradeFadeSeconds (device-free, pure)
 #include "TerrainECS/TerrainReprovisionDebounce.h" // coalesce SamplesPerMeter/size drags
+#include "Types/FlatMap.h"
 #include "Types/Types.h"
 
 #include <memory>
@@ -26,6 +27,7 @@ class TileStreamingManager;
 class AtlasResidencyController;
 class TerrainService;
 class TerrainFieldUploader;
+class TerrainSkyline;
 struct TerrainTileData;
 
 // ECS system that handles terrain data lifecycle and heightmap/splat/normal GPU upload.
@@ -75,23 +77,33 @@ public:
     // wants it.
     bool TryGetAtlasResidency(uint32 tiledTerrainIndex, AtlasResidencySnapshot& outSnapshot) const;
 
-    // Extraction ticks on which a terrain's regional grass controls existed but were not yet
-    // sampleable, so placement was refused for that terrain. Monotonic across the session, and
-    // the only frame-exact answer to "how long does adding a region blank the grass". A single
-    // step is the one tick a freshly created control texture needs; a climbing count is the
-    // gate firing repeatedly, which would be a defect rather than a transient.
+    // Extraction ticks on which placement was refused for a terrain because its grass control
+    // field was not sampleable: its first compose had not landed, or its texture was not yet
+    // uploaded and published. Monotonic across the session, and the frame-exact answer to "how
+    // long was the grass held back". A climb while a terrain waits for its first field (the
+    // compose runs as a job after a scene opens) is expected; a climb on a terrain whose field
+    // is already composed is the gate firing repeatedly, which would be a defect.
     uint64 GrassControlSuppressedTicks() const { return m_GrassControlSuppressedTicks; }
 
 private:
     uint64 m_GrassControlSuppressedTicks = 0;
 
-    // Marches the terrain skyline along the sun's azimuth for each view and leaves the answer
+    // Answers the terrain skyline along the sun's azimuth for each view and leaves the answer
     // on the sun-glare feature. Here rather than in the renderer because the renderer cannot
     // depend on TerrainECS (the dependency runs the other way), and the glare's render node has
     // a camera but no ECS world.
     void PublishSunGlareSkyline(ECS::World& world);
     // Reused across frames so the per-frame refill does not allocate.
     std::vector<Engine::Renderer::SunGlareRenderFeature::ViewSkyline> m_SkylineScratch;
+    // Each view's skyline, kept across frames, and the publish that last saw the view.
+    struct ViewSkylineState
+    {
+        std::unique_ptr<TerrainSkyline> Skyline;
+        uint64 LastPublish = 0;
+    };
+    FlatMap<uint32, ViewSkylineState> m_ViewSkylines;
+    std::vector<uint32> m_RetiredSkylineViews; // reused by the publish
+    uint64 m_SkylinePublish = 0;
     GrassWindVolumeExtractor m_GrassWindVolumes;
 
     // Drop every per-terrain tracker (tile streaming state, atlas controller, coarse-build/

@@ -81,7 +81,6 @@
 #include "Logger/Logger.h"
 #include "Mathematics/Types.h"
 #include "Editor/Shortcuts/EditorShortcuts.h"
-#include "Panels/SettingsPanel.h"
 #include "Platform/ContextMenu.h"
 #include "Platform/Window.h"
 #include "PlayMode/PlayModeManager.h"
@@ -2389,11 +2388,9 @@ HierarchyPanel::HierarchyPanel()
             m_OnTreeIconSizeWheelCommit(px);
     });
 
-    // Search bar placement and visibility are controlled via Settings.
+    // Search bar placement is controlled via Settings.
     auto built = BuildPanelSearchBar(
         "hierarchy-search-field",
-        []()
-        { return SettingsPanel::GetSearchBarsVisible(); },
         {},
         [this](const std::string& text)
         { ApplySearchFilter(text); },
@@ -2408,10 +2405,10 @@ HierarchyPanel::HierarchyPanel()
     m_SearchField = built.FieldPtr;
     if (m_SearchField)
         m_SearchField->SetTooltip("Search names, or combine filters: t:Light path:\"/World/Root\" name:Key id:42");
-    navigationBar->SetSearchBar(std::move(built.Root));
+    navigationBar->PlaceSearchAbove(m_SearchBar);
+    AddChild(std::move(built.Root));
     AddChild(std::move(navigationBar));
-    // The row, not the search inside it, is what the top/bottom setting moves.
-    EditorSearchBars::RegisterHosted(m_SearchBar, m_NavigationBar);
+    EditorSearchBars::Register(m_SearchBar);
 }
 
 void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
@@ -4057,7 +4054,7 @@ HierarchyPanel::~HierarchyPanel()
     m_RefreshQueued = false;
     ClearSearchHighlights();
     if (m_SearchBar)
-        SettingsPanel::UnregisterSearchBar(m_SearchBar);
+        EditorSearchBars::Unregister(m_SearchBar);
 
     if (m_ChangeNotifications && m_StructureSub)
     {
@@ -4994,8 +4991,8 @@ void HierarchyPanel::ApplyRenderLayerVisibility()
     m_Tree->RefreshFromProvider();
 }
 
-// has-* follows whether a bar is really on screen, so the navigation row only
-// rides up when there is a bar to make room for.
+// has-* follows whether a bar is really on screen, so the size bar and a bottom search only
+// ride up when there is a bar to make room for.
 void HierarchyPanel::SetHorizontalBarPresent(bool present)
 {
     if (m_Tree)

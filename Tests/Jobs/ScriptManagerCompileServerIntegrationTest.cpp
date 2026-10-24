@@ -6,7 +6,7 @@
 #include "Engine/Build/DotnetHost.h"
 #include "Jobs/WorkspaceId.h"
 #include "JobSystem/WorkStealingThreadPool.h"
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -80,7 +80,7 @@ TEST(ScriptManagerCompileServerIntegration, CompileProjectCanReferenceEcsAbiWhen
 #endif
 #ifdef _WIN32
     // Only run when the ECS ABI module is staged next to the test executable.
-    std::filesystem::path engineBinDir = GameEngine::PathUtils::GetExecutableDirectory();
+    std::filesystem::path engineBinDir = GameEngine::ApplicationPaths::GetExecutableDirectory();
     if (!std::filesystem::exists(engineBinDir / "GameEngine.ECS.ABI.dll"))
     {
         GTEST_SKIP() << "GameEngine.ECS.ABI.dll not found next to test executable; skipping";

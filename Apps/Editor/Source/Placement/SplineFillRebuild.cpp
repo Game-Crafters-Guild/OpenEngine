@@ -4,8 +4,11 @@
 #include "Logger/Logger.h"
 #include "Placement/PieceEntity.h"
 #include "Placement/TileLayout.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "Components/Terrain/Terrain.h"
+#include "ECS/World.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainECS/TerrainService.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +34,18 @@ constexpr uint32 kFillChunkCells = 128u;
 // whether or not the camera has ever been near it.
 constexpr float32 kOutsideFootprintHeight = 1.0e9f;
 
+// The tiled data of the terrain ResolveSurfaceHeightQuery reads (FindSurfaceHeightTerrain, when it
+// is planar and tiled), or null.
+const TerrainECS::TiledTerrainData* FindQueriedTiledTerrain(ECS::World& world)
+{
+    TerrainECS::TerrainService* service = TerrainECS::TerrainService::TryGet();
+    const Components::Terrain* terrain = TerrainECS::FindSurfaceHeightTerrain(world).Terrain;
+    if (!service || !terrain || terrain->Domain == Components::TerrainDomain::Spherical)
+        return nullptr;
+    return service->GetTiledTerrainData(
+        TerrainECS::TiledTerrainHandle{terrain->TiledTerrainHandle, terrain->TiledTerrainGeneration});
+}
+
 } // namespace
 
 WaterFillRun BuildWaterFillRun(ECS::World& world,
@@ -43,9 +58,20 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
     if (worldStations.empty())
         return run;
 
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(world);
-    const float32 spacingX = terrain.LatticeSpacingX();
-    const float32 spacingZ = terrain.LatticeSpacingZ();
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(world);
+    const TerrainECS::TiledTerrainData* tiled = terrain.IsValid() ? FindQueriedTiledTerrain(world) : nullptr;
+    // A tiled terrain's grid sits on its TILE lattice, the lattice ComposeTiledGroundBlock addresses. A
+    // cooked height store can sit on another lattice (the one SampleHeight reads), so the fill aligns
+    // to the tiles it composes, not to the query's lattice.
+    const bool tileLattice = tiled && tiled->Config.TileWorldSize > 0.0f &&
+                             tiled->Config.TileConfig.HeightmapWidth >= 2u &&
+                             tiled->Config.TileConfig.HeightmapHeight >= 2u;
+    const float32 spacingX =
+        tileLattice ? tiled->Config.TileWorldSize / static_cast<float32>(tiled->Config.TileConfig.HeightmapWidth - 1u)
+                    : terrain.LatticeSpacingX();
+    const float32 spacingZ =
+        tileLattice ? tiled->Config.TileWorldSize / static_cast<float32>(tiled->Config.TileConfig.HeightmapHeight - 1u)
+                    : terrain.LatticeSpacingZ();
     if (!terrain.IsValid() || !(spacingX > 0.0f) || !(spacingZ > 0.0f))
     {
         run.Outcome = WaterFillOutcome::NoTerrain;
@@ -55,7 +81,7 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
     // the camera, so the store holds no answer for a corridor the camera is not
     // near. Without the system that composes it there is no ground source at all,
     // which is the same "nothing to fill against" NoTerrain already names.
-    if (terrain.Tiled && !modifierSystem)
+    if (tiled && !modifierSystem)
     {
         run.Outcome = WaterFillOutcome::NoTerrain;
         return run;
@@ -81,8 +107,8 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
         maxZ = std::max(maxZ, station.Position.z);
     }
     const float32 margin = reach + std::max(spacingX, spacingZ) * 2.0f;
-    const float32 originX = terrain.LatticeOriginX();
-    const float32 originZ = terrain.LatticeOriginZ();
+    const float32 originX = tileLattice ? tiled->WorldOriginX : terrain.FootprintOriginX();
+    const float32 originZ = tileLattice ? tiled->WorldOriginZ : terrain.FootprintOriginZ();
     const int32 firstX = static_cast<int32>(std::floor((minX - margin - originX) / spacingX));
     const int32 lastX = static_cast<int32>(std::ceil((maxX + margin - originX) / spacingX));
     const int32 firstZ = static_cast<int32>(std::floor((minZ - margin - originZ) / spacingZ));
@@ -116,10 +142,8 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
     // with no resampling.
     std::vector<float32> composed;
     const bool composedWindow =
-        terrain.Tiled &&
-        modifierSystem->ComposeTiledGroundBlock(*terrain.Tiled, terrain.HeightScale,
-                                                terrain.OriginY, firstX, firstZ, grid.CountX,
-                                                grid.CountZ, composed);
+        tileLattice && modifierSystem->ComposeTiledGroundBlock(*tiled, terrain.HeightScale(), terrain.OriginY(),
+                                                               firstX, firstZ, grid.CountX, grid.CountZ, composed);
 
     std::vector<float32> heights(static_cast<size_t>(grid.CountX) * grid.CountZ, 0.0f);
     for (uint32 cz = 0; cz < grid.CountZ; ++cz)
@@ -136,15 +160,17 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
             }
             if (composedWindow)
             {
-                heights[index] = terrain.OriginY + composed[index] * terrain.HeightScale;
+                heights[index] = terrain.OriginY() + composed[index] * terrain.HeightScale();
                 continue;
             }
-            // Single terrain: one heightfield over the whole footprint, always
-            // resident. SampleHeight rejects the same rectangle ContainsXZ just
-            // accepted, so a failure here is a boundary corner an ulp outside it —
-            // the edge of the world, which bounds the surface like a bank.
-            if (!terrain.SampleHeight(worldX, worldZ, heights[index]))
-                heights[index] = kOutsideFootprintHeight;
+            // A fill floods the ground as drawn up close, so it takes only the finest height
+            // (RequireFinest). A corner without it (a page not on the CPU yet, or a height store
+            // still cooking) bounds the surface like a bank, as the edge of the world does.
+            TerrainECS::SurfaceHeightSample sample;
+            heights[index] = terrain.SampleHeight(Mathematics::Vector3(worldX, 0.0f, worldZ),
+                                                  TerrainECS::SurfaceHeightPolicy::RequireFinest, sample)
+                                 ? sample.Height
+                                 : kOutsideFootprintHeight;
         }
     }
     grid.Heights = heights;

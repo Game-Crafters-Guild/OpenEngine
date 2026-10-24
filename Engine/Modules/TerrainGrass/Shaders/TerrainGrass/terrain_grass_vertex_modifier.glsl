@@ -91,6 +91,7 @@ struct TerrainParamsEntry
     float GrassRootFadeEnd;
     uint GrassControlBindless;
     uint ColorMapBindless;
+    float GrassGroundTintHeight;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer

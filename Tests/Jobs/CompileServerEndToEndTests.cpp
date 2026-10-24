@@ -3,7 +3,7 @@
 #include "Jobs/CompileServerClient.h"
 #include "Jobs/PipeTransport.h"
 #include "Jobs/WorkspaceId.h"
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/PackageScriptCompile.h"
 #include "Scripting/PathResolver.h"
@@ -524,7 +524,7 @@ std::string DumpDiagnostics(const CompileServerResponse& resp)
 CompileServerRequestDesc MakeGeneratorRequest(const std::filesystem::path& workspace,
                                               const std::string& assemblyName)
 {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     CompileServerRequestDesc desc;
     desc.ProjectRoot = workspace;
     desc.AssemblyName = assemblyName;
@@ -540,7 +540,7 @@ CompileServerRequestDesc MakeGeneratorRequest(const std::filesystem::path& works
 // GE0018: a GameSystem the generator cannot construct — neither the generated
 // registration nor the runtime's reflection discovery can instantiate it.
 TEST(CompileServerEndToEnd, GeneratorErrorFailsCompile) {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     ASSERT_TRUE(std::filesystem::exists(exeDir / "SourceGenerators" / "EntitySystemGenerator.dll"))
         << "generator not staged next to the test exe — the assertions below would pass vacuously";
     ASSERT_TRUE(std::filesystem::exists(exeDir / "GameEngine.Scripting.ABI.dll"));
@@ -583,7 +583,7 @@ TEST(CompileServerEndToEnd, GeneratorErrorFailsCompile) {
 // GE0017: a non-partial GameSystem gets no generated registration, but the
 // runtime's reflection discovery still finds and runs it.
 TEST(CompileServerEndToEnd, GeneratorWarningKeepsCompileSuccessful) {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     ASSERT_TRUE(std::filesystem::exists(exeDir / "SourceGenerators" / "EntitySystemGenerator.dll"))
         << "generator not staged next to the test exe — the assertions below would pass vacuously";
 
@@ -629,7 +629,7 @@ TEST(CompileServerEndToEnd, GeneratorWarningKeepsCompileSuccessful) {
 // GE0018 leg below reports Success with a registration-less assembly — pre-gate
 // behavior, silently restored by request ordering.
 TEST(CompileServerEndToEnd, GeneratorErrorStillFailsAfterAGeneratorLessRequest) {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     ASSERT_TRUE(std::filesystem::exists(exeDir / "SourceGenerators" / "EntitySystemGenerator.dll"))
         << "generator not staged next to the test exe — the GE0018 assertion would pass vacuously";
     ASSERT_TRUE(std::filesystem::exists(exeDir / "GameEngine.Scripting.ABI.dll"));

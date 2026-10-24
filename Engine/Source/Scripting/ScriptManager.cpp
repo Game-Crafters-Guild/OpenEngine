@@ -5,7 +5,7 @@
 #include "Assets/Packages/PackageNativeCache.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Assets/FileWatchingService.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Engine/Build/CancellableShellProcess.h"
 #include "Engine/Build/DotnetHost.h"
 #include "Editor/EditorIPCClient.h"
@@ -211,10 +211,10 @@ bool ScriptManager::Initialize(const ScriptsConfig& config, JobSystem::WorkSteal
     // assemblies — except inside a macOS app bundle, which is never written to (a write
     // invalidates its code signature), so they go to the user-writable scripts assemblies
     // directory instead.
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
-    m_EditorScriptsDirectory = PathUtils::GetInstallAssetsRoot();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
+    m_EditorScriptsDirectory = ApplicationPaths::GetInstallAssetsRoot();
     m_EditorAssembliesDirectory = exeDir;
-    if (!PathUtils::GetBundleResourcesDirectory(exeDir).empty() && !m_AssembliesDirectory.empty())
+    if (!ApplicationPaths::GetBundleResourcesDirectory(exeDir).empty() && !m_AssembliesDirectory.empty())
     {
         m_EditorAssembliesDirectory = m_AssembliesDirectory;
     }
@@ -273,7 +273,7 @@ bool ScriptManager::Initialize(const ScriptsConfig& config, JobSystem::WorkSteal
         RemoveStaleGeneratedProject();
 
     // Log resolved critical paths (exe-relative)
-    Logger::Log::Info("Executable dir: {}", PathUtils::GetExecutableDirectory().string());
+    Logger::Log::Info("Executable dir: {}", ApplicationPaths::GetExecutableDirectory().string());
     Logger::Log::Info("Assemblies dir: {}", GetAssembliesDirectory().string());
     Logger::Log::Info("Scripts root: {}", m_ScriptsDirectory.string());
 
@@ -2906,7 +2906,7 @@ bool ScriptManager::EnsureEditorAutoProject(std::filesystem::path& outProjectPat
             (void)ReadFileTextShared(projectPath, existingContent);
         }
 
-        const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+        const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
         const std::filesystem::path engineBinDir = ScriptingPaths::ResolveEngineManagedDirectory();
         std::string engineBinDirAbs = engineBinDir.generic_string();
         if (!engineBinDirAbs.empty() && engineBinDirAbs.back() != '/' && engineBinDirAbs.back() != '\\')

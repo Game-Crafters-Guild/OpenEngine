@@ -399,12 +399,12 @@
 }
 
 /* The hint in an empty comment field: the search fields' placeholder look (theme/widgets.css
-   .search-field-with-filter-placeholder), dim and italic. */
+   .search-field-with-filter-placeholder), quiet and italic. */
 .markup-inspector-comment-placeholder {
 	position: absolute;
 	left: 7px;
 	top: 5px;
-	color: var(--ui_color_text_dim);
+	color: var(--ui_color_text_placeholder);
 	font-style: italic;
 	pointer-events: none;
 }

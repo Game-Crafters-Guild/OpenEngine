@@ -20,8 +20,11 @@ struct TerrainHeightSourceInputs
     /// The terrain's base is a heightmap whose cooked store is open: cooked into the project's cache
     /// in the editor, or the packaged terrain container in the Player (which never cooks on load).
     bool CookedStoreOpen = false;
-    /// The terrain's page table is within the platform's cap (PageTableRefusal, HeightPageProfile) and
-    /// its pyramid lies on the tile lattice where the CBT and the modifier overlay need it.
+    /// The terrain's pyramid lies on the tile lattice where the CBT and the modifier overlay need it
+    /// (a cooked store on its own grid lies on it too, without an overlay: PageOverlayAllowance).
+    bool PagesOnLattice = false;
+    /// The pages are on the lattice and the page table is within the platform's cap
+    /// (PageTableRefusal, HeightPageProfile).
     bool PageTableFits = false;
     /// The device runs the wide CBT arm, the one that binds the page table and the page cache
     /// (bindings 22 and 23). The narrow arm (no 64-bit shader integers, WebGPU) has no storage
@@ -34,5 +37,11 @@ struct TerrainHeightSourceInputs
 /// table fits on the GPU and the GPU arm reads pages. Otherwise it keeps its unified or atlas height
 /// texture.
 bool TerrainHeightIsPaged(const TerrainHeightSourceInputs& inputs);
+
+/// True when the terrain's CPU height (SurfaceHeightQuery: picks, placement, navigation, the skyline)
+/// is read from its height pages: a page source exists for it on the lattice. The GPU arm, the GPU
+/// page table's cap and pending modifiers do not matter: the CPU pages exist for every terrain that
+/// has a page source, and take its modifier overlay once it is baked.
+bool TerrainHeightHasCpuPages(const TerrainHeightSourceInputs& inputs);
 
 } // namespace GameEngine::TerrainECS

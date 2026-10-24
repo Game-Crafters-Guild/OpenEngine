@@ -21,7 +21,7 @@ FileLogLevel ResolveFileLogLevel()
 	const char* configured = std::getenv(kFileLogLevelEnvVar);
 	if (configured != nullptr && configured[0] != '\0')
 	{
-		String spelling(configured);
+		std::string spelling(configured);
 		std::transform(spelling.begin(), spelling.end(), spelling.begin(),
 					   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
@@ -77,7 +77,7 @@ void FileSink::Write(const LogMessage& message)
 
 	// The level is always written: a log file whose lines carry no severity cannot
 	// be triaged, and FileSink::Config deliberately has no switch for it.
-	String formatted =
+	std::string formatted =
 	    FormatMessage(message, m_Config.includeTimestamp, /*includeLevel=*/true, m_Config.includeSource);
 	m_File << formatted << '\n';
 	m_CurrentSize += formatted.size() + 1; // account for newline
@@ -102,7 +102,7 @@ bool FileSink::ShouldLog(LogLevel level) const
 	return level >= m_Config.minLevel;
 }
 
-String FileSink::GetName() const
+std::string FileSink::GetName() const
 {
 	return "FileSink";
 }

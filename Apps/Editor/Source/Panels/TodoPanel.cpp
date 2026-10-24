@@ -198,7 +198,6 @@ void TodoPanel::BuildUI()
     // Search bar
     auto built = BuildPanelSearchBar(
         "todo-search-field",
-        []() { return SettingsPanel::GetSearchBarsVisible(); },
         [this](const std::string& value)
         {
             m_SearchQuery = value;
@@ -217,6 +216,7 @@ void TodoPanel::BuildUI()
         });
     m_SearchBar = built.RootPtr;
     m_SearchField = built.FieldPtr;
+    container->AddClass("panel-search-host");
     container->AddChild(std::move(built.Root));
     SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
     

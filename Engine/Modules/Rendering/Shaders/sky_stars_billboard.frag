@@ -4,7 +4,7 @@
 // spikes, at the radiance sky_stars_billboard.vert computed, added to scene colour at the frame's
 // pre-exposure, and its luminance added to the star light (SkyStarLight), which the tonemap's night
 // tint reads to keep the stars' colour. The sparkle's points are narrower than a pixel, so it is averaged over four taps of a
-// rotated grid in the pixel; the round shape is smooth at the pixel scale and takes one.
+// rotated grid in the pixel; the round core is the pixel's mean in closed form and takes one evaluation.
 
 #include "Includes/sky_star_model.glsl"
 

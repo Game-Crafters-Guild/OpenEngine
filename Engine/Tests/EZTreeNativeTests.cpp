@@ -2,7 +2,7 @@
 
 #include "AssetDatabase/AssetStore_TextJsonl.h"
 #include "Assets/TextureCook.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "ECS/ComponentFactory.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/SystemScheduling.h"
@@ -548,7 +548,7 @@ constexpr EZTree::LeafType kLeafTypes[] = {
 // fixtures, never the source tree.
 std::filesystem::path StagedEZTreeManifestFile()
 {
-    return PathUtils::GetExecutableDirectory() / "TestData" / "Packages" / "eztree" /
+    return ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages" / "eztree" /
            "Assets" / ".assetmanifest";
 }
 

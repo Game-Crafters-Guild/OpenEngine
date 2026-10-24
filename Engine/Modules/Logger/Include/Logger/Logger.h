@@ -3,17 +3,18 @@
 #include "Logger/Backtrace.h"
 #include "Logger/LogLevel.h"
 #include "Logger/LogSink.h"
-#include "Logger/Types.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <format>
 #include <future>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Logger
 {
@@ -40,7 +41,7 @@ class Log
 
     static void Initialize(const Config& config);
     static void Shutdown();
-    static void AddSink(UniquePtr<LogSink> sink);
+    static void AddSink(std::unique_ptr<LogSink> sink);
     static void ClearSinks();
     static void SetLogLevel(LogLevel level);
     static LogLevel GetLogLevel();
@@ -265,7 +266,7 @@ class Log
     struct LoggerState
     {
         Config m_Config;
-        Vector<UniquePtr<LogSink>> Sinks;
+        std::vector<std::unique_ptr<LogSink>> Sinks;
         std::mutex Mutex;
         std::atomic<bool> Initialized{false};
         std::atomic<LogLevel> m_EffectiveMinLevel{LogLevel::Off};
@@ -294,7 +295,8 @@ class Log
   private:
     static LoggerState& GetState();
 
-    DISALLOW_COPY_AND_ASSIGN(Log);
+    Log(const Log&) = delete;
+    Log& operator=(const Log&) = delete;
 };
 
 } // namespace Logger

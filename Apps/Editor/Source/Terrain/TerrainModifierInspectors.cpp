@@ -70,12 +70,12 @@ using namespace InspectorDrag;
 const char* GrassHeightTooltip()
 {
     static const std::string text =
-        "Blade height inside this region, as a percentage of the terrain's own grass height. "
-        "100% leaves the terrain's grass alone. Regions blend toward their target in priority "
-        "order across the volume's falloff, so a later 100% region restores the terrain's grass "
+        "Blade height inside this volume, as a percentage of the terrain's own grass height. "
+        "100% leaves the terrain's grass alone. Volumes blend toward their target in priority "
+        "order across each volume's falloff, so a later 100% volume restores the terrain's grass "
         "over an earlier reduction; 0% removes it. Below about "
         + std::to_string(static_cast<int32>(kTerrainGrassHeightReadableFloor * 100.0f + 0.5f))
-        + "% a region reads as the ground colour under it rather than as short grass - the "
+        + "% a volume reads as the ground color under it rather than as short grass - the "
           "control keeps working all the way down, it just stops reading as grass. To make a "
           "patch look sparser rather than shorter, use Density.";
     return text.c_str();
@@ -191,7 +191,7 @@ void AddBlendModeDropdown(UIElement* parent, TerrainModifierBlend currentBlend,
             ? "How the modifier combines with existing terrain. Min cuts (never raises), Max "
               "unions (never lowers); the Smooth pair rounds the seam over Blend Smoothing. "
               "Average POOLS instead: every effect sharing a pool contributes its value and "
-              "its weight, and the pool applies the weighted average once, so two regions "
+              "its weight, and the pool applies the weighted average once, so two volumes "
               "covering the same ground land between their answers instead of the later one "
               "overwriting the earlier. A pooled effect applies at the pool's slot, not its "
               "own. Pools are per effect type — a Noise pool and a Flatten pool of the same "
@@ -231,9 +231,9 @@ TextField* AddPoolGroupRow(UIElement* parent, const std::string& initial)
     static_assert(kTerrainPoolGroupCapacity == 32,
                   "The Pool Group tooltip below quotes 31 characters. Update it with the capacity.");
     InspectorUI::AddLabel(row, "Pool Group",
-        "LEAVE BLANK unless you need this region kept apart. Blank means it averages with every "
+        "LEAVE BLANK unless you need this volume kept apart. Blank means it averages with every "
         "other blank one where they overlap, which is what a junction is. Naming a pool moves "
-        "this region into a system of its own: it averages with regions of the same name and "
+        "this volume into a system of its own: it averages with volumes of the same name and "
         "OVERWRITES the rest instead of averaging with them. Up to 31 characters — a longer name "
         "is refused rather than shortened, because two names that agree that far would merge "
         "into one pool.");
@@ -309,7 +309,7 @@ void AddPoolingRows(const InspectorContext& ctx, const TEffect* comp)
             groupField->SetValue(std::string(EffectPoolName(*c)));
             Logger::Log::Warning(
                 "Pool group name is {} characters; the limit is {}. The edit was refused "
-                "rather than truncated, because a truncated name would merge this region "
+                "rather than truncated, because a truncated name would merge this volume "
                 "into another pool. Shorten the name and commit again.",
                 value.size(), sizeof(c->PoolGroup) - 1);
             return;
@@ -376,7 +376,7 @@ void AddOrphanEffectNotice(const InspectorContext& ctx)
         return;
     ctx.Parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(
         "No Terrain Modifier Volume on this entity, so this effect is inactive. "
-        "Add one to give it a region."));
+        "Add one to give it a place to apply."));
 }
 
 // Effects stack in the order their sections appear under the volume; dragging a
@@ -684,11 +684,11 @@ void RegisterTerrainModifierInspectors()
                               || comp->Shape == TerrainVolumeShape::SplineArea;
         if (splineShape)
         {
-            InspectorUI::AddLine(ctx.Parent, "Region comes from the Spline on this entity");
+            InspectorUI::AddLine(ctx.Parent, "Shape comes from the Spline on this entity");
             if (!ctx.World->GetComponent<SplineComponent>(ctx.Entity))
             {
                 ctx.Parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(
-                    "No Spline component on this entity, so this volume has no region and is "
+                    "No Spline component on this entity, so this volume has no shape and is "
                     "ignored. Add a Spline, or pick a Circle / Rectangle shape."));
             }
             if (AnyActiveSphericalTerrain(ctx.World))
@@ -709,7 +709,7 @@ void RegisterTerrainModifierInspectors()
             };
             auto* dd = InspectorUI::AddDropdownRow(ctx.Parent, "Shape", kShapeOptions,
                                       static_cast<int>(comp->Shape),
-                                      "Region of effect. Spline shapes take their geometry from "
+                                      "Where the effects apply. Spline shapes take their geometry from "
                                       "the Spline on this entity: Path is the swept band, Area "
                                       "also fills what a closed spline encloses. Global covers "
                                       "every terrain at full strength, with no edge.");
@@ -802,7 +802,7 @@ void RegisterTerrainModifierInspectors()
         traits.MissingHostWarning =
             "This effect has no Terrain Modifier Volume on its entity, so it is inactive. "
             "Add a Terrain Modifier Volume (the effect nests under it, and the volume defines "
-            "the region it applies to), or remove the effect.";
+            "where it applies), or remove the effect.";
         Editor::EditorComponentTraitsRegistry::Get().Register(
             ECS::GetComponentTypeId<TerrainModifierVolume>(), std::move(traits));
     }
@@ -854,7 +854,7 @@ void RegisterTerrainModifierInspectors()
 
         AddClaimsRow(ctx, comp,
             "Stop at ground another volume has claimed, instead of grading through it. Turn this "
-            "OFF for a region that owns its own ground, or its own claim holds it back. Answered "
+            "OFF for a volume that owns its own ground, or its own claim holds it back. Answered "
             "PER EFFECT, in every blend mode: a run that owns its ground grades it while the path "
             "beside it stops at the claim.");
         AddPoolingRows(ctx, comp);
@@ -879,7 +879,7 @@ void RegisterTerrainModifierInspectors()
         AddComponentFloatRowWithDrag<TerrainGroundClaimEffect>(
             ctx.Parent, "Strength", comp->Strength, w, e, n,
             [](TerrainGroundClaimEffect& u, float v) { u.Strength = v; },
-            "How strongly this region owns its ground, from 0 (not at all) to 1 (entirely), "
+            "How strongly this volume owns its ground, from 0 (not at all) to 1 (entirely), "
             "scaled by the volume's own falloff. Any height effect set to stop at claimed ground "
             "is held back by it, whatever that effect blends with, as long as this claim applies "
             "FIRST. This effect writes no height of its own.",
@@ -914,8 +914,8 @@ void RegisterTerrainModifierInspectors()
             // /utf-8, so a literal superscript would depend on the compiler's source codepage.
             [base](float v) { return GrassMultiplierLabel("Density", v, base.BladesPerSquareMeter,
                                                           "/m\xC2\xB2"); },
-            "How much of the terrain's own grass density this region keeps. 100% leaves it alone, "
-            "0% clears the region. Blades keep their positions and randomness, so lowering this "
+            "How much of the terrain's own grass density this volume keeps. 100% leaves it alone, "
+            "0% clears the volume. Blades keep their positions and randomness, so lowering this "
             "thins the field rather than reshuffling it, and it can never place more grass than "
             "the terrain already pays for.");
 
@@ -990,8 +990,8 @@ void RegisterTerrainModifierInspectors()
 
         AddClaimsRow(ctx, comp,
             "Stop at ground another volume has claimed, instead of raising or lowering through "
-            "it. Turn this OFF for a region that owns its own ground, or its own claim holds it "
-            "back. Answered PER EFFECT, in every blend mode: a region that owns its ground shapes "
+            "it. Turn this OFF for a volume that owns its own ground, or its own claim holds it "
+            "back. Answered PER EFFECT, in every blend mode: a volume that owns its ground shapes "
             "it while the one beside it stops at the claim.");
         AddPoolingRows(ctx, comp);
     });
@@ -1085,8 +1085,8 @@ void RegisterTerrainModifierInspectors()
 
         AddClaimsRow(ctx, comp,
             "Stop at ground another volume has claimed, instead of roughening through it. Turn "
-            "this OFF for a region that owns its own ground, or its own claim holds it back. "
-            "Answered PER EFFECT, in every blend mode: a region that owns its ground shapes it "
+            "this OFF for a volume that owns its own ground, or its own claim holds it back. "
+            "Answered PER EFFECT, in every blend mode: a volume that owns its ground shapes it "
             "while the one beside it stops at the claim.");
         AddPoolingRows(ctx, comp);
     });
@@ -1148,8 +1148,8 @@ void RegisterTerrainModifierInspectors()
 
         AddClaimsRow(ctx, comp,
             "Stop at ground another volume has claimed, instead of stamping through it. Turn this "
-            "OFF for a region that owns its own ground, or its own claim holds it back. Answered "
-            "PER EFFECT, in every blend mode: a region that owns its ground shapes it while the "
+            "OFF for a volume that owns its own ground, or its own claim holds it back. Answered "
+            "PER EFFECT, in every blend mode: a volume that owns its ground shapes it while the "
             "one beside it stops at the claim.");
         AddPoolingRows(ctx, comp);
     });

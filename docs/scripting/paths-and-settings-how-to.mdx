@@ -44,7 +44,7 @@ std::filesystem::path saves    = GameEngine::StandardPaths::GameSavesRoot("My Ga
   - `GameSavesRoot(app)` → `<UserDataRoot>/saves`
 
 Notes:
-- `PathUtils::SanitizeForFolderName()` sanitizes `app` to keep folder names filesystem-safe across platforms.
+- `ApplicationPaths::SanitizeForFolderName()` sanitizes `app` to keep folder names filesystem-safe across platforms.
 
 ## Engine-resolved workspace and project roots
 
@@ -152,12 +152,12 @@ userSettings.Save();
 
 ## The OS Documents folder
 
-Header: `Engine/Include/Core/Application.h` (`PathUtils`)
+Header: `Engine/Include/Core/ApplicationPaths.h`
 
 ```cpp title="The OS Documents folder"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
-std::filesystem::path docs = GameEngine::PathUtils::GetUserDocumentsDirectory();
+std::filesystem::path docs = GameEngine::ApplicationPaths::GetUserDocumentsDirectory();
 ```
 
 Platform behavior:

@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include "Core/ApplicationPaths.h"
 #include "Assets/AssetManager.h"
 #include "Core/Engine.h"
 #include "Engine/Build/AssetCollector.h"
@@ -106,7 +107,7 @@ TEST_F(TerrainPageExportTests, EachShippedHeightmapShipsOneContainerOfItsCookedP
     ASSERT_EQ(result.Containers.size(), 1u);
     // Where the Player opens it: under the asset root of a package whose executable sits in `content`.
     EXPECT_EQ(result.Containers.front(),
-              PathUtils::InstallAssetsRootFor(content) / "Cooked" / "Terrain" / (guid.ToString() + ".geterrain"));
+              ApplicationPaths::InstallAssetsRootFor(content) / "Cooked" / "Terrain" / (guid.ToString() + ".geterrain"));
 
     PageStreaming::PageStoreReader reader;
     ASSERT_EQ(PageStreaming::OpenTerrainContainerField(result.Containers.front(), PageStreaming::PageFieldKind::Height,

@@ -947,7 +947,7 @@ TEST(SunGlareSourceContract, TheSkylineTermIsIndependentOfWhereTheCameraPoints)
     const std::string publisher = LoadRepoFileWithoutComments(
         "Engine/Modules/TerrainECS/Source/Systems/TerrainExtractionSystem.cpp");
     ASSERT_FALSE(publisher.empty());
-    EXPECT_NE(publisher.find("TerrainHorizonTangent("), std::string::npos)
+    EXPECT_NE(publisher.find("Skyline.Tangent("), std::string::npos)
         << "nothing marches the terrain skyline any more";
     EXPECT_NE(publisher.find("settings.scatteringSunDir[0], settings.scatteringSunDir[2]"),
               std::string::npos)

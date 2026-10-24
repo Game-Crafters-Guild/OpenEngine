@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "Engine/Rendering/CameraAspectRatio.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/Vector3.h"
 #include "Types/Color.h"
 
@@ -16,8 +17,6 @@ using GameEngine::Mathematics::Vector3;
 namespace
 {
 
-constexpr float kPi = 3.14159265358979323846f;
-
 // Blue frame color shared by the ortho rectangle and the perspective frame.
 const Color kFrameColor(0.25f, 0.55f, 1.0f, 1.0f);
 constexpr float kFrameThickness = 2.0f;
@@ -26,11 +25,6 @@ constexpr float kFrameThickness = 2.0f;
 // drawn (clamped to the camera's near/far). Far enough to read clearly without
 // dominating the view; the frustum has the same framing at any depth.
 constexpr float kFrameGuideDistance = 4.0f;
-
-float ToRadians(float degrees)
-{
-    return degrees * (kPi / 180.0f);
-}
 
 // Resolve the projection aspect (width / height) for the framed area. For a
 // Native preset the live Game View size isn't available to a Scene View gizmo,
@@ -120,7 +114,7 @@ void CameraFrameGizmo::Render(GizmoRenderContext& context)
     // Perspective: draw a single rectangle for the camera's framing at a guide
     // distance in front of the camera. The full frustum's connecting edges read
     // as a noisy "cross"; one rectangle (matching the ortho case) is clearer.
-    const float halfFovY = ToRadians(m_Params.FovY) * 0.5f;
+    const float halfFovY = Mathematics::ToRadians(m_Params.FovY) * 0.5f;
     const float tanHalf  = std::tan(halfFovY);
     float dist = kFrameGuideDistance;
     if (dist < m_Params.NearZ) dist = m_Params.NearZ;

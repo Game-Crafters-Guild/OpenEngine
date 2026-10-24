@@ -57,45 +57,45 @@ Each star sends the illuminance of its magnitude: a magnitude 0 star gives 2.54e
 Some terms model the sky, some depend on who looks at it, and some are a look:
 
 - **The sky (physical).** The count law of the star field, each star's flux, the extinction along the star, the visibility threshold against the sky behind it, and the twinkle's amount by airmass.
-- **The observer.** Eye draws the stars as a dark-adapted eye sees them: the glare around a bright star (CIE 146) and faint stars fading to white. Camera draws the same stars without the glare, each in its catalog color. The visibility threshold is the eye's for both observers: the limit is the density of the field, a setting.
+- **Seen by.** Camera, the default, draws every star in its own color, with no glare. Eye draws the stars as an eye used to the dark sees them: the glare around a bright star (CIE 146) and faint stars fading to white. Both use the eye's visibility threshold; Limit sets how many stars show.
 - **The look (artistic).** The compression, the glow, the spikes, the core's scale, the sparkle shape, the twinkle rate and the night tint.
 
-The engine ships the **Vivid** look as its default. Vivid is artistic and uses the eye. The **Physical** look is one click away: it sets every artistic setting to its physical value and uses the camera.
+The engine ships the **Vivid** look, seen by a camera, as its default. Vivid is artistic. The **Physical** preset is one pick away: it sets every artistic setting to its physical value.
 
 - **Extinction.** The air dims and reddens a star near the horizon. The engine reads the atmosphere's transmittance along the star's direction, as it does for the sun.
-- **Core.** A star is a soft round point about two pixels wide (the physical core; **Core** scales it). Every star has the same core: a bright star is a brighter point with a glare and a glow around it, not a wider disk. The star's light stays the same at every screen resolution and at every position on the screen.
-- **Glare.** The eye scatters a small part of a bright star's light around it (disability glare, CIE 146). With the **Eye** observer the engine draws this glare. The light of the glare comes out of the star's core, so the total light of the star does not change. The glare is faint. For a stronger glow, use **Glow**. The **Camera** observer draws no glare.
-- **Color.** Each star has the color of its temperature, reddened by the air near the horizon. With the **Eye** observer, faint stars fade to white, as the eye's rod vision sees them: a star brighter than magnitude 3.5 keeps its full color, and the color fades to white between magnitude 3.5 and magnitude 5.5. With the **Camera** observer, every star keeps its color. The highlight compression does not change the color.
+- **Core.** A star is a soft round point about two pixels wide (the physical core; **Core** scales it). Every star has the same core: a bright star is a brighter point with a glare and a glow around it, not a wider disk. Each pixel shows the core's light over the pixel's whole area. So in the scene, before tone mapping, a star's light stays the same at every screen resolution, at every position on the screen and as the camera moves. On screen, a core narrower than a pixel still changes a little as it crosses from one pixel to the next: about 6 % at Core 0.6, about 2.5 % at the default 0.75 and about 1.5 % at 0.85. Which pixel is brightest, and how bright it is, also change as the star moves.
+- **Glare.** The eye scatters a small part of a bright star's light around it (disability glare, CIE 146). With **Seen by: Eye** the engine draws this glare. The light of the glare comes out of the star's core, so the total light of the star does not change. The glare is faint. For a stronger glow, use **Glow**. **Seen by: Camera** draws no glare.
+- **Color.** Each star has the color of its temperature, reddened by the air near the horizon. With **Seen by: Eye**, faint stars fade to white, as the eye's rod vision sees them: a star brighter than magnitude 3.5 keeps its full color, and the color fades to white between magnitude 3.5 and magnitude 5.5. With **Seen by: Camera**, every star keeps its color. The highlight compression does not change the color.
 - **Visibility.** The eye sees a fainter star against a darker sky. The engine uses the eye's threshold for a point of light against a background (Schaefer 1993): the limiting magnitude is the setting's value under a moonless sky, about 4 under a full-moon sky, and about -4 in daylight. The engine reads the sky behind each star, so at dusk the bright stars come out first, and near the moon fewer stars show.
 - **Twinkle.** Stars near the horizon twinkle (scintillation). Stars overhead stay steady.
 
 ## Star settings
 
-The star settings are on the **Sky Environment** component, in the inspector's **Stars** section. The observer and the two physical settings come first. The **Artistic** group follows: these settings make the stars look better on a screen, and their neutral values give the physical sky. The defaults are the **Vivid** look, which is artistic.
+The star settings are on the **Sky Environment** component, in the inspector's **Stars** section. The **Preset** list and **Seen by** come first, then the **Visibility** group with the two physical settings, Limit and Twinkle. The **Artistic** group follows: these settings make the stars look better on a screen, and their neutral values give the physical sky. The defaults are the **Vivid** look, which is artistic.
 
 | Setting | Scene key | Kind | Default | What it does |
 |---|---|---|---|---|
-| Observer | `StarObserver` | The observer | Eye | Eye draws the stars as a dark-adapted eye sees them (glare, faint stars fading to white); Camera draws the same stars without the glare, each in its catalog color. A look sets it: Physical uses Camera, the other looks use Eye. |
+| Seen by | `StarObserver` | Seen by | Camera | Who looks at the sky. Camera draws every star in its own color, with no glare. Eye draws the stars as an eye used to the dark sees them: a glare around bright stars, and faint stars that fade to white. The presets do not change it, so every preset works with either. |
 | Limit | `StarLimitingMagnitude` | Physical | 7.25 | The limiting magnitude: the faintest star that the engine draws under a moonless sky. 6.5 is an average sky seen by eye, 7.25 a dark site. Use up to 8 for a camera. Lower values draw fewer stars. A brighter sky lowers the limit by the eye's threshold. |
 | Twinkle | `StarTwinkleAmount` | Physical | 0.3 | How far a star's brightness swings at about 6 degrees above the horizon (scintillation). Stars overhead stay steady. 0 gives still stars. |
 | Highlights | `StarHighlightCompression` | Artistic | 0.775 | Makes the bright stars less bright, relative to the faint stars. 1 is physical: a magnitude -1.5 star is 1,585 times as bright as a magnitude 6.5 star. 0.775 makes it 300 times as bright, so the brightest stars do not clip at a night exposure. |
 | Glow | `StarGlow` | Artistic | 0.9 | A soft glow around the brightest stars, as a multiple of the star's own light: 1 adds the star's light again around it. It acts on stars brighter than magnitude 3, in full on stars brighter than magnitude 1.5, with either shape. The glow adds light around the core or the sparkle, which keeps the brightness that it has with no glow. 0 is physical. The range is 0 to 4. |
 | Twinkle rate | `StarTwinkleRate` | Artistic | 1 | How fast the twinkle swings, as a multiple of a slow twinkle. At 1 the fastest swing is about 2 Hz. The most, 12, keeps the fastest swing under 30 times a second. Real scintillation is faster still. |
 | Shape | `StarShape` | Artistic | Point | **Point** is the physical round core. **Sparkle** draws every star as a four-pointed sparkle. |
-| Core | `StarCoreScale` | Artistic | 0.85 | The scale of every star's core. 1 is the physical point. A smaller value gives a tighter, brighter point. The range is 0.5 to 3. |
+| Core | `StarCoreScale` | Artistic | 0.75 | The scale of every star's core. 1 is the physical point. A smaller value gives a tighter, brighter point. The range is 0.5 to 3. |
 | Spikes | `StarSpikes` | Artistic | 0.2 | Four diffraction spikes on the stars that have a glow, as the share of the glow's light that they take. The star's total light does not change. 0 gives no spikes. The spikes need a glow. |
 | Spike length | `StarSpikeLength` | Artistic | 0.6 | The distance over which a spike fades to a third, in glow radii. 1 is about 7 pixels on a 900-pixel-tall view. A bright spike stays visible for a few times that distance. The range is 0.5 to 4. |
 
-## Star looks
+## Star presets
 
-The **Star look** buttons set the star settings and the night tint together, with one click and one undo step:
+The **Preset** list sets the star settings and the night tint together, with one pick and one undo step. Each preset shows the same patch of the night sky in that look, its name, and one line:
 
-- **Vivid** (the default, artistic): a dark site's star count, the brightest stars glowing with four thin diffraction spikes two to three glow radii long, a tighter core, faint stars that fade to white, and the full navy night tint.
-- **Restrained**: Vivid without the spikes, with the physical core, a softer glow (0.8) and half the night tint.
-- **Physical**: the physical sky as a camera records it. It sets every artistic setting to its neutral value (highlights 1, no glow, no spikes, core 1, the Point shape, no tint) and the observer to **Camera**: no glare, and every star keeps its color. It sets the limit to 6.5, the naked eye's limit, and the twinkle rate to 12, its top.
+- **Vivid** (the default, artistic): a dark site's star count, the brightest stars glowing with four thin diffraction spikes two to three glow radii long, a tighter core, and the full navy night tint.
+- **Restrained**: Vivid without the spikes, with the physical core, a soft round glow (0.8) around the bright stars and half the night tint. The glow is what tells it from Physical.
 - **Classic**: every star is a four-pointed sparkle, with a soft glow (0.8) and half the night tint.
+- **Physical**: every artistic setting at its neutral value (highlights 1, no glow, no spikes, core 1, the Point shape, no tint). It sets the limit to 6.5, the naked eye's limit, so fewer faint stars show, and the twinkle rate to 12, its top.
 
-The looks do not change the sky's exposure trim or any other sky setting. The button of the look that the star settings match shows as selected. After you change a star setting by hand, the row shows **Custom**. The night tint is on each global **Post Process Volume**, and the buttons set it on all of them. If the world has no global Post Process Volume, the row says so, and a look sets the star settings only. Add a global Post Process Volume to control the night tint.
+The presets do not change **Seen by**, the sky's exposure trim or any other sky setting. Physical with the default **Seen by: Camera** is the sky as a camera records it. The field shows the preset that the star settings and the night tint match. After you change a star setting or the night tint by hand, the field reads **Custom**. When only the night tint differs from every preset, the row says so under the field. Custom is not in the list: pick a preset to go back to one. The night tint is on each global **Post Process Volume**, and a preset sets it on all of them. If the world has no global Post Process Volume, the row says so, and a preset sets the star settings only. Add a global Post Process Volume to control the night tint.
 
 ## The night tint
 

@@ -192,6 +192,21 @@ TEST(TerrainGrassClamps, TranslucencyHoldsBetweenOpaqueAndAThinLeaf)
     EXPECT_FLOAT_EQ(Components::kMaxTerrainGrassTranslucency, 1.0f);
 }
 
+TEST(TerrainGrassClamps, GroundTintHeightHoldsAboveTheRootAndAtMostTheTip)
+{
+    Components::TerrainGrass grass{};
+    grass.GroundTintHeight = 0.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.GroundTintHeight, Components::kMinTerrainGrassGroundTintHeight);
+    EXPECT_FLOAT_EQ(Components::kMinTerrainGrassGroundTintHeight, 0.01f);
+    grass.GroundTintHeight = 0.75f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.GroundTintHeight, 0.75f);
+    grass.GroundTintHeight = 2.0f;
+    ClampFields(grass);
+    EXPECT_FLOAT_EQ(grass.GroundTintHeight, 1.0f);
+}
+
 TEST(TerrainGrassClamps, RootFadeSpanStaysNonEmpty)
 {
     constexpr float32 kSpan = Components::kMinTerrainGrassRootFadeSpan;

@@ -163,6 +163,9 @@ private:
 // Builds a Jolt heightfield from samples, with the encode range padded so in-place edits
 // (UpdateHeightFieldRegion) can raise or lower past the initial min/max without a full rebuild.
 // Touches no world state, so any thread may call it.
+static_assert(kHeightFieldNoCollision == JPH::HeightFieldShapeConstants::cNoCollisionValue,
+              "a hole sample of a HeightFieldShapeDef is Jolt's no-collision value");
+
 JPH::ShapeRefC BuildHeightFieldShape(const HeightFieldShapeDef& d)
 {
     if (d.Samples.empty() || d.SampleCount == 0)

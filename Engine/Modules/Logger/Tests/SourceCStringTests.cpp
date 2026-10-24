@@ -160,10 +160,10 @@ TEST(SourceCStringTests, DeniedProbeReportsUnavailableInsteadOfUnreadablePointer
         Log::ClearSinks();
         static std::mutex blameMutex;
         static size_t blamedPointers = 0;
-        auto sink = MakeUnique<CallbackSink>();
+        auto sink = std::make_unique<CallbackSink>();
         sink->RegisterCallback([](const LogMessage& message) {
             std::lock_guard lock(blameMutex);
-            if (message.Message.find("dropped unreadable source-location pointer") != String::npos)
+            if (message.Message.find("dropped unreadable source-location pointer") != std::string::npos)
                 ++blamedPointers;
         });
         Log::AddSink(std::move(sink));

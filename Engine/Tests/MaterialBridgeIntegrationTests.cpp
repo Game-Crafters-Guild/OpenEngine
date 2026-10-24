@@ -3320,9 +3320,9 @@ class CannotDrawWarningCounter
     CannotDrawWarningCounter()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         sink->RegisterCallback([count = m_Count](const Logger::LogMessage& msg) {
-            if (msg.Message.find("can never draw") != Logger::String::npos)
+            if (msg.Message.find("can never draw") != std::string::npos)
                 count->fetch_add(1);
         });
         Logger::Log::AddSink(std::move(sink));
@@ -3614,10 +3614,10 @@ class UnknownKeyWarningCapture
     explicit UnknownKeyWarningCapture(const GUID& materialGuid)
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         sink->RegisterCallback([state = m_State, materialTag = "(" + materialGuid.ToString() + ")"](const Logger::LogMessage& msg) {
-            if (msg.Message.find("unknown texture key") != Logger::String::npos &&
-                msg.Message.find(materialTag) != Logger::String::npos)
+            if (msg.Message.find("unknown texture key") != std::string::npos &&
+                msg.Message.find(materialTag) != std::string::npos)
             {
                 std::lock_guard lock(state->Mutex);
                 state->Messages.push_back(msg.Message);
@@ -3633,18 +3633,18 @@ class UnknownKeyWarningCapture
         return static_cast<int>(m_State->Messages.size());
     }
 
-    Logger::String First() const
+    std::string First() const
     {
         Logger::Log::Flush();
         std::lock_guard lock(m_State->Mutex);
-        return m_State->Messages.empty() ? Logger::String{} : m_State->Messages.front();
+        return m_State->Messages.empty() ? std::string{} : m_State->Messages.front();
     }
 
   private:
     struct State
     {
         std::mutex Mutex;
-        std::vector<Logger::String> Messages;
+        std::vector<std::string> Messages;
     };
     std::shared_ptr<State> m_State = std::make_shared<State>();
 };
@@ -3669,8 +3669,8 @@ TEST_F(MaterialBridgeIntegrationTest, UnknownTextureKey_RegistersSkipsAndWarnsOn
            "rebind would replay the bad name";
     ASSERT_EQ(warnings.Count(), 1);
     // The warning states the fix: it names the key and the valid candidates.
-    EXPECT_NE(warnings.First().find("baseColorMap"), Logger::String::npos);
-    EXPECT_NE(warnings.First().find("albedoMap"), Logger::String::npos);
+    EXPECT_NE(warnings.First().find("baseColorMap"), std::string::npos);
+    EXPECT_NE(warnings.First().find("albedoMap"), std::string::npos);
 
     // Runtime materials (particle emitters) re-register every frame; the
     // report must stay one line per material+key, not one per application.

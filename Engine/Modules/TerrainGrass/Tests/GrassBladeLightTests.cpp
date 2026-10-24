@@ -17,7 +17,9 @@
 #include "Terrain/TerrainTypes.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 
 namespace
 {
@@ -302,42 +304,168 @@ TEST(GrassBladeLight, TheLeafCarriesNoFaceOnReflectionAndTheRootAndFarFieldKeepT
 // the shipped Root Fade, composed as the surface composes it: the canopy from its root end to the
 // tip, then the ground handover over it.
 static Shader::vec3 AutoRootAlbedo(const Shader::vec3& ground, const Shader::vec3& tip, const Shader::vec3& autoRoot,
-                            float t, float groundingStrength)
+                            float t, float groundingStrength, float groundTintHeight)
 {
     const GameEngine::Terrain::TerrainGPUParams shipped{};
-    const Shader::vec3 canopy = Shader::mix(
-        Shader::GrassBladeCanopyRoot(autoRoot, ground, true, groundingStrength), tip, Shader::grassCanopyRise(t));
+    const Shader::vec3 canopy =
+        Shader::GrassBladeCanopy(autoRoot, ground, tip, true, groundingStrength, groundTintHeight, t);
     const float colourRise = Shader::GrassBladeColourRise(shipped.GrassRootFadeStart, shipped.GrassRootFadeEnd, t);
     return Shader::mix(ground, canopy, Shader::GrassBladeGroundedRise(colourRise, groundingStrength));
 }
 
-// An automatic root reads root, then leaf: with Splat Root Color on, the blade's albedo rises from
-// the ground at its base to the tip with no band darker than the ground between them. Grounding
-// Strength keeps its meaning: at 0 the root is the tip in shade and the blade takes no ground, at 1
-// the root is the ground. The ground is the untextured grass layer's turf green, the tip the default
-// leaf green, the root under Auto the tip at 40 % in linear light (TerrainGrassAutoRootColor).
+// The two ends of Ground Tint Height's range (kMinTerrainGrassGroundTintHeight and 1 in TerrainGrass.h).
+constexpr float kGroundTintHeights[] = {0.01f, 1.0f};
+
+// An automatic root reads root, then leaf: with Splat Root Color on, the blade's albedo runs from
+// the ground at its base to the tip with no band darker than the ground or the tip between them, at
+// both ends of Ground Tint Height, over a ground darker than the leaf and over grounds as bright as it or
+// brighter. Grounding Strength keeps its meaning: at 0 the root is the tip in shade and the blade
+// takes no ground, at 1 the root is the ground. The dark ground is the untextured grass layer's turf
+// green, the tip the default leaf green, the root under Auto the tip at 40 % in linear light
+// (TerrainGrassAutoRootColor).
 TEST(GrassBladeLight, AnAutomaticRootRisesFromTheGroundIntoTheLeafWithNoDip)
 {
-    const Shader::vec3 ground{0.10f, 0.16f, 0.035f};
     const Shader::vec3 tip{0.19f, 0.30f, 0.075f};
     const Shader::vec3 autoRoot = tip * 0.4f;
-    float previous = Luma(ground);
-    for (float t = 0.0f; t <= 1.0f; t += 0.01f)
-    {
-        const float value = Luma(AutoRootAlbedo(ground, tip, autoRoot, t, 1.0f));
-        EXPECT_GE(value, previous - 1e-6f) << "the albedo darkens at t " << t;
-        previous = value;
-    }
-    EXPECT_NEAR(previous, Luma(tip), 1e-5f) << "the tip is the leaf";
+    const Shader::vec3 grounds[] = {{0.10f, 0.16f, 0.035f}, tip, {0.50f, 0.42f, 0.28f}};
+    for (const Shader::vec3& ground : grounds)
+        for (const float groundTintHeight : kGroundTintHeights)
+        {
+            // The albedo moves monotonically from the ground's luma to the tip's.
+            const float direction = Luma(tip) >= Luma(ground) ? 1.0f : -1.0f;
+            float previous = Luma(ground);
+            for (float t = 0.0f; t <= 1.0f; t += 0.01f)
+            {
+                const float value = Luma(AutoRootAlbedo(ground, tip, autoRoot, t, 1.0f, groundTintHeight));
+                EXPECT_GE(direction * (value - previous), -1e-6f)
+                    << "the albedo turns back at t " << t << ", ground luma " << Luma(ground) << ", Ground Tint Height "
+                    << groundTintHeight;
+                previous = value;
+            }
+            EXPECT_NEAR(previous, Luma(tip), 1e-5f) << "the tip is the leaf, Ground Tint Height " << groundTintHeight;
+        }
 
-    const Shader::vec3 groundedRoot = AutoRootAlbedo(ground, tip, autoRoot, 0.0f, 1.0f);
+    const Shader::vec3 ground = grounds[0];
+
+    const Shader::vec3 groundedRoot = AutoRootAlbedo(ground, tip, autoRoot, 0.0f, 1.0f, 1.0f);
     EXPECT_NEAR(groundedRoot.x, ground.x, 1e-6f) << "Grounding Strength 1: the root is the ground";
     EXPECT_NEAR(groundedRoot.y, ground.y, 1e-6f) << "Grounding Strength 1: the root is the ground";
     EXPECT_NEAR(groundedRoot.z, ground.z, 1e-6f) << "Grounding Strength 1: the root is the ground";
-    const Shader::vec3 ungroundedRoot = AutoRootAlbedo(ground, tip, autoRoot, 0.0f, 0.0f);
+    const Shader::vec3 ungroundedRoot = AutoRootAlbedo(ground, tip, autoRoot, 0.0f, 0.0f, 1.0f);
     EXPECT_NEAR(ungroundedRoot.x, autoRoot.x, 1e-6f) << "Grounding Strength 0: the root is the tip in shade";
     EXPECT_NEAR(ungroundedRoot.y, autoRoot.y, 1e-6f) << "Grounding Strength 0: the root is the tip in shade";
     EXPECT_NEAR(ungroundedRoot.z, autoRoot.z, 1e-6f) << "Grounding Strength 0: the root is the tip in shade";
+}
+
+// Below Grounding Strength 1 the gradient's root end is partly the tip in shade, darker than a bright
+// ground. That part ends at Ground Tint Height with the ground's share, so over sand at strength 0.5
+// and a tint height of 0.5 the albedo never drops below the darker of the blade's root and the tip.
+TEST(GrassBladeLight, ABrightGroundAtHalfGroundingStrengthShowsNoBandAboveTheTintHeight)
+{
+    const Shader::vec3 tip{0.19f, 0.30f, 0.075f};
+    const Shader::vec3 autoRoot = tip * 0.4f;
+    const Shader::vec3 sand{0.50f, 0.42f, 0.28f};
+    const float floorLuma = std::min(Luma(AutoRootAlbedo(sand, tip, autoRoot, 0.0f, 0.5f, 0.5f)), Luma(tip));
+    for (int step = 0; step <= 100; ++step)
+    {
+        const float t = static_cast<float>(step) / 100.0f;
+        EXPECT_GE(Luma(AutoRootAlbedo(sand, tip, autoRoot, t, 0.5f, 0.5f)), floorLuma - 1e-6f)
+            << "a band darker than the root and the tip at t " << t;
+    }
+}
+
+// Ground Tint Height at 1 is the plain canopy gradient: the mix from the canopy's root end to the tip,
+// bit for bit, at every height and Grounding Strength, over the default turf and a dirt ground.
+// Without the ground in the gradient (an authored root, or Splat Root Color off) Ground Tint Height
+// changes nothing at either end of its range.
+TEST(GrassBladeLight, AGroundTintHeightOfOneIsThePlainCanopyGradientBitForBit)
+{
+    const vec3 grounds[] = {vec3(0.10f, 0.16f, 0.035f), vec3(0.20f, 0.12f, 0.06f)};
+    for (const vec3& ground : grounds)
+        for (const float groundingStrength : {0.0f, 0.5f, 1.0f})
+            for (int step = 0; step <= 100; ++step)
+            {
+                const float t = static_cast<float>(step) / 100.0f;
+                for (const bool rootFromGround : {true, false})
+                {
+                    const vec3 plain = Shader::mix(
+                        Shader::GrassBladeCanopyRoot(kRoot, ground, rootFromGround, groundingStrength), kTip,
+                        Shader::grassCanopyRise(t));
+                    for (const float groundTintHeight : kGroundTintHeights)
+                    {
+                        if (rootFromGround && groundTintHeight != 1.0f)
+                            continue;
+                        const vec3 drawn = Shader::GrassBladeCanopy(kRoot, ground, kTip, rootFromGround,
+                                                                    groundingStrength, groundTintHeight, t);
+                        EXPECT_EQ(std::bit_cast<std::uint32_t>(drawn.x), std::bit_cast<std::uint32_t>(plain.x));
+                        EXPECT_EQ(std::bit_cast<std::uint32_t>(drawn.y), std::bit_cast<std::uint32_t>(plain.y));
+                        EXPECT_EQ(std::bit_cast<std::uint32_t>(drawn.z), std::bit_cast<std::uint32_t>(plain.z))
+                            << "t " << t << ", Grounding Strength " << groundingStrength << ", from ground "
+                            << rootFromGround << ", Ground Tint Height " << groundTintHeight;
+                    }
+                }
+            }
+}
+
+// The default Ground Tint Height is 0.5 (TerrainGPUParams' default, pinned to the component's by
+// RenderPipelineDeclareTests.GrassGpuParamDefaultsMatchTheComponent). At the default the root is the
+// gradient's root end (the ground's color at Grounding Strength 1) and the upper half of the blade is
+// the leaf color, over the default turf and a dirt ground, at any Grounding Strength. This is a look
+// change from 1, where the ground still holds half of the blade's color at mid-height.
+TEST(GrassBladeLight, TheDefaultGroundTintHeightKeepsTheUpperHalfOfTheBladeTheLeafColor)
+{
+    const float groundTintHeight = GameEngine::Terrain::TerrainGPUParams{}.GrassGroundTintHeight;
+    ASSERT_FLOAT_EQ(groundTintHeight, 0.5f);
+    const vec3 grounds[] = {vec3(0.10f, 0.16f, 0.035f), vec3(0.20f, 0.12f, 0.06f)};
+    for (const vec3& ground : grounds)
+        for (const float groundingStrength : {0.0f, 0.5f, 1.0f})
+        {
+            const vec3 rootEnd = Shader::GrassBladeCanopyRoot(kRoot, ground, true, groundingStrength);
+            const vec3 root =
+                Shader::GrassBladeCanopy(kRoot, ground, kTip, true, groundingStrength, groundTintHeight, 0.0f);
+            EXPECT_NEAR(root.x, rootEnd.x, 1e-6f)
+                << "the root is the gradient's root end, Grounding Strength " << groundingStrength;
+            EXPECT_NEAR(root.y, rootEnd.y, 1e-6f);
+            EXPECT_NEAR(root.z, rootEnd.z, 1e-6f);
+            for (int step = 50; step <= 100; ++step)
+            {
+                const float t = static_cast<float>(step) / 100.0f;
+                const vec3 drawn = Shader::GrassBladeCanopy(kRoot, ground, kTip, true, groundingStrength,
+                                                            groundTintHeight, t);
+                EXPECT_NEAR(drawn.x, kTip.x, 1e-6f) << "the ground still shows at t " << t
+                                                     << ", Grounding Strength " << groundingStrength;
+                EXPECT_NEAR(drawn.y, kTip.y, 1e-6f);
+                EXPECT_NEAR(drawn.z, kTip.z, 1e-6f);
+            }
+        }
+}
+
+// Ground Tint Height sets where the ground's share of the blade ends. With the root and the tip black and
+// the ground white, the gradient is the ground's share alone. At 1 the share falls as the canopy
+// rises: half at mid-blade, about a sixth at three quarters. At 0.5 it is half at a quarter of the
+// blade and gone by half height, so the upper blade is the root-to-tip gradient alone. Grounding
+// Strength scales the share at every height.
+static float GroundShare(float groundingStrength, float groundTintHeight, float t)
+{
+    const vec3 black(0.0f, 0.0f, 0.0f);
+    const vec3 white(1.0f, 1.0f, 1.0f);
+    return Shader::GrassBladeCanopy(black, white, black, true, groundingStrength, groundTintHeight, t).x;
+}
+
+TEST(GrassBladeLight, GroundTintHeightSetsWhereTheGroundsShareOfTheBladeEnds)
+{
+    EXPECT_FLOAT_EQ(GroundShare(1.0f, 1.0f, 0.0f), 1.0f) << "the root is the ground";
+    EXPECT_NEAR(GroundShare(1.0f, 1.0f, 0.5f), 0.5f, 1e-6f);
+    EXPECT_NEAR(GroundShare(1.0f, 1.0f, 0.75f), 0.15625f, 1e-6f);
+    EXPECT_FLOAT_EQ(GroundShare(1.0f, 0.5f, 0.0f), 1.0f) << "the root is the ground";
+    EXPECT_NEAR(GroundShare(1.0f, 0.5f, 0.25f), 0.5f, 1e-6f);
+    for (int step = 50; step <= 100; ++step)
+    {
+        const float t = static_cast<float>(step) / 100.0f;
+        EXPECT_NEAR(GroundShare(1.0f, 0.5f, t), 0.0f, 1e-6f) << "the ground still shows at t " << t;
+    }
+    EXPECT_NEAR(GroundShare(0.5f, 0.5f, 0.25f), 0.25f, 1e-6f);
+    EXPECT_NEAR(GroundShare(0.5f, 1.0f, 0.5f), 0.25f, 1e-6f);
 }
 
 // The colour's handover ends exactly at the authored Root Fade end, for any authored span.

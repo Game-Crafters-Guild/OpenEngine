@@ -2,6 +2,7 @@
 #include "TerrainECS/TerrainHandleHygiene.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainFieldUploader.h"
+#include "TerrainSkyline.h"
 #include "TerrainECS/TerrainGrassAlpha.h"
 #include "TerrainECS/TerrainGrassAuthoredBits.h"
 #include "TerrainECS/TerrainRenderFeature.h"
@@ -9,7 +10,7 @@
 #include "TerrainECS/AtlasResidencyController.h"
 #include "TerrainECS/AtlasTileNormal.h"
 #include "TerrainECS/TerrainSizingPlan.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainHeightPageDriver.h"
 #include "TerrainECS/TerrainHeightPageFeature.h"
 #include "CBTTerrain/CBTLayout.h" // kAtlasMaxTiles (F2 cap warn)
@@ -35,6 +36,7 @@
 #include "Terrain/CDLODSelection.h"
 #include "Logger/Logger.h"
 #include "Rendering/CameraTypes.h"
+#include "Rendering/Sky/SkySettings.h"
 #include "Core/CpuProfiler.h"
 
 #include <algorithm>
@@ -286,10 +288,14 @@ TerrainColorMapBinding PublishAtlasColorMap(TerrainFieldUploader& uploader, Terr
 // The one writer of a terrain row's grass parameters, shared by the tiled and the untiled path:
 // the authored component clamped to its supported ranges, Root Color resolved (Auto derives it
 // from Tip Color, so the GPU never sees the sentinel), the texture-card bindings, and the enabled
-// bit cleared when the row places nothing. A terrain with no TerrainGrass (`grass` null) gets the
-// disabled row with the GPU defaults.
+// bit cleared when the row places nothing or its placement waits for its grass control field
+// (`placementWaitsForField`, the caller's gate). Every value derived from the enabled bit is
+// written after it is final, so a row whose grass does not draw carries none: no canopy depth,
+// which the terrain surface would otherwise shade the ground with. A terrain with no TerrainGrass
+// (`grass` null) gets the disabled row with the GPU defaults.
 void WriteGrassParams(Terrain::TerrainGPUParams& params,
                       const Components::TerrainGrass* grass,
+                      bool placementWaitsForField,
                       Engine::Renderer::RenderServices* renderServices)
 {
     params.GrassEnabled = TerrainGrassAuthoredBits(grass);
@@ -312,6 +318,8 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
     params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
     params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
+    params.GrassGroundTintHeight =
+        grass ? std::clamp(grass->GroundTintHeight, Components::kMinTerrainGrassGroundTintHeight, 1.0f) : 1.0f;
     params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
     params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
     params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
@@ -333,6 +341,8 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
     params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
     ApplyGrassTextureParams(params, grass, renderServices);
+    if (placementWaitsForField)
+        params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
     ClearGrassEnabledIfNothingToPlace(params);
     params.GrassCanopyOcclusion =
         Terrain::TerrainGrassCanopyOcclusionDepth(params, grass ? grass->CanopyShade : 0.0f);
@@ -497,6 +507,10 @@ void TerrainExtractionSystem::ForgetRetiredTiledTerrains(TerrainService& service
 // lattice inside the march -- finer would interpolate between the same two corners twice.
 static constexpr float32 kSkylineMarchDistance = 8000.0f;
 static constexpr float32 kSkylineMarchStep = 4.0f;
+// How far, as an angle seen from the eye, a kept skyline station may sit from the march's line:
+// the sun's angular radius, the width the glare fades the skyline over, so every kept station lies
+// inside the disc's own span of azimuth.
+static constexpr float32 kSkylineAngularTolerance = Rendering::kSunAngularRadiusRad;
 
 // The terrain skyline along the sun's azimuth, per view, handed to the sun glare.
 //
@@ -509,6 +523,9 @@ static constexpr float32 kSkylineMarchStep = 4.0f;
 // inside the viewport, so a sun one degree outside the frame edge cannot be occluded by
 // anything, and the halo switched off the frame its centre crossed in. A skyline is a property
 // of the terrain and the eye, so it holds on- and off-frame and past any cascade distance.
+//
+// Each view keeps its skyline across frames (TerrainSkyline): a frame where its eye, the sun and
+// the terrain under its stations stayed put samples nothing.
 void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
 {
     GE_CPU_PROFILE_SCOPE("Terrain.SunGlareSkyline");
@@ -524,32 +541,42 @@ void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
     if (!settings.showSunDisk)
         return;
 
-    // Resolved every frame rather than cached: the query holds pointers into terrain residency
-    // that streaming moves, and a stale one would march over freed tiles.
-    const PlanarHeightQuery ground = ResolvePlanarHeightQuery(world);
+    // Resolved every frame rather than cached: the query is a view of the height pages, valid until
+    // their next Update. The skyline takes coarse answers (AcceptCoarse), so a far ridge reads the
+    // pinned level the GPU draws there.
+    const SurfaceHeightQuery ground = ResolveSurfaceHeightQuery(world);
 
     // The WHOLE set, replaced each frame. Scratch reused so the refill does not allocate.
+    ++m_SkylinePublish;
     m_SkylineScratch.clear();
     for (const Rendering::ViewDesc& view : m_RenderServices->Views().GetViews())
     {
         float32 tangent = Engine::Renderer::SunGlareRenderFeature::kNoSkyline;
-        if (ground.IsValid())
+        const Rendering::CameraData* camera = m_RenderServices->Views().FindCameraData(view.cameraId);
+        if (ground.IsValid() && camera)
         {
-            const Rendering::CameraData* camera =
-                m_RenderServices->Views().FindCameraData(view.cameraId);
-            if (camera)
-            {
-                const float32 marched = TerrainHorizonTangent(
-                    ground, camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2],
-                    settings.scatteringSunDir[0], settings.scatteringSunDir[2],
-                    kSkylineMarchDistance, kSkylineMarchStep);
-                if (marched != kNoTerrainHorizon)
-                    tangent = marched;
-            }
+            ViewSkylineState& state = m_ViewSkylines.GetOrInsert(view.id);
+            state.LastPublish = m_SkylinePublish;
+            if (!state.Skyline)
+                state.Skyline = std::make_unique<TerrainSkyline>();
+            const float32 answered = state.Skyline->Tangent(
+                ground, Mathematics::Vector3(camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2]),
+                settings.scatteringSunDir[0], settings.scatteringSunDir[2], kSkylineMarchDistance, kSkylineMarchStep,
+                kSkylineAngularTolerance);
+            if (answered != TerrainSkyline::kNoSkyline)
+                tangent = answered;
         }
         m_SkylineScratch.push_back({view.id, tangent});
     }
     glare->SetSkylines(m_SkylineScratch.data(), m_SkylineScratch.size());
+
+    // A view this publish did not answer drops its kept stations.
+    m_RetiredSkylineViews.clear();
+    for (const auto& [viewId, state] : m_ViewSkylines)
+        if (state.LastPublish != m_SkylinePublish)
+            m_RetiredSkylineViews.push_back(viewId);
+    for (uint32 viewId : m_RetiredSkylineViews)
+        m_ViewSkylines.Erase(viewId);
 }
 
 void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
@@ -1964,7 +1991,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                            ? Terrain::kTerrainFlagHasNormalmap : 0u)
                     | (feature->GetSplatmapTexture(globalGpuHandle).IsValid()
                            ? Terrain::kTerrainFlagHasSplatmap : 0u);
-                WriteGrassParams(params, grass, m_RenderServices);
 
                 // Atlas-backed terrains have no unified heightmap (HeightmapBindless == 0). The grass
                 // placement compute reads the kTerrainFlagAtlasBacked bit (set above) and routes its
@@ -1982,7 +2008,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         ? m_GrassFieldUploader->UpdateAtlas(*feature, globalGpuHandle, *tiled, atlasGeo, atlasRows)
                         : m_GrassFieldUploader->UpdateUnified(*feature, globalGpuHandle, tiled->GrassUnifiedField);
                     feature->RegisterFieldsBindless(globalGpuHandle, *m_RenderServices);
-                    const bool required = atlasBacked ? tiled->GrassRegionsActive : tiled->GrassUnifiedField.IsActive();
+                    const bool required = atlasBacked
+                        ? tiled->GrassRegionsActive || !tiled->GrassCoarseField.Initialized
+                        : tiled->GrassUnifiedField.GatesPlacement();
                     const bool namedMaps = m_RenderServices->GetProfile().IsCompat();
                     const bool sampleable = atlasBacked
                         ? feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Atlas)
@@ -1991,17 +2019,18 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                            && feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Coarse) != 0))
                         : feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified)
                           && (namedMaps || feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified) != 0);
-                    // A defined white clear is not yet authored content. Keep
-                    // pending fields out of placement until upload + publication.
+                    // A defined white clear is not yet authored content, and a field
+                    // whose first compose has not landed says nothing yet. Keep both
+                    // out of placement until upload + publication.
                     if (required && (!grassControlsActive || !sampleable))
                     {
-                        params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
                         grassControlsSuppressed = true;
                         ++m_GrassControlSuppressedTicks;
                     }
                 }
                 else
                     feature->ReleaseFieldResources(TerrainField::GrassControl, globalGpuHandle);
+                WriteGrassParams(params, grass, grassControlsSuppressed, m_RenderServices);
                 if (grassControlsActive && !atlasBacked)
                 {
                     params.Flags |= Terrain::kTerrainFlagHasGrassControls;
@@ -2404,7 +2433,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                        ? Terrain::kTerrainFlagHasNormalmap : 0u)
                 | (feature->GetSplatmapTexture(handle).IsValid()
                        ? Terrain::kTerrainFlagHasSplatmap : 0u);
-            WriteGrassParams(params, grass, m_RenderServices);
             bool grassControlsSuppressed = false;
             if (grass)
             {
@@ -2414,15 +2442,15 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 params.GrassControlBindless = feature->GetFieldBindlessIndex(TerrainField::GrassControl, handle, TerrainFieldMap::Unified);
                 const bool sampleable = feature->FieldCanBeSampled(TerrainField::GrassControl, handle, TerrainFieldMap::Unified)
                     && (m_RenderServices->GetProfile().IsCompat() || params.GrassControlBindless != 0);
-                if (data->GrassField.IsActive() && (!ready || !sampleable))
+                if (data->GrassField.GatesPlacement() && (!ready || !sampleable))
                 {
-                    params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
                     grassControlsSuppressed = true;
                     ++m_GrassControlSuppressedTicks;
                 }
             }
             else
                 feature->ReleaseFieldResources(TerrainField::GrassControl, handle);
+            WriteGrassParams(params, grass, grassControlsSuppressed, m_RenderServices);
             const TerrainColorMapBinding colorMap = PublishUnifiedColorMap(
                 *m_ColorMapUploader, *feature, *m_RenderServices, handle, data->ColorMap);
             if (colorMap.Unified)

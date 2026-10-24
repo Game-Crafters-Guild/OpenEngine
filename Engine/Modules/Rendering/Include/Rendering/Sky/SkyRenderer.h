@@ -152,7 +152,7 @@ class SkyRenderer
         // 32x32 is the production size — the data is very low-frequency.
         uint32_t multiscatterLutSize = 32;
 
-        // Where the host staged the engine assets (PathUtils::GetInstallAssetsRoot()).
+        // Where the host staged the engine assets (ApplicationPaths::GetInstallAssetsRoot()).
         // The renderer does not derive it: install layout is the host's concern, and this
         // module has no dependency that can answer it. Empty leaves engine-owned sky art
         // unresolvable, which the load path reports rather than silently substituting.

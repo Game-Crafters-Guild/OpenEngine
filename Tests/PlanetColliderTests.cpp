@@ -315,7 +315,7 @@ TEST(PlanetCollider, RegionRegenerationChangesOnlyRegionAndRematches)
 
 // TerrainService planet-face slot lifecycle: acquire six, the pool holds them, ReleaseAll
 // drops every slot (the Play-exit sweep), and a stale-generation release is refused (the
-// silent-unbind guard). Mirrors the tile-physics slot test.
+// silent-unbind guard).
 TEST(PlanetCollider, ServiceSlotsReleaseAndStaleGuard)
 {
     if (TerrainService::IsInitialized())

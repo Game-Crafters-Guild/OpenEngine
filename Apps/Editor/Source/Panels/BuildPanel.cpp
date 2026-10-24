@@ -2,7 +2,7 @@
 #include "Editor/Registries/BuildExporterRegistry.h"
 #include "Editor/Settings/BuildFolderDefaults.h"
 #include "Editor/Settings/BuildRenderPipelineSettings.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Core/EngineVersion.h"
 #include "Editor/Settings/RenderPipelineSettings.h"
@@ -997,8 +997,8 @@ BuildSettings BuildPanel::GatherBuildSettings()
 
     // Project and SDK paths.
     settings.projectRoot = wsRoot;
-    settings.editorSDKPath = PathUtils::GetExecutableDirectory() / "SDK";
-    settings.runtimeDepsPath = PathUtils::GetExecutableDirectory();
+    settings.editorSDKPath = ApplicationPaths::GetExecutableDirectory() / "SDK";
+    settings.runtimeDepsPath = ApplicationPaths::GetExecutableDirectory();
 
     // Player config derived from project settings.
     GameConfig& cfg = settings.playerConfig;
@@ -1142,7 +1142,7 @@ BuildSettings BuildPanel::GatherBuildSettings()
         }
         else
         {
-            const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+            const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
             for (const std::filesystem::path& candidate :
                  {exeDir / "../../../../vcpkg_installed", exeDir / "../../../../../vcpkg_installed"})
             {

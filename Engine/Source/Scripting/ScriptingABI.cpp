@@ -182,7 +182,7 @@ static void EnsureNativeLoggerConfiguredFromEnv()
 #if LOGGER_ENABLE_SOURCE_LOCATION
         fileCfg.includeSource = true;
 #endif
-        Logger::Log::AddSink(Logger::MakeUnique<Logger::FileSink>(fileCfg));
+        Logger::Log::AddSink(std::make_unique<Logger::FileSink>(fileCfg));
         Logger::Log::Info("GameEngine.Native logger attached to GE_LOGFILE: {}", fileCfg.filename);
     }
     else

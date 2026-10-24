@@ -1,4 +1,4 @@
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/MacBundleAssembler.h"
 #include "Scripting/PathResolver.h"
@@ -182,7 +182,7 @@ TEST(MacBundleAssembler, ContentRootContentPassesCodesign)
     // Any Mach-O executable stands in for the Player; Codesign re-signs it ad hoc.
     fs::copy_file("/usr/bin/true", macOSDir / "Player");
 
-    const fs::path contentRoot = GameEngine::PathUtils::InstallContentRootFor(macOSDir);
+    const fs::path contentRoot = GameEngine::ApplicationPaths::InstallContentRootFor(macOSDir);
     for (const char* path : {"game.config", "Assets/.assetmanifest", "Assets/.lod/model.gelod",
                              "Assets/Models/model.glb", "Packages/packages.index"})
         WriteFixture(contentRoot / path);

@@ -3,7 +3,8 @@
 #include "Logger/Logger.h"
 #include "Logger/FileSink.h"
 #include "Logger/Backtrace.h"
-#include "Core/Application.h" // PathUtils (default log file location)
+#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Assets/AssetRegistry.h"
@@ -59,7 +60,7 @@ namespace {
 
     std::filesystem::path GetCrashDumpDirectory()
     {
-        return (GameEngine::PathUtils::GetUserCacheDirectory() / "GameEngine" / "CrashDumps").lexically_normal();
+        return (GameEngine::ApplicationPaths::GetUserCacheDirectory() / "GameEngine" / "CrashDumps").lexically_normal();
     }
 
     std::filesystem::path BuildCrashDumpPath(std::string_view reason)
@@ -201,7 +202,7 @@ namespace {
 #if LOGGER_ENABLE_SOURCE_LOCATION
         fileCfg.includeSource = true;
 #endif
-        Logger::Log::AddSink(Logger::MakeUnique<Logger::FileSink>(fileCfg));
+        Logger::Log::AddSink(std::make_unique<Logger::FileSink>(fileCfg));
         // Reported after the attach so both lines reach the file the run will be
         // read from, not only the console the run may not have.
         if (!fileLevel.unrecognizedValue.empty())
@@ -397,7 +398,7 @@ namespace {
         const char* existing = std::getenv("VK_ICD_FILENAMES");
 
         // Look for the staged ICD inside the .app bundle.
-        const std::filesystem::path exeDir = GameEngine::PathUtils::GetExecutableDirectory();
+        const std::filesystem::path exeDir = GameEngine::ApplicationPaths::GetExecutableDirectory();
         const std::filesystem::path icd =
             (exeDir / ".." / "Resources" / "vulkan" / "icd.d" / "MoltenVK_icd.json").lexically_normal();
 
@@ -556,7 +557,7 @@ static int EditorMainImpl(int argc, char** argv) {
             namespace fs = std::filesystem;
             std::error_code ec;
 
-            const fs::path logDir = (GameEngine::PathUtils::GetUserCacheDirectory() / "GameEngine" / "Logs").lexically_normal();
+            const fs::path logDir = (GameEngine::ApplicationPaths::GetUserCacheDirectory() / "GameEngine" / "Logs").lexically_normal();
             if (!logDir.empty())
             {
                 fs::create_directories(logDir, ec);

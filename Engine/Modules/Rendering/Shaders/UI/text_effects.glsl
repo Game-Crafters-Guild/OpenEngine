@@ -49,7 +49,7 @@ float textShadowSoftEdge(float inside, float blur)
 {
     float sigma = 0.5 * blur;
     float sigmaEff = sqrt(sigma * sigma + kTextShadowPixelSigma * kTextShadowPixelSigma);
-    return 0.5 + 0.5 * erfApprox(inside / (sigmaEff * 1.4142135));
+    return 0.5 + 0.5 * GE_Erf(inside / (sigmaEff * 1.4142135));
 }
 
 // Alpha of a colour glyph's atlas at uv; zero outside the glyph's own rect,

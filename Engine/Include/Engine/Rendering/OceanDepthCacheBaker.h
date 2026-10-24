@@ -36,11 +36,14 @@ struct OceanSceneDepthBakeStats
     uint32 SkippedSkinned = 0;
     uint32 SkippedTerrain = 0;
     uint32 SkippedUntagged = 0;
+    uint32 UnsampledTerrainTexels = 0; ///< texels on a terrain with no finest height yet: the bake fails
 };
 
-// Bakes the current scene's MeshRenderer geometry and terrain heightfields into a
+// Bakes the current scene's MeshRenderer geometry and planar terrains into a
 // saved ocean depth cache. Sources are filtered by Layers, transformed by
-// WorldTransform, and sampled top-down into Ocean's .oceandepth format.
+// WorldTransform, and sampled top-down into Ocean's .oceandepth format. A terrain
+// is read at its finest height (SurfaceHeightQuery, RequireFinest), streamed out
+// or not; a texel on a terrain whose height store is still cooking fails the bake.
 bool BakeOceanDepthCacheFromSceneMeshes(ECS::World& world,
                                         const Ocean::OceanDepthCacheBakeDesc& desc,
                                         const OceanSceneDepthBakeOptions& options,

@@ -18,7 +18,7 @@
 /// Paths anchor to StagedRoot() — the build root derived from the executable's
 /// own location — never to the current working directory: EngineCore::Initialize
 /// moves the process working directory to the executable directory
-/// (Engine/Source/Core/PathUtils.cpp), so a CWD-relative fixture path resolves
+/// (Engine/Source/Core/ApplicationPaths.cpp), so a CWD-relative fixture path resolves
 /// differently before and after the first test that initializes the engine.
 
 #include "StagedTestPaths.h"

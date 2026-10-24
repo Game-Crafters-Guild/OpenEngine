@@ -148,10 +148,8 @@ std::string CellSizeCaption(const NavigationSurface& surface, const SurfaceBox& 
 void AddModeRow(UIElement* parent, const InspectorContext& ctx, ECS::ComponentTypeId typeId, NavigationSurfaceMode mode)
 {
     // The row is hand-built for the cell-size follow below; its tooltip is the reflected one.
-    const ECS::FieldInfo* field = ECS::ComponentFieldRegistry::FindField(typeId, "Mode");
-    const std::string tooltip = field ? std::string(field->Tooltip) : std::string();
     Dropdown* dropdown = InspectorUI::AddDropdownRow(parent, "Mode", ModeOptions(), static_cast<int>(mode),
-                                                     tooltip.empty() ? nullptr : tooltip.c_str());
+                                                     InspectorDrag::ReflectedTooltip(typeId, "Mode"));
     dropdown->SetId("navigation-surface-mode");
     dropdown->SetOnValueChanged(
         [w = ctx.World, e = ctx.Entity, n = ctx.ChangeNotifications, undo = ctx.Undo,
@@ -174,12 +172,6 @@ void AddModeRow(UIElement* parent, const InspectorContext& ctx, ECS::ComponentTy
         });
 }
 
-const char* ReflectedTooltip(ECS::ComponentTypeId typeId, std::string_view fieldName)
-{
-    const ECS::FieldInfo* field = ECS::ComponentFieldRegistry::FindField(typeId, fieldName);
-    return field && !field->Tooltip.empty() ? field->Tooltip.data() : nullptr;
-}
-
 void AddAgentRow(const InspectorContext& ctx, ECS::ComponentTypeId typeId, const NavigationSurface& surface,
                  const AgentRow& row)
 {
@@ -191,7 +183,7 @@ void AddAgentRow(const InspectorContext& ctx, ECS::ComponentTypeId typeId, const
         ctx.Parent, row.Label, surface.*member, ctx.World, ctx.Entity, ctx.ChangeNotifications, ctx.Undo,
         std::string("Change Navigation Surface ") + row.Label,
         [member](NavigationSurface& target, float value) { target.*member = value; }, NavigationSurface{}.*member,
-        ReflectedTooltip(typeId, row.Field), {}, minValue, maxValue);
+        InspectorDrag::ReflectedTooltip(typeId, row.Field), {}, minValue, maxValue);
 }
 
 // Center or Extent as one Vector3 row. While Fit Bounds is on the row is inactive and shows the
@@ -201,7 +193,7 @@ void AddBoundsVectorRow(const InspectorContext& ctx, ECS::ComponentTypeId typeId
                         Mathematics::Vector3 NavigationSurface::*member, bool fitted)
 {
     UIElement* row = InspectorUI::AddRow(ctx.Parent);
-    InspectorUI::AddLabel(row, label, ReflectedTooltip(typeId, fieldName));
+    InspectorUI::AddLabel(row, label, InspectorDrag::ReflectedTooltip(typeId, fieldName));
     auto field = std::make_unique<Vector3Field>();
     field->AddClass("inspector-vector3");
     field->SetValue(Rendering::Vector3(value.x, value.y, value.z));

@@ -1187,6 +1187,7 @@ target_include_directories(TerrainRegionBakeTests PRIVATE
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Tests
   ${CMAKE_CURRENT_BINARY_DIR}/generated
   # TerrainColorMapCompose.h: the colour map's texel arithmetic the colour map tests hold texels to.
+  # TerrainRowBands.h: the row bands and the parallel threshold the bake and grass tests check.
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
 )
 ge_set_output_tests(TerrainRegionBakeTests)
@@ -1285,6 +1286,8 @@ target_include_directories(TerrainAtlasTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/Engine/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include
+  # TerrainSkyline.h, private to TerrainECS.
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
   ${CMAKE_SOURCE_DIR}/Engine/Modules/PageStreaming/Include
   # Grass atlas params builder oracle (TerrainGrassRenderFeature::BuildAtlasParams) + its deps.
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Include

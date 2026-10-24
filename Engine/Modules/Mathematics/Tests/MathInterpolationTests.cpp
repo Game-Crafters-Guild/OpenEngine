@@ -65,6 +65,32 @@ TEST(MathInterpolation, SmoothStepAtHalf)
 }
 
 // ---------------------------------------------------------------------------
+// SmootherStep, Fract, Wrap
+// ---------------------------------------------------------------------------
+
+TEST(MathInterpolation, SmootherStepMeetsTheEdgesFlatterThanSmoothStep)
+{
+    EXPECT_FLOAT_EQ(SmootherStep(0.0f, 1.0f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(SmootherStep(0.0f, 1.0f, 1.0f), 1.0f);
+    EXPECT_FLOAT_EQ(SmootherStep(2.0f, 4.0f, 3.0f), 0.5f);
+    EXPECT_FLOAT_EQ(SmootherStep(0.0f, 1.0f, 0.1f), 0.00856f);
+    EXPECT_LT(SmootherStep(0.0f, 1.0f, 0.1f), SmoothStep(0.0f, 1.0f, 0.1f));
+}
+
+TEST(MathInterpolation, FractWrapsNegativeInputsUpward)
+{
+    EXPECT_FLOAT_EQ(Fract(1.25f), 0.25f);
+    EXPECT_FLOAT_EQ(Fract(-0.25f), 0.75f);
+}
+
+TEST(MathInterpolation, WrapFoldsIntoThePeriodAndPassesANonPositivePeriod)
+{
+    EXPECT_FLOAT_EQ(Wrap(7.0f, 3.0f), 1.0f);
+    EXPECT_FLOAT_EQ(Wrap(-1.0f, 3.0f), 2.0f);
+    EXPECT_FLOAT_EQ(Wrap(5.0f, 0.0f), 5.0f);
+}
+
+// ---------------------------------------------------------------------------
 // LerpColorARGB
 // ---------------------------------------------------------------------------
 

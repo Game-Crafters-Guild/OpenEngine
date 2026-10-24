@@ -4,6 +4,7 @@
 #include "PlayerRunOptions.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Core/StandardPaths.h"
 #include "Engine/Build/GameConfig.h"
@@ -84,7 +85,7 @@ void SignalHandler(int sig)
 // Contents/Resources inside a macOS app bundle.
 std::filesystem::path StagedContentRoot()
 {
-    return GameEngine::PathUtils::InstallContentRootFor(GameEngine::PathUtils::GetExecutableDirectory());
+    return GameEngine::ApplicationPaths::InstallContentRootFor(GameEngine::ApplicationPaths::GetExecutableDirectory());
 }
 
 // Parse --config <path> from command line. Returns path to game.config.
@@ -353,7 +354,7 @@ static int PlayerMainImpl(int argc, char** argv)
     const std::filesystem::path launchCwd = std::filesystem::current_path(launchCwdEc);
 
     // Ensure working directory matches executable for asset resolution.
-    GameEngine::PathUtils::EnsureWorkingDirectoryMatchesExecutable();
+    GameEngine::ApplicationPaths::EnsureWorkingDirectoryMatchesExecutable();
 
     // Load game config. A user-passed --config that does not exist is a hard
     // error — silently falling back to defaults ("My Game", no scene) renders
@@ -413,7 +414,7 @@ static int PlayerMainImpl(int argc, char** argv)
     // Resolve the asset root to an absolute path. A relative value from the
     // command line resolves against the LAUNCH cwd (where the user ran the
     // command); without one, the root is the Assets/ the build staged.
-    std::filesystem::path assetRoot = GameEngine::PathUtils::GetInstallAssetsRoot();
+    std::filesystem::path assetRoot = GameEngine::ApplicationPaths::GetInstallAssetsRoot();
     if (std::optional<std::filesystem::path> cliAssetRoot = ParseAssetRoot(argc, argv))
     {
         assetRoot = *cliAssetRoot;
@@ -481,7 +482,7 @@ static int PlayerMainImpl(int argc, char** argv)
     // Detect NativeAOT scripts library next to the executable. When present,
     // CoreCLR initialization is skipped entirely and ManagedSystemBridge loads
     // the AOT library via LoadLibrary/dlopen instead.
-    auto exeDir = GameEngine::PathUtils::GetExecutableDirectory();
+    auto exeDir = GameEngine::ApplicationPaths::GetExecutableDirectory();
     bool useNativeAOT = std::filesystem::exists(exeDir / GameEngine::kNativeAotScriptsLibraryName);
 
     // Packaged-game detection is a POSITIVE signal from the shipped layout:

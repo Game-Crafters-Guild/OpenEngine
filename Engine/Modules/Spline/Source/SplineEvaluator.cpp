@@ -272,11 +272,48 @@ float32 DistSqToAABB(const V3& p, const Mathematics::AABB& box, Metric metric)
     return dx * dx + dy * dy + dz * dz;
 }
 
+// The segment whose bounds lie nearest the query, and how near (squared). The bounds are the box of
+// the segment's samples inflated by its larger end radius (RebuildSplineCache), so its swept
+// footprint is no nearer the query than its box, to the accuracy of those samples: the same
+// assumption the broad-phase cull below makes. `Complete` is false when the bounds cache does not
+// cover every segment; nothing may then be concluded about the uncovered ones.
+struct NearestBounds
+{
+    uint32 Segment = 0;
+    float32 DistSq = std::numeric_limits<float32>::max();
+    bool Complete = false;
+};
+
+NearestBounds FindNearestSegmentBounds(const SplineData& spline, const V3& queryPos, Metric metric)
+{
+    NearestBounds nearest{};
+    const uint32 segCount = spline.GetSegmentCount();
+    const uint32 boundedCount = std::min(segCount, static_cast<uint32>(spline.SegmentBounds.size()));
+    nearest.Complete = boundedCount == segCount;
+    for (uint32 seg = 0; seg < boundedCount; ++seg)
+    {
+        const float32 distSq = DistSqToAABB(queryPos, spline.SegmentBounds[seg], metric);
+        if (distSq < nearest.DistSq)
+        {
+            nearest.DistSq = distSq;
+            nearest.Segment = seg;
+        }
+    }
+    return nearest;
+}
+
 // Closest point on the curve under `metric`. Subdivision approach: sample each
 // segment at regular intervals, then refine the best candidate with bisection.
 // Position and T always address the full 3-D curve; only the distance being
 // minimized changes with the metric.
-ClosestPointResult FindClosestImpl(const SplineData& spline, const V3& queryPos, Metric metric)
+//
+// Nearest bounds first: that segment is refined before any other, so its distance
+// culls every segment whose box is farther — on a long route all but one or two.
+// A culled segment holds no nearer point (its box contains it), so the answer is
+// the one an in-order scan of every segment gives; only an exact tie between two
+// segments may resolve to the other one.
+ClosestPointResult FindClosestImpl(const SplineData& spline, const V3& queryPos, Metric metric,
+                                   const NearestBounds& nearest)
 {
     ClosestPointResult best{};
     best.Distance = std::numeric_limits<float32>::max();
@@ -291,8 +328,14 @@ ClosestPointResult FindClosestImpl(const SplineData& spline, const V3& queryPos,
 
     float32 globalBestDistSq = std::numeric_limits<float32>::max();
 
-    for (uint32 seg = 0; seg < segCount; ++seg)
+    // Visit 0 is the nearest-bounds segment; visits 1..segCount walk every
+    // segment in order and skip that one.
+    for (uint32 visit = 0; visit <= segCount; ++visit)
     {
+        const uint32 seg = visit == 0 ? nearest.Segment : visit - 1;
+        if (visit != 0 && seg == nearest.Segment)
+            continue;
+
         // Broad phase: skip segments whose AABB is farther than current best.
         if (seg < static_cast<uint32>(spline.SegmentBounds.size()))
         {
@@ -352,14 +395,39 @@ ClosestPointResult FindClosestImpl(const SplineData& spline, const V3& queryPos,
     return best;
 }
 
+ClosestPointResult FindClosestImpl(const SplineData& spline, const V3& queryPos, Metric metric)
+{
+    return FindClosestImpl(spline, queryPos, metric, FindNearestSegmentBounds(spline, queryPos, metric));
+}
+
 // Distance to the swept envelope under `metric`: distance to the path minus the
 // radius interpolated at the closest point. `fillInterior` decides whether a
 // closed spline's enclosed region counts as inside (a filled area) or only the
 // swept band around the curve does (a ring).
+//
+// Outside a filled interior and outside every segment box, the signed distance is
+// never less than the distance to the nearest box: each box is inflated by its
+// segment's radius, so it holds the swept disc of every point it bounds. So when
+// that box is `cutoff` or farther away the curve is not searched, and the box
+// distance, a value at or beyond `cutoff`, is returned instead of the exact one.
 float32 SignedDistanceImpl(const SplineData& spline, const V3& queryPos, Metric metric,
-                           bool fillInterior)
+                           bool fillInterior, float32 cutoff)
 {
-    auto result = FindClosestImpl(spline, queryPos, metric);
+    // For closed splines with a cached polygon, test whether the query point
+    // is inside the enclosed area (XZ plane). Interior points get a negative
+    // signed distance so the terrain modifier fills the entire region.
+    const bool inside = fillInterior && spline.IsEffectivelyClosed() && !spline.ClosedPolygonXZ.empty()
+        && Mathematics::PointInPolygon(Mathematics::Vector2(queryPos.x, queryPos.z), spline.ClosedPolygonXZ);
+
+    const NearestBounds nearest = FindNearestSegmentBounds(spline, queryPos, metric);
+    if (!inside && nearest.Complete && spline.IsValid())
+    {
+        const float32 boundsDistance = std::sqrt(nearest.DistSq);
+        if (boundsDistance > 0.0f && boundsDistance >= cutoff)
+            return boundsDistance;
+    }
+
+    auto result = FindClosestImpl(spline, queryPos, metric, nearest);
     if (result.Distance >= std::numeric_limits<float32>::max() * 0.5f)
         return std::numeric_limits<float32>::max();
 
@@ -369,14 +437,8 @@ float32 SignedDistanceImpl(const SplineData& spline, const V3& queryPos, Metric 
     DecomposeT(spline, result.T, seg, lt);
     float32 radius = LerpRadius(spline, seg, lt);
 
-    // For closed splines with a cached polygon, test whether the query point
-    // is inside the enclosed area (XZ plane). Interior points get a negative
-    // signed distance so the terrain modifier fills the entire region.
-    if (fillInterior && spline.IsEffectivelyClosed() && !spline.ClosedPolygonXZ.empty())
-    {
-        if (Mathematics::PointInPolygon(Mathematics::Vector2(queryPos.x, queryPos.z), spline.ClosedPolygonXZ))
-            return -(result.Distance + radius); // Always negative inside
-    }
+    if (inside)
+        return -(result.Distance + radius); // Always negative inside
 
     // Positive = outside envelope, negative = inside radius band.
     return result.Distance - radius;
@@ -489,7 +551,8 @@ ClosestPointResult FindClosestPoint(const SplineData& spline,
 float32 SignedDistanceToSpline(const SplineData& spline,
                                const Mathematics::Vector3& queryPos)
 {
-    return SignedDistanceImpl(spline, queryPos, Metric::ThreeD, /*fillInterior=*/true);
+    return SignedDistanceImpl(spline, queryPos, Metric::ThreeD, /*fillInterior=*/true,
+                              std::numeric_limits<float32>::infinity());
 }
 
 ClosestPointResult FindClosestPointXZ(const SplineData& spline, float32 worldX, float32 worldZ)
@@ -497,14 +560,14 @@ ClosestPointResult FindClosestPointXZ(const SplineData& spline, float32 worldX, 
     return FindClosestImpl(spline, V3(worldX, 0.0f, worldZ), Metric::XZ);
 }
 
-float32 SignedDistanceToSplineXZ(const SplineData& spline, float32 worldX, float32 worldZ)
+float32 SignedDistanceToSplineXZ(const SplineData& spline, float32 worldX, float32 worldZ, float32 cutoff)
 {
-    return SignedDistanceImpl(spline, V3(worldX, 0.0f, worldZ), Metric::XZ, /*fillInterior=*/true);
+    return SignedDistanceImpl(spline, V3(worldX, 0.0f, worldZ), Metric::XZ, /*fillInterior=*/true, cutoff);
 }
 
-float32 SignedDistanceToSplineBandXZ(const SplineData& spline, float32 worldX, float32 worldZ)
+float32 SignedDistanceToSplineBandXZ(const SplineData& spline, float32 worldX, float32 worldZ, float32 cutoff)
 {
-    return SignedDistanceImpl(spline, V3(worldX, 0.0f, worldZ), Metric::XZ, /*fillInterior=*/false);
+    return SignedDistanceImpl(spline, V3(worldX, 0.0f, worldZ), Metric::XZ, /*fillInterior=*/false, cutoff);
 }
 
 void RebuildSplineCache(SplineData& spline)

@@ -1,6 +1,6 @@
 #include "Editor/EditorPaths.h"
 
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Jobs/WorkspaceId.h"
 
@@ -16,11 +16,11 @@ EditorGlobalPaths GetEditorGlobalPaths()
     EditorGlobalPaths out{};
 
     // Preserve existing conventions used by EditorPathPolicy (avoid migration in this pass).
-    out.userDataRoot = (GameEngine::PathUtils::GetUserDataDirectory() / "GameEngine" / "Editor").lexically_normal();
+    out.userDataRoot = (GameEngine::ApplicationPaths::GetUserDataDirectory() / "GameEngine" / "Editor").lexically_normal();
     // Historical layout: caches live under <UserCache>/GameEngine rather than
     // .../GameEngine/Editor. An isolated session override must take the cache
     // with it, or two editors still share compiled shaders and derived files.
-    out.userCacheRoot = (GameEngine::PathUtils::GetUserCacheDirectory() / "GameEngine").lexically_normal();
+    out.userCacheRoot = (GameEngine::ApplicationPaths::GetUserCacheDirectory() / "GameEngine").lexically_normal();
     if (const char* root = std::getenv("GE_EDITOR_USER_DATA_ROOT"); root && *root)
     {
         const fs::path overrideRoot(root);
@@ -33,7 +33,7 @@ EditorGlobalPaths GetEditorGlobalPaths()
 
     out.userLogsRoot = (out.userDataRoot / "Logs").lexically_normal();
 
-    out.installAssetsRoot = GameEngine::PathUtils::GetInstallAssetsRoot();
+    out.installAssetsRoot = GameEngine::ApplicationPaths::GetInstallAssetsRoot();
     out.userAssetsRoot = (out.userDataRoot / "EditorAssets").lexically_normal();
     // Keep a validation/development session's writable shader mirror isolated
     // from other editor builds refreshing the shared user assets on launch.

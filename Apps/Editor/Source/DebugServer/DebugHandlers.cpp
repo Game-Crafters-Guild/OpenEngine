@@ -18,6 +18,7 @@
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/Particles.h"
 #include "Components/Rendering/WorldSectorCoord.h"
+#include "Core/ApplicationPaths.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/RenderLayerMaskText.h"
@@ -38,6 +39,7 @@
 #include "DebugServer/CameraProjectionReport.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "DebugServer/ComponentValueReader.h"
+#include "Mathematics/Interpolation.h"
 #include "DebugServer/RenderLayerMaskValue.h"
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/EditorDebugServer.h"
@@ -1180,6 +1182,33 @@ static float TriangularDitherAt(uint32_t px, uint32_t py)
     return s * (1.0f - std::sqrt(std::max(0.0f, 1.0f - std::abs(o))));
 }
 
+// Clamp-to-edge bilinear sample of a plane of 3 floats per pixel, at pixel-center
+// coordinates (sx, sy).
+static Mathematics::Vector3 SampleEncodedPlaneBilinear(
+    const std::vector<float>& plane, uint32_t width, uint32_t height, float sx, float sy)
+{
+    const float fx = std::clamp(sx - 0.5f, 0.0f, static_cast<float>(width - 1));
+    const float fy = std::clamp(sy - 0.5f, 0.0f, static_cast<float>(height - 1));
+    const uint32_t x0 = static_cast<uint32_t>(fx);
+    const uint32_t y0 = static_cast<uint32_t>(fy);
+    const uint32_t x1 = std::min(x0 + 1, width - 1);
+    const uint32_t y1 = std::min(y0 + 1, height - 1);
+    const float tx = fx - static_cast<float>(x0);
+    const float ty = fy - static_cast<float>(y0);
+    const float* p00 = &plane[(static_cast<size_t>(y0) * width + x0) * 3];
+    const float* p10 = &plane[(static_cast<size_t>(y0) * width + x1) * 3];
+    const float* p01 = &plane[(static_cast<size_t>(y1) * width + x0) * 3];
+    const float* p11 = &plane[(static_cast<size_t>(y1) * width + x1) * 3];
+    Mathematics::Vector3 rgb;
+    for (size_t c = 0; c < 3; ++c)
+    {
+        const float top = p00[c] + (p10[c] - p00[c]) * tx;
+        const float bot = p01[c] + (p11[c] - p01[c]) * tx;
+        rgb[c] = top + (bot - top) * ty;
+    }
+    return rgb;
+}
+
 // Gradient-aware deband on the encoded float plane — the CPU mirror of
 // encode_srgb.frag's pre-dither DebandEncoded, kept so captures continue to
 // match the screen (the same parity contract as TriangularDitherAt above):
@@ -1208,30 +1237,6 @@ static std::vector<float> DebandEncodedPlane(
     constexpr float kGolden = 0.61803399f;
     constexpr float kTwoPi = 6.2831853f;
 
-    auto fract = [](float v) -> float { return v - std::floor(v); };
-    auto sampleBilinear = [&](float sx, float sy, float rgb[3])
-    {
-        // Pixel-center coordinates in, clamp-to-edge bilinear out.
-        const float fx = std::clamp(sx - 0.5f, 0.0f, static_cast<float>(width - 1));
-        const float fy = std::clamp(sy - 0.5f, 0.0f, static_cast<float>(height - 1));
-        const uint32_t x0 = static_cast<uint32_t>(fx);
-        const uint32_t y0 = static_cast<uint32_t>(fy);
-        const uint32_t x1 = std::min(x0 + 1, width - 1);
-        const uint32_t y1 = std::min(y0 + 1, height - 1);
-        const float tx = fx - static_cast<float>(x0);
-        const float ty = fy - static_cast<float>(y0);
-        const float* p00 = &enc[(static_cast<size_t>(y0) * width + x0) * 3];
-        const float* p10 = &enc[(static_cast<size_t>(y0) * width + x1) * 3];
-        const float* p01 = &enc[(static_cast<size_t>(y1) * width + x0) * 3];
-        const float* p11 = &enc[(static_cast<size_t>(y1) * width + x1) * 3];
-        for (int c = 0; c < 3; ++c)
-        {
-            const float top = p00[c] + (p10[c] - p00[c]) * tx;
-            const float bot = p01[c] + (p11[c] - p01[c]) * tx;
-            rgb[c] = top + (bot - top) * ty;
-        }
-    };
-
     std::vector<float> out(enc.size());
     for (uint32_t py = 0; py < height; ++py)
     {
@@ -1241,44 +1246,36 @@ static std::vector<float> DebandEncodedPlane(
             const float u2 = InterleavedGradientNoiseAt(px, py, 11.0f);
             const float cx = static_cast<float>(px) + 0.5f;
             const float cy = static_cast<float>(py) + 0.5f;
-            float res[3];
             const float* center = &enc[(static_cast<size_t>(py) * width + px) * 3];
-            res[0] = center[0];
-            res[1] = center[1];
-            res[2] = center[2];
+            Mathematics::Vector3 debanded(center[0], center[1], center[2]);
             for (int i = 1; i <= kIterations; ++i)
             {
-                const float r1 = fract(u1 + static_cast<float>(i) * kGolden);
-                const float r2 = fract(u2 + static_cast<float>(i) * kGolden);
+                const float r1 = Math::Fract(u1 + static_cast<float>(i) * kGolden);
+                const float r2 = Math::Fract(u2 + static_cast<float>(i) * kGolden);
                 const float dist = baseRadius * static_cast<float>(i) * (0.25f + 0.75f * r1);
                 const float angle = kTwoPi * r2;
                 const float ox = dist * std::cos(angle);
                 const float oy = dist * std::sin(angle);
-                float t0[3], t1[3], t2[3], t3[3];
-                sampleBilinear(cx + ox, cy + oy, t0);
-                sampleBilinear(cx - oy, cy + ox, t1);
-                sampleBilinear(cx - ox, cy - oy, t2);
-                sampleBilinear(cx + oy, cy - ox, t3);
+                const Mathematics::Vector3 t0 = SampleEncodedPlaneBilinear(enc, width, height, cx + ox, cy + oy);
+                const Mathematics::Vector3 t1 = SampleEncodedPlaneBilinear(enc, width, height, cx - oy, cy + ox);
+                const Mathematics::Vector3 t2 = SampleEncodedPlaneBilinear(enc, width, height, cx - ox, cy - oy);
+                const Mathematics::Vector3 t3 = SampleEncodedPlaneBilinear(enc, width, height, cx + oy, cy - ox);
                 // Gate against the ORIGINAL center (mirrors DebandEncoded):
                 // bounds total displacement to one threshold by construction.
-                float avg[3];
+                Mathematics::Vector3 avg;
                 bool pass = true;
-                for (int c = 0; c < 3; ++c)
+                for (size_t c = 0; c < 3; ++c)
                 {
                     avg[c] = 0.25f * (t0[c] + t1[c] + t2[c] + t3[c]);
                     pass = pass && std::abs(avg[c] - center[c]) < threshold;
                 }
                 if (pass)
-                {
-                    res[0] = avg[0];
-                    res[1] = avg[1];
-                    res[2] = avg[2];
-                }
+                    debanded = avg;
             }
             float* dst = &out[(static_cast<size_t>(py) * width + px) * 3];
-            dst[0] = res[0];
-            dst[1] = res[1];
-            dst[2] = res[2];
+            dst[0] = debanded[0];
+            dst[1] = debanded[1];
+            dst[2] = debanded[2];
         }
     }
     return out;
@@ -3438,8 +3435,21 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         if (button < 0)
             return Editor::RefuseRequest("button must be non-negative");
 
-        // Frame 1: move + press.
+        // A double or triple click: the presses land inside the platform's double-click
+        // interval whatever the frame rate, which two separate requests cannot promise.
+        constexpr int kMaxClickCount = 3;
+        int clickCount = 1;
+        if (json error; !Editor::ReadClickCount(ctx.params, kMaxClickCount, clickCount, error))
+            return error;
+
+        // Frame 1: move, then every click but the last whole, then the last press. The UI
+        // dispatches each edge as it arrives, so the earlier clicks complete in this frame.
         Editor::InjectMouseMove(wndCtx->inputConfig, wndCtx->window.get(), wndCtx->ui.get(), x, y);
+        for (int click = 1; click < clickCount; ++click)
+        {
+            Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, true);
+            Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, false);
+        }
         Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, true);
 
         // Defer the release to the next frame so the UI processes the press first.
@@ -3451,7 +3461,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         float clickY = y;
         int clickButton = button;
         auto framesToSkip = std::make_shared<int>(1);
-        server.EnqueueDeferredResponse(ctx.id, [wndCtx, clickX, clickY, clickButton, framesToSkip](json& outResult) -> bool
+        server.EnqueueDeferredResponse(ctx.id, [wndCtx, clickX, clickY, clickButton, clickCount, framesToSkip](json& outResult) -> bool
         {
             if (*framesToSkip > 0)
             {
@@ -3476,7 +3486,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             const std::string hit = wndCtx->ui->GetHoveredElementDebugName();
             Editor::InjectMouseMove(wndCtx->inputConfig, wndCtx->window.get(), wndCtx->ui.get(), clickX, clickY);
             Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), clickButton, false);
-            outResult = json{{"clicked", true}, {"x", clickX}, {"y", clickY}, {"button", clickButton}, {"hit", hit}};
+            outResult = json{{"clicked", true}, {"x", clickX}, {"y", clickY}, {"button", clickButton},
+                             {"clickCount", clickCount}, {"hit", hit}};
             return true;
         });
 
@@ -8487,7 +8498,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             !error.is_null())
             return error;
 
-        float target[3] = {0.0f, 0.0f, 0.0f};
+        Mathematics::Vector3 target(0.0f, 0.0f, 0.0f);
         bool framedBounds = false;
         float autoDistance = 0.0f; // subtree-derived; used when the caller omits distance
 
@@ -8509,27 +8520,20 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             Editor::SubtreeWorldBounds subtree;
             if (Editor::ComputeSubtreeWorldBounds(*world, entity, subtree) && subtree.HasBounds)
             {
-                const Mathematics::Vector3 center = subtree.Center();
-                target[0] = center.x;
-                target[1] = center.y;
-                target[2] = center.z;
+                target = subtree.Center();
                 autoDistance = std::max(subtree.Radius() * 1.8f, 0.5f);
                 framedBounds = true;
             }
             else if (auto* xf = world->GetComponent<Components::Transform>(entity))
             {
                 auto pos = xf->GetPosition();
-                target[0] = pos.x;
-                target[1] = pos.y;
-                target[2] = pos.z;
+                target = Mathematics::Vector3(pos.x, pos.y, pos.z);
             }
         }
         else if (ctx.params.contains("target"))
         {
             auto& t = ctx.params["target"];
-            target[0] = t[0].get<float>();
-            target[1] = t[1].get<float>();
-            target[2] = t[2].get<float>();
+            target = Mathematics::Vector3(t[0].get<float>(), t[1].get<float>(), t[2].get<float>());
         }
         else
         {
@@ -8551,7 +8555,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         }
 
         SceneViewCameraPose pose{};
-        if (!Editor::ComputeLookAtPose(Mathematics::Vector3(target[0], target[1], target[2]),
+        if (!Editor::ComputeLookAtPose(target,
                                        Mathematics::Vector3(dirX, dirY, dirZ), distance, pose))
             return Editor::RefuseRequest("Direction vector is zero");
         const float camX = pose.Pos[0];
@@ -8565,7 +8569,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         json response{
             {"ok", true},
             {"position", {camX, camY, camZ}},
-            {"target", {target[0], target[1], target[2]}},
+            {"target", {target.x, target.y, target.z}},
             {"yawDeg", yawDeg},
             {"pitchDeg", pitchDeg},
             {"distance", distance},
@@ -9729,9 +9733,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         json result = json::object();
         result["workspaceRoot"] = wsRoot.string();
         result["assetRoot"] = assetRoot.string();
-        result["sdkPath"] = (PathUtils::GetExecutableDirectory() / "SDK").string();
-        result["sdkLibDebugExists"] = std::filesystem::is_directory(PathUtils::GetExecutableDirectory() / "SDK" / "lib" / "Debug");
-        result["sdkLibReleaseExists"] = std::filesystem::is_directory(PathUtils::GetExecutableDirectory() / "SDK" / "lib" / "Release");
+        result["sdkPath"] = (ApplicationPaths::GetExecutableDirectory() / "SDK").string();
+        result["sdkLibDebugExists"] = std::filesystem::is_directory(ApplicationPaths::GetExecutableDirectory() / "SDK" / "lib" / "Debug");
+        result["sdkLibReleaseExists"] = std::filesystem::is_directory(ApplicationPaths::GetExecutableDirectory() / "SDK" / "lib" / "Release");
 
         // Count files in asset root
         int assetFileCount = 0;
@@ -9857,7 +9861,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 // bind world rotations identifies whether two rigs share
                 // a canonical T-pose at bind.
                 json worldRest = json::array();
-                std::vector<std::array<float, 4>> worldQuats(skel->BoneCount);
+                std::vector<Mathematics::Quaternion> worldQuats(skel->BoneCount, Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f));
                 const bool useTopo = !skel->TopologicalOrder.empty()
                     && skel->TopologicalOrder.size() == skel->BoneCount;
                 for (uint32_t i = 0; i < skel->BoneCount; ++i)
@@ -9865,25 +9869,18 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     const uint32_t b = useTopo ? skel->TopologicalOrder[i] : i;
                     const float* rp = (b * 4u + 3u < skel->RestRotation.size())
                         ? &skel->RestRotation[b * 4u] : nullptr;
-                    glm::quat local = rp
-                        ? glm::quat(rp[3], rp[0], rp[1], rp[2])
-                        : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                    const Mathematics::Quaternion local = rp
+                        ? Mathematics::Quaternion(rp[3], rp[0], rp[1], rp[2])
+                        : Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f);
                     const int32 parent = (b < skel->Parent.size()) ? skel->Parent[b] : -1;
-                    glm::quat world;
-                    if (parent < 0) world = local;
-                    else
-                    {
-                        const auto& p = worldQuats[static_cast<size_t>(parent)];
-                        glm::quat parentW(p[3], p[0], p[1], p[2]);
-                        world = parentW * local;
-                    }
-                    world = glm::normalize(world);
-                    worldQuats[b] = {world.x, world.y, world.z, world.w};
+                    const Mathematics::Quaternion world =
+                        parent < 0 ? local : worldQuats[static_cast<size_t>(parent)] * local;
+                    worldQuats[b] = world.Normalized();
                 }
                 for (uint32_t b = 0; b < skel->BoneCount; ++b)
                 {
-                    const auto& w = worldQuats[b];
-                    worldRest.push_back({w[0], w[1], w[2], w[3]});
+                    const glm::quat& w = worldQuats[b].GetGLM();
+                    worldRest.push_back({w.x, w.y, w.z, w.w});
                 }
                 skelJson["restWorld"] = std::move(worldRest);
             }

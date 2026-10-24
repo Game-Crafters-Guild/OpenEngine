@@ -6,7 +6,7 @@
 #include "Core/Engine.h"
 #include "ECS/World.h"
 #include "Placement/PlacementGroundGap.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainGpuBake.h"
 
 #include <nlohmann/json.hpp>
@@ -32,21 +32,28 @@ constexpr std::size_t kMaxGroundSamples = 8192u;
 // The composed-ground description shared by every handler in this file. Reported
 // alongside the samples so a reading carries the terrain it was taken against:
 // two runs that disagree are usually two different terrains, not two heights.
-json DescribeSurface(const TerrainECS::PlanarHeightQuery& query)
+// What the query reads: a whole-map heightfield, a paged terrain's CPU pages, or a paged terrain
+// whose pages have no source yet (a height store still cooking), which samples nothing.
+const char* SurfaceKind(const TerrainECS::SurfaceHeightQuery& query)
+{
+    if (query.WholeMap())
+        return "single";
+    return query.Edits().Source != 0 ? "paged" : "pagedNoSourceYet";
+}
+
+json DescribeSurface(const TerrainECS::SurfaceHeightQuery& query)
 {
     // Every footprint number comes from the query's own accessors, which report
-    // the extent it SAMPLES over. Reading the fields directly would mix a
-    // component-derived origin with a residency-derived lattice on a tiled
-    // terrain, where the two disagree. The lattice origin is the footprint
-    // origin, so it is reported once.
+    // the extent it SAMPLES over. The lattice origin is the footprint origin, so
+    // it is reported once.
     return json{
-        {"kind", query.Tiled ? "tiled" : "single"},
+        {"kind", SurfaceKind(query)},
         {"originX", query.FootprintOriginX()},
         {"originZ", query.FootprintOriginZ()},
-        {"originY", query.OriginY},
+        {"originY", query.OriginY()},
         {"sizeX", query.FootprintSizeX()},
         {"sizeZ", query.FootprintSizeZ()},
-        {"heightScale", query.HeightScale},
+        {"heightScale", query.HeightScale()},
         {"latticeSpacingX", query.LatticeSpacingX()},
         {"latticeSpacingZ", query.LatticeSpacingZ()},
         // A tiled terrain whose modifiers are all GPU-bakeable leaves the CPU
@@ -129,8 +136,8 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         if (!world)
             return Editor::RefuseRequest("No world available");
 
-        const TerrainECS::PlanarHeightQuery query =
-            TerrainECS::ResolvePlanarHeightQuery(*world);
+        const TerrainECS::SurfaceHeightQuery query =
+            TerrainECS::ResolveSurfaceHeightQuery(*world);
         if (!query.IsValid())
             return UnresolvedSurface();
 
@@ -141,16 +148,23 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
             const auto z = point[1].get<float32>();
 
             // Outside the footprint there is no ground and never will be;
-            // inside it but unsampleable means the tile has not streamed in.
+            // inside it but unsampled means no page is on the CPU there yet.
             // Collapsing those into one "false" is how a caller ends up bedding
-            // geometry into a streaming hole, so they stay separate.
+            // geometry into a streaming hole, so they stay separate. A coarse
+            // answer is reported (AcceptCoarse) with its level and `finest`
+            // false, so a caller judging precision reads both.
             const bool inside = query.ContainsXZ(x, z);
-            float32 y = 0.0f;
-            const bool sampled = query.SampleHeight(x, z, y);
+            TerrainECS::SurfaceHeightSample height;
+            const bool sampled = query.SampleHeight(Mathematics::Vector3(x, 0.0f, z),
+                                                    TerrainECS::SurfaceHeightPolicy::AcceptCoarse, height);
 
             json sample{{"x", x}, {"z", z}, {"inside", inside}, {"sampled", sampled}};
             if (sampled)
-                sample["y"] = y;
+            {
+                sample["y"] = height.Height;
+                sample["level"] = height.Level;
+                sample["finest"] = height.Detail == TerrainECS::SurfaceHeightDetail::Finest;
+            }
             samples.push_back(std::move(sample));
         }
 
@@ -183,8 +197,8 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         if (!world->IsValid(route))
             return Editor::RefuseRequest("Invalid entity");
 
-        const TerrainECS::PlanarHeightQuery query =
-            TerrainECS::ResolvePlanarHeightQuery(*world);
+        const TerrainECS::SurfaceHeightQuery query =
+            TerrainECS::ResolveSurfaceHeightQuery(*world);
         if (!query.IsValid())
             return UnresolvedSurface();
 

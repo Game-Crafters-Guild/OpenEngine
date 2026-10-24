@@ -30,7 +30,7 @@ namespace GameEngine::Components
 // the generic Add-Component menu, exactly like TerrainGrass.
 struct TerrainPlanetRelief
 {
-    // @ge-tooltip Base surface displacement along the normal (metres). ~= R/40 reads well.
+    // @ge-tooltip Base surface displacement along the normal (meters). ~= R/40 reads well.
     float32 Amplitude = 60.0f;   // procedural relief along the normal (metres)
     // @ge-tooltip Angular frequency of the base noise (wavelength ~= 2*pi*R / frequency).
     float32 Frequency = 6.0f;    // angular frequency (wavelength ~= 2piR/frequency)

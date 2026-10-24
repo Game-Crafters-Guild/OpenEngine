@@ -1,8 +1,9 @@
-/* Dropdown control — disabled presentation.
-   The control's layout, popup and resting/hover surface live in
-   theme/widgets.css with the rest of the .dropdown family; this file carries
-   only the state the control itself refuses input in, attached by Dropdown's
-   constructor (RequestSubtreeStyleAssetPath).
+/* Dropdown control — picture options and the disabled presentation.
+   The control's base layout, popup and resting/hover surface live in
+   theme/widgets.css with the rest of the .dropdown family; this file, attached
+   by Dropdown's constructor (RequestSubtreeStyleAssetPath), carries the picture
+   rows and the state the control refuses input in. It joins the cascade after
+   the theme, so a rule here wins a tie with a widgets.css rule.
 
    A disabled dropdown is a value to READ. It keeps the value at normal reading
    weight — dimming the text is what made a read-only panel unreadable — and
@@ -25,4 +26,57 @@
 /* No chevron: a box with an arrow that never opens is a false affordance. */
 .dropdown:disabled .dropdown-chevron {
 	display: none;
+}
+
+/* A picture list (Dropdown::Option::pictureClass): each row shows a picture of
+   what the option does, then its name and one line under it. Every row of such
+   a list comes from DropdownPictureRow.uxml, which puts .dropdown-item-picture
+   on the row; the selection check keeps the shared leading gutter, centered on
+   the taller row. */
+.dropdown-item-picture {
+	align-items: center;
+	padding: 4px 10px 4px 24px;
+	background-position: 7px 50%;
+}
+
+/* The picture: a 3:2 frame, untinted. The option's class picks the image. */
+.dropdown-item-picture-image {
+	width: 72px;
+	height: 48px;
+	min-width: 72px;
+	flex-shrink: 0;
+	margin-right: 10px;
+	background-size: cover;
+	background-repeat: no-repeat;
+	background-position: center;
+	pointer-events: none;
+}
+
+.dropdown-item-text {
+	display: flex;
+	flex-direction: column;
+	flex-grow: 1;
+	min-width: 0;
+	row-gap: 2px;
+}
+
+/* The line under the name: the row's text color at 75% opacity, so it follows
+   the row's rest, hover and selected states. */
+.dropdown-item-description {
+	font-size: 12px;
+	opacity: 0.75;
+	white-space: nowrap;
+}
+
+/* The selected option's picture in the closed header, sized to the header's
+   text line so a picture list keeps the height of every other field. */
+.dropdown-header-picture {
+	width: 24px;
+	height: 16px;
+	min-width: 24px;
+	flex-shrink: 0;
+	background-size: cover;
+	background-repeat: no-repeat;
+	background-position: center;
+	pointer-events: none;
 }

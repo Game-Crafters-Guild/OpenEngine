@@ -35,7 +35,7 @@ class WorkingLayoutLogCounter
     explicit WorkingLayoutLogCounter(std::string needle) : m_Needle(std::move(needle))
     {
         Logger::Log::Initialize({Logger::LogLevel::Debug, false});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         m_Sink = sink.get();
         Logger::Log::AddSink(std::move(sink));
         m_CallbackId = m_Sink->RegisterCallback([this](const Logger::LogMessage& message) {
@@ -54,7 +54,7 @@ class WorkingLayoutLogCounter
   private:
     std::string m_Needle;
     Logger::CallbackSink* m_Sink = nullptr;
-    Logger::uint64 m_CallbackId = 0;
+    std::uint64_t m_CallbackId = 0;
     std::atomic<int> m_Count{0};
 };
 

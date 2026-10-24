@@ -95,8 +95,8 @@
       <pane id="AnimationWindowPropertiesPane" class="animationwindow-properties-pane" weight="0">
         <UIElement id="AnimationWindowPropertiesHeader" class="animationwindow-properties-header">
           <UIElement class="animationwindow-properties-search-row panel-search-bar search-field-with-filter">
-            <TextField id="AnimationWindowPropertiesSearch" class="animationwindow-properties-search panel-search-field" />
-            <UIElement id="AnimationWindowPropertiesSearchIcon" class="panel-search-icon" />
+            <TextField id="AnimationWindowPropertiesSearch" class="animationwindow-properties-search panel-search-field search-field-with-filter-input" />
+            <UIElement id="AnimationWindowPropertiesSearchIcon" class="panel-search-icon search-field-with-filter-icon" />
             <Button id="AnimationWindowPropertiesSearchClear" class="panel-search-clear xclose-icon hidden" />
           </UIElement>
           <UIElement id="AnimationWindowPropertiesFilterRow" class="animationwindow-properties-filter-row">

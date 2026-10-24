@@ -10,7 +10,7 @@ set(ENGINE_SOURCES
     Source/Core/EngineLoggerBridge.cpp
     Source/Core/WindowInputRouter.cpp
     Source/Core/WindowUiBootstrap.cpp
-    Source/Core/PathUtils.cpp
+    Source/Core/ApplicationPaths.cpp
     Source/Core/StandardPaths.cpp
     # Source/Components/ComponentReflection.cpp is generated at build time as
     # ComponentReflection.gen.cpp by the ComponentScanner tool — wired in via
@@ -198,6 +198,7 @@ set(ENGINE_SOURCES
 
 set(ENGINE_HEADERS
     Include/Core/Application.h
+    Include/Core/ApplicationPaths.h
     Include/Core/DeferredActionQueue.h
     Include/Core/WindowInputRouter.h
     Include/Core/WindowUiBootstrap.h
@@ -1637,6 +1638,8 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(OceanDepthCacheBakerTests Tests/OceanDepthCacheBakerTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
     target_link_libraries(OceanDepthCacheBakerTests PRIVATE Engine GTest::gtest)
+    target_include_directories(OceanDepthCacheBakerTests PRIVATE
+        ${CMAKE_SOURCE_DIR}/Tests) # PagedTiledTerrain.h
     set_target_properties(OceanDepthCacheBakerTests PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON

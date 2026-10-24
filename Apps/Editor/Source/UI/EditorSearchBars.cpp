@@ -8,30 +8,6 @@
 
 namespace GameEngine {
 
-bool EditorSearchBars::GetVisible()
-{
-    // Load on first access if not yet loaded
-    if (!s_Loaded)
-        LoadFromPreferences();
-    return s_Visible;
-}
-
-void EditorSearchBars::SetVisible(bool visible)
-{
-    s_Visible = visible;
-    s_Loaded = true;
-    SaveToPreferences();
-    PruneNulls();
-
-    for (const RegisteredBar& registered : s_Bars)
-    {
-        if (visible)
-            registered.SearchBar->RemoveClass("hidden");
-        else
-            registered.SearchBar->AddClass("hidden");
-    }
-}
-
 bool EditorSearchBars::GetAtTop()
 {
     if (!s_Loaded)
@@ -68,9 +44,8 @@ void EditorSearchBars::SetAtTop(bool atTop)
     PruneNulls();
 
     std::vector<UIManager*> managersToRefresh;
-    for (const RegisteredBar& registered : s_Bars)
+    for (UIElement* bar : s_Bars)
     {
-        UIElement* bar = registered.PlacementTarget;
         ApplyPlacement(bar);
 
         UIElement* dirtyRoot = bar->GetParent() ? bar->GetParent() : bar;
@@ -89,33 +64,17 @@ void EditorSearchBars::SetAtTop(bool atTop)
 
 void EditorSearchBars::Register(UIElement* searchBar)
 {
-    RegisterHosted(searchBar, searchBar);
-}
-
-void EditorSearchBars::RegisterHosted(UIElement* searchBar, UIElement* placementHost)
-{
-    if (!searchBar || !placementHost)
+    if (!searchBar)
         return;
 
-    // Load on first register if not yet loaded
     if (!s_Loaded)
         LoadFromPreferences();
 
-    // Ensure the bar matches current global state immediately.
-    if (!s_Visible)
-        searchBar->AddClass("hidden");
-    else
-        searchBar->RemoveClass("hidden");
-    ApplyPlacement(placementHost);
+    ApplyPlacement(searchBar);
     RegisterFocusTarget(searchBar);
 
-    auto it = std::find_if(s_Bars.begin(), s_Bars.end(),
-                           [searchBar](const RegisteredBar& registered)
-                           { return registered.SearchBar == searchBar; });
-    if (it == s_Bars.end())
-        s_Bars.push_back({searchBar, placementHost});
-    else
-        it->PlacementTarget = placementHost;
+    if (std::find(s_Bars.begin(), s_Bars.end(), searchBar) == s_Bars.end())
+        s_Bars.push_back(searchBar);
 }
 
 void EditorSearchBars::RegisterFocusTarget(UIElement* searchBar)
@@ -146,17 +105,17 @@ void EditorSearchBars::ApplyFocusOutline(UIElement* searchBar)
         searchBar->RemoveClass("search-accent-focus");
 }
 
-void EditorSearchBars::ApplyPlacement(UIElement* placementTarget)
+void EditorSearchBars::ApplyPlacement(UIElement* searchBar)
 {
-    if (!placementTarget)
+    if (!searchBar)
         return;
 
     if (s_AtTop)
-        placementTarget->AddClass("search-bar-at-top");
+        searchBar->AddClass("search-bar-at-top");
     else
-        placementTarget->RemoveClass("search-bar-at-top");
+        searchBar->RemoveClass("search-bar-at-top");
 
-    UIElement* parent = placementTarget->GetParent();
+    UIElement* parent = searchBar->GetParent();
     if (!parent)
         return;
 
@@ -171,9 +130,7 @@ void EditorSearchBars::Unregister(UIElement* searchBar)
     if (!searchBar)
         return;
 
-    auto it = std::remove_if(s_Bars.begin(), s_Bars.end(),
-                             [searchBar](const RegisteredBar& registered)
-                             { return registered.SearchBar == searchBar; });
+    auto it = std::remove(s_Bars.begin(), s_Bars.end(), searchBar);
     if (it != s_Bars.end())
         s_Bars.erase(it, s_Bars.end());
     UnregisterFocusTarget(searchBar);
@@ -181,9 +138,7 @@ void EditorSearchBars::Unregister(UIElement* searchBar)
 
 void EditorSearchBars::PruneNulls()
 {
-    auto it = std::remove_if(s_Bars.begin(), s_Bars.end(),
-                             [](const RegisteredBar& registered)
-                             { return !registered.SearchBar || !registered.PlacementTarget; });
+    auto it = std::remove(s_Bars.begin(), s_Bars.end(), nullptr);
     if (it != s_Bars.end())
         s_Bars.erase(it, s_Bars.end());
 }
@@ -195,10 +150,8 @@ void EditorSearchBars::LoadFromPreferences()
     prefs.Load(&err);
 
     // A key the profile never saved reads its default, not the value an earlier load left behind.
-    s_Visible = kDefaultVisible;
     s_AtTop = kDefaultAtTop;
     s_AccentFocusOutline = kDefaultAccentFocusOutline;
-    prefs.TryGetBool("ui.searchBarsVisible", s_Visible);
     prefs.TryGetBool("ui.searchBarsAtTop", s_AtTop);
     prefs.TryGetBool("ui.searchBarsAccentFocusOutline", s_AccentFocusOutline);
     s_Loaded = true;
@@ -210,7 +163,6 @@ void EditorSearchBars::SaveToPreferences()
     std::string err;
     prefs.Load(&err); // Load existing to preserve other settings
     
-    prefs.SetBool("ui.searchBarsVisible", s_Visible);
     prefs.SetBool("ui.searchBarsAtTop", s_AtTop);
     prefs.SetBool("ui.searchBarsAccentFocusOutline", s_AccentFocusOutline);
     prefs.Save(&err);

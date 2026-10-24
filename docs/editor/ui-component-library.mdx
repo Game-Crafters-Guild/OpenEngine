@@ -167,6 +167,26 @@ Dropdown::Option{"soft", "Soft", {}, "dropdown-icon--light-area"};
 EnumEntry<LightType>{LightType::Area, "Area", "dropdown-icon--light-area"};
 ```
 
+An option may instead carry a picture of what it does, for a choice the user judges by its look, such as a preset. The option names the picture's CSS class and one line of text. The list then shows each option as a row with a 72 x 48 picture, the name, and the line under it. The closed field shows the selected picture small, at the height of every other field. The pictures draw untinted. A stylesheet maps each class to its image, the same way as for icons. When options declare both, the picture replaces the icon. A list in native mode shows the names only.
+
+A preset list whose values match no preset can name that state in the field without adding an entry: `SetNoSelectionText("Custom")`, then select index -1. The list still offers only the presets, and picking one selects it and calls the change callback.
+
+```cpp title="Options that carry a picture and a line of text"
+Dropdown::Option{"Vivid", "Vivid", {}, {}, "option-picture--star-look-vivid", "The default. Bright stars glow, with four thin spikes and the full night tint."};
+```
+
+`theme/option-pictures.css` maps each picture class to its image: the class is `option-picture--<stem>` and the file is `Icons/OptionPictures/<stem>.png`, 144 x 96 for the 72 x 48 frame.
+
+### Picture choices
+
+A choice among two or three options that look different, side by side as tiles: a picture, the name and one line each. One tile is selected at a time, like a group of radio buttons. A left click selects a tile; with the field focused, Up and Left select the previous tile and Down and Right the next, wrapping at the ends. The sky's **Seen by** row (Camera or Eye) is one. The control is `EditorUI::PictureChoiceField`; the pictures use the same classes as dropdown pictures.
+
+```cpp title="Two picture tiles"
+EditorUI::PictureChoiceField field({{"Camera", "Every star keeps its color.", "option-picture--star-seen-by-camera"},
+                                    {"Eye", "Faint stars look white.", "option-picture--star-seen-by-eye"}},
+                                   0);
+```
+
 ### Text and numeric fields
 
 Text input, multiline text, float/int values, and vector groups. Controls: `TextField`, `FloatField`, `Vector3Field`.

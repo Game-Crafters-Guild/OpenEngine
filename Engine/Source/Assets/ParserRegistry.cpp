@@ -26,7 +26,7 @@
 #include "Assets/Parsers/UILayoutAssetParser.h"
 #include "Assets/Parsers/UIStyleAssetParser.h"
 #include "Assets/Parsers/XmlAssetParser.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 #include <algorithm>
 #include <cctype>
@@ -71,7 +71,7 @@ bool ParserRegistry::Initialize()
 
     // Optional: dynamic parser plugins.
     // Default location: <exe>/Plugins/AssetParsers
-    LoadPluginsFromDirectory(PathUtils::GetExecutableDirectory() / "Plugins" / "AssetParsers");
+    LoadPluginsFromDirectory(ApplicationPaths::GetExecutableDirectory() / "Plugins" / "AssetParsers");
     LoadPluginsFromEnvironment();
 
     m_Initialized = true;

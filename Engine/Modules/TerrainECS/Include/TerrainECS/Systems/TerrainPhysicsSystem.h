@@ -14,12 +14,15 @@ struct Terrain;
 namespace GameEngine::TerrainECS
 {
 
+class TerrainService;
+
 // A planar terrain's collider describes it when it reads the terrain's current
 // data handle and was sized from the terrain's current extent and height scale.
 bool ColliderMatchesTerrain(const Components::HeightFieldColliderShape& shape, const Components::Terrain& terrain);
 
 // Provisions HeightFieldColliderShape + PhysicsBody + PhysicsCollider on terrain
-// entities that have height data ready, and keeps a planar terrain's shape on the
+// entities that have height data ready (a tiled terrain on its window pages, a single
+// one on itself), and keeps a planar terrain's shape on the
 // terrain's current data handle, extent and height scale. The actual Jolt body
 // creation is handled by PhysicsInitSystem via its heightfield gather block.
 class TerrainPhysicsSystem : public ECS::ISystem
@@ -32,6 +35,11 @@ private:
     // Provision / refresh a spherical terrain's six per-face heightfield colliders
     // (planet-collider slice). Split out so the tiled/single provisioning stays readable.
     void UpdatePlanetColliders(ECS::World& world);
+
+    // Provisions a tiled terrain's colliders: one per finest page in its CPU windows (the cameras' and
+    // the dynamic bodies', independent of the view), torn down when the page leaves every window. A
+    // terrain whose pages have no source yet (its height store still cooking) gets none.
+    void UpdatePageColliders(ECS::World& world, TerrainService& service);
 
     // Removes the collider of a terrain that lost its planar data with no
     // planar replacement: the Terrain component was removed, or the terrain
@@ -46,12 +54,8 @@ private:
     uint64 m_TrackedWorld = 0;
     uint64 m_TrackedReset = 0;
 
-    // Latched once a duplicate tiled-handle claim is seen, so the misconfig
-    // warning is logged once per system rather than every frame the duplicate
-    // persists.
-    bool m_WarnedDuplicateTiledClaim = false;
-
-    // Same, for a second enabled spherical terrain (only the first gets face colliders).
+    // Latched once a second enabled spherical terrain is seen (only the first gets face
+    // colliders), so the misconfig warning is logged once per system.
     bool m_WarnedDuplicatePlanetClaim = false;
 
     // The sphere sculpt mirror version the planet face colliders have consumed. A refresh

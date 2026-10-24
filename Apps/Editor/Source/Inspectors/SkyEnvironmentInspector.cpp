@@ -16,6 +16,7 @@
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/SkyDayCurveRow.h"
 #include "Inspectors/SkyStarLookRow.h"
+#include "Inspectors/SkyStarSeenByRow.h"
 #include "Inspectors/SkySunDriveRows.h"
 #include "Inspectors/SkySunIlluminanceRow.h"
 #include "Sky/SkyEnvironmentComponentTraits.h"
@@ -82,11 +83,6 @@ constexpr EnumEntry<Rendering::SkyBelowHorizonMode> kBelowHorizonModes[] = {
 // Sky-type dropdown options (mirrors Components::SkyMode). Switching rebuilds the inspector so
 // the physical vs gradient control sets show/hide.
 // Star shape dropdown options (mirrors Components::StarShapeKind).
-constexpr EnumEntry<Components::StarObserverKind> kStarObservers[] = {
-    {Components::StarObserverKind::Eye, "Eye"},
-    {Components::StarObserverKind::Camera, "Camera"},
-};
-
 constexpr EnumEntry<Components::StarShapeKind> kStarShapes[] = {
     {Components::StarShapeKind::Point, "Point"},
     {Components::StarShapeKind::Sparkle, "Sparkle"},
@@ -2067,17 +2063,9 @@ void RegisterSkyEnvironmentInspector()
             4.0f);
 
         AddSkyStarLookRow(stars, w, e, n, undo);
+        AddSkyStarSeenByRow(stars, w, e, n, undo);
 
-        {
-            auto* observerField = InspectorUI::AddEnumRow(
-                stars, "Observer", kStarObservers, sky->StarObserver,
-                "Observer: Eye draws the stars as a dark-adapted eye sees them (glare, faint stars fading to white); Camera draws the same stars "
-                "without the glare, each in its catalog color.");
-            observerField->SetOnValueChanged([w, e, n, undo](Components::StarObserverKind v) {
-                CommitComponentWithUndo<Components::SkyEnvironment>(w, e, n, undo, "Change Sky Star Observer",
-                    [v](Components::SkyEnvironment& u) { u.StarObserver = v; });
-            });
-        }
+        InspectorUI::AddTextBlock(stars, "Visibility", "inspector-section-subheader");
 
         AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Limit", sky->StarLimitingMagnitude,
             w, e, n, undo, "Change Sky Star Limiting Magnitude",

@@ -7,6 +7,8 @@ Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:sleep_poll:1               
 Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:std_thread:1                         # the debug server's socket thread
 Apps/Editor/Source/DebugServer/EditorDebugServer.h:condition_variable:1                   # the debug server's socket thread
 Apps/Editor/Source/DebugServer/EditorDebugServer.h:std_thread:1                           # the debug server's socket thread
+Apps/Editor/Source/DebugServer/PointerCoordsRequest.cpp:one_free_function_file:1          # two request readers; the gate does not see ReadPointerCoords, whose signature wraps
+Apps/Editor/Source/DebugServer/PointerCoordsRequest.h:one_free_function_file:1            # two request readers; the gate does not see ReadPointerCoords, whose signature wraps
 Apps/Editor/Source/DeviceLossSurfacer.cpp:std_thread:1                                    # a native modal that returns only when a person answers
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:atomic_spin:1                   # a watchdog (must not depend on the pool it watches)
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:sleep_poll:1                    # a watchdog (must not depend on the pool it watches)

@@ -5,7 +5,7 @@
 #include "Assets/Packages/PackagesLockFile.h"
 #include "Assets/Packages/ProjectPackagesManifest.h"
 #include "AssetCore/PathNormalization.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -254,7 +254,7 @@ PackageResolution PackageResolver::Resolve(const std::filesystem::path& projectR
     std::filesystem::path enginePackageAuthoringRoot;
     {
         const std::filesystem::path engineRoot =
-            enginePackagesRoot.empty() ? PathUtils::GetExecutableDirectory() / kStagedEnginePackagesDirName
+            enginePackagesRoot.empty() ? ApplicationPaths::GetExecutableDirectory() / kStagedEnginePackagesDirName
                                        : enginePackagesRoot;
         enginePackageAuthoringRoot = ReadEnginePackageAuthoringRoot(engineRoot);
         std::error_code ec;

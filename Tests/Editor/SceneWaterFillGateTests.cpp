@@ -37,7 +37,7 @@
 
 #include "Placement/CenterlineSampling.h"
 #include "Placement/SplineFillRebuild.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 
 #include "Components/Name.h"
 #include "Components/Spline/SplineComponent.h"
@@ -73,8 +73,8 @@ using GameEngine::TerrainECS::TerrainService;
 
 using GameEngine::Editor::BuildWaterFillRun;
 using GameEngine::Editor::CenterlineSampleCount;
-using GameEngine::TerrainECS::PlanarHeightQuery;
-using GameEngine::TerrainECS::ResolvePlanarHeightQuery;
+using GameEngine::TerrainECS::SurfaceHeightQuery;
+using GameEngine::TerrainECS::ResolveSurfaceHeightQuery;
 using GameEngine::Editor::WaterFillOutcome;
 using GameEngine::Editor::WaterFillRun;
 using GameEngine::Editor::WorldCenterlineLength;
@@ -86,6 +86,18 @@ namespace SplineECS = GameEngine::SplineECS;
 
 namespace
 {
+
+// The finest ground height at world (x, z): a water fill floods the ground as drawn up close.
+bool SampleGround(const GameEngine::TerrainECS::SurfaceHeightQuery& query, GameEngine::float32 worldX,
+                  GameEngine::float32 worldZ, GameEngine::float32& outY)
+{
+    GameEngine::TerrainECS::SurfaceHeightSample sample;
+    if (!query.SampleHeight(GameEngine::Mathematics::Vector3{worldX, 0.0f, worldZ},
+                            GameEngine::TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
+        return false;
+    outY = sample.Height;
+    return true;
+}
 
 const char* EnvOrNull(const char* name)
 {
@@ -246,7 +258,7 @@ struct RefusalField
 
 RefusalField SolveRefusalField(const std::vector<SG::SplineStripStation>& stations,
                                const Components::SplineExtrude& recipe,
-                               const TerrainECS::PlanarHeightQuery& terrain)
+                               const TerrainECS::SurfaceHeightQuery& terrain)
 {
     RefusalField out;
     const float32 spacingX = terrain.LatticeSpacingX();
@@ -265,8 +277,8 @@ RefusalField SolveRefusalField(const std::vector<SG::SplineStripStation>& statio
     }
     const float32 reach = std::max(0.0f, recipe.MaxHalfWidth);
     const float32 margin = reach + std::max(spacingX, spacingZ) * 2.0f;
-    const float32 originX = terrain.LatticeOriginX();
-    const float32 originZ = terrain.LatticeOriginZ();
+    const float32 originX = terrain.FootprintOriginX();
+    const float32 originZ = terrain.FootprintOriginZ();
     const int32 firstX = static_cast<int32>(std::floor((minX - margin - originX) / spacingX));
     const int32 lastX = static_cast<int32>(std::ceil((maxX + margin - originX) / spacingX));
     const int32 firstZ = static_cast<int32>(std::floor((minZ - margin - originZ) / spacingZ));
@@ -288,7 +300,7 @@ RefusalField SolveRefusalField(const std::vector<SG::SplineStripStation>& statio
             const float32 wx = out.Grid.WorldX(cx);
             const float32 wz = out.Grid.WorldZ(cz);
             const uint32 index = out.Grid.Index(cx, cz);
-            if (!terrain.ContainsXZ(wx, wz) || !terrain.SampleHeight(wx, wz, out.Heights[index]))
+            if (!terrain.ContainsXZ(wx, wz) || !SampleGround(terrain, wx, wz, out.Heights[index]))
                 out.Heights[index] = 1.0e9f;
         }
     out.Grid.Heights = out.Heights;
@@ -355,7 +367,7 @@ struct RefusalTally
     uint32 InteriorUnseen = 0;
 };
 
-RefusalTally ReportRefusals(const FittedRun& run, const TerrainECS::PlanarHeightQuery& terrain,
+RefusalTally ReportRefusals(const FittedRun& run, const TerrainECS::SurfaceHeightQuery& terrain,
                             const SG::SplineFillDiagnostics& production)
 {
     const RefusalField solved = SolveRefusalField(run.Stations, run.Recipe, terrain);
@@ -739,7 +751,7 @@ TEST_F(SceneWaterFillGate, GroundUnderEveryControlPoint)
     LoadAndBake();
     ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(m_World);
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(m_World);
     ASSERT_TRUE(terrain.IsValid());
 
     auto* splines = SplineECS::SplineService::TryGet();
@@ -770,7 +782,7 @@ TEST_F(SceneWaterFillGate, GroundUnderEveryControlPoint)
         {
             const Vector3 world = worldM.TransformPoint(data->Points[i].Position);
             float32 ground = 0.0f;
-            const bool ok = terrain.SampleHeight(world.x, world.z, ground);
+            const bool ok = SampleGround(terrain, world.x, world.z, ground);
             std::printf("      %4zu %8.2f %8.2f  %9.3f %9.3f %9.3f%s\n", i, world.x, world.z,
                         world.y, ground, ground - world.y, ok ? "" : "   <-- off terrain");
         }
@@ -787,14 +799,16 @@ TEST_F(SceneWaterFillGate, ReliefMapAndSeaBand)
     LoadAndBake();
     ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(m_World);
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(m_World);
     ASSERT_TRUE(terrain.IsValid());
 
     const float32 step = EnvUint("GE_SCENE_WATER_GATE_MAP_STEP", 16u) * 1.0f;
-    const float32 minX = terrain.OriginX;
-    const float32 minZ = terrain.OriginZ;
-    const int32 countX = static_cast<int32>(terrain.SizeX / step) + 1;
-    const int32 countZ = static_cast<int32>(terrain.SizeZ / step) + 1;
+    const float32 minX = terrain.FootprintOriginX();
+    const float32 minZ = terrain.FootprintOriginZ();
+    const float32 sizeX = terrain.FootprintSizeX();
+    const float32 sizeZ = terrain.FootprintSizeZ();
+    const int32 countX = static_cast<int32>(sizeX / step) + 1;
+    const int32 countZ = static_cast<int32>(sizeZ / step) + 1;
 
     std::printf("\n[map] %.0f m grid, rows are Z ascending, columns X ascending from "
                 "(%.0f, %.0f)\n",
@@ -806,14 +820,14 @@ TEST_F(SceneWaterFillGate, ReliefMapAndSeaBand)
     for (int32 iz = 0; iz < countZ; ++iz)
     {
         const float32 worldZ = std::min(minZ + static_cast<float32>(iz) * step,
-                                        minZ + terrain.SizeZ);
+                                        minZ + sizeZ);
         std::printf("[map] %6.0f", worldZ);
         for (int32 ix = 0; ix < countX; ++ix)
         {
             const float32 worldX = std::min(minX + static_cast<float32>(ix) * step,
-                                            minX + terrain.SizeX);
+                                            minX + sizeX);
             float32 h = 0.0f;
-            if (terrain.SampleHeight(worldX, worldZ, h))
+            if (SampleGround(terrain, worldX, worldZ, h))
                 std::printf("%6.1f", h);
             else
                 std::printf("%6s", "-");
@@ -823,15 +837,15 @@ TEST_F(SceneWaterFillGate, ReliefMapAndSeaBand)
 
     // The band the sea has to clear. Sampled on the same lattice the fill reads,
     // so "fraction below y" is the fraction of the island that y submerges.
-    const uint32 width = terrain.Single != nullptr ? terrain.Single->Heightfield.GetWidth() : 0u;
-    const uint32 height = terrain.Single != nullptr ? terrain.Single->Heightfield.GetHeight() : 0u;
+    const uint32 width = terrain.WholeMap() != nullptr ? terrain.WholeMap()->Heightfield.GetWidth() : 0u;
+    const uint32 height = terrain.WholeMap() != nullptr ? terrain.WholeMap()->Heightfield.GetHeight() : 0u;
     ASSERT_GT(width, 0u);
     std::vector<float32> samples;
     samples.reserve(static_cast<size_t>(width) * height);
     for (uint32 zi = 0; zi < height; ++zi)
         for (uint32 xi = 0; xi < width; ++xi)
-            samples.push_back(terrain.OriginY +
-                              terrain.Single->Heightfield.GetSample(xi, zi) * terrain.HeightScale);
+            samples.push_back(terrain.OriginY() +
+                              terrain.WholeMap()->Heightfield.GetSample(xi, zi) * terrain.HeightScale());
     std::sort(samples.begin(), samples.end());
     std::printf("\n[band] %zu lattice samples: min %.2f  max %.2f\n", samples.size(),
                 samples.front(), samples.back());
@@ -879,16 +893,16 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
     LoadAndBake();
     ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(m_World);
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(m_World);
     ASSERT_TRUE(terrain.IsValid());
-    ASSERT_NE(terrain.Single, nullptr)
+    ASSERT_NE(terrain.WholeMap(), nullptr)
         << "the slope bar reads the baked lattice directly; there is no tiled path here";
 
     const float32 seaY = EnvFloat("GE_SCENE_WATER_GATE_SEA_Y", 3.0f);
     const float32 maxMedian = EnvFloat("GE_SCENE_WATER_GATE_MAX_MEDIAN_SLOPE", 30.0f);
     const float32 maxP95 = EnvFloat("GE_SCENE_WATER_GATE_MAX_P95_SLOPE", 55.0f);
 
-    const GameEngine::Terrain::HeightfieldData& field = terrain.Single->Heightfield;
+    const GameEngine::Terrain::HeightfieldData& field = terrain.WholeMap()->Heightfield;
     const uint32 width = field.GetWidth();
     const uint32 height = field.GetHeight();
     ASSERT_GE(width, 2u);
@@ -900,7 +914,7 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
     const float32 diagonal = std::sqrt(spacingX * spacingX + spacingZ * spacingZ);
 
     auto worldY = [&](uint32 xi, uint32 zi) {
-        return terrain.OriginY + field.GetSample(xi, zi) * terrain.HeightScale;
+        return terrain.OriginY() + field.GetSample(xi, zi) * terrain.HeightScale();
     };
 
     const float32 toDegrees = 57.2957795130823f;
@@ -912,9 +926,9 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
     // Terrain.layerAlbedoN decides what each channel DRAWS; the channel names below
     // are the shipped role convention (grass, rock, dirt, snow), not a claim about
     // which rule put weight there.
-    const bool splatAligned = terrain.Single->SplatmapWidth == width &&
-                              terrain.Single->SplatmapHeight == height &&
-                              terrain.Single->Splatmap.size() ==
+    const bool splatAligned = terrain.WholeMap()->SplatmapWidth == width &&
+                              terrain.WholeMap()->SplatmapHeight == height &&
+                              terrain.WholeMap()->Splatmap.size() ==
                                   static_cast<size_t>(width) * height * 4u;
     double splatSum[4] = {};
     uint32 splatDominant[4] = {};
@@ -952,10 +966,10 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
                 for (uint32 c = 0; c < 4u; ++c)
                 {
                     const float32 weight =
-                        static_cast<float32>(terrain.Single->Splatmap[texel + c]) / 255.0f;
+                        static_cast<float32>(terrain.WholeMap()->Splatmap[texel + c]) / 255.0f;
                     splatSum[c] += weight;
-                    if (terrain.Single->Splatmap[texel + c] >
-                        terrain.Single->Splatmap[texel + best])
+                    if (terrain.WholeMap()->Splatmap[texel + c] >
+                        terrain.WholeMap()->Splatmap[texel + best])
                         best = c;
                 }
                 ++splatDominant[best];
@@ -1046,7 +1060,7 @@ TEST_F(SceneWaterFillGate, EveryFittedRunHoldsTheWaterItsGroundCanHold)
     std::vector<FittedRun> runs = CollectFittedRuns();
     ASSERT_FALSE(runs.empty());
 
-    const TerrainECS::PlanarHeightQuery terrain = TerrainECS::ResolvePlanarHeightQuery(m_World);
+    const TerrainECS::SurfaceHeightQuery terrain = TerrainECS::ResolveSurfaceHeightQuery(m_World);
     ASSERT_TRUE(terrain.IsValid());
 
     for (const FittedRun& run : runs)
@@ -1101,7 +1115,7 @@ TEST_F(SceneWaterFillGate, EveryFittedRunHoldsTheWaterItsGroundCanHold)
         {
             const SG::SplineStripStation& s = run.Stations[i];
             float32 bed = 0.0f;
-            const bool bedRead = terrain.SampleHeight(s.Position.x, s.Position.z, bed);
+            const bool bedRead = SampleGround(terrain, s.Position.x, s.Position.z, bed);
             float32 rim = 1.0e9f;
             for (int32 side = -1; side <= 1; side += 2)
                 for (float32 offset = reach - 1.0f; offset <= reach + 1.0f; offset += 0.5f)
@@ -1109,7 +1123,7 @@ TEST_F(SceneWaterFillGate, EveryFittedRunHoldsTheWaterItsGroundCanHold)
                     const float32 px = s.Position.x + s.Right.x * offset * static_cast<float32>(side);
                     const float32 pz = s.Position.z + s.Right.z * offset * static_cast<float32>(side);
                     float32 h = 0.0f;
-                    if (terrain.SampleHeight(px, pz, h))
+                    if (SampleGround(terrain, px, pz, h))
                         rim = std::min(rim, h);
                 }
             std::printf("        %7.2f %8.2f %8.2f  %8.3f %9.3f %9.3f%s\n", s.Distance,
@@ -1129,7 +1143,7 @@ TEST_F(SceneWaterFillGate, EveryFittedRunHoldsTheWaterItsGroundCanHold)
             for (const SG::SplineStripStation& s : run.Stations)
             {
                 float32 g = 0.0f;
-                if (!terrain.SampleHeight(s.Position.x, s.Position.z, g) || g < s.Position.y)
+                if (!SampleGround(terrain, s.Position.x, s.Position.z, g) || g < s.Position.y)
                     continue;
                 if (shown++ < 20u)
                     std::printf("        arc %7.2f at (%8.2f, %8.2f)  waterline %8.3f  "
@@ -1153,7 +1167,7 @@ TEST_F(SceneWaterFillGate, EveryFittedRunHoldsTheWaterItsGroundCanHold)
                      offset <= run.Recipe.MaxHalfWidth + 0.01f; offset += 2.0f)
                 {
                     float32 g = 0.0f;
-                    const bool ok = terrain.SampleHeight(s.Position.x + s.Right.x * offset,
+                    const bool ok = SampleGround(terrain, s.Position.x + s.Right.x * offset,
                                                          s.Position.z + s.Right.z * offset, g);
                     std::printf("%7.2f%c", ok ? g : 0.0f, (ok && g < s.Position.y) ? '*' : ' ');
                 }

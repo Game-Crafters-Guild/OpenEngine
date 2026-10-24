@@ -117,3 +117,73 @@ TEST(PointerCoordsRequestTests, RejectionNamesTheDragFieldsItWasAskedFor)
     EXPECT_NE(endMessage.find("endY=" + params["endY"].dump()), std::string::npos) << endMessage;
     EXPECT_EQ(endMessage.find("startX"), std::string::npos) << endMessage;
 }
+
+namespace
+{
+constexpr int kMaxClickCount = 3;
+
+std::string ClickCountRejection(const char* paramsText)
+{
+    int clickCount = -7;
+    json error;
+    EXPECT_FALSE(Editor::ReadClickCount(json::parse(paramsText), kMaxClickCount, clickCount, error)) << paramsText;
+    EXPECT_EQ(clickCount, -7) << "a refused request leaves the count untouched";
+    EXPECT_TRUE(Editor::IsRefusal(error)) << error.dump();
+    return Editor::HandlerResponse("0", error).value("error", std::string());
+}
+} // namespace
+
+TEST(PointerCoordsRequestTests, AnAbsentClickCountIsOneClick)
+{
+    int clickCount = 0;
+    json error;
+    EXPECT_TRUE(Editor::ReadClickCount(json::parse(R"({"x": 1, "y": 2})"), kMaxClickCount, clickCount, error));
+    EXPECT_EQ(clickCount, 1);
+    EXPECT_TRUE(error.is_null());
+}
+
+TEST(PointerCoordsRequestTests, AnIntegerClickCountInRangeIsAccepted)
+{
+    for (const char* text : {R"({"clickCount": 1})", R"({"clickCount": 2})", R"({"clickCount": 3})"})
+    {
+        int clickCount = 0;
+        json error;
+        EXPECT_TRUE(Editor::ReadClickCount(json::parse(text), kMaxClickCount, clickCount, error)) << text;
+        EXPECT_EQ(clickCount, json::parse(text)["clickCount"].get<int>());
+        EXPECT_TRUE(error.is_null());
+    }
+}
+
+TEST(PointerCoordsRequestTests, AFractionalClickCountIsRefusedNotTruncated)
+{
+    const std::string message = ClickCountRejection(R"({"clickCount": 2.5})");
+    EXPECT_NE(message.find("clickCount must be an integer from 1 to 3"), std::string::npos) << message;
+    EXPECT_NE(message.find("2.5"), std::string::npos) << message;
+}
+
+TEST(PointerCoordsRequestTests, ABoolClickCountIsRefusedNotReadAsOne)
+{
+    const std::string message = ClickCountRejection(R"({"clickCount": true})");
+    EXPECT_NE(message.find("got true"), std::string::npos) << message;
+}
+
+TEST(PointerCoordsRequestTests, AStringOrNullClickCountIsRefusedWithTheAcceptedValues)
+{
+    for (const char* text : {R"({"clickCount": "2"})", R"({"clickCount": null})"})
+    {
+        const std::string message = ClickCountRejection(text);
+        EXPECT_NE(message.find("clickCount must be an integer from 1 to 3"), std::string::npos) << message;
+        EXPECT_EQ(message.find("json.exception"), std::string::npos) << message;
+    }
+}
+
+TEST(PointerCoordsRequestTests, AClickCountOutOfRangeIsRefusedBeforeItNarrows)
+{
+    // 4294967298 is 2^32 + 2: narrowed to a 32-bit int first, it would read as a double-click.
+    for (const char* text : {R"({"clickCount": 0})", R"({"clickCount": -1})", R"({"clickCount": 4})",
+                             R"({"clickCount": 4294967298})", R"({"clickCount": 18446744073709551615})"})
+    {
+        const std::string message = ClickCountRejection(text);
+        EXPECT_NE(message.find(json::parse(text)["clickCount"].dump()), std::string::npos) << message;
+    }
+}

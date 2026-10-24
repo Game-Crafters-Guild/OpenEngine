@@ -1,0 +1,94 @@
+/* PictureChoiceField: a few choices side by side as tiles, each a picture, a name and one line.
+   Where the field is too narrow for two tiles of 150 px, the tiles stack one per row.
+   Attached by the control (RequestSubtreeStyleAssetPath). The tile parts come from
+   PictureChoiceField.uxml; which image a picture is comes from theme/option-pictures.css. */
+
+.picture-choice-field {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	column-gap: 6px;
+	row-gap: 6px;
+	flex-grow: 1;
+	min-width: 0;
+}
+
+/* Keyboard focus only, as for a button: a click already says which tile was hit. The ring is the
+   only accent the field draws, so a focused field never reads as a selected tile. */
+.picture-choice-field:focus-visible {
+	outline: 2px solid var(--ui_color_accent_blue);
+	outline-offset: 2px;
+}
+
+/* The picture on the left, the name and the line beside it, as a picture row in a dropdown. */
+.picture-choice-tile {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 1 1 150px;
+	min-width: 0;
+	padding: 4px;
+	column-gap: 8px;
+	border-width: 1px;
+	border-radius: var(--ui_radius_sm);
+	border-color: var(--ui_color_dropdown_outline);
+	background-color: var(--ui_color_bg_field);
+	cursor: pointer;
+	color: var(--ui_color_dropdown_item_text);
+}
+
+/* Hover lifts the plate and draws the selected tile's edge, so the tile under the pointer reads as
+   an outline before it is picked. */
+.picture-choice-tile:hover {
+	background-color: var(--ui_color_bg_hover);
+	border-color: var(--ui_color_dropdown_outline_hover);
+}
+
+/* The selected tile: a lighter plate, a lighter edge and bright text, as a selected segmented
+   button, so the choice reads at first sight. No accent: the accent is the focus ring. Hovered, it
+   keeps its plate. */
+.picture-choice-tile-selected {
+	background-color: var(--ui_color_bg_selected);
+	border-color: var(--ui_color_dropdown_outline_hover);
+	color: var(--ui_color_text_bright);
+}
+
+.picture-choice-tile-selected:hover {
+	background-color: var(--ui_color_bg_selected);
+	border-color: var(--ui_color_dropdown_outline_hover);
+	color: var(--ui_color_text_bright);
+}
+
+/* The picture: a 3:2 frame, untinted, the same size as in a dropdown's picture row. */
+.picture-choice-picture {
+	width: 72px;
+	height: 48px;
+	min-width: 72px;
+	flex-shrink: 0;
+	border-radius: 2px;
+	background-size: cover;
+	background-repeat: no-repeat;
+	background-position: center;
+	pointer-events: none;
+}
+
+.picture-choice-text {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0px;
+	row-gap: 2px;
+	min-width: 0;
+	pointer-events: none;
+}
+
+.picture-choice-name {
+	font-size: 13px;
+}
+
+/* The line under the name: the editor's secondary text, as an inspector caption, wrapping in a
+   narrow inspector. */
+.picture-choice-description {
+	font-size: 12px;
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+}

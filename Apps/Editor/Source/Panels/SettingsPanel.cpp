@@ -17,6 +17,7 @@
 #include "Components/Rendering/PostProcessVolume.h"
 #include "UI/AnimationWindowSettings.h"
 #include "UI/EditorIcons.h"
+#include "UI/PanelSearchBar.h"
 #include "UI/UIAccentStyleHelper.h"
 #include "UI/SyntaxHighlightSettings.h"
 #include "UI/Controls/DockspaceElement.h"
@@ -1710,112 +1711,21 @@ void SettingsPanel::CreateContentPane(UIElement* parent)
 
 void SettingsPanel::CreateSearchBar(UIElement* parent)
 {
-    auto searchBar = std::make_unique<UIElement>();
-    searchBar->AddClass("settings-search-bar");
-    
-    m_SearchBar = searchBar.get();
-    
-    // Capture search bar pointer for callbacks
-    UIElement* searchBarPtr = m_SearchBar;
-    
-    // Create text field first so it's on top
-    auto searchField = std::make_unique<TextField>();
-    m_SearchField = searchField.get();
-    searchField->AddClass("settings-search-field");
-    searchField->SetValue("");
-    
-    // Add text field to search bar first
-    searchBar->AddChild(std::move(searchField));
-    
-    // Create icon element after field so it appears behind
-    auto searchIcon = std::make_unique<UIElement>();
-    searchIcon->AddClass("settings-search-icon");
-    UIElement* searchIconPtr = searchIcon.get();
-    searchBar->AddChild(std::move(searchIcon));
-
-    auto clearButton = std::make_unique<Button>();
-    clearButton->AddClass("icon-button");
-    clearButton->AddClass("settings-search-clear");
-    clearButton->AddClass("xclose-icon");
-    clearButton->AddClass("hidden");
-    clearButton->SetFocusable(false);
-    clearButton->SetTooltip("Clear search");
-    Button* clearButtonPtr = clearButton.get();
-    searchBar->AddChild(std::move(clearButton));
-    
-    // Show background when typing, hide when cleared, and perform search
-    m_SearchField->SetOnValueChanging([this, searchBarPtr, searchIconPtr, clearButtonPtr](const std::string& value) {
-        if (!value.empty()) {
-            searchBarPtr->AddClass("has-query");
-            clearButtonPtr->RemoveClass("hidden");
-            // Has text - show background and make icon fully opaque
-            if (searchBarPtr->HasClass("hidden")) {
-                searchBarPtr->RemoveClass("hidden");
-            }
-            if (!searchBarPtr->HasClass("active")) {
-                searchBarPtr->AddClass("active");
-            }
-            if (!searchIconPtr->HasClass("icon-active")) {
-                searchIconPtr->AddClass("icon-active");
-            }
-            // Perform search
-            PerformSearch(value);
-        } else {
-            searchBarPtr->RemoveClass("has-query");
-            clearButtonPtr->AddClass("hidden");
-            // Empty - hide background again if search bars are globally hidden
-            if (!SettingsPanel::GetSearchBarsVisible() && !searchBarPtr->HasClass("hidden")) {
-                searchBarPtr->AddClass("hidden");
-            }
-            searchBarPtr->RemoveClass("active");
-            searchIconPtr->RemoveClass("icon-active");
-            // Clear search results and show normal category
-            ClearSearchResults();
-        }
-    });
-
-    clearButtonPtr->RegisterEventHandler(kEventButtonClick, [this, searchBarPtr, searchIconPtr, clearButtonPtr](UIEvent&) {
-        if (!m_SearchField || m_SearchField->GetValue().empty())
-            return;
-        m_SearchField->SetValue("");
-        if (!SettingsPanel::GetSearchBarsVisible())
-            searchBarPtr->AddClass("hidden");
-        searchBarPtr->RemoveClass("has-query");
-        searchBarPtr->RemoveClass("active");
-        searchIconPtr->RemoveClass("icon-active");
-        clearButtonPtr->AddClass("hidden");
-        ClearSearchResults();
-    });
-    
-    // Show background when field gains focus (clicking in it)
-    m_SearchField->RegisterEventHandler(kEventFocusIn, [searchBarPtr, searchIconPtr](UIEvent&) {
-        if (searchBarPtr->HasClass("hidden")) {
-            searchBarPtr->RemoveClass("hidden");
-        }
-        if (!searchBarPtr->HasClass("active")) {
-            searchBarPtr->AddClass("active");
-        }
-        if (!searchIconPtr->HasClass("icon-active")) {
-            searchIconPtr->AddClass("icon-active");
-        }
-    });
-    
-    // Hide background when clicking away (losing focus) if empty
-    m_SearchField->RegisterEventHandler(kEventFocusOut, [searchBarPtr, searchIconPtr, searchField = m_SearchField](UIEvent&) {
-        if (searchField && searchField->GetValue().empty()) {
-            if (!SettingsPanel::GetSearchBarsVisible() && !searchBarPtr->HasClass("hidden")) {
-                searchBarPtr->AddClass("hidden");
-            }
-            searchBarPtr->RemoveClass("active");
-            searchIconPtr->RemoveClass("icon-active");
-        }
-    });
-
-    parent->AddChild(std::move(searchBar));
+    auto built = BuildPanelSearchBar("settings-search-field", {},
+                                     [this](const std::string& value)
+                                     {
+                                         if (value.empty())
+                                             ClearSearchResults();
+                                         else
+                                             PerformSearch(value);
+                                     });
+    m_SearchBar = built.RootPtr;
+    parent->AddClass("settings-search-host");
+    parent->AddChild(std::move(built.Root));
 
     // Register after mounting so the shared placement preference can also style
     // the container that reserves space above or below the content pane.
-    RegisterSearchBar(m_SearchBar, searchIconPtr);
+    RegisterSearchBar(m_SearchBar, built.IconPtr);
 }
 
 void SettingsPanel::BuildUI()
@@ -1868,7 +1778,6 @@ void SettingsPanel::RebuildLayout(LayoutMode newMode)
     m_TreeSplitterDragging = false;
     m_ContentHeader = nullptr;
     m_ContentBody = nullptr;
-    m_SearchField = nullptr;
     m_SearchBar = nullptr;
     m_RegistryButtonRows.clear();
     m_HierarchyTreeChildIndentSlider = nullptr;
@@ -1887,7 +1796,6 @@ void SettingsPanel::RebuildLayout(LayoutMode newMode)
     m_AssetsTreeIconSizeField = nullptr;
     m_GridIconSizeSlider = nullptr;
     m_GridIconSizeField = nullptr;
-    m_SearchBarsToggle = nullptr;
     m_CheckmarkTogglesToggle = nullptr;
     m_GraySlidersToggle = nullptr;
     m_TabIconsToggle = nullptr;
@@ -3470,7 +3378,6 @@ void SettingsPanel::ClearContentPane()
     m_AssetsTreeIconSizeField = nullptr;
     m_GridIconSizeSlider = nullptr;
     m_GridIconSizeField = nullptr;
-    m_SearchBarsToggle = nullptr;
     m_CheckmarkTogglesToggle = nullptr;
     m_GraySlidersToggle = nullptr;
     m_TabIconsToggle = nullptr;
@@ -4406,31 +4313,6 @@ void SettingsPanel::CreateUIAppearanceContent()
     }
 
     // (Slug text weight threshold moved to the Font Rendering tab.)
-
-    // Search Bars toggle
-    {
-        auto section = std::make_unique<UIElement>();
-        section->AddClass("settings-row");
-        section->AddClass("settings-toggle-row");
-
-        auto toggle = std::make_unique<Toggle>();
-        m_SearchBarsToggle = toggle.get();
-        toggle->AddClass("settings-toggle");
-        toggle->SetChecked(EditorSearchBars::GetVisible());
-
-        toggle->SetOnValueChanged([](const bool& visible) {
-            EditorSearchBars::SetVisible(visible);
-        });
-
-        section->AddChild(std::move(toggle));
-
-        auto label = std::make_unique<Label>();
-        label->SetText("Filled Search Bar");
-        label->AddClass("settings-row-label");
-        section->InsertChild(0, std::move(label));
-
-        m_ContentBody->AddContent(std::move(section));
-    }
 
     // Search bar placement toggle
     {
@@ -12816,8 +12698,6 @@ void SettingsPanel::RegisterSearchableItems()
     m_SearchableItems.push_back(
         {"Expand Smart Folders On Startup", "smart folders startup collapse expand assets", SettingsCategory::UIAssets, nullptr});
     m_SearchableItems.push_back(
-        {"Filled Search Bar", "search bars filled background visibility show hide", SettingsCategory::UIAppearance, nullptr});
-    m_SearchableItems.push_back(
         {"Place Search Bars at Top", "search bar placement position top bottom panels", SettingsCategory::UIAppearance, nullptr});
     m_SearchableItems.push_back(
         {"Accent Search Focus Outline", "search bar focus border accent color", SettingsCategory::UIAppearance, nullptr});
@@ -13504,8 +13384,8 @@ void SettingsPanel::OpenSearchResultInContext(SettingsCategory category,
                                               const std::string& query)
 {
     m_PendingSearchContextReveal = PendingSearchContextReveal{category, label, query};
-    if (m_SearchField)
-        m_SearchField->SetValue("");
+    if (m_SearchBar)
+        m_SearchBar->SetValue("");
     ClearSearchResults();
 }
 

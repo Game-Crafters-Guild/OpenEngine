@@ -21,7 +21,7 @@ struct PackagedGameLayout
 {
     bool IsPackaged = false;
 
-    // Directory holding game.config + Assets/: PathUtils::InstallContentRootFor
+    // Directory holding game.config + Assets/: ApplicationPaths::InstallContentRootFor
     // the executable directory (the exe dir on Windows/Linux, Contents/Resources
     // inside a mac bundle).
     std::filesystem::path ContentRoot;
@@ -57,7 +57,7 @@ bool PlayerNeedsManagedSystemBridge(const ScriptsConfig& config, bool useNativeA
 
 // The Player's 'editor' asset source for a run whose project mount roots at
 // `projectAssetsRoot`, with the runtime-staged engine assets at
-// `stagedAssetsRoot`, the install assets root (PathUtils::GetInstallAssetsRoot).
+// `stagedAssetsRoot`, the install assets root (ApplicationPaths::GetInstallAssetsRoot).
 // Three layouts:
 //  - distinct staged root: a real second mount (dev --asset-root run; engine
 //    shaders/defaults ship in the install assets root, project content elsewhere);

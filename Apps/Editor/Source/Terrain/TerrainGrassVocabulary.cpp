@@ -25,6 +25,14 @@ std::string RenderModeInactiveNote(bool needsAlpha)
            "terrain, so this row still counts while any other terrain needs the alpha path.";
 }
 
+std::string GroundTintHeightInactiveNote(bool automaticRootColor, bool splatRootColor)
+{
+    if (automaticRootColor && splatRootColor)
+        return {};
+    return "No ground color in the blade's gradient, so Ground Tint Height changes nothing. To use it, set "
+           "Root Color to Auto and turn Splat Root Color on.";
+}
+
 std::string RangeTooltip()
 {
     return "Distance at which density reaches zero, and the ceiling on how far grass is placed. "

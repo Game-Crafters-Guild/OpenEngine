@@ -17,6 +17,7 @@
 #include "Mathematics/Vector3.h"
 #include "Pathfinding/DetourNavMap.h"
 #include "Pathfinding/NavSurfaceFile.h"
+#include "Types/FormatNumber.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -181,8 +182,8 @@ std::string FormatBakeStatus(const NavigationSurface& surface)
             return "Waiting for: the baked data (.navsurface) to load";
         if (surface.BakeWait == Components::NavigationBakeWait::Model)
             return "Waiting for: model " + ModelName(surface.BlockingModel.ToGuid()) + " is still loading";
-        return "Waiting for: terrain tile " + TilePair(surface.BlockingTileX, surface.BlockingTileZ) +
-               " is not resident";
+        return "Waiting for: terrain height near X " + FormatFixed(surface.BlockingPoint.x, 0) + ", Z " +
+               FormatFixed(surface.BlockingPoint.z, 0) + " to load";
     case NavigationBakePhase::Baking:
         return "Baking: " + FormatGroupedInteger(surface.BakeDone) + " of " + FormatGroupedInteger(surface.BakeTotal) +
                " " + Units(surface.Mode);

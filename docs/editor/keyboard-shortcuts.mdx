@@ -1,6 +1,6 @@
 ---
 title: Editor keyboard shortcuts
-description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, the Hierarchy and the Assets panel, view navigation, and tab management.
+description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, the Hierarchy, the Assets panel and the Log panel, view navigation, and tab management.
 ---
 
 ## Gizmo tools (Scene View)
@@ -95,6 +95,26 @@ a name that can be used and cancels one that cannot.
 Two entities can have the same name. The context menus of both panels list Rename and Delete as well,
 with their keys. In both panels, a slow second click on the name of the selected item also starts a
 rename.
+
+---
+
+## Log panel
+
+These keys and clicks act on the lines of the Log panel. Click a line first to give the list
+keyboard focus.
+
+| Key or click | Action | Description |
+|--------------|--------|-------------|
+| **Click** | Select | Select the line and show its whole message, time, source and stack trace in the detail pane |
+| **Shift + Click** | Select Range | Select every line from the last selected line to this one |
+| **Ctrl + Click** (PC/Linux), **Cmd + Click** (macOS) | Add to Selection | Add the line to the selection, or take it out |
+| **Ctrl + A** (PC/Linux), **Cmd + A** (macOS) | Select All | Select every line the filters show |
+| **Ctrl + C** (PC/Linux), **Cmd + C** (macOS) | Copy | Copy the selected lines, each with its source and stack trace |
+| **Double-click** | Open Source | Open the file and line the entry names; on a line that names none, a double-click only selects it |
+| **Right-click** | Menu | Open the line's menu: Copy, Open Source (on a line that names a file and line) and Clear Log |
+
+A notice at the right end of the copied line confirms each copy. Open Source opens a C# file in the script editor at the
+line. It opens any other file in the external editor, at the top of the file.
 
 ---
 

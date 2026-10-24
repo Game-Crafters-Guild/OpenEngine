@@ -1,6 +1,6 @@
 #include "Engine/Build/MaterialVariantCookTool.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Rendering/ShaderCache/ShaderProgramIndex.h"
 
 #include <algorithm>
@@ -16,7 +16,7 @@ std::filesystem::path FindMaterialVariantCook()
 #else
     const std::filesystem::path relative = std::filesystem::path("Tools") / "MaterialVariantCook";
 #endif
-    return PathUtils::FindFileUpward(PathUtils::GetExecutableDirectory(), relative);
+    return ApplicationPaths::FindFileUpward(ApplicationPaths::GetExecutableDirectory(), relative);
 }
 
 std::vector<std::string> DesktopMaterialCookArguments(const DesktopMaterialCookInputs& inputs)

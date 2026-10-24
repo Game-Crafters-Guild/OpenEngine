@@ -1,0 +1,11 @@
+<!-- One row of a dropdown whose options carry pictures (Dropdown::Option::pictureClass).
+     Dropdown instantiates it into each popup row: the root's class goes on the row, the
+     option's picture class on the picture, the option's label and description into the two
+     labels. controls/Dropdown.css styles every part. -->
+<UIElement class="dropdown-item-picture">
+  <UIElement class="dropdown-item-picture-image" />
+  <UIElement class="dropdown-item-text">
+    <Label class="dropdown-item-label" />
+    <Label class="dropdown-item-description" />
+  </UIElement>
+</UIElement>

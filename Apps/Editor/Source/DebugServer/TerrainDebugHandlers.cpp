@@ -22,7 +22,7 @@
 #include "Mathematics/Vector3.h"
 #include "SceneView/TerrainBrushTool.h"
 #include "SceneViewController.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainRenderPublication.h"
 #include "TerrainECS/TerrainService.h"
@@ -294,7 +294,7 @@ void KeepIfAmongWorst(std::vector<CornerHeightError>& worst, size_t capacity, co
 // reads the composed heightfield, so the two agree to a lattice cell, and a stale corner is
 // metres off.
 json CornerHeightAudit(const CBTTerrain::CBTTreeSnapshot& snapshot,
-                       const TerrainECS::PlanarHeightQuery& query)
+                       const TerrainECS::SurfaceHeightQuery& query)
 {
     constexpr uint32_t kMaxSamples = 8192u;
     constexpr size_t kWorstRows = 8u;
@@ -321,12 +321,17 @@ json CornerHeightAudit(const CBTTerrain::CBTTreeSnapshot& snapshot,
         {
             if (cursor % stride != 0u)
                 continue;
-            float cpuY = 0.0f;
-            if (!query.SampleHeight(corners[k][0], corners[k][2], cpuY))
+            // The audit compares the GPU's corners with the CPU's finest height (RequireFinest): a
+            // coarse answer would report its own level's error, so a corner without the finest
+            // height on the CPU is counted unsampled.
+            TerrainECS::SurfaceHeightSample sample;
+            if (!query.SampleHeight(Mathematics::Vector3(corners[k][0], 0.0f, corners[k][2]),
+                                    TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
             {
                 ++unsampled;
                 continue;
             }
+            const float cpuY = sample.Height;
             const float err = std::fabs(corners[k][1] - cpuY);
             errors.push_back(err);
             if (err > kStaleOver1M)
@@ -691,8 +696,9 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
             // per submitted render-graph frame stream, so a multi-window editor steps it once per
             // window per app frame — it is not an app frame count.
             {"grassFrameIndex", grassFrameIndex},
-            // Extraction ticks on which regional grass controls existed but were not yet
-            // sampleable, so placement was refused. Monotonic: sample it, change the region,
+            // Extraction ticks on which placement was refused because a terrain's grass control
+            // field was not sampleable: its first compose had not landed yet, or its control
+            // texture was not uploaded and published yet. Monotonic: sample it, change the region,
             // sample again, and the delta is exactly how many ticks the edit blanked grass for.
             {"grassControlSuppressedTicks", extraction ? extraction->GrassControlSuppressedTicks() : 0},
             {"grassPlacement", std::move(grassPlacement)}
@@ -744,7 +750,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         json heights;
         if (snapshot.DomainMode == CBTTerrain::kDomainPlanar && !snapshot.Vertices.empty())
             if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
-                heights = CornerHeightAudit(snapshot, TerrainECS::ResolvePlanarHeightQuery(*world));
+                heights = CornerHeightAudit(snapshot, TerrainECS::ResolveSurfaceHeightQuery(*world));
         return json{
             {"heights", std::move(heights)},
             {"domain", snapshot.DomainMode == CBTTerrain::kDomainSpherical ? "spherical" : "planar"},

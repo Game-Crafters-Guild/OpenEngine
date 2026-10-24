@@ -34,7 +34,7 @@
 #include "Assets/ShaderProgramAsset.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Components/Terrain/TerrainGrass.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -887,7 +887,7 @@ struct GrassShaderLocation
 std::optional<GrassShaderLocation> FindGrassShaderLocation(bool cookedPrograms)
 {
     namespace fs = std::filesystem;
-    const fs::path shaders = PathUtils::GetInstallAssetsRoot() / "Shaders";
+    const fs::path shaders = ApplicationPaths::GetInstallAssetsRoot() / "Shaders";
     std::error_code ec;
     if (cookedPrograms)
     {

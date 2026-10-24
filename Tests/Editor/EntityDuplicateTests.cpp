@@ -58,8 +58,8 @@
 #include "Spline/SplineData.h"
 #include "SplineECS/SplineService.h"
 #include "Terrain/TerrainTypes.h"
+#include "TerrainECS/Components/TerrainPageCollider.h"
 #include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
-#include "TerrainECS/Components/TerrainTileCollider.h"
 #include "TerrainECS/Systems/TerrainWorldHooks.h"
 #include "TerrainECS/TerrainService.h"
 
@@ -945,8 +945,8 @@ EntityHandle DuplicateOnce(World& world, EntityHandle root)
 // ---------------------------------------------------------------------------
 
 using GameEngine::Components::Terrain;
+using GameEngine::Components::TerrainPageCollider;
 using GameEngine::Components::TerrainPlanetFaceCollider;
-using GameEngine::Components::TerrainTileCollider;
 using GameEngine::TerrainECS::TerrainService;
 
 GameEngine::Terrain::TerrainConfig SingleTerrainConfig()
@@ -1179,7 +1179,7 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritTheSourcesHeightField
     EXPECT_NE(svc.GetTerrainData(handle), nullptr);
 }
 
-// The per-tile and per-face collider entities are runtime provisioning links
+// The per-page and per-face collider entities are runtime provisioning links
 // that carry a heightfield physics handle. They are standalone roots rather
 // than children of the terrain, so Ctrl+D reaches them only by selecting one
 // directly — the hierarchy lists them, so that is a real two-keystroke path.
@@ -1188,15 +1188,15 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritColliderPhysicsHandle
     World world;
     GameEngine::TerrainECS::RegisterTerrainWorldHooks(world);
 
-    const auto tileEntity = world.CreateEntity();
-    TerrainTileCollider tile{};
-    tile.TiledIndex = 7;
-    tile.TiledGeneration = 2;
-    tile.TileX = 3;
-    tile.TileZ = 4;
-    tile.PhysicsHandleIndex = 11;
-    tile.PhysicsHandleGeneration = 5;
-    world.AddComponentImmediate(tileEntity, tile);
+    const auto pageEntity = world.CreateEntity();
+    TerrainPageCollider page{};
+    page.TiledIndex = 7;
+    page.TiledGeneration = 2;
+    page.PageX = 3;
+    page.PageZ = 4;
+    page.PhysicsHandleIndex = 11;
+    page.PhysicsHandleGeneration = 5;
+    world.AddComponentImmediate(pageEntity, page);
 
     const auto faceEntity = world.CreateEntity();
     TerrainPlanetFaceCollider face{};
@@ -1207,14 +1207,14 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritColliderPhysicsHandle
     face.PhysicsHandleGeneration = 6;
     world.AddComponentImmediate(faceEntity, face);
 
-    const auto tileClone = DuplicateOne(world, tileEntity);
-    ASSERT_TRUE(tileClone.IsValid());
-    const auto* clonedTile = world.GetComponent<TerrainTileCollider>(tileClone);
-    ASSERT_NE(clonedTile, nullptr);
-    EXPECT_EQ(clonedTile->PhysicsHandleIndex, 0u)
-        << "the copy names the source tile's heightfield physics handle";
-    EXPECT_EQ(clonedTile->PhysicsHandleGeneration, 0u);
-    EXPECT_EQ(clonedTile->TileX, 3) << "only the runtime handle is cleared";
+    const auto pageClone = DuplicateOne(world, pageEntity);
+    ASSERT_TRUE(pageClone.IsValid());
+    const auto* clonedPage = world.GetComponent<TerrainPageCollider>(pageClone);
+    ASSERT_NE(clonedPage, nullptr);
+    EXPECT_EQ(clonedPage->PhysicsHandleIndex, 0u)
+        << "the copy names the source page's heightfield physics handle";
+    EXPECT_EQ(clonedPage->PhysicsHandleGeneration, 0u);
+    EXPECT_EQ(clonedPage->PageX, 3u) << "only the runtime handle is cleared";
 
     const auto faceClone = DuplicateOne(world, faceEntity);
     ASSERT_TRUE(faceClone.IsValid());
@@ -1226,9 +1226,9 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritColliderPhysicsHandle
     EXPECT_EQ(clonedFace->Face, 4u) << "only the runtime handle is cleared";
 
     // The originals are untouched.
-    const auto* sourceTile = world.GetComponent<TerrainTileCollider>(tileEntity);
-    ASSERT_NE(sourceTile, nullptr);
-    EXPECT_EQ(sourceTile->PhysicsHandleIndex, 11u);
+    const auto* sourcePage = world.GetComponent<TerrainPageCollider>(pageEntity);
+    ASSERT_NE(sourcePage, nullptr);
+    EXPECT_EQ(sourcePage->PhysicsHandleIndex, 11u);
     const auto* sourceFace = world.GetComponent<TerrainPlanetFaceCollider>(faceEntity);
     ASSERT_NE(sourceFace, nullptr);
     EXPECT_EQ(sourceFace->PhysicsHandleIndex, 13u);

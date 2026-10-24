@@ -1,0 +1,37 @@
+/* Which image each option picture class means.
+ *
+ * A picture shows what an option does, for a choice a user judges by its look: a preset in a
+ * dropdown (Dropdown::Option::pictureClass) or a tile of a PictureChoiceField. The code that
+ * declares the option names the class; this file is the only place that names the image, and the
+ * picture draws untinted. Size and spacing belong to the control that shows it.
+ *
+ * One stem per picture: the class is `option-picture--<stem>` and the file is
+ * `Icons/OptionPictures/<stem>.png`. OptionPicturesTests asserts every class a source declares has a
+ * rule here, every rule is declared, and every file exists.
+ *
+ * The star pictures are 144 x 96 crops of the Scene View at the pose in
+ * Icons/OptionPictures/star-pictures.txt, so they can be made again when a look changes. */
+
+.option-picture--star-look-vivid {
+	background-image: url("editor:Icons/OptionPictures/star-look-vivid.png");
+}
+
+.option-picture--star-look-restrained {
+	background-image: url("editor:Icons/OptionPictures/star-look-restrained.png");
+}
+
+.option-picture--star-look-classic {
+	background-image: url("editor:Icons/OptionPictures/star-look-classic.png");
+}
+
+.option-picture--star-look-physical {
+	background-image: url("editor:Icons/OptionPictures/star-look-physical.png");
+}
+
+.option-picture--star-seen-by-eye {
+	background-image: url("editor:Icons/OptionPictures/star-seen-by-eye.png");
+}
+
+.option-picture--star-seen-by-camera {
+	background-image: url("editor:Icons/OptionPictures/star-seen-by-camera.png");
+}

@@ -632,9 +632,14 @@ layout(std430, set = CBT_DESCRIPTOR_SET, binding = 20) CBT_SSBO_QUAL buffer CBTS
 // [0] lattice cells, [1] first | top << 8, [2 + k] level first entries, [18] the chain ranges' level-0
 // samples (0: none), [19] chain levels with a range, [20 + j] chain level j's first entry
 #define CBT_HEIGHT_RANGE_HEADER 64u
-// The first stored level's steepest step per block, after the chain ranges (CBTLayout.h
-// kCBTHeightStepFirstWord): header + 2 x (2^20 + 2^19) words.
-#define CBT_HEIGHT_STEP_FIRST_WORD 3145792u
+// The first stored level's differences per block (steepest step, largest second difference along X and
+// along Z, largest mixed difference), four words per block, after the chain ranges (CBTLayout.h
+// kCBTHeightDifferencesFirstWord): header + 2 x (2^20 + 2^19) words.
+#define CBT_HEIGHT_DIFFERENCES_FIRST_WORD 3145792u
+// Each level-0 block's plane (x slope, z slope, residual low, residual width), four words per entry,
+// after the differences (CBTLayout.h kCBTHeightPlaneFirstWord): CBT_HEIGHT_DIFFERENCES_FIRST_WORD +
+// 4 x 2^20 words.
+#define CBT_HEIGHT_PLANE_FIRST_WORD 7340096u
 layout(std430, set = CBT_DESCRIPTOR_SET, binding = 21) CBT_SSBO_QUAL buffer CBTHeightRangeBuffer
 {
     uint Range[];

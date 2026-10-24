@@ -9,7 +9,6 @@ add_library(PhysicsECS OBJECT
     Source/PhysicsScriptApi.cpp
     Source/PhysicsWorldService.cpp
     Source/HeightFieldDataProvider.cpp
-    Source/HeightFieldCollisionReadiness.cpp
     Source/PhysicsWorldSettingsHelpers.cpp
     Source/Systems/PhysicsWorldBootstrapSystem.cpp
     Source/Systems/PhysicsEventsSystem.cpp

@@ -4,6 +4,7 @@
 #include "UI/Controls/ItemSizeSlider.h"
 
 #include <cmath>
+#include <memory>
 
 namespace GameEngine::Editor
 {
@@ -20,7 +21,8 @@ HierarchyNavigationBar::HierarchyNavigationBar()
     AddClass("hierarchy-navigation-bar");
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto sizeSlider = std::make_unique<EditorUI::ItemSizeSlider>();
+    auto sizeSlider = std::make_unique<EditorUI::ItemSizeSlider>(
+        EditorUI::ItemSizeSlider::Subject{"Row size", "the Hierarchy", "resizes its rows"});
     m_SizeSlider = sizeSlider.get();
     m_SizeSlider->AddClass("hierarchy-size-slider");
     m_SizeSlider->SetMin(kMinEditorTreeIconSizePx);
@@ -61,12 +63,11 @@ void HierarchyNavigationBar::ApplyResizeGesture(float scrollY)
         m_OnItemSizeChanged(resized);
 }
 
-void HierarchyNavigationBar::SetSearchBar(std::unique_ptr<UIElement> searchBar)
+void HierarchyNavigationBar::PlaceSearchAbove(UIElement* search)
 {
-    if (!searchBar)
-        return;
-    searchBar->AddClass("hierarchy-navigation-bar-search");
-    AddChild(std::move(searchBar));
+    m_Search = search;
+    if (m_Search)
+        m_Search->AddClass("hierarchy-panel-search");
 }
 
 void HierarchyNavigationBar::SetAboveHorizontalScrollbar(bool above)
@@ -75,6 +76,12 @@ void HierarchyNavigationBar::SetAboveHorizontalScrollbar(bool above)
         AddClass("hierarchy-navigation-bar-above-scrollbar");
     else
         RemoveClass("hierarchy-navigation-bar-above-scrollbar");
+    if (!m_Search)
+        return;
+    if (above)
+        m_Search->AddClass("hierarchy-panel-search-above-scrollbar");
+    else
+        m_Search->RemoveClass("hierarchy-panel-search-above-scrollbar");
 }
 
 } // namespace GameEngine::Editor

@@ -28,7 +28,7 @@ bool SaveCompiledGraphFile(const std::filesystem::path& path, const SgGraphDocum
                              const SgNodeLibraryIndex& library);
 
 /** Engine shader-graph node helper root: "Shaders/Graph/Nodes" under the install assets
-    root the build stages for this executable (the PathUtils::GetInstallAssetsRoot() rule).
+    root the build stages for this executable (the ApplicationPaths::GetInstallAssetsRoot() rule).
     The host registers it through SetEngineGraphNodesRoot (the engine knows its install
     assets root; this module does not); until then the module's own copy of the layout rule
     resolves it. Empty when nothing is staged; a binary that reflects the node library must

@@ -46,7 +46,7 @@ class LogLineFlagSink final : public Logger::LogSink
     }
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "LogLineFlagSink"; }
+    std::string GetName() const override { return "LogLineFlagSink"; }
 
   private:
     std::atomic<bool>* m_Flag;

@@ -1,6 +1,6 @@
 #include "MovieRecorderController.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Editor/Settings/EditorSettingsRegistry.h"
 #include "Editor/Settings/RenderPipelineSettings.h"
@@ -204,7 +204,7 @@ std::filesystem::path MovieRecorderController::GetRecordingsDirectory()
     {
         return root / "MovieRecordings";
     }
-    return PathUtils::GetUserDataDirectory() / "GameEngine" / "MovieRecordings";
+    return ApplicationPaths::GetUserDataDirectory() / "GameEngine" / "MovieRecordings";
 }
 
 std::filesystem::path MovieRecorderController::ResolveRequestedOutputPath(const Settings& settings)
@@ -255,7 +255,7 @@ std::filesystem::path MovieRecorderController::NextAvailableOutputPath(const std
 
 std::filesystem::path MovieRecorderController::ResolvePlayerExecutable()
 {
-    const auto exeDir = PathUtils::GetExecutableDirectory();
+    const auto exeDir = ApplicationPaths::GetExecutableDirectory();
 #if defined(_WIN32)
     const std::vector<std::filesystem::path> candidates = {
         exeDir / "Player.exe",
@@ -692,7 +692,7 @@ void MovieRecorderController::StartStandaloneRecording(const Settings& settings,
     if (player.empty())
     {
         EmitStatus("Player executable not found. Build the Player target first.");
-        Logger::Log::Error("MovieRecorder: Player executable not found near '{}'", PathUtils::GetExecutableDirectory().string());
+        Logger::Log::Error("MovieRecorder: Player executable not found near '{}'", ApplicationPaths::GetExecutableDirectory().string());
         return;
     }
 

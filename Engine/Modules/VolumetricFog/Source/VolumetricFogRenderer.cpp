@@ -11,6 +11,7 @@
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
 #include "Rendering/Core/PipelineTypes.h"
@@ -88,16 +89,6 @@ uint32_t PcgHash(uint32_t v)
     v = v * 747796405u + 2891336453u;
     uint32_t word = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
     return (word >> 22u) ^ word;
-}
-
-float Fract(float v)
-{
-    return v - std::floor(v);
-}
-
-float Clamp01(float v)
-{
-    return std::clamp(v, 0.0f, 1.0f);
 }
 
 void CopyMatrix(float* dst, const float* src)
@@ -253,14 +244,6 @@ void Normalize3(float v[3])
     v[2] *= invLen;
 }
 
-float Smoothstep(float edge0, float edge1, float x)
-{
-    if (edge1 <= edge0)
-        return x >= edge1 ? 1.0f : 0.0f;
-    const float t = Clamp01((x - edge0) / (edge1 - edge0));
-    return t * t * (3.0f - 2.0f * t);
-}
-
 struct ResolvedFogSun
 {
     float direction[3] = {0.35f, -0.65f, 0.68f};
@@ -355,8 +338,8 @@ void ResolveFogAmbient(RenderServices& services, const VolumetricFogSettings& se
         return;
 
     const auto& sky = skyFeature->GetSettings();
-    const float day = Clamp01(sky.primarySunDir[1] * 0.5f + 0.5f);
-    const float night = Clamp01(sky.nightSkyBlend);
+    const float day = Math::Clamp01(sky.primarySunDir[1] * 0.5f + 0.5f);
+    const float night = Math::Clamp01(sky.nightSkyBlend);
     float horizon[3]{};
     for (int i = 0; i < 3; ++i)
     {
@@ -640,35 +623,35 @@ bool VolumetricFogRenderer::CreateJitterAtlasTexture()
     if (!m_JitterAtlasTexture.IsValid())
         return false;
 
-    const uint32_t n = kJitterAtlasSize;
-    std::vector<float> base(n * n * n, 0.0f);
+    const uint32_t atlasSize = kJitterAtlasSize;
+    std::vector<float> base(atlasSize * atlasSize * atlasSize, 0.0f);
     auto indexOf = [](uint32_t x, uint32_t y, uint32_t z) {
-        return static_cast<size_t>(x + y * n + z * n * n);
+        return static_cast<size_t>(x + y * atlasSize + z * atlasSize * atlasSize);
     };
 
-    for (uint32_t z = 0; z < n; ++z)
+    for (uint32_t z = 0; z < atlasSize; ++z)
     {
-        for (uint32_t y = 0; y < n; ++y)
+        for (uint32_t y = 0; y < atlasSize; ++y)
         {
-            for (uint32_t x = 0; x < n; ++x)
+            for (uint32_t x = 0; x < atlasSize; ++x)
             {
                 const uint32_t h =
                     PcgHash(x * 1973u ^ y * 9277u ^ z * 26699u ^ 0x9E3779B9u);
                 const float whiteRank = static_cast<float>(h & 0x00FFFFFFu) * (1.0f / 16777216.0f);
                 const float stratified =
-                    Fract((static_cast<float>(x * 13u + y * 17u + z * 19u) + 0.5f) / static_cast<float>(n) +
+                    Math::Fract((static_cast<float>(x * 13u + y * 17u + z * 19u) + 0.5f) / static_cast<float>(atlasSize) +
                           static_cast<float>(z) * 0.61803398875f);
-                base[indexOf(x, y, z)] = Fract(whiteRank * 0.62f + stratified * 0.38f);
+                base[indexOf(x, y, z)] = Math::Fract(whiteRank * 0.62f + stratified * 0.38f);
             }
         }
     }
 
-    std::vector<uint8_t> voxels(n * n * n, 0u);
-    for (uint32_t z = 0; z < n; ++z)
+    std::vector<uint8_t> voxels(atlasSize * atlasSize * atlasSize, 0u);
+    for (uint32_t z = 0; z < atlasSize; ++z)
     {
-        for (uint32_t y = 0; y < n; ++y)
+        for (uint32_t y = 0; y < atlasSize; ++y)
         {
-            for (uint32_t x = 0; x < n; ++x)
+            for (uint32_t x = 0; x < atlasSize; ++x)
             {
                 float neighborhood = 0.0f;
                 for (int dz = -1; dz <= 1; ++dz)
@@ -677,15 +660,15 @@ bool VolumetricFogRenderer::CreateJitterAtlasTexture()
                     {
                         for (int dx = -1; dx <= 1; ++dx)
                         {
-                            const uint32_t sx = static_cast<uint32_t>((static_cast<int>(x) + dx + static_cast<int>(n)) % static_cast<int>(n));
-                            const uint32_t sy = static_cast<uint32_t>((static_cast<int>(y) + dy + static_cast<int>(n)) % static_cast<int>(n));
-                            const uint32_t sz = static_cast<uint32_t>((static_cast<int>(z) + dz + static_cast<int>(n)) % static_cast<int>(n));
+                            const uint32_t sx = static_cast<uint32_t>((static_cast<int>(x) + dx + static_cast<int>(atlasSize)) % static_cast<int>(atlasSize));
+                            const uint32_t sy = static_cast<uint32_t>((static_cast<int>(y) + dy + static_cast<int>(atlasSize)) % static_cast<int>(atlasSize));
+                            const uint32_t sz = static_cast<uint32_t>((static_cast<int>(z) + dz + static_cast<int>(atlasSize)) % static_cast<int>(atlasSize));
                             neighborhood += base[indexOf(sx, sy, sz)];
                         }
                     }
                 }
                 neighborhood *= 1.0f / 27.0f;
-                const float contrastAdapted = Clamp01((base[indexOf(x, y, z)] - neighborhood) * 0.72f + 0.5f);
+                const float contrastAdapted = Math::Clamp01((base[indexOf(x, y, z)] - neighborhood) * 0.72f + 0.5f);
                 voxels[indexOf(x, y, z)] = static_cast<uint8_t>(std::round(contrastAdapted * 255.0f));
             }
         }
@@ -695,11 +678,11 @@ bool VolumetricFogRenderer::CreateJitterAtlasTexture()
         m_Device,
         m_JitterAtlasTexture,
         voxels.data(),
-        n,
-        n,
-        n,
-        n,
-        n * n,
+        atlasSize,
+        atlasSize,
+        atlasSize,
+        atlasSize,
+        atlasSize * atlasSize,
         "VolumetricFog.JitterAtlasUpload");
     return true;
 }
@@ -755,7 +738,7 @@ bool VolumetricFogRenderer::CreateDensityNoiseAtlasTexture()
                         amp *= 0.5f;
                         scale *= 2u;
                     }
-                    const float v = Clamp01(sum / std::max(norm, 0.0001f));
+                    const float v = Math::Clamp01(sum / std::max(norm, 0.0001f));
                     voxels[indexOf(x, y, z, c)] = static_cast<uint8_t>(std::round(v * 255.0f));
                 }
             }
@@ -1139,11 +1122,11 @@ void VolumetricFogRenderer::FillParams(
     out.localVolumeAxisZHalfExtent[3] = std::max(s.localVolumeHalfExtents[2], 0.001f);
     out.localVolumeParams[0] = std::max(s.localVolumeBlendDistance, 0.0f);
     out.localVolumeParams[1] = (!s.isGlobal && s.localVolumeValid) ? 1.0f : 0.0f;
-    out.localVolumeParams[2] = std::clamp(s.skyFade, 0.0f, 1.0f);
+    out.localVolumeParams[2] = Math::Clamp01(s.skyFade);
     out.localVolumeParams[3] = 0.0f;
     out.noiseParams[0] = s.noiseEnabled ? 1.0f : 0.0f;
     out.noiseParams[1] = std::max(s.noiseScale, 0.01f);
-    out.noiseParams[2] = std::clamp(s.noiseStrength, 0.0f, 1.0f);
+    out.noiseParams[2] = Math::Clamp01(s.noiseStrength);
     out.noiseParams[3] = std::max(s.noiseContrast, 0.01f);
     out.noiseVelocityTime[0] = s.noiseVelocity[0];
     out.noiseVelocityTime[1] = s.noiseVelocity[1];
@@ -1153,14 +1136,14 @@ void VolumetricFogRenderer::FillParams(
     out.noiseChannelWeights[1] = std::max(s.noiseChannelWeights[1], 0.0f);
     out.noiseChannelWeights[2] = std::max(s.noiseChannelWeights[2], 0.0f);
     out.noiseChannelWeights[3] = std::max(s.noiseChannelWeights[3], 0.0f);
-    out.densityParams[0] = std::clamp(s.densityThreshold, 0.0f, 1.0f);
+    out.densityParams[0] = Math::Clamp01(s.densityThreshold);
     out.densityParams[1] = std::max(s.densityThresholdSoftness, 0.0001f);
     out.densityParams[2] = IsOrthographicProjectionLH_ZO(camera.proj) ? 1.0f : 0.0f;
     out.densityParams[3] = iblEnabled ? 1.0f : 0.0f;
     out.volumeParams[0] = std::max(effectiveMaxDistance, 0.01f);
     out.volumeParams[1] = std::max(s.depthDistribution, 0.05f);
     out.volumeParams[2] = s.temporalEnabled ? std::clamp(s.temporalBlend, 0.0f, 0.99f) : 0.0f;
-    out.volumeParams[3] = std::clamp(s.jitterStrength, 0.0f, 1.0f);
+    out.volumeParams[3] = Math::Clamp01(s.jitterStrength);
     out.gridParams[0] = static_cast<float>(grid.width);
     out.gridParams[1] = static_cast<float>(grid.height);
     out.gridParams[2] = static_cast<float>(grid.slices);
@@ -1286,10 +1269,10 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
         dst.params0[1] = src.enabled ? std::max(src.weight, 0.0f) : 0.0f;
         dst.params0[2] = std::max(src.density, 0.0f);
         dst.params0[3] = static_cast<float>(src.densityMode);
-        dst.params1[0] = std::clamp(src.densityThreshold, 0.0f, 1.0f);
+        dst.params1[0] = Math::Clamp01(src.densityThreshold);
         dst.params1[1] = std::max(src.densityThresholdSoftness, 0.0001f);
         dst.params1[2] = static_cast<float>(src.gradientMode);
-        dst.params1[3] = std::clamp(src.gradientStrength, 0.0f, 1.0f);
+        dst.params1[3] = Math::Clamp01(src.gradientStrength);
     }
 
     const BufferHandle uboBuf = paramsUp.Buffer;

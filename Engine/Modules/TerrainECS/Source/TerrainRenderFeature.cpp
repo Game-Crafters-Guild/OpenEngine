@@ -7,7 +7,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Materials/ShaderCompileService.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -1959,7 +1959,7 @@ bool TerrainRenderFeature::EnsureGpuBakePipeline()
         return false;
 
     namespace fs = std::filesystem;
-    const fs::path shaderDir = PathUtils::GetInstallAssetsRoot() / "Shaders" / "CBT";
+    const fs::path shaderDir = ApplicationPaths::GetInstallAssetsRoot() / "Shaders" / "CBT";
     std::error_code ec;
     if (!fs::exists(shaderDir / "terrain_height_bake.comp", ec))
     {

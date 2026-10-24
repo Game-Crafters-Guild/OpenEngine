@@ -801,6 +801,25 @@ void CBT_StoreHeightRange(uint entry, vec2 lowHigh)
     gHeightRange.Range[w + 1u] = floatBitsToUint(lowHigh.y);
 }
 
+// Level-0 pyramid entry `entry`'s plane: x slope, z slope (normalized height per cell about the block's
+// center), the low end and the width of the height minus that plane over the block (CBTLayout.h
+// kCBTHeightPlaneFirstWord).
+vec4 CBT_LoadHeightPlane(uint entry)
+{
+    uint w = CBT_HEIGHT_PLANE_FIRST_WORD + 4u * entry;
+    return vec4(uintBitsToFloat(gHeightRange.Range[w]), uintBitsToFloat(gHeightRange.Range[w + 1u]),
+                uintBitsToFloat(gHeightRange.Range[w + 2u]), uintBitsToFloat(gHeightRange.Range[w + 3u]));
+}
+
+void CBT_StoreHeightPlane(uint entry, vec4 plane)
+{
+    uint w = CBT_HEIGHT_PLANE_FIRST_WORD + 4u * entry;
+    gHeightRange.Range[w] = floatBitsToUint(plane.x);
+    gHeightRange.Range[w + 1u] = floatBitsToUint(plane.y);
+    gHeightRange.Range[w + 2u] = floatBitsToUint(plane.z);
+    gHeightRange.Range[w + 3u] = floatBitsToUint(plane.w);
+}
+
 // The level-0 pyramid level chain level `chainLevel` (>= 1) keeps its range pyramid from. Mirror
 // CBTLayout.h CBTHeightChainRangeBase.
 uint CBT_ChainRangeBase(uint first, uint top, uint chainLevel)
@@ -899,29 +918,53 @@ bool CBT_HeightRangeOverUV(vec2 uvMin, vec2 uvMax, out vec2 lowHigh)
 // finer than the first stored level. The planar split reads its boxes here, so it sees the heights
 // the pyramid was last built from, the build the update triggers with VertexEval's own refresh (a
 // rebound texture, a forced refresh, an edit rect): a height change nobody announced stays out of the
-// split as it stays out of the cached corners. Nests like CBT_HeightRangeOverUV. `stepHigh` is the
-// steepest neighboring-sample step in the same blocks when they are the first stored level's
-// (CBTLayout.h kCBTHeightStepFirstWord), else 3e38 (no step bound). Call only where
-// CBT_PlanarCriterionOn holds (a pyramid for the bound lattice).
-vec2 CBT_PyramidRangeOverUV(uvec2 cells, vec2 uvMin, vec2 uvMax, out float stepHigh)
+// split as it stays out of the cached corners. Nests like CBT_HeightRangeOverUV. `differences` is the
+// largest of each first and second difference in the same blocks when they are the first stored
+// level's (CBTLayout.h kCBTHeightDifferencesFirstWord), else 3e38 in every component (no bound). Call
+// only where CBT_PlanarCriterionOn holds (a pyramid for the bound lattice).
+vec2 CBT_PyramidRangeOverUV(uvec2 cells, vec2 uvMin, vec2 uvMax, out vec4 differences)
 {
     uint firstTop = gHeightRange.Range[1];
     uint first = firstTop & 0xFFu;
     uint top = firstTop >> 8u;
     uvec2 c0, c1;
     uint level = min(max(CBT_RangeCells(uvMin, uvMax, cells, c0, c1), first), top);
-    stepHigh = 3.0e38;
+    differences = vec4(3.0e38);
     if (level == first)
     {
         uint dimX = CBT_HeightRangeDim(cells.x, first);
         uvec2 b0 = c0 >> first;
         uvec2 b1 = c1 >> first;
-        stepHigh = 0.0;
+        differences = vec4(0.0);
         for (uint y = b0.y; y <= b1.y; ++y)
             for (uint x = b0.x; x <= b1.x; ++x)
-                stepHigh = max(stepHigh, uintBitsToFloat(gHeightRange.Range[CBT_HEIGHT_STEP_FIRST_WORD + y * dimX + x]));
+            {
+                uint w = CBT_HEIGHT_DIFFERENCES_FIRST_WORD + 4u * (y * dimX + x);
+                uvec4 bits = uvec4(gHeightRange.Range[w], gHeightRange.Range[w + 1u], gHeightRange.Range[w + 2u],
+                                   gHeightRange.Range[w + 3u]);
+                differences = max(differences, uintBitsToFloat(bits));
+            }
     }
     return CBT_RangeOverBlocks(cells, c0, c1, level, gHeightRange.Range[2u + level]);
+}
+
+// The width of a slab about a plane that holds the level-0 surface over the lattice cells a UV box
+// touches (normalized height): the plane width of the smallest stored block of the level-0 pyramid
+// that contains those cells, never finer than the first stored level. A sub-box's block is that block
+// or one inside it, and a block's width is never below its children's, so the width nests. Call only
+// where CBT_PlanarCriterionOn holds.
+float CBT_PlaneWidthOverUV(uvec2 cells, vec2 uvMin, vec2 uvMax)
+{
+    uint firstTop = gHeightRange.Range[1];
+    uint first = firstTop & 0xFFu;
+    uint top = firstTop >> 8u;
+    uvec2 c0, c1;
+    CBT_RangeCells(uvMin, uvMax, cells, c0, c1);
+    uint differ = (c0.x ^ c1.x) | (c0.y ^ c1.y);
+    uint level = differ == 0u ? 0u : uint(findMSB(differ)) + 1u;
+    level = min(max(level, first), top);
+    uvec2 block = c0 >> level;
+    return CBT_LoadHeightPlane(gHeightRange.Range[2u + level] + block.y * CBT_HeightRangeDim(cells.x, level) + block.x).w;
 }
 
 // The chain levels with a stored range for the bound lattice of `samples` (header [18], [19]); 0 when
@@ -1279,37 +1322,50 @@ CBTPlanarCriterion CBT_MakePlanarCriterion(CBTFrameParams fp, vec3 origin, vec3 
 }
 
 // A node's box (render-origin-relative): its UV box in XZ, the level-0 pyramid's range over it in Y
-// (CBT_PyramidRangeOverUV). `rangeM` is the level-0 surface's range over the box (meters): the box's
-// height, or the step bound when the box is small against its blocks (CBT_PlanarStepBoundRange).
+// (CBT_PyramidRangeOverUV). `rangeM` bounds the level-0 surface's distance from the facet's plane
+// (meters): the box's height, or when the box is small against its blocks the step bound
+// (CBT_PlanarStepBoundRange) or the curvature bound (CBT_PlanarCurvatureBound) if smaller.
 void CBT_PlanarNodeBox(CBTPlanarCriterion c, CBTFrameParams fp, vec2 uvMin, vec2 uvMax, out vec3 lo, out vec3 hi,
                        out float rangeM)
 {
-    float stepHigh;
-    vec2 range = CBT_PyramidRangeOverUV(c.Cells, uvMin, uvMax, stepHigh);
+    vec4 differences;
+    vec2 range = CBT_PyramidRangeOverUV(c.Cells, uvMin, uvMax, differences);
     precise vec2 xzMin = c.OriginXZ + uvMin * fp.terrainSize.xy;
     precise vec2 xzMax = c.OriginXZ + uvMax * fp.terrainSize.xy;
     precise float y0 = range.x * c.HeightScale + c.BaseY;
     precise float y1 = range.y * c.HeightScale + c.BaseY;
     lo = vec3(xzMin.x, min(y0, y1), xzMin.y);
     hi = vec3(xzMax.x, max(y0, y1), xzMax.y);
-    precise vec2 extentCells = max(min(uvMax, vec2(1.0)) - max(uvMin, vec2(0.0)), vec2(0.0)) * vec2(c.Cells);
-    precise float stepM = stepHigh * abs(c.HeightScale);
-    rangeM = CBT_PlanarStepBoundRange(hi.y - lo.y, stepM, extentCells.x, extentCells.y);
+    precise vec2 cellMin = max(uvMin, vec2(0.0)) * vec2(c.Cells);
+    precise vec2 cellMax = min(uvMax, vec2(1.0)) * vec2(c.Cells);
+    precise vec2 extentCells = max(cellMax - cellMin, vec2(0.0));
+    precise vec4 differencesM = differences * abs(c.HeightScale);
+    rangeM = CBT_PlanarStepBoundRange(hi.y - lo.y, differencesM.x, extentCells.x, extentCells.y);
+    // Only the first stored level's blocks carry second differences (3e38 elsewhere).
+    if (differences.y < 3.0e38)
+    {
+        vec2 knots = max(ceil(cellMax) - floor(cellMin) - 1.0, vec2(0.0));
+        rangeM = min(rangeM, CBT_PlanarCurvatureBound(differencesM.y, differencesM.z, differencesM.w, extentCells.x,
+                                                      extentCells.y, knots.x, knots.y));
+    }
 }
 
 // Whether a node splits at `thresholdPx`, from its UV box and its split edge in UV alone (section 5.1
 // of the monotone split design): its demand above the threshold times the near-bias, pool-pressure and
-// water-plane scales, and its drawn range above the flat veto. The drawn range is the smallest of the
-// level-0 range over the box and of the range of every chain level the draw reads there over the box
-// widened by the draw's reach. Kernel_Classify asks it of a facet, its parent and its parent's twin
+// water-plane scales, and its r above the flat veto. r, the surface's distance from the facet's plane,
+// is the smallest of the level-0 range over the box, the plane width over the box
+// (CBT_PlaneWidthOverUV), and the range of every chain level the draw reads there over the box widened
+// by the draw's reach. Kernel_Classify asks it of a facet, its parent and its parent's twin
 // with the corners each of them rebuilds bit for bit, so the four children of a diamond reach one
 // answer.
 bool CBT_PlanarNodeSplits(CBTPlanarCriterion c, CBTFrameParams fp, vec2 uvMin, vec2 uvMax, float uvEdge,
                           float thresholdPx)
 {
     vec3 lo, hi;
-    float rangeM;
-    CBT_PlanarNodeBox(c, fp, uvMin, uvMax, lo, hi, rangeM);
+    float boxRangeM;
+    CBT_PlanarNodeBox(c, fp, uvMin, uvMax, lo, hi, boxRangeM);
+    precise float planeM = CBT_PlaneWidthOverUV(c.Cells, uvMin, uvMax) * abs(c.HeightScale);
+    float rangeM = min(boxRangeM, planeM);
     float dist = CBT_DistanceToBox(lo, hi, c.CamRel);
     uint levels = c.ChainLevels > 0u ? CBT_DrawnRangeChainLevels(CBT_ChainLevel(dist, c.ChainScale), c.ChainLevels) : 0u;
     if (levels > 0u)
@@ -2876,6 +2932,66 @@ void Kernel_PrepareBisectorIndirect()
 // (entries stay live, the count stays right). Catching that needs either per-slot visited memory
 // or a checksum over every entry, and no kernel can produce it — every writer of IndicesAll writes
 // a repeat-free list.
+
+#if !defined(CBT_DECODE_INT32)
+// The bound height texture's normalized sample (x, y) in ring slot `frameSlot`.
+float CBT_HeightSample(uint frameSlot, uint x, uint y)
+{
+    return texelFetch(CBT_RING(gHeight, frameSlot), ivec2(x, y), 0).r;
+}
+
+// The differences one lattice sample `p` of a first-stored-level block [s0, s1] adds to the block's
+// (CBTLayout.h kCBTHeightDifferencesFirstWord), `hgt` its height: the steps to its neighbors at lower X
+// and lower Z inside the block, its second differences along X and Z where it has a neighbor on both
+// sides in the lattice, and the mixed difference of the cell it is the low corner of inside the block.
+vec4 CBT_SampleDifferences(uint frameSlot, uvec2 p, uvec2 s0, uvec2 s1, uvec2 cells, float hgt)
+{
+    vec4 d = vec4(0.0);
+    if (p.x > s0.x)
+        d.x = abs(hgt - CBT_HeightSample(frameSlot, p.x - 1u, p.y));
+    if (p.y > s0.y)
+        d.x = max(d.x, abs(hgt - CBT_HeightSample(frameSlot, p.x, p.y - 1u)));
+    if (p.x > 0u && p.x < cells.x)
+    {
+        precise float second = CBT_HeightSample(frameSlot, p.x - 1u, p.y) - 2.0 * hgt +
+                               CBT_HeightSample(frameSlot, p.x + 1u, p.y);
+        d.y = abs(second);
+    }
+    if (p.y > 0u && p.y < cells.y)
+    {
+        precise float second = CBT_HeightSample(frameSlot, p.x, p.y - 1u) - 2.0 * hgt +
+                               CBT_HeightSample(frameSlot, p.x, p.y + 1u);
+        d.z = abs(second);
+    }
+    if (p.x < s1.x && p.y < s1.y)
+    {
+        precise float mixed = CBT_HeightSample(frameSlot, p.x + 1u, p.y + 1u) -
+                              CBT_HeightSample(frameSlot, p.x + 1u, p.y) -
+                              CBT_HeightSample(frameSlot, p.x, p.y + 1u) + hgt;
+        d.w = abs(mixed);
+    }
+    return d;
+}
+
+// The plane of level-0 pyramid block `block` at `level` above the first stored level, from its 2 x 2
+// children at `belowOffset` (a lattice edge repeats the last child; CBT_PlaneFold).
+vec4 CBT_FoldHeightPlane(uvec2 block, uint level, uint belowOffset, uvec2 belowDim)
+{
+    vec4 child[4];
+    vec2 offset[4];
+    float childCells = float(1u << (level - 1u));
+    vec2 center = (vec2(block) + 0.5) * (2.0 * childCells);
+    for (uint i = 0u; i < 4u; ++i)
+    {
+        uvec2 c = min(block * 2u + uvec2(i & 1u, i >> 1u), belowDim - 1u);
+        child[i] = CBT_LoadHeightPlane(belowOffset + c.y * belowDim.x + c.x);
+        offset[i] = (vec2(c) + 0.5) * childCells - center;
+    }
+    return CBT_PlaneFold(child[0], child[1], child[2], child[3], offset[0], offset[1], offset[2], offset[3],
+                         0.5 * childCells);
+}
+#endif
+
 // Writes level k = pc.passIndex & 0xFF of the height-range pyramid (CBT_HeightRange*) and of the
 // chain levels' range pyramids, for the first pc.passIndex >> 8 chain levels (0: none; the CPU passes
 // CBTHeightChainRangeLevels when the chain is built for the bound lattice). Threads [0, N_k) write the
@@ -2921,22 +3037,47 @@ void Kernel_HeightRangeBuild()
     uint base = chainLevel == 0u ? first : CBT_ChainRangeBase(first, top, chainLevel);
     if (level == base && chainLevel == 0u)
     {
-        // The block's range and its steepest step between neighboring samples along X or Z, every pair
-        // of the block's samples included (CBTLayout.h kCBTHeightStepFirstWord).
+        // The block's range, its first and second differences (CBTLayout.h kCBTHeightDifferencesFirstWord)
+        // and its plane: the least-squares fit to its samples, slopes about the block's center. The
+        // samples form a grid, so each slope is the covariance of the height with that coordinate over the
+        // coordinate's variance, about the samples' mean position; the heights are taken relative to the
+        // block's first sample, which leaves the slopes as they are and keeps the sums' rounding at the
+        // scale of the block's relief instead of its height.
         uvec2 s0 = block << level;
         uvec2 s1 = min((block + 1u) << level, cells);
-        float stepHigh = 0.0;
+        vec4 differences = vec4(0.0);
+        vec2 center = (vec2(block) + 0.5) * float(1u << level);
+        vec2 mean = 0.5 * vec2(s0 + s1);
+        float origin = CBT_HeightSample(frameSlot, s0.x, s0.y);
+        vec4 moments = vec4(0.0); // sum of dx h, dx^2, dz h, dz^2
         for (uint y = s0.y; y <= s1.y; ++y)
             for (uint x = s0.x; x <= s1.x; ++x)
             {
-                float hgt = texelFetch(CBT_RING(gHeight, frameSlot), ivec2(x, y), 0).r;
+                float hgt = CBT_HeightSample(frameSlot, x, y);
                 acc = vec2(min(acc.x, hgt), max(acc.y, hgt));
-                if (x > s0.x)
-                    stepHigh = max(stepHigh, abs(hgt - texelFetch(CBT_RING(gHeight, frameSlot), ivec2(x - 1u, y), 0).r));
-                if (y > s0.y)
-                    stepHigh = max(stepHigh, abs(hgt - texelFetch(CBT_RING(gHeight, frameSlot), ivec2(x, y - 1u), 0).r));
+                differences = max(differences, CBT_SampleDifferences(frameSlot, uvec2(x, y), s0, s1, cells, hgt));
+                vec2 d = vec2(x, y) - mean;
+                precise float relative = hgt - origin;
+                moments += vec4(d.x * relative, d.x * d.x, d.y * relative, d.y * d.y);
             }
-        gHeightRange.Range[CBT_HEIGHT_STEP_FIRST_WORD + e] = floatBitsToUint(stepHigh);
+        uint differencesWord = CBT_HEIGHT_DIFFERENCES_FIRST_WORD + 4u * e;
+        gHeightRange.Range[differencesWord] = floatBitsToUint(differences.x);
+        gHeightRange.Range[differencesWord + 1u] = floatBitsToUint(differences.y);
+        gHeightRange.Range[differencesWord + 2u] = floatBitsToUint(differences.z);
+        gHeightRange.Range[differencesWord + 3u] = floatBitsToUint(differences.w);
+        // Two samples or more per axis (s1 > s0), so both variances are positive.
+        vec2 slope = vec2(moments.x / moments.y, moments.z / moments.w);
+        vec2 residual = vec2(3.0e38, -3.0e38);
+        for (uint y = s0.y; y <= s1.y; ++y)
+            for (uint x = s0.x; x <= s1.x; ++x)
+            {
+                vec2 d = vec2(x, y) - center;
+                precise float r = (CBT_HeightSample(frameSlot, x, y) - origin) - slope.x * d.x - slope.y * d.y;
+                residual = vec2(min(residual.x, r), max(residual.y, r));
+            }
+        precise float low = residual.x + origin;
+        CBT_StoreHeightPlane(CBT_HeightRangeOffset(cells, first, level) + e,
+                             vec4(slope, low, residual.y - residual.x));
     }
     else if (level == base)
     {
@@ -2973,6 +3114,9 @@ void Kernel_HeightRangeBuild()
                 vec2 r = CBT_LoadHeightRange(belowOffset + c.y * belowDim.x + c.x);
                 acc = vec2(min(acc.x, r.x), max(acc.y, r.y));
             }
+        if (chainLevel == 0u)
+            CBT_StoreHeightPlane(CBT_HeightRangeOffset(cells, first, level) + e,
+                                 CBT_FoldHeightPlane(block, level, belowOffset, belowDim));
     }
     CBT_StoreHeightRange(CBT_RangeLevelEntry(cells, first, top, chainLevel, level) + e, acc);
 #endif

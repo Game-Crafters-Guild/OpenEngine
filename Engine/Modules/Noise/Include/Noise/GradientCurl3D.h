@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 
 #include <cmath>
@@ -39,14 +40,12 @@ inline Mathematics::Vector3 PotentialGradient(const Mathematics::Vector3& point,
     Mathematics::Vector3 fraction, fade, fadeSlope;
     for (std::uint32_t axis = 0; axis < 3; ++axis)
     {
-        float wrapped = std::fmod(point[axis], kPeriod);
-        if (wrapped < 0.0f)
-            wrapped += kPeriod;
+        const float wrapped = Math::Wrap(point[axis], kPeriod);
         const float whole = std::floor(wrapped);
         cell[axis] = static_cast<std::uint32_t>(whole);
         const float t = wrapped - whole;
         fraction[axis] = t;
-        fade[axis] = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+        fade[axis] = Math::SmootherStep(0.0f, 1.0f, t);
         fadeSlope[axis] = 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
     }
     Mathematics::Vector3 result;

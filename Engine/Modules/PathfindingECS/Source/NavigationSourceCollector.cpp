@@ -461,7 +461,7 @@ bool NavigationTerrainSource::OverlapsXZ(float32 minX, float32 minZ, float32 max
 NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world)
 {
     NavigationTerrainSource source;
-    source.Query = TerrainECS::ResolvePlanarHeightQuery(world);
+    source.Query = TerrainECS::ResolveSurfaceHeightQuery(world);
     if (!source.Query.IsValid())
     {
         bool first = true;
@@ -500,8 +500,8 @@ NavigationBounds NavigationSurfaceBounds(const Components::NavigationSurface& su
     if (terrain.Query.IsValid())
     {
         const auto& query = terrain.Query;
-        const float32 low[3] = {query.FootprintOriginX(), query.OriginY, query.FootprintOriginZ()};
-        const float32 high[3] = {low[0] + query.FootprintSizeX(), query.OriginY + query.HeightScale,
+        const float32 low[3] = {query.FootprintOriginX(), query.OriginY(), query.FootprintOriginZ()};
+        const float32 high[3] = {low[0] + query.FootprintSizeX(), query.OriginY() + query.HeightScale(),
                                  low[2] + query.FootprintSizeZ()};
         bounds.Include(low);
         bounds.Include(high);
@@ -536,7 +536,7 @@ uint32 TerrainLatticeStride(const NavigationTerrainSource& terrain, float32 cell
 }
 
 bool AppendTerrainLattice(const NavigationTerrainSource& terrain, float32 minX, float32 minZ, float32 maxX,
-                          float32 maxZ, uint32 stride, NavigationTriangles& out, int32& outTileX, int32& outTileZ)
+                          float32 maxZ, uint32 stride, NavigationTriangles& out, Mathematics::Vector3& outWaitPoint)
 {
     const auto& query = terrain.Query;
     const float32 spacingX = query.LatticeSpacingX() * static_cast<float32>(stride);
@@ -544,8 +544,8 @@ bool AppendTerrainLattice(const NavigationTerrainSource& terrain, float32 minX, 
     if (!terrain.OverlapsXZ(minX, minZ, maxX, maxZ) || !(spacingX > 0.0f) || !(spacingZ > 0.0f))
         return true;
 
-    const float32 originX = query.LatticeOriginX();
-    const float32 originZ = query.LatticeOriginZ();
+    const float32 originX = query.FootprintOriginX();
+    const float32 originZ = query.FootprintOriginZ();
     const int32 lastX = static_cast<int32>(std::floor(query.FootprintSizeX() / spacingX + 1.0e-3f));
     const int32 lastZ = static_cast<int32>(std::floor(query.FootprintSizeZ() / spacingZ + 1.0e-3f));
     const int32 x0 = std::clamp(static_cast<int32>(std::floor((minX - originX) / spacingX)), 0, lastX);
@@ -557,10 +557,6 @@ bool AppendTerrainLattice(const NavigationTerrainSource& terrain, float32 minX, 
     if (width < 2 || depth < 2)
         return true;
 
-    // A tiled residency answers no sample on the footprint's far edge, which belongs to no tile, so
-    // corners there are read a hair inside it.
-    const float32 maxSampleX = originX + query.FootprintSizeX() - 1.0e-3f * spacingX;
-    const float32 maxSampleZ = originZ + query.FootprintSizeZ() - 1.0e-3f * spacingZ;
     const size_t firstVertex = out.Vertices.size();
     const uint32 baseVertex = out.VertexCount();
     out.Vertices.reserve(firstVertex + static_cast<size_t>(width) * depth * 3);
@@ -570,15 +566,15 @@ bool AppendTerrainLattice(const NavigationTerrainSource& terrain, float32 minX, 
         {
             const float32 worldX = originX + static_cast<float32>(x) * spacingX;
             const float32 worldZ = originZ + static_cast<float32>(z) * spacingZ;
-            float32 height = 0.0f;
-            if (!query.SampleHeight(std::min(worldX, maxSampleX), std::min(worldZ, maxSampleZ), height))
+            TerrainECS::SurfaceHeightSample sample;
+            if (!query.SampleHeight(Mathematics::Vector3(worldX, 0.0f, worldZ),
+                                    TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
             {
                 out.Vertices.resize(firstVertex);
-                if (!query.TileCoordinateAt(worldX, worldZ, outTileX, outTileZ))
-                    outTileX = outTileZ = 0;
+                outWaitPoint = Mathematics::Vector3(worldX, 0.0f, worldZ);
                 return false;
             }
-            out.Vertices.insert(out.Vertices.end(), {worldX, height, worldZ});
+            out.Vertices.insert(out.Vertices.end(), {worldX, sample.Height, worldZ});
         }
     }
     out.Indices.reserve(out.Indices.size() + static_cast<size_t>(width - 1) * (depth - 1) * 6);

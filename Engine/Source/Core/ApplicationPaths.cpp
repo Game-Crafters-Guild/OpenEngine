@@ -1,4 +1,4 @@
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 #if defined(__EMSCRIPTEN__)
 #include "Platform/WebPersistentStorage.h"
@@ -23,7 +23,7 @@
 namespace GameEngine
 {
 
-std::filesystem::path PathUtils::GetExecutableDirectory()
+std::filesystem::path ApplicationPaths::GetExecutableDirectory()
 {
     static std::filesystem::path cachedPath;
 
@@ -117,7 +117,7 @@ std::filesystem::path NormalizeDirectory(const std::filesystem::path& directory)
 }
 } // namespace
 
-std::filesystem::path PathUtils::GetBundleResourcesDirectory(const std::filesystem::path& executableDirectory)
+std::filesystem::path ApplicationPaths::GetBundleResourcesDirectory(const std::filesystem::path& executableDirectory)
 {
 #if defined(__APPLE__)
     const std::filesystem::path exeDir = NormalizeDirectory(executableDirectory);
@@ -133,7 +133,7 @@ std::filesystem::path PathUtils::GetBundleResourcesDirectory(const std::filesyst
 #endif
 }
 
-std::filesystem::path PathUtils::GetInstallAssetsRoot()
+std::filesystem::path ApplicationPaths::GetInstallAssetsRoot()
 {
     // The executable does not move while it runs, so the layout rule is evaluated once; every
     // later call is a copy of the answer.
@@ -141,13 +141,13 @@ std::filesystem::path PathUtils::GetInstallAssetsRoot()
     return installAssetsRoot;
 }
 
-std::filesystem::path PathUtils::InstallAssetsRootFor(const std::filesystem::path& executableDirectory)
+std::filesystem::path ApplicationPaths::InstallAssetsRootFor(const std::filesystem::path& executableDirectory)
 {
     const std::filesystem::path contentRoot = InstallContentRootFor(executableDirectory);
     return contentRoot.empty() ? contentRoot : contentRoot / "Assets";
 }
 
-std::filesystem::path PathUtils::InstallContentRootFor(const std::filesystem::path& executableDirectory)
+std::filesystem::path ApplicationPaths::InstallContentRootFor(const std::filesystem::path& executableDirectory)
 {
     const std::filesystem::path exeDir = NormalizeDirectory(executableDirectory);
     if (exeDir.empty())
@@ -163,7 +163,7 @@ std::filesystem::path PathUtils::InstallContentRootFor(const std::filesystem::pa
     return bundleResources.empty() ? exeDir : bundleResources;
 }
 
-std::filesystem::path PathUtils::GetScriptsAssemblyDirectory()
+std::filesystem::path ApplicationPaths::GetScriptsAssemblyDirectory()
 {
     // Scripts assembly OUTPUT directory: <exe>/ScriptAssemblies
     auto exeDir = GetExecutableDirectory();
@@ -180,12 +180,12 @@ std::filesystem::path PathUtils::GetScriptsAssemblyDirectory()
     return outDir;
 }
 
-void PathUtils::EnsureWorkingDirectoryMatchesExecutable()
+void ApplicationPaths::EnsureWorkingDirectoryMatchesExecutable()
 {
     EnsureWorkingDirectoryMatches(GetExecutableDirectory());
 }
 
-void PathUtils::EnsureWorkingDirectoryMatches(const std::filesystem::path& directory)
+void ApplicationPaths::EnsureWorkingDirectoryMatches(const std::filesystem::path& directory)
 {
     namespace fs = std::filesystem;
 
@@ -275,7 +275,7 @@ static std::filesystem::path WebPersistentDir(const char* root)
 }
 #endif
 
-std::filesystem::path PathUtils::GetUserCacheDirectory()
+std::filesystem::path ApplicationPaths::GetUserCacheDirectory()
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -302,7 +302,7 @@ std::filesystem::path PathUtils::GetUserCacheDirectory()
 #endif
 }
 
-std::filesystem::path PathUtils::GetUserDataDirectory()
+std::filesystem::path ApplicationPaths::GetUserDataDirectory()
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -329,7 +329,7 @@ std::filesystem::path PathUtils::GetUserDataDirectory()
 #endif
 }
 
-std::filesystem::path PathUtils::GetUserDocumentsDirectory()
+std::filesystem::path ApplicationPaths::GetUserDocumentsDirectory()
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -436,7 +436,7 @@ std::filesystem::path PathUtils::GetUserDocumentsDirectory()
 #endif
 }
 
-std::string PathUtils::SanitizeForFolderName(std::string_view name)
+std::string ApplicationPaths::SanitizeForFolderName(std::string_view name)
 {
     auto isBad = [](unsigned char c) -> bool
     {
@@ -497,7 +497,7 @@ std::string PathUtils::SanitizeForFolderName(std::string_view name)
     return out;
 }
 
-std::filesystem::path PathUtils::GetBundledShaderCacheRoot()
+std::filesystem::path ApplicationPaths::GetBundledShaderCacheRoot()
 {
 #if defined(__EMSCRIPTEN__)
     // The cook ships in the wasm preload at the MEMFS root.
@@ -514,7 +514,7 @@ std::filesystem::path PathUtils::GetBundledShaderCacheRoot()
     return std::filesystem::is_directory(bundleCache, ec) ? bundleCache : std::filesystem::path{};
 }
 
-std::filesystem::path PathUtils::FindFileUpward(std::filesystem::path start, const std::filesystem::path& relative)
+std::filesystem::path ApplicationPaths::FindFileUpward(std::filesystem::path start, const std::filesystem::path& relative)
 {
     std::error_code ec;
     while (!start.empty())

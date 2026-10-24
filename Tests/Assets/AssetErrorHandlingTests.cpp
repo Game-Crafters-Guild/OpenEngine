@@ -350,15 +350,15 @@ namespace
 class WarningCapture
 {
   public:
-    explicit WarningCapture(Logger::String needle)
+    explicit WarningCapture(std::string needle)
     {
         // Engine is a SHARED library: AssetManager logs through Engine's Logger
         // state, not this executable's copy. Adopt it, or the capture reads zero.
         Logger::Log::RedirectToSharedState(GameEngine::GetEngineLoggerState());
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         sink->RegisterCallback([state = m_State, needle = std::move(needle)](const Logger::LogMessage& msg) {
-            if (msg.Level == Logger::LogLevel::Warning && msg.Message.find(needle) != Logger::String::npos)
+            if (msg.Level == Logger::LogLevel::Warning && msg.Message.find(needle) != std::string::npos)
             {
                 std::lock_guard lock(state->Mutex);
                 state->Messages.push_back(msg.Message);
@@ -367,7 +367,7 @@ class WarningCapture
         Logger::Log::AddSink(std::move(sink));
     }
 
-    std::vector<Logger::String> Messages() const
+    std::vector<std::string> Messages() const
     {
         Logger::Log::Flush();
         std::lock_guard lock(m_State->Mutex);
@@ -378,7 +378,7 @@ class WarningCapture
     struct State
     {
         std::mutex Mutex;
-        std::vector<Logger::String> Messages;
+        std::vector<std::string> Messages;
     };
     std::shared_ptr<State> m_State = std::make_shared<State>();
 };
@@ -409,8 +409,8 @@ TEST_F(AssetErrorHandlingTest, AssetManager_CreateAsset_ThrowingFactory_LogsReas
 
     const auto messages = warnings.Messages();
     ASSERT_EQ(messages.size(), 1u);
-    EXPECT_NE(messages.front().find("broken"), Logger::String::npos) << messages.front();
-    EXPECT_NE(messages.front().find(AssetTypeToString(AssetType::Video)), Logger::String::npos) << messages.front();
+    EXPECT_NE(messages.front().find("broken"), std::string::npos) << messages.front();
+    EXPECT_NE(messages.front().find(AssetTypeToString(AssetType::Video)), std::string::npos) << messages.front();
 }
 
 TEST_F(AssetErrorHandlingTest, DecodeSuppressionPreservesFileSpellingAndReportsErrorOnce)
