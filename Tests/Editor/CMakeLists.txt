@@ -2038,6 +2038,13 @@ if(TARGET EditorTests)
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/Graph/graph-ported-node.uxml"
 	    "Assets/UI/Graph/graph-ported-node.uxml")
 
+	# Layout measurements must use the shipped faces, not platform fallback metrics.
+	foreach(_face IN ITEMS Roboto-Regular.ttf Roboto-Medium.ttf Roboto-Bold.ttf)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/${_face}"
+	        "Assets/Fonts/${_face}")
+	endforeach()
+
 	# InspectorNotice builds its plate, text and action from its layout, read
 	# from the same install-assets root.
 	ge_stage_test_asset(EditorTests
