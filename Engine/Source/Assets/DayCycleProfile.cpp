@@ -4,6 +4,7 @@
 #include "Logger/Logger.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "Scene/SceneValue.h"
+#include "Serialization/JsonRead.h"
 #include "Types/ParseNumber.h"
 
 #include <algorithm>
@@ -187,94 +188,6 @@ const DayCycleTrackDesc* FindTrackByFileKey(std::string_view fileKey)
     return nullptr;
 }
 
-// A pass over profile text that stops at the first key an object already holds. It reads events
-// only and builds no document: nlohmann's callback parser rescans a container each time an object
-// in it closes, which is quadratic in the number of objects.
-class RepeatedKeyScan final : public nlohmann::json_sax<nlohmann::json>
-{
-  public:
-    const std::string& Repeated() const
-    {
-        return m_Repeated;
-    }
-
-    bool null() override
-    {
-        return true;
-    }
-    bool boolean(bool) override
-    {
-        return true;
-    }
-    bool number_integer(number_integer_t) override
-    {
-        return true;
-    }
-    bool number_unsigned(number_unsigned_t) override
-    {
-        return true;
-    }
-    bool number_float(number_float_t, const string_t&) override
-    {
-        return true;
-    }
-    bool string(string_t&) override
-    {
-        return true;
-    }
-    bool binary(binary_t&) override
-    {
-        return true;
-    }
-    bool start_object(std::size_t) override
-    {
-        m_KeysOfOpenObjects.emplace_back();
-        return true;
-    }
-    bool key(string_t& name) override
-    {
-        std::vector<std::string>& seen = m_KeysOfOpenObjects.back();
-        if (std::find(seen.begin(), seen.end(), name) != seen.end())
-        {
-            m_Repeated = name;
-            return false;
-        }
-        seen.push_back(name);
-        return true;
-    }
-    bool end_object() override
-    {
-        m_KeysOfOpenObjects.pop_back();
-        return true;
-    }
-    bool start_array(std::size_t) override
-    {
-        return true;
-    }
-    bool end_array() override
-    {
-        return true;
-    }
-    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override
-    {
-        return false;
-    }
-
-  private:
-    std::vector<std::vector<std::string>> m_KeysOfOpenObjects;
-    std::string m_Repeated;
-};
-
-// The first key written twice in one object of `text`, or empty. JSON leaves a repeated key to the
-// reader, which keeps the last; a profile refuses it instead, so no definition is lost unseen.
-std::string FirstRepeatedKey(std::string_view text)
-{
-    RepeatedKeyScan scan;
-    if (nlohmann::json::sax_parse(text.begin(), text.end(), &scan))
-        return {};
-    return scan.Repeated();
-}
-
 bool ParseTrack(const DayCycleTrackDesc& desc, const nlohmann::json& value, DayCycleTrackKeys& out,
                 std::string& outError)
 {
@@ -368,9 +281,12 @@ bool ParseDayCycleProfile(std::string_view text, DayCycleProfileData& out, std::
         outError = "the file is not a JSON object";
         return false;
     }
-    if (const std::string repeated = FirstRepeatedKey(text); !repeated.empty())
+    // JSON leaves a repeated key to the reader, which keeps the last; a profile refuses it instead,
+    // so no definition is lost unseen.
+    if (const Serialization::JsonStructureScan scan = Serialization::ScanJsonStructure(text);
+        scan.Found == Serialization::JsonStructureScan::Finding::RepeatedKey)
     {
-        outError = "'" + repeated + "' is written twice; keep one";
+        outError = "'" + scan.Key + "' is written twice; keep one";
         return false;
     }
     for (const auto& [field, value] : root.items())

@@ -2872,6 +2872,21 @@ TEST(GltfImport, ClipSchemaKeysAreCheckedInTheObjectThatHoldsThem)
     EXPECT_EQ(apart.Settings.RootMotion->Bone, "root");
 }
 
+// Events are sibling objects in one array: each holds its own "frame" and "name", and a key written twice in a later
+// event is still found.
+TEST(GltfImport, ClipSchemaKeysAreCheckedInEachEventOfTheArray)
+{
+    const SchemaRead apart = ReadSchema(R"({"clip": {"schemaVersion": 1,
+        "events": [{"frame": 3, "name": "hit"}, {"frame": 7, "name": "land"}]}})");
+    ASSERT_TRUE(apart.Refusal.empty()) << apart.Refusal;
+    EXPECT_EQ(apart.Events.GetEvents().size(), 2u);
+
+    const SchemaRead twice = ReadSchema(R"({"clip": {"schemaVersion": 1,
+        "events": [{"frame": 3, "name": "hit"}, {"frame": 7, "name": "land", "frame": 9}]}})");
+    EXPECT_NE(twice.Refusal.find(R"(the key "frame" twice in one object)"), std::string::npos) << twice.Refusal;
+    EXPECT_TRUE(twice.Events.GetEvents().empty());
+}
+
 TEST(GltfImport, ClipSchemaEventOnTheLastFrameOfAFloatKeyedClipIsRead)
 {
     // Key times are 32-bit floats, so the end frame, length x rate, lands a rounding error off a whole frame; an

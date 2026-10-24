@@ -229,3 +229,10 @@ TEST(DayCycleProfileAsset, RefusesATrackNamedTwice)
                                                           "exposureOffset": { "keys": "0,-1" } } })");
     EXPECT_NE(error.find("'exposureOffset' is written twice"), std::string::npos) << error;
 }
+
+TEST(DayCycleProfileAsset, RefusesAKeyWrittenTwiceInsideATrack)
+{
+    const std::string error = RefusalOf(R"({ "tracks": { "exposureOffset": { "keys": "0,0", "keys": "0,-1" },
+                                                          "fogDensity": { "keys": "0,1" } } })");
+    EXPECT_NE(error.find("'keys' is written twice"), std::string::npos) << error;
+}

@@ -2,13 +2,16 @@
 
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
+#include "Types/Types.h"
 
 #include <cstddef>
 #include <format>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 // Reading authored JSON without throwing. A decode reports a file it cannot read by refusing it,
@@ -90,6 +93,113 @@ inline bool ParseJson(std::string_view text, nlohmann::json& outDocument, std::s
     outError = recorder.Error.empty() ? std::string("the text is not JSON") : std::move(recorder.Error);
     outDocument = nlohmann::json();
     return false;
+}
+
+/// What ScanJsonStructure found first in a JSON text.
+struct JsonStructureScan
+{
+    enum class Finding
+    {
+        /// The text is JSON with no key twice in one object and no nesting past the limit.
+        None,
+        /// An object holds the key `Key` twice.
+        RepeatedKey,
+        /// An object or array opens past the depth limit.
+        TooDeep,
+        /// The text is not JSON; ParseJson() says why.
+        NotJson,
+    };
+
+    Finding Found = Finding::None;
+    /// The key written twice, when Found is RepeatedKey.
+    std::string Key;
+};
+
+/// No depth limit for ScanJsonStructure.
+inline constexpr size_t kNoJsonDepthLimit = std::numeric_limits<size_t>::max();
+
+/**
+ * @brief Scans `text` once for what a parsed document cannot show, and stops at the first finding.
+ *
+ * JSON leaves a key written twice in one object to the reader, and nlohmann::json keeps the last,
+ * so a format that refuses a repeated key scans its text with this before or after ParseJson().
+ * The scan also refuses objects and arrays nested more than `depthLimit` levels deep; the outermost
+ * value is level 1. It reads parse events and builds no document, so it is linear in the text:
+ * nlohmann's parse callback rescans a container each time an object in it closes, which is
+ * quadratic in the number of objects.
+ */
+inline JsonStructureScan ScanJsonStructure(std::string_view text, size_t depthLimit = kNoJsonDepthLimit)
+{
+    class StructureScanner final : public nlohmann::json_sax<nlohmann::json>
+    {
+      public:
+        explicit StructureScanner(size_t depthLimit) : m_DepthLimit(depthLimit) {}
+
+        bool null() override { return true; }
+        bool boolean(bool) override { return true; }
+        bool number_integer(number_integer_t) override { return true; }
+        bool number_unsigned(number_unsigned_t) override { return true; }
+        bool number_float(number_float_t, const string_t&) override { return true; }
+        bool string(string_t&) override { return true; }
+        bool binary(binary_t&) override { return true; }
+        bool start_object(std::size_t) override
+        {
+            if (!OpenLevel())
+                return false;
+            // The key sets of closed objects stay allocated for the next objects at their level.
+            if (m_OpenObjects == m_KeysOfOpenObjects.size())
+                m_KeysOfOpenObjects.emplace_back();
+            else
+                m_KeysOfOpenObjects[m_OpenObjects].clear();
+            ++m_OpenObjects;
+            return true;
+        }
+        bool key(string_t& name) override
+        {
+            if (m_KeysOfOpenObjects[m_OpenObjects - 1].insert(name).second)
+                return true;
+            Result.Found = JsonStructureScan::Finding::RepeatedKey;
+            Result.Key = name;
+            return false;
+        }
+        bool end_object() override
+        {
+            --m_OpenObjects;
+            --m_Depth;
+            return true;
+        }
+        bool start_array(std::size_t) override { return OpenLevel(); }
+        bool end_array() override
+        {
+            --m_Depth;
+            return true;
+        }
+        bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override
+        {
+            Result.Found = JsonStructureScan::Finding::NotJson;
+            return false;
+        }
+
+        JsonStructureScan Result;
+
+      private:
+        // Enters one more level of objects and arrays; false, with the finding, past the limit.
+        bool OpenLevel()
+        {
+            if (++m_Depth <= m_DepthLimit)
+                return true;
+            Result.Found = JsonStructureScan::Finding::TooDeep;
+            return false;
+        }
+
+        size_t m_DepthLimit;
+        size_t m_Depth = 0;
+        size_t m_OpenObjects = 0;
+        std::vector<FastHashSet<std::string>> m_KeysOfOpenObjects;
+    };
+    StructureScanner scanner(depthLimit);
+    nlohmann::json::sax_parse(text.begin(), text.end(), &scanner);
+    return std::move(scanner.Result);
 }
 
 /**

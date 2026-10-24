@@ -42,6 +42,7 @@ set(ASSET_TEST_SOURCES
     TerrainMaterialLibraryAssetTests.cpp
     NavSurfaceAssetTests.cpp
     DayCycleProfileAssetTests.cpp
+    JsonStructureScanTests.cpp
     AssetDbHardeningTests.cpp
     AssetDbDerivedReconcileTests.cpp
     AssetDbDerivedRedirectTests.cpp
