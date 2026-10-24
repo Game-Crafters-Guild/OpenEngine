@@ -17,6 +17,7 @@
 #include "Engine/Rendering/MaterialSsboLayout.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/CameraTypes.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Common/Math.h"
 #include "Rendering/Common/Utils.h"
@@ -345,7 +346,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     pd.topology = PrimitiveTopology::TriangleList;
     pd.AddDynamicState(DynamicState::Viewport);
     pd.AddDynamicState(DynamicState::Scissor);
-    pd.EnableDepthTest(true, CompareOp::Greater); // reverse-Z: nearer is greater
+    pd.EnableDepthTest(true, ReverseZ::kNearerOrEqual);
     pd.SetCullingMode(CullModeFlagBits::None, FrontFace::CounterClockwise);
     pd.colorAttachmentFormats = {static_cast<uint32_t>(TextureFormat::RGBA8_UNORM)};
     pd.depthAttachmentFormat = static_cast<uint32_t>(TextureFormat::D32_FLOAT);
@@ -472,7 +473,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     rp.clearColorValue[0][3] = 1.0f;
     rp.colorStoreOp[0] = RenderPassDesc::StoreOp::Store;
     rp.clearDepth = true;
-    rp.clearDepthValue = 0.0f; // reverse-Z far
+    rp.clearDepthValue = ReverseZ::kClearFar;
     rp.depthStoreOp = RenderPassDesc::StoreOp::Store;
 
     cl->BeginRenderPass(rp);

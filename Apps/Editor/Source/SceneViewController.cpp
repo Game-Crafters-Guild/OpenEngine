@@ -29,6 +29,7 @@
 #include "Rendering/Core/HzbCullingStrategy.h"
 #include "Rendering/Core/NoneCullingStrategy.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 #include <algorithm>
@@ -2415,7 +2416,7 @@ bool SceneViewController::DeclarePreviewTargetsRG(
         clear.clearColorValue[2] = static_cast<float>(bg & 0xFFu) / 255.0f;
         clear.clearColorValue[3] = 1.0f;
         clear.clearDepth = true;
-        clear.clearDepthValue = 0.0f;
+        clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
         rs->Views().SetViewClearConfig(m_PreviewViewId, clear);
     }
 
@@ -4118,7 +4119,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         clear.clearColorValue[3] = 1.0f;
     }
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs->Views().SetViewClearConfig(m_ViewId, clear);
 
     // Scene-view-local post-process override — identical to the old arm.

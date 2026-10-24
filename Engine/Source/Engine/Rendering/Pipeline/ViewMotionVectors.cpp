@@ -10,6 +10,7 @@
 #include "Rendering/Core/GPUInstanceWorldKey.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
@@ -479,7 +480,7 @@ GraphicsPipelineId ViewMotionVectors::GetOrCreateMVPipeline(IDevice* device, uin
     gd.Rasterization.cullMode = CullModeFlagBits::None;
     gd.DepthStencil.depthTestEnable = true;
     gd.DepthStencil.depthWriteEnable = false;
-    gd.DepthStencil.depthCompareOp = CompareOp::GreaterOrEqual;
+    gd.DepthStencil.depthCompareOp = ReverseZ::kNearerOrEqual;
     DynamicStateInfo dyn{};
     dyn.states = {DynamicState::Viewport, DynamicState::Scissor};
     gd.DynamicState = dyn;

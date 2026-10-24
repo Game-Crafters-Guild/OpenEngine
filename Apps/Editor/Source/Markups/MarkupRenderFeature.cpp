@@ -14,6 +14,7 @@
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
 #include "Rendering/Core/RenderGraph/RGFullscreen.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "SceneView/SceneViewGizmos.h"
@@ -325,10 +326,10 @@ bool MarkupRenderFeature::EnsurePipelines(IDevice& device)
                                         const char* visibleName, const char* occludedName, bool meshInput) {
         return GlowPipelines{
             PipelineDescTranslator::InternGraphics(device, BuildGlowPipelineDesc(stageVs, stageFs, m_GlowLayout,
-                                                                                 CompareOp::GreaterOrEqual, visibleName,
+                                                                                 ReverseZ::kNearerOrEqual, visibleName,
                                                                                  meshInput)),
             PipelineDescTranslator::InternGraphics(device, BuildGlowPipelineDesc(stageVs, stageFs, m_GlowLayout,
-                                                                                 CompareOp::Less, occludedName,
+                                                                                 ReverseZ::kFarther, occludedName,
                                                                                  meshInput))};
     };
     const GlowPipelines single = intern(vs, fs, "SV_MarkupGlow", "SV_MarkupGlow_Occluded", false);

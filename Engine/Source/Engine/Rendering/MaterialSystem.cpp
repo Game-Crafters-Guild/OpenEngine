@@ -39,6 +39,7 @@
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
 #include "Rendering/Core/PipelineTypes.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBlendDerive.h"
 #include "Rendering/Materials/MaterialBuildService.h"
@@ -211,7 +212,7 @@ Rendering::GraphicsPipelineId InternBaseMaterialPipeline(
     gd.Rasterization.cullMode  = cullMode;
     gd.Rasterization.frontFace = frontFace;
     gd.DepthStencil.depthTestEnable  = blend.DepthTestEnable;
-    gd.DepthStencil.depthCompareOp   = Rendering::CompareOp::GreaterOrEqual;
+    gd.DepthStencil.depthCompareOp   = Rendering::ReverseZ::kNearerOrEqual;
     gd.DepthStencil.depthWriteEnable = blend.DepthWriteEnable;
     gd.ColorBlend.attachments = {blend.Attachment};
     if (!blend.BlendEnable)

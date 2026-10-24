@@ -33,6 +33,7 @@
 #include "Rendering/Core/RenderGraph/RGStateMap.h"
 #include "Rendering/Core/RenderGraph/RGTransientPool.h"
 #include "Rendering/Core/RenderGraph/RGUploadRing.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <cassert>
 #include <cstdint>
@@ -123,7 +124,7 @@ enum class RGStoreOp : uint8_t
 struct RGClearValue
 {
     float Color[4] = {0, 0, 0, 0};
-    float Depth = 0.0f; // reverse-Z: clear to far
+    float Depth = ReverseZ::kClearFar;
     uint32_t Stencil = 0;
 };
 struct RGAttachmentOps

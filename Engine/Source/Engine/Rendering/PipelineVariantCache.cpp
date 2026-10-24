@@ -13,6 +13,7 @@
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/ParallaxReliefDepth.h"
 #include "Engine/Rendering/DepthDrawRecorder.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
@@ -151,12 +152,11 @@ inline size_t VariantL1Index(size_t keyHash) noexcept
 // Hardware depth bias for shadow map rendering. The constant factor offsets all
 // fragments by a fixed amount in depth-buffer units, while the slope factor
 // scales with the surface's depth gradient so steep triangles get more bias.
-// Reverse-Z + D32_FLOAT: signs are negative so the bias pushes fragments toward
-// 0.0 (away from light); the magnitudes are unchanged from the forward-Z
-// values that were tuned for this engine's CSM scale.
-static constexpr float kShadowDepthBiasConstant = -1.25f;
+// ReverseZ::CasterBiasAwayFromViewer gives the sign that pushes casters away
+// from the light; the magnitudes are tuned for this engine's CSM scale.
+static constexpr float kShadowDepthBiasConstant = Rendering::ReverseZ::CasterBiasAwayFromViewer(1.25f);
 
-static constexpr float kShadowDepthBiasSlope = -1.75f;
+static constexpr float kShadowDepthBiasSlope = Rendering::ReverseZ::CasterBiasAwayFromViewer(1.75f);
 
 PipelineVariantCache::InstancedVariantKey PipelineVariantCache::MakeColorVariantKey(
     const Material& material, Rendering::VertexAttributeFlags vertexFlags, uint32_t sampleCount,
@@ -1341,7 +1341,7 @@ Rendering::GraphicsPipelineId PipelineVariantCache::InternDepthPipelineId(
     // camera depth the prepass already completed — writing there would move the
     // depth every other consumer of this frame reconstructs against.
     gd.DepthStencil.depthWriteEnable = !colorTint && !motionColor;
-    gd.DepthStencil.depthCompareOp   = Rendering::CompareOp::GreaterOrEqual;
+    gd.DepthStencil.depthCompareOp   = Rendering::ReverseZ::kNearerOrEqual;
 
     if (colorTint)
     {
