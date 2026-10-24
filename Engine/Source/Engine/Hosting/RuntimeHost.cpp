@@ -5,6 +5,7 @@
 #include "Components/Rendering/Camera.h"
 #include "Components/Transform.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "ECS/ECSTemplates.h"
 #include "ECSModules/Rendering/RenderingLoop.h"
@@ -632,7 +633,7 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
             &EngineCore::GetInstance().GetJobSystem(),
             // The default HUD font ships with the runtime. A development project
             // can have a separate asset root without duplicating bundled fonts.
-            PathUtils::GetInstallAssetsRoot(), /*neverClearTarget=*/false);
+            ApplicationPaths::GetInstallAssetsRoot(), /*neverClearTarget=*/false);
         m_GameUI->GetUIManager()->SetScaleSettings(m_Desc.UIScale);
     }
     GameUI::SetHost(m_GameUI.get());

@@ -17,6 +17,7 @@
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "ECS/Systems.h"
 #include "ECS/World.h"
@@ -169,7 +170,7 @@ protected:
 TEST_F(RuntimeHostFrame, DefaultHudFontComesFromStagedAssetsWithASeparateProject)
 {
     ASSERT_FALSE(fs::exists(m_Root / "Assets/Fonts/Roboto-Regular.ttf"));
-    ASSERT_TRUE(fs::exists(PathUtils::GetInstallAssetsRoot() / "Fonts/Roboto-Regular.ttf"))
+    ASSERT_TRUE(fs::exists(ApplicationPaths::GetInstallAssetsRoot() / "Fonts/Roboto-Regular.ttf"))
         << "the runtime font must be staged beside the test executable";
     ASSERT_EQ(m_Host->LoadRenderPipeline(), Engine::Renderer::PipelineResolveFailure::None);
     ASSERT_TRUE(m_Host->OpenScene("Scenes/Empty.scene"));
