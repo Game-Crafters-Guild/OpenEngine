@@ -31,3 +31,12 @@ add_test(NAME UIDockingModelTests COMMAND $<TARGET_FILE:UIDockingModelTests>)
 set_tests_properties(UIDockingModelTests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+
+add_executable(FontResolverTests FontResolverTests.cpp)
+target_include_directories(FontResolverTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests)
+target_compile_features(FontResolverTests PRIVATE cxx_std_20)
+target_link_libraries(FontResolverTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+ge_set_output_tests(FontResolverTests)
+ge_stage_runtime_dependencies(FontResolverTests)
+add_test(NAME FontResolverTests COMMAND $<TARGET_FILE:FontResolverTests>)
+set_tests_properties(FontResolverTests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
