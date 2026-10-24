@@ -11,7 +11,6 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -28,7 +27,7 @@ using Serialization::Quoted;
 // The one version of the clip schema this reader reads.
 constexpr double kClipSchemaVersion = 1.0;
 // The deepest an extras block holding a schema may nest its objects and arrays; the block itself is level 1.
-constexpr int kSchemaDepthLimit = 16;
+constexpr size_t kSchemaDepthLimit = 16u;
 constexpr size_t kBytesPerKibibyte = 1024u;
 // How far past the clip's end an event still counts as on its last frame, in float epsilons of the end frame. The
 // clip's length and rate come from 32-bit float key times, so the end frame, length x rate, carries a relative
@@ -42,96 +41,6 @@ constexpr double kLastFrameToleranceLimit = 0.5;
 // C string boundary, and a line break would split the log line that names it.
 constexpr unsigned char kFirstPrintableCharacter = 0x20u;
 constexpr unsigned char kDeleteCharacter = 0x7Fu;
-
-// A pass over extras text that checks what only a parse sees: objects and arrays nested past the depth limit, and a
-// key an object already holds (a parsed document keeps only the last). It stops at the first of either. The text is
-// parsed into a document after it, with no parse callback: nlohmann's callback parser rescans a container each time
-// an object in it closes, which is quadratic in the number of objects, while this pass and a plain parse are linear.
-class ExtrasBoundsCheck final : public json::json_sax_t
-{
-  public:
-    const std::string& Refusal() const
-    {
-        return m_Refusal;
-    }
-
-    bool null() override
-    {
-        return true;
-    }
-    bool boolean(bool) override
-    {
-        return true;
-    }
-    bool number_integer(number_integer_t) override
-    {
-        return true;
-    }
-    bool number_unsigned(number_unsigned_t) override
-    {
-        return true;
-    }
-    bool number_float(number_float_t, const string_t&) override
-    {
-        return true;
-    }
-    bool string(string_t&) override
-    {
-        return true;
-    }
-    bool binary(binary_t&) override
-    {
-        return true;
-    }
-    bool start_object(std::size_t) override
-    {
-        if (!OpenLevel())
-            return false;
-        m_KeysOfOpenObjects.emplace_back();
-        return true;
-    }
-    bool key(string_t& name) override
-    {
-        if (m_KeysOfOpenObjects.back().insert(name).second)
-            return true;
-        m_Refusal = std::format("the animation's extras have the key {} twice in one object", Quoted(name));
-        return false;
-    }
-    bool end_object() override
-    {
-        m_KeysOfOpenObjects.pop_back();
-        --m_Depth;
-        return true;
-    }
-    bool start_array(std::size_t) override
-    {
-        return OpenLevel();
-    }
-    bool end_array() override
-    {
-        --m_Depth;
-        return true;
-    }
-    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override
-    {
-        return false;
-    }
-
-  private:
-    // Enters one more level of objects and arrays; false, with the refusal, past the depth limit.
-    bool OpenLevel()
-    {
-        if (++m_Depth <= kSchemaDepthLimit)
-            return true;
-        m_Refusal = std::format("the animation's extras nest objects and arrays deeper than {} levels",
-                                kSchemaDepthLimit);
-        return false;
-    }
-
-    int m_Depth = 0;
-    std::vector<std::unordered_set<std::string>> m_KeysOfOpenObjects;
-    std::string m_Refusal;
-};
 
 // The extras as a JSON document, or why they are not read.
 struct BoundedExtras
@@ -153,10 +62,21 @@ BoundedExtras ParseBoundedExtras(std::string_view text)
         return extras;
     }
 
-    ExtrasBoundsCheck check;
-    if (!json::sax_parse(text.begin(), text.end(), &check))
+    // One pass over the text finds what the parsed document cannot show: nesting past the limit, and a key an object
+    // already holds (the document keeps only the last).
+    const Serialization::JsonStructureScan scan = Serialization::ScanJsonStructure(text, kSchemaDepthLimit);
+    switch (scan.Found)
     {
-        extras.Refusal = check.Refusal().empty() ? "the animation's extras are not valid JSON" : check.Refusal();
+    case Serialization::JsonStructureScan::Finding::None: break;
+    case Serialization::JsonStructureScan::Finding::RepeatedKey:
+        extras.Refusal = std::format("the animation's extras have the key {} twice in one object", Quoted(scan.Key));
+        return extras;
+    case Serialization::JsonStructureScan::Finding::TooDeep:
+        extras.Refusal = std::format("the animation's extras nest objects and arrays deeper than {} levels",
+                                     kSchemaDepthLimit);
+        return extras;
+    case Serialization::JsonStructureScan::Finding::NotJson:
+        extras.Refusal = "the animation's extras are not valid JSON";
         return extras;
     }
     extras.Document = json::parse(text.begin(), text.end(), nullptr, /*allow_exceptions=*/false);

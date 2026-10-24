@@ -4,15 +4,18 @@
 #include "Logger/Logger.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "Scene/SceneValue.h"
+#include "Serialization/JsonRead.h"
 #include "Types/ParseNumber.h"
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <numbers>
+#include <string>
 #include <utility>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace GameEngine
 {
@@ -185,31 +188,6 @@ const DayCycleTrackDesc* FindTrackByFileKey(std::string_view fileKey)
     return nullptr;
 }
 
-// The first key written twice in one object of `text`, or empty. JSON leaves a repeated key to the
-// reader, which keeps the last; a profile refuses it instead, so no definition is lost unseen.
-std::string FirstRepeatedKey(std::string_view text)
-{
-    std::vector<std::vector<std::string>> objects;
-    std::string repeated;
-    const auto callback = [&](int, nlohmann::json::parse_event_t event, nlohmann::json& parsed) {
-        if (event == nlohmann::json::parse_event_t::object_start)
-            objects.emplace_back();
-        else if (event == nlohmann::json::parse_event_t::object_end && !objects.empty())
-            objects.pop_back();
-        else if (event == nlohmann::json::parse_event_t::key && !objects.empty() && repeated.empty())
-        {
-            const std::string key = parsed.get<std::string>();
-            std::vector<std::string>& seen = objects.back();
-            if (std::find(seen.begin(), seen.end(), key) != seen.end())
-                repeated = key;
-            seen.push_back(key);
-        }
-        return true;
-    };
-    (void)nlohmann::json::parse(text, callback, false);
-    return repeated;
-}
-
 bool ParseTrack(const DayCycleTrackDesc& desc, const nlohmann::json& value, DayCycleTrackKeys& out,
                 std::string& outError)
 {
@@ -303,9 +281,12 @@ bool ParseDayCycleProfile(std::string_view text, DayCycleProfileData& out, std::
         outError = "the file is not a JSON object";
         return false;
     }
-    if (const std::string repeated = FirstRepeatedKey(text); !repeated.empty())
+    // JSON leaves a repeated key to the reader, which keeps the last; a profile refuses it instead,
+    // so no definition is lost unseen.
+    if (const Serialization::JsonStructureScan scan = Serialization::ScanJsonStructure(text);
+        scan.Found == Serialization::JsonStructureScan::Finding::RepeatedKey)
     {
-        outError = "'" + repeated + "' is written twice; keep one";
+        outError = "'" + scan.Key + "' is written twice; keep one";
         return false;
     }
     for (const auto& [field, value] : root.items())
