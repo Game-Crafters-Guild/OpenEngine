@@ -121,7 +121,7 @@ Why the tag types matter:
 Known limits:
 
 - **Dependent base classes.** A class template does not see a declaration in a base class that depends on a template parameter. Such code falls back to its namespace or module channel.
-- **Naming rule.** Do not declare `GE_LOG_CHANNEL` in the broad `GameEngine` namespace, which about 250 module source files use. It would replace the module default for all of them. `Logger.cpp` refuses nothing here; the convention is documented next to the macro.
+- **Naming rule.** Do not declare `GE_LOG_CHANNEL` in the broad `GameEngine` namespace, which about 250 module source files use. It would replace the module default for all of them. The compiler cannot catch this, so the rule is documented next to the macro and checked in review.
 
 ### Module defaults in CMake
 
@@ -154,7 +154,7 @@ The resolution order is the same as for engine modules. Only the source of the d
 - **Packages that belong to an engine area.** A package that extends an engine area declares its own channel in its namespace or classes. For example, `fidelityfx-dof` declares `GE_LOG_CHANNEL("Rendering.DoF")`. No manifest field is added for this; the scope declarations already cover it.
 - **Both build paths must agree.** A package module is compiled in two places: `ge_add_engine_package_module` in the engine build, which produces the shipped prebuilt, and the editor's source build through the generated project, which is the fallback when the prebuilt's `engine_abi` marker does not match. Both must emit the same `GE_LOG_MODULE`, derived from the manifest's `name`.
 - **Kept out of the ABI digest.** The define does not change the ABI, so it stays out of the package defines that feed the `engine_abi` digest. Otherwise renaming a channel would invalidate every shipped prebuilt. In CMake it is a separate `target_compile_definitions` call, not part of `_gepkg_defines`. In the generator it is a separate field, not part of `CompileDefinitions`, if that list feeds the digest; this needs checking (open question 3).
-- **Unload and hot reload.** Package and game modules unload and reload. `RegisterChannel` copies the name into the registry's arena, so an unloaded DLL leaves no dangling name, which is the same rule the logger already follows for source-file names. The reloaded DLL registers the same name again and gets the same id, so level rules and the Log panel's filters carry over across a reload.
+- **Unload and hot reload.** Package and game modules unload and reload. `RegisterChannel` copies the name into the registry's own storage, so an unloaded DLL leaves no dangling name, which is the same rule the logger already follows for source-file names. The reloaded DLL registers the same name again and gets the same id, so level rules and the Log panel's filters carry over across a reload.
 
 ## Levels
 
@@ -179,8 +179,9 @@ The Log panel keeps the two apart:
 
 ### Rules and effective levels
 
-- The level state is a set of rules keyed by name prefix. `Log::SetLogLevel(level)` sets the root rule.
-- `Log::SetChannelLevel(prefix, level)` sets one rule, and `Log::ClearChannelLevel(prefix)` removes it.
+- The level state is a set of rules keyed by name prefix.
+- `Log::SetLogLevel(level)` sets the root rule, as it sets the global level today. Its 76 callers outside the Logger module do not change.
+- `Log::SetChannelLevel(prefix, level)` sets one rule, and `Log::ClearChannelLevel(prefix)` removes it. Both refuse the empty prefix, which belongs to `SetLogLevel`, so the two functions never act on the same rule.
 - When a rule changes, every registered channel's effective level is recomputed. Rules change rarely, so the cost is O(channels × rules) and does not matter.
 - When a channel registers, its effective level is computed from the rules that exist at that moment. A rule therefore applies to channels that first log after it was set.
 - `Off` on a channel silences it completely, Critical included. That matches what `Off` does globally today.
@@ -195,7 +196,8 @@ The Log panel keeps the two apart:
 ### Sink levels
 
 - Today `Log::Initialize` copies `Config::GlobalMinLevel` into the default `ConsoleSink`'s `MinLevel` (`Logger.cpp:108`). With channels, that cap would drop a channel set to Debug while the global level is Info. The console sink created by `Initialize` therefore defaults to `Trace` and relies on the channel gate.
-- `RingBufferSink` and `CallbackSink` already default to `Trace`. `FileSink` has no level of its own.
+- `RingBufferSink` and `CallbackSink` already default to `Trace`.
+- `FileSink::Config::minLevel` (default Debug) is set by the editor from `GE_LOG_FILE_LEVEL` through `ResolveFileLogLevel` (`FileSink.h`). It stays: it is an explicit host-chosen cap on what the file records, not a per-channel level. A channel turned up to Trace still reaches the console and the Log panel; the file records it only if `GE_LOG_FILE_LEVEL` allows Trace. The Logging settings page shows this cap next to the rules, so a missing line in the file is not mistaken for a level rule that did not apply.
 - A sink keeps its own `MinLevel` only as an explicit cap that a host chooses.
 
 ### `LOG_TRACE` and `LOG_DEBUG` in Release
@@ -220,7 +222,7 @@ Everything that leaves the process today is formatted text, so persisting names 
 
 ### Names and threads
 
-- Channel names are stored in an arena in `LoggerState` and never move. `Log::GetChannelName(id)` returns a `std::string_view` without a lock, so the drain thread and sinks can read names freely.
+- Channel names are stored in a fixed array of `String`, one entry per id, in `LoggerState`. An entry is written once, before its id is published with a release store of the channel count, and never changes after that. `Log::GetChannelName(id)` therefore returns a `std::string_view` without a lock, so the drain thread and sinks can read names freely. `Memory/Arena.h` is not used: it is a per-thread scratch arena, and these names live for the whole process and are read from every thread.
 - Registration takes a registry mutex: it looks the name up in a `FlatMap<String, LogChannelId>`, appends it if it is new, and computes its effective level.
 
 ### Logger state shared across modules
@@ -238,9 +240,9 @@ Channels live in `LoggerState`, so the host and `Engine.dll` share one registry 
 
 ### Editor Log panel (`LogView`)
 
-- A channel filter next to the severity toggles and the search box: a tree of channel names built from the registry, with tri-state checkboxes for parents. Unchecking `Rendering` hides all of `Rendering.*`.
-- The channel column shows the name, with a stable color derived from a hash of the top-level segment, so related channels share a hue.
-- Changing a channel's level from the panel's context menu writes the same rule the settings page writes.
+- A channel filter next to the severity toggles and the search box: a tree of channel names built from the registry, with tri-state checkboxes for parents. It uses `UI/Controls/TreeView.h` and `UI/Controls/Checkbox.h`. `Checkbox` has no partly-checked state today, so it is extended with one in its own commit first. Unchecking `Rendering` hides all of `Rendering.*`.
+- The channel column shows the name, with a stable color derived from an FNV-1a hash (`Types/Fnv1a.h`) of the top-level segment, so related channels share a hue.
+- Changing a channel's level from the panel's context menu (`UI/Interaction/ContextMenuManipulator.h`) writes the same rule the settings page writes.
 
 ### Editor settings
 
@@ -256,7 +258,9 @@ Channels live in `LoggerState`, so the host and `Engine.dll` share one registry 
 
 ### Player and tests
 
-`GE_LOG_LEVELS` holds rules as `prefix=level` pairs separated by commas: `GE_LOG_LEVELS=Terrain=debug,Rendering=warning`. The empty prefix is written `*`. The Player reads it at startup and also accepts the same value through a command-line flag. A malformed pair is refused with a message that quotes the pair and the expected form.
+`GE_LOG_LEVELS` holds rules as `prefix=level` pairs separated by commas: `GE_LOG_LEVELS=Terrain=debug,Rendering=warning`. The empty prefix is written `*`. The Player reads it at startup and also accepts the same value through a command-line flag. A malformed pair is refused with a message that quotes the pair and the expected form. Parsing uses `ParseLogLevel` (`LogLevel.h`) and `TrimWhitespaceView` (`Types/StringUtils.h`). `Types` has no split function, so `Split` is added to `StringUtils.h` in its own commit first.
+
+`GE_LOG_FILE_LEVEL` stays separate and keeps its meaning: it caps the file sink, while `GE_LOG_LEVELS` sets channel rules (see "Sink levels").
 
 ## C# scripts
 
@@ -313,7 +317,7 @@ The editor suites cover the `get_log` channel filter. A live check covers the Lo
 - **An explicit category at every call, as some engines require.** Precise, but it would mean editing all 5,000 call sites by hand, and it gives the wrong answer in the common case where the module already says enough.
 - **Channels by namespace only.** The namespaces are uneven: plain `GameEngine` covers about 250 module source files, so most logs would land in one channel. Namespace declarations remain an override, not the base layer.
 - **Channel from `std::source_location` and path rules.** It would need no rewrite, but it means a lookup keyed by file-name pointer on every call, before the level check can even run. That is slow, and pointer-keyed caches break when a module unloads.
-- **Stable ids from a hash of the name.** Ids would be the same in every run, but the hot path would need a hash-to-slot lookup instead of a direct index. Every persisted output already carries the name, so nothing needs a stable id.
+- **Stable ids from a hash of the name, such as the engine's `StringId` (`Types/StringId.h`, 64-bit FNV-1a).** Ids would be the same in every run, but the hot path would need a hash-to-slot lookup instead of a direct index. Every persisted output already carries the name, so nothing needs a stable id.
 
 ## Open questions
 
