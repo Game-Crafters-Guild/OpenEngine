@@ -33,7 +33,6 @@
 #include "Rendering/Passes/TemporalDither.h"
 #include "Scene/SceneAssetResolver.h"
 #include "Scene/SceneIO.h"
-#include "Types/PathUtils.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureSpace.h"
 

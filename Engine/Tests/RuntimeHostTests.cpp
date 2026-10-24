@@ -35,7 +35,6 @@
 #include "Rendering/Text/FontAtlas.h"
 #include "ScopedPlatformCacheRoot.h"
 #include "Scripting/ScriptsConfig.h"
-#include "Types/PathUtils.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/UIManager.h"
 
