@@ -63,7 +63,7 @@ layout(std430, set = 2, binding = 1) readonly buffer OceanParamsBuffer
     float uIntersectionFoamStrength;
     float uFoamPad2;
     // --- Material / shading parity block (mirror of OceanParamsGPU). Order +
-    // std430 padding must match byte-for-byte: 9 vec4 lanes then 4 scalar lanes.
+    // std430 padding must match byte-for-byte: 8 vec4 lanes then 4 scalar lanes.
     vec4  uDiffuse;             // view-up diffuse scatter tint
     vec4  uDiffuseGrazing;      // grazing-angle diffuse scatter tint
     vec4  uDiffuseShadow;       // in-shadow diffuse tint
@@ -72,7 +72,6 @@ layout(std430, set = 2, binding = 1) readonly buffer OceanParamsBuffer
     vec4  uSkyBase;             // procedural sky zenith/base
     vec4  uSkyTowardsSun;       // sky tint toward the sun
     vec4  uSkyAwayFromSun;      // sky tint away from the sun
-    vec4  uDirectionalLightColor; // ocean-only tint for direct sun glitter
     float uNormalsStrength;
     float uNormalsScale;
     float uSubSurfaceDepthMax;
@@ -86,9 +85,9 @@ layout(std430, set = 2, binding = 1) readonly buffer OceanParamsBuffer
     float uIorWater;
     uint  uPlanarReflections;
     float uSkyDirectionality;
-    float uDirectionalLightBoost;
-    float uDirectionalLightFallOff;
     float uPlanarReflectionStrength;
+    float uSurfacePad0;
+    float uSurfacePad1;
     // Refraction / depth-fog (Phase 4). Lane A: xyz = per-channel depth-fog
     // extinction; w = screen-space refraction distortion strength. Lane B:
     // x = grab-available flag (1 = sample the scene grab; 0 = opaque),

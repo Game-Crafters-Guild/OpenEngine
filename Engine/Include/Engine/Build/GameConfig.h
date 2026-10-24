@@ -61,7 +61,7 @@ struct GameConfig
     Rendering::AntiAliasingProjectSettings renderQuality;
 
     // The project's render layer names (rendering.renderLayerNames), copied from the project at
-    // package time; the Player sets them at startup, so a game's FindRenderLayer answers with them.
+    // package time; the Player sets them at startup, so a game's RenderLayers.Find answers with them.
     Rendering::RenderLayerNames renderLayerNames;
 
     // Window: the size and mode the runtime creates its window with at startup.

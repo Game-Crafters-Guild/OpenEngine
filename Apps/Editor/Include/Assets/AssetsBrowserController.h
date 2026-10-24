@@ -159,12 +159,14 @@ public:
     // Directly set grid/list selection from a set of asset paths (used by undo/redo).
     void SetSelectionFromPaths(const std::vector<std::filesystem::path>& paths);
 
-    // Inline rename of the file at `assetPath` in whichever view is showing: its
+    // Inline rename of the file or folder at `assetPath` in whichever view is showing: its
     // name becomes an editor (Enter commits, Escape cancels). Renaming a surface
-    // shader renames its paired material too. Folders and virtual entries are ignored.
+    // shader renames its paired material too. Virtual entries and the Assets root are ignored.
     void BeginRename(const std::filesystem::path& assetPath);
-    // BeginRename for the single selected file, if there is one.
+    // BeginRename for the single selected file or folder, if there is one.
     void BeginRenameOfSelection();
+    // Inline rename of the folder selected in the folder tree.
+    void BeginRenameOfTreeSelection();
     
     // Text truncation settings for asset browser (grid/list).
     // These are typically driven live from SettingsPanel.
@@ -227,6 +229,10 @@ private:
     // A rename requested before the item's cell exists (fresh directory load,
     // scroll-into-view) starts when the grid or list binds that item.
     void StartPendingRenameIfBound(const std::filesystem::path& boundPath);
+    // False for virtual entries, missing paths and the Assets root itself.
+    bool IsRenameableAssetPath(const std::filesystem::path& path) const;
+    // Inline rename of the folder on the folder tree's row `id` (F2 or the folder's menu).
+    void BeginRenameOfTreeFolder(TreeId id);
     Label* FindNameLabelForPath(const std::filesystem::path& assetPath) const;
     bool IsGridViewShowing() const;
     void OnAssetRenamed(const std::filesystem::path& renamedTo);

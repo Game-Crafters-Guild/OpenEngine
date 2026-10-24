@@ -3,6 +3,7 @@
 // native binding.
 #include "ProbeSystem.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace GameEngine::Probe::Script
@@ -89,6 +90,38 @@ bool TryNearest(ProbeSystem& probe, Mathematics::Vector3 point, ECS::EntityHandl
     (void)point;
     outEntity = probe.Nearest;
     return probe.Nearest.IsValid();
+}
+
+std::string Echo(ProbeSystem& probe, std::string_view text)
+{
+    ++ProbeSystem::Calls();
+    probe.LastText = std::string(text);
+    return probe.LastText;
+}
+
+Rendering::RenderLayerMask SwapLayers(ProbeSystem& probe, Rendering::RenderLayerMask layers)
+{
+    ++ProbeSystem::Calls();
+    const Rendering::RenderLayerMask previous = probe.Layers;
+    probe.Layers = layers;
+    return previous;
+}
+
+std::int32_t ListHits(ProbeSystem& probe, Mathematics::Vector3 origin, std::span<Hit> hits)
+{
+    ++ProbeSystem::Calls();
+    (void)origin;
+    const std::size_t written = std::min(probe.Hits.size(), hits.size());
+    std::copy_n(probe.Hits.begin(), written, hits.begin());
+    return static_cast<std::int32_t>(probe.Hits.size());
+}
+
+ColorLinear SwapTint(ProbeSystem& probe, ColorLinear tint)
+{
+    ++ProbeSystem::Calls();
+    const ColorLinear previous = probe.Tint;
+    probe.Tint = tint;
+    return previous;
 }
 
 SubscriptionId SubscribeTouched(ECS::EntityHandle scope, ScriptCallback<Touch> callback)

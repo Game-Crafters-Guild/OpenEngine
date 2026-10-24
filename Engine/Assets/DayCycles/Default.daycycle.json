@@ -1,0 +1,9 @@
+{
+  "name": "Default",
+  "description": "The engine's day: a 1.5-stop dip through civil twilight.",
+  "tracks": {
+    "exposureOffset": {
+      "keys": "-11,0,0,0,1,1;-6,-1.5,0,0,1,1;0,0,0,0,1,1"
+    }
+  }
+}

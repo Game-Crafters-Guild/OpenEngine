@@ -18,6 +18,15 @@ ge_set_output_tests(NativePostSimulationTests)
 ge_stage_runtime_dependencies(NativePostSimulationTests)
 add_test(NAME NativePostSimulationTests COMMAND $<TARGET_FILE:NativePostSimulationTests>)
 
+add_executable(UserSystemOrderTests UserSystemOrderTests.cpp)
+target_link_libraries(UserSystemOrderTests PRIVATE Engine Mathematics Types GTest::gtest GTest::gtest_main)
+target_include_directories(UserSystemOrderTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/Engine/Include
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/NativeScripting/GameSDK/Include)
+ge_set_output_tests(UserSystemOrderTests)
+ge_stage_runtime_dependencies(UserSystemOrderTests)
+add_test(NAME UserSystemOrderTests COMMAND $<TARGET_FILE:UserSystemOrderTests>)
+
 # ---------------------------------------------------------------------------
 # Probe DLL — stand-in for a Phase-2 user module.
 #

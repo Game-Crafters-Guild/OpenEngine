@@ -8,7 +8,6 @@
 // never-realized attachment and its dimensions are immaterial to the assertions. Pools
 // are owned once and reused; each call declares a fresh frame (immediate-mode rebuild).
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
 
 #include "SharedHeadlessDevice.h"
@@ -20,28 +19,6 @@
 #include "Rendering/Core/RenderGraph/RGUploadRing.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIManager.h"
-
-// A headless GPU device of the caller's own: no swapchain, and GE_HEADLESS_TEST=1 so
-// device init skips presentation paths. Returns null when no Vulkan device
-// is available — callers GTEST_SKIP on that. For a test that asserts on the
-// device itself; every other test takes SharedHeadlessDevice().
-inline std::unique_ptr<GameEngine::Rendering::IDevice> MakeHeadlessDevice()
-{
-#ifdef _WIN32
-    _putenv_s("GE_HEADLESS_TEST", "1");
-#else
-    setenv("GE_HEADLESS_TEST", "1", 1);
-#endif
-    GameEngine::Rendering::DeviceDesc dd{};
-    dd.preferredAPI = GameEngine::Rendering::GraphicsAPI::Vulkan;
-    dd.enableDynamicRendering = true;
-    dd.enableSwapchain = false; // headless
-    dd.enableDebugLayer = false;
-    auto dev = GameEngine::Rendering::DeviceFactory::CreateDevice(dd);
-    if (!dev || !dev->Initialize(dd))
-        return nullptr;
-    return dev;
-}
 
 // Find the first TextInput in a subtree. Typed fields embed their editor as
 // a child element; tests reach it through this walk instead of the protected

@@ -200,13 +200,15 @@ bool RenderServices::Initialize(Rendering::IDevice* device)
     // frees per-view GPU buffers through a live device.
     m_ViewRegistry.SetDevice(m_Device);
     // The one cross-subsystem lifecycle edge (sec 3.3): ReleaseView clears the
-    // view's draw-builder submissions and temporal history after tearing
-    // down its own state.
+    // view's draw-builder submissions, temporal history and scatter buffers
+    // after tearing down its own state.
     m_ViewRegistry.SetViewReleasedCallback(
         [this](Rendering::ViewId id)
         {
             m_WorldDrawBuilder.ClearView(id);
             m_ViewTemporalHistory.ReleaseView(id);
+            if (m_DrawStreamBuilder)
+                m_DrawStreamBuilder->ReleaseView(static_cast<uint32_t>(id));
         });
     Rendering::IDevice* const dev = m_Device;
 
@@ -242,22 +244,6 @@ bool RenderServices::Initialize(Rendering::IDevice* device)
             Logger::Log::Warning("GE_TAA_RENDER_SCALE '{}' out of range [{}, 1.0]; keeping {}", env,
                                  kMinRenderScale, m_DefaultRenderScale);
     }
-
-    // Which producer arm writes deforming motion vectors. Three independent
-    // switches, every one off by default, so a run that sets none records
-    // nothing and the frame is the frame it was before this work. They select
-    // between the options the producer comparison measures; enabling more than
-    // one is refused (they share one target). The measurement slice replaces
-    // the switches with the winner.
-    SetDeformationMotionArm(ResolveDeformationMotionArm(
-        Platform::EnvironmentSwitchEnabled("GE_DEFORMATION_MOTION_COLOR_PASS_TARGET", false),
-        Platform::EnvironmentSwitchEnabled("GE_DEFORMATION_MOTION_PREPASS_TARGET", false),
-        Platform::EnvironmentSwitchEnabled("GE_DEFORMATION_MOTION_SEPARATE_PASS", false)));
-    // Stated once, so a run that enabled a switch and sees no motion can tell
-    // "the arm is off" from "the arm ran and recorded nothing" without a build.
-    if (m_DeformationMotionArm != DeformationMotionArm::None)
-        Logger::Log::Info("Deformation motion: producing through the {} arm.",
-                          DeformationMotionArmName(m_DeformationMotionArm));
 
     // Texture residency + binding service: bindless array, GPU texture cache,
     // samplers, defaults, LUTs, async upload pump.
@@ -579,7 +565,7 @@ void RenderServices::CreateFallbackBuffers()
         }
 
         // MotionParams fallback: the motion variant's per-view block, zeroed. A
-        // view whose producer arm did not run this frame must bind zeros
+        // view whose producer did not run this frame must bind zeros
         // rather than another view's previous view-projection — a stale matrix
         // would be a wrong motion vector, which is worse than none. Nothing
         // draws with it: a producer that cannot fill the block records no

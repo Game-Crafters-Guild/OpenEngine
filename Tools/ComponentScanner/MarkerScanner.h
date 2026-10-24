@@ -32,7 +32,12 @@ struct MarkerLines
     // a game export strips its lines from every staged scene (the entity stays).
     std::set<int> EditorOnly;
 
-    // Field-level: "// @ge-readonly" / "// @ge-hidden" -> FieldFlags::ReadOnly / Hidden.
+    // Struct-level: "// @ge-engine-internal" -> engine runtime state that is no game API: the
+    // component has no C# mirror (ComponentMirror.h).
+    std::set<int> EngineInternal;
+
+    // Field-level: "// @ge-readonly" / "// @ge-hidden" -> FieldFlags::ReadOnly / Hidden. On a
+    // struct, "// @ge-readonly" makes the component engine-owned: its C# mirror is read-only.
     std::set<int> ReadOnly;
     std::set<int> Hidden;
 

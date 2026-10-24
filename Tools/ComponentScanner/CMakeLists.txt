@@ -23,6 +23,10 @@ add_library(ComponentScannerCore STATIC
     ApiScanner.cpp
     BindingRules.cpp
     CommentStripper.cpp
+    ComponentMirror.cpp
+    ComponentMirrorCSharpEmitter.cpp
+    ComponentMirrorLayoutEmitter.cpp
+    ComponentMirrorResolver.cpp
     ComponentScanner.cpp
     CSharpBindingEmitter.cpp
     DtsEmitter.cpp
@@ -70,6 +74,7 @@ if(BUILD_TESTING)
         Tests/BaseDetectionTests.cpp
         Tests/BindingEmitterTests.cpp
         Tests/CommentStripperTests.cpp
+        Tests/ComponentMirrorTests.cpp
         Tests/EnumScannerTests.cpp
         Tests/HostileHeaderTests.cpp
         Tests/MarkerAttachmentTests.cpp

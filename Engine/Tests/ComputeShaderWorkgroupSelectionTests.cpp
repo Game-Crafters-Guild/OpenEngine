@@ -10,7 +10,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 
 #include <gtest/gtest.h>
 
@@ -170,7 +170,7 @@ size_t CountContaining(const std::vector<std::string>& lines, const std::string&
 
 TEST(ComputeShaderWorkgroupSelection, ADeviceThatAllowsTheFullWorkgroupRunsThe32Package)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
     ASSERT_GE(device->GetCapabilities().maxComputeWorkGroupSize, 1024u);
@@ -178,7 +178,6 @@ TEST(ComputeShaderWorkgroupSelection, ADeviceThatAllowsTheFullWorkgroupRunsThe32
     ASSERT_EQ(CountContaining(lines, kCaptureLive), 1u);
     EXPECT_EQ(CountContaining(lines, "RenderPipeline ComputeShader 'DepthMinMax'"), 0u)
         << "the node tried a fallback, or failed to load a package, on a device that runs 32 x 32";
-    device->Shutdown();
 }
 
 TEST(ComputeShaderWorkgroupSelection, ADeviceThatAllows256InvocationsRunsThe16Package)

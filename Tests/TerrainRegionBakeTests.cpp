@@ -3348,6 +3348,57 @@ TEST(TerrainRegionBake, StreamedTilesStartFromTheHeightmapBase)
     ASSERT_TRUE(sawFull[0] && sawFull[1]) << "the tiles did not stream in within the deadline";
 }
 
+// A Coarse tile arrives with its full-resolution stand-in (the upsampled heights and their normal)
+// built on the streaming worker, current for the heightfield it integrated with, so the frame that
+// patches it copies texels: computing it there costs about 16 ms per tile on the frame thread
+// (#3409). The stand-in is byte-equal to one built from the integrated heightfield.
+TEST(TerrainRegionBake, ACoarseArrivalCarriesItsStandInFromTheStreamingJob)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const GUID heightmapGuid = GUID::Generate();
+    ASSERT_NE(SeedNoiseHeightmap(svc, heightmapGuid), nullptr);
+    const TiledTerrainConfig cfg = MakeBaseTestTiledConfig(
+        svc.ResolveTiledTerrainBase(Components::TerrainBaseSource::HeightmapAsset, heightmapGuid));
+    const TiledTerrainHandle handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    tiled->WorldOriginX = kBaseTerrainOriginX;
+    tiled->WorldOriginZ = kBaseTerrainOriginZ;
+
+    JobSystem::WorkStealingThreadPool pool(4);
+    TileStreamingManager streaming(&pool);
+    const std::vector<Mathematics::Vector3> cameras{
+        {kBaseTerrainOriginX + kTiledTileWorld, 50.0f, kBaseTerrainOriginZ + 0.5f * kTiledTileWorld}};
+    const uint32 tileRes = tiled->Config.TileConfig.HeightmapWidth;
+    const float32 tileWorld = tiled->Config.TileWorldSize;
+    const float32 heightScale = tiled->Config.HeightScale;
+
+    const TerrainTileData* coarseTile = nullptr;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!coarseTile && std::chrono::steady_clock::now() < deadline)
+    {
+        streaming.Update(handle, *tiled, svc, cameras, Mathematics::Vector3{0.0f, 0.0f, 1.0f},
+                         4.0f * kTiledTileWorld, 1.0f / 60.0f);
+        for (const auto& [coord, tile] : tiled->Tiles)
+            if (tile && tile->LodState == TileLodState::Coarse)
+                coarseTile = tile.get();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_NE(coarseTile, nullptr) << "no tile reached its coarse stage within the deadline";
+    ASSERT_NE(coarseTile->CoarseStandIn, nullptr) << "the coarse job built no stand-in";
+    const CoarseTileStandIn& standIn = *coarseTile->CoarseStandIn;
+    EXPECT_TRUE(standIn.Matches(tileRes, tileWorld, heightScale, coarseTile->HeightfieldVersion))
+        << "the extraction would rebuild the stand-in on the frame thread";
+
+    CoarseTileStandIn rebuilt;
+    BuildCoarseTileStandIn(coarseTile->Heightfield, tileRes, tileWorld, heightScale, rebuilt);
+    ASSERT_EQ(standIn.Heights.GetSampleCount(), rebuilt.Heights.GetSampleCount());
+    EXPECT_EQ(0, std::memcmp(standIn.Heights.GetRawSamples(), rebuilt.Heights.GetRawSamples(),
+                             rebuilt.Heights.GetSampleCount() * sizeof(float32)));
+    EXPECT_EQ(standIn.Normalmap, rebuilt.Normalmap);
+}
+
 namespace
 {
 // One tiled terrain streamed by a manager shared with another, and the ground it must show.
@@ -4472,6 +4523,22 @@ TEST(TerrainRegionBake, StrokeDabWorkStaysTileScopedNotResidentScoped)
 
 namespace
 {
+// Runs the modifier system until `tile`'s arrival bake is in (ModifiersApplied), at most a few
+// frames past the row budget's count, and returns the frames it took.
+uint32 UpdateUntilArrivalBaked(TerrainModifierSystem& system, ECS::World& world, const TerrainTileData& tile)
+{
+    const uint32 budgetFrames =
+        (tile.Heightfield.GetHeight() + TerrainModifierSystem::kArrivalSplatRowsPerFrame - 1u) /
+        TerrainModifierSystem::kArrivalSplatRowsPerFrame;
+    uint32 frames = 0;
+    while (!tile.ModifiersApplied && frames < budgetFrames + 4u)
+    {
+        system.Update(world, 1.0f / 60.0f);
+        ++frames;
+    }
+    return frames;
+}
+
 // Stream a NEW Full tile in via the real service path (CreateEmptyTile +
 // SetTileHeightfield with a full-resolution world-space-noise heightfield),
 // mirroring what TileStreamingManager::IntegrateCompletedTiles does on a Full
@@ -4726,7 +4793,7 @@ TEST(TerrainRegionBake, TiledStreamInWithModifierBakesOnlyThatTile)
     ASSERT_FALSE(t2->ModifiersApplied);
     const uint64 v2AfterStream = t2->HeightfieldVersion;
 
-    system.Update(world, 1.0f / 60.0f); // must bake ONLY tile 2
+    UpdateUntilArrivalBaked(system, world, *t2); // must bake ONLY tile 2
 
     EXPECT_EQ(Tile(tiled, 0, 0)->HeightfieldVersion, v0)
         << "resident tile 0 must NOT re-bake / re-cook on a stream-in";
@@ -4785,7 +4852,7 @@ TEST(TerrainRegionBake, AnArrivalOnlySurfaceRulesReachKeepsItsStreamedHeights)
     arrived->Heightfield.SetSample(5, 5, marker);
     const uint64 versionBefore = arrived->HeightfieldVersion;
 
-    system.Update(world, 1.0f / 60.0f);
+    UpdateUntilArrivalBaked(system, world, *arrived);
 
     ASSERT_TRUE(arrived->ModifiersApplied);
     ASSERT_GT(WeightedTexelCount(arrived->Splatmap), 0u) << "the rules row placed nothing: the bake did not run";
@@ -4827,9 +4894,10 @@ TEST(TerrainRegionBake, AnArrivalsSplatRunsInRowBandsAndMatchesTheSerialBake)
 
         StreamInFullTile(svc, handle, TileCoord{2, 0});
         system.Update(world, 1.0f / 60.0f);
+        outBands = system.GetLastBakeBandCountForTests();
+        UpdateUntilArrivalBaked(system, world, *Tile(tiled, 2, 0));
         ASSERT_TRUE(Tile(tiled, 2, 0)->ModifiersApplied);
         outSplat = Tile(tiled, 2, 0)->Splatmap;
-        outBands = system.GetLastBakeBandCountForTests();
     };
 
     std::vector<uint8> serial, parallel;
@@ -4850,14 +4918,395 @@ TEST(TerrainRegionBake, AnArrivalsSplatRunsInRowBandsAndMatchesTheSerialBake)
     }
 
     EXPECT_EQ(serialBands, 0u);
-    // One tile's rows in kBakeBandRows bands (the splat is square, four bytes a texel).
-    const auto rows = static_cast<uint32>(std::lround(std::sqrt(static_cast<double>(serial.size() / 4u))));
+    // A frame's row budget in kBakeBandRows bands.
     const auto bandRows = static_cast<uint32>(TerrainModifierSystem::kBakeBandRows);
-    EXPECT_EQ(parallelBands, (rows + bandRows - 1u) / bandRows) << "the arrival's splat did not fan out across the pool";
+    EXPECT_EQ(parallelBands, (TerrainModifierSystem::kArrivalSplatRowsPerFrame + bandRows - 1u) / bandRows)
+        << "the arrival's splat did not fan out across the pool";
     ASSERT_GT(WeightedTexelCount(serial), 0u) << "the rules row placed nothing: zeros would match zeros";
     ASSERT_EQ(serial.size(), parallel.size());
     EXPECT_EQ(0, std::memcmp(serial.data(), parallel.data(), serial.size()))
         << "the banded arrival splat differs from the serial one";
+}
+
+// The arrivals' surface-rules splat spends at most kArrivalSplatRowsPerFrame rows a frame on one
+// terrain, however many tiles arrive together: a whole tile in one frame costs 72 ms on the
+// single-thread web build and about 5 ms a tile joined into the frame on a threaded one (#3408).
+// A tile stays unapplied until its last row is in.
+TEST(TerrainRegionBake, ArrivalsSplatSpendsAtMostTheTerrainsRowBudgetEachFrame)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 4.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 4);
+    CreateGlobalRulesModifier(world);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+
+    StreamInFullTile(svc, handle, TileCoord{2, 0});
+    StreamInFullTile(svc, handle, TileCoord{3, 0});
+    const std::array<const TerrainTileData*, 2> arrivals{Tile(tiled, 2, 0), Tile(tiled, 3, 0)};
+    const uint32 rows = arrivals[0]->Heightfield.GetHeight();
+    const uint32 budget = TerrainModifierSystem::kArrivalSplatRowsPerFrame;
+    ASSERT_GT(rows, budget) << "a tile fits one frame's budget: nothing to spread";
+
+    // The rows a tile has composited: its cursor while it bakes, all of them once applied.
+    const auto bakedRows = [rows](const TerrainTileData& t) {
+        return t.ModifiersApplied ? rows : t.ArrivalSplatNextRow;
+    };
+    uint32 frames = 0;
+    uint32 baked = 0;
+    while (!(arrivals[0]->ModifiersApplied && arrivals[1]->ModifiersApplied) && frames < 2u * rows)
+    {
+        system.Update(world, 1.0f / 60.0f);
+        ++frames;
+        const uint32 nowBaked = bakedRows(*arrivals[0]) + bakedRows(*arrivals[1]);
+        EXPECT_LE(nowBaked - baked, budget) << "frame " << frames << " spent more than the terrain's budget";
+        baked = nowBaked;
+    }
+    EXPECT_TRUE(arrivals[0]->ModifiersApplied && arrivals[1]->ModifiersApplied);
+    EXPECT_EQ(frames, (2u * rows + budget - 1u) / budget);
+    EXPECT_GT(WeightedTexelCount(arrivals[0]->Splatmap), 0u) << "the rules row placed nothing";
+    EXPECT_GT(WeightedTexelCount(arrivals[1]->Splatmap), 0u) << "the rules row placed nothing";
+}
+
+// A Coarse tile turning Full keeps showing its coarse splat while its arrival bake runs: the
+// uploaders draw ArrivalSplatStandIn, so the partly baked splat never reaches the screen. The
+// bake's end drops the stand-in and marks the baked splat for upload.
+TEST(TerrainRegionBake, ATileTurningFullShowsItsCoarseSplatUntilItsArrivalBakeEnds)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 3);
+    CreateGlobalRulesModifier(world);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+
+    const TileCoord coord{2, 0};
+    svc.CreateEmptyTile(handle, coord);
+    constexpr uint32 kCoarse = 33;
+    Terrain::HeightfieldData coarse;
+    coarse.Resize(kCoarse, kCoarse, 0.0f);
+    svc.SetTileHeightfield(handle, coord, std::move(coarse), 0.0f, 0.0f);
+    std::vector<uint8> coarseSplat(static_cast<size_t>(kCoarse) * kCoarse * 4u, 0u);
+    for (std::size_t i = 0; i + 3 < coarseSplat.size(); i += 4)
+        coarseSplat[i + 1] = 255u;
+    const std::vector<uint8> shown = coarseSplat;
+    svc.SetTileMaps(handle, coord, std::move(coarseSplat), kCoarse, kCoarse, {}, 0, 0);
+    ASSERT_EQ(Tile(tiled, 2, 0)->LodState, TileLodState::Coarse);
+
+    StreamInFullTile(svc, handle, coord);
+    const TerrainTileData& arrived = *Tile(tiled, 2, 0);
+    ASSERT_EQ(arrived.LodState, TileLodState::Full);
+    EXPECT_EQ(arrived.ArrivalSplatStandIn, shown) << "the coarse splat is not what the arrival shows";
+    EXPECT_EQ(arrived.ArrivalSplatStandInDim, kCoarse);
+
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_FALSE(arrived.ModifiersApplied) << "one frame baked the whole tile: no stand-in phase to check";
+    EXPECT_EQ(arrived.ArrivalSplatStandIn, shown) << "the stand-in left before the bake ended";
+
+    UpdateUntilArrivalBaked(system, world, arrived);
+    ASSERT_TRUE(arrived.ModifiersApplied);
+    EXPECT_TRUE(arrived.ArrivalSplatStandIn.empty());
+    EXPECT_TRUE(arrived.SplatmapDirty) << "the baked splat must upload";
+}
+
+// Two tiles a height modifier reaches arrive together; the second waits frames for the row budget.
+// Each one's heights are composed once, on its first bake frame: composing a tile again on every
+// frame it waits re-uploads its heights, regenerates its normal, syncs the quadtree and restarts
+// its collider build each time, for the same samples.
+TEST(TerrainRegionBake, AnArrivalWaitingForTheRowBudgetComposesItsHeightsOnce)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 4.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 4);
+    CreateGlobalRulesModifier(world);
+    // A flatten across the boundary of tiles 2 and 3 (x 2048 to 4096), clear of tiles 0 and 1.
+    CreateFlattenModifier(world, 3072.0f, 512.0f, 20.0f, 700.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+
+    StreamInFullTile(svc, handle, TileCoord{2, 0});
+    StreamInFullTile(svc, handle, TileCoord{3, 0});
+    const TerrainTileData& first = *Tile(tiled, 2, 0);
+    const TerrainTileData& second = *Tile(tiled, 3, 0);
+    const uint64 firstStreamed = first.HeightfieldVersion;
+    const uint64 secondStreamed = second.HeightfieldVersion;
+    ASSERT_GT(first.Heightfield.GetHeight(), TerrainModifierSystem::kArrivalSplatRowsPerFrame)
+        << "a tile fits one frame's budget: neither arrival waits";
+
+    for (uint32 frame = 0; frame < 64u && !(first.ModifiersApplied && second.ModifiersApplied); ++frame)
+        system.Update(world, 1.0f / 60.0f);
+    ASSERT_TRUE(first.ModifiersApplied && second.ModifiersApplied);
+    EXPECT_EQ(first.HeightfieldVersion, firstStreamed + 1u) << "tile 2's heights were composed more than once";
+    EXPECT_EQ(second.HeightfieldVersion, secondStreamed + 1u) << "tile 3's heights were composed more than once";
+}
+
+namespace
+{
+// The highest cached top among a terrain's resident Full tiles (1 when none is higher).
+float32 ResidentFullMaxHeight(const TiledTerrainData& tiled)
+{
+    float32 maxH = 1.0f;
+    for (const auto& [coord, tilePtr] : tiled.Tiles)
+        if (tilePtr && tilePtr->LodState == TileLodState::Full)
+            maxH = std::max(maxH, tilePtr->CachedMaxH);
+    return maxH;
+}
+
+struct ArrivalAcrossDeparture
+{
+    std::vector<uint8> Splat;
+    float32 ResidentMaxBefore = 0.0f;
+    float32 ResidentMaxAfter = 0.0f;
+    bool ResplatPending = false;
+};
+
+// Tile 2 arrives beside resident tiles 0 and 1; a flatten raises tile 1, the top of the resident
+// range. With `departMidBake`, tile 1 departs after the arrival's first bake frame, which shrinks
+// the resident range while the arrival's later rows are still to bake.
+ArrivalAcrossDeparture BakeArrivalAcrossADeparture(bool departMidBake)
+{
+    ArrivalAcrossDeparture result;
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    for (int32 x = 0; x < 2; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 3);
+    CreateGlobalRulesModifier(world);
+    CreateFlattenModifier(world, 1536.0f, 512.0f, 200.0f, 300.0f);
+    TerrainModifierSystem system;
+    for (uint32 frame = 0; frame < 4u; ++frame)
+        system.Update(world, 1.0f / 60.0f);
+    result.ResidentMaxBefore = ResidentFullMaxHeight(*tiled);
+
+    StreamInFullTile(svc, handle, TileCoord{2, 0});
+    system.Update(world, 1.0f / 60.0f);
+    if (departMidBake)
+        svc.UnloadTile(handle, TileCoord{1, 0});
+    UpdateUntilArrivalBaked(system, world, *Tile(tiled, 2, 0));
+    for (uint32 frame = 0; frame < 64u; ++frame)
+        system.Update(world, 1.0f / 60.0f);
+    result.ResidentMaxAfter = ResidentFullMaxHeight(*tiled);
+    result.ResplatPending = tiled->SplatResplatPending;
+    result.Splat = Tile(tiled, 2, 0)->Splatmap;
+    return result;
+}
+} // namespace
+
+// A resident tile departs while an arrival's splat bake is spread over frames, and the resident
+// height range shrinks. Every row of the arrival normalizes against the one range its bake began
+// with: a range that changes at a frame boundary splits the tile into two bands of different
+// ground, and a shrinking range schedules no resplat to heal it.
+TEST(TerrainRegionBake, AnArrivalsRowsShareOneHeightRangeWhenATileDepartsMidBake)
+{
+    const ArrivalAcrossDeparture stay = BakeArrivalAcrossADeparture(false);
+    const ArrivalAcrossDeparture depart = BakeArrivalAcrossADeparture(true);
+    ASSERT_GT(depart.ResidentMaxBefore, depart.ResidentMaxAfter) << "the departure did not shrink the range";
+    EXPECT_FALSE(depart.ResplatPending) << "a resplat would heal the split: the departure must not schedule one";
+    ASSERT_GT(WeightedTexelCount(stay.Splat), 0u) << "the rules row placed nothing: zeros would match zeros";
+    ASSERT_EQ(stay.Splat.size(), depart.Splat.size());
+    EXPECT_EQ(0, std::memcmp(stay.Splat.data(), depart.Splat.data(), stay.Splat.size()))
+        << "the arrival's rows were normalized against two height ranges";
+}
+
+namespace
+{
+struct ArrivalAcrossWidening
+{
+    std::vector<uint8> Splat;
+    bool WidenedMidBake = false;
+};
+
+// Tile 0 arrives beside resident tiles 1 and 2; tile 3 arrives under a flatten that raises it
+// above the resident range, which schedules the renormalize. With `widenMidBake`, tile 3 arrives
+// after tile 0's first bake frame, and the renormalize rewrites tile 0 while its bake still runs;
+// otherwise tile 3 arrives and settles first.
+ArrivalAcrossWidening BakeArrivalAcrossAWidening(bool widenMidBake)
+{
+    ArrivalAcrossWidening result;
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 4.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    for (int32 x = 1; x < 3; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 4);
+    CreateGlobalRulesModifier(world);
+    CreateFlattenModifier(world, 3584.0f, 512.0f, 200.0f, 300.0f);
+    TerrainModifierSystem system;
+    for (uint32 frame = 0; frame < 4u; ++frame)
+        system.Update(world, 1.0f / 60.0f);
+
+    constexpr uint32 kSettleFrames = 96;
+    if (!widenMidBake)
+    {
+        StreamInFullTile(svc, handle, TileCoord{3, 0});
+        UpdateUntilArrivalBaked(system, world, *Tile(tiled, 3, 0));
+        for (uint32 frame = 0; frame < kSettleFrames; ++frame)
+            system.Update(world, 1.0f / 60.0f);
+    }
+    StreamInFullTile(svc, handle, TileCoord{0, 0});
+    system.Update(world, 1.0f / 60.0f);
+    if (widenMidBake)
+    {
+        StreamInFullTile(svc, handle, TileCoord{3, 0});
+        system.Update(world, 1.0f / 60.0f);
+        result.WidenedMidBake = tiled->SplatResplatPending && !Tile(tiled, 0, 0)->ModifiersApplied;
+    }
+    UpdateUntilArrivalBaked(system, world, *Tile(tiled, 0, 0));
+    UpdateUntilArrivalBaked(system, world, *Tile(tiled, 3, 0));
+    for (uint32 frame = 0; frame < kSettleFrames; ++frame)
+        system.Update(world, 1.0f / 60.0f);
+    result.Splat = Tile(tiled, 0, 0)->Splatmap;
+    return result;
+}
+} // namespace
+
+// An arrival's splat bake is spread over frames, and another arrival widens the height range,
+// so the renormalize rewrites the first arrival while its bake still runs. The bake's remaining
+// rows move onto the renormalize's range: rows left on the range the bake began with would split
+// the tile into two bands of different ground, and no later resplat heals them.
+TEST(TerrainRegionBake, AnArrivalsRowsShareOneHeightRangeWhenARenormalizeWidensItMidBake)
+{
+    const ArrivalAcrossWidening settledFirst = BakeArrivalAcrossAWidening(false);
+    const ArrivalAcrossWidening widened = BakeArrivalAcrossAWidening(true);
+    ASSERT_TRUE(widened.WidenedMidBake) << "the second arrival did not widen the range during the first one's bake";
+    ASSERT_GT(WeightedTexelCount(settledFirst.Splat), 0u) << "the rules row placed nothing: zeros would match zeros";
+    ASSERT_EQ(settledFirst.Splat.size(), widened.Splat.size());
+    EXPECT_EQ(0, std::memcmp(settledFirst.Splat.data(), widened.Splat.data(), settledFirst.Splat.size()))
+        << "the arrival's rows were normalized against two height ranges";
+}
+
+// While a tile's arrival bake runs, its colour map keeps the one it showed while Coarse, as the
+// uploaders keep its coarse splat: composing it from the partly baked splat would show the unbaked
+// rows' ground on screen until the bake ends.
+TEST(TerrainRegionBake, TheColorMapWaitsForAnArrivalsSplatBakeToEnd)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f;
+    const auto handle = svc.CreateTiledTerrain(cfg);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+        svc.LoadTile(handle, TileCoord{x, 0})->LodState = TileLodState::Full;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 3);
+    CreateGlobalRulesModifier(world);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+
+    // The streaming path: a Coarse tile with its splat, then the Full heights and the job's
+    // unbaked full-resolution splat.
+    const TileCoord coord{2, 0};
+    svc.CreateEmptyTile(handle, coord);
+    constexpr uint32 kCoarse = 33;
+    Terrain::HeightfieldData coarse;
+    coarse.Resize(kCoarse, kCoarse, 0.0f);
+    svc.SetTileHeightfield(handle, coord, std::move(coarse), 0.0f, 0.0f);
+    svc.SetTileMaps(handle, coord, std::vector<uint8>(static_cast<size_t>(kCoarse) * kCoarse * 4u, 0u), kCoarse,
+                    kCoarse, {}, 0, 0);
+    system.Update(world, 1.0f / 60.0f);
+    TerrainTileData& arrived = *Tile(tiled, 2, 0);
+    ASSERT_FALSE(arrived.SplatColorDirtyFull) << "the colour map never composed the coarse tile";
+
+    StreamInFullTile(svc, handle, coord);
+    const uint32 res = arrived.Heightfield.GetWidth();
+    svc.SetTileMaps(handle, coord, std::vector<uint8>(static_cast<size_t>(res) * res * 4u, 0u), res, res, {}, 0, 0);
+    ASSERT_FALSE(arrived.ArrivalSplatStandIn.empty());
+
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_FALSE(arrived.ModifiersApplied) << "one frame baked the whole tile: no bake to wait for";
+    EXPECT_TRUE(arrived.SplatColorDirtyFull) << "the colour map was composed from a partly baked splat";
+
+    UpdateUntilArrivalBaked(system, world, arrived);
+    ASSERT_TRUE(arrived.ModifiersApplied);
+    system.Update(world, 1.0f / 60.0f);
+    EXPECT_FALSE(arrived.SplatColorDirtyFull) << "the colour map did not compose the baked splat";
+    EXPECT_EQ(arrived.ColorMap.Width, res);
+}
+
+// A coarse stand-in serves only the heights, extent and height scale it was built for: the
+// extraction rebuilds it when any of them moved, so a stale one never reaches the screen.
+TEST(TerrainRegionBake, ACoarseStandInGoesStaleWhenItsTileHeightsChange)
+{
+    constexpr uint32 kCoarse = 33;
+    constexpr uint32 kTileRes = 129;
+    Terrain::HeightfieldData coarse;
+    coarse.Resize(kCoarse, kCoarse, 0.0f);
+    coarse.FillWithNoiseWorldSpace(kTileNoiseFrequency, kTileNoiseAmplitude, 0.0f, 0.0f, kTiledTileWorld,
+                                   kTiledTileWorld, kTileNoiseOctaves, kTileNoiseSeed);
+    CoarseTileStandIn standIn;
+    BuildCoarseTileStandIn(coarse, kTileRes, kTiledTileWorld, kTiledHeightScale, standIn);
+    standIn.HeightfieldVersion = 7u;
+
+    EXPECT_TRUE(standIn.Matches(kTileRes, kTiledTileWorld, kTiledHeightScale, 7u));
+    EXPECT_FALSE(standIn.Matches(kTileRes, kTiledTileWorld, kTiledHeightScale, 8u)) << "new heights";
+    EXPECT_FALSE(standIn.Matches(kTileRes, kTiledTileWorld, 2.0f * kTiledHeightScale, 7u)) << "new height scale";
+    EXPECT_FALSE(standIn.Matches(kTileRes, 2.0f * kTiledTileWorld, kTiledHeightScale, 7u)) << "new extent";
+    EXPECT_FALSE(standIn.Matches(2u * kTileRes - 1u, kTiledTileWorld, kTiledHeightScale, 7u)) << "new resolution";
 }
 
 // ZERO-WORK count oracle (coordinator REQUIRED 2): a stream-in in a scene where
@@ -5140,7 +5589,7 @@ TEST(TerrainRegionBake, TiledStaleRangeStreamInRenormalizesToCommittedRange)
         t2->SplatmapDirty = true;
     }
 
-    systemA.Update(worldA, 1.0f / 60.0f); // BakeTiledStreamedTiles must renormalize tile 2
+    UpdateUntilArrivalBaked(systemA, worldA, *Tile(tiledA, 2, 0)); // must renormalize tile 2
     for (int32 i = 0; i < 512 && tiledA->SplatResplatPending; ++i)
         systemA.Update(worldA, 1.0f / 60.0f);
 
@@ -5917,7 +6366,7 @@ TEST(TerrainRegionBake, TilePhysicsSlotsReleasedOnDestroyAndReleaseAll)
 
 // Paint-only region bake proportionality (review Fix 2): a paint-only (splat)
 // edit on a tiled terrain must NOT bump any tile's HeightfieldVersion, must NOT
-// bump tiled.Revision, and must NOT re-flag QuadtreeDirty / GlobalHeightRangeDirty
+// bump tiled.Revision, and must NOT re-flag QuadtreeDirty
 // — heights are untouched, so a global quadtree rebuild + collider re-cook would
 // be pure waste. Pre-fix (unconditional rescan + version bumps) fails this.
 TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
@@ -5963,7 +6412,6 @@ TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
     // Simulate extraction consuming the full bake's structural dirt so the
     // paint-only re-flag is observable.
     tiled->QuadtreeDirty = false;
-    tiled->GlobalHeightRangeDirty = false;
 
     // Paint drag (move the splat stamp, staying inside tile 0) → region bake,
     // splat-only.
@@ -5980,8 +6428,6 @@ TEST(TerrainRegionBake, TiledPaintOnlyEditDoesNotBumpHeightOrQuadtree)
         << "paint-only edit must not bump tiled.Revision";
     EXPECT_FALSE(tiled->QuadtreeDirty)
         << "paint-only edit must not re-flag the global quadtree for rebuild";
-    EXPECT_FALSE(tiled->GlobalHeightRangeDirty)
-        << "paint-only edit must not re-flag the global height range";
     // The splat still updated (the paint actually ran).
     EXPECT_TRUE(Tile(tiled, 0, 0)->SplatmapDirty);
 }
@@ -6337,8 +6783,8 @@ TEST(TerrainRegionBake, ReprovisionFullDestroyClearsBrushDirtyQuadtreeTiles)
 }
 
 // Even if a stale (old-grid) coordinate reached the incremental patch, FinalizeGlobalQuadtreeUpdates
-// must bounds-guard it: an out-of-grid coord is not in Tiles (skipped), and an in-Tiles coord is
-// node-index clamped — so it neither crashes nor corrupts the resident tiles' quadtree nodes.
+// must bounds-guard it: the nodes of a coord outside the grid fall outside the tree and are skipped,
+// so it neither crashes nor corrupts the resident tiles' quadtree nodes.
 TEST(TerrainRegionBake, StaleQuadtreeCoordIsBoundsGuardedNotPatched)
 {
     ScopedTerrainService scoped;
@@ -6374,6 +6820,251 @@ TEST(TerrainRegionBake, StaleQuadtreeCoordIsBoundsGuardedNotPatched)
     EXPECT_TRUE(t->DirtyQuadtreeTiles.empty()); // consumed, not left to re-fire
     EXPECT_EQ(t->GlobalQuadtree.GetNodesPerAxisAtLevel(0), nodesPerAxisBefore);
     EXPECT_FLOAT_EQ(t->GlobalQuadtree.GetNode(0, 0, 0).MinHeight, node00Before); // resident nodes intact
+}
+
+// Counts the nodes, at every level, where the global quadtree differs from a full rebuild over
+// the same resident set. Leaves the tree fully rebuilt.
+static uint32 CountNodesDifferingFromAFullRebuild(TerrainService& svc, TiledTerrainHandle handle,
+                                                  TiledTerrainData& tiled)
+{
+    const Terrain::CDLODQuadtree patched = tiled.GlobalQuadtree;
+    tiled.QuadtreeDirty = true;
+    svc.FinalizeGlobalQuadtreeUpdates(handle);
+    const Terrain::CDLODQuadtree& rebuilt = tiled.GlobalQuadtree;
+    if (patched.GetNumLevels() != rebuilt.GetNumLevels())
+        return ~0u;
+    uint32 mismatches = 0;
+    for (uint32 level = 0; level < rebuilt.GetNumLevels(); ++level)
+    {
+        const uint32 nodesPerAxis = rebuilt.GetNodesPerAxisAtLevel(level);
+        for (uint32 z = 0; z < nodesPerAxis; ++z)
+            for (uint32 x = 0; x < nodesPerAxis; ++x)
+            {
+                const auto& a = patched.GetNode(level, x, z);
+                const auto& b = rebuilt.GetNode(level, x, z);
+                if (a.MinHeight != b.MinHeight || a.MaxHeight != b.MaxHeight)
+                    ++mismatches;
+            }
+    }
+    return mismatches;
+}
+
+// A tile leaving the resident set (#4695) is an incremental patch, not a full rebuild: the
+// sync writes {0,0} to the departed tile's finest-level nodes and rebuilds the coarser levels,
+// which leaves every node at every level equal to a full rebuild over the remaining tiles.
+TEST(TerrainRegionBake, ATileDepartureClearsOnlyItsNodesAndMatchesAFullRebuild)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = 2.0f * kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f; // 3x2 grid
+    const TiledTerrainHandle h = svc.CreateTiledTerrain(cfg);
+    auto* t = svc.GetTiledTerrainData(h);
+    ASSERT_NE(t, nullptr);
+    for (int32 z = 0; z < 2; ++z)
+        for (int32 x = 0; x < 3; ++x)
+        {
+            auto* tile = svc.LoadTile(h, TileCoord{x, z});
+            ASSERT_NE(tile, nullptr);
+            tile->LodState = TileLodState::Full;
+        }
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
+    ASSERT_FALSE(t->QuadtreeDirty);
+
+    // The departing tile's nodes hold real heights, so clearing them is observable.
+    const TileCoord departed{1, 0};
+    const uint32 tileFinestNodes = 1u << (t->Config.TileConfig.LODLevels - 1);
+    const uint32 departedNodeX = static_cast<uint32>(departed.X) * tileFinestNodes + tileFinestNodes / 2;
+    ASSERT_GT(t->GlobalQuadtree.GetNode(0, departedNodeX, tileFinestNodes / 2).MaxHeight, 0.0f);
+
+    svc.UnloadTile(h, departed);
+    EXPECT_FALSE(t->QuadtreeDirty) << "a departure must not force a full rebuild of every resident tile";
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
+    EXPECT_EQ(t->GlobalQuadtree.GetNode(0, departedNodeX, tileFinestNodes / 2).MaxHeight, 0.0f);
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
+        << "the patched tree must equal a full rebuild over the same resident set";
+}
+
+// The departure invariant at a corner, in the middle, for two tiles in one sync, for a tile that
+// leaves and streams back in before the sync (with heights, or still Empty), and for a departure
+// in the frame of a full bake: every node at every level equals a full rebuild.
+TEST(TerrainRegionBake, TileDeparturesInEveryPositionAndOrderMatchAFullRebuild)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = 3.0f * kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f; // 3x3 grid
+    const TiledTerrainHandle h = svc.CreateTiledTerrain(cfg);
+    auto* t = svc.GetTiledTerrainData(h);
+    ASSERT_NE(t, nullptr);
+    for (int32 z = 0; z < 3; ++z)
+        for (int32 x = 0; x < 3; ++x)
+        {
+            auto* tile = svc.LoadTile(h, TileCoord{x, z});
+            ASSERT_NE(tile, nullptr);
+            tile->LodState = TileLodState::Full;
+        }
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
+
+    // A corner tile.
+    svc.UnloadTile(h, TileCoord{2, 2});
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "corner";
+
+    // The middle tile.
+    svc.UnloadTile(h, TileCoord{1, 1});
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "middle";
+
+    // Two tiles in one sync.
+    svc.UnloadTile(h, TileCoord{0, 1});
+    svc.UnloadTile(h, TileCoord{1, 2});
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "two tiles";
+
+    // A tile that leaves and streams back in before the sync: its new heights, not {0,0}.
+    const TileCoord returned{2, 1};
+    svc.UnloadTile(h, returned);
+    auto* back = svc.CreateEmptyTile(h, returned);
+    ASSERT_NE(back, nullptr);
+    Terrain::HeightfieldData heights;
+    heights.Resize(back->Config.HeightmapWidth, back->Config.HeightmapHeight, 0.75f);
+    svc.SetTileHeightfield(h, returned, std::move(heights), 0.75f, 0.75f);
+    svc.PatchTileInGlobalQuadtree(h, returned);
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    const uint32 tileFinestNodes = 1u << (t->Config.TileConfig.LODLevels - 1);
+    EXPECT_EQ(t->GlobalQuadtree.GetNode(0, 2 * tileFinestNodes, tileFinestNodes).MaxHeight, 0.75f);
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "left and returned";
+
+    // A tile that leaves and comes back Empty (its content still in flight) before the sync.
+    svc.UnloadTile(h, TileCoord{0, 0});
+    ASSERT_NE(svc.CreateEmptyTile(h, TileCoord{0, 0}), nullptr);
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "returned Empty";
+
+    // A departure in the frame of a full bake (BakeTiledFull sets QuadtreeDirty).
+    svc.UnloadTile(h, TileCoord{2, 0});
+    t->QuadtreeDirty = true;
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u) << "full-bake frame";
+}
+
+// A tile that streams in under a height modifier lists itself for the incremental patch once its
+// heights are composed, instead of forcing a full rebuild of every resident tile: the sync then
+// leaves every node equal to a full rebuild, the arrival's composed heights included.
+TEST(TerrainRegionBake, AnArrivalUnderAHeightModifierPatchesOnlyItsNodesAndMatchesAFullRebuild)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 3.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f; // 3x1 grid
+    const auto h = svc.CreateTiledTerrain(cfg);
+    auto* t = svc.GetTiledTerrainData(h);
+    ASSERT_NE(t, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+    {
+        auto* tile = svc.LoadTile(h, TileCoord{x, 0});
+        ASSERT_NE(tile, nullptr);
+        tile->LodState = TileLodState::Full;
+    }
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, h, 3);
+    // A flatten well above the base noise, inside tile 2 (x in [2048, 3072]).
+    CreateFlattenModifier(world, 2560.0f, 512.0f, 60.0f, 120.0f);
+
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f); // full bake of tiles 0 and 1
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
+    ASSERT_FALSE(t->QuadtreeDirty);
+
+    // Tile 2 streams in with base heights and is patched into the tree, as the extraction's
+    // quadtree sync does on integration.
+    StreamInFullTile(svc, h, TileCoord{2, 0});
+    svc.PatchTileInGlobalQuadtree(h, TileCoord{2, 0});
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_FALSE(t->QuadtreeDirty);
+
+    UpdateUntilArrivalBaked(system, world, *Tile(t, 2, 0));
+    ASSERT_TRUE(Tile(t, 2, 0)->ModifiersApplied);
+    EXPECT_FALSE(t->QuadtreeDirty) << "an arrival under a height modifier must not force a full rebuild";
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
+        << "the arrival's composed heights must reach the tree";
+}
+
+// Two tiles that stream in under one height modifier in the same frame each list themselves for
+// the incremental patch: the sync leaves every node equal to a full rebuild, the resident
+// neighbor the modifier also reaches included.
+TEST(TerrainRegionBake, TwoArrivalsUnderOneHeightModifierInOneFrameMatchAFullRebuild)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 4.0f * kTiledTileWorld;
+    cfg.WorldSizeZ = kTiledTileWorld;
+    cfg.HeightScale = kTiledHeightScale;
+    cfg.SamplesPerMeter = 1.0f; // 4x1 grid
+    const auto h = svc.CreateTiledTerrain(cfg);
+    auto* t = svc.GetTiledTerrainData(h);
+    ASSERT_NE(t, nullptr);
+    for (int32 x = 0; x < 2; ++x)
+    {
+        auto* tile = svc.LoadTile(h, TileCoord{x, 0});
+        ASSERT_NE(tile, nullptr);
+        tile->LodState = TileLodState::Full;
+    }
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, h, 4);
+    // A flatten across tiles 1, 2 and 3 (x in [948, 3148]).
+    CreateFlattenModifier(world, 2048.0f, 512.0f, 60.0f, 1100.0f);
+
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f); // full bake of tiles 0 and 1
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_TRUE(t->GlobalQuadtree.IsBuilt());
+    ASSERT_FALSE(t->QuadtreeDirty);
+
+    for (int32 x = 2; x < 4; ++x)
+    {
+        StreamInFullTile(svc, h, TileCoord{x, 0});
+        svc.PatchTileInGlobalQuadtree(h, TileCoord{x, 0});
+    }
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    ASSERT_FALSE(t->QuadtreeDirty);
+
+    UpdateUntilArrivalBaked(system, world, *Tile(t, 2, 0));
+    UpdateUntilArrivalBaked(system, world, *Tile(t, 3, 0));
+    ASSERT_TRUE(Tile(t, 2, 0)->ModifiersApplied);
+    ASSERT_TRUE(Tile(t, 3, 0)->ModifiersApplied);
+    EXPECT_FALSE(t->QuadtreeDirty) << "arrivals under a height modifier must not force a full rebuild";
+    svc.FinalizeGlobalQuadtreeUpdates(h);
+    EXPECT_TRUE(t->DirtyQuadtreeTiles.empty());
+    EXPECT_EQ(CountNodesDifferingFromAFullRebuild(svc, h, *t), 0u)
+        << "both arrivals' composed heights must reach the tree";
 }
 
 // ---- Flatten / Stamp on spherical (planet) terrain (round-6 P2, her #12) ------------------------

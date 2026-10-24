@@ -14,10 +14,10 @@ the GPU is reading the correct data.
 
 ### Step 1: Reproduce visually (5 min)
 
-1. `take_screenshot` to see the current state.
+1. `take_screenshot`, then open the PNG it saved, to see the current state.
 2. `capture_resource <name> rangeMin rangeMax` to inspect render targets and
    depth buffers.
-3. `get_log minLevel=error` to check for VUIDs.
+3. `get_log minLevel=error pattern=VUID` to check for VUIDs.
 4. `get_render_graph_validation` to check for resource conflicts.
 
 ### Step 2: Verify the GPU reads the right data (30 min)
@@ -222,7 +222,7 @@ paths are in the tool result. Read them first when a capture comes back empty.
 |------|-----|
 | `take_screenshot` | Capture viewport |
 | `capture_resource name rangeMin rangeMax layer` | Capture any RG texture |
-| `get_log count minLevel filter` | Check VUIDs and warnings |
+| `get_log minLevel pattern since` | Check VUIDs and warnings |
 | `get_render_graph_validation` | Check resource conflicts |
 | `get_render_graph_pass_detail passName` | Inspect per-pass resource accesses |
 | `get_render_graph_resources type aliveOnly` | List all RG resources |

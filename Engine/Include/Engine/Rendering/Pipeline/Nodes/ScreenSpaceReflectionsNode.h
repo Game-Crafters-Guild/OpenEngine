@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Engine/Rendering/Pipeline/Nodes/DepthResolveNode.h"
+#include "Engine/Rendering/Pipeline/Nodes/HZBBuildNode.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Engine/Rendering/Pipeline/ViewMotionVectors.h"
 #include "Engine/Rendering/PostProcessSettings.h"
@@ -25,6 +27,11 @@ namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 // compact indirect ray list, stochastic GGX VNDF HiZ intersection, dedicated
 // reflection reprojection/prefilter/temporal accumulation, then BRDF-aware HDR
 // composite. The history is independent of the engine's TAA implementation.
+//
+// The chain traces View.DepthResolvedPostOcean, the view depth after its last
+// writer, and marches the nearest-surface pyramid (View.SSRHiZ) this node builds
+// from that same depth, so the march and the hit test see the same surfaces (the
+// water and the phase-B recover among them).
 class ScreenSpaceReflectionsNode final : public IRenderPipelineNode
 {
   public:
@@ -93,6 +100,11 @@ class ScreenSpaceReflectionsNode final : public IRenderPipelineNode
     // device objects created there.
     Rendering::IDevice* m_Device = nullptr;
     ViewMotionVectors m_MotionVectors;
+    // The trace depth when the ocean step published no View.DepthResolvedPostOcean: that copy,
+    // taken here after every pass that writes the view depth, and published under the same name.
+    DepthResolveNode m_TraceDepthResolve;
+    // The nearest-surface (MAX) pyramid of View.DepthResolvedPostOcean, published as View.SSRHiZ.
+    HZBBuildNode m_TracePyramid;
     std::string m_Id;
     std::string m_InputKey = "SceneColor";
     std::string m_OutputKey = "HDRSSSR";

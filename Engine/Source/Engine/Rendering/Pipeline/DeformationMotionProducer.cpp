@@ -1,11 +1,12 @@
 #include "Engine/Rendering/Pipeline/DeformationMotionProducer.h"
 
+#include "DeformationMotionViewClassifier.h"
 #include "Engine/Rendering/DeformationMotionParams.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewTemporalHistory.h"
 #include "Logger/Logger.h"
 
-#include <unordered_set>
+#include <string>
 
 namespace GameEngine::Engine::Renderer::Pipeline
 {
@@ -13,20 +14,51 @@ using SlicePhase = ::GameEngine::Rendering::GPUDrawStreamBuilder::SlicePhase;
 
 namespace
 {
-// Warn once per arm that has no implementation yet, rather than silently
-// producing nothing: a run that enabled a switch and saw no motion must be
-// able to tell "the arm is off" from "the arm does not exist".
-void WarnArmNotImplemented(DeformationMotionArm arm)
+std::string ViewLabel(const Rendering::ViewDesc& view)
 {
-    static bool warnedOnce = false;
-    if (warnedOnce)
+    const std::string id = "view " + std::to_string(static_cast<uint32_t>(view.id));
+    if (view.debugName == nullptr || view.debugName[0] == '\0')
+        return id;
+    return std::string("\"") + view.debugName + "\" (" + id + ")";
+}
+
+// One line per view each time its state changes, so a line is never left
+// standing after the view moved on. "Nothing in the view deforms" logs nothing
+// and keeps the last state: it is the ordinary state of most views, and a view
+// whose trees leave and re-enter the frame has nothing new to say. A view the
+// user can change (letterboxed, multisampled) is a warning; the expected
+// states are information.
+void LogStateChange(ViewDeclare& view, DeformationMotionRefusal refusal)
+{
+    if (refusal == DeformationMotionRefusal::NoDeformingMaterial)
         return;
-    warnedOnce = true;
-    Logger::Log::Error(
-        "Deformation motion: the {} producer arm is enabled but is not implemented in this build, "
-        "so no deforming motion is produced. Enable the separate-pass arm "
-        "(GE_DEFORMATION_MOTION_SEPARATE_PASS) instead.",
-        DeformationMotionArmName(arm));
+    uint8_t& logged = view.Services.Views().PerView(view.View.id).DeformationMotionLogged;
+    if (logged == static_cast<uint8_t>(refusal))
+        return;
+    logged = static_cast<uint8_t>(refusal);
+    const std::string label = ViewLabel(view.View);
+    switch (refusal)
+    {
+    case DeformationMotionRefusal::None:
+        Logger::Log::Info("Deformation motion: {} writes exact motion vectors for its deforming meshes.",
+                          label);
+        break;
+    case DeformationMotionRefusal::NoRenderedHistory:
+        Logger::Log::Info("Deformation motion: {} writes no exact motion vectors for its deforming "
+                          "meshes yet, because {}.",
+                          label, DeformationMotionRefusalReason(refusal));
+        break;
+    case DeformationMotionRefusal::CompatibilityProfile:
+        Logger::Log::Info("Deformation motion: {} writes no exact motion vectors for its deforming "
+                          "meshes, because {}.",
+                          label, DeformationMotionRefusalReason(refusal));
+        break;
+    default:
+        Logger::Log::Warning("Deformation motion: {} writes no exact motion vectors for its deforming "
+                             "meshes, because {}. They reproject from the camera alone.",
+                             label, DeformationMotionRefusalReason(refusal));
+        break;
+    }
 }
 } // namespace
 
@@ -34,65 +66,29 @@ bool DeclareDeformationMotion(ViewDeclare& view, Rendering::RenderGraph::RGTextu
                               const ViewTemporalSample* previous, bool previousValid,
                               double currentOrigin)
 {
-    const DeformationMotionArm arm = view.Services.GetDeformationMotionArm();
-    if (arm == DeformationMotionArm::None)
-        return false;
-    if (arm != DeformationMotionArm::SeparatePass)
-    {
-        WarnArmNotImplemented(arm);
-        return false;
-    }
     if (!target.IsValid() || !view.ViewDepth.IsValid())
         return false;
 
-    // A view with no deforming material records nothing and declares no pass.
-    // The subset is derived alongside the batch keys, so this costs a lookup.
+    // A refused view records nothing and declares no pass, and the mover lane
+    // owns its target as it does on a view with nothing deforming. The deforming subset is
+    // derived alongside the batch keys, so asking costs a lookup.
     auto& drawBuilder = view.Services.GetWorldDrawBuilder();
-    if (drawBuilder.GetDeformingBatchKeys(view.View.id).empty())
-    {
-        // Saying so is the difference between "nothing in this view deforms"
-        // and "the lane predicate rejected what does": both produce an empty
-        // span, and only the message can tell them apart. Once PER VIEW, not
-        // once per process — a frame declares several views and the first one
-        // to miss would otherwise swallow the message for the view the reader
-        // is actually looking at.
-        static std::unordered_set<uint32_t> warnedViews;
-        if (warnedViews.insert(static_cast<uint32_t>(view.View.id)).second)
-        {
-            Logger::Log::Info(
-                "Deformation motion: view {} has {} batch keys and none of them is in the "
-                "deforming lane, so no motion is produced for it. The lane takes a material "
-                "carrying the simple vec3 ModifyVertex form; the extended output form, "
-                "procedural geometry and blended materials are refused, and contributor "
-                "geometry (terrain, ocean) is not in it at all.",
-                static_cast<uint32_t>(view.View.id),
-                drawBuilder.GetBatchKeys(view.View.id).size());
-        }
-        return false;
-    }
-
-    // Per-instance validity arrives on the channel the scatter writes, and the
-    // motion variant declares that binding unconditionally — so a frame whose
-    // history is not allocated must record nothing rather than draw with an
-    // unwritten descriptor. The camera slices ask for the history whenever an
-    // arm is enabled, so this fires only on the frames before the allocation
-    // lands, and it says so.
     auto* streams = view.Services.GetDrawStreamBuilder();
-    if (streams == nullptr ||
-        !streams->GetRenderedHistoryForRead(static_cast<uint32_t>(view.View.id)).IsValid())
-    {
-        static bool warnedOnce = false;
-        if (!warnedOnce)
-        {
-            warnedOnce = true;
-            Logger::Log::Warning(
-                "Deformation motion: view {} has no rendered level and phase history this frame, "
-                "so per-instance validity cannot be read and no deforming motion is produced. "
-                "This is expected on the frames before the scatter allocates it.",
-                static_cast<uint32_t>(view.View.id));
-        }
+    const uint32_t viewId = static_cast<uint32_t>(view.View.id);
+    DeformationMotionViewState state{};
+    state.CompatibilityProfile = view.Services.GetProfile().IsCompat();
+    state.Letterboxed = view.Services.Views().GetViewLetterbox(view.View.id).active;
+    state.DepthSampleCount = view.Frame.Graph().ResourceDesc(view.ViewDepth.Id).SampleCount;
+    state.HasDeformingBatchKeys = !drawBuilder.GetDeformingBatchKeys(view.View.id).empty();
+    // The motion variant declares the validity binding unconditionally, so a
+    // view whose history is not allocated must record nothing rather than draw
+    // with an unwritten descriptor.
+    state.HasRenderedHistory =
+        streams != nullptr && streams->GetRenderedHistoryForRead(viewId).IsValid();
+    const DeformationMotionRefusal refusal = ClassifyDeformationMotionView(state);
+    LogStateChange(view, refusal);
+    if (refusal != DeformationMotionRefusal::None)
         return false;
-    }
 
     DeformationMotionEndpoint endpoint{};
     endpoint.Previous = previous;
@@ -115,8 +111,7 @@ bool DeclareDeformationMotion(ViewDeclare& view, Rendering::RenderGraph::RGTextu
     // only when the view published phase-B ranges at all; every non-HZB view
     // publishes none.
     if (streams->HasPublishedRangesForPhase(
-            static_cast<uint32_t>(view.View.id),
-            ::GameEngine::Rendering::GPUDrawStreamBuilder::kCascadeIndexNone, SlicePhase::B))
+            viewId, ::GameEngine::Rendering::GPUDrawStreamBuilder::kCascadeIndexNone, SlicePhase::B))
     {
         view.Services.AddDeformationMotionPassForView(view.Frame, view.View.id, target,
                                                       view.ViewDepth, endpoint,

@@ -1488,6 +1488,130 @@ TEST(RenderServicesRGPassTests, WorldScatterRegistersSlicesOnlyForParticipatingV
     f.Down();
 }
 
+// The deforming-motion producer reads per-instance validity from the view's
+// rendered level and phase history, so every camera view keeps it without a
+// switch: a TAA or reflections view with wind in it gets exact motion by
+// default.
+TEST(RenderServicesRGPassTests, ACameraViewKeepsTheRenderedHistoryTheMotionProducerReads)
+{
+    RsFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto* builder = f.Rs.GetDrawStreamBuilder();
+        ASSERT_NE(builder, nullptr);
+        if (!builder->GetOrCreateScatterPipeline().IsValid())
+            GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+
+        Rendering::GPUInstance instance{};
+        f.Rs.GetGPUScene()->AddInstance(instance);
+
+        FramePools pools(f.Device.get());
+        RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        f.Rs.BeginWorldDrawFrame();
+        f.Rs.BuildWorldBatchKeys();
+        f.Rs.ScheduleGpuSkinningAndRetarget(frame);
+        f.Rs.ScheduleViewCullingDispatches(frame, 1.0f / 60.0f);
+        f.Rs.ScheduleWorldBucketerDispatches(frame);
+
+        EXPECT_TRUE(builder->GetRenderedHistoryForRead(static_cast<uint32_t>(f.View)).IsValid())
+            << "the camera slice asks for the history the producer reads validity from";
+
+        frame.Execute();
+        f.Device->WaitForIdle();
+    }
+    f.Down();
+}
+
+// A released view frees its rendered history: view ids are never reused, so a
+// pair kept past the release would stay allocated until the device goes away.
+TEST(RenderServicesRGPassTests, AReleasedViewDropsItsRenderedHistory)
+{
+    RsFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto* builder = f.Rs.GetDrawStreamBuilder();
+        ASSERT_NE(builder, nullptr);
+        if (!builder->GetOrCreateScatterPipeline().IsValid())
+            GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+
+        Rendering::GPUInstance instance{};
+        f.Rs.GetGPUScene()->AddInstance(instance);
+
+        const uint32_t viewId = static_cast<uint32_t>(f.View);
+        FramePools pools(f.Device.get());
+        for (uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex)
+        {
+            if (frameIndex == 1)
+                ASSERT_TRUE(f.Rs.Views().ReleaseView(f.View));
+            RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+            frame.BeginFrame(frameIndex);
+            f.Rs.BeginWorldDrawFrame();
+            f.Rs.BuildWorldBatchKeys();
+            f.Rs.ScheduleGpuSkinningAndRetarget(frame);
+            f.Rs.ScheduleViewCullingDispatches(frame, 1.0f / 60.0f);
+            f.Rs.ScheduleWorldBucketerDispatches(frame);
+
+            EXPECT_EQ(builder->GetRenderedHistoryForRead(viewId).IsValid(), frameIndex == 0)
+                << "frame " << frameIndex << ": the history lives exactly as long as the view";
+
+            frame.Execute();
+            f.Device->WaitForIdle();
+        }
+    }
+    f.Down();
+}
+
+// The per-slice answer is this frame's, not the first frame's: the slice flags
+// are reset with the range map, so a view that stops participating stops
+// reporting ranges on the next frame.
+TEST(RenderServicesRGPassTests, PublishedRangesForAPhaseAreThisFramesOnly)
+{
+    RsFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto* builder = f.Rs.GetDrawStreamBuilder();
+        ASSERT_NE(builder, nullptr);
+        if (!builder->GetOrCreateScatterPipeline().IsValid())
+            GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+
+        Rendering::GPUInstance instance{};
+        f.Rs.GetGPUScene()->AddInstance(instance);
+
+        using Phase = GPUDrawStreamBuilder::SlicePhase;
+        const uint32_t viewId = static_cast<uint32_t>(f.View);
+        FramePools pools(f.Device.get());
+        for (uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex)
+        {
+            // The second frame puts the view to sleep: it registers no slice.
+            if (frameIndex == 1)
+                f.Rs.Views().SetViewRenderLayerMask(f.View, GameEngine::Rendering::RenderLayerMask::None());
+            RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+            frame.BeginFrame(frameIndex);
+            f.Rs.BeginWorldDrawFrame();
+            f.Rs.BuildWorldBatchKeys();
+            f.Rs.ScheduleGpuSkinningAndRetarget(frame);
+            f.Rs.ScheduleViewCullingDispatches(frame, 1.0f / 60.0f);
+            f.Rs.ScheduleWorldBucketerDispatches(frame);
+
+            EXPECT_EQ(builder->HasPublishedRangesForPhase(viewId, GPUDrawStreamBuilder::kCascadeIndexNone,
+                                                          Phase::A),
+                      frameIndex == 0)
+                << "frame " << frameIndex;
+            EXPECT_FALSE(builder->HasPublishedRangesForPhase(
+                viewId, GPUDrawStreamBuilder::kCascadeIndexNone, Phase::B))
+                << "no phase-B slice was registered on frame " << frameIndex;
+
+            frame.Execute();
+            f.Device->WaitForIdle();
+        }
+    }
+    f.Down();
+}
+
 // L6 — the forward-sampled buffer read stamp. EmitForwardSampledBufferRead
 // stamps each entry with the frame it was imported into (pointer, frameIndex);
 // the world pass declares an entry only while that stamp matches, so a

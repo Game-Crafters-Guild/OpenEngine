@@ -4,6 +4,7 @@
 
 #include "PhysicsECS/PhysicsWorldService.h"
 
+#include "PhysicsECS/Components/KinematicBody.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 
 #include "Components/Transform.h"
@@ -23,6 +24,10 @@ void PhysicsWritebackSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         ECS::Write<GameEngine::Components::Transform>,
         ECS::Write<GameEngine::Components::WorldTransform>,
         ECS::Write<GameEngine::Components::PhysicsBody>>();
+    // A kinematic body follows its Transform (PhysicsStepSystem moves it there over the frame's steps), so
+    // the Transform is the source and is not written back. Leaving its chunks out of the visit also leaves
+    // their WorldTransform unstamped, so the step's change gate sees only the bodies that moved.
+    q.Without<GameEngine::Components::KinematicBody>();
 
     uint32 composed = 0;
     q.Each([&](ECS::EntityHandle e,

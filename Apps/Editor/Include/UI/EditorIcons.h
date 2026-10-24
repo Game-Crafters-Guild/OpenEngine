@@ -87,6 +87,8 @@ namespace GameEngine::EditorIcons
     inline constexpr const char* kVideoCam = "editor:Icons/videocam.svg";
     inline constexpr const char* kSkyEnvironment = "editor:Icons/skyenvironment.svg";
     inline constexpr const char* kSparkles = "editor:Icons/sparkles.svg";
+    inline constexpr const char* kAudioEnabled = "editor:Icons/audio-on-speaker.svg";
+    inline constexpr const char* kAudioMuted = "editor:Icons/audio-muted-speaker.svg";
     inline constexpr const char* kMusicNote = "editor:Icons/music-note-icon@32px.svg";
     inline constexpr const char* kPhysics = "editor:Icons/PhysicsSettings.svg";
     // Tools.

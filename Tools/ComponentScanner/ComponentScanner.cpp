@@ -5,6 +5,10 @@
 #include "BindingRules.h"
 #include "CSharpBindingEmitter.h"
 #include "CommentStripper.h"
+#include "ComponentMirror.h"
+#include "ComponentMirrorCSharpEmitter.h"
+#include "ComponentMirrorLayoutEmitter.h"
+#include "ComponentMirrorResolver.h"
 #include "DtsEmitter.h"
 #include "EnumScanner.h"
 #include "JsonEmitter.h"
@@ -203,6 +207,7 @@ ReflectedField ReadField(const std::vector<std::string>& lines, const FieldDecl&
     if (tooltip && !Lexical::TrimView(*tooltip).empty())
         result.Tooltip = std::move(tooltip);
     result.Range = MarkerAttachment::FieldValueMarkerAttached(lines, field.DeclLine, field.EndLine, markers.Ranges);
+    result.Line = field.DeclLine;
     return result;
 }
 
@@ -284,8 +289,9 @@ bool WriteOutput(const fs::path& path, const std::string& text, std::ostream& ou
     return true;
 }
 
-// Writes each (file name, text) into `dir` and deletes every other file there whose name ends
-// in `suffix`, so a module that is gone leaves no generated file behind.
+// Writes each (path relative to `dir`, text) into `dir` and deletes every other file under it
+// whose name ends in `suffix`, so a module or a component header that is gone leaves no
+// generated file behind.
 bool WriteGeneratedFiles(const fs::path& dir, const std::map<std::string, std::string>& files, std::string_view suffix,
                          std::ostream& out, std::ostream& err)
 {
@@ -295,9 +301,9 @@ bool WriteGeneratedFiles(const fs::path& dir, const std::map<std::string, std::s
         if (name.ends_with(suffix) && !WriteOutput(dir / PathFromUtf8(name), text, out, err))
             return false;
     std::vector<fs::path> stale;
-    for (fs::directory_iterator it(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+    for (fs::recursive_directory_iterator it(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
     {
-        const std::string name = Utf8(it->path().filename());
+        const std::string name = Utf8(it->path().lexically_relative(dir));
         if (it->is_regular_file(ec) && name.ends_with(suffix) && files.count(name) == 0)
             stale.push_back(it->path());
     }
@@ -310,6 +316,170 @@ bool WriteGeneratedFiles(const fs::path& dir, const std::map<std::string, std::s
             return false;
         }
         out << "Removed " << Utf8(file) << "\n";
+    }
+    return true;
+}
+
+// What a component scan collects from its roots: the reflected components or systems, the
+// skipped structs, the headers they come from, and the enums, aliases and struct names the web
+// types resolve field types with.
+struct ComponentCollection
+{
+    // Every header of a component scan, in scan order; ReflectedStruct::Source indexes it.
+    std::vector<ComponentHeader> Headers;
+    std::vector<ReflectedStruct> Reflected;
+    std::vector<ReflectedSystem> Systems;
+    std::vector<SkippedStruct> Skipped;
+    std::set<std::string> HeadersWithComponents;
+    std::set<std::string> HeadersWithSystems;
+    // De-dupe structs reflected from more than one root (by fully-qualified name).
+    std::set<std::string> SeenQualified;
+    std::vector<fs::path> IncludeRoots;
+    EnumTable Enums;
+    // `using` aliases across all scanned headers, for the web emitters' kind resolution; an
+    // alias declared twice with different targets is dropped.
+    std::map<std::string, std::string> Aliases;
+    // Simple names of every struct declared in the scanned headers, in any namespace: a field
+    // of such a type with no reflected kind is Unknown in the registry too (WebOmissionReason).
+    std::set<std::string> KnownStructs;
+    std::set<std::string> AmbiguousAliases;
+};
+
+// Scans every root's headers into `result`: components (engine mode, or inheriting
+// `detectBase`) or systems (`systemBase`). False, with the error written, when a root is not a
+// directory.
+bool CollectComponents(const std::vector<fs::path>& inDirs, const std::optional<std::string>& detectBase,
+                       const std::optional<std::string>& systemBase, ComponentCollection& result, std::ostream& err)
+{
+    for (const fs::path& inDir : inDirs)
+    {
+        std::error_code ec;
+        if (!fs::is_directory(inDir, ec))
+        {
+            err << "Input directory does not exist: " << Utf8(inDir) << "\n";
+            return false;
+        }
+
+        // Engine mode resolves includes relative to Engine/Include (yielding
+        // "Components/Transform.h"). User (--detect-base) mode has only the scanned SourceDir
+        // on the generated DLL's include path, so emit includes relative to it ("Foo.h",
+        // "Combat/Foo.h") — FindIncludeRoot's Engine/Components heuristic would otherwise pick
+        // the parent of a SourceDir named "Components".
+        const fs::path includeRoot = detectBase ? FullPath(inDir) : FindIncludeRoot(inDir);
+        result.IncludeRoots.push_back(includeRoot);
+
+        for (const fs::path& header : ListFiles(inDir, IsHeaderExtension))
+        {
+            std::string raw;
+            if (!ReadText(header, raw))
+            {
+                err << "Failed to read " << Utf8(header) << ": cannot open the file\n";
+                continue;
+            }
+
+            StrippedSource stripped = CommentStripper::Strip(raw);
+            const std::string& cleaned = stripped.Text;
+            const std::vector<ParsedStruct> structs = StructParser::Parse(cleaned, stripped.Warnings);
+            ReportWarnings(header, stripped.Warnings, err);
+            if (detectBase)
+                ReportComponentMacros(header, stripped.Macros, *detectBase, err);
+            for (const ParsedStruct& parsed : structs)
+                result.KnownStructs.insert(parsed.Name);
+
+            // Collect enum declarations for name-based serialization of enum fields (component
+            // modes only — a system isn't reflected). Last unique definition wins; a conflicting
+            // redefinition of the same simple name is flagged ambiguous.
+            if (!systemBase)
+            {
+                for (EnumDecl& ed : EnumScanner::Scan(cleaned))
+                {
+                    const auto existing = result.Enums.ByName.find(ed.Name);
+                    if (existing != result.Enums.ByName.end())
+                    {
+                        if (!SameMembers(existing->second, ed))
+                            result.Enums.Ambiguous.insert(ed.Name);
+                    }
+                    else
+                    {
+                        result.Enums.ByName.emplace(ed.Name, std::move(ed));
+                    }
+                }
+
+                for (auto& [name, target] : TypeAliasScanner::Scan(cleaned))
+                {
+                    const auto existing = result.Aliases.find(name);
+                    if (existing != result.Aliases.end() && existing->second != target)
+                        result.AmbiguousAliases.insert(name);
+                    result.Aliases[name] = target;
+                }
+            }
+
+            // Marker comments ("// @ge-no-add", "// @ge-editor-only", "// @ge-readonly",
+            // "// @ge-hidden", "// @ge-tooltip ...") are captured from the RAW text because the
+            // comment stripper has already removed them from `cleaned`.
+            std::vector<std::string> lines = SplitLines(raw);
+            const MarkerLines markers = MarkerScanner::Scan(lines, err);
+
+            const std::string includePath = ToIncludePath(header, includeRoot);
+            bool fileHadReflected = false;
+
+            for (const ParsedStruct& s : structs)
+            {
+                // System mode (--detect-system-base SystemBase): collect structs inheriting
+                // `: ... SystemBase` (global systems) OR `: ... EntitySystem<Self>` (per-entity
+                // systems — the CRTP base derives SystemBase, but the scanner only sees the
+                // direct base name, so match it explicitly). Both register identically: the
+                // generated UserSystemAdapter<T> ticks T::OnUpdate, which for a per-entity system
+                // is EntitySystem's inherited OnUpdate.
+                if (systemBase)
+                {
+                    if (!InheritsBase(s.Bases, *systemBase) && !InheritsBase(s.Bases, kEntitySystemBase))
+                        continue;
+                    if (!result.SeenQualified.insert(QualifiedName(s.Namespace, s.Name)).second)
+                        continue; // already seen from an earlier root
+                    result.Systems.push_back(ReflectedSystem{s.Name, s.Namespace, includePath});
+                    result.HeadersWithSystems.insert(includePath);
+                    continue;
+                }
+
+                // Engine mode (default): structs declared directly in GameEngine::Components.
+                // User mode (--detect-base ComponentBase): structs inheriting
+                // `: ... ComponentBase`, in any namespace.
+                const bool isComponent = detectBase ? InheritsBase(s.Bases, *detectBase) : s.Namespace == kComponentNamespace;
+                if (!isComponent)
+                    continue;
+
+                if (std::optional<std::string> skipReason = EvaluateSkip(s))
+                {
+                    result.Skipped.push_back(SkippedStruct{s.Name, includePath, std::move(*skipReason)});
+                    continue;
+                }
+
+                if (!result.SeenQualified.insert(QualifiedName(s.Namespace, s.Name)).second)
+                    continue; // already reflected from an earlier root
+
+                ReflectedStruct r;
+                r.Name = s.Name;
+                r.Namespace = s.Namespace;
+                r.Header = includePath;
+                r.NoAdd = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.NoAdd);
+                r.DoNotSerialize = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.DoNotSerialize);
+                r.EditorOnly = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.EditorOnly);
+                r.EngineInternal = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.EngineInternal);
+                r.ReadOnly = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.ReadOnly);
+                r.Source = result.Headers.size();
+                r.Line = s.DeclLine;
+                for (const FieldDecl& f : s.Fields)
+                    r.Fields.push_back(ReadField(lines, f, markers));
+                result.Reflected.push_back(std::move(r));
+                fileHadReflected = true;
+            }
+
+            if (fileHadReflected)
+                result.HeadersWithComponents.insert(includePath);
+            if (!systemBase)
+                result.Headers.push_back(ComponentHeader{Utf8(header), includePath, std::move(lines), std::move(stripped.Text)});
+        }
     }
     return true;
 }
@@ -328,8 +498,12 @@ struct BindingOutputs
 // every other .json there deleted, so a removed facade leaves no file behind. With binding
 // outputs, a declaration the generators cannot emit is a refusal too, and the bindings are
 // written beside the description the same way.
-int RunApiScan(const fs::path& modulesDir, const std::vector<fs::path>& searchDirs, const fs::path& apiDir,
-               const BindingOutputs& bindings, bool dryRun, std::ostream& out, std::ostream& err)
+// With component roots, the scan also mirrors their components in C# (ComponentMirror.h): it writes
+// component-classes.txt beside the description, the C# mirrors under the C# binding's Components
+// directory and the layout pins beside the native bindings, and a component the rules refuse fails
+// the scan like a refused declaration.
+int RunApiScan(const fs::path& modulesDir, const std::vector<fs::path>& searchDirs, const std::vector<fs::path>& componentDirs,
+               const fs::path& apiDir, const BindingOutputs& bindings, bool dryRun, std::ostream& out, std::ostream& err)
 {
     std::error_code ec;
     if (!fs::is_directory(modulesDir, ec))
@@ -348,6 +522,17 @@ int RunApiScan(const fs::path& modulesDir, const std::vector<fs::path>& searchDi
     ApiScanResult result = ApiScanner::Scan(modulesDir, searchDirs);
     if ((bindings.NativeDir || bindings.CSharpDir) && result.Refusals.empty())
         result.Refusals = BindingRules::Unsupported(result.Description);
+    ComponentMirrors mirrors;
+    if (!componentDirs.empty())
+    {
+        ComponentCollection components;
+        if (!CollectComponents(componentDirs, std::nullopt, std::nullopt, components, err))
+            return 2;
+        for (const std::string& name : components.AmbiguousAliases)
+            components.Aliases.erase(name);
+        mirrors = ComponentMirrorResolver::Resolve(components.Headers, components.Reflected, components.Aliases, modulesDir,
+                                                   result.Description, result.Refusals);
+    }
     for (const ApiRefusal& refusal : result.Refusals)
         err << "error: " << refusal.File << ":" << refusal.Line << ": " << refusal.Problem << ". Fix: " << refusal.Fix << "\n";
 
@@ -367,6 +552,16 @@ int RunApiScan(const fs::path& modulesDir, const std::vector<fs::path>& searchDi
     out << "ComponentScanner.api modules=" << result.Description.Modules.size() << " functions=" << functions
         << " records=" << records << " enums=" << enums << " handles=" << handles << " events=" << events
         << " refused=" << result.Refusals.size() << "\n";
+    if (!componentDirs.empty())
+    {
+        std::map<ComponentClass, std::size_t> classes;
+        for (const MirrorStruct& mirror : mirrors.Structs)
+            ++classes[mirror.Class];
+        out << "ComponentScanner.components reflected=" << mirrors.Structs.size() << " mirrored=" << classes[ComponentClass::GameData]
+            << " readonly=" << classes[ComponentClass::EngineOwned] << " element=" << classes[ComponentClass::Element]
+            << " internal=" << classes[ComponentClass::EngineInternal] << " editor=" << classes[ComponentClass::EditorOnly]
+            << " enums=" << mirrors.Enums.size() << "\n";
+    }
     if (!result.Refusals.empty())
     {
         err << "The script API description cannot be generated; nothing was written.\n";
@@ -390,10 +585,18 @@ int RunApiScan(const fs::path& modulesDir, const std::vector<fs::path>& searchDi
         if (bindings.CSharpDir)
             csharp[BindingRules::CSharpFile(module)] = CSharpBindingEmitter::Emit(module, index);
     }
+    if (!componentDirs.empty() && bindings.CSharpDir)
+        for (auto& [name, text] : ComponentMirrorCSharpEmitter::Emit(mirrors))
+            csharp[std::string(kComponentCSharpDir) + "/" + name] = std::move(text);
     if (!WriteGeneratedFiles(apiDir, description, ".json", out, err))
+        return 1;
+    if (!componentDirs.empty() && !WriteOutput(apiDir / kComponentClassesFile, ComponentClassesText(mirrors), out, err))
         return 1;
     if (bindings.NativeDir && (!WriteGeneratedFiles(*bindings.NativeDir, native, ".script.gen.h", out, err) ||
                                !WriteGeneratedFiles(*bindings.NativeDir, native, ".script.gen.cpp", out, err)))
+        return 1;
+    if (!componentDirs.empty() && bindings.NativeDir &&
+        !WriteOutput(*bindings.NativeDir / kComponentLayoutFile, ComponentMirrorLayoutEmitter::Emit(mirrors), out, err))
         return 1;
     if (bindings.CSharpDir && !WriteGeneratedFiles(*bindings.CSharpDir, csharp, ".g.cs", out, err))
         return 1;
@@ -450,6 +653,7 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
     std::optional<fs::path> jsonFile;
     std::optional<fs::path> apiModulesDir;
     std::vector<fs::path> apiSearchDirs;
+    std::vector<fs::path> apiComponentDirs;
     std::optional<fs::path> apiDir;
     BindingOutputs bindingOutputs;
     bool dryRun = false;
@@ -468,8 +672,8 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
         const std::string& arg = args[i];
         const bool takesValue = arg == "--in" || arg == "--out" || arg == "--emit-dts" || arg == "--emit-json" ||
                                 arg == "--detect-base" || arg == "--detect-system-base" || arg == "--api-modules" ||
-                                arg == "--api-search" || arg == "--emit-api" || arg == "--emit-native" ||
-                                arg == "--emit-csharp";
+                                arg == "--api-search" || arg == "--api-components" || arg == "--emit-api" ||
+                                arg == "--emit-native" || arg == "--emit-csharp";
         if (takesValue)
         {
             if (i + 1 >= args.size())
@@ -492,6 +696,8 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
                 apiModulesDir = PathFromUtf8(value);
             else if (arg == "--api-search")
                 apiSearchDirs.push_back(PathFromUtf8(value));
+            else if (arg == "--api-components")
+                apiComponentDirs.push_back(PathFromUtf8(value));
             else if (arg == "--emit-api")
                 apiDir = PathFromUtf8(value);
             else if (arg == "--emit-native")
@@ -511,15 +717,16 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
         return 2;
     }
 
-    if (apiDir || apiModulesDir || !apiSearchDirs.empty() || bindingOutputs.NativeDir || bindingOutputs.CSharpDir)
+    if (apiDir || apiModulesDir || !apiSearchDirs.empty() || !apiComponentDirs.empty() || bindingOutputs.NativeDir ||
+        bindingOutputs.CSharpDir)
     {
         if (!apiDir || !apiModulesDir || !inDirs.empty() || outFile || dtsFile || jsonFile || detectBase || systemBase)
         {
-            err << "--emit-api <dir> takes --api-modules <dir> (and --api-search <dir>, --emit-native <dir>, --emit-csharp "
-                   "<dir>) and runs alone: the script API scan is its own invocation.\n";
+            err << "--emit-api <dir> takes --api-modules <dir> (and --api-search <dir>, --api-components <dir>, --emit-native "
+                   "<dir>, --emit-csharp <dir>) and runs alone: the script API scan is its own invocation.\n";
             return 2;
         }
-        return RunApiScan(*apiModulesDir, apiSearchDirs, *apiDir, bindingOutputs, dryRun, out, err);
+        return RunApiScan(*apiModulesDir, apiSearchDirs, apiComponentDirs, *apiDir, bindingOutputs, dryRun, out, err);
     }
 
     if (inDirs.empty())
@@ -532,149 +739,19 @@ int Run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
         return 2;
     }
 
-    std::vector<ReflectedStruct> reflected;
-    std::vector<ReflectedSystem> systems;
-    std::vector<SkippedStruct> skipped;
-    std::set<std::string> headersWithComponents;
-    std::set<std::string> headersWithSystems;
-    // De-dupe structs reflected from more than one root (by fully-qualified name).
-    std::set<std::string> seenQualified;
-    std::vector<fs::path> includeRoots;
-
-    EnumTable enums;
-
-    // `using` aliases across all scanned headers, for the web emitters' kind resolution; an
-    // alias declared twice with different targets is dropped.
-    std::map<std::string, std::string> aliases;
-    // Simple names of every struct declared in the scanned headers, in any namespace: a field
-    // of such a type with no reflected kind is Unknown in the registry too (WebOmissionReason).
-    std::set<std::string> knownStructs;
-    std::set<std::string> ambiguousAliases;
-
-    for (const fs::path& inDir : inDirs)
-    {
-        std::error_code ec;
-        if (!fs::is_directory(inDir, ec))
-        {
-            err << "Input directory does not exist: " << Utf8(inDir) << "\n";
-            return 2;
-        }
-
-        // Engine mode resolves includes relative to Engine/Include (yielding
-        // "Components/Transform.h"). User (--detect-base) mode has only the scanned SourceDir
-        // on the generated DLL's include path, so emit includes relative to it ("Foo.h",
-        // "Combat/Foo.h") — FindIncludeRoot's Engine/Components heuristic would otherwise pick
-        // the parent of a SourceDir named "Components".
-        const fs::path includeRoot = detectBase ? FullPath(inDir) : FindIncludeRoot(inDir);
-        includeRoots.push_back(includeRoot);
-
-        for (const fs::path& header : ListFiles(inDir, IsHeaderExtension))
-        {
-            std::string raw;
-            if (!ReadText(header, raw))
-            {
-                err << "Failed to read " << Utf8(header) << ": cannot open the file\n";
-                continue;
-            }
-
-            StrippedSource stripped = CommentStripper::Strip(raw);
-            const std::string& cleaned = stripped.Text;
-            const std::vector<ParsedStruct> structs = StructParser::Parse(cleaned, stripped.Warnings);
-            ReportWarnings(header, stripped.Warnings, err);
-            if (detectBase)
-                ReportComponentMacros(header, stripped.Macros, *detectBase, err);
-            for (const ParsedStruct& parsed : structs)
-                knownStructs.insert(parsed.Name);
-
-            // Collect enum declarations for name-based serialization of enum fields (component
-            // modes only — a system isn't reflected). Last unique definition wins; a conflicting
-            // redefinition of the same simple name is flagged ambiguous.
-            if (!systemBase)
-            {
-                for (EnumDecl& ed : EnumScanner::Scan(cleaned))
-                {
-                    const auto existing = enums.ByName.find(ed.Name);
-                    if (existing != enums.ByName.end())
-                    {
-                        if (!SameMembers(existing->second, ed))
-                            enums.Ambiguous.insert(ed.Name);
-                    }
-                    else
-                    {
-                        enums.ByName.emplace(ed.Name, std::move(ed));
-                    }
-                }
-
-                for (auto& [name, target] : TypeAliasScanner::Scan(cleaned))
-                {
-                    const auto existing = aliases.find(name);
-                    if (existing != aliases.end() && existing->second != target)
-                        ambiguousAliases.insert(name);
-                    aliases[name] = target;
-                }
-            }
-
-            // Marker comments ("// @ge-no-add", "// @ge-editor-only", "// @ge-readonly",
-            // "// @ge-hidden", "// @ge-tooltip ...") are captured from the RAW text because the
-            // comment stripper has already removed them from `cleaned`.
-            const std::vector<std::string> lines = SplitLines(raw);
-            const MarkerLines markers = MarkerScanner::Scan(lines, err);
-
-            const std::string includePath = ToIncludePath(header, includeRoot);
-            bool fileHadReflected = false;
-
-            for (const ParsedStruct& s : structs)
-            {
-                // System mode (--detect-system-base SystemBase): collect structs inheriting
-                // `: ... SystemBase` (global systems) OR `: ... EntitySystem<Self>` (per-entity
-                // systems — the CRTP base derives SystemBase, but the scanner only sees the
-                // direct base name, so match it explicitly). Both register identically: the
-                // generated UserSystemAdapter<T> ticks T::OnUpdate, which for a per-entity system
-                // is EntitySystem's inherited OnUpdate.
-                if (systemBase)
-                {
-                    if (!InheritsBase(s.Bases, *systemBase) && !InheritsBase(s.Bases, kEntitySystemBase))
-                        continue;
-                    if (!seenQualified.insert(QualifiedName(s.Namespace, s.Name)).second)
-                        continue; // already seen from an earlier root
-                    systems.push_back(ReflectedSystem{s.Name, s.Namespace, includePath});
-                    headersWithSystems.insert(includePath);
-                    continue;
-                }
-
-                // Engine mode (default): structs declared directly in GameEngine::Components.
-                // User mode (--detect-base ComponentBase): structs inheriting
-                // `: ... ComponentBase`, in any namespace.
-                const bool isComponent = detectBase ? InheritsBase(s.Bases, *detectBase) : s.Namespace == kComponentNamespace;
-                if (!isComponent)
-                    continue;
-
-                if (std::optional<std::string> skipReason = EvaluateSkip(s))
-                {
-                    skipped.push_back(SkippedStruct{s.Name, includePath, std::move(*skipReason)});
-                    continue;
-                }
-
-                if (!seenQualified.insert(QualifiedName(s.Namespace, s.Name)).second)
-                    continue; // already reflected from an earlier root
-
-                ReflectedStruct r;
-                r.Name = s.Name;
-                r.Namespace = s.Namespace;
-                r.Header = includePath;
-                r.NoAdd = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.NoAdd);
-                r.DoNotSerialize = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.DoNotSerialize);
-                r.EditorOnly = MarkerAttachment::StructMarkerAttached(lines, s.DeclLine, markers.EditorOnly);
-                for (const FieldDecl& f : s.Fields)
-                    r.Fields.push_back(ReadField(lines, f, markers));
-                reflected.push_back(std::move(r));
-                fileHadReflected = true;
-            }
-
-            if (fileHadReflected)
-                headersWithComponents.insert(includePath);
-        }
-    }
+    ComponentCollection collection;
+    if (!CollectComponents(inDirs, detectBase, systemBase, collection, err))
+        return 2;
+    std::vector<ReflectedStruct>& reflected = collection.Reflected;
+    std::vector<ReflectedSystem>& systems = collection.Systems;
+    std::vector<SkippedStruct>& skipped = collection.Skipped;
+    const std::set<std::string>& headersWithComponents = collection.HeadersWithComponents;
+    const std::set<std::string>& headersWithSystems = collection.HeadersWithSystems;
+    const std::vector<fs::path>& includeRoots = collection.IncludeRoots;
+    const EnumTable& enums = collection.Enums;
+    std::map<std::string, std::string>& aliases = collection.Aliases;
+    const std::set<std::string>& knownStructs = collection.KnownStructs;
+    const std::set<std::string>& ambiguousAliases = collection.AmbiguousAliases;
 
     // User-mode diagnostic: a macro-free `: <detectBase>` component authored in a .cpp (not a
     // header) is never registered — the scanner only reflects headers (the generated TU

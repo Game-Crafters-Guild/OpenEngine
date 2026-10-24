@@ -42,6 +42,7 @@ using namespace GameEngine::GlslShim;
 using GameEngine::GlslShim::clamp;
 using GameEngine::GlslShim::floor;
 using GameEngine::GlslShim::fract;
+using GameEngine::GlslShim::sqrt;
 using GameEngine::TerrainGrass::GrassHashNext;
 using GameEngine::TerrainGrass::GrassHashToUnit;
 #include "GrassBladeShapeExtracted.h"
@@ -783,6 +784,15 @@ std::string StripComments(const std::string& src)
     return out;
 }
 
+// The source with every whitespace character removed, so a scan matches a statement however it is
+// laid out.
+std::string StripWhitespace(std::string source)
+{
+    source.erase(std::remove_if(source.begin(), source.end(), [](unsigned char c) { return std::isspace(c) != 0; }),
+                 source.end());
+    return source;
+}
+
 std::string ReadShaderSourceRaw(const std::string& name)
 {
     const std::string path = std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/" + name;
@@ -1009,20 +1019,22 @@ TEST(GrassSplatResolveSharing, ColourShowsTheUpgradeCrossfadeAndPlacementDoesNot
     struct Consumer
     {
         const char* File;
+        const char* Resolve;
         const char* ShowsFade;
     };
     // The ground colour is resolved by the vertex stage's root resolve on the full profile and by
-    // the surface on the compat profile; both show the fade.
-    for (const Consumer consumer : {Consumer{"grass_root_ground_color.glsl", "true"},
-                                    Consumer{"terrain_grass_surface.glsl", "true"},
-                                    Consumer{"terrain_grass_place.comp", "false"}})
+    // the surface on the compat profile; both show the fade. The root resolves the atlas once for
+    // its three reads and hands it to GrassAtlas_ResolveSplatAt.
+    for (const Consumer consumer : {Consumer{"grass_root_ground_color.glsl", "GrassAtlas_ResolveSplatAt", "true"},
+                                    Consumer{"terrain_grass_surface.glsl", "GrassAtlas_ResolveSplat", "true"},
+                                    Consumer{"terrain_grass_place.comp", "GrassAtlas_ResolveSplat", "false"}})
     {
         const std::string src = ReadShaderSource(consumer.File);
         ASSERT_GT(src.size(), 200u) << consumer.File << " read back empty or stripped to nothing";
 
-        const std::vector<std::string> calls = CallArguments(src, "GrassAtlas_ResolveSplat");
+        const std::vector<std::string> calls = CallArguments(src, consumer.Resolve);
         ASSERT_EQ(calls.size(), 1u)
-            << consumer.File << " calls GrassAtlas_ResolveSplat " << calls.size()
+            << consumer.File << " calls " << consumer.Resolve << " " << calls.size()
             << " times; one call site per stage is what makes its fade answer scannable here";
 
         // The last argument, however the earlier ones are spelled. A literal is required rather
@@ -1042,26 +1054,26 @@ TEST(GrassSplatResolveSharing, ColourShowsTheUpgradeCrossfadeAndPlacementDoesNot
     }
 }
 
-// The blade's root ground colour (grass_root_ground_color.glsl) reaches the atlas TWICE: the splat
-// weights through the shared resolve above, and the terrain normal that supplies the triplanar
-// projection weights the shared albedo expression blends its taps by. cbt_surface.glsl crossfades
-// BOTH on upgrade, so fading only the splat would still step the blend the moment a tile went
-// resident.
+// The blade's root ground colour (grass_root_ground_color.glsl) reaches the atlas THREE times: the
+// splat weights through the shared resolve above, the terrain normal that supplies the triplanar
+// projection weights the shared albedo expression blends its taps by, and the colour map mixed over
+// the result. cbt_surface.glsl crossfades all three on upgrade, so fading only the splat would still
+// step the blend the moment a tile went resident.
 TEST(GrassSplatResolveSharing, TheRootGroundNormalTakesTheSameUpgradeWeight)
 {
     const std::string surface = ReadShaderSource("grass_root_ground_color.glsl");
     ASSERT_GT(surface.size(), 200u) << "the root resolve read back empty or stripped to nothing";
 
     const std::vector<std::string> calls = CallArguments(surface, "GrassAtlas_SlotUpgradeWeight");
-    ASSERT_EQ(calls.size(), 1u)
+    ASSERT_EQ(calls.size(), 2u)
         << "grass_root_ground_color.glsl calls GrassAtlas_SlotUpgradeWeight " << calls.size()
-        << " times; the ground normal is the one site that needs it directly (the splat reaches it "
-           "through GrassAtlas_ResolveSplat)";
+        << " times; the ground normal and the colour map are the two sites that need it directly "
+           "(the splat reaches it through GrassAtlas_ResolveSplatAt)";
     // The weight must come from the row THIS resolve read — a second clock, or a constant, would
     // put the blade's projection weights on a different schedule from the ground's.
-    EXPECT_NE(calls[0].find("r.Fade"), std::string::npos)
-        << "the ground normal's upgrade weight is not derived from the resolved row's Fade: "
-        << calls[0];
+    for (const std::string& call : calls)
+        EXPECT_NE(call.find("r.Fade"), std::string::npos)
+            << "an upgrade weight at the root is not derived from the resolved row's Fade: " << call;
 }
 
 // Deriving the weight is not applying it: deleting just the mix() while keeping the weight call
@@ -1075,7 +1087,7 @@ TEST(GrassSplatResolveSharing, TheUpgradeWeightIsActuallyMixedNotJustDerived)
         size_t ExpectedMixes;
     };
     for (const MixSite& site : {MixSite{"grass_atlas_splat.glsl", 1u},
-                                MixSite{"grass_root_ground_color.glsl", 1u}})
+                                MixSite{"grass_root_ground_color.glsl", 2u}})
     {
         const std::string src = ReadShaderSource(site.File);
         ASSERT_GT(src.size(), 200u) << site.File << " read back empty or stripped to nothing";
@@ -1106,7 +1118,7 @@ TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscal
     std::vector<std::string> scheduleMixes;
     for (const std::string& arg : CallArguments(surface, "mix"))
         if (arg.find("groundedEnd") != std::string::npos &&
-            arg.find("bladeRise") != std::string::npos)
+            arg.find("groundedRise") != std::string::npos)
             scheduleMixes.push_back(arg);
     ASSERT_EQ(scheduleMixes.size(), 1u)
         << "expected exactly one groundedEnd-to-canopy handover mix in the grass surface, found "
@@ -1128,6 +1140,20 @@ TEST(GrassContactIdentity, TheGroundedEndTakesTheTerrainColourAndOcclusionUnscal
     EXPECT_NE(stripped.find("vec3groundedEnd=((tp.GrassEnabled&2u)!=0u)?terrainColor:rootColor;"),
               std::string::npos)
         << "the grounded colour is no longer the unscaled terrain colour under Splat Root Color";
+
+    // The blade reflects as the ground over a longer span than it is coloured as the ground, so the
+    // write that weights its face-on reflection reads the reflection's handover, not the colour's.
+    std::vector<std::string> weightWrites;
+    for (const std::string& arg : CallArguments(surface, "GrassBladeSpecularWeight"))
+        if (arg.find("float") == std::string::npos)
+            weightWrites.push_back(arg);
+    ASSERT_EQ(weightWrites.size(), 1u)
+        << "expected exactly one specular weight write in the grass surface, found " << weightWrites.size();
+    EXPECT_NE(weightWrites[0].find("reflectionRise"), std::string::npos)
+        << "the specular weight reads `" << weightWrites[0]
+        << "`, not the reflection's handover: the leaf colour shows at the base before the contact fades";
+    EXPECT_EQ(weightWrites[0].find("groundedRise"), std::string::npos)
+        << "the specular weight reads the colour's handover `" << weightWrites[0] << "`";
 
     // The contact's indirect light: the blade root and the ground under a full field take the same
     // canopy occlusion, executed on the shipped shared block, at every depth a row can carry.
@@ -1207,11 +1233,13 @@ TEST(GrassContactIdentity, TheCanopyDepthIsTheFieldsCoverageAndZeroWhereNoBladeS
 {
     Terrain::TerrainGPUParams meadow{};
     meadow.GrassEnabled = Terrain::kTerrainGrassBitEnabled;
-    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 1.0f), 21.0f * 0.036f * 0.72f * 0.4f, 1e-6f);
+    const float32 cover = 21.0f * 0.036f * 0.72f;
+    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 1.0f),
+                cover * Terrain::kTerrainGrassCanopyOcclusionScale, 1e-6f);
     // Canopy Shade scales the physical depth: 0 is open ground under the grass, 2 twice the shade.
     EXPECT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 0.0f), 0.0f);
-    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 2.0f), 2.0f * 21.0f * 0.036f * 0.72f * 0.4f,
-                1e-6f);
+    EXPECT_NEAR(Terrain::TerrainGrassCanopyOcclusionDepth(meadow, 2.0f),
+                2.0f * cover * Terrain::kTerrainGrassCanopyOcclusionScale, 1e-6f);
 
     Terrain::TerrainGPUParams dense = meadow;
     dense.GrassDensity = 256.0f;
@@ -1224,6 +1252,27 @@ TEST(GrassContactIdentity, TheCanopyDepthIsTheFieldsCoverageAndZeroWhereNoBladeS
     Terrain::TerrainGPUParams cards = meadow;
     cards.GrassEnabled |= Terrain::kTerrainGrassBitTextureCard;
     EXPECT_EQ(Terrain::TerrainGrassCanopyOcclusionDepth(cards, 1.0f), 0.0f);
+}
+
+// THE GROUND UNDER A FIELD IS THE TERRAIN'S OWN MATERIAL, at every distance and every density: the
+// field shades the ground (Canopy Shade) and never recolours it, and the blade's base resolves onto
+// that same colour. A darker ground under grass is authored in the terrain's materials.
+TEST(GrassContactIdentity, TheGroundUnderAFieldIsTheTerrainsMaterialAtEveryDistanceAndDensity)
+{
+    std::ifstream groundFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl");
+    ASSERT_TRUE(groundFile.good()) << "cannot read cbt_surface.glsl";
+    const std::string ground = StripWhitespace(StripComments(
+        std::string((std::istreambuf_iterator<char>(groundFile)), std::istreambuf_iterator<char>())));
+    const std::string surface = StripWhitespace(ReadShaderSource("terrain_grass_surface.glsl"));
+
+    // The ground's colour is its resolved material times the canopy shade, and nothing else.
+    EXPECT_NE(ground.find("o.baseColor=baseColor*grassCanopy;"), std::string::npos)
+        << "the ground under a field is no longer its own material times the canopy shade";
+    // The blade's ground colour is the terrain's resolved albedo at its root, never reassigned.
+    EXPECT_NE(surface.find("vec3terrainColor=vGrassBlade.yzw;"), std::string::npos)
+        << "the blade no longer takes the ground's colour from its root";
+    EXPECT_EQ(surface.find("terrainColor=Grass"), std::string::npos)
+        << "the blade's ground colour is replaced or mixed before the ground handover";
 }
 
 // The plan step WRITES the indirect block the placement then adds to, each through its own copy
@@ -1356,9 +1405,39 @@ TEST(GrassClumpModel, TheBladeShapeWordRoundTripsItsFourFields)
     EXPECT_EQ(G::GrassPackRandAndCoverage(1.0f, 1.0f) >> 24u, 0u) << "bits 24-31 stay unused";
 }
 
-// The blade instance is 48 bytes in every shader that declares it: the per-blade shape rides in a
-// word the instance already had, so the pool's size per view is what it was.
-TEST(GrassBladeInstanceLayout, TheInstanceStaysFortyEightBytesInEveryShaderThatDeclaresIt)
+// The root ground colour the placement compute packs and the vertex stage decodes: each channel
+// within half a 10-bit step of its square root, so within 0.1% of full scale and within 1% of the
+// value down to 0.01, with the channels independent and the range clamped to [0, 1]. Executed on
+// the shipped GLSL.
+TEST(GrassClumpModel, TheRootColorWordRoundTripsWithinHalfAStepOfItsSquareRoot)
+{
+    namespace G = GrassBladeShapeShader;
+    constexpr float32 kHalfStep = 0.5f / 1023.0f;
+    for (float32 r : {0.0f, 0.0004f, 0.01f, 0.03f, 0.18f, 0.5f, 1.0f})
+    {
+        for (float32 g : {0.0f, 0.02f, 0.27f, 0.91f})
+        {
+            const float32 b = 0.5f * (r + g);
+            const G::vec3 decoded = G::GrassUnpackRootColor(G::GrassPackRootColor(G::vec3(r, g, b)));
+            for (const auto [value, got] : {std::pair{r, decoded.x}, std::pair{g, decoded.y}, std::pair{b, decoded.z}})
+            {
+                const float32 encoded = std::sqrt(value);
+                EXPECT_NEAR(got, value, kHalfStep * (2.0f * encoded + kHalfStep) + 1e-7f) << value;
+                if (value >= 0.01f)
+                    EXPECT_LT(std::abs(got - value), 0.01f * value) << value;
+            }
+        }
+    }
+    const G::vec3 clamped = G::GrassUnpackRootColor(G::GrassPackRootColor(G::vec3(-0.5f, 1.5f, 0.25f)));
+    EXPECT_EQ(clamped.x, 0.0f);
+    EXPECT_EQ(clamped.y, 1.0f);
+    EXPECT_NEAR(clamped.z, 0.25f, 1e-3f) << "a clamped neighbour does not leak into this channel";
+    EXPECT_EQ(G::GrassPackRootColor(G::vec3(1.0f, 1.0f, 1.0f)) >> 30u, 0u) << "bits 30-31 stay unused";
+}
+
+// The blade instance is 52 bytes in every shader that declares it, the root ground colour last at
+// byte 48: the size and offset TerrainGrassRenderFeature.cpp's GrassBladeInstanceGPU asserts.
+TEST(GrassBladeInstanceLayout, TheInstanceIsFiftyTwoBytesWithTheRootColorLastInEveryShaderThatDeclaresIt)
 {
     std::vector<std::vector<std::string>> declared;
     for (const char* file : {"terrain_grass_place.comp", "terrain_grass_vertex_modifier.glsl"})
@@ -1378,7 +1457,9 @@ TEST(GrassBladeInstanceLayout, TheInstanceStaysFortyEightBytesInEveryShaderThatD
                                                             << " is a " << type << ", not a 4-byte scalar";
             fields.push_back(type + " " + (*it)[2].str());
         }
-        EXPECT_EQ(fields.size() * 4u, 48u) << file << " declares " << fields.size() << " instance fields";
+        EXPECT_EQ(fields.size() * 4u, 52u) << file << " declares " << fields.size() << " instance fields";
+        ASSERT_FALSE(fields.empty());
+        EXPECT_EQ(fields.back(), "uint RootColor") << file << ": the root colour is not the last word";
         declared.push_back(std::move(fields));
     }
     EXPECT_EQ(declared[0], declared[1]) << "the placement and the vertex stage disagree on the instance";

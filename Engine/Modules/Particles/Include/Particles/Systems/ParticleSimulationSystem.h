@@ -51,8 +51,14 @@ struct ParticleWorldState
     {
         /// The frame the load may next be requested.
         uint64 RetryFrame = 0;
+        /// The registry's processor revision when the load was last requested. 0 before the first
+        /// request. The registry's revision is never 0, so the first request always asks.
+        uint64 ProcessorRevision = 0;
         /// Whether the last load failed; written by the loader thread.
         std::shared_ptr<std::atomic<bool>> Failed = std::make_shared<std::atomic<bool>>(false);
+        /// Set by a load that failed after the processor revision moved while it ran; written by the
+        /// loader thread, cleared by the next request.
+        std::shared_ptr<std::atomic<bool>> RevisedDuringLoad = std::make_shared<std::atomic<bool>>(false);
     };
     std::unordered_map<GUID, StackLoad> StackLoads;
     uint64 WorldId = 0, Frame = 0;

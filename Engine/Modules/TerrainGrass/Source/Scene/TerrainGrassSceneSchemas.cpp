@@ -222,6 +222,7 @@ public:
         outLines.push_back("TerrainGrass.rootFadeEnd = " + FormatFloat(c->RootFadeEnd));
         outLines.push_back("TerrainGrass.groundingStrength = " + FormatFloat(c->GroundingStrength));
         outLines.push_back("TerrainGrass.canopyShade = " + FormatFloat(c->CanopyShade));
+        outLines.push_back("TerrainGrass.groundDarkening = " + FormatFloat(c->GroundDarkening));
         outLines.push_back("TerrainGrass.translucency = " + FormatFloat(c->Translucency));
         outLines.push_back(std::string("TerrainGrass.textureGrass = ") + (c->TextureGrass ? "true" : "false"));
         outLines.push_back("TerrainGrass.textureCardsPerSquareMeter = " + FormatFloat(c->TextureCardsPerSquareMeter));
@@ -230,6 +231,7 @@ public:
         outLines.push_back("TerrainGrass.rootColor = " + std::to_string(c->RootColor));
         outLines.push_back("TerrainGrass.tipColor = " + std::to_string(c->TipColor));
         outLines.push_back("TerrainGrass.backlightColor = " + std::to_string(c->BacklightColor));
+        outLines.push_back("TerrainGrass.soilColor = " + std::to_string(c->SoilColor));
         SerializeGuid(outLines, "TerrainGrass.albedoTexture", c->AlbedoTextureAssetGuid.ToGuid());
         SerializeGuid(outLines, "TerrainGrass.alphaTexture", c->AlphaTextureAssetGuid.ToGuid());
         SerializeGuid(outLines, "TerrainGrass.normalTexture", c->NormalTextureAssetGuid.ToGuid());
@@ -287,6 +289,7 @@ public:
         else if (property == "rootfadeend") { if (!ParseF32(value, c.RootFadeEnd, outError)) return false; }
         else if (property == "groundingstrength") { if (!ParseF32(value, c.GroundingStrength, outError)) return false; }
         else if (property == "canopyshade") { if (!ParseF32(value, c.CanopyShade, outError)) return false; }
+        else if (property == "grounddarkening") { if (!ParseF32(value, c.GroundDarkening, outError)) return false; }
         else if (property == "translucency") { if (!ParseF32(value, c.Translucency, outError)) return false; }
         else if (property == "texturegrass") { if (!ParseBool(value, c.TextureGrass, outError)) return false; }
         else if (property == "texturecardspersquaremeter") { if (!ParseF32(value, c.TextureCardsPerSquareMeter, outError)) return false; }
@@ -295,6 +298,7 @@ public:
         else if (property == "rootcolor") { if (!ParseU32(value, c.RootColor, outError)) return false; }
         else if (property == "tipcolor") { if (!ParseU32(value, c.TipColor, outError)) return false; }
         else if (property == "backlightcolor") { if (!ParseU32(value, c.BacklightColor, outError)) return false; }
+        else if (property == "soilcolor") { if (!ParseU32(value, c.SoilColor, outError)) return false; }
         else if (property == "albedotexture") { GUID g{}; if (!ParseGuid(value, g, outError)) return false; c.AlbedoTextureAssetGuid.Set(g); }
         else if (property == "alphatexture") { GUID g{}; if (!ParseGuid(value, g, outError)) return false; c.AlphaTextureAssetGuid.Set(g); }
         else if (property == "normaltexture") { GUID g{}; if (!ParseGuid(value, g, outError)) return false; c.NormalTextureAssetGuid.Set(g); }

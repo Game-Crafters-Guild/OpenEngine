@@ -207,3 +207,71 @@ TEST(IblShaderContract, MultiBounceCannotBrightenAtFullVisibility)
            "lower bound at the visibility and an UPPER bound at 1.0, so full visibility is "
            "an exact no-op and occlusion can never brighten";
 }
+
+// A surface that composes its own environment reflection into its emission (the ocean) sets
+// so.environmentSpecularCoverage to the share of the pixel the standard lobe still covers. The
+// coverage has to scale the WHOLE base lobe, the table's grazing bias included: so.specularWeight
+// only scales F0 and leaves the bias, which is most of the reflection at grazing angles. It also
+// has to scale the weight the screen-space reflections replace, or SSR would put the lobe back.
+TEST(IblShaderContract, EnvironmentSpecularCoverageScalesTheWholeBaseLobe)
+{
+    const std::string source = LoadIblGlslWithoutComments();
+    ASSERT_FALSE(source.empty()) << "ibl.glsl not found via GE_RENDERER_REPO_ROOT";
+
+    const std::string body = StripWhitespace(ExtractFunctionBody(source, "vec3 GE_EvaluateIBL"));
+    ASSERT_FALSE(body.empty()) << "GE_EvaluateIBL not found";
+    const std::size_t coverage = body.find("specularWeight*=so.environmentSpecularCoverage;");
+    ASSERT_NE(coverage, std::string::npos)
+        << "GE_EvaluateIBL must multiply the reconstructed lobe (F0 * scale + bias) by "
+           "so.environmentSpecularCoverage";
+    const std::size_t lobe = body.find("vec3specular=pref*(specularWeight+so.environmentReflectionWeight);");
+    ASSERT_NE(lobe, std::string::npos);
+    EXPECT_LT(coverage, lobe) << "the coverage must scale the lobe before it is formed";
+    const std::size_t replaceable =
+        body.find("vec3replaceableWeight=(specularWeight+so.environmentReflectionWeight)*specAO;");
+    ASSERT_NE(replaceable, std::string::npos);
+    EXPECT_LT(coverage, replaceable) << "the coverage must scale the weight SSR replaces";
+    const std::size_t bias = body.find("vec3specularWeight=(specF0*ab.x+ab.y);");
+    ASSERT_NE(bias, std::string::npos);
+    EXPECT_LT(bias, coverage) << "the coverage must scale the bias term, not only F0";
+}
+
+// A surface that weights its own reflection of the environment (the ocean's Fresnel with its
+// dials) publishes that weight, and the environment term evaluates the radiance for it: the same
+// prefiltered sample, after the local probe's parallax, the DDGI reflection composite and the
+// AmbientLight specular fill, so those sources reach that reflection as they reach the standard
+// lobe. The reflection the surface put in its emission itself (a planar capture) is published
+// too, and screen-space reflections replace all of it: the weight they replace is the sum, and
+// the incident radiance is the weighted mean, so weight x incident is exactly what the forward
+// pass added (pref x (standard + own weight) + the emitted reflection).
+TEST(IblShaderContract, SurfaceReflectionTakesTheEnvironmentSourcesAndIsReplaceable)
+{
+    const std::string source = LoadIblGlslWithoutComments();
+    ASSERT_FALSE(source.empty()) << "ibl.glsl not found via GE_RENDERER_REPO_ROOT";
+
+    const std::string body = StripWhitespace(ExtractFunctionBody(source, "vec3 GE_EvaluateIBL"));
+    ASSERT_FALSE(body.empty()) << "GE_EvaluateIBL not found";
+    const std::size_t lobe = body.find("vec3specular=pref*(specularWeight+so.environmentReflectionWeight);");
+    EXPECT_NE(lobe, std::string::npos)
+        << "the surface's own reflection weight must multiply the same environment radiance as the "
+           "standard lobe";
+    const std::size_t ddgi = body.find("pref=GE_DDGICompositeReflection(");
+    const std::size_t parallax = body.find("vec3prefDir=GE_LocalReflectionDirection(positionWS,R);");
+    ASSERT_NE(parallax, std::string::npos);
+    if (lobe != std::string::npos)
+    {
+        EXPECT_LT(parallax, lobe);
+        if (ddgi != std::string::npos)
+            EXPECT_LT(ddgi, lobe) << "the DDGI composite must reach the surface's own reflection";
+    }
+    EXPECT_NE(body.find("vec3replaceableWeight=(specularWeight+so.environmentReflectionWeight)*specAO;"),
+              std::string::npos)
+        << "screen-space reflections must replace the surface's own reflection with the standard lobe";
+    EXPECT_NE(body.find("ge_sssrSpecularWeight=replaceableWeight+vec3(so.emittedReflection.a);"),
+              std::string::npos)
+        << "the reflection the surface emitted itself must be replaceable too";
+    EXPECT_NE(body.find("ge_sssrIncidentRadiance=pref+(so.emittedReflection.rgb-pref*so.emittedReflection.a)/"
+                        "max(ge_sssrSpecularWeight,vec3(1e-6));"),
+              std::string::npos)
+        << "the incident radiance must be the weighted mean, so weight x incident is what was added";
+}

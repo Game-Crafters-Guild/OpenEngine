@@ -298,7 +298,7 @@ void NavigationDebugSystem::Update(ECS::World& world, float32 deltaTime)
                 // A re-bake replaces the grid behind the same handle, so the bake version is part of
                 // what the cached lines were drawn from.
                 uint64 key = (static_cast<uint64>(source.NavMapGeneration) << 32) | source.NavMapIndex;
-                uint32 currentVersion = gridMap->GetTopologyVersion() + (source.BakeVersion << 16);
+                uint32 currentVersion = gridMap->GetTopologyVersion() + (static_cast<uint32>(source.BakeVersion) << 16);
                 auto it = m_GridVersionCache.find(key);
                 bool needsRegen = (it == m_GridVersionCache.end() ||
                                    it->second != currentVersion ||
@@ -349,7 +349,7 @@ void NavigationDebugSystem::Update(ECS::World& world, float32 deltaTime)
 
                 if (showPaths)
                 {
-                    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+                    const Pathfinding::PathStatus status = state.Status;
                     if (status == Pathfinding::PathStatus::Complete ||
                         status == Pathfinding::PathStatus::Partial)
                     {

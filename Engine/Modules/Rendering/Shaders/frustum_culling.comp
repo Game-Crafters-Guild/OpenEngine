@@ -31,6 +31,11 @@ struct GPUCullingData {
 #include "Includes/gpu_culling_data_fields.glsl"
 };
 
+#include "Includes/cull_pass_membership.glsl"
+
+#define GE_CULL_DEFORMATION_MARGIN_BINDING 3
+#include "Includes/cull_deformation_margin.glsl"
+
 // Buffers
 layout(set = 0, binding = 0, std430) restrict readonly buffer InstanceBuffer {
     GPUInstance instances[];
@@ -96,22 +101,23 @@ void main() {
 	    // `kViewCount` allows the SPIR-V compiler to fully unroll this loop at
 	    // PSO creation time, so the N=1 variant collapses to a single test.
 	    // Per-frustum radius inflation comes from the CPU (conservative for
-	    // main view / cascade 0, tight for distant cascades — SCALE-11).
+	    // main view / cascade 0, tight for distant cascades — SCALE-11). It
+	    // wraps the deformed extent, so it applies after the material's margin.
+	    float radius = DeformedCullRadius(instance);
 	    for (uint c = 0u; c < kViewCount; ++c) {
 	        bool isVisible = TestSphereFrustum(
 	            instance.boundingCenter,
-	            instance.boundingRadius * cullingData.cullMargins[c],
+	            radius * cullingData.cullMargins[c],
 	            cullingData.frustumPlanes[c], cullingData.cameraPosition
 	        );
 
 	        // Every color and shadow slice honors the requesting view's layers.
 	        isVisible = isVisible && (instance.renderLayerMask & cullingData.renderLayerMask) != 0u;
 
-	        // Shadow dispatches drop non-casters: bit 0 of instance.flags is the
-	        // cast-shadows flag (set at extraction). Main/reflection views leave
-	        // cullShadowCasters at 0 so everything stays visible.
-	        if (cullingData.cullShadowCasters != 0u && (instance.flags & 1u) == 0u)
-	            isVisible = false;
+	        // Shadow dispatches drop non-casters; color dispatches (main,
+	        // reflection, thumbnail views) drop shadows-only instances; the
+	        // Scene View's dispatches of both kinds drop the ones its eye hides.
+	        isVisible = isVisible && InstanceInPass(instance.flags, cullingData.passFlags);
 
 	        // Each view writes into its own slice of the shared visibility
 	        // buffer at `sliceOffsets[c] + localIndex`.

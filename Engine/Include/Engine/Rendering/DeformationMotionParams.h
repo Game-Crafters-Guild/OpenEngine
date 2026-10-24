@@ -2,9 +2,9 @@
 //
 // The block itself is declared once in GLSL
 // (Shaders/Includes/deformation_motion.glsl) and read by both stages of the
-// motion variant. This header is its processor mirror plus the two decisions a
-// producer has to make before it can fill it: which arm is writing, and whether
-// the view's history can be differenced at all this frame.
+// motion variant. This header is its processor mirror plus the decision the
+// producer makes before it can fill it: whether the view's history can be
+// differenced this frame.
 #pragma once
 
 #include "Mathematics/Rect.h"
@@ -50,33 +50,6 @@ static_assert(offsetof(DeformationMotionParamsGPU, JitterUv) == 96);
 /// set-0 resolution keys on that name exactly as it does for `Cam` and `Light`.
 /// A provider registered under the type name never binds.
 inline constexpr const char* kDeformationMotionParamsName = "MotionParams";
-
-/// Which producer writes the deforming surfaces into the shared motion target.
-/// One value per option in the design's producer comparison; the arms exist
-/// simultaneously so the comparison can measure them against each other.
-enum class DeformationMotionArm : uint8_t
-{
-    /// Nothing records deforming motion. The target carries what the mover
-    /// lane writes and the clear sentinel everywhere else — today's frame.
-    None = 0,
-    /// (a) An extra colour target on the opaque world pass.
-    ColorPassTarget,
-    /// (b) The same, on the depth prepass.
-    PrepassTarget,
-    /// (c) A pass of its own that re-rasterizes the deforming ranges.
-    SeparatePass,
-};
-
-const char* DeformationMotionArmName(DeformationMotionArm arm);
-
-/// Resolve the three independent switches to the one arm that runs.
-///
-/// Two producers writing one target would write every deforming pixel twice
-/// and the later write would win non-deterministically, so more than one
-/// enabled switch is refused by name and resolves to `None` — the frame keeps
-/// today's behaviour rather than a wrong vector. The refusal is logged once.
-DeformationMotionArm ResolveDeformationMotionArm(bool colorPassTarget, bool prepassTarget,
-                                                 bool separatePass);
 
 /// The history half of the block: what the view last rendered, and whether
 /// this frame can be differenced against it. Resolved by the target's owner,

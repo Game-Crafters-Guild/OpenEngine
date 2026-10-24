@@ -1,16 +1,18 @@
 #pragma once
 
-// The Physics script API: ray casts against the physics world, the velocity and the impulses of an
+// The Physics script API: ray casts and box overlaps against the physics world, the velocity and the impulses of an
 // entity's PhysicsBody, the input of its CharacterController, and its contact and trigger events.
 // Every marked declaration is generated into the C# binding (Physics, and entity.Physics); a native
 // script calls the same functions. Distances are in meters, velocities in meters per second, impulses
 // in newton seconds; +Y is up.
 
 #include "ECS/ECS.h"
+#include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
 #include "Types/ScriptCallback.h"
 
 #include <cstdint>
+#include <span>
 
 namespace GameEngine::ECS
 {
@@ -68,12 +70,34 @@ struct TriggerEvent
 bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
              float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
 
+/// Casts a ray and writes every body it hits within maxDistance into hits, nearest first, each body once at
+/// its nearest hit. Returns the number of bodies the ray hits. When that is more than hits holds, the nearest
+/// ones that fit are written: call again with a larger buffer to get all of them. A buffer of length 0 asks
+/// the number only. 0 outside play mode. The direction need not be of length 1. Only bodies on a layer of
+/// layerMask are hit; triggers are hit unless ignoreTriggers is true.
+// @ge-script @ge-context
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
+                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+                        bool ignoreTriggers = false);
+
+/// Writes the entity of every body that overlaps a box into bodies, in no fixed order. The box is centered
+/// at center, extends halfExtents from it along each of its axes (in meters, each above 0), and is turned by
+/// rotation. Returns the number of bodies in the box. When that is more than bodies holds, the ones that fit
+/// are written: call again with a larger buffer to get all of them. A buffer of length 0 asks the number
+/// only. 0 outside play mode. Only bodies on a layer of layerMask are found; triggers are found unless
+/// ignoreTriggers is true.
+// @ge-script @ge-context
+std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::Vector3 center, Mathematics::Vector3 halfExtents,
+                        Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies,
+                        std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+
 /// The velocity of the entity's body. Zero for an entity with no PhysicsBody, and outside play mode.
 // @ge-script @ge-context
 Mathematics::Vector3 GetLinearVelocity(ECS::World& world, ECS::EntityHandle entity);
 
-/// Sets the velocity of the entity's body. Does nothing for an entity with no PhysicsBody, or a static
-/// one, and outside play mode.
+/// Sets the velocity of the entity's body. Does nothing for an entity with no PhysicsBody, for a static
+/// body, and outside play mode. A kinematic body follows its Transform: the call is ignored and logs a
+/// warning once per entity. Move its Transform instead.
 // @ge-script @ge-context
 void SetLinearVelocity(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector3 velocity);
 
@@ -81,7 +105,9 @@ void SetLinearVelocity(ECS::World& world, ECS::EntityHandle entity, Mathematics:
 // @ge-script @ge-context
 Mathematics::Vector3 GetAngularVelocity(ECS::World& world, ECS::EntityHandle entity);
 
-/// Sets the angular velocity of the entity's body, in radians per second about each axis.
+/// Sets the angular velocity of the entity's body, in radians per second about each axis. A kinematic body
+/// follows its Transform: the call is ignored and logs a warning once per entity. Rotate its Transform
+/// instead.
 // @ge-script @ge-context
 void SetAngularVelocity(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector3 velocity);
 

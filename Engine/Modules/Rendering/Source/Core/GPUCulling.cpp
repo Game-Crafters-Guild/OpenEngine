@@ -61,7 +61,8 @@ constexpr uint32_t kOcclusionPhaseANameCode = 0xFCu; // "GPUCulling.View{n}.C252
 constexpr uint32_t kOcclusionPhaseBNameCode = 0xFDu; // "GPUCulling.View{n}.C253"
 
 // set 0 for hzb_culling.comp: instance/cullingData/visibility/prevVisible SSBOs,
-// the HZB combined image sampler, and the stats SSBO.
+// the HZB combined image sampler, the stats SSBO and the per-material
+// deformation margins.
 DescriptorSetLayoutDesc MakeHzbCullingDescriptorSetLayout()
 {
     DescriptorSetLayoutDesc layout{};
@@ -88,6 +89,7 @@ DescriptorSetLayoutDesc MakeHzbCullingDescriptorSetLayout()
     hzb.debugName = "HZB";
     layout.bindings.push_back(hzb);
     addStorage(5, "OcclusionStatsBuffer");
+    addStorage(6, "DeformationMarginBuffer");
     return layout;
 }
 
@@ -117,8 +119,11 @@ void FillCullingDataFromView(const ViewCullingInput& view, uint32_t sliceInstanc
     cd.deltaTime = view.deltaTime;
     // Shadow dispatches (area light = kAreaShadowCullingIndex, or any per-view
     // cascade) must drop non-casters; the main camera / reflection / thumbnail
-    // views (kCullingCascadeIndexNone) keep everything.
-    cd.cullShadowCasters = (view.cascadeIndex != kCullingCascadeIndexNone) ? 1u : 0u;
+    // views (kCullingCascadeIndexNone) are color dispatches and drop shadows-only
+    // instances instead.
+    cd.passFlags = (view.cascadeIndex != kCullingCascadeIndexNone) ? kCullPassShadowDispatch : 0u;
+    if (view.dropEditorHidden)
+        cd.passFlags |= kCullPassDropEditorHidden;
     // Single-view dispatches (main / probe / area / spot / point faces)
     // stay conservative — a false cull here pops on screen.
     for (uint32_t m = 0; m < kMaxViewsPerCullingDispatch; ++m)
@@ -577,6 +582,7 @@ void GPUCullingPipeline::ScheduleHzbCullPass(RenderGraph::RGFrame& frame,
                                              uint32_t prevVisibleBytes, RenderGraph::RGBuffer stats,
                                              RenderGraph::RGTexture hzb,
                                              const GPUCullingData& cullingData,
+                                             const CullDeformationMargins& margins,
                                              uint32_t sliceOffsetElements, uint32_t firstInstance,
                                              uint32_t sliceInstanceCount, uint64_t sliceStableKey)
 {
@@ -586,7 +592,7 @@ void GPUCullingPipeline::ScheduleHzbCullPass(RenderGraph::RGFrame& frame,
         return;
     const SamplerHandle sampler = EnsureHzbSampler();
     if (!sampler.IsValid() || !instances.IsValid() || !visibility.IsValid() ||
-        !prevVisible.IsValid() || !stats.IsValid() || !hzb.IsValid())
+        !prevVisible.IsValid() || !stats.IsValid() || !hzb.IsValid() || !margins.Valid())
         return;
 
     // Per-dispatch culling params via the frame upload ring (same as the
@@ -640,7 +646,7 @@ void GPUCullingPipeline::ScheduleHzbCullPass(RenderGraph::RGFrame& frame,
             }
         },
         [pipeline, sampler, instances, visibility, prevVisible, stats, hzb, cdBuf = cd.Buffer,
-         cdOff = cd.Offset, pc, instanceBytes, visBytes, prevVisibleBytes, isPhaseB,
+         cdOff = cd.Offset, margins, pc, instanceBytes, visBytes, prevVisibleBytes, isPhaseB,
          instanceCount = sliceInstanceCount](RenderGraph::RGContext& ctx)
         {
             DescriptorSetDesc setDesc{};
@@ -674,6 +680,7 @@ void GPUCullingPipeline::ScheduleHzbCullPass(RenderGraph::RGFrame& frame,
                                                         prevVisibleBytes);
             ctx.GetDevice()->UpdateCombinedImageSamplerBinding(set, 4, ctx.GetTexture(hzb), sampler);
             ctx.GetDevice()->UpdateStorageBufferBinding(set, 5, ctx.GetBuffer(stats), 0, statsBytes);
+            ctx.GetDevice()->UpdateStorageBufferBinding(set, 6, margins.Buffer, margins.Offset, margins.Bytes);
 
             ctx.Cmd->SetPipeline(pipeline);
             ctx.Cmd->BindDescriptorSet(0, set, pipeline);
@@ -711,11 +718,31 @@ void GPUCullingPipeline::BeginFrame(RenderGraph::RGFrame* frame, GPUScene* scene
     m_ViewVisibilityLayout.clear();
     m_OcclusionReservations.clear();
     m_FrameVisTotalBytes = 0;
+    m_FrameDeformationMargins = {};
     m_LastPublishArm = PublishArm::None;
     m_FrameRGOwner = frame;
     m_FrameVisRG = {};
     m_FrameAnyVisRG = {};
     m_FrameRuntimeVisRG = {};
+}
+
+const CullDeformationMargins& GPUCullingPipeline::FrameDeformationMargins(RenderGraph::RGFrame& frame)
+{
+    if (m_FrameDeformationMargins.Valid())
+        return m_FrameDeformationMargins;
+    // At least one float, so an empty material set still binds a valid range
+    // whose length() the kernels bound their read with.
+    const size_t count = std::max<size_t>(m_MaterialDeformationMargins.size(), 1u);
+    const uint64_t bytes = count * sizeof(float);
+    const RenderGraph::RGUploadRing::Alloc upload = frame.AllocUpload(bytes);
+    if (!upload.Ptr)
+        return m_FrameDeformationMargins;
+    if (m_MaterialDeformationMargins.empty())
+        *static_cast<float*>(upload.Ptr) = 0.0f;
+    else
+        std::memcpy(upload.Ptr, m_MaterialDeformationMargins.data(), bytes);
+    m_FrameDeformationMargins = {upload.Buffer, upload.Offset, bytes};
+    return m_FrameDeformationMargins;
 }
 
 void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
@@ -776,6 +803,8 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
     // (startup async shader load; frustum_culling.comp hot-reload) and keeps
     // skipping after the PSO becomes available.
     blob.Append(scene.CullingPipelineValidityMask());
+    blob.Append(static_cast<uint32_t>(m_MaterialDeformationMargins.size()));
+    blob.AppendBytes(m_MaterialDeformationMargins.data(), m_MaterialDeformationMargins.size() * sizeof(float));
 
     blob.Append(static_cast<uint32_t>(m_PendingViews.size()));
     for (size_t i = 0; i < m_PendingViews.size(); ++i)
@@ -1031,6 +1060,9 @@ void GPUCullingPipeline::EndFrameRG()
             r.consumed = true;
     }
 
+    const CullDeformationMargins margins =
+        elide.Skip ? CullDeformationMargins{} : FrameDeformationMargins(*frame);
+
     // Per-view dispatches.
     const size_t kMinInstanceBufferSize = 1024;
     const uint32_t instanceBytes = static_cast<uint32_t>(std::max(
@@ -1080,7 +1112,7 @@ void GPUCullingPipeline::EndFrameRG()
                     (static_cast<uint64_t>(view.viewId) << 16) | kOcclusionPhaseANameCode;
                 ScheduleHzbCullPass(*frame, sceneRG.Instances, instanceBytes, m_FrameVisRG, prevVis,
                                     static_cast<uint32_t>(pvIt->second.bytes), statsRG, sentinel, cd,
-                                    layout.offset, view.firstInstance, sliceInstanceCount, keyA);
+                                    margins, layout.offset, view.firstInstance, sliceInstanceCount, keyA);
                 continue;
             }
         }
@@ -1089,7 +1121,7 @@ void GPUCullingPipeline::EndFrameRG()
                              static_cast<uint64_t>(view.cascadeIndex);
         scene->ScheduleCullingPassForRange(*frame, sceneRG, m_FrameVisRG, visTotalBytes,
                                            layout.offset, view.firstInstance, sliceInstanceCount,
-                                           cd, key);
+                                           cd, margins, key);
     }
 
     // Fused cascade-group dispatches.
@@ -1118,9 +1150,11 @@ void GPUCullingPipeline::EndFrameRG()
         cd.renderLayerMask = g.renderLayerMask.Bits;
         cd.frameIndex = g.frameIndex;
         cd.deltaTime = g.deltaTime;
-        // Shadow groups drop non-casters; a color fan-out (probe faces) keeps
-        // everything, matching the single-view dispatch above.
-        cd.cullShadowCasters = g.shadowCasterDispatch ? 1u : 0u;
+        // Shadow groups drop non-casters; a color fan-out (probe faces) drops
+        // shadows-only instances, matching the single-view dispatch above.
+        cd.passFlags = g.shadowCasterDispatch ? kCullPassShadowDispatch : 0u;
+        if (g.dropEditorHidden)
+            cd.passFlags |= kCullPassDropEditorHidden;
         // Cascade 0 keeps the conservative margin (closest shadows, edge pops
         // most visible); distant cascades 1..3 run tight — the 50% inflation
         // was passing ~50% extra casters into every cascade slice (SCALE-11).
@@ -1141,7 +1175,7 @@ void GPUCullingPipeline::EndFrameRG()
 
         scene->ScheduleCullingPassForCascadeGroup(*frame, sceneRG, m_FrameVisRG, visTotalBytes,
                                                   sliceOffsets, g.cascadeCount, g.firstInstance,
-                                                  g.instanceCount, cd, key);
+                                                  g.instanceCount, cd, margins, key);
     }
 
     // Dispatches were declared: the visibility content generation advances so
@@ -1239,7 +1273,8 @@ void GPUCullingPipeline::ScheduleOcclusionCullPass(RenderGraph::RGFrame& frame, 
             (static_cast<uint64_t>(r.input.viewId) << 16) | kOcclusionPhaseBNameCode;
         ScheduleHzbCullPass(frame, sceneRG.Instances, instanceBytes, m_FrameVisRG, prevVis,
                             static_cast<uint32_t>(pvIt->second.bytes), statsRG, hzb, cd,
-                            r.visibilityOffset, r.input.firstInstance, r.sliceInstanceCount, key);
+                            FrameDeformationMargins(frame), r.visibilityOffset, r.input.firstInstance,
+                            r.sliceInstanceCount, key);
         // Phase B writes the visibility buffer (and rewrites prevVisible):
         // advance the content generation so the phase-B scatter gate — whose
         // call follows this dispatch in declaration order — recomputes.

@@ -21,6 +21,8 @@
 #include "Assets/TimelineAsset.h"
 #include "Assets/AnimationGraphAsset.h"
 #include "Assets/NavGridAsset.h"
+#include "Assets/DayCycleProfile.h"
+#include "Assets/NavSurfaceAsset.h"
 #include "Assets/SceneAsset.h"
 #include "Graph/GraphAsset.h"
 
@@ -133,6 +135,10 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
 
     RegisterCoreType(typeRegistry, AssetType::NavigationGrid, &CreateAssetAtPath<NavGridAsset>,
                      "Navigation Grid Asset");
+    RegisterCoreType(typeRegistry, AssetType::NavigationSurfaceData, &CreateAssetAtPath<NavSurfaceAsset>,
+                     "Navigation Surface Data");
+    RegisterCoreType(typeRegistry, AssetType::DayCycleProfile, &CreateAssetAtPath<DayCycleProfile>,
+                     "Day Cycle Profile");
 
     // Ocean payloads are consumed by the ocean systems directly.
     RegisterCoreType(typeRegistry, AssetType::OceanDepthCache, &CreateBinaryAsset, "Ocean Depth Cache");
@@ -147,8 +153,9 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
     // dims inferred from file size).
     RegisterCoreType(typeRegistry, AssetType::TerrainHeightmap, &CreateBinaryAsset, "Terrain Heightmap");
 
-    // One zone's brush-authored R32F offset field or R8 weight mask,
-    // GUID-referenced from a TerrainSculptZone / TerrainPaintZone component.
+    // One zone's brush-authored R32F offset field, R8 weight mask or RGBA32F
+    // colour, GUID-referenced from a TerrainSculptZone / TerrainPaintZone /
+    // TerrainColorZone component.
     // TerrainZonePayloadCodec decodes/encodes it in TerrainService at bake and
     // save time.
     RegisterCoreType(typeRegistry, AssetType::TerrainZoneData, &CreateBinaryAsset, "Terrain Zone Data");

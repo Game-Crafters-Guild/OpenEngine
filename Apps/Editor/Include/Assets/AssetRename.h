@@ -17,13 +17,16 @@ struct AssetRenameValidation
     std::string Reason; // User-facing, states what to fix. Empty when Ok.
 };
 
-/// Validates `newStem` (the file name without extension) as the new name for the
-/// asset at `currentPath`. Rejects empty names, path separators and characters no
-/// supported filesystem accepts, hidden-file dots, names Windows reserves, over-long
-/// names, and collisions with an existing sibling (a case-only change of the same
-/// file is allowed). `Reason` is the message shown to the user.
-AssetRenameValidation ValidateAssetRenameStem(const std::string& newStem,
-                                              const std::filesystem::path& currentPath);
+/// The part of an asset's name a rename edits: a file's name without its extension, a
+/// folder's whole name.
+std::string AssetRenameEditableName(const std::filesystem::path& path);
+
+/// Validates `newName` (the editable name: a file's name without its extension, a folder's
+/// whole name) as the new name for the asset or folder at `currentPath`. Rejects empty names,
+/// path separators and characters no supported filesystem accepts, hidden-file dots, names
+/// Windows reserves, over-long names, and collisions with an existing sibling (a case-only
+/// change of the same file is allowed). `Reason` is the message shown to the user.
+AssetRenameValidation ValidateAssetRename(const std::string& newName, const std::filesystem::path& currentPath);
 
 /// The `.material` that `Create -> Surface Shader` pairs with a shader: same stem,
 /// same directory, and its `surfaceShader` names the shader file. Empty when the
@@ -59,7 +62,7 @@ struct AssetRenamePlan
     bool HasCompanion() const { return !CompanionFrom.empty(); }
 };
 
-AssetRenamePlan PlanAssetRename(const std::filesystem::path& currentPath, const std::string& newStem);
+AssetRenamePlan PlanAssetRename(const std::filesystem::path& currentPath, const std::string& newName);
 
 /// The registry's canonical form of `path` — the absolute, registry-normalized
 /// path its metadata carries — or `path` unchanged when it is not a registered

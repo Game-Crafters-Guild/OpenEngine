@@ -1,8 +1,10 @@
 // The sorted transparent per-view build on a real device: once the view's retained staging has
-// grown, a frame's build takes nothing from the heap (its working sets live in a ScratchScope).
+// grown, a frame's build takes nothing from the heap (its working sets live in a ScratchScope); and
+// the Scene View's build leaves out a pane its eye hides.
 
 #include "ExtractionHarness.h"
 
+#include "Components/SceneViewHidden.h"
 #include "Memory/AllocationCountScope.h"
 #include "Rendering/Core/GPUScene.h"
 
@@ -84,6 +86,42 @@ TEST_F(SortedTransparentBuildAllocationTest, SortedTransparencyAllocatesNothingP
     }
     m_Device->WaitForIdle();
     EXPECT_EQ(measuredAllocations, 0u) << "over " << kMeasuredFrames << " builds";
+}
+
+// A glass pane the Scene View eye hides stages no sorted record in the Scene View, and the Game View
+// over the same camera still sorts and draws it.
+TEST_F(SortedTransparentBuildAllocationTest, TheSceneViewLeavesOutAPaneItsEyeHides)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), /*fastPath=*/true));
+    if (!m_Device->GetCapabilities().supportsBufferDeviceAddress)
+        GTEST_SKIP() << "the sorted transparent path needs buffer device addresses";
+
+    const GUID glass = FixedGuid(0x43);
+    ASSERT_NE(RegisterBlendMaterial(h, glass, "Glass", 1u), nullptr);
+    h.materialGuid = glass;
+    ECS::Entity pane = h.SpawnRenderable(0.0f, 0.0f, 0.5f);
+    h.world->AddComponentImmediate<Components::SceneViewHidden>(pane.GetHandle(), {});
+    const ViewId sceneView =
+        h.rs.Views().AllocateView("EyeSceneView", h.cameraId, Rendering::ViewPurpose::EditorScene);
+    h.rs.Views().SetViewWorldId(sceneView, h.worldId);
+    h.rs.Views().SetViewRenderLayerMask(sceneView, Rendering::RenderLayerMask::Default());
+
+    Rendering::GPUScene* scene = h.rs.GetGPUScene();
+    ASSERT_NE(scene, nullptr);
+    ASSERT_TRUE(m_Device->BeginFrame());
+    scene->AdvanceFrameSlot();
+    h.rs.BeginWorldDrawFrame();
+    h.StepFrame();
+    h.rs.BuildWorldBatchKeys();
+    scene->FlushGPUBuffers();
+    h.rs.BuildSortedTransparentForView(h.viewId);
+    h.rs.BuildSortedTransparentForView(sceneView);
+    EXPECT_TRUE(h.rs.IsSortedTransparentActive(h.viewId)) << "the Game View sorts the pane";
+    EXPECT_FALSE(h.rs.IsSortedTransparentActive(sceneView)) << "the Scene View stages nothing for it";
+    scene->EndFrame();
+    m_Device->Present();
+    m_Device->WaitForIdle();
 }
 
 } // namespace

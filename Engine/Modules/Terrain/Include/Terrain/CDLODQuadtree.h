@@ -15,7 +15,8 @@ class HeightfieldData;
 // enabling fast frustum culling with tight vertical bounds.
 //
 // The tree is a complete quadtree stored as a flat array (level-order).
-// Level 0 = root (covers entire terrain). Level N = finest subdivision.
+// Level 0 = finest subdivision (2^(numLevels-1) nodes per axis).
+// Level numLevels-1 = root (one node covering the entire terrain).
 class CDLODQuadtree
 {
 public:

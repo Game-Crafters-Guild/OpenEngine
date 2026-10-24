@@ -3101,6 +3101,7 @@ TEST(TerrainEffectRegistry, ListContainsExactlyTheCanonicalEffectComponents)
         ECS::GetComponentTypeId<Components::TerrainSurfaceRulesEffect>(),
         ECS::GetComponentTypeId<Components::TerrainGroundClaimEffect>(),
         ECS::GetComponentTypeId<Components::TerrainGrassEffect>(),
+        ECS::GetComponentTypeId<Components::TerrainColorEffect>(),
     };
 
     const auto effects = TerrainECS::TerrainEffectTypes();

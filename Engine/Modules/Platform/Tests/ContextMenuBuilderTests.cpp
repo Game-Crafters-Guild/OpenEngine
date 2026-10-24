@@ -63,12 +63,17 @@ public:
     {
         m_SubMenuIcons.emplace_back(submenuId, imagePath);
     }
+    void SetItemShortcut(uint32_t commandId, const std::string& keyText) override
+    {
+        m_Shortcuts.emplace_back(commandId, keyText);
+    }
     void Show(Platform::Window*, int, int) override {}
 
     std::vector<SubMenuRecord>    m_SubMenus;
     std::vector<ItemRecord>       m_Items;
     std::vector<SeparatorRecord>  m_Separators;
     std::vector<std::pair<uint32_t, std::string>> m_SubMenuIcons;
+    std::vector<std::pair<uint32_t, std::string>> m_Shortcuts;
 
 private:
     uint32_t m_NextId = 1;
@@ -184,6 +189,18 @@ TEST(ContextMenuBuilderTests, AppliesIconToCommandlessSubmenu)
     EXPECT_EQ(menu.m_SubMenuIcons[0].second, "editor:Icons/terrain.svg");
 }
 
+
+TEST(ContextMenuBuilderTests, GivesAnItemItsShortcutText)
+{
+    FakeContextMenu menu;
+    ContextMenuBuilder builder;
+    builder.AddItem("Rename", 7, MenuItemFlag_None, 0, {}, "F2")
+        .AddItem("Refresh", 8);
+    builder.Build(&menu);
+
+    const std::vector<std::pair<uint32_t, std::string>> expected{{7u, "F2"}};
+    EXPECT_EQ(menu.m_Shortcuts, expected) << "only the item that names a key shows one";
+}
 
 TEST(PlatformShellTests, OpenPath_ReturnsFalseForEmptyAndNonExisting)
 {

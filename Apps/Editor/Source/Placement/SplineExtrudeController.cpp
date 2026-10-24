@@ -493,7 +493,7 @@ bool SplineExtrudeController::CommitChunkMeshes(ECS::World& world,
 
     Components::MeshRenderer renderer{};
     renderer.materialAssetGuid = material;
-    renderer.castShadows = recipe.CastShadows;
+    renderer.shadowCasting = recipe.CastShadows ? Components::ShadowCasting::On : Components::ShadowCasting::Off;
     renderer.receiveShadows = recipe.ReceiveShadows;
     // A chunk whose vertices are wholesale replaced under a stable handle has
     // no previous-frame correspondence, so motion vectors would ghost for one

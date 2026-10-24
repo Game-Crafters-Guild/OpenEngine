@@ -21,6 +21,7 @@
 #include "ECS/World.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/Toggle.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
 
@@ -34,7 +35,8 @@ using Components::TerrainGrass;
 namespace
 {
 
-constexpr const char* kAutoCaption = "Auto (from Tip)";
+constexpr const char* kAutoCaption = "Auto (from ground)";
+constexpr const char* kAutoFromTipCaption = "Auto (from tip color)";
 constexpr const char* kAuthoredCaption = "Root";
 constexpr const char* kAutoButtonId = "terrain-grass-root-color-auto";
 constexpr std::uint32_t kAuthoredRoot = 0xFF233712u;
@@ -46,6 +48,30 @@ Label* FindCaption(UIElement& element, const std::string& text)
         return label;
     for (const auto& child : element.GetChildren())
         if (Label* found = FindCaption(*child, text))
+            return found;
+    return nullptr;
+}
+
+Toggle* FindToggle(UIElement& element)
+{
+    if (auto* toggle = dynamic_cast<Toggle*>(&element))
+        return toggle;
+    for (const auto& child : element.GetChildren())
+        if (Toggle* found = FindToggle(*child))
+            return found;
+    return nullptr;
+}
+
+// The toggle on the inspector row whose label reads `text`.
+Toggle* FindRowToggle(UIElement& element, const std::string& text)
+{
+    if (auto* label = dynamic_cast<Label*>(&element); label && label->GetText() == text)
+    {
+        UIElement* row = label->GetParent() ? label->GetParent()->GetParent() : nullptr;
+        return row ? FindToggle(*row) : nullptr;
+    }
+    for (const auto& child : element.GetChildren())
+        if (Toggle* found = FindRowToggle(*child, text))
             return found;
     return nullptr;
 }
@@ -92,6 +118,7 @@ protected:
             openedArgb = argb;
             picker = std::move(callbacks);
         };
+        ctx.RequestInspectorRefresh = [this] { ++refreshes; };
         (*inspector)(ctx);
     }
 
@@ -111,6 +138,7 @@ protected:
     UIElement parent{"div"};
     std::optional<ColorPickerCallbacks> picker;
     std::uint32_t openedArgb = 0;
+    int refreshes = 0;
 };
 
 TEST_F(TerrainGrassRootColorRowTest, ADefaultComponentShowsAutoAndOffersNoAutoButton)
@@ -128,7 +156,7 @@ TEST_F(TerrainGrassRootColorRowTest, ThePickerOpensAtTheDerivedRootAndApplyAutho
     Build(grass);
     ASSERT_NO_FATAL_FAILURE(OpenRootPicker(kAutoCaption));
     EXPECT_EQ(openedArgb, Components::TerrainGrassResolvedRootColor(grass))
-        << "the picker opened on a colour the blades do not use";
+        << "the picker opened on a colour other than the resolved Root Color";
 
     picker->onApply(kPickedRoot, 1.0f);
     EXPECT_EQ(RootColor(), kPickedRoot) << "applying a colour did not author the root";
@@ -158,6 +186,23 @@ TEST_F(TerrainGrassRootColorRowTest, TheAutoButtonClearsAnAuthoredRoot)
     ASSERT_NE(button, nullptr) << "an authored root offers no way back to Auto";
     Dispatch(*button, kEventButtonClick);
     EXPECT_EQ(RootColor(), Components::kTerrainGrassAutoRootColor) << "the Auto button left the root authored";
+}
+
+// With Splat Root Color off an automatic root is the tip in shade, and the row says so; turning
+// Splat Root Color on rebuilds the inspector, so the row's caption follows the toggle.
+TEST_F(TerrainGrassRootColorRowTest, TheAutoCaptionNamesWhereTheRootComesFrom)
+{
+    TerrainGrass grass{};
+    grass.UseSplatRootColor = false;
+    Build(grass);
+    EXPECT_NE(FindCaption(parent, kAutoFromTipCaption), nullptr) << "an Auto root without the ground does not say tip color";
+    EXPECT_EQ(FindCaption(parent, kAutoCaption), nullptr);
+
+    Toggle* splat = FindRowToggle(parent, "Splat Root Color");
+    ASSERT_NE(splat, nullptr) << "no Splat Root Color toggle";
+    splat->SetValue(true);
+    EXPECT_TRUE(world.GetComponent<TerrainGrass>(entity)->UseSplatRootColor);
+    EXPECT_EQ(refreshes, 1) << "the Root Color caption keeps naming the tip after Splat Root Color turns on";
 }
 
 } // namespace

@@ -547,8 +547,10 @@ public:
     /**
      * @brief Move an asset's file binding: the registry keeps its GUID under the new
      * path and a resident instance follows, so a later reload reads the new file.
-     * The caller has already moved the file. Owner thread only. False when the old
-     * path was not a registered asset (or the rename crossed a source root).
+     * For a folder, every registered asset under it moves the same way.
+     * The caller has already moved the file or folder. Owner thread only. False when
+     * the old path was not a registered asset (for a folder: when no asset under it
+     * was), or the rename crossed a source root.
      */
     bool RenameAssetPath(const std::filesystem::path& oldPath, const std::filesystem::path& newPath);
 

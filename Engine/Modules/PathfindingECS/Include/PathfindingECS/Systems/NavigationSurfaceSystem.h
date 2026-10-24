@@ -2,6 +2,7 @@
 #include "ECS/Systems.h"
 #include "Assets/FileWatchingService.h"
 #include "AssetCore/GUID.h"
+#include "Mathematics/Rect.h"
 #include "Pathfinding/PathfindingTypes.h"
 
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace GameEngine::Components
@@ -22,6 +24,7 @@ struct WorldTransform;
 namespace GameEngine::Pathfinding
 {
 class GridMap;
+struct NavSurfaceData;
 } // namespace GameEngine::Pathfinding
 
 namespace JobSystem
@@ -38,10 +41,16 @@ struct NavigationTerrainSource;
 class NavigationMeshBake;
 
 // Bakes every NavigationSurface: when it first appears (or after its map was released) and on
-// RequestBake. A mesh bakes as Detour tiles built on the job system, at most
-// kTileSnapshotsPerUpdate tiles started per update; a grid bakes in one update. Both read the
-// terrain's heightfield, the collider shapes of static bodies and mesh renderers, never a physics
-// world, so a surface bakes in edit mode, in Play and in a game alike. Also stamps
+// RequestBake. A mesh surface that appears with BakedData loads the tiles it holds instead of
+// building them, and counts the ones whose content changed since as stale. A baked mesh surface
+// keeps a queue of dirty tiles, fed by terrain edits (each terrain's dirty-region log), carving
+// NavigationObstacles, Navigation::MarkDirty (kept while the surface bakes or loads) and its stale
+// tiles; it takes at most kTileRebakesPerUpdate of them per update, rebuilds those whose content
+// hash changed, and asks the agents whose path crosses a replaced tile to replan. A mesh bakes as
+// Detour tiles built on the job system, at most kTileSnapshotsPerUpdate tiles started per update;
+// a grid bakes in one update. Both read the terrain's heightfield, the collider shapes of static
+// bodies and mesh renderers, never a physics world, so a surface bakes in edit mode, in Play and in
+// a game alike. Also stamps
 // NavigationObstacle footprints into grid surfaces every update, and publishes each surface's bake
 // state into the component for the inspector.
 class NavigationSurfaceSystem : public ECS::ISystem
@@ -50,6 +59,8 @@ public:
     // Mesh tiles a bake snapshots on the main thread per update. A count, not a time, so the tiles a
     // frame starts do not depend on the machine.
     static constexpr uint32 kTileSnapshotsPerUpdate = 64;
+    // Dirty mesh tiles a surface starts rebaking per update, the same count rule.
+    static constexpr uint32 kTileRebakesPerUpdate = 8;
 
     NavigationSurfaceSystem();
     ~NavigationSurfaceSystem() override;
@@ -60,6 +71,8 @@ public:
 private:
     // What this system knows about one surface: the bake in progress, and what the map holds.
     struct SurfaceRecord;
+    // The world's carving obstacles, gathered again only when one changed.
+    struct CarveWatch;
 
     // `placed` is false while the surface's position is not known yet; its bake waits for it.
     void UpdateSurface(ECS::World& world, ECS::EntityHandle entity, Components::NavigationSurface& surface,
@@ -71,15 +84,28 @@ private:
     // every model that is not resident; a model whose load ended without it is left out of the
     // bake, with one warning.
     GUID FirstLoadingModel(ECS::World& world, ECS::EntityHandle entity, SurfaceRecord& record);
+    // The surface's BakedData once it has loaded; null while it loads (`outLoading`) or when it
+    // cannot load (one warning). Requests the load.
+    std::shared_ptr<const Pathfinding::NavSurfaceData> ResolveBakedData(ECS::EntityHandle entity,
+                                                                        const Components::NavigationSurface& surface,
+                                                                        SurfaceRecord& record, bool& outLoading);
+    // Starts the mesh bake over `bounds`; with `bakedData` that matches the surface's settings and
+    // chart, the tiles it holds are loaded instead of built.
     void StartMeshBake(ECS::World& world, ECS::EntityHandle entity, Components::NavigationSurface& surface,
                        const NavigationTerrainSource& terrain,
                        std::shared_ptr<const NavigationStaticGeometry> geometry, const NavigationBounds& bounds,
-                       SurfaceRecord& record);
+                       std::shared_ptr<const Pathfinding::NavSurfaceData> bakedData, SurfaceRecord& record);
     void BakeGrid(ECS::World& world, ECS::EntityHandle entity, Components::NavigationSurface& surface,
                   const NavigationTerrainSource& terrain, const NavigationStaticGeometry& geometry,
                   const NavigationBounds& bounds, SurfaceRecord& record);
     void StepMeshBake(ECS::World& world, ECS::EntityHandle entity, Components::NavigationSurface& surface,
                       JobSystem::WorkStealingThreadPool* pool, SurfaceRecord& record);
+    // A baked mesh surface's update: queues the tiles the terrain, the carving obstacles and
+    // MarkDirty touched since the last one, rebakes the oldest dirty tiles under the cap, puts the
+    // finished ones into the mesh and asks the agents whose path crosses them to replan.
+    void UpdateDirtyTiles(ECS::World& world, ECS::EntityHandle entity, Components::NavigationSurface& surface,
+                          const Components::WorldTransform* transform, JobSystem::WorkStealingThreadPool* pool,
+                          SurfaceRecord& record);
     // Releases the maps m_Unbound collected that no surface in `world` names.
     void ReleaseUnboundMaps(ECS::World& world);
     void ApplyAuthoredCells(const Components::NavigationSurface& surface, ECS::EntityHandle entity,
@@ -103,6 +129,9 @@ private:
     uint64 m_UpdateIndex = 0;
 
     std::unordered_map<ECS::EntityHandle, std::unique_ptr<SurfaceRecord>, ECS::EntityHandleHash> m_Surfaces;
+    std::unique_ptr<CarveWatch> m_CarveWatch;
+    // The boxes MarkDirty queued for this update's world, by surface.
+    std::vector<std::pair<ECS::EntityHandle, Mathematics::Rect>> m_DirtyBoxes;
     // Maps a surface was bound to and no longer is (undo or redo restored bytes naming another
     // map). Released at the end of the update unless some surface in the world still names one.
     std::vector<Pathfinding::NavMapHandle> m_Unbound;

@@ -14,12 +14,18 @@
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/SkySunPath.h"
 #include "Components/Transform.h"
+#include "Editor/Hierarchy/HierarchyEntityIcon.h"
+#include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "PhysicsECS/Components/PlaneColliderShape.h"
+#include "UI/UIElement.h"
 
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "StagedTestPaths.h"
+
+#include <algorithm>
+#include <cmath>
 
 using namespace GameEngine;
 
@@ -163,6 +169,68 @@ TEST(DefaultSceneEntities, TheGroundIsTheEnginesGridGround)
             EXPECT_FLOAT_EQ(tiling->second[5], transform.GetScale().z) << "one grid cell per meter";
         });
     EXPECT_EQ(planes, 1);
+}
+
+// A new scene's ground is the Ground primitive, cut into cells of at most 50 m at its scale: a
+// texture coordinate interpolated across a larger triangle makes the grid lines jump as the camera
+// moves.
+TEST(DefaultSceneEntities, TheGroundIsCutIntoSmallCells)
+{
+    // 50 m, with room for the float rounding of the generated vertex positions.
+    constexpr float kMaxCellMeters = 50.0f * 1.001f;
+    using PG = Engine::Renderer::PrimitiveGenerator;
+    Engine::Renderer::RenderServices renderServices;
+    ECS::World world;
+    Editor::SeedDefaultSceneEntities(world, &renderServices);
+
+    // The longest triangle edge of the ground mesh along each axis, in mesh units.
+    const Mesh mesh = PG::GenerateByGuid(PG::GroundGuid());
+    ASSERT_FALSE(mesh.Indices.empty());
+    float longestX = 0.0f;
+    float longestZ = 0.0f;
+    for (size_t i = 0; i < mesh.Indices.size(); i += 3)
+    {
+        for (size_t k = 0; k < 3; ++k)
+        {
+            const float* a = mesh.Vertices[mesh.Indices[i + k]].Position;
+            const float* b = mesh.Vertices[mesh.Indices[i + (k + 1) % 3]].Position;
+            longestX = std::max(longestX, std::abs(b[0] - a[0]));
+            longestZ = std::max(longestZ, std::abs(b[2] - a[2]));
+        }
+    }
+
+    int grounds = 0;
+    world.Query<ECS::Read<Components::PlaneColliderShape>, ECS::Read<Components::MeshRenderer>,
+                ECS::Read<Components::Transform>>().Each(
+        [&](ECS::EntityHandle, const Components::PlaneColliderShape&, const Components::MeshRenderer& renderer,
+            const Components::Transform& transform)
+        {
+            ++grounds;
+            EXPECT_EQ(renderer.modelAssetGuid.ToGuid(), PG::GroundGuid());
+            EXPECT_LE(longestX * transform.GetScale().x, kMaxCellMeters);
+            EXPECT_LE(longestZ * transform.GetScale().z, kMaxCellMeters);
+        });
+    EXPECT_EQ(grounds, 1);
+}
+
+// The ground's Hierarchy row shows the plane shape icon.
+TEST(DefaultSceneEntities, TheGroundShowsThePlaneIcon)
+{
+    Engine::Renderer::RenderServices renderServices;
+    ECS::World world;
+    Editor::SeedDefaultSceneEntities(world, &renderServices);
+
+    int grounds = 0;
+    world.Query<ECS::Read<Components::PlaneColliderShape>, ECS::Read<Components::MeshRenderer>>().Each(
+        [&](ECS::EntityHandle handle, const Components::PlaneColliderShape&, const Components::MeshRenderer&)
+        {
+            ++grounds;
+            UIElement row{"GroundRow"};
+            Editor::ApplyHierarchyEntityIconClasses(&world, &row, handle);
+            EXPECT_TRUE(row.HasClass("hierarchy-entity-shape-plane"));
+            EXPECT_FALSE(row.HasClass("hierarchy-entity-sprite"));
+        });
+    EXPECT_EQ(grounds, 1);
 }
 
 TEST(DefaultSceneEntities, SeededPrimitiveBottomsRestOnThePlane)

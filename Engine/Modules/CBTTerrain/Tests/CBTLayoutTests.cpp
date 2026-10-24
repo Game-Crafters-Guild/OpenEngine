@@ -540,17 +540,18 @@ TEST(CBTLayout, BothTerrainSurfacesCrossfadeANewlyResidentSlotInFromTheCoarseFie
         StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl"));
     ASSERT_FALSE(ground.empty()) << "cannot read cbt_surface.glsl";
 
-    // The ground crossfades exactly two fields on the row Fade — its atlas NORMAL and its atlas
-    // SPLAT — and the grass surface mirrors both. A third would be a new field the blades have to
-    // decide about too, so it belongs here as a prompt rather than passing unnoticed.
+    // The ground crossfades exactly three fields on the row Fade — its atlas NORMAL, its atlas
+    // SPLAT and its atlas COLOUR MAP — and the blade root mirrors all three. A fourth would be a new
+    // field the blades have to decide about too, so it belongs here as a prompt rather than passing
+    // unnoticed.
     size_t groundFades = 0;
     for (size_t at = ground.find("r.Fade < 1.0"); at != std::string::npos;
          at = ground.find("r.Fade < 1.0", at + 1))
         ++groundFades;
-    EXPECT_EQ(groundFades, 2u)
+    EXPECT_EQ(groundFades, 3u)
         << "cbt_surface.glsl gates " << groundFades
-        << " crossfades on the row Fade, expected 2 (atlas normal + atlas splat). The grass surface "
-           "mirrors this set; a change here is a decision for the blades as well";
+        << " crossfades on the row Fade, expected 3 (atlas normal + atlas splat + atlas colour map). "
+           "The grass surface mirrors this set; a change here is a decision for the blades as well";
 
     // The blade's ground colour is resolved at its root by the vertex stage on the full profile.
     const std::string grass = StripLineComments(
@@ -986,7 +987,7 @@ TEST(CBTLayout, DefaultTerrainMaterialsCarryTheShippedPalette)
 
     // grass / rock / dirt / snow — linear RGB, the order the splat blends its channels.
     const float kTints[4][3] = {
-        {0.14f, 0.13f, 0.065f}, {0.55f, 0.50f, 0.42f}, {0.50f, 0.38f, 0.25f}, {0.90f, 0.92f, 0.95f}};
+        {0.10f, 0.16f, 0.035f}, {0.55f, 0.50f, 0.42f}, {0.50f, 0.38f, 0.25f}, {0.90f, 0.92f, 0.95f}};
     // The values TerrainGPUParams::LayerRoughness defaulted to, which the surface blended before it
     // resolved roughness through a record.
     const float kRoughness[4] = {0.85f, 0.65f, 0.75f, 0.90f};
@@ -1008,6 +1009,11 @@ TEST(CBTLayout, DefaultTerrainMaterialsCarryTheShippedPalette)
         EXPECT_GT(material.VariationScale, 0.0f) << "role " << role;
         EXPECT_GT(material.VariationStrength, 0.0f) << "role " << role;
     }
+    // The grass role is a turf green: the untextured ground of a meadow, under its blades and beyond
+    // them, on a planet and on a terrain with no grass.
+    const TerrainMaterialRecord& grass = kDefaultTerrainMaterials[0];
+    EXPECT_GT(grass.AlbedoG, 1.4f * grass.AlbedoR) << "the grass role is not a green turf";
+    EXPECT_GT(grass.AlbedoG, 1.4f * grass.AlbedoB) << "the grass role is not a green turf";
 }
 
 // The C++ <-> GLSL layout lock for the two structs the fragment reads every pixel
@@ -1144,8 +1150,8 @@ TEST(CBTLayout, GlslSurfaceStructsMatchCppStd430)
         {"AtlasNormalCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasNormalCoarseBindless)},
         {"AtlasGrassBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasGrassBindless)},
         {"AtlasGrassCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasGrassCoarseBindless)},
-        {"_PadAtlasGrass0", "uint", 1, offsetof(CBTSurfaceParams, _PadAtlasGrass0)},
-        {"_PadAtlasGrass1", "uint", 1, offsetof(CBTSurfaceParams, _PadAtlasGrass1)},
+        {"AtlasColorBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasColorBindless)},
+        {"AtlasColorCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasColorCoarseBindless)},
         {"SphereAnalyticCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticCount)},
         {"SphereAnalyticDabCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticDabCount)},
         {"SphereAnalytic", "CBTSphereAnalyticFlatten", kMaxSphereAnalyticModifiers,
@@ -1212,6 +1218,7 @@ TEST(CBTLayout, TerrainParamsEntryMirrorsAgreeAcrossEveryShader)
         {"LayerRole", "uint", 4, offsetof(GameEngine::Terrain::TerrainGPUParams, LayerRole)},
         {"GrassLayerIndex", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, GrassLayerIndex)},
         {"GrassControlBindless", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, GrassControlBindless)},
+        {"ColorMapBindless", "uint", 1, offsetof(GameEngine::Terrain::TerrainGPUParams, ColorMapBindless)},
     };
     for (const auto& anchor : kAnchors)
     {

@@ -61,6 +61,8 @@ std::string Emit(const WebComponentModel& model)
     {
         w.StartObject();
         w.String("name", c.Name);
+        if (c.EngineInternal)
+            w.Boolean("engineInternal", true);
         w.StartArray("fields");
         for (const WebField& f : c.Fields)
             WriteField(w, f);

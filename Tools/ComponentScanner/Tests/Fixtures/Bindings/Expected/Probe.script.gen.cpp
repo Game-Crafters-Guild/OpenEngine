@@ -77,6 +77,43 @@ GE_Result GE_CDECL CallCountThunk(std::uint32_t* outResult)
     }
 }
 
+GE_Result GE_CDECL EchoThunk(const char* text, std::int32_t textLength, char* outResult, std::int32_t outResultCapacity, std::int32_t* outResultLength)
+{
+    constexpr const char* kFunction = "Probe.Echo";
+    if (text == nullptr && textLength != 0)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "text");
+    if (textLength < 0)
+        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, "textLength");
+    if (outResultLength == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "outResultLength");
+    if (outResultCapacity < 0)
+        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, "outResultCapacity");
+    if (outResult == nullptr && outResultCapacity != 0)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "outResult");
+    *outResultLength = 0;
+    try
+    {
+        ::GameEngine::EngineCore& scriptEngine = ::GameEngine::EngineCore::GetInstance();
+        if (::GameEngine::DllBootstrap::EnsureEngineInitializedFor(scriptEngine) != GE_Result_Ok)
+            return ::GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!::GameEngine::ScriptingAbi::OnEngineMainThreadFor(scriptEngine))
+            return ::GameEngine::ScriptingAbi::RefuseThread(kFunction, ::GameEngine::ScriptingAbi::ThreadRule::Main);
+        ProbeSystem* scriptContext = ::GameEngine::ScriptingAbi::ScriptContext<ProbeSystem>(scriptEngine);
+        if (scriptContext == nullptr)
+            return ::GameEngine::ScriptingAbi::ContextMissing();
+        const std::string resultText = ::GameEngine::Probe::Script::Echo(*scriptContext, ::GameEngine::ScriptingAbi::TextIn(text, textLength));
+        return ::GameEngine::ScriptingAbi::CopyTextOut(resultText, outResult, outResultCapacity, outResultLength);
+    }
+    catch (const std::exception& error)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, error.what());
+    }
+    catch (...)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, "an exception that is not a std::exception");
+    }
+}
+
 GE_Result GE_CDECL GetLastOptionsThunk(GameEngine::Probe::SoundOptions* outResult)
 {
     constexpr const char* kFunction = "Probe.GetLastOptions";
@@ -152,6 +189,41 @@ GE_Result GE_CDECL GetSpeedThunk(std::uint32_t entity, float* outResult)
         if (scriptContext == nullptr)
             return ::GameEngine::ScriptingAbi::ContextMissing();
         *outResult = ::GameEngine::Probe::Script::GetSpeed(*scriptContext, ::GameEngine::ECS::EntityHandle(entity));
+        return GE_Result_Ok;
+    }
+    catch (const std::exception& error)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, error.what());
+    }
+    catch (...)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, "an exception that is not a std::exception");
+    }
+}
+
+GE_Result GE_CDECL ListHitsThunk(const GameEngine::Mathematics::Vector3* origin, GameEngine::Probe::Hit* hits, std::int32_t hitsCapacity, std::int32_t* outResult)
+{
+    constexpr const char* kFunction = "Probe.ListHits";
+    if (origin == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "origin");
+    if (hitsCapacity < 0)
+        return ::GameEngine::ScriptingAbi::RefuseNegativeLength(kFunction, "hitsCapacity");
+    if (hits == nullptr && hitsCapacity != 0)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "hits");
+    if (outResult == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "outResult");
+    *outResult = {};
+    try
+    {
+        ::GameEngine::EngineCore& scriptEngine = ::GameEngine::EngineCore::GetInstance();
+        if (::GameEngine::DllBootstrap::EnsureEngineInitializedFor(scriptEngine) != GE_Result_Ok)
+            return ::GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!::GameEngine::ScriptingAbi::OnEngineMainThreadFor(scriptEngine))
+            return ::GameEngine::ScriptingAbi::RefuseThread(kFunction, ::GameEngine::ScriptingAbi::ThreadRule::Main);
+        ProbeSystem* scriptContext = ::GameEngine::ScriptingAbi::ScriptContext<ProbeSystem>(scriptEngine);
+        if (scriptContext == nullptr)
+            return ::GameEngine::ScriptingAbi::ContextMissing();
+        *outResult = ::GameEngine::Probe::Script::ListHits(*scriptContext, *origin, std::span<GameEngine::Probe::Hit>(hits, static_cast<std::size_t>(hitsCapacity)));
         return GE_Result_Ok;
     }
     catch (const std::exception& error)
@@ -265,6 +337,66 @@ GE_Result GE_CDECL SetSpeedThunk(std::uint32_t entity, float speed)
         if (scriptContext == nullptr)
             return ::GameEngine::ScriptingAbi::ContextMissing();
         ::GameEngine::Probe::Script::SetSpeed(*scriptContext, ::GameEngine::ECS::EntityHandle(entity), speed);
+        return GE_Result_Ok;
+    }
+    catch (const std::exception& error)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, error.what());
+    }
+    catch (...)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, "an exception that is not a std::exception");
+    }
+}
+
+GE_Result GE_CDECL SwapLayersThunk(std::uint32_t layers, std::uint32_t* outResult)
+{
+    constexpr const char* kFunction = "Probe.SwapLayers";
+    if (outResult == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "outResult");
+    *outResult = {};
+    try
+    {
+        ::GameEngine::EngineCore& scriptEngine = ::GameEngine::EngineCore::GetInstance();
+        if (::GameEngine::DllBootstrap::EnsureEngineInitializedFor(scriptEngine) != GE_Result_Ok)
+            return ::GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!::GameEngine::ScriptingAbi::OnEngineMainThreadFor(scriptEngine))
+            return ::GameEngine::ScriptingAbi::RefuseThread(kFunction, ::GameEngine::ScriptingAbi::ThreadRule::Main);
+        ProbeSystem* scriptContext = ::GameEngine::ScriptingAbi::ScriptContext<ProbeSystem>(scriptEngine);
+        if (scriptContext == nullptr)
+            return ::GameEngine::ScriptingAbi::ContextMissing();
+        *outResult = ::GameEngine::Probe::Script::SwapLayers(*scriptContext, ::GameEngine::Rendering::RenderLayerMask{layers}).Bits;
+        return GE_Result_Ok;
+    }
+    catch (const std::exception& error)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, error.what());
+    }
+    catch (...)
+    {
+        return ::GameEngine::ScriptingAbi::CallFailed(kFunction, "an exception that is not a std::exception");
+    }
+}
+
+GE_Result GE_CDECL SwapTintThunk(const GameEngine::ColorLinear* tint, GameEngine::ColorLinear* outResult)
+{
+    constexpr const char* kFunction = "Probe.SwapTint";
+    if (tint == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "tint");
+    if (outResult == nullptr)
+        return ::GameEngine::ScriptingAbi::RefuseNull(kFunction, "outResult");
+    *outResult = {};
+    try
+    {
+        ::GameEngine::EngineCore& scriptEngine = ::GameEngine::EngineCore::GetInstance();
+        if (::GameEngine::DllBootstrap::EnsureEngineInitializedFor(scriptEngine) != GE_Result_Ok)
+            return ::GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!::GameEngine::ScriptingAbi::OnEngineMainThreadFor(scriptEngine))
+            return ::GameEngine::ScriptingAbi::RefuseThread(kFunction, ::GameEngine::ScriptingAbi::ThreadRule::Main);
+        ProbeSystem* scriptContext = ::GameEngine::ScriptingAbi::ScriptContext<ProbeSystem>(scriptEngine);
+        if (scriptContext == nullptr)
+            return ::GameEngine::ScriptingAbi::ContextMissing();
+        *outResult = ::GameEngine::Probe::Script::SwapTint(*scriptContext, *tint);
         return GE_Result_Ok;
     }
     catch (const std::exception& error)
@@ -436,13 +568,17 @@ constexpr GE_Probe_Table_v1 kTable{
     1u,
     GE_Probe_Hash,
     &GameEngine::Probe::Script::CallCountThunk,
+    &GameEngine::Probe::Script::EchoThunk,
     &GameEngine::Probe::Script::GetLastOptionsThunk,
     &GameEngine::Probe::Script::GetPoseThunk,
     &GameEngine::Probe::Script::GetSpeedThunk,
+    &GameEngine::Probe::Script::ListHitsThunk,
     &GameEngine::Probe::Script::PlayThunk,
     &GameEngine::Probe::Script::PushThunk,
     &GameEngine::Probe::Script::SetFlagThunk,
     &GameEngine::Probe::Script::SetSpeedThunk,
+    &GameEngine::Probe::Script::SwapLayersThunk,
+    &GameEngine::Probe::Script::SwapTintThunk,
     &GameEngine::Probe::Script::ThrowThunk,
     &GameEngine::Probe::Script::TryCastThunk,
     &GameEngine::Probe::Script::TryNearestThunk,
@@ -464,6 +600,10 @@ EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_call_count(std::uint32_t* outResult)
 {
     return GameEngine::Probe::Script::CallCountThunk(outResult);
 }
+EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_echo(const char* text, std::int32_t textLength, char* outResult, std::int32_t outResultCapacity, std::int32_t* outResultLength)
+{
+    return GameEngine::Probe::Script::EchoThunk(text, textLength, outResult, outResultCapacity, outResultLength);
+}
 EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_get_last_options(GameEngine::Probe::SoundOptions* outResult)
 {
     return GameEngine::Probe::Script::GetLastOptionsThunk(outResult);
@@ -475,6 +615,10 @@ EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_get_pose(GameEngine::Mathematics::Matrix
 EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_get_speed(std::uint32_t entity, float* outResult)
 {
     return GameEngine::Probe::Script::GetSpeedThunk(entity, outResult);
+}
+EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_list_hits(const GameEngine::Mathematics::Vector3* origin, GameEngine::Probe::Hit* hits, std::int32_t hitsCapacity, std::int32_t* outResult)
+{
+    return GameEngine::Probe::Script::ListHitsThunk(origin, hits, hitsCapacity, outResult);
 }
 EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_play(std::uint64_t sound, const GameEngine::Probe::SoundOptions* options, float gain, GameEngine::Probe::Loudness loudness, std::uint32_t layers, std::uint8_t* outResult)
 {
@@ -491,6 +635,14 @@ EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_set_flag(std::uint8_t on, std::int8_t le
 EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_set_speed(std::uint32_t entity, float speed)
 {
     return GameEngine::Probe::Script::SetSpeedThunk(entity, speed);
+}
+EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_swap_layers(std::uint32_t layers, std::uint32_t* outResult)
+{
+    return GameEngine::Probe::Script::SwapLayersThunk(layers, outResult);
+}
+EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_swap_tint(const GameEngine::ColorLinear* tint, GameEngine::ColorLinear* outResult)
+{
+    return GameEngine::Probe::Script::SwapTintThunk(tint, outResult);
 }
 EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_throw()
 {

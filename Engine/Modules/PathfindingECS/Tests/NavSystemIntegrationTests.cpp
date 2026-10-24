@@ -73,12 +73,12 @@ protected:
         agent.Acceleration = 100.0f; // High acceleration so velocity converges quickly in tests
         agent.StoppingDistance = 0.3f;
         agent.Radius = 0.25f;
-        agent.NavMapIndex = navMapIndex;
-        agent.NavMapGeneration = navMapGeneration;
         agent.AgentId = entity.GetHandle().id;
         entity.Set(agent);
 
         Components::NavigationAgentState state{};
+        state.NavMapIndex = navMapIndex;
+        state.NavMapGeneration = navMapGeneration;
         state.DestinationX = destX;
         state.DestinationY = 0.0f;
         state.DestinationZ = destZ;
@@ -207,7 +207,7 @@ TEST_F(NavSystemIntegrationTest, PathfindingOnGrid)
     world->ProcessCommands();
 
     auto state = GetAgentState(agentEntity);
-    auto status = static_cast<Pathfinding::PathStatus>(state.Status);
+    auto status = state.Status;
     EXPECT_EQ(status, Pathfinding::PathStatus::Complete);
     EXPECT_FALSE(state.PathDirty);
 }
@@ -316,7 +316,7 @@ TEST_F(NavSystemIntegrationTest, BlockedPathFails)
     world->ProcessCommands();
 
     auto agentState = GetAgentState(agentEntity);
-    auto status = static_cast<Pathfinding::PathStatus>(agentState.Status);
+    auto status = agentState.Status;
     EXPECT_EQ(status, Pathfinding::PathStatus::Failed);
 }
 
@@ -392,7 +392,7 @@ TEST_F(NavSystemIntegrationTest, StandingOccupancyRemainsWhenDestinationCancelle
     ASSERT_TRUE(gridMap->WorldToCell(wt.matrix[12], wt.matrix[14], hereX, hereZ));
     EXPECT_EQ(gridMap->GetCellReservation(hereX, hereZ).AgentId, agentId);
     EXPECT_NE(gridMap->GetCellReservation(hereX, hereZ).Occupancy, 0u);
-    EXPECT_TRUE(GetAgentState(agentEntity).HasCellReservations);
+    EXPECT_TRUE(GetAgentState(agentEntity).CellReservationOwner != 0u);
 }
 
 TEST_F(NavSystemIntegrationTest, BodyStampRemainsOnPathDirtyRetarget)
@@ -442,7 +442,7 @@ TEST_F(NavSystemIntegrationTest, BodyStampRemainsOnPathDirtyRetarget)
     EXPECT_EQ(gridMap->GetCellReservation(hereX, hereZ).AgentId, agentId)
         << "Retarget must keep a body stamp so a neighbour cannot step through";
     EXPECT_NE(gridMap->GetCellReservation(hereX, hereZ).Occupancy, 0u);
-    EXPECT_TRUE(GetAgentState(agentEntity).HasCellReservations);
+    EXPECT_TRUE(GetAgentState(agentEntity).CellReservationOwner != 0u);
 }
 
 TEST_F(NavSystemIntegrationTest, ReservationsClearedWhenAgentDestroyed)
@@ -683,7 +683,7 @@ TEST_F(NavSystemIntegrationTest, FailedOccupancyReplansAfterBodyLeaves)
     pathSystem.Update(*world, kDeltaTime);
     world->ProcessCommands();
 
-    const auto occupiedStatus = static_cast<Pathfinding::PathStatus>(GetAgentState(walker).Status);
+    const auto occupiedStatus = GetAgentState(walker).Status;
     EXPECT_TRUE(occupiedStatus == Pathfinding::PathStatus::Complete ||
                 occupiedStatus == Pathfinding::PathStatus::Partial)
         << "Occupancy on the only corridor cell is a tax, not Failed when dest is walkable";
@@ -707,7 +707,7 @@ TEST_F(NavSystemIntegrationTest, FailedOccupancyReplansAfterBodyLeaves)
         world->ProcessCommands();
     }
 
-    const auto status = static_cast<Pathfinding::PathStatus>(GetAgentState(walker).Status);
+    const auto status = GetAgentState(walker).Status;
     EXPECT_TRUE(status == Pathfinding::PathStatus::Complete ||
                 status == Pathfinding::PathStatus::Partial)
         << "Walker must recover after the occupying body leaves";

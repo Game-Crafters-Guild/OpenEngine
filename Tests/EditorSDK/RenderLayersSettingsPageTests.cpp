@@ -7,7 +7,7 @@
 #include "Core/Engine.h"
 #include "Editor/Settings/EditorSettingsRegistry.h"
 #include "Engine/Rendering/RenderLayerNames.h"
-#include "Engine/Rendering/RenderLayers.h"
+#include "Rendering/RenderLayersScriptApi.h"
 
 #include "../TestTempDir.h"
 
@@ -104,8 +104,8 @@ TEST_F(RenderLayersSettingsPageTest, ARenameReachesTheProjectFileAndTheGameReads
     ASSERT_TRUE(root.contains("rendering"));
     EXPECT_EQ(root["rendering"]["renderLayerNames"], nlohmann::json::parse(R"(["", "Props", "Foliage"])"));
     EXPECT_EQ(root["rendering"]["lodMode"], "sse") << "the other rendering keys stay";
-    EXPECT_EQ(gr::FindRenderLayer("Foliage"), 2u);
-    EXPECT_EQ(gr::RenderLayerName(1), "Props");
+    EXPECT_EQ(gr::Script::Find("Foliage"), gr::RenderLayerMask::FromLayer(2));
+    EXPECT_EQ(gr::Script::NameOf(gr::RenderLayerMask::FromLayer(1)), "Props");
 }
 
 } // namespace

@@ -16,7 +16,8 @@ namespace GameEngine::ComponentScanner
 // One reflected field: its member name, its C++ type string (used to match enum fields to a
 // scanned enum declaration and to resolve the web kind), its array extent text (nullopt when
 // not an array), and its markers: the FieldFlags policy (Hidden / ReadOnly / Transient), the
-// tooltip and the inspector range (nullopt when unmarked).
+// tooltip and the inspector range (nullopt when unmarked). Line is the 1-based line of the
+// declaration.
 struct ReflectedField
 {
     std::string Name;
@@ -27,8 +28,12 @@ struct ReflectedField
     bool Transient = false;
     std::optional<std::string> Tooltip;
     std::optional<FieldRange> Range;
+    int Line = -1;
 };
 
+// One reflected struct. The struct markers: @ge-no-add, [DoNotSerialize], @ge-editor-only,
+// @ge-engine-internal and @ge-readonly. Source is the index of its header in the scan's
+// ComponentHeader list, Line the 1-based line of its `struct` head.
 struct ReflectedStruct
 {
     std::string Name;
@@ -38,6 +43,21 @@ struct ReflectedStruct
     bool NoAdd = false;
     bool DoNotSerialize = false;
     bool EditorOnly = false;
+    bool EngineInternal = false;
+    bool ReadOnly = false;
+    std::size_t Source = 0;
+    int Line = -1;
+};
+
+// One scanned header: its path as the scanner's errors print it, its include path
+// ("Components/Rendering/MeshRenderer.h"), its raw lines (markers and `///` comments) and its
+// comment-stripped text.
+struct ComponentHeader
+{
+    std::string File;
+    std::string IncludePath;
+    std::vector<std::string> Lines;
+    std::string Stripped;
 };
 
 // One detected user system: an ECS::SystemBase-derived struct. Unlike a component it carries

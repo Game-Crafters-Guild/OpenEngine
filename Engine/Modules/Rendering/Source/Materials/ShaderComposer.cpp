@@ -354,6 +354,20 @@ static bool IsGraphLivePreviewMaterialDirectory(const std::filesystem::path& mat
     return !materialDir.empty() && materialDir.filename() == "GraphPreview";
 }
 
+// The surface a document that authors none composes with.
+static constexpr const char* kDefaultSurfaceShader = "Surfaces/standard_surface.glsl";
+
+// The first probe of ResolveShaderReference: a relative reference that names a file inside the
+// material's own directory. An absolute reference never resolves through a directory.
+static bool ResolvesInMaterialDirectory(const std::filesystem::path& reference,
+                                        const std::filesystem::path& materialDir)
+{
+    if (materialDir.empty() || reference.is_absolute())
+        return false;
+    std::error_code ec;
+    return std::filesystem::exists((materialDir / reference).lexically_normal(), ec);
+}
+
 // Human-readable list of every root ResolveShaderReference consults, in probe
 // order, for unresolved-surface diagnostics.
 static std::string DescribeSearchedShaderRoots(const std::filesystem::path& materialDir,
@@ -650,14 +664,10 @@ std::filesystem::path ShaderComposer::ResolveShaderReference(const std::string& 
     // (cache-driven compile that could not recover it) — never a real root.
     // It is skipped entirely so a stand-in directory can't masquerade as the
     // material's own and shadow the project/package/engine chain.
-    std::error_code ec;
-    if (!materialDir.empty())
-    {
-        const fs::path fromMaterial = (materialDir / p).lexically_normal();
-        if (fs::exists(fromMaterial, ec))
-            return fs::absolute(fromMaterial);
-    }
+    if (ResolvesInMaterialDirectory(p, materialDir))
+        return fs::absolute((materialDir / p).lexically_normal());
 
+    std::error_code ec;
     for (const fs::path& projectRoot : context.ProjectRoots)
     {
         const fs::path fromProject = (projectRoot / p).lexically_normal();
@@ -687,9 +697,24 @@ std::filesystem::path ShaderComposer::ResolveSurfaceShaderPath(const std::string
                                                                const std::filesystem::path& materialDir,
                                                                const MaterialBuildContext& context)
 {
-    const std::string relativePath =
-        surfaceShader.empty() ? std::string("Surfaces/standard_surface.glsl") : surfaceShader;
+    const std::string relativePath = surfaceShader.empty() ? std::string(kDefaultSurfaceShader) : surfaceShader;
     return ResolveShaderReference(relativePath, materialDir, context);
+}
+
+std::filesystem::path ShaderComposer::ShaderLocalDirectory(const std::string& surfaceShader,
+                                                           const std::string& vertexModifier,
+                                                           const std::filesystem::path& materialDir)
+{
+    if (materialDir.empty())
+        return {};
+    if (IsGraphLivePreviewMaterialDirectory(materialDir))
+        return materialDir;
+    const std::filesystem::path surface = surfaceShader.empty() ? kDefaultSurfaceShader : surfaceShader;
+    if (ResolvesInMaterialDirectory(surface, materialDir))
+        return materialDir;
+    if (!vertexModifier.empty() && ResolvesInMaterialDirectory(vertexModifier, materialDir))
+        return materialDir;
+    return {};
 }
 
 std::string ShaderComposer::ShaderRootRelative(const std::filesystem::path& path,
@@ -822,8 +847,8 @@ ComposedShaderSource ShaderComposer::Compose(const MaterialDocument& doc,
     // The roots the compile request will hand the includer — every substituted
     // literal below is spelled against these, so composition is reproducible on
     // any machine that has the same content.
-    const std::vector<std::filesystem::path> includeRoots =
-        BuildMaterialIncludeRoots(context, materialDir);
+    const std::vector<std::filesystem::path> includeRoots = BuildMaterialIncludeRoots(
+        context, ShaderLocalDirectory(doc.surfaceShader, doc.vertexModifier, materialDir));
 
     // Read adapter vertex source.
     std::string vsSrc;

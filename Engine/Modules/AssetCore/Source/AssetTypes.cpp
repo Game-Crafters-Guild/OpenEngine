@@ -133,6 +133,7 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
 
         // Navigation formats
         {".navgrid", AssetType::NavigationGrid},
+        {".navsurface", AssetType::NavigationSurfaceData},
 
         // Terrain heightmap raw formats (16-bit PNG heightmaps stay Texture)
         {".r16", AssetType::TerrainHeightmap},
@@ -164,6 +165,9 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         {".profile.json", AssetType::SkeletonProfile},
         {".humanoidrig.json", AssetType::HumanoidRig},
         {".retargetmap.json", AssetType::RetargetMap},
+
+        // Day Cycle profiles: tracks over the sun's elevation
+        {".daycycle.json", AssetType::DayCycleProfile},
 
         // Animation clip sidecars (Phase B3 .blend Action extraction)
         {".anim.json", AssetType::Animation},
@@ -256,6 +260,15 @@ String GetCompoundExtensionFromPath(const String& path) {
     return lowerName.substr(lastDot);
 }
 
+String GetAssetNameFromPath(const String& path) {
+    const size_t lastSlash = path.find_last_of("/\\");
+    const String filename = (lastSlash == String::npos) ? path : path.substr(lastSlash + 1);
+    const String extension = GetCompoundExtensionFromPath(filename);
+    if (extension.size() >= filename.size())
+        return filename;
+    return filename.substr(0, filename.size() - extension.size());
+}
+
 String AssetStateToString(AssetState state) {
     switch (state) {
         case AssetState::Unloaded:  return "Unloaded";
@@ -305,6 +318,7 @@ bool IsTextBasedAssetType(AssetType type) {
         case AssetType::LensFlareDefinition:
         case AssetType::TerrainMaterialLibrary:
         case AssetType::ParticleStack:
+        case AssetType::DayCycleProfile:
             return true;
         default:
             return false;

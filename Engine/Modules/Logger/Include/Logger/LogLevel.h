@@ -2,6 +2,9 @@
 
 #include "Logger/Types.h"
 
+#include <optional>
+#include <string_view>
+
 #if defined(_WIN32) || defined(_WIN64)
 // Windows: no unistd.h, we avoid isatty/fileno
 #else
@@ -60,26 +63,21 @@ inline const char* LogLevelToShortString(LogLevel level) {
 }
 
 /**
- * @brief Convert string to LogLevel
- * @param levelStr String representation of log level
- * @return Corresponding LogLevel, or LogLevel::Info if not recognized
+ * @brief Parse a log level name
+ * @param name trace, debug, info, warning (or warn), error, critical or off, in
+ *        lower or upper case
+ * @return The level, or nullopt for any other spelling, so a caller can refuse a
+ *         typo instead of logging at a level nobody asked for
  */
-inline LogLevel StringToLogLevel(const String& levelStr) {
-    if (levelStr == "TRACE" || levelStr == "trace") { return LogLevel::Trace;
-}
-    if (levelStr == "DEBUG" || levelStr == "debug") { return LogLevel::Debug;
-}
-    if (levelStr == "INFO" || levelStr == "info") { return LogLevel::Info;
-}
-    if (levelStr == "WARNING" || levelStr == "WARN" || levelStr == "warning" || levelStr == "warn") { return LogLevel::Warning;
-}
-    if (levelStr == "ERROR" || levelStr == "error") { return LogLevel::Error;
-}
-    if (levelStr == "CRITICAL" || levelStr == "critical") { return LogLevel::Critical;
-}
-    if (levelStr == "OFF" || levelStr == "off") { return LogLevel::Off;
-}
-    return LogLevel::Info; // Default fallback
+inline std::optional<LogLevel> ParseLogLevel(std::string_view name) {
+    if (name == "TRACE" || name == "trace") { return LogLevel::Trace; }
+    if (name == "DEBUG" || name == "debug") { return LogLevel::Debug; }
+    if (name == "INFO" || name == "info") { return LogLevel::Info; }
+    if (name == "WARNING" || name == "WARN" || name == "warning" || name == "warn") { return LogLevel::Warning; }
+    if (name == "ERROR" || name == "error") { return LogLevel::Error; }
+    if (name == "CRITICAL" || name == "critical") { return LogLevel::Critical; }
+    if (name == "OFF" || name == "off") { return LogLevel::Off; }
+    return std::nullopt;
 }
 
 /**

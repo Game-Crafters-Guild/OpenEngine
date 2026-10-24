@@ -112,6 +112,55 @@ namespace GameEngine.ManagedBindingTests
         }
 
         /// <summary>
+        /// A ray along +Z through three boxes writes all three, nearest first; a span of two gets the nearest two and
+        /// the count of three; an empty span asks the count.
+        /// </summary>
+        [Test]
+        public void RayCastAllWritesEveryBodyAlongTheRayNearestFirst()
+        {
+            Entity near = AddBox(new Vector3(0f, 0f, 5f), new Vector3(1f, 1f, 0.5f), BoxKind.Static);
+            Entity middle = AddBox(new Vector3(0f, 0f, 10f), new Vector3(1f, 1f, 0.5f), BoxKind.Static);
+            Entity far = AddBox(new Vector3(0f, 0f, 15f), new Vector3(1f, 1f, 0.5f), BoxKind.Static);
+
+            Span<RayHit> hits = stackalloc RayHit[4];
+            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, hits), Is.EqualTo(3));
+            Assert.That(hits[0].Entity, Is.EqualTo(near));
+            Assert.That(hits[1].Entity, Is.EqualTo(middle));
+            Assert.That(hits[2].Entity, Is.EqualTo(far));
+            Assert.That(hits[0].Distance, Is.EqualTo(4.5f).Within(1e-3f));
+            Assert.That(hits[2].Distance, Is.EqualTo(14.5f).Within(1e-3f));
+
+            Span<RayHit> two = stackalloc RayHit[2];
+            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, two), Is.EqualTo(3), "the full count, never a silent truncation");
+            Assert.That(two[0].Entity, Is.EqualTo(near));
+            Assert.That(two[1].Entity, Is.EqualTo(middle));
+            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, Span<RayHit>.Empty), Is.EqualTo(3), "an empty span asks the count");
+            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, hits, maxDistance: 12f), Is.EqualTo(2), "within maxDistance");
+        }
+
+        /// <summary>
+        /// A box query finds the two bodies inside it and not the one outside; a span of one gets one of them and the
+        /// count of two.
+        /// </summary>
+        [Test]
+        public void BoxOverlapFindsTheBodiesInsideTheBox()
+        {
+            Entity left = AddBox(new Vector3(-1f, 0f, 0f), new Vector3(0.5f, 0.5f, 0.5f), BoxKind.Static);
+            Entity right = AddBox(new Vector3(1f, 0f, 0f), new Vector3(0.5f, 0.5f, 0.5f), BoxKind.Static);
+            AddBox(new Vector3(10f, 0f, 0f), new Vector3(0.5f, 0.5f, 0.5f), BoxKind.Static);
+
+            Assert.That(Unsafe.SizeOf<Entity>(), Is.EqualTo(4), "a Span<Entity> crosses as packed 32-bit entity ids");
+            Span<Entity> bodies = stackalloc Entity[4];
+            Assert.That(Physics.BoxOverlap(Vector3.Zero, new Vector3(3f, 1f, 1f), Quaternion.Identity, bodies), Is.EqualTo(2));
+            Assert.That(new[] { bodies[0], bodies[1] }, Is.EquivalentTo(new[] { left, right }));
+
+            Span<Entity> one = stackalloc Entity[1];
+            Assert.That(Physics.BoxOverlap(Vector3.Zero, new Vector3(3f, 1f, 1f), Quaternion.Identity, one), Is.EqualTo(2),
+                        "the full count, never a silent truncation");
+            Assert.That(one[0] == left || one[0] == right, Is.True);
+        }
+
+        /// <summary>
         /// A box falls onto the ground: ContactBegin fires once when it lands, its handler launches it upward through the
         /// view's velocity, and ContactEnd fires once when it leaves.
         /// </summary>
@@ -246,6 +295,74 @@ namespace GameEngine.ManagedBindingTests
             }
             Array.Sort(rounds);
             TestContext.WriteLine($"RayCast median of {kRayCastRounds} x {kRayCastCalls}: {rounds[kRayCastRounds / 2]:F2} ns/call");
+        }
+
+        private const int kRayCastAllCalls = 1_000_000;
+        private const float kBoxDepth = 1f;
+
+        // Every body along the ray with one RayCastAll.
+        private static double TimeRayCastAll(RayHit[] buffer)
+        {
+            int hits = 0;
+            Vector3 forward = Vector3.UnitZ;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < kRayCastAllCalls; i++)
+                hits += Physics.RayCastAll(Vector3.Zero, forward, buffer, maxDistance: 50f);
+            watch.Stop();
+            Assert.That(hits, Is.EqualTo(3 * kRayCastAllCalls));
+            return watch.Elapsed.TotalMilliseconds * 1e6 / kRayCastAllCalls;
+        }
+
+        // Every body along the ray with RayCast in a loop: each cast starts past the box the last one hit.
+        private static double TimeRayCastLoop(RayHit[] buffer)
+        {
+            int hits = 0;
+            Vector3 forward = Vector3.UnitZ;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < kRayCastAllCalls; i++)
+            {
+                Vector3 origin = Vector3.Zero;
+                float remaining = 50f;
+                int count = 0;
+                while (count < buffer.Length && Physics.RayCast(origin, forward, out RayHit hit, remaining))
+                {
+                    buffer[count++] = hit;
+                    float step = hit.Distance + kBoxDepth + 0.01f;
+                    origin += forward * step;
+                    remaining -= step;
+                }
+                hits += count;
+            }
+            watch.Stop();
+            Assert.That(hits, Is.EqualTo(3 * kRayCastAllCalls));
+            return watch.Elapsed.TotalMilliseconds * 1e6 / kRayCastAllCalls;
+        }
+
+        /// <summary>
+        /// One million queries for every body along a ray through three boxes: RayCastAll against a loop of RayCast
+        /// calls that finds the same three bodies (four casts, the last a miss), in interleaved rounds. Run it from a
+        /// Release build. Prints nanoseconds per query for each round and the medians.
+        /// </summary>
+        [Test, Explicit("Micro-benchmark: Physics.RayCastAll against a loop of Physics.RayCast")]
+        public void Bench_RayCastAll()
+        {
+            for (int i = 0; i < 3; i++)
+                AddBox(new Vector3(0f, 0f, 5f + 5f * i), new Vector3(1f, 1f, kBoxDepth / 2f), BoxKind.Static);
+            var buffer = new RayHit[4];
+            TimeRayCastAll(buffer);
+            TimeRayCastLoop(buffer);
+            var all = new double[kRayCastRounds];
+            var loop = new double[kRayCastRounds];
+            for (int round = 0; round < kRayCastRounds; round++)
+            {
+                all[round] = TimeRayCastAll(buffer);
+                loop[round] = TimeRayCastLoop(buffer);
+                TestContext.WriteLine($"round {round}: RayCastAll {all[round]:F2} ns/query, RayCast loop {loop[round]:F2} ns/query");
+            }
+            Array.Sort(all);
+            Array.Sort(loop);
+            TestContext.WriteLine($"median of {kRayCastRounds} x {kRayCastAllCalls}: RayCastAll {all[kRayCastRounds / 2]:F2} ns/query, " +
+                                  $"RayCast loop {loop[kRayCastRounds / 2]:F2} ns/query");
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

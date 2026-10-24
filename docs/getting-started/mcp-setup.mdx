@@ -210,7 +210,7 @@ Use the same stdio command. Minimal entry (absolute paths recommended for GUI cl
    window geometry.
 
 The server also publishes three read-only resources, `gameengine://log`,
-`gameengine://scene`, and `gameengine://stats`: the recent log, the scene hierarchy, and the
+`gameengine://scene`, and `gameengine://stats`: the recent warnings and errors, the scene hierarchy, and the
 render statistics, each empty while no editor answers.
 
 For the tool list, ask the code rather than a doc that can drift:
@@ -220,11 +220,44 @@ node mcp/ge.mjs --help          # all tools, grouped by category
 node mcp/ge.mjs list            # just the names, one per line
 ```
 
+## Reading results
+
+The build, test and capture tools answer with a short summary, not with their output.
+The summary is the record of the run. Read it, and do not read the log to find a result.
+
+| Tool | The summary holds |
+|---|---|
+| `build_engine` | the exit code, the duration, the target, the error count with the first ten unique error lines, the warning count, the binaries the build wrote, and the path of the full log. Pass `includeWarnings` to list the warning lines too. |
+| `run_tests` | one registered test, run with the arguments, working directory and environment its CTest registration gives it. A gtest suite runs in one process: declared = ran + disabled, each failing test with its first message line, each skipped test with its reason, the path of the gtest XML and the path of the console log. `filter` is for a red-first run of one test only; a run in which no test ran is void and fails. Any other registration (`dotnet test`, a node, python or cmake script) reports its exit code, the last lines of its output and the path of the log, and takes no filter. |
+| `get_build_status` | the game build: running or stopped, succeeded, the error count with the first ten unique error lines, the warning count, and the output directory. |
+| `take_screenshot`, `trigger_capture`, `get_capture_status` | one record line: the file path, its size, its SHA-256, the scene view camera pose and the validation counts. The image stays on disk; open the file to look at it. Pass `includeImage` to `take_screenshot` when the client cannot read files. |
+
+`get_log` is for one specific line you are looking for:
+
+- Pass a level and a pattern: `--min-level error --pattern "shader|pipeline"`. The pattern
+  is a regular expression of at most 256 characters and ignores case; plain words joined
+  by `|` are a pattern. A level the tool does not know is refused. Without arguments the
+  tool returns warnings and errors only, at most 30 lines and about 1.5 KB of lines,
+  newest last.
+- Every answer carries `nextSince` and ends with `next`: the next call, with `since` and
+  the same level and pattern filled in. Make that call, and its answer holds only the lines
+  logged after this one. A `since` from an earlier editor session answers
+  from the start of the log and says `restarted`.
+- Do not poll the tail. Through the MCP server, a repeated call without `since` that finds
+  nothing new answers with one `unchanged` line. The `ge` CLI opens a new connection for
+  every call, so it always answers in full: pass `since` there.
+- Do not call it after a build, a suite or a capture: their summaries already hold the
+  errors.
+- When the level, the pattern or the size cap leave lines out, `omitted` says how many and
+  names a narrower call (a higher level, a pattern, or a smaller count with `offset`).
+  With `since`, `omitted.overwritten` counts the lines after the cursor that the log's
+  buffer no longer holds.
+
 ## Command-line interface
 
 ```bash title="Call tools from the command line"
 node mcp/ge.mjs get_editor_state
-node mcp/ge.mjs get_log --count 50 --min-level warning
+node mcp/ge.mjs get_log --min-level warning --pattern "shader|pipeline"
 node mcp/ge.mjs take_screenshot --target viewport
 node mcp/ge.mjs set_camera --position 70,9,50 --yaw-deg 300
 node mcp/ge.mjs get_render_stats --port 11162     # a non-default editor
@@ -247,7 +280,7 @@ works too.
 | object | `--values Intensity=3` (repeatable), or `--values '{"Intensity":3}'` |
 | object list | `--fields Current:float --fields Max:float` |
 | boolean | `--all` / `--no-all` / `--all=false`: **omitted is a third state**, and tools like `set_gizmos_visibility` rely on it |
-| everything | `ge get_log '{"count":50}'`: a lone `{…}` is the whole parameter object, so an MCP tool call pastes in verbatim |
+| everything | `ge get_log '{"minLevel":"error","since":120}'`: a lone `{…}` is the whole parameter object, so an MCP tool call pastes in verbatim |
 
 **Other subcommands.** `ge raw <method> '{…}'` forwards any debug-server method
 unvalidated, which is how the handlers with no typed tool stay reachable

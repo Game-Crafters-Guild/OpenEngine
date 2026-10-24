@@ -27,9 +27,11 @@
 #include "ECS/Components.h"
 #include "ECS/ECSTemplates.h"
 
+#include "Components/SceneViewHidden.h"
 #include "Components/Transform.h"
 #include "Components/Animation/AnimatorRef.h"
 #include "Components/Animation/SkeletonRef.h"
+#include "Components/Rendering/GIEmitter.h"
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/LODGroup.h"
 #include "Components/Rendering/MeshGPUData.h"
@@ -47,6 +49,7 @@
 #include "Assets/ModelAsset.h" // Mesh/Vertex for registry fixtures
 #include "AssetCore/GUID.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/GPUInstanceDepthClass.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Materials/MaterialDocument.h"
 
@@ -642,10 +645,11 @@ TEST_F(ExtractionFastPathTest, MeshRendererValueEditEscalatesViaProbe)
     ASSERT_NE(mgBefore, nullptr);
     const uint32 flagsBefore =
         h.rs.GetGPUScene()->GetInstances()[mgBefore->instanceIndex].flags;
-    ASSERT_NE(flagsBefore & 1u, 0u) << "castShadows expected on by default";
+    ASSERT_NE(flagsBefore & 1u, 0u) << "a mesh casts by default";
+    ASSERT_EQ(flagsBefore & Rendering::kInstanceFlagShadowsOnly, 0u);
 
     if (auto* mr = h.world->GetComponentForWrite<MeshRenderer>(e.GetHandle()))
-        mr->castShadows = false;
+        mr->shadowCasting = Components::ShadowCasting::ShadowsOnly;
     h.StepFrame();
     EXPECT_EQ(h.Stats().FastFrame, 0u);
     EXPECT_NE(h.Stats().EscalationReasonBits &
@@ -653,9 +657,61 @@ TEST_F(ExtractionFastPathTest, MeshRendererValueEditEscalatesViaProbe)
               0u);
     auto* mg = h.world->GetComponent<MeshGPUData>(e.GetHandle());
     ASSERT_NE(mg, nullptr);
-    EXPECT_EQ(h.rs.GetGPUScene()->GetInstances()[mg->instanceIndex].flags & 1u, 0u)
-        << "the full pass must fold the castShadows edit into instance flags";
+    const uint32 flagsAfter = h.rs.GetGPUScene()->GetInstances()[mg->instanceIndex].flags;
+    EXPECT_NE(flagsAfter & Rendering::kInstanceFlagShadowsOnly, 0u)
+        << "the full pass must fold the Shadow Casting edit into instance flags";
+    EXPECT_NE(flagsAfter & 1u, 0u) << "a shadows-only mesh still casts";
     ASSERT_TRUE(h.PrimeToFastPath());
+}
+
+// A GI emitter publishes a DDGI light only while it is drawn: set to Shadows Only, its instance
+// loses the emitter bit, so the light of the object it stands in for is not added twice.
+static uint32 InstanceFlagsOf(ExtractionHarness& h, const ECS::Entity& e)
+{
+    const auto* mg = h.world->GetComponent<MeshGPUData>(e.GetHandle());
+    return mg ? h.rs.GetGPUScene()->GetInstances()[mg->instanceIndex].flags : 0u;
+}
+
+TEST_F(ExtractionFastPathTest, AShadowsOnlyEmitterIsNotAGIEmitter)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), true));
+    ECS::Entity e = h.SpawnRenderable(0.0f, 0.0f, 0.0f);
+    e.Set(Components::GIEmitter{});
+    ASSERT_TRUE(h.PrimeToFastPath());
+    ASSERT_NE(InstanceFlagsOf(h, e) & Rendering::kInstanceFlagGIEmitter, 0u) << "the drawn emitter is a GI emitter";
+
+    if (auto* mr = h.world->GetComponentForWrite<MeshRenderer>(e.GetHandle()))
+        mr->shadowCasting = Components::ShadowCasting::ShadowsOnly;
+    h.StepFrame();
+    EXPECT_NE(InstanceFlagsOf(h, e) & Rendering::kInstanceFlagShadowsOnly, 0u);
+    EXPECT_EQ(InstanceFlagsOf(h, e) & Rendering::kInstanceFlagGIEmitter, 0u);
+}
+
+// The Scene View eye reaches the instance as bit 8 through the structural change its tag makes, for
+// the entity's own eye and for the derived one alike, and leaves the other bits alone: the cast bit
+// stays for the views that still draw it. Showing it again clears the bit.
+TEST_F(ExtractionFastPathTest, TheSceneViewEyeSetsAndClearsTheEditorHiddenBit)
+{
+    ExtractionHarness h;
+    ASSERT_TRUE(h.Initialize(m_Device.get(), true));
+    ECS::Entity own = h.SpawnRenderable(0.0f, 0.0f, 0.0f);
+    ECS::Entity inherited = h.SpawnRenderable(2.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(h.PrimeToFastPath());
+    const uint32 shownFlags = InstanceFlagsOf(h, own);
+    ASSERT_EQ(shownFlags & Rendering::kInstanceFlagEditorHidden, 0u);
+
+    h.world->AddComponentImmediate<Components::SceneViewHidden>(own.GetHandle(), {});
+    h.world->AddComponentImmediate<Components::SceneViewHiddenInHierarchy>(inherited.GetHandle(), {});
+    h.StepFrame();
+    EXPECT_EQ(InstanceFlagsOf(h, own), shownFlags | Rendering::kInstanceFlagEditorHidden);
+    EXPECT_NE(InstanceFlagsOf(h, inherited) & Rendering::kInstanceFlagEditorHidden, 0u);
+
+    h.world->RemoveComponentImmediate<Components::SceneViewHidden>(own.GetHandle());
+    h.world->RemoveComponentImmediate<Components::SceneViewHiddenInHierarchy>(inherited.GetHandle());
+    h.StepFrame();
+    EXPECT_EQ(InstanceFlagsOf(h, own), shownFlags);
+    EXPECT_EQ(InstanceFlagsOf(h, inherited) & Rendering::kInstanceFlagEditorHidden, 0u);
 }
 
 TEST_F(ExtractionFastPathTest, LayerOnlyChangesPublishPayloadAndInvalidateShadows)

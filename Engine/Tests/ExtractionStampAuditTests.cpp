@@ -203,7 +203,7 @@ TEST(ExtractionStampAuditTests, IdleAnimatedSceneDoesNotStampProbedColumns)
     // be a probe that matches nothing.
     const uint64 gateMr = world.GetGlobalSystemVersion();
     if (auto* mr = world.GetComponentForWrite<Components::MeshRenderer>(skinned.GetHandle()))
-        mr->castShadows = !mr->castShadows;
+        mr->shadowCasting = Components::ShadowCasting::Off;
     EXPECT_GT(VisitedSince<Components::MeshRenderer>(world, gateMr), 0u);
 
     const uint64 gateLb = world.GetGlobalSystemVersion();

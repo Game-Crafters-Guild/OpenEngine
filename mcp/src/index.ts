@@ -6,7 +6,8 @@ import { authorizeHostAction, servedTools } from "./assistant.js";
 import { ipcConfig } from "./config.js";
 import { editorCallCount, lastEditorEndpoint } from "./editor-call.js";
 import { ipc } from "./ipc-singleton.js";
-import type { ToolDef } from "./registry.js";
+import { mcpNextCall } from "./next-call.js";
+import type { ToolDef, ToolOutput } from "./registry.js";
 import { toolByName } from "./tools/index.js";
 
 // MCP front-end over the shared tool registry (src/tools/). This file adapts
@@ -35,6 +36,12 @@ try {
 }
 const servedNames = new Set(tools.map(t => t.name));
 
+/** The data as JSON, with the next call beside it when the tool names one. */
+function dataText(tool: string, out: ToolOutput): string {
+  const data = out.next ? { ...(out.data as object), next: mcpNextCall(tool, out.next) } : out.data;
+  return JSON.stringify(data, null, 2);
+}
+
 for (const tool of tools) {
   server.tool(tool.name, tool.description, tool.schema, async (args: Record<string, unknown>) => {
     // Only when this invocation actually reached an editor — attributing an
@@ -53,10 +60,10 @@ for (const tool of tools) {
         | { type: "text"; text: string }
         | { type: "image"; data: string; mimeType: string }
       > = [];
-      // Image first: an agent reading the response sees the picture before the
-      // path, which is the order take_screenshot has always answered in.
-      if (out.image) content.push({ type: "image", data: out.image.base64, mimeType: out.image.mimeType });
-      content.push({ type: "text", text: withEndpoint(out.summary ?? JSON.stringify(out.data, null, 2)) });
+      // Image first, and only when the tool asked for it inline: an agent
+      // reading the response then sees the picture before the path.
+      if (out.image?.inline) content.push({ type: "image", data: out.image.base64, mimeType: out.image.mimeType });
+      content.push({ type: "text", text: withEndpoint(out.summary ?? dataText(tool.name, out)) });
       return { content };
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: withEndpoint(err?.message ?? String(err)) }], isError: true };
@@ -85,7 +92,7 @@ function registerResource(name: string, toolName: string, description: string, a
   );
 }
 
-registerResource("log", "get_log", "Recent engine log messages", { count: 200 }, "[]");
+registerResource("log", "get_log", "Recent engine warnings and errors", {}, "{}");
 registerResource("scene", "get_scene_hierarchy", "Current scene entity hierarchy", {}, "{}");
 registerResource("stats", "get_render_stats", "Real-time render/perf stats", {}, "{}");
 

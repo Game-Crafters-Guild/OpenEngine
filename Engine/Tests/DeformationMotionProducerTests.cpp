@@ -2,7 +2,7 @@
 //
 // The producer makes four decisions before it records anything, and every one
 // of them is a correctness gate rather than a policy knob:
-//   - which arm runs, given three independent switches that share one target;
+//   - whether the view can be written at all (its refusals);
 //   - whether this frame's endpoint pair can be differenced at all, which is
 //     the discontinuity policy;
 //   - which materials are in its lane, which is also which instances the mover
@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "Engine/Rendering/DeformationMotionParams.h"
+#include "Pipeline/DeformationMotionViewClassifier.h"
 #include "Engine/Rendering/DepthDrawRecorder.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialDeformationClassify.h"
@@ -49,26 +50,6 @@ DeformationMotionRaster MakeRaster()
     return raster;
 }
 } // namespace
-
-// Three switches, one target. Exactly one arm may run.
-TEST(DeformationMotionProducer, EachSwitchSelectsItsOwnArmAndNoneIsTheDefault)
-{
-    EXPECT_EQ(ResolveDeformationMotionArm(false, false, false), DeformationMotionArm::None);
-    EXPECT_EQ(ResolveDeformationMotionArm(true, false, false),
-              DeformationMotionArm::ColorPassTarget);
-    EXPECT_EQ(ResolveDeformationMotionArm(false, true, false), DeformationMotionArm::PrepassTarget);
-    EXPECT_EQ(ResolveDeformationMotionArm(false, false, true), DeformationMotionArm::SeparatePass);
-}
-
-// Two producers writing one target would write every deforming pixel twice and
-// let record order pick the survivor. The refusal is silence, not a coin toss.
-TEST(DeformationMotionProducer, MoreThanOneEnabledArmIsRefused)
-{
-    EXPECT_EQ(ResolveDeformationMotionArm(true, true, false), DeformationMotionArm::None);
-    EXPECT_EQ(ResolveDeformationMotionArm(true, false, true), DeformationMotionArm::None);
-    EXPECT_EQ(ResolveDeformationMotionArm(false, true, true), DeformationMotionArm::None);
-    EXPECT_EQ(ResolveDeformationMotionArm(true, true, true), DeformationMotionArm::None);
-}
 
 // The block the producer uploads, member by member, against values the test
 // computes itself.
@@ -219,4 +200,54 @@ TEST(DeformationMotionProducer, AMotionTailDithersWithoutTheCoverageFragmentKeyw
                                                  /*crossfading=*/false);
     EXPECT_EQ(head.Keywords, motionHead);
     EXPECT_FALSE(HasKeyword(head.Keywords, MaterialKeyword::SSSRNormalRoughness));
+}
+
+// Every refusal names its own cause, and the producer is refused for its shape
+// only when the view has something to produce. The fallback for all of them is
+// the mover lane owning the target: the producer reports that it recorded
+// nothing, and ViewMotionVectors then clears the target in its own pass.
+TEST(DeformationMotionProducer, ARefusedViewNamesItsCause)
+{
+    DeformationMotionViewState ready{};
+    ready.HasDeformingBatchKeys = true;
+    ready.HasRenderedHistory = true;
+    EXPECT_EQ(ClassifyDeformationMotionView(ready), DeformationMotionRefusal::None)
+        << "the control: a full-viewport, single-sample view with a deformer and its history";
+
+    DeformationMotionViewState letterboxed = ready;
+    letterboxed.Letterboxed = true;
+    EXPECT_EQ(ClassifyDeformationMotionView(letterboxed), DeformationMotionRefusal::Letterboxed)
+        << "the mover lane writes nothing on a letterboxed view, and neither does the producer";
+
+    DeformationMotionViewState compatibility = ready;
+    compatibility.CompatibilityProfile = true;
+    EXPECT_EQ(ClassifyDeformationMotionView(compatibility),
+              DeformationMotionRefusal::CompatibilityProfile)
+        << "the compatibility profile's cooked materials have no motion variant";
+
+    DeformationMotionViewState multisampled = ready;
+    multisampled.DepthSampleCount = 4;
+    EXPECT_EQ(ClassifyDeformationMotionView(multisampled), DeformationMotionRefusal::Multisampled);
+
+    DeformationMotionViewState noHistory = ready;
+    noHistory.HasRenderedHistory = false;
+    EXPECT_EQ(ClassifyDeformationMotionView(noHistory), DeformationMotionRefusal::NoRenderedHistory)
+        << "the motion variant reads validity from the history unconditionally";
+
+    DeformationMotionViewState nothingDeforms = letterboxed;
+    nothingDeforms.DepthSampleCount = 4;
+    nothingDeforms.CompatibilityProfile = true;
+    nothingDeforms.HasDeformingBatchKeys = false;
+    EXPECT_EQ(ClassifyDeformationMotionView(nothingDeforms),
+              DeformationMotionRefusal::NoDeformingMaterial)
+        << "a view with nothing to produce is not refused for its shape";
+
+    for (const DeformationMotionRefusal refusal :
+         {DeformationMotionRefusal::CompatibilityProfile, DeformationMotionRefusal::Letterboxed,
+          DeformationMotionRefusal::Multisampled,
+          DeformationMotionRefusal::NoDeformingMaterial, DeformationMotionRefusal::NoRenderedHistory})
+    {
+        EXPECT_STRNE(DeformationMotionRefusalReason(refusal),
+                     DeformationMotionRefusalReason(DeformationMotionRefusal::None));
+    }
 }

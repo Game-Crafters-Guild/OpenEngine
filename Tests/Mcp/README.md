@@ -14,6 +14,7 @@ could not run.
 |---|---|---|
 | `ipc-method-drift.mjs` | `EditorIpcMethodDrift` | A `RegisterHandler()` in `Apps/Editor/Source/DebugServer` that is neither exposed as a tool in `mcp/src/tools` nor listed in `mcp/ipc-method-coverage.json` with a reason for staying raw-only. Also catches stale and redundant entries in that list. |
 | `mcp-editor-endpoint-check.mjs` | `McpEditorEndpointReport` | An answer that does not name which editor produced it. Several editors run at once, so a call that lands on the wrong one returns plausible data; every answer, including a refusal, must report the endpoint taken from the live socket. |
+| `instrument-summaries-check.mjs` | `McpInstrumentSummaries` | A capture tool that sends its image inline by default or drops the record line, `get_log` adding client-side defaults, dropping its cursor or losing the `next` call its reply ends with, a gtest or build summary that loses the counts or the first lines, a run with no test reported as passed, `run_tests` losing a suite's registered arguments, working directory or environment, or passing gtest flags to a registration that is not a gtest suite, the registered environment not reaching the process, and a tool description or CLI overview without the guidance on summaries and `get_log`. |
 | `rgp-capture-check.mjs` | `McpRgpCaptureGate` | The Radeon GPU Profiler flow attempting a capture on non-AMD hardware, refusing without naming what it found, or reporting a stale `.rgp` file as a fresh capture. |
 
 `ipc-method-drift.mjs` also runs in CI before anything is built, and takes

@@ -5,10 +5,13 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <unordered_map>
 #include <vector>
 
 #if GE_PATHFINDING_BACKEND_DETOUR
 #include <Recast.h>
+#include <DetourCommon.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshBuilder.h>
 #include <DetourNavMeshQuery.h>
@@ -24,11 +27,8 @@ static_assert(sizeof(int) == sizeof(uint32), "Recast API expects int-sized indic
 static constexpr int32 kMaxPathPolys = 256;
 static constexpr int32 kMaxStraightPathPoints = 256;
 static constexpr float32 kPolySearchExtent[3] = {2.0f, 4.0f, 2.0f};
-// Search nodes a query may visit: enough for a path across a 16,384-tile mesh.
+// Search nodes a query may visit: enough for a path across a full chart.
 static constexpr int32 kQueryNodePool = 65535;
-// Detour packs a polygon reference into 32 bits: at least 10 for the salt, the rest shared
-// between the tile index and the polygon index.
-static constexpr uint32 kTileAndPolygonBits = 22;
 
 // The tallest cell is 0.2 m: finer tracks steps better, coarser loses a 0.4 m step to rounding.
 static constexpr float32 kMaxCellHeight = 0.2f;
@@ -98,18 +98,82 @@ rcConfig MakeRecastConfig(const NavMeshSettings& settings)
     return cfg;
 }
 
-uint32 TileBitsFor(const NavMeshTileLayout& layout)
+// Why Detour cannot hold `tile`'s bytes safely, or null when it can. Detour's addTile and its queries
+// take the header's counts and every index in the data as they are, so each is checked here: the
+// header, the section sizes summed in Detour's layout against the bytes, the coordinates against the
+// key, and every polygon vertex, neighbour, detail and bounding-volume index against its array.
+const char* RefuseTileData(const NavMeshTileData& tile)
 {
-    const uint32 tiles = layout.TilesX * layout.TilesZ;
-    uint32 bits = 0;
-    while ((1u << bits) < tiles)
-        ++bits;
-    return bits;
-}
+    const std::vector<uint8>& data = tile.Data;
+    if (data.size() < sizeof(dtMeshHeader))
+        return "the tile is shorter than its header";
+    dtMeshHeader header;
+    std::memcpy(&header, data.data(), sizeof(header));
+    if (header.magic != DT_NAVMESH_MAGIC || header.version != DT_NAVMESH_VERSION)
+        return "the tile is not Detour tile data of this version";
+    if (header.x != tile.Key.X || header.y != tile.Key.Z || header.layer != 0)
+        return "the tile's coordinates are not its key's";
+    const int32 counts[] = {header.polyCount, header.vertCount, header.maxLinkCount, header.detailMeshCount,
+                            header.detailVertCount, header.detailTriCount, header.bvNodeCount};
+    for (const int32 count : counts)
+        if (count < 0 || count > (1 << 20))
+            return "a count in the tile's header is out of range";
+    if (header.polyCount > static_cast<int32>(DetourNavMap::kMaxPolygonsPerTile) || header.maxLinkCount < 1 ||
+        header.detailMeshCount != header.polyCount || header.offMeshConCount != 0 || header.offMeshBase != header.polyCount)
+        return "the tile's header does not describe a tile this engine builds";
 
-uint32 MaxPolygonsPerTile(const NavMeshTileLayout& layout)
-{
-    return 1u << (kTileAndPolygonBits - TileBitsFor(layout));
+    const size_t headerSize = static_cast<size_t>(dtAlign4(sizeof(dtMeshHeader)));
+    const size_t vertsSize = static_cast<size_t>(dtAlign4(sizeof(float) * 3 * header.vertCount));
+    const size_t polysSize = static_cast<size_t>(dtAlign4(sizeof(dtPoly) * header.polyCount));
+    const size_t linksSize = static_cast<size_t>(dtAlign4(sizeof(dtLink) * header.maxLinkCount));
+    const size_t detailMeshesSize = static_cast<size_t>(dtAlign4(sizeof(dtPolyDetail) * header.detailMeshCount));
+    const size_t detailVertsSize = static_cast<size_t>(dtAlign4(sizeof(float) * 3 * header.detailVertCount));
+    const size_t detailTrisSize = static_cast<size_t>(dtAlign4(sizeof(unsigned char) * 4 * header.detailTriCount));
+    const size_t bvTreeSize = static_cast<size_t>(dtAlign4(sizeof(dtBVNode) * header.bvNodeCount));
+    if (headerSize + vertsSize + polysSize + linksSize + detailMeshesSize + detailVertsSize + detailTrisSize +
+            bvTreeSize !=
+        data.size())
+        return "the tile's sections do not add up to its size";
+
+    const uint8* polysAt = data.data() + headerSize + vertsSize;
+    const uint8* detailMeshesAt = polysAt + polysSize + linksSize;
+    const uint8* detailTrisAt = detailMeshesAt + detailMeshesSize + detailVertsSize;
+    const uint8* bvTreeAt = detailTrisAt + detailTrisSize;
+    for (int32 p = 0; p < header.polyCount; ++p)
+    {
+        dtPoly poly;
+        std::memcpy(&poly, polysAt + sizeof(dtPoly) * p, sizeof(poly));
+        if (poly.vertCount < 3 || poly.vertCount > DT_VERTS_PER_POLYGON || poly.getType() != DT_POLYTYPE_GROUND)
+            return "a polygon of the tile is malformed";
+        for (uint32 v = 0; v < poly.vertCount; ++v)
+        {
+            if (poly.verts[v] >= header.vertCount)
+                return "a polygon of the tile names a vertex it does not have";
+            const uint16 neighbour = poly.neis[v];
+            if (neighbour != 0 && (neighbour & DT_EXT_LINK) == 0 && neighbour > header.polyCount)
+                return "a polygon of the tile names a neighbour it does not have";
+        }
+        dtPolyDetail detail;
+        std::memcpy(&detail, detailMeshesAt + sizeof(dtPolyDetail) * p, sizeof(detail));
+        if (static_cast<uint64>(detail.vertBase) + detail.vertCount > static_cast<uint64>(header.detailVertCount) ||
+            static_cast<uint64>(detail.triBase) + detail.triCount > static_cast<uint64>(header.detailTriCount))
+            return "a detail mesh of the tile lies outside its arrays";
+        for (uint32 t = 0; t < detail.triCount; ++t)
+        {
+            const uint8* triangle = detailTrisAt + 4 * (static_cast<size_t>(detail.triBase) + t);
+            for (int32 corner = 0; corner < 3; ++corner)
+                if (triangle[corner] >= poly.vertCount + detail.vertCount)
+                    return "a detail triangle of the tile names a vertex it does not have";
+        }
+    }
+    for (int32 n = 0; n < header.bvNodeCount; ++n)
+    {
+        dtBVNode node;
+        std::memcpy(&node, bvTreeAt + sizeof(dtBVNode) * n, sizeof(node));
+        if (node.i >= header.polyCount || node.i < -header.bvNodeCount)
+            return "a bounding-volume node of the tile names a polygon it does not have";
+    }
+    return nullptr;
 }
 
 // Owns the Recast intermediates of one tile build and frees them on every exit path.
@@ -136,10 +200,16 @@ struct TileBuildScratch
 struct DetourNavMap::Impl
 {
     NavMeshSettings Settings;
-    NavMeshTileLayout Layout;
+    NavMeshChart Chart;
     dtNavMesh* NavMesh = nullptr;
     dtNavMeshQuery* NavQuery = nullptr;
     dtQueryFilter Filter;
+    // Pool slots no tile holds, freed longest ago first: AddTile takes the front and RemoveTile
+    // appends, so a slot (and the salt of its references) is reused as late as the pool allows.
+    std::deque<int32> FreeSlots;
+    // Each held tile as it was added. Detour links a tile in its own copy of the bytes, so these
+    // are the bytes a file keeps: the same for the same build whatever the mesh around it.
+    std::unordered_map<NavTileKey, NavMeshTileData, NavTileKeyHash> Tiles;
 
     // Rebuilt from the tiles on first access after AddTile or RemoveTile changed them.
     mutable std::vector<float32> DebugVertices;
@@ -174,6 +244,20 @@ struct DetourNavMap::Impl
             return false;
         }
         return true;
+    }
+
+    void ToLocal(float32 x, float32 y, float32 z, float32 out[3]) const
+    {
+        Chart.ToChart(x, y, z, out);
+    }
+
+    void ToWorld(const float32 local[3], float32& outX, float32& outY, float32& outZ) const
+    {
+        float64 world[3];
+        Chart.ToWorld(local, world);
+        outX = static_cast<float32>(world[0]);
+        outY = static_cast<float32>(world[1]);
+        outZ = static_cast<float32>(world[2]);
     }
 
     // An edge with no polygon across it: no neighbour inside the tile, and a tile-border edge whose
@@ -218,10 +302,9 @@ struct DetourNavMap::Impl
 
             for (int32 v = 0; v < tile->header->vertCount; ++v)
             {
-                const float32* vert = &tile->verts[v * 3];
-                DebugVertices.push_back(vert[0]);
-                DebugVertices.push_back(vert[1]);
-                DebugVertices.push_back(vert[2]);
+                float32 world[3];
+                ToWorld(&tile->verts[v * 3], world[0], world[1], world[2]);
+                DebugVertices.insert(DebugVertices.end(), world, world + 3);
             }
 
             for (int32 p = 0; p < tile->header->polyCount; ++p)
@@ -259,22 +342,18 @@ DetourNavMap::~DetourNavMap() = default;
 DetourNavMap::DetourNavMap(DetourNavMap&&) noexcept = default;
 DetourNavMap& DetourNavMap::operator=(DetourNavMap&&) noexcept = default;
 
-bool DetourNavMap::Initialize(const NavMeshSettings& settings, const NavMeshTileLayout& layout)
+bool DetourNavMap::Initialize(const NavMeshSettings& settings, const NavMeshChart& chart)
 {
     m_Impl = std::make_unique<Impl>();
-    const uint64 tiles = static_cast<uint64>(layout.TilesX) * layout.TilesZ;
-    if (tiles == 0 || tiles > kMaxTiles || !(settings.CellSize > 0.0f))
+    if (!(settings.CellSize > 0.0f) || !chart.HasIdentityRotation())
         return false;
 
-    const float32 tileSize = static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
+    // The origin is zero: tiles are built and kept in the chart's frame.
     dtNavMeshParams params = {};
-    params.orig[0] = layout.OriginX;
-    params.orig[1] = layout.OriginY;
-    params.orig[2] = layout.OriginZ;
-    params.tileWidth = tileSize;
-    params.tileHeight = tileSize;
-    params.maxTiles = static_cast<int32>(1u << TileBitsFor(layout));
-    params.maxPolys = static_cast<int32>(MaxPolygonsPerTile(layout));
+    params.tileWidth = GetTileSize(settings);
+    params.tileHeight = params.tileWidth;
+    params.maxTiles = static_cast<int32>(kMaxTiles);
+    params.maxPolys = static_cast<int32>(kMaxPolygonsPerTile);
 
     m_Impl->NavMesh = dtAllocNavMesh();
     if (!m_Impl->NavMesh)
@@ -285,7 +364,9 @@ bool DetourNavMap::Initialize(const NavMeshSettings& settings, const NavMeshTile
         return false;
     }
     m_Impl->Settings = settings;
-    m_Impl->Layout = layout;
+    m_Impl->Chart = chart;
+    for (int32 slot = 0; slot < static_cast<int32>(kMaxTiles); ++slot)
+        m_Impl->FreeSlots.push_back(slot);
     return true;
 }
 
@@ -299,17 +380,22 @@ const NavMeshSettings& DetourNavMap::GetSettings() const
     return m_Impl->Settings;
 }
 
-const NavMeshTileLayout& DetourNavMap::GetLayout() const
+const NavMeshChart& DetourNavMap::GetChart() const
 {
-    return m_Impl->Layout;
+    return m_Impl->Chart;
 }
 
-void DetourNavMap::GetTileBounds(const NavMeshSettings& settings, const NavMeshTileLayout& layout, uint32 tileX,
-                                 uint32 tileZ, float32& outMinX, float32& outMinZ, float32& outMaxX, float32& outMaxZ)
+float32 DetourNavMap::GetTileSize(const NavMeshSettings& settings)
 {
-    const float32 tileSize = static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
-    outMinX = layout.OriginX + static_cast<float32>(tileX) * tileSize;
-    outMinZ = layout.OriginZ + static_cast<float32>(tileZ) * tileSize;
+    return static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
+}
+
+void DetourNavMap::GetTileBounds(const NavMeshSettings& settings, int32 tileX, int32 tileZ, float32& outMinX,
+                                 float32& outMinZ, float32& outMaxX, float32& outMaxZ)
+{
+    const float32 tileSize = GetTileSize(settings);
+    outMinX = static_cast<float32>(tileX) * tileSize;
+    outMinZ = static_cast<float32>(tileZ) * tileSize;
     outMaxX = outMinX + tileSize;
     outMaxZ = outMinZ + tileSize;
 }
@@ -319,13 +405,11 @@ float32 DetourNavMap::GetTileBorder(const NavMeshSettings& settings)
     return static_cast<float32>(WalkableRadiusCells(settings) + kTileBorderPaddingCells) * settings.CellSize;
 }
 
-bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileLayout& layout, uint32 tileX,
-                             uint32 tileZ, const InputGeometry& geometry, NavMeshTileData& outTile,
-                             std::string& outError)
+bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavTileKey& key, const InputGeometry& geometry,
+                             NavMeshTileData& outTile, std::string& outError)
 {
     outTile = {};
-    outTile.TileX = tileX;
-    outTile.TileZ = tileZ;
+    outTile.Key = key;
     if (!geometry.Vertices || geometry.VertexCount == 0 || !geometry.Indices || geometry.TriangleCount == 0)
         return true;
 
@@ -334,7 +418,7 @@ bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileL
     float32 geometryMax[3];
     rcCalcBounds(geometry.Vertices, static_cast<int32>(geometry.VertexCount), geometryMin, geometryMax);
     float32 minX = 0.0f, minZ = 0.0f, maxX = 0.0f, maxZ = 0.0f;
-    GetTileBounds(settings, layout, tileX, tileZ, minX, minZ, maxX, maxZ);
+    GetTileBounds(settings, key.X, key.Z, minX, minZ, maxX, maxZ);
     const float32 border = static_cast<float32>(cfg.borderSize) * cfg.cs;
     cfg.bmin[0] = minX - border;
     cfg.bmin[1] = geometryMin[1];
@@ -380,6 +464,14 @@ bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileL
     rcFreeHeightField(scratch.Heightfield);
     scratch.Heightfield = nullptr;
 
+    // Carves are cut before erosion, so the agent keeps its radius from them as from a wall.
+    for (uint32 i = 0; i < geometry.CarveCount; ++i)
+    {
+        const CarvePrism& carve = geometry.Carves[i];
+        rcMarkConvexPolyArea(&ctx, carve.Points, static_cast<int32>(carve.PointCount), carve.MinY, carve.MaxY,
+                             RC_NULL_AREA, *scratch.Compact);
+    }
+
     if (!rcErodeWalkableArea(&ctx, cfg.walkableRadius, *scratch.Compact) ||
         !rcBuildDistanceField(&ctx, *scratch.Compact) ||
         !rcBuildRegions(&ctx, *scratch.Compact, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea))
@@ -414,12 +506,10 @@ bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileL
     rcPolyMesh& polyMesh = *scratch.PolyMesh;
     if (polyMesh.npolys == 0)
         return true;
-    const uint32 maxPolygons = MaxPolygonsPerTile(layout);
-    if (static_cast<uint32>(polyMesh.npolys) > maxPolygons)
+    if (static_cast<uint32>(polyMesh.npolys) > kMaxPolygonsPerTile)
     {
-        outError = "the tile has " + std::to_string(polyMesh.npolys) + " polygons and " +
-                   std::to_string(layout.TilesX * layout.TilesZ) + " tiles leave room for " +
-                   std::to_string(maxPolygons) + ": raise Cell Size or shrink the bounds";
+        outError = "the tile has " + std::to_string(polyMesh.npolys) + " polygons and a tile holds " +
+                   std::to_string(kMaxPolygonsPerTile) + ": raise Cell Size";
         return false;
     }
     for (int32 i = 0; i < polyMesh.npolys; ++i)
@@ -441,8 +531,8 @@ bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileL
     params.walkableHeight = settings.AgentHeight;
     params.walkableRadius = settings.AgentRadius;
     params.walkableClimb = CellClimbFor(settings);
-    params.tileX = static_cast<int32>(tileX);
-    params.tileY = static_cast<int32>(tileZ);
+    params.tileX = key.X;
+    params.tileY = key.Z;
     params.tileLayer = 0;
     rcVcopy(params.bmin, polyMesh.bmin);
     rcVcopy(params.bmax, polyMesh.bmax);
@@ -463,38 +553,66 @@ bool DetourNavMap::BuildTile(const NavMeshSettings& settings, const NavMeshTileL
     return true;
 }
 
-bool DetourNavMap::AddTile(const NavMeshTileData& tile)
+bool DetourNavMap::AddTile(const NavMeshTileData& tile, std::string* outRefusal)
 {
     if (!IsBuilt())
         return false;
-    RemoveTile(tile.TileX, tile.TileZ);
+    if (!tile.Data.empty())
+    {
+        const char* refusal = RefuseTileData(tile);
+        if (refusal)
+        {
+            if (outRefusal)
+                *outRefusal = refusal;
+            return false;
+        }
+    }
+    RemoveTile(tile.Key);
     if (tile.Data.empty())
+    {
+        // No walkable area: Detour holds nothing, the map keeps the key and the content hash.
+        m_Impl->Tiles[tile.Key] = tile;
         return true;
+    }
+    if (m_Impl->FreeSlots.empty())
+        return false;
 
     // Detour owns and frees the data it is given (DT_TILE_FREE_DATA), so it gets its own copy.
     auto* data = static_cast<uint8*>(dtAlloc(static_cast<int32>(tile.Data.size()), DT_ALLOC_PERM));
     if (!data)
         return false;
     std::memcpy(data, tile.Data.data(), tile.Data.size());
-    if (dtStatusFailed(m_Impl->NavMesh->addTile(data, static_cast<int32>(tile.Data.size()), DT_TILE_FREE_DATA, 0,
-                                                nullptr)))
+    // A tile reference naming the slot and its current salt makes Detour place the tile there.
+    dtNavMesh& navMesh = *m_Impl->NavMesh;
+    const int32 slot = m_Impl->FreeSlots.front();
+    const dtMeshTile* slotTile = static_cast<const dtNavMesh&>(navMesh).getTile(slot);
+    const dtTileRef slotRef = navMesh.encodePolyId(slotTile->salt, static_cast<uint32>(slot), 0);
+    if (dtStatusFailed(
+            navMesh.addTile(data, static_cast<int32>(tile.Data.size()), DT_TILE_FREE_DATA, slotRef, nullptr)))
     {
         dtFree(data);
         return false;
     }
+    m_Impl->FreeSlots.pop_front();
+    m_Impl->Tiles[tile.Key] = tile;
     m_Impl->DebugMeshDirty = true;
     return true;
 }
 
-bool DetourNavMap::RemoveTile(uint32 tileX, uint32 tileZ)
+bool DetourNavMap::RemoveTile(const NavTileKey& key)
 {
     if (!IsBuilt())
         return false;
-    const dtTileRef ref = m_Impl->NavMesh->getTileRefAt(static_cast<int32>(tileX), static_cast<int32>(tileZ), 0);
-    if (!ref || dtStatusFailed(m_Impl->NavMesh->removeTile(ref, nullptr, nullptr)))
-        return false;
-    m_Impl->DebugMeshDirty = true;
-    return true;
+    dtNavMesh& navMesh = *m_Impl->NavMesh;
+    const dtTileRef ref = navMesh.getTileRefAt(key.X, key.Z, 0);
+    if (ref)
+    {
+        if (dtStatusFailed(navMesh.removeTile(ref, nullptr, nullptr)))
+            return false;
+        m_Impl->FreeSlots.push_back(static_cast<int32>(navMesh.decodePolyIdTile(ref)));
+        m_Impl->DebugMeshDirty = true;
+    }
+    return m_Impl->Tiles.erase(key) > 0 || ref != 0;
 }
 
 uint32 DetourNavMap::GetTileCount() const
@@ -542,13 +660,25 @@ uint64 DetourNavMap::GetTileDataBytes() const
     return bytes;
 }
 
+void DetourNavMap::CopyTiles(std::vector<NavMeshTileData>& out) const
+{
+    out.clear();
+    if (!IsBuilt())
+        return;
+    out.reserve(m_Impl->Tiles.size());
+    for (const auto& [key, tile] : m_Impl->Tiles)
+        out.push_back(tile);
+}
+
 PathStatus DetourNavMap::FindPath(const PathRequest& request, PathBuffer& pathBuffer, PathHandle& outPath) const
 {
     if (!IsBuilt())
         return PathStatus::Failed;
 
-    const float32 startPos[3] = {request.StartX, request.StartY, request.StartZ};
-    const float32 endPos[3] = {request.EndX, request.EndY, request.EndZ};
+    float32 startPos[3];
+    float32 endPos[3];
+    m_Impl->ToLocal(request.StartX, request.StartY, request.StartZ, startPos);
+    m_Impl->ToLocal(request.EndX, request.EndY, request.EndZ, endPos);
     const float32 extent[3] = {request.AgentRadius * 4.0f, request.AgentHeight, request.AgentRadius * 4.0f};
 
     dtPolyRef startRef = 0, endRef = 0;
@@ -587,11 +717,7 @@ PathStatus DetourNavMap::FindPath(const PathRequest& request, PathBuffer& pathBu
 
     std::vector<PathPoint> points(straightPathCount);
     for (int32 i = 0; i < straightPathCount; ++i)
-    {
-        points[i].X = straightPath[i * 3 + 0];
-        points[i].Y = straightPath[i * 3 + 1];
-        points[i].Z = straightPath[i * 3 + 2];
-    }
+        m_Impl->ToWorld(&straightPath[i * 3], points[i].X, points[i].Y, points[i].Z);
 
     outPath = pathBuffer.AllocatePath(points.data(), static_cast<uint32>(points.size()));
 
@@ -605,7 +731,8 @@ bool DetourNavMap::IsPointNavigable(float32 x, float32 y, float32 z, float32 rad
     if (!IsBuilt())
         return false;
 
-    const float32 pos[3] = {x, y, z};
+    float32 pos[3];
+    m_Impl->ToLocal(x, y, z, pos);
     const float32 extent[3] = {radius, radius * 2.0f, radius};
 
     dtPolyRef ref = 0;
@@ -617,10 +744,10 @@ bool DetourNavMap::IsPointNavigable(float32 x, float32 y, float32 z, float32 rad
     // Check XZ distance to nearest navigable point (height is checked separately
     // with a more generous tolerance since navmesh Y can differ from query Y due
     // to terrain slope within a polygon).
-    const float32 dx = nearestPos[0] - x;
-    const float32 dz = nearestPos[2] - z;
+    const float32 dx = nearestPos[0] - pos[0];
+    const float32 dz = nearestPos[2] - pos[2];
     const float32 distXZSq = dx * dx + dz * dz;
-    const float32 dy = std::abs(nearestPos[1] - y);
+    const float32 dy = std::abs(nearestPos[1] - pos[1]);
     return distXZSq <= radius * radius && dy <= radius * 2.0f;
 }
 
@@ -630,7 +757,8 @@ bool DetourNavMap::GetClosestNavigablePoint(float32 x, float32 y, float32 z, flo
     if (!IsBuilt())
         return false;
 
-    const float32 pos[3] = {x, y, z};
+    float32 pos[3];
+    m_Impl->ToLocal(x, y, z, pos);
     const float32 extent[3] = {searchRadius, searchRadius, searchRadius};
 
     dtPolyRef ref = 0;
@@ -641,14 +769,12 @@ bool DetourNavMap::GetClosestNavigablePoint(float32 x, float32 y, float32 z, flo
 
     // Reject results outside the requested search radius in the XZ plane
     // (Detour's extent is an AABB, so corner results can exceed the radius).
-    const float32 dx = nearestPos[0] - x;
-    const float32 dz = nearestPos[2] - z;
+    const float32 dx = nearestPos[0] - pos[0];
+    const float32 dz = nearestPos[2] - pos[2];
     if (dx * dx + dz * dz > searchRadius * searchRadius)
         return false;
 
-    outX = nearestPos[0];
-    outY = nearestPos[1];
-    outZ = nearestPos[2];
+    m_Impl->ToWorld(nearestPos, outX, outY, outZ);
     return true;
 }
 
@@ -665,8 +791,10 @@ bool DetourNavMap::Raycast(float32 startX, float32 startY, float32 startZ,
     if (!IsBuilt())
         return false;
 
-    const float32 startPos[3] = {startX, startY, startZ};
-    const float32 endPos[3] = {endX, endY, endZ};
+    float32 startPos[3];
+    float32 endPos[3];
+    m_Impl->ToLocal(startX, startY, startZ, startPos);
+    m_Impl->ToLocal(endX, endY, endZ, endPos);
 
     dtPolyRef startRef = 0;
     float32 nearestPos[3];
@@ -688,9 +816,10 @@ bool DetourNavMap::Raycast(float32 startX, float32 startY, float32 startZ,
     if (t >= 1.0f)
         return false; // No hit, ray reached end
 
-    hitX = nearestPos[0] + (endPos[0] - nearestPos[0]) * t;
-    hitY = nearestPos[1] + (endPos[1] - nearestPos[1]) * t;
-    hitZ = nearestPos[2] + (endPos[2] - nearestPos[2]) * t;
+    const float32 hit[3] = {nearestPos[0] + (endPos[0] - nearestPos[0]) * t,
+                            nearestPos[1] + (endPos[1] - nearestPos[1]) * t,
+                            nearestPos[2] + (endPos[2] - nearestPos[2]) * t};
+    m_Impl->ToWorld(hit, hitX, hitY, hitZ);
     return true;
 }
 
@@ -761,7 +890,7 @@ DetourNavMap::~DetourNavMap() = default;
 DetourNavMap::DetourNavMap(DetourNavMap&&) noexcept = default;
 DetourNavMap& DetourNavMap::operator=(DetourNavMap&&) noexcept = default;
 
-bool DetourNavMap::Initialize(const NavMeshSettings& /*settings*/, const NavMeshTileLayout& /*layout*/)
+bool DetourNavMap::Initialize(const NavMeshSettings& /*settings*/, const NavMeshChart& /*chart*/)
 {
     return false;
 }
@@ -777,18 +906,23 @@ const NavMeshSettings& DetourNavMap::GetSettings() const
     return kNone;
 }
 
-const NavMeshTileLayout& DetourNavMap::GetLayout() const
+const NavMeshChart& DetourNavMap::GetChart() const
 {
-    static const NavMeshTileLayout kNone;
+    static const NavMeshChart kNone;
     return kNone;
 }
 
-void DetourNavMap::GetTileBounds(const NavMeshSettings& settings, const NavMeshTileLayout& layout, uint32 tileX,
-                                 uint32 tileZ, float32& outMinX, float32& outMinZ, float32& outMaxX, float32& outMaxZ)
+float32 DetourNavMap::GetTileSize(const NavMeshSettings& settings)
 {
-    const float32 tileSize = static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
-    outMinX = layout.OriginX + static_cast<float32>(tileX) * tileSize;
-    outMinZ = layout.OriginZ + static_cast<float32>(tileZ) * tileSize;
+    return static_cast<float32>(kNavMeshTileCells) * settings.CellSize;
+}
+
+void DetourNavMap::GetTileBounds(const NavMeshSettings& settings, int32 tileX, int32 tileZ, float32& outMinX,
+                                 float32& outMinZ, float32& outMaxX, float32& outMaxZ)
+{
+    const float32 tileSize = GetTileSize(settings);
+    outMinX = static_cast<float32>(tileX) * tileSize;
+    outMinZ = static_cast<float32>(tileZ) * tileSize;
     outMaxX = outMinX + tileSize;
     outMaxZ = outMinZ + tileSize;
 }
@@ -798,20 +932,19 @@ float32 DetourNavMap::GetTileBorder(const NavMeshSettings& /*settings*/)
     return 0.0f;
 }
 
-bool DetourNavMap::BuildTile(const NavMeshSettings& /*settings*/, const NavMeshTileLayout& /*layout*/,
-                             uint32 /*tileX*/, uint32 /*tileZ*/, const InputGeometry& /*geometry*/,
-                             NavMeshTileData& /*outTile*/, std::string& outError)
+bool DetourNavMap::BuildTile(const NavMeshSettings& /*settings*/, const NavTileKey& /*key*/,
+                             const InputGeometry& /*geometry*/, NavMeshTileData& /*outTile*/, std::string& outError)
 {
     outError = "the engine was built without the Recast/Detour backend";
     return false;
 }
 
-bool DetourNavMap::AddTile(const NavMeshTileData& /*tile*/)
+bool DetourNavMap::AddTile(const NavMeshTileData& /*tile*/, std::string* /*outRefusal*/)
 {
     return false;
 }
 
-bool DetourNavMap::RemoveTile(uint32 /*tileX*/, uint32 /*tileZ*/)
+bool DetourNavMap::RemoveTile(const NavTileKey& /*key*/)
 {
     return false;
 }
@@ -829,6 +962,11 @@ uint32 DetourNavMap::GetPolygonCount() const
 uint64 DetourNavMap::GetTileDataBytes() const
 {
     return 0;
+}
+
+void DetourNavMap::CopyTiles(std::vector<NavMeshTileData>& out) const
+{
+    out.clear();
 }
 
 PathStatus DetourNavMap::FindPath(const PathRequest& /*request*/, PathBuffer& /*pathBuffer*/, PathHandle& /*outPath*/) const

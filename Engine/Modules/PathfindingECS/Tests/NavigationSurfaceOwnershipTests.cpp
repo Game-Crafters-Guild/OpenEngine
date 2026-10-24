@@ -1,4 +1,5 @@
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Components/NavigationSurface.h"
@@ -402,7 +403,7 @@ TEST_F(NavigationSurfaceOwnershipTest, UndoKeepsTheStatusOfTheMapTheSurfaceHolds
     world->AddComponentImmediate(entity, edited);
     ASSERT_TRUE(Navigation::RequestBake(*world, entity));
     build.Update(*world, 0);
-    const uint32 newerVersion = world->GetComponent<Surface>(entity)->BakeVersion;
+    const uint64 newerVersion = world->GetComponent<Surface>(entity)->BakeVersion;
     ASSERT_GT(newerVersion, beforeEdit.BakeVersion);
 
     world->AddComponentImmediate(entity, beforeEdit); // undo the radius edit

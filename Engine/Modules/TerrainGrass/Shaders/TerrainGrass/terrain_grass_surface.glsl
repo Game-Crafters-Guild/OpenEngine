@@ -25,6 +25,7 @@ layout(location = 4) flat in float vGrassCoverage;
 #include "Includes/bindless_textures.glsl"
 #include "Includes/srgb_transfer.glsl"
 #include "Includes/terrain_grass_canopy.glsl"
+#include "Includes/terrain_color_map.glsl"
 #include "TerrainGrass/grass_clump.glsl"
 
 #if defined(GE_COMPAT_PROFILE)
@@ -32,7 +33,7 @@ layout(location = 4) flat in float vGrassCoverage;
 // placement compute runs, so a blade's colour and its placement mask read one answer. Spelled
 // "CBT/..." because the surface is compiled by MaterialBuildService, whose include roots are the
 // Assets/Shaders tree; the compute, whose path carries the CBT directory itself, says
-// "cbt_atlas.glsl". The full profile resolves the ground in the vertex stage
+// "cbt_atlas.glsl". The full profile resolves the ground in the placement compute
 // (grass_root_ground_color.glsl), so only this profile's surface reads the splat.
 #include "CBT/cbt_atlas.glsl"
 #define GRASS_ATLAS_SET 2
@@ -66,6 +67,10 @@ layout(set = 2, binding = 25) uniform texture2D gGrassBladeNormal;
 layout(set = 2, binding = 26) uniform texture2D gGrassVtxHeightmap;
 layout(set = 2, binding = 27) uniform texture2D gGrassVtxNormalmap;
 layout(set = 2, binding = 28) uniform sampler gGrassMapSampler;
+// The terrain's unified colour map (TerrainColorMap.h); an atlas-backed terrain's is not bound here.
+layout(set = 2, binding = 29) uniform texture2D gGrassColormap;
+// TerrainGPUParams::Flags bit (mirror Terrain::kTerrainFlagHasColorMap).
+const uint kGrassTerrainFlagHasColorMap = 64u;
 
 // GLSL cannot return an opaque sampler from a function, so the slot walk completes the tap.
 vec3 GrassCompatLayerAlbedo(uint slot, vec2 uv, vec2 ddx, vec2 ddy)
@@ -182,6 +187,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -190,10 +196,11 @@ layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
 };
 
 // THE COMPAT PROFILE'S PER-FRAGMENT GROUND RESOLVE. The full profile resolves a blade's ground
-// colour once, at its root, in the vertex stage (grass_root_ground_color.glsl) and reads it from
-// vGrassBlade: a per-fragment resolve at the fragment's own position draws a textured ground's
-// pattern up a leaning blade (#4206). This profile keeps the per-fragment resolve below until its
-// own change moves it.
+// colour once, at its root, in the placement compute (grass_root_ground_color.glsl) and reads it
+// from vGrassBlade: a per-fragment resolve at the fragment's own position draws a textured ground's
+// pattern up a leaning blade (#4206). This profile resolves per fragment because its placement
+// compute has no texture binding array to tap the layer textures through; the surface reads the two
+// layer albedos as named bindings (gGrassLayer0Albedo, gGrassLayer1Albedo).
 #if defined(GE_COMPAT_PROFILE)
 // Never expanded on this profile — the tap seam below selects a named binding instead. Defined
 // only because the include requires the symbol; expanding it is a compile error naming this line.
@@ -333,6 +340,12 @@ vec3 sampleTerrainBaseColor(TerrainParamsEntry tp, vec3 posWS, vec3 posRelWS)
             color += CBT_MaterialAlbedo(uint(i), mat, tc, muv, posWS, footprintWS) * weights[i];
         }
     }
+    // The colour map, mixed in as the ground mixes it (cbt_surface.glsl). The atlas map is not bound
+    // on this profile, so an atlas-backed terrain's blades read none, as its ground does.
+    if ((tp.Flags & kGrassTerrainFlagHasColorMap) != 0u && !grassAtlasBacked(tp.Flags))
+    {
+        color = TerrainApplyColorMap(color, GRASS_COMPAT_LATTICE_TAP(gGrassColormap, uv));
+    }
     return color;
 }
 #endif // GE_COMPAT_PROFILE
@@ -387,35 +400,38 @@ float grassDitherThreshold(vec2 pixel)
 const float kGrassCoverageDitherAmp = 0.25;
 #endif
 
-// THE GROUND HANDOVER: how far this fragment's ALBEDO has left the ground it grows out of. 0 below
-// RootFadeStart, where the blade IS the ground, and 1 above RootFadeEnd, where it is entirely its
-// canopy colour. This is a material lever, authored on the component, and it moves the colour
-// only. It does NOT shape the canopy: the canopy's own root-to-tip gradient (grassCanopyRise) runs
-// the whole blade whatever span is authored here, so a short handover cannot flatten the upper
-// blade into one colour. The shading-normal settle below also runs the whole blade: the lighting
-// handover is the physical part, and a shorter span for it is what put a dark band across the
-// lower-middle of backlit blades (kGrassNormalSettleBladeRange carries that measurement). The
-// shipped span is the lowest quarter of the blade. The clamp pass keeps RootFadeEnd above
-// RootFadeStart, which smoothstep requires.
-float grassBladeRise(TerrainParamsEntry tp, float t)
-{
-    return smoothstep(tp.GrassRootFadeStart, tp.GrassRootFadeEnd, t);
-}
-
-// THE CANOPY GRADIENT: the blade's own colour from RootColor at its root to TipColor at its tip,
-// over the whole blade. Fixed, and independent of the authored ground handover above.
-float grassCanopyRise(float t)
-{
-    return smoothstep(0.0, 1.0, t);
-}
-
 // Distance-settled blade normals. Near the camera a blade shades with the rounded normal the vertex
 // stage builds across its width, so it reads as a leaf. Far
 // away that variation is sub-pixel and feeds specular aliasing rather than form, so it gives way
 // to the TERRAIN normal, shading the field as one lit surface with the ground it stands on.
 // Fraction of the far-LOD band over which that handover completes, so it holds as GrassRange is
 // authored rather than being a second distance control that can disagree with the first.
-const float kGrassNormalSettleRange = 0.55;
+// The literals from here to the specular weight carry the `f` suffix because the block is compiled
+// as C++ by the host tests (GlslShim.h).
+// GE_SHARED_GRASS_BLADE_LOBE_BEGIN
+// THE CANOPY GRADIENT: the blade's own colour from its root end (GrassBladeCanopyRoot) at its root
+// to TipColor at its tip, over the whole blade. Fixed, and independent of the authored ground
+// handover below.
+float grassCanopyRise(float t)
+{
+    return smoothstep(0.0f, 1.0f, t);
+}
+
+// THE CANOPY'S ROOT END. An authored Root Color is the canopy's root. Under Auto with Splat Root
+// Color on (`rootFromGround`), the canopy starts from the ground the blade grows out of, so the
+// ground handover and the canopy gradient make one ramp from the ground into the leaf: the blade
+// reads root, then leaf. A root darker than the ground, as the tip in shade is, would show as a
+// band above the handover, darker than the ground beside the blade. Grounding Strength sets how much
+// of the ground the canopy starts from: 1 starts it from the ground, 0 from the tip in shade, so at
+// 0 no part of the blade takes the ground, as on an authored root. Under Auto without Splat Root
+// Color there is no ground to start from, and `rootColor` is the tip in shade
+// (kTerrainGrassAutoRootLuminance in TerrainGrass.h).
+vec3 GrassBladeCanopyRoot(vec3 rootColor, vec3 groundColor, bool rootFromGround, float groundingStrength)
+{
+    return rootFromGround ? mix(rootColor, groundColor, groundingStrength) : rootColor;
+}
+
+const float kGrassNormalSettleRange = 0.55f;
 // Height fraction over which the same handover completes along the BLADE: fully settled onto the
 // terrain normal at the root, entirely the blade's own normal above this. It runs the WHOLE blade,
 // independent of the authored colour span (RootFadeStart / RootFadeEnd), which is a material
@@ -444,7 +460,7 @@ const float kGrassNormalSettleRange = 0.55;
 //
 // It does not share a value with the far-LOD range above: one is a fraction of the far-LOD band
 // and the other a fraction of blade height, tuned against different measurements.
-const float kGrassNormalSettleBladeRange = 1.0;
+const float kGrassNormalSettleBladeRange = 1.0f;
 // THE LEAF'S FORM. The vertex stage shades a blade as a shallow rounded channel: the two edge
 // normals are the face normal turned by kGrassBladeFoldRadians about the spine, one each way, and
 // the hardware interpolates between them across the width. That is the blade's whole form; it
@@ -453,8 +469,66 @@ const float kGrassNormalSettleBladeRange = 1.0;
 // Gloss follows the normal detail it belongs to: a lobe justified by per-blade normal variation has
 // to widen as that variation settles out, or it survives as glitter on a surface that no longer has
 // the geometry to earn it: a near blade is at roughness 0.55, the settled canopy is matte.
-const float kGrassBladeRoughness = 0.55;
-const float kGrassCanopyRoughness = 1.0;
+//
+// THE LEAF'S SHINE. The leaf colour is the leaf as it looks face-on, its shine included, so above
+// the ground handover the lobe carries no face-on reflection of its own: only the Fresnel rise, the
+// pale sheen a waxy leaf takes on toward grazing angles and into a low sun. The root reflects as the
+// ground it is coloured as, keeping the ground's reflection for longer inside the colour's handover
+// (kGrassReflectionHandoverSharpness), and the far field keeps the settled lobe, the full dielectric
+// reflectance.
+const float kGrassBladeRoughness = 0.55f;
+const float kGrassCanopyRoughness = 1.0f;
+
+// THE GROUND HANDOVER: how far this fragment's ALBEDO has left the ground it grows out of. 0 below
+// RootFadeStart, where the blade IS the ground, and 1 from RootFadeEnd up, where it is entirely its
+// canopy color. This is a material lever, authored on the component, and it moves the color only. It
+// does NOT shape the canopy: the canopy's own root-to-tip gradient (grassCanopyRise) runs the whole
+// blade whatever span is authored here, so a short handover cannot flatten the upper blade into one
+// color. The shading-normal settle also runs the whole blade: the lighting handover is the physical
+// part, and a shorter span for it is what put a dark band across the lower-middle of backlit blades
+// (kGrassNormalSettleBladeRange carries that measurement). The clamp pass keeps RootFadeEnd above
+// RootFadeStart, which smoothstep requires.
+//
+// The clamp pass also keeps RootFadeEnd at or below the tip, so the tip is always the canopy's color.
+float GrassBladeColourRise(float rootFadeStart, float rootFadeEnd, float t)
+{
+    return smoothstep(rootFadeStart, rootFadeEnd, t);
+}
+
+// How far the blade's colour has left the ground at this height: the handover (GrassBladeColourRise)
+// at Grounding Strength 1, and 1 from the root up at Grounding Strength 0, where the blade is its own
+// colour all the way down.
+float GrassBladeGroundedRise(float rise, float groundingStrength)
+{
+    return mix(1.0f, rise, groundingStrength);
+}
+
+// How late inside the colour's handover the reflection leaves the ground's: the reflection's rise is
+// the colour's rise to this power. Both reach 1 at the handover's end, so above it the blade reflects
+// as leaf. Inside the handover the blade keeps the ground's reflection longer than the ground's colour:
+// with the two rising together the saturated leaf colour shows at the base before the contact has
+// faded into the ground. The power and the handover's span are chosen together: 8 over the default
+// span (RootFadeEnd 0.275) keeps the base's saturation against the ground within 5 % of a blade with
+// the full face-on reflection at every measured pose, and changes from the base's glaze to the leaf
+// more softly than a higher power.
+const float kGrassReflectionHandoverSharpness = 8.0f;
+
+// How far the blade's reflection has left the ground's at this height: 0 at RootFadeStart, 1 where the
+// colour's handover (GrassBladeColourRise) ends and above, rising later inside it.
+float GrassBladeReflectionRise(float rootFadeStart, float rootFadeEnd, float t)
+{
+    return pow(GrassBladeColourRise(rootFadeStart, rootFadeEnd, t), kGrassReflectionHandoverSharpness);
+}
+
+// The weight on the blade's face-on reflectance (SurfaceOutput.specularWeight, which scales F0 only).
+// `rise` is the reflection's ground handover (GrassBladeReflectionRise through GrassBladeGroundedRise),
+// `farSettle` the far-LOD settle. 0 on the part of a near blade that reflects as leaf, 1 where it
+// reflects as ground and across the settled far field.
+float GrassBladeSpecularWeight(float rise, float farSettle)
+{
+    return 1.0f - rise * (1.0f - farSettle);
+}
+// GE_SHARED_GRASS_BLADE_LOBE_END
 
 // LIGHT THROUGH THE BLADE. A blade is a thin leaf: some of the light that falls on it leaves through
 // its far face (the lighting model's diffuse transmission, GE_DiffuseTransmissionFarFace). So a face
@@ -582,10 +656,10 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     float t = clamp(sIn.uv0.x, 0.0, 1.0);
     float side = clamp(sIn.uv0.y, 0.0, 1.0);
     float farLod = 1.0 - clamp(farLodTerm, 0.0, 1.0);
-    float bladeRise = grassBladeRise(tp, t);
+    float bladeRise = GrassBladeColourRise(tp.GrassRootFadeStart, tp.GrassRootFadeEnd, t);
 
     // The ground the blade grows out of: ONE colour per blade on the full profile, resolved at its
-    // root by the vertex stage, so no part of the ground's pattern can be drawn up the blade.
+    // root by the placement compute, so no part of the ground's pattern can be drawn up the blade.
 #if defined(GE_COMPAT_PROFILE)
     vec3 terrainColor = sampleTerrainBaseColor(tp, sIn.positionWS, sIn.positionRelWS);
     float windGate = vGrassWindStrength;
@@ -600,7 +674,10 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // default), or the authored RootColor for a field that does not take its ground's colour.
     vec3 groundedEnd = ((tp.GrassEnabled & 2u) != 0u) ? terrainColor : rootColor;
 
-    vec3 col = mix(rootColor, tip, grassCanopyRise(t));
+    // Bit 1 is Splat Root Color, bit 5 an automatic Root Color (kTerrainGrassBit* in TerrainTypes.h).
+    bool rootFromGround = (tp.GrassEnabled & 34u) == 34u;
+    vec3 col = mix(GrassBladeCanopyRoot(rootColor, groundedEnd, rootFromGround, groundingStrength), tip,
+                   grassCanopyRise(t));
     uint atlasTile = grassAtlasTile(tp, tint);
     vec2 textureUv = grassAtlasUV(tp, atlasTile, side, t, tint);
     // Hoisted here, the last uniform-flow point before the blade-texture branches below: WGSL
@@ -709,7 +786,7 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // starts the blend below the root, so the root carries some tip colour and a value step sits on
     // the contact line by choice.
     //
-    // By default the DEPARTURE spans the lowest quarter of the blade, into a canopy that is still
+    // By default the DEPARTURE spans just over the lowest quarter of the blade, into a canopy that is still
     // near RootColor there, so the step from the ground is small; a whole-blade span instead
     // carries the ground colour halfway up the blade.
     //
@@ -718,7 +795,8 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     //
     // GroundingStrength still turns the whole grounding read off: at 0 the weight is 1 everywhere and
     // the blade is its canopy chain from root to tip.
-    col = mix(groundedEnd, col, mix(1.0, bladeRise, groundingStrength));
+    float groundedRise = GrassBladeGroundedRise(bladeRise, groundingStrength);
+    col = mix(groundedEnd, col, groundedRise);
 
     float terrainFade = smoothstep(0.28, 0.92, farLod);
     col = mix(col, terrainColor, terrainFade * 0.92);
@@ -757,8 +835,8 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // spanning the whole blade costs under a high sun is measured on kGrassNormalSettleBladeRange.
     // Settling here also gives the blade its dark-root, bright-tip structure out of geometry rather
     // than out of a second shade ramp.
-    float normalSettle = max(smoothstep(0.0, kGrassNormalSettleRange, farLod),
-                             1.0 - smoothstep(0.0, kGrassNormalSettleBladeRange, t));
+    float farSettle = smoothstep(0.0, kGrassNormalSettleRange, farLod);
+    float normalSettle = max(farSettle, 1.0 - smoothstep(0.0, kGrassNormalSettleBladeRange, t));
     // How much of the blade's own normal survives here: its form strength, faded out by the settle.
     // Folding the two into one weight is an algebraic identity, not an approximation —
     // mix(mix(C, B, f), C, s) == mix(C, B, f * (1 - s)) — so this is one mix and one normalize
@@ -766,6 +844,8 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // mix(bladeNormal, terrainNormal, settle) it replaces.
     float bladeWeight = 1.0 - normalSettle;
     o.roughness = mix(kGrassCanopyRoughness, kGrassBladeRoughness, bladeWeight);
+    float reflectionRise = GrassBladeReflectionRise(tp.GrassRootFadeStart, tp.GrassRootFadeEnd, t);
+    o.specularWeight = GrassBladeSpecularWeight(GrassBladeGroundedRise(reflectionRise, groundingStrength), farSettle);
     vec3 grassNormal = normalize(mix(terrainNormal, bladeNormal, bladeWeight));
     // No brightness is handed back for the blade normal's departure from the terrain normal: the
     // fold and the arched upper blade face the sky, and a noon field measured at 1.00x its ground

@@ -81,14 +81,17 @@ inline constexpr bool TerrainGrassSupportsDomain(TerrainDomain domain)
 // and the colour picker write opaque colours only.
 inline constexpr uint32 kTerrainGrassAutoRootColor = 0u;
 
-// How much of Tip Color's luminance an automatic root keeps. The three grass colours are stored as
-// sRGB bytes and the surface decodes them to linear albedo on read (grassColorFromArgb in
-// terrain_grass_surface.glsl), so the rule runs in linear light: decode the tip, scale every channel
-// by this, encode back to bytes. Scaling linear RGB scales luminance by exactly this and keeps hue
-// and chromaticity: the root is the tip in shade, so the blade always darkens toward the ground
-// whatever tip a scene authors. A fixed default root cannot do that: against a dark authored tip it
-// is the lighter end and the gradient brightens toward the ground.
-inline constexpr float32 kTerrainGrassAutoRootLuminance = 0.65f;
+// How much of Tip Color's luminance an automatic root keeps where the blade has no ground colour
+// to start from (Splat Root Color off); with it on, an automatic root starts from the ground colour
+// at the blade's root, by Grounding Strength (GrassBladeCanopyRoot in terrain_grass_surface.glsl).
+// The three grass colours are stored as sRGB bytes and the surface decodes them to linear albedo
+// on read (grassColorFromArgb in terrain_grass_surface.glsl), so the rule runs in linear light:
+// decode the tip, scale every channel by this, encode back to bytes. Scaling linear RGB scales
+// luminance by exactly this and keeps hue and chromaticity: the root is the tip in shade, so the
+// blade always darkens toward the ground whatever tip a scene authors. A fixed default root cannot
+// do that: against a dark authored tip it is the lighter end and the gradient brightens toward the
+// ground.
+inline constexpr float32 kTerrainGrassAutoRootLuminance = 0.4f;
 
 // The ARGB the root of a blade's gradient uses: the authored Root Color, or under Auto the tip
 // darkened to kTerrainGrassAutoRootLuminance in linear light.
@@ -225,19 +228,21 @@ struct TerrainGrass
     float32 HueVariation = 0.45f;
     // THE GROUND HANDOVER: the height fractions between which a blade leaves the ground colour it
     // grows out of and becomes its own canopy colour. Below RootFadeStart the blade IS the terrain;
-    // above RootFadeEnd it is entirely itself. The canopy's own RootColor-to-TipColor gradient runs
+    // from RootFadeEnd up it is entirely itself. The canopy's own RootColor-to-TipColor gradient runs
     // the whole blade whatever this span is, so a short span cannot flatten the upper blade. A
     // negative start begins the blend below the root, so the root already carries part of the tip
     // colour. This is a material lever over the blade's albedo
     // only: the shading normal still settles onto the terrain normal over the whole blade, whatever
-    // span is authored. The shipped span is the lowest quarter of the blade.
+    // span is authored. The shipped span ends at 0.275 of the blade's height: over a shorter one
+    // the blade's face-on reflection (kGrassReflectionHandoverSharpness in
+    // terrain_grass_surface.glsl) leaves the ground's too abruptly to keep the contact.
     //
     // The ground colour is ONE colour per blade: the terrain's albedo resolved at the blade's ROOT
     // over a 1 m footprint (terrain_grass_vertex_modifier.glsl, kGrassRootGroundFootprint), carried
     // to every fragment of the blade. It cannot draw the ground's pattern up the blade. The blade's
     // root is therefore the ground's local average colour, not the exact texel beside it.
     float32 RootFadeStart = 0.0f;
-    float32 RootFadeEnd = 0.25f;
+    float32 RootFadeEnd = 0.275f;
     // The master gate over the whole GROUNDING read, and nothing to do with cast shadows: it scales
     // the wind-gust shading and the blade's blend into the ground colour it
     // grows out of (the root colour above, over the RootFade span). At 0 a blade never adopts its
@@ -252,13 +257,25 @@ struct TerrainGrass
     // ground (a bright lawn); above 1 the field is shaded more, up to the depth cap. The blade base and the ground beside it
     // always take the same shade (Includes/terrain_grass_canopy.glsl).
     float32 CanopyShade = 1.0f;
+    // How far the ground under this field is mixed toward SoilColor, 0 to 1. The bake writes
+    // SoilColor into the terrain's colour map where the blades stand, at this weight times the
+    // field's coverage and any Grass Area region's Darken Ground scale, so the ground under a field
+    // reads as soil beside the lit blades. 0 writes nothing. A planar terrain only; applies at the
+    // next bake, not the same frame.
+    float32 GroundDarkening = 0.0f;
     // How much light passes through a blade's tip, against the light its sunlit face reflects: a
     // face turned away from the sun is lit by the light through the leaf, and a field seen against
     // the sun glows at its tips. 1 is a thin leaf, as much light through it as off it, and the most:
     // a back-lit blade is never brighter than the same blade lit from the front. 0 makes the blade
-    // opaque. The light through falls to nothing toward the thick root. Cast shadows dim it like any
-    // other light.
-    float32 Translucency = 1.0f;
+    // opaque. The default 0.7 is a grass leaf, which passes less light than it reflects: under the
+    // sky both faces of a blade gather light, so at 1 a tip is twice as bright as its colour and a
+    // field under a low sun reads with pale, near-white tips. The light through falls to nothing
+    // toward the thick root. Cast shadows dim it like any other light. This is the lighting model's
+    // diffuse transmission (MaterialKeyword::DiffuseTransmission): a share of the light on one face
+    // leaves the other, inside the light's shadow. The Subsurface lobe does not apply: it adds a
+    // view-dependent glow outside the shadow multiply, so a blade would be brighter against the sun
+    // than lit from the front, and a field in a hill's shadow would still glow.
+    float32 Translucency = 0.7f;
     bool TextureGrass = false;
     float32 TextureCardsPerSquareMeter = 1.5f;
     float32 TextureSize = 1.0f;
@@ -268,19 +285,23 @@ struct TerrainGrass
     // linear albedo on read (grassColorFromArgb), so the swatch is the blade's colour before
     // lighting.
     //
-    // The root of each blade's own gradient. kTerrainGrassAutoRootColor (the default) derives it
-    // from TipColor; any opaque colour is used as authored. Read it through
+    // The root of each blade's own gradient. kTerrainGrassAutoRootColor (the default) starts from the
+    // ground colour at the blade's root with UseSplatRootColor, by GroundingStrength, else it is
+    // derived from TipColor; any opaque colour is used as authored. Read the uploaded colour through
     // TerrainGrassResolvedRootColor, never directly.
     uint32 RootColor = kTerrainGrassAutoRootColor;
     // A leaf's albedo, linear (0.19, 0.30, 0.075): a meadow green that a lit tip carries above the
-    // soil it grows in (Terrain::kDefaultTerrainMaterials' grass role is that soil). sRGB bytes, as
-    // the picker writes them; the surface decodes them (grassColorFromArgb).
+    // ground it grows in. sRGB bytes, as the picker writes them; the surface decodes them
+    // (grassColorFromArgb).
     uint32 TipColor = 0xFF79954Du;
     // The colour of the light through a blade: its hue and saturation. Its brightness is the
     // blade's own (the root-to-tip tone, the brightness jitter and the canopy shade carry over), so
     // only the colour of the glow is authored here. Linear (0.50, 0.62, 0.12): light through a green
     // leaf is a more yellow green.
     uint32 BacklightColor = 0xFFBCCE61u;
+    // The colour GroundDarkening mixes the ground under the field toward, sRGB bytes as Tip Color.
+    // Linear (0.10, 0.075, 0.045): a dark brown soil.
+    uint32 SoilColor = 0xFF594D3Cu;
     Components::TextureRef AlbedoTextureAssetGuid;
     Components::TextureRef AlphaTextureAssetGuid;
     Components::TextureRef NormalTextureAssetGuid;

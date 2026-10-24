@@ -2,7 +2,8 @@
 // first pick starts a job and answers with the mesh's bounds, marked pending; once the job
 // publishes, picks hit triangles, and the published BVH is the one a synchronous build makes.
 // A Scene View drop reports a point or a mesh that is only a pending stand-in, so the drop can
-// refuse it, and an invalidated build never publishes.
+// refuse it, and an invalidated build never publishes. A shadows-only mesh draws in no color pass,
+// and a mesh the Scene View eye hides draws in no Scene View pass, so no pick hits either.
 
 #include <gtest/gtest.h>
 
@@ -21,6 +22,7 @@
 #include "Assets/ModelAsset.h"
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/SceneViewHidden.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -40,6 +42,7 @@ using GameEngine::Editor::Picking::MeshBvhCache;
 using GameEngine::Editor::Picking::PickableKind;
 using GameEngine::Editor::Picking::PickOptions;
 using GameEngine::Editor::Picking::RaycastScene;
+using GameEngine::Editor::Picking::RaycastSceneAll;
 using GameEngine::Mathematics::Ray3D;
 using GameEngine::Mathematics::Vector3;
 
@@ -358,4 +361,27 @@ TEST_F(MeshPickingPendingBvhTests, AWaitingLookupBuildsAQueuedBuildItselfInstead
     EXPECT_TRUE(returnedWhileHeld) << "the synchronous lookup waited for the jobs queued ahead of the build";
     ASSERT_NE(bvh, nullptr);
     EXPECT_FALSE(MeshBvhCache::Instance().TryGet(m_Guid, 0, Grid()).Pending);
+}
+
+TEST_F(MeshPickingPendingBvhTests, AShadowsOnlyMeshIsNotHit)
+{
+    ASSERT_TRUE(RaycastScene(DownAt(1.0f, 1.0f), m_World, PickOptions{}).Hit) << "the control pick";
+    m_World.GetComponentForWrite<Components::MeshRenderer>(m_Entity)->shadowCasting =
+        Components::ShadowCasting::ShadowsOnly;
+    EXPECT_FALSE(RaycastScene(DownAt(1.0f, 1.0f), m_World, PickOptions{}).Hit);
+    EXPECT_FALSE(RaycastScene(DownAt(1.0f, 1.0f), m_World, RestrictedToGrid()).Hit);
+    std::vector<GameEngine::Editor::Picking::PickHit> hits;
+    RaycastSceneAll(DownAt(1.0f, 1.0f), m_World, hits, PickOptions{});
+    EXPECT_TRUE(hits.empty());
+}
+
+TEST_F(MeshPickingPendingBvhTests, AMeshTheSceneViewEyeHidesIsNotHit)
+{
+    ASSERT_TRUE(RaycastScene(DownAt(1.0f, 1.0f), m_World, PickOptions{}).Hit) << "the control pick";
+    m_World.AddComponentImmediate<Components::SceneViewHidden>(m_Entity, {});
+    EXPECT_FALSE(RaycastScene(DownAt(1.0f, 1.0f), m_World, PickOptions{}).Hit);
+    EXPECT_FALSE(RaycastScene(DownAt(1.0f, 1.0f), m_World, RestrictedToGrid()).Hit);
+    std::vector<GameEngine::Editor::Picking::PickHit> hits;
+    RaycastSceneAll(DownAt(1.0f, 1.0f), m_World, hits, PickOptions{});
+    EXPECT_TRUE(hits.empty());
 }

@@ -10,6 +10,7 @@
 #include "Rendering/CameraDerivation.h"
 #include "Rendering/Common/Frustum.h"
 #include "Rendering/Core/GPUCulling.h"
+#include "Rendering/Core/GPUInstanceDepthClass.h"
 #include "Rendering/Core/GPUScene.h"
 
 #include <algorithm>
@@ -29,7 +30,7 @@ enum CandidateState : uint8_t
 {
     kRejected = 0,
     kResolvedBit = 1u << 0,
-    kVisibleBit = 1u << 1, // inside the view frustum
+    kVisibleBit = 1u << 1, // inside the view frustum and drawn in color (not shadows only)
     kCasterBit = 1u << 2,  // castShadows submission flag
 };
 
@@ -63,6 +64,8 @@ struct CpuDrawStreamBuilder::CullInputs
     // Render origin, world space; the planes are already relative to it.
     Rendering::Vector3 Origin{0.0f, 0.0f, 0.0f};
     Rendering::Vector4 Planes[6];
+    // The view is the editor Scene View: its camera and caster sets leave out what the eye hides.
+    bool DropEditorHidden = false;
 };
 
 void CpuDrawStreamBuilder::Clear()
@@ -124,6 +127,8 @@ void CpuDrawStreamBuilder::BuildView(Rendering::ViewId viewId, const WorldDrawBu
     inputs.MeshRegistry = &meshRegistry;
     inputs.Instances = instances.data();
     inputs.InstanceCount = instances.size();
+    const Rendering::ViewDesc* view = views.FindViewDesc(viewId);
+    inputs.DropEditorHidden = view != nullptr && view->DropsEditorHidden();
     // Cull camera-relative, in the SAME arithmetic the GPU frustum cull uses
     // (SortedTransparentCull.h documents the equivalence): planes translated by
     // the view's render origin, centres differenced against it. At origin
@@ -198,9 +203,10 @@ void CpuDrawStreamBuilder::ResolveAndCullRange(CullInputs inputs, Candidate* can
                                         inst.boundingCenter.y - inputs.Origin.y,
                                         inst.boundingCenter.z - inputs.Origin.z);
         out.State = kResolvedBit;
-        if (Rendering::TestSphereFrustum(center, inst.boundingRadius, inputs.Planes))
+        if (Rendering::InstanceInColorPass(rec.flags, inputs.DropEditorHidden) &&
+            Rendering::TestSphereFrustum(center, inst.boundingRadius, inputs.Planes))
             out.State |= kVisibleBit;
-        if ((rec.flags & kSubmissionFlagCastShadows) != 0u)
+        if (Rendering::InstanceInShadowPass(rec.flags, inputs.DropEditorHidden))
             out.State |= kCasterBit;
     }
 }

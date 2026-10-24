@@ -1,9 +1,10 @@
 #include "Engine/Rendering/RenderLayerNames.h"
 
-#include "Engine/Rendering/RenderLayers.h"
 #include "Logger/Logger.h"
+#include "Rendering/RenderLayersScriptApi.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <fstream>
 #include <mutex>
@@ -18,7 +19,7 @@ namespace
 constexpr const char* kEditorDirName = ".Editor";
 constexpr const char* kProjectSettingsFileName = "ProjectSettings.json";
 
-// The table FindRenderLayer and RenderLayerName answer from. Written between frames on the main thread;
+// The table Script::Find and Script::NameOf answer from. Written between frames on the main thread;
 // the lock keeps a read at a system's start on another thread whole.
 std::mutex g_TableMutex;
 RenderLayerNames g_Table;
@@ -149,21 +150,23 @@ void SetRenderLayerNames(const RenderLayerNames& names)
     g_Table = names;
 }
 
-std::optional<uint32> FindRenderLayer(std::string_view name)
+RenderLayerMask Script::Find(std::string_view name)
 {
     std::lock_guard<std::mutex> lock(g_TableMutex);
     for (uint32 layer = 0; layer < RenderLayerMask::kCount; ++layer)
     {
         if (g_Table.EffectiveName(layer) == name)
-            return layer;
+            return RenderLayerMask::FromLayer(layer);
     }
-    return std::nullopt;
+    return RenderLayerMask::None();
 }
 
-std::string RenderLayerName(uint32 layer)
+std::string Script::NameOf(RenderLayerMask layer)
 {
+    if (std::popcount(layer.Bits) != 1)
+        return {};
     std::lock_guard<std::mutex> lock(g_TableMutex);
-    return g_Table.EffectiveName(layer);
+    return g_Table.EffectiveName(static_cast<uint32>(std::countr_zero(layer.Bits)));
 }
 
 } // namespace GameEngine::Rendering

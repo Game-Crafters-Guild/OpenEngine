@@ -15,6 +15,7 @@
 #include "SceneView/TerrainBrushTool.h"
 #include "Terrain/TerrainBaseSourceSection.h"
 #include "Terrain/TerrainGrassVocabulary.h"
+#include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainLayers.h"
 #include "Terrain/TerrainMaterialLibraryMint.h"
 #include "Terrain/TerrainMaterialRecord.h" // kMaxTerrainMaterials — the slot ID domain
@@ -172,6 +173,7 @@ static uint32_t GetGrassColor(const Components::TerrainGrass& grass, int slot)
     case 0: return Components::TerrainGrassResolvedRootColor(grass);
     case 1: return grass.TipColor;
     case 2: return grass.BacklightColor;
+    case 3: return grass.SoilColor;
     default: return 0xFF000000u;
     }
 }
@@ -184,6 +186,7 @@ static void SetGrassColor(Components::TerrainGrass& grass, int slot, uint32_t ar
     case 0: grass.RootColor = color; break;
     case 1: grass.TipColor = color; break;
     case 2: grass.BacklightColor = color; break;
+    case 3: grass.SoilColor = color; break;
     default: break;
     }
     TerrainGrass::ReconcileTerrainGrassPreset(grass);
@@ -306,6 +309,48 @@ static void AddGrassColorRow(UIElement* parent,
     AddGrassColorSwatch(field, slot, swatchName, w, e, n, openPicker, std::move(onCommitted));
 }
 
+// Darken Ground, shown as a percentage. The colour map recomposes the whole terrain when the value
+// changes, so a drag previews the value in the field and the map follows once the drag ends: the
+// gesture holds the terrain's interactive-edit signal, which the colour map waits out.
+static void AddGrassDarkenGroundRow(UIElement* parent, const Components::TerrainGrass& grass, ECS::World* w,
+                                    ECS::EntityHandle e, Editor::EditorChangeNotifications* n)
+{
+    using namespace InspectorDrag;
+    auto arm = std::make_shared<Editor::TerrainInteractiveModifierEditArm>();
+    const auto apply = [](Components::TerrainGrass& u, float percent) {
+        u.GroundDarkening = std::isfinite(percent) ? std::clamp(percent / 100.0f, 0.0f, 1.0f) : 0.0f;
+    };
+    FloatField* field = AddFloatRowWithDrag(
+        parent, "Darken Ground", grass.GroundDarkening * 100.0f,
+        [w, e, n, arm, apply](float v)
+        {
+            auto* comp = w->GetComponent<Components::TerrainGrass>(e);
+            if (!comp)
+                return;
+            arm->Arm();
+            Components::TerrainGrass updated = *comp;
+            apply(updated, v);
+            Editor::PreviewComponentUpdate(w, e, n, updated);
+        },
+        [w, e, n, arm, apply](float v)
+        {
+            if (auto* comp = w->GetComponent<Components::TerrainGrass>(e))
+            {
+                Components::TerrainGrass updated = *comp;
+                apply(updated, v);
+                Editor::CommitComponentUpdate(w, e, n, updated);
+            }
+            arm->Release();
+        },
+        0.0f,
+        "Mixes the ground under the blades toward Soil Color by this amount times how much grass "
+        "stands there. At 0% the ground keeps its own color. A Grass Area region lowers it inside its shape with its own "
+        "Darken Ground row. Applies when you release the value.",
+        0.0f, 100.0f);
+    if (field)
+        field->SetSuffix("%");
+}
+
 // Root Color: Auto (derived from Tip Color, the default) or an authored colour. The swatch always
 // shows the colour the blades use; picking a colour authors it, and the Auto button clears it.
 static void AddGrassRootColorRow(UIElement* parent,
@@ -322,16 +367,18 @@ static void AddGrassRootColorRow(UIElement* parent,
 
     UIElement* row = InspectorUI::AddRow(parent);
     InspectorUI::AddLabel(row, "Root Color",
-        "The color at the root of each blade's own gradient. Auto uses Tip Color at 65% of its "
-        "brightness, so the blade darkens toward the ground whatever Tip Color is. Pick a color "
-        "to set it yourself; Auto clears it again. Over the Root Fade span the base of the "
-        "blade also takes the color of the ground under it");
+        "The color at the root of each blade's own gradient. Auto starts it from the color of the "
+        "ground under the blade, so the blade goes from its ground into the leaf; with Splat Root "
+        "Color off, Auto uses Tip Color at 40% of its brightness. Pick a color to set it yourself; "
+        "Auto clears it again. Over the Root Fade span the base of the blade also takes the color "
+        "of the ground under it.");
     UIElement* field = InspectorUI::AddFieldContainer(row);
     field->Overrides()
         .Set(Style::FlexDir, FlexDirection::Row)
         .Set(Style::AlignItems, AlignItems::Center)
         .Set(Style::Gap, StyleLength::Px(8.0f));
-    AddGrassColorSwatch(field, 0, automatic ? "Auto (from Tip)" : "Root", w, e, n, openPicker,
+    const char* autoName = grass->UseSplatRootColor ? "Auto (from ground)" : "Auto (from tip color)";
+    AddGrassColorSwatch(field, 0, automatic ? autoName : "Root", w, e, n, openPicker,
                         requestRefresh);
     if (automatic)
         return;
@@ -340,7 +387,7 @@ static void AddGrassRootColorRow(UIElement* parent,
     button->SetId("terrain-grass-root-color-auto");
     button->AddClass("small");
     button->SetText("Auto");
-    button->SetTooltip("Derive Root Color from Tip Color again");
+    button->SetTooltip("Set Root Color to Auto");
     button->RegisterEventHandler(kEventButtonClick, [w, e, n, requestRefresh](UIEvent&)
         {
             auto* c = w->GetComponent<Components::TerrainGrass>(e);
@@ -1447,6 +1494,11 @@ void RegisterTerrainInspector()
             "0 lights the ground under the grass as open ground, for a bright lawn",
             {}, 0.0f, TerrainGrass::kMaxGrassCanopyShade);
 
+        AddGrassDarkenGroundRow(grassSection, *grass, w, e, n);
+        AddGrassColorRow(grassSection, "Soil Color",
+            "The color Darken Ground mixes the ground under the field toward",
+            3, "Soil", w, e, n, ctx.OpenColorPickerWindow, {});
+
         // Strength and colour in ONE row: the tint is meaningless without the term it tints, and
         // two rows for one effect is exactly the surface this pass exists to shrink.
         if (FloatField* backlight = AddComponentFloatRowWithDrag<Components::TerrainGrass>(
@@ -1454,9 +1506,10 @@ void RegisterTerrainInspector()
                 [](Components::TerrainGrass& u, float v) {
                     u.Translucency = std::clamp(v, 0.0f, Components::kMaxTerrainGrassTranslucency);
                 },
-                "How much light passes through a blade's tip, and its color: the face turned away "
-                "from the sun is lit through the leaf and a field against the sun glows. 1 is a thin "
-                "leaf, as much light through it as off it; 0 is an opaque blade",
+                "Light through the leaf, and its color. A blade turned away from the sun is lit "
+                "through the leaf, and under the sky this light also brightens the tips: at 1 a tip "
+                "is twice as bright as its color and can look pale. The thick root lets no light "
+                "through. 0 is an opaque blade.",
                 {}, 0.0f, Components::kMaxTerrainGrassTranslucency))
         {
             // The class is what makes it one row: a field container lays its float field out
@@ -1623,18 +1676,21 @@ void RegisterTerrainInspector()
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             advanced, "Grounding Strength", grass->GroundingStrength, w, e, n,
             [](Components::TerrainGrass& u, float v) { u.GroundingStrength = std::clamp(v, 0.0f, 1.0f); },
-            "Master gate over how far the blade reads as growing out of its ground: the gust "
-            "shading and the base's blend into the terrain colour. Nothing "
-            "to do with cast shadows. At 0 a blade never adopts its ground's colour at all, so "
-            "this is a stylisation escape hatch rather than a look dial",
+            "How much the blade reads as growing out of its ground: the blend of its base into the "
+            "ground color, and the light and dark waves that gusts send across the field. It does "
+            "not change cast shadows. At 0 a blade takes none of its ground's color; use 0 for a "
+            "stylized field",
             {}, 0.0f, 1.0f);
 
+        // The Root Color row names where an automatic root comes from, so the inspector rebuilds.
         AddToggleRow(advanced, "Splat Root Color", grass->UseSplatRootColor,
-            [w, e, n](bool v)
+            [w, e, n, requestRefresh = ctx.RequestInspectorRefresh](bool v)
             {
                 Components::TerrainGrass updated = *w->GetComponent<Components::TerrainGrass>(e);
                 updated.UseSplatRootColor = v;
                 Editor::CommitComponentUpdate(w, e, n, updated);
+                if (requestRefresh)
+                    requestRefresh();
             },
             "On: the base of each blade takes the color of the ground under it. Off: the base takes "
             "Root Color, for a field that does not take its ground's color");

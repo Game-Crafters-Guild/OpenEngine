@@ -166,7 +166,7 @@ struct OceanParamsGPU
 
     // Main directional light, fed from the scene so the surface can do
     // sun-direction subsurface scattering (forward scatter through wave crests)
-    // and sun glitter — the reference ocean's signature look. xyz of SunDirection
+    // — the reference ocean's signature look. xyz of SunDirection
     // points TOWARD the sun; SunColor is light colour premultiplied by intensity.
     float32 SunDirection[4] = {0.32f, 0.7f, 0.22f, 0.0f};
     float32 SunColor[4] = {1.0f, 0.96f, 0.88f, 1.0f};
@@ -209,7 +209,6 @@ struct OceanParamsGPU
     float32 SkyBase[4] = {0.09f, 0.19f, 0.34f, 1.0f};
     float32 SkyTowardsSun[4] = {0.27f, 0.39f, 0.49f, 1.0f};
     float32 SkyAwayFromSun[4] = {0.06f, 0.13f, 0.26f, 1.0f};
-    float32 DirectionalLightColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
     // Scalar lane 1: surface normal map strength + world tiling scale, and the
     // shallow-tint depth shaping (depth = 0 until the Phase 5 depth cascade).
@@ -223,7 +222,7 @@ struct OceanParamsGPU
     float32 SubSurfaceBase = 0.0f;
     float32 SubSurfaceSun = 1.7f;
     float32 SubSurfaceSunFallOff = 5.0f;
-    float32 Specular = 0.7f;
+    float32 Specular = 1.0f;
 
     // Scalar lane 3: microfacet roughness, the two IORs for the Schlick R0, the
     // planar-reflection toggle (0 = off), and planar capture blend strength.
@@ -232,12 +231,12 @@ struct OceanParamsGPU
     float32 IorWater = 1.333f;
     uint32 PlanarReflections = 0;
 
-    // Scalar lane 4: sky directionality exponent, sun glitter boost/falloff, and
-    // how strongly the planar capture replaces the procedural reflected sky.
+    // Scalar lane 4: sky directionality exponent and how strongly the planar
+    // capture replaces the procedural reflected sky, padded to the lane.
     float32 SkyDirectionality = 1.0f;
-    float32 DirectionalLightBoost = 7.0f;
-    float32 DirectionalLightFallOff = 275.0f;
     float32 PlanarReflectionStrength = 1.0f;
+    float32 _SurfacePad0 = 0.0f;
+    float32 _SurfacePad1 = 0.0f;
 
     // --- Refraction / depth-fog transparency (Phase 4) ---
     // Lane A: DepthFogDensity (rgb) is the per-channel extinction of the grabbed

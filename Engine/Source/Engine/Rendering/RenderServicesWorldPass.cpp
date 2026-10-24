@@ -142,6 +142,22 @@ void DeclareDdgiGatherReads(RenderGraph::RGPassBuilder& p, const DDGIProbeFeatur
             p.Read(probeState, RenderGraph::RGBufferRead::Storage);
 }
 
+// Feature-owned MRT slices (the screen-space reflection G-buffer), attached verbatim: formats, clears
+// and locations belong to the contributing provider.
+void AttachExtraColors(RenderGraph::RGPassBuilder& p, const RenderServices::WorldPassTargetsRG& targets)
+{
+    for (uint32_t i = 0; i < targets.ExtraColorCount; ++i)
+    {
+        const auto& extra = targets.ExtraColor[i];
+        if (!extra.Texture.IsValid())
+            continue;
+        if (extra.Resolve.IsValid())
+            p.AttachColorResolve(extra.Location, extra.Texture, extra.Resolve, extra.Ops);
+        else
+            p.AttachColor(extra.Location, extra.Texture, extra.Ops);
+    }
+}
+
 // The reads the forward fog's textures need (forward_fog.glsl): the sky backdrop, bound on every pass
 // (BuildPassResourcesRG), and the froxel volume on VolumetricFog-keyword passes.
 void DeclareForwardFogReads(RenderGraph::RGPassBuilder& p, const RenderServices::WorldPassTargetsRG& targets,
@@ -356,7 +372,7 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
             vfr->SpotShadowData.Offset, sizeof(SpotShadowDataGPU));
     }
     // MotionParams: the motion variant's per-view block, written at the
-    // producer arm's declaration. Bound by the block's reflected INSTANCE
+    // producer's declaration. Bound by the block's reflected INSTANCE
     // name; the zero fallback above covers every view whose producer did not
     // run, so the binding exists on every draw either way.
     if (vfr && vfr->DeformationMotion.Valid())
@@ -366,10 +382,9 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
     }
     // MotionHistory: the scatter's per-instance rendered level and phase
     // history for this frame, the channel the motion variant reads validity
-    // from. Present only while a view asks for the history, which is only
-    // while a producer arm is enabled — and the motion variant is the only
-    // program that declares the binding, so nothing else is affected by its
-    // absence.
+    // from. Present on every view whose camera slices ask for the history —
+    // and the motion variant is the only program that declares the binding,
+    // so nothing else is affected by its absence.
     if (m_DrawStreamBuilder)
     {
         const auto history =
@@ -1495,18 +1510,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 else
                     p.AttachColor(0, targets.Color, col, targets.ColorRange);
             }
-            // Feature-owned MRT slices, attached verbatim: formats, clears and
-            // locations belong to the contributing provider.
-            for (uint32_t i = 0; i < targets.ExtraColorCount; ++i)
-            {
-                const auto& extra = targets.ExtraColor[i];
-                if (!extra.Texture.IsValid())
-                    continue;
-                if (extra.Resolve.IsValid())
-                    p.AttachColorResolve(extra.Location, extra.Texture, extra.Resolve, extra.Ops);
-                else
-                    p.AttachColor(extra.Location, extra.Texture, extra.Ops);
-            }
+            AttachExtraColors(p, targets);
             if (targets.Depth.IsValid())
             {
                 RenderGraph::RGAttachmentOps dops{};
@@ -2349,6 +2353,7 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
                 else
                     p.AttachColor(0, targets.Color, col, targets.ColorRange);
             }
+            AttachExtraColors(p, targets);
             if (targets.Depth.IsValid())
             {
                 RenderGraph::RGAttachmentOps dops{};

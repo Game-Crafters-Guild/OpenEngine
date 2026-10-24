@@ -294,8 +294,9 @@ class ScriptManager
     // (editor kind — loaded only when the editor scripts assembly is present).
     std::filesystem::path PackageAssembliesDirectory(bool editorKind) const;
 
-    // Where the auto-generated project scripts csproj lives (EnsureAutoProject
-    // writes it here): the generated-project root when configured, otherwise the
+    // Where the project's scripts csproj lives (EnsureAutoProject creates it here and
+    // rewrites the engine props and targets beside it; the csproj itself belongs to the
+    // user, see ScriptsProjectFile.h): the generated-project root when configured, otherwise the
     // workspace (project) root, so an IDE opening it defaults new files to the
     // project rather than into Assets/. The build pipeline resolves the project's
     // csproj through this SAME accessor so editor and packager can never disagree
@@ -306,9 +307,9 @@ class ScriptManager
     // and the build pipeline's no-live-session fallback both resolve through it.
     static std::filesystem::path GeneratedProjectPathFor(const std::filesystem::path& projectRoot);
 
-    // Regenerate the auto-generated scripts csproj (content-compared write) so
-    // its baked package references and paths match the CURRENT session state.
-    // The packaged build calls this before `dotnet build` — the csproj is the
+    // Rewrite the scripts project's engine props and targets (content-compared writes) so
+    // their baked package references and paths match the CURRENT session state.
+    // The packaged build calls this before `dotnet build` — the project is the
     // only reference carrier on that path (live editor compiles pass
     // references per compile-server request). No-op (false) in packaged mode,
     // when auto-generation is off, or before Initialize.
@@ -369,6 +370,10 @@ class ScriptManager
      * @return The subscription, or null when the directory is empty
      */
     UniquePtr<FileWatchSubscription> WatchScriptDirectory(const std::filesystem::path& directory);
+    // One subscription per folder that holds a file whose change changes the scripts' package
+    // restore (ScriptRestoreInputFiles): the csproj's folder and each folder above it that holds one.
+    Vector<FileWatchSubscription> WatchScriptsProjectFiles();
+    void OnScriptsProjectFileChanged(const FileChangeEvent& event);
 
     /**
      * @brief Replace the package module subscriptions with one per C# module
@@ -454,8 +459,9 @@ class ScriptManager
     bool TriggerInitialBuild();
     void QueueDeferredInitialBuildIfNeeded();
     /**
-     * @brief Ensure an auto-generated C# project exists in the assemblies directory
-     *        that references sources under the scripts root. Returns its path via outProjectPath.
+     * @brief Rewrite the engine props and targets of the scripts project (the scripts root's
+     *        sources, the engine references) and create the user's csproj when absent, or put
+     *        back a missing engine import. Returns the csproj path via outProjectPath.
      */
     bool EnsureAutoProject(std::filesystem::path& outProjectPath) const;
 
@@ -500,6 +506,9 @@ class ScriptManager
     CoreCLRHost m_ClrHost;
     // FileWatchingService subscriptions for .cs/.csproj changes; held only while hot reload is enabled.
     UniquePtr<FileWatchSubscription> m_ScriptsWatchSubscription;
+    // The scripts csproj and the other restore inputs: a package added in the IDE, on the settings
+    // page or in a Directory.Packages.props recompiles.
+    Vector<FileWatchSubscription> m_ScriptsProjectWatchSubscriptions;
     UniquePtr<FileWatchSubscription> m_EditorScriptsWatchSubscription;
     // One per watched package C# module root, rebuilt from the module set by
     // SetPackageCodeModules; same lifetime rule as the two handles above.

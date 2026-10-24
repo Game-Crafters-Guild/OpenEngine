@@ -1,8 +1,16 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace GameEngine::Math
+{
+template <std::uint8_t N>
+struct CurveBase;
+using Curve = CurveBase<32>;
+} // namespace GameEngine::Math
 
 namespace GameEngine::Scene
 {
@@ -103,6 +111,15 @@ std::string FormatFloat(float value);
 std::string FormatFloat2(float x, float y);
 std::string FormatFloat3(float x, float y, float z);
 std::string FormatFloat4(float x, float y, float z, float w);
+
+// A Math::Curve as one line of text, every field of every key: "t,v,inTan,outTan,interp,mode" per
+// key, keys separated by ';'. The one format for a curve whose keys may be Smooth, with tangents
+// (ValueCurve's shape, the sky's sun illuminance curve, a Day Cycle profile's tracks).
+std::string FormatCurveKeys(const Math::Curve& curve);
+// Parse FormatCurveKeys' line back into a curve. Missing trailing fields of a key read 0 / Linear /
+// Auto, so the compact "time,value;..." form reads as Linear keys. An empty or garbage line gives an
+// empty curve; the caller picks its own default for that. Keys are inserted in time order.
+Math::Curve ParseCurveKeys(std::string_view value);
 
 // Format an asset reference. Either argument may be empty; at least one
 // must be non-empty. Output forms:

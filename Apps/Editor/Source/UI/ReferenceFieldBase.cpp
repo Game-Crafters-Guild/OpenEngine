@@ -5,6 +5,8 @@
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 
+#include <utility>
+
 namespace GameEngine
 {
 
@@ -35,7 +37,7 @@ void ReferenceFieldBase::BuildNameAndClearButton()
     auto name = std::make_unique<Label>();
     name->AddClass("asset-field-name");
     name->AddClass("empty");
-    name->SetText("(None)");
+    name->SetText(m_EmptyText);
     m_NameLabel = name.get();
     AddChild(std::move(name));
 
@@ -115,7 +117,7 @@ void ReferenceFieldBase::OpenReferenceDialog()
 
 void ReferenceFieldBase::ShowEmpty()
 {
-    m_NameLabel->SetText("(None)");
+    m_NameLabel->SetText(m_EmptyText);
     m_NameLabel->AddClass("empty");
     m_ClearBtn->AddClass("hidden");
 }
@@ -126,6 +128,13 @@ void ReferenceFieldBase::ShowNamed(const std::string& name)
     m_NameLabel->RemoveClass("empty");
     if (m_Clearable)
         m_ClearBtn->RemoveClass("hidden");
+}
+
+void ReferenceFieldBase::SetEmptyText(std::string text)
+{
+    m_EmptyText = std::move(text);
+    if (m_NameLabel && m_NameLabel->HasClass("empty"))
+        m_NameLabel->SetText(m_EmptyText);
 }
 
 void ReferenceFieldBase::SetClearable(bool clearable)

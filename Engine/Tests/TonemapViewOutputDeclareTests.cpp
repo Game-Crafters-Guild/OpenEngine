@@ -11,7 +11,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -87,7 +87,7 @@ RenderPipelineBlueprint TonemapBlueprint()
 
 struct TonemapFixture
 {
-    std::unique_ptr<IDevice> Device;
+    IDevice* Device = nullptr;
     std::unique_ptr<RenderServices> Rs;
     RenderPipelineNodeRegistry Registry;
     Rendering::ViewId View{};
@@ -96,11 +96,11 @@ struct TonemapFixture
 
     bool Up()
     {
-        Device = CreateVulkanDeviceFast();
+        Device = SharedHeadlessDevice();
         if (!Device)
             return false;
         Rs = std::make_unique<RenderServices>();
-        EXPECT_TRUE(Rs->Initialize(Device.get()));
+        EXPECT_TRUE(Rs->Initialize(Device));
         CameraData camera{};
         for (int i = 0; i < 16; i += 5)
         {
@@ -131,10 +131,10 @@ struct TonemapFixture
         RenderPipelineInstance instance(*Rs, Registry);
         instance.SetBlueprint(TonemapBlueprint());
 
-        RenderGraph::RGResourcePool persistent(Device.get());
-        RenderGraph::RGTransientPool transient(Device.get());
-        RenderGraph::RGUploadRing ring(Device.get(), 2, 262144);
-        RenderGraph::RGFrame frame(Device.get(), &persistent, &transient, &ring);
+        RenderGraph::RGResourcePool persistent(Device);
+        RenderGraph::RGTransientPool transient(Device);
+        RenderGraph::RGUploadRing ring(Device, 2, 262144);
+        RenderGraph::RGFrame frame(Device, &persistent, &transient, &ring);
         frame.BeginFrame(0);
 
         const RenderGraph::RGTexture color = frame.ImportPersistentTexture(
@@ -208,7 +208,6 @@ struct TonemapFixture
     {
         Device->WaitForIdle();
         Rs->Shutdown();
-        Device->Shutdown();
     }
 };
 

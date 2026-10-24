@@ -93,6 +93,7 @@ struct TerrainParamsEntry
     float GrassRootFadeStart;
     float GrassRootFadeEnd;
     uint GrassControlBindless;
+    uint ColorMapBindless;
 };
 
 struct GrassBladeInstance
@@ -112,6 +113,10 @@ struct GrassBladeInstance
     float NormalX;
     float NormalZ;
     uint Flags; // LOD index + clump colour code; grass_clump.glsl owns the bit layout
+    // The ground colour under the root (grass_root_ground_color.glsl), resolved here once per blade
+    // on the full profile; grass_clump.glsl owns the packing. 0 on compat, whose surface resolves
+    // the colour per fragment.
+    uint RootColor;
 };
 
 struct DrawIndexedIndirectCommand
@@ -278,6 +283,15 @@ layout(set = 0, binding = 19) uniform sampler gGrassMapSampler;
 #include "TerrainGrass/grass_atlas_splat.glsl"
 #include "Includes/terrain_grass_canopy.glsl"
 
+#if !defined(GE_COMPAT_PROFILE)
+// The ground colour a blade grows out of, resolved here once per placed blade and carried in the
+// instance (RootColor), so the vertex stage reads one word instead of resolving it per vertex. The
+// material table follows the compat maps' last binding (19), which this profile does not declare.
+#define GRASS_MATERIAL_TABLE_SET 0
+#define GRASS_MATERIAL_TABLE_BINDING 20
+#include "TerrainGrass/grass_root_ground_color.glsl"
+#endif
+
 // Endpoint-aligned RG8 control lattice: R is height, G is density. Missing maps
 // are exactly neutral. Resolve at the blade's own site, and do not crossfade rejection
 // probabilities during streaming.
@@ -335,6 +349,9 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     // y = flattest falloff. Read by terrain_grass_plan.comp, whose budget fit needs a term that
     // dominates every per-terrain value; declared here because both kernels bind this same block.
     vec4 Summary;
+    // This view's render origin (Cam.uRenderOriginSector): xyz = sector, w = sector size in metres.
+    // The root colour's projection UVs are anchored to it, as the ground's are.
+    ivec4 RenderOriginSector;
 } Place;
 
 // Width, in pixels, that a blade is never allowed to project below. Under about a pixel a blade
@@ -401,6 +418,14 @@ float grassMinWidthScale(vec3 rootWS, float bladeHeight, float bladeWidth, float
         return kGrassMaxWidthExpansion;
     return (kGrassMinPixelWidth / pixelsPerUnit) / bladeWidth;
 }
+
+#if !defined(GE_COMPAT_PROFILE)
+// This view's render origin in world metres (GE_RenderOriginWorld in the draw's stages).
+vec3 grassRenderOriginWorld()
+{
+    return vec3(Place.RenderOriginSector.xyz) * float(Place.RenderOriginSector.w);
+}
+#endif
 
 float sampleAtlasHeight01(vec2 uv)
 {
@@ -558,6 +583,7 @@ uint emitCellSlots()
         blade.NormalX = 0.0;
         blade.NormalZ = 0.0;
         blade.Flags = GrassPackFlags(lod, 0u, 0.0);
+        blade.RootColor = 0u;
 
         if (slot < slotCount)
         {
@@ -683,6 +709,13 @@ uint emitCellSlots()
                             blade.NormalX = terrainNormal.x;
                             blade.NormalZ = terrainNormal.z;
                         }
+#if !defined(GE_COMPAT_PROFILE)
+                        // At the blade's site on the surface. The vertex stage sinks the drawn root
+                        // 1 cm along the normal, which moves a 1 m footprint's centre by under 1 cm.
+                        vec3 rootWS = vec3(worldX, blade.RootY, worldZ);
+                        blade.RootColor = GrassPackRootColor(
+                            GrassRootGroundColor(stp, rootWS, rootWS - grassRenderOriginWorld()));
+#endif
                         accepted = true;
                     }
                 }

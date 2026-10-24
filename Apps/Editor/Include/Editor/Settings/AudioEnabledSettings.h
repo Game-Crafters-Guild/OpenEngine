@@ -9,8 +9,7 @@ namespace GameEngine::Editor
 {
 
 /**
- * Whether the editor plays audio, toggled from the Play button's context menu and from the
- * audio toggle right of the Play button.
+ * Whether the editor plays audio, toggled from the Play button's context menu.
  *
  * Audio is enabled by default. Disabling it silences the speakers for every sound the
  * engine plays while the editor runs: play mode, inspector previews and editor sounds
@@ -30,7 +29,7 @@ class AudioEnabledSettings
     static void Set(Audio::AudioSystem* audio, bool enabled);
 
     /// Flips the state IsEnabled reads, applies it to `audio` and saves it; returns the new
-    /// state. The Play button menu's row and the toolbar's audio toggle both toggle here.
+    /// state. The Play button menu's audio row toggles here.
     static bool Toggle(Audio::AudioSystem* audio);
 
     /// The live state of `audio`, or the saved preference when `audio` is null.

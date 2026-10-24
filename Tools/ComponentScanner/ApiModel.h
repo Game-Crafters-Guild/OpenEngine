@@ -16,10 +16,13 @@ inline constexpr std::int64_t kApiDescriptionFormat = 1;
 // The kinds a script API declaration may take, return or hold (the binding layer's kind
 // table). Each value kind crosses the boundary as the bytes of its C++ type: the integers and
 // floats as themselves, Bool as one byte, the Mathematics types as the System.Numerics
-// layout, ColorLinear as four floats, Entity as the packed 32-bit ECS::EntityHandle, StringId
-// as its 64-bit hash, Angle as a float in radians. String (std::string_view) and Span
-// (std::span<const T>) are parameter-only kinds. Record, Enum and Handle name a declaration
-// marked in a <Module>ScriptApi.h; Void is a return type only.
+// layout, ColorLinear as four floats, Entity as the packed 32-bit ECS::EntityHandle,
+// RenderLayerMask as its 32-bit word of layers, StringId as its 64-bit hash, Angle as a
+// float in radians. String is text: a std::string_view parameter or a std::string return
+// value, never an out parameter or a record field. Span is a parameter-only kind:
+// std::span<const T> in, or std::span<T> out (the function writes the results into the caller's
+// buffer and returns their number). Record, Enum and Handle name a declaration marked in a
+// <Module>ScriptApi.h; Void is a return type only.
 enum class ApiKind : std::uint8_t
 {
     Void,
@@ -42,6 +45,7 @@ enum class ApiKind : std::uint8_t
     Mat4,
     ColorLinear,
     Entity,
+    RenderLayerMask,
     StringId,
     String,
     Span,

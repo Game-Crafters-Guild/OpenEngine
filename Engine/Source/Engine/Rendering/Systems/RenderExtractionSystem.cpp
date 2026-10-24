@@ -34,6 +34,7 @@
 #include "Components/Rendering/MorphTargetWeights.h"
 #include "Components/Rendering/SkinnedMeshRenderer.h"
 #include "Components/Rendering/SkyEnvironment.h"
+#include "Components/SceneViewHidden.h"
 #include "Components/Rendering/Ocean.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "GPUFogParticles/GPUFogParticlesMaterial.h"
@@ -147,32 +148,6 @@ inline void Normalize3(float& x, float& y, float& z)
     x *= invLen;
     y *= invLen;
     z *= invLen;
-}
-
-struct WorldTimeOfDayState
-{
-    float hours = 12.0f;
-    float dayKeyTimesHours[4] = {0.0f, 6.0f, 12.0f, 18.0f};
-};
-
-WorldTimeOfDayState FindWorldTimeOfDayState(GameEngine::ECS::World& world)
-{
-    WorldTimeOfDayState state{};
-    bool found = false;
-    world.Query<
-             GameEngine::ECS::Read<GameEngine::Components::SkyEnvironment>>()
-        .Each([&](GameEngine::ECS::EntityHandle,
-                  const GameEngine::Components::SkyEnvironment& sky)
-              {
-                  if (found)
-                      return;
-                  state.hours = sky.TimeOfDayHours;
-                  state.dayKeyTimesHours[0] = sky.DayKeyTimesHours.Midnight;
-                  state.dayKeyTimesHours[1] = sky.DayKeyTimesHours.Dawn;
-                  state.dayKeyTimesHours[2] = sky.DayKeyTimesHours.Midday;
-                  state.dayKeyTimesHours[3] = sky.DayKeyTimesHours.Sunset;
-                  found = true; });
-    return state;
 }
 
 inline void ReleaseMeshGpuInstance(GameEngine::Rendering::GPUScene& scene,
@@ -316,7 +291,9 @@ struct RenderExtractionParallelState
                                    const Components::AnimatorRef*,
                                    const Components::LODGroup*,
                                    const ECS::ComponentDisabled<Components::MeshRenderer>*,
-                                   const ECS::ComponentDisabled<Components::SkinnedMeshRenderer>*>;
+                                   const ECS::ComponentDisabled<Components::SkinnedMeshRenderer>*,
+                                   const Components::SceneViewHidden*,
+                                   const Components::SceneViewHiddenInHierarchy*>;
     std::vector<RefreshRead> refreshReads;
 };
 
@@ -415,23 +392,32 @@ bool PayloadPrevDiffers(const GPUInstance& payload)
 
 // GPUInstance flag bits from their extraction inputs. Shared by the parallel
 // prepare and the fast path's subset refresh so the two can't disagree on
-// bit layout (bit 0 castShadows, bit 1 receiveShadows, bits 2/3 depth class,
-// bit 4 mirrored, bit 5 sorted transparent, bit 6 DDGI GI emitter,
-// upper 16 = worldKey).
-uint32 ComputeInstanceFlags(bool castShadows, bool receiveShadows,
-                            Rendering::MaterialDepthClass depthClass, bool sortedTransparent,
-                            bool giEmitter, uint64 worldId)
+// bit layout (bit 0 cast shadows, bit 1 receiveShadows, bits 2/3 depth class,
+// bit 4 mirrored, bit 5 sorted transparent, bit 6 DDGI GI emitter, bit 7 shadows
+// only, bit 8 editor hidden, upper 16 = worldKey). A mesh casts when its Shadow
+// Casting is not Off and its LocalBounds (when it has one) casts; Shadows Only sets
+// bit 7 beside bit 0 and clears bit 6. The Scene View eye sets bit 8 and nothing
+// else: the Scene View's culls drop the instance, and every other view still draws
+// it, its shadow and its emission.
+uint32 ComputeInstanceFlags(Components::ShadowCasting shadowCasting, bool boundsCastShadows,
+                            bool receiveShadows, Rendering::MaterialDepthClass depthClass,
+                            bool sortedTransparent, bool giEmitter, bool editorHidden, uint64 worldId)
 {
     uint32 flags = 0u;
-    if (castShadows)
+    if (shadowCasting != Components::ShadowCasting::Off && boundsCastShadows)
         flags |= 1u;
+    if (shadowCasting == Components::ShadowCasting::ShadowsOnly)
+        flags |= Rendering::kInstanceFlagShadowsOnly;
     if (receiveShadows)
         flags |= 2u;
     flags |= Rendering::DepthClassInstanceFlagBits(depthClass);
     if (sortedTransparent)
         flags |= Rendering::kInstanceFlagSortedTransparent;
-    if (giEmitter)
+    // Emission belongs to a drawn surface: a shadows-only proxy publishes no DDGI light.
+    if (giEmitter && shadowCasting != Components::ShadowCasting::ShadowsOnly)
         flags |= Rendering::kInstanceFlagGIEmitter;
+    if (editorHidden)
+        flags |= Rendering::kInstanceFlagEditorHidden;
     const uint32 worldKey16 = Rendering::PackWorldKey16(worldId);
     flags |= (worldKey16 << 16);
     return flags;
@@ -542,7 +528,7 @@ uint64 RecordDigestTerm(const WorldRenderableRecord& rec)
     constexpr uint64 kFnvOffsetBasis = 14695981039346656037ull;
     uint64 recDigest = HashValue(kFnvOffsetBasis, rec.meshRenderer.meshGpuHandleId);
     recDigest = HashValue(recDigest, rec.meshRenderer.materialAssetGuid);
-    recDigest = HashValue(recDigest, rec.meshRenderer.castShadows);
+    recDigest = HashValue(recDigest, rec.meshRenderer.shadowCasting);
     recDigest = HashValue(recDigest, rec.meshRenderer.RenderLayers.Bits);
     // In the digest or a live toggle does nothing until an unrelated field
     // happens to re-arm extraction.
@@ -564,7 +550,9 @@ auto RenderableQuery(ECS::World& world)
         ECS::Optional<Components::LODGroup>,
         ECS::Optional<Components::MeshGPUData>,
         ECS::Optional<Components::GIEmitter>,
-        ECS::Optional<Components::Transform>>();
+        ECS::Optional<Components::Transform>,
+        ECS::Optional<Components::SceneViewHidden>,
+        ECS::Optional<Components::SceneViewHiddenInHierarchy>>();
 }
 
 // Appends a record for every renderable `query` (a RenderableQuery, possibly
@@ -588,7 +576,9 @@ void AppendRenderableRecords(QueryT& query, std::vector<WorldRenderableRecord>& 
                    const Components::WorldSectorCoord* sc, const Components::SkinnedMeshRenderer* smr,
                    const Components::SkeletonRef* skelRef, const Components::AnimatorRef* anim,
                    const Components::LODGroup* lodGroup, Components::MeshGPUData* meshGpu,
-                   const Components::GIEmitter* giEmitter, const Components::Transform* local)
+                   const Components::GIEmitter* giEmitter, const Components::Transform* local,
+                   const Components::SceneViewHidden* hidden,
+                   const Components::SceneViewHiddenInHierarchy* hiddenInHierarchy)
                {
                    if (meshGpu && meshGpu->hlodEvicted)
                    {
@@ -605,6 +595,7 @@ void AppendRenderableRecords(QueryT& query, std::vector<WorldRenderableRecord>& 
                    rec.worldTransform = xf;
                    rec.meshRenderer = mr;
                    rec.giEmitter = giEmitter != nullptr;
+                   rec.editorHidden = hidden != nullptr || hiddenInHierarchy != nullptr;
                    rec.alwaysRefreshCarrier = smr != nullptr || skelRef != nullptr || anim != nullptr;
                    rec.meshGpu = meshGpu;
                    if (wb)
@@ -720,12 +711,12 @@ void PrepareRecord(const WorldRenderableRecord& rec,
         return;
     }
 
-    const bool castShadows = rec.meshRenderer.castShadows &&
-                             (!rec.hasBounds || rec.bounds.CastShadows);
-    const uint32 flags = ComputeInstanceFlags(castShadows, rec.meshRenderer.receiveShadows,
+    const uint32 flags = ComputeInstanceFlags(rec.meshRenderer.shadowCasting,
+                                              !rec.hasBounds || rec.bounds.CastShadows,
+                                              rec.meshRenderer.receiveShadows,
                                               rs.Materials().GetMaterialDepthClass(matIdx),
                                               IsOrderDependentBlendMaterial(*material),
-                                              rec.giEmitter, worldId);
+                                              rec.giEmitter, rec.editorHidden, worldId);
 
     // Bone-palette atlas offset (SkinDiag logging is intentionally omitted here —
     // it is env-gated diagnostics that would log unordered from workers).
@@ -1520,7 +1511,6 @@ void ExtractNightTint(const Components::PostProcessVolume& volume, PostProcessSe
 void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64 worldId, RenderServices* rs)
 {
     m_Volumes.clear();
-    const WorldTimeOfDayState worldTimeOfDay = FindWorldTimeOfDayState(world);
 
     // Snapshot the effect registrations once per extraction (descriptor storage
     // is process-lifetime stable; ForEach allocates, the volume loop must not).
@@ -1531,11 +1521,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
             if (d.Extract || d.NeutralizeSettings)
                 effectHooks.push_back(&d);
         });
-    PostProcessExtractContext extractCtx{};
-    extractCtx.Services = rs;
-    extractCtx.TimeOfDayHours = worldTimeOfDay.hours;
-    std::memcpy(extractCtx.DayKeyTimesHours, worldTimeOfDay.dayKeyTimesHours,
-                sizeof(extractCtx.DayKeyTimesHours));
+    const PostProcessExtractContext extractCtx = MakePostProcessExtractContext(world, rs);
 
     world.Query<
              GameEngine::ECS::Read<GameEngine::Components::PostProcessVolume>,
@@ -1618,23 +1604,14 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                          [](const PostProcessExtractedVolume& a, const PostProcessExtractedVolume& b)
                          { return a.Priority < b.Priority; });
 
-        bool hasWorldCameraPos = false;
+        const Rendering::CameraData* worldCamData = rs->Views().FindMainCameraData(worldId);
+        const bool hasWorldCameraPos = worldCamData != nullptr;
         float worldCameraPos[3] = {0.0f, 0.0f, 0.0f};
-        const Rendering::CameraData* worldCamData = nullptr;
-        const auto& views = rs->Views().GetViews();
-        for (const auto& view : views)
+        if (worldCamData)
         {
-            if (view.worldId != 0 && view.worldId != worldId)
-                continue;
-            const auto* cam = rs->Views().FindCameraData(view.cameraId);
-            if (!cam)
-                continue;
-            worldCameraPos[0] = cam->cameraPos[0];
-            worldCameraPos[1] = cam->cameraPos[1];
-            worldCameraPos[2] = cam->cameraPos[2];
-            worldCamData = cam;
-            hasWorldCameraPos = true;
-            break;
+            worldCameraPos[0] = worldCamData->cameraPos[0];
+            worldCameraPos[1] = worldCamData->cameraPos[1];
+            worldCameraPos[2] = worldCamData->cameraPos[2];
         }
 
         ResolvedVolumeStack worldStack =
@@ -2111,7 +2088,8 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
                              Components::LocalBounds, Components::SkinnedMeshRenderer,
                              Components::SkeletonRef, Components::AnimatorRef,
                              Components::LODGroup, ECS::ComponentDisabled<Components::MeshRenderer>,
-                             ECS::ComponentDisabled<Components::SkinnedMeshRenderer>>(
+                             ECS::ComponentDisabled<Components::SkinnedMeshRenderer>,
+                             Components::SceneViewHidden, Components::SceneViewHiddenInHierarchy>(
         std::span{m_AlwaysRefresh}, std::span{reads});
     for (std::size_t i = 0; i < m_AlwaysRefresh.size(); ++i)
     {
@@ -2125,8 +2103,8 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
         // latch it set as a stopped mover's settle and zero its motion vector.
         if (std::binary_search(m_DeltaPreparedIds.begin(), m_DeltaPreparedIds.end(), e.id))
             continue;
-        const auto& [wt, mgRead, mr, giEmitterTag, lb, smr, skelRef, anim, lodGroup, rendererOff, skinnedOff] =
-            reads[i];
+        const auto& [wt, mgRead, mr, giEmitterTag, lb, smr, skelRef, anim, lodGroup, rendererOff, skinnedOff,
+                     hidden, hiddenInHierarchy] = reads[i];
         if (!wt || !mgRead || mgRead->instanceIndex == 0xFFFFFFFFu)
             continue; // never extracted / released: creation is the full lane's job (E4)
         // Tag component: presence is the signal (Components::GIEmitter).
@@ -2175,11 +2153,11 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
         const bool hasActiveAnimation = anim && anim->ClipIndex != 0;
         const float lodBias = lodGroup ? lodGroup->Bias : 0.0f;
 
-        const bool castShadows = mr->castShadows && (!hasBounds || lb->CastShadows);
         const uint32 flags =
-            ComputeInstanceFlags(castShadows, mr->receiveShadows,
+            ComputeInstanceFlags(mr->shadowCasting, !hasBounds || lb->CastShadows, mr->receiveShadows,
                                  m_RenderServices->Materials().GetMaterialDepthClass(matIdx),
-                                 IsOrderDependentBlendMaterial(*material), giEmitter, worldId);
+                                 IsOrderDependentBlendMaterial(*material), giEmitter,
+                                 hidden != nullptr || hiddenInHierarchy != nullptr, worldId);
 
         const SkinPaletteOffsets paletteOffsets =
             ResolveSkinPaletteOffsets(skeletonId, hasActiveAnimation, runtimeId);

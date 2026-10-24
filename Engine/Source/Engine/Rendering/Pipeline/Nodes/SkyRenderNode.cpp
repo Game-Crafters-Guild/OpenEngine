@@ -295,38 +295,16 @@ static uint64_t SkyViewLutDigest(uint64_t settingsDigest, uint32_t altitudeBand)
 }
 
 // The altitude band of the camera the sky-view LUT is baked for. One LUT serves every view, so one
-// camera decides: the first view drawing through the pipeline this frame whose purpose is Game,
-// else the first EditorScene view (previews and utility captures never move it). Band 0 (the ground)
-// when there is neither.
-static uint32_t SkyViewLutCameraBand(Engine::Renderer::RenderServices& rs,
-                                     std::span<const Rendering::ViewDesc> views,
-                                     float planetRadius)
+// camera decides: the main camera over every world (ViewRegistry::FindMainCameraData), the camera
+// the sun state's horizon dip reads. Band 0 (the ground) when there is none.
+static uint32_t SkyViewLutCameraBand(const Engine::Renderer::RenderServices& rs, float planetRadius)
 {
-    const Rendering::ViewDesc* chosen = nullptr;
-    for (const auto& v : views)
-    {
-        if (!v.activeRenderPipeline || !v.Participates())
-            continue;
-        if (v.purpose == Rendering::ViewPurpose::Game)
-        {
-            chosen = &v;
-            break;
-        }
-        if (v.purpose == Rendering::ViewPurpose::EditorScene && !chosen)
-            chosen = &v;
-    }
-    if (!chosen)
-        return 0u;
-    const auto* camData = rs.Views().FindCameraData(chosen->cameraId);
+    const auto* camData = rs.Views().FindMainCameraData(0);
     if (!camData)
         return 0u;
     float camPos[3], camFwd[3], camUp[3], camRight[3];
     ExtractCameraVectors(*camData, camPos, camFwd, camUp, camRight);
-    // The planet's centre sits planetRadius below the world origin, as in the sky shaders.
-    const double y = static_cast<double>(camPos[1]) + planetRadius;
-    const double r = std::sqrt(static_cast<double>(camPos[0]) * camPos[0] + y * y +
-                               static_cast<double>(camPos[2]) * camPos[2]);
-    return Rendering::SkyViewLutAltitudeBand(static_cast<float>(r - planetRadius));
+    return Rendering::SkyViewLutAltitudeBand(Rendering::AltitudeAbovePlanetMeters(camPos, planetRadius));
 }
 
 void SkyRenderNode::EnsureDescriptorSetDescs(const Rendering::SkyRenderer& renderer)
@@ -504,7 +482,7 @@ void SkyRenderNode::Declare(RenderPipelineInstance& instance, const PipelineDecl
     const uint64_t digest = ComputeSkyLutSettingsDigest(settings);
     Rendering::AtmosphereParametersGPU lutAtmosphere{};
     FillAtmosphereFromSettings(settings, lutAtmosphere);
-    const uint32_t altitudeBand = SkyViewLutCameraBand(rs, ctx.Views, lutAtmosphere.planetRadius);
+    const uint32_t altitudeBand = SkyViewLutCameraBand(rs, lutAtmosphere.planetRadius);
     const bool transCurrent = renderer.IsTransmittanceComputed();
     const bool multiscatterCurrent = renderer.IsMultiscatterCurrentFor(digest);
     const bool skyViewCurrent = renderer.IsSkyViewLutCurrentFor(SkyViewLutDigest(digest, altitudeBand));

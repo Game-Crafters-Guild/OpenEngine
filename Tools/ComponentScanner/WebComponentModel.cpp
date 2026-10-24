@@ -49,6 +49,7 @@ std::optional<WebComponentModel> WebComponentModel::Build(const std::vector<Refl
         WebComponent component;
         component.Name = r->Name;
         component.NoAdd = r->NoAdd;
+        component.EngineInternal = r->EngineInternal;
         for (const ReflectedField& f : r->Fields)
         {
             if (f.Hidden || f.Transient)

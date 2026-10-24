@@ -1,5 +1,6 @@
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainService.h"
+#include "Terrain/TerrainMaterialRecord.h"
 #include "Terrain/TerrainTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/CommandList.h"
@@ -8,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -524,4 +526,40 @@ TEST_F(TerrainRenderFeatureTest, TerrainParamsRepeatedDeviceIndexHoldsTheElement
 
     EXPECT_EQ(m_Feature->GetLastTerrainParamsSlot(), first)
         << "a repeated device index is the same frame, not the next one";
+}
+
+namespace
+{
+// Whether the feature's last-upload copy holds exactly these params and material records.
+void ExpectLastUploadBytes(const TerrainRenderFeature& feature, const TerrainGPUParams& params,
+                           const std::vector<TerrainMaterialRecord>& materials, const char* when)
+{
+    std::vector<uint8> paramsBytes;
+    std::vector<uint8> materialBytes;
+    feature.CopyLastTerrainParamsAndMaterialBytes(paramsBytes, materialBytes);
+    ASSERT_EQ(paramsBytes.size(), sizeof(params)) << when;
+    EXPECT_EQ(std::memcmp(paramsBytes.data(), &params, sizeof(params)), 0) << when;
+    ASSERT_EQ(materialBytes.size(), materials.size() * sizeof(TerrainMaterialRecord)) << when;
+    EXPECT_EQ(std::memcmp(materialBytes.data(), materials.data(), materialBytes.size()), 0) << when;
+}
+} // namespace
+
+// The grass placement's skip check compares the published params and material table byte for byte,
+// so the copy it reads must be the bytes the last upload was given, both from that one upload. A
+// tint change on its own must show in the material bytes: it changes every blade's ground colour.
+TEST_F(TerrainRenderFeatureTest, LastUploadBytesAreTheParamsAndMaterialsItWasGiven)
+{
+    m_Feature = std::make_unique<TerrainRenderFeature>();
+    ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
+
+    TerrainGPUParams params{};
+    params.WorldSizeX = 512.0f;
+    std::vector<TerrainMaterialRecord> materials(Terrain::kDefaultTerrainMaterials,
+                                                 Terrain::kDefaultTerrainMaterials + kTerrainLayerRoleCount);
+    m_Feature->UploadTerrainParamsArray(&params, 1, materials.data(), kTerrainLayerRoleCount, 0u);
+    ExpectLastUploadBytes(*m_Feature, params, materials, "first upload");
+
+    materials[0].AlbedoR *= 0.5f;
+    m_Feature->UploadTerrainParamsArray(&params, 1, materials.data(), kTerrainLayerRoleCount, 1u);
+    ExpectLastUploadBytes(*m_Feature, params, materials, "after a tint change");
 }

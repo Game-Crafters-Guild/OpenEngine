@@ -10,6 +10,7 @@
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainGrass.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
 #include "Components/Terrain/TerrainModifierVolume.h"
 #include "Components/Terrain/TerrainModifiers.h"
@@ -59,6 +60,9 @@ struct SceneInputs
     float32 SplineX = -100.0f;
     float32 MaskScale = 1.0f;
     float32 PayloadScale = 30.0f;
+    // Darken Ground on a TerrainGrass the terrain carries when above 0: an input of the colour
+    // section alone.
+    float32 GroundDarkening = 0.0f;
 };
 
 struct BakeResult
@@ -67,6 +71,7 @@ struct BakeResult
     std::vector<uint8> Splat;
     float32 SplatMinH = 0.0f;
     float32 SplatMaxH = 0.0f;
+    std::vector<uint8> Color;
 };
 
 // Asset identities never reach the key (it hashes content), so any GUIDs serve.
@@ -239,6 +244,12 @@ struct BakeSession
         for (uint32 i = 0; i < mask.size(); ++i)
             mask[i] = in.MaskScale * (0.15f + 0.7f * static_cast<float32>(i % 16u) / 15.0f);
         system.SeedDecodedStampMaskForTests(kMaskGuid, mask, 16, 16);
+        if (in.GroundDarkening > 0.0f)
+        {
+            Components::TerrainGrass grass{};
+            grass.GroundDarkening = in.GroundDarkening;
+            world.AddComponentImmediate<Components::TerrainGrass>(terrainEntity, grass);
+        }
         Update();
     }
 
@@ -258,6 +269,7 @@ struct BakeSession
         result.Splat = data->Splatmap;
         result.SplatMinH = data->SplatBakeMinH;
         result.SplatMaxH = data->SplatBakeMaxH;
+        result.Color = data->ColorMap.Pixels;
         return result;
     }
 };
@@ -464,6 +476,40 @@ TEST(TerrainBakeCache, AHitServesTheStoredArtifactInsteadOfBaking)
     const BakeResult served = BakeScene({}, {dir.Path, false});
     ASSERT_EQ(served.Heights.size(), fresh.Heights.size());
     EXPECT_EQ(served.Heights[0], fresh.Heights[0] + 1.0f) << "a hit must apply the stored heights, not bake";
+}
+
+// Darken Ground is an input of the colour section alone: changing it between two opens serves the
+// stored heights and splat (a height hit) and composes the colour map again (a colour miss), and an
+// unchanged amount serves the stored colour map as well.
+TEST(TerrainBakeCache, ADarkenGroundChangeIsAColourMissAndAHeightHit)
+{
+    TempDirectory dir;
+    SceneInputs soil;
+    soil.GroundDarkening = 0.5f;
+    const BakeResult stored = BakeScene(soil, {dir.Path, true});
+    ASSERT_FALSE(stored.Color.empty()) << "the soil write left no colour map";
+    const fs::path file = Artifacts(dir.Path).at(0);
+    const uint64 key = StoredKey(file);
+    TerrainBakeArtifact artifact;
+    ASSERT_EQ(ReadTerrainBake(file, key, kDim, kDim, artifact), TerrainBakeCacheStatus::Hit);
+    ASSERT_NE(artifact.ColorKey, 0u) << "the store carried no colour section";
+    ASSERT_EQ(artifact.Color, stored.Color);
+    // Mark both sections, so a served one is told from a baked or a composed one.
+    for (float32& height : artifact.Heights)
+        height += 1.0f;
+    for (size_t i = 3; i < artifact.Color.size(); i += 4)
+        artifact.Color[i] = 7;
+    ASSERT_TRUE(WriteTerrainBake(file, key, artifact));
+
+    SceneInputs more = soil;
+    more.GroundDarkening = 0.8f;
+    const BakeResult changed = BakeScene(more, {dir.Path, false});
+    EXPECT_EQ(changed.Heights[0], stored.Heights[0] + 1.0f) << "the heights must be served: a height hit";
+    EXPECT_EQ(changed.Color, BakeScene(more, {}).Color) << "the colour map must be composed again: a colour miss";
+
+    const BakeResult same = BakeScene(soil, {dir.Path, false});
+    ASSERT_FALSE(same.Color.empty());
+    EXPECT_EQ(same.Color[3], 7) << "an unchanged colour key must serve the stored colour map";
 }
 
 TEST(TerrainBakeCache, TheSameInputsGiveTheSameKey)
@@ -883,7 +929,7 @@ TEST(TerrainBakeCache, ASaveStoresNothingForATerrainWithoutATag)
 // the new values from the failure message.
 TEST(TerrainBakeCache, TheKeyAndTheBakeOutputArePinnedToTheFormatVersion)
 {
-    constexpr uint64 kPinnedKey = 0xdcc535cfbbbe9a3full;
+    constexpr uint64 kPinnedKey = 0xf9c04502f6686a22ull;
     constexpr uint64 kPinnedOutput = 0xf19e25b84ba58001ull;
     TempDirectory dir;
     const BakeResult bake = BakeScene({}, {dir.Path, true});

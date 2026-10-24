@@ -1,10 +1,11 @@
 // The ground colour a blade grows out of: ONE colour per blade, resolved at its root.
 //
-// Included by terrain_grass_vertex_modifier.glsl on the full profile. Every vertex of a blade
-// resolves the same root, and the result reaches the surface through a FLAT varying, so the blade
-// carries one ground colour from its root to its tip. The surface resolved the ground at each
-// fragment's own world position until #4206: a leaning blade's fragments stand over different
-// ground, so a textured ground drew its pattern up the blade as streaks.
+// Included by terrain_grass_place.comp on the full profile, which resolves it once per placed
+// blade and stores it in the blade instance (GrassBladeInstance::RootColor, packed by
+// grass_clump.glsl). The vertex stage reads it from there and hands it to the surface through a
+// FLAT varying, so the blade carries one ground colour from its root to its tip. A colour resolved
+// at each fragment's own world position draws a textured ground's pattern up a leaning blade as
+// streaks, because the blade's fragments stand over different ground.
 //
 // The resolve is the ground's own (Includes/terrain_material_albedo.glsl, the file cbt_surface.glsl
 // shades the ground with), on the same splat (grass_atlas_splat.glsl, the file the placement mask
@@ -14,21 +15,23 @@
 // under it. A blade a few centimetres wide that took the texel under its root would turn every
 // fine detail of the ground into blade-to-blade noise.
 //
-// When the terrain's macro colour map lands (#2706), it replaces this footprint average: one tap of
-// that map at the root is the blade's ground colour.
+// The terrain's colour map (TerrainColorMap.h) then mixes that average toward the painted colour by
+// its weight, the expression the ground applies (cbt_surface.glsl), so a blade's base and the
+// ground beside it agree under a stroke and under the grass's own written soil. The map modifies the
+// footprint average; it does not replace it.
 //
 // The includer supplies, before this file: TerrainParamsEntry, the bindless texture table
-// (Includes/bindless_textures.glsl), CBT/cbt_atlas.glsl, and grass_atlas_splat.glsl with its set
-// and bindings.
+// (Includes/bindless_textures.glsl), cbt_atlas.glsl, grass_atlas_splat.glsl with its set and
+// bindings, and GRASS_MATERIAL_TABLE_SET / GRASS_MATERIAL_TABLE_BINDING for the material table.
 
 #ifndef GRASS_ROOT_GROUND_COLOR_GLSL
 #define GRASS_ROOT_GROUND_COLOR_GLSL
 
-// A grass draw carries blades from several terrains, so a material's bindless index varies within
-// the draw: nonuniform access (GE_BTEX), as on the surface.
+// The blades of one placement workgroup can stand on different terrains, so a material's bindless
+// index varies across invocations: nonuniform access (GE_BTEX).
 #define CBT_LAYER_TEX(texIdx) GE_BTEX(texIdx, GE_TS_REPEAT)
 #define CBT_LAYER_TEX_EDGE(texIdx) GE_BTEX(texIdx, GE_TS_CLAMP_ANISO)
-// A vertex stage has no implicit derivatives. The taps take explicit gradients, which
+// A compute stage has no implicit derivatives. The taps take explicit gradients, which
 // GrassRootGroundColor sets to the root footprint, so every layer reads the mip whose texel spans
 // that much ground at its own tiling. The per-view TAAU mip bias is a screen-space correction and
 // does not apply to a footprint chosen in world metres, so the seam drops it.
@@ -37,15 +40,16 @@
     textureGrad(CBT_LAYER_TEX_EDGE(tex), uv, ddx, ddy).rgb
 #include "Includes/terrain_material_albedo.glsl"
 
-// The terrain's material table, the same buffer and binding the surface used to read. Nameless on
-// purpose: MaterialBinder keys set-2 buffers on the reflected instance name.
-layout(std430, set = 2, binding = 4) readonly buffer TerrainMaterialTableBuffer
+// The terrain's material table, the buffer the ground's surface reads.
+layout(std430, set = GRASS_MATERIAL_TABLE_SET, binding = GRASS_MATERIAL_TABLE_BINDING) readonly buffer
+TerrainMaterialTableBuffer
 {
     TerrainMaterialRecordData TerrainMaterials[];
 };
 
 #include "Includes/terrain_blend_width.glsl"
 #include "Includes/terrain_blend_resolve.glsl"
+#include "Includes/terrain_color_map.glsl"
 
 // World metres of ground one root colour stands for. About the spacing of tufts (the shipped clump
 // is 1.1 m), and coarse enough that a 2 m texture repeat resolves to a few texels.
@@ -57,8 +61,8 @@ const float kGrassRootGroundFootprint = 1.0;
 // weights under a blade fade in on the ground's clock (CBTLayoutTests pins the pair).
 //
 // Called only when a contributing material is textured: an untextured record resolves to its tint
-// and never reads the projection weights.
-vec3 grassRootTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
+// and never reads the projection weights. `r` is the atlas resolve at `uv` (GrassRootGroundColor).
+vec3 grassRootTerrainNormalWS(TerrainParamsEntry tp, vec2 uv, AtlasResolve r)
 {
     if (tp.NormalmapBindless != 0u)
     {
@@ -70,7 +74,6 @@ vec3 grassRootTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
     }
     if (grassAtlasBacked(tp.Flags))
     {
-        AtlasResolve r = grassAtlasResolve(uv);
         bool haveSlot = r.Resident && Atlas.NormalBindless != 0u;
         bool haveCoarse = Atlas.NormalCoarseBindless != 0u;
         float slotWeight = GrassAtlas_SlotUpgradeWeight(haveSlot, haveCoarse, r.Fade, true);
@@ -91,15 +94,45 @@ vec3 grassRootTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
     return vec3(0.0, 1.0, 0.0);
 }
 
-// The terrain's resolved albedo around a blade's root. rootRelWS is the root relative to the
-// render origin, which the projection UVs are anchored to.
+// The colour map at a terrain UV, read where the ground reads it: the unified map on a planar
+// terrain, the resident atlas slot (showing the coarse->slot upgrade crossfade on the ground's clock)
+// or the coarse map out of the window on an atlas-backed one. The map has one level, so the tap is
+// the bilinear texel at the root; a premultiplied texel filters to the right mix. vec4(0) is
+// identity. `r` is the atlas resolve at `uv` (GrassRootGroundColor).
+vec4 grassRootColorMap(TerrainParamsEntry tp, vec2 uv, AtlasResolve r)
+{
+    if (grassAtlasBacked(tp.Flags))
+    {
+        bool haveSlot = r.Resident && Atlas.ColorBindless != 0u;
+        bool haveCoarse = Atlas.ColorCoarseBindless != 0u;
+        vec4 coarse = haveCoarse ? textureLod(GE_BTEX(Atlas.ColorCoarseBindless, GE_TS_CLAMP),
+                                              grassCoarseUV(uv, Atlas.CoarseDim), 0.0)
+                                 : vec4(0.0);
+        if (!haveSlot)
+            return coarse;
+        float slotWeight = GrassAtlas_SlotUpgradeWeight(haveSlot, haveCoarse, r.Fade, true);
+        vec4 slot = textureLod(GE_BTEX(Atlas.ColorBindless, GE_TS_CLAMP), r.SlotUV, 0.0);
+        return slotWeight < 1.0 ? mix(coarse, slot, slotWeight) : slot;
+    }
+    if (tp.ColorMapBindless == 0u)
+        return vec4(0.0);
+    return textureLod(GE_BTEX(tp.ColorMapBindless, GE_TS_CLAMP),
+                      CBT_LatticeTextureUV(uv, vec2(textureSize(GE_BTEX(tp.ColorMapBindless, GE_TS_CLAMP), 0))),
+                      0.0);
+}
+
+// The terrain's resolved albedo around a blade's root, with the colour map applied. rootRelWS is
+// the root relative to the render origin, which the projection UVs are anchored to.
 vec3 GrassRootGroundColor(TerrainParamsEntry tp, vec3 rootWS, vec3 rootRelWS)
 {
     vec2 uv = clamp(vec2((rootWS.x - tp.WorldOriginX) / max(tp.WorldSizeX, 0.0001),
                          (rootWS.z - tp.WorldOriginZ) / max(tp.WorldSizeZ, 0.0001)),
                     vec2(0.0), vec2(1.0));
 
-    vec4 weights = GrassAtlas_ResolveSplat(tp.Flags, tp.SplatmapBindless, uv, true);
+    // One atlas resolve at the root for the splat, normal and colour map reads: each would otherwise
+    // compile its own, and the stage carries all three even on a planar terrain.
+    AtlasResolve atlas = grassAtlasResolve(uv);
+    vec4 weights = GrassAtlas_ResolveSplatAt(atlas, tp.Flags, tp.SplatmapBindless, uv, true);
     uint roles[4] = uint[4](tp.LayerRole[0], tp.LayerRole[1], tp.LayerRole[2], tp.LayerRole[3]);
     weights = CBT_ResolveBlendWeights(weights, roles);
 
@@ -107,7 +140,7 @@ vec3 GrassRootGroundColor(TerrainParamsEntry tp, vec3 rootWS, vec3 rootRelWS)
     for (int i = 0; i < 4; ++i)
         anyTextured = anyTextured || (weights[i] > 0.0 && TerrainMaterials[roles[i]].AlbedoTex != 0u);
     CBTTriplanarCtx tc = CBT_BuildTriplanarCtx(
-        rootRelWS, anyTextured ? grassRootTerrainNormalWS(tp, uv) : vec3(0.0, 1.0, 0.0), uv);
+        rootRelWS, anyTextured ? grassRootTerrainNormalWS(tp, uv, atlas) : vec3(0.0, 1.0, 0.0), uv);
     // The footprint as screen-space-style gradients: x along world X, y along world Y and Z, so
     // each of the three projections (XY, XZ, YZ) sees the footprint on both of its axes.
     float footprint = kGrassRootGroundFootprint;
@@ -127,7 +160,7 @@ vec3 GrassRootGroundColor(TerrainParamsEntry tp, vec3 rootWS, vec3 rootRelWS)
             color += CBT_MaterialAlbedo(uint(i), mat, tc, muv, rootWS, footprint) * weights[i];
         }
     }
-    return color;
+    return TerrainApplyColorMap(color, grassRootColorMap(tp, uv, atlas));
 }
 
 #endif // GRASS_ROOT_GROUND_COLOR_GLSL

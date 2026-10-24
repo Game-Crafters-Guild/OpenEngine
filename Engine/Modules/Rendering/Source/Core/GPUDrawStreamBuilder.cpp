@@ -290,6 +290,7 @@ void GPUDrawStreamBuilder::ResetTrackingState()
     m_RenderedHistoryResetRuns.clear();
     m_FrameSlices.clear();
     m_RangeMap.clear();
+    m_PublishedSliceKeys.clear();
     m_SentinelBuffer               = BufferHandle{};
     m_ScatterPipeline              = PipelineHandle{};
     m_GroupCompactPipeline         = PipelineHandle{};
@@ -850,6 +851,21 @@ void GPUDrawStreamBuilder::ReleaseRenderedHistory(uint32_t viewId)
                                      std::memory_order_relaxed);
 }
 
+void GPUDrawStreamBuilder::ReleaseView(uint32_t viewId)
+{
+    ReleaseRenderedHistory(viewId);
+    if (const auto it = m_PrevLod.find(viewId); it != m_PrevLod.end())
+    {
+        RetireBuffer(it->second.buffer);
+        m_PrevLod.erase(it);
+    }
+    if (const auto it = m_LodFade.find(viewId); it != m_LodFade.end())
+    {
+        RetireBuffer(it->second.buffer);
+        m_LodFade.erase(it);
+    }
+}
+
 GPUDrawStreamBuilder::ScatterIntrospection GPUDrawStreamBuilder::IntrospectScatter() const
 {
     // Same lock GetOrCreateScatterPipeline writes these members under, so a
@@ -1367,6 +1383,7 @@ void GPUDrawStreamBuilder::BeginArenaFrame()
     m_ClassMapBytes        = 0;
     m_FrameSlices.clear();
     m_RangeMap.clear();
+    m_PublishedSliceKeys.clear();
     m_SliceStatsBindings.clear();
     m_UnobservableTailSlices = 0;
 }
@@ -1399,16 +1416,7 @@ GPUDrawStreamBuilder::GetRenderedHistoryForRead(uint32_t viewId) const
 bool GPUDrawStreamBuilder::HasPublishedRangesForPhase(uint32_t viewId, uint8_t cascadeIndex,
                                                       SlicePhase phase) const
 {
-    // The key packs the three axes above the material and mesh fields, so one
-    // masked comparison answers for every batch of the slice.
-    constexpr uint64_t kBatchAxesMask = (1ull << 48) - 1ull;
-    const uint64_t wanted = MakeStreamKey(viewId, cascadeIndex, 0u, 0u, phase);
-    for (const auto& [key, range] : m_RangeMap)
-    {
-        if ((key & ~kBatchAxesMask) == wanted && range.IsValid())
-            return true;
-    }
-    return false;
+    return m_PublishedSliceKeys.contains(MakeStreamKey(viewId, cascadeIndex, 0u, 0u, phase));
 }
 
 GPUDrawStreamBuilder::ScatterStats GPUDrawStreamBuilder::ReadScatterStats() const
@@ -2213,6 +2221,8 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
             ++m_UnobservableTailSlices;
         }
 
+        const uint64_t sliceKey = MakeStreamKey(slice.viewId, slice.cascadeIndex, 0u, 0u, slice.phase);
+        bool slicePublished = false;
         if (groupActive)
         {
             // One range per run, keyed by POOL GROUP (the consumers' axis).
@@ -2266,55 +2276,61 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                     range.even     = head;
                     range.evenTail = tail;
                 }
+                slicePublished |= range.IsValid();
             }
-            continue;
         }
-
-        for (uint32_t b = 0; b < static_cast<uint32_t>(sliceTable.size()); ++b)
+        else
         {
-            const BatchTableEntry& e = sliceTable[b];
-            // MakeStreamKey masks the mesh field to 24 bits, so a parity-0 row
-            // and its parity-1 sibling collapse to the SAME range-map key — they
-            // MUST merge into one BatchDrawRange (two segments), not overwrite
-            // each other. Detect parity from bit 24 and fill the matching
-            // segment, preserving the other (rows arrive in sort order, so the
-            // parity-0 block precedes the parity-1 block for a material).
-            const bool     mirroredRow = (e.meshIndex & kMeshParityBit) != 0u;
-            const uint32_t realMesh    = e.meshIndex & ~kMeshParityBit;
-            BatchDrawRange& range = m_RangeMap[MakeStreamKey(
-                slice.viewId, slice.cascadeIndex, e.materialIndex, realMesh, slice.phase)];
-            range.recordBuffer = m_SharedRecords;
-            range.countBuffer  = m_SharedCursors;
-            BatchDrawSegment head{};
-            head.cmdByteOffset = static_cast<size_t>(sliceRecordBase + e.recordOffset)
-                                 * kDrawCommandStride;
-            head.countByteOffset = static_cast<size_t>(sliceCursorBase + b) * sizeof(uint32_t);
-            head.maxDrawCount    = e.capacity;
-            // The tail reuses the row's own recordOffset against the tail block
-            // base. There is no compact pass here, so the count slot IS the raw
-            // cursor and maxDrawCount is the only clamp — it must be the PAIRED
-            // bound, or an odd-capacity row whose tail filled would draw one
-            // slot the scatter refused to write.
-            BatchDrawSegment tail{};
-            if (sliceHasTail)
+            for (uint32_t b = 0; b < static_cast<uint32_t>(sliceTable.size()); ++b)
             {
-                tail.cmdByteOffset = static_cast<size_t>(tailRecordBase + e.recordOffset)
+                const BatchTableEntry& e = sliceTable[b];
+                // MakeStreamKey masks the mesh field to 24 bits, so a parity-0 row
+                // and its parity-1 sibling collapse to the SAME range-map key — they
+                // MUST merge into one BatchDrawRange (two segments), not overwrite
+                // each other. Detect parity from bit 24 and fill the matching
+                // segment, preserving the other (rows arrive in sort order, so the
+                // parity-0 block precedes the parity-1 block for a material).
+                const bool     mirroredRow = (e.meshIndex & kMeshParityBit) != 0u;
+                const uint32_t realMesh    = e.meshIndex & ~kMeshParityBit;
+                BatchDrawRange& range = m_RangeMap[MakeStreamKey(
+                    slice.viewId, slice.cascadeIndex, e.materialIndex, realMesh, slice.phase)];
+                range.recordBuffer = m_SharedRecords;
+                range.countBuffer  = m_SharedCursors;
+                BatchDrawSegment head{};
+                head.cmdByteOffset = static_cast<size_t>(sliceRecordBase + e.recordOffset)
                                      * kDrawCommandStride;
-                tail.countByteOffset =
-                    static_cast<size_t>(tailCursorBase + b) * sizeof(uint32_t);
-                tail.maxDrawCount = TailDrawBound(e.capacity);
-            }
-            if (mirroredRow)
-            {
-                range.mirrored     = head;
-                range.mirroredTail = tail;
-            }
-            else
-            {
-                range.even     = head;
-                range.evenTail = tail;
+                head.countByteOffset = static_cast<size_t>(sliceCursorBase + b) * sizeof(uint32_t);
+                head.maxDrawCount    = e.capacity;
+                // The tail reuses the row's own recordOffset against the tail block
+                // base. There is no compact pass here, so the count slot IS the raw
+                // cursor and maxDrawCount is the only clamp — it must be the PAIRED
+                // bound, or an odd-capacity row whose tail filled would draw one
+                // slot the scatter refused to write.
+                BatchDrawSegment tail{};
+                if (sliceHasTail)
+                {
+                    tail.cmdByteOffset = static_cast<size_t>(tailRecordBase + e.recordOffset)
+                                         * kDrawCommandStride;
+                    tail.countByteOffset =
+                        static_cast<size_t>(tailCursorBase + b) * sizeof(uint32_t);
+                    tail.maxDrawCount = TailDrawBound(e.capacity);
+                }
+                if (mirroredRow)
+                {
+                    range.mirrored     = head;
+                    range.mirroredTail = tail;
+                }
+                else
+                {
+                    range.even     = head;
+                    range.evenTail = tail;
+                }
+                slicePublished |= range.IsValid();
             }
         }
+        // The pool-group runs and the per-batch rows publish the slice here.
+        if (slicePublished)
+            m_PublishedSliceKeys.insert(sliceKey);
     }
 
     const RenderGraph::RGBuffer ordering =

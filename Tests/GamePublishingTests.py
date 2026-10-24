@@ -237,7 +237,8 @@ class PublishingTests(unittest.TestCase):
     def test_editor_failure_and_superseded_build_never_publish(self):
         self.target["editorPlatform"] = "Linux"
         for status in ({"generation": 8}, {"generation": 7, "running": False, "succeeded": False,
-                                            "cancelled": False, "errors": ["script compile failed"]}):
+                                            "cancelled": False, "errors": 1,
+                                            "errorLines": ["script compile failed"]}):
             replies = [{"workspaceRoot": str(self.root)}, {"running": False}, {"generation": 7}, status]
             with mock.patch.object(pub, "editor_call", side_effect=replies), self.assertRaises(pub.ReleaseError):
                 pub.build_in_editor(self.root, self.target)

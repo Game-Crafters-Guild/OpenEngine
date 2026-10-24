@@ -5,6 +5,8 @@
 #include "Engine/Rendering/Pipeline/Nodes/DepthResolveNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/TransmissivePassNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h"
+#include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
+#include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/WorldDrawTypes.h"
 #include "AssetCore/GUID.h"
@@ -12,11 +14,13 @@
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
 
 #include "RGPassQuery.h"
-#include "TestDeviceHelper.h"
+#include "SharedHeadlessDevice.h"
 
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -443,6 +447,145 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     return out;
 }
 
+// What the glass pass declared for the screen-space reflection slices the world pass wrote.
+struct ReflectionSliceDecl
+{
+    bool PassDeclared = false;  // positive control: the glass pass ran at all
+    bool SlicesWritten = false; // the world pass published the three slices as written
+    uint32_t SlicesAttached = 0;
+    bool LoadedAndStored = true;
+    bool AtTheWorldLocations = true;
+};
+
+/// WorldRender + TransmissiveRender over one single-sample view holding a transmissive batch, with
+/// screen-space reflections active or not for the view.
+ReflectionSliceDecl DeclareGlassUnderReflections(Rendering::IDevice* device, bool reflectionsActive)
+{
+    ReflectionSliceDecl out{};
+    RenderServices rs;
+    if (!rs.Initialize(device))
+        return out;
+
+    const CameraId camId = rs.Views().AllocateCamera("GlassReflectCam");
+    CameraData cd{};
+    for (int i = 0; i < 16; i += 5)
+    {
+        cd.view[i] = 1.0f;
+        cd.proj[i] = 1.0f;
+        cd.viewProj[i] = 1.0f;
+    }
+    rs.Views().SetCameraData(camId, cd);
+    const ViewId viewId = rs.Views().AllocateView("GlassReflectView", camId);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
+    Rendering::ViewClearConfig clear{};
+    clear.clearColor = true;
+    clear.clearDepth = true;
+    rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
+    PostProcessSettings pp{};
+    pp.SSSRIntensity = reflectionsActive ? 1.0f : 0.0f;
+    rs.Views().SetViewPostProcessOverride(viewId, pp);
+
+    RenderPipelineNodeRegistry registry;
+    if (!registry.Register("WorldRender", [] { return std::make_unique<Nodes::WorldRenderNode>(); },
+                           true)
+        || !registry.Register("TransmissiveRender",
+                              [] { return std::make_unique<Nodes::TransmissivePassNode>(); }, true))
+    {
+        rs.Shutdown();
+        return out;
+    }
+    RenderPipelineBlueprint bp;
+    bp.pipelineName = "GlassReflectTest";
+    {
+        RenderPipelineBlueprint::Pass p;
+        p.id = "World";
+        p.type = "WorldRender";
+        p.enabled = true;
+        p.perView = true;
+        p.passJson = R"({"id":"World","type":"WorldRender"})";
+        bp.passes.push_back(p);
+    }
+    {
+        RenderPipelineBlueprint::Pass p;
+        p.id = "Transmissive";
+        p.type = "TransmissiveRender";
+        p.enabled = true;
+        p.perView = true;
+        p.passJson = R"({"id":"Transmissive","type":"TransmissiveRender","draws":["glass"]})";
+        bp.passes.push_back(p);
+    }
+    bp.outputs.push_back({"FinalColor", "View.Resolve"});
+    RenderPipelineInstance instance(rs, registry);
+    instance.SetBlueprint(bp);
+
+    Material glass = Material::TestFactory::Create(GUID::Generate(), "GlassMat", 32u);
+    Material::TestFactory::SetGraphicsPipelineId(glass, Rendering::GraphicsPipelineId{1u});
+    Material::TestFactory::SetGpuSceneMaterialIndex(glass, 1u);
+    {
+        Rendering::ShaderVariantKey key{};
+        key.materialKeywords |= Rendering::MaterialKeyword::Transmission;
+        Material::TestFactory::SetVariantKey(glass, key);
+    }
+
+    FramePools pools(device);
+    RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.BeginFrame(0);
+    RenderGraph::RGTexture color = frame.ImportPersistentTexture("GR.Color", ColorTargetDesc(1u));
+    RenderGraph::RGTexture depth = frame.ImportPersistentTexture("GR.Depth", DepthTargetDesc(1u));
+
+    const Rendering::MeshGPUHandle mesh = RegisterTestMesh(rs);
+    rs.BeginWorldDrawFrame();
+    WorldSubmissionRecord rec{};
+    rec.viewId = viewId;
+    rec.meshHandle = mesh;
+    rec.material = &glass;
+    rec.renderLayerMask = GameEngine::Rendering::RenderLayerMask::Default();
+    rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&rec, 1u));
+    rs.BuildWorldBatchKeys();
+
+    const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{viewId, color, depth, {}}};
+    const std::vector<Rendering::ViewDesc> views(rs.Views().GetViews().begin(),
+                                                 rs.Views().GetViews().end());
+    instance.Declare(frame, targets, views);
+
+    const auto passes = GameEngine::Testing::RGQuery::DeclaredIds(
+        frame.Graph(), Subtree{"TransmissiveRenderEntities"});
+    out.PassDeclared = passes.size() == 1u;
+    // The world pass's slice locations (ReflectionsProvider): normal 1, weight 2, radiance 3.
+    const std::pair<const char*, uint32_t> slices[] = {{"View.NormalRoughness.Written", 1u},
+                                                       {"View.SSRSpecularWeight.Written", 2u},
+                                                       {"View.SSRSpecularRadiance.Written", 3u}};
+    const auto* resources = instance.FrameResourcesFor(&frame);
+    out.SlicesWritten = resources != nullptr;
+    for (const auto& [name, location] : slices)
+    {
+        RenderGraph::RGTexture slice{};
+        if (resources)
+            if (const auto it = resources->Textures.find({viewId, name}); it != resources->Textures.end())
+                slice = it->second;
+        if (!slice.IsValid())
+        {
+            out.SlicesWritten = false;
+            continue;
+        }
+        for (const auto& att : frame.Attachments())
+        {
+            if (!out.PassDeclared || att.Pass != passes.front() || att.IsDepth || att.Tex != slice.Id)
+                continue;
+            ++out.SlicesAttached;
+            out.LoadedAndStored &= att.Ops.Load == RenderGraph::RGLoadOp::Load &&
+                                   att.Ops.Store == RenderGraph::RGStoreOp::Store;
+            out.AtTheWorldLocations &= att.Slot == location;
+        }
+    }
+
+    frame.MarkOutput(color);
+    frame.Execute();
+    device->WaitForIdle();
+    rs.Shutdown();
+    return out;
+}
+
 } // namespace
 
 // The fix this file exists for. Without a depth attachment the transmissive pass has no hardware
@@ -451,11 +594,11 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
 // material's own depthWriteEnable from writing glass into the shared depth.
 TEST(TransmissiveDepthAttachmentTests, AttachesOpaqueDepthReadOnlyWhenSampleCountsMatch)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
 
-    const PassDepthDecl d = DeclareTransmissiveWorld(device.get(), /*samples=*/1u);
+    const PassDepthDecl d = DeclareTransmissiveWorld(device, /*samples=*/1u);
     ASSERT_TRUE(d.PassDeclared)
         << "positive control: a transmissive material in the view must declare exactly one "
            "transmissive pass — without it every assertion below is vacuous";
@@ -467,8 +610,6 @@ TEST(TransmissiveDepthAttachmentTests, AttachesOpaqueDepthReadOnlyWhenSampleCoun
            "tests against would both destroy the opaque depth and disable the occlusion";
     EXPECT_EQ(d.Store, RenderGraph::RGStoreOp::None)
         << "a read-only attach preserves contents and records no attachment write";
-
-    device->Shutdown();
 }
 
 // The reason the attach is conditional rather than unconditional. Under MSAA the pass composites
@@ -479,18 +620,16 @@ TEST(TransmissiveDepthAttachmentTests, AttachesOpaqueDepthReadOnlyWhenSampleCoun
 // attachment-less and glass falls back to the in-shader compare in adapter_forward.glsl.
 TEST(TransmissiveDepthAttachmentTests, WithholdsDepthWhenColorResolvedAndDepthMultisampled)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
 
-    const PassDepthDecl d = DeclareTransmissiveWorld(device.get(), /*samples=*/4u);
+    const PassDepthDecl d = DeclareTransmissiveWorld(device, /*samples=*/4u);
     ASSERT_TRUE(d.PassDeclared)
         << "positive control: the MSAA arm must still declare the pass, else 'no depth "
            "attachment' would be trivially true";
     EXPECT_FALSE(d.AttachedDepth)
         << "MSAA depth beside the resolved 1-sample colour is an illegal mixed-sample pass";
-
-    device->Shutdown();
 }
 
 // The late-transparent sibling of the case above. Smoke and ocean spray composite into the same
@@ -502,11 +641,11 @@ TEST(TransmissiveDepthAttachmentTests, WithholdsDepthWhenColorResolvedAndDepthMu
 // depthWriteEnable through.
 TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesOpaqueDepthReadOnly)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
 
-    const PassDepthDecl d = DeclareLateTransparentWorld(device.get(), /*samples=*/1u);
+    const PassDepthDecl d = DeclareLateTransparentWorld(device, /*samples=*/1u);
     ASSERT_TRUE(d.PassDeclared)
         << "positive control: a late-forward command in the view must declare exactly one "
            "LateTransparent pass — without it every assertion below is vacuous";
@@ -519,8 +658,6 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesOpaqueDepthReadOnl
            "opaque scene: it must load that depth, never clear it";
     EXPECT_EQ(d.Store, RenderGraph::RGStoreOp::None)
         << "a read-only attach preserves contents and records no attachment write";
-
-    device->Shutdown();
 }
 
 // This blueprint declares no DepthResolve node, so View.DepthResolved aliases View.Depth and the
@@ -532,11 +669,11 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesOpaqueDepthReadOnl
 // what puts FRAGMENT_SHADER + SHADER_READ in the consumer scope.
 TEST(TransmissiveDepthAttachmentTests, LateTransparentSamplesTheDepthItAttachesReadOnly)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
 
-    const PassDepthDecl d = DeclareLateTransparentWorld(device.get(), /*samples=*/1u);
+    const PassDepthDecl d = DeclareLateTransparentWorld(device, /*samples=*/1u);
     ASSERT_TRUE(d.PassDeclared) << "positive control: the LateTransparent pass must declare";
     ASSERT_TRUE(d.AttachedDepth)
         << "positive control: without an attachment there is no aliased resource to sample, and "
@@ -547,8 +684,6 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentSamplesTheDepthItAttachesR
     EXPECT_TRUE(d.SampledAttachedDepth)
         << "the attach's DepthRead scope alone leaves a ge_sceneDepth texelFetch reading memory "
            "that is available but not visible to the fragment stage";
-
-    device->Shutdown();
 }
 
 // Under MSAA the late pass draws into the resolved 1-sample colour, which the multisampled view depth
@@ -559,14 +694,14 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentSamplesTheDepthItAttachesR
 // the source.
 TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesACopyOfTheViewDepthUnderMsaa)
 {
-    auto device = CreateVulkanDeviceFast();
+    auto* device = SharedHeadlessDevice();
     if (!device)
         GTEST_SKIP() << "No Vulkan device available";
 
     for (const bool withDepthResolve : {false, true})
     {
         SCOPED_TRACE(withDepthResolve ? "with a DepthResolve node" : "without a DepthResolve node");
-        const PassDepthDecl d = DeclareLateTransparentWorld(device.get(), /*samples=*/4u, withDepthResolve);
+        const PassDepthDecl d = DeclareLateTransparentWorld(device, /*samples=*/4u, withDepthResolve);
         ASSERT_TRUE(d.PassDeclared) << "positive control: the MSAA arm must declare the LateTransparent pass";
         EXPECT_TRUE(d.AttachedDepth) << "under MSAA the late transparents must still have a depth test";
         EXPECT_FALSE(d.AttachedViewDepth) << "the multisampled view depth cannot share the resolved colour's pass";
@@ -580,8 +715,6 @@ TEST(TransmissiveDepthAttachmentTests, LateTransparentAttachesACopyOfTheViewDept
             << "View.DepthResolved is resolved after the prepass and misses terrain, grass and the ocean";
         EXPECT_TRUE(d.CopyBeforeLatePass);
     }
-
-    device->Shutdown();
 }
 
 // A node told what to draw draws only that; a list that names nothing, or names an unknown kind, is refused
@@ -601,4 +734,68 @@ TEST(TransmissiveDepthAttachmentTests, DrawsListNamesWhatTheNodeDraws)
         EXPECT_FALSE(node.Initialize("Transmissive", json, &error)) << json;
         EXPECT_NE(error.find("\"glass\""), std::string::npos) << json << ": " << error;
     }
+}
+
+// Glass is not in the depth buffer, so at its pixels the world pass's reflection slices describe
+// the opaque surface behind it. Screen-space reflections then replace that surface's probe lobe
+// on a pixel that shows the surface only through the glass, and the composite goes black where
+// the subtracted lobe outweighs what the glass lets through. The glass pass takes the slices,
+// loaded and stored at the world pass's locations, so the glass can zero the weight under it.
+TEST(TransmissiveDepthAttachmentTests, GlassTakesTheReflectionSlicesWhenReflectionsRun)
+{
+    Rendering::ShaderPackage pkg{};
+    if (!Rendering::LoadShaderPkg("Shaders/copy.shaderpkg", Rendering::ShaderSourceKind::SpirV, pkg))
+        GTEST_SKIP() << "copy.shaderpkg not staged: the scene-colour grab declines without it";
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    const ReflectionSliceDecl on = DeclareGlassUnderReflections(device, true);
+    ASSERT_TRUE(on.PassDeclared) << "positive control: the glass pass must declare";
+    ASSERT_TRUE(on.SlicesWritten) << "positive control: the world pass must write the slices";
+    EXPECT_EQ(on.SlicesAttached, 3u)
+        << "the glass pass must attach the normal, weight and radiance slices";
+    EXPECT_TRUE(on.LoadedAndStored) << "the slices hold the opaque scene's values: load and store them";
+    EXPECT_TRUE(on.AtTheWorldLocations) << "the glass variant writes the slices at the world's locations";
+
+    const ReflectionSliceDecl off = DeclareGlassUnderReflections(device, false);
+    ASSERT_TRUE(off.PassDeclared) << "positive control: the glass pass must declare without reflections";
+    EXPECT_EQ(off.SlicesAttached, 0u) << "without reflections the glass pass attaches no slice";
+}
+
+// The glass writes the weight slice's RGB and nothing of the normal and radiance slices, so the
+// opaque surface behind it keeps those values for their other reader (the DDGI glossy resolve).
+// Only the transmissive pass's glass variant (the reflection keyword with the scene-colour grab)
+// is masked, and only when its program declares all three slices.
+TEST(TransmissiveDepthAttachmentTests, GlassMasksTheNormalAndRadianceSlices)
+{
+    constexpr auto kGlassPass =
+        Rendering::MaterialKeyword::SSSRNormalRoughness | Rendering::MaterialKeyword::SceneColorGrab;
+    const auto writeMasks = [](const Rendering::ColorBlendState& blend)
+    {
+        std::vector<uint32_t> masks;
+        for (const auto& attachment : blend.attachments)
+            masks.push_back(attachment.colorWriteMask);
+        return masks;
+    };
+    const auto blendOf = [](size_t attachments)
+    {
+        Rendering::ColorBlendState blend{};
+        blend.attachments.resize(attachments);
+        return blend;
+    };
+
+    Rendering::ColorBlendState glass = blendOf(4);
+    ReflectionsProvider::ApplyTransmissivePassWriteMasks(kGlassPass, glass);
+    EXPECT_EQ(writeMasks(glass), (std::vector<uint32_t>{0xFu, 0u, 0x7u, 0u}))
+        << "colour untouched; normal and radiance masked off; the weight's RGB written, its alpha kept";
+
+    Rendering::ColorBlendState world = blendOf(4);
+    ReflectionsProvider::ApplyTransmissivePassWriteMasks(Rendering::MaterialKeyword::SSSRNormalRoughness, world);
+    EXPECT_EQ(writeMasks(world), writeMasks(blendOf(4))) << "the world pass writes all its slices";
+
+    Rendering::ColorBlendState shortArray = blendOf(3);
+    ReflectionsProvider::ApplyTransmissivePassWriteMasks(kGlassPass, shortArray);
+    EXPECT_EQ(writeMasks(shortArray), writeMasks(blendOf(3)))
+        << "a program without the three slices is left as built";
 }

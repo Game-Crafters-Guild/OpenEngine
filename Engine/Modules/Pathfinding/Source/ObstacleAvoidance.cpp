@@ -3,9 +3,12 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <vector>
 
 #if GE_PATHFINDING_BACKEND_DETOUR
+#include <DetourCommon.h>
 #include <DetourCrowd.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshQuery.h>
@@ -21,6 +24,36 @@ struct CrowdManager::Impl
     dtCrowd* Crowd = nullptr;
     dtNavMesh* NavMesh = nullptr;
     dtNavMeshQuery* NavQuery = nullptr;
+    // The frame of the mesh the crowd steers on: agents live in chart-local coordinates and the
+    // public functions take and return world points.
+    NavMeshChart Chart;
+    // Counts the successful Initialize calls.
+    uint32 Generation = 0;
+    // Per crowd agent index: whether it arrived (MarkAgentArrived), and the goal it arrived at, in
+    // chart-local coordinates.
+    struct Arrival
+    {
+        bool Arrived = false;
+        float32 Goal[3] = {};
+    };
+    std::vector<Arrival> Arrivals;
+
+    void ClearArrival(CrowdAgentHandle agent)
+    {
+        if (agent >= 0 && static_cast<std::size_t>(agent) < Arrivals.size())
+            Arrivals[static_cast<std::size_t>(agent)] = {};
+    }
+
+    void ToLocal(float32 x, float32 y, float32 z, float32 out[3]) const { Chart.ToChart(x, y, z, out); }
+
+    void ToWorld(const float32 local[3], float32& outX, float32& outY, float32& outZ) const
+    {
+        float64 world[3];
+        Chart.ToWorld(local, world);
+        outX = static_cast<float32>(world[0]);
+        outY = static_cast<float32>(world[1]);
+        outZ = static_cast<float32>(world[2]);
+    }
 
     ~Impl()
     {
@@ -58,6 +91,7 @@ bool CrowdManager::Initialize(DetourNavMap& navMap, uint32 maxAgents)
     m_Impl->NavMesh = static_cast<dtNavMesh*>(navMap.GetDetourNavMesh());
     if (!m_Impl->NavMesh)
         return false;
+    m_Impl->Chart = navMap.GetChart();
 
     m_Impl->NavQuery = dtAllocNavMeshQuery();
     if (!m_Impl->NavQuery)
@@ -125,6 +159,8 @@ bool CrowdManager::Initialize(DetourNavMap& navMap, uint32 maxAgents)
     avoidanceParams.adaptiveDepth = 3;
     m_Impl->Crowd->setObstacleAvoidanceParams(3, &avoidanceParams);
 
+    m_Impl->Arrivals.assign(maxAgents, {});
+    ++m_Impl->Generation;
     return true;
 }
 
@@ -141,6 +177,7 @@ void CrowdManager::Shutdown()
         m_Impl->NavQuery = nullptr;
     }
     m_Impl->NavMesh = nullptr;
+    m_Impl->Arrivals.clear();
 }
 
 bool CrowdManager::IsInitialized() const
@@ -153,12 +190,18 @@ bool CrowdManager::IsBoundTo(const DetourNavMap& navMap) const
     return IsInitialized() && m_Impl->NavMesh == navMap.GetDetourNavMesh();
 }
 
+uint32 CrowdManager::GetGeneration() const
+{
+    return m_Impl ? m_Impl->Generation : 0;
+}
+
 CrowdAgentHandle CrowdManager::AddAgent(float32 x, float32 y, float32 z, const CrowdAgentParams& params)
 {
     if (!IsInitialized())
         return kInvalidCrowdAgent;
 
-    const float32 pos[3] = {x, y, z};
+    float32 pos[3];
+    m_Impl->ToLocal(x, y, z, pos);
 
     dtCrowdAgentParams agentParams = {};
     agentParams.radius = params.Radius;
@@ -176,7 +219,9 @@ CrowdAgentHandle CrowdManager::AddAgent(float32 x, float32 y, float32 z, const C
     agentParams.obstacleAvoidanceType = static_cast<uint8>(params.AvoidanceQuality);
     agentParams.queryFilterType = 0;
 
-    return static_cast<CrowdAgentHandle>(m_Impl->Crowd->addAgent(pos, &agentParams));
+    const auto handle = static_cast<CrowdAgentHandle>(m_Impl->Crowd->addAgent(pos, &agentParams));
+    m_Impl->ClearArrival(handle);
+    return handle;
 }
 
 void CrowdManager::RemoveAgent(CrowdAgentHandle agent)
@@ -184,6 +229,7 @@ void CrowdManager::RemoveAgent(CrowdAgentHandle agent)
     if (!IsInitialized() || agent == kInvalidCrowdAgent)
         return;
     m_Impl->Crowd->removeAgent(static_cast<int32>(agent));
+    m_Impl->ClearArrival(agent);
 }
 
 void CrowdManager::SetAgentTarget(CrowdAgentHandle agent, float32 x, float32 y, float32 z)
@@ -191,7 +237,8 @@ void CrowdManager::SetAgentTarget(CrowdAgentHandle agent, float32 x, float32 y, 
     if (!IsInitialized() || agent == kInvalidCrowdAgent)
         return;
 
-    const float32 targetPos[3] = {x, y, z};
+    float32 targetPos[3];
+    m_Impl->ToLocal(x, y, z, targetPos);
 
     const dtCrowdAgent* crowdAgent = m_Impl->Crowd->getAgent(static_cast<int32>(agent));
     const float32 agentRadius = (crowdAgent && crowdAgent->active) ? crowdAgent->params.radius : 0.6f;
@@ -203,7 +250,7 @@ void CrowdManager::SetAgentTarget(CrowdAgentHandle agent, float32 x, float32 y, 
     };
 
     dtPolyRef targetRef = 0;
-    float32 nearestPos[3] = {x, y, z};
+    float32 nearestPos[3] = {targetPos[0], targetPos[1], targetPos[2]};
     dtStatus status = m_Impl->NavQuery->findNearestPoly(targetPos, extent,
                                                          m_Impl->Crowd->getFilter(0),
                                                          &targetRef, nearestPos);
@@ -214,11 +261,26 @@ void CrowdManager::SetAgentTarget(CrowdAgentHandle agent, float32 x, float32 y, 
         return;
     }
 
+    m_Impl->ClearArrival(agent);
     if (!m_Impl->Crowd->requestMoveTarget(static_cast<int32>(agent), targetRef, nearestPos))
     {
         Logger::Log::Warning("[CrowdManager] SetAgentTarget: requestMoveTarget failed for agent {} "
-                             "to ({}, {}, {})", agent, nearestPos[0], nearestPos[1], nearestPos[2]);
+                             "to ({}, {}, {})", agent, x, y, z);
     }
+}
+
+void CrowdManager::MarkAgentArrived(CrowdAgentHandle agent)
+{
+    if (!IsInitialized() || agent == kInvalidCrowdAgent ||
+        static_cast<std::size_t>(agent) >= m_Impl->Arrivals.size())
+        return;
+    const dtCrowdAgent* crowdAgent = m_Impl->Crowd->getAgent(static_cast<int32>(agent));
+    if (!crowdAgent || !crowdAgent->active)
+        return;
+    Impl::Arrival& arrival = m_Impl->Arrivals[static_cast<std::size_t>(agent)];
+    arrival.Arrived = true;
+    dtVcopy(arrival.Goal, crowdAgent->targetPos);
+    m_Impl->Crowd->resetMoveTarget(static_cast<int32>(agent));
 }
 
 void CrowdManager::SetAgentParams(CrowdAgentHandle agent, const CrowdAgentParams& params)
@@ -257,9 +319,7 @@ void CrowdManager::GetAgentPosition(CrowdAgentHandle agent, float32& outX, float
     if (!crowdAgent || !crowdAgent->active)
         return;
 
-    outX = crowdAgent->npos[0];
-    outY = crowdAgent->npos[1];
-    outZ = crowdAgent->npos[2];
+    m_Impl->ToWorld(crowdAgent->npos, outX, outY, outZ);
 }
 
 void CrowdManager::GetAgentVelocity(CrowdAgentHandle agent, float32& outVx, float32& outVy, float32& outVz) const
@@ -289,9 +349,7 @@ void CrowdManager::GetAgentTarget(CrowdAgentHandle agent, float32& outX, float32
     if (!crowdAgent || !crowdAgent->active)
         return;
 
-    outX = crowdAgent->targetPos[0];
-    outY = crowdAgent->targetPos[1];
-    outZ = crowdAgent->targetPos[2];
+    m_Impl->ToWorld(crowdAgent->targetPos, outX, outY, outZ);
 }
 
 bool CrowdManager::IsAgentActive(CrowdAgentHandle agent) const
@@ -301,6 +359,40 @@ bool CrowdManager::IsAgentActive(CrowdAgentHandle agent) const
 
     const dtCrowdAgent* crowdAgent = m_Impl->Crowd->getAgent(static_cast<int32>(agent));
     return crowdAgent && crowdAgent->active;
+}
+
+bool CrowdManager::IsAgentHeldOffGoal(CrowdAgentHandle agent) const
+{
+    if (!IsInitialized() || agent == kInvalidCrowdAgent)
+        return false;
+
+    const dtCrowdAgent* crowdAgent = m_Impl->Crowd->getAgent(static_cast<int32>(agent));
+    if (!crowdAgent || !crowdAgent->active || crowdAgent->targetState != DT_CROWDAGENT_TARGET_VALID ||
+        crowdAgent->ncorners == 0 || (crowdAgent->cornerFlags[crowdAgent->ncorners - 1] & DT_STRAIGHTPATH_END) == 0)
+        return false;
+
+    // Two agents touch within their radii and this share of the agent's radius: the separation
+    // keeps neighbors about that far apart.
+    constexpr float32 kTouchMarginRadii = 0.5f;
+    // Two goals this close, in meters, are the same goal: both orders named one point.
+    constexpr float32 kSameGoal = 0.05f;
+    const float32* goal = &crowdAgent->cornerVerts[(crowdAgent->ncorners - 1) * 3];
+    const float32 ownDistance = dtVdist2D(crowdAgent->npos, goal);
+    for (int32 i = 0; i < crowdAgent->nneis; ++i)
+    {
+        const dtCrowdAgent* neighbor = m_Impl->Crowd->getAgent(crowdAgent->neis[i].idx);
+        if (!neighbor || !neighbor->active)
+            continue;
+        const float32 touch =
+            crowdAgent->params.radius * (1.0f + kTouchMarginRadii) + neighbor->params.radius;
+        if (dtVdist2D(neighbor->npos, crowdAgent->npos) > touch)
+            continue;
+        const Impl::Arrival& arrival = m_Impl->Arrivals[static_cast<std::size_t>(crowdAgent->neis[i].idx)];
+        if (dtVdist2D(neighbor->npos, goal) < ownDistance ||
+            (arrival.Arrived && dtVdist2D(arrival.Goal, crowdAgent->targetPos) <= kSameGoal))
+            return true;
+    }
+    return false;
 }
 
 void CrowdManager::Update(float32 deltaTime)
@@ -344,6 +436,11 @@ bool CrowdManager::IsBoundTo(const DetourNavMap& /*navMap*/) const
     return false;
 }
 
+uint32 CrowdManager::GetGeneration() const
+{
+    return 0;
+}
+
 CrowdAgentHandle CrowdManager::AddAgent(float32 /*x*/, float32 /*y*/, float32 /*z*/, const CrowdAgentParams& /*params*/)
 {
     return kInvalidCrowdAgent;
@@ -354,6 +451,10 @@ void CrowdManager::RemoveAgent(CrowdAgentHandle /*agent*/)
 }
 
 void CrowdManager::SetAgentTarget(CrowdAgentHandle /*agent*/, float32 /*x*/, float32 /*y*/, float32 /*z*/)
+{
+}
+
+void CrowdManager::MarkAgentArrived(CrowdAgentHandle /*agent*/)
 {
 }
 
@@ -377,6 +478,11 @@ void CrowdManager::GetAgentTarget(CrowdAgentHandle /*agent*/, float32& outX, flo
 }
 
 bool CrowdManager::IsAgentActive(CrowdAgentHandle /*agent*/) const
+{
+    return false;
+}
+
+bool CrowdManager::IsAgentHeldOffGoal(CrowdAgentHandle /*agent*/) const
 {
     return false;
 }

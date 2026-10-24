@@ -217,6 +217,9 @@
 	   below add up to that same 96px of chrome, so both backends open at the
 	   same width for the same titles. */
 	min-width: 180px;
+	/* A menu opens at its anchor point, a submenu level with its parent row:
+	   the dropdown's 2px drop below its combo box does not apply. */
+	margin-top: 0px;
 }
 
 .dropdown-separator {
@@ -2679,6 +2682,26 @@ button.large,
 
 .context-menu .dropdown-item:hover .dropdown-item-arrow-glyph {
 	color: var(--ui_color_text_bright);
+}
+
+/* The key that runs a row's command (F2, Ctrl+D), right-aligned where a
+   parent row's chevron sits: the negative right margin takes it 32px into the
+   row's 44px trailing reserve, 12px from the row's edge like the chevron.
+   Dimmer than the title at rest, bright on the lit row. */
+.context-menu .dropdown-item-shortcut {
+	flex-shrink: 0;
+	margin-left: 24px;
+	margin-right: -32px;
+	text-align: right;
+	color: var(--ui_color_menu_shortcut_text);
+}
+
+.context-menu .dropdown-item:hover .dropdown-item-shortcut {
+	color: var(--ui_color_text_bright);
+}
+
+.context-menu .dropdown-item.disabled .dropdown-item-shortcut {
+	color: var(--ui_color_menu_text_disabled);
 }
 
 /* The clear button sat 4px off the field's edge, which reads as crowding

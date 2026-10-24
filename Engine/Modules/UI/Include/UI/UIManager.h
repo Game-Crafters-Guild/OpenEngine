@@ -239,6 +239,16 @@ class UIManager
     /** Immediately hide the active tooltip overlay (e.g. when the hovered target moves under the cursor). */
     void DismissActiveTooltip();
 
+    /** Shows `source`'s tooltip now, anchored to `source`, wherever the pointer is: for a message the
+        user must see without pointing at it, such as the reason a typed name is refused. The bubble
+        follows the element's tooltip text and stays until UnpinTooltip(source) or until `source` is
+        destroyed; while `source` is hidden or out of the tree (its dock tab swapped out) the bubble
+        is hidden and it comes back when `source` shows again. It shows even when hover tooltips are
+        turned off. One element holds the pin; pinning another moves it. */
+    void PinTooltip(UIElement& source);
+    /** Ends the pin `source` holds and hides its bubble; does nothing when another element holds it. */
+    void UnpinTooltip(const UIElement& source);
+
     // Per-frame update. This is the primary entry point for UI time,
     // input dispatch, layout and geometry generation.
     //
@@ -824,6 +834,8 @@ public:
     // current pointer position on the last completed layout, with an active
     // capture outranking it; the answer is what routes the event onward (a
     // consumed press reaches neither the app InputSystem nor a runtime sink).
+    // A press belongs to the button that began it: only that button's release
+    // ends it, and another button's edges while it is held dispatch nothing.
     bool OnMouseButton(int button, bool down);
     // Terminate an in-flight press whose release will never arrive, because the pointer
     // stream itself ended (the Game View viewport the host reads pointer from was left).
@@ -1568,7 +1580,7 @@ public:
     bool m_ScrollWheelMoved = false; // set by OnScroll; consumed by Update() for fast-path gating
     bool m_ScrollOffsetsChanged = false; // set by ScrollView; consumed by Update() for fast-path gating
     bool m_MouseDown = false;
-    int m_MouseButton = 0; // 0=LMB, 1=RMB, 2=MMB, etc.
+    int m_MouseButton = 0; // the button that began the press in progress, or the last one (0=LMB, 1=RMB, 2=MMB)
     // A button transition (press, release, or CancelPress) happened since the
     // last heavy pass. Dispatch itself is synchronous, so this is not an event
     // queue: it is the per-frame work signal that a transition leaves behind —

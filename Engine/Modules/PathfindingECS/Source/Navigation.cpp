@@ -1,7 +1,11 @@
 #include "PathfindingECS/Navigation.h"
+#include "PathfindingECS/NavigationScriptApi.h"
 
 #include "PathfindingECS/Components/NavigationSurface.h"
+#include "PathfindingECS/NavigationService.h"
+#include "PathfindingECS/NavigationSurfaceRuntime.h"
 
+#include "NavigationBakedData.h"
 #include "NavigationSourceCollector.h"
 
 #include "AssetCore/Asset.h"
@@ -11,8 +15,11 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Mathematics/Vector3.h"
+#include "Pathfinding/DetourNavMap.h"
+#include "Pathfinding/NavSurfaceFile.h"
 #include "Types/StringUtils.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace GameEngine::Navigation
@@ -46,6 +53,14 @@ std::string FormatFailure(const NavigationSurface& surface)
     case NavigationBakeFailure::SphericalTerrain:
         return "Failed: spherical terrains are not baked";
     case NavigationBakeFailure::TooLarge:
+        if (surface.Mode == NavigationSurfaceMode::Mesh)
+            return "Failed: the bounds need " + FormatGroupedInteger(surface.BakeTotal) +
+                   " tiles and a mesh surface spans at most " +
+                   std::to_string(Pathfinding::kNavChartTilesPerSide) + " x " +
+                   std::to_string(Pathfinding::kNavChartTilesPerSide) + " tiles (" +
+                   FormatGroupedInteger(static_cast<uint64>(Pathfinding::kNavChartTilesPerSide *
+                                                            Pathfinding::kNavMeshTileCells * surface.CellSize)) +
+                   " m on a side at this Cell Size): shrink the bounds or raise Cell Size";
         return "Failed: the bounds need " + FormatGroupedInteger(surface.BakeTotal) + " " + Units(surface.Mode) +
                ": raise Cell Size or shrink the bounds";
     case NavigationBakeFailure::TileBuild:
@@ -71,9 +86,16 @@ std::string FormatBaked(const NavigationSurface& surface)
         const std::string mode = surface.BakedMode != surface.Mode ? ModeName(surface.BakedMode) + ", " : "";
         return "Out of date: the settings changed since the last bake (" + mode + count + "). Bake to apply.";
     }
-    return "Baked: " + count + ", " + FormatGroupedInteger(surface.BakedWalkable) +
-           (surface.BakedMode == NavigationSurfaceMode::Grid ? " walkable, " : " polygons, ") +
-           FormatMebibytes(surface.BakedBytes) + ", version " + std::to_string(surface.BakeVersion);
+    std::string text = "Baked: " + count + ", " + FormatGroupedInteger(surface.BakedWalkable) +
+                       (surface.BakedMode == NavigationSurfaceMode::Grid ? " walkable, " : " polygons, ") +
+                       FormatMebibytes(surface.BakedBytes) + ", version " + std::to_string(surface.BakeVersion);
+    if (surface.StaleTiles > 0)
+        text += ". Stale: " + FormatGroupedInteger(surface.StaleTiles) + " tiles, " +
+                TilePair(surface.BlockingTileX, surface.BlockingTileZ) +
+                " among them, whose ground changed since the bake: rebaking";
+    else if (surface.TilesDirty + surface.TilesBaking > 0)
+        text += ". Rebaking: " + FormatGroupedInteger(surface.TilesDirty + surface.TilesBaking) + " tiles";
+    return text;
 }
 
 // The model's name in the asset registry (its file name as spelled on disk, without the
@@ -99,6 +121,53 @@ bool RequestBake(ECS::World& world, ECS::EntityHandle surface)
     return true;
 }
 
+bool MarkDirty(ECS::World& world, ECS::EntityHandle surface, Mathematics::Vector3 min, Mathematics::Vector3 max)
+{
+    const auto* component = world.GetComponent<NavigationSurface>(surface);
+    if (!component || component->Mode != NavigationSurfaceMode::Mesh)
+        return false;
+    PathfindingECS::NavigationService::QueueDirtyBox(
+        world.GetWorldId(), surface,
+        Mathematics::Rect::FromEdges(std::min(min.x, max.x), std::min(min.z, max.z), std::max(min.x, max.x),
+                                     std::max(min.z, max.z)));
+    return true;
+}
+
+std::string FormatAgentStatus(const AgentStatus& status)
+{
+    std::string reason;
+    switch (status.Reason)
+    {
+    case StatusReason::None: break;
+    case StatusReason::NoSurface:
+        reason = "no surface: set Surface, or keep one Navigation Surface in the scene";
+        break;
+    case StatusReason::SurfaceNotBaked:
+        reason = status.PendingTiles > 0
+                     ? "the surface is baking, " + FormatGroupedInteger(status.PendingTiles) + " tiles left"
+                     : "the surface is not baked";
+        break;
+    case StatusReason::DestinationOffSurface: reason = "the destination is off the surface"; break;
+    case StatusReason::StartOffSurface: reason = "the agent stands off the surface"; break;
+    case StatusReason::NoRoute: reason = "no walkable route to the destination"; break;
+    case StatusReason::DynamicBody:
+        reason = "a dynamic body fights the movement: make the body kinematic or remove it";
+        break;
+    }
+
+    switch (status.State)
+    {
+    case AgentState::Idle: return "Idle: no order";
+    case AgentState::Waiting: return reason.empty() ? "Waiting for its path" : "Waiting: " + reason;
+    case AgentState::Walking:
+        return status.PartialPath ? "Walking to the reachable point nearest the destination" : "Walking";
+    case AgentState::Arrived:
+        return status.PartialPath ? "Arrived at the reachable point nearest the destination" : "Arrived";
+    case AgentState::Failed: return reason.empty() ? "Failed" : "Failed: " + reason;
+    }
+    return {};
+}
+
 std::string FormatBakeStatus(const NavigationSurface& surface)
 {
     switch (surface.BakePhase)
@@ -108,6 +177,8 @@ std::string FormatBakeStatus(const NavigationSurface& surface)
     case NavigationBakePhase::Waiting:
         if (surface.BakeWait == Components::NavigationBakeWait::TerrainData)
             return "Waiting for: the terrain's heightfield to be built";
+        if (surface.BakeWait == Components::NavigationBakeWait::BakedData)
+            return "Waiting for: the baked data (.navsurface) to load";
         if (surface.BakeWait == Components::NavigationBakeWait::Model)
             return "Waiting for: model " + ModelName(surface.BlockingModel.ToGuid()) + " is still loading";
         return "Waiting for: terrain tile " + TilePair(surface.BlockingTileX, surface.BlockingTileZ) +
@@ -177,6 +248,19 @@ uint64 BakeUnitCount(const NavigationSurface& surface, const Mathematics::Vector
     bounds.Include(low);
     bounds.Include(high);
     return PathfindingECS::NavigationBakeExtentOf(surface, bounds).Count();
+}
+
+bool WriteBakedSurface(ECS::World& world, ECS::EntityHandle surface, std::vector<uint8>& out)
+{
+    out.clear();
+    const auto* component = world.GetComponent<NavigationSurface>(surface);
+    if (!component || component->BakePhase != NavigationBakePhase::Baked ||
+        component->BakedMode != NavigationSurfaceMode::Mesh)
+        return false;
+    const auto* mesh = PathfindingECS::ResolveNavigationSurfaceMesh(world, *component);
+    if (!mesh || !mesh->IsBuilt())
+        return false;
+    return Pathfinding::WriteNavSurface(PathfindingECS::MakeNavigationBakedData(*component, *mesh), out);
 }
 
 } // namespace GameEngine::Navigation

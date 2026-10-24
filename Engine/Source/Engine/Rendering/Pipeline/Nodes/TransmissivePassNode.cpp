@@ -3,6 +3,7 @@
 #include "Engine/Rendering/Pipeline/ForwardFogKeywords.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h" // ParseWorldPassKeywords
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
+#include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/RenderServices.h"
 
@@ -210,9 +211,13 @@ void TransmissivePassNode::DeclareForView(ViewDeclare& d)
             t.Depth = d.ViewDepth;
     }
     // Frame-scoped grab id: the pass declares the Read(Sampled) that orders the
-    // grab copy before this draw (the contract in SceneColorGrab.h).
+    // grab copy before this draw (the contract in SceneColorGrab.h). The glass also takes
+    // the screen-space reflection slices, so the reflections leave its pixels alone.
     if (grabReady)
+    {
         t.SceneGrab = grab.GetGrabTextureRG();
+        keywords |= ReflectionsProvider::ContributeTransmissivePassTargets(d, t);
+    }
     d.Services.AddWorldPassForView(
         d.Frame, d.View.id, t, keywords,
         Engine::Renderer::RenderServices::WorldPassDrawScope::TransmissiveOnly);

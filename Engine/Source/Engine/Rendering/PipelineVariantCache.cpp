@@ -46,6 +46,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/VolumetricFogNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/TransmissivePassNode.h"
 #include "Engine/Rendering/Pipeline/Nodes/WorldRenderNode.h"
+#include "Engine/Rendering/Pipeline/ReflectionsProvider.h"
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Logger/Logger.h"
@@ -772,6 +773,7 @@ void PipelineVariantCache::SubmitPendingVariantCompiles()
             job.IsDepth = req.IsDepth;
             job.MaterialVersion = material->GetVersion();
             job.Name = material->GetName();
+            job.MaterialAssetPath = material->GetMaterialAssetPath();
             job.Spec = material->GetCompileSpec();
             job.BaseGraphicsPipelineId = baseId;
             job.BuildContext = buildContext;
@@ -786,9 +788,8 @@ void PipelineVariantCache::SubmitPendingVariantCompiles()
             if (job.Spec.customVertexShader)
                 Rendering::ApplyCustomVertexShaderClamp(mergedKey);
             job.CacheKey.VariantKey = mergedKey;
-            job.CacheKey.Source.SurfaceShaderPath = job.Spec.surfaceShaderPath;
-            job.CacheKey.Source.VertexModifierPath = job.Spec.vertexModifierPath;
-            job.CacheKey.Source.MaterialAssetPath = material->GetMaterialAssetPath();
+            job.CacheKey.Source = MakeShaderSourceKey(job.Spec.surfaceShaderPath, job.Spec.vertexModifierPath,
+                                                     job.MaterialAssetPath);
 
             // Count the compile as running BEFORE dispatch so the throttle sees it;
             // every Run* exit decrements via the RAII guard (ReleaseVariantCompile).
@@ -962,7 +963,7 @@ void PipelineVariantCache::RunColorVariantCompile(const VariantCompileRequest& r
 
     const auto tCompile0 = std::chrono::high_resolution_clock::now();
     auto variant = m_Materials->m_ShaderCompilationCache.GetOrCompile(
-        req.CacheKey, req.Spec, req.BuildContext, req.Name,
+        req.CacheKey, req.Spec, req.BuildContext, req.Name, req.MaterialAssetPath,
         m_Materials->GetDevice()->PreferredShaderSource());
     if (!variant || variant->vertexBytes.empty())
         return; // transient (context cold) or genuine failure — the scope re-opens the key
@@ -1016,19 +1017,21 @@ void PipelineVariantCache::RunColorVariantCompile(const VariantCompileRequest& r
     gd.PushConstants.Size      = 128;
     gd.PushConstants.StageMask = Rendering::kShaderStageVertex | Rendering::kShaderStageFragment;
 
-    // SSSR's adapter writes colour + octahedral-NR + albedo. A cooked lookup
-    // that silently resolved a 1-output row interns a legal pipeline whose extra
-    // pass targets are write-masked off — classify then rejects every pixel.
-    constexpr uint32_t kSssrColorAttachmentCount = 3;
+    // SSSR's adapter writes four colour outputs: colour, normal-roughness,
+    // specular weight and specular radiance. A cooked lookup that silently
+    // resolved a 1-output row interns a legal pipeline whose extra pass targets
+    // are write-masked off — classify then rejects every pixel.
+    constexpr uint32_t kSssrColorAttachmentCount = 4;
     if (Rendering::HasKeyword(req.Key.PassKeywords, Rendering::MaterialKeyword::SSSRNormalRoughness)
         && gd.ColorBlend.attachments.size() < kSssrColorAttachmentCount)
     {
         Logger::Log::Warning(
             "RunColorVariantCompile '{}': SSSR variant interned with {} colour attachments "
-            "(kw={:#x}); expected {} (color + oNormalRoughness + oAlbedo)",
+            "(kw={:#x}); expected {} (color, normal-roughness, specular weight, specular radiance)",
             req.Name, static_cast<uint32_t>(gd.ColorBlend.attachments.size()),
             static_cast<uint64_t>(req.Key.PassKeywords), kSssrColorAttachmentCount);
     }
+    Pipeline::ReflectionsProvider::ApplyTransmissivePassWriteMasks(req.Key.PassKeywords, gd.ColorBlend);
 
     std::vector<Rendering::DescriptorSetLayoutId> setLayouts = gd.DescriptorSetLayouts;
     const auto pipelineId = m_Materials->GetDevice()->InternGraphicsPipeline(std::move(gd));
@@ -1078,7 +1081,7 @@ void PipelineVariantCache::RunDepthVariantCompile(const VariantCompileRequest& r
 
     const auto tCompile0 = std::chrono::high_resolution_clock::now();
     auto variant = m_Materials->m_ShaderCompilationCache.GetOrCompile(
-        req.CacheKey, req.Spec, req.BuildContext, req.Name,
+        req.CacheKey, req.Spec, req.BuildContext, req.Name, req.MaterialAssetPath,
         m_Materials->GetDevice()->PreferredShaderSource());
     if (!variant || variant->vertexBytes.empty())
         return; // transient or genuine failure — the scope re-opens the key

@@ -1,0 +1,100 @@
+---
+title: Day Cycle profiles
+description: How a Day Cycle profile keys the look of the day over the sun's elevation, how to edit it in the Day Cycle window and the profile's inspector, how the scrub previews the scene's time of day, and where a profile is saved.
+---
+
+A **Day Cycle profile** is an asset that shapes the look of the day. It holds **tracks**: each track is a curve of one value over the sun's elevation, from the night below the horizon to the sun high at noon. The engine ships two profiles, and a project can have its own.
+
+A profile does not change the rendered picture: no effect applies a profile from a Post Process Volume. You can create, edit and save profiles, and scrub the scene's time of day.
+
+## Tracks
+
+A track keys one value over the sun's elevation in degrees, measured above the horizon. The elevation is used, not the clock, because the light, the sky and the eye respond to how high the sun is. The same keys give the same light at every latitude, on every day of the year, and on a custom sun path. Beyond its first and last key, a track holds the value of that key.
+
+| Track | Unit | What it does | The value that changes nothing |
+|---|---|---|---|
+| Exposure offset | stops | Darkens or brightens the whole picture after the camera's metering. | 0 |
+
+**Separate dusk.** The sun has the same elevation at dawn and at dusk, so by default one curve keys both. Turn on **Separate dusk** on a track to key the dusk half of the day (the afternoon and the evening) on a second curve. The dusk half is the part of the day when the sun is west of the meridian. The graph draws the half the playhead is on in blue, where you edit it, and the other half in yellow. On a sun set by hand, the half comes from the sun's direction. In a polar day, where the sun never sets, the day splits at noon and midnight.
+
+A profile can leave a track out. In the Day Cycle window, a track that is left out shows the shipped Default profile's value, drawn gray: the day every volume starts from. The profile's inspector shows the profile alone, with no volume around it, so there a left-out track reads "not keyed by this profile" and has no value. Use **Add track** to key it and **Remove track** to leave it out again.
+
+## The shipped profiles
+
+| Profile | What it holds |
+|---|---|
+| Default | The dusk: the exposure dips through civil twilight, from 0 at sunset to -1.5 stops with the sun 6 degrees below the horizon, and back to 0 at 11 degrees below, where the camera's night curve takes over. |
+| Clear day | No grading: the exposure offset is 0 at every elevation. |
+
+They are in `Engine/Assets/DayCycles/` and ship with the editor. Load one into your own profile with **Presets**: this copies the preset's tracks into the profile and keeps your profile's name and description. Undo puts back the tracks you had.
+
+## The two views of a track
+
+Each track can be drawn along either axis, and both axes are always printed:
+
+- **Sun's elevation.** The axis is in degrees. Under each degree is the hour at which the open scene's sun reaches it on the evening side. Dawn mirrors those hours. The twilight band, from -18 degrees to the horizon, is shaded. You edit keys in this view: drag a key, right-click empty space to add one, and select a key and press Delete to remove it.
+- **Time of day.** The axis is the clock, from 00:00 to 24:00. Under each hour is the sun's elevation at that hour. The track is drawn through the open scene's sun path, so a dusk dip shows twice, once at dawn and once at dusk. This view is read-only: edit the keys in the elevation view.
+
+The playhead shows the hour, the elevation and the value of each track where the sun is now. The axis toggle only chooses which axis leads.
+
+## The Day Cycle window
+
+Open the window from the **Panels** button in the editor's top toolbar or from the search (**Ctrl+K**, **Cmd+K** on macOS), or with **Open in the Day Cycle window** on a profile's inspector. The window shows the profile you last selected in the asset browser. When you have not selected one, it shows the Default profile. Its toolbar names the profile, the Post Process Volume it is shown on (the selected volume, else the scene's global volume), the axis toggle, **Save** and **Presets**. Under the toolbar is the scrub, then every track on one shared axis, with a column per track that gives the value now and where the value comes from.
+
+The window and the profile's inspector edit the same profile. An edit on one shows on the other, both use the editor's undo history, and one **Unsaved changes** mark and one **Save** serve both.
+
+## The scrub previews the time of day
+
+Drag the playhead on the scrub, or on any track's graph, to change the time of day that the scene renders. The Scene View and the Game View follow the drag, so you can edit a key and see the frame it changes.
+
+The scrub is a preview. It does not write the Sky Environment's **Time of Day**, so the scene does not get an unsaved change, a save does not keep the preview, and the preview is not an undo step. The preview ends when you close the window, edit the sky, open or close a scene, switch projects, or press Play. After an edit to **Time of Day**, the scene shows the hour that you typed.
+
+When **Animate Time of Day** is on, the clock stops while you hold the playhead. When you release it, the hour that you scrubbed to becomes the sky's **Time of Day**, as one undo step, and the clock continues from that hour.
+
+The scrub is off, with a notice, in Play mode, and when the sky's hour does not place the sun:
+
+- When **Sky drives sun light** is off, the sun follows the linked light: rotate the light, or turn **Sky drives sun light** on.
+- The sun is set by hand (**Auto Sun/Moon** is off). Turn on **Auto Sun/Moon**.
+
+The playhead still follows the sun in both cases, so when you rotate the linked light, the playhead and the values move with it.
+
+## Where a profile is saved
+
+**Save** writes the profile only into your project's assets. A profile that ships with the editor or comes from a package shows **Save a copy to the project** in place of **Save**. This writes the profile to the project's `DayCycles` folder as "<name> copy" (for example `Default copy.daycycle.json`) and opens the copy for editing. The shipped profiles are not changed.
+
+## The file
+
+A profile is a JSON file named `<name>.daycycle.json`:
+
+```json title="DayCycles/Marsh.daycycle.json"
+{
+  "name": "Marsh",
+  "description": "A darker dusk, with the dawn left as it is.",
+  "tracks": {
+    "exposureOffset": {
+      "keys": "-11,0,0,0,1,1;-6,-1.5,0,0,1,1;0,0,0,0,1,1",
+      "separateDusk": true,
+      "duskKeys": "-14,0,0,0,1,1;-6,-2,0,0,1,1;0,0,0,0,1,1"
+    }
+  }
+}
+```
+
+Each key is `elevation,value,inTangent,outTangent,interpolation,tangentMode`, and the keys are separated by `;`. Write the keys from the lowest elevation to the highest. The interpolation is 0 for linear, 1 for smooth and 2 for step. The tangent mode is 0 for auto, 1 for flat, 2 for broken, 3 for manual and 4 for mirrored. A track holds at most 32 keys.
+
+A file that the editor cannot read does not load, and the log gives the reason and the fix. The file has no version field. A file is refused for these reasons:
+
+- It is not a JSON object, or it writes one key twice in one object.
+- It has a field that the format does not have, for example a `version` field.
+- A field has the wrong type: `name`, `description`, `keys` or `duskKeys` that is not a string, `tracks` or a track that is not an object, or `separateDusk` that is not `true` or `false`.
+- It names a track that is not in the table above. The log names the track and lists the tracks that exist.
+- A track has no keys, or more than 32.
+- A key has fewer than two fields or more than six, or a field that is not a finite decimal number.
+- A key's elevation is outside -90 to 90 degrees, its interpolation is not 0, 1 or 2, or its tangent mode is not 0 to 4.
+- Its keys are not in ascending elevation.
+- It has `duskKeys` without `"separateDusk": true`, or `"separateDusk": true` without `duskKeys`.
+
+## Related pages
+
+- [Exposure](exposure.mdx#how-a-night-stays-dark): how the camera keeps a night dark, which the dusk track sits on top of.
+- [The night sky](night-sky.mdx): the moon, the stars and the night sky's glow after the dusk.

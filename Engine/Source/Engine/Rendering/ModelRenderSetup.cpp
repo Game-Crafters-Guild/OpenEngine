@@ -465,7 +465,7 @@ void ApplyModelRenderResources(ECS::World& world, RenderServices& rs, ECS::Entit
         Components::SkinnedMeshRenderer smr{};
         smr.meshId = 0;
         smr.skeletonId = resources.modelAsset->GetSkeletonId();
-        smr.castShadows = updated.castShadows;
+        smr.castShadows = updated.shadowCasting != Components::ShadowCasting::Off;
         smr.receiveShadows = updated.receiveShadows;
         world.AddComponentImmediate(entity, smr);
     }

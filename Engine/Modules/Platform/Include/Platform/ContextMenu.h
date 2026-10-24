@@ -81,6 +81,11 @@ public:
     /// ignore this when not supported.
     virtual void SetSubMenuIcon(uint32_t submenuId, const std::string& imagePath) { (void)submenuId; (void)imagePath; }
 
+    /// Optional: the key that runs the item's command, as the user reads it ("F2", "Ctrl+D"),
+    /// shown at the row's trailing edge. The menu only shows it; the key itself is handled by
+    /// whoever binds it. Native menus may ignore this when not supported.
+    virtual void SetItemShortcut(uint32_t commandId, const std::string& keyText) { (void)commandId; (void)keyText; }
+
     // Show menu at (x, y) relative to the client area of `window`.
     virtual void Show(Platform::Window* window, int x, int y) = 0;
 };
@@ -91,6 +96,7 @@ struct ContextMenuItemDesc {
     uint32_t    Flags    = MenuItemFlag_None;
     int         Priority = 0;
     std::string IconPath;
+    std::string Shortcut;  // the key that runs CommandId, as SetItemShortcut shows it; empty for none
 };
 
 // Build a menu from path-based descriptors.
@@ -105,9 +111,10 @@ public:
                                 uint32_t commandId,
                                 uint32_t Flags    = MenuItemFlag_None,
                                 int      Priority = 0,
-                                const std::string& IconPath = {})
+                                const std::string& IconPath = {},
+                                const std::string& Shortcut = {})
     {
-        m_Items.push_back({ path, commandId, Flags, Priority, IconPath });
+        m_Items.push_back({ path, commandId, Flags, Priority, IconPath, Shortcut });
         return *this;
     }
 

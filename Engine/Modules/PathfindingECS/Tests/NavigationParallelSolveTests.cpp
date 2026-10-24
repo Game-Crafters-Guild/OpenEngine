@@ -39,8 +39,9 @@ constexpr uint32 kPoolWorkers = 16;
 // it holds. NavigationAgentState has padding, so it is compared field by field.
 struct AgentRecord
 {
-    std::tuple<float32, float32, float32, bool, bool, bool, bool, uint32, uint32, uint32, float32, float32, float32,
-               float32, float32, float32, float32, float32, float32, uint8, int32, float32, uint32>
+    std::tuple<float32, float32, float32, bool, bool, bool, uint32, uint32, uint32, uint32, float32, float32, float32,
+               float32, float32, float32, float32, float32, float32, Pathfinding::PathStatus, Navigation::StatusReason,
+               uint32, Navigation::StatusReason, bool, int32, float32, uint32>
         State;
     std::vector<Pathfinding::PathPoint> Points;
 
@@ -62,10 +63,11 @@ AgentRecord Record(const Components::NavigationAgentState& s, const Pathfinding:
 {
     AgentRecord record;
     record.State = {s.DestinationX, s.DestinationY, s.DestinationZ, s.HasDestination, s.PathDirty,
-                    s.ReplanRequested, s.HasCellReservations, s.PathIndex, s.PathGeneration,
+                    s.ReplanRequested, s.CellReservationOwner, s.PathIndex, s.PathGeneration,
                     s.CurrentPathPointIndex, s.CurrentWaypointX, s.CurrentWaypointY, s.CurrentWaypointZ,
                     s.NextWaypointX, s.NextWaypointY, s.NextWaypointZ, s.VelocityX, s.VelocityY, s.VelocityZ,
-                    s.Status, s.CrowdAgentHandle, s.ReplanTimer, s.PathRequestSequence};
+                    s.Status, s.Reason, s.PendingTiles, s.LoggedReason, s.DestinationUnchecked, s.CrowdAgentHandle,
+                    s.ReplanTimer, s.PathRequestSequence};
     const Pathfinding::PathHandle path{s.PathIndex, s.PathGeneration};
     record.Points.resize(buffer.GetPointCount(path));
     buffer.CopyPoints(path, record.Points.data(), static_cast<uint32>(record.Points.size()));
@@ -119,8 +121,7 @@ protected:
         agent.Acceleration = 100.0f;
         agent.StoppingDistance = 0.3f;
         agent.Radius = 0.25f;
-        agent.NavMapIndex = map.Index;
-        agent.NavMapGeneration = map.Generation;
+        agent.Surface = Testing::SurfaceOwning(*m_World, map);
         agent.AgentId = entity.GetHandle().id;
         agent.ReplanInterval = 0.0f;
         entity.Set(agent);
@@ -146,6 +147,13 @@ protected:
 
         m_World->ProcessCommands();
         return entity;
+    }
+
+    // The map of the surface `agent` walks.
+    Pathfinding::NavMapHandle MapOf(const ECS::Entity& agent)
+    {
+        ECS::Entity surface{m_World.get(), agent.Get<Components::NavigationAgent>()->Surface};
+        return Testing::SurfaceMap(*m_World, surface);
     }
 
     // A wall across the middle of the grid with two gaps, so routes are long
@@ -258,7 +266,7 @@ TEST_F(NavigationParallelSolveTest, SolvesPublishHelpersOnThePool)
     EXPECT_GT(m_Pool->GetPublishedJobCount(), before) << "eight grid solves ran without a helper on the pool";
     for (const auto& agent : agents)
         EXPECT_EQ(agent.Get<Components::NavigationAgentState>()->Status,
-                  static_cast<uint8>(Pathfinding::PathStatus::Complete));
+                  Pathfinding::PathStatus::Complete);
 }
 
 TEST_F(NavigationParallelSolveTest, ResultsApplyInQueueOrder)
@@ -281,7 +289,7 @@ TEST_F(NavigationParallelSolveTest, ResultsApplyInQueueOrder)
     for (uint32 i = 0; i < kAgents; ++i)
     {
         const auto* state = agents[i].Get<Components::NavigationAgentState>();
-        ASSERT_EQ(state->Status, static_cast<uint8>(Pathfinding::PathStatus::Complete)) << "agent " << i;
+        ASSERT_EQ(state->Status, Pathfinding::PathStatus::Complete) << "agent " << i;
         // A fresh PathBuffer hands out slots 0, 1, 2, ... in allocation order.
         EXPECT_EQ(state->PathIndex, i) << "agent " << i << "'s path was not the " << i << "th allocated";
     }
@@ -309,18 +317,18 @@ TEST_F(NavigationParallelSolveTest, OneBatchSolvesOnTwoGridMaps)
     auto agents = CreateLongColumn(8);
     const auto second = CreateLongColumn(8);
     agents.insert(agents.end(), second.begin(), second.end());
-    const auto* first = agents.front().Get<Components::NavigationAgent>();
-    const auto* last = agents.back().Get<Components::NavigationAgent>();
-    ASSERT_NE(NavigationService::Get().GetGridMap({first->NavMapIndex, first->NavMapGeneration}), nullptr);
-    ASSERT_NE(NavigationService::Get().GetGridMap({last->NavMapIndex, last->NavMapGeneration}), nullptr);
-    ASSERT_NE(first->NavMapIndex, last->NavMapIndex);
+    const auto first = MapOf(agents.front());
+    const auto last = MapOf(agents.back());
+    ASSERT_NE(NavigationService::Get().GetGridMap(first), nullptr);
+    ASSERT_NE(NavigationService::Get().GetGridMap(last), nullptr);
+    ASSERT_NE(first.Index, last.Index);
 
     NavigationPathfindingSystem pathSystem;
     pathSystem.Update(*m_World, kDt);
     m_World->ProcessCommands();
     for (const auto& agent : agents)
         EXPECT_EQ(agent.Get<Components::NavigationAgentState>()->Status,
-                  static_cast<uint8>(Pathfinding::PathStatus::Complete));
+                  Pathfinding::PathStatus::Complete);
 }
 
 #if GE_DEBUG_INSTRUMENTATION
@@ -379,10 +387,7 @@ TEST_F(NavigationParallelSolveTest, GridWriteWhileSolvesRunAsserts)
         {
             CreateWorld(kPoolWorkers);
             auto agents = CreateLongColumn(32);
-            s_GridToWrite.store(NavigationService::Get().GetGridMap(
-                                    {agents[0].Get<Components::NavigationAgent>()->NavMapIndex,
-                                     agents[0].Get<Components::NavigationAgent>()->NavMapGeneration}),
-                                std::memory_order_release);
+            s_GridToWrite.store(NavigationService::Get().GetGridMap(MapOf(agents[0])), std::memory_order_release);
             s_WriteFired = false;
             JobSystem::WorkStealingThreadPool::SetClaimHelperHookForTests(&WriteGridFromHelper);
             NavigationPathfindingSystem pathSystem;
@@ -398,8 +403,7 @@ TEST_F(NavigationParallelSolveTest, MapTableWriteWhileSolvesRunAsserts)
         {
             CreateWorld(kPoolWorkers);
             auto agents = CreateLongColumn(32);
-            s_MapToRemove.Index = agents[0].Get<Components::NavigationAgent>()->NavMapIndex;
-            s_MapToRemove.Generation = agents[0].Get<Components::NavigationAgent>()->NavMapGeneration;
+            s_MapToRemove = MapOf(agents[0]);
             s_WriteFired = false;
             JobSystem::WorkStealingThreadPool::SetClaimHelperHookForTests(&RemoveMapFromHelper);
             NavigationPathfindingSystem pathSystem;

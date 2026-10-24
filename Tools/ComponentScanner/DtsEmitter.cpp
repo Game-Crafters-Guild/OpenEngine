@@ -5,6 +5,7 @@
 #include <charconv>
 #include <set>
 #include <string_view>
+#include <vector>
 
 namespace GameEngine::ComponentScanner::DtsEmitter
 {
@@ -146,17 +147,25 @@ std::string Emit(const WebComponentModel& model)
     out += "// One interface and one ComponentType value per reflected component; & NoAdd marks the ones a page\n";
     out += "// cannot add or remove. Each field's type follows its reflected kind.\n";
 
+    // An engine-internal component is no game API: it and the enums only it uses stay out.
+    std::vector<const WebComponent*> components;
+    std::set<const EnumDecl*> enums;
     std::set<std::string> imports;
-    if (!model.Components.empty())
-        imports.insert("ComponentType");
     for (const WebComponent& c : model.Components)
     {
+        if (c.EngineInternal)
+            continue;
+        components.push_back(&c);
+        imports.insert("ComponentType");
         if (c.NoAdd)
             imports.insert("NoAdd");
         for (const WebField& f : c.Fields)
-            if (!f.Enum)
-                if (const std::string_view view = ImportedViewType(f.Kind); !view.empty())
-                    imports.insert(std::string(view));
+        {
+            if (f.Enum)
+                enums.insert(f.Enum);
+            else if (const std::string_view view = ImportedViewType(f.Kind); !view.empty())
+                imports.insert(std::string(view));
+        }
     }
     if (!imports.empty())
     {
@@ -174,6 +183,8 @@ std::string Emit(const WebComponentModel& model)
 
     for (const EnumDecl* e : model.Enums)
     {
+        if (enums.count(e) == 0)
+            continue;
         out += "\nexport type " + e->Name + " = ";
         for (std::size_t i = 0; i < e->Members.size(); ++i)
         {
@@ -184,16 +195,16 @@ std::string Emit(const WebComponentModel& model)
         out += ";\n";
     }
 
-    for (const WebComponent& c : model.Components)
+    for (const WebComponent* c : components)
     {
-        out += "\nexport interface " + c.Name + " {\n";
-        for (const WebField& f : c.Fields)
+        out += "\nexport interface " + c->Name + " {\n";
+        for (const WebField& f : c->Fields)
         {
             AppendDoc(out, f);
             out += "    " + std::string(f.ReadOnly ? "readonly " : "") + f.TsName + ": " + FieldType(f) + ";\n";
         }
         out += "}\n";
-        out += "export declare const " + c.Name + ": ComponentType<" + c.Name + ">" + (c.NoAdd ? " & NoAdd" : "") + ";\n";
+        out += "export declare const " + c->Name + ": ComponentType<" + c->Name + ">" + (c->NoAdd ? " & NoAdd" : "") + ";\n";
     }
     return out;
 }

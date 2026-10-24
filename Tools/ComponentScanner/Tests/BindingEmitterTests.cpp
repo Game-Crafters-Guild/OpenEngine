@@ -73,9 +73,20 @@ TEST(ScriptBindings, RefusesWhatTheGeneratorsDoNotEmit)
     const std::string text = err.str();
     const std::string header =
         Utf8Text(fs::path(GE_COMPONENT_SCANNER_FIXTURES_DIR) / "ScriptApi" / "Good" / "Kinds" / "Include" / "Kinds" / "KindsScriptApi.h");
-    EXPECT_NE(text.find("error: " + header + ":85: the binding generators do not emit the String kind (parameter `name`). Fix: "
+    EXPECT_EQ(text.find("the String kind"), std::string::npos) << "the generators emit text";
+    EXPECT_EQ(text.find("the ColorLinear kind"), std::string::npos) << "the generators emit a linear color";
+    EXPECT_NE(text.find("error: " + header + ":85: the binding generators do not emit the Span kind (parameter `weights`). Fix: "
                         "use a kind of the crossing the generators emit (docs/scripting/exposing-a-function.mdx), or leave the "
                         "declaration unmarked"),
+              std::string::npos)
+        << text;
+    EXPECT_NE(text.find("error: " + header + ":122: the binding generators emit a span of results of records or entities only "
+                        "(parameter `weights` holds Float). Fix: write the results as a marked record, or as entities"),
+              std::string::npos)
+        << text;
+    EXPECT_EQ(text.find("parameter `found`"), std::string::npos) << "the generators emit a span of records";
+    EXPECT_NE(text.find("error: " + header + ":131: the binding generators emit a RenderLayerMask as a parameter or a return value "
+                        "only (field `layers` of `Listener`). Fix: hold the mask's bits as a std::uint32_t field"),
               std::string::npos)
         << text;
     EXPECT_NE(text.find("the binding generators emit events with no @ge-context (`ContactBegin`)"), std::string::npos) << text;

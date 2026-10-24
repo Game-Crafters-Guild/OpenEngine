@@ -160,6 +160,75 @@ private:
     const uint32* m_Masks = nullptr;
 };
 
+// Builds a Jolt heightfield from samples, with the encode range padded so in-place edits
+// (UpdateHeightFieldRegion) can raise or lower past the initial min/max without a full rebuild.
+// Touches no world state, so any thread may call it.
+JPH::ShapeRefC BuildHeightFieldShape(const HeightFieldShapeDef& d)
+{
+    if (d.Samples.empty() || d.SampleCount == 0)
+        return {};
+
+    // Jolt HeightFieldShapeSettings expects a flat float array of NxN samples.
+    // The offset and scale map from sample-space to world-space.
+    JPH::HeightFieldShapeSettings settings(
+        d.Samples.data(),
+        JPH::Vec3(d.Offset.x, d.Offset.y, d.Offset.z),
+        JPH::Vec3(d.Scale.x, d.Scale.y, d.Scale.z),
+        d.SampleCount);
+
+    float32 rawMin = std::numeric_limits<float32>::max();
+    float32 rawMax = std::numeric_limits<float32>::lowest();
+    for (const float32 s : d.Samples)
+    {
+        if (s == JPH::HeightFieldShapeConstants::cNoCollisionValue)
+            continue;
+        rawMin = std::min(rawMin, s);
+        rawMax = std::max(rawMax, s);
+    }
+    if (rawMin <= rawMax)
+    {
+        const float32 pad = (rawMax - rawMin) * kHeightFieldRangeHeadroom;
+        settings.mMinHeightValue = rawMin - pad;
+        settings.mMaxHeightValue = rawMax + pad;
+    }
+
+    JPH::ShapeSettings::ShapeResult res = settings.Create();
+    if (res.HasError())
+    {
+        Logger::Log::Error("[Physics] Failed to create heightfield shape: {}", res.GetError().c_str());
+        return {};
+    }
+    JPH::ShapeRefC shape = res.Get();
+    const JPH::AABox bounds = shape->GetLocalBounds();
+    Logger::Log::Info("[Physics] Heightfield shape created: bounds min=[{:.1f},{:.1f},{:.1f}] max=[{:.1f},{:.1f},{:.1f}]",
+        bounds.mMin.GetX(), bounds.mMin.GetY(), bounds.mMin.GetZ(),
+        bounds.mMax.GetX(), bounds.mMax.GetY(), bounds.mMax.GetZ());
+    return shape;
+}
+
+// A heightfield built by PrepareJoltHeightFieldShape, with the mapping UpdateHeightFieldRegion needs.
+class JoltPreparedHeightFieldShape final : public PreparedHeightFieldShape
+{
+public:
+    JPH::ShapeRefC Shape;
+    float32 OffsetY = 0.0f;
+    float32 ScaleY = 1.0f;
+};
+
+// The backend's HeightFieldShapeBuilder: Jolt's factory and allocators are process-wide and
+// outlive every backend, so a job may run this after its world shut down.
+std::shared_ptr<const PreparedHeightFieldShape> PrepareJoltHeightFieldShape(const HeightFieldShapeDef& definition)
+{
+    JPH::ShapeRefC shape = BuildHeightFieldShape(definition);
+    if (!shape)
+        return nullptr;
+    auto prepared = std::make_shared<JoltPreparedHeightFieldShape>();
+    prepared->Shape = std::move(shape);
+    prepared->OffsetY = definition.Offset.y;
+    prepared->ScaleY = definition.Scale.y;
+    return prepared;
+}
+
 } // namespace
 
 struct JoltPhysicsBackend::Impl
@@ -810,50 +879,17 @@ ShapeHandle JoltPhysicsBackend::CreateShape(const ShapeDefinition& definition, c
                 }
                 else if constexpr (std::is_same_v<T, HeightFieldShapeDef>)
                 {
-                    if (d.Samples.empty() || d.SampleCount == 0)
+                    JPH::ShapeRefC shape = BuildHeightFieldShape(d);
+                    if (!shape)
                         return std::nullopt;
-
-                    // Jolt HeightFieldShapeSettings expects a flat float array of NxN samples.
-                    // The offset and scale map from sample-space to world-space.
-                    JPH::HeightFieldShapeSettings settings(
-                        d.Samples.data(),
-                        JPH::Vec3(d.Offset.x, d.Offset.y, d.Offset.z),
-                        JPH::Vec3(d.Scale.x, d.Scale.y, d.Scale.z),
-                        d.SampleCount);
-
-                    // Pad the fixed 16-bit encode range so in-place edits
-                    // (UpdateHeightFieldRegion) can raise/lower past the
-                    // initial min/max without forcing a full rebuild.
-                    {
-                        float32 rawMin = std::numeric_limits<float32>::max();
-                        float32 rawMax = std::numeric_limits<float32>::lowest();
-                        for (const float32 s : d.Samples)
-                        {
-                            if (s == JPH::HeightFieldShapeConstants::cNoCollisionValue)
-                                continue;
-                            rawMin = std::min(rawMin, s);
-                            rawMax = std::max(rawMax, s);
-                        }
-                        if (rawMin <= rawMax)
-                        {
-                            const float32 pad = (rawMax - rawMin) * kHeightFieldRangeHeadroom;
-                            settings.mMinHeightValue = rawMin - pad;
-                            settings.mMaxHeightValue = rawMax + pad;
-                        }
-                    }
-
-                    JPH::ShapeSettings::ShapeResult res = settings.Create();
-                    if (res.HasError())
-                    {
-                        Logger::Log::Error("[Physics] Failed to create heightfield shape: {}", res.GetError().c_str());
-                        return std::nullopt;
-                    }
-                    auto shape = res.Get();
-                    auto bounds = shape->GetLocalBounds();
-                    Logger::Log::Info("[Physics] Heightfield shape created: bounds min=[{:.1f},{:.1f},{:.1f}] max=[{:.1f},{:.1f},{:.1f}]",
-                        bounds.mMin.GetX(), bounds.mMin.GetY(), bounds.mMin.GetZ(),
-                        bounds.mMax.GetX(), bounds.mMax.GetY(), bounds.mMax.GetZ());
                     return shape;
+                }
+                else if constexpr (std::is_same_v<T, PreparedHeightFieldShapeDef>)
+                {
+                    const auto* prepared = dynamic_cast<const JoltPreparedHeightFieldShape*>(d.Shape.get());
+                    if (!prepared || !prepared->Shape)
+                        return std::nullopt;
+                    return prepared->Shape;
                 }
                 else
                 {
@@ -873,8 +909,18 @@ ShapeHandle JoltPhysicsBackend::CreateShape(const ShapeDefinition& definition, c
     // can convert raw provider samples into the shape's local height space.
     if (const auto* hfDef = std::get_if<HeightFieldShapeDef>(&definition))
         m_Impl->heightFieldInfoByShapeHandle[h.Value()] = Impl::HeightFieldCreationInfo{hfDef->Offset.y, hfDef->Scale.y};
+    else if (const auto* preparedDef = std::get_if<PreparedHeightFieldShapeDef>(&definition))
+    {
+        const auto* prepared = static_cast<const JoltPreparedHeightFieldShape*>(preparedDef->Shape.get());
+        m_Impl->heightFieldInfoByShapeHandle[h.Value()] = Impl::HeightFieldCreationInfo{prepared->OffsetY, prepared->ScaleY};
+    }
 
     return ShapeHandle(h.Value());
+}
+
+HeightFieldShapeBuilder JoltPhysicsBackend::GetHeightFieldShapeBuilder() const
+{
+    return &PrepareJoltHeightFieldShape;
 }
 
 void JoltPhysicsBackend::DestroyShape(ShapeHandle shape)
@@ -1171,6 +1217,23 @@ void JoltPhysicsBackend::SetBodyTransform(BodyHandle body, const Transform& tran
     auto& bi = m_Impl->physicsSystem.GetBodyInterface();
     const JPH::EActivation act = (activation == ActivationMode::Activate) ? JPH::EActivation::Activate : JPH::EActivation::DontActivate;
     bi.SetPositionAndRotation(*id, pos, rot, act);
+}
+
+void JoltPhysicsBackend::MoveKinematic(BodyHandle body, const Transform& target, float32 deltaTime)
+{
+    if (!m_Impl || !m_Impl->initialized)
+        return;
+
+    const auto h = GenerationalVector::Handle(static_cast<uint64_t>(body.Value()));
+    const JPH::BodyID* id = m_Impl->bodies.Get(h);
+    if (!id)
+        return;
+
+    const auto& qglm = target.rotation.GetGLM();
+    const JPH::Quat rot(static_cast<float>(qglm.x), static_cast<float>(qglm.y), static_cast<float>(qglm.z), static_cast<float>(qglm.w));
+    const JPH::RVec3 pos(static_cast<float>(target.position.x), static_cast<float>(target.position.y), static_cast<float>(target.position.z));
+
+    m_Impl->physicsSystem.GetBodyInterface().MoveKinematic(*id, pos, rot, deltaTime);
 }
 
 Vector3 JoltPhysicsBackend::GetLinearVelocity(BodyHandle body) const

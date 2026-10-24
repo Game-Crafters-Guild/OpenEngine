@@ -20,6 +20,7 @@
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainService.h"
 
 namespace GameEngine::Editor::SceneTools
@@ -35,8 +36,6 @@ using GameEngine::Components::TerrainNoiseEffect;
 using GameEngine::Components::TerrainStampEffect;
 using GameEngine::Components::TerrainVolumeShape;
 using GameEngine::Components::TerrainModifierShape;
-using GameEngine::Components::TerrainPaintZone;
-using GameEngine::Components::TerrainSculptZone;
 using GameEngine::Components::WorldTransform;
 
 namespace
@@ -375,12 +374,12 @@ void TerrainModifierGizmo::Render(GizmoRenderContext& context)
         return;
 
     DrawModifierVolumes(context, *world, terrain, m_SelectedEntities, m_HoveredEntity);
-    // SculptZone is sphere-supported; a paint zone is drawn greyed on a planet
-    // (keep in lockstep with IsSphereSupportedModifier).
-    DrawZoneModifiers<TerrainSculptZone>(context, *world, terrain, m_SelectedEntities,
-                                         m_HoveredEntity, /*sphereSupported*/ true);
-    DrawZoneModifiers<TerrainPaintZone>(context, *world, terrain, m_SelectedEntities,
-                                        m_HoveredEntity, /*sphereSupported*/ false);
+    // A zone kind the sphere bake does not apply is drawn greyed on a planet.
+    TerrainECS::ForEachZoneKind([&]<typename TZone>()
+    {
+        DrawZoneModifiers<TZone>(context, *world, terrain, m_SelectedEntities, m_HoveredEntity,
+                                 TerrainECS::TerrainZoneKind<TZone>::SphereSupported);
+    });
 }
 
 } // namespace GameEngine::Editor::SceneTools

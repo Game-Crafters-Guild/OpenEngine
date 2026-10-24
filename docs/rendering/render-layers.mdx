@@ -76,27 +76,26 @@ A value in any other form is refused. The load report names the key and the form
 
 ## Layers from code
 
-A game finds a layer by its name once, when a system starts, and keeps the layer number. Do not look names up every frame. A name that no layer has gives no layer, never layer 0.
+A game finds a layer by its name once, when a system starts, and keeps the layer. Do not look names up every frame. A name that no layer has gives no layer, never layer 0.
 
 :::::tabs
 ::::tab[C++]
 
-```cpp title="Engine/Rendering/RenderLayers.h"
-namespace GameEngine::Rendering
+```cpp title="Rendering/RenderLayersScriptApi.h"
+namespace GameEngine::Rendering::Script
 {
-std::optional<uint32> FindRenderLayer(std::string_view name); // exact and case-sensitive
-std::string RenderLayerName(uint32 layer);                    // "Props", "Default", "Layer 7"
+RenderLayerMask Find(std::string_view name); // exact and case-sensitive; RenderLayerMask::None() for no layer
+std::string NameOf(RenderLayerMask layer);   // "Props", "Default", "Layer 7"; "" for no layer or several
 }
 ```
 
 ```cpp title="Put the minimap icons on the Minimap layer"
-const auto minimap = Rendering::FindRenderLayer("Minimap");
-if (!minimap)
+m_MinimapLayer = Rendering::Script::Find("Minimap");
+if (m_MinimapLayer == Rendering::RenderLayerMask::None())
 {
     Logger::Log::Error("MinimapSystem: no render layer named 'Minimap' (Settings, Project, Render Layers)");
     return;
 }
-m_MinimapLayer = Rendering::RenderLayerMask::FromLayer(*minimap);
 
 // Later, for each icon: a 4-byte write.
 entity.GetForWrite<Components::MeshRenderer>()->RenderLayers = m_MinimapLayer;
@@ -105,9 +104,21 @@ entity.GetForWrite<Components::MeshRenderer>()->RenderLayers = m_MinimapLayer;
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-C# cannot look up a layer by name yet. Native code uses `Rendering::FindRenderLayer` and `Rendering::RenderLayerName`. A C# script sets layers by number with `GameEngine.Scripting.RenderLayerMask`, for example `RenderLayerMask.FromLayer(3)`.
-:::
+```csharp title="GameEngine.Scripting.RenderLayers"
+public static class RenderLayers
+{
+    public static RenderLayerMask Find(string name);    // exact and case-sensitive; RenderLayerMask.None for no layer
+    public static string NameOf(RenderLayerMask layer); // "Props", "Default", "Layer 7"; "" for no layer or several
+}
+```
+
+```csharp title="Put the minimap icons on the Minimap layer"
+m_MinimapLayer = RenderLayers.Find("Minimap");
+if (m_MinimapLayer == RenderLayerMask.None)
+    Console.WriteLine("MinimapSystem: no render layer named 'Minimap' (Settings, Project, Render Layers)");
+```
+
+`Find` answers a mask of the one layer that has the name. Call `Find` and `NameOf` on the main thread or from a system the engine runs. Before the engine runs, `Find` answers `RenderLayerMask.None` and `NameOf` the empty string. A C# script also sets layers by number, for example `RenderLayerMask.FromLayer(3)`.
 
 ::::
 :::::
@@ -134,7 +145,7 @@ struct RenderLayerMask
 ::::
 ::::tab[C#]
 
-```csharp title="GameEngine.Scripting.ABI"
+```csharp title="GameEngine.Scripting.Bindings"
 public readonly struct RenderLayerMask
 {
     public readonly uint Bits;

@@ -2836,6 +2836,8 @@ bool DDGIProbeFeature::TickHardwareLane(Rendering::RenderGraph::RGFrame& frame, 
                 continue;
             if ((inst.sectorPacked[0] | inst.sectorPacked[1]) != 0u)
                 continue;
+            if (!DDGITracesInstance(inst))
+                continue;
             if (!m_SceneAS->IsBlasReady(inst.meshIndex))
                 continue;
             const float* m = inst.transform.Data();
@@ -2857,6 +2859,8 @@ bool DDGIProbeFeature::TickHardwareLane(Rendering::RenderGraph::RGFrame& frame, 
         for (const DDGISkinnedGeometry::SkinnedTlasRow& row : skinned.TlasRows)
         {
             const Rendering::GPUInstance& inst = instances[row.InstanceIndex];
+            if (!DDGITracesInstance(inst))
+                continue;
             const float* m = inst.transform.Data();
             bool sane = std::isfinite(inst.boundingRadius) && inst.boundingRadius < kMaxSaneWorldUnits;
             for (int f = 0; f < 16 && sane; ++f)

@@ -1,6 +1,6 @@
 ---
 title: Editor keyboard shortcuts
-description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, view navigation, and tab management.
+description: The editor's keyboard and mouse shortcuts for the gizmo tools, the Scene View camera, the Hierarchy and the Assets panel, view navigation, and tab management.
 ---
 
 ## Gizmo tools (Scene View)
@@ -59,10 +59,33 @@ description: The editor's keyboard and mouse shortcuts for the gizmo tools, the 
 | **Shift + F2** | CPU Profiler Off | Turn the CPU profiler off |
 | **F3** | UI Demo | Open the UI demo panel |
 
-The CPU profiler keys exist in builds with CPU profiling compiled in. All three can be rebound under
+The CPU profiler keys exist in builds with CPU profiling compiled in. When the Hierarchy or the
+Assets panel has keyboard focus, **F2** renames instead. All three can be rebound under
 **Keyboard Shortcuts > Diagnostics**. While a game runs in a focused Game View, a game that binds or
 reads one of these keys receives it and the editor does not act on it. A key the game does not use
 still reaches the editor.
+
+---
+
+## Hierarchy and Assets panel
+
+These keys act on the selection of the panel that has keyboard focus. Click an item in the panel
+first.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| **F2** | Rename | Rename the selected entity in the Hierarchy, or the selected asset or folder in the Assets panel (its item view or its folder tree) |
+| **Return** (macOS) | Rename | The same as F2, as in Finder |
+| **Delete** | Delete | Delete the selected entities in the Hierarchy, with their children |
+| **Ctrl + D** (PC/Linux), **Cmd + D** (macOS) | Duplicate | Duplicate the selected entities in the Hierarchy |
+
+While you rename, **Enter** keeps the new name and **Escape** cancels. A name that cannot be used
+is outlined in red as you type, a note under the field says why (for example, that another file in
+the folder already has the name), and Enter leaves the field open. A click outside the field keeps
+a name that can be used and cancels one that cannot.
+Two entities can have the same name. The context menus of both panels list Rename and Delete as well,
+with their keys. In both panels, a slow second click on the name of the selected item also starts a
+rename.
 
 ---
 

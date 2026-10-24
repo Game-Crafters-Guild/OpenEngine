@@ -1,9 +1,9 @@
 ---
 title: Ocean surface detail, rivers and spray
-description: The ocean features that add to the analytic surface (a normal-mapped surface, water-body materials, spline rivers, accumulated shadows, crest spray, and reflected caustics) and the shallow clarity window.
+description: The ocean features that add to the analytic surface (a normal-mapped surface, water-body materials, spline rivers, accumulated shadows, crest spray, and reflected caustics), the shallow clarity window, and how the water reflects the sky.
 ---
 
-The ocean renders an analytic surface by default. This guide covers the features that add to it: a detailed surface driven by a normal texture, materials on individual water bodies, continuous spline rivers, accumulated water shadows, and crest spray. Each one is off until you use it, so an ocean that uses none of them renders and costs what it did without them. The one exception is the shallow clarity window below, which is on by default and reproduces the look the ocean always had.
+The ocean renders an analytic surface by default. This guide covers the features that add to it: a detailed surface driven by a normal texture, materials on individual water bodies, continuous spline rivers, accumulated water shadows, and crest spray. Each one is off until you use it, so an ocean that uses none of them renders and costs what it did without them. The one exception is the shallow clarity window below, which is on by default. The last section describes how the water reflects the sky and the scene.
 
 ## Example scenes
 
@@ -76,3 +76,18 @@ A calm ocean schedules no spray work once the last droplets have landed.
 ## Shallow clarity window
 
 Seen from above, the surface eases its depth fog in over the first meters of the view ray's path through the water, so the seabed and its caustics stay readable in the shallows however dense the fog is. `OceanSurface.ShallowClarityDistance` is that path length in meters (default 8, range 0.01 to 50): shorter brings the deep color in sooner. `OceanSurface.ShallowClarityFloor` is the fraction of the depth fog applied where the path starts at the surface (default 0.22, range 0 to 1). The fog ramps smoothly from it up to full strength over the distance and is unscaled beyond. Unlike the features above, the window is on by default. A floor of 1 turns it off. It does not apply to the water seen from below the surface.
+
+## Reflection
+
+The water reflects its surroundings, weighted by the Fresnel term of the air and water boundary. The base reflectance comes from `OceanSurface.IorAir` and `IorWater` (about 0.02 at the defaults 1.0 and 1.333) and rises toward 1 at grazing angles; `FresnelPower` sets how fast it rises (5 is the physical curve). What the water reflects is the scene's environment, blurred by `Roughness`, with the planar capture blended over it when `PlanarReflections` is on and a capture was rendered this frame. Without an environment source, the procedural sky colors stand in.
+
+| Field | Effect |
+|---|---|
+| `Specular` | Scales the Fresnel weight of the reflection. 1 is the full reflection; lower values let the water body show through toward the horizon. Default 1. |
+| `ReflectionStrength` | Scales the whole reflection, sky and planar capture alike (default 1). |
+| `PlanarReflectionStrength` | How strongly the planar capture covers the reflected environment (default 1, range 0 to 3). Above 1 it brightens the captured objects, and the sky does not show through them. |
+| `ShallowRefractionReflectionSuppression` | Lowers the reflection where the seabed shows through, so caustics stay readable (default 1; 0 keeps the full reflection). |
+
+The sun and every other light reflect off the water as off any other surface: one highlight at the water's `Roughness` (default 0.12), with the same base reflectance from `IorAir` and `IorWater`, darkened by the shadows of every light. Ripples smaller than a pixel widen it, so a rough or distant sea spreads the sun into a path of glints. `Specular` and `ReflectionStrength` scale the reflection of the surroundings only, not the highlights of lights.
+
+Foam and painted albedo are ordinary surfaces: they take the scene's lighting and environment reflection where they cover the water, and the water's own reflection is hidden under them. The scene's other reflection sources reach the open water as they reach any surface: screen-space reflections replace the water's reflection where a trace hits, so objects reflect in the water with `PlanarReflections` off; a local reflection probe's parallax and the specular fill of an `AmbientLight` with `AffectSpecular` change the environment it reflects. The reflections of a DDGI volume do not reach the open water. The planar capture covers the environment where it captured an object, and screen-space reflections replace it there too. The web profile has neither the planar capture nor the environment on the water: there it reflects the procedural sky colors.

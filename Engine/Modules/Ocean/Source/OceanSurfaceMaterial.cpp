@@ -1,18 +1,51 @@
 #include "Ocean/OceanSurfaceMaterial.h"
+#include "OceanSurfaceMaterialInternal.h"
+
+#include <array>
+#include <string>
 
 namespace GameEngine::Ocean
 {
-
-const GUID& OceanSurfaceMaterialGuid()
+namespace
 {
-    static const GUID guid = GUID::Derive(GUID{}, "ocean/default_material");
-    return guid;
+std::array<GUID, kOceanSurfacePassKeywordSetCount> DeriveSurfaceGuids()
+{
+    std::array<GUID, kOceanSurfacePassKeywordSetCount> guids{};
+    guids[0] = GUID::Derive(GUID{}, "ocean/default_material");
+    for (std::size_t index = 1u; index < guids.size(); ++index)
+        guids[index] = GUID::Derive(
+            GUID{}, "ocean/default_material/pass_keywords/" +
+                        std::to_string(static_cast<std::uint64_t>(OceanSurfacePassKeywordSet(index))));
+    return guids;
+}
+} // namespace
+
+// Bit i of a set's index stands for the i-th lowest keyword of kOceanSurfacePassKeywords.
+std::size_t OceanSurfacePassKeywordSetIndex(Rendering::MaterialKeyword passKeywords)
+{
+    const std::uint64_t keywords = static_cast<std::uint64_t>(passKeywords);
+    std::uint64_t mask = static_cast<std::uint64_t>(kOceanSurfacePassKeywords);
+    std::size_t index = 0u;
+    for (std::size_t bit = 0u; mask != 0u; ++bit, mask &= mask - 1u)
+        if ((keywords & mask & ~(mask - 1u)) != 0u)
+            index |= std::size_t{1} << bit;
+    return index;
 }
 
-const GUID& OceanSurfaceFogMaterialGuid()
+Rendering::MaterialKeyword OceanSurfacePassKeywordSet(std::size_t index)
 {
-    static const GUID guid = GUID::Derive(GUID{}, "ocean/default_material/height_fog");
-    return guid;
+    std::uint64_t mask = static_cast<std::uint64_t>(kOceanSurfacePassKeywords);
+    std::uint64_t keywords = 0u;
+    for (std::size_t bit = 0u; mask != 0u; ++bit, mask &= mask - 1u)
+        if (((index >> bit) & 1u) != 0u)
+            keywords |= mask & ~(mask - 1u);
+    return static_cast<Rendering::MaterialKeyword>(keywords);
+}
+
+const GUID& OceanSurfaceMaterialGuid(Rendering::MaterialKeyword passKeywords)
+{
+    static const std::array<GUID, kOceanSurfacePassKeywordSetCount> guids = DeriveSurfaceGuids();
+    return guids[OceanSurfacePassKeywordSetIndex(passKeywords)];
 }
 
 MaterialDocument BuildOceanSurfaceMaterialDocument()

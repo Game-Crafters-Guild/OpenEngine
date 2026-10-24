@@ -162,37 +162,48 @@
 	color: #FFFFFF;
 }
 
-/* Inline rename: the field stands in for the title/name label for one editing
-   session (Enter commits, Escape cancels). An invalid name is outlined and the
-   reason rides on the field's tooltip. */
-.grid-cell .asset-rename-field {
-	margin-top: 6px;
-	width: 90%;
-	align-self: center;
-	min-height: 20px;
-}
-
-.grid-cell .asset-rename-field > TextInput {
-	font-size: var(--ui_font_size_base);
-	text-align: center;
-}
-
-.assets-name-cell .asset-rename-field {
+/* Inline rename (InlineRenameSession): the field stands in for an item's
+   title for one editing session (Enter commits, Escape cancels). In a row (the
+   Assets list, the folder tree, the Hierarchy) it takes the row's slack; an
+   invalid name is outlined and the reason rides on the field's tooltip. */
+.inline-rename-field {
 	flex-grow: 1;
 	flex-shrink: 1;
 	min-width: 0;
 }
 
+/* A grid cell is a column: the field sits under the thumbnail at its own
+   height instead of growing down the cell. It is as wide as the thumbnail
+   (the cell is the icon plus 8px a side), and the top margin puts its text on
+   the baseline of the title it replaces. */
+.grid-rename-field {
+	flex-grow: 0;
+	align-self: stretch;
+	margin: 11px 8px 0px 8px;
+	min-height: 20px;
+}
+
+/* In a tree row the field takes the title's place in the row's order, after the
+   foldout and the icon. */
+.tree-rename-field {
+	order: 3;
+}
+
+.grid-rename-field > TextInput {
+	font-size: var(--ui_font_size_base);
+	text-align: center;
+}
+
 /* The editing state is a visible box, not just a caret. The base TextInput
    hover/focus rules keep the accent colour, and the invalid rule outranks them. */
-.asset-rename-field > TextInput {
+.inline-rename-field > TextInput {
 	border-width: 1px;
 	border-style: solid;
 	border-color: var(--ui_color_accent);
 }
 
-.asset-rename-field.invalid > TextInput {
-	border-color: var(--ui_color_vcs_removed);
+.inline-rename-field.invalid > TextInput {
+	border-color: var(--ui_color_error_text);
 }
 
 /* ------------------------------------------------

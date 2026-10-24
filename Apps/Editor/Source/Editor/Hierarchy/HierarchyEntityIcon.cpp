@@ -428,6 +428,11 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
                 row->AddClass("hierarchy-entity-shape-capsule");
                 return;
             }
+            if (g == PG::GroundGuid())
+            {
+                row->AddClass("hierarchy-entity-shape-plane");
+                return;
+            }
             if (g == PG::PlaneSpriteUvGuid())
             {
                 if (IsSpriteMeshRenderer(*meshRenderer))

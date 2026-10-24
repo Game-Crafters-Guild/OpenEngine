@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ECS.ABI\GameEngine.ECS.ABI.csproj" />
+    <!-- The generated Input enums (MouseButton) that the UI pointer events carry. -->
+    <ProjectReference Include="..\Scripting.Bindings\GameEngine.Scripting.Bindings.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -71,6 +71,15 @@ std::vector<LineCondition> ConditionsByLine(const std::vector<std::string>& line
 // comment-only line.
 std::vector<LineMarkers> MarkersByLine(const std::vector<std::string>& lines, const std::vector<LineCondition>& conditions);
 
+// The text of `///` lines as one doc string: lines joined with a space, a blank `///` line a
+// paragraph break ("\n").
+std::string JoinDoc(const std::vector<std::string>& lines);
+
+// The doc of the declaration on 1-based `declLine`: the `///` lines of the comment run directly
+// above it, joined (JoinDoc). Plain `//` lines (markers) in the run are skipped; a blank line or
+// code ends it.
+std::string DocAbove(const std::vector<std::string>& lines, int declLine);
+
 } // namespace ApiMarkerLines
 
 } // namespace GameEngine::ComponentScanner

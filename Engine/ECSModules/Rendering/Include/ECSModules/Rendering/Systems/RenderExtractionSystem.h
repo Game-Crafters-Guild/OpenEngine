@@ -72,6 +72,9 @@ public:
         GameEngine::Components::MeshRenderer meshRenderer;
         // Components::GIEmitter presence, resolved once at gather time.
         bool giEmitter = false;
+        // Hidden by the Scene View eye (Components::SceneViewHidden or
+        // SceneViewHiddenInHierarchy), resolved once at gather time.
+        bool editorHidden = false;
         // Holds a component that puts it in the always-refresh subset
         // (SkinnedMeshRenderer, SkeletonRef or AnimatorRef; morph carriers
         // are found by their own column).

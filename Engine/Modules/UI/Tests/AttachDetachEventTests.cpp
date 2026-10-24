@@ -16,6 +16,7 @@
 //   * a handler mutating the tree during the settle neither recurses nor is lost.
 #include <gtest/gtest.h>
 
+#include "SharedHeadlessDevice.h"
 #include "UIRgTestHarness.h"
 
 #include "UI/Assets/UILayoutAsset.h"
@@ -173,12 +174,12 @@ std::filesystem::path MakeAttachTestUxml(const char* name, const char* contents)
 // hook its Unity namesake is.
 TEST(AttachDetachEventTests, RemoveChildAnnouncesDetachForTheWholeDoomedSubtree)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a = tree.A;
     ui.SetRoot(std::move(tree.Root));
@@ -204,12 +205,12 @@ TEST(AttachDetachEventTests, RemoveChildAnnouncesDetachForTheWholeDoomedSubtree)
 // where a destruction races a still-pending queue slot for the same element.
 TEST(AttachDetachEventTests, DestroyingAnElementThatWasNeverAnnouncedAttachedIsSilent)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     ui.SetRoot(MakeElement("root"));
     ui.Update(0.0f, /*interactive=*/false);
 
@@ -233,13 +234,13 @@ TEST(AttachDetachEventTests, DestroyingAnElementThatWasNeverAnnouncedAttachedIsS
 // registries a handler resolves through are still intact at that point.
 TEST(AttachDetachEventTests, AManagerDyingAnnouncesItsWholeTree)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
     {
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         WatchedTree tree = BuildWatchedTree(log);
         ui.SetRoot(std::move(tree.Root));
         ui.Update(0.0f, /*interactive=*/false);
@@ -256,12 +257,12 @@ TEST(AttachDetachEventTests, AManagerDyingAnnouncesItsWholeTree)
 // destruction — and the new tree attaches on the next settle.
 TEST(AttachDetachEventTests, ReplacingTheRootAnnouncesTheTreeItDestroys)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     ui.SetRoot(std::move(tree.Root));
     ui.Update(0.0f, /*interactive=*/false);
@@ -277,12 +278,12 @@ TEST(AttachDetachEventTests, ReplacingTheRootAnnouncesTheTreeItDestroys)
 // rescue an element out of it: both would dangle the moment the dispatch returns.
 TEST(AttachDetachEventTests, TreeEditsFromInsideADestructionDetachAreRefused)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a = tree.A;
     UIElement* a1 = tree.A1;
@@ -325,12 +326,12 @@ TEST(AttachDetachEventTests, TreeEditsFromInsideADestructionDetachAreRefused)
 // would look identical to one that handled it.
 TEST(AttachDetachEventTests, ADrainReleasedCaptureCannotRemoveALaterElementOfTheSameDestructionWalk)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a1 = tree.A1;
     UIElement* b = tree.B;
@@ -369,13 +370,13 @@ TEST(AttachDetachEventTests, ADrainReleasedCaptureCannotRemoveALaterElementOfThe
 // dispatch property; the cost claim is structural (destruction is already O(n)).
 TEST(AttachDetachEventTests, MassTeardownWithNoSubscribersDispatchesNothing)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
     {
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         auto root = MakeElement("root");
         for (int i = 0; i < 200; ++i)
         {
@@ -400,12 +401,12 @@ TEST(AttachDetachEventTests, MassTeardownWithNoSubscribersDispatchesNothing)
 
 TEST(AttachDetachEventTests, InitialBuildAttachesEveryElementPreOrder)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     ui.SetRoot(std::move(tree.Root));
 
@@ -423,12 +424,12 @@ TEST(AttachDetachEventTests, InitialBuildAttachesEveryElementPreOrder)
 
 TEST(AttachDetachEventTests, ASettledTreeAnnouncesNothingOnLaterFrames)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     ui.SetRoot(std::move(tree.Root));
     ui.Update(0.0f, /*interactive=*/false);
@@ -446,12 +447,12 @@ TEST(AttachDetachEventTests, ASettledTreeAnnouncesNothingOnLaterFrames)
 
 TEST(AttachDetachEventTests, TakeChildDetachesTheSubtreePostOrder)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a = tree.A;
     ui.SetRoot(std::move(tree.Root));
@@ -472,12 +473,12 @@ TEST(AttachDetachEventTests, TakeChildDetachesTheSubtreePostOrder)
 
 TEST(AttachDetachEventTests, ReAttachingADetachedSubtreeAnnouncesItAgain)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a = tree.A;
     ui.SetRoot(std::move(tree.Root));
@@ -498,12 +499,12 @@ TEST(AttachDetachEventTests, ReAttachingADetachedSubtreeAnnouncesItAgain)
 
 TEST(AttachDetachEventTests, DetachAndReAttachInOneFrameAnnouncesNothing)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* a = tree.A;
     ui.SetRoot(std::move(tree.Root));
@@ -526,12 +527,12 @@ TEST(AttachDetachEventTests, DetachAndReAttachInOneFrameAnnouncesNothing)
 
 TEST(AttachDetachEventTests, MountTabActivationIsAnAttachAndDeactivationADetach)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     auto mountOwned = std::make_unique<Mount>();
@@ -564,12 +565,12 @@ TEST(AttachDetachEventTests, MountTabActivationIsAnAttachAndDeactivationADetach)
 
 TEST(AttachDetachEventTests, HandlerMutatingTheTreeDuringTheSettleDefersToTheNextFrame)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();
@@ -603,12 +604,12 @@ TEST(AttachDetachEventTests, HandlerMutatingTheTreeDuringTheSettleDefersToTheNex
 
 TEST(AttachDetachEventTests, HandlerRemovingAnElementDuringTheSettleIsDeferredThenAnnounced)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     WatchedTree tree = BuildWatchedTree(log);
     UIElement* rootRaw = tree.Root.get();
     UIElement* b = tree.B;
@@ -642,12 +643,12 @@ TEST(AttachDetachEventTests, HandlerRemovingAnElementDuringTheSettleIsDeferredTh
 // outright — SEH 0xc0000005 in plain DebugFast, no sanitizer needed.
 TEST(AttachDetachEventTests, DestroyingAnElementQueuedTwiceClearsBothSlots)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     auto mountOwned = std::make_unique<Mount>();
@@ -702,10 +703,10 @@ TEST(AttachDetachEventTests, DestroyingAnElementQueuedTwiceClearsBothSlots)
 // element the template newly introduces must see its attach.
 TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto assetRoot = std::filesystem::temp_directory_path() / "ui_attach_detach_assets";
@@ -730,7 +731,7 @@ TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach
 
     AttachLog log;
     AttachLog addedLog;
-    UIManager ui(dev.get(), &assets);
+    UIManager ui(dev, &assets);
     ASSERT_TRUE(ui.LoadLayoutFromAsset(*layout));
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
@@ -779,10 +780,10 @@ TEST(AttachDetachEventTests, ReconcilePreservedElementsGetNoPairAndNewOnesAttach
 // destruction is not a detach, so nothing is dispatched for it.
 TEST(AttachDetachEventTests, ReconcileAnnouncesTheElementItReplaces)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto assetRoot = std::filesystem::temp_directory_path() / "ui_attach_detach_replace_assets";
@@ -805,7 +806,7 @@ TEST(AttachDetachEventTests, ReconcileAnnouncesTheElementItReplaces)
     auto* layout = dynamic_cast<UILayoutAsset*>(asset.get());
     ASSERT_NE(layout, nullptr);
 
-    UIManager ui(dev.get(), &assets);
+    UIManager ui(dev, &assets);
     ASSERT_TRUE(ui.LoadLayoutFromAsset(*layout));
     ui.Update(0.0f, /*interactive=*/false);
     DriveUiRender(ui, rg);
@@ -864,12 +865,12 @@ TEST(AttachDetachEventTests, ReconcileAnnouncesTheElementItReplaces)
 // than deferred a frame.
 TEST(AttachDetachEventTests, InsertChildFromAnAttachHandlerDoesNotSkipASibling)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();
@@ -910,7 +911,7 @@ TEST(AttachDetachEventTests, InsertChildFromAnAttachHandlerDoesNotSkipASibling)
 // window, re-docked after that window closes.
 TEST(AttachDetachEventTests, ASurvivingMountTargetIsAnnouncedAgainByItsNextManager)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
@@ -919,7 +920,7 @@ TEST(AttachDetachEventTests, ASurvivingMountTargetIsAnnouncedAgainByItsNextManag
     Watch(*panel, "panel", log);
 
     {
-        UIManager a(dev.get());
+        UIManager a(dev);
         auto rootA = MakeElement("rootA");
         auto mountOwned = std::make_unique<Mount>();
         Mount* m = mountOwned.get();
@@ -931,7 +932,7 @@ TEST(AttachDetachEventTests, ASurvivingMountTargetIsAnnouncedAgainByItsNextManag
         ASSERT_EQ(log.CountOf("detach:panel"), 0u);
     }
 
-    UIManager b(dev.get());
+    UIManager b(dev);
     auto rootB = MakeElement("rootB");
     auto mountOwned = std::make_unique<Mount>();
     Mount* m = mountOwned.get();
@@ -956,11 +957,11 @@ TEST(AttachDetachEventTests, ASurvivingMountTargetIsAnnouncedAgainByItsNextManag
 // wait for the settle, when both the authored-id and instance-id indexes can resolve it.
 TEST(AttachDetachEventTests, AnElementIsNeverAnnouncedAttachedBeforeTheAbiCanResolveIt)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();
     ui.SetRoot(std::move(root));
@@ -1005,12 +1006,12 @@ TEST(AttachDetachEventTests, AnElementIsNeverAnnouncedAttachedBeforeTheAbiCanRes
 // both complete inside one generation are jointly a non-event.
 TEST(AttachDetachEventTests, AttachThenDetachInOneFrameAnnouncesNothing)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();
     ui.SetRoot(std::move(root));
@@ -1037,12 +1038,12 @@ TEST(AttachDetachEventTests, AttachThenDetachInOneFrameAnnouncesNothing)
 // its generations collapsed or dropped: exactly one per frame, forever.
 TEST(AttachDetachEventTests, AHandlerRemutatingOnEveryAttachAdvancesOneGenerationPerFrame)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
     auto root = MakeElement("root");
 
     int depth = 0;
@@ -1076,12 +1077,12 @@ TEST(AttachDetachEventTests, AHandlerRemutatingOnEveryAttachAdvancesOneGeneratio
 // against the comment claiming it.
 TEST(AttachDetachEventTests, OrderHoldsAcrossAMountPortalEdge)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto portal = MakeElement("portal");
     auto portalChild = MakeElement("portalChild");
@@ -1131,13 +1132,13 @@ TEST(AttachDetachEventTests, OrderHoldsAcrossAMountPortalEdge)
 // assertion, so run it in isolation when it does.
 TEST(AttachDetachEventTests, ElementQueuedInOneManagerAndWalkedByAnotherLeavesADanglingQueueSlot)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager a(dev.get());
-    UIManager b(dev.get());
+    UIManager a(dev);
+    UIManager b(dev);
 
     auto rootA = MakeElement("rootA");
     auto mountAOwned = std::make_unique<Mount>();
@@ -1194,12 +1195,12 @@ TEST(AttachDetachEventTests, ElementQueuedInOneManagerAndWalkedByAnotherLeavesAD
 // sequence is.
 TEST(AttachDetachEventTests, ControlSameSequenceWithoutBsWalkIsSafe)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
-    UIManager a(dev.get());
-    UIManager b(dev.get());
+    UIManager a(dev);
+    UIManager b(dev);
 
     auto rootA = MakeElement("rootA");
     auto mountAOwned = std::make_unique<Mount>();
@@ -1236,12 +1237,12 @@ TEST(AttachDetachEventTests, ControlSameSequenceWithoutBsWalkIsSafe)
 // StillIndexed discipline exists for.
 TEST(AttachDetachEventTests, DestroyingASnapshottedButUnvisitedElementIsSkipped)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     auto m1Owned = std::make_unique<Mount>();
@@ -1292,12 +1293,12 @@ TEST(AttachDetachEventTests, DestroyingASnapshottedButUnvisitedElementIsSkipped)
 // arm reported a false clean.
 TEST(AttachDetachEventTests, DetachingAnAncestorMidWalkSelfCorrectsNextFrame)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto portal = MakeElement("portal");
     auto portalChild = MakeElement("portalChild");
@@ -1354,12 +1355,12 @@ TEST(AttachDetachEventTests, DetachingAnAncestorMidWalkSelfCorrectsNextFrame)
 // ---------------------------------------------------------------------------------------
 TEST(AttachDetachEventTests, DetachHandlerAddingASiblingDoesNotCorruptRemoveChild)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();
@@ -1397,10 +1398,10 @@ TEST(AttachDetachEventTests, DetachHandlerAddingASiblingDoesNotCorruptRemoveChil
 // destruction-detach that SetRoot (:1542) now performs.
 TEST(AttachDetachEventTests, LoadingASecondLayoutAnnouncesTheTreeItDestroys)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto assetRoot = std::filesystem::temp_directory_path() / "ui_r4_loadlayout_assets";
@@ -1426,7 +1427,7 @@ TEST(AttachDetachEventTests, LoadingASecondLayoutAnnouncesTheTreeItDestroys)
     ASSERT_NE(layoutA, nullptr);
     ASSERT_NE(layoutB, nullptr);
 
-    UIManager ui(dev.get(), &assets);
+    UIManager ui(dev, &assets);
     ASSERT_TRUE(ui.LoadLayoutFromAsset(*layoutA));
     ui.Update(0.0f, false);
     DriveUiRender(ui, rg);
@@ -1462,10 +1463,10 @@ TEST(AttachDetachEventTests, LoadingASecondLayoutAnnouncesTheTreeItDestroys)
 // destruction-detach loop over the byId/noId leftovers (:508, :513).
 TEST(AttachDetachEventTests, ReconcileTypeChangeAnnouncesTheElementItReplaces)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
-    UiRgHarness rg(dev.get());
+    UiRgHarness rg(dev);
     UIRegistration::RegisterBuiltInControls();
 
     auto assetRoot = std::filesystem::temp_directory_path() / "ui_r4_typechange_assets";
@@ -1484,7 +1485,7 @@ TEST(AttachDetachEventTests, ReconcileTypeChangeAnnouncesTheElementItReplaces)
     auto* layout = dynamic_cast<UILayoutAsset*>(asset.get());
     ASSERT_NE(layout, nullptr);
 
-    UIManager ui(dev.get(), &assets);
+    UIManager ui(dev, &assets);
     ASSERT_TRUE(ui.LoadLayoutFromAsset(*layout));
     ui.Update(0.0f, false);
     DriveUiRender(ui, rg);
@@ -1527,7 +1528,7 @@ TEST(AttachDetachEventTests, ReconcileTypeChangeAnnouncesTheElementItReplaces)
 // announcing anything, so the attach never gets its detach.
 TEST(AttachDetachEventTests, AManagerDyingAnnouncesItsExternallyOwnedMountTargetToo)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
@@ -1536,7 +1537,7 @@ TEST(AttachDetachEventTests, AManagerDyingAnnouncesItsExternallyOwnedMountTarget
     Watch(*panel, "panel", log);
 
     {
-        UIManager a(dev.get());
+        UIManager a(dev);
         auto rootA = MakeElement("rootA");
         auto mountOwned = std::make_unique<Mount>();
         Mount* m = mountOwned.get();
@@ -1556,14 +1557,14 @@ TEST(AttachDetachEventTests, AManagerDyingAnnouncesItsExternallyOwnedMountTarget
 // R5. The edge rule, both orderings, for a destruction that races a pending queue slot.
 TEST(AttachDetachEventTests, EdgeRuleHoldsForDestructionAgainstAPendingQueueSlot)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     // Ordering A: queued attach never dispatched, then destroyed -> silent both ways.
     {
         AttachLog log;
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         auto root = MakeElement("root");
         UIElement* rootRaw = root.get();
         ui.SetRoot(std::move(root));
@@ -1584,7 +1585,7 @@ TEST(AttachDetachEventTests, EdgeRuleHoldsForDestructionAgainstAPendingQueueSlot
     // Ordering B: attach dispatched, then a queued detach pending, then destroyed.
     {
         AttachLog log;
-        UIManager ui(dev.get());
+        UIManager ui(dev);
         auto root = MakeElement("root");
         UIElement* rootRaw = root.get();
         ui.SetRoot(std::move(root));
@@ -1610,12 +1611,12 @@ TEST(AttachDetachEventTests, EdgeRuleHoldsForDestructionAgainstAPendingQueueSlot
 // R1 faults, the held iterator in RemoveChildImpl is the cause and nothing else is.
 TEST(AttachDetachEventTests, ControlDetachHandlerAddingToAnUnrelatedParentIsSafe)
 {
-    auto dev = MakeHeadlessDevice();
+    auto* dev = SharedHeadlessDevice();
     if (!dev)
         GTEST_SKIP() << "No device";
 
     AttachLog log;
-    UIManager ui(dev.get());
+    UIManager ui(dev);
 
     auto root = MakeElement("root");
     UIElement* rootRaw = root.get();

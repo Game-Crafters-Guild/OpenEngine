@@ -29,11 +29,13 @@ struct WebField
 };
 
 // NoAdd: the component is marked // @ge-no-add (every entity has one; a page cannot add or
-// remove it).
+// remove it). EngineInternal: the component is marked // @ge-engine-internal (engine runtime
+// state, no game API): components.json lists it, marked, and components.d.ts leaves it out.
 struct WebComponent
 {
     std::string Name;
     bool NoAdd = false;
+    bool EngineInternal = false;
     std::vector<WebField> Fields;
 };
 

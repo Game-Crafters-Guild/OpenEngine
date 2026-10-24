@@ -371,7 +371,7 @@ MeshRenderer.meshPrimitive = Plane
 MeshRenderer.material = [guid="9aae4628-ba39-4546-b3c7-55730e59d1ca"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Plane"
@@ -425,7 +425,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [path="Materials/NewMaterial1.material" guid="95733180-c8f8-4739-8347-77a4e2b8caf5"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sphere"
@@ -478,7 +478,7 @@ MeshRenderer.meshPrimitive = Sphere
 MeshRenderer.material = [guid="61feaec8-7114-499d-93b7-7ac6603b7165"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Reflection Probe Test Sphere"
@@ -584,7 +584,7 @@ MeshRenderer.meshAsset = [path="Sponza/glTF/Sponza.gltf" guid="0d33e765-7917-481
 MeshRenderer.material = [guid="821fa7e5-1934-446d-bf33-e47b0e8c2c1e"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh0"
@@ -611,7 +611,7 @@ MeshRenderer.meshId = 1
 MeshRenderer.material = [guid="3521a7e5-1935-446d-9114-6a1eaaf64cca"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh1"
@@ -638,7 +638,7 @@ MeshRenderer.meshId = 2
 MeshRenderer.material = [guid="1c1ca7e5-1932-446d-9450-0598b3035b79"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh2"
@@ -675,7 +675,7 @@ MeshRenderer.meshId = 3
 MeshRenderer.material = [guid="cf1da7e5-1933-446d-a7b5-4917475d5666"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh3"
@@ -702,7 +702,7 @@ MeshRenderer.meshId = 4
 MeshRenderer.material = [guid="b618a7e5-1930-446d-84e4-0866657b951b"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh4"
@@ -729,7 +729,7 @@ MeshRenderer.meshId = 5
 MeshRenderer.material = [guid="691aa7e5-1931-446d-acef-f027b566cc66"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh5"
@@ -756,7 +756,7 @@ MeshRenderer.meshId = 6
 MeshRenderer.material = [guid="5015a7e5-192e-446d-afc1-cd6a6bdabdfe"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh6"
@@ -783,7 +783,7 @@ MeshRenderer.meshId = 7
 MeshRenderer.material = [guid="0317a7e5-192f-446d-bedd-2cc14aabcefb"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh7"
@@ -810,7 +810,7 @@ MeshRenderer.meshId = 8
 MeshRenderer.material = [guid="1a2da7e5-193c-446d-9896-920080599dbd"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh8"
@@ -837,7 +837,7 @@ MeshRenderer.meshId = 9
 MeshRenderer.material = [guid="cd2ea7e5-193d-446d-98c3-6ba4bc2db78d"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh9"
@@ -864,7 +864,7 @@ MeshRenderer.meshId = 10
 MeshRenderer.material = [guid="7f1bfd3a-0140-4788-bf25-9177b9ba6d85"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh10"
@@ -891,7 +891,7 @@ MeshRenderer.meshId = 11
 MeshRenderer.material = [guid="cc19fd3a-013f-4788-9c23-2a259fcb27e3"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh11"
@@ -918,7 +918,7 @@ MeshRenderer.meshId = 12
 MeshRenderer.material = [guid="e51efd3a-0142-4788-92a2-3f9562a8bcd9"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh12"
@@ -955,7 +955,7 @@ MeshRenderer.meshId = 13
 MeshRenderer.material = [guid="321dfd3a-0141-4788-8c96-59fb36518034"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh13"
@@ -982,7 +982,7 @@ MeshRenderer.meshId = 14
 MeshRenderer.material = [guid="b314fd3a-013c-4788-ba80-ed9b996b4210"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh14"
@@ -1009,7 +1009,7 @@ MeshRenderer.meshId = 15
 MeshRenderer.material = [guid="0013fd3a-013b-4788-aa2e-16e41012eb79"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh15"
@@ -1036,7 +1036,7 @@ MeshRenderer.meshId = 16
 MeshRenderer.material = [guid="1918fd3a-013e-4788-bcf2-50678fe33b98"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh16"
@@ -1063,7 +1063,7 @@ MeshRenderer.meshId = 17
 MeshRenderer.material = [guid="6616fd3a-013d-4788-98aa-212ad2bdaab3"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh17"
@@ -1090,7 +1090,7 @@ MeshRenderer.meshId = 18
 MeshRenderer.material = [guid="1729fd3a-0148-4788-a1e4-b976ef712686"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh18"
@@ -1117,7 +1117,7 @@ MeshRenderer.meshId = 19
 MeshRenderer.material = [guid="6427fd3a-0147-4788-b206-578a65df1332"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh19"
@@ -1144,7 +1144,7 @@ MeshRenderer.meshId = 20
 MeshRenderer.material = [guid="c4def43a-014e-4d88-bd31-ab52e26f9273"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh20"
@@ -1171,7 +1171,7 @@ MeshRenderer.meshId = 21
 MeshRenderer.material = [guid="77e0f43a-014f-4d88-8624-8d97eb258943"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh21"
@@ -1198,7 +1198,7 @@ MeshRenderer.meshId = 22
 MeshRenderer.material = [guid="2ae2f43a-0150-4d88-a503-08e617575367"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh22"
@@ -1235,7 +1235,7 @@ MeshRenderer.meshId = 23
 MeshRenderer.material = [guid="dde3f43a-0151-4d88-bb7f-373fb4f66e99"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh23"
@@ -1262,7 +1262,7 @@ MeshRenderer.meshId = 24
 MeshRenderer.material = [guid="f8d7f43a-014a-4d88-b224-cc4df7c01df0"]
 MeshRenderer.enabled = true
 MeshRenderer.renderLayers = [0]
-MeshRenderer.castShadows = true
+MeshRenderer.shadowCasting = On
 MeshRenderer.receiveShadows = true
 MeshRenderer.motionVectors = true
 Name.value = "Sponza_submesh24"

@@ -30,6 +30,8 @@
     "export_model_materials": "One-off model material export; no typed tool yet.",
     "enumerate_provenance": "Asset provenance dump; no typed tool yet.",
     "set_entity_enabled": "Toggles entity enablement; set_component reaches the same state today.",
+    "mark_navigation_dirty": "Navigation::MarkDirty for a live check of a surface's dirty queue; a game calls MarkDirty itself.",
+    "set_destination": "Navigation::SetDestination for a live check of an agent's request; a game calls SetDestination itself.",
     "select_smart_folder": "Assets-panel smart folder selection; no typed tool yet.",
     "get_asset_sources": "Lists mounted asset roots; get_build_settings answers the usual mount question.",
     "get_asset_list": "Registered-asset listing; no typed tool yet.",

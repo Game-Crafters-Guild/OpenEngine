@@ -214,7 +214,7 @@ uint32 HlodRuntime::ReconcileScene(GameEngine::ECS::World& world,
                 mr.meshGpuHandleId = static_cast<uint64>(handle);
                 mr.materialAssetGuid.Set(sub.MaterialGuid);
                 mr.RenderLayers = bc.RenderLayers; // the bake keeps one layer set per cluster
-                mr.castShadows = true;
+                mr.shadowCasting = Components::ShadowCasting::On;
                 mr.receiveShadows = true;
                 mr.motionVectors = false; // immobile proxy: no motion vectors
                 proxy.Set(mr);

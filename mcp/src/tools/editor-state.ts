@@ -1,13 +1,47 @@
 import { z } from "zod";
-import type { ToolDef } from "../registry.js";
-import { proxyTool } from "./proxy.js";
+import { editorCall } from "../editor-call.js";
+import { defineTool, type ToolDef } from "../registry.js";
+import { definedOnly, proxyTool } from "./proxy.js";
+
+type LogQuery = {
+  since?: number;
+  minLevel?: string;
+  pattern?: string;
+  count?: number;
+  offset?: number;
+};
+
+// The level the editor's narrower call names when the cap cut lines: one step up,
+// while there is a level below error to leave.
+const kNarrowerLevel: Record<string, string> = {
+  trace: "warning", debug: "warning", info: "warning", warning: "error", warn: "error",
+};
+
+/**
+ * The get_log call to make after this reply. Normally the same level and pattern
+ * from nextSince. When the cap left matching lines out, the narrower call the reply
+ * names instead, over the same window: a higher level, or at error and above the
+ * next page back past the lines returned.
+ */
+function nextLogQuery(query: LogQuery, reply: any): Record<string, unknown> | undefined {
+  if (typeof reply?.nextSince !== "number") return undefined;
+  if (!reply.omitted?.overCap) {
+    return definedOnly({ since: reply.nextSince, minLevel: query.minLevel, pattern: query.pattern });
+  }
+  const higher = kNarrowerLevel[(query.minLevel ?? "warning").toLowerCase()];
+  if (higher) return definedOnly({ ...query, minLevel: higher });
+  const returned = Array.isArray(reply.lines) ? reply.lines.length : 0;
+  return definedOnly({ ...query, offset: (query.offset ?? 0) + returned });
+}
 
 export const tools: ToolDef[] = [
   proxyTool({
     name: "get_build_status",
     category: "editor",
-    description: "Get the current game build generation, running/completed state, success receipt and diagnostics. Poll after trigger_build and require the same generation with running=false and succeeded=true before publishing its output.",
-    schema: {},
+    description: "Get the game build summary: the generation, running or stopped, succeeded, the progress and stage message, errors N with the first ten unique error lines, warnings N (the lines only with includeWarnings=true), and the output directory. The summary is the record of the build: do not read get_log for it. Poll after trigger_build and require the same generation with running=false and succeeded=true before publishing its output.",
+    schema: {
+      includeWarnings: z.boolean().optional().describe("List the first unique warning lines as well as their count (default false: the count only)"),
+    },
   }),
   proxyTool({
     name: "get_editor_state",
@@ -16,22 +50,23 @@ export const tools: ToolDef[] = [
     schema: {},
   }),
 
-  proxyTool({
+  defineTool({
     name: "get_log",
     category: "editor",
-    description: "Get the most recent engine log messages (the tail). Returns the newest `count` messages, oldest-first within that window — so a small count shows what just happened.",
+    description: "Get engine log lines, filtered. Call it to find a specific line you are looking for: pass a level and a pattern. Every reply ends with next: the next call, with since=<nextSince> and the same level and pattern. Make that call, and its reply holds only the lines logged after this one. Do not call it after build_engine, run_tests or a capture tool: their summaries already hold the errors and are the record. Do not poll it for progress: on the MCP server's connection a repeated call with nothing new answers 'unchanged'. Defaults: warning level and above, at most 30 lines and about 1.5 KB of line text, newest last. An unknown level is refused. The reply says how many lines the filters or the cap left out and names the narrower call, and next is then that narrower call.",
     schema: {
-      count: z.coerce.number().optional().describe("Max messages to return, taken from the newest end (default 100)"),
-      minLevel: z.string().optional().describe("Minimum level: trace/debug/info/warning/error"),
-      filter: z.string().optional().describe("Substring filter — only return messages containing this text"),
-      offset: z.coerce.number().optional().describe("Skip this many of the newest matching messages before returning (page further back into history; default 0)"),
+      since: z.coerce.number().optional().describe("Return only lines after this sequence number: the nextSince of the previous answer. A cursor from an earlier editor session answers from the start of the log and says restarted"),
+      minLevel: z.string().optional().describe("Minimum level: trace/debug/info/warning/error/critical (default warning). Ask for info or lower only when a warning-level answer does not hold the line"),
+      pattern: z.string().optional().describe("Regular expression (ECMAScript syntax, case-insensitive, at most 256 characters); only lines that match it are returned. Plain words are a pattern: 'shader|pipeline'"),
+      count: z.coerce.number().optional().describe("Max lines, taken from the newest end (default 30). Raise it only when the answer says lines were left out and a narrower level or pattern cannot find the line"),
+      offset: z.coerce.number().optional().describe("Skip this many of the newest matching lines before returning (page further back into history; default 0)"),
     },
-    params: ({ count, minLevel, filter, offset }) => ({
-      count: count ?? 100,
-      minLevel: minLevel ?? "info",
-      filter: filter ?? "",
-      offset: offset ?? 0,
-    }),
+    ipcMethod: "get_log",
+    run: async (args) => {
+      const params = definedOnly(args);
+      const reply = await editorCall("get_log", params);
+      return { data: reply, next: nextLogQuery(params as LogQuery, reply) };
+    },
   }),
 
   proxyTool({
@@ -44,7 +79,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "trigger_build",
     category: "editor",
-    description: "Trigger a game build from the Editor's Build panel for a single platform (e.g. \"Mac\", \"Windows\"). The build runs asynchronously on the editor UI thread; poll get_log (filter \"Build:\") to follow progress and find the produced artifact path.",
+    description: "Trigger a game build from the Editor's Build panel for a single platform (e.g. \"Mac\", \"Windows\"). The build runs asynchronously on the editor UI thread; call get_build_status for its progress and, once it stops, its summary (succeeded, errors N with the first unique error lines, warnings N, the output directory).",
     schema: {
       platform: z.string().describe("Target platform to build: Mac, Windows, Linux, Steam, Nintendo, Sony"),
     },

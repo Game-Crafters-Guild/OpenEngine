@@ -46,6 +46,7 @@ constexpr std::pair<std::string_view, ApiKind> kBuiltIns[] = {
     {"GameEngine::Mathematics::Matrix4x4", ApiKind::Mat4},
     {"GameEngine::ColorLinear", ApiKind::ColorLinear},
     {"GameEngine::ECS::EntityHandle", ApiKind::Entity},
+    {"GameEngine::Rendering::RenderLayerMask", ApiKind::RenderLayerMask},
     {"GameEngine::StringId", ApiKind::StringId},
     {"std::string_view", ApiKind::String},
 };
@@ -112,10 +113,11 @@ DeclarationProblem Problem(std::string problem, std::string fix)
     return DeclarationProblem{std::move(problem), std::move(fix)};
 }
 
-std::optional<ApiType> ResolveSpan(std::string_view text, const ApiLookup& lookup,
-                                   DeclarationProblem& outProblem)
+// "std::span<const T>" or "std::span<T>" with no extent. A span of T is one the function writes: it is
+// resolved only where `outWritable` is given (a parameter), and *outWritable says which it is.
+std::optional<ApiType> ResolveSpan(std::string_view text, const ApiLookup& lookup, DeclarationProblem& outProblem,
+                                   bool* outWritable)
 {
-    // "std::span<const T>" with no extent.
     const std::size_t open = text.find('<');
     const std::size_t close = text.rfind('>');
     if (open == std::string_view::npos || close == std::string_view::npos || close < open)
@@ -129,13 +131,17 @@ std::optional<ApiType> ResolveSpan(std::string_view text, const ApiLookup& looku
         outProblem = Problem("a span with a fixed extent cannot be bound", "take std::span<const T>, whose count travels with it");
         return std::nullopt;
     }
-    if (!StartsWith(element, "const ") && !StartsWith(element, "const"))
+    const bool writable = !StartsWith(element, "const ") && !StartsWith(element, "const");
+    if (writable && outWritable == nullptr)
     {
-        outProblem = Problem("a span the function writes (`" + std::string(text) + "`) is not in the kinds",
-                             "take std::span<const T> in; return results through one out parameter");
+        outProblem = Problem("a span the function writes (`" + std::string(text) + "`) is a parameter only",
+                             "take std::span<T> as a parameter and return the number of results");
         return std::nullopt;
     }
-    element = TrimView(element.substr(5));
+    if (outWritable != nullptr)
+        *outWritable = writable;
+    if (!writable)
+        element = TrimView(element.substr(5));
     std::optional<ApiType> elementType = ResolveValue(element, lookup, outProblem);
     if (!elementType)
         return std::nullopt;
@@ -196,22 +202,9 @@ std::optional<ApiType> ResolveMarked(std::string_view name, const ApiLookup& loo
     return std::nullopt;
 }
 
-} // namespace
-
-bool NamesQualified(std::string_view spelled, std::string_view qualified)
-{
-    const std::vector<std::string_view> a = Segments(spelled);
-    const std::vector<std::string_view> b = Segments(qualified);
-    if (a.size() > b.size())
-        return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-        if (a[a.size() - 1 - i] != b[b.size() - 1 - i])
-            return false;
-    return true;
-}
-
-std::optional<ApiType> ResolveValue(std::string_view typeText, const ApiLookup& lookup,
-                                    DeclarationProblem& outProblem)
+// ResolveValue, and for a parameter (`outWritableSpan` given) also a span the function writes.
+std::optional<ApiType> ResolveValueOrSpan(std::string_view typeText, const ApiLookup& lookup, DeclarationProblem& outProblem,
+                                          bool* outWritableSpan)
 {
     const std::string text = CollapseSpaces(typeText);
     if (text == "void")
@@ -226,7 +219,7 @@ std::optional<ApiType> ResolveValue(std::string_view typeText, const ApiLookup& 
     const std::size_t angle = text.find('<');
     const std::string base = angle == std::string::npos ? text : text.substr(0, angle);
     if (NamesQualified(base, "std::span") && StartsWith(base, "std::"))
-        return ResolveSpan(text, lookup, outProblem);
+        return ResolveSpan(text, lookup, outProblem, outWritableSpan);
 
     if (angle != std::string::npos)
     {
@@ -265,6 +258,47 @@ std::optional<ApiType> ResolveValue(std::string_view typeText, const ApiLookup& 
                          "module's <Module>ScriptApi.h: a struct or an enum class with // @ge-script, a handle alias "
                          "with // @ge-script-handle");
     return std::nullopt;
+}
+
+} // namespace
+
+bool NamesQualified(std::string_view spelled, std::string_view qualified)
+{
+    const std::vector<std::string_view> a = Segments(spelled);
+    const std::vector<std::string_view> b = Segments(qualified);
+    if (a.size() > b.size())
+        return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[a.size() - 1 - i] != b[b.size() - 1 - i])
+            return false;
+    return true;
+}
+
+std::optional<ApiType> ResolveValue(std::string_view typeText, const ApiLookup& lookup,
+                                    DeclarationProblem& outProblem)
+{
+    return ResolveValueOrSpan(typeText, lookup, outProblem, nullptr);
+}
+
+std::optional<ApiType> ResolveReturn(std::string_view typeText, const ApiLookup& lookup,
+                                     DeclarationProblem& outProblem)
+{
+    const std::string text = CollapseSpaces(typeText);
+    const std::string_view unrooted = StartsWith(text, "::") ? std::string_view(text).substr(2) : std::string_view(text);
+    if (NamesQualified(unrooted, "std::string") && StartsWith(unrooted, "std::"))
+        return ApiType{ApiKind::String, {}, {}};
+    std::optional<ApiType> type = ResolveValue(text, lookup, outProblem);
+    if (type && type->Kind == ApiKind::String)
+    {
+        outProblem = Problem("a returned `" + text + "` can outlive the text it views", "return std::string");
+        return std::nullopt;
+    }
+    if (type && type->Kind == ApiKind::Span)
+    {
+        outProblem = Problem("a span is a parameter only", "return a value kind, or write the result through one out parameter");
+        return std::nullopt;
+    }
+    return type;
 }
 
 std::optional<ApiParamShape> ResolveParameter(std::string_view typeText, const ApiLookup& lookup,
@@ -319,7 +353,8 @@ std::optional<ApiParamShape> ResolveParameter(std::string_view typeText, const A
         return std::nullopt;
     }
 
-    std::optional<ApiType> type = ResolveValue(text, lookup, outProblem);
+    bool writableSpan = false;
+    std::optional<ApiType> type = ResolveValueOrSpan(text, lookup, outProblem, &writableSpan);
     if (!type)
         return std::nullopt;
     if (type->Kind == ApiKind::Void)
@@ -327,12 +362,18 @@ std::optional<ApiParamShape> ResolveParameter(std::string_view typeText, const A
         outProblem = Problem("a void parameter cannot be bound", "remove it");
         return std::nullopt;
     }
+    if (type->Kind == ApiKind::Span && reference)
+    {
+        outProblem = Problem("a span by reference cannot be bound",
+                             "take std::span<const T> by value for a list in, std::span<T> by value for results");
+        return std::nullopt;
+    }
 
     ApiParamShape shape;
-    shape.Out = reference && !isConst;
-    if (shape.Out && (type->Kind == ApiKind::String || type->Kind == ApiKind::Span))
+    shape.Out = (reference && !isConst) || writableSpan;
+    if (shape.Out && type->Kind == ApiKind::String)
     {
-        outProblem = Problem("text or a span cannot be an out parameter", "take std::string_view or std::span<const T> in");
+        outProblem = Problem("text cannot be an out parameter", "take std::string_view in, or return std::string");
         return std::nullopt;
     }
     shape.Type = std::move(*type);
@@ -352,7 +393,8 @@ std::uint32_t SizeOf(ApiKind kind)
     case ApiKind::UInt32:
     case ApiKind::Float:
     case ApiKind::Angle:
-    case ApiKind::Entity: return 4;
+    case ApiKind::Entity:
+    case ApiKind::RenderLayerMask: return 4;
     case ApiKind::Int64:
     case ApiKind::UInt64:
     case ApiKind::Double:

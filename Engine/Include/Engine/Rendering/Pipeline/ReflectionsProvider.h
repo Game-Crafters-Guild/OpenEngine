@@ -51,6 +51,39 @@ public:
     static Rendering::MaterialKeyword ContributeWorldPassTargets(
         ViewDeclare& d, RenderServices::WorldPassTargetsRG& targets,
         Rendering::RenderGraph::RGTexture normalTarget);
+
+    // Attach the slices the world pass wrote this frame to a later forward
+    // pass (`targets`) whose surfaces are in its depth buffer and own the
+    // pixels they cover (the water surface), loaded and stored, and return
+    // the keyword that makes its variants write them; None when the world
+    // pass did not write them for screen-space reflections or when the pass
+    // has no depth attachment. Occluded fragments fail the depth test and
+    // leave the slices of the surface in front as they are.
+    static Rendering::MaterialKeyword ContributeLateForwardPassTargets(
+        ViewDeclare& d, RenderServices::WorldPassTargetsRG& targets);
+
+    // Attach the slices the world pass wrote this frame to the transmissive
+    // pass (`targets`), loaded and stored, and return the keyword that makes
+    // the glass variant write them; None when the world pass did not write
+    // them for screen-space reflections, when the pass has no depth attachment,
+    // or when the device lacks independent blend (supportsIndependentBlend). Glass draws over the opaque surface
+    // the slices describe and is not in the depth buffer, so reflections would
+    // replace that surface's probe lobe on a pixel that shows it only through
+    // the glass. The glass writes a zero weight, which keeps the pass off its
+    // pixels; the other two slices keep the opaque surface's values for their
+    // other readers (the DDGI glossy resolve), through the write masks
+    // ApplyTransmissivePassWriteMasks sets. Call it only when the pass binds
+    // the scene-colour grab: that keyword is how the variant cache tells the
+    // transmissive pass's glass from glass the world pass draws.
+    static Rendering::MaterialKeyword ContributeTransmissivePassTargets(
+        ViewDeclare& d, RenderServices::WorldPassTargetsRG& targets);
+
+    // The colour-blend write masks of a forward variant drawn with
+    // `passKeywords`. The transmissive pass's glass (the reflection keyword
+    // with the scene-colour grab) writes the weight slice's RGB and nothing of
+    // the normal and radiance slices; every other variant is left as built.
+    static void ApplyTransmissivePassWriteMasks(Rendering::MaterialKeyword passKeywords,
+                                                Rendering::ColorBlendState& blend);
 };
 
 } // namespace GameEngine::Engine::Renderer::Pipeline
