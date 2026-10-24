@@ -1,6 +1,6 @@
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Components/NavigationObstacle.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
@@ -25,7 +25,6 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
-#include <cstring>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -449,8 +448,9 @@ TEST_F(NavigationAssetWatchTest, EditingANavGridUnderTheAssetRootRebakesGridSurf
     surface.CellSize = kCellSize;
     surface.FitBounds = false;
     surface.Extent = {4.0f, 1.0f, 4.0f};
-    GUID authored;
-    std::memset(&authored, 0x42, sizeof(authored));
+    GUID::Data authoredBytes{};
+    authoredBytes.fill(0x42);
+    const GUID authored(authoredBytes);
     surface.AuthoredCells.Set(authored); // only grids with authored cells re-bake on an edit
     entity.Set(surface);
     world->ProcessCommands();

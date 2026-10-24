@@ -16,6 +16,7 @@
 #include "UI/UIManager.h"                      // GetFocusedElementId for the live-refresh focus skip
 
 #include "ECS/ComponentFieldRegistry.h"
+#include "ECS/FieldAccess.h"             // ReadFieldInteger / WriteFieldInteger
 #include "ECS/Reflection.h"               // FieldInfo, FieldTypeId, FieldElementSize
 
 #include <limits>                          // quiet_NaN for the clamped-range float row
@@ -24,6 +25,7 @@
 #include "Core/Engine.h"                  // EngineCore::GetInstance().GetAssetManager() for the asset picker
 #include "Assets/AssetRegistry.h"         // AssetRegistry for AssetGuid field pickers
 #include "AssetCore/GUID.h"               // GUID (AssetRef field storage)
+#include "Types/ParseNumber.h"            // ParseUnsigned (enum option values)
 #include "Types/StringUtils.h"            // IdentifierToWords (row and option labels)
 
 #include <algorithm>
@@ -88,96 +90,15 @@ uint32 MixedRenderLayerBits(Rendering::RenderLayerMask primary, const std::vecto
     return mixed;
 }
 
-// Read any integer field element as a signed int for display. 64-bit values are
-// truncated to int — acceptable for the starter set (no 64-bit fields); revisit
-// when a component reflects an int64/uint64 that needs the full range.
-int ReadIntElement(const Snapshot& bytes, std::size_t offset, ECS::FieldTypeId type)
+// The snapshot as the component bytes the ECS field accessor reads and writes.
+std::span<const std::byte> ComponentBytes(const Snapshot& bytes)
 {
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-        case FieldTypeId::Int8:   { std::int8_t   v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::UInt8:  { std::uint8_t  v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::Int16:  { std::int16_t  v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::UInt16: { std::uint16_t v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::Int32:  { std::int32_t  v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::UInt32: { std::uint32_t v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::Int64:  { std::int64_t  v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        case FieldTypeId::UInt64: { std::uint64_t v = 0; ReadPod(bytes, offset, v); return static_cast<int>(v); }
-        default: return 0;
-    }
+    return std::as_bytes(std::span(bytes));
 }
 
-void WriteIntElement(Snapshot& bytes, std::size_t offset, ECS::FieldTypeId type, int value)
+std::span<std::byte> WritableComponentBytes(Snapshot& bytes)
 {
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-        case FieldTypeId::Int8:   { auto v = static_cast<std::int8_t>(value);   if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt8:  { auto v = static_cast<std::uint8_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int16:  { auto v = static_cast<std::int16_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt16: { auto v = static_cast<std::uint16_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int32:  { auto v = static_cast<std::int32_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt32: { auto v = static_cast<std::uint32_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int64:  { auto v = static_cast<std::int64_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt64: { auto v = static_cast<std::uint64_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        default: break;
-    }
-}
-
-// Write an unsigned integer of the field's width (used by the editable uint row,
-// which parses the full unsigned range a signed int can't hold).
-void WriteUIntElement(Snapshot& bytes, std::size_t offset, ECS::FieldTypeId type, std::uint64_t value)
-{
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-        case FieldTypeId::UInt8:  { auto v = static_cast<std::uint8_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt16: { auto v = static_cast<std::uint16_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt32: { auto v = static_cast<std::uint32_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt64: { if (offset + sizeof(value) <= bytes.size()) std::memcpy(bytes.data() + offset, &value, sizeof(value)); break; }
-        default: break;
-    }
-}
-
-// Read an integer field element as a full 64-bit signed value (no truncation),
-// honoring the field's signedness/width. Enum matching compares against the
-// EnumNameValue table's std::int64_t, so the full range must survive.
-std::int64_t ReadIntElement64(const Snapshot& bytes, std::size_t offset, ECS::FieldTypeId type)
-{
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-        case FieldTypeId::Int8:   { std::int8_t   v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::UInt8:  { std::uint8_t  v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::Int16:  { std::int16_t  v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::UInt16: { std::uint16_t v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::Int32:  { std::int32_t  v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::UInt32: { std::uint32_t v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        case FieldTypeId::Int64:  { std::int64_t  v = 0; ReadPod(bytes, offset, v); return v; }
-        case FieldTypeId::UInt64: { std::uint64_t v = 0; ReadPod(bytes, offset, v); return static_cast<std::int64_t>(v); }
-        default: return 0;
-    }
-}
-
-// Write a full 64-bit value into an integer field element of the field's width.
-// Enum values come from the table as std::int64_t; truncating to int would corrupt
-// large UInt32/UInt64 enumerators, so this writes the native width directly.
-void WriteIntElement64(Snapshot& bytes, std::size_t offset, ECS::FieldTypeId type, std::int64_t value)
-{
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-        case FieldTypeId::Int8:   { auto v = static_cast<std::int8_t>(value);   if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt8:  { auto v = static_cast<std::uint8_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int16:  { auto v = static_cast<std::int16_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt16: { auto v = static_cast<std::uint16_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int32:  { auto v = static_cast<std::int32_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt32: { auto v = static_cast<std::uint32_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::Int64:  { auto v = static_cast<std::int64_t>(value);  if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        case FieldTypeId::UInt64: { auto v = static_cast<std::uint64_t>(value); if (offset + sizeof(v) <= bytes.size()) std::memcpy(bytes.data() + offset, &v, sizeof(v)); break; }
-        default: break;
-    }
+    return std::as_writable_bytes(std::span(bytes));
 }
 
 // Index of the EnumNames entry whose Value equals `value`, or -1 when the stored
@@ -269,82 +190,20 @@ void WireEdit(const std::shared_ptr<std::optional<Editor::UndoRedoService::Inter
     };
 }
 
-// Row label for a reflected field: a curated name where the field's own reads badly, otherwise its
-// identifier as words.
-std::string FieldDisplayName(std::string_view name)
+// Row label for a reflected field: its "// @ge-label" text, otherwise its identifier as words.
+std::string FieldDisplayName(const ECS::FieldInfo& field)
 {
-    if (name == "Meshes")
-        return "Mesh";
-    if (name == "CombineDisplacementCascade")
-        return "Combine Cascade";
-    if (name == "LodDataResolution")
-        return "LOD Data Resolution";
-    if (name == "RasterDepthCaptureResolution")
-        return "Raster Depth Resolution";
-    if (name == "PlanarReflectionStrength")
-        return "Planar Strength";
-    if (name == "PlanarReflectionScale")
-        return "Planar Scale";
-    if (name == "FoamDebugMode")
-        return "Foam Debug";
-    if (name == "ShallowRefractionReflectionSuppression")
-        return "Shallow Reflection Suppression";
-    if (name == "SkyIntensity")
-        return "Sky Light";
-    if (name == "ReflectionIntensity")
-        return "Local Reflections";
-    if (name == "ProbesLongAxis")
-        return "Divisions";
-    if (name == "RaysPerProbe")
-        return "Rays / Probe";
-    return IdentifierToWords(name);
+    if (!field.Label.empty())
+        return std::string(field.Label);
+    return IdentifierToWords(field.Name);
 }
 
-// Option label for an enumerator: a curated name where one is kept, otherwise its identifier as
-// words.
-std::string EnumDisplayName(std::string_view fieldName, std::string_view name)
+// Option label for an enumerator: its "// @ge-label" text, otherwise its identifier as words.
+std::string EnumDisplayName(const ECS::EnumNameValue& value)
 {
-    if (name == "SingleGrid")
-        return "single grid";
-    if (name == "Cascaded2")
-        return "cascaded (2)";
-    // Components::DDGIDebugView
-    if (name == "CascadeWeight")
-        return "cascade weight";
-    if (name == "NearestProbeIrradiance")
-        return "nearest probe irradiance";
-    if (name == "ProbeStateFine")
-        return "probe state (fine)";
-    if (name == "NearestProbeIrradianceFine")
-        return "nearest probe irradiance (fine)";
-    if (name == "FineProbeCoord")
-        return "fine probe coord";
-    if (name == "FineProbeSlot")
-        return "fine probe slot";
-    if (name == "ProbeState")
-        return "probe state";
-    if (name == "Coverage")
-        return "probe coverage";
-    // Components::ReflectionProbeUpdateMode: a realtime probe re-bakes only
-    // while its world changes, so the label says so.
-    if (fieldName == "UpdateMode" && name == "Realtime")
-        return "Realtime (on change)";
-    // DDGIGlossyResolveScale (Components/Rendering/DDGIVolume.h). Gated on
-    // the field: reflection only hands us value names, and "Full"/"Half"
-    // are generic enough to collide with unrelated enums (e.g.
-    // HumanoidRetargetLOD::Full).
-    if (fieldName == "GlossyResolveScale")
-    {
-        if (name == "Quarter")
-            return "25%";
-        if (name == "Half")
-            return "50%";
-        if (name == "ThreeQuarter")
-            return "75%";
-        if (name == "Full")
-            return "100%";
-    }
-    return IdentifierToWords(name);
+    if (!value.Label.empty())
+        return std::string(value.Label);
+    return IdentifierToWords(value.Name);
 }
 
 // "Mesh 1" for the first of several elements: counted from one, as the rest of the inspector counts slots.
@@ -354,198 +213,6 @@ std::string ElementLabel(std::string_view name, std::uint32_t index, std::uint32
     if (count > 1)
         label += " " + std::to_string(index + 1);
     return label;
-}
-
-std::string_view SimpleTypeName(std::string_view canonicalName)
-{
-    const std::size_t pos = canonicalName.rfind("::");
-    return (pos == std::string_view::npos) ? canonicalName : canonicalName.substr(pos + 2);
-}
-
-const char* OceanSurfaceFieldTooltip(std::string_view fieldName)
-{
-    struct Entry { std::string_view Field; const char* Tooltip; };
-    static constexpr Entry kTooltips[] = {
-        {"DeepColor", "Base deep-water colour used when depth fog fully hides the refracted scene."},
-        {"FoamColor", "Tint of whitecaps, shoreline foam, and intersection foam."},
-        {"ChoppyScale", "Scales horizontal wave displacement. Higher values sharpen crests and wind chop."},
-        {"FresnelPower", "Controls how strongly reflection concentrates near grazing viewing angles."},
-        {"ReflectionStrength", "Scales sky and planar reflection contribution on the water surface."},
-        {"SubsurfaceStrength", "Overall intensity of the teal subsurface glow through wave crests."},
-        {"FoamAmount", "Coverage multiplier for wave-generated whitecaps."},
-        {"FoamFadeRate", "How quickly simulated foam decays over time. Lower values leave longer trails."},
-        {"WaveFoamStrength", "Amount of foam deposited by breaking or pinching wave crests."},
-        {"WaveFoamCoverage", "Breaking threshold for wave foam. Higher values create foam more readily."},
-        {"FoamScale", "World tiling scale for the bubble/foam texture pattern."},
-        {"FoamFeather", "Softness of foam edges and threshold transitions."},
-        {"SprayWindThreshold", "Minimum wind speed in meters per second before open-water crest spray begins."},
-        {"SprayEmissionThreshold", "Minimum sampled crest strength required to emit wind spray. Higher values restrict spray to stronger crests."},
-        {"FoamTexture", "Optional texture sampled for foam bubbles. Empty uses procedural foam."},
-        {"FoamDebugMode", "Debug overlay mode for inspecting foam, shoreline, and depth data."},
-        {"ShorelineFoamMaxDepth", "Seabed depth range where shoreline foam appears and fades out."},
-        {"ShorelineFoamStrength", "Intensity multiplier for foam along shallow shorelines."},
-        {"NormalsStrength", "Strength of high-frequency normal detail on the water surface."},
-        {"NormalsScale", "World tiling scale of high-frequency water normal detail."},
-        {"Diffuse", "Main lit water diffuse/scatter colour."},
-        {"DiffuseGrazing", "Diffuse colour used when viewing across the water at grazing angles."},
-        {"DiffuseShadow", "Diffuse tint for water faces with less direct sun."},
-        {"SubSurfaceShallowCol", "Shallow-water tint blended in where the seabed is near the surface."},
-        {"SubSurfaceDepthMax", "Depth at which shallow-water tint fully fades to deep water."},
-        {"SubSurfaceDepthPower", "Exponent shaping the shallow-to-deep colour fade."},
-        {"SubSurfaceColour", "Ambient subsurface scatter colour pushed through the water."},
-        {"SubSurfaceBase", "Baseline subsurface scatter present across the surface."},
-        {"SubSurfaceSun", "Forward-scatter lobe intensity toward the sun."},
-        {"SubSurfaceSunFallOff", "Falloff of the sun-facing subsurface scatter lobe."},
-        {"Specular", "Scales the reflection of the sky and surroundings. 1 is the full reflection; lower values let the water body show through. The highlights of lights are not scaled."},
-        {"Roughness", "Roughness of the water surface. Higher blurs its highlights and reflections."},
-        {"IorAir", "Index of refraction for air, used with IOR water for Fresnel/refraction."},
-        {"IorWater", "Index of refraction for water, used for Fresnel and underwater bending."},
-        {"PlanarReflections", "Draws the objects a planar capture sees over the environment reflection. Where the capture drew nothing, the water shows the environment reflection."},
-        {"PlanarReflectionStrength", "How strongly the planar capture covers the reflected environment; above 1 it brightens the captured objects."},
-        {"PlanarReflectionScale", "Resolution scale of the planar reflection capture relative to the main view."},
-        {"SkyBase", "Base/zenith colour of the procedural reflected sky."},
-        {"SkyTowardsSun", "Reflected sky tint in the sun direction."},
-        {"SkyAwayFromSun", "Reflected sky tint away from the sun."},
-        {"SkyDirectionality", "Sharpness of the reflected sky blend around the sun direction."},
-        {"DepthFogDensity", "Per-channel water extinction for refracted and underwater geometry. Higher values fog faster."},
-        {"DepthFogFalloff", "Distance curve used by surface refraction fog and the underwater pass."},
-        {"DepthFogStartDistance", "Meters of clear water before depth fog starts to build."},
-        {"DepthFogEndDistance", "Distance where Linear/Smooth depth fog reaches its authored range. 0 uses an automatic range from density."},
-        {"DepthFogFalloffPower", "Curve shaping for depth fog distance. 1 is neutral; higher values delay fog near the camera."},
-        {"RefractionStrength", "Strength of screen-space refraction distortion from surface normals."},
-        {"ShallowRefractionReflectionSuppression", "Reduces sky and planar reflection only where shallow refraction is clear, keeping seabed caustics visible. 0 leaves reflection unchanged."},
-        {"ShallowClarityDistance", "Meters of view path through the water over which the depth fog ramps up to full strength, keeping the seabed readable in the shallows. Shorter brings the deep color in sooner."},
-        {"ShallowClarityFloor", "The fraction of depth fog at the surface (1 = no window), ramping up to full over the clarity distance."},
-        {"CausticsScale", "World tiling size of the caustics pattern. Smaller values make tighter caustics."},
-        {"CausticsAverage", "Neutral average subtracted from caustics so they can darken as well as brighten."},
-        {"CausticsStrength", "Contrast/intensity of the caustics pattern."},
-        {"CausticsFocalDepth", "Water depth where caustics appear sharpest."},
-        {"CausticsDepthOfField", "Depth range over which caustics stay sharp around the focal depth."},
-        {"CausticsDistortionStrength", "Amount of ripple distortion applied to procedural caustics UVs."},
-        {"CausticsDistortionScale", "World tiling scale of the caustics distortion sample."},
-        {"CausticsTexture", "Optional user caustics texture. Empty uses the procedural caustics web."},
-        {"Underwater", "Enables the fullscreen underwater pass when the camera is below the water surface."},
-        {"MeniscusWidth", "Width of the bright waterline band when the camera crosses the surface."},
-        {"UnderwaterInscattering", "Enables sun light scattering through the underwater view."},
-        {"InscatterStrength", "Intensity of underwater in-scattered light."},
-        {"InscatterPhaseG", "Anisotropy of underwater scattering. Higher values push light forward toward the sun direction."},
-        {"UnderwaterDistortion", "Enables underwater lens and waterline distortion."},
-        {"DistortionStrength", "Strength of the underwater screen distortion."},
-        {"UnderwaterGodRays", "Enables procedural underwater god rays."},
-        {"GodRayStrength", "Brightness of underwater god rays."},
-        {"GodRayDensity", "Angular frequency/density of underwater god ray shafts."},
-        {"CausticsOnGeometry", "Projects caustics onto submerged scene geometry in the underwater pass."},
-        {"LightShafts", "Enables above-water screen-space light shafts from the sun."},
-        {"LightShaftStrength", "Intensity of above-water sun shafts."},
-        {"Flow", "Enables the ocean flow cascade to advect foam and surface detail."},
-        {"DynamicWaves", "Enables interactive dynamic waves from OceanWaveImpulse and water interactions."},
-        {"ClipSurface", "Enables clip sources that cut holes or restore regions in the ocean surface."},
-        {"DefaultClippingState", "Default clip value outside clip sources. 0 keeps water solid; 1 clips it away."},
-        {"Albedo", "Enables albedo sources that paint colour onto the water surface."},
-        {"IntersectionFoamDepth", "Screen-space depth range used to form foam where water meets opaque geometry."},
-        {"IntersectionFoamStrength", "Intensity multiplier for intersection/contact foam."},
-    };
-    for (const Entry& entry : kTooltips)
-    {
-        if (entry.Field == fieldName)
-            return entry.Tooltip;
-    }
-    return nullptr;
-}
-
-const char* OceanRendererFieldTooltip(std::string_view fieldName)
-{
-    struct Entry { std::string_view Field; const char* Tooltip; };
-    static constexpr Entry kTooltips[] = {
-        {"QualityOverride", "Ocean quality tier. 0 = Low, 1 = Medium, 2 = High."},
-        {"LodCount", "Number of camera-snapped ocean LOD cascade layers."},
-        {"LodDataResolution", "Texel resolution per axis for ocean simulation cascades."},
-        {"MinScale", "World size of the finest ocean cascade. Smaller values concentrate detail near the camera."},
-        {"MaxScale", "Maximum world size of the coarsest ocean cascade."},
-        {"GeometryUpSampleFactor", "Multiplier for the camera-centered ocean grid density."},
-        {"GeometryDownSampleFactor", "Divider for ocean grid density and triangle count."},
-        {"GravityMultiplier", "Scales wave dispersion gravity for FFT and dynamic waves."},
-        {"TimeScale", "Multiplies ocean animation time. 0 freezes wave and simulation motion."},
-        {"TimeOffset", "Offsets ocean animation phase without changing speed."},
-        {"UseFixedTime", "Uses Fixed Time as the absolute ocean time for deterministic preview or capture."},
-        {"FixedTime", "Absolute ocean time used when Use Fixed Time is enabled."},
-        {"MaxActiveDepthCaches", "Runtime budget for active OceanDepthCacheSource components. 0 keeps all eligible caches."},
-        {"RasterDepthCapture", "Captures dynamic mesh geometry into the seabed-depth texture from a top-down pass."},
-        {"RasterDepthCaptureResolution", "Resolution of the dynamic raster seabed-depth capture."},
-        {"RasterDepthCaptureLayers", "The render layers the raster seabed-depth capture draws."},
-        {"RasterDepthCaptureSizeX", "World X size of the top-down raster seabed-depth capture."},
-        {"RasterDepthCaptureSizeZ", "World Z size of the top-down raster seabed-depth capture."},
-        {"RasterDepthCaptureTopPadding", "Extra height above captured geometry for the raster depth camera."},
-        {"RasterDepthCaptureDeepWaterDepth", "Fallback water depth used where raster capture finds no seabed."},
-        {"GlobalWindSpeed", "Global wind speed in meters per second for FFT and Gerstner waves."},
-        {"GlobalWindDirection", "Global wind direction in degrees. 0 points along world +X."},
-        {"GlobalWindTurbulence", "Directional spread of global wind waves. Higher values make a more chaotic sea."},
-        {"SpectrumAsset", "Optional asset-backed global wave spectrum."},
-        {"CombineDisplacementCascade", "Experimental path that combines FFT displacement cascades once per frame."},
-    };
-    for (const Entry& entry : kTooltips)
-    {
-        if (entry.Field == fieldName)
-            return entry.Tooltip;
-    }
-    return nullptr;
-}
-
-const char* ReflectionProbeFieldTooltip(std::string_view fieldName)
-{
-    struct Entry { std::string_view Field; const char* Tooltip; };
-    static constexpr Entry kTooltips[] = {
-        {"BlendDistance", "Fade width near the influence edge. Visible when the camera is near the probe boundary."},
-        {"Priority", "Tie-breaker when more than one probe influences the camera."},
-        {"BoxProjection", "Use the transform-scaled local box for probe selection and parallax-corrected specular reflections. When disabled, the transform range is treated as an ellipsoid."},
-        {"OriginOffsetX", "Capture/projection origin offset along the probe's local X axis."},
-        {"OriginOffsetY", "Capture/projection origin offset along the probe's local Y axis."},
-        {"OriginOffsetZ", "Capture/projection origin offset along the probe's local Z axis."},
-        {"Intensity", "Runtime IBL multiplier. Updates immediately without rebaking the cubemap."},
-        {"ExposureEV", "Exposure applied when baking the probe capture."},
-        {"RotationDegrees", "Yaw rotation applied to sky/HDRI probe lighting during bake."},
-        {"IblLowerHemisphereDarkness", "Darkens lighting sampled from below the horizon. 0 keeps it bright; 1 makes it black."},
-        {"CaptureResolution", "Cubemap face resolution for the scene capture. Higher values sharpen mirror-like reflections but make probe bakes more expensive."},
-        {"UpdateMode", "When the probe re-bakes. Once: only when the probe's own settings, the sky or the geometry in its world are added or removed. Realtime (on change): also whenever its world changes: lights, the sky, moved or edited renderables, material edits, and animated or depth-writing content such as skinned characters, terrain, an animated ocean or grass. Shader-time material animation, playing video textures and particles do not re-bake it; set the interval to 0 to capture them every frame."},
-        {"RealtimeUpdateInterval", "Realtime (on change): the fastest the probe may re-bake while the world changes, in seconds; 0 = every frame."},
-        {"MaxDistance", "Far clip distance for scene capture. 0 uses the probe volume."},
-        {"CapturedLayers", "The render layers the probe's capture draws."},
-    };
-    for (const Entry& entry : kTooltips)
-    {
-        if (entry.Field == fieldName)
-            return entry.Tooltip;
-    }
-    return nullptr;
-}
-
-std::string FieldTooltip(ECS::ComponentTypeId typeId, const ECS::FieldInfo& field)
-{
-    if (!field.Tooltip.empty())
-        return std::string(field.Tooltip);
-
-    const std::string_view fieldName = field.Name;
-    const std::string_view typeName = SimpleTypeName(ECS::ComponentFieldRegistry::GetCanonicalName(typeId));
-    if (typeName == "OceanSurface")
-    {
-        if (const char* tooltip = OceanSurfaceFieldTooltip(fieldName))
-            return tooltip;
-    }
-    else if (typeName == "OceanRenderer")
-    {
-        if (const char* tooltip = OceanRendererFieldTooltip(fieldName))
-            return tooltip;
-    }
-    else if (typeName == "ReflectionProbe")
-    {
-        if (const char* tooltip = ReflectionProbeFieldTooltip(fieldName))
-            return tooltip;
-    }
-
-    if (typeName.rfind("Ocean", 0) == 0)
-        return IdentifierToWords(fieldName) + " for " + std::string(typeName) + ".";
-
-    return {};
 }
 
 // A labeled row backed by a TextField (for String and editable-uint fields).
@@ -705,44 +372,38 @@ void RecordDoubleFieldRefresh(RefreshPlan* plan, FloatField* field, std::size_t 
     }});
 }
 
-void RecordIntFieldRefresh(RefreshPlan* plan, IntField* field, std::size_t offset, ECS::FieldTypeId type)
+void RecordIntFieldRefresh(RefreshPlan* plan, IntField* field, const ECS::FieldInfo& fieldInfo, std::uint32_t element)
 {
     if (!plan || !field)
         return;
-    plan->push_back({[field, offset, type](const Snapshot& bytes, const std::string& focusId) {
+    plan->push_back({[field, fieldInfo, element](const Snapshot& bytes, const std::string& focusId) {
         if (ShouldSkipFieldRefresh(field, focusId))
             return;
-        if (offset >= bytes.size())
+        std::int64_t value = 0;
+        if (!ECS::ReadFieldInteger(fieldInfo, ComponentBytes(bytes), element, value))
             return;
-        const int cur = ReadIntElement(bytes, offset, type);
+        const int cur = static_cast<int>(value);
         if (field->GetValue() == cur)
             return;
         field->SetValueWithoutNotify(cur);
     }});
 }
 
-void RecordUIntTextFieldRefresh(RefreshPlan* plan, TextField* field, std::size_t offset, ECS::FieldTypeId type)
+void RecordUIntTextFieldRefresh(RefreshPlan* plan, TextField* field, const ECS::FieldInfo& fieldInfo,
+                                std::uint32_t element)
 {
     if (!plan || !field)
         return;
     // Cache the last raw value so an idle tick compares one uint64 instead of
     // formatting a string (TextField reformats past the base equality check).
     auto lastValue = std::make_shared<std::optional<std::uint64_t>>();
-    plan->push_back({[field, offset, type, lastValue](const Snapshot& bytes, const std::string& focusId) {
+    plan->push_back({[field, fieldInfo, element, lastValue](const Snapshot& bytes, const std::string& focusId) {
         if (ShouldSkipFieldRefresh(field, focusId))
             return;
-        std::uint64_t value = 0;
-        if (type == ECS::FieldTypeId::UInt32)
-        {
-            std::uint32_t v = 0;
-            if (!ReadPod(bytes, offset, v))
-                return;
-            value = v;
-        }
-        else if (!ReadPod(bytes, offset, value))
-        {
+        std::int64_t stored = 0;
+        if (!ECS::ReadFieldInteger(fieldInfo, ComponentBytes(bytes), element, stored))
             return;
-        }
+        const auto value = static_cast<std::uint64_t>(stored);
         if (lastValue->has_value() && **lastValue == value)
             return;
         *lastValue = value;
@@ -886,7 +547,7 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
     strengthValue = std::clamp(strengthValue, 0.0f, 1.0f);
 
     UIElement* row = InspectorUI::AddRow(parent);
-    Label* label = InspectorUI::AddLabel(row, std::string(FieldDisplayName(field.Name)), tooltip);
+    Label* label = InspectorUI::AddLabel(row, std::string(FieldDisplayName(field)), tooltip);
     UIElement* fieldContainer = InspectorUI::AddFieldContainer(row);
     fieldContainer->Overrides()
         .Set(Style::FlexDir, FlexDirection::Row)
@@ -894,7 +555,7 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
         .Set(Style::Gap, StyleLength::Px(10.0f));
 
     FieldEditContext toggleFec = fecBase;
-    toggleFec.Label = std::string(FieldDisplayName(field.Name));
+    toggleFec.Label = std::string(FieldDisplayName(field));
     auto toggleEditState = std::make_shared<std::optional<Editor::UndoRedoService::InteractiveEdit>>();
     std::function<void(bool)> onToggleChanging;
     std::function<void(bool)> onToggleChanged;
@@ -920,7 +581,7 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
         toggle->SetMixed();
 
     FieldEditContext strengthFec = fecBase;
-    strengthFec.Label = std::string(FieldDisplayName(strengthField->Name));
+    strengthFec.Label = std::string(FieldDisplayName(*strengthField));
     auto strengthEditState = std::make_shared<std::optional<Editor::UndoRedoService::InteractiveEdit>>();
     std::function<void(float)> onStrengthChanging;
     std::function<void(float)> onStrengthChanged;
@@ -943,8 +604,8 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
     slider->Overrides()
         .Set(Style::FlexGrow, 1.0f)
         .Set(Style::MinWidth, StyleLength::Px(80.0f));
-    if (const char* strengthTooltip = OceanSurfaceFieldTooltip(strengthField->Name))
-        slider->SetTooltip(strengthTooltip);
+    if (!strengthField->Tooltip.empty())
+        slider->SetTooltip(std::string(strengthField->Tooltip));
     slider->SetOnValueChanging(
         [cb = std::move(onStrengthChanging)](const float& v) {
             if (cb)
@@ -1426,8 +1087,8 @@ bool EmitEnumDropdownRow(UIElement* parent, RefreshPlan* plan, const Snapshot& b
                          const char* tooltip = nullptr)
 {
     const std::size_t offset = field.Offset;
-    const ECS::FieldTypeId fieldType = field.Type;
-    const std::int64_t current = ReadIntElement64(bytes, offset, fieldType);
+    std::int64_t current = 0;
+    ECS::ReadFieldInteger(field, ComponentBytes(bytes), 0, current);
     const int currentIndex = EnumIndexForValue(field.EnumNames, current);
     const bool mixed = SpanDiffers(bytes, extraBytes, offset, field.Size);
 
@@ -1447,13 +1108,13 @@ bool EmitEnumDropdownRow(UIElement* parent, RefreshPlan* plan, const Snapshot& b
     for (std::size_t i = 0; i < field.EnumNames.size(); ++i)
     {
         options.push_back(
-            {std::to_string(i), std::string(EnumDisplayName(field.Name, field.EnumNames[i].Name))});
+            {std::to_string(i), std::string(EnumDisplayName(field.EnumNames[i]))});
         if (!mixed && static_cast<int>(i) == currentIndex)
             selectedIndex = static_cast<int>(options.size()) - 1;
     }
 
     FieldEditContext fec = fecBase;
-    fec.Label = std::string(FieldDisplayName(field.Name));
+    fec.Label = std::string(FieldDisplayName(field));
     Dropdown* dd = InspectorUI::AddDropdownRow(parent, fec.Label, options, selectedIndex, tooltip);
     if (!dd)
         return false;
@@ -1469,7 +1130,7 @@ bool EmitEnumDropdownRow(UIElement* parent, RefreshPlan* plan, const Snapshot& b
     // Wire AFTER SetOptions (done inside AddDropdownRow): SetSelectedIndex fires
     // NotifyValueChanged on the initial selection, and wiring first would commit a
     // spurious no-op edit on every rebuild.
-    dd->SetOnValueChanged([fec, offset, fieldType, values](const std::string& optionValue) {
+    dd->SetOnValueChanged([fec, field, values](const std::string& optionValue) {
         if (optionValue == kEnumMixedOptionValue)
             return;  // selecting the sentinel itself is a no-op
         int idx = -1;
@@ -1477,8 +1138,8 @@ bool EmitEnumDropdownRow(UIElement* parent, RefreshPlan* plan, const Snapshot& b
         if (idx < 0 || idx >= static_cast<int>(values.size()))
             return;
         const std::int64_t newValue = values[static_cast<std::size_t>(idx)];
-        CommitFieldPatch(fec, [offset, fieldType, newValue](Snapshot& b) {
-            WriteIntElement64(b, offset, fieldType, newValue);
+        CommitFieldPatch(fec, [field, newValue](Snapshot& b) {
+            ECS::WriteFieldInteger(field, WritableComponentBytes(b), 0, newValue);
         });
     });
 
@@ -1490,13 +1151,15 @@ bool EmitEnumDropdownRow(UIElement* parent, RefreshPlan* plan, const Snapshot& b
     if (plan && !mixed)
     {
         const std::span<const ECS::EnumNameValue> enumNames = field.EnumNames;  // view over constexpr data; outlives the inspector
-        plan->push_back({[dd, offset, fieldType, enumNames](const Snapshot& b, const std::string& focusId) {
+        plan->push_back({[dd, field, enumNames](const Snapshot& b, const std::string& focusId) {
             // Leave the widget alone while the user is interacting: focused/dragging
             // (ShouldSkipFieldRefresh) or with the popup open (IsMenuOpen) — the same
             // skip philosophy as a focused text field.
             if (ShouldSkipFieldRefresh(dd, focusId) || dd->IsMenuOpen())
                 return;
-            const std::int64_t cur = ReadIntElement64(b, offset, fieldType);
+            std::int64_t cur = 0;
+            if (!ECS::ReadFieldInteger(field, ComponentBytes(b), 0, cur))
+                return;
             const int tableIndex = EnumIndexForValue(enumNames, cur);
             // Fresh value left the enum table: emit would have fallen back to the
             // numeric field, which we cannot switch to post-build, so keep the last
@@ -1555,21 +1218,20 @@ bool EmitUIntPresetDropdownRow(UIElement* parent, RefreshPlan* plan, const Snaps
     }
 
     FieldEditContext fec = fecBase;
-    fec.Label = std::string(FieldDisplayName(field.Name));
+    fec.Label = std::string(FieldDisplayName(field));
     Dropdown* dd = InspectorUI::AddDropdownRow(parent, fec.Label, options, selectedIndex, tooltip);
     if (!dd)
         return false;
 
-    dd->SetOnValueChanged([fec, offset](const std::string& optionValue) {
+    dd->SetOnValueChanged([fec, field](const std::string& optionValue) {
         if (optionValue == kEnumMixedOptionValue || optionValue == kPresetCustomOptionValue)
             return;
-        std::uint64_t parsed = 0;
-        try { parsed = std::stoull(optionValue, nullptr, 10); } catch (...) { return; }
-        if (parsed > std::numeric_limits<std::uint32_t>::max())
+        const std::optional<std::uint64_t> parsed = ParseUnsigned(optionValue);
+        if (!parsed || *parsed > std::numeric_limits<std::uint32_t>::max())
             return;
-        const std::uint32_t newValue = static_cast<std::uint32_t>(parsed);
-        CommitFieldPatch(fec, [offset, newValue](Snapshot& b) {
-            WriteUIntElement(b, offset, ECS::FieldTypeId::UInt32, newValue);
+        const std::uint32_t newValue = static_cast<std::uint32_t>(*parsed);
+        CommitFieldPatch(fec, [field, newValue](Snapshot& b) {
+            ECS::WriteFieldInteger(field, WritableComponentBytes(b), 0, newValue);
         });
     });
 
@@ -1654,7 +1316,7 @@ bool EmitFloatPresetDropdownRow(UIElement* parent, RefreshPlan* plan, const Snap
     }
 
     FieldEditContext fec = fecBase;
-    fec.Label = std::string(FieldDisplayName(field.Name));
+    fec.Label = std::string(FieldDisplayName(field));
     Dropdown* dd = InspectorUI::AddDropdownRow(parent, fec.Label, options, selectedIndex, tooltip);
     if (!dd)
         return false;
@@ -1745,7 +1407,12 @@ std::string FormatReadOnlyValue(const Snapshot& bytes, const ECS::FieldInfo& fie
         case FieldTypeId::Int32:
         case FieldTypeId::Int64:
         case FieldTypeId::UInt8:
-        case FieldTypeId::UInt16: return std::to_string(ReadIntElement(bytes, off, field.Type));
+        case FieldTypeId::UInt16:
+        {
+            std::int64_t value = 0;
+            ECS::ReadFieldInteger(field, ComponentBytes(bytes), 0, value);
+            return std::to_string(value);
+        }
         case FieldTypeId::UInt32: { std::uint32_t v = 0; ReadPod(bytes, off, v); return std::to_string(v); }
         case FieldTypeId::UInt64: { std::uint64_t v = 0; ReadPod(bytes, off, v); return std::to_string(v); }
         case FieldTypeId::String:
@@ -1826,7 +1493,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
     {
         if (!onlyFields.empty() && std::find(onlyFields.begin(), onlyFields.end(), field.Name) == onlyFields.end())
             continue;
-        const std::string tooltip = FieldTooltip(typeId, field);
+        const std::string tooltip(field.Tooltip);
         const char* tooltipPtr = tooltip.empty() ? nullptr : tooltip.c_str();
 
         // A field whose authored value this build could not read renders the fallback it landed on,
@@ -1844,7 +1511,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
             continue;
         if (ECS::HasAnyFlag(field.Flags, ECS::FieldFlags::ReadOnly))
         {
-            InspectorUI::AddLine(parent, std::string(FieldDisplayName(field.Name)) + ": " + FormatReadOnlyValue(bytes, field));
+            InspectorUI::AddLine(parent, std::string(FieldDisplayName(field)) + ": " + FormatReadOnlyValue(bytes, field));
             any = true;
             continue;
         }
@@ -1876,7 +1543,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     ReadPod(bytes, offset, cur);
 
                     FieldEditContext fec = fecBase;
-                    fec.Label = ElementLabel(FieldDisplayName(field.Name), i, count);
+                    fec.Label = ElementLabel(FieldDisplayName(field), i, count);
                     auto editState = std::make_shared<std::optional<Editor::UndoRedoService::InteractiveEdit>>();
                     std::function<void(bool)> onChanging, onChanged;
                     WireEdit<bool>(editState, fec,
@@ -1915,7 +1582,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     // spectrum) render as sliders; scalar ranged fields stay as
                     // clamped drag fields.
                     EmitFloatRow(parent, planPtr, bytes, fecBase,
-                                 ElementLabel(FieldDisplayName(field.Name), i, count), offset,
+                                 ElementLabel(FieldDisplayName(field), i, count), offset,
                                  SpanDiffers(bytes, extraBytes, offset, sizeof(float)), any,
                                  field.HasRange, field.MinValue, field.MaxValue,
                                  /*useSlider*/ count > 1, tooltipPtr);
@@ -1931,7 +1598,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     ReadPod(bytes, offset, cur);
 
                     FieldEditContext fec = fecBase;
-                    fec.Label = ElementLabel(FieldDisplayName(field.Name), i, count);
+                    fec.Label = ElementLabel(FieldDisplayName(field), i, count);
                     auto editState = std::make_shared<std::optional<Editor::UndoRedoService::InteractiveEdit>>();
                     std::function<void(float)> onChanging, onChanged;
                     WireEdit<float>(editState, fec,
@@ -1991,43 +1658,46 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     // or 0x-hex input).
                     if (field.Type == FieldTypeId::UInt32 || field.Type == FieldTypeId::UInt64)
                     {
-                        std::uint64_t uv = 0;
-                        if (field.Type == FieldTypeId::UInt32) { std::uint32_t v = 0; ReadPod(bytes, offset, v); uv = v; }
-                        else { ReadPod(bytes, offset, uv); }
+                        std::int64_t stored = 0;
+                        ECS::ReadFieldInteger(field, ComponentBytes(bytes), i, stored);
+                        const auto uv = static_cast<std::uint64_t>(stored);
 
                         FieldEditContext fec = fecBase;
-                        fec.Label = ElementLabel(FieldDisplayName(field.Name), i, count);
-                        const FieldTypeId fieldType = field.Type;
+                        fec.Label = ElementLabel(FieldDisplayName(field), i, count);
                         TextField* tf = AddTextFieldRow(parent, fec.Label, std::to_string(uv),
                                                         tooltipPtr);
-                        WireTextCommit(tf, fec, [offset, fieldType](Snapshot& b, const std::string& s) {
+                        WireTextCommit(tf, fec, [field, i](Snapshot& b, const std::string& s) {
                             std::uint64_t parsed = 0;
                             try { parsed = std::stoull(s, nullptr, 0); } catch (...) { return; }
-                            WriteUIntElement(b, offset, fieldType, parsed);
+                            ECS::WriteFieldInteger(field, WritableComponentBytes(b), i,
+                                                   static_cast<std::int64_t>(parsed));
                         });
                         if (tf && SpanDiffers(bytes, extraBytes, offset, elemSize))
                             tf->SetMixed();
-                        RecordUIntTextFieldRefresh(planPtr, tf, offset, fieldType);
+                        RecordUIntTextFieldRefresh(planPtr, tf, field, i);
                         any = true;
                         continue;
                     }
 
-                    const int cur = ReadIntElement(bytes, offset, field.Type);
+                    std::int64_t stored = 0;
+                    ECS::ReadFieldInteger(field, ComponentBytes(bytes), i, stored);
+                    const int cur = static_cast<int>(stored);
 
                     FieldEditContext fec = fecBase;
-                    fec.Label = ElementLabel(FieldDisplayName(field.Name), i, count);
-                    const FieldTypeId fieldType = field.Type;
+                    fec.Label = ElementLabel(FieldDisplayName(field), i, count);
                     auto editState = std::make_shared<std::optional<Editor::UndoRedoService::InteractiveEdit>>();
                     std::function<void(int)> onChanging, onChanged;
                     WireEdit<int>(editState, fec,
-                        [offset, fieldType](Snapshot& b, int v) { WriteIntElement(b, offset, fieldType, v); },
+                        [field, i](Snapshot& b, int v) {
+                            ECS::WriteFieldInteger(field, WritableComponentBytes(b), i, v);
+                        },
                         onChanging, onChanged);
                     IntField* intf = AddIntRowWithDrag(parent, fec.Label, cur,
                                                        std::move(onChanging), std::move(onChanged),
                                                        std::numeric_limits<int>::min(), tooltipPtr);
                     if (intf && SpanDiffers(bytes, extraBytes, offset, elemSize))
                         intf->SetMixed();
-                    RecordIntFieldRefresh(planPtr, intf, offset, field.Type);
+                    RecordIntFieldRefresh(planPtr, intf, field, i);
                     any = true;
                 }
                 break;
@@ -2040,7 +1710,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 if (count != 1 || !ReadPod(bytes, field.Offset, mask))
                     break;
                 FieldEditContext fec = fecBase;
-                fec.Label = std::string(FieldDisplayName(field.Name));
+                fec.Label = std::string(FieldDisplayName(field));
                 const std::size_t offset = field.Offset;
                 MaskField* layers = InspectorUI::AddRenderLayersRow(
                     parent, fec.Label, mask, MixedRenderLayerBits(mask, extraBytes, offset), tooltipPtr,
@@ -2067,7 +1737,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     ++len;
 
                 FieldEditContext fec = fecBase;
-                fec.Label = std::string(FieldDisplayName(field.Name));
+                fec.Label = std::string(FieldDisplayName(field));
                 const std::size_t offset = field.Offset;
                 const std::uint32_t cap = field.Size;  // char[cap] capacity, incl. null terminator
                 TextField* tf = AddTextFieldRow(parent, fec.Label, std::string(text, len),
@@ -2096,7 +1766,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 {
                     const std::size_t base = field.Offset + static_cast<std::size_t>(i) * elemSize;
                     EmitFloatAxisRows(parent, planPtr, bytes, extraBytes, fecBase,
-                                      ElementLabel(FieldDisplayName(field.Name), i, count),
+                                      ElementLabel(FieldDisplayName(field), i, count),
                                       base, axisCount, /*isColor*/ false, any, tooltipPtr);
                 }
                 break;
@@ -2107,7 +1777,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 for (std::uint32_t i = 0; i < count && i < kMaxElementRows; ++i)
                 {
                     const std::size_t base = field.Offset + static_cast<std::size_t>(i) * elemSize;
-                    EmitColorSwatchRow(parent, planPtr, bytes, fecBase, ElementLabel(FieldDisplayName(field.Name), i, count), base,
+                    EmitColorSwatchRow(parent, planPtr, bytes, fecBase, ElementLabel(FieldDisplayName(field), i, count), base,
                                        ctx.OpenColorPickerWindow, any, tooltipPtr);
                 }
                 break;
@@ -2118,7 +1788,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 {
                     const std::size_t base = field.Offset + static_cast<std::size_t>(i) * elemSize;
                     EmitQuatEulerRows(parent, planPtr, bytes, extraBytes, fecBase,
-                                      ElementLabel(FieldDisplayName(field.Name), i, count),
+                                      ElementLabel(FieldDisplayName(field), i, count),
                                       base, any, tooltipPtr);
                 }
                 break;
@@ -2132,7 +1802,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 ReadPod(bytes, field.Offset, id);
 
                 FieldEditContext fec = fecBase;
-                fec.Label = std::string(FieldDisplayName(field.Name));
+                fec.Label = std::string(FieldDisplayName(field));
                 const std::size_t offset = field.Offset;
                 InspectorUI::AddEntityFieldRow(parent, fec.Label, ECS::EntityHandle(id), ctx.World,
                     [fec, offset](ECS::EntityHandle h) {
@@ -2167,7 +1837,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                     }
 
                     FieldEditContext fec = fecBase;
-                    fec.Label = ElementLabel(FieldDisplayName(field.Name), i, count);
+                    fec.Label = ElementLabel(FieldDisplayName(field), i, count);
                     InspectorUI::AddAssetFieldRow(parent, fec.Label, current,
                         AcceptedAssetTypesForAssetField(field),
                         &EngineCore::GetInstance().GetAssetManager().GetRegistry(),
@@ -2185,7 +1855,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
             }
             default:
             {
-                InspectorUI::AddLine(parent, std::string(FieldDisplayName(field.Name)) + " (" + std::to_string(field.Size) + " bytes)");
+                InspectorUI::AddLine(parent, std::string(FieldDisplayName(field)) + " (" + std::to_string(field.Size) + " bytes)");
                 any = true;
                 break;
             }

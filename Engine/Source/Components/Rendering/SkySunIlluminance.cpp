@@ -29,7 +29,7 @@ bool IsDrivableSunLight(const ECS::World& world, ECS::EntityHandle light)
     if (!DirectionalLight(world, light) || !world.GetComponent<Transform>(light))
         return false;
     const Parent* parent = world.GetComponent<Parent>(light);
-    return !(parent && world.IsValid(parent->parent));
+    return !(parent && world.IsValid(parent->Entity));
 }
 
 ECS::EntityHandle LightSkyWouldDrive(const ECS::World& world, const SkyEnvironment& sky)

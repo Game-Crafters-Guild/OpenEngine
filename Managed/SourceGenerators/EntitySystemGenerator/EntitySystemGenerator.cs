@@ -308,7 +308,6 @@ namespace GameEngine.SourceGenerators
                                         attr.ConstructorArguments[0].Value as string;
                                 }
                             }
-                            ep.HasBoolFields = HasBoolFields(innerNamed);
                         }
                     }
                     else
@@ -351,8 +350,14 @@ namespace GameEngine.SourceGenerators
                                 }
                             }
 
-                            // Check for bool fields (GE0014).
-                            ep.HasBoolFields = HasBoolFields(namedType);
+                            // A ref of an engine component's mirror writes into the chunk with no merge
+                            // (GE0027, GE0028).
+                            if (ep.BuiltInNativeName != null && param.RefKind == RefKind.Ref)
+                            {
+                                ep.IsEngineOwnedMirror = namedType.IsReadOnly;
+                                if (HasEngineKeptFields(namedType))
+                                    ep.WholeValueAssignment = FindWholeValueAssignment(executeMethod, param.Name);
+                            }
                         }
                     }
 
@@ -679,18 +684,52 @@ namespace GameEngine.SourceGenerators
             return sb.ToString();
         }
 
-        private static bool HasBoolFields(INamedTypeSymbol type)
+        /// <summary>
+        /// True when an engine component's mirror holds bytes the engine keeps: a field the mirror does not let a
+        /// script write. The component mirror emitter (Tools/ComponentScanner/ComponentMirror.h) writes such a field
+        /// as a readonly field, or as a private field with no settable property of its member name (a hidden field;
+        /// a read-only enum or text field). A private field behind a settable property (an enum or a text field) is
+        /// writable.
+        /// </summary>
+        private static bool HasEngineKeptFields(INamedTypeSymbol type)
         {
             foreach (var member in type.GetMembers())
             {
-                if (member is IFieldSymbol field
-                    && !field.IsStatic
-                    && field.Type.SpecialType == SpecialType.System_Boolean)
-                {
+                if (member is not IFieldSymbol field || field.IsStatic || field.IsImplicitlyDeclared)
+                    continue;
+                if (field.IsReadOnly)
                     return true;
-                }
+                if (field.DeclaredAccessibility == Accessibility.Public)
+                    continue;
+                string memberName = field.Name.StartsWith("m_", StringComparison.Ordinal) ? field.Name.Substring(2) : field.Name;
+                bool settable = type.GetMembers(memberName).OfType<IPropertySymbol>()
+                    .Any(p => p.SetMethod != null && p.DeclaredAccessibility == Accessibility.Public);
+                if (!settable)
+                    return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// The first whole-value assignment to <paramref name="parameter"/> in the body of <paramref name="method"/>
+        /// (<c>renderer = saved;</c>), or null. A <c>ref</c> reassignment (<c>p = ref other;</c>) writes no bytes.
+        /// </summary>
+        private static Location? FindWholeValueAssignment(IMethodSymbol method, string parameter)
+        {
+            foreach (var reference in method.DeclaringSyntaxReferences)
+            {
+                foreach (var assignment in reference.GetSyntax().DescendantNodes().OfType<AssignmentExpressionSyntax>())
+                {
+                    if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                        && assignment.Left is IdentifierNameSyntax target
+                        && target.Identifier.ValueText == parameter
+                        && assignment.Right is not RefExpressionSyntax)
+                    {
+                        return assignment.GetLocation();
+                    }
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -886,15 +925,6 @@ namespace GameEngine.SourceGenerators
                                 hasErrors = true;
                             }
 
-                            // GE0014: bool fields (warning).
-                            if (param.HasBoolFields)
-                            {
-                                diagnostics.Add(Diagnostic.Create(
-                                    Diagnostics.GE0014_BoolField,
-                                    param.Location ?? model.ExecuteLocation ?? model.StructLocation,
-                                    innerTypeName));
-                            }
-
                             optionalParams.Add(param);
                             continue;
                         }
@@ -957,13 +987,25 @@ namespace GameEngine.SourceGenerators
                             hasErrors = true;
                         }
 
-                        // GE0014: bool fields (warning).
-                        if (param.HasBoolFields)
+                        // GE0027: a ref of a component the engine owns.
+                        if (param.IsEngineOwnedMirror)
                         {
                             diagnostics.Add(Diagnostic.Create(
-                                Diagnostics.GE0014_BoolField,
+                                Diagnostics.GE0027_RefOfEngineOwnedComponent,
                                 param.Location ?? model.ExecuteLocation ?? model.StructLocation,
-                                param.FullTypeName));
+                                param.Name,
+                                param.TypeName));
+                            hasErrors = true;
+                        }
+                        // GE0028: a whole-value write over the bytes the engine keeps.
+                        else if (param.WholeValueAssignment != null)
+                        {
+                            diagnostics.Add(Diagnostic.Create(
+                                Diagnostics.GE0028_WholeValueWriteOfEngineFields,
+                                param.WholeValueAssignment,
+                                param.Name,
+                                param.TypeName));
+                            hasErrors = true;
                         }
 
                         componentParams.Add(param);
@@ -1702,7 +1744,12 @@ namespace GameEngine.SourceGenerators
         public bool ImplementsIComponent;
         public bool IsUnmanaged;
         public bool HasStructLayout;
-        public bool HasBoolFields;
+        /// <summary>A ref of an engine-owned mirror (a readonly struct with [BuiltInComponent]): GE0027.</summary>
+        public bool IsEngineOwnedMirror;
+        /// <summary>
+        /// The first whole-value assignment to a ref of a mirror whose fields the engine keeps in part: GE0028.
+        /// </summary>
+        public Location? WholeValueAssignment;
         public string? InnerFullTypeName;
         public Location? Location;
         /// <summary>
@@ -1725,7 +1772,8 @@ namespace GameEngine.SourceGenerators
                 && ImplementsIComponent == other.ImplementsIComponent
                 && IsUnmanaged == other.IsUnmanaged
                 && HasStructLayout == other.HasStructLayout
-                && HasBoolFields == other.HasBoolFields
+                && IsEngineOwnedMirror == other.IsEngineOwnedMirror
+                && Equals(WholeValueAssignment, other.WholeValueAssignment)
                 && InnerFullTypeName == other.InnerFullTypeName
                 && BuiltInNativeName == other.BuiltInNativeName
                 && InnerBuiltInNativeName == other.InnerBuiltInNativeName;
@@ -1931,14 +1979,6 @@ namespace GameEngine.SourceGenerators
             defaultSeverity: DiagnosticSeverity.Error,
             isEnabledByDefault: true);
 
-        public static readonly DiagnosticDescriptor GE0014_BoolField = new(
-            id: "GE0014",
-            title: "Component struct contains bool field",
-            messageFormat:
-                "Component type '{0}' contains a bool field; use byte instead for C#/C++ interop safety",
-            category: Category,
-            defaultSeverity: DiagnosticSeverity.Warning,
-            isEnabledByDefault: true);
 
         public static readonly DiagnosticDescriptor GE0015_DuplicateComponent = new(
             id: "GE0015",
@@ -2062,6 +2102,25 @@ namespace GameEngine.SourceGenerators
                 + "and will not persist to .scene files",
             category: Category,
             defaultSeverity: DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor GE0027_RefOfEngineOwnedComponent = new(
+            id: "GE0027",
+            title: "A ref of a component the engine owns",
+            messageFormat:
+                "Parameter '{0}' takes '{1}' by ref, but the engine owns {1} and a script only reads it; take it as 'in'",
+            category: Category,
+            defaultSeverity: DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor GE0028_WholeValueWriteOfEngineFields = new(
+            id: "GE0028",
+            title: "A whole-value write of a component with fields the engine keeps",
+            messageFormat:
+                "'{0} = ...' writes every byte of '{1}', including the fields the engine keeps (hidden, read-only "
+                + "and runtime fields); set the fields you change",
+            category: Category,
+            defaultSeverity: DiagnosticSeverity.Error,
             isEnabledByDefault: true);
     }
 }

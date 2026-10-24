@@ -65,10 +65,10 @@ std::unordered_map<std::string, std::string> SerializeLiveProperties(
 std::string LiveParentSceneId(const ECS::World& world, ECS::EntityHandle entity)
 {
     const auto* parent = world.GetComponent<Components::Parent>(entity);
-    if (!parent || !parent->parent.IsValid() || !world.IsValid(parent->parent))
+    if (!parent || !parent->Entity.IsValid() || !world.IsValid(parent->Entity))
         return {};
     const auto* tag =
-        world.GetComponent<Components::SceneEntityTag>(parent->parent);
+        world.GetComponent<Components::SceneEntityTag>(parent->Entity);
     return tag && tag->value[0] != '\0' ? std::string(tag->View()) : std::string{};
 }
 } // namespace

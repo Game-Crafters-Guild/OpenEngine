@@ -5,10 +5,10 @@
 #include "NavigationMeshBake.h"
 #include "NavigationSourceCollector.h"
 
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/Components/NavigationObstacle.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"

@@ -555,6 +555,8 @@ class SceneViewController
     bool StepCameraHistoryForward();
 
   private:
+    void FramePerspectiveBounds(const Mathematics::AABB& bounds);
+
     // Clicks and hovers that arrived while the scene TLAS was refitting on the
     // job system. They apply on the frame the refit finishes, so the main
     // thread never waits for it; a newer hover replaces an older one.

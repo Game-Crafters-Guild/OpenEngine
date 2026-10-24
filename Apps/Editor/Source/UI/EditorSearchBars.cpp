@@ -193,7 +193,11 @@ void EditorSearchBars::LoadFromPreferences()
     auto prefs = Editor::OpenEditorPreferences();
     std::string err;
     prefs.Load(&err);
-    
+
+    // A key the profile never saved reads its default, not the value an earlier load left behind.
+    s_Visible = kDefaultVisible;
+    s_AtTop = kDefaultAtTop;
+    s_AccentFocusOutline = kDefaultAccentFocusOutline;
     prefs.TryGetBool("ui.searchBarsVisible", s_Visible);
     prefs.TryGetBool("ui.searchBarsAtTop", s_AtTop);
     prefs.TryGetBool("ui.searchBarsAccentFocusOutline", s_AccentFocusOutline);

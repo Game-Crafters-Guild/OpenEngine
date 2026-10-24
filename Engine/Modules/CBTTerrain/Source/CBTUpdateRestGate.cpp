@@ -11,9 +11,11 @@ bool CBTUpdateRestGate::CanSkip(std::span<const uint8_t> inputs)
     {
         m_Inputs.assign(inputs.begin(), inputs.end());
         m_HasInputs = true;
+        m_InputsHeld = false;
         Restart();
         return false;
     }
+    m_InputsHeld = true;
     return m_QuietReadings >= kQuietReadingsToRest;
 }
 
@@ -42,6 +44,7 @@ void CBTUpdateRestGate::Reset()
 {
     m_Inputs.clear();
     m_HasInputs = false;
+    m_InputsHeld = false;
     Restart();
 }
 

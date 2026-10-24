@@ -1,25 +1,20 @@
-// The planar domain metric decides its MERGE on the parent's split edge, not the facet's own.
+// The planar merge is decided on the parent, not on the facet's own edge.
 //
-// A facet's split edge is one LEG of its parent and its sibling's is the other. They are exactly
-// congruent in world space, but under a grazing perspective camera they project an order of
-// magnitude apart, so a per-child screen-space merge test could only ever be answered YES by one of
-// the two — and PrepareSimplify needs BOTH to carry CBT_STATE_SIMPLIFY before a diamond can
-// collapse. Measuring the parent's hypotenuse instead (CBT_ParentSplitEdgeFar, threshold scaled by
-// sqrt(2) and taken at the parent's midpoint) gives both children the same question and the same
-// answer.
+// A facet's split edge is one LEG of its parent and its sibling's is the other. Under a grazing
+// perspective camera the two legs project an order of magnitude apart, so a per-child screen-space
+// merge test could only ever be answered YES by one of the two, and PrepareSimplify needs BOTH to
+// carry CBT_STATE_SIMPLIFY before a diamond can collapse. The planar criterion (cbt_kernels.comp
+// CBT_PlanarClassify) asks the parent and the parent's twin instead, each from the UV box both
+// children rebuild bit for bit, so the two children ask the same question and reach the same answer,
+// on flat ground and on relief alike.
 //
 // The instrument here is the GPU's own CBTBisectorData::BisectorState, read back after the tree has
 // converged: with nothing left to serve, that word is exactly the decision Kernel_Classify reached.
-// A CPU re-derivation of the decision would only be testing the re-derivation.
+// The CPU mirror below (ClassifyPairs) restates the screen-space edge rule the arms without a height
+// pyramid keep; here it only sorts the pairs into the population the census counts.
 //
-// EVERY test runs BOTH height regimes, because the reconstruction's accuracy depends on relief and
-// flat ground is the one case that cannot fail. Planar corners carry sampled height in .y
-// (cbt_kernels.comp VertexEval) scaled by TerrainSize[2] = heightScale, so at heightScale 0 all
-// three corners share one y and 2*c1 - held recovers the sibling's corner EXACTLY in all three
-// components. With relief the y component is extrapolated — 2*h(mid) - h(held) is the true height
-// only where h is linear along the edge — so the two children reconstruct segments that agree in XZ
-// and differ in Y, and the parent metric carries a residual disagreement instead of none. The
-// relief arm is the shipped ComposedIsland configuration (512 m, heightScale 60).
+// EVERY test runs BOTH height regimes: flat ground and the shipped ComposedIsland relief (512 m,
+// heightScale 60).
 
 #include <gtest/gtest.h>
 
@@ -167,12 +162,6 @@ Proj ProjectPix(const float* m, const std::array<float, 3>& p)
     return r;
 }
 
-float WorldLen(const std::array<float, 3>& u, const std::array<float, 3>& v)
-{
-    const float dx = u[0] - v[0], dy = u[1] - v[1], dz = u[2] - v[2];
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 // CPU mirror of CBT_NearBiasCoarsen (cbt_kernels.comp).
 float NearBiasCoarsen(const CBTFrameParams& p, float contention, const std::array<float, 3>& point)
 {
@@ -270,8 +259,6 @@ struct PairVerdict
     // differ in Y, and comparing this prediction against the GPU's states is what attributes a
     // residual disagreement to the reconstruction rather than to something else in Classify.
     ReconVerdict Recon = ReconVerdict::PredictsAgree;
-    float ReconRelErr = 0.0f;  // |reconstructed endpoint - true endpoint| / parent edge length
-    float WorldEdgeRatio = 1.0f; // odd's own world split edge / even's — 1.0 only on flat ground
     // The two reconstructed parent-edge lengths and the bound they are compared against, kept so a
     // failure can name the state it sampled instead of only its count.
     float EvenLenPx = 0.0f, OddLenPx = 0.0f, BoundPx = 0.0f;
@@ -449,16 +436,6 @@ class CBTParentMergeMetric : public ::testing::Test
             const Proj evenFar = ProjectPix(p.ViewProjRel, evenRecon);
             const Proj oddFar = ProjectPix(p.ViewProjRel, oddRecon);
 
-            v.WorldEdgeRatio = WorldLen(even.C0, even.C2) > 0.0f
-                                   ? WorldLen(odd.C0, odd.C2) / WorldLen(even.C0, even.C2)
-                                   : 1.0f;
-            // The even child reconstructs the odd child's unshared corner, and vice versa, so the
-            // true endpoints are known and the reconstruction error is measurable directly.
-            const float parentLen = WorldLen(even.C0, odd.C2);
-            if (parentLen > 0.0f)
-                v.ReconRelErr = std::max(WorldLen(evenRecon, odd.C2), WorldLen(oddRecon, even.C0)) /
-                                parentLen;
-
             if (evenFar.InFront && oddFar.InFront)
             {
                 const float parentMergePx = p.Screen[3] * NearBiasCoarsen(p, contention, even.C1);
@@ -544,10 +521,11 @@ void BuildGrazingPlanarParams(CBTFrameParams& p, const Pose& pose, const Regime&
 
 // The defect, stated as the property it violated: two children of one parent must reach the SAME
 // merge decision. Under the per-child metric they could not — bothMerge was 0 over 447k pairs and
-// every merge candidate died at PrepareSimplify's pair-state test.
+// every merge candidate died at PrepareSimplify's pair-state test. Under the reflected parent edge
+// the relief arm still split 53 of 11,408 pairs; the parent's box leaves none.
 //
-// RED ARM: neuter the parent branch in Kernel_Classify (fall back to `edgePx < mergePx`) and the
-// disagreement count jumps into the thousands.
+// RED ARM: decide the merge on the facet's own box in CBT_PlanarClassify and the disagreement count
+// jumps into the thousands.
 TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
 {
     for (const Regime& regime : kRegimes)
@@ -573,16 +551,7 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
     const std::vector<PairVerdict> pairs = ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst));
 
     uint64_t domainPairs = 0, bothSimplify = 0, disagree = 0, offBranch = 0, unprojectable = 0;
-    uint64_t gateOwned = 0, gateOwnedDisagree = 0, reconPredicted = 0, reconPredictedAndDisagreed = 0;
-    // The disagreements the reconstruction model does NOT explain, split by whether the mirror was
-    // entitled to an opinion: boundaryDisagree sits inside kMirrorBoundaryRelTol of the bound (the
-    // mirror abstains), unexplainedDisagree does not (a second mechanism, and the defect this
-    // assertion exists to catch). boundaryPairs is the whole abstention population, bounded below so
-    // the band cannot grow to excuse a regression.
-    uint64_t boundaryPairs = 0, boundaryDisagree = 0, unexplainedDisagree = 0;
-    const PairVerdict* worstUnexplained = nullptr;
-    double reconErrSum = 0.0, reconErrMax = 0.0;
-    float worldRatioMin = 1e30f, worldRatioMax = 0.0f;
+    uint64_t gateOwned = 0, gateOwnedDisagree = 0;
     for (const PairVerdict& v : pairs)
     {
         if (!v.OnDomainBranch)
@@ -603,40 +572,10 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
             continue;
         }
         ++domainPairs;
-        reconErrSum += v.ReconRelErr;
-        reconErrMax = std::max(reconErrMax, static_cast<double>(v.ReconRelErr));
-        worldRatioMin = std::min(worldRatioMin, v.WorldEdgeRatio);
-        worldRatioMax = std::max(worldRatioMax, v.WorldEdgeRatio);
-        const bool gpuDisagreed = v.EvenSimplify != v.OddSimplify;
-        if (v.Recon == ReconVerdict::Boundary)
-            ++boundaryPairs;
-        if (v.Recon == ReconVerdict::PredictsDisagree)
-        {
-            ++reconPredicted;
-            if (gpuDisagreed)
-                ++reconPredictedAndDisagreed;
-        }
         if (v.EvenSimplify && v.OddSimplify)
             ++bothSimplify;
-        else if (gpuDisagreed)
-        {
+        else if (v.EvenSimplify != v.OddSimplify)
             ++disagree;
-            if (v.Recon == ReconVerdict::Boundary)
-                ++boundaryDisagree;
-            else if (v.Recon == ReconVerdict::PredictsAgree)
-            {
-                ++unexplainedDisagree;
-                // Keep the offender furthest from the bound: the nearer ones are the weakest
-                // evidence of a second mechanism, so a failure should name the strongest.
-                const auto slack = [](const PairVerdict& q) {
-                    return std::min(std::abs(q.EvenLenPx - q.BoundPx),
-                                    std::abs(q.OddLenPx - q.BoundPx)) /
-                           q.BoundPx;
-                };
-                if (worstUnexplained == nullptr || slack(v) > slack(*worstUnexplained))
-                    worstUnexplained = &v;
-            }
-        }
     }
 
     std::printf("[parent-merge:%s/%s] live=%u occ=%.4f mergeDemand=%d mergeServed=%d "
@@ -653,20 +592,6 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
                 static_cast<unsigned long long>(unprojectable),
                 static_cast<unsigned long long>(gateOwned),
                 static_cast<unsigned long long>(gateOwnedDisagree));
-    std::printf("[parent-merge:%s/%s] recon rel-err mean=%.6f max=%.6f | world split-edge ratio "
-                "odd/even min=%.6f max=%.6f | recon-predicts-disagree=%llu (GPU disagreed=%llu)\n",
-                regime.Label, pose.Label,
-                domainPairs ? reconErrSum / static_cast<double>(domainPairs) : 0.0, reconErrMax,
-                worldRatioMin, worldRatioMax,
-                static_cast<unsigned long long>(reconPredicted),
-                static_cast<unsigned long long>(reconPredictedAndDisagreed));
-    std::printf("[parent-merge:%s/%s] mirror-boundary pairs=%llu (%.2e of domain) of which "
-                "disagreeing=%llu | UNEXPLAINED disagreements=%llu\n",
-                regime.Label, pose.Label, static_cast<unsigned long long>(boundaryPairs),
-                domainPairs ? static_cast<double>(boundaryPairs) / static_cast<double>(domainPairs)
-                            : 0.0,
-                static_cast<unsigned long long>(boundaryDisagree),
-                static_cast<unsigned long long>(unexplainedDisagree));
 
     // Positive control: a zero-size population would make the disagreement assert vacuous.
     // EXPECT + continue rather than ASSERT: the arms are an inner loop, so an ASSERT here would
@@ -678,76 +603,8 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
         continue;
     }
 
-    // The disagreement bound is REGIME-SPLIT, because the reconstruction's exactness is. Asserting
-    // 0 in both regimes would either fail on relief or, worse, pass only because the arm is flat,
-    // which is how this test's first version passed while proving nothing about production.
-    if (regime.HeightScale == 0.0f)
-    {
-        EXPECT_EQ(disagree, 0u)
-            << pose.Label << ": " << disagree << " of " << domainPairs
-            << " sibling pairs disagree on FLAT ground, where 2*c1 - held recovers the sibling's "
-               "corner exactly in all three components -- this must be zero";
-        EXPECT_DOUBLE_EQ(reconErrMax, 0.0) << pose.Label << ": flat reconstruction is not exact";
-    }
-    else
-    {
-        // Relief extrapolates the reconstructed endpoint's height, so a pair sitting within that
-        // error of the threshold can still split its decision. Bounded as a FRACTION, well above
-        // the measured rate so ordinary relief variation does not flake it.
-        constexpr double kMaxReliefDisagreeFraction = 0.02;
-        const double disagreeFraction =
-            static_cast<double>(disagree) / static_cast<double>(domainPairs);
-        EXPECT_LT(disagreeFraction, kMaxReliefDisagreeFraction)
-            << pose.Label << ": " << disagree << " of " << domainPairs << " ("
-            << 100.0 * disagreeFraction << "%) sibling pairs disagree on relief";
-
-        // Attribution, not just a bound: every disagreement the GPU produced must be one the
-        // reconstruction model predicts from the two children's own corners. If these come apart,
-        // the residual has a second cause and the bound above is measuring the wrong thing.
-        //
-        // Counted against the model's THREE-valued verdict, not as a count equality with the GPU's
-        // own disagreements: that would be a bit-exact claim resting on inexact arithmetic. Over
-        // ~268k pairs per arm a handful land within a few ULP of the bound, and there the mirror is
-        // not entitled to a verdict at all. Only PredictsAgree counts as unexplained — both
-        // reconstructions clear of the bound, yet the GPU still classified the two children
-        // differently — which is precisely the second-mechanism defect this test exists to catch.
-        EXPECT_EQ(unexplainedDisagree, 0u)
-            << pose.Label << ": " << disagree << " GPU disagreements, " << reconPredictedAndDisagreed
-            << " predicted by the height extrapolation and " << boundaryDisagree
-            << " at the mirror's numeric boundary, leaving " << unexplainedDisagree
-            << " that something else splits"
-            << (worstUnexplained != nullptr
-                    ? (testing::Message()
-                       << " -- worst: evenLen=" << worstUnexplained->EvenLenPx
-                       << " oddLen=" << worstUnexplained->OddLenPx
-                       << " bound=" << worstUnexplained->BoundPx << " (both clear of the bound by "
-                       << 100.0 *
-                              std::min(std::abs(worstUnexplained->EvenLenPx -
-                                                worstUnexplained->BoundPx),
-                                       std::abs(worstUnexplained->OddLenPx -
-                                                worstUnexplained->BoundPx)) /
-                              worstUnexplained->BoundPx
-                       << "%, so this is not rounding)")
-                          .GetString()
-                    : std::string());
-
-        // The abstention band must stay a numeric detail, not a population: if it ever grows to
-        // cover a real share of the pairs it would start excusing genuine second-mechanism
-        // disagreements as "unresolvable". Measured 7-18 of ~268k domain-owned pairs (6.7e-5).
-        constexpr double kMaxBoundaryFraction = 1e-3;
-        const double boundaryFraction =
-            static_cast<double>(boundaryPairs) / static_cast<double>(domainPairs);
-        EXPECT_LT(boundaryFraction, kMaxBoundaryFraction)
-            << pose.Label << ": " << boundaryPairs << " of " << domainPairs << " ("
-            << 100.0 * boundaryFraction
-            << "%) domain-owned pairs sit inside the mirror's numeric boundary band -- the band is "
-               "no longer a rounding detail and the attribution above is being excused, not made";
-
-        EXPECT_GT(reconErrMax, 0.0)
-            << pose.Label
-            << ": relief arm reconstructs exactly, so the height source never reached the corners";
-    }
-
+    EXPECT_EQ(disagree, 0u) << pose.Label << ": " << disagree << " of " << domainPairs
+                            << " sibling pairs disagree on the merge";
 
     // And the consequence, read off the GPU's own counters rather than re-derived from geometry: a
     // converged tree must not stand at a large unservable merge demand. Every disagreeing pair
@@ -765,15 +622,19 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
     }
 }
 
-// The over-conservative case named in the design: a pair where at least one child REFUSES on its
-// own edge while the parent they would collapse into is comfortably inside the merge band. The
-// per-child metric pinned exactly these; the parent metric must merge them.
+// The parent-edge merge of the screen-space edge rule, on an arm without a height pyramid. The flat
+// regime binds no height texture, so the planar criterion is off (CBT_PlanarCriterionOn) and Classify
+// runs the edge rule the atlas source, the narrow heap and a lattice too large for the pyramid keep: a
+// facet merges on its parent's split edge (CBT_ParentSplitEdgeFar), not on its own. The over-conservative
+// case: a pair where at least one child REFUSES on its own edge while the parent they would collapse into
+// is comfortably inside the merge band. A per-child metric pins exactly these; the parent edge must merge
+// them.
 //
 // RED ARM: neuter the parent branch and this population is classified NOT-SIMPLIFY on the refusing
 // child, so bothSimplify collapses to 0 while the population itself stays non-empty.
 TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
 {
-    for (const Regime& regime : kRegimes)
+    const Regime& regime = kFlat;
     for (const Pose& pose : kPoses)
     {
     SCOPED_TRACE(testing::Message() << "arm " << regime.Label << "/" << pose.Label);
@@ -845,13 +706,10 @@ TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
         continue;
     }
 
-    // ATTRIBUTION, not a tuned threshold. An over-conservative pair either merges, or it is one
-    // the reconstruction model predicts the two children will answer differently, or it sits so
-    // close to the bound that this CPU mirror cannot say which side the shader chose
-    // (kMirrorBoundaryRelTol). This holds exactly in BOTH regimes: on flat ground the model predicts
-    // no disagreements and every pair merges, and on relief the shortfall is exactly the pairs whose
-    // extrapolated parent height straddles the band. A tuned pass-rate would have hidden a real
-    // regression behind a number chosen to pass.
+    // ATTRIBUTION, not a tuned threshold. An over-conservative pair either merges, or it sits so close
+    // to the bound that this CPU mirror cannot say which side the shader chose (kMirrorBoundaryRelTol).
+    // On flat ground the two children rebuild the parent edge exactly, so the reconstruction model
+    // predicts no disagreement and every other pair merges.
     EXPECT_EQ(unexplainedRefusals, 0u)
         << regime.Label << "/" << pose.Label << ": " << unexplainedRefusals << " of "
         << overConservative
@@ -859,7 +717,7 @@ TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
            "not explain -- the parent rule is not reaching them";
 
     // Magnitude guard: the rule must still fire for the large majority, so a wholesale regression
-    // that made every pair "explained" cannot pass quietly. Measured 100% flat, 84-89% on relief.
+    // that made every pair "explained" cannot pass quietly.
     constexpr double kMinMergedFraction = 0.75;
     const double mergedFraction =
         static_cast<double>(merged) / static_cast<double>(overConservative);
@@ -878,9 +736,7 @@ TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
             << overConservative << " over-conservative pairs fell in the boundary band";
     }
 
-    // The control is exact in BOTH regimes: the reconstruction error moves a decision near the
-    // threshold, and this population sits at twice the band. A hit here is an inverted comparison,
-    // not relief noise.
+    // The control sits at twice the band, so a hit here is an inverted comparison.
     EXPECT_EQ(wronglyMerged, 0u)
         << regime.Label << "/" << pose.Label << ": " << wronglyMerged
         << " pairs were flagged SIMPLIFY with a parent well past the band";
@@ -898,12 +754,10 @@ TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
 // large merge cascade is harder to hold with relief, not easier. A flat regression in the cascade
 // path would therefore not be caught here.
 //
-// NOT part of the parent metric's red arm, and deliberately so: measured on THIS arm with the
-// parent check neutered, the test still passes (live 33,134 -> 5,624, 17.0%, against 33,134 ->
-// 4,663, 14.1% with the metric live). Bulk coarsening is served under either rule, because a 4x
+// NOT part of the parent merge's red arm: bulk coarsening is served under either rule, because a 4x
 // threshold move puts BOTH legs of a parent far below the band, and the legs' projected spread
-// only decides pairs sitting near it. What the parent metric changes is the converged fringe,
-// which the two population tests above gate.
+// only decides pairs sitting near it. What the parent merge changes is the converged fringe,
+// which the census above gates.
 TEST_F(CBTParentMergeMetric, CoarseningCascadeStaysConforming)
 {
     CBTInstance inst;

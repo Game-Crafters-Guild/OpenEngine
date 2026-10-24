@@ -422,41 +422,6 @@ inline ContentBox ComputeContentBox(float elX, float elY, float elW, float elH,
     };
 }
 
-inline uint64_t HashPtr64(const void* p)
-{
-    uint64_t x = (uint64_t)(uintptr_t)p;
-    x ^= x >> 30;
-    x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;
-    x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-}
-
-inline void HashCombine(uint64_t& h, uint64_t v)
-{
-    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-}
-
-inline uint64_t HashFloatBits(float f)
-{
-    uint32_t bits = 0;
-    static_assert(sizeof(bits) == sizeof(f), "float must be 32-bit");
-    std::memcpy(&bits, &f, sizeof(bits));
-    return (uint64_t)bits;
-}
-
-inline uint64_t HashString64(const std::string& s)
-{
-    uint64_t h = 1469598103934665603ULL;
-    for (unsigned char c : s)
-    {
-        h ^= (uint64_t)c;
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
-
 // Merge local stylesheet handles into an output sheet list (append-or-move-to-end).
 template <typename HandleVec>
 inline void MergeSheets(std::vector<const GameEngine::Stylesheet*>& outSheets,

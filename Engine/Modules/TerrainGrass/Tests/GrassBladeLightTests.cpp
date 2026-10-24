@@ -200,20 +200,24 @@ float MeadowCanopyDepth()
                     GameEngine::Terrain::kTerrainGrassCanopyOcclusionMax);
 }
 
+// The share of the light that reaches a fixture end under the meadow's canopy. The lighting scales the
+// whole response by it (SurfaceOutput.lightVisibility); the albedo stays the authored colour.
+float FixtureShade(const FixtureEnd& end)
+{
+    return Shader::GrassBladeCanopyOcclusion(MeadowCanopyDepth(), 1.0f, end.Height);
+}
+
 float FixtureLuma(const FixtureEnd& end, float translucency)
 {
-    const float shade = Shader::GrassBladeCanopyOcclusion(MeadowCanopyDepth(), 1.0f, end.Height);
-    const Shader::GrassLeafLight leaf =
-        Shader::GrassBladeLeafLight(end.Albedo * shade, kBacklight, translucency, end.Height);
-    return LeafLuma(leaf, end.SunCosine) + Luma(leaf.Albedo) * kSkyLight * kInvPi;
+    const Shader::GrassLeafLight leaf = Shader::GrassBladeLeafLight(end.Albedo, kBacklight, translucency, end.Height);
+    return FixtureShade(end) * (LeafLuma(leaf, end.SunCosine) + Luma(leaf.Albedo) * kSkyLight * kInvPi);
 }
 
 // The sun's light alone, without the sky.
 float FixtureSunLuma(const FixtureEnd& end, float translucency)
 {
-    const float shade = Shader::GrassBladeCanopyOcclusion(MeadowCanopyDepth(), 1.0f, end.Height);
-    return LeafLuma(Shader::GrassBladeLeafLight(end.Albedo * shade, kBacklight, translucency, end.Height),
-                    end.SunCosine);
+    return FixtureShade(end) *
+           LeafLuma(Shader::GrassBladeLeafLight(end.Albedo, kBacklight, translucency, end.Height), end.SunCosine);
 }
 
 float FixtureTipOverBase(float sunFaceCosine, float translucency)
@@ -395,3 +399,4 @@ TEST(GrassBladeLight, TheSpecularWeightScalesTheFaceOnReflectionOnly)
     EXPECT_NEAR(Shader::GE_FresnelF82(leafF0, white, cos80).y, 0.3853f, 1e-4f)
         << "the sun's Fresnel on the leaf part at 80 degrees";
 }
+

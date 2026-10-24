@@ -71,10 +71,16 @@ struct SpawnHint : ECS::ComponentBase {
 | `@ge-no-add` | struct | The component registers, loads and saves as usual but stays out of the Add Component menu. Use it for a component a tool or a system adds, where a hand-added one would be wrong. |
 | `@ge-editor-only` | struct | The component loads, saves and shows in the editor as usual. A game export removes its lines from every scene and blueprint it ships, so the shipped scene has no trace of it. The entity stays, with its other components and its children. Use it for annotations only the editor reads. |
 | `[DoNotSerialize]` | struct or field | Never saved or loaded: runtime state rebuilt every session. On a field, only that field. |
-| `@ge-readonly` | field | Shown in the inspector, not editable there. |
-| `@ge-hidden` | field | Not shown in the inspector. |
+| `@ge-readonly Writer` | struct | The engine owns the component, and `Writer` (the text after the marker) is the system that writes it. Its C# mirror is read-only, and a script's `ComponentType<T>.Set` is refused with an error that names the writer. |
+| `@ge-engine-internal Writer` | struct | Engine runtime state, no game API: the component has no C# mirror and no web type, and a script cannot write it. `Writer` is the system that writes it. |
+| `@ge-tag` | struct | A struct with no fields is a component (a tag that an entity has or not). A struct with no fields and no marker is not a component. |
+| `@ge-readonly` | field | Shown in the inspector, not editable there. In the C# mirror the field is get-only, and a script's write keeps the engine's value. |
+| `@ge-hidden` | field | Not shown in the inspector and not saved in scenes. The C# mirror has no member for it, and a script's write keeps the engine's value. |
 | `@ge-tooltip Text` | field | The inspector's tooltip for the field; the text may be quoted. |
+| `@ge-label Text` | field or enumerator | The words the inspector shows for the field's row or for the enumerator in a dropdown, in place of the name split into words (`RaysPerProbe` reads "Rays Per Probe"); the text may be quoted. On an enumerator, put it on the enumerator's line or on the line above. The scene file and the C# mirror keep the C++ name. A label on a `@ge-hidden` field is ignored, with a build warning. |
 | `@ge-range Min [Max]` | float field | The inspector clamps edits to the range; without `Max` the range is open above. |
+
+A field that refers to an asset is an `AssetRef<AssetType::...>` (`Components/AssetRef.h`), for example `AssetRef<AssetType::Audio> Sound;`. The inspector shows an asset picker for that asset type, and a scene saves the asset's GUID. The scanner skips a component that has a pointer, a reference, a `std::` container or any other template type in a field, and the build output names the component and the field.
 
 ### Explicit registration
 

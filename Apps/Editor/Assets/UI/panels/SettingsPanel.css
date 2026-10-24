@@ -897,7 +897,8 @@ button.settings-vcs-refresh-button,
     /* Note: Don't use font-family: monospace - causes font corruption if font not loaded */
 }
 
-/* Search Bar (bottom by default; the user preference can anchor it at the top) */
+/* Search Bar: anchored at the bottom here, and at the top under .search-bar-at-top, which
+   EditorSearchBars sets while the preference places search bars at the top (its default). */
 .settings-search-bar {
     position: absolute;
     bottom: 8px;

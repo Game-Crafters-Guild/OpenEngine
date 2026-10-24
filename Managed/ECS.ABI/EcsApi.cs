@@ -123,6 +123,19 @@ namespace GameEngine.ECS
         private static ulong s_cachedId;
         private static ulong s_disabledTypeId;
         private static bool s_disabledTypeIdResolved;
+        private static T s_default;
+        private static bool s_defaultResolved;
+
+        // The registered name of an engine component's mirror ([BuiltInComponent]); null for a C# component.
+        private static readonly string? s_nativeName =
+            (Attribute.GetCustomAttribute(typeof(T), typeof(GameEngine.Scripting.BuiltInComponentAttribute), false)
+                as GameEngine.Scripting.BuiltInComponentAttribute)?.NativeName;
+
+        /// <summary>
+        /// True for the mirror of an engine component: its writes go through the script entries, which keep the
+        /// engine's fields and refuse a component the engine owns (Set, EntityCommands).
+        /// </summary>
+        internal static bool IsEngineComponent => s_nativeName != null;
 
         /// <summary>
         /// Returns the ComponentTypeId for T, lazily registering on first access.
@@ -167,19 +180,28 @@ namespace GameEngine.ECS
         /// <summary>
         /// The engine's default value of a built-in component or of an element struct a component holds:
         /// the bytes of the default-constructed C++ struct, which the parameterless constructor of a
-        /// generated mirror copies. The engine hands this process no default table, so the read throws
-        /// with the fix; <c>default(T)</c> is all zeros, as for any C# struct.
+        /// generated mirror copies (ComponentDefaults). With no engine in the process, or no engine default
+        /// for T, the read throws with the fix; <c>default(T)</c> is all zeros, as for any C# struct.
         /// </summary>
-        internal static T Default => throw new InvalidOperationException(
-            $"{typeof(T).Name} takes its defaults from the engine, which is not running in this process. Create " +
-            "it in a system or after the engine starts, or start from `default` and set every field.");
+        internal static T Default
+        {
+            get
+            {
+                if (!Volatile.Read(ref s_defaultResolved))
+                {
+                    s_default = ComponentDefaults.Read<T>(s_nativeName ?? throw new InvalidOperationException(
+                        $"{typeof(T).Name} is a C# component, which has no engine default. Start from `default` and set every field."));
+                    Volatile.Write(ref s_defaultResolved, true);
+                }
+                return s_default;
+            }
+        }
 
         private static ulong ResolveTypeId()
         {
             // A mirror of an engine component ([BuiltInComponent]) resolves through its native name.
-            if (Attribute.GetCustomAttribute(typeof(T), typeof(GameEngine.Scripting.BuiltInComponentAttribute), false)
-                is GameEngine.Scripting.BuiltInComponentAttribute builtIn)
-                return Ecs.GetComponentTypeIdByName(builtIn.NativeName);
+            if (s_nativeName != null)
+                return Ecs.GetComponentTypeIdByName(s_nativeName);
 
             return Ecs.RegisterBlobComponent(RegistrationName(), (uint)Unsafe.SizeOf<T>());
         }
@@ -196,12 +218,19 @@ namespace GameEngine.ECS
             return name.Replace('+', '.');
         }
 
-        /// <summary>Sets component value on the entity (adds the component if missing).</summary>
+        /// <summary>
+        /// Sets component value on the entity (adds the component if missing). For an engine component, the
+        /// engine keeps its own bytes of every field the mirror does not let a script write (hidden, read-only
+        /// and runtime fields), and refuses a component the engine owns with InvalidOperationException.
+        /// </summary>
         public static void Set(in WorldHandle world, uint entityId, in T value)
         {
             Span<byte> tmp = stackalloc byte[Unsafe.SizeOf<T>()];
             MemoryMarshal.Write(tmp, in value);
-            world.SetComponentBytes(entityId, CachedId, tmp);
+            if (s_nativeName != null)
+                world.SetComponentBytesFromScript(entityId, CachedId, tmp);
+            else
+                world.SetComponentBytes(entityId, CachedId, tmp);
         }
 
         /// <summary>Reads component value from the entity.</summary>
@@ -220,6 +249,8 @@ namespace GameEngine.ECS
     /// </summary>
     public readonly struct WorldHandle
     {
+        private const int kResultInvalidArg = -2; // GE_Result_InvalidArg: the native call set the last error
+
         private readonly ulong m_handle;
 
         internal WorldHandle(ulong handle) { m_handle = handle; }
@@ -337,13 +368,31 @@ namespace GameEngine.ECS
             return m;
         }
 
-        /// <summary>Sets an arbitrary component (identified by ComponentTypeId) from raw bytes.</summary>
+        /// <summary>
+        /// Sets an arbitrary component (identified by ComponentTypeId) from raw bytes. A component the engine owns is
+        /// refused with InvalidOperationException, as <c>ComponentType&lt;T&gt;.Set</c> refuses it.
+        /// </summary>
         public void SetComponentBytes(uint entityId, ulong componentTypeId, ReadOnlySpan<byte> bytes)
         {
             if (m_handle == 0) throw new InvalidOperationException("World handle is invalid");
             int rc = Native.TrySetComponentBytes(m_handle, entityId, componentTypeId, bytes);
+            if (rc == kResultInvalidArg)
+                throw new InvalidOperationException(Internal.ScriptLastError.Read());
             if (rc != 0)
-                throw new InvalidOperationException("Failed to set component bytes");
+                throw new InvalidOperationException($"Failed to set component bytes (result {rc})");
+        }
+
+        // A script's write of an engine component (ComponentType<T>.Set of a mirror): the engine keeps the bytes it
+        // owns and refuses a component it owns, with its last error.
+        internal void SetComponentBytesFromScript(uint entityId, ulong componentTypeId, ReadOnlySpan<byte> bytes)
+        {
+            if (m_handle == 0) throw new InvalidOperationException("World handle is invalid");
+            int rc = Native.TrySetComponentBytesFromScript(m_handle, entityId, componentTypeId, bytes);
+            if (rc != 0)
+            {
+                string reason = Internal.ScriptLastError.Read();
+                throw new InvalidOperationException(reason.Length != 0 ? reason : $"Failed to set component bytes (result {rc})");
+            }
         }
 
         /// <summary>Gets an arbitrary component (identified by ComponentTypeId) as raw bytes.</summary>
@@ -471,6 +520,9 @@ namespace GameEngine.ECS
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int GE_ECSABI_RemoveComponent_Delegate(ulong world, uint entity, ulong componentTypeId);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GE_ECSABI_GetComponentDefaults_Delegate(byte* outData, uint outCap, out uint outLen);
+
         private static readonly object s_lock = new object();
         private static bool s_loaded;
 
@@ -493,8 +545,10 @@ namespace GameEngine.ECS
         private static GE_ECSABI_SetComponentBytes_Delegate? s_setComponentBytes;
         private static GE_ECSABI_GetComponentBytes_Delegate? s_getComponentBytes;
         private static GE_ECSABI_RemoveComponent_Delegate? s_removeComponent;
+        private static GE_ECSABI_SetComponentBytes_Delegate? s_setComponentBytesFromScript;
 
-        private static void EnsureLoaded()
+        /// <summary>Binds the engine's ECS table, and with it copies the engine's component defaults (ComponentDefaults).</summary>
+        internal static void EnsureLoaded()
         {
             if (s_loaded)
                 return;
@@ -525,6 +579,12 @@ namespace GameEngine.ECS
                 s_setComponentBytes = iface.SetComponentBytes != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECSABI_SetComponentBytes_Delegate>(iface.SetComponentBytes) : null;
                 s_getComponentBytes = iface.GetComponentBytes != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECSABI_GetComponentBytes_Delegate>(iface.GetComponentBytes) : null;
                 s_removeComponent = iface.RemoveComponent != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECSABI_RemoveComponent_Delegate>(iface.RemoveComponent) : null;
+                s_setComponentBytesFromScript = iface.SetComponentBytesFromScript != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECSABI_SetComponentBytes_Delegate>(iface.SetComponentBytesFromScript) : null;
+
+                // The defaults, once, as the managed side binds: the native table is not locked, and a
+                // user-script reload rewrites it, so it is read here and never again.
+                if (iface.GetComponentDefaults != 0)
+                    ComponentDefaults.Publish(ReadComponentDefaults(Marshal.GetDelegateForFunctionPointer<GE_ECSABI_GetComponentDefaults_Delegate>(iface.GetComponentDefaults)));
 
                 s_loaded = true;
             }
@@ -769,6 +829,32 @@ namespace GameEngine.ECS
             if (s_getDisabledTypeId == null)
                 return -1;
             return s_getDisabledTypeId(componentTypeId, out disabledTypeId);
+        }
+
+        // The engine's default records ({typeId, size, bytes} back to back, GE_ECSABI_GetComponentDefaults_Fn) in one copy.
+        private static byte[] ReadComponentDefaults(GE_ECSABI_GetComponentDefaults_Delegate getDefaults)
+        {
+            if (getDefaults(null, 0, out uint length) != 0 || length == 0)
+                return Array.Empty<byte>();
+            byte[] records = new byte[length];
+            fixed (byte* p = records)
+            {
+                if (getDefaults(p, length, out _) != 0)
+                    return Array.Empty<byte>();
+            }
+            return records;
+        }
+
+        /// <summary>A script's write of an engine component (ECS 2.4); the engine keeps the bytes it owns.</summary>
+        public static int TrySetComponentBytesFromScript(ulong world, uint entity, ulong componentTypeId, ReadOnlySpan<byte> data)
+        {
+            EnsureLoaded();
+            if (s_setComponentBytesFromScript == null)
+                return -1;
+            fixed (byte* p = data)
+            {
+                return s_setComponentBytesFromScript(world, entity, componentTypeId, p, (uint)data.Length);
+            }
         }
 
         public static int TrySetComponentBytes(ulong world, uint entity, ulong componentTypeId, ReadOnlySpan<byte> data)

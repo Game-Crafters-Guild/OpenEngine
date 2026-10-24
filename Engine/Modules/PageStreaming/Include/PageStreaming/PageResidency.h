@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PageStreaming/PageCache.h"
+#include "PageStreaming/PageLoader.h"
 
 #include <atomic>
 #include <memory>
@@ -27,22 +28,11 @@ namespace GameEngine::PageStreaming
 
 struct PageSampleRect;
 
-class GeneratedHeightPageProvider;
-class PageStoreReader;
-
-/// Where one field's pages come from: a cooked store (read through the asset reader threads) or a
-/// generated provider (evaluated on Background jobs). Exactly one is set.
-struct PageSource
-{
-    std::shared_ptr<const PageStoreReader> Store;
-    std::shared_ptr<const GeneratedHeightPageProvider> Generated;
-};
-
 /// What the residency may spend, for every field of every terrain in the process together.
 struct PageResidencyBudget
 {
-    /// Decoded page samples kept on the CPU between a page's load and its upload (design D3:
-    /// 64 MiB); a page's samples are dropped once its cache has taken it. Loaded pages the caches
+    /// Decoded page samples kept on the CPU between a page's load and its upload; a page's
+    /// samples are dropped once its cache has taken it. Loaded pages the caches
     /// can place are never dropped before then, so the budget in force is the larger of this and
     /// those pages' bytes.
     uint64 CpuBytes = 64ull * 1024ull * 1024ull;
@@ -138,10 +128,7 @@ private:
     {
         uint32 Stream = 0;
         uint64 Epoch = 0;
-        PageAddress Address;
-        std::shared_ptr<const std::vector<float32>> Samples; // null: the page did not load
-        std::string Error;                                   // why, when it did not
-        bool Absent = false;                                 // not in its source at all: never retried
+        PageFetchOutcome Outcome;
     };
 
     struct Stream

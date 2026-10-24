@@ -3,8 +3,8 @@
 #include "ECS/ECSTemplates.h"
 #include "Engine/Rendering/WindVolumeResolver.h"
 #include "GlslShim.h"
+#include <bit>
 #include <gtest/gtest.h>
-#include <cstring>
 
 namespace Shader
 {
@@ -39,10 +39,7 @@ void CheckParity(ECS::World& world, float x, float y, float z)
         base.Turbulence, base.GustFrequency, base.GustScale, base.Weight};
     for (const auto& packed : ExtractGPU(world))
     {
-        Shader::GrassWindVolume volume;
-        static_assert(sizeof(volume) == sizeof(packed));
-        std::memcpy(&volume, &packed, sizeof(volume));
-        gpu = Shader::grassBlendVolume(gpu, volume, Shader::vec3(x, y, z));
+        gpu = Shader::grassBlendVolume(gpu, std::bit_cast<Shader::GrassWindVolume>(packed), Shader::vec3(x, y, z));
     }
     const auto cpu = WindVolumeResolver::ResolveAt(world, x, y, z, base);
     EXPECT_NEAR(cpu.VelocityX, gpu.velocity.x, 1e-5f);

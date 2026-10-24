@@ -437,6 +437,17 @@ if(GE_DESKTOP_SHADER_PARITY_BASELINE AND Python3_Interpreter_FOUND AND GLSLC_EXE
   set_tests_properties(DesktopSpirvParity.MatchesMain PROPERTIES SKIP_RETURN_CODE 125)
 endif()
 
+# The patterns the coding style replaces with an engine piece only become fewer: the gate fails when a
+# pattern's count rises above Tools/CleanupGate/baseline.json, and names the file, the line and the piece.
+if(Python3_Interpreter_FOUND)
+  add_test(NAME CleanupGateTests
+    COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tools/CleanupGate/cleanup_gate.py
+            --root ${CMAKE_SOURCE_DIR})
+  set_tests_properties(CleanupGateTests PROPERTIES TIMEOUT 300)
+else()
+  message(STATUS "Python 3 not found - CleanupGateTests not registered")
+endif()
+
 # The host cook reads and writes packages only through ShaderReflect.
 if(Python3_Interpreter_FOUND AND TARGET ShaderReflect AND NOT EMSCRIPTEN)
   add_test(NAME WebShaderPackageBounds
@@ -1257,6 +1268,8 @@ add_executable(TerrainAtlasTests
   TerrainPageResolveGpuTests.cpp
   # The height source of a tiled terrain and the main-thread half of its height pages.
   TerrainHeightPagesTests.cpp
+  # The CPU height pages and the query the CPU readers sample them through.
+  TerrainCpuHeightPagesTests.cpp
   ${_GE_PAGE_RESOLVE_HEADERS}
   ${_GE_PAGE_RESOLVE_PROBE_SPV}
 )
@@ -1529,6 +1542,9 @@ add_subdirectory(Editor)
 
 # Standalone Player startup resolution (HDR output options).
 add_subdirectory(Player)
+
+# The web library's page reflection, compiled for the desktop.
+add_subdirectory(WebLibrary)
 
 # EditorSDK ABI tests (registries + Editor-kind module build/load); no-op
 # when the Editor (and its EditorSDK target) is not built.

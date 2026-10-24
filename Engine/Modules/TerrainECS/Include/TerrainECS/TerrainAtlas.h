@@ -300,8 +300,8 @@ std::vector<TileCoord> NeighborsNeedingApronRefresh(const AtlasIndirectionTable&
 //
 // A kAtlasNoSlot row means the tile is outside the resident window. The sampler
 // must degrade to the coarse source, never garbage or a hole. The coarse source
-// is a low-resolution per-terrain field (the global quadtree's coarse data,
-// which the streaming manager keeps current) sampled bilinearly in terrain UV.
+// is a low-resolution per-terrain field of the whole-terrain base relief,
+// sampled bilinearly in terrain UV.
 // The innermost out-of-window tile (fallback) sits against the outermost
 // in-window tile; their shared edge must match to within the coarse tolerance,
 // or tiles crossing the horizon show a ring seam.

@@ -82,10 +82,10 @@ bool GetEntityWorldMatrix(ECS::World* world,
     {
         Mathematics::Matrix4x4 local = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
         if (const auto* parent = world->GetComponent<Components::Parent>(entity);
-            parent && parent->parent.IsValid())
+            parent && parent->Entity.IsValid())
         {
             Mathematics::Matrix4x4 parentWorld;
-            if (GetEntityWorldMatrix(world, parent->parent, parentWorld, depth + 1))
+            if (GetEntityWorldMatrix(world, parent->Entity, parentWorld, depth + 1))
             {
                 out = parentWorld * local;
                 return true;

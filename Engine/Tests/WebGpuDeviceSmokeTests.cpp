@@ -1538,9 +1538,9 @@ TEST(WebGpuDeviceSmoke, HandBuiltPassLayoutsDeclareTheShadersReadOnlyStorage)
         const DescriptorSetLayoutDesc* NodeLayout; // what the render node binds its descriptor sets with
     };
     const Pass passes[] = {
-        {"Shaders/sky_render.shaderpkg", sky.EnsureSkyRenderId(*device), &sky.GetSkyRenderSetDesc().layout},
-        {"Shaders/sky_stars_billboard.shaderpkg", sky.EnsureStarBillboardId(*device),
-         &sky.GetStarBillboardSetDesc().layout},
+        {"Shaders/sky_render.shaderpkg", sky.EnsureSkyRenderId(*device, false), &sky.GetSkyRenderSetDesc(false).layout},
+        {"Shaders/sky_stars_billboard.shaderpkg", sky.EnsureStarBillboardId(*device, false),
+         &sky.GetStarBillboardSetDesc(false).layout},
         {"Shaders/lens_flare.shaderpkg", lensFlare.GetPipelineId(), &lensFlare.GetLayout()},
     };
     for (const Pass& pass : passes)

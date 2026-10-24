@@ -43,6 +43,9 @@ enum class HumanoidRetargetLOD : uint8_t
 // skeleton (the one the mesh skins to). HumanoidRetargetSystem reads the
 // source clip directly from ClipStore and samples it onto the source rig's
 // skeleton (resolved via the RetargetMap's SourceRigRef -> HumanoidRig).
+// @ge-no-add  added by AnimationSystem when an animator plays a clip authored on another rig
+// [DoNotSerialize] — runtime playback state (clip index, skeleton id, clip time) the
+// animation system rebuilds every session.
 struct HumanoidRetargeterComponent
 {
     // RetargetMap GUID. Authoritative reference — null GUID means the
@@ -52,7 +55,7 @@ struct HumanoidRetargeterComponent
 
     // Source clip ID (ClipStore index, mirroring AnimatorRef::ClipIndex).
     // 0 = no clip.
-    uint32 SourceClipIndex = 0; // [DoNotSerialize] ClipStore handle rebuilt from the source clip GUID at load
+    uint32 SourceClipIndex = 0; // @ge-readonly the animation system
 
     // SkeletonStore runtime identity of the rig the clip's channel bone
     // indices are authored against. In a cross-rig pair this differs from the
@@ -65,11 +68,11 @@ struct HumanoidRetargeterComponent
     // the update. For a source-less standalone or procedural clip the value is
     // the authored source that auto-bootstrap wrote at component creation, and
     // 0 selects the target skeleton (the intentional same-rig path).
-    uint32 SourceSkeletonId = 0;
+    uint32 SourceSkeletonId = 0; // @ge-readonly the animation system
 
     // Per-frame clock. Identical semantics to AnimatorRef::Time. The system
     // advances this when the entity is enabled and not paused.
-    float32 ClipTimeSeconds = 0.0f;
+    float32 ClipTimeSeconds = 0.0f; // @ge-readonly the animation system
 
     // Playback speed multiplier. Mirrors AnimatorRef::Speed.
     float32 Speed = 1.0f;

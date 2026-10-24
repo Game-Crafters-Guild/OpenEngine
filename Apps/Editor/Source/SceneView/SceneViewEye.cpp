@@ -42,13 +42,13 @@ SceneViewEyeState DescribeSceneViewEye(ECS::World& world, ECS::EntityHandle enti
     state.HiddenSelf = world.HasComponent<Components::SceneViewHidden>(entity);
     if (state.HiddenSelf || !world.HasComponent<Components::SceneViewHiddenInHierarchy>(entity))
         return state;
-    for (const auto* link = world.GetComponent<Components::Parent>(entity); link && world.IsValid(link->parent);
-         link = world.GetComponent<Components::Parent>(link->parent))
+    for (const auto* link = world.GetComponent<Components::Parent>(entity); link && world.IsValid(link->Entity);
+         link = world.GetComponent<Components::Parent>(link->Entity))
     {
-        if (!world.HasComponent<Components::SceneViewHidden>(link->parent))
+        if (!world.HasComponent<Components::SceneViewHidden>(link->Entity))
             continue;
         state.HiddenByParent = true;
-        state.HidingAncestor = link->parent;
+        state.HidingAncestor = link->Entity;
         break;
     }
     return state;

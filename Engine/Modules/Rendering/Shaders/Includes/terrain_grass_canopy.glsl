@@ -7,7 +7,8 @@
 // darkens the blade base by the coverage its site had at placement (carried in the instance). The
 // ground and the blade root take the SAME depth times the SAME coverage, so the contact keeps its
 // identity at a feathered splat edge and under a grass region as well as inside a full field: a
-// one-sided shade lands as a step at the contact line. Both surfaces scale their reflectance by it.
+// one-sided shade lands as a step at the contact line. Both surfaces hand it to the lighting model as
+// the share of the light that reaches them (SurfaceOutput.lightVisibility).
 //
 // The literals carry the `f` suffix because the block is lifted verbatim into the host tests
 // (GlslShim.h), where an unsuffixed literal is a double.

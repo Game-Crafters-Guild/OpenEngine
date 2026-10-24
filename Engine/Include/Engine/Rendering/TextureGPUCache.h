@@ -5,6 +5,7 @@
 #include "AssetCore/GUID.h"
 #include "Rendering/Core/Handle.h"
 
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 

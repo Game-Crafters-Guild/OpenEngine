@@ -196,6 +196,8 @@ namespace Rendering {
 
         void BarrierBatch(const std::vector<ResourceBarrier>& barriers) override;
 
+        void RecordStateAfterBarriers(const std::vector<ResourceBarrier>& barriers) override;
+
         // Debug events
         void BeginEvent(const char* name) override;
         void EndEvent() override;

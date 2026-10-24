@@ -6,7 +6,6 @@ add_library(Ocean OBJECT
     Source/OceanRenderFeature.cpp
     Source/OceanFootprintFrustum.cpp
     Source/OceanSimulationDemand.cpp
-    Source/OceanFieldRanges.cpp
     Source/OceanShaderProgram.cpp
     Source/OceanFFT.cpp
     Source/OceanCascadeArray.cpp

@@ -202,6 +202,61 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetWidthPercent(uint64_t instanceId, floa
     }
 }
 
+// Writes left/top into the style override bag SetWidthPercent uses, which a .uxml reconcile keeps.
+// The bag is applied after the element's style attribute, so this call wins over an authored inline `left:`.
+GE_API GE_Result GE_CDECL GE_UIElement_SetOffset(uint64_t instanceId, float x, float y)
+{
+    try
+    {
+        GameEngine::UIElement* el = ResolveElement(instanceId);
+        if (!el)
+            return GE_Result_NotFound;
+
+        el->Overrides().Set(GameEngine::Style::PositionLeft, GameEngine::StyleLength::Px(x));
+        el->Overrides().Set(GameEngine::Style::PositionTop, GameEngine::StyleLength::Px(y));
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// Take the pointer for an element, so the rest of the gesture is routed to it wherever the pointer goes.
+GE_API GE_Result GE_CDECL GE_UIElement_CapturePointer(uint64_t instanceId)
+{
+    try
+    {
+        GameEngine::UIElement* el = ResolveElement(instanceId);
+        if (!el)
+            return GE_Result_NotFound;
+
+        GameEngine::GameUI::GetUIManager()->CaptureMouse(el);
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// Let it go, only when this element holds the pointer: a release from any other element is NotFound and
+// leaves the capture alone.
+GE_API GE_Result GE_CDECL GE_UIElement_ReleasePointer(uint64_t instanceId)
+{
+    try
+    {
+        GameEngine::UIManager* ui = GameEngine::GameUI::GetUIManager();
+        if (!ui || !ui->ReleaseMouseCaptureHeldBy(instanceId))
+            return GE_Result_NotFound;
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
 // Set a Label element's text. GE_Result_NotFound if the handle no longer resolves;
 // GE_Result_InvalidArg if the element is alive but isn't a Label (so the script learns it
 // resolved the wrong id).
@@ -423,6 +478,49 @@ GE_API GE_Result GE_CDECL GE_UIElement_UnregisterEvent(uint64_t instanceId, cons
         if (eventId == 0)
             return GE_Result_InvalidArg;
         GameEngine::GameUI::Detail::UnregisterSessionEvent(instanceId, eventId, token);
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// The same override FloatingPanel::Raise writes; the next style pass re-sorts the parent's children.
+GE_API GE_Result GE_CDECL GE_UIElement_SetZIndex(uint64_t instanceId, int32_t zIndex)
+{
+    try
+    {
+        GameEngine::UIElement* el = ResolveElement(instanceId);
+        if (!el)
+            return GE_Result_NotFound;
+
+        el->Overrides().Set(GameEngine::Style::ZIndex, static_cast<int>(zIndex));
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// Where the element was drawn, in window space.
+GE_API GE_Result GE_CDECL GE_UIElement_GetRect(uint64_t instanceId, float* x, float* y, float* width, float* height)
+{
+    if (!x || !y || !width || !height)
+        return GE_Result_InvalidArg;
+
+    try
+    {
+        GameEngine::UIElement* el = ResolveElement(instanceId);
+        if (!el)
+            return GE_Result_NotFound;
+
+        const auto rect = el->GetWindowRect();
+        *x = rect.X;
+        *y = rect.Y;
+        *width = rect.Width;
+        *height = rect.Height;
         return GE_Result_Ok;
     }
     catch (...)

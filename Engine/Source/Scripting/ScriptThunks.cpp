@@ -88,6 +88,11 @@ GE_Result CallFailed(const char* function, const char* what)
     return Report(GE_Result_Fail, std::string(function) + " failed: " + what);
 }
 
+GE_Result RefuseScriptWrite(std::string text)
+{
+    return Report(GE_Result_InvalidArg, std::move(text));
+}
+
 GE_Result ServeTable(const char* module, std::uint64_t expectedHash, std::uint64_t requestedHash, const void* table,
                      std::uint32_t tableSize, const void** outTable, std::uint32_t* outSize)
 {

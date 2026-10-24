@@ -32,7 +32,7 @@ struct SubtreeWorldBounds
 
     Mathematics::Vector3 Center() const { return (Box.min + Box.max) * 0.5f; }
 
-    // Radius of the bounding sphere enclosing Box (same idiom as FrameAll).
+    // Radius of the bounding sphere enclosing Box.
     float Radius() const
     {
         const Mathematics::Vector3 halfExtents = (Box.max - Box.min) * 0.5f;
@@ -55,5 +55,20 @@ bool ComputeSubtreeWorldBounds(ECS::World& world, ECS::EntityHandle root, Subtre
 // False, leaving `out` unchanged, when `direction` has no length.
 bool ComputeLookAtPose(const Mathematics::Vector3& target, const Mathematics::Vector3& direction, float distance,
                        SceneViewCameraPose& out);
+
+// The perspective pose that frames `bounds`: every corner inside the view with a 10% margin,
+// the box center as the orbit pivot, the yaw and pitch of `currentPose` kept. A flat box (one
+// extent under a tenth of the largest) seen within 30 degrees of edge-on is viewed from 30 degrees
+// off its plane instead: from the low side only when `currentPose` is past the box's low face,
+// from the high side otherwise. `fieldOfViewDeg` is the vertical
+// field of view in degrees, `aspect` the view's width over its height, and `nearClip` the
+// closest the camera may come to any corner.
+SceneViewCameraPose ComputePerspectiveFramingPose(const Mathematics::AABB& bounds,
+                                                  const SceneViewCameraPose& currentPose,
+                                                  float fieldOfViewDeg, float aspect, float nearClip);
+
+// The Scene View's far clip for a camera `distance` from its orbit pivot: the configured
+// `farClip`, or twice the distance when that is larger, so a framed object is never clipped.
+float ExpandFarClipForFraming(float farClip, float distance);
 
 } // namespace GameEngine::Editor

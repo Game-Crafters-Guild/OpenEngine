@@ -22,7 +22,6 @@
 #include "ECSModules/Rendering/Systems/SkyEnvironmentSystem.h"
 #include "ECSModules/Rendering/Systems/AmbientLightSystem.h"
 #include "ECSModules/Rendering/Systems/DDGIVolumeSystem.h"
-#include "Engine/Rendering/DDGIFieldRanges.h"
 #include "ECSModules/Rendering/Systems/ReflectionProbeSystem.h"
 
 #include "ECS/DisabledInHierarchySystem.h"
@@ -165,9 +164,6 @@ void AddRenderingSystemsToSchedule(ECS::SystemScheduleBuilder& schedule, RenderS
     // {kCamera} suffices — the same dependency SkyEnvironmentSystem uses)
     // but touches no IBL feature state, so it carries no ordering edge to
     // the Sky/ReflectionProbe/AmbientLight chain above.
-    static const bool s_DDGIRangesRegisteredScheduled =
-        [] { RegisterDDGIFieldRanges(); return true; }();
-    (void)s_DDGIRangesRegisteredScheduled;
     schedule.Add<DDGIVolumeSystem>(kDDGIVolume, SystemPhase::Camera, 4, {kCamera}, renderServices);
 
     // RenderGraph build is responsible for invoking RenderServices::BuildFrameGraph,

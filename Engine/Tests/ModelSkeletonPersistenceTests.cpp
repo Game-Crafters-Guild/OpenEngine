@@ -93,7 +93,7 @@ class ModelSkeletonPersistence : public testing::Test
         ref.instanceOwner = owner;
         world.AddComponentImmediate(entity, ref);
         Parent parent{};
-        parent.parent = owner;
+        parent.Entity = owner;
         world.AddComponentImmediate(entity, parent);
         if (helper)
             world.AddComponentImmediate(entity, AnimatedNodeRef{1});

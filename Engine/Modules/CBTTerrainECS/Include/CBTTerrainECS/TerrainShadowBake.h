@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CBTTerrain/TerrainShadowGrid.h"
+#include "CBTTerrainECS/TerrainShadowFieldLit.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineIdentifiers.h"
@@ -43,6 +44,8 @@ struct TerrainShadowBakeInputs
     float SizeX = 0.0f;
     float SizeZ = 0.0f;
     float HeightScale = 0.0f;
+    // The draw's level scale for this view (TerrainShadowMap::DrawLevelScale); 0 without a height chain.
+    float DrawLevelScale = 0.0f;
     // This frame's edit rect in terrain UV [0, 1] (empty when MaxU <= MinU): the lines crossing it
     // are re-baked.
     float DirtyMinU = 0.0f;
@@ -81,6 +84,9 @@ class TerrainShadowBake
 
     // Drops every handle of the dead device; the next declaration re-creates them and bakes in full.
     void OnDeviceRebuilt();
+    // Drops the map's bindless registration and the lit field's registration and level views: on a
+    // frame without a map, and from the owner's teardown while the device and `rs` are alive.
+    void Release(Engine::Renderer::RenderServices& rs);
 
   private:
     // What a full bake depends on; a change re-bakes every line.
@@ -103,11 +109,10 @@ class TerrainShadowBake
         bool Present = false;
         Rendering::RenderGraph::RGTexture Map{};
         CBTTerrain::TerrainShadowGrid Grid{};
+        bool FieldLit = false;
     };
 
     bool EnsurePipeline(Rendering::IDevice& device);
-    // Drops the map's bindless registration (a frame without a map).
-    void ReleaseMapBindless(Engine::Renderer::RenderServices& rs);
     // Declares the map and the frame's bake into `frame`; false when no map can be published.
     bool DeclareFrameMap(Engine::Renderer::RenderServices& rs, Rendering::RenderGraph::RGFrame& frame,
                          uint64_t worldId, const TerrainShadowBakeInputs& inputs);
@@ -131,6 +136,8 @@ class TerrainShadowBake
     // The inputs of the last declared full bake. A frame that declares a bake and is then abandoned
     // leaves the map one bake behind until the inputs next change.
     std::optional<BakeKey> m_Baked;
+    // The map's lit field, rebuilt with every bake; published beside the map when it could be.
+    TerrainShadowFieldLit m_FieldLit;
     FrameMap m_Frame{};
 };
 

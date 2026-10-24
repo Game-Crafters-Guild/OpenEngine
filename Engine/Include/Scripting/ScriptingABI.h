@@ -412,6 +412,21 @@ typedef void(GE_CDECL* GE_UIEventCallback)(const GE_UIEventData* ev, void* user)
 GE_API GE_Result GE_CDECL GE_GameUI_FindElement(uint64_t entityId, const char* id, uint64_t* outInstanceId);
 
 GE_API GE_Result GE_CDECL GE_UIElement_SetWidthPercent(uint64_t instanceId, float pct);
+
+// Sets the element's left/top in the parent's UI pixels, before any transform on the parent. An
+// absolutely positioned element is placed from the inside of its parent's border; any other element
+// moves from where layout places it. The value replaces the stylesheet's left/top and the element's
+// own style attribute, and survives a .uxml reload. GE_Result_NotFound if the handle no longer
+// resolves.
+GE_API GE_Result GE_CDECL GE_UIElement_SetOffset(uint64_t instanceId, float x, float y);
+
+// Take the pointer for this element, so every move, release and cancel is routed to it, also after the pointer
+// has left it. The capture ends at ReleasePointer or at the button's release, whichever comes first, and a
+// capture by another element replaces it. A removed element's capture ends on the next update.
+GE_API GE_Result GE_CDECL GE_UIElement_CapturePointer(uint64_t instanceId);
+// Releases the pointer only when this element holds it; from any other element GE_Result_NotFound, and
+// the capture stays where it is.
+GE_API GE_Result GE_CDECL GE_UIElement_ReleasePointer(uint64_t instanceId);
 GE_API GE_Result GE_CDECL GE_UIElement_SetLabelText(uint64_t instanceId, const char* text);
 GE_API GE_Result GE_CDECL GE_UIElement_SetClass(uint64_t instanceId, const char* className, int32_t on);
 // Liveness as a QUERY, not as a failure: Ok with *outAlive 0 or 1. A caller asking
@@ -458,6 +473,17 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetDropdownSelectedIndex(uint64_t instanc
 // the option's VALUE is the field value, read through GE_UIElement_GetValueText.
 GE_API GE_Result GE_CDECL GE_UIElement_GetDropdownSelectedLabel(uint64_t instanceId, char* buffer,
                                                                 int32_t bufferLen, int32_t* outLen);
+
+// Orders the element among its siblings, as CSS z-index does: a higher value is drawn in front of the siblings and
+// found first by the pointer; equal values keep document order. The value replaces the stylesheet's z-index for this
+// element. GE_Result_NotFound if the handle no longer resolves.
+GE_API GE_Result GE_CDECL GE_UIElement_SetZIndex(uint64_t instanceId, int32_t zIndex);
+
+// The element's box in window space, in UI pixels: the box from the last layout, carried through its own transform
+// and every transformed ancestor's as the bounds of the transformed box (UIElement::GetWindowRect). A parent that
+// clips its children does not shrink it. A tooltip, a menu or a drag anchors to this.
+// A null out-parameter is InvalidArg; a handle that no longer resolves is NotFound.
+GE_API GE_Result GE_CDECL GE_UIElement_GetRect(uint64_t instanceId, float* x, float* y, float* width, float* height);
 
 // -------- Element TYPES defined outside C++ --------
 // The lifecycle layer: who may define element types, which tags they own, and what happens

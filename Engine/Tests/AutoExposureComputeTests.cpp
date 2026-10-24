@@ -19,9 +19,10 @@
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "TestDeviceHelper.h"
-#include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -30,6 +31,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 using namespace GameEngine::Rendering;
 
@@ -370,9 +373,9 @@ class AutoExposureComputeTest : public ::testing::Test
         cl->Dispatch(1, 1, 1);
         Submit(cl.get());
         const auto out = ReadWords(State, kStateBytes);
-        SnapshotState result{};
-        std::memcpy(&result, out.data(), kStateBytes);
-        return result;
+        std::array<uint32_t, kStateBytes / sizeof(uint32_t)> words{};
+        std::copy_n(out.begin(), words.size(), words.begin());
+        return std::bit_cast<SnapshotState>(words);
     }
 
     std::unique_ptr<IDevice> Device;

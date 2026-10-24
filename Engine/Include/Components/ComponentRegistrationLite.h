@@ -109,3 +109,18 @@ inline bool RegisterReflectedComponent(bool addable)
     [[maybe_unused]] const bool GE_PP_CONCAT(ge_auto_register_, __LINE__) =        \
         ::GameEngine::Components::RegisterReflectedComponent<TypeName>(false);     \
     }
+
+// A component with no fields (a tag, "// @ge-tag"), as in ComponentRegistration.h.
+#define GE_REGISTER_TAG_COMPONENT(TypeName)                                        \
+    GE_REFLECT_TAG(TypeName);                                                      \
+    namespace {                                                                    \
+    [[maybe_unused]] const bool GE_PP_CONCAT(ge_auto_register_, __LINE__) =        \
+        ::GameEngine::Components::RegisterReflectedComponent<TypeName>(true);      \
+    }
+
+#define GE_REGISTER_TAG_COMPONENT_NO_ADD(TypeName)                                 \
+    GE_REFLECT_TAG(TypeName);                                                      \
+    namespace {                                                                    \
+    [[maybe_unused]] const bool GE_PP_CONCAT(ge_auto_register_, __LINE__) =        \
+        ::GameEngine::Components::RegisterReflectedComponent<TypeName>(false);     \
+    }

@@ -312,7 +312,7 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_UsesWorldTransform
 	parent.Set(parentLocal);
 
 	Parent parentComp{};
-	parentComp.parent = parent.GetHandle();
+	parentComp.Entity = parent.GetHandle();
 
 	MeshRenderer mr = MakeTestMeshRenderer(setup);
 
@@ -1150,10 +1150,10 @@ TEST(TransformHierarchyParallelTests, ReparentTopologyRebuild_ChildFollowsNewPar
 	Entity c = world.Create(Transform::FromTRS({0.0f, 0.0f, 3.0f}, Mathematics::Quaternion{}, {1, 1, 1}));
 
 	Parent bToA{};
-	bToA.parent = a.GetHandle();
+	bToA.Entity = a.GetHandle();
 	b.Set(bToA);
 	Parent cToB{};
-	cToB.parent = b.GetHandle();
+	cToB.Entity = b.GetHandle();
 	c.Set(cToB);
 	world.ProcessCommands();
 
@@ -1169,7 +1169,7 @@ TEST(TransformHierarchyParallelTests, ReparentTopologyRebuild_ChildFollowsNewPar
 
 	// Reparent c directly under a: c world = a(10,0,0) + local(0,0,3).
 	Parent cToA{};
-	cToA.parent = a.GetHandle();
+	cToA.Entity = a.GetHandle();
 	c.Set(cToA);
 	world.ProcessCommands();
 	parallel.Update(world, 0.0f);
@@ -1199,8 +1199,8 @@ TEST(TransformHierarchyParallelTests, MixedHierarchy_OffAndOnBitwiseIdentical)
 		Entity root = w.Create(MakeVariedLocalTransform(1000));
 		Entity mid = w.Create(MakeVariedLocalTransform(1001));
 		Entity leaf = w.Create(MakeVariedLocalTransform(1002));
-		Parent pm{}; pm.parent = root.GetHandle(); mid.Set(pm);
-		Parent pl{}; pl.parent = mid.GetHandle(); leaf.Set(pl);
+		Parent pm{}; pm.Entity = root.GetHandle(); mid.Set(pm);
+		Parent pl{}; pl.Entity = mid.GetHandle(); leaf.Set(pl);
 		handles.push_back(root.GetHandle());
 		handles.push_back(mid.GetHandle());
 		handles.push_back(leaf.GetHandle());

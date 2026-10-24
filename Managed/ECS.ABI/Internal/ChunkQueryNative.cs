@@ -396,9 +396,18 @@ namespace GameEngine.ECS.Internal
                 throw new MissingMethodException("ECS ABI DeferCommand not available");
 
             int rc = s_deferCommand(worldHandle, commandType, entity, componentTypeId, data, dataLen);
-            if (rc != 0)
-                throw new InvalidOperationException($"DeferCommand failed rc={rc}");
+            if (rc == 0)
+                return;
+            // A refused script write states the component, its writer and the fix in the last error.
+            string reason = commandType == kDeferScriptWrite ? ScriptLastError.Read() : string.Empty;
+            throw new InvalidOperationException(reason.Length != 0 ? reason : $"DeferCommand failed rc={rc}");
         }
+
+        /// <summary>
+        /// The DeferCommand kind of a script's add or set of an engine component (a C# mirror): queued as a script
+        /// write, which keeps the engine's fields and is refused for a component the engine owns.
+        /// </summary>
+        internal const uint kDeferScriptWrite = 5;
 
         /// <summary>
         /// Switches an entity on or off: ECS.Disabled and the derived DisabledInHierarchy move

@@ -351,8 +351,10 @@ TEST(QueueOwnershipTransferExemption, StageValidityExemptionKeysOnFamilyIndicesN
     // run this test filtered for the armed evidence run.
     const std::string syncValLine = FindLine(logLines, "synchronization validation");
     if (!syncValLine.empty())
+    {
         EXPECT_NE(syncValLine.find("ENABLED"), std::string::npos)
             << "sync validation was asked for but did not arm: " << syncValLine;
+    }
     std::cout << "[ sync-val ] " << (syncValLine.empty() ? "not resolved in this process (instance "
                                                            "pre-created by an earlier test)"
                                                          : syncValLine)

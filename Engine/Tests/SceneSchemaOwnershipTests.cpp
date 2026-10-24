@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "Components/GameLogicGraphRef.h"
 #include "Components/Measure/MeasureComponent.h"
 #include "Components/Spline/SplineComponent.h"
 #include "ECS/ComponentFactory.h"
@@ -34,6 +35,7 @@ TEST_F(SceneSchemaOwnership, TokenOwnedTypeHasOneSchemaReachedByItsToken)
     const Owned owned[] = {
         {"Spline", "SplineComponent", ECS::GetComponentTypeId<Components::SplineComponent>()},
         {"Measure", "MeasureComponent", ECS::GetComponentTypeId<Components::MeasureComponent>()},
+        {"GameLogicGraph", "GameLogicGraphRef", ECS::GetComponentTypeId<Components::GameLogicGraphRef>()},
     };
     for (const Owned& o : owned)
     {

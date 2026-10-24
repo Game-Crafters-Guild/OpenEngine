@@ -43,7 +43,7 @@
 #include "Ocean/OceanRenderFeature.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/GPUInstanceWorldKey.h"
-#include "Rendering/Core/HashUtils.h"
+#include "Types/Fnv1a.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -524,15 +524,15 @@ void EmitSubmissions(std::vector<WorldSubmissionRecord>& subs,
 // wrapping sum over the gathered records): what it renders, not where.
 uint64 RecordDigestTerm(const WorldRenderableRecord& rec)
 {
-    using ::GameEngine::Rendering::HashUtils::HashValue;
+    using ::GameEngine::Hashing::Fnv1a64Value;
     constexpr uint64 kFnvOffsetBasis = 14695981039346656037ull;
-    uint64 recDigest = HashValue(kFnvOffsetBasis, rec.meshRenderer.meshGpuHandleId);
-    recDigest = HashValue(recDigest, rec.meshRenderer.materialAssetGuid);
-    recDigest = HashValue(recDigest, rec.meshRenderer.shadowCasting);
-    recDigest = HashValue(recDigest, rec.meshRenderer.RenderLayers.Bits);
+    uint64 recDigest = Fnv1a64Value(kFnvOffsetBasis, rec.meshRenderer.meshGpuHandleId);
+    recDigest = Fnv1a64Value(recDigest, rec.meshRenderer.materialAssetGuid);
+    recDigest = Fnv1a64Value(recDigest, rec.meshRenderer.shadowCasting);
+    recDigest = Fnv1a64Value(recDigest, rec.meshRenderer.RenderLayers.Bits);
     // In the digest or a live toggle does nothing until an unrelated field
     // happens to re-arm extraction.
-    recDigest = HashValue(recDigest, rec.giEmitter);
+    recDigest = Fnv1a64Value(recDigest, rec.giEmitter);
     return recDigest;
 }
 
@@ -1826,13 +1826,13 @@ uint64 RenderExtractionSystem::ComputeMaterialDigest() const
     // draw set), but a full-vs-fast submission-membership divergence during
     // failed-recompile windows; bump-on-recompile is the cheap upgrade if
     // soak ever shows it mattering.
-    using GameEngine::Rendering::HashUtils::Fnv1a64;
-    using GameEngine::Rendering::HashUtils::HashValue;
+    using GameEngine::Hashing::Fnv1a64;
+    using GameEngine::Hashing::Fnv1a64Value;
     constexpr uint64 kFnvOffsetBasis = 14695981039346656037ull;
     auto& materials = m_RenderServices->Materials();
-    uint64 digest = HashValue(kFnvOffsetBasis, materials.MaterialSSBOGeneration());
+    uint64 digest = Fnv1a64Value(kFnvOffsetBasis, materials.MaterialSSBOGeneration());
     const auto depthClasses = materials.MaterialDepthClassSpan();
-    digest = HashValue(digest, static_cast<uint64>(depthClasses.size()));
+    digest = Fnv1a64Value(digest, static_cast<uint64>(depthClasses.size()));
     if (!depthClasses.empty())
         digest = Fnv1a64(depthClasses.data(), depthClasses.size(), digest);
     return digest;
@@ -1853,7 +1853,7 @@ RenderExtractionSystem::ComputeViewFingerprints(uint64 worldId) const
     // misreading the churn as an escalation storm. The persistent hash leaves
     // the OnDemand views out, so that churn is distinguishable from a change
     // to what the Always views draw (IsOnDemandViewChurnOnly).
-    using GameEngine::Rendering::HashUtils::HashValue;
+    using GameEngine::Hashing::Fnv1a64Value;
     constexpr uint64 kFnvOffsetBasis = 14695981039346656037ull;
     ViewFingerprints fingerprints{kFnvOffsetBasis, kFnvOffsetBasis};
     uint32 matchingCount = 0;
@@ -1862,19 +1862,19 @@ RenderExtractionSystem::ComputeViewFingerprints(uint64 worldId) const
     {
         if (view.worldId != 0 && view.worldId != worldId)
             continue;
-        fingerprints.All = HashValue(fingerprints.All, view.id);
-        fingerprints.All = HashValue(fingerprints.All, view.worldId);
-        fingerprints.All = HashValue(fingerprints.All, view.ActiveRenderLayerMask().Bits);
+        fingerprints.All = Fnv1a64Value(fingerprints.All, view.id);
+        fingerprints.All = Fnv1a64Value(fingerprints.All, view.worldId);
+        fingerprints.All = Fnv1a64Value(fingerprints.All, view.ActiveRenderLayerMask().Bits);
         ++matchingCount;
         if (view.participation == Rendering::ViewParticipation::OnDemand)
             continue;
-        fingerprints.Persistent = HashValue(fingerprints.Persistent, view.id);
-        fingerprints.Persistent = HashValue(fingerprints.Persistent, view.worldId);
-        fingerprints.Persistent = HashValue(fingerprints.Persistent, view.ActiveRenderLayerMask().Bits);
+        fingerprints.Persistent = Fnv1a64Value(fingerprints.Persistent, view.id);
+        fingerprints.Persistent = Fnv1a64Value(fingerprints.Persistent, view.worldId);
+        fingerprints.Persistent = Fnv1a64Value(fingerprints.Persistent, view.ActiveRenderLayerMask().Bits);
         ++persistentCount;
     }
-    fingerprints.All = HashValue(fingerprints.All, matchingCount);
-    fingerprints.Persistent = HashValue(fingerprints.Persistent, persistentCount);
+    fingerprints.All = Fnv1a64Value(fingerprints.All, matchingCount);
+    fingerprints.Persistent = Fnv1a64Value(fingerprints.Persistent, persistentCount);
     return fingerprints;
 }
 
@@ -2922,7 +2922,7 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 // Arbitrary stable tag for "an ocean renderer".
                 constexpr uint64 kOceanContentTag = 0x0CEA0CEAull;
                 const uint64 oceanTerm =
-                    GameEngine::Rendering::HashUtils::HashValue(kFnvOffsetBasis, kOceanContentTag);
+                    GameEngine::Hashing::Fnv1a64Value(kFnvOffsetBasis, kOceanContentTag);
                 world.Query<GameEngine::ECS::Read<GameEngine::Components::OceanRenderer>>()
                     .Each([&](const GameEngine::Components::OceanRenderer&)
                           {

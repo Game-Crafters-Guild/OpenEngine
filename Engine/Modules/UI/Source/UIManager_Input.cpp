@@ -270,12 +270,7 @@ bool UIManager::DispatchMouseButtonPress()
             m_FocusViaKeyboard = false;
             m_FocusId.clear();
             if (UIElement* root = GetRootElement())
-            {
-                m_MouseCaptured = true;
-                m_CaptureElement = root;
-                m_CaptureInstanceId = root->GetInstanceId();
-                m_CaptureId = EnsureElementId(root);
-            }
+                CaptureMouse(root);
             return true;
         }
     }
@@ -1210,25 +1205,12 @@ bool UIManager::DispatchBubbleEvent(UIElement* target, EventId id, int button,
         UIElement* cap = FindElementByInstanceId(captureReqInstanceId);
         if (cap)
         {
-            m_MouseCaptured = true;
-            m_CaptureElement = cap;
-            m_CaptureInstanceId = cap->GetInstanceId();
-            m_CaptureId = cap->GetId();
-            if (m_CaptureId.empty())
-            {
-                // Capture must be restorable across rebuilds (splitter drag, virtualization).
-                m_CaptureId = EnsureElementId(cap);
-            }
+            CaptureMouse(cap);
         }
         else if (id == kEventMouseDown)
         {
             if (UIElement* root = GetRootElement())
-            {
-                m_MouseCaptured = true;
-                m_CaptureElement = root;
-                m_CaptureInstanceId = root->GetInstanceId();
-                m_CaptureId = EnsureElementId(root);
-            }
+                CaptureMouse(root);
         }
     }
     return ev.Handled;

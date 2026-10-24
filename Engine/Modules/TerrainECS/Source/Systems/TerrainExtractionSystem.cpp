@@ -662,6 +662,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     // Assert that the modifier system is not concurrently accessing terrain data.
     terrainService->AssertNoModifierAccess();
 
+    // The dynamic bodies' CPU height windows, before the terrains' page requests read them.
+    terrainService->GetHeightPages().GatherBodyWindows(world);
+
     std::vector<TerrainInstanceInfo> activeInfos;
     std::vector<Terrain::TerrainGPUParams> paramsArray;
     // Every terrain's four channel-role materials, concatenated. Params entries name records in
@@ -908,50 +911,10 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                         deltaTime, m_AtlasFadeSeconds);
                 }
 
-                // ---- Batched quadtree update for tiles integrated this frame ----
-
                 const std::vector<TileCoord>& integratedTiles = *integratedTilesThisFrame;
-                if (!integratedTiles.empty() || tiled->QuadtreeDirty ||
-                    !tiled->DirtyQuadtreeTiles.empty())
-                {
-                    GE_CPU_PROFILE_SCOPE("Terrain.QuadtreeSync");
-                    // Falsifiable idle-cost signal: the global-quadtree finalize walks
-                    // per-tile node min/max (O(nodes), or O(samples) on the sample-scan
-                    // fallback path) and is INVISIBLE to Terrain.TileUpload/TileBake — so
-                    // if this fires every frame on an idle tiled terrain, it is the hidden
-                    // per-frame cost. Silent unless it actually runs (gated on integrated
-                    // tiles or a dirty quadtree).
-                    static const bool kTileDebug = std::getenv("GE_TERRAIN_TILE_DEBUG") != nullptr;
-                    if (kTileDebug)
-                        Logger::Log::Info("Terrain.QuadtreeSync integrated={} quadtreeDirty={}",
-                                          integratedTiles.size(), tiled->QuadtreeDirty ? 1 : 0);
-                    for (const auto& intCoord : integratedTiles)
-                    {
-                        auto tileIt = tiled->Tiles.find(intCoord);
-                        if (tileIt != tiled->Tiles.end() && tileIt->second &&
-                            !tileIt->second->PrecomputedQuadtreeNodes.empty())
-                        {
-                            // Use pre-computed min/max from job thread (no heightfield scan).
-                            terrainService->PatchTileInGlobalQuadtreePrecomputed(
-                                tiledHandle, intCoord,
-                                tileIt->second->PrecomputedQuadtreeNodes.data(),
-                                tileIt->second->PrecomputedQuadtreeNodesPerAxis);
-                        }
-                        else
-                        {
-                            // Fallback: scan heightfield on main thread.
-                            terrainService->PatchTileInGlobalQuadtree(tiledHandle, intCoord);
-                        }
-                    }
-                    terrainService->FinalizeGlobalQuadtreeUpdates(tiledHandle);
-                }
 
-                if (!tiled->GlobalQuadtree.IsBuilt())
-                {
-                    return; // No tiles loaded yet.
-                }
-
-                // ---- Global GPU TerrainData (holds the global quadtree for render node) ----
+                // ---- Global GPU TerrainData ----
+                // The whole-terrain handle the render feature and the height pages address.
 
                 TerrainHandle globalGpuHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration};
                 auto* globalData = terrainService->GetTerrainData(globalGpuHandle);
@@ -960,15 +923,16 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     if (tiled->GlobalGpuHandleIndex != 0 || tiled->GlobalGpuHandleGeneration != 0)
                         return; // Stale handle
 
-                    // Create a lightweight TerrainData for the global quadtree.
-                    // Minimal heightfield (3x3); only the quadtree and morph ranges matter.
+                    // A placeholder TerrainData: a minimal 3x3 heightfield and one LOD level. The
+                    // handle keys the terrain in the render feature and the height pages; the
+                    // single-terrain path never reads it, so it carries no LOD structure.
                     Terrain::TerrainConfig globalConfig{};
                     globalConfig.HeightmapWidth = 3;
                     globalConfig.HeightmapHeight = 3;
                     globalConfig.WorldSizeX = terrain.SizeX;
                     globalConfig.WorldSizeZ = terrain.SizeZ;
                     globalConfig.HeightScale = terrain.HeightScale;
-                    globalConfig.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
+                    globalConfig.LODLevels = 1;
                     globalConfig.LODRangeScale = Terrain::kDefaultLODRangeScale;
                     globalConfig.PatchGridSize = Terrain::kDefaultGridSize;
 
@@ -992,84 +956,11 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                                    pageFocalScale);
                 }
 
-                // Sync global quadtree to the GPU slot.
-                globalData->Quadtree = tiled->GlobalQuadtree;
-                globalData->Config.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
                 globalData->Config.WorldSizeX = terrain.SizeX;
                 globalData->Config.WorldSizeZ = terrain.SizeZ;
                 globalData->Config.HeightScale = terrain.HeightScale;
                 globalData->Config.LODRangeScale = Terrain::kDefaultLODRangeScale;
                 globalData->Config.PatchGridSize = Terrain::kDefaultGridSize;
-
-                // ---- Compute morph ranges for the global quadtree ----
-                // Within-tile levels use normal chained ranges.
-                // Tile-level and above use FLT_MAX to force subdivision,
-                // preventing multi-tile patches that can't be assigned to one tile.
-
-                if (!tiled->MorphRangesComputed ||
-                    tiled->CachedLODRangeScale != Terrain::kDefaultLODRangeScale ||
-                    tiled->CachedFarClip != maxViewFarClip)
-                {
-                    const uint32 globalLevels = tiled->GlobalQuadtree.GetNumLevels();
-                    const uint32 tileLevels = tiled->Config.TileConfig.LODLevels;
-                    const uint32 finestNodesPerAxis = tiled->GlobalQuadtree.GetNodesPerAxisAtLevel(0);
-                    const float32 patchSizeX = terrain.SizeX / static_cast<float32>(finestNodesPerAxis);
-                    const float32 patchSizeZ = terrain.SizeZ / static_cast<float32>(finestNodesPerAxis);
-                    const float32 baseRange = std::max(patchSizeX, patchSizeZ) * Terrain::kDefaultLODRangeScale;
-                    constexpr float32 kMorphStartRatio = 0.66f;
-
-                    // The coarsest renderable LOD range is clamped to the far clip
-                    // plane so we never select patches beyond what the camera can see.
-                    // Use the lesser of streaming radius and far clip.
-                    const float32 maxRenderDist = std::min(streamR, maxViewFarClip);
-
-                    // Within-tile levels (0 to tileLevels-3): normal LOD ranges.
-                    for (uint32 i = 0; i + 2 < tileLevels && i < globalLevels; ++i)
-                        tiled->VisRanges[i] = Terrain::CDLODSelection::ComputeLODRange(i, baseRange, Terrain::kDefaultLODRangeScale);
-
-                    // Coarsest within-tile level: extend to cover the visible distance
-                    // so far tiles render coarse patches instead of disappearing.
-                    if (tileLevels >= 2 && tileLevels - 2 < globalLevels)
-                    {
-                        tiled->VisRanges[tileLevels - 2] = std::max(
-                            Terrain::CDLODSelection::ComputeLODRange(tileLevels - 2, baseRange, Terrain::kDefaultLODRangeScale),
-                            maxRenderDist);
-                    }
-
-                    // Tile-level and above: always enter, never produce multi-tile patches.
-                    for (uint32 i = (tileLevels > 0 ? tileLevels - 1 : 0); i < globalLevels; ++i)
-                        tiled->VisRanges[i] = std::numeric_limits<float32>::max();
-
-                    // Compute chained morph start/end.
-                    float32 prevMorphStart = 0.0f;
-                    for (uint32 i = 0; i < globalLevels; ++i)
-                    {
-                        if (tiled->VisRanges[i] < 1e30f)
-                        {
-                            tiled->MorphEnd[i] = tiled->VisRanges[i];
-                            tiled->MorphStart[i] = prevMorphStart + (tiled->MorphEnd[i] - prevMorphStart) * kMorphStartRatio;
-                            prevMorphStart = tiled->MorphStart[i];
-                        }
-                        else
-                        {
-                            // Tile-level and above: these nodes always subdivide, so
-                            // morph must be 0. With FLT_MAX for both, the shader computes
-                            // (dist - FLT_MAX) / max(0, 0.001) → clamped to 0.
-                            tiled->MorphStart[i] = std::numeric_limits<float32>::max();
-                            tiled->MorphEnd[i] = std::numeric_limits<float32>::max();
-                        }
-                    }
-
-                    tiled->MorphRangesComputed = true;
-                    tiled->CachedLODRangeScale = Terrain::kDefaultLODRangeScale;
-                    tiled->CachedFarClip = maxViewFarClip;
-                }
-
-                // Sync morph ranges to global GPU data.
-                std::memcpy(globalData->VisRanges, tiled->VisRanges, sizeof(tiled->VisRanges));
-                std::memcpy(globalData->MorphStart, tiled->MorphStart, sizeof(tiled->MorphStart));
-                std::memcpy(globalData->MorphEnd, tiled->MorphEnd, sizeof(tiled->MorphEnd));
-                globalData->MorphRangesComputed = true;
 
                 // Grid mesh is now updated on the render thread (BuildForView)
                 // to avoid races between extraction and rendering.
@@ -1909,7 +1800,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                     tiled->SplatResplatPending = true;
                                     tiled->SplatResplatIdleFrames = 0;
                                     ++tiled->Revision;
-                                    tiled->QuadtreeDirty = true;
                                     terrainService->MarkGpuReadbackSplatPending();
                                     static const bool kGpuBakeDebug =
                                         std::getenv("GE_TERRAIN_GPU_BAKE_DEBUG") != nullptr;
@@ -2042,7 +1932,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 //
                 // The render extent is the REAL area the unified heightmap covers
                 // (extent.WorldSizeX/Z = tilesPerAxis * tileWorldSize), computed above —
-                // NOT the power-of-2 square the global quadtree rounds up to, which would
+                // NOT a power-of-two square, which would
                 // stretch a non-square / non-pow2-tile-count terrain. CBT maps
                 // world = origin + uv*size and samples the same uv, so size must match it.
                 Terrain::TerrainGPUParams params{};
@@ -2165,7 +2055,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 info.SizeZ = extent.WorldSizeZ;
                 info.HeightScale = terrain.HeightScale;
                 info.LODRangeScale = Terrain::kDefaultLODRangeScale;
-                info.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
+                info.LODLevels = globalData->Config.LODLevels;
                 info.MaterialTiling = terrain.MaterialTiling;
                 info.Handle = globalGpuHandle;
                 info.HeightmapTexture = infoHeightTex;
@@ -2209,15 +2099,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (!atlasRows.empty())
                     std::memcpy(info.AtlasRowBytes.data(), atlasRows.data(),
                                 info.AtlasRowBytes.size());
-                info.Quadtree = tiled->GlobalQuadtree;
                 info.PatchGridSize = Terrain::kDefaultGridSize;
-                info.MorphRangesComputed = tiled->MorphRangesComputed;
-                if (tiled->MorphRangesComputed)
-                {
-                    std::memcpy(info.VisRanges, tiled->VisRanges, sizeof(info.VisRanges));
-                    std::memcpy(info.MorphStart, tiled->MorphStart, sizeof(info.MorphStart));
-                    std::memcpy(info.MorphEnd, tiled->MorphEnd, sizeof(info.MorphEnd));
-                }
                 activeInfos.push_back(std::move(info));
 
                 // Tile unloading is handled by TileStreamingManager::UnloadDistantTiles.
@@ -2551,9 +2433,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             paramsArray.push_back(params);
 
             // Cache terrain instance info for render node.
-            // Snapshot the quadtree and morph ranges so the render thread
-            // never accesses TerrainData directly (avoids cross-thread race
-            // when the modifier system rebuilds the quadtree).
+            // A snapshot, so the render thread never reads TerrainData directly
+            // (the modifier system rewrites it on the main thread).
             TerrainInstanceInfo info{};
             info.WorldOriginX = worldX;
             info.WorldOriginY = worldXf.matrix[13];
@@ -2576,7 +2457,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             info.GrassControlsSuppressedPlacement = grassControlsSuppressed;
             info.ColorMapBindlessIndex = params.ColorMapBindless;
             info.GrassRegionsActive = (params.Flags & Terrain::kTerrainFlagHasGrassControls) != 0;
-            info.Quadtree = data->Quadtree;
             info.PatchGridSize = data->Config.PatchGridSize;
             info.MorphRangesComputed = data->MorphRangesComputed;
             if (data->MorphRangesComputed)

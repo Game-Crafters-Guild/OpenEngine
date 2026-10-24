@@ -109,7 +109,7 @@ GE_REFLECT(GameEngine::Components::Light,
     Type, Color, Intensity, Range, InnerAngle, OuterAngle, AreaShape,
     AreaWidth, AreaHeight, AreaRadius, Decay, CastsLight, CastsShadows, CascadeCount);
 
-GE_REFLECT(GameEngine::Components::Parent, parent);
+GE_REFLECT(GameEngine::Components::Parent, Entity);
 
 // Fixtures for JSON edge cases and the through-the-handler integration test.
 struct UnmappedThing { std::int32_t a; std::int32_t b; };  // no trait -> Unknown -> hex
@@ -392,7 +392,7 @@ TEST(ComponentReflectionTests, RealComponentsReflectCorrectly)
     {
         const auto f = GetReflectedFields<GameEngine::Components::Parent>();
         ASSERT_EQ(f.size(), 1u);
-        EXPECT_EQ(f[0].Name, "parent");
+        EXPECT_EQ(f[0].Name, "Entity");
         EXPECT_EQ(f[0].Type, FieldTypeId::EntityHandle);
         EXPECT_EQ(f[0].Size, 4u);
     }
@@ -425,8 +425,9 @@ TEST(ComponentReflectionTests, JsonDumpUsesFieldNamesAndValues)
 
 TEST(ComponentReflectionTests, FieldWalkSnapshotRoundTrip)
 {
-    ReflectProbe src;
-    std::memset(&src, 0, sizeof(src));
+    // Value-initialized, not aggregate-initialized: zero-initialization also clears the padding
+    // that the whole-object memcmp below compares.
+    ReflectProbe src = ReflectProbe();
     src.Flag = true;
     src.I64 = -123456789012345LL;
     src.U64 = 0xFEEDFACECAFEBEEFull;
@@ -447,8 +448,7 @@ TEST(ComponentReflectionTests, FieldWalkSnapshotRoundTrip)
         blob.insert(blob.end(), srcBytes + f.Offset, srcBytes + f.Offset + f.Size);
 
     // Restore field-by-field into a zeroed destination.
-    ReflectProbe dst;
-    std::memset(&dst, 0, sizeof(dst));
+    ReflectProbe dst = ReflectProbe();
     auto* dstBytes = reinterpret_cast<std::byte*>(&dst);
     std::size_t cursor = 0;
     for (const FieldInfo& f : fields)

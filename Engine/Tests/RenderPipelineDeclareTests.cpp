@@ -128,6 +128,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <optional>
 #include <chrono>
 #include <cmath>
@@ -10868,11 +10869,13 @@ std::vector<std::string> VertexReadBindingsMissingFrom(const Rendering::ShaderMe
 
 // The rule both prepass heads are held to (#3367). Under the compatibility profile the head declares no
 // binding that only the fragment stage reads, and every binding the desktop head's vertex stage reads is
-// still declared. The desktop head keeps the variant's whole reflected layout, shadow and IBL slots
-// included.
+// still declared, except `desktopOnlyVertexReads`: work the full profile does in its vertex stage that
+// the compat profile does elsewhere. The desktop head keeps the variant's whole reflected layout, shadow
+// and IBL slots included.
 void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDocument& doc,
                                              Rendering::MaterialKeyword keywords,
-                                             Rendering::VertexAttributeFlags vertexFlags)
+                                             Rendering::VertexAttributeFlags vertexFlags,
+                                             std::span<const std::string_view> desktopOnlyVertexReads = {})
 {
     PrepassHeadDeclaration compat;
     {
@@ -10888,7 +10891,11 @@ void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDo
         << doc.materialName << ": the desktop head keeps the variant's whole reflected layout";
     if (!compat.Meta || !desktop.Meta)
         return;
-    const std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::erase_if(missing, [&](const std::string& name) {
+        return std::find(desktopOnlyVertexReads.begin(), desktopOnlyVertexReads.end(), name) !=
+               desktopOnlyVertexReads.end();
+    });
     EXPECT_TRUE(missing.empty()) << doc.materialName << ": the compat head drops " << missing.size()
                                  << " binding(s) the vertex stage reads, first '"
                                  << (missing.empty() ? std::string{} : missing.front()) << "'";
@@ -10926,9 +10933,13 @@ TEST(RenderPipelineDeclareTests, CompatCbtPrepassHeadDeclaresOnlyWhatItsVertexSt
         f.Down();
         GTEST_SKIP() << "staged shader sources not found";
     }
+    // The full profile moves far vertices to the prefiltered height chain in its vertex stage
+    // (cbt_vertex_modifier.glsl): the chain and the frame's level rule. The compat profile draws the
+    // cached corners, so its head rightly declares neither.
+    static constexpr std::string_view kDesktopHeightChainReads[] = {"gCbtChain", "gCbtDrawLevel"};
     ExpectCompatHeadDeclaresOnlyVertexReads(f, CBTTerrainECS::BuildCBTTerrainMaterialDocument(),
                                             CBTTerrainECS::CBTTerrainMaterialKeywords(),
-                                            Rendering::VertexAttributeFlags::None);
+                                            Rendering::VertexAttributeFlags::None, kDesktopHeightChainReads);
     f.Down();
 }
 
@@ -14273,6 +14284,82 @@ TEST(RenderPipelineDeclareTests, ReadbackStripsDeviceRowPaddingForFullRegionAndS
                 EXPECT_EQ(result.pixels[i + 3], 255);
             }
         }
+    }
+}
+
+// With async compute on, a texture written on the compute queue and read back on graphics has
+// its transition into the copy source recorded at the compute submission's tail, on another
+// command list. The subresource readback must still copy from the transfer-source layout the
+// graph left it in: no "no recorded layout" report, and the written texels come back.
+TEST(RenderPipelineDeclareTests, SubresourceReadbackOfAComputeWrittenTextureCopiesFromTheGraphState)
+{
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    if (device->GetComputeQueueFamilyIndex() == device->GetGraphicsQueueFamilyIndex())
+        GTEST_SKIP() << "No separate compute queue family: the graph records every transition on one list";
+    FramePools pools(device);
+    RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RenderGraph::RGFrame::kIdentityQueueMap);
+    frame.BeginFrame(1);
+    TextureDesc td{};
+    td.width = 6;
+    td.height = 4;
+    td.depth = 1;
+    td.mipLevels = 1;
+    td.arrayLayers = 1;
+    td.sampleCount = 1;
+    td.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
+               static_cast<uint32_t>(TextureUsage::TransferSrc) |
+               static_cast<uint32_t>(TextureUsage::TransferDst);
+    const auto src = frame.CreateTexture("CrossQueueReadback.Src", td);
+    ASSERT_TRUE(src.IsValid());
+    frame.AddComputePass(
+        "CrossQueueReadback.Fill", static_cast<int32_t>(PassPhase::kWorldRender),
+        [&](RenderGraph::RGPassBuilder& p) { p.Write(src, RenderGraph::RGTextureWrite::CopyDst); },
+        [src](RenderGraph::RGContext& ctx)
+        {
+            const float color[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+            ctx.Cmd->ClearColorImageSubresource(ctx.GetTexture(src), 0, 0, color);
+        });
+    const auto ticket =
+        Rendering::RequestTextureSubresourceReadbackRG(device, frame, src, 0, 0, 0, 0, 0, 0, "CrossQueue");
+    ASSERT_NE(ticket, nullptr);
+
+    std::vector<std::string> log;
+    {
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+        frame.Execute();
+        Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
+        device->WaitForIdle();
+        Logger::Log::Flush();
+    }
+
+    const auto& barriers = frame.Graph().Barriers();
+    const auto& placement = frame.Graph().BarrierSubmissions();
+    ASSERT_EQ(placement.size(), barriers.size());
+    bool relocated = false;
+    for (size_t i = 0; i < barriers.size(); ++i)
+    {
+        const RenderGraph::RGBarrier& b = barriers[i];
+        relocated |= b.Resource == src.Id && b.NewLayout == RenderGraph::RGImageLayout::TransferSrc &&
+                     placement[i] != RenderGraph::kInvalidId;
+    }
+    ASSERT_TRUE(relocated)
+        << "the transition into the copy source must record on the compute tail; the check is void";
+
+    EXPECT_EQ(GameEngine::TestLog::CountLinesContaining(log, "no recorded layout"), 0u)
+        << GameEngine::TestLog::FirstLineContaining(log, "no recorded layout");
+    Rendering::ViewReadbackResult result{};
+    ASSERT_TRUE(ticket->TryGet(result));
+    ASSERT_EQ(result.pixels.size(), static_cast<size_t>(td.width) * td.height * 4u);
+    for (size_t i = 0; i < result.pixels.size(); i += 4)
+    {
+        EXPECT_NEAR(result.pixels[i], 64, 2);
+        EXPECT_NEAR(result.pixels[i + 1], 128, 2);
+        EXPECT_NEAR(result.pixels[i + 2], 191, 2);
+        EXPECT_EQ(result.pixels[i + 3], 255);
     }
 }
 
@@ -20527,8 +20614,23 @@ struct TerrainShadowFrame
     std::vector<float> Map;
     std::vector<float> Distances;
     uint32 MapSide = 0;
+    // The lit field's level 0 as the GPU built it (FieldSide x FieldSide lit shares and occluder octaves),
+    // when the frame read the map back; the map's texel (meters between samples).
+    std::vector<float> Field;
+    std::vector<float> FieldOctaves;
+    uint32 FieldSide = 0;
+    float MapTexel = 0.0f;
+    // The draw's level scale the map was published with (TerrainShadowMap::DrawLevelScale).
+    float DrawLevelScale = 0.0f;
+    uint32 FieldLevels = 0;
+    // The map's samples per line and lines in use (the rest of the map holds whatever the pool left).
+    uint32 SamplesU = 0;
+    uint32 SamplesV = 0;
     // ShadowData's terrain presence word for the view (terrainShadowSource.z), -1 when the frame had none.
     float ShadowDataTerrainPresence = -1.0f;
+    // ShadowData's lit field index and levels (terrainShadowField.xy).
+    uint32 ShadowDataFieldIndex = 0;
+    uint32 ShadowDataFieldLevels = 0;
 };
 
 // The terrain shadow frames' sun disc (degrees, full): the bake follows its lower edge too. Wide, so that
@@ -20570,13 +20672,25 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
     const TerrainShadowMap* published = shadows.FindTerrainShadowMap(v, frame.FrameIndex());
     out.Published = published != nullptr;
     std::shared_ptr<Rendering::RGReadbackTicket> mapTicket;
+    std::shared_ptr<Rendering::RGReadbackTicket> fieldTicket;
     if (readMap && published)
     {
         mapTicket = Rendering::RequestTextureReadbackRG(f.Device, frame, published->Map, "TerrainShadowTest.Map");
         out.MapSide = published->MapSide;
+        out.SamplesU = static_cast<uint32>(published->SamplesU);
+        out.SamplesV = static_cast<uint32>(published->SamplesV);
+        out.MapTexel = published->Texel;
+        out.DrawLevelScale = published->DrawLevelScale;
+        if (published->FieldLit.IsValid())
+        {
+            fieldTicket =
+                Rendering::RequestTextureReadbackRG(f.Device, frame, published->FieldLit, "TerrainShadowTest.FieldLit");
+            out.FieldSide = published->MapSide / 2u;
+            out.FieldLevels = published->FieldLitLevels;
+        }
     }
     frame.Execute();
-    if (mapTicket)
+    if (mapTicket || fieldTicket)
         Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
     f.Device->WaitForIdle();
     Rendering::ViewReadbackResult mapResult{};
@@ -20592,6 +20706,20 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
             out.Distances[i] = GameEngine::Mathematics::HalfToFloat(bits[1]);
         }
     }
+    Rendering::ViewReadbackResult fieldResult{};
+    if (fieldTicket && fieldTicket->TryGet(fieldResult) &&
+        fieldResult.pixels.size() >= size_t(out.FieldSide) * out.FieldSide * 4u)
+    {
+        out.Field.resize(size_t(out.FieldSide) * out.FieldSide);
+        out.FieldOctaves.resize(out.Field.size());
+        for (size_t i = 0; i < out.Field.size(); ++i)
+        {
+            uint16_t bits[2] = {};
+            std::memcpy(bits, fieldResult.pixels.data() + i * 4u, sizeof(bits));
+            out.Field[i] = GameEngine::Mathematics::HalfToFloat(bits[0]);
+            out.FieldOctaves[i] = GameEngine::Mathematics::HalfToFloat(bits[1]);
+        }
+    }
     if (const auto* resources = instance.FrameResourcesFor(&frame))
     {
         const auto binding = resources->Buffers.find({v, "ShadowData"});
@@ -20603,6 +20731,8 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
                 ShadowDataGPU data{};
                 std::memcpy(&data, mapped + binding->second.Offset, sizeof(data));
                 out.ShadowDataTerrainPresence = static_cast<float>(data.terrainShadowSource[2]);
+                out.ShadowDataFieldIndex = data.terrainShadowField[0];
+                out.ShadowDataFieldLevels = data.terrainShadowField[1];
                 f.Device->UnmapBuffer(binding->second.Buffer);
             }
         }
@@ -20893,6 +21023,165 @@ TEST(RenderPipelineDeclareTests, TerrainShadowBakesOnlyWhenTheSunOrTheHeightsCha
         f.Device->DestroyTexture(heights);
     }
     f.Down();
+}
+
+// The terrain shadow's lit field (TerrainShadowFieldLit): a far terrain pixel reads the share of the map's
+// samples it covers that see the sun and how far their occluders lie, so its level 0 must be exactly that
+// share over each 2 x 2 samples of the baked map (a sample is lit when its clearance is at most 0 or it lies
+// outside the samples in use; the four shares are exact in half precision) and the mean of their occluder
+// octaves (0 for a lit sample, log2 of the occluder's distance over one map texel, at least 0, for a
+// shadowed one; to half precision), the chain must run to one texel, ShadowData must carry it to the
+// shading passes, and the map is published with the draw's level scale, which the ray-traced mask reads.
+TEST(RenderPipelineDeclareTests, TerrainShadowLitFieldAveragesTheMapsSamples)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        const ViewId v = f.AddView("TerrainShadowView", 1u);
+        if (!ActivateCbtTerrain(f, terrain))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources or CBT kernels unavailable";
+        }
+        TextureHandle heights{};
+        const uint32 heightIndex = UploadRidgeHeightTexture(f, heights);
+        if (heightIndex == 0u)
+        {
+            f.Down();
+            GTEST_SKIP() << "the device has no bindless textures";
+        }
+        SetShadowTestTerrain(terrain, heights, heightIndex, true);
+        EXPECT_TRUE(f.Registry.Register("ShadowMap", [] { return std::make_unique<Nodes::ShadowMapNode>(); }, true));
+        const RenderPipelineBlueprint bp = CompileTestBlueprint(f, R"json({
+          "schemaVersion": 2, "pipelineName": "TerrainShadowLitFieldTest",
+          "passes": [
+            { "id": "Upload", "type": "TerrainUpload" },
+            { "id": "CSM", "type": "ShadowMap", "buffer": "ShadowData" },
+            { "id": "Terrain", "type": "CBTRender" },
+            { "id": "Prepass", "type": "DepthPrepass", "clearDepthValue": 0.0 },
+            { "id": "World", "type": "WorldRender" }
+          ]
+        })json", "terrain_shadow_lit_field.rendergraph");
+        EXPECT_FALSE(bp.HasErrors());
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+        const TerrainShadowFrame frame = DeclareTerrainShadowFrame(f, pools, instance, v, terrain, 0u, 15.0f, true);
+        EXPECT_TRUE(frame.Baked);
+        EXPECT_NE(frame.ShadowDataFieldIndex, 0u) << "ShadowData does not carry the lit field";
+        EXPECT_EQ(frame.FieldLevels, static_cast<uint32>(std::bit_width(frame.MapSide / 2u)));
+        EXPECT_EQ(frame.ShadowDataFieldLevels, frame.FieldLevels);
+        EXPECT_GT(frame.DrawLevelScale, 0.0f) << "the ray-traced mask cannot tell the draw level without the scale";
+        ASSERT_FALSE(frame.Map.empty());
+        ASSERT_EQ(frame.Field.size(), size_t(frame.FieldSide) * frame.FieldSide) << "the lit field was not read back";
+        ASSERT_GT(frame.MapTexel, 0.0f);
+        size_t mismatched = 0, partial = 0, dark = 0, octavesMismatched = 0;
+        float octavesMax = 0.0f;
+        for (uint32 y = 0; y < frame.FieldSide; ++y)
+            for (uint32 x = 0; x < frame.FieldSide; ++x)
+            {
+                float lit = 0.0f;
+                float octaves = 0.0f;
+                for (uint32 dy = 0; dy < 2u; ++dy)
+                    for (uint32 dx = 0; dx < 2u; ++dx)
+                    {
+                        const uint32 u = 2u * x + dx, line = 2u * y + dy;
+                        // A sample outside the lines and samples in use has no caster: lit.
+                        const bool inUse = u < frame.SamplesU && line < frame.SamplesV;
+                        const size_t at = size_t(line) * frame.MapSide + u;
+                        if (inUse && frame.Map[at] > 0.0f)
+                            octaves += 0.25f * std::log2(std::max(frame.Distances[at], frame.MapTexel) / frame.MapTexel);
+                        else
+                            lit += 0.25f;
+                    }
+                const float field = frame.Field[size_t(y) * frame.FieldSide + x];
+                mismatched += std::abs(field - lit) > 1.0e-3f ? 1u : 0u;
+                const float fieldOctaves = frame.FieldOctaves[size_t(y) * frame.FieldSide + x];
+                octavesMismatched += std::abs(fieldOctaves - octaves) > 1.0e-2f * std::max(1.0f, octaves) ? 1u : 0u;
+                octavesMax = std::max(octavesMax, fieldOctaves);
+                partial += (field > 0.0f && field < 1.0f) ? 1u : 0u;
+                dark += field == 0.0f ? 1u : 0u;
+            }
+        std::printf("[terrain-shadow lit field] side %u levels %u: %zu partial, %zu dark, %zu mismatched; occluder "
+                    "octaves up to %.2f, %zu mismatched\n",
+                    frame.FieldSide, frame.FieldLevels, partial, dark, mismatched, octavesMax, octavesMismatched);
+        EXPECT_GT(dark, 0u) << "the ridge's shadow is not in the field: the test cannot tell the share";
+        EXPECT_GT(partial, 0u) << "no texel straddles the shadow's edge";
+        EXPECT_EQ(mismatched, 0u) << "the lit field is not the share of the map's lit samples";
+        EXPECT_GT(octavesMax, 1.0f) << "the ridge's shadow casters are not in the field: the test cannot tell the octaves";
+        EXPECT_EQ(octavesMismatched, 0u) << "the lit field's occluder octaves are not the mean over the map's samples";
+        f.Device->DestroyTexture(heights);
+    }
+    f.Down();
+}
+
+namespace
+{
+// The texture views alive on `device` that no one has released: a view queued for destruction counts as live
+// until its frame retires.
+size_t HeldTextureViews(const Rendering::IDevice& device)
+{
+    const Rendering::IDevice::ResourcePoolStats s = device.GetResourcePoolStats();
+    return s.liveTextureViews - std::min(s.liveTextureViews, s.deferredTextureViews);
+}
+} // namespace
+
+// The lit field's per-level storage views live as long as the terrain feature that owns the bake: once the
+// render services shut down (the features are destroyed while the device lives on), none of them is still
+// alive, so a device that outlives a terrain does not hold its field's views until its own teardown.
+TEST(RenderPipelineDeclareTests, TerrainShadowLitFieldViewsAreReleasedWithTheTerrain)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    const size_t viewsBefore = HeldTextureViews(*f.Device);
+    uint32 fieldLevels = 0;
+    size_t viewsWithField = 0;
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        const ViewId v = f.AddView("TerrainShadowView", 1u);
+        if (!ActivateCbtTerrain(f, terrain))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources or CBT kernels unavailable";
+        }
+        TextureHandle heights{};
+        const uint32 heightIndex = UploadRidgeHeightTexture(f, heights);
+        if (heightIndex == 0u)
+        {
+            f.Down();
+            GTEST_SKIP() << "the device has no bindless textures";
+        }
+        SetShadowTestTerrain(terrain, heights, heightIndex, true);
+        const RenderPipelineBlueprint bp = CompileTestBlueprint(f, R"json({
+          "schemaVersion": 2, "pipelineName": "TerrainShadowLitFieldTeardownTest",
+          "passes": [
+            { "id": "Upload", "type": "TerrainUpload" },
+            { "id": "Terrain", "type": "CBTRender" },
+            { "id": "Prepass", "type": "DepthPrepass", "clearDepthValue": 0.0 },
+            { "id": "World", "type": "WorldRender" }
+          ]
+        })json", "terrain_shadow_lit_field_teardown.rendergraph");
+        EXPECT_FALSE(bp.HasErrors());
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+        const TerrainShadowFrame frame = DeclareTerrainShadowFrame(f, pools, instance, v, terrain, 0u, 15.0f, true);
+        EXPECT_TRUE(frame.Baked);
+        fieldLevels = frame.FieldLevels;
+        viewsWithField = HeldTextureViews(*f.Device);
+        f.Device->DestroyTexture(heights);
+    }
+    f.Down();
+    const size_t viewsAfter = HeldTextureViews(*f.Device);
+    std::printf("[terrain-shadow lit field teardown] levels %u, views held before %zu, with the field %zu, after %zu\n",
+                fieldLevels, viewsBefore, viewsWithField, viewsAfter);
+    EXPECT_GT(fieldLevels, 0u) << "the frame published no lit field: the test cannot see its views";
+    EXPECT_GE(viewsWithField, viewsBefore + fieldLevels) << "the field's level views were not created";
+    EXPECT_LE(viewsAfter, viewsBefore) << viewsAfter - std::min(viewsAfter, viewsBefore)
+                                       << " texture view(s) outlived the render services that created them";
 }
 
 // A pipeline may declare ShadowMap before the terrain: the map published later in the frame's declaration

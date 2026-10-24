@@ -2,7 +2,7 @@
 
 #include "ECS/ECS.h"
 #include "Editor/Entities/EditorComponentTraits.h"
-#include "PathfindingECS/Components/NavigationSource.h"
+#include "Components/Navigation/NavigationSource.h"
 
 #include <utility>
 

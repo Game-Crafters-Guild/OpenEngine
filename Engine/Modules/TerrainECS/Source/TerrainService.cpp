@@ -327,6 +327,15 @@ JobSystem::JobChannel& TerrainService::BakeStoreChannel(JobSystem::WorkStealingT
     return *m_BakeStoreChannel;
 }
 
+SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terrain)
+{
+    const TiledTerrainData* tiled =
+        GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    if (!tiled || !m_HeightPages)
+        return {};
+    return m_HeightPages->SurfaceQuery(TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration});
+}
+
 TerrainHeightPages& TerrainService::GetHeightPages()
 {
     if (!m_HeightPages)
@@ -1264,8 +1273,7 @@ void TerrainService::DestroyTiledTerrain(TiledTerrainHandle handle)
     if (!slot.Active || slot.Generation != handle.Generation)
         return;
 
-    // Destroy the global GPU TerrainData slot (holds the global quadtree) before
-    // freeing the tiled data. Tiles no longer own per-tile GPU slots — the whole
+    // Destroy the global GPU TerrainData slot before freeing the tiled data. Tiles no longer own per-tile GPU slots — the whole
     // terrain renders through one unified texture set on the render feature.
     if (slot.Data && (slot.Data->GlobalGpuHandleIndex != 0 || slot.Data->GlobalGpuHandleGeneration != 0))
     {
@@ -2148,9 +2156,7 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     auto* ptr = tile.get();
     tiled.Tiles[coord] = std::move(tile);
 
-    // Mark the global quadtree for rebuild.
     ++tiled.Revision;
-    tiled.QuadtreeDirty = true;
 
     return ptr;
 }
@@ -2166,12 +2172,7 @@ void TerrainService::UnloadTile(TiledTerrainHandle handle, TileCoord coord)
         return;
 
     if (slot.Data->Tiles.erase(coord) > 0)
-    {
         ++slot.Data->Revision;
-        // Only the departed tile's nodes change: the next sync clears them instead
-        // of rescanning every resident tile (FinalizeGlobalQuadtreeUpdates).
-        slot.Data->DirtyQuadtreeTiles.push_back(coord);
-    }
 }
 
 bool TerrainService::IsTileLoaded(TiledTerrainHandle handle, TileCoord coord) const
@@ -2185,69 +2186,6 @@ bool TerrainService::IsTileLoaded(TiledTerrainHandle handle, TileCoord coord) co
         return false;
 
     return slot.Data->Tiles.count(coord) > 0;
-}
-
-void TerrainService::RebuildGlobalQuadtree(TiledTerrainHandle handle)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-    const auto& cfg = tiled.Config;
-
-    // Each tile's finest level has tileFinestNodes nodes per axis.
-    const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-    const uint32 maxTilesPerAxis = std::max(cfg.TilesPerAxisX, cfg.TilesPerAxisZ);
-
-    // Find globalLODLevels such that 2^(G-1) >= tileFinestNodes * maxTilesPerAxis.
-    const uint32 totalFinestNeeded = tileFinestNodes * maxTilesPerAxis;
-    uint32 globalLODLevels = 1;
-    while ((1u << (globalLODLevels - 1)) < totalFinestNeeded && globalLODLevels < Terrain::kMaxLODLevels)
-        ++globalLODLevels;
-
-    tiled.GlobalQuadtree.AllocateLevels(globalLODLevels);
-
-    // Populate finest-level nodes from each loaded tile's heightfield.
-    // Each finest-level node covers samplesPerNode heightfield samples.
-    const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-    const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-    for (auto& [coord, tilePtr] : tiled.Tiles)
-    {
-        const auto& hf = tilePtr->Heightfield;
-
-        for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-        {
-            for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-            {
-                const int32 startX = static_cast<int32>(nx * samplesPerNodeX);
-                const int32 startZ = static_cast<int32>(nz * samplesPerNodeZ);
-
-                float32 minH, maxH;
-                hf.GetMinMax(startX, startZ,
-                             static_cast<int32>(samplesPerNodeX + 1),
-                             static_cast<int32>(samplesPerNodeZ + 1),
-                             minH, maxH);
-
-                const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                    globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-                {
-                    tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, minH, maxH);
-                }
-            }
-        }
-    }
-
-    tiled.GlobalQuadtree.BuildCoarseLevelsFromChildren();
-    tiled.QuadtreeDirty = false;
 }
 
 // ---- Async tile API (used by TileStreamingManager) ----
@@ -2371,221 +2309,6 @@ void TerrainService::SetTileMaps(TiledTerrainHandle handle, TileCoord coord,
     // HeightfieldVersion past this — a freshly-streamed tile skips the re-gen entirely.
     tile.NormalmapVersion = tile.HeightfieldVersion;
     ++slot.Data->Revision;
-}
-
-void TerrainService::PatchTileInGlobalQuadtree(TiledTerrainHandle handle, TileCoord coord)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-    const auto& cfg = tiled.Config;
-
-    auto tileIt = tiled.Tiles.find(coord);
-    if (tileIt == tiled.Tiles.end() || !tileIt->second)
-        return;
-
-    if (!tiled.GlobalQuadtree.IsBuilt())
-    {
-        // Quadtree not yet allocated — do a full rebuild instead.
-        // (This will be followed by FinalizeGlobalQuadtreeUpdates anyway.)
-        tiled.QuadtreeDirty = true;
-        return;
-    }
-
-    const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-    const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-    const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-    const auto& hf = tileIt->second->Heightfield;
-
-    for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-    {
-        for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-        {
-            const int32 startX = static_cast<int32>(nx * samplesPerNodeX);
-            const int32 startZ = static_cast<int32>(nz * samplesPerNodeZ);
-
-            float32 nodeMinH, nodeMaxH;
-            hf.GetMinMax(startX, startZ,
-                         static_cast<int32>(samplesPerNodeX + 1),
-                         static_cast<int32>(samplesPerNodeZ + 1),
-                         nodeMinH, nodeMaxH);
-
-            const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-            const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-            if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-            {
-                tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-            }
-        }
-    }
-}
-
-void TerrainService::PatchTileInGlobalQuadtreePrecomputed(
-    TiledTerrainHandle handle, TileCoord coord,
-    const NodeMinMax* nodes, uint32 nodesPerAxis)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-
-    if (!tiled.GlobalQuadtree.IsBuilt())
-    {
-        tiled.QuadtreeDirty = true;
-        return;
-    }
-
-    const uint32 tileFinestNodes = 1u << (tiled.Config.TileConfig.LODLevels - 1);
-    const uint32 actualNodes = std::min(nodesPerAxis, tileFinestNodes);
-
-    for (uint32 nz = 0; nz < actualNodes; ++nz)
-    {
-        for (uint32 nx = 0; nx < actualNodes; ++nx)
-        {
-            const auto& node = nodes[nz * nodesPerAxis + nx];
-            const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-            const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-            if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-            {
-                tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ,
-                                                    node.MinH, node.MaxH);
-            }
-        }
-    }
-}
-
-void TerrainService::FinalizeGlobalQuadtreeUpdates(TiledTerrainHandle handle)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-
-    if (tiled.QuadtreeDirty)
-    {
-        // Full rebuild needed (first allocation or structural change).
-        // Release lock and call the full rebuild which will re-acquire it.
-        // Actually, since RebuildGlobalQuadtree also takes the lock, we need
-        // to do the work inline here to avoid deadlock.
-        const auto& cfg = tiled.Config;
-        const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-        const uint32 maxTilesPerAxis = std::max(cfg.TilesPerAxisX, cfg.TilesPerAxisZ);
-        const uint32 totalFinestNeeded = tileFinestNodes * maxTilesPerAxis;
-        uint32 globalLODLevels = 1;
-        while ((1u << (globalLODLevels - 1)) < totalFinestNeeded && globalLODLevels < Terrain::kMaxLODLevels)
-            ++globalLODLevels;
-
-        tiled.GlobalQuadtree.AllocateLevels(globalLODLevels);
-
-        const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-        const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-        for (auto& [coord, tilePtr] : tiled.Tiles)
-        {
-            if (!tilePtr || tilePtr->LodState == TileLodState::Empty)
-                continue;
-
-            const auto& hf = tilePtr->Heightfield;
-            for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-            {
-                for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-                {
-                    float32 nodeMinH, nodeMaxH;
-                    hf.GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                                 static_cast<int32>(nz * samplesPerNodeZ),
-                                 static_cast<int32>(samplesPerNodeX + 1),
-                                 static_cast<int32>(samplesPerNodeZ + 1),
-                                 nodeMinH, nodeMaxH);
-
-                    const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                    const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                    if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                        globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-                    {
-                        tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-                    }
-                }
-            }
-        }
-
-        tiled.QuadtreeDirty = false;
-        tiled.DirtyQuadtreeTiles.clear(); // full rebuild subsumes any pending patches
-    }
-    else if (!tiled.DirtyQuadtreeTiles.empty() && !tiled.GlobalQuadtree.IsBuilt())
-    {
-        // Edited tiles pending but no base quadtree to patch yet (edit before the
-        // initial build): fall back to a full rebuild on the next sync.
-        tiled.QuadtreeDirty = true;
-    }
-    else if (!tiled.DirtyQuadtreeTiles.empty())
-    {
-        // Incremental patch: only the listed tiles' finest-level nodes are written,
-        // each to the value the full-rebuild loop above writes: the heightfield scan
-        // for a resident, non-Empty tile, {0,0} (the AllocateLevels value) for a
-        // tile that left or holds no data. Untouched tiles' nodes stay as they are,
-        // so neither an edit dab nor a tile departure rescans every resident tile.
-        const auto& cfg = tiled.Config;
-        const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-        const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-        const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-        const uint32 nodesPerAxis = tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0);
-
-        for (const TileCoord& coord : tiled.DirtyQuadtreeTiles)
-        {
-            auto tileIt = tiled.Tiles.find(coord);
-            const Terrain::HeightfieldData* hf =
-                (tileIt != tiled.Tiles.end() && tileIt->second &&
-                 tileIt->second->LodState != TileLodState::Empty)
-                    ? &tileIt->second->Heightfield
-                    : nullptr;
-
-            for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-            {
-                for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-                {
-                    float32 nodeMinH = 0.0f;
-                    float32 nodeMaxH = 0.0f;
-                    if (hf)
-                        hf->GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                                      static_cast<int32>(nz * samplesPerNodeZ),
-                                      static_cast<int32>(samplesPerNodeX + 1),
-                                      static_cast<int32>(samplesPerNodeZ + 1),
-                                      nodeMinH, nodeMaxH);
-
-                    const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                    const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                    if (globalNodeX < nodesPerAxis && globalNodeZ < nodesPerAxis)
-                        tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-                }
-            }
-        }
-        tiled.DirtyQuadtreeTiles.clear();
-    }
-
-    tiled.GlobalQuadtree.BuildCoarseLevelsFromChildren();
 }
 
 } // namespace GameEngine::TerrainECS

@@ -47,6 +47,7 @@ Before opening a pull request, run the `change-scrutiny` skill (`.claude/skills/
 - Plain commits after review; never force-push a shared branch. No attribution lines or tool signatures in commits or bodies. Impersonal phrasing.
 - No feature code in hubs (`EditorApplication`, `SettingsPanel`, `InspectorPanel`, `RenderServices`, `UIManager`, `core.css`). Extensible surfaces take registrations: settings through `EditorSettingsRegistry`, inspectors, post effects, dockables and search items through their registries.
 - Few settings, high-quality defaults. A dial whose non-default values are all worse is deleted, not shipped.
+- Anything a user sees or operates is understood without explanation. The UI/UX pass in the `change-scrutiny` skill is the checklist, and the pull request body carries its line.
 - Reuse the engine's types: `GUID` or `StringId` for identity, the maths types, `Handle`, the job system, the event module. Every added function has a production caller in the same change; no compatibility shims, no dead code.
 - No legacy by default: there are no users or released projects to preserve. For every API, saved format, and removal, update current callers and committed assets and delete the obsolete path. No backward compatibility, saved-data migrations, deprecated aliases, fallback readers, or legacy-only warnings and checks unless explicitly requested for a concrete consumer. Keep ordinary validation of supported data.
 - Performance claims are measured in Release on a quiet machine against a rule stated before measuring.

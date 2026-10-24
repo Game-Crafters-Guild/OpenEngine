@@ -131,10 +131,10 @@ bool GetEntityWorldMatrixForMeasure(GameEngine::ECS::World* world,
     {
         GameEngine::Mathematics::Matrix4x4 local = GameEngine::Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
         if (const auto* parent = world->GetComponent<GameEngine::Components::Parent>(entity);
-            parent && parent->parent.IsValid())
+            parent && parent->Entity.IsValid())
         {
             GameEngine::Mathematics::Matrix4x4 parentWorld;
-            if (GetEntityWorldMatrixForMeasure(world, parent->parent, parentWorld, depth + 1))
+            if (GetEntityWorldMatrixForMeasure(world, parent->Entity, parentWorld, depth + 1))
             {
                 out = parentWorld * local;
                 return true;
@@ -165,10 +165,10 @@ void SetEntityPositionForMeasure(GameEngine::ECS::World* world,
     {
         GameEngine::Mathematics::Vector3 localPoint = point;
         if (const auto* parent = world->GetComponent<GameEngine::Components::Parent>(entity);
-            parent && parent->parent.IsValid())
+            parent && parent->Entity.IsValid())
         {
             GameEngine::Mathematics::Matrix4x4 parentWorld;
-            if (GetEntityWorldMatrixForMeasure(world, parent->parent, parentWorld))
+            if (GetEntityWorldMatrixForMeasure(world, parent->Entity, parentWorld))
             {
                 const GameEngine::Mathematics::Matrix4x4 invParent =
                     GameEngine::Mathematics::Inverse(parentWorld);
@@ -254,7 +254,7 @@ void ClearStaleSplineSelection(GameEngine::Editor::SceneTools::SplineInteraction
     hover = GameEngine::Editor::SceneTools::SplineHover{};
 }
 
-inline void GetSceneViewClipPlanes(GameEngine::ECS::World* world, float& nearClip, float& farClip)
+inline void GetSceneViewClipPlanes(GameEngine::ECS::World* world, float distance, float& nearClip, float& farClip)
 {
     nearClip = 0.1f;
     farClip = 200.0f;
@@ -279,7 +279,12 @@ inline void GetSceneViewClipPlanes(GameEngine::ECS::World* world, float& nearCli
     // cause. Cheap: one terrain query, typically a single entity.
     if (world)
         farClip = GameEngine::Engine::Renderer::ExpandFarClipForSphericalTerrain(*world, farClip);
+
+    farClip = GameEngine::Editor::ExpandFarClipForFraming(farClip, distance);
 }
+
+// How long the camera takes to move to a framed pose or a pose from the camera history.
+constexpr float kCameraMoveSeconds = 0.25f;
 
 // Minimum camera–pivot distance for orbit / dolly. Matches the sanitized near
 // plane so zoom limits stay consistent with Scene View projection settings.
@@ -287,7 +292,7 @@ inline float GetSceneViewMinOrbitDistance(GameEngine::ECS::World* world)
 {
     float nearClip = 0.01f;
     float farUnused = 1000.0f;
-    GetSceneViewClipPlanes(world, nearClip, farUnused);
+    GetSceneViewClipPlanes(world, 0.0f, nearClip, farUnused);
     return nearClip;
 }
 
@@ -387,11 +392,11 @@ bool SceneViewController::IsEntityPickable(ECS::EntityHandle entity) const
     using GameEngine::Components::Parent;
     int safety = 64;
     const Parent* p = world->GetComponent<Parent>(entity);
-    while (p && p->parent.IsValid() && safety-- > 0)
+    while (p && p->Entity.IsValid() && safety-- > 0)
     {
-        if (!m_IsEntityPickable(p->parent))
+        if (!m_IsEntityPickable(p->Entity))
             return false;
-        p = world->GetComponent<Parent>(p->parent);
+        p = world->GetComponent<Parent>(p->Entity);
     }
     return true;
 }
@@ -2352,7 +2357,7 @@ BuildCameraDataFromPose(
 
     float nearClip = 0.1f;
     float farClip = 200.0f;
-    GetSceneViewClipPlanes(world, nearClip, farClip);
+    GetSceneViewClipPlanes(world, pose.Distance, nearClip, farClip);
     const float fovDeg = GetSceneViewFieldOfViewDeg();
     const float fovRad = ToRadians(fovDeg);
     Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(fovRad, aspect, nearClip, farClip);
@@ -2693,7 +2698,7 @@ void SceneViewController::StartHistoryTweenTo(int targetIndex)
     h.SuppressAutoPush = true;
     h.HasLastStable = false;
     h.StableSeconds = 0.0f;
-    StartCameraTween(h.Entries[targetIndex], 0.25f);
+    StartCameraTween(h.Entries[targetIndex], kCameraMoveSeconds);
 }
 
 bool SceneViewController::StepCameraHistoryBack()
@@ -3175,7 +3180,7 @@ void SceneViewController::UpdateCamera(float deltaSeconds, bool moveForward, boo
 
         float nearClip = 0.1f;
         float farClip = 200.0f;
-        GetSceneViewClipPlanes(&GetWorld(), nearClip, farClip);
+        GetSceneViewClipPlanes(&GetWorld(), m_CamDistance, nearClip, farClip);
 
         Matrix4x4 projM;
         if (m_Is2DMode || m_Orthographic)
@@ -3406,6 +3411,17 @@ void SceneViewController::UpdateDolly(float deltaY)
     m_CamPos[2] = newCam.Z;
 }
 
+void SceneViewController::FramePerspectiveBounds(const Mathematics::AABB& bounds)
+{
+    const float aspect = m_LastW > 0 && m_LastH > 0
+                             ? static_cast<float>(m_LastW) / static_cast<float>(m_LastH)
+                             : 1.0f;
+    const auto pose = Editor::ComputePerspectiveFramingPose(bounds, GetCameraPose(),
+                                                            GetSceneViewFieldOfViewDeg(), aspect, GetSceneViewMinOrbitDistance(&GetWorld()));
+    ResetFlyVelocity();
+    StartCameraTween(pose, kCameraMoveSeconds);
+}
+
 void SceneViewController::FrameOrigin()
 {
     // Frame the selected entity if one exists, otherwise frame world origin
@@ -3454,6 +3470,11 @@ void SceneViewController::FrameOrigin()
                     Editor::SubtreeWorldBounds subtree;
                     if (Editor::ComputeSubtreeWorldBounds(*world, targetEntity, subtree) && subtree.HasBounds)
                     {
+                        if (!m_Is2DMode && !m_Orthographic)
+                        {
+                            FramePerspectiveBounds(subtree.Box);
+                            return;
+                        }
                         frameDistance = std::max(subtree.Radius() * 1.8f, 0.5f);
 
                         target = subtree.Center();
@@ -3562,21 +3583,23 @@ void SceneViewController::FrameAll()
         return;
     }
 
+    if (!m_Is2DMode && !m_Orthographic)
+    {
+        FramePerspectiveBounds({{minBounds[0], minBounds[1], minBounds[2]},
+                                {maxBounds[0], maxBounds[1], maxBounds[2]}});
+        return;
+    }
+
     // Calculate center of combined bounds
     float target[3] = {
         (minBounds[0] + maxBounds[0]) * 0.5f,
         (minBounds[1] + maxBounds[1]) * 0.5f,
         (minBounds[2] + maxBounds[2]) * 0.5f};
 
-    // Calculate the radius of the bounding sphere that encompasses the box
     float extent[3] = {
         (maxBounds[0] - minBounds[0]) * 0.5f,
         (maxBounds[1] - minBounds[1]) * 0.5f,
         (maxBounds[2] - minBounds[2]) * 0.5f};
-    float radius = std::sqrt(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]);
-
-    // Set frame distance to show all objects with some padding
-    float frameDistance = std::max(radius * 2.0f, 1.0f);
 
     // Place the camera to look at the target from the current viewing direction
     float yawR = m_CamYawDeg * 3.1415926535f / 180.0f;
@@ -3587,41 +3610,33 @@ void SceneViewController::FrameAll()
         std::cos(pitR) * std::sin(yawR)};
     Normalize3(dir);
 
-    if (m_Is2DMode || m_Orthographic)
+    // Orthographic and 2D: m_CamDistance is the visible height.
+    // Use the scene extent projected onto the screen axes for best fit.
+    const float aspect = (m_LastH > 0) ? static_cast<float>(m_LastW) / static_cast<float>(m_LastH) : 1.0f;
+    const float worldUp[3] = {0.0f, 1.0f, 0.0f};
+    float right[3];
+    Cross3(worldUp, dir, right);
+    Normalize3(right);
+
+    float up[3];
+    Cross3(dir, right, up);
+    Normalize3(up);
+
+    const float halfW = std::abs(right[0]) * extent[0] + std::abs(right[1]) * extent[1] + std::abs(right[2]) * extent[2];
+    const float halfH = std::abs(up[0]) * extent[0] + std::abs(up[1]) * extent[1] + std::abs(up[2]) * extent[2];
+    float orthoH = std::max(halfH * 2.0f, 1.0f);
+    if (aspect > 0.001f)
+        orthoH = std::max(orthoH, (halfW * 2.0f) / aspect);
+    if (m_Is2DMode)
     {
-        // In orthographic modes, m_CamDistance is the visible height.
-        // Use the scene extent projected onto the screen axes for best fit.
-        const float aspect = (m_LastH > 0) ? static_cast<float>(m_LastW) / static_cast<float>(m_LastH) : 1.0f;
-        const float worldUp[3] = {0.0f, 1.0f, 0.0f};
-        float right[3];
-        Cross3(worldUp, dir, right);
-        Normalize3(right);
-
-        float up[3];
-        Cross3(dir, right, up);
-        Normalize3(up);
-
-        const float halfW = std::abs(right[0]) * extent[0] + std::abs(right[1]) * extent[1] + std::abs(right[2]) * extent[2];
-        const float halfH = std::abs(up[0]) * extent[0] + std::abs(up[1]) * extent[1] + std::abs(up[2]) * extent[2];
-        float orthoH = std::max(halfH * 2.0f, 1.0f);
-        if (aspect > 0.001f)
-            orthoH = std::max(orthoH, (halfW * 2.0f) / aspect);
-        if (m_Is2DMode)
-        {
-            SetOrthoHeight2D(orthoH * 1.2f); // snaps to pixel-perfect step when active
-        }
-        else
-        {
-            const float minDist = GetSceneViewMinOrbitDistance(&GetWorld());
-            const float maxDist = Editor::SceneViewSettings::Get().GetMaxDistance();
-            m_CamDistance = std::clamp(orthoH * 1.2f, minDist, maxDist);
-        }
+        SetOrthoHeight2D(orthoH * 1.2f); // snaps to pixel-perfect step when active
     }
     else
     {
-        m_CamDistance = frameDistance;
+        const float minDist = GetSceneViewMinOrbitDistance(&GetWorld());
+        const float maxDist = Editor::SceneViewSettings::Get().GetMaxDistance();
+        m_CamDistance = std::clamp(orthoH * 1.2f, minDist, maxDist);
     }
-
     m_CamPos[0] = target[0] - dir[0] * m_CamDistance;
     m_CamPos[1] = target[1] - dir[1] * m_CamDistance;
     m_CamPos[2] = target[2] - dir[2] * m_CamDistance;
@@ -4034,7 +4049,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
 
         float nearClip = 0.1f;
         float farClip = 200.0f;
-        GetSceneViewClipPlanes(&GetWorld(), nearClip, farClip);
+        GetSceneViewClipPlanes(&GetWorld(), m_CamDistance, nearClip, farClip);
 
         Matrix4x4 projM;
         if (m_Is2DMode || m_Orthographic)

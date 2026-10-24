@@ -135,7 +135,7 @@ bool HasAnyValidParent(ECS::World& world) {
     using namespace GameEngine::ECS;
     bool found = false;
     world.Query<Read<Parent>>().IncludeDisabled().Each([&](EntityHandle, const Parent& p) {
-        if (p.parent.IsValid()) found = true;
+        if (p.Entity.IsValid()) found = true;
     });
     return found;
 }
@@ -335,7 +335,7 @@ bool TransformHierarchySystem::HasParentColumnChange(ECS::World& world,
         q.IncludeDisabled();
         q.Each([&](EntityHandle entity, const Parent& parent) {
             const size_t index = FindNodeIndex(entity);
-            if (index != SIZE_MAX && m_Nodes[index].parentEntity != parent.parent)
+            if (index != SIZE_MAX && m_Nodes[index].parentEntity != parent.Entity)
                 changed = true;
         });
     } else {
@@ -542,13 +542,13 @@ void TransformHierarchySystem::RebuildTopology(ECS::World& world) {
         q.IncludeDisabled();
         q.Each([this](EntityHandle entity, const Transform& local, WorldTransform& worldTransform,
                       const Parent* parent) {
-            AddNode(entity, local, worldTransform, parent ? parent->parent : EntityHandle{});
+            AddNode(entity, local, worldTransform, parent ? parent->Entity : EntityHandle{});
         });
     } else {
         auto q = world.Query<Read<Transform>, Write<WorldTransform>, Read<Parent>>();
         q.IncludeDisabled();
         q.Each([this](EntityHandle entity, const Transform& local, WorldTransform& worldTransform,
-                      const Parent& parent) { AddNode(entity, local, worldTransform, parent.parent); });
+                      const Parent& parent) { AddNode(entity, local, worldTransform, parent.Entity); });
     }
 
     size_t maxEntityIndex = 0;

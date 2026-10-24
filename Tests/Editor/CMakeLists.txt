@@ -909,6 +909,8 @@ set(EDITOR_TEST_SOURCES
 	# The inspector's render layer rows: one layer per selected entity, for a reflected row and the
 	# Terrain row (DefaultComponentInspector.cpp and TerrainInspector.cpp compile in above).
 	RenderLayersRowTests.cpp
+	# The default inspector's row and option words from // @ge-label, else the identifier as words.
+	InspectorLabelRowTests.cpp
 	# The Mesh Renderer's Shadow Casting row: one choice sets the mode on each selected entity.
 	ShadowCastingRowTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/ShadowCastingRow.cpp
@@ -2077,7 +2079,7 @@ if(TARGET EditorTests)
 	  COMMAND "${CMAKE_COMMAND}"
 	    -DTEST_EXE=$<TARGET_FILE:EditorTests>
 	    -DTEST_WORKING_DIR=$<TARGET_FILE_DIR:EditorTests>
-	    -DTEST_ARGS=--gtest_filter=SceneViewFramingTests.*
+	    -DTEST_ARGS=--gtest_filter=SceneViewFramingTests.*:SceneViewPerspectiveFraming.*
 	    -P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 	)
 

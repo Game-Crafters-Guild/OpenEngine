@@ -406,7 +406,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
             posZ = xf->matrix[14];
         }
         if (auto* p = world->GetComponent<Components::Parent>(placeholder))
-            parentEntity = p->parent;
+            parentEntity = p->Entity;
         if (auto* o = world->GetComponent<Components::HierarchyOrder>(placeholder))
         {
             hasOrder = true;
@@ -519,7 +519,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
         if (parentEntity.IsValid() && world->IsValid(parentEntity))
         {
             Components::Parent p{};
-            p.parent = parentEntity;
+            p.Entity = parentEntity;
             world->AddComponentImmediate(spriteResult, p);
         }
         if (hasOrder)
@@ -602,7 +602,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
         if (parentEntity.IsValid() && world->IsValid(parentEntity))
         {
             Components::Parent p{};
-            p.parent = parentEntity;
+            p.Entity = parentEntity;
             world->AddComponentImmediate(result.rootEntity, p);
         }
         if (hasOrder)

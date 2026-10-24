@@ -92,7 +92,7 @@ class HierarchyEmptyParentTest : public ::testing::Test
     EntityHandle ParentOf(EntityHandle e)
     {
         const auto* p = m_World.GetComponent<Parent>(e);
-        return p ? p->parent : EntityHandle{};
+        return p ? p->Entity : EntityHandle{};
     }
 
     HierarchyRecord Record(EntityHandle e)
@@ -101,7 +101,7 @@ class HierarchyEmptyParentTest : public ::testing::Test
         if (const auto* p = m_World.GetComponent<Parent>(e))
         {
             r.HasParent = true;
-            r.ParentEntity = p->parent;
+            r.ParentEntity = p->Entity;
         }
         if (const auto* o = m_World.GetComponent<HierarchyOrder>(e))
         {

@@ -65,6 +65,8 @@ std::optional<WebComponentModel> WebComponentModel::Build(const std::vector<Refl
             {
                 const WebOmissionReason reason = knownStructs.count(resolved.TypeName) != 0
                                                      ? WebOmissionReason::NoReflectedKind
+                                                 : enums.Ambiguous.count(resolved.TypeName) != 0
+                                                     ? WebOmissionReason::AmbiguousEnum
                                                      : WebOmissionReason::UnresolvedType;
                 model.Omitted.push_back(WebOmission{r->Name, f.Name, f.Type, reason});
                 continue;
@@ -72,7 +74,7 @@ std::optional<WebComponentModel> WebComponentModel::Build(const std::vector<Refl
             if (resolved.Enum)
                 usedEnums[resolved.Enum->Name] = resolved.Enum;
             component.Fields.push_back(WebField{f.Name, CamelCase(f.Name), resolved.Kind, resolved.Enum, f.ArrayExtent,
-                                                f.ReadOnly, f.Tooltip, f.Range});
+                                                f.ReadOnly, f.Tooltip, f.Label, f.Range});
         }
         model.Components.push_back(std::move(component));
     }

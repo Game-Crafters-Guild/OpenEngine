@@ -6,7 +6,7 @@
 #include "ECS/Query.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/GridMap.h"
 #include "Pathfinding/PathfindingTypes.h"

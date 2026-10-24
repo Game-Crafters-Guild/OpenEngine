@@ -6,6 +6,7 @@
 #include "Input/GamepadFrame.h"
 #include "Input/GamepadPolling.h"
 #include "Input/InputSystem.h"
+#include "Platform/ApplicationScriptApi.h"
 #include "Platform/Thread.h"
 #include "Platform/Window.h"
 #include "Core/CpuProfiler.h"
@@ -146,6 +147,20 @@ int Application::Run() {
 
     Logger::Log::Info("Main loop ended");
     return m_ExitCode;
+}
+
+void Application::RequestGameExit(int exitCode)
+{
+    SetExitCode(exitCode);
+    RequestExit();
+}
+
+// The script API's body (Platform/ApplicationScriptApi.h): the running application decides what a game's
+// exit request means.
+void Platform::Script::RequestExit(std::int32_t exitCode)
+{
+    if (Application* application = Application::Get())
+        application->RequestGameExit(exitCode);
 }
 
 void Application::RunPlatformLoop() {

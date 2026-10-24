@@ -287,7 +287,7 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
                 if (parentEntity.IsValid())
                 {
                     Components::Parent parent{};
-                    parent.parent = parentEntity;
+                    parent.Entity = parentEntity;
                     bundle.Add(parent);
                 }
 
@@ -371,13 +371,13 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
             if (sceneParentIt != sceneNodeEntities.end() && sceneParentIt->second.IsValid())
             {
                 Components::Parent parent{};
-                parent.parent = sceneParentIt->second;
+                parent.Entity = sceneParentIt->second;
                 bundle.Add(parent);
             }
             else if (needsContainerRoot && result.rootEntity.IsValid())
             {
                 Components::Parent parent{};
-                parent.parent = result.rootEntity;
+                parent.Entity = result.rootEntity;
                 bundle.Add(parent);
             }
 
@@ -501,7 +501,7 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
         if (!needsContainerRoot || !result.rootEntity.IsValid())
             return;
         Components::Parent parent{};
-        parent.parent = result.rootEntity;
+        parent.Entity = result.rootEntity;
         bundle.Add(parent);
     };
 

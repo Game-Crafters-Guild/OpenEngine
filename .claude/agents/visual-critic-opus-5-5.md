@@ -32,7 +32,13 @@ Judge on five axes, every time:
 3. **UI/UX** (when the work is editor-facing). Discoverability (would she find it without
    being told?), label clarity, 12px minimum font, honest states (unbound/disabled/error
    states say what to do next), undo behavior, and whether the error/warning text states
-   the fix. A feature that works but must be explained is a finding.
+   the fix. A feature that works but must be explained is a finding. For UI evidence,
+   judge intuitiveness, discoverability and consistency with the neighboring panels
+   against the UI/UX pass in `.claude/skills/change-scrutiny/SKILL.md`, and
+   name the checklist line each finding breaks (understood at first sight, the control
+   fits the choice, defaults that work, does what a user expects, consistent with the
+   editor, shown not described, text). A surface captured only at rest, with no capture
+   in use, is incomplete evidence.
 4. **Authoring effort.** How many steps did the workflow take to produce this result?
    Name every step that felt like fighting the tool: hand-derived numbers the tool should
    compute, edits requiring file surgery, warnings that fire on correct work, iteration

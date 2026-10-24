@@ -97,7 +97,7 @@ TEST(ModelEntityFactoryHelperNodes, ChildListedBeforeParentAttachesToParentWithL
 
     const auto* parentRef = world.GetComponent<GameEngine::Components::Parent>(byName.at("Child"));
     ASSERT_NE(parentRef, nullptr);
-    EXPECT_EQ(parentRef->parent, byName.at("ParentNode"))
+    EXPECT_EQ(parentRef->Entity, byName.at("ParentNode"))
         << "child listed before its parent was re-rooted instead of deferred";
 
     const auto* xf = world.GetComponent<GameEngine::Components::Transform>(byName.at("Child"));
@@ -107,7 +107,7 @@ TEST(ModelEntityFactoryHelperNodes, ChildListedBeforeParentAttachesToParentWithL
 
     const auto* parentParentRef = world.GetComponent<GameEngine::Components::Parent>(byName.at("ParentNode"));
     ASSERT_NE(parentParentRef, nullptr);
-    EXPECT_EQ(parentParentRef->parent, result.rootEntity);
+    EXPECT_EQ(parentParentRef->Entity, result.rootEntity);
 }
 
 // A parent index absent from importedNodes IS a bone: the node roots under the
@@ -135,7 +135,7 @@ TEST(ModelEntityFactoryHelperNodes, BoneParentedNodeRootsWithWorldTransform)
 
     const auto* parentRef = world.GetComponent<GameEngine::Components::Parent>(socket);
     ASSERT_NE(parentRef, nullptr);
-    EXPECT_EQ(parentRef->parent, result.rootEntity);
+    EXPECT_EQ(parentRef->Entity, result.rootEntity);
 
     const auto* xf = world.GetComponent<GameEngine::Components::Transform>(socket);
     ASSERT_NE(xf, nullptr);
@@ -194,7 +194,7 @@ TEST(ModelEntityFactoryRoot, ASoleMeshTurnedByItsNodeSitsBelowAnIdentityRoot)
 
     const auto* parent = world.GetComponent<GameEngine::Components::Parent>(mesh);
     ASSERT_NE(parent, nullptr);
-    EXPECT_EQ(parent->parent, result.rootEntity);
+    EXPECT_EQ(parent->Entity, result.rootEntity);
     const auto* meshTransform = world.GetComponent<GameEngine::Components::Transform>(mesh);
     ASSERT_NE(meshTransform, nullptr);
     for (int i = 0; i < 16; ++i)

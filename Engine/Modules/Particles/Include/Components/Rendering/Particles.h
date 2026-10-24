@@ -76,9 +76,10 @@ struct ParticlePlayback
     /// Events SendEvent queued, delivered to every live particle on the emitter's next update.
     StringId PendingEvents[ParticleMaxPendingEvents]{};
     uint32 PendingEventCount = 0u;
-    uint32 LiveCount = 0u, SimulatedSteps = 0u;
-    float64 SimulatedTime = 0.0, DroppedTime = 0.0;
-    float32 SimulationMs = 0.0f;
+    // What the emitter reports, written by the particle simulation:
+    uint32 LiveCount = 0u, SimulatedSteps = 0u;  // @ge-readonly
+    float64 SimulatedTime = 0.0, DroppedTime = 0.0; // @ge-readonly
+    float32 SimulationMs = 0.0f;                 // @ge-readonly
 
     /// Queues `name` for the emitter's game-event rules. False when ParticleMaxPendingEvents events
     /// already wait for the next update; the event is then dropped.
@@ -120,8 +121,8 @@ struct ParticleCollisionEvent
 struct ParticleCollisionEventsBuffer
 {
     static constexpr uint32 kMaxEvents = 64u;
-    uint32 Count = 0u;
-    ParticleCollisionEvent Events[kMaxEvents]{};
+    uint32 Count = 0u;                           // @ge-readonly the simulation rewrites it every frame
+    ParticleCollisionEvent Events[kMaxEvents]{}; // @ge-readonly the simulation rewrites it every frame
 
     void Clear()
     {

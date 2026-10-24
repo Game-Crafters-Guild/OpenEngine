@@ -23,6 +23,7 @@
 #include "Ocean/OceanRenderFeature.h"
 #include "Ocean/OceanSeabedVisibility.h"
 #include "Terrain/TerrainMaterialRecord.h"
+#include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/TerrainHeightPageFeature.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 
@@ -216,6 +217,9 @@ void AppendInputBytes(std::vector<uint8_t>& out, const T& value)
 
 CBTRenderFeature::~CBTRenderFeature()
 {
+    // RenderServices destroys its features before the device and the texture service.
+    if (m_Services)
+        m_TerrainShadowBake.Release(*m_Services);
     m_ActivityReadback.Shutdown();
     m_Instance.Shutdown();
     m_KernelSet.Shutdown();
@@ -568,6 +572,7 @@ bool CBTRenderFeature::IsUpdateAtRest(const CBTTerrain::CBTFrameParams& params)
 {
     CBTTerrain::CBTClassifyDesc classify = m_Classify;
     classify.GateVertexEval = 0u; // chosen per recorded update, not an input
+    classify.Settle = 0u;         // derived from these inputs, not one of them
     m_UpdateInputs.clear();
     AppendInputBytes(m_UpdateInputs, params);
     AppendInputBytes(m_UpdateInputs, classify);
@@ -685,9 +690,9 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
     // params, gCbtSculpt = the sculpt page pool, gCbtSculptTable = the sculpt page table), plus the
     // atlas rows. The sculpt/surface buffers are offset-bound to THIS frame's ring slot so the
     // fragment reads element [0] / page-id-relative-0.
-    if (m_DrawBuffers.size() != 8)
+    if (m_DrawBuffers.size() != 10)
     {
-        m_DrawBuffers.assign(8u, Engine::Renderer::DrawBindings::BufferEntry{});
+        m_DrawBuffers.assign(10u, Engine::Renderer::DrawBindings::BufferEntry{});
         m_DrawBuffers[0].Name = HashStringId("gIdxVis");
         m_DrawBuffers[1].Name = HashStringId("gVertex");
         m_DrawBuffers[2].Name = HashStringId("TerrainParamsBuffer");
@@ -696,6 +701,8 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
         m_DrawBuffers[5].Name = HashStringId("gAtlasRows");
         m_DrawBuffers[6].Name = HashStringId("gCbtSculptTable");
         m_DrawBuffers[7].Name = HashStringId("TerrainMaterialTableBuffer");
+        m_DrawBuffers[8].Name = HashStringId("gCbtChain");
+        m_DrawBuffers[9].Name = HashStringId("gCbtDrawLevel");
     }
     m_DrawBuffers[0].Buffer = res.GetBuffer(CBTBinding::IndicesVisible);
     m_DrawBuffers[1].Buffer = res.GetBuffer(CBTBinding::CurrentVertex);
@@ -728,6 +735,13 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
     m_DrawBuffers[7].Offset = 0u;
     m_DrawBuffers[7].Range =
         static_cast<uint64_t>(terrainMaterialCount) * sizeof(Terrain::TerrainMaterialRecord);
+    // The draw's prefiltered height chain and this frame's level rule (the vertex modifier moves far
+    // vertices to the chain level of their distance). The compat surface declares neither, and the
+    // binder leaves an entry the pipeline does not reflect unbound.
+    m_DrawBuffers[8].Buffer = res.GetHeightChainBuffer();
+    m_DrawBuffers[9].Buffer = res.GetDrawLevelParamsBuffer();
+    m_DrawBuffers[9].Offset = static_cast<uint64_t>(m_FrameSlot) * CBTTerrain::kCBTDrawLevelParamsSlotStride;
+    m_DrawBuffers[9].Range = sizeof(CBTTerrain::CBTDrawLevelParams);
 
     // Env-gated (GE_CBT_DESC_DEBUG) diagnostic: dump every set-2 handle the binder
     // resolves for this draw (by reflected name), plus the indirect buffer + the
@@ -832,8 +846,65 @@ bool CBTRenderFeature::BuildDrawCommand(RenderServices& rs, ViewId /*viewId*/,
         }
         outCmd.Bindings.Textures = m_DrawTextures;
     }
+    else if (!rs.GetProfile().IsCompat())
+    {
+        // The far-field normal chain the full-profile surface samples (cbt_NormalChain); the compat
+        // surface declares none.
+        m_DrawTextures.resize(1u);
+        m_DrawTextures[0] = Engine::Renderer::DrawBindings::TextureEntry{};
+        m_DrawTextures[0].Name = HashStringId("cbt_NormalChain");
+        m_DrawTextures[0].Texture = res.GetNormalChainTexture();
+        m_DrawTextures[0].Sampler = res.GetHeightSampler();
+        outCmd.Bindings.Textures = m_DrawTextures;
+    }
 
     return true;
+}
+
+void CBTRenderFeature::ApplyHeightChain(const TerrainECS::TerrainInstanceInfo& terrain,
+                                        const Rendering::CameraData& camera, uint32_t frameIndex,
+                                        CBTTerrain::CBTFrameParams& out)
+{
+    CBTTerrain::CBTDrawLevelParams level{};
+    uint32_t samplesX = 0;
+    uint32_t samplesZ = 0;
+    if (m_Device && terrain.HeightmapTexture.IsValid())
+        m_Device->GetTextureSize(terrain.HeightmapTexture, samplesX, samplesZ);
+    const bool unified = m_DomainConfig.DomainMode == CBTTerrain::kDomainPlanar && !m_KernelSet.IsNarrowHeap() &&
+                         out.AtlasParams1[2] == 0.0f && samplesX >= 2u && samplesZ >= 2u && samplesX <= 0xFFFFu &&
+                         samplesZ <= 0xFFFFu;
+    const bool chained = unified && CBTTerrain::CBTHeightChainTopLevel(samplesX, samplesZ) > 0u &&
+                         CBTTerrain::CBTHeightRangeFirstLevel(samplesX - 1u, samplesZ - 1u) != 0u &&
+                         std::abs(camera.proj[5]) > 0.0f &&
+                         m_Instance.ProvisionHeightChainWords(CBTTerrain::CBTHeightChainWords(samplesX, samplesZ));
+    out.HeightChain[0] = 0.0f;
+    out.HeightChain[1] = 0.0f;
+    if (chained)
+    {
+        // The page rule's view for this camera (TerrainHeightPageDriver states its view the same way),
+        // and the level-0 texel the rule measures in: the coarser of the two axes.
+        const TerrainECS::PageLevelView view = TerrainECS::MakePageLevelView(
+            TerrainECS::kPageLevelReferenceRows, 2.0f * std::atan(1.0f / std::abs(camera.proj[5])), m_TargetPixelError);
+        const float level0Texel = std::max(terrain.SizeX / static_cast<float>(samplesX - 1u),
+                                           terrain.SizeZ / static_cast<float>(samplesZ - 1u));
+        const float scale = view.TargetPixels / (view.FocalPixels * level0Texel);
+        if (std::isfinite(scale) && scale > 0.0f)
+        {
+            out.HeightChain[0] = scale;
+            out.HeightChain[1] = static_cast<float>(CBTTerrain::CBTHeightChainTopLevel(samplesX, samplesZ));
+            level.Eye[0] = out.CameraPos[0];
+            level.Eye[1] = out.CameraPos[1];
+            level.Eye[2] = out.CameraPos[2];
+            level.Eye[3] = scale;
+            level.Height[0] = out.TerrainSize[2];
+            level.Height[1] = out.TerrainSize[3];
+            level.Lattice[0] = samplesX | (samplesZ << 16u);
+            // The far-field normal chain the surface samples, or 0 mips (the level-0 map everywhere).
+            if (m_Instance.ProvisionNormalChain(samplesX, samplesZ))
+                level.Lattice[1] = CBTTerrain::CBTNormalChainMips(samplesX, samplesZ);
+        }
+    }
+    m_Instance.UploadDrawLevelParams(frameIndex, level);
 }
 
 float CBTRenderFeature::SampleSphereSurfaceHeight(float dx, float dy, float dz) const
@@ -1103,6 +1174,7 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         out.WaterPlane[2] = kSubmergedCoarsen;
     }
     out.WaterPlane[3] = ContentAwareSplitPx();
+    ApplyHeightChain(t, cam, frameIndex, out);
 
     // Planet-shading surface params (plan §planet-shading): the small graphics-only buffer the
     // fragment reads for the per-pixel analytic sphere normal + slope/altitude splat. Written

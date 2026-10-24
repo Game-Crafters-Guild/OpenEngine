@@ -105,8 +105,8 @@ void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
     rs.EmitForwardCommand(d.View.id, cmd, hasHead ? ForwardDrawDepth::Prepass : ForwardDrawDepth::ColourPass,
                           hasHead ? &head : nullptr);
     // Order CBT.Update before the draws: the indirect args need an Indirect read edge,
-    // the VISIBLE index stream + per-bisector vertex buffer a Storage read (both
-    // vertex-stage SSBOs). The camera draw rides the VISIBLE stream (Classify frustum-
+    // the VISIBLE index stream, the per-bisector vertex buffer and the height chain a
+    // Storage read (all vertex-stage SSBOs). The camera draw rides the VISIBLE stream (Classify frustum-
     // culls into it); the ALL stream is still MarkOutput'd by the update for the (later)
     // shadow path, which reads it instead. The identity index + count buffers are static
     // (settled at init), so they are not declared. The world pass and the prepass declare
@@ -115,11 +115,15 @@ void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
         {outputs.IndirectDraw, RG::RGBufferRead::Indirect},
         {outputs.IndicesVisible, RG::RGBufferRead::Storage},
         {outputs.CurrentVertex, RG::RGBufferRead::Storage},
+        {outputs.HeightChain, RG::RGBufferRead::Storage},
     };
     const ForwardBufferReaders readers =
         hasHead ? ForwardBufferReaders::WorldPassAndPrepass : ForwardBufferReaders::WorldPass;
     for (const auto& [buffer, access] : drawReads)
         rs.EmitForwardSampledBufferRead(d.Frame, d.View.id, buffer, access, readers);
+    // The surface samples the far-field normal chain the update writes (fragment stage, world pass).
+    if (outputs.NormalChain.IsValid())
+        rs.EmitForwardSampledRead(d.Frame, d.View.id, outputs.NormalChain);
 }
 
 // The terrain's shadow on the directional light (TerrainShadowBake): declares this frame's bake
@@ -139,6 +143,7 @@ void DeclareTerrainShadow(Pipeline::ViewDeclare& d, CBTRenderFeature& feature,
     inputs.SizeX = params.TerrainSize[0];
     inputs.SizeZ = params.TerrainSize[1];
     inputs.HeightScale = params.TerrainSize[2];
+    inputs.DrawLevelScale = params.HeightChain[0];
     const CBTTerrain::CBTClassifyDesc& classify = feature.GetClassify();
     inputs.DirtyMinU = classify.DirtyMinU;
     inputs.DirtyMinV = classify.DirtyMinV;
@@ -311,6 +316,7 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
         // the point the update actually records, so a change on a non-recording frame is kept.
         CBTTerrain::CBTClassifyDesc classify = feature.GetClassify();
         classify.GateVertexEval = feature.ConsumeForceVertexEval() ? 0u : 1u;
+        classify.Settle = feature.InputsHeld() ? 1u : 0u;
         // Forward the bound heightmap so the update pass declares its read edge on
         // the texture VertexEval samples (plan §8 C5 — live-edit region uploads).
         const CBTTerrain::CBTActivitySlot activitySlot =

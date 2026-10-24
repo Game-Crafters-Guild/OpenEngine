@@ -96,7 +96,7 @@ TEST(SkySunIlluminance, OnlyAnEnabledDrivingSkyDrivesAnUnparentedDirectionalLigh
 
     const ECS::EntityHandle holder = world.CreateEntity();
     Components::Parent parent{};
-    parent.parent = holder;
+    parent.Entity = holder;
     world.AddComponentImmediate(sun, parent);
     EXPECT_FALSE(SunIlluminance::IsDrivableSunLight(world, sun)) << "the drive writes a local rotation";
     EXPECT_FALSE(SunIlluminance::LightSkyWouldDrive(world, sky).IsValid());

@@ -16,6 +16,8 @@
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/Animation/AnimatedNodeRef.h"
+#include "Components/Animation/AnimatedSprite2D.h"
+#include "Components/Animation/HumanoidRetargeterComponent.h"
 #include "Components/Animation/ValueCurve.h"
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/LODGroup.h"
@@ -23,8 +25,8 @@
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/SkySunDrive.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationAgent.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "Engine/Rendering/MeshNameRegistry.h"
 #include "Components/Rendering/ParticleRenderer.h"
 #include "Components/Rendering/Particles.h"
@@ -81,7 +83,7 @@
 #include "ECS/UnresolvedComponentStore.h"
 #include "Logger/Logger.h"
 #include "MarkupECS/MarkupService.h"
-#include "PathfindingECS/Components/NavigationSource.h"
+#include "Components/Navigation/NavigationSource.h"
 #include "SplineECS/SplineService.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
 #include "TerrainGrass/Scene/TerrainGrassSceneSchemas.h"
@@ -781,7 +783,7 @@ TEST(SceneIO, LoadBasicScene_EntitiesAndParenting)
         EXPECT_EQ(n->View(), "Child");
         auto* p = world.GetComponent<Components::Parent>(child);
         ASSERT_NE(p, nullptr);
-        EXPECT_EQ(p->parent.id, root.id);
+        EXPECT_EQ(p->Entity.id, root.id);
     }
 }
 
@@ -1060,7 +1062,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripCoreComponents)
     w1.AddComponentImmediate(root, rn);
 
     Components::Parent cp{};
-    cp.parent = root;
+    cp.Entity = root;
     w1.AddComponentImmediate(child, cp);
 
     Components::Transform rt = Components::Transform::FromTRS(
@@ -1082,7 +1084,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripCoreComponents)
 
     auto* p2 = w2.GetComponent<Components::Parent>(c2);
     ASSERT_NE(p2, nullptr);
-    EXPECT_EQ(p2->parent.id, r2.id);
+    EXPECT_EQ(p2->Entity.id, r2.id);
 }
 
 // A navigation agent saves the surface it walks as the surface entity's scene id and loads it back as
@@ -2361,6 +2363,62 @@ TEST(SceneIO, SaveThenLoad_RoundTripAudioEmitterFalloff)
     EXPECT_EQ(d2->minDistance, 1.0f);
     EXPECT_EQ(d2->maxDistance, 10000.0f);
     EXPECT_EQ(d2->rolloff, 1.0f);
+}
+
+// AnimatedSprite2D has no hand-written schema: the reflection fallback saves and loads every field,
+// the sprite frames reference by its GUID.
+TEST(SceneIO, SaveThenLoad_RoundTripAnimatedSprite2D)
+{
+    const auto scenePath = MakeTempPath("animated_sprite_2d.scene");
+
+    ECS::World w1;
+    const ECS::EntityHandle entity = w1.CreateEntity();
+    ASSERT_TRUE(entity.IsValid());
+    w1.AddComponentImmediate(entity, Components::SceneEntityTag{{'s', 'p', 'r', '\0'}});
+    Components::AnimatedSprite2D authored{};
+    authored.spriteFramesGuid.Set(GUID("1a2b3c4d-5e6f-7081-9203-a4b5c6d7e8f9"));
+    authored.SetAnimationName("run");
+    authored.timeSeconds = 0.25f;
+    authored.speedScale = 1.5f;
+    authored.playing = false;
+    authored.loop = false;
+    w1.AddComponentImmediate(entity, authored);
+
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const auto* loaded = w2.GetComponent<Components::AnimatedSprite2D>(FindByTag(w2, "spr"));
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->spriteFramesGuid, authored.spriteFramesGuid);
+    EXPECT_EQ(loaded->AnimationName(), "run");
+    EXPECT_EQ(loaded->timeSeconds, 0.25f);
+    EXPECT_EQ(loaded->speedScale, 1.5f);
+    EXPECT_FALSE(loaded->playing);
+    EXPECT_FALSE(loaded->loop);
+}
+
+// HumanoidRetargeterComponent is runtime playback state the animation system adds and rebuilds
+// every session: a scene never saves it.
+TEST(SceneIO, HumanoidRetargeterComponentIsNeverSaved)
+{
+    const auto scenePath = MakeTempPath("humanoid_retargeter.scene");
+
+    ECS::World w1;
+    const ECS::EntityHandle entity = w1.CreateEntity();
+    ASSERT_TRUE(entity.IsValid());
+    w1.AddComponentImmediate(entity, Components::SceneEntityTag{{'r', 't', 'g', '\0'}});
+    Components::HumanoidRetargeterComponent retargeter{};
+    retargeter.SourceClipIndex = 3;
+    w1.AddComponentImmediate(entity, retargeter);
+
+    ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
+
+    ECS::World w2;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(w2, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const ECS::EntityHandle loaded = FindByTag(w2, "rtg");
+    ASSERT_TRUE(loaded.IsValid());
+    EXPECT_EQ(w2.GetComponent<Components::HumanoidRetargeterComponent>(loaded), nullptr);
 }
 
 // Exposure lives on the Camera (the sensor). The exposure-control fields (mode + Manual EV100 +
@@ -7903,7 +7961,7 @@ TEST(SceneIO, Save_EntitySectionsFollowHierarchyDepthFirstNotLexicalTagOrder)
     w.AddComponentImmediate(child, hc);
 
     Components::Parent p{};
-    p.parent = parent;
+    p.Entity = parent;
     w.AddComponentImmediate(child, p);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w, scenePath, Scene::SaveOptions{}));
@@ -8010,7 +8068,7 @@ TEST(SceneIO, BlueprintInstance_InstantiatesWithPrefixAndOverrides)
 
     auto* p = world.GetComponent<Components::Parent>(instChild);
     ASSERT_NE(p, nullptr);
-    EXPECT_EQ(p->parent.id, inst.id);
+    EXPECT_EQ(p->Entity.id, inst.id);
 }
 
 TEST(SceneIO, Save_PreservesBlueprintInstanceAndRemovalDirectives)

@@ -73,7 +73,7 @@ void TerrainShadowBake::DeclareForView(Engine::Renderer::RenderServices& rs, RG:
         m_Frame.FrameIndex = frame.FrameIndex();
         m_Frame.Present = DeclareFrameMap(rs, frame, worldId, inputs);
         if (!m_Frame.Present)
-            ReleaseMapBindless(rs);
+            Release(rs);
     }
     if (m_Frame.Present)
         Publish(rs, frame, viewId, inputs);
@@ -94,10 +94,11 @@ void TerrainShadowBake::OnDeviceRebuilt()
     // A map and height texture re-created on the rebuilt device may come back with the handle ids the
     // record holds, which would make the next frame's inputs compare equal and skip the bake.
     m_Baked.reset();
+    m_FieldLit.OnDeviceRebuilt();
     m_Frame = FrameMap{};
 }
 
-void TerrainShadowBake::ReleaseMapBindless(Engine::Renderer::RenderServices& rs)
+void TerrainShadowBake::Release(Engine::Renderer::RenderServices& rs)
 {
     // On a frame with no map the pool may age the texture out: its slot is dropped first, so it never
     // describes a freed image, and the next map registers afresh.
@@ -105,6 +106,7 @@ void TerrainShadowBake::ReleaseMapBindless(Engine::Renderer::RenderServices& rs)
         rs.Textures().InvalidateBindless(m_MapTexture);
     m_MapTexture = {};
     m_MapBindlessIndex = 0;
+    m_FieldLit.Release(rs);
 }
 
 bool TerrainShadowBake::EnsurePipeline(Rendering::IDevice& device)
@@ -225,6 +227,7 @@ bool TerrainShadowBake::DeclareFrameMap(Engine::Renderer::RenderServices& rs, RG
 
     m_Frame.Map = map;
     m_Frame.Grid = *grid;
+    m_Frame.FieldLit = m_FieldLit.Declare(rs, frame, map, side, *grid, lines.Count > 0u);
     return true;
 }
 
@@ -309,6 +312,8 @@ void TerrainShadowBake::Publish(Engine::Renderer::RenderServices& rs, RG::RGFram
     // The view's shading passes sample the map through the bindless array; the world pass declares
     // the read so the graph orders it after this frame's bake.
     rs.EmitForwardSampledRead(frame, viewId, m_Frame.Map);
+    if (m_Frame.FieldLit)
+        rs.EmitForwardSampledRead(frame, viewId, m_FieldLit.Field());
 
     Engine::Renderer::TerrainShadowMap published{};
     published.Map = m_Frame.Map;
@@ -331,6 +336,13 @@ void TerrainShadowBake::Publish(Engine::Renderer::RenderServices& rs, RG::RGFram
     published.VMin = m_Frame.Grid.VMin;
     published.SamplesU = static_cast<float>(m_Frame.Grid.SamplesU);
     published.SamplesV = static_cast<float>(m_Frame.Grid.SamplesV);
+    published.DrawLevelScale = inputs.DrawLevelScale;
+    if (m_Frame.FieldLit)
+    {
+        published.FieldLit = m_FieldLit.Field();
+        published.FieldLitBindlessIndex = m_FieldLit.BindlessIndex();
+        published.FieldLitLevels = m_FieldLit.Levels();
+    }
     shadows->PublishTerrainShadowMap(viewId, frame.FrameIndex(), published, rs);
 }
 

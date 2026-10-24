@@ -51,16 +51,22 @@ std::optional<int> InPrecedingCommentRun(const std::vector<std::string>& lines, 
     return std::nullopt;
 }
 
-// True when a struct-level marker ("// @ge-no-add") attaches to the struct whose declaration
-// head sits on `declLine`: on the declaration line itself, or on the contiguous
+// The line of the struct-level marker ("// @ge-no-add") that attaches to the struct whose
+// declaration head sits on `declLine`: the declaration line itself, or a line of the contiguous
 // comment/blank run immediately preceding it.
-inline bool StructMarkerAttached(const std::vector<std::string>& lines, int declLine, const std::set<int>& markerLines)
+inline std::optional<int> StructMarkerLine(const std::vector<std::string>& lines, int declLine, const std::set<int>& markerLines)
 {
     if (declLine < 1 || markerLines.empty())
-        return false;
+        return std::nullopt;
     if (markerLines.count(declLine) != 0)
-        return true;
-    return InPrecedingCommentRun(lines, declLine, [&](int line) { return markerLines.count(line) != 0; }).has_value();
+        return declLine;
+    return InPrecedingCommentRun(lines, declLine, [&](int line) { return markerLines.count(line) != 0; });
+}
+
+// True when a struct-level marker attaches to the struct whose declaration head sits on `declLine`.
+inline bool StructMarkerAttached(const std::vector<std::string>& lines, int declLine, const std::set<int>& markerLines)
+{
+    return StructMarkerLine(lines, declLine, markerLines).has_value();
 }
 
 // True when a field-level marker ("// @ge-readonly" / "// @ge-hidden") attaches to a field
