@@ -33,15 +33,17 @@
 #include "Rendering/Passes/TemporalDither.h"
 #include "Scene/SceneAssetResolver.h"
 #include "Scene/SceneIO.h"
+#include "Types/PathUtils.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureSpace.h"
 
-#include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <span>
 #include <utility>
+
+#include <GLFW/glfw3.h>
 
 namespace GameEngine {
 

@@ -14,8 +14,6 @@
 // opens, the engine's schedule and a native script run every fixed frame in real time, and the
 // script's quit ends the run. It needs neither, so it never skips.
 
-#include <gtest/gtest.h>
-
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h"
 #include "Core/Application.h"
@@ -37,6 +35,7 @@
 #include "Rendering/Text/FontAtlas.h"
 #include "ScopedPlatformCacheRoot.h"
 #include "Scripting/ScriptsConfig.h"
+#include "Types/PathUtils.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/UIManager.h"
 
@@ -47,6 +46,8 @@
 #include <optional>
 #include <system_error>
 #include <thread>
+
+#include <gtest/gtest.h>
 
 using namespace GameEngine;
 namespace fs = std::filesystem;
