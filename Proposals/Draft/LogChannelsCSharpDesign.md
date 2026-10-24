@@ -54,7 +54,7 @@ A Roslyn incremental generator, next to `EntitySystemGenerator` under `Managed/S
 - **Namespaces.** For every namespace that contains code, it emits an `internal static class Log` in that namespace. C# looks up a simple name in the enclosing namespace's own members before the file's `using` directives, so inside `MyGame.AI`, `Log` means the generated `MyGame.AI.Log`, not `GameEngine.Log`.
 - **Classes.** For every class with `[LogChannel]`, it emits a nested `private static class Log`, which takes precedence over the namespace one.
 - **The channel.** The generator applies the resolution order at compile time and writes the resulting channel name into each generated class. Nothing about the channel is looked up at runtime.
-- **The filtered-out path.** Each generated `Log` method takes a level-specific interpolated-string handler that is generic over the scope, for example `InfoHandler<TScope>`, where `TScope` is a generated type with a `static abstract` channel id. The handler's constructor checks `levels[TScope.Id]` and sets `shouldAppend` to false when the channel is below Info. A filtered-out call therefore never formats or allocates.
+- **The filtered-out path.** Each generated `Log` method takes a level-specific interpolated-string handler that is generic over the scope, for example `InfoHandler<TScope>`, where `TScope` is a generated type with a `static abstract` `LogChannel` property. The handler's constructor checks `levels[TScope.Channel.Id]` and sets `shouldAppend` to false when the channel is below Info. A filtered-out call therefore never formats or allocates.
 
 ```csharp
 // Generated for namespace MyGame.AI
@@ -62,7 +62,7 @@ namespace MyGame.AI
 {
     internal sealed class LogScope : GameEngine.ILogScope
     {
-        public static ushort Id { get; } = GameEngine.LogChannels.Register("Scripts.MyGame.AI");
+        public static GameEngine.LogChannel Channel { get; } = new("Scripts.MyGame.AI");
     }
 
     internal static class Log
@@ -94,7 +94,8 @@ An interceptor generator would replace each `GameEngine.Log.Info(...)` call with
 ## The managed hot path
 
 - **Level checks without leaving managed code.** The effective-level array is fixed and never moves (see "The hot path" in [Log Channels](LogChannelsDesign.md)). C# reads it in place: `GE_GetLogLevelTable` returns its address and capacity once. A level check is a `Volatile.Read` of one byte with no P/Invoke call. `Logger.cpp` asserts that `std::atomic<LogLevel>` is always lock-free and one byte wide, which this layout depends on.
-- **Static ids.** Each `LogScope.Id` is a static read-only value. Tiered compilation treats it as a constant once the type is initialized.
+- **One way to register.** Generated scopes and explicit handles both register through the `LogChannel` constructor. No separate registration function exists.
+- **Static ids.** Each `LogScope.Channel` is a static read-only value. Tiered compilation treats it as a constant once the type is initialized.
 - **Formatting and dispatch.** A message that passes the check is formatted into a pooled buffer, converted to UTF-8 and sent with one `GE_Log` call.
 
 ## Scripting ABI
@@ -109,7 +110,7 @@ The definition (`ScriptingABI.cpp:463`), the binding `InteropGenerator` emits (`
 
 ## Hot reload
 
-A script reload creates new types, so `LogScope.Id` initializes again. It registers the same names, and channel registration is idempotent by name, so it gets the same ids back. Level rules and the Log panel's filters carry over across the reload.
+A script reload creates new types, so `LogScope.Channel` initializes again. It registers the same names, and channel registration is idempotent by name, so it gets the same ids back. Level rules and the Log panel's filters carry over across the reload.
 
 ## `Console.WriteLine`
 

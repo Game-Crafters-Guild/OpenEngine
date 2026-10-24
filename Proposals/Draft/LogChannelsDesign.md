@@ -7,7 +7,7 @@ Status: proposal, not implemented. Facts about the current code were read at `58
 All log output today goes into one stream. The only filters are severity and a text search. On a busy frame, a person who wants to see what terrain streaming is doing has two options:
 
 - Lower the global level to Debug and get every module's Debug output.
-- Use a text search that depends on each call site writing its own prefix. Only about 124 calls do, for example `HZBBuildNode:` and `EditorDebugServer:`.
+- Use a text search that depends on each call site writing its own prefix. About 1,900 calls do, for example `HZBBuildNode:` and `EditorDebugServer:`, each with its own spelling.
 
 There is no way to say "Debug for terrain, Warning for everything else", and no way to show only one subsystem in the Log panel or in `get_log`.
 
@@ -76,8 +76,8 @@ The closest declaration wins:
 | 1 | Explicit at the call | `LOG_<LEVEL>_TO(name, ...)` |
 | 2 | Class | `GE_LOG_CHANNEL(name)` in the class body. Derived classes get it through normal member lookup unless they declare their own. |
 | 3 | Namespace | `GE_LOG_CHANNEL(name)` at namespace scope. Inner namespaces get it unless they declare their own. |
-| 4 | Module default | The `GE_LOG_MODULE` compile definition of the target that compiles the file |
-| 5 | Fallback | `Default`, when the target defines no `GE_LOG_MODULE` |
+| 4 | Module default | The `GE_LOG_DEFAULT_CHANNEL` compile definition of the target that compiles the file |
+| 5 | Fallback | `Default`, when the target defines no `GE_LOG_DEFAULT_CHANNEL` |
 
 There is no file-scope form. A declaration in an anonymous namespace would collide in the `-unity` presets, where several .cpp files become one translation unit.
 
@@ -93,12 +93,12 @@ struct ChannelLookup : ChannelLookupFallback {};
 }
 
 // Logger.h, global scope. Internal linkage: each target's translation units compile
-// their own copy with their own GE_LOG_MODULE, which keeps this ODR-clean.
+// their own copy with their own GE_LOG_DEFAULT_CHANNEL, which keeps this ODR-clean.
 // `inline` keeps GCC and Clang from warning about an unused static function,
 // which warnings-as-errors would turn into a build failure.
 static inline Logger::LogChannelId GeLogChannel(Logger::ChannelLookupFallback)
 {
-    static const Logger::LogChannelId id = Logger::Log::RegisterChannel(GE_LOG_MODULE);
+    static const Logger::LogChannelId id = Logger::Log::RegisterChannel(GE_LOG_DEFAULT_CHANNEL);
     return id;
 }
 
@@ -127,7 +127,7 @@ Known limits:
 
 ### Module defaults in CMake
 
-Every module in `GE_ENGINE_MODULES` (`Engine/CMakeLists.txt`) is an `OBJECT` library, and the `foreach` over that list already visits each one. A new helper, `ge_set_log_channel(<target> [<name>])`, adds `GE_LOG_MODULE="<name>"` as a **PRIVATE** compile definition. PRIVATE matters because the same loop re-exports each module's `INTERFACE_COMPILE_DEFINITIONS` through `Engine`. The name defaults to the target name. Targets whose names are not good channel names pass one:
+Every module in `GE_ENGINE_MODULES` (`Engine/CMakeLists.txt`) is an `OBJECT` library, and the `foreach` over that list already visits each one. A new helper, `ge_set_default_log_channel(<target> [<name>])`, adds `GE_LOG_DEFAULT_CHANNEL="<name>"` as a **PRIVATE** compile definition. PRIVATE matters because the same loop re-exports each module's `INTERFACE_COMPILE_DEFINITIONS` through `Engine`. The name defaults to the target name. Targets whose names are not good channel names pass one:
 
 | Target | Channel |
 |---|---|
@@ -154,7 +154,7 @@ The resolution order is the same as for engine modules. Only the source of the d
 - **Names with dashes.** Package names use dashes (`fidelityfx-dof`), so channel-name segments allow `-` after the first character: `[A-Za-z][A-Za-z0-9_-]*`.
 - **One root for packages.** All packages sit under `Packages`, so their names cannot collide with engine channels (`rendering` against `Rendering`), and a single rule turns all package output up or down.
 - **Packages that belong to an engine area.** A package that extends an engine area declares its own channel in its namespace or classes. For example, `fidelityfx-dof` declares `GE_LOG_CHANNEL("Rendering.DoF")`. No manifest field is added for this; the scope declarations already cover it.
-- **Both build paths must agree.** A package module is compiled in two places: `ge_add_engine_package_module` in the engine build, which produces the shipped prebuilt, and the editor's source build through the generated project, which is the fallback when the prebuilt's `engine_abi` marker does not match. Both must emit the same `GE_LOG_MODULE`, derived from the manifest's `name`.
+- **Both build paths must agree.** A package module is compiled in two places: `ge_add_engine_package_module` in the engine build, which produces the shipped prebuilt, and the editor's source build through the generated project, which is the fallback when the prebuilt's `engine_abi` marker does not match. Both must emit the same `GE_LOG_DEFAULT_CHANNEL`, derived from the manifest's `name`.
 - **Kept out of the ABI digest.** The define does not change the ABI, so it stays out of the package defines that feed the `engine_abi` digest. Otherwise renaming a channel would invalidate every shipped prebuilt. In CMake it is a separate `target_compile_definitions` call, not part of `_gepkg_defines`. In the generator it is a separate field, not part of `CompileDefinitions`, if that list feeds the digest; this needs checking (open question 3).
 - **Unload and hot reload.** Package and game modules unload and reload. `RegisterChannel` copies the name into the registry's own storage, so an unloaded DLL leaves no dangling name, which is the same rule the logger already follows for source-file names. The reloaded DLL registers the same name again and gets the same id, so level rules and the Log panel's filters carry over across a reload.
 
@@ -182,7 +182,7 @@ The Log panel keeps the two apart:
 ### Rules and effective levels
 
 - The level state is a set of rules keyed by name prefix.
-- `Log::SetLogLevel(level)` sets the root rule, as it sets the global level today. Its 76 callers outside the Logger module do not change.
+- `Log::SetLogLevel(level)` sets the root rule, as it sets the global level today. Its 61 callers outside the Logger module do not change.
 - `Log::SetChannelLevel(prefix, level)` sets one rule, and `Log::ClearChannelLevel(prefix)` removes it. Both refuse the empty prefix, which belongs to `SetLogLevel`, so the two functions never act on the same rule.
 - When a rule changes, every registered channel's effective level is recomputed. Rules change rarely, so the cost is O(channels × rules) and does not matter.
 - When a channel registers, its effective level is computed from the rules that exist at that moment. A rule therefore applies to channels that first log after it was set.
@@ -192,6 +192,7 @@ The Log panel keeps the two apart:
 
 - The effective levels live in a fixed-capacity array of `std::atomic<LogLevel>` in `LoggerState`, indexed by channel id.
 - The array never moves, so a read needs no lock: `ShouldLog(channel, level)` is `level >= levels[channel].load(relaxed)`.
+- `ShouldLog(channel, level)` replaces today's `ShouldLog(level)`, which has no callers outside the Logger module. No channel-less version is kept. It stays public only because the macros call it.
 - The capacity is `kMaxLogChannels`, 1,024 channels, which is 1 KB of levels. A registration past the capacity returns the `Default` channel and logs one warning naming the channel that was refused.
 - The other new cost per call is the guard check on the function-local static in `GeLogChannel`. That is one acquire load and a branch once the static is set. "Performance" below says how to measure it.
 
@@ -290,7 +291,7 @@ Managed scripts get their own `Log` API with channels resolved from class attrib
 |---|---|---|
 | `LOG_*` macro calls | 156 | None. They get their area's channel. |
 | Direct `Logger::Log::<Level>(...)` and `Log::<Level>(...)` calls | about 4,855 (Trace 36, Debug 359, Info 1,569, Warning 1,610, Error 1,274, Critical 7) | One mechanical commit rewrites them to the matching `LOG_*` macro. |
-| Calls with a hand-written `Name:` prefix | about 124 | Unchanged by the migration. When someone next touches one, they declare a class-scope channel and drop the prefix. |
+| Calls with a hand-written `Name:` prefix | about 1,900 | Unchanged by the migration. When someone next touches one, they declare a class-scope channel and drop the prefix. |
 | `LogWithSource` callers outside Logger | 0 | It becomes private. |
 
 The mechanical rewrite changes behavior in exactly one way: the 395 direct Trace and Debug calls compile out in Release once they are macros, while today they are kept and filtered at runtime.
@@ -341,4 +342,4 @@ The editor suites cover the `get_log` channel filter. A live check covers the Lo
 
 1. Should Trace and Debug stay compiled out in Release now that a channel can be turned up at runtime? Keeping them costs code size and one gate per call. Removing them lets a shipped game's log be turned up for one subsystem.
 2. Are the channel names in the CMake table right, especially `Rendering.Services` and `Platform.Provider`?
-3. Which define lists feed the `engine_abi` digest? On the CMake side it is `_gepkg_defines` (`cmake/Packages.cmake`); on the editor side it is not yet traced whether `NativeBuildConfig::CompileDefinitions` is the digest input. `GE_LOG_MODULE` has to stay out of the digest on both paths.
+3. Which define lists feed the `engine_abi` digest? On the CMake side it is `_gepkg_defines` (`cmake/Packages.cmake`); on the editor side it is not yet traced whether `NativeBuildConfig::CompileDefinitions` is the digest input. `GE_LOG_DEFAULT_CHANNEL` has to stay out of the digest on both paths.
