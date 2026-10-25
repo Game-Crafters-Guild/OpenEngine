@@ -2,9 +2,14 @@
 
 #include "UI/Controls/DockPanel.h"
 
+#include "Platform/WebView.h"
+#include "UI/UIManagerRef.h"
+
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,12 +18,12 @@ namespace GameEngine
 {
 struct AssetLoadHandle;
 class UIElement;
+class Button;
 class TextField;
 class Label;
 namespace Platform
 {
 class Window;
-class IWebView;
 }
 
 // Web panel: loads any URL or YouTube in platform web views (WKWebView/WebView2/WebKitGTK),
@@ -74,6 +79,8 @@ class WebPanel : public DockPanel
     std::string ConvertEmbedToWatchURL(const std::string& embedURL);
     int ConvertTimestampToSeconds(const std::string& timestamp);
     void UpdateWebViewSize();
+    void OnReloadClicked();
+    void UpdateNavigationControls();
     void SetupWebView();
 
     WebTab* ActiveTab();
@@ -103,6 +110,9 @@ class WebPanel : public DockPanel
 
     UIElement* m_Container = nullptr;
     TextField* m_URLField = nullptr;
+    Button* m_BackButton = nullptr;
+    Button* m_ForwardButton = nullptr;
+    Button* m_ReloadButton = nullptr;
     UIElement* m_TabBar = nullptr;
     UIElement* m_WebViewContainer = nullptr;
     Label* m_ErrorLabel = nullptr;
@@ -111,6 +121,12 @@ class WebPanel : public DockPanel
     size_t m_ActiveTab = 0;
     Platform::Window* m_ParentWindow = nullptr;
     std::string m_PendingURL;
+    // The active view's navigation state the controls last showed; empty until they first show one.
+    std::optional<Platform::WebViewNavigation> m_ShownNavigation;
+    // The page changes the state without a layout pass (a link, a load finishing), so the controls
+    // also refresh on the manager's periodic tick.
+    UIManagerRef m_RefreshManager;
+    uint64_t m_RefreshToken = 0;
     // Why the web view cannot be created, stating the fix; empty while it can.
     std::string m_WebViewUnavailableMessage;
 };

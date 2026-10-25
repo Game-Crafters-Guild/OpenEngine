@@ -10,6 +10,19 @@ namespace Platform {
 
 class Window;
 
+/// What a web view's navigation controls show: the history around the current page, whether a page
+/// is loading, and the page's URL.
+struct WebViewNavigation {
+    bool CanGoBack = false;
+    bool CanGoForward = false;
+    bool IsLoading = false;
+    /// The URL of the page on screen, which links and redirects change; empty where the platform
+    /// cannot read it.
+    std::string URL;
+
+    bool operator==(const WebViewNavigation&) const = default;
+};
+
 // Cross-platform web view interface
 // Provides a unified API for embedding web content (YouTube, etc.) in the editor
 class IWebView {
@@ -21,6 +34,20 @@ public:
 
     // Load HTML content directly (for better control over iframe embeds)
     virtual bool LoadHTML(const std::string& html, const std::string& baseURL = "https://www.youtube.com") = 0;
+
+    // Move through the view's history. Each does nothing when GetNavigation reports it cannot.
+    virtual void GoBack() = 0;
+    virtual void GoForward() = 0;
+
+    // Load the current page again, or stop the page that is loading.
+    virtual void Reload() = 0;
+    virtual void StopLoading() = 0;
+
+    // The view's navigation state, cheap enough to read every frame. A view whose native view does not
+    // exist yet reports the defaults.
+    // Web: an embedded page of another site hides its history, loading state and URL, so only Reload
+    //   works there.
+    virtual WebViewNavigation GetNavigation() const = 0;
 
     // The native handle the view lives in, or nullptr once it is destroyed; callers use it only as
     // "the view exists".

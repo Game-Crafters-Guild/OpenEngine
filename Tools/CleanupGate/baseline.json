@@ -2829,8 +2829,6 @@
    "Engine/Modules/Platform/Source/HttpHeaderRules.h": 1,
    "Engine/Modules/Platform/Source/SystemFonts_Stub.cpp": 1,
    "Engine/Modules/Platform/Source/Thread.cpp": 1,
-   "Engine/Modules/Platform/Source/Utf8ToWide_Win32.cpp": 1,
-   "Engine/Modules/Platform/Source/Utf8ToWide_Win32.h": 1,
    "Engine/Modules/Platform/Source/WebEnvironment_Web.cpp": 1,
    "Engine/Modules/Platform/Source/WebUnavailable.h": 1,
    "Engine/Modules/Rendering/Include/Rendering/Core/GPUInstanceWorldKey.h": 1,

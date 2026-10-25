@@ -112,6 +112,32 @@ class WebViewWeb final : public IWebView
         return true;
     }
 
+    // An embedded page of another site hides its history from this page, so the view cannot move
+    // through it or report it.
+    void GoBack() override {}
+    void GoForward() override {}
+
+    void Reload() override
+    {
+        if (m_Destroyed)
+            return;
+        EM_ASM({
+            var frame = (Module.__geWebViews || {})[$0];
+            if (!frame)
+                return;
+            // Assigning an attribute its own value reloads the frame: srcdoc when it shows inline
+            // HTML, src otherwise.
+            if (frame.hasAttribute('srcdoc'))
+                frame.srcdoc = frame.srcdoc;
+            else if (frame.src)
+                frame.src = frame.src;
+        }, m_Id);
+    }
+
+    void StopLoading() override {}
+
+    WebViewNavigation GetNavigation() const override { return {}; }
+
     void* GetNativeView() const override
     {
         // No native view pointer exists, but callers use this as a liveness

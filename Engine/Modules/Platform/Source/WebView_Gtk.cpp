@@ -91,6 +91,39 @@ public:
         return m_State.LoadHTML(html);
     }
 
+    void GoBack() override
+    {
+        if (m_Window)
+            webkit_web_view_go_back(m_WebView);
+    }
+
+    void GoForward() override
+    {
+        if (m_Window)
+            webkit_web_view_go_forward(m_WebView);
+    }
+
+    void Reload() override
+    {
+        if (m_Window)
+            webkit_web_view_reload(m_WebView);
+    }
+
+    void StopLoading() override
+    {
+        if (m_Window)
+            webkit_web_view_stop_loading(m_WebView);
+    }
+
+    WebViewNavigation GetNavigation() const override
+    {
+        if (!m_Window)
+            return {};
+        const gchar* uri = webkit_web_view_get_uri(m_WebView);
+        return {webkit_web_view_can_go_back(m_WebView) != FALSE, webkit_web_view_can_go_forward(m_WebView) != FALSE,
+                webkit_web_view_is_loading(m_WebView) != FALSE, uri ? uri : ""};
+    }
+
     void* GetNativeView() const override { return m_Window ? m_WebView : nullptr; }
 
     void Resize(int width, int height) override { m_State.Resize(width, height); }
