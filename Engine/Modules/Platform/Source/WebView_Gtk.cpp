@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <string>
 
 #include <gdk/gdkx.h>
@@ -243,11 +244,11 @@ private:
     bool m_LoadFailed = false;
 };
 
-IWebView* CreateGtkWebView(unsigned long parentWindow)
+std::unique_ptr<IWebView> CreateGtkWebView(unsigned long parentWindow)
 {
     if (!StartGtk())
         return nullptr;
-    return new WebView_Gtk(parentWindow);
+    return std::make_unique<WebView_Gtk>(parentWindow);
 }
 
 void PumpGtkEvents()
