@@ -671,7 +671,7 @@ TEST_F(MarkupRequestsTest, APathRoundTripsItsPointsAndRefusesWhatItIsNot)
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"center", {0, 0, 0}}})));
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"outline", Square(0.0f, 0.0f, 10.0f)}})));
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"kind", "region"}})));
-    EXPECT_NE(Editor::UpdateMarkup(Context, {{"entityId", road}, {"points", {{0, 0, 0}, {10, 0, 10}}}}).dump().find("Edit path"),
+    EXPECT_NE(Editor::UpdateMarkup(Context, {{"entityId", road}, {"points", {{0, 0, 0}, {10, 0, 10}}}}).dump().find("Edit Path"),
               std::string::npos)
         << "points on a path answered ok and changed nothing";
     EXPECT_FALSE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"status", "Requested"}})));

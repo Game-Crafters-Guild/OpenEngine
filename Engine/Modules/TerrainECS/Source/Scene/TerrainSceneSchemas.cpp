@@ -1,3 +1,4 @@
+#include "Mathematics/Interpolation.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneValue.h"
 #include "Scene/RenderLayerMaskText.h"
@@ -758,7 +759,7 @@ public:
             else if (property == "grassbladesegments") { if (!ParseU32(value, grass.BladeSegments, outError)) return false; grass.BladeSegments = std::clamp(grass.BladeSegments, Components::kMinTerrainGrassBladeSegments, Components::kMaxTerrainGrassBladeSegments); }
             else if (property == "grassrandomscale") { if (!ParseF32(value, grass.RandomScale, outError)) return false; grass.RandomScale = std::max(0.0f, grass.RandomScale); }
             else if (property == "grasslayerindex") { if (!ParseU32(value, grass.LayerIndex, outError)) return false; grass.LayerIndex = std::min(grass.LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u); }
-            else if (property == "grassmaskthreshold") { if (!ParseF32(value, grass.MaskThreshold, outError)) return false; grass.MaskThreshold = std::clamp(grass.MaskThreshold, 0.0f, 1.0f); }
+            else if (property == "grassmaskthreshold") { if (!ParseF32(value, grass.MaskThreshold, outError)) return false; grass.MaskThreshold = Math::Clamp01(grass.MaskThreshold); }
             else if (property == "grassdensityfalloff") { if (!ParseF32(value, grass.DensityFalloff, outError)) return false; grass.DensityFalloff = std::max(0.0f, grass.DensityFalloff); }
             else if (property == "grassrange") { if (!ParseF32(value, grass.Range, outError)) return false; grass.Range = std::max(0.0f, grass.Range); }
             else if (property == "grassplacementseed") { if (!ParseF32(value, grass.PlacementSeed, outError)) return false; }

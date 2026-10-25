@@ -1,5 +1,6 @@
 #include "Terrain/TerrainModifierInspectors.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainGrassRegionRows.h"
 
 #include "InspectorRegistry.h"
@@ -782,7 +783,7 @@ void RegisterTerrainModifierInspectors()
 
         AddComponentFloatRowWithDrag<TerrainModifierVolume>(
             ctx.Parent, "Weight", comp->Weight, w, e, n,
-            [](TerrainModifierVolume& u, float v) { u.Weight = std::clamp(v, 0.0f, 1.0f); },
+            [](TerrainModifierVolume& u, float v) { u.Weight = Math::Clamp01(v); },
             "Master strength for every effect in this volume (0-1)");
 
         AddComponentFloatRowWithDrag<TerrainModifierVolume>(
@@ -1043,7 +1044,7 @@ void RegisterTerrainModifierInspectors()
 
         AddComponentFloatRowWithDrag<TerrainNoiseEffect>(
             ctx.Parent, "Persistence", comp->Persistence, w, e, n,
-            [](TerrainNoiseEffect& u, float v) { u.Persistence = std::clamp(v, 0.0f, 1.0f); },
+            [](TerrainNoiseEffect& u, float v) { u.Persistence = Math::Clamp01(v); },
             "Amplitude multiplier per octave (typically 0.5)");
 
         // Erosion block. Strength 0 leaves the noise untouched, so the rest of
@@ -1075,12 +1076,12 @@ void RegisterTerrainModifierInspectors()
 
         AddComponentFloatRowWithDrag<TerrainNoiseEffect>(
             ctx.Parent, "Edge Rounding", comp->ErosionEdgeRounding, w, e, n,
-            [](TerrainNoiseEffect& u, float v) { u.ErosionEdgeRounding = std::clamp(v, 0.0f, 1.0f); },
+            [](TerrainNoiseEffect& u, float v) { u.ErosionEdgeRounding = Math::Clamp01(v); },
             "0 = crisp branching creases, 1 = rounded");
 
         AddComponentFloatRowWithDrag<TerrainNoiseEffect>(
             ctx.Parent, "Erosion Fade", comp->ErosionFade, w, e, n,
-            [](TerrainNoiseEffect& u, float v) { u.ErosionFade = std::clamp(v, 0.0f, 1.0f); },
+            [](TerrainNoiseEffect& u, float v) { u.ErosionFade = Math::Clamp01(v); },
             "Fade gullies out at peaks and valleys");
 
         AddClaimsRow(ctx, comp,
@@ -1202,7 +1203,7 @@ void RegisterTerrainModifierInspectors()
 
         AddComponentFloatRowWithDrag<TerrainPaintLayerEffect>(
             ctx.Parent, "Strength", comp->Strength, w, e, n,
-            [](TerrainPaintLayerEffect& u, float v) { u.Strength = std::clamp(v, 0.0f, 1.0f); },
+            [](TerrainPaintLayerEffect& u, float v) { u.Strength = Math::Clamp01(v); },
             "Paint intensity (0-1)");
 
         AddToggleRow(ctx.Parent, "Replace", comp->Replace,

@@ -132,6 +132,15 @@ TEST(StringUtilsTests, IdentifierToWordsReadsIdentifiersAsWords)
         EXPECT_EQ(IdentifierToWords(c.Identifier), c.Words) << c.Identifier;
 }
 
+// Component and type names are shown and keyed without their namespace or managed qualifier.
+TEST(StringUtilsTests, UnqualifiedNameKeepsTheNameAfterTheLastQualifier)
+{
+    EXPECT_EQ(UnqualifiedName("GameEngine::Components::Light"), "Light");
+    EXPECT_EQ(UnqualifiedName("MyGame.Combat.HealthPool"), "HealthPool");
+    EXPECT_EQ(UnqualifiedName("Light"), "Light");
+    EXPECT_EQ(UnqualifiedName(""), "");
+}
+
 TEST(StringUtilsTests, ToUpperAsciiRaisesOnlyAsciiLetters)
 {
     EXPECT_EQ(ToUpperAscii("abc-Def_9"), "ABC-DEF_9");

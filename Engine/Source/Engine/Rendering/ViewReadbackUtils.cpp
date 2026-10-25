@@ -3,6 +3,7 @@
 #include "Engine/Rendering/ViewReadbackUtils.h"
 #include "Logger/Logger.h"
 #include "Mathematics/HalfFloat.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/BarrierMapping.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "UI/UITextureSpace.h"
@@ -32,7 +33,7 @@ float HalfBitsToDisplayFloat(uint16_t v)
 
 float LinearToSrgb01(float c)
 {
-    c = std::clamp(c, 0.0f, 1.0f);
+    c = Math::Clamp01(c);
     return c <= 0.0031308f ? c * 12.92f
                            : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
 }
@@ -64,7 +65,7 @@ const std::array<uint8_t, 65536>& HalfToUnorm8Lut()
         std::array<uint8_t, 65536> t{};
         for (uint32_t v = 0; v < 65536u; ++v)
             t[v] = static_cast<uint8_t>(
-                std::clamp(HalfBitsToDisplayFloat(static_cast<uint16_t>(v)), 0.0f, 1.0f) * 255.0f + 0.5f);
+                Math::Clamp01(HalfBitsToDisplayFloat(static_cast<uint16_t>(v))) * 255.0f + 0.5f);
         return t;
     }();
     return lut;

@@ -1,5 +1,6 @@
 #include "Rendering/Sky/AtmosphereTransmittance.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Types/ColorUtils.h"
 
 #include <algorithm>
@@ -132,7 +133,7 @@ SkyBodyGroundColors EvaluateBodyGroundColors(const AtmosphereParametersGPU& atmo
     EvaluateGroundLevelSunColor(atmosphere, config.moonColor, state.moonDirWS[1], bodies.Moon);
 
     bodies.MoonBlend =
-        config.useMoonWhenSunBelowHorizon ? std::clamp(state.primaryMoonBlend, 0.0f, 1.0f) : 0.0f;
+        config.useMoonWhenSunBelowHorizon ? Math::Clamp01(state.primaryMoonBlend) : 0.0f;
     return bodies;
 }
 

@@ -16,6 +16,7 @@
 #include "Engine/Rendering/ModelMaterialBridge.h"
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Materials/MaterialDocument.h"
 
 #include "Inspectors/InspectorComponentRowHelpers.h"
@@ -259,7 +260,7 @@ static uint32_t BaseColorToIconTint(const MaterialDocument& doc)
         return 0u;
     // Blend 50% towards white so dark materials still produce a visible tint.
     auto toU8 = [](float v) -> uint32_t {
-        return static_cast<uint32_t>(std::clamp(v * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint32_t>(Math::Clamp01(v * 0.5f + 0.5f) * 255.0f + 0.5f);
     };
     return 0xFF000000u | (toU8(c[0]) << 16) | (toU8(c[1]) << 8) | toU8(c[2]);
 }

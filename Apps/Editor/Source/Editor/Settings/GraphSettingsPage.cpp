@@ -6,6 +6,7 @@
 #include "Graph/GraphNodeRegistry.h"
 #include "Graph/GraphTypeRegistry.h"
 #include "Graph/NodeColorSettings.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/GraphPanel.h"
 
 #include <algorithm>
@@ -47,7 +48,7 @@ NodeDropShadowState LoadDropShadowState()
     loadFloat(GraphCanvas::kNodeDropShadowBlurPreference, state.Blur);
     loadFloat(GraphCanvas::kNodeDropShadowOpacityPreference, state.Opacity);
     state.Blur = std::max(0.0f, state.Blur);
-    state.Opacity = std::clamp(state.Opacity, 0.0f, 1.0f);
+    state.Opacity = Math::Clamp01(state.Opacity);
     return state;
 }
 

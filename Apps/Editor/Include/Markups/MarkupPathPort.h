@@ -41,7 +41,7 @@ bool IsMarkupPath(const ECS::World& world, ECS::EntityHandle entity);
 // only off the terrain.
 std::optional<std::string> ReadPathPoints(const nlohmann::json& value, std::vector<Mathematics::Vector3>& out);
 
-// Stands each of `points` on the terrain under it (MarkupTerrainHeightAt), so the knots Edit path
+// Stands each of `points` on the terrain under it (MarkupTerrainHeightAt), so the knots Edit Path
 // offers are on the line the Scene View draws; a point off the terrain keeps its y.
 void StandPathOnGround(ECS::World& world, std::span<Mathematics::Vector3> points);
 

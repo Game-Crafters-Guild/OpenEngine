@@ -1,5 +1,7 @@
 #include "Ocean/OceanInputDrawSource.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 
 namespace GameEngine::Ocean
@@ -45,7 +47,7 @@ void OceanInputDrawRegistry::Sort(std::span<OceanInputDrawPacket> packets)
 float32 OceanInputDrawRegistry::ApplyBlend(float32 current, float32 value,
                                            float32 weight, OceanInputBlendMode blend)
 {
-    const float32 w = std::clamp(weight, 0.0f, 1.0f);
+    const float32 w = Math::Clamp01(weight);
     float32 combined = value;
     switch (blend)
     {

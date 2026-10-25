@@ -8,6 +8,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "UI/StyleProperties.h"
 
@@ -86,17 +87,17 @@ void RegisterVignetteEffectInspector()
         OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         AddComponentFloatRowWithDrag<V>(ctx.Parent, "Intensity",
-            std::clamp(effect->Intensity, 0.0f, 1.0f), w, e, n, undo,
+            Math::Clamp01(effect->Intensity), w, e, n, undo,
             "Change Vignette Intensity",
-            [](V& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); },
+            [](V& u, float v) { u.Intensity = Math::Clamp01(v); },
             kDefaults.Intensity,
             "Corner darkening amount (0 = off).",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<V>(ctx.Parent, "Smoothness",
-            std::clamp(effect->Smoothness, 0.0f, 1.0f), w, e, n, undo,
+            Math::Clamp01(effect->Smoothness), w, e, n, undo,
             "Change Vignette Smoothness",
-            [](V& u, float v) { u.Smoothness = std::clamp(v, 0.0f, 1.0f); },
+            [](V& u, float v) { u.Smoothness = Math::Clamp01(v); },
             kDefaults.Smoothness,
             "Falloff sharpness toward the corners.",
             {}, 0.0f, 1.0f);

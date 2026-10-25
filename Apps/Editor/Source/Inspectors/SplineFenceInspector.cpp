@@ -7,6 +7,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/SplineFenceOverrideFields.h"
+#include "Mathematics/Interpolation.h"
 #include "Placement/FenceSpanOverrides.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -393,7 +394,7 @@ void RegisterSplineFenceInspector()
 
             AddComponentFloatRowWithDrag<SplineFence>(
                 ctx.Parent, "Slope Blend", comp->SlopeBlend, w, e, n, undo, "Change Slope Blend",
-                [](SplineFence& u, float v) { u.SlopeBlend = std::clamp(v, 0.0f, 1.0f); }, 0.0f,
+                [](SplineFence& u, float v) { u.SlopeBlend = Math::Clamp01(v); }, 0.0f,
                 "0 = plumb posts, which is what a real fence does; 1 = posts lean into the slope",
                 {}, 0.0f, 1.0f);
 

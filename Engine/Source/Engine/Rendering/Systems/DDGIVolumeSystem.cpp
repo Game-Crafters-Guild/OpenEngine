@@ -94,7 +94,7 @@ DDGIVolumeDesc DDGIVolumeSystem::ResolveActiveVolume(ECS::World& world)
     desc.ProbePlacement = comp.ProbePlacement;
     desc.ClassifyStrength = comp.ClassifyStrength;
     desc.DebugView = comp.DebugView;
-    desc.ProbesLongAxis = comp.ProbesLongAxis;
+    desc.ProbesLongAxis = comp.Divisions;
     desc.RaysPerProbe = comp.RaysPerProbe;
     desc.Intensity = comp.Intensity;
     desc.BounceIntensity = comp.BounceIntensity;

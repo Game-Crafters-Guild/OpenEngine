@@ -3,9 +3,9 @@
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/SkyBackdrop.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Sky/SkySettings.h"
 
-#include <algorithm>
 #include <cmath>
 
 namespace GameEngine::Engine::Renderer {
@@ -110,7 +110,7 @@ void FillHeightFogSkyColor(const PostProcessSettings& settings, const Rendering:
         break;
     }
 
-    const float nightAmount = std::clamp(sky.nightSkyBlend, 0.0f, 1.0f);
+    const float nightAmount = Math::Clamp01(sky.nightSkyBlend);
     if (sky.belowHorizonMode == static_cast<uint32_t>(Rendering::SkyBelowHorizonMode::StylizedGround))
     {
         // sky_render.frag paints the stylized rim over the horizon, fully at viewZenithCos == 0.

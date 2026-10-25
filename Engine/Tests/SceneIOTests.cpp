@@ -5616,6 +5616,32 @@ TEST(SceneIO, UnknownFieldIsReportedWithItsLineAndTheSceneLoads)
     EXPECT_TRUE(curve->Loop);
 }
 
+// A saved easing reads back from its code name and from the name the curve presets show.
+TEST(SceneIO, ValueCurveBuiltinEasingReadsTheCodeNameAndThePresetName)
+{
+    const auto scenePath = MakeTempPath("value_curve_easing_names.scene");
+    ASSERT_TRUE(WriteFile(scenePath,
+                          "[scene name=\"EasingNames\" version=1]\n"
+                          "\n"
+                          "[entity id=\"code\"]\n"
+                          "ValueCurve.builtinEasing = QuadInOut\n"
+                          "\n"
+                          "[entity id=\"preset\"]\n"
+                          "ValueCurve.builtinEasing = \"Quad In Out\"\n"));
+
+    ECS::World world;
+    Scene::LoadOptions opts{Scene::LoadMode::Replace};
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, opts)) << Scene::GetLastSceneIOError().message;
+    for (const char* tag : {"code", "preset"})
+    {
+        const auto e = FindByTag(world, tag);
+        ASSERT_TRUE(e.IsValid()) << tag;
+        const auto* curve = world.GetComponent<Components::ValueCurve>(e);
+        ASSERT_NE(curve, nullptr) << tag;
+        EXPECT_EQ(curve->BuiltinEasing, Math::TweenEasing::QuadInOut) << tag;
+    }
+}
+
 // A block that also holds a malformed value is applied again one field at a time, and that pass meets
 // every unknown name a second time. Each line is still one row: the unknown names once, the malformed
 // values once.

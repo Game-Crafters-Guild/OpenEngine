@@ -143,7 +143,7 @@ DDGIVolume.Enabled = true
 ; Adaptive, unlike ddgi_cornell_red.scene's Grid — ClassifyStrength only has
 ; anything to do while the classify pass exists.
 DDGIVolume.ProbePlacement = 1
-DDGIVolume.ProbesLongAxis = 12
+DDGIVolume.Divisions = 12
 DDGIVolume.RaysPerProbe = 128
 DDGIVolume.Intensity = 1.0
 DDGIVolume.BounceIntensity = 1.0

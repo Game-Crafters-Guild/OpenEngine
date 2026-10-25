@@ -106,7 +106,16 @@ static bool ResolveStageSource(const ShaderStageCompileSpec& spec,
         out = spec.inlineSource;
         return true;
     }
-    return ReadShaderFileText(srcPath, out, outError);
+    const ShaderSourceCache::EntryPtr entry =
+        ShaderSourceCache::Get().Read(srcPath, ShaderSourceCache::NormalizedKey(srcPath));
+    if (!entry)
+    {
+        if (outError)
+            *outError = "Failed to open file: " + srcPath.string();
+        return false;
+    }
+    out = entry->Bytes;
+    return true;
 }
 
 static std::string Hex64(uint64_t v)
@@ -158,6 +167,7 @@ public:
     explicit FileIncluder(std::vector<std::filesystem::path> dirs,
                           std::unordered_map<std::string, uint64_t>* outIncludeHashes)
         : m_Dirs(std::move(dirs))
+        , m_DirsSignature(ShaderSourceCache::MakeRootsSignature(m_Dirs))
         , m_OutIncludeHashes(outIncludeHashes)
     {
     }
@@ -168,55 +178,32 @@ public:
                                        size_t /*include_depth*/) override
     {
         auto* result = new shaderc_include_result();
-        std::filesystem::path req(requested_source ? requested_source : "");
+        const std::string operand(requested_source ? requested_source : "");
+        const std::filesystem::path requestingDir =
+            requesting_source && requesting_source[0] ? std::filesystem::path(requesting_source).parent_path()
+                                                      : std::filesystem::path{};
 
-        std::vector<std::filesystem::path> search;
-        if (requesting_source && requesting_source[0])
+        // The same resolution and the same bytes the key's closure walk folded
+        // (CollectIncludeClosure), so the program compiled here is the one its key names.
+        ShaderSourceCache& cache = ShaderSourceCache::Get();
+        const ShaderSourceCache::ResolutionPtr resolved =
+            cache.Resolve(requestingDir, m_Dirs, m_DirsSignature, operand);
+        const ShaderSourceCache::EntryPtr entry = resolved ? cache.Read(resolved->Candidate, resolved->Key) : nullptr;
+        if (entry)
         {
-            std::filesystem::path rs(requesting_source);
-            if (!rs.empty())
-                search.push_back(rs.parent_path());
-        }
-        for (const auto& d : m_Dirs)
-            search.push_back(d);
+            if (m_OutIncludeHashes)
+                m_OutIncludeHashes->try_emplace(resolved->Key, entry->Hash);
 
-        std::error_code ec;
-        for (const auto& dir : search)
-        {
-            std::filesystem::path cand = dir / req;
-            if (std::filesystem::exists(cand, ec))
-            {
-                std::ifstream in(cand, std::ios::binary);
-                std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            m_OwnedStrings.emplace_back(resolved->Candidate.string());
+            m_OwnedEntries.push_back(entry);
+            const std::string& resolvedName = m_OwnedStrings.back();
 
-                // Record include dependency hash (resolved absolute path).
-                if (m_OutIncludeHashes)
-                {
-                    std::error_code ec2;
-                    std::filesystem::path abs = std::filesystem::absolute(cand, ec2);
-                    if (ec2)
-                        abs = cand;
-                    const std::string key = abs.lexically_normal().string();
-                    if (m_OutIncludeHashes->find(key) == m_OutIncludeHashes->end())
-                    {
-                        const uint64_t h = HashShaderBytes(contents.data(), contents.size());
-                        (*m_OutIncludeHashes)[key] = h;
-                    }
-                }
-
-                m_OwnedStrings.emplace_back(cand.string());
-                m_OwnedStrings.emplace_back(std::move(contents));
-
-                const std::string& resolvedName = m_OwnedStrings[m_OwnedStrings.size() - 2];
-                const std::string& resolvedText = m_OwnedStrings[m_OwnedStrings.size() - 1];
-
-                result->source_name = resolvedName.c_str();
-                result->source_name_length = resolvedName.size();
-                result->content = resolvedText.c_str();
-                result->content_length = resolvedText.size();
-                result->user_data = nullptr;
-                return result;
-            }
+            result->source_name = resolvedName.c_str();
+            result->source_name_length = resolvedName.size();
+            result->content = entry->Bytes.c_str();
+            result->content_length = entry->Bytes.size();
+            result->user_data = nullptr;
+            return result;
         }
 
         // Not found. shaderc treats a result with empty content as a SUCCESSFUL
@@ -228,25 +215,19 @@ public:
         // (bad path, missing staging), and if it were genuinely optional the author
         // should guard it, not lean on empty content.
         {
-            std::string searched;
-            for (const auto& dir : search)
-            {
-                if (!searched.empty())
-                    searched += ", ";
-                searched += (dir / req).generic_string();
-            }
-            Logger::Log::Error("ShaderCompileService: #include \"{}\" (from '{}') NOT FOUND — shaderc "
+            std::string searched = requestingDir.empty() ? std::string() : (requestingDir / operand).generic_string();
+            for (const auto& dir : m_Dirs)
+                searched += (searched.empty() ? "" : ", ") + (dir / operand).generic_string();
+            Logger::Log::Error("ShaderCompileService: #include \"{}\" (from '{}') {} — shaderc "
                                "will substitute EMPTY content. Searched: [{}]",
-                               requested_source ? requested_source : "",
-                               requesting_source ? requesting_source : "<root>", searched);
+                               operand, requesting_source ? requesting_source : "<root>",
+                               resolved ? "UNREADABLE" : "NOT FOUND", searched);
         }
-        m_OwnedStrings.emplace_back(std::string(requested_source ? requested_source : ""));
-        m_OwnedStrings.emplace_back(std::string());
-        const std::string& nm = m_OwnedStrings[m_OwnedStrings.size() - 2];
-        const std::string& txt = m_OwnedStrings[m_OwnedStrings.size() - 1];
+        m_OwnedStrings.emplace_back(operand);
+        const std::string& nm = m_OwnedStrings.back();
         result->source_name = nm.c_str();
         result->source_name_length = nm.size();
-        result->content = txt.c_str();
+        result->content = "";
         result->content_length = 0;
         result->user_data = nullptr;
         return result;
@@ -259,14 +240,18 @@ public:
 
 private:
     std::vector<std::filesystem::path> m_Dirs;
+    std::string m_DirsSignature;
     std::unordered_map<std::string, uint64_t>* m_OutIncludeHashes = nullptr;
-    // Keeps the strings whose c_str() we hand to shaderc alive for the whole compile.
+    // Keeps the source names whose c_str() we hand to shaderc alive for the whole compile.
     // MUST be std::deque (not std::vector): shaderc holds those pointers across later
     // GetInclude calls (nested includes), and std::vector reallocation on a subsequent
     // emplace_back would invalidate them -> use-after-free / heap corruption in glslang's
     // SPIR-V generation. std::deque::push_back never invalidates references to existing
     // elements, so the pointers stay valid until the includer is destroyed.
     std::deque<std::string> m_OwnedStrings;
+    // The held sources whose bytes shaderc reads in place: an announcement may empty the
+    // cache mid-compile, and these keep the bytes alive until the includer is destroyed.
+    std::vector<ShaderSourceCache::EntryPtr> m_OwnedEntries;
 };
 
 static shaderc_shader_kind ToShadercKind(ShaderStageKind k)
@@ -516,9 +501,8 @@ bool TryServeCachedProgram(const std::filesystem::path& pkgPath, ShaderSourceKin
         // An include folded into the key needs no re-read: the key match already proved it.
         if (inc.path.empty() || closure.covered.count(inc.path) != 0)
             continue;
-        // Through the shared source cache: it re-reads and re-compares the bytes, so this is as
-        // strict as a direct read, and these are the same engine headers every other program's
-        // revalidation asks about.
+        // Through the shared source cache: the bytes held since the last announced edit, the same
+        // ones a compile of this program would read now.
         const ShaderSourceCache::EntryPtr cached = ShaderSourceCache::Get().Read(inc.path, inc.path);
         if (!cached || cached->Hash != inc.hash64)
             return false;
@@ -589,6 +573,10 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
     // identically on another. What the roots were a proxy for (which files an
     // #include resolves to) is measured directly by folding the closure's
     // CONTENT, so dropping them loses no discrimination.
+    //
+    // The source cache's generation before the first source is read: a compile
+    // finishing under a later one may have read bytes the key never folded.
+    const uint64_t sourceGeneration = ShaderSourceCache::Get().Generation();
     uint64_t h = kShaderHashOffsetBasis;
     // Encode key-format version + chosen compile target so 1.2 and 1.3 builds
     // never collide in a shared cache (CacheKeyTarget).
@@ -797,10 +785,6 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
 
     out.meta = std::move(meta);
 
-    // Emit shaderpkg
-    std::error_code ec;
-    std::filesystem::create_directories(out.outputDir, ec);
-
     // Record ONLY the dependencies the key could not cover — Slang module
     // imports and macro-form directives, which no textual scan resolves. A
     // covered include is proven by the key match itself, and recording its
@@ -824,11 +808,26 @@ bool ShaderCompileService::CompileProgramToCache(const ShaderProgramCompileReque
             out.cacheInfoJson.reset();
     }
 
-    std::string saveErr;
-    if (!SaveShaderPkg(out.shaderPkgPath, out.meta, spvBytes, out.cacheInfoJson, &saveErr))
+    // An edit announced between the key and the end of the compile may have
+    // reached the compile but not the key: both read the source cache, which the
+    // announcement emptied. The program is still this request's result, but
+    // stored, it would be served to whoever keys the pre-edit bytes later (an
+    // undo, a revert) as SPIR-V built from the edit.
+    if (ShaderSourceCache::Get().Generation() != sourceGeneration)
     {
-        setErr(saveErr.empty() ? "Failed to save .shaderpkg" : saveErr);
-        return false;
+        Logger::Log::Info("[ShaderCache] NOT STORED '{}': a shader source edit was announced during its compile",
+                          req.debugName);
+    }
+    else
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(out.outputDir, ec);
+        std::string saveErr;
+        if (!SaveShaderPkg(out.shaderPkgPath, out.meta, spvBytes, out.cacheInfoJson, &saveErr))
+        {
+            setErr(saveErr.empty() ? "Failed to save .shaderpkg" : saveErr);
+            return false;
+        }
     }
     out.stageBytes = std::move(spvBytes);
 

@@ -4,6 +4,7 @@
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "InspectorRegistry.h"  // InspectorContext, used by GetAdditionalEntities below
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
@@ -728,7 +729,7 @@ inline SliderWithFloatValueRow AddComponentMultiplierPercentRow(
     });
     field->SetOnValueChanged([run, slider, rowLabel, labelFor](const float& percent)
     {
-        const float v = std::clamp(percent / 100.0f, 0.0f, 1.0f);
+        const float v = Math::Clamp01(percent / 100.0f);
         slider->SetValueWithoutNotify(v);
         if (rowLabel)
             rowLabel->SetText(labelFor(v));

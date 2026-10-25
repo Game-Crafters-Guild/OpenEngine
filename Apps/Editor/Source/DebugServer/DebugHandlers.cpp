@@ -2375,10 +2375,11 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
             if (name.starts_with(ECS::kComponentDisabledNamePrefix))
                 continue;
 
-            // Use short name (strip namespace prefix) for JSON keys.
-            auto lastColon = name.rfind("::");
-            if (lastColon != std::string::npos)
-                name = name.substr(lastColon + 2);
+            // The key drops a native component's C++ namespace and keeps a script component's own
+            // namespace ("Game.Combat.Health"): two script components with one class name can sit on
+            // one entity, and set_component finds each by its key.
+            if (const size_t scope = name.rfind("::"); scope != std::string::npos)
+                name.erase(0, scope + 2);
             if (!serialized.count(typeId))
                 components[name] = SerializeDynamicComponent(world, entity, typeId);
             AddComponentEnabledState(components[name], world, entity, typeId);

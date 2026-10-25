@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/HotReloadIntegration.h"
 #include "Rendering/Materials/ShaderCompileService.h"
+#include "Rendering/ShaderGraph/SgGraphFileIO.h"
 
 #include <atomic>
 #include <chrono>
@@ -27,6 +29,8 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace GameEngine::Rendering;
 
@@ -553,6 +557,7 @@ TEST(SlangCompileLane, CompilesEndToEndAndRevalidatesModuleImports)
     WriteTextFile(modPath, kProbeModuleV2);
     std::error_code ec;
     fs::last_write_time(modPath, fs::file_time_type::clock::now() + std::chrono::seconds(2), ec);
+    NotifyShaderSourcesChanged();
 
     ShaderProgramCompileResult resStale{};
     ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(req, ShaderSourceKind::SpirV, resStale, &err)) << err;
@@ -632,7 +637,8 @@ static_assert(sizeof(kProbeBrdfV1) == sizeof(kProbeBrdfV2), "same-length rewrite
 // shape mtime-preserving tooling produces (robocopy /COPY:DAT, timestamp-
 // restoring syncs) and the shape a same-tick save produces. After the rewrite the
 // file is INDISTINGUISHABLE from the original by size or timestamp; only its
-// content differs.
+// content differs. The edit is then announced, as the editor's file watcher
+// announces it: the compile path re-reads no held source until it is.
 void RewritePreservingMtimeAndLength(const fs::path& p, const char* newText)
 {
     std::error_code ec;
@@ -648,6 +654,7 @@ void RewritePreservingMtimeAndLength(const fs::path& p, const char* newText)
     fs::last_write_time(p, originalMtime, ec);
     ASSERT_FALSE(ec) << "could not restore mtime of " << p.string();
     ASSERT_EQ(fs::last_write_time(p, ec), originalMtime) << "mtime restore did not stick";
+    NotifyShaderSourcesChanged();
 }
 } // namespace
 
@@ -743,9 +750,9 @@ TEST(ShaderCompileCacheKey, TransitiveAdapterIncludeContentEntersKey)
 
 TEST(ShaderCompileCacheKey, UnchangedIncludeClosureStaysACacheHit)
 {
-    // No always-recompile regression. Content-keying reads the whole closure on
-    // every key build, so the guarantee that matters is that an UNCHANGED closure
-    // still hits. Sized like the real adapter_forward chain (~18 files, ~130KB
+    // No always-recompile regression. Every key build folds the whole closure's
+    // content, so the guarantee that matters is that an UNCHANGED closure still
+    // hits. Sized like the real adapter_forward chain (~18 files, ~130KB
     // total) and looped so the printed figure is the per-hit key-build cost this
     // scheme adds to every cache hit.
     TempTree tree("ge_cachekey_closure_hit");
@@ -800,6 +807,224 @@ TEST(ShaderCompileCacheKey, UnchangedIncludeClosureStaysACacheHit)
     std::cout << "[warm-path] " << kHits << " cache hits over a " << kChainLength
               << "-file include closure: " << totalMs << " ms total, " << (totalMs / kHits)
               << " ms/hit" << std::endl;
+}
+
+// --- Shared includes are read once ------------------------------------------
+//
+// A prewarm builds thousands of programs whose closures share the same engine
+// headers. Each header is read from disk once per process and served from
+// memory to every later key build and compile, until an edit is announced.
+
+namespace
+{
+// A shared header set and a fragment that needs every one of them: a header the
+// compile cannot see leaves its function undefined and fails the compile.
+constexpr int kSharedHeaderCount = 4;
+
+void WriteSharedHeaders(const fs::path& dir)
+{
+    for (int h = 0; h < kSharedHeaderCount; ++h)
+    {
+        const std::string text = "float GE_Shared" + std::to_string(h) + "() { return " + std::to_string(h) + ".0; }\n";
+        WriteTextFile(dir / ("shared_" + std::to_string(h) + ".glsl"), text.c_str());
+    }
+}
+
+std::string FragUsingSharedHeaders(int variant)
+{
+    std::string text = "#version 450\n";
+    for (int h = 0; h < kSharedHeaderCount; ++h)
+        text += "#include \"shared_" + std::to_string(h) + ".glsl\"\n";
+    text += "layout(location = 0) out vec4 oColor;\nvoid main() { oColor = vec4(";
+    for (int h = 0; h < kSharedHeaderCount; ++h)
+        text += "GE_Shared" + std::to_string(h) + "() + ";
+    text += std::to_string(variant) + ".0); }\n";
+    return text;
+}
+
+// A fragment program named `name` at tree/Generated/`name`.frag whose source is `text`, searching
+// `includes` for its #include directives.
+ShaderProgramCompileRequest SharedHeaderRequest(const fs::path& cache, const fs::path& tree, const fs::path& includes,
+                                                const std::string& name, const std::string& text)
+{
+    auto request = MakeInlineRequest(cache, tree / "Generated" / (name + ".frag"), name, text.c_str(), "fs");
+    request.includeDirs = {includes};
+    return request;
+}
+} // namespace
+
+TEST(ShaderCompileCacheKey, ProgramsSharingIncludesReadEachIncludeOnce)
+{
+    TempTree tree("ge_cachekey_shared_once");
+    const fs::path cache = tree.Root / "Cache";
+    const fs::path includes = tree.Root / "Includes";
+    WriteSharedHeaders(includes);
+
+    const std::string firstText = FragUsingSharedHeaders(0);
+    ShaderProgramCompileResult first{};
+    COMPILE_OR_SKIP(SharedHeaderRequest(cache, tree.Root, includes, "shared_0", firstText), first);
+    ASSERT_EQ(first.includeClosurePaths.size(), static_cast<size_t>(kSharedHeaderCount));
+    const uint64_t afterFirst = ShaderCompileService::GetTotalCompilations();
+
+    // With nothing announced, no later program may read a header from disk: once
+    // they are gone, only the held bytes can still key and compile the programs.
+    std::error_code ec;
+    fs::remove_all(includes, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    constexpr int kPrograms = 8;
+    for (int variant = 1; variant < kPrograms; ++variant)
+    {
+        const std::string text = FragUsingSharedHeaders(variant);
+        ShaderProgramCompileResult result{};
+        std::string err;
+        ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(
+            SharedHeaderRequest(cache, tree.Root, includes, "shared_" + std::to_string(variant), text),
+            ShaderSourceKind::SpirV, result, &err))
+            << "program " << variant << " read a shared include from disk again: " << err;
+        EXPECT_EQ(result.includeClosurePaths, first.includeClosurePaths) << "program " << variant;
+        EXPECT_NE(result.outputDir, first.outputDir) << "each variant is its own program";
+    }
+    EXPECT_EQ(ShaderCompileService::GetTotalCompilations(), afterFirst + kPrograms - 1)
+        << "every variant compiled, each from the held includes";
+}
+
+TEST(ShaderCompileCacheKey, ConcurrentBuildsSharingIncludesKeyAndCompileAsSequentialOnes)
+{
+    // The prewarm compiles on every job worker at once, all reaching the same
+    // headers through the one source cache. Every concurrent build must succeed
+    // and land at the key a sequential build of the same program computes.
+    TempTree tree("ge_cachekey_concurrent");
+    const fs::path cache = tree.Root / "Cache";
+    const fs::path includes = tree.Root / "Includes";
+    WriteSharedHeaders(includes);
+    NotifyShaderSourcesChanged();
+
+    constexpr int kThreads = 8;
+    constexpr int kProgramsPerThread = 4;
+    std::vector<std::string> texts;
+    for (int i = 0; i < kThreads * kProgramsPerThread; ++i)
+        texts.push_back(FragUsingSharedHeaders(i));
+
+    // Shaderc availability, checked once so the threads below need no skip path.
+    ShaderProgramCompileResult probe{};
+    COMPILE_OR_SKIP(SharedHeaderRequest(cache, tree.Root, includes, "concurrent_0", texts[0]), probe);
+    NotifyShaderSourcesChanged();
+
+    std::vector<fs::path> concurrentDirs(texts.size());
+    std::vector<std::string> errors(texts.size());
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t)
+    {
+        threads.emplace_back([&, t]() {
+            for (int k = 0; k < kProgramsPerThread; ++k)
+            {
+                const int i = t * kProgramsPerThread + k;
+                ShaderProgramCompileResult result{};
+                const ShaderProgramCompileRequest request =
+                    SharedHeaderRequest(cache, tree.Root, includes, "concurrent_" + std::to_string(i), texts[i]);
+                if (ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, result, &errors[i]))
+                    concurrentDirs[i] = result.outputDir;
+            }
+        });
+    }
+    for (std::thread& thread : threads)
+        thread.join();
+
+    NotifyShaderSourcesChanged();
+    for (size_t i = 0; i < texts.size(); ++i)
+    {
+        ASSERT_FALSE(concurrentDirs[i].empty()) << "concurrent build " << i << " failed: " << errors[i];
+        ShaderProgramCompileResult sequential{};
+        std::string err;
+        const ShaderProgramCompileRequest request =
+            SharedHeaderRequest(cache, tree.Root, includes, "concurrent_" + std::to_string(i), texts[i]);
+        ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, sequential, &err))
+            << err;
+        EXPECT_EQ(sequential.outputDir, concurrentDirs[i]) << "build " << i << " keyed differently under concurrency";
+        EXPECT_FALSE(sequential.stageBytes.at("fs").empty());
+    }
+}
+
+TEST(ShaderCompileCacheKey, ACompileOverlappingAnAnnouncementIsReturnedButNotStored)
+{
+    // The key and the compile both read the held sources, and an edit announced
+    // between them can reach the compile but not the key. Such a program is the
+    // request's result, but stored, it would later be served to whoever keys the
+    // pre-edit bytes. An announcer runs for the whole compile, so announcements
+    // land between the key and the end of the compile.
+    TempTree tree("ge_cachekey_announced_midcompile");
+    const fs::path cache = tree.Root / "Cache";
+    const fs::path includes = tree.Root / "Includes";
+    WriteSharedHeaders(includes);
+    const std::string text = FragUsingSharedHeaders(0);
+    auto request = MakeInlineRequest(cache, tree.Root / "Generated" / "announced.frag", "announced", text.c_str(), "fs");
+    request.includeDirs = {includes};
+
+    // Shaderc availability, checked on another program so the one below is cold.
+    const std::string probeText = FragUsingSharedHeaders(1);
+    auto probeRequest =
+        MakeInlineRequest(cache, tree.Root / "Generated" / "probe.frag", "probe", probeText.c_str(), "fs");
+    probeRequest.includeDirs = {includes};
+    ShaderProgramCompileResult probe{};
+    COMPILE_OR_SKIP(probeRequest, probe);
+
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> announcements{0};
+    std::thread announcer([&]() {
+        while (!stop.load(std::memory_order_acquire))
+        {
+            NotifyShaderSourcesChanged();
+            announcements.fetch_add(1, std::memory_order_acq_rel);
+            std::this_thread::yield();
+        }
+    });
+    while (announcements.load(std::memory_order_acquire) == 0)
+        std::this_thread::yield();
+    const uint64_t announcedBefore = announcements.load(std::memory_order_acquire);
+    ShaderProgramCompileResult overlapped{};
+    std::string err;
+    const bool compiled = ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, overlapped, &err);
+    const uint64_t announcedDuring = announcements.load(std::memory_order_acquire) - announcedBefore;
+    stop.store(true, std::memory_order_release);
+    announcer.join();
+
+    ASSERT_TRUE(compiled) << err;
+    ASSERT_GT(announcedDuring, 1u) << "no announcement landed during the compile: this run proves nothing";
+    EXPECT_FALSE(overlapped.stageBytes.at("fs").empty()) << "the compiled program was not returned";
+    EXPECT_FALSE(fs::exists(overlapped.shaderPkgPath))
+        << "a program compiled across an announcement was stored under the key built before it";
+
+    // With nothing announced, the same program is stored under the same key.
+    ShaderProgramCompileResult quiet{};
+    ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, quiet, &err)) << err;
+    EXPECT_EQ(quiet.outputDir, overlapped.outputDir);
+    EXPECT_TRUE(fs::exists(quiet.shaderPkgPath));
+}
+
+TEST(ShaderCompileCacheKey, ARewrittenGeneratedSurfaceChangesTheNextKey)
+{
+    // Generated shader-graph surfaces live under the shader cache root, which no
+    // file watcher reports: the writer's own announcement is the only way a
+    // rewrite reaches the next key.
+    TempTree tree("ge_cachekey_generated_surface");
+    const fs::path cache = tree.Root / "Cache";
+    const fs::path surface = tree.Root / "Generated" / "graph_surface.glsl";
+    fs::create_directories(surface.parent_path());
+    ASSERT_TRUE(GameEngine::ShaderGraph::WriteGraphFileTextIfChanged(surface, "float GE_Graph() { return 1.0; }\n"));
+
+    const char* text = "#version 450\n#include \"graph_surface.glsl\"\nlayout(location = 0) out vec4 oColor;\n"
+                       "void main() { oColor = vec4(GE_Graph()); }\n";
+    auto request = MakeInlineRequest(cache, tree.Root / "Program" / "graph.frag", "graph", text, "fs");
+    request.includeDirs = {surface.parent_path()};
+    ShaderProgramCompileResult first{};
+    COMPILE_OR_SKIP(request, first);
+
+    ASSERT_TRUE(GameEngine::ShaderGraph::WriteGraphFileTextIfChanged(surface, "float GE_Graph() { return 2.0; }\n"));
+    ShaderProgramCompileResult second{};
+    std::string err;
+    ASSERT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, second, &err)) << err;
+    EXPECT_NE(second.outputDir, first.outputDir) << "the rewritten surface was not read: its write was not announced";
 }
 
 TEST(ShaderCompileCacheKey, ForeignKeyedEntryIsIgnoredNotServed)

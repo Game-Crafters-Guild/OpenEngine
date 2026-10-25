@@ -1,5 +1,6 @@
 #include "Terrain/TerrainRuleWeightProfileStrip.h"
 
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/TerrainSurfaceRuleEval.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIPrimitive.h"
@@ -32,7 +33,7 @@ constexpr float kHueB = 1.0f;
 
 uint32_t WeightColor(float weight)
 {
-    const float t = std::clamp(weight, 0.0f, 1.0f);
+    const float t = Math::Clamp01(weight);
     // Lift from a dim floor to full so a shallow ramp still reads as filled, and
     // carry alpha with it so the curve's foot fades out rather than ending on a
     // hard line.
@@ -109,8 +110,7 @@ void TerrainRuleWeightProfileStrip::OnGeneratePrimitives(UI::PrimitiveEmitContex
         const float t = static_cast<float>(i) / static_cast<float>(columns);
         const float value = m_Domain.Min + t * domainSpan;
         weights[static_cast<std::size_t>(i)] =
-            std::clamp(TerrainECS::TerrainRuleConditionWeightForValue(m_Condition, value),
-                       0.0f, 1.0f);
+            Math::Clamp01(TerrainECS::TerrainRuleConditionWeightForValue(m_Condition, value));
     }
 
     const float bottom = plotY + plotH;

@@ -5,6 +5,7 @@
 #include "Assets/AssetManager.h"
 #include "Core/Engine.h"
 #include "Input/KeyCodes.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "UI/AssetField.h"
 #include "UI/ResolvedStyle.h"
@@ -174,8 +175,8 @@ void BlendSpace2DEditor::PadToSample(float localX, float localY, const PadLayout
 {
     const BlendSpace2DAxis axisX = MakeAxisX();
     const BlendSpace2DAxis axisY = MakeAxisY();
-    const float tx = pad.Width <= 0.f ? 0.f : std::clamp((localX - pad.Left) / pad.Width, 0.f, 1.f);
-    const float ty = pad.Height <= 0.f ? 0.f : std::clamp(1.f - (localY - pad.Top) / pad.Height, 0.f, 1.f);
+    const float tx = pad.Width <= 0.f ? 0.f : Math::Clamp01((localX - pad.Left) / pad.Width);
+    const float ty = pad.Height <= 0.f ? 0.f : Math::Clamp01(1.f - (localY - pad.Top) / pad.Height);
     outX = axisX.Min + tx * (axisX.Max - axisX.Min);
     outY = axisY.Min + ty * (axisY.Max - axisY.Min);
 }

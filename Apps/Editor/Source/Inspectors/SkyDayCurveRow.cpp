@@ -99,9 +99,9 @@ static std::vector<Dropdown::Option> BuildSkyScalarCurveShapeModeOptions()
 static CubicBezierShape CubicBezierShapeFromSkyBezier(const Components::SkyScalarCubicBezier& bezier)
 {
     return {
-        std::clamp(bezier.Control1X, 0.0f, 1.0f),
+        Math::Clamp01(bezier.Control1X),
         bezier.Control1Y,
-        std::clamp(bezier.Control2X, 0.0f, 1.0f),
+        Math::Clamp01(bezier.Control2X),
         bezier.Control2Y,
         bezier.AnchorStartY,
         bezier.AnchorEndY,
@@ -111,9 +111,9 @@ static CubicBezierShape CubicBezierShapeFromSkyBezier(const Components::SkyScala
 static Components::SkyScalarCubicBezier SkyBezierFromCubicBezierShape(const CubicBezierShape& shape)
 {
     return {
-        std::clamp(shape.C1X, 0.0f, 1.0f),
+        Math::Clamp01(shape.C1X),
         shape.C1Y,
-        std::clamp(shape.C2X, 0.0f, 1.0f),
+        Math::Clamp01(shape.C2X),
         shape.C2Y,
         shape.AnchorStartY,
         shape.AnchorEndY,
@@ -128,9 +128,9 @@ static CubicBezierShape SkyBezierShapeFromPreset(const CurvePresets::CubicBezier
         return Math::Lerp(displayMin, displayMax, Math::Clamp01(v));
     };
     return {
-        std::clamp(preset.Control1X, 0.0f, 1.0f),
+        Math::Clamp01(preset.Control1X),
         remap(preset.Control1Y),
-        std::clamp(preset.Control2X, 0.0f, 1.0f),
+        Math::Clamp01(preset.Control2X),
         remap(preset.Control2Y),
         remap(preset.AnchorStartY),
         remap(preset.AnchorEndY),
@@ -145,9 +145,9 @@ static CurvePresets::CubicBezierPreset PresetFromSkyBezierShape(const CubicBezie
         return Math::Clamp01(Math::InverseLerp(displayMin, displayMax, v));
     };
     return {
-        std::clamp(shape.C1X, 0.0f, 1.0f),
+        Math::Clamp01(shape.C1X),
         normalize(shape.C1Y),
-        std::clamp(shape.C2X, 0.0f, 1.0f),
+        Math::Clamp01(shape.C2X),
         normalize(shape.C2Y),
         normalize(shape.AnchorStartY),
         normalize(shape.AnchorEndY),
@@ -353,8 +353,8 @@ CurveField* AddSkyDayCurveRow(
                            Components::SkyEnvironment& u,
                            const Components::SkyScalarCubicBezier& bezierShape) {
         Components::SkyScalarCubicBezier clamped = bezierShape;
-        clamped.Control1X = std::clamp(clamped.Control1X, 0.0f, 1.0f);
-        clamped.Control2X = std::clamp(clamped.Control2X, 0.0f, 1.0f);
+        clamped.Control1X = Math::Clamp01(clamped.Control1X);
+        clamped.Control2X = Math::Clamp01(clamped.Control2X);
         clamped.Control1Y = clampValue(clamped.Control1Y);
         clamped.Control2Y = clampValue(clamped.Control2Y);
         clamped.AnchorStartY = clampValue(clamped.AnchorStartY);

@@ -147,8 +147,11 @@ class MaterialSystem
     void InstallReloadInvalidator(AssetEventDispatcher& dispatcher);
 
     // A shader source file (surface .glsl, vertex modifier) changed on disk.
-    // Thread-safe enqueue; the next BeginFrame invalidates every cached shader
-    // referencing the file and recompiles the registered materials that use it.
+    // Empties the held shader sources at once, so the next build reads every file
+    // again, and enqueues the file (thread-safe): the next BeginFrame invalidates
+    // every cached shader referencing it and recompiles the registered materials
+    // that use it. An empty path stands for the default surface, which a material
+    // that authors no surface composes with.
     // Direct-call seam (editor recompile button, tests) — the asset event path
     // enqueues GUIDs via the subscriber instead.
     void NotifyShaderSourceEdited(const std::filesystem::path& sourcePath);

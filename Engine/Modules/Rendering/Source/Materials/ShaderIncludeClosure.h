@@ -51,8 +51,8 @@ struct IncludeClosure
 // Walk the #include closure of `sourceText`, resolving each directive with the
 // SAME search order the compiler's includer uses: the requesting source's own
 // directory first, then `searchDirs` in order, taking the first path that
-// exists. KEEP IN SYNC WITH FileIncluder — a scan that resolves a directive to a
-// different file than the compiler does would key content the compile never read.
+// exists. Both resolve through ShaderSourceCache::Resolve and read through
+// ShaderSourceCache::Read, so the key folds exactly the bytes the compile reads.
 //
 // Conservative by construction: preprocessor conditionals are NOT evaluated, so
 // the closure is a SUPERSET of what the compiler actually pulls in for a given

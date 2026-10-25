@@ -42,6 +42,9 @@ set(EDITOR_TEST_SOURCES
 	PlayModeChangeReviewTests.cpp
 	PlayModeMarkupNotesTests.cpp
 	RenderPipelineInspectorTests.cpp
+	# The shader inspector's stage handling for a .slang module.
+	ShaderInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/ShaderInspector.cpp
 	InspectorSimulationRefreshTests.cpp
 	InspectorSourceRowTests.cpp
 	TextureCoveragePolicyNoticeTests.cpp
@@ -891,6 +894,10 @@ set(EDITOR_TEST_SOURCES
 	# the arrows select. Its layout file is staged below.
 	PictureChoiceFieldTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/PictureChoiceField.cpp
+	# The Terrain Grass Preset row: Custom is a state once a dial differs, and a pick applies the preset
+	# as one undo step.
+	TerrainGrassPresetRowTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainGrassPresetRow.cpp
 	# Option pictures: every declared class has a rule naming an existing file, and back.
 	OptionPicturesTests.cpp
 	# The sky inspector's sun readout: its wording and the info card it is shown in.
@@ -2078,6 +2085,11 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/TransientNotice/TransientNotice.uxml"
 	    "Assets/UI/controls/TransientNotice/TransientNotice.uxml")
+
+	# The Hierarchy's bottom bar builds its rows glyph from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml"
+	    "Assets/UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml")
 
 	# The Log list builds each row from its layout, read from the same root.
 	ge_stage_test_asset(EditorTests

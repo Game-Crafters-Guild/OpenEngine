@@ -1,5 +1,6 @@
 #include "Panels/VideoPlayerModal.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
@@ -217,7 +218,7 @@ void VideoPlayerModal::BuildUI()
             const float barW = m_SeekBar->GetLayoutWidth();
             if (barW > 0.0f)
             {
-                const float ratio = std::clamp((e.X - m_SeekBar->GetLayoutX()) / barW, 0.0f, 1.0f);
+                const float ratio = Math::Clamp01((e.X - m_SeekBar->GetLayoutX()) / barW);
                 m_Player.Seek(ratio * m_Player.GetDuration());
             }
             e.Stop();
@@ -229,7 +230,7 @@ void VideoPlayerModal::BuildUI()
             const float barW = m_SeekBar->GetLayoutWidth();
             if (barW > 0.0f)
             {
-                const float ratio = std::clamp((e.X - m_SeekBar->GetLayoutX()) / barW, 0.0f, 1.0f);
+                const float ratio = Math::Clamp01((e.X - m_SeekBar->GetLayoutX()) / barW);
                 m_Player.Seek(ratio * m_Player.GetDuration());
             }
         });
@@ -656,7 +657,7 @@ void VideoPlayerModal::UpdateControlState()
 
     if (m_SeekFill && dur > 0.0f)
     {
-        const float pct = std::clamp(cur / dur, 0.0f, 1.0f) * 100.0f;
+        const float pct = Math::Clamp01(cur / dur) * 100.0f;
         m_SeekFill->Overrides().Set(Style::Width, StyleLength::Percent(pct));
     }
 

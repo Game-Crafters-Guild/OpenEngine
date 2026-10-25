@@ -4,6 +4,7 @@
 #include "Inspectors/DeclaredPropertyRowModel.h"
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "UI/InspectorSection.h"
 #include "Input/InputSystem.h"
@@ -29,6 +30,7 @@
 #include "Rendering/Materials/MaterialAlphaMode.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
+#include "Rendering/Materials/MaterialPropertyBinding.h"
 #include "Rendering/Materials/MaterialValidation.h"
 #include "Rendering/Materials/ShaderCapabilityDetector.h"
 #include "Rendering/Materials/ShaderPropertyTable.h"
@@ -99,7 +101,7 @@ static uint32_t BaseColorToIconTint(const MaterialDocument& doc)
         return 0u;
     // Blend 50% towards white so dark materials still produce a visible tint.
     auto toU8 = [](float v) -> uint32_t {
-        return static_cast<uint32_t>(std::clamp(v * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint32_t>(Math::Clamp01(v * 0.5f + 0.5f) * 255.0f + 0.5f);
     };
     return 0xFF000000u | (toU8(c[0]) << 16) | (toU8(c[1]) << 8) | toU8(c[2]);
 }
@@ -1476,7 +1478,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 // rows; brightness is the separate "Emission Luminance (nits)" row, so the colour
                 // picker never touches the nits value.
                 const auto& arr = std::get<std::vector<float>>(val);
-                AddColorSwatchRow(content, Editor::MaterialRows::PropertyLabel(key), arr, root, mat, key, openPicker, inlineEmbed, openAsset);
+                AddColorSwatchRow(content, Rendering::MaterialPropertyBinding::PropertyKeyLabel(key), arr, root, mat, key, openPicker, inlineEmbed, openAsset);
             }
             else if (key == "enableClearCoat" && std::holds_alternative<bool>(val))
             {
@@ -1583,7 +1585,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 float cur = kDefaultEmissiveExposureWeight;
                 if (!TryGetScalarFromMaterialValue(val, cur))
                     continue;
-                AddMaterialSliderRow(content, Editor::MaterialRows::PropertyLabel(key), cur, 0.0f, 1.0f, root, mat, key,
+                AddMaterialSliderRow(content, Rendering::MaterialPropertyBinding::PropertyKeyLabel(key), cur, 0.0f, 1.0f, root, mat, key,
                                      openPicker, undo, inlineEmbed, openAsset,
                                      Editor::MaterialRows::kEmissiveExposureWeightTooltip);
             }
@@ -1592,7 +1594,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 float cur = 0.0f;
                 if (!TryGetScalarFromMaterialValue(val, cur))
                     continue;
-                AddMaterialSliderRow(content, Editor::MaterialRows::PropertyLabel(key), cur, 0.0f, 1.0f, root, mat, key, openPicker, undo, inlineEmbed, openAsset);
+                AddMaterialSliderRow(content, Rendering::MaterialPropertyBinding::PropertyKeyLabel(key), cur, 0.0f, 1.0f, root, mat, key, openPicker, undo, inlineEmbed, openAsset);
             }
             else if (key == "emissionLuminance" && std::holds_alternative<float>(val))
             {
@@ -1612,7 +1614,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
             else if (std::holds_alternative<float>(val))
             {
                 float cur = std::get<float>(val);
-                InspectorDrag::AddFloatRowWithDrag(content, Editor::MaterialRows::PropertyLabel(key), cur,
+                InspectorDrag::AddFloatRowWithDrag(content, Rendering::MaterialPropertyBinding::PropertyKeyLabel(key), cur,
                     [mat, key](float v) { UpdateRuntimeProperty(mat, key, MaterialValue{v}); },
                     [root, mat, key, openPicker, inlineEmbed, openAsset](float v) {
                         MaterialDocument d = mat->GetDocument();
@@ -1693,7 +1695,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
             const std::string& propKey = kv.first;
             const MaterialValue& val = kv.second;
 
-            const std::string propLabel = Editor::MaterialRows::PropertyLabel(propKey);
+            const std::string propLabel = Rendering::MaterialPropertyBinding::PropertyKeyLabel(propKey);
             if (std::holds_alternative<float>(val))
             {
                 float cur = std::get<float>(val);
@@ -1825,13 +1827,13 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
             float hexBlend = 0.5f;
             if (auto it = doc.properties.find("hexBlend"); it != doc.properties.end())
                 (void)TryGetScalarFromMaterialValue(it->second, hexBlend);
-            AddMaterialSliderRow(content, "Hex Blend", std::clamp(hexBlend, 0.0f, 1.0f), 0.0f, 1.0f,
+            AddMaterialSliderRow(content, "Hex Blend", Math::Clamp01(hexBlend), 0.0f, 1.0f,
                                  root, mat, "hexBlend", openPicker, undo, inlineEmbed, openAsset);
 
             float hexRotation = 1.0f;
             if (auto it = doc.properties.find("hexRotation"); it != doc.properties.end())
                 (void)TryGetScalarFromMaterialValue(it->second, hexRotation);
-            AddMaterialSliderRow(content, "Hex Rotation", std::clamp(hexRotation, 0.0f, 1.0f), 0.0f, 1.0f,
+            AddMaterialSliderRow(content, "Hex Rotation", Math::Clamp01(hexRotation), 0.0f, 1.0f,
                                  root, mat, "hexRotation", openPicker, undo, inlineEmbed, openAsset);
         }
 
@@ -2567,17 +2569,17 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     return;
                 if (auto* rs = EngineCore::GetInstance().GetRenderServices())
                 {
+                    // First, so the compile below reads the disk again: the held
+                    // shader sources are emptied on every press, also for a material
+                    // on the default surface (an empty surfaceShader), since the
+                    // missed edit can be in any include. The surface, or the default
+                    // surface for a material that authors none, also goes through the
+                    // runtime lane, which recompiles the registered pipelines of every
+                    // material composed with it, so the viewport updates and not only
+                    // the diagnostics.
+                    rs->Materials().NotifyShaderSourceEdited(mat->GetDocument().surfaceShader);
                     rs->Materials().Compiler().Clear(mat->GetGUID());
                     rs->Materials().Compiler().RequestCompile(mat->GetGUID());
-                    // Also push the edit through the runtime lane: recompile the
-                    // registered pipelines of every material sharing this
-                    // surface, so the viewport updates — not just the
-                    // diagnostics. (Before this the button refreshed the
-                    // inspector's compile result while draws kept the stale
-                    // SPIR-V.)
-                    const std::string& surface = mat->GetDocument().surfaceShader;
-                    if (!surface.empty())
-                        rs->Materials().NotifyShaderSourceEdited(surface);
                 }
                 RequestRebuild(root, mat, openPicker, pingAsset, nullptr, inlineEmbed, openAsset);
             });

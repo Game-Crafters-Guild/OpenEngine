@@ -15,6 +15,7 @@
 #include "Platform/ContextMenu.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/WorldSnapshotCommand.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/Label.h"
 #include "UI/EditorIcons.h"
 #include "UI/InspectorSection.h"
@@ -52,10 +53,7 @@ std::string NormalizeComponentName(std::string_view text)
     // keys use the serialized component name ("Light.intensity"). Compare the
     // unqualified type name so Inspector sections can resolve their scene
     // properties across compilers and registration paths.
-    if (const size_t separator = text.rfind("::");
-        separator != std::string_view::npos)
-        text.remove_prefix(separator + 2);
-    return NormalizeName(text);
+    return NormalizeName(UnqualifiedName(text));
 }
 
 Label* FindRowLabel(UIElement* element)

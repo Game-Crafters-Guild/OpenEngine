@@ -7,6 +7,7 @@
 #include "ECS/Components.h"
 #include "ECS/ECS.h"
 #include "ECS/ECSTemplates.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Ray.h"
 #include "Mathematics/Vector3.h"
@@ -32,10 +33,10 @@ using Mathematics::Vector3;
 
 Color MeasureColor(const Components::MeasureComponent& measure, float alphaScale)
 {
-    return Color(std::clamp(measure.Color[0], 0.0f, 1.0f),
-                 std::clamp(measure.Color[1], 0.0f, 1.0f),
-                 std::clamp(measure.Color[2], 0.0f, 1.0f),
-                 std::clamp(measure.Color[3] * alphaScale, 0.0f, 1.0f));
+    return Color(Math::Clamp01(measure.Color[0]),
+                 Math::Clamp01(measure.Color[1]),
+                 Math::Clamp01(measure.Color[2]),
+                 Math::Clamp01(measure.Color[3] * alphaScale));
 }
 
 Vector3 Lerp(const Vector3& a, const Vector3& b, float t)
@@ -284,7 +285,7 @@ void MeasureSceneGizmo::Render(GizmoRenderContext& context)
                     const Color hoverLineColor(lineColor.r + (1.0f - lineColor.r) * 0.35f,
                                                lineColor.g + (1.0f - lineColor.g) * 0.35f,
                                                lineColor.b + (1.0f - lineColor.b) * 0.35f,
-                                               std::clamp(lineColor.a * 1.15f, 0.0f, 1.0f));
+                                               Math::Clamp01(lineColor.a * 1.15f));
                     DrawDottedWorldLine(context, start, end, hoverLineColor, 2.4f, 0.12f);
                 }
                 DrawDottedWorldLine(context, start, end, lineColor, 1.5f, 0.12f);

@@ -1,6 +1,7 @@
 #include "Engine/Rendering/ColorGradeParamsUBO.h"
 
 #include "Engine/Rendering/PostProcessSettings.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 
@@ -15,8 +16,8 @@ namespace {
 // the authored start instead of an undefined smoothstep.
 void SanitizeBandRange(float32 start, float32 end, float& outStart, float& outEnd)
 {
-    outStart = std::clamp(start, 0.0f, 1.0f);
-    outEnd = std::max(std::clamp(end, 0.0f, 1.0f), outStart + kColorGradeMinBandWidth);
+    outStart = Math::Clamp01(start);
+    outEnd = std::max(Math::Clamp01(end), outStart + kColorGradeMinBandWidth);
 }
 
 // URP-parity white balance (ColorUtils.ColorBalanceToLMSCoeffs): temperature/tint

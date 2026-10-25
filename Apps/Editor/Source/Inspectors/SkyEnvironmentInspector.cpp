@@ -1,6 +1,7 @@
 #include "Inspectors/SkyEnvironmentInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/Light.h"
@@ -330,7 +331,7 @@ static void AddSkyEnvironmentDayKeyGradientRow(
             LinearRgbToPickerState(rgb, argb, intensity);
             barRaw->SetStopColor(i, argb);
             if (float* keyHour = (*accessTimeCopy)(*comp, i))
-                barRaw->SetStopPosition(i, std::clamp(*keyHour / 24.0f, 0.0f, 1.0f));
+                barRaw->SetStopPosition(i, Math::Clamp01(*keyHour / 24.0f));
         }
     };
     syncUi();
@@ -428,7 +429,7 @@ static void AddSkyEnvironmentDayKeyGradientRow(
         [world, notifications, undo, targets, accessTimeCopy, selectedStop, syncUi, keyTimeDragEdit](size_t stopIndex, float normalized) {
             const size_t stop = std::min(stopIndex, size_t{3});
             *selectedStop = stop;
-            const float requestedHour = std::clamp(normalized, 0.0f, 1.0f) * 24.0f;
+            const float requestedHour = Math::Clamp01(normalized) * 24.0f;
 
             if (!targets || targets->empty())
                 return;
@@ -489,7 +490,7 @@ static void AddSkyEnvironmentDayKeyGradientRow(
         [world, notifications, targets, accessTimeCopy, selectedStop, syncUi, keyTimeDragEdit](size_t stopIndex, float normalized) {
             const size_t stop = std::min(stopIndex, size_t{3});
             *selectedStop = stop;
-            const float requestedHour = std::clamp(normalized, 0.0f, 1.0f) * 24.0f;
+            const float requestedHour = Math::Clamp01(normalized) * 24.0f;
 
             auto applyOne = [accessTimeCopy, stop, requestedHour](Components::SkyEnvironment& env) {
                 const float clamped = ClampSkyDayKeyHour(env.DayKeyTimesHours, stop, requestedHour);
@@ -878,7 +879,7 @@ void RegisterSkyEnvironmentInspector()
             AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
                 ctx.Parent, "IBL ground darkening", sky->IblLowerHemisphereDarkness, w, e, n, undo,
                 "Change Sky IBL Ground Darkening",
-                [](Components::SkyEnvironment& u, float v) { u.IblLowerHemisphereDarkness = std::clamp(v, 0.0f, 1.0f); },
+                [](Components::SkyEnvironment& u, float v) { u.IblLowerHemisphereDarkness = Math::Clamp01(v); },
                 0.3f, "Darkens the lower hemisphere of the baked ambient only.",
                 extras, 0.0f, 1.0f);
 
@@ -1643,7 +1644,7 @@ void RegisterSkyEnvironmentInspector()
                                       &Components::SkyEnvironment::BelowHorizonDarknessBezier},
                 w, e, n, undo,
                 "Change Sky Horizon Darkness",
-                [](float v) { return std::clamp(v, 0.0f, 1.0f); },
+                [](float v) { return Math::Clamp01(v); },
                 0.0f, 1.0f,
                 "Below-horizon band strength across the day.", extras, ctx.Window, ctx.FrameRefreshCallbacks, ctx.SimulationRefreshCallbacks,
                 refreshTimeOfDayControlsNow, curvePlaybackScrubActive);
@@ -1889,7 +1890,7 @@ void RegisterSkyEnvironmentInspector()
                 n,
                 undo,
                 "Change Sky Moon Cycle",
-                [](Components::SkyEnvironment& u, float v) { u.MoonArcPosition = std::clamp(v, 0.0f, 1.0f); },
+                [](Components::SkyEnvironment& u, float v) { u.MoonArcPosition = Math::Clamp01(v); },
                 sky->MoonArcPosition,
                 "Where the moon is in its cycle, which is also its phase: 0=new, 0.25=first quarter, 0.5=full, 0.75=last quarter. It sets the lit shape of the disk and the moonlight.",
                 extras,
@@ -1980,7 +1981,7 @@ void RegisterSkyEnvironmentInspector()
             n,
             undo,
             "Change Sky Falling Star Amount",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarAmount = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::SkyEnvironment& u, float v) { u.FallingStarAmount = Math::Clamp01(v); },
             sky->FallingStarAmount,
             "How many falling stars may appear at once.",
             extras,
@@ -2079,7 +2080,7 @@ void RegisterSkyEnvironmentInspector()
 
         AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Twinkle", sky->StarTwinkleAmount, w, e, n,
             undo, "Change Sky Star Twinkle Amount",
-            [](Components::SkyEnvironment& u, float v) { u.StarTwinkleAmount = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::SkyEnvironment& u, float v) { u.StarTwinkleAmount = Math::Clamp01(v); },
             Components::SkyEnvironment{}.StarTwinkleAmount,
             "Twinkle (scintillation), physical: how much a star's brightness swings at about 6 degrees "
             "above the horizon. It grows with the air the light crosses, so stars overhead hold steady. "
@@ -2138,7 +2139,7 @@ void RegisterSkyEnvironmentInspector()
 
         AddComponentFloatRowWithDrag<Components::SkyEnvironment>(stars, "Spikes", sky->StarSpikes, w, e, n,
             undo, "Change Sky Star Spikes",
-            [](Components::SkyEnvironment& u, float v) { u.StarSpikes = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::SkyEnvironment& u, float v) { u.StarSpikes = Math::Clamp01(v); },
             Components::SkyEnvironment{}.StarSpikes,
             "Star spikes, artistic: four diffraction spikes on the stars that carry the glow, as the share of "
             "the glow's light they take, so a star's total light does not change. 0 is none; they need Glow.",

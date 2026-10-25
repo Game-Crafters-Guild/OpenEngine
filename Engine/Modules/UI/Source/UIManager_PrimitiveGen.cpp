@@ -1,3 +1,4 @@
+#include "Mathematics/Interpolation.h"
 #include "UI/UIManager.h"
 #include "UIManager_Internal.h"
 #include "BackgroundImageGeometry.h"
@@ -2702,7 +2703,7 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
     if (slice.IsSliced())
     {
         const uint32_t tint = bgImg.HasTint ? UI::PackFromARGB(bgImg.Tint) : 0xFFFFFFFFu;
-        const float sat = std::clamp(bgImg.Saturation, 0.0f, 1.0f);
+        const float sat = Math::Clamp01(bgImg.Saturation);
         UI::BuildNineSliceRegions(
             slice, static_cast<float>(imgW), static_cast<float>(imgH),
             x, y, w, h, ctx.ContentScale,
@@ -2807,7 +2808,7 @@ void UIManager::EmitBackgroundImagePrimitive(UIElement* el, PrimitiveGenContext&
     UI::SetTextureSourceSpaceBits(prim, bgSlot.SpaceBits);
     if (el->HasClass("ui-bg-point-filter"))
         prim.ModeAndFlags |= UI::kPrimPointFilterBit;
-    prim.Saturation = std::clamp(bgImg.Saturation, 0.0f, 1.0f);
+    prim.Saturation = Math::Clamp01(bgImg.Saturation);
     UI::SetClip(prim, clipIdx);
     UI::SetOpacity(prim, ctx.EffectiveOpacity);
 

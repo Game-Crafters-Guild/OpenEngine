@@ -7,7 +7,13 @@ The `TerrainGrass` component grows procedural grass on the terrain on the same e
 
 ## Presets
 
-**Preset** at the top of the grass settings picks the kind of field. A preset sets the colors, **Blade Height**, **Blade Width**, the density and **Blade Tilt**. Every setting stays editable after you pick a preset. When you change one of them, **Preset** shows **Custom**. A preset does not change the wind, the clumps, **Root Fade**, **Canopy Shade** or the textures.
+**Preset** at the top of the grass settings picks the kind of field. One Undo reverts the pick. A preset sets the colors, **Blade Height**, **Blade Width**, the density and **Blade Tilt**. A preset does not change the wind, the clumps, **Root Fade**, **Canopy Shade** or the textures. Each preset in the list shows a picture of the field, its name and one line:
+
+- **Meadow** (the default): mid-height and leaf green.
+- **Lawn**: short, dense and upright.
+- **Steppe**: sparse, tall and dry.
+
+Every setting stays editable after you pick a preset. When you change one of them, the Preset row reads **Custom**. Custom is not in the list: pick a preset to go back to one.
 
 | Preset | Stored value | Density (blades / m²) | Height (m) | Width (m) | Tilt | Tip color |
 |---|---|---|---|---|---|---|
@@ -20,7 +26,7 @@ The scene stores the preset as `TerrainGrass.preset`. The preset is a label of w
 
 :::caution[Provisional values]
 
-The preset values and the default palette are provisional. They are set again, on the rendered look, after a change to how the tips of the blades are lit against the sun. The settings, the stored fields and the color contract stay as described here.
+The preset values and the default palette are provisional. The settings, the stored fields and the color contract stay as described here.
 
 :::
 

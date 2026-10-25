@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "TerrainGrass/GrassPlacementModel.h" // GrassHashSite / GrassHashNext / GrassHashToUnit
 
 #include <algorithm>
@@ -254,9 +255,9 @@ inline constexpr uint32 kGrassGustShift = 12u;
 inline uint32 GrassPackFarLodAndGustBits(float32 farLodTerm, float32 gust)
 {
     const uint32 lod = static_cast<uint32>(
-        std::floor(std::clamp(farLodTerm, 0.0f, 1.0f) * static_cast<float32>(kGrassFarLodLevels) + 0.5f));
+        std::floor(Math::Clamp01(farLodTerm) * static_cast<float32>(kGrassFarLodLevels) + 0.5f));
     const uint32 wind = static_cast<uint32>(
-        std::floor(std::clamp(gust, 0.0f, 1.0f) * static_cast<float32>(kGrassGustLevels) + 0.5f));
+        std::floor(Math::Clamp01(gust) * static_cast<float32>(kGrassGustLevels) + 0.5f));
     return kGrassCustomPackBias | lod | (wind << kGrassGustShift);
 }
 
@@ -306,7 +307,7 @@ inline float32 GrassUnpackTerrainNormalZBits(uint32 packed)
 // bit-identical to one with the height multiplier applied rather than merely indistinguishable.
 inline float32 GrassClumpHeightMultiplier(float32 heightRand, float32 variance)
 {
-    const float32 v = std::clamp(variance, 0.0f, 1.0f);
+    const float32 v = Math::Clamp01(variance);
     return 1.0f + (heightRand * 2.0f - 1.0f) * v;
 }
 
@@ -318,9 +319,9 @@ inline constexpr float32 kGrassClumpTaperEdge = 0.75f;
 // of 0 returns exactly 1.0, so an untapered field is bit-identical to one without the term.
 inline float32 GrassClumpTaperMultiplier(float32 distanceCells, float32 taper)
 {
-    const float32 x = std::clamp(distanceCells / kGrassClumpTaperEdge, 0.0f, 1.0f);
+    const float32 x = Math::Clamp01(distanceCells / kGrassClumpTaperEdge);
     const float32 edge = x * x * (3.0f - 2.0f * x);
-    return 1.0f - std::clamp(taper, 0.0f, 1.0f) * edge;
+    return 1.0f - Math::Clamp01(taper) * edge;
 }
 
 } // namespace GameEngine::TerrainGrass

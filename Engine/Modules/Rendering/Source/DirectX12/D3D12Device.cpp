@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include "D3D12Device.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/TextureFormatSupportGate.h"
 #include "D3D12CommandList.h"
 #include "Logger/Logger.h"
@@ -1182,7 +1183,7 @@ bool D3D12Device::CreateSwapchain(void* windowHandle, uint32_t width, uint32_t h
         {
             const HdrStaticMetadata& src = m_HdrState.staticMetadata;
             auto chroma = [](float value) -> UINT16 {
-                return static_cast<UINT16>(std::clamp(value, 0.0f, 1.0f) * 50000.0f + 0.5f);
+                return static_cast<UINT16>(Math::Clamp01(value) * 50000.0f + 0.5f);
             };
             DXGI_HDR_METADATA_HDR10 metadata{};
             metadata.RedPrimary[0] = chroma(src.redPrimary[0]);

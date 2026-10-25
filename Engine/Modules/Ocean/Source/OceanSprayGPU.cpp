@@ -6,6 +6,7 @@
 #include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/VectorOps.h"
 #include "Ocean/OceanRenderFeature.h"
 #include "Ocean/OceanShaderProgram.h"
@@ -204,7 +205,7 @@ bool OceanSprayGPU::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare &d, O
         return true;
     const auto params = ocean.GetParamsForView(d.View.id);
     const float ramp =
-        std::clamp((m_WindSpeed - m_Surface.SprayWindThreshold) / kWindRampMetersPerSecond, 0.0f, 1.0f);
+        Math::Clamp01((m_WindSpeed - m_Surface.SprayWindThreshold) / kWindRampMetersPerSecond);
     const float spawnRadius = std::max(m_Surface.SpraySpawnRadius, 1.0f);
     const float spawnArea = Mathematics::Pi * spawnRadius * spawnRadius;
     const float crestRate = std::max(m_Surface.SpraySpawnRate, 0.0f) * spawnArea * ramp;
@@ -272,11 +273,11 @@ bool OceanSprayGPU::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare &d, O
     u.Emission[3] = std::max(m_Surface.SprayUpVelocity, 0.0f);
     u.Appearance[0] = std::max(m_Surface.SprayStartSize, 0.005f);
     u.Appearance[1] = std::max(m_Surface.SprayEndSize, u.Appearance[0]);
-    u.Appearance[2] = std::clamp(m_Surface.SprayOpacity, 0.0f, 1.0f);
+    u.Appearance[2] = Math::Clamp01(m_Surface.SprayOpacity);
     u.Appearance[3] = params.SeaLevel;
     u.Controls[0] = static_cast<float>(capacity);
     u.Controls[2] = reset ? 1.0f : 0.0f;
-    u.Controls[3] = std::clamp(m_Surface.SprayEmissionThreshold, 0.0f, 1.0f);
+    u.Controls[3] = Math::Clamp01(m_Surface.SprayEmissionThreshold);
     for (uint32 i = 0; i < 3; ++i)
     {
         u.Shift[i] = m_Origin[i] - h.Origin[i];

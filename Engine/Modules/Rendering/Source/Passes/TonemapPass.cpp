@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
@@ -355,7 +356,7 @@ RenderGraph::RGPass AddTonemapPassRG(RenderGraph::RGFrame& frame, RenderGraph::R
 		pcw.Add("paperWhiteNits", params.paperWhiteNits);
 		pcw.Add("maxOutputNits", params.maxOutputNits);
 		pcw.Add("preserveAlpha", params.preserveAlpha);
-		pcw.Add("lutIntensity", std::clamp(params.lutIntensity, 0.0f, 1.0f));
+		pcw.Add("lutIntensity", Math::Clamp01(params.lutIntensity));
 		pcw.Add("lutInputEncoding", params.lut.InputEncoding);
 		pcw.Add("lutSize3d", params.lut.Size3D);
 		pcw.Add("lutSize1d", params.lut.Size1D);

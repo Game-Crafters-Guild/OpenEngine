@@ -8,7 +8,9 @@
 #include "TestTempDir.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -18,6 +20,8 @@
 #include <vector>
 
 #ifdef PLATFORM_WINDOWS
+#include <share.h>
+
 // Declared directly instead of via <windows.h>: that header's global GUID
 // typedef is ambiguous against GameEngine::GUID under the using-directive
 // below. Signatures match kernel32 exactly (BOOL=int, DWORD=unsigned long).
@@ -573,6 +577,72 @@ TEST_F(SafeSaveRenameWatcherTest, ExternalSingleAttemptReplaceFileSucceedsWhileR
 #else
     GTEST_SKIP() << "Windows-specific sharing semantics.";
 #endif
+}
+
+// A writer can hold a file without read sharing for a moment. A read that lands
+// in that moment waits for it rather than reporting the file unreadable.
+TEST(SharedFileReadTest, AReadThatMeetsAShortExclusiveHoldWaitsForIt)
+{
+#ifdef PLATFORM_WINDOWS
+    const auto dir = TestUtils::MakeUniqueTempDirectory("shared_file_read_hold_test");
+    const auto target = dir / "held.glsl";
+    WriteBinaryFile(target, "held bytes");
+
+    FILE* exclusive = _wfsopen(target.wstring().c_str(), L"rb", _SH_DENYRW);
+    ASSERT_NE(exclusive, nullptr);
+    // The hold lasts 1 ms from the moment the holder runs; sleep_for would round it
+    // up to the Windows timer tick. The read starts once the holder runs, so a late
+    // thread start cannot stretch the hold. The read is owed only when the hold ended
+    // inside the retry window, the four 2 ms waits between the five attempts: on a
+    // saturated CPU the holder can lose the processor mid-hold and hold for longer.
+    constexpr auto kRetryWindow = std::chrono::milliseconds(8);
+    std::atomic<bool> holding{false};
+    std::chrono::steady_clock::duration heldFor{};
+    std::thread holder([exclusive, &holding, &heldFor]() {
+        const auto heldFrom = std::chrono::steady_clock::now();
+        const auto releaseAt = heldFrom + std::chrono::milliseconds(1);
+        holding.store(true);
+        while (std::chrono::steady_clock::now() < releaseAt)
+            std::this_thread::yield();
+        fclose(exclusive);
+        heldFor = std::chrono::steady_clock::now() - heldFrom;
+    });
+    while (!holding.load())
+        std::this_thread::yield();
+
+    std::string text;
+    const bool read = ReadFileTextShared(target, text);
+    holder.join();
+    std::filesystem::remove_all(dir);
+    if (!read && heldFor >= kRetryWindow)
+        GTEST_SKIP() << "the holder ran late and held the file for "
+                     << std::chrono::duration<double, std::milli>(heldFor).count()
+                     << " ms, past the retry window";
+    EXPECT_TRUE(read) << "a read during a short exclusive hold reported the file unreadable";
+    EXPECT_EQ(text, "held bytes");
+#else
+    GTEST_SKIP() << "Windows-specific sharing semantics.";
+#endif
+}
+
+// Windows reports a directory opened as a file as access denied, the same error a
+// replace in progress gives; waiting cannot make a directory readable, so the
+// read fails before the first retry delay (2 ms).
+TEST(SharedFileReadTest, AReadOfADirectoryFailsBeforeTheFirstRetry)
+{
+    const auto dir = TestUtils::MakeUniqueTempDirectory("shared_file_read_directory_test");
+    std::filesystem::create_directories(dir);
+
+    std::string text;
+    const auto start = std::chrono::steady_clock::now();
+    const bool read = ReadFileTextShared(dir, text);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_FALSE(read);
+    EXPECT_LT(elapsed, std::chrono::milliseconds(2))
+        << "a directory read waited "
+        << std::chrono::duration<double, std::milli>(elapsed).count() << " ms";
+    std::filesystem::remove_all(dir);
 }
 
 TEST_F(SafeSaveRenameWatcherTest, SafeSaveCyclesKeepTargetGuidStable)

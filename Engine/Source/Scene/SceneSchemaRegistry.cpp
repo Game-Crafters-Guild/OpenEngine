@@ -5,6 +5,7 @@
 #include "ECS/ModuleRegistration.h"
 #include "Logger/Logger.h"
 #include "Scene/ReflectionSceneSchema.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -61,21 +62,6 @@ static std::unordered_map<ECS::ComponentTypeId, std::unique_ptr<ReflectionSceneS
     return s;
 }
 
-static std::string SimpleName(std::string_view canonical)
-{
-    // Native canonical names qualify with "::"; managed (C# blob) ones with '.'. Both reduce
-    // to the unqualified suffix here because the .scene component token cannot contain '.'
-    // (ParseComponentLine splits "Component.prop" at the FIRST dot). Load resolves the simple
-    // name back to the full canonical via ComponentFieldRegistry::FindByName suffix matching.
-    auto pos = canonical.rfind("::");
-    if (pos != std::string_view::npos)
-        return std::string(canonical.substr(pos + 2));
-    pos = canonical.rfind('.');
-    if (pos != std::string_view::npos)
-        return std::string(canonical.substr(pos + 1));
-    return std::string(canonical);
-}
-
 // Scene token (registry key) -> registered component type, filled by ComponentTypeForSchema.
 // Maintained under SchemasMutex.
 static std::unordered_map<std::string, ECS::ComponentTypeId>& TokenTypes()
@@ -100,7 +86,9 @@ static const ISceneComponentSchema* FindForComponentTypeLocked(ECS::ComponentTyp
             canon = info->Name;
     if (canon.empty())
         return nullptr;
-    if (auto it = schemas.find(ToKey(SimpleName(canon))); it != schemas.end())
+    // A scene names a component without its qualifier ("::" native, "." managed): the component token
+    // cannot hold a '.', because ParseComponentLine splits "Component.prop" at the first dot.
+    if (auto it = schemas.find(ToKey(UnqualifiedName(canon))); it != schemas.end())
         return it->second.Schema.get();
     return nullptr;
 }
@@ -113,7 +101,7 @@ static const ISceneComponentSchema* GetOrCreateReflectionSchemaLocked(ECS::Compo
     if (it != cache.end())
         return it->second.get();
     const std::string_view canon = ECS::ComponentFieldRegistry::GetCanonicalName(typeId);
-    auto schema = std::make_unique<ReflectionSceneSchema>(typeId, SimpleName(canon));
+    auto schema = std::make_unique<ReflectionSceneSchema>(typeId, std::string(UnqualifiedName(canon)));
     auto* ptr = schema.get();
     cache.emplace(typeId, std::move(schema));
     return ptr;

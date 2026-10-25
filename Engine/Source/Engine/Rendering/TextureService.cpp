@@ -13,6 +13,7 @@
 #include "Engine/Rendering/MaterialBinder.h"
 #include "Engine/Rendering/MaterialCompiler.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialParamsLayout.h"
@@ -376,10 +377,9 @@ void TextureService::CreateDefaultTexturesAndLuts(Rendering::IDevice* dev)
                 const float nx = (static_cast<float>(x) + 0.5f) / 64.0f * 2.0f - 1.0f;
                 const float ny = (static_cast<float>(y) + 0.5f) / 64.0f * 2.0f - 1.0f;
                 const float r = std::sqrt(nx * nx + ny * ny);
-                const float core = std::clamp(1.0f - r * 2.9f, 0.0f, 1.0f);
-                const float halo = std::clamp(1.0f - r, 0.0f, 1.0f);
-                const float alpha = std::clamp(core * core + halo * halo * halo * 0.45f,
-                                               0.0f, 1.0f);
+                const float core = Math::Clamp01(1.0f - r * 2.9f);
+                const float halo = Math::Clamp01(1.0f - r);
+                const float alpha = Math::Clamp01(core * core + halo * halo * halo * 0.45f);
                 const uint32_t a = static_cast<uint32_t>(alpha * 255.0f + 0.5f);
                 lensFlarePixels[y * 64u + x] =
                     (a << 24u) | (255u << 16u) | (255u << 8u) | 255u;
