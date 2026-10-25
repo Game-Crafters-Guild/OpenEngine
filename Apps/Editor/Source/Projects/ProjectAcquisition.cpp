@@ -2,12 +2,12 @@
 
 #include "Editor/EditorPaths.h"
 #include "Editor/Settings/SettingsStore.h"
+#include "Editor/ZipArchive.h"
 #include "FileSystem/FileSystem.h"
 #include "Logger/Logger.h"
 #include "Projects/ProjectStartupScene.h"
 #include "Projects/SubprocessStream.h"
 #include "Platform/HttpClient.h"
-#include "Projects/ZipArchive.h"
 #include "Core/Application.h"
 #include "JobSystem/JobChannel.h"
 

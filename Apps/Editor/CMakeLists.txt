@@ -123,7 +123,6 @@ set(EDITOR_SOURCES
     Source/Projects/ProjectAcquisition.cpp
     Source/Projects/ProjectStartupScene.cpp
     Source/Projects/SubprocessStream.cpp
-    Source/Projects/ZipArchive.cpp
     Source/Panels/SaveSceneAsModal.cpp
     Source/Panels/DownloadInProgressModal.cpp
     Source/Panels/ConfirmActionModal.cpp
@@ -995,6 +994,8 @@ set(EDITOR_SDK_SOURCES
 	Source/Editor/Assets/UnityImportHostedConverter.cpp
 	Source/Editor/Assets/EditorAssetActions.cpp
 	Source/Editor/CaptureOutputDirectory.cpp
+	# The zip reader, in the SDK so package modules can list and extract archives too.
+	Source/Editor/ZipArchive.cpp
 	Source/EditorPaths.cpp
 	Source/SettingsStore.cpp
 	Source/InspectorRegistry.cpp
@@ -1017,7 +1018,7 @@ set(EDITOR_SDK_SOURCES
 	Source/Editor/Entities/EntityDisplayName.cpp
 )
 
-# Vendored miniz (zip reader for project acquisition).
+# Vendored miniz, behind Editor/ZipArchive.h (compiled into EditorSDK).
 set(EDITOR_MINIZ_SOURCES
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tdef.c
@@ -1593,6 +1594,16 @@ add_library(EditorSDK SHARED ${EDITOR_SDK_SOURCES})
 # target link) so the OBJECT lib's engine-module link interface is not
 # replayed here (see the note above about registry statics).
 target_sources(EditorSDK PRIVATE $<TARGET_OBJECTS:VCSIntegration>)
+# Third-party C sources; compiled quietly like the engine's other vendored libraries.
+# Their symbols stay out of the SDK's ELF export table, so a package module that
+# vendors its own miniz never binds to this copy.
+target_sources(EditorSDK PRIVATE ${EDITOR_MINIZ_SOURCES})
+target_include_directories(EditorSDK PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz)
+if(MSVC)
+	set_source_files_properties(${EDITOR_MINIZ_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
+else()
+	set_source_files_properties(${EDITOR_MINIZ_SOURCES} PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
+endif()
 ge_add_production_allocation_hook(EditorSDK)
 # The engine-ABI digest of Editor-kind modules folds this binary's link stamp
 # (ReadBinaryLinkStamp); an ELF link writes one only when asked.
@@ -1748,14 +1759,7 @@ target_include_directories(Editor PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/Source
 	${CMAKE_CURRENT_SOURCE_DIR}/Include
 	${CMAKE_CURRENT_SOURCE_DIR}/Modules
-	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz
 )
-
-# Third-party C sources; compiled quietly like the engine's other vendored libraries.
-target_sources(Editor PRIVATE ${EDITOR_MINIZ_SOURCES})
-if(MSVC)
-	set_source_files_properties(${EDITOR_MINIZ_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
-endif()
 
 # Engine.dll bundles engine modules as OBJECT files spliced in at SHARED-link time,
 # so Editor.exe must not link those modules directly. Doing so can duplicate
