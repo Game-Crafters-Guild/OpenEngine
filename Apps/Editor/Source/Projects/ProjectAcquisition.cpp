@@ -2,7 +2,7 @@
 
 #include "Editor/EditorPaths.h"
 #include "Editor/Settings/SettingsStore.h"
-#include "Editor/ZipArchive.h"
+#include "Editor/ZipArchiveReader.h"
 #include "FileSystem/FileSystem.h"
 #include "Logger/Logger.h"
 #include "Projects/ProjectStartupScene.h"
@@ -12,7 +12,8 @@
 #include "JobSystem/JobChannel.h"
 
 #include <cstdlib>
-#include <fstream>
+#include <optional>
+#include <span>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -170,6 +171,33 @@ bool MoveTree(const fs::path& from, const fs::path& to, std::string& outError)
     }
     RemoveTreeForce(from);
     return true;
+}
+
+// Extracts the archive into destination. When innerRoot is non-empty, only the
+// files under that archive-relative folder are extracted, with the prefix
+// stripped (a manifest zip source's "path"). Fails on the first entry that fails.
+bool ExtractProjectArchive(ZipArchiveReader& archive, const fs::path& destination,
+                           const std::string& innerRoot, std::string& outError)
+{
+    const std::string prefix = innerRoot.empty() ? std::string{} : innerRoot + "/";
+    std::vector<ZipEntryExtraction> extractions;
+    for (const std::string& name : archive.EntryNames())
+    {
+        if (name.starts_with(prefix))
+            extractions.push_back({name, destination / fs::path(name.substr(prefix.size()))});
+    }
+    if (extractions.empty())
+    {
+        outError = innerRoot.empty() ? "The archive is empty."
+                                     : "The archive has no folder '" + innerRoot + "'.";
+        return false;
+    }
+
+    std::vector<ZipEntryFailure> failures;
+    if (archive.ExtractEntries(extractions, failures))
+        return true;
+    outError = "Could not extract '" + failures.front().EntryName + "': " + failures.front().Message;
+    return false;
 }
 
 void StampProjectSettings(const ProjectAcquireRequest& request, const fs::path& settingsFile)
@@ -415,12 +443,12 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
 
     case ProjectSourceType::Zip:
     {
-        fs::path zipFile = request.LocalArchivePath;
-        fs::path downloadedZip;
-        if (zipFile.empty())
+        // A download is read from memory; an archive on disk is read in place.
+        HttpClient::HttpResponse response;
+        std::optional<ZipArchiveReader> archive;
+        if (request.LocalArchivePath.empty())
         {
-            const HttpClient::HttpResponse response =
-                HttpClient::Get(request.Entry.Source.Url, {}, kMaxProjectArchiveBytes);
+            response = HttpClient::Get(request.Entry.Source.Url, {}, kMaxProjectArchiveBytes);
             if (!response.success || response.statusCode != 200 || response.body.empty())
             {
                 fail("Download failed: " +
@@ -428,30 +456,13 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
                                              : response.error));
                 return;
             }
-            downloadedZip = context.StagingRoot /
-                (request.Entry.Id + "-" + std::to_string(CurrentProcessId()) + ".zip");
-            fs::create_directories(downloadedZip.parent_path(), ec);
-            std::ofstream out(downloadedZip, std::ios::binary | std::ios::trunc);
-            if (!out ||
-                !out.write(response.body.data(),
-                           static_cast<std::streamsize>(response.body.size()))
-                     .good())
-            {
-                fail("Could not write the downloaded archive.");
-                return;
-            }
-            out.close();
-            zipFile = downloadedZip;
+            archive = ZipArchiveReader::OpenMemory(std::as_bytes(std::span(response.body)), &error);
         }
-
-        const bool extracted =
-            ExtractZipArchive(zipFile, destination, request.Entry.Source.Path, &error);
-        if (!downloadedZip.empty())
+        else
         {
-            fs::remove(downloadedZip, ec);
-            ec.clear();
+            archive = ZipArchiveReader::OpenFile(request.LocalArchivePath, &error);
         }
-        if (!extracted)
+        if (!archive || !ExtractProjectArchive(*archive, destination, request.Entry.Source.Path, error))
         {
             fail(std::move(error));
             return;

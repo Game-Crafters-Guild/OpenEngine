@@ -1694,7 +1694,7 @@ add_executable(ProjectPickerJobTests
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Projects/ProjectAcquisition.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Projects/ProjectStartupScene.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Projects/SubprocessStream.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/ZipArchive.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/ZipArchiveReader.cpp
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tdef.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tinfl.c
@@ -1739,40 +1739,40 @@ add_test(NAME ProjectPickerJobTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
-# The zip reader through the EditorSDK export package modules link: listing, chosen-entry
-# extraction and unsafe entry names. The test writes its archives with its own miniz copy;
+# The zip reader through the EditorSDK export package modules link: archives on disk and in
+# memory, listing, chosen-entry extraction and unsafe entry names. The test writes its archives with its own miniz copy;
 # the SDK's copy is not exported.
-set(ZIP_ARCHIVE_TEST_MINIZ_SOURCES
+set(ZIP_ARCHIVE_READER_TEST_MINIZ_SOURCES
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tdef.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tinfl.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_zip.c
 )
-add_executable(ZipArchiveTests
-	ZipArchiveTests.cpp
-	${ZIP_ARCHIVE_TEST_MINIZ_SOURCES}
+add_executable(ZipArchiveReaderTests
+	ZipArchiveReaderTests.cpp
+	${ZIP_ARCHIVE_READER_TEST_MINIZ_SOURCES}
 )
-target_include_directories(ZipArchiveTests PRIVATE
+target_include_directories(ZipArchiveReaderTests PRIVATE
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz
 )
-target_link_libraries(ZipArchiveTests PRIVATE
+target_link_libraries(ZipArchiveReaderTests PRIVATE
 	Engine
 	EditorSDK
 	GTest::gtest
 	GTest::gtest_main
 )
-set_target_properties(ZipArchiveTests PROPERTIES
+set_target_properties(ZipArchiveReaderTests PROPERTIES
 	CXX_STANDARD 20
 	CXX_STANDARD_REQUIRED ON
 	VCPKG_APPLOCAL_DEPS OFF
 )
-ge_set_output_tests(ZipArchiveTests)
-ge_stage_runtime_dependencies(ZipArchiveTests)
-add_test(NAME ZipArchiveTests
+ge_set_output_tests(ZipArchiveReaderTests)
+ge_stage_runtime_dependencies(ZipArchiveReaderTests)
+add_test(NAME ZipArchiveReaderTests
 	COMMAND "${CMAKE_COMMAND}"
-		-DTEST_EXE=$<TARGET_FILE:ZipArchiveTests>
-		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:ZipArchiveTests>
+		-DTEST_EXE=$<TARGET_FILE:ZipArchiveReaderTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:ZipArchiveReaderTests>
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 

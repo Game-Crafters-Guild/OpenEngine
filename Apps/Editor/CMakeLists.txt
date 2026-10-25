@@ -995,7 +995,7 @@ set(EDITOR_SDK_SOURCES
 	Source/Editor/Assets/EditorAssetActions.cpp
 	Source/Editor/CaptureOutputDirectory.cpp
 	# The zip reader, in the SDK so package modules can list and extract archives too.
-	Source/Editor/ZipArchive.cpp
+	Source/Editor/ZipArchiveReader.cpp
 	Source/EditorPaths.cpp
 	Source/SettingsStore.cpp
 	Source/InspectorRegistry.cpp
@@ -1018,7 +1018,7 @@ set(EDITOR_SDK_SOURCES
 	Source/Editor/Entities/EntityDisplayName.cpp
 )
 
-# Vendored miniz, behind Editor/ZipArchive.h (compiled into EditorSDK).
+# Vendored miniz, behind Editor/ZipArchiveReader.h (compiled into EditorSDK).
 set(EDITOR_MINIZ_SOURCES
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz.c
 	${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/miniz/miniz_tdef.c

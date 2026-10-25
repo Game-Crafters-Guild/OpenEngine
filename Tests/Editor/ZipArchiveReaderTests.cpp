@@ -1,16 +1,18 @@
-// The editor's zip reader as package modules see it through EditorSDK: listing an
-// archive's files, extracting a chosen set of them, and refusing entry names that
-// would write outside the destination.
+// The editor's zip reader as package modules see it through EditorSDK: opening an
+// archive on disk or in memory, listing its files, extracting a chosen set of them,
+// and refusing entry names that would write outside the destination.
 
 #include <gtest/gtest.h>
 
-#include "Editor/ZipArchive.h"
+#include "Editor/ZipArchiveReader.h"
 
-#include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,9 +20,7 @@
 #include <miniz.h>
 
 namespace fs = std::filesystem;
-using GameEngine::Editor::ExtractZipArchive;
-using GameEngine::Editor::ExtractZipEntries;
-using GameEngine::Editor::ListZipEntries;
+using GameEngine::Editor::ZipArchiveReader;
 using GameEngine::Editor::ZipEntryExtraction;
 using GameEngine::Editor::ZipEntryFailure;
 
@@ -30,7 +30,7 @@ namespace
 // An archive entry: a name ending in '/' is a folder entry.
 using ArchiveEntry = std::pair<std::string, std::string>;
 
-class ZipArchiveTest : public ::testing::Test
+class ZipArchiveReaderTest : public ::testing::Test
 {
   protected:
     void SetUp() override
@@ -100,21 +100,21 @@ class ZipArchiveTest : public ::testing::Test
 
 } // namespace
 
-TEST_F(ZipArchiveTest, ListsFilesInArchiveOrderWithoutFolders)
+TEST_F(ZipArchiveReaderTest, ListsFilesInArchiveOrderWithoutFolders)
 {
     const fs::path zipFile = WriteArchive({{"readme.txt", "read me"},
                                            {"Models/", ""},
                                            {"Models/GLB format/tree.glb", "glb"},
                                            {"Audio/click.ogg", "ogg"}});
 
-    std::vector<std::string> names;
     std::string error;
-    ASSERT_TRUE(ListZipEntries(zipFile, names, &error)) << error;
-    EXPECT_EQ(names, (std::vector<std::string>{"readme.txt", "Models/GLB format/tree.glb",
-                                               "Audio/click.ogg"}));
+    const std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
+    EXPECT_EQ(archive->EntryNames(), (std::vector<std::string>{
+                                         "readme.txt", "Models/GLB format/tree.glb", "Audio/click.ogg"}));
 }
 
-TEST_F(ZipArchiveTest, ListLeavesOutUnsafeNames)
+TEST_F(ZipArchiveReaderTest, LeavesOutUnsafeNames)
 {
     const fs::path zipFile = WriteArchiveWithAbsoluteEntry(
         "_absolute.txt", {{"../escape.txt", "x"},
@@ -124,26 +124,30 @@ TEST_F(ZipArchiveTest, ListLeavesOutUnsafeNames)
                           {"C:/drive.txt", "x"},
                           {"Models/safe.txt", "safe"}});
 
-    std::vector<std::string> names;
     std::string error;
-    ASSERT_TRUE(ListZipEntries(zipFile, names, &error)) << error;
-    EXPECT_EQ(names, (std::vector<std::string>{"Models/safe.txt"}));
+    const std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
+    EXPECT_EQ(archive->EntryNames(), (std::vector<std::string>{"Models/safe.txt"}));
 }
 
-TEST_F(ZipArchiveTest, ListReportsAFileThatIsNotAnArchive)
+TEST_F(ZipArchiveReaderTest, OpenReportsBytesThatAreNotAnArchive)
 {
     const fs::path notZip = m_Root / "download.zip";
     std::ofstream(notZip) << "not a zip";
 
-    std::vector<std::string> names;
     std::string error;
-    EXPECT_FALSE(ListZipEntries(notZip, names, &error));
+    EXPECT_FALSE(ZipArchiveReader::OpenFile(notZip, &error));
     EXPECT_FALSE(error.empty());
-    EXPECT_FALSE(ListZipEntries(m_Root / "missing.zip", names, &error));
+    EXPECT_FALSE(ZipArchiveReader::OpenFile(m_Root / "missing.zip", &error));
     EXPECT_NE(error.find("missing.zip"), std::string::npos) << error;
+
+    const std::string bytes = "not a zip";
+    error.clear();
+    EXPECT_FALSE(ZipArchiveReader::OpenMemory(std::as_bytes(std::span(bytes)), &error));
+    EXPECT_FALSE(error.empty());
 }
 
-TEST_F(ZipArchiveTest, ExtractsOnlyTheChosenEntriesToTheirDestinations)
+TEST_F(ZipArchiveReaderTest, ExtractsOnlyTheChosenEntriesToTheirDestinations)
 {
     const fs::path zipFile = WriteArchive({{"Models/GLB format/tree.glb", "glb"},
                                            {"Models/FBX format/tree.fbx", "fbx"},
@@ -152,12 +156,14 @@ TEST_F(ZipArchiveTest, ExtractsOnlyTheChosenEntriesToTheirDestinations)
     fs::create_directories(output);
     std::ofstream(output / "License.txt") << "an older license that is replaced";
 
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
     const std::vector<ZipEntryExtraction> chosen = {
         {"Models/GLB format/tree.glb", output / "Models" / "tree.glb"},
         {"License.txt", output / "License.txt"}};
     std::vector<ZipEntryFailure> failures;
-    std::string error;
-    ASSERT_TRUE(ExtractZipEntries(zipFile, chosen, failures, &error)) << error;
+    EXPECT_TRUE(archive->ExtractEntries(chosen, failures));
     EXPECT_TRUE(failures.empty());
 
     EXPECT_EQ(ReadFile(output / "Models" / "tree.glb"), "glb");
@@ -166,7 +172,7 @@ TEST_F(ZipArchiveTest, ExtractsOnlyTheChosenEntriesToTheirDestinations)
     EXPECT_FALSE(fs::exists(output / "Models" / "tree.fbx"));
 }
 
-TEST_F(ZipArchiveTest, ExtractReportsEachFailedEntryAndExtractsTheRest)
+TEST_F(ZipArchiveReaderTest, ExtractReportsEachFailedEntryAndExtractsTheRest)
 {
     const fs::path zipFile = WriteArchive({{"Models/", ""},
                                            {"Models/tree.glb", "glb"},
@@ -175,6 +181,9 @@ TEST_F(ZipArchiveTest, ExtractReportsEachFailedEntryAndExtractsTheRest)
     const fs::path output = m_Root / "out";
     fs::create_directories(output / "click.ogg");
 
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
     const std::vector<ZipEntryExtraction> chosen = {
         {"Models/missing.glb", output / "missing.glb"},
         {"Models/", output / "Models"},
@@ -182,9 +191,7 @@ TEST_F(ZipArchiveTest, ExtractReportsEachFailedEntryAndExtractsTheRest)
         {"Audio/click.ogg", output / "click.ogg"},
         {"Models/tree.glb", output / "tree.glb"}};
     std::vector<ZipEntryFailure> failures;
-    std::string error;
-    EXPECT_FALSE(ExtractZipEntries(zipFile, chosen, failures, &error));
-    EXPECT_TRUE(error.empty()) << error;
+    EXPECT_FALSE(archive->ExtractEntries(chosen, failures));
 
     ASSERT_EQ(failures.size(), 4u);
     EXPECT_EQ(failures[0].EntryName, "Models/missing.glb");
@@ -200,44 +207,20 @@ TEST_F(ZipArchiveTest, ExtractReportsEachFailedEntryAndExtractsTheRest)
     EXPECT_FALSE(fs::exists(m_Root / "escape.txt"));
 }
 
-TEST_F(ZipArchiveTest, ExtractReportsAnUnreadableArchiveWithoutEntryFailures)
+TEST_F(ZipArchiveReaderTest, ReadsAnArchiveHeldInMemory)
 {
-    const fs::path notZip = m_Root / "download.zip";
-    std::ofstream(notZip) << "not a zip";
+    const std::string bytes = ReadFile(WriteArchive({{"Models/", ""},
+                                                     {"Models/tree.glb", "glb"},
+                                                     {"../escape.txt", "escaped"}}));
 
-    const std::vector<ZipEntryExtraction> chosen = {{"readme.txt", m_Root / "readme.txt"}};
+    std::string error;
+    std::optional<ZipArchiveReader> archive =
+        ZipArchiveReader::OpenMemory(std::as_bytes(std::span(bytes)), &error);
+    ASSERT_TRUE(archive) << error;
+    EXPECT_EQ(archive->EntryNames(), (std::vector<std::string>{"Models/tree.glb"}));
+
+    const std::vector<ZipEntryExtraction> chosen = {{"Models/tree.glb", m_Root / "out" / "tree.glb"}};
     std::vector<ZipEntryFailure> failures;
-    std::string error;
-    EXPECT_FALSE(ExtractZipEntries(notZip, chosen, failures, &error));
-    EXPECT_FALSE(error.empty());
-    EXPECT_TRUE(failures.empty());
-}
-
-TEST_F(ZipArchiveTest, WholeArchiveExtractionSkipsUnsafeEntries)
-{
-    const fs::path zipFile = WriteArchiveWithAbsoluteEntry(
-        "_absolute.txt", {{"Assets/scene.json", "scene"}, {"../escape.txt", "escaped"}});
-    const fs::path output = m_Root / "project";
-
-    std::string error;
-    ASSERT_TRUE(ExtractZipArchive(zipFile, output, "", &error)) << error;
-    EXPECT_EQ(ReadFile(output / "Assets" / "scene.json"), "scene");
-    EXPECT_FALSE(fs::exists(m_Root / "escape.txt"));
-    EXPECT_FALSE(fs::exists(output / "escape.txt"));
-}
-
-TEST_F(ZipArchiveTest, InnerRootExtractionStripsTheFolderPrefix)
-{
-    const fs::path zipFile = WriteArchive({{"repo-main/", ""},
-                                           {"repo-main/project/Assets/scene.json", "scene"},
-                                           {"repo-main/README.md", "readme"}});
-    const fs::path output = m_Root / "project";
-
-    std::string error;
-    ASSERT_TRUE(ExtractZipArchive(zipFile, output, "repo-main/project", &error)) << error;
-    EXPECT_EQ(ReadFile(output / "Assets" / "scene.json"), "scene");
-    EXPECT_FALSE(fs::exists(output / "README.md"));
-
-    EXPECT_FALSE(ExtractZipArchive(zipFile, m_Root / "other", "repo-main/absent", &error));
-    EXPECT_NE(error.find("repo-main/absent"), std::string::npos) << error;
+    EXPECT_TRUE(archive->ExtractEntries(chosen, failures));
+    EXPECT_EQ(ReadFile(m_Root / "out" / "tree.glb"), "glb");
 }
