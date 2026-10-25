@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 namespace GameEngine {
 namespace Platform {
 
@@ -15,8 +17,8 @@ class IWebView;
  */
 struct WebViewGtkModule {
     /// A web view whose window is a child of the X11 window parentWindow, or nullptr when GTK cannot
-    /// start on the X11 display. The caller owns the view.
-    IWebView* (*Create)(unsigned long parentWindow);
+    /// start on the X11 display.
+    std::unique_ptr<IWebView> (*Create)(unsigned long parentWindow);
 
     /// Runs the GTK events that are ready, without waiting. Called once per host frame.
     void (*PumpEvents)();

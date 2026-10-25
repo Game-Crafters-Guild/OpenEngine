@@ -83,7 +83,7 @@ std::unique_ptr<IWebView> CreateWebView(Window* parentWindow, const std::filesys
     const WebViewGtkModule* module = LoadModule();
     if (!module)
         return nullptr;
-    return std::unique_ptr<IWebView>(module->Create(glfwGetX11Window(glfwWindow)));
+    return module->Create(glfwGetX11Window(glfwWindow));
 #else
     (void)parentWindow;
     return nullptr;
