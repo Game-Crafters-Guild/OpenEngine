@@ -36,15 +36,17 @@ class UndoRedoService;
 class DayCycleScrub
 {
   public:
-    /// `isPlaying` says whether the editor plays; null means never.
-    DayCycleScrub(ECS::World& world, Engine::Renderer::SkyEnvironmentSystem& sky, UndoRedoService* undo,
+    /// `sky` resolves the current system, or null when rendering has stopped. The world, undo,
+    /// notifications and getter captures must outlive this object. `isPlaying` may be null.
+    DayCycleScrub(ECS::World& world, std::function<Engine::Renderer::SkyEnvironmentSystem*()> sky, UndoRedoService* undo,
                   EditorChangeNotifications* notifications, std::function<bool()> isPlaying);
     ~DayCycleScrub();
     DayCycleScrub(const DayCycleScrub&) = delete;
     DayCycleScrub& operator=(const DayCycleScrub&) = delete;
 
     /// Why the scrub is off, as the notice the window shows; empty while the scrub works. The editor
-    /// plays, the scene has no sky, the sky follows a linked light, or its sun is set by hand.
+    /// plays, rendering has stopped, the scene has no sky, the sky follows a linked light, or its
+    /// sun is set by hand.
     std::string BlockedNotice() const;
 
     /// The playhead is pressed (true) or released (false).
@@ -64,7 +66,7 @@ class DayCycleScrub
     void OnComponentChanged(const EditorChangeNotifications::ComponentChangedEvent& event);
 
     ECS::World& m_World;
-    Engine::Renderer::SkyEnvironmentSystem& m_Sky;
+    std::function<Engine::Renderer::SkyEnvironmentSystem*()> m_Sky;
     UndoRedoService* m_Undo = nullptr;
     EditorChangeNotifications* m_Notifications = nullptr;
     std::function<bool()> m_IsPlaying;

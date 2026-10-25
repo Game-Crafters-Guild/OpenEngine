@@ -194,7 +194,7 @@ TEST_F(DayCycleEditorTests, TheScrubIsOffWithANoticeUnderAFollowedLightAndASunSe
     followed.TimeOfDayDrivesSunLight = false;
     SetSky(followed);
     {
-        DayCycleScrub scrub(World, Sky, &Undo, &Notifications, {});
+        DayCycleScrub scrub(World, Services().Sky, &Undo, &Notifications, {});
         EXPECT_NE(scrub.BlockedNotice().find("The sun follows the light Sun"), std::string::npos)
             << scrub.BlockedNotice();
         DayCycleWindow window(Services());
@@ -206,7 +206,7 @@ TEST_F(DayCycleEditorTests, TheScrubIsOffWithANoticeUnderAFollowedLightAndASunSe
     byHand.SunLight = {};
     byHand.AutoSunMoon = false;
     SetSky(byHand);
-    DayCycleScrub scrub(World, Sky, &Undo, &Notifications, {});
+    DayCycleScrub scrub(World, Services().Sky, &Undo, &Notifications, {});
     EXPECT_NE(scrub.BlockedNotice().find("The sun is set by hand"), std::string::npos) << scrub.BlockedNotice();
     DayCycleWindow window(Services());
     window.ScrubTo(18.5f);
@@ -239,6 +239,64 @@ TEST_F(DayCycleEditorTests, PlayModeEndsThePreviewAndTurnsTheScrubOff)
     EXPECT_FALSE(Sky.GetPreviewHour(World.GetWorldId()).has_value()) << "the preview played";
     window.ScrubTo(12.0f);
     EXPECT_FALSE(Sky.GetPreviewHour(World.GetWorldId()).has_value()) << "the scrub ran in Play mode";
-    DayCycleScrub scrub(World, Sky, &Undo, &Notifications, [this]() { return Playing; });
+    DayCycleScrub scrub(World, Services().Sky, &Undo, &Notifications, [this]() { return Playing; });
     EXPECT_EQ(scrub.BlockedNotice(), "The scrub is off in Play mode.");
+}
+
+TEST_F(DayCycleEditorTests, ClosingTheWindowDoesNotReachAnUnavailableSkySystem)
+{
+    auto services = Services();
+    auto* currentSky = &Sky;
+    services.Sky = [&currentSky]() { return currentSky; };
+    auto window = std::make_unique<DayCycleWindow>(services);
+    window->ScrubTo(18.5f);
+    ASSERT_EQ(Sky.GetPreviewHour(World.GetWorldId()), 18.5f);
+
+    // Keep the retired system alive so an access after revocation fails deterministically.
+    currentSky = nullptr;
+    window.reset();
+    EXPECT_EQ(Sky.GetPreviewHour(World.GetWorldId()), 18.5f);
+}
+
+TEST_F(DayCycleEditorTests, TheScrubUsesTheCurrentSkySystem)
+{
+    Engine::Renderer::SkyEnvironmentSystem replacement(&Render);
+    auto* currentSky = &Sky;
+    auto services = Services();
+    services.Sky = [&currentSky]() { return currentSky; };
+    auto window = std::make_unique<DayCycleWindow>(services);
+    window->ScrubTo(18.5f);
+    ASSERT_EQ(Sky.GetPreviewHour(World.GetWorldId()), 18.5f);
+
+    currentSky = &replacement;
+    window->Refresh();
+    window->ScrubTo(7.0f);
+    EXPECT_EQ(replacement.GetPreviewHour(World.GetWorldId()), 7.0f);
+    EXPECT_EQ(Sky.GetPreviewHour(World.GetWorldId()), 18.5f);
+    window.reset();
+    EXPECT_FALSE(replacement.GetPreviewHour(World.GetWorldId()));
+    EXPECT_EQ(Sky.GetPreviewHour(World.GetWorldId()), 18.5f);
+}
+
+TEST_F(DayCycleEditorTests, TheWindowCanOutliveItsSkySystem)
+{
+    auto sky = std::make_unique<Engine::Renderer::SkyEnvironmentSystem>(&Render);
+    auto services = Services();
+    services.Sky = [&sky]() { return sky.get(); };
+    auto window = std::make_unique<DayCycleWindow>(services);
+    window->SetScrubHeld(true);
+    window->ScrubTo(18.5f);
+    ASSERT_EQ(sky->GetPreviewHour(World.GetWorldId()), 18.5f);
+
+    sky.reset();
+    window->Refresh();
+    window->SetScrubHeld(false);
+    window->ScrubTo(7.0f);
+    EXPECT_EQ(SkyNow().TimeOfDayHours, 10.0f);
+    Components::SkyEnvironment edited = SkyNow();
+    edited.TimeOfDayHours = 8.0f;
+    Editor::CommitComponentUpdate(&World, SkyEntity, &Notifications, edited);
+    Editor::NotifyWorldStructure(&Notifications, &World);
+    window.reset();
+    EXPECT_EQ(SkyNow().TimeOfDayHours, 8.0f);
 }
