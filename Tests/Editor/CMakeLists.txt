@@ -1678,8 +1678,9 @@ add_test(NAME PanelDeferredBindLatchTests
 
 # The project picker's network jobs on their channels: the community catalog fetch and a
 # project acquisition hold no compute worker, and the catalog service's destructor waits for a
-# fetch in flight; and the startup scene a project opens on and is given when created, for every
-# built-in template too, plus real loads of the staged template scenes. Its own target because it points
+# fetch in flight; a zip source's inner-folder extraction; and the startup scene a project opens
+# on and is given when created, for every built-in template too, plus real loads of the staged
+# template scenes. Its own target because it points
 # GE_EDITOR_USER_DATA_ROOT at a scratch preferences file for the whole process.
 add_executable(ProjectPickerJobTests
 	ProjectCatalogServiceTests.cpp

@@ -7,6 +7,7 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Projects/ProjectAcquisition.h"
 #include "ScopedEditorUserDataRoot.h"
+#include "TestZipArchive.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -15,10 +16,6 @@
 #include <future>
 #include <string>
 #include <thread>
-#include <utility>
-#include <vector>
-
-#include <miniz.h>
 
 namespace fs = std::filesystem;
 using GameEngine::Editor::ProjectAcquireRequest;
@@ -30,18 +27,21 @@ using GameEngine::Editor::ProjectSourceType;
 namespace
 {
 
-// Writes a .zip of (name, contents) entries; a name ending in '/' is a folder entry.
-void WriteZip(const fs::path& zipFile, const std::vector<std::pair<std::string, std::string>>& entries)
+constexpr std::chrono::seconds kAcquisitionTimeout{10};
+constexpr std::chrono::milliseconds kPollInterval{1};
+
+// Polls until the acquisition leaves Running or kAcquisitionTimeout passes.
+ProjectAcquireStatus WaitForAcquisition(ProjectAcquisition& acquisition)
 {
-    mz_zip_archive archive{};
-    ASSERT_TRUE(mz_zip_writer_init_file(&archive, zipFile.string().c_str(), 0));
-    for (const auto& [name, contents] : entries)
+    ProjectAcquireStatus status;
+    const auto deadline = std::chrono::steady_clock::now() + kAcquisitionTimeout;
+    while (std::chrono::steady_clock::now() < deadline)
     {
-        ASSERT_TRUE(mz_zip_writer_add_mem(&archive, name.c_str(), contents.data(), contents.size(),
-                                          MZ_DEFAULT_COMPRESSION));
+        if (acquisition.Poll(status) && status.State != ProjectAcquireState::Running)
+            break;
+        std::this_thread::sleep_for(kPollInterval);
     }
-    ASSERT_TRUE(mz_zip_writer_finalize_archive(&archive));
-    ASSERT_TRUE(mz_zip_writer_end(&archive));
+    return status;
 }
 
 // Acquires the archive's innerRoot folder as root/projects/Acquired, through the
@@ -59,18 +59,9 @@ ProjectAcquireStatus AcquireLocalZip(const fs::path& root, const fs::path& zipFi
     request.LocalArchivePath = zipFile;
     request.Destination = root / "projects" / "Acquired";
     request.DisplayName = "Acquired";
-    ProjectAcquireStatus status;
     if (!acquisition.Start(request))
-        return status;
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        if (acquisition.Poll(status) && status.State != ProjectAcquireState::Running)
-            break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return status;
+        return {};
+    return WaitForAcquisition(acquisition);
 }
 
 fs::path MakeScratchRoot()
@@ -86,9 +77,7 @@ fs::path MakeScratchRoot()
 // With the pool's only compute worker held, a template copy still completes.
 TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
 {
-    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const fs::path root = fs::temp_directory_path() / ("ge_acquisition_" + std::to_string(stamp));
-    fs::create_directories(root / "user");
+    const fs::path root = MakeScratchRoot();
     fs::create_directories(root / "templates" / "empty" / "Assets");
     {
         std::ofstream file(root / "templates" / "empty" / "Assets" / "readme.txt");
@@ -117,14 +106,7 @@ TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
         request.Destination = root / "projects" / "Acquired";
         request.DisplayName = "Acquired";
         ASSERT_TRUE(acquisition.Start(request));
-
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (std::chrono::steady_clock::now() < deadline)
-        {
-            if (acquisition.Poll(status) && status.State != ProjectAcquireState::Running)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        status = WaitForAcquisition(acquisition);
         release.set_value();
         held.Wait();
     }
@@ -142,10 +124,10 @@ TEST(ProjectAcquisition, AZipSourceExtractsItsInnerFolder)
     const fs::path root = MakeScratchRoot();
     const ScopedEditorUserDataRoot userDataRoot(root / "user");
     const fs::path zipFile = root / "project.zip";
-    WriteZip(zipFile, {{"repo-main/", ""},
-                       {"repo-main/project/Assets/readme.txt", "project"},
-                       {"repo-main/project/../../escape.txt", "escaped"},
-                       {"repo-main/README.md", "repository readme"}});
+    ASSERT_TRUE(WriteTestZip(zipFile, {{"repo-main/", ""},
+                                       {"repo-main/project/Assets/readme.txt", "project"},
+                                       {"repo-main/project/../../escape.txt", "escaped"},
+                                       {"repo-main/README.md", "repository readme"}}));
 
     const ProjectAcquireStatus status = AcquireLocalZip(root, zipFile, "repo-main/project");
     EXPECT_EQ(status.State, ProjectAcquireState::Succeeded) << status.Error;
@@ -163,7 +145,7 @@ TEST(ProjectAcquisition, AZipSourceWithoutItsInnerFolderFails)
     const fs::path root = MakeScratchRoot();
     const ScopedEditorUserDataRoot userDataRoot(root / "user");
     const fs::path zipFile = root / "project.zip";
-    WriteZip(zipFile, {{"repo-main/README.md", "repository readme"}});
+    ASSERT_TRUE(WriteTestZip(zipFile, {{"repo-main/README.md", "repository readme"}}));
 
     const ProjectAcquireStatus status = AcquireLocalZip(root, zipFile, "repo-main/project");
     EXPECT_EQ(status.State, ProjectAcquireState::Failed);

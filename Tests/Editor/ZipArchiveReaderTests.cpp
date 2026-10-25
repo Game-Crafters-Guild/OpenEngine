@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "Editor/ZipArchiveReader.h"
+#include "TestZipArchive.h"
 
 #include <chrono>
 #include <cstddef>
@@ -14,10 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <utility>
 #include <vector>
-
-#include <miniz.h>
 
 namespace fs = std::filesystem;
 using GameEngine::Editor::ZipArchiveReader;
@@ -26,9 +24,6 @@ using GameEngine::Editor::ZipEntryFailure;
 
 namespace
 {
-
-// An archive entry: a name ending in '/' is a folder entry.
-using ArchiveEntry = std::pair<std::string, std::string>;
 
 class ZipArchiveReaderTest : public ::testing::Test
 {
@@ -46,28 +41,19 @@ class ZipArchiveReaderTest : public ::testing::Test
         fs::remove_all(m_Root, ec);
     }
 
-    fs::path WriteArchive(const std::vector<ArchiveEntry>& entries)
+    fs::path WriteArchive(const std::vector<TestZipEntry>& entries)
     {
         const fs::path zipFile = m_Root / "archive.zip";
-        mz_zip_archive archive{};
-        EXPECT_TRUE(mz_zip_writer_init_file(&archive, zipFile.string().c_str(), 0));
-        for (const auto& [name, contents] : entries)
-        {
-            EXPECT_TRUE(mz_zip_writer_add_mem(&archive, name.c_str(), contents.data(), contents.size(),
-                                              MZ_DEFAULT_COMPRESSION))
-                << name;
-        }
-        EXPECT_TRUE(mz_zip_writer_finalize_archive(&archive));
-        EXPECT_TRUE(mz_zip_writer_end(&archive));
+        EXPECT_TRUE(WriteTestZip(zipFile, entries));
         return zipFile;
     }
 
     // miniz refuses to write a name that starts with '/', so the name is written with
     // a placeholder first byte and patched in the local header and the central directory.
     fs::path WriteArchiveWithAbsoluteEntry(const std::string& placeholderName,
-                                           const std::vector<ArchiveEntry>& otherEntries)
+                                           const std::vector<TestZipEntry>& otherEntries)
     {
-        std::vector<ArchiveEntry> entries = otherEntries;
+        std::vector<TestZipEntry> entries = otherEntries;
         entries.emplace_back(placeholderName, "absolute");
         const fs::path zipFile = WriteArchive(entries);
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <numeric>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -124,8 +125,7 @@ struct ZipArchiveReader::State
         // A case-sensitive mz_zip_reader_locate_file is a linear scan, so one
         // lookup per requested entry would be quadratic; look names up here instead.
         ByName.resize(Names.size());
-        for (size_t position = 0; position < ByName.size(); ++position)
-            ByName[position] = position;
+        std::iota(ByName.begin(), ByName.end(), size_t{0});
         std::sort(ByName.begin(), ByName.end(),
                   [this](size_t left, size_t right) { return Names[left] < Names[right]; });
         return true;
