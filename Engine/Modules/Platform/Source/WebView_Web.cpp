@@ -13,7 +13,7 @@
 // the canvas's own page offset, read per-apply because layout moves it.
 //
 // What a browser cannot give back: no cross-origin page will report its clicks,
-// so SetOnMouseDown never fires (its contract already says macOS only), and
+// so SetOnMouseDown never fires (its contract names macOS and Linux only), and
 // there is no OS drag source, so BeginFileDrag stays false.
 
 #include "Platform/WebView.h"

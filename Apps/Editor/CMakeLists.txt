@@ -1991,6 +1991,12 @@ set_target_properties(Editor PROPERTIES UNITY_BUILD OFF)
 # Output layout: bin/<Config>/Apps/Editor
 ge_set_output_app(Editor "Editor")
 
+# The Linux web view module loads from the folder libEngine.so is staged in (WebView_Linux.cpp).
+if (TARGET PlatformWebViewGtk)
+    ge_set_output_app(PlatformWebViewGtk "Editor")
+    add_dependencies(Editor PlatformWebViewGtk)
+endif()
+
 # Stage runtime DLL dependencies (e.g. GameEngine.Native.dll, vcpkg DLLs) next to Editor.exe
 ge_stage_runtime_dependencies(Editor)
 ge_register_application_directory(Editor)

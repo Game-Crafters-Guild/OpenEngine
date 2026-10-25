@@ -52,7 +52,7 @@ public:
 
     // Invoked on mouse-down inside the web view. Native web-view clicks never reach
     // the engine input path, so the host UI uses this to clear its own focus state
-    // (e.g. a focused URL field). Currently fired on macOS only.
+    // (e.g. a focused URL field). Fired on macOS and Linux.
     virtual void SetOnMouseDown(std::function<void()> callback) = 0;
 
     // Invoked once if the view cannot be created, with a message for the user that states the
