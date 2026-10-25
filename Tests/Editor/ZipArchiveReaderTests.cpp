@@ -1,6 +1,7 @@
 // The editor's zip reader as package modules see it through EditorSDK: opening an
 // archive on disk or in memory, listing its files, extracting a chosen set of them,
-// and refusing entry names that would write outside the destination.
+// reading one into memory, and refusing entry names that would write outside the
+// destination.
 
 #include <gtest/gtest.h>
 
@@ -79,6 +80,11 @@ class ZipArchiveReaderTest : public ::testing::Test
     {
         std::ifstream in(file, std::ios::binary);
         return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+
+    static std::string ToString(const std::vector<std::byte>& bytes)
+    {
+        return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
     }
 
     fs::path m_Root;
@@ -209,4 +215,62 @@ TEST_F(ZipArchiveReaderTest, ReadsAnArchiveHeldInMemory)
     std::vector<ZipEntryFailure> failures;
     EXPECT_TRUE(archive->ExtractEntries(chosen, failures));
     EXPECT_EQ(ReadFile(m_Root / "out" / "tree.glb"), "glb");
+}
+
+TEST_F(ZipArchiveReaderTest, ReadsAnEntryIntoMemory)
+{
+    const std::string binary("glb\0\x01\xff data", 11);
+    const fs::path zipFile = WriteArchive({{"Models/tree.glb", binary}, {"empty.txt", ""}});
+
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
+    std::vector<std::byte> bytes;
+    ASSERT_TRUE(archive->ReadEntry("Models/tree.glb", bytes, binary.size(), &error)) << error;
+    EXPECT_EQ(ToString(bytes), binary);
+    ASSERT_TRUE(archive->ReadEntry("empty.txt", bytes, binary.size(), &error)) << error;
+    EXPECT_TRUE(bytes.empty());
+
+    const std::string archiveBytes = ReadFile(zipFile);
+    std::optional<ZipArchiveReader> inMemory =
+        ZipArchiveReader::OpenMemory(std::as_bytes(std::span(archiveBytes)), &error);
+    ASSERT_TRUE(inMemory) << error;
+    ASSERT_TRUE(inMemory->ReadEntry("Models/tree.glb", bytes, binary.size(), &error)) << error;
+    EXPECT_EQ(ToString(bytes), binary);
+}
+
+TEST_F(ZipArchiveReaderTest, ReadEntryRefusesNamesThatAreNotSafeFiles)
+{
+    const fs::path zipFile = WriteArchive({{"Models/", ""},
+                                           {"Models/tree.glb", "glb"},
+                                           {"../escape.txt", "escaped"}});
+
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
+    for (const std::string name : {"Models/missing.glb", "Models/", "../escape.txt"})
+    {
+        std::vector<std::byte> bytes(4, std::byte{1});
+        error.clear();
+        EXPECT_FALSE(archive->ReadEntry(name, bytes, 1024, &error)) << name;
+        EXPECT_TRUE(bytes.empty()) << name;
+        EXPECT_NE(error.find(name), std::string::npos) << error;
+    }
+}
+
+TEST_F(ZipArchiveReaderTest, ReadEntryRefusesAnEntryLargerThanTheLimit)
+{
+    const std::string contents(1000, 'x');
+    const fs::path zipFile = WriteArchive({{"big.bin", contents}});
+
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(zipFile, &error);
+    ASSERT_TRUE(archive) << error;
+    std::vector<std::byte> bytes;
+    EXPECT_FALSE(archive->ReadEntry("big.bin", bytes, contents.size() - 1, &error));
+    EXPECT_TRUE(bytes.empty());
+    EXPECT_NE(error.find("1,000"), std::string::npos) << error;
+
+    EXPECT_TRUE(archive->ReadEntry("big.bin", bytes, contents.size(), &error)) << error;
+    EXPECT_EQ(bytes.size(), contents.size());
 }

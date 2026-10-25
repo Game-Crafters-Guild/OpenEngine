@@ -131,7 +131,8 @@ struct ZipArchiveReader::State
         return true;
     }
 
-    // The miniz index of the file named name, or nothing.
+    // The miniz index of the file named name, or nothing. Folder entries and
+    // unsafe names are never found.
     std::optional<mz_uint> FindFile(const std::string& name) const
     {
         const auto found = std::lower_bound(
@@ -224,6 +225,46 @@ bool ZipArchiveReader::ExtractEntries(std::span<const ZipEntryExtraction> entrie
             outFailures.push_back({entry.EntryName, std::move(message)});
     }
     return outFailures.size() == failureCountBefore;
+}
+
+bool ZipArchiveReader::ReadEntry(const std::string& entryName, std::vector<std::byte>& outBytes,
+                                 size_t maxBytes, std::string* outError)
+{
+    outBytes.clear();
+    const std::optional<mz_uint> index = m_State->FindFile(entryName);
+    if (!index)
+    {
+        if (outError)
+            *outError = "The archive has no file named '" + entryName + "'.";
+        return false;
+    }
+
+    mz_zip_archive_file_stat stat{};
+    if (!mz_zip_reader_file_stat(&m_State->Archive, *index, &stat))
+    {
+        if (outError)
+            *outError = "Could not read the archive's file table.";
+        return false;
+    }
+    if (stat.m_uncomp_size > maxBytes)
+    {
+        if (outError)
+            *outError = "'" + entryName + "' is " + FormatGroupedInteger(stat.m_uncomp_size) +
+                        " bytes, more than the " + FormatGroupedInteger(maxBytes) + "-byte limit.";
+        return false;
+    }
+
+    // miniz stops decompressing at the buffer's end and checks the CRC, so an
+    // entry cannot write past its stated size.
+    outBytes.resize(static_cast<size_t>(stat.m_uncomp_size));
+    if (!mz_zip_reader_extract_to_mem(&m_State->Archive, *index, outBytes.data(), outBytes.size(), 0))
+    {
+        outBytes.clear();
+        if (outError)
+            *outError = "Could not decompress '" + entryName + "'; the archive may be corrupt.";
+        return false;
+    }
+    return true;
 }
 
 } // namespace GameEngine::Editor
